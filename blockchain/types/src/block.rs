@@ -205,7 +205,7 @@ mod block_tests {
     use bth_account_keys::AccountKey;
     use bth_crypto_keys::RistrettoPrivate;
     use bth_transaction_core::{
-        membership_proofs::Range, ring_signature::KeyImage, tokens::Mob,
+        membership_proofs::Range, ring_signature::KeyImage, tokens::Bth,
         tx::TxOutMembershipHash, Amount, Token,
     };
     use bth_util_from_random::FromRandom;
@@ -234,7 +234,7 @@ mod block_tests {
                     BLOCK_VERSION,
                     Amount {
                         value: rng.next_u64(),
-                        token_id: Mob::ID,
+                        token_id: Bth::ID,
                     },
                     &recipient.default_subaddress(),
                     &RistrettoPrivate::from_random(rng),
@@ -381,6 +381,8 @@ mod block_tests {
     /// actual block id into the test. This should hopefully catches cases where
     /// we add/change Block/BlockContents and accidentally break id
     /// calculation of old blocks.
+    ///
+    /// NOTE: Hash values updated after TxOut structure change (fog hint removal).
     fn test_hashing_is_consistent_block_version_one() {
         let mut rng = get_seeded_rng();
 
@@ -389,8 +391,8 @@ mod block_tests {
         assert_eq!(
             block.id.as_ref(),
             &[
-                222, 73, 210, 166, 125, 94, 48, 79, 128, 55, 120, 50, 68, 204, 131, 52, 79, 71, 91,
-                196, 93, 86, 209, 152, 155, 234, 26, 192, 162, 165, 160, 20
+                183, 14, 124, 191, 97, 62, 200, 180, 48, 117, 223, 145, 120, 58, 174, 154, 103, 159,
+                34, 21, 132, 89, 55, 37, 229, 132, 112, 81, 38, 110, 94, 244
             ]
         );
 
@@ -398,8 +400,8 @@ mod block_tests {
         assert_eq!(
             block_contents.hash().as_ref(),
             &[
-                46, 242, 28, 218, 210, 76, 187, 220, 72, 72, 53, 58, 24, 41, 6, 239, 131, 81, 192,
-                252, 93, 136, 35, 91, 185, 32, 94, 1, 156, 71, 94, 14
+                206, 77, 231, 254, 202, 155, 94, 24, 148, 228, 12, 63, 249, 47, 240, 241, 235, 191,
+                161, 21, 208, 183, 147, 216, 148, 53, 104, 51, 92, 187, 181, 89
             ]
         );
 
@@ -408,16 +410,18 @@ mod block_tests {
         assert_eq!(
             block_with_no_memo.id.as_ref(),
             &[
-                191, 207, 107, 78, 75, 166, 31, 130, 48, 139, 206, 247, 211, 79, 37, 153, 169, 188,
-                212, 128, 226, 182, 22, 223, 6, 163, 168, 123, 127, 114, 70, 138
+                // Updated after TxOut structure change (fog hint removal)
+                81, 194, 43, 67, 5, 100, 2, 126, 101, 251, 142, 83, 180, 177, 124, 120, 28, 23,
+                157, 184, 73, 254, 138, 184, 81, 224, 135, 179, 246, 153, 77, 200
             ]
         );
 
         assert_eq!(
             block_with_no_memo.contents_hash.as_ref(),
             &[
-                243, 164, 40, 173, 7, 115, 68, 93, 208, 45, 219, 161, 198, 90, 201, 188, 104, 67,
-                1, 213, 3, 151, 104, 78, 72, 109, 223, 131, 19, 119, 118, 95
+                // Updated after TxOut structure change (fog hint removal)
+                223, 134, 121, 101, 29, 6, 75, 82, 91, 133, 200, 60, 25, 215, 45, 214, 34, 143,
+                74, 130, 159, 77, 230, 164, 233, 197, 230, 57, 65, 207, 164, 242
             ]
         );
     }

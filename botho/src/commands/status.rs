@@ -8,9 +8,12 @@ use crate::wallet::Wallet;
 /// Show node and wallet status
 pub fn run(config_path: &Path) -> Result<()> {
     let config = Config::load(config_path)
-        .context("No wallet found. Run 'botho init' first.")?;
+        .context("No config found. Run 'botho init' first.")?;
 
-    let wallet = Wallet::from_mnemonic(&config.wallet.mnemonic)?;
+    // Wallet is optional (relay nodes don't have one)
+    let wallet = config.wallet.as_ref().and_then(|w| {
+        Wallet::from_mnemonic(&w.mnemonic).ok()
+    });
 
     // Open ledger
     let ledger_path = ledger_db_path_from_config(config_path);
@@ -26,7 +29,11 @@ pub fn run(config_path: &Path) -> Result<()> {
     println!("=== Botho Status ===");
     println!();
     println!("Wallet:");
-    println!("  Address: {}", wallet.address_string().replace('\n', ", "));
+    if let Some(ref w) = wallet {
+        println!("  Address: {}", w.address_string().replace('\n', ", "));
+    } else {
+        println!("  (No wallet configured - running as relay node)");
+    }
     println!();
     println!("Chain:");
     println!("  Height: {}", state.height);

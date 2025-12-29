@@ -262,7 +262,8 @@ impl TxInput {
 pub const DEFAULT_RING_SIZE: usize = 11;
 
 /// Minimum ring size (must have at least some privacy)
-pub const MIN_RING_SIZE: usize = 3;
+/// Higher values provide better anonymity set. Industry standard is 11+.
+pub const MIN_RING_SIZE: usize = 7;
 
 /// A member of a ring (either the real input or a decoy).
 ///

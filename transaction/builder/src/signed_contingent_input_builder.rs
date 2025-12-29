@@ -489,7 +489,7 @@ pub mod tests {
     };
     use bth_account_keys::AccountKey;
     use bth_crypto_ring_signature_signer::NoKeysRingSigner;
-    use bth_transaction_core::{constants::MILLIMOB_TO_PICOMOB, tokens::Mob, Token};
+    use bth_transaction_core::{constants::MILLIBTH_TO_NANOBTH, tokens::Bth, Token};
     use rand::{rngs::StdRng, SeedableRng};
 
     #[test]
@@ -501,8 +501,8 @@ pub mod tests {
 
             let sender = AccountKey::random(&mut rng);
             let recipient = AccountKey::random(&mut rng);
-            let value = 1475 * MILLIMOB_TO_PICOMOB;
-            let amount = Amount::new(value, Mob::ID);
+            let value = 1475 * MILLIBTH_TO_NANOBTH;
+            let amount = Amount::new(value, Bth::ID);
 
             let input_credentials =
                 get_input_credentials(block_version, amount, &sender, &mut rng);
@@ -521,10 +521,10 @@ pub mod tests {
             builder.set_tombstone_block(2000);
 
             // Add required output (recipient receives some value)
-            let output_value = value - Mob::MINIMUM_FEE;
+            let output_value = value - Bth::MINIMUM_FEE;
             builder
                 .add_required_output(
-                    Amount::new(output_value, Mob::ID),
+                    Amount::new(output_value, Bth::ID),
                     &recipient.default_subaddress(),
                     &mut rng,
                 )

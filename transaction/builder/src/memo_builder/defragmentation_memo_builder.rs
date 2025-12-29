@@ -6,7 +6,7 @@
 use super::MemoBuilder;
 use crate::ReservedSubaddresses;
 use bth_account_keys::PublicAddress;
-use bth_transaction_core::{tokens::Mob, Amount, MemoContext, MemoPayload, NewMemoError, Token};
+use bth_transaction_core::{tokens::Bth, Amount, MemoContext, MemoPayload, NewMemoError, Token};
 use bth_transaction_extra::DefragmentationMemo;
 
 /// This memo builder builds the [`DefragmentationMemo`] (0x0003).
@@ -36,7 +36,7 @@ pub struct DefragmentationMemoBuilder {
 impl Default for DefragmentationMemoBuilder {
     fn default() -> Self {
         Self {
-            fee: Amount::new(Mob::MINIMUM_FEE, Mob::ID),
+            fee: Amount::new(Bth::MINIMUM_FEE, Bth::ID),
             defrag_id: 0,
             wrote_main_memo: false,
             wrote_decoy_memo: false,
@@ -142,7 +142,7 @@ mod tests {
         let mut builder = DefragmentationMemoBuilder::default();
         builder
             .make_memo_for_output(
-                Amount::new(100, Mob::ID),
+                Amount::new(100, Bth::ID),
                 &PublicAddress::default(),
                 MemoContext {
                     tx_public_key: &RistrettoPublic::from_random(&mut rng),
@@ -151,7 +151,7 @@ mod tests {
             .unwrap();
         builder
             .make_memo_for_change_output(
-                Amount::new(0, Mob::ID),
+                Amount::new(0, Bth::ID),
                 &ReservedSubaddresses::from(&AccountKey::random(&mut rng)),
                 MemoContext {
                     tx_public_key: &RistrettoPublic::from_random(&mut rng),
@@ -161,7 +161,7 @@ mod tests {
 
         assert_matches!(
             builder.make_memo_for_output(
-                Amount::new(100, Mob::ID),
+                Amount::new(100, Bth::ID),
                 &PublicAddress::default(),
                 MemoContext {
                     tx_public_key: &RistrettoPublic::from_random(&mut rng),

@@ -9,7 +9,9 @@ pub fn run(config_path: &Path) -> Result<()> {
     let config = Config::load(config_path)
         .context("No wallet found. Run 'botho init' first.")?;
 
-    let wallet = Wallet::from_mnemonic(&config.wallet.mnemonic)
+    let mnemonic = config.mnemonic()
+        .context("No wallet configured. Run 'botho init' to create one.")?;
+    let wallet = Wallet::from_mnemonic(mnemonic)
         .context("Failed to load wallet from mnemonic")?;
 
     println!("Your receiving address:");

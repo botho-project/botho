@@ -17,5 +17,8 @@ pub mod rpc;
 pub mod transaction;
 pub mod wallet;
 
+#[cfg(feature = "pq")]
+pub mod transaction_pq;
+
 // Re-export commands module for CLI binary
 pub mod commands;

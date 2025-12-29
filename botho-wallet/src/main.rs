@@ -40,7 +40,11 @@ enum Commands {
     },
 
     /// Show wallet receive address
-    Address,
+    Address {
+        /// Show quantum-safe (post-quantum) address
+        #[arg(long)]
+        pq: bool,
+    },
 
     /// Check wallet balance
     Balance {
@@ -60,6 +64,10 @@ enum Commands {
         /// Skip confirmation prompt
         #[arg(long)]
         yes: bool,
+
+        /// Use quantum-private transaction (larger, higher fee, post-quantum secure)
+        #[arg(long)]
+        quantum_private: bool,
     },
 
     /// Sync wallet with the network
@@ -114,14 +122,14 @@ async fn main() -> Result<()> {
         Commands::Init { recover } => {
             commands::init::run(&wallet_path, recover).await
         }
-        Commands::Address => {
-            commands::address::run(&wallet_path).await
+        Commands::Address { pq } => {
+            commands::address::run(&wallet_path, pq).await
         }
         Commands::Balance { detailed } => {
             commands::balance::run(&wallet_path, detailed).await
         }
-        Commands::Send { address, amount, yes } => {
-            commands::send::run(&wallet_path, &address, amount, yes).await
+        Commands::Send { address, amount, yes, quantum_private } => {
+            commands::send::run(&wallet_path, &address, amount, yes, quantum_private).await
         }
         Commands::Sync { full } => {
             commands::sync::run(&wallet_path, full).await

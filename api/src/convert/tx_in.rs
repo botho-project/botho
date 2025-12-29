@@ -115,7 +115,7 @@ mod tests {
     use bth_account_keys::PublicAddress;
     use bth_crypto_keys::RistrettoPrivate;
     use bth_transaction_core::{
-        onetime_keys::create_shared_secret, tokens::Mob, Amount, BlockVersion, MaskedAmount, Token,
+        onetime_keys::create_shared_secret, tokens::Bth, Amount, BlockVersion, MaskedAmount, Token,
     };
     use bth_util_from_random::FromRandom;
     use rand::{rngs::StdRng, SeedableRng};
@@ -128,7 +128,7 @@ mod tests {
 
         let amount = Amount {
             value: 1u64 << 13,
-            token_id: Mob::ID,
+            token_id: Bth::ID,
         };
 
         let recipient = PublicAddress::from_random(&mut rng);
@@ -138,7 +138,6 @@ mod tests {
             amount,
             &recipient,
             &tx_private_key,
-            Default::default(),
         )
         .unwrap();
 

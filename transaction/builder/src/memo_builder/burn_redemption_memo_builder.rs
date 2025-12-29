@@ -7,7 +7,7 @@
 use super::MemoBuilder;
 use crate::ReservedSubaddresses;
 use bth_account_keys::{burn_address, PublicAddress, ShortAddressHash};
-use bth_transaction_core::{tokens::Mob, Amount, MemoContext, MemoPayload, NewMemoError, Token};
+use bth_transaction_core::{tokens::Bth, Amount, MemoContext, MemoPayload, NewMemoError, Token};
 use bth_transaction_extra::{BurnRedemptionMemo, DestinationMemo, DestinationMemoError, UnusedMemo};
 
 /// BurnRedemptionMemoBuilder
@@ -59,7 +59,7 @@ impl BurnRedemptionMemoBuilder {
             destination_memo_enabled: false,
             wrote_destination_memo: false,
             burn_amount: None,
-            fee: Amount::new(Mob::MINIMUM_FEE, Mob::ID),
+            fee: Amount::new(Bth::MINIMUM_FEE, Bth::ID),
         }
     }
     /// Enable destination memos
@@ -160,7 +160,7 @@ mod tests {
         builder.enable_destination_memo();
         builder
             .make_memo_for_output(
-                Amount::new(100, Mob::ID),
+                Amount::new(100, Bth::ID),
                 &burn_address(),
                 MemoContext {
                     tx_public_key: &RistrettoPublic::from_random(&mut rng),
@@ -169,7 +169,7 @@ mod tests {
             .unwrap();
         builder
             .make_memo_for_change_output(
-                Amount::new(100, Mob::ID),
+                Amount::new(100, Bth::ID),
                 &ReservedSubaddresses::from(&AccountKey::random(&mut rng)),
                 MemoContext {
                     tx_public_key: &RistrettoPublic::from_random(&mut rng),
@@ -179,7 +179,7 @@ mod tests {
 
         assert_matches!(
             builder.make_memo_for_output(
-                Amount::new(100, Mob::ID),
+                Amount::new(100, Bth::ID),
                 &burn_address(),
                 MemoContext {
                     tx_public_key: &RistrettoPublic::from_random(&mut rng),

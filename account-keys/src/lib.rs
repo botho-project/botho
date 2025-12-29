@@ -37,4 +37,4 @@ pub use crate::{
 };
 
 #[cfg(feature = "pq")]
-pub use crate::quantum_safe::{QuantumSafeAccountKey, QuantumSafePublicAddress};
+pub use crate::quantum_safe::{AddressParseError, QuantumSafeAccountKey, QuantumSafePublicAddress};

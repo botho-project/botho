@@ -134,13 +134,22 @@ mod tests {
         let keys1 = derive_pq_keys(mnemonic);
         let keys2 = derive_pq_keys(mnemonic);
 
-        // Note: Currently not deterministic due to pqcrypto limitations
-        // This test documents the expected behavior once we have proper seeded keygen
-        // assert_eq!(
-        //     keys1.kem_keypair.public_key().as_bytes(),
-        //     keys2.kem_keypair.public_key().as_bytes()
-        // );
-        let _ = (keys1, keys2); // Suppress unused warnings
+        // Same mnemonic should produce identical keys
+        assert_eq!(
+            keys1.kem_keypair.public_key().as_bytes(),
+            keys2.kem_keypair.public_key().as_bytes()
+        );
+        assert_eq!(
+            keys1.sig_keypair.public_key().as_bytes(),
+            keys2.sig_keypair.public_key().as_bytes()
+        );
+
+        // Different mnemonic should produce different keys
+        let keys3 = derive_pq_keys(b"different mnemonic");
+        assert_ne!(
+            keys1.kem_keypair.public_key().as_bytes(),
+            keys3.kem_keypair.public_key().as_bytes()
+        );
     }
 
     #[test]
@@ -179,8 +188,17 @@ mod tests {
         let keypair1 = derive_onetime_sig_keypair(&shared_secret, 1);
 
         // Different output indices should produce different keypairs
-        // (once we have deterministic keygen)
-        let _ = (keypair0, keypair1);
+        assert_ne!(
+            keypair0.public_key().as_bytes(),
+            keypair1.public_key().as_bytes()
+        );
+
+        // Same inputs should produce identical keypairs
+        let keypair0_again = derive_onetime_sig_keypair(&shared_secret, 0);
+        assert_eq!(
+            keypair0.public_key().as_bytes(),
+            keypair0_again.public_key().as_bytes()
+        );
     }
 
     #[test]

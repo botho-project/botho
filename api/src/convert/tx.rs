@@ -44,8 +44,8 @@ mod tests {
         EmptyMemoBuilder, ReservedSubaddresses, SignedContingentInputBuilder, TransactionBuilder,
     };
     use bth_transaction_core::{
-        constants::{MILLIMOB_TO_PICOMOB, RING_SIZE},
-        tokens::Mob,
+        constants::{MILLIBTH_TO_NANOBTH, RING_SIZE},
+        tokens::Bth,
         tx::Tx,
         Amount, BlockVersion, Token, TokenId,
     };
@@ -64,18 +64,18 @@ mod tests {
             let bob = AccountKey::random(&mut rng);
 
             let mut transaction_builder =
-                TransactionBuilder::new(block_version, Amount::new(Mob::MINIMUM_FEE, Mob::ID))
+                TransactionBuilder::new(block_version, Amount::new(Bth::MINIMUM_FEE, Bth::ID))
                     .unwrap();
 
             transaction_builder.add_input(get_input_credentials(
                 block_version,
-                Amount::new(65536 + Mob::MINIMUM_FEE, Mob::ID),
+                Amount::new(65536 + Bth::MINIMUM_FEE, Bth::ID),
                 &alice,
                 &mut rng,
             ));
             transaction_builder
                 .add_output(
-                    Amount::new(65536, Mob::ID),
+                    Amount::new(65536, Bth::ID),
                     &bob.default_subaddress(),
                     &mut rng,
                 )
@@ -150,7 +150,7 @@ mod tests {
 
             sci_builder
                 .add_required_output(
-                    Amount::new(1000 * MILLIMOB_TO_PICOMOB, Mob::ID),
+                    Amount::new(1000 * MILLIBTH_TO_NANOBTH, Bth::ID),
                     &charlie.default_subaddress(),
                     &mut rng,
                 )
@@ -161,12 +161,12 @@ mod tests {
             // Alice sends this token2 amount to Bob from Charlie, paying Charlie 1 MOB
             // as he desires, and returning .475 MOB as change to herself.
             let mut transaction_builder =
-                TransactionBuilder::new(block_version, Amount::new(Mob::MINIMUM_FEE, Mob::ID))
+                TransactionBuilder::new(block_version, Amount::new(Bth::MINIMUM_FEE, Bth::ID))
                     .unwrap();
 
             transaction_builder.add_input(get_input_credentials(
                 block_version,
-                Amount::new(1475 * MILLIMOB_TO_PICOMOB, Mob::ID),
+                Amount::new(1475 * MILLIBTH_TO_NANOBTH, Bth::ID),
                 &alice,
                 &mut rng,
             ));
@@ -182,7 +182,7 @@ mod tests {
 
             transaction_builder
                 .add_change_output(
-                    Amount::new(475 * MILLIMOB_TO_PICOMOB - Mob::MINIMUM_FEE, Mob::ID),
+                    Amount::new(475 * MILLIBTH_TO_NANOBTH - Bth::MINIMUM_FEE, Bth::ID),
                     &ReservedSubaddresses::from(&alice),
                     &mut rng,
                 )
@@ -258,7 +258,7 @@ mod tests {
             // Originator requests an output worth 1MOB destined to themselves
             sci_builder
                 .add_partial_fill_output(
-                    Amount::new(1000 * MILLIMOB_TO_PICOMOB, Mob::ID),
+                    Amount::new(1000 * MILLIBTH_TO_NANOBTH, Bth::ID),
                     &charlie.default_subaddress(),
                     &mut rng,
                 )
@@ -277,12 +277,12 @@ mod tests {
             // Alice sends 250 token2 to Bob from Charlie, paying Charlie .25 MOB
             // as he desires, and returning .475 MOB as change to herself.
             let mut transaction_builder =
-                TransactionBuilder::new(block_version, Amount::new(Mob::MINIMUM_FEE, Mob::ID))
+                TransactionBuilder::new(block_version, Amount::new(Bth::MINIMUM_FEE, Bth::ID))
                     .unwrap();
 
             transaction_builder.add_input(get_input_credentials(
                 block_version,
-                Amount::new(1475 * MILLIMOB_TO_PICOMOB, Mob::ID),
+                Amount::new(1475 * MILLIBTH_TO_NANOBTH, Bth::ID),
                 &alice,
                 &mut rng,
             ));
@@ -301,8 +301,8 @@ mod tests {
             transaction_builder
                 .add_change_output(
                     Amount::new(
-                        (475 + (1000 - 250)) * MILLIMOB_TO_PICOMOB - Mob::MINIMUM_FEE,
-                        Mob::ID,
+                        (475 + (1000 - 250)) * MILLIBTH_TO_NANOBTH - Bth::MINIMUM_FEE,
+                        Bth::ID,
                     ),
                     &ReservedSubaddresses::from(&alice),
                     &mut rng,

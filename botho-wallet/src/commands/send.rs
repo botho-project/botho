@@ -9,10 +9,40 @@ use crate::rpc_pool::RpcPool;
 use crate::storage::EncryptedWallet;
 use crate::transaction::{format_amount, parse_amount, sync_wallet, TransactionBuilder};
 
-use super::{print_error, print_success, prompt_confirm, prompt_password};
+use super::{print_error, print_success, print_warning, prompt_confirm, prompt_password};
 
 /// Run the send command
-pub async fn run(wallet_path: &Path, address: &str, amount: f64, skip_confirm: bool) -> Result<()> {
+pub async fn run(
+    wallet_path: &Path,
+    address: &str,
+    amount: f64,
+    skip_confirm: bool,
+    quantum_private: bool,
+) -> Result<()> {
+    // Handle quantum-private transaction request
+    #[cfg(not(feature = "pq"))]
+    if quantum_private {
+        print_error("Quantum-private transactions are not enabled in this build.");
+        println!("Rebuild with --features pq to enable post-quantum transactions.");
+        return Ok(());
+    }
+
+    #[cfg(feature = "pq")]
+    if quantum_private {
+        return run_quantum_private(wallet_path, address, amount, skip_confirm).await;
+    }
+
+    // Classical transaction flow
+    run_classical(wallet_path, address, amount, skip_confirm).await
+}
+
+/// Run a classical (non-PQ) transaction
+async fn run_classical(
+    wallet_path: &Path,
+    address: &str,
+    amount: f64,
+    skip_confirm: bool,
+) -> Result<()> {
     // Check wallet exists
     if !EncryptedWallet::exists(wallet_path) {
         print_error("No wallet found. Run 'botho-wallet init' first.");
@@ -175,4 +205,133 @@ fn parse_address(address: &str) -> Result<bth_account_keys::PublicAddress> {
     Err(anyhow!(
         "Invalid address format. Expected 'cad:<view>:<spend>' or 'view:<hex>\\nspend:<hex>'"
     ))
+}
+
+/// Run a quantum-private transaction
+#[cfg(feature = "pq")]
+async fn run_quantum_private(
+    wallet_path: &Path,
+    address: &str,
+    amount: f64,
+    skip_confirm: bool,
+) -> Result<()> {
+    use bth_account_keys::QuantumSafePublicAddress;
+
+    // Check wallet exists
+    if !EncryptedWallet::exists(wallet_path) {
+        print_error("No wallet found. Run 'botho-wallet init' first.");
+        return Ok(());
+    }
+
+    // Parse amount
+    let amount_str = format!("{}", amount);
+    let amount_picocredits = parse_amount(&amount_str)?;
+
+    if amount_picocredits == 0 {
+        return Err(anyhow!("Amount must be greater than 0"));
+    }
+
+    // Parse quantum-safe recipient address
+    // The address is validated here; full transaction building will use it
+    let _pq_recipient = QuantumSafePublicAddress::from_address_string(address)
+        .map_err(|e| anyhow!("Invalid quantum-safe address: {:?}", e))?;
+
+    // Load and decrypt wallet
+    let mut wallet = EncryptedWallet::load(wallet_path)?;
+    let password = prompt_password("Enter wallet password: ")?;
+
+    let mnemonic = wallet.decrypt(&password)
+        .map_err(|_| anyhow!("Failed to decrypt wallet - wrong password?"))?;
+
+    let keys = WalletKeys::from_mnemonic(&mnemonic)?;
+
+    // Connect to network
+    println!();
+    println!("Connecting to network...");
+
+    let discovery = wallet
+        .get_discovery_state(&password)?
+        .unwrap_or_else(NodeDiscovery::new);
+
+    let mut rpc = RpcPool::new(discovery);
+    rpc.connect().await?;
+
+    println!("Connected to {} nodes", rpc.connected_count());
+
+    // Sync wallet
+    println!("Syncing wallet...");
+    let (utxos, height) = sync_wallet(&mut rpc, &keys, wallet.sync_height).await?;
+
+    // Calculate PQ fee (higher than classical due to larger tx size)
+    // Simple 1-input, 2-output PQ transaction fee
+    use botho::transaction_pq::calculate_pq_fee;
+    let estimated_inputs = std::cmp::max(1, (amount_picocredits / 1_000_000_000_000).saturating_add(1) as usize);
+    let fee = calculate_pq_fee(estimated_inputs, 2);
+
+    // Build classical transaction builder to check balance
+    let builder = TransactionBuilder::new(keys.clone(), utxos, height);
+    let balance = builder.balance();
+
+    // Check sufficient funds
+    let total_needed = amount_picocredits + fee;
+    if balance < total_needed {
+        print_error(&format!(
+            "Insufficient funds. Balance: {}, needed: {}",
+            format_amount(balance),
+            format_amount(total_needed)
+        ));
+        return Ok(());
+    }
+
+    // Show transaction details
+    println!();
+    println!("Quantum-Private Transaction Details:");
+    println!("  Type:      Post-Quantum (ML-KEM-768 + ML-DSA-65)");
+    println!("  Recipient: {}...", &address[..std::cmp::min(50, address.len())]);
+    println!("  Amount:    {}", format_amount(amount_picocredits));
+    println!("  Fee:       {} (higher due to ~19x larger tx size)", format_amount(fee));
+    println!("  Total:     {}", format_amount(total_needed));
+    println!();
+    println!("  Balance after: {}", format_amount(balance - total_needed));
+    println!();
+    print_warning("Quantum-private transactions are larger and cost more in fees,");
+    println!("         but provide protection against future quantum computers.");
+
+    // Confirm
+    if !skip_confirm {
+        println!();
+        if !prompt_confirm("Send this quantum-private transaction?")? {
+            println!("Aborted.");
+            return Ok(());
+        }
+    }
+
+    // Build and sign quantum-private transaction
+    println!();
+    println!("Building quantum-private transaction...");
+
+    // TODO: Full PQ transaction building requires:
+    // 1. Selecting UTXOs
+    // 2. Creating PQ outputs with ML-KEM encapsulation
+    // 3. Signing with both Schnorr and ML-DSA
+    // 4. Submitting to network
+    //
+    // For now, we show the framework is in place but full implementation
+    // requires network protocol support for PQ transactions.
+
+    print_error("Full quantum-private transaction building is coming soon.");
+    println!();
+    println!("The cryptographic primitives are ready (ML-KEM-768, ML-DSA-65),");
+    println!("but network protocol support for PQ transactions is in development.");
+    println!();
+    println!("In the meantime, you can:");
+    println!("  • Generate your quantum-safe address: botho-wallet address --pq");
+    println!("  • Use classical transactions (still secure against current threats)");
+
+    // Update sync height anyway
+    wallet.set_sync_height(height);
+    wallet.set_discovery_state(rpc.discovery(), &password)?;
+    wallet.save(wallet_path)?;
+
+    Ok(())
 }

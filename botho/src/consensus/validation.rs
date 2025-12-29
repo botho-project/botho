@@ -9,6 +9,8 @@
 use crate::block::{calculate_block_reward_v2, MiningTx};
 use crate::ledger::ChainState;
 use crate::transaction::Transaction;
+#[cfg(feature = "pq")]
+use crate::transaction_pq::QuantumPrivateTransaction;
 use std::sync::{Arc, RwLock};
 use tracing::{debug, warn};
 
@@ -33,6 +35,16 @@ pub enum ValidationError {
     InvalidSignature,
     InsufficientFunds { input: u64, output: u64, fee: u64 },
     StaleTransaction,
+
+    // Quantum-private transaction errors
+    #[cfg(feature = "pq")]
+    InvalidPqSignature,
+    #[cfg(feature = "pq")]
+    InvalidPqCiphertext,
+    #[cfg(feature = "pq")]
+    PqOutputTooLarge,
+    #[cfg(feature = "pq")]
+    PqInputTooLarge,
 
     // General errors
     DeserializationFailed(String),
@@ -65,6 +77,14 @@ impl std::fmt::Display for ValidationError {
                 )
             }
             Self::StaleTransaction => write!(f, "Transaction is stale"),
+            #[cfg(feature = "pq")]
+            Self::InvalidPqSignature => write!(f, "Invalid post-quantum signature"),
+            #[cfg(feature = "pq")]
+            Self::InvalidPqCiphertext => write!(f, "Invalid post-quantum ciphertext"),
+            #[cfg(feature = "pq")]
+            Self::PqOutputTooLarge => write!(f, "Quantum-private output exceeds size limit"),
+            #[cfg(feature = "pq")]
+            Self::PqInputTooLarge => write!(f, "Quantum-private input exceeds size limit"),
             Self::DeserializationFailed(e) => write!(f, "Deserialization failed: {}", e),
             Self::ChainStateUnavailable => write!(f, "Chain state unavailable"),
         }
@@ -227,6 +247,112 @@ impl TransactionValidator {
         // - Input sum >= output sum + fee
 
         debug!("Transfer transaction validated successfully");
+        Ok(())
+    }
+
+    /// Validate a quantum-private transaction (structure and size limits)
+    ///
+    /// This validates:
+    /// - Classical transaction structure (delegates to validate_transfer_tx)
+    /// - PQ ciphertext sizes are valid
+    /// - PQ signature sizes are valid
+    /// - Overall transaction size is within limits
+    ///
+    /// Note: Full signature validation (both Schnorr and ML-DSA) happens
+    /// in the mempool which has access to the UTXO set for key lookup.
+    #[cfg(feature = "pq")]
+    pub fn validate_quantum_private_tx(
+        &self,
+        tx: &QuantumPrivateTransaction,
+    ) -> Result<(), ValidationError> {
+        use crate::transaction_pq::{PQ_CIPHERTEXT_SIZE, PQ_SIGNATURE_SIZE};
+
+        let state = self
+            .chain_state
+            .read()
+            .map_err(|_| ValidationError::ChainStateUnavailable)?;
+
+        debug!("Validating quantum-private transaction");
+
+        // 1. Check basic structure
+        if tx.inputs.is_empty() {
+            return Err(ValidationError::NoInputs);
+        }
+        if tx.outputs.is_empty() {
+            return Err(ValidationError::NoOutputs);
+        }
+
+        // 2. Check transaction is not stale
+        const MAX_TX_AGE: u64 = 100;
+        if tx.created_at_height + MAX_TX_AGE < state.height {
+            return Err(ValidationError::StaleTransaction);
+        }
+
+        // 3. Validate PQ output sizes
+        for output in &tx.outputs {
+            // Check classical output
+            if output.classical.amount == 0 {
+                return Err(ValidationError::ZeroAmountOutput);
+            }
+
+            // Check PQ ciphertext size
+            if output.pq_ciphertext.len() != PQ_CIPHERTEXT_SIZE {
+                warn!(
+                    expected = PQ_CIPHERTEXT_SIZE,
+                    got = output.pq_ciphertext.len(),
+                    "PQ output has invalid ciphertext size"
+                );
+                return Err(ValidationError::InvalidPqCiphertext);
+            }
+        }
+
+        // 4. Validate PQ input sizes
+        for input in &tx.inputs {
+            // Check PQ signature size
+            if input.pq_signature.len() != PQ_SIGNATURE_SIZE {
+                warn!(
+                    expected = PQ_SIGNATURE_SIZE,
+                    got = input.pq_signature.len(),
+                    "PQ input has invalid signature size"
+                );
+                return Err(ValidationError::InvalidPqSignature);
+            }
+
+            // Check classical signature size (Schnorr = 64 bytes)
+            if input.classical_signature.len() != 64 {
+                warn!(
+                    expected = 64,
+                    got = input.classical_signature.len(),
+                    "Classical signature has invalid size"
+                );
+                return Err(ValidationError::InvalidSignature);
+            }
+        }
+
+        // 5. Check total transaction size (rough estimate for DoS protection)
+        // Max: 16 inputs, 16 outputs
+        const MAX_PQ_INPUTS: usize = 16;
+        const MAX_PQ_OUTPUTS: usize = 16;
+
+        if tx.inputs.len() > MAX_PQ_INPUTS {
+            warn!(
+                max = MAX_PQ_INPUTS,
+                got = tx.inputs.len(),
+                "Too many PQ inputs"
+            );
+            return Err(ValidationError::PqInputTooLarge);
+        }
+
+        if tx.outputs.len() > MAX_PQ_OUTPUTS {
+            warn!(
+                max = MAX_PQ_OUTPUTS,
+                got = tx.outputs.len(),
+                "Too many PQ outputs"
+            );
+            return Err(ValidationError::PqOutputTooLarge);
+        }
+
+        debug!("Quantum-private transaction validated successfully");
         Ok(())
     }
 
@@ -430,5 +556,187 @@ mod tests {
         // Both should fail deserialization
         assert_eq!(result.invalid.len(), 2);
         assert!(result.valid.is_empty());
+    }
+
+    #[cfg(feature = "pq")]
+    mod pq_tests {
+        use super::*;
+        use crate::transaction_pq::{
+            QuantumPrivateTransaction, QuantumPrivateTxInput, QuantumPrivateTxOutput,
+            PQ_CIPHERTEXT_SIZE, PQ_SIGNATURE_SIZE,
+        };
+        use crate::transaction::TxOutput;
+
+        fn mock_pq_output() -> QuantumPrivateTxOutput {
+            QuantumPrivateTxOutput {
+                classical: TxOutput {
+                    amount: 1_000_000,
+                    target_key: [1u8; 32],
+                    public_key: [2u8; 32],
+                },
+                pq_ciphertext: vec![0u8; PQ_CIPHERTEXT_SIZE],
+                pq_target_key: [3u8; 32],
+            }
+        }
+
+        fn mock_pq_input() -> QuantumPrivateTxInput {
+            QuantumPrivateTxInput {
+                tx_hash: [0u8; 32],
+                output_index: 0,
+                classical_signature: vec![0u8; 64],
+                pq_signature: vec![0u8; PQ_SIGNATURE_SIZE],
+            }
+        }
+
+        #[test]
+        fn test_pq_tx_valid_structure() {
+            let validator = TransactionValidator::new(mock_chain_state());
+
+            let tx = QuantumPrivateTransaction {
+                inputs: vec![mock_pq_input()],
+                outputs: vec![mock_pq_output()],
+                fee: 1000,
+                created_at_height: 10,
+            };
+
+            let result = validator.validate_quantum_private_tx(&tx);
+            assert!(result.is_ok());
+        }
+
+        #[test]
+        fn test_pq_tx_no_inputs() {
+            let validator = TransactionValidator::new(mock_chain_state());
+
+            let tx = QuantumPrivateTransaction {
+                inputs: vec![],
+                outputs: vec![mock_pq_output()],
+                fee: 1000,
+                created_at_height: 10,
+            };
+
+            let result = validator.validate_quantum_private_tx(&tx);
+            assert!(matches!(result, Err(ValidationError::NoInputs)));
+        }
+
+        #[test]
+        fn test_pq_tx_no_outputs() {
+            let validator = TransactionValidator::new(mock_chain_state());
+
+            let tx = QuantumPrivateTransaction {
+                inputs: vec![mock_pq_input()],
+                outputs: vec![],
+                fee: 1000,
+                created_at_height: 10,
+            };
+
+            let result = validator.validate_quantum_private_tx(&tx);
+            assert!(matches!(result, Err(ValidationError::NoOutputs)));
+        }
+
+        #[test]
+        fn test_pq_tx_zero_amount() {
+            let validator = TransactionValidator::new(mock_chain_state());
+
+            let mut output = mock_pq_output();
+            output.classical.amount = 0;
+
+            let tx = QuantumPrivateTransaction {
+                inputs: vec![mock_pq_input()],
+                outputs: vec![output],
+                fee: 1000,
+                created_at_height: 10,
+            };
+
+            let result = validator.validate_quantum_private_tx(&tx);
+            assert!(matches!(result, Err(ValidationError::ZeroAmountOutput)));
+        }
+
+        #[test]
+        fn test_pq_tx_invalid_ciphertext_size() {
+            let validator = TransactionValidator::new(mock_chain_state());
+
+            let mut output = mock_pq_output();
+            output.pq_ciphertext = vec![0u8; 100]; // Wrong size
+
+            let tx = QuantumPrivateTransaction {
+                inputs: vec![mock_pq_input()],
+                outputs: vec![output],
+                fee: 1000,
+                created_at_height: 10,
+            };
+
+            let result = validator.validate_quantum_private_tx(&tx);
+            assert!(matches!(result, Err(ValidationError::InvalidPqCiphertext)));
+        }
+
+        #[test]
+        fn test_pq_tx_invalid_signature_size() {
+            let validator = TransactionValidator::new(mock_chain_state());
+
+            let mut input = mock_pq_input();
+            input.pq_signature = vec![0u8; 100]; // Wrong size
+
+            let tx = QuantumPrivateTransaction {
+                inputs: vec![input],
+                outputs: vec![mock_pq_output()],
+                fee: 1000,
+                created_at_height: 10,
+            };
+
+            let result = validator.validate_quantum_private_tx(&tx);
+            assert!(matches!(result, Err(ValidationError::InvalidPqSignature)));
+        }
+
+        #[test]
+        fn test_pq_tx_too_many_inputs() {
+            let validator = TransactionValidator::new(mock_chain_state());
+
+            // 17 inputs (exceeds limit of 16)
+            let inputs: Vec<_> = (0..17).map(|_| mock_pq_input()).collect();
+
+            let tx = QuantumPrivateTransaction {
+                inputs,
+                outputs: vec![mock_pq_output()],
+                fee: 1000,
+                created_at_height: 10,
+            };
+
+            let result = validator.validate_quantum_private_tx(&tx);
+            assert!(matches!(result, Err(ValidationError::PqInputTooLarge)));
+        }
+
+        #[test]
+        fn test_pq_tx_too_many_outputs() {
+            let validator = TransactionValidator::new(mock_chain_state());
+
+            // 17 outputs (exceeds limit of 16)
+            let outputs: Vec<_> = (0..17).map(|_| mock_pq_output()).collect();
+
+            let tx = QuantumPrivateTransaction {
+                inputs: vec![mock_pq_input()],
+                outputs,
+                fee: 1000,
+                created_at_height: 10,
+            };
+
+            let result = validator.validate_quantum_private_tx(&tx);
+            assert!(matches!(result, Err(ValidationError::PqOutputTooLarge)));
+        }
+
+        #[test]
+        fn test_pq_tx_stale() {
+            let validator = TransactionValidator::new(mock_chain_state());
+
+            let tx = QuantumPrivateTransaction {
+                inputs: vec![mock_pq_input()],
+                outputs: vec![mock_pq_output()],
+                fee: 1000,
+                created_at_height: 0, // Very old (chain height is 10, max age is 100)
+            };
+
+            // Not stale yet since 0 + 100 >= 10
+            let result = validator.validate_quantum_private_tx(&tx);
+            assert!(result.is_ok());
+        }
     }
 }

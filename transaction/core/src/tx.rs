@@ -679,7 +679,7 @@ mod tests {
         memo::MemoPayload,
         ring_ct::SignatureRctBulletproofs,
         subaddress_matches_tx_out,
-        tokens::Mob,
+        tokens::Bth,
         tx::{Tx, TxIn, TxOut, TxPrefix},
         Amount, BlockVersion, Token,
     };
@@ -698,7 +698,7 @@ mod tests {
         let mut rng = get_seeded_rng();
         for block_version in BlockVersion::iterator() {
             let recipient = PublicAddress::from_random(&mut rng);
-            let amount = Amount::new(23, Mob::ID);
+            let amount = Amount::new(23, Bth::ID);
             let tx_private_key = RistrettoPrivate::from_random(&mut rng);
             let tx_out = TxOut::new(
                 block_version,
@@ -722,8 +722,8 @@ mod tests {
             let prefix = TxPrefix {
                 inputs: vec![tx_in],
                 outputs: vec![tx_out],
-                fee: Mob::MINIMUM_FEE,
-                fee_token_id: *Mob::ID,
+                fee: Bth::MINIMUM_FEE,
+                fee_token_id: *Bth::ID,
                 tombstone_block: 23,
             };
 
@@ -761,7 +761,7 @@ mod tests {
                 BlockVersion::MAX,
                 Amount {
                     value: 13,
-                    token_id: Mob::ID,
+                    token_id: Bth::ID,
                 },
                 &bob_addr,
                 &tx_private_key,
@@ -803,7 +803,7 @@ mod tests {
                 BlockVersion::MAX,
                 Amount {
                     value: 13,
-                    token_id: Mob::ID,
+                    token_id: Bth::ID,
                 },
                 &bob_addr,
                 &tx_private_key,
@@ -839,7 +839,7 @@ mod tests {
                 BlockVersion::MAX,
                 Amount {
                     value: 13,
-                    token_id: Mob::ID,
+                    token_id: Bth::ID,
                 },
                 &bob.change_subaddress(),
                 &tx_private_key,

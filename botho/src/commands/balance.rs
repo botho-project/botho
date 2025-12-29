@@ -10,7 +10,11 @@ pub fn run(config_path: &Path) -> Result<()> {
     let config = Config::load(config_path)
         .context("No wallet found. Run 'botho init' first.")?;
 
-    let wallet = Wallet::from_mnemonic(&config.wallet.mnemonic)?;
+    let wallet_config = config.wallet
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("No wallet configured. Run 'botho init' first."))?;
+
+    let wallet = Wallet::from_mnemonic(&wallet_config.mnemonic)?;
     let address = wallet.default_address();
 
     // Open ledger

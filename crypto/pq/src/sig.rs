@@ -17,18 +17,18 @@
 //! 4. This hybrid approach ensures security against both classical and quantum attacks
 
 use crate::error::PqError;
-use pqcrypto_dilithium::dilithium3;
-use pqcrypto_traits::sign::{DetachedSignature, PublicKey as _, SecretKey as _};
+use ml_dsa::{KeyGen, MlDsa65, SigningKey, VerifyingKey};
+use rand_core::RngCore;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// ML-DSA-65 public key size in bytes
 pub const ML_DSA_65_PUBLIC_KEY_BYTES: usize = 1952;
 
-/// ML-DSA-65 secret key size in bytes (Dilithium3)
+/// ML-DSA-65 secret key size in bytes
 pub const ML_DSA_65_SECRET_KEY_BYTES: usize = 4032;
 
-/// ML-DSA-65 signature size in bytes (Dilithium3)
+/// ML-DSA-65 signature size in bytes
 pub const ML_DSA_65_SIGNATURE_BYTES: usize = 3309;
 
 /// ML-DSA-65 public key for signature verification
@@ -72,13 +72,21 @@ impl MlDsa65PublicKey {
 
     /// Verify a signature on a message
     pub fn verify(&self, message: &[u8], signature: &MlDsa65Signature) -> Result<(), PqError> {
-        let pk = dilithium3::PublicKey::from_bytes(&self.bytes)
-            .map_err(|_| PqError::InvalidPublicKey("failed to parse public key".into()))?;
+        use ml_dsa::signature::Verifier;
 
-        let sig = dilithium3::DetachedSignature::from_bytes(&signature.bytes)
-            .map_err(|_| PqError::InvalidSignature("failed to parse signature".into()))?;
+        // Parse the public key using decode()
+        let vk_encoded = hybrid_array::Array::try_from(&self.bytes[..])
+            .expect("public key has correct size");
+        let vk = VerifyingKey::<MlDsa65>::decode(&vk_encoded);
 
-        dilithium3::verify_detached_signature(&sig, message, &pk)
+        // Parse the signature using decode()
+        let sig_encoded = hybrid_array::Array::try_from(&signature.bytes[..])
+            .expect("signature has correct size");
+        let sig = ml_dsa::Signature::<MlDsa65>::decode(&sig_encoded)
+            .ok_or_else(|| PqError::InvalidSignature("failed to decode signature".into()))?;
+
+        // Verify
+        vk.verify(message, &sig)
             .map_err(|_| PqError::VerificationFailed)
     }
 }
@@ -178,29 +186,41 @@ pub struct MlDsa65KeyPair {
 impl MlDsa65KeyPair {
     /// Generate a new random keypair
     pub fn generate() -> Self {
-        let (pk, sk) = dilithium3::keypair();
+        // Get 32 random bytes using rand_core 0.6's OsRng
+        let mut seed = [0u8; 32];
+        rand_core::OsRng.fill_bytes(&mut seed);
+
+        // Use deterministic keygen from the seed
+        Self::from_seed(&seed)
+    }
+
+    /// Generate a keypair deterministically from a 32-byte seed
+    ///
+    /// This uses ML-DSA's internal deterministic key generation (FIPS 204 KeyGen_internal).
+    /// The same seed always produces the same keypair.
+    pub fn from_seed(seed: &[u8; 32]) -> Self {
+        // Convert to ml-dsa's B32 type (Array<u8, U32>)
+        let seed_arr = hybrid_array::Array::try_from(&seed[..])
+            .expect("seed has correct size");
+
+        // Use KeyGen trait's from_seed method for deterministic generation
+        // This completely avoids any RNG version conflicts!
+        let keypair = <MlDsa65 as KeyGen>::from_seed(&seed_arr);
+
+        // Encode keys to bytes
+        let pk_encoded = keypair.verifying_key().encode();
+        let sk_encoded = keypair.signing_key().encode();
 
         let mut pk_bytes = [0u8; ML_DSA_65_PUBLIC_KEY_BYTES];
-        pk_bytes.copy_from_slice(pk.as_bytes());
+        pk_bytes.copy_from_slice(pk_encoded.as_slice());
 
         let mut sk_bytes = [0u8; ML_DSA_65_SECRET_KEY_BYTES];
-        sk_bytes.copy_from_slice(sk.as_bytes());
+        sk_bytes.copy_from_slice(sk_encoded.as_slice());
 
         Self {
             public_key: MlDsa65PublicKey { bytes: pk_bytes },
             secret_key: MlDsa65SecretKey { bytes: sk_bytes },
         }
-    }
-
-    /// Generate a keypair deterministically from a 32-byte seed
-    ///
-    /// Note: Currently uses random keygen as pqcrypto doesn't expose seeded keygen.
-    /// TODO: Implement proper deterministic keygen when pqcrypto supports it.
-    pub fn from_seed(_seed: &[u8; 32]) -> Self {
-        // pqcrypto doesn't expose seeded keygen directly.
-        // For now, generate random keys. This will be fixed when we add
-        // a proper seeded keygen implementation.
-        Self::generate()
     }
 
     /// Get the public key
@@ -215,13 +235,18 @@ impl MlDsa65KeyPair {
 
     /// Sign a message
     pub fn sign(&self, message: &[u8]) -> MlDsa65Signature {
-        let sk = dilithium3::SecretKey::from_bytes(&self.secret_key.bytes)
-            .expect("Invalid secret key bytes in sign");
+        use ml_dsa::signature::Signer;
 
-        let sig = dilithium3::detached_sign(message, &sk);
+        // Parse the signing key from encoded bytes using decode()
+        let sk_encoded = hybrid_array::Array::try_from(&self.secret_key.bytes[..])
+            .expect("secret key has correct size");
+        let sk = SigningKey::<MlDsa65>::decode(&sk_encoded);
+
+        // Sign the message (deterministic signing)
+        let sig = sk.sign(message);
 
         let mut sig_bytes = [0u8; ML_DSA_65_SIGNATURE_BYTES];
-        sig_bytes.copy_from_slice(sig.as_bytes());
+        sig_bytes.copy_from_slice(sig.encode().as_slice());
 
         MlDsa65Signature { bytes: sig_bytes }
     }
@@ -257,6 +282,36 @@ mod tests {
 
         // Verify should succeed
         assert!(keypair.public_key().verify(message, &signature).is_ok());
+    }
+
+    #[test]
+    fn test_deterministic_keygen() {
+        let seed = [42u8; 32];
+
+        let keypair1 = MlDsa65KeyPair::from_seed(&seed);
+        let keypair2 = MlDsa65KeyPair::from_seed(&seed);
+
+        // Same seed should produce same keys
+        assert_eq!(keypair1.public_key().as_bytes(), keypair2.public_key().as_bytes());
+        assert_eq!(keypair1.secret_key().as_bytes(), keypair2.secret_key().as_bytes());
+
+        // Different seed should produce different keys
+        let keypair3 = MlDsa65KeyPair::from_seed(&[43u8; 32]);
+        assert_ne!(keypair1.public_key().as_bytes(), keypair3.public_key().as_bytes());
+    }
+
+    #[test]
+    fn test_deterministic_signing() {
+        let seed = [42u8; 32];
+        let keypair = MlDsa65KeyPair::from_seed(&seed);
+        let message = b"deterministic test";
+
+        // Both signatures should verify
+        let sig1 = keypair.sign(message);
+        let sig2 = keypair.sign(message);
+
+        assert!(keypair.public_key().verify(message, &sig1).is_ok());
+        assert!(keypair.public_key().verify(message, &sig2).is_ok());
     }
 
     #[test]

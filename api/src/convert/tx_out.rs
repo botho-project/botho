@@ -88,7 +88,7 @@ impl TryFrom<&external::TxOut> for tx::TxOut {
 mod tests {
     use super::*;
     use bth_crypto_keys::RistrettoPrivate;
-    use bth_transaction_core::{tokens::Mob, Amount, BlockVersion, PublicAddress, Token};
+    use bth_transaction_core::{tokens::Bth, Amount, BlockVersion, PublicAddress, Token};
     use bth_util_from_random::FromRandom;
     use rand::{rngs::StdRng, SeedableRng};
 
@@ -99,7 +99,7 @@ mod tests {
 
         let amount = Amount {
             value: 1u64 << 13,
-            token_id: Mob::ID,
+            token_id: Bth::ID,
         };
         let source = tx::TxOut::new(
             BlockVersion::ZERO,
@@ -122,7 +122,7 @@ mod tests {
 
         let amount = Amount {
             value: 1u64 << 13,
-            token_id: Mob::ID,
+            token_id: Bth::ID,
         };
         let source = tx::TxOut::new(
             BlockVersion::MAX,

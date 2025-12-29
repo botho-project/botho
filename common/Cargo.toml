@@ -66,3 +66,4 @@ slog-term = { workspace = true, optional = true }
 
 [dev-dependencies]
 proptest = { workspace = true, features = ["default-code-coverage"] }
+serde_json = { workspace = true }

@@ -19,15 +19,15 @@ pub trait Token {
 /// external.proto
 pub mod tokens {
     use super::*;
-    use crate::constants::MICROMOB_TO_PICOMOB;
+    use crate::constants::MICROBTH_TO_NANOBTH;
 
-    /// The MOB token.
-    pub struct Mob;
-    impl Token for Mob {
+    /// The BTH token.
+    pub struct Bth;
+    impl Token for Bth {
         /// Token Id.
         const ID: TokenId = TokenId::BTH;
 
-        /// Minimum fee, deominated in picoMOB.
-        const MINIMUM_FEE: u64 = 400 * MICROMOB_TO_PICOMOB;
+        /// Minimum fee, denominated in nanoBTH.
+        const MINIMUM_FEE: u64 = 400 * MICROBTH_TO_NANOBTH;
     }
 }

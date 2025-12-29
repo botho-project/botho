@@ -2,7 +2,7 @@
 
 //! A helper object for maintaining a map of token id -> minimum fee.
 
-use crate::{tokens::Mob, Token, TokenId};
+use crate::{tokens::Bth, Token, TokenId};
 use alloc::collections::BTreeMap;
 use displaydoc::Display;
 use bth_crypto_digestible::{Digestible, MerlinTranscript};
@@ -121,9 +121,9 @@ impl FeeMap {
             return Err(Error::InvalidFeeNotDivisible(*token_id, *fee));
         }
 
-        // Must have a minimum fee for MOB.
-        if !minimum_fees.contains_key(&Mob::ID) {
-            return Err(Error::MissingFee(Mob::ID));
+        // Must have a minimum fee for BTH.
+        if !minimum_fees.contains_key(&Bth::ID) {
+            return Err(Error::MissingFee(Bth::ID));
         }
 
         // All good.
@@ -138,7 +138,7 @@ impl FeeMap {
     /// Helper method for constructing the default fee map.
     pub fn default_map() -> BTreeMap<TokenId, u64> {
         let mut map = BTreeMap::new();
-        map.insert(Mob::ID, Mob::MINIMUM_FEE);
+        map.insert(Bth::ID, Bth::MINIMUM_FEE);
         map
     }
 
@@ -169,14 +169,14 @@ mod test {
     /// Valid fee maps ids should be accepted
     #[test]
     fn valid_fee_maps_accepted() {
-        let fee_map1 = FeeMap::try_from_iter([(Mob::ID, 1024), (TokenId::from(2), 80000)]).unwrap();
-        assert!(fee_map1.get_fee_for_token(&Mob::ID).is_some());
+        let fee_map1 = FeeMap::try_from_iter([(Bth::ID, 1024), (TokenId::from(2), 80000)]).unwrap();
+        assert!(fee_map1.get_fee_for_token(&Bth::ID).is_some());
 
-        let fee_map2 = FeeMap::try_from_iter([(Mob::ID, 1024), (TokenId::from(2), 3072)]).unwrap();
-        assert!(fee_map2.get_fee_for_token(&Mob::ID).is_some());
+        let fee_map2 = FeeMap::try_from_iter([(Bth::ID, 1024), (TokenId::from(2), 3072)]).unwrap();
+        assert!(fee_map2.get_fee_for_token(&Bth::ID).is_some());
 
-        let fee_map3 = FeeMap::try_from_iter([(Mob::ID, 1024), (TokenId::from(30), 3072)]).unwrap();
-        assert!(fee_map3.get_fee_for_token(&Mob::ID).is_some());
+        let fee_map3 = FeeMap::try_from_iter([(Bth::ID, 1024), (TokenId::from(30), 3072)]).unwrap();
+        assert!(fee_map3.get_fee_for_token(&Bth::ID).is_some());
     }
 
     /// Invalid fee maps are rejected.
@@ -184,31 +184,31 @@ mod test {
     fn invalid_fee_maps_are_rejected() {
         let test_token_id = TokenId::from(2);
 
-        // Missing MOB is not allowed
+        // Missing BTH is not allowed
         assert_eq!(
             FeeMap::is_valid_map(&BTreeMap::default()),
-            Err(Error::MissingFee(Mob::ID)),
+            Err(Error::MissingFee(Bth::ID)),
         );
 
         assert_eq!(
             FeeMap::is_valid_map(&BTreeMap::from_iter(vec![(test_token_id, 1024)])),
-            Err(Error::MissingFee(Mob::ID)),
+            Err(Error::MissingFee(Bth::ID)),
         );
 
         // All fees must be >0
         assert_eq!(
-            FeeMap::is_valid_map(&BTreeMap::from_iter(vec![(Mob::ID, 0)])),
-            Err(Error::InvalidFeeTooSmall(Mob::ID, 0)),
+            FeeMap::is_valid_map(&BTreeMap::from_iter(vec![(Bth::ID, 0)])),
+            Err(Error::InvalidFeeTooSmall(Bth::ID, 0)),
         );
 
         assert_eq!(
-            FeeMap::is_valid_map(&BTreeMap::from_iter(vec![(Mob::ID, 10)])),
-            Err(Error::InvalidFeeTooSmall(Mob::ID, 10)),
+            FeeMap::is_valid_map(&BTreeMap::from_iter(vec![(Bth::ID, 10)])),
+            Err(Error::InvalidFeeTooSmall(Bth::ID, 10)),
         );
 
         assert_eq!(
             FeeMap::is_valid_map(&BTreeMap::from_iter(vec![
-                (Mob::ID, 1024),
+                (Bth::ID, 1024),
                 (test_token_id, 0)
             ])),
             Err(Error::InvalidFeeTooSmall(test_token_id, 0)),
@@ -216,12 +216,12 @@ mod test {
 
         // All fees must be evenly divisible by smallest minimum fee
         assert_eq!(
-            FeeMap::try_from_iter([(Mob::ID, 1023), (TokenId::from(2), 80000)]),
-            Err(Error::InvalidFeeNotDivisible(Mob::ID, 1023))
+            FeeMap::try_from_iter([(Bth::ID, 1023), (TokenId::from(2), 80000)]),
+            Err(Error::InvalidFeeNotDivisible(Bth::ID, 1023))
         );
 
         assert_eq!(
-            FeeMap::try_from_iter([(Mob::ID, 1024), (TokenId::from(2), 80001)]),
+            FeeMap::try_from_iter([(Bth::ID, 1024), (TokenId::from(2), 80001)]),
             Err(Error::InvalidFeeNotDivisible(TokenId::from(2), 80001))
         );
     }

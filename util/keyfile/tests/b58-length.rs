@@ -1,3 +1,10 @@
+// Copyright (c) 2018-2022 The Botho Foundation
+
+// NOTE: This test file is disabled because it tests fog URL b58 encoding,
+// and fog functionality was removed.
+// When fog is re-implemented (if ever), this test should be re-enabled.
+
+/*
 use bth_account_keys::{AccountKey, RootIdentity};
 use bth_api::printable::{printable_wrapper, PrintableWrapper};
 use bth_util_test_helper::{run_with_several_seeds, CryptoRng, RngCore};
@@ -21,9 +28,7 @@ fn test_b58pub_length<T: RngCore + CryptoRng>(
             rng,
             &url,
             "",
-            b"DEADBEEF", /* Length doesn't matter because fog authority spki is signed when we
-                          * go to public address and signature has fixed
-                          * length in the public address */
+            b"DEADBEEF",
         );
 
         let acct_key = AccountKey::from(&root_id);
@@ -55,3 +60,4 @@ fn test_b58_pub_length() {
         assert!(test_b58pub_length(DOMAIN_LIMIT, 10, &mut rng), "Domain limit is not computed correctly, we didn't exceed the limit with urls of length {DOMAIN_LIMIT}");
     })
 }
+*/

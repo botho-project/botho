@@ -5,6 +5,10 @@ edition = "2021"
 description = "A privacy-preserving mined cryptocurrency"
 license = "GPL-3.0"
 
+[features]
+default = []
+pq = ["bth-account-keys/pq", "bth-crypto-pq"]
+
 [lib]
 name = "botho"
 path = "src/lib.rs"
@@ -29,6 +33,7 @@ dirs = "5"
 # Crypto & Keys
 bth-account-keys = { path = "../account-keys" }
 bth-crypto-keys = { path = "../crypto/keys" }
+bth-crypto-pq = { path = "../crypto/pq", optional = true }
 bth-crypto-ring-signature = { path = "../crypto/ring-signature" }
 bth-core = { path = "../core" }
 bth-util-from-random = { path = "../util/from-random" }

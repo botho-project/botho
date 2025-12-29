@@ -5,124 +5,19 @@
 
 use bth_account_keys::{AccountKey, PublicAddress, RootIdentity};
 use bth_api::{blockchain, external, quorum_set};
-use bth_blockchain_test_utils::{
-    get_blocks, make_block_metadata, make_quorum_set, make_verification_report,
-};
-use bth_blockchain_types::{
-    BlockData, BlockID, BlockMetadata, BlockVersion, QuorumSet, VerificationReport,
-};
-use bth_crypto_ring_signature_signer::NoKeysRingSigner;
-use bth_transaction_builder::{
-    test_utils::get_input_credentials, EmptyMemoBuilder, ReservedSubaddresses,
-    SignedContingentInputBuilder,
-};
-use bth_transaction_core::Amount;
-use bth_transaction_extra::SignedContingentInput;
+use bth_blockchain_test_utils::{get_blocks, make_block_metadata, make_quorum_set, make_verification_report};
+use bth_blockchain_types::{BlockData, BlockID, BlockMetadata, BlockVersion, QuorumSet, VerificationReport};
 use bth_util_from_random::FromRandom;
 use bth_util_serial::round_trip_message;
 use bth_util_test_helper::{run_with_several_seeds, CryptoRng, RngCore};
 
-// Generate some example root identities
+// Generate some example root identities (non-fog only)
 fn root_identity_examples<T: RngCore + CryptoRng>(rng: &mut T) -> Vec<RootIdentity> {
     vec![
         RootIdentity::from_random(rng),
-        RootIdentity::random_with_fog(rng, "fog://example.com", "", &[]),
-        RootIdentity::random_with_fog(rng, "fog://example.com", "", &[7u8, 7u8, 7u8, 7u8]),
-        RootIdentity::random_with_fog(rng, "fog://example.com", "1", &[7u8, 7u8, 7u8, 7u8]),
-        RootIdentity::random_with_fog(rng, "fog://example.com", "1", &[]),
+        RootIdentity::from_random(rng),
+        RootIdentity::from_random(rng),
     ]
-}
-
-// Signed contingent input examples
-fn signed_contingent_input_examples<T: RngCore + CryptoRng>(
-    block_version: BlockVersion,
-    rng: &mut T,
-) -> Vec<SignedContingentInput> {
-    let mut result = Vec::new();
-
-    let sender = AccountKey::random(rng);
-    let recipient = AccountKey::random(rng).default_subaddress();
-    let recipient2 = AccountKey::random_with_fog(rng).default_subaddress();
-    let sender_change_dest = ReservedSubaddresses::from(&sender);
-
-    let fpr = MockFogResolver(
-        [(
-            recipient2.fog_report_url().unwrap().to_string(),
-            FullyValidatedFogPubkey {
-                pubkey: FromRandom::from_random(rng),
-                pubkey_expiry: 1000,
-            },
-        )]
-        .into(),
-    );
-
-    let input_credentials = get_input_credentials(
-        block_version,
-        Amount::new(200, 1.into()),
-        &sender,
-        &fpr,
-        rng,
-    );
-    let mut builder = SignedContingentInputBuilder::new(
-        block_version,
-        input_credentials,
-        fpr.clone(),
-        EmptyMemoBuilder,
-    )
-    .unwrap();
-    builder
-        .add_required_output(Amount::new(400, 0.into()), &recipient, rng)
-        .unwrap();
-    result.push(builder.build(&NoKeysRingSigner {}, rng).unwrap());
-
-    let input_credentials = get_input_credentials(
-        block_version,
-        Amount::new(200, 1.into()),
-        &sender,
-        &fpr,
-        rng,
-    );
-    let mut builder = SignedContingentInputBuilder::new(
-        block_version,
-        input_credentials,
-        fpr.clone(),
-        EmptyMemoBuilder,
-    )
-    .unwrap();
-    builder
-        .add_required_output(Amount::new(400, 0.into()), &recipient, rng)
-        .unwrap();
-    builder
-        .add_required_output(Amount::new(600, 2.into()), &recipient2, rng)
-        .unwrap();
-    result.push(builder.build(&NoKeysRingSigner {}, rng).unwrap());
-
-    let input_credentials = get_input_credentials(
-        block_version,
-        Amount::new(300, 1.into()),
-        &sender,
-        &fpr,
-        rng,
-    );
-    let mut builder = SignedContingentInputBuilder::new(
-        block_version,
-        input_credentials,
-        fpr.clone(),
-        EmptyMemoBuilder,
-    )
-    .unwrap();
-    builder
-        .add_required_output(Amount::new(400, 0.into()), &recipient, rng)
-        .unwrap();
-    builder
-        .add_required_output(Amount::new(600, 2.into()), &recipient2, rng)
-        .unwrap();
-    builder
-        .add_required_change_output(Amount::new(100, 1.into()), &sender_change_dest, rng)
-        .unwrap();
-    result.push(builder.build(&NoKeysRingSigner {}, rng).unwrap());
-
-    result
 }
 
 // Test that RootIdentity roundtrips through .proto structure
@@ -157,19 +52,8 @@ fn public_address_round_trip() {
     })
 }
 
-// Test that a SignedContingentInput round trips through .proto structure
-#[test]
-fn signed_contingent_input_round_trip() {
-    run_with_several_seeds(|mut rng| {
-        for block_version in BlockVersion::iterator().skip(3) {
-            for example in signed_contingent_input_examples(block_version, &mut rng) {
-                round_trip_message::<SignedContingentInput, external::SignedContingentInput>(
-                    &example,
-                );
-            }
-        }
-    })
-}
+// NOTE: SignedContingentInput round trip test removed - requires fog functionality
+// which was removed as part of the fog removal.
 
 #[test]
 fn block_metadata_round_trip() {

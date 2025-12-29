@@ -18,8 +18,10 @@
 //! 5. Shared secret is used to derive the one-time output keys
 
 use crate::error::PqError;
-use pqcrypto_kyber::kyber768;
-use pqcrypto_traits::kem::{Ciphertext as _, PublicKey as _, SecretKey as _, SharedSecret as _};
+use ml_kem::{kem::Encapsulate, Encoded, EncodedSizeUser, KemCore, MlKem768};
+// Use rand_core 0.6 which is compatible with ml-kem
+use rand_chacha::ChaCha20Rng;
+use rand_core::{OsRng, SeedableRng};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -80,16 +82,21 @@ impl MlKem768PublicKey {
     /// - ciphertext should be included in the transaction output
     /// - shared_secret is used to derive one-time keys
     pub fn encapsulate(&self) -> (MlKem768Ciphertext, MlKem768SharedSecret) {
-        let pk = kyber768::PublicKey::from_bytes(&self.bytes)
-            .expect("Invalid public key bytes in encapsulate");
+        // Type alias for the encoded encapsulation key
+        type EkEncoded = Encoded<<MlKem768 as KemCore>::EncapsulationKey>;
 
-        let (ss, ct) = kyber768::encapsulate(&pk);
+        // Parse the public key bytes into Encoded, then into EncapsulationKey
+        let ek_encoded: EkEncoded = EkEncoded::try_from(&self.bytes[..])
+            .expect("invalid encapsulation key size");
+        let ek = <MlKem768 as KemCore>::EncapsulationKey::from_bytes(&ek_encoded);
 
-        let mut ct_bytes = [0u8; ML_KEM_768_CIPHERTEXT_BYTES];
-        ct_bytes.copy_from_slice(ct.as_bytes());
+        // Encapsulate with random
+        let mut rng = OsRng;
+        let (ct, ss) = ek.encapsulate(&mut rng).expect("encapsulation failed");
 
-        let mut ss_bytes = [0u8; ML_KEM_768_SHARED_SECRET_BYTES];
-        ss_bytes.copy_from_slice(ss.as_bytes());
+        // Extract bytes
+        let ct_bytes: [u8; ML_KEM_768_CIPHERTEXT_BYTES] = ct.as_slice().try_into().unwrap();
+        let ss_bytes: [u8; ML_KEM_768_SHARED_SECRET_BYTES] = ss.as_slice().try_into().unwrap();
 
         (
             MlKem768Ciphertext { bytes: ct_bytes },
@@ -212,13 +219,14 @@ pub struct MlKem768KeyPair {
 impl MlKem768KeyPair {
     /// Generate a new random keypair
     pub fn generate() -> Self {
-        let (pk, sk) = kyber768::keypair();
+        let mut rng = OsRng;
+        let (dk, ek) = MlKem768::generate(&mut rng);
 
         let mut pk_bytes = [0u8; ML_KEM_768_PUBLIC_KEY_BYTES];
-        pk_bytes.copy_from_slice(pk.as_bytes());
+        pk_bytes.copy_from_slice(ek.as_bytes().as_slice());
 
         let mut sk_bytes = [0u8; ML_KEM_768_SECRET_KEY_BYTES];
-        sk_bytes.copy_from_slice(sk.as_bytes());
+        sk_bytes.copy_from_slice(dk.as_bytes().as_slice());
 
         Self {
             public_key: MlKem768PublicKey { bytes: pk_bytes },
@@ -228,17 +236,23 @@ impl MlKem768KeyPair {
 
     /// Generate a keypair deterministically from a 32-byte seed
     ///
-    /// This uses HKDF to expand the seed into the required randomness
-    /// for key generation, ensuring the same seed always produces
-    /// the same keypair.
-    ///
-    /// Note: Currently uses random keygen as pqcrypto doesn't expose seeded keygen.
-    /// TODO: Implement proper deterministic keygen when pqcrypto supports it.
-    pub fn from_seed(_seed: &[u8; 32]) -> Self {
-        // pqcrypto doesn't expose seeded keygen directly.
-        // For now, generate random keys. This will be fixed when we add
-        // a proper seeded keygen implementation.
-        Self::generate()
+    /// This uses ChaCha20Rng seeded with the input to generate
+    /// deterministic keys. The same seed always produces the same keypair.
+    pub fn from_seed(seed: &[u8; 32]) -> Self {
+        // ChaCha20Rng from rand_chacha 0.3 is compatible with ml-kem's rand_core 0.6
+        let mut rng = ChaCha20Rng::from_seed(*seed);
+        let (dk, ek) = MlKem768::generate(&mut rng);
+
+        let mut pk_bytes = [0u8; ML_KEM_768_PUBLIC_KEY_BYTES];
+        pk_bytes.copy_from_slice(ek.as_bytes().as_slice());
+
+        let mut sk_bytes = [0u8; ML_KEM_768_SECRET_KEY_BYTES];
+        sk_bytes.copy_from_slice(dk.as_bytes().as_slice());
+
+        Self {
+            public_key: MlKem768PublicKey { bytes: pk_bytes },
+            secret_key: MlKem768SecretKey { bytes: sk_bytes },
+        }
     }
 
     /// Get the public key
@@ -253,16 +267,27 @@ impl MlKem768KeyPair {
 
     /// Decapsulate a ciphertext to recover the shared secret
     pub fn decapsulate(&self, ciphertext: &MlKem768Ciphertext) -> Result<MlKem768SharedSecret, PqError> {
-        let sk = kyber768::SecretKey::from_bytes(&self.secret_key.bytes)
-            .map_err(|_| PqError::InvalidSecretKey("failed to parse secret key".into()))?;
+        use ml_kem::kem::Decapsulate;
 
-        let ct = kyber768::Ciphertext::from_bytes(&ciphertext.bytes)
-            .map_err(|_| PqError::InvalidCiphertext("failed to parse ciphertext".into()))?;
+        // Type aliases for encoded types
+        type DkEncoded = Encoded<<MlKem768 as KemCore>::DecapsulationKey>;
+        type CtEncoded = ml_kem::Ciphertext<MlKem768>;
 
-        let ss = kyber768::decapsulate(&ct, &sk);
+        // Parse the secret key (decapsulation key) bytes into Encoded, then into DecapsulationKey
+        let dk_encoded: DkEncoded = DkEncoded::try_from(&self.secret_key.bytes[..])
+            .map_err(|_| PqError::InvalidSecretKey("invalid decapsulation key size".into()))?;
+        let dk = <MlKem768 as KemCore>::DecapsulationKey::from_bytes(&dk_encoded);
+
+        // Parse the ciphertext - Ciphertext is just an Array, use TryFrom
+        let ct: CtEncoded = CtEncoded::try_from(&ciphertext.bytes[..])
+            .map_err(|_| PqError::InvalidCiphertext("invalid ciphertext size".into()))?;
+
+        // Decapsulate - returns Result<SharedSecret, ()> in newer ml-kem
+        let ss = dk.decapsulate(&ct)
+            .map_err(|_| PqError::DecapsulationFailed)?;
 
         let mut ss_bytes = [0u8; ML_KEM_768_SHARED_SECRET_BYTES];
-        ss_bytes.copy_from_slice(ss.as_bytes());
+        ss_bytes.copy_from_slice(ss.as_slice());
 
         Ok(MlKem768SharedSecret { bytes: ss_bytes })
     }
@@ -298,6 +323,22 @@ mod tests {
 
         let decapsulated = keypair.decapsulate(&ciphertext).unwrap();
         assert_eq!(shared_secret.as_bytes(), decapsulated.as_bytes());
+    }
+
+    #[test]
+    fn test_deterministic_keygen() {
+        let seed = [42u8; 32];
+
+        let keypair1 = MlKem768KeyPair::from_seed(&seed);
+        let keypair2 = MlKem768KeyPair::from_seed(&seed);
+
+        // Same seed should produce same keys
+        assert_eq!(keypair1.public_key().as_bytes(), keypair2.public_key().as_bytes());
+        assert_eq!(keypair1.secret_key().as_bytes(), keypair2.secret_key().as_bytes());
+
+        // Different seed should produce different keys
+        let keypair3 = MlKem768KeyPair::from_seed(&[43u8; 32]);
+        assert_ne!(keypair1.public_key().as_bytes(), keypair3.public_key().as_bytes());
     }
 
     #[test]

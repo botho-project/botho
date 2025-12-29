@@ -4,6 +4,7 @@ import {
   useEffect,
   useState,
   useCallback,
+  useRef,
   type ReactNode,
 } from 'react'
 import { LocalNodeAdapter } from '@botho/adapters'
@@ -21,11 +22,13 @@ interface ConnectionContextValue extends ConnectionState {
   connectToNode: (node: NodeInfo) => Promise<void>
   disconnect: () => void
   addCustomNode: (host: string, port: number) => Promise<void>
+  /** The connected adapter for making API calls */
+  adapter: LocalNodeAdapter | null
 }
 
 const ConnectionContext = createContext<ConnectionContextValue | null>(null)
 
-const adapter = new LocalNodeAdapter()
+const scanAdapter = new LocalNodeAdapter()
 
 export function ConnectionProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<ConnectionState>({
@@ -34,12 +37,13 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     connectedNode: null,
     error: null,
   })
+  const adapterRef = useRef<LocalNodeAdapter | null>(null)
 
   const scanForNodes = useCallback(async () => {
     setState((s) => ({ ...s, isScanning: true, error: null }))
 
     try {
-      const nodes = await adapter.scanForNodes()
+      const nodes = await scanAdapter.scanForNodes()
       setState((s) => ({
         ...s,
         isScanning: false,
@@ -62,6 +66,11 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     }))
 
     try {
+      // Disconnect existing adapter if any
+      if (adapterRef.current) {
+        adapterRef.current.disconnect()
+      }
+
       // Create a new adapter for this specific node
       const nodeAdapter = new LocalNodeAdapter({
         host: node.host,
@@ -69,6 +78,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       })
       await nodeAdapter.connect()
 
+      adapterRef.current = nodeAdapter
       const connectedNode = nodeAdapter.getNodeInfo()
       setState((s) => ({
         ...s,
@@ -78,6 +88,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       // Store last connected node
       localStorage.setItem('botho-last-node', JSON.stringify(connectedNode))
     } catch (err) {
+      adapterRef.current = null
       setState((s) => ({
         ...s,
         connectedNode: null,
@@ -87,7 +98,10 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const disconnect = useCallback(() => {
-    adapter.disconnect()
+    if (adapterRef.current) {
+      adapterRef.current.disconnect()
+      adapterRef.current = null
+    }
     setState((s) => ({
       ...s,
       connectedNode: null,
@@ -139,6 +153,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
           await nodeAdapter.connect()
           const connectedNode = nodeAdapter.getNodeInfo()
           if (connectedNode) {
+            adapterRef.current = nodeAdapter
             setState((s) => ({ ...s, connectedNode }))
             return
           }
@@ -160,6 +175,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
         connectToNode,
         disconnect,
         addCustomNode,
+        adapter: adapterRef.current,
       }}
     >
       {children}

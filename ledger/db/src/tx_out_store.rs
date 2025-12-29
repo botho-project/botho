@@ -213,7 +213,7 @@ pub mod tx_out_store_tests {
     use bth_account_keys::AccountKey;
     use bth_common::Hash;
     use bth_crypto_keys::{CompressedRistrettoPublic, RistrettoPrivate};
-    use bth_transaction_core::{tokens::Mob, tx::TxOut, Amount, BlockVersion, Token};
+    use bth_transaction_core::{tokens::Bth, tx::TxOut, Amount, BlockVersion, Token};
     use bth_util_from_random::FromRandom;
     use rand::{rngs::StdRng, SeedableRng};
     use std::path::Path;
@@ -246,7 +246,7 @@ pub mod tx_out_store_tests {
         let mut tx_outs: Vec<TxOut> = Vec::new();
         let recipient_account = AccountKey::random(&mut rng);
         let value: u64 = 100;
-        let token_id = Mob::ID;
+        let token_id = Bth::ID;
 
         for _i in 0..num_tx_outs {
             let amount = Amount { value, token_id };

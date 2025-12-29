@@ -448,4 +448,63 @@ mod test {
             account2.spend_private_key().to_bytes()
         );
     }
+
+    /// Regenerate slip10_key.json test vectors
+    /// Run with: cargo test -p bth-core --lib -- --nocapture --ignored regen_slip10_key_vectors
+    #[test]
+    #[ignore]
+    fn regen_slip10_key_vectors() {
+        std::println!("\n=== REGENERATED slip10_key.json ===\n[");
+        for data in SLIPKEY_TO_RISTRETTO_TESTS.iter() {
+            let mut key_bytes = [0u8; 32];
+            hex::decode_to_slice(&data.slip10_hex, &mut key_bytes).unwrap();
+
+            // Get the raw scalar bytes (64 bytes for HKDF output)
+            let view_kdf = Hkdf::<Sha512>::new(Some(b"botho-ristretto255-view"), &key_bytes);
+            let mut view_okm = [0u8; 64];
+            view_kdf.expand(b"", &mut view_okm).unwrap();
+
+            let spend_kdf = Hkdf::<Sha512>::new(Some(b"botho-ristretto255-spend"), &key_bytes);
+            let mut spend_okm = [0u8; 64];
+            spend_kdf.expand(b"", &mut spend_okm).unwrap();
+
+            std::println!(r#"    {{
+        "slip10_hex": "{}",
+        "view_hex": "{}",
+        "spend_hex": "{}"
+    }},"#, data.slip10_hex, hex::encode(view_okm), hex::encode(spend_okm));
+        }
+        std::println!("]");
+    }
+
+    /// Regenerate slip10_mnemonic.json test vectors
+    /// Run with: cargo test -p bth-core --lib -- --nocapture --ignored regen_slip10_mnemonic_vectors
+    #[test]
+    #[ignore]
+    #[cfg(feature = "bip39")]
+    fn regen_slip10_mnemonic_vectors() {
+        std::println!("\n=== REGENERATED slip10_mnemonic.json ===\n[");
+        for data in MNEMONIC_TO_RISTRETTO_TESTS.iter() {
+            let mnemonic = Mnemonic::from_phrase(&data.phrase, Language::English).unwrap();
+            let slip10_key = mnemonic.derive_slip10_key(data.account_index);
+
+            let key_bytes: &[u8] = slip10_key.as_ref();
+
+            let view_kdf = Hkdf::<Sha512>::new(Some(b"botho-ristretto255-view"), key_bytes);
+            let mut view_okm = [0u8; 64];
+            view_kdf.expand(b"", &mut view_okm).unwrap();
+
+            let spend_kdf = Hkdf::<Sha512>::new(Some(b"botho-ristretto255-spend"), key_bytes);
+            let mut spend_okm = [0u8; 64];
+            spend_kdf.expand(b"", &mut spend_okm).unwrap();
+
+            std::println!(r#"    {{
+        "phrase": "{}",
+        "account_index": {},
+        "view_hex": "{}",
+        "spend_hex": "{}"
+    }},"#, data.phrase, data.account_index, hex::encode(view_okm), hex::encode(spend_okm));
+        }
+        std::println!("]");
+    }
 }

@@ -17,7 +17,7 @@ use bth_transaction_core::{
     get_tx_out_shared_secret,
     onetime_keys::recover_onetime_private_key,
     ring_signature::KeyImage,
-    tokens::Mob,
+    tokens::Bth,
     tx::{Tx, TxOut},
     Amount, Token,
 };
@@ -67,15 +67,15 @@ pub fn create_transaction<L: Ledger, R: RngCore + CryptoRng>(
         .get_value(&shared_secret)
         .unwrap();
 
-    assert!(amount.value >= Mob::MINIMUM_FEE);
+    assert!(amount.value >= Bth::MINIMUM_FEE);
     create_transaction_with_amount(
         block_version,
         ledger,
         tx_out,
         sender,
         recipient,
-        amount.value - Mob::MINIMUM_FEE,
-        Mob::MINIMUM_FEE,
+        amount.value - Bth::MINIMUM_FEE,
+        Bth::MINIMUM_FEE,
         tombstone_block,
         rng,
     )
@@ -281,7 +281,7 @@ pub fn initialize_ledger(
     rng: &mut (impl CryptoRng + RngCore),
 ) -> Vec<BlockData> {
     let value: u64 = INITIALIZE_LEDGER_AMOUNT;
-    let token_id = Mob::ID;
+    let token_id = Bth::ID;
 
     // TxOut from the previous block
     let mut to_spend: Option<TxOut> = None;

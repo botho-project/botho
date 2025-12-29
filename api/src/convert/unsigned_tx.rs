@@ -113,7 +113,7 @@ mod tests {
     use bth_transaction_builder::{
         test_utils::get_input_credentials, EmptyMemoBuilder, TransactionBuilder,
     };
-    use bth_transaction_core::{tokens::Mob, Amount, Token};
+    use bth_transaction_core::{tokens::Bth, Amount, Token};
     use rand::{rngs::StdRng, SeedableRng};
 
     // Test converting between external::UnsignedTx and
@@ -129,19 +129,19 @@ mod tests {
 
             let mut transaction_builder = TransactionBuilder::new(
                 block_version,
-                Amount::new(Mob::MINIMUM_FEE, Mob::ID),
+                Amount::new(Bth::MINIMUM_FEE, Bth::ID),
             )
             .unwrap();
 
             transaction_builder.add_input(get_input_credentials(
                 block_version,
-                Amount::new(65536 + Mob::MINIMUM_FEE, Mob::ID),
+                Amount::new(65536 + Bth::MINIMUM_FEE, Bth::ID),
                 &alice,
                 &mut rng,
             ));
             transaction_builder
                 .add_output(
-                    Amount::new(65536, Mob::ID),
+                    Amount::new(65536, Bth::ID),
                     &bob.default_subaddress(),
                     &mut rng,
                 )

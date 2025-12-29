@@ -73,7 +73,7 @@ mod tests {
         SignedContingentInputBuilder,
     };
     use bth_transaction_core::{
-        constants::MILLIMOB_TO_PICOMOB, tokens::Mob, Amount, BlockVersion, Token, TokenId,
+        constants::MILLIBTH_TO_NANOBTH, tokens::Bth, Amount, BlockVersion, Token, TokenId,
     };
     use prost::Message;
     use rand::{rngs::StdRng, SeedableRng};
@@ -94,9 +94,12 @@ mod tests {
             &charlie,
             &mut rng,
         );
+        // Global indices for the ring members (one per ring member)
+        let ring_global_indices: Vec<u64> = (0..input_credentials.ring.len() as u64).collect();
         let mut sci_builder = SignedContingentInputBuilder::new(
             BlockVersion::MAX,
             input_credentials,
+            ring_global_indices,
             EmptyMemoBuilder,
         )
         .unwrap();
@@ -104,7 +107,7 @@ mod tests {
         // Originator requests an output worth 1MOB destined to themselves
         sci_builder
             .add_partial_fill_output(
-                Amount::new(1000 * MILLIMOB_TO_PICOMOB, Mob::ID),
+                Amount::new(1000 * MILLIBTH_TO_NANOBTH, Bth::ID),
                 &charlie.default_subaddress(),
                 &mut rng,
             )
@@ -118,10 +121,10 @@ mod tests {
                 &mut rng,
             )
             .unwrap();
-        let mut sci = sci_builder.build(&NoKeysRingSigner {}, &mut rng).unwrap();
+        let sci = sci_builder.build(&NoKeysRingSigner {}, &mut rng).unwrap();
 
-        sci.tx_in.proofs = proofs;
-        sci.tx_out_global_indices = vec![1, 2, 3, 4];
+        // Note: proofs field was removed from TxIn as part of SGX removal
+        // sci.tx_out_global_indices is not directly mutable, skip modification
 
         // decode(encode(sci)) should be the identity function.
         {

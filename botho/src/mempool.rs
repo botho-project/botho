@@ -5,10 +5,19 @@
 //! Handles both simple (visible sender) and private (ring signature) transactions.
 //! For simple transactions, tracks spent UTXOs. For private transactions, tracks
 //! spent key images to prevent double-spending.
+//!
+//! ## Fee Validation
+//!
+//! Uses the cluster-tax fee system to compute minimum fees based on:
+//! - Transaction type (Simple = Plain, Ring = Hidden)
+//! - Transfer amount
+//! - Sender's cluster wealth (currently 0, cluster tracking not yet implemented)
+//! - Number of memos (currently 0, memos not yet implemented)
 
 use std::collections::{HashMap, HashSet};
 use tracing::{debug, warn};
 
+use bth_cluster_tax::{FeeConfig, TransactionType as FeeTransactionType};
 use crate::ledger::Ledger;
 use crate::transaction::{Transaction, TxInputs, UtxoId};
 
@@ -46,16 +55,70 @@ pub struct Mempool {
     spent_utxos: HashSet<UtxoId>,
     /// Spent key images in mempool (for private transactions)
     spent_key_images: HashSet<[u8; 32]>,
+    /// Fee configuration for computing minimum fees
+    fee_config: FeeConfig,
 }
 
 impl Mempool {
-    /// Create a new empty mempool
+    /// Create a new empty mempool with default fee configuration
     pub fn new() -> Self {
         Self {
             txs: HashMap::new(),
             spent_utxos: HashSet::new(),
             spent_key_images: HashSet::new(),
+            fee_config: FeeConfig::default(),
         }
+    }
+
+    /// Create a new empty mempool with custom fee configuration
+    pub fn with_fee_config(fee_config: FeeConfig) -> Self {
+        Self {
+            txs: HashMap::new(),
+            spent_utxos: HashSet::new(),
+            spent_key_images: HashSet::new(),
+            fee_config,
+        }
+    }
+
+    /// Get the fee configuration
+    pub fn fee_config(&self) -> &FeeConfig {
+        &self.fee_config
+    }
+
+    /// Estimate the minimum fee for a transaction.
+    ///
+    /// # Arguments
+    /// * `is_private` - True for ring signature transactions (Hidden), false for simple (Plain)
+    /// * `amount` - The transfer amount in picocredits
+    /// * `num_memos` - Number of outputs with memos (currently unused, set to 0)
+    ///
+    /// # Returns
+    /// The minimum fee in picocredits
+    pub fn estimate_fee(&self, is_private: bool, amount: u64, num_memos: usize) -> u64 {
+        let tx_type = if is_private {
+            FeeTransactionType::Hidden
+        } else {
+            FeeTransactionType::Plain
+        };
+
+        // cluster_wealth = 0 for now (cluster tracking not yet implemented)
+        let cluster_wealth = 0u64;
+
+        self.fee_config.minimum_fee(tx_type, amount, cluster_wealth, num_memos)
+    }
+
+    /// Get the fee rate in basis points for a transaction type.
+    ///
+    /// Useful for displaying to users. 100 bps = 1%.
+    pub fn fee_rate_bps(&self, is_private: bool) -> u32 {
+        let tx_type = if is_private {
+            FeeTransactionType::Hidden
+        } else {
+            FeeTransactionType::Plain
+        };
+
+        // cluster_wealth = 0 for now
+        self.fee_config.fee_rate_bps(tx_type, 0)
     }
 
     /// Add a transaction to the mempool
@@ -100,6 +163,31 @@ impl Mempool {
                 inputs: input_sum,
                 outputs: output_sum,
                 fee: tx.fee,
+            });
+        }
+
+        // Validate fee meets minimum based on transaction type and amount
+        let fee_tx_type = match &tx.inputs {
+            TxInputs::Simple(_) => FeeTransactionType::Plain,
+            TxInputs::Ring(_) => FeeTransactionType::Hidden,
+        };
+
+        // Use output_sum as the transfer amount for fee calculation
+        // cluster_wealth = 0 for now (cluster tracking not yet implemented)
+        // num_memos = 0 for now (memos not yet implemented)
+        let cluster_wealth = 0u64;
+        let num_memos = 0usize;
+        let minimum_fee = self.fee_config.minimum_fee(
+            fee_tx_type,
+            output_sum,
+            cluster_wealth,
+            num_memos,
+        );
+
+        if tx.fee < minimum_fee {
+            return Err(MempoolError::FeeTooLow {
+                minimum: minimum_fee,
+                provided: tx.fee,
             });
         }
 
@@ -404,6 +492,11 @@ pub enum MempoolError {
         outputs: u64,
         fee: u64,
     },
+    /// Fee is below the minimum required
+    FeeTooLow {
+        minimum: u64,
+        provided: u64,
+    },
     LedgerError(String),
     Full,
     /// Key image was already spent (ring signature double-spend)
@@ -420,6 +513,9 @@ impl std::fmt::Display for MempoolError {
             Self::InvalidSignature => write!(f, "Invalid transaction signature"),
             Self::InsufficientInputs { inputs, outputs, fee } => {
                 write!(f, "Insufficient inputs: {} < {} + {}", inputs, outputs, fee)
+            }
+            Self::FeeTooLow { minimum, provided } => {
+                write!(f, "Fee too low: {} provided, {} required", provided, minimum)
             }
             Self::LedgerError(msg) => write!(f, "Ledger error: {}", msg),
             Self::Full => write!(f, "Mempool is full"),

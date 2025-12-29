@@ -109,11 +109,12 @@ impl Miner {
 
     /// Update the work for all mining threads
     pub fn update_work(&self, work: MiningWork) {
-        {
-            let mut current = self.current_work.write().unwrap();
+        if let Ok(mut current) = self.current_work.write() {
             *current = work;
+            drop(current);
+            self.work_version.fetch_add(1, Ordering::SeqCst);
         }
-        self.work_version.fetch_add(1, Ordering::SeqCst);
+        // If lock is poisoned, mining threads will detect stale work and exit
     }
 
     pub fn start(&mut self) {
@@ -186,7 +187,11 @@ fn mine_loop(
         // Check if work has been updated
         let current_version = work_version.load(Ordering::Relaxed);
         if current_version != last_work_version || cached_work.is_none() {
-            cached_work = Some(current_work.read().unwrap().clone());
+            // If lock is poisoned, exit the mining loop gracefully
+            let Ok(work_guard) = current_work.read() else {
+                break;
+            };
+            cached_work = Some(work_guard.clone());
             last_work_version = current_version;
             // Reset nonce when work changes to avoid collisions
             nonce = (thread_id as u64) << 56;

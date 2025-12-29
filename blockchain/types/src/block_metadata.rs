@@ -149,4 +149,283 @@ impl BlockMetadata {
     }
 }
 
-// Test module removed: SGX attestation backwards compatibility tests are no longer relevant
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::{string::ToString, vec::Vec};
+    use core::str::FromStr;
+    use bth_util_from_random::FromRandom;
+    use rand::{rngs::StdRng, SeedableRng};
+
+    /// Create a test BlockID
+    fn make_test_block_id() -> BlockID {
+        BlockID::try_from(&[1u8; 32][..]).unwrap()
+    }
+
+    /// Create a test QuorumSet
+    fn make_test_quorum_set() -> QuorumSet {
+        QuorumSet::empty()
+    }
+
+    /// Create a test ResponderId
+    fn make_test_responder_id() -> ResponderId {
+        ResponderId::from_str("test-node:8080").unwrap()
+    }
+
+    /// Create a test VerificationReport
+    fn make_test_verification_report() -> VerificationReport {
+        VerificationReport::default()
+    }
+
+    /// Create a test Ed25519Pair with a deterministic seed
+    fn make_test_keypair() -> Ed25519Pair {
+        let mut rng = StdRng::seed_from_u64(42);
+        Ed25519Pair::from_random(&mut rng)
+    }
+
+    /// Create another test Ed25519Pair with a different seed
+    fn make_other_keypair() -> Ed25519Pair {
+        let mut rng = StdRng::seed_from_u64(99);
+        Ed25519Pair::from_random(&mut rng)
+    }
+
+    #[test]
+    fn test_attestation_evidence_from_verification_report() {
+        let report = make_test_verification_report();
+        let evidence = AttestationEvidence::from(report.clone());
+
+        match evidence {
+            AttestationEvidence::VerificationReport(r) => assert_eq!(r, report),
+        }
+    }
+
+    #[test]
+    fn test_block_metadata_contents_new() {
+        let block_id = make_test_block_id();
+        let quorum_set = make_test_quorum_set();
+        let report = make_test_verification_report();
+        let evidence = AttestationEvidence::from(report);
+        let responder_id = make_test_responder_id();
+
+        let contents = BlockMetadataContents::new(
+            block_id.clone(),
+            quorum_set.clone(),
+            evidence.clone(),
+            responder_id.clone(),
+        );
+
+        assert_eq!(contents.block_id(), &block_id);
+        assert_eq!(contents.quorum_set(), &quorum_set);
+        assert_eq!(contents.attestation_evidence(), &evidence);
+        assert_eq!(contents.responder_id(), &responder_id);
+    }
+
+    #[test]
+    fn test_block_metadata_contents_getters() {
+        let block_id = make_test_block_id();
+        let quorum_set = make_test_quorum_set();
+        let report = make_test_verification_report();
+        let evidence = AttestationEvidence::from(report);
+        let responder_id = make_test_responder_id();
+
+        let contents = BlockMetadataContents::new(
+            block_id.clone(),
+            quorum_set.clone(),
+            evidence.clone(),
+            responder_id.clone(),
+        );
+
+        // Test all getter methods
+        assert_eq!(*contents.block_id(), block_id);
+        assert_eq!(*contents.quorum_set(), quorum_set);
+        assert_eq!(*contents.attestation_evidence(), evidence);
+        assert_eq!(contents.responder_id().to_string(), "test-node:8080");
+    }
+
+    #[test]
+    fn test_block_metadata_new() {
+        let block_id = make_test_block_id();
+        let quorum_set = make_test_quorum_set();
+        let report = make_test_verification_report();
+        let evidence = AttestationEvidence::from(report);
+        let responder_id = make_test_responder_id();
+
+        let contents = BlockMetadataContents::new(
+            block_id,
+            quorum_set,
+            evidence,
+            responder_id,
+        );
+
+        let keypair = make_test_keypair();
+        let signature = keypair.sign_metadata(&contents).unwrap();
+        let node_key = keypair.public_key();
+
+        let metadata = BlockMetadata::new(contents.clone(), node_key, signature.clone());
+
+        assert_eq!(metadata.contents(), &contents);
+        assert_eq!(metadata.node_key(), &node_key);
+        assert_eq!(metadata.signature(), &signature);
+    }
+
+    #[test]
+    fn test_block_metadata_from_contents_and_keypair() {
+        let block_id = make_test_block_id();
+        let quorum_set = make_test_quorum_set();
+        let report = make_test_verification_report();
+        let evidence = AttestationEvidence::from(report);
+        let responder_id = make_test_responder_id();
+
+        let contents = BlockMetadataContents::new(
+            block_id,
+            quorum_set,
+            evidence,
+            responder_id,
+        );
+
+        let keypair = make_test_keypair();
+
+        let metadata = BlockMetadata::from_contents_and_keypair(contents.clone(), &keypair).unwrap();
+
+        assert_eq!(metadata.contents(), &contents);
+        assert_eq!(metadata.node_key(), &keypair.public_key());
+    }
+
+    #[test]
+    fn test_block_metadata_verify_valid_signature() {
+        let block_id = make_test_block_id();
+        let quorum_set = make_test_quorum_set();
+        let report = make_test_verification_report();
+        let evidence = AttestationEvidence::from(report);
+        let responder_id = make_test_responder_id();
+
+        let contents = BlockMetadataContents::new(
+            block_id,
+            quorum_set,
+            evidence,
+            responder_id,
+        );
+
+        let keypair = make_test_keypair();
+        let metadata = BlockMetadata::from_contents_and_keypair(contents, &keypair).unwrap();
+
+        // Valid signature should verify
+        assert!(metadata.verify().is_ok());
+    }
+
+    #[test]
+    fn test_block_metadata_verify_invalid_signature() {
+        let block_id = make_test_block_id();
+        let quorum_set = make_test_quorum_set();
+        let report = make_test_verification_report();
+        let evidence = AttestationEvidence::from(report);
+        let responder_id = make_test_responder_id();
+
+        let contents = BlockMetadataContents::new(
+            block_id,
+            quorum_set,
+            evidence,
+            responder_id,
+        );
+
+        let keypair = make_test_keypair();
+        let other_keypair = make_other_keypair();
+
+        // Sign with one key, but use different public key
+        let signature = keypair.sign_metadata(&contents).unwrap();
+        let wrong_node_key = other_keypair.public_key();
+
+        let metadata = BlockMetadata::new(contents, wrong_node_key, signature);
+
+        // Invalid signature should fail to verify
+        assert!(metadata.verify().is_err());
+    }
+
+    #[test]
+    fn test_block_metadata_contents_equality() {
+        let block_id = make_test_block_id();
+        let quorum_set = make_test_quorum_set();
+        let report = make_test_verification_report();
+        let evidence = AttestationEvidence::from(report);
+        let responder_id = make_test_responder_id();
+
+        let contents1 = BlockMetadataContents::new(
+            block_id.clone(),
+            quorum_set.clone(),
+            evidence.clone(),
+            responder_id.clone(),
+        );
+
+        let contents2 = BlockMetadataContents::new(
+            block_id,
+            quorum_set,
+            evidence,
+            responder_id,
+        );
+
+        assert_eq!(contents1, contents2);
+    }
+
+    #[test]
+    fn test_block_metadata_clone() {
+        let block_id = make_test_block_id();
+        let quorum_set = make_test_quorum_set();
+        let report = make_test_verification_report();
+        let evidence = AttestationEvidence::from(report);
+        let responder_id = make_test_responder_id();
+
+        let contents = BlockMetadataContents::new(
+            block_id,
+            quorum_set,
+            evidence,
+            responder_id,
+        );
+
+        let keypair = make_test_keypair();
+        let metadata = BlockMetadata::from_contents_and_keypair(contents, &keypair).unwrap();
+
+        let cloned = metadata.clone();
+        assert_eq!(metadata, cloned);
+    }
+
+    #[test]
+    fn test_attestation_evidence_equality() {
+        let report1 = make_test_verification_report();
+        let report2 = make_test_verification_report();
+
+        let evidence1 = AttestationEvidence::from(report1);
+        let evidence2 = AttestationEvidence::from(report2);
+
+        assert_eq!(evidence1, evidence2);
+    }
+
+    #[test]
+    fn test_block_metadata_prost_encode_decode() {
+        let block_id = make_test_block_id();
+        let quorum_set = make_test_quorum_set();
+        let report = make_test_verification_report();
+        let evidence = AttestationEvidence::from(report);
+        let responder_id = make_test_responder_id();
+
+        let contents = BlockMetadataContents::new(
+            block_id,
+            quorum_set,
+            evidence,
+            responder_id,
+        );
+
+        let keypair = make_test_keypair();
+        let metadata = BlockMetadata::from_contents_and_keypair(contents, &keypair).unwrap();
+
+        // Encode
+        let mut buf = Vec::new();
+        metadata.encode(&mut buf).unwrap();
+
+        // Decode
+        let decoded = BlockMetadata::decode(&buf[..]).unwrap();
+        assert_eq!(metadata, decoded);
+
+        // Signature should still verify after round-trip
+        assert!(decoded.verify().is_ok());
+    }
+}

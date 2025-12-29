@@ -6,7 +6,7 @@ use crate::{error::{Result, RetryResult}, thick::EvidenceKind};
 use bth_blockchain_types::{Block, BlockID, BlockIndex};
 use tonic::Status as GrpcError;
 use bth_consensus_api::consensus_common::LastBlockInfoResponse;
-use bth_transaction_core::{tokens::Mob, tx::Tx, Token, TokenId};
+use bth_transaction_core::{tokens::Bth, tx::Tx, Token, TokenId};
 use bth_util_uri::ConnectionUri;
 use serde::Serialize;
 use std::{
@@ -106,7 +106,7 @@ impl From<LastBlockInfoResponse> for BlockInfo {
         #[allow(deprecated)]
         // Needed for nodes that do not yet return the fee map.
         let minimum_fees = if src.minimum_fees.is_empty() {
-            [(Mob::ID, src.mob_minimum_fee)].into()
+            [(Bth::ID, src.mob_minimum_fee)].into()
         } else {
             src.minimum_fees
                 .iter()

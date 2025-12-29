@@ -73,44 +73,46 @@ impl MonetarySystem {
 
     /// Get the current block reward.
     pub fn block_reward(&self) -> u64 {
-        self.inner.read().unwrap().block_reward()
+        self.inner.read().map(|c| c.block_reward()).unwrap_or(0)
     }
 
     /// Get the current difficulty.
     pub fn difficulty(&self) -> u64 {
-        self.inner.read().unwrap().state.difficulty
+        self.inner.read().map(|c| c.state.difficulty).unwrap_or(1)
     }
 
     /// Get the current block height according to monetary system.
     pub fn height(&self) -> u64 {
-        self.inner.read().unwrap().state.height
+        self.inner.read().map(|c| c.state.height).unwrap_or(0)
     }
 
     /// Get the total circulating supply.
     pub fn total_supply(&self) -> u64 {
-        self.inner.read().unwrap().state.total_supply
+        self.inner.read().map(|c| c.state.total_supply).unwrap_or(0)
     }
 
     /// Get the current phase ("Halving" or "Tail Emission").
     pub fn phase(&self) -> &'static str {
-        self.inner.read().unwrap().phase()
+        self.inner.read().map(|c| c.phase()).unwrap_or("Unknown")
     }
 
     /// Get current halving number (0-indexed), or None if in tail emission.
     pub fn current_halving(&self) -> Option<u32> {
-        self.inner.read().unwrap().current_halving()
+        self.inner.read().ok().and_then(|c| c.current_halving())
     }
 
     /// Blocks until next halving, or None if in tail emission.
     pub fn blocks_until_halving(&self) -> Option<u64> {
-        self.inner.read().unwrap().blocks_until_next_halving()
+        self.inner.read().ok().and_then(|c| c.blocks_until_next_halving())
     }
 
     /// Record a fee burn.
     ///
     /// Call this when transaction fees are burned (subtracted from supply).
     pub fn record_fee_burn(&self, amount: u64) {
-        self.inner.write().unwrap().record_fee_burn(amount);
+        if let Ok(mut controller) = self.inner.write() {
+            controller.record_fee_burn(amount);
+        }
     }
 
     /// Process a mined block.
@@ -118,34 +120,58 @@ impl MonetarySystem {
     /// Returns the block reward. Call this after a block is successfully mined.
     /// The `block_time` should be the timestamp of the new block.
     pub fn process_block(&self, block_time: u64) -> u64 {
-        self.inner.write().unwrap().process_block(block_time)
+        self.inner.write()
+            .map(|mut c| c.process_block(block_time))
+            .unwrap_or(0)
     }
 
     /// Get a statistics snapshot.
     pub fn stats(&self) -> MonetaryStats {
         let current_time = current_unix_time();
-        self.inner.read().unwrap().stats(current_time)
+        self.inner.read()
+            .map(|c| c.stats(current_time))
+            .unwrap_or_else(|_| MonetaryStats {
+                height: 0,
+                phase: "Unknown",
+                current_halving: None,
+                blocks_until_halving: None,
+                block_reward: 0,
+                difficulty: 1,
+                total_supply: 0,
+                total_rewards_emitted: 0,
+                total_fees_burned: 0,
+                net_supply_change: 0,
+                effective_inflation_bps: 0,
+                estimated_block_time: 0.0,
+            })
     }
 
     /// Get a clone of the underlying controller (for persistence).
     pub fn controller(&self) -> DifficultyController {
-        self.inner.read().unwrap().clone()
+        self.inner.read()
+            .map(|c| c.clone())
+            .unwrap_or_else(|_| DifficultyController::new(MonetaryPolicy::default(), 0, 1, current_unix_time()))
     }
 
     /// Replace the controller (for loading from persistence).
     pub fn set_controller(&self, controller: DifficultyController) {
-        *self.inner.write().unwrap() = controller;
+        if let Ok(mut inner) = self.inner.write() {
+            *inner = controller;
+        }
     }
 
     /// Check if we're in the halving phase (Phase 1).
     pub fn is_halving_phase(&self) -> bool {
-        let controller = self.inner.read().unwrap();
-        controller.policy.is_halving_phase(controller.state.height)
+        self.inner.read()
+            .map(|c| c.policy.is_halving_phase(c.state.height))
+            .unwrap_or(false)
     }
 
     /// Get the policy configuration.
     pub fn policy(&self) -> MonetaryPolicy {
-        self.inner.read().unwrap().policy.clone()
+        self.inner.read()
+            .map(|c| c.policy.clone())
+            .unwrap_or_default()
     }
 }
 

@@ -6,6 +6,10 @@ description = "Standalone thin wallet client for Botho cryptocurrency"
 license = "Apache-2.0"
 rust-version = { workspace = true }
 
+[features]
+default = ["pq"]
+pq = ["bth-account-keys/pq", "bth-crypto-pq", "botho/pq"]
+
 [[bin]]
 name = "botho-wallet"
 path = "src/main.rs"
@@ -14,9 +18,11 @@ path = "src/main.rs"
 # Crypto
 bth-account-keys = { path = "../account-keys" }
 bth-crypto-keys = { path = "../crypto/keys" }
+bth-crypto-pq = { path = "../crypto/pq", optional = true }
 bth-transaction-core = { path = "../transaction/core" }
 bth-transaction-types = { path = "../transaction/types" }
 bth-core = { path = "../core" }
+botho = { path = "../botho", optional = true }
 
 # BIP39 and key derivation
 tiny-bip39 = { workspace = true }
@@ -53,6 +59,7 @@ rand = { workspace = true }
 dirs = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+zeroize = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = [

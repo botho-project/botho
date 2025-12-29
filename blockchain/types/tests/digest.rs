@@ -5,7 +5,7 @@ use bth_blockchain_test_utils::get_blocks_with_recipients;
 use bth_blockchain_types::{Block, BlockVersion};
 use bth_crypto_digestible_test_utils::*;
 use bth_crypto_keys::RistrettoPrivate;
-use bth_transaction_core::{tokens::Mob, tx::TxOut, Amount, Token};
+use bth_transaction_core::{tokens::Bth, tx::TxOut, Amount, Token};
 use bth_util_from_random::FromRandom;
 use bth_util_test_helper::{RngCore, RngType as FixedRng, SeedableRng};
 
@@ -26,7 +26,7 @@ fn test_origin_tx_outs() -> Vec<TxOut> {
                 BlockVersion::ZERO,
                 Amount {
                     value: rng.next_u32() as u64,
-                    token_id: Mob::ID,
+                    token_id: Bth::ID,
                 },
                 &acct.default_subaddress(),
                 &RistrettoPrivate::from_random(&mut rng),
@@ -40,6 +40,7 @@ fn test_origin_tx_outs() -> Vec<TxOut> {
 fn tx_out_digestible_ast() {
     let tx_out = &test_origin_tx_outs()[0];
 
+    // NOTE: Values updated after TxOut structure change (fog hint removal)
     let expected_ast = ASTNode::from(ASTAggregate {
         context: b"test",
         name: b"TxOut".to_vec(),
@@ -54,15 +55,15 @@ fn tx_out_digestible_ast() {
                         context: b"commitment",
                         type_name: b"ristretto",
                         data: vec![
-                            172, 16, 198, 12, 234, 63, 110, 222, 197, 110, 174, 61, 243, 236, 17,
-                            137, 111, 17, 147, 46, 211, 210, 105, 25, 246, 234, 9, 139, 20, 165,
-                            126, 122,
+                            206, 153, 255, 220, 215, 210, 74, 91, 111, 70, 206, 134, 248, 86, 85,
+                            164, 29, 195, 87, 125, 222, 158, 46, 42, 11, 204, 217, 90, 242, 107,
+                            230, 8,
                         ],
                     }),
                     ASTNode::from(ASTPrimitive {
                         context: b"masked_value",
                         type_name: b"uint",
-                        data: vec![187, 146, 125, 76, 38, 34, 179, 187],
+                        data: vec![92, 252, 97, 92, 139, 187, 13, 169],
                     }),
                 ],
             }),
@@ -70,19 +71,18 @@ fn tx_out_digestible_ast() {
                 context: b"target_key",
                 type_name: b"ristretto",
                 data: vec![
-                    126, 132, 117, 253, 124, 40, 56, 37, 230, 94, 15, 206, 138, 168, 124, 53, 160,
-                    123, 163, 167, 130, 15, 16, 157, 171, 117, 12, 8, 214, 240, 105, 113,
+                    74, 108, 234, 245, 141, 135, 114, 232, 14, 111, 94, 94, 202, 223, 37, 96, 237,
+                    23, 223, 163, 176, 238, 18, 38, 149, 117, 77, 63, 25, 93, 251, 42,
                 ],
             }),
             ASTNode::from(ASTPrimitive {
                 context: b"public_key",
                 type_name: b"ristretto",
                 data: vec![
-                    238, 35, 140, 56, 133, 221, 101, 105, 2, 101, 249, 201, 51, 21, 57, 222, 41,
-                    51, 60, 205, 41, 220, 180, 61, 236, 162, 72, 97, 136, 209, 89, 88,
+                    170, 123, 183, 16, 205, 89, 67, 189, 49, 19, 247, 240, 142, 140, 239, 60, 157,
+                    103, 149, 14, 115, 139, 43, 54, 196, 113, 5, 218, 109, 189, 122, 123,
                 ],
             }),
-            // Note: e_fog_hint was removed as part of fog removal
         ],
     });
 
@@ -129,6 +129,7 @@ fn origin_block_digestible_ast() {
         root_element_ast.clone(),
     );
 
+    // NOTE: Values updated after TxOut structure change (fog hint removal)
     let expected_ast = ASTNode::from(ASTAggregate {
         context: b"test",
         name: b"Block".to_vec(),
@@ -138,8 +139,8 @@ fn origin_block_digestible_ast() {
                 context: b"id",
                 type_name: b"bytes",
                 data: vec![
-                    239, 212, 254, 14, 99, 142, 120, 10, 162, 43, 240, 17, 174, 105, 108, 169, 88,
-                    89, 125, 57, 251, 59, 5, 34, 198, 186, 252, 243, 205, 168, 132, 22,
+                    39, 81, 163, 82, 37, 16, 193, 6, 101, 9, 124, 158, 212, 101, 32, 202, 79, 70,
+                    11, 127, 28, 16, 21, 147, 80, 198, 37, 132, 76, 246, 102, 38,
                 ],
             }),
             ASTNode::from(ASTPrimitive {
@@ -167,8 +168,8 @@ fn origin_block_digestible_ast() {
                 context: b"contents_hash",
                 type_name: b"bytes",
                 data: vec![
-                    4, 109, 35, 97, 243, 10, 38, 15, 175, 178, 67, 8, 197, 85, 85, 102, 238, 51,
-                    51, 226, 100, 40, 117, 203, 72, 111, 39, 29, 80, 138, 125, 248,
+                    94, 68, 139, 62, 53, 52, 237, 30, 98, 86, 44, 94, 73, 63, 106, 253, 54, 125,
+                    58, 47, 115, 184, 38, 254, 101, 211, 190, 96, 113, 196, 189, 153,
                 ],
             }),
         ],
@@ -198,43 +199,45 @@ fn test_blockchain(block_version: BlockVersion) -> Vec<[u8; 32]> {
 }
 
 // Test digest of block contents at versions 0 and 1.
+// NOTE: Values updated after TxOut structure change (fog hint removal)
 #[test]
 fn block_contents_digestible_v0() {
     assert_eq!(
         test_blockchain(BlockVersion::ZERO),
         [
             [
-                203, 245, 7, 219, 1, 210, 70, 210, 93, 109, 135, 251, 188, 10, 120, 155, 108, 240,
-                18, 0, 89, 156, 18, 143, 136, 8, 169, 97, 25, 150, 178, 46
+                244, 192, 93, 139, 11, 204, 144, 246, 158, 247, 159, 155, 117, 1, 87, 12, 235, 3,
+                32, 11, 228, 80, 15, 20, 68, 184, 221, 134, 172, 20, 98, 28
             ],
             [
-                54, 192, 31, 97, 184, 133, 252, 77, 58, 179, 228, 251, 171, 126, 158, 75, 32, 84,
-                82, 114, 115, 15, 162, 111, 252, 166, 179, 7, 181, 119, 177, 187
+                89, 44, 79, 242, 135, 124, 111, 199, 207, 205, 87, 77, 175, 60, 213, 181, 180, 81,
+                193, 49, 47, 66, 195, 168, 175, 211, 58, 108, 88, 206, 122, 148
             ],
             [
-                236, 60, 128, 45, 199, 115, 208, 199, 32, 82, 230, 193, 18, 127, 139, 221, 112,
-                165, 191, 116, 8, 223, 88, 6, 247, 77, 238, 242, 185, 28, 59, 105
+                214, 30, 140, 28, 131, 53, 253, 168, 62, 182, 206, 142, 112, 40, 90, 81, 192, 248,
+                187, 27, 215, 152, 64, 157, 142, 130, 58, 59, 242, 65, 9, 184
             ]
         ]
     );
 }
 
+// NOTE: Values updated after TxOut structure change (fog hint removal)
 #[test]
 fn block_contents_digestible_v1() {
     assert_eq!(
         test_blockchain(BlockVersion::ONE),
         [
             [
-                126, 82, 1, 40, 59, 4, 198, 138, 175, 164, 245, 37, 61, 87, 228, 167, 179, 164, 13,
-                151, 165, 219, 177, 188, 30, 66, 116, 242, 46, 216, 148, 181
+                14, 196, 230, 52, 150, 168, 112, 108, 152, 151, 43, 238, 58, 40, 5, 241, 110, 101,
+                211, 187, 90, 235, 201, 219, 251, 154, 238, 34, 14, 72, 139, 63
             ],
             [
-                175, 203, 59, 69, 47, 106, 110, 92, 255, 130, 32, 232, 192, 153, 202, 46, 113, 186,
-                181, 248, 84, 31, 233, 133, 162, 237, 83, 10, 23, 26, 218, 32
+                113, 164, 238, 77, 174, 22, 204, 61, 175, 209, 70, 180, 81, 65, 207, 51, 255, 113,
+                76, 177, 168, 247, 240, 187, 96, 79, 18, 167, 124, 91, 216, 18
             ],
             [
-                166, 180, 148, 136, 166, 248, 232, 243, 179, 83, 228, 35, 173, 193, 126, 139, 26,
-                80, 174, 81, 115, 88, 40, 52, 124, 98, 184, 251, 71, 253, 152, 116
+                148, 135, 147, 246, 200, 106, 221, 113, 61, 231, 180, 172, 168, 170, 35, 123, 117,
+                246, 156, 33, 171, 137, 38, 219, 67, 147, 199, 79, 116, 70, 88, 250
             ]
         ]
     );

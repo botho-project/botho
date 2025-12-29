@@ -195,3 +195,63 @@ pub trait CryptoBox<KexAlgo: Kex>: Default {
         Ok((status, ciphertext))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bth_crypto_keys::KeyError;
+
+    #[test]
+    fn test_error_key() {
+        let key_error = KeyError::LengthMismatch(32, 64);
+        let error = Error::Key(key_error);
+
+        let display = alloc::format!("{}", error);
+        assert!(display.contains("Error decoding curvepoint"));
+    }
+
+    #[test]
+    fn test_error_too_short() {
+        let error = Error::TooShort(10, 48);
+
+        let display = alloc::format!("{}", error);
+        assert!(display.contains("10"));
+        assert!(display.contains("48"));
+        assert!(display.contains("shorter"));
+    }
+
+    #[test]
+    fn test_error_unknown_algorithm() {
+        let error = Error::UnknownAlgorithm(99);
+
+        let display = alloc::format!("{}", error);
+        assert!(display.contains("99"));
+        assert!(display.contains("Unknown algorithm"));
+    }
+
+    #[test]
+    fn test_error_wrong_magic_bytes() {
+        let error = Error::WrongMagicBytes;
+
+        let display = alloc::format!("{}", error);
+        assert!(display.contains("magic"));
+    }
+
+    #[test]
+    fn test_error_equality() {
+        assert_eq!(Error::WrongMagicBytes, Error::WrongMagicBytes);
+        assert_eq!(Error::UnknownAlgorithm(1), Error::UnknownAlgorithm(1));
+        assert_eq!(Error::TooShort(10, 20), Error::TooShort(10, 20));
+
+        assert_ne!(Error::UnknownAlgorithm(1), Error::UnknownAlgorithm(2));
+        assert_ne!(Error::TooShort(10, 20), Error::TooShort(10, 30));
+        assert_ne!(Error::WrongMagicBytes, Error::UnknownAlgorithm(0));
+    }
+
+    #[test]
+    fn test_error_debug() {
+        let error = Error::TooShort(5, 10);
+        let debug = alloc::format!("{:?}", error);
+        assert!(debug.contains("TooShort"));
+    }
+}

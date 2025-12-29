@@ -9,7 +9,7 @@ pub use bth_transaction_core::{
     get_tx_out_shared_secret,
     onetime_keys::recover_onetime_private_key,
     ring_signature::KeyImage,
-    tokens::Mob,
+    tokens::Bth,
     tx::{Tx, TxOut, TxOutMembershipElement, TxOutMembershipHash},
     Amount, BlockVersion, Token,
 };
@@ -52,7 +52,7 @@ pub fn create_test_tx_out(
     let account_key = AccountKey::random(rng);
     TxOut::new(
         block_version,
-        Amount::new(rng.next_u64(), Mob::ID),
+        Amount::new(rng.next_u64(), Bth::ID),
         &account_key.default_subaddress(),
         &RistrettoPrivate::from_random(rng),
     )

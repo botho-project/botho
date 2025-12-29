@@ -16,7 +16,7 @@ use bth_crypto_keys::{CompressedRistrettoPublic, ReprBytes};
 use bth_ledger_db::test_utils::{InverseTxOutputsOrdering, INITIALIZE_LEDGER_AMOUNT};
 use bth_transaction_core::{
     constants::{MAX_TOMBSTONE_BLOCKS, RING_SIZE},
-    tokens::Mob,
+    tokens::Bth,
     validation::*,
     BlockVersion, InputRules, Token,
 };
@@ -590,11 +590,11 @@ fn test_validate_transaction_fee() {
 
         {
             // Off by one fee gets rejected
-            let fee = Mob::MINIMUM_FEE - 1;
+            let fee = Bth::MINIMUM_FEE - 1;
             let (tx, _ledger) =
                 create_test_tx_with_amount(block_version, INITIALIZE_LEDGER_AMOUNT - fee, fee);
             assert_eq!(
-                validate_transaction_fee(&tx, Mob::MINIMUM_FEE),
+                validate_transaction_fee(&tx, Bth::MINIMUM_FEE),
                 Err(TransactionValidationError::TxFeeError)
             );
         }
@@ -603,18 +603,18 @@ fn test_validate_transaction_fee() {
             // Exact fee amount is okay
             let (tx, _ledger) = create_test_tx_with_amount(
                 block_version,
-                INITIALIZE_LEDGER_AMOUNT - Mob::MINIMUM_FEE,
-                Mob::MINIMUM_FEE,
+                INITIALIZE_LEDGER_AMOUNT - Bth::MINIMUM_FEE,
+                Bth::MINIMUM_FEE,
             );
-            assert_eq!(validate_transaction_fee(&tx, Mob::MINIMUM_FEE), Ok(()));
+            assert_eq!(validate_transaction_fee(&tx, Bth::MINIMUM_FEE), Ok(()));
         }
 
         {
             // Overpaying fees is okay
-            let fee = Mob::MINIMUM_FEE + 1;
+            let fee = Bth::MINIMUM_FEE + 1;
             let (tx, _ledger) =
                 create_test_tx_with_amount(block_version, INITIALIZE_LEDGER_AMOUNT - fee, fee);
-            assert_eq!(validate_transaction_fee(&tx, Mob::MINIMUM_FEE), Ok(()));
+            assert_eq!(validate_transaction_fee(&tx, Bth::MINIMUM_FEE), Ok(()));
         }
     }
 }
@@ -692,7 +692,7 @@ fn test_validate_tombstone_tombstone_block_too_far() {
 #[test]
 fn test_global_validate_for_blocks_with_sorted_outputs() {
     let mut rng = get_seeded_rng();
-    let fee = Mob::MINIMUM_FEE + 1;
+    let fee = Bth::MINIMUM_FEE + 1;
 
     let recipients = vec![
         AccountKey::random(&mut rng).default_subaddress(),

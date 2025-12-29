@@ -7,7 +7,7 @@ use crate::{MemoBuilder, ReservedSubaddresses};
 use alloc::{format, string::String};
 use bth_account_keys::PublicAddress;
 use bth_crypto_keys::RistrettoPublic;
-use bth_transaction_core::{tokens::Mob, Amount, MemoContext, MemoPayload, NewMemoError, Token};
+use bth_transaction_core::{tokens::Bth, Amount, MemoContext, MemoPayload, NewMemoError, Token};
 use bth_transaction_extra::{GiftCodeFundingMemo, UnusedMemo};
 
 /// There are three possible gift code memo types specified in MCIP #32
@@ -51,7 +51,7 @@ impl GiftCodeFundingMemoBuilder {
         }
         Ok(Self {
             gift_code_tx_out_public_key: None,
-            fee: Amount::new(Mob::MINIMUM_FEE, Mob::ID),
+            fee: Amount::new(Bth::MINIMUM_FEE, Bth::ID),
             note: note.into(),
             wrote_change_memo: false,
         })

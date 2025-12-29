@@ -20,7 +20,7 @@ use bth_transaction_core::{
     onetime_keys::{create_shared_secret, create_tx_out_public_key},
     ring_ct::{InputRing, OutputSecret},
     ring_signature::Scalar,
-    tokens::Mob,
+    tokens::Bth,
     tx::{Tx, TxIn, TxOut},
     Amount, BlockVersion, ClusterTagVector, FeeMap, MemoContext, MemoPayload, NewMemoError,
     RevealedTxOut, RevealedTxOutError, Token, TokenId,
@@ -658,7 +658,7 @@ impl TransactionBuilder {
         }
 
         if !self.block_version.masked_token_id_feature_is_supported()
-            && self.fee.token_id != Mob::ID
+            && self.fee.token_id != Bth::ID
         {
             return Err(TxBuilderError::FeatureNotSupportedAtBlockVersion(
                 *self.block_version,
@@ -862,7 +862,7 @@ pub mod transaction_builder_tests {
     use bth_account_keys::{AccountKey, DEFAULT_SUBADDRESS_INDEX};
     use bth_crypto_ring_signature_signer::NoKeysRingSigner;
     use bth_transaction_core::{
-        constants::MILLIMOB_TO_PICOMOB,
+        constants::MILLIBTH_TO_NANOBTH,
         ring_signature::KeyImage,
         subaddress_matches_tx_out,
         validation::{validate_signature, validate_tx_out},
@@ -889,7 +889,7 @@ pub mod transaction_builder_tests {
         for (block_version, token_id) in get_block_version_token_id_pairs() {
             let sender = AccountKey::random(&mut rng);
             let recipient = AccountKey::random(&mut rng);
-            let value = 1475 * MILLIMOB_TO_PICOMOB;
+            let value = 1475 * MILLIBTH_TO_NANOBTH;
             let amount = Amount { value, token_id };
 
             // Create input credentials
@@ -901,14 +901,14 @@ pub mod transaction_builder_tests {
 
             let mut transaction_builder = TransactionBuilder::new(
                 block_version,
-                Amount::new(Mob::MINIMUM_FEE, token_id),
+                Amount::new(Bth::MINIMUM_FEE, token_id),
             )
             .unwrap();
 
             transaction_builder.add_input(input_credentials);
             let TxOutContext { confirmation, .. } = transaction_builder
                 .add_output(
-                    Amount::new(value - Mob::MINIMUM_FEE, token_id),
+                    Amount::new(value - Bth::MINIMUM_FEE, token_id),
                     &recipient.default_subaddress(),
                     &mut rng,
                 )

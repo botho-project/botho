@@ -222,4 +222,197 @@ mod tests {
         let result = validate_committed_tag_structure(&[commitment]);
         assert!(result.is_ok());
     }
+
+    #[test]
+    fn test_validate_structure_empty_outputs() {
+        let result = validate_committed_tag_structure(&[]);
+        assert!(result.is_ok(), "Empty outputs should be valid");
+    }
+
+    #[test]
+    fn test_validate_structure_multiple_outputs() {
+        let secret1 = create_test_secret(500_000, &[(1, TAG_WEIGHT_SCALE)]);
+        let secret2 = create_test_secret(500_000, &[(2, TAG_WEIGHT_SCALE)]);
+
+        let result = validate_committed_tag_structure(&[secret1.commit(), secret2.commit()]);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_committed_tag_config_default() {
+        let config = CommittedTagConfig::default();
+        assert_eq!(config.decay_rate, 50_000); // 5%
+    }
+
+    #[test]
+    fn test_validate_multiple_inputs() {
+        let decay_rate = 50_000;
+
+        // Create two inputs from different clusters
+        let input1_secret = create_test_secret(500_000, &[(1, TAG_WEIGHT_SCALE)]);
+        let input2_secret = create_test_secret(500_000, &[(2, TAG_WEIGHT_SCALE)]);
+
+        let ring1 = vec![input1_secret.commit()];
+        let ring2 = vec![input2_secret.commit()];
+
+        // Create decayed output combining both
+        let output1_secret = input1_secret.apply_decay(decay_rate, &mut OsRng);
+        let output2_secret = input2_secret.apply_decay(decay_rate, &mut OsRng);
+
+        // Get commitments before moving secrets
+        let output1_commit = output1_secret.commit();
+        let output2_commit = output2_secret.commit();
+
+        // Build signature with two inputs
+        let mut builder = ExtendedSignatureBuilder::new(decay_rate);
+        builder.add_input(ring1.clone(), 0, input1_secret);
+        builder.add_input(ring2.clone(), 0, input2_secret);
+        builder.add_output(output1_secret);
+        builder.add_output(output2_secret);
+
+        let signature = builder.build(&mut OsRng).expect("Should build signature");
+
+        // Validate
+        let ring_data1 = RingTagData {
+            member_tags: ring1,
+            real_index: 0,
+        };
+        let ring_data2 = RingTagData {
+            member_tags: ring2,
+            real_index: 0,
+        };
+
+        let result = validate_committed_tags(
+            &[ring_data1, ring_data2],
+            &[output1_commit, output2_commit],
+            &signature,
+            decay_rate,
+        );
+
+        assert!(result.is_ok(), "Multiple inputs should validate: {:?}", result);
+    }
+
+    #[test]
+    fn test_validate_zero_decay_rate() {
+        let decay_rate = 0; // No decay
+
+        let input_secret = create_test_secret(1_000_000, &[(1, TAG_WEIGHT_SCALE)]);
+        let ring_tags = vec![input_secret.commit()];
+
+        // With 0 decay, output should equal input
+        let output_secret = input_secret.apply_decay(decay_rate, &mut OsRng);
+        let output_commitment = output_secret.commit();
+
+        let mut builder = ExtendedSignatureBuilder::new(decay_rate);
+        builder.add_input(ring_tags.clone(), 0, input_secret);
+        builder.add_output(output_secret);
+
+        let signature = builder.build(&mut OsRng).expect("Should build signature");
+
+        let ring_data = RingTagData {
+            member_tags: ring_tags,
+            real_index: 0,
+        };
+
+        let result = validate_committed_tags(
+            &[ring_data],
+            &[output_commitment],
+            &signature,
+            decay_rate,
+        );
+
+        assert!(result.is_ok(), "Zero decay should validate: {:?}", result);
+    }
+
+    #[test]
+    fn test_validate_high_decay_rate() {
+        let decay_rate = 900_000; // 90% decay
+
+        let input_secret = create_test_secret(1_000_000, &[(1, TAG_WEIGHT_SCALE)]);
+        let ring_tags = vec![input_secret.commit()];
+
+        let output_secret = input_secret.apply_decay(decay_rate, &mut OsRng);
+        let output_commitment = output_secret.commit();
+
+        let mut builder = ExtendedSignatureBuilder::new(decay_rate);
+        builder.add_input(ring_tags.clone(), 0, input_secret);
+        builder.add_output(output_secret);
+
+        let signature = builder.build(&mut OsRng).expect("Should build signature");
+
+        let ring_data = RingTagData {
+            member_tags: ring_tags,
+            real_index: 0,
+        };
+
+        let result = validate_committed_tags(
+            &[ring_data],
+            &[output_commitment],
+            &signature,
+            decay_rate,
+        );
+
+        assert!(result.is_ok(), "High decay should validate: {:?}", result);
+    }
+
+    #[test]
+    fn test_validate_error_display() {
+        // Test that error types are distinguishable
+        let e1 = CommittedTagValidationError::PseudoOutputCountMismatch {
+            expected: 2,
+            actual: 1,
+        };
+        let e2 = CommittedTagValidationError::InvalidInheritanceProof { input_index: 0 };
+        let e3 = CommittedTagValidationError::InvalidConservationProof;
+        let e4 = CommittedTagValidationError::InvalidCommitment;
+
+        assert_ne!(e1, e2);
+        assert_ne!(e2, e3);
+        assert_ne!(e3, e4);
+
+        // Test debug output works
+        let _ = format!("{:?}", e1);
+        let _ = format!("{:?}", e2);
+        let _ = format!("{:?}", e3);
+        let _ = format!("{:?}", e4);
+    }
+
+    #[test]
+    fn test_validate_with_mixed_clusters() {
+        let decay_rate = 50_000;
+
+        // Create input with mixed clusters
+        let input_secret = create_test_secret(
+            1_000_000,
+            &[
+                (1, 500_000),  // 50%
+                (2, 300_000),  // 30%
+                (3, 200_000),  // 20%
+            ],
+        );
+        let ring_tags = vec![input_secret.commit()];
+
+        let output_secret = input_secret.apply_decay(decay_rate, &mut OsRng);
+        let output_commitment = output_secret.commit();
+
+        let mut builder = ExtendedSignatureBuilder::new(decay_rate);
+        builder.add_input(ring_tags.clone(), 0, input_secret);
+        builder.add_output(output_secret);
+
+        let signature = builder.build(&mut OsRng).expect("Should build signature");
+
+        let ring_data = RingTagData {
+            member_tags: ring_tags,
+            real_index: 0,
+        };
+
+        let result = validate_committed_tags(
+            &[ring_data],
+            &[output_commitment],
+            &signature,
+            decay_rate,
+        );
+
+        assert!(result.is_ok(), "Mixed clusters should validate: {:?}", result);
+    }
 }

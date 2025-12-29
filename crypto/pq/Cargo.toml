@@ -9,13 +9,17 @@ description = "Post-quantum cryptographic primitives for Botho (ML-KEM, ML-DSA)"
 
 [features]
 default = ["std"]
-std = ["pqcrypto-kyber/std", "pqcrypto-dilithium/std"]
+std = []
 
 [dependencies]
-# Post-quantum cryptography (NIST standards)
-pqcrypto-kyber = { version = "0.8", default-features = false }
-pqcrypto-dilithium = { version = "0.5", default-features = false }
-pqcrypto-traits = { version = "0.3", default-features = false }
+# Post-quantum cryptography (RustCrypto implementations of NIST standards)
+ml-kem = "0.2"
+ml-dsa = "0.1.0-rc.2"
+
+# For deterministic keygen - rand 0.9 for ml-dsa, rand_core 0.6 for ml-kem
+rand = "0.9.0"
+rand_core = { version = "0.6", features = ["getrandom"] }
+rand_chacha = "0.3"
 
 # Key derivation
 hkdf = { workspace = true }
@@ -25,6 +29,9 @@ sha2 = { workspace = true }
 zeroize = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }
 serde = { workspace = true, features = ["derive", "alloc"] }
+
+# Re-export hybrid_array for key type conversions
+hybrid-array = "0.4"
 
 [dev-dependencies]
 rand = { workspace = true }

@@ -137,7 +137,7 @@ mod tests {
     use bth_account_keys::{AccountKey, PublicAddress};
     use bth_crypto_keys::RistrettoPrivate;
     use bth_transaction_core::{
-        ring_signature::CurveScalar, tokens::Mob, tx::TxOut, Amount, BlockVersion, Token,
+        ring_signature::CurveScalar, tokens::Bth, tx::TxOut, Amount, BlockVersion, Token,
         UnmaskedAmount,
     };
     use bth_transaction_extra::ReservedSubaddresses;
@@ -151,7 +151,7 @@ mod tests {
 
         let recipient_orig = {
             let recipient = PublicAddress::from_random(&mut rng);
-            let amount = Amount::new(1000, Mob::ID);
+            let amount = Amount::new(1000, Bth::ID);
             let tx_private_key = RistrettoPrivate::from_random(&mut rng);
             TxBlueprintOutput::Recipient {
                 recipient,
@@ -166,7 +166,7 @@ mod tests {
         let change_orig = {
             let account_key = AccountKey::random(&mut rng);
             let change_destination = ReservedSubaddresses::from(&account_key);
-            let amount = Amount::new(500, Mob::ID);
+            let amount = Amount::new(500, Bth::ID);
             let tx_private_key = RistrettoPrivate::from_random(&mut rng);
             TxBlueprintOutput::Change {
                 change_destination,
@@ -180,7 +180,7 @@ mod tests {
 
         let sci_orig = {
             let recipient = PublicAddress::from_random(&mut rng);
-            let amount = Amount::new(100, Mob::ID);
+            let amount = Amount::new(100, Bth::ID);
             let tx_private_key = RistrettoPrivate::from_random(&mut rng);
             let output = TxOut::new(block_version, amount, &recipient, &tx_private_key).unwrap();
             let unmasked_amount = UnmaskedAmount {

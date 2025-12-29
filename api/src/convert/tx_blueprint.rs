@@ -73,7 +73,7 @@ mod tests {
         SignedContingentInputBuilder, TransactionBuilder,
     };
     use bth_transaction_core::{
-        constants::MILLIMOB_TO_PICOMOB, tokens::Mob, Amount, Token, TokenId,
+        constants::MILLIBTH_TO_NANOBTH, tokens::Bth, Amount, Token, TokenId,
     };
     use rand::{rngs::StdRng, SeedableRng};
 
@@ -94,15 +94,18 @@ mod tests {
             &charlie,
             &mut rng,
         );
+        // Global indices for the ring members
+        let ring_global_indices: Vec<u64> = (0..input_credentials_sci.ring.len() as u64).collect();
         let mut sci_builder = SignedContingentInputBuilder::new(
             block_version,
             input_credentials_sci.clone(),
+            ring_global_indices,
             EmptyMemoBuilder,
         )
         .unwrap();
         sci_builder
             .add_required_output(
-                Amount::new(1000 * MILLIMOB_TO_PICOMOB, Mob::ID),
+                Amount::new(1000 * MILLIBTH_TO_NANOBTH, Bth::ID),
                 &charlie.default_subaddress(),
                 &mut rng,
             )
@@ -111,12 +114,12 @@ mod tests {
 
         let mut transaction_builder = TransactionBuilder::new(
             block_version,
-            Amount::new(Mob::MINIMUM_FEE, Mob::ID),
+            Amount::new(Bth::MINIMUM_FEE, Bth::ID),
         )
         .unwrap();
         transaction_builder.add_input(get_input_credentials(
             block_version,
-            Amount::new(1475 * MILLIMOB_TO_PICOMOB, Mob::ID),
+            Amount::new(1475 * MILLIBTH_TO_NANOBTH, Bth::ID),
             &alice,
             &mut rng,
         ));
@@ -130,7 +133,7 @@ mod tests {
             .unwrap();
         transaction_builder
             .add_change_output(
-                Amount::new(475 * MILLIMOB_TO_PICOMOB - Mob::MINIMUM_FEE, Mob::ID),
+                Amount::new(475 * MILLIBTH_TO_NANOBTH - Bth::MINIMUM_FEE, Bth::ID),
                 &ReservedSubaddresses::from(&alice),
                 &mut rng,
             )

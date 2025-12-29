@@ -14,7 +14,7 @@ use bth_crypto_ring_signature_signer::{NoKeysRingSigner, OneTimeKeyDeriveData};
 use bth_transaction_core::{
     constants::RING_SIZE,
     onetime_keys::*,
-    tokens::Mob,
+    tokens::Bth,
     tx::{Tx, TxOut},
     Amount, BlockVersion, MemoContext, MemoPayload, NewMemoError, Token, TokenId,
 };
@@ -76,7 +76,7 @@ pub fn get_ring<RNG: CryptoRng + RngCore>(
         let token_id = if block_version.masked_token_id_feature_is_supported() {
             TokenId::from(idx as u64)
         } else {
-            Mob::ID
+            Bth::ID
         };
         let amount = Amount::new(amount.value, token_id);
         let (tx_out, _) =
@@ -151,7 +151,7 @@ pub fn get_unsigned_transaction<RNG: RngCore + CryptoRng>(
 ) -> Result<UnsignedTx, TxBuilderError> {
     let mut transaction_builder = TransactionBuilder::new(
         block_version,
-        Amount::new(Mob::MINIMUM_FEE, token_id),
+        Amount::new(Bth::MINIMUM_FEE, token_id),
     )
     .unwrap();
     let input_value = 1000;

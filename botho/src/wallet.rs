@@ -231,10 +231,13 @@ impl Wallet {
             let shuffled_ring: Vec<RingMember> = indices.iter().map(|&i| ring[i].clone()).collect();
 
             // Find where the real input ended up
+            // This should always succeed since we just added it, but handle gracefully
             let real_index = shuffled_ring
                 .iter()
                 .position(|m| m.target_key == real_target_key)
-                .expect("Real input must be in ring");
+                .ok_or_else(|| anyhow::anyhow!(
+                    "Internal error: real input not found in ring after shuffle"
+                ))?;
 
             // Create ring input with MLSAG signature
             let ring_input = RingTxInput::new(

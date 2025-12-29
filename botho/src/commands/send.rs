@@ -2,6 +2,7 @@
 
 use anyhow::{Context, Result};
 use bth_account_keys::PublicAddress;
+use bth_cluster_tax::{FeeConfig, TransactionType};
 use std::fs;
 use std::path::Path;
 
@@ -9,12 +10,6 @@ use crate::config::{ledger_db_path_from_config, Config};
 use crate::ledger::Ledger;
 use crate::transaction::{Transaction, TxInput, TxOutput};
 use crate::wallet::Wallet;
-
-/// Minimum transaction fee in picocredits (0.0001 credits)
-const MIN_FEE: u64 = 100_000_000;
-
-/// Private transaction fee multiplier (ring signatures are larger)
-const PRIVATE_FEE_MULTIPLIER: u64 = 4;
 
 /// Pending transactions file name
 const PENDING_TXS_FILE: &str = "pending_txs.bin";
@@ -26,7 +21,11 @@ pub fn run(config_path: &Path, address_str: &str, amount_str: &str, private: boo
     let config = Config::load(config_path)
         .context("No wallet found. Run 'botho init' first.")?;
 
-    let wallet = Wallet::from_mnemonic(&config.wallet.mnemonic)?;
+    let wallet_config = config.wallet
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("No wallet configured. Run 'botho init' first."))?;
+
+    let wallet = Wallet::from_mnemonic(&wallet_config.mnemonic)?;
     let our_address = wallet.default_address();
 
     // Parse recipient address (format: "view:<hex>,spend:<hex>")
@@ -50,12 +49,22 @@ pub fn run(config_path: &Path, address_str: &str, amount_str: &str, private: boo
         .get_utxos_for_address(&our_address)
         .map_err(|e| anyhow::anyhow!("Failed to get UTXOs: {}", e))?;
 
-    // Calculate fee based on transaction type
-    let fee = if private {
-        MIN_FEE * PRIVATE_FEE_MULTIPLIER
+    // Calculate fee using the cluster-tax fee curve
+    let fee_config = FeeConfig::default();
+    let tx_type = if private {
+        TransactionType::Hidden
     } else {
-        MIN_FEE
+        TransactionType::Plain
     };
+
+    // Get fee rate (cluster_wealth = 0 for now, num_memos = 0)
+    let cluster_wealth = 0u64;
+    let num_memos = 0usize; // Memos not yet implemented
+    let fee_rate_bps = fee_config.fee_rate_bps_with_memos(tx_type, cluster_wealth, num_memos);
+    let fee = fee_config.minimum_fee(tx_type, amount, cluster_wealth, num_memos);
+
+    // Ensure minimum fee of at least 1 picocredit
+    let fee = fee.max(1);
 
     let total_balance: u64 = utxos.iter().map(|u| u.output.amount).sum();
     let required = amount + fee;
@@ -126,15 +135,23 @@ pub fn run(config_path: &Path, address_str: &str, amount_str: &str, private: boo
 
     let tx_hash = tx.hash();
     let num_inputs = tx.inputs.len();
-    let tx_type = if private { "Private" } else { "Simple" };
+    let tx_type_str = if private { "Private" } else { "Simple" };
 
     // Display transaction details
     println!();
-    println!("=== {} Transaction Created ===", tx_type);
+    println!("=== {} Transaction Created ===", tx_type_str);
     println!("From: your wallet");
     println!("To: {}", address_str);
     println!("Amount: {:.12} credits", amount as f64 / 1_000_000_000_000.0);
-    println!("Fee: {:.12} credits", fee as f64 / 1_000_000_000_000.0);
+    println!();
+    println!("Fee breakdown:");
+    println!("  Type: {} ({})", tx_type_str, if private { "ring signatures" } else { "visible sender" });
+    println!("  Rate: {} bps ({:.2}%)", fee_rate_bps, fee_rate_bps as f64 / 100.0);
+    if num_memos > 0 {
+        println!("  Memos: {} (+{}% each)", num_memos, fee_config.memo_fee_rate_bps as f64 / 100.0);
+    }
+    println!("  Total fee: {:.12} credits", fee as f64 / 1_000_000_000_000.0);
+    println!();
     if change > 0 {
         println!("Change: {:.12} credits", change as f64 / 1_000_000_000_000.0);
     }

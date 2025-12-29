@@ -80,6 +80,8 @@ exclude = [
     # grpcio utilities replaced by tonic
     "util/grpc",
     "util/build/grpc",
+    # Tauri desktop wallet has its own Cargo workspace
+    "web/packages/desktop/src-tauri",
 ]
 
 resolver = "2"
@@ -157,9 +159,8 @@ opentelemetry_sdk = "0.25"
 p256 = { version = "0.13", default-features = false }
 pem = "3"
 percent-encoding = "2"
-pqcrypto-dilithium = { version = "0.5", default-features = false }
-pqcrypto-kyber = { version = "0.8", default-features = false }
-pqcrypto-traits = { version = "0.3", default-features = false }
+# Post-quantum crypto now uses RustCrypto's ml-kem and ml-dsa crates
+# (previously used pqcrypto-* crates)
 predicates = "3"
 primitive-types = "0.12"
 proc-macro2 = "1"
@@ -169,7 +170,7 @@ prost = { version = "0.12", default-features = false, features = ["derive"] }
 prost-build = "0.12"
 postcard = { version = "1", default-features = false, features = ["alloc"] }
 quote = "1"
-rand = { version = "0.8", default-features = false }
+rand = { version = "0.8", default-features = false, features = ["std_rng"] }
 rand_chacha = "0.3"
 rand_core = { version = "0.6", default-features = false }
 rand_hc = { version = "0.3", default-features = false }

@@ -9,8 +9,8 @@ use bth_transaction_builder::{
     EmptyMemoBuilder, ReservedSubaddresses, SignedContingentInputBuilder, TransactionBuilder,
 };
 use bth_transaction_core::{
-    constants::{MAX_INPUTS, MAX_OUTPUTS, MILLIMOB_TO_PICOMOB},
-    tokens::Mob,
+    constants::{MAX_INPUTS, MAX_OUTPUTS, MILLIBTH_TO_NANOBTH},
+    tokens::Bth,
     tx::Tx,
     Amount, BlockVersion, Token, TokenId,
 };
@@ -230,13 +230,13 @@ fn test_two_input_tx_with_change_tx_summary_verification() {
         let sender_change_dest = ReservedSubaddresses::from(&sender);
         let recipient = AccountKey::random(&mut rng);
         let recipient_address = recipient.default_subaddress();
-        let value = 1475 * MILLIMOB_TO_PICOMOB;
-        let value2 = 1000 * MILLIMOB_TO_PICOMOB;
-        let change_value = 128 * MILLIMOB_TO_PICOMOB;
+        let value = 1475 * MILLIBTH_TO_NANOBTH;
+        let value2 = 1000 * MILLIBTH_TO_NANOBTH;
+        let change_value = 128 * MILLIBTH_TO_NANOBTH;
 
         let mut transaction_builder = TransactionBuilder::new(
             block_version,
-            Amount::new(Mob::MINIMUM_FEE, token_id),
+            Amount::new(Bth::MINIMUM_FEE, token_id),
         )
         .unwrap();
 
@@ -259,7 +259,7 @@ fn test_two_input_tx_with_change_tx_summary_verification() {
 
         transaction_builder
             .add_output(
-                Amount::new(value + value2 - change_value - Mob::MINIMUM_FEE, token_id),
+                Amount::new(value + value2 - change_value - Bth::MINIMUM_FEE, token_id),
                 &recipient_address,
                 &mut rng,
             )
@@ -307,10 +307,10 @@ fn test_two_input_tx_with_change_tx_summary_verification() {
             &[(
                 TransactionEntity::OtherAddress(recipient_hash),
                 token_id,
-                (value + value2 - change_value - Mob::MINIMUM_FEE) as u128
+                (value + value2 - change_value - Bth::MINIMUM_FEE) as u128
             ),]
         );
-        assert_eq!(report.network_fee, Amount::new(Mob::MINIMUM_FEE, token_id));
+        assert_eq!(report.network_fee, Amount::new(Bth::MINIMUM_FEE, token_id));
     }
 }
 
@@ -326,12 +326,12 @@ fn test_simple_tx_with_change_tx_summary_verification() {
         let sender_change_dest = ReservedSubaddresses::from(&sender);
         let recipient = AccountKey::random(&mut rng);
         let recipient_address = recipient.default_subaddress();
-        let value = 1475 * MILLIMOB_TO_PICOMOB;
-        let change_value = 128 * MILLIMOB_TO_PICOMOB;
+        let value = 1475 * MILLIBTH_TO_NANOBTH;
+        let change_value = 128 * MILLIBTH_TO_NANOBTH;
 
         let mut transaction_builder = TransactionBuilder::new(
             block_version,
-            Amount::new(Mob::MINIMUM_FEE, token_id),
+            Amount::new(Bth::MINIMUM_FEE, token_id),
         )
         .unwrap();
 
@@ -347,7 +347,7 @@ fn test_simple_tx_with_change_tx_summary_verification() {
 
         transaction_builder
             .add_output(
-                Amount::new(value - change_value - Mob::MINIMUM_FEE, token_id),
+                Amount::new(value - change_value - Bth::MINIMUM_FEE, token_id),
                 &recipient_address,
                 &mut rng,
             )
@@ -391,10 +391,10 @@ fn test_simple_tx_with_change_tx_summary_verification() {
             &[(
                 TransactionEntity::OtherAddress(recipient_hash),
                 token_id,
-                (value - change_value - Mob::MINIMUM_FEE) as u128
+                (value - change_value - Bth::MINIMUM_FEE) as u128
             ),]
         );
-        assert_eq!(report.network_fee, Amount::new(Mob::MINIMUM_FEE, token_id));
+        assert_eq!(report.network_fee, Amount::new(Bth::MINIMUM_FEE, token_id));
     }
 }
 
@@ -412,13 +412,13 @@ fn test_two_output_tx_with_change_tx_summary_verification() {
         let recipient_address = recipient.default_subaddress();
         let recipient2 = AccountKey::random(&mut rng);
         let recipient2_address = recipient2.default_subaddress();
-        let value = 1475 * MILLIMOB_TO_PICOMOB;
-        let value2 = 1000 * MILLIMOB_TO_PICOMOB;
-        let change_value = 128 * MILLIMOB_TO_PICOMOB;
+        let value = 1475 * MILLIBTH_TO_NANOBTH;
+        let value2 = 1000 * MILLIBTH_TO_NANOBTH;
+        let change_value = 128 * MILLIBTH_TO_NANOBTH;
 
         let mut transaction_builder = TransactionBuilder::new(
             block_version,
-            Amount::new(Mob::MINIMUM_FEE, token_id),
+            Amount::new(Bth::MINIMUM_FEE, token_id),
         )
         .unwrap();
 
@@ -426,7 +426,7 @@ fn test_two_output_tx_with_change_tx_summary_verification() {
 
         let input_credentials = get_input_credentials(
             block_version,
-            Amount::new(value + value2 + change_value + Mob::MINIMUM_FEE, token_id),
+            Amount::new(value + value2 + change_value + Bth::MINIMUM_FEE, token_id),
             &sender,
             &mut rng,
         );
@@ -475,7 +475,7 @@ fn test_two_output_tx_with_change_tx_summary_verification() {
             &[(
                 token_id,
                 TotalKind::Ours,
-                (value + value2 + Mob::MINIMUM_FEE) as i128
+                (value + value2 + Bth::MINIMUM_FEE) as i128
             ),]
         );
         let mut outputs = [
@@ -492,7 +492,7 @@ fn test_two_output_tx_with_change_tx_summary_verification() {
         ];
         outputs.sort();
         assert_eq!(&report.outputs[..], &outputs[..]);
-        assert_eq!(report.network_fee, Amount::new(Mob::MINIMUM_FEE, token_id));
+        assert_eq!(report.network_fee, Amount::new(Bth::MINIMUM_FEE, token_id));
     }
 }
 
@@ -507,8 +507,8 @@ fn test_sci_tx_summary_verification() {
     let alice = AccountKey::random(&mut rng);
     let bob = AccountKey::random(&mut rng);
 
-    let value = 1475 * MILLIMOB_TO_PICOMOB;
-    let amount = Amount::new(value, Mob::ID);
+    let value = 1475 * MILLIBTH_TO_NANOBTH;
+    let amount = Amount::new(value, Bth::ID);
     let token2 = TokenId::from(2);
     let value2 = 100_000;
     let amount2 = Amount::new(value2, token2);
@@ -547,7 +547,7 @@ fn test_sci_tx_summary_verification() {
 
     let mut builder = TransactionBuilder::new(
         block_version,
-        Amount::new(Mob::MINIMUM_FEE, Mob::ID),
+        Amount::new(Bth::MINIMUM_FEE, Bth::ID),
     )
     .unwrap();
 
@@ -567,7 +567,7 @@ fn test_sci_tx_summary_verification() {
     // Bob keeps the Mob that Alice supplies, less fees
     builder
         .add_output(
-            Amount::new(value - Mob::MINIMUM_FEE, Mob::ID),
+            Amount::new(value - Bth::MINIMUM_FEE, Bth::ID),
             &bob.default_subaddress(),
             &mut rng,
         )
@@ -598,7 +598,7 @@ fn test_sci_tx_summary_verification() {
             // Bob sends 100_000 of token id 2 to the swap counterparty
             (token2, TotalKind::Ours, value2 as i128),
             // SCI inputs used in the transaction (fully consumed)
-            (Mob::ID, TotalKind::Sci, value as i128),
+            (Bth::ID, TotalKind::Sci, value as i128),
         ]
     );
     let mut outputs = [
@@ -607,12 +607,12 @@ fn test_sci_tx_summary_verification() {
         // Converted output to ourself
         (
             TransactionEntity::OurAddress(bob_hash),
-            Mob::ID,
-            (value - Mob::MINIMUM_FEE) as u128,
+            Bth::ID,
+            (value - Bth::MINIMUM_FEE) as u128,
         ),
     ];
     outputs.sort();
     assert_eq!(&report.outputs[..], &outputs[..]);
 
-    assert_eq!(report.network_fee, Amount::new(Mob::MINIMUM_FEE, Mob::ID));
+    assert_eq!(report.network_fee, Amount::new(Bth::MINIMUM_FEE, Bth::ID));
 }

@@ -93,33 +93,44 @@ mod tests {
     }
 
     #[test]
-    fn test_keygen_works() {
-        // Note: Deterministic keygen is not yet implemented (pqcrypto limitation)
-        // This test just verifies keygen works at all
+    fn test_keygen_deterministic() {
         let seed = [123u8; 32];
-        let keypair = MlKem768KeyPair::from_seed(&seed);
+        let keypair1 = MlKem768KeyPair::from_seed(&seed);
+        let keypair2 = MlKem768KeyPair::from_seed(&seed);
+
+        // Same seed produces same keys
+        assert_eq!(keypair1.public_key().as_bytes(), keypair2.public_key().as_bytes());
 
         // Verify the keypair works for encapsulation
-        let (ct, ss) = keypair.public_key().encapsulate();
-        let decap = keypair.decapsulate(&ct).unwrap();
+        let (ct, ss) = keypair1.public_key().encapsulate();
+        let decap = keypair1.decapsulate(&ct).unwrap();
         assert_eq!(ss.as_bytes(), decap.as_bytes());
     }
 
     #[test]
-    fn test_derive_pq_keys_works() {
-        // Note: Deterministic keygen is not yet implemented (pqcrypto limitation)
-        // This test just verifies derive_pq_keys works at all
+    fn test_derive_pq_keys_deterministic() {
         let mnemonic = b"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-        let keys = derive_pq_keys(mnemonic);
+        let keys1 = derive_pq_keys(mnemonic);
+        let keys2 = derive_pq_keys(mnemonic);
+
+        // Same mnemonic produces same keys
+        assert_eq!(
+            keys1.kem_keypair.public_key().as_bytes(),
+            keys2.kem_keypair.public_key().as_bytes()
+        );
+        assert_eq!(
+            keys1.sig_keypair.public_key().as_bytes(),
+            keys2.sig_keypair.public_key().as_bytes()
+        );
 
         // Verify the KEM keypair works
-        let (ct, ss) = keys.kem_keypair.public_key().encapsulate();
-        let decap = keys.kem_keypair.decapsulate(&ct).unwrap();
+        let (ct, ss) = keys1.kem_keypair.public_key().encapsulate();
+        let decap = keys1.kem_keypair.decapsulate(&ct).unwrap();
         assert_eq!(ss.as_bytes(), decap.as_bytes());
 
         // Verify the signature keypair works
         let msg = b"test message";
-        let sig = keys.sig_keypair.sign(msg);
-        assert!(keys.sig_keypair.public_key().verify(msg, &sig).is_ok());
+        let sig = keys1.sig_keypair.sign(msg);
+        assert!(keys1.sig_keypair.public_key().verify(msg, &sig).is_ok());
     }
 }

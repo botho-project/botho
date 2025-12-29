@@ -17,6 +17,7 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
+use zeroize::Zeroize;
 
 use crate::discovery::NodeDiscovery;
 
@@ -304,13 +305,12 @@ fn derive_key(password: &str, salt: &str) -> Result<[u8; 32]> {
     Ok(key)
 }
 
-/// Securely zero out sensitive data (best effort)
+/// Securely zero out sensitive data.
+///
+/// Uses the `zeroize` crate which provides guaranteed memory clearing
+/// that won't be optimized away by the compiler.
 pub fn secure_zero(data: &mut [u8]) {
-    for byte in data.iter_mut() {
-        *byte = 0;
-    }
-    // Compiler barrier to prevent optimization
-    std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
+    data.zeroize();
 }
 
 /// Set Windows ACL to owner-only access (equivalent to Unix 0600)
