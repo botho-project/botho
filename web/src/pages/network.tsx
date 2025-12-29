@@ -1,6 +1,7 @@
 import { Layout } from '@/components/layout'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
-import { motion } from 'motion/react'
+import { NetworkGraph, type NetworkPeer } from '@/components/network'
+import { motion, AnimatePresence } from 'motion/react'
 import {
   Activity,
   CheckCircle2,
@@ -8,29 +9,35 @@ import {
   Clock,
   Globe,
   Loader2,
-  Network,
   Radio,
   Server,
   Shield,
   Signal,
   Users,
-  Wifi,
+  X,
   Zap,
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { cn } from '@/lib/utils'
 
-interface SCPNode {
-  id: string
-  name: string
-  address: string
-  status: 'online' | 'syncing' | 'offline'
-  latency: number
-  slot: number
-  phase: 'nominate' | 'prepare' | 'commit' | 'externalize'
-  isValidator: boolean
-  quorumSet: string[]
+const phaseColors = {
+  nominate: { bg: 'bg-[--color-warning]/20', text: 'text-[--color-warning]', label: 'Nominate' },
+  prepare: { bg: 'bg-[--color-pulse]/20', text: 'text-[--color-pulse]', label: 'Prepare' },
+  commit: { bg: 'bg-[--color-purple]/20', text: 'text-[--color-purple]', label: 'Commit' },
+  externalize: { bg: 'bg-[--color-success]/20', text: 'text-[--color-success]', label: 'Externalize' },
 }
+
+// Mock peer data - in production this comes from gossip
+const mockPeers: NetworkPeer[] = [
+  { id: 'self', nodeId: 'cad1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh', isValidator: true, isSelf: true, status: 'online', latency: 0, blockHeight: 1234567, version: '0.1.0', connectedTo: ['node-2', 'node-3', 'node-4', 'node-5'] },
+  { id: 'node-2', nodeId: 'cad1pqr8stuvwxyz0123456789abcdefghijklmnop', isValidator: true, isSelf: false, status: 'online', latency: 45, blockHeight: 1234567, version: '0.1.0', connectedTo: ['self', 'node-3', 'node-5', 'node-6'] },
+  { id: 'node-3', nodeId: 'cad1abc9defghijk0123456789lmnopqrstuvwxyz', isValidator: true, isSelf: false, status: 'online', latency: 89, blockHeight: 1234566, version: '0.1.0', connectedTo: ['self', 'node-2', 'node-4', 'node-7'] },
+  { id: 'node-4', nodeId: 'cad1xyz7890abcdefghijklmnopqrstuvwxyz0123', isValidator: false, isSelf: false, status: 'online', latency: 23, blockHeight: 1234567, version: '0.1.0', connectedTo: ['self', 'node-3', 'node-6'] },
+  { id: 'node-5', nodeId: 'cad1lmn4567opqrstuvwxyzabcdefghijk890123', isValidator: false, isSelf: false, status: 'syncing', latency: 67, blockHeight: 1234560, version: '0.1.0', connectedTo: ['self', 'node-2', 'node-7'] },
+  { id: 'node-6', nodeId: 'cad1def1234ghijklmnopqrstuvwxyzabc567890', isValidator: false, isSelf: false, status: 'offline', latency: 0, blockHeight: 1234550, version: '0.0.9', connectedTo: ['node-2', 'node-4'] },
+  { id: 'node-7', nodeId: 'cad1ghi8901jklmnopqrstuvwxyzabcdef234567', isValidator: true, isSelf: false, status: 'online', latency: 112, blockHeight: 1234567, version: '0.1.0', connectedTo: ['node-3', 'node-5', 'node-8'] },
+  { id: 'node-8', nodeId: 'cad1jkl5678mnopqrstuvwxyzabcdefghi901234', isValidator: false, isSelf: false, status: 'online', latency: 156, blockHeight: 1234567, version: '0.1.0', connectedTo: ['node-7'] },
+]
 
 interface SCPSlot {
   slot: number
@@ -40,39 +47,17 @@ interface SCPSlot {
   totalNodes: number
 }
 
-const mockNodes: SCPNode[] = [
-  { id: 'node-1', name: 'US-East Validator', address: '10.0.1.1:8443', status: 'online', latency: 12, slot: 1234567, phase: 'externalize', isValidator: true, quorumSet: ['node-2', 'node-3', 'node-4'] },
-  { id: 'node-2', name: 'EU-West Validator', address: '10.0.2.1:8443', status: 'online', latency: 45, slot: 1234567, phase: 'externalize', isValidator: true, quorumSet: ['node-1', 'node-3', 'node-5'] },
-  { id: 'node-3', name: 'Asia-Pacific Node', address: '10.0.3.1:8443', status: 'syncing', latency: 89, slot: 1234566, phase: 'commit', isValidator: true, quorumSet: ['node-1', 'node-2', 'node-4'] },
-  { id: 'node-4', name: 'US-West Node', address: '10.0.4.1:8443', status: 'online', latency: 23, slot: 1234567, phase: 'externalize', isValidator: false, quorumSet: ['node-1', 'node-2'] },
-  { id: 'node-5', name: 'SA-East Node', address: '10.0.5.1:8443', status: 'online', latency: 67, slot: 1234567, phase: 'externalize', isValidator: false, quorumSet: ['node-2', 'node-3'] },
-  { id: 'node-6', name: 'AF-South Node', address: '10.0.6.1:8443', status: 'offline', latency: 0, slot: 1234560, phase: 'nominate', isValidator: false, quorumSet: ['node-1', 'node-4'] },
-]
-
 const mockSlotHistory: SCPSlot[] = [
   { slot: 1234567, phase: 'externalize', startTime: Date.now() - 5000, votes: 5, totalNodes: 6 },
   { slot: 1234566, phase: 'externalize', startTime: Date.now() - 65000, votes: 6, totalNodes: 6 },
   { slot: 1234565, phase: 'externalize', startTime: Date.now() - 125000, votes: 5, totalNodes: 6 },
   { slot: 1234564, phase: 'externalize', startTime: Date.now() - 185000, votes: 6, totalNodes: 6 },
-  { slot: 1234563, phase: 'externalize', startTime: Date.now() - 245000, votes: 6, totalNodes: 6 },
 ]
-
-const phaseColors = {
-  nominate: { bg: 'bg-[--color-warning]/20', text: 'text-[--color-warning]', label: 'Nominate' },
-  prepare: { bg: 'bg-[--color-pulse]/20', text: 'text-[--color-pulse]', label: 'Prepare' },
-  commit: { bg: 'bg-[--color-purple]/20', text: 'text-[--color-purple]', label: 'Commit' },
-  externalize: { bg: 'bg-[--color-success]/20', text: 'text-[--color-success]', label: 'Externalize' },
-}
-
-const statusColors = {
-  online: 'bg-[--color-success]',
-  syncing: 'bg-[--color-warning]',
-  offline: 'bg-[--color-danger]',
-}
 
 export function NetworkPage() {
   const [currentSlot, setCurrentSlot] = useState(1234567)
   const [currentPhase, setCurrentPhase] = useState<keyof typeof phaseColors>('externalize')
+  const [selectedPeer, setSelectedPeer] = useState<NetworkPeer | null>(null)
 
   // Simulate SCP phase progression
   useEffect(() => {
@@ -90,14 +75,14 @@ export function NetworkPage() {
     return () => clearInterval(interval)
   }, [])
 
-  const onlineNodes = mockNodes.filter((n) => n.status === 'online').length
-  const validators = mockNodes.filter((n) => n.isValidator).length
+  const onlinePeers = mockPeers.filter((p) => p.status === 'online').length
+  const validators = mockPeers.filter((p) => p.isValidator).length
   const avgLatency = Math.round(
-    mockNodes.filter((n) => n.status === 'online').reduce((sum, n) => sum + n.latency, 0) / onlineNodes
+    mockPeers.filter((p) => p.status === 'online' && !p.isSelf).reduce((sum, p) => sum + (p.latency || 0), 0) / (onlinePeers - 1)
   )
 
   return (
-    <Layout title="Network" subtitle="SCP consensus and network topology">
+    <Layout title="Network" subtitle="P2P gossip topology and SCP consensus">
       <div className="space-y-6">
         {/* Live consensus status */}
         <motion.div
@@ -122,7 +107,7 @@ export function NetworkPage() {
                 </h2>
               </div>
               <p className="mt-2 text-sm text-[--color-dim]">
-                Stellar Consensus Protocol is actively processing slot {currentSlot.toLocaleString()}
+                Processing slot {currentSlot.toLocaleString()}
               </p>
             </div>
 
@@ -182,11 +167,11 @@ export function NetworkPage() {
         {/* Stats grid */}
         <div className="grid grid-cols-5 gap-4">
           {[
-            { label: 'Connected Peers', value: onlineNodes, total: mockNodes.length, icon: Users, color: 'success' },
+            { label: 'Known Peers', value: mockPeers.length - 1, icon: Users, color: 'success' },
             { label: 'Validators', value: validators, icon: Shield, color: 'purple' },
             { label: 'Current Slot', value: currentSlot.toLocaleString(), icon: Zap, color: 'pulse' },
             { label: 'Avg Latency', value: `${avgLatency}ms`, icon: Signal, color: 'warning' },
-            { label: 'Ledger Close', value: '~60s', icon: Clock, color: 'pulse' },
+            { label: 'Slot Time', value: '~60s', icon: Clock, color: 'pulse' },
           ].map((stat, i) => (
             <motion.div
               key={stat.label}
@@ -201,154 +186,198 @@ export function NetworkPage() {
               </div>
               <p className="mt-1 font-display text-xl font-bold text-[--color-light]">
                 {stat.value}
-                {'total' in stat && (
-                  <span className="ml-1 text-sm text-[--color-dim]">/ {stat.total}</span>
-                )}
               </p>
             </motion.div>
           ))}
         </div>
 
-        <div className="grid grid-cols-3 gap-6">
-          {/* Node list */}
-          <div className="col-span-2">
-            <Card>
-              <CardHeader>
-                <div className="flex items-center gap-2">
-                  <Server className="h-4 w-4 text-[--color-pulse]" />
-                  <CardTitle>Network Nodes</CardTitle>
-                </div>
-                <div className="flex gap-2">
-                  <span className="flex items-center gap-1 text-xs text-[--color-dim]">
-                    <div className="h-2 w-2 rounded-full bg-[--color-success]" /> Online
-                  </span>
-                  <span className="flex items-center gap-1 text-xs text-[--color-dim]">
-                    <div className="h-2 w-2 rounded-full bg-[--color-warning]" /> Syncing
-                  </span>
-                  <span className="flex items-center gap-1 text-xs text-[--color-dim]">
-                    <div className="h-2 w-2 rounded-full bg-[--color-danger]" /> Offline
-                  </span>
+        {/* Network graph and side panel */}
+        <div className="grid grid-cols-4 gap-6">
+          {/* Network graph */}
+          <div className="col-span-3">
+            <Card className="h-[600px] overflow-hidden">
+              <CardHeader className="border-b border-[--color-steel]">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Globe className="h-4 w-4 text-[--color-pulse]" />
+                    <CardTitle>Network Topology</CardTitle>
+                  </div>
+                  <div className="flex gap-4">
+                    <span className="flex items-center gap-1.5 text-xs text-[--color-dim]">
+                      <div className="h-2 w-2 rounded-full bg-[--color-pulse]" /> You
+                    </span>
+                    <span className="flex items-center gap-1.5 text-xs text-[--color-dim]">
+                      <div className="h-2 w-2 rounded-full bg-[--color-purple]" /> Validator
+                    </span>
+                    <span className="flex items-center gap-1.5 text-xs text-[--color-dim]">
+                      <div className="h-2 w-2 rounded-full bg-[--color-steel]" /> Node
+                    </span>
+                  </div>
                 </div>
               </CardHeader>
-              <CardContent className="p-0">
-                <div className="divide-y divide-[--color-steel]">
-                  {mockNodes.map((node, i) => {
-                    const phase = phaseColors[node.phase]
-
-                    return (
-                      <motion.div
-                        key={node.id}
-                        initial={{ opacity: 0, x: -20 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        transition={{ delay: i * 0.05 }}
-                        className="group flex items-center justify-between px-5 py-4 transition-colors hover:bg-[--color-slate]/50"
-                      >
-                        <div className="flex items-center gap-4">
-                          <div className="relative">
-                            <div className={cn(
-                              'flex h-10 w-10 items-center justify-center rounded-lg',
-                              node.isValidator ? 'bg-[--color-purple]/10' : 'bg-[--color-slate]'
-                            )}>
-                              {node.isValidator ? (
-                                <Shield className="h-5 w-5 text-[--color-purple]" />
-                              ) : (
-                                <Server className="h-5 w-5 text-[--color-dim]" />
-                              )}
-                            </div>
-                            <div className={cn(
-                              'absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-[--color-abyss]',
-                              statusColors[node.status]
-                            )} />
-                          </div>
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <span className="font-medium text-[--color-light]">{node.name}</span>
-                              {node.isValidator && (
-                                <span className="rounded bg-[--color-purple]/10 px-1.5 py-0.5 text-xs font-medium text-[--color-purple]">
-                                  Validator
-                                </span>
-                              )}
-                            </div>
-                            <div className="mt-0.5 flex items-center gap-2 text-xs text-[--color-dim]">
-                              <span className="font-mono">{node.address}</span>
-                              <span>•</span>
-                              <span>Slot {node.slot.toLocaleString()}</span>
-                            </div>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-4">
-                          <div className={cn('rounded px-2 py-1 text-xs font-medium', phase.bg, phase.text)}>
-                            {phase.label}
-                          </div>
-                          <div className="w-16 text-right">
-                            {node.status === 'online' ? (
-                              <span className={cn(
-                                'font-mono text-sm',
-                                node.latency < 50 ? 'text-[--color-success]' : node.latency < 100 ? 'text-[--color-warning]' : 'text-[--color-danger]'
-                              )}>
-                                {node.latency}ms
-                              </span>
-                            ) : (
-                              <span className="text-xs text-[--color-dim]">{node.status}</span>
-                            )}
-                          </div>
-                        </div>
-                      </motion.div>
-                    )
-                  })}
-                </div>
+              <CardContent className="h-[calc(100%-65px)] p-0">
+                <NetworkGraph peers={mockPeers} onPeerSelect={setSelectedPeer} />
               </CardContent>
             </Card>
           </div>
 
-          {/* Right column */}
+          {/* Side panel */}
           <div className="space-y-6">
-            {/* Slot history */}
-            <Card>
-              <CardHeader>
-                <div className="flex items-center gap-2">
-                  <Activity className="h-4 w-4 text-[--color-success]" />
-                  <CardTitle>Recent Slots</CardTitle>
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                {mockSlotHistory.map((slot, i) => (
-                  <motion.div
-                    key={slot.slot}
-                    initial={{ opacity: 0, x: 10 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ delay: i * 0.05 }}
-                    className="flex items-center justify-between rounded-lg bg-[--color-slate]/50 px-3 py-2"
-                  >
-                    <div className="flex items-center gap-2">
-                      <CheckCircle2 className="h-4 w-4 text-[--color-success]" />
-                      <span className="font-mono text-sm text-[--color-light]">
-                        #{slot.slot.toLocaleString()}
-                      </span>
-                    </div>
-                    <div className="text-right">
-                      <span className="text-xs text-[--color-success]">
-                        {slot.votes}/{slot.totalNodes} votes
-                      </span>
-                    </div>
-                  </motion.div>
-                ))}
-              </CardContent>
-            </Card>
+            {/* Selected peer details or recent slots */}
+            <AnimatePresence mode="wait">
+              {selectedPeer ? (
+                <motion.div
+                  key="peer-details"
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: 20 }}
+                >
+                  <Card>
+                    <CardHeader>
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          {selectedPeer.isSelf ? (
+                            <Radio className="h-4 w-4 text-[--color-pulse]" />
+                          ) : selectedPeer.isValidator ? (
+                            <Shield className="h-4 w-4 text-[--color-purple]" />
+                          ) : (
+                            <Server className="h-4 w-4 text-[--color-dim]" />
+                          )}
+                          <CardTitle>
+                            {selectedPeer.isSelf ? 'Your Node' : 'Peer Details'}
+                          </CardTitle>
+                        </div>
+                        <button
+                          onClick={() => setSelectedPeer(null)}
+                          className="rounded p-1 text-[--color-dim] hover:bg-[--color-slate] hover:text-[--color-light]"
+                        >
+                          <X className="h-4 w-4" />
+                        </button>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      <div>
+                        <p className="text-xs text-[--color-dim]">Node ID</p>
+                        <p className="mt-1 break-all font-mono text-xs text-[--color-light]">
+                          {selectedPeer.nodeId}
+                        </p>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <p className="text-xs text-[--color-dim]">Status</p>
+                          <p className={cn(
+                            'mt-1 text-sm font-medium capitalize',
+                            selectedPeer.status === 'online' ? 'text-[--color-success]' :
+                            selectedPeer.status === 'syncing' ? 'text-[--color-warning]' :
+                            'text-[--color-danger]'
+                          )}>
+                            {selectedPeer.status}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-[--color-dim]">Role</p>
+                          <p className={cn(
+                            'mt-1 text-sm font-medium',
+                            selectedPeer.isValidator ? 'text-[--color-purple]' : 'text-[--color-ghost]'
+                          )}>
+                            {selectedPeer.isValidator ? 'Validator' : 'Node'}
+                          </p>
+                        </div>
+                      </div>
+
+                      {!selectedPeer.isSelf && selectedPeer.latency !== undefined && (
+                        <div>
+                          <p className="text-xs text-[--color-dim]">Latency</p>
+                          <p className={cn(
+                            'mt-1 font-mono text-sm',
+                            selectedPeer.latency < 50 ? 'text-[--color-success]' :
+                            selectedPeer.latency < 100 ? 'text-[--color-warning]' :
+                            'text-[--color-danger]'
+                          )}>
+                            {selectedPeer.latency}ms
+                          </p>
+                        </div>
+                      )}
+
+                      <div>
+                        <p className="text-xs text-[--color-dim]">Block Height</p>
+                        <p className="mt-1 font-mono text-sm text-[--color-light]">
+                          {selectedPeer.blockHeight?.toLocaleString() || 'Unknown'}
+                        </p>
+                      </div>
+
+                      <div>
+                        <p className="text-xs text-[--color-dim]">Version</p>
+                        <p className="mt-1 text-sm text-[--color-ghost]">
+                          v{selectedPeer.version || 'Unknown'}
+                        </p>
+                      </div>
+
+                      <div>
+                        <p className="text-xs text-[--color-dim]">Connected Peers</p>
+                        <p className="mt-1 text-sm text-[--color-light]">
+                          {selectedPeer.connectedTo.length}
+                        </p>
+                      </div>
+                    </CardContent>
+                  </Card>
+                </motion.div>
+              ) : (
+                <motion.div
+                  key="slot-history"
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: 20 }}
+                >
+                  <Card>
+                    <CardHeader>
+                      <div className="flex items-center gap-2">
+                        <Activity className="h-4 w-4 text-[--color-success]" />
+                        <CardTitle>Recent Slots</CardTitle>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                      {mockSlotHistory.map((slot, i) => (
+                        <motion.div
+                          key={slot.slot}
+                          initial={{ opacity: 0, x: 10 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          transition={{ delay: i * 0.05 }}
+                          className="flex items-center justify-between rounded-lg bg-[--color-slate]/50 px-3 py-2"
+                        >
+                          <div className="flex items-center gap-2">
+                            <CheckCircle2 className="h-4 w-4 text-[--color-success]" />
+                            <span className="font-mono text-sm text-[--color-light]">
+                              #{slot.slot.toLocaleString()}
+                            </span>
+                          </div>
+                          <div className="text-right">
+                            <span className="text-xs text-[--color-success]">
+                              {slot.votes}/{slot.totalNodes}
+                            </span>
+                          </div>
+                        </motion.div>
+                      ))}
+                    </CardContent>
+                  </Card>
+                </motion.div>
+              )}
+            </AnimatePresence>
 
             {/* Quorum info */}
             <Card>
               <CardHeader>
                 <div className="flex items-center gap-2">
-                  <Globe className="h-4 w-4 text-[--color-purple]" />
+                  <Shield className="h-4 w-4 text-[--color-purple]" />
                   <CardTitle>Quorum Status</CardTitle>
                 </div>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div>
                   <div className="mb-1 flex justify-between text-sm">
-                    <span className="text-[--color-dim]">Quorum Threshold</span>
-                    <span className="text-[--color-light]">67%</span>
+                    <span className="text-[--color-dim]">Agreement</span>
+                    <span className="text-[--color-light]">83%</span>
                   </div>
                   <div className="h-2 overflow-hidden rounded-full bg-[--color-slate]">
                     <motion.div
@@ -358,64 +387,26 @@ export function NetworkPage() {
                       className="h-full rounded-full bg-gradient-to-r from-[--color-pulse] to-[--color-success]"
                     />
                   </div>
-                  <p className="mt-1 text-xs text-[--color-success]">83% agreement reached</p>
                 </div>
 
                 <div className="space-y-2">
                   <p className="text-xs text-[--color-dim]">Active Validators</p>
                   <div className="flex flex-wrap gap-1">
-                    {mockNodes.filter((n) => n.isValidator).map((node) => (
+                    {mockPeers.filter((p) => p.isValidator).map((peer) => (
                       <div
-                        key={node.id}
+                        key={peer.id}
                         className={cn(
-                          'rounded px-2 py-1 text-xs',
-                          node.status === 'online'
-                            ? 'bg-[--color-success]/10 text-[--color-success]'
+                          'rounded px-2 py-1 text-xs cursor-pointer transition-colors',
+                          peer.status === 'online'
+                            ? 'bg-[--color-success]/10 text-[--color-success] hover:bg-[--color-success]/20'
                             : 'bg-[--color-danger]/10 text-[--color-danger]'
                         )}
+                        onClick={() => setSelectedPeer(peer)}
                       >
-                        {node.name.split(' ')[0]}
+                        {peer.isSelf ? 'You' : peer.nodeId.slice(0, 8)}
                       </div>
                     ))}
                   </div>
-                </div>
-
-                <div className="rounded-lg bg-[--color-slate] p-3">
-                  <div className="flex items-center gap-2">
-                    <Wifi className="h-4 w-4 text-[--color-pulse]" />
-                    <span className="text-sm font-medium text-[--color-light]">Network Health</span>
-                  </div>
-                  <p className="mt-1 text-xs text-[--color-success]">
-                    All quorum intersections intact. Network is fully connected.
-                  </p>
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Connection info */}
-            <Card>
-              <CardHeader>
-                <div className="flex items-center gap-2">
-                  <Network className="h-4 w-4 text-[--color-warning]" />
-                  <CardTitle>Your Connection</CardTitle>
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <div className="flex justify-between text-sm">
-                  <span className="text-[--color-dim]">Connected To</span>
-                  <span className="text-[--color-light]">localhost:8443</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-[--color-dim]">Node Type</span>
-                  <span className="text-[--color-purple]">Validator</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-[--color-dim]">Peer Count</span>
-                  <span className="text-[--color-light]">{onlineNodes - 1}</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-[--color-dim]">Sync Status</span>
-                  <span className="text-[--color-success]">Synchronized</span>
                 </div>
               </CardContent>
             </Card>
