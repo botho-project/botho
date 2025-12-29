@@ -148,7 +148,7 @@ let config = FeeConfig {
 ## Testing
 
 ```bash
-cargo test -p bt-cluster-tax
+cargo test -p bth-cluster-tax
 ```
 
 ## License

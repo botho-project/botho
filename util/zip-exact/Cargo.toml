@@ -1,5 +1,5 @@
 [package]
-name = "bt-util-zip-exact"
+name = "bth-util-zip-exact"
 version = "7.1.0"
 authors = ["Botho"]
 edition = "2021"

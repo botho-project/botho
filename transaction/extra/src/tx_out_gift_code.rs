@@ -2,8 +2,8 @@
 
 //! Code for computing & receiving gift codes
 
-use bt_crypto_keys::{RistrettoPrivate, RistrettoPublic};
-use bt_transaction_types::{Amount, AmountError, MaskedAmount};
+use bth_crypto_keys::{RistrettoPrivate, RistrettoPublic};
+use bth_transaction_types::{Amount, AmountError, MaskedAmount};
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use subtle::{Choice, ConstantTimeEq};

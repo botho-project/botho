@@ -3,8 +3,8 @@
 //! Convert to/from external::ReservedSubaddresses
 
 use crate::{external, ConversionError};
-use bt_account_keys::PublicAddress;
-use bt_transaction_extra::ReservedSubaddresses;
+use bth_account_keys::PublicAddress;
+use bth_transaction_extra::ReservedSubaddresses;
 
 impl From<&ReservedSubaddresses> for external::ReservedSubaddresses {
     fn from(src: &ReservedSubaddresses) -> Self {
@@ -44,7 +44,7 @@ impl TryFrom<&external::ReservedSubaddresses> for ReservedSubaddresses {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bt_account_keys::AccountKey;
+    use bth_account_keys::AccountKey;
     use rand::{rngs::StdRng, SeedableRng};
 
     #[test]

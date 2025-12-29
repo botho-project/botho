@@ -1,5 +1,5 @@
 [package]
-name = "bt-util-uri"
+name = "bth-util-uri"
 version = "7.1.0"
 authors = ["Botho"]
 edition = "2021"
@@ -8,9 +8,9 @@ readme = "README.md"
 rust-version = { workspace = true }
 
 [dependencies]
-bt-common = { workspace = true }
-bt-crypto-keys = { workspace = true }
-bt-util-host-cert = { workspace = true }
+bth-common = { workspace = true }
+bth-crypto-keys = { workspace = true }
+bth-util-host-cert = { workspace = true }
 
 base64 = { workspace = true }
 displaydoc = { workspace = true }
@@ -20,7 +20,7 @@ serde = { workspace = true, features = ["alloc", "derive"] }
 url = { workspace = true }
 
 [dev-dependencies]
-bt-util-from-random = { workspace = true }
+bth-util-from-random = { workspace = true }
 
 rand = { workspace = true }
 rand_hc = { workspace = true }

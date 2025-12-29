@@ -1,5 +1,5 @@
 [package]
-name = "bt-util-metered-channel"
+name = "bth-util-metered-channel"
 version = "7.1.0"
 authors = ["Botho"]
 edition = "2021"
@@ -7,6 +7,6 @@ license = "GPL-3.0"
 rust-version = { workspace = true }
 
 [dependencies]
-bt-util-metrics = { workspace = true }
+bth-util-metrics = { workspace = true }
 
 crossbeam-channel = { workspace = true }

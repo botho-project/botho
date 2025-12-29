@@ -1,5 +1,5 @@
 [package]
-name = "bt-crypto-noise"
+name = "bth-crypto-noise"
 version = "7.1.0"
 authors = ["Botho"]
 edition = "2021"
@@ -7,8 +7,8 @@ license = "Apache-2.0"
 rust-version = { workspace = true }
 
 [dependencies]
-bt-crypto-keys = { workspace = true }
-bt-util-from-random = { workspace = true }
+bth-crypto-keys = { workspace = true }
+bth-util-from-random = { workspace = true }
 
 aead = { workspace = true }
 aes-gcm = { workspace = true }

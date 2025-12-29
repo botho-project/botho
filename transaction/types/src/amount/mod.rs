@@ -6,7 +6,7 @@
 pub use error::AmountError;
 
 use crate::TokenId;
-use bt_crypto_digestible::Digestible;
+use bth_crypto_digestible::Digestible;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;

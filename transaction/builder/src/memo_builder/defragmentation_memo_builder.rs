@@ -5,9 +5,9 @@
 
 use super::MemoBuilder;
 use crate::ReservedSubaddresses;
-use bt_account_keys::PublicAddress;
-use bt_transaction_core::{tokens::Mob, Amount, MemoContext, MemoPayload, NewMemoError, Token};
-use bt_transaction_extra::DefragmentationMemo;
+use bth_account_keys::PublicAddress;
+use bth_transaction_core::{tokens::Mob, Amount, MemoContext, MemoPayload, NewMemoError, Token};
+use bth_transaction_extra::DefragmentationMemo;
 
 /// This memo builder builds the [`DefragmentationMemo`] (0x0003).
 ///
@@ -131,9 +131,9 @@ impl MemoBuilder for DefragmentationMemoBuilder {
 mod tests {
     use super::*;
     use assert_matches::assert_matches;
-    use bt_account_keys::AccountKey;
-    use bt_crypto_keys::RistrettoPublic;
-    use bt_util_from_random::FromRandom;
+    use bth_account_keys::AccountKey;
+    use bth_crypto_keys::RistrettoPublic;
+    use bth_util_from_random::FromRandom;
     use rand::{rngs::StdRng, SeedableRng};
 
     #[test]

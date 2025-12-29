@@ -1,5 +1,5 @@
 [package]
-name = "bt-core"
+name = "bth-core"
 version = "7.1.0"
 authors = ["Botho"]
 edition = "2021"
@@ -11,7 +11,7 @@ rust-version = { workspace = true }
 [features]
 bip39 = ["dep:tiny-bip39", "dep:slip10_ed25519"]
 internals = []
-serde = ["dep:serde", "bt-core-types/serde"]
+serde = ["dep:serde", "bth-core-types/serde"]
 
 default = ["bip39"]
 
@@ -26,24 +26,23 @@ slip10_ed25519 = { workspace = true, optional = true }
 tiny-bip39 = { workspace = true, optional = true }
 zeroize = { workspace = true }
 
-bt-core-types = { workspace = true }
-bt-crypto-hashes = { workspace = true }
-bt-crypto-keys = { workspace = true }
+bth-core-types = { workspace = true }
+bth-crypto-hashes = { workspace = true }
+bth-crypto-keys = { workspace = true }
 
 [dev-dependencies]
 
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 hex = { workspace = true }
-lazy_static = { workspace = true }
 rand_core = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 
-bt-test-vectors-definitions = { workspace = true }
-bt-util-from-random = { workspace = true }
-bt-util-test-vector = { workspace = true }
-bt-util-test-with-data = { workspace = true }
+bth-test-vectors-definitions = { workspace = true }
+bth-util-from-random = { workspace = true }
+bth-util-test-vector = { workspace = true }
+bth-util-test-with-data = { workspace = true }
 
 [[example]]
 name = "slip10"

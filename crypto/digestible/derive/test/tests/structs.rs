@@ -1,8 +1,8 @@
 // Copyright (c) 2018-2022 The Botho Foundation
 
 /// Tests of the behavior of the macro-generated Digestible implementations
-use bt_crypto_digestible::{Digestible, MerlinTranscript};
-use bt_crypto_digestible_test_utils::*;
+use bth_crypto_digestible::{Digestible, MerlinTranscript};
+use bth_crypto_digestible_test_utils::*;
 
 // Test structs
 #[derive(Digestible)]

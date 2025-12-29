@@ -1,4 +1,4 @@
-bt-watcher
+bth-watcher
 =========
 
 Watcher nodes perform an essential role in the Botho network by verifying the signatures that the full validator nodes attach to each block. In this way the watcher nodes continuously monitor the integrity of the decentralized Botho network.
@@ -18,7 +18,7 @@ consensus_client_url = "mc://node2.test.mobilecoin.com/"
 
 ```sh
 SGX_MODE=HW MC_LOG=debug,hyper=error,want=error,reqwest=error,mio=error,rustls=error \
-    cargo run -p bt-watcher --bin bt-watcher -- \
+    cargo run -p bth-watcher --bin bth-watcher -- \
     --sources-path sources.toml \
     --watcher-db /tmp/watcher-db
 ```

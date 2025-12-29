@@ -1,5 +1,5 @@
 [package]
-name = "bt-util-test-with-data"
+name = "bth-util-test-with-data"
 version = "7.1.0"
 authors = ["Botho"]
 edition = "2021"

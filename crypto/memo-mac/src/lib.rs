@@ -8,7 +8,7 @@
 #![no_std]
 
 use hmac::{Hmac, Mac};
-use bt_crypto_keys::CompressedRistrettoPublic;
+use bth_crypto_keys::CompressedRistrettoPublic;
 use sha2::Sha512;
 
 type HmacSha512 = Hmac<Sha512>;

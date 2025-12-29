@@ -15,10 +15,10 @@ use crate::{
     TokenId,
 };
 
-use bt_crypto_digestible::Digestible;
-use bt_crypto_hashes::{Blake2b512, Digest};
-use bt_crypto_keys::RistrettoPublic;
-use bt_crypto_ring_signature::{generators, CompressedCommitment, Scalar};
+use bth_crypto_digestible::Digestible;
+use bth_crypto_hashes::{Blake2b512, Digest};
+use bth_crypto_keys::RistrettoPublic;
+use bth_crypto_ring_signature::{generators, CompressedCommitment, Scalar};
 
 use crc::Crc;
 #[cfg(feature = "prost")]

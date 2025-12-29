@@ -1,4 +1,4 @@
-bt-crypto-hashes
+bth-crypto-hashes
 ======
 
 This crate contains a wrapper of Blake2b that produces a 32 byte digest, instead

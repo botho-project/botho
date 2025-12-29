@@ -5,9 +5,9 @@
 use crate::{range_proofs::error::Error as RangeProofError, TokenId};
 use alloc::string::{String, ToString};
 use displaydoc::Display;
-use bt_crypto_ring_signature::Error as RingSignatureError;
-use bt_crypto_ring_signature_signer::Error as SignerError;
-use bt_util_zip_exact::ZipExactError;
+use bth_crypto_ring_signature::Error as RingSignatureError;
+use bth_crypto_ring_signature_signer::Error as SignerError;
+use bth_util_zip_exact::ZipExactError;
 use serde::{Deserialize, Serialize};
 
 /// An error which can occur in connection to a ring signature
@@ -95,8 +95,8 @@ pub enum Error {
     InvalidTagSignature,
 }
 
-impl From<bt_util_repr_bytes::LengthMismatch> for Error {
-    fn from(src: bt_util_repr_bytes::LengthMismatch) -> Self {
+impl From<bth_util_repr_bytes::LengthMismatch> for Error {
+    fn from(src: bth_util_repr_bytes::LengthMismatch) -> Self {
         Error::LengthMismatch(src.found, src.expected)
     }
 }

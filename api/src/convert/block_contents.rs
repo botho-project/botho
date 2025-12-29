@@ -3,8 +3,8 @@
 //! Convert to/from blockchain::BlockContents
 
 use crate::{blockchain, external, ConversionError};
-use bt_blockchain_types::BlockContents;
-use bt_transaction_core::{
+use bth_blockchain_types::BlockContents;
+use bth_transaction_core::{
     mint::{MintTx, ValidatedMintConfigTx},
     ring_signature::KeyImage,
     tx::TxOut,

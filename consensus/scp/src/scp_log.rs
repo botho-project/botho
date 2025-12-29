@@ -3,7 +3,7 @@
 //! This crate provides a logging framework for recording and replaying SCP
 //! messages.
 use crate::{msg::Msg, slot::SlotMetrics, QuorumSet, ScpNode, SlotIndex, Value};
-use bt_common::{
+use bth_common::{
     logger::{log, Logger},
     NodeID,
 };
@@ -178,7 +178,7 @@ impl<V: Value, N: ScpNode<V>> LoggingScpNode<V, N> {
             msg,
         };
         let bytes =
-            bt_util_serial::serialize(&data).map_err(|e| format!("failed serialize: {e:?}"))?;
+            bth_util_serial::serialize(&data).map_err(|e| format!("failed serialize: {e:?}"))?;
 
         let mut file_path = self.cur_slot_out_path.clone();
         file_path.push(format!("{:08}", self.msg_count));
@@ -345,7 +345,7 @@ impl<V: serde::de::DeserializeOwned + Value> Iterator for ScpLogReader<V> {
     fn next(&mut self) -> Option<Self::Item> {
         let path = self.files.pop_front()?;
         let bytes = read(&path).unwrap_or_else(|_| panic!("failed reading {path:?}"));
-        let data: Self::Item = bt_util_serial::deserialize(&bytes)
+        let data: Self::Item = bth_util_serial::deserialize(&bytes)
             .unwrap_or_else(|_| panic!("failed deserializing {path:?}"));
         Some(data)
     }
@@ -354,7 +354,7 @@ impl<V: serde::de::DeserializeOwned + Value> Iterator for ScpLogReader<V> {
 #[cfg(test)]
 mod tests {
     use crate::{node::MockScpNode, scp_log::LoggingScpNode};
-    use bt_common::logger::{test_with_logger, Logger};
+    use bth_common::logger::{test_with_logger, Logger};
     use std::fs::create_dir_all;
     use tempfile::TempDir;
 

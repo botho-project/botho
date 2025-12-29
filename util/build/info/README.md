@@ -1,3 +1,3 @@
-## bt-util-build-info
+## bth-util-build-info
 
 Measurements made at compile time.

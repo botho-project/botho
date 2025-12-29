@@ -12,11 +12,11 @@ path = "src/main.rs"
 
 [dependencies]
 # Crypto
-bt-account-keys = { path = "../account-keys" }
-bt-crypto-keys = { path = "../crypto/keys" }
-bt-transaction-core = { path = "../transaction/core" }
-bt-transaction-types = { path = "../transaction/types" }
-bt-core = { path = "../core" }
+bth-account-keys = { path = "../account-keys" }
+bth-crypto-keys = { path = "../crypto/keys" }
+bth-transaction-core = { path = "../transaction/core" }
+bth-transaction-types = { path = "../transaction/types" }
+bth-core = { path = "../core" }
 
 # BIP39 and key derivation
 tiny-bip39 = { workspace = true }

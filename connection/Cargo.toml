@@ -1,5 +1,5 @@
 [package]
-name = "bt-connection"
+name = "bth-connection"
 version = "7.1.0"
 authors = ["Botho"]
 edition = "2021"
@@ -10,20 +10,19 @@ rust-version = { workspace = true }
 [dependencies]
 
 der = { workspace = true }
-bt-api = { path = "../api" }
-bt-blockchain-types = { workspace = true }
-bt-common = { workspace = true }
-bt-consensus-api = { workspace = true }
-bt-crypto-keys = { workspace = true }
-bt-crypto-noise = { workspace = true }
-bt-transaction-core = { workspace = true }
-bt-util-grpc-tonic = { workspace = true }
-bt-util-serial = { workspace = true }
-bt-util-uri = { workspace = true }
+bth-api = { path = "../api" }
+bth-blockchain-types = { workspace = true }
+bth-common = { workspace = true }
+bth-consensus-api = { workspace = true }
+bth-crypto-keys = { workspace = true }
+bth-crypto-noise = { workspace = true }
+bth-transaction-core = { workspace = true }
+bth-util-grpc-tonic = { workspace = true }
+bth-util-serial = { workspace = true }
+bth-util-uri = { workspace = true }
 
 aes-gcm = { workspace = true }
 base64 = { workspace = true }
-cookie = { workspace = true }
 displaydoc = { workspace = true }
 mc-rand = { workspace = true }
 prost = { workspace = true, features = ["derive"] }

@@ -1,33 +1,33 @@
 [package]
-name = "bt-consensus-api"
+name = "bth-consensus-api"
 version = "7.1.0"
 authors = ["Botho"]
 build = "build.rs"
 edition = "2021"
 license = "Apache-2.0"
-links = "bt-consensus-api"
+links = "bth-consensus-api"
 readme = "README.md"
 rust-version = { workspace = true }
 
 [dependencies]
-bt-api = { workspace = true }
-bt-ledger-db = { workspace = true }
-bt-transaction-core = { workspace = true }
+bth-api = { workspace = true }
+bth-ledger-db = { workspace = true }
+bth-transaction-core = { workspace = true }
 
 futures = { workspace = true }
 prost = { workspace = true }
 tonic = { workspace = true, features = ["codegen", "prost"] }
 
 [build-dependencies]
-bt-util-build-grpc-tonic = { workspace = true }
-bt-util-build-script = { workspace = true }
+bth-util-build-grpc-tonic = { workspace = true }
+bth-util-build-script = { workspace = true }
 
 cargo-emit = { workspace = true }
 
 [dev-dependencies]
-bt-crypto-multisig = { workspace = true }
-bt-transaction-core-test-utils = { workspace = true }
-bt-util-serial = { workspace = true }
+bth-crypto-multisig = { workspace = true }
+bth-transaction-core-test-utils = { workspace = true }
+bth-util-serial = { workspace = true }
 
 rand_core = { workspace = true }
 rand_hc = { workspace = true }

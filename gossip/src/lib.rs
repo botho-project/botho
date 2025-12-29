@@ -26,7 +26,7 @@
 //! # Usage
 //!
 //! ```ignore
-//! use bt_gossip::{GossipService, GossipConfig, NodeCapabilities};
+//! use bth_gossip::{GossipService, GossipConfig, NodeCapabilities};
 //!
 //! // Create the service
 //! let config = GossipConfig::default();

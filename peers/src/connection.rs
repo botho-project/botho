@@ -9,16 +9,16 @@ use crate::{
     traits::ConsensusConnection,
 };
 use core::fmt::{Display, Formatter, Result as FmtResult};
-use bt_blockchain_types::{Block, BlockID, BlockIndex};
-use bt_common::{
+use bth_blockchain_types::{Block, BlockID, BlockIndex};
+use bth_common::{
     logger::{o, Logger},
     trace_time, NodeID, ResponderId,
 };
-use bt_connection::{
+use bth_connection::{
     AttestedConnection, BlockInfo, BlockchainConnection, Connection, EvidenceKind,
     Error as ConnectionError, Result as ConnectionResult,
 };
-use bt_consensus_api::{
+use bth_consensus_api::{
     consensus_common::{
         blockchain_api_client::BlockchainApiClient, BlocksRequest,
     },
@@ -28,9 +28,9 @@ use bt_consensus_api::{
         GetTxsRequest as GrpcFetchTxsRequest,
     },
 };
-use bt_transaction_core::tx::TxHash;
-use bt_util_serial::{deserialize, serialize};
-use bt_util_uri::{ConnectionUri, ConsensusPeerUri as PeerUri};
+use bth_transaction_core::tx::TxHash;
+use bth_util_serial::{deserialize, serialize};
+use bth_util_uri::{ConnectionUri, ConsensusPeerUri as PeerUri};
 use std::{
     cmp::Ordering,
     hash::{Hash, Hasher},
@@ -281,11 +281,11 @@ impl ConsensusConnection for PeerConnection {
 
         // Parse the response payload - post-SGX returns data directly
         match response.payload {
-            Some(bt_consensus_api::consensus_peer::get_txs_response::Payload::Success(msg)) => {
+            Some(bth_consensus_api::consensus_peer::get_txs_response::Payload::Success(msg)) => {
                 // The data field contains serialized ConsensusMsg items
                 deserialize(&msg.data).map_err(|_| Error::Serialization)
             }
-            Some(bt_consensus_api::consensus_peer::get_txs_response::Payload::TxHashesNotInCache(not_found)) => {
+            Some(bth_consensus_api::consensus_peer::get_txs_response::Payload::TxHashesNotInCache(not_found)) => {
                 let missing: Vec<TxHash> = not_found.tx_hashes
                     .iter()
                     .filter_map(|h| TxHash::try_from(h.as_slice()).ok())

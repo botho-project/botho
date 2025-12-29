@@ -4,9 +4,9 @@ use alloc::vec::Vec;
 
 use crate::{tx::TxOut, TxOutConversionError};
 use displaydoc::Display;
-use bt_crypto_digestible::Digestible;
-use bt_crypto_ring_signature::Scalar;
-use bt_transaction_types::{Amount, AmountError, MaskedAmount, MaskedAmountV2};
+use bth_crypto_digestible::Digestible;
+use bth_crypto_ring_signature::Scalar;
+use bth_transaction_types::{Amount, AmountError, MaskedAmount, MaskedAmountV2};
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;

@@ -1,5 +1,5 @@
 [package]
-name = "bt-core-types"
+name = "bth-core-types"
 version = "7.1.0"
 authors = ["Botho"]
 edition = "2021"
@@ -10,7 +10,7 @@ rust-version = { workspace = true }
 
 [features]
 serde = ["dep:serde"]
-prost = ["dep:prost", "bt-crypto-keys/prost"]
+prost = ["dep:prost", "bth-crypto-keys/prost"]
 
 [dependencies]
 # External dependencies
@@ -21,4 +21,4 @@ subtle = { workspace = true }
 zeroize = { workspace = true }
 
 # Botho dependencies
-bt-crypto-keys = { workspace = true }
+bth-crypto-keys = { workspace = true }

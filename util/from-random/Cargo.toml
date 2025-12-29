@@ -1,5 +1,5 @@
 [package]
-name = "bt-util-from-random"
+name = "bth-util-from-random"
 version = "7.1.0"
 authors = ["Botho"]
 description = "A trait for constructing an object from a random number generator."

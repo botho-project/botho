@@ -43,9 +43,9 @@ use generic_array::{
     GenericArray,
 };
 use hkdf::Hkdf;
-use bt_crypto_digestible::Digestible;
-use bt_crypto_keys::{CompressedRistrettoPublic, RistrettoPublic};
-use bt_util_repr_bytes::{
+use bth_crypto_digestible::Digestible;
+use bth_crypto_keys::{CompressedRistrettoPublic, RistrettoPublic};
+use bth_util_repr_bytes::{
     derive_debug_and_display_hex_from_as_ref, derive_into_vec_from_repr_bytes,
     derive_prost_message_from_repr_bytes, derive_repr_bytes_from_as_ref_and_try_from,
     derive_serde_from_repr_bytes,
@@ -248,8 +248,8 @@ impl From<Utf8Error> for MemoError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bt_util_from_random::FromRandom;
-    use bt_util_test_helper::{RngType, SeedableRng};
+    use bth_util_from_random::FromRandom;
+    use bth_util_test_helper::{RngType, SeedableRng};
 
     #[test]
     fn test_memo_payload_round_trip() {

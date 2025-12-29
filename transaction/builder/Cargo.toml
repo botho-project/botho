@@ -1,5 +1,5 @@
 [package]
-name = "bt-transaction-builder"
+name = "bth-transaction-builder"
 version = "7.1.0"
 authors = ["Botho"]
 edition = "2021"
@@ -9,7 +9,7 @@ rust-version = { workspace = true }
 
 [features]
 test-only = []
-pq = ["bt-crypto-pq", "bt-account-keys/pq", "bt-transaction-core/pq"]  # Post-quantum transaction builder
+pq = ["bth-crypto-pq", "bth-account-keys/pq", "bth-transaction-core/pq"]  # Post-quantum transaction builder
 
 [dependencies]
 # External dependencies
@@ -25,19 +25,19 @@ subtle = { workspace = true }
 zeroize = { workspace = true }
 
 # Botho dependencies
-bt-account-keys = { workspace = true }
-bt-crypto-digestible = { workspace = true }
-bt-crypto-hashes = { workspace = true }
-bt-crypto-keys = { workspace = true }
-bt-crypto-pq = { workspace = true, optional = true }
-bt-crypto-ring-signature-signer = { workspace = true }
-bt-transaction-core = { workspace = true }
-bt-transaction-extra = { workspace = true }
-bt-transaction-summary = { workspace = true }
-bt-transaction-types = { workspace = true }
-bt-util-from-random = { workspace = true }
-bt-util-serial = { workspace = true }
-bt-util-u64-ratio = { workspace = true }
+bth-account-keys = { workspace = true }
+bth-crypto-digestible = { workspace = true }
+bth-crypto-hashes = { workspace = true }
+bth-crypto-keys = { workspace = true }
+bth-crypto-pq = { workspace = true, optional = true }
+bth-crypto-ring-signature-signer = { workspace = true }
+bth-transaction-core = { workspace = true }
+bth-transaction-extra = { workspace = true }
+bth-transaction-summary = { workspace = true }
+bth-transaction-types = { workspace = true }
+bth-util-from-random = { workspace = true }
+bth-util-serial = { workspace = true }
+bth-util-u64-ratio = { workspace = true }
 
 # `default` feature enables curve25519-dalek target detection for x86_64 with and without AVX
 curve25519-dalek = { workspace = true }
@@ -46,4 +46,4 @@ curve25519-dalek = { workspace = true }
 assert_matches = { workspace = true }
 maplit = { workspace = true }
 
-bt-util-test-helper = { workspace = true }
+bth-util-test-helper = { workspace = true }

@@ -3,7 +3,7 @@
 //! Convert to/from external::TxOutMembershipElement
 
 use crate::{external, ConversionError};
-use bt_transaction_core::{
+use bth_transaction_core::{
     membership_proofs::Range,
     tx::{TxOutMembershipElement, TxOutMembershipHash},
 };

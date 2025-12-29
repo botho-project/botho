@@ -2,13 +2,13 @@
 
 //! Minting transactions.
 
-use crate::{domain_separators::MINT_TX_PREFIX_DOMAIN_TAG, encrypted_fog_hint::EncryptedFogHint};
+use crate::domain_separators::MINT_TX_PREFIX_DOMAIN_TAG;
 use alloc::vec::Vec;
 use core::fmt;
-use bt_crypto_digestible::{Digestible, MerlinTranscript};
-use bt_crypto_keys::{Ed25519Signature, RistrettoPublic};
-use bt_crypto_multisig::MultiSig;
-use bt_util_serial::Message;
+use bth_crypto_digestible::{Digestible, MerlinTranscript};
+use bth_crypto_keys::{Ed25519Signature, RistrettoPublic};
+use bth_crypto_multisig::MultiSig;
+use bth_util_serial::Message;
 use serde::{Deserialize, Serialize};
 
 /// The contents of a mint-tx, which is a transaction to mint new tokens.
@@ -41,9 +41,7 @@ pub struct MintTxPrefix {
     #[prost(uint64, tag = "6")]
     pub tombstone_block: u64,
 
-    /// Optional, encrypted fog hint, if you are trying to mint to a fog user.
-    #[prost(message, tag = "7")]
-    pub e_fog_hint: Option<EncryptedFogHint>,
+    // Field 7 was `e_fog_hint` - removed as part of fog removal
 }
 
 impl MintTxPrefix {

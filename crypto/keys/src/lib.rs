@@ -7,8 +7,8 @@
 //! X25519 ECDH with Ephemeral Keys
 //!
 //! ```
-//! use bt_crypto_keys::*;
-//! use bt_util_from_random::FromRandom;
+//! use bth_crypto_keys::*;
+//! use bth_util_from_random::FromRandom;
 //! use rand_core::SeedableRng;
 //! use rand_hc::Hc128Rng;
 //!
@@ -33,8 +33,8 @@
 //! Ed25519 Signing
 //!
 //! ```
-//! use bt_crypto_keys::*;
-//! use bt_util_from_random::FromRandom;
+//! use bth_crypto_keys::*;
+//! use bth_util_from_random::FromRandom;
 //! use rand_core::SeedableRng;
 //! use rand_hc::Hc128Rng;
 //!
@@ -75,7 +75,7 @@ pub use crate::{
 pub(crate) use base64::engine::general_purpose::STANDARD as BASE64_ENGINE;
 
 pub use digest::Digest;
-pub use bt_util_repr_bytes::{typenum::Unsigned, GenericArray, LengthMismatch, ReprBytes};
+pub use bth_util_repr_bytes::{typenum::Unsigned, GenericArray, LengthMismatch, ReprBytes};
 pub use schnorrkel_og::SignatureError as SchnorrkelError;
 pub use signature::{
     DigestSigner, DigestVerifier, Error as SignatureError, SignatureEncoding, Signer, Verifier,

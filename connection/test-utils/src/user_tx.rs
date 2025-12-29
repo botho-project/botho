@@ -2,10 +2,10 @@
 
 //! User Transaction Connection Mock
 
-use bt_blockchain_types::BlockIndex;
-use bt_connection::{Connection, Result as ConnectionResult, UserTxConnection};
-use bt_transaction_core::tx::Tx;
-use bt_util_uri::{ConnectionUri, ConsensusClientUri};
+use bth_blockchain_types::BlockIndex;
+use bth_connection::{Connection, Result as ConnectionResult, UserTxConnection};
+use bth_transaction_core::tx::Tx;
+use bth_util_uri::{ConnectionUri, ConsensusClientUri};
 use std::{
     cmp::Ordering,
     fmt::{Display, Formatter, Result as FmtResult},

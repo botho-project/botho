@@ -17,8 +17,8 @@
 // 2/2]])
 
 use crate::mock_network;
-use bt_common::NodeID;
-use bt_consensus_scp::{test_utils, QuorumSet};
+use bth_common::NodeID;
+use bth_consensus_scp::{test_utils, QuorumSet};
 use std::collections::HashSet;
 
 ///////////////////////////////////////////////////////////////////////////////

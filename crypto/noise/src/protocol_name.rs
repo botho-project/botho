@@ -8,7 +8,7 @@ use aes_gcm::Aes256Gcm;
 use core::marker::PhantomData;
 use digest::Digest;
 use displaydoc::Display;
-use bt_crypto_keys::{Kex, X25519};
+use bth_crypto_keys::{Kex, X25519};
 use serde::{Deserialize, Serialize};
 use sha2::Sha512;
 use subtle::ConstantTimeEq;

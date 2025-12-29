@@ -7,9 +7,9 @@
 
 use super::Error;
 use curve25519_dalek::scalar::Scalar;
-use bt_crypto_digestible::Digestible;
-use bt_util_from_random::FromRandom;
-use bt_util_repr_bytes::{
+use bth_crypto_digestible::Digestible;
+use bth_util_from_random::FromRandom;
+use bth_util_repr_bytes::{
     derive_core_cmp_from_as_ref, derive_debug_and_display_hex_from_as_ref,
     derive_try_from_slice_from_repr_bytes, typenum::U32, GenericArray, ReprBytes,
 };
@@ -17,7 +17,7 @@ use rand_core::{CryptoRng, RngCore};
 use zeroize::Zeroize;
 
 #[cfg(feature = "prost")]
-use bt_util_repr_bytes::derive_prost_message_from_repr_bytes;
+use bth_util_repr_bytes::derive_prost_message_from_repr_bytes;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -156,8 +156,8 @@ mod tests {
     /// CurveScalar should serialize and deserialize.
     fn test_curve_scalar_roundtrip() {
         let five = CurveScalar::from(5u64);
-        let bytes = bt_util_serial::encode(&five);
-        let result: CurveScalar = bt_util_serial::decode(&bytes).unwrap();
+        let bytes = bth_util_serial::encode(&five);
+        let result: CurveScalar = bth_util_serial::decode(&bytes).unwrap();
         assert_eq!(five, result);
     }
 }

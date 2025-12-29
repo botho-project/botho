@@ -10,7 +10,9 @@
     "build:web": "pnpm --filter @botho/web-wallet build",
     "build:desktop": "pnpm --filter @botho/desktop build",
     "preview": "pnpm --filter @botho/web-wallet preview",
-    "typecheck": "pnpm -r typecheck"
+    "typecheck": "pnpm -r typecheck",
+    "deploy": "pnpm build:web && wrangler pages deploy packages/web-wallet/dist --project-name=botho",
+    "deploy:preview": "pnpm build:web && wrangler pages deploy packages/web-wallet/dist --project-name=botho --branch=preview"
   },
   "devDependencies": {
     "typescript": "~5.9.3"

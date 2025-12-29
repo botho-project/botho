@@ -1,14 +1,14 @@
 // Copyright (c) 2018-2022 The Botho Foundation
 
-//! Transaction Summary types, see [bt_transaction_core::tx_summary::Summarize]
+//! Transaction Summary types, see [bth_transaction_core::tx_summary::Summarize]
 //! for summary details.
 
 use alloc::vec::Vec;
 
 use crate::masked_amount::MaskedAmount;
-use bt_crypto_digestible::Digestible;
-use bt_crypto_keys::CompressedRistrettoPublic;
-use bt_crypto_ring_signature::CompressedCommitment;
+use bth_crypto_digestible::Digestible;
+use bth_crypto_keys::CompressedRistrettoPublic;
+use bth_crypto_ring_signature::CompressedCommitment;
 
 #[cfg(feature = "prost")]
 use prost::Message;

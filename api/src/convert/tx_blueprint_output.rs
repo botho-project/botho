@@ -1,10 +1,9 @@
 // Copyright (c) 2018-2025 The Botho Foundation
 
-//! Convert to/from bt_transaction_builder::TxBlueprintOutput.
+//! Convert to/from bth_transaction_builder::TxBlueprintOutput.
 
 use crate::{external, ConversionError};
-use bt_transaction_builder::TxBlueprintOutput; // Import only the main enum
-use bt_transaction_core::encrypted_fog_hint::EncryptedFogHint;
+use bth_transaction_builder::TxBlueprintOutput;
 
 impl From<&TxBlueprintOutput> for external::TxBlueprintOutput {
     fn from(source: &TxBlueprintOutput) -> Self {
@@ -12,15 +11,11 @@ impl From<&TxBlueprintOutput> for external::TxBlueprintOutput {
             TxBlueprintOutput::Recipient {
                 recipient,
                 amount,
-                e_fog_hint,
                 tx_private_key,
             } => {
                 let proto_recipient = external::TxBlueprintOutputRecipient {
                     recipient: Some(recipient.into()),
                     amount: Some(amount.into()),
-                    e_fog_hint: Some(external::EncryptedFogHint {
-                        data: e_fog_hint.as_ref().to_vec(),
-                    }),
                     tx_private_key: Some(tx_private_key.into()),
                 };
                 external::TxBlueprintOutput {
@@ -33,15 +28,11 @@ impl From<&TxBlueprintOutput> for external::TxBlueprintOutput {
             TxBlueprintOutput::Change {
                 change_destination,
                 amount,
-                e_fog_hint,
                 tx_private_key,
             } => {
                 let proto_change = external::TxBlueprintOutputChange {
                     change_destination: Some(change_destination.into()),
                     amount: Some(amount.into()),
-                    e_fog_hint: Some(external::EncryptedFogHint {
-                        data: e_fog_hint.as_ref().to_vec(),
-                    }),
                     tx_private_key: Some(tx_private_key.into()),
                 };
                 external::TxBlueprintOutput {
@@ -85,15 +76,7 @@ impl TryFrom<&external::TxBlueprintOutput> for TxBlueprintOutput {
                     .as_ref()
                     .ok_or_else(|| ConversionError::MissingField("amount".to_string()))?
                     .into();
-                let e_fog_hint = EncryptedFogHint::try_from(
-                    proto_recipient
-                        .e_fog_hint
-                        .as_ref()
-                        .unwrap_or(&Default::default())
-                        .data
-                        .as_slice(),
-                )
-                .map_err(|_| ConversionError::ArrayCastError)?;
+                // Note: e_fog_hint is ignored - fog support removed
                 let tx_private_key = proto_recipient
                     .tx_private_key
                     .as_ref()
@@ -102,7 +85,6 @@ impl TryFrom<&external::TxBlueprintOutput> for TxBlueprintOutput {
                 Ok(TxBlueprintOutput::Recipient {
                     recipient,
                     amount,
-                    e_fog_hint,
                     tx_private_key,
                 })
             }
@@ -117,15 +99,7 @@ impl TryFrom<&external::TxBlueprintOutput> for TxBlueprintOutput {
                     .as_ref()
                     .ok_or_else(|| ConversionError::MissingField("amount".to_string()))?
                     .into();
-                let e_fog_hint = EncryptedFogHint::try_from(
-                    proto_change
-                        .e_fog_hint
-                        .as_ref()
-                        .unwrap_or(&Default::default())
-                        .data
-                        .as_slice(),
-                )
-                .map_err(|_| ConversionError::ArrayCastError)?;
+                // Note: e_fog_hint is ignored - fog support removed
                 let tx_private_key = proto_change
                     .tx_private_key
                     .as_ref()
@@ -134,7 +108,6 @@ impl TryFrom<&external::TxBlueprintOutput> for TxBlueprintOutput {
                 Ok(TxBlueprintOutput::Change {
                     change_destination,
                     amount,
-                    e_fog_hint,
                     tx_private_key,
                 })
             }
@@ -161,14 +134,14 @@ impl TryFrom<&external::TxBlueprintOutput> for TxBlueprintOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bt_account_keys::{AccountKey, PublicAddress};
-    use bt_crypto_keys::RistrettoPrivate;
-    use bt_transaction_core::{
-        encrypted_fog_hint::ENCRYPTED_FOG_HINT_LEN, ring_signature::CurveScalar, tokens::Mob,
-        tx::TxOut, Amount, BlockVersion, Token, UnmaskedAmount,
+    use bth_account_keys::{AccountKey, PublicAddress};
+    use bth_crypto_keys::RistrettoPrivate;
+    use bth_transaction_core::{
+        ring_signature::CurveScalar, tokens::Mob, tx::TxOut, Amount, BlockVersion, Token,
+        UnmaskedAmount,
     };
-    use bt_transaction_extra::ReservedSubaddresses;
-    use bt_util_from_random::FromRandom;
+    use bth_transaction_extra::ReservedSubaddresses;
+    use bth_util_from_random::FromRandom;
     use rand::{rngs::StdRng, SeedableRng};
 
     #[test]
@@ -179,12 +152,10 @@ mod tests {
         let recipient_orig = {
             let recipient = PublicAddress::from_random(&mut rng);
             let amount = Amount::new(1000, Mob::ID);
-            let e_fog_hint = EncryptedFogHint::new(&[3u8; ENCRYPTED_FOG_HINT_LEN]);
             let tx_private_key = RistrettoPrivate::from_random(&mut rng);
             TxBlueprintOutput::Recipient {
                 recipient,
                 amount,
-                e_fog_hint,
                 tx_private_key,
             }
         };
@@ -196,12 +167,10 @@ mod tests {
             let account_key = AccountKey::random(&mut rng);
             let change_destination = ReservedSubaddresses::from(&account_key);
             let amount = Amount::new(500, Mob::ID);
-            let e_fog_hint = EncryptedFogHint::new(&[3u8; ENCRYPTED_FOG_HINT_LEN]);
             let tx_private_key = RistrettoPrivate::from_random(&mut rng);
             TxBlueprintOutput::Change {
                 change_destination,
                 amount,
-                e_fog_hint,
                 tx_private_key,
             }
         };
@@ -213,14 +182,7 @@ mod tests {
             let recipient = PublicAddress::from_random(&mut rng);
             let amount = Amount::new(100, Mob::ID);
             let tx_private_key = RistrettoPrivate::from_random(&mut rng);
-            let output = TxOut::new(
-                block_version,
-                amount,
-                &recipient,
-                &tx_private_key,
-                Default::default(),
-            )
-            .unwrap();
+            let output = TxOut::new(block_version, amount, &recipient, &tx_private_key).unwrap();
             let unmasked_amount = UnmaskedAmount {
                 value: amount.value,
                 token_id: *amount.token_id,

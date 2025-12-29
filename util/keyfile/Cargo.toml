@@ -1,5 +1,5 @@
 [package]
-name = "bt-util-keyfile"
+name = "bth-util-keyfile"
 version = "7.1.0"
 authors = ["Botho"]
 edition = "2021"
@@ -27,13 +27,13 @@ name = "read-pubfile"
 path = "src/bin/read_pubfile.rs"
 
 [dependencies]
-bt-account-keys = { workspace = true }
-bt-api = { workspace = true }
-bt-core = { workspace = true, features = ["bip39"] }
+bth-account-keys = { workspace = true }
+bth-api = { workspace = true }
+bth-core = { workspace = true, features = ["bip39"] }
 mc-rand = { workspace = true }
-bt-util-from-random = { workspace = true }
-bt-util-parse = { workspace = true }
-bt-util-serial = { workspace = true, features = ["std"] }
+bth-util-from-random = { workspace = true }
+bth-util-parse = { workspace = true }
+bth-util-serial = { workspace = true, features = ["std"] }
 
 base64 = { workspace = true }
 clap = { workspace = true, features = ["derive", "env"] }
@@ -50,7 +50,7 @@ tiny-bip39 = { workspace = true }
 x509-signature = { workspace = true }
 
 [dev-dependencies]
-bt-crypto-x509-test-vectors = { workspace = true }
-bt-util-test-helper = { workspace = true }
+# bth-crypto-x509-test-vectors = { workspace = true }  # Removed: requires openssl
+bth-util-test-helper = { workspace = true }
 
 tempfile = { workspace = true }

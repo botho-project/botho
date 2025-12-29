@@ -1,5 +1,5 @@
 [package]
-name = "bt-util-test-helper"
+name = "bth-util-test-helper"
 version = "7.1.0"
 authors = ["Botho"]
 edition = "2021"
@@ -13,7 +13,7 @@ path = "src/bin/generate_account_keys.rs"
 
 [dependencies]
 # Botho dependencies
-bt-account-keys = { workspace = true }
+bth-account-keys = { workspace = true }
 
 # External dependencies
 clap = { workspace = true, features = ["derive", "env"] }
@@ -21,6 +21,6 @@ rand = { workspace = true }
 rand_hc = { workspace = true }
 
 [dev-dependencies]
-bt-common = { workspace = true, features = ["loggers"] }
+bth-common = { workspace = true, features = ["loggers"] }
 
 itertools = { workspace = true }

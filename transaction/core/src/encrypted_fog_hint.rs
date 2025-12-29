@@ -1,200 +1,84 @@
 // Copyright (c) 2018-2022 The Botho Foundation
+// Copyright (c) 2024 Botho Foundation
 
-//! Define DiscoveryHint buffer size, and serialization defs for it
-//! Also define `fake_onetime_hint` which samples the distribution that
-//! should be used for these hints when there is no discovery server.
+//! Stub module for EncryptedFogHint.
 //!
-//! Note: Using generic array because rust has poor support for implementing
-//! builtin traits on arrays of size > 32.
+//! Fog support has been removed from Botho. This module provides a minimal
+//! stub type for backwards compatibility with serialized data and APIs.
 
-use alloc::{vec, vec::Vec};
-use core::fmt;
-use generic_array::{
-    typenum::{Diff, Unsigned, U84},
-    GenericArray,
+use alloc::vec::Vec;
+use bth_crypto_digestible::Digestible;
+use bth_util_repr_bytes::{
+    derive_prost_message_from_repr_bytes, derive_repr_bytes_from_as_ref_and_try_from,
+    typenum::U128, GenericArray, LengthMismatch,
 };
-use bt_crypto_box::{CryptoBox, VersionedCryptoBox};
-use bt_crypto_digestible::Digestible;
-use bt_crypto_keys::Ristretto;
-use bt_util_from_random::FromRandom;
-use prost::{
-    bytes::{Buf, BufMut},
-    encoding::{bytes, skip_field, DecodeContext, WireType},
-    DecodeError, Message,
-};
-use rand_core::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
-use zeroize::Zeroize;
 
-/// The length of the encrypted fog hint field in the ledger.
+/// Length of the encrypted fog hint field (for backwards compatibility)
+pub const ENCRYPTED_FOG_HINT_LEN: usize = 128;
+
+/// A stub type for encrypted fog hints.
 ///
-/// Must be at least as large as bt_crypto_box::VersionedCryptoBox::FooterSize.
-/// Footersize = 50, + 32 for one curve point, + 2 bytes of magic / padding
-/// space for future needs
-pub type EncryptedFogHintSize = U84;
-/// Length of encrypted fog hint as a usize
-pub const ENCRYPTED_FOG_HINT_LEN: usize = EncryptedFogHintSize::USIZE;
-
-type Bytes = GenericArray<u8, EncryptedFogHintSize>;
-
-/// An encrypted fog hint payload in the ledger
-#[derive(
-    Clone,
-    Default,
-    Deserialize,
-    Digestible,
-    Eq,
-    Hash,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    Serialize,
-    Zeroize,
-)]
+/// Fog support has been removed. This type exists only for backwards
+/// compatibility with serialized transactions and APIs.
+#[derive(Clone, Debug, Default, Deserialize, Digestible, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[digestible(transparent)]
 pub struct EncryptedFogHint {
-    bytes: Bytes,
+    data: GenericArray<u8, U128>,
 }
 
-// AsRef and AsMut slice conversions
-impl AsRef<Bytes> for EncryptedFogHint {
-    fn as_ref(&self) -> &Bytes {
-        &self.bytes
+impl EncryptedFogHint {
+    /// Create a new EncryptedFogHint from raw bytes
+    pub fn new(data: &[u8; ENCRYPTED_FOG_HINT_LEN]) -> Self {
+        Self {
+            data: GenericArray::clone_from_slice(data),
+        }
+    }
+
+    /// Generate a fake "onetime hint" (all zeros - fog is deprecated)
+    pub fn fake_onetime_hint<R>(_rng: &mut R) -> Self {
+        Self::default()
     }
 }
 
-impl AsMut<Bytes> for EncryptedFogHint {
-    fn as_mut(&mut self) -> &mut Bytes {
-        &mut self.bytes
-    }
-}
-
-impl From<Bytes> for EncryptedFogHint {
-    fn from(bytes: Bytes) -> Self {
-        Self { bytes }
+impl AsRef<[u8]> for EncryptedFogHint {
+    fn as_ref(&self) -> &[u8] {
+        self.data.as_slice()
     }
 }
 
 impl From<&[u8; ENCRYPTED_FOG_HINT_LEN]> for EncryptedFogHint {
-    #[inline]
-    fn from(a: &[u8; ENCRYPTED_FOG_HINT_LEN]) -> Self {
-        Self {
-            bytes: GenericArray::clone_from_slice(&a[..]),
-        }
+    fn from(src: &[u8; ENCRYPTED_FOG_HINT_LEN]) -> Self {
+        Self::new(src)
     }
 }
 
-impl<'bytes> TryFrom<&'bytes [u8]> for EncryptedFogHint {
-    type Error = ();
+impl TryFrom<&[u8]> for EncryptedFogHint {
+    type Error = LengthMismatch;
 
-    fn try_from(slice: &'bytes [u8]) -> Result<Self, ()> {
-        if slice.len() == ENCRYPTED_FOG_HINT_LEN {
-            Ok(Self {
-                bytes: GenericArray::clone_from_slice(slice),
+    fn try_from(src: &[u8]) -> Result<Self, Self::Error> {
+        if src.len() == ENCRYPTED_FOG_HINT_LEN {
+            let arr: [u8; ENCRYPTED_FOG_HINT_LEN] = src.try_into().map_err(|_| LengthMismatch {
+                expected: ENCRYPTED_FOG_HINT_LEN,
+                found: src.len(),
+            })?;
+            Ok(Self::new(&arr))
+        } else {
+            Err(LengthMismatch {
+                expected: ENCRYPTED_FOG_HINT_LEN,
+                found: src.len(),
             })
-        } else {
-            Err(())
         }
     }
 }
 
-impl EncryptedFogHint {
-    /// Create a new encrypted fog hint from byte array
-    #[inline]
-    pub fn new(a: &[u8; ENCRYPTED_FOG_HINT_LEN]) -> Self {
-        Self {
-            bytes: GenericArray::clone_from_slice(&a[..]),
-        }
-    }
+impl TryFrom<&Vec<u8>> for EncryptedFogHint {
+    type Error = LengthMismatch;
 
-    /// Convert to byte array
-    #[inline]
-    pub fn to_bytes(&self) -> [u8; ENCRYPTED_FOG_HINT_LEN] {
-        let mut result = [0u8; ENCRYPTED_FOG_HINT_LEN];
-        result.copy_from_slice(self.as_ref().as_slice());
-        result
-    }
-
-    /// fake_onetime_hint
-    /// To be used in prod when sending to a recipient with no known fog server
-    /// This means it should be indistinguishable from an ecies encryption of a
-    /// random plaintext. There are several ways we could sample that
-    /// distribution but the simplest is to do exactly that. This is also
-    /// future-proof if we later tweak the cryptobox implementation.
-    pub fn fake_onetime_hint<T: RngCore + CryptoRng>(rng: &mut T) -> Self {
-        // Make plaintext of the right size
-        let plaintext = GenericArray::<
-            u8,
-            Diff<EncryptedFogHintSize, <VersionedCryptoBox as CryptoBox<Ristretto>>::FooterSize>,
-        >::default();
-        // Make a random key
-        let key = bt_crypto_keys::RistrettoPublic::from_random(rng);
-        // encrypt_in_place into the buffer
-        let bytes = VersionedCryptoBox::default()
-            .encrypt_fixed_length(rng, &key, &plaintext)
-            .expect("Encryption error");
-        Self { bytes }
+    fn try_from(src: &Vec<u8>) -> Result<Self, Self::Error> {
+        Self::try_from(src.as_slice())
     }
 }
 
-impl Message for EncryptedFogHint {
-    fn encode_raw<B>(&self, buf: &mut B)
-    where
-        B: BufMut,
-    {
-        bytes::encode(1, &self.to_bytes().to_vec(), buf)
-    }
-    fn merge_field<B>(
-        &mut self,
-        tag: u32,
-        wire_type: WireType,
-        buf: &mut B,
-        ctx: DecodeContext,
-    ) -> Result<(), DecodeError>
-    where
-        B: Buf,
-    {
-        if tag == 1 {
-            let mut vbuf = Vec::new();
-            bytes::merge(wire_type, &mut vbuf, buf, ctx)?;
-            if vbuf.len() != ENCRYPTED_FOG_HINT_LEN {
-                return Err(DecodeError::new(alloc::format!(
-                    "EncryptedFogHint: expected {} bytes, got {}",
-                    ENCRYPTED_FOG_HINT_LEN,
-                    vbuf.len()
-                )));
-            }
-            let mut abuf: [u8; ENCRYPTED_FOG_HINT_LEN] = [0u8; ENCRYPTED_FOG_HINT_LEN];
-            abuf.copy_from_slice(&vbuf[0..ENCRYPTED_FOG_HINT_LEN]);
-            *self = Self::new(&abuf);
-            Ok(())
-        } else {
-            skip_field(wire_type, tag, buf, ctx)
-        }
-    }
-    fn encoded_len(&self) -> usize {
-        bytes::encoded_len(1, &vec![0u8; ENCRYPTED_FOG_HINT_LEN])
-    }
-    fn clear(&mut self) {
-        *self = Self::default();
-    }
-}
-
-impl fmt::Debug for EncryptedFogHint {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "EncryptedFogHint({})", hex_fmt::HexFmt(self.as_ref()))
-    }
-}
-
-#[cfg(test)]
-mod testing {
-    use super::*;
-
-    #[test]
-    fn test_fog_hint_serde() {
-        let a = EncryptedFogHint::new(&[17u8; ENCRYPTED_FOG_HINT_LEN]);
-        let a_ser = bt_util_serial::serialize(&a).unwrap();
-        let b: EncryptedFogHint = bt_util_serial::deserialize(&a_ser).unwrap();
-        assert_eq!(a.as_ref(), b.as_ref());
-    }
-}
+derive_repr_bytes_from_as_ref_and_try_from!(EncryptedFogHint, U128);
+derive_prost_message_from_repr_bytes!(EncryptedFogHint);

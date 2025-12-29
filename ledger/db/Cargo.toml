@@ -1,5 +1,5 @@
 [package]
-name = "bt-ledger-db"
+name = "bth-ledger-db"
 version = "7.1.0"
 authors = ["Botho"]
 edition = "2021"
@@ -8,30 +8,30 @@ readme = "README.md"
 rust-version = { workspace = true }
 
 [features]
-# The migration_support feature exposes some internals that should only be used by the `bt-ledger-migration` tool.
+# The migration_support feature exposes some internals that should only be used by the `bth-ledger-migration` tool.
 migration_support = []
 test_utils = [
-    "bt-blockchain-test-utils",
-    "bt-transaction-core-test-utils",
-    "bt-transaction-builder/test-only",
+    "bth-blockchain-test-utils",
+    "bth-transaction-core-test-utils",
+    "bth-transaction-builder/test-only",
 ]
 
 [dependencies]
-bt-account-keys = { workspace = true }
-bt-blockchain-test-utils = { workspace = true, optional = true }
-bt-blockchain-types = { workspace = true }
-bt-common = { workspace = true, features = ["log"] }
-bt-crypto-keys = { workspace = true }
-bt-crypto-ring-signature-signer = { workspace = true }
-bt-transaction-builder = { workspace = true }
-bt-transaction-core = { workspace = true }
-bt-transaction-core-test-utils = { workspace = true, optional = true }
-bt-util-from-random = { workspace = true }
-bt-util-lmdb = { workspace = true }
-bt-util-metrics = { workspace = true }
-bt-util-serial = { workspace = true, features = ["std"] }
-bt-util-telemetry = { workspace = true }
-bt-util-test-helper = { workspace = true }
+bth-account-keys = { workspace = true }
+bth-blockchain-test-utils = { workspace = true, optional = true }
+bth-blockchain-types = { workspace = true }
+bth-common = { workspace = true, features = ["log"] }
+bth-crypto-keys = { workspace = true }
+bth-crypto-ring-signature-signer = { workspace = true }
+bth-transaction-builder = { workspace = true }
+bth-transaction-core = { workspace = true }
+bth-transaction-core-test-utils = { workspace = true, optional = true }
+bth-util-from-random = { workspace = true }
+bth-util-lmdb = { workspace = true }
+bth-util-metrics = { workspace = true }
+bth-util-serial = { workspace = true, features = ["std"] }
+bth-util-telemetry = { workspace = true }
+bth-util-test-helper = { workspace = true }
 
 displaydoc = { workspace = true }
 lmdb-rkv = { workspace = true }
@@ -41,8 +41,8 @@ rand = { workspace = true }
 tempfile = { workspace = true }
 
 [dev-dependencies]
-bt-blockchain-test-utils = { workspace = true }
-bt-crypto-multisig = { workspace = true }
+bth-blockchain-test-utils = { workspace = true }
+bth-crypto-multisig = { workspace = true }
 mc-rand = { workspace = true }
-bt-transaction-builder = { workspace = true, features = ["test-only"] }
-bt-transaction-core-test-utils = { workspace = true }
+bth-transaction-builder = { workspace = true, features = ["test-only"] }
+bth-transaction-core-test-utils = { workspace = true }

@@ -9,7 +9,7 @@ use crate::{
     },
     rpc_logger,
 };
-use bt_common::logger::{log, Logger};
+use bth_common::logger::{log, Logger};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,

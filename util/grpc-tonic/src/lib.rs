@@ -21,7 +21,7 @@ pub use chain_id::{
 pub use health_service::{
     HealthCheckStatus, HealthService, ReadinessIndicator, ServiceHealthCheckCallback,
 };
-pub use bt_util_metrics::ServiceMetrics;
+pub use bth_util_metrics::ServiceMetrics;
 
 // Include the generated protobuf code
 pub mod grpc_health_v1 {
@@ -36,28 +36,26 @@ pub mod admin {
     include!(concat!(env!("OUT_DIR"), "/protos-auto-gen/admin.rs"));
 }
 
-use bt_common::logger::{log, Logger};
-use std::sync::atomic::{AtomicU64, Ordering};
+use bth_common::logger::{log, Logger};
+use std::sync::{atomic::{AtomicU64, Ordering}, LazyLock};
 use tonic::{Request, Status};
 
-lazy_static::lazy_static! {
-    /// Generates service metrics with service name for tracking
-    pub static ref SVC_COUNTERS: ServiceMetrics = ServiceMetrics::default();
+/// Generates service metrics with service name for tracking
+pub static SVC_COUNTERS: LazyLock<ServiceMetrics> = LazyLock::new(ServiceMetrics::default);
 
-    // Generate a random seed at startup so that rpc_client_id hashes are not identifying specific
-    // users by leaking IP addresses.
-    static ref RPC_LOGGER_CLIENT_ID_SEED: String = {
-        use rand::Rng;
-        let mut rng = rand::thread_rng();
-        std::iter::repeat(())
-            .map(|()| rng.sample(rand::distributions::Alphanumeric))
-            .take(32)
-            .map(char::from)
-            .collect()
-    };
+// Generate a random seed at startup so that rpc_client_id hashes are not identifying specific
+// users by leaking IP addresses.
+static RPC_LOGGER_CLIENT_ID_SEED: LazyLock<String> = LazyLock::new(|| {
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+    std::iter::repeat(())
+        .map(|()| rng.sample(rand::distributions::Alphanumeric))
+        .take(32)
+        .map(char::from)
+        .collect()
+});
 
-    static ref RPC_LOGGER_REQUEST_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
-}
+static RPC_LOGGER_REQUEST_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 /// Create a logger for an RPC request
 pub fn rpc_logger<T>(request: &Request<T>, logger: &Logger) -> Logger {
@@ -66,7 +64,7 @@ pub fn rpc_logger<T>(request: &Request<T>, logger: &Logger) -> Logger {
         .map(|a| a.to_string())
         .unwrap_or_else(|| "unknown".to_string());
 
-    let hash = bt_common::fast_hash(
+    let hash = bth_common::fast_hash(
         format!("{}{}", *RPC_LOGGER_CLIENT_ID_SEED, remote_addr).as_bytes(),
     );
     let hash_str = hex_fmt::HexFmt(hash).to_string();
@@ -158,21 +156,21 @@ pub fn rpc_unavailable_error<S: std::fmt::Display, E: std::fmt::Display>(
 }
 
 /// Converts a serialization Error to a Status error.
-pub fn ser_to_rpc_err(error: bt_util_serial::encode::Error, logger: &Logger) -> Status {
+pub fn ser_to_rpc_err(error: bth_util_serial::encode::Error, logger: &Logger) -> Status {
     rpc_internal_error("Serialization", error, logger)
 }
 
 /// Converts a deserialization Error to a Status error.
-pub fn deser_to_rpc_err(error: bt_util_serial::decode::Error, logger: &Logger) -> Status {
+pub fn deser_to_rpc_err(error: bth_util_serial::decode::Error, logger: &Logger) -> Status {
     rpc_internal_error("Deserialization", error, logger)
 }
 
 /// Converts an encode Error to a Status error.
-pub fn encode_to_rpc_err(error: bt_util_serial::EncodeError, logger: &Logger) -> Status {
+pub fn encode_to_rpc_err(error: bth_util_serial::EncodeError, logger: &Logger) -> Status {
     rpc_internal_error("Encode", error, logger)
 }
 
 /// Converts a decode Error to a Status error.
-pub fn decode_to_rpc_err(error: bt_util_serial::DecodeError, logger: &Logger) -> Status {
+pub fn decode_to_rpc_err(error: bth_util_serial::DecodeError, logger: &Logger) -> Status {
     rpc_internal_error("Decode", error, logger)
 }

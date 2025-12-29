@@ -1,5 +1,5 @@
 [package]
-name = "bt-peers-test-utils"
+name = "bth-peers-test-utils"
 version = "7.1.0"
 authors = ["Botho"]
 edition = "2021"
@@ -8,17 +8,17 @@ readme = "README.md"
 rust-version = { workspace = true }
 
 [dependencies]
-bt-blockchain-types = { workspace = true }
-bt-common = { workspace = true }
-bt-connection = { workspace = true }
-bt-consensus-api = { workspace = true }
-bt-consensus-scp = { workspace = true, features = ["test_utils"] }
-bt-crypto-keys = { workspace = true }
-bt-ledger-db = { workspace = true, features = ["test_utils"] }
-bt-peers = { workspace = true }
-bt-transaction-core = { workspace = true }
-bt-util-from-random = { workspace = true }
-bt-util-uri = { workspace = true }
+bth-blockchain-types = { workspace = true }
+bth-common = { workspace = true }
+bth-connection = { workspace = true }
+bth-consensus-api = { workspace = true }
+bth-consensus-scp = { workspace = true, features = ["test_utils"] }
+bth-crypto-keys = { workspace = true }
+bth-ledger-db = { workspace = true, features = ["test_utils"] }
+bth-peers = { workspace = true }
+bth-transaction-core = { workspace = true }
+bth-util-from-random = { workspace = true }
+bth-util-uri = { workspace = true }
 
 hex = { workspace = true }
 tonic = { workspace = true }
@@ -28,4 +28,4 @@ retry = { workspace = true }
 sha2 = { workspace = true, features = ["asm"] }
 
 [dev-dependencies]
-bt-common = { workspace = true, features = ["loggers"] }
+bth-common = { workspace = true, features = ["loggers"] }

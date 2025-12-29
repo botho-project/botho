@@ -36,8 +36,8 @@ pub enum Error {
     InvalidState,
 }
 
-impl From<bt_util_repr_bytes::LengthMismatch> for Error {
-    fn from(src: bt_util_repr_bytes::LengthMismatch) -> Self {
+impl From<bth_util_repr_bytes::LengthMismatch> for Error {
+    fn from(src: bth_util_repr_bytes::LengthMismatch) -> Self {
         Self::LengthMismatch(src.found, src.expected)
     }
 }

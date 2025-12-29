@@ -9,7 +9,7 @@ use crate::{
     },
     rpc_logger,
 };
-use bt_common::logger::{log, Logger};
+use bth_common::logger::{log, Logger};
 use tonic::{Request, Response, Status};
 
 /// A service that exposes the BuildInfo of a service
@@ -30,18 +30,18 @@ impl BuildInfoService {
     }
 }
 
-/// Get the BuildInfo object from bt_util_build_info
+/// Get the BuildInfo object from bth_util_build_info
 pub fn get_build_info() -> BuildInfo {
     BuildInfo {
-        git_commit: bt_util_build_info::git_commit().to_owned(),
-        profile: bt_util_build_info::profile().to_owned(),
-        debug: bt_util_build_info::debug().to_owned(),
-        opt_level: bt_util_build_info::opt_level().to_owned(),
-        debug_assertions: bt_util_build_info::debug_assertions().to_owned(),
-        target_arch: bt_util_build_info::target_arch().to_owned(),
-        target_feature: bt_util_build_info::target_feature().to_owned(),
-        rustflags: bt_util_build_info::rustflags().to_owned(),
-        sgx_mode: bt_util_build_info::sgx_mode().to_owned(),
+        git_commit: bth_util_build_info::git_commit().to_owned(),
+        profile: bth_util_build_info::profile().to_owned(),
+        debug: bth_util_build_info::debug().to_owned(),
+        opt_level: bth_util_build_info::opt_level().to_owned(),
+        debug_assertions: bth_util_build_info::debug_assertions().to_owned(),
+        target_arch: bth_util_build_info::target_arch().to_owned(),
+        target_feature: bth_util_build_info::target_feature().to_owned(),
+        rustflags: bth_util_build_info::rustflags().to_owned(),
+        sgx_mode: bth_util_build_info::sgx_mode().to_owned(),
     }
 }
 

@@ -1,5 +1,5 @@
 [package]
-name = "bt-crypto-pq"
+name = "bth-crypto-pq"
 version = "0.1.0"
 authors = ["Botho Foundation"]
 edition = "2021"

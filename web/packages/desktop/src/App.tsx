@@ -1,7 +1,6 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { ConnectionProvider, useConnection } from './contexts/connection'
 import { MiningProvider } from './contexts/mining'
-import { Layout } from './components/layout'
 import { SplashScreen } from './components/splash-screen'
 import { DashboardPage } from './pages/dashboard'
 import { WalletPage } from './pages/wallet'

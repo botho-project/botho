@@ -1,5 +1,5 @@
 [package]
-name = "bt-peers"
+name = "bth-peers"
 version = "7.1.0"
 authors = ["Botho"]
 edition = "2021"
@@ -11,18 +11,18 @@ rust-version = { workspace = true }
 test_utils = []
 
 [dependencies]
-bt-blockchain-types = { workspace = true }
-bt-common = { workspace = true, features = ["log"] }
-bt-connection = { workspace = true }
-bt-consensus-api = { workspace = true }
-bt-consensus-scp = { workspace = true }
-bt-crypto-digestible = { workspace = true }
-bt-crypto-keys = { workspace = true }
-bt-ledger-db = { workspace = true }
-bt-transaction-core = { workspace = true }
-bt-util-grpc-tonic = { workspace = true }
-bt-util-serial = { workspace = true }
-bt-util-uri = { workspace = true }
+bth-blockchain-types = { workspace = true }
+bth-common = { workspace = true, features = ["log"] }
+bth-connection = { workspace = true }
+bth-consensus-api = { workspace = true }
+bth-consensus-scp = { workspace = true }
+bth-crypto-digestible = { workspace = true }
+bth-crypto-keys = { workspace = true }
+bth-ledger-db = { workspace = true }
+bth-transaction-core = { workspace = true }
+bth-util-grpc-tonic = { workspace = true }
+bth-util-serial = { workspace = true }
+bth-util-uri = { workspace = true }
 
 crossbeam-channel = { workspace = true }
 displaydoc = { workspace = true }
@@ -33,8 +33,8 @@ tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
 tonic = { workspace = true, features = ["codegen", "prost"] }
 
 [dev-dependencies]
-bt-connection-test-utils = { workspace = true }
-bt-peers-test-utils = { workspace = true }
+bth-connection-test-utils = { workspace = true }
+bth-peers-test-utils = { workspace = true }
 
 rand = { workspace = true }
 rand_hc = { workspace = true }

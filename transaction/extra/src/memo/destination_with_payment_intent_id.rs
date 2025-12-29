@@ -6,7 +6,7 @@
 
 use super::{compute_destination_memo, DestinationMemoError, RegisteredMemoType};
 use crate::impl_memo_type_conversions;
-use bt_account_keys::ShortAddressHash;
+use bth_account_keys::ShortAddressHash;
 
 /// A memo that the sender writes to themself to record details of the
 /// transaction, and attaches to the change TxOut so that they can recover it

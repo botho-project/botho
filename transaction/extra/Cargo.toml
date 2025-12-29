@@ -1,5 +1,5 @@
 [package]
-name = "bt-transaction-extra"
+name = "bth-transaction-extra"
 version = "7.1.0"
 authors = ["Botho"]
 edition = "2021"
@@ -19,35 +19,35 @@ subtle = { workspace = true }
 zeroize = { workspace = true }
 
 # Botho dependencies
-bt-account-keys = { workspace = true }
-bt-cluster-tax = { workspace = true, optional = true }
-bt-core = { workspace = true }
-bt-crypto-digestible = { workspace = true, features = ["dalek"] }
-bt-crypto-hashes = { workspace = true }
-bt-crypto-keys = { workspace = true }
-bt-crypto-memo-mac = { workspace = true }
-bt-crypto-ring-signature = { workspace = true }
-bt-crypto-ring-signature-signer = { workspace = true }
-bt-transaction-core = { workspace = true }
-bt-transaction-summary = { workspace = true }
-bt-transaction-types = { workspace = true }
-bt-util-from-random = { workspace = true }
-bt-util-repr-bytes = { workspace = true }
-bt-util-serial = { workspace = true }
-bt-util-u64-ratio = { workspace = true }
-bt-util-vec-map = { workspace = true }
-bt-util-zip-exact = { workspace = true }
+bth-account-keys = { workspace = true }
+bth-cluster-tax = { workspace = true, optional = true }
+bth-core = { workspace = true }
+bth-crypto-digestible = { workspace = true, features = ["dalek"] }
+bth-crypto-hashes = { workspace = true }
+bth-crypto-keys = { workspace = true }
+bth-crypto-memo-mac = { workspace = true }
+bth-crypto-ring-signature = { workspace = true }
+bth-crypto-ring-signature-signer = { workspace = true }
+bth-transaction-core = { workspace = true }
+bth-transaction-summary = { workspace = true }
+bth-transaction-types = { workspace = true }
+bth-util-from-random = { workspace = true }
+bth-util-repr-bytes = { workspace = true }
+bth-util-serial = { workspace = true }
+bth-util-u64-ratio = { workspace = true }
+bth-util-vec-map = { workspace = true }
+bth-util-zip-exact = { workspace = true }
 
 curve25519-dalek = { workspace = true }
 
 [features]
 default = []
-cluster-tax = ["dep:bt-cluster-tax"]
+cluster-tax = ["dep:bth-cluster-tax"]
 
 [dev-dependencies]
 assert_matches = { workspace = true }
 maplit = { workspace = true }
 
-bt-transaction-builder = { workspace = true, features = ["test-only"] }
-bt-util-from-random = { workspace = true }
-bt-util-test-helper = { workspace = true }
+bth-transaction-builder = { workspace = true, features = ["test-only"] }
+bth-util-from-random = { workspace = true }
+bth-util-test-helper = { workspace = true }

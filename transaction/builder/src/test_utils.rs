@@ -8,19 +8,18 @@ use crate::{
     TxBuilderError,
 };
 use alloc::vec::Vec;
-use bt_account_keys::{AccountKey, PublicAddress, DEFAULT_SUBADDRESS_INDEX};
-use bt_crypto_keys::{RistrettoPrivate, RistrettoPublic};
-use bt_crypto_ring_signature_signer::{NoKeysRingSigner, OneTimeKeyDeriveData};
-use bt_transaction_core::{
+use bth_account_keys::{AccountKey, PublicAddress, DEFAULT_SUBADDRESS_INDEX};
+use bth_crypto_keys::{RistrettoPrivate, RistrettoPublic};
+use bth_crypto_ring_signature_signer::{NoKeysRingSigner, OneTimeKeyDeriveData};
+use bth_transaction_core::{
     constants::RING_SIZE,
-    encrypted_fog_hint::EncryptedFogHint,
     onetime_keys::*,
     tokens::Mob,
     tx::{Tx, TxOut},
     Amount, BlockVersion, MemoContext, MemoPayload, NewMemoError, Token, TokenId,
 };
-use bt_transaction_extra::UnsignedTx;
-use bt_util_from_random::FromRandom;
+use bth_transaction_extra::UnsignedTx;
+use bth_util_from_random::FromRandom;
 use rand::{rngs::StdRng, CryptoRng, RngCore, SeedableRng};
 
 /// Creates a TxOut that sends `value` to `recipient`.
@@ -41,14 +40,11 @@ pub fn create_output<RNG: CryptoRng + RngCore>(
     recipient: &PublicAddress,
     rng: &mut RNG,
 ) -> Result<(TxOut, RistrettoPublic), TxBuilderError> {
-    // Botho doesn't use Fog - use fake hint for protocol compatibility
-    let hint = EncryptedFogHint::fake_onetime_hint(rng);
     let tx_private_key = RistrettoPrivate::from_random(rng);
-    let (tx_out, shared_secret) = crate::transaction_builder::create_output_with_fog_hint(
+    let (tx_out, shared_secret) = crate::transaction_builder::create_output_internal(
         block_version,
         amount,
         recipient,
-        hint,
         |_| Ok(MemoPayload::default()),
         &tx_private_key,
     )?;
@@ -221,7 +217,7 @@ pub fn build_change_memo_with_amount(
 ) -> Result<MemoPayload, NewMemoError> {
     // Create simulated context
     let mut rng: StdRng = SeedableRng::from_seed([0u8; 32]);
-    let alice = AccountKey::random_with_fog(&mut rng);
+    let alice = AccountKey::random(&mut rng);
     let alice_address_book = ReservedSubaddresses::from(&alice);
     let change_tx_pubkey = RistrettoPublic::from_random(&mut rng);
     let memo_context = MemoContext {

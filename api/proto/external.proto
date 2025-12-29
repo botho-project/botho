@@ -55,9 +55,7 @@ message Ed25519SignerSet {
 
 // Complete AccountKey
 //
-// containing the pair of secret keys, which can be used for spending,
-// and optionally some Fog related info that is used to form
-// public addresses for accounts that sign up with Fog service.
+// containing the pair of secret keys, which can be used for spending.
 //
 // This matches the Rust `transaction::AccountKey` struct.
 message AccountKey {
@@ -67,18 +65,9 @@ message AccountKey {
     // Private key `b` used for spending.
     RistrettoPrivate spend_private_key = 2;
 
-    // Optional url of fog report server.
-    // Empty string when not in use, i.e. for accounts that don't have fog service.
-    string fog_report_url = 3;
-
-    // Optional fog report id.
-    // The fog report server may serve multiple reports, this id disambiguates
-    // which one to use when sending to this account.
-    string fog_report_id = 4;
-
-    // Optional fog authority subjectPublicKeyInfo.
-    // Empty when not in use.
-    bytes fog_authority_spki = 5;
+    // Reserved field numbers for removed fog fields
+    reserved 3, 4, 5;
+    reserved "fog_report_url", "fog_report_id", "fog_authority_spki";
 }
 
 // A public address, used to identify recipients.
@@ -89,20 +78,9 @@ message PublicAddress {
     // Spend public key
     CompressedRistretto spend_public_key = 2;
 
-    // Optional url of fog report server.
-    // Empty string when not in use, i.e. for accounts that don't have fog service.
-    // Indicates the place at which the fog report server should be contacted.
-    string fog_report_url = 3;
-
-    // Optional fog report id.
-    // The fog report server may serve multiple reports, this id disambiguates
-    // which one to use when sending to this account.
-    string fog_report_id = 4;
-
-    // View key signature over the fog authority subjectPublicKeyInfo.
-    //
-    // This must be parseable as a RistrettoSignature.
-    bytes fog_authority_sig = 5;
+    // Reserved field numbers for removed fog fields
+    reserved 3, 4, 5;
+    reserved "fog_report_url", "fog_report_id", "fog_authority_sig";
 }
 
 // A KDF can be used to stretch a 32 byte secret into multiple secret private keys.
@@ -112,13 +90,10 @@ message PublicAddress {
 message RootIdentity {
     // The root entropy used to derive cryptonote private keys for this account
     RootEntropy root_entropy = 1;
-    // Optional url of fog report server, same as in AccountKey
-    string fog_report_url = 2;
-    // Optional fog report id, same as in AccountKey
-    string fog_report_id = 3;
-    // Optional fog authority subjectPublicKeyInfo.
-    // Empty when not in use.
-    bytes fog_authority_spki = 4;
+
+    // Reserved field numbers for removed fog fields
+    reserved 2, 3, 4;
+    reserved "fog_report_url", "fog_report_id", "fog_authority_spki";
 }
 
 // A 32 byte secret used as input key material to derive private keys
@@ -195,10 +170,7 @@ message MaskedAmount {
     bytes masked_token_id = 3;
 }
 
-// The bytes of encrypted fog hint
-message EncryptedFogHint {
-    bytes data = 1;
-}
+// Reserved: EncryptedFogHint message was removed (fog service no longer used)
 
 // The bytes of encrypted memo
 message EncryptedMemo {
@@ -246,10 +218,9 @@ message TxOut {
     // Public key.
     CompressedRistretto public_key = 3;
 
-    // Encrypted fog hint payload.
-    // This is an mc-crypto-box cryptogram for the fog ingest server,
-    // or a random cryptogram indistinguishable from a real one.
-    EncryptedFogHint e_fog_hint = 4;
+    // Reserved field for removed fog hint
+    reserved 4;
+    reserved "e_fog_hint";
 
     // Encrypted memo
     EncryptedMemo e_memo = 5;
@@ -572,8 +543,9 @@ message MintTxPrefix {
     // The block index at which this transaction is no longer valid.
     uint64 tombstone_block = 6;
 
-    // The (optional) encrypted fog hint of the minted TxOut.
-    EncryptedFogHint e_fog_hint = 7;
+    // Reserved field for removed fog hint
+    reserved 7;
+    reserved "e_fog_hint";
 }
 
 // A mint transaction coupled with a signature over it.
@@ -879,8 +851,9 @@ message TxBlueprintOutputRecipient {
     // The amount being sent
     Amount amount = 2;
 
-    // The encrypted fog hint for the fog ingest server
-    EncryptedFogHint e_fog_hint = 3;
+    // Reserved field for removed fog hint
+    reserved 3;
+    reserved "e_fog_hint";
 
     // The tx private key for the output
     RistrettoPrivate tx_private_key = 4;
@@ -893,8 +866,9 @@ message TxBlueprintOutputChange {
     // The amount being sent
     Amount amount = 2;
 
-    // The encrypted fog hint for the fog ingest server
-    EncryptedFogHint e_fog_hint = 3;
+    // Reserved field for removed fog hint
+    reserved 3;
+    reserved "e_fog_hint";
 
     // The tx private key for the output
     RistrettoPrivate tx_private_key = 4;

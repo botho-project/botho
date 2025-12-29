@@ -2,7 +2,7 @@
 
 //! This module provides a consistent set of AccountKeys for use in testing
 
-use bt_account_keys::{AccountKey, PublicAddress, RootIdentity};
+use bth_account_keys::{AccountKey, PublicAddress, RootIdentity};
 use rand::{rngs::StdRng, SeedableRng};
 use std::{cmp, sync::LazyLock};
 
@@ -142,7 +142,7 @@ pub fn default_addresses() -> Vec<PublicAddress> {
 mod testing {
     use super::*;
     use itertools::Itertools;
-    use bt_common::logger::{log, test_with_logger, Logger};
+    use bth_common::logger::{log, test_with_logger, Logger};
     use std::time::Instant;
 
     #[test]

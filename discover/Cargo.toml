@@ -1,5 +1,5 @@
 [package]
-name = "bt-discover"
+name = "bth-discover"
 version = "0.1.0"
 authors = ["Botho Foundation"]
 edition = "2021"
@@ -8,17 +8,17 @@ rust-version = { workspace = true }
 description = "CLI tool for discovering Botho network topology and generating configurations"
 
 [[bin]]
-name = "bt-discover"
+name = "bth-discover"
 path = "src/main.rs"
 
 [dependencies]
 # Workspace dependencies
-bt-common = { workspace = true, features = ["std"] }
-bt-consensus-scp-types = { workspace = true }
-bt-crypto-keys = { workspace = true }
-bt-gossip = { workspace = true }
-bt-util-from-random = { workspace = true }
-bt-util-uri = { workspace = true }
+bth-common = { workspace = true, features = ["std"] }
+bth-consensus-scp-types = { workspace = true }
+bth-crypto-keys = { workspace = true }
+bth-gossip = { workspace = true }
+bth-util-from-random = { workspace = true }
+bth-util-uri = { workspace = true }
 
 # External dependencies
 anyhow = { workspace = true }

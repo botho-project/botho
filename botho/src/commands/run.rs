@@ -2,9 +2,9 @@
 
 use anyhow::{Context, Result};
 use futures::StreamExt;
-use bt_common::{NodeID, ResponderId};
-use bt_consensus_scp::QuorumSet;
-use bt_crypto_keys::Ed25519Public;
+use bth_common::{NodeID, ResponderId};
+use bth_consensus_scp::QuorumSet;
+use bth_crypto_keys::Ed25519Public;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::str::FromStr;
@@ -494,7 +494,7 @@ async fn run_async(config: Config, config_path: &Path, mine: bool) -> Result<()>
 
 /// Build SCP quorum set from QuorumBuilder
 fn build_scp_quorum_set(quorum: &QuorumBuilder) -> QuorumSet {
-    use bt_consensus_scp_types::QuorumSetMember;
+    use bth_consensus_scp_types::QuorumSetMember;
 
     // Create NodeIDs from actual PeerIds
     let members: Vec<QuorumSetMember<NodeID>> = quorum

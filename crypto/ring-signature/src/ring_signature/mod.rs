@@ -41,8 +41,8 @@ pub use self::{
     mlsag_verify::MlsagVerify,
 };
 
-use bt_crypto_hashes::{Blake2b512, Digest};
-use bt_crypto_keys::{CompressedRistrettoPublic, RistrettoPublic};
+use bth_crypto_hashes::{Blake2b512, Digest};
+use bth_crypto_keys::{CompressedRistrettoPublic, RistrettoPublic};
 
 /// The base point for blinding factors used with all amount commitments
 pub const B_BLINDING: RistrettoPoint = RISTRETTO_BASEPOINT_POINT;

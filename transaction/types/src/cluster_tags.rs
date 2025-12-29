@@ -14,7 +14,7 @@ extern crate alloc;
 #[cfg(feature = "alloc")]
 use alloc::vec::Vec;
 
-use bt_crypto_digestible::Digestible;
+use bth_crypto_digestible::Digestible;
 #[cfg(feature = "prost")]
 use prost::Message;
 #[cfg(feature = "serde")]

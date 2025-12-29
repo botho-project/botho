@@ -5,8 +5,8 @@
 //! backward-incompatible changes.
 
 use clap::Parser;
-use bt_common::logger::{create_app_logger, o};
-use bt_ledger_migration::migrate;
+use bth_common::logger::{create_app_logger, o};
+use bth_ledger_migration::migrate;
 use std::{path::PathBuf, thread::sleep, time::Duration};
 
 /// Command line configuration
@@ -18,9 +18,9 @@ pub struct Config {
 }
 
 fn main() {
-    let _sentry_guard = bt_common::sentry::init();
+    let _sentry_guard = bth_common::sentry::init();
     let (logger, _global_logger_guard) = create_app_logger(o!());
-    bt_common::setup_panic_handler();
+    bth_common::setup_panic_handler();
 
     let config = Config::parse();
 

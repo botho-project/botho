@@ -1,5 +1,5 @@
 [package]
-name = "bt-crypto-keys"
+name = "bth-crypto-keys"
 version = "7.1.0"
 authors = ["Botho"]
 edition = "2021"
@@ -13,26 +13,26 @@ alloc = [
     "base64/alloc",
     "curve25519-dalek/alloc",
     "ed25519-dalek/alloc",
-    "bt-crypto-digestible/alloc",
-    "bt-crypto-digestible-signature/alloc",
-    "bt-util-repr-bytes/alloc",
+    "bth-crypto-digestible/alloc",
+    "bth-crypto-digestible-signature/alloc",
+    "bth-util-repr-bytes/alloc",
 ]
 serde = [
     "dep:serde",
-    "dep:bt-util-serial",
+    "dep:bth-util-serial",
     "ed25519/serde",
     "curve25519-dalek/serde",
     "ed25519-dalek/serde",
-    "bt-util-repr-bytes/serde",
+    "bth-util-repr-bytes/serde",
 ]
-prost = ["alloc", "bt-util-repr-bytes/prost"]
+prost = ["alloc", "bth-util-repr-bytes/prost"]
 default = [
     "alloc",
     "serde",
     "prost",
-    "bt-util-repr-bytes/default",
+    "bth-util-repr-bytes/default",
     "curve25519-dalek/default",
-    "dep:bt-util-serial",
+    "dep:bth-util-serial",
 ]
 
 [dependencies]
@@ -46,11 +46,11 @@ ed25519-dalek = { workspace = true, features = ["rand_core", "digest"] }
 hex = { workspace = true }
 hex_fmt = { workspace = true }
 
-bt-crypto-digestible = { workspace = true, features = ["dalek", "derive"] }
-bt-crypto-digestible-signature = { workspace = true }
-bt-util-from-random = { workspace = true }
-bt-util-repr-bytes = { workspace = true }
-bt-util-serial = { workspace = true, optional = true }
+bth-crypto-digestible = { workspace = true, features = ["dalek", "derive"] }
+bth-crypto-digestible-signature = { workspace = true }
+bth-util-from-random = { workspace = true }
+bth-util-repr-bytes = { workspace = true }
+bth-util-serial = { workspace = true, optional = true }
 rand_core = { workspace = true }
 rand_hc = { workspace = true }
 schnorrkel-og = { workspace = true }
@@ -63,8 +63,8 @@ x25519-dalek = { workspace = true, features = ["static_secrets"] }
 zeroize = { workspace = true }
 
 [dev-dependencies]
-bt-crypto-hashes = { workspace = true }
-bt-util-test-helper = { workspace = true }
+bth-crypto-hashes = { workspace = true }
+bth-util-test-helper = { workspace = true }
 
 pem = { workspace = true }
 rand_hc = { workspace = true }

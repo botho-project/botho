@@ -16,5 +16,5 @@ pub use agents::{
     WhaleStrategy,
 };
 pub use metrics::{Metrics, SimulationMetrics};
-pub use runner::{run_simulation, SimulationConfig};
-pub use state::SimulationState;
+pub use runner::{run_simulation, RoundSummary, SimulationConfig, SimulationResult};
+pub use state::{EmissionStats, SimulationState};

@@ -3,7 +3,7 @@
 use crate::{InputRuleError, TxOutConversionError};
 use alloc::string::String;
 use displaydoc::Display;
-use bt_crypto_keys::KeyError;
+use bth_crypto_keys::KeyError;
 use serde::{Deserialize, Serialize};
 
 /// Type alias for transaction validation results.
@@ -209,7 +209,7 @@ pub enum TransactionValidationError {
     InvalidPqOutputReference,
 }
 
-impl From<bt_crypto_keys::KeyError> for TransactionValidationError {
+impl From<bth_crypto_keys::KeyError> for TransactionValidationError {
     fn from(_src: KeyError) -> Self {
         Self::KeyError
     }

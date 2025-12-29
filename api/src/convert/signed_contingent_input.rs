@@ -3,10 +3,10 @@
 //! Convert to/from external::SignedContingentInput.
 
 use crate::{external, ConversionError};
-use bt_transaction_core::UnmaskedAmount;
-use bt_transaction_extra::SignedContingentInput;
+use bth_transaction_core::UnmaskedAmount;
+use bth_transaction_extra::SignedContingentInput;
 
-/// Convert bt_transaction_extra::SignedContingentInput -->
+/// Convert bth_transaction_extra::SignedContingentInput -->
 /// external::SignedContingentInput.
 impl From<&SignedContingentInput> for external::SignedContingentInput {
     fn from(src: &SignedContingentInput) -> Self {
@@ -26,7 +26,7 @@ impl From<&SignedContingentInput> for external::SignedContingentInput {
 }
 
 /// Convert external::SignedContingentInput -->
-/// bt_transaction_extra::SignedContingentInput.
+/// bth_transaction_extra::SignedContingentInput.
 impl TryFrom<&external::SignedContingentInput> for SignedContingentInput {
     type Error = ConversionError;
 
@@ -66,14 +66,14 @@ impl TryFrom<&external::SignedContingentInput> for SignedContingentInput {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bt_account_keys::AccountKey;
-    use bt_crypto_ring_signature_signer::NoKeysRingSigner;
+    use bth_account_keys::AccountKey;
+    use bth_crypto_ring_signature_signer::NoKeysRingSigner;
     use mc_fog_report_validation_test_utils::MockFogResolver;
-    use bt_transaction_builder::{
+    use bth_transaction_builder::{
         test_utils::get_input_credentials, EmptyMemoBuilder, ReservedSubaddresses,
         SignedContingentInputBuilder,
     };
-    use bt_transaction_core::{
+    use bth_transaction_core::{
         constants::MILLIMOB_TO_PICOMOB, tokens::Mob, Amount, BlockVersion, Token, TokenId,
     };
     use prost::Message;
@@ -131,14 +131,14 @@ mod tests {
 
         // decode(encode(sci)) should be the identity function.
         {
-            let bytes = bt_util_serial::encode(&sci);
-            let recovered_sci = bt_util_serial::decode(&bytes).unwrap();
+            let bytes = bth_util_serial::encode(&sci);
+            let recovered_sci = bth_util_serial::decode(&bytes).unwrap();
             assert_eq!(sci, recovered_sci);
         }
 
-        // Converting bt_transaction_extra::SignedContingentInput ->
+        // Converting bth_transaction_extra::SignedContingentInput ->
         // external::SignedContingentInput ->
-        // bt_transaction_extra::SignedContingentInput should be the identity
+        // bth_transaction_extra::SignedContingentInput should be the identity
         // function.
         {
             let external_sci = external::SignedContingentInput::from(&sci);
@@ -148,7 +148,7 @@ mod tests {
 
         // Encoding with prost, decoding with protobuf should be the identity function.
         {
-            let bytes = bt_util_serial::encode(&sci);
+            let bytes = bth_util_serial::encode(&sci);
             let recovered_sci = external::SignedContingentInput::decode(bytes.as_slice()).unwrap();
             assert_eq!(recovered_sci, external::SignedContingentInput::from(&sci));
         }
@@ -157,7 +157,7 @@ mod tests {
         {
             let external_sci = external::SignedContingentInput::from(&sci);
             let bytes = external_sci.encode_to_vec();
-            let recovered_sci = bt_util_serial::decode(&bytes).unwrap();
+            let recovered_sci = bth_util_serial::decode(&bytes).unwrap();
             assert_eq!(sci, recovered_sci);
         }
     }

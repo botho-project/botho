@@ -14,21 +14,19 @@ use serde::{Deserialize, Serialize};
 
 pub use big_array::BigArray;
 
-// We put a new-type around serde_cbor::Error in `mod decode` and `mod encode`,
-// because this keeps us compatible with how rmp-serde was exporting its errors,
-// and avoids unnecessary code changes.
+// Error types for serialization/deserialization using postcard format.
 pub mod decode {
     #[derive(Debug)]
-    pub struct Error(serde_cbor::Error);
+    pub struct Error(postcard::Error);
 
     impl core::fmt::Display for Error {
         fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-            write!(f, "Cbor Decode Error: {}", self.0)
+            write!(f, "Postcard Decode Error: {}", self.0)
         }
     }
 
-    impl From<serde_cbor::Error> for Error {
-        fn from(src: serde_cbor::Error) -> Self {
+    impl From<postcard::Error> for Error {
+        fn from(src: postcard::Error) -> Self {
             Self(src)
         }
     }
@@ -36,41 +34,38 @@ pub mod decode {
 
 pub mod encode {
     #[derive(Debug)]
-    pub struct Error(serde_cbor::Error);
+    pub struct Error(postcard::Error);
 
     impl core::fmt::Display for Error {
         fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-            write!(f, "Cbor Encode Error: {}", self.0)
+            write!(f, "Postcard Encode Error: {}", self.0)
         }
     }
 
-    impl From<serde_cbor::Error> for Error {
-        fn from(src: serde_cbor::Error) -> Self {
+    impl From<postcard::Error> for Error {
+        fn from(src: postcard::Error) -> Self {
             Self(src)
         }
     }
 }
 
-/// Serialize the given data structure.
+/// Serialize the given data structure using postcard format.
 ///
-/// Forward bt_util_serial::serialize to bincode::serialize(..., Infinite)
-/// Serialization can fail if `T`'s implementation of `Serialize` decides to
-/// fail.
+/// Postcard is a compact, no_std-friendly binary format.
+/// Serialization can fail if `T`'s implementation of `Serialize` decides to fail.
 pub fn serialize<T>(value: &T) -> Result<Vec<u8>, encode::Error>
 where
     T: Serialize + Sized,
 {
-    Ok(serde_cbor::to_vec(value)?)
+    Ok(postcard::to_allocvec(value)?)
 }
 
-/// Deserialize the given bytes to a data structure.
-///
-/// Forward bt_util_serial::deserialize to serde_cbor::from_slice
+/// Deserialize the given bytes to a data structure using postcard format.
 pub fn deserialize<'a, T>(bytes: &'a [u8]) -> Result<T, decode::Error>
 where
     T: Deserialize<'a>,
 {
-    Ok(serde_cbor::from_slice(bytes)?)
+    Ok(postcard::from_bytes(bytes)?)
 }
 
 pub fn encode<T: Message>(value: &T) -> Vec<u8> {

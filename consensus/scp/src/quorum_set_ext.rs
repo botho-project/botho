@@ -6,7 +6,7 @@ use crate::{
     msg::Msg, predicates::Predicate, GenericNodeId, QuorumSet, QuorumSetMember,
     QuorumSetMemberWrapper, Value,
 };
-use bt_common::{HashMap, HashSet};
+use bth_common::{HashMap, HashSet};
 
 /// Helper extension for [QuorumSet].
 pub trait QuorumSetExt<ID: GenericNodeId> {
@@ -330,7 +330,7 @@ mod tests {
         predicates::FuncPredicate,
         test_utils::test_node_id,
     };
-    use bt_common::{NodeID, ResponderId};
+    use bth_common::{NodeID, ResponderId};
 
     #[test]
     // findBlockingSet returns an empty set when there is no blocking set

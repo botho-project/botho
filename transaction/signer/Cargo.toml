@@ -1,5 +1,5 @@
 [package]
-name = "bt-transaction-signer"
+name = "bth-transaction-signer"
 version = "7.1.0"
 authors = ["Botho"]
 edition = "2021"
@@ -29,14 +29,14 @@ tiny-bip39 = { workspace = true }
 zeroize = { workspace = true }
 
 # Botho dependencies
-bt-account-keys = { workspace = true }
-bt-common = { workspace = true, features = ["loggers"] }
-bt-core = { workspace = true, features = ["serde", "bip39"] }
-bt-core-types = { workspace = true, features = ["serde"] }
-bt-crypto-keys = { workspace = true }
-bt-crypto-ring-signature = { workspace = true }
-bt-crypto-ring-signature-signer = { workspace = true }
-bt-transaction-core = { workspace = true }
-bt-transaction-summary = { workspace = true }
-bt-util-repr-bytes = { workspace = true }
-bt-util-serial = { workspace = true }
+bth-account-keys = { workspace = true }
+bth-common = { workspace = true, features = ["loggers"] }
+bth-core = { workspace = true, features = ["serde", "bip39"] }
+bth-core-types = { workspace = true, features = ["serde"] }
+bth-crypto-keys = { workspace = true }
+bth-crypto-ring-signature = { workspace = true }
+bth-crypto-ring-signature-signer = { workspace = true }
+bth-transaction-core = { workspace = true }
+bth-transaction-summary = { workspace = true }
+bth-util-repr-bytes = { workspace = true }
+bth-util-serial = { workspace = true }

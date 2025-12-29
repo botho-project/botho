@@ -5,8 +5,8 @@
 
 use super::{Config, KeyValidityMap};
 use crate::{ParseError, ValidationError};
-use bt_blockchain_types::BlockIndex;
-use bt_crypto_keys::Ed25519Public;
+use bth_blockchain_types::BlockIndex;
+use bth_crypto_keys::Ed25519Public;
 use std::path::Path;
 
 /// A validator that checks that a given key is used within a configured range

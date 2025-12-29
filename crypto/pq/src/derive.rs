@@ -66,7 +66,7 @@ impl PqKeyMaterial {
 /// # Example
 ///
 /// ```rust
-/// use bt_crypto_pq::derive_pq_keys;
+/// use bth_crypto_pq::derive_pq_keys;
 ///
 /// let mnemonic = b"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 /// let keys = derive_pq_keys(mnemonic);

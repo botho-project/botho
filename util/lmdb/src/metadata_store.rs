@@ -8,7 +8,7 @@ use lmdb::{
     Database, DatabaseFlags, Environment, Error as LmdbError, RwTransaction, Transaction,
     WriteFlags,
 };
-use bt_util_serial::{decode, encode};
+use bth_util_serial::{decode, encode};
 use prost::Message;
 
 /// An error type.
@@ -33,14 +33,14 @@ impl From<LmdbError> for MetadataStoreError {
     }
 }
 
-impl From<bt_util_serial::DecodeError> for MetadataStoreError {
-    fn from(_: bt_util_serial::DecodeError) -> Self {
+impl From<bth_util_serial::DecodeError> for MetadataStoreError {
+    fn from(_: bth_util_serial::DecodeError) -> Self {
         Self::Deserialization
     }
 }
 
-impl From<bt_util_serial::EncodeError> for MetadataStoreError {
-    fn from(_: bt_util_serial::EncodeError) -> Self {
+impl From<bth_util_serial::EncodeError> for MetadataStoreError {
+    fn from(_: bth_util_serial::EncodeError) -> Self {
         Self::Serialization
     }
 }

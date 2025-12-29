@@ -1,5 +1,5 @@
 [package]
-name = "bt-test-vectors-definitions"
+name = "bth-test-vectors-definitions"
 version = "7.1.0"
 authors = ["Botho"]
 edition = "2021"
@@ -7,6 +7,6 @@ license = "GPL-3.0"
 rust-version = { workspace = true }
 
 [dependencies]
-bt-util-test-vector = { workspace = true }
+bth-util-test-vector = { workspace = true }
 
 serde = { workspace = true, features = ["derive"] }

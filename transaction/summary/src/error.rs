@@ -1,9 +1,9 @@
 // Copyright (c) 2018-2022 The Botho Foundation
 
 use displaydoc::Display;
-use bt_crypto_keys::KeyError;
-use bt_transaction_types::{AmountError, BlockVersionError};
-use bt_util_zip_exact::ZipExactError;
+use bth_crypto_keys::KeyError;
+use bth_transaction_types::{AmountError, BlockVersionError};
+use bth_util_zip_exact::ZipExactError;
 
 /// An error which can occur when verifying a TxSummary against unblinding data
 #[derive(Clone, Debug, Display)]

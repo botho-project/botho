@@ -10,9 +10,9 @@ use crate::{
     BlockVersion,
 };
 
-use bt_crypto_digestible::Digestible;
-use bt_crypto_keys::RistrettoPublic;
-use bt_crypto_ring_signature::{CompressedCommitment, Scalar};
+use bth_crypto_digestible::Digestible;
+use bth_crypto_keys::RistrettoPublic;
+use bth_crypto_ring_signature::{CompressedCommitment, Scalar};
 
 #[cfg(feature = "prost")]
 use prost::Oneof;

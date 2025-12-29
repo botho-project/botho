@@ -3,7 +3,7 @@
 //! Convert to/from external::TxIn.
 
 use crate::{external, ConversionError};
-use bt_transaction_core::{tx, InputRules, RevealedTxOut};
+use bth_transaction_core::{tx, InputRules, RevealedTxOut};
 
 /// Convert tx::TxIn --> external::TxIn.
 impl From<&tx::TxIn> for external::TxIn {
@@ -112,12 +112,12 @@ impl TryFrom<&external::RevealedTxOut> for RevealedTxOut {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bt_account_keys::PublicAddress;
-    use bt_crypto_keys::RistrettoPrivate;
-    use bt_transaction_core::{
+    use bth_account_keys::PublicAddress;
+    use bth_crypto_keys::RistrettoPrivate;
+    use bth_transaction_core::{
         onetime_keys::create_shared_secret, tokens::Mob, Amount, BlockVersion, MaskedAmount, Token,
     };
-    use bt_util_from_random::FromRandom;
+    use bth_util_from_random::FromRandom;
     use rand::{rngs::StdRng, SeedableRng};
 
     #[test]

@@ -36,6 +36,8 @@
 
 pub mod analysis;
 pub mod crypto;
+pub mod emission;
+pub mod monetary;
 #[cfg(feature = "cli")]
 pub mod simulation;
 pub mod signing;
@@ -47,7 +49,9 @@ mod tag;
 mod transfer;
 
 pub use cluster::{ClusterId, ClusterWealth};
+pub use emission::{EmissionConfig, EmissionController, EmissionState};
 pub use fee_curve::{ClusterFactorCurve, FeeConfig, FeeCurve, FeeRateBps, TransactionType};
+pub use monetary::{DifficultyController, MonetaryPolicy, MonetaryState, MonetaryStats};
 pub use tag::{TagVector, TagWeight, TAG_WEIGHT_SCALE};
 pub use transfer::{execute_transfer, mint, Account, TransferConfig, TransferError, TransferResult};
 pub use validate::{

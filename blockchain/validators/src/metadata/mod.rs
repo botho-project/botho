@@ -6,7 +6,7 @@ pub mod key_range;
 
 use crate::{ParseError, ValidationError};
 use key_range::KeyRangeValidator;
-use bt_blockchain_types::{BlockIndex, BlockMetadata};
+use bth_blockchain_types::{BlockIndex, BlockMetadata};
 use std::path::Path;
 
 /// A [BlockMetadata] validator that validates metadata signatures, signing
@@ -43,7 +43,7 @@ impl MetadataValidator {
 mod tests {
     use super::*;
     use crate::test_utils::{make_key, make_metadata};
-    use bt_crypto_keys::Ed25519Signature;
+    use bth_crypto_keys::Ed25519Signature;
 
     fn make_validator() -> MetadataValidator {
         let key_range = KeyRangeValidator::new(

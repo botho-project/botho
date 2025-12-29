@@ -1,5 +1,5 @@
 use core::fmt;
-use bt_crypto_digestible::{DigestTranscript, Digestible, MerlinTranscript};
+use bth_crypto_digestible::{DigestTranscript, Digestible, MerlinTranscript};
 use serde_json::json;
 use std::ops::Deref;
 

@@ -4,7 +4,7 @@
 
 #![deny(missing_docs)]
 
-use bt_common::NodeID;
+use bth_common::NodeID;
 
 mod traits;
 pub use traits::{ConnectionUri, UriConversionError, UriScheme};
@@ -124,7 +124,7 @@ impl UriScheme for WatcherScheme {
 #[cfg(test)]
 mod consensus_client_uri_tests {
     use super::{ConnectionUri, ConsensusClientUri as ClientUri};
-    use bt_common::ResponderId;
+    use bth_common::ResponderId;
     use std::str::FromStr;
 
     #[test]
@@ -302,9 +302,9 @@ mod consensus_client_uri_tests {
 mod consensus_peer_uri_tests {
     use super::{ConnectionUri, ConsensusPeerUri as PeerUri};
     use core::str::FromStr;
-    use bt_common::{NodeID, ResponderId};
-    use bt_crypto_keys::{Ed25519Pair, Ed25519Public};
-    use bt_util_from_random::FromRandom;
+    use bth_common::{NodeID, ResponderId};
+    use bth_crypto_keys::{Ed25519Pair, Ed25519Public};
+    use bth_util_from_random::FromRandom;
     use rand::SeedableRng;
     use rand_hc::Hc128Rng as FixedRng;
 
@@ -385,7 +385,7 @@ mod consensus_peer_uri_tests {
 mod fog_uri_tests {
     use super::{ConnectionUri, FogUri};
     use core::str::FromStr;
-    use bt_common::ResponderId;
+    use bth_common::ResponderId;
 
     #[test]
     fn test_valid_client_uris() {

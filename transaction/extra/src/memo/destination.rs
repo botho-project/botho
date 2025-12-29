@@ -7,7 +7,7 @@
 use super::RegisteredMemoType;
 use crate::impl_memo_type_conversions;
 use displaydoc::Display;
-use bt_account_keys::ShortAddressHash;
+use bth_account_keys::ShortAddressHash;
 
 /// A memo that the sender writes to themself to record details of the
 /// transaction, and attaches to the change TxOut so that they can recover it

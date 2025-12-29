@@ -1,5 +1,5 @@
 [package]
-name = "bt-consensus-scp-play"
+name = "bth-consensus-scp-play"
 version = "7.1.0"
 authors = ["Botho"]
 edition = "2021"
@@ -12,10 +12,10 @@ name = "scp-play"
 path = "src/main.rs"
 
 [dependencies]
-bt-common = { workspace = true, features = ["loggers"] }
-bt-consensus-scp = { workspace = true, features = ["test_utils"] }
-bt-transaction-core = { workspace = true }
-bt-util-uri = { workspace = true }
+bth-common = { workspace = true, features = ["loggers"] }
+bth-consensus-scp = { workspace = true, features = ["test_utils"] }
+bth-transaction-core = { workspace = true }
+bth-util-uri = { workspace = true }
 
 clap = { workspace = true, features = ["derive", "env"] }
 serde_json = { workspace = true }

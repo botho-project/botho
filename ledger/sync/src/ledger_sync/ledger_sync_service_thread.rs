@@ -4,9 +4,9 @@
 //! performs the sync in a background thread.
 
 use crate::{LedgerSync, LedgerSyncService, PollingNetworkState, TransactionsFetcher};
-use bt_common::logger::{log, Logger};
-use bt_connection::{BlockchainConnection, ConnectionManager};
-use bt_ledger_db::Ledger;
+use bth_common::logger::{log, Logger};
+use bth_connection::{BlockchainConnection, ConnectionManager};
+use bth_ledger_db::Ledger;
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},

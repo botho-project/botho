@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use crate::{execute_transfer, ClusterWealth, FeeCurve, TransferConfig};
+use crate::{execute_transfer, ClusterWealth, EmissionConfig, FeeCurve, TransferConfig};
 
 use super::agent::{Action, Agent, AgentId};
 use super::metrics::{snapshot_metrics, Metrics, SimulationMetrics};
@@ -25,6 +25,13 @@ pub struct SimulationConfig {
 
     /// Verbose output.
     pub verbose: bool,
+
+    /// Emission configuration (optional - enables adaptive emission).
+    pub emission_config: Option<EmissionConfig>,
+
+    /// Blocks per round (for emission simulation).
+    /// Default 1 means each round = 1 block.
+    pub blocks_per_round: u64,
 }
 
 impl Default for SimulationConfig {
@@ -35,7 +42,23 @@ impl Default for SimulationConfig {
             transfer_config: TransferConfig::default(),
             snapshot_frequency: 100,
             verbose: false,
+            emission_config: None,
+            blocks_per_round: 1,
         }
+    }
+}
+
+impl SimulationConfig {
+    /// Enable adaptive emission with default parameters.
+    pub fn with_emission(mut self) -> Self {
+        self.emission_config = Some(EmissionConfig::default());
+        self
+    }
+
+    /// Enable adaptive emission with custom configuration.
+    pub fn with_emission_config(mut self, config: EmissionConfig) -> Self {
+        self.emission_config = Some(config);
+        self
     }
 }
 
@@ -50,6 +73,9 @@ pub struct SimulationResult {
 
     /// Per-round data (if verbose).
     pub round_summaries: Vec<RoundSummary>,
+
+    /// Final emission statistics (if emission enabled).
+    pub emission_stats: Option<super::state::EmissionStats>,
 }
 
 /// Summary of a single round.
@@ -59,6 +85,10 @@ pub struct RoundSummary {
     pub transactions: u64,
     pub fees_collected: u64,
     pub total_transferred: u64,
+    /// Block rewards emitted this round.
+    pub rewards_emitted: u64,
+    /// Current block reward rate.
+    pub block_reward: u64,
 }
 
 /// Run a simulation with the given agents.
@@ -105,6 +135,19 @@ pub fn run_simulation(
     // Calculate total supply
     state.total_supply = agents.iter().map(|a| a.balance()).sum();
 
+    // Initialize emission controller if configured
+    if let Some(ref emission_config) = config.emission_config {
+        state.init_emission(emission_config.clone());
+    }
+
+    // Find miner indices for reward distribution
+    let miner_indices: Vec<usize> = agents
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| a.agent_type() == "Miner")
+        .map(|(i, _)| i)
+        .collect();
+
     // Initial snapshot
     let initial_metrics = collect_metrics(agents, &state, &mut metrics, &config.fee_curve);
     metrics.record_snapshot(initial_metrics);
@@ -117,6 +160,7 @@ pub fn run_simulation(
         let mut round_fees = 0u64;
         let mut round_transactions = 0u64;
         let mut round_transferred = 0u64;
+        let mut round_rewards = 0u64;
 
         // Collect actions from all agents
         let mut actions: Vec<(AgentId, Action)> = Vec::new();
@@ -278,14 +322,40 @@ pub fn run_simulation(
             }
         }
 
-        // Update state
-        state.total_fees_collected += round_fees;
+        // Update state with fees (uses emission controller if available)
+        if state.emission_controller.is_some() {
+            // Record fee burns to emission controller
+            state.record_fee_burn(round_fees);
+        } else {
+            state.total_fees_collected += round_fees;
+        }
         state.transaction_count += round_transactions;
+
+        // Process blocks and distribute rewards to miners
+        if state.emission_controller.is_some() && !miner_indices.is_empty() {
+            for _ in 0..config.blocks_per_round {
+                let reward = state.process_block();
+                if reward > 0 {
+                    round_rewards += reward;
+
+                    // Distribute reward to a miner (round-robin for simplicity)
+                    let miner_idx = miner_indices[round as usize % miner_indices.len()];
+                    let cluster_id = state.next_cluster_id();
+
+                    // Mint reward to miner's account
+                    let miner_account = agents[miner_idx].account_mut();
+                    crate::mint(miner_account, reward, cluster_id, &mut state.cluster_wealth);
+                }
+            }
+        }
 
         // Update agent balances in state
         for agent in agents.iter() {
             state.update_agent_balance(agent.id(), agent.balance());
         }
+
+        // Get current block reward for summary
+        let current_block_reward = state.current_block_reward();
 
         // Record round summary
         if config.verbose {
@@ -294,6 +364,8 @@ pub fn run_simulation(
                 transactions: round_transactions,
                 fees_collected: round_fees,
                 total_transferred: round_transferred,
+                rewards_emitted: round_rewards,
+                block_reward: current_block_reward,
             });
         }
 
@@ -314,10 +386,13 @@ pub fn run_simulation(
         }
     }
 
+    let emission_stats = state.emission_stats();
+
     SimulationResult {
         metrics,
         final_state: state,
         round_summaries,
+        emission_stats,
     }
 }
 
@@ -410,7 +485,8 @@ fn collect_metrics(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::simulation::agents::{MerchantAgent, RetailUserAgent};
+    use crate::simulation::agents::{MerchantAgent, MinerAgent, RetailUserAgent};
+    use crate::EmissionConfig;
 
     #[test]
     fn test_basic_simulation() {
@@ -431,5 +507,236 @@ mod tests {
         let result = run_simulation(&mut agents, &config);
 
         assert!(!result.metrics.snapshots.is_empty());
+    }
+
+    #[test]
+    fn test_simulation_with_emission() {
+        // Create a simple economy with a miner (who doesn't sell) and a merchant
+        // Using a miner with no buyers so they just accumulate rewards
+        let mut agents: Vec<Box<dyn Agent>> = vec![
+            Box::new(MinerAgent::new(AgentId(1))), // No buyers - won't sell
+            Box::new(MerchantAgent::new(AgentId(2))),
+            Box::new(RetailUserAgent::new(AgentId(3)).with_merchants(vec![AgentId(2)])),
+        ];
+
+        // Initial balances
+        agents[0].account_mut().balance = 10_000; // Miner
+        agents[1].account_mut().balance = 5_000;  // Merchant
+        agents[2].account_mut().balance = 5_000;  // Retail
+
+        // Configure emission with small parameters for testing
+        // Note: The emission controller adapts rewards based on target inflation,
+        // so the actual emission may differ from initial_block_reward × blocks
+        let emission_config = EmissionConfig {
+            target_inflation_bps: 200,    // 2% target
+            blocks_per_epoch: 10,         // Small epochs
+            epochs_per_year: 100,         // More frequent epochs
+            initial_block_reward: 100,
+            min_block_reward: 1,
+            max_block_reward: 10_000,
+            max_adjustment_rate_bps: 5000, // 50% adjustment allowed
+        };
+
+        let config = SimulationConfig {
+            rounds: 50,
+            snapshot_frequency: 10,
+            emission_config: Some(emission_config),
+            blocks_per_round: 1,
+            ..Default::default()
+        };
+
+        let result = run_simulation(&mut agents, &config);
+
+        // Verify emission stats are present
+        assert!(result.emission_stats.is_some());
+        let stats = result.emission_stats.unwrap();
+
+        // Verify blocks were processed (50 rounds × 1 block/round = 50 blocks = 5 epochs)
+        assert_eq!(stats.current_epoch, 5);
+
+        // Verify rewards were emitted (emission adapts to target inflation)
+        assert!(
+            stats.total_emitted > 0,
+            "Should have emitted some rewards: {}",
+            stats.total_emitted
+        );
+
+        // Miner should have received all rewards (no selling)
+        let miner_balance = *result.final_state.agent_balances.get(&AgentId(1)).unwrap();
+        let expected_balance = 10_000 + stats.total_emitted;
+        assert_eq!(
+            miner_balance, expected_balance,
+            "Miner should have initial 10_000 + {} rewards = {}, got: {}",
+            stats.total_emitted, expected_balance, miner_balance
+        );
+
+        // Verify emission controller is working (rewards should adapt over epochs)
+        // The initial high reward (100) will adjust down toward target
+        assert!(
+            stats.current_block_reward < 100,
+            "Block reward should have adjusted from 100 to: {}",
+            stats.current_block_reward
+        );
+    }
+
+    #[test]
+    fn test_fee_burn_affects_emission() {
+        // Test that fee burns cause emission adjustments
+        let mut agents: Vec<Box<dyn Agent>> = vec![
+            Box::new(MinerAgent::new(AgentId(1)).with_buyers(vec![AgentId(2)])),
+            Box::new(MerchantAgent::new(AgentId(2))),
+            Box::new(
+                RetailUserAgent::new(AgentId(3))
+                    .with_merchants(vec![AgentId(2)])
+                    .with_spending_probability(1.0), // High frequency
+            ),
+        ];
+
+        // Larger balances to ensure many transactions occur
+        agents[0].account_mut().balance = 100_000;
+        agents[1].account_mut().balance = 100_000;
+        agents[2].account_mut().balance = 100_000;
+
+        let emission_config = EmissionConfig {
+            target_inflation_bps: 200,
+            blocks_per_epoch: 10,
+            epochs_per_year: 100,
+            initial_block_reward: 100,
+            min_block_reward: 1,
+            max_block_reward: 10_000,
+            max_adjustment_rate_bps: 5000,
+        };
+
+        let config = SimulationConfig {
+            rounds: 100,
+            snapshot_frequency: 50,
+            emission_config: Some(emission_config),
+            blocks_per_round: 1,
+            ..Default::default()
+        };
+
+        let result = run_simulation(&mut agents, &config);
+        let stats = result.emission_stats.unwrap();
+
+        // Should have burned some fees
+        assert!(
+            stats.total_fees_burned > 0,
+            "Should have burned fees: {}",
+            stats.total_fees_burned
+        );
+
+        // Net supply change should be approximately target
+        // (within margin because simulation may not reach equilibrium)
+        let net_change = stats.net_supply_change;
+        assert!(net_change >= 0, "Should have net positive emission");
+    }
+
+    #[test]
+    fn test_emission_without_miners() {
+        // Test graceful behavior when no miners exist
+        let mut agents: Vec<Box<dyn Agent>> = vec![
+            Box::new(MerchantAgent::new(AgentId(1))),
+            Box::new(RetailUserAgent::new(AgentId(2)).with_merchants(vec![AgentId(1)])),
+        ];
+
+        agents[0].account_mut().balance = 10_000;
+        agents[1].account_mut().balance = 10_000;
+
+        let emission_config = EmissionConfig::default();
+
+        let config = SimulationConfig {
+            rounds: 20,
+            emission_config: Some(emission_config),
+            blocks_per_round: 1,
+            ..Default::default()
+        };
+
+        // Should not panic
+        let result = run_simulation(&mut agents, &config);
+
+        // Emission controller should exist but no rewards distributed
+        assert!(result.emission_stats.is_some());
+        let stats = result.emission_stats.unwrap();
+
+        // Blocks should still be processed even without miners
+        assert!(
+            stats.total_emitted == 0,
+            "No rewards should be emitted without miners"
+        );
+    }
+
+    #[test]
+    fn test_round_summary_with_emission() {
+        let mut agents: Vec<Box<dyn Agent>> = vec![
+            Box::new(MinerAgent::new(AgentId(1))),
+            Box::new(MerchantAgent::new(AgentId(2))),
+        ];
+
+        agents[0].account_mut().balance = 1_000;
+        agents[1].account_mut().balance = 1_000;
+
+        let emission_config = EmissionConfig {
+            blocks_per_epoch: 100,
+            initial_block_reward: 50,
+            ..Default::default()
+        };
+
+        let config = SimulationConfig {
+            rounds: 5,
+            verbose: true, // Enable round summaries
+            emission_config: Some(emission_config),
+            blocks_per_round: 1,
+            ..Default::default()
+        };
+
+        let result = run_simulation(&mut agents, &config);
+
+        // Should have round summaries
+        assert_eq!(result.round_summaries.len(), 5);
+
+        // Each round should show block reward and emission
+        for summary in &result.round_summaries {
+            assert_eq!(summary.block_reward, 50, "Block reward should be 50");
+            assert_eq!(
+                summary.rewards_emitted, 50,
+                "Should emit 50 per round (1 block)"
+            );
+        }
+    }
+
+    #[test]
+    fn test_multiple_blocks_per_round() {
+        let mut agents: Vec<Box<dyn Agent>> = vec![
+            Box::new(MinerAgent::new(AgentId(1))),
+            Box::new(MerchantAgent::new(AgentId(2))),
+        ];
+
+        agents[0].account_mut().balance = 1_000;
+        agents[1].account_mut().balance = 1_000;
+
+        let emission_config = EmissionConfig {
+            blocks_per_epoch: 100,
+            initial_block_reward: 10,
+            ..Default::default()
+        };
+
+        let config = SimulationConfig {
+            rounds: 10,
+            verbose: true,
+            emission_config: Some(emission_config),
+            blocks_per_round: 5, // 5 blocks per round
+            ..Default::default()
+        };
+
+        let result = run_simulation(&mut agents, &config);
+        let stats = result.emission_stats.unwrap();
+
+        // 10 rounds × 5 blocks/round = 50 blocks × 10 reward = 500 total
+        assert_eq!(stats.total_emitted, 500);
+
+        // Each round should emit 5 × 10 = 50
+        for summary in &result.round_summaries {
+            assert_eq!(summary.rewards_emitted, 50);
+        }
     }
 }

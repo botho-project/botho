@@ -1,6 +1,6 @@
 use digest::{generic_array, Digest};
 use generic_array::typenum::{IsGreaterOrEqual, B1, U32};
-use bt_crypto_digestible::DigestTranscript;
+use bth_crypto_digestible::DigestTranscript;
 
 /// An object which implements the DigestTranscript API over a cryptographic
 /// digest function.

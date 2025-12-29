@@ -9,7 +9,7 @@
 //! Suggested use:
 //! cargo run --release -- --num 1000 >> account_keys.json
 use clap::Parser;
-use bt_util_test_helper::{known_accounts, AccountKey};
+use bth_util_test_helper::{known_accounts, AccountKey};
 
 #[derive(Debug, Parser)]
 struct Config {

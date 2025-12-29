@@ -4,16 +4,16 @@
 
 use alloc::{collections::BTreeMap, string::String, vec::Vec};
 use displaydoc::Display;
-use bt_crypto_digestible::Digestible;
-use bt_crypto_ring_signature::{
+use bth_crypto_digestible::Digestible;
+use bth_crypto_ring_signature::{
     Commitment, CompressedCommitment, Error as RingSignatureError, KeyImage, RingMLSAG,
 };
-use bt_transaction_core::{
+use bth_transaction_core::{
     ring_ct::{GeneratorCache, PresignedInputRing, SignedInputRing},
     tx::TxIn,
     Amount, AmountError, RevealedTxOutError, TokenId, TxOutConversionError, UnmaskedAmount,
 };
-use bt_util_u64_ratio::U64Ratio;
+use bth_util_u64_ratio::U64Ratio;
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;

@@ -28,9 +28,9 @@ use libp2p::{
     swarm::SwarmEvent,
     tcp, yamux, Multiaddr, PeerId, Swarm, SwarmBuilder,
 };
-use bt_common::{NodeID, ResponderId};
-use bt_consensus_scp_types::QuorumSet;
-use bt_crypto_keys::{Ed25519Pair, Signer};
+use bth_common::{NodeID, ResponderId};
+use bth_consensus_scp_types::QuorumSet;
+use bth_crypto_keys::{Ed25519Pair, Signer};
 use std::{
     collections::HashSet,
     sync::Arc,
@@ -543,7 +543,7 @@ async fn handle_behaviour_event(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bt_crypto_keys::Ed25519Public;
+    use bth_crypto_keys::Ed25519Public;
     use std::str::FromStr;
 
     fn make_test_service() -> GossipService {

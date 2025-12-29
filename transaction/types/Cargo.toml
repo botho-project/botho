@@ -1,5 +1,5 @@
 [package]
-name = "bt-transaction-types"
+name = "bth-transaction-types"
 version = "7.1.0"
 authors = ["Botho"]
 edition = "2021"
@@ -8,9 +8,9 @@ readme = "README.md"
 rust-version = { workspace = true }
 
 [features]
-serde = ["dep:serde", "bt-crypto-keys/serde", "bt-crypto-ring-signature/serde"]
-prost = ["dep:prost", "bt-crypto-keys/prost", "bt-crypto-ring-signature/prost"]
-alloc = ["serde?/alloc", "bt-crypto-digestible/alloc"]
+serde = ["dep:serde", "bth-crypto-keys/serde", "bth-crypto-ring-signature/serde"]
+prost = ["dep:prost", "bth-crypto-keys/prost", "bth-crypto-ring-signature/prost"]
+alloc = ["serde?/alloc", "bth-crypto-digestible/alloc"]
 
 default = ["alloc", "serde", "prost"]
 
@@ -26,11 +26,11 @@ subtle = { workspace = true, features = ["i128"] }
 zeroize = { workspace = true }
 
 # Botho dependencies
-bt-crypto-digestible = { workspace = true, features = ["dalek", "derive"] }
-bt-crypto-hashes = { workspace = true }
-bt-crypto-keys = { workspace = true }
-bt-crypto-ring-signature = { workspace = true }
+bth-crypto-digestible = { workspace = true, features = ["dalek", "derive"] }
+bth-crypto-hashes = { workspace = true }
+bth-crypto-keys = { workspace = true }
+bth-crypto-ring-signature = { workspace = true }
 
 [dev-dependencies]
-bt-crypto-ring-signature = { workspace = true, features = ["proptest"] }
+bth-crypto-ring-signature = { workspace = true, features = ["proptest"] }
 proptest = { workspace = true, features = ["default-code-coverage"] }

@@ -7,7 +7,7 @@
 //! they do not get mixed together. The code here is based on OpMetrics and
 //! allows us to do so.
 
-use bt_util_metrics::{
+use bth_util_metrics::{
     register, Collector, Desc, Histogram, HistogramOpts, HistogramVec, IntCounter, IntCounterVec,
     IntGauge, IntGaugeVec, MetricFamily, Opts,
 };

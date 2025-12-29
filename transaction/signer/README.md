@@ -1,4 +1,4 @@
-# bt-transaction-signer
+# bth-transaction-signer
 
 This crate defines the API for communication with external transaction-signer implementations such as the offline signer (see `src/main.rs`) or hardware wallets, and provides helpers for the implementation of external transaction-signers.
 

@@ -1,28 +1,28 @@
 [package]
-name = "bt-api"
+name = "bth-api"
 version = "7.1.0"
 authors = ["Botho"]
 build = "build.rs"
 edition = "2021"
-links = "bt-api"
+links = "bth-api"
 license = "Apache-2.0"
 readme = "README.md"
 rust-version = { workspace = true }
 
 [dependencies]
-bt-account-keys = { workspace = true }
-bt-blockchain-types = { workspace = true }
-bt-common = { workspace = true }
-bt-crypto-keys = { workspace = true }
-bt-crypto-multisig = { workspace = true }
-bt-crypto-ring-signature-signer = { workspace = true }
-bt-transaction-builder = { workspace = true }
-bt-transaction-core = { workspace = true }
-bt-transaction-extra = { workspace = true }
-bt-transaction-summary = { workspace = true }
-bt-util-repr-bytes = { workspace = true }
-bt-util-serial = { workspace = true }
-bt-util-uri = { workspace = true }
+bth-account-keys = { workspace = true }
+bth-blockchain-types = { workspace = true }
+bth-common = { workspace = true }
+bth-crypto-keys = { workspace = true }
+bth-crypto-multisig = { workspace = true }
+bth-crypto-ring-signature-signer = { workspace = true }
+bth-transaction-builder = { workspace = true }
+bth-transaction-core = { workspace = true }
+bth-transaction-extra = { workspace = true }
+bth-transaction-summary = { workspace = true }
+bth-util-repr-bytes = { workspace = true }
+bth-util-serial = { workspace = true }
+bth-util-uri = { workspace = true }
 
 bs58 = { workspace = true }
 crc = { workspace = true }
@@ -32,23 +32,23 @@ curve25519-dalek = { workspace = true }
 prost = { workspace = true }
 
 [build-dependencies]
-bt-util-build-grpc-tonic = { workspace = true }
-bt-util-build-script = { workspace = true }
+bth-util-build-grpc-tonic = { workspace = true }
+bth-util-build-script = { workspace = true }
 
 cargo-emit = { workspace = true }
 
 [dev-dependencies]
-bt-blockchain-test-utils = { workspace = true }
-bt-crypto-ring-signature-signer = { workspace = true }
-bt-crypto-x509-test-vectors = { workspace = true }
-bt-test-vectors-b58-encodings = { workspace = true }
-bt-transaction-builder = { workspace = true, features = ["test-only"] }
-bt-util-from-random = { workspace = true }
-bt-util-serial = { workspace = true, features = ["test_utils"] }
-bt-util-test-helper = { workspace = true }
-bt-util-test-vector = { workspace = true }
-bt-util-test-with-data = { workspace = true }
-bt-util-zip-exact = { workspace = true }
+bth-blockchain-test-utils = { workspace = true }
+bth-crypto-ring-signature-signer = { workspace = true }
+# bth-crypto-x509-test-vectors = { workspace = true }  # Removed: requires openssl
+bth-test-vectors-b58-encodings = { workspace = true }
+bth-transaction-builder = { workspace = true, features = ["test-only"] }
+bth-util-from-random = { workspace = true }
+bth-util-serial = { workspace = true, features = ["test_utils"] }
+bth-util-test-helper = { workspace = true }
+bth-util-test-vector = { workspace = true }
+bth-util-test-with-data = { workspace = true }
+bth-util-zip-exact = { workspace = true }
 
 assert_matches = { workspace = true }
 generic-array = { workspace = true }

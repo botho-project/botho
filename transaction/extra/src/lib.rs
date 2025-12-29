@@ -1,6 +1,6 @@
 // Copyright (c) 2018-2023 The Botho Foundation
 
-//! Ancillary structures and schema on top of the core Mobilecoin transaction
+//! Ancillary structures and schema on top of the core Botho transaction
 //! logic.
 //!
 //! These structures may be important or even essential to some client
@@ -37,4 +37,4 @@ pub use tx_out_gift_code::TxOutGiftCode;
 pub use unsigned_tx::UnsignedTx;
 
 // Re-export this to help the exported macros work
-pub use bt_transaction_core::MemoPayload;
+pub use bth_transaction_core::MemoPayload;

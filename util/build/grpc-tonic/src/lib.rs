@@ -5,7 +5,7 @@
 //! This crate provides utilities for compiling Protocol Buffer definitions
 //! into Rust code using tonic-build, generating both client and server stubs.
 
-use bt_util_build_script::Environment;
+use bth_util_build_script::Environment;
 use std::{ffi::OsStr, fs, path::PathBuf};
 
 /// Compile protobuf files into Rust code using tonic-build, and generate a
@@ -22,7 +22,7 @@ pub fn compile_protos_and_generate_mod_rs(proto_dirs: &[&str], proto_files: &[&s
 
     // If the proto files change, we need to re-run.
     for dir in proto_dirs.iter() {
-        bt_util_build_script::rerun_if_path_changed(&PathBuf::from(dir));
+        bth_util_build_script::rerun_if_path_changed(&PathBuf::from(dir));
     }
 
     // Delete old code and create output directory.
@@ -59,7 +59,7 @@ where
 
     // If the proto files change, we need to re-run.
     for dir in proto_dirs.iter() {
-        bt_util_build_script::rerun_if_path_changed(&PathBuf::from(dir));
+        bth_util_build_script::rerun_if_path_changed(&PathBuf::from(dir));
     }
 
     // Delete old code and create output directory.

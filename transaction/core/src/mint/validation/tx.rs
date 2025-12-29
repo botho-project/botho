@@ -15,8 +15,8 @@ use crate::{
     },
     BlockVersion, TokenId,
 };
-use bt_crypto_keys::Ed25519Public;
-use bt_crypto_multisig::SignerSet;
+use bth_crypto_keys::Ed25519Public;
+use bth_crypto_multisig::SignerSet;
 
 /// Determines if the transaction is valid, with respect to the provided
 /// context.
@@ -43,8 +43,6 @@ pub fn validate_mint_tx(
     validate_tombstone(current_block_index, tx.prefix.tombstone_block)?;
 
     validate_against_mint_config(tx, mint_config)?;
-
-    validate_e_fog_hint(block_version, tx)?;
 
     Ok(())
 }
@@ -73,16 +71,6 @@ pub fn validate_against_mint_config(tx: &MintTx, mint_config: &MintConfig) -> Re
     Ok(())
 }
 
-/// The transaction must not use encrypted fog hint before minting to fog is
-/// allowed
-fn validate_e_fog_hint(block_version: BlockVersion, tx: &MintTx) -> Result<(), Error> {
-    if tx.prefix.e_fog_hint.is_some() && !block_version.minting_to_fog_addresses_is_supported() {
-        return Err(Error::MintingToFogNotSupported);
-    }
-
-    Ok(())
-}
-
 /// The transaction must be properly signed by the signer set.
 ///
 /// # Arguments
@@ -100,15 +88,12 @@ fn validate_signature(tx: &MintTx, signer_set: &SignerSet<Ed25519Public>) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        encrypted_fog_hint::EncryptedFogHint,
-        mint::{constants::NONCE_LENGTH, MintTxPrefix},
-    };
+    use crate::mint::{constants::NONCE_LENGTH, MintTxPrefix};
     use alloc::vec;
-    use bt_crypto_keys::{Ed25519Pair, RistrettoPublic, Signer};
-    use bt_crypto_multisig::MultiSig;
-    use bt_util_from_random::FromRandom;
-    use bt_util_test_helper::get_seeded_rng;
+    use bth_crypto_keys::{Ed25519Pair, RistrettoPublic, Signer};
+    use bth_crypto_multisig::MultiSig;
+    use bth_util_from_random::FromRandom;
+    use bth_util_test_helper::get_seeded_rng;
 
     #[test]
     fn validate_against_mint_config_accepts_valid_config() {
@@ -138,7 +123,6 @@ mod tests {
             spend_public_key: RistrettoPublic::from_random(&mut rng),
             nonce: vec![1u8; NONCE_LENGTH],
             tombstone_block: 10,
-            e_fog_hint: None,
         };
         let message = prefix.hash();
         let signature = MultiSig::new(vec![
@@ -178,7 +162,6 @@ mod tests {
             spend_public_key: RistrettoPublic::from_random(&mut rng),
             nonce: vec![1u8; NONCE_LENGTH],
             tombstone_block: 10,
-            e_fog_hint: None,
         };
         let message = prefix.hash();
         let signature = MultiSig::new(vec![
@@ -221,7 +204,6 @@ mod tests {
             spend_public_key: RistrettoPublic::from_random(&mut rng),
             nonce: vec![1u8; NONCE_LENGTH],
             tombstone_block: 10,
-            e_fog_hint: None,
         };
         let message = prefix.hash();
         let signature = MultiSig::new(vec![
@@ -264,7 +246,6 @@ mod tests {
             spend_public_key: RistrettoPublic::from_random(&mut rng),
             nonce: vec![1u8; NONCE_LENGTH],
             tombstone_block: 10,
-            e_fog_hint: None,
         };
         let message = prefix.hash();
         let signature = MultiSig::new(vec![
@@ -291,7 +272,6 @@ mod tests {
             spend_public_key: RistrettoPublic::from_random(&mut rng),
             nonce: vec![1u8; NONCE_LENGTH],
             tombstone_block: 10,
-            e_fog_hint: None,
         };
         let message = prefix.hash();
         let signature = MultiSig::new(vec![signer_1.try_sign(message.as_ref()).unwrap()]);
@@ -316,7 +296,6 @@ mod tests {
             spend_public_key: RistrettoPublic::from_random(&mut rng),
             nonce: vec![1u8; NONCE_LENGTH],
             tombstone_block: 10,
-            e_fog_hint: None,
         };
         let message = prefix.hash();
         let signature = MultiSig::new(vec![signer_1.try_sign(message.as_ref()).unwrap()]);
@@ -343,7 +322,6 @@ mod tests {
             spend_public_key: RistrettoPublic::from_random(&mut rng),
             nonce: vec![1u8; NONCE_LENGTH],
             tombstone_block: 10,
-            e_fog_hint: None,
         };
         let message = prefix.hash();
         let signature = MultiSig::new(vec![signer_1.try_sign(message.as_ref()).unwrap()]);
@@ -389,70 +367,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn validate_e_fog_hint_works_block_version_2() {
-        let mut rng = get_seeded_rng();
-        let token_id = 123;
-        let signer_1 = Ed25519Pair::from_random(&mut rng);
-
-        let mut prefix = MintTxPrefix {
-            token_id,
-            amount: 10,
-            view_public_key: RistrettoPublic::from_random(&mut rng),
-            spend_public_key: RistrettoPublic::from_random(&mut rng),
-            nonce: vec![1u8; NONCE_LENGTH],
-            tombstone_block: 10,
-            e_fog_hint: None,
-        };
-        let message = prefix.hash();
-        let signature = MultiSig::new(vec![signer_1.try_sign(message.as_ref()).unwrap()]);
-        let tx = MintTx {
-            prefix: prefix.clone(),
-            signature,
-        };
-
-        assert_eq!(validate_e_fog_hint(BlockVersion::TWO, &tx), Ok(()));
-
-        prefix.e_fog_hint = Some(EncryptedFogHint::default());
-        let message = prefix.hash();
-        let signature = MultiSig::new(vec![signer_1.try_sign(message.as_ref()).unwrap()]);
-        let tx = MintTx { prefix, signature };
-
-        assert_eq!(
-            validate_e_fog_hint(BlockVersion::TWO, &tx),
-            Err(Error::MintingToFogNotSupported)
-        );
-    }
-
-    #[test]
-    fn validate_e_fog_hint_works_block_version_3() {
-        let mut rng = get_seeded_rng();
-        let token_id = 123;
-        let signer_1 = Ed25519Pair::from_random(&mut rng);
-
-        let mut prefix = MintTxPrefix {
-            token_id,
-            amount: 10,
-            view_public_key: RistrettoPublic::from_random(&mut rng),
-            spend_public_key: RistrettoPublic::from_random(&mut rng),
-            nonce: vec![1u8; NONCE_LENGTH],
-            tombstone_block: 10,
-            e_fog_hint: None,
-        };
-        let message = prefix.hash();
-        let signature = MultiSig::new(vec![signer_1.try_sign(message.as_ref()).unwrap()]);
-        let tx = MintTx {
-            prefix: prefix.clone(),
-            signature,
-        };
-
-        assert_eq!(validate_e_fog_hint(BlockVersion::THREE, &tx), Ok(()));
-
-        prefix.e_fog_hint = Some(EncryptedFogHint::default());
-        let message = prefix.hash();
-        let signature = MultiSig::new(vec![signer_1.try_sign(message.as_ref()).unwrap()]);
-        let tx = MintTx { prefix, signature };
-
-        assert_eq!(validate_e_fog_hint(BlockVersion::THREE, &tx), Ok(()));
-    }
 }

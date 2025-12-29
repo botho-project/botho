@@ -1,5 +1,5 @@
 [package]
-name = "bt-account-keys"
+name = "bth-account-keys"
 version = "7.1.0"
 authors = ["Botho"]
 edition = "2021"
@@ -8,18 +8,18 @@ readme = "README.md"
 rust-version = { workspace = true }
 
 [features]
-std = ["bt-util-repr-bytes/alloc"]
-prost = ["dep:prost", "bt-util-repr-bytes/prost", "bt-crypto-keys/prost"]
-serde = ["dep:serde", "bt-crypto-keys/serde", "curve25519-dalek/serde"]
-pq = ["dep:bt-crypto-pq", "dep:bs58", "dep:sha2", "std"]  # Post-quantum keys require std
+std = ["bth-util-repr-bytes/alloc"]
+prost = ["dep:prost", "bth-util-repr-bytes/prost", "bth-crypto-keys/prost"]
+serde = ["dep:serde", "bth-crypto-keys/serde", "curve25519-dalek/serde"]
+pq = ["dep:bth-crypto-pq", "dep:bs58", "dep:sha2", "std"]  # Post-quantum keys require std
 default = [
     "std",
     "prost",
     "serde",
-    "bt-util-serial",
-    "bt-crypto-digestible/default",
-    "bt-crypto-hashes/default",
-    "bt-crypto-keys/default",
+    "bth-util-serial",
+    "bth-crypto-digestible/default",
+    "bth-crypto-hashes/default",
+    "bth-crypto-keys/default",
 ]
 
 [dependencies]
@@ -38,23 +38,23 @@ subtle = { workspace = true }
 zeroize = { workspace = true }
 
 # Botho dependencies
-bt-account-keys-types = { workspace = true }
-bt-core = { workspace = true }
-bt-crypto-digestible = { workspace = true }
-bt-crypto-hashes = { workspace = true }
-bt-crypto-keys = { workspace = true }
-bt-crypto-pq = { workspace = true, optional = true }
-bt-util-from-random = { workspace = true }
-bt-util-repr-bytes = { workspace = true }
-bt-util-serial = { workspace = true, optional = true }
+bth-account-keys-types = { workspace = true }
+bth-core = { workspace = true }
+bth-crypto-digestible = { workspace = true }
+bth-crypto-hashes = { workspace = true }
+bth-crypto-keys = { workspace = true }
+bth-crypto-pq = { workspace = true, optional = true }
+bth-util-from-random = { workspace = true }
+bth-util-repr-bytes = { workspace = true }
+bth-util-serial = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
 
-bt-test-vectors-account-keys = { workspace = true }
-bt-util-test-helper = { workspace = true }
-bt-util-test-vector = { workspace = true }
-bt-util-test-with-data = { workspace = true }
+bth-test-vectors-account-keys = { workspace = true }
+bth-util-test-helper = { workspace = true }
+bth-util-test-vector = { workspace = true }
+bth-util-test-with-data = { workspace = true }
 rand = { workspace = true }
 rand_hc = { workspace = true }
 

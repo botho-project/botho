@@ -11,10 +11,10 @@ use clap::Parser;
 use log::{debug, info};
 use serde::{Deserialize, Serialize};
 
-use bt_core::{account::Account, slip10::Slip10KeyGenerator};
-use bt_crypto_ring_signature_signer::LocalRingSigner;
-use bt_transaction_core::AccountKey;
-use bt_transaction_signer::{read_input, write_output, Operations};
+use bth_core::{account::Account, slip10::Slip10KeyGenerator};
+use bth_crypto_ring_signature_signer::LocalRingSigner;
+use bth_transaction_core::AccountKey;
+use bth_transaction_signer::{read_input, write_output, Operations};
 
 #[derive(Clone, PartialEq, Debug, Parser)]
 struct Args {

@@ -118,7 +118,7 @@ pub async fn run(wallet_path: &Path, address: &str, amount: f64, skip_confirm: b
 }
 
 /// Parse a recipient address from string
-fn parse_address(address: &str) -> Result<bt_account_keys::PublicAddress> {
+fn parse_address(address: &str) -> Result<bth_account_keys::PublicAddress> {
     // Expected format: cad:<view_key_hex>:<spend_key_hex>
     // or: view:<hex>\nspend:<hex>
 
@@ -161,12 +161,12 @@ fn parse_address(address: &str) -> Result<bt_account_keys::PublicAddress> {
 
         match (view_bytes, spend_bytes) {
             (Some(v), Some(s)) if v.len() == 32 && s.len() == 32 => {
-                let view_key = bt_crypto_keys::RistrettoPublic::try_from(&v[..])
+                let view_key = bth_crypto_keys::RistrettoPublic::try_from(&v[..])
                     .map_err(|_| anyhow!("Invalid view public key"))?;
-                let spend_key = bt_crypto_keys::RistrettoPublic::try_from(&s[..])
+                let spend_key = bth_crypto_keys::RistrettoPublic::try_from(&s[..])
                     .map_err(|_| anyhow!("Invalid spend public key"))?;
 
-                return Ok(bt_account_keys::PublicAddress::new(&spend_key, &view_key));
+                return Ok(bth_account_keys::PublicAddress::new(&spend_key, &view_key));
             }
             _ => return Err(anyhow!("Invalid address key lengths")),
         }

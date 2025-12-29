@@ -5,8 +5,8 @@ use crate::{
 };
 use futures::executor::block_on;
 use grpcio::{Environment, Service, ShutdownFuture};
-use bt_common::logger::{log, Logger};
-use bt_util_uri::{AdminUri, ConnectionUri};
+use bth_common::logger::{log, Logger};
+use bth_util_uri::{AdminUri, ConnectionUri};
 use std::sync::Arc;
 
 /// The admin server is a grpc server that serves the admin endpoint

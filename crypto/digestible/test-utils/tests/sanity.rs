@@ -2,8 +2,8 @@
 //! expect. This is basically a test that the default implementations of
 //! `append_primitive` etc. in the DigestTranscript crate match the spec, and
 //! that nothing else went wrong wiring all this stuff up.
-use bt_crypto_digestible::DigestTranscript;
-use bt_crypto_digestible_test_utils::{
+use bth_crypto_digestible::DigestTranscript;
+use bth_crypto_digestible_test_utils::{
     ASTAggregate, ASTNode, ASTNone, ASTPrimitive, ASTSequence, ASTVariant, MockMerlin,
 };
 

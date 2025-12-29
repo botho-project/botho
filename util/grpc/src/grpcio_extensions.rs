@@ -8,8 +8,8 @@ use grpcio::{
     CertificateRequestType, Channel, ChannelBuilder, ChannelCredentialsBuilder, Environment,
     Result, Server, ServerBuilder, ServerCredentials,
 };
-use bt_common::logger::{log, Logger};
-use bt_util_uri::ConnectionUri;
+use bth_common::logger::{log, Logger};
+use bth_util_uri::ConnectionUri;
 use std::{sync::Arc, time::Duration};
 
 /// A trait to ease grpcio channel construction from URIs.

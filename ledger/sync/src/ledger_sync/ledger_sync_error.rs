@@ -4,8 +4,8 @@
 
 use crate::transactions_fetcher_trait::TransactionFetcherError;
 use displaydoc::Display;
-use bt_connection::Error as ConnectionError;
-use bt_ledger_db::Error as LedgerDbError;
+use bth_connection::Error as ConnectionError;
+use bth_ledger_db::Error as LedgerDbError;
 use retry::Error as RetryError;
 
 #[derive(Debug, Display)]
@@ -30,7 +30,7 @@ pub enum LedgerSyncError {
     TransactionFetcher(Box<dyn TransactionFetcherError>),
 
     /// Api conversion error: {0:?}
-    ApiConversionError(bt_api::ConversionError),
+    ApiConversionError(bth_api::ConversionError),
 
     /// Invalid block ID
     InvalidBlockId,

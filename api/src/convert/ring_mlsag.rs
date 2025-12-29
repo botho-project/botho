@@ -3,7 +3,7 @@
 //! Convert to/from external::RingMLSAG
 
 use crate::{external, ConversionError};
-use bt_transaction_core::ring_signature::{CurveScalar, RingMLSAG};
+use bth_transaction_core::ring_signature::{CurveScalar, RingMLSAG};
 
 impl From<&RingMLSAG> for external::RingMlsag {
     fn from(source: &RingMLSAG) -> Self {

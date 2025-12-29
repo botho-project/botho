@@ -2,9 +2,9 @@
 
 use alloc::{string::String, vec::Vec};
 use displaydoc::Display;
-use bt_crypto_keys::{KeyError, RistrettoPrivate};
-use bt_crypto_ring_signature::{Error as RingSignatureError, ReducedTxOut, RingMLSAG, Scalar};
-use bt_transaction_types::Amount;
+use bth_crypto_keys::{KeyError, RistrettoPrivate};
+use bth_crypto_ring_signature::{Error as RingSignatureError, ReducedTxOut, RingMLSAG, Scalar};
+use bth_transaction_types::Amount;
 use rand_core::CryptoRngCore;
 use zeroize::Zeroize;
 

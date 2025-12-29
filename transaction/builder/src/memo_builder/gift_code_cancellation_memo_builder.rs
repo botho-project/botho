@@ -4,9 +4,9 @@
 //! specified in MCIP #32
 
 use super::{MemoBuilder, ReservedSubaddresses};
-use bt_account_keys::PublicAddress;
-use bt_transaction_core::{tokens::Mob, Amount, MemoContext, MemoPayload, NewMemoError, Token};
-use bt_transaction_extra::GiftCodeCancellationMemo;
+use bth_account_keys::PublicAddress;
+use bth_transaction_core::{tokens::Mob, Amount, MemoContext, MemoPayload, NewMemoError, Token};
+use bth_transaction_extra::GiftCodeCancellationMemo;
 
 /// There are three possible gift code memo types specified in MCIP #32
 /// | Memo type bytes | Name                        |

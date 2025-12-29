@@ -1,8 +1,8 @@
 // Copyright (c) 2018-2022 The Botho Foundation
 
 use crate::{BlockContents, BlockContentsHash, BlockID, BlockVersion};
-use bt_crypto_digestible::{DigestTranscript, Digestible, MerlinTranscript};
-use bt_transaction_core::tx::{TxOut, TxOutMembershipElement};
+use bth_crypto_digestible::{DigestTranscript, Digestible, MerlinTranscript};
+use bth_transaction_core::tx::{TxOut, TxOutMembershipElement};
 use prost::Message;
 use serde::{Deserialize, Serialize};
 
@@ -202,14 +202,14 @@ pub fn compute_block_id(
 mod block_tests {
     use super::*;
     use alloc::{vec, vec::Vec};
-    use bt_account_keys::AccountKey;
-    use bt_crypto_keys::RistrettoPrivate;
-    use bt_transaction_core::{
+    use bth_account_keys::AccountKey;
+    use bth_crypto_keys::RistrettoPrivate;
+    use bth_transaction_core::{
         encrypted_fog_hint::EncryptedFogHint, membership_proofs::Range, ring_signature::KeyImage,
         tokens::Mob, tx::TxOutMembershipHash, Amount, Token,
     };
-    use bt_util_from_random::FromRandom;
-    use bt_util_test_helper::{get_seeded_rng, CryptoRng, RngCore};
+    use bth_util_from_random::FromRandom;
+    use bth_util_test_helper::{get_seeded_rng, CryptoRng, RngCore};
 
     // This is block version 1 to avoid messing with test vectors
     const BLOCK_VERSION: BlockVersion = BlockVersion::ONE;

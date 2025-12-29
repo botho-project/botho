@@ -4,7 +4,7 @@
 
 use displaydoc::Display;
 use hex::FromHexError;
-use bt_crypto_keys::{KeyError, SignatureError};
+use bth_crypto_keys::{KeyError, SignatureError};
 use pem::PemError;
 use serde_json::Error as JsonError;
 use std::{io::Error as IoError, path::PathBuf, string::FromUtf8Error};

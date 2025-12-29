@@ -11,10 +11,10 @@ use log::debug;
 use rand_core::{CryptoRng, OsRng, RngCore};
 use serde::{de::DeserializeOwned, Serialize};
 
-use bt_core::keys::TxOutPublic;
-use bt_crypto_keys::RistrettoPublic;
-use bt_crypto_ring_signature_signer::RingSigner;
-use bt_transaction_core::{
+use bth_core::keys::TxOutPublic;
+use bth_crypto_keys::RistrettoPublic;
+use bth_crypto_ring_signature_signer::RingSigner;
+use bth_transaction_core::{
     ring_ct::{
         Error as RingCtError, ExtendedMessageDigest, InputRing, SignatureRctBulletproofs,
         SigningData,
@@ -22,7 +22,7 @@ use bt_transaction_core::{
     tx::Tx,
     Amount, TokenId, TxSummary, UnmaskedAmount,
 };
-use bt_transaction_summary::TxSummaryUnblindingData;
+use bth_transaction_summary::TxSummaryUnblindingData;
 
 pub mod types;
 use types::*;

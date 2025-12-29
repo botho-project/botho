@@ -468,7 +468,6 @@ macro_rules! derive_debug_and_display_hex_from_as_ref {
 #[cfg(test)]
 mod tests {
     extern crate alloc;
-    extern crate serde_cbor;
 
     use super::*;
     use alloc::{format, vec::Vec};
@@ -535,18 +534,18 @@ mod tests {
     derive_serde_from_repr_bytes!(Numbers);
 
     #[test]
-    fn round_trip_twenty_bytes_serde_cbor() {
+    fn round_trip_twenty_bytes_postcard() {
         let value = TwentyBytes { bytes: [7u8; 20] };
-        let serialized = serde_cbor::to_vec(&value).unwrap();
-        let value2 = serde_cbor::from_slice(&serialized).unwrap();
+        let serialized = postcard::to_allocvec(&value).unwrap();
+        let value2 = postcard::from_bytes(&serialized).unwrap();
         assert_eq!(value, value2);
     }
 
     #[test]
-    fn round_trip_numbers_serde_cbor() {
+    fn round_trip_numbers_postcard() {
         let value = Numbers { a: 3, b: 4 };
-        let serialized = serde_cbor::to_vec(&value).unwrap();
-        let value2 = serde_cbor::from_slice(&serialized).unwrap();
+        let serialized = postcard::to_allocvec(&value).unwrap();
+        let value2 = postcard::from_bytes(&serialized).unwrap();
         assert_eq!(value, value2);
     }
 

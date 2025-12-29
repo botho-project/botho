@@ -2,8 +2,8 @@
 
 use super::{OneTimeKeyDeriveData, RingSigner, SignableInputRing};
 use crate::traits::Error;
-use bt_crypto_keys::RistrettoPublic;
-use bt_crypto_ring_signature::{generators, RingMLSAG, Scalar};
+use bth_crypto_keys::RistrettoPublic;
+use bth_crypto_ring_signature::{generators, RingMLSAG, Scalar};
 use rand_core::CryptoRngCore;
 
 /// An implementation of RingSigner that holds no keys, and doesn't do any

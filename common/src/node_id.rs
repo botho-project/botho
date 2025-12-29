@@ -9,8 +9,8 @@ use core::{
     hash::{Hash, Hasher},
 };
 use displaydoc::Display;
-use bt_crypto_digestible::Digestible;
-use bt_crypto_keys::{Ed25519Public, KeyError};
+use bth_crypto_digestible::Digestible;
+use bth_crypto_keys::{Ed25519Public, KeyError};
 use prost::Message;
 use serde::{Deserialize, Serialize};
 

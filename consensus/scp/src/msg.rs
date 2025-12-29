@@ -2,8 +2,8 @@
 
 //! Message types for the phases of SCP.
 use crate::{ballot::Ballot, GenericNodeId, QuorumSet, SlotIndex, Topic::*, Value};
-use bt_common::{HashSet, HasherBuilder, NodeID};
-use bt_crypto_digestible::Digestible;
+use bth_common::{HashSet, HasherBuilder, NodeID};
+use bth_crypto_digestible::Digestible;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
     cmp,
@@ -1008,9 +1008,9 @@ mod msg_tests {
     // serialized deterministically.
     fn nominatepayload_deterministic_serialize() {
         let values = "kantzzcemc xzbvuwkjae wllqmutprx hkhdtpehmo myfcxwjtim rihkjzfayw ykifmibexv fbyzrjpjte ylbycdyprn cflmqswwrf".split(' ').map(|s| s.to_string()).collect::<Vec<String>>();
-        let mut rng = bt_util_test_helper::get_seeded_rng();
+        let mut rng = bth_util_test_helper::get_seeded_rng();
 
-        let reference = bt_util_serial::serialize(&NominatePayload {
+        let reference = bth_util_serial::serialize(&NominatePayload {
             X: BTreeSet::from_iter(values.clone()),
             Y: BTreeSet::from_iter(values.clone()),
         })
@@ -1019,7 +1019,7 @@ mod msg_tests {
         for _i in 0..100 {
             let mut test_values = values.clone();
             test_values.shuffle(&mut rng);
-            let serialized = bt_util_serial::serialize(&NominatePayload {
+            let serialized = bth_util_serial::serialize(&NominatePayload {
                 X: BTreeSet::from_iter(test_values.clone()),
                 Y: BTreeSet::from_iter(test_values.clone()),
             })
@@ -1036,9 +1036,9 @@ mod msg_tests {
             Y: BTreeSet::from_iter([10, 20, 30]),
         };
 
-        let serialized_payload = bt_util_serial::serialize(&payload).unwrap();
+        let serialized_payload = bth_util_serial::serialize(&payload).unwrap();
         let payload2: NominatePayload<u32> =
-            bt_util_serial::deserialize(&serialized_payload).unwrap();
+            bth_util_serial::deserialize(&serialized_payload).unwrap();
 
         assert_eq!(payload, payload2);
     }

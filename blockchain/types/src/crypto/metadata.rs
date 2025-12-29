@@ -3,8 +3,8 @@
 //! Cryptographic helpers for signing and verifying [BlockMetadataContents].
 
 use crate::BlockMetadataContents;
-use bt_crypto_digestible_signature::{DigestibleSigner, DigestibleVerifier};
-use bt_crypto_keys::{
+use bth_crypto_digestible_signature::{DigestibleSigner, DigestibleVerifier};
+use bth_crypto_keys::{
     Ed25519Pair, Ed25519Public, Ed25519Signature, SignatureEncoding, SignatureError,
 };
 

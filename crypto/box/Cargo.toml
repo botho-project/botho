@@ -1,5 +1,5 @@
 [package]
-name = "bt-crypto-box"
+name = "bth-crypto-box"
 version = "7.1.0"
 authors = ["Botho"]
 edition = "2021"
@@ -8,8 +8,8 @@ readme = "README.md"
 rust-version = { workspace = true }
 
 [dependencies]
-bt-crypto-hashes = { workspace = true }
-bt-crypto-keys = { workspace = true }
+bth-crypto-hashes = { workspace = true }
+bth-crypto-keys = { workspace = true }
 
 aead = { workspace = true, features = ["alloc"] }
 digest = { workspace = true }
@@ -19,5 +19,5 @@ mc-oblivious-aes-gcm = { workspace = true, features = ["aes", "alloc", "zeroize"
 rand_core = { workspace = true }
 
 [dev-dependencies]
-bt-util-from-random = { workspace = true }
-bt-util-test-helper = { workspace = true }
+bth-util-from-random = { workspace = true }
+bth-util-test-helper = { workspace = true }

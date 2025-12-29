@@ -13,8 +13,8 @@ pub mod keygen;
 
 use crate::error::Error;
 use bip39::Mnemonic;
-use bt_account_keys::{AccountKey, PublicAddress, RootIdentity};
-use bt_api::printable::{printable_wrapper, PrintableWrapper};
+use bth_account_keys::{AccountKey, PublicAddress, RootIdentity};
+use bth_api::printable::{printable_wrapper, PrintableWrapper};
 use std::{
     fs::File,
     io::{Read, Write},
@@ -26,16 +26,13 @@ pub fn write_keyfile<P: AsRef<Path>>(
     path: P,
     mnemonic: &Mnemonic,
     account_index: u32,
-    fog_report_url: Option<&str>,
-    fog_report_id: &str,
-    fog_authority_spki: Option<&[u8]>,
 ) -> Result<(), Error> {
     let json = UncheckedMnemonicAccount {
         mnemonic: Some(mnemonic.clone().into_phrase()),
         account_index: Some(account_index),
-        fog_report_url: fog_report_url.map(ToOwned::to_owned),
-        fog_report_id: Some(fog_report_id.to_owned()),
-        fog_authority_spki: fog_authority_spki.map(ToOwned::to_owned),
+        fog_report_url: None,        // Fog support removed
+        fog_report_id: None,         // Fog support removed
+        fog_authority_spki: None,    // Fog support removed
     };
     Ok(serde_json::to_writer(File::create(path)?, &json)?)
 }
@@ -86,7 +83,7 @@ pub fn read_keyfile_data<R: Read>(buffer: R) -> Result<AccountKey, Error> {
 
 /// Write user public address to disk
 pub fn write_pubfile<P: AsRef<Path>>(path: P, addr: &PublicAddress) -> Result<(), Error> {
-    File::create(path)?.write_all(&bt_util_serial::encode(addr))?;
+    File::create(path)?.write_all(&bth_util_serial::encode(addr))?;
     Ok(())
 }
 /// Read user public address from disk
@@ -101,7 +98,7 @@ pub fn read_pubfile_data<R: Read>(buffer: &mut R) -> Result<PublicAddress, Error
         buffer.read_to_end(&mut data)?;
         data
     };
-    let result: PublicAddress = bt_util_serial::decode(&data)?;
+    let result: PublicAddress = bth_util_serial::decode(&data)?;
     Ok(result)
 }
 
@@ -153,94 +150,33 @@ mod testing {
 
     use super::*;
     use bip39::{Language, MnemonicType};
-    use bt_core::slip10::Slip10KeyGenerator;
+    use bth_core::slip10::Slip10KeyGenerator;
 
-    /// Test that round-tripping through a keyfile without fog gets the same
+    /// Test that round-tripping through a keyfile gets the same
     /// result as creating the key directly.
     #[test]
-    fn keyfile_roundtrip_no_fog() {
+    fn keyfile_roundtrip() {
         let dir = tempfile::tempdir().expect("Could not create temp dir");
         let mnemonic = Mnemonic::new(MnemonicType::Words24, Language::English);
-        let path = dir.path().join("no_fog");
-        write_keyfile(&path, &mnemonic, 0, None, "", None).expect("Could not write keyfile");
+        let path = dir.path().join("keyfile");
+        write_keyfile(&path, &mnemonic, 0).expect("Could not write keyfile");
         let expected = AccountKey::from(mnemonic.derive_slip10_key(0));
         let actual = read_keyfile(&path).expect("Could not read keyfile");
         assert_eq!(expected, actual);
     }
 
-    /// Test that round-tripping through a keyfile with fog gets the same result
-    /// as creating the key directly.
+    /// Test that writing a [`PublicAddress`](bth_account_keys::PublicAddress)
+    /// and reading it back gets the same results.
     #[test]
-    fn keyfile_roundtrip_with_fog() {
-        let fog_report_url = "fog://unittest.botho.com";
-        let fog_report_id = "1";
-        let pem = pem::parse(bt_crypto_x509_test_vectors::ok_rsa_head())
-            .expect("Could not parse DER bytes from PEM certificate file");
-        let fog_authority_spki = x509_signature::parse_certificate(pem.contents())
-            .expect("Could not parse X509 certificate from DER bytes")
-            .subject_public_key_info()
-            .spki();
-
-        let dir = tempfile::tempdir().expect("Could not create temp dir");
-        let mnemonic = Mnemonic::new(MnemonicType::Words24, Language::English);
-
-        let path = dir.path().join("with_fog");
-        write_keyfile(
-            &path,
-            &mnemonic,
-            0,
-            Some(fog_report_url),
-            fog_report_id,
-            Some(fog_authority_spki),
-        )
-        .expect("Could not write keyfile");
-
-        let expected = AccountKey::from(mnemonic.derive_slip10_key(0)).with_fog(
-            fog_report_url,
-            fog_report_id,
-            fog_authority_spki,
-        );
-        let actual = read_keyfile(&path).expect("Could not read keyfile");
-        assert_eq!(expected, actual);
-    }
-
-    /// Test that writing a [`PublicAddress`](bt_account_keys::PublicAddress)
-    /// and reading it back without fog details gets the same results.
-    #[test]
-    fn pubfile_roundtrip_no_fog() {
+    fn pubfile_roundtrip() {
         let mn = Mnemonic::new(MnemonicType::Words24, Language::English);
 
         let expected = AccountKey::from(mn.derive_slip10_key(0)).default_subaddress();
 
         let dir = tempfile::tempdir().expect("Could not create temporary directory");
-        let path = dir.path().join("pubfile_no_fog");
+        let path = dir.path().join("pubfile");
         write_pubfile(&path, &expected).expect("Could not write pubfile");
         let actual = read_pubfile(&path).expect("Could not read back pubfile");
-        assert_eq!(expected, actual);
-    }
-
-    /// Test that writing a [`PublicAddress`](bt_account_keys::PublicAddress)
-    /// and reading it back with fog details gets the same results.
-    #[test]
-    fn pubfile_roundtrip_with_fog() {
-        let fog_report_url = "fog://unittest.botho.com";
-        let fog_report_id = "1";
-        let pem = pem::parse(bt_crypto_x509_test_vectors::ok_rsa_head())
-            .expect("Could not parse DER bytes from PEM certificate file");
-        let fog_authority_spki = x509_signature::parse_certificate(pem.contents())
-            .expect("Could not parse X509 certificate from DER bytes")
-            .subject_public_key_info()
-            .spki();
-        let slip10key =
-            Mnemonic::new(MnemonicType::Words24, Language::English).derive_slip10_key(0);
-        let expected = AccountKey::from(slip10key)
-            .with_fog(fog_report_url, fog_report_id, fog_authority_spki)
-            .default_subaddress();
-
-        let dir = tempfile::tempdir().expect("Could not create temporary directory");
-        let path = dir.path().join("pubfile_with_fog");
-        write_pubfile(&path, &expected).expect("Could not write fog pubfile");
-        let actual = read_pubfile(&path).expect("Could not read back fog pubfile");
         assert_eq!(expected, actual);
     }
 }

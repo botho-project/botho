@@ -6,15 +6,15 @@
 
 use bip39::{Language, Mnemonic};
 use displaydoc::Display;
-use bt_account_keys::AccountKey;
-use bt_core::slip10::Slip10KeyGenerator;
+use bth_account_keys::AccountKey;
+use bth_core::slip10::Slip10KeyGenerator;
 use mc_rand::{CryptoRng, RngCore};
 use prost::Message;
 use serde::{Deserialize, Serialize};
 
 /// An enumeration of errors which can occur when converting an
 /// [`UncheckedMnemonicAccount`] to an
-/// [`AccountKey`](bt_account_keys::AccountKey).
+/// [`AccountKey`](bth_account_keys::AccountKey).
 #[derive(Clone, Debug, Display, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum Error {
     /// No mnemonic was provided
@@ -33,14 +33,17 @@ pub struct UncheckedMnemonicAccount {
     /// The account index the mnemonic is intended to work with
     #[prost(uint32, optional, tag = "2")]
     pub account_index: Option<u32>,
-    /// The Fog URL for this account, if any.
+    /// The Fog URL for this account (deprecated, ignored)
     #[prost(string, optional, tag = "3")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fog_report_url: Option<String>,
-    /// The Fog Report ID string
+    /// The Fog Report ID string (deprecated, ignored)
     #[prost(string, optional, tag = "4")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fog_report_id: Option<String>,
-    /// The Fog Authority subjectPublicKeyInfo
+    /// The Fog Authority subjectPublicKeyInfo (deprecated, ignored)
     #[prost(bytes, optional, tag = "5")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fog_authority_spki: Option<Vec<u8>>,
 }
 
@@ -54,11 +57,8 @@ impl TryFrom<UncheckedMnemonicAccount> for AccountKey {
         )
         .map_err(|e| Error::InvalidMnemonic(format!("{e}")))?;
         let slip10 = mnemonic.derive_slip10_key(src.account_index.ok_or(Error::NoAccountIndex)?);
-        Ok(AccountKey::from(slip10).with_fog(
-            src.fog_report_url.unwrap_or_default().as_str(),
-            src.fog_report_id.unwrap_or_default().as_str(),
-            src.fog_authority_spki.unwrap_or_default().as_slice(),
-        ))
+        // Note: fog fields in UncheckedMnemonicAccount are ignored - fog support removed
+        Ok(AccountKey::from(slip10))
     }
 }
 
@@ -80,21 +80,4 @@ impl UncheckedMnemonicAccount {
         }
     }
 
-    /// Construct an identity with fog and with a random slip10 key
-    pub fn random_with_fog<T: RngCore + CryptoRng>(
-        rng: &mut T,
-        fog_report_url: &str,
-        fog_report_id: &str,
-        fog_authority_spki: &[u8],
-    ) -> Self {
-        let mut result = Self::random(rng);
-
-        if !fog_report_url.is_empty() {
-            result.fog_report_url = Some(fog_report_url.to_owned());
-            result.fog_report_id = Some(fog_report_id.to_owned());
-            result.fog_authority_spki = Some(fog_authority_spki.to_owned());
-        }
-
-        result
-    }
 }

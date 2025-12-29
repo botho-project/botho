@@ -7,7 +7,7 @@ const CHANNEL_SIZE: usize = 100_000;
 const TRIM_MARKER: &str = "... <trimmed>";
 
 /// Macros to ease with tests/benches that require a Logger instance.
-pub use bt_util_logger_macros::{async_test_with_logger, bench_with_logger, test_with_logger};
+pub use bth_util_logger_macros::{async_test_with_logger, bench_with_logger, test_with_logger};
 
 use super::*;
 
@@ -16,7 +16,6 @@ mod sentry_logger;
 mod udp_writer;
 
 use chrono::{Local, Utc};
-use lazy_static::lazy_static;
 use sentry_logger::SentryLogger;
 use slog::Drain;
 use slog_json::Json;
@@ -24,7 +23,7 @@ use slog_term::TermDecorator;
 use std::{
     env, format, io,
     string::{String, ToString},
-    sync::Mutex,
+    sync::{LazyLock, Mutex},
     vec::Vec,
 };
 
@@ -191,14 +190,14 @@ pub fn create_test_logger(test_name: String) -> Logger {
     ))
 }
 
-lazy_static! {
-    /// Switchable app logger support.
-    static ref SWITCHABLE_APP_LOGGER: slog_atomic::AtomicSwitchCtrl<(), io::Error> =
+/// Switchable app logger support.
+static SWITCHABLE_APP_LOGGER: LazyLock<slog_atomic::AtomicSwitchCtrl<(), io::Error>> =
+    LazyLock::new(|| {
         slog_atomic::AtomicSwitch::new(
-            slog::Discard.map_err(|_| io::Error::new(io::ErrorKind::Other, "should not happen"))
+            slog::Discard.map_err(|_| io::Error::new(io::ErrorKind::Other, "should not happen")),
         )
-        .ctrl();
-}
+        .ctrl()
+    });
 
 /// Create an application logger (to be used by our binary crates).
 pub fn create_app_logger<T: slog::SendSyncRefUnwindSafeKV + 'static>(
@@ -236,7 +235,7 @@ pub fn create_app_logger<T: slog::SendSyncRefUnwindSafeKV + 'static>(
 
     {
         let mut buf = String::new();
-        bt_util_build_info::write_report(&mut buf).expect("Getting build_info report failed");
+        bth_util_build_info::write_report(&mut buf).expect("Getting build_info report failed");
         log::info!(app_logger, "{} started: {}", current_exe, buf);
     }
 

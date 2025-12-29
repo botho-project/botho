@@ -19,7 +19,7 @@
 //! # Usage
 //!
 //! ```ignore
-//! use bt_account_keys::{QuantumSafeAccountKey, QuantumSafePublicAddress};
+//! use bth_account_keys::{QuantumSafeAccountKey, QuantumSafePublicAddress};
 //!
 //! // Create from mnemonic (PQ keys derived deterministically)
 //! let account = QuantumSafeAccountKey::from_mnemonic("word1 word2 ... word24");
@@ -35,7 +35,7 @@
 use alloc::{string::String, vec::Vec};
 use core::fmt;
 
-use bt_crypto_pq::{
+use bth_crypto_pq::{
     derive_pq_keys, MlDsa65KeyPair, MlDsa65PublicKey, MlKem768KeyPair, MlKem768PublicKey,
     PqKeyMaterial, ML_DSA_65_PUBLIC_KEY_BYTES, ML_KEM_768_PUBLIC_KEY_BYTES,
 };
@@ -238,12 +238,12 @@ impl QuantumSafePublicAddress {
     }
 
     /// Get the classical view public key
-    pub fn view_public_key(&self) -> &bt_crypto_keys::RistrettoPublic {
+    pub fn view_public_key(&self) -> &bth_crypto_keys::RistrettoPublic {
         self.classical.view_public_key()
     }
 
     /// Get the classical spend public key
-    pub fn spend_public_key(&self) -> &bt_crypto_keys::RistrettoPublic {
+    pub fn spend_public_key(&self) -> &bth_crypto_keys::RistrettoPublic {
         self.classical.spend_public_key()
     }
 

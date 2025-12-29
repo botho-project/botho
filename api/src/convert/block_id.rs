@@ -3,7 +3,7 @@
 //! Convert to/from blockchain::BlockId
 
 use crate::{blockchain, ConversionError};
-use bt_blockchain_types::BlockID;
+use bth_blockchain_types::BlockID;
 
 /// Convert BlockID --> blockchain::BlockId.
 impl From<&BlockID> for blockchain::BlockId {

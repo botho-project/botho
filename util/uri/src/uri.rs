@@ -2,7 +2,7 @@
 
 use crate::traits::{ConnectionUri, UriScheme};
 use displaydoc::Display;
-use bt_common::ResponderId;
+use bth_common::ResponderId;
 use percent_encoding::percent_decode_str;
 use std::{
     fmt::{Display, Formatter, Result as FmtResult},

@@ -1,5 +1,5 @@
 [package]
-name = "bt-crypto-x509-test-vectors"
+name = "bth-crypto-x509-test-vectors"
 version = "7.1.0"
 authors = ["Botho"]
 edition = "2021"
@@ -12,15 +12,15 @@ rust-version = { workspace = true }
 path = "src/lib.rs"
 
 [[bin]]
-name = "bt-crypto-x509-test-vectors"
+name = "bth-crypto-x509-test-vectors"
 path = "src/main.rs"
 
 [dependencies]
-bt-crypto-keys = { workspace = true }
+bth-crypto-keys = { workspace = true }
 
 clap = { workspace = true, features = ["derive", "env"] }
 pem = { workspace = true }
 
 [build-dependencies]
 cargo-emit = { workspace = true }
-bt-util-build-script = { workspace = true }
+bth-util-build-script = { workspace = true }

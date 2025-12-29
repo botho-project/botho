@@ -6,7 +6,7 @@
 
 use crate::{impl_memo_type_conversions, RegisteredMemoType};
 use core::str;
-use bt_transaction_core::MemoError;
+use bth_transaction_core::MemoError;
 
 /// Gift Code Sender Memo
 ///

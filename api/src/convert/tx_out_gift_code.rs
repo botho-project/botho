@@ -3,7 +3,7 @@
 //! Convert to/from printable::TxOutGiftCode
 
 use crate::{printable, ConversionError};
-use bt_transaction_extra::TxOutGiftCode;
+use bth_transaction_extra::TxOutGiftCode;
 
 /// Convert TxOutGiftCode --> printable::TxOutGiftCode.
 impl From<&TxOutGiftCode> for printable::TxOutGiftCode {
@@ -43,9 +43,9 @@ impl TryFrom<&printable::TxOutGiftCode> for TxOutGiftCode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bt_crypto_keys::{RistrettoPrivate, RistrettoPublic};
-    use bt_util_from_random::FromRandom;
-    use bt_util_serial::{decode, encode};
+    use bth_crypto_keys::{RistrettoPrivate, RistrettoPublic};
+    use bth_util_from_random::FromRandom;
+    use bth_util_serial::{decode, encode};
     use prost::Message;
     use rand::rngs::StdRng;
     use rand_core::SeedableRng;

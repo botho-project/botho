@@ -1,7 +1,7 @@
-bt-transaction-extra
+bth-transaction-extra
 ====================
 
-This crate is meant to sit one level above `bt-transaction-core`, containing:
+This crate is meant to sit one level above `bth-transaction-core`, containing:
 
 * Types and schema defining concepts related to transactions / transaction math,
   and which might appear in external.proto or be specified in MCIPs

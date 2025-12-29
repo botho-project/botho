@@ -11,9 +11,9 @@ use crate::{
     GossipConfig, GossipConfigBuilder, GossipEvent, GossipService, NodeCapabilities,
     SharedPeerStore,
 };
-use bt_common::{NodeID, ResponderId};
-use bt_consensus_scp_types::QuorumSet;
-use bt_crypto_keys::Ed25519Pair;
+use bth_common::{NodeID, ResponderId};
+use bth_consensus_scp_types::QuorumSet;
+use bth_crypto_keys::Ed25519Pair;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};

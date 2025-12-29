@@ -1,8 +1,8 @@
-//! JSON formats for private keys together with fog data.
+//! JSON formats for private keys.
 //! Files formatted in this way are sufficient to derive an account key in
 //! a self-contained way without any context, which is useful for many tools.
 
-use bt_account_keys::{RootEntropy, RootIdentity};
+use bth_account_keys::{RootEntropy, RootIdentity};
 use serde::{Deserialize, Serialize};
 
 /// Historical JSON schema for a root identity
@@ -10,11 +10,14 @@ use serde::{Deserialize, Serialize};
 pub struct RootIdentityJson {
     /// Root entropy used to derive a user's private keys.
     pub root_entropy: [u8; 32],
-    /// User's fog url, if any.
+    /// User's fog url (deprecated, ignored)
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub fog_url: String,
-    /// User's report id, if any.
+    /// User's report id (deprecated, ignored)
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub fog_report_id: String,
-    /// User's fog authority subjectPublicKeyInfo bytes, if any
+    /// User's fog authority spki bytes (deprecated, ignored)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fog_authority_spki: Vec<u8>,
 }
 
@@ -22,20 +25,18 @@ impl From<&RootIdentity> for RootIdentityJson {
     fn from(src: &RootIdentity) -> Self {
         Self {
             root_entropy: src.root_entropy.bytes,
-            fog_url: src.fog_report_url.clone(),
-            fog_report_id: src.fog_report_id.clone(),
-            fog_authority_spki: src.fog_authority_spki.clone(),
+            fog_url: String::new(),
+            fog_report_id: String::new(),
+            fog_authority_spki: Vec::new(),
         }
     }
 }
 
 impl From<RootIdentityJson> for RootIdentity {
     fn from(src: RootIdentityJson) -> Self {
+        // Note: fog fields are ignored - fog support removed
         Self {
             root_entropy: RootEntropy::from(&src.root_entropy),
-            fog_report_url: src.fog_url,
-            fog_report_id: src.fog_report_id,
-            fog_authority_spki: src.fog_authority_spki,
         }
     }
 }

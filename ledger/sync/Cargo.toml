@@ -1,5 +1,5 @@
 [package]
-name = "bt-ledger-sync"
+name = "bth-ledger-sync"
 version = "7.1.0"
 authors = ["Botho"]
 edition = "2021"
@@ -13,21 +13,21 @@ path = "src/test_app/main.rs"
 required-features = ["test_utils"]
 
 [features]
-test_utils = ["bt-consensus-scp/test_utils"]
+test_utils = ["bth-consensus-scp/test_utils"]
 
 [dependencies]
-bt-account-keys = { workspace = true }
-bt-api = { workspace = true }
-bt-blockchain-test-utils = { workspace = true }
-bt-blockchain-types = { workspace = true }
-bt-common = { workspace = true, features = ["log"] }
-bt-connection = { workspace = true }
-bt-consensus-scp = { workspace = true }
-bt-ledger-db = { workspace = true }
-bt-transaction-core = { workspace = true }
-bt-transaction-core-test-utils = { workspace = true }
-bt-util-telemetry = { workspace = true }
-bt-util-uri = { workspace = true }
+bth-account-keys = { workspace = true }
+bth-api = { workspace = true }
+bth-blockchain-test-utils = { workspace = true }
+bth-blockchain-types = { workspace = true }
+bth-common = { workspace = true, features = ["log"] }
+bth-connection = { workspace = true }
+bth-consensus-scp = { workspace = true }
+bth-ledger-db = { workspace = true }
+bth-transaction-core = { workspace = true }
+bth-transaction-core-test-utils = { workspace = true }
+bth-util-telemetry = { workspace = true }
+bth-util-uri = { workspace = true }
 
 crossbeam-channel = { workspace = true }
 displaydoc = { workspace = true }
@@ -41,11 +41,11 @@ tempfile = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
-bt-common = { workspace = true, features = ["loggers"] }
-bt-connection-test-utils = { workspace = true }
-bt-consensus-scp = { workspace = true, features = ["test_utils"] }
-bt-ledger-db = { workspace = true, features = ["test_utils"] }
-bt-peers-test-utils = { workspace = true }
-bt-util-test-helper = { workspace = true }
+bth-common = { workspace = true, features = ["loggers"] }
+bth-connection-test-utils = { workspace = true }
+bth-consensus-scp = { workspace = true, features = ["test_utils"] }
+bth-ledger-db = { workspace = true, features = ["test_utils"] }
+bth-peers-test-utils = { workspace = true }
+bth-util-test-helper = { workspace = true }
 
 serde = { workspace = true, features = ["alloc", "derive"] }

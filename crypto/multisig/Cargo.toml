@@ -1,5 +1,5 @@
 [package]
-name = "bt-crypto-multisig"
+name = "bth-crypto-multisig"
 version = "7.1.0"
 authors = ["Botho"]
 description = "Botho multi-signature implementations"
@@ -8,15 +8,15 @@ license = "Apache-2.0"
 rust-version = { workspace = true }
 
 [dependencies]
-bt-crypto-digestible = { workspace = true }
-bt-crypto-keys = { workspace = true }
+bth-crypto-digestible = { workspace = true }
+bth-crypto-keys = { workspace = true }
 
 prost = { workspace = true, features = ["prost-derive"] }
 serde = { workspace = true, features = ["alloc", "derive"] }
 
 [dev-dependencies]
-bt-util-from-random = { workspace = true }
-bt-util-serial = { workspace = true }
+bth-util-from-random = { workspace = true }
+bth-util-serial = { workspace = true }
 
 rand_core = { workspace = true }
 rand_hc = { workspace = true }

@@ -12,8 +12,8 @@
 
 use crate::{key_bytes_to_u64, u64_to_key_bytes, Error};
 use lmdb::{Database, DatabaseFlags, Environment, RwTransaction, Transaction, WriteFlags};
-use bt_common::HashMap;
-use bt_transaction_core::{ClusterId, ClusterTagVector, TAG_WEIGHT_SCALE};
+use bth_common::HashMap;
+use bth_transaction_core::{ClusterId, ClusterTagVector, TAG_WEIGHT_SCALE};
 // LMDB Database names.
 /// Maps cluster_id -> total wealth (u64)
 pub const CLUSTER_WEALTH_DB_NAME: &str = "cluster_wealth_store:wealth_by_cluster";
@@ -179,7 +179,7 @@ impl ClusterWealthStore {
 mod tests {
     use super::*;
     use lmdb::{Environment, EnvironmentFlags};
-    use bt_transaction_core::ClusterTagEntry;
+    use bth_transaction_core::ClusterTagEntry;
     use tempfile::TempDir;
 
     fn create_test_env() -> (TempDir, Environment) {

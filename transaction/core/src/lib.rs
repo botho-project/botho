@@ -12,6 +12,7 @@ extern crate alloc;
 #[macro_use]
 extern crate lazy_static;
 
+pub mod encrypted_fog_hint;
 mod fee_map;
 mod input_rules;
 mod memo;
@@ -20,8 +21,6 @@ mod token;
 mod tx_error;
 
 pub mod emission;
-pub mod encrypted_fog_hint;
-pub mod fog_hint;
 pub mod membership_proofs;
 pub mod mining_tx;
 pub mod mint;
@@ -45,9 +44,12 @@ pub use tx::MemoContext;
 pub use tx_error::{NewMemoError, NewTxError, TxOutConversionError, ViewKeyMatchError};
 pub use tx_summary::TxSummaryNew;
 
+// Re-export encrypted_fog_hint stub for backwards compatibility
+pub use encrypted_fog_hint::{EncryptedFogHint, ENCRYPTED_FOG_HINT_LEN};
+
 // Re-export from transaction-types, and some from RingSignature crate.
-pub use bt_crypto_ring_signature::{Commitment, CompressedCommitment};
-pub use bt_transaction_types::{
+pub use bth_crypto_ring_signature::{Commitment, CompressedCommitment};
+pub use bth_transaction_types::{
     constants, domain_separators, Amount, AmountError, BlockVersion, BlockVersionError,
     ClusterId, ClusterTagEntry, ClusterTagVector, MaskedAmount, MaskedAmountV1, MaskedAmountV2,
     TokenId, TxSummary, UnmaskedAmount, MAX_CLUSTER_TAGS, MIN_STORED_WEIGHT, TAG_WEIGHT_SCALE,
@@ -55,16 +57,16 @@ pub use bt_transaction_types::{
 
 /// Re-export all of mc-crypto-ring-signature
 pub mod ring_signature {
-    pub use bt_crypto_ring_signature::*;
+    pub use bth_crypto_ring_signature::*;
 }
 
 // Re-export the one-time keys module which historically lived in this crate
-pub use bt_crypto_ring_signature::onetime_keys;
+pub use bth_crypto_ring_signature::onetime_keys;
 
 // Re-export some dependent types from mc-account-keys
-pub use bt_account_keys::{AccountKey, PublicAddress};
+pub use bth_account_keys::{AccountKey, PublicAddress};
 
-use bt_crypto_keys::{KeyError, RistrettoPrivate, RistrettoPublic};
+use bth_crypto_keys::{KeyError, RistrettoPrivate, RistrettoPublic};
 use onetime_keys::{create_shared_secret, recover_public_subaddress_spend_key};
 use tx::TxOut;
 

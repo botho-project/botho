@@ -6,7 +6,7 @@
 //! A standalone watcher program that can sync data from multiple sources.
 
 use displaydoc::Display;
-use bt_watcher::{
+use bth_watcher::{
     attestation_evidence_collector::AttestationEvidenceCollector,
     config::WatcherConfig,
     watcher::{SyncResult, Watcher},
@@ -14,9 +14,9 @@ use bt_watcher::{
 };
 
 use clap::Parser;
-use bt_common::logger::{create_app_logger, log, o, Logger};
-use bt_util_grpc_tonic::{HealthCheckStatus, HealthService};
-use bt_util_uri::ConnectionUri;
+use bth_common::logger::{create_app_logger, log, o, Logger};
+use bth_util_grpc_tonic::{HealthCheckStatus, HealthService};
+use bth_util_uri::ConnectionUri;
 use std::{
     io::Error as IOError,
     net::SocketAddr,
@@ -29,9 +29,9 @@ use std::{
 use tonic::transport::Server;
 
 fn main() {
-    let _sentry_guard = bt_common::sentry::init();
+    let _sentry_guard = bth_common::sentry::init();
     let (logger, _global_logger_guard) = create_app_logger(o!());
-    bt_common::setup_panic_handler();
+    bth_common::setup_panic_handler();
 
     let config = WatcherConfig::parse();
     let sources_config = config.sources_config();

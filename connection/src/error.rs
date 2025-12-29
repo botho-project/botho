@@ -6,10 +6,10 @@ pub use retry::Error as RetryError;
 
 use crate::traits::AttestationError;
 use displaydoc::Display;
-use bt_blockchain_types::ConvertError;
+use bth_blockchain_types::ConvertError;
 use tonic::Status as GrpcError;
-use bt_consensus_api::{consensus_common::ProposeTxResult, ConversionError};
-use bt_crypto_noise::CipherError;
+use bth_consensus_api::{consensus_common::ProposeTxResult, ConversionError};
+use bth_crypto_noise::CipherError;
 use std::{array::TryFromSliceError, result::Result as StdResult};
 
 pub type Result<T> = StdResult<T, Error>;

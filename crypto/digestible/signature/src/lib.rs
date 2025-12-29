@@ -2,7 +2,7 @@
 
 #![no_std]
 
-use bt_crypto_digestible::{Digestible, MerlinTranscript};
+use bth_crypto_digestible::{Digestible, MerlinTranscript};
 use signature::{SignatureEncoding, Signer, Verifier};
 
 pub use signature::Error;

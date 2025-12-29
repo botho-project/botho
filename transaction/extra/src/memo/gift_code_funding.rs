@@ -6,9 +6,9 @@
 
 use crate::{impl_memo_type_conversions, RegisteredMemoType};
 use core::str;
-use bt_crypto_hashes::{Blake2b512, Digest};
-use bt_crypto_keys::RistrettoPublic;
-use bt_transaction_core::MemoError;
+use bth_crypto_hashes::{Blake2b512, Digest};
+use bth_crypto_keys::RistrettoPublic;
+use bth_transaction_core::MemoError;
 
 /// Botho account owners can create a special TxOut called a "gift code".
 ///
@@ -146,7 +146,7 @@ impl_memo_type_conversions! { GiftCodeFundingMemo }
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bt_util_from_random::FromRandom;
+    use bth_util_from_random::FromRandom;
     use rand::{rngs::StdRng, SeedableRng};
 
     #[test]

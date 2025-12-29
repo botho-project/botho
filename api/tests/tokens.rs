@@ -1,9 +1,9 @@
-use bt_api::external::KnownTokenId;
-use bt_transaction_core::{tokens, Token};
+use bth_api::external::KnownTokenId;
+use bth_transaction_core::{tokens, Token};
 
 // Test that protobuf KnownTokens enum matches the tokens in mc-transaction-core
 #[test]
-fn test_known_tokens_enum_vs_bt_transaction_core_tokens() {
+fn test_known_tokens_enum_vs_bth_transaction_core_tokens() {
     let known_tokens = [KnownTokenId::Mob];
     for token in known_tokens.iter() {
         match token {

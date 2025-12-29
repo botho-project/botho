@@ -3,7 +3,7 @@
 //! Convert between Rust and proto representations of NodeID.
 
 use crate::{quorum_set::Node as NodeProto, ConversionError};
-use bt_common::{NodeID, ResponderId};
+use bth_common::{NodeID, ResponderId};
 use std::str::FromStr;
 
 impl From<&NodeID> for NodeProto {

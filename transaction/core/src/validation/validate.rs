@@ -11,7 +11,7 @@ use crate::{
     Amount, BlockVersion, ClusterId, TokenId, TAG_WEIGHT_SCALE,
 };
 use alloc::{collections::BTreeMap, format, vec::Vec};
-use bt_common::HashSet;
+use bth_common::HashSet;
 use rand_core::{CryptoRng, RngCore};
 
 /// Determines if the transaction is valid, with respect to the provided

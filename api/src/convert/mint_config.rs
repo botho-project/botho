@@ -3,7 +3,7 @@
 //! Convert to/from external:MintConfig/MintConfigTxPrefix/MintConfigTx.
 
 use crate::{external, ConversionError};
-use bt_transaction_core::mint::{MintConfig, MintConfigTx, MintConfigTxPrefix};
+use bth_transaction_core::mint::{MintConfig, MintConfigTx, MintConfigTxPrefix};
 
 /// Convert MintConfig --> external::MintConfig.
 impl From<&MintConfig> for external::MintConfig {
@@ -102,7 +102,7 @@ impl TryFrom<&external::MintConfigTx> for MintConfigTx {
 mod tests {
     use super::*;
     use crate::convert::ed25519_multisig::tests::{test_multi_sig, test_signer_set};
-    use bt_util_serial::{decode, encode};
+    use bth_util_serial::{decode, encode};
     use prost::Message;
 
     #[test]
@@ -122,8 +122,8 @@ mod tests {
             assert_eq!(source, recovered);
         }
 
-        // Converting bt_transaction_core::mint::MintConfig -> external::MintConfig ->
-        // bt_transaction_core::mint::MintConfig should be the identity function.
+        // Converting bth_transaction_core::mint::MintConfig -> external::MintConfig ->
+        // bth_transaction_core::mint::MintConfig should be the identity function.
         {
             let external = external::MintConfig::from(&source);
             let recovered = MintConfig::try_from(&external).unwrap();
@@ -180,8 +180,8 @@ mod tests {
             assert_eq!(source, recovered);
         }
 
-        // Converting bt_transaction_core::mint::MintConfigTx ->
-        // external::MintConfigTx -> bt_transaction_core::mint::
+        // Converting bth_transaction_core::mint::MintConfigTx ->
+        // external::MintConfigTx -> bth_transaction_core::mint::
         // MintConfigTx should be the identity function.
         {
             let external = external::MintConfigTx::from(&source);

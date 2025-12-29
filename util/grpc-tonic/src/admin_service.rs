@@ -10,7 +10,7 @@ use crate::{
     build_info_service::get_build_info,
     rpc_logger,
 };
-use bt_common::logger::{log, Logger};
+use bth_common::logger::{log, Logger};
 use prometheus::Encoder;
 use std::{env, sync::Arc};
 use tonic::{Request, Response, Status};
@@ -90,7 +90,7 @@ impl AdminApi for AdminService {
         log::trace!(logger, "get_info");
 
         let mut build_info_json = String::new();
-        bt_util_build_info::write_report(&mut build_info_json)
+        bth_util_build_info::write_report(&mut build_info_json)
             .map_err(|e| Status::internal(format!("write_report failed: {}", e)))?;
 
         let build_info = get_build_info();
@@ -122,7 +122,7 @@ impl AdminApi for AdminService {
 
         log::info!(logger, "Updating RUST_LOG to '{}'", req.rust_log);
         env::set_var("RUST_LOG", req.rust_log);
-        bt_common::logger::recreate_app_logger();
+        bth_common::logger::recreate_app_logger();
 
         Ok(Response::new(()))
     }

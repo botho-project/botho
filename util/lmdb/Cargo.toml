@@ -1,5 +1,5 @@
 [package]
-name = "bt-util-lmdb"
+name = "bth-util-lmdb"
 version = "7.1.0"
 authors = ["Botho"]
 edition = "2021"
@@ -7,7 +7,7 @@ license = "GPL-3.0"
 rust-version = { workspace = true }
 
 [dependencies]
-bt-util-serial = { workspace = true, features = ["std"] }
+bth-util-serial = { workspace = true, features = ["std"] }
 
 displaydoc = { workspace = true }
 lmdb-rkv = { workspace = true }

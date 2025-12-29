@@ -26,7 +26,7 @@ fn sample_keys_determinism() {
     let mut authority_pemfile =
         NamedTempFile::new().expect("Could not create file for temp root authority");
     authority_pemfile
-        .write_all(bt_crypto_x509_test_vectors::ok_rsa_head().as_bytes())
+        .write_all(bth_crypto_x509_test_vectors::ok_rsa_head().as_bytes())
         .expect("Could not write temp root authority");
     let fog_authority_root = authority_pemfile
         .path()
@@ -93,7 +93,7 @@ fn sample_keys_determinism2() {
     let mut authority_pemfile =
         NamedTempFile::new().expect("Could not create file for temp root authority");
     authority_pemfile
-        .write_all(bt_crypto_x509_test_vectors::ok_rsa_head().as_bytes())
+        .write_all(bth_crypto_x509_test_vectors::ok_rsa_head().as_bytes())
         .expect("Could not write temp root authority");
     let fog_authority_root = authority_pemfile
         .path()

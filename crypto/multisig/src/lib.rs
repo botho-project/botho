@@ -15,8 +15,8 @@ extern crate alloc;
 
 use alloc::{vec, vec::Vec};
 use core::hash::Hash;
-use bt_crypto_digestible::Digestible;
-use bt_crypto_keys::{PublicKey, SignatureEncoding, SignatureError, Verifier};
+use bth_crypto_digestible::Digestible;
+use bth_crypto_keys::{PublicKey, SignatureEncoding, SignatureError, Verifier};
 use prost::Message;
 use serde::{Deserialize, Serialize};
 
@@ -248,8 +248,8 @@ impl<P: Default + PublicKey + Message> SignerSet<P> {
 mod test {
     use super::*;
     use alloc::vec;
-    use bt_crypto_keys::{Ed25519Pair, Ed25519Public, Signer};
-    use bt_util_from_random::FromRandom;
+    use bth_crypto_keys::{Ed25519Pair, Ed25519Public, Signer};
+    use bth_util_from_random::FromRandom;
     use rand_core::SeedableRng;
     use rand_hc::Hc128Rng;
 
@@ -701,14 +701,14 @@ mod test {
 
         assert_eq!(
             signer_set,
-            bt_util_serial::deserialize(&bt_util_serial::serialize(&signer_set).unwrap()).unwrap(),
+            bth_util_serial::deserialize(&bth_util_serial::serialize(&signer_set).unwrap()).unwrap(),
         );
 
         let message = b"this is a test";
         let multi_sig = make_multi_sig(message.as_ref(), &[&signer1]);
         assert_eq!(
             multi_sig,
-            bt_util_serial::deserialize(&bt_util_serial::serialize(&multi_sig).unwrap()).unwrap(),
+            bth_util_serial::deserialize(&bth_util_serial::serialize(&multi_sig).unwrap()).unwrap(),
         );
     }
 
@@ -745,7 +745,7 @@ mod test {
 
         assert_eq!(
             signer_set,
-            bt_util_serial::decode(&bt_util_serial::encode(&signer_set)).unwrap(),
+            bth_util_serial::decode(&bth_util_serial::encode(&signer_set)).unwrap(),
         );
 
         let message = b"this is a test";
@@ -753,7 +753,7 @@ mod test {
 
         assert_eq!(
             multi_sig,
-            bt_util_serial::decode(&bt_util_serial::encode(&multi_sig)).unwrap(),
+            bth_util_serial::decode(&bth_util_serial::encode(&multi_sig)).unwrap(),
         );
     }
 

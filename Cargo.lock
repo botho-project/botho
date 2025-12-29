@@ -68,26 +68,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "aligned-array"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e05c92d086290f52938013f6242ac62bf7d401fab8ad36798a609faa65c3fd2c"
-dependencies = [
- "generic-array",
- "subtle",
-]
-
-[[package]]
-name = "aligned-cmov"
-version = "2.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "618b842c70f8bbf37d814e3216dccdcedb5e4995e81fbb42f709cd10116df6f2"
-dependencies = [
- "aligned-array",
- "generic-array",
-]
-
-[[package]]
 name = "allocator-api2"
 version = "0.2.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -459,16 +439,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "balanced-tree-index"
-version = "2.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9cb637edbca91c1be6b05b38c94fbd173d8e92ba2317e2368ee1f70fe1d83244"
-dependencies = [
- "aligned-cmov",
- "rand_core 0.6.4",
-]
-
-[[package]]
 name = "base-x"
 version = "0.2.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -583,16 +553,16 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bincode",
- "bt-account-keys",
- "bt-common",
- "bt-consensus-scp",
- "bt-consensus-scp-types",
- "bt-core",
- "bt-crypto-digestible",
- "bt-crypto-keys",
- "bt-crypto-ring-signature",
- "bt-gossip",
- "bt-util-from-random",
+ "bth-account-keys",
+ "bth-common",
+ "bth-consensus-scp",
+ "bth-consensus-scp-types",
+ "bth-core",
+ "bth-crypto-digestible",
+ "bth-crypto-keys",
+ "bth-crypto-ring-signature",
+ "bth-gossip",
+ "bth-util-from-random",
  "clap",
  "crossbeam-channel",
  "ctrlc",
@@ -627,11 +597,11 @@ dependencies = [
  "anyhow",
  "argon2",
  "bincode",
- "bt-account-keys",
- "bt-core",
- "bt-crypto-keys",
- "bt-transaction-core",
- "bt-transaction-types",
+ "bth-account-keys",
+ "bth-core",
+ "bth-crypto-keys",
+ "bth-transaction-core",
+ "bth-transaction-types",
  "chacha20poly1305",
  "chrono",
  "clap",
@@ -670,23 +640,23 @@ dependencies = [
 ]
 
 [[package]]
-name = "bt-account-keys"
+name = "bth-account-keys"
 version = "7.1.0"
 dependencies = [
  "bs58 0.4.0",
- "bt-account-keys-types",
- "bt-core",
- "bt-crypto-digestible",
- "bt-crypto-hashes",
- "bt-crypto-keys",
- "bt-crypto-pq",
- "bt-test-vectors-account-keys",
- "bt-util-from-random",
- "bt-util-repr-bytes",
- "bt-util-serial",
- "bt-util-test-helper",
- "bt-util-test-vector",
- "bt-util-test-with-data",
+ "bth-account-keys-types",
+ "bth-core",
+ "bth-crypto-digestible",
+ "bth-crypto-hashes",
+ "bth-crypto-keys",
+ "bth-crypto-pq",
+ "bth-test-vectors-account-keys",
+ "bth-util-from-random",
+ "bth-util-repr-bytes",
+ "bth-util-serial",
+ "bth-util-test-helper",
+ "bth-util-test-vector",
+ "bth-util-test-with-data",
  "criterion",
  "curve25519-dalek",
  "displaydoc",
@@ -703,41 +673,40 @@ dependencies = [
 ]
 
 [[package]]
-name = "bt-account-keys-types"
+name = "bth-account-keys-types"
 version = "7.1.0"
 dependencies = [
- "bt-crypto-keys",
+ "bth-crypto-keys",
 ]
 
 [[package]]
-name = "bt-api"
+name = "bth-api"
 version = "7.1.0"
 dependencies = [
  "assert_matches",
  "bs58 0.4.0",
- "bt-account-keys",
- "bt-blockchain-test-utils",
- "bt-blockchain-types",
- "bt-common",
- "bt-crypto-keys",
- "bt-crypto-multisig",
- "bt-crypto-ring-signature-signer",
- "bt-crypto-x509-test-vectors",
- "bt-test-vectors-b58-encodings",
- "bt-transaction-builder",
- "bt-transaction-core",
- "bt-transaction-extra",
- "bt-transaction-summary",
- "bt-util-build-grpc-tonic",
- "bt-util-build-script",
- "bt-util-from-random",
- "bt-util-repr-bytes",
- "bt-util-serial",
- "bt-util-test-helper",
- "bt-util-test-vector",
- "bt-util-test-with-data",
- "bt-util-uri",
- "bt-util-zip-exact",
+ "bth-account-keys",
+ "bth-blockchain-test-utils",
+ "bth-blockchain-types",
+ "bth-common",
+ "bth-crypto-keys",
+ "bth-crypto-multisig",
+ "bth-crypto-ring-signature-signer",
+ "bth-test-vectors-b58-encodings",
+ "bth-transaction-builder",
+ "bth-transaction-core",
+ "bth-transaction-extra",
+ "bth-transaction-summary",
+ "bth-util-build-grpc-tonic",
+ "bth-util-build-script",
+ "bth-util-from-random",
+ "bth-util-repr-bytes",
+ "bth-util-serial",
+ "bth-util-test-helper",
+ "bth-util-test-vector",
+ "bth-util-test-with-data",
+ "bth-util-uri",
+ "bth-util-zip-exact",
  "cargo-emit",
  "crc",
  "curve25519-dalek",
@@ -751,38 +720,38 @@ dependencies = [
 ]
 
 [[package]]
-name = "bt-blockchain-test-utils"
+name = "bth-blockchain-test-utils"
 version = "7.1.0"
 dependencies = [
- "bt-blockchain-types",
- "bt-common",
- "bt-consensus-scp-types",
- "bt-crypto-keys",
- "bt-transaction-core",
- "bt-transaction-core-test-utils",
- "bt-util-from-random",
- "bt-util-test-helper",
+ "bth-blockchain-types",
+ "bth-common",
+ "bth-consensus-scp-types",
+ "bth-crypto-keys",
+ "bth-transaction-core",
+ "bth-transaction-core-test-utils",
+ "bth-util-from-random",
+ "bth-util-test-helper",
 ]
 
 [[package]]
-name = "bt-blockchain-types"
+name = "bth-blockchain-types"
 version = "7.1.0"
 dependencies = [
- "bt-account-keys",
- "bt-blockchain-test-utils",
- "bt-common",
- "bt-consensus-scp-types",
- "bt-crypto-digestible",
- "bt-crypto-digestible-signature",
- "bt-crypto-digestible-test-utils",
- "bt-crypto-keys",
- "bt-crypto-ring-signature",
- "bt-transaction-core",
- "bt-transaction-types",
- "bt-util-from-random",
- "bt-util-repr-bytes",
- "bt-util-serial",
- "bt-util-test-helper",
+ "bth-account-keys",
+ "bth-blockchain-test-utils",
+ "bth-common",
+ "bth-consensus-scp-types",
+ "bth-crypto-digestible",
+ "bth-crypto-digestible-signature",
+ "bth-crypto-digestible-test-utils",
+ "bth-crypto-keys",
+ "bth-crypto-ring-signature",
+ "bth-transaction-core",
+ "bth-transaction-types",
+ "bth-util-from-random",
+ "bth-util-repr-bytes",
+ "bth-util-serial",
+ "bth-util-test-helper",
  "displaydoc",
  "hex_fmt",
  "prost 0.12.6",
@@ -792,14 +761,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "bt-blockchain-validators"
+name = "bth-blockchain-validators"
 version = "7.1.0"
 dependencies = [
- "bt-blockchain-test-utils",
- "bt-blockchain-types",
- "bt-crypto-keys",
- "bt-util-from-random",
- "bt-util-test-helper",
+ "bth-blockchain-test-utils",
+ "bth-blockchain-types",
+ "bth-crypto-keys",
+ "bth-util-from-random",
+ "bth-util-test-helper",
  "displaydoc",
  "hex",
  "pem",
@@ -810,7 +779,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "bt-cluster-tax"
+name = "bth-cluster-tax"
 version = "0.1.0"
 dependencies = [
  "clap",
@@ -822,15 +791,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "bt-common"
+name = "bth-common"
 version = "7.1.0"
 dependencies = [
  "backtrace",
- "bt-crypto-digestible",
- "bt-crypto-keys",
- "bt-util-build-info",
- "bt-util-logger-macros",
- "bt-util-serial",
+ "bth-crypto-digestible",
+ "bth-crypto-keys",
+ "bth-util-build-info",
+ "bth-util-logger-macros",
+ "bth-util-serial",
  "cfg-if 1.0.0",
  "chrono",
  "displaydoc",
@@ -838,7 +807,6 @@ dependencies = [
  "hex",
  "hex_fmt",
  "hostname",
- "lazy_static",
  "mc-rand",
  "proptest",
  "prost 0.12.6",
@@ -858,22 +826,21 @@ dependencies = [
 ]
 
 [[package]]
-name = "bt-connection"
+name = "bth-connection"
 version = "7.1.0"
 dependencies = [
  "aes-gcm",
  "base64 0.21.7",
- "bt-api",
- "bt-blockchain-types",
- "bt-common",
- "bt-consensus-api",
- "bt-crypto-keys",
- "bt-crypto-noise",
- "bt-transaction-core",
- "bt-util-grpc-tonic",
- "bt-util-serial",
- "bt-util-uri",
- "cookie",
+ "bth-api",
+ "bth-blockchain-types",
+ "bth-common",
+ "bth-consensus-api",
+ "bth-crypto-keys",
+ "bth-crypto-noise",
+ "bth-transaction-core",
+ "bth-util-grpc-tonic",
+ "bth-util-serial",
+ "bth-util-uri",
  "der",
  "displaydoc",
  "mc-rand",
@@ -889,28 +856,28 @@ dependencies = [
 ]
 
 [[package]]
-name = "bt-connection-test-utils"
+name = "bth-connection-test-utils"
 version = "7.1.0"
 dependencies = [
- "bt-blockchain-types",
- "bt-connection",
- "bt-ledger-db",
- "bt-transaction-core",
- "bt-util-uri",
+ "bth-blockchain-types",
+ "bth-connection",
+ "bth-ledger-db",
+ "bth-transaction-core",
+ "bth-util-uri",
 ]
 
 [[package]]
-name = "bt-consensus-api"
+name = "bth-consensus-api"
 version = "7.1.0"
 dependencies = [
- "bt-api",
- "bt-crypto-multisig",
- "bt-ledger-db",
- "bt-transaction-core",
- "bt-transaction-core-test-utils",
- "bt-util-build-grpc-tonic",
- "bt-util-build-script",
- "bt-util-serial",
+ "bth-api",
+ "bth-crypto-multisig",
+ "bth-ledger-db",
+ "bth-transaction-core",
+ "bth-transaction-core-test-utils",
+ "bth-util-build-grpc-tonic",
+ "bth-util-build-script",
+ "bth-util-serial",
  "cargo-emit",
  "futures",
  "prost 0.12.6",
@@ -920,17 +887,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "bt-consensus-scp"
+name = "bth-consensus-scp"
 version = "7.1.0"
 dependencies = [
- "bt-common",
- "bt-consensus-scp-types",
- "bt-crypto-digestible",
- "bt-crypto-keys",
- "bt-util-from-random",
- "bt-util-logger-macros",
- "bt-util-serial",
- "bt-util-test-helper",
+ "bth-common",
+ "bth-consensus-scp-types",
+ "bth-crypto-digestible",
+ "bth-crypto-keys",
+ "bth-util-from-random",
+ "bth-util-logger-macros",
+ "bth-util-serial",
+ "bth-util-test-helper",
  "crossbeam-channel",
  "dashmap 6.1.0",
  "maplit",
@@ -945,27 +912,27 @@ dependencies = [
 ]
 
 [[package]]
-name = "bt-consensus-scp-play"
+name = "bth-consensus-scp-play"
 version = "7.1.0"
 dependencies = [
- "bt-common",
- "bt-consensus-scp",
- "bt-transaction-core",
- "bt-util-uri",
+ "bth-common",
+ "bth-consensus-scp",
+ "bth-transaction-core",
+ "bth-util-uri",
  "clap",
  "serde_json",
 ]
 
 [[package]]
-name = "bt-consensus-scp-types"
+name = "bth-consensus-scp-types"
 version = "7.1.0"
 dependencies = [
- "bt-common",
- "bt-crypto-digestible",
- "bt-crypto-keys",
- "bt-util-from-random",
- "bt-util-serial",
- "bt-util-test-helper",
+ "bth-common",
+ "bth-crypto-digestible",
+ "bth-crypto-keys",
+ "bth-util-from-random",
+ "bth-util-serial",
+ "bth-util-test-helper",
  "prost 0.12.6",
  "rand 0.8.5",
  "rand_hc",
@@ -973,24 +940,23 @@ dependencies = [
 ]
 
 [[package]]
-name = "bt-core"
+name = "bth-core"
 version = "7.1.0"
 dependencies = [
  "anyhow",
- "bt-core-types",
- "bt-crypto-hashes",
- "bt-crypto-keys",
- "bt-test-vectors-definitions",
- "bt-util-from-random",
- "bt-util-test-vector",
- "bt-util-test-with-data",
+ "bth-core-types",
+ "bth-crypto-hashes",
+ "bth-crypto-keys",
+ "bth-test-vectors-definitions",
+ "bth-util-from-random",
+ "bth-util-test-vector",
+ "bth-util-test-with-data",
  "clap",
  "curve25519-dalek",
  "ed25519-dalek",
  "generic-array",
  "hex",
  "hkdf",
- "lazy_static",
  "rand_core 0.6.4",
  "serde",
  "serde_json",
@@ -1001,10 +967,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "bt-core-types"
+name = "bth-core-types"
 version = "7.1.0"
 dependencies = [
- "bt-crypto-keys",
+ "bth-crypto-keys",
  "curve25519-dalek",
  "prost 0.12.6",
  "serde",
@@ -1013,14 +979,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "bt-crypto-box"
+name = "bth-crypto-box"
 version = "7.1.0"
 dependencies = [
  "aead",
- "bt-crypto-hashes",
- "bt-crypto-keys",
- "bt-util-from-random",
- "bt-util-test-helper",
+ "bth-crypto-hashes",
+ "bth-crypto-keys",
+ "bth-util-from-random",
+ "bth-util-test-helper",
  "digest",
  "displaydoc",
  "hkdf",
@@ -1029,10 +995,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "bt-crypto-digestible"
+name = "bth-crypto-digestible"
 version = "7.1.0"
 dependencies = [
- "bt-crypto-digestible-derive",
+ "bth-crypto-digestible-derive",
  "cfg-if 1.0.0",
  "curve25519-dalek",
  "ed25519-dalek",
@@ -1042,7 +1008,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "bt-crypto-digestible-derive"
+name = "bth-crypto-digestible-derive"
 version = "7.1.0"
 dependencies = [
  "proc-macro2",
@@ -1051,50 +1017,50 @@ dependencies = [
 ]
 
 [[package]]
-name = "bt-crypto-digestible-derive-test"
+name = "bth-crypto-digestible-derive-test"
 version = "7.1.0"
 dependencies = [
- "bt-crypto-digestible",
- "bt-crypto-digestible-test-utils",
+ "bth-crypto-digestible",
+ "bth-crypto-digestible-test-utils",
 ]
 
 [[package]]
-name = "bt-crypto-digestible-signature"
+name = "bth-crypto-digestible-signature"
 version = "7.1.0"
 dependencies = [
- "bt-crypto-digestible",
+ "bth-crypto-digestible",
  "signature",
 ]
 
 [[package]]
-name = "bt-crypto-digestible-test-utils"
+name = "bth-crypto-digestible-test-utils"
 version = "7.1.0"
 dependencies = [
- "bt-crypto-digestible",
+ "bth-crypto-digestible",
  "serde_json",
 ]
 
 [[package]]
-name = "bt-crypto-hashes"
+name = "bth-crypto-hashes"
 version = "7.1.0"
 dependencies = [
  "blake2",
- "bt-crypto-digestible",
+ "bth-crypto-digestible",
  "digest",
 ]
 
 [[package]]
-name = "bt-crypto-keys"
+name = "bth-crypto-keys"
 version = "7.1.0"
 dependencies = [
  "base64 0.21.7",
- "bt-crypto-digestible",
- "bt-crypto-digestible-signature",
- "bt-crypto-hashes",
- "bt-util-from-random",
- "bt-util-repr-bytes",
- "bt-util-serial",
- "bt-util-test-helper",
+ "bth-crypto-digestible",
+ "bth-crypto-digestible-signature",
+ "bth-crypto-hashes",
+ "bth-util-from-random",
+ "bth-util-repr-bytes",
+ "bth-util-serial",
+ "bth-util-test-helper",
  "curve25519-dalek",
  "digest",
  "displaydoc",
@@ -1119,22 +1085,22 @@ dependencies = [
 ]
 
 [[package]]
-name = "bt-crypto-memo-mac"
+name = "bth-crypto-memo-mac"
 version = "7.1.0"
 dependencies = [
- "bt-crypto-keys",
+ "bth-crypto-keys",
  "hmac",
  "sha2",
 ]
 
 [[package]]
-name = "bt-crypto-multisig"
+name = "bth-crypto-multisig"
 version = "7.1.0"
 dependencies = [
- "bt-crypto-digestible",
- "bt-crypto-keys",
- "bt-util-from-random",
- "bt-util-serial",
+ "bth-crypto-digestible",
+ "bth-crypto-keys",
+ "bth-util-from-random",
+ "bth-util-serial",
  "prost 0.12.6",
  "rand_core 0.6.4",
  "rand_hc",
@@ -1142,13 +1108,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "bt-crypto-noise"
+name = "bth-crypto-noise"
 version = "7.1.0"
 dependencies = [
  "aead",
  "aes-gcm",
- "bt-crypto-keys",
- "bt-util-from-random",
+ "bth-crypto-keys",
+ "bth-util-from-random",
  "digest",
  "displaydoc",
  "generic-array",
@@ -1163,7 +1129,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "bt-crypto-pq"
+name = "bth-crypto-pq"
 version = "0.1.0"
 dependencies = [
  "hex",
@@ -1179,19 +1145,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "bt-crypto-ring-signature"
+name = "bth-crypto-ring-signature"
 version = "7.1.0"
 dependencies = [
- "bt-account-keys",
- "bt-core-types",
- "bt-crypto-digestible",
- "bt-crypto-digestible-test-utils",
- "bt-crypto-hashes",
- "bt-crypto-keys",
- "bt-util-from-random",
- "bt-util-repr-bytes",
- "bt-util-serial",
- "bt-util-test-helper",
+ "bth-account-keys",
+ "bth-core-types",
+ "bth-crypto-digestible",
+ "bth-crypto-digestible-test-utils",
+ "bth-crypto-hashes",
+ "bth-crypto-keys",
+ "bth-util-from-random",
+ "bth-util-repr-bytes",
+ "bth-util-serial",
+ "bth-util-test-helper",
  "curve25519-dalek",
  "displaydoc",
  "ed25519-dalek",
@@ -1205,15 +1171,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "bt-crypto-ring-signature-signer"
+name = "bth-crypto-ring-signature-signer"
 version = "7.1.0"
 dependencies = [
- "bt-account-keys",
- "bt-crypto-digestible-test-utils",
- "bt-crypto-keys",
- "bt-crypto-ring-signature",
- "bt-transaction-types",
- "bt-util-serial",
+ "bth-account-keys",
+ "bth-crypto-digestible-test-utils",
+ "bth-crypto-keys",
+ "bth-crypto-ring-signature",
+ "bth-transaction-types",
+ "bth-util-serial",
  "curve25519-dalek",
  "displaydoc",
  "generic-array",
@@ -1230,12 +1196,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "bt-crypto-sig"
+name = "bth-crypto-sig"
 version = "7.1.0"
 dependencies = [
- "bt-crypto-keys",
- "bt-util-from-random",
- "bt-util-test-helper",
+ "bth-crypto-keys",
+ "bth-util-from-random",
+ "bth-util-test-helper",
  "merlin",
  "rand_core 0.6.4",
  "rand_hc",
@@ -1243,27 +1209,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "bt-crypto-x509-test-vectors"
-version = "7.1.0"
-dependencies = [
- "bt-crypto-keys",
- "bt-util-build-script",
- "cargo-emit",
- "clap",
- "pem",
-]
-
-[[package]]
-name = "bt-discover"
+name = "bth-discover"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "bt-common",
- "bt-consensus-scp-types",
- "bt-crypto-keys",
- "bt-gossip",
- "bt-util-from-random",
- "bt-util-uri",
+ "bth-common",
+ "bth-consensus-scp-types",
+ "bth-crypto-keys",
+ "bth-gossip",
+ "bth-util-from-random",
+ "bth-util-uri",
  "clap",
  "futures",
  "hex",
@@ -1278,16 +1233,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "bt-gossip"
+name = "bth-gossip"
 version = "0.1.0"
 dependencies = [
  "bitflags 2.4.2",
- "bt-common",
- "bt-consensus-scp-types",
- "bt-crypto-digestible",
- "bt-crypto-keys",
- "bt-util-serial",
- "bt-util-uri",
+ "bth-common",
+ "bth-consensus-scp-types",
+ "bth-crypto-digestible",
+ "bth-crypto-keys",
+ "bth-util-serial",
+ "bth-util-uri",
  "displaydoc",
  "futures",
  "hex",
@@ -1303,25 +1258,25 @@ dependencies = [
 ]
 
 [[package]]
-name = "bt-ledger-db"
+name = "bth-ledger-db"
 version = "7.1.0"
 dependencies = [
- "bt-account-keys",
- "bt-blockchain-test-utils",
- "bt-blockchain-types",
- "bt-common",
- "bt-crypto-keys",
- "bt-crypto-multisig",
- "bt-crypto-ring-signature-signer",
- "bt-transaction-builder",
- "bt-transaction-core",
- "bt-transaction-core-test-utils",
- "bt-util-from-random",
- "bt-util-lmdb",
- "bt-util-metrics",
- "bt-util-serial",
- "bt-util-telemetry",
- "bt-util-test-helper",
+ "bth-account-keys",
+ "bth-blockchain-test-utils",
+ "bth-blockchain-types",
+ "bth-common",
+ "bth-crypto-keys",
+ "bth-crypto-multisig",
+ "bth-crypto-ring-signature-signer",
+ "bth-transaction-builder",
+ "bth-transaction-core",
+ "bth-transaction-core-test-utils",
+ "bth-util-from-random",
+ "bth-util-lmdb",
+ "bth-util-metrics",
+ "bth-util-serial",
+ "bth-util-telemetry",
+ "bth-util-test-helper",
  "displaydoc",
  "lmdb-rkv",
  "mc-rand",
@@ -1332,37 +1287,37 @@ dependencies = [
 ]
 
 [[package]]
-name = "bt-ledger-migration"
+name = "bth-ledger-migration"
 version = "7.1.0"
 dependencies = [
- "bt-common",
- "bt-ledger-db",
- "bt-util-lmdb",
- "bt-util-serial",
+ "bth-common",
+ "bth-ledger-db",
+ "bth-util-lmdb",
+ "bth-util-serial",
  "clap",
  "lmdb-rkv",
  "serde",
 ]
 
 [[package]]
-name = "bt-ledger-sync"
+name = "bth-ledger-sync"
 version = "7.1.0"
 dependencies = [
- "bt-account-keys",
- "bt-api",
- "bt-blockchain-test-utils",
- "bt-blockchain-types",
- "bt-common",
- "bt-connection",
- "bt-connection-test-utils",
- "bt-consensus-scp",
- "bt-ledger-db",
- "bt-peers-test-utils",
- "bt-transaction-core",
- "bt-transaction-core-test-utils",
- "bt-util-telemetry",
- "bt-util-test-helper",
- "bt-util-uri",
+ "bth-account-keys",
+ "bth-api",
+ "bth-blockchain-test-utils",
+ "bth-blockchain-types",
+ "bth-common",
+ "bth-connection",
+ "bth-connection-test-utils",
+ "bth-consensus-scp",
+ "bth-ledger-db",
+ "bth-peers-test-utils",
+ "bth-transaction-core",
+ "bth-transaction-core-test-utils",
+ "bth-util-telemetry",
+ "bth-util-test-helper",
+ "bth-util-uri",
  "crossbeam-channel",
  "displaydoc",
  "mockall",
@@ -1376,23 +1331,23 @@ dependencies = [
 ]
 
 [[package]]
-name = "bt-peers"
+name = "bth-peers"
 version = "7.1.0"
 dependencies = [
- "bt-blockchain-types",
- "bt-common",
- "bt-connection",
- "bt-connection-test-utils",
- "bt-consensus-api",
- "bt-consensus-scp",
- "bt-crypto-digestible",
- "bt-crypto-keys",
- "bt-ledger-db",
- "bt-peers-test-utils",
- "bt-transaction-core",
- "bt-util-grpc-tonic",
- "bt-util-serial",
- "bt-util-uri",
+ "bth-blockchain-types",
+ "bth-common",
+ "bth-connection",
+ "bth-connection-test-utils",
+ "bth-consensus-api",
+ "bth-consensus-scp",
+ "bth-crypto-digestible",
+ "bth-crypto-keys",
+ "bth-ledger-db",
+ "bth-peers-test-utils",
+ "bth-transaction-core",
+ "bth-util-grpc-tonic",
+ "bth-util-serial",
+ "bth-util-uri",
  "crossbeam-channel",
  "displaydoc",
  "mockall",
@@ -1405,20 +1360,20 @@ dependencies = [
 ]
 
 [[package]]
-name = "bt-peers-test-utils"
+name = "bth-peers-test-utils"
 version = "7.1.0"
 dependencies = [
- "bt-blockchain-types",
- "bt-common",
- "bt-connection",
- "bt-consensus-api",
- "bt-consensus-scp",
- "bt-crypto-keys",
- "bt-ledger-db",
- "bt-peers",
- "bt-transaction-core",
- "bt-util-from-random",
- "bt-util-uri",
+ "bth-blockchain-types",
+ "bth-common",
+ "bth-connection",
+ "bth-consensus-api",
+ "bth-consensus-scp",
+ "bth-crypto-keys",
+ "bth-ledger-db",
+ "bth-peers",
+ "bth-transaction-core",
+ "bth-util-from-random",
+ "bth-util-uri",
  "hex",
  "rand 0.8.5",
  "rand_hc",
@@ -1428,86 +1383,69 @@ dependencies = [
 ]
 
 [[package]]
-name = "bt-test-vectors-account-keys"
+name = "bth-test-vectors-account-keys"
 version = "7.1.0"
 dependencies = [
- "bt-account-keys",
- "bt-core",
- "bt-test-vectors-definitions",
- "bt-util-test-vector",
+ "bth-account-keys",
+ "bth-core",
+ "bth-test-vectors-definitions",
+ "bth-util-test-vector",
  "hex",
  "tiny-bip39",
 ]
 
 [[package]]
-name = "bt-test-vectors-b58-encodings"
+name = "bth-test-vectors-b58-encodings"
 version = "7.1.0"
 dependencies = [
- "bt-account-keys",
- "bt-api",
- "bt-test-vectors-definitions",
- "bt-util-test-vector",
+ "bth-account-keys",
+ "bth-api",
+ "bth-test-vectors-definitions",
+ "bth-util-test-vector",
 ]
 
 [[package]]
-name = "bt-test-vectors-definitions"
+name = "bth-test-vectors-definitions"
 version = "7.1.0"
 dependencies = [
- "bt-util-test-vector",
+ "bth-util-test-vector",
  "serde",
 ]
 
 [[package]]
-name = "bt-test-vectors-memos"
+name = "bth-test-vectors-memos"
 version = "7.1.0"
 dependencies = [
- "bt-account-keys",
- "bt-crypto-keys",
- "bt-test-vectors-definitions",
- "bt-transaction-extra",
- "bt-util-from-random",
- "bt-util-serial",
- "bt-util-test-vector",
+ "bth-account-keys",
+ "bth-crypto-keys",
+ "bth-test-vectors-definitions",
+ "bth-transaction-extra",
+ "bth-util-from-random",
+ "bth-util-serial",
+ "bth-util-test-vector",
  "hex",
  "rand 0.8.5",
 ]
 
 [[package]]
-name = "bt-test-vectors-tx-out-records"
-version = "7.1.0"
-dependencies = [
- "bt-account-keys",
- "bt-common",
- "bt-crypto-keys",
- "bt-test-vectors-definitions",
- "bt-transaction-core",
- "bt-util-from-random",
- "bt-util-serial",
- "bt-util-test-vector",
- "hex",
- "mc-oblivious-traits",
- "rand 0.8.5",
-]
-
-[[package]]
-name = "bt-transaction-builder"
+name = "bth-transaction-builder"
 version = "7.1.0"
 dependencies = [
  "assert_matches",
- "bt-account-keys",
- "bt-crypto-digestible",
- "bt-crypto-hashes",
- "bt-crypto-keys",
- "bt-crypto-pq",
- "bt-crypto-ring-signature-signer",
- "bt-transaction-core",
- "bt-transaction-extra",
- "bt-transaction-summary",
- "bt-transaction-types",
- "bt-util-from-random",
- "bt-util-serial",
- "bt-util-test-helper",
- "bt-util-u64-ratio",
+ "bth-account-keys",
+ "bth-crypto-digestible",
+ "bth-crypto-hashes",
+ "bth-crypto-keys",
+ "bth-crypto-pq",
+ "bth-crypto-ring-signature-signer",
+ "bth-transaction-core",
+ "bth-transaction-extra",
+ "bth-transaction-summary",
+ "bth-transaction-types",
+ "bth-util-from-random",
+ "bth-util-serial",
+ "bth-util-test-helper",
+ "bth-util-u64-ratio",
  "cfg-if 1.0.0",
  "curve25519-dalek",
  "displaydoc",
@@ -1523,32 +1461,32 @@ dependencies = [
 ]
 
 [[package]]
-name = "bt-transaction-core"
+name = "bth-transaction-core"
 version = "7.1.0"
 dependencies = [
  "aes",
  "assert_matches",
- "bt-account-keys",
- "bt-common",
- "bt-crypto-box",
- "bt-crypto-digestible",
- "bt-crypto-digestible-test-utils",
- "bt-crypto-hashes",
- "bt-crypto-keys",
- "bt-crypto-multisig",
- "bt-crypto-pq",
- "bt-crypto-ring-signature",
- "bt-crypto-ring-signature-signer",
- "bt-ledger-db",
- "bt-transaction-builder",
- "bt-transaction-core-test-utils",
- "bt-transaction-types",
- "bt-util-from-random",
- "bt-util-repr-bytes",
- "bt-util-serial",
- "bt-util-test-helper",
- "bt-util-u64-ratio",
- "bt-util-zip-exact",
+ "bth-account-keys",
+ "bth-common",
+ "bth-crypto-box",
+ "bth-crypto-digestible",
+ "bth-crypto-digestible-test-utils",
+ "bth-crypto-hashes",
+ "bth-crypto-keys",
+ "bth-crypto-multisig",
+ "bth-crypto-pq",
+ "bth-crypto-ring-signature",
+ "bth-crypto-ring-signature-signer",
+ "bth-ledger-db",
+ "bth-transaction-builder",
+ "bth-transaction-core-test-utils",
+ "bth-transaction-types",
+ "bth-util-from-random",
+ "bth-util-repr-bytes",
+ "bth-util-serial",
+ "bth-util-test-helper",
+ "bth-util-u64-ratio",
+ "bth-util-zip-exact",
  "bulletproofs-og",
  "crc",
  "ctr",
@@ -1570,44 +1508,44 @@ dependencies = [
 ]
 
 [[package]]
-name = "bt-transaction-core-test-utils"
+name = "bth-transaction-core-test-utils"
 version = "7.1.0"
 dependencies = [
- "bt-account-keys",
- "bt-crypto-keys",
- "bt-crypto-multisig",
- "bt-crypto-ring-signature-signer",
- "bt-transaction-core",
- "bt-util-from-random",
- "bt-util-serial",
+ "bth-account-keys",
+ "bth-crypto-keys",
+ "bth-crypto-multisig",
+ "bth-crypto-ring-signature-signer",
+ "bth-transaction-core",
+ "bth-util-from-random",
+ "bth-util-serial",
  "mc-rand",
 ]
 
 [[package]]
-name = "bt-transaction-extra"
+name = "bth-transaction-extra"
 version = "7.1.0"
 dependencies = [
  "assert_matches",
- "bt-account-keys",
- "bt-cluster-tax",
- "bt-core",
- "bt-crypto-digestible",
- "bt-crypto-hashes",
- "bt-crypto-keys",
- "bt-crypto-memo-mac",
- "bt-crypto-ring-signature",
- "bt-crypto-ring-signature-signer",
- "bt-transaction-builder",
- "bt-transaction-core",
- "bt-transaction-summary",
- "bt-transaction-types",
- "bt-util-from-random",
- "bt-util-repr-bytes",
- "bt-util-serial",
- "bt-util-test-helper",
- "bt-util-u64-ratio",
- "bt-util-vec-map",
- "bt-util-zip-exact",
+ "bth-account-keys",
+ "bth-cluster-tax",
+ "bth-core",
+ "bth-crypto-digestible",
+ "bth-crypto-hashes",
+ "bth-crypto-keys",
+ "bth-crypto-memo-mac",
+ "bth-crypto-ring-signature",
+ "bth-crypto-ring-signature-signer",
+ "bth-transaction-builder",
+ "bth-transaction-core",
+ "bth-transaction-summary",
+ "bth-transaction-types",
+ "bth-util-from-random",
+ "bth-util-repr-bytes",
+ "bth-util-serial",
+ "bth-util-test-helper",
+ "bth-util-u64-ratio",
+ "bth-util-vec-map",
+ "bth-util-zip-exact",
  "cfg-if 1.0.0",
  "curve25519-dalek",
  "displaydoc",
@@ -1621,21 +1559,21 @@ dependencies = [
 ]
 
 [[package]]
-name = "bt-transaction-signer"
+name = "bth-transaction-signer"
 version = "7.1.0"
 dependencies = [
  "anyhow",
- "bt-account-keys",
- "bt-common",
- "bt-core",
- "bt-core-types",
- "bt-crypto-keys",
- "bt-crypto-ring-signature",
- "bt-crypto-ring-signature-signer",
- "bt-transaction-core",
- "bt-transaction-summary",
- "bt-util-repr-bytes",
- "bt-util-serial",
+ "bth-account-keys",
+ "bth-common",
+ "bth-core",
+ "bth-core-types",
+ "bth-crypto-keys",
+ "bth-crypto-ring-signature",
+ "bth-crypto-ring-signature-signer",
+ "bth-transaction-core",
+ "bth-transaction-summary",
+ "bth-util-repr-bytes",
+ "bth-util-serial",
  "clap",
  "displaydoc",
  "hex",
@@ -1649,19 +1587,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "bt-transaction-summary"
+name = "bth-transaction-summary"
 version = "7.1.0"
 dependencies = [
- "bt-account-keys",
- "bt-core",
- "bt-crypto-digestible",
- "bt-crypto-keys",
- "bt-crypto-ring-signature",
- "bt-transaction-core",
- "bt-transaction-types",
- "bt-util-from-random",
- "bt-util-vec-map",
- "bt-util-zip-exact",
+ "bth-account-keys",
+ "bth-core",
+ "bth-crypto-digestible",
+ "bth-crypto-keys",
+ "bth-crypto-ring-signature",
+ "bth-transaction-core",
+ "bth-transaction-types",
+ "bth-util-from-random",
+ "bth-util-vec-map",
+ "bth-util-zip-exact",
  "displaydoc",
  "heapless",
  "prost 0.12.6",
@@ -1672,13 +1610,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "bt-transaction-types"
+name = "bth-transaction-types"
 version = "7.1.0"
 dependencies = [
- "bt-crypto-digestible",
- "bt-crypto-hashes",
- "bt-crypto-keys",
- "bt-crypto-ring-signature",
+ "bth-crypto-digestible",
+ "bth-crypto-hashes",
+ "bth-crypto-keys",
+ "bth-crypto-ring-signature",
  "crc",
  "displaydoc",
  "hkdf",
@@ -1691,15 +1629,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "bt-util-build-grpc-tonic"
+name = "bth-util-build-grpc-tonic"
 version = "7.1.0"
 dependencies = [
- "bt-util-build-script",
+ "bth-util-build-script",
  "tonic-build",
 ]
 
 [[package]]
-name = "bt-util-build-info"
+name = "bth-util-build-info"
 version = "7.1.0"
 dependencies = [
  "cargo-emit",
@@ -1707,49 +1645,47 @@ dependencies = [
 ]
 
 [[package]]
-name = "bt-util-build-script"
+name = "bth-util-build-script"
 version = "7.1.0"
 dependencies = [
  "cargo-emit",
  "displaydoc",
- "lazy_static",
  "url",
  "walkdir",
 ]
 
 [[package]]
-name = "bt-util-cli"
+name = "bth-util-cli"
 version = "7.1.0"
 dependencies = [
- "bt-util-build-info",
+ "bth-util-build-info",
  "clap",
 ]
 
 [[package]]
-name = "bt-util-from-random"
+name = "bth-util-from-random"
 version = "7.1.0"
 dependencies = [
  "rand_core 0.6.4",
 ]
 
 [[package]]
-name = "bt-util-grpc-tonic"
+name = "bth-util-grpc-tonic"
 version = "7.1.0"
 dependencies = [
  "async-trait",
  "base64 0.21.7",
- "bt-common",
- "bt-util-build-grpc-tonic",
- "bt-util-build-info",
- "bt-util-metrics",
- "bt-util-serial",
- "bt-util-uri",
+ "bth-common",
+ "bth-util-build-grpc-tonic",
+ "bth-util-build-info",
+ "bth-util-metrics",
+ "bth-util-serial",
+ "bth-util-uri",
  "displaydoc",
  "futures",
  "hex",
  "hex_fmt",
  "hmac",
- "lazy_static",
  "prometheus",
  "prost 0.12.6",
  "rand 0.8.5",
@@ -1765,22 +1701,21 @@ dependencies = [
 ]
 
 [[package]]
-name = "bt-util-host-cert"
+name = "bth-util-host-cert"
 version = "7.1.0"
 
 [[package]]
-name = "bt-util-keyfile"
+name = "bth-util-keyfile"
 version = "7.1.0"
 dependencies = [
  "base64 0.21.7",
- "bt-account-keys",
- "bt-api",
- "bt-core",
- "bt-crypto-x509-test-vectors",
- "bt-util-from-random",
- "bt-util-parse",
- "bt-util-serial",
- "bt-util-test-helper",
+ "bth-account-keys",
+ "bth-api",
+ "bth-core",
+ "bth-util-from-random",
+ "bth-util-parse",
+ "bth-util-serial",
+ "bth-util-test-helper",
  "clap",
  "displaydoc",
  "hex",
@@ -1798,17 +1733,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "bt-util-lmdb"
+name = "bth-util-lmdb"
 version = "7.1.0"
 dependencies = [
- "bt-util-serial",
+ "bth-util-serial",
  "displaydoc",
  "lmdb-rkv",
  "prost 0.12.6",
 ]
 
 [[package]]
-name = "bt-util-logger-macros"
+name = "bth-util-logger-macros"
 version = "7.1.0"
 dependencies = [
  "proc-macro2",
@@ -1817,27 +1752,26 @@ dependencies = [
 ]
 
 [[package]]
-name = "bt-util-metered-channel"
+name = "bth-util-metered-channel"
 version = "7.1.0"
 dependencies = [
- "bt-util-metrics",
+ "bth-util-metrics",
  "crossbeam-channel",
 ]
 
 [[package]]
-name = "bt-util-metrics"
+name = "bth-util-metrics"
 version = "7.1.0"
 dependencies = [
- "bt-common",
+ "bth-common",
  "chrono",
- "lazy_static",
  "prometheus",
  "serde_json",
  "tonic 0.10.2",
 ]
 
 [[package]]
-name = "bt-util-parse"
+name = "bth-util-parse"
 version = "7.1.0"
 dependencies = [
  "hex",
@@ -1845,29 +1779,29 @@ dependencies = [
 ]
 
 [[package]]
-name = "bt-util-repr-bytes"
+name = "bth-util-repr-bytes"
 version = "7.1.0"
 dependencies = [
  "generic-array",
  "hex_fmt",
+ "postcard",
  "prost 0.12.6",
  "serde",
- "serde_cbor",
 ]
 
 [[package]]
-name = "bt-util-serial"
+name = "bth-util-serial"
 version = "7.1.0"
 dependencies = [
+ "postcard",
  "prost 0.12.6",
  "serde",
- "serde_cbor",
  "serde_json",
  "serde_with",
 ]
 
 [[package]]
-name = "bt-util-telemetry"
+name = "bth-util-telemetry"
 version = "7.1.0"
 dependencies = [
  "cfg-if 1.0.0",
@@ -1879,11 +1813,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "bt-util-test-helper"
+name = "bth-util-test-helper"
 version = "7.1.0"
 dependencies = [
- "bt-account-keys",
- "bt-common",
+ "bth-account-keys",
+ "bth-common",
  "clap",
  "itertools 0.12.1",
  "rand 0.8.5",
@@ -1891,7 +1825,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "bt-util-test-vector"
+name = "bth-util-test-vector"
 version = "7.1.0"
 dependencies = [
  "serde",
@@ -1899,7 +1833,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "bt-util-test-with-data"
+name = "bth-util-test-with-data"
 version = "7.1.0"
 dependencies = [
  "proc-macro2",
@@ -1908,18 +1842,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "bt-util-u64-ratio"
+name = "bth-util-u64-ratio"
 version = "7.1.0"
 
 [[package]]
-name = "bt-util-uri"
+name = "bth-util-uri"
 version = "7.1.0"
 dependencies = [
  "base64 0.21.7",
- "bt-common",
- "bt-crypto-keys",
- "bt-util-from-random",
- "bt-util-host-cert",
+ "bth-common",
+ "bth-crypto-keys",
+ "bth-util-from-random",
+ "bth-util-host-cert",
  "displaydoc",
  "hex",
  "percent-encoding",
@@ -1930,7 +1864,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "bt-util-vec-map"
+name = "bth-util-vec-map"
 version = "7.1.0"
 dependencies = [
  "displaydoc",
@@ -1938,7 +1872,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "bt-util-zip-exact"
+name = "bth-util-zip-exact"
 version = "7.1.0"
 dependencies = [
  "serde",
@@ -2158,6 +2092,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cobs"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0fa961b519f0b462e3a3b4a34b64d119eeaca1d59af726fe450bbba07a9fc0a1"
+dependencies = [
+ "thiserror 2.0.17",
+]
+
+[[package]]
 name = "colorchoice"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2183,16 +2126,6 @@ name = "const-str"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2f421161cb492475f1661ddc9815a745a1c894592070661180fdec3d4872e9c3"
-
-[[package]]
-name = "cookie"
-version = "0.18.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3cd91cf61412820176e137621345ee43b3f4423e589e7ae4e50d601d93e35ef8"
-dependencies = [
- "time",
- "version_check",
-]
 
 [[package]]
 name = "core-foundation"
@@ -2646,6 +2579,18 @@ name = "either"
 version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48c757948c5ede0e46177b7add2e67155f70e33c07fea8284df6576da70b3719"
+
+[[package]]
+name = "embedded-io"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ef1a6892d9eef45c8fa6b9e0086428a2cca8491aca8f787c534a3d6d0bcb3ced"
+
+[[package]]
+name = "embedded-io"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "edd0f118536f44f5ccd48bcb8b111bdc3de888b58c74639dfb034a357d0f206d"
 
 [[package]]
 name = "encoding_rs"
@@ -4261,17 +4206,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mc-oblivious-traits"
-version = "2.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "56a0bf3928f85cb40f30954d0882f595b0543343e978f5d7e24afd392bd5e127"
-dependencies = [
- "aligned-cmov",
- "balanced-tree-index",
- "rand_core 0.6.4",
-]
-
-[[package]]
 name = "mc-rand"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4924,6 +4858,18 @@ dependencies = [
  "cpufeatures",
  "opaque-debug",
  "universal-hash",
+]
+
+[[package]]
+name = "postcard"
+version = "1.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6764c3b5dd454e283a30e6dfe78e9b31096d9e32036b5d1eaac7a6119ccb9a24"
+dependencies = [
+ "cobs",
+ "embedded-io 0.4.0",
+ "embedded-io 0.6.1",
+ "serde",
 ]
 
 [[package]]
@@ -5977,15 +5923,6 @@ checksum = "9a8e94ea7f378bd32cbbd37198a4a91436180c5bb472411e48b5ec2e2124ae9e"
 dependencies = [
  "serde_core",
  "serde_derive",
-]
-
-[[package]]
-name = "serde_cbor"
-version = "0.11.1"
-source = "git+https://github.com/mobilecoinofficial/cbor?rev=4c886a7c1d523aae1ec4aa7386f402cb2f4341b5#4c886a7c1d523aae1ec4aa7386f402cb2f4341b5"
-dependencies = [
- "half",
- "serde",
 ]
 
 [[package]]
@@ -7693,13 +7630,3 @@ dependencies = [
  "quote",
  "syn 2.0.111",
 ]
-
-[[patch.unused]]
-name = "mbedtls"
-version = "0.8.1"
-source = "git+https://github.com/mobilecoinfoundation/rust-mbedtls.git?rev=f82523478a1dd813ca381c190175355d249a8123#f82523478a1dd813ca381c190175355d249a8123"
-
-[[patch.unused]]
-name = "mbedtls-sys-auto"
-version = "2.26.1"
-source = "git+https://github.com/mobilecoinfoundation/rust-mbedtls.git?rev=f82523478a1dd813ca381c190175355d249a8123#f82523478a1dd813ca381c190175355d249a8123"

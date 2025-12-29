@@ -2,7 +2,7 @@
 
 //! Botho Transaction Constants.
 
-use bt_crypto_ring_signature::Scalar;
+use bth_crypto_ring_signature::Scalar;
 
 /// Maximum number of transactions that may be included in a Block.
 pub const MAX_TRANSACTIONS_PER_BLOCK: usize = 5000;

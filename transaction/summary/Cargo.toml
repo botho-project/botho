@@ -1,5 +1,5 @@
 [package]
-name = "bt-transaction-summary"
+name = "bth-transaction-summary"
 version = "7.1.0"
 authors = ["Botho"]
 edition = "2021"
@@ -10,20 +10,20 @@ readme = "README.md"
 std = ["prost?/std"]
 serde = [
     "dep:serde",
-    "bt-account-keys?/serde",
-    "bt-crypto-keys/serde",
-    "bt-crypto-ring-signature/serde",
-    "bt-transaction-types/serde",
+    "bth-account-keys?/serde",
+    "bth-crypto-keys/serde",
+    "bth-crypto-ring-signature/serde",
+    "bth-transaction-types/serde",
 ]
 prost = [
     "dep:prost",
-    "bt-account-keys?/prost",
-    "bt-crypto-keys/prost",
-    "bt-crypto-ring-signature/prost",
-    "bt-transaction-types/prost",
+    "bth-account-keys?/prost",
+    "bth-crypto-keys/prost",
+    "bth-crypto-ring-signature/prost",
+    "bth-transaction-types/prost",
 ]
 
-default = ["std", "serde", "prost", "bt-account-keys"]
+default = ["std", "serde", "prost", "bth-account-keys"]
 
 [dependencies]
 # External dependencies
@@ -31,14 +31,14 @@ displaydoc = { workspace = true }
 heapless = { workspace = true }
 
 # Botho dependencies
-bt-account-keys = { workspace = true, optional = true }
-bt-core = { workspace = true }
-bt-crypto-digestible = { workspace = true, features = ["dalek", "derive"] }
-bt-crypto-keys = { workspace = true }
-bt-crypto-ring-signature = { workspace = true }
-bt-transaction-types = { workspace = true, features = ["alloc"] }
-bt-util-vec-map = { workspace = true }
-bt-util-zip-exact = { workspace = true }
+bth-account-keys = { workspace = true, optional = true }
+bth-core = { workspace = true }
+bth-crypto-digestible = { workspace = true, features = ["dalek", "derive"] }
+bth-crypto-keys = { workspace = true }
+bth-crypto-ring-signature = { workspace = true }
+bth-transaction-types = { workspace = true, features = ["alloc"] }
+bth-util-vec-map = { workspace = true }
+bth-util-zip-exact = { workspace = true }
 
 prost = { workspace = true, features = ["prost-derive"], optional = true }
 serde = { workspace = true, features = ["derive"], optional = true }
@@ -46,6 +46,6 @@ subtle = { workspace = true, features = ["i128"] }
 zeroize = { workspace = true }
 
 [dev-dependencies]
-bt-transaction-core = { workspace = true, features = [] }
-bt-util-from-random = { workspace = true }
+bth-transaction-core = { workspace = true, features = [] }
+bth-util-from-random = { workspace = true }
 rand = { workspace = true }

@@ -5,7 +5,7 @@
 //! This was proposed for standardization in bothofoundation/mcips/pull/32
 
 use crate::{impl_memo_type_conversions, RegisteredMemoType};
-use bt_transaction_core::MemoError;
+use bth_transaction_core::MemoError;
 
 /// Memo representing the cancellation of a gift code.
 ///

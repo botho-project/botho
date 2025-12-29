@@ -1,7 +1,7 @@
 // Copyright (c) 2018-2022 The Botho Foundation
 
-use bt_account_keys::{AccountKey, PublicAddress, ShortAddressHash};
-use bt_crypto_keys::{RistrettoPrivate, RistrettoPublic};
+use bth_account_keys::{AccountKey, PublicAddress, ShortAddressHash};
+use bth_crypto_keys::{RistrettoPrivate, RistrettoPublic};
 
 /// A credential that a sender can use to make an Authenticated Sender Memo.
 ///

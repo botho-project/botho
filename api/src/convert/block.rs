@@ -3,8 +3,8 @@
 //! Convert to/from blockchain::Block
 
 use crate::{blockchain, ConversionError};
-use bt_blockchain_types::{Block, BlockContentsHash, BlockID};
-use bt_transaction_core::tx::TxOutMembershipElement;
+use bth_blockchain_types::{Block, BlockContentsHash, BlockID};
+use bth_transaction_core::tx::TxOutMembershipElement;
 
 /// Convert Block --> blockchain::Block.
 impl From<&Block> for blockchain::Block {
@@ -52,7 +52,7 @@ impl TryFrom<&blockchain::Block> for Block {
 mod tests {
     use super::*;
     use crate::external;
-    use bt_transaction_core::{membership_proofs::Range, tx::TxOutMembershipHash};
+    use bth_transaction_core::{membership_proofs::Range, tx::TxOutMembershipHash};
     use prost::Message;
 
     #[test]
@@ -178,13 +178,13 @@ mod tests {
             let blockchain_block_bytes = blockchain_block.encode_to_vec();
 
             let block_from_prost: Block =
-                bt_util_serial::decode(&blockchain_block_bytes).expect("failed decoding");
+                bth_util_serial::decode(&blockchain_block_bytes).expect("failed decoding");
             assert_eq!(source_block, block_from_prost);
         }
 
         // Encode using `prost`, decode using `protobuf`.
         {
-            let prost_block_bytes = bt_util_serial::encode(&source_block);
+            let prost_block_bytes = bth_util_serial::encode(&source_block);
             let blockchain_block =
                 blockchain::Block::decode(prost_block_bytes.as_slice()).expect("failed decoding");
 

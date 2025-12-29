@@ -32,7 +32,7 @@ members = [
     "crypto/ring-signature",
     "crypto/ring-signature/signer",
     "crypto/sig",
-    "crypto/x509/test-vectors",
+    # "crypto/x509/test-vectors",  # Removed: requires openssl for cert generation
     "ledger/db",
     "ledger/migration",
     "ledger/sync",
@@ -41,7 +41,7 @@ members = [
     "test-vectors/account-keys",
     "test-vectors/b58-encodings",
     "test-vectors/memos",
-    "test-vectors/tx-out-records",
+    # "test-vectors/tx-out-records",  # Removed: fog-dependent
     "transaction/builder",
     "transaction/core",
     "transaction/core/test-utils",
@@ -72,7 +72,7 @@ members = [
     "util/zip-exact",
 ]
 exclude = [
-    # bt-util-serial should only be accessed via the `common` crate.
+    # bth-util-serial should only be accessed via the `common` crate.
     "util/serial",
     # Watcher is SGX-specific and removed post-SGX
     "watcher",
@@ -111,18 +111,12 @@ cc = "1"
 cfg-if = "1"
 chrono = { version = "0.4", default-features = false }
 clap = "4"
-clio = "0.3"
-cookie = "0.18"
 crc = { version = "3", default-features = false }
 criterion = "0.5"
 crossbeam-channel = "0.5"
 ctr = "0.9"
-ctrlc = "3"
 curve25519-dalek = { version = "4", default-features = false }
 der = { version = "0.7", default-features = false }
-diesel = "2"
-diesel-derive-enum = "2"
-diesel_migrations = "2"
 digest = { version = "0.10", default-features = false }
 dashmap = "6"
 dirs = "5"
@@ -130,7 +124,6 @@ displaydoc = { version = "0.2", default-features = false }
 dyn-clone = "1"
 ed25519 = { version = "2", default-features = false }
 ed25519-dalek = { version = "2", default-features = false }
-fs_extra = "1"
 futures = "0.3"
 generic-array = { version = "0.14", default-features = false }
 getrandom = "0.2"
@@ -147,13 +140,9 @@ json = "0.12"
 lazy_static = "1"
 libc = "0.2"
 libp2p = { version = "0.54", default-features = false }
-libz-sys = "1"
-link-cplusplus = "1"
 lmdb-rkv = "0.14"
 log = "0.4"
 maplit = "1"
-mbedtls = { version = "0.8", default-features = false }
-mbedtls-sys-auto = "2"
 mc-oblivious-aes-gcm = { version = "0.10", default-features = false }
 mc-oblivious-traits = { version = "2", features = ["no_asm_insecure"] }
 mc-rand = "1"
@@ -168,8 +157,6 @@ opentelemetry_sdk = "0.25"
 p256 = { version = "0.13", default-features = false }
 pem = "3"
 percent-encoding = "2"
-pkg-config = "0.3"
-portpicker = "0.1"
 pqcrypto-dilithium = { version = "0.5", default-features = false }
 pqcrypto-kyber = { version = "0.8", default-features = false }
 pqcrypto-traits = { version = "0.3", default-features = false }
@@ -180,9 +167,8 @@ prometheus = "0.13"
 proptest = { version = "1", default-features = false }
 prost = { version = "0.12", default-features = false, features = ["derive"] }
 prost-build = "0.12"
-protobuf = "2"
+postcard = { version = "1", default-features = false, features = ["alloc"] }
 quote = "1"
-r2d2 = "0.8"
 rand = { version = "0.8", default-features = false }
 rand_chacha = "0.3"
 rand_core = { version = "0.6", default-features = false }
@@ -192,15 +178,11 @@ rayon = "1"
 regex = "1"
 reqwest = { version = "0.11", default-features = false }
 retry = "2"
-rocket = "0.5"
-rusoto_core = { version = "0.48", default-features = false }
-rusoto_s3 = { version = "0.48", default-features = false }
 schnorrkel-og = { version = "0.11.0-pre.0", default-features = false }
 secrecy = "0.8"
 semver = "1"
 sentry = { version = "0.32", default-features = false }
 serde = { version = "1", default-features = false }
-serde_cbor = { version = "0.11", default-features = false }
 serde_derive = "1"
 serde_json = { version = "1", default-features = false, features = ["alloc"] }
 serde_with = { version = "3", default-features = false }
@@ -220,11 +202,9 @@ slog-scope = "4"
 slog-stdlog = "4"
 slog-term = "2"
 static_assertions = "1"
-stdext = "0.3"
 subtle = { version = "2", default-features = false }
 syn = "2"
 tempfile = "3"
-textwrap = "0.16"
 thiserror = "1"
 tiny-bip39 = "1"
 tokio = "1"
@@ -243,74 +223,74 @@ x509-signature = "0.5"
 yare = "2"
 zeroize = { version = "1", default-features = false }
 
-bt-account-keys = { path = "account-keys", default-features = false }
-bt-account-keys-types = { path = "account-keys/types" }
-bt-api = { path = "api" }
-bt-blockchain-test-utils = { path = "blockchain/test-utils" }
-bt-blockchain-types = { path = "blockchain/types" }
-bt-cluster-tax = { path = "cluster-tax" }
-bt-common = { path = "common", default-features = false }
-bt-connection = { path = "connection" }
-bt-connection-test-utils = { path = "connection/test-utils" }
-bt-consensus-api = { path = "consensus/api" }
-bt-consensus-scp = { path = "consensus/scp" }
-bt-consensus-scp-types = { path = "consensus/scp/types" }
-bt-core = { path = "core", default-features = false }
-bt-core-types = { path = "core/types", default-features = false }
-bt-crypto-box = { path = "crypto/box" }
-bt-crypto-digestible = { path = "crypto/digestible", default-features = false }
-bt-crypto-digestible-derive = { path = "crypto/digestible/derive", default-features = false }
-bt-crypto-digestible-signature = { path = "crypto/digestible/signature", default-features = false }
-bt-crypto-digestible-test-utils = { path = "crypto/digestible/test-utils" }
-bt-crypto-hashes = { path = "crypto/hashes", default-features = false }
-bt-crypto-keys = { path = "crypto/keys", default-features = false }
-bt-crypto-memo-mac = { path = "crypto/memo-mac" }
-bt-crypto-multisig = { path = "crypto/multisig", default-features = false }
-bt-crypto-noise = { path = "crypto/noise", default-features = false }
-bt-crypto-pq = { path = "crypto/pq", default-features = false }
-bt-crypto-ring-signature = { path = "crypto/ring-signature", default-features = false }
-bt-crypto-ring-signature-signer = { path = "crypto/ring-signature/signer", default-features = false }
-bt-crypto-x509-test-vectors = { path = "crypto/x509/test-vectors" }
-bt-ledger-db = { path = "ledger/db" }
-bt-ledger-migration = { path = "ledger/migration" }
-bt-ledger-sync = { path = "ledger/sync" }
-bt-peers = { path = "peers" }
-bt-peers-test-utils = { path = "peers/test-utils" }
-bt-test-vectors-account-keys = { path = "test-vectors/account-keys" }
-bt-test-vectors-b58-encodings = { path = "test-vectors/b58-encodings" }
-bt-test-vectors-definitions = { path = "test-vectors/definitions" }
-bt-test-vectors-tx-out-records = { path = "test-vectors/tx-out-records" }
-bt-transaction-builder = { path = "transaction/builder" }
-bt-transaction-core = { path = "transaction/core", default-features = false }
-bt-transaction-core-test-utils = { path = "transaction/core/test-utils" }
-bt-transaction-extra = { path = "transaction/extra" }
-bt-transaction-summary = { path = "transaction/summary" }
-bt-transaction-types = { path = "transaction/types", default-features = false }
-bt-util-build-grpc-tonic = { path = "util/build/grpc-tonic" }
-bt-util-build-info = { path = "util/build/info" }
-bt-util-build-script = { path = "util/build/script" }
-bt-util-cli = { path = "util/cli" }
-bt-util-from-random = { path = "util/from-random", default-features = false }
-bt-util-grpc-tonic = { path = "util/grpc-tonic" }
-bt-util-host-cert = { path = "util/host-cert", default-features = false }
-bt-util-keyfile = { path = "util/keyfile" }
-bt-util-lmdb = { path = "util/lmdb" }
-bt-util-logger-macros = { path = "util/logger-macros" }
-bt-util-metered-channel = { path = "util/metered-channel" }
-bt-util-metrics = { path = "util/metrics" }
-bt-util-parse = { path = "util/parse" }
-bt-util-repr-bytes = { path = "util/repr-bytes", default-features = false }
-bt-util-serial = { path = "util/serial", default-features = false }
-bt-util-telemetry = { path = "util/telemetry" }
-bt-util-test-helper = { path = "util/test-helper", default-features = false }
-bt-util-test-vector = { path = "util/test-vector" }
-bt-util-test-with-data = { path = "util/test-with-data" }
-bt-util-u64-ratio = { path = "util/u64-ratio" }
-bt-util-uri = { path = "util/uri" }
-bt-util-vec-map = { path = "util/vec-map" }
-bt-util-zip-exact = { path = "util/zip-exact", default-features = false }
-bt-gossip = { path = "gossip" }
-bt-discover = { path = "discover" }
+bth-account-keys = { path = "account-keys", default-features = false }
+bth-account-keys-types = { path = "account-keys/types" }
+bth-api = { path = "api" }
+bth-blockchain-test-utils = { path = "blockchain/test-utils" }
+bth-blockchain-types = { path = "blockchain/types" }
+bth-cluster-tax = { path = "cluster-tax" }
+bth-common = { path = "common", default-features = false }
+bth-connection = { path = "connection" }
+bth-connection-test-utils = { path = "connection/test-utils" }
+bth-consensus-api = { path = "consensus/api" }
+bth-consensus-scp = { path = "consensus/scp" }
+bth-consensus-scp-types = { path = "consensus/scp/types" }
+bth-core = { path = "core", default-features = false }
+bth-core-types = { path = "core/types", default-features = false }
+bth-crypto-box = { path = "crypto/box" }
+bth-crypto-digestible = { path = "crypto/digestible", default-features = false }
+bth-crypto-digestible-derive = { path = "crypto/digestible/derive", default-features = false }
+bth-crypto-digestible-signature = { path = "crypto/digestible/signature", default-features = false }
+bth-crypto-digestible-test-utils = { path = "crypto/digestible/test-utils" }
+bth-crypto-hashes = { path = "crypto/hashes", default-features = false }
+bth-crypto-keys = { path = "crypto/keys", default-features = false }
+bth-crypto-memo-mac = { path = "crypto/memo-mac" }
+bth-crypto-multisig = { path = "crypto/multisig", default-features = false }
+bth-crypto-noise = { path = "crypto/noise", default-features = false }
+bth-crypto-pq = { path = "crypto/pq", default-features = false }
+bth-crypto-ring-signature = { path = "crypto/ring-signature", default-features = false }
+bth-crypto-ring-signature-signer = { path = "crypto/ring-signature/signer", default-features = false }
+# bth-crypto-x509-test-vectors = { path = "crypto/x509/test-vectors" }  # Removed: requires openssl
+bth-ledger-db = { path = "ledger/db" }
+bth-ledger-migration = { path = "ledger/migration" }
+bth-ledger-sync = { path = "ledger/sync" }
+bth-peers = { path = "peers" }
+bth-peers-test-utils = { path = "peers/test-utils" }
+bth-test-vectors-account-keys = { path = "test-vectors/account-keys" }
+bth-test-vectors-b58-encodings = { path = "test-vectors/b58-encodings" }
+bth-test-vectors-definitions = { path = "test-vectors/definitions" }
+# bth-test-vectors-tx-out-records = { path = "test-vectors/tx-out-records" }  # Removed: fog-dependent
+bth-transaction-builder = { path = "transaction/builder" }
+bth-transaction-core = { path = "transaction/core", default-features = false }
+bth-transaction-core-test-utils = { path = "transaction/core/test-utils" }
+bth-transaction-extra = { path = "transaction/extra" }
+bth-transaction-summary = { path = "transaction/summary" }
+bth-transaction-types = { path = "transaction/types", default-features = false }
+bth-util-build-grpc-tonic = { path = "util/build/grpc-tonic" }
+bth-util-build-info = { path = "util/build/info" }
+bth-util-build-script = { path = "util/build/script" }
+bth-util-cli = { path = "util/cli" }
+bth-util-from-random = { path = "util/from-random", default-features = false }
+bth-util-grpc-tonic = { path = "util/grpc-tonic" }
+bth-util-host-cert = { path = "util/host-cert", default-features = false }
+bth-util-keyfile = { path = "util/keyfile" }
+bth-util-lmdb = { path = "util/lmdb" }
+bth-util-logger-macros = { path = "util/logger-macros" }
+bth-util-metered-channel = { path = "util/metered-channel" }
+bth-util-metrics = { path = "util/metrics" }
+bth-util-parse = { path = "util/parse" }
+bth-util-repr-bytes = { path = "util/repr-bytes", default-features = false }
+bth-util-serial = { path = "util/serial", default-features = false }
+bth-util-telemetry = { path = "util/telemetry" }
+bth-util-test-helper = { path = "util/test-helper", default-features = false }
+bth-util-test-vector = { path = "util/test-vector" }
+bth-util-test-with-data = { path = "util/test-with-data" }
+bth-util-u64-ratio = { path = "util/u64-ratio" }
+bth-util-uri = { path = "util/uri" }
+bth-util-vec-map = { path = "util/vec-map" }
+bth-util-zip-exact = { path = "util/zip-exact", default-features = false }
+bth-gossip = { path = "gossip" }
+bth-discover = { path = "discover" }
 
 [profile.dev]
 opt-level = 0
@@ -349,17 +329,8 @@ lto = "thin"
 # Fork and rename to use "OG" dalek-cryptography with latest dependencies.
 bulletproofs-og = { git = "https://github.com/mobilecoinfoundation/bulletproofs.git", rev = "9abfdc054d9ba65f1e185ea1e6eff3947ce879dc" }
 
-# mbedtls patched to allow certificate verification with a profile
-mbedtls = { git = "https://github.com/mobilecoinfoundation/rust-mbedtls.git", rev = "f82523478a1dd813ca381c190175355d249a8123" }
-mbedtls-sys-auto = { git = "https://github.com/mobilecoinfoundation/rust-mbedtls.git", rev = "f82523478a1dd813ca381c190175355d249a8123" }
-
 # Override lmdb-rkv for a necessary bugfix (see https://github.com/mozilla/lmdb-rs/pull/80)
 lmdb-rkv = { git = "https://github.com/mozilla/lmdb-rs", rev = "df1c2f5" }
 
 # Fork and rename to use "OG" dalek-cryptography.
 schnorrkel-og = { git = "https://github.com/mobilecoinfoundation/schnorrkel.git", rev = "049bf9d30f3bbe072e2ad1b5eefdf0f3c851215e" }
-
-# Fixes the following:
-# * Allow enabling `serde/std` without also requiring `serde_cbor/std` to be enabled.
-#   See: https://github.com/pyfisch/cbor/pull/198
-serde_cbor = { git = "https://github.com/mobilecoinofficial/cbor", rev = "4c886a7c1d523aae1ec4aa7386f402cb2f4341b5" }

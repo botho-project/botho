@@ -13,7 +13,7 @@
 
 use super::error::{TransactionValidationError, TransactionValidationResult};
 use crate::quantum_private::{QuantumPrivateError, QuantumPrivateTxIn, QuantumPrivateTxOut};
-use bt_crypto_pq::{
+use bth_crypto_pq::{
     MlDsa65PublicKey, MlKem768Ciphertext, ML_DSA_65_PUBLIC_KEY_BYTES, ML_KEM_768_CIPHERTEXT_BYTES,
 };
 
@@ -113,7 +113,7 @@ pub fn validate_quantum_private_tx_in_structure(
 pub fn verify_quantum_private_signatures(
     tx_in: &QuantumPrivateTxIn,
     message: &[u8],
-    classical_public_key: &bt_crypto_keys::RistrettoPublic,
+    classical_public_key: &bth_crypto_keys::RistrettoPublic,
     pq_public_key: &MlDsa65PublicKey,
 ) -> TransactionValidationResult<()> {
     // Verify Schnorr signature
@@ -132,9 +132,9 @@ pub fn verify_quantum_private_signatures(
 fn verify_schnorr_signature(
     tx_in: &QuantumPrivateTxIn,
     message: &[u8],
-    public_key: &bt_crypto_keys::RistrettoPublic,
+    public_key: &bth_crypto_keys::RistrettoPublic,
 ) -> TransactionValidationResult<()> {
-    use bt_crypto_digestible::{DigestTranscript, Digestible, MerlinTranscript};
+    use bth_crypto_digestible::{DigestTranscript, Digestible, MerlinTranscript};
     use curve25519_dalek::{
         constants::RISTRETTO_BASEPOINT_POINT,
         ristretto::CompressedRistretto,
@@ -203,7 +203,7 @@ fn verify_dilithium_signature(
     message: &[u8],
     public_key: &MlDsa65PublicKey,
 ) -> TransactionValidationResult<()> {
-    use bt_crypto_pq::MlDsa65Signature;
+    use bth_crypto_pq::MlDsa65Signature;
 
     // Parse the signature
     let signature = MlDsa65Signature::from_bytes(&tx_in.dilithium_signature)
@@ -291,7 +291,7 @@ pub fn verify_all_quantum_private_signatures(
             .map_err(|_| TransactionValidationError::InvalidPqOutputReference)?;
 
         // Get the classical public key
-        let classical_public_key = bt_crypto_keys::RistrettoPublic::try_from(&output.target_key)
+        let classical_public_key = bth_crypto_keys::RistrettoPublic::try_from(&output.target_key)
             .map_err(|_| TransactionValidationError::InvalidRistrettoPublicKey)?;
 
         // Get the PQ public key
@@ -318,7 +318,6 @@ mod tests {
             masked_amount: None,
             target_key: Default::default(),
             public_key: Default::default(),
-            e_fog_hint: Default::default(),
             e_memo: None,
             cluster_tags: None,
             pq_ciphertext: Vec::new(),

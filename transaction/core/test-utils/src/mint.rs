@@ -1,18 +1,18 @@
 // Copyright (c) 2018-2023 The Botho Foundation
 //! Test helpers for minting transactions
 
-use bt_account_keys::PublicAddress;
-use bt_crypto_keys::{Ed25519Pair, Ed25519Signature, RistrettoPublic, Signer};
-use bt_crypto_multisig::{MultiSig, SignerSet};
+use bth_account_keys::PublicAddress;
+use bth_crypto_keys::{Ed25519Pair, Ed25519Signature, RistrettoPublic, Signer};
+use bth_crypto_multisig::{MultiSig, SignerSet};
 use mc_rand::{CryptoRng, RngCore};
-use bt_transaction_core::{
+use bth_transaction_core::{
     mint::{
         constants::NONCE_LENGTH, MintConfig, MintConfigTx, MintConfigTxPrefix, MintTx,
         MintTxPrefix, ValidatedMintConfigTx,
     },
     TokenId,
 };
-use bt_util_from_random::FromRandom;
+use bth_util_from_random::FromRandom;
 
 /// Generate a valid MintConfigTx and return it together with the set of signing
 /// keys that are allowed to sign it.
@@ -143,7 +143,6 @@ pub fn create_mint_tx_to_recipient(
         spend_public_key: *recipient.spend_public_key(),
         nonce,
         tombstone_block: 10,
-        e_fog_hint: None,
     };
 
     let signature = sign_mint_tx_prefix(&prefix, &signers.iter().collect::<Vec<_>>());

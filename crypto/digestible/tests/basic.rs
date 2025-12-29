@@ -4,7 +4,7 @@
 // Copyright (c) 2018-2022 The Botho Foundation
 
 use curve25519_dalek::{constants::RISTRETTO_BASEPOINT_POINT, scalar::Scalar};
-use bt_crypto_digestible::{Digestible, MerlinTranscript};
+use bth_crypto_digestible::{Digestible, MerlinTranscript};
 use std::collections::{BTreeMap, BTreeSet};
 
 // Test merlin transcript hash values for various primitives

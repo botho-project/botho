@@ -5,7 +5,7 @@
 use bip39::Mnemonic;
 use clap::Parser;
 
-use bt_core::{
+use bth_core::{
     account::{Account, RingCtAddress},
     slip10::Slip10KeyGenerator,
     subaddress::Subaddress,

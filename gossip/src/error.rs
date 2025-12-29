@@ -48,14 +48,14 @@ pub enum GossipError {
     BootstrapFailed(String),
 }
 
-impl From<bt_util_serial::encode::Error> for GossipError {
-    fn from(err: bt_util_serial::encode::Error) -> Self {
+impl From<bth_util_serial::encode::Error> for GossipError {
+    fn from(err: bth_util_serial::encode::Error) -> Self {
         GossipError::SerializationError(err.to_string())
     }
 }
 
-impl From<bt_util_serial::decode::Error> for GossipError {
-    fn from(err: bt_util_serial::decode::Error) -> Self {
+impl From<bth_util_serial::decode::Error> for GossipError {
+    fn from(err: bth_util_serial::decode::Error) -> Self {
         GossipError::DeserializationError(err.to_string())
     }
 }

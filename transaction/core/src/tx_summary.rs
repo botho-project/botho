@@ -90,11 +90,11 @@ use alloc::{collections::BTreeMap, vec::Vec};
 
 use crate::{tx::TxPrefix, TxOut};
 
-use bt_crypto_keys::CompressedRistrettoPublic;
-use bt_crypto_ring_signature::CompressedCommitment;
-use bt_util_zip_exact::{zip_exact, ZipExactError};
+use bth_crypto_keys::CompressedRistrettoPublic;
+use bth_crypto_ring_signature::CompressedCommitment;
+use bth_util_zip_exact::{zip_exact, ZipExactError};
 
-pub use bt_transaction_types::{TxInSummary, TxOutSummary, TxSummary};
+pub use bth_transaction_types::{TxInSummary, TxOutSummary, TxSummary};
 
 /// [TxSummaryNew] trait for constructing [TxSummary] object
 pub trait TxSummaryNew: Sized {

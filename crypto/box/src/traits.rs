@@ -9,7 +9,7 @@ use crate::aead::{
 use alloc::vec::Vec;
 use core::ops::{Add, Sub};
 use displaydoc::Display;
-use bt_crypto_keys::{Kex, KeyError};
+use bth_crypto_keys::{Kex, KeyError};
 use mc_oblivious_aes_gcm::CtDecryptResult;
 use rand_core::{CryptoRng, RngCore};
 

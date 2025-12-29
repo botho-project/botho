@@ -5,16 +5,16 @@
 //! and utilizing SCPNetworkState.
 
 use crate::{NetworkState, SCPNetworkState};
-use bt_blockchain_types::BlockIndex;
-use bt_common::{
+use bth_blockchain_types::BlockIndex;
+use bth_common::{
     logger::{log, Logger},
     ResponderId,
 };
-use bt_connection::{
+use bth_connection::{
     BlockInfo, BlockchainConnection, Connection, ConnectionManager, RetryableBlockchainConnection,
 };
-use bt_consensus_scp::{ballot::Ballot, msg::ExternalizePayload, Msg, QuorumSet, SlotIndex, Topic};
-use bt_util_uri::ConnectionUri;
+use bth_consensus_scp::{ballot::Ballot, msg::ExternalizePayload, Msg, QuorumSet, SlotIndex, Topic};
+use bth_util_uri::ConnectionUri;
 use retry::delay::{jitter, Fibonacci};
 use std::{
     collections::{HashMap, HashSet},
@@ -197,11 +197,11 @@ impl<BC: BlockchainConnection> NetworkState for PollingNetworkState<BC> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bt_common::logger::{test_with_logger, Logger};
-    use bt_connection::ConnectionManager;
-    use bt_consensus_scp::QuorumSet;
-    use bt_ledger_db::test_utils::get_mock_ledger;
-    use bt_peers_test_utils::{test_node_id, test_peer_uri, MockPeerConnection};
+    use bth_common::logger::{test_with_logger, Logger};
+    use bth_connection::ConnectionManager;
+    use bth_consensus_scp::QuorumSet;
+    use bth_ledger_db::test_utils::get_mock_ledger;
+    use bth_peers_test_utils::{test_node_id, test_peer_uri, MockPeerConnection};
 
     #[test_with_logger]
     fn test_new_creates_empty_state(logger: Logger) {

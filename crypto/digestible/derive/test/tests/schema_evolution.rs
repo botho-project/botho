@@ -2,8 +2,8 @@
 
 /// Tests of the schema evolution properties of derive(Digestible)
 /// implementations
-use bt_crypto_digestible::{Digestible, MerlinTranscript};
-use bt_crypto_digestible_test_utils::*;
+use bth_crypto_digestible::{Digestible, MerlinTranscript};
+use bth_crypto_digestible_test_utils::*;
 
 // An example structure
 #[derive(Digestible)]

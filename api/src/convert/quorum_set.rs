@@ -8,7 +8,7 @@ use crate::{
     },
     ConversionError,
 };
-use bt_blockchain_types::{NodeID, QuorumSet, QuorumSetMember, QuorumSetMemberWrapper};
+use bth_blockchain_types::{NodeID, QuorumSet, QuorumSetMember, QuorumSetMemberWrapper};
 
 // QuorumSet
 impl From<&QuorumSet> for QuorumSetProto {

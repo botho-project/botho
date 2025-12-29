@@ -1,4 +1,4 @@
-## bt-common
+## bth-common
 
 This crate contains several things right now:
 

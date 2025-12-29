@@ -1,2 +1,4 @@
 export { Layout } from './layout'
 export { SplashScreen } from './splash-screen'
+export { NetworkGraph, type NetworkPeer } from './network'
+export { PeerNode, type PeerNodeData } from './network'

@@ -3,7 +3,7 @@
 //! Convert to/from external::TxHash
 
 use crate::{external, ConversionError};
-use bt_transaction_core::tx;
+use bth_transaction_core::tx;
 
 /// Convert tx::TxHash --> external::TxHash.
 impl From<&tx::TxHash> for external::TxHash {

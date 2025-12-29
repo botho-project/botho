@@ -1,4 +1,4 @@
-bt-util-keyfile
+bth-util-keyfile
 ========
 
 As part of the demo infrastructure, we need to write out little binary

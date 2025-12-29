@@ -5,7 +5,7 @@
 
 use alloc::string::String;
 use alloc::vec::Vec;
-use bt_crypto_digestible::Digestible;
+use bth_crypto_digestible::Digestible;
 use serde::{Deserialize, Serialize};
 
 /// Stub for VerificationReport - attestation is not used in Botho

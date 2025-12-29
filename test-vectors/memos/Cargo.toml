@@ -1,5 +1,5 @@
 [package]
-name = "bt-test-vectors-memos"
+name = "bth-test-vectors-memos"
 version = "7.1.0"
 authors = ["Botho"]
 edition = "2021"
@@ -8,7 +8,7 @@ rust-version = { workspace = true }
 
 [dependencies]
 # MC Dependencies
-bt-test-vectors-definitions = { workspace = true }
+bth-test-vectors-definitions = { workspace = true }
 
 # External Dependencies
 hex = { workspace = true }
@@ -16,13 +16,13 @@ rand = { workspace = true }
 
 [build-dependencies]
 # MC Dependencies
-bt-account-keys = { workspace = true }
-bt-crypto-keys = { workspace = true }
-bt-test-vectors-definitions = { workspace = true }
-bt-transaction-extra = { workspace = true }
-bt-util-from-random = { workspace = true }
-bt-util-serial = { workspace = true }
-bt-util-test-vector = { workspace = true }
+bth-account-keys = { workspace = true }
+bth-crypto-keys = { workspace = true }
+bth-test-vectors-definitions = { workspace = true }
+bth-transaction-extra = { workspace = true }
+bth-util-from-random = { workspace = true }
+bth-util-serial = { workspace = true }
+bth-util-test-vector = { workspace = true }
 
 # External Dependencies
 hex = { workspace = true }

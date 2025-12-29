@@ -2,23 +2,23 @@
 
 //! Tests of the streaming verifier
 
-use bt_account_keys::{AccountKey, ShortAddressHash};
-use bt_crypto_keys::{RistrettoPrivate, RistrettoPublic};
-use bt_crypto_ring_signature_signer::NoKeysRingSigner;
-use bt_transaction_builder::{
+use bth_account_keys::{AccountKey, ShortAddressHash};
+use bth_crypto_keys::{RistrettoPrivate, RistrettoPublic};
+use bth_crypto_ring_signature_signer::NoKeysRingSigner;
+use bth_transaction_builder::{
     test_utils::{get_input_credentials, get_unsigned_transaction},
     EmptyMemoBuilder, ReservedSubaddresses, SignedContingentInputBuilder, TransactionBuilder,
 };
-use bt_transaction_core::{
+use bth_transaction_core::{
     constants::{MAX_INPUTS, MAX_OUTPUTS, MILLIMOB_TO_PICOMOB, RING_SIZE},
     tokens::Mob,
     tx::Tx,
     Amount, BlockVersion, Token, TokenId,
 };
-use bt_transaction_extra::UnsignedTx;
-use bt_transaction_summary::{verify_tx_summary, TotalKind, TransactionEntity};
-use bt_util_from_random::FromRandom;
-use bt_util_serial::encode;
+use bth_transaction_extra::UnsignedTx;
+use bth_transaction_summary::{verify_tx_summary, TotalKind, TransactionEntity};
+use bth_util_from_random::FromRandom;
+use bth_util_serial::encode;
 use rand::{rngs::StdRng, SeedableRng};
 use rand_core::CryptoRngCore;
 use std::collections::BTreeMap;

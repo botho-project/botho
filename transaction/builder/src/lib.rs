@@ -26,7 +26,7 @@ pub mod test_utils;
 
 pub use error::{SignedContingentInputBuilderError, TxBuilderError};
 pub use input_credentials::InputCredentials;
-pub use bt_transaction_extra::ReservedSubaddresses;
+pub use bth_transaction_extra::ReservedSubaddresses;
 pub use memo_builder::{
     BurnRedemptionMemoBuilder, DefragmentationMemoBuilder, EmptyMemoBuilder,
     GiftCodeCancellationMemoBuilder, GiftCodeFundingMemoBuilder, GiftCodeSenderMemoBuilder,

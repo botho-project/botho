@@ -1,5 +1,5 @@
 [package]
-name = "bt-util-repr-bytes"
+name = "bth-util-repr-bytes"
 version = "7.1.0"
 authors = ["Botho"]
 edition = "2021"
@@ -18,4 +18,4 @@ prost = { workspace = true, features = ["prost-derive"], optional = true }
 serde = { workspace = true, features = ["alloc"], optional = true }
 
 [dev-dependencies]
-serde_cbor = { workspace = true, features = ["alloc"] }
+postcard = { workspace = true }

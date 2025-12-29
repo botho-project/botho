@@ -3,12 +3,11 @@
 //! Utility methods
 
 use cargo_emit::rerun_if_changed;
-use lazy_static::lazy_static;
 use std::{
     collections::HashSet,
     ffi::OsStr,
     path::Path,
-    sync::{Arc, Mutex},
+    sync::{LazyLock, Mutex},
 };
 use walkdir::WalkDir;
 
@@ -19,12 +18,10 @@ fn build_hash_set(str_contents: &'static [&'static str]) -> HashSet<&'static OsS
     str_contents.iter().map(OsStr::new).collect()
 }
 
-lazy_static! {
-    static ref EXTENSION_SET: Arc<Mutex<HashSet<&'static OsStr>>> =
-        Arc::new(Mutex::new(build_hash_set(DEFAULT_EXTENSIONS)));
-    static ref FILE_SET: Arc<Mutex<HashSet<&'static OsStr>>> =
-        Arc::new(Mutex::new(build_hash_set(DEFAULT_FILES)));
-}
+static EXTENSION_SET: LazyLock<Mutex<HashSet<&'static OsStr>>> =
+    LazyLock::new(|| Mutex::new(build_hash_set(DEFAULT_EXTENSIONS)));
+static FILE_SET: LazyLock<Mutex<HashSet<&'static OsStr>>> =
+    LazyLock::new(|| Mutex::new(build_hash_set(DEFAULT_FILES)));
 
 /// Adds all the known source files under the given path which match the given
 /// extensions and filenames.

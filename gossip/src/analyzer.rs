@@ -11,8 +11,8 @@ use crate::{
     messages::NodeAnnouncement,
     store::SharedPeerStore,
 };
-use bt_common::{HashMap, HashSet, ResponderId};
-use bt_consensus_scp_types::{QuorumSet, QuorumSetMember};
+use bth_common::{HashMap, HashSet, ResponderId};
+use bth_consensus_scp_types::{QuorumSet, QuorumSetMember};
 use std::sync::Arc;
 
 /// A cluster of nodes that tend to trust each other.
@@ -479,8 +479,8 @@ mod tests {
         messages::{NodeAnnouncement, NodeCapabilities},
         store::{PeerStore, PeerStoreConfig},
     };
-    use bt_common::NodeID;
-    use bt_crypto_keys::Ed25519Public;
+    use bth_common::NodeID;
+    use bth_crypto_keys::Ed25519Public;
     use std::str::FromStr;
 
     fn make_node_id(name: &str) -> NodeID {

@@ -1,5 +1,5 @@
 [package]
-name = "bt-util-vec-map"
+name = "bth-util-vec-map"
 version = "7.1.0"
 authors = ["Botho"]
 description = "A map object based on heapless Vec"

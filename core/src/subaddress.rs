@@ -6,9 +6,9 @@
 
 use curve25519_dalek::{ristretto::RistrettoPoint, scalar::Scalar};
 
-use bt_core_types::account::{PublicSubaddress, ViewAccount};
-use bt_crypto_hashes::{Blake2b512, Digest};
-use bt_crypto_keys::{RistrettoPrivate, RistrettoPublic};
+use bth_core_types::account::{PublicSubaddress, ViewAccount};
+use bth_crypto_hashes::{Blake2b512, Digest};
+use bth_crypto_keys::{RistrettoPrivate, RistrettoPublic};
 
 use crate::{
     account::{Account, SpendSubaddress},
@@ -120,9 +120,9 @@ impl Subaddress for ViewAccount {
 #[cfg(test)]
 mod tests {
 
-    use bt_test_vectors_definitions::account_keys::DefaultSubaddrKeysFromAcctPrivKeys;
-    use bt_util_test_vector::TestVector;
-    use bt_util_test_with_data::test_with_data;
+    use bth_test_vectors_definitions::account_keys::DefaultSubaddrKeysFromAcctPrivKeys;
+    use bth_util_test_vector::TestVector;
+    use bth_util_test_with_data::test_with_data;
 
     use super::*;
     use crate::consts::DEFAULT_SUBADDRESS_INDEX;

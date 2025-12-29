@@ -4,8 +4,8 @@
 
 use crate::{external, ConversionError};
 use curve25519_dalek::scalar::Scalar;
-use bt_crypto_keys::RistrettoPrivate;
-use bt_transaction_core::ring_signature::CurveScalar;
+use bth_crypto_keys::RistrettoPrivate;
+use bth_transaction_core::ring_signature::CurveScalar;
 
 /// Convert RistrettoPrivate --> external::CurveScalar.
 impl From<&RistrettoPrivate> for external::CurveScalar {

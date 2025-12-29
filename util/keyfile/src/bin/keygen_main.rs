@@ -5,7 +5,7 @@
 
 use bip39::{Language, Mnemonic};
 use clap::Parser;
-use bt_util_keyfile::{config::KeyConfig, keygen};
+use bth_util_keyfile::{config::KeyConfig, keygen};
 use rand::{RngCore, SeedableRng};
 use rand_hc::Hc128Rng;
 
@@ -26,13 +26,6 @@ fn main() {
         .output_dir
         .clone()
         .unwrap_or_else(|| std::env::current_dir().unwrap());
-    let fog_report_url = config.general.fog_report_url.as_deref();
-    let fog_report_id = config.general.fog_report_id;
-    let fog_authority_spki = config
-        .general
-        .fog_authority_spki
-        .as_ref()
-        .map(AsRef::<[u8]>::as_ref);
     let name = config.name.as_str();
 
     let mut csprng = Hc128Rng::from_seed(config.general.seed);
@@ -44,14 +37,5 @@ fn main() {
 
     println!("Writing to {path:?}");
 
-    keygen::write_keyfiles(
-        path,
-        name,
-        &mnemonic,
-        0,
-        fog_report_url,
-        &fog_report_id,
-        fog_authority_spki,
-    )
-    .expect("Could not write keyfile");
+    keygen::write_keyfiles(path, name, &mnemonic, 0).expect("Could not write keyfile");
 }

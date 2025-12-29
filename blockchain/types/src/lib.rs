@@ -30,6 +30,6 @@ pub use crate::{
 
 // Use stub types instead of removed mc-attest-verifier-types
 pub use crate::attestation_stubs::{VerificationReport, VerificationSignature};
-pub use bt_common::NodeID;
-pub use bt_consensus_scp_types::{QuorumSet, QuorumSetMember, QuorumSetMemberWrapper};
-pub use bt_transaction_types::{BlockVersion, BlockVersionError, BlockVersionIterator};
+pub use bth_common::NodeID;
+pub use bth_consensus_scp_types::{QuorumSet, QuorumSetMember, QuorumSetMemberWrapper};
+pub use bth_transaction_types::{BlockVersion, BlockVersionError, BlockVersionIterator};

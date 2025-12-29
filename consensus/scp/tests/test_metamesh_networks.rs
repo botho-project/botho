@@ -2,7 +2,7 @@
 
 mod mock_network;
 
-use bt_common::logger::{test_with_logger, Logger};
+use bth_common::logger::{test_with_logger, Logger};
 use serial_test::serial;
 use std::time::Duration;
 

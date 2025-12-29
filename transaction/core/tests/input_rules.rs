@@ -3,19 +3,19 @@
 mod util;
 
 use assert_matches::assert_matches;
-use bt_account_keys::AccountKey;
-use bt_crypto_keys::RistrettoPublic;
-use bt_transaction_builder::DefaultTxOutputsOrdering;
-use bt_transaction_core::{
+use bth_account_keys::AccountKey;
+use bth_crypto_keys::RistrettoPublic;
+use bth_transaction_builder::DefaultTxOutputsOrdering;
+use bth_transaction_core::{
     get_tx_out_shared_secret, tx::Tx, Amount, BlockVersion, InputRuleError, InputRules,
     MaskedAmount, RevealedTxOut, RevealedTxOutError,
 };
-use bt_util_from_random::FromRandom;
-use bt_util_test_helper::{RngType, SeedableRng};
+use bth_util_from_random::FromRandom;
+use bth_util_test_helper::{RngType, SeedableRng};
 
 use util::{create_test_tx, create_test_tx_with_amount_and_comparer_and_recipients};
 
-use bt_ledger_db::test_utils::INITIALIZE_LEDGER_AMOUNT;
+use bth_ledger_db::test_utils::INITIALIZE_LEDGER_AMOUNT;
 
 // Gets the set of rules from the first input of a Tx
 fn get_first_rules(tx: &Tx) -> &InputRules {

@@ -8,7 +8,7 @@ pub mod known_accounts;
 
 pub use rand::{seq::SliceRandom, CryptoRng, Rng, RngCore, SeedableRng};
 // re-export AccountKey and PublicAddress to save an import elsewhere
-pub use bt_account_keys::{AccountKey, PublicAddress};
+pub use bth_account_keys::{AccountKey, PublicAddress};
 
 const NUM_TRIALS: usize = 3;
 

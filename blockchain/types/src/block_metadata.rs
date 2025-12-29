@@ -6,9 +6,9 @@ use crate::{
 };
 use ::prost::Message;
 use displaydoc::Display;
-use bt_common::ResponderId;
-use bt_crypto_digestible::Digestible;
-use bt_crypto_keys::{Ed25519Pair, Ed25519Public, Ed25519Signature, SignatureError};
+use bth_common::ResponderId;
+use bth_crypto_digestible::Digestible;
+use bth_crypto_keys::{Ed25519Pair, Ed25519Public, Ed25519Signature, SignatureError};
 use serde::{Deserialize, Serialize};
 
 /// The attestation evidence variants for a block.
@@ -154,8 +154,8 @@ mod test {
     use super::*;
     use crate::QuorumSetMember;
     use alloc::vec;
-    use bt_blockchain_test_utils::test_node_id;
-    use bt_crypto_digestible::MerlinTranscript;
+    use bth_blockchain_test_utils::test_node_id;
+    use bth_crypto_digestible::MerlinTranscript;
 
     /// Metadata contents used in block version 3
     #[derive(Clone, Deserialize, Digestible, Display, Eq, Message, PartialEq, Serialize)]
@@ -180,8 +180,8 @@ mod test {
 
     #[test]
     fn metadata_contents_version_3_works_with_version_4() {
-        bt_util_test_helper::run_with_several_seeds(|mut rng| {
-            let report = bt_blockchain_test_utils::make_verification_report(&mut rng);
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
+            let report = bth_blockchain_test_utils::make_verification_report(&mut rng);
             let quorum_set = QuorumSet::new(
                 2,
                 vec![
@@ -198,9 +198,9 @@ mod test {
                 responder_id: ResponderId("hello".into()),
             };
 
-            let bytes = bt_util_serial::encode(&block_v3);
+            let bytes = bth_util_serial::encode(&block_v3);
 
-            let block_v4: BlockMetadataContents = bt_util_serial::decode(&bytes).unwrap();
+            let block_v4: BlockMetadataContents = bth_util_serial::decode(&bytes).unwrap();
 
             assert_eq!(block_v4.block_id(), &BlockID([1; 32]));
             assert_eq!(block_v4.quorum_set(), &quorum_set);

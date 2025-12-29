@@ -33,8 +33,8 @@ use crate::{
 
 use alloc::vec::Vec;
 use displaydoc::Display;
-use bt_crypto_hashes::Blake2b512;
-use bt_crypto_keys::{Kex, Ristretto};
+use bth_crypto_hashes::Blake2b512;
+use bth_crypto_keys::{Kex, Ristretto};
 use mc_oblivious_aes_gcm::{Aes256Gcm, CtDecryptResult};
 use rand_core::{CryptoRng, RngCore};
 
@@ -172,10 +172,10 @@ pub enum VersionError {
 #[cfg(test)]
 mod test {
     use super::*;
-    use bt_crypto_keys::{RistrettoPrivate, RistrettoPublic};
-    use bt_util_from_random::FromRandom;
+    use bth_crypto_keys::{RistrettoPrivate, RistrettoPublic};
+    use bth_util_from_random::FromRandom;
 
-    extern crate bt_util_test_helper;
+    extern crate bth_util_test_helper;
 
     #[test]
     fn test_ristretto_hkdf_blake2b_aes256_gcm_round_trip() {
@@ -183,7 +183,7 @@ mod test {
         let plaintext1 = b"01234567".to_vec();
         let plaintext2 = plaintext1.repeat(50);
 
-        bt_util_test_helper::run_with_several_seeds(|mut rng| {
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
             let a = RistrettoPrivate::from_random(&mut rng);
             let a_pub = RistrettoPublic::from(&a);
 
@@ -206,7 +206,7 @@ mod test {
         let plaintext1 = b"01234567".to_vec();
         let plaintext2 = plaintext1.repeat(50);
 
-        bt_util_test_helper::run_with_several_seeds(|mut rng| {
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
             let a = RistrettoPrivate::from_random(&mut rng);
             let a_pub = RistrettoPublic::from(&a);
 

@@ -1,5 +1,5 @@
 [package]
-name = "bt-crypto-digestible-test-utils"
+name = "bth-crypto-digestible-test-utils"
 version = "7.1.0"
 authors = ["Botho"]
 edition = "2021"
@@ -8,5 +8,5 @@ readme = "README.md"
 rust-version = { workspace = true }
 
 [dependencies]
-bt-crypto-digestible = { workspace = true, default-features = true }
+bth-crypto-digestible = { workspace = true, default-features = true }
 serde_json = { workspace = true, features = ["alloc"] }

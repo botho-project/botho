@@ -3,7 +3,7 @@
 //! Convert to/from external::VerificationSignature
 
 use crate::external;
-use bt_blockchain_types::VerificationSignature;
+use bth_blockchain_types::VerificationSignature;
 
 impl From<&VerificationSignature> for external::VerificationSignature {
     fn from(src: &VerificationSignature) -> Self {

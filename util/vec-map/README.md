@@ -1,4 +1,4 @@
-bt-util-vec-map
+bth-util-vec-map
 ===============
 
 This is a map (container of key-value pairs) whose storage is arranged as two

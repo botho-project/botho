@@ -2,10 +2,10 @@
 
 //! Proptest Fixtures.
 
-pub use bt_crypto_ring_signature::{proptest_fixtures::*, CurveScalar, Scalar};
+pub use bth_crypto_ring_signature::{proptest_fixtures::*, CurveScalar, Scalar};
 
 use crate::{amount::Amount, masked_amount::MaskedAmountV1, TokenId};
-use bt_crypto_keys::RistrettoPublic;
+use bth_crypto_keys::RistrettoPublic;
 use proptest::prelude::*;
 
 prop_compose! {

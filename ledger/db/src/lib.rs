@@ -29,4 +29,4 @@ pub use crate::{
     mint_tx_store::MintTxStore,
     tx_out_store::TxOutStore,
 };
-pub use bt_util_lmdb::{MetadataStore, MetadataStoreError, MetadataStoreSettings};
+pub use bth_util_lmdb::{MetadataStore, MetadataStoreError, MetadataStoreSettings};

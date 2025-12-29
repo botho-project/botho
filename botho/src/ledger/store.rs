@@ -1,13 +1,13 @@
 use lmdb::{Cursor, Database, Environment, EnvironmentFlags, Transaction, WriteFlags};
-use bt_account_keys::PublicAddress;
-use bt_crypto_keys::{RistrettoPublic, RistrettoSignature};
+use bth_account_keys::PublicAddress;
+use bth_crypto_keys::{RistrettoPublic, RistrettoSignature};
 use std::fs;
 use std::path::Path;
 use tracing::{debug, info, warn};
 
 use super::{ChainState, LedgerError};
 use crate::block::Block;
-use crate::transaction::{Transaction as BothoTransaction, TxOutput, Utxo, UtxoId};
+use crate::transaction::{Transaction as BothoTransaction, TxInputs, TxOutput, Utxo, UtxoId};
 
 /// LMDB-backed ledger storage
 pub struct Ledger {
@@ -21,6 +21,10 @@ pub struct Ledger {
     /// address_index: (view_key || spend_key) (64 bytes) -> [UtxoId (36 bytes), ...]
     /// Maps addresses to their UTXOs for efficient balance lookups
     address_index_db: Database,
+    /// key_images: key_image (32 bytes) -> height (8 bytes)
+    /// Tracks spent key images to prevent double-spending with ring signatures.
+    /// Value is the block height where the key image was first seen.
+    key_images_db: Database,
 }
 
 // Metadata keys (fixed size for LMDB compatibility)
@@ -39,7 +43,7 @@ impl Ledger {
 
         let env = Environment::new()
             .set_flags(EnvironmentFlags::NO_SUB_DIR)
-            .set_max_dbs(4)
+            .set_max_dbs(5)
             .set_map_size(1024 * 1024 * 1024) // 1GB
             .open(path.join("ledger.mdb").as_ref())?;
 
@@ -47,6 +51,7 @@ impl Ledger {
         let meta_db = env.create_db(Some("meta"), lmdb::DatabaseFlags::empty())?;
         let utxo_db = env.create_db(Some("utxos"), lmdb::DatabaseFlags::empty())?;
         let address_index_db = env.create_db(Some("address_index"), lmdb::DatabaseFlags::empty())?;
+        let key_images_db = env.create_db(Some("key_images"), lmdb::DatabaseFlags::empty())?;
 
         let ledger = Self {
             env,
@@ -54,6 +59,7 @@ impl Ledger {
             meta_db,
             utxo_db,
             address_index_db,
+            key_images_db,
         };
 
         // Initialize with genesis if empty
@@ -240,22 +246,34 @@ impl Ledger {
 
             let tx_hash = tx.hash();
 
-            // Remove spent UTXOs (inputs)
-            for input in &tx.inputs {
-                let spent_id = UtxoId::new(input.tx_hash, input.output_index);
+            // Process spent inputs based on type
+            match &tx.inputs {
+                TxInputs::Simple(inputs) => {
+                    // Remove spent UTXOs (inputs)
+                    for input in inputs {
+                        let spent_id = UtxoId::new(input.tx_hash, input.output_index);
 
-                // Get the UTXO first so we can remove it from the address index
-                if let Ok(utxo_bytes) = txn.get(self.utxo_db, &spent_id.to_bytes()) {
-                    if let Ok(spent_utxo) = bincode::deserialize::<Utxo>(utxo_bytes) {
-                        // Remove from address index
-                        self.remove_from_address_index(&mut txn, &spent_utxo)?;
+                        // Get the UTXO first so we can remove it from the address index
+                        if let Ok(utxo_bytes) = txn.get(self.utxo_db, &spent_id.to_bytes()) {
+                            if let Ok(spent_utxo) = bincode::deserialize::<Utxo>(utxo_bytes) {
+                                // Remove from address index
+                                self.remove_from_address_index(&mut txn, &spent_utxo)?;
+                            }
+                            // Remove from UTXO database
+                            txn.del(self.utxo_db, &spent_id.to_bytes(), None)?;
+                        } else {
+                            // UTXO not found - this is a validation error
+                            // For now, log and continue (validation should catch this earlier)
+                            debug!("Warning: UTXO not found when spending");
+                        }
                     }
-                    // Remove from UTXO database
-                    txn.del(self.utxo_db, &spent_id.to_bytes(), None)?;
-                } else {
-                    // UTXO not found - this is a validation error
-                    // For now, log and continue (validation should catch this earlier)
-                    debug!("Warning: UTXO not found when spending");
+                }
+                TxInputs::Ring(ring_inputs) => {
+                    // For ring signature transactions, record key images to prevent double-spend
+                    // The actual UTXO being spent is hidden within the ring
+                    for ring_input in ring_inputs {
+                        self.record_key_image(&mut txn, &ring_input.key_image, new_height)?;
+                    }
                 }
             }
 
@@ -487,59 +505,206 @@ impl Ledger {
 
     /// Verify all signatures in a transaction
     ///
-    /// For each input, this looks up the UTXO being spent and verifies
+    /// For Simple inputs: looks up the UTXO being spent and verifies
     /// the signature against the UTXO's one-time target key (stealth address).
+    ///
+    /// For Ring inputs: verifies the ring signature and checks that key images
+    /// haven't been spent (double-spend prevention).
     ///
     /// With stealth addresses, the target_key is the one-time public spend key
     /// `P = Hs(r * C) * G + D`. The spender proves ownership using the
     /// corresponding one-time private key `x = Hs(a * R) + d`.
     pub fn verify_transaction(&self, tx: &BothoTransaction) -> Result<(), LedgerError> {
-        let signing_hash = tx.signing_hash();
+        match &tx.inputs {
+            TxInputs::Simple(inputs) => {
+                let signing_hash = tx.signing_hash();
 
-        for (i, input) in tx.inputs.iter().enumerate() {
-            // Look up the UTXO being spent
-            let utxo_id = UtxoId::new(input.tx_hash, input.output_index);
-            let utxo = self.get_utxo(&utxo_id)?.ok_or_else(|| {
-                LedgerError::InvalidBlock(format!(
-                    "Input {} references non-existent UTXO {}:{}",
-                    i,
-                    hex::encode(&input.tx_hash[0..8]),
-                    input.output_index
-                ))
-            })?;
+                for (i, input) in inputs.iter().enumerate() {
+                    // Look up the UTXO being spent
+                    let utxo_id = UtxoId::new(input.tx_hash, input.output_index);
+                    let utxo = self.get_utxo(&utxo_id)?.ok_or_else(|| {
+                        LedgerError::InvalidBlock(format!(
+                            "Input {} references non-existent UTXO {}:{}",
+                            i,
+                            hex::encode(&input.tx_hash[0..8]),
+                            input.output_index
+                        ))
+                    })?;
 
-            // Get the one-time target key (stealth spend public key)
-            let target_public = RistrettoPublic::try_from(&utxo.output.target_key[..])
-                .map_err(|_| {
-                    LedgerError::InvalidBlock(format!(
-                        "Input {} has invalid target key in UTXO",
-                        i
-                    ))
+                    // Get the one-time target key (stealth spend public key)
+                    let target_public = RistrettoPublic::try_from(&utxo.output.target_key[..])
+                        .map_err(|_| {
+                            LedgerError::InvalidBlock(format!(
+                                "Input {} has invalid target key in UTXO",
+                                i
+                            ))
+                        })?;
+
+                    // Parse the signature
+                    let signature = RistrettoSignature::try_from(input.signature.as_slice()).map_err(
+                        |_| {
+                            LedgerError::InvalidBlock(format!(
+                                "Input {} has invalid signature format (expected 64 bytes, got {})",
+                                i,
+                                input.signature.len()
+                            ))
+                        },
+                    )?;
+
+                    // Verify the signature against the one-time target key
+                    target_public
+                        .verify_schnorrkel(b"botho-tx-v1", &signing_hash, &signature)
+                        .map_err(|_| {
+                            LedgerError::InvalidBlock(format!(
+                                "Input {} has invalid signature",
+                                i
+                            ))
+                        })?;
+                }
+            }
+            TxInputs::Ring(ring_inputs) => {
+                // Verify key images haven't been spent (double-spend check)
+                for (i, ring_input) in ring_inputs.iter().enumerate() {
+                    if let Ok(Some(spent_height)) = self.is_key_image_spent(&ring_input.key_image) {
+                        return Err(LedgerError::InvalidBlock(format!(
+                            "Ring input {} uses key image already spent at height {}",
+                            i, spent_height
+                        )));
+                    }
+                }
+
+                // Verify ring signatures
+                tx.verify_ring_signatures().map_err(|e| {
+                    LedgerError::InvalidBlock(format!("Invalid ring signature: {}", e))
                 })?;
-
-            // Parse the signature
-            let signature = RistrettoSignature::try_from(input.signature.as_slice()).map_err(
-                |_| {
-                    LedgerError::InvalidBlock(format!(
-                        "Input {} has invalid signature format (expected 64 bytes, got {})",
-                        i,
-                        input.signature.len()
-                    ))
-                },
-            )?;
-
-            // Verify the signature against the one-time target key
-            target_public
-                .verify_schnorrkel(b"botho-tx-v1", &signing_hash, &signature)
-                .map_err(|_| {
-                    LedgerError::InvalidBlock(format!(
-                        "Input {} has invalid signature",
-                        i
-                    ))
-                })?;
+            }
         }
 
         Ok(())
+    }
+
+    // ========================================================================
+    // Key Image Tracking (for Ring Signature Double-Spend Prevention)
+    // ========================================================================
+
+    /// Check if a key image has already been spent.
+    ///
+    /// Key images are used with ring signatures to prevent double-spending
+    /// without revealing which output was actually spent. Each output can
+    /// only produce one unique key image, so tracking spent key images
+    /// prevents the same output from being spent twice.
+    ///
+    /// # Arguments
+    /// * `key_image` - The 32-byte key image to check
+    ///
+    /// # Returns
+    /// `Some(height)` if the key image was spent at that block height,
+    /// `None` if the key image has never been seen.
+    pub fn is_key_image_spent(&self, key_image: &[u8; 32]) -> Result<Option<u64>, LedgerError> {
+        let txn = self.env.begin_ro_txn()?;
+
+        match txn.get(self.key_images_db, key_image) {
+            Ok(bytes) => {
+                if bytes.len() == 8 {
+                    let height = u64::from_le_bytes(bytes.try_into().unwrap());
+                    Ok(Some(height))
+                } else {
+                    Ok(None)
+                }
+            }
+            Err(lmdb::Error::NotFound) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Record a key image as spent at the given block height.
+    ///
+    /// This should be called when processing a block that contains
+    /// ring signature transactions. The key image is recorded along
+    /// with the height where it was first seen.
+    ///
+    /// # Arguments
+    /// * `txn` - The write transaction to use
+    /// * `key_image` - The 32-byte key image to record
+    /// * `height` - The block height where this key image was spent
+    pub fn record_key_image(
+        &self,
+        txn: &mut lmdb::RwTransaction,
+        key_image: &[u8; 32],
+        height: u64,
+    ) -> Result<(), LedgerError> {
+        txn.put(
+            self.key_images_db,
+            key_image,
+            &height.to_le_bytes(),
+            WriteFlags::NO_OVERWRITE, // Fail if already exists (double-spend attempt)
+        )
+        .map_err(|e| {
+            if matches!(e, lmdb::Error::KeyExist) {
+                LedgerError::InvalidBlock("Key image already spent (double-spend)".to_string())
+            } else {
+                e.into()
+            }
+        })
+    }
+
+    /// Get a random sample of UTXOs for use as decoys in ring signatures.
+    ///
+    /// Selects UTXOs that are suitable for use as decoys:
+    /// - Must have been confirmed for at least `min_confirmations` blocks
+    /// - Excludes the specified real inputs to avoid including them as decoys
+    ///
+    /// # Arguments
+    /// * `count` - Number of decoy UTXOs to return
+    /// * `exclude` - UTXOs to exclude (the real inputs)
+    /// * `min_confirmations` - Minimum confirmations required for decoys
+    ///
+    /// # Returns
+    /// A vector of TxOutputs suitable for use as ring decoys.
+    pub fn get_decoy_outputs(
+        &self,
+        count: usize,
+        exclude: &[[u8; 32]], // target_keys to exclude
+        min_confirmations: u64,
+    ) -> Result<Vec<TxOutput>, LedgerError> {
+        use rand::seq::SliceRandom;
+
+        let state = self.get_chain_state()?;
+        let max_height = state.height.saturating_sub(min_confirmations);
+
+        let txn = self.env.begin_ro_txn()?;
+
+        // Collect all eligible UTXOs
+        // Note: This is a simple implementation that scans all UTXOs.
+        // For production, consider using a separate index or reservoir sampling.
+        let mut candidates: Vec<TxOutput> = Vec::new();
+
+        // Create a cursor to iterate over all UTXOs
+        let mut cursor = txn.open_ro_cursor(self.utxo_db)?;
+
+        for result in cursor.iter() {
+            if let Ok((_, value)) = result {
+                if let Ok(utxo) = bincode::deserialize::<Utxo>(value) {
+                    // Check confirmations
+                    if utxo.created_at <= max_height {
+                        // Check exclusion list
+                        if !exclude.contains(&utxo.output.target_key) {
+                            candidates.push(utxo.output);
+                        }
+                    }
+                }
+            }
+        }
+
+        drop(cursor);
+        drop(txn);
+
+        // Randomly sample from candidates
+        let mut rng = rand::thread_rng();
+        candidates.shuffle(&mut rng);
+        candidates.truncate(count);
+
+        Ok(candidates)
     }
 }
 

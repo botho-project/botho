@@ -3,24 +3,24 @@
 //! Tests that prost-versions of structures round-trip with the versions
 //! generated from external.proto
 
-use bt_account_keys::{AccountKey, PublicAddress, RootIdentity};
-use bt_api::{blockchain, external, quorum_set};
-use bt_blockchain_test_utils::{
+use bth_account_keys::{AccountKey, PublicAddress, RootIdentity};
+use bth_api::{blockchain, external, quorum_set};
+use bth_blockchain_test_utils::{
     get_blocks, make_block_metadata, make_quorum_set, make_verification_report,
 };
-use bt_blockchain_types::{
+use bth_blockchain_types::{
     BlockData, BlockID, BlockMetadata, BlockVersion, QuorumSet, VerificationReport,
 };
-use bt_crypto_ring_signature_signer::NoKeysRingSigner;
-use bt_transaction_builder::{
+use bth_crypto_ring_signature_signer::NoKeysRingSigner;
+use bth_transaction_builder::{
     test_utils::get_input_credentials, EmptyMemoBuilder, ReservedSubaddresses,
     SignedContingentInputBuilder,
 };
-use bt_transaction_core::Amount;
-use bt_transaction_extra::SignedContingentInput;
-use bt_util_from_random::FromRandom;
-use bt_util_serial::round_trip_message;
-use bt_util_test_helper::{run_with_several_seeds, CryptoRng, RngCore};
+use bth_transaction_core::Amount;
+use bth_transaction_extra::SignedContingentInput;
+use bth_util_from_random::FromRandom;
+use bth_util_serial::round_trip_message;
+use bth_util_test_helper::{run_with_several_seeds, CryptoRng, RngCore};
 
 // Generate some example root identities
 fn root_identity_examples<T: RngCore + CryptoRng>(rng: &mut T) -> Vec<RootIdentity> {

@@ -3,16 +3,13 @@
 //! Convert to/from external::PublicAddress
 
 use crate::{external, ConversionError};
-use bt_account_keys::PublicAddress;
+use bth_account_keys::PublicAddress;
 
 impl From<&PublicAddress> for external::PublicAddress {
     fn from(src: &PublicAddress) -> Self {
         Self {
             view_public_key: Some(src.view_public_key().into()),
             spend_public_key: Some(src.spend_public_key().into()),
-            fog_report_url: src.fog_report_url().unwrap_or_default().to_string(),
-            fog_report_id: src.fog_report_id().unwrap_or_default().to_string(),
-            fog_authority_sig: src.fog_authority_sig().unwrap_or_default().to_vec(),
         }
     }
 }
@@ -24,33 +21,23 @@ impl TryFrom<&external::PublicAddress> for PublicAddress {
         let spend_public_key = src
             .spend_public_key
             .as_ref()
-            .ok_or(bt_crypto_keys::KeyError::LengthMismatch(0, 32))
-            .and_then(|key| bt_crypto_keys::RistrettoPublic::try_from(&key.data[..]))?;
+            .ok_or(bth_crypto_keys::KeyError::LengthMismatch(0, 32))
+            .and_then(|key| bth_crypto_keys::RistrettoPublic::try_from(&key.data[..]))?;
 
         let view_public_key = src
             .view_public_key
             .as_ref()
-            .ok_or(bt_crypto_keys::KeyError::LengthMismatch(0, 32))
-            .and_then(|key| bt_crypto_keys::RistrettoPublic::try_from(&key.data[..]))?;
+            .ok_or(bth_crypto_keys::KeyError::LengthMismatch(0, 32))
+            .and_then(|key| bth_crypto_keys::RistrettoPublic::try_from(&key.data[..]))?;
 
-        if src.fog_report_url.is_empty() {
-            Ok(PublicAddress::new(&spend_public_key, &view_public_key))
-        } else {
-            Ok(PublicAddress::new_with_fog(
-                &spend_public_key,
-                &view_public_key,
-                &src.fog_report_url,
-                src.fog_report_id.clone(),
-                src.fog_authority_sig.clone(),
-            ))
-        }
+        Ok(PublicAddress::new(&spend_public_key, &view_public_key))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bt_account_keys::AccountKey;
+    use bth_account_keys::AccountKey;
     use rand::{rngs::StdRng, SeedableRng};
 
     // Test converting between external::PublicAddress and
@@ -59,63 +46,20 @@ mod tests {
     fn test_public_address_conversion() {
         let mut rng: StdRng = SeedableRng::from_seed([123u8; 32]);
 
-        // without fog_url
-        {
-            // public_addresss -> external
-            let public_address = AccountKey::random(&mut rng).default_subaddress();
-            let proto_credentials = external::PublicAddress::from(&public_address);
-            assert_eq!(
-                *proto_credentials.view_public_key.as_ref().unwrap(),
-                external::CompressedRistretto::from(public_address.view_public_key())
-            );
-            assert_eq!(
-                *proto_credentials.spend_public_key.as_ref().unwrap(),
-                external::CompressedRistretto::from(public_address.spend_public_key())
-            );
-            assert_eq!(proto_credentials.fog_report_url, String::from(""));
+        // public_address -> external
+        let public_address = AccountKey::random(&mut rng).default_subaddress();
+        let proto_credentials = external::PublicAddress::from(&public_address);
+        assert_eq!(
+            *proto_credentials.view_public_key.as_ref().unwrap(),
+            external::CompressedRistretto::from(public_address.view_public_key())
+        );
+        assert_eq!(
+            *proto_credentials.spend_public_key.as_ref().unwrap(),
+            external::CompressedRistretto::from(public_address.spend_public_key())
+        );
 
-            assert_eq!(proto_credentials.fog_authority_sig.len(), 0);
-
-            assert_eq!(proto_credentials.fog_report_id, String::from(""));
-
-            // external -> public_addresss
-            let public_address2 = PublicAddress::try_from(&proto_credentials).unwrap();
-            assert_eq!(public_address, public_address2);
-        }
-
-        // with valid fog_url
-        {
-            // public_addresss -> external
-            let tmp_public_address = AccountKey::random(&mut rng).default_subaddress();
-            let public_address = PublicAddress::new_with_fog(
-                tmp_public_address.spend_public_key(),
-                tmp_public_address.view_public_key(),
-                "fog://test.botho.com".to_string(),
-                "99".to_string(),
-                vec![9, 9, 9, 9],
-            );
-
-            let proto_credentials = external::PublicAddress::from(&public_address);
-            assert_eq!(
-                *proto_credentials.view_public_key.as_ref().unwrap(),
-                external::CompressedRistretto::from(public_address.view_public_key())
-            );
-            assert_eq!(
-                *proto_credentials.spend_public_key.as_ref().unwrap(),
-                external::CompressedRistretto::from(public_address.spend_public_key())
-            );
-            assert_eq!(
-                proto_credentials.fog_report_url,
-                String::from("fog://test.botho.com")
-            );
-
-            assert_eq!(proto_credentials.fog_authority_sig, vec![9, 9, 9, 9],);
-
-            assert_eq!(proto_credentials.fog_report_id, "99");
-
-            // external -> public_addresss
-            let public_address2 = PublicAddress::try_from(&proto_credentials).unwrap();
-            assert_eq!(public_address, public_address2);
-        }
+        // external -> public_address
+        let public_address2 = PublicAddress::try_from(&proto_credentials).unwrap();
+        assert_eq!(public_address, public_address2);
     }
 }

@@ -1,5 +1,5 @@
-McCryptoBox
-===========
+bth-crypto-box
+=============
 
 Provides a simple rust interface for doing authenticated asymmetric key cryptography,
 using the Ristretto group.
@@ -92,8 +92,8 @@ is used for key exchange, then Hsalsa20 is used to extract entropy from the shar
 Hsalsa20 is then used as a CSPRNG and this pseudorandom sequence is xor'd with the plaintext
 to achieve encryption. Poly1305 is used to produce a MAC.
 
-So, `bt-crypto-box` can be viewed as a variation on NaCl cryptobox.
-For technical reasons, it is a requirement in Mobilecoin to have a version of
+So, `bth-crypto-box` can be viewed as a variation on NaCl cryptobox.
+For technical reasons, it is a requirement in Botho to have a version of
 cryptobox based on the Ristretto group.
 
 Choice to use random nonces derived from key exchange

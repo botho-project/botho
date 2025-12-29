@@ -190,7 +190,7 @@ impl BasicCredentials {
 #[cfg(test)]
 mod test {
     use super::*;
-    use bt_common::time::SystemTimeProvider;
+    use bth_common::time::SystemTimeProvider;
     use std::time::Duration;
 
     const TOKEN_MAX_LIFETIME: Duration = Duration::from_secs(60);

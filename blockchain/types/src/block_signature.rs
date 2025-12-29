@@ -2,8 +2,8 @@
 
 use crate::Block;
 use core::fmt::{Display, Formatter, Result as FmtResult};
-use bt_crypto_digestible::{Digestible, MerlinTranscript};
-use bt_crypto_keys::{
+use bth_crypto_digestible::{Digestible, MerlinTranscript};
+use bth_crypto_keys::{
     Ed25519Pair, Ed25519Public, Ed25519Signature, SignatureError, Signer, Verifier,
 };
 use prost::Message;

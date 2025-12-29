@@ -9,10 +9,10 @@ use crate::{
     error::RetryResult,
     traits::{ConsensusConnection, RetryableConsensusConnection},
 };
-use bt_common::ResponderId;
-use bt_connection::{impl_sync_connection_retry, SyncConnection};
-use bt_consensus_api::consensus_peer::ConsensusMsgResponse;
-use bt_transaction_core::tx::TxHash;
+use bth_common::ResponderId;
+use bth_connection::{impl_sync_connection_retry, SyncConnection};
+use bth_consensus_api::consensus_peer::ConsensusMsgResponse;
+use bth_transaction_core::tx::TxHash;
 use std::time::Duration;
 
 /// Blanket implementation of RetryableConsensusConnection for SyncConnection

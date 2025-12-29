@@ -5,15 +5,15 @@
 
 use crate::error::WatcherDBError;
 use lmdb::{Cursor, Database, DatabaseFlags, Environment, RwTransaction, Transaction, WriteFlags};
-use bt_blockchain_types::{
+use bth_blockchain_types::{
     Block, BlockContents, BlockData, BlockIndex, BlockMetadata, BlockSignature,
 };
-use bt_common::{
+use bth_common::{
     logger::{log, Logger},
     HashMap,
 };
-use bt_crypto_digestible::{Digestible, MerlinTranscript};
-use bt_util_serial::{decode, encode};
+use bth_crypto_digestible::{Digestible, MerlinTranscript};
+use bth_util_serial::{decode, encode};
 use prost::Message;
 use std::{str, sync::Arc};
 use url::Url;
@@ -296,7 +296,7 @@ impl BlockDataStore {
 mod tests {
     use super::*;
     use crate::watcher_db::tests::{setup_blocks, setup_watcher_db};
-    use bt_common::logger::test_with_logger;
+    use bth_common::logger::test_with_logger;
 
     #[test_with_logger]
     fn block_data_store_happy_path(logger: Logger) {

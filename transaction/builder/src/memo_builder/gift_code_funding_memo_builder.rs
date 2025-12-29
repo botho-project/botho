@@ -5,10 +5,10 @@
 
 use crate::{MemoBuilder, ReservedSubaddresses};
 use alloc::{format, string::String};
-use bt_account_keys::PublicAddress;
-use bt_crypto_keys::RistrettoPublic;
-use bt_transaction_core::{tokens::Mob, Amount, MemoContext, MemoPayload, NewMemoError, Token};
-use bt_transaction_extra::{GiftCodeFundingMemo, UnusedMemo};
+use bth_account_keys::PublicAddress;
+use bth_crypto_keys::RistrettoPublic;
+use bth_transaction_core::{tokens::Mob, Amount, MemoContext, MemoPayload, NewMemoError, Token};
+use bth_transaction_extra::{GiftCodeFundingMemo, UnusedMemo};
 
 /// There are three possible gift code memo types specified in MCIP #32
 /// | Memo type bytes | Name                        |
@@ -128,8 +128,8 @@ impl MemoBuilder for GiftCodeFundingMemoBuilder {
 mod tests {
     use super::*;
     use assert_matches::assert_matches;
-    use bt_account_keys::AccountKey;
-    use bt_util_from_random::FromRandom;
+    use bth_account_keys::AccountKey;
+    use bth_util_from_random::FromRandom;
     use rand::{rngs::StdRng, SeedableRng};
 
     fn build_gift_code_memos(
@@ -139,7 +139,7 @@ mod tests {
     ) -> Result<MemoPayload, NewMemoError> {
         // Create simulated context
         let mut rng: StdRng = SeedableRng::from_seed([0u8; 32]);
-        let alice = AccountKey::random_with_fog(&mut rng);
+        let alice = AccountKey::random(&mut rng);
         let alice_address_book = ReservedSubaddresses::from(&alice);
         let change_tx_pubkey = RistrettoPublic::from_random(&mut rng);
         let change_amount = Amount::new(1, 0.into());
@@ -257,7 +257,7 @@ mod tests {
         builder.set_fee(fee).unwrap();
 
         // Build a memo
-        let alice = AccountKey::random_with_fog(&mut rng);
+        let alice = AccountKey::random(&mut rng);
         let alice_address_book = ReservedSubaddresses::from(&alice);
         let change_amount = Amount::new(666, 666.into());
 
@@ -295,7 +295,7 @@ mod tests {
         builder.set_fee(fee).unwrap();
 
         // Build a memo
-        let alice = AccountKey::random_with_fog(&mut rng);
+        let alice = AccountKey::random(&mut rng);
         let alice_address_book = ReservedSubaddresses::from(&alice);
         let change_amount = Amount::new(666, 0.into());
 
@@ -343,7 +343,7 @@ mod tests {
         let fee = Amount::new(1, 0.into());
         builder.set_fee(fee).unwrap();
 
-        let alice = AccountKey::random_with_fog(&mut rng);
+        let alice = AccountKey::random(&mut rng);
         let alice_address_book = ReservedSubaddresses::from(&alice);
         let change_amount = Amount::new(666, 0.into());
 

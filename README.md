@@ -2,186 +2,166 @@
 
 *"Motho ke motho ka batho"* — A person is a person through other people.
 
-A privacy-preserving, mined cryptocurrency built on proven cryptographic foundations.
+**A global currency designed for privacy, fairness, and the long term.**
 
-## What is Botho?
+## The Name
 
-**Botho** (Sesotho/Setswana: humanity, humaneness) is a cryptocurrency that embodies the African philosophy of interconnectedness—the idea that we exist through our relationships with others. Just as the Botho philosophy emphasizes community over individualism, this currency is designed for collective benefit rather than concentrated wealth.
+**Botho** (pronounced BOH-toh) comes from the Sesotho and Setswana languages of Southern Africa, meaning *humanity*, *humaneness*, or *ubuntu*. It is a national principle of Botswana and a core philosophy across many African cultures.
 
-Botho combines:
+The opening proverb—*"Motho ke motho ka batho"*—translates to "a person is a person through other people." It expresses the idea that our humanity is defined by our relationships and responsibilities to one another, not by individual accumulation.
 
-- **Proof-of-Work Mining**: Bitcoin-style mining with variable difficulty
-- **Full Transaction Privacy**: Stealth addresses, ring signatures, and confidential transactions
-- **Anti-Inequality Design**: Progressive fees that discourage wealth concentration
-- **Simple Design**: Focused on the essentials, removing unnecessary complexity
+In currency design, this philosophy rejects the "number go up" mentality. Instead, Botho asks: *how can money serve community rather than concentrate power?*
 
-The native currency unit is the **credit** (symbol: **BTH**).
+## Why Botho?
 
-## Philosophy
+The world needs a digital currency that works for everyone—not just early adopters and whales. Botho is built on three principles that set it apart:
 
-Botho is a national principle of Botswana, describing "a person who has a well-rounded character, who is well-mannered, courteous and disciplined, and realises his or her full potential."
+### Privacy as a Human Right
 
-In the context of cryptocurrency:
-- **Decentralized consensus** reflects "a person is a person through other people"
-- **Privacy** respects individual dignity
-- **Progressive fees** prioritize community over accumulation
-- **Tail emission** ensures sustainable, shared security
+Every transaction is private by default. No surveillance, no tracking, no exceptions.
 
-## How Mining Works
+- **Stealth addresses** ensure recipients can't be linked across transactions
+- **Confidential amounts** hide transaction values from observers
+- **Post-quantum ready** with ML-KEM-768 and ML-DSA-65 hybrid cryptography
 
-Botho uses a **parallel proof-of-work** mechanism integrated with Stellar Consensus Protocol (SCP) for Byzantine fault tolerance.
+Unlike "transparent by default" cryptocurrencies, Botho treats financial privacy the way cash does—as the baseline, not a premium feature.
 
-### The Mining Process
+### Anti-Hoarding Economics
 
-1. **Find a Valid Nonce**: Miners search for a nonce that produces a hash below the difficulty target:
-   ```
-   SHA256(nonce || prev_block_hash || miner_address) < difficulty_target
-   ```
+Most cryptocurrencies reward early accumulators and punish late adopters. Botho inverts this with **progressive transaction fees** based on wealth concentration:
 
-2. **Submit Mining Transaction**: Valid proofs are wrapped in a `MiningTx` and submitted to the consensus network
+| Wealth Level | Fee Rate |
+|:--|:--|
+| Widely circulated coins | 0.05% |
+| Moderately concentrated | 1-5% |
+| Heavily hoarded | up to 30% |
 
-3. **SCP Decides the Winner**: Multiple miners may find valid solutions simultaneously—the SCP quorum determines which block is accepted, providing Byzantine fault tolerance
+The system tracks coin *ancestry*, not identities. Coins that circulate through the economy pay less; coins that sit in whale wallets pay more. This is Sybil-resistant—splitting your wallet doesn't help because fees are based on where coins came from, not where they are now.
 
-### Why Parallel Mining?
+### Sustainable Security
 
-Unlike Bitcoin where the first valid block to propagate "wins," Botho separates proof-of-work from block selection:
+Bitcoin's security budget will eventually depend entirely on transaction fees. Botho ensures permanent security through **perpetual tail emission**:
 
-- **Multiple Valid Solutions**: Any miner who finds a valid nonce can submit a mining transaction
-- **Consensus-Based Selection**: The SCP quorum (not network propagation speed) determines which miner's block is included
-- **Byzantine Fault Tolerance**: Even if some nodes are malicious or offline, consensus proceeds correctly
-- **Fair Selection**: Network latency doesn't determine the winner—the quorum does
+- Initial reward: 50 BTH per block
+- Smooth decay with ~4-year halving
+- Permanent floor: 0.6 BTH per block forever
 
-### Emission Schedule
+This guarantees miners are always incentivized to secure the network, without relying on ever-increasing transaction volume.
 
-Mining rewards follow a smooth decay curve with perpetual tail emission:
+## Technical Foundation
+
+Botho combines proven cryptographic building blocks in a novel architecture:
+
+| Component | Technology | Benefit |
+|:--|:--|:--|
+| Consensus | Stellar Consensus Protocol (SCP) | 3-5 second finality, Byzantine fault tolerance |
+| Mining | Parallel proof-of-work | Fair block selection, not fastest-propagation-wins |
+| Privacy | CryptoNote stealth addresses | Unlinkable transactions |
+| Quantum safety | ML-KEM-768 + ML-DSA-65 | Future-proof key exchange and signatures |
+| Fee system | Cluster-tagged progressive fees | Economic equality without identity |
+
+### Fast Finality
+
+Unlike Bitcoin's probabilistic finality (wait 6 blocks = 60 minutes to be "sure"), Botho transactions are final in seconds. The SCP quorum reaches consensus, and that's it—no reorgs, no double-spend risk.
+
+### Block Parameters
 
 | Parameter | Value |
-| :-- | :-- |
-| Initial reward | 50 BTH |
-| Halving period | ~6,307,200 blocks (~4 years at 20-sec blocks) |
-| Tail emission | 0.6 BTH per block (perpetual) |
-| Total supply | ~18 million BTH (pre-tail) |
+|:--|:--|
+| Block time | ~20 seconds |
+| Difficulty adjustment | Every 10 blocks |
+| Total supply | ~18 million BTH (pre-tail) + 0.6 BTH/block forever |
+| Native unit | credit (BTH) |
 
-### Difficulty Adjustment
+## Philosophy in Practice
 
-- **Target block time**: 20 seconds
-- **Adjustment window**: Every 10 blocks
-- **Smooth adjustment**: Prevents large difficulty jumps (max 4x change per adjustment)
+The Botho philosophy manifests in every design decision:
 
-## Privacy Features
+- **Decentralized consensus** — decisions require community agreement
+- **Privacy** — respecting individual dignity
+- **Progressive fees** — prioritizing circulation over accumulation
+- **Tail emission** — sustainable security for future generations
 
-Botho inherits battle-tested privacy technology from the CryptoNote protocol:
+## Getting Started
 
-- **Stealth Addresses**: Each transaction creates a unique one-time destination address
-- **Ring Signatures**: Hide the sender among a group of possible signers (planned)
-- **RingCT (Ring Confidential Transactions)**: Amounts are cryptographically hidden (planned)
-
-These features ensure that transactions cannot be traced or linked, providing cash-like privacy.
-
-## Progressive Transaction Fees
-
-Botho implements a novel **cluster-based progressive fee** system designed to reduce wealth concentration without sacrificing privacy or enabling Sybil attacks.
-
-### How It Works
-
-Transaction fees are based on coin *ancestry*, not account identity:
-
-1. **Clusters**: Each coin-creation event (mining reward) spawns a new "cluster" identity
-2. **Tag Vectors**: Every account carries a sparse vector of weights indicating what fraction of its coins trace back to each cluster origin
-3. **Cluster Wealth**: The total value in the system tagged to a given cluster (W = Σ balance × tag_weight)
-4. **Progressive Fees**: Fee rate increases with cluster wealth via a sigmoid curve—larger clusters pay higher rates
-
-```
-Fee Rate = sigmoid(cluster_wealth) → ranges from 0.05% to 30%
-```
-
-### Why It's Sybil-Resistant
-
-Splitting transactions or creating multiple accounts doesn't reduce fees because:
-- Fee rate depends on **cluster wealth**, not transaction size or account count
-- All accounts holding coins from the same mining origin pay the same rate
-- The only way to reduce fees is through genuine economic activity that diffuses coins across the economy
-
-### Tag Decay
-
-Tags decay by ~5% per transaction hop, gradually converting cluster attribution into "background" (fully diffused) wealth. This means:
-- Coins that circulate widely pay lower fees over time
-- Hoarded coins retain high cluster attribution and pay higher fees
-- ~14 transaction hops to halve a tag's weight
-
-### Default Parameters
-
-| Parameter | Value | Description |
-| :-- | :-- | :-- |
-| Minimum fee | 0.05% | Small/diffused clusters |
-| Maximum fee | 30% | Large concentrated clusters |
-| Decay rate | 5% per hop | Tag decay per transaction |
-| Midpoint | 10M credits | Sigmoid inflection point |
-
-## Project Status
-
-This project is in early development. We are actively:
-
-- Implementing the mining mechanism
-- Simplifying the codebase (removing SGX dependencies, Fog, and other MobileCoin-specific components)
-- Developing and validating the progressive fee mechanism through economic simulation
-
-### Simplifications from MobileCoin
-
-By removing SGX enclaves, we eliminate the need for:
-
-- **Oblivious database access patterns**: MobileCoin used ORAM and other techniques to hide which records were accessed inside enclaves. Without SGX, standard database access is fine.
-- **Remote attestation**: No need for Intel attestation infrastructure or verification.
-- **Sealed storage**: Encryption keys can use standard key management instead of SGX sealing.
-
-This allows significant code simplification throughout the codebase.
-
-## Building
-
-The workspace can be built with `cargo build` and tested with `cargo test`.
+### Run a Node
 
 ```bash
+# Clone and build
+git clone https://github.com/botho-project/botho.git
+cd botho
 cargo build --release
-cargo test
+
+# Initialize wallet (generates 24-word mnemonic)
+./target/release/botho init
+
+# Start node
+./target/release/botho run
+
+# Start node with mining
+./target/release/botho run --mine
 ```
+
+### CLI Commands
+
+| Command | Description |
+|:--|:--|
+| `botho init` | Create wallet with recovery phrase |
+| `botho run` | Start node and sync blockchain |
+| `botho run --mine` | Start node with mining enabled |
+| `botho status` | Show sync and wallet status |
+| `botho balance` | Show wallet balance |
+| `botho address` | Show receiving address |
+| `botho send <addr> <amt>` | Send credits |
+
+### Web Wallet
+
+Visit [botho.io](https://botho.io) to use the web wallet without running a node.
 
 ## Documentation
 
-Detailed documentation is available in the [docs](./docs) directory:
-
 | Document | Description |
-| :-- | :-- |
+|:--|:--|
 | [Getting Started](./docs/getting-started.md) | Build, install, and run your first node |
 | [Architecture](./docs/architecture.md) | System design and component overview |
-| [Configuration](./docs/configuration.md) | Complete configuration reference |
-| [Mining](./docs/mining.md) | Mining setup, economics, and troubleshooting |
+| [Mining](./docs/mining.md) | Mining setup and economics |
 | [Privacy](./docs/privacy.md) | Privacy features and cryptography |
+| [Progressive Fees](./docs/progressive-fees.md) | How the anti-hoarding fee system works |
+
+## Project Status
+
+Botho is in active development. Current focus areas:
+
+- Core node implementation with SCP consensus
+- Stealth address transaction privacy
+- Progressive fee mechanism
+- Web and desktop wallet applications
+
+### Origins
+
+Botho is derived from [MobileCoin](https://github.com/mobilecoinfoundation/mobilecoin), with significant simplifications. We removed SGX enclaves, Fog, and mobile-specific infrastructure to focus on a clean, auditable implementation for desktop and server environments.
 
 ## Repository Structure
 
 | Directory | Description |
-| :-- | :-- |
-| [cluster-tax](./cluster-tax) | Progressive fee mechanism and economic simulation |
-| [common](./common) | Shared utilities and types |
-| [consensus](./consensus) | Block validation and consensus |
+|:--|:--|
+| [botho](./botho) | Main node binary |
+| [botho-wallet](./botho-wallet) | Wallet implementation |
+| [cluster-tax](./cluster-tax) | Progressive fee mechanism |
+| [consensus/scp](./consensus/scp) | Stellar Consensus Protocol |
 | [crypto](./crypto) | Cryptographic primitives |
 | [ledger](./ledger) | Blockchain storage |
 | [transaction](./transaction) | Private transaction construction |
-| [util](./util) | Miscellaneous utilities |
-
-## Origins
-
-Botho is derived from [MobileCoin](https://github.com/mobilecoinfoundation/mobilecoin), with significant simplifications to focus on mined, private transactions.
-
-**Note**: Unlike MobileCoin, Botho is designed for desktop and server environments only. There are no plans for mobile device support. We have removed MobileCoin's SGX enclave infrastructure, Fog (the privacy-preserving mobile sync service), and other components designed for resource-constrained devices.
+| [web](./web) | Web wallet and landing page |
 
 ## Links
 
 - **Website**: [botho.io](https://botho.io)
+- **Documentation**: [botho.io/docs](https://botho.io/docs)
 
 ## License
 
-See the LICENSE file for details.
+See the [LICENSE](./LICENSE) file for details.
 
 ## Cryptography Notice
 

@@ -1,5 +1,5 @@
 [package]
-name = "bt-crypto-digestible-signature"
+name = "bth-crypto-digestible-signature"
 version = "7.1.0"
 authors = ["Botho"]
 edition = "2021"
@@ -9,12 +9,12 @@ readme = "README.md"
 rust-version = { workspace = true }
 
 [features]
-alloc = ["bt-crypto-digestible/alloc"]
-dalek = ["bt-crypto-digestible/dalek"]
-derive = ["bt-crypto-digestible/derive"]
+alloc = ["bth-crypto-digestible/alloc"]
+dalek = ["bth-crypto-digestible/dalek"]
+derive = ["bth-crypto-digestible/derive"]
 default = ["alloc", "derive", "dalek"]
 
 [dependencies]
-bt-crypto-digestible = { workspace = true }
+bth-crypto-digestible = { workspace = true }
 
 signature = { workspace = true }

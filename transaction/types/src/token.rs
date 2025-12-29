@@ -3,7 +3,7 @@
 //! A new-type wrapper for representing TokenIds
 
 use core::{fmt, hash::Hash, num::ParseIntError, ops::Deref, str::FromStr};
-use bt_crypto_digestible::Digestible;
+use bth_crypto_digestible::Digestible;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 use subtle::{Choice, ConditionallySelectable, ConstantTimeEq};

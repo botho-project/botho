@@ -205,11 +205,59 @@ fn calculate_new_difficulty(
 }
 ```
 
+### Adaptive Emission (Target Inflation Model)
+
+The base emission schedule is modified by an **Adaptive Emission Controller** that adjusts block rewards to maintain a target net inflation rate after accounting for fee burns.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Monetary Flow                                 │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│   Fees Burned ──────┐                                           │
+│   (deflationary)    │                                           │
+│                     ▼                                           │
+│              ┌──────────────┐                                   │
+│              │   Emission   │◄──── target_inflation = 2%        │
+│              │  Controller  │                                   │
+│              └──────────────┘                                   │
+│                     │                                           │
+│                     ▼                                           │
+│   Block Rewards ────┘                                           │
+│   (inflationary)                                                │
+│                                                                  │
+│   Net Effect: net_inflation = emission - fees_burned            │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Formula:**
+```rust
+target_emission_per_epoch = (supply × target_inflation) / epochs_per_year
+required_gross_emission = target_emission_per_epoch + fees_burned_last_epoch
+block_reward = required_gross_emission / blocks_per_epoch
+```
+
+**Example** (100M supply, 2% target, 1000 blocks/epoch, 365 epochs/year):
+- Target net emission per epoch: 100M × 0.02 / 365 ≈ 5,479 coins
+- If 2,000 coins were burned in fees last epoch:
+- Gross emission needed: 5,479 + 2,000 = 7,479 coins
+- Block reward: 7,479 / 1000 ≈ 7.48 coins per block
+
+**Safeguards:**
+- `min_block_reward`: Floor to ensure miners are always compensated
+- `max_block_reward`: Ceiling to prevent hyperinflation if fees spike
+- `max_adjustment_rate`: Limit how fast rewards can change (e.g., 10%/epoch)
+
+**Implementation:** `cluster-tax/src/emission.rs` - `EmissionController`
+
 ### Transaction Fees
 
-- Minimum fee: 0.0001 credits (100,000,000 picocredits)
-- Fees go to the miner who includes the transaction
-- Mempool prioritizes by fee-per-byte
+Fees are **burned** (destroyed) rather than paid to miners. This creates deflationary pressure that the Adaptive Emission Controller compensates for.
+
+- Progressive fees based on cluster wealth (0.05%-0.3% for plain, 0.2%-1.2% for hidden)
+- Mining transactions have no fee (creates new coins)
+- Mempool prioritizes by fee rate
 
 ## Network Protocol (Implemented)
 
@@ -548,10 +596,10 @@ enum ConsensusEvent {
 ## Code Reuse from MobileCoin
 
 ### Kept (mostly as-is)
-- `bt-account-keys` - Key derivation
-- `bt-crypto-*` - Cryptographic primitives
-- `bt-consensus-scp` - Stellar Consensus Protocol
-- `bt-common` - Shared types (NodeID, ResponderId)
+- `bth-account-keys` - Key derivation
+- `bth-crypto-*` - Cryptographic primitives
+- `bth-consensus-scp` - Stellar Consensus Protocol
+- `bth-common` - Shared types (NodeID, ResponderId)
 
 ### Heavily Modified
 - `mobilecoind` → `botho` - Complete rewrite as CLI
@@ -612,32 +660,35 @@ botho/src/
 | `scoped_threadpool` | Removed (unused) | ✅ Removed |
 | `json` | Removed (unused) | ✅ Removed |
 | `rjson` | Removed (unused) | ✅ Removed |
-| `lazy_static` | `std::sync::LazyLock` | ✅ Migrated in botho/ crate |
+| `lazy_static` | `std::sync::LazyLock` | ✅ Migrated in botho/, ledger/db, core, util/grpc-tonic, util/build/script, common |
 | `once_cell` | `std::sync::OnceLock` | ✅ Migrated in botho/ crate |
-
-### In Progress
-
-| Old | New | Status |
-|-----|-----|--------|
-| `lazy_static` | `std::sync::LazyLock` | ⚠️ Inherited Botho crates still use lazy_static |
-| `yaml-rust` | Removed (unused) | ⚠️ Still in workspace, unused |
-| `serde_cbor` | `ciborium` | ⚠️ Both present, migration incomplete |
-
-### Recently Completed
-
-| Old | New | Status |
-|-----|-----|--------|
 | `grpcio` | `tonic` | ✅ Complete - watcher/SGX excluded, all active crates use tonic |
+| `yaml-rust` | Removed | ✅ Removed from transaction/extra, transaction/builder, workspace |
+| `serde_cbor` | `postcard` | ✅ Migrated util/serial, util/repr-bytes to postcard v1 (compact, no_std) |
+| `rusoto_*` | Removed (unused) | ✅ Removed from workspace (no code usage) |
+| `protobuf 2` | Removed (unused) | ✅ Removed from workspace (no code usage) |
+| `mbedtls` | Removed (unused) | ✅ Removed from workspace + patches (no code usage) |
+| `textwrap` | Removed (unused) | ✅ Removed from workspace (no crate usage) |
+| `stdext` | Removed (unused) | ✅ Removed from workspace (no crate usage) |
+| `crypto/x509/test-vectors` | Commented out | ✅ Requires OpenSSL, not needed |
+| `diesel`, `diesel-derive-enum`, `diesel_migrations` | Removed (unused) | ✅ Removed from workspace |
+| `rocket` | Removed (unused) | ✅ Removed from workspace |
+| `r2d2` | Removed (unused) | ✅ Removed from workspace |
+| `ctrlc` | Removed (unused) | ✅ Removed from workspace |
+| `clio` | Removed (unused) | ✅ Removed from workspace |
+| `fs_extra` | Removed (unused) | ✅ Removed from workspace |
+| `link-cplusplus` | Removed (unused) | ✅ Removed from workspace |
+| `pkg-config` | Removed (unused) | ✅ Removed from workspace |
+| `libz-sys` | Removed (unused) | ✅ Removed from workspace |
+| `portpicker` | Removed (unused) | ✅ Removed from workspace |
+| `cookie` | Removed (unused) | ✅ Removed from workspace and connection/ |
 
 ### Pending
 
 | Old | New | Status |
 |-----|-----|--------|
-| `rusoto_*` | `aws-sdk-*` | ⏳ Used in ledger/distribution |
 | `slog` | `tracing` | ⏳ botho/ already migrated, inherited crates remain |
-| `mbedtls` | `rustls` | ⏳ Low priority |
-| `lmdb-rkv` | `heed` or `redb` | ⏳ Low priority |
-| `protobuf 2` | `prost` | ⏳ Already using prost in many places |
+| `lmdb-rkv` | `heed` or `redb` | ⏳ Low priority, still needed with patch |
 
 **Notes**:
 - `transaction/core` is `#![no_std]` and must continue using `lazy_static`
@@ -1002,66 +1053,74 @@ Tasks:
 
 | Priority | Optimization | Effort | Impact | Status |
 |----------|--------------|--------|--------|--------|
-| 1 | Replace nodes_map Mutex with DashMap | Low | High | ✅ Done |
-| 2 | Blocking channel receive (recv_timeout) | Low | Medium | ✅ Done |
-| 3 | Arc<Msg> instead of cloning | Medium | Medium | ⏳ Pending |
-| 4 | Quorum HashSet backtracking | High | High | ✅ Done |
-| 5 | Cache to_propose BTreeSet | Low | Low | ✅ Done |
+| 1 | Replace nodes_map Mutex with DashMap | Low | High | ✅ Done (+50-250%) |
+| 2 | Arc<Msg> instead of cloning | Low | Medium | ✅ Done |
+| 3 | Blocking channel receive (recv_timeout) | Low | N/A | ❌ Reverted |
+| 4 | Cache to_propose BTreeSet | Low | N/A | ❌ Reverted |
 
 ### Implementation Details
 
 #### 1. DashMap for Lock-Free Broadcasting ✅
 
-**File:** `consensus/scp/tests/mock_network/mod.rs`
+**File:** `botho/src/bin/scp_sim.rs`
 
-Replaced `Arc<Mutex<HashMap<NodeID, SCPNode>>>` with `Arc<DashMap<NodeID, SCPNode>>` for concurrent access without global locking during message broadcasts.
+Replaced `Arc<Mutex<HashMap<NodeID, SimNode>>>` with `Arc<DashMap<NodeID, SimNode>>` for concurrent access without global locking during message broadcasts.
 
-#### 2. Blocking Channel Receive ✅
+**Result:** 50-250% throughput improvement depending on node count. This was the highest-impact optimization.
 
-**File:** `consensus/scp/tests/mock_network/mod.rs`
+#### 2. Arc<Msg> for Message Sharing ✅
 
-Changed busy-wait `try_recv() + yield_now()` to `recv_timeout(Duration::from_micros(100))` for efficient blocking when no messages are available.
+**File:** `botho/src/bin/scp_sim.rs`
 
-#### 3. Quorum HashSet Backtracking ✅
+Wrapped SCP messages in `Arc` and clone by reference rather than cloning message contents for each peer.
 
-**File:** `consensus/scp/src/quorum_set_ext.rs`
+**Result:** Modest improvement, especially beneficial with larger message sizes.
 
-New `findQuorumHelperMut` function uses mutable `&mut HashSet` with backtracking instead of cloning at each recursive branch. Reduces O(2^n) allocations to O(n).
+#### 3. Blocking Channel Receive ❌ REVERTED
 
-#### 4. BTreeSet Caching ✅
+**Attempted:** Replace busy-wait `try_recv() + yield_now()` with `recv_timeout(Duration::from_micros(100))`.
 
-**File:** `consensus/scp/tests/mock_network/mod.rs`
+**Result:** Simulation hung. Even with 1μs timeout, the blocking behavior broke SCP consensus timing. The protocol requires continuous checking of timeouts and proposal state - any blocking disrupts this flow. The busy-wait pattern with `yield_now()` is actually necessary for this workload.
 
-Added `pending_values_changed` flag and `cached_values_to_propose` to avoid rebuilding the BTreeSet on every loop iteration.
+**Lesson:** Not all "obvious" optimizations help. SCP has tight timing requirements that don't tolerate blocking.
 
-### Remaining Optimizations
+#### 4. BTreeSet Caching ❌ REVERTED
 
-#### Arc<Msg> for Message Sharing ⏳
+**Attempted:** Cache the `to_propose` BTreeSet and only rebuild when `pending_values` changes.
 
-**Location:** `consensus/scp/src/slot.rs:333, 385`
+**Result:** Performance decreased by 50-75%. At high transaction rates (10k tx/s), new values arrive constantly, so the cache was invalidated on nearly every iteration. The caching added overhead (extra clone to cache, flag bookkeeping) without saving work.
 
-```rust
-self.handle_messages(&[msg.clone()])  // Clone on every message
-self.M.insert(msg.sender_id.clone(), msg.clone());
-```
+**Lesson:** Caching is counterproductive when the cache invalidation rate matches the access rate. Simpler is better for high-frequency-update scenarios.
 
-**Solution:** Use `Arc<Msg<V>>` throughout to share ownership without cloning.
+### Key Lessons Learned
+
+1. **Profile before optimizing**: The DashMap optimization had 50-250% impact while seemingly-clever caching hurt performance.
+
+2. **Understand workload characteristics**: High-frequency updates (10k tx/s) mean caches are invalidated constantly - overhead exceeds benefit.
+
+3. **Respect protocol timing**: SCP consensus requires continuous non-blocking execution. Even microsecond-level blocking breaks the protocol flow.
+
+4. **Lock contention scales non-linearly**: The original Mutex approach degraded severely as node count increased. Concurrent data structures (DashMap) are essential for multi-threaded consensus.
+
+### Potential Future Optimizations
+
+These optimizations may help but haven't been tested:
 
 #### Message Sorting ⏳
 
 **Location:** `consensus/scp/src/slot.rs:359`
 
-**Solution:** Use a priority queue or maintain sorted order incrementally.
+**Idea:** Use a priority queue or maintain sorted order incrementally instead of sorting on each access.
 
 #### Value Validation Caching ⏳
 
 **Location:** `consensus/scp/src/slot.rs:374-378`
 
-Cache validation results per value hash to avoid re-validating seen values.
+**Idea:** Cache validation results per value hash to avoid re-validating seen values. (May have same issue as BTreeSet caching if values change frequently.)
 
 #### SmallVec for Small Collections ⏳
 
-Many `Vec<V>` allocations for small node sets could use `SmallVec<[V; 8]>` to avoid heap allocation.
+**Idea:** Many `Vec<V>` allocations for small node sets could use `SmallVec<[V; 8]>` to avoid heap allocation.
 
 ## Quantum Resistance
 
@@ -1120,39 +1179,40 @@ pqcrypto-traits = "0.3"      # Common traits
 - CryptoNote v2.0 Whitepaper (stealth address protocol)
 - "Post-Quantum Cryptography for Blockchain" (IEEE S&P 2024)
 
-## AWS Deployment
+## Deployment (Cloudflare + AWS)
 
 ### Infrastructure Overview
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                              AWS Account                                 │
+│                          Cloudflare + AWS                                │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                          │
-│   ┌─────────────────────┐              ┌─────────────────────┐          │
-│   │   Route 53          │              │   CloudWatch        │          │
-│   │   DNS for botho.io  │              │   Monitoring/Alerts │          │
-│   └──────────┬──────────┘              └──────────┬──────────┘          │
-│              │                                    │                      │
-│   ┌──────────┴──────────────────────────────────┴──────────┐           │
-│   │                                                          │           │
-│   │   ┌─────────────────┐         ┌─────────────────────┐   │           │
-│   │   │  Amplify        │         │  EC2 (t3.large)     │   │           │
-│   │   │  botho.io       │         │  seed.botho.io      │   │           │
-│   │   │                 │         │                     │   │           │
-│   │   │  - Static site  │         │  - Botho node       │   │           │
-│   │   │  - Web wallet   │         │  - P2P networking   │   │           │
-│   │   │  - Docs         │         │  - Ledger DB        │   │           │
-│   │   │  - Free tier    │         │  - Elastic IP       │   │           │
-│   │   └─────────────────┘         └─────────────────────┘   │           │
-│   │                                         │                │           │
-│   │                               ┌─────────┴─────────┐     │           │
-│   │                               │  EBS Volume       │     │           │
-│   │                               │  100GB gp3        │     │           │
-│   │                               │  (Ledger storage) │     │           │
-│   │                               └───────────────────┘     │           │
-│   │                                                          │           │
-│   └──────────────────────────────────────────────────────────┘          │
+│   ┌───────────────────────────────┐    ┌─────────────────────────────┐  │
+│   │         Cloudflare            │    │         AWS Account         │  │
+│   │                               │    │                             │  │
+│   │  ┌─────────────────────────┐  │    │  ┌───────────────────────┐  │  │
+│   │  │  Cloudflare Pages       │  │    │  │  CloudWatch           │  │  │
+│   │  │  botho.io               │  │    │  │  Monitoring/Alerts    │  │  │
+│   │  │                         │  │    │  └───────────┬───────────┘  │  │
+│   │  │  - Static site          │  │    │              │              │  │
+│   │  │  - Web wallet           │  │    │  ┌───────────┴───────────┐  │  │
+│   │  │  - Docs                 │  │    │  │  EC2 (t3.large)       │  │  │
+│   │  │  - Free tier            │  │    │  │  seed.botho.io        │  │  │
+│   │  └─────────────────────────┘  │    │  │                       │  │  │
+│   │                               │    │  │  - Botho node         │  │  │
+│   │  ┌─────────────────────────┐  │    │  │  - P2P networking     │  │  │
+│   │  │  Cloudflare DNS         │  │    │  │  - Ledger DB          │  │  │
+│   │  │  botho.io zone          │  │    │  │  - Elastic IP         │  │  │
+│   │  │  seed.botho.io → EC2    │  │    │  └───────────┬───────────┘  │  │
+│   │  └─────────────────────────┘  │    │              │              │  │
+│   │                               │    │  ┌───────────┴───────────┐  │  │
+│   └───────────────────────────────┘    │  │  EBS Volume           │  │  │
+│                                        │  │  100GB gp3            │  │  │
+│                                        │  │  (Ledger storage)     │  │  │
+│                                        │  └───────────────────────┘  │  │
+│                                        │                             │  │
+│                                        └─────────────────────────────┘  │
 │                                                                          │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
@@ -1165,10 +1225,9 @@ pqcrypto-traits = "0.3"      # Common traits
 | EC2 t3.large | 1-yr reserved | ~$38 |
 | EBS gp3 | 100GB | ~$8 |
 | Elastic IP | 1 (attached) | $0 |
-| Amplify Hosting | Static site | Free tier |
-| Route 53 | Hosted zone | ~$0.50 |
+| Cloudflare Pages | Static site + DNS | Free |
 | Data transfer | ~100GB/mo | ~$9 |
-| **Total** | | **~$55-80/mo** |
+| **Total** | | **~$55-75/mo** |
 
 ### EC2 Setup for seed.botho.io
 
@@ -1454,12 +1513,12 @@ aws cloudwatch put-metric-alarm \
 
 #### Web Hosting (botho.io)
 
-- [ ] Amplify app created
+- [ ] Cloudflare Pages project created
 - [ ] GitHub repo connected
-- [ ] Build settings configured
-- [ ] Custom domain added
-- [ ] SSL certificate provisioned
-- [ ] DNS configured (via Route 53 or registrar)
+- [ ] Build settings configured (pnpm build:web)
+- [ ] Custom domain added (botho.io, www.botho.io)
+- [ ] SSL certificate provisioned (automatic)
+- [ ] DNS CNAME records pointing to pages.dev
 
 #### Post-Launch
 

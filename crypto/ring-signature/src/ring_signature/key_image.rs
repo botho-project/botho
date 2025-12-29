@@ -2,15 +2,15 @@
 
 use super::{hash_to_point, Error, Scalar};
 use curve25519_dalek::ristretto::CompressedRistretto;
-use bt_crypto_digestible::Digestible;
-use bt_crypto_keys::{RistrettoPrivate, RistrettoPublic};
-use bt_util_repr_bytes::{
+use bth_crypto_digestible::Digestible;
+use bth_crypto_keys::{RistrettoPrivate, RistrettoPublic};
+use bth_util_repr_bytes::{
     derive_core_cmp_from_as_ref, derive_debug_and_display_hex_from_as_ref,
     derive_repr_bytes_from_as_ref_and_try_from, typenum::U32, LengthMismatch,
 };
 
 #[cfg(feature = "prost")]
-use bt_util_repr_bytes::derive_prost_message_from_repr_bytes;
+use bth_util_repr_bytes::derive_prost_message_from_repr_bytes;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};

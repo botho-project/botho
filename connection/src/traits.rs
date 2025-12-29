@@ -3,11 +3,11 @@
 //! Traits which connection implementations can implement.
 
 use crate::{error::{Result, RetryResult}, thick::EvidenceKind};
-use bt_blockchain_types::{Block, BlockID, BlockIndex};
+use bth_blockchain_types::{Block, BlockID, BlockIndex};
 use tonic::Status as GrpcError;
-use bt_consensus_api::consensus_common::LastBlockInfoResponse;
-use bt_transaction_core::{tokens::Mob, tx::Tx, Token, TokenId};
-use bt_util_uri::ConnectionUri;
+use bth_consensus_api::consensus_common::LastBlockInfoResponse;
+use bth_transaction_core::{tokens::Mob, tx::Tx, Token, TokenId};
+use bth_util_uri::ConnectionUri;
 use serde::Serialize;
 use std::{
     collections::BTreeMap,

@@ -3,7 +3,7 @@
 //! Broadcasts messages through the network.
 
 use crate::ConsensusMsg;
-use bt_common::ResponderId;
+use bth_common::ResponderId;
 use mockall::*;
 
 #[automock]

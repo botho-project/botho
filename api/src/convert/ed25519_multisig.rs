@@ -3,8 +3,8 @@
 //! Convert to/from external::Ed25519SignerSet/Ed25519MultiSig.
 
 use crate::{external, ConversionError};
-use bt_crypto_keys::{Ed25519Public, Ed25519Signature};
-use bt_crypto_multisig::{MultiSig, SignerSet};
+use bth_crypto_keys::{Ed25519Public, Ed25519Signature};
+use bth_crypto_multisig::{MultiSig, SignerSet};
 
 /// Convert MultiSig<Ed25519Signature> --> external::Ed25519MultiSig.
 impl From<&MultiSig<Ed25519Signature>> for external::Ed25519MultiSig {
@@ -79,9 +79,9 @@ impl TryFrom<&external::Ed25519SignerSet> for SignerSet<Ed25519Public> {
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use bt_crypto_keys::{Ed25519Pair, Signer};
-    use bt_util_from_random::FromRandom;
-    use bt_util_serial::{decode, encode};
+    use bth_crypto_keys::{Ed25519Pair, Signer};
+    use bth_util_from_random::FromRandom;
+    use bth_util_serial::{decode, encode};
     use prost::Message;
     use rand_core::SeedableRng;
     use rand_hc::Hc128Rng;

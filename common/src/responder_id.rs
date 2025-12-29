@@ -11,7 +11,7 @@ use core::{
     str::FromStr,
 };
 use displaydoc::Display;
-use bt_crypto_digestible::Digestible;
+use bth_crypto_digestible::Digestible;
 use prost::{
     bytes::{Buf, BufMut},
     encoding, Message,

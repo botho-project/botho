@@ -7,7 +7,7 @@
 use super::RegisteredMemoType;
 use crate::impl_memo_type_conversions;
 use displaydoc::Display;
-use bt_transaction_core::NewMemoError;
+use bth_transaction_core::NewMemoError;
 
 /// Memo denoting a defragmentation transaction.
 ///

@@ -1,9 +1,9 @@
 // Copyright (c) 2018-2022 The Botho Foundation
 
-//! Convert to/from bt_transaction_core::ring_signature::ReducedTxOut
+//! Convert to/from bth_transaction_core::ring_signature::ReducedTxOut
 
 use crate::{external, ConversionError};
-use bt_transaction_core::ring_signature::ReducedTxOut;
+use bth_transaction_core::ring_signature::ReducedTxOut;
 
 impl From<&ReducedTxOut> for external::ReducedTxOut {
     fn from(source: &ReducedTxOut) -> Self {
@@ -45,15 +45,15 @@ impl TryFrom<&external::ReducedTxOut> for ReducedTxOut {
 #[cfg(test)]
 mod tests {
     use curve25519_dalek::ristretto::CompressedRistretto;
-    use bt_crypto_keys::CompressedRistrettoPublic;
-    use bt_transaction_core::{ring_signature::ReducedTxOut, CompressedCommitment};
-    use bt_util_from_random::FromRandom;
+    use bth_crypto_keys::CompressedRistrettoPublic;
+    use bth_transaction_core::{ring_signature::ReducedTxOut, CompressedCommitment};
+    use bth_util_from_random::FromRandom;
     use rand::{rngs::StdRng, SeedableRng};
 
     use crate::external;
 
     // Test converting between external::ReducedTxOut and
-    // bt_transaction_core::ring_signature::ReducedTxOut
+    // bth_transaction_core::ring_signature::ReducedTxOut
     #[test]
     fn test_reduced_tx_out_conversion() {
         let mut rng: StdRng = SeedableRng::from_seed([123u8; 32]);

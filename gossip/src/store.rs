@@ -6,7 +6,7 @@
 //! and managing `NodeAnnouncement` messages from gossip.
 
 use crate::messages::{NodeAnnouncement, NodeCapabilities, PeerInfo};
-use bt_common::{HashMap, HashSet, NodeID, ResponderId};
+use bth_common::{HashMap, HashSet, NodeID, ResponderId};
 use std::sync::{Arc, RwLock};
 
 /// Configuration for the peer store.
@@ -340,8 +340,8 @@ pub fn new_shared_store(config: PeerStoreConfig) -> SharedPeerStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bt_consensus_scp_types::QuorumSetMember;
-    use bt_crypto_keys::Ed25519Public;
+    use bth_consensus_scp_types::QuorumSetMember;
+    use bth_crypto_keys::Ed25519Public;
     use std::str::FromStr;
 
     fn make_test_announcement(name: &str, timestamp: u64) -> NodeAnnouncement {

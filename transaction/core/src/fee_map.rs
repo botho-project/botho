@@ -5,7 +5,7 @@
 use crate::{tokens::Mob, Token, TokenId};
 use alloc::collections::BTreeMap;
 use displaydoc::Display;
-use bt_crypto_digestible::{Digestible, MerlinTranscript};
+use bth_crypto_digestible::{Digestible, MerlinTranscript};
 use serde::{Deserialize, Serialize};
 
 /// The log base 2 of the smallest allowed minimum fee, in the smallest

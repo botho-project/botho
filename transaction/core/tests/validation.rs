@@ -11,16 +11,16 @@ use crate::util::{
     create_test_tx, create_test_tx_with_amount,
     create_test_tx_with_amount_and_comparer_and_recipients,
 };
-use bt_account_keys::AccountKey;
-use bt_crypto_keys::{CompressedRistrettoPublic, ReprBytes};
-use bt_ledger_db::test_utils::{InverseTxOutputsOrdering, INITIALIZE_LEDGER_AMOUNT};
-use bt_transaction_core::{
+use bth_account_keys::AccountKey;
+use bth_crypto_keys::{CompressedRistrettoPublic, ReprBytes};
+use bth_ledger_db::test_utils::{InverseTxOutputsOrdering, INITIALIZE_LEDGER_AMOUNT};
+use bth_transaction_core::{
     constants::{MAX_TOMBSTONE_BLOCKS, RING_SIZE},
     tokens::Mob,
     validation::*,
     BlockVersion, InputRules, Token,
 };
-use bt_util_test_helper::get_seeded_rng;
+use bth_util_test_helper::get_seeded_rng;
 
 #[test]
 // Should return MissingMemo when memos are missing in an output

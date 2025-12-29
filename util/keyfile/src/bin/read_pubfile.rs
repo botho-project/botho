@@ -5,7 +5,7 @@
 //! Optionally, can transcribe them to the b58 format
 
 use clap::Parser;
-use bt_util_keyfile::{read_pubfile, write_b58pubfile};
+use bth_util_keyfile::{read_pubfile, write_b58pubfile};
 use std::path::PathBuf;
 
 #[derive(Debug, Parser)]

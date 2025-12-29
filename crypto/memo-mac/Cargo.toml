@@ -1,5 +1,5 @@
 [package]
-name = "bt-crypto-memo-mac"
+name = "bth-crypto-memo-mac"
 version = "7.1.0"
 authors = ["Botho"]
 edition = "2021"
@@ -14,4 +14,4 @@ hmac = { workspace = true }
 sha2 = { workspace = true }
 
 # Botho dependencies
-bt-crypto-keys = { workspace = true }
+bth-crypto-keys = { workspace = true }

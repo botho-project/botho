@@ -1,22 +1,21 @@
 // Copyright (c) 2018-2025 The Botho Foundation
 
 use crate::{
-    transaction_builder::create_output_with_fog_hint, MemoBuilder, ReservedSubaddresses,
+    transaction_builder::create_output_internal, MemoBuilder, ReservedSubaddresses,
     TxBuilderError, TxOutputsOrdering,
 };
 use alloc::vec::Vec;
-use bt_account_keys::PublicAddress;
-use bt_crypto_keys::RistrettoPrivate;
-use bt_crypto_ring_signature_signer::RingSigner;
-use bt_transaction_core::{
-    encrypted_fog_hint::EncryptedFogHint,
+use bth_account_keys::PublicAddress;
+use bth_crypto_keys::RistrettoPrivate;
+use bth_crypto_ring_signature_signer::RingSigner;
+use bth_transaction_core::{
     ring_ct::{InputRing, OutputSecret},
     tx::{Tx, TxIn, TxOut, TxPrefix},
     FeeMap, MemoContext, MemoPayload, NewMemoError,
 };
-use bt_transaction_extra::UnsignedTx;
-use bt_transaction_summary::TxOutSummaryUnblindingData;
-use bt_transaction_types::{Amount, BlockVersion, ClusterTagVector, UnmaskedAmount};
+use bth_transaction_extra::UnsignedTx;
+use bth_transaction_summary::TxOutSummaryUnblindingData;
+use bth_transaction_types::{Amount, BlockVersion, ClusterTagVector, UnmaskedAmount};
 use rand::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 
@@ -31,9 +30,6 @@ pub enum TxBlueprintOutput {
         /// The amount being sent.
         amount: Amount,
 
-        /// The encrypted fog hint for the fog ingest server.
-        e_fog_hint: EncryptedFogHint,
-
         /// The tx private key for the output.
         tx_private_key: RistrettoPrivate,
     },
@@ -45,9 +41,6 @@ pub enum TxBlueprintOutput {
 
         /// The amount being sent.
         amount: Amount,
-
-        /// The encrypted fog hint for the fog ingest server.
-        e_fog_hint: EncryptedFogHint,
 
         /// The tx private key for the output.
         tx_private_key: RistrettoPrivate,
@@ -160,13 +153,11 @@ fn build_output(
         TxBlueprintOutput::Recipient {
             recipient,
             amount,
-            e_fog_hint,
             tx_private_key,
         } => build_standard_output(
             unsigned_tx.block_version,
             amount,
             &recipient,
-            e_fog_hint,
             |memo_ctxt| mb.make_memo_for_output(amount, &recipient, memo_ctxt),
             tx_private_key,
             unsigned_tx.cluster_tags.as_ref(),
@@ -175,13 +166,11 @@ fn build_output(
         TxBlueprintOutput::Change {
             change_destination,
             amount,
-            e_fog_hint,
             tx_private_key,
         } => build_standard_output(
             unsigned_tx.block_version,
             amount,
             &change_destination.change_subaddress,
-            e_fog_hint,
             |memo_ctxt| mb.make_memo_for_change_output(amount, &change_destination, memo_ctxt),
             tx_private_key,
             unsigned_tx.cluster_tags.as_ref(),
@@ -217,16 +206,14 @@ fn build_standard_output(
     block_version: BlockVersion,
     amount: Amount,
     recipient: &PublicAddress,
-    e_fog_hint: EncryptedFogHint,
     memo_fn: impl FnOnce(MemoContext) -> Result<MemoPayload, NewMemoError>,
     tx_private_key: RistrettoPrivate,
     cluster_tags: Option<&ClusterTagVector>,
 ) -> Result<(TxOut, TxOutSummaryUnblindingData), TxBuilderError> {
-    let (mut tx_out, shared_secret) = create_output_with_fog_hint(
+    let (mut tx_out, shared_secret) = create_output_internal(
         block_version,
         amount,
         recipient,
-        e_fog_hint,
         memo_fn,
         &tx_private_key,
     )?;

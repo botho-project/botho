@@ -11,8 +11,8 @@ use crate::{
 use alloc::vec::Vec;
 use displaydoc::Display;
 use generic_array::typenum::Unsigned;
-use bt_crypto_keys::{Kex, KexReusablePrivate, ReprBytes};
-use bt_util_from_random::FromRandom;
+use bth_crypto_keys::{Kex, KexReusablePrivate, ReprBytes};
+use bth_util_from_random::FromRandom;
 use rand_core::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 
@@ -593,7 +593,7 @@ mod test {
     use super::*;
     use crate::patterns::{HandshakeIX, HandshakeNX};
     use aes_gcm::Aes256Gcm;
-    use bt_crypto_keys::{X25519Private, X25519};
+    use bth_crypto_keys::{X25519Private, X25519};
     use rand_core::SeedableRng;
     use rand_hc::Hc128Rng;
     use sha2::Sha512;

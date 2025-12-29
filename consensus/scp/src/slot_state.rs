@@ -12,7 +12,7 @@ use crate::{
     slot::{Phase, Slot},
     SlotIndex, Value,
 };
-use bt_common::{HashSet, NodeID};
+use bth_common::{HashSet, NodeID};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, fmt::Display};
 

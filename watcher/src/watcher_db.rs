@@ -4,24 +4,24 @@
 
 use crate::{block_data_store::BlockDataStore, error::WatcherDBError};
 
-use bt_blockchain_types::{BlockData, BlockIndex, BlockSignature};
-use bt_common::{
+use bth_blockchain_types::{BlockData, BlockIndex, BlockSignature};
+use bth_common::{
     logger::{log, Logger},
     HashMap,
 };
-use bt_crypto_digestible::{Digestible, MerlinTranscript};
-use bt_crypto_keys::Ed25519Public;
-use bt_util_lmdb::{MetadataStore, MetadataStoreSettings};
-use bt_util_repr_bytes::ReprBytes;
-use bt_util_serial::{decode, encode, Message};
-use bt_watcher_api::TimestampResultCode;
+use bth_crypto_digestible::{Digestible, MerlinTranscript};
+use bth_crypto_keys::Ed25519Public;
+use bth_util_lmdb::{MetadataStore, MetadataStoreSettings};
+use bth_util_repr_bytes::ReprBytes;
+use bth_util_serial::{decode, encode, Message};
+use bth_watcher_api::TimestampResultCode;
 use serde::{Deserialize, Serialize};
 
 use lmdb::{
     Cursor, Database, DatabaseFlags, Environment, EnvironmentFlags, RwTransaction, Transaction,
     WriteFlags,
 };
-use bt_util_repr_bytes::typenum::Unsigned;
+use bth_util_repr_bytes::typenum::Unsigned;
 use std::{
     path::Path,
     str,
@@ -1093,12 +1093,12 @@ fn bytes_to_url(bytes: &[u8]) -> Result<Url, WatcherDBError> {
 pub mod tests {
     use super::*;
     use mc_attest_verifier_types::prost;
-    use bt_blockchain_test_utils::get_blocks;
-    use bt_blockchain_types::{BlockVersion, VerificationReport};
-    use bt_common::logger::test_with_logger;
-    use bt_crypto_keys::Ed25519Pair;
-    use bt_util_from_random::FromRandom;
-    use bt_util_test_helper::{get_seeded_rng, run_with_one_seed};
+    use bth_blockchain_test_utils::get_blocks;
+    use bth_blockchain_types::{BlockVersion, VerificationReport};
+    use bth_common::logger::test_with_logger;
+    use bth_crypto_keys::Ed25519Pair;
+    use bth_util_from_random::FromRandom;
+    use bth_util_test_helper::{get_seeded_rng, run_with_one_seed};
     use rand_core::SeedableRng;
     use rand_hc::Hc128Rng;
     use tempfile::TempDir;

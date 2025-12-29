@@ -5,12 +5,12 @@
 use alloc::vec::Vec;
 
 use core::fmt;
-use bt_account_keys::PublicAddress;
-use bt_common::Hash;
-use bt_crypto_digestible::{Digestible, MerlinTranscript};
-use bt_crypto_keys::{CompressedRistrettoPublic, RistrettoPrivate, RistrettoPublic};
-use bt_crypto_ring_signature::{KeyImage, ReducedTxOut};
-use bt_util_repr_bytes::{
+use bth_account_keys::PublicAddress;
+use bth_common::Hash;
+use bth_crypto_digestible::{Digestible, MerlinTranscript};
+use bth_crypto_keys::{CompressedRistrettoPublic, RistrettoPrivate, RistrettoPublic};
+use bth_crypto_ring_signature::{KeyImage, ReducedTxOut};
+use bth_util_repr_bytes::{
     derive_prost_message_from_repr_bytes, typenum::U32, GenericArray, ReprBytes,
 };
 use prost::Message;
@@ -18,7 +18,6 @@ use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
 
 use crate::{
-    encrypted_fog_hint::EncryptedFogHint,
     get_tx_out_shared_secret,
     input_rules::InputRules,
     membership_proofs::Range,
@@ -276,9 +275,7 @@ pub struct TxOut {
     #[prost(message, required, tag = "3")]
     pub public_key: CompressedRistrettoPublic,
 
-    /// The encrypted fog hint for the fog ingest server.
-    #[prost(message, required, tag = "4")]
-    pub e_fog_hint: EncryptedFogHint,
+    // Field 4 was `e_fog_hint` - removed as part of fog removal
 
     /// The encrypted memo (except for old TxOut's, which don't have this.)
     #[prost(message, tag = "5")]
@@ -329,20 +326,17 @@ impl TxOut {
     /// * `amount` - Amount contained within the TxOut
     /// * `recipient` - Recipient's address.
     /// * `tx_private_key` - The transaction's private key
-    /// * `hint` - Encrypted Fog hint for this output.
     pub fn new(
         block_version: BlockVersion,
         amount: Amount,
         recipient: &PublicAddress,
         tx_private_key: &RistrettoPrivate,
-        hint: EncryptedFogHint,
     ) -> Result<Self, NewTxError> {
         TxOut::new_with_memo(
             block_version,
             amount,
             recipient,
             tx_private_key,
-            hint,
             |_| Ok(MemoPayload::default()),
         )
     }
@@ -356,7 +350,6 @@ impl TxOut {
     /// * `amount` - Amount contained within the TxOut
     /// * `recipient` - Recipient's address.
     /// * `tx_private_key` - The transaction's private key
-    /// * `hint` - Encrypted Fog hint.
     /// * `memo_fn` - A callback taking MemoContext, which produces a
     ///   MemoPayload, or a NewMemo error
     pub fn new_with_memo(
@@ -364,7 +357,6 @@ impl TxOut {
         amount: Amount,
         recipient: &PublicAddress,
         tx_private_key: &RistrettoPrivate,
-        hint: EncryptedFogHint,
         memo_fn: impl FnOnce(MemoContext) -> Result<MemoPayload, NewMemoError>,
     ) -> Result<Self, NewTxError> {
         let target_key = create_tx_out_target_key(tx_private_key, recipient).into();
@@ -389,7 +381,6 @@ impl TxOut {
             masked_amount,
             target_key,
             public_key: public_key.into(),
-            e_fog_hint: hint,
             e_memo,
             cluster_tags: None,
             committed_cluster_tags: None,
@@ -403,7 +394,6 @@ impl TxOut {
     /// * `amount` - Amount contained within the TxOut
     /// * `recipient` - Recipient's address.
     /// * `tx_private_key` - The transaction's private key
-    /// * `hint` - Encrypted Fog hint.
     /// * `memo_fn` - A callback taking MemoContext, which produces a MemoPayload
     /// * `cluster_tags` - The cluster tag vector inherited from input(s)
     pub fn new_with_cluster_tags(
@@ -411,12 +401,11 @@ impl TxOut {
         amount: Amount,
         recipient: &PublicAddress,
         tx_private_key: &RistrettoPrivate,
-        hint: EncryptedFogHint,
         memo_fn: impl FnOnce(MemoContext) -> Result<MemoPayload, NewMemoError>,
         cluster_tags: ClusterTagVector,
     ) -> Result<Self, NewTxError> {
         let mut tx_out =
-            Self::new_with_memo(block_version, amount, recipient, tx_private_key, hint, memo_fn)?;
+            Self::new_with_memo(block_version, amount, recipient, tx_private_key, memo_fn)?;
 
         // Only include cluster tags if the block version supports them
         if block_version.cluster_tags_are_supported() {
@@ -433,7 +422,6 @@ impl TxOut {
     /// * `amount` - Amount contained within the TxOut
     /// * `recipient` - Recipient's address.
     /// * `tx_private_key` - The transaction's private key
-    /// * `hint` - Encrypted Fog hint.
     /// * `memo_fn` - A callback taking MemoContext, which produces a MemoPayload
     /// * `committed_cluster_tags` - Serialized CommittedTagVector from mc-cluster-tax
     pub fn new_with_committed_cluster_tags(
@@ -441,12 +429,11 @@ impl TxOut {
         amount: Amount,
         recipient: &PublicAddress,
         tx_private_key: &RistrettoPrivate,
-        hint: EncryptedFogHint,
         memo_fn: impl FnOnce(MemoContext) -> Result<MemoPayload, NewMemoError>,
         committed_cluster_tags: Vec<u8>,
     ) -> Result<Self, NewTxError> {
         let mut tx_out =
-            Self::new_with_memo(block_version, amount, recipient, tx_private_key, hint, memo_fn)?;
+            Self::new_with_memo(block_version, amount, recipient, tx_private_key, memo_fn)?;
 
         // Only include committed cluster tags if the block version supports them
         if block_version.cluster_tags_are_supported() {
@@ -697,12 +684,12 @@ mod tests {
         Amount, BlockVersion, Token,
     };
     use alloc::vec;
-    use bt_account_keys::{
+    use bth_account_keys::{
         AccountKey, PublicAddress, CHANGE_SUBADDRESS_INDEX, DEFAULT_SUBADDRESS_INDEX,
     };
-    use bt_crypto_keys::{RistrettoPrivate, RistrettoPublic};
-    use bt_util_from_random::FromRandom;
-    use bt_util_test_helper::get_seeded_rng;
+    use bth_crypto_keys::{RistrettoPrivate, RistrettoPublic};
+    use bth_util_from_random::FromRandom;
+    use bth_util_test_helper::get_seeded_rng;
     use prost::Message;
 
     #[test]
@@ -718,7 +705,6 @@ mod tests {
                 amount,
                 &recipient,
                 &tx_private_key,
-                Default::default(),
             )
             .unwrap();
 
@@ -779,7 +765,6 @@ mod tests {
                 },
                 &bob_addr,
                 &tx_private_key,
-                Default::default(),
             )
             .unwrap();
             assert!(
@@ -822,7 +807,6 @@ mod tests {
                 },
                 &bob_addr,
                 &tx_private_key,
-                Default::default(),
                 |_| Ok(memo_val),
             )
             .unwrap();
@@ -859,7 +843,6 @@ mod tests {
                 },
                 &bob.change_subaddress(),
                 &tx_private_key,
-                Default::default(),
                 |_| Ok(memo_val),
             )
             .unwrap();

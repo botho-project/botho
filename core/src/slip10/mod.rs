@@ -3,7 +3,7 @@
 //! Botho SLIP-0010 / BIP39 Based Key Derivation
 //!
 //! This provides utilities to handle SLIP-0010 key bytes and their relation to
-//! the Botho [`Account`](bt_core::Account) structure, which contains a
+//! the Botho [`Account`](bth_core::Account) structure, which contains a
 //! pair of Ristretto255 view/spend private scalars.
 //!
 //! As well as providing traits to create a Slip10Key from entropy and path,
@@ -16,7 +16,7 @@ use hkdf::Hkdf;
 use sha2::Sha512;
 use zeroize::Zeroize;
 
-use bt_crypto_keys::RistrettoPrivate;
+use bth_crypto_keys::RistrettoPrivate;
 
 #[cfg(feature = "bip39")]
 pub use bip39::{Language, Mnemonic};
@@ -144,18 +144,19 @@ mod test {
 
     use super::*;
     use alloc::{string::String, vec::Vec};
-    use bt_crypto_keys::RistrettoPublic;
+    use bth_crypto_keys::RistrettoPublic;
     use serde::{Deserialize, Serialize};
+    use std::sync::LazyLock;
 
     // Include test vectors as JSON strings
     const KEY_TO_RISTRETTO_STR: &str = include_str!("../../tests/slip10_key.json");
     const MNEMONIC_TO_RISTRETTO_STR: &str = include_str!("../../tests/slip10_mnemonic.json");
 
     // Deserialize test vectors on first access
-    lazy_static::lazy_static! {
-        pub static ref SLIPKEY_TO_RISTRETTO_TESTS: Vec<KeyToRistretto> = serde_json::from_str(KEY_TO_RISTRETTO_STR).unwrap();
-        pub static ref MNEMONIC_TO_RISTRETTO_TESTS: Vec<MnemonicToRistretto> = serde_json::from_str(MNEMONIC_TO_RISTRETTO_STR).unwrap();
-    }
+    static SLIPKEY_TO_RISTRETTO_TESTS: LazyLock<Vec<KeyToRistretto>> =
+        LazyLock::new(|| serde_json::from_str(KEY_TO_RISTRETTO_STR).unwrap());
+    static MNEMONIC_TO_RISTRETTO_TESTS: LazyLock<Vec<MnemonicToRistretto>> =
+        LazyLock::new(|| serde_json::from_str(MNEMONIC_TO_RISTRETTO_STR).unwrap());
 
     /// Slip10 key to ristretto test definitions
     #[derive(Clone, PartialEq, Serialize, Deserialize)]

@@ -3,7 +3,7 @@
 //! Convert to/from watcher_api::*
 
 use crate::{watcher, ConversionError};
-use bt_watcher_api::TimestampResultCode;
+use bth_watcher_api::TimestampResultCode;
 
 impl From<&TimestampResultCode> for watcher::TimestampResultCode {
     fn from(src: &TimestampResultCode) -> Self {

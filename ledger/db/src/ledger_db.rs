@@ -8,15 +8,15 @@ use lmdb::{
     Database, DatabaseFlags, Environment, EnvironmentFlags, RoTransaction, RwTransaction,
     Transaction, WriteFlags,
 };
-use bt_blockchain_types::{
+use bth_blockchain_types::{
     Block, BlockContents, BlockData, BlockID, BlockIndex, BlockMetadata, BlockSignature,
     BlockVersion, MAX_BLOCK_VERSION,
 };
-use bt_common::{logger::global_log, Hash, HashMap};
-use bt_crypto_keys::CompressedRistrettoPublic;
-use bt_transaction_core::{mint::MintTx, ring_signature::KeyImage, tx::TxOut, TokenId};
-use bt_util_serial::{decode, encode, Message};
-use bt_util_telemetry::{
+use bth_common::{logger::global_log, Hash, HashMap};
+use bth_crypto_keys::CompressedRistrettoPublic;
+use bth_transaction_core::{mint::MintTx, ring_signature::KeyImage, tx::TxOut, TokenId};
+use bth_util_serial::{decode, encode, Message};
+use bth_util_telemetry::{
     mark_span_as_active, start_block_span, telemetry_static_key, tracer, Key, Span,
 };
 use std::{
@@ -514,7 +514,7 @@ impl LedgerDB {
 
     /// Get the total wealth attributed to a cluster.
     /// This is used for progressive fee computation.
-    pub fn get_cluster_wealth(&self, cluster_id: bt_transaction_core::ClusterId) -> Result<u64, Error> {
+    pub fn get_cluster_wealth(&self, cluster_id: bth_transaction_core::ClusterId) -> Result<u64, Error> {
         let db_transaction = self.env.begin_ro_txn()?;
         self.cluster_wealth_store.get_cluster_wealth(cluster_id, &db_transaction)
     }
@@ -522,8 +522,8 @@ impl LedgerDB {
     /// Get wealth for multiple clusters at once.
     pub fn get_cluster_wealths(
         &self,
-        cluster_ids: &[bt_transaction_core::ClusterId],
-    ) -> Result<HashMap<bt_transaction_core::ClusterId, u64>, Error> {
+        cluster_ids: &[bth_transaction_core::ClusterId],
+    ) -> Result<HashMap<bth_transaction_core::ClusterId, u64>, Error> {
         let db_transaction = self.env.begin_ro_txn()?;
         self.cluster_wealth_store.get_cluster_wealths(cluster_ids, &db_transaction)
     }
@@ -535,7 +535,7 @@ impl LedgerDB {
     }
 
     /// Get all cluster wealths (for analysis/debugging).
-    pub fn get_all_cluster_wealths(&self) -> Result<HashMap<bt_transaction_core::ClusterId, u64>, Error> {
+    pub fn get_all_cluster_wealths(&self) -> Result<HashMap<bth_transaction_core::ClusterId, u64>, Error> {
         let db_transaction = self.env.begin_ro_txn()?;
         self.cluster_wealth_store.get_all_cluster_wealths(&db_transaction)
     }
@@ -674,8 +674,8 @@ impl LedgerDB {
     /// * `db_transaction` - The database transaction
     pub fn write_cluster_wealth_deltas(
         &self,
-        input_contributions: &HashMap<bt_transaction_core::ClusterId, u64>,
-        output_contributions: &HashMap<bt_transaction_core::ClusterId, u64>,
+        input_contributions: &HashMap<bth_transaction_core::ClusterId, u64>,
+        output_contributions: &HashMap<bth_transaction_core::ClusterId, u64>,
         db_transaction: &mut RwTransaction,
     ) -> Result<(), Error> {
         self.cluster_wealth_store.apply_wealth_deltas(
@@ -980,14 +980,14 @@ pub fn key_bytes_to_u64(bytes: &[u8]) -> u64 {
 mod ledger_db_test {
     use super::*;
     use crate::test_utils::{add_block_contents_to_ledger, add_txos_and_key_images_to_ledger};
-    use bt_blockchain_test_utils::{get_blocks, make_block_metadata};
-    use bt_crypto_keys::Ed25519Pair;
-    use bt_transaction_core_test_utils::{
+    use bth_blockchain_test_utils::{get_blocks, make_block_metadata};
+    use bth_crypto_keys::Ed25519Pair;
+    use bth_transaction_core_test_utils::{
         create_mint_config_tx, create_mint_config_tx_and_signers, create_mint_tx,
         create_test_tx_out, mint_config_tx_to_validated as to_validated,
     };
-    use bt_util_from_random::FromRandom;
-    use bt_util_test_helper::get_seeded_rng;
+    use bth_util_from_random::FromRandom;
+    use bth_util_test_helper::get_seeded_rng;
     use rand::{rngs::StdRng, RngCore, SeedableRng};
     use tempfile::TempDir;
     use test::Bencher;
@@ -2419,7 +2419,7 @@ mod ledger_db_test {
             // does not exceed MAX_BLOCK_VERSION
             let invalid_block = Block::new_with_parent(
                 unsafe {
-                    core::mem::transmute::<u32, bt_blockchain_types::BlockVersion>(
+                    core::mem::transmute::<u32, bth_blockchain_types::BlockVersion>(
                         last_block.version + 1,
                     )
                 },

@@ -1,6 +1,6 @@
-use bt_account_keys::{AccountKey, RootIdentity};
-use bt_api::printable::{printable_wrapper, PrintableWrapper};
-use bt_util_test_helper::{run_with_several_seeds, CryptoRng, RngCore};
+use bth_account_keys::{AccountKey, RootIdentity};
+use bth_api::printable::{printable_wrapper, PrintableWrapper};
+use bth_util_test_helper::{run_with_several_seeds, CryptoRng, RngCore};
 
 // The limit which we require b58 addresses to be less than
 const B58_ADDRESS_LIMIT: usize = 255;

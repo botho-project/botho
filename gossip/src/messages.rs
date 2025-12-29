@@ -8,9 +8,9 @@
 //! - Learn about network topology (who trusts whom)
 //! - Suggest quorum set configurations based on observed trust patterns
 
-use bt_common::{NodeID, ResponderId};
-use bt_consensus_scp_types::QuorumSet;
-use bt_crypto_keys::{Ed25519Public, Ed25519Signature};
+use bth_common::{NodeID, ResponderId};
+use bth_consensus_scp_types::QuorumSet;
+use bth_crypto_keys::{Ed25519Public, Ed25519Signature};
 use serde::{Deserialize, Serialize};
 
 /// Capabilities advertised by a node.
@@ -111,7 +111,7 @@ impl NodeAnnouncement {
             bytes.extend_from_slice(endpoint.as_bytes());
         }
         // Serialize quorum set
-        if let Ok(qs_bytes) = bt_util_serial::serialize(&self.quorum_set) {
+        if let Ok(qs_bytes) = bth_util_serial::serialize(&self.quorum_set) {
             bytes.extend_from_slice(&qs_bytes);
         }
         for url in &self.tx_source_urls {
@@ -125,7 +125,7 @@ impl NodeAnnouncement {
 
     /// Verify the signature on this announcement.
     pub fn verify_signature(&self) -> bool {
-        use bt_crypto_keys::Verifier;
+        use bth_crypto_keys::Verifier;
         let bytes = self.signing_bytes();
         self.node_id.public_key.verify(&bytes, &self.signature).is_ok()
     }
@@ -247,7 +247,7 @@ pub struct BlockBroadcast {
 // Serde helpers for Ed25519 types
 
 mod signature_serde {
-    use bt_crypto_keys::Ed25519Signature;
+    use bth_crypto_keys::Ed25519Signature;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
     pub fn serialize<S>(sig: &Ed25519Signature, serializer: S) -> Result<S::Ok, S::Error>
@@ -269,7 +269,7 @@ mod signature_serde {
 }
 
 mod pubkey_serde {
-    use bt_crypto_keys::Ed25519Public;
+    use bth_crypto_keys::Ed25519Public;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
     pub fn serialize<S>(key: &Ed25519Public, serializer: S) -> Result<S::Ok, S::Error>
@@ -293,7 +293,7 @@ mod pubkey_serde {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bt_consensus_scp_types::QuorumSetMember;
+    use bth_consensus_scp_types::QuorumSetMember;
     use std::str::FromStr;
 
     fn make_test_node_id(name: &str) -> NodeID {

@@ -2,7 +2,7 @@
 
 //! Generate canned certificate data (via bash script)
 
-use bt_util_build_script::Environment;
+use bth_util_build_script::Environment;
 use std::process::Command;
 
 fn main() {

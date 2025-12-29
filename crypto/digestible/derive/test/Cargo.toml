@@ -1,5 +1,5 @@
 [package]
-name = "bt-crypto-digestible-derive-test"
+name = "bth-crypto-digestible-derive-test"
 version = "7.1.0"
 authors = ["Botho"]
 edition = "2021"
@@ -7,5 +7,5 @@ license = "Apache-2.0"
 rust-version = { workspace = true }
 
 [dependencies]
-bt-crypto-digestible = { workspace = true }
-bt-crypto-digestible-test-utils = { workspace = true }
+bth-crypto-digestible = { workspace = true }
+bth-crypto-digestible-test-utils = { workspace = true }

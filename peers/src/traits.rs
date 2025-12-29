@@ -8,10 +8,10 @@ use crate::{
     error::{Result, RetryResult},
     ConsensusMsg,
 };
-use bt_common::{NodeID, ResponderId};
-use bt_connection::Connection;
-use bt_consensus_api::consensus_peer::ConsensusMsgResponse;
-use bt_transaction_core::tx::TxHash;
+use bth_common::{NodeID, ResponderId};
+use bth_connection::Connection;
+use bth_consensus_api::consensus_peer::ConsensusMsgResponse;
+use bth_transaction_core::tx::TxHash;
 use std::time::Duration;
 
 /// A trait which describes a connection from one consensus node to another.

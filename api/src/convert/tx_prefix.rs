@@ -3,7 +3,7 @@
 //! Convert to/from external::TxPrefix.
 
 use crate::{external, ConversionError};
-use bt_transaction_core::tx;
+use bth_transaction_core::tx;
 
 /// Convert tx::TxPrefix --> external::TxPrefix.
 impl From<&tx::TxPrefix> for external::TxPrefix {

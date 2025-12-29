@@ -8,11 +8,11 @@
 use crate::SenderMemoCredential;
 use alloc::boxed::Box;
 use core::fmt::Debug;
-use bt_account_keys::{PublicAddress, ShortAddressHash};
-use bt_crypto_keys::{
+use bth_account_keys::{PublicAddress, ShortAddressHash};
+use bth_crypto_keys::{
     CompressedRistrettoPublic, KexReusablePrivate, RistrettoPrivate, RistrettoPublic,
 };
-use bt_transaction_core::NewMemoError;
+use bth_transaction_core::NewMemoError;
 use subtle::{Choice, ConstantTimeEq};
 
 /// A trait for abstracting away signing of 0x0100 and 0x0101 memos.
@@ -66,7 +66,7 @@ impl AuthenticatedMemoHmacSigner for SenderMemoCredential {
         let shared_secret = self
             .subaddress_spend_private_key
             .key_exchange(receiving_subaddress_view_public_key);
-        let hmac_value = bt_crypto_memo_mac::compute_category1_hmac(
+        let hmac_value = bth_crypto_memo_mac::compute_category1_hmac(
             shared_secret.as_ref(),
             tx_out_public_key,
             memo_type_bytes,
@@ -93,7 +93,7 @@ pub fn validate_authenticated_sender(
     let shared_secret =
         receiving_subaddress_view_private_key.key_exchange(sender_address.spend_public_key());
 
-    let expected_hmac = bt_crypto_memo_mac::compute_category1_hmac(
+    let expected_hmac = bth_crypto_memo_mac::compute_category1_hmac(
         shared_secret.as_ref(),
         tx_out_public_key,
         memo_type_bytes,

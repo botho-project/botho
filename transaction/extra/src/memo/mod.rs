@@ -126,10 +126,10 @@ impl_memo_enum! { MemoType,
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bt_account_keys::{AccountKey, ShortAddressHash};
-    use bt_crypto_keys::{CompressedRistrettoPublic, RistrettoPrivate};
-    use bt_transaction_core::MemoPayload;
-    use bt_util_from_random::FromRandom;
+    use bth_account_keys::{AccountKey, ShortAddressHash};
+    use bth_crypto_keys::{CompressedRistrettoPublic, RistrettoPrivate};
+    use bth_transaction_core::MemoPayload;
+    use bth_util_from_random::FromRandom;
     use rand::{rngs::StdRng, SeedableRng};
 
     #[test]

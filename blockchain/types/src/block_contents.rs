@@ -3,9 +3,9 @@
 use crate::ConvertError;
 use alloc::{vec, vec::Vec};
 use core::fmt::Debug;
-use bt_crypto_digestible::{Digestible, MerlinTranscript};
-use bt_crypto_ring_signature::KeyImage;
-use bt_transaction_core::{
+use bth_crypto_digestible::{Digestible, MerlinTranscript};
+use bth_crypto_ring_signature::KeyImage;
+use bth_transaction_core::{
     mint::{MintTx, ValidatedMintConfigTx},
     tx::TxOut,
 };

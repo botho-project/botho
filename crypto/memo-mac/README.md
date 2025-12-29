@@ -1,4 +1,4 @@
-bt-crypto-memo-mac
+bth-crypto-memo-mac
 ==================
 
 This crate contains details for computing the RTH memo hmac value. This is in it's

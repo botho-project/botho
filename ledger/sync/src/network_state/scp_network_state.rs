@@ -3,9 +3,9 @@
 //! NetworkState implementation for the `scp` module.
 
 use crate::NetworkState;
-use bt_blockchain_types::BlockIndex;
-use bt_common::{NodeID, ResponderId};
-use bt_consensus_scp::{
+use bth_blockchain_types::BlockIndex;
+use bth_common::{NodeID, ResponderId};
+use bth_consensus_scp::{
     ballot::Ballot, msg::ExternalizePayload, predicates::FuncPredicate,
     quorum_set_ext::QuorumSetExt, GenericNodeId, Msg, QuorumSet, SlotIndex, Topic, Value,
 };
@@ -172,8 +172,8 @@ impl<ID: GenericNodeId + Send + AsRef<ResponderId> + DeserializeOwned + Serializ
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bt_consensus_scp::msg::*;
-    use bt_peers_test_utils::test_node_id;
+    use bth_consensus_scp::msg::*;
+    use bth_peers_test_utils::test_node_id;
     use std::collections::BTreeSet;
 
     #[test]

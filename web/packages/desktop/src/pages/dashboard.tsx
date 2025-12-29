@@ -1,6 +1,5 @@
 import { Layout } from '../components/layout'
 import { Card, CardHeader, CardTitle, CardContent } from '@botho/ui'
-import { formatNumber } from '@botho/ui'
 import { motion } from 'motion/react'
 import {
   Blocks,

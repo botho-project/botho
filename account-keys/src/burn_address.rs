@@ -40,8 +40,8 @@
 
 use crate::{domain_separators::BURN_ADDRESS_DOMAIN_SEPARATOR, PublicAddress};
 use curve25519_dalek::{ristretto::RistrettoPoint, scalar::Scalar};
-use bt_crypto_hashes::{Blake2b512, Digest};
-use bt_crypto_keys::{RistrettoPrivate, RistrettoPublic};
+use bth_crypto_hashes::{Blake2b512, Digest};
+use bth_crypto_keys::{RistrettoPrivate, RistrettoPublic};
 
 /// The constant chosen for the burn address view private key.
 ///

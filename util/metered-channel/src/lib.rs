@@ -1,10 +1,10 @@
 // Copyright (c) 2018-2022 The Botho Foundation
 
 //! Provides an mpsc (multi-producer single-consumer) channel wrapped in an
-//! [`IntGauge`](bt_util_metrics::IntGauge)
+//! [`IntGauge`](bth_util_metrics::IntGauge)
 
 use crossbeam_channel::{RecvError, RecvTimeoutError, SendError, TryRecvError, TrySendError};
-use bt_util_metrics::IntGauge;
+use bth_util_metrics::IntGauge;
 use std::{fmt, iter::FusedIterator, time::Duration};
 
 /// Similar to `crossbeam_channel::Sender`, but with an `IntGauge`.

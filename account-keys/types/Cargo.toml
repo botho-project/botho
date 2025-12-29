@@ -1,5 +1,5 @@
 [package]
-name = "bt-account-keys-types"
+name = "bth-account-keys-types"
 version = "7.1.0"
 authors = ["Botho"]
 edition = "2021"
@@ -9,4 +9,4 @@ rust-version = { workspace = true }
 
 [dependencies]
 # Botho dependencies
-bt-crypto-keys = { workspace = true }
+bth-crypto-keys = { workspace = true }

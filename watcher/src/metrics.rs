@@ -2,8 +2,8 @@
 
 //! Watcher metrics comparing ledger height and block height
 
-use bt_common::HashMap;
-use bt_util_metrics::{IntGauge, OpMetrics};
+use bth_common::HashMap;
+use bth_util_metrics::{IntGauge, OpMetrics};
 use url::Url;
 
 lazy_static::lazy_static! {

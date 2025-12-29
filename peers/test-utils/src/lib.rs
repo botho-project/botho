@@ -3,27 +3,27 @@
 
 //! Mock Peer test utilities
 
-pub use bt_consensus_scp::test_utils::{test_node_id, test_node_id_and_signer};
+pub use bth_consensus_scp::test_utils::{test_node_id, test_node_id_and_signer};
 use tonic::Status;
 
-use bt_blockchain_types::{Block, BlockID, BlockIndex};
-use bt_common::{NodeID, ResponderId};
-use bt_connection::{
+use bth_blockchain_types::{Block, BlockID, BlockIndex};
+use bth_common::{NodeID, ResponderId};
+use bth_connection::{
     BlockInfo, BlockchainConnection, Connection, Error as ConnectionError,
     Result as ConnectionResult,
 };
-use bt_consensus_api::consensus_peer::{ConsensusMsgResponse, ConsensusMsgResult};
-use bt_consensus_scp::{
+use bth_consensus_api::consensus_peer::{ConsensusMsgResponse, ConsensusMsgResult};
+use bth_consensus_scp::{
     msg::{Msg, NominatePayload},
     QuorumSet, SlotIndex, Topic,
 };
-use bt_crypto_keys::{Ed25519Pair, Ed25519Public};
-use bt_ledger_db::{test_utils::MockLedger, Ledger};
-use bt_peers::{
+use bth_crypto_keys::{Ed25519Pair, Ed25519Public};
+use bth_ledger_db::{test_utils::MockLedger, Ledger};
+use bth_peers::{
     ConsensusConnection, ConsensusMsg, ConsensusValue, Error as PeerError, Result as PeerResult,
 };
-use bt_transaction_core::tx::TxHash;
-use bt_util_uri::{ConnectionUri, ConsensusPeerUri as PeerUri};
+use bth_transaction_core::tx::TxHash;
+use bth_util_uri::{ConnectionUri, ConsensusPeerUri as PeerUri};
 use sha2::{Digest, Sha512_256};
 use std::{
     cmp::{min, Ordering},
@@ -251,11 +251,11 @@ pub fn test_peer_uri_with_key(node_id: u32, public_key: &Ed25519Public) -> PeerU
 #[cfg(test)]
 mod peer_manager_tests {
     use super::*;
-    use bt_common::logger::{test_with_logger, Logger};
-    use bt_connection::ConnectionManager;
-    use bt_ledger_db::test_utils::get_mock_ledger;
-    use bt_peers::RetryableConsensusConnection;
-    use bt_util_from_random::FromRandom;
+    use bth_common::logger::{test_with_logger, Logger};
+    use bth_connection::ConnectionManager;
+    use bth_ledger_db::test_utils::get_mock_ledger;
+    use bth_peers::RetryableConsensusConnection;
+    use bth_util_from_random::FromRandom;
     use rand::SeedableRng;
     use rand_hc::Hc128Rng as FixedRng;
     use retry::delay::Fibonacci;
@@ -367,15 +367,15 @@ mod peer_manager_tests {
 #[cfg(test)]
 mod threaded_broadcaster_tests {
     use super::*;
-    use bt_common::logger::{test_with_logger, Logger};
-    use bt_connection::ConnectionManager;
-    use bt_ledger_db::test_utils::get_mock_ledger;
-    use bt_peers::{
+    use bth_common::logger::{test_with_logger, Logger};
+    use bth_connection::ConnectionManager;
+    use bth_ledger_db::test_utils::get_mock_ledger;
+    use bth_peers::{
         Broadcast, ThreadedBroadcaster,
         ThreadedBroadcasterFibonacciRetryPolicy as FibonacciRetryPolicy,
         DEFAULT_RETRY_MAX_ATTEMPTS,
     };
-    use bt_util_from_random::FromRandom;
+    use bth_util_from_random::FromRandom;
     use rand::SeedableRng;
     use rand_hc::Hc128Rng as FixedRng;
 

@@ -14,8 +14,8 @@ use crate::{
     },
     BlockVersion, TokenId,
 };
-use bt_crypto_keys::Ed25519Public;
-use bt_crypto_multisig::SignerSet;
+use bth_crypto_keys::Ed25519Public;
+use bth_crypto_multisig::SignerSet;
 
 /// Determines if the transaction is valid, with respect to the provided
 /// context.
@@ -110,10 +110,10 @@ mod tests {
     use super::*;
     use crate::mint::{config::MintConfigTxPrefix, constants::NONCE_LENGTH};
     use alloc::vec;
-    use bt_crypto_keys::{Ed25519Pair, Signer};
-    use bt_crypto_multisig::MultiSig;
-    use bt_util_from_random::FromRandom;
-    use bt_util_test_helper::get_seeded_rng;
+    use bth_crypto_keys::{Ed25519Pair, Signer};
+    use bth_crypto_multisig::MultiSig;
+    use bth_util_from_random::FromRandom;
+    use bth_util_test_helper::get_seeded_rng;
 
     #[test]
     fn validate_configs_accepts_valid_mint_configs() {

@@ -11,7 +11,7 @@ use core::{
 };
 use digest::Digest;
 use generic_array::{typenum::Unsigned, GenericArray};
-use bt_crypto_keys::Kex;
+use bth_crypto_keys::Kex;
 use secrecy::{ExposeSecret, SecretVec};
 use zeroize::Zeroize;
 
@@ -113,7 +113,7 @@ mod test {
     use super::*;
     use crate::patterns::HandshakeIX;
     use aes_gcm::Aes256Gcm;
-    use bt_crypto_keys::X25519;
+    use bth_crypto_keys::X25519;
     use sha2::Sha512;
 
     // (echo -en

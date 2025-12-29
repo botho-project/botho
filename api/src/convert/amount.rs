@@ -3,8 +3,8 @@
 //! Convert to/from external::Amount
 
 use crate::{external, external::CompressedRistretto, ConversionError};
-use bt_transaction_core::{Amount, MaskedAmount, MaskedAmountV1, MaskedAmountV2};
-use bt_util_repr_bytes::ReprBytes;
+use bth_transaction_core::{Amount, MaskedAmount, MaskedAmountV1, MaskedAmountV2};
+use bth_util_repr_bytes::ReprBytes;
 // Note:
 // external::MaskedAmount is a proto message
 // external::TxOut_oneof_masked_amount is a proto oneof
@@ -149,10 +149,10 @@ impl From<&external::Amount> for Amount {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bt_transaction_core::TokenId;
+    use bth_transaction_core::TokenId;
 
     // Test converting between external::Amount and
-    // bt_transaction_types::Amount
+    // bth_transaction_types::Amount
     #[test]
     fn test_amount_conversion() {
         let amount = Amount::new(10000, TokenId::from(10));

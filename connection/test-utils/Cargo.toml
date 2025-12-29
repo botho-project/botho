@@ -1,5 +1,5 @@
 [package]
-name = "bt-connection-test-utils"
+name = "bth-connection-test-utils"
 version = "7.1.0"
 authors = ["Botho"]
 edition = "2021"
@@ -7,8 +7,8 @@ license = "Apache-2.0"
 rust-version = { workspace = true }
 
 [dependencies]
-bt-blockchain-types = { workspace = true }
-bt-connection = { workspace = true }
-bt-ledger-db = { workspace = true, features = ["test_utils"] }
-bt-transaction-core = { workspace = true }
-bt-util-uri = { workspace = true }
+bth-blockchain-types = { workspace = true }
+bth-connection = { workspace = true }
+bth-ledger-db = { workspace = true, features = ["test_utils"] }
+bth-transaction-core = { workspace = true }
+bth-util-uri = { workspace = true }

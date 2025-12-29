@@ -6,9 +6,9 @@
 
 use crate::transactions_fetcher_trait::{TransactionFetcherError, TransactionsFetcher};
 use displaydoc::Display;
-use bt_api::{block_num_to_s3block_path, blockchain, merged_block_num_to_s3block_path};
-use bt_blockchain_types::{Block, BlockData, BlockIndex};
-use bt_common::{
+use bth_api::{block_num_to_s3block_path, blockchain, merged_block_num_to_s3block_path};
+use bth_blockchain_types::{Block, BlockData, BlockIndex};
+use bth_common::{
     logger::{log, Logger},
     lru::LruCache,
     ResponderId,
@@ -370,7 +370,7 @@ impl TransactionsFetcher for ReqwestTransactionsFetcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bt_common::logger::{test_with_logger, Logger};
+    use bth_common::logger::{test_with_logger, Logger};
 
     #[test_with_logger]
     fn test_new_normalizes_urls_with_trailing_slash(logger: Logger) {

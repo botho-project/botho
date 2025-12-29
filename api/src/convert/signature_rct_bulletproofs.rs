@@ -3,7 +3,7 @@
 //! Convert to/from external::SignatureRctBulletproofs
 
 use crate::{external, ConversionError};
-use bt_transaction_core::{
+use bth_transaction_core::{
     ring_ct::SignatureRctBulletproofs, ring_signature::RingMLSAG, CompressedCommitment,
 };
 

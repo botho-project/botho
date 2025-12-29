@@ -2,7 +2,7 @@
 
 //! Predicates for use in trust decisions for SCP.
 use crate::{ballot::Ballot, GenericNodeId, Msg, Value};
-use bt_common::{HashMap, HashSet, NodeID};
+use bth_common::{HashMap, HashSet, NodeID};
 use std::{collections::BTreeSet, sync::Arc};
 
 /// An interface for predicates, used for performing searches for quorums and

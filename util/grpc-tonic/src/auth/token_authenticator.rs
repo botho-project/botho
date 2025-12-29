@@ -8,7 +8,7 @@ use super::*;
 
 use displaydoc::Display;
 use hmac::{Hmac, Mac};
-use bt_common::time::TimeProvider;
+use bth_common::time::TimeProvider;
 use sha2::Sha256;
 use std::time::Duration;
 use subtle::ConstantTimeEq;

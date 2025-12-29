@@ -1,5 +1,5 @@
 [package]
-name = "bt-util-parse"
+name = "bth-util-parse"
 version = "7.1.0"
 authors = ["Botho"]
 edition = "2021"

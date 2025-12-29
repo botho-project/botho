@@ -2,7 +2,7 @@
 
 //! A registry of tokens
 
-use bt_transaction_types::TokenId;
+use bth_transaction_types::TokenId;
 
 /// A generic representation of a token.
 pub trait Token {

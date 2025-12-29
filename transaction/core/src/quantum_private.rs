@@ -33,9 +33,9 @@ use alloc::vec::Vec;
 #[allow(unused_imports)]
 use core::fmt; // Keep for Display impl
 
-use bt_crypto_digestible::Digestible;
-use bt_crypto_keys::CompressedRistrettoPublic;
-use bt_crypto_pq::{
+use bth_crypto_digestible::Digestible;
+use bth_crypto_keys::CompressedRistrettoPublic;
+use bth_crypto_pq::{
     MlDsa65PublicKey, MlDsa65Signature, MlKem768Ciphertext,
     ML_DSA_65_PUBLIC_KEY_BYTES, ML_DSA_65_SIGNATURE_BYTES, ML_KEM_768_CIPHERTEXT_BYTES,
 };
@@ -44,7 +44,6 @@ use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
 
 use crate::{
-    encrypted_fog_hint::EncryptedFogHint,
     memo::EncryptedMemo,
     tx::TxHash,
     ClusterTagVector, MaskedAmount,
@@ -117,10 +116,7 @@ pub struct QuantumPrivateTxOut {
     #[prost(message, required, tag = "3")]
     pub public_key: CompressedRistrettoPublic,
 
-    /// The encrypted fog hint for the fog ingest server.
-    #[prost(message, required, tag = "4")]
-    #[zeroize(skip)]
-    pub e_fog_hint: EncryptedFogHint,
+    // Field 4 was `e_fog_hint` - removed as part of fog removal
 
     /// The encrypted memo.
     #[prost(message, tag = "5")]
@@ -154,14 +150,12 @@ impl QuantumPrivateTxOut {
     /// * `masked_amount` - The encrypted amount
     /// * `target_key` - Classical one-time spend public key
     /// * `public_key` - Classical ephemeral ECDH public key
-    /// * `e_fog_hint` - Encrypted fog hint
     /// * `pq_ciphertext` - ML-KEM-768 ciphertext
     /// * `pq_target_key` - ML-DSA-65 one-time public key
     pub fn new(
         masked_amount: MaskedAmount,
         target_key: CompressedRistrettoPublic,
         public_key: CompressedRistrettoPublic,
-        e_fog_hint: EncryptedFogHint,
         pq_ciphertext: MlKem768Ciphertext,
         pq_target_key: MlDsa65PublicKey,
     ) -> Self {
@@ -169,7 +163,6 @@ impl QuantumPrivateTxOut {
             masked_amount: Some(masked_amount),
             target_key,
             public_key,
-            e_fog_hint,
             e_memo: None,
             cluster_tags: None,
             pq_ciphertext: pq_ciphertext.as_bytes().to_vec(),

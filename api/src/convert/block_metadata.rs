@@ -3,8 +3,8 @@
 //! Convert to/from blockchain::BlockMetadataContents.
 
 use crate::{blockchain, blockchain::block_metadata_contents, ConversionError};
-use bt_blockchain_types::{AttestationEvidence, BlockMetadata, BlockMetadataContents};
-use bt_common::ResponderId;
+use bth_blockchain_types::{AttestationEvidence, BlockMetadata, BlockMetadataContents};
+use bth_common::ResponderId;
 use std::str::FromStr;
 
 impl From<&BlockMetadataContents> for blockchain::BlockMetadataContents {

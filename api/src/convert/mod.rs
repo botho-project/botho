@@ -6,7 +6,7 @@
 //! gRPC and Protobuf provide a reduced selection of types, and so there are
 //! some differences between values stored in the ledger and values transmitted
 //! over the API. This module provides conversions between "equivalent" types,
-//! such as `bt_api::blockchain::Block` and `bt_blockchain_types::Block`.
+//! such as `bth_api::blockchain::Block` and `bth_blockchain_types::Block`.
 
 // blockchain
 mod archive_block;
@@ -68,7 +68,7 @@ mod tx_out_gift_code;
 mod error;
 pub use error::ConversionError;
 
-use bt_blockchain_types::BlockIndex;
+use bth_blockchain_types::BlockIndex;
 use std::path::PathBuf;
 
 /// Helper method for getting the suggested path/filename for a given block

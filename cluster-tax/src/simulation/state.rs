@@ -1,6 +1,6 @@
 //! Simulation state tracking.
 
-use crate::{ClusterId, ClusterWealth, FeeCurve, TransferConfig};
+use crate::{ClusterId, ClusterWealth, EmissionConfig, EmissionController, FeeCurve, TransferConfig};
 use std::collections::HashMap;
 
 use super::agent::AgentId;
@@ -46,6 +46,26 @@ pub struct SimulationState {
 
     /// Next cluster ID to assign for minting.
     next_cluster_id: u64,
+
+    /// Adaptive emission controller for dynamic block rewards.
+    pub emission_controller: Option<EmissionController>,
+
+    /// Total block rewards emitted this simulation.
+    pub total_rewards_emitted: u64,
+
+    /// Fees burned in current round (for emission tracking).
+    pub round_fees_burned: u64,
+}
+
+/// Emission statistics snapshot.
+#[derive(Debug, Clone)]
+pub struct EmissionStats {
+    pub current_epoch: u64,
+    pub current_block_reward: u64,
+    pub total_emitted: u64,
+    pub total_fees_burned: u64,
+    pub net_supply_change: i64,
+    pub effective_inflation_bps: i64,
 }
 
 impl SimulationState {
@@ -65,7 +85,75 @@ impl SimulationState {
             mixer_ids: Vec::new(),
             fee_rates: HashMap::new(),
             next_cluster_id: 0,
+            emission_controller: None,
+            total_rewards_emitted: 0,
+            round_fees_burned: 0,
         }
+    }
+
+    /// Create a new simulation state with adaptive emission.
+    pub fn with_emission(
+        total_rounds: u64,
+        fee_curve: FeeCurve,
+        transfer_config: TransferConfig,
+        emission_config: EmissionConfig,
+        initial_supply: u64,
+    ) -> Self {
+        let mut state = Self::new(total_rounds, fee_curve, transfer_config);
+        state.emission_controller = Some(EmissionController::new(emission_config, initial_supply));
+        state.total_supply = initial_supply;
+        state
+    }
+
+    /// Initialize emission controller after agents are registered.
+    pub fn init_emission(&mut self, emission_config: EmissionConfig) {
+        self.emission_controller = Some(EmissionController::new(emission_config, self.total_supply));
+    }
+
+    /// Get the current block reward from emission controller.
+    pub fn current_block_reward(&self) -> u64 {
+        self.emission_controller
+            .as_ref()
+            .map(|ec| ec.block_reward())
+            .unwrap_or(0)
+    }
+
+    /// Record fees burned (goes to emission controller).
+    pub fn record_fee_burn(&mut self, amount: u64) {
+        self.total_fees_collected += amount;
+        self.round_fees_burned += amount;
+        if let Some(ref mut ec) = self.emission_controller {
+            ec.record_fee_burn(amount);
+        }
+    }
+
+    /// Process a block: emits reward and returns the reward amount.
+    pub fn process_block(&mut self) -> u64 {
+        if let Some(ref mut ec) = self.emission_controller {
+            let reward = ec.process_block();
+            self.total_rewards_emitted += reward;
+            self.total_supply = ec.state.total_supply;
+            reward
+        } else {
+            0
+        }
+    }
+
+    /// Reset round-specific counters.
+    pub fn reset_round_counters(&mut self) {
+        self.round_fees_burned = 0;
+    }
+
+    /// Get emission statistics if emission is enabled.
+    pub fn emission_stats(&self) -> Option<EmissionStats> {
+        self.emission_controller.as_ref().map(|ec| EmissionStats {
+            current_epoch: ec.state.current_epoch,
+            current_block_reward: ec.state.current_block_reward,
+            total_emitted: ec.state.total_emitted,
+            total_fees_burned: ec.state.total_fees_burned,
+            net_supply_change: ec.state.net_supply_change(),
+            effective_inflation_bps: ec.state.effective_inflation_bps(&ec.config),
+        })
     }
 
     /// Get the next cluster ID for minting.

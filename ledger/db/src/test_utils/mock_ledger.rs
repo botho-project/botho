@@ -1,14 +1,14 @@
 // Copyright (c) 2018-2022 The Botho Foundation
 
 use crate::{ActiveMintConfig, ActiveMintConfigs, Error, Ledger};
-use bt_blockchain_test_utils::get_blocks;
-use bt_blockchain_types::{
+use bth_blockchain_test_utils::get_blocks;
+use bth_blockchain_types::{
     Block, BlockContents, BlockData, BlockIndex, BlockMetadata, BlockSignature, BlockVersion,
 };
-use bt_common::{Hash, HashMap, HashSet};
-use bt_crypto_keys::CompressedRistrettoPublic;
-use bt_transaction_core::{mint::MintTx, ring_signature::KeyImage, tx::TxOut, TokenId};
-use bt_util_test_helper::get_seeded_rng;
+use bth_common::{Hash, HashMap, HashSet};
+use bth_crypto_keys::CompressedRistrettoPublic;
+use bth_transaction_core::{mint::MintTx, ring_signature::KeyImage, tx::TxOut, TokenId};
+use bth_util_test_helper::get_seeded_rng;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 #[derive(Default)]

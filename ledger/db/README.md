@@ -1,4 +1,4 @@
-# bt-ledger-db
+# bth-ledger-db
 
 Persistent storage for the blockchain.
 

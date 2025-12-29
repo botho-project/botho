@@ -17,17 +17,17 @@ fn main() {
     }
     if args.len() > 1 {
         if args[1] == "--git-commit" {
-            print!("{}", bt_util_build_info::git_commit());
+            print!("{}", bth_util_build_info::git_commit());
             return;
         } else if args[1] == "--profile" {
-            print!("{}", bt_util_build_info::profile());
+            print!("{}", bth_util_build_info::profile());
             return;
         } else if args[1] == "--debug" {
-            print!("{}", bt_util_build_info::debug());
+            print!("{}", bth_util_build_info::debug());
             return;
         } else if args[1] == "--all" {
             let mut result = String::new();
-            bt_util_build_info::write_report(&mut result).unwrap();
+            bth_util_build_info::write_report(&mut result).unwrap();
             print!("{result}");
             return;
         }

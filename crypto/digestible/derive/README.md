@@ -1,4 +1,4 @@
-bt-crypto-digestible-derive
+bth-crypto-digestible-derive
 =================
 
 This proc macro crate allows the use of `derive(Digestible)` in user structs and enums.

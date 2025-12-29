@@ -9,11 +9,11 @@ use super::MemoBuilder;
 use crate::ReservedSubaddresses;
 use alloc::{boxed::Box, sync::Arc};
 use core::fmt::Debug;
-use bt_account_keys::{PublicAddress, ShortAddressHash};
-use bt_transaction_core::{
+use bth_account_keys::{PublicAddress, ShortAddressHash};
+use bth_transaction_core::{
     tokens::Mob, Amount, MemoContext, MemoPayload, NewMemoError, Token, TokenId,
 };
-use bt_transaction_extra::{
+use bth_transaction_extra::{
     AuthenticatedMemoHmacSigner, AuthenticatedSenderMemo,
     AuthenticatedSenderWithPaymentIntentIdMemo, AuthenticatedSenderWithPaymentRequestIdMemo,
     DestinationMemo, DestinationMemoError, DestinationWithPaymentIntentIdMemo,
@@ -325,9 +325,9 @@ impl MemoBuilder for RTHMemoBuilder {
 mod tests {
     use super::*;
     use assert_matches::assert_matches;
-    use bt_account_keys::AccountKey;
-    use bt_crypto_keys::RistrettoPublic;
-    use bt_util_from_random::FromRandom;
+    use bth_account_keys::AccountKey;
+    use bth_crypto_keys::RistrettoPublic;
+    use bth_util_from_random::FromRandom;
     use rand::{rngs::StdRng, SeedableRng};
 
     #[test]

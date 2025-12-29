@@ -7,7 +7,7 @@ use super::*;
 
 use displaydoc::Display;
 use hmac::{Hmac, Mac};
-use bt_common::time::TimeProvider;
+use bth_common::time::TimeProvider;
 use sha2::Sha256;
 use std::time::Duration;
 use subtle::ConstantTimeEq;
@@ -183,7 +183,7 @@ impl<TP: TimeProvider> Drop for TokenBasicCredentialsGenerator<TP> {
 mod tests {
     use super::*;
     const TOKEN_MAX_LIFETIME: Duration = Duration::from_secs(60);
-    use bt_common::time::{MockTimeProvider, SystemTimeProvider};
+    use bth_common::time::{MockTimeProvider, SystemTimeProvider};
 
     #[test]
     fn valid_token_authenticates_successfully() {

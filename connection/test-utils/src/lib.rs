@@ -2,7 +2,7 @@
 
 //! Connection mock and test utilities
 
-use bt_util_uri::ConsensusClientUri;
+use bth_util_uri::ConsensusClientUri;
 use std::str::FromStr;
 
 mod blockchain;

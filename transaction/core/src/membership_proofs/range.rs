@@ -1,7 +1,7 @@
 // Copyright (c) 2018-2022 The Botho Foundation
 
 use core::cmp::Ordering;
-use bt_crypto_digestible::Digestible;
+use bth_crypto_digestible::Digestible;
 use prost::Message;
 // These require the serde "derive" feature to be enabled.
 use serde::{Deserialize, Serialize};

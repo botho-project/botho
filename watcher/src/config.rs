@@ -4,8 +4,8 @@
 //! Configuration parameters for the watcher test utility.
 
 use clap::Parser;
-use bt_util_parse::parse_duration_in_seconds;
-use bt_util_uri::{ConsensusClientUri, WatcherUri};
+use bth_util_parse::parse_duration_in_seconds;
+use bth_util_uri::{ConsensusClientUri, WatcherUri};
 use serde::{Deserialize, Serialize};
 use std::{fs, path::PathBuf, str::FromStr, time::Duration};
 use url::Url;

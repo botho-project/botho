@@ -8,7 +8,7 @@ use curve25519_dalek::ristretto::RistrettoPoint;
 use rand_core::CryptoRngCore;
 use zeroize::Zeroize;
 
-use bt_crypto_keys::{RistrettoPrivate, RistrettoPublic};
+use bth_crypto_keys::{RistrettoPrivate, RistrettoPublic};
 
 use crate::{
     ring_signature::{

@@ -2,8 +2,8 @@
 
 //! Unmasked amount types
 use crate::{amount::Amount, TokenId};
-use bt_crypto_digestible::Digestible;
-use bt_crypto_ring_signature::CurveScalar;
+use bth_crypto_digestible::Digestible;
+use bth_crypto_ring_signature::CurveScalar;
 
 #[cfg(feature = "prost")]
 use prost::Message;

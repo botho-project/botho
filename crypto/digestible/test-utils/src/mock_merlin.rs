@@ -1,4 +1,4 @@
-use bt_crypto_digestible::DigestTranscript;
+use bth_crypto_digestible::DigestTranscript;
 
 // This is a mock of merlin, which doesn't hash anything, but captures
 // the inputs to calls to "append_bytes", so that we can inspect them,

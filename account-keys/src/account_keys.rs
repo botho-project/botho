@@ -12,17 +12,13 @@
 
 #![allow(non_snake_case)]
 
-use alloc::{
-    string::{String, ToString},
-    vec::Vec,
-};
 use core::{
     cmp::Ordering,
     fmt,
     hash::{Hash, Hasher},
 };
 use curve25519_dalek::{ristretto::RistrettoPoint, scalar::Scalar};
-use bt_core::{
+use bth_core::{
     keys::{
         RootSpendPrivate, RootSpendPublic, RootViewPrivate, SubaddressSpendPublic,
         SubaddressViewPublic,
@@ -30,9 +26,9 @@ use bt_core::{
     slip10::Slip10Key,
     subaddress::Subaddress,
 };
-use bt_crypto_digestible::{Digestible, MerlinTranscript};
-use bt_crypto_keys::{RistrettoPrivate, RistrettoPublic};
-use bt_util_from_random::FromRandom;
+use bth_crypto_digestible::{Digestible, MerlinTranscript};
+use bth_crypto_keys::{RistrettoPrivate, RistrettoPublic};
+use bth_util_from_random::FromRandom;
 #[cfg(feature = "prost")]
 use prost::Message;
 use rand_core::{CryptoRng, RngCore};
@@ -40,7 +36,7 @@ use rand_core::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
 
-pub use bt_core::{
+pub use bth_core::{
     account::ShortAddressHash,
     consts::{
         CHANGE_SUBADDRESS_INDEX, DEFAULT_SUBADDRESS_INDEX, GIFT_CODE_SUBADDRESS_INDEX,
@@ -60,30 +56,6 @@ pub struct PublicAddress {
     /// The user's public subaddress spend key `D`.
     #[cfg_attr(feature = "prost", prost(message, required, tag = "2"))]
     spend_public_key: RistrettoPublic,
-
-    /// This is the URL to talk to the fog report server.
-    /// Empty if no fog for this public address, should be parseable as
-    /// bt_util_uri::FogUri.
-    #[cfg_attr(feature = "prost", prost(string, tag = "3"))]
-    #[digestible(never_omit)]
-    fog_report_url: String,
-
-    /// The fog report server potentially returns multiple reports when queried.
-    /// This id string indicates which of the reports to use.
-    ///
-    /// Empty if no fog for this public address.
-    #[cfg_attr(feature = "prost", prost(string, tag = "4"))]
-    #[digestible(never_omit)]
-    fog_report_id: String,
-
-    /// A signature with the user's spend_private_key over the fog authority's
-    /// subjectPublicKeyInfo.
-    ///
-    /// Empty if no fog for this public address, must be parseable as a
-    /// [`SchnorrkelSignature`].
-    #[cfg_attr(feature = "prost", prost(bytes, tag = "5"))]
-    #[digestible(never_omit)]
-    fog_authority_sig: Vec<u8>,
 }
 
 impl fmt::Display for PublicAddress {
@@ -97,19 +69,12 @@ impl fmt::Display for PublicAddress {
         {
             write!(f, "{byte:02X}")?;
         }
-        if !self.fog_report_url.is_empty() {
-            write!(f, ":'{}'", self.fog_report_url)?;
-        }
-        if !self.fog_report_id.is_empty() {
-            write!(f, "#{}", self.fog_report_id)?;
-        }
         Ok(())
     }
 }
 
 impl PublicAddress {
-    /// Create a new public address from CryptoNote key pair (with no account
-    /// service)
+    /// Create a new public address from CryptoNote key pair
     ///
     /// # Arguments
     /// `spend_public_key` - The user's public subaddress spend key `D`,
@@ -119,37 +84,6 @@ impl PublicAddress {
         Self {
             view_public_key: *view_public_key,
             spend_public_key: *spend_public_key,
-            fog_report_url: Default::default(),
-            fog_report_id: Default::default(),
-            fog_authority_sig: Default::default(),
-        }
-    }
-
-    /// Create a new public address with specific public keys and account
-    /// service name and authority sig.
-    ///
-    /// # Arguments
-    /// `spend_public_key` - The user's public subaddress spend key `D`,
-    /// `view_public_key` - The user's public subaddress view key `C`,
-    /// `fog_report_url` - User's fog report server url
-    /// `fog_report_id` - The id labelling the report to use, from among the
-    /// several reports which might be served by the fog report server.
-    /// `fog_authority_sig` - A signature over the fog authority fingerprint
-    /// using the subaddress_spend_private_key
-    #[inline]
-    pub fn new_with_fog(
-        spend_public_key: &RistrettoPublic,
-        view_public_key: &RistrettoPublic,
-        fog_report_url: impl ToString,
-        fog_report_id: String,
-        fog_authority_sig: impl AsRef<[u8]>,
-    ) -> Self {
-        Self {
-            view_public_key: *view_public_key,
-            spend_public_key: *spend_public_key,
-            fog_report_url: fog_report_url.to_string(),
-            fog_report_id,
-            fog_authority_sig: fog_authority_sig.as_ref().to_vec(),
         }
     }
 
@@ -162,36 +96,9 @@ impl PublicAddress {
     pub fn spend_public_key(&self) -> &RistrettoPublic {
         &self.spend_public_key
     }
-
-    /// Get the optional fog report url (if it exists / is not empty).
-    pub fn fog_report_url(&self) -> Option<&str> {
-        if self.fog_report_url.is_empty() {
-            None
-        } else {
-            Some(&self.fog_report_url)
-        }
-    }
-
-    /// Get the optional fog authority sig (if it exists / is not empty).
-    pub fn fog_authority_sig(&self) -> Option<&[u8]> {
-        if self.fog_authority_sig.is_empty() {
-            None
-        } else {
-            Some(&self.fog_authority_sig)
-        }
-    }
-
-    /// Get the optional fog report key (if it exists / is not empty).
-    pub fn fog_report_id(&self) -> Option<&str> {
-        if self.fog_report_id.is_empty() {
-            None
-        } else {
-            Some(&self.fog_report_id)
-        }
-    }
 }
 
-impl bt_account_keys_types::RingCtAddress for PublicAddress {
+impl bth_account_keys_types::RingCtAddress for PublicAddress {
     fn view_public_key(&self) -> &RistrettoPublic {
         &self.view_public_key
     }
@@ -201,7 +108,7 @@ impl bt_account_keys_types::RingCtAddress for PublicAddress {
     }
 }
 
-impl bt_core::account::RingCtAddress for PublicAddress {
+impl bth_core::account::RingCtAddress for PublicAddress {
     fn view_public_key(&self) -> SubaddressViewPublic {
         SubaddressViewPublic::from(self.view_public_key)
     }
@@ -219,7 +126,7 @@ impl From<&PublicAddress> for ShortAddressHash {
     }
 }
 
-impl From<&PublicAddress> for bt_core::account::PublicSubaddress {
+impl From<&PublicAddress> for bth_core::account::PublicSubaddress {
     fn from(value: &PublicAddress) -> Self {
         Self {
             view_public: value.view_public_key.into(),
@@ -240,8 +147,7 @@ impl FromRandom for PublicAddress {
 /// Complete AccountKey.
 ///
 /// Containing the pair of secret keys, which can be used
-/// for spending, and optionally some fog-related info,
-/// can be used for spending. This should only ever be present in client code.
+/// for spending. This should only ever be present in client code.
 #[derive(Clone, Zeroize)]
 #[cfg_attr(feature = "prost", derive(Message))]
 #[cfg_attr(not(feature = "prost"), derive(Debug))]
@@ -254,20 +160,6 @@ pub struct AccountKey {
     /// Private key `b` used for spending.
     #[cfg_attr(feature = "prost", prost(message, required, tag = "2"))]
     spend_private_key: RistrettoPrivate,
-
-    /// Fog Report server url (if user has Fog service), empty string otherwise
-    #[cfg_attr(feature = "prost", prost(string, tag = "3"))]
-    fog_report_url: String,
-
-    /// Fog Report Key (if user has Fog service), empty otherwise
-    /// The key labelling the report to use, from among the several reports
-    /// which might be served by the fog report server.
-    #[cfg_attr(feature = "prost", prost(string, tag = "4"))]
-    fog_report_id: String,
-
-    /// Fog Authority Key Fingerprint (if user has Fog service), empty otherwise
-    #[cfg_attr(feature = "prost", prost(bytes, tag = "5"))]
-    fog_authority_spki: Vec<u8>,
 }
 
 // Note: Hash, Ord is implemented in terms of default_subaddress() because
@@ -309,7 +201,7 @@ impl From<Slip10Key> for AccountKey {
 }
 
 impl AccountKey {
-    /// A user's AccountKey, without a fog service.
+    /// A user's AccountKey.
     ///
     /// # Arguments
     /// * `spend_private_key` - The user's private spend key `b`.
@@ -319,61 +211,7 @@ impl AccountKey {
         Self {
             spend_private_key: *spend_private_key,
             view_private_key: *view_private_key,
-            fog_report_url: Default::default(),
-            fog_report_id: Default::default(),
-            fog_authority_spki: Default::default(),
         }
-    }
-
-    /// A user's AccountKey, with an fog service.
-    ///
-    /// # Arguments
-    /// * `spend_private_key` - The user's private spend key `b`.
-    /// * `view_private_key` - The user's private view key `a`.
-    /// * `fog_report_url` - Url of fog report service
-    /// * `fog_report_id` - The id labelling the report to use, from among the
-    ///   several reports which might be served by the fog report server.
-    /// * `fog_authority` - The DER-encoded subjectPublicKeyInfo of the fog
-    ///   authority, which will be signed by the user when constructing the
-    ///   public address.
-    pub fn new_with_fog(
-        spend_private_key: &RistrettoPrivate,
-        view_private_key: &RistrettoPrivate,
-        fog_report_url: impl ToString,
-        fog_report_id: String,
-        fog_authority_spki: impl AsRef<[u8]>,
-    ) -> Self {
-        Self {
-            spend_private_key: *spend_private_key,
-            view_private_key: *view_private_key,
-            fog_report_url: fog_report_url.to_string(),
-            fog_report_id,
-            fog_authority_spki: fog_authority_spki.as_ref().to_vec(),
-        }
-    }
-
-    /// Copy to a new instance using with provided fog fields
-    ///
-    /// # Arguments
-    /// * `fog_report_url` - Url of fog report service
-    /// * `fog_report_id` - The id labelling the report to use, from among the
-    ///   several reports which might be served by the fog report server.
-    /// * `fog_authority` - The DER-encoded subjectPublicKeyInfo of the fog
-    ///   authority, which will be signed by the user when constructing the
-    ///   public address.
-    pub fn with_fog(
-        self,
-        fog_report_url: impl ToString,
-        fog_report_id: impl ToString,
-        fog_authority_spki: impl AsRef<[u8]>,
-    ) -> Self {
-        AccountKey::new_with_fog(
-            &self.spend_private_key,
-            &self.view_private_key,
-            fog_report_url,
-            fog_report_id.to_string(),
-            fog_authority_spki,
-        )
     }
 
     /// Get the view private key.
@@ -386,52 +224,11 @@ impl AccountKey {
         &self.spend_private_key
     }
 
-    /// Access the fog url (if it exists).
-    pub fn fog_report_url(&self) -> Option<&str> {
-        if self.fog_report_url.is_empty() {
-            None
-        } else {
-            Some(&self.fog_report_url)
-        }
-    }
-
-    /// Access the fog authority subject public key info.
-    pub fn fog_authority_spki(&self) -> Option<&[u8]> {
-        if self.fog_authority_spki.is_empty() {
-            None
-        } else {
-            Some(&self.fog_authority_spki)
-        }
-    }
-
-    /// Access the fog report key (if it exists).
-    pub fn fog_report_id(&self) -> Option<&str> {
-        if self.fog_report_id.is_empty() {
-            None
-        } else {
-            Some(&self.fog_report_id)
-        }
-    }
-
-    /// Create an account key with random secret keys, and no fog service
-    /// (intended for tests).
+    /// Create an account key with random secret keys (intended for tests).
     pub fn random<T: RngCore + CryptoRng>(rng: &mut T) -> Self {
         Self::new(
             &RistrettoPrivate::from_random(rng),
             &RistrettoPrivate::from_random(rng),
-        )
-    }
-
-    /// Create an account key with random secret keys, and the fog service
-    /// url "fog://example.com"
-    /// (intended for tests).
-    pub fn random_with_fog<T: RngCore + CryptoRng>(rng: &mut T) -> Self {
-        Self::new_with_fog(
-            &RistrettoPrivate::from_random(rng),
-            &RistrettoPrivate::from_random(rng),
-            "fog://example.com".to_string(),
-            Default::default(),
-            <Vec<u8>>::default(),
         )
     }
 
@@ -465,15 +262,9 @@ impl AccountKey {
             RistrettoPublic::from(&subaddress_spend_private)
         };
 
-        // Fog authority signing removed - Botho does not use Fog
-        let fog_authority_sig = Vec::default();
-
         PublicAddress {
             view_public_key,
             spend_public_key,
-            fog_report_url: self.fog_report_url.clone(),
-            fog_report_id: self.fog_report_id.clone(),
-            fog_authority_sig,
         }
     }
 
@@ -582,7 +373,7 @@ impl From<&AccountKey> for ViewAccountKey {
 }
 
 impl ViewAccountKey {
-    /// A user's ViewAccountKey, without a fog service.
+    /// A user's ViewAccountKey.
     ///
     /// # Arguments
     /// * `view_private_key` - The user's private view key `a`.
@@ -642,9 +433,6 @@ impl ViewAccountKey {
         PublicAddress {
             view_public_key: view_public.inner(),
             spend_public_key: spend_public.inner(),
-            fog_report_url: "".to_string(),
-            fog_report_id: "".to_string(),
-            fog_authority_sig: Vec::default(),
         }
     }
 
@@ -701,45 +489,22 @@ impl ViewAccountKey {
 #[cfg(test)]
 mod account_key_tests {
     use super::*;
-    use bt_crypto_keys::RistrettoSignature;
-    use bt_test_vectors_account_keys::{
+    use bth_test_vectors_account_keys::{
         DefaultSubaddrKeysFromAcctPrivKeys, SubaddrKeysFromAcctPrivKeys,
     };
-    use bt_util_test_vector::TestVector;
-    use bt_util_test_with_data::test_with_data;
+    use bth_util_test_vector::TestVector;
+    use bth_util_test_with_data::test_with_data;
     use rand::prelude::StdRng;
     use rand_core::SeedableRng;
 
-    // Helper method to verify the signature of a public address
-    fn verify_signature(subaddress: &PublicAddress, spki: &[u8]) {
-        let signature = RistrettoSignature::try_from(
-            subaddress
-                .fog_authority_sig()
-                .expect("Subaddress does not contain fog authority sig"),
-        )
-        .expect("Could not construct signature from fog authority sig bytes");
-        assert!(subaddress
-            .view_public_key
-            .verify_authority(spki, &signature)
-            .is_ok());
-    }
-
     #[test]
     // Deserializing should recover a serialized a PublicAddress.
-    fn bt_util_serial_prost_roundtrip_public_address() {
-        bt_util_test_helper::run_with_several_seeds(|mut rng| {
-            {
-                let acct = AccountKey::random(&mut rng);
-                let ser = bt_util_serial::encode(&acct.default_subaddress());
-                let result: PublicAddress = bt_util_serial::decode(&ser).unwrap();
-                assert_eq!(acct.default_subaddress(), result);
-            }
-            {
-                let acct = AccountKey::random_with_fog(&mut rng);
-                let ser = bt_util_serial::encode(&acct.default_subaddress());
-                let result: PublicAddress = bt_util_serial::decode(&ser).unwrap();
-                assert_eq!(acct.default_subaddress(), result);
-            }
+    fn bth_util_serial_prost_roundtrip_public_address() {
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
+            let acct = AccountKey::random(&mut rng);
+            let ser = bth_util_serial::encode(&acct.default_subaddress());
+            let result: PublicAddress = bth_util_serial::decode(&ser).unwrap();
+            assert_eq!(acct.default_subaddress(), result);
         });
     }
 
@@ -819,33 +584,6 @@ mod account_key_tests {
             public_address.spend_public_key().to_bytes(),
             case.subaddress_spend_public_key
         );
-    }
-
-    #[test]
-    // Subaddress fog authority signature should verify
-    fn test_fog_authority_signature() {
-        let mut rng: StdRng = SeedableRng::from_seed([42u8; 32]);
-        let view_private = RistrettoPrivate::from_random(&mut rng);
-        let spend_private = RistrettoPrivate::from_random(&mut rng);
-        let fog_url = "fog://example.com";
-        let mut fog_authority_spki = [0u8; 32];
-        rng.fill_bytes(&mut fog_authority_spki);
-        let fog_report_key = String::from("");
-
-        let account_key = AccountKey::new_with_fog(
-            &spend_private,
-            &view_private,
-            fog_url,
-            fog_report_key,
-            fog_authority_spki,
-        );
-
-        let index = rng.next_u64();
-        let subaddress = account_key.subaddress(index);
-
-        // Note: The fog_authority_fingerprint is published, so it is known by the
-        // verifier.
-        verify_signature(&subaddress, &fog_authority_spki);
     }
 
     #[test]

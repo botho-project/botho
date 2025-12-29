@@ -2,9 +2,9 @@
 
 //! The ballot contains the value on which to consense.
 
-use bt_common::HasherBuilder;
-use bt_consensus_scp_types::Value;
-use bt_crypto_digestible::Digestible;
+use bth_common::HasherBuilder;
+use bth_consensus_scp_types::Value;
+use bth_crypto_digestible::Digestible;
 use serde::{Deserialize, Serialize};
 use std::{
     cmp::Ordering,

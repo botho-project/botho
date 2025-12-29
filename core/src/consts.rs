@@ -13,7 +13,7 @@ pub const USAGE_BIP44: u32 = 44;
 pub const COINTYPE_BOTHO: u32 = 866;
 
 /// Domain separator for hashing a private view key and index into a subaddress.
-pub(crate) const SUBADDRESS_DOMAIN_TAG: &str = "bt_subaddress";
+pub(crate) const SUBADDRESS_DOMAIN_TAG: &str = "bth_subaddress";
 
 /// An account's "default address" is its zero^th subaddress.
 pub const DEFAULT_SUBADDRESS_INDEX: u64 = 0;

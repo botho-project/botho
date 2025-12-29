@@ -34,8 +34,8 @@ pub enum Error {
     NumericLimitsExceeded,
 }
 
-impl From<bt_util_serial::encode::Error> for Error {
-    fn from(_e: bt_util_serial::encode::Error) -> Self {
+impl From<bth_util_serial::encode::Error> for Error {
+    fn from(_e: bth_util_serial::encode::Error) -> Self {
         Error::TxOutSerializationError
     }
 }

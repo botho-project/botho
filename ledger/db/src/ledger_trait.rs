@@ -7,12 +7,12 @@
 //! ring members exist.
 
 use crate::{ActiveMintConfig, ActiveMintConfigs, Error};
-use bt_blockchain_types::{
+use bth_blockchain_types::{
     Block, BlockContents, BlockData, BlockIndex, BlockMetadata, BlockSignature,
 };
-use bt_common::{Hash, HashMap};
-use bt_crypto_keys::CompressedRistrettoPublic;
-use bt_transaction_core::{mint::MintTx, ring_signature::KeyImage, tx::TxOut, TokenId};
+use bth_common::{Hash, HashMap};
+use bth_crypto_keys::CompressedRistrettoPublic;
+use bth_transaction_core::{mint::MintTx, ring_signature::KeyImage, tx::TxOut, TokenId};
 use mockall::*;
 
 #[automock]

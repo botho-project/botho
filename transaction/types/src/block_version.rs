@@ -2,7 +2,7 @@
 
 use core::{fmt, hash::Hash, ops::Deref, str::FromStr};
 use displaydoc::Display;
-use bt_crypto_digestible::Digestible;
+use bth_crypto_digestible::Digestible;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};

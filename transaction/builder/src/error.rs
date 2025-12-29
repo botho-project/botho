@@ -2,8 +2,8 @@
 // Copyright (c) 2024 Botho Foundation
 
 use displaydoc::Display;
-use bt_crypto_ring_signature_signer::Error as SignerError;
-use bt_transaction_core::{
+use bth_crypto_ring_signature_signer::Error as SignerError;
+use bth_transaction_core::{
     ring_ct::Error as RingCtError, AmountError, NewMemoError, NewTxError, TokenId,
     TxOutConversionError,
 };
@@ -18,7 +18,7 @@ pub enum TxBuilderError {
     RangeProofFailed,
 
     /// Serialization: {0}
-    SerializationFailed(bt_util_serial::encode::Error),
+    SerializationFailed(bth_util_serial::encode::Error),
 
     /// Serialization: {0}
     EncodingFailed(prost::EncodeError),
@@ -42,7 +42,7 @@ pub enum TxBuilderError {
     NoInputs,
 
     /// Key: {0}
-    KeyError(bt_crypto_keys::KeyError),
+    KeyError(bth_crypto_keys::KeyError),
 
     /// Memo: {0}
     Memo(NewMemoError),
@@ -72,8 +72,8 @@ pub enum TxBuilderError {
     AlreadyHavePartialFillChange,
 }
 
-impl From<bt_util_serial::encode::Error> for TxBuilderError {
-    fn from(x: bt_util_serial::encode::Error) -> Self {
+impl From<bth_util_serial::encode::Error> for TxBuilderError {
+    fn from(x: bth_util_serial::encode::Error) -> Self {
         TxBuilderError::SerializationFailed(x)
     }
 }
@@ -96,8 +96,8 @@ impl From<NewTxError> for TxBuilderError {
     }
 }
 
-impl From<bt_crypto_keys::KeyError> for TxBuilderError {
-    fn from(e: bt_crypto_keys::KeyError) -> Self {
+impl From<bth_crypto_keys::KeyError> for TxBuilderError {
+    fn from(e: bth_crypto_keys::KeyError) -> Self {
         TxBuilderError::KeyError(e)
     }
 }

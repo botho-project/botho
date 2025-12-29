@@ -31,7 +31,7 @@ pub struct KeyConfig {
 
     /// Seed to use when generating keys (e.g.
     /// 1234567812345678123456781234567812345678123456781234567812345678).
-    #[clap(short, long, value_parser = bt_util_parse::parse_hex::<[u8; 32]>, env = "MC_SEED", default_value = "0101010101010101010101010101010101010101010101010101010101010101")]
+    #[clap(short, long, value_parser = bth_util_parse::parse_hex::<[u8; 32]>, env = "MC_SEED", default_value = "0101010101010101010101010101010101010101010101010101010101010101")]
     pub seed: [u8; 32],
 }
 

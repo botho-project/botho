@@ -11,7 +11,7 @@
 extern crate alloc;
 
 use crate::onetime_keys::create_shared_secret;
-use bt_crypto_keys::{RistrettoPrivate, RistrettoPublic};
+use bth_crypto_keys::{RistrettoPrivate, RistrettoPublic};
 
 mod amount;
 mod domain_separators;

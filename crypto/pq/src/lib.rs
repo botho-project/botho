@@ -19,7 +19,7 @@
 //! # Example
 //!
 //! ```rust
-//! use bt_crypto_pq::{MlKem768KeyPair, MlDsa65KeyPair};
+//! use bth_crypto_pq::{MlKem768KeyPair, MlDsa65KeyPair};
 //!
 //! // Generate keypairs from seed (deterministic)
 //! let seed = [0u8; 32];

@@ -2,7 +2,7 @@
 
 //! Helper functions intended to return canned certificate data
 
-use bt_crypto_keys::{DistinguishedEncoding, Ed25519Pair, Ed25519Private};
+use bth_crypto_keys::{DistinguishedEncoding, Ed25519Pair, Ed25519Private};
 use std::{fs, path::PathBuf};
 
 /// Retrieve a pathbuf for a file containing a PEM string

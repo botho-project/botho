@@ -1,4 +1,4 @@
-bt-util-test-helper
+bth-util-test-helper
 ===========
 
 Helper code for making tests that depend on randomness -- it takes care of

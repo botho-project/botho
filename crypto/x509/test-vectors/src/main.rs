@@ -27,8 +27,8 @@ struct Config {
 fn main() {
     let config = Config::parse();
     let output = match config.kind {
-        PathKind::Chain => bt_crypto_x509_test_vectors::chain_path(&config.test_name),
-        PathKind::Key => bt_crypto_x509_test_vectors::key_path(&config.test_name),
+        PathKind::Chain => bth_crypto_x509_test_vectors::chain_path(&config.test_name),
+        PathKind::Key => bth_crypto_x509_test_vectors::key_path(&config.test_name),
     };
     println!("{}", output.display())
 }

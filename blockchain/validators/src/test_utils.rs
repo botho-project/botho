@@ -2,11 +2,11 @@
 
 //! Test helpers.
 
-use bt_blockchain_test_utils::{make_block_id, make_block_metadata_contents};
-use bt_blockchain_types::BlockMetadata;
-use bt_crypto_keys::{Ed25519Pair, Ed25519Public};
-use bt_util_from_random::FromRandom;
-use bt_util_test_helper::{RngType as FixedRng, SeedableRng};
+use bth_blockchain_test_utils::{make_block_id, make_block_metadata_contents};
+use bth_blockchain_types::BlockMetadata;
+use bth_crypto_keys::{Ed25519Pair, Ed25519Public};
+use bth_util_from_random::FromRandom;
+use bth_util_test_helper::{RngType as FixedRng, SeedableRng};
 
 /// Make Ed25519 Public key from seed
 pub fn make_key(seed: u64) -> Ed25519Public {

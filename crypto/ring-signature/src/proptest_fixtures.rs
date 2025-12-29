@@ -3,7 +3,7 @@
 //! Fixtures for use with proptest
 
 use crate::{CurveScalar, Scalar};
-use bt_crypto_keys::{RistrettoPrivate, RistrettoPublic};
+use bth_crypto_keys::{RistrettoPrivate, RistrettoPublic};
 use proptest::prelude::*;
 
 /// Generates an arbitrary Scalar.

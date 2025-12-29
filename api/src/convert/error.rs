@@ -1,10 +1,10 @@
 // Copyright (c) 2018-2022 The Botho Foundation
 
-use bt_blockchain_types::{BlockVersionError, ConvertError};
-use bt_crypto_keys::{KeyError, SignatureError};
-use bt_transaction_core::ring_signature::Error as RingSigError;
-use bt_util_serial::prost::DecodeError;
-use bt_util_uri::{UriConversionError, UriParseError};
+use bth_blockchain_types::{BlockVersionError, ConvertError};
+use bth_crypto_keys::{KeyError, SignatureError};
+use bth_transaction_core::ring_signature::Error as RingSigError;
+use bth_util_serial::prost::DecodeError;
+use bth_util_uri::{UriConversionError, UriParseError};
 use std::{
     array::TryFromSliceError,
     convert::Infallible,

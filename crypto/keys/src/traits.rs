@@ -7,8 +7,8 @@ use crate::{Digest, LengthMismatch, ReprBytes};
 use core::{fmt::Debug, hash::Hash};
 use displaydoc::Display;
 //use hex_fmt::HexFmt;
-use bt_crypto_digestible::Digestible;
-use bt_util_from_random::FromRandom;
+use bth_crypto_digestible::Digestible;
+use bth_util_from_random::FromRandom;
 use rand_core::{CryptoRng, RngCore};
 
 #[cfg(feature = "alloc")]

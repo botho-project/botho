@@ -5,7 +5,7 @@ use core::{
     fmt::{Debug, Display},
     hash::Hash,
 };
-use bt_crypto_digestible::Digestible;
+use bth_crypto_digestible::Digestible;
 use prost::Message;
 use serde::{de::DeserializeOwned, Serialize};
 

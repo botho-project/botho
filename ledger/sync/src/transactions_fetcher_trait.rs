@@ -3,8 +3,8 @@
 //! The `TransactionsFetcher` trait describes the interface used by
 //! `LedgerSyncService` for fetching transaction data.
 
-use bt_blockchain_types::{Block, BlockData};
-use bt_common::ResponderId;
+use bth_blockchain_types::{Block, BlockData};
+use bth_common::ResponderId;
 use std::fmt::Debug;
 
 pub trait TransactionFetcherError: Debug + Send + Sync {}

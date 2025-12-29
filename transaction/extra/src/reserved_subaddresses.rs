@@ -2,7 +2,7 @@
 
 //! Object containing subaddresses of Botho reserved subaddress indices
 
-use bt_account_keys::{AccountKey, PublicAddress, ViewAccountKey};
+use bth_account_keys::{AccountKey, PublicAddress, ViewAccountKey};
 use serde::{Deserialize, Serialize};
 
 /// Information about reserved subaddresses.

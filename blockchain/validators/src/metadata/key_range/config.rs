@@ -4,8 +4,8 @@
 
 use crate::ParseError;
 use hex::ToHex;
-use bt_blockchain_types::BlockIndex;
-use bt_crypto_keys::{DistinguishedEncoding, Ed25519Public};
+use bth_blockchain_types::BlockIndex;
+use bth_crypto_keys::{DistinguishedEncoding, Ed25519Public};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,

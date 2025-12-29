@@ -8,8 +8,8 @@ use core::fmt::Display;
 use displaydoc::Display;
 use heapless::Vec;
 
-use bt_core::account::ShortAddressHash;
-use bt_transaction_types::{
+use bth_core::account::ShortAddressHash;
+use bth_transaction_types::{
     constants::{MAX_INPUTS, MAX_OUTPUTS},
     Amount, TokenId,
 };

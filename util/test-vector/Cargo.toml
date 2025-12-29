@@ -1,5 +1,5 @@
 [package]
-name = "bt-util-test-vector"
+name = "bth-util-test-vector"
 version = "7.1.0"
 authors = ["Botho"]
 edition = "2021"

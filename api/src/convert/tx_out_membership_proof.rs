@@ -3,7 +3,7 @@
 //! Convert to/from external::TxOutMembershipProof
 
 use crate::{external, ConversionError};
-use bt_transaction_core::tx::{TxOutMembershipElement, TxOutMembershipProof};
+use bth_transaction_core::tx::{TxOutMembershipElement, TxOutMembershipProof};
 
 /// Convert TxOutMembershipProof -> external::MembershipProof.
 impl From<&TxOutMembershipProof> for external::TxOutMembershipProof {
@@ -41,7 +41,7 @@ impl TryFrom<&external::TxOutMembershipProof> for TxOutMembershipProof {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bt_transaction_core::membership_proofs::Range;
+    use bth_transaction_core::membership_proofs::Range;
 
     #[test]
     /// Convert TxOutMembershipProof -> external::TxOutMembershipProof.

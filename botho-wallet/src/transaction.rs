@@ -4,7 +4,7 @@
 //! All signing happens locally - private keys never leave the wallet.
 
 use anyhow::{anyhow, Result};
-use bt_account_keys::PublicAddress;
+use bth_account_keys::PublicAddress;
 use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

@@ -3,7 +3,7 @@
 //! Convert to/from external::KeyImage.
 
 use crate::{external, ConversionError};
-use bt_transaction_core::ring_signature::KeyImage;
+use bth_transaction_core::ring_signature::KeyImage;
 
 /// Convert KeyImage -->  external::KeyImage.
 impl From<&KeyImage> for external::KeyImage {

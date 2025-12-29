@@ -1,12 +1,12 @@
 // Copyright (c) 2018-2022 The Botho Foundation
 
-use bt_crypto_keys::{RistrettoPrivate, RistrettoPublic};
+use bth_crypto_keys::{RistrettoPrivate, RistrettoPublic};
 
 use alloc::vec::Vec;
 use rand_core::CryptoRngCore;
 use zeroize::Zeroize;
 
-use bt_crypto_digestible::Digestible;
+use bth_crypto_digestible::Digestible;
 
 #[cfg(feature = "prost")]
 use prost::Message;
@@ -209,9 +209,9 @@ mod mlsag_tests {
     use super::*;
     use crate::generators;
     use curve25519_dalek::ristretto::CompressedRistretto;
-    use bt_crypto_keys::CompressedRistrettoPublic;
-    use bt_util_from_random::FromRandom;
-    use bt_util_test_helper::{RngType, SeedableRng};
+    use bth_crypto_keys::CompressedRistrettoPublic;
+    use bth_util_from_random::FromRandom;
+    use bth_util_test_helper::{RngType, SeedableRng};
     use proptest::prelude::*;
 
     #[derive(Clone)]
@@ -696,14 +696,14 @@ mod mlsag_tests {
 
             let signature = params.sign(&mut rng).unwrap();
 
-            use bt_util_serial::prost::Message;
+            use bth_util_serial::prost::Message;
 
             // The encoded bytes should have the correct length.
-            let bytes = bt_util_serial::encode(&signature);
+            let bytes = bth_util_serial::encode(&signature);
             assert_eq!(bytes.len(), signature.encoded_len());
 
             // decode(encode(&signature)) should be the identity function.
-            let recovered_signature = bt_util_serial::decode(&bytes).unwrap();
+            let recovered_signature = bth_util_serial::decode(&bytes).unwrap();
             assert_eq!(signature, recovered_signature);
         }
 

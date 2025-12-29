@@ -6,11 +6,11 @@
 // code. https://github.com/rust-lang/rust/issues/46379
 #![allow(dead_code)]
 
-use bt_common::{
+use bth_common::{
     logger::{log, Logger},
     NodeID,
 };
-use bt_consensus_scp::{
+use bth_consensus_scp::{
     msg::Msg,
     slot::{CombineFn, ValidityFn},
     test_utils, Node, QuorumSet, ScpNode, SlotIndex,
@@ -516,10 +516,10 @@ pub fn build_and_test(network_config: &NetworkConfig, test_options: &TestOptions
 
     let start = Instant::now();
 
-    let mut rng = bt_util_test_helper::get_seeded_rng();
+    let mut rng = bth_util_test_helper::get_seeded_rng();
     let mut values = Vec::<String>::with_capacity(test_options.values_to_submit);
     for _i in 0..test_options.values_to_submit {
-        let value = bt_util_test_helper::random_str(CHARACTERS_PER_VALUE, &mut rng);
+        let value = bth_util_test_helper::random_str(CHARACTERS_PER_VALUE, &mut rng);
         values.push(value);
     }
 

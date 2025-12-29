@@ -1,5 +1,5 @@
 [package]
-name = "bt-common"
+name = "bth-common"
 version = "7.1.0"
 authors = ["Botho"]
 edition = "2021"
@@ -7,11 +7,11 @@ license = "Apache-2.0"
 rust-version = { workspace = true }
 
 [features]
-std = ["displaydoc/std", "bt-util-serial/std"]
+std = ["displaydoc/std", "bth-util-serial/std"]
 log = [
     "backtrace",
     "chrono/clock",
-    "bt-util-logger-macros",
+    "bth-util-logger-macros",
     "slog-scope",
 ]
 loggers = [
@@ -20,8 +20,7 @@ loggers = [
     "std",
     # Dependencies
     "hostname",
-    "lazy_static",
-    "bt-util-build-info",
+    "bth-util-build-info",
     "sentry",
     "slog-async",
     "slog-atomic",
@@ -32,15 +31,15 @@ loggers = [
 ]
 
 [dependencies]
-bt-crypto-digestible = { workspace = true }
-bt-crypto-keys = { workspace = true, features = ["serde", "alloc", "prost"] }
+bth-crypto-digestible = { workspace = true }
+bth-crypto-keys = { workspace = true, features = ["serde", "alloc", "prost"] }
 mc-rand = { workspace = true }
 # loggers-only dependencies
-bt-util-build-info = { workspace = true, optional = true }
+bth-util-build-info = { workspace = true, optional = true }
 # log- and loggers-only dependencies
-bt-util-logger-macros = { workspace = true, optional = true }
-# Note: bt-util-serial is an unused dependency, but anywhere we forward serde/std, we need to get rmp-serde/std also, or the build breaks.
-bt-util-serial = { workspace = true }
+bth-util-logger-macros = { workspace = true, optional = true }
+# Note: bth-util-serial is an unused dependency, but anywhere we forward serde/std, we need to get rmp-serde/std also, or the build breaks.
+bth-util-serial = { workspace = true }
 
 backtrace = { workspace = true, optional = true }
 cfg-if = { workspace = true }
@@ -50,7 +49,6 @@ hashbrown = { workspace = true, features = ["serde", "nightly"] }
 hex = { workspace = true }
 hex_fmt = { workspace = true }
 hostname = { workspace = true, optional = true }
-lazy_static = { workspace = true, optional = true }
 prost = { workspace = true, features = ["prost-derive"] }
 rand_core = { workspace = true }
 sentry = { workspace = true, features = ["backtrace", "contexts", "log", "panic", "reqwest", "rustls", "serde_json", "slog"], optional = true }

@@ -4,8 +4,8 @@
 
 use crate::{external, ConversionError};
 use curve25519_dalek::ristretto::CompressedRistretto;
-use bt_crypto_keys::{CompressedRistrettoPublic, RistrettoPublic};
-use bt_transaction_core::CompressedCommitment;
+use bth_crypto_keys::{CompressedRistrettoPublic, RistrettoPublic};
+use bth_transaction_core::CompressedCommitment;
 
 impl From<&CompressedCommitment> for external::CompressedRistretto {
     fn from(source: &CompressedCommitment) -> Self {

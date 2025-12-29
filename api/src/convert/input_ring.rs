@@ -1,10 +1,10 @@
 // Copyright (c) 2018-2022 The Botho Foundation
 
-//! Convert to/from bt_transaction_core::ring_ct::InputRing.
+//! Convert to/from bth_transaction_core::ring_ct::InputRing.
 
 use crate::{external, external::input_ring::Ring, ConversionError};
-use bt_crypto_ring_signature_signer::SignableInputRing;
-use bt_transaction_core::ring_ct::{InputRing, PresignedInputRing};
+use bth_crypto_ring_signature_signer::SignableInputRing;
+use bth_transaction_core::ring_ct::{InputRing, PresignedInputRing};
 
 impl From<&InputRing> for external::InputRing {
     fn from(source: &InputRing) -> Self {
@@ -114,16 +114,16 @@ impl TryFrom<&external::SignableInputRing> for SignableInputRing {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bt_account_keys::AccountKey;
+    use bth_account_keys::AccountKey;
     use mc_fog_report_validation_test_utils::MockFogResolver;
-    use bt_transaction_builder::{
+    use bth_transaction_builder::{
         test_utils::get_input_credentials, EmptyMemoBuilder, TransactionBuilder,
     };
-    use bt_transaction_core::{tokens::Mob, Amount, BlockVersion, Token};
+    use bth_transaction_core::{tokens::Mob, Amount, BlockVersion, Token};
     use rand::{rngs::StdRng, SeedableRng};
 
     // Test converting between external::InputRing and
-    // bt_transaction_core::ring_signature::InputRing
+    // bth_transaction_core::ring_signature::InputRing
     #[test]
     fn test_input_ring_conversion() {
         // Generate an UnsignedTx to test with.
@@ -163,8 +163,8 @@ mod tests {
 
             let input_ring = unsigned_tx.rings[0].clone();
 
-            // Converting bt_transaction_core::ring_signature::InputRing ->
-            // external::InputRing -> bt_transaction_core::ring_signature::
+            // Converting bth_transaction_core::ring_signature::InputRing ->
+            // external::InputRing -> bth_transaction_core::ring_signature::
             // InputRing should be the identity function.
             {
                 let external_input_ring: external::InputRing = (&input_ring).into();

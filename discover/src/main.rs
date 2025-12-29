@@ -8,13 +8,13 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use libp2p::Multiaddr;
-use bt_common::ResponderId;
-use bt_consensus_scp_types::QuorumSet;
-use bt_gossip::{
+use bth_common::ResponderId;
+use bth_consensus_scp_types::QuorumSet;
+use bth_gossip::{
     GossipConfig, GossipConfigBuilder, GossipEvent, GossipService, NodeCapabilities,
     QuorumStrategy, TopologyAnalyzer,
 };
-use bt_util_from_random::FromRandom;
+use bth_util_from_random::FromRandom;
 use std::{
     path::PathBuf,
     str::FromStr,
@@ -160,14 +160,14 @@ async fn main() -> Result<()> {
 async fn discover_network(
     config: GossipConfig,
     timeout_secs: u64,
-) -> Result<bt_gossip::SharedPeerStore> {
+) -> Result<bth_gossip::SharedPeerStore> {
     // Create a minimal node identity for discovery
-    let node_id = bt_common::NodeID {
+    let node_id = bth_common::NodeID {
         responder_id: ResponderId::from_str("discover-client:0").unwrap(),
-        public_key: bt_crypto_keys::Ed25519Public::default(),
+        public_key: bth_crypto_keys::Ed25519Public::default(),
     };
 
-    let signing_key = std::sync::Arc::new(bt_crypto_keys::Ed25519Pair::from_random(&mut rand::thread_rng()));
+    let signing_key = std::sync::Arc::new(bth_crypto_keys::Ed25519Pair::from_random(&mut rand::thread_rng()));
 
     let mut service = GossipService::new(
         node_id,
@@ -355,10 +355,10 @@ fn print_quorum_set(qs: &QuorumSet<ResponderId>, indent: usize) {
     for member in &qs.members {
         if let Some(m) = member.as_ref() {
             match m {
-                bt_consensus_scp_types::QuorumSetMember::Node(id) => {
+                bth_consensus_scp_types::QuorumSetMember::Node(id) => {
                     println!("{}- {}", prefix, id);
                 }
-                bt_consensus_scp_types::QuorumSetMember::InnerSet(inner) => {
+                bth_consensus_scp_types::QuorumSetMember::InnerSet(inner) => {
                     println!(
                         "{}- InnerSet (threshold {}, {} members):",
                         prefix,

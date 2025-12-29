@@ -2,8 +2,8 @@
 
 /// Tests of the schema evolution properties of derive(Digestible)
 /// implementations when transparent enums are involved
-use bt_crypto_digestible::Digestible;
-use bt_crypto_digestible_test_utils::*;
+use bth_crypto_digestible::Digestible;
+use bth_crypto_digestible_test_utils::*;
 
 // An example structure
 #[derive(Digestible)]

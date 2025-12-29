@@ -2,9 +2,9 @@
 
 use crate::TxBuilderError;
 use alloc::vec::Vec;
-use bt_crypto_keys::{RistrettoPrivate, RistrettoPublic};
-use bt_crypto_ring_signature_signer::{InputSecret, OneTimeKeyDeriveData, SignableInputRing};
-use bt_transaction_core::{
+use bth_crypto_keys::{RistrettoPrivate, RistrettoPublic};
+use bth_crypto_ring_signature_signer::{InputSecret, OneTimeKeyDeriveData, SignableInputRing};
+use bth_transaction_core::{
     onetime_keys::create_shared_secret,
     tx::{TxIn, TxOut},
     TxOutConversionError,

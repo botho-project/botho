@@ -1,5 +1,5 @@
 [package]
-name = "bt-util-build-script"
+name = "bth-util-build-script"
 version = "7.1.0"
 authors = ["Botho"]
 description = "Cargo build-script assistance, from Botho."
@@ -11,6 +11,5 @@ rust-version = { workspace = true }
 [dependencies]
 cargo-emit = { workspace = true }
 displaydoc = { workspace = true }
-lazy_static = { workspace = true }
 url = { workspace = true }
 walkdir = { workspace = true }

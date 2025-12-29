@@ -1,5 +1,5 @@
 [package]
-name = "bt-crypto-hashes"
+name = "bth-crypto-hashes"
 version = "7.1.0"
 authors = ["Botho"]
 edition = "2021"
@@ -8,10 +8,10 @@ readme = "README.md"
 rust-version = { workspace = true }
 
 [features]
-default = ["bt-crypto-digestible/default"]
+default = ["bth-crypto-digestible/default"]
 
 [dependencies]
-bt-crypto-digestible = { workspace = true }
+bth-crypto-digestible = { workspace = true }
 
 digest = { workspace = true }
 

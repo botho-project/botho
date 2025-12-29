@@ -3,7 +3,7 @@
 //! Convert to/from external::ClusterTagVector and related types.
 
 use crate::{external, ConversionError};
-use bt_transaction_core::{ClusterId, ClusterTagEntry, ClusterTagVector};
+use bth_transaction_core::{ClusterId, ClusterTagEntry, ClusterTagVector};
 
 /// Convert ClusterTagVector --> external::ClusterTagVector.
 impl From<&ClusterTagVector> for external::ClusterTagVector {

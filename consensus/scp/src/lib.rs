@@ -17,7 +17,7 @@ pub mod test_utils;
 mod utils;
 
 #[doc(inline)]
-pub use bt_consensus_scp_types::{core_types, quorum_set};
+pub use bth_consensus_scp_types::{core_types, quorum_set};
 
 #[doc(inline)]
 pub use crate::{

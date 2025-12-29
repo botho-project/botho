@@ -13,7 +13,7 @@ use core::marker::PhantomData;
 use displaydoc::Display;
 use generic_array::typenum::Unsigned;
 use hkdf::{InvalidLength, SimpleHkdf};
-use bt_crypto_keys::{Kex, KexPublic, ReprBytes};
+use bth_crypto_keys::{Kex, KexPublic, ReprBytes};
 use secrecy::{ExposeSecret, SecretVec};
 use serde::{Deserialize, Serialize};
 

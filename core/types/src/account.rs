@@ -75,7 +75,7 @@ impl Account {
 ///
 /// Derived from an [Account] object, used where spend key custody is external
 /// (offline or via hardware). Protobuf encoding is equivalent to
-/// [bt_account_keys::ViewAccountKey]
+/// [bth_account_keys::ViewAccountKey]
 #[derive(Zeroize)]
 #[zeroize(drop)]
 pub struct ViewAccount {

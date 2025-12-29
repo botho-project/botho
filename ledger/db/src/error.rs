@@ -1,9 +1,9 @@
 // Copyright (c) 2018-2022 The Botho Foundation
 
 use displaydoc::Display;
-use bt_blockchain_types::{BlockID, BlockIndex};
-use bt_transaction_core::membership_proofs::RangeError;
-use bt_util_lmdb::MetadataStoreError;
+use bth_blockchain_types::{BlockID, BlockIndex};
+use bth_transaction_core::membership_proofs::RangeError;
+use bth_util_lmdb::MetadataStoreError;
 
 /// A Ledger error kind.
 #[derive(Clone, Display, Eq, PartialEq)]
@@ -119,26 +119,26 @@ impl From<lmdb::Error> for Error {
     }
 }
 
-impl From<bt_util_serial::decode::Error> for Error {
-    fn from(_: bt_util_serial::decode::Error) -> Self {
+impl From<bth_util_serial::decode::Error> for Error {
+    fn from(_: bth_util_serial::decode::Error) -> Self {
         Error::Deserialization
     }
 }
 
-impl From<bt_util_serial::encode::Error> for Error {
-    fn from(_: bt_util_serial::encode::Error) -> Self {
+impl From<bth_util_serial::encode::Error> for Error {
+    fn from(_: bth_util_serial::encode::Error) -> Self {
         Error::Serialization
     }
 }
 
-impl From<bt_util_serial::DecodeError> for Error {
-    fn from(_: bt_util_serial::DecodeError) -> Self {
+impl From<bth_util_serial::DecodeError> for Error {
+    fn from(_: bth_util_serial::DecodeError) -> Self {
         Error::Deserialization
     }
 }
 
-impl From<bt_util_serial::EncodeError> for Error {
-    fn from(_: bt_util_serial::EncodeError) -> Self {
+impl From<bth_util_serial::EncodeError> for Error {
+    fn from(_: bth_util_serial::EncodeError) -> Self {
         Error::Serialization
     }
 }

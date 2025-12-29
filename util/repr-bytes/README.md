@@ -1,7 +1,7 @@
-bt-util-repr-bytes
+bth-util-repr-bytes
 ==================
 
-`bt-util-repr-bytes` provides a low-level trait representing an object which
+`bth-util-repr-bytes` provides a low-level trait representing an object which
 has a fixed-width canonical representation as bytes. This is intended to abstract
 the differences between different kinds of cryptographic keys.
 
@@ -13,9 +13,9 @@ to the slice, because that would be a reference to a temporary [3]. Because comp
 and decompressing Ristretto points involves finite field operations, this is expensive
 and cannot be done constantly.
 
-In crates like `bt-crypto-keys` we want to create generic interfaces for
-key exchange [5]. This can be used as a building block for crates like `bt-crypto-noise` [7],
-and `bt-crypto-box` [8], which can in principle be implemented for any elliptic curve.
+In crates like `bth-crypto-keys` we want to create generic interfaces for
+key exchange [5]. This can be used as a building block for crates like `bth-crypto-noise` [7],
+and `bth-crypto-box` [8], which can in principle be implemented for any elliptic curve.
 
 Using generic implementations of cryptographic algorithms has numerous advantages:
 - Separating the sensitive, cryptographic parts, from the parts which are
@@ -38,7 +38,7 @@ Design goals:
   No global allocator requirements.
 - Use `generic_array`, or at least `typenum`, to track the size of the fixed-width representation.
   This is in keeping with other examples like `aead` and `digest` [1,2], it is consumed in some
-  downstream crates like `bt-crypto-box` [8] which must assemble a Kex algorithm and an Aead together.
+  downstream crates like `bth-crypto-box` [8] which must assemble a Kex algorithm and an Aead together.
   `typenum` is pretty much a requirement in low-level core-only code
   until so-called "const generics" are stable in rustlang [10].
 
@@ -65,7 +65,7 @@ Discussion:
 
    We also need to know the Size in bytes statically -- this means it has to be an
    associated type or an associated const of the trait. If we want to be able to use
-   this easily in things like `bt-crypto-box` that have to work with `aead` which uses
+   this easily in things like `bth-crypto-box` that have to work with `aead` which uses
    `generic_array`, then it needs to be a `typenum` and not just a `const` [8].
 
    We don't allow that `to_bytes` can fail because it doesn't have any possibility of

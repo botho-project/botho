@@ -15,9 +15,9 @@ use crate::{
 };
 use alloc::{collections::BTreeMap, vec::Vec};
 use displaydoc::Display;
-use bt_crypto_digestible::{Digestible, MerlinTranscript};
-use bt_crypto_keys::CompressedRistrettoPublic;
-use bt_util_u64_ratio::U64Ratio;
+use bth_crypto_digestible::{Digestible, MerlinTranscript};
+use bth_crypto_keys::CompressedRistrettoPublic;
+use bth_util_u64_ratio::U64Ratio;
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;

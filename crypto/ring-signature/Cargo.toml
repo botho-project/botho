@@ -1,5 +1,5 @@
 [package]
-name = "bt-crypto-ring-signature"
+name = "bth-crypto-ring-signature"
 version = "7.1.0"
 authors = ["Botho"]
 edition = "2021"
@@ -10,8 +10,8 @@ rust-version = { workspace = true }
 [features]
 alloc = [
     "serde?/alloc",
-    "bt-crypto-digestible/alloc",
-    "bt-util-repr-bytes/alloc",
+    "bth-crypto-digestible/alloc",
+    "bth-util-repr-bytes/alloc",
     "curve25519-dalek/alloc",
     "ed25519-dalek/alloc",
 ]
@@ -19,18 +19,18 @@ serde = [
     "dep:serde",
     "curve25519-dalek/serde",
     "ed25519-dalek/serde",
-    "bt-crypto-keys/serde",
+    "bth-crypto-keys/serde",
 ]
-prost = ["dep:prost", "bt-crypto-keys/prost", "bt-util-serial"]
+prost = ["dep:prost", "bth-crypto-keys/prost", "bth-util-serial"]
 internals = []
 
 default = [
     "alloc",
     "serde",
     "prost",
-    "bt-util-repr-bytes/default",
+    "bth-util-repr-bytes/default",
     "curve25519-dalek/default",
-    "bt-crypto-hashes/default",
+    "bth-crypto-hashes/default",
 ]
 proptest = ["dep:proptest", "default"]
 
@@ -44,13 +44,13 @@ ed25519-dalek = { workspace = true }
 hex_fmt = { workspace = true, optional = true }
 
 # Botho dependencies
-bt-core-types = { workspace = true }
-bt-crypto-digestible = { workspace = true, features = ["dalek", "derive"] }
-bt-crypto-hashes = { workspace = true }
-bt-crypto-keys = { workspace = true }
-bt-util-from-random = { workspace = true }
-bt-util-repr-bytes = { workspace = true }
-bt-util-serial = { workspace = true, optional = true }
+bth-core-types = { workspace = true }
+bth-crypto-digestible = { workspace = true, features = ["dalek", "derive"] }
+bth-crypto-hashes = { workspace = true }
+bth-crypto-keys = { workspace = true }
+bth-util-from-random = { workspace = true }
+bth-util-repr-bytes = { workspace = true }
+bth-util-serial = { workspace = true, optional = true }
 
 # Enable all default features not known to break code coverage builds
 proptest = { workspace = true, features = ["default-code-coverage"], optional = true }
@@ -62,8 +62,8 @@ zeroize = { workspace = true }
 
 [dev-dependencies]
 
-bt-account-keys = { workspace = true }
-bt-crypto-digestible-test-utils = { workspace = true }
-bt-util-serial = { workspace = true, features = ["std"] }
-bt-util-test-helper = { workspace = true }
+bth-account-keys = { workspace = true }
+bth-crypto-digestible-test-utils = { workspace = true }
+bth-util-serial = { workspace = true, features = ["std"] }
+bth-util-test-helper = { workspace = true }
 proptest = { workspace = true, features = ["default-code-coverage"] }

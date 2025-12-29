@@ -3,7 +3,7 @@
 //! Convert to/from blockchain::BlockContentsHash
 
 use crate::{blockchain, ConversionError};
-use bt_blockchain_types::BlockContentsHash;
+use bth_blockchain_types::BlockContentsHash;
 
 /// Convert BlockContentsHash --> blockchain::BlockContentsHash.
 impl From<&BlockContentsHash> for blockchain::BlockContentsHash {

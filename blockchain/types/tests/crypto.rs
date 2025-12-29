@@ -3,11 +3,11 @@
 //! We assume signing, context changes, mutability, etc. is tested at lower
 //! level, and just do a round-trip.
 
-use bt_blockchain_test_utils::{make_block_id, make_block_metadata_contents};
-use bt_blockchain_types::crypto::metadata::{MetadataSigner, MetadataVerifier};
-use bt_crypto_keys::Ed25519Pair;
-use bt_util_from_random::FromRandom;
-use bt_util_test_helper::run_with_several_seeds;
+use bth_blockchain_test_utils::{make_block_id, make_block_metadata_contents};
+use bth_blockchain_types::crypto::metadata::{MetadataSigner, MetadataVerifier};
+use bth_crypto_keys::Ed25519Pair;
+use bth_util_from_random::FromRandom;
+use bth_util_test_helper::run_with_several_seeds;
 
 #[test]
 fn block_metadata() {

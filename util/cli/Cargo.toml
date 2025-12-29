@@ -1,5 +1,5 @@
 [package]
-name = "bt-util-cli"
+name = "bth-util-cli"
 version = "7.1.0"
 authors = ["Botho"]
 edition = "2021"
@@ -8,7 +8,7 @@ readme = "README.md"
 rust-version = { workspace = true }
 
 [dependencies]
-bt-util-build-info = { workspace = true }
+bth-util-build-info = { workspace = true }
 
 clap = { workspace = true, features = ["string"] }
 

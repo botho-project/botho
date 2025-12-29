@@ -3,7 +3,7 @@
 //! Convert to/from external::TxOutConfirmationNumber
 
 use crate::{external, ConversionError};
-use bt_transaction_extra::TxOutConfirmationNumber;
+use bth_transaction_extra::TxOutConfirmationNumber;
 
 /// Convert TxOutConfirmationNumber --> external::TxOutConfirmationNumber.
 impl From<&TxOutConfirmationNumber> for external::TxOutConfirmationNumber {

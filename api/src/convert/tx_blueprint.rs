@@ -1,10 +1,10 @@
 // Copyright (c) 2018-2025 The Botho Foundation
 
-//! Convert to/from bt_transaction_builder::TxBlueprint.
+//! Convert to/from bth_transaction_builder::TxBlueprint.
 
 use crate::{external, ConversionError};
-use bt_transaction_builder::TxBlueprint;
-use bt_transaction_core::{ring_ct::InputRing, tx::TxIn, Amount};
+use bth_transaction_builder::TxBlueprint;
+use bth_transaction_core::{ring_ct::InputRing, tx::TxIn, Amount};
 use std::convert::{TryFrom, TryInto};
 
 impl From<&TxBlueprint> for external::TxBlueprint {
@@ -65,15 +65,15 @@ impl TryFrom<&external::TxBlueprint> for TxBlueprint {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bt_account_keys::AccountKey;
-    use bt_blockchain_types::BlockVersion;
-    use bt_crypto_ring_signature_signer::NoKeysRingSigner;
+    use bth_account_keys::AccountKey;
+    use bth_blockchain_types::BlockVersion;
+    use bth_crypto_ring_signature_signer::NoKeysRingSigner;
     use mc_fog_report_validation_test_utils::MockFogResolver;
-    use bt_transaction_builder::{
+    use bth_transaction_builder::{
         test_utils::get_input_credentials, EmptyMemoBuilder, ReservedSubaddresses,
         SignedContingentInputBuilder, TransactionBuilder,
     };
-    use bt_transaction_core::{
+    use bth_transaction_core::{
         constants::MILLIMOB_TO_PICOMOB, tokens::Mob, Amount, Token, TokenId,
     };
     use rand::{rngs::StdRng, SeedableRng};

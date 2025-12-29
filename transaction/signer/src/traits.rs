@@ -6,13 +6,13 @@
 
 use core::{convert::Infallible, fmt::Debug};
 
-use bt_core::{
+use bth_core::{
     account::{Account, PublicSubaddress, ViewAccount},
     keys::TxOutPublic,
     subaddress::Subaddress,
 };
 
-use bt_crypto_ring_signature::{onetime_keys::recover_onetime_private_key, KeyImage};
+use bth_crypto_ring_signature::{onetime_keys::recover_onetime_private_key, KeyImage};
 
 /// View only account provider
 pub trait ViewAccountProvider {

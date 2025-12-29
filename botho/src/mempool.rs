@@ -1,14 +1,16 @@
 // Copyright (c) 2024 Botho Foundation
 
 //! Transaction mempool for storing pending transactions.
+//!
+//! Handles both simple (visible sender) and private (ring signature) transactions.
+//! For simple transactions, tracks spent UTXOs. For private transactions, tracks
+//! spent key images to prevent double-spending.
 
-use bt_account_keys::PublicAddress;
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, RwLock};
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 use crate::ledger::Ledger;
-use crate::transaction::{Transaction, TxInput, UtxoId};
+use crate::transaction::{Transaction, TxInputs, UtxoId};
 
 /// Maximum transactions in mempool
 const MAX_MEMPOOL_SIZE: usize = 1000;
@@ -40,8 +42,10 @@ impl PendingTx {
 pub struct Mempool {
     /// Pending transactions by hash
     txs: HashMap<[u8; 32], PendingTx>,
-    /// Set of spent UTXOs (to detect double-spends)
+    /// Spent UTXOs in mempool (for simple transactions)
     spent_utxos: HashSet<UtxoId>,
+    /// Spent key images in mempool (for private transactions)
+    spent_key_images: HashSet<[u8; 32]>,
 }
 
 impl Mempool {
@@ -50,6 +54,7 @@ impl Mempool {
         Self {
             txs: HashMap::new(),
             spent_utxos: HashSet::new(),
+            spent_key_images: HashSet::new(),
         }
     }
 
@@ -64,7 +69,6 @@ impl Mempool {
 
         // Check mempool size
         if self.txs.len() >= MAX_MEMPOOL_SIZE {
-            // Evict lowest fee transaction
             self.evict_lowest_fee();
         }
 
@@ -72,8 +76,61 @@ impl Mempool {
         tx.is_valid_structure()
             .map_err(|e| MempoolError::InvalidTransaction(e.to_string()))?;
 
+        // Validate based on input type
+        let input_sum = match &tx.inputs {
+            TxInputs::Simple(inputs) => {
+                self.validate_simple_inputs(inputs, &tx, ledger)?
+            }
+            TxInputs::Ring(ring_inputs) => {
+                self.validate_ring_inputs(ring_inputs, &tx, ledger)?
+            }
+        };
+
+        // Validate outputs + fee <= inputs
+        let output_sum: u64 = tx.outputs.iter().map(|o| o.amount).sum();
+        if output_sum + tx.fee > input_sum {
+            return Err(MempoolError::InsufficientInputs {
+                inputs: input_sum,
+                outputs: output_sum,
+                fee: tx.fee,
+            });
+        }
+
+        // Mark inputs as spent
+        match &tx.inputs {
+            TxInputs::Simple(inputs) => {
+                for input in inputs {
+                    let utxo_id = UtxoId::new(input.tx_hash, input.output_index);
+                    self.spent_utxos.insert(utxo_id);
+                }
+            }
+            TxInputs::Ring(ring_inputs) => {
+                for ring_input in ring_inputs {
+                    self.spent_key_images.insert(ring_input.key_image);
+                }
+            }
+        }
+
+        // Add to mempool
+        let pending = PendingTx::new(tx);
+        self.txs.insert(tx_hash, pending);
+
+        debug!("Added transaction {} to mempool", hex::encode(&tx_hash[0..8]));
+        Ok(tx_hash)
+    }
+
+    /// Validate simple (visible) transaction inputs
+    fn validate_simple_inputs(
+        &self,
+        inputs: &[crate::transaction::TxInput],
+        tx: &Transaction,
+        ledger: &Ledger,
+    ) -> Result<u64, MempoolError> {
+        let signing_hash = tx.signing_hash();
+        let mut input_sum = 0u64;
+
         // Check for double-spends within mempool
-        for input in &tx.inputs {
+        for input in inputs {
             let utxo_id = UtxoId::new(input.tx_hash, input.output_index);
             if self.spent_utxos.contains(&utxo_id) {
                 return Err(MempoolError::DoubleSpend);
@@ -81,13 +138,11 @@ impl Mempool {
         }
 
         // Validate inputs exist in ledger and verify signatures
-        let signing_hash = tx.signing_hash();
-        let mut input_sum = 0u64;
-        for input in &tx.inputs {
+        for input in inputs {
             let utxo_id = UtxoId::new(input.tx_hash, input.output_index);
             match ledger.get_utxo(&utxo_id) {
                 Ok(Some(utxo)) => {
-                    // Verify signature against the UTXO's target_key (one-time public key)
+                    // Verify signature against the UTXO's target_key
                     if !input.verify_signature(&signing_hash, &utxo.output.target_key) {
                         warn!(
                             "Invalid signature for input {}:{}",
@@ -107,37 +162,67 @@ impl Mempool {
             }
         }
 
-        // Validate outputs + fee <= inputs
-        let output_sum: u64 = tx.outputs.iter().map(|o| o.amount).sum();
-        if output_sum + tx.fee > input_sum {
-            return Err(MempoolError::InsufficientInputs {
-                inputs: input_sum,
-                outputs: output_sum,
-                fee: tx.fee,
-            });
+        Ok(input_sum)
+    }
+
+    /// Validate ring signature (private) transaction inputs
+    fn validate_ring_inputs(
+        &self,
+        ring_inputs: &[crate::transaction::RingTxInput],
+        tx: &Transaction,
+        ledger: &Ledger,
+    ) -> Result<u64, MempoolError> {
+        let mut input_sum = 0u64;
+
+        // Check for double-spends via key images (mempool)
+        for ring_input in ring_inputs {
+            if self.spent_key_images.contains(&ring_input.key_image) {
+                return Err(MempoolError::DoubleSpend);
+            }
         }
 
-        // Mark UTXOs as spent
-        for input in &tx.inputs {
-            let utxo_id = UtxoId::new(input.tx_hash, input.output_index);
-            self.spent_utxos.insert(utxo_id);
+        // Check for double-spends via key images (ledger)
+        for ring_input in ring_inputs {
+            if let Ok(Some(_)) = ledger.is_key_image_spent(&ring_input.key_image) {
+                return Err(MempoolError::KeyImageSpent(ring_input.key_image));
+            }
         }
 
-        // Add to mempool
-        let pending = PendingTx::new(tx);
-        self.txs.insert(tx_hash, pending);
+        // Verify ring signatures
+        tx.verify_ring_signatures()
+            .map_err(|e| MempoolError::InvalidSignature)?;
 
-        debug!("Added transaction {} to mempool", hex::encode(&tx_hash[0..8]));
-        Ok(tx_hash)
+        // For ring signatures, we need to verify all ring members are valid UTXOs
+        // and sum amounts (this is a simplification - real RingCT hides amounts)
+        for ring_input in ring_inputs {
+            // In a full implementation, we'd verify each ring member exists
+            // For now, we trust the ring and the signature verification
+            // Amount validation is deferred to block validation
+        }
+
+        // With ring signatures and trivial commitments, we can't know exact
+        // input amounts without revealing which ring member is real.
+        // For now, return 0 and let higher-level validation handle amounts.
+        // TODO: Implement proper balance verification with commitments
+        Ok(u64::MAX) // Allow through, block validation will catch issues
     }
 
     /// Remove a transaction from the mempool
     pub fn remove_tx(&mut self, tx_hash: &[u8; 32]) -> Option<Transaction> {
         if let Some(pending) = self.txs.remove(tx_hash) {
-            // Remove spent UTXOs
-            for input in &pending.tx.inputs {
-                let utxo_id = UtxoId::new(input.tx_hash, input.output_index);
-                self.spent_utxos.remove(&utxo_id);
+            // Remove spent inputs
+            match &pending.tx.inputs {
+                TxInputs::Simple(inputs) => {
+                    for input in inputs {
+                        let utxo_id = UtxoId::new(input.tx_hash, input.output_index);
+                        self.spent_utxos.remove(&utxo_id);
+                    }
+                }
+                TxInputs::Ring(ring_inputs) => {
+                    for ring_input in ring_inputs {
+                        self.spent_key_images.remove(&ring_input.key_image);
+                    }
+                }
             }
             Some(pending.tx)
         } else {
@@ -166,25 +251,32 @@ impl Mempool {
         }
     }
 
-    /// Remove transactions that spend UTXOs that no longer exist
+    /// Remove transactions that are no longer valid
+    ///
+    /// For simple transactions: checks if UTXOs still exist
+    /// For private transactions: checks if key images were spent
     pub fn remove_invalid(&mut self, ledger: &Ledger) {
         let mut to_remove = Vec::new();
 
         for (tx_hash, pending) in &self.txs {
-            for input in &pending.tx.inputs {
-                let utxo_id = UtxoId::new(input.tx_hash, input.output_index);
-                match ledger.get_utxo(&utxo_id) {
-                    Ok(None) => {
-                        // UTXO no longer exists
-                        to_remove.push(*tx_hash);
-                        break;
-                    }
-                    Err(_) => {
-                        to_remove.push(*tx_hash);
-                        break;
-                    }
-                    Ok(Some(_)) => {}
+            let is_invalid = match &pending.tx.inputs {
+                TxInputs::Simple(inputs) => {
+                    // Check if any input UTXO no longer exists
+                    inputs.iter().any(|input| {
+                        let utxo_id = UtxoId::new(input.tx_hash, input.output_index);
+                        matches!(ledger.get_utxo(&utxo_id), Ok(None) | Err(_))
+                    })
                 }
+                TxInputs::Ring(ring_inputs) => {
+                    // Check if any key image was spent in ledger
+                    ring_inputs.iter().any(|ri| {
+                        matches!(ledger.is_key_image_spent(&ri.key_image), Ok(Some(_)))
+                    })
+                }
+            };
+
+            if is_invalid {
+                to_remove.push(*tx_hash);
             }
         }
 
@@ -255,11 +347,11 @@ impl Default for Mempool {
 }
 
 /// Thread-safe mempool wrapper
-pub type SharedMempool = Arc<RwLock<Mempool>>;
+pub type SharedMempool = std::sync::Arc<std::sync::RwLock<Mempool>>;
 
 /// Create a new shared mempool
 pub fn new_shared_mempool() -> SharedMempool {
-    Arc::new(RwLock::new(Mempool::new()))
+    std::sync::Arc::new(std::sync::RwLock::new(Mempool::new()))
 }
 
 /// Mempool errors
@@ -277,6 +369,8 @@ pub enum MempoolError {
     },
     LedgerError(String),
     Full,
+    /// Key image was already spent (ring signature double-spend)
+    KeyImageSpent([u8; 32]),
 }
 
 impl std::fmt::Display for MempoolError {
@@ -292,6 +386,7 @@ impl std::fmt::Display for MempoolError {
             }
             Self::LedgerError(msg) => write!(f, "Ledger error: {}", msg),
             Self::Full => write!(f, "Mempool is full"),
+            Self::KeyImageSpent(ki) => write!(f, "Key image already spent: {}", hex::encode(&ki[0..8])),
         }
     }
 }

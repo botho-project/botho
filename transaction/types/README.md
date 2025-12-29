@@ -1,4 +1,4 @@
-bt-transaction-types
+bth-transaction-types
 ====================
 
 This crate defines several small wrapper types around integers and such according

@@ -5,7 +5,7 @@
 
 use crate::mnemonic_acct::Error as MnemonicAccountError;
 use displaydoc::Display;
-use bt_account_keys::Error as AccountKeyError;
+use bth_account_keys::Error as AccountKeyError;
 use prost::{DecodeError as ProstDecodeError, EncodeError as ProstEncodeError};
 use serde_json::Error as JsonError;
 use std::io::Error as IoError;
@@ -27,8 +27,6 @@ pub enum Error {
     MnemonicAccount(MnemonicAccountError),
     /// The entropy provided was not the correct size for BIP-39
     MnemonicSize,
-    /// Fog details are all or nothing, some were missing
-    MissingFogDetails,
 }
 
 impl From<AccountKeyError> for Error {

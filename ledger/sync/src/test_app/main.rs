@@ -3,14 +3,14 @@
 
 //! Ledger Sync test app
 
-use bt_blockchain_test_utils::get_blocks;
-use bt_blockchain_types::BlockVersion;
-use bt_common::{logger::log, ResponderId};
-use bt_connection::{ConnectionManager, HardcodedCredentialsProvider, ThickClient};
-use bt_consensus_scp::{test_utils::test_node_id, QuorumSet};
-use bt_ledger_db::{Ledger, LedgerDB};
-use bt_ledger_sync::{LedgerSync, LedgerSyncService, PollingNetworkState};
-use bt_util_uri::ConsensusClientUri as ClientUri;
+use bth_blockchain_test_utils::get_blocks;
+use bth_blockchain_types::BlockVersion;
+use bth_common::{logger::log, ResponderId};
+use bth_connection::{ConnectionManager, HardcodedCredentialsProvider, ThickClient};
+use bth_consensus_scp::{test_utils::test_node_id, QuorumSet};
+use bth_ledger_db::{Ledger, LedgerDB};
+use bth_ledger_sync::{LedgerSync, LedgerSyncService, PollingNetworkState};
+use bth_util_uri::ConsensusClientUri as ClientUri;
 use std::{path::PathBuf, str::FromStr};
 use tempfile::TempDir;
 
@@ -48,7 +48,7 @@ fn _make_ledger_long(ledger: &mut LedgerDB) {
 
 fn main() {
     let (logger, _global_logger_guard) =
-        bt_common::logger::create_app_logger(bt_common::logger::o!());
+        bth_common::logger::create_app_logger(bth_common::logger::o!());
     log::info!(logger, "starting, network = {}", NETWORK);
 
     // Get a ledger database to work on.
@@ -127,9 +127,9 @@ fn main() {
 
     /*
     let transactions_fetcher =
-        bt_ledger_sync::ConnectionManagerTransactionsFetcher::new(conn_manager.clone(), logger.clone());
+        bth_ledger_sync::ConnectionManagerTransactionsFetcher::new(conn_manager.clone(), logger.clone());
     */
-    let transactions_fetcher = bt_ledger_sync::ReqwestTransactionsFetcher::new(
+    let transactions_fetcher = bth_ledger_sync::ReqwestTransactionsFetcher::new(
         vec![
             String::from(
                 "https://s3-us-west-1.amazonaws.com/botho.chain/node2.test.botho.com/",

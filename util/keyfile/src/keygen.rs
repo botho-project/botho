@@ -1,16 +1,16 @@
 // Copyright (c) 2018-2022 The Botho Foundation
 
 //! A tool for writing private and public key files to disk,
-//! corresponding to `bt_account_keys::RootIdentity`, and
-//! `bt_account_keys::PublicAddress` respectively.
+//! corresponding to `bth_account_keys::RootIdentity`, and
+//! `bth_account_keys::PublicAddress` respectively.
 
 use crate::{
     error::Error, read_keyfile, read_pubfile, read_root_entropy_keyfile, write_b58pubfile,
     write_keyfile, write_pubfile,
 };
 use bip39::{Language, Mnemonic};
-use bt_account_keys::{AccountKey, PublicAddress, RootIdentity};
-use bt_core::slip10::Slip10KeyGenerator;
+use bth_account_keys::{AccountKey, PublicAddress, RootIdentity};
+use bth_core::slip10::Slip10KeyGenerator;
 use rand_core::{RngCore, SeedableRng};
 use rand_hc::Hc128Rng;
 use std::{
@@ -26,18 +26,9 @@ pub fn write_keyfiles<P: AsRef<Path>>(
     name: &str,
     mnemonic: &Mnemonic,
     account_index: u32,
-    fog_report_url: Option<&str>,
-    fog_report_id: &str,
-    fog_authority_spki: Option<&[u8]>,
 ) -> Result<(), Error> {
     let slip10key = mnemonic.clone().derive_slip10_key(account_index);
-    let acct_key = match (fog_report_url, fog_authority_spki) {
-        (None, None) => AccountKey::from(slip10key),
-        (Some(fog_report_url), Some(fog_authority_spki)) => {
-            AccountKey::from(slip10key).with_fog(fog_report_url, fog_report_id, fog_authority_spki)
-        }
-        _ => return Err(Error::MissingFogDetails),
-    };
+    let acct_key = AccountKey::from(slip10key);
     let addr = acct_key.default_subaddress();
 
     fs::create_dir_all(&path)?;
@@ -46,9 +37,6 @@ pub fn write_keyfiles<P: AsRef<Path>>(
         path.as_ref().join(name).with_extension("json"),
         mnemonic,
         account_index,
-        fog_report_url,
-        fog_report_id,
-        fog_authority_spki,
     )?;
     write_pubfile(path.as_ref().join(name).with_extension("pub"), &addr)?;
     write_b58pubfile(path.as_ref().join(name).with_extension("b58pub"), &addr)?;
@@ -66,9 +54,6 @@ fn keyfile_name(i: usize) -> String {
 pub fn write_default_keyfiles<P: AsRef<Path>>(
     path: P,
     num_accounts: usize,
-    fog_report_url: Option<&str>,
-    fog_report_id: &str,
-    fog_authority_spki: Option<&[u8]>,
     seed: [u8; 32],
 ) -> Result<(), Error> {
     let mut keys_rng = Hc128Rng::from_seed(seed);
@@ -85,9 +70,6 @@ pub fn write_default_keyfiles<P: AsRef<Path>>(
             &keyfile_name(i),
             &mnemonic,
             0,
-            fog_report_url,
-            fog_report_id,
-            fog_authority_spki,
         )?;
     }
     Ok(())
@@ -204,54 +186,15 @@ mod test {
         assert_eq!(entries, entries2);
     }
 
-    /// Test that two runs of default generation come up with the same results
-    /// with fog details.
+    /// Test that two runs of default generation come up with the same results.
     #[test]
-    fn default_generation_roundtrip_with_fog() {
+    fn default_generation_roundtrip() {
         let dir1 = tempfile::tempdir().expect("Could not create temporary dir1");
         let dir2 = tempfile::tempdir().expect("Could not create temporary dir2");
 
-        let pem = pem::parse(bt_crypto_x509_test_vectors::ok_rsa_head())
-            .expect("Could not parse DER bytes from PEM certificate file");
-        let fog_authority_spki = x509_signature::parse_certificate(pem.contents())
-            .expect("Could not parse X509 certificate from DER bytes")
-            .subject_public_key_info()
-            .spki();
-
-        let fqdn = "fog://fog.unittest.com";
-        let fog_report_id = "1";
-        write_default_keyfiles(
-            &dir1,
-            10,
-            Some(fqdn),
-            fog_report_id,
-            Some(fog_authority_spki),
-            DEFAULT_SEED,
-        )
-        .expect("Error writing default keyfiles to dir1");
-        write_default_keyfiles(
-            &dir2,
-            10,
-            Some(fqdn),
-            fog_report_id,
-            Some(fog_authority_spki),
-            DEFAULT_SEED,
-        )
-        .expect("Error writing default keyfiles to dir2");
-        assert_default_pubfiles_eq(&dir1, &dir2);
-        assert_default_mnemonics_eq(&dir1, &dir2);
-    }
-
-    /// Test that two runs of default generation come up with the same results
-    /// without fog.
-    #[test]
-    fn default_generation_no_fog() {
-        let dir1 = tempfile::tempdir().expect("Could not create temporary dir1");
-        let dir2 = tempfile::tempdir().expect("Could not create temporary dir2");
-
-        write_default_keyfiles(&dir1, 10, None, "", None, DEFAULT_SEED)
+        write_default_keyfiles(&dir1, 10, DEFAULT_SEED)
             .expect("Could not write keyfiles to dir1");
-        write_default_keyfiles(&dir2, 10, None, "", None, DEFAULT_SEED)
+        write_default_keyfiles(&dir2, 10, DEFAULT_SEED)
             .expect("Could not write keyfiles to dir2");
 
         assert_default_pubfiles_eq(&dir1, &dir2);
@@ -274,7 +217,7 @@ mod test {
 
         let dir1 = tempfile::tempdir().expect("Could not create temporary dir1");
 
-        write_default_keyfiles(&dir1, 10, None, "", None, DEFAULT_SEED)
+        write_default_keyfiles(&dir1, 10, DEFAULT_SEED)
             .expect("Could not write example keyfiles");
 
         let mut actual =

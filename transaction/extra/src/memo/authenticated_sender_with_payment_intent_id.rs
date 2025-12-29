@@ -12,9 +12,9 @@ use super::{
     RegisteredMemoType,
 };
 use crate::impl_memo_type_conversions;
-use bt_account_keys::{PublicAddress, ShortAddressHash};
-use bt_crypto_keys::{CompressedRistrettoPublic, RistrettoPrivate, RistrettoPublic};
-use bt_transaction_core::NewMemoError;
+use bth_account_keys::{PublicAddress, ShortAddressHash};
+use bth_crypto_keys::{CompressedRistrettoPublic, RistrettoPrivate, RistrettoPublic};
+use bth_transaction_core::NewMemoError;
 use subtle::Choice;
 
 /// A memo that the sender writes to convey their identity in an authenticated

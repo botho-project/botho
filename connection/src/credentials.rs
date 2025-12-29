@@ -4,7 +4,7 @@
 //! GRPC credentials support - Simplified for tonic
 
 use displaydoc::Display;
-use bt_util_uri::ConnectionUri;
+use bth_util_uri::ConnectionUri;
 use std::{
     convert::Infallible,
     fmt::{Debug, Display},

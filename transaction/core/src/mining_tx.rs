@@ -9,8 +9,8 @@
 
 use alloc::vec::Vec;
 use core::fmt;
-use bt_crypto_digestible::Digestible;
-use bt_crypto_keys::{CompressedRistrettoPublic, RistrettoPublic};
+use bth_crypto_digestible::Digestible;
+use bth_crypto_keys::{CompressedRistrettoPublic, RistrettoPublic};
 use prost::Message;
 
 use crate::emission::block_reward;
@@ -291,8 +291,8 @@ impl Default for DifficultyTarget {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bt_account_keys::AccountKey;
-    use bt_util_from_random::FromRandom;
+    use bth_account_keys::AccountKey;
+    use bth_util_from_random::FromRandom;
     use rand::{rngs::StdRng, SeedableRng};
 
     fn test_account() -> AccountKey {

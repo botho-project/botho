@@ -5,7 +5,7 @@ import {
   useCallback,
   type ReactNode,
 } from 'react'
-import type { MiningStats, MiningStatus } from '@botho/core'
+import type { MiningStats } from '@botho/core'
 
 interface MiningContextValue {
   stats: MiningStats

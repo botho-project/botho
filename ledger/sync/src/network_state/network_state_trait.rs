@@ -2,8 +2,8 @@
 
 //! Tracks the state of peers' ledgers.
 
-use bt_blockchain_types::BlockIndex;
-use bt_common::ResponderId;
+use bth_blockchain_types::BlockIndex;
+use bth_common::ResponderId;
 use std::collections::HashSet;
 
 /// An interface for an object that keeps track of the network's status,

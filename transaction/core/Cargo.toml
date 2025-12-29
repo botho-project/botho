@@ -1,5 +1,5 @@
 [package]
-name = "bt-transaction-core"
+name = "bth-transaction-core"
 version = "7.1.0"
 authors = ["Botho"]
 edition = "2021"
@@ -9,7 +9,7 @@ rust-version = { workspace = true }
 
 [features]
 default = []
-pq = ["dep:bt-crypto-pq"]  # Post-quantum transaction types
+pq = ["dep:bth-crypto-pq"]  # Post-quantum transaction types
 
 [dependencies]
 # External dependencies
@@ -32,32 +32,32 @@ subtle = { workspace = true, features = ["i128"] }
 zeroize = { workspace = true }
 
 # Botho dependencies
-bt-account-keys = { workspace = true }
-bt-common = { workspace = true }
-bt-crypto-box = { workspace = true }
-bt-crypto-digestible = { workspace = true, features = ["dalek", "derive"] }
-bt-crypto-hashes = { workspace = true }
-bt-crypto-keys = { workspace = true }
-bt-crypto-multisig = { workspace = true }
-bt-crypto-pq = { workspace = true, optional = true }
-bt-crypto-ring-signature = { workspace = true, features = ["alloc", "serde", "prost"] }
-bt-crypto-ring-signature-signer = { workspace = true, features = ["alloc", "serde"] }
-bt-transaction-types = { workspace = true, features = ["alloc", "serde", "prost"] }
-bt-util-from-random = { workspace = true }
-bt-util-repr-bytes = { workspace = true }
-bt-util-serial = { workspace = true }
-bt-util-u64-ratio = { workspace = true }
-bt-util-zip-exact = { workspace = true, features = ["serde"] }
+bth-account-keys = { workspace = true }
+bth-common = { workspace = true }
+bth-crypto-box = { workspace = true }
+bth-crypto-digestible = { workspace = true, features = ["dalek", "derive"] }
+bth-crypto-hashes = { workspace = true }
+bth-crypto-keys = { workspace = true }
+bth-crypto-multisig = { workspace = true }
+bth-crypto-pq = { workspace = true, optional = true }
+bth-crypto-ring-signature = { workspace = true, features = ["alloc", "serde", "prost"] }
+bth-crypto-ring-signature-signer = { workspace = true, features = ["alloc", "serde"] }
+bth-transaction-types = { workspace = true, features = ["alloc", "serde", "prost"] }
+bth-util-from-random = { workspace = true }
+bth-util-repr-bytes = { workspace = true }
+bth-util-serial = { workspace = true }
+bth-util-u64-ratio = { workspace = true }
+bth-util-zip-exact = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
 assert_matches = { workspace = true }
 
-bt-crypto-digestible-test-utils = { workspace = true }
-bt-crypto-ring-signature = { workspace = true, features = ["proptest"] }
-bt-ledger-db = { workspace = true, features = ["test_utils"] }
-bt-transaction-builder = { workspace = true, features = ["test-only"] }
-bt-transaction-core-test-utils = { workspace = true }
-bt-util-serial = { workspace = true, features = ["std"] }
-bt-util-test-helper = { workspace = true }
+bth-crypto-digestible-test-utils = { workspace = true }
+bth-crypto-ring-signature = { workspace = true, features = ["proptest"] }
+bth-ledger-db = { workspace = true, features = ["test_utils"] }
+bth-transaction-builder = { workspace = true, features = ["test-only"] }
+bth-transaction-core-test-utils = { workspace = true }
+bth-util-serial = { workspace = true, features = ["std"] }
+bth-util-test-helper = { workspace = true }
 proptest = { workspace = true, features = ["default-code-coverage"] }
 rand = { workspace = true }

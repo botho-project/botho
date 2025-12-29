@@ -75,9 +75,9 @@ use crate::domain_separators::HASH_TO_SCALAR_DOMAIN_TAG;
 use curve25519_dalek::{
     constants::RISTRETTO_BASEPOINT_POINT, ristretto::RistrettoPoint, scalar::Scalar,
 };
-use bt_core_types::account::RingCtAddress;
-use bt_crypto_hashes::{Blake2b512, Digest};
-use bt_crypto_keys::{RistrettoPrivate, RistrettoPublic};
+use bth_core_types::account::RingCtAddress;
+use bth_crypto_hashes::{Blake2b512, Digest};
+use bth_crypto_keys::{RistrettoPrivate, RistrettoPublic};
 
 const G: RistrettoPoint = RISTRETTO_BASEPOINT_POINT;
 
@@ -200,9 +200,9 @@ pub fn create_shared_secret(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bt_account_keys::{AccountKey, PublicAddress};
-    use bt_util_from_random::FromRandom;
-    use bt_util_test_helper::run_with_several_seeds;
+    use bth_account_keys::{AccountKey, PublicAddress};
+    use bth_util_from_random::FromRandom;
+    use bth_util_test_helper::run_with_several_seeds;
 
     // Returns (tx_target_key, tx_public_key)
     fn get_output_public_keys(

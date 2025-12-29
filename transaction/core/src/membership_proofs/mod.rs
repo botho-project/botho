@@ -12,7 +12,7 @@ use crate::{
     tx::{TxOut, TxOutMembershipElement, TxOutMembershipHash, TxOutMembershipProof},
 };
 use alloc::vec::Vec;
-use bt_crypto_hashes::{Blake2b256, Digest};
+use bth_crypto_hashes::{Blake2b256, Digest};
 use subtle::{Choice, ConditionallySelectable, ConstantTimeEq};
 
 mod errors;

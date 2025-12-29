@@ -32,7 +32,7 @@ async fn sample_service_method(request: Request<Params>) -> Result<Response<T>, 
 ```
 */
 
-use bt_common::logger::global_log;
+use bth_common::logger::global_log;
 use prometheus::{
     core::{Collector, Desc},
     proto::MetricFamily,

@@ -14,17 +14,16 @@
 
 use alloc::string::String;
 use alloc::vec::Vec;
-use bt_account_keys::{QuantumSafeAccountKey, QuantumSafePublicAddress};
-use bt_crypto_digestible::{DigestTranscript, Digestible, MerlinTranscript};
-use bt_crypto_keys::{CompressedRistrettoPublic, RistrettoPrivate, RistrettoPublic};
-use bt_crypto_pq::{derive_onetime_sig_keypair, MlDsa65KeyPair};
-use bt_transaction_core::{
-    encrypted_fog_hint::EncryptedFogHint,
+use bth_account_keys::{QuantumSafeAccountKey, QuantumSafePublicAddress};
+use bth_crypto_digestible::{DigestTranscript, Digestible, MerlinTranscript};
+use bth_crypto_keys::{CompressedRistrettoPublic, RistrettoPrivate, RistrettoPublic};
+use bth_crypto_pq::{derive_onetime_sig_keypair, MlDsa65KeyPair};
+use bth_transaction_core::{
     quantum_private::{QuantumPrivateTxIn, QuantumPrivateTxOut},
     tx::TxHash,
     Amount, BlockVersion, MaskedAmount,
 };
-use bt_util_from_random::FromRandom;
+use bth_util_from_random::FromRandom;
 use rand_core::{CryptoRng, RngCore};
 
 /// Error type for quantum-private transaction building.
@@ -211,14 +210,14 @@ impl QuantumPrivateTransactionBuilder {
         let recipient_view_key = pending.recipient.classical().view_public_key();
 
         // Create shared secret using ECDH: shared = tx_private_key * view_public_key
-        let shared_secret = bt_transaction_core::onetime_keys::create_shared_secret(
+        let shared_secret = bth_transaction_core::onetime_keys::create_shared_secret(
             recipient_view_key,
             &tx_private_key,
         );
 
         // Create classical one-time target key using stealth address protocol
         // target = Hs(shared) * G + spend_public_key
-        let target_key = bt_transaction_core::onetime_keys::create_tx_out_target_key(
+        let target_key = bth_transaction_core::onetime_keys::create_tx_out_target_key(
             &tx_private_key,
             pending.recipient.classical(),
         );
@@ -234,9 +233,6 @@ impl QuantumPrivateTransactionBuilder {
                 },
             )?;
 
-        // Create fake fog hint (Botho doesn't use fog)
-        let e_fog_hint = EncryptedFogHint::fake_onetime_hint(rng);
-
         // === Post-Quantum Layer ===
 
         // Encapsulate to recipient's ML-KEM public key
@@ -251,7 +247,6 @@ impl QuantumPrivateTransactionBuilder {
             masked_amount,
             CompressedRistrettoPublic::from(&target_key),
             CompressedRistrettoPublic::from(&tx_public_key),
-            e_fog_hint,
             ciphertext,
             pq_target_key,
         ))
@@ -377,7 +372,7 @@ pub fn derive_input_credentials(
     })?;
 
     // Recover one-time private key using the standard CryptoNote protocol
-    let onetime_private_key = bt_transaction_core::onetime_keys::recover_onetime_private_key(
+    let onetime_private_key = bth_transaction_core::onetime_keys::recover_onetime_private_key(
         &tx_public_key,
         account.classical().view_private_key(),
         &account.classical().subaddress_spend_private(0),
@@ -390,7 +385,7 @@ pub fn derive_input_credentials(
         .ok_or(QuantumPrivateTxBuilderError::MissingPqCredentials)?;
 
     // Create shared secret for decryption
-    let shared_secret = bt_transaction_core::onetime_keys::create_shared_secret(
+    let shared_secret = bth_transaction_core::onetime_keys::create_shared_secret(
         &tx_public_key,
         account.classical().view_private_key(),
     );
@@ -412,7 +407,160 @@ pub fn derive_input_credentials(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bt_crypto_pq::MlKem768KeyPair;
+    use bth_crypto_pq::MlKem768KeyPair;
+    use bth_transaction_core::TokenId;
+
+    /// Test successful transaction building.
+    #[test]
+    fn test_builder_success() {
+        let account = create_test_account();
+        let mut builder = QuantumPrivateTransactionBuilder::new(
+            account.clone(),
+            BlockVersion::try_from(3).unwrap(),
+        );
+
+        // Add input with value 1000
+        let mut input = create_test_input_credentials();
+        input.value = 1000;
+        builder.add_input(input);
+
+        // Add output with value 900 (fee = 100)
+        let recipient = account.subaddress(0);
+        builder.add_output(Amount::new(900, TokenId::from(0)), recipient);
+        builder.set_fee(100);
+
+        let result = builder.build(&mut rand::thread_rng());
+        assert!(result.is_ok());
+
+        let (inputs, outputs) = result.unwrap();
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(outputs.len(), 1);
+    }
+
+    /// Test transaction with multiple inputs and outputs.
+    #[test]
+    fn test_builder_multiple_io() {
+        let account = create_test_account();
+        let mut builder = QuantumPrivateTransactionBuilder::new(
+            account.clone(),
+            BlockVersion::try_from(3).unwrap(),
+        );
+
+        // Add two inputs (500 + 600 = 1100)
+        let mut input1 = create_test_input_credentials();
+        input1.value = 500;
+        builder.add_input(input1);
+
+        let mut input2 = create_test_input_credentials();
+        input2.value = 600;
+        builder.add_input(input2);
+
+        // Add three outputs (400 + 300 + 300 = 1000, fee = 100)
+        let recipient = account.subaddress(0);
+        builder.add_output(Amount::new(400, TokenId::from(0)), recipient.clone());
+        builder.add_output(Amount::new(300, TokenId::from(0)), recipient.clone());
+        builder.add_output(Amount::new(300, TokenId::from(0)), recipient);
+        builder.set_fee(100);
+
+        let result = builder.build(&mut rand::thread_rng());
+        assert!(result.is_ok());
+
+        let (inputs, outputs) = result.unwrap();
+        assert_eq!(inputs.len(), 2);
+        assert_eq!(outputs.len(), 3);
+    }
+
+    /// Test that each output has unique PQ data.
+    #[test]
+    fn test_outputs_have_unique_pq_data() {
+        let account = create_test_account();
+        let mut builder = QuantumPrivateTransactionBuilder::new(
+            account.clone(),
+            BlockVersion::try_from(3).unwrap(),
+        );
+
+        let mut input = create_test_input_credentials();
+        input.value = 200;
+        builder.add_input(input);
+
+        let recipient = account.subaddress(0);
+        builder.add_output(Amount::new(100, TokenId::from(0)), recipient.clone());
+        builder.add_output(Amount::new(100, TokenId::from(0)), recipient);
+
+        let (_, outputs) = builder.build(&mut rand::thread_rng()).unwrap();
+
+        // Each output should have a different PQ ciphertext (random encapsulation)
+        let ct1 = outputs[0].get_pq_ciphertext().unwrap();
+        let ct2 = outputs[1].get_pq_ciphertext().unwrap();
+        assert_ne!(ct1.as_bytes(), ct2.as_bytes());
+
+        // Each output should have a different public key
+        assert_ne!(outputs[0].public_key, outputs[1].public_key);
+    }
+
+    /// Test that signatures are valid for each input.
+    #[test]
+    fn test_input_signatures_valid() {
+        let account = create_test_account();
+        let mut builder = QuantumPrivateTransactionBuilder::new(
+            account.clone(),
+            BlockVersion::try_from(3).unwrap(),
+        );
+
+        // Create input with known signing keypair
+        let input = create_test_input_credentials();
+        let pq_public_key = input.pq_signing_keypair.public_key().clone();
+        builder.add_input(input);
+
+        let recipient = account.subaddress(0);
+        builder.add_output(Amount::new(100, TokenId::from(0)), recipient);
+
+        let (inputs, outputs) = builder.build(&mut rand::thread_rng()).unwrap();
+
+        // Verify the PQ signature
+        let message = compute_test_message(&outputs);
+        let pq_sig = inputs[0].get_dilithium_signature().unwrap();
+        assert!(pq_public_key.verify(&message, &pq_sig).is_ok());
+    }
+
+    /// Helper to compute signing message (mirrors builder logic).
+    fn compute_test_message(outputs: &[QuantumPrivateTxOut]) -> [u8; 32] {
+        let mut transcript = MerlinTranscript::new(b"quantum-private-tx");
+        for output in outputs.iter() {
+            output.append_to_transcript(b"output", &mut transcript);
+        }
+        let mut message = [0u8; 32];
+        transcript.extract_digest(&mut message);
+        message
+    }
+
+    /// Test total value calculation.
+    #[test]
+    fn test_total_value_calculation() {
+        let account = create_test_account();
+        let mut builder = QuantumPrivateTransactionBuilder::new(
+            account.clone(),
+            BlockVersion::try_from(3).unwrap(),
+        );
+
+        // Add inputs
+        let mut input1 = create_test_input_credentials();
+        input1.value = 500;
+        builder.add_input(input1);
+
+        let mut input2 = create_test_input_credentials();
+        input2.value = 300;
+        builder.add_input(input2);
+
+        assert_eq!(builder.total_input_value(), 800);
+
+        // Add outputs
+        let recipient = account.subaddress(0);
+        builder.add_output(Amount::new(400, TokenId::from(0)), recipient.clone());
+        builder.add_output(Amount::new(300, TokenId::from(0)), recipient);
+
+        assert_eq!(builder.total_output_value(), 700);
+    }
 
     #[test]
     fn test_builder_no_inputs_error() {
@@ -458,11 +606,8 @@ mod tests {
         builder.add_input(input);
 
         // Add output with value 200 (more than input)
-        let recipient = account.public_address();
-        builder.add_output(
-            Amount::new(200, bt_transaction_core::TokenId::MOB),
-            recipient,
-        );
+        let recipient = account.subaddress(0);
+        builder.add_output(Amount::new(200, TokenId::from(0)), recipient);
 
         let result = builder.build(&mut rand::thread_rng());
         assert!(matches!(
@@ -472,7 +617,9 @@ mod tests {
     }
 
     fn create_test_account() -> QuantumSafeAccountKey {
-        QuantumSafeAccountKey::random(&mut rand::thread_rng())
+        QuantumSafeAccountKey::from_mnemonic(
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        )
     }
 
     fn create_test_input_credentials() -> QuantumPrivateInputCredentials {
@@ -482,20 +629,19 @@ mod tests {
         let shared_secret = RistrettoPublic::from_random(rng);
         let masked_amount = MaskedAmount::new(
             BlockVersion::try_from(3).unwrap(),
-            Amount::new(100, bt_transaction_core::TokenId::MOB),
+            Amount::new(100, TokenId::from(0)),
             &shared_secret.into(),
         )
         .unwrap();
 
-        let kem_keypair = MlKem768KeyPair::generate(rng);
+        let kem_keypair = MlKem768KeyPair::generate();
         let (ciphertext, _) = kem_keypair.public_key().encapsulate();
-        let sig_keypair = bt_crypto_pq::MlDsa65KeyPair::generate(rng);
+        let sig_keypair = bth_crypto_pq::MlDsa65KeyPair::generate();
 
         let output = QuantumPrivateTxOut::new(
             masked_amount,
             CompressedRistrettoPublic::from(&RistrettoPublic::from_random(rng)),
             CompressedRistrettoPublic::from(&RistrettoPublic::from_random(rng)),
-            EncryptedFogHint::fake_onetime_hint(rng),
             ciphertext,
             sig_keypair.public_key().clone(),
         );

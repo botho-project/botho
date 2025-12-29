@@ -1,7 +1,7 @@
-bt-crypto-digestible
+bth-crypto-digestible
 ==========
 
-`bt-crypto-digestible` and its companion crate `bt-crypto-digestible-derive`,
+`bth-crypto-digestible` and its companion crate `bth-crypto-digestible-derive`,
 represent a scheme for secure (nonmalleable) hashing of structured data, using
 protocol transcript objects like Merlin.
 
@@ -14,7 +14,7 @@ This approach is based on two ideas:
   This is the `Digestible` trait provided by this crate.
 - Use code-gen to generate correct implementations of the trait, to reduce the
   amount of manually-written security critical code to a minimum.
-  This is the proc-macro offered by the `bt-crypto-digestible-derive` crate.
+  This is the proc-macro offered by the `bth-crypto-digestible-derive` crate.
 
 Engineering goals:
 - The hash must be stable and canonical, not depending on implementation details
@@ -151,7 +151,7 @@ does as well.
 In fact, there are certain cases when we WANT to be able to use a traditional digest function
 with the `digestible` crate. For instance, if we need to create an ed25519ph signature, then the
 API requires us to provide a SHA512 hasher to which the message has already been marshalled. If you need to do this,
-you can use the `digestible` trait with the `PseudoMerlin` object in `bt-crypto-hashes`. `PseudoMerlin`
+you can use the `digestible` trait with the `PseudoMerlin` object in `bth-crypto-hashes`. `PseudoMerlin`
 carefully emulates the API of merlin for appending bytes, on top of an arbitrary cryptographic hash function.
 If the chosen hash function is strongly collision resistant in the classical sense, then `PseudoMerlin` is suitable
 for use with the `Digestible` crate to create non-malleable hashes.

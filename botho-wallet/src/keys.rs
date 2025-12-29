@@ -5,9 +5,9 @@
 
 use anyhow::{anyhow, Result};
 use bip39::{Language, Mnemonic};
-use bt_account_keys::{AccountKey, PublicAddress};
-use bt_core::slip10::Slip10KeyGenerator;
-use bt_crypto_keys::RistrettoSignature;
+use bth_account_keys::{AccountKey, PublicAddress};
+use bth_core::slip10::Slip10KeyGenerator;
+use bth_crypto_keys::RistrettoSignature;
 
 /// Number of words in the mnemonic phrase
 const MNEMONIC_WORDS: usize = 24;

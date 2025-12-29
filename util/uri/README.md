@@ -1,4 +1,4 @@
-bt-util-uri
+bth-util-uri
 =====
 
 Portable code for handling URI's used in our system.

@@ -6,7 +6,7 @@
 //! is a transaction hash. The externalized set of transaction hashes
 //! becomes the next block.
 
-use bt_crypto_digestible::Digestible;
+use bth_crypto_digestible::Digestible;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fmt;

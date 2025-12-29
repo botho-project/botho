@@ -7,7 +7,7 @@ use crate::{
     slot::{CombineFn, ScpSlot, Slot, SlotMetrics, ValidityFn},
     QuorumSet, ScpNode, SlotIndex, Value,
 };
-use bt_common::{
+use bth_common::{
     logger::{log, Logger},
     HashMap, NodeID,
 };
@@ -315,7 +315,7 @@ mod tests {
     use super::*;
     use crate::{ballot::Ballot, msg::*, slot::MockScpSlot, test_utils::*};
     use maplit::btreeset;
-    use bt_common::logger::test_with_logger;
+    use bth_common::logger::test_with_logger;
     use std::sync::Arc;
 
     fn get_node(

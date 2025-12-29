@@ -1,5 +1,5 @@
 [package]
-name = "bt-util-build-info"
+name = "bth-util-build-info"
 version = "7.1.0"
 authors = ["Botho"]
 build = "build.rs"

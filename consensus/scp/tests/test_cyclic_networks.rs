@@ -2,7 +2,7 @@
 
 mod mock_network;
 
-use bt_common::logger::{test_with_logger, Logger};
+use bth_common::logger::{test_with_logger, Logger};
 use serial_test::serial;
 
 /// Performs a consensus test for a cyclic network of `num_nodes` nodes.

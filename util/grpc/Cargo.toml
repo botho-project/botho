@@ -1,5 +1,5 @@
 [package]
-name = "bt-util-grpc"
+name = "bth-util-grpc"
 version = "7.1.0"
 authors = ["Botho"]
 description = "Runtime gRPC Utilities"
@@ -9,11 +9,11 @@ readme = "README.md"
 rust-version = { workspace = true }
 
 [dependencies]
-bt-common = { workspace = true, features = ["loggers"] }
-bt-util-build-info = { workspace = true }
-bt-util-metrics = { workspace = true, features = ["service_metrics"] }
-bt-util-serial = { workspace = true, features = ["std"] }
-bt-util-uri = { workspace = true }
+bth-common = { workspace = true, features = ["loggers"] }
+bth-util-build-info = { workspace = true }
+bth-util-metrics = { workspace = true, features = ["service_metrics"] }
+bth-util-serial = { workspace = true, features = ["std"] }
+bth-util-uri = { workspace = true }
 
 base64 = { workspace = true }
 clap = { workspace = true, features = ["derive", "env"] }
@@ -36,10 +36,10 @@ subtle = { workspace = true, features = ["i128"] }
 zeroize = { workspace = true }
 
 [build-dependencies]
-bt-util-build-grpc = { workspace = true }
+bth-util-build-grpc = { workspace = true }
 
 [dev-dependencies]
 libc = { workspace = true }
 tempfile = { workspace = true }
 
-bt-crypto-x509-test-vectors = { workspace = true }
+bth-crypto-x509-test-vectors = { workspace = true }

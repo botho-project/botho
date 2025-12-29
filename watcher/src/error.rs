@@ -3,10 +3,10 @@
 //! Error data types
 
 use displaydoc::Display;
-use bt_connection::Error as ConnectionError;
-use bt_crypto_keys::KeyError;
-use bt_ledger_sync::ReqwestTransactionsFetcherError;
-use bt_util_lmdb::MetadataStoreError;
+use bth_connection::Error as ConnectionError;
+use bth_crypto_keys::KeyError;
+use bth_ledger_sync::ReqwestTransactionsFetcherError;
+use bth_util_lmdb::MetadataStoreError;
 use std::string::FromUtf8Error;
 
 /// Watcher Errors

@@ -18,10 +18,10 @@ use curve25519_dalek::{
 };
 use digest::generic_array::typenum::{U32, U64};
 use hex_fmt::HexFmt;
-use bt_crypto_digestible::{Digestible, MerlinTranscript};
-use bt_crypto_digestible_signature::{DigestibleSigner, DigestibleVerifier};
-use bt_util_from_random::FromRandom;
-use bt_util_repr_bytes::{
+use bth_crypto_digestible::{Digestible, MerlinTranscript};
+use bth_crypto_digestible_signature::{DigestibleSigner, DigestibleVerifier};
+use bth_util_from_random::FromRandom;
+use bth_util_repr_bytes::{
     derive_core_cmp_from_as_ref, derive_debug_and_display_hex_from_as_ref,
     derive_repr_bytes_from_as_ref_and_try_from, derive_try_from_slice_from_repr_bytes, ReprBytes,
 };
@@ -36,13 +36,13 @@ use schnorrkel_og::{
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "serde")]
-use bt_util_repr_bytes::derive_serde_from_repr_bytes;
+use bth_util_repr_bytes::derive_serde_from_repr_bytes;
 
 #[cfg(feature = "alloc")]
-use bt_util_repr_bytes::derive_into_vec_from_repr_bytes;
+use bth_util_repr_bytes::derive_into_vec_from_repr_bytes;
 
 #[cfg(feature = "prost")]
-use bt_util_repr_bytes::derive_prost_message_from_repr_bytes;
+use bth_util_repr_bytes::derive_prost_message_from_repr_bytes;
 
 use subtle::{Choice, ConstantTimeEq};
 use zeroize::Zeroize;
@@ -667,7 +667,7 @@ derive_prost_message_from_repr_bytes!(RistrettoSignature);
 
 #[cfg(test)]
 mod test {
-    extern crate bt_util_test_helper;
+    extern crate bth_util_test_helper;
 
     #[cfg(feature = "serde")]
     use super::*;
@@ -676,12 +676,12 @@ mod test {
     #[test]
     #[cfg(feature = "serde")]
     fn test_pubkey_serialize() {
-        bt_util_test_helper::run_with_several_seeds(|mut rng| {
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
             let pubkey = RistrettoPublic::from_random(&mut rng);
             let serialized =
-                bt_util_serial::serialize(&pubkey).expect("Could not serialize pubkey");
+                bth_util_serial::serialize(&pubkey).expect("Could not serialize pubkey");
             let deserialized: RistrettoPublic =
-                bt_util_serial::deserialize(&serialized).expect("Could not deserialize pubkey");
+                bth_util_serial::deserialize(&serialized).expect("Could not deserialize pubkey");
             assert_eq!(deserialized, pubkey);
         });
     }
@@ -690,11 +690,11 @@ mod test {
     #[test]
     #[cfg(feature = "serde")]
     fn test_privkey_serialize() {
-        bt_util_test_helper::run_with_several_seeds(|mut rng| {
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
             let privkey = RistrettoPrivate::from_random(&mut rng);
             let serialized =
-                bt_util_serial::serialize(&privkey).expect("Could not serialize private key.");
-            let deserialized: RistrettoPrivate = bt_util_serial::deserialize(&serialized)
+                bth_util_serial::serialize(&privkey).expect("Could not serialize private key.");
+            let deserialized: RistrettoPrivate = bth_util_serial::deserialize(&serialized)
                 .expect("Could not deserialize private key");
             let pubkey = RistrettoPublic::from(&privkey);
             let deserialized_pubkey = RistrettoPublic::from(&deserialized);

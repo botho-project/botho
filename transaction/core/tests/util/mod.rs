@@ -4,18 +4,18 @@
 // code. https://github.com/rust-lang/rust/issues/46379
 #![allow(dead_code)]
 
-use bt_account_keys::PublicAddress;
-use bt_ledger_db::{
+use bth_account_keys::PublicAddress;
+use bth_ledger_db::{
     test_utils::{
         create_ledger, create_transaction, create_transaction_with_amount_and_comparer,
         create_transaction_with_amount_and_comparer_and_recipients, initialize_ledger,
     },
     Ledger, LedgerDB,
 };
-use bt_transaction_builder::{DefaultTxOutputsOrdering, TxOutputsOrdering};
-use bt_transaction_core::{tx::Tx, BlockVersion};
-use bt_transaction_core_test_utils::AccountKey;
-use bt_util_test_helper::{RngType, SeedableRng};
+use bth_transaction_builder::{DefaultTxOutputsOrdering, TxOutputsOrdering};
+use bth_transaction_core::{tx::Tx, BlockVersion};
+use bth_transaction_core_test_utils::AccountKey;
+use bth_util_test_helper::{RngType, SeedableRng};
 
 pub fn create_test_tx(block_version: BlockVersion) -> (Tx, LedgerDB) {
     let mut rng: RngType = SeedableRng::from_seed([1u8; 32]);

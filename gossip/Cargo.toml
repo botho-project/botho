@@ -1,5 +1,5 @@
 [package]
-name = "bt-gossip"
+name = "bth-gossip"
 version = "0.1.0"
 authors = ["Botho Foundation"]
 edition = "2021"
@@ -9,12 +9,12 @@ description = "Gossip-based peer discovery and topology sharing for Botho"
 
 [dependencies]
 # Workspace dependencies
-bt-common = { workspace = true, features = ["std"] }
-bt-consensus-scp-types = { workspace = true }
-bt-crypto-keys = { workspace = true }
-bt-crypto-digestible = { workspace = true }
-bt-util-serial = { workspace = true }
-bt-util-uri = { workspace = true }
+bth-common = { workspace = true, features = ["std"] }
+bth-consensus-scp-types = { workspace = true }
+bth-crypto-keys = { workspace = true }
+bth-crypto-digestible = { workspace = true }
+bth-util-serial = { workspace = true }
+bth-util-uri = { workspace = true }
 
 # External dependencies
 bitflags = { workspace = true, features = ["serde"] }

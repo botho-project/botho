@@ -1,7 +1,7 @@
 // Copyright (c) 2024 Botho Foundation
 
 use anyhow::{Context, Result};
-use bt_account_keys::PublicAddress;
+use bth_account_keys::PublicAddress;
 use std::fs;
 use std::path::Path;
 
@@ -111,7 +111,7 @@ pub fn run(config_path: &Path, address_str: &str, amount_str: &str) -> Result<()
     }
     println!();
     println!("Transaction hash: {}", hex::encode(&tx_hash[0..16]));
-    println!("Inputs: {}", tx.inputs.len());
+    println!("Inputs: {}", inputs.len());
     println!("Outputs: {}", tx.outputs.len());
 
     // Save transaction to pending file
@@ -209,9 +209,9 @@ fn parse_address(s: &str) -> Result<PublicAddress> {
     }
 
     // Create PublicAddress from the keys
-    let view_key = bt_crypto_keys::RistrettoPublic::try_from(&view_bytes[..])
+    let view_key = bth_crypto_keys::RistrettoPublic::try_from(&view_bytes[..])
         .map_err(|e| anyhow::anyhow!("Invalid view key: {}", e))?;
-    let spend_key = bt_crypto_keys::RistrettoPublic::try_from(&spend_bytes[..])
+    let spend_key = bth_crypto_keys::RistrettoPublic::try_from(&spend_bytes[..])
         .map_err(|e| anyhow::anyhow!("Invalid spend key: {}", e))?;
 
     Ok(PublicAddress::new(&spend_key, &view_key))

@@ -18,7 +18,7 @@ There are two environment variables that affect the exporting of traces:
 
 The first step is to ensure that the binary you are running is export traces. This is usually done in the `main()` function:
 ```
-    let _tracer = bt_util_telemetry::setup_default_tracer(env!("CARGO_PKG_NAME"))
+    let _tracer = bth_util_telemetry::setup_default_tracer(env!("CARGO_PKG_NAME"))
         .expect("Failed setting telemetry tracer");
 ```
 

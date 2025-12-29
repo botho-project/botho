@@ -1,5 +1,5 @@
 [package]
-name = "bt-util-logger-macros"
+name = "bth-util-logger-macros"
 version = "7.1.0"
 authors = ["Botho"]
 edition = "2021"

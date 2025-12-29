@@ -3,7 +3,7 @@
 //! Convert to/from external::RistrettoPrivate
 
 use crate::{external, ConversionError};
-use bt_crypto_keys::RistrettoPrivate;
+use bth_crypto_keys::RistrettoPrivate;
 
 /// Convert RistrettoPrivate --> external::RistrettoPrivate
 impl From<&RistrettoPrivate> for external::RistrettoPrivate {

@@ -1,7 +1,7 @@
 // Copyright (c) 2018-2022 The Botho Foundation
 
 use crate::{msg::Msg, slot::SlotMetrics, QuorumSet, SlotIndex, Value};
-use bt_common::NodeID;
+use bth_common::NodeID;
 use mockall::*;
 use std::collections::BTreeSet;
 

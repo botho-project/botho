@@ -3,8 +3,8 @@
 //! Convert to/from external::TxOut
 
 use crate::{external, ConversionError};
-use bt_crypto_keys::{CompressedRistrettoPublic, RistrettoPublic};
-use bt_transaction_core::{encrypted_fog_hint::EncryptedFogHint, tx, EncryptedMemo, MaskedAmount};
+use bth_crypto_keys::{CompressedRistrettoPublic, RistrettoPublic};
+use bth_transaction_core::{tx, EncryptedMemo, MaskedAmount};
 
 /// Convert tx::TxOut --> external::TxOut.
 impl From<&tx::TxOut> for external::TxOut {
@@ -12,9 +12,6 @@ impl From<&tx::TxOut> for external::TxOut {
         Self {
             target_key: Some((&source.target_key).into()),
             public_key: Some((&source.public_key).into()),
-            e_fog_hint: Some(external::EncryptedFogHint {
-                data: source.e_fog_hint.as_ref().to_vec(),
-            }),
             e_memo: source.e_memo.as_ref().map(|m| external::EncryptedMemo {
                 data: AsRef::<[u8]>::as_ref(m).to_vec(),
             }),
@@ -58,15 +55,7 @@ impl TryFrom<&external::TxOut> for tx::TxOut {
         .map_err(|_| ConversionError::KeyCastError)?
         .into();
 
-        let e_fog_hint = EncryptedFogHint::try_from(
-            source
-                .e_fog_hint
-                .as_ref()
-                .unwrap_or(&Default::default())
-                .data
-                .as_slice(),
-        )
-        .map_err(|_| ConversionError::ArrayCastError)?;
+        // Note: e_fog_hint is ignored - fog support removed
 
         let e_memo = source
             .e_memo
@@ -87,7 +76,6 @@ impl TryFrom<&external::TxOut> for tx::TxOut {
             masked_amount,
             target_key,
             public_key,
-            e_fog_hint,
             e_memo,
             cluster_tags,
             committed_cluster_tags: source.committed_cluster_tags.clone(),
@@ -99,9 +87,9 @@ impl TryFrom<&external::TxOut> for tx::TxOut {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bt_crypto_keys::RistrettoPrivate;
-    use bt_transaction_core::{tokens::Mob, Amount, BlockVersion, PublicAddress, Token};
-    use bt_util_from_random::FromRandom;
+    use bth_crypto_keys::RistrettoPrivate;
+    use bth_transaction_core::{tokens::Mob, Amount, BlockVersion, PublicAddress, Token};
+    use bth_util_from_random::FromRandom;
     use rand::{rngs::StdRng, SeedableRng};
 
     #[test]
@@ -118,7 +106,6 @@ mod tests {
             amount,
             &PublicAddress::from_random(&mut rng),
             &RistrettoPrivate::from_random(&mut rng),
-            Default::default(),
         )
         .unwrap();
 
@@ -142,7 +129,6 @@ mod tests {
             amount,
             &PublicAddress::from_random(&mut rng),
             &RistrettoPrivate::from_random(&mut rng),
-            Default::default(),
         )
         .unwrap();
 
@@ -152,7 +138,6 @@ mod tests {
         assert_eq!(source.masked_amount, recovered_tx_out.masked_amount);
         assert_eq!(source.target_key, recovered_tx_out.target_key);
         assert_eq!(source.public_key, recovered_tx_out.public_key);
-        assert_eq!(source.e_fog_hint, recovered_tx_out.e_fog_hint);
         assert_eq!(source.e_memo, recovered_tx_out.e_memo);
     }
 }

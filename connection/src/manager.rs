@@ -3,11 +3,11 @@
 //! Common connection manager implementation
 
 use crate::{sync::SyncConnection, traits::Connection};
-use bt_common::{
+use bth_common::{
     logger::{o, Logger},
     ResponderId,
 };
-use bt_util_uri::ConnectionUri;
+use bth_util_uri::ConnectionUri;
 use std::{
     collections::BTreeMap,
     sync::{Arc, RwLock, RwLockReadGuard},

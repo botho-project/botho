@@ -1,5 +1,5 @@
 [package]
-name = "bt-util-u64-ratio"
+name = "bth-util-u64-ratio"
 version = "7.1.0"
 authors = ["Botho"]
 description = "A helper for computing with ratios of u64 numbers"

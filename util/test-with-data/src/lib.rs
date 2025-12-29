@@ -20,7 +20,7 @@ use syn::{Expr, ItemFn};
 ///
 /// Here's a very simple example:
 /// ```rust
-/// # use bt_util_test_with_data::test_with_data;
+/// # use bth_util_test_with_data::test_with_data;
 ///
 /// #[test_with_data([1, 2, 3])]
 /// fn silly(x: i32) {

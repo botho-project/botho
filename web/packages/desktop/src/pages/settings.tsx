@@ -2,7 +2,6 @@ import { Layout } from '../components/layout'
 import { Card, CardHeader, CardTitle, CardContent, Button, Input } from '@botho/ui'
 import { useState } from 'react'
 import {
-  Settings,
   Server,
   Cpu,
   Shield,

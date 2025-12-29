@@ -3,8 +3,8 @@
 //! A simple generator cache
 
 use alloc::collections::BTreeMap;
-use bt_crypto_ring_signature::{generators, PedersenGens};
-use bt_transaction_types::TokenId;
+use bth_crypto_ring_signature::{generators, PedersenGens};
+use bth_transaction_types::TokenId;
 
 /// GeneratorCache is a simple object which caches computations of
 /// generator: TokenId -> PedersenGens

@@ -8,13 +8,13 @@
 
 extern crate alloc;
 
-#[cfg(feature = "bt-account-keys")]
+#[cfg(feature = "bth-account-keys")]
 mod data;
 mod error;
 mod report;
 mod verifier;
 
-#[cfg(feature = "bt-account-keys")]
+#[cfg(feature = "bth-account-keys")]
 pub use data::{verify_tx_summary, TxOutSummaryUnblindingData, TxSummaryUnblindingData};
 
 pub use error::Error;

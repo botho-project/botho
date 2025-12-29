@@ -1,3 +1,3 @@
-## bt-connection
+## bth-connection
 
 Attested Botho connections.

@@ -3,10 +3,7 @@
 //! Convert to/from external:MintTx/MintTxPrefix.
 
 use crate::{external, ConversionError};
-use bt_transaction_core::{
-    encrypted_fog_hint::EncryptedFogHint,
-    mint::{MintTx, MintTxPrefix},
-};
+use bth_transaction_core::mint::{MintTx, MintTxPrefix};
 
 /// Convert MintTxPrefix --> external::MintTxPrefix.
 impl From<&MintTxPrefix> for external::MintTxPrefix {
@@ -18,12 +15,6 @@ impl From<&MintTxPrefix> for external::MintTxPrefix {
             spend_public_key: Some((&src.spend_public_key).into()),
             nonce: src.nonce.clone(),
             tombstone_block: src.tombstone_block,
-            e_fog_hint: src
-                .e_fog_hint
-                .as_ref()
-                .map(|hint| external::EncryptedFogHint {
-                    data: hint.as_ref().to_vec(),
-                }),
         }
     }
 }
@@ -43,14 +34,7 @@ impl TryFrom<&external::MintTxPrefix> for MintTxPrefix {
             .as_ref()
             .unwrap_or(&Default::default())
             .try_into()?;
-        let e_fog_hint = source
-            .e_fog_hint
-            .as_ref()
-            .map(|hint| {
-                EncryptedFogHint::try_from(hint.data.as_slice())
-                    .map_err(|_| ConversionError::ArrayCastError)
-            })
-            .transpose()?;
+        // Note: e_fog_hint is ignored - fog support removed
 
         Ok(Self {
             token_id: source.token_id,
@@ -59,7 +43,6 @@ impl TryFrom<&external::MintTxPrefix> for MintTxPrefix {
             spend_public_key,
             nonce: source.nonce.clone(),
             tombstone_block: source.tombstone_block,
-            e_fog_hint,
         })
     }
 }
@@ -98,9 +81,9 @@ impl TryFrom<&external::MintTx> for MintTx {
 mod tests {
     use super::*;
     use crate::convert::ed25519_multisig::tests::test_multi_sig;
-    use bt_crypto_keys::RistrettoPublic;
-    use bt_util_from_random::FromRandom;
-    use bt_util_serial::{decode, encode};
+    use bth_crypto_keys::RistrettoPublic;
+    use bth_util_from_random::FromRandom;
+    use bth_util_serial::{decode, encode};
     use prost::Message;
     use rand_core::{RngCore, SeedableRng};
     use rand_hc::Hc128Rng;
@@ -119,7 +102,6 @@ mod tests {
                 spend_public_key: RistrettoPublic::from_random(&mut rng),
                 nonce: vec![3u8; 32],
                 tombstone_block: rng.next_u64(),
-                e_fog_hint: Some(EncryptedFogHint::fake_onetime_hint(&mut rng)),
             },
             signature: test_multi_sig(),
         };
@@ -131,8 +113,8 @@ mod tests {
             assert_eq!(source, recovered);
         }
 
-        // Converting bt_transaction_core::mint::MintTx -> external::MintTx ->
-        // bt_transaction_core::mint::MintTx should be the identity function.
+        // Converting bth_transaction_core::mint::MintTx -> external::MintTx ->
+        // bth_transaction_core::mint::MintTx should be the identity function.
         {
             let external = external::MintTx::from(&source);
             let recovered = MintTx::try_from(&external).unwrap();

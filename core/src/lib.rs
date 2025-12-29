@@ -9,7 +9,7 @@
 #![deny(unsafe_code)]
 
 // Re-export shared type modules
-pub use bt_core_types::{account, keys};
+pub use bth_core_types::{account, keys};
 
 pub mod consts;
 

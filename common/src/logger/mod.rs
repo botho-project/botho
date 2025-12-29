@@ -60,7 +60,7 @@ cfg_if::cfg_if! {
         /// Simple time measurement utility, based on the [measure_time](https://docs.rs/measure_time/) crate.
         ///
         /// Note that even though the macro lives inside the `logger` module, it needs to be imported by
-        /// `use bt_common::trace_time`, since Rust exports all macros at the crate level :/
+        /// `use bth_common::trace_time`, since Rust exports all macros at the crate level :/
         #[macro_export]
         macro_rules! trace_time {
             ($logger:expr, $($arg:tt)+) => (

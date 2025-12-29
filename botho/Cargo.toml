@@ -27,19 +27,19 @@ toml = "0.8"
 dirs = "5"
 
 # Crypto & Keys
-bt-account-keys = { path = "../account-keys" }
-bt-crypto-keys = { path = "../crypto/keys" }
-bt-crypto-ring-signature = { path = "../crypto/ring-signature" }
-bt-core = { path = "../core" }
-bt-util-from-random = { path = "../util/from-random" }
+bth-account-keys = { path = "../account-keys" }
+bth-crypto-keys = { path = "../crypto/keys" }
+bth-crypto-ring-signature = { path = "../crypto/ring-signature" }
+bth-core = { path = "../core" }
+bth-util-from-random = { path = "../util/from-random" }
 rand_core = "0.6"
 
 # Networking & Consensus
-bt-gossip = { path = "../gossip" }
-bt-common = { path = "../common", features = ["std"] }
-bt-consensus-scp = { path = "../consensus/scp", features = ["test_utils"] }
-bt-consensus-scp-types = { path = "../consensus/scp/types", features = ["test_utils"] }
-bt-crypto-digestible = { path = "../crypto/digestible" }
+bth-gossip = { path = "../gossip" }
+bth-common = { path = "../common", features = ["std"] }
+bth-consensus-scp = { path = "../consensus/scp", features = ["test_utils"] }
+bth-consensus-scp-types = { path = "../consensus/scp/types", features = ["test_utils"] }
+bth-crypto-digestible = { path = "../crypto/digestible" }
 libp2p = { version = "0.54", features = ["tokio"] }
 futures = "0.3"
 bip39 = { package = "tiny-bip39", version = "1" }

@@ -10,10 +10,10 @@
 //! the actual signatures. This enum makes it convenient to do this.
 
 use crate::InputCredentials;
-use bt_crypto_keys::CompressedRistrettoPublic;
-use bt_transaction_core::{ring_ct::InputRing, tx::TxIn, Amount, TxOutConversionError};
-use bt_transaction_extra::SignedContingentInput;
-use bt_transaction_types::ClusterTagVector;
+use bth_crypto_keys::CompressedRistrettoPublic;
+use bth_transaction_core::{ring_ct::InputRing, tx::TxIn, Amount, TxOutConversionError};
+use bth_transaction_extra::SignedContingentInput;
+use bth_transaction_types::ClusterTagVector;
 
 /// Material that can be used by the transaction builder to create an input to
 /// a transaction.

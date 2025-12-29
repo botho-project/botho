@@ -7,9 +7,9 @@
 use super::ReservedSubaddresses;
 use alloc::boxed::Box;
 use core::fmt::Debug;
-use bt_account_keys::PublicAddress;
-use bt_transaction_core::{Amount, MemoContext, MemoPayload, NewMemoError};
-use bt_transaction_extra::UnusedMemo;
+use bth_account_keys::PublicAddress;
+use bth_transaction_core::{Amount, MemoContext, MemoPayload, NewMemoError};
+use bth_transaction_extra::UnusedMemo;
 
 mod burn_redemption_memo_builder;
 mod defragmentation_memo_builder;

@@ -1,7 +1,7 @@
-use bt_account_keys::PublicAddress;
-use bt_crypto_keys::RistrettoPrivate;
-use bt_crypto_ring_signature::onetime_keys::{create_tx_out_public_key, create_tx_out_target_key};
-use bt_util_from_random::FromRandom;
+use bth_account_keys::PublicAddress;
+use bth_crypto_keys::RistrettoPrivate;
+use bth_crypto_ring_signature::onetime_keys::{create_tx_out_public_key, create_tx_out_target_key};
+use bth_util_from_random::FromRandom;
 use rand_core::OsRng;
 use sha2::{Digest, Sha256};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};

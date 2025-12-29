@@ -3,9 +3,9 @@
 use crate::traits::Error;
 
 use super::{OneTimeKeyDeriveData, RingSigner, SignableInputRing};
-use bt_account_keys::AccountKey;
-use bt_crypto_keys::RistrettoPublic;
-use bt_crypto_ring_signature::{
+use bth_account_keys::AccountKey;
+use bth_crypto_keys::RistrettoPublic;
+use bth_crypto_ring_signature::{
     generators, onetime_keys::recover_onetime_private_key, RingMLSAG, Scalar,
 };
 use rand_core::CryptoRngCore;

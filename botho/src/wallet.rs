@@ -1,11 +1,11 @@
 use anyhow::Result;
 use bip39::{Language, Mnemonic};
-use bt_account_keys::{AccountKey, PublicAddress};
-use bt_core::slip10::Slip10KeyGenerator;
-use bt_crypto_keys::RistrettoSignature;
+use bth_account_keys::{AccountKey, PublicAddress};
+use bth_core::slip10::Slip10KeyGenerator;
+use bth_crypto_keys::RistrettoSignature;
 
 use crate::ledger::Ledger;
-use crate::transaction::{Transaction, UtxoId};
+use crate::transaction::{Transaction, TxInputs, UtxoId};
 
 /// Wallet manages a single account derived from a BIP39 mnemonic
 pub struct Wallet {
@@ -53,13 +53,26 @@ impl Wallet {
     /// 3. Recovers the one-time private key for signing
     /// 4. Signs with the one-time private key (not the wallet's main spend key)
     ///
+    /// Note: This method only signs Simple inputs. Ring inputs use MLSAG
+    /// signatures which are created during transaction construction.
+    ///
     /// Returns an error if:
     /// - A referenced UTXO doesn't exist
     /// - The wallet doesn't own the UTXO (stealth detection fails)
+    /// - The transaction uses Ring inputs (not supported by this method)
     pub fn sign_transaction(&self, tx: &mut Transaction, ledger: &Ledger) -> Result<()> {
         let signing_hash = tx.signing_hash();
 
-        for input in &mut tx.inputs {
+        let inputs = match &mut tx.inputs {
+            TxInputs::Simple(inputs) => inputs,
+            TxInputs::Ring(_) => {
+                return Err(anyhow::anyhow!(
+                    "Ring signature transactions must be signed during construction"
+                ));
+            }
+        };
+
+        for input in inputs {
             // Look up the UTXO being spent
             let utxo_id = UtxoId::new(input.tx_hash, input.output_index);
             let utxo = ledger

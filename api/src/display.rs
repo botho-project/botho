@@ -76,11 +76,11 @@ mod display_tests {
         external,
         printable::{printable_wrapper, PaymentRequest, PrintableWrapper, TransferPayload},
     };
-    use bt_test_vectors_b58_encodings::{
+    use bth_test_vectors_b58_encodings::{
         B58EncodePublicAddressWithFog, B58EncodePublicAddressWithoutFog,
     };
-    use bt_util_test_vector::TestVector;
-    use bt_util_test_with_data::test_with_data;
+    use bth_util_test_vector::TestVector;
+    use bth_util_test_with_data::test_with_data;
 
     fn sample_public_address() -> external::PublicAddress {
         external::PublicAddress {
@@ -90,7 +90,7 @@ mod display_tests {
             spend_public_key: Some(external::CompressedRistretto {
                 data: vec![1u8; 32],
             }),
-            fog_report_url: "mob://fog.example.com".to_string(),
+            fog_report_url: "botho://fog.example.com".to_string(),
             ..Default::default()
         }
     }

@@ -5,7 +5,7 @@
 
 use displaydoc::Display;
 use grpcio::{CertificateRequestType, ServerCredentialsBuilder, ServerCredentialsFetcher};
-use bt_common::logger::{log, Logger};
+use bth_common::logger::{log, Logger};
 use signal_hook::{consts::SIGHUP, flag};
 use std::{
     fs, io,
@@ -147,9 +147,9 @@ mod tests {
         ChannelBuilder, ChannelCredentialsBuilder, EnvBuilder, Server, ServerBuilder,
         ServerCredentials,
     };
-    use bt_common::logger::test_with_logger;
-    use bt_crypto_x509_test_vectors::{ok_self_signed_1, ok_self_signed_2};
-    use bt_util_uri::ConsensusClientUri;
+    use bth_common::logger::test_with_logger;
+    use bth_crypto_x509_test_vectors::{ok_self_signed_1, ok_self_signed_2};
+    use bth_util_uri::ConsensusClientUri;
     use std::{str::FromStr, thread, time::Duration};
 
     fn create_test_server(

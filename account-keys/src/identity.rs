@@ -10,19 +10,18 @@
 //! AccountKey derived this way can be represented with a smaller amount of
 //! information.
 //!
-//! The other (fog-related) fields of RootIdentity are analogous to AccountKey.
+//! RootIdentity is used for account key derivation.
 
 use crate::AccountKey;
-use alloc::{borrow::ToOwned, string::String, vec::Vec};
 use core::hash::Hash;
 use curve25519_dalek::scalar::Scalar;
 use hkdf::SimpleHkdf;
-use bt_crypto_hashes::Blake2b256;
-use bt_crypto_keys::RistrettoPrivate;
-use bt_util_from_random::FromRandom;
+use bth_crypto_hashes::Blake2b256;
+use bth_crypto_keys::RistrettoPrivate;
+use bth_util_from_random::FromRandom;
 #[cfg(feature = "prost")]
-use bt_util_repr_bytes::derive_prost_message_from_repr_bytes;
-use bt_util_repr_bytes::{
+use bth_util_repr_bytes::derive_prost_message_from_repr_bytes;
+use bth_util_repr_bytes::{
     derive_debug_and_display_hex_from_as_ref, derive_repr_bytes_from_as_ref_and_try_from,
     typenum::U32, LengthMismatch,
 };
@@ -85,59 +84,26 @@ derive_debug_and_display_hex_from_as_ref!(RootEntropy);
 #[cfg(feature = "prost")]
 derive_prost_message_from_repr_bytes!(RootEntropy);
 
-/// A RootIdentity contains 32 bytes of root entropy (for deriving private keys
-/// using a KDF), together with any fog data for the account.
+/// A RootIdentity contains 32 bytes of root entropy for deriving private keys
+/// using a KDF.
 #[derive(Clone, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "prost", derive(Message))]
 pub struct RootIdentity {
     /// Root entropy used to derive a user's private keys.
     #[cfg_attr(feature = "prost", prost(message, required, tag = 1))]
     pub root_entropy: RootEntropy,
-    /// Fog report url
-    #[cfg_attr(feature = "prost", prost(string, tag = 2))]
-    pub fog_report_url: String,
-    /// Fog report id
-    #[cfg_attr(feature = "prost", prost(string, tag = 3))]
-    pub fog_report_id: String,
-    /// Fog authority subjectPublicKeyInfo
-    #[cfg_attr(feature = "prost", prost(bytes, tag = 4))]
-    pub fog_authority_spki: Vec<u8>,
 }
 
-impl RootIdentity {
-    /// Generate a random root identity with a specific fog_report_url
-    /// configured
-    pub fn random_with_fog<T: RngCore + CryptoRng>(
-        rng: &mut T,
-        fog_report_url: &str,
-        fog_report_id: &str,
-        fog_authority_spki: &[u8],
-    ) -> Self {
-        let mut result = Self::from_random(rng);
-
-        if !fog_report_url.is_empty() {
-            fog_report_url.clone_into(&mut result.fog_report_url);
-            fog_report_id.clone_into(&mut result.fog_report_id);
-            fog_authority_spki.clone_into(&mut result.fog_authority_spki);
-        }
-
-        result
-    }
-}
-
-// Make RootIdentity from RootEntropy by defaulting all fog-related fields.
+// Make RootIdentity from RootEntropy.
 impl From<&RootEntropy> for RootIdentity {
     fn from(src: &RootEntropy) -> Self {
         Self {
             root_entropy: src.clone(),
-            fog_report_url: Default::default(),
-            fog_report_id: Default::default(),
-            fog_authority_spki: Default::default(),
         }
     }
 }
 
-/// Generate a random root identity without fog configured
+/// Generate a random root identity
 impl FromRandom for RootIdentity {
     fn from_random<T: RngCore + CryptoRng>(rng: &mut T) -> Self {
         Self::from(&RootEntropy::from_random(rng))
@@ -155,17 +121,11 @@ impl From<&RootIdentity> for AccountKey {
             src.root_entropy.as_ref(),
             b"view",
         ));
-        AccountKey::new_with_fog(
-            &spend_private_key,
-            &view_private_key,
-            src.fog_report_url.clone(),
-            src.fog_report_id.clone(),
-            src.fog_authority_spki.clone(),
-        )
+        AccountKey::new(&spend_private_key, &view_private_key)
     }
 }
 
-/// Construct fogless RootIdentity from [u8;32]
+/// Construct RootIdentity from [u8;32]
 impl From<&[u8; 32]> for RootIdentity {
     fn from(src: &[u8; 32]) -> Self {
         Self::from(&RootEntropy::from(src))
@@ -192,23 +152,17 @@ fn root_identity_hkdf_helper(ikm: &[u8], info: &[u8]) -> Scalar {
 #[cfg(test)]
 mod testing {
     use super::*;
-    use bt_test_vectors_account_keys::AcctPrivKeysFromRootEntropy;
-    use bt_util_test_vector::TestVector;
-    use bt_util_test_with_data::test_with_data;
+    use bth_test_vectors_account_keys::AcctPrivKeysFromRootEntropy;
+    use bth_util_test_vector::TestVector;
+    use bth_util_test_with_data::test_with_data;
 
     // Protobuf deserialization should recover a serialized RootIdentity.
     #[test]
     fn prost_roundtrip_root_identity() {
-        bt_util_test_helper::run_with_several_seeds(|mut rng| {
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
             let root_id = RootIdentity::from_random(&mut rng);
-            let ser = bt_util_serial::encode(&root_id);
-            let result: RootIdentity = bt_util_serial::decode(&ser).unwrap();
-            assert_eq!(root_id, result);
-
-            let root_id =
-                RootIdentity::random_with_fog(&mut rng, "fog://example.com", "1", &[7u8, 7u8]);
-            let ser = bt_util_serial::encode(&root_id);
-            let result: RootIdentity = bt_util_serial::decode(&ser).unwrap();
+            let ser = bth_util_serial::encode(&root_id);
+            let result: RootIdentity = bth_util_serial::decode(&ser).unwrap();
             assert_eq!(root_id, result);
         })
     }

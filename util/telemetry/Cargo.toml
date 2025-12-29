@@ -1,5 +1,5 @@
 [package]
-name = "bt-util-telemetry"
+name = "bth-util-telemetry"
 version = "7.1.0"
 authors = ["Botho"]
 edition = "2021"

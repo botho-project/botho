@@ -1,10 +1,10 @@
 // Copyright (c) 2018-2022 The Botho Foundation
 
 use bip39::{Language, Mnemonic};
-use bt_account_keys::{AccountKey, RootIdentity};
-use bt_core::slip10::Slip10KeyGenerator;
-use bt_test_vectors_definitions::account_keys::*;
-use bt_util_test_vector::write_jsonl;
+use bth_account_keys::{AccountKey, RootIdentity};
+use bth_core::slip10::Slip10KeyGenerator;
+use bth_test_vectors_definitions::account_keys::*;
+use bth_util_test_vector::write_jsonl;
 
 fn main() {
     write_jsonl("../vectors", || {

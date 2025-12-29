@@ -10,21 +10,21 @@ use tonic::metadata::MetadataValue;
 use tonic::transport::Channel;
     AuthRequestOutput, ClientInitiate, Start, Transition, UnverifiedAttestationEvidence,
 };
-use bt_common::{
+use bth_common::{
     logger::{log, Logger},
     time::SystemTimeProvider,
     trace_time, HashMap,
 };
-use bt_connection::{
+use bth_connection::{
     AnyCredentialsProvider, CredentialsProvider, HardcodedCredentialsProvider,
     TokenBasicCredentialsProvider,
 };
-use bt_crypto_keys::{Ed25519Public, X25519};
-use bt_crypto_noise::HandshakeNX;
+use bth_crypto_keys::{Ed25519Public, X25519};
+use bth_crypto_noise::HandshakeNX;
 use mc_rand::McRng;
-use bt_util_grpc::{ConnectionUriGrpcioChannel, TokenBasicCredentialsGenerator};
-use bt_util_repr_bytes::ReprBytes;
-use bt_util_uri::{ConnectionUri, ConsensusClientUri};
+use bth_util_grpc::{ConnectionUriGrpcioChannel, TokenBasicCredentialsGenerator};
+use bth_util_repr_bytes::ReprBytes;
+use bth_util_uri::{ConnectionUri, ConsensusClientUri};
 use sha2::Sha512;
 use std::{
     marker::PhantomData,
@@ -446,10 +446,10 @@ mod tests {
     use super::*;
     use crate::watcher_db::tests::{setup_blocks, setup_watcher_db};
     use mc_attest_core::VerificationSignature;
-    use bt_blockchain_types::BlockSignature;
-    use bt_common::logger::test_with_logger;
-    use bt_crypto_digestible::{Digestible, MerlinTranscript};
-    use bt_crypto_keys::{Ed25519Pair, Ed25519Private};
+    use bth_blockchain_types::BlockSignature;
+    use bth_common::logger::test_with_logger;
+    use bth_crypto_digestible::{Digestible, MerlinTranscript};
+    use bth_crypto_keys::{Ed25519Pair, Ed25519Private};
     use serial_test::serial;
     use std::{str::FromStr, sync::Mutex, thread::sleep};
 
