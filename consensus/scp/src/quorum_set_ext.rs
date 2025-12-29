@@ -109,6 +109,7 @@ impl<ID: GenericNodeId> QuorumSetExt<ID> for QuorumSet<ID> {
 }
 
 /// Internal helper method, implementing the logic for finding a quorum.
+/// Uses mutable HashSet with backtracking to avoid O(2^n) clones.
 ///
 /// # Arguments
 /// * `threshold` - How many more nodes do we need to reach a quorum.
@@ -117,23 +118,26 @@ impl<ID: GenericNodeId> QuorumSetExt<ID> for QuorumSet<ID> {
 /// * `msgs` - A map of ID -> Msg holding the newest message received from each
 ///   node.
 /// * `pred` - Predicate to apply to the messages.
-/// * `node_so_far` - Nodes we have collected so far in our quest for finding a
-///   quorum.
-fn findQuorumHelper<ID: GenericNodeId, V: Value, P: Predicate<V, ID>>(
+/// * `nodes_so_far` - Mutable set of nodes collected so far (modified in place).
+///
+/// # Returns
+/// * `Some(pred)` if a quorum was found (nodes_so_far contains the quorum nodes)
+/// * `None` if no quorum was found (nodes_so_far is restored to original state)
+fn findQuorumHelperMut<ID: GenericNodeId, V: Value, P: Predicate<V, ID>>(
     threshold: u32,
     members: &[QuorumSetMemberWrapper<ID>],
     msgs: &HashMap<ID, Msg<V, ID>>,
     pred: P,
-    nodes_so_far: HashSet<ID>,
-) -> (HashSet<ID>, P) {
+    nodes_so_far: &mut HashSet<ID>,
+) -> Option<P> {
     // If we don't need any more nodes, we're done.
     if threshold == 0 {
-        return (nodes_so_far, pred);
+        return Some(pred);
     }
 
     // If we need more nodes/sets than we have, we will never find a match.
     if threshold as usize > members.len() {
-        return (HashSet::default(), pred);
+        return None;
     }
 
     // See if the first member of our potential nodes/sets allows us to reach
@@ -143,59 +147,95 @@ fn findQuorumHelper<ID: GenericNodeId, V: Value, P: Predicate<V, ID>>(
             // If we already seen this node and it got added to the list of potential
             // quorum-forming nodes, we need one less node to reach quorum.
             if nodes_so_far.contains(N) {
-                return findQuorumHelper(threshold - 1, &members[1..], msgs, pred, nodes_so_far);
+                return findQuorumHelperMut(threshold - 1, &members[1..], msgs, pred, nodes_so_far);
             }
 
             // If we have received a message from node N
             if let Some(msg) = msgs.get(N) {
                 // and if the predicate accepts it
                 if let Some(nextPred) = pred.test(msg) {
-                    // then add this node into the list of potentoal quorum-forming nodes, and
-                    // see if we can find a quorum that satisfies its validators.
-                    let mut nodes_so_far_with_N = nodes_so_far.clone();
-                    nodes_so_far_with_N.insert(N.clone());
+                    // then add this node into the list of potential quorum-forming nodes
+                    let was_new = nodes_so_far.insert(N.clone());
 
-                    let (nodes_so_far2, pred2) = findQuorumHelper(
+                    // see if we can find a quorum that satisfies its validators.
+                    if let Some(pred2) = findQuorumHelperMut(
                         msg.quorum_set.threshold,
                         &msg.quorum_set.members,
                         msgs,
                         nextPred,
-                        nodes_so_far_with_N,
-                    );
-                    if !nodes_so_far2.is_empty() {
+                        nodes_so_far,
+                    ) {
                         // We can find a quorum for the node's validators, so consider it a
                         // good potential fit and keep searching for `threshold - 1` nodes.
-                        return findQuorumHelper(
+                        if let Some(final_pred) = findQuorumHelperMut(
                             threshold - 1,
                             &members[1..],
                             msgs,
                             pred2,
-                            nodes_so_far2,
-                        );
+                            nodes_so_far,
+                        ) {
+                            return Some(final_pred);
+                        }
+                    }
+
+                    // Backtrack: remove the node we added if this path failed
+                    if was_new {
+                        nodes_so_far.remove(N);
                     }
                 }
             }
         }
         Some(QuorumSetMember::InnerSet(Q)) => {
-            // See if we can find quorum for the inner set.
-            let (nodes_so_far2, pred2) = findQuorumHelper(
+            // For inner sets, we need to snapshot and restore since we can't easily
+            // track which specific nodes were added by the recursive call.
+            let snapshot = nodes_so_far.clone();
+
+            if let Some(pred2) = findQuorumHelperMut(
                 Q.threshold,
                 &Q.members,
                 msgs,
                 pred.clone(),
-                nodes_so_far.clone(),
-            );
-            if !nodes_so_far2.is_empty() {
+                nodes_so_far,
+            ) {
                 // We found a quorum for the inner set, we need 1 validator less.
-                return findQuorumHelper(threshold - 1, &members[1..], msgs, pred2, nodes_so_far2);
+                if let Some(final_pred) = findQuorumHelperMut(
+                    threshold - 1,
+                    &members[1..],
+                    msgs,
+                    pred2,
+                    nodes_so_far,
+                ) {
+                    return Some(final_pred);
+                }
             }
+
+            // Restore from snapshot if this path failed
+            *nodes_so_far = snapshot;
+            // Fall through to try next member
         }
         None => {}
     }
 
     // First member didn't get us to a quorum, move to the next member and try
     // again.
-    findQuorumHelper(threshold, &members[1..], msgs, pred, nodes_so_far)
+    findQuorumHelperMut(threshold, &members[1..], msgs, pred, nodes_so_far)
+}
+
+/// Wrapper function that maintains the original API while using the optimized
+/// mutable helper internally.
+fn findQuorumHelper<ID: GenericNodeId, V: Value, P: Predicate<V, ID>>(
+    threshold: u32,
+    members: &[QuorumSetMemberWrapper<ID>],
+    msgs: &HashMap<ID, Msg<V, ID>>,
+    pred: P,
+    nodes_so_far: HashSet<ID>,
+) -> (HashSet<ID>, P) {
+    let mut nodes = nodes_so_far;
+    if let Some(final_pred) = findQuorumHelperMut(threshold, members, msgs, pred.clone(), &mut nodes) {
+        (nodes, final_pred)
+    } else {
+        (HashSet::default(), pred)
+    }
 }
 
 /// Internal helper method, implementing the logic for finding a blocking

@@ -6,6 +6,9 @@
 mod error;
 mod validate;
 
+#[cfg(feature = "pq")]
+mod quantum_private_validate;
+
 pub use self::{
     error::{TransactionValidationError, TransactionValidationResult},
     validate::{
@@ -19,4 +22,12 @@ pub use self::{
         validate_that_no_masked_token_id_exists, validate_that_no_memo_exists, validate_tombstone,
         validate_transaction_fee, validate_tx_out, ClusterWealthLookup, ProgressiveFeeConfig,
     },
+};
+
+#[cfg(feature = "pq")]
+pub use self::quantum_private_validate::{
+    validate_quantum_private_inputs, validate_quantum_private_outputs,
+    validate_quantum_private_tx_in_structure, validate_quantum_private_tx_out,
+    verify_all_quantum_private_signatures, verify_quantum_private_signatures,
+    QuantumPrivateOutputLookup,
 };

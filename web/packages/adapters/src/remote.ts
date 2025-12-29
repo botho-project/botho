@@ -134,7 +134,7 @@ export class RemoteNodeAdapter implements NodeAdapter {
 
     const response = await this.fetchApi(`/api/blocks?${params}`)
     const data = await response.json()
-    return data.blocks.map((b: unknown) => this.parseBlock(b))
+    return data.blocks.map((b: unknown) => this.parseBlock(b as Record<string, unknown>))
   }
 
   // =========================================================================
@@ -166,7 +166,7 @@ export class RemoteNodeAdapter implements NodeAdapter {
       body: JSON.stringify({ addresses }),
     })
     const data = await response.json()
-    return data.transactions.map((t: unknown) => this.parseTransaction(t))
+    return data.transactions.map((t: unknown) => this.parseTransaction(t as Record<string, unknown>))
   }
 
   async getTransaction(txHash: TxHash): Promise<Transaction | null> {
@@ -188,7 +188,7 @@ export class RemoteNodeAdapter implements NodeAdapter {
       const response = await this.fetchApi('/api/transactions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/octet-stream' },
-        body: signedTx,
+        body: signedTx as unknown as BodyInit,
       })
       const data = await response.json()
       return {

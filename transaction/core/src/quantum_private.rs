@@ -369,11 +369,15 @@ mod tests {
     fn test_size_comparison() {
         use size_comparison::*;
 
-        // Quantum-private outputs are ~16x larger
-        assert!(OUTPUT_OVERHEAD > 15.0);
-        assert!(OUTPUT_OVERHEAD < 20.0);
+        // Quantum-private outputs are ~43x larger
+        // (72 classical + 1088 ML-KEM ciphertext + 1952 ML-DSA public key = 3112 bytes)
+        // vs 72 bytes for classical
+        assert!(OUTPUT_OVERHEAD > 40.0);
+        assert!(OUTPUT_OVERHEAD < 50.0);
 
         // Quantum-private inputs are ~34x larger
+        // (36 reference + 64 Schnorr + 3309 Dilithium = 3409 bytes)
+        // vs 100 bytes for classical
         assert!(INPUT_OVERHEAD > 30.0);
         assert!(INPUT_OVERHEAD < 40.0);
     }

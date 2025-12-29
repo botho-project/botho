@@ -518,14 +518,10 @@ fn run_node(
     let mut current_slot: SlotIndex = 0;
     let mut slot_started = false;
 
-    // Use a short timeout for blocking receive - balances responsiveness with CPU efficiency
-    let recv_timeout = Duration::from_micros(100);
-
     loop {
-        // Drain all available messages first (non-blocking batch receive)
-        let mut received_any = true;
-        while received_any {
-            received_any = false;
+        // Drain all available messages in a batch (more efficient than one-by-one)
+        let mut processed = 0;
+        loop {
             match receiver.try_recv() {
                 Ok(NodeMessage::Value(v)) => {
                     pending_values.push(v);
@@ -538,17 +534,17 @@ fn run_node(
                             .or_insert_with(Instant::now);
                         slot_started = true;
                     }
-                    received_any = true;
+                    processed += 1;
                 }
                 Ok(NodeMessage::ScpMsg(msg)) => {
                     metrics.record_msg_received();
                     if let Ok(Some(out_msg)) = scp_node.handle_message(&msg) {
                         broadcast_msg(&nodes_map, &peers, out_msg, &metrics);
                     }
-                    received_any = true;
+                    processed += 1;
                 }
                 Ok(NodeMessage::Stop) => return,
-                Err(crossbeam_channel::TryRecvError::Empty) => {}
+                Err(crossbeam_channel::TryRecvError::Empty) => break,
                 Err(crossbeam_channel::TryRecvError::Disconnected) => return,
             }
         }
@@ -601,31 +597,9 @@ fn run_node(
             slot_started = false;
         }
 
-        // Block briefly waiting for next message instead of busy-spinning
-        // This significantly reduces CPU usage when idle
-        match receiver.recv_timeout(recv_timeout) {
-            Ok(NodeMessage::Value(v)) => {
-                pending_values.push(v);
-                if !slot_started {
-                    slot_start_times
-                        .lock()
-                        .unwrap()
-                        .entry(current_slot)
-                        .or_insert_with(Instant::now);
-                    slot_started = true;
-                }
-            }
-            Ok(NodeMessage::ScpMsg(msg)) => {
-                metrics.record_msg_received();
-                if let Ok(Some(out_msg)) = scp_node.handle_message(&msg) {
-                    broadcast_msg(&nodes_map, &peers, out_msg, &metrics);
-                }
-            }
-            Ok(NodeMessage::Stop) => return,
-            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
-                // Timeout is fine - just loop back to process timeouts
-            }
-            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => return,
+        // Yield if no messages were processed (reduces CPU spinning)
+        if processed == 0 {
+            thread::yield_now();
         }
     }
 }
