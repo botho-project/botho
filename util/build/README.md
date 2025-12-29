@@ -1,3 +1,3 @@
-## mc-util-build
+## bt-util-build
 
 Tools for building and signing enclaves.

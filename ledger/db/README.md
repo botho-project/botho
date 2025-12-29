@@ -1,4 +1,4 @@
-# mc-ledger-db
+# bt-ledger-db
 
 Persistent storage for the blockchain.
 

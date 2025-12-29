@@ -1,4 +1,4 @@
-mc-account-keys
+bt-account-keys
 ===============
 
 This crate defines structures that represent the private keys to a Botho account,

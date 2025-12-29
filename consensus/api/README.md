@@ -1,4 +1,4 @@
-# mc-consensus-api
+# bt-consensus-api
 
 gRPC API for client-to-node and node-to-node requests.
 

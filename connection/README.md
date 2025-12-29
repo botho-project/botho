@@ -1,3 +1,3 @@
-## mc-connection
+## bt-connection
 
 Attested Botho connections.

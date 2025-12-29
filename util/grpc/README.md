@@ -1,4 +1,4 @@
-mc-util-grpc
+bt-util-grpc
 =========
 
 Common utilities in connection to grpc, especially for converting error types

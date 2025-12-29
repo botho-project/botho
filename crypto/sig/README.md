@@ -1,4 +1,4 @@
-mc-crypto-sig
+bt-crypto-sig
 =============
 
 This crate provides digital signatures using the Ristretto elliptic curve points

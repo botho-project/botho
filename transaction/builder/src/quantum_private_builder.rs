@@ -311,7 +311,6 @@ impl QuantumPrivateTransactionBuilder {
         message: &[u8; 32],
         rng: &mut RNG,
     ) -> Result<[u8; 64], QuantumPrivateTxBuilderError> {
-        use bt_crypto_digestible::{DigestTranscript, Digestible, MerlinTranscript};
         use curve25519_dalek::{constants::RISTRETTO_BASEPOINT_POINT, scalar::Scalar};
 
         // Generate random nonce k
@@ -331,7 +330,7 @@ impl QuantumPrivateTransactionBuilder {
         let mut transcript = MerlinTranscript::new(b"quantum-private-schnorr");
         r_bytes.append_to_transcript(b"R", &mut transcript);
         pk_bytes.as_slice().append_to_transcript(b"P", &mut transcript);
-        message.append_to_transcript(b"msg", &mut transcript);
+        message.as_slice().append_to_transcript(b"msg", &mut transcript);
 
         let mut c_bytes = [0u8; 32];
         transcript.extract_digest(&mut c_bytes);

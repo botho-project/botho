@@ -1,4 +1,4 @@
-mc-transaction-types
+bt-transaction-types
 ====================
 
 This crate defines several small wrapper types around integers and such according

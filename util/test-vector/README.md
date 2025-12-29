@@ -1,4 +1,4 @@
-mc-util-test-vector
+bt-util-test-vector
 ===========
 
 Code to help facilitate generating and using test vectors.
@@ -90,9 +90,9 @@ The test function should have only 1 parameter. That parameter should be of the 
 <details><summary>Example</summary>
 
 ```Rust
-use mc_test_vectors_account_keys::AcctPrivKeysFromRootEntropy;
-use mc_util_test_vector::TestVector;
-use mc_util_test_with_data::test_with_data;
+use bt_test_vectors_account_keys::AcctPrivKeysFromRootEntropy;
+use bt_util_test_vector::TestVector;
+use bt_util_test_with_data::test_with_data;
 
 #[test]
 #[test_with_data(AcctPrivKeysFromRootEntropy::from_jsonl("../test-vectors/vectors"))]

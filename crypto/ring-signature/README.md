@@ -1,4 +1,4 @@
-mc-crypto-ring-signature
+bt-crypto-ring-signature
 ========================
 
 This crate implements a few fundamental parts of Botho transactions:
@@ -10,7 +10,7 @@ This crate implements a few fundamental parts of Botho transactions:
   of only one of these, but the signature does not reveal which one it is. This signature
   confers spend authority for a value in the blockchain. However, there may be many of these in a
   single Botho transaction. The entire assembly is defined in the `ring_ct` module in
-  `mc-transaction-core`.
+  `bt-transaction-core`.
 * Definitions for "one-time keys" and their connection to transaction outputs and subaddresses.
 
 This crate implicitly defines relationships between a bunch of key components:
@@ -20,5 +20,5 @@ This crate implicitly defines relationships between a bunch of key components:
 * Subaddreses and Ring signatures
 
 However, most things having to do with the TxOut Public key and the TxOut shared secret
-live in the `mc-transaction-core` crate, one level higher. Most of the actual blockchain
-data structures are defined in `mc-blockchain-types`.
+live in the `bt-transaction-core` crate, one level higher. Most of the actual blockchain
+data structures are defined in `bt-blockchain-types`.

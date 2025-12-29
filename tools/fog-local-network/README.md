@@ -23,7 +23,7 @@ In order to use it, the following steps are necessary.
 
 2) Generating a set of sample keys:
     ```
-    cargo run -p mc-util-keyfile --bin sample-keys --release -- --num 1000
+    cargo run -p bt-util-keyfile --bin sample-keys --release -- --num 1000
     ```
 
     Some important things to note:
@@ -33,7 +33,7 @@ In order to use it, the following steps are necessary.
 
 3) Bootstrap a ledger:
     ```
-    cargo run -p mc-util-generate-sample-ledger --release -- --txs 100
+    cargo run -p bt-util-generate-sample-ledger --release -- --txs 100
     ```
 
 4) Start postgresql service:
@@ -65,11 +65,11 @@ In order to use it, the following steps are necessary.
     # Create a set of target keys. They would be identical to the first N keys inside `keys/`. This is needed if you don't
     # want to send to transactions to all 1000 keys created at step 1.
     # Notice the addition of the --output-dir argument
-    cargo run -p mc-util-keyfile --bin sample-keys --release -- \
+    cargo run -p bt-util-keyfile --bin sample-keys --release -- \
         --num 10 \
         --output-dir fog_keys \
         --fog-report-url 'insecure-fog://localhost:6200' \
-        --fog-authority-root $(${CARGO_TARGET_DIR:-target}/release/mc-crypto-x509-test-vectors --type=chain --test-name=ok_rsa_head)
+        --fog-authority-root $(${CARGO_TARGET_DIR:-target}/release/bt-crypto-x509-test-vectors --type=chain --test-name=ok_rsa_head)
 
     # Run the distribution script. This takes awhile and you should see transactions going through by looking at the logs.
     SGX_MODE=SW MC_LOG=debug \
@@ -77,7 +77,7 @@ In order to use it, the following steps are necessary.
     LEDGER_ENCLAVE_PRIVKEY=$(pwd)/../Enclave_private.pem \
     VIEW_ENCLAVE_PRIVKEY=$(pwd)/../Enclave_private.pem \
     CONSENSUS_ENCLAVE_PRIVKEY=$(pwd)/../Enclave_private.pem \
-        cargo run -p mc-fog-distribution --release -- \
+        cargo run -p bt-fog-distribution --release -- \
         --sample-data-dir . \
         --peer insecure-mc://localhost:3200/ \
         --peer insecure-mc://localhost:3201/ \
@@ -96,7 +96,7 @@ In order to use it, the following steps are necessary.
     LEDGER_ENCLAVE_PRIVKEY=$(pwd)/../Enclave_private.pem \
     VIEW_ENCLAVE_PRIVKEY=$(pwd)/../Enclave_private.pem \
     CONSENSUS_ENCLAVE_PRIVKEY=$(pwd)/../Enclave_private.pem \
-        cargo run -p mc-fog-test-client -- \
+        cargo run -p bt-fog-test-client -- \
         --consensus insecure-mc://localhost:3200/ \
         --consensus insecure-mc://localhost:3201/ \
         --consensus insecure-mc://localhost:3202/ \

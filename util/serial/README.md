@@ -1,4 +1,4 @@
-mc-util-serial
+bt-util-serial
 ========
 
 One way to easily pass Rust data structures to and from the Enclave is to use a

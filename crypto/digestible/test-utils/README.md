@@ -1,7 +1,7 @@
-mc-crypto-digestible-test-utils
+bt-crypto-digestible-test-utils
 ==========
 
-`mc-crypto-digest-test-utils` includes two implementations of `DigestTranscript`
+`bt-crypto-digest-test-utils` includes two implementations of `DigestTranscript`
 that can be used to verify that `digestible-derive` is generating the right code.
 
 `MockMerlin` can be used to capture the sequence of `append_bytes` calls when

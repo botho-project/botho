@@ -1,4 +1,4 @@
-mc-util-u64-ratio
+bt-util-u64-ratio
 =================
 
 This crate provides a type `U64Ratio` which represents a ratio of two `u64`

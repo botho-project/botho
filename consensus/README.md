@@ -1,3 +1,3 @@
-## mc-consensus
+## bt-consensus
 
 Byzantine Fault Tolerant Consensus.

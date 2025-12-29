@@ -1,4 +1,4 @@
-mc-util-cli
+bt-util-cli
 ========
 
 Command line interface (CLI) utilities.
