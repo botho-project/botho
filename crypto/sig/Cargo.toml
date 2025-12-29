@@ -1,13 +1,13 @@
 [package]
-name = "mc-crypto-sig"
+name = "bt-crypto-sig"
 version = "7.1.0"
-authors = ["MobileCoin"]
+authors = ["Botho"]
 edition = "2021"
 license = "Apache-2.0"
 rust-version = { workspace = true }
 
 [dependencies]
-mc-crypto-keys = { workspace = true }
+bt-crypto-keys = { workspace = true }
 
 merlin = { workspace = true }
 rand_core = { workspace = true }
@@ -15,5 +15,5 @@ rand_hc = { workspace = true }
 schnorrkel-og = { workspace = true }
 
 [dev-dependencies]
-mc-util-from-random = { workspace = true }
-mc-util-test-helper = { workspace = true }
+bt-util-from-random = { workspace = true }
+bt-util-test-helper = { workspace = true }

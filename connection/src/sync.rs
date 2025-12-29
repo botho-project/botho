@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! A synchronous connection wrapper around an inner (thread-unsafe) connection
 
@@ -9,9 +9,9 @@ use crate::{
         RetryableUserTxConnection, UserTxConnection,
     },
 };
-use mc_blockchain_types::{Block, BlockID, BlockIndex};
-use mc_common::logger::Logger;
-use mc_transaction_core::tx::Tx;
+use bt_blockchain_types::{Block, BlockID, BlockIndex};
+use bt_common::logger::Logger;
+use bt_transaction_core::tx::Tx;
 use std::{
     cmp::Ordering,
     fmt::{Display, Formatter, Result as FmtResult},

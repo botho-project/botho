@@ -1,15 +1,15 @@
-// Copyright (c) 2018-2023 The MobileCoin Foundation
+// Copyright (c) 2018-2023 The Botho Foundation
 
 use alloc::vec::Vec;
 
 use super::{Error, TxSummaryUnblindingReport};
 use crate::{report::TransactionReport, TxSummaryStreamingVerifierCtx};
-use mc_account_keys::PublicAddress;
-use mc_core::account::{PublicSubaddress, RingCtAddress, ShortAddressHash};
-use mc_crypto_digestible::Digestible;
-use mc_crypto_keys::RistrettoPrivate;
-use mc_transaction_types::{Amount, TxSummary, UnmaskedAmount};
-use mc_util_zip_exact::zip_exact;
+use bt_account_keys::PublicAddress;
+use bt_core::account::{PublicSubaddress, RingCtAddress, ShortAddressHash};
+use bt_crypto_digestible::Digestible;
+use bt_crypto_keys::RistrettoPrivate;
+use bt_transaction_types::{Amount, TxSummary, UnmaskedAmount};
+use bt_util_zip_exact::zip_exact;
 #[cfg(feature = "prost")]
 use prost::Message;
 #[cfg(feature = "serde")]

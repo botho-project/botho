@@ -1,11 +1,12 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
+// Copyright (c) 2024 Botho Foundation
 #![deny(missing_docs)]
 #![doc = include_str!("../../README.md")]
 
 //! A standalone watcher program that can sync data from multiple sources.
 
 use displaydoc::Display;
-use mc_watcher::{
+use bt_watcher::{
     attestation_evidence_collector::AttestationEvidenceCollector,
     config::WatcherConfig,
     watcher::{SyncResult, Watcher},
@@ -13,24 +14,24 @@ use mc_watcher::{
 };
 
 use clap::Parser;
-use futures::executor::block_on;
-use grpcio::{EnvBuilder, ServerBuilder};
-use mc_common::logger::{create_app_logger, log, o, Logger};
-use mc_util_grpc::{ConnectionUriGrpcioServer, HealthCheckStatus, HealthService};
-use mc_util_uri::ConnectionUri;
+use bt_common::logger::{create_app_logger, log, o, Logger};
+use bt_util_grpc_tonic::{HealthCheckStatus, HealthService};
+use bt_util_uri::ConnectionUri;
 use std::{
     io::Error as IOError,
+    net::SocketAddr,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
     thread::{sleep, Builder as ThreadBuilder, JoinHandle},
 };
+use tonic::transport::Server;
 
 fn main() {
-    let _sentry_guard = mc_common::sentry::init();
+    let _sentry_guard = bt_common::sentry::init();
     let (logger, _global_logger_guard) = create_app_logger(o!());
-    mc_common::setup_panic_handler();
+    bt_common::setup_panic_handler();
 
     let config = WatcherConfig::parse();
     let sources_config = config.sources_config();
@@ -55,40 +56,45 @@ fn main() {
     let mut sync_thread = WatcherSyncThread::start(watcher, config.clone(), logger.clone())
         .expect("Failed starting watcher sync thread.");
 
-    // Start gRPC server.
+    // Start gRPC server using tonic.
     let health_check_callback: Arc<dyn Fn(&str) -> HealthCheckStatus + Sync + Send> =
         Arc::new(move |_| HealthCheckStatus::Serving);
-    let health_service =
-        HealthService::new(Some(health_check_callback), logger.clone()).into_service();
+    let health_service = HealthService::new(Some(health_check_callback), logger.clone());
 
-    let env = Arc::new(
-        EnvBuilder::new()
-            .name_prefix("User-RPC".to_string())
-            .build(),
-    );
+    // Parse the listen address from the URI
+    let addr: SocketAddr = config
+        .client_listen_uri
+        .addr()
+        .parse()
+        .expect("Could not parse listen address");
 
-    let server_builder = ServerBuilder::new(env).register_service(health_service);
+    log::info!(logger, "gRPC API listening on {}", addr);
 
-    let mut server = server_builder
-        .build_using_uri(&config.client_listen_uri, logger.clone())
-        .expect("Could not build server for client listen URI");
-    server.start();
+    // Run the tonic server in a separate runtime
+    let server_logger = logger.clone();
+    let server_handle = std::thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+        rt.block_on(async {
+            if let Err(e) = Server::builder()
+                .add_service(health_service.into_service())
+                .serve(addr)
+                .await
+            {
+                log::error!(server_logger, "gRPC server error: {}", e);
+            }
+        });
+    });
 
-    log::info!(
-        logger,
-        "gRPC API listening on {}",
-        config.client_listen_uri.addr()
-    );
-
-    // Wait forever for sync thread to exit. If it ever exits, shut down the gRPC
-    // server.
+    // Wait forever for sync thread to exit.
     sync_thread
         .join_handle
         .take()
         .expect("No join handle for watcher sync thread")
         .join()
         .expect("Failed waiting for watcher sync thread");
-    block_on(server.shutdown()).expect("Could not shut down gRPC server.")
+
+    // Server thread will be terminated when main exits
+    drop(server_handle);
 }
 
 /// Possible errors.

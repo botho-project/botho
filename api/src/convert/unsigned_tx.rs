@@ -1,12 +1,12 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
-//! Convert to/from mc_transaction_extra::UnsignedTx.
+//! Convert to/from bt_transaction_extra::UnsignedTx.
 
 use crate::{external, ConversionError};
-use mc_blockchain_types::BlockVersion;
-use mc_transaction_core::UnmaskedAmount;
-use mc_transaction_extra::UnsignedTx;
-use mc_transaction_summary::TxOutSummaryUnblindingData;
+use bt_blockchain_types::BlockVersion;
+use bt_transaction_core::UnmaskedAmount;
+use bt_transaction_extra::UnsignedTx;
+use bt_transaction_summary::TxOutSummaryUnblindingData;
 
 impl From<&UnsignedTx> for external::UnsignedTx {
     fn from(source: &UnsignedTx) -> Self {
@@ -109,16 +109,16 @@ impl TryFrom<&external::UnmaskedAmount> for UnmaskedAmount {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mc_account_keys::AccountKey;
+    use bt_account_keys::AccountKey;
     use mc_fog_report_validation_test_utils::MockFogResolver;
-    use mc_transaction_builder::{
+    use bt_transaction_builder::{
         test_utils::get_input_credentials, EmptyMemoBuilder, TransactionBuilder,
     };
-    use mc_transaction_core::{tokens::Mob, Amount, Token};
+    use bt_transaction_core::{tokens::Mob, Amount, Token};
     use rand::{rngs::StdRng, SeedableRng};
 
     // Test converting between external::UnsignedTx and
-    // mc_transaction_builder::UnsignedTx
+    // bt_transaction_builder::UnsignedTx
     #[test]
     fn test_unsigned_tx_conversion() {
         // Generate an UnsignedTx to test with.
@@ -156,8 +156,8 @@ mod tests {
                 .build_unsigned(EmptyMemoBuilder)
                 .unwrap();
 
-            // Converting mc_transaction_builder::UnsignedTx -> external::UnsignedTx ->
-            // mc_transaction_builder::UnsignedTx should be the identity function.
+            // Converting bt_transaction_builder::UnsignedTx -> external::UnsignedTx ->
+            // bt_transaction_builder::UnsignedTx should be the identity function.
             {
                 let external_unsigned_tx: external::UnsignedTx = (&unsigned_tx).into();
                 let recovered_unsigned_tx: UnsignedTx = (&external_unsigned_tx).try_into().unwrap();

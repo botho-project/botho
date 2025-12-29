@@ -1,20 +1,20 @@
 [package]
-name = "mc-gossip"
+name = "bt-gossip"
 version = "0.1.0"
-authors = ["Cadence Foundation"]
+authors = ["Botho Foundation"]
 edition = "2021"
 license = "Apache-2.0"
 rust-version = { workspace = true }
-description = "Gossip-based peer discovery and topology sharing for Cadence"
+description = "Gossip-based peer discovery and topology sharing for Botho"
 
 [dependencies]
 # Workspace dependencies
-mc-common = { workspace = true, features = ["std"] }
-mc-consensus-scp-types = { workspace = true }
-mc-crypto-keys = { workspace = true }
-mc-crypto-digestible = { workspace = true }
-mc-util-serial = { workspace = true }
-mc-util-uri = { workspace = true }
+bt-common = { workspace = true, features = ["std"] }
+bt-consensus-scp-types = { workspace = true }
+bt-crypto-keys = { workspace = true }
+bt-crypto-digestible = { workspace = true }
+bt-util-serial = { workspace = true }
+bt-util-uri = { workspace = true }
 
 # External dependencies
 bitflags = { workspace = true, features = ["serde"] }

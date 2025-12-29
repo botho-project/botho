@@ -1,6 +1,6 @@
-// Copyright (c) 2024 Cadence Foundation
+// Copyright (c) 2024 Botho Foundation
 
-//! Smooth emission curve for Cadence PoW mining rewards.
+//! Smooth emission curve for Botho PoW mining rewards.
 //!
 //! This module implements a Monero-style smooth emission curve with tail emission,
 //! ensuring a decreasing block reward that eventually stabilizes at a minimum

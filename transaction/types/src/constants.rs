@@ -1,8 +1,8 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
-//! MobileCoin Transaction Constants.
+//! Botho Transaction Constants.
 
-use mc_crypto_ring_signature::Scalar;
+use bt_crypto_ring_signature::Scalar;
 
 /// Maximum number of transactions that may be included in a Block.
 pub const MAX_TRANSACTIONS_PER_BLOCK: usize = 5000;
@@ -34,8 +34,8 @@ pub const MAX_OUTPUTS: u64 = 16;
 /// multi-sig.
 pub const MAX_TOMBSTONE_BLOCKS: u64 = 20160;
 
-/// The MobileCoin network will contain a fixed supply of 250 million
-/// mobilecoins (MOB).
+/// The Botho network will contain a fixed supply of 250 million
+/// bothos (MOB).
 pub const TOTAL_MOB: u64 = 250_000_000;
 
 /// one microMOB = 1e6 picoMOB

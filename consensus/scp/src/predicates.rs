@@ -1,8 +1,8 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Predicates for use in trust decisions for SCP.
 use crate::{ballot::Ballot, GenericNodeId, Msg, Value};
-use mc_common::{HashMap, HashSet, NodeID};
+use bt_common::{HashMap, HashSet, NodeID};
 use std::{collections::BTreeSet, sync::Arc};
 
 /// An interface for predicates, used for performing searches for quorums and

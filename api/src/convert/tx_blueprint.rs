@@ -1,10 +1,10 @@
-// Copyright (c) 2018-2025 The MobileCoin Foundation
+// Copyright (c) 2018-2025 The Botho Foundation
 
-//! Convert to/from mc_transaction_builder::TxBlueprint.
+//! Convert to/from bt_transaction_builder::TxBlueprint.
 
 use crate::{external, ConversionError};
-use mc_transaction_builder::TxBlueprint;
-use mc_transaction_core::{ring_ct::InputRing, tx::TxIn, Amount};
+use bt_transaction_builder::TxBlueprint;
+use bt_transaction_core::{ring_ct::InputRing, tx::TxIn, Amount};
 use std::convert::{TryFrom, TryInto};
 
 impl From<&TxBlueprint> for external::TxBlueprint {
@@ -16,6 +16,7 @@ impl From<&TxBlueprint> for external::TxBlueprint {
             fee: Some((&source.fee).into()),
             tombstone_block: source.tombstone_block,
             block_version: *source.block_version,
+            cluster_tags: source.cluster_tags.as_ref().map(Into::into),
         }
     }
 }
@@ -43,6 +44,12 @@ impl TryFrom<&external::TxBlueprint> for TxBlueprint {
         let tombstone_block = source.tombstone_block;
         let block_version = source.block_version.try_into()?;
 
+        let cluster_tags = source
+            .cluster_tags
+            .as_ref()
+            .map(|ct| ct.try_into())
+            .transpose()?;
+
         Ok(TxBlueprint {
             inputs,
             rings,
@@ -50,6 +57,7 @@ impl TryFrom<&external::TxBlueprint> for TxBlueprint {
             fee,
             tombstone_block,
             block_version,
+            cluster_tags,
         })
     }
 }
@@ -57,15 +65,15 @@ impl TryFrom<&external::TxBlueprint> for TxBlueprint {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mc_account_keys::AccountKey;
-    use mc_blockchain_types::BlockVersion;
-    use mc_crypto_ring_signature_signer::NoKeysRingSigner;
+    use bt_account_keys::AccountKey;
+    use bt_blockchain_types::BlockVersion;
+    use bt_crypto_ring_signature_signer::NoKeysRingSigner;
     use mc_fog_report_validation_test_utils::MockFogResolver;
-    use mc_transaction_builder::{
+    use bt_transaction_builder::{
         test_utils::get_input_credentials, EmptyMemoBuilder, ReservedSubaddresses,
         SignedContingentInputBuilder, TransactionBuilder,
     };
-    use mc_transaction_core::{
+    use bt_transaction_core::{
         constants::MILLIMOB_TO_PICOMOB, tokens::Mob, Amount, Token, TokenId,
     };
     use rand::{rngs::StdRng, SeedableRng};

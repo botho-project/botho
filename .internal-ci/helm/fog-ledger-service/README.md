@@ -1,6 +1,6 @@
 # Fog-Ledger-Service
 
-Run a MobileCoin fog-view instance.
+Run a Botho fog-view instance.
 
 ### Required Values
 

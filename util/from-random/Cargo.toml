@@ -1,7 +1,7 @@
 [package]
-name = "mc-util-from-random"
+name = "bt-util-from-random"
 version = "7.1.0"
-authors = ["MobileCoin"]
+authors = ["Botho"]
 description = "A trait for constructing an object from a random number generator."
 edition = "2021"
 license = "Apache-2.0"

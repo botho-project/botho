@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Transaction validation.
 
@@ -11,7 +11,7 @@ use crate::{
     Amount, BlockVersion, ClusterId, TokenId, TAG_WEIGHT_SCALE,
 };
 use alloc::{collections::BTreeMap, format, vec::Vec};
-use mc_common::HashSet;
+use bt_common::HashSet;
 use rand_core::{CryptoRng, RngCore};
 
 /// Determines if the transaction is valid, with respect to the provided
@@ -26,7 +26,7 @@ use rand_core::{CryptoRng, RngCore};
 ///   tx.prefix.fee_token_id
 /// * `csprng` - Cryptographically secure random number generator.
 ///
-/// Note: Cadence does not use merkle membership proofs. Ring members are
+/// Note: Botho does not use merkle membership proofs. Ring members are
 /// validated directly against the UTXO set.
 pub fn validate<R: RngCore + CryptoRng>(
     tx: &Tx,
@@ -53,7 +53,7 @@ pub fn validate<R: RngCore + CryptoRng>(
 
     validate_inputs_are_sorted(&tx.prefix)?;
 
-    // Note: Cadence does not use merkle membership proofs - ring members
+    // Note: Botho does not use merkle membership proofs - ring members
     // are validated directly against the UTXO set by the validator.
 
     validate_signature(block_version, tx, csprng)?;
@@ -301,7 +301,7 @@ pub fn validate_masked_token_id_exists(tx_out: &TxOut) -> TransactionValidationR
 /// * The signer owns one element in each input ring,
 /// * Each key image corresponds to the spent ring element,
 /// * The outputs have values in [0,2^64),
-/// * The transaction does not create or destroy mobilecoins.
+/// * The transaction does not create or destroy bothos.
 /// * The signature is valid according to the rules of this block version
 pub fn validate_signature<R: RngCore + CryptoRng>(
     block_version: BlockVersion,
@@ -338,8 +338,8 @@ pub fn validate_transaction_fee(tx: &Tx, minimum_fee: u64) -> TransactionValidat
     }
 }
 
-// Note: validate_membership_proofs was removed as part of Cadence fork.
-// Cadence does not use merkle membership proofs - ring members are validated
+// Note: validate_membership_proofs was removed as part of Botho fork.
+// Botho does not use merkle membership proofs - ring members are validated
 // directly against the UTXO set.
 
 /// The transaction must be not have expired, or be too long-lived.

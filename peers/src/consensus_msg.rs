@@ -1,15 +1,15 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Messages used in Consensus by Peers
 
 use displaydoc::Display;
-use mc_blockchain_types::BlockID;
-use mc_common::{NodeID, ResponderId};
-use mc_consensus_scp::msg::Msg;
-use mc_crypto_digestible::{DigestTranscript, Digestible, MerlinTranscript};
-use mc_crypto_keys::{Ed25519Pair, Ed25519Signature, KeyError, SignatureError, Signer, Verifier};
-use mc_ledger_db::Ledger;
-use mc_transaction_core::{
+use bt_blockchain_types::BlockID;
+use bt_common::{NodeID, ResponderId};
+use bt_consensus_scp::msg::Msg;
+use bt_crypto_digestible::{DigestTranscript, Digestible, MerlinTranscript};
+use bt_crypto_keys::{Ed25519Pair, Ed25519Signature, KeyError, SignatureError, Signer, Verifier};
+use bt_ledger_db::Ledger;
+use bt_transaction_core::{
     mint::{MintConfigTx, MintTx},
     tx::TxHash,
 };
@@ -104,7 +104,7 @@ pub enum ConsensusMsgError {
     ZeroSlot,
 
     /// Ledger db error: {0}
-    LedgerDbError(mc_ledger_db::Error),
+    LedgerDbError(bt_ledger_db::Error),
 
     /// Serialization
     Serialization,
@@ -116,14 +116,14 @@ pub enum ConsensusMsgError {
     SignatureError(SignatureError),
 }
 
-impl From<mc_ledger_db::Error> for ConsensusMsgError {
-    fn from(src: mc_ledger_db::Error) -> Self {
+impl From<bt_ledger_db::Error> for ConsensusMsgError {
+    fn from(src: bt_ledger_db::Error) -> Self {
         ConsensusMsgError::LedgerDbError(src)
     }
 }
 
-impl From<mc_util_serial::encode::Error> for ConsensusMsgError {
-    fn from(_src: mc_util_serial::encode::Error) -> Self {
+impl From<bt_util_serial::encode::Error> for ConsensusMsgError {
+    fn from(_src: bt_util_serial::encode::Error) -> Self {
         ConsensusMsgError::Serialization
     }
 }
@@ -201,9 +201,9 @@ impl ConsensusMsg {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mc_consensus_scp::{ballot::Ballot, msg::*, QuorumSet, SlotIndex};
-    use mc_ledger_db::test_utils::get_mock_ledger;
-    use mc_peers_test_utils::test_node_id_and_signer;
+    use bt_consensus_scp::{ballot::Ballot, msg::*, QuorumSet, SlotIndex};
+    use bt_ledger_db::test_utils::get_mock_ledger;
+    use bt_peers_test_utils::test_node_id_and_signer;
 
     // Create a minimal ConsensusMsg for testing
     fn create_msg_node_a() -> ConsensusMsg {
@@ -257,36 +257,36 @@ mod tests {
     fn test_serialization() {
         let msg = create_msg_node_a();
 
-        let ser = mc_util_serial::serialize(&msg.scp_msg.sender_id).unwrap();
-        let m: NodeID = mc_util_serial::deserialize(&ser).unwrap();
+        let ser = bt_util_serial::serialize(&msg.scp_msg.sender_id).unwrap();
+        let m: NodeID = bt_util_serial::deserialize(&ser).unwrap();
         assert_eq!(msg.scp_msg.sender_id, m);
 
-        let ser = mc_util_serial::serialize(&msg.scp_msg.slot_index).unwrap();
-        let m: SlotIndex = mc_util_serial::deserialize(&ser).unwrap();
+        let ser = bt_util_serial::serialize(&msg.scp_msg.slot_index).unwrap();
+        let m: SlotIndex = bt_util_serial::deserialize(&ser).unwrap();
         assert_eq!(msg.scp_msg.slot_index, m);
 
-        let ser = mc_util_serial::serialize(&msg.scp_msg.quorum_set).unwrap();
-        let m: QuorumSet = mc_util_serial::deserialize(&ser).unwrap();
+        let ser = bt_util_serial::serialize(&msg.scp_msg.quorum_set).unwrap();
+        let m: QuorumSet = bt_util_serial::deserialize(&ser).unwrap();
         assert_eq!(msg.scp_msg.quorum_set, m);
 
-        let ser = mc_util_serial::serialize(&msg.scp_msg.topic).unwrap();
-        let m: Topic<ConsensusValue> = mc_util_serial::deserialize(&ser).unwrap();
+        let ser = bt_util_serial::serialize(&msg.scp_msg.topic).unwrap();
+        let m: Topic<ConsensusValue> = bt_util_serial::deserialize(&ser).unwrap();
         assert_eq!(msg.scp_msg.topic, m);
 
-        let ser = mc_util_serial::serialize(&msg.scp_msg).unwrap();
-        let m: Msg<ConsensusValue> = mc_util_serial::deserialize(&ser).unwrap();
+        let ser = bt_util_serial::serialize(&msg.scp_msg).unwrap();
+        let m: Msg<ConsensusValue> = bt_util_serial::deserialize(&ser).unwrap();
         assert_eq!(msg.scp_msg, m);
 
-        let ser = mc_util_serial::serialize(&msg.prev_block_id).unwrap();
-        let b: BlockID = mc_util_serial::deserialize(&ser).unwrap();
+        let ser = bt_util_serial::serialize(&msg.prev_block_id).unwrap();
+        let b: BlockID = bt_util_serial::deserialize(&ser).unwrap();
         assert_eq!(msg.prev_block_id, b);
 
-        let ser = mc_util_serial::serialize(&msg.signature).unwrap();
-        let s: Ed25519Signature = mc_util_serial::deserialize(&ser).unwrap();
+        let ser = bt_util_serial::serialize(&msg.signature).unwrap();
+        let s: Ed25519Signature = bt_util_serial::deserialize(&ser).unwrap();
         assert_eq!(msg.signature, s);
 
-        let serialized = mc_util_serial::serialize(&msg).unwrap();
-        let m: ConsensusMsg = mc_util_serial::deserialize(&serialized).unwrap();
+        let serialized = bt_util_serial::serialize(&msg).unwrap();
+        let m: ConsensusMsg = bt_util_serial::deserialize(&serialized).unwrap();
         assert_eq!(msg, m);
     }
 

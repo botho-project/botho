@@ -1,7 +1,7 @@
 [package]
-name = "mc-transaction-signer"
+name = "bt-transaction-signer"
 version = "7.1.0"
-authors = ["MobileCoin"]
+authors = ["Botho"]
 edition = "2021"
 license = "Apache-2.0"
 readme = "README.md"
@@ -28,15 +28,15 @@ subtle = { workspace = true, features = ["i128"] }
 tiny-bip39 = { workspace = true }
 zeroize = { workspace = true }
 
-# MobileCoin dependencies
-mc-account-keys = { workspace = true }
-mc-common = { workspace = true, features = ["loggers"] }
-mc-core = { workspace = true, features = ["serde", "bip39"] }
-mc-core-types = { workspace = true, features = ["serde"] }
-mc-crypto-keys = { workspace = true }
-mc-crypto-ring-signature = { workspace = true }
-mc-crypto-ring-signature-signer = { workspace = true }
-mc-transaction-core = { workspace = true }
-mc-transaction-summary = { workspace = true }
-mc-util-repr-bytes = { workspace = true }
-mc-util-serial = { workspace = true }
+# Botho dependencies
+bt-account-keys = { workspace = true }
+bt-common = { workspace = true, features = ["loggers"] }
+bt-core = { workspace = true, features = ["serde", "bip39"] }
+bt-core-types = { workspace = true, features = ["serde"] }
+bt-crypto-keys = { workspace = true }
+bt-crypto-ring-signature = { workspace = true }
+bt-crypto-ring-signature-signer = { workspace = true }
+bt-transaction-core = { workspace = true }
+bt-transaction-summary = { workspace = true }
+bt-util-repr-bytes = { workspace = true }
+bt-util-serial = { workspace = true }

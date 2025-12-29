@@ -1,3 +1,3 @@
 ## mc-connection
 
-Attested MobileCoin connections.
+Attested Botho connections.

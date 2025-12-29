@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2024 The MobileCoin Foundation
+// Copyright (c) 2018-2024 The Botho Foundation
 
 //! Utility for building and signing a transaction.
 //!
@@ -13,10 +13,10 @@ use core::{
     cmp::Ordering,
     fmt::Debug,
 };
-use mc_account_keys::PublicAddress;
-use mc_crypto_keys::{CompressedRistrettoPublic, RistrettoPrivate, RistrettoPublic};
-use mc_crypto_ring_signature_signer::RingSigner;
-use mc_transaction_core::{
+use bt_account_keys::PublicAddress;
+use bt_crypto_keys::{CompressedRistrettoPublic, RistrettoPrivate, RistrettoPublic};
+use bt_crypto_ring_signature_signer::RingSigner;
+use bt_transaction_core::{
     encrypted_fog_hint::EncryptedFogHint,
     onetime_keys::{create_shared_secret, create_tx_out_public_key},
     ring_ct::{InputRing, OutputSecret},
@@ -26,11 +26,11 @@ use mc_transaction_core::{
     Amount, BlockVersion, ClusterTagVector, FeeMap, MemoContext, MemoPayload, NewMemoError,
     RevealedTxOut, RevealedTxOutError, Token, TokenId,
 };
-use mc_transaction_extra::{
+use bt_transaction_extra::{
     SignedContingentInput, SignedContingentInputError, TxOutConfirmationNumber, UnsignedTx,
 };
-use mc_util_from_random::FromRandom;
-use mc_util_u64_ratio::U64Ratio;
+use bt_util_from_random::FromRandom;
+use bt_util_u64_ratio::U64Ratio;
 use rand_core::{CryptoRng, RngCore};
 
 /// A trait used to compare the transaction outputs
@@ -66,7 +66,7 @@ pub struct TxOutContext {
 /// Helper utility for building and signing a CryptoNote-style transaction,
 /// and attaching memos as appropriate.
 ///
-/// Note: Cadence does not use Fog services. All encrypted fog hints are fake
+/// Note: Botho does not use Fog services. All encrypted fog hints are fake
 /// placeholders for protocol compatibility.
 #[derive(Clone, Debug)]
 pub struct TransactionBuilder {
@@ -190,7 +190,7 @@ impl TransactionBuilder {
                 ),
             );
         }
-        // Note: Cadence does not use membership proofs
+        // Note: Botho does not use membership proofs
         let rules = sci
             .tx_in
             .input_rules
@@ -306,7 +306,7 @@ impl TransactionBuilder {
                 sci.block_version,
             ));
         }
-        // Note: Cadence does not use membership proofs
+        // Note: Botho does not use membership proofs
 
         let rules = sci
             .tx_in
@@ -480,7 +480,7 @@ impl TransactionBuilder {
         change_destination: &ReservedSubaddresses,
         rng: &mut RNG,
     ) -> Result<TxOutContext, TxBuilderError> {
-        // Cadence doesn't use Fog - use fake hint for protocol compatibility
+        // Botho doesn't use Fog - use fake hint for protocol compatibility
         let hint = EncryptedFogHint::fake_onetime_hint(rng);
 
         if !self.block_version.mixed_transactions_are_supported()
@@ -524,7 +524,7 @@ impl TransactionBuilder {
     ///
     /// The gift code subaddress is meant for reserving TxOuts for usage
     /// at a later time. This enables functionality like sending "gift codes"
-    /// to individuals who may not have a Cadence account and "red envelopes".
+    /// to individuals who may not have a Botho account and "red envelopes".
     ///
     /// The caller should ensure that the math adds up, and that
     /// change_value + gift_code_amount + fee = total_input_value
@@ -563,7 +563,7 @@ impl TransactionBuilder {
         tx_private_key: Option<RistrettoPrivate>,
         rng: &mut RNG,
     ) -> Result<TxOutContext, TxBuilderError> {
-        // Cadence doesn't use Fog - use fake hint for protocol compatibility
+        // Botho doesn't use Fog - use fake hint for protocol compatibility
         let hint = EncryptedFogHint::fake_onetime_hint(rng);
 
         if !self.block_version.mixed_transactions_are_supported()
@@ -706,7 +706,7 @@ impl TransactionBuilder {
                     return Err(TxBuilderError::SignedInputRulesNotAllowed);
                 }
             }
-            // Note: Cadence does not use membership proofs
+            // Note: Botho does not use membership proofs
         }
 
         // Construct a list of sorted inputs.
@@ -880,12 +880,12 @@ pub mod transaction_builder_tests {
     };
     use alloc::vec;
     use assert_matches::assert_matches;
-    use mc_account_keys::{
+    use bt_account_keys::{
         burn_address, burn_address_view_private, AccountKey, ShortAddressHash,
         CHANGE_SUBADDRESS_INDEX, DEFAULT_SUBADDRESS_INDEX, GIFT_CODE_SUBADDRESS_INDEX,
     };
-    use mc_crypto_ring_signature_signer::{InputSecret, NoKeysRingSigner};
-    use mc_transaction_core::{
+    use bt_crypto_ring_signature_signer::{InputSecret, NoKeysRingSigner};
+    use bt_transaction_core::{
         constants::{MAX_INPUTS, MAX_OUTPUTS, MILLIMOB_TO_PICOMOB},
         get_tx_out_shared_secret,
         onetime_keys::*,
@@ -894,7 +894,7 @@ pub mod transaction_builder_tests {
         validation::{validate_signature, validate_tx_out},
         NewTxError,
     };
-    use mc_transaction_extra::{MemoType, SenderMemoCredential, TxOutGiftCode};
+    use bt_transaction_extra::{MemoType, SenderMemoCredential, TxOutGiftCode};
     use rand::{rngs::StdRng, SeedableRng};
 
     // Helper which produces a list of block_version, TokenId pairs to iterate over
@@ -2304,7 +2304,7 @@ pub mod transaction_builder_tests {
     #[test]
     fn test_add_regular_output_after_change_output() {
         let mut rng: StdRng = SeedableRng::from_seed([1u8; 32]);
-        let token_id = TokenId::MOB;
+        let token_id = TokenId::BTH;
         let block_version = BlockVersion::MAX;
         let sender = AccountKey::random(&mut rng);
         let sender_addr = sender.default_subaddress();

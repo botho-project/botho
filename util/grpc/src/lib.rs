@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Utilities related to grpc bindings, particularly, setting up routes,
 //! creating grpc error objects, and various common services like the admin
@@ -45,8 +45,8 @@ use futures::prelude::*;
 use grpcio::{
     CallOption, MetadataBuilder, RpcContext, RpcStatus, RpcStatusCode, ServerCredentials, UnarySink,
 };
-use mc_common::logger::{log, o, Level, Logger};
-use mc_util_metrics::ServiceMetrics;
+use bt_common::logger::{log, o, Level, Logger};
+use bt_util_metrics::ServiceMetrics;
 use rand::Rng;
 use std::{
     fmt::Display,
@@ -264,22 +264,22 @@ pub fn rpc_unavailable_error<S: Display, E: Display>(
 }
 
 /// Converts a serialization Error to an RpcStatus error.
-pub fn ser_to_rpc_err(error: mc_util_serial::encode::Error, logger: &Logger) -> RpcStatus {
+pub fn ser_to_rpc_err(error: bt_util_serial::encode::Error, logger: &Logger) -> RpcStatus {
     rpc_internal_error("Serialization", error, logger)
 }
 
 /// Converts a deserialization Error to an RpcStatus error.
-pub fn deser_to_rpc_err(error: mc_util_serial::decode::Error, logger: &Logger) -> RpcStatus {
+pub fn deser_to_rpc_err(error: bt_util_serial::decode::Error, logger: &Logger) -> RpcStatus {
     rpc_internal_error("Deserialization", error, logger)
 }
 
 /// Converts an encode Error to an RpcStatus error.
-pub fn encode_to_rpc_err(error: mc_util_serial::EncodeError, logger: &Logger) -> RpcStatus {
+pub fn encode_to_rpc_err(error: bt_util_serial::EncodeError, logger: &Logger) -> RpcStatus {
     rpc_internal_error("Encode", error, logger)
 }
 
 /// Converts a decode Error to an RpcStatus error.
-pub fn decode_to_rpc_err(error: mc_util_serial::DecodeError, logger: &Logger) -> RpcStatus {
+pub fn decode_to_rpc_err(error: bt_util_serial::DecodeError, logger: &Logger) -> RpcStatus {
     rpc_internal_error("Decode", error, logger)
 }
 
@@ -321,7 +321,7 @@ pub fn run_server(
 /// making it easier to debug RPC-related interactions.
 pub fn rpc_logger(ctx: &RpcContext, logger: &Logger) -> Logger {
     let hash =
-        mc_common::fast_hash(format!("{}{}", *RPC_LOGGER_CLIENT_ID_SEED, ctx.peer()).as_bytes());
+        bt_common::fast_hash(format!("{}{}", *RPC_LOGGER_CLIENT_ID_SEED, ctx.peer()).as_bytes());
     let hash_str = hex_fmt::HexFmt(hash).to_string();
 
     let request_id = RPC_LOGGER_REQUEST_ID_COUNTER.fetch_add(1, Ordering::SeqCst);

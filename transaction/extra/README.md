@@ -6,7 +6,7 @@ This crate is meant to sit one level above `mc-transaction-core`, containing:
 * Types and schema defining concepts related to transactions / transaction math,
   and which might appear in external.proto or be specified in MCIPs
 * Are *NOT* directly related to the structure of a valid transaction or to
-  MobileCoin transaction validation performed by the consensus enclave.
+  Botho transaction validation performed by the consensus enclave.
 
 The consensus enclave does not directly depend on this crate, and so it is
 easier see that changing something in this crate does not break enclave compatibility.

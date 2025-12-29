@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 #![deny(missing_docs)]
 
 //! Retrieve the paths of previously generated test vectors
@@ -27,8 +27,8 @@ struct Config {
 fn main() {
     let config = Config::parse();
     let output = match config.kind {
-        PathKind::Chain => mc_crypto_x509_test_vectors::chain_path(&config.test_name),
-        PathKind::Key => mc_crypto_x509_test_vectors::key_path(&config.test_name),
+        PathKind::Chain => bt_crypto_x509_test_vectors::chain_path(&config.test_name),
+        PathKind::Key => bt_crypto_x509_test_vectors::key_path(&config.test_name),
     };
     println!("{}", output.display())
 }

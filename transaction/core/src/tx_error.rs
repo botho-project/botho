@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Errors that can occur when creating a new TxOut
 
@@ -7,8 +7,8 @@ use core::str::Utf8Error;
 
 use crate::MemoError;
 use displaydoc::Display;
-use mc_crypto_keys::KeyError;
-use mc_transaction_types::AmountError;
+use bt_crypto_keys::KeyError;
+use bt_transaction_types::AmountError;
 use serde::{Deserialize, Serialize};
 
 /// An error that occurs when creating a new TxOut

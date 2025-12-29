@@ -1,10 +1,10 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Convert to/from blockchain::BlockMetadataContents.
 
 use crate::{blockchain, blockchain::block_metadata_contents, ConversionError};
-use mc_blockchain_types::{AttestationEvidence, BlockMetadata, BlockMetadataContents};
-use mc_common::ResponderId;
+use bt_blockchain_types::{AttestationEvidence, BlockMetadata, BlockMetadataContents};
+use bt_common::ResponderId;
 use std::str::FromStr;
 
 impl From<&BlockMetadataContents> for blockchain::BlockMetadataContents {

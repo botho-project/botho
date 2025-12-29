@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Input Materials is a helper struct for the transaction builder.
 //! The transaction builder can get inputs either from input credentials,
@@ -10,10 +10,10 @@
 //! the actual signatures. This enum makes it convenient to do this.
 
 use crate::InputCredentials;
-use mc_crypto_keys::CompressedRistrettoPublic;
-use mc_transaction_core::{ring_ct::InputRing, tx::TxIn, Amount, TxOutConversionError};
-use mc_transaction_extra::SignedContingentInput;
-use mc_transaction_types::ClusterTagVector;
+use bt_crypto_keys::CompressedRistrettoPublic;
+use bt_transaction_core::{ring_ct::InputRing, tx::TxIn, Amount, TxOutConversionError};
+use bt_transaction_extra::SignedContingentInput;
+use bt_transaction_types::ClusterTagVector;
 
 /// Material that can be used by the transaction builder to create an input to
 /// a transaction.

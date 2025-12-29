@@ -1,11 +1,11 @@
 [package]
-name = "mc-crypto-digestible-derive-test"
+name = "bt-crypto-digestible-derive-test"
 version = "7.1.0"
-authors = ["MobileCoin"]
+authors = ["Botho"]
 edition = "2021"
 license = "Apache-2.0"
 rust-version = { workspace = true }
 
 [dependencies]
-mc-crypto-digestible = { workspace = true }
-mc-crypto-digestible-test-utils = { workspace = true }
+bt-crypto-digestible = { workspace = true }
+bt-crypto-digestible-test-utils = { workspace = true }

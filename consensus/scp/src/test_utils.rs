@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Utilities for Stellar Consensus Protocol tests.
 
@@ -6,12 +6,12 @@
 // code. https://github.com/rust-lang/rust/issues/46379
 #![allow(dead_code)]
 
-pub use mc_consensus_scp_types::test_utils::{
+pub use bt_consensus_scp_types::test_utils::{
     fig_2_network, test_node_id, test_node_id_and_signer, three_node_cycle, three_node_dense_graph,
 };
 
 use crate::{slot::Slot, QuorumSet, SlotIndex, Value};
-use mc_common::{logger::Logger, NodeID};
+use bt_common::{logger::Logger, NodeID};
 use std::{fmt, sync::Arc};
 
 /// Error for transaction validation

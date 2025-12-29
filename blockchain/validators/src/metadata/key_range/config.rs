@@ -1,11 +1,11 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Configuration for the key range validator.
 
 use crate::ParseError;
 use hex::ToHex;
-use mc_blockchain_types::BlockIndex;
-use mc_crypto_keys::{DistinguishedEncoding, Ed25519Public};
+use bt_blockchain_types::BlockIndex;
+use bt_crypto_keys::{DistinguishedEncoding, Ed25519Public};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -21,7 +21,7 @@ pub type KeyValidityMap = HashMap<Ed25519Public, Vec<RangeInclusive<BlockIndex>>
 const PUBLIC_KEY_TAG: &str = "PUBLIC KEY";
 
 /// Container for key validity configs.
-/// Supports parsing a `metadata-signers.toml` as specified in [MCIP #43](https://github.com/mobilecoinfoundation/mcips/pull/43).
+/// Supports parsing a `metadata-signers.toml` as specified in [MCIP #43](https://github.com/bothofoundation/mcips/pull/43).
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Config {
     /// The key validity ranges.

@@ -1,9 +1,9 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Convert to/from watcher_api::*
 
 use crate::{watcher, ConversionError};
-use mc_watcher_api::TimestampResultCode;
+use bt_watcher_api::TimestampResultCode;
 
 impl From<&TimestampResultCode> for watcher::TimestampResultCode {
     fn from(src: &TimestampResultCode) -> Self {

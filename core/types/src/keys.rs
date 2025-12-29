@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Basic key types
 
@@ -10,7 +10,7 @@ use core::{
 use curve25519_dalek::{ristretto::RistrettoPoint, scalar::Scalar};
 use zeroize::Zeroize;
 
-use mc_crypto_keys::{KeyError, ReprBytes, RistrettoPrivate, RistrettoPublic};
+use bt_crypto_keys::{KeyError, ReprBytes, RistrettoPrivate, RistrettoPublic};
 
 use crate::markers::*;
 
@@ -88,7 +88,7 @@ where
 
     type Error = <KEY as ReprBytes>::Error;
 
-    fn from_bytes(src: &mc_crypto_keys::GenericArray<u8, Self::Size>) -> Result<Self, Self::Error> {
+    fn from_bytes(src: &bt_crypto_keys::GenericArray<u8, Self::Size>) -> Result<Self, Self::Error> {
         let key = <KEY as ReprBytes>::from_bytes(src)?;
         Ok(Key {
             key,
@@ -97,7 +97,7 @@ where
         })
     }
 
-    fn to_bytes(&self) -> mc_crypto_keys::GenericArray<u8, Self::Size> {
+    fn to_bytes(&self) -> bt_crypto_keys::GenericArray<u8, Self::Size> {
         <KEY as ReprBytes>::to_bytes(&self.key)
     }
 }

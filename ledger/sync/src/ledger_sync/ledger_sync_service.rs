@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2023 The MobileCoin Foundation
+// Copyright (c) 2018-2023 The Botho Foundation
 
 //! LedgerSyncService provides a mechanism for synchronizing a local ledger with
 //! the network. It uses consensus nodes as the source of truth for blocks, and
@@ -9,20 +9,20 @@ use crate::{
     BlockMetadataProvider, LedgerSync, LedgerSyncError, NetworkState, PassThroughMetadataProvider,
     TransactionsFetcher,
 };
-use mc_blockchain_types::{compute_block_id, Block, BlockData, BlockID, BlockIndex};
-use mc_common::{
+use bt_blockchain_types::{compute_block_id, Block, BlockData, BlockID, BlockIndex};
+use bt_common::{
     logger::{log, Logger},
     trace_time, ResponderId,
 };
-use mc_connection::{
+use bt_connection::{
     BlockchainConnection, Connection, ConnectionManager, RetryableBlockchainConnection,
 };
-use mc_ledger_db::Ledger;
-use mc_transaction_core::ring_signature::KeyImage;
-use mc_util_telemetry::{
+use bt_ledger_db::Ledger;
+use bt_transaction_core::ring_signature::KeyImage;
+use bt_util_telemetry::{
     block_span_builder, telemetry_static_key, tracer, Context, Key, Span, TraceContextExt, Tracer,
 };
-use mc_util_uri::ConnectionUri;
+use bt_util_uri::ConnectionUri;
 use retry::delay::Fibonacci;
 use std::{
     cmp::min,
@@ -230,7 +230,7 @@ impl<
                 .num_blocks()
                 .expect("failed getting number of blocks"),
         );
-        mc_common::trace_time!(self.logger, "Appended {} blocks to ledger", blocks.len());
+        bt_common::trace_time!(self.logger, "Appended {} blocks to ledger", blocks.len());
 
         for block_data in blocks {
             let append_block_start = SystemTime::now();
@@ -897,13 +897,13 @@ pub fn identify_safe_blocks<L: Ledger>(
 mod tests {
     use super::*;
     use crate::{test_utils::MockTransactionsFetcher, SCPNetworkState};
-    use mc_blockchain_test_utils::make_block_metadata;
-    use mc_blockchain_types::BlockMetadata;
-    use mc_common::{logger::test_with_logger, NodeID};
-    use mc_consensus_scp::{ballot::Ballot, msg::*, *};
-    use mc_ledger_db::test_utils::{get_mock_ledger, get_test_ledger_blocks};
-    use mc_peers_test_utils::{test_node_id, test_peer_uri, MockPeerConnection};
-    use mc_util_test_helper::get_seeded_rng;
+    use bt_blockchain_test_utils::make_block_metadata;
+    use bt_blockchain_types::BlockMetadata;
+    use bt_common::{logger::test_with_logger, NodeID};
+    use bt_consensus_scp::{ballot::Ballot, msg::*, *};
+    use bt_ledger_db::test_utils::{get_mock_ledger, get_test_ledger_blocks};
+    use bt_peers_test_utils::{test_node_id, test_peer_uri, MockPeerConnection};
+    use bt_util_test_helper::get_seeded_rng;
 
     #[test_with_logger]
     // A node with the trivial quorum set should never be "behind".

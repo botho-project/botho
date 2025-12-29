@@ -1,11 +1,11 @@
-// Copyright (c) 2018-2023 The MobileCoin Foundation
-// Copyright (c) 2024 Cadence Foundation
+// Copyright (c) 2018-2023 The Botho Foundation
+// Copyright (c) 2024 Botho Foundation
 
 mod mint;
 
-pub use mc_account_keys::{AccountKey, PublicAddress, DEFAULT_SUBADDRESS_INDEX};
-pub use mc_crypto_ring_signature_signer::NoKeysRingSigner;
-pub use mc_transaction_core::{
+pub use bt_account_keys::{AccountKey, PublicAddress, DEFAULT_SUBADDRESS_INDEX};
+pub use bt_crypto_ring_signature_signer::NoKeysRingSigner;
+pub use bt_transaction_core::{
     encrypted_fog_hint::EncryptedFogHint,
     get_tx_out_shared_secret,
     onetime_keys::recover_onetime_private_key,
@@ -14,16 +14,16 @@ pub use mc_transaction_core::{
     tx::{Tx, TxOut, TxOutMembershipElement, TxOutMembershipHash},
     Amount, BlockVersion, Token,
 };
-pub use mc_util_serial::round_trip_message;
+pub use bt_util_serial::round_trip_message;
 pub use mint::{
     create_mint_config_tx, create_mint_config_tx_and_signers, create_mint_tx,
     create_mint_tx_to_recipient, mint_config_tx_to_validated, sign_mint_config_tx_prefix,
     sign_mint_tx_prefix,
 };
 
-use mc_crypto_keys::RistrettoPrivate;
+use bt_crypto_keys::RistrettoPrivate;
 use mc_rand::{CryptoRng, RngCore};
-use mc_util_from_random::FromRandom;
+use bt_util_from_random::FromRandom;
 
 /// Generate a set of outputs that "mint" coins for each recipient.
 pub fn get_outputs<T: RngCore + CryptoRng>(

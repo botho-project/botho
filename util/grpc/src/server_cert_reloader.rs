@@ -1,11 +1,11 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! A `grpcio::ServerCredentialsFetcher` implementation that reloads a GRPC's
 //! server TLS certificate/key when a SIGHUP is received.
 
 use displaydoc::Display;
 use grpcio::{CertificateRequestType, ServerCredentialsBuilder, ServerCredentialsFetcher};
-use mc_common::logger::{log, Logger};
+use bt_common::logger::{log, Logger};
 use signal_hook::{consts::SIGHUP, flag};
 use std::{
     fs, io,
@@ -147,9 +147,9 @@ mod tests {
         ChannelBuilder, ChannelCredentialsBuilder, EnvBuilder, Server, ServerBuilder,
         ServerCredentials,
     };
-    use mc_common::logger::test_with_logger;
-    use mc_crypto_x509_test_vectors::{ok_self_signed_1, ok_self_signed_2};
-    use mc_util_uri::ConsensusClientUri;
+    use bt_common::logger::test_with_logger;
+    use bt_crypto_x509_test_vectors::{ok_self_signed_1, ok_self_signed_2};
+    use bt_util_uri::ConsensusClientUri;
     use std::{str::FromStr, thread, time::Duration};
 
     fn create_test_server(

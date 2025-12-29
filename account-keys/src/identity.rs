@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! In cryptography, several private keys can be derived from a single source of
 //! entropy using a strong KDF (key derivation function).
@@ -6,7 +6,7 @@
 //! at least enough entropy as the length of any one of the derived keys.
 //!
 //! The RootIdentity object contains 32 bytes of "root entropy", used with HKDF
-//! to produce the other MobileCoin private keys. This is useful because an
+//! to produce the other Botho private keys. This is useful because an
 //! AccountKey derived this way can be represented with a smaller amount of
 //! information.
 //!
@@ -17,12 +17,12 @@ use alloc::{borrow::ToOwned, string::String, vec::Vec};
 use core::hash::Hash;
 use curve25519_dalek::scalar::Scalar;
 use hkdf::SimpleHkdf;
-use mc_crypto_hashes::Blake2b256;
-use mc_crypto_keys::RistrettoPrivate;
-use mc_util_from_random::FromRandom;
+use bt_crypto_hashes::Blake2b256;
+use bt_crypto_keys::RistrettoPrivate;
+use bt_util_from_random::FromRandom;
 #[cfg(feature = "prost")]
-use mc_util_repr_bytes::derive_prost_message_from_repr_bytes;
-use mc_util_repr_bytes::{
+use bt_util_repr_bytes::derive_prost_message_from_repr_bytes;
+use bt_util_repr_bytes::{
     derive_debug_and_display_hex_from_as_ref, derive_repr_bytes_from_as_ref_and_try_from,
     typenum::U32, LengthMismatch,
 };
@@ -192,23 +192,23 @@ fn root_identity_hkdf_helper(ikm: &[u8], info: &[u8]) -> Scalar {
 #[cfg(test)]
 mod testing {
     use super::*;
-    use mc_test_vectors_account_keys::AcctPrivKeysFromRootEntropy;
-    use mc_util_test_vector::TestVector;
-    use mc_util_test_with_data::test_with_data;
+    use bt_test_vectors_account_keys::AcctPrivKeysFromRootEntropy;
+    use bt_util_test_vector::TestVector;
+    use bt_util_test_with_data::test_with_data;
 
     // Protobuf deserialization should recover a serialized RootIdentity.
     #[test]
     fn prost_roundtrip_root_identity() {
-        mc_util_test_helper::run_with_several_seeds(|mut rng| {
+        bt_util_test_helper::run_with_several_seeds(|mut rng| {
             let root_id = RootIdentity::from_random(&mut rng);
-            let ser = mc_util_serial::encode(&root_id);
-            let result: RootIdentity = mc_util_serial::decode(&ser).unwrap();
+            let ser = bt_util_serial::encode(&root_id);
+            let result: RootIdentity = bt_util_serial::decode(&ser).unwrap();
             assert_eq!(root_id, result);
 
             let root_id =
                 RootIdentity::random_with_fog(&mut rng, "fog://example.com", "1", &[7u8, 7u8]);
-            let ser = mc_util_serial::encode(&root_id);
-            let result: RootIdentity = mc_util_serial::decode(&ser).unwrap();
+            let ser = bt_util_serial::encode(&root_id);
+            let result: RootIdentity = bt_util_serial::decode(&ser).unwrap();
             assert_eq!(root_id, result);
         })
     }

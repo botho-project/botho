@@ -1,4 +1,4 @@
-// Copyright (c) 2024 Cadence Foundation
+// Copyright (c) 2024 Botho Foundation
 
 //! libp2p network behaviour for the gossip protocol.
 //!
@@ -241,7 +241,7 @@ impl GossipBehaviour {
 
         // Configure identify
         let identify = identify::Behaviour::new(identify::Config::new(
-            "/cadence/1.0.0".to_string(),
+            "/botho/1.0.0".to_string(),
             libp2p::identity::Keypair::generate_ed25519().public(),
         ));
 

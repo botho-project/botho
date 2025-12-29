@@ -1,8 +1,8 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Implementation of the [GRPC Health Checking
 //! Protocol](https://github.com/grpc/grpc/blob/master/doc/health-checking.md) with some added
-//! MobileCoin-specific (Ping) extensions.
+//! Botho-specific (Ping) extensions.
 
 use crate::{
     grpc_health_v1::{
@@ -12,7 +12,7 @@ use crate::{
 };
 use futures::prelude::*;
 use grpcio::{RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, Service, UnarySink};
-use mc_common::logger::{log, Logger};
+use bt_common::logger::{log, Logger};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,

@@ -1,9 +1,9 @@
 [package]
-name = "mc-crypto-keys"
+name = "bt-crypto-keys"
 version = "7.1.0"
-authors = ["MobileCoin"]
+authors = ["Botho"]
 edition = "2021"
-description = "MobileCoin Diffie-Hellman Key Exchange and Digital Signatures"
+description = "Botho Diffie-Hellman Key Exchange and Digital Signatures"
 license = "Apache-2.0"
 readme = "README.md"
 rust-version = { workspace = true }
@@ -13,26 +13,26 @@ alloc = [
     "base64/alloc",
     "curve25519-dalek/alloc",
     "ed25519-dalek/alloc",
-    "mc-crypto-digestible/alloc",
-    "mc-crypto-digestible-signature/alloc",
-    "mc-util-repr-bytes/alloc",
+    "bt-crypto-digestible/alloc",
+    "bt-crypto-digestible-signature/alloc",
+    "bt-util-repr-bytes/alloc",
 ]
 serde = [
     "dep:serde",
-    "dep:mc-util-serial",
+    "dep:bt-util-serial",
     "ed25519/serde",
     "curve25519-dalek/serde",
     "ed25519-dalek/serde",
-    "mc-util-repr-bytes/serde",
+    "bt-util-repr-bytes/serde",
 ]
-prost = ["alloc", "mc-util-repr-bytes/prost"]
+prost = ["alloc", "bt-util-repr-bytes/prost"]
 default = [
     "alloc",
     "serde",
     "prost",
-    "mc-util-repr-bytes/default",
+    "bt-util-repr-bytes/default",
     "curve25519-dalek/default",
-    "dep:mc-util-serial",
+    "dep:bt-util-serial",
 ]
 
 [dependencies]
@@ -46,11 +46,11 @@ ed25519-dalek = { workspace = true, features = ["rand_core", "digest"] }
 hex = { workspace = true }
 hex_fmt = { workspace = true }
 
-mc-crypto-digestible = { workspace = true, features = ["dalek", "derive"] }
-mc-crypto-digestible-signature = { workspace = true }
-mc-util-from-random = { workspace = true }
-mc-util-repr-bytes = { workspace = true }
-mc-util-serial = { workspace = true, optional = true }
+bt-crypto-digestible = { workspace = true, features = ["dalek", "derive"] }
+bt-crypto-digestible-signature = { workspace = true }
+bt-util-from-random = { workspace = true }
+bt-util-repr-bytes = { workspace = true }
+bt-util-serial = { workspace = true, optional = true }
 rand_core = { workspace = true }
 rand_hc = { workspace = true }
 schnorrkel-og = { workspace = true }
@@ -63,8 +63,8 @@ x25519-dalek = { workspace = true, features = ["static_secrets"] }
 zeroize = { workspace = true }
 
 [dev-dependencies]
-mc-crypto-hashes = { workspace = true }
-mc-util-test-helper = { workspace = true }
+bt-crypto-hashes = { workspace = true }
+bt-util-test-helper = { workspace = true }
 
 pem = { workspace = true }
 rand_hc = { workspace = true }

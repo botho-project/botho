@@ -1,17 +1,17 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! SLIP-0010 example applet
 
 use bip39::Mnemonic;
 use clap::Parser;
 
-use mc_core::{
+use bt_core::{
     account::{Account, RingCtAddress},
     slip10::Slip10KeyGenerator,
     subaddress::Subaddress,
 };
 
-/// MobileCoin SLIP-0010/BIP39 account derivation example
+/// Botho SLIP-0010/BIP39 account derivation example
 #[derive(Clone, Debug, Parser)]
 struct Args {
     /// Mnemonic for wallet address derivation, if unspecified a random phrase
@@ -23,7 +23,7 @@ struct Args {
     #[clap(short, long, default_value = "0")]
     pub account_index: u32,
 
-    /// MobileCoin account subaddress index (default subaddress is 0)
+    /// Botho account subaddress index (default subaddress is 0)
     #[clap(short, long, default_value = "0")]
     pub subaddress_index: u64,
 }

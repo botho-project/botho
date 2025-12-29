@@ -1,22 +1,22 @@
 [package]
-name = "mc-consensus-scp-types"
+name = "bt-consensus-scp-types"
 version = "7.1.0"
-authors = ["MobileCoin"]
+authors = ["Botho"]
 edition = "2018"
 license = "Apache-2.0"
 rust-version = { workspace = true }
 
 [features]
 default = []
-std = ["mc-common/std", "serde/std"]
-test_utils = ["mc-util-test-helper", "rand", "rand_hc"]
+std = ["bt-common/std", "serde/std"]
+test_utils = ["bt-util-test-helper", "rand", "rand_hc"]
 
 [dependencies]
-mc-common = { workspace = true }
-mc-crypto-digestible = { workspace = true, features = ["derive"] }
-mc-crypto-keys = { workspace = true }
-mc-util-from-random = { workspace = true }
-mc-util-test-helper = { workspace = true, optional = true }
+bt-common = { workspace = true }
+bt-crypto-digestible = { workspace = true, features = ["derive"] }
+bt-crypto-keys = { workspace = true }
+bt-util-from-random = { workspace = true }
+bt-util-test-helper = { workspace = true, optional = true }
 
 prost = { workspace = true, features = ["prost-derive"] }
 rand = { workspace = true, optional = true }
@@ -24,8 +24,8 @@ rand_hc = { workspace = true, optional = true }
 serde = { workspace = true, features = ["alloc", "derive"] }
 
 [dev-dependencies]
-mc-util-serial = { workspace = true, features = ["std"] }
-mc-util-test-helper = { workspace = true }
+bt-util-serial = { workspace = true, features = ["std"] }
+bt-util-test-helper = { workspace = true }
 
 rand = { workspace = true }
 rand_hc = { workspace = true }

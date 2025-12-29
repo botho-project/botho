@@ -1,7 +1,7 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 use criterion::{criterion_group, criterion_main, Criterion};
-use mc_account_keys::AccountKey;
+use bt_account_keys::AccountKey;
 use rand::{rngs::StdRng, SeedableRng};
 
 fn account_keys_benchmarks(c: &mut Criterion) {

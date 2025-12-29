@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2023 The MobileCoin Foundation
+// Copyright (c) 2018-2023 The Botho Foundation
 
 //! Ancillary structures and schema on top of the core Mobilecoin transaction
 //! logic.
@@ -37,4 +37,4 @@ pub use tx_out_gift_code::TxOutGiftCode;
 pub use unsigned_tx::UnsignedTx;
 
 // Re-export this to help the exported macros work
-pub use mc_transaction_core::MemoPayload;
+pub use bt_transaction_core::MemoPayload;

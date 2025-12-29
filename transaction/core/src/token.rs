@@ -1,8 +1,8 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! A registry of tokens
 
-use mc_transaction_types::TokenId;
+use bt_transaction_types::TokenId;
 
 /// A generic representation of a token.
 pub trait Token {
@@ -25,7 +25,7 @@ pub mod tokens {
     pub struct Mob;
     impl Token for Mob {
         /// Token Id.
-        const ID: TokenId = TokenId::MOB;
+        const ID: TokenId = TokenId::BTH;
 
         /// Minimum fee, deominated in picoMOB.
         const MINIMUM_FEE: u64 = 400 * MICROMOB_TO_PICOMOB;

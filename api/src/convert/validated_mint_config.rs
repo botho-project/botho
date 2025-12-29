@@ -1,9 +1,9 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Convert between the Rust and Protobuf versions of [ValidatedMintConfigTx]
 
 use crate::{external, ConversionError};
-use mc_transaction_core::mint::ValidatedMintConfigTx;
+use bt_transaction_core::mint::ValidatedMintConfigTx;
 
 /// Convert ValidatedMintConfigTx --> external::ValidatedMintConfigTx.
 impl From<&ValidatedMintConfigTx> for external::ValidatedMintConfigTx {
@@ -41,8 +41,8 @@ impl TryFrom<&external::ValidatedMintConfigTx> for ValidatedMintConfigTx {
 mod tests {
     use super::*;
     use crate::convert::ed25519_multisig::tests::{test_multi_sig, test_signer_set};
-    use mc_transaction_core::mint::{MintConfig, MintConfigTx, MintConfigTxPrefix};
-    use mc_util_serial::{decode, encode};
+    use bt_transaction_core::mint::{MintConfig, MintConfigTx, MintConfigTxPrefix};
+    use bt_util_serial::{decode, encode};
     use prost::Message;
 
     #[test]
@@ -81,8 +81,8 @@ mod tests {
             assert_eq!(source, recovered);
         }
 
-        // Converting mc_transaction_core::mint::ValidatedMintConfigTx ->
-        // external::ValidatedMintConfigTx -> mc_transaction_core::mint::
+        // Converting bt_transaction_core::mint::ValidatedMintConfigTx ->
+        // external::ValidatedMintConfigTx -> bt_transaction_core::mint::
         // ValidatedMintConfigTx should be the identity function.
         {
             let external = external::ValidatedMintConfigTx::from(&source);

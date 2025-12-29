@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! A commitment to an output's amount, denominated in picoMOB.
 //!
@@ -15,10 +15,10 @@ use crate::{
     TokenId,
 };
 
-use mc_crypto_digestible::Digestible;
-use mc_crypto_hashes::{Blake2b512, Digest};
-use mc_crypto_keys::RistrettoPublic;
-use mc_crypto_ring_signature::{generators, CompressedCommitment, Scalar};
+use bt_crypto_digestible::Digestible;
+use bt_crypto_hashes::{Blake2b512, Digest};
+use bt_crypto_keys::RistrettoPublic;
+use bt_crypto_ring_signature::{generators, CompressedCommitment, Scalar};
 
 use crc::Crc;
 #[cfg(feature = "prost")]
@@ -27,7 +27,7 @@ use prost::Message;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
 
-/// A commitment to an amount of MobileCoin or a related token, as it appears on
+/// A commitment to an amount of Botho or a related token, as it appears on
 /// the blockchain. This is a "blinded" commitment, and only the sender and
 /// receiver know the value and token id.
 #[derive(Clone, Digestible, Eq, Hash, PartialEq, Zeroize)]
@@ -36,7 +36,7 @@ use zeroize::Zeroize;
 #[cfg_attr(not(feature = "prost"), derive(Debug))]
 #[cfg_attr(feature = "serde", derive(Deserialize, Serialize))]
 pub struct MaskedAmountV1 {
-    /// A Pedersen commitment `v*H + b*G` to a quantity `v` of MobileCoin or a
+    /// A Pedersen commitment `v*H + b*G` to a quantity `v` of Botho or a
     /// related token, with blinding `b`,
     #[cfg_attr(feature = "prost", prost(message, required, tag = "1"))]
     pub commitment: CompressedCommitment,

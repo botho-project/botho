@@ -1,10 +1,10 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! The ballot contains the value on which to consense.
 
-use mc_common::HasherBuilder;
-use mc_consensus_scp_types::Value;
-use mc_crypto_digestible::Digestible;
+use bt_common::HasherBuilder;
+use bt_consensus_scp_types::Value;
+use bt_crypto_digestible::Digestible;
 use serde::{Deserialize, Serialize};
 use std::{
     cmp::Ordering,

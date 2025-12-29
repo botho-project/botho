@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 #![no_std]
 
@@ -53,7 +53,7 @@ pub mod encode {
 
 /// Serialize the given data structure.
 ///
-/// Forward mc_util_serial::serialize to bincode::serialize(..., Infinite)
+/// Forward bt_util_serial::serialize to bincode::serialize(..., Infinite)
 /// Serialization can fail if `T`'s implementation of `Serialize` decides to
 /// fail.
 pub fn serialize<T>(value: &T) -> Result<Vec<u8>, encode::Error>
@@ -65,7 +65,7 @@ where
 
 /// Deserialize the given bytes to a data structure.
 ///
-/// Forward mc_util_serial::deserialize to serde_cbor::from_slice
+/// Forward bt_util_serial::deserialize to serde_cbor::from_slice
 pub fn deserialize<'a, T>(bytes: &'a [u8]) -> Result<T, decode::Error>
 where
     T: Deserialize<'a>,

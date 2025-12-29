@@ -7,7 +7,7 @@ import {
   type ReactNode,
 } from 'react'
 
-export interface CadenceNode {
+export interface BothoNode {
   id: string
   host: string
   port: number
@@ -20,25 +20,25 @@ export interface CadenceNode {
 
 interface ConnectionState {
   isScanning: boolean
-  discoveredNodes: CadenceNode[]
-  connectedNode: CadenceNode | null
+  discoveredNodes: BothoNode[]
+  connectedNode: BothoNode | null
   error: string | null
 }
 
 interface ConnectionContextValue extends ConnectionState {
   scanForNodes: () => Promise<void>
-  connectToNode: (node: CadenceNode) => Promise<void>
+  connectToNode: (node: BothoNode) => Promise<void>
   disconnect: () => void
   addCustomNode: (host: string, port: number) => Promise<void>
 }
 
 const ConnectionContext = createContext<ConnectionContextValue | null>(null)
 
-// Common ports where Cadence nodes might be running
+// Common ports where Botho nodes might be running
 const DEFAULT_PORTS = [8080, 8081, 8082, 8083, 8084, 3000, 3001, 9090, 9091]
 const SCAN_TIMEOUT = 2000
 
-async function probeNode(host: string, port: number): Promise<CadenceNode | null> {
+async function probeNode(host: string, port: number): Promise<BothoNode | null> {
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), SCAN_TIMEOUT)
 
@@ -62,7 +62,7 @@ async function probeNode(host: string, port: number): Promise<CadenceNode | null
       port,
       version: data.version || 'unknown',
       blockHeight: data.blockHeight || data.block_height,
-      networkId: data.networkId || data.network_id || 'cadence-mainnet',
+      networkId: data.networkId || data.network_id || 'botho-mainnet',
       latency,
       status: 'online',
     }
@@ -85,7 +85,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     setState((s) => ({ ...s, isScanning: true, error: null }))
 
     const hosts = ['localhost', '127.0.0.1']
-    const probePromises: Promise<CadenceNode | null>[] = []
+    const probePromises: Promise<BothoNode | null>[] = []
 
     for (const host of hosts) {
       for (const port of DEFAULT_PORTS) {
@@ -94,10 +94,10 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     }
 
     const results = await Promise.all(probePromises)
-    const nodes = results.filter((n): n is CadenceNode => n !== null)
+    const nodes = results.filter((n): n is BothoNode => n !== null)
 
     // Deduplicate by port (localhost and 127.0.0.1 are the same)
-    const uniqueNodes = nodes.reduce<CadenceNode[]>((acc, node) => {
+    const uniqueNodes = nodes.reduce<BothoNode[]>((acc, node) => {
       if (!acc.some((n) => n.port === node.port)) {
         acc.push(node)
       }
@@ -111,7 +111,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     }))
   }, [])
 
-  const connectToNode = useCallback(async (node: CadenceNode) => {
+  const connectToNode = useCallback(async (node: BothoNode) => {
     setState((s) => ({
       ...s,
       error: null,
@@ -131,7 +131,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       }))
 
       // Store last connected node
-      localStorage.setItem('cadence-last-node', JSON.stringify(verified))
+      localStorage.setItem('botho-last-node', JSON.stringify(verified))
     } catch (err) {
       setState((s) => ({
         ...s,
@@ -146,7 +146,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       ...s,
       connectedNode: null,
     }))
-    localStorage.removeItem('cadence-last-node')
+    localStorage.removeItem('botho-last-node')
   }, [])
 
   const addCustomNode = useCallback(async (host: string, port: number) => {
@@ -172,10 +172,10 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   // On mount, try to reconnect to last node or scan
   useEffect(() => {
     const init = async () => {
-      const lastNode = localStorage.getItem('cadence-last-node')
+      const lastNode = localStorage.getItem('botho-last-node')
       if (lastNode) {
         try {
-          const node = JSON.parse(lastNode) as CadenceNode
+          const node = JSON.parse(lastNode) as BothoNode
           const verified = await probeNode(node.host, node.port)
           if (verified) {
             setState((s) => ({ ...s, connectedNode: verified }))

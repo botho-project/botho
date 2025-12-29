@@ -1,16 +1,17 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
+// Copyright (c) 2024 Botho Foundation
 
 //! Ledger Sync test app
 
-use mc_blockchain_test_utils::get_blocks;
-use mc_blockchain_types::BlockVersion;
-use mc_common::{logger::log, ResponderId};
-use mc_connection::{ConnectionManager, HardcodedCredentialsProvider, ThickClient};
-use mc_consensus_scp::{test_utils::test_node_id, QuorumSet};
-use mc_ledger_db::{Ledger, LedgerDB};
-use mc_ledger_sync::{LedgerSync, LedgerSyncService, PollingNetworkState};
-use mc_util_uri::ConsensusClientUri as ClientUri;
-use std::{path::PathBuf, str::FromStr, sync::Arc};
+use bt_blockchain_test_utils::get_blocks;
+use bt_blockchain_types::BlockVersion;
+use bt_common::{logger::log, ResponderId};
+use bt_connection::{ConnectionManager, HardcodedCredentialsProvider, ThickClient};
+use bt_consensus_scp::{test_utils::test_node_id, QuorumSet};
+use bt_ledger_db::{Ledger, LedgerDB};
+use bt_ledger_sync::{LedgerSync, LedgerSyncService, PollingNetworkState};
+use bt_util_uri::ConsensusClientUri as ClientUri;
+use std::{path::PathBuf, str::FromStr};
 use tempfile::TempDir;
 
 const NETWORK: &str = "test";
@@ -47,7 +48,7 @@ fn _make_ledger_long(ledger: &mut LedgerDB) {
 
 fn main() {
     let (logger, _global_logger_guard) =
-        mc_common::logger::create_app_logger(mc_common::logger::o!());
+        bt_common::logger::create_app_logger(bt_common::logger::o!());
     log::info!(logger, "starting, network = {}", NETWORK);
 
     // Get a ledger database to work on.
@@ -84,30 +85,18 @@ fn main() {
         ledger.num_txos().unwrap()
     );
 
-    // Set up connections.
-    let grpc_env = Arc::new(
-        grpcio::EnvBuilder::new()
-            .name_prefix("Test-RPC".to_string())
-            .build(),
-    );
-
-    let identity = mc_consensus_enclave_measurement::mr_signer_identity(None);
-
-    log::debug!(logger, "Attestation identity: {:?}", identity);
-
+    // Set up connections using tonic-based ThickClient (post-SGX, no attestation needed)
     let peers = vec!["1", "2", "3", "4"]
         .into_iter()
         .map(|node_id| {
             let node_uri =
-                ClientUri::from_str(&format!("mc://node{node_id}.{NETWORK}.mobilecoin.com/"))
+                ClientUri::from_str(&format!("mc://node{node_id}.{NETWORK}.botho.com/"))
                     .expect("failed parsing URI");
 
             ThickClient::new(
-                // TODO: Supply a chain-id here?
-                String::default(),
+                String::default(), // chain_id
                 node_uri.clone(),
-                [identity.clone()],
-                grpc_env.clone(),
+                Vec::<()>::new(), // identities (unused post-SGX)
                 HardcodedCredentialsProvider::from(&node_uri),
                 logger.clone(),
             )
@@ -138,18 +127,18 @@ fn main() {
 
     /*
     let transactions_fetcher =
-        mc_ledger_sync::ConnectionManagerTransactionsFetcher::new(conn_manager.clone(), logger.clone());
+        bt_ledger_sync::ConnectionManagerTransactionsFetcher::new(conn_manager.clone(), logger.clone());
     */
-    let transactions_fetcher = mc_ledger_sync::ReqwestTransactionsFetcher::new(
+    let transactions_fetcher = bt_ledger_sync::ReqwestTransactionsFetcher::new(
         vec![
             String::from(
-                "https://s3-us-west-1.amazonaws.com/mobilecoin.chain/node2.test.mobilecoin.com/",
+                "https://s3-us-west-1.amazonaws.com/botho.chain/node2.test.botho.com/",
             ),
             String::from(
-                "https://s3-us-west-1.amazonaws.com/mobilecoin.chain/node3.test.mobilecoin.com/",
+                "https://s3-us-west-1.amazonaws.com/botho.chain/node3.test.botho.com/",
             ),
             String::from(
-                "https://s3-us-west-1.amazonaws.com/mobilecoin.chain/node4.test.mobilecoin.com/",
+                "https://s3-us-west-1.amazonaws.com/botho.chain/node4.test.botho.com/",
             ),
         ],
         logger.clone(),

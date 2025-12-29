@@ -1,19 +1,19 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
-//! MobileCoin core constants
+//! Botho core constants
 
 /// The BIP44 "usage" component of a BIP32 path.
 ///
 /// See https://github.com/bitcoin/bips/blob/master/bip-0044.mediawiki for more details.
 pub const USAGE_BIP44: u32 = 44;
 
-/// The MobileCoin "coin type" component of a BIP32 path.
+/// The Botho "coin type" component of a BIP32 path.
 ///
 /// See https://github.com/satoshilabs/slips/blob/master/slip-0044.md for reference.
-pub const COINTYPE_MOBILECOIN: u32 = 866;
+pub const COINTYPE_BOTHO: u32 = 866;
 
 /// Domain separator for hashing a private view key and index into a subaddress.
-pub(crate) const SUBADDRESS_DOMAIN_TAG: &str = "mc_subaddress";
+pub(crate) const SUBADDRESS_DOMAIN_TAG: &str = "bt_subaddress";
 
 /// An account's "default address" is its zero^th subaddress.
 pub const DEFAULT_SUBADDRESS_INDEX: u64 = 0;

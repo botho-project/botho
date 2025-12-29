@@ -1,9 +1,9 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Convert to/from external::KeyImage.
 
 use crate::{external, ConversionError};
-use mc_transaction_core::ring_signature::KeyImage;
+use bt_transaction_core::ring_signature::KeyImage;
 
 /// Convert KeyImage -->  external::KeyImage.
 impl From<&KeyImage> for external::KeyImage {

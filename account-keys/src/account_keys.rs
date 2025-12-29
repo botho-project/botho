@@ -1,8 +1,8 @@
-// Copyright (c) 2018-2023 The MobileCoin Foundation
+// Copyright (c) 2018-2023 The Botho Foundation
 
-//! MobileCoin account keys.
+//! Botho account keys.
 //!
-//! MobileCoin accounts give users fine-grained controls for sharing their
+//! Botho accounts give users fine-grained controls for sharing their
 //! address with senders and third-party services. Each account is defined
 //! by a pair of private keys (a,b) that are used for identifying owned
 //! outputs and spending them, respectively. Instead of sharing the public
@@ -22,7 +22,7 @@ use core::{
     hash::{Hash, Hasher},
 };
 use curve25519_dalek::{ristretto::RistrettoPoint, scalar::Scalar};
-use mc_core::{
+use bt_core::{
     keys::{
         RootSpendPrivate, RootSpendPublic, RootViewPrivate, SubaddressSpendPublic,
         SubaddressViewPublic,
@@ -30,9 +30,9 @@ use mc_core::{
     slip10::Slip10Key,
     subaddress::Subaddress,
 };
-use mc_crypto_digestible::{Digestible, MerlinTranscript};
-use mc_crypto_keys::{RistrettoPrivate, RistrettoPublic};
-use mc_util_from_random::FromRandom;
+use bt_crypto_digestible::{Digestible, MerlinTranscript};
+use bt_crypto_keys::{RistrettoPrivate, RistrettoPublic};
+use bt_util_from_random::FromRandom;
 #[cfg(feature = "prost")]
 use prost::Message;
 use rand_core::{CryptoRng, RngCore};
@@ -40,7 +40,7 @@ use rand_core::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
 
-pub use mc_core::{
+pub use bt_core::{
     account::ShortAddressHash,
     consts::{
         CHANGE_SUBADDRESS_INDEX, DEFAULT_SUBADDRESS_INDEX, GIFT_CODE_SUBADDRESS_INDEX,
@@ -48,7 +48,7 @@ pub use mc_core::{
     },
 };
 
-/// A MobileCoin user's public subaddress.
+/// A Botho user's public subaddress.
 #[derive(Clone, Digestible, Eq, Hash, Ord, PartialEq, PartialOrd, Zeroize)]
 #[cfg_attr(feature = "prost", derive(Message))]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -63,7 +63,7 @@ pub struct PublicAddress {
 
     /// This is the URL to talk to the fog report server.
     /// Empty if no fog for this public address, should be parseable as
-    /// mc_util_uri::FogUri.
+    /// bt_util_uri::FogUri.
     #[cfg_attr(feature = "prost", prost(string, tag = "3"))]
     #[digestible(never_omit)]
     fog_report_url: String,
@@ -88,7 +88,7 @@ pub struct PublicAddress {
 
 impl fmt::Display for PublicAddress {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "MOB")?;
+        write!(f, "BTH")?;
         for byte in self
             .spend_public_key
             .to_bytes()
@@ -191,7 +191,7 @@ impl PublicAddress {
     }
 }
 
-impl mc_account_keys_types::RingCtAddress for PublicAddress {
+impl bt_account_keys_types::RingCtAddress for PublicAddress {
     fn view_public_key(&self) -> &RistrettoPublic {
         &self.view_public_key
     }
@@ -201,7 +201,7 @@ impl mc_account_keys_types::RingCtAddress for PublicAddress {
     }
 }
 
-impl mc_core::account::RingCtAddress for PublicAddress {
+impl bt_core::account::RingCtAddress for PublicAddress {
     fn view_public_key(&self) -> SubaddressViewPublic {
         SubaddressViewPublic::from(self.view_public_key)
     }
@@ -219,7 +219,7 @@ impl From<&PublicAddress> for ShortAddressHash {
     }
 }
 
-impl From<&PublicAddress> for mc_core::account::PublicSubaddress {
+impl From<&PublicAddress> for bt_core::account::PublicSubaddress {
     fn from(value: &PublicAddress) -> Self {
         Self {
             view_public: value.view_public_key.into(),
@@ -465,7 +465,7 @@ impl AccountKey {
             RistrettoPublic::from(&subaddress_spend_private)
         };
 
-        // Fog authority signing removed - Cadence does not use Fog
+        // Fog authority signing removed - Botho does not use Fog
         let fog_authority_sig = Vec::default();
 
         PublicAddress {
@@ -701,12 +701,12 @@ impl ViewAccountKey {
 #[cfg(test)]
 mod account_key_tests {
     use super::*;
-    use mc_crypto_keys::RistrettoSignature;
-    use mc_test_vectors_account_keys::{
+    use bt_crypto_keys::RistrettoSignature;
+    use bt_test_vectors_account_keys::{
         DefaultSubaddrKeysFromAcctPrivKeys, SubaddrKeysFromAcctPrivKeys,
     };
-    use mc_util_test_vector::TestVector;
-    use mc_util_test_with_data::test_with_data;
+    use bt_util_test_vector::TestVector;
+    use bt_util_test_with_data::test_with_data;
     use rand::prelude::StdRng;
     use rand_core::SeedableRng;
 
@@ -726,18 +726,18 @@ mod account_key_tests {
 
     #[test]
     // Deserializing should recover a serialized a PublicAddress.
-    fn mc_util_serial_prost_roundtrip_public_address() {
-        mc_util_test_helper::run_with_several_seeds(|mut rng| {
+    fn bt_util_serial_prost_roundtrip_public_address() {
+        bt_util_test_helper::run_with_several_seeds(|mut rng| {
             {
                 let acct = AccountKey::random(&mut rng);
-                let ser = mc_util_serial::encode(&acct.default_subaddress());
-                let result: PublicAddress = mc_util_serial::decode(&ser).unwrap();
+                let ser = bt_util_serial::encode(&acct.default_subaddress());
+                let result: PublicAddress = bt_util_serial::decode(&ser).unwrap();
                 assert_eq!(acct.default_subaddress(), result);
             }
             {
                 let acct = AccountKey::random_with_fog(&mut rng);
-                let ser = mc_util_serial::encode(&acct.default_subaddress());
-                let result: PublicAddress = mc_util_serial::decode(&ser).unwrap();
+                let ser = bt_util_serial::encode(&acct.default_subaddress());
+                let result: PublicAddress = bt_util_serial::decode(&ser).unwrap();
                 assert_eq!(acct.default_subaddress(), result);
             }
         });

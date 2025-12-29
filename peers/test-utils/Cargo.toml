@@ -1,31 +1,31 @@
 [package]
-name = "mc-peers-test-utils"
+name = "bt-peers-test-utils"
 version = "7.1.0"
-authors = ["MobileCoin"]
+authors = ["Botho"]
 edition = "2021"
 license = "GPL-3.0"
 readme = "README.md"
 rust-version = { workspace = true }
 
 [dependencies]
-mc-blockchain-types = { workspace = true }
-mc-common = { workspace = true }
-mc-connection = { workspace = true }
-mc-consensus-api = { workspace = true }
-mc-consensus-scp = { workspace = true, features = ["test_utils"] }
-mc-crypto-keys = { workspace = true }
-mc-ledger-db = { workspace = true, features = ["test_utils"] }
-mc-peers = { workspace = true }
-mc-transaction-core = { workspace = true }
-mc-util-from-random = { workspace = true }
-mc-util-uri = { workspace = true }
+bt-blockchain-types = { workspace = true }
+bt-common = { workspace = true }
+bt-connection = { workspace = true }
+bt-consensus-api = { workspace = true }
+bt-consensus-scp = { workspace = true, features = ["test_utils"] }
+bt-crypto-keys = { workspace = true }
+bt-ledger-db = { workspace = true, features = ["test_utils"] }
+bt-peers = { workspace = true }
+bt-transaction-core = { workspace = true }
+bt-util-from-random = { workspace = true }
+bt-util-uri = { workspace = true }
 
-grpcio = { workspace = true, features = ["prost-codec"] }
 hex = { workspace = true }
+tonic = { workspace = true }
 rand = { workspace = true }
 rand_hc = { workspace = true }
 retry = { workspace = true }
 sha2 = { workspace = true, features = ["asm"] }
 
 [dev-dependencies]
-mc-common = { workspace = true, features = ["loggers"] }
+bt-common = { workspace = true, features = ["loggers"] }

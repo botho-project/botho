@@ -23,11 +23,11 @@ The main differences are:
   does not take an RNG as it does in Schnorrkel. Instead, in order to use Schnorrkel without
   patching it, we create a seeded RNG using a seed derived in a manner similar to the nonce
   in RFC6979 and ed25519.
-  -  This is very important for MobileCoin because we want for the public address to be
+  -  This is very important for Botho because we want for the public address to be
      completely deterministic from the private account key, so that we can detect malicious
      tampering easily.
 - We do not use the "minisecret key" or the "minisecret key expansion" from Schnorrkel.
-  - This will create serious problems for MobileCoin, because we want to be able to use
+  - This will create serious problems for Botho, because we want to be able to use
     exactly the public keys that are already in the public address to verify the signatures.
     Otherwise it significantly increases the size of the public address.
   - We believe that the "minisecret key expansion" in Schnorrkel is not strictly necessary.

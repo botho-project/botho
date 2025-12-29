@@ -1,13 +1,13 @@
-// Copyright (c) 2018-2023 The MobileCoin Foundation
+// Copyright (c) 2018-2023 The Botho Foundation
 
 //! Defines the DefragmentationMemoBuilder
 //! This memo builder implements DefragmentationMemos defined in MCIP #61
 
 use super::MemoBuilder;
 use crate::ReservedSubaddresses;
-use mc_account_keys::PublicAddress;
-use mc_transaction_core::{tokens::Mob, Amount, MemoContext, MemoPayload, NewMemoError, Token};
-use mc_transaction_extra::DefragmentationMemo;
+use bt_account_keys::PublicAddress;
+use bt_transaction_core::{tokens::Mob, Amount, MemoContext, MemoPayload, NewMemoError, Token};
+use bt_transaction_extra::DefragmentationMemo;
 
 /// This memo builder builds the [`DefragmentationMemo`] (0x0003).
 ///
@@ -131,9 +131,9 @@ impl MemoBuilder for DefragmentationMemoBuilder {
 mod tests {
     use super::*;
     use assert_matches::assert_matches;
-    use mc_account_keys::AccountKey;
-    use mc_crypto_keys::RistrettoPublic;
-    use mc_util_from_random::FromRandom;
+    use bt_account_keys::AccountKey;
+    use bt_crypto_keys::RistrettoPublic;
+    use bt_util_from_random::FromRandom;
     use rand::{rngs::StdRng, SeedableRng};
 
     #[test]

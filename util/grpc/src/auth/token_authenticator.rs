@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! GRPC authenticator that relies on a shared secret for generating and
 //! verifying tokens.
@@ -7,7 +7,7 @@ use super::*;
 
 use displaydoc::Display;
 use hmac::{Hmac, Mac};
-use mc_common::time::TimeProvider;
+use bt_common::time::TimeProvider;
 use sha2::Sha256;
 use std::time::Duration;
 use subtle::ConstantTimeEq;
@@ -183,7 +183,7 @@ impl<TP: TimeProvider> Drop for TokenBasicCredentialsGenerator<TP> {
 mod tests {
     use super::*;
     const TOKEN_MAX_LIFETIME: Duration = Duration::from_secs(60);
-    use mc_common::time::{MockTimeProvider, SystemTimeProvider};
+    use bt_common::time::{MockTimeProvider, SystemTimeProvider};
 
     #[test]
     fn valid_token_authenticates_successfully() {

@@ -1,8 +1,8 @@
 mc-account-keys
 ===============
 
-This crate defines structures that represent the private keys to a MobileCoin account,
-and the public keys that correspond to a MobileCoin public address.
+This crate defines structures that represent the private keys to a Botho account,
+and the public keys that correspond to a Botho public address.
 
 It also defines how public addresses are derived from account keys, and how to
 serialize them in the protobuf format.

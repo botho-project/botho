@@ -1,4 +1,4 @@
-// Copyright (c) 2024 Cadence Foundation
+// Copyright (c) 2024 Botho Foundation
 
 //! Topology analyzer for quorum set suggestions.
 //!
@@ -11,8 +11,8 @@ use crate::{
     messages::NodeAnnouncement,
     store::SharedPeerStore,
 };
-use mc_common::{HashMap, HashSet, ResponderId};
-use mc_consensus_scp_types::{QuorumSet, QuorumSetMember};
+use bt_common::{HashMap, HashSet, ResponderId};
+use bt_consensus_scp_types::{QuorumSet, QuorumSetMember};
 use std::sync::Arc;
 
 /// A cluster of nodes that tend to trust each other.
@@ -479,8 +479,8 @@ mod tests {
         messages::{NodeAnnouncement, NodeCapabilities},
         store::{PeerStore, PeerStoreConfig},
     };
-    use mc_common::NodeID;
-    use mc_crypto_keys::Ed25519Public;
+    use bt_common::NodeID;
+    use bt_crypto_keys::Ed25519Public;
     use std::str::FromStr;
 
     fn make_node_id(name: &str) -> NodeID {

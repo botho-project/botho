@@ -1,27 +1,27 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! The watcher database
 
 use crate::{block_data_store::BlockDataStore, error::WatcherDBError};
 
-use mc_blockchain_types::{BlockData, BlockIndex, BlockSignature};
-use mc_common::{
+use bt_blockchain_types::{BlockData, BlockIndex, BlockSignature};
+use bt_common::{
     logger::{log, Logger},
     HashMap,
 };
-use mc_crypto_digestible::{Digestible, MerlinTranscript};
-use mc_crypto_keys::Ed25519Public;
-use mc_util_lmdb::{MetadataStore, MetadataStoreSettings};
-use mc_util_repr_bytes::ReprBytes;
-use mc_util_serial::{decode, encode, Message};
-use mc_watcher_api::TimestampResultCode;
+use bt_crypto_digestible::{Digestible, MerlinTranscript};
+use bt_crypto_keys::Ed25519Public;
+use bt_util_lmdb::{MetadataStore, MetadataStoreSettings};
+use bt_util_repr_bytes::ReprBytes;
+use bt_util_serial::{decode, encode, Message};
+use bt_watcher_api::TimestampResultCode;
 use serde::{Deserialize, Serialize};
 
 use lmdb::{
     Cursor, Database, DatabaseFlags, Environment, EnvironmentFlags, RwTransaction, Transaction,
     WriteFlags,
 };
-use mc_util_repr_bytes::typenum::Unsigned;
+use bt_util_repr_bytes::typenum::Unsigned;
 use std::{
     path::Path,
     str,
@@ -1093,12 +1093,12 @@ fn bytes_to_url(bytes: &[u8]) -> Result<Url, WatcherDBError> {
 pub mod tests {
     use super::*;
     use mc_attest_verifier_types::prost;
-    use mc_blockchain_test_utils::get_blocks;
-    use mc_blockchain_types::{BlockVersion, VerificationReport};
-    use mc_common::logger::test_with_logger;
-    use mc_crypto_keys::Ed25519Pair;
-    use mc_util_from_random::FromRandom;
-    use mc_util_test_helper::{get_seeded_rng, run_with_one_seed};
+    use bt_blockchain_test_utils::get_blocks;
+    use bt_blockchain_types::{BlockVersion, VerificationReport};
+    use bt_common::logger::test_with_logger;
+    use bt_crypto_keys::Ed25519Pair;
+    use bt_util_from_random::FromRandom;
+    use bt_util_test_helper::{get_seeded_rng, run_with_one_seed};
     use rand_core::SeedableRng;
     use rand_hc::Hc128Rng;
     use tempfile::TempDir;

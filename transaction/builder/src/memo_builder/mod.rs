@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Defines the MemoBuilder trait, and the Default implementation
 //! The memo builder for recoverable transaction history is defined in a
@@ -7,9 +7,9 @@
 use super::ReservedSubaddresses;
 use alloc::boxed::Box;
 use core::fmt::Debug;
-use mc_account_keys::PublicAddress;
-use mc_transaction_core::{Amount, MemoContext, MemoPayload, NewMemoError};
-use mc_transaction_extra::UnusedMemo;
+use bt_account_keys::PublicAddress;
+use bt_transaction_core::{Amount, MemoContext, MemoPayload, NewMemoError};
+use bt_transaction_extra::UnusedMemo;
 
 mod burn_redemption_memo_builder;
 mod defragmentation_memo_builder;

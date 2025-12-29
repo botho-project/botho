@@ -1,11 +1,11 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Proptest Fixtures.
 
-pub use mc_crypto_ring_signature::{proptest_fixtures::*, CurveScalar, Scalar};
+pub use bt_crypto_ring_signature::{proptest_fixtures::*, CurveScalar, Scalar};
 
 use crate::{amount::Amount, masked_amount::MaskedAmountV1, TokenId};
-use mc_crypto_keys::RistrettoPublic;
+use bt_crypto_keys::RistrettoPublic;
 use proptest::prelude::*;
 
 prop_compose! {
@@ -15,7 +15,7 @@ prop_compose! {
                 (value in 0..=max_value) -> MaskedAmountV1 {
             let amount = Amount {
                 value,
-                token_id: TokenId::MOB,
+                token_id: TokenId::BTH,
             };
             MaskedAmountV1::new(amount, &shared_secret).unwrap()
     }

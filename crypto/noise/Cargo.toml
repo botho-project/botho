@@ -1,14 +1,14 @@
 [package]
-name = "mc-crypto-noise"
+name = "bt-crypto-noise"
 version = "7.1.0"
-authors = ["MobileCoin"]
+authors = ["Botho"]
 edition = "2021"
 license = "Apache-2.0"
 rust-version = { workspace = true }
 
 [dependencies]
-mc-crypto-keys = { workspace = true }
-mc-util-from-random = { workspace = true }
+bt-crypto-keys = { workspace = true }
+bt-util-from-random = { workspace = true }
 
 aead = { workspace = true }
 aes-gcm = { workspace = true }

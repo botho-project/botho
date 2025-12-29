@@ -1,9 +1,9 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Code for computing & receiving gift codes
 
-use mc_crypto_keys::{RistrettoPrivate, RistrettoPublic};
-use mc_transaction_types::{Amount, AmountError, MaskedAmount};
+use bt_crypto_keys::{RistrettoPrivate, RistrettoPublic};
+use bt_transaction_types::{Amount, AmountError, MaskedAmount};
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use subtle::{Choice, ConstantTimeEq};

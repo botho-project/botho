@@ -1,4 +1,4 @@
-// Copyright (c) 2024 Cadence Foundation
+// Copyright (c) 2024 Botho Foundation
 
 //! Integration module for using gossip with the consensus service.
 //!
@@ -11,9 +11,9 @@ use crate::{
     GossipConfig, GossipConfigBuilder, GossipEvent, GossipService, NodeCapabilities,
     SharedPeerStore,
 };
-use mc_common::{NodeID, ResponderId};
-use mc_consensus_scp_types::QuorumSet;
-use mc_crypto_keys::Ed25519Pair;
+use bt_common::{NodeID, ResponderId};
+use bt_consensus_scp_types::QuorumSet;
+use bt_crypto_keys::Ed25519Pair;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};

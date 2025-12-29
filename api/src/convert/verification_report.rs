@@ -1,9 +1,9 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Convert to/from external::VerificationReport
 
 use crate::external;
-use mc_blockchain_types::VerificationReport;
+use bt_blockchain_types::VerificationReport;
 
 impl From<&VerificationReport> for external::VerificationReport {
     fn from(src: &VerificationReport) -> Self {
@@ -35,12 +35,12 @@ mod tests {
     /// Test round-trip conversion of prost to protobuf to prost
     #[test]
     fn prost_to_proto_roundtrip() {
-        use mc_blockchain_types::VerificationSignature;
+        use bt_blockchain_types::VerificationSignature;
         let report = VerificationReport {
             sig: Some(VerificationSignature {
                 contents: b"this is a fake signature".to_vec(),
             }),
-            chain: pem::parse_many(mc_crypto_x509_test_vectors::ok_rsa_chain_25519_leaf().0)
+            chain: pem::parse_many(bt_crypto_x509_test_vectors::ok_rsa_chain_25519_leaf().0)
                 .expect("Could not parse PEM input")
                 .into_iter()
                 .map(Pem::into_contents)

@@ -1,9 +1,9 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Convert to/from blockchain::BlockSignature
 
 use crate::{blockchain, ConversionError};
-use mc_blockchain_types::BlockSignature;
+use bt_blockchain_types::BlockSignature;
 
 /// Convert BlockSignature --> blockchain::BlockSignature.
 impl From<&BlockSignature> for blockchain::BlockSignature {
@@ -40,9 +40,9 @@ impl TryFrom<&blockchain::BlockSignature> for BlockSignature {
 mod tests {
     use super::*;
     use crate::external;
-    use mc_crypto_keys::{Ed25519Private, Ed25519Signature};
-    use mc_util_from_random::FromRandom;
-    use mc_util_repr_bytes::ReprBytes;
+    use bt_crypto_keys::{Ed25519Private, Ed25519Signature};
+    use bt_util_from_random::FromRandom;
+    use bt_util_repr_bytes::ReprBytes;
     use prost::Message;
     use rand::{rngs::StdRng, SeedableRng};
 
@@ -117,13 +117,13 @@ mod tests {
             let blockchain_block_signature_bytes = blockchain_block_signature.encode_to_vec();
 
             let block_signature_from_prost: BlockSignature =
-                mc_util_serial::decode(&blockchain_block_signature_bytes).expect("failed decoding");
+                bt_util_serial::decode(&blockchain_block_signature_bytes).expect("failed decoding");
             assert_eq!(source_block_signature, block_signature_from_prost);
         }
 
         // Encode using `prost`, decode using `protobuf`.
         {
-            let prost_block_signature_bytes = mc_util_serial::encode(&source_block_signature);
+            let prost_block_signature_bytes = bt_util_serial::encode(&source_block_signature);
             let blockchain_block_signature =
                 blockchain::BlockSignature::decode(prost_block_signature_bytes.as_slice())
                     .expect("failed decoding");

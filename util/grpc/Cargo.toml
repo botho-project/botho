@@ -1,7 +1,7 @@
 [package]
-name = "mc-util-grpc"
+name = "bt-util-grpc"
 version = "7.1.0"
-authors = ["MobileCoin"]
+authors = ["Botho"]
 description = "Runtime gRPC Utilities"
 edition = "2021"
 license = "GPL-3.0"
@@ -9,11 +9,11 @@ readme = "README.md"
 rust-version = { workspace = true }
 
 [dependencies]
-mc-common = { workspace = true, features = ["loggers"] }
-mc-util-build-info = { workspace = true }
-mc-util-metrics = { workspace = true, features = ["service_metrics"] }
-mc-util-serial = { workspace = true, features = ["std"] }
-mc-util-uri = { workspace = true }
+bt-common = { workspace = true, features = ["loggers"] }
+bt-util-build-info = { workspace = true }
+bt-util-metrics = { workspace = true, features = ["service_metrics"] }
+bt-util-serial = { workspace = true, features = ["std"] }
+bt-util-uri = { workspace = true }
 
 base64 = { workspace = true }
 clap = { workspace = true, features = ["derive", "env"] }
@@ -36,10 +36,10 @@ subtle = { workspace = true, features = ["i128"] }
 zeroize = { workspace = true }
 
 [build-dependencies]
-mc-util-build-grpc = { workspace = true }
+bt-util-build-grpc = { workspace = true }
 
 [dev-dependencies]
 libc = { workspace = true }
 tempfile = { workspace = true }
 
-mc-crypto-x509-test-vectors = { workspace = true }
+bt-crypto-x509-test-vectors = { workspace = true }

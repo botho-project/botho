@@ -1,14 +1,14 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Object for 0x0001 Burn Redemption memo type
 //!
-//! This was proposed for standardization in mobilecoinfoundation/mcips/pull/39
+//! This was proposed for standardization in bothofoundation/mcips/pull/39
 
 use super::RegisteredMemoType;
 use crate::impl_memo_type_conversions;
 
 /// A memo that the sender writes to associate a burn of an assert on the
-/// MobileCoin blockchain with a redemption of another asset on a different
+/// Botho blockchain with a redemption of another asset on a different
 /// blockchain.
 ///
 /// The main intended use-case for this is burning of tokens that

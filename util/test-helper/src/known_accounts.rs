@@ -1,8 +1,8 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! This module provides a consistent set of AccountKeys for use in testing
 
-use mc_account_keys::{AccountKey, PublicAddress, RootIdentity};
+use bt_account_keys::{AccountKey, PublicAddress, RootIdentity};
 use rand::{rngs::StdRng, SeedableRng};
 use std::{cmp, sync::LazyLock};
 
@@ -142,7 +142,7 @@ pub fn default_addresses() -> Vec<PublicAddress> {
 mod testing {
     use super::*;
     use itertools::Itertools;
-    use mc_common::logger::{log, test_with_logger, Logger};
+    use bt_common::logger::{log, test_with_logger, Logger};
     use std::time::Instant;
 
     #[test]

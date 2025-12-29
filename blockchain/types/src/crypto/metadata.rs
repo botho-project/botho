@@ -1,10 +1,10 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Cryptographic helpers for signing and verifying [BlockMetadataContents].
 
 use crate::BlockMetadataContents;
-use mc_crypto_digestible_signature::{DigestibleSigner, DigestibleVerifier};
-use mc_crypto_keys::{
+use bt_crypto_digestible_signature::{DigestibleSigner, DigestibleVerifier};
+use bt_crypto_keys::{
     Ed25519Pair, Ed25519Public, Ed25519Signature, SignatureEncoding, SignatureError,
 };
 

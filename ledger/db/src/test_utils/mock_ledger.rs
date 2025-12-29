@@ -1,14 +1,14 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 use crate::{ActiveMintConfig, ActiveMintConfigs, Error, Ledger};
-use mc_blockchain_test_utils::get_blocks;
-use mc_blockchain_types::{
+use bt_blockchain_test_utils::get_blocks;
+use bt_blockchain_types::{
     Block, BlockContents, BlockData, BlockIndex, BlockMetadata, BlockSignature, BlockVersion,
 };
-use mc_common::{Hash, HashMap, HashSet};
-use mc_crypto_keys::CompressedRistrettoPublic;
-use mc_transaction_core::{mint::MintTx, ring_signature::KeyImage, tx::TxOut, TokenId};
-use mc_util_test_helper::get_seeded_rng;
+use bt_common::{Hash, HashMap, HashSet};
+use bt_crypto_keys::CompressedRistrettoPublic;
+use bt_transaction_core::{mint::MintTx, ring_signature::KeyImage, tx::TxOut, TokenId};
+use bt_util_test_helper::get_seeded_rng;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 #[derive(Default)]

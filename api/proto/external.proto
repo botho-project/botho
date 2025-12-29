@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 // MUST BE KEPT IN SYNC WITH RUST CODE!
 
@@ -6,9 +6,9 @@ syntax = "proto3";
 
 package external;
 
-option java_package = "com.mobilecoin.api";
-option java_outer_classname = "MobileCoinAPI";
-option go_package = "mobilecoin/api";
+option java_package = "com.botho.api";
+option java_outer_classname = "BothoAPI";
+option go_package = "botho/api";
 
 //
 // `keys` crate
@@ -138,7 +138,7 @@ message RootEntropy {
 // If changing this, please keep it in sync with the list defined in
 // mc-transaction-core in the tokens module.
 enum KnownTokenId {
-    MOB = 0;
+    BTH = 0;
 }
 
 // A 32-byte scalar associated to the ristretto group.
@@ -149,7 +149,7 @@ message CurveScalar {
     bytes data = 1;
 }
 
- // A 32-byte mobilecoin transaction key image.
+ // A 32-byte botho transaction key image.
 message KeyImage {
     bytes data = 1;
 }
@@ -851,6 +851,10 @@ message TxBlueprint {
 
     // Block version
     uint32 block_version = 6;
+
+    // Inherited cluster tags for outputs (computed from input tags).
+    // Only set when block version supports cluster tags.
+    ClusterTagVector cluster_tags = 7;
 }
 
 

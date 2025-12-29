@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 #![no_std]
 
@@ -629,9 +629,9 @@ cfg_if! {
     if #[cfg(feature = "dalek")] {
         /// Add support for Dalek primitives
         ///
-        /// We have several new-type wrappers around these in MobileCoin and it
+        /// We have several new-type wrappers around these in Botho and it
         /// would be nice if we could derive digestible for everything in other
-        /// MobileCoin crates.
+        /// Botho crates.
         use curve25519_dalek::ristretto::{CompressedRistretto, RistrettoPoint};
         use curve25519_dalek::scalar::Scalar;
 
@@ -679,4 +679,4 @@ cfg_if! {
 // [1]: https://github.com/serde-rs/serde/blob/v1.0.89/serde/src/lib.rs#L245-L256
 #[cfg(feature = "derive")]
 #[doc(hidden)]
-pub use mc_crypto_digestible_derive::Digestible;
+pub use bt_crypto_digestible_derive::Digestible;

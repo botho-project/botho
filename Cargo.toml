@@ -1,13 +1,12 @@
 [workspace]
 members = [
-    "cadence",
-    "cadence-wallet",
+    "botho",
+    "botho-wallet",
     "cluster-tax",
     "discover",
     "account-keys",
     "gossip",
     "account-keys/types",
-    "admin-http-gateway",
     "api",
     "blockchain/types",
     "blockchain/validators",
@@ -15,14 +14,9 @@ members = [
     "connection",
     "connection/test-utils",
     "consensus/api",
-    "consensus/mint-client",
-    "consensus/pow",
     "consensus/scp",
     "consensus/scp/play",
     "consensus/scp/types",
-    "consensus/service",
-    "consensus/service/config",
-    "consensus/tool",
     "core",
     "core/types",
     "crypto/box",
@@ -32,31 +26,18 @@ members = [
     "crypto/digestible/test-utils",
     "crypto/keys",
     "crypto/memo-mac",
-    "crypto/message-cipher",
     "crypto/multisig",
     "crypto/noise",
+    "crypto/pq",
     "crypto/ring-signature",
     "crypto/ring-signature/signer",
     "crypto/sig",
     "crypto/x509/test-vectors",
-    "crypto/x509/utils",
-    "go-grpc-gateway/testing",
     "ledger/db",
-    "ledger/distribution",
-    "ledger/from-archive",
     "ledger/migration",
     "ledger/sync",
-    "light-client/cli",
-    "light-client/relayer",
-    "light-client/verifier",
-    "mobilecoind",
-    "mobilecoind-dev-faucet",
-    "mobilecoind-json",
-    "mobilecoind/api",
     "peers",
     "peers/test-utils",
-    "t3/api",
-    "t3/connection",
     "test-vectors/account-keys",
     "test-vectors/b58-encodings",
     "test-vectors/memos",
@@ -68,20 +49,11 @@ members = [
     "transaction/signer",
     "transaction/summary",
     "transaction/types",
-    "util/b58-decoder",
-    "util/build/grpc",
     "util/build/grpc-tonic",
     "util/build/script",
     "util/cli",
-    "util/dump-ledger",
-    "util/encodings",
-    "util/ffi",
     "util/from-random",
-    "util/generate-sample-ledger",
-    "util/grpc",
     "util/grpc-tonic",
-    "util/grpc-admin-tool",
-    "util/grpc-token-generator",
     "util/host-cert",
     "util/keyfile",
     "util/lmdb",
@@ -90,7 +62,6 @@ members = [
     "util/metrics",
     "util/parse",
     "util/repr-bytes",
-    "util/seeded-ed25519-key-gen",
     "util/serial",
     "util/telemetry",
     "util/test-helper",
@@ -99,13 +70,16 @@ members = [
     "util/uri",
     "util/vec-map",
     "util/zip-exact",
-    "wasm-test",
-    "watcher",
-    "watcher/api",
 ]
 exclude = [
-    # mc-util-serial should only be accessed via the `common` crate.
+    # bt-util-serial should only be accessed via the `common` crate.
     "util/serial",
+    # Watcher is SGX-specific and removed post-SGX
+    "watcher",
+    "watcher/api",
+    # grpcio utilities replaced by tonic
+    "util/grpc",
+    "util/build/grpc",
 ]
 
 resolver = "2"
@@ -150,6 +124,7 @@ diesel = "2"
 diesel-derive-enum = "2"
 diesel_migrations = "2"
 digest = { version = "0.10", default-features = false }
+dashmap = "6"
 dirs = "5"
 displaydoc = { version = "0.2", default-features = false }
 dyn-clone = "1"
@@ -159,8 +134,6 @@ fs_extra = "1"
 futures = "0.3"
 generic-array = { version = "0.14", default-features = false }
 getrandom = "0.2"
-grpcio = { version = "0.13", default-features = false }
-grpcio-compiler = { version = "0.13", default-features = false }
 hashbrown = { version = "0.14", default-features = false }
 heapless = { version = "0.8", default-features = false }
 hex = { version = "0.4", default-features = false, features = ["alloc"] }
@@ -182,9 +155,7 @@ maplit = "1"
 mbedtls = { version = "0.8", default-features = false }
 mbedtls-sys-auto = "2"
 mc-oblivious-aes-gcm = { version = "0.10", default-features = false }
-mc-oblivious-map = "2"
-mc-oblivious-ram = "2"
-mc-oblivious-traits = "2"
+mc-oblivious-traits = { version = "2", features = ["no_asm_insecure"] }
 mc-rand = "1"
 merlin = { version = "3", default-features = false }
 mockall = "0.12"
@@ -199,6 +170,9 @@ pem = "3"
 percent-encoding = "2"
 pkg-config = "0.3"
 portpicker = "0.1"
+pqcrypto-dilithium = { version = "0.5", default-features = false }
+pqcrypto-kyber = { version = "0.8", default-features = false }
+pqcrypto-traits = { version = "0.3", default-features = false }
 predicates = "3"
 primitive-types = "0.12"
 proc-macro2 = "1"
@@ -207,7 +181,6 @@ proptest = { version = "1", default-features = false }
 prost = { version = "0.12", default-features = false, features = ["derive"] }
 prost-build = "0.12"
 protobuf = "2"
-protoc-grpcio = "3"
 quote = "1"
 r2d2 = "0.8"
 rand = { version = "0.8", default-features = false }
@@ -229,7 +202,7 @@ sentry = { version = "0.32", default-features = false }
 serde = { version = "1", default-features = false }
 serde_cbor = { version = "0.11", default-features = false }
 serde_derive = "1"
-serde_json = { version = "1", default-features = false }
+serde_json = { version = "1", default-features = false, features = ["alloc"] }
 serde_with = { version = "3", default-features = false }
 serial_test = "3"
 sha2 = { version = "0.10", default-features = false }
@@ -271,88 +244,74 @@ yaml-rust = "0.4"
 yare = "2"
 zeroize = { version = "1", default-features = false }
 
-mc-account-keys = { path = "account-keys", default-features = false }
-mc-account-keys-types = { path = "account-keys/types" }
-mc-api = { path = "api" }
-mc-blockchain-test-utils = { path = "blockchain/test-utils" }
-mc-blockchain-types = { path = "blockchain/types" }
-mc-cluster-tax = { path = "cluster-tax" }
-mc-common = { path = "common", default-features = false }
-mc-connection = { path = "connection" }
-mc-connection-test-utils = { path = "connection/test-utils" }
-mc-consensus-api = { path = "consensus/api" }
-mc-consensus-mint-client-types = { path = "consensus/mint-client/types" }
-mc-consensus-pow = { path = "consensus/pow" }
-mc-consensus-scp = { path = "consensus/scp" }
-mc-consensus-scp-types = { path = "consensus/scp/types" }
-mc-consensus-service-config = { path = "consensus/service/config" }
-mc-core = { path = "core", default-features = false }
-mc-core-types = { path = "core/types", default-features = false }
-mc-crypto-box = { path = "crypto/box" }
-mc-crypto-digestible = { path = "crypto/digestible", default-features = false }
-mc-crypto-digestible-derive = { path = "crypto/digestible/derive", default-features = false }
-mc-crypto-digestible-signature = { path = "crypto/digestible/signature", default-features = false }
-mc-crypto-digestible-test-utils = { path = "crypto/digestible/test-utils" }
-mc-crypto-hashes = { path = "crypto/hashes", default-features = false }
-mc-crypto-keys = { path = "crypto/keys", default-features = false }
-mc-crypto-memo-mac = { path = "crypto/memo-mac" }
-mc-crypto-message-cipher = { path = "crypto/message-cipher" }
-mc-crypto-multisig = { path = "crypto/multisig", default-features = false }
-mc-crypto-noise = { path = "crypto/noise", default-features = false }
-mc-crypto-ring-signature = { path = "crypto/ring-signature", default-features = false }
-mc-crypto-ring-signature-signer = { path = "crypto/ring-signature/signer", default-features = false }
-mc-crypto-x509-test-vectors = { path = "crypto/x509/test-vectors" }
-mc-crypto-x509-utils = { path = "crypto/x509/utils" }
-mc-ledger-db = { path = "ledger/db" }
-mc-ledger-migration = { path = "ledger/migration" }
-mc-ledger-sync = { path = "ledger/sync" }
-mc-light-client-verifier = { path = "light-client/verifier" }
-mc-mobilecoind-api = { path = "mobilecoind/api" }
-mc-peers = { path = "peers" }
-mc-peers-test-utils = { path = "peers/test-utils" }
-mc-t3-api = { path = "t3/api" }
-mc-t3-connection = { path = "t3/connection" }
-mc-test-vectors-account-keys = { path = "test-vectors/account-keys" }
-mc-test-vectors-b58-encodings = { path = "test-vectors/b58-encodings" }
-mc-test-vectors-definitions = { path = "test-vectors/definitions" }
-mc-test-vectors-tx-out-records = { path = "test-vectors/tx-out-records" }
-mc-transaction-builder = { path = "transaction/builder" }
-mc-transaction-core = { path = "transaction/core", default-features = false }
-mc-transaction-core-test-utils = { path = "transaction/core/test-utils" }
-mc-transaction-extra = { path = "transaction/extra" }
-mc-transaction-summary = { path = "transaction/summary" }
-mc-transaction-types = { path = "transaction/types", default-features = false }
-mc-util-build-grpc = { path = "util/build/grpc" }
-mc-util-build-grpc-tonic = { path = "util/build/grpc-tonic" }
-mc-util-build-info = { path = "util/build/info" }
-mc-util-build-script = { path = "util/build/script" }
-mc-util-cli = { path = "util/cli" }
-mc-util-encodings = { path = "util/encodings", default-features = false }
-mc-util-from-random = { path = "util/from-random", default-features = false }
-mc-util-generate-sample-ledger = { path = "util/generate-sample-ledger" }
-mc-util-grpc = { path = "util/grpc" }
-mc-util-grpc-tonic = { path = "util/grpc-tonic" }
-mc-util-host-cert = { path = "util/host-cert", default-features = false }
-mc-util-keyfile = { path = "util/keyfile" }
-mc-util-lmdb = { path = "util/lmdb" }
-mc-util-logger-macros = { path = "util/logger-macros" }
-mc-util-metered-channel = { path = "util/metered-channel" }
-mc-util-metrics = { path = "util/metrics" }
-mc-util-parse = { path = "util/parse" }
-mc-util-repr-bytes = { path = "util/repr-bytes", default-features = false }
-mc-util-serial = { path = "util/serial", default-features = false }
-mc-util-telemetry = { path = "util/telemetry" }
-mc-util-test-helper = { path = "util/test-helper", default-features = false }
-mc-util-test-vector = { path = "util/test-vector" }
-mc-util-test-with-data = { path = "util/test-with-data" }
-mc-util-u64-ratio = { path = "util/u64-ratio" }
-mc-util-uri = { path = "util/uri" }
-mc-util-vec-map = { path = "util/vec-map" }
-mc-util-zip-exact = { path = "util/zip-exact", default-features = false }
-mc-watcher = { path = "watcher" }
-mc-watcher-api = { path = "watcher/api" }
-mc-gossip = { path = "gossip" }
-mc-discover = { path = "discover" }
+bt-account-keys = { path = "account-keys", default-features = false }
+bt-account-keys-types = { path = "account-keys/types" }
+bt-api = { path = "api" }
+bt-blockchain-test-utils = { path = "blockchain/test-utils" }
+bt-blockchain-types = { path = "blockchain/types" }
+bt-cluster-tax = { path = "cluster-tax" }
+bt-common = { path = "common", default-features = false }
+bt-connection = { path = "connection" }
+bt-connection-test-utils = { path = "connection/test-utils" }
+bt-consensus-api = { path = "consensus/api" }
+bt-consensus-scp = { path = "consensus/scp" }
+bt-consensus-scp-types = { path = "consensus/scp/types" }
+bt-core = { path = "core", default-features = false }
+bt-core-types = { path = "core/types", default-features = false }
+bt-crypto-box = { path = "crypto/box" }
+bt-crypto-digestible = { path = "crypto/digestible", default-features = false }
+bt-crypto-digestible-derive = { path = "crypto/digestible/derive", default-features = false }
+bt-crypto-digestible-signature = { path = "crypto/digestible/signature", default-features = false }
+bt-crypto-digestible-test-utils = { path = "crypto/digestible/test-utils" }
+bt-crypto-hashes = { path = "crypto/hashes", default-features = false }
+bt-crypto-keys = { path = "crypto/keys", default-features = false }
+bt-crypto-memo-mac = { path = "crypto/memo-mac" }
+bt-crypto-multisig = { path = "crypto/multisig", default-features = false }
+bt-crypto-noise = { path = "crypto/noise", default-features = false }
+bt-crypto-pq = { path = "crypto/pq", default-features = false }
+bt-crypto-ring-signature = { path = "crypto/ring-signature", default-features = false }
+bt-crypto-ring-signature-signer = { path = "crypto/ring-signature/signer", default-features = false }
+bt-crypto-x509-test-vectors = { path = "crypto/x509/test-vectors" }
+bt-ledger-db = { path = "ledger/db" }
+bt-ledger-migration = { path = "ledger/migration" }
+bt-ledger-sync = { path = "ledger/sync" }
+bt-peers = { path = "peers" }
+bt-peers-test-utils = { path = "peers/test-utils" }
+bt-test-vectors-account-keys = { path = "test-vectors/account-keys" }
+bt-test-vectors-b58-encodings = { path = "test-vectors/b58-encodings" }
+bt-test-vectors-definitions = { path = "test-vectors/definitions" }
+bt-test-vectors-tx-out-records = { path = "test-vectors/tx-out-records" }
+bt-transaction-builder = { path = "transaction/builder" }
+bt-transaction-core = { path = "transaction/core", default-features = false }
+bt-transaction-core-test-utils = { path = "transaction/core/test-utils" }
+bt-transaction-extra = { path = "transaction/extra" }
+bt-transaction-summary = { path = "transaction/summary" }
+bt-transaction-types = { path = "transaction/types", default-features = false }
+bt-util-build-grpc-tonic = { path = "util/build/grpc-tonic" }
+bt-util-build-info = { path = "util/build/info" }
+bt-util-build-script = { path = "util/build/script" }
+bt-util-cli = { path = "util/cli" }
+bt-util-from-random = { path = "util/from-random", default-features = false }
+bt-util-grpc-tonic = { path = "util/grpc-tonic" }
+bt-util-host-cert = { path = "util/host-cert", default-features = false }
+bt-util-keyfile = { path = "util/keyfile" }
+bt-util-lmdb = { path = "util/lmdb" }
+bt-util-logger-macros = { path = "util/logger-macros" }
+bt-util-metered-channel = { path = "util/metered-channel" }
+bt-util-metrics = { path = "util/metrics" }
+bt-util-parse = { path = "util/parse" }
+bt-util-repr-bytes = { path = "util/repr-bytes", default-features = false }
+bt-util-serial = { path = "util/serial", default-features = false }
+bt-util-telemetry = { path = "util/telemetry" }
+bt-util-test-helper = { path = "util/test-helper", default-features = false }
+bt-util-test-vector = { path = "util/test-vector" }
+bt-util-test-with-data = { path = "util/test-with-data" }
+bt-util-u64-ratio = { path = "util/u64-ratio" }
+bt-util-uri = { path = "util/uri" }
+bt-util-vec-map = { path = "util/vec-map" }
+bt-util-zip-exact = { path = "util/zip-exact", default-features = false }
+bt-gossip = { path = "gossip" }
+bt-discover = { path = "discover" }
 
 [profile.dev]
 opt-level = 0

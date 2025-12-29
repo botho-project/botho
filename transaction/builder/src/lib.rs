@@ -1,7 +1,7 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
-// Copyright (c) 2024 Cadence Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
+// Copyright (c) 2024 Botho Foundation
 
-//! Utilities for creating Cadence transactions, intended for client-side use.
+//! Utilities for creating Botho transactions, intended for client-side use.
 #![no_std]
 #![deny(missing_docs)]
 
@@ -23,7 +23,7 @@ pub mod test_utils;
 
 pub use error::{SignedContingentInputBuilderError, TxBuilderError};
 pub use input_credentials::InputCredentials;
-pub use mc_transaction_extra::ReservedSubaddresses;
+pub use bt_transaction_extra::ReservedSubaddresses;
 pub use memo_builder::{
     BurnRedemptionMemoBuilder, DefragmentationMemoBuilder, EmptyMemoBuilder,
     GiftCodeCancellationMemoBuilder, GiftCodeFundingMemoBuilder, GiftCodeSenderMemoBuilder,

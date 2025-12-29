@@ -1,7 +1,7 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
-// Copyright (c) 2024 Cadence Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
+// Copyright (c) 2024 Botho Foundation
 
-use mc_util_build_script::Environment;
+use bt_util_build_script::Environment;
 
 fn main() {
     let env = Environment::default();
@@ -17,12 +17,12 @@ fn main() {
     let mut all_proto_dirs = vec![proto_str];
 
     let api_proto_path = env
-        .depvar("MC_API_PROTOS_PATH")
+        .depvar("BT_API_PROTOS_PATH")
         .expect("Could not read api's protos path")
         .to_owned();
     all_proto_dirs.extend(api_proto_path.split(':').collect::<Vec<&str>>());
 
-    mc_util_build_grpc::compile_protos_and_generate_mod_rs(
+    bt_util_build_grpc_tonic::compile_protos_with_config(
         all_proto_dirs.as_slice(),
         &[
             "attest.proto",
@@ -31,5 +31,11 @@ fn main() {
             "consensus_config.proto",
             "consensus_peer.proto",
         ],
+        |builder| {
+            builder
+                // Use types from mc-api for external.proto types
+                .extern_path(".external", "::bt_api::external")
+                .extern_path(".blockchain", "::bt_api::blockchain")
+        },
     );
 }

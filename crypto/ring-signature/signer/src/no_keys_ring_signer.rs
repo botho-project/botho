@@ -1,9 +1,9 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 use super::{OneTimeKeyDeriveData, RingSigner, SignableInputRing};
 use crate::traits::Error;
-use mc_crypto_keys::RistrettoPublic;
-use mc_crypto_ring_signature::{generators, RingMLSAG, Scalar};
+use bt_crypto_keys::RistrettoPublic;
+use bt_crypto_ring_signature::{generators, RingMLSAG, Scalar};
 use rand_core::CryptoRngCore;
 
 /// An implementation of RingSigner that holds no keys, and doesn't do any

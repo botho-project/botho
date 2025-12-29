@@ -1,9 +1,9 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
-//! Convert to/from mc_crypto_ring_signature_signer::InputSecret.
+//! Convert to/from bt_crypto_ring_signature_signer::InputSecret.
 
 use crate::{external, external::input_secret, ConversionError};
-use mc_crypto_ring_signature_signer::{InputSecret, OneTimeKeyDeriveData};
+use bt_crypto_ring_signature_signer::{InputSecret, OneTimeKeyDeriveData};
 
 impl From<&InputSecret> for external::InputSecret {
     fn from(source: &InputSecret) -> Self {
@@ -69,14 +69,14 @@ impl TryFrom<&external::InputSecret> for InputSecret {
 mod tests {
     use crate::external;
     use curve25519_dalek::scalar::Scalar;
-    use mc_crypto_keys::RistrettoPrivate;
-    use mc_crypto_ring_signature_signer::{InputSecret, OneTimeKeyDeriveData};
-    use mc_transaction_core::{Amount, TokenId};
-    use mc_util_from_random::FromRandom;
+    use bt_crypto_keys::RistrettoPrivate;
+    use bt_crypto_ring_signature_signer::{InputSecret, OneTimeKeyDeriveData};
+    use bt_transaction_core::{Amount, TokenId};
+    use bt_util_from_random::FromRandom;
     use rand::{rngs::StdRng, SeedableRng};
 
     // Test converting between external::InputSecret and
-    // mc_crypto_ring_signature_signer::InputSecret
+    // bt_crypto_ring_signature_signer::InputSecret
     #[test]
     fn test_input_secret_conversion() {
         let mut rng: StdRng = SeedableRng::from_seed([123u8; 32]);

@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 // The `quote!` macro requires deep recursion.
 #![recursion_limit = "4096"]
@@ -347,8 +347,8 @@ fn try_digestible_struct(
     // first creating an agg header, then appending each field,
     // then creating a matching agg closer
     let expanded = quote! {
-        impl #impl_generics mc_crypto_digestible::Digestible for #ident #ty_generics #where_clause {
-            fn append_to_transcript<DT: mc_crypto_digestible::DigestTranscript>(&self, context: &'static [u8], transcript: &mut DT) {
+        impl #impl_generics bt_crypto_digestible::Digestible for #ident #ty_generics #where_clause {
+            fn append_to_transcript<DT: bt_crypto_digestible::DigestTranscript>(&self, context: &'static [u8], transcript: &mut DT) {
                 transcript.append_agg_header(context, stringify!(#custom_name).as_bytes());
                 #(#call)*
                 transcript.append_agg_closer(context, stringify!(#custom_name).as_bytes());
@@ -393,22 +393,22 @@ fn try_digestible_struct_transparent(
 
     let expanded = if let Some(field_ident) = &fields[0].ident {
         quote! {
-            impl #impl_generics mc_crypto_digestible::Digestible for #ident #ty_generics #where_clause {
-                fn append_to_transcript<DT: mc_crypto_digestible::DigestTranscript>(&self, context: &'static [u8], transcript: &mut DT) {
+            impl #impl_generics bt_crypto_digestible::Digestible for #ident #ty_generics #where_clause {
+                fn append_to_transcript<DT: bt_crypto_digestible::DigestTranscript>(&self, context: &'static [u8], transcript: &mut DT) {
                     self.#field_ident.append_to_transcript(context, transcript);
                 }
-                fn append_to_transcript_allow_omit<DT: mc_crypto_digestible::DigestTranscript>(&self, context: &'static [u8], transcript: &mut DT) {
+                fn append_to_transcript_allow_omit<DT: bt_crypto_digestible::DigestTranscript>(&self, context: &'static [u8], transcript: &mut DT) {
                     self.#field_ident.append_to_transcript_allow_omit(context, transcript);
                 }
             }
         }
     } else {
         quote! {
-            impl #impl_generics mc_crypto_digestible::Digestible for #ident #ty_generics #where_clause {
-                fn append_to_transcript<DT: mc_crypto_digestible::DigestTranscript>(&self, context: &'static [u8], transcript: &mut DT) {
+            impl #impl_generics bt_crypto_digestible::Digestible for #ident #ty_generics #where_clause {
+                fn append_to_transcript<DT: bt_crypto_digestible::DigestTranscript>(&self, context: &'static [u8], transcript: &mut DT) {
                     self.0.append_to_transcript(context, transcript);
                 }
-                fn append_to_transcript_allow_omit<DT: mc_crypto_digestible::DigestTranscript>(&self, context: &'static [u8], transcript: &mut DT) {
+                fn append_to_transcript_allow_omit<DT: bt_crypto_digestible::DigestTranscript>(&self, context: &'static [u8], transcript: &mut DT) {
                     self.0.append_to_transcript_allow_omit(context, transcript);
                 }
             }
@@ -557,8 +557,8 @@ fn try_digestible_enum(
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
     let expanded = quote! {
-        impl #impl_generics mc_crypto_digestible::Digestible for #ident #ty_generics #where_clause {
-            fn append_to_transcript<DT: mc_crypto_digestible::DigestTranscript>(&self, context: &'static [u8], transcript: &mut DT) {
+        impl #impl_generics bt_crypto_digestible::Digestible for #ident #ty_generics #where_clause {
+            fn append_to_transcript<DT: bt_crypto_digestible::DigestTranscript>(&self, context: &'static [u8], transcript: &mut DT) {
                 // Per-variant hashing.
                 match self {
                     #(#call)*
@@ -652,14 +652,14 @@ fn try_digestible_enum_transparent(
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
     let expanded = quote! {
-        impl #impl_generics mc_crypto_digestible::Digestible for #ident #ty_generics #where_clause {
-            fn append_to_transcript<DT: mc_crypto_digestible::DigestTranscript>(&self, context: &'static [u8], transcript: &mut DT) {
+        impl #impl_generics bt_crypto_digestible::Digestible for #ident #ty_generics #where_clause {
+            fn append_to_transcript<DT: bt_crypto_digestible::DigestTranscript>(&self, context: &'static [u8], transcript: &mut DT) {
                 // Per-variant hashing.
                 match self {
                     #(#call)*
                 }
             }
-            fn append_to_transcript_allow_omit<DT: mc_crypto_digestible::DigestTranscript>(&self, context: &'static [u8], transcript: &mut DT) {
+            fn append_to_transcript_allow_omit<DT: bt_crypto_digestible::DigestTranscript>(&self, context: &'static [u8], transcript: &mut DT) {
                 // Per-variant hashing with allow_omit
                 match self {
                     #(#call_allow_omit)*

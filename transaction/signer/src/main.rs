@@ -1,8 +1,8 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Offline transaction signer implementation
 //!
-//! WIP port / simplification from https://github.com/mobilecoinofficial/full-service/blob/fefe6f645d676b393ece2f607f0081304141b590/transaction-signer/src/bin/main.rs#L337
+//! WIP port / simplification from https://github.com/bothoofficial/full-service/blob/fefe6f645d676b393ece2f607f0081304141b590/transaction-signer/src/bin/main.rs#L337
 
 use std::path::Path;
 
@@ -11,10 +11,10 @@ use clap::Parser;
 use log::{debug, info};
 use serde::{Deserialize, Serialize};
 
-use mc_core::{account::Account, slip10::Slip10KeyGenerator};
-use mc_crypto_ring_signature_signer::LocalRingSigner;
-use mc_transaction_core::AccountKey;
-use mc_transaction_signer::{read_input, write_output, Operations};
+use bt_core::{account::Account, slip10::Slip10KeyGenerator};
+use bt_crypto_ring_signature_signer::LocalRingSigner;
+use bt_transaction_core::AccountKey;
+use bt_transaction_signer::{read_input, write_output, Operations};
 
 #[derive(Clone, PartialEq, Debug, Parser)]
 struct Args {

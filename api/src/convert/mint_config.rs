@@ -1,9 +1,9 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Convert to/from external:MintConfig/MintConfigTxPrefix/MintConfigTx.
 
 use crate::{external, ConversionError};
-use mc_transaction_core::mint::{MintConfig, MintConfigTx, MintConfigTxPrefix};
+use bt_transaction_core::mint::{MintConfig, MintConfigTx, MintConfigTxPrefix};
 
 /// Convert MintConfig --> external::MintConfig.
 impl From<&MintConfig> for external::MintConfig {
@@ -102,7 +102,7 @@ impl TryFrom<&external::MintConfigTx> for MintConfigTx {
 mod tests {
     use super::*;
     use crate::convert::ed25519_multisig::tests::{test_multi_sig, test_signer_set};
-    use mc_util_serial::{decode, encode};
+    use bt_util_serial::{decode, encode};
     use prost::Message;
 
     #[test]
@@ -122,8 +122,8 @@ mod tests {
             assert_eq!(source, recovered);
         }
 
-        // Converting mc_transaction_core::mint::MintConfig -> external::MintConfig ->
-        // mc_transaction_core::mint::MintConfig should be the identity function.
+        // Converting bt_transaction_core::mint::MintConfig -> external::MintConfig ->
+        // bt_transaction_core::mint::MintConfig should be the identity function.
         {
             let external = external::MintConfig::from(&source);
             let recovered = MintConfig::try_from(&external).unwrap();
@@ -180,8 +180,8 @@ mod tests {
             assert_eq!(source, recovered);
         }
 
-        // Converting mc_transaction_core::mint::MintConfigTx ->
-        // external::MintConfigTx -> mc_transaction_core::mint::
+        // Converting bt_transaction_core::mint::MintConfigTx ->
+        // external::MintConfigTx -> bt_transaction_core::mint::
         // MintConfigTx should be the identity function.
         {
             let external = external::MintConfigTx::from(&source);

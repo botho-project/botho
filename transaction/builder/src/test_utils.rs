@@ -1,5 +1,5 @@
-// Copyright (c) 2018-2024 The MobileCoin Foundation
-// Copyright (c) 2024 Cadence Foundation
+// Copyright (c) 2018-2024 The Botho Foundation
+// Copyright (c) 2024 Botho Foundation
 
 //! Utilities that help with testing the transaction builder and related objects
 
@@ -8,10 +8,10 @@ use crate::{
     TxBuilderError,
 };
 use alloc::vec::Vec;
-use mc_account_keys::{AccountKey, PublicAddress, DEFAULT_SUBADDRESS_INDEX};
-use mc_crypto_keys::{RistrettoPrivate, RistrettoPublic};
-use mc_crypto_ring_signature_signer::{NoKeysRingSigner, OneTimeKeyDeriveData};
-use mc_transaction_core::{
+use bt_account_keys::{AccountKey, PublicAddress, DEFAULT_SUBADDRESS_INDEX};
+use bt_crypto_keys::{RistrettoPrivate, RistrettoPublic};
+use bt_crypto_ring_signature_signer::{NoKeysRingSigner, OneTimeKeyDeriveData};
+use bt_transaction_core::{
     constants::RING_SIZE,
     encrypted_fog_hint::EncryptedFogHint,
     onetime_keys::*,
@@ -19,8 +19,8 @@ use mc_transaction_core::{
     tx::{Tx, TxOut},
     Amount, BlockVersion, MemoContext, MemoPayload, NewMemoError, Token, TokenId,
 };
-use mc_transaction_extra::UnsignedTx;
-use mc_util_from_random::FromRandom;
+use bt_transaction_extra::UnsignedTx;
+use bt_util_from_random::FromRandom;
 use rand::{rngs::StdRng, CryptoRng, RngCore, SeedableRng};
 
 /// Creates a TxOut that sends `value` to `recipient`.
@@ -41,7 +41,7 @@ pub fn create_output<RNG: CryptoRng + RngCore>(
     recipient: &PublicAddress,
     rng: &mut RNG,
 ) -> Result<(TxOut, RistrettoPublic), TxBuilderError> {
-    // Cadence doesn't use Fog - use fake hint for protocol compatibility
+    // Botho doesn't use Fog - use fake hint for protocol compatibility
     let hint = EncryptedFogHint::fake_onetime_hint(rng);
     let tx_private_key = RistrettoPrivate::from_random(rng);
     let (tx_out, shared_secret) = crate::transaction_builder::create_output_with_fog_hint(

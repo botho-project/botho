@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! This module implements the common keys traits for the Ed25519 digital
 //! signature scheme.
@@ -16,9 +16,9 @@ use ed25519_dalek::{
     SecretKey, Signature as DalekSignature, SigningKey, VerifyingKey as DalekPublicKey,
     PUBLIC_KEY_LENGTH,
 };
-use mc_crypto_digestible::{DigestTranscript, Digestible};
-use mc_util_from_random::FromRandom;
-use mc_util_repr_bytes::{
+use bt_crypto_digestible::{DigestTranscript, Digestible};
+use bt_util_from_random::FromRandom;
+use bt_util_repr_bytes::{
     derive_core_cmp_from_as_ref, derive_debug_and_display_hex_from_as_ref,
     derive_repr_bytes_from_as_ref_and_try_from,
 };
@@ -29,16 +29,16 @@ use zeroize::Zeroize;
 use alloc::vec::Vec;
 
 #[cfg(feature = "alloc")]
-use mc_util_repr_bytes::derive_into_vec_from_repr_bytes;
+use bt_util_repr_bytes::derive_into_vec_from_repr_bytes;
 
 #[cfg(feature = "prost")]
-use mc_util_repr_bytes::derive_prost_message_from_repr_bytes;
+use bt_util_repr_bytes::derive_prost_message_from_repr_bytes;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "serde")]
-use mc_util_serial::BigArray;
+use bt_util_serial::BigArray;
 
 // ASN.1 DER Signature Bytes -- this is a set of nested TLVs describing
 // a detached signature -- use https://lapo.it/asn1js/
@@ -503,8 +503,8 @@ mod ed25519_tests {
 
     use super::*;
     use crate::{ReprBytes, Unsigned};
-    use mc_crypto_digestible::Digestible;
-    use mc_crypto_hashes::PseudoMerlin;
+    use bt_crypto_digestible::Digestible;
+    use bt_crypto_hashes::PseudoMerlin;
     use rand_core::SeedableRng;
     use rand_hc::Hc128Rng;
     use semver::{Version, VersionReq};

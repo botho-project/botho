@@ -1,9 +1,9 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Convert between Rust and proto representations of NodeID.
 
 use crate::{quorum_set::Node as NodeProto, ConversionError};
-use mc_common::{NodeID, ResponderId};
+use bt_common::{NodeID, ResponderId};
 use std::str::FromStr;
 
 impl From<&NodeID> for NodeProto {

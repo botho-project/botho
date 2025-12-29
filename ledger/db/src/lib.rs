@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Persistent storage for the blockchain.
 #![warn(unused_extern_crates)]
@@ -29,4 +29,4 @@ pub use crate::{
     mint_tx_store::MintTxStore,
     tx_out_store::TxOutStore,
 };
-pub use mc_util_lmdb::{MetadataStore, MetadataStoreError, MetadataStoreSettings};
+pub use bt_util_lmdb::{MetadataStore, MetadataStoreError, MetadataStoreSettings};

@@ -1,15 +1,15 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
-use mc_account_keys::AccountKey;
-use mc_blockchain_test_utils::get_blocks_with_recipients;
-use mc_blockchain_types::{Block, BlockVersion};
-use mc_crypto_digestible_test_utils::*;
-use mc_crypto_keys::RistrettoPrivate;
-use mc_transaction_core::{
+use bt_account_keys::AccountKey;
+use bt_blockchain_test_utils::get_blocks_with_recipients;
+use bt_blockchain_types::{Block, BlockVersion};
+use bt_crypto_digestible_test_utils::*;
+use bt_crypto_keys::RistrettoPrivate;
+use bt_transaction_core::{
     encrypted_fog_hint::EncryptedFogHint, tokens::Mob, tx::TxOut, Amount, Token,
 };
-use mc_util_from_random::FromRandom;
-use mc_util_test_helper::{RngCore, RngType as FixedRng, SeedableRng};
+use bt_util_from_random::FromRandom;
+use bt_util_test_helper::{RngCore, RngType as FixedRng, SeedableRng};
 
 fn test_accounts() -> Vec<AccountKey> {
     let mut rng: FixedRng = SeedableRng::from_seed([12u8; 32]);

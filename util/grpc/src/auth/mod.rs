@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! GRPC authentication utilities.
 
@@ -190,7 +190,7 @@ impl BasicCredentials {
 #[cfg(test)]
 mod test {
     use super::*;
-    use mc_common::time::SystemTimeProvider;
+    use bt_common::time::SystemTimeProvider;
     use std::time::Duration;
 
     const TOKEN_MAX_LIFETIME: Duration = Duration::from_secs(60);

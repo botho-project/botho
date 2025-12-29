@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! A set of static ZWTs designed to aid the handling of noise protocol strings.
 
@@ -8,7 +8,7 @@ use aes_gcm::Aes256Gcm;
 use core::marker::PhantomData;
 use digest::Digest;
 use displaydoc::Display;
-use mc_crypto_keys::{Kex, X25519};
+use bt_crypto_keys::{Kex, X25519};
 use serde::{Deserialize, Serialize};
 use sha2::Sha512;
 use subtle::ConstantTimeEq;
@@ -132,7 +132,7 @@ mod test {
     use core::str::FromStr;
 
     #[test]
-    fn mobilecoin_ix_25519_aesgcm_sha512_from_str() {
+    fn botho_ix_25519_aesgcm_sha512_from_str() {
         let name = "Noise_IX_25519_AESGCM_SHA512";
         let parsed_name =
             ProtocolName::<HandshakeIX, X25519, Aes256Gcm, Sha512>::from_str(name).unwrap();
@@ -141,7 +141,7 @@ mod test {
     }
 
     #[test]
-    fn mobilecoin_nx_25519_aesgcm_sha512_from_str() {
+    fn botho_nx_25519_aesgcm_sha512_from_str() {
         let name = "Noise_NX_25519_AESGCM_SHA512";
         let parsed_name =
             ProtocolName::<HandshakeNX, X25519, Aes256Gcm, Sha512>::from_str(name).unwrap();

@@ -1,10 +1,10 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Convert to/from blockchain::BlockContents
 
 use crate::{blockchain, external, ConversionError};
-use mc_blockchain_types::BlockContents;
-use mc_transaction_core::{
+use bt_blockchain_types::BlockContents;
+use bt_transaction_core::{
     mint::{MintTx, ValidatedMintConfigTx},
     ring_signature::KeyImage,
     tx::TxOut,

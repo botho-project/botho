@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Define DiscoveryHint buffer size, and serialization defs for it
 //! Also define `fake_onetime_hint` which samples the distribution that
@@ -13,10 +13,10 @@ use generic_array::{
     typenum::{Diff, Unsigned, U84},
     GenericArray,
 };
-use mc_crypto_box::{CryptoBox, VersionedCryptoBox};
-use mc_crypto_digestible::Digestible;
-use mc_crypto_keys::Ristretto;
-use mc_util_from_random::FromRandom;
+use bt_crypto_box::{CryptoBox, VersionedCryptoBox};
+use bt_crypto_digestible::Digestible;
+use bt_crypto_keys::Ristretto;
+use bt_util_from_random::FromRandom;
 use prost::{
     bytes::{Buf, BufMut},
     encoding::{bytes, skip_field, DecodeContext, WireType},
@@ -28,7 +28,7 @@ use zeroize::Zeroize;
 
 /// The length of the encrypted fog hint field in the ledger.
 ///
-/// Must be at least as large as mc_crypto_box::VersionedCryptoBox::FooterSize.
+/// Must be at least as large as bt_crypto_box::VersionedCryptoBox::FooterSize.
 /// Footersize = 50, + 32 for one curve point, + 2 bytes of magic / padding
 /// space for future needs
 pub type EncryptedFogHintSize = U84;
@@ -128,7 +128,7 @@ impl EncryptedFogHint {
             Diff<EncryptedFogHintSize, <VersionedCryptoBox as CryptoBox<Ristretto>>::FooterSize>,
         >::default();
         // Make a random key
-        let key = mc_crypto_keys::RistrettoPublic::from_random(rng);
+        let key = bt_crypto_keys::RistrettoPublic::from_random(rng);
         // encrypt_in_place into the buffer
         let bytes = VersionedCryptoBox::default()
             .encrypt_fixed_length(rng, &key, &plaintext)
@@ -193,8 +193,8 @@ mod testing {
     #[test]
     fn test_fog_hint_serde() {
         let a = EncryptedFogHint::new(&[17u8; ENCRYPTED_FOG_HINT_LEN]);
-        let a_ser = mc_util_serial::serialize(&a).unwrap();
-        let b: EncryptedFogHint = mc_util_serial::deserialize(&a_ser).unwrap();
+        let a_ser = bt_util_serial::serialize(&a).unwrap();
+        let b: EncryptedFogHint = bt_util_serial::deserialize(&a_ser).unwrap();
         assert_eq!(a.as_ref(), b.as_ref());
     }
 }

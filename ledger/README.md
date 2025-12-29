@@ -1,3 +1,3 @@
 ## ledger
 
-Storage and synchronization for the MobileCoin blockchain.
+Storage and synchronization for the Botho blockchain.

@@ -1,4 +1,4 @@
-// Copyright (c) 2024 Cadence Foundation
+// Copyright (c) 2024 Botho Foundation
 
 //! High-level gossip service that manages the libp2p swarm and peer store.
 //!
@@ -28,9 +28,9 @@ use libp2p::{
     swarm::SwarmEvent,
     tcp, yamux, Multiaddr, PeerId, Swarm, SwarmBuilder,
 };
-use mc_common::{NodeID, ResponderId};
-use mc_consensus_scp_types::QuorumSet;
-use mc_crypto_keys::{Ed25519Pair, Signer};
+use bt_common::{NodeID, ResponderId};
+use bt_consensus_scp_types::QuorumSet;
+use bt_crypto_keys::{Ed25519Pair, Signer};
 use std::{
     collections::HashSet,
     sync::Arc,
@@ -543,7 +543,7 @@ async fn handle_behaviour_event(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mc_crypto_keys::Ed25519Public;
+    use bt_crypto_keys::Ed25519Public;
     use std::str::FromStr;
 
     fn make_test_service() -> GossipService {

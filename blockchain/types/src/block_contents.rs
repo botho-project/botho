@@ -1,11 +1,11 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 use crate::ConvertError;
 use alloc::{vec, vec::Vec};
 use core::fmt::Debug;
-use mc_crypto_digestible::{Digestible, MerlinTranscript};
-use mc_crypto_ring_signature::KeyImage;
-use mc_transaction_core::{
+use bt_crypto_digestible::{Digestible, MerlinTranscript};
+use bt_crypto_ring_signature::KeyImage;
+use bt_transaction_core::{
     mint::{MintTx, ValidatedMintConfigTx},
     tx::TxOut,
 };

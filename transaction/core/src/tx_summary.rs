@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! The TxSummary is meant to reduce the complexity of implementing a hardware
 //! wallet. (See MCIP 52)
@@ -90,11 +90,11 @@ use alloc::{collections::BTreeMap, vec::Vec};
 
 use crate::{tx::TxPrefix, TxOut};
 
-use mc_crypto_keys::CompressedRistrettoPublic;
-use mc_crypto_ring_signature::CompressedCommitment;
-use mc_util_zip_exact::{zip_exact, ZipExactError};
+use bt_crypto_keys::CompressedRistrettoPublic;
+use bt_crypto_ring_signature::CompressedCommitment;
+use bt_util_zip_exact::{zip_exact, ZipExactError};
 
-pub use mc_transaction_types::{TxInSummary, TxOutSummary, TxSummary};
+pub use bt_transaction_types::{TxInSummary, TxOutSummary, TxSummary};
 
 /// [TxSummaryNew] trait for constructing [TxSummary] object
 pub trait TxSummaryNew: Sized {

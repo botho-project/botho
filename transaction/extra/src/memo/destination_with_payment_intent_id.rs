@@ -1,12 +1,12 @@
-// Copyright (c) 2018-2023 The MobileCoin Foundation
+// Copyright (c) 2018-2023 The Botho Foundation
 
 //! Object for 0x0204 Destination With Payment Intent Id memo type
 //!
-//! This was proposed for standardization in mobilecoinfoundation/mcips/pull/54
+//! This was proposed for standardization in bothofoundation/mcips/pull/54
 
 use super::{compute_destination_memo, DestinationMemoError, RegisteredMemoType};
 use crate::impl_memo_type_conversions;
-use mc_account_keys::ShortAddressHash;
+use bt_account_keys::ShortAddressHash;
 
 /// A memo that the sender writes to themself to record details of the
 /// transaction, and attaches to the change TxOut so that they can recover it

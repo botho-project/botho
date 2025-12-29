@@ -1,20 +1,35 @@
-# Cadence
+# Botho
+
+*"Motho ke motho ka batho"* — A person is a person through other people.
 
 A privacy-preserving, mined cryptocurrency built on proven cryptographic foundations.
 
-## What is Cadence?
+## What is Botho?
 
-Cadence is a new cryptocurrency that combines:
+**Botho** (Sesotho/Setswana: humanity, humaneness) is a cryptocurrency that embodies the African philosophy of interconnectedness—the idea that we exist through our relationships with others. Just as the Botho philosophy emphasizes community over individualism, this currency is designed for collective benefit rather than concentrated wealth.
+
+Botho combines:
 
 - **Proof-of-Work Mining**: Bitcoin-style mining with variable difficulty
-- **Full Transaction Privacy**: Ring signatures, one-time addresses, and confidential transactions
+- **Full Transaction Privacy**: Stealth addresses, ring signatures, and confidential transactions
+- **Anti-Inequality Design**: Progressive fees that discourage wealth concentration
 - **Simple Design**: Focused on the essentials, removing unnecessary complexity
 
-The native currency unit is the **credit**.
+The native currency unit is the **credit** (symbol: **BTH**).
+
+## Philosophy
+
+Botho is a national principle of Botswana, describing "a person who has a well-rounded character, who is well-mannered, courteous and disciplined, and realises his or her full potential."
+
+In the context of cryptocurrency:
+- **Decentralized consensus** reflects "a person is a person through other people"
+- **Privacy** respects individual dignity
+- **Progressive fees** prioritize community over accumulation
+- **Tail emission** ensures sustainable, shared security
 
 ## How Mining Works
 
-Cadence uses a **parallel proof-of-work** mechanism integrated with Stellar Consensus Protocol (SCP) for Byzantine fault tolerance.
+Botho uses a **parallel proof-of-work** mechanism integrated with Stellar Consensus Protocol (SCP) for Byzantine fault tolerance.
 
 ### The Mining Process
 
@@ -29,7 +44,7 @@ Cadence uses a **parallel proof-of-work** mechanism integrated with Stellar Cons
 
 ### Why Parallel Mining?
 
-Unlike Bitcoin where the first valid block to propagate "wins," Cadence separates proof-of-work from block selection:
+Unlike Bitcoin where the first valid block to propagate "wins," Botho separates proof-of-work from block selection:
 
 - **Multiple Valid Solutions**: Any miner who finds a valid nonce can submit a mining transaction
 - **Consensus-Based Selection**: The SCP quorum (not network propagation speed) determines which miner's block is included
@@ -42,10 +57,10 @@ Mining rewards follow a smooth decay curve with perpetual tail emission:
 
 | Parameter | Value |
 | :-- | :-- |
-| Initial reward | 50 CAD |
+| Initial reward | 50 BTH |
 | Halving period | ~6,307,200 blocks (~4 years at 20-sec blocks) |
-| Tail emission | 0.6 CAD per block (perpetual) |
-| Total supply | ~18 million CAD (pre-tail) |
+| Tail emission | 0.6 BTH per block (perpetual) |
+| Total supply | ~18 million BTH (pre-tail) |
 
 ### Difficulty Adjustment
 
@@ -55,17 +70,17 @@ Mining rewards follow a smooth decay curve with perpetual tail emission:
 
 ## Privacy Features
 
-Cadence inherits battle-tested privacy technology from the CryptoNote protocol:
+Botho inherits battle-tested privacy technology from the CryptoNote protocol:
 
-- **Ring Signatures**: Hide the sender among a group of possible signers
-- **One-Time Addresses**: Each transaction creates a unique destination address
-- **RingCT (Ring Confidential Transactions)**: Amounts are cryptographically hidden
+- **Stealth Addresses**: Each transaction creates a unique one-time destination address
+- **Ring Signatures**: Hide the sender among a group of possible signers (planned)
+- **RingCT (Ring Confidential Transactions)**: Amounts are cryptographically hidden (planned)
 
 These features ensure that transactions cannot be traced or linked, providing cash-like privacy.
 
 ## Progressive Transaction Fees
 
-Cadence implements a novel **cluster-based progressive fee** system designed to reduce wealth concentration without sacrificing privacy or enabling Sybil attacks.
+Botho implements a novel **cluster-based progressive fee** system designed to reduce wealth concentration without sacrificing privacy or enabling Sybil attacks.
 
 ### How It Works
 
@@ -130,6 +145,18 @@ cargo build --release
 cargo test
 ```
 
+## Documentation
+
+Detailed documentation is available in the [docs](./docs) directory:
+
+| Document | Description |
+| :-- | :-- |
+| [Getting Started](./docs/getting-started.md) | Build, install, and run your first node |
+| [Architecture](./docs/architecture.md) | System design and component overview |
+| [Configuration](./docs/configuration.md) | Complete configuration reference |
+| [Mining](./docs/mining.md) | Mining setup, economics, and troubleshooting |
+| [Privacy](./docs/privacy.md) | Privacy features and cryptography |
+
 ## Repository Structure
 
 | Directory | Description |
@@ -144,9 +171,13 @@ cargo test
 
 ## Origins
 
-Cadence is derived from [MobileCoin](https://github.com/mobilecoinfoundation/mobilecoin), with significant simplifications to focus on mined, private transactions.
+Botho is derived from [MobileCoin](https://github.com/mobilecoinfoundation/mobilecoin), with significant simplifications to focus on mined, private transactions.
 
-**Note**: Unlike MobileCoin, Cadence is designed for desktop and server environments only. There are no plans for mobile device support. We have removed MobileCoin's SGX enclave infrastructure, Fog (the privacy-preserving mobile sync service), and other components designed for resource-constrained devices.
+**Note**: Unlike MobileCoin, Botho is designed for desktop and server environments only. There are no plans for mobile device support. We have removed MobileCoin's SGX enclave infrastructure, Fog (the privacy-preserving mobile sync service), and other components designed for resource-constrained devices.
+
+## Links
+
+- **Website**: [botho.io](https://botho.io)
 
 ## License
 

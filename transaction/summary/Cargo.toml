@@ -1,7 +1,7 @@
 [package]
-name = "mc-transaction-summary"
+name = "bt-transaction-summary"
 version = "7.1.0"
-authors = ["MobileCoin"]
+authors = ["Botho"]
 edition = "2021"
 license = "Apache-2.0"
 readme = "README.md"
@@ -10,35 +10,35 @@ readme = "README.md"
 std = ["prost?/std"]
 serde = [
     "dep:serde",
-    "mc-account-keys?/serde",
-    "mc-crypto-keys/serde",
-    "mc-crypto-ring-signature/serde",
-    "mc-transaction-types/serde",
+    "bt-account-keys?/serde",
+    "bt-crypto-keys/serde",
+    "bt-crypto-ring-signature/serde",
+    "bt-transaction-types/serde",
 ]
 prost = [
     "dep:prost",
-    "mc-account-keys?/prost",
-    "mc-crypto-keys/prost",
-    "mc-crypto-ring-signature/prost",
-    "mc-transaction-types/prost",
+    "bt-account-keys?/prost",
+    "bt-crypto-keys/prost",
+    "bt-crypto-ring-signature/prost",
+    "bt-transaction-types/prost",
 ]
 
-default = ["std", "serde", "prost", "mc-account-keys"]
+default = ["std", "serde", "prost", "bt-account-keys"]
 
 [dependencies]
 # External dependencies
 displaydoc = { workspace = true }
 heapless = { workspace = true }
 
-# MobileCoin dependencies
-mc-account-keys = { workspace = true, optional = true }
-mc-core = { workspace = true }
-mc-crypto-digestible = { workspace = true, features = ["dalek", "derive"] }
-mc-crypto-keys = { workspace = true }
-mc-crypto-ring-signature = { workspace = true }
-mc-transaction-types = { workspace = true, features = ["alloc"] }
-mc-util-vec-map = { workspace = true }
-mc-util-zip-exact = { workspace = true }
+# Botho dependencies
+bt-account-keys = { workspace = true, optional = true }
+bt-core = { workspace = true }
+bt-crypto-digestible = { workspace = true, features = ["dalek", "derive"] }
+bt-crypto-keys = { workspace = true }
+bt-crypto-ring-signature = { workspace = true }
+bt-transaction-types = { workspace = true, features = ["alloc"] }
+bt-util-vec-map = { workspace = true }
+bt-util-zip-exact = { workspace = true }
 
 prost = { workspace = true, features = ["prost-derive"], optional = true }
 serde = { workspace = true, features = ["derive"], optional = true }
@@ -46,6 +46,6 @@ subtle = { workspace = true, features = ["i128"] }
 zeroize = { workspace = true }
 
 [dev-dependencies]
-mc-transaction-core = { workspace = true, features = [] }
-mc-util-from-random = { workspace = true }
+bt-transaction-core = { workspace = true, features = [] }
+bt-util-from-random = { workspace = true }
 rand = { workspace = true }

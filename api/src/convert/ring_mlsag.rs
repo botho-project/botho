@@ -1,9 +1,9 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Convert to/from external::RingMLSAG
 
 use crate::{external, ConversionError};
-use mc_transaction_core::ring_signature::{CurveScalar, RingMLSAG};
+use bt_transaction_core::ring_signature::{CurveScalar, RingMLSAG};
 
 impl From<&RingMLSAG> for external::RingMlsag {
     fn from(source: &RingMLSAG) -> Self {

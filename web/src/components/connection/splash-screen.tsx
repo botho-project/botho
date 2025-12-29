@@ -11,7 +11,7 @@ import {
   WifiOff,
 } from 'lucide-react'
 import { useState } from 'react'
-import { useConnection, type CadenceNode } from '@/contexts/connection'
+import { useConnection, type BothoNode } from '@/contexts/connection'
 import { cn } from '@/lib/utils'
 
 export function SplashScreen() {
@@ -29,7 +29,7 @@ export function SplashScreen() {
   const [customPort, setCustomPort] = useState('8080')
   const [isConnecting, setIsConnecting] = useState<string | null>(null)
 
-  const handleConnect = async (node: CadenceNode) => {
+  const handleConnect = async (node: BothoNode) => {
     setIsConnecting(node.id)
     await connectToNode(node)
     setIsConnecting(null)
@@ -114,7 +114,7 @@ export function SplashScreen() {
             transition={{ delay: 0.2 }}
             className="font-display text-4xl font-bold tracking-tight text-gradient"
           >
-            Cadence
+            Botho
           </motion.h1>
           <motion.p
             initial={{ opacity: 0 }}
@@ -178,7 +178,7 @@ export function SplashScreen() {
                   </div>
                   <p className="mt-3 text-sm text-[--color-dim]">No nodes found</p>
                   <p className="mt-1 text-xs text-[--color-steel]">
-                    Start a Cadence node or add one manually
+                    Start a Botho node or add one manually
                   </p>
                 </motion.div>
               ) : (
@@ -319,7 +319,7 @@ export function SplashScreen() {
         >
           Start a node with{' '}
           <code className="rounded bg-[--color-slate] px-1.5 py-0.5 font-mono text-[--color-ghost]">
-            cadence run
+            botho run
           </code>
         </motion.p>
       </motion.div>

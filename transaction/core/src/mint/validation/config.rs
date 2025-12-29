@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! MintConfigTx transaction validation.
 
@@ -14,8 +14,8 @@ use crate::{
     },
     BlockVersion, TokenId,
 };
-use mc_crypto_keys::Ed25519Public;
-use mc_crypto_multisig::SignerSet;
+use bt_crypto_keys::Ed25519Public;
+use bt_crypto_multisig::SignerSet;
 
 /// Determines if the transaction is valid, with respect to the provided
 /// context.
@@ -110,10 +110,10 @@ mod tests {
     use super::*;
     use crate::mint::{config::MintConfigTxPrefix, constants::NONCE_LENGTH};
     use alloc::vec;
-    use mc_crypto_keys::{Ed25519Pair, Signer};
-    use mc_crypto_multisig::MultiSig;
-    use mc_util_from_random::FromRandom;
-    use mc_util_test_helper::get_seeded_rng;
+    use bt_crypto_keys::{Ed25519Pair, Signer};
+    use bt_crypto_multisig::MultiSig;
+    use bt_util_from_random::FromRandom;
+    use bt_util_test_helper::get_seeded_rng;
 
     #[test]
     fn validate_configs_accepts_valid_mint_configs() {

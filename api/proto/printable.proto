@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 // Protos to be used for displaying encoded strings to users
 
@@ -7,7 +7,7 @@ import "external.proto";
 
 package printable;
 
-option java_package = "com.mobilecoin.api";
+option java_package = "com.botho.api";
 
 // Message for a payment request, which combines a public address
 // with an a requested payment amount and memo field
@@ -51,8 +51,8 @@ message TransferPayload {
 // Message encoding information required to locate a TxOut,
 //
 // un-blind the amount, and spend the TxOut. This can be used to give
-// MobileCoin to both FOG & non-FOG users who may not yet have
-// a MobileCoin account enabled
+// Botho to both FOG & non-FOG users who may not yet have
+// a Botho account enabled
 message TxOutGiftCode {
   // The global index of the TxOut that has been gifted. This allows
   // the receiver to find & uniquely identify the TxOut

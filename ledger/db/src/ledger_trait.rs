@@ -1,5 +1,5 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
-// Copyright (c) 2024 Cadence Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
+// Copyright (c) 2024 Botho Foundation
 
 //! Note: Merkle proof methods were removed as part of SGX removal.
 //! With SGX enclaves removed, membership proofs are no longer needed -
@@ -7,12 +7,12 @@
 //! ring members exist.
 
 use crate::{ActiveMintConfig, ActiveMintConfigs, Error};
-use mc_blockchain_types::{
+use bt_blockchain_types::{
     Block, BlockContents, BlockData, BlockIndex, BlockMetadata, BlockSignature,
 };
-use mc_common::{Hash, HashMap};
-use mc_crypto_keys::CompressedRistrettoPublic;
-use mc_transaction_core::{mint::MintTx, ring_signature::KeyImage, tx::TxOut, TokenId};
+use bt_common::{Hash, HashMap};
+use bt_crypto_keys::CompressedRistrettoPublic;
+use bt_transaction_core::{mint::MintTx, ring_signature::KeyImage, tx::TxOut, TokenId};
 use mockall::*;
 
 #[automock]

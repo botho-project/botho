@@ -1,11 +1,11 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Convert to/from external::CompressedRistretto.
 
 use crate::{external, ConversionError};
 use curve25519_dalek::ristretto::CompressedRistretto;
-use mc_crypto_keys::{CompressedRistrettoPublic, RistrettoPublic};
-use mc_transaction_core::CompressedCommitment;
+use bt_crypto_keys::{CompressedRistrettoPublic, RistrettoPublic};
+use bt_transaction_core::CompressedCommitment;
 
 impl From<&CompressedCommitment> for external::CompressedRistretto {
     fn from(source: &CompressedCommitment) -> Self {

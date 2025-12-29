@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 use cargo_emit::rerun_if_env_changed;
 use std::{
@@ -37,7 +37,7 @@ fn get_git_commit(current_dir: impl AsRef<Path>) -> String {
 }
 
 /// Get the git commit of what should be the root repository.
-/// This is useful when `mobilecoin` is a submodule of another repository.
+/// This is useful when `botho` is a submodule of another repository.
 /// Use the GIT_COMMIT environment variable to override this.
 fn get_root_git_commit() -> String {
     if let Ok(result) = env::var("GIT_COMMIT") {
@@ -72,12 +72,12 @@ fn get_root_git_commit() -> String {
     }
 }
 
-/// Get the `mobilecoin` repository's git commit.
+/// Get the `botho` repository's git commit.
 // This build script is run from the directory containing it, so calling
 // get_get_commit with the current directory will give the git commit of the
-// mobilecoin repository. When mobilecoin is not submoduled this will be
+// botho repository. When botho is not submoduled this will be
 // identicial to the root git commit returned from `get_root_git_commit`.
-fn get_mobilecoin_git_commit() -> String {
+fn get_botho_git_commit() -> String {
     get_git_commit(env::current_dir().expect("failed getting current directory"))
 }
 
@@ -100,7 +100,7 @@ fn env_with_fallback(name: &str, fallback: &str) -> String {
 fn main() {
     // Collect stuff to go in the build info file
     let root_git_commit = get_root_git_commit();
-    let mobilecoin_git_commit = get_mobilecoin_git_commit();
+    let botho_git_commit = get_botho_git_commit();
     let profile = env_with_fallback("PROFILE", "?");
     let debug = env_with_fallback("DEBUG", "false");
     let opt_level = env_with_fallback("OPT_LEVEL", "?");
@@ -116,7 +116,7 @@ fn main() {
         r###"
 // This file is generated
 pub fn git_commit() -> &'static str {{ "{root_git_commit}" }}
-pub fn mobilecoin_git_commit() -> &'static str {{ "{mobilecoin_git_commit}" }}
+pub fn botho_git_commit() -> &'static str {{ "{botho_git_commit}" }}
 pub fn profile() -> &'static str {{ "{profile}" }}
 pub fn debug() -> &'static str {{ "{debug}" }}
 pub fn opt_level() -> &'static str {{ "{opt_level}" }}

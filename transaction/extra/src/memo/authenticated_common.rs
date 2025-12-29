@@ -1,18 +1,18 @@
-// Copyright (c) 2018-2023 The MobileCoin Foundation
+// Copyright (c) 2018-2023 The Botho Foundation
 
 //! HMAC code shared by all category 0x01 memos.
 //!
 //! This validation scheme was proposed for standardization in
-//! mobilecoinfoundation/mcips/pull/4
+//! bothofoundation/mcips/pull/4
 
 use crate::SenderMemoCredential;
 use alloc::boxed::Box;
 use core::fmt::Debug;
-use mc_account_keys::{PublicAddress, ShortAddressHash};
-use mc_crypto_keys::{
+use bt_account_keys::{PublicAddress, ShortAddressHash};
+use bt_crypto_keys::{
     CompressedRistrettoPublic, KexReusablePrivate, RistrettoPrivate, RistrettoPublic,
 };
-use mc_transaction_core::NewMemoError;
+use bt_transaction_core::NewMemoError;
 use subtle::{Choice, ConstantTimeEq};
 
 /// A trait for abstracting away signing of 0x0100 and 0x0101 memos.
@@ -66,7 +66,7 @@ impl AuthenticatedMemoHmacSigner for SenderMemoCredential {
         let shared_secret = self
             .subaddress_spend_private_key
             .key_exchange(receiving_subaddress_view_public_key);
-        let hmac_value = mc_crypto_memo_mac::compute_category1_hmac(
+        let hmac_value = bt_crypto_memo_mac::compute_category1_hmac(
             shared_secret.as_ref(),
             tx_out_public_key,
             memo_type_bytes,
@@ -93,7 +93,7 @@ pub fn validate_authenticated_sender(
     let shared_secret =
         receiving_subaddress_view_private_key.key_exchange(sender_address.spend_public_key());
 
-    let expected_hmac = mc_crypto_memo_mac::compute_category1_hmac(
+    let expected_hmac = bt_crypto_memo_mac::compute_category1_hmac(
         shared_secret.as_ref(),
         tx_out_public_key,
         memo_type_bytes,

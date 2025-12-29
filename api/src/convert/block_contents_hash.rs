@@ -1,9 +1,9 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Convert to/from blockchain::BlockContentsHash
 
 use crate::{blockchain, ConversionError};
-use mc_blockchain_types::BlockContentsHash;
+use bt_blockchain_types::BlockContentsHash;
 
 /// Convert BlockContentsHash --> blockchain::BlockContentsHash.
 impl From<&BlockContentsHash> for blockchain::BlockContentsHash {

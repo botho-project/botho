@@ -1,9 +1,9 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 use displaydoc::Display;
-use mc_crypto_keys::KeyError;
-use mc_transaction_types::{AmountError, BlockVersionError};
-use mc_util_zip_exact::ZipExactError;
+use bt_crypto_keys::KeyError;
+use bt_transaction_types::{AmountError, BlockVersionError};
+use bt_util_zip_exact::ZipExactError;
 
 /// An error which can occur when verifying a TxSummary against unblinding data
 #[derive(Clone, Debug, Display)]

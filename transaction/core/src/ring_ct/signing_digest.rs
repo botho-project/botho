@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 use crate::{
     domain_separators::{EXTENDED_MESSAGE_AND_TX_SUMMARY_DOMAIN_TAG, EXTENDED_MESSAGE_DOMAIN_TAG},
@@ -6,8 +6,8 @@ use crate::{
     BlockVersion, CompressedCommitment, TxSummary, TxSummaryNew,
 };
 use alloc::vec::Vec;
-use mc_crypto_digestible::{DigestTranscript, Digestible, MerlinTranscript};
-use mc_util_zip_exact::ZipExactError;
+use bt_crypto_digestible::{DigestTranscript, Digestible, MerlinTranscript};
+use bt_util_zip_exact::ZipExactError;
 
 /// The MLSAG signing digest is the digest that MLSAGs actually sign
 pub struct MLSAGSigningDigest(pub Vec<u8>);

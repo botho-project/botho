@@ -1,7 +1,7 @@
 [package]
-name = "mc-consensus-scp"
+name = "bt-consensus-scp"
 version = "7.1.0"
-authors = ["MobileCoin"]
+authors = ["Botho"]
 description = "Stellar Consensus Protocol"
 edition = "2021"
 keywords = ["SCP", "Stellar Consensus Protocol", "Consensus", "Stellar", "Byzantine"]
@@ -10,15 +10,15 @@ readme = "README.md"
 rust-version = { workspace = true }
 
 [features]
-test_utils = ["mc-consensus-scp-types/test_utils"]
+test_utils = ["bt-consensus-scp-types/test_utils"]
 
 [dependencies]
-mc-common = { workspace = true, features = ["log"] }
-mc-consensus-scp-types = { workspace = true }
-mc-crypto-digestible = { workspace = true, features = ["derive"] }
-mc-crypto-keys = { workspace = true }
-mc-util-from-random = { workspace = true }
-mc-util-serial = { workspace = true, features = ["std"] }
+bt-common = { workspace = true, features = ["log"] }
+bt-consensus-scp-types = { workspace = true }
+bt-crypto-digestible = { workspace = true, features = ["derive"] }
+bt-crypto-keys = { workspace = true }
+bt-util-from-random = { workspace = true }
+bt-util-serial = { workspace = true, features = ["std"] }
 
 mockall = { workspace = true }
 primitive-types = { workspace = true }
@@ -28,12 +28,13 @@ serde = { workspace = true, features = ["alloc", "derive"] }
 serde_json = { workspace = true }
 
 [dev-dependencies]
-mc-common = { workspace = true, features = ["loggers"] }
-mc-consensus-scp-types = { workspace = true, features = ["test_utils"] }
-mc-util-logger-macros = { workspace = true }
-mc-util-test-helper = { workspace = true }
+bt-common = { workspace = true, features = ["loggers"] }
+bt-consensus-scp-types = { workspace = true, features = ["test_utils"] }
+bt-util-logger-macros = { workspace = true }
+bt-util-test-helper = { workspace = true }
 
 crossbeam-channel = { workspace = true }
+dashmap = { workspace = true }
 maplit = { workspace = true }
 serial_test = { workspace = true }
 tempfile = { workspace = true }

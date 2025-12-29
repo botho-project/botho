@@ -1,8 +1,8 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Helper functions intended to return canned certificate data
 
-use mc_crypto_keys::{DistinguishedEncoding, Ed25519Pair, Ed25519Private};
+use bt_crypto_keys::{DistinguishedEncoding, Ed25519Pair, Ed25519Private};
 use std::{fs, path::PathBuf};
 
 /// Retrieve a pathbuf for a file containing a PEM string

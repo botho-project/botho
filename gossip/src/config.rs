@@ -1,4 +1,4 @@
-// Copyright (c) 2024 Cadence Foundation
+// Copyright (c) 2024 Botho Foundation
 
 //! Configuration for the gossip service.
 

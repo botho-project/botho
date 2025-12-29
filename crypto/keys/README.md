@@ -24,4 +24,4 @@ This crate provides `KeyExSystem`-related implementations for X25519 and Ristret
 The most direct work which is required is deprecating the signing system in favor of the RustCrypto `signature` traits, splitting the X, Ed, and Ristretto types into separate crates, and bringing them all together by submitting this work to RustCrypto for eventual inclusion. This is intended to do two things:
 
 1. Improve the rust cryptographic ecosystem
-1. Reduce MobileCoin's burden as it relates to cryptography-related code maintenance.
+1. Reduce Botho's burden as it relates to cryptography-related code maintenance.

@@ -1,9 +1,9 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Definition of memo payload type
 //!
 //! This memo payload and its encryption scheme was proposed for standardization
-//! in mobilecoinfoundation/mcips/pull/3.
+//! in bothofoundation/mcips/pull/3.
 //!
 //! The encrypted memo of TxOut's is designed to have one encryption scheme and
 //! the payload is an extensible format. Two bytes are used for a schema type,
@@ -43,9 +43,9 @@ use generic_array::{
     GenericArray,
 };
 use hkdf::Hkdf;
-use mc_crypto_digestible::Digestible;
-use mc_crypto_keys::{CompressedRistrettoPublic, RistrettoPublic};
-use mc_util_repr_bytes::{
+use bt_crypto_digestible::Digestible;
+use bt_crypto_keys::{CompressedRistrettoPublic, RistrettoPublic};
+use bt_util_repr_bytes::{
     derive_debug_and_display_hex_from_as_ref, derive_into_vec_from_repr_bytes,
     derive_prost_message_from_repr_bytes, derive_repr_bytes_from_as_ref_and_try_from,
     derive_serde_from_repr_bytes,
@@ -248,8 +248,8 @@ impl From<Utf8Error> for MemoError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mc_util_from_random::FromRandom;
-    use mc_util_test_helper::{RngType, SeedableRng};
+    use bt_util_from_random::FromRandom;
+    use bt_util_test_helper::{RngType, SeedableRng};
 
     #[test]
     fn test_memo_payload_round_trip() {

@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! The Noise Framework's SymmetricState object.
 
@@ -13,7 +13,7 @@ use core::marker::PhantomData;
 use displaydoc::Display;
 use generic_array::typenum::Unsigned;
 use hkdf::{InvalidLength, SimpleHkdf};
-use mc_crypto_keys::{Kex, KexPublic, ReprBytes};
+use bt_crypto_keys::{Kex, KexPublic, ReprBytes};
 use secrecy::{ExposeSecret, SecretVec};
 use serde::{Deserialize, Serialize};
 
@@ -148,7 +148,7 @@ where
     /// into our existing handshake hash, and a new cipher key, which is
     /// applied to our internal cipher state.
     ///
-    /// MobileCoin does not currently utilize pre-shared keys anywhere, so
+    /// Botho does not currently utilize pre-shared keys anywhere, so
     /// this is unused,
     #[allow(dead_code)]
     pub fn mix_key_and_hash(

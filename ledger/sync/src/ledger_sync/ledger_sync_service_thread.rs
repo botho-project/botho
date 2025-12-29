@@ -1,12 +1,12 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! An integration between `PollingNetworkState` and `LedgerSyncService` that
 //! performs the sync in a background thread.
 
 use crate::{LedgerSync, LedgerSyncService, PollingNetworkState, TransactionsFetcher};
-use mc_common::logger::{log, Logger};
-use mc_connection::{BlockchainConnection, ConnectionManager};
-use mc_ledger_db::Ledger;
+use bt_common::logger::{log, Logger};
+use bt_connection::{BlockchainConnection, ConnectionManager};
+use bt_ledger_db::Ledger;
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},

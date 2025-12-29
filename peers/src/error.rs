@@ -1,19 +1,20 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
+// Copyright (c) 2024 Botho Foundation
 
-//! A Peer-to-Peer networking error.
+//! A Peer-to-Peer networking error - Post-SGX simplified version.
 
 use crate::ConsensusMsgError;
 use displaydoc::Display;
-use grpcio::Error as GrpcError;
-use mc_connection::AttestationError;
-use mc_consensus_api::ConversionError;
-use mc_transaction_core::tx::TxHash;
-use mc_util_serial::{
+use bt_connection::AttestationError;
+use bt_consensus_api::ConversionError;
+use bt_transaction_core::tx::TxHash;
+use bt_util_serial::{
     decode::Error as RmpDecodeError, encode::Error as RmpEncodeError,
     DecodeError as ProstDecodeError, EncodeError as ProstEncodeError,
 };
 use retry::Error as RetryError;
 use std::{array::TryFromSliceError, result::Result as StdResult};
+use tonic::Status as GrpcError;
 
 /// A convenience wrapper for a [std::result::Result] object which contains a
 /// peer [Error].
@@ -41,9 +42,7 @@ pub enum Error {
     Conversion(ConversionError),
     /// Serialization
     Serialization,
-    /// Enclave error: {0}
-    Enclave(EnclaveError),
-    /// Conensus message: {0}
+    /// Consensus message: {0}
     ConsensusMsg(ConsensusMsgError),
     /// Tx hashes not in cache: {0:?}
     TxHashesNotInCache(Vec<TxHash>),
@@ -53,10 +52,7 @@ pub enum Error {
 
 impl Error {
     pub fn should_retry(&self) -> bool {
-        matches!(
-            self,
-            Error::Grpc(_) | Error::Attestation(_) | Error::Enclave(EnclaveError::Attest(_))
-        )
+        matches!(self, Error::Grpc(_) | Error::Attestation(_))
     }
 }
 
@@ -114,24 +110,19 @@ impl From<TryFromSliceError> for Error {
     }
 }
 
-impl From<EnclaveError> for Error {
-    fn from(src: EnclaveError) -> Self {
-        Self::Enclave(src)
-    }
-}
-
 impl From<ConsensusMsgError> for Error {
     fn from(src: ConsensusMsgError) -> Self {
         Self::ConsensusMsg(src)
     }
 }
 
+/// Peer attestation error - simplified post-SGX
 #[derive(Debug, Display)]
 pub enum PeerAttestationError {
     /// gRPC failure during attestation: {0}
     Grpc(GrpcError),
-    /// Local enclave failure during attestation: {0}
-    Enclave(EnclaveError),
+    /// Other attestation error: {0}
+    Other(String),
 }
 
 impl From<GrpcError> for PeerAttestationError {
@@ -140,18 +131,13 @@ impl From<GrpcError> for PeerAttestationError {
     }
 }
 
-impl From<EnclaveError> for PeerAttestationError {
-    fn from(src: EnclaveError) -> Self {
-        PeerAttestationError::Enclave(src)
-    }
-}
-
 impl AttestationError for PeerAttestationError {
     fn should_reattest(&self) -> bool {
-        true
+        // No attestation needed post-SGX
+        false
     }
 
     fn should_retry(&self) -> bool {
-        true
+        matches!(self, Self::Grpc(_))
     }
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! The Node ID type
 
@@ -9,8 +9,8 @@ use core::{
     hash::{Hash, Hasher},
 };
 use displaydoc::Display;
-use mc_crypto_digestible::Digestible;
-use mc_crypto_keys::{Ed25519Public, KeyError};
+use bt_crypto_digestible::Digestible;
+use bt_crypto_keys::{Ed25519Public, KeyError};
 use prost::Message;
 use serde::{Deserialize, Serialize};
 

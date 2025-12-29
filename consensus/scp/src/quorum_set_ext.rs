@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! [QuorumSet] helpers.
 
@@ -6,7 +6,7 @@ use crate::{
     msg::Msg, predicates::Predicate, GenericNodeId, QuorumSet, QuorumSetMember,
     QuorumSetMemberWrapper, Value,
 };
-use mc_common::{HashMap, HashSet};
+use bt_common::{HashMap, HashSet};
 
 /// Helper extension for [QuorumSet].
 pub trait QuorumSetExt<ID: GenericNodeId> {
@@ -290,7 +290,7 @@ mod tests {
         predicates::FuncPredicate,
         test_utils::test_node_id,
     };
-    use mc_common::{NodeID, ResponderId};
+    use bt_common::{NodeID, ResponderId};
 
     #[test]
     // findBlockingSet returns an empty set when there is no blocking set
@@ -626,8 +626,8 @@ mod tests {
     #[test]
     // Quorum set can be constructed with ResponderId
     fn test_blocking_set_with_responder_id() {
-        // Quorum set by ResponderId, as employed by e.g. mobilecoind
-        let mobilecoind_quorum_set: QuorumSet<ResponderId> = {
+        // Quorum set by ResponderId, as employed by e.g. bothod
+        let bothod_quorum_set: QuorumSet<ResponderId> = {
             let inner_quorum_set_one: QuorumSet<ResponderId> = QuorumSet::new_with_node_ids(
                 2,
                 vec![
@@ -684,7 +684,7 @@ mod tests {
             test_fn: &|msg: &Msg<u32, ResponderId>| responder_ids.contains(&msg.sender_id),
         };
 
-        let (node_ids, _) = mobilecoind_quorum_set.findBlockingSet(&msgs, fp);
+        let (node_ids, _) = bothod_quorum_set.findBlockingSet(&msgs, fp);
         assert_eq!(
             node_ids,
             HashSet::from_iter([test_node_id(2).responder_id, test_node_id(3).responder_id])

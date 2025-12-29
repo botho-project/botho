@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 use retry::delay::{jitter, Fibonacci};
 use std::time::{Duration, Instant};

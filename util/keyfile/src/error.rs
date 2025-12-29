@@ -1,11 +1,11 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! This module contains the error type which methods of the `keyfile` crate can
 //! generate.
 
 use crate::mnemonic_acct::Error as MnemonicAccountError;
 use displaydoc::Display;
-use mc_account_keys::Error as AccountKeyError;
+use bt_account_keys::Error as AccountKeyError;
 use prost::{DecodeError as ProstDecodeError, EncodeError as ProstEncodeError};
 use serde_json::Error as JsonError;
 use std::io::Error as IoError;

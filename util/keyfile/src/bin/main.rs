@@ -1,11 +1,11 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 #![deny(missing_docs)]
 
 //! A tool for inspecting binary keyfiles
 //! Reads .bin file on stdin, or a path to .bin file, emits description on
 //! stdout
 
-use mc_account_keys::AccountKey;
+use bt_account_keys::AccountKey;
 use std::{
     env, fs, io,
     io::{Cursor, Read},
@@ -13,11 +13,11 @@ use std::{
 
 fn print_keyfile_bytes(bytes: &[u8]) {
     let acct_key =
-        if let Ok(identity) = mc_util_keyfile::read_root_entropy_keyfile_data(Cursor::new(bytes)) {
+        if let Ok(identity) = bt_util_keyfile::read_root_entropy_keyfile_data(Cursor::new(bytes)) {
             println!("Identity: {identity:?}");
             AccountKey::from(&identity)
         } else {
-            mc_util_keyfile::read_keyfile_data(Cursor::new(bytes))
+            bt_util_keyfile::read_keyfile_data(Cursor::new(bytes))
                 .expect("Could not parse key file as either mnemonic or legacy entropy")
         };
 

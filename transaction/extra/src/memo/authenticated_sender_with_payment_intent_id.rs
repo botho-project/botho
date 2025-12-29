@@ -1,8 +1,8 @@
-// Copyright (c) 2018-2023 The MobileCoin Foundation
+// Copyright (c) 2018-2023 The Botho Foundation
 
 //! Object for 0x0102 Authenticated Sender With Payment Intent Id memo type
 //!
-//! This was proposed for standardization in mobilecoinfoundation/mcips/pull/54
+//! This was proposed for standardization in bothofoundation/mcips/pull/54
 
 use super::{
     authenticated_common::{
@@ -12,16 +12,16 @@ use super::{
     RegisteredMemoType,
 };
 use crate::impl_memo_type_conversions;
-use mc_account_keys::{PublicAddress, ShortAddressHash};
-use mc_crypto_keys::{CompressedRistrettoPublic, RistrettoPrivate, RistrettoPublic};
-use mc_transaction_core::NewMemoError;
+use bt_account_keys::{PublicAddress, ShortAddressHash};
+use bt_crypto_keys::{CompressedRistrettoPublic, RistrettoPrivate, RistrettoPublic};
+use bt_transaction_core::NewMemoError;
 use subtle::Choice;
 
 /// A memo that the sender writes to convey their identity in an authenticated
 /// but deniable way, for the recipient of a TxOut, which also includes a
 /// payment intent id number under the MAC.
 ///
-/// See mobilecoinfoundation/mcips/pull/4 for a discussion of the deniability
+/// See bothofoundation/mcips/pull/4 for a discussion of the deniability
 /// property.
 ///
 /// The recipient of this memo type should:

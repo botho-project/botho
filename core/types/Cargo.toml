@@ -1,16 +1,16 @@
 [package]
-name = "mc-core-types"
+name = "bt-core-types"
 version = "7.1.0"
-authors = ["MobileCoin"]
+authors = ["Botho"]
 edition = "2021"
-description = "MobileCoin Core Types"
+description = "Botho Core Types"
 license = "Apache-2.0"
 readme = "README.md"
 rust-version = { workspace = true }
 
 [features]
 serde = ["dep:serde"]
-prost = ["dep:prost", "mc-crypto-keys/prost"]
+prost = ["dep:prost", "bt-crypto-keys/prost"]
 
 [dependencies]
 # External dependencies
@@ -20,5 +20,5 @@ serde = { workspace = true, features = ["derive"], optional = true }
 subtle = { workspace = true }
 zeroize = { workspace = true }
 
-# MobileCoin dependencies
-mc-crypto-keys = { workspace = true }
+# Botho dependencies
+bt-crypto-keys = { workspace = true }

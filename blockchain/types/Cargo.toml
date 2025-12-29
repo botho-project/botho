@@ -1,24 +1,24 @@
 [package]
-name = "mc-blockchain-types"
+name = "bt-blockchain-types"
 version = "7.1.0"
-authors = ["MobileCoin"]
+authors = ["Botho"]
 edition = "2021"
 license = "Apache-2.0"
 rust-version = { workspace = true }
 
 [dependencies]
-# MobileCoin dependencies
-mc-account-keys = { workspace = true }
-mc-common = { workspace = true }
-mc-consensus-scp-types = { workspace = true }
-mc-crypto-digestible = { workspace = true, features = ["dalek", "derive"] }
-mc-crypto-digestible-signature = { workspace = true }
-mc-crypto-keys = { workspace = true }
-mc-crypto-ring-signature = { workspace = true }
-mc-transaction-core = { workspace = true }
-mc-transaction-types = { workspace = true }
-mc-util-from-random = { workspace = true }
-mc-util-repr-bytes = { workspace = true }
+# Botho dependencies
+bt-account-keys = { workspace = true }
+bt-common = { workspace = true }
+bt-consensus-scp-types = { workspace = true }
+bt-crypto-digestible = { workspace = true, features = ["dalek", "derive"] }
+bt-crypto-digestible-signature = { workspace = true }
+bt-crypto-keys = { workspace = true }
+bt-crypto-ring-signature = { workspace = true }
+bt-transaction-core = { workspace = true }
+bt-transaction-types = { workspace = true }
+bt-util-from-random = { workspace = true }
+bt-util-repr-bytes = { workspace = true }
 
 # External dependencies
 displaydoc = { workspace = true }
@@ -28,9 +28,9 @@ serde = { workspace = true, features = ["alloc", "derive"] }
 zeroize = { workspace = true }
 
 [dev-dependencies]
-mc-blockchain-test-utils = { workspace = true }
-mc-crypto-digestible-test-utils = { workspace = true }
-mc-util-serial = { workspace = true }
-mc-util-test-helper = { workspace = true }
+bt-blockchain-test-utils = { workspace = true }
+bt-crypto-digestible-test-utils = { workspace = true }
+bt-util-serial = { workspace = true }
+bt-util-test-helper = { workspace = true }
 
 rand = { workspace = true }

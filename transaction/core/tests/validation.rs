@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! This module is meant to unit test all of the functionality in the validation
 //! module in mc-transaction-core.
@@ -11,16 +11,16 @@ use crate::util::{
     create_test_tx, create_test_tx_with_amount,
     create_test_tx_with_amount_and_comparer_and_recipients,
 };
-use mc_account_keys::AccountKey;
-use mc_crypto_keys::{CompressedRistrettoPublic, ReprBytes};
-use mc_ledger_db::test_utils::{InverseTxOutputsOrdering, INITIALIZE_LEDGER_AMOUNT};
-use mc_transaction_core::{
+use bt_account_keys::AccountKey;
+use bt_crypto_keys::{CompressedRistrettoPublic, ReprBytes};
+use bt_ledger_db::test_utils::{InverseTxOutputsOrdering, INITIALIZE_LEDGER_AMOUNT};
+use bt_transaction_core::{
     constants::{MAX_TOMBSTONE_BLOCKS, RING_SIZE},
     tokens::Mob,
     validation::*,
     BlockVersion, InputRules, Token,
 };
-use mc_util_test_helper::get_seeded_rng;
+use bt_util_test_helper::get_seeded_rng;
 
 #[test]
 // Should return MissingMemo when memos are missing in an output
@@ -115,8 +115,8 @@ fn test_validate_no_masked_token_id_exists() {
     );
 }
 
-// NOTE: Membership proof tests were removed as part of the Cadence fork.
-// Cadence does not use merkle membership proofs - ring members are validated
+// NOTE: Membership proof tests were removed as part of the Botho fork.
+// Botho does not use merkle membership proofs - ring members are validated
 // directly against the UTXO set.
 
 #[test]

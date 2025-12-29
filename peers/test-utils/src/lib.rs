@@ -1,27 +1,29 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
+// Copyright (c) 2024 Botho Foundation
 
 //! Mock Peer test utilities
 
-pub use mc_consensus_scp::test_utils::{test_node_id, test_node_id_and_signer};
+pub use bt_consensus_scp::test_utils::{test_node_id, test_node_id_and_signer};
+use tonic::Status;
 
-use mc_blockchain_types::{Block, BlockID, BlockIndex};
-use mc_common::{NodeID, ResponderId};
-use mc_connection::{
+use bt_blockchain_types::{Block, BlockID, BlockIndex};
+use bt_common::{NodeID, ResponderId};
+use bt_connection::{
     BlockInfo, BlockchainConnection, Connection, Error as ConnectionError,
     Result as ConnectionResult,
 };
-use mc_consensus_api::consensus_peer::{ConsensusMsgResponse, ConsensusMsgResult};
-use mc_consensus_scp::{
+use bt_consensus_api::consensus_peer::{ConsensusMsgResponse, ConsensusMsgResult};
+use bt_consensus_scp::{
     msg::{Msg, NominatePayload},
     QuorumSet, SlotIndex, Topic,
 };
-use mc_crypto_keys::{Ed25519Pair, Ed25519Public};
-use mc_ledger_db::{test_utils::MockLedger, Ledger};
-use mc_peers::{
+use bt_crypto_keys::{Ed25519Pair, Ed25519Public};
+use bt_ledger_db::{test_utils::MockLedger, Ledger};
+use bt_peers::{
     ConsensusConnection, ConsensusMsg, ConsensusValue, Error as PeerError, Result as PeerResult,
 };
-use mc_transaction_core::tx::TxHash;
-use mc_util_uri::{ConnectionUri, ConsensusPeerUri as PeerUri};
+use bt_transaction_core::tx::TxHash;
+use bt_util_uri::{ConnectionUri, ConsensusPeerUri as PeerUri};
 use sha2::{Digest, Sha512_256};
 use std::{
     cmp::{min, Ordering},
@@ -194,7 +196,7 @@ impl<L: Ledger + Sync> ConsensusConnection for MockPeerConnection<L> {
         locked_state.send_consensus_msg_call_count += 1;
         if locked_state.send_consensus_msg_should_error_count > 0 {
             locked_state.send_consensus_msg_should_error_count -= 1;
-            return Err(PeerError::Grpc(grpcio::Error::RemoteStopped));
+            return Err(PeerError::Grpc(Status::unavailable("Remote peer stopped")));
         }
 
         locked_state.msgs.push_back(msg.clone());
@@ -204,20 +206,9 @@ impl<L: Ledger + Sync> ConsensusConnection for MockPeerConnection<L> {
         Ok(resp)
     }
 
-    fn send_propose_tx(
-        &mut self,
-        _encrypted_tx: &WellFormedEncryptedTx,
-        _origin_node: &NodeID,
-    ) -> PeerResult<()> {
-        unimplemented!()
-    }
-
-    fn fetch_txs(&mut self, _hashes: &[TxHash]) -> PeerResult<Vec<TxContext>> {
-        unimplemented!()
-    }
-
-    fn fetch_latest_msg(&mut self) -> PeerResult<Option<ConsensusMsg>> {
-        unimplemented!()
+    fn fetch_txs(&mut self, _hashes: &[TxHash]) -> PeerResult<Vec<ConsensusMsg>> {
+        // Post-SGX: return ConsensusMsg directly instead of encrypted TxContext
+        Ok(vec![])
     }
 }
 pub fn create_consensus_msg(
@@ -260,11 +251,11 @@ pub fn test_peer_uri_with_key(node_id: u32, public_key: &Ed25519Public) -> PeerU
 #[cfg(test)]
 mod peer_manager_tests {
     use super::*;
-    use mc_common::logger::{test_with_logger, Logger};
-    use mc_connection::ConnectionManager;
-    use mc_ledger_db::test_utils::get_mock_ledger;
-    use mc_peers::RetryableConsensusConnection;
-    use mc_util_from_random::FromRandom;
+    use bt_common::logger::{test_with_logger, Logger};
+    use bt_connection::ConnectionManager;
+    use bt_ledger_db::test_utils::get_mock_ledger;
+    use bt_peers::RetryableConsensusConnection;
+    use bt_util_from_random::FromRandom;
     use rand::SeedableRng;
     use rand_hc::Hc128Rng as FixedRng;
     use retry::delay::Fibonacci;
@@ -376,15 +367,15 @@ mod peer_manager_tests {
 #[cfg(test)]
 mod threaded_broadcaster_tests {
     use super::*;
-    use mc_common::logger::{test_with_logger, Logger};
-    use mc_connection::ConnectionManager;
-    use mc_ledger_db::test_utils::get_mock_ledger;
-    use mc_peers::{
+    use bt_common::logger::{test_with_logger, Logger};
+    use bt_connection::ConnectionManager;
+    use bt_ledger_db::test_utils::get_mock_ledger;
+    use bt_peers::{
         Broadcast, ThreadedBroadcaster,
         ThreadedBroadcasterFibonacciRetryPolicy as FibonacciRetryPolicy,
         DEFAULT_RETRY_MAX_ATTEMPTS,
     };
-    use mc_util_from_random::FromRandom;
+    use bt_util_from_random::FromRandom;
     use rand::SeedableRng;
     use rand_hc::Hc128Rng as FixedRng;
 

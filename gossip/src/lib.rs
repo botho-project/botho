@@ -1,6 +1,6 @@
-// Copyright (c) 2024 Cadence Foundation
+// Copyright (c) 2024 Botho Foundation
 
-//! Gossip-based peer discovery and topology sharing for Cadence.
+//! Gossip-based peer discovery and topology sharing for Botho.
 //!
 //! This crate provides a gossip protocol layer that enables:
 //!
@@ -26,7 +26,7 @@
 //! # Usage
 //!
 //! ```ignore
-//! use cadence_gossip::{GossipService, GossipConfig, NodeCapabilities};
+//! use bt_gossip::{GossipService, GossipConfig, NodeCapabilities};
 //!
 //! // Create the service
 //! let config = GossipConfig::default();

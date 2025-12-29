@@ -1,9 +1,9 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 use crate::{TransactionFetcherError, TransactionsFetcher};
-use mc_blockchain_types::{Block, BlockData};
-use mc_common::ResponderId;
-use mc_ledger_db::Ledger;
+use bt_blockchain_types::{Block, BlockData};
+use bt_common::ResponderId;
+use bt_ledger_db::Ledger;
 
 impl TransactionFetcherError for String {}
 

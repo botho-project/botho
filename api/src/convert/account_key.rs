@@ -1,9 +1,9 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Convert to/from external::AccountKey
 
 use crate::{external, ConversionError};
-use mc_account_keys::AccountKey;
+use bt_account_keys::AccountKey;
 
 impl From<&AccountKey> for external::AccountKey {
     fn from(src: &AccountKey) -> Self {
@@ -24,14 +24,14 @@ impl TryFrom<&external::AccountKey> for AccountKey {
         let spend_private_key = src
             .spend_private_key
             .as_ref()
-            .ok_or(mc_crypto_keys::KeyError::LengthMismatch(0, 32))
-            .and_then(|key| mc_crypto_keys::RistrettoPrivate::try_from(&key.data[..]))?;
+            .ok_or(bt_crypto_keys::KeyError::LengthMismatch(0, 32))
+            .and_then(|key| bt_crypto_keys::RistrettoPrivate::try_from(&key.data[..]))?;
 
         let view_private_key = src
             .view_private_key
             .as_ref()
-            .ok_or(mc_crypto_keys::KeyError::LengthMismatch(0, 32))
-            .and_then(|key| mc_crypto_keys::RistrettoPrivate::try_from(&key.data[..]))?;
+            .ok_or(bt_crypto_keys::KeyError::LengthMismatch(0, 32))
+            .and_then(|key| bt_crypto_keys::RistrettoPrivate::try_from(&key.data[..]))?;
 
         if src.fog_report_url.is_empty() {
             Ok(AccountKey::new(&spend_private_key, &view_private_key))
@@ -88,7 +88,7 @@ mod tests {
             let account_key = AccountKey::new_with_fog(
                 tmp_account_key.spend_private_key(),
                 tmp_account_key.view_private_key(),
-                "fog://test.mobilecoin.com".to_string(),
+                "fog://test.botho.com".to_string(),
                 "99".to_string(),
                 vec![9, 9, 9, 9],
             );
@@ -104,7 +104,7 @@ mod tests {
             );
             assert_eq!(
                 proto_credentials.fog_report_url,
-                String::from("fog://test.mobilecoin.com")
+                String::from("fog://test.botho.com")
             );
 
             assert_eq!(proto_credentials.fog_authority_spki, vec![9, 9, 9, 9],);

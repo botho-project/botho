@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 #![deny(missing_docs)]
 
 //! A tool for exporting known accounts to std out
@@ -9,7 +9,7 @@
 //! Suggested use:
 //! cargo run --release -- --num 1000 >> account_keys.json
 use clap::Parser;
-use mc_util_test_helper::{known_accounts, AccountKey};
+use bt_util_test_helper::{known_accounts, AccountKey};
 
 #[derive(Debug, Parser)]
 struct Config {

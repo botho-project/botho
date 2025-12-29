@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Error types used by this crate
 
@@ -6,10 +6,10 @@ pub use retry::Error as RetryError;
 
 use crate::traits::AttestationError;
 use displaydoc::Display;
-use grpcio::Error as GrpcError;
-use mc_blockchain_types::ConvertError;
-use mc_consensus_api::{consensus_common::ProposeTxResult, ConversionError};
-use mc_crypto_noise::CipherError;
+use bt_blockchain_types::ConvertError;
+use tonic::Status as GrpcError;
+use bt_consensus_api::{consensus_common::ProposeTxResult, ConversionError};
+use bt_crypto_noise::CipherError;
 use std::{array::TryFromSliceError, result::Result as StdResult};
 
 pub type Result<T> = StdResult<T, Error>;

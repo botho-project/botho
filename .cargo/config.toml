@@ -17,5 +17,5 @@ rustflags = ["-C", "target-cpu=skylake", '--cfg=curve25519_dalek_backend="simd"'
 rustflags = ["-C", "target-cpu=skylake", '--cfg=curve25519_dalek_backend="simd"', '--cfg=feature="precomputed-tables"']
 
 [cargo-new]
-name = "MobileCoin"
+name = "Botho"
 email = ""

@@ -1,6 +1,6 @@
 # Fog-Ledger-FSG
 
-Run a MobileCoin fog-ledger fogShardGenerator chart
+Run a Botho fog-ledger fogShardGenerator chart
 
 ### Required Values
 

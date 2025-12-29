@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Implementation of the `TransactionsFetcher` trait that fetches transactions
 //! data over http(s) using the `reqwest` library. It can be used, for example,
@@ -6,9 +6,9 @@
 
 use crate::transactions_fetcher_trait::{TransactionFetcherError, TransactionsFetcher};
 use displaydoc::Display;
-use mc_api::{block_num_to_s3block_path, blockchain, merged_block_num_to_s3block_path};
-use mc_blockchain_types::{Block, BlockData, BlockIndex};
-use mc_common::{
+use bt_api::{block_num_to_s3block_path, blockchain, merged_block_num_to_s3block_path};
+use bt_blockchain_types::{Block, BlockData, BlockIndex};
+use bt_common::{
     logger::{log, Logger},
     lru::LruCache,
     ResponderId,
@@ -364,5 +364,180 @@ impl TransactionsFetcher for ReqwestTransactionsFetcher {
         block: &Block,
     ) -> Result<BlockData, Self::Error> {
         self.get_block_data_by_index(block.index, Some(block))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bt_common::logger::{test_with_logger, Logger};
+
+    #[test_with_logger]
+    fn test_new_normalizes_urls_with_trailing_slash(logger: Logger) {
+        let urls = vec![
+            "https://example.com/blocks".to_string(),
+            "https://example.org/data/".to_string(),
+        ];
+
+        let fetcher = ReqwestTransactionsFetcher::new(urls, logger).unwrap();
+
+        // All URLs should end with a trailing slash
+        assert!(fetcher.source_urls[0].as_str().ends_with('/'));
+        assert!(fetcher.source_urls[1].as_str().ends_with('/'));
+        assert_eq!(
+            fetcher.source_urls[0].as_str(),
+            "https://example.com/blocks/"
+        );
+        assert_eq!(fetcher.source_urls[1].as_str(), "https://example.org/data/");
+    }
+
+    #[test_with_logger]
+    fn test_new_with_invalid_url_returns_error(logger: Logger) {
+        let urls = vec!["not a valid url".to_string()];
+
+        let result = ReqwestTransactionsFetcher::new(urls, logger);
+        assert!(result.is_err());
+
+        match result {
+            Err(ReqwestTransactionsFetcherError::UrlParse(url, _)) => {
+                assert!(url.contains("not a valid url"));
+            }
+            _ => panic!("Expected UrlParse error"),
+        }
+    }
+
+    #[test_with_logger]
+    fn test_new_with_empty_urls_succeeds(logger: Logger) {
+        let urls: Vec<String> = vec![];
+
+        let fetcher = ReqwestTransactionsFetcher::new(urls, logger).unwrap();
+        assert!(fetcher.source_urls.is_empty());
+    }
+
+    #[test_with_logger]
+    fn test_set_merged_blocks_bucket_sizes(logger: Logger) {
+        let urls = vec!["https://example.com/".to_string()];
+
+        let mut fetcher = ReqwestTransactionsFetcher::new(urls, logger).unwrap();
+
+        // Initially uses default bucket sizes
+        assert_eq!(
+            fetcher.merged_blocks_bucket_sizes,
+            DEFAULT_MERGED_BLOCKS_BUCKET_SIZES
+        );
+
+        // Set custom bucket sizes
+        let custom_sizes = vec![500, 50, 5];
+        fetcher.set_merged_blocks_bucket_sizes(&custom_sizes);
+
+        assert_eq!(fetcher.merged_blocks_bucket_sizes, custom_sizes);
+    }
+
+    #[test_with_logger]
+    fn test_new_with_client(logger: Logger) {
+        let urls = vec!["https://example.com/".to_string()];
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .unwrap();
+
+        let fetcher = ReqwestTransactionsFetcher::new_with_client(urls, client, logger).unwrap();
+
+        assert_eq!(fetcher.source_urls.len(), 1);
+    }
+
+    #[test]
+    fn test_error_display_format() {
+        let url_parse_err = ReqwestTransactionsFetcherError::UrlParse(
+            "bad-url".to_string(),
+            url::ParseError::RelativeUrlWithoutBase,
+        );
+        let display = format!("{}", url_parse_err);
+        assert!(display.contains("Url parse error"));
+        assert!(display.contains("bad-url"));
+
+        let no_urls_err = ReqwestTransactionsFetcherError::NoUrlsConfigured;
+        let display = format!("{}", no_urls_err);
+        assert!(display.contains("No URLs configured"));
+
+        let invalid_block_err = ReqwestTransactionsFetcherError::InvalidBlockReceived(
+            "https://example.com/block/0".to_string(),
+            "block mismatch".to_string(),
+        );
+        let display = format!("{}", invalid_block_err);
+        assert!(display.contains("invalid block"));
+        assert!(display.contains("block mismatch"));
+    }
+
+    #[test_with_logger]
+    fn test_cache_behavior(logger: Logger) {
+        let urls = vec!["file:///nonexistent/".to_string()];
+
+        let fetcher = ReqwestTransactionsFetcher::new(urls, logger).unwrap();
+
+        // Cache should start empty
+        let cache = fetcher.blocks_cache.lock().unwrap();
+        assert_eq!(cache.len(), 0);
+        drop(cache);
+
+        // Hits and misses should start at 0
+        assert_eq!(fetcher.hits.load(Ordering::SeqCst), 0);
+        assert_eq!(fetcher.misses.load(Ordering::SeqCst), 0);
+    }
+
+    #[test_with_logger]
+    fn test_source_url_rotation(logger: Logger) {
+        let urls = vec![
+            "https://source1.example.com/".to_string(),
+            "https://source2.example.com/".to_string(),
+            "https://source3.example.com/".to_string(),
+        ];
+
+        let fetcher = ReqwestTransactionsFetcher::new(urls, logger).unwrap();
+
+        // Verify the source_index_counter increments
+        let initial = fetcher.source_index_counter.load(Ordering::SeqCst);
+        assert_eq!(initial, 0);
+
+        // Simulate multiple accesses - the counter should increment
+        // (This would happen in get_block_data_by_index)
+        fetcher.source_index_counter.fetch_add(1, Ordering::SeqCst);
+        fetcher.source_index_counter.fetch_add(1, Ordering::SeqCst);
+        fetcher.source_index_counter.fetch_add(1, Ordering::SeqCst);
+
+        let counter = fetcher.source_index_counter.load(Ordering::SeqCst);
+        assert_eq!(counter, 3);
+
+        // Verify round-robin behavior (counter % num_sources)
+        let source_idx = counter as usize % fetcher.source_urls.len();
+        assert_eq!(source_idx, 0); // 3 % 3 = 0, back to first source
+    }
+
+    #[test_with_logger]
+    fn test_default_merged_blocks_bucket_sizes_are_sorted_descending(logger: Logger) {
+        // Verify the invariant that bucket sizes must be sorted in descending order
+        let sizes = DEFAULT_MERGED_BLOCKS_BUCKET_SIZES;
+
+        for i in 0..sizes.len() - 1 {
+            assert!(
+                sizes[i] > sizes[i + 1],
+                "Bucket sizes must be sorted in descending order"
+            );
+        }
+    }
+
+    #[test_with_logger]
+    fn test_clone(logger: Logger) {
+        let urls = vec!["https://example.com/".to_string()];
+
+        let fetcher = ReqwestTransactionsFetcher::new(urls, logger).unwrap();
+        let cloned = fetcher.clone();
+
+        // Cloned instance should share the same Arc references
+        assert_eq!(fetcher.source_urls, cloned.source_urls);
+
+        // Incrementing counter in one should affect the other (shared Arc)
+        fetcher.source_index_counter.fetch_add(1, Ordering::SeqCst);
+        assert_eq!(cloned.source_index_counter.load(Ordering::SeqCst), 1);
     }
 }

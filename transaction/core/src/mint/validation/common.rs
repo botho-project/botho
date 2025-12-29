@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Common validation code shared between different mint transaction types.
 
@@ -48,7 +48,7 @@ pub fn validate_block_version(block_version: BlockVersion) -> Result<(), Error> 
 /// Arguments:
 /// * `token_id` - The token id being minted.
 pub fn validate_token_id(token_id: TokenId) -> Result<(), Error> {
-    if token_id == TokenId::MOB {
+    if token_id == TokenId::BTH {
         return Err(Error::InvalidTokenId(token_id));
     }
 

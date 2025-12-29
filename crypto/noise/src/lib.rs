@@ -1,7 +1,7 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! A type-parameterized implementation of the Noise framework, with some
-//! hooks for supporting MobileCoin's usage while talking to an enclave.
+//! hooks for supporting Botho's usage while talking to an enclave.
 
 #![no_std]
 

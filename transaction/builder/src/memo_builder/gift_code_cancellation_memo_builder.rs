@@ -1,12 +1,12 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Defines the Memo Builder for the gift code cancellation memo (0x0202)
 //! specified in MCIP #32
 
 use super::{MemoBuilder, ReservedSubaddresses};
-use mc_account_keys::PublicAddress;
-use mc_transaction_core::{tokens::Mob, Amount, MemoContext, MemoPayload, NewMemoError, Token};
-use mc_transaction_extra::GiftCodeCancellationMemo;
+use bt_account_keys::PublicAddress;
+use bt_transaction_core::{tokens::Mob, Amount, MemoContext, MemoPayload, NewMemoError, Token};
+use bt_transaction_extra::GiftCodeCancellationMemo;
 
 /// There are three possible gift code memo types specified in MCIP #32
 /// | Memo type bytes | Name                        |

@@ -1,24 +1,24 @@
-// Copyright (c) 2018-2023 The MobileCoin Foundation
+// Copyright (c) 2018-2023 The Botho Foundation
 
 //! Tests of the streaming verifier
 
-use mc_account_keys::{AccountKey, ShortAddressHash};
-use mc_crypto_keys::{RistrettoPrivate, RistrettoPublic};
-use mc_crypto_ring_signature_signer::NoKeysRingSigner;
-use mc_transaction_builder::{
+use bt_account_keys::{AccountKey, ShortAddressHash};
+use bt_crypto_keys::{RistrettoPrivate, RistrettoPublic};
+use bt_crypto_ring_signature_signer::NoKeysRingSigner;
+use bt_transaction_builder::{
     test_utils::{get_input_credentials, get_unsigned_transaction},
     EmptyMemoBuilder, ReservedSubaddresses, SignedContingentInputBuilder, TransactionBuilder,
 };
-use mc_transaction_core::{
+use bt_transaction_core::{
     constants::{MAX_INPUTS, MAX_OUTPUTS, MILLIMOB_TO_PICOMOB, RING_SIZE},
     tokens::Mob,
     tx::Tx,
     Amount, BlockVersion, Token, TokenId,
 };
-use mc_transaction_extra::UnsignedTx;
-use mc_transaction_summary::{verify_tx_summary, TotalKind, TransactionEntity};
-use mc_util_from_random::FromRandom;
-use mc_util_serial::encode;
+use bt_transaction_extra::UnsignedTx;
+use bt_transaction_summary::{verify_tx_summary, TotalKind, TransactionEntity};
+use bt_util_from_random::FromRandom;
+use bt_util_serial::encode;
 use rand::{rngs::StdRng, SeedableRng};
 use rand_core::CryptoRngCore;
 use std::collections::BTreeMap;

@@ -1,10 +1,10 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! The `TransactionsFetcher` trait describes the interface used by
 //! `LedgerSyncService` for fetching transaction data.
 
-use mc_blockchain_types::{Block, BlockData};
-use mc_common::ResponderId;
+use bt_blockchain_types::{Block, BlockData};
+use bt_common::ResponderId;
 use std::fmt::Debug;
 
 pub trait TransactionFetcherError: Debug + Send + Sync {}

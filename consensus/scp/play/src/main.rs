@@ -1,18 +1,18 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 #![deny(missing_docs)]
 
 //! A utility to play back SCP messages logged by `LoggingScpNode`.
 
 use clap::Parser;
-use mc_common::{logger::log, NodeID};
-use mc_consensus_scp::{
+use bt_common::{logger::log, NodeID};
+use bt_consensus_scp::{
     msg::Msg,
     scp_log::{LoggedMsg, ScpLogReader, StoredMsg},
     test_utils::{get_bounded_combine_fn, trivial_validity_fn},
     Node, QuorumSet, ScpNode, SlotIndex,
 };
-use mc_transaction_core::{constants::MAX_TRANSACTIONS_PER_BLOCK, tx::TxHash};
-use mc_util_uri::ConsensusPeerUri as PeerUri;
+use bt_transaction_core::{constants::MAX_TRANSACTIONS_PER_BLOCK, tx::TxHash};
+use bt_util_uri::ConsensusPeerUri as PeerUri;
 use std::{
     collections::VecDeque, path::PathBuf, str::FromStr, sync::Arc, thread::sleep, time::Duration,
 };
@@ -30,8 +30,8 @@ pub struct Config {
     /// Quorum set.
     ///
     /// The quorum set is represented in JSON. For example:
-    /// {"threshold":1,"members":[{"type":"Node","args":"node2.test.mobilecoin.
-    /// com:8443"},{"type":"Node","args":"node3.test.mobilecoin.com:4843"}]}
+    /// {"threshold":1,"members":[{"type":"Node","args":"node2.test.botho.
+    /// com:8443"},{"type":"Node","args":"node3.test.botho.com:4843"}]}
     #[clap(long, value_parser = parse_quorum_set_from_json, env = "MC_QUORUM_SET")]
     pub quorum_set: Option<QuorumSet>,
 
@@ -59,7 +59,7 @@ fn parse_node_id_from_uri(src: &str) -> Result<NodeID, String> {
 
 fn main() {
     let (logger, _global_logger_guard) =
-        mc_common::logger::create_app_logger(mc_common::logger::o!());
+        bt_common::logger::create_app_logger(bt_common::logger::o!());
     let config = Config::parse();
 
     let validity_fn = Arc::new(trivial_validity_fn);

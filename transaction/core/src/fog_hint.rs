@@ -1,17 +1,17 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Code for computing and decrypting fog hints
 
 use crate::encrypted_fog_hint::{EncryptedFogHint, EncryptedFogHintSize};
-use mc_account_keys::PublicAddress;
-use mc_crypto_box::{
+use bt_account_keys::PublicAddress;
+use bt_crypto_box::{
     generic_array::{
         typenum::{Diff, Unsigned},
         GenericArray,
     },
     CryptoBox, Error as CryptoBoxError, VersionedCryptoBox,
 };
-use mc_crypto_keys::{
+use bt_crypto_keys::{
     CompressedRistrettoPublic, ReprBytes, Ristretto, RistrettoPrivate, RistrettoPublic,
 };
 use rand_core::{CryptoRng, RngCore};
@@ -164,7 +164,7 @@ impl FogHint {
 #[cfg(test)]
 mod testing {
     use super::*;
-    use mc_util_from_random::FromRandom;
+    use bt_util_from_random::FromRandom;
 
     fn random_fog_hint<T: RngCore + CryptoRng>(rng: &mut T) -> FogHint {
         let view = RistrettoPublic::from_random(rng);
@@ -173,7 +173,7 @@ mod testing {
 
     #[test]
     fn test_round_trip() {
-        mc_util_test_helper::run_with_several_seeds(|mut rng| {
+        bt_util_test_helper::run_with_several_seeds(|mut rng| {
             let z = RistrettoPrivate::from_random(&mut rng);
             let zpub = RistrettoPublic::from(&z);
 
@@ -191,7 +191,7 @@ mod testing {
 
     #[test]
     fn test_expected_failure() {
-        mc_util_test_helper::run_with_several_seeds(|mut rng| {
+        bt_util_test_helper::run_with_several_seeds(|mut rng| {
             let z = RistrettoPrivate::from_random(&mut rng);
             let zpub = RistrettoPublic::from(&z);
             let not_z = RistrettoPrivate::from_random(&mut rng);

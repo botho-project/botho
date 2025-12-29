@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Data access abstraction for mint transactions stored in the ledger.
 //!
@@ -9,9 +9,9 @@
 
 use crate::{key_bytes_to_u64, u64_to_key_bytes, Error, MintConfigStore};
 use lmdb::{Database, DatabaseFlags, Environment, RwTransaction, Transaction, WriteFlags};
-use mc_blockchain_types::BlockIndex;
-use mc_transaction_core::mint::MintTx;
-use mc_util_serial::{decode, encode, Message};
+use bt_blockchain_types::BlockIndex;
+use bt_transaction_core::mint::MintTx;
+use bt_util_serial::{decode, encode, Message};
 
 // LMDB Database names.
 pub const MINT_TXS_BY_BLOCK_DB_NAME: &str = "mint_tx_store:set_txs_by_block";
@@ -156,13 +156,13 @@ impl MintTxStore {
 mod tests {
     use super::*;
     use crate::{mint_config_store::ActiveMintConfig, tx_out_store::tx_out_store_tests::get_env};
-    use mc_crypto_keys::Ed25519Pair;
-    use mc_transaction_core::TokenId;
-    use mc_transaction_core_test_utils::{
+    use bt_crypto_keys::Ed25519Pair;
+    use bt_transaction_core::TokenId;
+    use bt_transaction_core_test_utils::{
         create_mint_config_tx_and_signers, create_mint_tx,
         mint_config_tx_to_validated as to_validated,
     };
-    use mc_util_from_random::FromRandom;
+    use bt_util_from_random::FromRandom;
     use rand::{rngs::StdRng, SeedableRng};
     use std::cmp::max;
 

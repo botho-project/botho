@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2023 The MobileCoin Foundation
+// Copyright (c) 2018-2023 The Botho Foundation
 
 //! Input rules, described in MCIP #31, specify any additional criteria that the
 //! Tx must satisfy to be valid.
@@ -15,9 +15,9 @@ use crate::{
 };
 use alloc::{collections::BTreeMap, vec::Vec};
 use displaydoc::Display;
-use mc_crypto_digestible::{Digestible, MerlinTranscript};
-use mc_crypto_keys::CompressedRistrettoPublic;
-use mc_util_u64_ratio::U64Ratio;
+use bt_crypto_digestible::{Digestible, MerlinTranscript};
+use bt_crypto_keys::CompressedRistrettoPublic;
+use bt_util_u64_ratio::U64Ratio;
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;

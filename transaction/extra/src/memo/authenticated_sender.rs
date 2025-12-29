@@ -1,8 +1,8 @@
-// Copyright (c) 2018-2023 The MobileCoin Foundation
+// Copyright (c) 2018-2023 The Botho Foundation
 
 //! Object for 0x0100 Authenticated Sender memo type
 //!
-//! This was proposed for standardization in mobilecoinfoundation/mcips/pull/4
+//! This was proposed for standardization in bothofoundation/mcips/pull/4
 
 use super::{
     authenticated_common::{
@@ -12,9 +12,9 @@ use super::{
     RegisteredMemoType,
 };
 use crate::impl_memo_type_conversions;
-use mc_account_keys::{PublicAddress, ShortAddressHash};
-use mc_crypto_keys::{CompressedRistrettoPublic, RistrettoPrivate, RistrettoPublic};
-use mc_transaction_core::NewMemoError;
+use bt_account_keys::{PublicAddress, ShortAddressHash};
+use bt_crypto_keys::{CompressedRistrettoPublic, RistrettoPrivate, RistrettoPublic};
+use bt_transaction_core::NewMemoError;
 use subtle::Choice;
 
 /// A memo that the sender writes to convey their identity in an authenticated

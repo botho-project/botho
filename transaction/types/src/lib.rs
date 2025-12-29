@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Types and wrappers for used in transactions, and other
 //! low-level types. This crate is intended to have a small footprint

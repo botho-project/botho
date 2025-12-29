@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Transaction signer types, this defines the API for communication with
 //! external reansaction signers, such as the offline signer, or other
@@ -11,10 +11,10 @@ use log::debug;
 use rand_core::{CryptoRng, OsRng, RngCore};
 use serde::{de::DeserializeOwned, Serialize};
 
-use mc_core::keys::TxOutPublic;
-use mc_crypto_keys::RistrettoPublic;
-use mc_crypto_ring_signature_signer::RingSigner;
-use mc_transaction_core::{
+use bt_core::keys::TxOutPublic;
+use bt_crypto_keys::RistrettoPublic;
+use bt_crypto_ring_signature_signer::RingSigner;
+use bt_transaction_core::{
     ring_ct::{
         Error as RingCtError, ExtendedMessageDigest, InputRing, SignatureRctBulletproofs,
         SigningData,
@@ -22,7 +22,7 @@ use mc_transaction_core::{
     tx::Tx,
     Amount, TokenId, TxSummary, UnmaskedAmount,
 };
-use mc_transaction_summary::TxSummaryUnblindingData;
+use bt_transaction_summary::TxSummaryUnblindingData;
 
 pub mod types;
 use types::*;

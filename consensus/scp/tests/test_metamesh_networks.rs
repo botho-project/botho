@@ -1,8 +1,8 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 mod mock_network;
 
-use mc_common::logger::{test_with_logger, Logger};
+use bt_common::logger::{test_with_logger, Logger};
 use serial_test::serial;
 use std::time::Duration;
 

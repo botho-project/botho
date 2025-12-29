@@ -1,11 +1,11 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! User Transaction Connection Mock
 
-use mc_blockchain_types::BlockIndex;
-use mc_connection::{Connection, Result as ConnectionResult, UserTxConnection};
-use mc_transaction_core::tx::Tx;
-use mc_util_uri::{ConnectionUri, ConsensusClientUri};
+use bt_blockchain_types::BlockIndex;
+use bt_connection::{Connection, Result as ConnectionResult, UserTxConnection};
+use bt_transaction_core::tx::Tx;
+use bt_util_uri::{ConnectionUri, ConsensusClientUri};
 use std::{
     cmp::Ordering,
     fmt::{Display, Formatter, Result as FmtResult},

@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 #![doc = include_str!("../README.md")]
 #![deny(missing_docs)]
@@ -13,8 +13,8 @@ pub mod keygen;
 
 use crate::error::Error;
 use bip39::Mnemonic;
-use mc_account_keys::{AccountKey, PublicAddress, RootIdentity};
-use mc_api::printable::{printable_wrapper, PrintableWrapper};
+use bt_account_keys::{AccountKey, PublicAddress, RootIdentity};
+use bt_api::printable::{printable_wrapper, PrintableWrapper};
 use std::{
     fs::File,
     io::{Read, Write},
@@ -86,7 +86,7 @@ pub fn read_keyfile_data<R: Read>(buffer: R) -> Result<AccountKey, Error> {
 
 /// Write user public address to disk
 pub fn write_pubfile<P: AsRef<Path>>(path: P, addr: &PublicAddress) -> Result<(), Error> {
-    File::create(path)?.write_all(&mc_util_serial::encode(addr))?;
+    File::create(path)?.write_all(&bt_util_serial::encode(addr))?;
     Ok(())
 }
 /// Read user public address from disk
@@ -101,7 +101,7 @@ pub fn read_pubfile_data<R: Read>(buffer: &mut R) -> Result<PublicAddress, Error
         buffer.read_to_end(&mut data)?;
         data
     };
-    let result: PublicAddress = mc_util_serial::decode(&data)?;
+    let result: PublicAddress = bt_util_serial::decode(&data)?;
     Ok(result)
 }
 
@@ -153,7 +153,7 @@ mod testing {
 
     use super::*;
     use bip39::{Language, MnemonicType};
-    use mc_core::slip10::Slip10KeyGenerator;
+    use bt_core::slip10::Slip10KeyGenerator;
 
     /// Test that round-tripping through a keyfile without fog gets the same
     /// result as creating the key directly.
@@ -172,9 +172,9 @@ mod testing {
     /// as creating the key directly.
     #[test]
     fn keyfile_roundtrip_with_fog() {
-        let fog_report_url = "fog://unittest.mobilecoin.com";
+        let fog_report_url = "fog://unittest.botho.com";
         let fog_report_id = "1";
-        let pem = pem::parse(mc_crypto_x509_test_vectors::ok_rsa_head())
+        let pem = pem::parse(bt_crypto_x509_test_vectors::ok_rsa_head())
             .expect("Could not parse DER bytes from PEM certificate file");
         let fog_authority_spki = x509_signature::parse_certificate(pem.contents())
             .expect("Could not parse X509 certificate from DER bytes")
@@ -204,7 +204,7 @@ mod testing {
         assert_eq!(expected, actual);
     }
 
-    /// Test that writing a [`PublicAddress`](mc_account_keys::PublicAddress)
+    /// Test that writing a [`PublicAddress`](bt_account_keys::PublicAddress)
     /// and reading it back without fog details gets the same results.
     #[test]
     fn pubfile_roundtrip_no_fog() {
@@ -219,13 +219,13 @@ mod testing {
         assert_eq!(expected, actual);
     }
 
-    /// Test that writing a [`PublicAddress`](mc_account_keys::PublicAddress)
+    /// Test that writing a [`PublicAddress`](bt_account_keys::PublicAddress)
     /// and reading it back with fog details gets the same results.
     #[test]
     fn pubfile_roundtrip_with_fog() {
-        let fog_report_url = "fog://unittest.mobilecoin.com";
+        let fog_report_url = "fog://unittest.botho.com";
         let fog_report_id = "1";
-        let pem = pem::parse(mc_crypto_x509_test_vectors::ok_rsa_head())
+        let pem = pem::parse(bt_crypto_x509_test_vectors::ok_rsa_head())
             .expect("Could not parse DER bytes from PEM certificate file");
         let fog_authority_spki = x509_signature::parse_certificate(pem.contents())
             .expect("Could not parse X509 certificate from DER bytes")

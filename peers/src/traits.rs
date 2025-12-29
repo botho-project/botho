@@ -1,18 +1,21 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
+// Copyright (c) 2024 Botho Foundation
 
 //! Traits and objects specific to peering connections.
+//! Post-SGX simplified version - no encrypted transactions.
 
 use crate::{
     error::{Result, RetryResult},
     ConsensusMsg,
 };
-use mc_common::{NodeID, ResponderId};
-use mc_connection::Connection;
-use mc_consensus_api::consensus_peer::ConsensusMsgResponse;
-use mc_transaction_core::tx::TxHash;
+use bt_common::{NodeID, ResponderId};
+use bt_connection::Connection;
+use bt_consensus_api::consensus_peer::ConsensusMsgResponse;
+use bt_transaction_core::tx::TxHash;
 use std::time::Duration;
 
 /// A trait which describes a connection from one consensus node to another.
+/// Post-SGX simplified - transactions are sent directly without encryption.
 pub trait ConsensusConnection: Connection {
     /// Retrieve the remote peer ResponderId.
     fn remote_responder_id(&self) -> ResponderId;
@@ -23,18 +26,9 @@ pub trait ConsensusConnection: Connection {
     /// Send the given consensus message to the remote peer.
     fn send_consensus_msg(&mut self, msg: &ConsensusMsg) -> Result<ConsensusMsgResponse>;
 
-    /// Send the given propose tx message to the remote peer.
-    fn send_propose_tx(
-        &mut self,
-        encrypted_tx: &WellFormedEncryptedTx,
-        origin_node: &NodeID,
-    ) -> Result<()>;
-
-    /// Retrieve encrypted transactions which match the provided hashes.
-    fn fetch_txs(&mut self, hashes: &[TxHash]) -> Result<Vec<TxContext>>;
-
-    /// Retrieve the most recent consensus message sent by this peer.
-    fn fetch_latest_msg(&mut self) -> Result<Option<ConsensusMsg>>;
+    /// Retrieve transactions which match the provided hashes.
+    /// Post-SGX: Returns ConsensusMsg instead of encrypted TxContext.
+    fn fetch_txs(&mut self, hashes: &[TxHash]) -> Result<Vec<ConsensusMsg>>;
 }
 
 /// Retriable versions of the ConsensusConnection methods
@@ -49,22 +43,10 @@ pub trait RetryableConsensusConnection {
         retry_iterator: impl IntoIterator<Item = Duration>,
     ) -> RetryResult<ConsensusMsgResponse>;
 
-    /// Retryable version of the propose tx message transmitter
-    fn send_propose_tx(
-        &self,
-        encrypted_tx: &WellFormedEncryptedTx,
-        origin_node: &NodeID,
-        retry_iterator: impl IntoIterator<Item = Duration>,
-    ) -> RetryResult<()>;
-
+    /// Retryable version of fetch_txs
     fn fetch_txs(
         &self,
         hashes: &[TxHash],
         retry_iterator: impl IntoIterator<Item = Duration>,
-    ) -> RetryResult<Vec<TxContext>>;
-
-    fn fetch_latest_msg(
-        &self,
-        retry_iterator: impl IntoIterator<Item = Duration>,
-    ) -> RetryResult<Option<ConsensusMsg>>;
+    ) -> RetryResult<Vec<ConsensusMsg>>;
 }

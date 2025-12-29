@@ -1,7 +1,7 @@
 [package]
-name = "mc-crypto-digestible-signature"
+name = "bt-crypto-digestible-signature"
 version = "7.1.0"
-authors = ["MobileCoin"]
+authors = ["Botho"]
 edition = "2021"
 description = "Digestible Signatures"
 license = "Apache-2.0"
@@ -9,12 +9,12 @@ readme = "README.md"
 rust-version = { workspace = true }
 
 [features]
-alloc = ["mc-crypto-digestible/alloc"]
-dalek = ["mc-crypto-digestible/dalek"]
-derive = ["mc-crypto-digestible/derive"]
+alloc = ["bt-crypto-digestible/alloc"]
+dalek = ["bt-crypto-digestible/dalek"]
+derive = ["bt-crypto-digestible/derive"]
 default = ["alloc", "derive", "dalek"]
 
 [dependencies]
-mc-crypto-digestible = { workspace = true }
+bt-crypto-digestible = { workspace = true }
 
 signature = { workspace = true }

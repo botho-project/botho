@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! A commitment to an output's amount, denominated in picoMOB.
 //!
@@ -10,9 +10,9 @@ use crate::{
     BlockVersion,
 };
 
-use mc_crypto_digestible::Digestible;
-use mc_crypto_keys::RistrettoPublic;
-use mc_crypto_ring_signature::{CompressedCommitment, Scalar};
+use bt_crypto_digestible::Digestible;
+use bt_crypto_keys::RistrettoPublic;
+use bt_crypto_ring_signature::{CompressedCommitment, Scalar};
 
 #[cfg(feature = "prost")]
 use prost::Oneof;

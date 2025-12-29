@@ -1,0 +1,6 @@
+export { DashboardPage } from './dashboard'
+export { WalletPage } from './wallet'
+export { LedgerPage } from './ledger'
+export { NetworkPage } from './network'
+export { MiningPage } from './mining'
+export { SettingsPage } from './settings'

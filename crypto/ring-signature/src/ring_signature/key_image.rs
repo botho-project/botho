@@ -1,16 +1,16 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 use super::{hash_to_point, Error, Scalar};
 use curve25519_dalek::ristretto::CompressedRistretto;
-use mc_crypto_digestible::Digestible;
-use mc_crypto_keys::{RistrettoPrivate, RistrettoPublic};
-use mc_util_repr_bytes::{
+use bt_crypto_digestible::Digestible;
+use bt_crypto_keys::{RistrettoPrivate, RistrettoPublic};
+use bt_util_repr_bytes::{
     derive_core_cmp_from_as_ref, derive_debug_and_display_hex_from_as_ref,
     derive_repr_bytes_from_as_ref_and_try_from, typenum::U32, LengthMismatch,
 };
 
 #[cfg(feature = "prost")]
-use mc_util_repr_bytes::derive_prost_message_from_repr_bytes;
+use bt_util_repr_bytes::derive_prost_message_from_repr_bytes;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};

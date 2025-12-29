@@ -1,11 +1,11 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Object for 0x0202 Gift Code Cancellation memo type
 //!
-//! This was proposed for standardization in mobilecoinfoundation/mcips/pull/32
+//! This was proposed for standardization in bothofoundation/mcips/pull/32
 
 use crate::{impl_memo_type_conversions, RegisteredMemoType};
-use mc_transaction_core::MemoError;
+use bt_transaction_core::MemoError;
 
 /// Memo representing the cancellation of a gift code.
 ///

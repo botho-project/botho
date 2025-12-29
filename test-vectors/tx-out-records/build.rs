@@ -1,18 +1,18 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
-use mc_account_keys::AccountKey;
-use mc_common::ResponderId;
-use mc_crypto_keys::RistrettoPrivate;
+use bt_account_keys::AccountKey;
+use bt_common::ResponderId;
+use bt_crypto_keys::RistrettoPrivate;
     ingest::TxsForIngest,
     view::{FogTxOut, TxOutRecord},
 };
 use mc_oblivious_traits::HeapORAMStorageCreator;
-use mc_test_vectors_definitions::tx_out_records::{
+use bt_test_vectors_definitions::tx_out_records::{
     CorrectTxOutRecordData, IncorrectTxOutRecordData,
 };
-use mc_transaction_core::{fog_hint::FogHint, tokens::Mob, tx::TxOut, Amount, BlockVersion, Token};
-use mc_util_from_random::FromRandom;
-use mc_util_test_vector::write_jsonl;
+use bt_transaction_core::{fog_hint::FogHint, tokens::Mob, tx::TxOut, Amount, BlockVersion, Token};
+use bt_util_from_random::FromRandom;
+use bt_util_test_vector::write_jsonl;
 use rand::{rngs::StdRng, SeedableRng};
 
 fn main() {
@@ -26,10 +26,10 @@ fn write_correct_tx_out_records() {
         let tx_out_record_data = generate_tx_out_record_data();
         for tx_out_record in &tx_out_record_data.tx_out_records {
             let correct_tx_out_record_data = CorrectTxOutRecordData {
-                recipient_view_private_key_hex_proto_bytes: hex::encode(mc_util_serial::encode(
+                recipient_view_private_key_hex_proto_bytes: hex::encode(bt_util_serial::encode(
                     &tx_out_record_data.recipient_view_private_key,
                 )),
-                tx_out_record_hex_proto_bytes: hex::encode(mc_util_serial::encode(tx_out_record)),
+                tx_out_record_hex_proto_bytes: hex::encode(bt_util_serial::encode(tx_out_record)),
             };
 
             correct_tx_out_record_data_set.push(correct_tx_out_record_data);
@@ -46,10 +46,10 @@ fn write_incorrect_tx_out_records() {
         let tx_out_record_data = generate_tx_out_record_data();
         for tx_out_record in &tx_out_record_data.tx_out_records {
             let incorrect_tx_out_record_data = IncorrectTxOutRecordData {
-                spurious_view_private_key_hex_proto_bytes: hex::encode(mc_util_serial::encode(
+                spurious_view_private_key_hex_proto_bytes: hex::encode(bt_util_serial::encode(
                     &tx_out_record_data.spurious_view_private_key,
                 )),
-                tx_out_record_hex_proto_bytes: hex::encode(mc_util_serial::encode(tx_out_record)),
+                tx_out_record_hex_proto_bytes: hex::encode(bt_util_serial::encode(tx_out_record)),
             };
 
             incorrect_tx_out_record_data_set.push(incorrect_tx_out_record_data);
@@ -74,7 +74,7 @@ struct TxOutRecordData {
 }
 
 fn generate_tx_out_record_data() -> TxOutRecordData {
-    let logger = mc_common::logger::create_null_logger();
+    let logger = bt_common::logger::create_null_logger();
     let token_id = Mob::ID;
     let mut rng: StdRng = SeedableRng::from_seed([2u8; 32]);
     let mut tx_out_records: Vec<TxOutRecord> = Vec::new();

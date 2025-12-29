@@ -1,7 +1,7 @@
 [package]
-name = "mc-crypto-digestible"
+name = "bt-crypto-digestible"
 version = "7.1.0"
-authors = ["MobileCoin"]
+authors = ["Botho"]
 edition = "2021"
 license = "Apache-2.0"
 readme = "README.md"
@@ -12,7 +12,7 @@ default = ["alloc", "derive", "dalek", "curve25519-dalek/default"]
 # Enables support for types in alloc crate
 alloc = ["curve25519-dalek/alloc", "ed25519-dalek/alloc"]
 # Enables re-export of derive(Digestible) macro
-derive = ["mc-crypto-digestible-derive"]
+derive = ["bt-crypto-digestible-derive"]
 # Enables support for some crypto primitives in dalek crates
 dalek = ["curve25519-dalek", "ed25519-dalek", "x25519-dalek"]
 
@@ -25,6 +25,6 @@ ed25519-dalek = { workspace = true, optional = true }
 generic-array = { workspace = true }
 
 # For derive support
-mc-crypto-digestible-derive = { workspace = true, optional = true }
+bt-crypto-digestible-derive = { workspace = true, optional = true }
 merlin = { workspace = true }
 x25519-dalek = { workspace = true, optional = true }

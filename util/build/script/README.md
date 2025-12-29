@@ -1,4 +1,4 @@
-Cargo build-script assistance, from MobileCoin.
+Cargo build-script assistance, from Botho.
 
 This crate provides a programatic API for dealing with the various strings passed into build scripts via environment variables. The primary interface of use is the `Environment` structure:
 

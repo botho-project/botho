@@ -1,14 +1,14 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Minting transaction configuration.
 
 use crate::domain_separators::MINT_CONFIG_TX_PREFIX_DOMAIN_TAG;
 use alloc::vec::Vec;
 use core::fmt;
-use mc_crypto_digestible::{Digestible, MerlinTranscript};
-use mc_crypto_keys::{Ed25519Public, Ed25519Signature};
-use mc_crypto_multisig::{MultiSig, SignerSet};
-use mc_util_serial::Message;
+use bt_crypto_digestible::{Digestible, MerlinTranscript};
+use bt_crypto_keys::{Ed25519Public, Ed25519Signature};
+use bt_crypto_multisig::{MultiSig, SignerSet};
+use bt_util_serial::Message;
 use serde::{Deserialize, Serialize};
 
 /// A minting configuration for a single token ID.

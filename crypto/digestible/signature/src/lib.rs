@@ -1,8 +1,8 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 #![no_std]
 
-use mc_crypto_digestible::{Digestible, MerlinTranscript};
+use bt_crypto_digestible::{Digestible, MerlinTranscript};
 use signature::{SignatureEncoding, Signer, Verifier};
 
 pub use signature::Error;

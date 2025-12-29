@@ -1,9 +1,9 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Convert to/from external::SignatureRctBulletproofs
 
 use crate::{external, ConversionError};
-use mc_transaction_core::{
+use bt_transaction_core::{
     ring_ct::SignatureRctBulletproofs, ring_signature::RingMLSAG, CompressedCommitment,
 };
 
@@ -27,6 +27,7 @@ impl From<&SignatureRctBulletproofs> for external::SignatureRctBulletproofs {
             range_proofs: source.range_proofs.clone(),
             pseudo_output_token_ids: source.pseudo_output_token_ids.clone(),
             output_token_ids: source.output_token_ids.clone(),
+            extended_tag_signature: source.extended_tag_signature.clone(),
         }
     }
 }
@@ -53,6 +54,7 @@ impl TryFrom<&external::SignatureRctBulletproofs> for SignatureRctBulletproofs {
             range_proofs: source.range_proofs.clone(),
             pseudo_output_token_ids: source.pseudo_output_token_ids.clone(),
             output_token_ids: source.output_token_ids.clone(),
+            extended_tag_signature: source.extended_tag_signature.clone(),
         })
     }
 }

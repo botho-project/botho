@@ -1,6 +1,6 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
-use mc_blockchain_types::{BlockData, BlockMetadata};
+use bt_blockchain_types::{BlockData, BlockMetadata};
 
 /// A helper trait used by [crate::LedgerSyncService] for configuring what
 /// metadata, if any, is appended for a given block.

@@ -1,8 +1,8 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Connection mock and test utilities
 
-use mc_util_uri::ConsensusClientUri;
+use bt_util_uri::ConsensusClientUri;
 use std::str::FromStr;
 
 mod blockchain;

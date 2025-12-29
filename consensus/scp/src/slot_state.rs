@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! The state held by a single slot.
 //!
@@ -12,7 +12,7 @@ use crate::{
     slot::{Phase, Slot},
     SlotIndex, Value,
 };
-use mc_common::{HashSet, NodeID};
+use bt_common::{HashSet, NodeID};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, fmt::Display};
 

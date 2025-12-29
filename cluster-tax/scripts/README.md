@@ -1,6 +1,6 @@
 # Economic Simulation Scripts
 
-This directory contains Python scripts for modeling the economic effects of Cadence's progressive fee structure on wealth inequality.
+This directory contains Python scripts for modeling the economic effects of Botho's progressive fee structure on wealth inequality.
 
 ## Quick Start
 
@@ -9,14 +9,14 @@ cd cluster-tax
 python3 -m venv .venv
 source .venv/bin/activate
 pip install numpy matplotlib
-python scripts/cadence_fee_model.py
+python scripts/botho_fee_model.py
 ```
 
-Output is saved to `./gini_10yr/cadence_fee_model.png`.
+Output is saved to `./gini_10yr/botho_fee_model.png`.
 
 ## Scripts
 
-### `cadence_fee_model.py`
+### `botho_fee_model.py`
 
 The primary simulation script. Models a 500-agent economy over 10,000 rounds (~10 years) with:
 
@@ -97,14 +97,14 @@ def calculate_gini(wealths):
 | Configuration | Initial GINI | Final GINI | Reduction | Fees Burned |
 |---------------|--------------|------------|-----------|-------------|
 | Flat 1% | 0.788 | 0.413 | 47.5% | 985,840 |
-| **Cadence Default** | **0.788** | **0.409** | **48.1%** | **215,964** |
-| Cadence 1x-10x | 0.788 | 0.403 | 48.8% | 292,194 |
-| Cadence 10/40 bps | 0.788 | 0.406 | 48.5% | 431,196 |
-| Cadence 10/40 1x-10x | 0.788 | 0.408 | 48.3% | 583,021 |
+| **Botho Default** | **0.788** | **0.409** | **48.1%** | **215,964** |
+| Botho 1x-10x | 0.788 | 0.403 | 48.8% | 292,194 |
+| Botho 10/40 bps | 0.788 | 0.406 | 48.5% | 431,196 |
+| Botho 10/40 1x-10x | 0.788 | 0.408 | 48.3% | 583,021 |
 
 ### Visualization
 
-![Cadence Fee Model Results](../gini_10yr/cadence_fee_model.png)
+![Botho Fee Model Results](../gini_10yr/botho_fee_model.png)
 
 ### Key Findings
 
@@ -112,7 +112,7 @@ def calculate_gini(wealths):
 
 2. **Progressive fees are 4.5x more efficient** than flat fees:
    - Flat 1%: Burns 985K to achieve 47.5% reduction
-   - Cadence Default: Burns 216K to achieve 48.1% reduction
+   - Botho Default: Burns 216K to achieve 48.1% reduction
    - Same result, 78% less total fee burden
 
 3. **Diminishing returns beyond 6x factor**:
@@ -169,7 +169,7 @@ Redistribution achieves ~5% better reduction but adds implementation complexity.
 To test different parameters:
 
 ```python
-config = CadenceFeeConfig(
+config = BothoFeeConfig(
     name="Custom",
     plain_base_bps=10,      # Higher base rate
     hidden_base_bps=40,     # Maintain 4x ratio

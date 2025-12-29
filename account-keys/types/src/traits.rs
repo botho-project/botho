@@ -1,10 +1,10 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
-use mc_crypto_keys::RistrettoPublic;
+use bt_crypto_keys::RistrettoPublic;
 
 /// An object which represents a subaddress, and has RingCT-style
 /// view and spend public keys.
-// TODO: replace with typed `mc_core::account::RingCTAddress`
+// TODO: replace with typed `bt_core::account::RingCTAddress`
 pub trait RingCtAddress {
     /// Get the subaddress' view public key
     fn view_public_key(&self) -> &RistrettoPublic;

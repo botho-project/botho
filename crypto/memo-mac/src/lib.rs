@@ -1,14 +1,14 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! HMAC code shared by all category 0x01 memos.
 //!
 //! This validation scheme was proposed for standardization in
-//! mobilecoinfoundation/mcips/pull/4
+//! bothofoundation/mcips/pull/4
 
 #![no_std]
 
 use hmac::{Hmac, Mac};
-use mc_crypto_keys::CompressedRistrettoPublic;
+use bt_crypto_keys::CompressedRistrettoPublic;
 use sha2::Sha512;
 
 type HmacSha512 = Hmac<Sha512>;

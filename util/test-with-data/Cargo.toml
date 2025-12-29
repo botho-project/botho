@@ -1,7 +1,7 @@
 [package]
-name = "mc-util-test-with-data"
+name = "bt-util-test-with-data"
 version = "7.1.0"
-authors = ["MobileCoin"]
+authors = ["Botho"]
 edition = "2021"
 license = "GPL-3.0"
 rust-version = { workspace = true }

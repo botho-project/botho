@@ -1,6 +1,6 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
-//! MobileCoin Logging.
+//! Botho Logging.
 //!
 //! The configuration of our logging is affected by environment variables. The
 //! following variables are relevant:
@@ -60,7 +60,7 @@ cfg_if::cfg_if! {
         /// Simple time measurement utility, based on the [measure_time](https://docs.rs/measure_time/) crate.
         ///
         /// Note that even though the macro lives inside the `logger` module, it needs to be imported by
-        /// `use mc_common::trace_time`, since Rust exports all macros at the crate level :/
+        /// `use bt_common::trace_time`, since Rust exports all macros at the crate level :/
         #[macro_export]
         macro_rules! trace_time {
             ($logger:expr, $($arg:tt)+) => (

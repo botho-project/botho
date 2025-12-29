@@ -1,6 +1,6 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
-//! MobileCoin implementation of amount commitments and MLSAG ring signatures,
+//! Botho implementation of amount commitments and MLSAG ring signatures,
 //! as well as some related functions (see one-time keys module)
 
 #![no_std]
@@ -11,7 +11,7 @@
 extern crate alloc;
 
 use crate::onetime_keys::create_shared_secret;
-use mc_crypto_keys::{RistrettoPrivate, RistrettoPublic};
+use bt_crypto_keys::{RistrettoPrivate, RistrettoPublic};
 
 mod amount;
 mod domain_separators;

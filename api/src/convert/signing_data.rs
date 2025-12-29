@@ -1,9 +1,9 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
-//! Convert to/from mc_transaction_core::ring_ct::SigningData.
+//! Convert to/from bt_transaction_core::ring_ct::SigningData.
 
 use crate::{external, ConversionError};
-use mc_transaction_core::ring_ct::SigningData;
+use bt_transaction_core::ring_ct::SigningData;
 
 impl From<&SigningData> for external::SigningData {
     fn from(src: &SigningData) -> Self {
@@ -52,16 +52,16 @@ impl TryFrom<&external::SigningData> for SigningData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mc_account_keys::AccountKey;
+    use bt_account_keys::AccountKey;
     use mc_fog_report_validation_test_utils::MockFogResolver;
-    use mc_transaction_builder::{
+    use bt_transaction_builder::{
         test_utils::get_input_credentials, EmptyMemoBuilder, TransactionBuilder,
     };
-    use mc_transaction_core::{tokens::Mob, Amount, BlockVersion, Token};
+    use bt_transaction_core::{tokens::Mob, Amount, BlockVersion, Token};
     use rand::{rngs::StdRng, SeedableRng};
 
     // Test converting between external::SigningData and
-    // mc_transaction_core::ring_ct::SigningData
+    // bt_transaction_core::ring_ct::SigningData
     #[test]
     fn test_signing_data_conversion() {
         // Generate an UnsignedTx to test with.
@@ -101,8 +101,8 @@ mod tests {
 
             let (signing_data, _, _, _) = unsigned_tx.get_signing_data(&mut rng).unwrap();
 
-            // Converting mc_transaction_core::ring_ct::SigningData -> external::SigningData
-            // -> mc_transaction_core::ring_ct::SigningData should be the identity
+            // Converting bt_transaction_core::ring_ct::SigningData -> external::SigningData
+            // -> bt_transaction_core::ring_ct::SigningData should be the identity
             // function.
             {
                 let external_signing_data: external::SigningData = (&signing_data).into();

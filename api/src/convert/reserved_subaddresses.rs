@@ -1,10 +1,10 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Convert to/from external::ReservedSubaddresses
 
 use crate::{external, ConversionError};
-use mc_account_keys::PublicAddress;
-use mc_transaction_extra::ReservedSubaddresses;
+use bt_account_keys::PublicAddress;
+use bt_transaction_extra::ReservedSubaddresses;
 
 impl From<&ReservedSubaddresses> for external::ReservedSubaddresses {
     fn from(src: &ReservedSubaddresses) -> Self {
@@ -44,7 +44,7 @@ impl TryFrom<&external::ReservedSubaddresses> for ReservedSubaddresses {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mc_account_keys::AccountKey;
+    use bt_account_keys::AccountKey;
     use rand::{rngs::StdRng, SeedableRng};
 
     #[test]

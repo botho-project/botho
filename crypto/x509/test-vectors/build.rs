@@ -1,8 +1,8 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Generate canned certificate data (via bash script)
 
-use mc_util_build_script::Environment;
+use bt_util_build_script::Environment;
 use std::process::Command;
 
 fn main() {

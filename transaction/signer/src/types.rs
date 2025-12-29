@@ -1,17 +1,17 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Serializable types for exchange between full-service and offline or hardware
 //! wallet implementations.
 
-use mc_core::keys::{RootSpendPublic, RootViewPrivate, TxOutPublic};
+use bt_core::keys::{RootSpendPublic, RootViewPrivate, TxOutPublic};
 
-use mc_crypto_ring_signature::KeyImage;
-use mc_transaction_core::{
+use bt_crypto_ring_signature::KeyImage;
+use bt_transaction_core::{
     ring_ct::{InputRing, OutputSecret},
     tx::{Tx, TxPrefix},
     BlockVersion,
 };
-use mc_transaction_summary::TxOutSummaryUnblindingData;
+use bt_transaction_summary::TxOutSummaryUnblindingData;
 use serde::{Deserialize, Serialize};
 
 /// View account credentials produced by a signer implementation
@@ -30,10 +30,10 @@ pub struct AccountInfo {
     pub account_index: u32,
 }
 
-/// Convert a serializable signer [ViewAccount] object to the `mc_core` version
-impl From<AccountInfo> for mc_core::account::ViewAccount {
+/// Convert a serializable signer [ViewAccount] object to the `bt_core` version
+impl From<AccountInfo> for bt_core::account::ViewAccount {
     fn from(v: AccountInfo) -> Self {
-        mc_core::account::ViewAccount::new(v.view_private, v.spend_public)
+        bt_core::account::ViewAccount::new(v.view_private, v.spend_public)
     }
 }
 
@@ -238,8 +238,8 @@ pub(crate) mod string {
 
 /// Public key hex encoding support for serde
 pub(crate) mod pub_key_hex {
-    use mc_core::keys::Key;
-    use mc_crypto_keys::RistrettoPublic;
+    use bt_core::keys::Key;
+    use bt_crypto_keys::RistrettoPublic;
     use serde::de::{Deserializer, Error};
 
     use super::ConstArrayVisitor;
@@ -271,8 +271,8 @@ pub(crate) mod pub_key_hex {
 
 /// Private key hex encoding support for serde
 pub(crate) mod pri_key_hex {
-    use mc_core::keys::Key;
-    use mc_crypto_keys::RistrettoPrivate;
+    use bt_core::keys::Key;
+    use bt_crypto_keys::RistrettoPrivate;
     use serde::de::{Deserializer, Error};
 
     use super::ConstArrayVisitor;

@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 #![feature(proc_macro_diagnostic)]
 
@@ -31,8 +31,8 @@ fn impl_with_logger(item: TokenStream, params: TokenStream2, args: TokenStream2)
         #[test]
         fn #orig_ident(#params) {
             let test_name = format!("{}::{}", module_path!(), #orig_name);
-            let logger = mc_common::logger::create_test_logger(test_name);
-            mc_common::logger::slog_scope::scope(
+            let logger = bt_common::logger::create_test_logger(test_name);
+            bt_common::logger::slog_scope::scope(
                 &logger.clone(),
                 || #new_ident(logger #args)
             );
@@ -64,8 +64,8 @@ pub fn async_test_with_logger(attrs: TokenStream, item: TokenStream) -> TokenStr
         #[tokio::test(#attrs)]
         async fn #orig_ident() {
             let test_name = format!("{}::{}", module_path!(), #orig_name);
-            let logger = mc_common::logger::create_test_logger(test_name);
-            mc_common::logger::slog_scope::scope(
+            let logger = bt_common::logger::create_test_logger(test_name);
+            bt_common::logger::slog_scope::scope(
                 &logger.clone(),
                 || async { #new_ident(logger).await }
             ).await;

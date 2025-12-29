@@ -1,14 +1,14 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Defines the Memo Builder for the gift code funding memo (0x0201)
 //! specified in MCIP #32
 
 use crate::{MemoBuilder, ReservedSubaddresses};
 use alloc::{format, string::String};
-use mc_account_keys::PublicAddress;
-use mc_crypto_keys::RistrettoPublic;
-use mc_transaction_core::{tokens::Mob, Amount, MemoContext, MemoPayload, NewMemoError, Token};
-use mc_transaction_extra::{GiftCodeFundingMemo, UnusedMemo};
+use bt_account_keys::PublicAddress;
+use bt_crypto_keys::RistrettoPublic;
+use bt_transaction_core::{tokens::Mob, Amount, MemoContext, MemoPayload, NewMemoError, Token};
+use bt_transaction_extra::{GiftCodeFundingMemo, UnusedMemo};
 
 /// There are three possible gift code memo types specified in MCIP #32
 /// | Memo type bytes | Name                        |
@@ -128,8 +128,8 @@ impl MemoBuilder for GiftCodeFundingMemoBuilder {
 mod tests {
     use super::*;
     use assert_matches::assert_matches;
-    use mc_account_keys::AccountKey;
-    use mc_util_from_random::FromRandom;
+    use bt_account_keys::AccountKey;
+    use bt_util_from_random::FromRandom;
     use rand::{rngs::StdRng, SeedableRng};
 
     fn build_gift_code_memos(

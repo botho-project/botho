@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2023 The MobileCoin Foundation
+// Copyright (c) 2018-2023 The Botho Foundation
 
 //! A thin wrapper around Dalek libraries for key handling.
 //!
@@ -7,8 +7,8 @@
 //! X25519 ECDH with Ephemeral Keys
 //!
 //! ```
-//! use mc_crypto_keys::*;
-//! use mc_util_from_random::FromRandom;
+//! use bt_crypto_keys::*;
+//! use bt_util_from_random::FromRandom;
 //! use rand_core::SeedableRng;
 //! use rand_hc::Hc128Rng;
 //!
@@ -33,8 +33,8 @@
 //! Ed25519 Signing
 //!
 //! ```
-//! use mc_crypto_keys::*;
-//! use mc_util_from_random::FromRandom;
+//! use bt_crypto_keys::*;
+//! use bt_util_from_random::FromRandom;
 //! use rand_core::SeedableRng;
 //! use rand_hc::Hc128Rng;
 //!
@@ -75,7 +75,7 @@ pub use crate::{
 pub(crate) use base64::engine::general_purpose::STANDARD as BASE64_ENGINE;
 
 pub use digest::Digest;
-pub use mc_util_repr_bytes::{typenum::Unsigned, GenericArray, LengthMismatch, ReprBytes};
+pub use bt_util_repr_bytes::{typenum::Unsigned, GenericArray, LengthMismatch, ReprBytes};
 pub use schnorrkel_og::SignatureError as SchnorrkelError;
 pub use signature::{
     DigestSigner, DigestVerifier, Error as SignatureError, SignatureEncoding, Signer, Verifier,

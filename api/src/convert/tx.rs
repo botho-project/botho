@@ -1,11 +1,11 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Convert to/from external::Tx.
 
 use crate::{external, ConversionError};
-use mc_transaction_core::tx;
+use bt_transaction_core::tx;
 
-/// Convert mc_transaction_core::tx::Tx --> external::Tx.
+/// Convert bt_transaction_core::tx::Tx --> external::Tx.
 impl From<&tx::Tx> for external::Tx {
     fn from(source: &tx::Tx) -> Self {
         Self {
@@ -15,7 +15,7 @@ impl From<&tx::Tx> for external::Tx {
     }
 }
 
-/// Convert external::Tx --> mc_transaction_core::tx::Tx.
+/// Convert external::Tx --> bt_transaction_core::tx::Tx.
 impl TryFrom<&external::Tx> for tx::Tx {
     type Error = ConversionError;
 
@@ -37,13 +37,13 @@ impl TryFrom<&external::Tx> for tx::Tx {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mc_account_keys::AccountKey;
-    use mc_crypto_ring_signature_signer::NoKeysRingSigner;
-    use mc_transaction_builder::{
+    use bt_account_keys::AccountKey;
+    use bt_crypto_ring_signature_signer::NoKeysRingSigner;
+    use bt_transaction_builder::{
         test_utils::{get_input_credentials, get_ring_global_indices},
         EmptyMemoBuilder, ReservedSubaddresses, SignedContingentInputBuilder, TransactionBuilder,
     };
-    use mc_transaction_core::{
+    use bt_transaction_core::{
         constants::{MILLIMOB_TO_PICOMOB, RING_SIZE},
         tokens::Mob,
         tx::Tx,
@@ -87,12 +87,12 @@ mod tests {
 
             // decode(encode(tx)) should be the identity function.
             {
-                let bytes = mc_util_serial::encode(&tx);
-                let recovered_tx = mc_util_serial::decode(&bytes).unwrap();
+                let bytes = bt_util_serial::encode(&tx);
+                let recovered_tx = bt_util_serial::decode(&bytes).unwrap();
                 assert_eq!(tx, recovered_tx);
             }
 
-            // Converting mc_transaction_core::Tx -> external::Tx -> mc_transaction_core::Tx
+            // Converting bt_transaction_core::Tx -> external::Tx -> bt_transaction_core::Tx
             // should be the identity function.
             {
                 let external_tx: external::Tx = external::Tx::from(&tx);
@@ -102,7 +102,7 @@ mod tests {
 
             // Encoding with prost, decoding with protobuf should be the identity function.
             {
-                let bytes = mc_util_serial::encode(&tx);
+                let bytes = bt_util_serial::encode(&tx);
                 let recovered_tx = external::Tx::decode(bytes.as_slice()).unwrap();
                 assert_eq!(recovered_tx, external::Tx::from(&tx));
             }
@@ -111,7 +111,7 @@ mod tests {
             {
                 let external_tx: external::Tx = external::Tx::from(&tx);
                 let bytes = external_tx.encode_to_vec();
-                let recovered_tx: Tx = mc_util_serial::decode(&bytes).unwrap();
+                let recovered_tx: Tx = bt_util_serial::decode(&bytes).unwrap();
                 assert_eq!(tx, recovered_tx);
             }
         }
@@ -194,12 +194,12 @@ mod tests {
 
             // decode(encode(tx)) should be the identity function.
             {
-                let bytes = mc_util_serial::encode(&tx);
-                let recovered_tx = mc_util_serial::decode(&bytes).unwrap();
+                let bytes = bt_util_serial::encode(&tx);
+                let recovered_tx = bt_util_serial::decode(&bytes).unwrap();
                 assert_eq!(tx, recovered_tx);
             }
 
-            // Converting mc_transaction_core::Tx -> external::Tx -> mc_transaction_core::Tx
+            // Converting bt_transaction_core::Tx -> external::Tx -> bt_transaction_core::Tx
             // should be the identity function.
             {
                 let external_tx: external::Tx = external::Tx::from(&tx);
@@ -209,7 +209,7 @@ mod tests {
 
             // Encoding with prost, decoding with protobuf should be the identity function.
             {
-                let bytes = mc_util_serial::encode(&tx);
+                let bytes = bt_util_serial::encode(&tx);
                 let recovered_tx = external::Tx::decode(bytes.as_slice()).unwrap();
                 assert_eq!(recovered_tx, external::Tx::from(&tx));
             }
@@ -218,7 +218,7 @@ mod tests {
             {
                 let external_tx: external::Tx = external::Tx::from(&tx);
                 let bytes = external_tx.encode_to_vec();
-                let recovered_tx: Tx = mc_util_serial::decode(&bytes).unwrap();
+                let recovered_tx: Tx = bt_util_serial::decode(&bytes).unwrap();
                 assert_eq!(tx, recovered_tx);
             }
         }
@@ -315,12 +315,12 @@ mod tests {
 
             // decode(encode(tx)) should be the identity function.
             {
-                let bytes = mc_util_serial::encode(&tx);
-                let recovered_tx = mc_util_serial::decode(&bytes).unwrap();
+                let bytes = bt_util_serial::encode(&tx);
+                let recovered_tx = bt_util_serial::decode(&bytes).unwrap();
                 assert_eq!(tx, recovered_tx);
             }
 
-            // Converting mc_transaction_core::Tx -> external::Tx -> mc_transaction_core::Tx
+            // Converting bt_transaction_core::Tx -> external::Tx -> bt_transaction_core::Tx
             // should be the identity function.
             {
                 let external_tx: external::Tx = external::Tx::from(&tx);
@@ -330,7 +330,7 @@ mod tests {
 
             // Encoding with prost, decoding with protobuf should be the identity function.
             {
-                let bytes = mc_util_serial::encode(&tx);
+                let bytes = bt_util_serial::encode(&tx);
                 let recovered_tx = external::Tx::decode(bytes.as_slice()).unwrap();
                 assert_eq!(recovered_tx, external::Tx::from(&tx));
             }
@@ -339,7 +339,7 @@ mod tests {
             {
                 let external_tx: external::Tx = external::Tx::from(&tx);
                 let bytes = external_tx.encode_to_vec();
-                let recovered_tx: Tx = mc_util_serial::decode(&bytes).unwrap();
+                let recovered_tx: Tx = bt_util_serial::decode(&bytes).unwrap();
                 assert_eq!(tx, recovered_tx);
             }
         }

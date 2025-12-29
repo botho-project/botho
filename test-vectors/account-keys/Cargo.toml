@@ -1,19 +1,19 @@
 [package]
-name = "mc-test-vectors-account-keys"
+name = "bt-test-vectors-account-keys"
 version = "7.1.0"
-authors = ["MobileCoin"]
+authors = ["Botho"]
 edition = "2021"
 license = "GPL-3.0"
 rust-version = { workspace = true }
 
 [dependencies]
-mc-test-vectors-definitions = { workspace = true }
+bt-test-vectors-definitions = { workspace = true }
 
 [build-dependencies]
-mc-account-keys = { workspace = true }
-mc-core = { workspace = true, features = ["bip39"] }
-mc-test-vectors-definitions = { workspace = true }
-mc-util-test-vector = { workspace = true }
+bt-account-keys = { workspace = true }
+bt-core = { workspace = true, features = ["bip39"] }
+bt-test-vectors-definitions = { workspace = true }
+bt-util-test-vector = { workspace = true }
 
 hex = { workspace = true }
 tiny-bip39 = { workspace = true }

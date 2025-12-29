@@ -1,5 +1,5 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
-// Copyright (c) 2024 Cadence Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
+// Copyright (c) 2024 Botho Foundation
 
 //! Data access abstraction for TxOuts stored in the ledger.
 //!
@@ -9,10 +9,10 @@
 
 use crate::{key_bytes_to_u64, u64_to_key_bytes, Error};
 use lmdb::{Database, DatabaseFlags, Environment, RwTransaction, Transaction, WriteFlags};
-use mc_common::Hash;
-use mc_crypto_keys::CompressedRistrettoPublic;
-use mc_transaction_core::tx::TxOut;
-use mc_util_serial::{decode, encode};
+use bt_common::Hash;
+use bt_crypto_keys::CompressedRistrettoPublic;
+use bt_transaction_core::tx::TxOut;
+use bt_util_serial::{decode, encode};
 
 // LMDB Database names.
 pub const COUNTS_DB_NAME: &str = "tx_out_store:counts";
@@ -190,7 +190,7 @@ impl TxOutStore {
         &self,
         _index: u64,
         _db_transaction: &T,
-    ) -> Result<mc_transaction_core::tx::TxOutMembershipProof, Error> {
+    ) -> Result<bt_transaction_core::tx::TxOutMembershipProof, Error> {
         Err(Error::MerkleProofsNotSupported)
     }
 
@@ -210,16 +210,16 @@ pub mod tx_out_store_tests {
     use super::TxOutStore;
     use crate::Error;
     use lmdb::{Environment, RoTransaction, RwTransaction, Transaction};
-    use mc_account_keys::AccountKey;
-    use mc_common::Hash;
-    use mc_crypto_keys::{CompressedRistrettoPublic, RistrettoPrivate};
-    use mc_transaction_core::{
+    use bt_account_keys::AccountKey;
+    use bt_common::Hash;
+    use bt_crypto_keys::{CompressedRistrettoPublic, RistrettoPrivate};
+    use bt_transaction_core::{
         encrypted_fog_hint::{EncryptedFogHint, ENCRYPTED_FOG_HINT_LEN},
         tokens::Mob,
         tx::TxOut,
         Amount, BlockVersion, Token,
     };
-    use mc_util_from_random::FromRandom;
+    use bt_util_from_random::FromRandom;
     use rand::{rngs::StdRng, SeedableRng};
     use std::path::Path;
     use tempfile::TempDir;

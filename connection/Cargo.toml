@@ -1,7 +1,7 @@
 [package]
-name = "mc-connection"
+name = "bt-connection"
 version = "7.1.0"
-authors = ["MobileCoin"]
+authors = ["Botho"]
 edition = "2021"
 license = "GPL-3.0"
 readme = "README.md"
@@ -10,27 +10,29 @@ rust-version = { workspace = true }
 [dependencies]
 
 der = { workspace = true }
-mc-api = { path = "../api" }
-mc-blockchain-types = { workspace = true }
-mc-common = { workspace = true }
-mc-consensus-api = { workspace = true }
-mc-crypto-keys = { workspace = true }
-mc-crypto-noise = { workspace = true }
-mc-transaction-core = { workspace = true }
-mc-util-grpc = { workspace = true }
-mc-util-serial = { workspace = true }
-mc-util-uri = { workspace = true }
+bt-api = { path = "../api" }
+bt-blockchain-types = { workspace = true }
+bt-common = { workspace = true }
+bt-consensus-api = { workspace = true }
+bt-crypto-keys = { workspace = true }
+bt-crypto-noise = { workspace = true }
+bt-transaction-core = { workspace = true }
+bt-util-grpc-tonic = { workspace = true }
+bt-util-serial = { workspace = true }
+bt-util-uri = { workspace = true }
 
 aes-gcm = { workspace = true }
+base64 = { workspace = true }
 cookie = { workspace = true }
 displaydoc = { workspace = true }
-grpcio = { workspace = true, features = ["prost-codec"] }
 mc-rand = { workspace = true }
-prost = { workspace = true, features = ["prost-derive"] }
+prost = { workspace = true, features = ["derive"] }
 retry = { workspace = true }
 secrecy = { workspace = true }
 serde = { workspace = true }
 sha2 = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
+tonic = { workspace = true, features = ["codegen", "prost", "tls"] }
 
 [dev-dependencies]
 rand = { workspace = true }

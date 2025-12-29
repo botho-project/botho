@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 use base64::{engine::general_purpose::URL_SAFE as URL_SAFE_BASE64_ENGINE, Engine};
 use core::{
@@ -7,8 +7,8 @@ use core::{
     result::Result as StdResult,
 };
 use displaydoc::Display;
-use mc_common::{NodeID, ResponderId, ResponderIdParseError};
-use mc_crypto_keys::{DistinguishedEncoding, Ed25519Public, KeyError, SignatureError};
+use bt_common::{NodeID, ResponderId, ResponderIdParseError};
+use bt_crypto_keys::{DistinguishedEncoding, Ed25519Public, KeyError, SignatureError};
 use std::{path::PathBuf, str::FromStr};
 use url::Url;
 
@@ -161,8 +161,8 @@ pub trait ConnectionUri:
         // not returning anything. If the ca-bundle query parameter was present
         // we will propagate errors from `read_ca_bundle`.
         ca_bundle_path.map_or_else(
-            || Ok(mc_util_host_cert::read_ca_bundle(None).ok()),
-            |bundle_path| mc_util_host_cert::read_ca_bundle(Some(bundle_path)).map(Some),
+            || Ok(bt_util_host_cert::read_ca_bundle(None).ok()),
+            |bundle_path| bt_util_host_cert::read_ca_bundle(Some(bundle_path)).map(Some),
         )
     }
 

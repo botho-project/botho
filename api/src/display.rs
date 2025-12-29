@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Character encodings for public addresses and request types for easy
 //! cut-and-paste.
@@ -76,11 +76,11 @@ mod display_tests {
         external,
         printable::{printable_wrapper, PaymentRequest, PrintableWrapper, TransferPayload},
     };
-    use mc_test_vectors_b58_encodings::{
+    use bt_test_vectors_b58_encodings::{
         B58EncodePublicAddressWithFog, B58EncodePublicAddressWithoutFog,
     };
-    use mc_util_test_vector::TestVector;
-    use mc_util_test_with_data::test_with_data;
+    use bt_util_test_vector::TestVector;
+    use bt_util_test_with_data::test_with_data;
 
     fn sample_public_address() -> external::PublicAddress {
         external::PublicAddress {

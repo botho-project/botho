@@ -1,17 +1,17 @@
 [package]
-name = "mc-crypto-hashes"
+name = "bt-crypto-hashes"
 version = "7.1.0"
-authors = ["MobileCoin"]
+authors = ["Botho"]
 edition = "2021"
 license = "Apache-2.0"
 readme = "README.md"
 rust-version = { workspace = true }
 
 [features]
-default = ["mc-crypto-digestible/default"]
+default = ["bt-crypto-digestible/default"]
 
 [dependencies]
-mc-crypto-digestible = { workspace = true }
+bt-crypto-digestible = { workspace = true }
 
 digest = { workspace = true }
 

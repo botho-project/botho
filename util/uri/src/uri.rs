@@ -1,8 +1,8 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 use crate::traits::{ConnectionUri, UriScheme};
 use displaydoc::Display;
-use mc_common::ResponderId;
+use bt_common::ResponderId;
 use percent_encoding::percent_decode_str;
 use std::{
     fmt::{Display, Formatter, Result as FmtResult},

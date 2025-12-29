@@ -1,9 +1,9 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Convert to/from external:MintTx/MintTxPrefix.
 
 use crate::{external, ConversionError};
-use mc_transaction_core::{
+use bt_transaction_core::{
     encrypted_fog_hint::EncryptedFogHint,
     mint::{MintTx, MintTxPrefix},
 };
@@ -98,9 +98,9 @@ impl TryFrom<&external::MintTx> for MintTx {
 mod tests {
     use super::*;
     use crate::convert::ed25519_multisig::tests::test_multi_sig;
-    use mc_crypto_keys::RistrettoPublic;
-    use mc_util_from_random::FromRandom;
-    use mc_util_serial::{decode, encode};
+    use bt_crypto_keys::RistrettoPublic;
+    use bt_util_from_random::FromRandom;
+    use bt_util_serial::{decode, encode};
     use prost::Message;
     use rand_core::{RngCore, SeedableRng};
     use rand_hc::Hc128Rng;
@@ -131,8 +131,8 @@ mod tests {
             assert_eq!(source, recovered);
         }
 
-        // Converting mc_transaction_core::mint::MintTx -> external::MintTx ->
-        // mc_transaction_core::mint::MintTx should be the identity function.
+        // Converting bt_transaction_core::mint::MintTx -> external::MintTx ->
+        // bt_transaction_core::mint::MintTx should be the identity function.
         {
             let external = external::MintTx::from(&source);
             let recovered = MintTx::try_from(&external).unwrap();

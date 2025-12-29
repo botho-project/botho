@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! MetadataStore - an LMDB database that stores metadata about the database.
 //! Right now this is limited to versioning information.
@@ -8,7 +8,7 @@ use lmdb::{
     Database, DatabaseFlags, Environment, Error as LmdbError, RwTransaction, Transaction,
     WriteFlags,
 };
-use mc_util_serial::{decode, encode};
+use bt_util_serial::{decode, encode};
 use prost::Message;
 
 /// An error type.
@@ -33,14 +33,14 @@ impl From<LmdbError> for MetadataStoreError {
     }
 }
 
-impl From<mc_util_serial::DecodeError> for MetadataStoreError {
-    fn from(_: mc_util_serial::DecodeError) -> Self {
+impl From<bt_util_serial::DecodeError> for MetadataStoreError {
+    fn from(_: bt_util_serial::DecodeError) -> Self {
         Self::Deserialization
     }
 }
 
-impl From<mc_util_serial::EncodeError> for MetadataStoreError {
-    fn from(_: mc_util_serial::EncodeError) -> Self {
+impl From<bt_util_serial::EncodeError> for MetadataStoreError {
+    fn from(_: bt_util_serial::EncodeError) -> Self {
         Self::Serialization
     }
 }

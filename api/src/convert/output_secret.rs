@@ -1,9 +1,9 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
-//! Convert to/from mc_transaction_core::ring_ct::OutputSecret.
+//! Convert to/from bt_transaction_core::ring_ct::OutputSecret.
 
 use crate::{external, ConversionError};
-use mc_transaction_core::ring_ct::OutputSecret;
+use bt_transaction_core::ring_ct::OutputSecret;
 
 impl From<&OutputSecret> for external::OutputSecret {
     fn from(source: &OutputSecret) -> Self {
@@ -32,11 +32,11 @@ impl TryFrom<&external::OutputSecret> for OutputSecret {
 mod tests {
     use crate::external;
     use curve25519_dalek::scalar::Scalar;
-    use mc_transaction_core::{ring_ct::OutputSecret, Amount, TokenId};
+    use bt_transaction_core::{ring_ct::OutputSecret, Amount, TokenId};
     use rand::{rngs::StdRng, SeedableRng};
 
     // Test converting between external::OutputSecret and
-    // mc_transaction_core::ring_ct::OutputSecret
+    // bt_transaction_core::ring_ct::OutputSecret
     #[test]
     fn test_output_secret_conversion() {
         let mut rng: StdRng = SeedableRng::from_seed([123u8; 32]);

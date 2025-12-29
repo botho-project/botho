@@ -1,7 +1,7 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
-// Copyright (c) 2024 Cadence Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
+// Copyright (c) 2024 Botho Foundation
 
-//! Cadence transaction data types, transaction construction and validation
+//! Botho transaction data types, transaction construction and validation
 //! routines. Includes proof-of-work mining transaction support.
 
 #![no_std]
@@ -31,6 +31,9 @@ pub mod tx;
 pub mod tx_summary;
 pub mod validation;
 
+#[cfg(feature = "pq")]
+pub mod quantum_private;
+
 pub use emission::{block_reward, INITIAL_REWARD, MAX_SUPPLY, PICO_CAD, TAIL_EMISSION};
 pub use fee_map::{Error as FeeMapError, FeeMap, SMALLEST_MINIMUM_FEE_LOG2};
 pub use input_rules::{InputRuleError, InputRules};
@@ -43,8 +46,8 @@ pub use tx_error::{NewMemoError, NewTxError, TxOutConversionError, ViewKeyMatchE
 pub use tx_summary::TxSummaryNew;
 
 // Re-export from transaction-types, and some from RingSignature crate.
-pub use mc_crypto_ring_signature::{Commitment, CompressedCommitment};
-pub use mc_transaction_types::{
+pub use bt_crypto_ring_signature::{Commitment, CompressedCommitment};
+pub use bt_transaction_types::{
     constants, domain_separators, Amount, AmountError, BlockVersion, BlockVersionError,
     ClusterId, ClusterTagEntry, ClusterTagVector, MaskedAmount, MaskedAmountV1, MaskedAmountV2,
     TokenId, TxSummary, UnmaskedAmount, MAX_CLUSTER_TAGS, MIN_STORED_WEIGHT, TAG_WEIGHT_SCALE,
@@ -52,16 +55,16 @@ pub use mc_transaction_types::{
 
 /// Re-export all of mc-crypto-ring-signature
 pub mod ring_signature {
-    pub use mc_crypto_ring_signature::*;
+    pub use bt_crypto_ring_signature::*;
 }
 
 // Re-export the one-time keys module which historically lived in this crate
-pub use mc_crypto_ring_signature::onetime_keys;
+pub use bt_crypto_ring_signature::onetime_keys;
 
 // Re-export some dependent types from mc-account-keys
-pub use mc_account_keys::{AccountKey, PublicAddress};
+pub use bt_account_keys::{AccountKey, PublicAddress};
 
-use mc_crypto_keys::{KeyError, RistrettoPrivate, RistrettoPublic};
+use bt_crypto_keys::{KeyError, RistrettoPrivate, RistrettoPublic};
 use onetime_keys::{create_shared_secret, recover_public_subaddress_spend_key};
 use tx::TxOut;
 
@@ -99,3 +102,9 @@ pub fn subaddress_matches_tx_out(
     );
     Ok(sub_addr_spend == RistrettoPublic::from(&acct.subaddress_spend_private(subaddress_index)))
 }
+
+// Re-export quantum-private transaction types when pq feature is enabled
+#[cfg(feature = "pq")]
+pub use quantum_private::{
+    QuantumPrivateError, QuantumPrivateTxIn, QuantumPrivateTxOut, TransactionType,
+};

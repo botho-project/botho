@@ -1,11 +1,11 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 use alloc::vec::Vec;
-use mc_crypto_digestible::Digestible;
-use mc_crypto_hashes::{Blake2b256, Digest};
-use mc_crypto_keys::{RistrettoPrivate, RistrettoPublic};
-use mc_crypto_ring_signature::get_tx_out_shared_secret;
-use mc_util_repr_bytes::{
+use bt_crypto_digestible::Digestible;
+use bt_crypto_hashes::{Blake2b256, Digest};
+use bt_crypto_keys::{RistrettoPrivate, RistrettoPublic};
+use bt_crypto_ring_signature::get_tx_out_shared_secret;
+use bt_util_repr_bytes::{
     derive_prost_message_from_repr_bytes, typenum::U32, GenericArray, ReprBytes,
 };
 use serde::{Deserialize, Serialize};

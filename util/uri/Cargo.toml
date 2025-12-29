@@ -1,16 +1,16 @@
 [package]
-name = "mc-util-uri"
+name = "bt-util-uri"
 version = "7.1.0"
-authors = ["MobileCoin"]
+authors = ["Botho"]
 edition = "2021"
 license = "Apache-2.0"
 readme = "README.md"
 rust-version = { workspace = true }
 
 [dependencies]
-mc-common = { workspace = true }
-mc-crypto-keys = { workspace = true }
-mc-util-host-cert = { workspace = true }
+bt-common = { workspace = true }
+bt-crypto-keys = { workspace = true }
+bt-util-host-cert = { workspace = true }
 
 base64 = { workspace = true }
 displaydoc = { workspace = true }
@@ -20,7 +20,7 @@ serde = { workspace = true, features = ["alloc", "derive"] }
 url = { workspace = true }
 
 [dev-dependencies]
-mc-util-from-random = { workspace = true }
+bt-util-from-random = { workspace = true }
 
 rand = { workspace = true }
 rand_hc = { workspace = true }

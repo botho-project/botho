@@ -1,9 +1,9 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! A new-type wrapper for representing TokenIds
 
 use core::{fmt, hash::Hash, num::ParseIntError, ops::Deref, str::FromStr};
-use mc_crypto_digestible::Digestible;
+use bt_crypto_digestible::Digestible;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 use subtle::{Choice, ConditionallySelectable, ConstantTimeEq};
@@ -33,8 +33,8 @@ impl fmt::Display for TokenId {
 }
 
 impl TokenId {
-    /// Represents the MobileCoin token id for MOB token
-    pub const MOB: Self = Self(0);
+    /// Represents the Botho token id for BTH token
+    pub const BTH: Self = Self(0);
 
     /// Represents the number of bytes in a well-formed TokenId
     pub const NUM_BYTES: usize = 8;

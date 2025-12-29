@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Abstract traits used by Structs which implement key management
 
@@ -7,8 +7,8 @@ use crate::{Digest, LengthMismatch, ReprBytes};
 use core::{fmt::Debug, hash::Hash};
 use displaydoc::Display;
 //use hex_fmt::HexFmt;
-use mc_crypto_digestible::Digestible;
-use mc_util_from_random::FromRandom;
+use bt_crypto_digestible::Digestible;
+use bt_util_from_random::FromRandom;
 use rand_core::{CryptoRng, RngCore};
 
 #[cfg(feature = "alloc")]

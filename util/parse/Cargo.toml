@@ -1,7 +1,7 @@
 [package]
-name = "mc-util-parse"
+name = "bt-util-parse"
 version = "7.1.0"
-authors = ["MobileCoin"]
+authors = ["Botho"]
 edition = "2021"
 description = "Helpers for parsing, particularly, for use with Clap and similar"
 license = "GPL-3.0"

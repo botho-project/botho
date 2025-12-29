@@ -1,9 +1,9 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Convert to/from external::TxOutConfirmationNumber
 
 use crate::{external, ConversionError};
-use mc_transaction_extra::TxOutConfirmationNumber;
+use bt_transaction_extra::TxOutConfirmationNumber;
 
 /// Convert TxOutConfirmationNumber --> external::TxOutConfirmationNumber.
 impl From<&TxOutConfirmationNumber> for external::TxOutConfirmationNumber {

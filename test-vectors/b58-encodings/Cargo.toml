@@ -1,16 +1,16 @@
 [package]
-name = "mc-test-vectors-b58-encodings"
+name = "bt-test-vectors-b58-encodings"
 version = "7.1.0"
-authors = ["MobileCoin"]
+authors = ["Botho"]
 edition = "2021"
 license = "GPL-3.0"
 rust-version = { workspace = true }
 
 [dependencies]
-mc-test-vectors-definitions = { workspace = true }
+bt-test-vectors-definitions = { workspace = true }
 
 [build-dependencies]
-mc-account-keys = { workspace = true }
-mc-api = { workspace = true }
-mc-test-vectors-definitions = { workspace = true }
-mc-util-test-vector = { workspace = true }
+bt-account-keys = { workspace = true }
+bt-api = { workspace = true }
+bt-test-vectors-definitions = { workspace = true }
+bt-util-test-vector = { workspace = true }

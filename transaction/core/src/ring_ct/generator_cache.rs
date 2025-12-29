@@ -1,10 +1,10 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! A simple generator cache
 
 use alloc::collections::BTreeMap;
-use mc_crypto_ring_signature::{generators, PedersenGens};
-use mc_transaction_types::TokenId;
+use bt_crypto_ring_signature::{generators, PedersenGens};
+use bt_transaction_types::TokenId;
 
 /// GeneratorCache is a simple object which caches computations of
 /// generator: TokenId -> PedersenGens

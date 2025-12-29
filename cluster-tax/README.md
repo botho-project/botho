@@ -1,6 +1,6 @@
-# Cluster Tax: Progressive Transaction Fees for Cadence
+# Cluster Tax: Progressive Transaction Fees for Botho
 
-Cadence implements a **dual-incentive fee model** that prices privacy as a resource while applying progressive taxation to reduce wealth inequality.
+Botho implements a **dual-incentive fee model** that prices privacy as a resource while applying progressive taxation to reduce wealth inequality.
 
 ## The Problem
 
@@ -12,7 +12,7 @@ Traditional cryptocurrencies face two challenges:
 
 ## The Solution
 
-Cadence addresses both problems with a single fee structure:
+Botho addresses both problems with a single fee structure:
 
 ```
 fee_rate = base_rate × cluster_factor(sender_wealth)
@@ -57,7 +57,7 @@ This ensures:
 
 Agent-based simulations show this fee structure can **reduce inequality by ~48% over 10 years** through the burn mechanism alone (no redistribution required).
 
-![Cadence Fee Model Simulation Results](gini_10yr/cadence_fee_model.png)
+![Botho Fee Model Simulation Results](gini_10yr/botho_fee_model.png)
 
 | Metric | Result |
 |--------|--------|
@@ -148,7 +148,7 @@ let config = FeeConfig {
 ## Testing
 
 ```bash
-cargo test -p mc-cluster-tax
+cargo test -p bt-cluster-tax
 ```
 
 ## License

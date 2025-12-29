@@ -1,4 +1,4 @@
-// Copyright (c) 2024 Cadence Foundation
+// Copyright (c) 2024 Botho Foundation
 
 //! Error types for the gossip module.
 
@@ -48,14 +48,14 @@ pub enum GossipError {
     BootstrapFailed(String),
 }
 
-impl From<mc_util_serial::encode::Error> for GossipError {
-    fn from(err: mc_util_serial::encode::Error) -> Self {
+impl From<bt_util_serial::encode::Error> for GossipError {
+    fn from(err: bt_util_serial::encode::Error) -> Self {
         GossipError::SerializationError(err.to_string())
     }
 }
 
-impl From<mc_util_serial::decode::Error> for GossipError {
-    fn from(err: mc_util_serial::decode::Error) -> Self {
+impl From<bt_util_serial::decode::Error> for GossipError {
+    fn from(err: bt_util_serial::decode::Error) -> Self {
         GossipError::DeserializationError(err.to_string())
     }
 }

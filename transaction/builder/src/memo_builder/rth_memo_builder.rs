@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Defines the RTHMemoBuilder.
 //! (RTH is an abbrevation of Recoverable Transaction History.)
@@ -9,11 +9,11 @@ use super::MemoBuilder;
 use crate::ReservedSubaddresses;
 use alloc::{boxed::Box, sync::Arc};
 use core::fmt::Debug;
-use mc_account_keys::{PublicAddress, ShortAddressHash};
-use mc_transaction_core::{
+use bt_account_keys::{PublicAddress, ShortAddressHash};
+use bt_transaction_core::{
     tokens::Mob, Amount, MemoContext, MemoPayload, NewMemoError, Token, TokenId,
 };
-use mc_transaction_extra::{
+use bt_transaction_extra::{
     AuthenticatedMemoHmacSigner, AuthenticatedSenderMemo,
     AuthenticatedSenderWithPaymentIntentIdMemo, AuthenticatedSenderWithPaymentRequestIdMemo,
     DestinationMemo, DestinationMemoError, DestinationWithPaymentIntentIdMemo,
@@ -325,9 +325,9 @@ impl MemoBuilder for RTHMemoBuilder {
 mod tests {
     use super::*;
     use assert_matches::assert_matches;
-    use mc_account_keys::AccountKey;
-    use mc_crypto_keys::RistrettoPublic;
-    use mc_util_from_random::FromRandom;
+    use bt_account_keys::AccountKey;
+    use bt_crypto_keys::RistrettoPublic;
+    use bt_util_from_random::FromRandom;
     use rand::{rngs::StdRng, SeedableRng};
 
     #[test]

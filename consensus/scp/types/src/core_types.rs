@@ -1,11 +1,11 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
-//! Core types for MobileCoin's implementation of SCP.
+//! Core types for Botho's implementation of SCP.
 use core::{
     fmt::{Debug, Display},
     hash::Hash,
 };
-use mc_crypto_digestible::Digestible;
+use bt_crypto_digestible::Digestible;
 use prost::Message;
 use serde::{de::DeserializeOwned, Serialize};
 

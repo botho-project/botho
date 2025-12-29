@@ -1,8 +1,8 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
-//! Object containing subaddresses of MobileCoin reserved subaddress indices
+//! Object containing subaddresses of Botho reserved subaddress indices
 
-use mc_account_keys::{AccountKey, PublicAddress, ViewAccountKey};
+use bt_account_keys::{AccountKey, PublicAddress, ViewAccountKey};
 use serde::{Deserialize, Serialize};
 
 /// Information about reserved subaddresses.
@@ -59,7 +59,7 @@ impl From<&ViewAccountKey> for ReservedSubaddresses {
 
 impl ReservedSubaddresses {
     /// Set alternate subaddresseses for reserved addresses. This is useful in
-    /// some things like mobilecoind
+    /// some things like bothod
     pub fn from_subaddress_index(
         acct: &AccountKey,
         change_subaddress_index: Option<u64>,

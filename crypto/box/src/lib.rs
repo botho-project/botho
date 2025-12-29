@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 #![no_std]
 
@@ -31,10 +31,10 @@ pub use fixed_buffer::FixedBuffer;
 mod test {
     use super::*;
     use aead::generic_array::arr;
-    use mc_crypto_keys::{RistrettoPrivate, RistrettoPublic};
-    use mc_util_from_random::FromRandom;
+    use bt_crypto_keys::{RistrettoPrivate, RistrettoPublic};
+    use bt_util_from_random::FromRandom;
 
-    extern crate mc_util_test_helper;
+    extern crate bt_util_test_helper;
 
     #[test]
     fn test_round_trip() {
@@ -42,7 +42,7 @@ mod test {
         let plaintext1 = b"01234567".to_vec();
         let plaintext2 = plaintext1.repeat(50);
 
-        mc_util_test_helper::run_with_several_seeds(|mut rng| {
+        bt_util_test_helper::run_with_several_seeds(|mut rng| {
             let a = RistrettoPrivate::from_random(&mut rng);
             let a_pub = RistrettoPublic::from(&a);
 
@@ -65,7 +65,7 @@ mod test {
         let plaintext1 = b"01234567".to_vec();
         let plaintext2 = plaintext1.repeat(50);
 
-        mc_util_test_helper::run_with_several_seeds(|mut rng| {
+        bt_util_test_helper::run_with_several_seeds(|mut rng| {
             let a = RistrettoPrivate::from_random(&mut rng);
             let a_pub = RistrettoPublic::from(&a);
 
@@ -87,7 +87,7 @@ mod test {
         let plaintext1 = arr![u8; 0, 1, 2, 3, 4, 4, 3, 2];
         let plaintext2 = arr![u8; 42, 42, 42, 42, 78, 78, 78, 78];
 
-        mc_util_test_helper::run_with_several_seeds(|mut rng| {
+        bt_util_test_helper::run_with_several_seeds(|mut rng| {
             let a = RistrettoPrivate::from_random(&mut rng);
             let a_pub = RistrettoPublic::from(&a);
 

@@ -15,7 +15,7 @@ use core::{
 };
 use digest::{core_api::BlockSizeUser, Digest};
 use hkdf::SimpleHkdf;
-use mc_crypto_keys::{Kex, ReprBytes};
+use bt_crypto_keys::{Kex, ReprBytes};
 use mc_oblivious_aes_gcm::{CtAeadDecrypt, CtDecryptResult};
 use rand_core::{CryptoRng, RngCore};
 
@@ -74,7 +74,7 @@ where
         buffer: &mut [u8],
     ) -> Result<GenericArray<u8, Self::FooterSize>, AeadError> {
         // ECDH
-        use mc_crypto_keys::KexPublic;
+        use bt_crypto_keys::KexPublic;
         let (our_public, shared_secret) = key.new_secret(rng);
 
         let curve_point_bytes = our_public.to_bytes();
@@ -97,7 +97,7 @@ where
         buffer: &mut [u8],
     ) -> Result<CtDecryptResult, Error> {
         // ECDH
-        use mc_crypto_keys::KexReusablePrivate;
+        use bt_crypto_keys::KexReusablePrivate;
         // TODO: In generic_array 0.14 the tag can be split without copying it
         let public_key =
             KexAlgo::Public::try_from(&tag[..<KexAlgo::Public as ReprBytes>::Size::USIZE])

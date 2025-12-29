@@ -1,8 +1,8 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 #![deny(missing_docs)]
 //! Create some default keys for use in demos and testing
 use clap::Parser;
-use mc_util_keyfile::config::KeyConfig;
+use bt_util_keyfile::config::KeyConfig;
 
 #[derive(Debug, Parser)]
 struct Config {
@@ -36,7 +36,7 @@ fn main() {
 
     println!("Writing {} keys to {:?}", config.num, path);
 
-    mc_util_keyfile::keygen::write_default_keyfiles(
+    bt_util_keyfile::keygen::write_default_keyfiles(
         path,
         config.num,
         config.general.fog_report_url.as_deref(),

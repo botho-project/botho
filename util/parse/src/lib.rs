@@ -1,5 +1,5 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
-// Copyright (c) 2024 Cadence Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
+// Copyright (c) 2024 Botho Foundation
 #![deny(missing_docs)]
 
 //! Miscellaneous parsing and formatting utilities

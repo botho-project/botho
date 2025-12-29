@@ -1,9 +1,9 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
-// Copyright (c) 2024 Cadence Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
+// Copyright (c) 2024 Botho Foundation
 
 use displaydoc::Display;
-use mc_crypto_ring_signature_signer::Error as SignerError;
-use mc_transaction_core::{
+use bt_crypto_ring_signature_signer::Error as SignerError;
+use bt_transaction_core::{
     ring_ct::Error as RingCtError, AmountError, NewMemoError, NewTxError, TokenId,
     TxOutConversionError,
 };
@@ -18,7 +18,7 @@ pub enum TxBuilderError {
     RangeProofFailed,
 
     /// Serialization: {0}
-    SerializationFailed(mc_util_serial::encode::Error),
+    SerializationFailed(bt_util_serial::encode::Error),
 
     /// Serialization: {0}
     EncodingFailed(prost::EncodeError),
@@ -42,7 +42,7 @@ pub enum TxBuilderError {
     NoInputs,
 
     /// Key: {0}
-    KeyError(mc_crypto_keys::KeyError),
+    KeyError(bt_crypto_keys::KeyError),
 
     /// Memo: {0}
     Memo(NewMemoError),
@@ -72,8 +72,8 @@ pub enum TxBuilderError {
     AlreadyHavePartialFillChange,
 }
 
-impl From<mc_util_serial::encode::Error> for TxBuilderError {
-    fn from(x: mc_util_serial::encode::Error) -> Self {
+impl From<bt_util_serial::encode::Error> for TxBuilderError {
+    fn from(x: bt_util_serial::encode::Error) -> Self {
         TxBuilderError::SerializationFailed(x)
     }
 }
@@ -96,8 +96,8 @@ impl From<NewTxError> for TxBuilderError {
     }
 }
 
-impl From<mc_crypto_keys::KeyError> for TxBuilderError {
-    fn from(e: mc_crypto_keys::KeyError) -> Self {
+impl From<bt_crypto_keys::KeyError> for TxBuilderError {
+    fn from(e: bt_crypto_keys::KeyError) -> Self {
         TxBuilderError::KeyError(e)
     }
 }

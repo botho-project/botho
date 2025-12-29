@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Errors which can occur in connection to RingMLSAG signatures
 
@@ -36,8 +36,8 @@ pub enum Error {
     InvalidState,
 }
 
-impl From<mc_util_repr_bytes::LengthMismatch> for Error {
-    fn from(src: mc_util_repr_bytes::LengthMismatch) -> Self {
+impl From<bt_util_repr_bytes::LengthMismatch> for Error {
+    fn from(src: bt_util_repr_bytes::LengthMismatch) -> Self {
         Self::LengthMismatch(src.found, src.expected)
     }
 }

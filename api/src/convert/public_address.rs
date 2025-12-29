@@ -1,9 +1,9 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Convert to/from external::PublicAddress
 
 use crate::{external, ConversionError};
-use mc_account_keys::PublicAddress;
+use bt_account_keys::PublicAddress;
 
 impl From<&PublicAddress> for external::PublicAddress {
     fn from(src: &PublicAddress) -> Self {
@@ -24,14 +24,14 @@ impl TryFrom<&external::PublicAddress> for PublicAddress {
         let spend_public_key = src
             .spend_public_key
             .as_ref()
-            .ok_or(mc_crypto_keys::KeyError::LengthMismatch(0, 32))
-            .and_then(|key| mc_crypto_keys::RistrettoPublic::try_from(&key.data[..]))?;
+            .ok_or(bt_crypto_keys::KeyError::LengthMismatch(0, 32))
+            .and_then(|key| bt_crypto_keys::RistrettoPublic::try_from(&key.data[..]))?;
 
         let view_public_key = src
             .view_public_key
             .as_ref()
-            .ok_or(mc_crypto_keys::KeyError::LengthMismatch(0, 32))
-            .and_then(|key| mc_crypto_keys::RistrettoPublic::try_from(&key.data[..]))?;
+            .ok_or(bt_crypto_keys::KeyError::LengthMismatch(0, 32))
+            .and_then(|key| bt_crypto_keys::RistrettoPublic::try_from(&key.data[..]))?;
 
         if src.fog_report_url.is_empty() {
             Ok(PublicAddress::new(&spend_public_key, &view_public_key))
@@ -50,7 +50,7 @@ impl TryFrom<&external::PublicAddress> for PublicAddress {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mc_account_keys::AccountKey;
+    use bt_account_keys::AccountKey;
     use rand::{rngs::StdRng, SeedableRng};
 
     // Test converting between external::PublicAddress and
@@ -90,7 +90,7 @@ mod tests {
             let public_address = PublicAddress::new_with_fog(
                 tmp_public_address.spend_public_key(),
                 tmp_public_address.view_public_key(),
-                "fog://test.mobilecoin.com".to_string(),
+                "fog://test.botho.com".to_string(),
                 "99".to_string(),
                 vec![9, 9, 9, 9],
             );
@@ -106,7 +106,7 @@ mod tests {
             );
             assert_eq!(
                 proto_credentials.fog_report_url,
-                String::from("fog://test.mobilecoin.com")
+                String::from("fog://test.botho.com")
             );
 
             assert_eq!(proto_credentials.fog_authority_sig, vec![9, 9, 9, 9],);

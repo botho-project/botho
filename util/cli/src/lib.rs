@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 use clap::{CommandFactory, FromArgMatches, Parser};
 
@@ -23,7 +23,7 @@ pub trait ParserWithBuildInfo: Parser {
             let build_info = format!(
                 "{} commit: {}",
                 version,
-                mc_util_build_info::mobilecoin_git_commit()
+                bt_util_build_info::botho_git_commit()
             );
             command = command.long_version(build_info);
         }
@@ -31,7 +31,7 @@ pub trait ParserWithBuildInfo: Parser {
     }
 
     /// Similar to clap::Command::parse(), augmenting the version on the
-    /// clap::Command with build information from [mc_util_build_info].
+    /// clap::Command with build information from [bt_util_build_info].
     fn parse() -> Self {
         let command = Self::command_with_build_info();
         let matches = command.get_matches();
@@ -65,7 +65,7 @@ mod tests {
         let expected_long_version = format!(
             "{} commit: {}",
             command.get_version().unwrap(),
-            mc_util_build_info::mobilecoin_git_commit()
+            bt_util_build_info::botho_git_commit()
         );
         assert_eq!(command.get_long_version(), Some(&*expected_long_version));
     }

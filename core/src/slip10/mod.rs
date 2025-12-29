@@ -1,29 +1,29 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
-//! MobileCoin SLIP-0010 / BIP39 Based Key Derivation
+//! Botho SLIP-0010 / BIP39 Based Key Derivation
 //!
 //! This provides utilities to handle SLIP-0010 key bytes and their relation to
-//! the MobileCoin [`Account`](mc_core::Account) structure, which contains a
+//! the Botho [`Account`](bt_core::Account) structure, which contains a
 //! pair of Ristretto255 view/spend private scalars.
 //!
 //! As well as providing traits to create a Slip10Key from entropy and path,
 //! along with the canonical method of converting a BIP-39
 //! [`Mnemonic`](tiny_bip32::Mnemonic) with a given BIP-32 path into a
-//! [`Slip10Key`](Slip10Key) usable within MobileCoin.
+//! [`Slip10Key`](Slip10Key) usable within Botho.
 
 use curve25519_dalek::scalar::Scalar;
 use hkdf::Hkdf;
 use sha2::Sha512;
 use zeroize::Zeroize;
 
-use mc_crypto_keys::RistrettoPrivate;
+use bt_crypto_keys::RistrettoPrivate;
 
 #[cfg(feature = "bip39")]
 pub use bip39::{Language, Mnemonic};
 
 use crate::{
     account::Account,
-    consts::{COINTYPE_MOBILECOIN, USAGE_BIP44},
+    consts::{COINTYPE_BOTHO, USAGE_BIP44},
     keys::{RootSpendPrivate, RootViewPrivate},
 };
 
@@ -34,7 +34,7 @@ const BIP39_SECURE: u32 = 0x80000000;
 pub const fn wallet_path(account_index: u32) -> [u32; 3] {
     [
         BIP39_SECURE | USAGE_BIP44,
-        BIP39_SECURE | COINTYPE_MOBILECOIN,
+        BIP39_SECURE | COINTYPE_BOTHO,
         BIP39_SECURE | (account_index & 0x7FFFFFFF),
     ]
 }
@@ -73,7 +73,7 @@ impl From<&Slip10Key> for RootViewPrivate {
     fn from(src: &Slip10Key) -> Self {
         let mut okm = [0u8; 64];
 
-        let view_kdf = Hkdf::<Sha512>::new(Some(b"mobilecoin-ristretto255-view"), src.as_ref());
+        let view_kdf = Hkdf::<Sha512>::new(Some(b"botho-ristretto255-view"), src.as_ref());
         view_kdf
             .expand(b"", &mut okm)
             .expect("Invalid okm length when creating private view key");
@@ -90,7 +90,7 @@ impl From<&Slip10Key> for RootSpendPrivate {
     fn from(src: &Slip10Key) -> Self {
         let mut okm = [0u8; 64];
 
-        let spend_kdf = Hkdf::<Sha512>::new(Some(b"mobilecoin-ristretto255-spend"), src.as_ref());
+        let spend_kdf = Hkdf::<Sha512>::new(Some(b"botho-ristretto255-spend"), src.as_ref());
         spend_kdf
             .expand(b"", &mut okm)
             .expect("Invalid okm length when creating private spend key");
@@ -101,10 +101,10 @@ impl From<&Slip10Key> for RootSpendPrivate {
     }
 }
 
-/// A common interface for constructing a [`Slip10Key`] for MobileCoin given an
+/// A common interface for constructing a [`Slip10Key`] for Botho given an
 /// account index.
 pub trait Slip10KeyGenerator {
-    /// Derive a MobileCoin SLIP10 key for the given account from the current
+    /// Derive a Botho SLIP10 key for the given account from the current
     /// object
     fn derive_slip10_key(self, account_index: u32) -> Slip10Key;
 }
@@ -117,7 +117,7 @@ impl Slip10KeyGenerator for Mnemonic {
     /// Derive a SLIP-0010 key for the specified account
     fn derive_slip10_key(self, account_index: u32) -> Slip10Key {
         // We explicitly do not support passphrases for BIP-39 mnemonics, please
-        // see the MobileCoin Key Derivation design specification, v1.0.0, for
+        // see the Botho Key Derivation design specification, v1.0.0, for
         // design rationale.
         let seed = bip39::Seed::new(&self, "");
 
@@ -144,7 +144,7 @@ mod test {
 
     use super::*;
     use alloc::{string::String, vec::Vec};
-    use mc_crypto_keys::RistrettoPublic;
+    use bt_crypto_keys::RistrettoPublic;
     use serde::{Deserialize, Serialize};
 
     // Include test vectors as JSON strings
@@ -174,7 +174,7 @@ mod test {
         spend_hex: String,
     }
 
-    /// Test conversion of a SLIP10 seed into mobilecoin account keys
+    /// Test conversion of a SLIP10 seed into botho account keys
     #[test]
     fn slip10key_into_account_key() {
         for data in SLIPKEY_TO_RISTRETTO_TESTS.iter() {
@@ -208,7 +208,7 @@ mod test {
         }
     }
 
-    /// Test conversion of a BIP39 mnemonic into mobilecoin account keys
+    /// Test conversion of a BIP39 mnemonic into botho account keys
     #[test]
     #[cfg(feature = "bip39")]
     fn mnemonic_into_account_key() {

@@ -1,27 +1,30 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
+// Copyright (c) 2024 Botho Foundation
 
 //! Worker thread for collecting attestation evidence from nodes.
+//! Post-SGX: Uses tonic for gRPC communication.
 
 use crate::{config::SourceConfig, watcher_db::WatcherDB};
 use aes_gcm::Aes256Gcm;
-use grpcio::{CallOption, ChannelBuilder, Environment, MetadataBuilder};
+use tonic::metadata::MetadataValue;
+use tonic::transport::Channel;
     AuthRequestOutput, ClientInitiate, Start, Transition, UnverifiedAttestationEvidence,
 };
-use mc_common::{
+use bt_common::{
     logger::{log, Logger},
     time::SystemTimeProvider,
     trace_time, HashMap,
 };
-use mc_connection::{
+use bt_connection::{
     AnyCredentialsProvider, CredentialsProvider, HardcodedCredentialsProvider,
     TokenBasicCredentialsProvider,
 };
-use mc_crypto_keys::{Ed25519Public, X25519};
-use mc_crypto_noise::HandshakeNX;
+use bt_crypto_keys::{Ed25519Public, X25519};
+use bt_crypto_noise::HandshakeNX;
 use mc_rand::McRng;
-use mc_util_grpc::{ConnectionUriGrpcioChannel, TokenBasicCredentialsGenerator};
-use mc_util_repr_bytes::ReprBytes;
-use mc_util_uri::{ConnectionUri, ConsensusClientUri};
+use bt_util_grpc::{ConnectionUriGrpcioChannel, TokenBasicCredentialsGenerator};
+use bt_util_repr_bytes::ReprBytes;
+use bt_util_uri::{ConnectionUri, ConsensusClientUri};
 use sha2::Sha512;
 use std::{
     marker::PhantomData,
@@ -443,10 +446,10 @@ mod tests {
     use super::*;
     use crate::watcher_db::tests::{setup_blocks, setup_watcher_db};
     use mc_attest_core::VerificationSignature;
-    use mc_blockchain_types::BlockSignature;
-    use mc_common::logger::test_with_logger;
-    use mc_crypto_digestible::{Digestible, MerlinTranscript};
-    use mc_crypto_keys::{Ed25519Pair, Ed25519Private};
+    use bt_blockchain_types::BlockSignature;
+    use bt_common::logger::test_with_logger;
+    use bt_crypto_digestible::{Digestible, MerlinTranscript};
+    use bt_crypto_keys::{Ed25519Pair, Ed25519Private};
     use serial_test::serial;
     use std::{str::FromStr, sync::Mutex, thread::sleep};
 

@@ -9,7 +9,7 @@ pub use crate::{
     mock_merlin::MockMerlin,
 };
 
-use mc_crypto_digestible::{DigestTranscript, Digestible};
+use bt_crypto_digestible::{DigestTranscript, Digestible};
 
 pub fn digestible_test_case<D: Digestible>(
     context: &'static str,

@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! RingMLSAG signing internals
 
@@ -8,7 +8,7 @@ use curve25519_dalek::ristretto::RistrettoPoint;
 use rand_core::CryptoRngCore;
 use zeroize::Zeroize;
 
-use mc_crypto_keys::{RistrettoPrivate, RistrettoPublic};
+use bt_crypto_keys::{RistrettoPrivate, RistrettoPublic};
 
 use crate::{
     ring_signature::{

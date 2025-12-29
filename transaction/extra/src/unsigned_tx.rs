@@ -1,8 +1,8 @@
-// Copyright (c) 2018-2023 The MobileCoin Foundation
+// Copyright (c) 2018-2023 The Botho Foundation
 
 use alloc::vec::Vec;
-use mc_crypto_ring_signature_signer::RingSigner;
-use mc_transaction_core::{
+use bt_crypto_ring_signature_signer::RingSigner;
+use bt_transaction_core::{
     ring_ct::{
         CommittedTagSigningData, Error as RingCtError, ExtendedMessageDigest, InputRing,
         OutputSecret, SignatureRctBulletproofs, SigningData,
@@ -10,8 +10,8 @@ use mc_transaction_core::{
     tx::{Tx, TxPrefix},
     FeeMap,
 };
-use mc_transaction_summary::{TxOutSummaryUnblindingData, TxSummaryUnblindingData};
-use mc_transaction_types::{Amount, BlockVersion, TokenId, TxSummary, UnmaskedAmount};
+use bt_transaction_summary::{TxOutSummaryUnblindingData, TxSummaryUnblindingData};
+use bt_transaction_types::{Amount, BlockVersion, TokenId, TxSummary, UnmaskedAmount};
 use rand_core::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 
@@ -89,7 +89,7 @@ impl UnsignedTx {
         tag_data: &CommittedTagSigningData,
         rng: &mut RNG,
     ) -> Result<Tx, RingCtError> {
-        use mc_cluster_tax::{
+        use bt_cluster_tax::{
             create_tag_signature, CommittedTagVector, CommittedTagVectorSecret, RingTagData,
             TagSigningConfig, TagSigningInput, TagSigningOutput,
         };

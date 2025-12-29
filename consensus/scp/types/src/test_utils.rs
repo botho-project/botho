@@ -1,14 +1,14 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Utilities for SCP tests.
 
 use crate::QuorumSet;
 use alloc::{format, vec};
 use core::str::FromStr;
-use mc_common::{NodeID, ResponderId};
-use mc_crypto_keys::Ed25519Pair;
-use mc_util_from_random::FromRandom;
-use mc_util_test_helper::SeedableRng;
+use bt_common::{NodeID, ResponderId};
+use bt_crypto_keys::Ed25519Pair;
+use bt_util_from_random::FromRandom;
+use bt_util_test_helper::SeedableRng;
 use rand_hc::Hc128Rng as FixedRng;
 
 /// Creates NodeID from integer for testing.

@@ -1,9 +1,9 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Convert to/from external::TxHash
 
 use crate::{external, ConversionError};
-use mc_transaction_core::tx;
+use bt_transaction_core::tx;
 
 /// Convert tx::TxHash --> external::TxHash.
 impl From<&tx::TxHash> for external::TxHash {

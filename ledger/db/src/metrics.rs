@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! LedgerDB metrics.
 //! Usually we would use `uc_util_metrics::OpMetrics` for metric collections.
@@ -7,7 +7,7 @@
 //! they do not get mixed together. The code here is based on OpMetrics and
 //! allows us to do so.
 
-use mc_util_metrics::{
+use bt_util_metrics::{
     register, Collector, Desc, Histogram, HistogramOpts, HistogramVec, IntCounter, IntCounterVec,
     IntGauge, IntGaugeVec, MetricFamily, Opts,
 };

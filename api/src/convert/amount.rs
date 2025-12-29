@@ -1,10 +1,10 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Convert to/from external::Amount
 
 use crate::{external, external::CompressedRistretto, ConversionError};
-use mc_transaction_core::{Amount, MaskedAmount, MaskedAmountV1, MaskedAmountV2};
-use mc_util_repr_bytes::ReprBytes;
+use bt_transaction_core::{Amount, MaskedAmount, MaskedAmountV1, MaskedAmountV2};
+use bt_util_repr_bytes::ReprBytes;
 // Note:
 // external::MaskedAmount is a proto message
 // external::TxOut_oneof_masked_amount is a proto oneof
@@ -149,10 +149,10 @@ impl From<&external::Amount> for Amount {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mc_transaction_core::TokenId;
+    use bt_transaction_core::TokenId;
 
     // Test converting between external::Amount and
-    // mc_transaction_types::Amount
+    // bt_transaction_types::Amount
     #[test]
     fn test_amount_conversion() {
         let amount = Amount::new(10000, TokenId::from(10));

@@ -1,26 +1,26 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Tests that prost-versions of structures round-trip with the versions
 //! generated from external.proto
 
-use mc_account_keys::{AccountKey, PublicAddress, RootIdentity};
-use mc_api::{blockchain, external, quorum_set};
-use mc_blockchain_test_utils::{
+use bt_account_keys::{AccountKey, PublicAddress, RootIdentity};
+use bt_api::{blockchain, external, quorum_set};
+use bt_blockchain_test_utils::{
     get_blocks, make_block_metadata, make_quorum_set, make_verification_report,
 };
-use mc_blockchain_types::{
+use bt_blockchain_types::{
     BlockData, BlockID, BlockMetadata, BlockVersion, QuorumSet, VerificationReport,
 };
-use mc_crypto_ring_signature_signer::NoKeysRingSigner;
-use mc_transaction_builder::{
+use bt_crypto_ring_signature_signer::NoKeysRingSigner;
+use bt_transaction_builder::{
     test_utils::get_input_credentials, EmptyMemoBuilder, ReservedSubaddresses,
     SignedContingentInputBuilder,
 };
-use mc_transaction_core::Amount;
-use mc_transaction_extra::SignedContingentInput;
-use mc_util_from_random::FromRandom;
-use mc_util_serial::round_trip_message;
-use mc_util_test_helper::{run_with_several_seeds, CryptoRng, RngCore};
+use bt_transaction_core::Amount;
+use bt_transaction_extra::SignedContingentInput;
+use bt_util_from_random::FromRandom;
+use bt_util_serial::round_trip_message;
+use bt_util_test_helper::{run_with_several_seeds, CryptoRng, RngCore};
 
 // Generate some example root identities
 fn root_identity_examples<T: RngCore + CryptoRng>(rng: &mut T) -> Vec<RootIdentity> {

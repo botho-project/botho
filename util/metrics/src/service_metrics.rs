@@ -1,7 +1,8 @@
 // Copyright (c) The Libra Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 //
-// Contains modifications by MobileCoin.
+// Contains modifications by Botho.
+// Copyright (c) 2024 Botho Foundation - tonic migration
 
 /*!
 `ServiceMetrics` is a metric [`Collector`](prometheus::core::Collector) to capture key
@@ -21,28 +22,31 @@ a success or a failure, to bump the counter for failures.
 The call to `req` will provide a timer that handle time logging, as long
 as it's in scope.
 
-fn sample_service_method(ctx: RpcContext, params: Params) {
-  let _timer = metrics.req(&ctx);
+```ignore
+async fn sample_service_method(request: Request<Params>) -> Result<Response<T>, Status> {
+  let method_name = "MyService.sample_method".to_string();
+  let _timer = metrics.req(&method_name);
   // do business logic
-  metrics.resp(&ctx, success_flag);
+  metrics.resp(&method_name, success_flag);
 }
+```
 */
 
-use grpcio::{RpcContext, RpcStatusCode};
-use mc_common::logger::global_log;
+use bt_common::logger::global_log;
 use prometheus::{
     core::{Collector, Desc},
     proto::MetricFamily,
     HistogramOpts, HistogramTimer, HistogramVec, IntCounterVec, Opts, Result,
 };
 use std::{path::Path, str};
+use tonic::Code;
 
 /// Helper that encapsulates boilerplate for tracking prometheus metrics about
 /// gRPC services.
 ///
 /// This struct defines several common metrics (with a distinct MetricFamily per
 /// method) with the method path as a primary dimension/label. Method paths are
-/// derived from GRPC context. e.g., calc_service.req{method = "add"} = +1
+/// derived from request URI path. e.g., calc_service.req{method = "add"} = +1
 /// e.g., calc_service.duration_sum{method="add"} = 6
 ///
 /// Corresponds to which gRPC method is being called.
@@ -124,17 +128,11 @@ impl ServiceMetrics {
         svc
     }
 
-    /// Takes the RpcContext used during a gRPC method call to get the method
-    /// name and increments counters tracking the number of calls to and
-    /// returns a counter to track the duration of the method
-    pub fn req(&self, ctx: &RpcContext) -> Option<HistogramTimer> {
-        let method_name = Self::get_method_name(ctx);
-        self.req_impl(&method_name)
-    }
-
-    /// Increments counters tracking the number of calls to and
-    /// returns a counter to track the duration of the method
-    pub fn req_impl(&self, method_name: &GrpcMethodName) -> Option<HistogramTimer> {
+    /// Increments counters tracking the number of calls to a method
+    /// and returns a timer to track the duration of the method.
+    ///
+    /// The method_name should be the gRPC method path like "service.Method".
+    pub fn req(&self, method_name: &GrpcMethodName) -> Option<HistogramTimer> {
         self.num_req
             .with_label_values(&[method_name.as_str()])
             .inc();
@@ -145,39 +143,18 @@ impl ServiceMetrics {
         )
     }
 
-    /// Gets the method name from a gRPC RpcContext.
-    pub fn get_method_name(ctx: &RpcContext) -> GrpcMethodName {
-        match path_from_ctx(ctx) {
-            Some(method_name) => method_name,
-            None => "unknown_method".to_string(),
-        }
-    }
-
-    /// Takes the RpcContext used during a gRPC method call to get the method
-    /// name and increments an error counter if the method resulted in an
-    /// error
-    pub fn resp(&self, ctx: &RpcContext, success: bool) {
-        let method_name = Self::get_method_name(ctx);
-        self.resp_impl(&method_name, success);
-    }
-
-    pub fn resp_impl(&self, method_name: &GrpcMethodName, success: bool) {
+    /// Increments an error counter if the method resulted in an error.
+    pub fn resp(&self, method_name: &GrpcMethodName, success: bool) {
         self.num_error
             .with_label_values(&[method_name.as_str()])
             .inc_by(if success { 0 } else { 1 });
     }
 
-    /// Takes the RpcContext used during a gRPC method call to get the method
-    /// name as well as the gRPC status code that method returned and
-    /// increments a counter for the status code reported
-    pub fn status_code(&self, ctx: &RpcContext, response_code: RpcStatusCode) {
-        let method_name = Self::get_method_name(ctx);
-        self.status_code_impl(&method_name, response_code);
-    }
-
-    pub fn status_code_impl(&self, method_name: &GrpcMethodName, response_code: RpcStatusCode) {
+    /// Increments a counter for the gRPC status code reported.
+    pub fn status_code(&self, method_name: &GrpcMethodName, response_code: Code) {
+        let code_str = format!("{:?}", response_code);
         self.num_status_code
-            .with_label_values(&[method_name.as_str(), response_code.to_string().as_str()])
+            .with_label_values(&[method_name.as_str(), &code_str])
             .inc();
     }
 
@@ -218,18 +195,8 @@ impl Collector for ServiceMetrics {
     }
 }
 
-/// This method reads the full URI from gRpcContext
-/// which looks like `/{package}.{service_name}/{method}`
-/// ('/' equates to ascii code 47)
-/// and converts it into a dot-delimited string, dropping the 1st `/`
-fn path_from_ctx(ctx: &RpcContext) -> Option<String> {
-    let method = ctx.method();
-    path_from_byte_slice(method)
-}
-
-/// This method reads the full URI from gRpcContext
-/// which looks like `/{package}.{service_name}/{method}`
-/// ('/' equates to ascii code 47)
+/// This method reads the full URI path which looks like
+/// `/{package}.{service_name}/{method}` ('/' equates to ascii code 47)
 /// and converts it into a dot-delimited string, dropping the 1st `/`
 fn path_from_byte_slice(bytes: &[u8]) -> Option<String> {
     if bytes.len() < 5 || bytes[0] != 47u8 {

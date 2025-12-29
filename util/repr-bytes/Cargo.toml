@@ -1,7 +1,7 @@
 [package]
-name = "mc-util-repr-bytes"
+name = "bt-util-repr-bytes"
 version = "7.1.0"
-authors = ["MobileCoin"]
+authors = ["Botho"]
 edition = "2021"
 license = "Apache-2.0"
 readme = "README.md"

@@ -1,14 +1,14 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
-//! Transaction Summary types, see [mc_transaction_core::tx_summary::Summarize]
+//! Transaction Summary types, see [bt_transaction_core::tx_summary::Summarize]
 //! for summary details.
 
 use alloc::vec::Vec;
 
 use crate::masked_amount::MaskedAmount;
-use mc_crypto_digestible::Digestible;
-use mc_crypto_keys::CompressedRistrettoPublic;
-use mc_crypto_ring_signature::CompressedCommitment;
+use bt_crypto_digestible::Digestible;
+use bt_crypto_keys::CompressedRistrettoPublic;
+use bt_crypto_ring_signature::CompressedCommitment;
 
 #[cfg(feature = "prost")]
 use prost::Message;

@@ -1,10 +1,10 @@
-// Copyright (c) 2018-2025 The MobileCoin Foundation
+// Copyright (c) 2018-2025 The Botho Foundation
 
-//! Convert to/from mc_transaction_builder::TxBlueprintOutput.
+//! Convert to/from bt_transaction_builder::TxBlueprintOutput.
 
 use crate::{external, ConversionError};
-use mc_transaction_builder::TxBlueprintOutput; // Import only the main enum
-use mc_transaction_core::encrypted_fog_hint::EncryptedFogHint;
+use bt_transaction_builder::TxBlueprintOutput; // Import only the main enum
+use bt_transaction_core::encrypted_fog_hint::EncryptedFogHint;
 
 impl From<&TxBlueprintOutput> for external::TxBlueprintOutput {
     fn from(source: &TxBlueprintOutput) -> Self {
@@ -161,14 +161,14 @@ impl TryFrom<&external::TxBlueprintOutput> for TxBlueprintOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mc_account_keys::{AccountKey, PublicAddress};
-    use mc_crypto_keys::RistrettoPrivate;
-    use mc_transaction_core::{
+    use bt_account_keys::{AccountKey, PublicAddress};
+    use bt_crypto_keys::RistrettoPrivate;
+    use bt_transaction_core::{
         encrypted_fog_hint::ENCRYPTED_FOG_HINT_LEN, ring_signature::CurveScalar, tokens::Mob,
         tx::TxOut, Amount, BlockVersion, Token, UnmaskedAmount,
     };
-    use mc_transaction_extra::ReservedSubaddresses;
-    use mc_util_from_random::FromRandom;
+    use bt_transaction_extra::ReservedSubaddresses;
+    use bt_util_from_random::FromRandom;
     use rand::{rngs::StdRng, SeedableRng};
 
     #[test]

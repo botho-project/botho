@@ -1,6 +1,6 @@
 # Fog-View-FSG
 
-Run a MobileCoin fog-view fogShardGenerator chart
+Run a Botho fog-view fogShardGenerator chart
 
 ### Required Values
 

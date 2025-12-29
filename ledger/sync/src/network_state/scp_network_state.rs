@@ -1,11 +1,11 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! NetworkState implementation for the `scp` module.
 
 use crate::NetworkState;
-use mc_blockchain_types::BlockIndex;
-use mc_common::{NodeID, ResponderId};
-use mc_consensus_scp::{
+use bt_blockchain_types::BlockIndex;
+use bt_common::{NodeID, ResponderId};
+use bt_consensus_scp::{
     ballot::Ballot, msg::ExternalizePayload, predicates::FuncPredicate,
     quorum_set_ext::QuorumSetExt, GenericNodeId, Msg, QuorumSet, SlotIndex, Topic, Value,
 };
@@ -172,8 +172,8 @@ impl<ID: GenericNodeId + Send + AsRef<ResponderId> + DeserializeOwned + Serializ
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mc_consensus_scp::msg::*;
-    use mc_peers_test_utils::test_node_id;
+    use bt_consensus_scp::msg::*;
+    use bt_peers_test_utils::test_node_id;
     use std::collections::BTreeSet;
 
     #[test]

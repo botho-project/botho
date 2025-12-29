@@ -1,3 +1,3 @@
 # mc-api
 
-gRPC API shared between multiple MobileCoin services.
+gRPC API shared between multiple Botho services.

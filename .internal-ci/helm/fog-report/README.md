@@ -1,6 +1,6 @@
 # Fog-Report
 
-Run a MobileCoin fog-report instance.
+Run a Botho fog-report instance.
 
 ### Required Values
 

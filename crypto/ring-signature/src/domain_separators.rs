@@ -1,6 +1,6 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
-//! Domain separation tags for hash functions used in the MobileCoin amount and
+//! Domain separation tags for hash functions used in the Botho amount and
 //! MLSAG protocols.
 //!
 //! Domain separation allows multiple distinct hash functions to be derived from

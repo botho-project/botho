@@ -1,9 +1,9 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Broadcasts messages through the network.
 
 use crate::ConsensusMsg;
-use mc_common::ResponderId;
+use bt_common::ResponderId;
 use mockall::*;
 
 #[automock]

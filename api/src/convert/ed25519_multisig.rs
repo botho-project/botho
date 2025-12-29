@@ -1,10 +1,10 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Convert to/from external::Ed25519SignerSet/Ed25519MultiSig.
 
 use crate::{external, ConversionError};
-use mc_crypto_keys::{Ed25519Public, Ed25519Signature};
-use mc_crypto_multisig::{MultiSig, SignerSet};
+use bt_crypto_keys::{Ed25519Public, Ed25519Signature};
+use bt_crypto_multisig::{MultiSig, SignerSet};
 
 /// Convert MultiSig<Ed25519Signature> --> external::Ed25519MultiSig.
 impl From<&MultiSig<Ed25519Signature>> for external::Ed25519MultiSig {
@@ -79,9 +79,9 @@ impl TryFrom<&external::Ed25519SignerSet> for SignerSet<Ed25519Public> {
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use mc_crypto_keys::{Ed25519Pair, Signer};
-    use mc_util_from_random::FromRandom;
-    use mc_util_serial::{decode, encode};
+    use bt_crypto_keys::{Ed25519Pair, Signer};
+    use bt_util_from_random::FromRandom;
+    use bt_util_serial::{decode, encode};
     use prost::Message;
     use rand_core::SeedableRng;
     use rand_hc::Hc128Rng;

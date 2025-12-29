@@ -1,10 +1,10 @@
-use mc_account_keys::{AccountKey, RootIdentity};
-use mc_api::printable::{printable_wrapper, PrintableWrapper};
-use mc_util_test_helper::{run_with_several_seeds, CryptoRng, RngCore};
+use bt_account_keys::{AccountKey, RootIdentity};
+use bt_api::printable::{printable_wrapper, PrintableWrapper};
+use bt_util_test_helper::{run_with_several_seeds, CryptoRng, RngCore};
 
 // The limit which we require b58 addresses to be less than
 const B58_ADDRESS_LIMIT: usize = 255;
-// The limit which we impose on fog domains like "fog.mobilecoin.com"
+// The limit which we impose on fog domains like "fog.botho.com"
 const DOMAIN_LIMIT: usize = 34;
 
 // Try making a fog address with this domain length, (and an rng), several

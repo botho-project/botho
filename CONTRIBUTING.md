@@ -1,6 +1,6 @@
-# Contributing to Cadence
+# Contributing to Botho
 
-Thanks for your interest in contributing to Cadence!
+Thanks for your interest in contributing to Botho!
 
 ## Getting Started
 

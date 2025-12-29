@@ -1,6 +1,6 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
-//! MobileCoin Account and Subaddress objects
+//! Botho Account and Subaddress objects
 
 use zeroize::Zeroize;
 
@@ -28,7 +28,7 @@ impl<T: RingCtAddress> RingCtAddress for &T {
     }
 }
 
-/// MobileCoin basic account object.
+/// Botho basic account object.
 ///
 /// Typically derived via slip10, and containing root view and spend private
 /// keys.
@@ -71,11 +71,11 @@ impl Account {
     }
 }
 
-/// MobileCoin view only account object.
+/// Botho view only account object.
 ///
 /// Derived from an [Account] object, used where spend key custody is external
 /// (offline or via hardware). Protobuf encoding is equivalent to
-/// [mc_account_keys::ViewAccountKey]
+/// [bt_account_keys::ViewAccountKey]
 #[derive(Zeroize)]
 #[zeroize(drop)]
 pub struct ViewAccount {
@@ -120,7 +120,7 @@ impl From<&Account> for ViewAccount {
     }
 }
 
-/// MobileCoin spend subaddress object.
+/// Botho spend subaddress object.
 ///
 /// Contains view and spend private keys.
 #[derive(Clone, Debug, PartialEq, Zeroize)]
@@ -156,7 +156,7 @@ impl SpendSubaddress {
     }
 }
 
-/// MobileCoin view-only subaddress object.
+/// Botho view-only subaddress object.
 ///
 /// Contains view private and spend public key.
 #[derive(Clone, Debug, PartialEq, Zeroize)]
@@ -188,7 +188,7 @@ impl ViewSubaddress {
     }
 }
 
-/// MobileCoin public subaddress object
+/// Botho public subaddress object
 ///
 /// Contains view and spend public keys
 #[derive(Clone, Debug, PartialEq)]
@@ -232,7 +232,7 @@ impl From<&ViewSubaddress> for PublicSubaddress {
 }
 
 /// Represents a "standard" public address hash created using merlin,
-/// used in memos as a compact representation of a MobileCoin public address.
+/// used in memos as a compact representation of a Botho public address.
 /// This hash is collision resistant.
 #[derive(Copy, Clone, Default, Debug, Eq, Hash, PartialEq, Ord, PartialOrd)]
 pub struct ShortAddressHash([u8; 16]);

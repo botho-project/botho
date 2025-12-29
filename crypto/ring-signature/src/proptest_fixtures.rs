@@ -1,9 +1,9 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Fixtures for use with proptest
 
 use crate::{CurveScalar, Scalar};
-use mc_crypto_keys::{RistrettoPrivate, RistrettoPublic};
+use bt_crypto_keys::{RistrettoPrivate, RistrettoPublic};
 use proptest::prelude::*;
 
 /// Generates an arbitrary Scalar.

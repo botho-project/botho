@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! MintTx transaction validation.
 
@@ -15,8 +15,8 @@ use crate::{
     },
     BlockVersion, TokenId,
 };
-use mc_crypto_keys::Ed25519Public;
-use mc_crypto_multisig::SignerSet;
+use bt_crypto_keys::Ed25519Public;
+use bt_crypto_multisig::SignerSet;
 
 /// Determines if the transaction is valid, with respect to the provided
 /// context.
@@ -105,10 +105,10 @@ mod tests {
         mint::{constants::NONCE_LENGTH, MintTxPrefix},
     };
     use alloc::vec;
-    use mc_crypto_keys::{Ed25519Pair, RistrettoPublic, Signer};
-    use mc_crypto_multisig::MultiSig;
-    use mc_util_from_random::FromRandom;
-    use mc_util_test_helper::get_seeded_rng;
+    use bt_crypto_keys::{Ed25519Pair, RistrettoPublic, Signer};
+    use bt_crypto_multisig::MultiSig;
+    use bt_util_from_random::FromRandom;
+    use bt_util_test_helper::get_seeded_rng;
 
     #[test]
     fn validate_against_mint_config_accepts_valid_config() {

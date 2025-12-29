@@ -1,10 +1,10 @@
-// Copyright (c) 2018-2023 The MobileCoin Foundation
+// Copyright (c) 2018-2023 The Botho Foundation
 
 //! Defines an object for each known high-level memo type,
 //! and an enum to allow matching recovered memos to one of these types.
 //!
 //! The framework for memo types was proposed for standardization
-//! in mobilecoinfoundation/mcips/pull/3.
+//! in bothofoundation/mcips/pull/3.
 //!
 //! Several memo types from that proposal and subsequent proposals
 //! are implemented in modules beneath this module, and then included in the
@@ -126,10 +126,10 @@ impl_memo_enum! { MemoType,
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mc_account_keys::{AccountKey, ShortAddressHash};
-    use mc_crypto_keys::{CompressedRistrettoPublic, RistrettoPrivate};
-    use mc_transaction_core::MemoPayload;
-    use mc_util_from_random::FromRandom;
+    use bt_account_keys::{AccountKey, ShortAddressHash};
+    use bt_crypto_keys::{CompressedRistrettoPublic, RistrettoPrivate};
+    use bt_transaction_core::MemoPayload;
+    use bt_util_from_random::FromRandom;
     use rand::{rngs::StdRng, SeedableRng};
 
     #[test]

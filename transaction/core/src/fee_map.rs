@@ -1,11 +1,11 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! A helper object for maintaining a map of token id -> minimum fee.
 
 use crate::{tokens::Mob, Token, TokenId};
 use alloc::collections::BTreeMap;
 use displaydoc::Display;
-use mc_crypto_digestible::{Digestible, MerlinTranscript};
+use bt_crypto_digestible::{Digestible, MerlinTranscript};
 use serde::{Deserialize, Serialize};
 
 /// The log base 2 of the smallest allowed minimum fee, in the smallest

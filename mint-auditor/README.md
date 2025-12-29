@@ -19,7 +19,7 @@ https://github.com/mobilecoinofficial/reserve-auditor
 
 ## Historical (mint-auditor)
 
-This is a service which provides a gRPC API for auditing mints and burns on the MobileCoin blockchain, and optionally correlating them with deposits and withdrawals on a [Gnosis Safe](https://gnosis-safe.io/).
+This is a service which provides a gRPC API for auditing mints and burns on the Botho blockchain, and optionally correlating them with deposits and withdrawals on a [Gnosis Safe](https://gnosis-safe.io/).
 
 The mint auditor stores its audit information in a SQLite database, and provides a gRPC for querying this database.
 It also provides some Prometheus metrics to ease automated monitoring.
@@ -101,18 +101,18 @@ INFO:integration_test:213: All tests passed
 
 The mint auditor supports syncing data from a Gnosis safe. It uses the [Gnosis transaction service API](https://github.com/safe-global/safe-transaction-service/) to get the data. This service is operated by Gnosis, and is available for [ETH main net](https://safe-transaction.gnosis.io/) and [Rinkeby, an ETH test net](https://safe-transaction.rinkeby.gnosis.io/).
 
-Mints on the MobileCoin blockchain are expected to correlate with a deposit to a safe. The expected process is:
+Mints on the Botho blockchain are expected to correlate with a deposit to a safe. The expected process is:
 1. A deposit of the appropriate backing token is made to the safe using a standard Ethereum transaction.
-2. A MintTx is then submitted to the MobileCoin blockchain, embedding the deposit transaction hash in the nonce of the
-   MobileCoin MintTx. The nonce allows linking the MobileCoin mint to the Gnosis safe deposit.
+2. A MintTx is then submitted to the Botho blockchain, embedding the deposit transaction hash in the nonce of the
+   Botho MintTx. The nonce allows linking the Botho mint to the Gnosis safe deposit.
 
-Similarly, burns on the MobileCoin blockchain are expected to correlate with a withdrawal from a safe. The expected process is:
-1. A transaction on the MobileCoin blockchain that moves the desired token to the burn address is issued.
+Similarly, burns on the Botho blockchain are expected to correlate with a withdrawal from a safe. The expected process is:
+1. A transaction on the Botho blockchain that moves the desired token to the burn address is issued.
 2. A [batched transaction](https://help.gnosis-safe.io/en/articles/4680071-transaction-builder) is issued to the Ethereum blockchain. The batched transaction needs to contain two transactions:
     1. A transaction that moves the desired token out of the safe
-    1. A transaction to an auxiliary contract (see more details below) that is used to link withdrawal to the MobileCoin burn.
+    1. A transaction to an auxiliary contract (see more details below) that is used to link withdrawal to the Botho burn.
 
-Gnosis deposits are easily linked to the matching MobileCoin mints via the Ethereum transaction hash. Linking withdrawals is more difficult since standard Ethereum transactions do not have a way of including metadata. In an ideal world we would've had the option of including the MobileCoin burn transaction TxOut public key in the Ethereum withdrawal transaction, but there is no easy way to do that.
+Gnosis deposits are easily linked to the matching Botho mints via the Ethereum transaction hash. Linking withdrawals is more difficult since standard Ethereum transactions do not have a way of including metadata. In an ideal world we would've had the option of including the Botho burn transaction TxOut public key in the Ethereum withdrawal transaction, but there is no easy way to do that.
 The solution we came up with is to deploy an "auxiliary contract", who has a single function that accepts arbitrary metadata bytes, and use that as part of a Gnosis batched transfer to include extra data in addition to the token transfer. Such contract can be seen [here](https://github.com/tbrent/ethereum-metadata) and is [deployed to the Rinkeby network](https://rinkeby.etherscan.io/address/0x76BD419fBa96583d968b422D4f3CB2A70bf4CF40).
 
 #### Setting up
@@ -169,7 +169,7 @@ Once the Gnosis transaction service notices the transaction and the auditor sync
 
 #### Withdrawing from the safe
 
-Withdrawal is slightly move involved since you will need to construct a multi-transaction that both moves the token out of the safe and transacts with the auxiliary metadata contracts to record the matching MobileCoin burn TxOut public key.
+Withdrawal is slightly move involved since you will need to construct a multi-transaction that both moves the token out of the safe and transacts with the auxiliary metadata contracts to record the matching Botho burn TxOut public key.
 
 The steps to do that are:
 1. On the [Gnosis safe web app](https://gnosis-safe.io/app/) click `Apps` and then select the `Transaction Builder` application.

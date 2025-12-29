@@ -1,22 +1,22 @@
-// Copyright (c) 2018-2025 The MobileCoin Foundation
+// Copyright (c) 2018-2025 The Botho Foundation
 
 use crate::{
     transaction_builder::create_output_with_fog_hint, MemoBuilder, ReservedSubaddresses,
     TxBuilderError, TxOutputsOrdering,
 };
 use alloc::vec::Vec;
-use mc_account_keys::PublicAddress;
-use mc_crypto_keys::RistrettoPrivate;
-use mc_crypto_ring_signature_signer::RingSigner;
-use mc_transaction_core::{
+use bt_account_keys::PublicAddress;
+use bt_crypto_keys::RistrettoPrivate;
+use bt_crypto_ring_signature_signer::RingSigner;
+use bt_transaction_core::{
     encrypted_fog_hint::EncryptedFogHint,
     ring_ct::{InputRing, OutputSecret},
     tx::{Tx, TxIn, TxOut, TxPrefix},
     FeeMap, MemoContext, MemoPayload, NewMemoError,
 };
-use mc_transaction_extra::UnsignedTx;
-use mc_transaction_summary::TxOutSummaryUnblindingData;
-use mc_transaction_types::{Amount, BlockVersion, ClusterTagVector, UnmaskedAmount};
+use bt_transaction_extra::UnsignedTx;
+use bt_transaction_summary::TxOutSummaryUnblindingData;
+use bt_transaction_types::{Amount, BlockVersion, ClusterTagVector, UnmaskedAmount};
 use rand::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 

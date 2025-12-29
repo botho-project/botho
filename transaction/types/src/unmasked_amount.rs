@@ -1,9 +1,9 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Unmasked amount types
 use crate::{amount::Amount, TokenId};
-use mc_crypto_digestible::Digestible;
-use mc_crypto_ring_signature::CurveScalar;
+use bt_crypto_digestible::Digestible;
+use bt_crypto_ring_signature::CurveScalar;
 
 #[cfg(feature = "prost")]
 use prost::Message;

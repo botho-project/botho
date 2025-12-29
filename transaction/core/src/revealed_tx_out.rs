@@ -1,12 +1,12 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 use alloc::vec::Vec;
 
 use crate::{tx::TxOut, TxOutConversionError};
 use displaydoc::Display;
-use mc_crypto_digestible::Digestible;
-use mc_crypto_ring_signature::Scalar;
-use mc_transaction_types::{Amount, AmountError, MaskedAmount, MaskedAmountV2};
+use bt_crypto_digestible::Digestible;
+use bt_crypto_ring_signature::Scalar;
+use bt_transaction_types::{Amount, AmountError, MaskedAmount, MaskedAmountV2};
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;

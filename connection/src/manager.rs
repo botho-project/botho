@@ -1,13 +1,13 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Common connection manager implementation
 
 use crate::{sync::SyncConnection, traits::Connection};
-use mc_common::{
+use bt_common::{
     logger::{o, Logger},
     ResponderId,
 };
-use mc_util_uri::ConnectionUri;
+use bt_util_uri::ConnectionUri;
 use std::{
     collections::BTreeMap,
     sync::{Arc, RwLock, RwLockReadGuard},

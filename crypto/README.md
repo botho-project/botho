@@ -1,6 +1,6 @@
 ## crypto
 
-Provides implementations of cryptography primitives and wrappers around primitives needed in MobileCoin components.
+Provides implementations of cryptography primitives and wrappers around primitives needed in Botho components.
 
 | Name    | Description |
 | ------- | ----------- |

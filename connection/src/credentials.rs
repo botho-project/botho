@@ -1,18 +1,50 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
+// Copyright (c) 2024 Botho Foundation
 
-//! GRPC credentials support
+//! GRPC credentials support - Simplified for tonic
 
 use displaydoc::Display;
-use grpcio::{Error as GrpcError, RpcStatusCode};
-use mc_common::time::{SystemTimeProvider, TimeProvider};
-use mc_util_grpc::{
-    BasicCredentials, TokenBasicCredentialsGenerator, TokenBasicCredentialsGeneratorError,
-};
-use mc_util_uri::ConnectionUri;
+use bt_util_uri::ConnectionUri;
 use std::{
     convert::Infallible,
     fmt::{Debug, Display},
 };
+use tonic::Status;
+
+/// Basic credentials with username and password
+#[derive(Clone, Debug)]
+pub struct BasicCredentials {
+    username: String,
+    password: String,
+}
+
+impl BasicCredentials {
+    /// Create new basic credentials
+    pub fn new(username: impl AsRef<str>, password: impl AsRef<str>) -> Self {
+        Self {
+            username: username.as_ref().to_owned(),
+            password: password.as_ref().to_owned(),
+        }
+    }
+
+    /// Get the username
+    pub fn username(&self) -> &str {
+        &self.username
+    }
+
+    /// Get the password
+    pub fn password(&self) -> &str {
+        &self.password
+    }
+
+    /// Create the authorization header value
+    pub fn authorization_header(&self) -> String {
+        use base64::Engine;
+        let encoded = base64::engine::general_purpose::STANDARD
+            .encode(format!("{}:{}", self.username, self.password));
+        format!("Basic {}", encoded)
+    }
+}
 
 /// A trait that lets us determine if an error relates to authentication
 /// failure.
@@ -20,14 +52,9 @@ pub trait AuthenticationError {
     fn is_unauthenticated(&self) -> bool;
 }
 
-impl AuthenticationError for GrpcError {
+impl AuthenticationError for Status {
     fn is_unauthenticated(&self) -> bool {
-        match self {
-            GrpcError::RpcFailure(rpc_status) => {
-                rpc_status.code() == RpcStatusCode::UNAUTHENTICATED
-            }
-            _ => false,
-        }
+        self.code() == tonic::Code::Unauthenticated
     }
 }
 
@@ -75,34 +102,9 @@ impl CredentialsProvider for HardcodedCredentialsProvider {
     }
 }
 
-/// A credentials provider that uses an underlying
-/// TokenBasicCredentialsGenerator for generating credentials.
-pub struct TokenBasicCredentialsProvider<TP: TimeProvider> {
-    username: String,
-    generator: TokenBasicCredentialsGenerator<TP>,
-}
-
-impl<TP: TimeProvider> TokenBasicCredentialsProvider<TP> {
-    pub fn new(username: impl AsRef<str>, generator: TokenBasicCredentialsGenerator<TP>) -> Self {
-        Self {
-            username: username.as_ref().to_owned(),
-            generator,
-        }
-    }
-}
-
-impl<TP: TimeProvider> CredentialsProvider for TokenBasicCredentialsProvider<TP> {
-    type Error = TokenBasicCredentialsGeneratorError;
-
-    fn get_credentials(&self) -> Result<Option<BasicCredentials>, Self::Error> {
-        Some(self.generator.generate_for(&self.username)).transpose()
-    }
-}
-
 /// All possible types of built-in credential providers.
-pub enum AnyCredentialsProvider<TP: TimeProvider = SystemTimeProvider> {
+pub enum AnyCredentialsProvider {
     Hardcoded(HardcodedCredentialsProvider),
-    Token(TokenBasicCredentialsProvider<TP>),
 }
 
 /// Possible error types for built-in credential providers.
@@ -110,9 +112,6 @@ pub enum AnyCredentialsProvider<TP: TimeProvider = SystemTimeProvider> {
 pub enum AnyCredentialsError {
     /// Infallible
     Infallible,
-
-    /// Token: {0}
-    Token(TokenBasicCredentialsGeneratorError),
 }
 
 impl From<Infallible> for AnyCredentialsError {
@@ -121,19 +120,20 @@ impl From<Infallible> for AnyCredentialsError {
     }
 }
 
-impl From<TokenBasicCredentialsGeneratorError> for AnyCredentialsError {
-    fn from(src: TokenBasicCredentialsGeneratorError) -> Self {
-        Self::Token(src)
-    }
-}
+impl std::error::Error for AnyCredentialsError {}
 
-impl<TP: TimeProvider> CredentialsProvider for AnyCredentialsProvider<TP> {
+impl CredentialsProvider for AnyCredentialsProvider {
     type Error = AnyCredentialsError;
 
     fn get_credentials(&self) -> Result<Option<BasicCredentials>, Self::Error> {
         match self {
-            Self::Hardcoded(inner) => Ok(inner.get_credentials()?),
-            Self::Token(inner) => Ok(inner.get_credentials()?),
+            Self::Hardcoded(inner) => inner.get_credentials().map_err(Into::into),
+        }
+    }
+
+    fn clear(&self) {
+        match self {
+            Self::Hardcoded(inner) => inner.clear(),
         }
     }
 }

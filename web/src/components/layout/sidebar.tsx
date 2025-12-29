@@ -55,7 +55,7 @@ export function Sidebar() {
         </div>
         <div>
           <h1 className="font-display text-lg font-bold tracking-tight text-gradient">
-            Cadence
+            Botho
           </h1>
           <p className="text-xs text-[--color-dim]">Ledger Browser</p>
         </div>

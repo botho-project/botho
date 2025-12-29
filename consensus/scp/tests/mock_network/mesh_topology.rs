@@ -1,10 +1,10 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Mesh style network topologies.
 
 use crate::mock_network;
-use mc_common::NodeID;
-use mc_consensus_scp::{test_utils, QuorumSet};
+use bt_common::NodeID;
+use bt_consensus_scp::{test_utils, QuorumSet};
 use std::collections::HashSet;
 
 /// Mesh tests

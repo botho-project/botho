@@ -1,6 +1,6 @@
-// Copyright (c) 2018-2023 The MobileCoin Foundation
+// Copyright (c) 2018-2023 The Botho Foundation
 
-//! This file provides [HasherBuilder], used in `mc_common::HashMap`
+//! This file provides [HasherBuilder], used in `bt_common::HashMap`
 //! in and out of the enclave.
 
 use core::hash::BuildHasher;

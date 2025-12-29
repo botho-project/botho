@@ -1,7 +1,7 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
-//! MobileCoin core library.
-//! This provides base types and common functions for mobilecoin implementers /
+//! Botho core library.
+//! This provides base types and common functions for botho implementers /
 //! consumers.
 
 #![no_std]
@@ -9,7 +9,7 @@
 #![deny(unsafe_code)]
 
 // Re-export shared type modules
-pub use mc_core_types::{account, keys};
+pub use bt_core_types::{account, keys};
 
 pub mod consts;
 

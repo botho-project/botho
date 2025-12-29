@@ -1,8 +1,8 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 use crate::{BlockContents, BlockContentsHash, BlockID, BlockVersion};
-use mc_crypto_digestible::{DigestTranscript, Digestible, MerlinTranscript};
-use mc_transaction_core::tx::{TxOut, TxOutMembershipElement};
+use bt_crypto_digestible::{DigestTranscript, Digestible, MerlinTranscript};
+use bt_transaction_core::tx::{TxOut, TxOutMembershipElement};
 use prost::Message;
 use serde::{Deserialize, Serialize};
 
@@ -183,7 +183,7 @@ pub fn compute_block_id(
     root_element: &TxOutMembershipElement,
     contents_hash: &BlockContentsHash,
 ) -> BlockID {
-    let mut transcript = MerlinTranscript::new(b"mobilecoin-block-id");
+    let mut transcript = MerlinTranscript::new(b"botho-block-id");
 
     version.append_to_transcript(b"version", &mut transcript);
     parent_id.append_to_transcript(b"parent_id", &mut transcript);
@@ -202,14 +202,14 @@ pub fn compute_block_id(
 mod block_tests {
     use super::*;
     use alloc::{vec, vec::Vec};
-    use mc_account_keys::AccountKey;
-    use mc_crypto_keys::RistrettoPrivate;
-    use mc_transaction_core::{
+    use bt_account_keys::AccountKey;
+    use bt_crypto_keys::RistrettoPrivate;
+    use bt_transaction_core::{
         encrypted_fog_hint::EncryptedFogHint, membership_proofs::Range, ring_signature::KeyImage,
         tokens::Mob, tx::TxOutMembershipHash, Amount, Token,
     };
-    use mc_util_from_random::FromRandom;
-    use mc_util_test_helper::{get_seeded_rng, CryptoRng, RngCore};
+    use bt_util_from_random::FromRandom;
+    use bt_util_test_helper::{get_seeded_rng, CryptoRng, RngCore};
 
     // This is block version 1 to avoid messing with test vectors
     const BLOCK_VERSION: BlockVersion = BlockVersion::ONE;

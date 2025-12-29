@@ -1,13 +1,13 @@
-// Copyright (c) 2018-2023 The MobileCoin Foundation
+// Copyright (c) 2018-2023 The Botho Foundation
 
 //! Object for 0x0003 Defragmentation memo type
 //!
-//! This was proposed for standardization in mobilecoinfoundation/mcips/pull/61
+//! This was proposed for standardization in bothofoundation/mcips/pull/61
 
 use super::RegisteredMemoType;
 use crate::impl_memo_type_conversions;
 use displaydoc::Display;
-use mc_transaction_core::NewMemoError;
+use bt_transaction_core::NewMemoError;
 
 /// Memo denoting a defragmentation transaction.
 ///

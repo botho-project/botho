@@ -2,7 +2,7 @@
 //! Files formatted in this way are sufficient to derive an account key in
 //! a self-contained way without any context, which is useful for many tools.
 
-use mc_account_keys::{RootEntropy, RootIdentity};
+use bt_account_keys::{RootEntropy, RootIdentity};
 use serde::{Deserialize, Serialize};
 
 /// Historical JSON schema for a root identity

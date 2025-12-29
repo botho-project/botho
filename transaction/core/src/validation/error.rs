@@ -1,9 +1,9 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 use crate::{InputRuleError, TxOutConversionError};
 use alloc::string::String;
 use displaydoc::Display;
-use mc_crypto_keys::KeyError;
+use bt_crypto_keys::KeyError;
 use serde::{Deserialize, Serialize};
 
 /// Type alias for transaction validation results.
@@ -184,7 +184,7 @@ pub enum TransactionValidationError {
     PseudoTagOutputCountMismatch,
 }
 
-impl From<mc_crypto_keys::KeyError> for TransactionValidationError {
+impl From<bt_crypto_keys::KeyError> for TransactionValidationError {
     fn from(_src: KeyError) -> Self {
         Self::KeyError
     }

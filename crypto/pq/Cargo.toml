@@ -1,0 +1,31 @@
+[package]
+name = "bt-crypto-pq"
+version = "0.1.0"
+authors = ["Botho Foundation"]
+edition = "2021"
+license = "Apache-2.0"
+rust-version = { workspace = true }
+description = "Post-quantum cryptographic primitives for Botho (ML-KEM, ML-DSA)"
+
+[features]
+default = ["std"]
+std = ["pqcrypto-kyber/std", "pqcrypto-dilithium/std"]
+
+[dependencies]
+# Post-quantum cryptography (NIST standards)
+pqcrypto-kyber = { version = "0.8", default-features = false }
+pqcrypto-dilithium = { version = "0.5", default-features = false }
+pqcrypto-traits = { version = "0.3", default-features = false }
+
+# Key derivation
+hkdf = { workspace = true }
+sha2 = { workspace = true }
+
+# Utilities
+zeroize = { workspace = true, features = ["derive"] }
+thiserror = { workspace = true }
+serde = { workspace = true, features = ["derive", "alloc"] }
+
+[dev-dependencies]
+rand = { workspace = true }
+hex = { workspace = true }

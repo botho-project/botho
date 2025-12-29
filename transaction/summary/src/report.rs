@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2023 The MobileCoin Foundation
+// Copyright (c) 2018-2023 The Botho Foundation
 
 //! A TxSummaryUnblindingReport, containing the set of verified information
 //! about a transaction.
@@ -8,8 +8,8 @@ use core::fmt::Display;
 use displaydoc::Display;
 use heapless::Vec;
 
-use mc_core::account::ShortAddressHash;
-use mc_transaction_types::{
+use bt_core::account::ShortAddressHash;
+use bt_transaction_types::{
     constants::{MAX_INPUTS, MAX_OUTPUTS},
     Amount, TokenId,
 };

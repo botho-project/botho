@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Customizable implementation of the AdminApi service.
 
@@ -11,7 +11,7 @@ use crate::{
     rpc_logger, send_result, SVC_COUNTERS,
 };
 use grpcio::{RpcContext, RpcStatus, RpcStatusCode, Service, UnarySink};
-use mc_common::logger::{log, Logger};
+use bt_common::logger::{log, Logger};
 use prometheus::Encoder;
 use std::{env, sync::Arc};
 
@@ -89,7 +89,7 @@ impl AdminService {
         log::trace!(logger, "get_info_impl");
 
         let mut build_info_json = String::new();
-        mc_util_build_info::write_report(&mut build_info_json).map_err(|err| {
+        bt_util_build_info::write_report(&mut build_info_json).map_err(|err| {
             RpcStatus::with_message(
                 RpcStatusCode::INTERNAL,
                 format!("write_report failed: {err}"),
@@ -123,7 +123,7 @@ impl AdminService {
     ) -> Result<(), RpcStatus> {
         log::info!(logger, "Updating RUST_LOG to '{}'", request.rust_log);
         env::set_var("RUST_LOG", request.rust_log);
-        mc_common::logger::recreate_app_logger();
+        bt_common::logger::recreate_app_logger();
 
         Ok(())
     }
@@ -143,7 +143,7 @@ impl AdminApi for AdminService {
         sink: UnarySink<GetPrometheusMetricsResponse>,
     ) {
         let _timer = SVC_COUNTERS.req(&ctx);
-        mc_common::logger::scoped_global_logger(&rpc_logger(&ctx, &self.logger), |logger| {
+        bt_common::logger::scoped_global_logger(&rpc_logger(&ctx, &self.logger), |logger| {
             send_result(
                 ctx,
                 sink,
@@ -155,21 +155,21 @@ impl AdminApi for AdminService {
 
     fn get_info(&mut self, ctx: RpcContext, request: (), sink: UnarySink<GetInfoResponse>) {
         let _timer = SVC_COUNTERS.req(&ctx);
-        mc_common::logger::scoped_global_logger(&rpc_logger(&ctx, &self.logger), |logger| {
+        bt_common::logger::scoped_global_logger(&rpc_logger(&ctx, &self.logger), |logger| {
             send_result(ctx, sink, self.get_info_impl(request, logger), logger)
         });
     }
 
     fn set_rust_log(&mut self, ctx: RpcContext, request: SetRustLogRequest, sink: UnarySink<()>) {
         let _timer = SVC_COUNTERS.req(&ctx);
-        mc_common::logger::scoped_global_logger(&rpc_logger(&ctx, &self.logger), |logger| {
+        bt_common::logger::scoped_global_logger(&rpc_logger(&ctx, &self.logger), |logger| {
             send_result(ctx, sink, self.set_rust_log_impl(request, logger), logger)
         });
     }
 
     fn test_log_error(&mut self, ctx: RpcContext, request: (), sink: UnarySink<()>) {
         let _timer = SVC_COUNTERS.req(&ctx);
-        mc_common::logger::scoped_global_logger(&rpc_logger(&ctx, &self.logger), |logger| {
+        bt_common::logger::scoped_global_logger(&rpc_logger(&ctx, &self.logger), |logger| {
             send_result(ctx, sink, self.test_log_error_impl(request, logger), logger)
         });
     }

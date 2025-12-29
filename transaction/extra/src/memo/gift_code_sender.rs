@@ -1,12 +1,12 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Object for 0x0002 Gift Code Sender memo type
 //!
-//! This was proposed for standardization in mobilecoinfoundation/mcips/pull/32
+//! This was proposed for standardization in bothofoundation/mcips/pull/32
 
 use crate::{impl_memo_type_conversions, RegisteredMemoType};
 use core::str;
-use mc_transaction_core::MemoError;
+use bt_transaction_core::MemoError;
 
 /// Gift Code Sender Memo
 ///

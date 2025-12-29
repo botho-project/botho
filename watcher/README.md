@@ -1,7 +1,7 @@
 mc-watcher
 =========
 
-Watcher nodes perform an essential role in the MobileCoin network by verifying the signatures that the full validator nodes attach to each block. In this way the watcher nodes continuously monitor the integrity of the decentralized MobileCoin network.
+Watcher nodes perform an essential role in the Botho network by verifying the signatures that the full validator nodes attach to each block. In this way the watcher nodes continuously monitor the integrity of the decentralized Botho network.
 
 Basic run command to sync block signatures from two nodes on the test network:
 

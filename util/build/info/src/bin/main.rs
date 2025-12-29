@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Output the build_info that we compiled with
 //! This is in order to validate the build / any caching mechanisms
@@ -17,17 +17,17 @@ fn main() {
     }
     if args.len() > 1 {
         if args[1] == "--git-commit" {
-            print!("{}", mc_util_build_info::git_commit());
+            print!("{}", bt_util_build_info::git_commit());
             return;
         } else if args[1] == "--profile" {
-            print!("{}", mc_util_build_info::profile());
+            print!("{}", bt_util_build_info::profile());
             return;
         } else if args[1] == "--debug" {
-            print!("{}", mc_util_build_info::debug());
+            print!("{}", bt_util_build_info::debug());
             return;
         } else if args[1] == "--all" {
             let mut result = String::new();
-            mc_util_build_info::write_report(&mut result).unwrap();
+            bt_util_build_info::write_report(&mut result).unwrap();
             print!("{result}");
             return;
         }

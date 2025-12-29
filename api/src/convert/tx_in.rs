@@ -1,9 +1,9 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Convert to/from external::TxIn.
 
 use crate::{external, ConversionError};
-use mc_transaction_core::{tx, InputRules, RevealedTxOut};
+use bt_transaction_core::{tx, InputRules, RevealedTxOut};
 
 /// Convert tx::TxIn --> external::TxIn.
 impl From<&tx::TxIn> for external::TxIn {
@@ -112,12 +112,12 @@ impl TryFrom<&external::RevealedTxOut> for RevealedTxOut {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mc_account_keys::PublicAddress;
-    use mc_crypto_keys::RistrettoPrivate;
-    use mc_transaction_core::{
+    use bt_account_keys::PublicAddress;
+    use bt_crypto_keys::RistrettoPrivate;
+    use bt_transaction_core::{
         onetime_keys::create_shared_secret, tokens::Mob, Amount, BlockVersion, MaskedAmount, Token,
     };
-    use mc_util_from_random::FromRandom;
+    use bt_util_from_random::FromRandom;
     use rand::{rngs::StdRng, SeedableRng};
 
     #[test]

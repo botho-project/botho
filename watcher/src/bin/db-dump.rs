@@ -1,13 +1,13 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 #![deny(missing_docs)]
 
 //! A utility for examining the contents of a given watcher db.
 
 use clap::Parser;
-use mc_common::logger::{create_app_logger, o};
-use mc_crypto_keys::Ed25519Public;
-use mc_util_repr_bytes::ReprBytes;
-use mc_watcher::{attestation_evidence_collector, error::WatcherDBError, watcher_db::WatcherDB};
+use bt_common::logger::{create_app_logger, o};
+use bt_crypto_keys::Ed25519Public;
+use bt_util_repr_bytes::ReprBytes;
+use bt_watcher::{attestation_evidence_collector, error::WatcherDBError, watcher_db::WatcherDB};
 use std::path::PathBuf;
 use url::Url;
 

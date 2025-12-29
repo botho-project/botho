@@ -1,11 +1,11 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Errors related to ledger synchronization
 
 use crate::transactions_fetcher_trait::TransactionFetcherError;
 use displaydoc::Display;
-use mc_connection::Error as ConnectionError;
-use mc_ledger_db::Error as LedgerDbError;
+use bt_connection::Error as ConnectionError;
+use bt_ledger_db::Error as LedgerDbError;
 use retry::Error as RetryError;
 
 #[derive(Debug, Display)]
@@ -30,7 +30,7 @@ pub enum LedgerSyncError {
     TransactionFetcher(Box<dyn TransactionFetcherError>),
 
     /// Api conversion error: {0:?}
-    ApiConversionError(mc_api::ConversionError),
+    ApiConversionError(bt_api::ConversionError),
 
     /// Invalid block ID
     InvalidBlockId,

@@ -1,15 +1,15 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Connection mock and test utilities
 
-use mc_blockchain_types::{Block, BlockID, BlockIndex, BlockVersion};
-use mc_connection::{
+use bt_blockchain_types::{Block, BlockID, BlockIndex, BlockVersion};
+use bt_connection::{
     BlockInfo, BlockchainConnection, Connection, Error as ConnectionError,
     Result as ConnectionResult, UserTxConnection,
 };
-use mc_ledger_db::Ledger;
-use mc_transaction_core::{tx::Tx, FeeMap};
-use mc_util_uri::{ConnectionUri, ConsensusClientUri};
+use bt_ledger_db::Ledger;
+use bt_transaction_core::{tx::Tx, FeeMap};
+use bt_util_uri::{ConnectionUri, ConsensusClientUri};
 use std::{
     cmp::{min, Ordering},
     fmt::{Display, Formatter, Result as FmtResult},
@@ -138,7 +138,7 @@ impl<L: Ledger + Sync> UserTxConnection for MockBlockchainConnection<L> {
 mod tests {
     use super::*;
     use crate::test_client_uri;
-    use mc_ledger_db::test_utils::get_mock_ledger;
+    use bt_ledger_db::test_utils::get_mock_ledger;
 
     #[test]
     // Mock peer should return the correct range of blocks.

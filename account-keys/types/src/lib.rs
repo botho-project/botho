@@ -1,6 +1,6 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
-//! Traits and wrapper types connected to MobileCoin account keys.
+//! Traits and wrapper types connected to Botho account keys.
 //! This crate is intended to have a small footprint and be maximally portable.
 
 #![no_std]

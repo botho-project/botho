@@ -1,11 +1,11 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Convert to/from external::CurveScalar
 
 use crate::{external, ConversionError};
 use curve25519_dalek::scalar::Scalar;
-use mc_crypto_keys::RistrettoPrivate;
-use mc_transaction_core::ring_signature::CurveScalar;
+use bt_crypto_keys::RistrettoPrivate;
+use bt_transaction_core::ring_signature::CurveScalar;
 
 /// Convert RistrettoPrivate --> external::CurveScalar.
 impl From<&RistrettoPrivate> for external::CurveScalar {

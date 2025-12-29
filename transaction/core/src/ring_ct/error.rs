@@ -1,13 +1,13 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Errors which can occur in connection to ring_ct signatures
 
 use crate::{range_proofs::error::Error as RangeProofError, TokenId};
 use alloc::string::{String, ToString};
 use displaydoc::Display;
-use mc_crypto_ring_signature::Error as RingSignatureError;
-use mc_crypto_ring_signature_signer::Error as SignerError;
-use mc_util_zip_exact::ZipExactError;
+use bt_crypto_ring_signature::Error as RingSignatureError;
+use bt_crypto_ring_signature_signer::Error as SignerError;
+use bt_util_zip_exact::ZipExactError;
 use serde::{Deserialize, Serialize};
 
 /// An error which can occur in connection to a ring signature
@@ -95,8 +95,8 @@ pub enum Error {
     InvalidTagSignature,
 }
 
-impl From<mc_util_repr_bytes::LengthMismatch> for Error {
-    fn from(src: mc_util_repr_bytes::LengthMismatch) -> Self {
+impl From<bt_util_repr_bytes::LengthMismatch> for Error {
+    fn from(src: bt_util_repr_bytes::LengthMismatch) -> Self {
         Error::LengthMismatch(src.found, src.expected)
     }
 }

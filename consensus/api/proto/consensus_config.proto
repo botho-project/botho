@@ -1,4 +1,4 @@
-// Copyright (c) 2022 The MobileCoin Foundation
+// Copyright (c) 2022 The Botho Foundation
 
 // Consensus service configuration data types.
 
@@ -8,7 +8,7 @@ import "external.proto";
 
 package consensus_config;
 
-option go_package = "mobilecoin/api";
+option go_package = "botho/api";
 
 
 // A single active minting configuration.

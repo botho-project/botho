@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2023 The MobileCoin Foundation
+// Copyright (c) 2018-2023 The Botho Foundation
 
 //! This module contains code related to reading/writing mnemonic-based accounts
 //! (either as protobuf or JSON strings) and converting them into AccountKey
@@ -6,15 +6,15 @@
 
 use bip39::{Language, Mnemonic};
 use displaydoc::Display;
-use mc_account_keys::AccountKey;
-use mc_core::slip10::Slip10KeyGenerator;
+use bt_account_keys::AccountKey;
+use bt_core::slip10::Slip10KeyGenerator;
 use mc_rand::{CryptoRng, RngCore};
 use prost::Message;
 use serde::{Deserialize, Serialize};
 
 /// An enumeration of errors which can occur when converting an
 /// [`UncheckedMnemonicAccount`] to an
-/// [`AccountKey`](mc_account_keys::AccountKey).
+/// [`AccountKey`](bt_account_keys::AccountKey).
 #[derive(Clone, Debug, Display, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum Error {
     /// No mnemonic was provided

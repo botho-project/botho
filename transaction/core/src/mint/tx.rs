@@ -1,14 +1,14 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Minting transactions.
 
 use crate::{domain_separators::MINT_TX_PREFIX_DOMAIN_TAG, encrypted_fog_hint::EncryptedFogHint};
 use alloc::vec::Vec;
 use core::fmt;
-use mc_crypto_digestible::{Digestible, MerlinTranscript};
-use mc_crypto_keys::{Ed25519Signature, RistrettoPublic};
-use mc_crypto_multisig::MultiSig;
-use mc_util_serial::Message;
+use bt_crypto_digestible::{Digestible, MerlinTranscript};
+use bt_crypto_keys::{Ed25519Signature, RistrettoPublic};
+use bt_crypto_multisig::MultiSig;
+use bt_util_serial::Message;
 use serde::{Deserialize, Serialize};
 
 /// The contents of a mint-tx, which is a transaction to mint new tokens.

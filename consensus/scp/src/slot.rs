@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! A unit of time during which the nodes agree on transactions.
 //!
@@ -13,7 +13,7 @@ use crate::{
     slot_state::SlotState,
     utils, QuorumSet, QuorumSetExt, SlotIndex, Value,
 };
-use mc_common::{
+use bt_common::{
     logger::{log, o, Logger},
     HashMap, HashSet, NodeID,
 };
@@ -1820,7 +1820,7 @@ mod nominate_protocol_tests {
     use super::*;
     use crate::test_utils::*;
     use maplit::btreeset;
-    use mc_common::logger::test_with_logger;
+    use bt_common::logger::test_with_logger;
 
     #[test_with_logger]
     // Should return no values if none can be accepted nominated.
@@ -2415,7 +2415,7 @@ mod ballot_protocol_tests {
     use super::*;
     use crate::test_utils::*;
     use maplit::btreeset;
-    use mc_common::logger::test_with_logger;
+    use bt_common::logger::test_with_logger;
 
     // TODO: reject a message if it contains a ballot containing incorrectly ordered
     // values.
@@ -4468,7 +4468,7 @@ mod ballot_protocol_tests {
 mod tests {
     use super::*;
     use crate::test_utils::*;
-    use mc_common::logger::test_with_logger;
+    use bt_common::logger::test_with_logger;
 
     #[test_with_logger]
     // `ballots_accepted_prepared` should return all ballots accepted prepared by

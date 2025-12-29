@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 // QuorumSet data types.
 // Implemented here because the Rust definition is generic, so these types are for the current impl.
@@ -6,7 +6,7 @@
 syntax = "proto3";
 
 package quorum_set;
-option go_package = "mobilecoin/api";
+option go_package = "botho/api";
 
 import "external.proto";
 

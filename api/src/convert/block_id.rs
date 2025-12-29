@@ -1,9 +1,9 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Convert to/from blockchain::BlockId
 
 use crate::{blockchain, ConversionError};
-use mc_blockchain_types::BlockID;
+use bt_blockchain_types::BlockID;
 
 /// Convert BlockID --> blockchain::BlockId.
 impl From<&BlockID> for blockchain::BlockId {

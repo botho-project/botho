@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 /// Sets chan_size (maximal messages that can get queued up) for all channels
 const CHANNEL_SIZE: usize = 100_000;
@@ -7,7 +7,7 @@ const CHANNEL_SIZE: usize = 100_000;
 const TRIM_MARKER: &str = "... <trimmed>";
 
 /// Macros to ease with tests/benches that require a Logger instance.
-pub use mc_util_logger_macros::{async_test_with_logger, bench_with_logger, test_with_logger};
+pub use bt_util_logger_macros::{async_test_with_logger, bench_with_logger, test_with_logger};
 
 use super::*;
 
@@ -236,7 +236,7 @@ pub fn create_app_logger<T: slog::SendSyncRefUnwindSafeKV + 'static>(
 
     {
         let mut buf = String::new();
-        mc_util_build_info::write_report(&mut buf).expect("Getting build_info report failed");
+        bt_util_build_info::write_report(&mut buf).expect("Getting build_info report failed");
         log::info!(app_logger, "{} started: {}", current_exe, buf);
     }
 

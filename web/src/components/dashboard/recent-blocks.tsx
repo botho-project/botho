@@ -15,11 +15,11 @@ interface Block {
 
 // Mock data
 const mockBlocks: Block[] = [
-  { height: 1234567, hash: 'a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0', timestamp: Date.now() / 1000 - 12, txCount: 45, miner: 'pool.cadence.io', reward: 2.5 },
+  { height: 1234567, hash: 'a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0', timestamp: Date.now() / 1000 - 12, txCount: 45, miner: 'pool.botho.io', reward: 2.5 },
   { height: 1234566, hash: 'b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0a1', timestamp: Date.now() / 1000 - 78, txCount: 32, miner: '0x1234...5678', reward: 2.5 },
-  { height: 1234565, hash: 'c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0a1b2', timestamp: Date.now() / 1000 - 145, txCount: 67, miner: 'pool.cadence.io', reward: 2.5 },
+  { height: 1234565, hash: 'c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0a1b2', timestamp: Date.now() / 1000 - 145, txCount: 67, miner: 'pool.botho.io', reward: 2.5 },
   { height: 1234564, hash: 'd4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0a1b2c3', timestamp: Date.now() / 1000 - 198, txCount: 28, miner: '0xabcd...ef01', reward: 2.5 },
-  { height: 1234563, hash: 'e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0a1b2c3d4', timestamp: Date.now() / 1000 - 267, txCount: 51, miner: 'pool.cadence.io', reward: 2.5 },
+  { height: 1234563, hash: 'e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0a1b2c3d4', timestamp: Date.now() / 1000 - 267, txCount: 51, miner: 'pool.botho.io', reward: 2.5 },
 ]
 
 export function RecentBlocks() {

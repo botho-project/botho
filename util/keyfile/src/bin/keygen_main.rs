@@ -1,11 +1,11 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 #![deny(missing_docs)]
 
-//! A CLI tool for generating individual MobileCoin identities
+//! A CLI tool for generating individual Botho identities
 
 use bip39::{Language, Mnemonic};
 use clap::Parser;
-use mc_util_keyfile::{config::KeyConfig, keygen};
+use bt_util_keyfile::{config::KeyConfig, keygen};
 use rand::{RngCore, SeedableRng};
 use rand_hc::Hc128Rng;
 

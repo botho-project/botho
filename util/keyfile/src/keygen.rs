@@ -1,16 +1,16 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! A tool for writing private and public key files to disk,
-//! corresponding to `mc_account_keys::RootIdentity`, and
-//! `mc_account_keys::PublicAddress` respectively.
+//! corresponding to `bt_account_keys::RootIdentity`, and
+//! `bt_account_keys::PublicAddress` respectively.
 
 use crate::{
     error::Error, read_keyfile, read_pubfile, read_root_entropy_keyfile, write_b58pubfile,
     write_keyfile, write_pubfile,
 };
 use bip39::{Language, Mnemonic};
-use mc_account_keys::{AccountKey, PublicAddress, RootIdentity};
-use mc_core::slip10::Slip10KeyGenerator;
+use bt_account_keys::{AccountKey, PublicAddress, RootIdentity};
+use bt_core::slip10::Slip10KeyGenerator;
 use rand_core::{RngCore, SeedableRng};
 use rand_hc::Hc128Rng;
 use std::{
@@ -211,7 +211,7 @@ mod test {
         let dir1 = tempfile::tempdir().expect("Could not create temporary dir1");
         let dir2 = tempfile::tempdir().expect("Could not create temporary dir2");
 
-        let pem = pem::parse(mc_crypto_x509_test_vectors::ok_rsa_head())
+        let pem = pem::parse(bt_crypto_x509_test_vectors::ok_rsa_head())
             .expect("Could not parse DER bytes from PEM certificate file");
         let fog_authority_spki = x509_signature::parse_certificate(pem.contents())
             .expect("Could not parse X509 certificate from DER bytes")

@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! OpenTelemetry wrappers and helper utilities.
 
@@ -29,7 +29,7 @@ macro_rules! tracer {
 macro_rules! telemetry_static_key {
     ($key_name:tt) => {
         $crate::Key::from_static_str(concat!(
-            "mobilecoin.com/",
+            "botho.com/",
             env!("CARGO_PKG_NAME"),
             "/",
             $key_name

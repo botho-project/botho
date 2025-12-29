@@ -1,24 +1,24 @@
 [package]
-name = "mc-discover"
+name = "bt-discover"
 version = "0.1.0"
-authors = ["Cadence Foundation"]
+authors = ["Botho Foundation"]
 edition = "2021"
 license = "Apache-2.0"
 rust-version = { workspace = true }
-description = "CLI tool for discovering Cadence network topology and generating configurations"
+description = "CLI tool for discovering Botho network topology and generating configurations"
 
 [[bin]]
-name = "mc-discover"
+name = "bt-discover"
 path = "src/main.rs"
 
 [dependencies]
 # Workspace dependencies
-mc-common = { workspace = true, features = ["std"] }
-mc-consensus-scp-types = { workspace = true }
-mc-crypto-keys = { workspace = true }
-mc-gossip = { workspace = true }
-mc-util-from-random = { workspace = true }
-mc-util-uri = { workspace = true }
+bt-common = { workspace = true, features = ["std"] }
+bt-consensus-scp-types = { workspace = true }
+bt-crypto-keys = { workspace = true }
+bt-gossip = { workspace = true }
+bt-util-from-random = { workspace = true }
+bt-util-uri = { workspace = true }
 
 # External dependencies
 anyhow = { workspace = true }

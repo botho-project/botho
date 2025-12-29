@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 // Consensus service data types used by both client-facing and peer-facing APIs.
 
@@ -8,7 +8,7 @@ import "blockchain.proto";
 
 package consensus_common;
 
-option go_package = "mobilecoin/api";
+option go_package = "botho/api";
 
 // Blockchain API shared between clients and peers.
 service BlockchainAPI {
@@ -99,6 +99,17 @@ enum ProposeTxResult {
     InputRuleAmount = 53;
     LedgerTxOutIndexOutOfBounds = 54;
     FeeMapDigestMismatch = 55;
+    // Cluster tag errors
+    MissingClusterTags = 56;
+    ClusterTagsNotAllowed = 57;
+    InvalidClusterTags = 58;
+    ClusterTagInflation = 59;
+    InsufficientProgressiveFee = 60;
+    // Phase 2 committed tag errors
+    InvalidTagInheritanceProof = 61;
+    InvalidTagConservationProof = 62;
+    MissingExtendedTagSignature = 63;
+    PseudoTagOutputCountMismatch = 64;
 }
 
 // Response from TxPropose RPC call.

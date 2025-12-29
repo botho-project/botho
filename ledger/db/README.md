@@ -2,7 +2,7 @@
 
 Persistent storage for the blockchain.
 
-This crate defines a `Ledger` interface and an LMDB implementation of a blockchain data store. The MobileCoin blockchain redacts the inputs and signatures for each transaction.
+This crate defines a `Ledger` interface and an LMDB implementation of a blockchain data store. The Botho blockchain redacts the inputs and signatures for each transaction.
 
 For improved query efficiency, some data is duplicated outside of the block in additional LMDB indices.
 

@@ -1,12 +1,12 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 #![deny(missing_docs)]
 
 //! Ledger migration: Perform updates of LedgerDB to accommodate for
 //! backward-incompatible changes.
 
 use clap::Parser;
-use mc_common::logger::{create_app_logger, o};
-use mc_ledger_migration::migrate;
+use bt_common::logger::{create_app_logger, o};
+use bt_ledger_migration::migrate;
 use std::{path::PathBuf, thread::sleep, time::Duration};
 
 /// Command line configuration
@@ -18,9 +18,9 @@ pub struct Config {
 }
 
 fn main() {
-    let _sentry_guard = mc_common::sentry::init();
+    let _sentry_guard = bt_common::sentry::init();
     let (logger, _global_logger_guard) = create_app_logger(o!());
-    mc_common::setup_panic_handler();
+    bt_common::setup_panic_handler();
 
     let config = Config::parse();
 

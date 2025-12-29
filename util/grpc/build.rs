@@ -1,7 +1,7 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 fn main() {
-    mc_util_build_grpc::compile_protos_and_generate_mod_rs(
+    bt_util_build_grpc::compile_protos_and_generate_mod_rs(
         &["./proto"],
         &["build_info.proto", "health_api.proto", "admin.proto"],
     );

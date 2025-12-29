@@ -1,10 +1,10 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 use crate::TxBuilderError;
 use alloc::vec::Vec;
-use mc_crypto_keys::{RistrettoPrivate, RistrettoPublic};
-use mc_crypto_ring_signature_signer::{InputSecret, OneTimeKeyDeriveData, SignableInputRing};
-use mc_transaction_core::{
+use bt_crypto_keys::{RistrettoPrivate, RistrettoPublic};
+use bt_crypto_ring_signature_signer::{InputSecret, OneTimeKeyDeriveData, SignableInputRing};
+use bt_transaction_core::{
     onetime_keys::create_shared_secret,
     tx::{TxIn, TxOut},
     TxOutConversionError,

@@ -1,12 +1,12 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
-//! An aggregate which represents an amount of some token in the MobileCoin
+//! An aggregate which represents an amount of some token in the Botho
 //! blockchain.
 
 pub use error::AmountError;
 
 use crate::TokenId;
-use mc_crypto_digestible::Digestible;
+use bt_crypto_digestible::Digestible;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;

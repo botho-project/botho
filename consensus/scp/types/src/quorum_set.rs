@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! The quorum set is the essential unit of trust in SCP.
 //!
@@ -10,8 +10,8 @@ use core::{
     hash::{Hash, Hasher},
     ops::{Deref, DerefMut},
 };
-use mc_common::{HashSet, NodeID, ResponderId};
-use mc_crypto_digestible::Digestible;
+use bt_common::{HashSet, NodeID, ResponderId};
+use bt_crypto_digestible::Digestible;
 use prost::{Message, Oneof};
 use serde::{Deserialize, Serialize};
 
@@ -236,7 +236,7 @@ mod quorum_set_tests {
     use super::*;
     use crate::test_utils::test_node_id;
     use core::hash::BuildHasher;
-    use mc_common::HasherBuilder;
+    use bt_common::HasherBuilder;
 
     fn assert_quorum_sets_equal(quorum_set_1: &QuorumSet, quorum_set_2: &QuorumSet) {
         assert_eq!(quorum_set_1, quorum_set_2);

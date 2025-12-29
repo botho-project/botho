@@ -1,22 +1,22 @@
 [package]
-name = "mc-crypto-multisig"
+name = "bt-crypto-multisig"
 version = "7.1.0"
-authors = ["MobileCoin"]
-description = "MobileCoin multi-signature implementations"
+authors = ["Botho"]
+description = "Botho multi-signature implementations"
 edition = "2021"
 license = "Apache-2.0"
 rust-version = { workspace = true }
 
 [dependencies]
-mc-crypto-digestible = { workspace = true }
-mc-crypto-keys = { workspace = true }
+bt-crypto-digestible = { workspace = true }
+bt-crypto-keys = { workspace = true }
 
 prost = { workspace = true, features = ["prost-derive"] }
 serde = { workspace = true, features = ["alloc", "derive"] }
 
 [dev-dependencies]
-mc-util-from-random = { workspace = true }
-mc-util-serial = { workspace = true }
+bt-util-from-random = { workspace = true }
+bt-util-serial = { workspace = true }
 
 rand_core = { workspace = true }
 rand_hc = { workspace = true }

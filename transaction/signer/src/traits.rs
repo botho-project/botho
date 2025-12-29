@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Traits for implementation by transaction-signer implementations,
 //! these allow signing operations to be abstract over a transaction signer
@@ -6,13 +6,13 @@
 
 use core::{convert::Infallible, fmt::Debug};
 
-use mc_core::{
+use bt_core::{
     account::{Account, PublicSubaddress, ViewAccount},
     keys::TxOutPublic,
     subaddress::Subaddress,
 };
 
-use mc_crypto_ring_signature::{onetime_keys::recover_onetime_private_key, KeyImage};
+use bt_crypto_ring_signature::{onetime_keys::recover_onetime_private_key, KeyImage};
 
 /// View only account provider
 pub trait ViewAccountProvider {

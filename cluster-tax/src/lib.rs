@@ -1,6 +1,6 @@
-//! Cadence fee system with privacy-tiered pricing.
+//! Botho fee system with privacy-tiered pricing.
 //!
-//! This module implements Cadence's dual-incentive fee model:
+//! This module implements Botho's dual-incentive fee model:
 //!
 //! 1. **Privacy as a priced resource**: Private transactions cost more because
 //!    they impose verification burden and reduce network transparency.

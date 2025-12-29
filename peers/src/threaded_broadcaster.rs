@@ -1,6 +1,8 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
+// Copyright (c) 2024 Botho Foundation
 
-//! Mult-Threaded message broadcaster
+//! Multi-Threaded message broadcaster
+//! Post-SGX simplified version - no encrypted transaction handling.
 
 use crate::{
     consensus_msg::ConsensusMsg,
@@ -9,15 +11,14 @@ use crate::{
     traits::{ConsensusConnection, RetryableConsensusConnection},
     Broadcast,
 };
-use mc_common::{
+use bt_common::{
     logger::{log, o, Logger},
-    Hash, LruCache, NodeID, ResponderId,
+    Hash, LruCache, ResponderId,
 };
-use mc_connection::{Connection, ConnectionManager, SyncConnection};
-use mc_consensus_api::consensus_peer::ConsensusMsgResult;
-use mc_crypto_digestible::{Digestible, MerlinTranscript};
-use mc_transaction_core::tx::TxHash;
-use mc_util_uri::ConnectionUri;
+use bt_connection::{Connection, ConnectionManager, SyncConnection};
+use bt_consensus_api::consensus_peer::ConsensusMsgResult;
+use bt_crypto_digestible::{Digestible, MerlinTranscript};
+use bt_util_uri::ConnectionUri;
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -30,16 +31,15 @@ use std::{
 /// Number of messages to keep track of.
 const HISTORY_SIZE: usize = 10000;
 
-/// `ThreadedBroadcaster` is used to broadcast consensus messages and
-/// transactions to a list of peers.
+/// `ThreadedBroadcaster` is used to broadcast consensus messages to a list of peers.
 ///
-/// It keeps track of the last `HISTORY_SIZE`
-/// messages handed to it, preventing duplicate messages from being broadcasted.
-/// It can be used by `consensus_service` to deliver outgoing messages to the
-/// local node's peers, as well as to relay messages received from peers to
-/// other peers. A thread is created per each peer to handle message delivery.
-/// This means a non-responsive peer does not slow message delivery to other
-/// peers, and does not block the caller of `broadcast_consensus_msg`.
+/// It keeps track of the last `HISTORY_SIZE` messages handed to it, preventing
+/// duplicate messages from being broadcasted. It can be used by `consensus_service`
+/// to deliver outgoing messages to the local node's peers, as well as to relay
+/// messages received from peers to other peers. A thread is created per each peer
+/// to handle message delivery. This means a non-responsive peer does not slow
+/// message delivery to other peers, and does not block the caller of
+/// `broadcast_consensus_msg`.
 pub struct ThreadedBroadcaster<RP: RetryPolicy = FibonacciRetryPolicy> {
     /// List of peers to communicate with.
     peer_threads: Vec<PeerThread>,
@@ -48,9 +48,6 @@ pub struct ThreadedBroadcaster<RP: RetryPolicy = FibonacciRetryPolicy> {
     /// (We store hashes to reduce memory footprint - we don't actually care
     /// about the message's contents)
     seen_msg_hashes: LruCache<Hash, ()>,
-
-    /// Hashes of transactions we've already broadcasted.
-    seen_tx_hashes: LruCache<TxHash, ()>,
 
     // Retry policy.
     retry_policy: RP,
@@ -88,7 +85,6 @@ impl<RP: RetryPolicy> ThreadedBroadcaster<RP> {
         Self {
             peer_threads,
             seen_msg_hashes: LruCache::new(HISTORY_SIZE),
-            seen_tx_hashes: LruCache::new(HISTORY_SIZE),
             retry_policy: retry_policy.clone(),
             logger,
         }
@@ -97,68 +93,6 @@ impl<RP: RetryPolicy> ThreadedBroadcaster<RP> {
     pub fn stop(&mut self) {
         for peer_thread in self.peer_threads.iter_mut() {
             peer_thread.stop();
-        }
-    }
-
-    /// Broadcasts a propose transaction message.
-    ///
-    /// # Arguments
-    ///
-    /// * `origin_node` - The node the transaction was originally submitted to
-    ///   by a client.
-    ///
-    /// * `from_node` - The node the transaction was received from. This allows
-    ///   us to not echo the message back to the node that handed it to us. Note
-    ///   that due to message relaying, this can be a different node than the
-    ///   one that created the message (`origin_node`).
-    ///
-    /// * `msgs` - A map of peer id -> message to broadcast. We need a map since
-    ///   messages are encrypted for each peer using a peer-specific session
-    ///   key.
-    pub fn broadcast_propose_tx_msg(
-        &mut self,
-        tx_hash: &TxHash,
-        encrypted_tx: WellFormedEncryptedTx,
-        origin_node: &NodeID,
-        relayed_by: &ResponderId,
-    ) {
-        let deadline = Instant::now() + self.retry_policy.get_max_message_age();
-
-        // If we've already seen this transaction, we don't need to do anything.
-        // We use `get()` instead of `contains()` to update LRU state.
-        if self.seen_tx_hashes.get(tx_hash).is_some() {
-            return;
-        }
-
-        // Store message so it doesn't get processed again.
-        self.seen_tx_hashes.put(*tx_hash, ());
-
-        // Create arcs to prevent cloning of larger data structures.
-        let arc_encrypted_tx = Arc::new(encrypted_tx);
-        let arc_origin_node = Arc::new(origin_node.clone());
-
-        // Broadcast to all peers except the originating one.
-        for peer_thread in self.peer_threads.iter() {
-            // Do not broadcast to the originating node or the sender node.
-            if *peer_thread.responder_id() == origin_node.responder_id
-                || peer_thread.responder_id() == relayed_by
-            {
-                continue;
-            }
-
-            // Send message to peer.
-            if let Err(err) = peer_thread.handle_propose_tx_msg(
-                arc_encrypted_tx.clone(),
-                arc_origin_node.clone(),
-                deadline,
-            ) {
-                log::error!(
-                    self.logger,
-                    "failed broadcasting propose tx msg to {}: {:?}",
-                    peer_thread.responder_id(),
-                    err
-                );
-            }
         }
     }
 
@@ -238,13 +172,6 @@ enum ThreadMsg {
         deadline: Instant,
     },
 
-    /// Propose a transaction.
-    HandleProposeTx {
-        encrypted_tx: Arc<WellFormedEncryptedTx>,
-        origin_node: Arc<NodeID>,
-        deadline: Instant,
-    },
-
     /// Request the worker thread to stop.
     StopTrigger,
 
@@ -301,21 +228,6 @@ impl PeerThread {
             .map_err(|_err| Error::ChannelSend)
     }
 
-    pub fn handle_propose_tx_msg(
-        &self,
-        encrypted_tx: Arc<WellFormedEncryptedTx>,
-        origin_node: Arc<NodeID>,
-        deadline: Instant,
-    ) -> Result<(), Error> {
-        self.sender
-            .send(ThreadMsg::HandleProposeTx {
-                encrypted_tx,
-                origin_node,
-                deadline,
-            })
-            .map_err(|_err| Error::ChannelSend)
-    }
-
     /// Tests helper: wait until a barrier message is processed (indicating
     /// all previous messages were also processed).
     pub fn barrier(&self) {
@@ -357,18 +269,6 @@ impl PeerThread {
                     ThreadMsg::HandleConsensusMsg { msg, deadline } => {
                         Self::do_send_consensus_msg(&conn, &retry_policy, msg, deadline, &logger)
                     }
-                    ThreadMsg::HandleProposeTx {
-                        encrypted_tx,
-                        origin_node,
-                        deadline,
-                    } => Self::do_handle_propose_tx_msg(
-                        &conn,
-                        &retry_policy,
-                        &encrypted_tx,
-                        &origin_node,
-                        deadline,
-                        &logger,
-                    ),
                     ThreadMsg::StopTrigger => {
                         break;
                     }
@@ -422,30 +322,6 @@ impl PeerThread {
                     err
                 );
             }
-        }
-    }
-
-    fn do_handle_propose_tx_msg<CC: ConsensusConnection + 'static, RP: RetryPolicy>(
-        conn: &SyncConnection<CC>,
-        retry_policy: &RP,
-        encrypted_tx: &WellFormedEncryptedTx,
-        origin_node: &NodeID,
-        deadline: Instant,
-        logger: &Logger,
-    ) {
-        if Instant::now() > deadline {
-            return;
-        }
-
-        let retry_iterator = retry_policy.get_delay_iterator().with_deadline(deadline);
-
-        if let Err(err) = conn.send_propose_tx(encrypted_tx, origin_node, retry_iterator) {
-            log::error!(
-                logger,
-                "failed broadcasting propose tx to {}: {:?}",
-                conn,
-                err
-            );
         }
     }
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2023 The MobileCoin Foundation
+// Copyright (c) 2018-2023 The Botho Foundation
 
 //! This module provides support for a "streaming" verifier which consumes an
 //! extended-message digest, a TxSummary and a TxSummaryUnblindingData,
@@ -13,14 +13,14 @@
 use crate::report::TransactionReport;
 
 use super::{Error, TransactionEntity};
-use mc_core::account::{PublicSubaddress, RingCtAddress, ShortAddressHash};
-use mc_crypto_digestible::{DigestTranscript, Digestible, MerlinTranscript};
-use mc_crypto_keys::{RistrettoPrivate, RistrettoPublic};
-use mc_crypto_ring_signature::{
+use bt_core::account::{PublicSubaddress, RingCtAddress, ShortAddressHash};
+use bt_crypto_digestible::{DigestTranscript, Digestible, MerlinTranscript};
+use bt_crypto_keys::{RistrettoPrivate, RistrettoPublic};
+use bt_crypto_ring_signature::{
     onetime_keys::{create_shared_secret, create_tx_out_public_key, create_tx_out_target_key},
     CompressedCommitment,
 };
-use mc_transaction_types::{
+use bt_transaction_types::{
     domain_separators::EXTENDED_MESSAGE_AND_TX_SUMMARY_DOMAIN_TAG, Amount, AmountError,
     BlockVersion, MaskedAmount, TxInSummary, TxOutSummary, UnmaskedAmount,
 };
@@ -182,7 +182,7 @@ impl TxSummaryStreamingVerifierCtx {
             let value = unmasked_amount.value;
             let token_id = unmasked_amount.token_id;
             let blinding_factor = unmasked_amount.blinding;
-            let generator = mc_crypto_ring_signature::generators(token_id);
+            let generator = bt_crypto_ring_signature::generators(token_id);
             let expected_commitment =
                 CompressedCommitment::new(value, blinding_factor.into(), &generator);
             if &expected_commitment
@@ -234,7 +234,7 @@ impl TxSummaryStreamingVerifierCtx {
         let value = tx_in_summary_unblinding_data.value;
         let token_id = tx_in_summary_unblinding_data.token_id;
         let blinding_factor = tx_in_summary_unblinding_data.blinding;
-        let generator = mc_crypto_ring_signature::generators(token_id);
+        let generator = bt_crypto_ring_signature::generators(token_id);
         let expected_commitment =
             CompressedCommitment::new(value, blinding_factor.into(), &generator);
         if expected_commitment != tx_in_summary.pseudo_output_commitment {
@@ -304,7 +304,7 @@ impl TxSummaryStreamingVerifierCtx {
     // Err - if some structural issue with the TxOutSummary prevented view key
     // matching attempt
     fn view_key_match(&self, tx_out_summary: &TxOutSummary) -> Result<Option<Amount>, Error> {
-        let tx_out_shared_secret = mc_crypto_ring_signature::get_tx_out_shared_secret(
+        let tx_out_shared_secret = bt_crypto_ring_signature::get_tx_out_shared_secret(
             &self.view_private_key,
             &RistrettoPublic::try_from(&tx_out_summary.public_key)?,
         );
@@ -360,10 +360,10 @@ mod tests {
     use rand::rngs::OsRng;
 
     use crate::{report::TotalKind, TxSummaryUnblindingReport};
-    use mc_account_keys::AccountKey;
-    use mc_transaction_core::{tx::TxOut, BlockVersion};
-    use mc_transaction_types::TokenId;
-    use mc_util_from_random::FromRandom;
+    use bt_account_keys::AccountKey;
+    use bt_transaction_core::{tx::TxOut, BlockVersion};
+    use bt_transaction_types::TokenId;
+    use bt_util_from_random::FromRandom;
 
     // Test the size of the streaming verifier on the stack. This is using heapless.
     #[test]

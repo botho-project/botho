@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Range proofs are used to prove that a set of committed values are all
 //! in a well-defined range, without revealing the values.
@@ -11,7 +11,7 @@ extern crate alloc;
 use alloc::vec::Vec;
 use bulletproofs_og::{BulletproofGens, PedersenGens as BPPedersenGens, RangeProof};
 use curve25519_dalek::{ristretto::CompressedRistretto, scalar::Scalar};
-use mc_crypto_ring_signature::PedersenGens;
+use bt_crypto_ring_signature::PedersenGens;
 use merlin::Transcript;
 use rand_core::{CryptoRng, RngCore};
 
@@ -118,7 +118,7 @@ fn resize_slice_to_pow2<T: Clone>(slice: &[T]) -> Result<Vec<T>, Error> {
     }
 }
 
-/// Convert from the mc_crypto_ring_signature::PedersenGens to BPPedersenGens.
+/// Convert from the bt_crypto_ring_signature::PedersenGens to BPPedersenGens.
 /// These types are identical, but we need a version of it in the lower-level
 /// crate to break dependency on the bulletproofs crate.
 fn convert_gens(src: &PedersenGens) -> BPPedersenGens {
@@ -134,7 +134,7 @@ pub mod tests {
     use super::*;
     use crate::ring_signature::generators;
     use curve25519_dalek::ristretto::RistrettoPoint;
-    use mc_util_test_helper::get_seeded_rng;
+    use bt_util_test_helper::get_seeded_rng;
 
     fn generate_and_check(values: Vec<u64>, blindings: Vec<Scalar>) {
         let mut rng = get_seeded_rng();

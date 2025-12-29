@@ -1,12 +1,12 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Test helpers.
 
-use mc_blockchain_test_utils::{make_block_id, make_block_metadata_contents};
-use mc_blockchain_types::BlockMetadata;
-use mc_crypto_keys::{Ed25519Pair, Ed25519Public};
-use mc_util_from_random::FromRandom;
-use mc_util_test_helper::{RngType as FixedRng, SeedableRng};
+use bt_blockchain_test_utils::{make_block_id, make_block_metadata_contents};
+use bt_blockchain_types::BlockMetadata;
+use bt_crypto_keys::{Ed25519Pair, Ed25519Public};
+use bt_util_from_random::FromRandom;
+use bt_util_test_helper::{RngType as FixedRng, SeedableRng};
 
 /// Make Ed25519 Public key from seed
 pub fn make_key(seed: u64) -> Ed25519Public {

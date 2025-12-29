@@ -1,18 +1,18 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
-use mc_account_keys::{AccountKey, ShortAddressHash};
-use mc_crypto_keys::{CompressedRistrettoPublic, RistrettoPrivate};
-use mc_test_vectors_definitions::memos::{
+use bt_account_keys::{AccountKey, ShortAddressHash};
+use bt_crypto_keys::{CompressedRistrettoPublic, RistrettoPrivate};
+use bt_test_vectors_definitions::memos::{
     CorrectEncryptedDestinationMemoData, CorrectEncryptedSenderMemoData,
     CorrectEncryptedSenderWithPaymentRequestIdMemoData, IncorrectEncryptedSenderMemoData,
     IncorrectEncryptedSenderWithPaymentRequestIdMemoData,
 };
-use mc_transaction_extra::{
+use bt_transaction_extra::{
     AuthenticatedSenderMemo, AuthenticatedSenderWithPaymentRequestIdMemo, DestinationMemo,
     SenderMemoCredential,
 };
-use mc_util_from_random::FromRandom;
-use mc_util_test_vector::write_jsonl;
+use bt_util_from_random::FromRandom;
+use bt_util_test_vector::write_jsonl;
 
 use rand::{rngs::StdRng, SeedableRng};
 
@@ -57,7 +57,7 @@ fn write_correct_encrypted_sender_memos() {
             let sender_memo_bytes: [u8; 64] = encrypted_sender_memo.clone().into();
 
             let encrypted_sender_memo_data = CorrectEncryptedSenderMemoData {
-                sender_public_address_hex_proto_bytes: hex::encode(mc_util_serial::encode(
+                sender_public_address_hex_proto_bytes: hex::encode(bt_util_serial::encode(
                     &sender_public_address.clone(),
                 )),
                 recipient_view_public_key_hex_raw_bytes: hex::encode(
@@ -109,7 +109,7 @@ fn write_incorrect_encrypted_sender_memos() {
                 // sender_public_address. This results in a memo that won't be
                 // correct.
                 incorrect_sender_public_address_hex_proto_bytes: hex::encode(
-                    mc_util_serial::encode(&recipient_public_address.clone()),
+                    bt_util_serial::encode(&recipient_public_address.clone()),
                 ),
                 // Report the sender's view_public_key as the
                 // recipient_view_public_key.  This results in a memo that
@@ -154,7 +154,7 @@ fn write_correct_encrypted_destination_memos() {
             let destination_memo_bytes: [u8; 64] = encrypted_destination_memo.clone().into();
 
             let encrypted_destination_memo_data = CorrectEncryptedDestinationMemoData {
-                sender_public_address_hex_proto_bytes: hex::encode(mc_util_serial::encode(
+                sender_public_address_hex_proto_bytes: hex::encode(bt_util_serial::encode(
                     &sender_public_address.clone(),
                 )),
                 recipient_short_address_hash_hex_raw_bytes: hex::encode(<[u8; 16]>::from(
@@ -201,7 +201,7 @@ fn write_incorrect_encrypted_destination_memos() {
             let sender_short_address_hash = ShortAddressHash::from(&sender_public_address);
 
             let encrypted_destination_memo_data = CorrectEncryptedDestinationMemoData {
-                sender_public_address_hex_proto_bytes: hex::encode(mc_util_serial::encode(
+                sender_public_address_hex_proto_bytes: hex::encode(bt_util_serial::encode(
                     &recipient_public_address.clone(),
                 )),
                 recipient_short_address_hash_hex_raw_bytes: hex::encode(<[u8; 16]>::from(
@@ -255,7 +255,7 @@ fn write_correct_encrypted_sender_with_payment_request_id_memos() {
 
             let encrypted_sender_memo_with_payment_request_id_data =
                 CorrectEncryptedSenderWithPaymentRequestIdMemoData {
-                    sender_public_address_hex_proto_bytes: hex::encode(mc_util_serial::encode(
+                    sender_public_address_hex_proto_bytes: hex::encode(bt_util_serial::encode(
                         &sender_public_address.clone(),
                     )),
                     recipient_view_public_key_hex_raw_bytes: hex::encode(
@@ -312,7 +312,7 @@ fn write_incorrect_encrypted_sender_with_payment_request_id_memos() {
             let encrypted_sender_memo_with_payment_request_id_data =
                 IncorrectEncryptedSenderWithPaymentRequestIdMemoData {
                     incorrect_sender_public_address_hex_proto_bytes: hex::encode(
-                        mc_util_serial::encode(&recipient_public_address.clone()),
+                        bt_util_serial::encode(&recipient_public_address.clone()),
                     ),
                     incorrect_recipient_view_public_key_hex_raw_bytes: hex::encode(
                         sender_public_address.view_public_key().to_bytes(),

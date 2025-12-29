@@ -1,11 +1,11 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 #![deny(missing_docs)]
 
 //! Configuration parameters for the watcher test utility.
 
 use clap::Parser;
-use mc_util_parse::parse_duration_in_seconds;
-use mc_util_uri::{ConsensusClientUri, WatcherUri};
+use bt_util_parse::parse_duration_in_seconds;
+use bt_util_uri::{ConsensusClientUri, WatcherUri};
 use serde::{Deserialize, Serialize};
 use std::{fs, path::PathBuf, str::FromStr, time::Duration};
 use url::Url;
@@ -64,7 +64,7 @@ impl WatcherConfig {
 pub struct SourceConfig {
     /// URL to use for pulling blocks.
     ///
-    /// For example: https://s3-us-west-1.amazonaws.com/mobilecoin.chain/node1.test.mobilecoin.com/
+    /// For example: https://s3-us-west-1.amazonaws.com/botho.chain/node1.test.botho.com/
     tx_source_url: String,
 
     /// (Optional) Consensus node client URL to use for fetching the remote

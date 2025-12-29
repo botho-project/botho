@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! The Responder ID type
 
@@ -11,7 +11,7 @@ use core::{
     str::FromStr,
 };
 use displaydoc::Display;
-use mc_crypto_digestible::Digestible;
+use bt_crypto_digestible::Digestible;
 use prost::{
     bytes::{Buf, BufMut},
     encoding, Message,

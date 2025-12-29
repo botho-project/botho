@@ -1,8 +1,8 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Object for 0x0000 Unused memo type
 //!
-//! This was proposed for standardization in mobilecoinfoundation/mcips/pull/3
+//! This was proposed for standardization in bothofoundation/mcips/pull/3
 
 use super::RegisteredMemoType;
 use crate::impl_memo_type_conversions;

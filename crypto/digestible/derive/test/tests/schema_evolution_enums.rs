@@ -1,9 +1,9 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 /// Tests of the schema evolution properties of derive(Digestible)
 /// implementations when transparent enums are involved
-use mc_crypto_digestible::Digestible;
-use mc_crypto_digestible_test_utils::*;
+use bt_crypto_digestible::Digestible;
+use bt_crypto_digestible_test_utils::*;
 
 // An example structure
 #[derive(Digestible)]

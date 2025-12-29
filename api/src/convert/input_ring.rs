@@ -1,10 +1,10 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
-//! Convert to/from mc_transaction_core::ring_ct::InputRing.
+//! Convert to/from bt_transaction_core::ring_ct::InputRing.
 
 use crate::{external, external::input_ring::Ring, ConversionError};
-use mc_crypto_ring_signature_signer::SignableInputRing;
-use mc_transaction_core::ring_ct::{InputRing, PresignedInputRing};
+use bt_crypto_ring_signature_signer::SignableInputRing;
+use bt_transaction_core::ring_ct::{InputRing, PresignedInputRing};
 
 impl From<&InputRing> for external::InputRing {
     fn from(source: &InputRing) -> Self {
@@ -114,16 +114,16 @@ impl TryFrom<&external::SignableInputRing> for SignableInputRing {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mc_account_keys::AccountKey;
+    use bt_account_keys::AccountKey;
     use mc_fog_report_validation_test_utils::MockFogResolver;
-    use mc_transaction_builder::{
+    use bt_transaction_builder::{
         test_utils::get_input_credentials, EmptyMemoBuilder, TransactionBuilder,
     };
-    use mc_transaction_core::{tokens::Mob, Amount, BlockVersion, Token};
+    use bt_transaction_core::{tokens::Mob, Amount, BlockVersion, Token};
     use rand::{rngs::StdRng, SeedableRng};
 
     // Test converting between external::InputRing and
-    // mc_transaction_core::ring_signature::InputRing
+    // bt_transaction_core::ring_signature::InputRing
     #[test]
     fn test_input_ring_conversion() {
         // Generate an UnsignedTx to test with.
@@ -163,8 +163,8 @@ mod tests {
 
             let input_ring = unsigned_tx.rings[0].clone();
 
-            // Converting mc_transaction_core::ring_signature::InputRing ->
-            // external::InputRing -> mc_transaction_core::ring_signature::
+            // Converting bt_transaction_core::ring_signature::InputRing ->
+            // external::InputRing -> bt_transaction_core::ring_signature::
             // InputRing should be the identity function.
             {
                 let external_input_ring: external::InputRing = (&input_ring).into();

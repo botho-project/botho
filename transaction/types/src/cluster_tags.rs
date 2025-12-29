@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2024 The MobileCoin Foundation
+// Copyright (c) 2018-2024 The Botho Foundation
 
 //! Cluster tag vector for progressive transaction fees.
 //!
@@ -14,7 +14,7 @@ extern crate alloc;
 #[cfg(feature = "alloc")]
 use alloc::vec::Vec;
 
-use mc_crypto_digestible::Digestible;
+use bt_crypto_digestible::Digestible;
 #[cfg(feature = "prost")]
 use prost::Message;
 #[cfg(feature = "serde")]

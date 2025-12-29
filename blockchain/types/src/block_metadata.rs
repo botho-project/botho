@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 use crate::{
     crypto::metadata::{MetadataSigner, MetadataVerifier},
@@ -6,13 +6,13 @@ use crate::{
 };
 use ::prost::Message;
 use displaydoc::Display;
-use mc_common::ResponderId;
-use mc_crypto_digestible::Digestible;
-use mc_crypto_keys::{Ed25519Pair, Ed25519Public, Ed25519Signature, SignatureError};
+use bt_common::ResponderId;
+use bt_crypto_digestible::Digestible;
+use bt_crypto_keys::{Ed25519Pair, Ed25519Public, Ed25519Signature, SignatureError};
 use serde::{Deserialize, Serialize};
 
 /// The attestation evidence variants for a block.
-/// Note: DcapEvidence removed in Cadence (SGX not used)
+/// Note: DcapEvidence removed in Botho (SGX not used)
 #[derive(Clone, ::prost::Oneof, Deserialize, Display, Eq, PartialEq, Serialize, Digestible)]
 #[digestible(transparent)]
 pub enum AttestationEvidence {
@@ -154,8 +154,8 @@ mod test {
     use super::*;
     use crate::QuorumSetMember;
     use alloc::vec;
-    use mc_blockchain_test_utils::test_node_id;
-    use mc_crypto_digestible::MerlinTranscript;
+    use bt_blockchain_test_utils::test_node_id;
+    use bt_crypto_digestible::MerlinTranscript;
 
     /// Metadata contents used in block version 3
     #[derive(Clone, Deserialize, Digestible, Display, Eq, Message, PartialEq, Serialize)]
@@ -180,8 +180,8 @@ mod test {
 
     #[test]
     fn metadata_contents_version_3_works_with_version_4() {
-        mc_util_test_helper::run_with_several_seeds(|mut rng| {
-            let report = mc_blockchain_test_utils::make_verification_report(&mut rng);
+        bt_util_test_helper::run_with_several_seeds(|mut rng| {
+            let report = bt_blockchain_test_utils::make_verification_report(&mut rng);
             let quorum_set = QuorumSet::new(
                 2,
                 vec![
@@ -198,9 +198,9 @@ mod test {
                 responder_id: ResponderId("hello".into()),
             };
 
-            let bytes = mc_util_serial::encode(&block_v3);
+            let bytes = bt_util_serial::encode(&block_v3);
 
-            let block_v4: BlockMetadataContents = mc_util_serial::decode(&bytes).unwrap();
+            let block_v4: BlockMetadataContents = bt_util_serial::decode(&bytes).unwrap();
 
             assert_eq!(block_v4.block_id(), &BlockID([1; 32]));
             assert_eq!(block_v4.quorum_set(), &quorum_set);

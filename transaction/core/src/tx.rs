@@ -1,16 +1,16 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
-//! Definition of a MobileCoin transaction and a MobileCoin TxOut
+//! Definition of a Botho transaction and a Botho TxOut
 
 use alloc::vec::Vec;
 
 use core::fmt;
-use mc_account_keys::PublicAddress;
-use mc_common::Hash;
-use mc_crypto_digestible::{Digestible, MerlinTranscript};
-use mc_crypto_keys::{CompressedRistrettoPublic, RistrettoPrivate, RistrettoPublic};
-use mc_crypto_ring_signature::{KeyImage, ReducedTxOut};
-use mc_util_repr_bytes::{
+use bt_account_keys::PublicAddress;
+use bt_common::Hash;
+use bt_crypto_digestible::{Digestible, MerlinTranscript};
+use bt_crypto_keys::{CompressedRistrettoPublic, RistrettoPrivate, RistrettoPublic};
+use bt_crypto_ring_signature::{KeyImage, ReducedTxOut};
+use bt_util_repr_bytes::{
     derive_prost_message_from_repr_bytes, typenum::U32, GenericArray, ReprBytes,
 };
 use prost::Message;
@@ -124,7 +124,7 @@ impl fmt::Display for Tx {
 impl Tx {
     /// Compute a 32-byte hash from all of the contents of a Tx
     pub fn tx_hash(&self) -> TxHash {
-        TxHash::from(self.digest32::<MerlinTranscript>(b"mobilecoin-tx"))
+        TxHash::from(self.digest32::<MerlinTranscript>(b"botho-tx"))
     }
 
     /// Key images "spent" by this transaction.
@@ -197,7 +197,7 @@ impl TxPrefix {
 
     /// Digestible-crate hash of `self` using Merlin
     pub fn hash(&self) -> TxHash {
-        TxHash::from(self.digest32::<MerlinTranscript>(b"mobilecoin-tx-prefix"))
+        TxHash::from(self.digest32::<MerlinTranscript>(b"botho-tx-prefix"))
     }
 
     /// Get all output commitments.
@@ -458,7 +458,7 @@ impl TxOut {
 
     /// A merlin-based hash of this TxOut.
     pub fn hash(&self) -> Hash {
-        self.digest32::<MerlinTranscript>(b"mobilecoin-txout")
+        self.digest32::<MerlinTranscript>(b"botho-txout")
     }
 
     /// Try to establish ownership of this TxOut, using the view private key.
@@ -697,12 +697,12 @@ mod tests {
         Amount, BlockVersion, Token,
     };
     use alloc::vec;
-    use mc_account_keys::{
+    use bt_account_keys::{
         AccountKey, PublicAddress, CHANGE_SUBADDRESS_INDEX, DEFAULT_SUBADDRESS_INDEX,
     };
-    use mc_crypto_keys::{RistrettoPrivate, RistrettoPublic};
-    use mc_util_from_random::FromRandom;
-    use mc_util_test_helper::get_seeded_rng;
+    use bt_crypto_keys::{RistrettoPrivate, RistrettoPublic};
+    use bt_util_from_random::FromRandom;
+    use bt_util_test_helper::get_seeded_rng;
     use prost::Message;
 
     #[test]

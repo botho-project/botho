@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! An RCT_TYPE_BULLETPROOFS_2 signature.
 //!
@@ -14,14 +14,14 @@ use curve25519_dalek::{
     ristretto::{CompressedRistretto, RistrettoPoint},
     traits::Identity,
 };
-use mc_common::HashSet;
-use mc_crypto_digestible::Digestible;
-use mc_crypto_ring_signature::{
+use bt_common::HashSet;
+use bt_crypto_digestible::Digestible;
+use bt_crypto_ring_signature::{
     Commitment, CompressedCommitment, KeyImage, ReducedTxOut, RingMLSAG, Scalar,
 };
-use mc_crypto_ring_signature_signer::{RingSigner, SignableInputRing};
-use mc_util_serial::prost::Message;
-use mc_util_zip_exact::zip_exact;
+use bt_crypto_ring_signature_signer::{RingSigner, SignableInputRing};
+use bt_util_serial::prost::Message;
+use bt_util_zip_exact::zip_exact;
 use rand_core::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
@@ -724,7 +724,7 @@ impl SignatureRctBulletproofs {
             ));
         }
 
-        // The caller is responsible for calling mc_cluster_tax::create_tag_signature
+        // The caller is responsible for calling bt_cluster_tax::create_tag_signature
         // and setting signature.extended_tag_signature = Some(tag_sig_bytes)
         //
         // This separation exists because mc-transaction-core cannot depend on
@@ -1062,7 +1062,7 @@ impl SignatureRctBulletproofs {
         }
 
         // Full cryptographic verification is performed by calling
-        // mc_cluster_tax::verify_tag_signature() with the deserialized data.
+        // bt_cluster_tax::verify_tag_signature() with the deserialized data.
         // This requires the caller to have mc-cluster-tax available.
         //
         // The signature format is defined by mc-cluster-tax and contains:
@@ -1162,10 +1162,10 @@ mod rct_bulletproofs_tests {
         TokenId,
     };
     use assert_matches::assert_matches;
-    use mc_crypto_keys::{CompressedRistrettoPublic, RistrettoPrivate, RistrettoPublic};
-    use mc_crypto_ring_signature_signer::{InputSecret, NoKeysRingSigner, OneTimeKeyDeriveData};
-    use mc_util_from_random::FromRandom;
-    use mc_util_test_helper::{RngType, SeedableRng};
+    use bt_crypto_keys::{CompressedRistrettoPublic, RistrettoPrivate, RistrettoPublic};
+    use bt_crypto_ring_signature_signer::{InputSecret, NoKeysRingSigner, OneTimeKeyDeriveData};
+    use bt_util_from_random::FromRandom;
+    use bt_util_test_helper::{RngType, SeedableRng};
     use proptest::prelude::*;
 
     extern crate std;
@@ -1680,14 +1680,14 @@ mod rct_bulletproofs_tests {
             let params = SignatureParams::random(block_version, num_inputs, num_mixins, &mut rng);
             let signature = params.sign(&mut rng).unwrap();
 
-            use mc_util_serial::prost::Message;
+            use bt_util_serial::prost::Message;
 
             // The encoded bytes should have the correct length.
-            let bytes = mc_util_serial::encode(&signature);
+            let bytes = bt_util_serial::encode(&signature);
             assert_eq!(bytes.len(), signature.encoded_len());
 
             // decode(encode(&signature)) should be the identity function.
-            let recovered_signature : SignatureRctBulletproofs = mc_util_serial::decode(&bytes).unwrap();
+            let recovered_signature : SignatureRctBulletproofs = bt_util_serial::decode(&bytes).unwrap();
             assert_eq!(signature, recovered_signature);
         }
 

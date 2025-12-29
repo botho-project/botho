@@ -1,7 +1,7 @@
-use mc_account_keys::{AccountKey, RootIdentity};
-use mc_api::printable::{printable_wrapper, PrintableWrapper};
-use mc_test_vectors_definitions::b58_encodings::*;
-use mc_util_test_vector::write_jsonl;
+use bt_account_keys::{AccountKey, RootIdentity};
+use bt_api::printable::{printable_wrapper, PrintableWrapper};
+use bt_test_vectors_definitions::b58_encodings::*;
+use bt_util_test_vector::write_jsonl;
 
 fn main() {
     write_jsonl("../vectors", || {

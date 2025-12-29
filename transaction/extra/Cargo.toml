@@ -1,7 +1,7 @@
 [package]
-name = "mc-transaction-extra"
+name = "bt-transaction-extra"
 version = "7.1.0"
-authors = ["MobileCoin"]
+authors = ["Botho"]
 edition = "2021"
 license = "Apache-2.0"
 readme = "README.md"
@@ -18,37 +18,37 @@ serde = { workspace = true, features = ["alloc", "derive"] }
 subtle = { workspace = true }
 zeroize = { workspace = true }
 
-# MobileCoin dependencies
-mc-account-keys = { workspace = true }
-mc-cluster-tax = { workspace = true, optional = true }
-mc-core = { workspace = true }
-mc-crypto-digestible = { workspace = true, features = ["dalek"] }
-mc-crypto-hashes = { workspace = true }
-mc-crypto-keys = { workspace = true }
-mc-crypto-memo-mac = { workspace = true }
-mc-crypto-ring-signature = { workspace = true }
-mc-crypto-ring-signature-signer = { workspace = true }
-mc-transaction-core = { workspace = true }
-mc-transaction-summary = { workspace = true }
-mc-transaction-types = { workspace = true }
-mc-util-from-random = { workspace = true }
-mc-util-repr-bytes = { workspace = true }
-mc-util-serial = { workspace = true }
-mc-util-u64-ratio = { workspace = true }
-mc-util-vec-map = { workspace = true }
-mc-util-zip-exact = { workspace = true }
+# Botho dependencies
+bt-account-keys = { workspace = true }
+bt-cluster-tax = { workspace = true, optional = true }
+bt-core = { workspace = true }
+bt-crypto-digestible = { workspace = true, features = ["dalek"] }
+bt-crypto-hashes = { workspace = true }
+bt-crypto-keys = { workspace = true }
+bt-crypto-memo-mac = { workspace = true }
+bt-crypto-ring-signature = { workspace = true }
+bt-crypto-ring-signature-signer = { workspace = true }
+bt-transaction-core = { workspace = true }
+bt-transaction-summary = { workspace = true }
+bt-transaction-types = { workspace = true }
+bt-util-from-random = { workspace = true }
+bt-util-repr-bytes = { workspace = true }
+bt-util-serial = { workspace = true }
+bt-util-u64-ratio = { workspace = true }
+bt-util-vec-map = { workspace = true }
+bt-util-zip-exact = { workspace = true }
 
 curve25519-dalek = { workspace = true }
 
 [features]
 default = []
-cluster-tax = ["dep:mc-cluster-tax"]
+cluster-tax = ["dep:bt-cluster-tax"]
 
 [dev-dependencies]
 assert_matches = { workspace = true }
 maplit = { workspace = true }
 yaml-rust = { workspace = true }
 
-mc-transaction-builder = { workspace = true, features = ["test-only"] }
-mc-util-from-random = { workspace = true }
-mc-util-test-helper = { workspace = true }
+bt-transaction-builder = { workspace = true, features = ["test-only"] }
+bt-util-from-random = { workspace = true }
+bt-util-test-helper = { workspace = true }

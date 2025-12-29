@@ -1,19 +1,19 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! An store object for managing storage of BlockData objects in the database,
 //! while taking care of de-duplicating contents when possible.
 
 use crate::error::WatcherDBError;
 use lmdb::{Cursor, Database, DatabaseFlags, Environment, RwTransaction, Transaction, WriteFlags};
-use mc_blockchain_types::{
+use bt_blockchain_types::{
     Block, BlockContents, BlockData, BlockIndex, BlockMetadata, BlockSignature,
 };
-use mc_common::{
+use bt_common::{
     logger::{log, Logger},
     HashMap,
 };
-use mc_crypto_digestible::{Digestible, MerlinTranscript};
-use mc_util_serial::{decode, encode};
+use bt_crypto_digestible::{Digestible, MerlinTranscript};
+use bt_util_serial::{decode, encode};
 use prost::Message;
 use std::{str, sync::Arc};
 use url::Url;
@@ -296,7 +296,7 @@ impl BlockDataStore {
 mod tests {
     use super::*;
     use crate::watcher_db::tests::{setup_blocks, setup_watcher_db};
-    use mc_common::logger::test_with_logger;
+    use bt_common::logger::test_with_logger;
 
     #[test_with_logger]
     fn block_data_store_happy_path(logger: Logger) {

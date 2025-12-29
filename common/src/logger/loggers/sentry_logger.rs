@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 use slog::{o, Drain, Key, Level, Logger, Never, OwnedKVList, Record, Serializer, KV};
 use std::{

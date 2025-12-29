@@ -1,22 +1,22 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Object for 0x0201 Gift Code Funding memo type
 //!
-//! This was proposed for standardization in mobilecoinfoundation/mcips/pull/32
+//! This was proposed for standardization in bothofoundation/mcips/pull/32
 
 use crate::{impl_memo_type_conversions, RegisteredMemoType};
 use core::str;
-use mc_crypto_hashes::{Blake2b512, Digest};
-use mc_crypto_keys::RistrettoPublic;
-use mc_transaction_core::MemoError;
+use bt_crypto_hashes::{Blake2b512, Digest};
+use bt_crypto_keys::RistrettoPublic;
+use bt_transaction_core::MemoError;
 
-/// MobileCoin account owners can create a special TxOut called a "gift code".
+/// Botho account owners can create a special TxOut called a "gift code".
 ///
 /// This TxOut is sent to a special subaddress at index u64::MAX - 2 reserved
 /// for gift codes. After this is done, the onetime private key, shared secret
 /// and universal index of the TxOut is sent to the intended recipient.
-/// This allows people who don't yet have a MobileCoin account to receive
-/// MobileCoin. When the sender makes the initial TxOut to the gift code
+/// This allows people who don't yet have a Botho account to receive
+/// Botho. When the sender makes the initial TxOut to the gift code
 /// subaddress, this memo will be written to the subaddress reserved for change
 /// TxOuts indicating that a gift code was funded. It includes the first 4
 /// bytes of the hash of the TxOut to indicate which TxOut the gift code is,
@@ -146,7 +146,7 @@ impl_memo_type_conversions! { GiftCodeFundingMemo }
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mc_util_from_random::FromRandom;
+    use bt_util_from_random::FromRandom;
     use rand::{rngs::StdRng, SeedableRng};
 
     #[test]

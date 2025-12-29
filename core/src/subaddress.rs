@@ -1,14 +1,14 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
-//! MobileCoin Subaddress Derivations
+//! Botho Subaddress Derivations
 
 #![allow(non_snake_case)]
 
 use curve25519_dalek::{ristretto::RistrettoPoint, scalar::Scalar};
 
-use mc_core_types::account::{PublicSubaddress, ViewAccount};
-use mc_crypto_hashes::{Blake2b512, Digest};
-use mc_crypto_keys::{RistrettoPrivate, RistrettoPublic};
+use bt_core_types::account::{PublicSubaddress, ViewAccount};
+use bt_crypto_hashes::{Blake2b512, Digest};
+use bt_crypto_keys::{RistrettoPrivate, RistrettoPublic};
 
 use crate::{
     account::{Account, SpendSubaddress},
@@ -120,9 +120,9 @@ impl Subaddress for ViewAccount {
 #[cfg(test)]
 mod tests {
 
-    use mc_test_vectors_definitions::account_keys::DefaultSubaddrKeysFromAcctPrivKeys;
-    use mc_util_test_vector::TestVector;
-    use mc_util_test_with_data::test_with_data;
+    use bt_test_vectors_definitions::account_keys::DefaultSubaddrKeysFromAcctPrivKeys;
+    use bt_util_test_vector::TestVector;
+    use bt_util_test_with_data::test_with_data;
 
     use super::*;
     use crate::consts::DEFAULT_SUBADDRESS_INDEX;

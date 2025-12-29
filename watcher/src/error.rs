@@ -1,12 +1,12 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Error data types
 
 use displaydoc::Display;
-use mc_connection::Error as ConnectionError;
-use mc_crypto_keys::KeyError;
-use mc_ledger_sync::ReqwestTransactionsFetcherError;
-use mc_util_lmdb::MetadataStoreError;
+use bt_connection::Error as ConnectionError;
+use bt_crypto_keys::KeyError;
+use bt_ledger_sync::ReqwestTransactionsFetcherError;
+use bt_util_lmdb::MetadataStoreError;
 use std::string::FromUtf8Error;
 
 /// Watcher Errors

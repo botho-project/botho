@@ -1,19 +1,19 @@
-// Copyright (c) 2018-2023 The MobileCoin Foundation
+// Copyright (c) 2018-2023 The Botho Foundation
 
 //! Helpers for block-related tests.
 #![deny(missing_docs)]
 
-pub use mc_consensus_scp_types::test_utils::test_node_id;
+pub use bt_consensus_scp_types::test_utils::test_node_id;
 
-use mc_blockchain_types::{
+use bt_blockchain_types::{
     Block, BlockContents, BlockData, BlockID, BlockMetadata, BlockMetadataContents, BlockSignature,
     BlockVersion, QuorumSet, VerificationReport, VerificationSignature,
 };
-use mc_common::ResponderId;
-use mc_crypto_keys::Ed25519Pair;
-use mc_transaction_core_test_utils::{get_outputs, Amount, KeyImage};
-use mc_util_from_random::FromRandom;
-use mc_util_test_helper::{random_bytes_vec, AccountKey, CryptoRng, PublicAddress, Rng, RngCore};
+use bt_common::ResponderId;
+use bt_crypto_keys::Ed25519Pair;
+use bt_transaction_core_test_utils::{get_outputs, Amount, KeyImage};
+use bt_util_from_random::FromRandom;
+use bt_util_test_helper::{random_bytes_vec, AccountKey, CryptoRng, PublicAddress, Rng, RngCore};
 use std::str::FromStr;
 
 /// Get blocks with custom contents to simulate conditions seen in production.
@@ -174,7 +174,7 @@ pub fn make_block_metadata_contents(
         block_id,
         make_quorum_set(rng),
         make_verification_report(rng).into(),
-        ResponderId::from_str("test.mobilecoin.com:443").unwrap(),
+        ResponderId::from_str("test.botho.com:443").unwrap(),
     )
 }
 
@@ -206,8 +206,8 @@ pub fn make_block_signature<RNG: RngCore + CryptoRng>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mc_blockchain_types::compute_block_id;
-    use mc_util_test_helper::get_seeded_rng;
+    use bt_blockchain_types::compute_block_id;
+    use bt_util_test_helper::get_seeded_rng;
 
     #[test]
     /// [get_blocks] should return blocks that match the configuration specified

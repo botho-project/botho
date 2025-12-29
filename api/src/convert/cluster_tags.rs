@@ -1,9 +1,9 @@
-// Copyright (c) 2024 Cadence Foundation
+// Copyright (c) 2024 Botho Foundation
 
 //! Convert to/from external::ClusterTagVector and related types.
 
 use crate::{external, ConversionError};
-use mc_transaction_core::{ClusterId, ClusterTagEntry, ClusterTagVector};
+use bt_transaction_core::{ClusterId, ClusterTagEntry, ClusterTagVector};
 
 /// Convert ClusterTagVector --> external::ClusterTagVector.
 impl From<&ClusterTagVector> for external::ClusterTagVector {

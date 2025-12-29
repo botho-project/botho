@@ -1,9 +1,9 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Convert to/from printable::TxOutGiftCode
 
 use crate::{printable, ConversionError};
-use mc_transaction_extra::TxOutGiftCode;
+use bt_transaction_extra::TxOutGiftCode;
 
 /// Convert TxOutGiftCode --> printable::TxOutGiftCode.
 impl From<&TxOutGiftCode> for printable::TxOutGiftCode {
@@ -43,9 +43,9 @@ impl TryFrom<&printable::TxOutGiftCode> for TxOutGiftCode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mc_crypto_keys::{RistrettoPrivate, RistrettoPublic};
-    use mc_util_from_random::FromRandom;
-    use mc_util_serial::{decode, encode};
+    use bt_crypto_keys::{RistrettoPrivate, RistrettoPublic};
+    use bt_util_from_random::FromRandom;
+    use bt_util_serial::{decode, encode};
     use prost::Message;
     use rand::rngs::StdRng;
     use rand_core::SeedableRng;

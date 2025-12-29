@@ -1,5 +1,5 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
-// Copyright (c) 2024 Cadence Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
+// Copyright (c) 2024 Botho Foundation
 
 // Attestation stub types - replaces the full attestation protocol
 // after SGX removal. Messages are no longer encrypted but maintain
@@ -9,7 +9,7 @@ syntax = "proto3";
 
 package attest;
 
-option go_package = "mobilecoin/api";
+option go_package = "botho/api";
 
 // A message sent to a peer or the service.
 // Previously this was encrypted; now it's just plaintext data.

@@ -1,6 +1,6 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
-//! MobileCoin ring signatures
+//! Botho ring signatures
 
 #![allow(non_snake_case)]
 
@@ -41,8 +41,8 @@ pub use self::{
     mlsag_verify::MlsagVerify,
 };
 
-use mc_crypto_hashes::{Blake2b512, Digest};
-use mc_crypto_keys::{CompressedRistrettoPublic, RistrettoPublic};
+use bt_crypto_hashes::{Blake2b512, Digest};
+use bt_crypto_keys::{CompressedRistrettoPublic, RistrettoPublic};
 
 /// The base point for blinding factors used with all amount commitments
 pub const B_BLINDING: RistrettoPoint = RISTRETTO_BASEPOINT_POINT;

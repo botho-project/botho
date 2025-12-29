@@ -1,6 +1,6 @@
-//! Fee calculation for Cadence's three transaction types.
+//! Fee calculation for Botho's three transaction types.
 //!
-//! Cadence uses a dual-incentive fee model:
+//! Botho uses a dual-incentive fee model:
 //! - **Privacy as priced resource**: Private transactions cost more because
 //!   they impose verification burden and reduce transparency.
 //! - **Progressive wealth taxation**: ALL value transfers (plain and hidden)

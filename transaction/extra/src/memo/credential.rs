@@ -1,7 +1,7 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
-use mc_account_keys::{AccountKey, PublicAddress, ShortAddressHash};
-use mc_crypto_keys::{RistrettoPrivate, RistrettoPublic};
+use bt_account_keys::{AccountKey, PublicAddress, ShortAddressHash};
+use bt_crypto_keys::{RistrettoPrivate, RistrettoPublic};
 
 /// A credential that a sender can use to make an Authenticated Sender Memo.
 ///

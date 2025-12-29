@@ -1,4 +1,4 @@
-use mc_util_test_vector::TestVector;
+use bt_util_test_vector::TestVector;
 use serde::{Deserialize, Serialize};
 
 /// Contains the "correct" data associated with an encrypted sender memo.

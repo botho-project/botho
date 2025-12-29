@@ -1,7 +1,7 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 use crate::{msg::Msg, slot::SlotMetrics, QuorumSet, SlotIndex, Value};
-use mc_common::NodeID;
+use bt_common::NodeID;
 use mockall::*;
 use std::collections::BTreeSet;
 

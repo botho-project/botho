@@ -1,10 +1,10 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Validated URIs with custom schemes.
 
 #![deny(missing_docs)]
 
-use mc_common::NodeID;
+use bt_common::NodeID;
 
 mod traits;
 pub use traits::{ConnectionUri, UriConversionError, UriScheme};
@@ -124,7 +124,7 @@ impl UriScheme for WatcherScheme {
 #[cfg(test)]
 mod consensus_client_uri_tests {
     use super::{ConnectionUri, ConsensusClientUri as ClientUri};
-    use mc_common::ResponderId;
+    use bt_common::ResponderId;
     use std::str::FromStr;
 
     #[test]
@@ -139,21 +139,21 @@ mod consensus_client_uri_tests {
         assert_eq!(uri.username(), "");
         assert_eq!(uri.password(), "");
 
-        let uri = ClientUri::from_str("mc://node1.test.mobilecoin.com/").unwrap();
-        assert_eq!(uri.addr(), "node1.test.mobilecoin.com:443");
+        let uri = ClientUri::from_str("mc://node1.test.botho.com/").unwrap();
+        assert_eq!(uri.addr(), "node1.test.botho.com:443");
         assert_eq!(
             uri.responder_id().unwrap(),
-            ResponderId::from_str("node1.test.mobilecoin.com:443").unwrap()
+            ResponderId::from_str("node1.test.botho.com:443").unwrap()
         );
         assert!(uri.use_tls());
         assert_eq!(uri.username(), "");
         assert_eq!(uri.password(), "");
 
-        let uri = ClientUri::from_str("mc://node1.test.mobilecoin.com:666/").unwrap();
-        assert_eq!(uri.addr(), "node1.test.mobilecoin.com:666");
+        let uri = ClientUri::from_str("mc://node1.test.botho.com:666/").unwrap();
+        assert_eq!(uri.addr(), "node1.test.botho.com:666");
         assert_eq!(
             uri.responder_id().unwrap(),
-            ResponderId::from_str("node1.test.mobilecoin.com:666").unwrap()
+            ResponderId::from_str("node1.test.botho.com:666").unwrap()
         );
         assert!(uri.use_tls());
         assert_eq!(uri.username(), "");
@@ -189,65 +189,65 @@ mod consensus_client_uri_tests {
         assert_eq!(uri.username(), "");
         assert_eq!(uri.password(), "");
 
-        let uri = ClientUri::from_str("insecure-mc://node1.test.mobilecoin.com/").unwrap();
-        assert_eq!(uri.addr(), "node1.test.mobilecoin.com:3223");
+        let uri = ClientUri::from_str("insecure-mc://node1.test.botho.com/").unwrap();
+        assert_eq!(uri.addr(), "node1.test.botho.com:3223");
         assert_eq!(
             uri.responder_id().unwrap(),
-            ResponderId::from_str("node1.test.mobilecoin.com:3223").unwrap()
+            ResponderId::from_str("node1.test.botho.com:3223").unwrap()
         );
         assert!(!uri.use_tls());
         assert_eq!(uri.username(), "");
         assert_eq!(uri.password(), "");
 
-        let uri = ClientUri::from_str("insecure-mc://node1.test.mobilecoin.com:666/").unwrap();
-        assert_eq!(uri.addr(), "node1.test.mobilecoin.com:666");
+        let uri = ClientUri::from_str("insecure-mc://node1.test.botho.com:666/").unwrap();
+        assert_eq!(uri.addr(), "node1.test.botho.com:666");
         assert_eq!(
             uri.responder_id().unwrap(),
-            ResponderId::from_str("node1.test.mobilecoin.com:666").unwrap()
+            ResponderId::from_str("node1.test.botho.com:666").unwrap()
         );
         assert!(!uri.use_tls());
         assert_eq!(uri.username(), "");
         assert_eq!(uri.password(), "");
 
         let uri =
-            ClientUri::from_str("insecure-mc://coiner@node1.test.mobilecoin.com:666/").unwrap();
-        assert_eq!(uri.addr(), "node1.test.mobilecoin.com:666");
+            ClientUri::from_str("insecure-mc://coiner@node1.test.botho.com:666/").unwrap();
+        assert_eq!(uri.addr(), "node1.test.botho.com:666");
         assert_eq!(
             uri.responder_id().unwrap(),
-            ResponderId::from_str("node1.test.mobilecoin.com:666").unwrap()
+            ResponderId::from_str("node1.test.botho.com:666").unwrap()
         );
         assert!(!uri.use_tls());
         assert_eq!(uri.username(), "coiner");
         assert_eq!(uri.password(), "");
 
         let uri =
-            ClientUri::from_str("insecure-mc://:passw0rd@node1.test.mobilecoin.com:666/").unwrap();
-        assert_eq!(uri.addr(), "node1.test.mobilecoin.com:666");
+            ClientUri::from_str("insecure-mc://:passw0rd@node1.test.botho.com:666/").unwrap();
+        assert_eq!(uri.addr(), "node1.test.botho.com:666");
         assert_eq!(
             uri.responder_id().unwrap(),
-            ResponderId::from_str("node1.test.mobilecoin.com:666").unwrap()
+            ResponderId::from_str("node1.test.botho.com:666").unwrap()
         );
         assert!(!uri.use_tls());
         assert_eq!(uri.username(), "");
         assert_eq!(uri.password(), "passw0rd");
 
         let uri =
-            ClientUri::from_str("insecure-mc://abc:def@node1.test.mobilecoin.com:666/").unwrap();
-        assert_eq!(uri.addr(), "node1.test.mobilecoin.com:666");
+            ClientUri::from_str("insecure-mc://abc:def@node1.test.botho.com:666/").unwrap();
+        assert_eq!(uri.addr(), "node1.test.botho.com:666");
         assert_eq!(
             uri.responder_id().unwrap(),
-            ResponderId::from_str("node1.test.mobilecoin.com:666").unwrap()
+            ResponderId::from_str("node1.test.botho.com:666").unwrap()
         );
         assert!(!uri.use_tls());
         assert_eq!(uri.username(), "abc");
         assert_eq!(uri.password(), "def");
 
-        let uri = ClientUri::from_str("insecure-mc://abc:def:1:2:3@node1.test.mobilecoin.com:666/")
+        let uri = ClientUri::from_str("insecure-mc://abc:def:1:2:3@node1.test.botho.com:666/")
             .unwrap();
-        assert_eq!(uri.addr(), "node1.test.mobilecoin.com:666");
+        assert_eq!(uri.addr(), "node1.test.botho.com:666");
         assert_eq!(
             uri.responder_id().unwrap(),
-            ResponderId::from_str("node1.test.mobilecoin.com:666").unwrap()
+            ResponderId::from_str("node1.test.botho.com:666").unwrap()
         );
         assert!(!uri.use_tls());
         assert_eq!(uri.username(), "abc");
@@ -302,9 +302,9 @@ mod consensus_client_uri_tests {
 mod consensus_peer_uri_tests {
     use super::{ConnectionUri, ConsensusPeerUri as PeerUri};
     use core::str::FromStr;
-    use mc_common::{NodeID, ResponderId};
-    use mc_crypto_keys::{Ed25519Pair, Ed25519Public};
-    use mc_util_from_random::FromRandom;
+    use bt_common::{NodeID, ResponderId};
+    use bt_crypto_keys::{Ed25519Pair, Ed25519Public};
+    use bt_util_from_random::FromRandom;
     use rand::SeedableRng;
     use rand_hc::Hc128Rng as FixedRng;
 
@@ -314,36 +314,36 @@ mod consensus_peer_uri_tests {
         assert_eq!(uri.addr(), "127.0.0.1:8443");
         assert!(uri.use_tls());
 
-        let uri = PeerUri::from_str("mcp://node1.test.mobilecoin.com/").unwrap();
-        assert_eq!(uri.addr(), "node1.test.mobilecoin.com:8443");
+        let uri = PeerUri::from_str("mcp://node1.test.botho.com/").unwrap();
+        assert_eq!(uri.addr(), "node1.test.botho.com:8443");
         assert!(uri.use_tls());
 
-        let uri = PeerUri::from_str("mcp://node1.test.mobilecoin.com:666/").unwrap();
-        assert_eq!(uri.addr(), "node1.test.mobilecoin.com:666");
+        let uri = PeerUri::from_str("mcp://node1.test.botho.com:666/").unwrap();
+        assert_eq!(uri.addr(), "node1.test.botho.com:666");
         assert!(uri.use_tls());
 
         let uri = PeerUri::from_str("insecure-mcp://127.0.0.1/").unwrap();
         assert_eq!(uri.addr(), "127.0.0.1:8080");
         assert!(!uri.use_tls());
 
-        let uri = PeerUri::from_str("insecure-mcp://node1.test.mobilecoin.com/").unwrap();
-        assert_eq!(uri.addr(), "node1.test.mobilecoin.com:8080");
+        let uri = PeerUri::from_str("insecure-mcp://node1.test.botho.com/").unwrap();
+        assert_eq!(uri.addr(), "node1.test.botho.com:8080");
         assert!(!uri.use_tls());
 
-        let uri = PeerUri::from_str("insecure-mcp://node1.test.mobilecoin.com:666/").unwrap();
-        assert_eq!(uri.addr(), "node1.test.mobilecoin.com:666");
+        let uri = PeerUri::from_str("insecure-mcp://node1.test.botho.com:666/").unwrap();
+        assert_eq!(uri.addr(), "node1.test.botho.com:666");
 
         let mut seeded_rng: FixedRng = SeedableRng::from_seed([0u8; 32]);
         let signer_key = Ed25519Pair::from_random(&mut seeded_rng);
         let hex_pubkey = hex::encode(signer_key.public_key());
         let uri = PeerUri::from_str(&format!(
-            "mcp://node1.test.mobilecoin.com/?consensus-msg-key={hex_pubkey}"
+            "mcp://node1.test.botho.com/?consensus-msg-key={hex_pubkey}"
         ))
         .unwrap();
         assert_eq!(
             NodeID::from(&uri),
             NodeID {
-                responder_id: ResponderId::from_str("node1.test.mobilecoin.com:8443").unwrap(),
+                responder_id: ResponderId::from_str("node1.test.botho.com:8443").unwrap(),
                 public_key: signer_key.public_key(),
             }
         );
@@ -351,12 +351,12 @@ mod consensus_peer_uri_tests {
 
         // Base64 encoded with '+' -> '-', '/' -> '_'
         let uri = PeerUri::from_str(
-            "mcp://node1.test.mobilecoin.com/?consensus-msg-key=MCowBQYDK2VwAyEA7ge_uIUtt3Us9T_xnERgSy9kb1NxdbDhxLsIPN-FA30=")
+            "mcp://node1.test.botho.com/?consensus-msg-key=MCowBQYDK2VwAyEA7ge_uIUtt3Us9T_xnERgSy9kb1NxdbDhxLsIPN-FA30=")
             .unwrap();
         assert_eq!(
             NodeID::from(&uri),
             NodeID {
-                responder_id: ResponderId::from_str("node1.test.mobilecoin.com:8443").unwrap(),
+                responder_id: ResponderId::from_str("node1.test.botho.com:8443").unwrap(),
                 public_key: Ed25519Public::try_from(
                     [
                         238, 7, 191, 184, 133, 45, 183, 117, 44, 245, 63, 241, 156, 68, 96, 75, 47,
@@ -385,7 +385,7 @@ mod consensus_peer_uri_tests {
 mod fog_uri_tests {
     use super::{ConnectionUri, FogUri};
     use core::str::FromStr;
-    use mc_common::ResponderId;
+    use bt_common::ResponderId;
 
     #[test]
     fn test_valid_client_uris() {
@@ -397,19 +397,19 @@ mod fog_uri_tests {
         );
         assert!(uri.use_tls());
 
-        let uri = FogUri::from_str("fog://node1.test.mobilecoin.com/").unwrap();
-        assert_eq!(uri.addr(), "node1.test.mobilecoin.com:443");
+        let uri = FogUri::from_str("fog://node1.test.botho.com/").unwrap();
+        assert_eq!(uri.addr(), "node1.test.botho.com:443");
         assert_eq!(
             uri.responder_id().unwrap(),
-            ResponderId::from_str("node1.test.mobilecoin.com:443").unwrap()
+            ResponderId::from_str("node1.test.botho.com:443").unwrap()
         );
         assert!(uri.use_tls());
 
-        let uri = FogUri::from_str("fog://node1.test.mobilecoin.com:666/").unwrap();
-        assert_eq!(uri.addr(), "node1.test.mobilecoin.com:666");
+        let uri = FogUri::from_str("fog://node1.test.botho.com:666/").unwrap();
+        assert_eq!(uri.addr(), "node1.test.botho.com:666");
         assert_eq!(
             uri.responder_id().unwrap(),
-            ResponderId::from_str("node1.test.mobilecoin.com:666").unwrap()
+            ResponderId::from_str("node1.test.botho.com:666").unwrap()
         );
         assert!(uri.use_tls());
 
@@ -421,19 +421,19 @@ mod fog_uri_tests {
         );
         assert!(!uri.use_tls());
 
-        let uri = FogUri::from_str("insecure-fog://node1.test.mobilecoin.com/").unwrap();
-        assert_eq!(uri.addr(), "node1.test.mobilecoin.com:3225");
+        let uri = FogUri::from_str("insecure-fog://node1.test.botho.com/").unwrap();
+        assert_eq!(uri.addr(), "node1.test.botho.com:3225");
         assert_eq!(
             uri.responder_id().unwrap(),
-            ResponderId::from_str("node1.test.mobilecoin.com:3225").unwrap()
+            ResponderId::from_str("node1.test.botho.com:3225").unwrap()
         );
         assert!(!uri.use_tls());
 
-        let uri = FogUri::from_str("insecure-fog://node1.test.mobilecoin.com:666/").unwrap();
-        assert_eq!(uri.addr(), "node1.test.mobilecoin.com:666");
+        let uri = FogUri::from_str("insecure-fog://node1.test.botho.com:666/").unwrap();
+        assert_eq!(uri.addr(), "node1.test.botho.com:666");
         assert_eq!(
             uri.responder_id().unwrap(),
-            ResponderId::from_str("node1.test.mobilecoin.com:666").unwrap()
+            ResponderId::from_str("node1.test.botho.com:666").unwrap()
         );
         assert!(!uri.use_tls());
     }

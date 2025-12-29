@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Extension traits that make it easier to start GRPC servers and connect to
 //! them using URIs.
@@ -8,8 +8,8 @@ use grpcio::{
     CertificateRequestType, Channel, ChannelBuilder, ChannelCredentialsBuilder, Environment,
     Result, Server, ServerBuilder, ServerCredentials,
 };
-use mc_common::logger::{log, Logger};
-use mc_util_uri::ConnectionUri;
+use bt_common::logger::{log, Logger};
+use bt_util_uri::ConnectionUri;
 use std::{sync::Arc, time::Duration};
 
 /// A trait to ease grpcio channel construction from URIs.

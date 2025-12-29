@@ -1,6 +1,6 @@
-// Copyright (c) 2018-2023 The MobileCoin Foundation
+// Copyright (c) 2018-2023 The Botho Foundation
 
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![doc = include_str!("../README.md")]
@@ -8,13 +8,13 @@
 
 extern crate alloc;
 
-#[cfg(feature = "mc-account-keys")]
+#[cfg(feature = "bt-account-keys")]
 mod data;
 mod error;
 mod report;
 mod verifier;
 
-#[cfg(feature = "mc-account-keys")]
+#[cfg(feature = "bt-account-keys")]
 pub use data::{verify_tx_summary, TxOutSummaryUnblindingData, TxSummaryUnblindingData};
 
 pub use error::Error;

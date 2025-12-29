@@ -1,6 +1,6 @@
-use mc_blockchain_test_utils::get_blocks;
-use mc_blockchain_types::{Block, BlockVersion};
-use mc_util_test_helper::run_with_several_seeds;
+use bt_blockchain_test_utils::get_blocks;
+use bt_blockchain_types::{Block, BlockVersion};
+use bt_util_test_helper::run_with_several_seeds;
 
 #[test]
 fn test_cumulative_txo_counts() {

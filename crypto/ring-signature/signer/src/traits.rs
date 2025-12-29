@@ -1,10 +1,10 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 use alloc::{string::String, vec::Vec};
 use displaydoc::Display;
-use mc_crypto_keys::{KeyError, RistrettoPrivate};
-use mc_crypto_ring_signature::{Error as RingSignatureError, ReducedTxOut, RingMLSAG, Scalar};
-use mc_transaction_types::Amount;
+use bt_crypto_keys::{KeyError, RistrettoPrivate};
+use bt_crypto_ring_signature::{Error as RingSignatureError, ReducedTxOut, RingMLSAG, Scalar};
+use bt_transaction_types::Amount;
 use rand_core::CryptoRngCore;
 use zeroize::Zeroize;
 

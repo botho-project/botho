@@ -1,8 +1,8 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 use core::{fmt, hash::Hash, ops::Deref, str::FromStr};
 use displaydoc::Display;
-use mc_crypto_digestible::Digestible;
+use bt_crypto_digestible::Digestible;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -86,68 +86,68 @@ impl BlockVersion {
     }
 
     /// The encrypted memos feature is introduced in v1.
-    /// [MCIP #3](https://github.com/mobilecoinfoundation/mcips/pull/3)
+    /// [MCIP #3](https://github.com/bothofoundation/mcips/pull/3)
     pub fn e_memo_feature_is_supported(&self) -> bool {
         self >= &Self::ONE
     }
 
     /// The confidential token ids feature is introduced in v2.
-    /// [MCIP #25](https://github.com/mobilecoinfoundation/mcips/pull/25)
+    /// [MCIP #25](https://github.com/bothofoundation/mcips/pull/25)
     pub fn masked_token_id_feature_is_supported(&self) -> bool {
         self >= &Self::TWO
     }
 
     /// Transactions must be sorted from v3 onward.
-    /// [MCIP #34](https://github.com/mobilecoinfoundation/mcips/pull/34)
+    /// [MCIP #34](https://github.com/bothofoundation/mcips/pull/34)
     pub fn validate_transaction_outputs_are_sorted(&self) -> bool {
         self >= &Self::THREE
     }
 
     /// Mint transactions are introduced in v2.
-    /// [MCIP #37](https://github.com/mobilecoinfoundation/mcips/pull/37)
+    /// [MCIP #37](https://github.com/bothofoundation/mcips/pull/37)
     pub fn mint_transactions_are_supported(&self) -> bool {
         self >= &Self::TWO
     }
 
     /// Minting_to_fog_addresses is supported in v3
-    /// [MCIP #53](https://github.com/mobilecoinfoundation/mcips/pull/53)
+    /// [MCIP #53](https://github.com/bothofoundation/mcips/pull/53)
     pub fn minting_to_fog_addresses_is_supported(&self) -> bool {
         self >= &Self::THREE
     }
 
     /// The extended message digest is used when signing MLSAGs
     /// in v2 and higher. This is described in
-    /// [MCIP #25](https://github.com/mobilecoinfoundation/mcips/pull/25).
+    /// [MCIP #25](https://github.com/bothofoundation/mcips/pull/25).
     pub fn mlsags_sign_extended_message_digest(&self) -> bool {
         self >= &Self::TWO
     }
 
     /// Mixed transactions are introduced in v3
-    /// [MCIP #31](https://github.com/mobilecoinfoundation/mcips/pull/31)
+    /// [MCIP #31](https://github.com/bothofoundation/mcips/pull/31)
     pub fn mixed_transactions_are_supported(&self) -> bool {
         self >= &Self::THREE
     }
 
     /// Signed input rules are introduced in v3.
-    /// [MCIP #31](https://github.com/mobilecoinfoundation/mcips/pull/31)
+    /// [MCIP #31](https://github.com/bothofoundation/mcips/pull/31)
     pub fn signed_input_rules_are_supported(&self) -> bool {
         self >= &Self::THREE
     }
 
     /// Masked amount V2 derivation introduced with block version 3.
-    /// [MCIP #42](https://github.com/mobilecoinfoundation/mcips/pull/42)
+    /// [MCIP #42](https://github.com/bothofoundation/mcips/pull/42)
     pub fn masked_amount_v2_is_supported(&self) -> bool {
         self >= &Self::THREE
     }
 
     /// `BlockData.metadata` is required starting from v3.
-    /// [MCIP #43](https://github.com/mobilecoinfoundation/mcips/pull/43)
+    /// [MCIP #43](https://github.com/bothofoundation/mcips/pull/43)
     pub fn require_block_metadata(&self) -> bool {
         self >= &Self::THREE
     }
 
     /// MLSAGs sign extended-message-and-tx-summary digest starting from v3.
-    /// [MCIP #52](https://github.com/mobilecoinfoundation/mcips/pull/52)
+    /// [MCIP #52](https://github.com/bothofoundation/mcips/pull/52)
     pub fn mlsags_sign_extended_message_and_tx_summary_digest(&self) -> bool {
         self >= &Self::THREE
     }

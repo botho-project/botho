@@ -1,20 +1,20 @@
 [package]
-name = "mc-ledger-migration"
+name = "bt-ledger-migration"
 version = "7.1.0"
-authors = ["MobileCoin"]
+authors = ["Botho"]
 edition = "2021"
 license = "GPL-3.0"
 rust-version = { workspace = true }
 
 [[bin]]
-name = "mc-ledger-migration"
+name = "bt-ledger-migration"
 path = "src/main.rs"
 
 [dependencies]
-mc-common = { workspace = true, features = ["loggers"] }
-mc-ledger-db = { workspace = true, features = ["migration_support"] }
-mc-util-lmdb = { workspace = true }
-mc-util-serial = { workspace = true }
+bt-common = { workspace = true, features = ["loggers"] }
+bt-ledger-db = { workspace = true, features = ["migration_support"] }
+bt-util-lmdb = { workspace = true }
+bt-util-serial = { workspace = true }
 
 clap = { workspace = true, features = ["derive", "env"] }
 lmdb-rkv = { workspace = true }

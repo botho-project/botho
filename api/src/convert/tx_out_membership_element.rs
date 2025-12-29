@@ -1,9 +1,9 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Convert to/from external::TxOutMembershipElement
 
 use crate::{external, ConversionError};
-use mc_transaction_core::{
+use bt_transaction_core::{
     membership_proofs::Range,
     tx::{TxOutMembershipElement, TxOutMembershipHash},
 };

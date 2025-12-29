@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Thread-based simulation for consensus networks.
 
@@ -6,15 +6,16 @@
 // code. https://github.com/rust-lang/rust/issues/46379
 #![allow(dead_code)]
 
-use mc_common::{
+use bt_common::{
     logger::{log, Logger},
     NodeID,
 };
-use mc_consensus_scp::{
+use bt_consensus_scp::{
     msg::Msg,
     slot::{CombineFn, ValidityFn},
     test_utils, Node, QuorumSet, ScpNode, SlotIndex,
 };
+use dashmap::DashMap;
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
     sync::{Arc, Mutex},
@@ -127,7 +128,7 @@ impl NetworkConfig {
 pub struct SCPNetwork {
     handle_map: HashMap<NodeID, JoinHandle<()>>,
     names_map: HashMap<NodeID, String>,
-    nodes_map: Arc<Mutex<HashMap<NodeID, SCPNode>>>,
+    nodes_map: Arc<DashMap<NodeID, SCPNode>>,
     shared_data_map: HashMap<NodeID, Arc<Mutex<SCPNodeSharedData>>>,
     logger: Logger,
 }
@@ -138,7 +139,7 @@ impl SCPNetwork {
         let mut scp_network = SCPNetwork {
             handle_map: HashMap::default(),
             names_map: HashMap::default(),
-            nodes_map: Arc::new(Mutex::new(HashMap::default())),
+            nodes_map: Arc::new(DashMap::new()),
             shared_data_map: HashMap::default(),
             logger: logger.clone(),
         };
@@ -169,8 +170,6 @@ impl SCPNetwork {
                 .insert(node_config.id.clone(), node.shared_data.clone());
             scp_network
                 .nodes_map
-                .lock()
-                .expect("lock failed on nodes_map inserting node")
                 .insert(node_config.id.clone(), node);
         }
 
@@ -178,12 +177,10 @@ impl SCPNetwork {
     }
 
     fn stop_all(&mut self) {
-        let mut nodes_map = self
-            .nodes_map
-            .lock()
-            .expect("lock failed on nodes_map in stop_all");
         let mut node_ids: Vec<NodeID> = Vec::new();
-        for (node_id, node) in nodes_map.iter_mut() {
+        for entry in self.nodes_map.iter() {
+            let node_id = entry.key();
+            let node = entry.value();
             log::trace!(
                 self.logger,
                 "sending stop to {}",
@@ -194,7 +191,6 @@ impl SCPNetwork {
             node.send_stop();
             node_ids.push(node_id.clone());
         }
-        drop(nodes_map);
 
         for node_id in node_ids {
             self.handle_map
@@ -207,8 +203,6 @@ impl SCPNetwork {
 
     fn push_value(&self, node_id: &NodeID, value: &str) {
         self.nodes_map
-            .lock()
-            .expect("lock failed on nodes_map pushing value")
             .get(node_id)
             .expect("could not find node_id in nodes_map")
             .send_value(value);
@@ -235,21 +229,17 @@ impl SCPNetwork {
 
     fn broadcast_msg(
         logger: Logger,
-        nodes_map: &Arc<Mutex<HashMap<NodeID, SCPNode>>>,
+        nodes_map: &Arc<DashMap<NodeID, SCPNode>>,
         peers: &HashSet<NodeID>,
         msg: Msg<String>,
     ) {
-        let mut nodes_map = nodes_map
-            .lock()
-            .expect("lock failed on nodes_map in broadcast");
-
         log::trace!(logger, "(broadcast) {}", msg);
 
         let amsg = Arc::new(msg);
 
         for peer_id in peers {
             nodes_map
-                .get_mut(peer_id)
+                .get(peer_id)
                 .expect("failed to get peer from nodes_map")
                 .send_msg(amsg.clone());
         }
@@ -324,17 +314,22 @@ impl SCPNode {
                     // All values that have not yet been externalized.
                     let mut pending_values: Vec<String> = Vec::default();
 
+                    // Track if pending_values changed to avoid rebuilding BTreeSet unnecessarily
+                    let mut pending_values_changed = false;
+                    let mut cached_values_to_propose: Option<BTreeSet<String>> = None;
+
                     'main_loop: loop {
                         // Compare to byzantine_ledger::tick()
                         // there pending values are proposed before incoming msg is handled
                         let mut incoming_msg_option: Option<Arc<Msg<String>>> = None;
 
-                        // Collect one incoming message using a non-blocking channel read
-                        match receiver.try_recv() {
+                        // Use blocking recv with timeout instead of busy-wait spinning
+                        match receiver.recv_timeout(Duration::from_micros(100)) {
                             Ok(scp_msg) => match scp_msg {
                                 // Collect values submitted from the client
                                 SCPNodeTaskMessage::Value(value) => {
-                                    pending_values.push(value.clone());
+                                    pending_values.push(value);
+                                    pending_values_changed = true;
                                 }
 
                                 // Process an incoming SCP message
@@ -347,19 +342,29 @@ impl SCPNode {
                                     break 'main_loop;
                                 }
                             },
-                            Err(_) => {
-                                // Yield to other threads when we don't get a new message
-                                std::thread::yield_now();
+                            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+                                // No message available, continue processing
                             }
-                        };
+                            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
+                                break 'main_loop;
+                            }
+                        }
 
                         // Propose pending values submitted to our node
                         if !pending_values.is_empty() {
-                            let values_to_propose: BTreeSet<String> = pending_values
-                                .iter()
-                                .take(max_slot_proposed_values)
-                                .cloned()
-                                .collect();
+                            // Only rebuild BTreeSet when pending_values changed
+                            let values_to_propose = if pending_values_changed || cached_values_to_propose.is_none() {
+                                let new_set: BTreeSet<String> = pending_values
+                                    .iter()
+                                    .take(max_slot_proposed_values)
+                                    .cloned()
+                                    .collect();
+                                cached_values_to_propose = Some(new_set.clone());
+                                pending_values_changed = false;
+                                new_set
+                            } else {
+                                cached_values_to_propose.clone().unwrap()
+                            };
 
                             let outgoing_msg: Option<Msg<String>> = thread_local_node
                                 .propose_values(values_to_propose)
@@ -401,6 +406,8 @@ impl SCPNode {
 
                             // Continue proposing only values that were not externalized.
                             pending_values.retain(|v| !externalized_values.contains(v));
+                            // Invalidate cache since pending_values changed
+                            cached_values_to_propose = None;
 
                             let mut locked_shared_data = thread_shared_data
                                 .lock()
@@ -509,10 +516,10 @@ pub fn build_and_test(network_config: &NetworkConfig, test_options: &TestOptions
 
     let start = Instant::now();
 
-    let mut rng = mc_util_test_helper::get_seeded_rng();
+    let mut rng = bt_util_test_helper::get_seeded_rng();
     let mut values = Vec::<String>::with_capacity(test_options.values_to_submit);
     for _i in 0..test_options.values_to_submit {
-        let value = mc_util_test_helper::random_str(CHARACTERS_PER_VALUE, &mut rng);
+        let value = bt_util_test_helper::random_str(CHARACTERS_PER_VALUE, &mut rng);
         values.push(value);
     }
 

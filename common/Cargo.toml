@@ -1,17 +1,17 @@
 [package]
-name = "mc-common"
+name = "bt-common"
 version = "7.1.0"
-authors = ["MobileCoin"]
+authors = ["Botho"]
 edition = "2021"
 license = "Apache-2.0"
 rust-version = { workspace = true }
 
 [features]
-std = ["displaydoc/std", "mc-util-serial/std"]
+std = ["displaydoc/std", "bt-util-serial/std"]
 log = [
     "backtrace",
     "chrono/clock",
-    "mc-util-logger-macros",
+    "bt-util-logger-macros",
     "slog-scope",
 ]
 loggers = [
@@ -21,7 +21,7 @@ loggers = [
     # Dependencies
     "hostname",
     "lazy_static",
-    "mc-util-build-info",
+    "bt-util-build-info",
     "sentry",
     "slog-async",
     "slog-atomic",
@@ -32,15 +32,15 @@ loggers = [
 ]
 
 [dependencies]
-mc-crypto-digestible = { workspace = true }
-mc-crypto-keys = { workspace = true, features = ["serde", "alloc", "prost"] }
+bt-crypto-digestible = { workspace = true }
+bt-crypto-keys = { workspace = true, features = ["serde", "alloc", "prost"] }
 mc-rand = { workspace = true }
 # loggers-only dependencies
-mc-util-build-info = { workspace = true, optional = true }
+bt-util-build-info = { workspace = true, optional = true }
 # log- and loggers-only dependencies
-mc-util-logger-macros = { workspace = true, optional = true }
-# Note: mc-util-serial is an unused dependency, but anywhere we forward serde/std, we need to get rmp-serde/std also, or the build breaks.
-mc-util-serial = { workspace = true }
+bt-util-logger-macros = { workspace = true, optional = true }
+# Note: bt-util-serial is an unused dependency, but anywhere we forward serde/std, we need to get rmp-serde/std also, or the build breaks.
+bt-util-serial = { workspace = true }
 
 backtrace = { workspace = true, optional = true }
 cfg-if = { workspace = true }

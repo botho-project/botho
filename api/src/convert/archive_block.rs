@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Convert between BlockData and ArchiveBlock.
 
@@ -6,7 +6,7 @@ use crate::{
     blockchain::{archive_block, ArchiveBlock, ArchiveBlockV1, ArchiveBlocks},
     ConversionError,
 };
-use mc_blockchain_types::{BlockContents, BlockData, BlockMetadata, BlockSignature};
+use bt_blockchain_types::{BlockContents, BlockData, BlockMetadata, BlockSignature};
 
 /// Convert BlockData --> ArchiveBlock.
 impl From<&BlockData> for ArchiveBlock {
@@ -107,10 +107,10 @@ impl TryFrom<&ArchiveBlocks> for Vec<BlockData> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mc_blockchain_test_utils::get_blocks;
-    use mc_blockchain_types::{Block, BlockVersion};
-    use mc_util_test_helper::get_seeded_rng;
-    use mc_util_zip_exact::zip_exact;
+    use bt_blockchain_test_utils::get_blocks;
+    use bt_blockchain_types::{Block, BlockVersion};
+    use bt_util_test_helper::get_seeded_rng;
+    use bt_util_zip_exact::zip_exact;
 
     fn generate_test_blocks_data(num_blocks: usize) -> Vec<BlockData> {
         get_blocks(

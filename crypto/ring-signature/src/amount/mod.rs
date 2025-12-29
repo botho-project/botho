@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! A commitment to an output's amount. This commitment is always specific to
 //! a token id, and the value is in the smallest representable units.

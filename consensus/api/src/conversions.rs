@@ -1,20 +1,20 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Conversions between "API types" and "domain/persistence types".
 //!
 //! gRPC and Protobuf provide a reduced selection of types, and so there are
 //! some differences between values stored in the ledger and values transmitted
 //! over the API. This module provides conversions between "equivalent" types,
-//! such as `mc_consensus_api::consensus_common::ProposeTxResult` and
-//! `mc_transaction_core::validation::TransactionValidationError`.
+//! such as `bt_consensus_api::consensus_common::ProposeTxResult` and
+//! `bt_transaction_core::validation::TransactionValidationError`.
 
 use crate::{
     consensus_client::{MintValidationResult, MintValidationResultCode},
     consensus_common::ProposeTxResult,
     consensus_config,
 };
-use mc_api::ConversionError;
-use mc_transaction_core::{
+use bt_api::ConversionError;
+use bt_transaction_core::{
     mint::MintValidationError, validation::TransactionValidationError as Error, BlockVersion,
     InputRuleError, RevealedTxOutError, TokenId,
 };
@@ -63,6 +63,15 @@ impl From<Error> for ProposeTxResult {
             Error::InputRulesNotAllowed => Self::InputRulesNotAllowed,
             Error::InputRule(ir) => ir.into(),
             Error::UnknownMaskedAmountVersion => Self::UnknownMaskedAmountVersion,
+            Error::MissingClusterTags => Self::MissingClusterTags,
+            Error::ClusterTagsNotAllowed => Self::ClusterTagsNotAllowed,
+            Error::InvalidClusterTags => Self::InvalidClusterTags,
+            Error::ClusterTagInflation(_, _, _) => Self::ClusterTagInflation,
+            Error::InsufficientProgressiveFee(_, _) => Self::InsufficientProgressiveFee,
+            Error::InvalidTagInheritanceProof => Self::InvalidTagInheritanceProof,
+            Error::InvalidTagConservationProof => Self::InvalidTagConservationProof,
+            Error::MissingExtendedTagSignature => Self::MissingExtendedTagSignature,
+            Error::PseudoTagOutputCountMismatch => Self::PseudoTagOutputCountMismatch,
         }
     }
 }
@@ -214,10 +223,10 @@ impl TryInto<MintValidationError> for MintValidationResult {
     }
 }
 
-/// Convert mc_ledger_db::ActiveMintConfig -->
+/// Convert bt_ledger_db::ActiveMintConfig -->
 /// consensus_config::ActiveMintConfig
-impl From<&mc_ledger_db::ActiveMintConfig> for consensus_config::ActiveMintConfig {
-    fn from(src: &mc_ledger_db::ActiveMintConfig) -> Self {
+impl From<&bt_ledger_db::ActiveMintConfig> for consensus_config::ActiveMintConfig {
+    fn from(src: &bt_ledger_db::ActiveMintConfig) -> Self {
         Self {
             mint_config: Some((&src.mint_config).into()),
             total_minted: src.total_minted,
@@ -226,8 +235,8 @@ impl From<&mc_ledger_db::ActiveMintConfig> for consensus_config::ActiveMintConfi
 }
 
 /// Convert consensus_config::ActiveMintConfig -->
-/// mc_ledger_db::ActiveMintConfig
-impl TryFrom<&consensus_config::ActiveMintConfig> for mc_ledger_db::ActiveMintConfig {
+/// bt_ledger_db::ActiveMintConfig
+impl TryFrom<&consensus_config::ActiveMintConfig> for bt_ledger_db::ActiveMintConfig {
     type Error = ConversionError;
 
     fn try_from(src: &consensus_config::ActiveMintConfig) -> Result<Self, Self::Error> {
@@ -244,10 +253,10 @@ impl TryFrom<&consensus_config::ActiveMintConfig> for mc_ledger_db::ActiveMintCo
     }
 }
 
-/// Convert mc_ledger_db::ActiveMintConfigs -->
+/// Convert bt_ledger_db::ActiveMintConfigs -->
 /// consensus_config::ActiveMintConfigs
-impl From<&mc_ledger_db::ActiveMintConfigs> for consensus_config::ActiveMintConfigs {
-    fn from(src: &mc_ledger_db::ActiveMintConfigs) -> Self {
+impl From<&bt_ledger_db::ActiveMintConfigs> for consensus_config::ActiveMintConfigs {
+    fn from(src: &bt_ledger_db::ActiveMintConfigs) -> Self {
         Self {
             configs: src.configs.iter().map(|config| config.into()).collect(),
             mint_config_tx: Some((&src.mint_config_tx).into()),
@@ -256,8 +265,8 @@ impl From<&mc_ledger_db::ActiveMintConfigs> for consensus_config::ActiveMintConf
 }
 
 /// Convert consensus_config::ActiveMintConfigs -->
-/// mc_ledger_db::ActiveMintConfigs
-impl TryFrom<&consensus_config::ActiveMintConfigs> for mc_ledger_db::ActiveMintConfigs {
+/// bt_ledger_db::ActiveMintConfigs
+impl TryFrom<&consensus_config::ActiveMintConfigs> for bt_ledger_db::ActiveMintConfigs {
     type Error = ConversionError;
 
     fn try_from(src: &consensus_config::ActiveMintConfigs) -> Result<Self, Self::Error> {
@@ -282,10 +291,10 @@ impl TryFrom<&consensus_config::ActiveMintConfigs> for mc_ledger_db::ActiveMintC
 #[cfg(test)]
 mod conversion_tests {
     use super::*;
-    use mc_crypto_multisig::SignerSet;
-    use mc_transaction_core::mint::MintConfig;
-    use mc_transaction_core_test_utils::create_mint_config_tx_and_signers;
-    use mc_util_serial::{decode, encode};
+    use bt_crypto_multisig::SignerSet;
+    use bt_transaction_core::mint::MintConfig;
+    use bt_transaction_core_test_utils::create_mint_config_tx_and_signers;
+    use bt_util_serial::{decode, encode};
     use prost::Message;
     use rand_core::SeedableRng;
     use rand_hc::Hc128Rng;
@@ -296,7 +305,7 @@ mod conversion_tests {
         let (_mint_config_tx, signers) = create_mint_config_tx_and_signers(2.into(), &mut rng);
         let signer_set = SignerSet::new(signers.iter().map(|s| s.public_key()).collect(), 1);
 
-        let source = mc_ledger_db::ActiveMintConfig {
+        let source = bt_ledger_db::ActiveMintConfig {
             mint_config: MintConfig {
                 token_id: 123,
                 signer_set,
@@ -312,12 +321,12 @@ mod conversion_tests {
             assert_eq!(source, recovered);
         }
 
-        // Converting mc_ledger_db::ActiveMintConfig ->
-        // consensus_config::ActiveMintConfig -> mc_ledger_db::ActiveMintConfig
+        // Converting bt_ledger_db::ActiveMintConfig ->
+        // consensus_config::ActiveMintConfig -> bt_ledger_db::ActiveMintConfig
         // should be the identity function.
         {
             let external = consensus_config::ActiveMintConfig::from(&source);
-            let recovered = mc_ledger_db::ActiveMintConfig::try_from(&external).unwrap();
+            let recovered = bt_ledger_db::ActiveMintConfig::try_from(&external).unwrap();
             assert_eq!(source, recovered);
         }
 
@@ -333,7 +342,7 @@ mod conversion_tests {
         {
             let external = consensus_config::ActiveMintConfig::from(&source);
             let bytes = external.encode_to_vec();
-            let recovered: mc_ledger_db::ActiveMintConfig = decode(&bytes).unwrap();
+            let recovered: bt_ledger_db::ActiveMintConfig = decode(&bytes).unwrap();
             assert_eq!(source, recovered);
         }
     }
@@ -344,8 +353,8 @@ mod conversion_tests {
         let (mint_config_tx, signers) = create_mint_config_tx_and_signers(2.into(), &mut rng);
         let signer_set = SignerSet::new(signers.iter().map(|s| s.public_key()).collect(), 1);
 
-        let source = mc_ledger_db::ActiveMintConfigs {
-            configs: vec![mc_ledger_db::ActiveMintConfig {
+        let source = bt_ledger_db::ActiveMintConfigs {
+            configs: vec![bt_ledger_db::ActiveMintConfig {
                 mint_config: MintConfig {
                     token_id: 123,
                     signer_set,
@@ -363,12 +372,12 @@ mod conversion_tests {
             assert_eq!(source, recovered);
         }
 
-        // Converting mc_ledger_db::ActiveMintConfigs ->
-        // consensus_config::ActiveMintConfigs -> mc_ledger_db::ActiveMintConfigs
+        // Converting bt_ledger_db::ActiveMintConfigs ->
+        // consensus_config::ActiveMintConfigs -> bt_ledger_db::ActiveMintConfigs
         // should be the identity function.
         {
             let external = consensus_config::ActiveMintConfigs::from(&source);
-            let recovered = mc_ledger_db::ActiveMintConfigs::try_from(&external).unwrap();
+            let recovered = bt_ledger_db::ActiveMintConfigs::try_from(&external).unwrap();
             assert_eq!(source, recovered);
         }
 
@@ -387,7 +396,7 @@ mod conversion_tests {
         {
             let external = consensus_config::ActiveMintConfigs::from(&source);
             let bytes = external.encode_to_vec();
-            let recovered: mc_ledger_db::ActiveMintConfigs = decode(&bytes).unwrap();
+            let recovered: bt_ledger_db::ActiveMintConfigs = decode(&bytes).unwrap();
             assert_eq!(source, recovered);
         }
     }

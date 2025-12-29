@@ -1,18 +1,18 @@
-// Copyright (c) 2018-2023 The MobileCoin Foundation
+// Copyright (c) 2018-2023 The Botho Foundation
 //! Test helpers for minting transactions
 
-use mc_account_keys::PublicAddress;
-use mc_crypto_keys::{Ed25519Pair, Ed25519Signature, RistrettoPublic, Signer};
-use mc_crypto_multisig::{MultiSig, SignerSet};
+use bt_account_keys::PublicAddress;
+use bt_crypto_keys::{Ed25519Pair, Ed25519Signature, RistrettoPublic, Signer};
+use bt_crypto_multisig::{MultiSig, SignerSet};
 use mc_rand::{CryptoRng, RngCore};
-use mc_transaction_core::{
+use bt_transaction_core::{
     mint::{
         constants::NONCE_LENGTH, MintConfig, MintConfigTx, MintConfigTxPrefix, MintTx,
         MintTxPrefix, ValidatedMintConfigTx,
     },
     TokenId,
 };
-use mc_util_from_random::FromRandom;
+use bt_util_from_random::FromRandom;
 
 /// Generate a valid MintConfigTx and return it together with the set of signing
 /// keys that are allowed to sign it.

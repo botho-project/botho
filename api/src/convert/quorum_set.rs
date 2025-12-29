@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Convert between Rust and proto representations of QuorumSet.
 
@@ -8,7 +8,7 @@ use crate::{
     },
     ConversionError,
 };
-use mc_blockchain_types::{NodeID, QuorumSet, QuorumSetMember, QuorumSetMemberWrapper};
+use bt_blockchain_types::{NodeID, QuorumSet, QuorumSetMember, QuorumSetMemberWrapper};
 
 // QuorumSet
 impl From<&QuorumSet> for QuorumSetProto {

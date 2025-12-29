@@ -1,15 +1,15 @@
 [package]
-name = "mc-crypto-box"
+name = "bt-crypto-box"
 version = "7.1.0"
-authors = ["MobileCoin"]
+authors = ["Botho"]
 edition = "2021"
 license = "Apache-2.0"
 readme = "README.md"
 rust-version = { workspace = true }
 
 [dependencies]
-mc-crypto-hashes = { workspace = true }
-mc-crypto-keys = { workspace = true }
+bt-crypto-hashes = { workspace = true }
+bt-crypto-keys = { workspace = true }
 
 aead = { workspace = true, features = ["alloc"] }
 digest = { workspace = true }
@@ -19,5 +19,5 @@ mc-oblivious-aes-gcm = { workspace = true, features = ["aes", "alloc", "zeroize"
 rand_core = { workspace = true }
 
 [dev-dependencies]
-mc-util-from-random = { workspace = true }
-mc-util-test-helper = { workspace = true }
+bt-util-from-random = { workspace = true }
+bt-util-test-helper = { workspace = true }

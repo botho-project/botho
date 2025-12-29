@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 use crate::membership_proofs;
 use displaydoc::Display;
@@ -34,8 +34,8 @@ pub enum Error {
     NumericLimitsExceeded,
 }
 
-impl From<mc_util_serial::encode::Error> for Error {
-    fn from(_e: mc_util_serial::encode::Error) -> Self {
+impl From<bt_util_serial::encode::Error> for Error {
+    fn from(_e: bt_util_serial::encode::Error) -> Self {
         Error::TxOutSerializationError
     }
 }

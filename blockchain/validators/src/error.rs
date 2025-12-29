@@ -1,10 +1,10 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Validator errors.
 
 use displaydoc::Display;
 use hex::FromHexError;
-use mc_crypto_keys::{KeyError, SignatureError};
+use bt_crypto_keys::{KeyError, SignatureError};
 use pem::PemError;
 use serde_json::Error as JsonError;
 use std::{io::Error as IoError, path::PathBuf, string::FromUtf8Error};

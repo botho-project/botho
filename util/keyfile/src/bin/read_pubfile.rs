@@ -1,11 +1,11 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 #![deny(missing_docs)]
 
 //! Utility to read .pub files.
 //! Optionally, can transcribe them to the b58 format
 
 use clap::Parser;
-use mc_util_keyfile::{read_pubfile, write_b58pubfile};
+use bt_util_keyfile::{read_pubfile, write_b58pubfile};
 use std::path::PathBuf;
 
 #[derive(Debug, Parser)]

@@ -11,7 +11,7 @@
 
 pub use schnorrkel_og::{Signature, SignatureError, SIGNATURE_LENGTH};
 
-use mc_crypto_keys::{RistrettoPrivate, RistrettoPublic};
+use bt_crypto_keys::{RistrettoPrivate, RistrettoPublic};
 
 /// Create a deterministic Schnorrkel signature
 ///
@@ -59,8 +59,8 @@ pub fn verify(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mc_util_from_random::FromRandom;
-    use mc_util_test_helper::run_with_several_seeds;
+    use bt_util_from_random::FromRandom;
+    use bt_util_test_helper::run_with_several_seeds;
 
     mod compat_20210122 {
         use super::*;

@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Helper module for setting up logging to Sentry
 
@@ -33,7 +33,7 @@ pub fn init() -> Option<sentry::ClientInitGuard> {
 
             sentry::configure_scope(|scope| {
                 // Add our GIT commit to each message.
-                scope.set_tag("git_commit", mc_util_build_info::git_commit());
+                scope.set_tag("git_commit", bt_util_build_info::git_commit());
             });
 
             Some(guard)

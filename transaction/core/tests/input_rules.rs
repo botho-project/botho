@@ -1,21 +1,21 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 mod util;
 
 use assert_matches::assert_matches;
-use mc_account_keys::AccountKey;
-use mc_crypto_keys::RistrettoPublic;
-use mc_transaction_builder::DefaultTxOutputsOrdering;
-use mc_transaction_core::{
+use bt_account_keys::AccountKey;
+use bt_crypto_keys::RistrettoPublic;
+use bt_transaction_builder::DefaultTxOutputsOrdering;
+use bt_transaction_core::{
     get_tx_out_shared_secret, tx::Tx, Amount, BlockVersion, InputRuleError, InputRules,
     MaskedAmount, RevealedTxOut, RevealedTxOutError,
 };
-use mc_util_from_random::FromRandom;
-use mc_util_test_helper::{RngType, SeedableRng};
+use bt_util_from_random::FromRandom;
+use bt_util_test_helper::{RngType, SeedableRng};
 
 use util::{create_test_tx, create_test_tx_with_amount_and_comparer_and_recipients};
 
-use mc_ledger_db::test_utils::INITIALIZE_LEDGER_AMOUNT;
+use bt_ledger_db::test_utils::INITIALIZE_LEDGER_AMOUNT;
 
 // Gets the set of rules from the first input of a Tx
 fn get_first_rules(tx: &Tx) -> &InputRules {

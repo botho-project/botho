@@ -1,6 +1,6 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
-//! # MobileCoin transactions use CryptoNote-style `onetime keys` to protect
+//! # Botho transactions use CryptoNote-style `onetime keys` to protect
 //! recipient privacy.
 //!
 //! When creating a transaction, the sender computes a onetime public key for
@@ -11,7 +11,7 @@
 //! To further protect recipient privacy, an output's onetime key is computed
 //! for a `subaddress` that the recipient generated from their CryptoNote-style
 //! address. This makes it easy for a recipient to use different subaddresses
-//! for different purposes and keep track of how much MobileCoin was sent to
+//! for different purposes and keep track of how much Botho was sent to
 //! each subaddress.
 //!
 //! ## User account keys (a,b)
@@ -22,7 +22,7 @@
 //! with other users and they do not appear in the ledger.
 //!
 //! ## Creating the i^th subaddress (C_i, D_i)
-//! Instead, when a user wishes to receive MobileCoin, they compute a pair of
+//! Instead, when a user wishes to receive Botho, they compute a pair of
 //! public keys
 //!
 //!    `D_i = B + Hs( a | i ) * G`
@@ -35,8 +35,8 @@
 //!
 //! See the `account_keys` crate for more about account keys and subaddresses.
 //!
-//! ## Sending MobileCoin to a subaddress (C,D)
-//! To send MobileCoin to a recipient's subaddress (C,D), the sender generates a
+//! ## Sending Botho to a subaddress (C,D)
+//! To send Botho to a recipient's subaddress (C,D), the sender generates a
 //! unique random number `r`, and creates the following public keys and includes
 //! them in a transaction output:
 //!
@@ -57,7 +57,7 @@
 //! If this value equals the output's onetime_key, then the output was sent to
 //! your i^th subaddress.
 //!
-//! ## Spending MobileCoin sent to your subaddress (C_i, D_i)
+//! ## Spending Botho sent to your subaddress (C_i, D_i)
 //! To spend an output sent to your i^th subaddress, compute the onetime private
 //! key:
 //!
@@ -75,9 +75,9 @@ use crate::domain_separators::HASH_TO_SCALAR_DOMAIN_TAG;
 use curve25519_dalek::{
     constants::RISTRETTO_BASEPOINT_POINT, ristretto::RistrettoPoint, scalar::Scalar,
 };
-use mc_core_types::account::RingCtAddress;
-use mc_crypto_hashes::{Blake2b512, Digest};
-use mc_crypto_keys::{RistrettoPrivate, RistrettoPublic};
+use bt_core_types::account::RingCtAddress;
+use bt_crypto_hashes::{Blake2b512, Digest};
+use bt_crypto_keys::{RistrettoPrivate, RistrettoPublic};
 
 const G: RistrettoPoint = RISTRETTO_BASEPOINT_POINT;
 
@@ -200,9 +200,9 @@ pub fn create_shared_secret(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mc_account_keys::{AccountKey, PublicAddress};
-    use mc_util_from_random::FromRandom;
-    use mc_util_test_helper::run_with_several_seeds;
+    use bt_account_keys::{AccountKey, PublicAddress};
+    use bt_util_from_random::FromRandom;
+    use bt_util_test_helper::run_with_several_seeds;
 
     // Returns (tx_target_key, tx_public_key)
     fn get_output_public_keys(

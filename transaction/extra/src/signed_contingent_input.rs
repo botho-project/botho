@@ -1,19 +1,19 @@
-// Copyright (c) 2018-2023 The MobileCoin Foundation
+// Copyright (c) 2018-2023 The Botho Foundation
 
 //! A signed contingent input as described in MCIP #31
 
 use alloc::{collections::BTreeMap, string::String, vec::Vec};
 use displaydoc::Display;
-use mc_crypto_digestible::Digestible;
-use mc_crypto_ring_signature::{
+use bt_crypto_digestible::Digestible;
+use bt_crypto_ring_signature::{
     Commitment, CompressedCommitment, Error as RingSignatureError, KeyImage, RingMLSAG,
 };
-use mc_transaction_core::{
+use bt_transaction_core::{
     ring_ct::{GeneratorCache, PresignedInputRing, SignedInputRing},
     tx::TxIn,
     Amount, AmountError, RevealedTxOutError, TokenId, TxOutConversionError, UnmaskedAmount,
 };
-use mc_util_u64_ratio::U64Ratio;
+use bt_util_u64_ratio::U64Ratio;
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;

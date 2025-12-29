@@ -217,7 +217,7 @@ def main():
         ("Prog 0.1%-80%", FeeConfig("Prog 0.1%-80%", 10, 8000, 0, 1)),
     ]
 
-    print("\n1. BURN MODE (fees destroyed - Cadence model)")
+    print("\n1. BURN MODE (fees destroyed - Botho model)")
     print("-" * 50)
     burn_results = {}
     for name, config in configs:
@@ -313,7 +313,7 @@ FINDINGS: Progressive Fees & Inequality
 INITIAL GINI: {initial_gini:.3f}
 TARGET GINI:  {target_gini:.3f} (50% reduction)
 
-BURN MODE (Cadence model):
+BURN MODE (Botho model):
   Best: {best_burn[0]}
   Final GINI: {best_burn[1].gini_history[-1][1]:.3f}
   Reduction: {(initial_gini - best_burn[1].gini_history[-1][1])/initial_gini*100:.1f}%
@@ -354,7 +354,7 @@ To halve inequality over 10 years:
    - Sigmoid curve with midpoint at ~30% of P90 wealth
 
 2. MECHANISM:
-   - Pure fee burning (Cadence model) SLOWS but doesn't REVERSE concentration
+   - Pure fee burning (Botho model) SLOWS but doesn't REVERSE concentration
    - For 50% reduction, fees must be REDISTRIBUTED
 
 3. ALTERNATIVES if redistribution not feasible:

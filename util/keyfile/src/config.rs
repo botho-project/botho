@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 //! Configuration parameters for generating key files for a new user identity
 use base64::{engine::general_purpose::STANDARD as BASE64_ENGINE, Engine};
 use clap::Parser;
@@ -31,7 +31,7 @@ pub struct KeyConfig {
 
     /// Seed to use when generating keys (e.g.
     /// 1234567812345678123456781234567812345678123456781234567812345678).
-    #[clap(short, long, value_parser = mc_util_parse::parse_hex::<[u8; 32]>, env = "MC_SEED", default_value = "0101010101010101010101010101010101010101010101010101010101010101")]
+    #[clap(short, long, value_parser = bt_util_parse::parse_hex::<[u8; 32]>, env = "MC_SEED", default_value = "0101010101010101010101010101010101010101010101010101010101010101")]
     pub seed: [u8; 32],
 }
 

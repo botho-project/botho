@@ -1,6 +1,6 @@
-// Copyright (c) 2024 Cadence Foundation
+// Copyright (c) 2024 Botho Foundation
 
-//! Mining transaction types for Cadence PoW consensus.
+//! Mining transaction types for Botho PoW consensus.
 //!
 //! A `MiningTx` represents a proof-of-work claim that, when valid, entitles
 //! the miner to receive the block reward. Unlike regular transactions that
@@ -9,8 +9,8 @@
 
 use alloc::vec::Vec;
 use core::fmt;
-use mc_crypto_digestible::Digestible;
-use mc_crypto_keys::{CompressedRistrettoPublic, RistrettoPublic};
+use bt_crypto_digestible::Digestible;
+use bt_crypto_keys::{CompressedRistrettoPublic, RistrettoPublic};
 use prost::Message;
 
 use crate::emission::block_reward;
@@ -291,8 +291,8 @@ impl Default for DifficultyTarget {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mc_account_keys::AccountKey;
-    use mc_util_from_random::FromRandom;
+    use bt_account_keys::AccountKey;
+    use bt_util_from_random::FromRandom;
     use rand::{rngs::StdRng, SeedableRng};
 
     fn test_account() -> AccountKey {

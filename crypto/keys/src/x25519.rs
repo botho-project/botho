@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! dalek-cryptography based keys implementations
 
@@ -14,12 +14,12 @@ use alloc::vec::Vec;
 use base64::Engine;
 use core::fmt::{Debug, Formatter, Result as FmtResult};
 use digest::generic_array::typenum::U32;
-use mc_crypto_digestible::Digestible;
-use mc_util_from_random::FromRandom;
-use mc_util_repr_bytes::{derive_core_cmp_from_as_ref, derive_repr_bytes_from_as_ref_and_try_from};
+use bt_crypto_digestible::Digestible;
+use bt_util_from_random::FromRandom;
+use bt_util_repr_bytes::{derive_core_cmp_from_as_ref, derive_repr_bytes_from_as_ref_and_try_from};
 
 #[cfg(feature = "alloc")]
-use mc_util_repr_bytes::derive_into_vec_from_repr_bytes;
+use bt_util_repr_bytes::derive_into_vec_from_repr_bytes;
 
 use rand_core::{CryptoRng, RngCore};
 #[cfg(feature = "serde")]
@@ -115,7 +115,7 @@ impl DistinguishedEncoding for X25519Public {
     ///
     /// ```
     /// use pem::parse;
-    /// use mc_crypto_keys::*;
+    /// use bt_crypto_keys::*;
     ///
     /// const PUBKEY: &'static str = "-----BEGIN PUBLIC KEY-----
     /// MCowBQYDK2VuAyEAQcOfK2+MHlDJoQUkjboENfdfpFf2Uhv+ESWue1ErPTM=
@@ -162,7 +162,7 @@ impl AsRef<[u8]> for X25519Public {
     /// Public keys can be referenced as bytes.
     ///
     /// ```
-    /// use mc_crypto_keys::*;
+    /// use bt_crypto_keys::*;
     ///
     /// let key = [0x55u8; 32];
     /// let pubkey = X25519Public::try_from(&key as &[u8]).expect("Could not create key.");
@@ -173,8 +173,8 @@ impl AsRef<[u8]> for X25519Public {
     /// Digesting a X25519 key's raw bytes
     ///
     /// ```
-    /// use mc_crypto_keys::*;
-    /// use mc_crypto_digestible::Digestible;
+    /// use bt_crypto_keys::*;
+    /// use bt_crypto_digestible::Digestible;
     /// use sha2::{Digest, Sha256};
     ///
     /// let key = [0x55u8; 32];
@@ -218,7 +218,7 @@ impl Clone for X25519Public {
     /// # Examples
     ///
     /// ```
-    /// use mc_crypto_keys::X25519Public;
+    /// use bt_crypto_keys::X25519Public;
     ///
     /// let key = [0x55u8; 32];
     /// let pubkey1 = X25519Public::try_from(&key as &[u8]).expect("Could not create key.");
@@ -237,7 +237,7 @@ impl Debug for X25519Public {
     ///
     /// ```
     /// use pem::parse;
-    /// use mc_crypto_keys::*;
+    /// use bt_crypto_keys::*;
     ///
     /// const PUBKEY: &'static str = "-----BEGIN PUBLIC KEY-----
     /// MCowBQYDK2VuAyEAQcOfK2+MHlDJoQUkjboENfdfpFf2Uhv+ESWue1ErPTM=
@@ -311,8 +311,8 @@ impl From<&X25519Private> for X25519Public {
     ///
     /// # Examples
     /// ```
-    /// use mc_crypto_keys::*;
-    /// use mc_util_from_random::FromRandom;
+    /// use bt_crypto_keys::*;
+    /// use bt_util_from_random::FromRandom;
     /// use rand_core::SeedableRng;
     /// use rand_hc::Hc128Rng;
     /// use sha2::*;
@@ -333,8 +333,8 @@ impl From<&X25519EphemeralPrivate> for X25519Public {
     ///
     /// # Examples
     /// ```
-    /// use mc_crypto_keys::*;
-    /// use mc_util_from_random::FromRandom;
+    /// use bt_crypto_keys::*;
+    /// use bt_util_from_random::FromRandom;
     /// use rand_core::SeedableRng;
     /// use rand_hc::Hc128Rng;
     /// use sha2::*;
@@ -471,7 +471,7 @@ impl Clone for X25519Private {
     /// # Examples
     ///
     /// ```
-    /// use mc_crypto_keys::*;
+    /// use bt_crypto_keys::*;
     ///
     /// let key = [0x55u8; 32];
     /// let privkey1 = X25519Private::try_from(&key as &[u8]).expect("Could not load key.");
@@ -525,7 +525,7 @@ impl<'de> Deserialize<'de> for X25519Private {
 /// # Examples
 ///
 /// ```
-/// use mc_crypto_keys::*;
+/// use bt_crypto_keys::*;
 ///
 /// let mut key = [0x55u8; 32];
 /// key[0] = 0x50u8; // scalar values are clamped by dalek
@@ -559,7 +559,7 @@ impl<'bytes> TryFrom<&'bytes [u8]> for X25519Private {
     /// # Examples
     ///
     /// ```
-    /// use mc_crypto_keys::X25519Private;
+    /// use bt_crypto_keys::X25519Private;
     ///
     /// let mut key = [0x55u8; 32];
     /// key[0] = 0x50u8; // scalar values are clamped by dalek
@@ -594,7 +594,7 @@ mod test {
     use crate::{ReprBytes, Unsigned};
 
     #[cfg(feature = "serde")]
-    use mc_util_serial::{deserialize, serialize};
+    use bt_util_serial::{deserialize, serialize};
 
     #[test]
     fn test_repr_bytes_size_vs_constant() {

@@ -1,7 +1,7 @@
 [package]
-name = "mc-peers"
+name = "bt-peers"
 version = "7.1.0"
-authors = ["MobileCoin"]
+authors = ["Botho"]
 edition = "2021"
 license = "GPL-3.0"
 readme = "README.md"
@@ -11,29 +11,30 @@ rust-version = { workspace = true }
 test_utils = []
 
 [dependencies]
-mc-blockchain-types = { workspace = true }
-mc-common = { workspace = true, features = ["log"] }
-mc-connection = { workspace = true }
-mc-consensus-api = { workspace = true }
-mc-consensus-scp = { workspace = true }
-mc-crypto-digestible = { workspace = true }
-mc-crypto-keys = { workspace = true }
-mc-ledger-db = { workspace = true }
-mc-transaction-core = { workspace = true }
-mc-util-grpc = { workspace = true }
-mc-util-serial = { workspace = true }
-mc-util-uri = { workspace = true }
+bt-blockchain-types = { workspace = true }
+bt-common = { workspace = true, features = ["log"] }
+bt-connection = { workspace = true }
+bt-consensus-api = { workspace = true }
+bt-consensus-scp = { workspace = true }
+bt-crypto-digestible = { workspace = true }
+bt-crypto-keys = { workspace = true }
+bt-ledger-db = { workspace = true }
+bt-transaction-core = { workspace = true }
+bt-util-grpc-tonic = { workspace = true }
+bt-util-serial = { workspace = true }
+bt-util-uri = { workspace = true }
 
 crossbeam-channel = { workspace = true }
 displaydoc = { workspace = true }
-grpcio = { workspace = true, features = ["prost-codec"] }
 mockall = { workspace = true }
 retry = { workspace = true }
 serde = { workspace = true, features = ["alloc", "derive"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
+tonic = { workspace = true, features = ["codegen", "prost"] }
 
 [dev-dependencies]
-mc-connection-test-utils = { workspace = true }
-mc-peers-test-utils = { workspace = true }
+bt-connection-test-utils = { workspace = true }
+bt-peers-test-utils = { workspace = true }
 
 rand = { workspace = true }
 rand_hc = { workspace = true }

@@ -206,7 +206,7 @@ The `02-build-signed.sh` script will check to make sure all the files exist in t
 
 ### Build Release
 
-Use the GitHub actions `dispatch_workflow` for "(Manual) Build MobileCoin Release".
+Use the GitHub actions `dispatch_workflow` for "(Manual) Build Botho Release".
 
 Select `Run workflow` and pick the Tag you want to build.
 

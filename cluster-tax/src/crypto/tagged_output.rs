@@ -159,7 +159,7 @@ pub struct TaggedTxOut {
     /// Contains: masked_amount, target_key, public_key, e_fog_hint, e_memo
     ///
     /// For now, we reference it abstractly. In integration, this would be
-    /// mc_transaction_core::TxOut.
+    /// bt_transaction_core::TxOut.
     pub value_commitment: [u8; 32], // Placeholder for CompressedCommitment
 
     /// Public key for identifying the output.

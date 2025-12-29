@@ -1,10 +1,10 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 use crate::ConvertError;
 use alloc::{vec, vec::Vec};
 use core::hash::Hash;
-use mc_crypto_digestible::Digestible;
-use mc_util_repr_bytes::derive_debug_and_display_hex_from_as_ref;
+use bt_crypto_digestible::Digestible;
+use bt_util_repr_bytes::derive_debug_and_display_hex_from_as_ref;
 use prost::{
     bytes::{Buf, BufMut},
     encoding::{bytes, skip_field, DecodeContext, WireType},

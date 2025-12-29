@@ -1,4 +1,4 @@
-use mc_util_test_vector::TestVector;
+use bt_util_test_vector::TestVector;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]

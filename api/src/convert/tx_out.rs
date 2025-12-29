@@ -1,10 +1,10 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Convert to/from external::TxOut
 
 use crate::{external, ConversionError};
-use mc_crypto_keys::{CompressedRistrettoPublic, RistrettoPublic};
-use mc_transaction_core::{encrypted_fog_hint::EncryptedFogHint, tx, EncryptedMemo, MaskedAmount};
+use bt_crypto_keys::{CompressedRistrettoPublic, RistrettoPublic};
+use bt_transaction_core::{encrypted_fog_hint::EncryptedFogHint, tx, EncryptedMemo, MaskedAmount};
 
 /// Convert tx::TxOut --> external::TxOut.
 impl From<&tx::TxOut> for external::TxOut {
@@ -20,6 +20,7 @@ impl From<&tx::TxOut> for external::TxOut {
             }),
             masked_amount: source.masked_amount.as_ref().map(Into::into),
             cluster_tags: source.cluster_tags.as_ref().map(Into::into),
+            committed_cluster_tags: source.committed_cluster_tags.clone(),
         }
     }
 }
@@ -89,6 +90,7 @@ impl TryFrom<&external::TxOut> for tx::TxOut {
             e_fog_hint,
             e_memo,
             cluster_tags,
+            committed_cluster_tags: source.committed_cluster_tags.clone(),
         };
         Ok(tx_out)
     }
@@ -97,9 +99,9 @@ impl TryFrom<&external::TxOut> for tx::TxOut {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mc_crypto_keys::RistrettoPrivate;
-    use mc_transaction_core::{tokens::Mob, Amount, BlockVersion, PublicAddress, Token};
-    use mc_util_from_random::FromRandom;
+    use bt_crypto_keys::RistrettoPrivate;
+    use bt_transaction_core::{tokens::Mob, Amount, BlockVersion, PublicAddress, Token};
+    use bt_util_from_random::FromRandom;
     use rand::{rngs::StdRng, SeedableRng};
 
     #[test]

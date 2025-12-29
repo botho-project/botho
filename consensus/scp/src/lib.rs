@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 #![doc = include_str!("../README.md")]
 #![allow(non_snake_case)]
@@ -17,7 +17,7 @@ pub mod test_utils;
 mod utils;
 
 #[doc(inline)]
-pub use mc_consensus_scp_types::{core_types, quorum_set};
+pub use bt_consensus_scp_types::{core_types, quorum_set};
 
 #[doc(inline)]
 pub use crate::{

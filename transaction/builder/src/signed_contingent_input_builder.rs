@@ -1,5 +1,5 @@
-// Copyright (c) 2018-2024 The MobileCoin Foundation
-// Copyright (c) 2024 Cadence Foundation
+// Copyright (c) 2018-2024 The Botho Foundation
+// Copyright (c) 2024 Botho Foundation
 
 //! A builder object for signed contingent inputs (see MCIP #31)
 //! This plays a similar role to the transaction builder.
@@ -9,10 +9,10 @@ use crate::{
     TxBuilderError,
 };
 use alloc::{boxed::Box, vec::Vec};
-use mc_account_keys::PublicAddress;
-use mc_crypto_keys::RistrettoPrivate;
-use mc_crypto_ring_signature_signer::{RingSigner, SignableInputRing};
-use mc_transaction_core::{
+use bt_account_keys::PublicAddress;
+use bt_crypto_keys::RistrettoPrivate;
+use bt_crypto_ring_signature_signer::{RingSigner, SignableInputRing};
+use bt_transaction_core::{
     encrypted_fog_hint::EncryptedFogHint,
     ring_ct::OutputSecret,
     ring_signature::Scalar,
@@ -20,14 +20,14 @@ use mc_transaction_core::{
     Amount, BlockVersion, InputRules, MaskedAmount, MemoContext, MemoPayload, NewMemoError,
     RevealedTxOut, TokenId, UnmaskedAmount,
 };
-use mc_transaction_extra::{SignedContingentInput, TxOutConfirmationNumber};
-use mc_util_from_random::FromRandom;
+use bt_transaction_extra::{SignedContingentInput, TxOutConfirmationNumber};
+use bt_util_from_random::FromRandom;
 use rand_core::{CryptoRng, RngCore};
 
 /// Helper utility for creating signed contingent inputs with required outputs,
 /// and attaching memos as appropriate.
 ///
-/// Note: Cadence does not use Fog services. All encrypted fog hints are fake
+/// Note: Botho does not use Fog services. All encrypted fog hints are fake
 /// placeholders for protocol compatibility.
 #[derive(Debug)]
 pub struct SignedContingentInputBuilder {
@@ -224,7 +224,7 @@ impl SignedContingentInputBuilder {
         memo_fn: impl FnOnce(MemoContext) -> Result<MemoPayload, NewMemoError>,
         rng: &mut RNG,
     ) -> Result<(TxOut, TxOutConfirmationNumber), TxBuilderError> {
-        // Cadence doesn't use Fog - use fake hint for protocol compatibility
+        // Botho doesn't use Fog - use fake hint for protocol compatibility
         let hint = EncryptedFogHint::fake_onetime_hint(rng);
 
         let tx_private_key = RistrettoPrivate::from_random(rng);
@@ -370,7 +370,7 @@ impl SignedContingentInputBuilder {
             ));
         }
 
-        // Cadence doesn't use Fog - use fake hint for protocol compatibility
+        // Botho doesn't use Fog - use fake hint for protocol compatibility
         let hint = EncryptedFogHint::fake_onetime_hint(rng);
 
         let tx_private_key = RistrettoPrivate::from_random(rng);
@@ -499,11 +499,11 @@ pub mod tests {
     use alloc::{string::ToString, vec};
     use assert_matches::assert_matches;
     use maplit::btreemap;
-    use mc_account_keys::{AccountKey, CHANGE_SUBADDRESS_INDEX, DEFAULT_SUBADDRESS_INDEX};
-    use mc_crypto_keys::{CompressedRistrettoPublic, RistrettoPublic};
-    use mc_crypto_ring_signature_signer::NoKeysRingSigner;
+    use bt_account_keys::{AccountKey, CHANGE_SUBADDRESS_INDEX, DEFAULT_SUBADDRESS_INDEX};
+    use bt_crypto_keys::{CompressedRistrettoPublic, RistrettoPublic};
+    use bt_crypto_ring_signature_signer::NoKeysRingSigner;
     use mc_fog_report_validation_test_utils::{FullyValidatedFogPubkey, MockFogResolver};
-    use mc_transaction_core::{
+    use bt_transaction_core::{
         constants::MILLIMOB_TO_PICOMOB,
         fog_hint::FogHint,
         get_tx_out_shared_secret,
@@ -518,7 +518,7 @@ pub mod tests {
         },
         InputRuleError, Token,
     };
-    use mc_transaction_extra::{MemoType, SignedContingentInputError};
+    use bt_transaction_extra::{MemoType, SignedContingentInputError};
     use rand::{rngs::StdRng, SeedableRng};
 
     #[test]

@@ -1,7 +1,7 @@
 //! Cryptographic integration for cluster taxation.
 //!
 //! This module defines how cluster tags integrate with the existing
-//! MobileCoin transaction model.
+//! Botho transaction model.
 //!
 //! ## Design Phases
 //!

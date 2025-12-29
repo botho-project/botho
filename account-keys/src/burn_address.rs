@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! A canonical burn address for the auditable burning of funds
 //! This is described in MCIP #35, see that MCIP for security proof.
@@ -18,7 +18,7 @@
 //!
 //! However, there are challenges with this idea:
 //!
-//! In MobileCoin, unlike in cryptonote, all public addresses are subaddresses,
+//! In Botho, unlike in cryptonote, all public addresses are subaddresses,
 //! and the transaction builder uses the subaddress math rather than the
 //! "vanilla" cryptonote math. To avoid the need to create a custom transaction
 //! builder for burning, we would like the derivation of the burn address to
@@ -40,8 +40,8 @@
 
 use crate::{domain_separators::BURN_ADDRESS_DOMAIN_SEPARATOR, PublicAddress};
 use curve25519_dalek::{ristretto::RistrettoPoint, scalar::Scalar};
-use mc_crypto_hashes::{Blake2b512, Digest};
-use mc_crypto_keys::{RistrettoPrivate, RistrettoPublic};
+use bt_crypto_hashes::{Blake2b512, Digest};
+use bt_crypto_keys::{RistrettoPrivate, RistrettoPublic};
 
 /// The constant chosen for the burn address view private key.
 ///
@@ -90,7 +90,7 @@ fn burn_address_spend_public() -> RistrettoPoint {
 //
 // `subaddress_view_public = account_view_private * subaddress_spend_public`
 //
-// For reference, see Mechanics of MobileCoin section on subaddresses, or,
+// For reference, see Mechanics of Botho section on subaddresses, or,
 // refer to the `AccountKey` struct defined in this crate, which defines
 //
 // `subaddress_view_private = account_view_private * subaddress_spend_private`
@@ -115,7 +115,7 @@ fn burn_address_spend_public() -> RistrettoPoint {
 // will not work, because the transaction builder only supports
 // sending to subaddresses (and not "regular" cryptonote addresses). We could
 // bring back the (deprecated and deleted code) from before we made the decision
-// that all addresses in MobileCoin are subaddresses, but it's simpler not to
+// that all addresses in Botho are subaddresses, but it's simpler not to
 // have to do that.
 fn burn_address_view_public() -> RistrettoPoint {
     Scalar::from_canonical_bytes(BURN_ADDRESS_VIEW_PRIVATE_BYTES).unwrap()

@@ -48,7 +48,7 @@ const mockBlocks: Block[] = Array.from({ length: 10 }, (_, i) => ({
   timestamp: Date.now() / 1000 - i * 60 - Math.random() * 30,
   txCount: Math.floor(Math.random() * 100) + 10,
   size: Math.floor(Math.random() * 50000) + 10000,
-  miner: i % 3 === 0 ? 'pool.cadence.io' : `0x${Math.random().toString(16).slice(2, 10)}`,
+  miner: i % 3 === 0 ? 'pool.botho.io' : `0x${Math.random().toString(16).slice(2, 10)}`,
   reward: 2.5,
   difficulty: '2.45T',
   nonce: Math.floor(Math.random() * 1000000000),

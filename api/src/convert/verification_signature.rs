@@ -1,9 +1,9 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Convert to/from external::VerificationSignature
 
 use crate::external;
-use mc_blockchain_types::VerificationSignature;
+use bt_blockchain_types::VerificationSignature;
 
 impl From<&VerificationSignature> for external::VerificationSignature {
     fn from(src: &VerificationSignature) -> Self {

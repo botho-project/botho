@@ -5,7 +5,7 @@
 #[cfg(feature = "cli")]
 mod cli {
     use clap::{Parser, Subcommand};
-    use mc_cluster_tax::{
+    use bt_cluster_tax::{
         analysis::{
             analyze_fee_curve, analyze_structuring, analyze_wash_trading, hops_to_reach,
             tag_after_hops,
@@ -616,11 +616,11 @@ mod cli {
         rounds: u64,
         verbose: bool,
     ) {
-        use mc_cluster_tax::simulation::{
+        use bt_cluster_tax::simulation::{
             run_simulation, Agent, AgentId, MerchantAgent, MinerAgent, MixerServiceAgent,
             RetailUserAgent, SimulationConfig, WhaleAgent,
         };
-        use mc_cluster_tax::simulation::agents::whale::WhaleStrategy;
+        use bt_cluster_tax::simulation::agents::whale::WhaleStrategy;
 
         println!("Scenario A: Baseline Economy");
         println!("=============================");
@@ -731,11 +731,11 @@ mod cli {
     }
 
     fn run_scenario_whale(whale_wealth: u64, num_participants: usize, rounds: u64) {
-        use mc_cluster_tax::simulation::{
+        use bt_cluster_tax::simulation::{
             run_simulation, Agent, AgentId, MerchantAgent, RetailUserAgent,
             SimulationConfig, WhaleAgent,
         };
-        use mc_cluster_tax::simulation::agents::whale::WhaleStrategy;
+        use bt_cluster_tax::simulation::agents::whale::WhaleStrategy;
 
         println!("Scenario B: Whale Fee Minimization Strategies");
         println!("==============================================");
@@ -830,11 +830,11 @@ mod cli {
     }
 
     fn run_scenario_mixers(num_mixers: usize, num_whales: usize, rounds: u64) {
-        use mc_cluster_tax::simulation::{
+        use bt_cluster_tax::simulation::{
             run_simulation, Agent, AgentId, MixerServiceAgent, RetailUserAgent,
             SimulationConfig, WhaleAgent,
         };
-        use mc_cluster_tax::simulation::agents::whale::WhaleStrategy;
+        use bt_cluster_tax::simulation::agents::whale::WhaleStrategy;
 
         println!("Scenario C: Mixer Equilibrium");
         println!("=============================");
@@ -912,7 +912,7 @@ mod cli {
     }
 
     fn run_scenario_velocity(num_agents: usize, rounds: u64) {
-        use mc_cluster_tax::simulation::{
+        use bt_cluster_tax::simulation::{
             run_simulation, Agent, AgentId, MarketMakerAgent, RetailUserAgent,
             SimulationConfig,
         };
@@ -980,10 +980,10 @@ mod cli {
     }
 
     fn run_scenario_params(num_agents: usize, rounds: u64) {
-        use mc_cluster_tax::simulation::{
+        use bt_cluster_tax::simulation::{
             run_simulation, Agent, AgentId, RetailUserAgent, SimulationConfig, WhaleAgent,
         };
-        use mc_cluster_tax::simulation::agents::whale::WhaleStrategy;
+        use bt_cluster_tax::simulation::agents::whale::WhaleStrategy;
 
         println!("Scenario E: Parameter Sensitivity");
         println!("==================================");
@@ -1098,11 +1098,11 @@ mod cli {
         output_dir: String,
         flat_rate_bps: u32,
     ) {
-        use mc_cluster_tax::simulation::{
+        use bt_cluster_tax::simulation::{
             run_simulation, Agent, AgentId, MerchantAgent, MinerAgent,
             RetailUserAgent, SimulationConfig, WhaleAgent,
         };
-        use mc_cluster_tax::simulation::agents::whale::WhaleStrategy;
+        use bt_cluster_tax::simulation::agents::whale::WhaleStrategy;
         use std::fs;
 
         println!("==============================================");

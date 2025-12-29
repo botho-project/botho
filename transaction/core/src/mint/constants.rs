@@ -1,6 +1,6 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
-//! MobileCoin minting-related constants.
+//! Botho minting-related constants.
 
 /// Nonce length.
 pub const NONCE_LENGTH: usize = 64;

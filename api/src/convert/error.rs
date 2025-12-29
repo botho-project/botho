@@ -1,10 +1,10 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
-use mc_blockchain_types::{BlockVersionError, ConvertError};
-use mc_crypto_keys::{KeyError, SignatureError};
-use mc_transaction_core::ring_signature::Error as RingSigError;
-use mc_util_serial::prost::DecodeError;
-use mc_util_uri::{UriConversionError, UriParseError};
+use bt_blockchain_types::{BlockVersionError, ConvertError};
+use bt_crypto_keys::{KeyError, SignatureError};
+use bt_transaction_core::ring_signature::Error as RingSigError;
+use bt_util_serial::prost::DecodeError;
+use bt_util_uri::{UriConversionError, UriParseError};
 use std::{
     array::TryFromSliceError,
     convert::Infallible,

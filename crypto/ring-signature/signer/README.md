@@ -7,7 +7,7 @@ out of core, into its own crate.
 
 An interface and implementation for creating RingMLSAGs.
 
-A RingMLSAG is a ring signature scheme used critically in the MobileCoin transaction
+A RingMLSAG is a ring signature scheme used critically in the Botho transaction
 design. In a transaction, each real input is spent by a RingMLSAG -- this is the
 signature that confers spending authority.
 

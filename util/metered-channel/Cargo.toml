@@ -1,12 +1,12 @@
 [package]
-name = "mc-util-metered-channel"
+name = "bt-util-metered-channel"
 version = "7.1.0"
-authors = ["MobileCoin"]
+authors = ["Botho"]
 edition = "2021"
 license = "GPL-3.0"
 rust-version = { workspace = true }
 
 [dependencies]
-mc-util-metrics = { workspace = true }
+bt-util-metrics = { workspace = true }
 
 crossbeam-channel = { workspace = true }

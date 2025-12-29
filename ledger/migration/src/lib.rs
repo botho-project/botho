@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Ledger migration: Perform updates of LedgerDB to accommodate for
 //! backward-incompatible changes.
@@ -6,8 +6,8 @@
 #![allow(clippy::inconsistent_digit_grouping)]
 
 use lmdb::{DatabaseFlags, Environment, Transaction, WriteFlags};
-use mc_common::logger::{log, Logger};
-use mc_ledger_db::{
+use bt_common::logger::{log, Logger};
+use bt_ledger_db::{
     key_bytes_to_u64,
     ledger_db::{
         LedgerDbMetadataStoreSettings, TxOutsByBlockValue, BLOCK_NUMBER_BY_TX_OUT_INDEX,
@@ -17,8 +17,8 @@ use mc_ledger_db::{
     tx_out_store::TX_OUT_INDEX_BY_PUBLIC_KEY_DB_NAME,
     u64_to_key_bytes, Error, MetadataStore, MintConfigStore, MintTxStore, TxOutStore,
 };
-use mc_util_lmdb::MetadataStoreError;
-use mc_util_serial::decode;
+use bt_util_lmdb::MetadataStoreError;
+use bt_util_serial::decode;
 use std::path::Path;
 
 pub fn migrate(ledger_db_path: impl AsRef<Path>, logger: &Logger) {

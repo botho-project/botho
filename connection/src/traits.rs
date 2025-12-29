@@ -1,13 +1,13 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Traits which connection implementations can implement.
 
-use crate::error::{Result, RetryResult};
-use grpcio::Error as GrpcError;
-use mc_blockchain_types::{Block, BlockID, BlockIndex};
-use mc_consensus_api::consensus_common::LastBlockInfoResponse;
-use mc_transaction_core::{tokens::Mob, tx::Tx, Token, TokenId};
-use mc_util_uri::ConnectionUri;
+use crate::{error::{Result, RetryResult}, thick::EvidenceKind};
+use bt_blockchain_types::{Block, BlockID, BlockIndex};
+use tonic::Status as GrpcError;
+use bt_consensus_api::consensus_common::LastBlockInfoResponse;
+use bt_transaction_core::{tokens::Mob, tx::Tx, Token, TokenId};
+use bt_util_uri::ConnectionUri;
 use serde::Serialize;
 use std::{
     collections::BTreeMap,
@@ -58,7 +58,7 @@ pub trait AttestedConnection: Connection {
 
         let result = func(self);
 
-        if let Err(GrpcError::RpcFailure(_rpc_status)) = &result {
+        if result.is_err() {
             self.deattest();
         }
 

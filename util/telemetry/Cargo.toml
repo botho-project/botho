@@ -1,7 +1,7 @@
 [package]
-name = "mc-util-telemetry"
+name = "bt-util-telemetry"
 version = "7.1.0"
-authors = ["MobileCoin"]
+authors = ["Botho"]
 edition = "2021"
 license = "GPL-3.0"
 readme = "README.md"

@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 #![feature(proc_macro_diagnostic)]
 
@@ -20,7 +20,7 @@ use syn::{Expr, ItemFn};
 ///
 /// Here's a very simple example:
 /// ```rust
-/// # use mc_util_test_with_data::test_with_data;
+/// # use bt_util_test_with_data::test_with_data;
 ///
 /// #[test_with_data([1, 2, 3])]
 /// fn silly(x: i32) {

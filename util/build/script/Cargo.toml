@@ -1,8 +1,8 @@
 [package]
-name = "mc-util-build-script"
+name = "bt-util-build-script"
 version = "7.1.0"
-authors = ["MobileCoin"]
-description = "Cargo build-script assistance, from MobileCoin."
+authors = ["Botho"]
+description = "Cargo build-script assistance, from Botho."
 edition = "2021"
 license = "Apache-2.0"
 readme = "README.md"

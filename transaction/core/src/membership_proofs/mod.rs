@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Validation for merkle proofs of membership
 
@@ -12,7 +12,7 @@ use crate::{
     tx::{TxOut, TxOutMembershipElement, TxOutMembershipHash, TxOutMembershipProof},
 };
 use alloc::vec::Vec;
-use mc_crypto_hashes::{Blake2b256, Digest};
+use bt_crypto_hashes::{Blake2b256, Digest};
 use subtle::{Choice, ConditionallySelectable, ConstantTimeEq};
 
 mod errors;

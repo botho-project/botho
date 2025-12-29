@@ -1,6 +1,6 @@
-// Copyright (c) 2024 Cadence Foundation
+// Copyright (c) 2024 Botho Foundation
 
-//! CLI tool for discovering Cadence network topology and generating configurations.
+//! CLI tool for discovering Botho network topology and generating configurations.
 //!
 //! This tool connects to the gossip network, discovers peers, and helps users
 //! configure their nodes by suggesting quorum sets based on observed trust patterns.
@@ -8,13 +8,13 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use libp2p::Multiaddr;
-use mc_common::ResponderId;
-use mc_consensus_scp_types::QuorumSet;
-use mc_gossip::{
+use bt_common::ResponderId;
+use bt_consensus_scp_types::QuorumSet;
+use bt_gossip::{
     GossipConfig, GossipConfigBuilder, GossipEvent, GossipService, NodeCapabilities,
     QuorumStrategy, TopologyAnalyzer,
 };
-use mc_util_from_random::FromRandom;
+use bt_util_from_random::FromRandom;
 use std::{
     path::PathBuf,
     str::FromStr,
@@ -25,7 +25,7 @@ use tracing::{info, warn};
 
 #[derive(Parser)]
 #[command(name = "mc-discover")]
-#[command(about = "Discover Cadence network topology and generate configurations")]
+#[command(about = "Discover Botho network topology and generate configurations")]
 #[command(version)]
 struct Cli {
     /// Bootstrap peers to connect to (libp2p multiaddr format)
@@ -160,14 +160,14 @@ async fn main() -> Result<()> {
 async fn discover_network(
     config: GossipConfig,
     timeout_secs: u64,
-) -> Result<mc_gossip::SharedPeerStore> {
+) -> Result<bt_gossip::SharedPeerStore> {
     // Create a minimal node identity for discovery
-    let node_id = mc_common::NodeID {
+    let node_id = bt_common::NodeID {
         responder_id: ResponderId::from_str("discover-client:0").unwrap(),
-        public_key: mc_crypto_keys::Ed25519Public::default(),
+        public_key: bt_crypto_keys::Ed25519Public::default(),
     };
 
-    let signing_key = std::sync::Arc::new(mc_crypto_keys::Ed25519Pair::from_random(&mut rand::thread_rng()));
+    let signing_key = std::sync::Arc::new(bt_crypto_keys::Ed25519Pair::from_random(&mut rand::thread_rng()));
 
     let mut service = GossipService::new(
         node_id,
@@ -355,10 +355,10 @@ fn print_quorum_set(qs: &QuorumSet<ResponderId>, indent: usize) {
     for member in &qs.members {
         if let Some(m) = member.as_ref() {
             match m {
-                mc_consensus_scp_types::QuorumSetMember::Node(id) => {
+                bt_consensus_scp_types::QuorumSetMember::Node(id) => {
                     println!("{}- {}", prefix, id);
                 }
-                mc_consensus_scp_types::QuorumSetMember::InnerSet(inner) => {
+                bt_consensus_scp_types::QuorumSetMember::InnerSet(inner) => {
                     println!(
                         "{}- InnerSet (threshold {}, {} members):",
                         prefix,
@@ -539,7 +539,7 @@ async fn run_trust_command(
 }
 
 async fn run_interactive(config: GossipConfig) -> Result<()> {
-    println!("Cadence Network Discovery - Interactive Mode");
+    println!("Botho Network Discovery - Interactive Mode");
     println!("=============================================");
     println!();
 

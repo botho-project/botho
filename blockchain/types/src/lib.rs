@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2018-2022 The Botho Foundation
 
 //! Blockchain data structures.
 
@@ -30,6 +30,6 @@ pub use crate::{
 
 // Use stub types instead of removed mc-attest-verifier-types
 pub use crate::attestation_stubs::{VerificationReport, VerificationSignature};
-pub use mc_common::NodeID;
-pub use mc_consensus_scp_types::{QuorumSet, QuorumSetMember, QuorumSetMemberWrapper};
-pub use mc_transaction_types::{BlockVersion, BlockVersionError, BlockVersionIterator};
+pub use bt_common::NodeID;
+pub use bt_consensus_scp_types::{QuorumSet, QuorumSetMember, QuorumSetMemberWrapper};
+pub use bt_transaction_types::{BlockVersion, BlockVersionError, BlockVersionIterator};

@@ -1,7 +1,7 @@
 [package]
-name = "mc-crypto-x509-test-vectors"
+name = "bt-crypto-x509-test-vectors"
 version = "7.1.0"
-authors = ["MobileCoin"]
+authors = ["Botho"]
 edition = "2021"
 description = "Utilities for generating certificates and chains for unit tests"
 license = "GPL-3.0"
@@ -12,15 +12,15 @@ rust-version = { workspace = true }
 path = "src/lib.rs"
 
 [[bin]]
-name = "mc-crypto-x509-test-vectors"
+name = "bt-crypto-x509-test-vectors"
 path = "src/main.rs"
 
 [dependencies]
-mc-crypto-keys = { workspace = true }
+bt-crypto-keys = { workspace = true }
 
 clap = { workspace = true, features = ["derive", "env"] }
 pem = { workspace = true }
 
 [build-dependencies]
 cargo-emit = { workspace = true }
-mc-util-build-script = { workspace = true }
+bt-util-build-script = { workspace = true }
