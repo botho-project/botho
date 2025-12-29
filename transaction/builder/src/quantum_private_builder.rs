@@ -217,13 +217,14 @@ impl QuantumPrivateTransactionBuilder {
 
         // Get recipient's classical public keys
         let recipient_spend_key = pending.recipient.classical().spend_public_key();
-        let recipient_view_key = pending.recipient.classical().view_public_key();
 
         // Create classical one-time target key using stealth address protocol
         let target_key = create_tx_out_target_key(&tx_private_key, recipient_spend_key);
 
-        // Create shared secret for amount masking
-        let shared_secret = create_shared_secret(&tx_public_key, &tx_private_key);
+        // Create shared secret for amount masking using ECDH
+        let recipient_view_key = pending.recipient.classical().view_public_key();
+        let shared_secret =
+            bt_transaction_core::onetime_keys::create_shared_secret(recipient_view_key, &tx_private_key);
 
         // Mask the amount
         let masked_amount = MaskedAmount::new(pending.amount, &shared_secret.into())
@@ -250,7 +251,7 @@ impl QuantumPrivateTransactionBuilder {
 
         // Derive PQ one-time signing keypair from the shared secret
         let pq_onetime_keypair =
-            bt_crypto_pq::derive::derive_pq_signing_keypair(&pq_shared_secret, 0);
+            derive_onetime_sig_keypair(pq_shared_secret.as_bytes(), 0);
         let pq_target_key = pq_onetime_keypair.public_key().clone();
 
         Ok(QuantumPrivateTxOut::new(
@@ -265,18 +266,17 @@ impl QuantumPrivateTransactionBuilder {
 
     /// Compute the message to be signed by all inputs.
     fn compute_signing_message(&self, outputs: &[QuantumPrivateTxOut]) -> [u8; 32] {
-        use bt_crypto_digestible::{Digestible, MerlinTranscript};
-
         let mut transcript = MerlinTranscript::new(b"quantum-private-tx");
 
         // Hash all outputs
         for (i, output) in outputs.iter().enumerate() {
-            output.append_to_transcript(alloc::format!("output_{}", i).as_bytes(), &mut transcript);
+            let label = alloc::format!("output_{}", i);
+            output.append_to_transcript(label.as_bytes(), &mut transcript);
         }
 
         // Extract 32-byte digest
         let mut message = [0u8; 32];
-        bt_crypto_digestible::DigestTranscript::extract_digest(&mut transcript, &mut message);
+        transcript.extract_digest(&mut message);
         message
     }
 

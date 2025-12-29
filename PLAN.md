@@ -532,9 +532,9 @@ enum ConsensusEvent {
 - ✅ Static file serving for web dashboard
 - ✅ CORS support for browser clients
 
-## Simplifications from Botho
+## Simplifications from MobileCoin
 
-| Botho | Botho | Notes |
+| MobileCoin | Botho | Notes |
 |------------|-------|-------|
 | gRPC daemon | CLI foreground | No server, direct commands |
 | Multi-monitor | Single wallet | One mnemonic, one account |
@@ -545,13 +545,13 @@ enum ConsensusEvent {
 | Complex config | Single TOML | Everything in one file |
 | Ring signatures | Plain Ed25519 | Simplified (for now) |
 
-## Code Reuse from Botho
+## Code Reuse from MobileCoin
 
 ### Kept (mostly as-is)
-- `mc-account-keys` - Key derivation
-- `mc-crypto-*` - Cryptographic primitives
-- `mc-consensus-scp` - Stellar Consensus Protocol
-- `mc-common` - Shared types (NodeID, ResponderId)
+- `bt-account-keys` - Key derivation
+- `bt-crypto-*` - Cryptographic primitives
+- `bt-consensus-scp` - Stellar Consensus Protocol
+- `bt-common` - Shared types (NodeID, ResponderId)
 
 ### Heavily Modified
 - `mobilecoind` → `botho` - Complete rewrite as CLI
