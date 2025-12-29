@@ -9,6 +9,7 @@ rust-version = { workspace = true }
 
 [features]
 test-only = []
+pq = ["bt-crypto-pq", "bt-account-keys/pq", "bt-transaction-core/pq"]  # Post-quantum transaction builder
 
 [dependencies]
 # External dependencies
@@ -25,8 +26,10 @@ zeroize = { workspace = true }
 
 # Botho dependencies
 bt-account-keys = { workspace = true }
+bt-crypto-digestible = { workspace = true }
 bt-crypto-hashes = { workspace = true }
 bt-crypto-keys = { workspace = true }
+bt-crypto-pq = { workspace = true, optional = true }
 bt-crypto-ring-signature-signer = { workspace = true }
 bt-transaction-core = { workspace = true }
 bt-transaction-extra = { workspace = true }

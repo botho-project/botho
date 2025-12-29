@@ -1498,6 +1498,7 @@ dependencies = [
  "bt-account-keys",
  "bt-crypto-hashes",
  "bt-crypto-keys",
+ "bt-crypto-pq",
  "bt-crypto-ring-signature-signer",
  "bt-transaction-core",
  "bt-transaction-extra",

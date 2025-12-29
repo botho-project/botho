@@ -985,11 +985,11 @@ Tasks:
 
 | Priority | Optimization | Effort | Impact | Status |
 |----------|--------------|--------|--------|--------|
-| 1 | Replace nodes_map Mutex with DashMap | Low | High | ⏳ Pending |
-| 2 | Blocking channel receive | Low | Medium | ⏳ Pending |
+| 1 | Replace nodes_map Mutex with DashMap | Low | High | ✅ Done |
+| 2 | Blocking channel receive | Low | Medium | ✅ Done |
 | 3 | Arc<Msg> instead of cloning | Medium | Medium | ⏳ Pending |
-| 4 | Quorum HashSet optimization | High | High | ⏳ Pending |
-| 5 | Cache to_propose BTreeSet | Low | Low | ⏳ Pending |
+| 4 | Quorum HashSet optimization | High | High | ✅ Done |
+| 5 | Cache to_propose BTreeSet | Low | Low | ✅ Done |
 
 #### 1. Lock Contention in Message Broadcasting
 

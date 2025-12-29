@@ -18,6 +18,9 @@ mod signed_contingent_input_builder;
 mod transaction_builder;
 mod tx_blueprint;
 
+#[cfg(feature = "pq")]
+mod quantum_private_builder;
+
 #[cfg(any(test, feature = "test-only"))]
 pub mod test_utils;
 
@@ -34,3 +37,9 @@ pub use transaction_builder::{
     DefaultTxOutputsOrdering, TransactionBuilder, TxOutContext, TxOutputsOrdering,
 };
 pub use tx_blueprint::{TxBlueprint, TxBlueprintOutput};
+
+#[cfg(feature = "pq")]
+pub use quantum_private_builder::{
+    derive_input_credentials, QuantumPrivateInputCredentials, QuantumPrivateTransactionBuilder,
+    QuantumPrivateTxBuilderError,
+};
