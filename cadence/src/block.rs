@@ -95,6 +95,10 @@ impl BlockHeader {
 /// - `public_key`: Ephemeral DH public key for miner to derive shared secret
 ///
 /// Even if the same miner wins multiple blocks, their rewards are unlinkable.
+///
+/// Also includes the miner's public address (view_key, spend_key) for:
+/// - PoW binding: The proof of work is tied to the miner's identity
+/// - Block header: Required for block construction and verification
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct MiningTx {
     /// Block height this reward is for
@@ -102,6 +106,12 @@ pub struct MiningTx {
 
     /// Reward amount in picocredits
     pub reward: u64,
+
+    /// Miner's view public key (for PoW binding and block header)
+    pub miner_view_key: [u8; 32],
+
+    /// Miner's spend public key (for PoW binding and block header)
+    pub miner_spend_key: [u8; 32],
 
     /// One-time target key: `Hs(r * C) * G + D`
     /// This is the stealth spend public key that only the miner can identify.
@@ -135,10 +145,14 @@ impl MiningTx {
         difficulty: u64,
         timestamp: u64,
     ) -> Self {
+        // Store miner's public address for PoW binding
+        let miner_view_key = miner_address.view_public_key().to_bytes();
+        let miner_spend_key = miner_address.spend_public_key().to_bytes();
+
         // Generate random ephemeral key for stealth output
         let tx_private_key = RistrettoPrivate::from_random(&mut OsRng);
 
-        // Create stealth keys
+        // Create stealth keys for the reward output
         let target_key = create_tx_out_target_key(&tx_private_key, miner_address);
         let public_key =
             create_tx_out_public_key(&tx_private_key, miner_address.spend_public_key());
@@ -146,6 +160,8 @@ impl MiningTx {
         Self {
             block_height,
             reward,
+            miner_view_key,
+            miner_spend_key,
             target_key: target_key.to_bytes(),
             public_key: public_key.to_bytes(),
             prev_block_hash,
@@ -155,7 +171,8 @@ impl MiningTx {
         }
     }
 
-    /// Compute the PoW hash
+    /// Compute the PoW hash.
+    /// Uses stealth keys (target_key, public_key) to bind PoW to the specific output.
     pub fn pow_hash(&self) -> [u8; 32] {
         let mut hasher = Sha256::new();
         hasher.update(self.nonce.to_le_bytes());
@@ -184,6 +201,8 @@ impl MiningTx {
         let mut hasher = Sha256::new();
         hasher.update(self.block_height.to_le_bytes());
         hasher.update(self.reward.to_le_bytes());
+        hasher.update(self.miner_view_key);
+        hasher.update(self.miner_spend_key);
         hasher.update(self.target_key);
         hasher.update(self.public_key);
         hasher.update(self.prev_block_hash);
@@ -223,7 +242,10 @@ impl Block {
             mining_tx: MiningTx {
                 block_height: 0,
                 reward: 0,
-                // Genesis has no real recipient - use zero keys
+                // Genesis has no real miner - use zero keys
+                miner_view_key: [0u8; 32],
+                miner_spend_key: [0u8; 32],
+                // Genesis has no stealth output - use zero keys
                 target_key: [0u8; 32],
                 public_key: [0u8; 32],
                 prev_block_hash: [0u8; 32],

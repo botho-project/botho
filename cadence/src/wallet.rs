@@ -45,21 +45,19 @@ impl Wallet {
         )
     }
 
-    /// Sign all inputs of a transaction
+    /// Sign all inputs of a transaction using stealth address keys
     ///
-    /// This method looks up each UTXO being spent, verifies the wallet owns it,
-    /// and signs the transaction's signing_hash with the wallet's spend key.
+    /// With stealth addresses, each UTXO has a unique one-time key. This method:
+    /// 1. Looks up each UTXO being spent
+    /// 2. Uses stealth scanning (belongs_to) to verify ownership
+    /// 3. Recovers the one-time private key for signing
+    /// 4. Signs with the one-time private key (not the wallet's main spend key)
     ///
     /// Returns an error if:
     /// - A referenced UTXO doesn't exist
-    /// - The wallet doesn't own the UTXO (spend key mismatch)
+    /// - The wallet doesn't own the UTXO (stealth detection fails)
     pub fn sign_transaction(&self, tx: &mut Transaction, ledger: &Ledger) -> Result<()> {
         let signing_hash = tx.signing_hash();
-        let our_address = self.default_address();
-        let our_spend_key = our_address.spend_public_key().to_bytes();
-
-        // Get the private spend key for signing
-        let spend_private = self.account_key.default_subaddress_spend_private();
 
         for input in &mut tx.inputs {
             // Look up the UTXO being spent
@@ -75,18 +73,30 @@ impl Wallet {
                     )
                 })?;
 
-            // Verify we own this UTXO
-            if utxo.output.recipient_spend_key != our_spend_key {
-                return Err(anyhow::anyhow!(
+            // Use stealth detection to verify ownership and get subaddress index
+            let subaddress_index = utxo.output.belongs_to(&self.account_key).ok_or_else(|| {
+                anyhow::anyhow!(
                     "UTXO {}:{} does not belong to this wallet",
                     hex::encode(&input.tx_hash[0..8]),
                     input.output_index
-                ));
-            }
+                )
+            })?;
 
-            // Sign the transaction with our spend private key
+            // Recover the one-time private key for this stealth output
+            let onetime_private = utxo
+                .output
+                .recover_spend_key(&self.account_key, subaddress_index)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Failed to recover spend key for UTXO {}:{}",
+                        hex::encode(&input.tx_hash[0..8]),
+                        input.output_index
+                    )
+                })?;
+
+            // Sign the transaction with the one-time private key
             let signature: RistrettoSignature =
-                spend_private.sign_schnorrkel(b"cadence-tx-v1", &signing_hash);
+                onetime_private.sign_schnorrkel(b"cadence-tx-v1", &signing_hash);
 
             // Store the 64-byte signature
             let sig_bytes: &[u8] = signature.as_ref();

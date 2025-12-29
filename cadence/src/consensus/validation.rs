@@ -287,12 +287,13 @@ mod tests {
     fn test_mining_tx_wrong_height() {
         let validator = TransactionValidator::new(mock_chain_state());
 
-        let mut tx = MiningTx {
+        let tx = MiningTx {
             block_height: 5, // Wrong - should be 11
             reward: 600_000_000_000,
-            recipient_view_key: [0u8; 32],
-            recipient_spend_key: [0u8; 32],
-            output_public_key: [0u8; 32],
+            miner_view_key: [0u8; 32],
+            miner_spend_key: [0u8; 32],
+            target_key: [0u8; 32],
+            public_key: [0u8; 32],
             prev_block_hash: [0u8; 32],
             difficulty: 1000,
             nonce: 0,

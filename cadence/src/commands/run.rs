@@ -5,18 +5,20 @@ use futures::StreamExt;
 use mc_common::{NodeID, ResponderId};
 use mc_consensus_scp::QuorumSet;
 use mc_crypto_keys::Ed25519Public;
+use std::net::SocketAddr;
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::block::MiningTx;
 use crate::config::Config;
 use crate::consensus::{BlockBuilder, ConsensusConfig, ConsensusEvent, ConsensusService};
 use crate::network::{NetworkDiscovery, NetworkEvent, QuorumBuilder, QuorumValidation};
 use crate::node::Node;
+use crate::rpc::{start_rpc_server, RpcState};
 use crate::transaction::Transaction;
 
 /// Minimum peers required before mining can start
@@ -107,8 +109,37 @@ async fn run_async(config: Config, config_path: &Path, mine: bool) -> Result<()>
     // Create the node
     let mut node = Node::new(config.clone(), config_path)?;
 
+    // Start RPC server for thin wallet connections
+    let rpc_addr: SocketAddr = format!("0.0.0.0:{}", config.network.rpc_port)
+        .parse()
+        .expect("Invalid RPC address");
+
+    // Create shared state for RPC
+    let mining_active = Arc::new(RwLock::new(false));
+    let peer_count = Arc::new(RwLock::new(discovery.peer_count()));
+
+    let rpc_state = Arc::new(RpcState::from_shared(
+        node.shared_ledger(),
+        node.shared_mempool(),
+        mining_active.clone(),
+        peer_count.clone(),
+        node.wallet_view_key(),
+        node.wallet_spend_key(),
+    ));
+
+    // Spawn RPC server task
+    let rpc_state_clone = rpc_state.clone();
+    tokio::spawn(async move {
+        if let Err(e) = start_rpc_server(rpc_addr, rpc_state_clone).await {
+            error!("RPC server error: {}", e);
+        }
+    });
+
+    info!("RPC server listening on {}", rpc_addr);
+
     // Get chain state for consensus
-    let chain_state = node.ledger().get_chain_state()
+    let ledger = node.shared_ledger();
+    let chain_state = ledger.read().unwrap().get_chain_state()
         .map_err(|e| anyhow::anyhow!("Failed to get chain state: {}", e))?;
 
     // Create consensus service
@@ -171,6 +202,8 @@ async fn run_async(config: Config, config_path: &Path, mine: bool) -> Result<()>
             quorum.member_count()
         );
         node.start_mining_public()?;
+        // Update RPC mining status
+        *mining_active.write().unwrap() = true;
     }
 
     // Run the combined event loop
@@ -194,7 +227,8 @@ async fn run_async(config: Config, config_path: &Path, mine: bool) -> Result<()>
                                 warn!("Failed to add network block: {}", e);
                             } else {
                                 // Update consensus chain state
-                                if let Ok(state) = node.ledger().get_chain_state() {
+                                let state = node.shared_ledger().read().unwrap().get_chain_state();
+                                if let Ok(state) = state {
                                     consensus.update_chain_state(state);
                                 }
                             }
@@ -215,9 +249,13 @@ async fn run_async(config: Config, config_path: &Path, mine: bool) -> Result<()>
                         }
                         NetworkEvent::PeerDiscovered(peer_id) => {
                             info!("Peer connected: {}", peer_id);
+                            // Update RPC peer count
+                            *peer_count.write().unwrap() = discovery.peer_count();
                         }
                         NetworkEvent::PeerDisconnected(peer_id) => {
                             warn!("Peer disconnected: {}", peer_id);
+                            // Update RPC peer count
+                            *peer_count.write().unwrap() = discovery.peer_count();
                         }
                     }
                 }
@@ -243,7 +281,8 @@ async fn run_async(config: Config, config_path: &Path, mine: bool) -> Result<()>
                                         warn!("Failed to add consensus block: {}", e);
                                     } else {
                                         // Update consensus chain state
-                                        if let Ok(state) = node.ledger().get_chain_state() {
+                                        let state = node.shared_ledger().read().unwrap().get_chain_state();
+                                        if let Ok(state) = state {
                                             consensus.update_chain_state(state);
                                         }
 
@@ -320,6 +359,8 @@ async fn run_async(config: Config, config_path: &Path, mine: bool) -> Result<()>
     }
 
     node.stop_mining_public();
+    // Update RPC mining status
+    *mining_active.write().unwrap() = false;
     Ok(())
 }
 

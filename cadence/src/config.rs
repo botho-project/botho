@@ -23,6 +23,10 @@ pub struct NetworkConfig {
     #[serde(default = "default_gossip_port")]
     pub gossip_port: u16,
 
+    /// Port for JSON-RPC server (for thin wallet connections)
+    #[serde(default = "default_rpc_port")]
+    pub rpc_port: u16,
+
     /// Bootstrap peers for initial discovery (multiaddr format)
     #[serde(default)]
     pub bootstrap_peers: Vec<String>,
@@ -34,6 +38,10 @@ pub struct NetworkConfig {
 
 fn default_gossip_port() -> u16 {
     7100
+}
+
+fn default_rpc_port() -> u16 {
+    7101
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,6 +90,7 @@ impl Default for NetworkConfig {
     fn default() -> Self {
         Self {
             gossip_port: default_gossip_port(),
+            rpc_port: default_rpc_port(),
             bootstrap_peers: Vec::new(),
             quorum: QuorumConfig::default(),
         }

@@ -9,6 +9,7 @@ mod ledger;
 mod mempool;
 mod network;
 mod node;
+mod rpc;
 mod transaction;
 mod wallet;
 

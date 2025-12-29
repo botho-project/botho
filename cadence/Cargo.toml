@@ -21,7 +21,10 @@ dirs = "5"
 # Crypto & Keys
 mc-account-keys = { path = "../account-keys" }
 mc-crypto-keys = { path = "../crypto/keys" }
+mc-crypto-ring-signature = { path = "../crypto/ring-signature" }
 mc-core = { path = "../core" }
+mc-util-from-random = { path = "../util/from-random" }
+rand_core = "0.6"
 
 # Networking & Consensus
 mc-gossip = { path = "../gossip" }
@@ -54,6 +57,12 @@ thiserror = "1"
 
 # Async (for future networking)
 tokio = { version = "1", features = ["full"] }
+
+# JSON-RPC server
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+serde_json = "1"
 
 [dev-dependencies]
 tempfile = "3"

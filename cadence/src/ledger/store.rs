@@ -197,15 +197,11 @@ impl Ledger {
 
         // Create UTXO from mining reward (coinbase)
         // Use block hash as the "tx_hash" for mining rewards
+        // The mining tx has stealth output keys (target_key, public_key)
         let coinbase_utxo_id = UtxoId::new(new_hash, 0);
         let coinbase_utxo = Utxo {
             id: coinbase_utxo_id,
-            output: TxOutput {
-                amount: block.mining_tx.reward,
-                recipient_view_key: block.mining_tx.recipient_view_key,
-                recipient_spend_key: block.mining_tx.recipient_spend_key,
-                output_public_key: block.mining_tx.output_public_key,
-            },
+            output: block.mining_tx.to_tx_output(),
             created_at: new_height,
         };
         let coinbase_bytes = bincode::serialize(&coinbase_utxo)
@@ -399,18 +395,20 @@ impl Ledger {
     }
 
     /// Add a UTXO ID to the address index
+    ///
+    /// NOTE: With stealth addresses, we index by target_key (one-time key) instead of
+    /// recipient address. This allows retrieving UTXOs after the wallet has identified
+    /// them via stealth scanning, but doesn't reveal address linkage.
     fn add_to_address_index(
         &self,
         txn: &mut lmdb::RwTransaction,
         utxo: &Utxo,
     ) -> Result<(), LedgerError> {
-        let addr_key = Self::address_key(
-            &utxo.output.recipient_view_key,
-            &utxo.output.recipient_spend_key,
-        );
+        // Index by target_key for UTXO retrieval after stealth detection
+        let target_key = &utxo.output.target_key;
 
         // Get existing IDs or empty vec
-        let existing = match txn.get(self.address_index_db, &addr_key) {
+        let existing = match txn.get(self.address_index_db, target_key) {
             Ok(bytes) => bytes.to_vec(),
             Err(lmdb::Error::NotFound) => Vec::new(),
             Err(e) => return Err(e.into()),
@@ -422,7 +420,7 @@ impl Ledger {
 
         txn.put(
             self.address_index_db,
-            &addr_key,
+            target_key,
             &ids,
             WriteFlags::empty(),
         )?;
@@ -431,18 +429,17 @@ impl Ledger {
     }
 
     /// Remove a UTXO ID from the address index
+    ///
+    /// NOTE: With stealth addresses, UTXOs are indexed by target_key (one-time key).
     fn remove_from_address_index(
         &self,
         txn: &mut lmdb::RwTransaction,
         utxo: &Utxo,
     ) -> Result<(), LedgerError> {
-        let addr_key = Self::address_key(
-            &utxo.output.recipient_view_key,
-            &utxo.output.recipient_spend_key,
-        );
+        let target_key = &utxo.output.target_key;
 
         // Get existing IDs
-        let existing = match txn.get(self.address_index_db, &addr_key) {
+        let existing = match txn.get(self.address_index_db, target_key) {
             Ok(bytes) => bytes.to_vec(),
             Err(lmdb::Error::NotFound) => return Ok(()), // Nothing to remove
             Err(e) => return Err(e.into()),
@@ -457,12 +454,12 @@ impl Ledger {
             .collect();
 
         if filtered.is_empty() {
-            // No more UTXOs for this address, remove the entry
-            let _ = txn.del(self.address_index_db, &addr_key, None);
+            // No more UTXOs for this target key, remove the entry
+            let _ = txn.del(self.address_index_db, target_key, None);
         } else {
             txn.put(
                 self.address_index_db,
-                &addr_key,
+                target_key,
                 &filtered,
                 WriteFlags::empty(),
             )?;
@@ -474,7 +471,11 @@ impl Ledger {
     /// Verify all signatures in a transaction
     ///
     /// For each input, this looks up the UTXO being spent and verifies
-    /// the signature against the UTXO's spend public key.
+    /// the signature against the UTXO's one-time target key (stealth address).
+    ///
+    /// With stealth addresses, the target_key is the one-time public spend key
+    /// `P = Hs(r * C) * G + D`. The spender proves ownership using the
+    /// corresponding one-time private key `x = Hs(a * R) + d`.
     pub fn verify_transaction(&self, tx: &CadenceTransaction) -> Result<(), LedgerError> {
         let signing_hash = tx.signing_hash();
 
@@ -490,11 +491,11 @@ impl Ledger {
                 ))
             })?;
 
-            // Reconstruct the public spend key from the UTXO
-            let spend_public = RistrettoPublic::try_from(&utxo.output.recipient_spend_key[..])
+            // Get the one-time target key (stealth spend public key)
+            let target_public = RistrettoPublic::try_from(&utxo.output.target_key[..])
                 .map_err(|_| {
                     LedgerError::InvalidBlock(format!(
-                        "Input {} has invalid spend key in UTXO",
+                        "Input {} has invalid target key in UTXO",
                         i
                     ))
                 })?;
@@ -510,8 +511,8 @@ impl Ledger {
                 },
             )?;
 
-            // Verify the signature
-            spend_public
+            // Verify the signature against the one-time target key
+            target_public
                 .verify_schnorrkel(b"cadence-tx-v1", &signing_hash, &signature)
                 .map_err(|_| {
                     LedgerError::InvalidBlock(format!(
