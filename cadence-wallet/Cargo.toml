@@ -35,6 +35,9 @@ reqwest = { workspace = true, features = ["json", "rustls-tls"] }
 
 # CLI
 clap = { workspace = true, features = ["derive"] }
+rpassword = "7"
+chrono = { workspace = true, features = ["std", "clock"] }
+sha2 = { workspace = true }
 
 # Serialization
 serde = { workspace = true, features = ["derive"] }

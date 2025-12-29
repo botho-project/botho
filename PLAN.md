@@ -76,7 +76,10 @@ bootstrap_peers = [
 
 # Quorum configuration for consensus
 [network.quorum]
-threshold = 2  # Need 2 peers to agree
+mode = "recommended"  # or "explicit"
+min_peers = 1         # For recommended mode: minimum peers before mining
+threshold = 2         # For explicit mode: required agreement count
+members = []          # For explicit mode: list of trusted peer IDs
 
 [mining]
 enabled = false
@@ -223,6 +226,183 @@ Topics:
 4. Discovers additional peers through gossip
 5. Maintains peer table with last-seen timestamps
 
+## Network Launch Strategy
+
+### Overview
+
+Cadence uses a self-organizing quorum model based on Stellar's Federated Byzantine Agreement (FBA). Each node chooses its own quorum configuration, and the network's consensus cluster emerges from overlapping trust relationships.
+
+**Key principle**: Solo nodes cannot mine. Mining requires a satisfiable quorum with at least one other peer.
+
+### Launch Phases
+
+```
+Phase 0: Bootstrap Server Only
+┌─────────────────────────────────────────────────────────────────┐
+│   Bootstrap (hosted by Cadence team)                            │
+│   - Participates in consensus (no mining)                       │
+│   - Provides peer discovery                                     │
+│   - Suggests default quorum configuration                       │
+└─────────────────────────────────────────────────────────────────┘
+
+Phase 1: First Miner Joins (2-of-2)
+┌─────────────────┐       ┌─────────────────┐
+│   Bootstrap     │◄─────►│    Miner 1      │
+│   (no mining)   │       │   (mining)      │
+└─────────────────┘       └─────────────────┘
+         └── 2-of-2 consensus, mining starts ──┘
+
+Phase 2: Network Grows (n-of-N)
+┌─────────────────┐       ┌─────────────────┐       ┌─────────────────┐
+│   Bootstrap     │◄─────►│    Miner 1      │◄─────►│    Miner 2      │
+│   (may retire)  │       │                 │       │                 │
+└─────────────────┘       └─────────────────┘       └─────────────────┘
+                                   │
+                          ┌────────┴────────┐
+                          │    Miner 3      │
+                          │                 │
+                          └─────────────────┘
+         └── Threshold scales with BFT formula ──┘
+```
+
+### Quorum Configuration Modes
+
+Users can configure their quorum in `config.toml`:
+
+#### Recommended Mode (Default)
+
+Automatically trusts discovered peers and calculates BFT threshold:
+
+```toml
+[network.quorum]
+mode = "recommended"
+min_peers = 1  # Minimum peers before mining can start
+```
+
+- Trusts all connected peers
+- Threshold calculated as `ceil(2n/3)` for BFT safety
+- Good for most users who want to join the main network
+
+#### Explicit Mode
+
+User explicitly lists trusted peer IDs:
+
+```toml
+[network.quorum]
+mode = "explicit"
+threshold = 2
+members = [
+  "12D3KooWBootstrap...",  # Bootstrap server
+  "12D3KooWMiner1...",     # Specific trusted miner
+]
+```
+
+- Only counts listed peers toward quorum
+- Threshold is fixed (user-defined)
+- Good for private networks or specific trust relationships
+
+### BFT Threshold Calculation
+
+The threshold uses the formula `n = 3f + 1` where `f` = failures tolerated:
+
+| Nodes | Threshold | Fault Tolerance | Notes |
+|-------|-----------|-----------------|-------|
+| 2     | 2-of-2    | 0               | Any failure halts chain |
+| 3     | 2-of-3    | 1               | Minimum recommended |
+| 4     | 3-of-4    | 1               | |
+| 5     | 4-of-5    | 1               | |
+| 6     | 4-of-6    | 2               | |
+| 7     | 5-of-7    | 2               | Stellar's current Tier 1 |
+| 13    | 9-of-13   | 4               | Stellar's 2025 target |
+
+```rust
+fn calculate_threshold(n: usize) -> usize {
+    let f = (n - 1) / 3;  // Failures tolerated
+    n - f                  // Threshold = n - f ≈ ceil(2n/3)
+}
+```
+
+### Dynamic Mining Eligibility
+
+Mining is gated by quorum satisfiability:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Mining State Machine                          │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│   ┌──────────┐  peer connects    ┌──────────┐                   │
+│   │ WAITING  │ ───────────────► │  MINING  │                   │
+│   │          │  quorum met       │          │                   │
+│   └──────────┘ ◄─────────────── └──────────┘                   │
+│                  peer disconnects                                │
+│                  quorum lost                                     │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+- On peer connect: Re-evaluate quorum, start mining if satisfied
+- On peer disconnect: Re-evaluate quorum, stop mining if lost
+- Solo mining is impossible by design
+
+### Self-Organizing Quorum
+
+Nodes with bad quorum configurations self-punish:
+
+| Bad Config | Consequence |
+|------------|-------------|
+| Trust only yourself | Isolated, mine worthless blocks |
+| Trust too few nodes | Chain halts when they go offline |
+| Trust nodes outside main cluster | Follow a minority fork |
+| Threshold too low | Accept blocks others reject |
+| Threshold too high | Halt more often |
+
+**Economic incentive**: Mined coins are only valuable if the main cluster accepts your blocks. Bad configuration = wasted electricity.
+
+### Bootstrap Node Retirement
+
+The bootstrap node can eventually retire:
+
+1. Network reaches critical mass (e.g., 7+ stable miners)
+2. Bootstrap announces retirement (gives warning period)
+3. Miners update quorum configs to remove bootstrap
+4. Bootstrap stops participating
+5. Network continues with miner-only quorum
+
+### Example Configurations
+
+**For bootstrap server (no mining)**:
+```toml
+[mining]
+enabled = false
+
+[network.quorum]
+mode = "recommended"
+min_peers = 1
+```
+
+**For first miner joining network**:
+```toml
+[mining]
+enabled = true
+threads = 4
+
+[network.quorum]
+mode = "explicit"
+threshold = 2
+members = ["12D3KooWBootstrapPeerIdHere..."]
+```
+
+**For established miner (recommended mode)**:
+```toml
+[mining]
+enabled = true
+
+[network.quorum]
+mode = "recommended"
+min_peers = 2  # Wait for at least 2 peers
+```
+
 ## Consensus Integration (Partial)
 
 The SCP (Stellar Consensus Protocol) integration provides Byzantine fault tolerance:
@@ -271,15 +451,20 @@ enum ConsensusEvent {
 
 ### Lower Priority
 
-5. **Ring Signatures** - Replace simple Schnorr with ring signatures for sender privacy
+5. **Peer Reputation** - Track peer latency and reliability for selection
+   - `network/reputation.rs` module created with latency EMA tracking
+   - Needs integration into peer selection logic
+   - Ban peers with < 25% success rate
+
+6. **Ring Signatures** - Replace simple Schnorr with ring signatures for sender privacy
    - Currently uses plain Ed25519 signatures
    - Need to add decoy inputs and ring construction
 
-6. **One-Time Addresses** - Generate proper one-time output keys
+7. **One-Time Addresses** - Generate proper one-time output keys
    - Currently marked as TODO in block.rs
    - Need Diffie-Hellman key exchange for stealth addresses
 
-7. **Fee Market** - Dynamic fee based on mempool congestion
+8. **Fee Market** - Dynamic fee based on mempool congestion
    - Currently uses fixed minimum fee
 
 ## Simplifications from MobileCoin
@@ -338,7 +523,8 @@ cadence/src/
 ├── network/
 │   ├── mod.rs           # Module exports
 │   ├── discovery.rs     # libp2p gossip-based discovery
-│   └── quorum.rs        # Quorum builder and validation
+│   ├── quorum.rs        # Quorum builder and validation
+│   └── reputation.rs    # Peer latency/reliability tracking
 └── commands/
     ├── mod.rs
     ├── init.rs          # Wallet initialization
@@ -348,3 +534,37 @@ cadence/src/
     ├── address.rs       # Address display
     └── send.rs          # Transaction creation
 ```
+
+## Dependency Modernization
+
+### Completed
+
+| Old | New | Status |
+|-----|-----|--------|
+| `scoped_threadpool` | Removed (unused) | ✅ Removed |
+| `json` | Removed (unused) | ✅ Removed |
+| `rjson` | Removed (unused) | ✅ Removed |
+
+### In Progress
+
+| Old | New | Status |
+|-----|-----|--------|
+| `lazy_static` | `std::sync::LazyLock` | ⚠️ Partial - some std crates migrated |
+| `once_cell` | `std::sync::OnceLock` | ⚠️ Partial - consensus_service.rs migrated |
+| `yaml-rust` | Removed (unused) | ⚠️ Still in workspace, unused |
+| `serde_cbor` | `ciborium` | ⚠️ Both present, migration incomplete |
+
+### Pending
+
+| Old | New | Status |
+|-----|-----|--------|
+| `rusoto_*` | `aws-sdk-*` | ⏳ Used in ledger/distribution |
+| `grpcio` | `tonic` | ⏳ Large migration, cadence uses libp2p instead |
+| `slog` | `tracing` | ⏳ cadence/ already migrated, inherited crates remain |
+| `mbedtls` | `rustls` | ⏳ Low priority |
+| `lmdb-rkv` | `heed` or `redb` | ⏳ Low priority |
+| `protobuf 2` | `prost` | ⏳ Already using prost in many places |
+
+**Notes**:
+- `transaction/core` is `#![no_std]` and must continue using `lazy_static`
+- Many inherited MobileCoin crates still use older patterns

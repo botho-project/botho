@@ -70,6 +70,7 @@ members = [
     "transaction/types",
     "util/b58-decoder",
     "util/build/grpc",
+    "util/build/grpc-tonic",
     "util/build/script",
     "util/cli",
     "util/dump-ledger",
@@ -78,6 +79,7 @@ members = [
     "util/from-random",
     "util/generate-sample-ledger",
     "util/grpc",
+    "util/grpc-tonic",
     "util/grpc-admin-tool",
     "util/grpc-token-generator",
     "util/host-cert",
@@ -120,6 +122,7 @@ anyhow = "1"
 assert_cmd = "2"
 assert_matches = "1"
 async-channel = "2"
+async-trait = "0.1"
 backtrace = "0.3"
 balanced-tree-index = "2"
 base64 = { version = "0.21", default-features = false }
@@ -216,12 +219,10 @@ rayon = "1"
 regex = "1"
 reqwest = { version = "0.11", default-features = false }
 retry = "2"
-rjson = "0.3"
 rocket = "0.5"
 rusoto_core = { version = "0.48", default-features = false }
 rusoto_s3 = { version = "0.48", default-features = false }
 schnorrkel-og = { version = "0.11.0-pre.0", default-features = false }
-scoped_threadpool = "0.1"
 secrecy = "0.8"
 semver = "1"
 sentry = { version = "0.32", default-features = false }
@@ -256,9 +257,8 @@ tiny-bip39 = "1"
 tokio = "1"
 tokio-stream = "0.1"
 toml = "0.8"
-tonic = { version = "0.14", default-features = false }
-tonic-prost = { version = "0.14" }
-tonic-prost-build = { version = "0.14" }
+tonic = { version = "0.10", default-features = false }
+tonic-build = { version = "0.10", default-features = false }
 tracing = "0.1"
 url = "2"
 walkdir = "2"
@@ -323,6 +323,7 @@ mc-transaction-extra = { path = "transaction/extra" }
 mc-transaction-summary = { path = "transaction/summary" }
 mc-transaction-types = { path = "transaction/types", default-features = false }
 mc-util-build-grpc = { path = "util/build/grpc" }
+mc-util-build-grpc-tonic = { path = "util/build/grpc-tonic" }
 mc-util-build-info = { path = "util/build/info" }
 mc-util-build-script = { path = "util/build/script" }
 mc-util-cli = { path = "util/cli" }
@@ -330,6 +331,7 @@ mc-util-encodings = { path = "util/encodings", default-features = false }
 mc-util-from-random = { path = "util/from-random", default-features = false }
 mc-util-generate-sample-ledger = { path = "util/generate-sample-ledger" }
 mc-util-grpc = { path = "util/grpc" }
+mc-util-grpc-tonic = { path = "util/grpc-tonic" }
 mc-util-host-cert = { path = "util/host-cert", default-features = false }
 mc-util-keyfile = { path = "util/keyfile" }
 mc-util-lmdb = { path = "util/lmdb" }

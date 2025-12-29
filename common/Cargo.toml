@@ -68,4 +68,3 @@ slog-term = { workspace = true, optional = true }
 
 [dev-dependencies]
 proptest = { workspace = true, features = ["default-code-coverage"] }
-scoped_threadpool = { workspace = true }

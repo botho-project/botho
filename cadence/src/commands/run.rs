@@ -14,18 +14,53 @@ use std::time::Duration;
 use tracing::{debug, error, info, warn};
 
 use crate::block::MiningTx;
-use crate::config::Config;
+use crate::config::{Config, QuorumMode};
 use crate::consensus::{BlockBuilder, ConsensusConfig, ConsensusEvent, ConsensusService};
-use crate::network::{NetworkDiscovery, NetworkEvent, QuorumBuilder, QuorumValidation};
+use crate::network::{NetworkDiscovery, NetworkEvent, QuorumBuilder};
 use crate::node::Node;
 use crate::rpc::{start_rpc_server, RpcState};
 use crate::transaction::Transaction;
 
-/// Minimum peers required before mining can start
-const MIN_PEERS_FOR_MINING: usize = 1;
-
 /// Timeout for initial peer discovery (seconds)
 const DISCOVERY_TIMEOUT_SECS: u64 = 30;
+
+/// Helper to get connected peer IDs as strings
+fn get_connected_peer_ids(discovery: &NetworkDiscovery) -> Vec<String> {
+    discovery
+        .peer_table()
+        .iter()
+        .map(|p| p.peer_id.to_string())
+        .collect()
+}
+
+/// Check if mining should be enabled based on quorum config and connected peers
+fn check_mining_eligibility(
+    config: &Config,
+    connected_peers: &[String],
+    want_to_mine: bool,
+) -> (bool, String) {
+    if !want_to_mine {
+        return (false, "Mining not requested".to_string());
+    }
+
+    let (can_reach, quorum_size, threshold) = config.network.quorum.can_reach_quorum(connected_peers);
+
+    if !can_reach {
+        let mode_str = match config.network.quorum.mode {
+            QuorumMode::Explicit => "explicit",
+            QuorumMode::Recommended => "recommended",
+        };
+        return (
+            false,
+            format!(
+                "Quorum not satisfied ({} mode): have {}, need {} nodes",
+                mode_str, quorum_size, threshold
+            ),
+        );
+    }
+
+    (true, format!("Quorum satisfied: {}-of-{}", threshold, quorum_size))
+}
 
 /// Run the node
 pub fn run(config_path: &Path, mine: bool) -> Result<()> {
@@ -54,16 +89,22 @@ async fn run_async(config: Config, config_path: &Path, mine: bool) -> Result<()>
 
     let mut swarm = discovery.start().await?;
 
+    // Determine minimum peers to wait for based on quorum config
+    let min_peers_to_wait = match config.network.quorum.mode {
+        QuorumMode::Explicit => 1, // In explicit mode, wait for at least one peer
+        QuorumMode::Recommended => config.network.quorum.min_peers as usize,
+    };
+
     // Wait for peers with timeout
     info!(
-        "Waiting for peers (timeout: {}s)...",
-        DISCOVERY_TIMEOUT_SECS
+        "Waiting for peers (min: {}, timeout: {}s)...",
+        min_peers_to_wait, DISCOVERY_TIMEOUT_SECS
     );
 
     let start = std::time::Instant::now();
     let deadline = Duration::from_secs(DISCOVERY_TIMEOUT_SECS);
 
-    while start.elapsed() < deadline && discovery.peer_count() < MIN_PEERS_FOR_MINING {
+    while start.elapsed() < deadline && discovery.peer_count() < min_peers_to_wait {
         if shutdown.load(Ordering::SeqCst) {
             return Ok(());
         }
@@ -80,14 +121,13 @@ async fn run_async(config: Config, config_path: &Path, mine: bool) -> Result<()>
         }
     }
 
-    let has_peers = discovery.peer_count() >= MIN_PEERS_FOR_MINING;
-
     // Show peer status
     println!();
-    if has_peers {
-        println!("=== Connected Peers: {} ===", discovery.peer_count());
-        for peer in discovery.peer_table() {
-            println!("  - {}", peer.peer_id);
+    let connected_peers = get_connected_peer_ids(&discovery);
+    if !connected_peers.is_empty() {
+        println!("=== Connected Peers: {} ===", connected_peers.len());
+        for peer in &connected_peers {
+            println!("  - {}", peer);
         }
     } else {
         println!("=== No peers connected ===");
@@ -97,14 +137,22 @@ async fn run_async(config: Config, config_path: &Path, mine: bool) -> Result<()>
     }
     println!();
 
-    // Check quorum status
+    // Check quorum status using new config-based logic
+    let (can_mine_now, quorum_message) = check_mining_eligibility(&config, &connected_peers, mine);
+
+    // Display quorum status
+    let mode_str = match config.network.quorum.mode {
+        QuorumMode::Explicit => format!("explicit (threshold: {})", config.network.quorum.threshold),
+        QuorumMode::Recommended => format!("recommended (min_peers: {})", config.network.quorum.min_peers),
+    };
+    println!("Quorum mode: {}", mode_str);
+    println!("Quorum status: {}", quorum_message);
+
+    // Build QuorumBuilder for SCP (still needed for consensus service)
     let mut quorum = QuorumBuilder::new(config.network.quorum.threshold);
     for peer in discovery.peer_table() {
         quorum.add_member(peer.peer_id);
     }
-
-    let validation = QuorumValidation::new(&quorum);
-    println!("Quorum: {}", validation.message);
 
     // Create the node
     let mut node = Node::new(config.clone(), config_path)?;
@@ -163,21 +211,22 @@ async fn run_async(config: Config, config_path: &Path, mine: bool) -> Result<()>
 
     info!("Consensus service initialized at slot {}", consensus.current_slot());
 
-    // Determine if we can mine
-    let can_mine = if !mine {
-        false
-    } else if !has_peers {
-        warn!("Mining disabled: no peers connected");
-        false
-    } else if !validation.is_valid {
-        warn!("Mining disabled: quorum not satisfied");
-        false
-    } else {
-        true
-    };
+    // Track mining state - can change as peers connect/disconnect
+    let mut mining_enabled = false;
 
     println!();
     node.print_status_public()?;
+
+    // Start mining if quorum is satisfied
+    if can_mine_now {
+        info!("Starting mining - {}", quorum_message);
+        node.start_mining_public()?;
+        mining_enabled = true;
+        *mining_active.write().unwrap() = true;
+    } else if mine {
+        warn!("Mining requested but {}", quorum_message);
+        println!("Mining will start when quorum is satisfied.");
+    }
 
     // Load pending transactions from file and broadcast them
     match node.load_pending_transactions() {
@@ -193,17 +242,6 @@ async fn run_async(config: Config, config_path: &Path, mine: bool) -> Result<()>
         Err(e) => {
             warn!("Failed to load pending transactions: {}", e);
         }
-    }
-
-    if can_mine {
-        info!(
-            "Starting mining with {}-of-{} quorum",
-            quorum.threshold(),
-            quorum.member_count()
-        );
-        node.start_mining_public()?;
-        // Update RPC mining status
-        *mining_active.write().unwrap() = true;
     }
 
     // Run the combined event loop
@@ -251,11 +289,98 @@ async fn run_async(config: Config, config_path: &Path, mine: bool) -> Result<()>
                             info!("Peer connected: {}", peer_id);
                             // Update RPC peer count
                             *peer_count.write().unwrap() = discovery.peer_count();
+
+                            // Re-evaluate mining eligibility
+                            if mine && !mining_enabled {
+                                let connected = get_connected_peer_ids(&discovery);
+                                let (can_mine_now, msg) = check_mining_eligibility(&config, &connected, mine);
+                                if can_mine_now {
+                                    info!("Quorum reached! {}", msg);
+                                    if let Err(e) = node.start_mining_public() {
+                                        warn!("Failed to start mining: {}", e);
+                                    } else {
+                                        mining_enabled = true;
+                                        *mining_active.write().unwrap() = true;
+                                    }
+                                }
+                            }
                         }
                         NetworkEvent::PeerDisconnected(peer_id) => {
                             warn!("Peer disconnected: {}", peer_id);
                             // Update RPC peer count
                             *peer_count.write().unwrap() = discovery.peer_count();
+
+                            // Re-evaluate mining eligibility
+                            if mining_enabled {
+                                let connected = get_connected_peer_ids(&discovery);
+                                let (can_mine_now, msg) = check_mining_eligibility(&config, &connected, mine);
+                                if !can_mine_now {
+                                    warn!("Quorum lost! {} - stopping mining", msg);
+                                    node.stop_mining_public();
+                                    mining_enabled = false;
+                                    *mining_active.write().unwrap() = false;
+                                }
+                            }
+                        }
+                        NetworkEvent::SyncRequest { peer, request_id: _, request, channel } => {
+                            use crate::network::{SyncRequest, SyncResponse};
+                            debug!("Sync request from {:?}: {:?}", peer, request);
+                            // Handle the sync request
+                            let shared_ledger = node.shared_ledger();
+                            let response = match request {
+                                SyncRequest::GetStatus => {
+                                    let ledger = shared_ledger.read().unwrap();
+                                    let state = ledger.get_chain_state().unwrap_or_default();
+                                    SyncResponse::Status {
+                                        height: state.height,
+                                        tip_hash: state.tip_hash,
+                                    }
+                                }
+                                SyncRequest::GetBlocks { start_height, count } => {
+                                    let ledger = shared_ledger.read().unwrap();
+                                    let mut blocks = Vec::new();
+                                    let end_height = start_height.saturating_add(count as u64).saturating_sub(1);
+                                    for height in start_height..=end_height.min(start_height + 99) {
+                                        if let Ok(block) = ledger.get_block(height) {
+                                            blocks.push(block);
+                                        } else {
+                                            break;
+                                        }
+                                    }
+                                    let has_more = blocks.len() == count as usize;
+                                    SyncResponse::Blocks { blocks, has_more }
+                                }
+                            };
+                            // Send response
+                            if let Err(e) = NetworkDiscovery::send_sync_response(&mut swarm, channel, response) {
+                                warn!("Failed to send sync response: {:?}", e);
+                            }
+                        }
+                        NetworkEvent::SyncResponse { peer: _, request_id: _, response } => {
+                            use crate::network::SyncResponse;
+                            match response {
+                                SyncResponse::Blocks { blocks, has_more: _ } => {
+                                    debug!("Received {} blocks from sync", blocks.len());
+                                    for block in blocks {
+                                        if let Err(e) = node.add_block_from_network(&block) {
+                                            warn!("Failed to add synced block: {}", e);
+                                            break;
+                                        }
+                                    }
+                                    // Update consensus chain state
+                                    let shared_ledger = node.shared_ledger();
+                                    let state = shared_ledger.read().unwrap().get_chain_state();
+                                    if let Ok(state) = state {
+                                        consensus.update_chain_state(state);
+                                    }
+                                }
+                                SyncResponse::Status { height, tip_hash } => {
+                                    debug!("Peer at height {} with tip {}", height, hex::encode(&tip_hash[0..8]));
+                                }
+                                SyncResponse::Error(e) => {
+                                    warn!("Sync error from peer: {}", e);
+                                }
+                            }
                         }
                     }
                 }

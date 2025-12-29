@@ -6,6 +6,7 @@ use futures::StreamExt;
 use libp2p::{
     gossipsub::{self, IdentTopic, MessageAuthenticity},
     identity, noise,
+    request_response::{self, InboundRequestId, OutboundRequestId, ResponseChannel},
     swarm::{NetworkBehaviour, SwarmEvent},
     tcp, yamux, Multiaddr, PeerId, Swarm,
 };
@@ -16,6 +17,7 @@ use tracing::{debug, info, warn};
 
 use crate::block::Block;
 use crate::consensus::ScpMessage;
+use crate::network::sync::{create_sync_behaviour, SyncCodec, SyncRequest, SyncResponse};
 use crate::transaction::Transaction;
 
 /// Topic for block announcements
@@ -48,13 +50,28 @@ pub enum NetworkEvent {
     PeerDiscovered(PeerId),
     /// A peer disconnected
     PeerDisconnected(PeerId),
+    /// A sync request was received (need to respond)
+    SyncRequest {
+        peer: PeerId,
+        request_id: InboundRequestId,
+        request: SyncRequest,
+        channel: ResponseChannel<SyncResponse>,
+    },
+    /// A sync response was received
+    SyncResponse {
+        peer: PeerId,
+        request_id: OutboundRequestId,
+        response: SyncResponse,
+    },
 }
 
-/// Network behaviour combining gossipsub
+/// Network behaviour combining gossipsub and sync request-response
 #[derive(NetworkBehaviour)]
 pub struct CadenceBehaviour {
     /// Gossipsub for block propagation
     pub gossipsub: gossipsub::Behaviour,
+    /// Request-response for chain sync
+    pub sync: request_response::Behaviour<SyncCodec>,
 }
 
 /// Network discovery and gossip service
@@ -138,7 +155,10 @@ impl NetworkDiscovery {
                 )
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
 
-                Ok(CadenceBehaviour { gossipsub })
+                // Create sync request-response behaviour
+                let sync = create_sync_behaviour();
+
+                Ok(CadenceBehaviour { gossipsub, sync })
             })?
             .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(60)))
             .build();
@@ -281,6 +301,67 @@ impl NetworkDiscovery {
 
                 None
             }
+
+            // Handle sync request-response events
+            SwarmEvent::Behaviour(CadenceBehaviourEvent::Sync(
+                request_response::Event::Message { peer, message },
+            )) => match message {
+                request_response::Message::Request {
+                    request_id,
+                    request,
+                    channel,
+                } => {
+                    debug!(%peer, ?request, "Received sync request");
+                    Some(NetworkEvent::SyncRequest {
+                        peer,
+                        request_id,
+                        request,
+                        channel,
+                    })
+                }
+                request_response::Message::Response {
+                    request_id,
+                    response,
+                } => {
+                    debug!(%peer, "Received sync response");
+                    Some(NetworkEvent::SyncResponse {
+                        peer,
+                        request_id,
+                        response,
+                    })
+                }
+            },
+
+            SwarmEvent::Behaviour(CadenceBehaviourEvent::Sync(
+                request_response::Event::OutboundFailure {
+                    peer,
+                    request_id,
+                    error,
+                },
+            )) => {
+                warn!(%peer, ?request_id, %error, "Sync request failed");
+                Some(NetworkEvent::SyncResponse {
+                    peer,
+                    request_id,
+                    response: SyncResponse::Error(error.to_string()),
+                })
+            }
+
+            SwarmEvent::Behaviour(CadenceBehaviourEvent::Sync(
+                request_response::Event::InboundFailure {
+                    peer,
+                    request_id,
+                    error,
+                },
+            )) => {
+                warn!(%peer, ?request_id, %error, "Inbound sync request failed");
+                None
+            }
+
+            SwarmEvent::Behaviour(CadenceBehaviourEvent::Sync(
+                request_response::Event::ResponseSent { .. },
+            )) => None,
+
             SwarmEvent::NewListenAddr { address, .. } => {
                 info!("Listening on {}", address);
                 None
@@ -304,5 +385,23 @@ impl NetworkDiscovery {
             }
             _ => None,
         }
+    }
+
+    /// Send a sync request to a peer
+    pub fn send_sync_request(
+        swarm: &mut Swarm<CadenceBehaviour>,
+        peer: PeerId,
+        request: SyncRequest,
+    ) -> OutboundRequestId {
+        swarm.behaviour_mut().sync.send_request(&peer, request)
+    }
+
+    /// Send a sync response
+    pub fn send_sync_response(
+        swarm: &mut Swarm<CadenceBehaviour>,
+        channel: ResponseChannel<SyncResponse>,
+        response: SyncResponse,
+    ) -> Result<(), SyncResponse> {
+        swarm.behaviour_mut().sync.send_response(channel, response)
     }
 }
