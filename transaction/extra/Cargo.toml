@@ -1,0 +1,50 @@
+[package]
+name = "mc-transaction-extra"
+version = "7.1.0"
+authors = ["MobileCoin"]
+edition = "2021"
+license = "Apache-2.0"
+readme = "README.md"
+rust-version = { workspace = true }
+
+[dependencies]
+# External dependencies
+cfg-if = { workspace = true }
+displaydoc = { workspace = true }
+prost = { workspace = true, features = ["prost-derive"] }
+rand = { workspace = true }
+rand_core = { workspace = true }
+serde = { workspace = true, features = ["alloc", "derive"] }
+subtle = { workspace = true }
+zeroize = { workspace = true }
+
+# MobileCoin dependencies
+mc-account-keys = { workspace = true }
+mc-core = { workspace = true }
+mc-crypto-digestible = { workspace = true, features = ["dalek"] }
+mc-crypto-hashes = { workspace = true }
+mc-crypto-keys = { workspace = true }
+mc-crypto-memo-mac = { workspace = true }
+mc-crypto-ring-signature = { workspace = true }
+mc-crypto-ring-signature-signer = { workspace = true }
+mc-transaction-core = { workspace = true }
+mc-transaction-summary = { workspace = true }
+mc-transaction-types = { workspace = true }
+mc-util-from-random = { workspace = true }
+mc-util-repr-bytes = { workspace = true }
+mc-util-serial = { workspace = true }
+mc-util-u64-ratio = { workspace = true }
+mc-util-vec-map = { workspace = true }
+mc-util-zip-exact = { workspace = true }
+
+curve25519-dalek = { workspace = true }
+
+[dev-dependencies]
+assert_matches = { workspace = true }
+maplit = { workspace = true }
+yaml-rust = { workspace = true }
+
+mc-fog-report-validation-test-utils = { workspace = true }
+mc-transaction-builder = { workspace = true, features = ["test-only"] }
+mc-util-from-random = { workspace = true }
+mc-util-test-helper = { workspace = true }

@@ -1,0 +1,51 @@
+[package]
+name = "mc-transaction-summary"
+version = "7.1.0"
+authors = ["MobileCoin"]
+edition = "2021"
+license = "Apache-2.0"
+readme = "README.md"
+
+[features]
+std = ["prost?/std"]
+serde = [
+    "dep:serde",
+    "mc-account-keys?/serde",
+    "mc-crypto-keys/serde",
+    "mc-crypto-ring-signature/serde",
+    "mc-transaction-types/serde",
+]
+prost = [
+    "dep:prost",
+    "mc-account-keys?/prost",
+    "mc-crypto-keys/prost",
+    "mc-crypto-ring-signature/prost",
+    "mc-transaction-types/prost",
+]
+
+default = ["std", "serde", "prost", "mc-account-keys"]
+
+[dependencies]
+# External dependencies
+displaydoc = { workspace = true }
+heapless = { workspace = true }
+
+# MobileCoin dependencies
+mc-account-keys = { workspace = true, optional = true }
+mc-core = { workspace = true }
+mc-crypto-digestible = { workspace = true, features = ["dalek", "derive"] }
+mc-crypto-keys = { workspace = true }
+mc-crypto-ring-signature = { workspace = true }
+mc-transaction-types = { workspace = true, features = ["alloc"] }
+mc-util-vec-map = { workspace = true }
+mc-util-zip-exact = { workspace = true }
+
+prost = { workspace = true, features = ["prost-derive"], optional = true }
+serde = { workspace = true, features = ["derive"], optional = true }
+subtle = { workspace = true, features = ["i128"] }
+zeroize = { workspace = true }
+
+[dev-dependencies]
+mc-transaction-core = { workspace = true, features = [] }
+mc-util-from-random = { workspace = true }
+rand = { workspace = true }

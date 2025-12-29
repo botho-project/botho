@@ -1,0 +1,12 @@
+[package]
+name = "mc-util-from-random"
+version = "7.1.0"
+authors = ["MobileCoin"]
+description = "A trait for constructing an object from a random number generator."
+edition = "2021"
+license = "Apache-2.0"
+readme = "README.md"
+rust-version = { workspace = true }
+
+[dependencies]
+rand_core = { workspace = true }

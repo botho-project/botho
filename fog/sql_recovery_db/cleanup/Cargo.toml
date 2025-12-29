@@ -1,0 +1,19 @@
+[package]
+name = "mc-fog-sql-recovery-db-cleanup"
+version = "7.1.0"
+authors = ["Mobilecoin"]
+edition = "2021"
+license = "GPL-3.0"
+rust-version = { workspace = true }
+
+[[bin]]
+name = "mc-fog-sql-recovery-db-cleanup"
+path = "src/main.rs"
+
+[dependencies]
+chrono = { workspace = true }
+clap = { workspace = true, features = ["derive", "env"] }
+mc-common = { workspace = true, features = ["loggers"] }
+mc-fog-recovery-db-iface = { workspace = true }
+mc-fog-sql-recovery-db = { workspace = true }
+serde = { workspace = true, features = ["alloc", "derive"] }

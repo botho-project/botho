@@ -1,0 +1,20 @@
+[package]
+name = "mc-fog-report-connection"
+version = "7.1.0"
+authors = ["MobileCoin"]
+edition = "2021"
+license = "GPL-3.0"
+readme = "README.md"
+rust-version = { workspace = true }
+
+[dependencies]
+mc-account-keys = { workspace = true }
+mc-common = { workspace = true, features = ["log"] }
+mc-fog-report-api = { workspace = true }
+mc-fog-report-types = { workspace = true }
+mc-util-grpc = { workspace = true }
+mc-util-serial = { workspace = true }
+mc-util-uri = { workspace = true }
+
+displaydoc = { workspace = true }
+grpcio = { workspace = true, features = ["prost-codec"] }

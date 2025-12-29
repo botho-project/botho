@@ -1,0 +1,21 @@
+[package]
+name = "mc-consensus-scp-play"
+version = "7.1.0"
+authors = ["MobileCoin"]
+edition = "2021"
+license = "GPL-3.0"
+readme = "README.md"
+rust-version = { workspace = true }
+
+[[bin]]
+name = "scp-play"
+path = "src/main.rs"
+
+[dependencies]
+mc-common = { workspace = true, features = ["loggers"] }
+mc-consensus-scp = { workspace = true, features = ["test_utils"] }
+mc-transaction-core = { workspace = true }
+mc-util-uri = { workspace = true }
+
+clap = { workspace = true, features = ["derive", "env"] }
+serde_json = { workspace = true }

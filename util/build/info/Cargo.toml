@@ -1,0 +1,22 @@
+[package]
+name = "mc-util-build-info"
+version = "7.1.0"
+authors = ["MobileCoin"]
+build = "build.rs"
+edition = "2021"
+license = "GPL-3.0"
+readme = "README.md"
+rust-version = { workspace = true }
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "show-build-info"
+path = "src/bin/main.rs"
+
+[build-dependencies]
+cargo-emit = { workspace = true }
+
+[dev-dependencies]
+json = { workspace = true }

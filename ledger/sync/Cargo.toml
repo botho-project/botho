@@ -1,0 +1,54 @@
+[package]
+name = "mc-ledger-sync"
+version = "7.1.0"
+authors = ["MobileCoin"]
+edition = "2021"
+license = "GPL-3.0"
+readme = "README.md"
+rust-version = { workspace = true }
+
+[[bin]]
+name = "ledger-sync-test-app"
+path = "src/test_app/main.rs"
+required-features = ["mc-consensus-enclave-measurement"]
+
+[features]
+test_utils = []
+
+[dependencies]
+mc-account-keys = { workspace = true }
+mc-api = { workspace = true }
+mc-blockchain-test-utils = { workspace = true }
+mc-blockchain-types = { workspace = true }
+mc-common = { workspace = true, features = ["log"] }
+mc-connection = { workspace = true }
+mc-consensus-enclave-measurement = { workspace = true, optional = true }
+mc-consensus-scp = { workspace = true }
+mc-ledger-db = { workspace = true }
+mc-transaction-core = { workspace = true }
+mc-transaction-core-test-utils = { workspace = true }
+mc-util-telemetry = { workspace = true }
+mc-util-uri = { workspace = true }
+
+crossbeam-channel = { workspace = true }
+displaydoc = { workspace = true }
+grpcio = { workspace = true, features = ["prost-codec"] }
+mc-attestation-verifier = { workspace = true }
+mockall = { workspace = true }
+prost = { workspace = true, features = ["prost-derive"] }
+rand = { workspace = true }
+reqwest = { workspace = true, features = ["blocking", "rustls-tls", "gzip"] }
+retry = { workspace = true }
+serde = { workspace = true, features = ["alloc", "derive"] }
+tempfile = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+mc-common = { workspace = true, features = ["loggers"] }
+mc-connection-test-utils = { workspace = true }
+mc-consensus-scp = { workspace = true, features = ["test_utils"] }
+mc-ledger-db = { workspace = true, features = ["test_utils"] }
+mc-peers-test-utils = { workspace = true }
+mc-util-test-helper = { workspace = true }
+
+serde = { workspace = true, features = ["alloc", "derive"] }

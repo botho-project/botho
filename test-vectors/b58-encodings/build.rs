@@ -1,0 +1,56 @@
+use mc_account_keys::{AccountKey, RootIdentity};
+use mc_api::printable::{printable_wrapper, PrintableWrapper};
+use mc_test_vectors_definitions::b58_encodings::*;
+use mc_util_test_vector::write_jsonl;
+
+fn main() {
+    write_jsonl("../vectors", || {
+        (0..10)
+            .map(|n| {
+                let account_key = AccountKey::from(&RootIdentity::from(&[n; 32]));
+                let public_address = account_key.default_subaddress();
+                let wrapper = PrintableWrapper {
+                    wrapper: Some(printable_wrapper::Wrapper::PublicAddress(
+                        (&public_address).into(),
+                    )),
+                };
+                let b58_encoded = wrapper.b58_encode().unwrap();
+                B58EncodePublicAddressWithoutFog {
+                    view_public_key: public_address.view_public_key().to_bytes(),
+                    spend_public_key: public_address.spend_public_key().to_bytes(),
+                    b58_encoded,
+                }
+            })
+            .collect::<Vec<_>>()
+    })
+    .expect("Unable to write test vectors");
+
+    write_jsonl("../vectors", || {
+        (0..10)
+            .map(|n| {
+                let account_key = AccountKey::from(&RootIdentity {
+                    root_entropy: (&[n; 32]).into(),
+                    fog_report_url: "fog://example.com".to_owned(),
+                    fog_report_id: "".to_owned(),
+                    fog_authority_spki: Vec::new(),
+                });
+                let public_address = account_key.default_subaddress();
+                let wrapper = PrintableWrapper {
+                    wrapper: Some(printable_wrapper::Wrapper::PublicAddress(
+                        (&public_address).into(),
+                    )),
+                };
+                let b58_encoded = wrapper.b58_encode().unwrap();
+                B58EncodePublicAddressWithFog {
+                    view_public_key: public_address.view_public_key().to_bytes(),
+                    spend_public_key: public_address.spend_public_key().to_bytes(),
+                    fog_report_url: public_address.fog_report_url().unwrap_or("").to_owned(),
+                    fog_report_id: public_address.fog_report_id().unwrap_or("").to_owned(),
+                    fog_authority_sig: public_address.fog_authority_sig().unwrap_or(&[]).to_owned(),
+                    b58_encoded,
+                }
+            })
+            .collect::<Vec<_>>()
+    })
+    .expect("Unable to write test vectors");
+}

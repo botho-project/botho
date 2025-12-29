@@ -1,0 +1,71 @@
+# Copyright (c) 2018-2022 The MobileCoin Foundation
+### Chart Overrides.
+nameOverride: ""
+fullnameOverride: ""
+
+imagePullSecrets:
+- name: docker-credentials
+
+
+### Configuration and Secrets
+fogTestClientConfig:
+  ### populates keys directory, expects .b58pub and .json files for each key.
+  # Generate with:
+  #   kubectl create secret generic fog-test-client -o yaml --dry-run=client \
+  #     --from-file ./keys \
+  #     | grep -v creationTimestamp > fog-test-client-secret.yaml
+  keysSecret:
+    name: fog-test-client-keys
+
+  ### populates urls and vars
+  # Generate with:
+  #   kubectl create configmap fog-test-client -o yaml --dry-run=client \
+  #     --from-literal=FOG_VIEW="${FOG_VIEW}" \
+  #     --from-literal=FOG_LEDGER="${FOG_LEDGER}" \
+  #     --from-literal=CONSENSUS_VALIDATORS="${CONSENSUS_VALIDATORS}" \
+  #     | grep -v creationTimestamp > "fog-test-client-configMap.yaml"
+  configMap:
+    name: fog-test-client
+    ### Values:
+      # MC_CONSENSUS: ${consensus_validators}
+      # MC_CONSENSUS_WAIT: "20"
+      # MC_FOG_LEDGER: fog-ledger://${fog_hostname}:443
+      # MC_FOG_VIEW: fog-view://${fog_hostname}:443
+      # MC_TELEMETRY: "true"
+      # OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector.otel:4317
+      # OTEL_RESOURCE_ATTRIBUTES: deployment.environment=${partner}-${network}
+      # MC_TRANSFER_AMOUNT: "100000000000"
+
+  ### populates enclave measurement .css files
+  # Generate with:
+  #   kubectl create configmap fog-test-client-measurements -o yaml --dry-run=client \
+  #     --from-file ./measurements \
+  #     | grep -v creationTimestamp > fog-test-client-measurements-configMap.yaml
+  measurementsConfigMap:
+    name: fog-test-client-measurements
+
+### Deployments
+fogTestClient:
+  replicaCount: 1
+  image:
+    repository: mobilecoin/fog-test-client
+    tag: ""
+  podAnnotations:
+    fluentbit.io/include: 'true'
+    cluster-autoscaler.kubernetes.io/safe-to-evict: 'false'
+  resources:
+    requests:
+      cpu: 1000m
+      memory: 2Gi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+mobileCoinNetwork:
+  # test, prod, alpha...
+  network: ""
+  # mc, mcww, signal...
+  partner: ""
+
+serviceMonitor:
+  enabled: true

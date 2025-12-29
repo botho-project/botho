@@ -1,0 +1,57 @@
+// Copyright (c) 2018-2022 The MobileCoin Foundation
+
+// General-purpose administrative data types and service descriptors.
+// There are APIs related to some general-purpose management of a MobileCoin service instance,
+// and getting some common information out of it.
+// Some of them are sensitive, and as such these are not intended to be exposed to the world.
+
+syntax = "proto3";
+import "google/protobuf/empty.proto";
+import "build_info.proto";
+
+package admin;
+
+service AdminAPI {
+    // Get Prometheus metrics.
+    rpc GetPrometheusMetrics (google.protobuf.Empty) returns (GetPrometheusMetricsResponse);
+
+    // Get information such as build info, logging configuration, etc.
+    rpc GetInfo (google.protobuf.Empty) returns (GetInfoResponse);
+
+    // Set RUST_LOG.
+    rpc SetRustLog (SetRustLogRequest) returns (google.protobuf.Empty);
+
+    // Logs a test error message.
+    rpc TestLogError (google.protobuf.Empty) returns (google.protobuf.Empty);
+}
+
+message GetPrometheusMetricsResponse {
+    // Prometheus-encoded metrics.
+    // https://github.com/prometheus/docs/blob/main/content/docs/instrumenting/exposition_formats.md
+    string metrics = 1;
+}
+
+message GetInfoResponse {
+    // User-friendly service name (e.g. "Consensus Service").
+    string name = 1;
+
+    // Unique identifier for the service (e.g. the hostname it is running on).
+    string id = 2;
+
+    // JSON-encoded build information.
+    string build_info_json = 3;
+
+    // Structured build information.
+    build_info.BuildInfo build_info = 4;
+
+    // Service-specific JSON-encoded configuration.
+    string config_json = 5;
+
+    // Current RUST_LOG value.
+    string rust_log = 6;
+}
+
+message SetRustLogRequest {
+    // New value to set RUST_LOG to.
+    string rust_log = 1;
+}

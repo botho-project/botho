@@ -1,0 +1,69 @@
+[package]
+name = "mc-crypto-ring-signature"
+version = "7.1.0"
+authors = ["MobileCoin"]
+edition = "2021"
+license = "Apache-2.0"
+readme = "README.md"
+rust-version = { workspace = true }
+
+[features]
+alloc = [
+    "serde?/alloc",
+    "mc-crypto-digestible/alloc",
+    "mc-util-repr-bytes/alloc",
+    "curve25519-dalek/alloc",
+    "ed25519-dalek/alloc",
+]
+serde = [
+    "dep:serde",
+    "curve25519-dalek/serde",
+    "ed25519-dalek/serde",
+    "mc-crypto-keys/serde",
+]
+prost = ["dep:prost", "mc-crypto-keys/prost", "mc-util-serial"]
+internals = []
+
+default = [
+    "alloc",
+    "serde",
+    "prost",
+    "mc-util-repr-bytes/default",
+    "curve25519-dalek/default",
+    "mc-crypto-hashes/default",
+]
+proptest = ["dep:proptest", "default"]
+
+[dependencies]
+
+curve25519-dalek = { workspace = true }
+
+# External dependencies
+displaydoc = { workspace = true }
+ed25519-dalek = { workspace = true }
+hex_fmt = { workspace = true, optional = true }
+
+# MobileCoin dependencies
+mc-core-types = { workspace = true }
+mc-crypto-digestible = { workspace = true, features = ["dalek", "derive"] }
+mc-crypto-hashes = { workspace = true }
+mc-crypto-keys = { workspace = true }
+mc-util-from-random = { workspace = true }
+mc-util-repr-bytes = { workspace = true }
+mc-util-serial = { workspace = true, optional = true }
+
+# Enable all default features not known to break code coverage builds
+proptest = { workspace = true, features = ["default-code-coverage"], optional = true }
+prost = { workspace = true, features = ["prost-derive"], optional = true }
+rand_core = { workspace = true }
+serde = { workspace = true, features = ["derive"], optional = true }
+subtle = { workspace = true, features = ["i128"] }
+zeroize = { workspace = true }
+
+[dev-dependencies]
+
+mc-account-keys = { workspace = true }
+mc-crypto-digestible-test-utils = { workspace = true }
+mc-util-serial = { workspace = true, features = ["std"] }
+mc-util-test-helper = { workspace = true }
+proptest = { workspace = true, features = ["default-code-coverage"] }

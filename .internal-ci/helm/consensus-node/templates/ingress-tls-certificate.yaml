@@ -1,0 +1,19 @@
+# Copyright (c) 2018-2024 The MobileCoin Foundation
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "consensusNode.fullname" . }}-ingress-tls
+  labels:
+    {{- include "consensusNode.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "consensusNode.fullname" . }}-ingress-tls
+  privateKey:
+    size: 2048
+    algorithm: RSA
+    encoding: PKCS1
+  dnsNames:
+  - {{ .Values.node.config.clientHostname }}
+  - {{ .Values.node.config.peerHostname }}
+  issuerRef:
+    name: {{ .Values.node.ingress.common.tls.clusterIssuer }}
+    kind: ClusterIssuer

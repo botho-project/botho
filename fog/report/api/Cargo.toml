@@ -1,0 +1,31 @@
+[package]
+name = "mc-fog-report-api"
+version = "7.1.0"
+authors = ["MobileCoin"]
+edition = "2021"
+links = "mc-fog-report-api"
+license = "Apache-2.0"
+readme = "README.md"
+rust-version = { workspace = true }
+
+[dependencies]
+futures = { workspace = true }
+grpcio = { workspace = true, features = ["prost-codec"] }
+prost = { workspace = true, features = ["prost-derive"] }
+
+mc-api = { workspace = true }
+mc-attest-api = { workspace = true }
+mc-attest-verifier-types = { workspace = true }
+mc-consensus-api = { workspace = true }
+mc-fog-report-types = { workspace = true }
+
+[build-dependencies]
+mc-util-build-grpc = { workspace = true }
+mc-util-build-script = { workspace = true }
+
+cargo-emit = { workspace = true }
+
+[dev-dependencies]
+mc-attest-core = { workspace = true }
+mc-fog-report-api-test-utils = { workspace = true }
+prost = { workspace = true, features = ["prost-derive"] }

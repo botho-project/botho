@@ -1,0 +1,71 @@
+[package]
+name = "mc-common"
+version = "7.1.0"
+authors = ["MobileCoin"]
+edition = "2021"
+license = "Apache-2.0"
+rust-version = { workspace = true }
+
+[features]
+std = ["displaydoc/std", "mc-util-serial/std"]
+log = [
+    "backtrace",
+    "chrono/clock",
+    "mc-util-logger-macros",
+    "slog-scope",
+]
+loggers = [
+    # Features
+    "log",
+    "std",
+    # Dependencies
+    "hostname",
+    "lazy_static",
+    "mc-util-build-info",
+    "sentry",
+    "slog-async",
+    "slog-atomic",
+    "slog-envlogger",
+    "slog-json",
+    "slog-stdlog",
+    "slog-term",
+]
+
+[dependencies]
+mc-crypto-digestible = { workspace = true }
+mc-crypto-keys = { workspace = true, features = ["serde", "alloc", "prost"] }
+mc-rand = { workspace = true }
+# loggers-only dependencies
+mc-util-build-info = { workspace = true, optional = true }
+# log- and loggers-only dependencies
+mc-util-logger-macros = { workspace = true, optional = true }
+# Note: mc-util-serial is an unused dependency, but anywhere we forward serde/std, we need to get rmp-serde/std also, or the build breaks.
+mc-util-serial = { workspace = true }
+
+backtrace = { workspace = true, optional = true }
+cfg-if = { workspace = true }
+chrono = { workspace = true, optional = true }
+displaydoc = { workspace = true }
+hashbrown = { workspace = true, features = ["serde", "nightly"] }
+hex = { workspace = true }
+hex_fmt = { workspace = true }
+hostname = { workspace = true, optional = true }
+lazy_static = { workspace = true, optional = true }
+prost = { workspace = true, features = ["prost-derive"] }
+rand_core = { workspace = true }
+sentry = { workspace = true, features = ["backtrace", "contexts", "log", "panic", "reqwest", "rustls", "serde_json", "slog"], optional = true }
+serde = { workspace = true, features = ["alloc", "derive"] }
+sha3 = { workspace = true }
+siphasher = { workspace = true }
+slog = { workspace = true, features = ["dynamic-keys", "max_level_trace", "release_max_level_trace"] }
+slog-async = { workspace = true, optional = true }
+slog-atomic = { workspace = true, optional = true }
+slog-envlogger = { workspace = true, optional = true }
+slog-json = { workspace = true, optional = true }
+slog-scope = { workspace = true, optional = true }
+slog-stdlog = { workspace = true, optional = true }
+slog-term = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest = { workspace = true, features = ["default-code-coverage"] }
+scoped_threadpool = { workspace = true }

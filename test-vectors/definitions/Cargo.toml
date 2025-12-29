@@ -1,0 +1,12 @@
+[package]
+name = "mc-test-vectors-definitions"
+version = "7.1.0"
+authors = ["MobileCoin"]
+edition = "2021"
+license = "GPL-3.0"
+rust-version = { workspace = true }
+
+[dependencies]
+mc-util-test-vector = { workspace = true }
+
+serde = { workspace = true, features = ["derive"] }

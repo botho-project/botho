@@ -1,0 +1,619 @@
+# Copyright (c) 2018-2022 The MobileCoin Foundation
+#
+# MobileCoin Core projects - Reusable Workflow - Deploy core apps to to the development namespace.
+
+name: mobilecoin-workflow-dev-deploy
+
+on:
+  workflow_call:
+    inputs:
+      namespace:
+        description: "Target Namespace"
+        type: string
+        required: true
+      version:
+        description: "Chart Version"
+        type: string
+        required: true
+      docker_image_org:
+        description: "Docker Image Org"
+        type: string
+        required: false
+        default: docker.io/mobilecoin
+      chart_repo:
+        description: "Chart Repo URL"
+        type: string
+        required: false
+        default: ghcr.io/mobilecoinfoundation/charts
+      ingest_color:
+        description: "Fog Ingest blue/green"
+        type: string
+        required: true
+      block_version:
+        description: "block_version"
+        type: string
+        required: true
+      minimum_block:
+        description: "The minimum block height before the environment is ready"
+        type: string
+        required: false
+        default: "500"
+      shard_size:
+        description: "View/Ledger Shard size in blocks"
+        type: string
+        required: false
+        default: "20000"
+      shard_exceed_block_height_by:
+        description: "View/Ledger New shards should start this many blocks before the end of the current shard"
+        type: string
+        required: false
+        default: "5000"
+      tokens_file:
+        description: "Tokens File"
+        type: string
+        required: true
+      deployment_region:
+        description: "cloud deployment region"
+        type: string
+        required: false
+        default: italynorth
+    secrets:
+      DEV_RANCHER_CLUSTER:
+        description: "Rancher cluster name"
+        required: true
+      DEV_RANCHER_URL:
+        description: "Rancher server URL"
+        required: true
+      DEV_RANCHER_TOKEN:
+        description: "Rancher access token"
+        required: true
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  FLIPSIDE: ${{ inputs.ingest_color == 'blue' && 'green' || 'blue' }}
+  VALUES_BASE_PATH: .tmp/values
+
+jobs:
+  setup-environment:
+    uses: ./.github/workflows/mobilecoin-workflow-dev-setup-environment.yaml
+    with:
+      namespace: ${{ inputs.namespace }}
+      tokens_file: ${{ inputs.tokens_file }}
+    secrets: inherit
+
+  consensus-deploy:
+    needs:
+    - setup-environment
+    runs-on: mcf-dev-small-x64
+    strategy:
+      matrix:
+        release:
+          - name: consensus-node-1
+            instance: 1
+          - name: consensus-node-2
+            instance: 2
+          - name: consensus-node-3
+            instance: 3
+    steps:
+    - name: Generate consensus-node values file
+      run: |
+        mkdir -p "${VALUES_BASE_PATH}"
+        cat <<EOF > "${VALUES_BASE_PATH}/consensus-node-values.yaml"
+
+        mobilecoin:
+          network: ${{ inputs.namespace }}
+          partner: dev
+
+        node:
+          config:
+            clientHostname: node${{ matrix.release.instance }}.${{ inputs.namespace }}.development.mobilecoin.com
+            peerHostname: peer${{ matrix.release.instance }}.${{ inputs.namespace }}.development.mobilecoin.com
+            blockVersion: ${{ inputs.block_version }}
+
+          persistence:
+            enabled: false
+
+          ingress:
+            common:
+              tls:
+                clusterIssuer: google-public-ca
+            clientAttest:
+              rateLimits:
+                enabled: false
+        EOF
+
+    - name: Deploy Consensus nodes
+      uses: mobilecoinofficial/gha-k8s-toolbox@v1
+      with:
+        action: helm-deploy-oci
+        chart_repo: ${{ inputs.chart_repo }}
+        chart_name: consensus-node
+        chart_version: ${{ inputs.version }}
+        chart_values: ${{ env.VALUES_BASE_PATH }}/consensus-node-values.yaml
+        chart_wait_timeout: 60m
+        release_name: ${{ matrix.release.name }}
+        namespace: ${{ inputs.namespace }}
+        rancher_cluster: ${{ secrets.DEV_RANCHER_CLUSTER }}
+        rancher_url: ${{ secrets.DEV_RANCHER_URL }}
+        rancher_token: ${{ secrets.DEV_RANCHER_TOKEN }}
+        chart_repo_password: ${{ github.token }}
+        chart_repo_username: ${{ github.actor }}
+
+  mobilecoind-deploy:
+    needs:
+    - consensus-deploy
+    runs-on: mcf-dev-small-x64
+    steps:
+    - name: Generate mobilecoind values file
+      run: |
+        mkdir -p "${VALUES_BASE_PATH}"
+        cat <<EOF > "${VALUES_BASE_PATH}/mobilecoind-values.yaml"
+        image:
+          org: ${{ inputs.docker_image_org }}
+
+        mobilecoin:
+          network: ${{ inputs.namespace }}
+          partner: dev
+
+        persistence:
+          enabled: false
+
+        devFaucet:
+          enabled: true
+        EOF
+
+    - name: Mobilecoind nodes
+      uses: mobilecoinofficial/gha-k8s-toolbox@v1
+      with:
+        action: helm-deploy-oci
+        chart_repo: ${{ inputs.chart_repo }}
+        chart_name: mobilecoind
+        chart_version: ${{ inputs.version }}
+        chart_values: ${{ env.VALUES_BASE_PATH }}/mobilecoind-values.yaml
+        chart_wait_timeout: 60m
+        release_name: mobilecoind
+        namespace: ${{ inputs.namespace }}
+        rancher_cluster: ${{ secrets.DEV_RANCHER_CLUSTER }}
+        rancher_url: ${{ secrets.DEV_RANCHER_URL }}
+        rancher_token: ${{ secrets.DEV_RANCHER_TOKEN }}
+        chart_repo_password: ${{ github.token }}
+        chart_repo_username: ${{ github.actor }}
+
+  # run two copies of fog-report a/b
+  fog-report-deploy-a:
+    needs:
+    - consensus-deploy
+    runs-on: mcf-dev-small-x64
+    steps:
+    - name: Generate fog-report values file
+      run: |
+        mkdir -p "${VALUES_BASE_PATH}"
+        cat <<EOF > "${VALUES_BASE_PATH}/fog-report-values.yaml"
+        image:
+          org: ${{ inputs.docker_image_org }}
+
+        mobilecoin:
+          network: ${{ inputs.namespace }}
+          partner: dev
+
+        fogReport:
+          hosts:
+          - fog.${{ inputs.namespace }}.development.mobilecoin.com
+          ingress:
+            common:
+              blocklist:
+                enabled: false
+              tls:
+                clusterIssuer: google-public-ca
+          externalSecrets:
+            signingCert:
+              name: fog-report-signing-cert-a
+        EOF
+
+    - name: Deploy fog-report-a
+      uses: mobilecoinofficial/gha-k8s-toolbox@v1
+      with:
+        action: helm-deploy-oci
+        chart_repo: ${{ inputs.chart_repo }}
+        chart_name: fog-report
+        chart_version: ${{ inputs.version }}
+        chart_wait_timeout: 10m
+        chart_values: ${{ env.VALUES_BASE_PATH }}/fog-report-values.yaml
+        release_name: fog-report-a
+        namespace: ${{ inputs.namespace }}
+        rancher_cluster: ${{ secrets.DEV_RANCHER_CLUSTER }}
+        rancher_url: ${{ secrets.DEV_RANCHER_URL }}
+        rancher_token: ${{ secrets.DEV_RANCHER_TOKEN }}
+        chart_repo_password: ${{ github.token }}
+        chart_repo_username: ${{ github.actor }}
+
+  fog-report-deploy-b:
+    needs:
+    - consensus-deploy
+    runs-on: mcf-dev-small-x64
+    steps:
+    - name: Generate fog-report-b values file
+      run: |
+        mkdir -p "${VALUES_BASE_PATH}"
+        cat <<EOF > "${VALUES_BASE_PATH}/fog-report-values.yaml"
+        image:
+          org: ${{ inputs.docker_image_org }}
+
+        mobilecoin:
+          network: ${{ inputs.namespace }}
+          partner: dev
+
+        fogReport:
+          hosts:
+          - fog-b.${{ inputs.namespace }}.development.mobilecoin.com
+          - fog-report-b.${{ inputs.namespace }}.development.mobilecoin.com
+          ingress:
+            common:
+              blocklist:
+                enabled: false
+              tls:
+                clusterIssuer: google-public-ca
+          externalSecrets:
+            signingCert:
+              name: fog-report-signing-cert-b
+        EOF
+
+    - name: Deploy fog-report-b
+      uses: mobilecoinofficial/gha-k8s-toolbox@v1
+      with:
+        action: helm-deploy-oci
+        chart_repo: ${{ inputs.chart_repo }}
+        chart_name: fog-report
+        chart_version: ${{ inputs.version }}
+        chart_wait_timeout: 10m
+        chart_values: ${{ env.VALUES_BASE_PATH }}/fog-report-values.yaml
+        release_name: fog-report-b
+        namespace: ${{ inputs.namespace }}
+        rancher_cluster: ${{ secrets.DEV_RANCHER_CLUSTER }}
+        rancher_url: ${{ secrets.DEV_RANCHER_URL }}
+        rancher_token: ${{ secrets.DEV_RANCHER_TOKEN }}
+        chart_repo_password: ${{ github.token }}
+        chart_repo_username: ${{ github.actor }}
+
+  fog-view-deploy:
+    needs:
+    - consensus-deploy
+    runs-on: mcf-dev-small-x64
+    steps:
+    - name: Generate fog-view-service values file
+      run: |
+        mkdir -p "${VALUES_BASE_PATH}"
+        cat <<EOF > "${VALUES_BASE_PATH}/fog-view-service-values.yaml"
+        image:
+          org: ${{ inputs.docker_image_org }}
+
+        mobilecoin:
+          network: ${{ inputs.namespace }}
+          partner: dev
+
+        fogView:
+          responderID: fog.${{ inputs.namespace }}.development.mobilecoin.com
+          color: green
+
+          router:
+            ingress:
+              common:
+                blocklist:
+                  enabled: false
+                tls:
+                  clusterIssuer: google-public-ca
+        EOF
+    - name: Deploy fog-view-service
+      uses: mobilecoinofficial/gha-k8s-toolbox@v1
+      with:
+        action: helm-deploy-oci
+        chart_repo: ${{ inputs.chart_repo }}
+        chart_name: fog-view-service
+        chart_version: ${{ inputs.version }}
+        chart_wait_timeout: 10m
+        chart_values: ${{ env.VALUES_BASE_PATH }}/fog-view-service-values.yaml
+        release_name: fog-view-service
+        namespace: ${{ inputs.namespace }}
+        rancher_cluster: ${{ secrets.DEV_RANCHER_CLUSTER }}
+        rancher_url: ${{ secrets.DEV_RANCHER_URL }}
+        rancher_token: ${{ secrets.DEV_RANCHER_TOKEN }}
+        chart_repo_password: ${{ github.token }}
+        chart_repo_username: ${{ github.actor }}
+
+    - name: Generate fog-view-fsg-gr-z1 values file
+      run: |
+        mkdir -p "${VALUES_BASE_PATH}"
+        cat <<EOF > "${VALUES_BASE_PATH}/fog-view-fsg-values-gr-z1.yaml"
+        image:
+          org: ${{ inputs.docker_image_org }}
+
+        mobilecoin:
+          network: ${{ inputs.namespace }}
+          partner: dev
+
+        fogView:
+          responderID: fog.${{ inputs.namespace }}.development.mobilecoin.com
+          color: green
+          zone: ${{ inputs.deployment_region }}-1
+
+          stackConfig:
+            network:
+              default:
+                shardSize: ${{ inputs.shard_size }}
+                exceedBlockHeightBy: ${{ inputs.shard_exceed_block_height_by }}
+        EOF
+
+    - name: Deploy fog-view-fsg-gr-z1
+      uses: mobilecoinofficial/gha-k8s-toolbox@v1
+      with:
+        action: helm-deploy-oci
+        chart_repo: ${{ inputs.chart_repo }}
+        chart_name: fog-view-fsg
+        chart_version: ${{ inputs.version }}
+        chart_wait_timeout: 10m
+        chart_values: ${{ env.VALUES_BASE_PATH }}/fog-view-fsg-values-gr-z1.yaml
+        release_name: fog-view-fsg-gr-z1
+        namespace: ${{ inputs.namespace }}
+        rancher_cluster: ${{ secrets.DEV_RANCHER_CLUSTER }}
+        rancher_url: ${{ secrets.DEV_RANCHER_URL }}
+        rancher_token: ${{ secrets.DEV_RANCHER_TOKEN }}
+        chart_repo_password: ${{ github.token }}
+        chart_repo_username: ${{ github.actor }}
+
+    - name: Generate fog-view-fsg-gr-z2 values file
+      run: |
+        mkdir -p "${VALUES_BASE_PATH}"
+        cat <<EOF > "${VALUES_BASE_PATH}/fog-view-fsg-values-gr-z2.yaml"
+        image:
+          org: ${{ inputs.docker_image_org }}
+
+        mobilecoin:
+          network: ${{ inputs.namespace }}
+          partner: dev
+
+        fogView:
+          responderID: fog.${{ inputs.namespace }}.development.mobilecoin.com
+          color: green
+          zone: ${{ inputs.deployment_region }}-2
+
+          stackConfig:
+            network:
+              default:
+                shardSize: ${{ inputs.shard_size }}
+                exceedBlockHeightBy: ${{ inputs.shard_exceed_block_height_by }}
+        EOF
+
+    - name: Deploy fog-view-fsg-gr-z2
+      uses: mobilecoinofficial/gha-k8s-toolbox@v1
+      with:
+        action: helm-deploy-oci
+        chart_repo: ${{ inputs.chart_repo }}
+        chart_name: fog-view-fsg
+        chart_version: ${{ inputs.version }}
+        chart_wait_timeout: 10m
+        chart_values: ${{ env.VALUES_BASE_PATH }}/fog-view-fsg-values-gr-z2.yaml
+        release_name: fog-view-fsg-gr-z2
+        namespace: ${{ inputs.namespace }}
+        rancher_cluster: ${{ secrets.DEV_RANCHER_CLUSTER }}
+        rancher_url: ${{ secrets.DEV_RANCHER_URL }}
+        rancher_token: ${{ secrets.DEV_RANCHER_TOKEN }}
+        chart_repo_password: ${{ github.token }}
+        chart_repo_username: ${{ github.actor }}
+
+
+  fog-ledger-deploy:
+    needs:
+    - consensus-deploy
+    - mobilecoind-deploy
+    runs-on: mcf-dev-small-x64
+    steps:
+    - name: Generate fog-ledger-service values file
+      run: |
+        mkdir -p "${VALUES_BASE_PATH}"
+        cat <<EOF > "${VALUES_BASE_PATH}/fog-ledger-service-values.yaml"
+        image:
+          org: ${{ inputs.docker_image_org }}
+
+        mobilecoin:
+          network: ${{ inputs.namespace }}
+          partner: dev
+
+        fogLedger:
+          responderID: fog.${{ inputs.namespace }}.development.mobilecoin.com
+          color: green
+
+          router:
+            ingress:
+              common:
+                blocklist:
+                  enabled: false
+                tls:
+                  clusterIssuer: google-public-ca
+        EOF
+    - name: Deploy fog-ledger-service
+      uses: mobilecoinofficial/gha-k8s-toolbox@v1
+      with:
+        action: helm-deploy-oci
+        chart_repo: ${{ inputs.chart_repo }}
+        chart_name: fog-ledger-service
+        chart_version: ${{ inputs.version }}
+        chart_wait_timeout: 10m
+        chart_values: ${{ env.VALUES_BASE_PATH }}/fog-ledger-service-values.yaml
+        release_name: fog-ledger-service
+        namespace: ${{ inputs.namespace }}
+        rancher_cluster: ${{ secrets.DEV_RANCHER_CLUSTER }}
+        rancher_url: ${{ secrets.DEV_RANCHER_URL }}
+        rancher_token: ${{ secrets.DEV_RANCHER_TOKEN }}
+        chart_repo_password: ${{ github.token }}
+        chart_repo_username: ${{ github.actor }}
+
+    - name: Generate fog-ledger-fsg-gr-z1 values file
+      run: |
+        mkdir -p "${VALUES_BASE_PATH}"
+        cat <<EOF > "${VALUES_BASE_PATH}/fog-ledger-fsg-values-gr-z1.yaml"
+        image:
+          org: ${{ inputs.docker_image_org }}
+
+        mobilecoin:
+          network: ${{ inputs.namespace }}
+          partner: dev
+
+        fogLedger:
+          responderID: fog.${{ inputs.namespace }}.development.mobilecoin.com
+          color: green
+          zone: ${{ inputs.deployment_region }}-1
+
+          stackConfig:
+            network:
+              default:
+                shardSize: ${{ inputs.shard_size }}
+                exceedBlockHeightBy: ${{ inputs.shard_exceed_block_height_by }}
+        EOF
+
+    - name: Deploy fog-ledger-fsg-gr-z1
+      uses: mobilecoinofficial/gha-k8s-toolbox@v1
+      with:
+        action: helm-deploy-oci
+        chart_repo: ${{ inputs.chart_repo }}
+        chart_name: fog-ledger-fsg
+        chart_version: ${{ inputs.version }}
+        chart_wait_timeout: 10m
+        chart_values: ${{ env.VALUES_BASE_PATH }}/fog-ledger-fsg-values-gr-z1.yaml
+        release_name: fog-ledger-fsg-gr-z1
+        namespace: ${{ inputs.namespace }}
+        rancher_cluster: ${{ secrets.DEV_RANCHER_CLUSTER }}
+        rancher_url: ${{ secrets.DEV_RANCHER_URL }}
+        rancher_token: ${{ secrets.DEV_RANCHER_TOKEN }}
+        chart_repo_password: ${{ github.token }}
+        chart_repo_username: ${{ github.actor }}
+
+    - name: Generate fog-ledger-fsg-gr-z2 values file
+      run: |
+        mkdir -p "${VALUES_BASE_PATH}"
+        cat <<EOF > "${VALUES_BASE_PATH}/fog-ledger-fsg-values-gr-z2.yaml"
+        image:
+          org: ${{ inputs.docker_image_org }}
+
+        mobilecoin:
+          network: ${{ inputs.namespace }}
+          partner: dev
+
+        fogLedger:
+          responderID: fog.${{ inputs.namespace }}.development.mobilecoin.com
+          color: green
+          zone: ${{ inputs.deployment_region }}-2
+
+          stackConfig:
+            network:
+              default:
+                shardSize: ${{ inputs.shard_size }}
+                exceedBlockHeightBy: ${{ inputs.shard_exceed_block_height_by }}
+        EOF
+
+    - name: Deploy fog-ledger-fsg-gr-z2
+      uses: mobilecoinofficial/gha-k8s-toolbox@v1
+      with:
+        action: helm-deploy-oci
+        chart_repo: ${{ inputs.chart_repo }}
+        chart_name: fog-ledger-fsg
+        chart_version: ${{ inputs.version }}
+        chart_wait_timeout: 10m
+        chart_values: ${{ env.VALUES_BASE_PATH }}/fog-ledger-fsg-values-gr-z2.yaml
+        release_name: fog-ledger-fsg-gr-z2
+        namespace: ${{ inputs.namespace }}
+        rancher_cluster: ${{ secrets.DEV_RANCHER_CLUSTER }}
+        rancher_url: ${{ secrets.DEV_RANCHER_URL }}
+        rancher_token: ${{ secrets.DEV_RANCHER_TOKEN }}
+        chart_repo_password: ${{ github.token }}
+        chart_repo_username: ${{ github.actor }}
+
+  fog-ingest-deploy:
+    needs:
+    - consensus-deploy
+    - mobilecoind-deploy
+    runs-on: mcf-dev-small-x64
+    steps:
+    - name: Generate fog-ingest values file
+      run: |
+        mkdir -p "${VALUES_BASE_PATH}"
+        cat <<EOF > "${VALUES_BASE_PATH}/fog-ingest-values.yaml"
+        image:
+          org: ${{ inputs.docker_image_org }}
+        mobilecoin:
+          network: ${{ inputs.namespace }}
+          partner: dev
+        EOF
+
+    - name: Deploy fog-ingest
+      uses: mobilecoinofficial/gha-k8s-toolbox@v1.0.13
+      with:
+        action: helm-deploy-oci
+        chart_repo: ${{ inputs.chart_repo }}
+        chart_name: fog-ingest
+        chart_version: ${{ inputs.version }}
+        chart_wait_timeout: 10m
+        chart_values: ${{ env.VALUES_BASE_PATH }}/fog-ingest-values.yaml
+        release_name: fog-ingest-${{ inputs.ingest_color }}
+        namespace: ${{ inputs.namespace }}
+        rancher_cluster: ${{ secrets.DEV_RANCHER_CLUSTER }}
+        rancher_url: ${{ secrets.DEV_RANCHER_URL }}
+        rancher_token: ${{ secrets.DEV_RANCHER_TOKEN }}
+        chart_repo_password: ${{ github.token }}
+        chart_repo_username: ${{ github.actor }}
+
+    - name: Run fog-recovery database migrations
+      uses: mobilecoinofficial/gha-k8s-toolbox@v1.0.13
+      with:
+        action: toolbox-exec
+        ingest_color: ${{ inputs.ingest_color }}
+        namespace: ${{ inputs.namespace }}
+        rancher_cluster: ${{ secrets.DEV_RANCHER_CLUSTER }}
+        rancher_url: ${{ secrets.DEV_RANCHER_URL }}
+        rancher_token: ${{ secrets.DEV_RANCHER_TOKEN }}
+        command: |
+          fog-sql-recovery-db-migrations
+
+    - name: Activate primary ingest
+      uses: mobilecoinofficial/gha-k8s-toolbox@v1.0.13
+      with:
+        action: fog-ingest-activate
+        ingest_color: ${{ inputs.ingest_color }}
+        namespace: ${{ inputs.namespace }}
+        rancher_cluster: ${{ secrets.DEV_RANCHER_CLUSTER }}
+        rancher_url: ${{ secrets.DEV_RANCHER_URL }}
+        rancher_token: ${{ secrets.DEV_RANCHER_TOKEN }}
+
+    - name: Delete retired flipside ingest (if exists)
+      uses: mobilecoinofficial/gha-k8s-toolbox@v1.0.13
+      with:
+        action: helm-release-delete
+        namespace: ${{ inputs.namespace }}
+        release_name: fog-ingest-${{ env.FLIPSIDE }}
+        rancher_cluster: ${{ secrets.DEV_RANCHER_CLUSTER }}
+        rancher_url: ${{ secrets.DEV_RANCHER_URL }}
+        rancher_token: ${{ secrets.DEV_RANCHER_TOKEN }}
+
+  wait-for-up:
+    needs:
+    - fog-ingest-deploy
+    - fog-view-deploy
+    - fog-ledger-deploy
+    - fog-report-deploy-a
+    - fog-report-deploy-b
+    runs-on: mcf-dev-small-x64
+    steps:
+    - name: Check end points up.
+      uses: mobilecoinofficial/gha-k8s-toolbox@v1.0.13
+      with:
+        action: toolbox-exec
+        ingest_color: ${{ inputs.ingest_color }}
+        namespace: ${{ inputs.namespace }}
+        rancher_cluster: ${{ secrets.DEV_RANCHER_CLUSTER }}
+        rancher_url: ${{ secrets.DEV_RANCHER_URL }}
+        rancher_token: ${{ secrets.DEV_RANCHER_TOKEN }}
+        command: |
+          /test/check-env-status.sh --minimum-block ${{ inputs.minimum_block }} \
+              --namespace ${{ inputs.namespace }}

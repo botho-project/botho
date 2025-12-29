@@ -1,0 +1,43 @@
+[package]
+name = "mc-consensus-enclave-api"
+version = "7.1.0"
+authors = ["MobileCoin"]
+description = """
+The ECALL API declarations and API for operating an enclave.
+"""
+edition = "2021"
+license = "GPL-3.0"
+readme = "README.md"
+rust-version = { workspace = true }
+
+[features]
+default = ["std"]
+std = [
+    "displaydoc/std",
+    "mc-attest-core/std",
+    "mc-attest-ake/std",
+    "mc-util-serial/std",
+    "serde/std",
+]
+
+[dependencies]
+mc-attest-ake = { workspace = true }
+mc-attest-core = { workspace = true }
+mc-attest-enclave-api = { workspace = true }
+mc-blockchain-types = { workspace = true }
+mc-common = { workspace = true }
+mc-crypto-digestible = { workspace = true, features = ["derive"] }
+mc-crypto-keys = { workspace = true }
+mc-crypto-message-cipher = { workspace = true }
+mc-crypto-multisig = { workspace = true }
+mc-sgx-compat = { workspace = true }
+mc-sgx-report-cache-api = { workspace = true }
+mc-transaction-core = { workspace = true }
+mc-util-serial = { workspace = true }
+
+displaydoc = { workspace = true }
+hex = { workspace = true, features = ["alloc"] }
+serde = { workspace = true, features = ["alloc", "derive"] }
+
+[dev-dependencies]
+serde_json = { workspace = true }

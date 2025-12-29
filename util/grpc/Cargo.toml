@@ -1,0 +1,45 @@
+[package]
+name = "mc-util-grpc"
+version = "7.1.0"
+authors = ["MobileCoin"]
+description = "Runtime gRPC Utilities"
+edition = "2021"
+license = "GPL-3.0"
+readme = "README.md"
+rust-version = { workspace = true }
+
+[dependencies]
+mc-common = { workspace = true, features = ["loggers"] }
+mc-util-build-info = { workspace = true }
+mc-util-metrics = { workspace = true, features = ["service_metrics"] }
+mc-util-serial = { workspace = true, features = ["std"] }
+mc-util-uri = { workspace = true }
+
+base64 = { workspace = true }
+clap = { workspace = true, features = ["derive", "env"] }
+cookie = { workspace = true }
+displaydoc = { workspace = true }
+futures = { workspace = true }
+grpcio = { workspace = true, features = ["prost-codec", "boringssl"] }
+hex = { workspace = true }
+hex_fmt = { workspace = true }
+hmac = { workspace = true }
+lazy_static = { workspace = true }
+prometheus = { workspace = true }
+prost = { workspace = true }
+rand = { workspace = true }
+retry = { workspace = true }
+serde = { workspace = true }
+sha2 = { workspace = true }
+signal-hook = { workspace = true }
+subtle = { workspace = true, features = ["i128"] }
+zeroize = { workspace = true }
+
+[build-dependencies]
+mc-util-build-grpc = { workspace = true }
+
+[dev-dependencies]
+libc = { workspace = true }
+tempfile = { workspace = true }
+
+mc-crypto-x509-test-vectors = { workspace = true }

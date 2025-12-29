@@ -1,0 +1,41 @@
+[package]
+name = "mc-light-client-relayer"
+version = "7.1.0"
+authors = ["MobileCoin"]
+edition = "2021"
+license = "Apache-2.0"
+
+[[bin]]
+name = "mc-light-client-relayer"
+path = "src/bin/main.rs"
+
+[dependencies]
+mc-account-keys = { workspace = true }
+mc-blockchain-types = { workspace = true }
+mc-common = { workspace = true, features = ["loggers"] }
+mc-consensus-scp-types = { workspace = true }
+mc-crypto-keys = { workspace = true }
+mc-ledger-db = { workspace = true }
+mc-light-client-verifier = { workspace = true }
+mc-transaction-core = { workspace = true }
+mc-util-cli = { workspace = true }
+mc-util-from-random = { workspace = true }
+mc-util-grpc = { workspace = true }
+mc-util-metrics = { workspace = true }
+mc-util-telemetry = { workspace = true }
+mc-util-uri = { workspace = true }
+mc-watcher = { workspace = true }
+
+clap = { workspace = true, features = ["derive", "env"] }
+displaydoc = { workspace = true }
+lazy_static = { workspace = true }
+rayon = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+mc-consensus-scp-types = { workspace = true, features = ["test_utils"] }
+mc-ledger-db = { workspace = true, features = ["test_utils"] }
+mc-transaction-extra = { workspace = true }
+rand = { workspace = true }
+tempfile = { workspace = true }

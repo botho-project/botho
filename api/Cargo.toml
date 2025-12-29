@@ -1,0 +1,64 @@
+[package]
+name = "mc-api"
+version = "7.1.0"
+authors = ["MobileCoin"]
+build = "build.rs"
+edition = "2021"
+links = "mc-api"
+license = "Apache-2.0"
+readme = "README.md"
+rust-version = { workspace = true }
+
+[dependencies]
+mc-account-keys = { workspace = true }
+mc-attest-verifier-types = { workspace = true }
+mc-blockchain-types = { workspace = true }
+mc-common = { workspace = true }
+mc-crypto-keys = { workspace = true }
+mc-crypto-multisig = { workspace = true }
+mc-crypto-ring-signature-signer = { workspace = true }
+mc-transaction-builder = { workspace = true }
+mc-transaction-core = { workspace = true }
+mc-transaction-extra = { workspace = true }
+mc-transaction-summary = { workspace = true }
+mc-util-repr-bytes = { workspace = true }
+mc-util-serial = { workspace = true }
+mc-util-uri = { workspace = true }
+mc-watcher-api = { workspace = true }
+
+bs58 = { workspace = true }
+crc = { workspace = true }
+displaydoc = { workspace = true }
+mc-sgx-core-types = { workspace = true }
+mc-sgx-dcap-types = { workspace = true }
+
+curve25519-dalek = { workspace = true }
+prost = { workspace = true }
+
+[build-dependencies]
+mc-util-build-grpc = { workspace = true }
+mc-util-build-script = { workspace = true }
+
+cargo-emit = { workspace = true }
+
+[dev-dependencies]
+mc-attest-untrusted = { workspace = true }
+mc-blockchain-test-utils = { workspace = true }
+mc-crypto-ring-signature-signer = { workspace = true }
+mc-crypto-x509-test-vectors = { workspace = true }
+mc-fog-report-validation-test-utils = { workspace = true }
+mc-test-vectors-b58-encodings = { workspace = true }
+mc-transaction-builder = { workspace = true, features = ["test-only"] }
+mc-util-from-random = { workspace = true }
+mc-util-serial = { workspace = true, features = ["test_utils"] }
+mc-util-test-helper = { workspace = true }
+mc-util-test-vector = { workspace = true }
+mc-util-test-with-data = { workspace = true }
+mc-util-zip-exact = { workspace = true }
+
+assert_matches = { workspace = true }
+generic-array = { workspace = true }
+pem = { workspace = true }
+rand = { workspace = true }
+rand_core = { workspace = true }
+rand_hc = { workspace = true }

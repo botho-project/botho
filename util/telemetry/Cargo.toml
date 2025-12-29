@@ -1,0 +1,22 @@
+[package]
+name = "mc-util-telemetry"
+version = "7.1.0"
+authors = ["MobileCoin"]
+edition = "2021"
+license = "GPL-3.0"
+readme = "README.md"
+rust-version = { workspace = true }
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+otlp = ["dep:opentelemetry-otlp"]
+
+[dependencies]
+cfg-if = { workspace = true }
+displaydoc = { workspace = true }
+hostname = { workspace = true }
+opentelemetry = { workspace = true }
+opentelemetry-otlp = { workspace = true, features = ["grpc-tonic"], optional = true }
+opentelemetry_sdk = { workspace = true, features = ["rt-tokio"] }

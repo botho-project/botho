@@ -1,0 +1,20 @@
+[package]
+name = "mc-consensus-mint-client-types"
+version = "7.1.0"
+authors = ["MobileCoin"]
+edition = "2021"
+license = "Apache-2.0"
+rust-version = { workspace = true }
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+mc-consensus-service-config = { workspace = true }
+mc-crypto-keys = { workspace = true }
+mc-transaction-core = { workspace = true }
+
+displaydoc = { workspace = true }
+hex = { workspace = true, features = ["serde"] }
+serde = { workspace = true }
+serde_json = { workspace = true }

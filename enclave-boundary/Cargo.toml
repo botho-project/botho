@@ -1,0 +1,16 @@
+[package]
+name = "mc-enclave-boundary"
+version = "7.1.0"
+authors = ["MobileCoin"]
+edition = "2021"
+license = "GPL-3.0"
+readme = "README.md"
+rust-version = { workspace = true }
+
+[dependencies]
+rand_core = { workspace = true }
+
+mc-common = { workspace = true }
+mc-rand = { workspace = true }
+mc-sgx-compat = { workspace = true }
+mc-sgx-types = { workspace = true }

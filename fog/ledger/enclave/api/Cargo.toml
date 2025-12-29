@@ -1,0 +1,30 @@
+[package]
+name = "mc-fog-ledger-enclave-api"
+version = "7.1.0"
+authors = ["MobileCoin"]
+description = """
+The ECALL API declarations and API for operating a ledger enclave.
+"""
+edition = "2021"
+license = "GPL-3.0"
+readme = "README.md"
+rust-version = { workspace = true }
+
+[dependencies]
+# mobilecoin
+mc-attest-core = { workspace = true }
+mc-attest-enclave-api = { workspace = true }
+mc-common = { workspace = true }
+mc-crypto-keys = { workspace = true }
+mc-sgx-compat = { workspace = true }
+mc-sgx-report-cache-api = { workspace = true }
+mc-transaction-core = { workspace = true }
+mc-util-encodings = { workspace = true }
+mc-util-serial = { workspace = true }
+
+# fog
+mc-fog-types = { workspace = true }
+
+# third-party
+displaydoc = { workspace = true }
+serde = { workspace = true, features = ["alloc", "derive"] }

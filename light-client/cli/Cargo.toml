@@ -1,0 +1,30 @@
+[package]
+name = "mc-light-client-cli"
+version = "7.1.0"
+authors = ["MobileCoin"]
+edition = "2021"
+license = "GPL-3.0"
+rust-version = { workspace = true }
+
+[[bin]]
+name = "mc-light-client-cli"
+path = "src/bin/main.rs"
+
+[dependencies]
+mc-api = { workspace = true }
+mc-blockchain-types = { workspace = true }
+mc-common = { workspace = true, features = ["log"] }
+mc-consensus-api = { workspace = true }
+mc-consensus-scp-types = { workspace = true }
+mc-ledger-sync = { workspace = true }
+mc-light-client-verifier = { workspace = true }
+mc-util-grpc = { workspace = true }
+mc-util-serial = { workspace = true }
+mc-util-uri = { workspace = true }
+
+clap = { workspace = true, features = ["derive", "env"] }
+clio = { workspace = true, features = ["clap-parse"] }
+grpcio = { workspace = true, features = ["prost-codec"] }
+hex = { workspace = true }
+rayon = { workspace = true }
+serde_json = { workspace = true }

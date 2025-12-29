@@ -1,0 +1,49 @@
+[package]
+name = "mc-attest-ake"
+version = "7.1.0"
+authors = ["MobileCoin"]
+edition = "2021"
+license = "Apache-2.0"
+rust-version = { workspace = true }
+
+[features]
+default = ["std"]
+std = [
+    "mc-attest-verifier/std",
+    "mc-attest-core/std",
+    "digest/std",
+    "serde/std",
+]
+sgx-sim = ["mc-attest-verifier/sgx-sim"]
+
+[dependencies]
+mc-attest-core = { workspace = true }
+mc-attest-verifier = { workspace = true }
+mc-attest-verifier-types = { workspace = true }
+mc-crypto-keys = { workspace = true }
+mc-crypto-noise = { workspace = true }
+
+aead = { workspace = true }
+der = { workspace = true }
+digest = { workspace = true }
+displaydoc = { workspace = true }
+mc-attestation-verifier = { workspace = true }
+mc-sgx-dcap-types = { workspace = true }
+prost = { workspace = true, features = ["prost-derive"] }
+rand_core = { workspace = true }
+serde = { workspace = true, features = ["alloc"] }
+
+[build-dependencies]
+mc-util-build-script = { workspace = true }
+mc-util-build-sgx = { workspace = true }
+
+cargo-emit = { workspace = true }
+
+[dev-dependencies]
+mc-attest-untrusted = { workspace = true }
+mc-util-encodings = { workspace = true }
+mc-util-from-random = { workspace = true }
+
+aes-gcm = { workspace = true }
+rand_hc = { workspace = true }
+sha2 = { workspace = true }

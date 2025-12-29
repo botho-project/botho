@@ -1,0 +1,20 @@
+[package]
+name = "mc-attest-verifier-config"
+version = "7.1.0"
+authors = ["MobileCoin"]
+edition = "2021"
+license = "Apache-2.0"
+description = "A JSON schema for basic attestation configs"
+readme = "README.md"
+
+[dependencies]
+displaydoc = { workspace = true }
+hex = { workspace = true, features = ["alloc", "serde"] }
+mc-attestation-verifier = { workspace = true }
+mc-sgx-core-types = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true, features = ["alloc"] }
+
+[dev-dependencies]
+assert_matches = { workspace = true }
+hex-literal = { workspace = true }

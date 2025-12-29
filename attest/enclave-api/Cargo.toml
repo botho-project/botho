@@ -1,0 +1,23 @@
+[package]
+name = "mc-attest-enclave-api"
+version = "7.1.0"
+authors = ["MobileCoin"]
+description = """
+no_std structs used commonly in enclave api's in connection with attestation and key exchange
+"""
+edition = "2021"
+license = "GPL-3.0"
+readme = "README.md"
+rust-version = { workspace = true }
+
+[dependencies]
+mc-attest-ake = { workspace = true }
+mc-attest-core = { workspace = true }
+mc-attest-verifier = { workspace = true }
+mc-attestation-verifier = { workspace = true }
+mc-crypto-noise = { workspace = true }
+mc-sgx-compat = { workspace = true }
+mc-util-serial = { workspace = true }
+
+displaydoc = { workspace = true }
+serde = { workspace = true, features = ["alloc", "derive"] }

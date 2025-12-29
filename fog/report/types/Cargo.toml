@@ -1,0 +1,20 @@
+[package]
+name = "mc-fog-report-types"
+version = "7.1.0"
+authors = ["Mobilecoin"]
+edition = "2021"
+license = "Apache-2.0"
+readme = "README.md"
+rust-version = { workspace = true }
+
+[dependencies]
+mc-attest-verifier-types = { workspace = true }
+mc-crypto-digestible = { workspace = true }
+
+prost = { workspace = true, features = ["prost-derive"] }
+serde = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+mc-blockchain-test-utils = { workspace = true }
+mc-util-serial = { workspace = true }
+mc-util-test-helper = { workspace = true }

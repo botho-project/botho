@@ -1,0 +1,25 @@
+[package]
+name = "mc-ledger-migration"
+version = "7.1.0"
+authors = ["MobileCoin"]
+edition = "2021"
+license = "GPL-3.0"
+rust-version = { workspace = true }
+
+[[bin]]
+name = "mc-ledger-migration"
+path = "src/main.rs"
+
+[dependencies]
+mc-common = { workspace = true, features = ["loggers"] }
+mc-ledger-db = { workspace = true, features = ["migration_support"] }
+mc-util-lmdb = { workspace = true }
+mc-util-serial = { workspace = true }
+
+clap = { workspace = true, features = ["derive", "env"] }
+lmdb-rkv = { workspace = true }
+
+[build-dependencies]
+# Even though this is unused, it needs to be here otherwise Cargo brings in some weird mixture of packages/features that refuses to compile.
+# Go figure ¯\_(ツ)_/¯
+serde = { workspace = true, features = ["alloc", "derive"] }

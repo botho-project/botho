@@ -1,0 +1,27 @@
+[package]
+name = "mc-fog-view-enclave-api"
+version = "7.1.0"
+authors = ["MobileCoin"]
+edition = "2021"
+license = "GPL-3.0"
+rust-version = { workspace = true }
+
+[dependencies]
+# mobilecoin
+mc-attest-core = { workspace = true }
+mc-attest-enclave-api = { workspace = true }
+mc-common = { workspace = true }
+mc-crypto-keys = { workspace = true }
+mc-crypto-noise = { workspace = true }
+mc-sgx-compat = { workspace = true }
+mc-sgx-report-cache-api = { workspace = true }
+mc-sgx-types = { workspace = true }
+mc-util-serial = { workspace = true }
+
+# fog
+mc-fog-recovery-db-iface = { workspace = true }
+mc-fog-types = { workspace = true }
+
+# third-party
+displaydoc = { workspace = true }
+serde = { workspace = true }

@@ -1,0 +1,51 @@
+[package]
+name = "mc-consensus-scp"
+version = "7.1.0"
+authors = ["MobileCoin"]
+description = "Stellar Consensus Protocol"
+edition = "2021"
+keywords = ["SCP", "Stellar Consensus Protocol", "Consensus", "Stellar", "Byzantine"]
+license = "GPL-3.0"
+readme = "README.md"
+rust-version = { workspace = true }
+
+[features]
+test_utils = ["mc-consensus-scp-types/test_utils"]
+
+[dependencies]
+mc-common = { workspace = true, features = ["log"] }
+mc-consensus-scp-types = { workspace = true }
+mc-crypto-digestible = { workspace = true, features = ["derive"] }
+mc-crypto-keys = { workspace = true }
+mc-util-from-random = { workspace = true }
+mc-util-serial = { workspace = true, features = ["std"] }
+
+mockall = { workspace = true }
+primitive-types = { workspace = true }
+rand = { workspace = true }
+rand_hc = { workspace = true }
+serde = { workspace = true, features = ["alloc", "derive"] }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+mc-common = { workspace = true, features = ["loggers"] }
+mc-consensus-scp-types = { workspace = true, features = ["test_utils"] }
+mc-util-logger-macros = { workspace = true }
+mc-util-test-helper = { workspace = true }
+
+crossbeam-channel = { workspace = true }
+maplit = { workspace = true }
+serial_test = { workspace = true }
+tempfile = { workspace = true }
+
+[[test]]
+name = "test_cyclic_networks"
+required-features = ["test_utils"]
+
+[[test]]
+name = "test_mesh_networks"
+required-features = ["test_utils"]
+
+[[test]]
+name = "test_metamesh_networks"
+required-features = ["test_utils"]

@@ -1,0 +1,44 @@
+[package]
+name = "mc-attest-api"
+version = "7.1.0"
+authors = ["MobileCoin"]
+description = "gRPC APIs for encrypted communications with an enclave"
+edition = "2021"
+keywords = [
+    "SIGMA",
+    "Cryptography",
+    "Key Exchange",
+    "Diffie-Hellman",
+    "SGX",
+    "Attestation",
+]
+license = "Apache-2.0"
+links = "mc-attest-api"
+readme = "README.md"
+rust-version = { workspace = true }
+
+[dependencies]
+mc-attest-ake = { workspace = true }
+mc-attest-enclave-api = { workspace = true }
+mc-attest-verifier-types = { workspace = true }
+mc-crypto-keys = { workspace = true }
+mc-crypto-noise = { workspace = true }
+mc-sgx-core-types = { workspace = true }
+mc-sgx-dcap-types = { workspace = true }
+mc-util-serial = { workspace = true }
+
+aead = { workspace = true }
+digest = { workspace = true }
+futures = { workspace = true }
+grpcio = { workspace = true, features = ["prost-codec"] }
+prost = { workspace = true }
+
+[build-dependencies]
+mc-util-build-grpc = { workspace = true }
+mc-util-build-script = { workspace = true }
+
+cargo-emit = { workspace = true }
+
+[dev-dependencies]
+assert_matches = { workspace = true }
+mc-attest-untrusted = { workspace = true }

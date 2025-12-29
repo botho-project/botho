@@ -1,0 +1,17 @@
+# Copyright (c) 2018-2023 The MobileCoin Foundation
+{{- if .Values.devFaucet.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "mobilecoind.fullname" . }}-faucet
+  labels:
+    {{- include "mobilecoind.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "mobilecoind.selectorLabels" . | nindent 4 }}
+  ports:
+  - name: faucet
+    port: 80
+    targetPort: faucet
+{{- end }}

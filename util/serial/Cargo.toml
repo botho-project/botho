@@ -1,0 +1,25 @@
+[package]
+name = "mc-util-serial"
+version = "7.1.0"
+authors = ["MobileCoin"]
+edition = "2021"
+license = "Apache-2.0"
+readme = "README.md"
+rust-version = { workspace = true }
+
+[features]
+# Build everything with std flags turned on. This is generally needed in targets that use std
+# because rmp-ser../../alloc doesn't build against ser../../std,
+# so if anything else in your build plan will activate ser../../std, then mcseri../../std is
+# required.
+std = ["serde/std", "serde_cbor/std", "serde_with"]
+test_utils = []
+
+[dependencies]
+prost = { workspace = true, features = ["prost-derive"] }
+serde = { workspace = true, features = ["alloc", "derive"] }
+serde_cbor = { workspace = true, features = ["alloc"] }
+serde_with = { workspace = true, features = ["macros"], optional = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

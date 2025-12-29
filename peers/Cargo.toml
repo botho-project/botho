@@ -1,0 +1,43 @@
+[package]
+name = "mc-peers"
+version = "7.1.0"
+authors = ["MobileCoin"]
+edition = "2021"
+license = "GPL-3.0"
+readme = "README.md"
+rust-version = { workspace = true }
+
+[features]
+test_utils = []
+
+[dependencies]
+mc-attest-api = { workspace = true }
+mc-attest-core = { workspace = true }
+mc-attest-enclave-api = { workspace = true }
+mc-blockchain-types = { workspace = true }
+mc-common = { workspace = true, features = ["log"] }
+mc-connection = { workspace = true }
+mc-consensus-api = { workspace = true }
+mc-consensus-enclave-api = { workspace = true }
+mc-consensus-scp = { workspace = true }
+mc-crypto-digestible = { workspace = true }
+mc-crypto-keys = { workspace = true }
+mc-ledger-db = { workspace = true }
+mc-transaction-core = { workspace = true }
+mc-util-grpc = { workspace = true }
+mc-util-serial = { workspace = true }
+mc-util-uri = { workspace = true }
+
+crossbeam-channel = { workspace = true }
+displaydoc = { workspace = true }
+grpcio = { workspace = true, features = ["prost-codec"] }
+mockall = { workspace = true }
+retry = { workspace = true }
+serde = { workspace = true, features = ["alloc", "derive"] }
+
+[dev-dependencies]
+mc-connection-test-utils = { workspace = true }
+mc-peers-test-utils = { workspace = true }
+
+rand = { workspace = true }
+rand_hc = { workspace = true }

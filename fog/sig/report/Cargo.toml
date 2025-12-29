@@ -1,0 +1,24 @@
+[package]
+name = "mc-fog-sig-report"
+version = "7.1.0"
+authors = ["MobileCoin"]
+description = "Create and verify fog report signatures"
+edition = "2021"
+license = "Apache-2.0"
+readme = "README.md"
+rust-version = { workspace = true }
+
+[dependencies]
+mc-crypto-digestible-signature = { workspace = true }
+mc-crypto-keys = { workspace = true }
+mc-fog-report-types = { workspace = true }
+
+displaydoc = { workspace = true }
+signature = { workspace = true }
+
+[dev-dependencies]
+mc-attest-verifier-types = { workspace = true }
+mc-util-from-random = { workspace = true }
+
+rand_core = { workspace = true }
+rand_hc = { workspace = true }

@@ -1,0 +1,34 @@
+[package]
+name = "mc-consensus-api"
+version = "7.1.0"
+authors = ["MobileCoin"]
+build = "build.rs"
+edition = "2021"
+license = "Apache-2.0"
+links = "mc-consensus-api"
+readme = "README.md"
+rust-version = { workspace = true }
+
+[dependencies]
+mc-api = { workspace = true }
+mc-attest-api = { workspace = true }
+mc-ledger-db = { workspace = true }
+mc-transaction-core = { workspace = true }
+
+futures = { workspace = true }
+grpcio = { workspace = true, features = ["prost-codec"] }
+prost = { workspace = true }
+
+[build-dependencies]
+mc-util-build-grpc = { workspace = true }
+mc-util-build-script = { workspace = true }
+
+cargo-emit = { workspace = true }
+
+[dev-dependencies]
+mc-crypto-multisig = { workspace = true }
+mc-transaction-core-test-utils = { workspace = true }
+mc-util-serial = { workspace = true }
+
+rand_core = { workspace = true }
+rand_hc = { workspace = true }

@@ -1,0 +1,73 @@
+[package]
+name = "mc-crypto-keys"
+version = "7.1.0"
+authors = ["MobileCoin"]
+edition = "2021"
+description = "MobileCoin Diffie-Hellman Key Exchange and Digital Signatures"
+license = "Apache-2.0"
+readme = "README.md"
+rust-version = { workspace = true }
+
+[features]
+alloc = [
+    "base64/alloc",
+    "curve25519-dalek/alloc",
+    "ed25519-dalek/alloc",
+    "mc-crypto-digestible/alloc",
+    "mc-crypto-digestible-signature/alloc",
+    "mc-util-repr-bytes/alloc",
+]
+serde = [
+    "dep:serde",
+    "dep:mc-util-serial",
+    "ed25519/serde",
+    "curve25519-dalek/serde",
+    "ed25519-dalek/serde",
+    "mc-util-repr-bytes/serde",
+]
+prost = ["alloc", "mc-util-repr-bytes/prost"]
+default = [
+    "alloc",
+    "serde",
+    "prost",
+    "mc-util-repr-bytes/default",
+    "curve25519-dalek/default",
+    "dep:mc-util-serial",
+]
+
+[dependencies]
+
+base64 = { workspace = true }
+curve25519-dalek = { workspace = true, features = ["rand_core"] }
+digest = { workspace = true }
+displaydoc = { workspace = true }
+ed25519 = { workspace = true }
+ed25519-dalek = { workspace = true, features = ["rand_core", "digest"] }
+hex = { workspace = true }
+hex_fmt = { workspace = true }
+
+mc-crypto-digestible = { workspace = true, features = ["dalek", "derive"] }
+mc-crypto-digestible-signature = { workspace = true }
+mc-util-from-random = { workspace = true }
+mc-util-repr-bytes = { workspace = true }
+mc-util-serial = { workspace = true, optional = true }
+rand_core = { workspace = true }
+rand_hc = { workspace = true }
+schnorrkel-og = { workspace = true }
+serde = { workspace = true, features = ["derive"], optional = true }
+sha2 = { workspace = true }
+signature = { workspace = true, features = ["digest"] }
+static_assertions = { workspace = true }
+subtle = { workspace = true }
+x25519-dalek = { workspace = true, features = ["static_secrets"] }
+zeroize = { workspace = true }
+
+[dev-dependencies]
+mc-crypto-hashes = { workspace = true }
+mc-util-test-helper = { workspace = true }
+
+pem = { workspace = true }
+rand_hc = { workspace = true }
+semver = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }

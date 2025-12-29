@@ -1,0 +1,24 @@
+[package]
+name = "mc-fog-ingest-enclave-api"
+version = "7.1.0"
+authors = ["MobileCoin"]
+edition = "2021"
+license = "GPL-3.0"
+rust-version = { workspace = true }
+
+[dependencies]
+# mobilecoin
+mc-attest-core = { workspace = true }
+mc-attest-enclave-api = { workspace = true }
+mc-common = { workspace = true }
+mc-crypto-keys = { workspace = true }
+mc-sgx-compat = { workspace = true }
+mc-sgx-report-cache-api = { workspace = true }
+mc-util-serial = { workspace = true }
+
+# fog
+mc-fog-kex-rng = { workspace = true }
+mc-fog-types = { workspace = true }
+
+displaydoc = { workspace = true }
+serde = { workspace = true, features = ["alloc", "derive"] }

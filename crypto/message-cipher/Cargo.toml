@@ -1,0 +1,21 @@
+[package]
+name = "mc-crypto-message-cipher"
+version = "7.1.0"
+authors = ["MobileCoin"]
+edition = "2021"
+license = "GPL-3.0"
+readme = "README.md"
+rust-version = { workspace = true }
+
+[dependencies]
+mc-util-serial = { workspace = true }
+
+aes-gcm = { workspace = true }
+displaydoc = { workspace = true }
+generic-array = { workspace = true }
+rand_core = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+subtle = { workspace = true, features = ["i128"] }
+
+[dev-dependencies]
+mc-util-test-helper = { workspace = true }

@@ -1,0 +1,64 @@
+[package]
+name = "mc-attest-core"
+version = "7.1.0"
+authors = ["MobileCoin"]
+description = '''
+This crate contains necessary functions and utilities to perform remote
+attestation and verification of an SGX enclave.
+
+At present this is limited to the data structures and and errors necessary to
+verify the contents of the report as returned by Intel.
+'''
+edition = "2021"
+license = "Apache-2.0"
+readme = "README.md"
+rust-version = { workspace = true }
+
+[features]
+default = ["std"]
+std = [
+    "digest/std",
+    "displaydoc/std",
+    "mc-common/std",
+    "mc-util-encodings/std",
+    "sha2/std",
+]
+
+[dependencies]
+mc-attest-verifier-types = { workspace = true }
+mc-common = { workspace = true }
+mc-crypto-digestible = { workspace = true }
+mc-sgx-core-types = { workspace = true }
+mc-sgx-dcap-types = { workspace = true }
+mc-sgx-types = { workspace = true }
+mc-util-encodings = { workspace = true }
+mc-util-repr-bytes = { workspace = true, features = ["hex_fmt"] }
+
+base64 = { workspace = true, features = ["alloc"] }
+bitflags = { workspace = true, features = ["serde"] }
+chrono = { workspace = true, features = ["alloc"] }
+digest = { workspace = true }
+displaydoc = { workspace = true }
+hex = { workspace = true, features = ["alloc"] }
+hex_fmt = { workspace = true }
+prost = { workspace = true }
+rand_core = { workspace = true }
+rjson = { workspace = true }
+serde = { workspace = true, features = ["alloc", "derive"] }
+sha2 = { workspace = true }
+subtle = { workspace = true, features = ["i128"] }
+
+[build-dependencies]
+mc-util-build-script = { workspace = true }
+mc-util-build-sgx = { workspace = true }
+
+cargo-emit = { workspace = true }
+
+[dev-dependencies]
+mc-util-serial = { workspace = true }
+
+bincode = { workspace = true }
+hex = { workspace = true }
+pem = { workspace = true }
+rand = { workspace = true }
+rand_hc = { workspace = true }

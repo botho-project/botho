@@ -1,0 +1,31 @@
+[package]
+name = "mc-fog-report-cli"
+version = "7.1.0"
+authors = ["MobileCoin"]
+edition = "2021"
+license = "GPL-3.0"
+rust-version = { workspace = true }
+
+[[bin]]
+name = "fog-report-cli"
+path = "src/main.rs"
+
+[dependencies]
+mc-account-keys = { workspace = true }
+mc-attest-core = { workspace = true }
+mc-common = { workspace = true, features = ["loggers"] }
+mc-crypto-keys = { workspace = true }
+mc-fog-api = { workspace = true }
+mc-fog-ingest-enclave-measurement = { workspace = true }
+mc-fog-report-connection = { workspace = true }
+mc-fog-report-resolver = { workspace = true }
+mc-fog-report-types = { workspace = true }
+mc-fog-report-validation = { workspace = true }
+mc-util-cli = { workspace = true }
+mc-util-keyfile = { workspace = true }
+mc-util-uri = { workspace = true }
+
+base64 = { workspace = true }
+clap = { workspace = true, features = ["derive", "env"] }
+grpcio = { workspace = true, features = ["prost-codec"] }
+hex = { workspace = true }

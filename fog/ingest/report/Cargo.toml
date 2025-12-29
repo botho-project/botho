@@ -1,0 +1,20 @@
+[package]
+name = "mc-fog-ingest-report"
+version = "7.1.0"
+authors = ["MobileCoin"]
+edition = "2021"
+license = "Apache-2.0"
+rust-version = { workspace = true }
+
+[dependencies]
+mc-attest-core = { workspace = true }
+mc-attest-verifier = { workspace = true }
+mc-attest-verifier-types = { workspace = true }
+mc-attestation-verifier = { workspace = true }
+mc-crypto-keys = { workspace = true }
+mc-fog-report-types = { workspace = true }
+mc-util-encodings = { workspace = true }
+
+der = { workspace = true, features = ["std"] }
+displaydoc = { workspace = true }
+serde = { workspace = true, features = ["alloc", "derive"] }

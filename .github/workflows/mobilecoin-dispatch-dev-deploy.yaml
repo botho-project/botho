@@ -1,0 +1,120 @@
+# Copyright (c) 2018-2022 The MobileCoin Foundation
+#
+# MobileCoin Core projects - Dispatch (manual) Job - Deploy core apps to the development namespace.
+
+name: (Manual) Deploy to Dev Namespace
+
+run-name: Deploy ${{ inputs.version }} to ${{ inputs.namespace }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      namespace:
+        description: "Target Namespace"
+        type: string
+        required: true
+      version:
+        description: "Chart Version"
+        type: string
+        required: true
+      block_version:
+        description: "Consensus block_version"
+        type: string
+        required: true
+        default: '4'
+      tokens_file:
+        description: "Tokens File"
+        type: choice
+        required: false
+        default: 'dev'
+        options:
+        - dev
+        - test
+        - main
+      bootstrap_version:
+        description: "Bootstrap Blockchain from selected version"
+        type: choice
+        required: true
+        default: v5.2.3-dev.alpha.6224
+        options:
+        - none
+        - v5.1.1-dev.alpha.5946
+        - v5.2.3-dev.alpha.6224
+        - v6.0.2-dev.alpha.795965
+      minimum_block:
+        description: "Minimum block to wait for"
+        type: choice
+        required: false
+        default: '6224'
+        options:
+        - '500'
+        - '5946'
+        - '6224'
+        - '795965'
+      shard_size:
+        description: "Shard Size"
+        type: string
+        required: true
+        default: '20000'
+      shard_exceed_block_height_by:
+        description: "Exceed Block Height By"
+        type: string
+        required: true
+        default: '5000'
+      ingest_color:
+        description: "Fog Ingest blue/green"
+        type: choice
+        required: true
+        default: blue
+        options:
+        - blue
+        - green
+      deployment_region:
+        description: "cloud deployment region"
+        type: string
+        required: true
+        default: italynorth
+
+jobs:
+  list-values:
+    name: 👾 Environment Info - ${{ inputs.namespace }} - ${{ inputs.version }} 👾
+    runs-on: mcf-dev-small-x64
+    steps:
+    - name: Checkout
+      uses: mobilecoinofficial/gh-actions/checkout@v0
+
+    - name: 👾 Print Environment Details 👾
+      env:
+        NAMESPACE: ${{ inputs.namespace }}
+        VERSION: ${{ inputs.version }}
+      run: |
+        .internal-ci/util/print_details.sh
+
+  bootstrap:
+    needs:
+    - list-values
+    if: inputs.bootstrap_version != 'none'
+    uses: ./.github/workflows/mobilecoin-workflow-dev-bootstrap.yaml
+    with:
+      block_version: '3'
+      namespace: ${{ inputs.namespace }}
+      bootstrap_version: ${{ inputs.bootstrap_version }}
+      tokens_file: ${{ inputs.tokens_file }}
+    secrets: inherit
+
+  deploy:
+    if: '! failure()'
+    needs:
+    - bootstrap
+    uses: ./.github/workflows/mobilecoin-workflow-dev-deploy.yaml
+    with:
+      block_version: ${{ inputs.block_version }}
+      ingest_color: ${{ inputs.ingest_color }}
+      namespace: ${{ inputs.namespace }}
+      version: ${{ inputs.version }}
+      minimum_block: ${{ inputs.minimum_block }}
+      shard_size: ${{ inputs.shard_size }}
+      shard_exceed_block_height_by: ${{ inputs.shard_exceed_block_height_by }}
+      tokens_file: ${{ inputs.tokens_file }}
+      deployment_region: ${{ inputs.deployment_region }}
+    secrets: inherit

@@ -1,0 +1,34 @@
+[package]
+name = "mc-attest-untrusted"
+version = "7.1.0"
+authors = ["MobileCoin"]
+edition = "2021"
+license = "GPL-3.0"
+readme = "README.md"
+rust-version = { workspace = true }
+
+[features]
+sgx-sim = ["mc-attest-verifier/sgx-sim"]
+
+[dependencies]
+cfg-if = { workspace = true }
+displaydoc = { workspace = true }
+mc-attest-core = { workspace = true }
+mc-attest-verifier = { workspace = true }
+mc-attest-verifier-types = { workspace = true }
+mc-attestation-verifier = { workspace = true }
+mc-rand = { workspace = true }
+mc-sgx-core-types = { workspace = true }
+mc-sgx-dcap-ql = { workspace = true }
+mc-sgx-dcap-quoteverify = { workspace = true }
+mc-sgx-dcap-sys-types = { workspace = true }
+mc-sgx-dcap-types = { workspace = true }
+mc-sgx-types = { workspace = true }
+p256 = { workspace = true, features = ["ecdsa", "pem"] }
+sha2 = { workspace = true }
+
+[build-dependencies]
+mc-sgx-build = { workspace = true }
+
+[dev-dependencies]
+x509-cert = { workspace = true, features = ["pem"] }

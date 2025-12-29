@@ -1,0 +1,96 @@
+# Copyright (c) 2018-2022 The MobileCoin Foundation
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "fog-ingest.fullname" . }}-toolbox
+  labels:
+    {{- include "fog-ingest.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: toolbox
+      {{- include "fog-ingest.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        app: toolbox
+        {{- include "fog-ingest.selectorLabels" . | nindent 8 }}
+    spec:
+      imagePullSecrets:
+      {{- toYaml .Values.imagePullSecrets | nindent 6 }}
+      containers:
+      - image: '{{ .Values.toolbox.image.org | default .Values.image.org }}/{{ .Values.toolbox.image.name }}:{{ .Values.image.tag | default .Chart.AppVersion }}'
+        imagePullPolicy: Always
+        name: toolbox
+        args:
+        - sleep
+        - infinity
+        envFrom:
+        - secretRef:
+            name: sample-keys-seeds
+            optional: true
+        env:
+        - name: FOGDB_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: {{ .Values.fogIngest.externalConfigMaps.postgres.name }}
+              key: postgres-hostname
+        - name: FOGDB_USER
+          valueFrom:
+            configMapKeyRef:
+              name: {{ .Values.fogIngest.externalConfigMaps.postgres.name }}
+              key: postgres-username
+        - name: FOGDB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.fogIngest.externalSecrets.postgres.name }}
+              key: postgres-password
+        - name: FOGDB_DATABASE
+          valueFrom:
+            configMapKeyRef:
+              name: {{ .Values.fogIngest.externalConfigMaps.postgres.name }}
+              key: postgres-database
+        - name: FOGDB_SSL_OPTIONS
+          valueFrom:
+            configMapKeyRef:
+              name: {{ .Values.fogIngest.externalConfigMaps.postgres.name }}
+              key: postgres-ssl-options
+        - name: DATABASE_URL
+          value: 'postgres://$(FOGDB_USER):$(FOGDB_PASSWORD)@$(FOGDB_HOST)/$(FOGDB_DATABASE)$(FOGDB_SSL_OPTIONS)'
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: RUST_LOG
+          value: error
+        - name: CLIENT_AUTH_TOKEN_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: client-auth-token
+              key: token
+              optional: true
+        - name: MC_CHAIN_ID
+          value: {{ .Values.mobilecoin.network }}
+        volumeMounts:
+        - name: minting-keys
+          mountPath: /minting-keys
+          readOnly: true
+        - name: wallet-seeds
+          mountPath: /wallet-seeds
+          readOnly: true
+        resources:
+          {{- toYaml .Values.toolbox.resources | nindent 10 }}
+      nodeSelector:
+        {{- toYaml .Values.toolbox.nodeSelector | nindent 8 }}
+      tolerations:
+        {{- toYaml .Values.toolbox.tolerations | nindent 8 }}
+      volumes:
+      - name: minting-keys
+        secret:
+          secretName: consensus-minting-secrets
+          optional: true
+      - name: wallet-seeds
+        secret:
+          secretName: sample-keys-seeds
+          optional: true

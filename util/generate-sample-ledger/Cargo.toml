@@ -1,0 +1,30 @@
+[package]
+name = "mc-util-generate-sample-ledger"
+version = "7.1.0"
+authors = ["MobileCoin"]
+edition = "2021"
+license = "GPL-3.0"
+readme = "README.md"
+rust-version = { workspace = true }
+
+[[bin]]
+name = "generate-sample-ledger"
+path = "src/bin/generate_sample_ledger.rs"
+
+[dependencies]
+mc-account-keys = { workspace = true }
+mc-blockchain-test-utils = { workspace = true }
+mc-common = { workspace = true, features = ["log", "loggers"] }
+mc-ledger-db = { workspace = true }
+mc-transaction-core = { workspace = true }
+mc-util-build-info = { workspace = true }
+mc-util-from-random = { workspace = true }
+mc-util-keyfile = { workspace = true }
+mc-util-parse = { workspace = true }
+
+clap = { workspace = true, features = ["derive", "env"] }
+rand = { workspace = true }
+rand_hc = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

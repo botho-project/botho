@@ -1,0 +1,14 @@
+[package]
+name = "mc-connection-test-utils"
+version = "7.1.0"
+authors = ["MobileCoin"]
+edition = "2021"
+license = "Apache-2.0"
+rust-version = { workspace = true }
+
+[dependencies]
+mc-blockchain-types = { workspace = true }
+mc-connection = { workspace = true }
+mc-ledger-db = { workspace = true, features = ["test_utils"] }
+mc-transaction-core = { workspace = true }
+mc-util-uri = { workspace = true }

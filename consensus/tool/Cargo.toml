@@ -1,0 +1,19 @@
+[package]
+name = "mc-consensus-tool"
+version = "7.1.0"
+authors = ["MobileCoin"]
+edition = "2021"
+license = "GPL-3.0"
+readme = "README.md"
+rust-version = { workspace = true }
+
+[dependencies]
+mc-common = { workspace = true, features = ["log"] }
+mc-connection = { workspace = true }
+mc-consensus-api = { workspace = true }
+mc-util-grpc = { workspace = true }
+mc-util-uri = { workspace = true }
+
+clap = { workspace = true, features = ["derive", "env"] }
+grpcio = { workspace = true, features = ["prost-codec"] }
+serde_json = { workspace = true }

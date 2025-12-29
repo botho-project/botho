@@ -1,0 +1,27 @@
+[package]
+name = "mc-util-test-helper"
+version = "7.1.0"
+authors = ["MobileCoin"]
+edition = "2021"
+license = "GPL-3.0"
+readme = "README.md"
+rust-version = { workspace = true }
+
+[[bin]]
+name = "generate-account-keys"
+path = "src/bin/generate_account_keys.rs"
+
+[dependencies]
+# MobileCoin dependencies
+mc-account-keys = { workspace = true }
+
+# External dependencies
+clap = { workspace = true, features = ["derive", "env"] }
+lazy_static = { workspace = true }
+rand = { workspace = true }
+rand_hc = { workspace = true }
+
+[dev-dependencies]
+mc-common = { workspace = true, features = ["loggers"] }
+
+itertools = { workspace = true }

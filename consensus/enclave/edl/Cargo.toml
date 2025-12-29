@@ -1,0 +1,14 @@
+[package]
+name = "mc-consensus-enclave-edl"
+version = "7.1.0"
+authors = ["MobileCoin"]
+edition = "2021"
+license = "GPL-3.0"
+links = "consensus_enclave_edl"
+readme = "README.md"
+rust-version = { workspace = true }
+
+[build-dependencies]
+mc-util-build-script = { workspace = true }
+
+cargo-emit = { workspace = true }

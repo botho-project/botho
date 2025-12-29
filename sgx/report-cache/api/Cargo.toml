@@ -1,0 +1,17 @@
+[package]
+name = "mc-sgx-report-cache-api"
+version = "7.1.0"
+authors = ["MobileCoin"]
+edition = "2021"
+license = "GPL-3.0"
+# TODO: Consider making sgx a self-contained workspace and get the value from there.
+rust-version = "1.83.0"
+
+[dependencies]
+displaydoc = { workspace = true }
+serde = { workspace = true, features = ["alloc", "derive"] }
+
+mc-attest-core = { workspace = true }
+mc-attest-enclave-api = { workspace = true }
+mc-sgx-dcap-types = { workspace = true }
+mc-util-serial = { workspace = true }

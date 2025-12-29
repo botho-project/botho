@@ -1,0 +1,17 @@
+[package]
+name = "mc-crypto-memo-mac"
+version = "7.1.0"
+authors = ["MobileCoin"]
+edition = "2021"
+license = "Apache-2.0"
+
+[features]
+test-only = []
+
+[dependencies]
+# External dependencies
+hmac = { workspace = true }
+sha2 = { workspace = true }
+
+# MobileCoin dependencies
+mc-crypto-keys = { workspace = true }
