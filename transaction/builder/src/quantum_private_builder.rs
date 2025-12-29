@@ -377,7 +377,7 @@ pub fn derive_input_credentials(
 
     // Derive the PQ one-time signing keypair
     let pq_signing_keypair =
-        bt_crypto_pq::derive::derive_pq_signing_keypair(&pq_shared_secret, output_index);
+        derive_onetime_sig_keypair(pq_shared_secret.as_bytes(), output_index);
 
     // Derive the classical one-time private key
     // This requires the view private key and the output's public key
@@ -385,15 +385,16 @@ pub fn derive_input_credentials(
         QuantumPrivateTxBuilderError::InvalidRecipient("Invalid output public key".into())
     })?;
 
+    // Create shared secret using ECDH: shared = view_key * tx_public_key
     let shared_secret = bt_transaction_core::onetime_keys::create_shared_secret(
         &tx_public_key,
         account.classical().view_private_key(),
     );
 
+    // Recover one-time private key: x = H(shared_secret) + spend_private_key
     let onetime_private_key = bt_transaction_core::onetime_keys::recover_onetime_private_key(
         &shared_secret.into(),
-        0, // Assuming subaddress index 0
-        account.classical(),
+        account.classical().subaddress_spend_private(0),
     );
 
     // Get the decrypted value from the masked amount
@@ -412,7 +413,7 @@ pub fn derive_input_credentials(
         output_index,
         onetime_private_key,
         pq_signing_keypair,
-        value,
+        value: value.value,
     })
 }
 
