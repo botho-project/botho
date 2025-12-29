@@ -4,7 +4,7 @@
 
 use mc_account_keys::{AccountKey, PublicAddress, RootIdentity};
 use rand::{rngs::StdRng, SeedableRng};
-use std::cmp;
+use std::{cmp, sync::LazyLock};
 
 // The default accounts are the first NUMBER_OF_DEFAULT_ACCOUNTS that we
 // generate
@@ -64,51 +64,34 @@ fn derive_account_key(entropy: [u8; 32]) -> AccountKey {
     AccountKey::from(&RootIdentity::from(&entropy))
 }
 
-// This macro saves boilerplate in the creation of the lazy_static
-// KNOWN_ACCOUNT_KEYS_0_10
-macro_rules! build_derived_account_keys {
-    ($( $entropy_const:ident ),+)
-    =>
-    (
-        lazy_static! {
-            static ref KNOWN_ACCOUNT_KEYS_0_10: Vec<AccountKey> = {
-                let mut keys = Vec::with_capacity(10);
-                $(
-                    let acct = derive_account_key($entropy_const);
-                    keys.push(AccountKey::new(
-                        acct.spend_private_key(),
-                        acct.view_private_key(),
-                    ));
-                )+
-                keys
-            };
-        }
-    );
-}
+// First 10 known accounts derived from fixed entropies
+static KNOWN_ACCOUNT_KEYS_0_10: LazyLock<Vec<AccountKey>> = LazyLock::new(|| {
+    [E0, E1, E2, E3, E4, E5, E6, E7, E8, E9]
+        .iter()
+        .map(|entropy| {
+            let acct = derive_account_key(*entropy);
+            AccountKey::new(acct.spend_private_key(), acct.view_private_key())
+        })
+        .collect()
+});
 
-build_derived_account_keys! {E0, E1, E2, E3, E4, E5, E6, E7, E8, E9}
+static KNOWN_ACCOUNT_KEYS_10_100: LazyLock<Vec<AccountKey>> = LazyLock::new(|| {
+    let mut keys = Vec::with_capacity(90);
+    let mut known_accounts_rng: StdRng = SeedableRng::from_seed(SEED_10_100);
+    for _i in 10..100 {
+        keys.push(AccountKey::random(&mut known_accounts_rng));
+    }
+    keys
+});
 
-lazy_static! {
-    static ref KNOWN_ACCOUNT_KEYS_10_100: Vec<AccountKey> = {
-        let mut keys = Vec::with_capacity(90);
-        let mut known_accounts_rng: StdRng = SeedableRng::from_seed(SEED_10_100);
-        for _i in 10..100 {
-            keys.push(AccountKey::random(&mut known_accounts_rng));
-        }
-        keys
-    };
-}
-
-lazy_static! {
-    static ref KNOWN_ACCOUNT_KEYS_100_1000: Vec<AccountKey> = {
-        let mut keys = Vec::with_capacity(900);
-        let mut known_accounts_rng: StdRng = SeedableRng::from_seed(SEED_100_1000);
-        for _i in 100..1000 {
-            keys.push(AccountKey::random(&mut known_accounts_rng));
-        }
-        keys
-    };
-}
+static KNOWN_ACCOUNT_KEYS_100_1000: LazyLock<Vec<AccountKey>> = LazyLock::new(|| {
+    let mut keys = Vec::with_capacity(900);
+    let mut known_accounts_rng: StdRng = SeedableRng::from_seed(SEED_100_1000);
+    for _i in 100..1000 {
+        keys.push(AccountKey::random(&mut known_accounts_rng));
+    }
+    keys
+});
 
 // Generate known accounts.
 pub fn generate(mut num: usize) -> Vec<AccountKey> {

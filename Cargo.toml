@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "cadence",
+    "cadence-wallet",
     "cluster-tax",
     "discover",
     "account-keys",
@@ -253,7 +254,11 @@ textwrap = "0.16"
 thiserror = "1"
 tiny-bip39 = "1"
 tokio = "1"
+tokio-stream = "0.1"
 toml = "0.8"
+tonic = { version = "0.14", default-features = false }
+tonic-prost = { version = "0.14" }
+tonic-prost-build = { version = "0.14" }
 tracing = "0.1"
 url = "2"
 walkdir = "2"
@@ -271,6 +276,7 @@ mc-account-keys-types = { path = "account-keys/types" }
 mc-api = { path = "api" }
 mc-blockchain-test-utils = { path = "blockchain/test-utils" }
 mc-blockchain-types = { path = "blockchain/types" }
+mc-cluster-tax = { path = "cluster-tax" }
 mc-common = { path = "common", default-features = false }
 mc-connection = { path = "connection" }
 mc-connection-test-utils = { path = "connection/test-utils" }

@@ -7,7 +7,9 @@
 
 #[cfg(test)]
 extern crate test;
+
 use mc_util_metrics::ServiceMetrics;
+use std::sync::LazyLock;
 
 pub mod consensus_service;
 pub mod enclave_stubs;
@@ -21,6 +23,5 @@ mod byzantine_ledger;
 mod counters;
 mod peer_keepalive;
 
-lazy_static::lazy_static! {
-    pub static ref SVC_COUNTERS: ServiceMetrics = ServiceMetrics::new_and_registered("consensus_service");
-}
+pub static SVC_COUNTERS: LazyLock<ServiceMetrics> =
+    LazyLock::new(|| ServiceMetrics::new_and_registered("consensus_service"));

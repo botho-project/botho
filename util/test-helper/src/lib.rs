@@ -2,8 +2,7 @@
 
 //! Testing utilities
 
-#[macro_use]
-extern crate lazy_static;
+use std::sync::LazyLock;
 
 pub mod known_accounts;
 
@@ -29,9 +28,7 @@ pub fn run_with_one_seed<F: FnOnce(RngType)>(f: F) {
     f(get_seeded_rng());
 }
 
-lazy_static! {
-    static ref SEEDS: [Seed; NUM_TRIALS] = get_seeds();
-}
+static SEEDS: LazyLock<[Seed; NUM_TRIALS]> = LazyLock::new(get_seeds);
 
 fn get_seeds() -> [Seed; NUM_TRIALS] {
     let mut rng = get_seeded_rng();

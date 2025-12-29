@@ -1,8 +1,12 @@
 use mc_account_keys::PublicAddress;
+use mc_crypto_keys::RistrettoPrivate;
+use mc_crypto_ring_signature::onetime_keys::{create_tx_out_public_key, create_tx_out_target_key};
+use mc_util_from_random::FromRandom;
+use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::transaction::Transaction;
+use crate::transaction::{Transaction, TxOutput};
 
 /// Block header containing PoW fields
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,7 +88,13 @@ impl BlockHeader {
     }
 }
 
-/// A mining reward transaction (coinbase) with PoW proof
+/// A mining reward transaction (coinbase) with PoW proof and stealth addressing.
+///
+/// Uses CryptoNote-style stealth addresses for miner privacy:
+/// - `target_key`: One-time public key that only the miner can identify and spend
+/// - `public_key`: Ephemeral DH public key for miner to derive shared secret
+///
+/// Even if the same miner wins multiple blocks, their rewards are unlinkable.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct MiningTx {
     /// Block height this reward is for
@@ -93,14 +103,13 @@ pub struct MiningTx {
     /// Reward amount in picocredits
     pub reward: u64,
 
-    /// Recipient view public key
-    pub recipient_view_key: [u8; 32],
+    /// One-time target key: `Hs(r * C) * G + D`
+    /// This is the stealth spend public key that only the miner can identify.
+    pub target_key: [u8; 32],
 
-    /// Recipient spend public key
-    pub recipient_spend_key: [u8; 32],
-
-    /// One-time output public key (for privacy)
-    pub output_public_key: [u8; 32],
+    /// Ephemeral public key: `r * D`
+    /// Used by miner to derive the shared secret for detecting ownership.
+    pub public_key: [u8; 32],
 
     // PoW proof fields
     /// Previous block hash this mining tx builds on
@@ -117,13 +126,42 @@ pub struct MiningTx {
 }
 
 impl MiningTx {
+    /// Create a new mining transaction with stealth output for the given miner address.
+    pub fn new(
+        block_height: u64,
+        reward: u64,
+        miner_address: &PublicAddress,
+        prev_block_hash: [u8; 32],
+        difficulty: u64,
+        timestamp: u64,
+    ) -> Self {
+        // Generate random ephemeral key for stealth output
+        let tx_private_key = RistrettoPrivate::from_random(&mut OsRng);
+
+        // Create stealth keys
+        let target_key = create_tx_out_target_key(&tx_private_key, miner_address);
+        let public_key =
+            create_tx_out_public_key(&tx_private_key, miner_address.spend_public_key());
+
+        Self {
+            block_height,
+            reward,
+            target_key: target_key.to_bytes(),
+            public_key: public_key.to_bytes(),
+            prev_block_hash,
+            difficulty,
+            nonce: 0,
+            timestamp,
+        }
+    }
+
     /// Compute the PoW hash
     pub fn pow_hash(&self) -> [u8; 32] {
         let mut hasher = Sha256::new();
         hasher.update(self.nonce.to_le_bytes());
         hasher.update(self.prev_block_hash);
-        hasher.update(self.recipient_view_key);
-        hasher.update(self.recipient_spend_key);
+        hasher.update(self.target_key);
+        hasher.update(self.public_key);
         hasher.finalize().into()
     }
 
@@ -146,14 +184,25 @@ impl MiningTx {
         let mut hasher = Sha256::new();
         hasher.update(self.block_height.to_le_bytes());
         hasher.update(self.reward.to_le_bytes());
-        hasher.update(self.recipient_view_key);
-        hasher.update(self.recipient_spend_key);
-        hasher.update(self.output_public_key);
+        hasher.update(self.target_key);
+        hasher.update(self.public_key);
         hasher.update(self.prev_block_hash);
         hasher.update(self.difficulty.to_le_bytes());
         hasher.update(self.nonce.to_le_bytes());
         hasher.update(self.timestamp.to_le_bytes());
         hasher.finalize().into()
+    }
+
+    /// Convert this mining transaction's output into a TxOutput for ledger storage.
+    ///
+    /// This allows the ledger to store mining rewards using the same UTXO format
+    /// as regular transaction outputs.
+    pub fn to_tx_output(&self) -> TxOutput {
+        TxOutput {
+            amount: self.reward,
+            target_key: self.target_key,
+            public_key: self.public_key,
+        }
     }
 }
 
@@ -174,9 +223,9 @@ impl Block {
             mining_tx: MiningTx {
                 block_height: 0,
                 reward: 0,
-                recipient_view_key: [0u8; 32],
-                recipient_spend_key: [0u8; 32],
-                output_public_key: [0u8; 32],
+                // Genesis has no real recipient - use zero keys
+                target_key: [0u8; 32],
+                public_key: [0u8; 32],
                 prev_block_hash: [0u8; 32],
                 difficulty: u64::MAX,
                 nonce: 0,
@@ -206,7 +255,9 @@ impl Block {
         Self::new_template_with_txs(prev_block, miner_address, difficulty, reward, Vec::new())
     }
 
-    /// Create a new block template for mining with transactions
+    /// Create a new block template for mining with transactions.
+    ///
+    /// The mining reward output uses stealth addressing for miner privacy.
     pub fn new_template_with_txs(
         prev_block: &Block,
         miner_address: &PublicAddress,
@@ -226,6 +277,16 @@ impl Block {
         // Compute transaction root from all transactions
         let tx_root = Self::compute_tx_root(&transactions);
 
+        // Create stealth output for mining reward
+        let mining_tx = MiningTx::new(
+            prev_block.height() + 1,
+            reward,
+            miner_address,
+            prev_hash,
+            difficulty,
+            timestamp,
+        );
+
         Self {
             header: BlockHeader {
                 version: 1,
@@ -238,17 +299,7 @@ impl Block {
                 miner_view_key,
                 miner_spend_key,
             },
-            mining_tx: MiningTx {
-                block_height: prev_block.height() + 1,
-                reward,
-                recipient_view_key: miner_view_key,
-                recipient_spend_key: miner_spend_key,
-                output_public_key: [0u8; 32], // TODO: generate one-time key
-                prev_block_hash: prev_hash,
-                difficulty,
-                nonce: 0,
-                timestamp,
-            },
+            mining_tx,
             transactions,
         }
     }

@@ -9,6 +9,8 @@
 
 mod discovery;
 mod quorum;
+mod reputation;
 
 pub use discovery::{CadenceBehaviour, NetworkDiscovery, NetworkEvent, PeerTableEntry};
 pub use quorum::{QuorumBuilder, QuorumValidation};
+pub use reputation::{PeerReputation, ReputationManager};

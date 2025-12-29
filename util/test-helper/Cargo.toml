@@ -17,7 +17,6 @@ mc-account-keys = { workspace = true }
 
 # External dependencies
 clap = { workspace = true, features = ["derive", "env"] }
-lazy_static = { workspace = true }
 rand = { workspace = true }
 rand_hc = { workspace = true }
 

@@ -184,6 +184,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6df5aef5c5830360ce5218cecb8f018af3438af5686ae945094affc86fdec63"
 
 [[package]]
+name = "argon2"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c3610892ee6e0cbce8ae2700349fcf8f98adb0dbfbee85aec3c9179d29cc072"
+dependencies = [
+ "base64ct",
+ "blake2",
+ "cpufeatures",
+ "password-hash",
+]
+
+[[package]]
 name = "arrayref"
 version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -690,6 +702,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "cadence-wallet"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "argon2",
+ "bincode",
+ "chacha20poly1305",
+ "clap 4.5.1",
+ "dirs",
+ "futures",
+ "hex",
+ "mc-account-keys",
+ "mc-core",
+ "mc-crypto-keys",
+ "mc-transaction-core",
+ "mc-transaction-types",
+ "rand 0.8.5",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "slip10_ed25519",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tiny-bip39",
+ "tokio",
+ "toml 0.8.2",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "cargo-emit"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -995,9 +1038,9 @@ dependencies = [
 
 [[package]]
 name = "cpufeatures"
-version = "0.2.9"
+version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a17b76ff3a4162b0b27f354a0c87015ddad39d35f9c0c36607a3bdd175dde1f1"
+checksum = "59ed5838eebb26a2bb2e58f6d5b5316989ae9d08bab10e0e6d103e656d1b0280"
 dependencies = [
  "libc",
 ]
@@ -4651,6 +4694,7 @@ dependencies = [
  "displaydoc",
  "maplit",
  "mc-account-keys",
+ "mc-cluster-tax",
  "mc-core",
  "mc-crypto-digestible",
  "mc-crypto-hashes",
@@ -5038,7 +5082,6 @@ version = "7.1.0"
 dependencies = [
  "clap 4.5.1",
  "itertools 0.12.1",
- "lazy_static",
  "mc-account-keys",
  "mc-common",
  "rand 0.8.5",
@@ -5687,6 +5730,17 @@ dependencies = [
  "redox_syscall 0.5.18",
  "smallvec",
  "windows-link",
+]
+
+[[package]]
+name = "password-hash"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "346f04948ba92c43e8469c1ee6736c7563d71012b17d40745260fe106aac2166"
+dependencies = [
+ "base64ct",
+ "rand_core 0.6.4",
+ "subtle",
 ]
 
 [[package]]
