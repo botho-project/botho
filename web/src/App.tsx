@@ -1,11 +1,19 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { Layout } from '@/components/layout'
+import { SplashScreen } from '@/components/connection'
+import { ConnectionProvider, useConnection } from '@/contexts/connection'
 import { DashboardPage } from '@/pages/dashboard'
 import { WalletPage } from '@/pages/wallet'
 import { LedgerPage } from '@/pages/ledger'
 import { NetworkPage } from '@/pages/network'
 
-function App() {
+function AppRoutes() {
+  const { connectedNode } = useConnection()
+
+  if (!connectedNode) {
+    return <SplashScreen />
+  }
+
   return (
     <BrowserRouter>
       <Routes>
@@ -19,6 +27,14 @@ function App() {
         <Route path="/settings" element={<PlaceholderPage title="Settings" />} />
       </Routes>
     </BrowserRouter>
+  )
+}
+
+function App() {
+  return (
+    <ConnectionProvider>
+      <AppRoutes />
+    </ConnectionProvider>
   )
 }
 

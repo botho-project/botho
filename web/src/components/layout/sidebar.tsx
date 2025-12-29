@@ -1,10 +1,13 @@
 import { cn } from '@/lib/utils'
+import { useConnection } from '@/contexts/connection'
 import {
   Cpu,
   Database,
   Home,
+  LogOut,
   Network,
   Settings,
+  Signal,
   Wallet,
 } from 'lucide-react'
 import { Link, useLocation } from 'react-router-dom'
@@ -19,6 +22,7 @@ const navigation = [
 
 export function Sidebar() {
   const location = useLocation()
+  const { connectedNode, disconnect } = useConnection()
 
   return (
     <aside className="fixed inset-y-0 left-0 z-50 w-64 border-r border-[--color-steel] bg-[--color-abyss]/90 backdrop-blur-xl">
@@ -96,13 +100,38 @@ export function Sidebar() {
           <Settings className="h-5 w-5 text-[--color-dim]" />
           Settings
         </Link>
-        <div className="mt-4 rounded-lg bg-[--color-slate] p-3">
-          <div className="flex items-center gap-2">
-            <div className="h-2 w-2 rounded-full bg-[--color-success]" />
-            <span className="text-xs font-medium text-[--color-soft]">Node Connected</span>
+
+        {/* Connected node info */}
+        {connectedNode && (
+          <div className="mt-4 rounded-lg bg-[--color-slate] p-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="h-2 w-2 rounded-full bg-[--color-success] animate-pulse" />
+                <span className="text-xs font-medium text-[--color-soft]">Connected</span>
+              </div>
+              <button
+                onClick={disconnect}
+                className="rounded p-1 text-[--color-dim] transition-colors hover:bg-[--color-abyss] hover:text-[--color-danger]"
+                title="Disconnect"
+              >
+                <LogOut className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            <p className="mt-1 font-mono text-xs text-[--color-dim]">
+              {connectedNode.host}:{connectedNode.port}
+            </p>
+            <div className="mt-2 flex items-center gap-2 text-xs text-[--color-dim]">
+              <Signal className="h-3 w-3 text-[--color-success]" />
+              <span>{connectedNode.latency}ms</span>
+              {connectedNode.blockHeight && (
+                <>
+                  <span className="text-[--color-steel]">•</span>
+                  <span>Block {connectedNode.blockHeight.toLocaleString()}</span>
+                </>
+              )}
+            </div>
           </div>
-          <p className="mt-1 text-xs text-[--color-dim]">localhost:8080</p>
-        </div>
+        )}
       </div>
     </aside>
   )
