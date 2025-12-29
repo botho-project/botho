@@ -5,14 +5,9 @@ use mc_blockchain_test_utils::get_blocks;
 use mc_blockchain_types::{
     Block, BlockContents, BlockData, BlockIndex, BlockMetadata, BlockSignature, BlockVersion,
 };
-use mc_common::{HashMap, HashSet};
+use mc_common::{Hash, HashMap, HashSet};
 use mc_crypto_keys::CompressedRistrettoPublic;
-use mc_transaction_core::{
-    mint::MintTx,
-    ring_signature::KeyImage,
-    tx::{TxOut, TxOutMembershipElement, TxOutMembershipProof},
-    TokenId,
-};
+use mc_transaction_core::{mint::MintTx, ring_signature::KeyImage, tx::TxOut, TokenId};
 use mc_util_test_helper::get_seeded_rng;
 use std::sync::{Arc, Mutex, MutexGuard};
 

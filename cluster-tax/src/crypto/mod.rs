@@ -17,6 +17,7 @@
 
 mod committed_tags;
 mod extended_signature;
+mod serialization;
 mod tagged_output;
 mod validation;
 
@@ -30,5 +31,6 @@ pub use extended_signature::{
     PseudoTagOutput, TagInheritanceProof, ExtendedTxSignature,
     ExtendedSignatureBuilder, ExtendedSignatureVerifier, RingTagData,
 };
+pub use serialization::DeserializeError;
 pub use tagged_output::{TaggedTxOut, CompactTagVector};
 pub use validation::{validate_tag_inheritance, TagValidationError};

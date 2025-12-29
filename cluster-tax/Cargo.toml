@@ -15,8 +15,10 @@ curve25519-dalek = { workspace = true, features = ["alloc", "rand_core", "digest
 sha2 = { workspace = true }
 rand_core = { workspace = true }
 
-# Serialization (optional for now)
+# Serialization
+prost = { workspace = true }
 serde = { workspace = true, features = ["derive"], optional = true }
+
 # For CLI
 clap = { workspace = true, features = ["derive"], optional = true }
 # For random simulation

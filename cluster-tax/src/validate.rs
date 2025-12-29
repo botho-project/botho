@@ -1,0 +1,225 @@
+//! Transaction validation for committed cluster tags (Phase 2).
+//!
+//! This module provides the validation API for transactions using committed
+//! (privacy-preserving) cluster tags. The validation verifies zero-knowledge
+//! proofs of tag inheritance and conservation without revealing the actual
+//! tag values.
+
+use crate::crypto::{
+    CommittedTagVector, ExtendedSignatureVerifier, ExtendedTxSignature, RingTagData,
+};
+use crate::TagWeight;
+
+/// Error type for committed tag validation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CommittedTagValidationError {
+    /// Wrong number of pseudo-tag-outputs for the number of inputs.
+    PseudoOutputCountMismatch { expected: usize, actual: usize },
+
+    /// Inheritance proof failed for an input.
+    InvalidInheritanceProof { input_index: usize },
+
+    /// Tag conservation proof is invalid.
+    InvalidConservationProof,
+
+    /// A committed tag commitment is malformed.
+    InvalidCommitment,
+}
+
+/// Result type for committed tag validation.
+pub type CommittedTagValidationResult<T> = Result<T, CommittedTagValidationError>;
+
+/// Validate committed cluster tags for a transaction.
+///
+/// This verifies that:
+/// 1. Each pseudo-tag-output correctly inherits from one ring member
+/// 2. Output tags conserve mass (with decay) from input pseudo-tags
+///
+/// # Arguments
+/// * `input_ring_tags` - Committed tag vectors for each input ring
+/// * `output_tags` - Committed tag vectors for each output
+/// * `signature` - The extended transaction signature with tag proofs
+/// * `decay_rate` - Tag decay rate (parts per TAG_WEIGHT_SCALE)
+///
+/// # Returns
+/// * `Ok(())` if all proofs verify
+/// * `Err(CommittedTagValidationError)` if any proof fails
+pub fn validate_committed_tags(
+    input_ring_tags: &[RingTagData],
+    output_tags: &[CommittedTagVector],
+    signature: &ExtendedTxSignature,
+    decay_rate: TagWeight,
+) -> CommittedTagValidationResult<()> {
+    // Check pseudo-output count matches input count
+    if signature.pseudo_tag_outputs.len() != input_ring_tags.len() {
+        return Err(CommittedTagValidationError::PseudoOutputCountMismatch {
+            expected: input_ring_tags.len(),
+            actual: signature.pseudo_tag_outputs.len(),
+        });
+    }
+
+    // Create verifier and run verification
+    let verifier = ExtendedSignatureVerifier::new(
+        input_ring_tags.to_vec(),
+        output_tags.to_vec(),
+        decay_rate,
+    );
+
+    if verifier.verify(signature) {
+        Ok(())
+    } else {
+        // The verifier doesn't give us detailed failure info, so we return
+        // a generic conservation proof error. In production, we might want
+        // more granular error reporting.
+        Err(CommittedTagValidationError::InvalidConservationProof)
+    }
+}
+
+/// Validate that committed tag vectors on outputs are structurally valid.
+///
+/// This checks that all commitments can be decompressed to valid curve points.
+/// It does NOT verify any proofs - use `validate_committed_tags` for that.
+pub fn validate_committed_tag_structure(
+    outputs: &[CommittedTagVector],
+) -> CommittedTagValidationResult<()> {
+    for output in outputs {
+        // Check that the total commitment is valid
+        if output.total_commitment.decompress().is_none() {
+            return Err(CommittedTagValidationError::InvalidCommitment);
+        }
+
+        // Check that each entry commitment is valid
+        for entry in &output.entries {
+            if entry.decompress().is_none() {
+                return Err(CommittedTagValidationError::InvalidCommitment);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Configuration for committed tag validation.
+#[derive(Clone, Debug)]
+pub struct CommittedTagConfig {
+    /// Tag decay rate (parts per TAG_WEIGHT_SCALE).
+    /// Default: 50,000 (5%)
+    pub decay_rate: TagWeight,
+}
+
+impl Default for CommittedTagConfig {
+    fn default() -> Self {
+        Self {
+            decay_rate: 50_000, // 5%
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::crypto::{CommittedTagVectorSecret, ExtendedSignatureBuilder};
+    use crate::{ClusterId, TAG_WEIGHT_SCALE};
+    use rand_core::OsRng;
+    use std::collections::HashMap;
+
+    fn create_test_secret(value: u64, clusters: &[(u64, u32)]) -> CommittedTagVectorSecret {
+        let mut tags = HashMap::new();
+        for &(cluster_id, weight) in clusters {
+            tags.insert(ClusterId(cluster_id), weight);
+        }
+        CommittedTagVectorSecret::from_plaintext(value, &tags, &mut OsRng)
+    }
+
+    #[test]
+    fn test_validate_committed_tags_simple() {
+        let decay_rate = 50_000;
+
+        // Create input with 100% to cluster 1
+        let input_secret = create_test_secret(1_000_000, &[(1, TAG_WEIGHT_SCALE)]);
+        let input_commitment = input_secret.commit();
+
+        // Create ring with real input and fake
+        let fake = create_test_secret(500_000, &[(2, TAG_WEIGHT_SCALE)]).commit();
+        let ring_tags = vec![input_commitment.clone(), fake];
+        let real_index = 0;
+
+        // Create decayed output
+        let output_secret = input_secret.apply_decay(decay_rate, &mut OsRng);
+        let output_commitment = output_secret.commit();
+
+        // Build signature
+        let mut builder = ExtendedSignatureBuilder::new(decay_rate);
+        builder.add_input(ring_tags.clone(), real_index, input_secret);
+        builder.add_output(output_secret);
+
+        let signature = builder.build(&mut OsRng).expect("Should build signature");
+
+        // Validate
+        let ring_data = RingTagData {
+            member_tags: ring_tags,
+            real_index,
+        };
+
+        let result = validate_committed_tags(
+            &[ring_data],
+            &[output_commitment],
+            &signature,
+            decay_rate,
+        );
+
+        assert!(result.is_ok(), "Should validate: {:?}", result);
+    }
+
+    #[test]
+    fn test_validate_wrong_pseudo_output_count() {
+        let decay_rate = 50_000;
+
+        // Create input
+        let input_secret = create_test_secret(1_000_000, &[(1, TAG_WEIGHT_SCALE)]);
+        let input_commitment = input_secret.commit();
+        let ring_tags = vec![input_commitment.clone()];
+
+        // Create output
+        let output_secret = input_secret.apply_decay(decay_rate, &mut OsRng);
+        let output_commitment = output_secret.commit();
+
+        // Build signature
+        let mut builder = ExtendedSignatureBuilder::new(decay_rate);
+        builder.add_input(ring_tags.clone(), 0, input_secret);
+        builder.add_output(output_secret);
+
+        let signature = builder.build(&mut OsRng).expect("Should build signature");
+
+        // Try to validate with wrong number of ring inputs
+        let ring_data1 = RingTagData {
+            member_tags: ring_tags.clone(),
+            real_index: 0,
+        };
+        let ring_data2 = RingTagData {
+            member_tags: ring_tags,
+            real_index: 0,
+        };
+
+        let result = validate_committed_tags(
+            &[ring_data1, ring_data2], // 2 rings but signature has 1 pseudo-output
+            &[output_commitment],
+            &signature,
+            decay_rate,
+        );
+
+        assert!(matches!(
+            result,
+            Err(CommittedTagValidationError::PseudoOutputCountMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn test_validate_structure_valid() {
+        let secret = create_test_secret(1_000_000, &[(1, 500_000), (2, 300_000)]);
+        let commitment = secret.commit();
+
+        let result = validate_committed_tag_structure(&[commitment]);
+        assert!(result.is_ok());
+    }
+}

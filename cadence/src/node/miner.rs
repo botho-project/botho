@@ -114,9 +114,9 @@ impl Miner {
         for thread_id in 0..self.threads {
             let shutdown = self.shutdown.clone();
             let total_hashes = self.total_hashes.clone();
-            let blocks_found = self.blocks_found.clone();
+            let txs_found = self.txs_found.clone();
             let address = self.address.clone();
-            let block_sender = self.block_sender.clone();
+            let tx_sender = self.tx_sender.clone();
             let current_work = self.current_work.clone();
             let work_version = self.work_version.clone();
 
@@ -126,8 +126,8 @@ impl Miner {
                     address,
                     shutdown,
                     total_hashes,
-                    blocks_found,
-                    block_sender,
+                    txs_found,
+                    tx_sender,
                     current_work,
                     work_version,
                 );
@@ -147,7 +147,7 @@ impl Miner {
     pub fn stats(&self) -> MiningStats {
         MiningStats {
             total_hashes: self.total_hashes.load(Ordering::Relaxed),
-            blocks_found: self.blocks_found.load(Ordering::Relaxed),
+            txs_found: self.txs_found.load(Ordering::Relaxed),
             start_time: self.start_time,
         }
     }
@@ -159,8 +159,8 @@ fn mine_loop(
     address: PublicAddress,
     shutdown: Arc<AtomicBool>,
     total_hashes: Arc<AtomicU64>,
-    blocks_found: Arc<AtomicU64>,
-    block_sender: Sender<MinedBlock>,
+    txs_found: Arc<AtomicU64>,
+    tx_sender: Sender<MinedMiningTx>,
     current_work: Arc<std::sync::RwLock<MiningWork>>,
     work_version: Arc<AtomicU64>,
 ) {
@@ -196,8 +196,8 @@ fn mine_loop(
         let hash_value = u64::from_be_bytes(hash[0..8].try_into().unwrap());
 
         if hash_value < work.difficulty {
-            // Found a valid block!
-            blocks_found.fetch_add(1, Ordering::Relaxed);
+            // Found a valid mining transaction!
+            txs_found.fetch_add(1, Ordering::Relaxed);
 
             let reward = calculate_block_reward(work.height, work.total_mined);
 
@@ -206,50 +206,47 @@ fn mine_loop(
                 .unwrap()
                 .as_secs();
 
-            let block = Block {
-                header: BlockHeader {
-                    version: 1,
-                    prev_block_hash: work.prev_block_hash,
-                    tx_root: [0u8; 32], // No transactions in mined blocks yet
-                    timestamp,
-                    height: work.height,
-                    difficulty: work.difficulty,
-                    nonce,
-                    miner_view_key,
-                    miner_spend_key,
-                },
-                mining_tx: MiningTx {
-                    block_height: work.height,
-                    reward,
-                    recipient_view_key: miner_view_key,
-                    recipient_spend_key: miner_spend_key,
-                    output_public_key: [0u8; 32], // TODO: generate one-time key
-                    prev_block_hash: work.prev_block_hash,
-                    difficulty: work.difficulty,
-                    nonce,
-                    timestamp,
-                },
-                transactions: Vec::new(),
+            // Create the mining transaction with PoW proof
+            let mining_tx = MiningTx {
+                block_height: work.height,
+                reward,
+                recipient_view_key: miner_view_key,
+                recipient_spend_key: miner_spend_key,
+                output_public_key: [0u8; 32], // TODO: generate one-time key
+                prev_block_hash: work.prev_block_hash,
+                difficulty: work.difficulty,
+                nonce,
+                timestamp,
             };
 
+            // Calculate PoW priority (higher = better PoW)
+            // Invert hash value so lower hash = higher priority
+            let pow_priority = u64::MAX - hash_value;
+
             info!(
-                "Thread {} found block {}! Nonce: {}, Hash: {}, Reward: {} picocredits",
+                "Thread {} found mining tx for height {}! Nonce: {}, Hash: {}, Priority: {}, Reward: {} picocredits",
                 thread_id,
                 work.height,
                 nonce,
                 hex::encode(&hash[0..8]),
+                pow_priority,
                 reward
             );
 
-            // Send block to main thread
-            if block_sender.send(MinedBlock { block }).is_err() {
+            // Send mining tx to main thread for consensus submission
+            if tx_sender
+                .send(MinedMiningTx {
+                    mining_tx,
+                    pow_priority,
+                })
+                .is_err()
+            {
                 // Channel closed, exit
                 break;
             }
 
-            // Wait for work to be updated with new block
-            // (We'll continue mining on the same work until it's updated,
-            // which is suboptimal but simple)
+            // Continue mining - multiple miners may find valid PoW
+            // The best one (highest priority) will win in consensus
         }
 
         nonce = nonce.wrapping_add(1);

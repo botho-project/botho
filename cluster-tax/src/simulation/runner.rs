@@ -75,9 +75,23 @@ pub fn run_simulation(
     let mut metrics = SimulationMetrics::new();
     let mut round_summaries = Vec::new();
 
-    // Register all agents
-    for agent in agents.iter() {
+    // Register all agents and properly mint their initial balances
+    // This ensures cluster wealth is tracked correctly for progressive fees
+    for agent in agents.iter_mut() {
         state.register_agent(agent.id(), agent.agent_type());
+
+        // Get the agent's initial balance
+        let initial_balance = agent.balance();
+        if initial_balance > 0 {
+            // Get a unique cluster ID for this agent's initial wealth
+            let cluster_id = state.next_cluster_id();
+
+            // Mint the balance properly (sets up tags and cluster wealth)
+            let account = agent.account_mut();
+            account.balance = 0; // Reset before minting
+            crate::mint(account, initial_balance, cluster_id, &mut state.cluster_wealth);
+        }
+
         state.update_agent_balance(agent.id(), agent.balance());
     }
 

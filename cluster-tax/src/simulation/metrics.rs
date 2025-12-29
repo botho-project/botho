@@ -89,6 +89,44 @@ impl SimulationMetrics {
         self.snapshots.push(metrics);
     }
 
+    /// Export snapshots to CSV format.
+    pub fn to_csv(&self) -> String {
+        let mut csv = String::new();
+        csv.push_str("round,gini_coefficient,total_wealth,num_agents,total_fees,transaction_count,tag_entropy,top_1_pct_share,top_10_pct_share,q1_fee_rate,q2_fee_rate,q3_fee_rate,q4_fee_rate,q5_fee_rate\n");
+
+        for m in &self.snapshots {
+            csv.push_str(&format!(
+                "{},{:.6},{},{},{},{},{:.6},{:.6},{:.6},{:.2},{:.2},{:.2},{:.2},{:.2}\n",
+                m.round,
+                m.gini_coefficient,
+                m.total_wealth,
+                m.num_agents,
+                m.total_fees_collected,
+                m.transaction_count,
+                m.tag_entropy,
+                m.top_1_pct_wealth_share,
+                m.top_10_pct_wealth_share,
+                m.fee_rate_by_quintile[0],
+                m.fee_rate_by_quintile[1],
+                m.fee_rate_by_quintile[2],
+                m.fee_rate_by_quintile[3],
+                m.fee_rate_by_quintile[4],
+            ));
+        }
+
+        csv
+    }
+
+    /// Export Gini time series only (for simple plotting).
+    pub fn gini_series_csv(&self) -> String {
+        let mut csv = String::new();
+        csv.push_str("round,gini\n");
+        for m in &self.snapshots {
+            csv.push_str(&format!("{},{:.6}\n", m.round, m.gini_coefficient));
+        }
+        csv
+    }
+
     /// Record fees paid by an agent.
     pub fn record_agent_fees(&mut self, agent: AgentId, agent_type: &str, fees: u64) {
         *self.agent_fees.entry(agent).or_insert(0) += fees;

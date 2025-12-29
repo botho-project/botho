@@ -90,6 +90,9 @@ pub enum Error {
 
     /// Missing masked amonut
     MissingMaskedAmount,
+
+    /// Merkle proofs not supported (SGX removed)
+    MerkleProofsNotSupported,
 }
 
 // Implement Debug by forwarding to Display

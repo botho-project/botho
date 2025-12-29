@@ -1,21 +1,26 @@
 pub mod miner;
 
 use anyhow::Result;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::{error, info, warn};
 
+use crate::block::{Block, BlockHeader};
 use crate::block::difficulty::{calculate_new_difficulty, ADJUSTMENT_WINDOW};
+use crate::commands::send::{load_pending_txs, clear_pending_txs};
 use crate::config::{ledger_db_path_from_config, Config};
 use crate::ledger::Ledger;
-use crate::mempool::{Mempool, MempoolError, SharedMempool, new_shared_mempool};
+use crate::mempool::{MempoolError, SharedMempool, new_shared_mempool};
 use crate::transaction::Transaction;
 use crate::wallet::Wallet;
 
-pub use miner::{MinedBlock, Miner, MiningWork};
+/// Pending transactions file name
+const PENDING_TXS_FILE: &str = "pending_txs.bin";
+
+pub use miner::{MinedMiningTx, Miner, MiningWork};
 
 /// The main Cadence node
 pub struct Node {
@@ -25,7 +30,10 @@ pub struct Node {
     mempool: SharedMempool,
     shutdown: Arc<AtomicBool>,
     miner: Option<Miner>,
-    block_receiver: Option<Receiver<MinedBlock>>,
+    /// Receiver for mined mining transactions (to be submitted to consensus)
+    mining_tx_receiver: Option<Receiver<MinedMiningTx>>,
+    /// Directory containing config file (for finding pending_txs.bin)
+    config_dir: PathBuf,
 }
 
 impl Node {
@@ -41,6 +49,12 @@ impl Node {
         // Create mempool
         let mempool = new_shared_mempool();
 
+        // Get config directory for finding pending transactions file
+        let config_dir = config_path
+            .parent()
+            .unwrap_or(Path::new("."))
+            .to_path_buf();
+
         Ok(Self {
             config,
             wallet,
@@ -48,7 +62,8 @@ impl Node {
             mempool,
             shutdown: Arc::new(AtomicBool::new(false)),
             miner: None,
-            block_receiver: None,
+            mining_tx_receiver: None,
+            config_dir,
         })
     }
 
@@ -61,6 +76,9 @@ impl Node {
         ctrlc::set_handler(move || {
             shutdown.store(true, Ordering::SeqCst);
         })?;
+
+        // Load any pending transactions from file (created by `cadence send`)
+        self.load_pending_transactions_from_file()?;
 
         // Display node info
         self.print_status()?;
@@ -131,8 +149,8 @@ impl Node {
 
         let mut miner = Miner::new(threads, self.wallet.default_address(), self.shutdown.clone());
 
-        // Take the block receiver
-        self.block_receiver = miner.take_block_receiver();
+        // Take the mining tx receiver
+        self.mining_tx_receiver = miner.take_tx_receiver();
 
         // Set initial work from chain state
         let state = self
@@ -161,8 +179,8 @@ impl Node {
     }
 
     fn process_mined_blocks(&mut self) -> Result<()> {
-        // Collect blocks first to avoid borrow issues
-        let blocks: Vec<MinedBlock> = if let Some(ref receiver) = self.block_receiver {
+        // Collect mining transactions first to avoid borrow issues
+        let mining_txs: Vec<MinedMiningTx> = if let Some(ref receiver) = self.mining_tx_receiver {
             let mut collected = Vec::new();
             while let Ok(mined) = receiver.try_recv() {
                 collected.push(mined);
@@ -172,25 +190,69 @@ impl Node {
             Vec::new()
         };
 
-        // Process collected blocks
-        for mined in blocks {
+        // Process collected mining transactions
+        // TODO: Submit to consensus instead of building blocks directly
+        for mined in mining_txs {
+            let mining_tx = &mined.mining_tx;
             info!(
-                "Processing mined block {} with hash {}",
-                mined.block.height(),
-                hex::encode(&mined.block.hash()[0..8])
+                "Processing mining tx for height {} with priority {}",
+                mining_tx.block_height,
+                mined.pow_priority
             );
 
+            // Get pending transactions from mempool (limit to 100 per block)
+            let pending_txs = self.get_pending_transactions(100);
+            let tx_count = pending_txs.len();
+
+            // Calculate transaction merkle root
+            let tx_root = if pending_txs.is_empty() {
+                [0u8; 32]
+            } else {
+                use sha2::{Digest, Sha256};
+                let mut hasher = Sha256::new();
+                for tx in &pending_txs {
+                    hasher.update(tx.hash());
+                }
+                hasher.finalize().into()
+            };
+
+            // Build a block from the mining transaction and pending txs
+            // (In full consensus mode, this would come from externalized values)
+            let block = Block {
+                header: BlockHeader {
+                    version: 1,
+                    prev_block_hash: mining_tx.prev_block_hash,
+                    tx_root,
+                    timestamp: mining_tx.timestamp,
+                    height: mining_tx.block_height,
+                    difficulty: mining_tx.difficulty,
+                    nonce: mining_tx.nonce,
+                    miner_view_key: mining_tx.recipient_view_key,
+                    miner_spend_key: mining_tx.recipient_spend_key,
+                },
+                mining_tx: mining_tx.clone(),
+                transactions: pending_txs,
+            };
+
             // Add to ledger
-            match self.ledger.add_block(&mined.block) {
+            match self.ledger.add_block(&block) {
                 Ok(()) => {
                     info!(
-                        "Block {} added to ledger! Reward: {} credits",
-                        mined.block.height(),
-                        mined.block.mining_tx.reward as f64 / 1_000_000_000_000.0
+                        "Block {} added to ledger! Reward: {} credits, {} txs included",
+                        block.height(),
+                        mining_tx.reward as f64 / 1_000_000_000_000.0,
+                        tx_count
                     );
 
+                    // Remove confirmed transactions from mempool
+                    if !block.transactions.is_empty() {
+                        if let Ok(mut mempool) = self.mempool.write() {
+                            mempool.remove_confirmed(&block.transactions);
+                        }
+                    }
+
                     // Check if we need to adjust difficulty
-                    let new_height = mined.block.height();
+                    let new_height = block.height();
                     if new_height > 0 && new_height % ADJUSTMENT_WINDOW == 0 {
                         self.adjust_difficulty(new_height)?;
                     }
@@ -269,10 +331,10 @@ impl Node {
                 .map_err(|e| anyhow::anyhow!("Failed to get chain state: {}", e))?;
 
             println!(
-                "[Mining] Height: {} | Hashrate: {:.2} H/s | Blocks: {} | Mined: {:.6} credits",
+                "[Mining] Height: {} | Hashrate: {:.2} H/s | Txs found: {} | Mined: {:.6} credits",
                 state.height,
                 stats.hashrate(),
-                stats.blocks_found,
+                stats.txs_found,
                 state.total_mined as f64 / 1_000_000_000_000.0
             );
         }
@@ -345,23 +407,58 @@ impl Node {
         Ok(())
     }
 
-    /// Check if we've mined a block (non-blocking)
+    /// Check if we've mined a mining transaction (non-blocking)
+    /// Returns a block built from the mining transaction
+    /// TODO: In full consensus mode, this would submit to consensus instead
     pub fn check_mined_block(&mut self) -> Result<Option<crate::block::Block>> {
-        if let Some(ref receiver) = self.block_receiver {
+        if let Some(ref receiver) = self.mining_tx_receiver {
             if let Ok(mined) = receiver.try_recv() {
+                let mining_tx = &mined.mining_tx;
                 info!(
-                    "Mined block {} with hash {}",
-                    mined.block.height(),
-                    hex::encode(&mined.block.hash()[0..8])
+                    "Mined mining tx for height {} with priority {}",
+                    mining_tx.block_height,
+                    mined.pow_priority
                 );
+
+                // Get pending transactions from mempool
+                let pending_txs = self.get_pending_transactions(100);
+
+                // Calculate transaction merkle root
+                let tx_root = if pending_txs.is_empty() {
+                    [0u8; 32]
+                } else {
+                    use sha2::{Digest, Sha256};
+                    let mut hasher = Sha256::new();
+                    for tx in &pending_txs {
+                        hasher.update(tx.hash());
+                    }
+                    hasher.finalize().into()
+                };
+
+                // Build a block from the mining transaction
+                let block = Block {
+                    header: BlockHeader {
+                        version: 1,
+                        prev_block_hash: mining_tx.prev_block_hash,
+                        tx_root,
+                        timestamp: mining_tx.timestamp,
+                        height: mining_tx.block_height,
+                        difficulty: mining_tx.difficulty,
+                        nonce: mining_tx.nonce,
+                        miner_view_key: mining_tx.recipient_view_key,
+                        miner_spend_key: mining_tx.recipient_spend_key,
+                    },
+                    mining_tx: mining_tx.clone(),
+                    transactions: pending_txs,
+                };
 
                 // Add to our ledger
                 self.ledger
-                    .add_block(&mined.block)
+                    .add_block(&block)
                     .map_err(|e| anyhow::anyhow!("Failed to add mined block: {}", e))?;
 
                 // Check if we need to adjust difficulty
-                let new_height = mined.block.height();
+                let new_height = block.height();
                 if new_height > 0 && new_height % ADJUSTMENT_WINDOW == 0 {
                     self.adjust_difficulty(new_height)?;
                 }
@@ -383,11 +480,24 @@ impl Node {
                 }
 
                 // Remove confirmed transactions from mempool
-                if let Ok(mut mempool) = self.mempool.write() {
-                    mempool.remove_confirmed(&mined.block.transactions);
+                if !block.transactions.is_empty() {
+                    if let Ok(mut mempool) = self.mempool.write() {
+                        mempool.remove_confirmed(&block.transactions);
+                    }
                 }
 
-                return Ok(Some(mined.block));
+                return Ok(Some(block));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Check if we've mined a mining transaction (non-blocking)
+    /// Returns the raw MinedMiningTx for consensus submission (doesn't build block)
+    pub fn check_mined_mining_tx(&mut self) -> Result<Option<MinedMiningTx>> {
+        if let Some(ref receiver) = self.mining_tx_receiver {
+            if let Ok(mined) = receiver.try_recv() {
+                return Ok(Some(mined));
             }
         }
         Ok(None)
@@ -429,6 +539,56 @@ impl Node {
         if let Ok(mut mempool) = self.mempool.write() {
             mempool.remove_invalid(&self.ledger);
             mempool.evict_old();
+        }
+    }
+
+    /// Load pending transactions from file (created by `cadence send`)
+    fn load_pending_transactions_from_file(&self) -> Result<()> {
+        let pending_path = self.config_dir.join(PENDING_TXS_FILE);
+
+        match load_pending_txs(&pending_path) {
+            Ok(txs) if txs.is_empty() => {
+                // No pending transactions
+                Ok(())
+            }
+            Ok(txs) => {
+                info!("Loading {} pending transactions from file", txs.len());
+
+                let mut loaded = 0;
+                let mut failed = 0;
+
+                for tx in txs {
+                    match self.submit_transaction(tx) {
+                        Ok(hash) => {
+                            info!("Loaded pending tx: {}", hex::encode(&hash[0..8]));
+                            loaded += 1;
+                        }
+                        Err(e) => {
+                            warn!("Failed to load pending tx: {}", e);
+                            failed += 1;
+                        }
+                    }
+                }
+
+                info!(
+                    "Loaded {} pending transactions ({} failed)",
+                    loaded, failed
+                );
+
+                // Clear the pending file since we've loaded them
+                if let Err(e) = clear_pending_txs(&pending_path) {
+                    warn!("Failed to clear pending transactions file: {}", e);
+                }
+
+                Ok(())
+            }
+            Err(e) => {
+                // File might not exist, which is fine
+                if pending_path.exists() {
+                    warn!("Failed to load pending transactions: {}", e);
+                }
+                Ok(())
+            }
         }
     }
 }

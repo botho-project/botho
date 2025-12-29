@@ -211,8 +211,38 @@ pub const ANNOUNCEMENTS_TOPIC: &str = "/cadence/announcements/1.0.0";
 /// Gossipsub topic for peer exchange.
 pub const PEER_EXCHANGE_TOPIC: &str = "/cadence/peers/1.0.0";
 
+/// Gossipsub topic for new transactions.
+pub const TRANSACTIONS_TOPIC: &str = "/cadence/transactions/1.0.0";
+
+/// Gossipsub topic for new blocks.
+pub const BLOCKS_TOPIC: &str = "/cadence/blocks/1.0.0";
+
 /// Protocol ID for request-response topology sync.
 pub const TOPOLOGY_SYNC_PROTOCOL: &str = "/cadence/topology-sync/1.0.0";
+
+/// A transaction broadcast message.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransactionBroadcast {
+    /// Serialized transaction data
+    pub tx_data: Vec<u8>,
+    /// Transaction hash (for deduplication)
+    pub tx_hash: [u8; 32],
+    /// Timestamp when broadcast
+    pub timestamp: u64,
+}
+
+/// A block broadcast message.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlockBroadcast {
+    /// Serialized block data
+    pub block_data: Vec<u8>,
+    /// Block hash
+    pub block_hash: [u8; 32],
+    /// Block height
+    pub height: u64,
+    /// Timestamp when broadcast
+    pub timestamp: u64,
+}
 
 // Serde helpers for Ed25519 types
 

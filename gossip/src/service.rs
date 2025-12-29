@@ -248,8 +248,10 @@ async fn run_swarm(
         .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(60)))
         .build();
 
-    // Subscribe to the announcements topic
+    // Subscribe to gossip topics
     swarm.behaviour_mut().subscribe_announcements()?;
+    swarm.behaviour_mut().subscribe_transactions()?;
+    swarm.behaviour_mut().subscribe_blocks()?;
 
     // Start listening
     let listen_addr = config.listen_multiaddr();
@@ -331,6 +333,18 @@ async fn run_swarm(
                             warn!(?e, "Failed to publish announcement");
                         }
                         store.insert(announcement);
+                    }
+
+                    GossipCommand::BroadcastTransaction(tx_broadcast) => {
+                        if let Err(e) = swarm.behaviour_mut().publish_transaction(&tx_broadcast) {
+                            warn!(?e, "Failed to broadcast transaction");
+                        }
+                    }
+
+                    GossipCommand::BroadcastBlock(block_broadcast) => {
+                        if let Err(e) = swarm.behaviour_mut().publish_block(&block_broadcast) {
+                            warn!(?e, "Failed to broadcast block");
+                        }
                     }
 
                     GossipCommand::RequestTopology { peer, since_timestamp } => {

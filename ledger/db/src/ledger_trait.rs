@@ -1,4 +1,10 @@
 // Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2024 Cadence Foundation
+
+//! Note: Merkle proof methods were removed as part of SGX removal.
+//! With SGX enclaves removed, membership proofs are no longer needed -
+//! the consensus service can directly query the ledger to verify that
+//! ring members exist.
 
 use crate::{ActiveMintConfig, ActiveMintConfigs, Error};
 use mc_blockchain_types::{
@@ -6,12 +12,7 @@ use mc_blockchain_types::{
 };
 use mc_common::{Hash, HashMap};
 use mc_crypto_keys::CompressedRistrettoPublic;
-use mc_transaction_core::{
-    mint::MintTx,
-    ring_signature::KeyImage,
-    tx::{TxOut, TxOutMembershipElement, TxOutMembershipProof},
-    TokenId,
-};
+use mc_transaction_core::{mint::MintTx, ring_signature::KeyImage, tx::TxOut, TokenId};
 use mockall::*;
 
 #[automock]
@@ -73,11 +74,8 @@ pub trait Ledger: Send {
     /// Gets a TxOut by its index in the ledger.
     fn get_tx_out_by_index(&self, index: u64) -> Result<TxOut, Error>;
 
-    /// Gets a proof of memberships for TxOuts with indexes `indexes`.
-    fn get_tx_out_proof_of_memberships(
-        &self,
-        indexes: &[u64],
-    ) -> Result<Vec<TxOutMembershipProof>, Error>;
+    /// Returns true if the Ledger contains a TxOut with the given hash.
+    fn contains_tx_out_by_hash(&self, tx_out_hash: &Hash) -> Result<bool, Error>;
 
     /// Returns true if the Ledger contains the given TxOut public key.
     fn contains_tx_out_public_key(
@@ -97,9 +95,6 @@ pub trait Ledger: Send {
 
     /// Gets the key images used by transactions in a single block.
     fn get_key_images_by_block(&self, block_number: BlockIndex) -> Result<Vec<KeyImage>, Error>;
-
-    /// Get the tx out root membership element from the tx out Merkle Tree.
-    fn get_root_tx_out_membership_element(&self) -> Result<TxOutMembershipElement, Error>;
 
     /// Get the latest block header, if any. NotFound if the ledger-db is empty.
     fn get_latest_block(&self) -> Result<Block, Error> {

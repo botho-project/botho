@@ -1,8 +1,8 @@
 // Copyright (c) 2018-2023 The MobileCoin Foundation
 
 use crate::{
-    ActiveMintConfig, ActiveMintConfigs, Error, Ledger, LedgerMetrics, MetadataStore,
-    MetadataStoreSettings, MintConfigStore, MintTxStore, TxOutStore,
+    ActiveMintConfig, ActiveMintConfigs, ClusterWealthStore, Error, Ledger, LedgerMetrics,
+    MetadataStore, MetadataStoreSettings, MintConfigStore, MintTxStore, TxOutStore,
 };
 use lmdb::{
     Database, DatabaseFlags, Environment, EnvironmentFlags, RoTransaction, RwTransaction,
@@ -12,15 +12,9 @@ use mc_blockchain_types::{
     Block, BlockContents, BlockData, BlockID, BlockIndex, BlockMetadata, BlockSignature,
     BlockVersion, MAX_BLOCK_VERSION,
 };
-use mc_common::{logger::global_log, HashMap};
+use mc_common::{logger::global_log, Hash, HashMap};
 use mc_crypto_keys::CompressedRistrettoPublic;
-use mc_transaction_core::{
-    membership_proofs::Range,
-    mint::MintTx,
-    ring_signature::KeyImage,
-    tx::{TxOut, TxOutMembershipElement, TxOutMembershipProof},
-    TokenId,
-};
+use mc_transaction_core::{mint::MintTx, ring_signature::KeyImage, tx::TxOut, TokenId};
 use mc_util_serial::{decode, encode, Message};
 use mc_util_telemetry::{
     mark_span_as_active, start_block_span, telemetry_static_key, tracer, Key, Span,
@@ -35,7 +29,7 @@ use std::{
 pub const MAX_LMDB_FILE_SIZE: usize = 1 << 40; // 1 TB
 
 /// maximum number of [Database]s in the lmdb file
-pub const MAX_LMDB_DATABASES: u32 = 19;
+pub const MAX_LMDB_DATABASES: u32 = 20;
 
 // LMDB Database names.
 pub const COUNTS_DB_NAME: &str = "ledger_db:counts";
@@ -133,6 +127,9 @@ pub struct LedgerDB {
 
     /// Storage abstraction for mint transactions.
     mint_tx_store: MintTxStore,
+
+    /// Storage abstraction for cluster wealth tracking.
+    cluster_wealth_store: ClusterWealthStore,
 
     /// Location on filesystem.
     path: PathBuf,
@@ -336,41 +333,11 @@ impl Ledger for LedgerDB {
         Ok(key_image_list.key_images)
     }
 
-    /// Gets a proof of memberships for TxOuts with indexes `indexes`.
-    fn get_tx_out_proof_of_memberships(
-        &self,
-        indexes: &[u64],
-    ) -> Result<Vec<TxOutMembershipProof>, Error> {
+    /// Returns true if the Ledger contains a TxOut with the given hash.
+    fn contains_tx_out_by_hash(&self, tx_out_hash: &Hash) -> Result<bool, Error> {
         let db_transaction = self.env.begin_ro_txn()?;
-        indexes
-            .iter()
-            .map(|index| {
-                self.tx_out_store
-                    .get_merkle_proof_of_membership(*index, &db_transaction)
-            })
-            .collect()
-    }
-
-    /// Get the tx out root membership element from the tx out Merkle Tree.
-    fn get_root_tx_out_membership_element(&self) -> Result<TxOutMembershipElement, Error> {
-        let db_transaction = self.env.begin_ro_txn()?;
-
-        let num_txos = self.tx_out_store.num_tx_outs(&db_transaction)?;
-        if num_txos == 0 {
-            return Err(Error::NoOutputs);
-        }
-
-        let root_merkle_hash = self.tx_out_store.get_root_merkle_hash(&db_transaction)?;
-
-        let range = Range::new(
-            0,
-            // This duplicates the range calculation logic inside get_root_merkle_hash
-            num_txos
-                .checked_next_power_of_two()
-                .ok_or(Error::CapacityExceeded)?
-                - 1,
-        )?;
-        Ok(TxOutMembershipElement::new(range, root_merkle_hash))
+        self.tx_out_store
+            .contains_tx_out_by_hash(tx_out_hash, &db_transaction)
     }
 
     /// Get active mint configurations for a given token id.
@@ -463,6 +430,10 @@ impl LedgerDB {
         let mint_config_store = MintConfigStore::new(&env)?;
         let mint_tx_store = MintTxStore::new(&env)?;
 
+        // Cluster wealth store is a new addition - create if doesn't exist
+        ClusterWealthStore::create(&env).ok(); // Ignore error if already exists
+        let cluster_wealth_store = ClusterWealthStore::new(&env)?;
+
         let metrics = LedgerMetrics::new(path);
 
         let ledger_db = LedgerDB {
@@ -479,6 +450,7 @@ impl LedgerDB {
             tx_out_store,
             mint_config_store,
             mint_tx_store,
+            cluster_wealth_store,
             metrics,
         };
 
@@ -508,6 +480,7 @@ impl LedgerDB {
         TxOutStore::create(&env)?;
         MintConfigStore::create(&env)?;
         MintTxStore::create(&env)?;
+        ClusterWealthStore::create(&env)?;
 
         let mut db_transaction = env.begin_rw_txn()?;
 
@@ -537,6 +510,34 @@ impl LedgerDB {
         self.metrics.db_file_size.set(file_size as i64);
 
         Ok(())
+    }
+
+    /// Get the total wealth attributed to a cluster.
+    /// This is used for progressive fee computation.
+    pub fn get_cluster_wealth(&self, cluster_id: mc_transaction_core::ClusterId) -> Result<u64, Error> {
+        let db_transaction = self.env.begin_ro_txn()?;
+        self.cluster_wealth_store.get_cluster_wealth(cluster_id, &db_transaction)
+    }
+
+    /// Get wealth for multiple clusters at once.
+    pub fn get_cluster_wealths(
+        &self,
+        cluster_ids: &[mc_transaction_core::ClusterId],
+    ) -> Result<HashMap<mc_transaction_core::ClusterId, u64>, Error> {
+        let db_transaction = self.env.begin_ro_txn()?;
+        self.cluster_wealth_store.get_cluster_wealths(cluster_ids, &db_transaction)
+    }
+
+    /// Get total tracked wealth across all clusters.
+    pub fn get_total_tracked_wealth(&self) -> Result<u64, Error> {
+        let db_transaction = self.env.begin_ro_txn()?;
+        self.cluster_wealth_store.get_total_tracked_wealth(&db_transaction)
+    }
+
+    /// Get all cluster wealths (for analysis/debugging).
+    pub fn get_all_cluster_wealths(&self) -> Result<HashMap<mc_transaction_core::ClusterId, u64>, Error> {
+        let db_transaction = self.env.begin_ro_txn()?;
+        self.cluster_wealth_store.get_all_cluster_wealths(&db_transaction)
     }
 
     /// Write a `Block`.
@@ -660,6 +661,28 @@ impl LedgerDB {
 
         // Done.
         Ok(())
+    }
+
+    /// Update cluster wealth from pre-computed deltas.
+    ///
+    /// This is called when cluster wealth deltas are computed at a higher layer
+    /// (e.g., during transaction validation where plaintext amounts are available).
+    ///
+    /// # Arguments
+    /// * `input_contributions` - Wealth to subtract (from spent outputs)
+    /// * `output_contributions` - Wealth to add (from new outputs)
+    /// * `db_transaction` - The database transaction
+    pub fn write_cluster_wealth_deltas(
+        &self,
+        input_contributions: &HashMap<mc_transaction_core::ClusterId, u64>,
+        output_contributions: &HashMap<mc_transaction_core::ClusterId, u64>,
+        db_transaction: &mut RwTransaction,
+    ) -> Result<(), Error> {
+        self.cluster_wealth_store.apply_wealth_deltas(
+            input_contributions,
+            output_contributions,
+            db_transaction,
+        )
     }
 
     /// Checks if a block can be appended to the db.
@@ -959,7 +982,6 @@ mod ledger_db_test {
     use crate::test_utils::{add_block_contents_to_ledger, add_txos_and_key_images_to_ledger};
     use mc_blockchain_test_utils::{get_blocks, make_block_metadata};
     use mc_crypto_keys::Ed25519Pair;
-    use mc_transaction_core::membership_proofs::compute_implied_merkle_root;
     use mc_transaction_core_test_utils::{
         create_mint_config_tx, create_mint_config_tx_and_signers, create_mint_tx,
         create_test_tx_out, mint_config_tx_to_validated as to_validated,
@@ -2693,25 +2715,7 @@ mod ledger_db_test {
         }
     }
 
-    #[test]
-    // ledger_db.get_root_tx_out_membership_element returns the correct element
-    fn get_root_tx_out_membership_element_returns_correct_element() {
-        let mut ledger_db = create_db();
-        // Add some random blocks
-        populate_db(&mut ledger_db, 42, 3);
-
-        // The root element should be the same for all TxOuts in the ledger.
-        let root_element = ledger_db.get_root_tx_out_membership_element().unwrap();
-
-        for tx_out_index in 0..ledger_db.num_txos().unwrap() {
-            let proofs = ledger_db
-                .get_tx_out_proof_of_memberships(&[tx_out_index])
-                .unwrap();
-
-            let implied_root = compute_implied_merkle_root(&proofs[0]).unwrap();
-            assert_eq!(root_element, implied_root);
-        }
-    }
+    // Note: get_root_tx_out_membership_element test removed with SGX - Merkle proofs no longer used
 
     // FIXME(MC-526): If these benches are not marked ignore, they get run during
     // cargo test and they are not compiled with optimizations which makes them

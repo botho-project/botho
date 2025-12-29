@@ -109,8 +109,9 @@ pub use consensus_integration::{
 pub use config::{GossipConfig, GossipConfigBuilder};
 pub use error::{GossipError, GossipResult};
 pub use messages::{
-    GossipMessage, NodeAnnouncement, NodeCapabilities, PeerInfo, ANNOUNCEMENTS_TOPIC,
-    PEER_EXCHANGE_TOPIC, TOPOLOGY_SYNC_PROTOCOL,
+    BlockBroadcast, GossipMessage, NodeAnnouncement, NodeCapabilities, PeerInfo,
+    TransactionBroadcast, ANNOUNCEMENTS_TOPIC, BLOCKS_TOPIC, PEER_EXCHANGE_TOPIC,
+    TOPOLOGY_SYNC_PROTOCOL, TRANSACTIONS_TOPIC,
 };
 pub use service::GossipService;
 pub use store::{new_shared_store, PeerStore, PeerStoreConfig, PeerStoreStats, SharedPeerStore};

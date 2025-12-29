@@ -10,7 +10,10 @@
 use crate::{
     config::GossipConfig,
     error::{GossipError, GossipResult},
-    messages::{GossipMessage, NodeAnnouncement, ANNOUNCEMENTS_TOPIC, TOPOLOGY_SYNC_PROTOCOL},
+    messages::{
+        BlockBroadcast, NodeAnnouncement, TransactionBroadcast,
+        ANNOUNCEMENTS_TOPIC, BLOCKS_TOPIC, TRANSACTIONS_TOPIC, TOPOLOGY_SYNC_PROTOCOL,
+    },
     store::SharedPeerStore,
 };
 use futures::StreamExt;
@@ -42,6 +45,12 @@ pub enum GossipEvent {
 
     /// Received a node announcement
     AnnouncementReceived(NodeAnnouncement),
+
+    /// Received a transaction broadcast
+    TransactionReceived(TransactionBroadcast),
+
+    /// Received a block broadcast
+    BlockReceived(BlockBroadcast),
 
     /// Received a topology sync request
     TopologySyncRequest {
@@ -260,10 +269,54 @@ impl GossipBehaviour {
         Ok(())
     }
 
+    /// Subscribe to the transactions topic.
+    pub fn subscribe_transactions(&mut self) -> GossipResult<()> {
+        let topic = IdentTopic::new(TRANSACTIONS_TOPIC);
+        self.gossipsub
+            .subscribe(&topic)
+            .map_err(|e| GossipError::Libp2pError(format!("Failed to subscribe: {:?}", e)))?;
+        Ok(())
+    }
+
+    /// Subscribe to the blocks topic.
+    pub fn subscribe_blocks(&mut self) -> GossipResult<()> {
+        let topic = IdentTopic::new(BLOCKS_TOPIC);
+        self.gossipsub
+            .subscribe(&topic)
+            .map_err(|e| GossipError::Libp2pError(format!("Failed to subscribe: {:?}", e)))?;
+        Ok(())
+    }
+
     /// Publish a node announcement to the network.
     pub fn publish_announcement(&mut self, announcement: &NodeAnnouncement) -> GossipResult<()> {
         let topic = IdentTopic::new(ANNOUNCEMENTS_TOPIC);
         let data = serde_json::to_vec(announcement)
+            .map_err(|e| GossipError::SerializationError(e.to_string()))?;
+
+        self.gossipsub
+            .publish(topic, data)
+            .map_err(|e| GossipError::Libp2pError(format!("Failed to publish: {:?}", e)))?;
+
+        Ok(())
+    }
+
+    /// Publish a transaction to the network.
+    pub fn publish_transaction(&mut self, tx_broadcast: &TransactionBroadcast) -> GossipResult<()> {
+        let topic = IdentTopic::new(TRANSACTIONS_TOPIC);
+        let data = serde_json::to_vec(tx_broadcast)
+            .map_err(|e| GossipError::SerializationError(e.to_string()))?;
+
+        self.gossipsub
+            .publish(topic, data)
+            .map_err(|e| GossipError::Libp2pError(format!("Failed to publish: {:?}", e)))?;
+
+        Ok(())
+    }
+
+    /// Publish a block to the network.
+    pub fn publish_block(&mut self, block_broadcast: &BlockBroadcast) -> GossipResult<()> {
+        let topic = IdentTopic::new(BLOCKS_TOPIC);
+        let data = serde_json::to_vec(block_broadcast)
             .map_err(|e| GossipError::SerializationError(e.to_string()))?;
 
         self.gossipsub
@@ -309,6 +362,12 @@ pub enum GossipCommand {
     /// Publish a node announcement
     Announce(NodeAnnouncement),
 
+    /// Broadcast a transaction
+    BroadcastTransaction(TransactionBroadcast),
+
+    /// Broadcast a block
+    BroadcastBlock(BlockBroadcast),
+
     /// Request topology from a peer
     RequestTopology { peer: PeerId, since_timestamp: u64 },
 
@@ -335,6 +394,22 @@ impl GossipHandle {
     pub async fn announce(&self, announcement: NodeAnnouncement) -> GossipResult<()> {
         self.command_tx
             .send(GossipCommand::Announce(announcement))
+            .await
+            .map_err(|_| GossipError::ChannelClosed)
+    }
+
+    /// Broadcast a transaction to the network.
+    pub async fn broadcast_transaction(&self, tx: TransactionBroadcast) -> GossipResult<()> {
+        self.command_tx
+            .send(GossipCommand::BroadcastTransaction(tx))
+            .await
+            .map_err(|_| GossipError::ChannelClosed)
+    }
+
+    /// Broadcast a block to the network.
+    pub async fn broadcast_block(&self, block: BlockBroadcast) -> GossipResult<()> {
+        self.command_tx
+            .send(GossipCommand::BroadcastBlock(block))
             .await
             .map_err(|_| GossipError::ChannelClosed)
     }

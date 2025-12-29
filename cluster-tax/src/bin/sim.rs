@@ -173,6 +173,37 @@ mod cli {
             #[arg(short, long, default_value = "2000")]
             rounds: u64,
         },
+
+        /// Compare Gini coefficient evolution with and without progressive fees
+        Compare {
+            /// Number of retail users
+            #[arg(long, default_value = "100")]
+            retail_users: usize,
+
+            /// Number of merchants
+            #[arg(long, default_value = "10")]
+            merchants: usize,
+
+            /// Number of whales
+            #[arg(long, default_value = "5")]
+            whales: usize,
+
+            /// Whale wealth as fraction of total (0.0 to 1.0)
+            #[arg(long, default_value = "0.4")]
+            whale_fraction: f64,
+
+            /// Number of simulation rounds
+            #[arg(short, long, default_value = "10000")]
+            rounds: u64,
+
+            /// Output directory for CSV files
+            #[arg(short, long, default_value = ".")]
+            output: String,
+
+            /// Flat fee rate in basis points for comparison (default: average of progressive)
+            #[arg(long, default_value = "100")]
+            flat_rate: u32,
+        },
     }
 
     pub fn run(cli: Cli) {
@@ -208,6 +239,15 @@ mod cli {
             } => run_scenario_mixers(num_mixers, whales, rounds),
             Command::ScenarioVelocity { agents, rounds } => run_scenario_velocity(agents, rounds),
             Command::ScenarioParams { agents, rounds } => run_scenario_params(agents, rounds),
+            Command::Compare {
+                retail_users,
+                merchants,
+                whales,
+                whale_fraction,
+                rounds,
+                output,
+                flat_rate,
+            } => run_compare(retail_users, merchants, whales, whale_fraction, rounds, output, flat_rate),
         }
     }
 
@@ -1047,6 +1087,217 @@ mod cli {
                 whale_fees
             );
         }
+    }
+
+    fn run_compare(
+        num_retail: usize,
+        num_merchants: usize,
+        num_whales: usize,
+        whale_fraction: f64,
+        rounds: u64,
+        output_dir: String,
+        flat_rate_bps: u32,
+    ) {
+        use mc_cluster_tax::simulation::{
+            run_simulation, Agent, AgentId, MerchantAgent, MinerAgent,
+            RetailUserAgent, SimulationConfig, WhaleAgent,
+        };
+        use mc_cluster_tax::simulation::agents::whale::WhaleStrategy;
+        use std::fs;
+
+        println!("==============================================");
+        println!("GINI COEFFICIENT COMPARISON");
+        println!("Progressive vs Flat Transaction Fees");
+        println!("==============================================\n");
+
+        println!("Configuration:");
+        println!("  Retail users:     {num_retail}");
+        println!("  Merchants:        {num_merchants}");
+        println!("  Whales:           {num_whales}");
+        println!("  Whale fraction:   {:.1}%", whale_fraction * 100.0);
+        println!("  Rounds:           {rounds}");
+        println!("  Flat rate:        {} bps ({:.2}%)", flat_rate_bps, flat_rate_bps as f64 / 100.0);
+        println!("  Output dir:       {output_dir}\n");
+
+        // Helper to create agents with given seed for reproducibility
+        fn create_agents(
+            num_retail: usize,
+            num_merchants: usize,
+            num_whales: usize,
+            whale_fraction: f64,
+        ) -> (Vec<Box<dyn Agent>>, u64) {
+            let mut agents: Vec<Box<dyn Agent>> = Vec::new();
+            let mut next_id = 0u64;
+
+            // Calculate total supply
+            let retail_balance = 1_000u64;
+            let merchant_balance = 10_000u64;
+            let miner_balance = 5_000u64;
+            let base_supply = (num_retail as u64 * retail_balance)
+                + (num_merchants as u64 * merchant_balance)
+                + miner_balance;
+            let whale_wealth_total = (base_supply as f64 * whale_fraction / (1.0 - whale_fraction)) as u64;
+            let whale_wealth_each = whale_wealth_total / num_whales.max(1) as u64;
+
+            // Create merchants first
+            let merchant_ids: Vec<AgentId> = (0..num_merchants)
+                .map(|_| {
+                    let id = AgentId(next_id);
+                    next_id += 1;
+                    id
+                })
+                .collect();
+
+            for &id in &merchant_ids {
+                let mut merchant = MerchantAgent::new(id)
+                    .with_payment_threshold(20000)
+                    .with_supplier_payment_fraction(0.3);
+                merchant.account_mut_ref().balance = merchant_balance;
+                agents.push(Box::new(merchant));
+            }
+
+            // Create retail users
+            for _ in 0..num_retail {
+                let id = AgentId(next_id);
+                next_id += 1;
+                let mut retail = RetailUserAgent::new(id)
+                    .with_merchants(merchant_ids.clone())
+                    .with_spending_probability(0.15)
+                    .with_avg_spend(50);
+                retail.account_mut_ref().balance = retail_balance;
+                agents.push(Box::new(retail));
+            }
+
+            // Create whales
+            for _ in 0..num_whales {
+                let whale_id = AgentId(next_id);
+                next_id += 1;
+                let mut whale = WhaleAgent::new(whale_id, whale_wealth_each, WhaleStrategy::Passive)
+                    .with_spending_targets(merchant_ids.clone())
+                    .with_spending_rate(0.002);
+                whale.account_mut_ref().balance = whale_wealth_each;
+                agents.push(Box::new(whale));
+            }
+
+            // Create miner
+            let miner_id = AgentId(next_id);
+            let mut miner = MinerAgent::new(miner_id)
+                .with_buyers(merchant_ids)
+                .with_block_reward(100)
+                .with_mining_interval(10);
+            miner.account_mut_ref().balance = miner_balance;
+            agents.push(Box::new(miner));
+
+            let total_supply = base_supply + whale_wealth_total;
+            (agents, total_supply)
+        }
+
+        // Run with progressive fees
+        println!("Running simulation with PROGRESSIVE fees...");
+        let (mut progressive_agents, total_supply) = create_agents(num_retail, num_merchants, num_whales, whale_fraction);
+
+        // Scale the fee curve to match simulation wealth levels
+        // w_mid should be set so whale clusters are in the high-fee region
+        let whale_wealth_each = (total_supply as f64 * whale_fraction / num_whales.max(1) as f64) as u64;
+        let progressive_fee_curve = FeeCurve {
+            r_min_bps: 5,           // 0.05% for small/diffused
+            r_max_bps: 2000,        // 20% for large concentrated clusters
+            w_mid: whale_wealth_each / 2, // Midpoint at half whale wealth
+            steepness: whale_wealth_each / 4, // Gradual transition
+            background_rate_bps: 10, // 0.1% for diffused coins
+        };
+
+        println!("  Fee curve: w_mid={}, whale_wealth={}", progressive_fee_curve.w_mid, whale_wealth_each);
+
+        let progressive_config = SimulationConfig {
+            rounds,
+            fee_curve: progressive_fee_curve,
+            snapshot_frequency: rounds / 100,
+            verbose: false,
+            ..Default::default()
+        };
+        let progressive_result = run_simulation(&mut progressive_agents, &progressive_config);
+        let progressive_summary = progressive_result.metrics.summary();
+
+        // Run with flat fees
+        println!("Running simulation with FLAT fees...");
+        let (mut flat_agents, _) = create_agents(num_retail, num_merchants, num_whales, whale_fraction);
+        let flat_config = SimulationConfig {
+            rounds,
+            fee_curve: FeeCurve::flat(flat_rate_bps),
+            snapshot_frequency: rounds / 100,
+            verbose: false,
+            ..Default::default()
+        };
+        let flat_result = run_simulation(&mut flat_agents, &flat_config);
+        let flat_summary = flat_result.metrics.summary();
+
+        // Print comparison
+        println!("\n==============================================");
+        println!("RESULTS");
+        println!("==============================================\n");
+
+        println!("Total supply: {total_supply}\n");
+
+        println!("{:<25} {:>15} {:>15}", "", "Progressive", "Flat");
+        println!("{:-<25} {:-<15} {:-<15}", "", "", "");
+        println!("{:<25} {:>15.4} {:>15.4}", "Initial Gini", progressive_summary.initial_gini, flat_summary.initial_gini);
+        println!("{:<25} {:>15.4} {:>15.4}", "Final Gini", progressive_summary.final_gini, flat_summary.final_gini);
+        println!("{:<25} {:>+15.4} {:>+15.4}", "Gini Change",
+            progressive_summary.final_gini - progressive_summary.initial_gini,
+            flat_summary.final_gini - flat_summary.initial_gini);
+        println!("{:<25} {:>15} {:>15}", "Total Fees", progressive_summary.total_fees, flat_summary.total_fees);
+        println!("{:<25} {:>15} {:>15}", "Transactions", progressive_summary.total_transactions, flat_summary.total_transactions);
+
+        println!("\nFee rates by wealth quintile (bps):");
+        println!("{:<25} {:>15} {:>15}", "", "Progressive", "Flat");
+        for i in 0..5 {
+            let label = format!("Q{} ({} 20%)", i + 1, ["Poorest", "Lower", "Middle", "Upper", "Richest"][i]);
+            println!("{:<25} {:>15.1} {:>15.1}",
+                label,
+                progressive_summary.avg_fee_by_quintile[i],
+                flat_summary.avg_fee_by_quintile[i]);
+        }
+
+        // Export CSVs
+        // Create output directory if it doesn't exist
+        fs::create_dir_all(&output_dir).expect("Failed to create output directory");
+
+        let progressive_csv = progressive_result.metrics.to_csv();
+        let flat_csv = flat_result.metrics.to_csv();
+
+        let progressive_path = format!("{}/gini_progressive.csv", output_dir);
+        let flat_path = format!("{}/gini_flat.csv", output_dir);
+
+        fs::write(&progressive_path, &progressive_csv).expect("Failed to write progressive CSV");
+        fs::write(&flat_path, &flat_csv).expect("Failed to write flat CSV");
+
+        println!("\nCSV files exported:");
+        println!("  {progressive_path}");
+        println!("  {flat_path}");
+
+        // Also export a combined comparison CSV
+        let mut combined_csv = String::new();
+        combined_csv.push_str("round,gini_progressive,gini_flat\n");
+
+        let prog_snapshots = &progressive_result.metrics.snapshots;
+        let flat_snapshots = &flat_result.metrics.snapshots;
+
+        for i in 0..prog_snapshots.len().min(flat_snapshots.len()) {
+            combined_csv.push_str(&format!(
+                "{},{:.6},{:.6}\n",
+                prog_snapshots[i].round,
+                prog_snapshots[i].gini_coefficient,
+                flat_snapshots[i].gini_coefficient,
+            ));
+        }
+
+        let combined_path = format!("{}/gini_comparison.csv", output_dir);
+        fs::write(&combined_path, &combined_csv).expect("Failed to write combined CSV");
+        println!("  {combined_path}");
+
+        println!("\nTo plot results, run:");
+        println!("  python3 cluster-tax/scripts/plot_gini.py {output_dir}");
     }
 }
 

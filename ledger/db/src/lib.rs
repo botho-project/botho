@@ -7,6 +7,7 @@
 #[cfg(test)]
 extern crate test;
 
+mod cluster_wealth_store;
 mod error;
 mod ledger_trait;
 mod metrics;
@@ -19,6 +20,7 @@ pub mod test_utils;
 pub mod tx_out_store;
 
 pub use crate::{
+    cluster_wealth_store::ClusterWealthStore,
     error::Error,
     ledger_db::{create_ledger_in, key_bytes_to_u64, u64_to_key_bytes, LedgerDB},
     ledger_trait::{Ledger, MockLedger},

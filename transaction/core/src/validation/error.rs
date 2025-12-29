@@ -169,6 +169,19 @@ pub enum TransactionValidationError {
 
     /// Insufficient progressive fee: required {0}, actual {1}
     InsufficientProgressiveFee(u64, u64),
+
+    // =========== Phase 2 Committed Tag Errors ===========
+    /// Committed tag inheritance proof is invalid
+    InvalidTagInheritanceProof,
+
+    /// Tag conservation proof is invalid
+    InvalidTagConservationProof,
+
+    /// Extended tag signature is missing when committed tags are used
+    MissingExtendedTagSignature,
+
+    /// Wrong number of pseudo-tag-outputs in signature
+    PseudoTagOutputCountMismatch,
 }
 
 impl From<mc_crypto_keys::KeyError> for TransactionValidationError {
