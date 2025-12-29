@@ -6,7 +6,7 @@ use crate::{
         task_message::TaskMessage, IS_BEHIND_GRACE_PERIOD, MAX_PENDING_VALUES_TO_NOMINATE,
     },
     counters,
-    enclave_stubs::ConsensusEnclave,
+    enclave_stubs::{ConsensusEnclave, FormBlockInputs},
     mint_tx_manager::MintTxManager,
     tx_manager::TxManager,
 };
@@ -837,10 +837,10 @@ impl<
             }
         }
 
-        // Resolve hashes into well formed encrypted txs and associated proofs.
-        let well_formed_encrypted_txs_with_proofs = self
+        // Resolve hashes into well formed encrypted txs.
+        let well_formed_encrypted_txs = self
             .tx_manager
-            .tx_hashes_to_well_formed_encrypted_txs_and_proofs(&tx_hashes)
+            .tx_hashes_to_well_formed_encrypted_txs(&tx_hashes)
             .unwrap_or_else(|e| panic!("failed resolving tx_hashes {tx_hashes:?}: {e:?}"));
 
         // Bundle mint_txs with the matching configuration that allows the minting.
@@ -849,25 +849,17 @@ impl<
             .mint_txs_with_config(&mint_txs)
             .unwrap_or_else(|e| panic!("failed resolving mint txs {mint_txs:?}: {e:?}"));
 
-        // Get the root membership element, which is needed for validating the
-        // membership proofs (and also storing in the block for bookkeeping
-        // purposes).
-        let root_element = self
-            .ledger
-            .get_root_tx_out_membership_element()
-            .expect("Failed getting root tx out membership element");
-
         // Request the enclave to form the next block.
+        // Note: With SGX removed, there's no enclave and no membership proofs needed.
         let (block, block_contents, mut signature) = self
             .enclave
             .form_block(
                 &parent_block,
                 FormBlockInputs {
-                    well_formed_encrypted_txs_with_proofs,
+                    well_formed_encrypted_txs,
                     mint_config_txs,
                     mint_txs_with_config,
                 },
-                &root_element,
             )
             .expect("form_block failed");
 

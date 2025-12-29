@@ -38,6 +38,7 @@ pub mod analysis;
 pub mod crypto;
 #[cfg(feature = "cli")]
 pub mod simulation;
+pub mod signing;
 pub mod validate;
 
 mod cluster;
@@ -52,4 +53,8 @@ pub use transfer::{execute_transfer, mint, Account, TransferConfig, TransferErro
 pub use validate::{
     validate_committed_tags, validate_committed_tag_structure,
     CommittedTagConfig, CommittedTagValidationError, CommittedTagValidationResult,
+};
+pub use signing::{
+    create_tag_signature, verify_tag_signature,
+    TagSigningConfig, TagSigningError, TagSigningInput, TagSigningOutput, TagSigningResult,
 };

@@ -165,11 +165,12 @@ impl Ledger for MockLedger {
             .ok_or(Error::NotFound)
     }
 
-    fn get_tx_out_proof_of_memberships(
-        &self,
-        _indexes: &[u64],
-    ) -> Result<Vec<TxOutMembershipProof>, Error> {
-        unimplemented!()
+    fn contains_tx_out_by_hash(&self, tx_out_hash: &Hash) -> Result<bool, Error> {
+        Ok(self
+            .lock()
+            .tx_outs
+            .iter()
+            .any(|tx_out| tx_out_hash == &tx_out.hash()))
     }
 
     fn contains_tx_out_public_key(
@@ -190,10 +191,6 @@ impl Ledger for MockLedger {
     fn get_key_images_by_block(&self, block_index: BlockIndex) -> Result<Vec<KeyImage>, Error> {
         self.get_block_data(block_index)
             .map(|bd| bd.contents().key_images.clone())
-    }
-
-    fn get_root_tx_out_membership_element(&self) -> Result<TxOutMembershipElement, Error> {
-        unimplemented!();
     }
 
     fn get_active_mint_configs(

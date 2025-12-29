@@ -75,6 +75,18 @@ pub struct TxContext {
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct WellFormedEncryptedTx(pub Vec<u8>);
 
+/// Inputs for forming a new block.
+/// Note: Membership proofs were removed with SGX.
+#[derive(Clone, Debug, Default)]
+pub struct FormBlockInputs<MTXC> {
+    /// Well-formed encrypted transactions
+    pub well_formed_encrypted_txs: Vec<WellFormedEncryptedTx>,
+    /// Mint configuration transactions
+    pub mint_config_txs: Vec<mc_transaction_core::mint::ValidatedMintConfigTx>,
+    /// Mint transactions with their associated configurations
+    pub mint_txs_with_config: Vec<(mc_transaction_core::mint::MintTx, MTXC)>,
+}
+
 /// Context about a well-formed transaction, used for sorting and validation.
 #[derive(Clone, Debug, Default)]
 pub struct WellFormedTxContext {
@@ -314,11 +326,11 @@ pub trait ConsensusEnclave: Send + Sync {
     ) -> Result<(), Error>;
 
     /// Check if a transaction is well-formed.
+    /// Note: Membership proofs were removed with SGX.
     fn tx_is_well_formed(
         &self,
         tx_bytes: Vec<u8>,
         current_block_index: u64,
-        highest_index_proofs: Vec<mc_transaction_core::tx::TxOutMembershipProof>,
     ) -> Result<(WellFormedEncryptedTx, WellFormedTxContext), Error>;
 
     /// Prepare transactions for sending to a peer.
@@ -340,6 +352,26 @@ pub trait ConsensusEnclave: Send + Sync {
 
     /// Accept an authentication request from a client (stub - no-op without SGX).
     fn client_accept(&self, req: AuthMessage) -> Result<(AuthMessage, ClientSession), Error>;
+
+    /// Form a new block from the given inputs.
+    /// Note: Membership proofs were removed with SGX.
+    fn form_block<MTXC: Clone>(
+        &self,
+        parent_block: &mc_blockchain_types::Block,
+        inputs: FormBlockInputs<MTXC>,
+    ) -> Result<
+        (
+            mc_blockchain_types::Block,
+            mc_blockchain_types::BlockContents,
+            mc_blockchain_types::BlockSignature,
+        ),
+        Error,
+    >;
+
+    /// Get DCAP evidence (stub - returns None without SGX).
+    fn get_dcap_evidence(&self) -> Result<Option<()>, Error> {
+        Ok(None)
+    }
 }
 
 /// The AttestedApi trait (stub for attestation gRPC service).

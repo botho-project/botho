@@ -1,11 +1,12 @@
 // Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2024 Cadence Foundation
 
 use crate::{
     enclave_stubs::{EnclaveMessage, PeerSession, TxContext, WellFormedEncryptedTx},
     tx_manager::TxManagerResult,
 };
 use mc_common::HashSet;
-use mc_transaction_core::tx::{TxHash, TxOutMembershipProof};
+use mc_transaction_core::tx::TxHash;
 
 #[cfg(test)]
 use mockall::*;
@@ -35,16 +36,18 @@ pub trait TxManager: Send {
     /// Combines the transactions that correspond to the given hashes.
     fn combine(&self, tx_hashes: &[TxHash]) -> TxManagerResult<Vec<TxHash>>;
 
-    /// Get an array of well-formed encrypted transactions and membership proofs
-    /// that correspond to the provided tx hashes.
+    /// Get an array of well-formed encrypted transactions that correspond to
+    /// the provided tx hashes.
     ///
     /// # Arguments
     /// * `tx_hashes` - Hashes of well-formed transactions that are valid w.r.t.
     ///   the current ledger.
-    fn tx_hashes_to_well_formed_encrypted_txs_and_proofs(
+    ///
+    /// Note: Membership proofs were removed with SGX.
+    fn tx_hashes_to_well_formed_encrypted_txs(
         &self,
-        value: &[TxHash],
-    ) -> TxManagerResult<Vec<(WellFormedEncryptedTx, Vec<TxOutMembershipProof>)>>;
+        tx_hashes: &[TxHash],
+    ) -> TxManagerResult<Vec<WellFormedEncryptedTx>>;
 
     /// Creates a message containing a set of transactions that are encrypted
     /// for a peer.

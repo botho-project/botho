@@ -1,36 +1,32 @@
 // Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2024 Cadence Foundation
 
 //! Validates that a transaction or list of transactions are safe to append to
 //! the ledger.
+//!
+//! Note: With SGX removed, membership proofs are no longer validated.
+//! The consensus service directly checks that ring members exist in the ledger.
 //!
 //! Validation is broken into two parts:
 //! 1) "Well formed"-ness - A transaction is considered "well formed" if all the
 //!    data in it that is not affected by future changes to the ledger is
 //!    correct. This includes checks like inputs/outputs counts, range proofs,
-//!    signature validation, membership proofs, etc. A transaction that is
-//!    well-formed remains well-formed if additional transactions are appended
-//!    to the ledger. However, a transaction could transition from not
-//!    well-formed to well-formed: for example, the transaction may include
-//!    inputs that are not yet in the local ledger because the local ledger is
-//!    out of sync with the consensus ledger.
+//!    and signature validation. A transaction that is well-formed remains
+//!    well-formed if additional transactions are appended to the ledger.
 //!
 //! 2) "Is valid [to add to the ledger]" - This checks whether a **single**
 //!    transaction can be safely appended to a ledger in it's current state. A
 //!    valid transaction must also be well-formed.
-//!
-//! This definition differs from what the `mc_transaction_core::validation`
-//! module - the check provided by it is actually the "Is well formed" check,
-//! and might be renamed in the future to match this.
 
 use crate::{
     enclave_stubs::{TxContext, WellFormedTxContext},
     tx_manager::UntrustedInterfaces as TxManagerUntrustedInterfaces,
 };
 use mc_crypto_keys::CompressedRistrettoPublic;
-use mc_ledger_db::{Error as LedgerError, Ledger};
+use mc_ledger_db::Ledger;
 use mc_transaction_core::{
     ring_signature::KeyImage,
-    tx::{TxHash, TxOutMembershipProof},
+    tx::TxHash,
     validation::{validate_tombstone, TransactionValidationError, TransactionValidationResult},
 };
 use std::{collections::HashSet, sync::Arc};
@@ -49,27 +45,16 @@ impl<L: Ledger + Sync> DefaultTxManagerUntrustedInterfaces<L> {
 impl<L: Ledger + Sync> TxManagerUntrustedInterfaces for DefaultTxManagerUntrustedInterfaces<L> {
     /// Performs **only** the non-enclave part of the well-formed check.
     ///
-    /// Returns the local ledger's block index and membership proofs for each
-    /// highest index.
-    fn well_formed_check(
-        &self,
-        tx_context: &TxContext,
-    ) -> TransactionValidationResult<(u64, Vec<TxOutMembershipProof>)> {
-        // The transaction's membership proofs must reference data contained in the
-        // ledger. This check could fail if the local ledger is behind the
-        // network's consensus ledger.
-        let membership_proofs =
-            self.get_tx_out_proof_of_memberships(&tx_context.highest_indices)?;
-
-        // Note: It is possible that the proofs above are obtained for a different block
-        // index as a new block could be written between getting the proofs and
-        // the call to num_blocks().
+    /// Returns the local ledger's current block index.
+    /// Note: Membership proofs were removed with SGX removal.
+    fn well_formed_check(&self, _tx_context: &TxContext) -> TransactionValidationResult<u64> {
+        // Get the current block index
         let num_blocks = self
             .ledger
             .num_blocks()
             .map_err(|e| TransactionValidationError::Ledger(e.to_string()))?;
 
-        Ok((num_blocks - 1, membership_proofs))
+        Ok(num_blocks - 1)
     }
 
     /// Checks if a transaction is valid (see definition at top of this file).
@@ -163,42 +148,17 @@ impl<L: Ledger + Sync> TxManagerUntrustedInterfaces for DefaultTxManagerUntruste
 
         allowed_hashes
     }
-
-    fn get_tx_out_proof_of_memberships(
-        &self,
-        indexes: &[u64],
-    ) -> TransactionValidationResult<Vec<TxOutMembershipProof>> {
-        self.ledger
-            .get_tx_out_proof_of_memberships(indexes)
-            .map_err(|e| match e {
-                LedgerError::TxOutIndexOutOfBounds(index) => {
-                    TransactionValidationError::LedgerTxOutIndexOutOfBounds(index)
-                }
-                e => TransactionValidationError::Ledger(e.to_string()),
-            })
-    }
 }
 
 #[cfg(test)]
 pub mod well_formed_tests {
     use super::*;
-    use mc_ledger_db::{Error as LedgerError, MockLedger};
+    use mc_ledger_db::MockLedger;
 
     #[test]
-    // `is_well_formed` should accept a well-formed transaction.
-    fn is_well_formed_accepts_well_formed_transaction() {
+    // `well_formed_check` should return the current block index.
+    fn well_formed_check_returns_block_index() {
         let mut ledger = MockLedger::new();
-
-        // Untrusted should request a proof of membership for each highest index.
-        let highest_index_proofs = vec![
-            TxOutMembershipProof::new(1, 1, vec![]),
-            TxOutMembershipProof::new(1, 1, vec![]),
-            TxOutMembershipProof::new(1, 1, vec![]),
-        ];
-        ledger
-            .expect_get_tx_out_proof_of_memberships()
-            .times(1)
-            .return_const(Ok(highest_index_proofs));
 
         // Untrusted should request num_blocks.
         let num_blocks = 53;
@@ -218,46 +178,10 @@ pub mod well_formed_tests {
         };
 
         match untrusted.well_formed_check(&tx_context) {
-            Ok((current_block_index, highest_index_proofs)) => {
+            Ok(current_block_index) => {
                 assert_eq!(current_block_index, num_blocks - 1);
-                assert_eq!(highest_index_proofs.len(), 3)
             }
             Err(e) => panic!("Unexpected error {e}"),
-        }
-    }
-
-    #[test]
-    /// `is_well_formed` should reject a transaction that contains a
-    /// proof-of-membership with highest index outside the ledger, i.e. a
-    /// transaction "from the future".
-    fn is_well_formed_rejects_excessive_highest_index() {
-        // The ledger cannot provide membership proofs for highest indices.
-        let mut ledger = MockLedger::new();
-        ledger
-            .expect_get_tx_out_proof_of_memberships()
-            .times(1)
-            .return_const(Err(LedgerError::CapacityExceeded));
-
-        let untrusted = DefaultTxManagerUntrustedInterfaces::new(ledger);
-
-        // This tx_context contains highest_indices that exceed the number of TxOuts in
-        // the ledger.
-        let tx_context = TxContext {
-            highest_indices: vec![99, 10002, 445],
-            ..Default::default()
-        };
-
-        match untrusted.well_formed_check(&tx_context) {
-            Ok((_cur_block_index, _membership_proofs)) => {
-                panic!();
-            }
-            Err(e) => {
-                // This is expected.
-                assert_eq!(
-                    e,
-                    TransactionValidationError::Ledger(LedgerError::CapacityExceeded.to_string())
-                );
-            }
         }
     }
 }

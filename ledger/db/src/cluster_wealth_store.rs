@@ -179,7 +179,7 @@ impl ClusterWealthStore {
 mod tests {
     use super::*;
     use lmdb::{Environment, EnvironmentFlags};
-    use mc_transaction_core::{ClusterTagEntry, MIN_STORED_WEIGHT};
+    use mc_transaction_core::ClusterTagEntry;
     use tempfile::TempDir;
 
     fn create_test_env() -> (TempDir, Environment) {
@@ -211,8 +211,8 @@ mod tests {
 
         // Add 1000 units to cluster 1
         let mut txn = env.begin_rw_txn().unwrap();
-        let input_contribs = HashMap::new();
-        let mut output_contribs = HashMap::new();
+        let input_contribs = HashMap::default();
+        let mut output_contribs = HashMap::default();
         output_contribs.insert(ClusterId(1), 1000u64);
         store
             .apply_wealth_deltas(&input_contribs, &output_contribs, &mut txn)
@@ -234,10 +234,10 @@ mod tests {
         // Add 1000 units first
         {
             let mut txn = env.begin_rw_txn().unwrap();
-            let mut output_contribs = HashMap::new();
+            let mut output_contribs = HashMap::default();
             output_contribs.insert(ClusterId(1), 1000u64);
             store
-                .apply_wealth_deltas(&HashMap::new(), &output_contribs, &mut txn)
+                .apply_wealth_deltas(&HashMap::default(), &output_contribs, &mut txn)
                 .unwrap();
             txn.commit().unwrap();
         }
@@ -245,10 +245,10 @@ mod tests {
         // Subtract 300 units
         {
             let mut txn = env.begin_rw_txn().unwrap();
-            let mut input_contribs = HashMap::new();
+            let mut input_contribs = HashMap::default();
             input_contribs.insert(ClusterId(1), 300u64);
             store
-                .apply_wealth_deltas(&input_contribs, &HashMap::new(), &mut txn)
+                .apply_wealth_deltas(&input_contribs, &HashMap::default(), &mut txn)
                 .unwrap();
             txn.commit().unwrap();
         }
@@ -287,10 +287,10 @@ mod tests {
         // Add 1000 units
         {
             let mut txn = env.begin_rw_txn().unwrap();
-            let mut output_contribs = HashMap::new();
+            let mut output_contribs = HashMap::default();
             output_contribs.insert(ClusterId(1), 1000u64);
             store
-                .apply_wealth_deltas(&HashMap::new(), &output_contribs, &mut txn)
+                .apply_wealth_deltas(&HashMap::default(), &output_contribs, &mut txn)
                 .unwrap();
             txn.commit().unwrap();
         }
@@ -298,10 +298,10 @@ mod tests {
         // Subtract all 1000 units
         {
             let mut txn = env.begin_rw_txn().unwrap();
-            let mut input_contribs = HashMap::new();
+            let mut input_contribs = HashMap::default();
             input_contribs.insert(ClusterId(1), 1000u64);
             store
-                .apply_wealth_deltas(&input_contribs, &HashMap::new(), &mut txn)
+                .apply_wealth_deltas(&input_contribs, &HashMap::default(), &mut txn)
                 .unwrap();
             txn.commit().unwrap();
         }
@@ -324,12 +324,12 @@ mod tests {
         // Add wealth to multiple clusters
         {
             let mut txn = env.begin_rw_txn().unwrap();
-            let mut output_contribs = HashMap::new();
+            let mut output_contribs = HashMap::default();
             output_contribs.insert(ClusterId(1), 1000u64);
             output_contribs.insert(ClusterId(2), 2000u64);
             output_contribs.insert(ClusterId(3), 3000u64);
             store
-                .apply_wealth_deltas(&HashMap::new(), &output_contribs, &mut txn)
+                .apply_wealth_deltas(&HashMap::default(), &output_contribs, &mut txn)
                 .unwrap();
             txn.commit().unwrap();
         }

@@ -202,14 +202,6 @@ pub fn create_transaction_with_amount_and_comparer_and_recipients<
     }
     let real_index = ring.iter().position(|element| element == tx_out).unwrap();
 
-    // Membership proofs for the full ring.
-    let indexes = ring
-        .iter()
-        .map(|tx_out| ledger.get_tx_out_index_by_hash(&tx_out.hash()).unwrap())
-        .collect::<Vec<u64>>();
-    // Cadence doesn't use membership proofs
-    let _ = ledger.get_tx_out_proof_of_memberships(&indexes).unwrap();
-
     let spend_private_key = sender.subaddress_spend_private(DEFAULT_SUBADDRESS_INDEX);
     let tx_out_public_key = RistrettoPublic::try_from(&tx_out.public_key).unwrap();
     let onetime_private_key = recover_onetime_private_key(

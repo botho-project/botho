@@ -19,10 +19,7 @@ use mc_common::{
     logger::{log, Logger},
     HashMap, HashSet,
 };
-use mc_transaction_core::{
-    constants::MAX_TRANSACTIONS_PER_BLOCK,
-    tx::{TxHash, TxOutMembershipProof},
-};
+use mc_transaction_core::{constants::MAX_TRANSACTIONS_PER_BLOCK, tx::TxHash};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 mod error;
@@ -88,15 +85,13 @@ impl<E: ConsensusEnclave + Send, UI: UntrustedInterfaces + Send> TxManagerImpl<E
         let _metrics_timer = counters::WELL_FORMED_CHECK_TIME.start_timer();
 
         // The untrusted part of the well-formed check.
-        let (current_block_index, highest_index_proofs) =
-            self.untrusted.well_formed_check(&tx_context)?;
+        // Note: Membership proofs were removed with SGX.
+        let current_block_index = self.untrusted.well_formed_check(&tx_context)?;
 
         // The enclave part of the well-formed check.
-        let (well_formed_encrypted_tx, well_formed_tx_context) = self.enclave.tx_is_well_formed(
-            tx_context.locally_encrypted_tx,
-            current_block_index,
-            highest_index_proofs,
-        )?;
+        let (well_formed_encrypted_tx, well_formed_tx_context) = self
+            .enclave
+            .tx_is_well_formed(tx_context.locally_encrypted_tx, current_block_index)?;
 
         Ok(CacheEntry {
             encrypted_tx: well_formed_encrypted_tx,
@@ -256,31 +251,25 @@ impl<E: ConsensusEnclave + Send, UI: UntrustedInterfaces + Send> TxManager
             .combine(&tx_contexts, MAX_TRANSACTIONS_PER_BLOCK))
     }
 
-    /// Get an array of well-formed encrypted transactions and membership proofs
-    /// that correspond to the provided tx hashes.
+    /// Get an array of well-formed encrypted transactions that correspond to
+    /// the provided tx hashes.
     ///
     /// # Arguments
     /// * `tx_hashes` - Hashes of well-formed transactions that are valid w.r.t.
     ///   the current ledger.
-    fn tx_hashes_to_well_formed_encrypted_txs_and_proofs(
+    ///
+    /// Note: Membership proofs were removed with SGX.
+    fn tx_hashes_to_well_formed_encrypted_txs(
         &self,
         tx_hashes: &[TxHash],
-    ) -> TxManagerResult<Vec<(WellFormedEncryptedTx, Vec<TxOutMembershipProof>)>> {
+    ) -> TxManagerResult<Vec<WellFormedEncryptedTx>> {
         let cache = self.lock_cache();
         let cache_entries = Self::get_cache_entries(&cache, tx_hashes.iter())?;
 
-        cache_entries
+        Ok(cache_entries
             .into_iter()
-            .map(|entry| {
-                // Highest indices proofs must be w.r.t. the current ledger.
-                // Recreating them here is a crude way to ensure that.
-                let highest_index_proofs: Vec<_> = self
-                    .untrusted
-                    .get_tx_out_proof_of_memberships(entry.context.highest_indices())?;
-
-                Ok((entry.encrypted_tx().clone(), highest_index_proofs))
-            })
-            .collect::<Result<Vec<(WellFormedEncryptedTx, Vec<TxOutMembershipProof>)>, TxManagerError>>()
+            .map(|entry| entry.encrypted_tx().clone())
+            .collect())
     }
 
     /// Creates a message containing a set of transactions that are encrypted
@@ -354,7 +343,7 @@ mod tests {
         mock_untrusted
             .expect_well_formed_check()
             .times(1)
-            .return_const(Ok((0, vec![])));
+            .return_const(Ok(0));
 
         // The enclave's well-formed check also ought to be called, and should return
         // Ok.
@@ -395,7 +384,7 @@ mod tests {
         mock_untrusted
             .expect_well_formed_check()
             .times(1)
-            .return_const(Ok((0, vec![])));
+            .return_const(Ok(0));
 
         // The enclave's well-formed check also ought to be called, and should return
         // Ok.
@@ -463,7 +452,7 @@ mod tests {
         mock_untrusted
             .expect_well_formed_check()
             .times(1)
-            .return_const(Ok((0, vec![])));
+            .return_const(Ok(0));
 
         // This should be called, and return an error.
         let mut mock_enclave = MockConsensusEnclave::new();
@@ -711,26 +700,13 @@ mod tests {
         assert!(tx_manager.combine(&tx_hashes).is_err());
     }
 
-    // TODO: tx_hashed_to_block should provide correct proofs for highest indices
-
     #[test_with_logger]
-    // Should return correct well formed encrypted txs and proofs when all
-    // transactions are in the cache.
-    fn test_tx_hashes_to_well_formed_encrypted_txs_and_proofs_ok(logger: Logger) {
+    // Should return correct well formed encrypted txs when all transactions are
+    // in the cache.
+    fn test_tx_hashes_to_well_formed_encrypted_txs_ok(logger: Logger) {
         let tx_hashes = vec![TxHash([7u8; 32]), TxHash([44u8; 32]), TxHash([3u8; 32])];
 
-        let mut mock_untrusted = MockUntrustedInterfaces::new();
-
-        let highest_index_proofs = vec![
-            TxOutMembershipProof::new(1, 2, vec![]),
-            TxOutMembershipProof::new(3, 4, vec![]),
-        ];
-        // Should get "highest index proofs" once per transaction.
-        mock_untrusted
-            .expect_get_tx_out_proof_of_memberships()
-            .times(tx_hashes.len())
-            .return_const(Ok(highest_index_proofs));
-
+        let mock_untrusted = MockUntrustedInterfaces::new();
         let mock_enclave = MockConsensusEnclave::new();
         let tx_manager = TxManagerImpl::new(mock_enclave, mock_untrusted, logger);
 
@@ -743,30 +719,20 @@ mod tests {
             tx_manager.lock_cache().insert(*tx_hash, cache_entry);
         }
 
-        let well_formed_encrypted_txs_with_proofs = tx_manager
-            .tx_hashes_to_well_formed_encrypted_txs_and_proofs(&tx_hashes[..])
+        let well_formed_encrypted_txs = tx_manager
+            .tx_hashes_to_well_formed_encrypted_txs(&tx_hashes[..])
             .unwrap();
-        assert_eq!(well_formed_encrypted_txs_with_proofs.len(), tx_hashes.len());
+        assert_eq!(well_formed_encrypted_txs.len(), tx_hashes.len());
 
-        assert_eq!(
-            well_formed_encrypted_txs_with_proofs[0].0 .0,
-            tx_hashes[0].to_vec()
-        );
-        assert_eq!(
-            well_formed_encrypted_txs_with_proofs[1].0 .0,
-            tx_hashes[1].to_vec()
-        );
-
-        assert_eq!(
-            well_formed_encrypted_txs_with_proofs[2].0 .0,
-            tx_hashes[2].to_vec()
-        );
+        assert_eq!(well_formed_encrypted_txs[0].0, tx_hashes[0].to_vec());
+        assert_eq!(well_formed_encrypted_txs[1].0, tx_hashes[1].to_vec());
+        assert_eq!(well_formed_encrypted_txs[2].0, tx_hashes[2].to_vec());
     }
 
     #[test_with_logger]
     // Should return TxManagerError::NotInCache if any transactions are not in the
     // cache.
-    fn test_tx_hashes_to_well_formed_encrypted_txs_and_proofs_missing_hashes(logger: Logger) {
+    fn test_tx_hashes_to_well_formed_encrypted_txs_missing_hashes(logger: Logger) {
         let tx_manager = TxManagerImpl::new(
             MockConsensusEnclave::new(),
             MockUntrustedInterfaces::new(),
@@ -788,7 +754,7 @@ mod tests {
         let not_in_cache = TxHash([66u8; 32]);
         tx_hashes.insert(2, not_in_cache);
 
-        match tx_manager.tx_hashes_to_well_formed_encrypted_txs_and_proofs(&tx_hashes[..]) {
+        match tx_manager.tx_hashes_to_well_formed_encrypted_txs(&tx_hashes[..]) {
             Ok(_) => {
                 panic!();
             }

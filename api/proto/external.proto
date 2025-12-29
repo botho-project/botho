@@ -379,6 +379,10 @@ message SignatureRctBulletproofs {
     // Before mixed transactions feature, this field is empty, and the token ids of
     // all outputs are inferred from the tx.prefix.fee_token_id.
     repeated fixed64 output_token_ids = 6;
+    // Extended tag signature for committed cluster tags (Phase 2).
+    // Contains serialized proofs for tag inheritance and conservation.
+    // Only present when block version supports committed cluster tags.
+    optional bytes extended_tag_signature = 7;
 }
 
 message Tx {

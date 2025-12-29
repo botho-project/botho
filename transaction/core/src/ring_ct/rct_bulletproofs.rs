@@ -521,6 +521,7 @@ impl SigningData {
             range_proofs,
             pseudo_output_token_ids,
             output_token_ids,
+            extended_tag_signature: None, // Set by caller if committed tags are used
         })
     }
 }
@@ -563,6 +564,18 @@ pub struct SignatureRctBulletproofs {
     /// `prefix.outputs`, after mixed transactions feature
     #[prost(fixed64, repeated, tag = "6")]
     pub output_token_ids: Vec<u64>,
+
+    /// Extended tag signature for committed cluster tags (Phase 2).
+    ///
+    /// This field contains serialized proofs that:
+    /// 1. Pseudo-tag-outputs correctly commit to real input tag masses
+    /// 2. Output tags conserve mass (with decay) from inputs
+    ///
+    /// Only present when block version supports committed cluster tags.
+    /// When present, output TxOuts contain committed tag vectors instead
+    /// of plaintext tags.
+    #[prost(bytes, optional, tag = "7")]
+    pub extended_tag_signature: Option<Vec<u8>>,
 }
 
 impl SignatureRctBulletproofs {

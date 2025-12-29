@@ -1,10 +1,11 @@
 // Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2024 Cadence Foundation
+
+//! Note: With SGX removed, membership proofs are no longer needed.
+//! The well_formed_check now just returns the current block index.
 
 use crate::enclave_stubs::{TxContext, WellFormedTxContext};
-use mc_transaction_core::{
-    tx::{TxHash, TxOutMembershipProof},
-    validation::TransactionValidationResult,
-};
+use mc_transaction_core::{tx::TxHash, validation::TransactionValidationResult};
 use std::sync::Arc;
 
 #[cfg(test)]
@@ -16,12 +17,9 @@ use mockall::*;
 pub trait UntrustedInterfaces: Send + Sync {
     /// Performs **only** the untrusted part of the well-formed check.
     ///
-    /// Returns the local ledger's block index and membership proofs for each
-    /// highest index.
-    fn well_formed_check(
-        &self,
-        tx_context: &TxContext,
-    ) -> TransactionValidationResult<(u64, Vec<TxOutMembershipProof>)>;
+    /// Returns the local ledger's current block index.
+    /// Note: Membership proofs were removed with SGX.
+    fn well_formed_check(&self, tx_context: &TxContext) -> TransactionValidationResult<u64>;
 
     /// Checks if a transaction is valid (see definition in validators.rs).
     fn is_valid(&self, context: Arc<WellFormedTxContext>) -> TransactionValidationResult<()>;
@@ -37,11 +35,9 @@ pub trait UntrustedInterfaces: Send + Sync {
     ///
     /// Returns a bounded, deterministically-ordered list of transactions that
     /// are safe to append to the ledger.
-    fn combine(&self, tx_contexts: &[Arc<WellFormedTxContext>], max_elements: usize)
-        -> Vec<TxHash>;
-
-    fn get_tx_out_proof_of_memberships(
+    fn combine(
         &self,
-        indexes: &[u64],
-    ) -> TransactionValidationResult<Vec<TxOutMembershipProof>>;
+        tx_contexts: &[Arc<WellFormedTxContext>],
+        max_elements: usize,
+    ) -> Vec<TxHash>;
 }
