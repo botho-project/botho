@@ -289,6 +289,12 @@ pub struct TxOut {
     /// Only present from block version 5 (cluster tags) onwards.
     #[prost(message, tag = "7")]
     pub cluster_tags: Option<ClusterTagVector>,
+
+    /// Committed cluster tag vector for private transactions (Phase 2).
+    /// Contains Pedersen commitments to tag masses instead of plaintext values.
+    /// The serialization format is defined by mc-cluster-tax.
+    #[prost(bytes, optional, tag = "8")]
+    pub committed_cluster_tags: Option<Vec<u8>>,
 }
 
 /// When creating a MemoPayload for a TxOut, sometimes it is important to be
@@ -386,6 +392,7 @@ impl TxOut {
             e_fog_hint: hint,
             e_memo,
             cluster_tags: None,
+            committed_cluster_tags: None,
         })
     }
 
@@ -414,6 +421,36 @@ impl TxOut {
         // Only include cluster tags if the block version supports them
         if block_version.cluster_tags_are_supported() {
             tx_out.cluster_tags = Some(cluster_tags);
+        }
+
+        Ok(tx_out)
+    }
+
+    /// Creates a TxOut with committed cluster tags for private transactions (Phase 2).
+    ///
+    /// # Arguments
+    /// * `block_version` - Structural rules to target (must support committed cluster tags)
+    /// * `amount` - Amount contained within the TxOut
+    /// * `recipient` - Recipient's address.
+    /// * `tx_private_key` - The transaction's private key
+    /// * `hint` - Encrypted Fog hint.
+    /// * `memo_fn` - A callback taking MemoContext, which produces a MemoPayload
+    /// * `committed_cluster_tags` - Serialized CommittedTagVector from mc-cluster-tax
+    pub fn new_with_committed_cluster_tags(
+        block_version: BlockVersion,
+        amount: Amount,
+        recipient: &PublicAddress,
+        tx_private_key: &RistrettoPrivate,
+        hint: EncryptedFogHint,
+        memo_fn: impl FnOnce(MemoContext) -> Result<MemoPayload, NewMemoError>,
+        committed_cluster_tags: Vec<u8>,
+    ) -> Result<Self, NewTxError> {
+        let mut tx_out =
+            Self::new_with_memo(block_version, amount, recipient, tx_private_key, hint, memo_fn)?;
+
+        // Only include committed cluster tags if the block version supports them
+        if block_version.cluster_tags_are_supported() {
+            tx_out.committed_cluster_tags = Some(committed_cluster_tags);
         }
 
         Ok(tx_out)

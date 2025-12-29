@@ -87,6 +87,12 @@ pub enum Error {
 
     /// Signer: {0}
     Signer(SignerError),
+
+    /// Extended tag signature is missing when required
+    MissingExtendedTagSignature,
+
+    /// Invalid extended tag signature
+    InvalidTagSignature,
 }
 
 impl From<mc_util_repr_bytes::LengthMismatch> for Error {

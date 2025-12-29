@@ -20,6 +20,7 @@ zeroize = { workspace = true }
 
 # MobileCoin dependencies
 mc-account-keys = { workspace = true }
+mc-cluster-tax = { workspace = true, optional = true }
 mc-core = { workspace = true }
 mc-crypto-digestible = { workspace = true, features = ["dalek"] }
 mc-crypto-hashes = { workspace = true }
@@ -38,6 +39,10 @@ mc-util-vec-map = { workspace = true }
 mc-util-zip-exact = { workspace = true }
 
 curve25519-dalek = { workspace = true }
+
+[features]
+default = []
+cluster-tax = ["dep:mc-cluster-tax"]
 
 [dev-dependencies]
 assert_matches = { workspace = true }

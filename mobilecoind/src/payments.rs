@@ -24,7 +24,7 @@ use mc_transaction_core::{
     constants::{MAX_INPUTS, RING_SIZE},
     onetime_keys::recover_onetime_private_key,
     ring_signature::KeyImage,
-    tx::{Tx, TxOut, TxOutMembershipProof},
+    tx::{Tx, TxOut},
     Amount, FeeMap, TokenId,
 };
 use mc_transaction_extra::{
@@ -386,13 +386,8 @@ impl<T: BlockchainConnection + UserTxConnection + 'static, FPR: FogPubkeyResolve
             let sci_amounts = sci_for_tx.sci.validate()?;
             sci_amounts.add_to_balance_sheet(sci_for_tx.partial_fill_value, &mut balance_sheet)?;
 
-            // While we are here, also attach membership proofs to the sci
-            // It's assumed that SCI's are usually passed around without membership proofs,
-            // and these are only added when we actually want to build a Tx.
-            let mut sci_for_tx = sci_for_tx.clone();
-            let proofs = self.get_membership_proofs(&sci_for_tx.sci.tx_in.ring)?;
-            sci_for_tx.sci.tx_in.proofs = proofs;
-            scis_and_amounts.push((sci_for_tx, sci_amounts));
+            // Note: With SGX removed, membership proofs are no longer attached to SCIs.
+            scis_and_amounts.push((sci_for_tx.clone(), sci_amounts));
         }
 
         // Select the UTXOs to be used for this transaction.
@@ -422,24 +417,18 @@ impl<T: BlockchainConnection + UserTxConnection + 'static, FPR: FogPubkeyResolve
             all_selected_utxos,
         );
 
-        // The selected_utxos with corresponding proofs of membership.
-        let selected_utxos_with_proofs: Vec<(UnspentTxOut, TxOutMembershipProof)> = {
-            let outputs: Vec<TxOut> = all_selected_utxos
-                .iter()
-                .map(|utxo| utxo.tx_out.clone())
-                .collect();
-            let proofs = self.get_membership_proofs(&outputs)?;
-
-            all_selected_utxos.into_iter().zip(proofs).collect()
-        };
-        log::trace!(logger, "Got membership proofs");
+        // Get the indices for the selected UTXOs (needed for ring exclusion)
+        let selected_utxo_indices: Vec<u64> = all_selected_utxos
+            .iter()
+            .map(|utxo| {
+                self.ledger_db
+                    .get_tx_out_index_by_hash(&utxo.tx_out.hash())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
         // A ring of mixins for each UTXO.
         let rings = {
-            let mut excluded_tx_out_indices: Vec<u64> = selected_utxos_with_proofs
-                .iter()
-                .map(|(_, proof)| proof.index)
-                .collect();
+            let mut excluded_tx_out_indices: Vec<u64> = selected_utxo_indices.clone();
 
             for sci_for_tx in scis {
                 excluded_tx_out_indices.extend(sci_for_tx.sci.tx_out_global_indices.clone());
@@ -447,7 +436,7 @@ impl<T: BlockchainConnection + UserTxConnection + 'static, FPR: FogPubkeyResolve
 
             self.get_rings(
                 DEFAULT_RING_SIZE, // TODO configurable ring size
-                selected_utxos_with_proofs.len(),
+                all_selected_utxos.len(),
                 &excluded_tx_out_indices,
             )?
         };
@@ -463,9 +452,10 @@ impl<T: BlockchainConnection + UserTxConnection + 'static, FPR: FogPubkeyResolve
         log::trace!(logger, "Tombstone block set to {}", tombstone_block);
 
         // Build and return the TxProposal object
+        // Note: With SGX removed, membership proofs are no longer passed.
         let mut rng = rand::thread_rng();
         let tx_proposal = Self::build_tx_proposal(
-            &selected_utxos_with_proofs,
+            &all_selected_utxos,
             rings,
             &scis_and_amounts,
             block_version,
@@ -651,31 +641,19 @@ impl<T: BlockchainConnection + UserTxConnection + 'static, FPR: FogPubkeyResolve
             total_value
         );
 
-        // The selected_utxos with corresponding proofs of membership.
-        let selected_utxos_with_proofs: Vec<(UnspentTxOut, TxOutMembershipProof)> = {
-            let outputs: Vec<TxOut> = selected_utxos
-                .iter()
-                .map(|utxo| utxo.tx_out.clone())
-                .collect();
-            let proofs = self.get_membership_proofs(&outputs)?;
-
-            selected_utxos.into_iter().zip(proofs).collect()
-        };
-        log::trace!(logger, "Got membership proofs");
+        // Get indices for ring exclusion
+        // Note: With SGX removed, membership proofs are no longer used.
+        let excluded_tx_out_indices: Vec<u64> = selected_utxos
+            .iter()
+            .map(|utxo| self.ledger_db.get_tx_out_index_by_hash(&utxo.tx_out.hash()))
+            .collect::<Result<Vec<_>, _>>()?;
 
         // A ring of mixins for each selected UTXO.
-        let rings = {
-            let excluded_tx_out_indices: Vec<u64> = selected_utxos_with_proofs
-                .iter()
-                .map(|(_, proof)| proof.index)
-                .collect();
-
-            self.get_rings(
-                DEFAULT_RING_SIZE, // TODO configurable ring size
-                selected_utxos_with_proofs.len(),
-                &excluded_tx_out_indices,
-            )?
-        };
+        let rings = self.get_rings(
+            DEFAULT_RING_SIZE, // TODO configurable ring size
+            selected_utxos.len(),
+            &excluded_tx_out_indices,
+        )?;
         log::trace!(logger, "Got {} rings", rings.len());
 
         // Come up with tombstone block.
@@ -692,7 +670,7 @@ impl<T: BlockchainConnection + UserTxConnection + 'static, FPR: FogPubkeyResolve
         // Build and return the TxProposal object
         let mut rng = rand::thread_rng();
         let tx_proposal = Self::build_tx_proposal(
-            &selected_utxos_with_proofs,
+            &selected_utxos,
             rings,
             &[],
             block_version,
@@ -766,21 +744,14 @@ impl<T: BlockchainConnection + UserTxConnection + 'static, FPR: FogPubkeyResolve
             total_value - fee
         );
 
-        // The inputs with corresponding proofs of membership.
-        let inputs_with_proofs: Vec<(UnspentTxOut, TxOutMembershipProof)> = {
-            let tx_outs: Vec<TxOut> = inputs.iter().map(|utxo| utxo.tx_out.clone()).collect();
-            let proofs = self.get_membership_proofs(&tx_outs)?;
-            inputs.iter().cloned().zip(proofs).collect()
-        };
-        log::trace!(logger, "Got membership proofs");
-
-        // The index of each input in the ledger.
-        let input_indices: Vec<u64> = inputs_with_proofs
+        // Get indices for ring exclusion
+        // Note: With SGX removed, membership proofs are no longer used.
+        let input_indices: Vec<u64> = inputs
             .iter()
-            .map(|(_, membership_proof)| membership_proof.index)
-            .collect();
+            .map(|utxo| self.ledger_db.get_tx_out_index_by_hash(&utxo.tx_out.hash()))
+            .collect::<Result<Vec<_>, _>>()?;
 
-        let rings = self.get_rings(DEFAULT_RING_SIZE, inputs_with_proofs.len(), &input_indices)?;
+        let rings = self.get_rings(DEFAULT_RING_SIZE, inputs.len(), &input_indices)?;
         log::trace!(logger, "Got {} rings", rings.len());
 
         // Come up with tombstone block.
@@ -797,7 +768,7 @@ impl<T: BlockchainConnection + UserTxConnection + 'static, FPR: FogPubkeyResolve
         // Build and return the TxProposal object
         let mut rng = rand::thread_rng();
         let tx_proposal = Self::build_tx_proposal(
-            &inputs_with_proofs,
+            inputs,
             rings,
             &[],
             block_version,
@@ -1010,25 +981,14 @@ impl<T: BlockchainConnection + UserTxConnection + 'static, FPR: FogPubkeyResolve
         }
     }
 
-    /// Get membership proofs for a list of transaction outputs.
-    pub fn get_membership_proofs(
-        &self,
-        outputs: &[TxOut],
-    ) -> Result<Vec<TxOutMembershipProof>, Error> {
-        let indexes = outputs
-            .iter()
-            .map(|tx_out| self.ledger_db.get_tx_out_index_by_hash(&tx_out.hash()))
-            .collect::<Result<Vec<u64>, LedgerError>>()?;
-        Ok(self.ledger_db.get_tx_out_proof_of_memberships(&indexes)?)
-    }
-
     /// Get `num_rings` rings of mixins.
+    /// Note: With SGX removed, membership proofs are no longer needed.
     pub fn get_rings(
         &self,
         ring_size: usize,
         num_rings: usize,
         excluded_tx_out_indices: &[u64],
-    ) -> Result<Vec<Vec<(TxOut, TxOutMembershipProof)>>, Error> {
+    ) -> Result<Vec<Vec<TxOut>>, Error> {
         let num_requested = ring_size * num_rings;
         let num_txos = self.ledger_db.num_txos()?;
 
@@ -1064,15 +1024,8 @@ impl<T: BlockchainConnection + UserTxConnection + 'static, FPR: FogPubkeyResolve
             .collect();
         let mixins: Vec<TxOut> = mixins_result?;
 
-        let membership_proofs = self
-            .ledger_db
-            .get_tx_out_proof_of_memberships(&mixin_indices)?;
-
-        let mixins_with_proofs: Vec<(TxOut, TxOutMembershipProof)> =
-            mixins.into_iter().zip(membership_proofs).collect();
-
-        // Group mixins and proofs into individual rings.
-        let result: Vec<Vec<(_, _)>> = mixins_with_proofs
+        // Group mixins into individual rings.
+        let result: Vec<Vec<TxOut>> = mixins
             .chunks(ring_size)
             .map(|chunk| chunk.to_vec())
             .collect();
@@ -1083,11 +1036,10 @@ impl<T: BlockchainConnection + UserTxConnection + 'static, FPR: FogPubkeyResolve
     /// Create a TxProposal.
     ///
     /// # Arguments
-    /// * `inputs` - UTXOs to spend, with membership proofs.
-    /// * `rings` - A set of mixins for each input, with membership proofs.
+    /// * `inputs` - UTXOs to spend.
+    /// * `rings` - A set of mixins for each input.
     /// * `scis` - A set of scis to add to the Tx. Assumes SCI's already
-    ///   validated and had proofs added. The Sci Amounts from validation also
-    ///   need to be included.
+    ///   validated. The Sci Amounts from validation also need to be included.
     /// * `block_version` - The block version to target for this transaction
     /// * `fee_token_id` - The token id of the fee
     /// * `fee` - Transaction fee, in picoMOB.
@@ -1102,10 +1054,12 @@ impl<T: BlockchainConnection + UserTxConnection + 'static, FPR: FogPubkeyResolve
     /// * `fee_map` - The current minimum fee map consensus is configured with.
     /// * `rng` - randomness
     /// * `logger` - Logger
+    ///
+    /// Note: With SGX removed, membership proofs are no longer passed.
     #[allow(clippy::too_many_arguments)]
     fn build_tx_proposal(
-        inputs: &[(UnspentTxOut, TxOutMembershipProof)],
-        rings: Vec<Vec<(TxOut, TxOutMembershipProof)>>,
+        inputs: &[UnspentTxOut],
+        rings: Vec<Vec<TxOut>>,
         scis: &[(SciForTx, SignedContingentInputAmounts)],
         block_version: BlockVersion,
         fee_token_id: TokenId,
@@ -1164,22 +1118,15 @@ impl<T: BlockchainConnection + UserTxConnection + 'static, FPR: FogPubkeyResolve
             .map_err(|err| Error::TxBuild(format!("Error creating transaction builder: {err}")))?;
         tx_builder.set_fee_map(fee_map);
 
-        // Unzip each vec of tuples into a tuple of vecs.
-        let mut rings_and_proofs: Vec<(Vec<TxOut>, Vec<TxOutMembershipProof>)> = rings
-            .into_iter()
-            .map(|tuples| tuples.into_iter().unzip())
-            .collect();
+        // Convert rings into a mutable vec for processing.
+        // Note: With SGX removed, membership proofs are no longer used.
+        let mut rings_iter: Vec<Vec<TxOut>> = rings;
 
         // Add inputs to the tx.
-        for (utxo, proof) in inputs {
-            let (mut ring, mut membership_proofs) = rings_and_proofs
+        for utxo in inputs {
+            let mut ring = rings_iter
                 .pop()
-                .ok_or_else(|| Error::TxBuild("rings_and_proofs was empty".to_string()))?;
-            assert_eq!(
-                ring.len(),
-                membership_proofs.len(),
-                "Each ring element must have a corresponding membership proof."
-            );
+                .ok_or_else(|| Error::TxBuild("rings was empty".to_string()))?;
 
             // Add the input to the ring.
             let position_opt = ring.iter().position(|tx_out| *tx_out == utxo.tx_out);
@@ -1193,25 +1140,17 @@ impl<T: BlockchainConnection + UserTxConnection + 'static, FPR: FogPubkeyResolve
                     // The input is not already in the ring.
                     if ring.is_empty() {
                         // The ring is probably not empty, but ring[0] will panic if it is.
-                        // Append the input and its proof of membership.
+                        // Append the input.
                         ring.push(utxo.tx_out.clone());
-                        membership_proofs.push(proof.clone());
                     } else {
                         // Replace the first element of the ring.
                         ring[0] = utxo.tx_out.clone();
-                        membership_proofs[0] = proof.clone();
                     }
                     // The real input is always the first element. This is safe because
                     // TransactionBuilder sorts each ring.
                     0
                 }
             };
-
-            assert_eq!(
-                ring.len(),
-                membership_proofs.len(),
-                "Each ring element must have a corresponding membership proof."
-            );
 
             let public_key = RistrettoPublic::try_from(&utxo.tx_out.public_key)?;
             let onetime_private_key = recover_onetime_private_key(
@@ -1233,7 +1172,6 @@ impl<T: BlockchainConnection + UserTxConnection + 'static, FPR: FogPubkeyResolve
             tx_builder.add_input(
                 InputCredentials::new(
                     ring,
-                    membership_proofs,
                     real_key_index,
                     onetime_private_key,
                     *from_account_key.view_private_key(),
@@ -1371,10 +1309,7 @@ impl<T: BlockchainConnection + UserTxConnection + 'static, FPR: FogPubkeyResolve
         }
 
         // Return the TxProposal
-        let selected_utxos = inputs
-            .iter()
-            .map(|(utxo, _membership_proof)| utxo.clone())
-            .collect();
+        let selected_utxos = inputs.to_vec();
 
         Ok(TxProposal {
             utxos: selected_utxos,
@@ -1382,15 +1317,7 @@ impl<T: BlockchainConnection + UserTxConnection + 'static, FPR: FogPubkeyResolve
             tx,
             outlay_index_to_tx_out_index,
             outlay_confirmation_numbers,
-            scis: scis
-                .iter()
-                .cloned()
-                .map(|(mut sci_for_tx, _sci_amount)| {
-                    // clear out proofs here since they were not part of the request
-                    sci_for_tx.sci.tx_in.proofs = Vec::default();
-                    sci_for_tx
-                })
-                .collect(),
+            scis: scis.iter().cloned().map(|(sci_for_tx, _sci_amount)| sci_for_tx).collect(),
         })
     }
 
@@ -1483,22 +1410,11 @@ impl<T: BlockchainConnection + UserTxConnection + 'static, FPR: FogPubkeyResolve
             }
         };
 
-        let membership_proofs: Vec<TxOutMembershipProof> = global_indices
-            .into_iter()
-            .map(|index| TxOutMembershipProof {
-                index,
-                ..Default::default()
-            })
-            .collect();
+        // global_indices was used for membership proofs which are no longer needed
+        let _ = global_indices;
 
         // Create input credentials
         let input_credentials = {
-            assert_eq!(
-                ring.len(),
-                membership_proofs.len(),
-                "Each ring element must have a corresponding membership proof."
-            );
-
             let public_key = RistrettoPublic::try_from(&utxo.tx_out.public_key)?;
             let onetime_private_key = recover_onetime_private_key(
                 &public_key,
@@ -1508,7 +1424,6 @@ impl<T: BlockchainConnection + UserTxConnection + 'static, FPR: FogPubkeyResolve
 
             InputCredentials::new(
                 ring,
-                membership_proofs,
                 real_key_index,
                 onetime_private_key,
                 *from_account_key.view_private_key(),

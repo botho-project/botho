@@ -872,7 +872,8 @@ impl<
     }
 
     fn get_block_metadata(&self, block_id: &BlockID) -> BlockMetadata {
-        let dcap_evidence = self
+        // Note: With SGX removed, attestation evidence is a stub (empty VerificationReport).
+        let verification_report = self
             .enclave
             .get_attestation_evidence()
             .unwrap_or_else(|err| {
@@ -880,15 +881,10 @@ impl<
                     "Failed to fetch attestation evidence after forming block {block_id:?}: {err}"
                 )
             });
-        let prost_evidence = prost::DcapEvidence::try_from(&dcap_evidence).unwrap_or_else(|err| {
-            panic!(
-                "Failed to convert attestation evidence to prost after forming block {block_id:?}: {err}"
-            )
-        });
         let contents = BlockMetadataContents::new(
             block_id.clone(),
             self.scp_node.quorum_set(),
-            prost_evidence.into(),
+            verification_report.into(),
             self.scp_node.node_id().responder_id,
         );
 
@@ -903,12 +899,19 @@ mod tests {
     use super::*;
     use crate::{
         byzantine_ledger::tests::{get_local_node_config, get_peers, PeerConfig},
+        enclave_stubs::{
+            AuthMessage, ClientSession, EnclaveMessage, Error as EnclaveError, TxContext,
+            WellFormedEncryptedTx, WellFormedTxContext,
+        },
         mint_tx_manager::{MintTxManagerImpl, MockMintTxManager},
         tx_manager::{MockTxManager, TxManagerError, TxManagerImpl},
         validators::DefaultTxManagerUntrustedInterfaces,
     };
     use mc_account_keys::AccountKey;
-    use mc_blockchain_types::{AttestationEvidence, Block, BlockContents, BlockVersion};
+    use mc_blockchain_types::{
+        AttestationEvidence, Block, BlockContents, BlockSignature, BlockVersion,
+        VerificationReport,
+    };
     use mc_common::{logger::test_with_logger, NodeID};
     use mc_consensus_service_config::GovernorsMap;
     // Note: MockConsensusEnclave is provided by crate::enclave_stubs::MockConsensusEnclave
@@ -918,6 +921,7 @@ mod tests {
         slot::SlotMetrics,
         MockScpNode, QuorumSet,
     };
+    use mc_crypto_keys::Ed25519Public;
     use mc_crypto_multisig::SignerSet;
     use mc_ledger_db::{
         test_utils::{
@@ -928,7 +932,6 @@ mod tests {
     use mc_ledger_sync::{LedgerSyncError, MockLedgerSync};
     use mc_peers::MockBroadcast;
     use mc_peers_test_utils::MockPeerConnection;
-    use mc_sgx_report_cache_api::ReportableEnclave;
     use mc_transaction_core::{tx::Tx, validation::TransactionValidationError, TokenId};
     use mc_transaction_core_test_utils::{
         create_mint_config_tx_and_signers, create_mint_tx_to_recipient, mint_config_tx_to_validated,
@@ -936,7 +939,185 @@ mod tests {
     use mc_util_metered_channel::Sender;
     use mc_util_metrics::OpMetrics;
     use mockall::predicate::eq;
+    use prost::Message;
     use rand::{rngs::StdRng, SeedableRng};
+
+    /// A simple test enclave implementation for worker tests.
+    /// This replaces the deleted mc_consensus_enclave_mock::ConsensusServiceMockEnclave.
+    #[derive(Clone)]
+    pub struct TestEnclave {
+        /// Block version to use when forming blocks
+        pub block_version: BlockVersion,
+    }
+
+    impl Default for TestEnclave {
+        fn default() -> Self {
+            Self {
+                block_version: BlockVersion::MAX,
+            }
+        }
+    }
+
+    impl TestEnclave {
+        /// Create a new TestEnclave with the given block version.
+        pub fn new(block_version: BlockVersion) -> Self {
+            Self { block_version }
+        }
+
+        /// Convert a Tx to TxContext for testing.
+        pub fn tx_to_tx_context(tx: &Tx) -> TxContext {
+            let tx_bytes = tx.encode_to_vec();
+            TxContext {
+                tx_bytes,
+                tx_hash: tx.tx_hash(),
+                highest_indices: Vec::new(),
+                key_images: tx
+                    .signature
+                    .ring_signatures
+                    .iter()
+                    .map(|sig| sig.key_image)
+                    .collect(),
+                output_public_keys: tx.prefix.outputs.iter().map(|o| o.public_key).collect(),
+            }
+        }
+    }
+
+    impl ConsensusEnclave for TestEnclave {
+        fn client_tx_propose(
+            &self,
+            _msg: EnclaveMessage<ClientSession>,
+        ) -> Result<TxContext, EnclaveError> {
+            Ok(TxContext::default())
+        }
+
+        fn client_discard_message(
+            &self,
+            _msg: EnclaveMessage<ClientSession>,
+        ) -> Result<(), EnclaveError> {
+            Ok(())
+        }
+
+        fn tx_is_well_formed(
+            &self,
+            tx_bytes: Vec<u8>,
+            _current_block_index: u64,
+        ) -> Result<(WellFormedEncryptedTx, WellFormedTxContext), EnclaveError> {
+            // Deserialize the transaction to extract context
+            let tx = Tx::decode(tx_bytes.as_slice())
+                .map_err(|e| EnclaveError::Serialization(e.to_string()))?;
+            let fee = tx.prefix.fee;
+            let tx_hash = tx.tx_hash();
+            let tombstone_block = tx.prefix.tombstone_block;
+            let key_images: Vec<_> = tx
+                .signature
+                .ring_signatures
+                .iter()
+                .map(|sig| sig.key_image)
+                .collect();
+            let output_public_keys: Vec<_> =
+                tx.prefix.outputs.iter().map(|o| o.public_key).collect();
+
+            Ok((
+                WellFormedEncryptedTx(tx_bytes),
+                WellFormedTxContext::new(
+                    fee,
+                    tx_hash,
+                    tombstone_block,
+                    key_images,
+                    Vec::new(),
+                    output_public_keys,
+                ),
+            ))
+        }
+
+        fn txs_for_peer(
+            &self,
+            _encrypted_txs: &[WellFormedEncryptedTx],
+            _aad: &[u8],
+            peer: &crate::enclave_stubs::PeerSession,
+        ) -> Result<EnclaveMessage<crate::enclave_stubs::PeerSession>, EnclaveError> {
+            Ok(EnclaveMessage {
+                channel_id: peer.clone(),
+                data: Vec::new(),
+                aad: Vec::new(),
+            })
+        }
+
+        fn get_minting_trust_root(&self) -> Result<Ed25519Public, EnclaveError> {
+            Ok(Ed25519Public::default())
+        }
+
+        fn get_signer(&self) -> Result<Ed25519Public, EnclaveError> {
+            Ok(Ed25519Public::default())
+        }
+
+        fn peer_accept(
+            &self,
+            _req: AuthMessage,
+        ) -> Result<(AuthMessage, crate::enclave_stubs::PeerSession), EnclaveError> {
+            Ok((AuthMessage::default(), Default::default()))
+        }
+
+        fn client_accept(
+            &self,
+            _req: AuthMessage,
+        ) -> Result<(AuthMessage, ClientSession), EnclaveError> {
+            Ok((AuthMessage::default(), Default::default()))
+        }
+
+        fn form_block<MTXC: Clone>(
+            &self,
+            parent_block: &mc_blockchain_types::Block,
+            inputs: FormBlockInputs<MTXC>,
+        ) -> Result<(Block, BlockContents, BlockSignature), EnclaveError> {
+            // Deserialize transactions and collect outputs
+            let mut outputs = Vec::new();
+            let mut key_images = Vec::new();
+
+            for wf_tx in &inputs.well_formed_encrypted_txs {
+                if let Ok(tx) = Tx::decode(wf_tx.0.as_slice()) {
+                    outputs.extend(tx.prefix.outputs.clone());
+                    key_images.extend(
+                        tx.signature
+                            .ring_signatures
+                            .iter()
+                            .map(|sig| sig.key_image),
+                    );
+                }
+            }
+
+            // Add mint tx outputs
+            for (mint_tx, _) in &inputs.mint_txs_with_config {
+                if let Some(output) = &mint_tx.prefix.outputs.first() {
+                    outputs.push((*output).clone());
+                }
+            }
+
+            let block_contents = BlockContents {
+                key_images,
+                outputs,
+                validated_mint_config_txs: inputs
+                    .mint_config_txs
+                    .into_iter()
+                    .map(|tx| tx.into())
+                    .collect(),
+                mint_txs: inputs.mint_txs_with_config.iter().map(|(tx, _)| tx.clone()).collect(),
+            };
+
+            let block = Block::new_with_parent(
+                parent_block.version,
+                parent_block,
+                &Default::default(),
+                &block_contents,
+            );
+
+            Ok((block, block_contents, BlockSignature::default()))
+        }
+
+        fn get_attestation_evidence(&self) -> Result<VerificationReport, EnclaveError> {
+            Ok(VerificationReport::default())
+        }
+    }
 
     /// Create test mocks with sensible defaults.
     ///
@@ -1605,7 +1786,7 @@ mod tests {
             _mint_tx_manager,
             broadcast,
         ) = get_mocks(&local_node_id, &quorum_set, n_blocks);
-        let enclave = ConsensusServiceMockEnclave::default();
+        let enclave = TestEnclave::default();
         let attestation_evidence = enclave.get_attestation_evidence().unwrap();
 
         let tx_manager = TxManagerImpl::new(
@@ -1619,15 +1800,15 @@ mod tests {
         let (_task_sender, task_receiver) = get_channel();
 
         let hash_tx1 = tx_manager
-            .insert(ConsensusServiceMockEnclave::tx_to_tx_context(&txs[0]))
+            .insert(TestEnclave::tx_to_tx_context(&txs[0]))
             .unwrap();
 
         let hash_tx2 = tx_manager
-            .insert(ConsensusServiceMockEnclave::tx_to_tx_context(&txs[1]))
+            .insert(TestEnclave::tx_to_tx_context(&txs[1]))
             .unwrap();
 
         let hash_tx3 = tx_manager
-            .insert(ConsensusServiceMockEnclave::tx_to_tx_context(&txs[2]))
+            .insert(TestEnclave::tx_to_tx_context(&txs[2]))
             .unwrap();
 
         // Generate a minting transaction.
@@ -1730,10 +1911,9 @@ mod tests {
         let contents = metadata.contents();
         assert_eq!(&block.id, contents.block_id());
         assert_eq!(&quorum_set, contents.quorum_set());
-        let prost_evidence = prost::DcapEvidence::try_from(&attestation_evidence)
-            .expect("Failed decoding attestation evidence");
+        // With SGX removed, attestation evidence is a VerificationReport stub
         assert_eq!(
-            &AttestationEvidence::DcapEvidence(prost_evidence),
+            &AttestationEvidence::VerificationReport(attestation_evidence),
             contents.attestation_evidence()
         );
         assert_eq!(&local_node_id.responder_id, contents.responder_id());

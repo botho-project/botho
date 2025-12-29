@@ -148,6 +148,22 @@ async fn run_async(config: Config, config_path: &Path, mine: bool) -> Result<()>
     println!();
     node.print_status_public()?;
 
+    // Load pending transactions from file and broadcast them
+    match node.load_pending_transactions() {
+        Ok(pending_txs) if !pending_txs.is_empty() => {
+            info!("Broadcasting {} pending transactions to network", pending_txs.len());
+            for tx in &pending_txs {
+                if let Err(e) = NetworkDiscovery::broadcast_transaction(&mut swarm, tx) {
+                    debug!("Failed to broadcast pending tx: {}", e);
+                }
+            }
+        }
+        Ok(_) => {}
+        Err(e) => {
+            warn!("Failed to load pending transactions: {}", e);
+        }
+    }
+
     if can_mine {
         info!(
             "Starting mining with {}-of-{} quorum",
@@ -181,6 +197,13 @@ async fn run_async(config: Config, config_path: &Path, mine: bool) -> Result<()>
                                 if let Ok(state) = node.ledger().get_chain_state() {
                                     consensus.update_chain_state(state);
                                 }
+                            }
+                        }
+                        NetworkEvent::NewTransaction(tx) => {
+                            debug!("Received transaction {} from network", hex::encode(&tx.hash()[0..8]));
+                            // Add to mempool for inclusion in next block
+                            if let Err(e) = node.submit_transaction(tx) {
+                                debug!("Failed to add network transaction to mempool: {}", e);
                             }
                         }
                         NetworkEvent::ScpMessage(msg) => {
@@ -284,7 +307,12 @@ async fn run_async(config: Config, config_path: &Path, mine: bool) -> Result<()>
                     let tx_bytes = bincode::serialize(&tx)
                         .expect("Failed to serialize transaction");
 
-                    // Priority based on fee (higher fee = higher priority)
+                    // Broadcast to network so other nodes see it
+                    if let Err(e) = NetworkDiscovery::broadcast_transaction(&mut swarm, &tx) {
+                        debug!("Failed to broadcast transaction: {}", e);
+                    }
+
+                    // Submit to consensus for ordering
                     consensus.submit_transaction(tx_hash, tx_bytes);
                 }
             }

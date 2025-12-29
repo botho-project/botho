@@ -258,6 +258,11 @@ message TxOut {
     // Tracks coin ancestry for fee rate determination.
     // Only present from block version 5 onwards.
     ClusterTagVector cluster_tags = 7;
+
+    // Committed cluster tag vector for private transactions (Phase 2).
+    // Contains Pedersen commitments to tag masses instead of plaintext values.
+    // The serialization format is defined by mc-cluster-tax.
+    optional bytes committed_cluster_tags = 8;
 }
 
 message TxIn {

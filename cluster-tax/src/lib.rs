@@ -58,3 +58,6 @@ pub use signing::{
     create_tag_signature, verify_tag_signature,
     TagSigningConfig, TagSigningError, TagSigningInput, TagSigningOutput, TagSigningResult,
 };
+pub use crypto::{
+    CommittedTagVector, CommittedTagVectorSecret, RingTagData, ExtendedTxSignature,
+};

@@ -11,8 +11,8 @@ pub use self::{
     error::Error,
     generator_cache::GeneratorCache,
     rct_bulletproofs::{
-        InputRing, OutputSecret, PresignedInputRing, SignatureRctBulletproofs, SignedInputRing,
-        SigningData,
+        CommittedTagSigningData, InputRing, InputTagRing, OutputSecret, OutputTagSecret,
+        PresignedInputRing, SignatureRctBulletproofs, SignedInputRing, SigningData,
     },
     signing_digest::{compute_mlsag_signing_digest, ExtendedMessageDigest, MLSAGSigningDigest},
 };

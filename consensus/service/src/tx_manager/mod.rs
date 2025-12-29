@@ -89,9 +89,10 @@ impl<E: ConsensusEnclave + Send, UI: UntrustedInterfaces + Send> TxManagerImpl<E
         let current_block_index = self.untrusted.well_formed_check(&tx_context)?;
 
         // The enclave part of the well-formed check.
+        // Note: With SGX removed, tx_bytes are passed directly (no encryption).
         let (well_formed_encrypted_tx, well_formed_tx_context) = self
             .enclave
-            .tx_is_well_formed(tx_context.locally_encrypted_tx, current_block_index)?;
+            .tx_is_well_formed(tx_context.tx_bytes, current_block_index)?;
 
         Ok(CacheEntry {
             encrypted_tx: well_formed_encrypted_tx,

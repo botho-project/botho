@@ -8,7 +8,7 @@
 //! operating entirely in untrusted space.
 
 use displaydoc::Display;
-use mc_blockchain_types::BlockIndex;
+use mc_blockchain_types::{BlockIndex, VerificationReport};
 use mc_crypto_keys::{CompressedRistrettoPublic, Ed25519Public};
 use mc_transaction_core::{ring_signature::KeyImage, tx::TxHash};
 use serde::{Deserialize, Serialize};
@@ -368,9 +368,9 @@ pub trait ConsensusEnclave: Send + Sync {
         Error,
     >;
 
-    /// Get DCAP evidence (stub - returns None without SGX).
-    fn get_dcap_evidence(&self) -> Result<Option<()>, Error> {
-        Ok(None)
+    /// Get attestation evidence (stub - returns empty VerificationReport without SGX).
+    fn get_attestation_evidence(&self) -> Result<VerificationReport, Error> {
+        Ok(VerificationReport::default())
     }
 }
 

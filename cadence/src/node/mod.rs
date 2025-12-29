@@ -78,7 +78,7 @@ impl Node {
         })?;
 
         // Load any pending transactions from file (created by `cadence send`)
-        self.load_pending_transactions_from_file()?;
+        let _ = self.load_pending_transactions_from_file()?;
 
         // Display node info
         self.print_status()?;
@@ -543,25 +543,32 @@ impl Node {
     }
 
     /// Load pending transactions from file (created by `cadence send`)
-    fn load_pending_transactions_from_file(&self) -> Result<()> {
+    /// Returns the transactions that were loaded for broadcasting
+    pub fn load_pending_transactions(&self) -> Result<Vec<Transaction>> {
+        self.load_pending_transactions_from_file()
+    }
+
+    /// Load pending transactions from file (created by `cadence send`)
+    fn load_pending_transactions_from_file(&self) -> Result<Vec<Transaction>> {
         let pending_path = self.config_dir.join(PENDING_TXS_FILE);
 
         match load_pending_txs(&pending_path) {
             Ok(txs) if txs.is_empty() => {
                 // No pending transactions
-                Ok(())
+                Ok(Vec::new())
             }
             Ok(txs) => {
                 info!("Loading {} pending transactions from file", txs.len());
 
-                let mut loaded = 0;
+                let mut loaded_txs = Vec::new();
                 let mut failed = 0;
 
                 for tx in txs {
+                    let tx_clone = tx.clone();
                     match self.submit_transaction(tx) {
                         Ok(hash) => {
                             info!("Loaded pending tx: {}", hex::encode(&hash[0..8]));
-                            loaded += 1;
+                            loaded_txs.push(tx_clone);
                         }
                         Err(e) => {
                             warn!("Failed to load pending tx: {}", e);
@@ -572,7 +579,7 @@ impl Node {
 
                 info!(
                     "Loaded {} pending transactions ({} failed)",
-                    loaded, failed
+                    loaded_txs.len(), failed
                 );
 
                 // Clear the pending file since we've loaded them
@@ -580,14 +587,14 @@ impl Node {
                     warn!("Failed to clear pending transactions file: {}", e);
                 }
 
-                Ok(())
+                Ok(loaded_txs)
             }
             Err(e) => {
                 // File might not exist, which is fine
                 if pending_path.exists() {
                     warn!("Failed to load pending transactions: {}", e);
                 }
-                Ok(())
+                Ok(Vec::new())
             }
         }
     }

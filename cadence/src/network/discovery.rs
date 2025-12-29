@@ -16,9 +16,13 @@ use tracing::{debug, info, warn};
 
 use crate::block::Block;
 use crate::consensus::ScpMessage;
+use crate::transaction::Transaction;
 
 /// Topic for block announcements
 const BLOCKS_TOPIC: &str = "cadence/blocks/1.0.0";
+
+/// Topic for transaction announcements
+const TRANSACTIONS_TOPIC: &str = "cadence/transactions/1.0.0";
 
 /// Topic for SCP consensus messages
 const SCP_TOPIC: &str = "cadence/scp/1.0.0";
@@ -36,6 +40,8 @@ pub struct PeerTableEntry {
 pub enum NetworkEvent {
     /// A new block was received from a peer
     NewBlock(Block),
+    /// A new transaction was received from a peer
+    NewTransaction(Transaction),
     /// An SCP consensus message was received
     ScpMessage(ScpMessage),
     /// A new peer was discovered
@@ -141,6 +147,10 @@ impl NetworkDiscovery {
         let blocks_topic = IdentTopic::new(BLOCKS_TOPIC);
         swarm.behaviour_mut().gossipsub.subscribe(&blocks_topic)?;
 
+        // Subscribe to transactions topic
+        let transactions_topic = IdentTopic::new(TRANSACTIONS_TOPIC);
+        swarm.behaviour_mut().gossipsub.subscribe(&transactions_topic)?;
+
         // Subscribe to SCP consensus topic
         let scp_topic = IdentTopic::new(SCP_TOPIC);
         swarm.behaviour_mut().gossipsub.subscribe(&scp_topic)?;
@@ -185,6 +195,21 @@ impl NetworkDiscovery {
         Ok(())
     }
 
+    /// Broadcast a transaction to the network
+    pub fn broadcast_transaction(swarm: &mut Swarm<CadenceBehaviour>, tx: &Transaction) -> anyhow::Result<()> {
+        let topic = IdentTopic::new(TRANSACTIONS_TOPIC);
+        let tx_bytes = bincode::serialize(tx)?;
+
+        swarm
+            .behaviour_mut()
+            .gossipsub
+            .publish(topic, tx_bytes)
+            .map_err(|e| anyhow::anyhow!("Failed to publish transaction: {:?}", e))?;
+
+        debug!("Broadcast transaction {} to network", hex::encode(&tx.hash()[0..8]));
+        Ok(())
+    }
+
     /// Broadcast an SCP consensus message to the network
     pub fn broadcast_scp(swarm: &mut Swarm<CadenceBehaviour>, msg: &ScpMessage) -> anyhow::Result<()> {
         let topic = IdentTopic::new(SCP_TOPIC);
@@ -225,6 +250,20 @@ impl NetworkDiscovery {
                         }
                         Err(e) => {
                             warn!("Failed to deserialize block from gossip: {}", e);
+                        }
+                    }
+                } else if topic == TRANSACTIONS_TOPIC {
+                    // Try to deserialize as a transaction
+                    match bincode::deserialize::<Transaction>(&message.data) {
+                        Ok(tx) => {
+                            debug!(
+                                "Received transaction {} from network",
+                                hex::encode(&tx.hash()[0..8])
+                            );
+                            return Some(NetworkEvent::NewTransaction(tx));
+                        }
+                        Err(e) => {
+                            warn!("Failed to deserialize transaction from gossip: {}", e);
                         }
                     }
                 } else if topic == SCP_TOPIC {

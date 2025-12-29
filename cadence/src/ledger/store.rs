@@ -1,12 +1,13 @@
 use lmdb::{Cursor, Database, Environment, EnvironmentFlags, Transaction, WriteFlags};
 use mc_account_keys::PublicAddress;
+use mc_crypto_keys::{RistrettoPublic, RistrettoSignature};
 use std::fs;
 use std::path::Path;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use super::{ChainState, LedgerError};
 use crate::block::Block;
-use crate::transaction::{TxOutput, Utxo, UtxoId};
+use crate::transaction::{Transaction as CadenceTransaction, TxOutput, Utxo, UtxoId};
 
 /// LMDB-backed ledger storage
 pub struct Ledger {
@@ -17,6 +18,9 @@ pub struct Ledger {
     meta_db: Database,
     /// utxos: UtxoId (36 bytes) -> Utxo
     utxo_db: Database,
+    /// address_index: (view_key || spend_key) (64 bytes) -> [UtxoId (36 bytes), ...]
+    /// Maps addresses to their UTXOs for efficient balance lookups
+    address_index_db: Database,
 }
 
 // Metadata keys (fixed size for LMDB compatibility)
@@ -35,19 +39,21 @@ impl Ledger {
 
         let env = Environment::new()
             .set_flags(EnvironmentFlags::NO_SUB_DIR)
-            .set_max_dbs(3)
+            .set_max_dbs(4)
             .set_map_size(1024 * 1024 * 1024) // 1GB
             .open(path.join("ledger.mdb").as_ref())?;
 
         let blocks_db = env.create_db(Some("blocks"), lmdb::DatabaseFlags::empty())?;
         let meta_db = env.create_db(Some("meta"), lmdb::DatabaseFlags::empty())?;
         let utxo_db = env.create_db(Some("utxos"), lmdb::DatabaseFlags::empty())?;
+        let address_index_db = env.create_db(Some("address_index"), lmdb::DatabaseFlags::empty())?;
 
         let ledger = Self {
             env,
             blocks_db,
             meta_db,
             utxo_db,
+            address_index_db,
         };
 
         // Initialize with genesis if empty
@@ -210,16 +216,30 @@ impl Ledger {
             &coinbase_bytes,
             WriteFlags::empty(),
         )?;
+        // Add to address index
+        self.add_to_address_index(&mut txn, &coinbase_utxo)?;
         debug!("Created coinbase UTXO at height {}", new_height);
 
-        // Process regular transactions
+        // Verify and process regular transactions
         for tx in &block.transactions {
+            // Verify transaction signatures before processing
+            self.verify_transaction(tx)?;
+
             let tx_hash = tx.hash();
 
             // Remove spent UTXOs (inputs)
             for input in &tx.inputs {
                 let spent_id = UtxoId::new(input.tx_hash, input.output_index);
-                if let Err(lmdb::Error::NotFound) = txn.del(self.utxo_db, &spent_id.to_bytes(), None) {
+
+                // Get the UTXO first so we can remove it from the address index
+                if let Ok(utxo_bytes) = txn.get(self.utxo_db, &spent_id.to_bytes()) {
+                    if let Ok(spent_utxo) = bincode::deserialize::<Utxo>(utxo_bytes) {
+                        // Remove from address index
+                        self.remove_from_address_index(&mut txn, &spent_utxo)?;
+                    }
+                    // Remove from UTXO database
+                    txn.del(self.utxo_db, &spent_id.to_bytes(), None)?;
+                } else {
                     // UTXO not found - this is a validation error
                     // For now, log and continue (validation should catch this earlier)
                     debug!("Warning: UTXO not found when spending");
@@ -242,6 +262,8 @@ impl Ledger {
                     &utxo_bytes,
                     WriteFlags::empty(),
                 )?;
+                // Add to address index
+                self.add_to_address_index(&mut txn, &utxo)?;
             }
         }
 
@@ -319,25 +341,33 @@ impl Ledger {
         }
     }
 
-    /// Get all UTXOs belonging to an address
+    /// Get all UTXOs belonging to an address (using address index)
     pub fn get_utxos_for_address(&self, address: &PublicAddress) -> Result<Vec<Utxo>, LedgerError> {
         let view_key = address.view_public_key().to_bytes();
         let spend_key = address.spend_public_key().to_bytes();
+        let addr_key = Self::address_key(&view_key, &spend_key);
 
         let txn = self.env.begin_ro_txn()?;
-        let mut cursor = txn.open_ro_cursor(self.utxo_db)?;
+
+        // Look up UTXO IDs from the address index
+        let id_bytes = match txn.get(self.address_index_db, &addr_key) {
+            Ok(bytes) => bytes,
+            Err(lmdb::Error::NotFound) => return Ok(Vec::new()),
+            Err(e) => return Err(e.into()),
+        };
+
+        // Parse each 36-byte UTXO ID and fetch the corresponding UTXO
         let mut utxos = Vec::new();
-
-        // Iterate using the Cursor trait's iter_start method
-        for item in cursor.iter_start() {
-            let (_, value) = item?;
-            let utxo: Utxo = bincode::deserialize(value)
-                .map_err(|e| LedgerError::Serialization(e.to_string()))?;
-
-            if utxo.output.recipient_view_key == view_key
-                && utxo.output.recipient_spend_key == spend_key
-            {
-                utxos.push(utxo);
+        for chunk in id_bytes.chunks(36) {
+            if chunk.len() == 36 {
+                if let Some(utxo_id) = UtxoId::from_bytes(chunk) {
+                    // Fetch the UTXO by ID
+                    if let Ok(utxo_bytes) = txn.get(self.utxo_db, &utxo_id.to_bytes()) {
+                        if let Ok(utxo) = bincode::deserialize::<Utxo>(utxo_bytes) {
+                            utxos.push(utxo);
+                        }
+                    }
+                }
             }
         }
 
@@ -358,6 +388,140 @@ impl Ledger {
             Err(lmdb::Error::NotFound) => Ok(false),
             Err(e) => Err(e.into()),
         }
+    }
+
+    /// Compute address key from view and spend keys for index lookup
+    fn address_key(view_key: &[u8; 32], spend_key: &[u8; 32]) -> [u8; 64] {
+        let mut key = [0u8; 64];
+        key[0..32].copy_from_slice(view_key);
+        key[32..64].copy_from_slice(spend_key);
+        key
+    }
+
+    /// Add a UTXO ID to the address index
+    fn add_to_address_index(
+        &self,
+        txn: &mut lmdb::RwTransaction,
+        utxo: &Utxo,
+    ) -> Result<(), LedgerError> {
+        let addr_key = Self::address_key(
+            &utxo.output.recipient_view_key,
+            &utxo.output.recipient_spend_key,
+        );
+
+        // Get existing IDs or empty vec
+        let existing = match txn.get(self.address_index_db, &addr_key) {
+            Ok(bytes) => bytes.to_vec(),
+            Err(lmdb::Error::NotFound) => Vec::new(),
+            Err(e) => return Err(e.into()),
+        };
+
+        // Append the new UTXO ID
+        let mut ids = existing;
+        ids.extend_from_slice(&utxo.id.to_bytes());
+
+        txn.put(
+            self.address_index_db,
+            &addr_key,
+            &ids,
+            WriteFlags::empty(),
+        )?;
+
+        Ok(())
+    }
+
+    /// Remove a UTXO ID from the address index
+    fn remove_from_address_index(
+        &self,
+        txn: &mut lmdb::RwTransaction,
+        utxo: &Utxo,
+    ) -> Result<(), LedgerError> {
+        let addr_key = Self::address_key(
+            &utxo.output.recipient_view_key,
+            &utxo.output.recipient_spend_key,
+        );
+
+        // Get existing IDs
+        let existing = match txn.get(self.address_index_db, &addr_key) {
+            Ok(bytes) => bytes.to_vec(),
+            Err(lmdb::Error::NotFound) => return Ok(()), // Nothing to remove
+            Err(e) => return Err(e.into()),
+        };
+
+        // Filter out the removed UTXO ID
+        let utxo_id_bytes = utxo.id.to_bytes();
+        let filtered: Vec<u8> = existing
+            .chunks(36)
+            .filter(|chunk| chunk != &utxo_id_bytes)
+            .flat_map(|chunk| chunk.iter().copied())
+            .collect();
+
+        if filtered.is_empty() {
+            // No more UTXOs for this address, remove the entry
+            let _ = txn.del(self.address_index_db, &addr_key, None);
+        } else {
+            txn.put(
+                self.address_index_db,
+                &addr_key,
+                &filtered,
+                WriteFlags::empty(),
+            )?;
+        }
+
+        Ok(())
+    }
+
+    /// Verify all signatures in a transaction
+    ///
+    /// For each input, this looks up the UTXO being spent and verifies
+    /// the signature against the UTXO's spend public key.
+    pub fn verify_transaction(&self, tx: &CadenceTransaction) -> Result<(), LedgerError> {
+        let signing_hash = tx.signing_hash();
+
+        for (i, input) in tx.inputs.iter().enumerate() {
+            // Look up the UTXO being spent
+            let utxo_id = UtxoId::new(input.tx_hash, input.output_index);
+            let utxo = self.get_utxo(&utxo_id)?.ok_or_else(|| {
+                LedgerError::InvalidBlock(format!(
+                    "Input {} references non-existent UTXO {}:{}",
+                    i,
+                    hex::encode(&input.tx_hash[0..8]),
+                    input.output_index
+                ))
+            })?;
+
+            // Reconstruct the public spend key from the UTXO
+            let spend_public = RistrettoPublic::try_from(&utxo.output.recipient_spend_key[..])
+                .map_err(|_| {
+                    LedgerError::InvalidBlock(format!(
+                        "Input {} has invalid spend key in UTXO",
+                        i
+                    ))
+                })?;
+
+            // Parse the signature
+            let signature = RistrettoSignature::try_from(input.signature.as_slice()).map_err(
+                |_| {
+                    LedgerError::InvalidBlock(format!(
+                        "Input {} has invalid signature format (expected 64 bytes, got {})",
+                        i,
+                        input.signature.len()
+                    ))
+                },
+            )?;
+
+            // Verify the signature
+            spend_public
+                .verify_schnorrkel(b"cadence-tx-v1", &signing_hash, &signature)
+                .map_err(|_| {
+                    LedgerError::InvalidBlock(format!(
+                        "Input {} has invalid signature",
+                        i
+                    ))
+                })?;
+        }
+
+        Ok(())
     }
 }
 

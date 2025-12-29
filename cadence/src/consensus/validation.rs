@@ -100,13 +100,9 @@ impl TransactionValidator {
             "Validating mining transaction"
         );
 
-        // 1. Verify PoW (hash < difficulty)
-        if !tx.verify_pow() {
-            warn!("Mining tx failed PoW verification");
-            return Err(ValidationError::InvalidPoW);
-        }
+        // Check cheap validations first before expensive PoW verification
 
-        // 2. Check prev_block_hash matches current chain tip
+        // 1. Check prev_block_hash matches current chain tip
         if tx.prev_block_hash != state.tip_hash {
             warn!(
                 expected = hex::encode(&state.tip_hash[0..8]),
@@ -116,7 +112,7 @@ impl TransactionValidator {
             return Err(ValidationError::WrongPrevBlockHash);
         }
 
-        // 3. Check block_height is next expected
+        // 2. Check block_height is next expected
         let expected_height = state.height + 1;
         if tx.block_height != expected_height {
             warn!(
@@ -127,7 +123,7 @@ impl TransactionValidator {
             return Err(ValidationError::WrongBlockHeight);
         }
 
-        // 4. Check difficulty matches current network difficulty
+        // 3. Check difficulty matches current network difficulty
         if tx.difficulty != state.difficulty {
             warn!(
                 expected = state.difficulty,
@@ -137,7 +133,7 @@ impl TransactionValidator {
             return Err(ValidationError::WrongDifficulty);
         }
 
-        // 5. Check reward matches emission schedule
+        // 4. Check reward matches emission schedule
         let expected_reward = calculate_block_reward(tx.block_height, state.total_mined);
         if tx.reward != expected_reward {
             warn!(
@@ -151,7 +147,7 @@ impl TransactionValidator {
             });
         }
 
-        // 6. Check timestamp is reasonable
+        // 5. Check timestamp is reasonable
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -169,6 +165,12 @@ impl TransactionValidator {
         // Note: We don't check if timestamp is before parent here because
         // that requires looking up the parent block. The consensus layer
         // should handle this during block construction.
+
+        // 6. Verify PoW (hash < difficulty) - expensive, so do last
+        if !tx.verify_pow() {
+            warn!("Mining tx failed PoW verification");
+            return Err(ValidationError::InvalidPoW);
+        }
 
         debug!(
             height = tx.block_height,

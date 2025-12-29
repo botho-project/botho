@@ -43,7 +43,7 @@ use mc_transaction_core::{
     get_tx_out_shared_secret,
     onetime_keys::recover_onetime_private_key,
     ring_signature::KeyImage,
-    tx::{TxOut, TxOutMembershipProof},
+    tx::TxOut,
     Amount, MemoPayload, TokenId,
 };
 use mc_transaction_extra::{BurnRedemptionMemo, MemoType, TxOutConfirmationNumber};

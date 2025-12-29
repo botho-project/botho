@@ -320,18 +320,18 @@ impl Drop for ByzantineLedger {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
+    use super::worker::tests::TestEnclave;
     use super::*;
     use crate::{
+        enclave_stubs::TxContext,
         mint_tx_manager::{MintTxManagerImpl, MockMintTxManager},
         tx_manager::{MockTxManager, TxManagerImpl},
         validators::DefaultTxManagerUntrustedInterfaces,
     };
     use base64::{engine::general_purpose::STANDARD as BASE64_ENGINE, Engine};
-    use mc_attest_verifier_types::prost;
-    use mc_blockchain_types::{AttestationEvidence, BlockContents, BlockVersion};
+    use mc_blockchain_types::{AttestationEvidence, BlockContents, BlockVersion, VerificationReport};
     use mc_common::logger::test_with_logger;
-    use mc_consensus_enclave_mock::ConsensusServiceMockEnclave;
     use mc_consensus_scp::{ballot::Ballot, msg::*, SlotIndex};
     use mc_crypto_keys::{DistinguishedEncoding, Ed25519Private};
     use mc_ledger_db::test_utils::{
@@ -431,8 +431,7 @@ mod tests {
         initialize_ledger(BLOCK_VERSION, &mut ledger, num_blocks, &sender, &mut rng);
 
         // Mock enclave.
-        let enclave = ConsensusServiceMockEnclave::default();
-        enclave.blockchain_config.lock().unwrap().block_version = BLOCK_VERSION;
+        let enclave = TestEnclave::new(BLOCK_VERSION);
 
         // Mock peer_manager
         let peer_manager = ConnectionManager::new(
@@ -539,8 +538,8 @@ mod tests {
             logger.clone(),
         )));
 
-        let enclave = ConsensusServiceMockEnclave::new(BLOCK_VERSION, &mut rng);
-        let dcap_evidence = enclave.dcap_evidence.clone();
+        let enclave = TestEnclave::new(BLOCK_VERSION);
+        let attestation_evidence = enclave.get_attestation_evidence().unwrap();
 
         let tx_manager = Arc::new(TxManagerImpl::new(
             enclave.clone(),
@@ -627,23 +626,17 @@ mod tests {
         let client_tx_two = transactions.pop().unwrap();
 
         let hash_tx_zero: ConsensusValue = tx_manager
-            .insert(ConsensusServiceMockEnclave::tx_to_tx_context(
-                &client_tx_zero,
-            ))
+            .insert(TestEnclave::tx_to_tx_context(&client_tx_zero))
             .unwrap()
             .into();
 
         let hash_tx_one: ConsensusValue = tx_manager
-            .insert(ConsensusServiceMockEnclave::tx_to_tx_context(
-                &client_tx_one,
-            ))
+            .insert(TestEnclave::tx_to_tx_context(&client_tx_one))
             .unwrap()
             .into();
 
         let hash_tx_two: ConsensusValue = tx_manager
-            .insert(ConsensusServiceMockEnclave::tx_to_tx_context(
-                &client_tx_two,
-            ))
+            .insert(TestEnclave::tx_to_tx_context(&client_tx_two))
             .unwrap()
             .into();
 
@@ -830,18 +823,17 @@ mod tests {
         let signature = block_data.signature().unwrap();
         signature.verify(block_data.block()).unwrap();
 
-        // The block should have valid metadata with this node's quorum set and AVR.
+        // The block should have valid metadata with this node's quorum set and attestation evidence.
         let metadata = block_data.metadata().unwrap();
         metadata.verify().unwrap();
-        let prost_evidence = prost::DcapEvidence::try_from(&dcap_evidence)
-            .expect("failed decoding attestation evidence");
         assert_eq!(metadata.node_key(), &local_signer_key.public_key());
         assert_eq!(metadata.contents().responder_id(), &responder_id);
         assert_eq!(metadata.contents().block_id(), &block_data.block().id);
         assert_eq!(metadata.contents().quorum_set(), &local_quorum_set);
+        // With SGX removed, attestation evidence is a VerificationReport stub
         assert_eq!(
             metadata.contents().attestation_evidence(),
-            &AttestationEvidence::DcapEvidence(prost_evidence)
+            &AttestationEvidence::VerificationReport(attestation_evidence)
         );
     }
 
@@ -922,8 +914,8 @@ mod tests {
             logger.clone(),
         )));
 
-        let enclave = ConsensusServiceMockEnclave::new(BlockVersion::MAX, &mut rng);
-        let attestation_evidence = enclave.dcap_evidence.clone();
+        let enclave = TestEnclave::new(BlockVersion::MAX);
+        let attestation_evidence = enclave.get_attestation_evidence().unwrap();
 
         let tx_manager = Arc::new(TxManagerImpl::new(
             enclave.clone(),
@@ -1155,18 +1147,17 @@ mod tests {
         let signature = block_data.signature().unwrap();
         signature.verify(block_data.block()).unwrap();
 
-        // The block should have valid metadata with this node's quorum set and AVR.
+        // The block should have valid metadata with this node's quorum set and attestation evidence.
         let metadata = block_data.metadata().unwrap();
         metadata.verify().unwrap();
         assert_eq!(metadata.node_key(), &local_signer_key.public_key());
         assert_eq!(metadata.contents().responder_id(), &responder_id);
         assert_eq!(metadata.contents().block_id(), &block_data.block().id);
         assert_eq!(metadata.contents().quorum_set(), &local_quorum_set);
-        let prost_evidence = prost::DcapEvidence::try_from(&attestation_evidence)
-            .expect("failed decoding attestation evidence");
+        // With SGX removed, attestation evidence is a VerificationReport stub
         assert_eq!(
             metadata.contents().attestation_evidence(),
-            &AttestationEvidence::DcapEvidence(prost_evidence)
+            &AttestationEvidence::VerificationReport(attestation_evidence)
         );
     }
 }

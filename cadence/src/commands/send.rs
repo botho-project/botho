@@ -69,13 +69,13 @@ pub fn run(config_path: &Path, address_str: &str, amount_str: &str) -> Result<()
         selected_amount += utxo.output.amount;
     }
 
-    // Build inputs (for now, without real signatures)
+    // Build inputs (signatures will be added after transaction is constructed)
     let inputs: Vec<TxInput> = selected_utxos
         .iter()
         .map(|utxo| TxInput {
             tx_hash: utxo.id.tx_hash,
             output_index: utxo.id.output_index,
-            signature: vec![0u8; 64], // Placeholder signature
+            signature: Vec::new(), // Will be signed below
         })
         .collect();
 
@@ -92,7 +92,10 @@ pub fn run(config_path: &Path, address_str: &str, amount_str: &str) -> Result<()
     }
 
     // Create the transaction
-    let tx = Transaction::new(inputs, outputs, MIN_FEE, state.height);
+    let mut tx = Transaction::new(inputs, outputs, MIN_FEE, state.height);
+
+    // Sign the transaction with our wallet's spend key
+    wallet.sign_transaction(&mut tx, &ledger)?;
 
     let tx_hash = tx.hash();
 
