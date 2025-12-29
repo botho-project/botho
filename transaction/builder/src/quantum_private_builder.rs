@@ -26,15 +26,17 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 use bt_account_keys::{QuantumSafeAccountKey, QuantumSafePublicAddress};
+use bt_crypto_digestible::{DigestTranscript, Digestible, MerlinTranscript};
 use bt_crypto_keys::{CompressedRistrettoPublic, RistrettoPrivate, RistrettoPublic};
-use bt_crypto_pq::{MlDsa65KeyPair, MlDsa65Signature, MlKem768Ciphertext, MlKem768PublicKey};
+use bt_crypto_pq::{derive_onetime_sig_keypair, MlDsa65KeyPair};
 use bt_transaction_core::{
     encrypted_fog_hint::EncryptedFogHint,
-    onetime_keys::{create_shared_secret, create_tx_out_public_key, create_tx_out_target_key},
+    onetime_keys::create_tx_out_target_key,
     quantum_private::{QuantumPrivateTxIn, QuantumPrivateTxOut},
     tx::TxHash,
     Amount, MaskedAmount,
 };
+use bt_util_from_random::FromRandom;
 use rand_core::{CryptoRng, RngCore};
 
 /// Error type for quantum-private transaction building.
