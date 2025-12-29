@@ -1496,6 +1496,7 @@ version = "7.1.0"
 dependencies = [
  "assert_matches",
  "bt-account-keys",
+ "bt-crypto-digestible",
  "bt-crypto-hashes",
  "bt-crypto-keys",
  "bt-crypto-pq",

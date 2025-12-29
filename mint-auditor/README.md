@@ -158,7 +158,7 @@ mobilecoind \
         scan-ledger \
         --gnosis-safe-config gnosis-safe.toml \
         --ledger-db /tmp/ledger-db \
-        --mint-auditor-db /tmp/mc-auditor-db
+        --mint-auditor-db /tmp/bt-auditor-db
 ```
 #### Depositing to the safe
 
