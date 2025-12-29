@@ -15,6 +15,7 @@ members = [
     "connection/test-utils",
     "consensus/api",
     "consensus/mint-client",
+    "consensus/pow",
     "consensus/scp",
     "consensus/scp/play",
     "consensus/scp/types",
@@ -275,6 +276,7 @@ mc-connection = { path = "connection" }
 mc-connection-test-utils = { path = "connection/test-utils" }
 mc-consensus-api = { path = "consensus/api" }
 mc-consensus-mint-client-types = { path = "consensus/mint-client/types" }
+mc-consensus-pow = { path = "consensus/pow" }
 mc-consensus-scp = { path = "consensus/scp" }
 mc-consensus-scp-types = { path = "consensus/scp/types" }
 mc-consensus-service-config = { path = "consensus/service/config" }

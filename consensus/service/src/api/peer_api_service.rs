@@ -7,6 +7,7 @@ use crate::{
     background_work_queue::BackgroundWorkQueueSenderFn,
     consensus_service::{IncomingConsensusMsg, ProposeTxCallback},
     counters,
+    enclave_stubs::ConsensusEnclave,
     tx_manager::{TxManager, TxManagerError},
     SVC_COUNTERS,
 };

@@ -153,6 +153,22 @@ pub enum TransactionValidationError {
 
     /// Unknown Masked Amount version
     UnknownMaskedAmountVersion,
+
+    // =========== Cluster Tag Errors ===========
+    /// Cluster tags are required but missing from TxOut
+    MissingClusterTags,
+
+    /// Cluster tags are not allowed yet for this block version
+    ClusterTagsNotAllowed,
+
+    /// Cluster tag vector is malformed (invalid weights, duplicates, etc.)
+    InvalidClusterTags,
+
+    /// Cluster tag mass inflation: cluster {0} has output mass {1} > expected {2}
+    ClusterTagInflation(u64, u64, u64),
+
+    /// Insufficient progressive fee: required {0}, actual {1}
+    InsufficientProgressiveFee(u64, u64),
 }
 
 impl From<mc_crypto_keys::KeyError> for TransactionValidationError {

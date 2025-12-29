@@ -31,7 +31,7 @@ pub mod tx;
 pub mod tx_summary;
 pub mod validation;
 
-pub use emission::{block_reward, INITIAL_REWARD, MAX_SUPPLY, TAIL_EMISSION};
+pub use emission::{block_reward, INITIAL_REWARD, MAX_SUPPLY, PICO_CAD, TAIL_EMISSION};
 pub use fee_map::{Error as FeeMapError, FeeMap, SMALLEST_MINIMUM_FEE_LOG2};
 pub use input_rules::{InputRuleError, InputRules};
 pub use memo::{EncryptedMemo, MemoError, MemoPayload};
@@ -46,7 +46,8 @@ pub use tx_summary::TxSummaryNew;
 pub use mc_crypto_ring_signature::{Commitment, CompressedCommitment};
 pub use mc_transaction_types::{
     constants, domain_separators, Amount, AmountError, BlockVersion, BlockVersionError,
-    MaskedAmount, MaskedAmountV1, MaskedAmountV2, TokenId, TxSummary, UnmaskedAmount,
+    ClusterId, ClusterTagEntry, ClusterTagVector, MaskedAmount, MaskedAmountV1, MaskedAmountV2,
+    TokenId, TxSummary, UnmaskedAmount, MAX_CLUSTER_TAGS, MIN_STORED_WEIGHT, TAG_WEIGHT_SCALE,
 };
 
 /// Re-export all of mc-crypto-ring-signature

@@ -25,8 +25,8 @@ use crate::{
     memo::{EncryptedMemo, MemoPayload},
     onetime_keys::{create_shared_secret, create_tx_out_public_key, create_tx_out_target_key},
     ring_ct::{SignatureRctBulletproofs, SignedInputRing},
-    Amount, BlockVersion, CompressedCommitment, MaskedAmount, NewMemoError, NewTxError,
-    TxOutConversionError, ViewKeyMatchError,
+    Amount, BlockVersion, ClusterTagVector, CompressedCommitment, MaskedAmount, NewMemoError,
+    NewTxError, TxOutConversionError, ViewKeyMatchError,
 };
 
 /// Transaction hash length, in bytes.
@@ -283,6 +283,12 @@ pub struct TxOut {
     /// The encrypted memo (except for old TxOut's, which don't have this.)
     #[prost(message, tag = "5")]
     pub e_memo: Option<EncryptedMemo>,
+
+    /// Cluster tag vector for progressive transaction fees.
+    /// Tracks what fraction of this output's value traces back to each cluster origin.
+    /// Only present from block version 5 (cluster tags) onwards.
+    #[prost(message, tag = "7")]
+    pub cluster_tags: Option<ClusterTagVector>,
 }
 
 /// When creating a MemoPayload for a TxOut, sometimes it is important to be
@@ -379,7 +385,38 @@ impl TxOut {
             public_key: public_key.into(),
             e_fog_hint: hint,
             e_memo,
+            cluster_tags: None,
         })
+    }
+
+    /// Creates a TxOut with cluster tags for progressive fee computation.
+    ///
+    /// # Arguments
+    /// * `block_version` - Structural rules to target (must be >= 5 for cluster tags)
+    /// * `amount` - Amount contained within the TxOut
+    /// * `recipient` - Recipient's address.
+    /// * `tx_private_key` - The transaction's private key
+    /// * `hint` - Encrypted Fog hint.
+    /// * `memo_fn` - A callback taking MemoContext, which produces a MemoPayload
+    /// * `cluster_tags` - The cluster tag vector inherited from input(s)
+    pub fn new_with_cluster_tags(
+        block_version: BlockVersion,
+        amount: Amount,
+        recipient: &PublicAddress,
+        tx_private_key: &RistrettoPrivate,
+        hint: EncryptedFogHint,
+        memo_fn: impl FnOnce(MemoContext) -> Result<MemoPayload, NewMemoError>,
+        cluster_tags: ClusterTagVector,
+    ) -> Result<Self, NewTxError> {
+        let mut tx_out =
+            Self::new_with_memo(block_version, amount, recipient, tx_private_key, hint, memo_fn)?;
+
+        // Only include cluster tags if the block version supports them
+        if block_version.cluster_tags_are_supported() {
+            tx_out.cluster_tags = Some(cluster_tags);
+        }
+
+        Ok(tx_out)
     }
 
     /// A merlin-based hash of this TxOut.

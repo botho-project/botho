@@ -34,7 +34,7 @@ Unlike Bitcoin where the first valid block to propagate "wins," Cadence separate
 - **Multiple Valid Solutions**: Any miner who finds a valid nonce can submit a mining transaction
 - **Consensus-Based Selection**: The SCP quorum (not network propagation speed) determines which miner's block is included
 - **Byzantine Fault Tolerance**: Even if some nodes are malicious or offline, consensus proceeds correctly
-- **No Wasted Work**: Valid proofs that don't win can still demonstrate network hashrate
+- **Fair Selection**: Network latency doesn't determine the winner—the quorum does
 
 ### Emission Schedule
 
@@ -43,13 +43,13 @@ Mining rewards follow a smooth decay curve with perpetual tail emission:
 | Parameter | Value |
 | :-- | :-- |
 | Initial reward | 50 CAD |
-| Halving period | ~262,144 blocks (~1 year at 2-min blocks) |
+| Halving period | ~6,307,200 blocks (~4 years at 20-sec blocks) |
 | Tail emission | 0.6 CAD per block (perpetual) |
 | Total supply | 21 million CAD |
 
 ### Difficulty Adjustment
 
-- **Target block time**: 60 seconds
+- **Target block time**: 20 seconds
 - **Adjustment window**: Every 10 blocks
 - **Smooth adjustment**: Prevents large difficulty jumps (max 4x change per adjustment)
 

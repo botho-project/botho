@@ -8,9 +8,9 @@ use super::error::{TransactionValidationError, TransactionValidationResult};
 use crate::{
     constants::*,
     tx::{Tx, TxOut, TxPrefix},
-    Amount, BlockVersion, TokenId,
+    Amount, BlockVersion, ClusterId, TokenId, TAG_WEIGHT_SCALE,
 };
-use alloc::{format, vec::Vec};
+use alloc::{collections::BTreeMap, format, vec::Vec};
 use mc_common::HashSet;
 use rand_core::{CryptoRng, RngCore};
 
@@ -115,6 +115,14 @@ pub fn validate_tx_out(
         validate_masked_token_id_exists(tx_out)?;
     } else {
         validate_that_no_masked_token_id_exists(tx_out)?;
+    }
+
+    // If cluster tags are supported, they must be present and valid.
+    // If not yet supported, they must not be present.
+    if block_version.cluster_tags_are_supported() {
+        validate_cluster_tags_exist(tx_out)?;
+    } else {
+        validate_that_no_cluster_tags_exist(tx_out)?;
     }
 
     Ok(())
@@ -400,6 +408,215 @@ fn check_unique<T: Eq + core::hash::Hash>(
         if !uniques.insert(x) {
             return Err(err);
         }
+    }
+
+    Ok(())
+}
+
+// =========== Cluster Tag Validation ===========
+
+/// Validate that cluster tags exist on a TxOut (required from block version 5+).
+pub fn validate_cluster_tags_exist(tx_out: &TxOut) -> TransactionValidationResult<()> {
+    match &tx_out.cluster_tags {
+        Some(tags) if tags.is_valid() => Ok(()),
+        Some(_) => Err(TransactionValidationError::InvalidClusterTags),
+        None => Err(TransactionValidationError::MissingClusterTags),
+    }
+}
+
+/// Validate that cluster tags do not exist on a TxOut (for older block versions).
+pub fn validate_that_no_cluster_tags_exist(tx_out: &TxOut) -> TransactionValidationResult<()> {
+    if tx_out.cluster_tags.is_some() {
+        return Err(TransactionValidationError::ClusterTagsNotAllowed);
+    }
+    Ok(())
+}
+
+/// Validate cluster tag inheritance for a transaction.
+///
+/// This checks that output tags correctly inherit from input tags with decay.
+/// The sum of output tag masses for each cluster must not exceed the
+/// (decayed) input tag mass for that cluster.
+///
+/// # Arguments
+/// * `input_tx_outs` - The real inputs to the transaction (not the ring decoys)
+/// * `input_values` - The decrypted values of each input
+/// * `output_tx_outs` - The outputs of the transaction
+/// * `output_values` - The values of each output
+/// * `decay_rate` - Tag decay rate (parts per TAG_WEIGHT_SCALE)
+pub fn validate_cluster_tag_inheritance(
+    input_tx_outs: &[&TxOut],
+    input_values: &[u64],
+    output_tx_outs: &[&TxOut],
+    output_values: &[u64],
+    decay_rate: u32,
+) -> TransactionValidationResult<()> {
+    // Calculate input tag masses
+    let mut input_masses: BTreeMap<ClusterId, u64> = BTreeMap::new();
+
+    for (tx_out, &value) in input_tx_outs.iter().zip(input_values.iter()) {
+        if let Some(tags) = &tx_out.cluster_tags {
+            for entry in &tags.entries {
+                let mass = (value as u128 * entry.weight as u128 / TAG_WEIGHT_SCALE as u128) as u64;
+                *input_masses.entry(entry.cluster_id).or_insert(0) += mass;
+            }
+        }
+    }
+
+    // Calculate output tag masses
+    let mut output_masses: BTreeMap<ClusterId, u64> = BTreeMap::new();
+
+    for (tx_out, &value) in output_tx_outs.iter().zip(output_values.iter()) {
+        if let Some(tags) = &tx_out.cluster_tags {
+            for entry in &tags.entries {
+                let mass = (value as u128 * entry.weight as u128 / TAG_WEIGHT_SCALE as u128) as u64;
+                *output_masses.entry(entry.cluster_id).or_insert(0) += mass;
+            }
+        }
+    }
+
+    // Apply decay and check conservation
+    let decay_factor = TAG_WEIGHT_SCALE.saturating_sub(decay_rate);
+
+    for (cluster, &input_mass) in &input_masses {
+        let expected =
+            (input_mass as u128 * decay_factor as u128 / TAG_WEIGHT_SCALE as u128) as u64;
+        let actual = output_masses.get(cluster).copied().unwrap_or(0);
+
+        // Allow some tolerance for rounding
+        let tolerance = (input_mass / 1000).max(1);
+
+        if actual > expected + tolerance {
+            return Err(TransactionValidationError::ClusterTagInflation(
+                cluster.0,
+                actual,
+                expected,
+            ));
+        }
+    }
+
+    // Check that outputs don't introduce new clusters beyond background
+    for (cluster, &output_mass) in &output_masses {
+        if !input_masses.contains_key(cluster) && output_mass > 0 {
+            // New cluster appeared in outputs that wasn't in inputs
+            // This is only allowed if it came from background (no tags on inputs)
+            // For now, we allow this since background can become attributed
+            // through proportional distribution
+        }
+    }
+
+    Ok(())
+}
+
+/// Configuration for progressive fee computation.
+#[derive(Clone, Debug)]
+pub struct ProgressiveFeeConfig {
+    /// Base fee rate in basis points (applied to background/unattributed value).
+    pub background_rate_bps: u32,
+    /// Maximum fee rate in basis points.
+    pub max_rate_bps: u32,
+    /// Steepness of the fee curve (wealth level at sigmoid midpoint).
+    pub steepness: u64,
+}
+
+impl Default for ProgressiveFeeConfig {
+    fn default() -> Self {
+        Self {
+            background_rate_bps: 10,  // 0.1%
+            max_rate_bps: 1000,       // 10%
+            steepness: 10_000_000,    // 10 million
+        }
+    }
+}
+
+/// Cluster wealth tracker for progressive fee computation.
+pub trait ClusterWealthLookup {
+    /// Get the total wealth attributed to a cluster.
+    fn get_cluster_wealth(&self, cluster_id: ClusterId) -> u64;
+}
+
+/// Compute the progressive fee for a transaction.
+///
+/// The fee is computed as:
+/// fee = transfer_amount * effective_rate
+///
+/// where effective_rate is a weighted average of each cluster's rate,
+/// weighted by the value attributed to that cluster.
+pub fn compute_progressive_fee(
+    input_tx_outs: &[&TxOut],
+    input_values: &[u64],
+    transfer_amount: u64,
+    cluster_wealth: &impl ClusterWealthLookup,
+    fee_config: &ProgressiveFeeConfig,
+) -> u64 {
+    let mut weighted_rate: u128 = 0;
+    let mut total_value: u128 = 0;
+
+    for (tx_out, &value) in input_tx_outs.iter().zip(input_values.iter()) {
+        total_value += value as u128;
+
+        if let Some(tags) = &tx_out.cluster_tags {
+            for entry in &tags.entries {
+                let mass = (value as u128 * entry.weight as u128 / TAG_WEIGHT_SCALE as u128) as u64;
+                let wealth = cluster_wealth.get_cluster_wealth(entry.cluster_id);
+                let rate = compute_cluster_fee_rate(wealth, fee_config);
+                weighted_rate += mass as u128 * rate as u128;
+            }
+
+            // Background portion
+            let background_weight = tags.background_weight();
+            let background_mass =
+                (value as u128 * background_weight as u128 / TAG_WEIGHT_SCALE as u128) as u64;
+            weighted_rate += background_mass as u128 * fee_config.background_rate_bps as u128;
+        } else {
+            // No tags = fully background
+            weighted_rate += value as u128 * fee_config.background_rate_bps as u128;
+        }
+    }
+
+    if total_value == 0 {
+        return 0;
+    }
+
+    let effective_rate = weighted_rate / total_value;
+    (transfer_amount as u128 * effective_rate / 10_000) as u64
+}
+
+/// Compute the fee rate for a cluster based on its wealth.
+/// Uses a sigmoid curve: rate = min + (max - min) * sigmoid(wealth / steepness)
+fn compute_cluster_fee_rate(wealth: u64, config: &ProgressiveFeeConfig) -> u32 {
+    // Sigmoid approximation using rational function
+    let x = wealth as f64 / config.steepness as f64;
+    let sigmoid = x / (1.0 + x);
+
+    let rate_range = config.max_rate_bps - config.background_rate_bps;
+    let rate = config.background_rate_bps as f64 + (rate_range as f64 * sigmoid);
+
+    rate.round() as u32
+}
+
+/// Validate that the declared fee meets the progressive fee requirement.
+pub fn validate_progressive_fee(
+    input_tx_outs: &[&TxOut],
+    input_values: &[u64],
+    declared_fee: u64,
+    transfer_amount: u64,
+    cluster_wealth: &impl ClusterWealthLookup,
+    fee_config: &ProgressiveFeeConfig,
+) -> TransactionValidationResult<()> {
+    let required_fee = compute_progressive_fee(
+        input_tx_outs,
+        input_values,
+        transfer_amount,
+        cluster_wealth,
+        fee_config,
+    );
+
+    if declared_fee < required_fee {
+        return Err(TransactionValidationError::InsufficientProgressiveFee(
+            required_fee,
+            declared_fee,
+        ));
     }
 
     Ok(())

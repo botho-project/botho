@@ -207,7 +207,7 @@ fn mine_loop(
                 header: BlockHeader {
                     version: 1,
                     prev_block_hash: work.prev_block_hash,
-                    tx_root: [0u8; 32], // TODO: compute from transactions
+                    tx_root: [0u8; 32], // No transactions in mined blocks yet
                     timestamp,
                     height: work.height,
                     difficulty: work.difficulty,
@@ -222,6 +222,7 @@ fn mine_loop(
                     recipient_spend_key: miner_spend_key,
                     output_public_key: [0u8; 32], // TODO: generate one-time key
                 },
+                transactions: Vec::new(),
             };
 
             info!(

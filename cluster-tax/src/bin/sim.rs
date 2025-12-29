@@ -823,7 +823,7 @@ mod cli {
         }
 
         // Create whales that use mixers
-        for i in 0..num_whales {
+        for _ in 0..num_whales {
             let id = AgentId(next_id);
             next_id += 1;
 

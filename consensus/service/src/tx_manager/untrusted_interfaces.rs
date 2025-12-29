@@ -1,5 +1,6 @@
 // Copyright (c) 2018-2022 The MobileCoin Foundation
 
+use crate::enclave_stubs::{TxContext, WellFormedTxContext};
 use mc_transaction_core::{
     tx::{TxHash, TxOutMembershipProof},
     validation::TransactionValidationResult,

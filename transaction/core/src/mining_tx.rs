@@ -96,21 +96,43 @@ impl MiningTx {
     /// # Arguments
     /// * `prev_block_hash` - Hash of the previous block (32 bytes)
     /// * `height` - The block height being mined
-    /// * `recipient` - Address to receive the mining reward
+    /// * `recipient_view_key` - Recipient's view public key
+    /// * `recipient_spend_key` - Recipient's spend public key
     /// * `nonce` - Initial nonce value (will be modified during mining)
     pub fn new(
         prev_block_hash: [u8; 32],
         height: u64,
-        recipient: PublicAddress,
+        recipient_view_key: &RistrettoPublic,
+        recipient_spend_key: &RistrettoPublic,
         nonce: u64,
     ) -> Self {
         Self {
             prev_block_hash: prev_block_hash.to_vec(),
             height,
-            recipient,
+            recipient_view_key: CompressedRistrettoPublic::from(recipient_view_key),
+            recipient_spend_key: CompressedRistrettoPublic::from(recipient_spend_key),
             nonce,
             extra: Vec::new(),
             timestamp: 0, // Will be set during mining
+        }
+    }
+
+    /// Create a mining transaction from compressed public keys.
+    pub fn from_compressed(
+        prev_block_hash: [u8; 32],
+        height: u64,
+        recipient_view_key: CompressedRistrettoPublic,
+        recipient_spend_key: CompressedRistrettoPublic,
+        nonce: u64,
+    ) -> Self {
+        Self {
+            prev_block_hash: prev_block_hash.to_vec(),
+            height,
+            recipient_view_key,
+            recipient_spend_key,
+            nonce,
+            extra: Vec::new(),
+            timestamp: 0,
         }
     }
 
@@ -136,8 +158,8 @@ impl MiningTx {
         data.extend_from_slice(&self.height.to_le_bytes());
 
         // Recipient address (view key + spend key = 64 bytes)
-        data.extend_from_slice(self.recipient.view_public_key().as_bytes());
-        data.extend_from_slice(self.recipient.spend_public_key().as_bytes());
+        data.extend_from_slice(self.recipient_view_key.as_bytes());
+        data.extend_from_slice(self.recipient_spend_key.as_bytes());
 
         // Nonce (8 bytes, little-endian)
         data.extend_from_slice(&self.nonce.to_le_bytes());
@@ -165,16 +187,6 @@ impl MiningTx {
     /// Set the extra data field (max 32 bytes).
     pub fn set_extra(&mut self, extra: &[u8]) {
         self.extra = extra.iter().take(32).copied().collect();
-    }
-
-    /// Set the timestamp to the current Unix time.
-    #[cfg(feature = "std")]
-    pub fn set_timestamp_now(&mut self) {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        self.timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
     }
 }
 
@@ -239,6 +251,26 @@ impl DifficultyTarget {
         Self { target }
     }
 
+    /// Create a difficulty target from a 128-bit value.
+    ///
+    /// The value is stored in the lower 128 bits of the 256-bit target.
+    pub fn new(value: u128) -> Self {
+        let mut target = [0u8; 32];
+        // Store value in the lower 16 bytes (big-endian)
+        let value_bytes = value.to_be_bytes();
+        target[16..32].copy_from_slice(&value_bytes);
+        Self { target }
+    }
+
+    /// Get the difficulty value as a 128-bit unsigned integer.
+    ///
+    /// Returns the lower 128 bits of the target value.
+    pub fn value(&self) -> u128 {
+        let mut bytes = [0u8; 16];
+        bytes.copy_from_slice(&self.target[16..32]);
+        u128::from_be_bytes(bytes)
+    }
+
     /// Check if a hash meets this difficulty target.
     ///
     /// The hash (interpreted as a big-endian 256-bit number) must be
@@ -274,7 +306,13 @@ mod tests {
         let recipient = account.default_subaddress();
         let prev_hash = [0u8; 32];
 
-        let mining_tx = MiningTx::new(prev_hash, 100, recipient, 0);
+        let mining_tx = MiningTx::new(
+            prev_hash,
+            100,
+            recipient.view_public_key(),
+            recipient.spend_public_key(),
+            0,
+        );
 
         assert_eq!(mining_tx.height, 100);
         assert_eq!(mining_tx.nonce, 0);
@@ -287,7 +325,13 @@ mod tests {
         let recipient = account.default_subaddress();
         let prev_hash = [0u8; 32];
 
-        let mining_tx = MiningTx::new(prev_hash, 0, recipient, 0);
+        let mining_tx = MiningTx::new(
+            prev_hash,
+            0,
+            recipient.view_public_key(),
+            recipient.spend_public_key(),
+            0,
+        );
 
         // First block should have initial reward
         assert_eq!(mining_tx.reward_amount(), crate::emission::INITIAL_REWARD);
@@ -299,7 +343,13 @@ mod tests {
         let recipient = account.default_subaddress();
         let prev_hash = [42u8; 32];
 
-        let mut mining_tx = MiningTx::new(prev_hash, 100, recipient.clone(), 12345);
+        let mut mining_tx = MiningTx::new(
+            prev_hash,
+            100,
+            recipient.view_public_key(),
+            recipient.spend_public_key(),
+            12345,
+        );
         mining_tx.timestamp = 1700000000;
 
         let input1 = mining_tx.to_pow_input();
@@ -329,7 +379,13 @@ mod tests {
     fn test_extra_data_limit() {
         let account = test_account();
         let recipient = account.default_subaddress();
-        let mut mining_tx = MiningTx::new([0u8; 32], 0, recipient, 0);
+        let mut mining_tx = MiningTx::new(
+            [0u8; 32],
+            0,
+            recipient.view_public_key(),
+            recipient.spend_public_key(),
+            0,
+        );
 
         // Set extra data longer than 32 bytes
         let long_extra = [0xABu8; 100];

@@ -2,6 +2,8 @@ use mc_account_keys::PublicAddress;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::transaction::Transaction;
+
 /// Block header containing PoW fields
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlockHeader {
@@ -82,8 +84,8 @@ impl BlockHeader {
     }
 }
 
-/// A mining reward transaction (coinbase)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A mining reward transaction (coinbase) with PoW proof
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct MiningTx {
     /// Block height this reward is for
     pub block_height: u64,
@@ -99,6 +101,60 @@ pub struct MiningTx {
 
     /// One-time output public key (for privacy)
     pub output_public_key: [u8; 32],
+
+    // PoW proof fields
+    /// Previous block hash this mining tx builds on
+    pub prev_block_hash: [u8; 32],
+
+    /// Difficulty target at time of mining
+    pub difficulty: u64,
+
+    /// PoW nonce (the solution)
+    pub nonce: u64,
+
+    /// Timestamp when mined
+    pub timestamp: u64,
+}
+
+impl MiningTx {
+    /// Compute the PoW hash
+    pub fn pow_hash(&self) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(self.nonce.to_le_bytes());
+        hasher.update(self.prev_block_hash);
+        hasher.update(self.recipient_view_key);
+        hasher.update(self.recipient_spend_key);
+        hasher.finalize().into()
+    }
+
+    /// Verify the PoW is valid
+    pub fn verify_pow(&self) -> bool {
+        let hash = self.pow_hash();
+        let hash_value = u64::from_be_bytes(hash[0..8].try_into().unwrap());
+        hash_value < self.difficulty
+    }
+
+    /// Get the PoW hash value as u64 (lower = better, used for priority in consensus)
+    pub fn pow_priority(&self) -> u64 {
+        let hash = self.pow_hash();
+        // Invert so that lower hash = higher priority
+        u64::MAX - u64::from_be_bytes(hash[0..8].try_into().unwrap())
+    }
+
+    /// Compute the hash of this mining transaction (for consensus)
+    pub fn hash(&self) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(self.block_height.to_le_bytes());
+        hasher.update(self.reward.to_le_bytes());
+        hasher.update(self.recipient_view_key);
+        hasher.update(self.recipient_spend_key);
+        hasher.update(self.output_public_key);
+        hasher.update(self.prev_block_hash);
+        hasher.update(self.difficulty.to_le_bytes());
+        hasher.update(self.nonce.to_le_bytes());
+        hasher.update(self.timestamp.to_le_bytes());
+        hasher.finalize().into()
+    }
 }
 
 /// A complete block
@@ -106,8 +162,8 @@ pub struct MiningTx {
 pub struct Block {
     pub header: BlockHeader,
     pub mining_tx: MiningTx,
-    // TODO: Add regular transactions
-    // pub transactions: Vec<Transaction>,
+    /// Regular transactions included in this block
+    pub transactions: Vec<Transaction>,
 }
 
 impl Block {
@@ -122,6 +178,7 @@ impl Block {
                 recipient_spend_key: [0u8; 32],
                 output_public_key: [0u8; 32],
             },
+            transactions: Vec::new(),
         }
     }
 
@@ -135,12 +192,23 @@ impl Block {
         self.header.height
     }
 
-    /// Create a new block template for mining
+    /// Create a new block template for mining (without transactions)
     pub fn new_template(
         prev_block: &Block,
         miner_address: &PublicAddress,
         difficulty: u64,
         reward: u64,
+    ) -> Self {
+        Self::new_template_with_txs(prev_block, miner_address, difficulty, reward, Vec::new())
+    }
+
+    /// Create a new block template for mining with transactions
+    pub fn new_template_with_txs(
+        prev_block: &Block,
+        miner_address: &PublicAddress,
+        difficulty: u64,
+        reward: u64,
+        transactions: Vec<Transaction>,
     ) -> Self {
         let prev_hash = prev_block.hash();
         let timestamp = std::time::SystemTime::now()
@@ -151,11 +219,14 @@ impl Block {
         let miner_view_key = miner_address.view_public_key().to_bytes();
         let miner_spend_key = miner_address.spend_public_key().to_bytes();
 
+        // Compute transaction root from all transactions
+        let tx_root = Self::compute_tx_root(&transactions);
+
         Self {
             header: BlockHeader {
                 version: 1,
                 prev_block_hash: prev_hash,
-                tx_root: [0u8; 32], // TODO: compute from transactions
+                tx_root,
                 timestamp,
                 height: prev_block.height() + 1,
                 difficulty,
@@ -170,7 +241,26 @@ impl Block {
                 recipient_spend_key: miner_spend_key,
                 output_public_key: [0u8; 32], // TODO: generate one-time key
             },
+            transactions,
         }
+    }
+
+    /// Compute merkle root of transactions
+    fn compute_tx_root(transactions: &[Transaction]) -> [u8; 32] {
+        if transactions.is_empty() {
+            return [0u8; 32];
+        }
+
+        let mut hasher = Sha256::new();
+        for tx in transactions {
+            hasher.update(tx.hash());
+        }
+        hasher.finalize().into()
+    }
+
+    /// Get total fees from all transactions
+    pub fn total_fees(&self) -> u64 {
+        self.transactions.iter().map(|tx| tx.fee).sum()
     }
 }
 

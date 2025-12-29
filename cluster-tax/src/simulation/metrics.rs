@@ -203,11 +203,11 @@ pub fn calculate_gini(wealths: &[u64]) -> f64 {
 }
 
 /// Calculate Shannon entropy of tag distribution.
-pub fn calculate_tag_entropy(tags: &TagVector, cluster_wealth: &ClusterWealth) -> f64 {
+pub fn calculate_tag_entropy(tags: &TagVector, _cluster_wealth: &ClusterWealth) -> f64 {
     let mut entropy = 0.0;
 
     // Entropy of the tag vector itself
-    for (cluster, weight) in tags.iter() {
+    for (_cluster, weight) in tags.iter() {
         if weight > 0 {
             let p = weight as f64 / TAG_WEIGHT_SCALE as f64;
             if p > 0.0 {
@@ -314,7 +314,7 @@ pub fn snapshot_metrics(
     total_fees: u64,
     transaction_count: u64,
     mixer_volume: u64,
-    fee_curve: &FeeCurve,
+    _fee_curve: &FeeCurve,
 ) -> Metrics {
     let wealths: Vec<u64> = agent_data.iter().map(|(_, b, _, _)| *b).collect();
     let total_wealth: u64 = wealths.iter().sum();
@@ -413,6 +413,7 @@ mod tests {
         let (top_1, top_10) = calculate_concentration(&wealths);
 
         assert!(top_1 > 0.8, "Top 1% should have most wealth: {top_1}");
-        assert!(top_10 > 0.9, "Top 10% should have almost all: {top_10}");
+        // With 5 agents, top 10% is 1 agent (ceiling), which holds 90/100 = 0.9
+        assert!(top_10 >= 0.9, "Top 10% should have almost all: {top_10}");
     }
 }

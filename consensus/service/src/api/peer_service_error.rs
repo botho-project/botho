@@ -1,3 +1,4 @@
+use crate::enclave_stubs::Error as EnclaveError;
 use displaydoc::Display;
 use mc_transaction_core::tx::TxHash;
 
@@ -14,7 +15,7 @@ pub enum PeerServiceError {
     UnknownTransactions(Vec<TxHash>),
 
     /// Enclave-related error `{0}`.
-    Enclave(mc_consensus_enclave::Error),
+    Enclave(EnclaveError),
 
     /// Something went wrong...
     InternalError,

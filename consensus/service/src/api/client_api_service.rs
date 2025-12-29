@@ -6,6 +6,7 @@ use crate::{
     api::grpc_error::ConsensusGrpcError,
     consensus_service::ProposeTxCallback,
     counters,
+    enclave_stubs::{ClientSession, ConsensusEnclave, EnclaveMessage},
     mint_tx_manager::MintTxManager,
     tx_manager::{TxManager, TxManagerError},
     SVC_COUNTERS,

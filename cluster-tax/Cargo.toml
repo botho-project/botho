@@ -10,6 +10,11 @@ name = "cluster-tax-sim"
 path = "src/bin/sim.rs"
 
 [dependencies]
+# Cryptographic primitives for committed tags
+curve25519-dalek = { workspace = true, features = ["alloc", "rand_core", "digest"] }
+sha2 = { workspace = true }
+rand_core = { workspace = true }
+
 # Serialization (optional for now)
 serde = { workspace = true, features = ["derive"], optional = true }
 # For CLI
@@ -18,6 +23,7 @@ clap = { workspace = true, features = ["derive"], optional = true }
 rand = { workspace = true, features = ["std", "std_rng"], optional = true }
 
 [dev-dependencies]
+rand_core = { workspace = true, features = ["getrandom"] }
 
 [features]
 default = []

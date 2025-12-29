@@ -26,7 +26,9 @@ mc-core = { path = "../core" }
 # Networking & Consensus
 mc-gossip = { path = "../gossip" }
 mc-common = { path = "../common", features = ["std"] }
+mc-consensus-scp = { path = "../consensus/scp" }
 mc-consensus-scp-types = { path = "../consensus/scp/types" }
+mc-crypto-digestible = { path = "../crypto/digestible" }
 libp2p = { version = "0.54", features = ["tokio"] }
 futures = "0.3"
 bip39 = { package = "tiny-bip39", version = "1" }

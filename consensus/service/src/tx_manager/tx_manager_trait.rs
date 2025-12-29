@@ -1,6 +1,9 @@
 // Copyright (c) 2018-2022 The MobileCoin Foundation
 
-use crate::tx_manager::TxManagerResult;
+use crate::{
+    enclave_stubs::{EnclaveMessage, PeerSession, TxContext, WellFormedEncryptedTx},
+    tx_manager::TxManagerResult,
+};
 use mc_common::HashSet;
 use mc_transaction_core::tx::{TxHash, TxOutMembershipProof};
 

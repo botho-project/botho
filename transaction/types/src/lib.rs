@@ -18,6 +18,10 @@ pub use crate::{
 };
 #[cfg(feature = "alloc")]
 pub use crate::{
+    cluster_tags::{
+        ClusterId, ClusterTagEntry, ClusterTagVector, MAX_CLUSTER_TAGS, MIN_STORED_WEIGHT,
+        TAG_WEIGHT_SCALE,
+    },
     masked_amount::{MaskedAmount, MaskedAmountV1, MaskedAmountV2},
     tx_summary::{TxInSummary, TxOutSummary, TxSummary},
 };
@@ -29,6 +33,8 @@ pub mod proptest_fixtures;
 
 mod amount;
 mod block_version;
+#[cfg(feature = "alloc")]
+mod cluster_tags;
 #[cfg(feature = "alloc")]
 mod masked_amount;
 mod token;

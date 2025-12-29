@@ -23,8 +23,8 @@ use mc_transaction_core::{
     ring_signature::Scalar,
     tokens::Mob,
     tx::{Tx, TxIn, TxOut},
-    Amount, BlockVersion, FeeMap, MemoContext, MemoPayload, NewMemoError, RevealedTxOut,
-    RevealedTxOutError, Token, TokenId,
+    Amount, BlockVersion, ClusterTagVector, FeeMap, MemoContext, MemoPayload, NewMemoError,
+    RevealedTxOut, RevealedTxOutError, Token, TokenId,
 };
 use mc_transaction_extra::{
     SignedContingentInput, SignedContingentInputError, TxOutConfirmationNumber, UnsignedTx,
@@ -86,6 +86,10 @@ pub struct TransactionBuilder {
     fee: Amount,
     /// The minimum fee map, if available.
     fee_map: Option<FeeMap>,
+    /// Cluster tag decay rate for inheritance computation.
+    /// Expressed as parts per TAG_WEIGHT_SCALE (1_000_000 = 100% decay).
+    /// Default is 0 (no decay).
+    cluster_tag_decay_rate: u32,
 }
 
 impl TransactionBuilder {
@@ -109,6 +113,7 @@ impl TransactionBuilder {
             input_materials: Vec::new(),
             outputs: Vec::new(),
             tombstone_block: u64::MAX,
+            cluster_tag_decay_rate: 0,
         })
     }
 
@@ -629,6 +634,19 @@ impl TransactionBuilder {
         self.fee_map = Some(fee_map);
     }
 
+    /// Sets the cluster tag decay rate for tag inheritance.
+    ///
+    /// When outputs inherit cluster tags from inputs, the weights are
+    /// multiplied by (1 - decay_rate/TAG_WEIGHT_SCALE). A decay rate of
+    /// 100_000 (10%) means tags lose 10% of their weight per transaction.
+    ///
+    /// # Arguments
+    /// * `decay_rate` - Decay rate in parts per million (0 = no decay,
+    ///   1_000_000 = full decay)
+    pub fn set_cluster_tag_decay_rate(&mut self, decay_rate: u32) {
+        self.cluster_tag_decay_rate = decay_rate;
+    }
+
     /// Return blueprint that together with a memo builder can be used to
     /// produce an unsigned tx.
     pub fn build_blueprint(mut self) -> Result<TxBlueprint, TxBuilderError> {
@@ -697,6 +715,32 @@ impl TransactionBuilder {
         self.input_materials
             .sort_by(|a, b| a.sort_key().cmp(b.sort_key()));
 
+        // Compute inherited cluster tags if block version supports them
+        let cluster_tags = if self.block_version.cluster_tags_are_supported() {
+            // Collect (tags, value) pairs from all inputs that have cluster tags
+            let input_tags: Vec<(ClusterTagVector, u64)> = self
+                .input_materials
+                .iter()
+                .filter_map(|input| {
+                    input
+                        .cluster_tags()
+                        .map(|tags| (tags.clone(), input.amount().value))
+                })
+                .collect();
+
+            if input_tags.is_empty() {
+                // No inputs have tags, outputs get empty tags
+                Some(ClusterTagVector::empty())
+            } else {
+                Some(ClusterTagVector::merge_weighted(
+                    &input_tags,
+                    self.cluster_tag_decay_rate,
+                ))
+            }
+        } else {
+            None
+        };
+
         let inputs: Vec<TxIn> = self.input_materials.iter().map(TxIn::from).collect();
 
         let rings = self
@@ -712,6 +756,7 @@ impl TransactionBuilder {
             fee: self.fee,
             tombstone_block: self.tombstone_block,
             block_version: self.block_version,
+            cluster_tags,
         })
     }
 
@@ -846,7 +891,6 @@ pub mod transaction_builder_tests {
         onetime_keys::*,
         ring_signature::KeyImage,
         subaddress_matches_tx_out,
-        tx::TxOutMembershipProof,
         validation::{validate_signature, validate_tx_out},
         NewTxError,
     };
@@ -1041,7 +1085,7 @@ pub mod transaction_builder_tests {
             let amount = Amount { value, token_id };
 
             let input_credentials =
-                get_input_credentials(block_version, amount, &sender, &fog_resolver, &mut rng);
+                get_input_credentials(block_version, amount, &sender, &mut rng);
 
             let membership_proofs = input_credentials.membership_proofs.clone();
             let key_image = KeyImage::from(input_credentials.assert_has_onetime_private_key());
@@ -2714,7 +2758,7 @@ pub mod transaction_builder_tests {
         let change_destination = ReservedSubaddresses::from(&sender);
 
         let transaction_builder =
-            single_input_transaction_builder(block_version, token_id, 500, &fog_resolver, &mut rng);
+            single_input_transaction_builder(block_version, token_id, 500, &mut rng);
 
         // Adding an output that is not to the burn address is not allowed.
         {
@@ -2992,11 +3036,11 @@ pub mod transaction_builder_tests {
             .unwrap();
 
             let input_credentials =
-                get_input_credentials(block_version, amount1, &sender, &fog_resolver, &mut rng);
+                get_input_credentials(block_version, amount1, &sender, &mut rng);
             transaction_builder.add_input(input_credentials);
 
             let input_credentials =
-                get_input_credentials(block_version, amount2, &sender, &fog_resolver, &mut rng);
+                get_input_credentials(block_version, amount2, &sender, &mut rng);
             transaction_builder.add_input(input_credentials);
 
             let tx_out_context1 = transaction_builder
@@ -3122,11 +3166,11 @@ pub mod transaction_builder_tests {
             .unwrap();
 
             let input_credentials =
-                get_input_credentials(block_version, amount1, &sender, &fog_resolver, &mut rng);
+                get_input_credentials(block_version, amount1, &sender, &mut rng);
             transaction_builder.add_input(input_credentials);
 
             let input_credentials =
-                get_input_credentials(block_version, amount2, &sender, &fog_resolver, &mut rng);
+                get_input_credentials(block_version, amount2, &sender, &mut rng);
             transaction_builder.add_input(input_credentials);
 
             transaction_builder

@@ -196,11 +196,7 @@ impl Operations {
 
         let resp = TxSignResp {
             account_id: req.account_id,
-            tx: Tx {
-                prefix,
-                signature,
-                fee_map_digest: vec![],
-            },
+            tx: Tx { prefix, signature },
             txos,
         };
 

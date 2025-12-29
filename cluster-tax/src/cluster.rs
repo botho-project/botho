@@ -6,7 +6,7 @@ use std::collections::HashMap;
 ///
 /// Each coin-creation event (mining reward, initial distribution) spawns a new
 /// cluster. The ID is typically derived from the hash of the originating transaction.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ClusterId(pub u64);
 

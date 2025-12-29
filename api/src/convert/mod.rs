@@ -20,6 +20,7 @@ mod block_signature;
 // external
 mod account_key;
 mod amount;
+mod cluster_tags;
 // mod collateral; // Removed: SGX-related
 mod compressed_ristretto;
 mod curve_scalar;

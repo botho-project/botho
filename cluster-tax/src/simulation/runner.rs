@@ -2,10 +2,9 @@
 
 use std::collections::HashMap;
 
-use crate::{execute_transfer, mint, ClusterId, ClusterWealth, FeeCurve, TransferConfig};
+use crate::{execute_transfer, ClusterWealth, FeeCurve, TransferConfig};
 
 use super::agent::{Action, Agent, AgentId};
-use super::agents::MixerServiceAgent;
 use super::metrics::{snapshot_metrics, Metrics, SimulationMetrics};
 use super::state::SimulationState;
 
@@ -114,7 +113,7 @@ pub fn run_simulation(
         }
 
         // Build agent lookup for execution
-        let mut agent_map: HashMap<AgentId, usize> = agents
+        let agent_map: HashMap<AgentId, usize> = agents
             .iter()
             .enumerate()
             .map(|(i, a)| (a.id(), i))

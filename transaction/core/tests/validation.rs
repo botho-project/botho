@@ -13,15 +13,10 @@ use crate::util::{
 };
 use mc_account_keys::AccountKey;
 use mc_crypto_keys::{CompressedRistrettoPublic, ReprBytes};
-use mc_ledger_db::{
-    test_utils::{InverseTxOutputsOrdering, INITIALIZE_LEDGER_AMOUNT},
-    Ledger,
-};
+use mc_ledger_db::test_utils::{InverseTxOutputsOrdering, INITIALIZE_LEDGER_AMOUNT};
 use mc_transaction_core::{
     constants::{MAX_TOMBSTONE_BLOCKS, RING_SIZE},
-    membership_proofs::Range,
     tokens::Mob,
-    tx::{TxOutMembershipHash, TxOutMembershipProof},
     validation::*,
     BlockVersion, InputRules, Token,
 };
@@ -120,89 +115,9 @@ fn test_validate_no_masked_token_id_exists() {
     );
 }
 
-#[test]
-// Should return Ok(()) when the Tx's membership proofs are correct and agree
-// with ledger.
-fn test_validate_membership_proofs() {
-    for block_version in BlockVersion::iterator() {
-        let (tx, ledger) = create_test_tx(block_version);
-
-        let highest_indices = tx.get_membership_proof_highest_indices();
-        let root_proofs: Vec<TxOutMembershipProof> = ledger
-            .get_tx_out_proof_of_memberships(&highest_indices)
-            .expect("failed getting proofs");
-
-        // Validate the transaction prefix without providing the correct ledger context.
-        {
-            let mut broken_proofs = root_proofs.clone();
-            broken_proofs[0].elements[0].hash = TxOutMembershipHash::from([1u8; 32]);
-            assert_eq!(
-                validate_membership_proofs(&tx.prefix, &broken_proofs),
-                Err(TransactionValidationError::InvalidTxOutMembershipProof)
-            );
-        }
-
-        // Validate the transaction prefix with the correct root proofs.
-        {
-            let highest_indices = tx.get_membership_proof_highest_indices();
-            let root_proofs: Vec<TxOutMembershipProof> = ledger
-                .get_tx_out_proof_of_memberships(&highest_indices)
-                .expect("failed getting proofs");
-            assert_eq!(validate_membership_proofs(&tx.prefix, &root_proofs), Ok(()));
-        }
-    }
-}
-
-#[test]
-// Should return InvalidRangeProof if a membership proof containing an invalid
-// Range.
-fn test_validate_membership_proofs_invalid_range_in_tx() {
-    for block_version in BlockVersion::iterator() {
-        let (mut tx, ledger) = create_test_tx(block_version);
-
-        let highest_indices = tx.get_membership_proof_highest_indices();
-        let root_proofs: Vec<TxOutMembershipProof> = ledger
-            .get_tx_out_proof_of_memberships(&highest_indices)
-            .expect("failed getting proofs");
-
-        // Modify tx to include an invalid Range.
-        let mut proof = tx.prefix.inputs[0].proofs[0].clone();
-        let mut first_element = proof.elements[0].clone();
-        first_element.range = Range { from: 7, to: 3 };
-        proof.elements[0] = first_element;
-        tx.prefix.inputs[0].proofs[0] = proof;
-
-        assert_eq!(
-            validate_membership_proofs(&tx.prefix, &root_proofs),
-            Err(TransactionValidationError::MembershipProofValidationError)
-        );
-    }
-}
-
-#[test]
-// Should return InvalidRangeProof if a root proof containing an invalid Range.
-fn test_validate_membership_proofs_invalid_range_in_root_proof() {
-    for block_version in BlockVersion::iterator() {
-        let (tx, ledger) = create_test_tx(block_version);
-
-        let highest_indices = tx.get_membership_proof_highest_indices();
-        let mut root_proofs: Vec<TxOutMembershipProof> = ledger
-            .get_tx_out_proof_of_memberships(&highest_indices)
-            .expect("failed getting proofs");
-
-        // Modify a root proof to include an invalid Range.
-        let mut proof = root_proofs[0].clone();
-        let mut first_element = proof.elements[0].clone();
-        first_element.range = Range { from: 7, to: 3 };
-        proof.elements[0] = first_element;
-        root_proofs[0] = proof;
-
-        assert_eq!(
-            validate_membership_proofs(&tx.prefix, &root_proofs),
-            Err(TransactionValidationError::MembershipProofValidationError)
-        );
-    }
-}
+// NOTE: Membership proof tests were removed as part of the Cadence fork.
+// Cadence does not use merkle membership proofs - ring members are validated
+// directly against the UTXO set.
 
 #[test]
 // Test that validate_number_of_inputs is working as expected
@@ -773,7 +688,7 @@ fn test_validate_tombstone_tombstone_block_too_far() {
     }
 }
 
-// sense
+// Test that validation correctly handles sorted/unsorted outputs based on block version
 #[test]
 fn test_global_validate_for_blocks_with_sorted_outputs() {
     let mut rng = get_seeded_rng();
@@ -791,7 +706,7 @@ fn test_global_validate_for_blocks_with_sorted_outputs() {
     for block_version in BlockVersion::iterator() {
         // for block version < 3 it doesn't matter
         // for >= 3 it shall return an error about unsorted outputs
-        let (tx, ledger) =
+        let (tx, _ledger) =
             create_test_tx_with_amount_and_comparer_and_recipients::<InverseTxOutputsOrdering>(
                 block_version,
                 INITIALIZE_LEDGER_AMOUNT - fee,
@@ -799,16 +714,10 @@ fn test_global_validate_for_blocks_with_sorted_outputs() {
                 &recipients_refs,
             );
 
-        let highest_indices = tx.get_membership_proof_highest_indices();
-        let root_proofs: Vec<TxOutMembershipProof> = ledger
-            .get_tx_out_proof_of_memberships(&highest_indices)
-            .expect("failed getting proofs");
-
         let result = validate(
             &tx,
             tx.prefix.tombstone_block - 1,
             block_version,
-            &root_proofs,
             0,
             &mut rng,
         );

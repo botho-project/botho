@@ -1,8 +1,13 @@
 // Copyright (c) 2018-2022 The MobileCoin Foundation
 
 //! Serves node-to-node attested gRPC requests.
+//!
+//! Note: With SGX removed, this service is a stub that accepts all sessions.
 
-use crate::SVC_COUNTERS;
+use crate::{
+    enclave_stubs::{AttestedApi, AuthMessage, ClientSession, ConsensusEnclave, PeerSession, Session},
+    SVC_COUNTERS,
+};
 use grpcio::{RpcContext, UnarySink};
 use mc_common::{
     logger::{log, Logger},

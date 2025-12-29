@@ -16,7 +16,7 @@ use mc_transaction_core::{
 };
 use mc_transaction_extra::UnsignedTx;
 use mc_transaction_summary::TxOutSummaryUnblindingData;
-use mc_transaction_types::{Amount, BlockVersion, UnmaskedAmount};
+use mc_transaction_types::{Amount, BlockVersion, ClusterTagVector, UnmaskedAmount};
 use rand::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 
@@ -90,6 +90,10 @@ pub struct TxBlueprint {
 
     /// Block version
     pub block_version: BlockVersion,
+
+    /// Inherited cluster tags for outputs (computed from input tags).
+    /// Only set when block version supports cluster tags.
+    pub cluster_tags: Option<ClusterTagVector>,
 }
 
 impl TxBlueprint {
@@ -165,6 +169,7 @@ fn build_output(
             e_fog_hint,
             |memo_ctxt| mb.make_memo_for_output(amount, &recipient, memo_ctxt),
             tx_private_key,
+            unsigned_tx.cluster_tags.as_ref(),
         )?,
 
         TxBlueprintOutput::Change {
@@ -179,6 +184,7 @@ fn build_output(
             e_fog_hint,
             |memo_ctxt| mb.make_memo_for_change_output(amount, &change_destination, memo_ctxt),
             tx_private_key,
+            unsigned_tx.cluster_tags.as_ref(),
         )?,
 
         TxBlueprintOutput::Sci {
@@ -214,8 +220,9 @@ fn build_standard_output(
     e_fog_hint: EncryptedFogHint,
     memo_fn: impl FnOnce(MemoContext) -> Result<MemoPayload, NewMemoError>,
     tx_private_key: RistrettoPrivate,
+    cluster_tags: Option<&ClusterTagVector>,
 ) -> Result<(TxOut, TxOutSummaryUnblindingData), TxBuilderError> {
-    let (tx_out, shared_secret) = create_output_with_fog_hint(
+    let (mut tx_out, shared_secret) = create_output_with_fog_hint(
         block_version,
         amount,
         recipient,
@@ -223,6 +230,13 @@ fn build_standard_output(
         memo_fn,
         &tx_private_key,
     )?;
+
+    // Apply cluster tags if provided and block version supports them
+    if let Some(tags) = cluster_tags {
+        if block_version.cluster_tags_are_supported() {
+            tx_out.cluster_tags = Some(tags.clone());
+        }
+    }
 
     let (amount, blinding) = tx_out
         .get_masked_amount()

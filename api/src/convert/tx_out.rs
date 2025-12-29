@@ -19,6 +19,7 @@ impl From<&tx::TxOut> for external::TxOut {
                 data: AsRef::<[u8]>::as_ref(m).to_vec(),
             }),
             masked_amount: source.masked_amount.as_ref().map(Into::into),
+            cluster_tags: source.cluster_tags.as_ref().map(Into::into),
         }
     }
 }
@@ -75,12 +76,19 @@ impl TryFrom<&external::TxOut> for tx::TxOut {
             })
             .transpose()?;
 
+        let cluster_tags = source
+            .cluster_tags
+            .as_ref()
+            .map(|ct| ct.try_into())
+            .transpose()?;
+
         let tx_out = tx::TxOut {
             masked_amount,
             target_key,
             public_key,
             e_fog_hint,
             e_memo,
+            cluster_tags,
         };
         Ok(tx_out)
     }

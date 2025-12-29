@@ -22,6 +22,7 @@ mc-blockchain-test-utils = { workspace = true, optional = true }
 mc-blockchain-types = { workspace = true }
 mc-common = { workspace = true, features = ["log"] }
 mc-crypto-keys = { workspace = true }
+mc-crypto-ring-signature-signer = { workspace = true }
 mc-transaction-builder = { workspace = true }
 mc-transaction-core = { workspace = true }
 mc-transaction-core-test-utils = { workspace = true, optional = true }

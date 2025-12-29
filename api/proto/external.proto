@@ -205,6 +205,29 @@ message EncryptedMemo {
     bytes data = 1;
 }
 
+// A cluster identifier for progressive transaction fees.
+// Clusters are lineage markers assigned when coins are minted,
+// and propagate through the transaction graph with decay.
+message ClusterId {
+    fixed64 id = 1;
+}
+
+// A single cluster tag entry: cluster ID and weight.
+message ClusterTagEntry {
+    ClusterId cluster_id = 1;
+    // Weight in parts per million (1,000,000 = 100%)
+    fixed32 weight = 2;
+}
+
+// Cluster tag vector for progressive transaction fees.
+// Tracks what fraction of a TxOut's value traces back to each cluster origin.
+// Only present from block version 5 onwards.
+message ClusterTagVector {
+    // List of cluster tag entries, sorted by weight descending.
+    // Maximum of 16 entries.
+    repeated ClusterTagEntry entries = 1;
+}
+
 // A Transaction Output.
 message TxOut {
     // Masked Amount.
@@ -230,6 +253,11 @@ message TxOut {
 
     // Encrypted memo
     EncryptedMemo e_memo = 5;
+
+    // Cluster tag vector for progressive transaction fees.
+    // Tracks coin ancestry for fee rate determination.
+    // Only present from block version 5 onwards.
+    ClusterTagVector cluster_tags = 7;
 }
 
 message TxIn {

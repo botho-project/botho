@@ -62,15 +62,10 @@ impl UnsignedTx {
             signer,
             rng,
         )?;
-        let fee_map_digest = fee_map
-            .map(|fm| fm.canonical_digest().to_vec())
-            .unwrap_or_default();
+        // Note: fee_map is no longer used for fee_map_digest (removed with SGX)
+        let _ = fee_map;
 
-        Ok(Tx {
-            prefix,
-            signature,
-            fee_map_digest,
-        })
+        Ok(Tx { prefix, signature })
     }
 
     /// Get prepared (but unsigned) ringct bulletproofs which can be signed

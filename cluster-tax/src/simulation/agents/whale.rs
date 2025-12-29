@@ -1,6 +1,6 @@
 //! Whale agent: Large holder that may attempt fee minimization strategies.
 
-use crate::simulation::agent::{Action, ActionResult, Agent, AgentId};
+use crate::simulation::agent::{Action, Agent, AgentId};
 use crate::simulation::state::SimulationState;
 use crate::tag::TagVector;
 use crate::Account;
@@ -41,7 +41,7 @@ pub struct WhaleAgent {
 
 impl WhaleAgent {
     /// Create a new whale agent.
-    pub fn new(id: AgentId, initial_balance: u64, strategy: WhaleStrategy) -> Self {
+    pub fn new(id: AgentId, _initial_balance: u64, strategy: WhaleStrategy) -> Self {
         Self {
             account: Account::new(id.0),
             strategy,

@@ -1,10 +1,12 @@
-use lmdb::{Database, Environment, EnvironmentFlags, Transaction, WriteFlags};
+use lmdb::{Cursor, Database, Environment, EnvironmentFlags, Transaction, WriteFlags};
+use mc_account_keys::PublicAddress;
 use std::fs;
 use std::path::Path;
-use tracing::info;
+use tracing::{debug, info};
 
 use super::{ChainState, LedgerError};
 use crate::block::Block;
+use crate::transaction::{TxOutput, Utxo, UtxoId};
 
 /// LMDB-backed ledger storage
 pub struct Ledger {
@@ -13,6 +15,8 @@ pub struct Ledger {
     blocks_db: Database,
     /// metadata: key -> value (for chain state)
     meta_db: Database,
+    /// utxos: UtxoId (36 bytes) -> Utxo
+    utxo_db: Database,
 }
 
 // Metadata keys (fixed size for LMDB compatibility)
@@ -31,17 +35,19 @@ impl Ledger {
 
         let env = Environment::new()
             .set_flags(EnvironmentFlags::NO_SUB_DIR)
-            .set_max_dbs(2)
+            .set_max_dbs(3)
             .set_map_size(1024 * 1024 * 1024) // 1GB
             .open(path.join("ledger.mdb").as_ref())?;
 
         let blocks_db = env.create_db(Some("blocks"), lmdb::DatabaseFlags::empty())?;
         let meta_db = env.create_db(Some("meta"), lmdb::DatabaseFlags::empty())?;
+        let utxo_db = env.create_db(Some("utxos"), lmdb::DatabaseFlags::empty())?;
 
         let ledger = Self {
             env,
             blocks_db,
             meta_db,
+            utxo_db,
         };
 
         // Initialize with genesis if empty
@@ -183,6 +189,62 @@ impl Ledger {
         let new_height = block.height();
         let new_total_mined = state.total_mined + block.mining_tx.reward;
 
+        // Create UTXO from mining reward (coinbase)
+        // Use block hash as the "tx_hash" for mining rewards
+        let coinbase_utxo_id = UtxoId::new(new_hash, 0);
+        let coinbase_utxo = Utxo {
+            id: coinbase_utxo_id,
+            output: TxOutput {
+                amount: block.mining_tx.reward,
+                recipient_view_key: block.mining_tx.recipient_view_key,
+                recipient_spend_key: block.mining_tx.recipient_spend_key,
+                output_public_key: block.mining_tx.output_public_key,
+            },
+            created_at: new_height,
+        };
+        let coinbase_bytes = bincode::serialize(&coinbase_utxo)
+            .map_err(|e| LedgerError::Serialization(e.to_string()))?;
+        txn.put(
+            self.utxo_db,
+            &coinbase_utxo_id.to_bytes(),
+            &coinbase_bytes,
+            WriteFlags::empty(),
+        )?;
+        debug!("Created coinbase UTXO at height {}", new_height);
+
+        // Process regular transactions
+        for tx in &block.transactions {
+            let tx_hash = tx.hash();
+
+            // Remove spent UTXOs (inputs)
+            for input in &tx.inputs {
+                let spent_id = UtxoId::new(input.tx_hash, input.output_index);
+                if let Err(lmdb::Error::NotFound) = txn.del(self.utxo_db, &spent_id.to_bytes(), None) {
+                    // UTXO not found - this is a validation error
+                    // For now, log and continue (validation should catch this earlier)
+                    debug!("Warning: UTXO not found when spending");
+                }
+            }
+
+            // Add new UTXOs (outputs)
+            for (idx, output) in tx.outputs.iter().enumerate() {
+                let utxo_id = UtxoId::new(tx_hash, idx as u32);
+                let utxo = Utxo {
+                    id: utxo_id,
+                    output: output.clone(),
+                    created_at: new_height,
+                };
+                let utxo_bytes = bincode::serialize(&utxo)
+                    .map_err(|e| LedgerError::Serialization(e.to_string()))?;
+                txn.put(
+                    self.utxo_db,
+                    &utxo_id.to_bytes(),
+                    &utxo_bytes,
+                    WriteFlags::empty(),
+                )?;
+            }
+        }
+
         txn.put(
             self.meta_db,
             META_HEIGHT,
@@ -200,9 +262,10 @@ impl Ledger {
         txn.commit()?;
 
         info!(
-            "Added block {} with hash {}",
+            "Added block {} with hash {} ({} txs)",
             new_height,
-            hex::encode(&new_hash[0..8])
+            hex::encode(&new_hash[0..8]),
+            block.transactions.len()
         );
 
         Ok(())
@@ -239,6 +302,62 @@ impl Ledger {
         }
 
         Ok(blocks)
+    }
+
+    /// Get a specific UTXO by ID
+    pub fn get_utxo(&self, id: &UtxoId) -> Result<Option<Utxo>, LedgerError> {
+        let txn = self.env.begin_ro_txn()?;
+
+        match txn.get(self.utxo_db, &id.to_bytes()) {
+            Ok(bytes) => {
+                let utxo: Utxo = bincode::deserialize(bytes)
+                    .map_err(|e| LedgerError::Serialization(e.to_string()))?;
+                Ok(Some(utxo))
+            }
+            Err(lmdb::Error::NotFound) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Get all UTXOs belonging to an address
+    pub fn get_utxos_for_address(&self, address: &PublicAddress) -> Result<Vec<Utxo>, LedgerError> {
+        let view_key = address.view_public_key().to_bytes();
+        let spend_key = address.spend_public_key().to_bytes();
+
+        let txn = self.env.begin_ro_txn()?;
+        let mut cursor = txn.open_ro_cursor(self.utxo_db)?;
+        let mut utxos = Vec::new();
+
+        // Iterate using the Cursor trait's iter_start method
+        for item in cursor.iter_start() {
+            let (_, value) = item?;
+            let utxo: Utxo = bincode::deserialize(value)
+                .map_err(|e| LedgerError::Serialization(e.to_string()))?;
+
+            if utxo.output.recipient_view_key == view_key
+                && utxo.output.recipient_spend_key == spend_key
+            {
+                utxos.push(utxo);
+            }
+        }
+
+        Ok(utxos)
+    }
+
+    /// Get balance for an address (sum of all UTXOs)
+    pub fn get_balance(&self, address: &PublicAddress) -> Result<u64, LedgerError> {
+        let utxos = self.get_utxos_for_address(address)?;
+        Ok(utxos.iter().map(|u| u.output.amount).sum())
+    }
+
+    /// Check if a UTXO exists (for transaction validation)
+    pub fn utxo_exists(&self, id: &UtxoId) -> Result<bool, LedgerError> {
+        let txn = self.env.begin_ro_txn()?;
+        match txn.get(self.utxo_db, &id.to_bytes()) {
+            Ok(_) => Ok(true),
+            Err(lmdb::Error::NotFound) => Ok(false),
+            Err(e) => Err(e.into()),
+        }
     }
 }
 

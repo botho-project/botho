@@ -10,6 +10,7 @@ extern crate test;
 use mc_util_metrics::ServiceMetrics;
 
 pub mod consensus_service;
+pub mod enclave_stubs;
 pub mod mint_tx_manager;
 pub mod tx_manager;
 pub mod validators; // Public so that it can be benchmarked by the `benchmarks` crate.

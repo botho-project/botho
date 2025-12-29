@@ -4,9 +4,11 @@ use clap::{Parser, Subcommand};
 mod block;
 mod commands;
 mod config;
+mod consensus;
 mod ledger;
 mod network;
 mod node;
+mod transaction;
 mod wallet;
 
 #[derive(Parser)]

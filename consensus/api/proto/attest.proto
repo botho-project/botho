@@ -1,0 +1,30 @@
+// Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2024 Cadence Foundation
+
+// Attestation stub types - replaces the full attestation protocol
+// after SGX removal. Messages are no longer encrypted but maintain
+// API compatibility.
+
+syntax = "proto3";
+
+package attest;
+
+option go_package = "mobilecoin/api";
+
+// A message sent to a peer or the service.
+// Previously this was encrypted; now it's just plaintext data.
+message Message {
+    // Channel identifier (e.g., session ID)
+    bytes channel_id = 1;
+
+    // The message data (previously encrypted, now plaintext transaction bytes)
+    bytes data = 2;
+
+    // Additional authenticated data
+    bytes aad = 3;
+}
+
+// Auth message for establishing a session (stub - not used without SGX)
+message AuthMessage {
+    bytes data = 1;
+}

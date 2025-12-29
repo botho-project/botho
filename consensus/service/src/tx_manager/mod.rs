@@ -8,12 +8,16 @@
 //! "working set" of transactions that the consensus service may operate on.
 
 #![allow(clippy::result_large_err)]
-use crate::counters;
+use crate::{
+    counters,
+    enclave_stubs::{
+        ConsensusEnclave, EnclaveMessage, PeerSession, TxContext, WellFormedEncryptedTx,
+        WellFormedTxContext,
+    },
+};
 use mc_common::{
     logger::{log, Logger},
     HashMap, HashSet,
-};
-    ConsensusEnclave, TxContext, WellFormedEncryptedTx, WellFormedTxContext,
 };
 use mc_transaction_core::{
     constants::MAX_TRANSACTIONS_PER_BLOCK,

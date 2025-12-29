@@ -12,8 +12,6 @@ pub fn run(config_path: &Path) -> Result<()> {
 
     let wallet = Wallet::from_mnemonic(&config.wallet.mnemonic)?;
     let address = wallet.default_address();
-    let wallet_view_key = address.view_public_key().to_bytes();
-    let wallet_spend_key = address.spend_public_key().to_bytes();
 
     // Open ledger
     let ledger_path = ledger_db_path_from_config(config_path);
@@ -25,32 +23,21 @@ pub fn run(config_path: &Path) -> Result<()> {
         .get_chain_state()
         .map_err(|e| anyhow::anyhow!("Failed to get chain state: {}", e))?;
 
-    // Calculate balance by scanning all blocks
-    let mut mined_balance: u64 = 0;
-    let mut blocks_mined: u64 = 0;
+    // Get balance from UTXOs
+    let utxos = ledger
+        .get_utxos_for_address(&address)
+        .map_err(|e| anyhow::anyhow!("Failed to get UTXOs: {}", e))?;
 
-    // Scan blocks starting from height 1 (skip genesis)
-    let blocks = ledger
-        .get_blocks(1, state.height as usize)
-        .map_err(|e| anyhow::anyhow!("Failed to get blocks: {}", e))?;
-
-    for block in blocks {
-        // Check if this block's mining reward was sent to our address
-        if block.mining_tx.recipient_view_key == wallet_view_key
-            && block.mining_tx.recipient_spend_key == wallet_spend_key
-        {
-            mined_balance += block.mining_tx.reward;
-            blocks_mined += 1;
-        }
-    }
+    let balance: u64 = utxos.iter().map(|u| u.output.amount).sum();
+    let utxo_count = utxos.len();
 
     // Convert from picocredits to credits
-    let credits = mined_balance as f64 / 1_000_000_000_000.0;
+    let credits = balance as f64 / 1_000_000_000_000.0;
 
     println!();
     println!("=== Wallet Balance ===");
-    println!("Mined: {:.12} credits ({} picocredits)", credits, mined_balance);
-    println!("Blocks mined: {}", blocks_mined);
+    println!("Balance: {:.12} credits ({} picocredits)", credits, balance);
+    println!("UTXOs: {}", utxo_count);
     println!();
     println!("Chain height: {}", state.height);
     println!("Total network mined: {:.12} credits", state.total_mined as f64 / 1_000_000_000_000.0);

@@ -13,6 +13,7 @@ use crate::InputCredentials;
 use mc_crypto_keys::CompressedRistrettoPublic;
 use mc_transaction_core::{ring_ct::InputRing, tx::TxIn, Amount, TxOutConversionError};
 use mc_transaction_extra::SignedContingentInput;
+use mc_transaction_types::ClusterTagVector;
 
 /// Material that can be used by the transaction builder to create an input to
 /// a transaction.
@@ -58,6 +59,17 @@ impl InputMaterials {
         match self {
             InputMaterials::Signable(cred) => cred.ring.len(),
             InputMaterials::Presigned(input) => input.tx_in.ring.len(),
+        }
+    }
+
+    /// Get the cluster tags from the real input being spent.
+    /// Returns None if the input has no cluster tags.
+    pub fn cluster_tags(&self) -> Option<&ClusterTagVector> {
+        match self {
+            InputMaterials::Signable(cred) => cred.ring[cred.real_index].cluster_tags.as_ref(),
+            // For presigned inputs, we take tags from the first ring element
+            // (the real input should have been at index 0 in most cases)
+            InputMaterials::Presigned(input) => input.tx_in.ring[0].cluster_tags.as_ref(),
         }
     }
 }

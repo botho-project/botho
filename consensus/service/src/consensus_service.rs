@@ -10,6 +10,7 @@ use crate::{
     background_work_queue::BackgroundWorkQueue,
     byzantine_ledger::ByzantineLedger,
     counters,
+    enclave_stubs::{ConsensusEnclaveError, ReportCacheError},
     mint_tx_manager::MintTxManager,
     peer_keepalive::PeerKeepalive,
     tx_manager::TxManager,

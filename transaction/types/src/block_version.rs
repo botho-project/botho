@@ -59,7 +59,7 @@ impl FromStr for BlockVersion {
 impl BlockVersion {
     /// The maximum value of block_version that this build of
     /// mc-transaction-core has support for
-    pub const MAX: Self = Self::FOUR;
+    pub const MAX: Self = Self::FIVE;
 
     /// Refers to the block version number at network launch.
     pub const ZERO: Self = Self(0);
@@ -75,6 +75,9 @@ impl BlockVersion {
 
     /// Constant for block version four
     pub const FOUR: Self = Self(4);
+
+    /// Constant for block version five (cluster tags)
+    pub const FIVE: Self = Self(5);
 
     /// Iterator over block versions from one up to max, inclusive. For use in
     /// tests.
@@ -153,6 +156,12 @@ impl BlockVersion {
     /// [MCIP #TODO]
     pub fn nested_multisigs_are_supported(&self) -> bool {
         self >= &Self::THREE
+    }
+
+    /// Cluster tags for progressive transaction fees are introduced in v5.
+    /// Tags track coin ancestry for progressive fee computation.
+    pub fn cluster_tags_are_supported(&self) -> bool {
+        self >= &Self::FIVE
     }
 }
 

@@ -8,8 +8,11 @@
 
 use core::cmp::max;
 
-/// Initial mining reward in atomic units (50 billion picoCAD = 50 CAD)
-pub const INITIAL_REWARD: u64 = 50_000_000_000_000;
+/// Atomic units per CAD (10^12, same as MobileCoin's picoMOB)
+pub const PICO_CAD: u64 = 1_000_000_000_000;
+
+/// Initial mining reward in atomic units (50 CAD = 50 * 10^12 picoCAD)
+pub const INITIAL_REWARD: u64 = 50 * PICO_CAD;
 
 /// Controls how quickly the reward decreases.
 /// The reward halves approximately every EMISSION_SPEED_FACTOR blocks.
@@ -18,17 +21,26 @@ pub const INITIAL_REWARD: u64 = 50_000_000_000_000;
 pub const EMISSION_SPEED_FACTOR: u64 = 1 << 18;
 
 /// Minimum reward per mining transaction (tail emission).
-/// Set to 0.6 CAD = 600 billion picoCAD to maintain miner incentives indefinitely.
-pub const TAIL_EMISSION: u64 = 600_000_000_000;
+/// Set to 0.6 CAD to maintain miner incentives indefinitely.
+pub const TAIL_EMISSION: u64 = 600_000_000_000; // 0.6 CAD
 
-/// Total supply cap in atomic units (picoCAD).
-/// 21 million CAD = 21_000_000 * 10^12 picoCAD
-pub const MAX_SUPPLY: u64 = 21_000_000_000_000_000_000;
+/// Maximum theoretical supply in atomic units (picoCAD).
+/// Due to the halving schedule and tail emission, the actual supply
+/// will asymptotically approach this value but never exceed it.
+/// Approximately 18 million CAD max (fits in u64 safely)
+/// Using 18_000_000 CAD = 18 * 10^18 picoCAD - just under u64::MAX
+pub const MAX_SUPPLY: u64 = 18_000_000_000_000_000_000;
 
 /// Calculate the mining reward for a given block height using smooth emission.
 ///
-/// The emission curve follows a smooth exponential decay:
-/// reward(height) = INITIAL_REWARD * 2^(-height / EMISSION_SPEED_FACTOR)
+/// The emission curve follows a smooth piecewise-linear decay that interpolates
+/// between halving points. Within each halving period, the reward decreases
+/// linearly from the period start to the period end.
+///
+/// - At height 0: INITIAL_REWARD (50 CAD)
+/// - At height EMISSION_SPEED_FACTOR: INITIAL_REWARD / 2 (25 CAD)
+/// - At height 2 * EMISSION_SPEED_FACTOR: INITIAL_REWARD / 4 (12.5 CAD)
+/// - And so on...
 ///
 /// Once the reward drops below TAIL_EMISSION, it stays at TAIL_EMISSION
 /// to ensure miners always have an incentive to secure the network.
@@ -39,19 +51,31 @@ pub const MAX_SUPPLY: u64 = 21_000_000_000_000_000_000;
 /// # Returns
 /// The mining reward in atomic units (picoCAD)
 pub fn block_reward(height: u64) -> u64 {
-    // Calculate how many times to halve based on height
-    let halvings = height / EMISSION_SPEED_FACTOR;
+    // Determine which halving period we're in
+    let period = height / EMISSION_SPEED_FACTOR;
 
     // Prevent overflow - after 64 halvings, reward is effectively 0
-    if halvings >= 64 {
+    if period >= 64 {
         return TAIL_EMISSION;
     }
 
-    // Calculate base reward with smooth exponential decay
-    let base_reward = INITIAL_REWARD >> halvings;
+    // Reward at the start of this period
+    let period_start_reward = INITIAL_REWARD >> period;
+
+    // Reward at the start of the next period (end of this period)
+    let period_end_reward = INITIAL_REWARD >> (period + 1);
+
+    // Position within the current period (0 to EMISSION_SPEED_FACTOR - 1)
+    let position_in_period = height % EMISSION_SPEED_FACTOR;
+
+    // Linear interpolation within the period
+    // reward = start - (start - end) * position / period_length
+    let reward_decrease =
+        (period_start_reward - period_end_reward) * position_in_period / EMISSION_SPEED_FACTOR;
+    let reward = period_start_reward - reward_decrease;
 
     // Apply tail emission floor
-    max(base_reward, TAIL_EMISSION)
+    max(reward, TAIL_EMISSION)
 }
 
 /// Calculate the cumulative emission up to a given block height.

@@ -6,7 +6,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::config::Config;
 use crate::network::{NetworkDiscovery, NetworkEvent, QuorumBuilder, QuorumValidation};
@@ -144,6 +144,10 @@ async fn run_async(config: Config, config_path: &Path, mine: bool) -> Result<()>
                             if let Err(e) = node.add_block_from_network(&block) {
                                 warn!("Failed to add network block: {}", e);
                             }
+                        }
+                        NetworkEvent::ScpMessage(_msg) => {
+                            // SCP consensus messages - handled by consensus service
+                            debug!("Received SCP message from network");
                         }
                         NetworkEvent::PeerDiscovered(peer_id) => {
                             info!("Peer connected: {}", peer_id);

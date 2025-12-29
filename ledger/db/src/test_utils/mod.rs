@@ -21,7 +21,8 @@ use mc_transaction_core::{
     tx::{Tx, TxOut},
     Amount, Token,
 };
-use mc_transaction_core_test_utils::{get_outputs, MockFogResolver, NoKeysRingSigner};
+use mc_crypto_ring_signature_signer::OneTimeKeyDeriveData;
+use mc_transaction_core_test_utils::{get_outputs, NoKeysRingSigner};
 use mc_util_test_helper::{CryptoRng, RngCore};
 use std::{cmp::Ordering, path::Path};
 use tempfile::TempDir;
@@ -186,7 +187,6 @@ pub fn create_transaction_with_amount_and_comparer_and_recipients<
     let mut transaction_builder = TransactionBuilder::new(
         block_version,
         Amount::new(fee, sender_amount.token_id),
-        MockFogResolver::default(),
     )
     .unwrap();
 
@@ -207,7 +207,8 @@ pub fn create_transaction_with_amount_and_comparer_and_recipients<
         .iter()
         .map(|tx_out| ledger.get_tx_out_index_by_hash(&tx_out.hash()).unwrap())
         .collect::<Vec<u64>>();
-    let membership_proofs = ledger.get_tx_out_proof_of_memberships(&indexes).unwrap();
+    // Cadence doesn't use membership proofs
+    let _ = ledger.get_tx_out_proof_of_memberships(&indexes).unwrap();
 
     let spend_private_key = sender.subaddress_spend_private(DEFAULT_SUBADDRESS_INDEX);
     let tx_out_public_key = RistrettoPublic::try_from(&tx_out.public_key).unwrap();
@@ -219,9 +220,8 @@ pub fn create_transaction_with_amount_and_comparer_and_recipients<
 
     let input_credentials = InputCredentials::new(
         ring,
-        membership_proofs,
         real_index,
-        onetime_private_key,
+        OneTimeKeyDeriveData::OneTimeKey(onetime_private_key),
         *sender.view_private_key(),
     )
     .unwrap();

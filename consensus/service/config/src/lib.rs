@@ -4,12 +4,14 @@
 #![deny(missing_docs)]
 
 mod error;
+mod governors;
 mod network;
 mod signer_identity;
 mod tokens;
 
 pub use crate::{
     error::Error,
+    governors::{GovernorsMap, GovernorsMapError},
     network::NetworkConfig,
     signer_identity::{Error as SignerIdentityError, SignerIdentity, SignerIdentityMap},
     tokens::TokensConfig,

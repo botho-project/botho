@@ -39,13 +39,15 @@ mod tests {
     use super::*;
     use mc_account_keys::AccountKey;
     use mc_crypto_ring_signature_signer::NoKeysRingSigner;
-    use mc_fog_report_validation_test_utils::MockFogResolver;
     use mc_transaction_builder::{
-        test_utils::get_input_credentials, EmptyMemoBuilder, ReservedSubaddresses,
-        SignedContingentInputBuilder, TransactionBuilder,
+        test_utils::{get_input_credentials, get_ring_global_indices},
+        EmptyMemoBuilder, ReservedSubaddresses, SignedContingentInputBuilder, TransactionBuilder,
     };
     use mc_transaction_core::{
-        constants::MILLIMOB_TO_PICOMOB, tokens::Mob, tx::Tx, Amount, BlockVersion, Token, TokenId,
+        constants::{MILLIMOB_TO_PICOMOB, RING_SIZE},
+        tokens::Mob,
+        tx::Tx,
+        Amount, BlockVersion, Token, TokenId,
     };
     use prost::Message;
     use rand::{rngs::StdRng, SeedableRng};
@@ -61,22 +63,14 @@ mod tests {
             let alice = AccountKey::random(&mut rng);
             let bob = AccountKey::random(&mut rng);
 
-            let fpr = MockFogResolver::default();
-
-            let mut transaction_builder = TransactionBuilder::new(
-                block_version,
-                Amount::new(Mob::MINIMUM_FEE, Mob::ID),
-                fpr.clone(),
-            )
-            .unwrap();
-
-            transaction_builder.set_fee_map(Default::default());
+            let mut transaction_builder =
+                TransactionBuilder::new(block_version, Amount::new(Mob::MINIMUM_FEE, Mob::ID))
+                    .unwrap();
 
             transaction_builder.add_input(get_input_credentials(
                 block_version,
                 Amount::new(65536 + Mob::MINIMUM_FEE, Mob::ID),
                 &alice,
-                &fpr,
                 &mut rng,
             ));
             transaction_builder
@@ -138,21 +132,18 @@ mod tests {
 
             let token2 = TokenId::from(2);
 
-            let fpr = MockFogResolver::default();
-
             // Charlie makes a signed contingent input, offering 1000 token2's for 1 MOB
             let input_credentials = get_input_credentials(
                 block_version,
                 Amount::new(1000, token2),
                 &charlie,
-                &fpr,
                 &mut rng,
             );
-            let proofs = input_credentials.membership_proofs.clone();
+            let ring_global_indices = get_ring_global_indices(RING_SIZE);
             let mut sci_builder = SignedContingentInputBuilder::new(
                 block_version,
                 input_credentials,
-                fpr.clone(),
+                ring_global_indices,
                 EmptyMemoBuilder,
             )
             .unwrap();
@@ -165,25 +156,18 @@ mod tests {
                 )
                 .unwrap();
 
-            let mut sci = sci_builder.build(&NoKeysRingSigner {}, &mut rng).unwrap();
-
-            // Alice adds proofs to the SCI
-            sci.tx_in.proofs = proofs;
+            let sci = sci_builder.build(&NoKeysRingSigner {}, &mut rng).unwrap();
 
             // Alice sends this token2 amount to Bob from Charlie, paying Charlie 1 MOB
             // as he desires, and returning .475 MOB as change to herself.
-            let mut transaction_builder = TransactionBuilder::new(
-                block_version,
-                Amount::new(Mob::MINIMUM_FEE, Mob::ID),
-                fpr.clone(),
-            )
-            .unwrap();
+            let mut transaction_builder =
+                TransactionBuilder::new(block_version, Amount::new(Mob::MINIMUM_FEE, Mob::ID))
+                    .unwrap();
 
             transaction_builder.add_input(get_input_credentials(
                 block_version,
                 Amount::new(1475 * MILLIMOB_TO_PICOMOB, Mob::ID),
                 &alice,
-                &fpr,
                 &mut rng,
             ));
             transaction_builder.add_presigned_input(sci).unwrap();
@@ -255,21 +239,18 @@ mod tests {
 
             let token2 = TokenId::from(2);
 
-            let fpr = MockFogResolver::default();
-
             // Charlie makes a signed contingent input, offering 1000 token2's for 1 MOB
             let input_credentials = get_input_credentials(
                 block_version,
                 Amount::new(1000, token2),
                 &charlie,
-                &fpr,
                 &mut rng,
             );
-            let proofs = input_credentials.membership_proofs.clone();
+            let ring_global_indices = get_ring_global_indices(RING_SIZE);
             let mut sci_builder = SignedContingentInputBuilder::new(
                 block_version,
                 input_credentials,
-                fpr.clone(),
+                ring_global_indices,
                 EmptyMemoBuilder,
             )
             .unwrap();
@@ -291,25 +272,18 @@ mod tests {
                     &mut rng,
                 )
                 .unwrap();
-            let mut sci = sci_builder.build(&NoKeysRingSigner {}, &mut rng).unwrap();
-
-            // Alice adds proofs to the SCI
-            sci.tx_in.proofs = proofs;
+            let sci = sci_builder.build(&NoKeysRingSigner {}, &mut rng).unwrap();
 
             // Alice sends 250 token2 to Bob from Charlie, paying Charlie .25 MOB
             // as he desires, and returning .475 MOB as change to herself.
-            let mut transaction_builder = TransactionBuilder::new(
-                block_version,
-                Amount::new(Mob::MINIMUM_FEE, Mob::ID),
-                fpr.clone(),
-            )
-            .unwrap();
+            let mut transaction_builder =
+                TransactionBuilder::new(block_version, Amount::new(Mob::MINIMUM_FEE, Mob::ID))
+                    .unwrap();
 
             transaction_builder.add_input(get_input_credentials(
                 block_version,
                 Amount::new(1475 * MILLIMOB_TO_PICOMOB, Mob::ID),
                 &alice,
-                &fpr,
                 &mut rng,
             ));
             transaction_builder

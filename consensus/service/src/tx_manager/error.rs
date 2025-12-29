@@ -1,5 +1,6 @@
 // Copyright (c) 2018-2022 The MobileCoin Foundation
 
+use crate::enclave_stubs::ConsensusEnclaveError;
 use displaydoc::Display;
 use mc_ledger_db::Error as LedgerDbError;
 use mc_transaction_core::{tx::TxHash, validation::TransactionValidationError};

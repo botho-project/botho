@@ -6,6 +6,7 @@ use crate::{
         task_message::TaskMessage, IS_BEHIND_GRACE_PERIOD, MAX_PENDING_VALUES_TO_NOMINATE,
     },
     counters,
+    enclave_stubs::ConsensusEnclave,
     mint_tx_manager::MintTxManager,
     tx_manager::TxManager,
 };

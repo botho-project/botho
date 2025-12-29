@@ -15,9 +15,13 @@ use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
 use crate::block::Block;
+use crate::consensus::ScpMessage;
 
 /// Topic for block announcements
 const BLOCKS_TOPIC: &str = "cadence/blocks/1.0.0";
+
+/// Topic for SCP consensus messages
+const SCP_TOPIC: &str = "cadence/scp/1.0.0";
 
 /// Entry in the peer table
 #[derive(Debug, Clone)]
@@ -32,6 +36,8 @@ pub struct PeerTableEntry {
 pub enum NetworkEvent {
     /// A new block was received from a peer
     NewBlock(Block),
+    /// An SCP consensus message was received
+    ScpMessage(ScpMessage),
     /// A new peer was discovered
     PeerDiscovered(PeerId),
     /// A peer disconnected
@@ -132,8 +138,12 @@ impl NetworkDiscovery {
             .build();
 
         // Subscribe to blocks topic
-        let topic = IdentTopic::new(BLOCKS_TOPIC);
-        swarm.behaviour_mut().gossipsub.subscribe(&topic)?;
+        let blocks_topic = IdentTopic::new(BLOCKS_TOPIC);
+        swarm.behaviour_mut().gossipsub.subscribe(&blocks_topic)?;
+
+        // Subscribe to SCP consensus topic
+        let scp_topic = IdentTopic::new(SCP_TOPIC);
+        swarm.behaviour_mut().gossipsub.subscribe(&scp_topic)?;
 
         // Listen on the configured port
         let listen_addr: Multiaddr = format!("/ip4/0.0.0.0/tcp/{}", self.port).parse()?;
@@ -175,6 +185,21 @@ impl NetworkDiscovery {
         Ok(())
     }
 
+    /// Broadcast an SCP consensus message to the network
+    pub fn broadcast_scp(swarm: &mut Swarm<CadenceBehaviour>, msg: &ScpMessage) -> anyhow::Result<()> {
+        let topic = IdentTopic::new(SCP_TOPIC);
+        let msg_bytes = bincode::serialize(msg)?;
+
+        swarm
+            .behaviour_mut()
+            .gossipsub
+            .publish(topic, msg_bytes)
+            .map_err(|e| anyhow::anyhow!("Failed to publish SCP message: {:?}", e))?;
+
+        debug!(slot = msg.slot_index, "Broadcast SCP message");
+        Ok(())
+    }
+
     /// Process a swarm event
     pub fn process_event(
         &mut self,
@@ -184,21 +209,38 @@ impl NetworkDiscovery {
             SwarmEvent::Behaviour(CadenceBehaviourEvent::Gossipsub(
                 gossipsub::Event::Message { message, .. },
             )) => {
-                // Try to deserialize as a block
-                match bincode::deserialize::<Block>(&message.data) {
-                    Ok(block) => {
-                        info!(
-                            "Received block {} from network (hash: {})",
-                            block.height(),
-                            hex::encode(&block.hash()[0..8])
-                        );
-                        Some(NetworkEvent::NewBlock(block))
+                // Determine which topic this message is from
+                let topic = message.topic.as_str();
+
+                if topic == BLOCKS_TOPIC {
+                    // Try to deserialize as a block
+                    match bincode::deserialize::<Block>(&message.data) {
+                        Ok(block) => {
+                            info!(
+                                "Received block {} from network (hash: {})",
+                                block.height(),
+                                hex::encode(&block.hash()[0..8])
+                            );
+                            return Some(NetworkEvent::NewBlock(block));
+                        }
+                        Err(e) => {
+                            warn!("Failed to deserialize block from gossip: {}", e);
+                        }
                     }
-                    Err(e) => {
-                        warn!("Failed to deserialize block from gossip: {}", e);
-                        None
+                } else if topic == SCP_TOPIC {
+                    // Try to deserialize as an SCP message
+                    match bincode::deserialize::<ScpMessage>(&message.data) {
+                        Ok(scp_msg) => {
+                            debug!(slot = scp_msg.slot_index, "Received SCP message from network");
+                            return Some(NetworkEvent::ScpMessage(scp_msg));
+                        }
+                        Err(e) => {
+                            warn!("Failed to deserialize SCP message from gossip: {}", e);
+                        }
                     }
                 }
+
+                None
             }
             SwarmEvent::NewListenAddr { address, .. } => {
                 info!("Listening on {}", address);
