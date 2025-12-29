@@ -291,10 +291,8 @@ impl QuantumPrivateTransactionBuilder {
         let schnorr_signature = self.sign_schnorr(&creds.onetime_private_key, message, rng)?;
 
         // Sign with post-quantum Dilithium signature
-        let dilithium_signature = creds
-            .pq_signing_keypair
-            .sign(message)
-            .map_err(|e| QuantumPrivateTxBuilderError::SigningError(alloc::format!("{:?}", e)))?;
+        // MlDsa65KeyPair::sign returns MlDsa65Signature directly (infallible)
+        let dilithium_signature = creds.pq_signing_keypair.sign(message);
 
         Ok(QuantumPrivateTxIn::new(
             creds.tx_hash,
