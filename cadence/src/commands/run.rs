@@ -440,14 +440,22 @@ async fn run_async(config: Config, config_path: &Path, mine: bool) -> Result<()>
 
             // Periodic status
             _ = status_interval.tick() => {
-                if can_mine {
-                    // Just show mining stats inline
-                }
+                let connected = get_connected_peer_ids(&discovery);
+                let (_, quorum_status) = check_mining_eligibility(&config, &connected, mine);
+                info!(
+                    "Peers: {} | Mining: {} | {}",
+                    connected.len(),
+                    if mining_enabled { "active" } else { "inactive" },
+                    quorum_status
+                );
             }
 
             // Check for mined mining transactions
             _ = tokio::time::sleep(Duration::from_millis(100)) => {
-                // Check for mined transactions and submit to consensus
+                // Only check for mined transactions if mining is enabled
+                if !mining_enabled {
+                    continue;
+                }
                 if let Some(mined_tx) = node.check_mined_mining_tx()? {
                     let mining_tx = &mined_tx.mining_tx;
                     info!(
