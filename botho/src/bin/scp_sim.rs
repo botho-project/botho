@@ -519,34 +519,31 @@ fn run_node(
     let mut slot_started = false;
 
     loop {
-        // Drain all available messages in a batch (more efficient than one-by-one)
-        let mut processed = 0;
-        loop {
-            match receiver.try_recv() {
-                Ok(NodeMessage::Value(v)) => {
-                    pending_values.push(v);
-                    // Record slot start time when first value arrives for this slot
-                    if !slot_started {
-                        slot_start_times
-                            .lock()
-                            .unwrap()
-                            .entry(current_slot)
-                            .or_insert_with(Instant::now);
-                        slot_started = true;
-                    }
-                    processed += 1;
+        // Non-blocking receive
+        match receiver.try_recv() {
+            Ok(NodeMessage::Value(v)) => {
+                pending_values.push(v);
+                // Record slot start time when first value arrives for this slot
+                if !slot_started {
+                    slot_start_times
+                        .lock()
+                        .unwrap()
+                        .entry(current_slot)
+                        .or_insert_with(Instant::now);
+                    slot_started = true;
                 }
-                Ok(NodeMessage::ScpMsg(msg)) => {
-                    metrics.record_msg_received();
-                    if let Ok(Some(out_msg)) = scp_node.handle_message(&msg) {
-                        broadcast_msg(&nodes_map, &peers, out_msg, &metrics);
-                    }
-                    processed += 1;
-                }
-                Ok(NodeMessage::Stop) => return,
-                Err(crossbeam_channel::TryRecvError::Empty) => break,
-                Err(crossbeam_channel::TryRecvError::Disconnected) => return,
             }
+            Ok(NodeMessage::ScpMsg(msg)) => {
+                metrics.record_msg_received();
+                if let Ok(Some(out_msg)) = scp_node.handle_message(&msg) {
+                    broadcast_msg(&nodes_map, &peers, out_msg, &metrics);
+                }
+            }
+            Ok(NodeMessage::Stop) => break,
+            Err(crossbeam_channel::TryRecvError::Empty) => {
+                thread::yield_now();
+            }
+            Err(crossbeam_channel::TryRecvError::Disconnected) => break,
         }
 
         // Propose pending values
@@ -595,11 +592,6 @@ fn run_node(
             ledger.lock().unwrap().push(block);
             current_slot += 1;
             slot_started = false;
-        }
-
-        // Yield if no messages were processed (reduces CPU spinning)
-        if processed == 0 {
-            thread::yield_now();
         }
     }
 }

@@ -45,6 +45,5 @@ curve25519-dalek = { workspace = true }
 [dev-dependencies]
 assert_matches = { workspace = true }
 maplit = { workspace = true }
-yaml-rust = { workspace = true }
 
 bt-util-test-helper = { workspace = true }

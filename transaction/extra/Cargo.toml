@@ -47,7 +47,6 @@ cluster-tax = ["dep:bt-cluster-tax"]
 [dev-dependencies]
 assert_matches = { workspace = true }
 maplit = { workspace = true }
-yaml-rust = { workspace = true }
 
 bt-transaction-builder = { workspace = true, features = ["test-only"] }
 bt-util-from-random = { workspace = true }
