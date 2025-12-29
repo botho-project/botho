@@ -17,4 +17,4 @@ pub use agents::{
 };
 pub use metrics::{Metrics, SimulationMetrics};
 pub use runner::{run_simulation, RoundSummary, SimulationConfig, SimulationResult};
-pub use state::{EmissionStats, SimulationState};
+pub use state::{MonetaryStats, SimulationState};

@@ -172,8 +172,6 @@ impl Mempool {
         tx: &Transaction,
         ledger: &Ledger,
     ) -> Result<u64, MempoolError> {
-        let mut input_sum = 0u64;
-
         // Check for double-spends via key images (mempool)
         for ring_input in ring_inputs {
             if self.spent_key_images.contains(&ring_input.key_image) {
@@ -190,19 +188,11 @@ impl Mempool {
 
         // Verify ring signatures
         tx.verify_ring_signatures()
-            .map_err(|e| MempoolError::InvalidSignature)?;
-
-        // For ring signatures, we need to verify all ring members are valid UTXOs
-        // and sum amounts (this is a simplification - real RingCT hides amounts)
-        for ring_input in ring_inputs {
-            // In a full implementation, we'd verify each ring member exists
-            // For now, we trust the ring and the signature verification
-            // Amount validation is deferred to block validation
-        }
+            .map_err(|_| MempoolError::InvalidSignature)?;
 
         // With ring signatures and trivial commitments, we can't know exact
         // input amounts without revealing which ring member is real.
-        // For now, return 0 and let higher-level validation handle amounts.
+        // For now, return MAX and let higher-level validation handle amounts.
         // TODO: Implement proper balance verification with commitments
         Ok(u64::MAX) // Allow through, block validation will catch issues
     }

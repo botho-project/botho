@@ -81,6 +81,11 @@ pub struct FeeConfig {
     /// Cluster factor curve for progressive fee calculation.
     /// Applied to both plain and hidden transactions.
     pub cluster_curve: ClusterFactorCurve,
+
+    /// Fee rate per memo in basis points.
+    /// Each output with `e_memo.is_some()` adds this rate to the base fee.
+    /// Default: 500 bps (5%) per memo
+    pub memo_fee_rate_bps: FeeRateBps,
 }
 
 impl Default for FeeConfig {
@@ -89,6 +94,7 @@ impl Default for FeeConfig {
             plain_base_fee_bps: 5,      // 0.05% base (up to 0.3% with 6x factor)
             hidden_base_fee_bps: 20,    // 0.2% base (up to 1.2% with 6x factor)
             cluster_curve: ClusterFactorCurve::default(),
+            memo_fee_rate_bps: 500,     // 5% per memo (500 bps = 0.05 multiplier per memo)
         }
     }
 }
@@ -109,7 +115,27 @@ impl FeeConfig {
         amount: u64,
         cluster_wealth: u64,
     ) -> (u64, u64) {
-        let rate_bps = self.fee_rate_bps(tx_type, cluster_wealth);
+        self.compute_fee_with_memos(tx_type, amount, cluster_wealth, 0)
+    }
+
+    /// Compute the fee for a transaction with memo count.
+    ///
+    /// # Arguments
+    /// * `tx_type` - The transaction type
+    /// * `amount` - Transfer amount
+    /// * `cluster_wealth` - Total wealth of sender's cluster
+    /// * `num_memos` - Number of outputs with encrypted memos
+    ///
+    /// # Returns
+    /// (fee_amount, net_amount_after_fee)
+    pub fn compute_fee_with_memos(
+        &self,
+        tx_type: TransactionType,
+        amount: u64,
+        cluster_wealth: u64,
+        num_memos: usize,
+    ) -> (u64, u64) {
+        let rate_bps = self.fee_rate_bps_with_memos(tx_type, cluster_wealth, num_memos);
         let fee = (amount as u128 * rate_bps as u128 / 10_000) as u64;
         let net = amount.saturating_sub(fee);
         (fee, net)
@@ -124,19 +150,64 @@ impl FeeConfig {
     ///
     /// Both are then multiplied by the cluster factor (1x-6x).
     pub fn fee_rate_bps(&self, tx_type: TransactionType, cluster_wealth: u64) -> FeeRateBps {
-        match tx_type {
+        self.fee_rate_bps_with_memos(tx_type, cluster_wealth, 0)
+    }
+
+    /// Get the fee rate in basis points for a transaction with memos.
+    ///
+    /// The formula is:
+    /// ```text
+    /// rate = base_rate × cluster_factor × memo_factor
+    /// where memo_factor = 1 + (memo_fee_rate_bps / 10000) × num_memos
+    /// ```
+    ///
+    /// # Arguments
+    /// * `tx_type` - The transaction type
+    /// * `cluster_wealth` - Total wealth of sender's cluster
+    /// * `num_memos` - Number of outputs with encrypted memos (`e_memo.is_some()`)
+    pub fn fee_rate_bps_with_memos(
+        &self,
+        tx_type: TransactionType,
+        cluster_wealth: u64,
+        num_memos: usize,
+    ) -> FeeRateBps {
+        let base_rate = match tx_type {
             TransactionType::Plain => {
                 let factor = self.cluster_curve.factor(cluster_wealth);
-                // fee = base × factor, where factor is in FACTOR_SCALE units
                 (self.plain_base_fee_bps as u64 * factor / ClusterFactorCurve::FACTOR_SCALE) as FeeRateBps
             }
             TransactionType::Hidden => {
                 let factor = self.cluster_curve.factor(cluster_wealth);
-                // fee = base × factor, where factor is in FACTOR_SCALE units
                 (self.hidden_base_fee_bps as u64 * factor / ClusterFactorCurve::FACTOR_SCALE) as FeeRateBps
             }
-            TransactionType::Mining => 0,
-        }
+            TransactionType::Mining => return 0,
+        };
+
+        // Apply memo multiplier: rate × (1 + memo_rate × num_memos)
+        // Using fixed point: rate × (10000 + memo_rate_bps × num_memos) / 10000
+        let memo_multiplier = 10_000u64 + (self.memo_fee_rate_bps as u64 * num_memos as u64);
+        ((base_rate as u64 * memo_multiplier) / 10_000) as FeeRateBps
+    }
+
+    /// Compute the memo factor as a multiplier (in 10000-scale fixed point).
+    ///
+    /// Returns 10000 for 1.0x, 10500 for 1.05x (one memo at 5%), etc.
+    pub fn memo_factor(&self, num_memos: usize) -> u64 {
+        10_000 + (self.memo_fee_rate_bps as u64 * num_memos as u64)
+    }
+
+    /// Compute the minimum fee for a transaction given type, wealth, and memo count.
+    ///
+    /// This is the canonical fee calculation for validation.
+    pub fn minimum_fee(
+        &self,
+        tx_type: TransactionType,
+        amount: u64,
+        cluster_wealth: u64,
+        num_memos: usize,
+    ) -> u64 {
+        let (fee, _) = self.compute_fee_with_memos(tx_type, amount, cluster_wealth, num_memos);
+        fee
     }
 }
 
@@ -398,6 +469,7 @@ mod tests {
             plain_base_fee_bps: 5,
             hidden_base_fee_bps: 20,
             cluster_curve: ClusterFactorCurve::flat(2), // 2x multiplier
+            memo_fee_rate_bps: 500,  // 5% per memo
         };
 
         // Plain with 2x flat factor: 5 * 2 = 10 bps
@@ -418,12 +490,132 @@ mod tests {
             plain_base_fee_bps: 100,  // 1% base for easy math
             hidden_base_fee_bps: 100,
             cluster_curve: ClusterFactorCurve::flat(1),  // 1x multiplier
+            memo_fee_rate_bps: 0,  // No memo fee for this test
         };
 
         // 1% base × 1x factor = 1% fee
         let (fee, net) = config.compute_fee(TransactionType::Plain, 10_000, 0);
         assert_eq!(fee, 100);  // 1% of 10,000
         assert_eq!(net, 9_900);
+    }
+
+    #[test]
+    fn test_memo_fee_factor() {
+        let config = FeeConfig {
+            plain_base_fee_bps: 100,  // 1% base
+            hidden_base_fee_bps: 100,
+            cluster_curve: ClusterFactorCurve::flat(1),  // 1x multiplier
+            memo_fee_rate_bps: 500,  // 5% per memo
+        };
+
+        // No memos: memo_factor = 10000 (1.0x)
+        assert_eq!(config.memo_factor(0), 10_000);
+
+        // 1 memo: memo_factor = 10000 + 500 = 10500 (1.05x)
+        assert_eq!(config.memo_factor(1), 10_500);
+
+        // 3 memos: memo_factor = 10000 + 1500 = 11500 (1.15x)
+        assert_eq!(config.memo_factor(3), 11_500);
+
+        // 16 memos (max outputs): memo_factor = 10000 + 8000 = 18000 (1.8x)
+        assert_eq!(config.memo_factor(16), 18_000);
+    }
+
+    #[test]
+    fn test_memo_fee_rate() {
+        let config = FeeConfig {
+            plain_base_fee_bps: 100,  // 1% base
+            hidden_base_fee_bps: 100,
+            cluster_curve: ClusterFactorCurve::flat(1),  // 1x multiplier
+            memo_fee_rate_bps: 500,  // 5% per memo
+        };
+
+        // Base rate with no memos: 100 bps
+        assert_eq!(config.fee_rate_bps_with_memos(TransactionType::Plain, 0, 0), 100);
+
+        // With 1 memo: 100 * 1.05 = 105 bps
+        assert_eq!(config.fee_rate_bps_with_memos(TransactionType::Plain, 0, 1), 105);
+
+        // With 3 memos: 100 * 1.15 = 115 bps
+        assert_eq!(config.fee_rate_bps_with_memos(TransactionType::Plain, 0, 3), 115);
+
+        // Mining tx: always 0, regardless of memos
+        assert_eq!(config.fee_rate_bps_with_memos(TransactionType::Mining, 0, 10), 0);
+    }
+
+    #[test]
+    fn test_memo_fee_computation() {
+        let config = FeeConfig {
+            plain_base_fee_bps: 100,  // 1% base
+            hidden_base_fee_bps: 100,
+            cluster_curve: ClusterFactorCurve::flat(1),
+            memo_fee_rate_bps: 500,  // 5% per memo
+        };
+
+        // 10,000 amount, no memos: fee = 1% = 100
+        let (fee0, net0) = config.compute_fee_with_memos(TransactionType::Plain, 10_000, 0, 0);
+        assert_eq!(fee0, 100);
+        assert_eq!(net0, 9_900);
+
+        // 10,000 amount, 1 memo: fee = 1.05% = 105
+        let (fee1, net1) = config.compute_fee_with_memos(TransactionType::Plain, 10_000, 0, 1);
+        assert_eq!(fee1, 105);
+        assert_eq!(net1, 9_895);
+
+        // 10,000 amount, 3 memos: fee = 1.15% = 115
+        let (fee3, net3) = config.compute_fee_with_memos(TransactionType::Plain, 10_000, 0, 3);
+        assert_eq!(fee3, 115);
+        assert_eq!(net3, 9_885);
+    }
+
+    #[test]
+    fn test_memo_fee_with_cluster_factor() {
+        // Test that memo and cluster factors multiply together
+        let config = FeeConfig {
+            plain_base_fee_bps: 100,   // 1% base
+            hidden_base_fee_bps: 100,
+            cluster_curve: ClusterFactorCurve::flat(2),  // 2x cluster factor
+            memo_fee_rate_bps: 1000,   // 10% per memo for easy math
+        };
+
+        // Base rate with 2x cluster factor, no memos: 100 * 2 = 200 bps
+        let rate_no_memo = config.fee_rate_bps_with_memos(TransactionType::Plain, 0, 0);
+        assert_eq!(rate_no_memo, 200);
+
+        // With 1 memo: 200 * 1.10 = 220 bps
+        let rate_1_memo = config.fee_rate_bps_with_memos(TransactionType::Plain, 0, 1);
+        assert_eq!(rate_1_memo, 220);
+
+        // With 2 memos: 200 * 1.20 = 240 bps
+        let rate_2_memos = config.fee_rate_bps_with_memos(TransactionType::Plain, 0, 2);
+        assert_eq!(rate_2_memos, 240);
+    }
+
+    #[test]
+    fn test_memo_incentives() {
+        // Verify the economic incentives are correctly structured
+        let config = FeeConfig::default();
+
+        // Memos should increase fees monotonically
+        let mut prev_rate = 0;
+        for num_memos in 0..=16 {
+            let rate = config.fee_rate_bps_with_memos(TransactionType::Plain, 0, num_memos);
+            assert!(
+                rate >= prev_rate,
+                "Rate should increase with memos: {} >= {} at {} memos",
+                rate, prev_rate, num_memos
+            );
+            prev_rate = rate;
+        }
+
+        // 16 memos should cost significantly more than 0 memos
+        let rate_0 = config.fee_rate_bps_with_memos(TransactionType::Plain, 0, 0);
+        let rate_16 = config.fee_rate_bps_with_memos(TransactionType::Plain, 0, 16);
+        assert!(
+            rate_16 > rate_0 * 150 / 100,
+            "16 memos should cost at least 50% more than 0 memos: {} vs {}",
+            rate_16, rate_0
+        );
     }
 
     #[test]

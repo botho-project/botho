@@ -3,7 +3,7 @@ use bth_account_keys::PublicAddress;
 use bth_crypto_keys::{RistrettoPublic, RistrettoSignature};
 use std::fs;
 use std::path::Path;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use super::{ChainState, LedgerError};
 use crate::block::Block;

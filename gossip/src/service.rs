@@ -543,21 +543,22 @@ async fn handle_behaviour_event(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bth_crypto_keys::Ed25519Public;
+    use bth_util_from_random::FromRandom;
     use std::str::FromStr;
 
     fn make_test_service() -> GossipService {
+        // Create a keypair and use its public key for the NodeID
+        let signing_key = Ed25519Pair::from_random(&mut rand::thread_rng());
+        let public_key = signing_key.public_key();
+
         let node_id = NodeID {
             responder_id: ResponderId::from_str("test-node:8443").unwrap(),
-            public_key: Ed25519Public::default(),
+            public_key,
         };
-
-        // For testing, use a dummy keypair
-        let signing_key = Arc::new(Ed25519Pair::from_random(&mut rand::thread_rng()));
 
         GossipService::new(
             node_id,
-            signing_key,
+            Arc::new(signing_key),
             QuorumSet::empty(),
             vec!["mcp://test-node:8443".to_string()],
             NodeCapabilities::GOSSIP,

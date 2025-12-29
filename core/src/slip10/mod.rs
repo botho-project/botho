@@ -141,6 +141,7 @@ impl Slip10KeyGenerator for Mnemonic {
 #[cfg(test)]
 mod test {
     extern crate alloc;
+    extern crate std;
 
     use super::*;
     use alloc::{string::String, vec::Vec};

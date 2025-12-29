@@ -412,26 +412,36 @@ impl DifficultyController {
 
         // === Monetary Component ===
         // Calculate actual net emission this epoch
-        let net_emission = self.state.epoch_rewards_emitted
-            .saturating_sub(self.state.epoch_fees_burned);
+        let net_emission = self.state.epoch_rewards_emitted as i64
+            - self.state.epoch_fees_burned as i64;
 
         // Calculate target net emission per epoch
         let epochs_per_year = self.policy.target_epochs_per_year();
         let annual_target = self.state.total_supply as u128
             * self.policy.tail_inflation_bps as u128
             / 10_000;
-        let epoch_target = (annual_target / epochs_per_year as u128) as u64;
+        let epoch_target = (annual_target / epochs_per_year as u128) as i64;
 
         // If net emission is too high, we need slower blocks (higher difficulty)
+        //   → ratio > 1.0 → multiply difficulty up
         // If net emission is too low, we need faster blocks (lower difficulty)
-        let monetary_ratio = if net_emission > 0 {
-            epoch_target as f64 / net_emission as f64
-        } else {
-            // We're in deflation! Speed up significantly.
-            2.0_f64.min(
-                self.policy.max_block_time_secs as f64
-                    / self.policy.min_block_time_secs as f64
+        //   → ratio < 1.0 → multiply difficulty down
+        //
+        // The ratio is: what fraction of target did we achieve?
+        // If we achieved less than target, ratio < 1, so we reduce difficulty.
+        let monetary_ratio = if net_emission > 0 && epoch_target > 0 {
+            // Normal case: positive net emission
+            // If net_emission < target, ratio < 1, difficulty decreases
+            net_emission as f64 / epoch_target as f64
+        } else if net_emission <= 0 {
+            // We're in deflation! Speed up significantly (lower difficulty).
+            0.5_f64.max(
+                self.policy.min_block_time_secs as f64
+                    / self.policy.max_block_time_secs as f64
             )
+        } else {
+            // Edge case: target is 0 or negative (shouldn't happen)
+            1.0
         };
 
         // === Blend ===

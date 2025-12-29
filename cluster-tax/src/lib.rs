@@ -65,3 +65,14 @@ pub use signing::{
 pub use crypto::{
     CommittedTagVector, CommittedTagVectorSecret, RingTagData, ExtendedTxSignature,
 };
+
+/// Memo fee rate in basis points per memo (1 bps = 0.01%).
+///
+/// Each output with an encrypted memo (`e_memo.is_some()`) adds this percentage
+/// to the base fee. This incentivizes efficient memo usage and compensates for
+/// the 66 bytes of perpetual ledger storage each memo consumes.
+///
+/// Default: 500 bps = 5% per memo
+///
+/// Example: 3 memos → fee multiplier = 1.0 + (0.05 × 3) = 1.15
+pub const MEMO_FEE_RATE_BPS: u32 = 500;

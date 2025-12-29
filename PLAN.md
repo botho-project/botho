@@ -259,6 +259,140 @@ Fees are **burned** (destroyed) rather than paid to miners. This creates deflati
 - Mining transactions have no fee (creates new coins)
 - Mempool prioritizes by fee rate
 
+### Memo Fee Economics
+
+**Philosophy**: Pay for CPU and ledger storage. Memos consume both, so they should cost more.
+
+#### The Problem
+
+Memos are currently "free" in terms of fees:
+- Each memo adds 66 bytes to a TxOut (2-byte type + 64-byte encrypted payload)
+- A transaction with 16 outputs × 66 bytes = **1,056 bytes of memo storage**
+- This storage persists **forever** in the ledger
+- Encryption/decryption costs CPU (HKDF + AES-256-CTR)
+- No economic signal to discourage frivolous memo usage
+
+#### Design Constraints
+
+1. **Cannot inspect memo contents** - Memos are encrypted with recipient's view key
+2. **Single fee field** - `TxPrefix.fee` is per-transaction, not per-output
+3. **Backward compatible** - Higher fees must always be accepted
+4. **Fits existing model** - Should integrate with cluster-tax system
+
+#### Solution: Memo Presence Multiplier
+
+Charge based on **presence** of encrypted memos (not their contents):
+
+```
+effective_fee = base_fee × tx_type_factor × cluster_factor × memo_factor
+
+where:
+  memo_factor = 1.0 + (MEMO_FEE_RATE × num_outputs_with_memo)
+  MEMO_FEE_RATE = 0.05  (5% per memo, tunable)
+```
+
+**Example** (base fee = 400 μMOB, 3 outputs with memos):
+```
+memo_factor = 1.0 + (0.05 × 3) = 1.15
+minimum_fee = 400 × 1.15 = 460 μMOB
+```
+
+#### What Counts as "Has Memo"
+
+```rust
+fn has_memo(output: &TxOut) -> bool {
+    match &output.e_memo {
+        None => false,                           // No memo field
+        Some(e) if e.is_unused() => false,       // UnusedMemo (0x0000)
+        Some(_) => true,                         // Any other encrypted memo
+    }
+}
+```
+
+**Note**: We can detect `UnusedMemo` by checking if the ciphertext decrypts to type bytes `[0x00, 0x00]`. However, this requires the view key. For fee validation (which happens without the view key), we treat **any non-None `e_memo`** as having a memo. Wallets should set `e_memo = None` instead of `UnusedMemo` to save fees.
+
+#### Incentives Created
+
+| Behavior | Fee Impact | Result |
+|----------|------------|--------|
+| Use memos on payment outputs | +5% each | Appropriate cost for storage |
+| Skip memo on change outputs | No extra | Wallets optimize automatically |
+| Set `e_memo = None` vs `UnusedMemo` | Saves 5% | Clear protocol guidance |
+| Spam 16-output tx with memos | +80% fee | Economic disincentive |
+
+#### Integration with Cluster-Tax
+
+The memo factor multiplies with existing factors:
+
+```rust
+// cluster-tax/src/fee_curve.rs
+pub fn compute_minimum_fee(
+    base_fee: u64,
+    tx_type: TransactionType,
+    cluster_wealth: u64,
+    num_memos: usize,
+) -> u64 {
+    let type_factor = match tx_type {
+        TransactionType::Plain => 1.0,
+        TransactionType::Hidden => 4.0,  // Ring signatures cost more
+    };
+
+    let cluster_factor = compute_cluster_factor(cluster_wealth);
+    let memo_factor = 1.0 + (MEMO_FEE_RATE * num_memos as f64);
+
+    (base_fee as f64 * type_factor * cluster_factor * memo_factor) as u64
+}
+```
+
+#### Validation Changes
+
+```rust
+// transaction/core/src/validation/validate.rs
+pub fn validate_transaction_fee(
+    tx: &Tx,
+    base_minimum_fee: u64,
+    cluster_wealth: u64,
+) -> TransactionValidationResult<()> {
+    let num_memos = tx.prefix.outputs
+        .iter()
+        .filter(|o| o.e_memo.is_some())
+        .count();
+
+    let required_fee = compute_minimum_fee(
+        base_minimum_fee,
+        tx.tx_type(),
+        cluster_wealth,
+        num_memos,
+    );
+
+    if tx.prefix.fee < required_fee {
+        Err(TransactionValidationError::TxFeeError)
+    } else {
+        Ok(())
+    }
+}
+```
+
+#### Implementation Tasks
+
+- [ ] Add `MEMO_FEE_RATE` constant to `cluster-tax/src/lib.rs`
+- [ ] Implement `compute_memo_factor()` in `cluster-tax/src/fee_curve.rs`
+- [ ] Update `compute_minimum_fee()` to include memo factor
+- [ ] Update `validate_transaction_fee()` to count memos
+- [ ] Update wallet/transaction builder to estimate memo fees
+- [ ] Add fee estimation API to JSON-RPC (`estimateFee` method)
+- [ ] Update `botho send` to show memo fee breakdown
+- [ ] Add tests for memo fee calculation
+- [ ] Document in wallet user guide
+
+#### Future Considerations
+
+1. **Per-memo-type pricing**: If we later want different prices for different memo types (e.g., AuthenticatedSenderMemo costs more due to HMAC), we'd need the recipient to report the memo type after decryption. This creates UX complexity and is deferred.
+
+2. **Memo size tiers**: Current memos are fixed at 66 bytes. If we add variable-length memos, pricing would scale with size.
+
+3. **Memo content verification**: A ZK proof that the memo contains valid data (not garbage) could earn a discount. Complex, deferred.
+
 ## Network Protocol (Implemented)
 
 Uses libp2p with gossipsub for peer-to-peer communication:
@@ -1027,6 +1161,61 @@ Tasks:
 - [ ] Performance benchmarks under load
 - [ ] Security review of key derivation
 
+### Rollout Strategy
+
+```
+Phase    Network State                    Action
+─────    ─────────────────────────────    ──────────────────────────────
+  0      Classical only                   Current state
+
+  1      PQ-aware nodes                   Deploy PQ-capable nodes
+         Classical consensus              PQ tx valid but optional
+
+  2      Majority PQ-aware                Encourage PQ for privacy
+         Soft preference for PQ           Higher reputation for PQ nodes
+
+  3      Quantum threat imminent          Hard fork announcement
+         (10+ years from now?)            6-month migration window
+
+  4      Post-fork                        Classical signatures rejected
+         All tx require PQ                Old addresses frozen/burned
+```
+
+### Open Questions
+
+1. **Ring signatures + PQ**: When we add ring signatures for sender privacy,
+   how do PQ ring signatures work? Research needed (lattice-based ring sigs
+   exist but are larger).
+
+2. **Amount hiding + PQ**: Pedersen commitments are also ECDLP-based.
+   Need PQ-safe commitment scheme for RingCT. Lattice commitments?
+
+3. **Address size**: 3.2 KB addresses are unwieldy. Options:
+   - QR codes (works fine)
+   - Address registry service (centralization tradeoff)
+   - Hybrid: short classical + derivable PQ (needs research)
+
+4. **Signature aggregation**: Can we aggregate Dilithium signatures to
+   reduce per-input overhead? (Probably not without new research)
+
+### PQ Dependencies
+
+```toml
+# Already added to Cargo.toml
+[dependencies]
+pqcrypto-kyber = "0.8"       # ML-KEM-768
+pqcrypto-dilithium = "0.5"   # ML-DSA-65
+pqcrypto-traits = "0.3"      # Common traits
+```
+
+### References
+
+- NIST FIPS 203: ML-KEM (Kyber) Standard
+- NIST FIPS 204: ML-DSA (Dilithium) Standard
+- NIST FIPS 205: SLH-DSA (SPHINCS+) Standard (backup option)
+- CryptoNote v2.0 Whitepaper (stealth address protocol)
+- "Post-Quantum Cryptography for Blockchain" (IEEE S&P 2024)
+
 ## Performance Optimization
 
 ### Baseline Benchmarks (Pre-Optimization)
@@ -1121,63 +1310,6 @@ These optimizations may help but haven't been tested:
 #### SmallVec for Small Collections ⏳
 
 **Idea:** Many `Vec<V>` allocations for small node sets could use `SmallVec<[V; 8]>` to avoid heap allocation.
-
-## Quantum Resistance
-
-### Rollout Strategy
-
-```
-Phase    Network State                    Action
-─────    ─────────────────────────────    ──────────────────────────────
-  0      Classical only                   Current state
-
-  1      PQ-aware nodes                   Deploy PQ-capable nodes
-         Classical consensus              PQ tx valid but optional
-
-  2      Majority PQ-aware                Encourage PQ for privacy
-         Soft preference for PQ           Higher reputation for PQ nodes
-
-  3      Quantum threat imminent          Hard fork announcement
-         (10+ years from now?)            6-month migration window
-
-  4      Post-fork                        Classical signatures rejected
-         All tx require PQ                Old addresses frozen/burned
-```
-
-### Open Questions
-
-1. **Ring signatures + PQ**: When we add ring signatures for sender privacy,
-   how do PQ ring signatures work? Research needed (lattice-based ring sigs
-   exist but are larger).
-
-2. **Amount hiding + PQ**: Pedersen commitments are also ECDLP-based.
-   Need PQ-safe commitment scheme for RingCT. Lattice commitments?
-
-3. **Address size**: 3.2 KB addresses are unwieldy. Options:
-   - QR codes (works fine)
-   - Address registry service (centralization tradeoff)
-   - Hybrid: short classical + derivable PQ (needs research)
-
-4. **Signature aggregation**: Can we aggregate Dilithium signatures to
-   reduce per-input overhead? (Probably not without new research)
-
-### Dependencies
-
-```toml
-# Cargo.toml additions
-[dependencies]
-pqcrypto-kyber = "0.8"       # ML-KEM-768
-pqcrypto-dilithium = "0.5"   # ML-DSA-65
-pqcrypto-traits = "0.3"      # Common traits
-```
-
-### References
-
-- NIST FIPS 203: ML-KEM (Kyber) Standard
-- NIST FIPS 204: ML-DSA (Dilithium) Standard
-- NIST FIPS 205: SLH-DSA (SPHINCS+) Standard (backup option)
-- CryptoNote v2.0 Whitepaper (stealth address protocol)
-- "Post-Quantum Cryptography for Blockchain" (IEEE S&P 2024)
 
 ## Deployment (Cloudflare + AWS)
 

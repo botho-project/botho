@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use crate::{execute_transfer, ClusterWealth, EmissionConfig, FeeCurve, TransferConfig};
+use crate::{execute_transfer, ClusterWealth, FeeCurve, MonetaryPolicy, TransferConfig};
 
 use super::agent::{Action, Agent, AgentId};
 use super::metrics::{snapshot_metrics, Metrics, SimulationMetrics};
@@ -26,12 +26,19 @@ pub struct SimulationConfig {
     /// Verbose output.
     pub verbose: bool,
 
-    /// Emission configuration (optional - enables adaptive emission).
-    pub emission_config: Option<EmissionConfig>,
+    /// Monetary policy (optional - enables two-phase emission).
+    pub monetary_policy: Option<MonetaryPolicy>,
 
-    /// Blocks per round (for emission simulation).
+    /// Initial mining difficulty.
+    pub initial_difficulty: u64,
+
+    /// Blocks per round (for monetary simulation).
     /// Default 1 means each round = 1 block.
     pub blocks_per_round: u64,
+
+    /// Simulated seconds per block (for difficulty adjustment).
+    /// This should match the policy's target_block_time_secs for stable simulation.
+    pub secs_per_block: u64,
 }
 
 impl Default for SimulationConfig {
@@ -42,22 +49,33 @@ impl Default for SimulationConfig {
             transfer_config: TransferConfig::default(),
             snapshot_frequency: 100,
             verbose: false,
-            emission_config: None,
+            monetary_policy: None,
+            initial_difficulty: 1000,
             blocks_per_round: 1,
+            secs_per_block: 60,
         }
     }
 }
 
 impl SimulationConfig {
-    /// Enable adaptive emission with default parameters.
-    pub fn with_emission(mut self) -> Self {
-        self.emission_config = Some(EmissionConfig::default());
+    /// Enable monetary policy with default parameters.
+    pub fn with_monetary(mut self) -> Self {
+        self.monetary_policy = Some(MonetaryPolicy::default());
         self
     }
 
-    /// Enable adaptive emission with custom configuration.
-    pub fn with_emission_config(mut self, config: EmissionConfig) -> Self {
-        self.emission_config = Some(config);
+    /// Enable monetary policy with custom configuration.
+    pub fn with_monetary_policy(mut self, policy: MonetaryPolicy) -> Self {
+        self.secs_per_block = policy.target_block_time_secs;
+        self.monetary_policy = Some(policy);
+        self
+    }
+
+    /// Use fast test parameters for monetary policy.
+    pub fn with_fast_monetary(mut self) -> Self {
+        let policy = MonetaryPolicy::fast_test();
+        self.secs_per_block = policy.target_block_time_secs;
+        self.monetary_policy = Some(policy);
         self
     }
 }
@@ -74,8 +92,8 @@ pub struct SimulationResult {
     /// Per-round data (if verbose).
     pub round_summaries: Vec<RoundSummary>,
 
-    /// Final emission statistics (if emission enabled).
-    pub emission_stats: Option<super::state::EmissionStats>,
+    /// Final monetary statistics (if monetary policy enabled).
+    pub monetary_stats: Option<super::state::MonetaryStats>,
 }
 
 /// Summary of a single round.
@@ -89,6 +107,10 @@ pub struct RoundSummary {
     pub rewards_emitted: u64,
     /// Current block reward rate.
     pub block_reward: u64,
+    /// Current difficulty.
+    pub difficulty: u64,
+    /// Current monetary phase.
+    pub phase: &'static str,
 }
 
 /// Run a simulation with the given agents.

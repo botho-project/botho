@@ -350,7 +350,7 @@ impl RingTxInput {
         real_index: usize,
         onetime_private_key: &RistrettoPrivate,
         amount: u64,
-        output_amount: u64,
+        _output_amount: u64, // Reserved for future RingCT balance proofs
         message: &[u8; 32],
         rng: &mut R,
     ) -> Result<Self, String> {

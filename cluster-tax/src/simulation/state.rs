@@ -1,6 +1,8 @@
 //! Simulation state tracking.
 
-use crate::{ClusterId, ClusterWealth, EmissionConfig, EmissionController, FeeCurve, TransferConfig};
+use crate::{
+    ClusterId, ClusterWealth, DifficultyController, FeeCurve, MonetaryPolicy, TransferConfig,
+};
 use std::collections::HashMap;
 
 use super::agent::AgentId;
@@ -47,25 +49,34 @@ pub struct SimulationState {
     /// Next cluster ID to assign for minting.
     next_cluster_id: u64,
 
-    /// Adaptive emission controller for dynamic block rewards.
-    pub emission_controller: Option<EmissionController>,
+    /// Two-phase monetary policy controller.
+    pub monetary_controller: Option<DifficultyController>,
 
     /// Total block rewards emitted this simulation.
     pub total_rewards_emitted: u64,
 
-    /// Fees burned in current round (for emission tracking).
+    /// Fees burned in current round (for monetary tracking).
     pub round_fees_burned: u64,
+
+    /// Simulated time in seconds (for difficulty adjustment).
+    pub simulated_time: u64,
 }
 
-/// Emission statistics snapshot.
+/// Monetary statistics snapshot.
 #[derive(Debug, Clone)]
-pub struct EmissionStats {
-    pub current_epoch: u64,
-    pub current_block_reward: u64,
+pub struct MonetaryStats {
+    pub height: u64,
+    pub phase: &'static str,
+    pub current_halving: Option<u32>,
+    pub blocks_until_halving: Option<u64>,
+    pub block_reward: u64,
+    pub difficulty: u64,
+    pub total_supply: u64,
     pub total_emitted: u64,
     pub total_fees_burned: u64,
     pub net_supply_change: i64,
     pub effective_inflation_bps: i64,
+    pub estimated_block_time: f64,
 }
 
 impl SimulationState {
@@ -85,54 +96,64 @@ impl SimulationState {
             mixer_ids: Vec::new(),
             fee_rates: HashMap::new(),
             next_cluster_id: 0,
-            emission_controller: None,
+            monetary_controller: None,
             total_rewards_emitted: 0,
             round_fees_burned: 0,
+            simulated_time: 0,
         }
     }
 
-    /// Create a new simulation state with adaptive emission.
-    pub fn with_emission(
-        total_rounds: u64,
-        fee_curve: FeeCurve,
-        transfer_config: TransferConfig,
-        emission_config: EmissionConfig,
-        initial_supply: u64,
-    ) -> Self {
-        let mut state = Self::new(total_rounds, fee_curve, transfer_config);
-        state.emission_controller = Some(EmissionController::new(emission_config, initial_supply));
-        state.total_supply = initial_supply;
-        state
+    /// Initialize monetary controller after agents are registered.
+    pub fn init_monetary(&mut self, policy: MonetaryPolicy, initial_difficulty: u64) {
+        self.monetary_controller = Some(DifficultyController::new(
+            policy,
+            self.total_supply,
+            initial_difficulty,
+            0, // Start time
+        ));
     }
 
-    /// Initialize emission controller after agents are registered.
-    pub fn init_emission(&mut self, emission_config: EmissionConfig) {
-        self.emission_controller = Some(EmissionController::new(emission_config, self.total_supply));
-    }
-
-    /// Get the current block reward from emission controller.
+    /// Get the current block reward from monetary controller.
     pub fn current_block_reward(&self) -> u64 {
-        self.emission_controller
+        self.monetary_controller
             .as_ref()
-            .map(|ec| ec.block_reward())
+            .map(|mc| mc.block_reward())
             .unwrap_or(0)
     }
 
-    /// Record fees burned (goes to emission controller).
+    /// Get the current difficulty from monetary controller.
+    pub fn current_difficulty(&self) -> u64 {
+        self.monetary_controller
+            .as_ref()
+            .map(|mc| mc.state.difficulty)
+            .unwrap_or(1)
+    }
+
+    /// Get the current monetary phase.
+    pub fn monetary_phase(&self) -> &'static str {
+        self.monetary_controller
+            .as_ref()
+            .map(|mc| mc.phase())
+            .unwrap_or("None")
+    }
+
+    /// Record fees burned (goes to monetary controller).
     pub fn record_fee_burn(&mut self, amount: u64) {
         self.total_fees_collected += amount;
         self.round_fees_burned += amount;
-        if let Some(ref mut ec) = self.emission_controller {
-            ec.record_fee_burn(amount);
+        if let Some(ref mut mc) = self.monetary_controller {
+            mc.record_fee_burn(amount);
         }
     }
 
     /// Process a block: emits reward and returns the reward amount.
-    pub fn process_block(&mut self) -> u64 {
-        if let Some(ref mut ec) = self.emission_controller {
-            let reward = ec.process_block();
+    /// `block_time` is the simulated time when this block was mined.
+    pub fn process_block(&mut self, block_time: u64) -> u64 {
+        if let Some(ref mut mc) = self.monetary_controller {
+            let reward = mc.process_block(block_time);
             self.total_rewards_emitted += reward;
-            self.total_supply = ec.state.total_supply;
+            self.total_supply = mc.state.total_supply;
+            self.simulated_time = block_time;
             reward
         } else {
             0
@@ -144,15 +165,24 @@ impl SimulationState {
         self.round_fees_burned = 0;
     }
 
-    /// Get emission statistics if emission is enabled.
-    pub fn emission_stats(&self) -> Option<EmissionStats> {
-        self.emission_controller.as_ref().map(|ec| EmissionStats {
-            current_epoch: ec.state.current_epoch,
-            current_block_reward: ec.state.current_block_reward,
-            total_emitted: ec.state.total_emitted,
-            total_fees_burned: ec.state.total_fees_burned,
-            net_supply_change: ec.state.net_supply_change(),
-            effective_inflation_bps: ec.state.effective_inflation_bps(&ec.config),
+    /// Get monetary statistics if monetary controller is enabled.
+    pub fn monetary_stats(&self) -> Option<MonetaryStats> {
+        self.monetary_controller.as_ref().map(|mc| {
+            let stats = mc.stats(self.simulated_time);
+            MonetaryStats {
+                height: stats.height,
+                phase: stats.phase,
+                current_halving: stats.current_halving,
+                blocks_until_halving: stats.blocks_until_halving,
+                block_reward: stats.block_reward,
+                difficulty: stats.difficulty,
+                total_supply: stats.total_supply,
+                total_emitted: stats.total_rewards_emitted,
+                total_fees_burned: stats.total_fees_burned,
+                net_supply_change: stats.net_supply_change,
+                effective_inflation_bps: stats.effective_inflation_bps,
+                estimated_block_time: stats.estimated_block_time,
+            }
         })
     }
 

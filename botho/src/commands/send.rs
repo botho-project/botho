@@ -92,6 +92,7 @@ pub fn run(config_path: &Path, address_str: &str, amount_str: &str) -> Result<()
     }
 
     // Create the transaction
+    let num_inputs = inputs.len();
     let mut tx = Transaction::new(inputs, outputs, MIN_FEE, state.height);
 
     // Sign the transaction with our wallet's spend key
@@ -111,7 +112,7 @@ pub fn run(config_path: &Path, address_str: &str, amount_str: &str) -> Result<()
     }
     println!();
     println!("Transaction hash: {}", hex::encode(&tx_hash[0..16]));
-    println!("Inputs: {}", inputs.len());
+    println!("Inputs: {}", num_inputs);
     println!("Outputs: {}", tx.outputs.len());
 
     // Save transaction to pending file

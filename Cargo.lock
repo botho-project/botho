@@ -1241,6 +1241,7 @@ dependencies = [
  "bth-consensus-scp-types",
  "bth-crypto-digestible",
  "bth-crypto-keys",
+ "bth-util-from-random",
  "bth-util-serial",
  "bth-util-uri",
  "displaydoc",

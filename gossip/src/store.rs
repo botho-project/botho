@@ -61,7 +61,7 @@ pub struct PeerStore {
     config: PeerStoreConfig,
 
     /// Map from ResponderID to the latest announcement
-    announcements: RwLock<HashMap<ResponderId, NodeAnnouncement>>,
+    pub(crate) announcements: RwLock<HashMap<ResponderId, NodeAnnouncement>>,
 
     /// Index: NodeID public key -> ResponderID (for lookups by key)
     key_index: RwLock<HashMap<[u8; 32], ResponderId>>,
@@ -340,7 +340,7 @@ pub fn new_shared_store(config: PeerStoreConfig) -> SharedPeerStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bth_consensus_scp_types::QuorumSetMember;
+    use bth_consensus_scp_types::{QuorumSet, QuorumSetMember};
     use bth_crypto_keys::Ed25519Public;
     use std::str::FromStr;
 
