@@ -34,7 +34,6 @@ bt-util-telemetry = { workspace = true }
 bt-util-test-helper = { workspace = true }
 
 displaydoc = { workspace = true }
-lazy_static = { workspace = true }
 lmdb-rkv = { workspace = true }
 mockall = { workspace = true }
 prost = { workspace = true, features = ["prost-derive"] }

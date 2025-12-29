@@ -1323,7 +1323,6 @@ dependencies = [
  "bt-util-telemetry",
  "bt-util-test-helper",
  "displaydoc",
- "lazy_static",
  "lmdb-rkv",
  "mc-rand",
  "mockall",
@@ -1520,7 +1519,6 @@ dependencies = [
  "serde",
  "sha2",
  "subtle",
- "yaml-rust",
  "zeroize",
 ]
 
@@ -1619,7 +1617,6 @@ dependencies = [
  "rand_core 0.6.4",
  "serde",
  "subtle",
- "yaml-rust",
  "zeroize",
 ]
 
@@ -7538,15 +7535,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d7d8a75eaf6557bb84a65ace8609883db44a29951042ada9b393151532e41fcb"
 dependencies = [
  "xml-rs",
-]
-
-[[package]]
-name = "yaml-rust"
-version = "0.4.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "56c1936c4cc7a1c9ab21a1ebb602eb942ba868cbd44a99cb7cdc5892335e1c85"
-dependencies = [
- "linked-hash-map",
 ]
 
 [[package]]

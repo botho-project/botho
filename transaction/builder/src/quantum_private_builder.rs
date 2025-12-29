@@ -11,17 +11,6 @@
 //! Quantum-private transactions require BOTH layers to sign:
 //! - Classical layer: Schnorr signatures on Ristretto (current security)
 //! - Post-quantum layer: ML-DSA-65 (Dilithium) signatures (future security)
-//!
-//! # Usage
-//!
-//! ```ignore
-//! use bt_transaction_builder::QuantumPrivateTransactionBuilder;
-//!
-//! let builder = QuantumPrivateTransactionBuilder::new(sender_pq_account);
-//! builder.add_input(pq_output, input_credentials)?;
-//! builder.add_output(amount, recipient_pq_address)?;
-//! let tx = builder.build(&mut rng)?;
-//! ```
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -31,10 +20,9 @@ use bt_crypto_keys::{CompressedRistrettoPublic, RistrettoPrivate, RistrettoPubli
 use bt_crypto_pq::{derive_onetime_sig_keypair, MlDsa65KeyPair};
 use bt_transaction_core::{
     encrypted_fog_hint::EncryptedFogHint,
-    onetime_keys::create_tx_out_target_key,
     quantum_private::{QuantumPrivateTxIn, QuantumPrivateTxOut},
     tx::TxHash,
-    Amount, MaskedAmount,
+    Amount, BlockVersion, MaskedAmount,
 };
 use bt_util_from_random::FromRandom;
 use rand_core::{CryptoRng, RngCore};
@@ -103,6 +91,8 @@ pub struct QuantumPrivateTransactionBuilder {
     outputs: Vec<PendingOutput>,
     /// Fee for this transaction.
     fee: u64,
+    /// Block version for this transaction.
+    block_version: BlockVersion,
 }
 
 impl QuantumPrivateTransactionBuilder {
@@ -110,12 +100,14 @@ impl QuantumPrivateTransactionBuilder {
     ///
     /// # Arguments
     /// * `sender` - The sender's quantum-safe account key
-    pub fn new(sender: QuantumSafeAccountKey) -> Self {
+    /// * `block_version` - The block version to target
+    pub fn new(sender: QuantumSafeAccountKey, block_version: BlockVersion) -> Self {
         Self {
             sender,
             inputs: Vec::new(),
             outputs: Vec::new(),
             fee: 0,
+            block_version,
         }
     }
 
@@ -215,25 +207,32 @@ impl QuantumPrivateTransactionBuilder {
         let tx_private_key = RistrettoPrivate::from_random(rng);
         let tx_public_key = RistrettoPublic::from(&tx_private_key);
 
-        // Get recipient's classical public keys
-        let recipient_spend_key = pending.recipient.classical().spend_public_key();
+        // Get recipient's classical view public key for ECDH
+        let recipient_view_key = pending.recipient.classical().view_public_key();
+
+        // Create shared secret using ECDH: shared = tx_private_key * view_public_key
+        let shared_secret = bt_transaction_core::onetime_keys::create_shared_secret(
+            recipient_view_key,
+            &tx_private_key,
+        );
 
         // Create classical one-time target key using stealth address protocol
-        let target_key = create_tx_out_target_key(&tx_private_key, recipient_spend_key);
-
-        // Create shared secret for amount masking using ECDH
-        let recipient_view_key = pending.recipient.classical().view_public_key();
-        let shared_secret =
-            bt_transaction_core::onetime_keys::create_shared_secret(recipient_view_key, &tx_private_key);
+        // target = Hs(shared) * G + spend_public_key
+        let target_key = bt_transaction_core::onetime_keys::create_tx_out_target_key(
+            &tx_private_key,
+            pending.recipient.classical(),
+        );
 
         // Mask the amount
-        let masked_amount = MaskedAmount::new(pending.amount, &shared_secret.into())
-            .map_err(|e| {
-                QuantumPrivateTxBuilderError::EncapsulationError(alloc::format!(
-                    "Failed to mask amount: {:?}",
-                    e
-                ))
-            })?;
+        let masked_amount =
+            MaskedAmount::new(self.block_version, pending.amount, &shared_secret.into()).map_err(
+                |e| {
+                    QuantumPrivateTxBuilderError::EncapsulationError(alloc::format!(
+                        "Failed to mask amount: {:?}",
+                        e
+                    ))
+                },
+            )?;
 
         // Create fake fog hint (Botho doesn't use fog)
         let e_fog_hint = EncryptedFogHint::fake_onetime_hint(rng);
@@ -242,16 +241,10 @@ impl QuantumPrivateTransactionBuilder {
 
         // Encapsulate to recipient's ML-KEM public key
         let recipient_pq_kem_key = pending.recipient.pq_kem_public_key();
-        let (ciphertext, pq_shared_secret) = recipient_pq_kem_key.encapsulate(rng).map_err(|e| {
-            QuantumPrivateTxBuilderError::EncapsulationError(alloc::format!(
-                "ML-KEM encapsulation failed: {:?}",
-                e
-            ))
-        })?;
+        let (ciphertext, pq_shared_secret) = recipient_pq_kem_key.encapsulate();
 
         // Derive PQ one-time signing keypair from the shared secret
-        let pq_onetime_keypair =
-            derive_onetime_sig_keypair(pq_shared_secret.as_bytes(), 0);
+        let pq_onetime_keypair = derive_onetime_sig_keypair(pq_shared_secret.as_bytes(), 0);
         let pq_target_key = pq_onetime_keypair.public_key().clone();
 
         Ok(QuantumPrivateTxOut::new(
@@ -268,10 +261,9 @@ impl QuantumPrivateTransactionBuilder {
     fn compute_signing_message(&self, outputs: &[QuantumPrivateTxOut]) -> [u8; 32] {
         let mut transcript = MerlinTranscript::new(b"quantum-private-tx");
 
-        // Hash all outputs
-        for (i, output) in outputs.iter().enumerate() {
-            let label = alloc::format!("output_{}", i);
-            output.append_to_transcript(label.as_bytes(), &mut transcript);
+        // Hash all outputs - use a single static label since index is included via order
+        for output in outputs.iter() {
+            output.append_to_transcript(b"output", &mut transcript);
         }
 
         // Extract 32-byte digest
@@ -376,8 +368,7 @@ pub fn derive_input_credentials(
     })?;
 
     // Derive the PQ one-time signing keypair
-    let pq_signing_keypair =
-        derive_onetime_sig_keypair(pq_shared_secret.as_bytes(), output_index);
+    let pq_signing_keypair = derive_onetime_sig_keypair(pq_shared_secret.as_bytes(), output_index);
 
     // Derive the classical one-time private key
     // This requires the view private key and the output's public key
@@ -385,16 +376,11 @@ pub fn derive_input_credentials(
         QuantumPrivateTxBuilderError::InvalidRecipient("Invalid output public key".into())
     })?;
 
-    // Create shared secret using ECDH: shared = view_key * tx_public_key
-    let shared_secret = bt_transaction_core::onetime_keys::create_shared_secret(
+    // Recover one-time private key using the standard CryptoNote protocol
+    let onetime_private_key = bt_transaction_core::onetime_keys::recover_onetime_private_key(
         &tx_public_key,
         account.classical().view_private_key(),
-    );
-
-    // Recover one-time private key: x = H(shared_secret) + spend_private_key
-    let onetime_private_key = bt_transaction_core::onetime_keys::recover_onetime_private_key(
-        &shared_secret.into(),
-        account.classical().subaddress_spend_private(0),
+        &account.classical().subaddress_spend_private(0),
     );
 
     // Get the decrypted value from the masked amount
@@ -402,6 +388,12 @@ pub fn derive_input_credentials(
         .masked_amount
         .as_ref()
         .ok_or(QuantumPrivateTxBuilderError::MissingPqCredentials)?;
+
+    // Create shared secret for decryption
+    let shared_secret = bt_transaction_core::onetime_keys::create_shared_secret(
+        &tx_public_key,
+        account.classical().view_private_key(),
+    );
 
     let (value, _token_id) = masked_amount
         .get_value(&shared_secret.into())
@@ -425,7 +417,8 @@ mod tests {
     #[test]
     fn test_builder_no_inputs_error() {
         let account = create_test_account();
-        let builder = QuantumPrivateTransactionBuilder::new(account);
+        let builder =
+            QuantumPrivateTransactionBuilder::new(account, BlockVersion::try_from(3).unwrap());
 
         let result = builder.build(&mut rand::thread_rng());
         assert!(matches!(
@@ -437,7 +430,8 @@ mod tests {
     #[test]
     fn test_builder_no_outputs_error() {
         let account = create_test_account();
-        let mut builder = QuantumPrivateTransactionBuilder::new(account);
+        let mut builder =
+            QuantumPrivateTransactionBuilder::new(account, BlockVersion::try_from(3).unwrap());
 
         // Add a dummy input
         let input = create_test_input_credentials();
@@ -453,7 +447,10 @@ mod tests {
     #[test]
     fn test_value_not_conserved_error() {
         let account = create_test_account();
-        let mut builder = QuantumPrivateTransactionBuilder::new(account.clone());
+        let mut builder = QuantumPrivateTransactionBuilder::new(
+            account.clone(),
+            BlockVersion::try_from(3).unwrap(),
+        );
 
         // Add input with value 100
         let mut input = create_test_input_credentials();
@@ -462,7 +459,10 @@ mod tests {
 
         // Add output with value 200 (more than input)
         let recipient = account.public_address();
-        builder.add_output(Amount::new(200, bt_transaction_core::TokenId::MOB), recipient);
+        builder.add_output(
+            Amount::new(200, bt_transaction_core::TokenId::MOB),
+            recipient,
+        );
 
         let result = builder.build(&mut rand::thread_rng());
         assert!(matches!(
@@ -479,14 +479,16 @@ mod tests {
         let rng = &mut rand::thread_rng();
 
         // Create a dummy output
+        let shared_secret = RistrettoPublic::from_random(rng);
         let masked_amount = MaskedAmount::new(
+            BlockVersion::try_from(3).unwrap(),
             Amount::new(100, bt_transaction_core::TokenId::MOB),
-            &RistrettoPublic::from_random(rng).into(),
+            &shared_secret.into(),
         )
         .unwrap();
 
         let kem_keypair = MlKem768KeyPair::generate(rng);
-        let (ciphertext, _) = kem_keypair.public_key().encapsulate(rng).unwrap();
+        let (ciphertext, _) = kem_keypair.public_key().encapsulate();
         let sig_keypair = bt_crypto_pq::MlDsa65KeyPair::generate(rng);
 
         let output = QuantumPrivateTxOut::new(

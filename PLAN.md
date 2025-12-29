@@ -1042,31 +1042,28 @@ Added `pending_values_changed` flag and `cached_values_to_propose` to avoid rebu
 
 ```rust
 self.handle_messages(&[msg.clone()])  // Clone on every message
-self.M.insert(msg.sender_id.clone(), msg.clone())
-    .collect();  // Rebuilt every loop iteration!
+self.M.insert(msg.sender_id.clone(), msg.clone());
 ```
 
-**Solution:** Only rebuild when `pending_values` changes.
+**Solution:** Use `Arc<Msg<V>>` throughout to share ownership without cloning.
 
-#### 6. Message Sorting on Every Batch
+#### Message Sorting ⏳
 
 **Location:** `consensus/scp/src/slot.rs:359`
 
 **Solution:** Use a priority queue or maintain sorted order incrementally.
 
-### Low Impact Optimizations
-
-#### 7. Value Validation Redundancy
+#### Value Validation Caching ⏳
 
 **Location:** `consensus/scp/src/slot.rs:374-378`
 
-Values are validated on every incoming message, even if seen before.
+Cache validation results per value hash to avoid re-validating seen values.
 
-**Solution:** Cache validation results per value hash.
-
-#### 8. SmallVec for Small Collections
+#### SmallVec for Small Collections ⏳
 
 Many `Vec<V>` allocations for small node sets could use `SmallVec<[V; 8]>` to avoid heap allocation.
+
+## Quantum Resistance
 
 ### Rollout Strategy
 
@@ -1321,108 +1318,73 @@ sudo systemctl start botho
 journalctl -u botho -f
 ```
 
-### Amplify Setup for botho.io
+### Cloudflare Pages Setup for botho.io
 
 #### Project Structure
 
 ```
 web/
 ├── pnpm-workspace.yaml
-├── landing/              # Marketing site
-│   ├── package.json
-│   └── src/
-├── wallet/               # Web wallet app
-│   ├── package.json
-│   └── src/
-└── docs/                 # Documentation
-    ├── package.json
-    └── src/
+├── packages/
+│   ├── adapters/         # @botho/adapters
+│   ├── core/             # @botho/core
+│   ├── ui/               # @botho/ui
+│   └── web-wallet/       # @botho/web-wallet (deploy target)
+│       └── dist/         # Build output
 ```
 
-#### Amplify Configuration
-
-```yaml
-# amplify.yml
-version: 1
-frontend:
-  phases:
-    preBuild:
-      commands:
-        - npm install -g pnpm
-        - pnpm install
-    build:
-      commands:
-        - pnpm build
-  artifacts:
-    baseDirectory: dist
-    files:
-      - '**/*'
-  cache:
-    paths:
-      - node_modules/**/*
-```
-
-#### CLI Commands
+#### Deployment via Wrangler CLI
 
 ```bash
-# 1. Install Amplify CLI
-npm install -g @aws-amplify/cli
+# 1. Install Wrangler
+npm install -g wrangler
 
-# 2. Initialize Amplify (in web/ directory)
-amplify init
+# 2. Login to Cloudflare
+wrangler login
 
-# 3. Add hosting
-amplify add hosting
-# Select: Hosting with Amplify Console
-# Select: Continuous deployment
+# 3. Build the project
+cd web
+pnpm install
+pnpm build:web
 
-# 4. Connect to GitHub repo
-amplify hosting configure
-
-# 5. Deploy
-amplify publish
+# 4. Deploy to Cloudflare Pages
+wrangler pages deploy packages/web-wallet/dist --project-name=botho
 ```
+
+#### Deployment via GitHub (Recommended)
+
+1. Go to **Cloudflare Dashboard → Pages**
+2. Click **Create a project → Connect to Git**
+3. Select the repository
+4. Configure build settings:
+   - **Build command:** `cd web && pnpm install && pnpm build:web`
+   - **Build output directory:** `web/packages/web-wallet/dist`
+   - **Root directory:** `/`
+5. Add environment variable: `NODE_VERSION=20`
+6. Deploy
 
 #### Custom Domain Setup
 
-```bash
-# In Amplify Console or via CLI:
-# 1. Add custom domain: botho.io
-# 2. Amplify will provision SSL certificate
-# 3. Add DNS records to Route 53 (or update nameservers)
-```
+1. In Pages project → **Custom domains**
+2. Add `botho.io` and `www.botho.io`
+3. Cloudflare auto-provisions SSL
+4. DNS records added automatically (if domain is on Cloudflare)
 
-### Route 53 DNS Configuration
+### Cloudflare DNS Configuration
 
-```bash
-# Create hosted zone
-aws route53 create-hosted-zone \
-  --name botho.io \
-  --caller-reference $(date +%s)
+If `botho.io` is already on Cloudflare, add these records:
 
-# Get hosted zone ID
-ZONE_ID=$(aws route53 list-hosted-zones-by-name \
-  --dns-name botho.io \
-  --query 'HostedZones[0].Id' \
-  --output text | cut -d'/' -f3)
+| Type  | Name | Content              | Proxy  | TTL  |
+|-------|------|----------------------|--------|------|
+| CNAME | @    | botho.pages.dev      | Proxied| Auto |
+| CNAME | www  | botho.pages.dev      | Proxied| Auto |
+| A     | seed | `<EC2_ELASTIC_IP>`   | DNS only| Auto |
 
-# Add seed node A record
-aws route53 change-resource-record-sets \
-  --hosted-zone-id $ZONE_ID \
-  --change-batch '{
-    "Changes": [{
-      "Action": "CREATE",
-      "ResourceRecordSet": {
-        "Name": "seed.botho.io",
-        "Type": "A",
-        "TTL": 300,
-        "ResourceRecords": [{"Value": "ELASTIC_IP_HERE"}]
-      }
-    }]
-  }'
+**Important:** `seed.botho.io` must be **DNS only** (gray cloud) for direct TCP access.
 
-# Amplify handles botho.io automatically
-```
+If domain is elsewhere, update nameservers to Cloudflare's:
+- `ns1.cloudflare.com`
+- `ns2.cloudflare.com`
 
 ### CloudWatch Monitoring
 

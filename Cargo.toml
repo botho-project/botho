@@ -240,7 +240,6 @@ wasm-bindgen-test = "0.3"
 x25519-dalek = { version = "2", default-features = false }
 x509-cert = { version = "0.2", default-features = false }
 x509-signature = "0.5"
-yaml-rust = "0.4"
 yare = "2"
 zeroize = { version = "1", default-features = false }
 

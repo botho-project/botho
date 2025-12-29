@@ -13,6 +13,7 @@ use bt_util_metrics::{
 };
 use std::{
     path::Path,
+    sync::LazyLock,
     time::{Duration, Instant},
 };
 
@@ -59,9 +60,8 @@ impl LedgerMetricsCollector {
     }
 }
 
-lazy_static::lazy_static! {
-    static ref COLLECTOR: LedgerMetricsCollector = LedgerMetricsCollector::new_and_registered();
-}
+static COLLECTOR: LazyLock<LedgerMetricsCollector> =
+    LazyLock::new(LedgerMetricsCollector::new_and_registered);
 
 impl Collector for LedgerMetricsCollector {
     fn desc(&self) -> Vec<&Desc> {
