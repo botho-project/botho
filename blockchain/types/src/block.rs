@@ -205,8 +205,8 @@ mod block_tests {
     use bth_account_keys::AccountKey;
     use bth_crypto_keys::RistrettoPrivate;
     use bth_transaction_core::{
-        encrypted_fog_hint::EncryptedFogHint, membership_proofs::Range, ring_signature::KeyImage,
-        tokens::Mob, tx::TxOutMembershipHash, Amount, Token,
+        membership_proofs::Range, ring_signature::KeyImage, tokens::Mob,
+        tx::TxOutMembershipHash, Amount, Token,
     };
     use bth_util_from_random::FromRandom;
     use bth_util_test_helper::{get_seeded_rng, CryptoRng, RngCore};
@@ -238,7 +238,6 @@ mod block_tests {
                     },
                     &recipient.default_subaddress(),
                     &RistrettoPrivate::from_random(rng),
-                    EncryptedFogHint::fake_onetime_hint(rng),
                 )
                 .unwrap()
             })

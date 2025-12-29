@@ -147,8 +147,26 @@ impl EncryptedWallet {
             file.write_all(json.as_bytes())?;
         }
 
-        #[cfg(not(unix))]
+        #[cfg(windows)]
         {
+            use std::io::Write;
+            // Write file first
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(path)?;
+            file.write_all(json.as_bytes())?;
+            drop(file);
+
+            // Set restrictive ACL (owner-only access)
+            set_windows_owner_only_acl(path)?;
+        }
+
+        #[cfg(not(any(unix, windows)))]
+        {
+            // Fallback for other platforms - at least log a warning
+            tracing::warn!("Unable to set restrictive file permissions on this platform");
             fs::write(path, json)?;
         }
 
@@ -293,6 +311,110 @@ pub fn secure_zero(data: &mut [u8]) {
     }
     // Compiler barrier to prevent optimization
     std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Set Windows ACL to owner-only access (equivalent to Unix 0600)
+#[cfg(windows)]
+fn set_windows_owner_only_acl(path: &Path) -> Result<()> {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    use windows::Win32::Foundation::{CloseHandle, HANDLE, PSID};
+    use windows::Win32::Security::Authorization::{
+        SetNamedSecurityInfoW, SE_FILE_OBJECT, EXPLICIT_ACCESS_W, SET_ACCESS,
+        NO_INHERITANCE, SetEntriesInAclW, TRUSTEE_IS_SID, TRUSTEE_W, TRUSTEE_TYPE,
+    };
+    use windows::Win32::Security::{
+        GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER,
+        DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
+        ACL, GENERIC_READ, GENERIC_WRITE,
+    };
+    use windows::Win32::System::Memory::{LocalFree, HLOCAL};
+    use windows::core::PCWSTR;
+
+    // Get current process token and user SID
+    let token = unsafe {
+        let mut token = HANDLE::default();
+        let current_process = windows::Win32::System::Threading::GetCurrentProcess();
+        windows::Win32::System::Threading::OpenProcessToken(
+            current_process,
+            TOKEN_QUERY,
+            &mut token,
+        )?;
+        token
+    };
+
+    // Get token user info
+    let mut token_info_len = 0u32;
+    unsafe {
+        let _ = GetTokenInformation(token, TokenUser, None, 0, &mut token_info_len);
+    }
+
+    let mut token_info = vec![0u8; token_info_len as usize];
+    unsafe {
+        GetTokenInformation(
+            token,
+            TokenUser,
+            Some(token_info.as_mut_ptr() as *mut _),
+            token_info_len,
+            &mut token_info_len,
+        )?;
+        CloseHandle(token)?;
+    }
+
+    let token_user = unsafe { &*(token_info.as_ptr() as *const TOKEN_USER) };
+    let user_sid = token_user.User.Sid;
+
+    // Create EXPLICIT_ACCESS for owner with full control
+    let mut ea = EXPLICIT_ACCESS_W {
+        grfAccessPermissions: (GENERIC_READ | GENERIC_WRITE).0,
+        grfAccessMode: SET_ACCESS,
+        grfInheritance: NO_INHERITANCE,
+        Trustee: TRUSTEE_W {
+            TrusteeForm: TRUSTEE_IS_SID,
+            TrusteeType: TRUSTEE_TYPE(0), // TRUSTEE_IS_USER
+            ptstrName: windows::core::PWSTR(user_sid.0 as *mut u16),
+            ..Default::default()
+        },
+    };
+
+    // Create ACL with the explicit access entry
+    let mut new_acl: *mut ACL = std::ptr::null_mut();
+    unsafe {
+        SetEntriesInAclW(Some(&[ea]), None, &mut new_acl)?;
+    }
+
+    // Convert path to wide string
+    let path_wide: Vec<u16> = OsStr::new(path)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+
+    // Set the new DACL on the file
+    let result = unsafe {
+        SetNamedSecurityInfoW(
+            PCWSTR::from_raw(path_wide.as_ptr()),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            PSID::default(),
+            PSID::default(),
+            Some(new_acl),
+            None,
+        )
+    };
+
+    // Free the ACL
+    if !new_acl.is_null() {
+        unsafe {
+            let _ = LocalFree(HLOCAL(new_acl as *mut _));
+        }
+    }
+
+    if result.is_err() {
+        tracing::warn!("Failed to set file ACL: {:?}", result);
+        // Don't fail - file is still written, just with default permissions
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

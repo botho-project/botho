@@ -10,6 +10,7 @@ pub mod config;
 pub mod consensus;
 pub mod ledger;
 pub mod mempool;
+pub mod monetary;
 pub mod network;
 pub mod node;
 pub mod rpc;

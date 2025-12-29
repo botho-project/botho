@@ -330,6 +330,20 @@ pub fn validate_signature<R: RngCore + CryptoRng>(
 }
 
 /// The fee amount must be greater than or equal to the given minimum fee.
+///
+/// The caller is responsible for computing `minimum_fee` based on:
+/// - Transaction type (Plain vs Hidden)
+/// - Cluster wealth (progressive taxation)
+/// - Number of memos (outputs with `e_memo.is_some()`)
+///
+/// Use `bth_cluster_tax::FeeConfig::minimum_fee()` to compute the required fee:
+/// ```ignore
+/// let num_memos = tx.prefix.outputs.iter()
+///     .filter(|o| o.e_memo.is_some())
+///     .count();
+/// let minimum_fee = fee_config.minimum_fee(tx_type, amount, cluster_wealth, num_memos);
+/// validate_transaction_fee(&tx, minimum_fee)?;
+/// ```
 pub fn validate_transaction_fee(tx: &Tx, minimum_fee: u64) -> TransactionValidationResult<()> {
     if tx.prefix.fee < minimum_fee {
         Err(TransactionValidationError::TxFeeError)

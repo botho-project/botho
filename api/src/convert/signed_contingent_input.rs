@@ -68,7 +68,6 @@ mod tests {
     use super::*;
     use bth_account_keys::AccountKey;
     use bth_crypto_ring_signature_signer::NoKeysRingSigner;
-    use mc_fog_report_validation_test_utils::MockFogResolver;
     use bth_transaction_builder::{
         test_utils::get_input_credentials, EmptyMemoBuilder, ReservedSubaddresses,
         SignedContingentInputBuilder,
@@ -88,21 +87,16 @@ mod tests {
 
         let token2 = TokenId::from(2);
 
-        let fpr = MockFogResolver::default();
-
         // Charlie makes a signed contingent input, offering 1000 token2's for 1 MOB
         let input_credentials = get_input_credentials(
             BlockVersion::MAX,
             Amount::new(1000, token2),
             &charlie,
-            &fpr,
             &mut rng,
         );
-        let proofs = input_credentials.membership_proofs.clone();
         let mut sci_builder = SignedContingentInputBuilder::new(
             BlockVersion::MAX,
             input_credentials,
-            fpr.clone(),
             EmptyMemoBuilder,
         )
         .unwrap();

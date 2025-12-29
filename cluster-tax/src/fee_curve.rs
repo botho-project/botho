@@ -49,6 +49,34 @@
 /// 10000 = 100%, 100 = 1%, 1 = 0.01%
 pub type FeeRateBps = u32;
 
+/// Count the number of outputs with encrypted memos.
+///
+/// This counts outputs where `has_memo(output)` is true.
+/// Wallets should set `e_memo = None` (rather than encrypting an `UnusedMemo`)
+/// to avoid memo fees on outputs that don't need memos.
+///
+/// # Usage in transaction validation:
+/// ```ignore
+/// let num_memos = tx.prefix.outputs.iter()
+///     .filter(|o| o.e_memo.is_some())
+///     .count();
+/// let required_fee = fee_config.minimum_fee(tx_type, amount, cluster_wealth, num_memos);
+/// ```
+///
+/// # Memo Fee Economics
+///
+/// Each memo adds ~5% to the base fee (configurable via `memo_fee_rate_bps`).
+/// This incentivizes:
+/// - Skipping memos on change outputs
+/// - Using `e_memo = None` instead of encrypting `UnusedMemo`
+/// - Thoughtful use of memo storage (66 bytes per memo, stored forever)
+pub fn count_outputs_with_memos<T, F>(outputs: &[T], has_memo: F) -> usize
+where
+    F: Fn(&T) -> bool,
+{
+    outputs.iter().filter(|o| has_memo(o)).count()
+}
+
 /// The type of transaction, determining fee calculation path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]

@@ -51,6 +51,10 @@ enum Commands {
 
         /// Amount to send (in credits)
         amount: String,
+
+        /// Use ring signatures for sender privacy (hides which UTXO you spent)
+        #[arg(long)]
+        private: bool,
     },
 }
 
@@ -91,8 +95,8 @@ fn main() -> Result<()> {
         Commands::Address => {
             commands::address::run(&config_path)
         }
-        Commands::Send { address, amount } => {
-            commands::send::run(&config_path, &address, &amount)
+        Commands::Send { address, amount, private } => {
+            commands::send::run(&config_path, &address, &amount, private)
         }
     }
 }

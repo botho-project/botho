@@ -54,8 +54,9 @@ A single foreground process that syncs the blockchain, manages a wallet, and opt
 | Stealth Addresses | ✅ Complete | CryptoNote-style one-time keys |
 | Wallet Scanner | ✅ Complete | TxOutput::belongs_to() with view key scanning |
 | Block Sync | ✅ Complete | Request-response protocol with DDoS protection |
-| Peer Reputation | ✅ Complete | EMA latency tracking, success/failure scoring |
-| Transaction Validation | ⚠️ Partial | Mining tx PoW verified; transfer tx signature verification TODO |
+| Peer Reputation | ✅ Complete | EMA latency tracking, success/failure scoring, sync integration |
+| Transaction Validation | ✅ Complete | Mining tx PoW, Simple tx Schnorr sigs, Ring tx MLSAG sigs |
+| Ring Signatures | ✅ Complete | MLSAG for sender privacy, key image double-spend prevention |
 | JSON-RPC Server | ✅ Complete | Full JSON-RPC 2.0 API for thin wallets |
 | Consensus Service | ⚠️ Partial | SCP wrapper exists, needs run loop integration |
 
@@ -143,25 +144,59 @@ struct MiningTx {
 ```rust
 struct Transaction {
     version: u32,
-    inputs: Vec<TxInput>,
+    inputs: TxInputs,              // Simple or Ring inputs
     outputs: Vec<TxOutput>,
     fee: u64,                      // In picocredits
     created_at_height: u64,
 }
 
+/// Transaction inputs - either visible sender (Simple) or hidden sender (Ring)
+enum TxInputs {
+    /// Simple inputs with visible sender
+    Simple(Vec<TxInput>),
+    /// Ring signature inputs with hidden sender
+    Ring(Vec<RingTxInput>),
+}
+
+/// Simple transaction input (visible sender)
 struct TxInput {
-    prev_tx_hash: [u8; 32],
+    tx_hash: [u8; 32],
     output_index: u32,
-    signature: [u8; 64],           // Schnorr signature
+    signature: Vec<u8>,            // Schnorr signature
+}
+
+/// Ring signature transaction input (hidden sender)
+struct RingTxInput {
+    ring: Vec<RingMember>,         // Decoy outputs + real input
+    key_image: [u8; 32],           // Prevents double-spending
+    signature: Vec<u8>,            // MLSAG ring signature
+}
+
+/// Ring member (decoy or real input)
+struct RingMember {
+    target_key: [u8; 32],          // One-time public key
+    commitment: [u8; 32],          // Amount commitment (trivial for now)
 }
 
 struct TxOutput {
     amount: u64,                   // In picocredits
     recipient_view_key: [u8; 32],
     recipient_spend_key: [u8; 32],
-    output_key: [u8; 32],          // One-time output key
+    target_key: [u8; 32],          // One-time output key
+    public_key: [u8; 32],          // Ephemeral ECDH key (R = r*G)
 }
 ```
+
+### Transaction Types
+
+| Type | Privacy | Sender | Receiver | Use Case |
+|------|---------|--------|----------|----------|
+| Simple | Low | Visible | Hidden (stealth) | Default, lower fees |
+| Ring (Private) | High | Hidden | Hidden (stealth) | Privacy-sensitive |
+
+**CLI Usage:**
+- `botho send <addr> <amount>` - Simple transaction (visible sender)
+- `botho send <addr> <amount> --private` - Ring signature transaction (hidden sender)
 
 ## Mining Economics (Implemented)
 
@@ -205,55 +240,149 @@ fn calculate_new_difficulty(
 }
 ```
 
-### Adaptive Emission (Target Inflation Model)
+### Two-Phase Monetary Policy
 
-The base emission schedule is modified by an **Adaptive Emission Controller** that adjusts block rewards to maintain a target net inflation rate after accounting for fee burns.
+Botho uses a two-phase monetary model that provides early adoption incentives while ensuring long-term monetary stability:
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                    Monetary Flow                                 │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│   Fees Burned ──────┐                                           │
-│   (deflationary)    │                                           │
-│                     ▼                                           │
-│              ┌──────────────┐                                   │
-│              │   Emission   │◄──── target_inflation = 2%        │
-│              │  Controller  │                                   │
-│              └──────────────┘                                   │
-│                     │                                           │
-│                     ▼                                           │
-│   Block Rewards ────┘                                           │
-│   (inflationary)                                                │
-│                                                                  │
-│   Net Effect: net_inflation = emission - fees_burned            │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        Two-Phase Monetary Model                          │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│   PHASE 1: HALVING (Years 0-10)         PHASE 2: TAIL EMISSION (10+)    │
+│   ─────────────────────────────         ────────────────────────────    │
+│   • Fixed block rewards                  • 2% annual net inflation       │
+│   • Halving every ~2.1 years             • Difficulty targets inflation  │
+│   • Timing-based difficulty              • Predictable growth rate       │
+│   • Rewards early adopters               • Long-term stability           │
+│                                                                          │
+│   ┌────────────────────────────────────────────────────────────────┐    │
+│   │  Block Reward (constant per phase)                              │    │
+│   │    │                                                            │    │
+│   │ 50 ├─────┐                                                      │    │
+│   │    │     │                                                      │    │
+│   │ 25 ├─────┴─────┐                                                │    │
+│   │    │           │                                                │    │
+│   │ 12 ├───────────┴─────┐                                          │    │
+│   │    │                 │     ┌─────────────────────────────────   │    │
+│   │  6 ├─────────────────┴─────┤  Tail: supply × 2% / blocks_year   │    │
+│   │    └────────────────────────────────────────────────────────►   │    │
+│   │    Year 0     2.1    4.2   6.3   8.4   10 ──────────────────►   │    │
+│   └────────────────────────────────────────────────────────────────┘    │
+│                                                                          │
+│   DIFFICULTY ADJUSTMENT:                                                 │
+│   ┌─────────────────────────────┬───────────────────────────────────┐   │
+│   │ Phase 1 (Halving)           │ Phase 2 (Tail Emission)           │   │
+│   │ • Traditional timing-based  │ • Inflation-targeting             │   │
+│   │ • If blocks too fast →      │ • If net_inflation > target →     │   │
+│   │   increase difficulty       │   increase difficulty (slow blocks)│   │
+│   │ • If blocks too slow →      │ • If net_inflation < target →     │   │
+│   │   decrease difficulty       │   decrease difficulty (fast blocks)│   │
+│   └─────────────────────────────┴───────────────────────────────────┘   │
+│                                                                          │
+│   FEES: Always burned (deflationary pressure)                            │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Formula:**
+**Key Insight**: Rewards should be predictable (fixed schedule), difficulty should adapt to monetary goals.
+
+#### Phase 1: Halving Phase (Early Adoption)
+
+During the first ~10 years, block rewards follow a Bitcoin-like halving schedule:
+
 ```rust
-target_emission_per_epoch = (supply × target_inflation) / epochs_per_year
-required_gross_emission = target_emission_per_epoch + fees_burned_last_epoch
-block_reward = required_gross_emission / blocks_per_epoch
+// Default configuration
+initial_reward: 50_000_000_000_000,  // 50 credits (in picocredits)
+halving_interval: 1_050_000,         // ~2.1 years at 60s blocks
+halving_count: 5,                    // 5 halvings over ~10 years
+
+// Reward at height H:
+reward = initial_reward >> (height / halving_interval)
 ```
 
-**Example** (100M supply, 2% target, 1000 blocks/epoch, 365 epochs/year):
-- Target net emission per epoch: 100M × 0.02 / 365 ≈ 5,479 coins
-- If 2,000 coins were burned in fees last epoch:
-- Gross emission needed: 5,479 + 2,000 = 7,479 coins
-- Block reward: 7,479 / 1000 ≈ 7.48 coins per block
+Difficulty adjustment is **timing-based** (traditional PoW):
+- Target: 60-second blocks
+- If blocks are too fast → increase difficulty
+- If blocks are too slow → decrease difficulty
 
-**Safeguards:**
-- `min_block_reward`: Floor to ensure miners are always compensated
-- `max_block_reward`: Ceiling to prevent hyperinflation if fees spike
-- `max_adjustment_rate`: Limit how fast rewards can change (e.g., 10%/epoch)
+#### Phase 2: Tail Emission (Long-Term Stability)
 
-**Implementation:** `cluster-tax/src/emission.rs` - `EmissionController`
+After ~10 years, the system transitions to inflation-targeting:
+
+```rust
+tail_inflation_bps: 200,  // 2% annual target
+
+// Tail reward calculation:
+annual_emission = supply × tail_inflation_bps / 10000
+blocks_per_year = 365 × 24 × 3600 / target_block_time
+tail_reward = annual_emission / blocks_per_year
+```
+
+Difficulty adjustment is **monetary** (inflation-targeting):
+- Target: 2% net inflation (gross emission - fees burned)
+- If net inflation too high → increase difficulty (slower blocks, less emission)
+- If net inflation too low → decrease difficulty (faster blocks, more emission)
+
+#### Monetary Adjustment Formula
+
+```rust
+// Calculate net emission over adjustment epoch
+net_emission = gross_rewards - fees_burned
+
+// Compare to target
+epoch_target = supply × tail_inflation_bps × epoch_duration / (10000 × year_secs)
+monetary_ratio = net_emission / epoch_target
+
+// Adjust difficulty
+if monetary_ratio > 1.0 {
+    // Net emission too high → slow down
+    new_difficulty = old_difficulty × monetary_ratio  // Increase
+} else if monetary_ratio < 1.0 {
+    // Net emission too low → speed up
+    new_difficulty = old_difficulty × monetary_ratio  // Decrease
+}
+```
+
+#### Example Scenario
+
+**Initial state** (Year 10+, tail emission phase):
+- Supply: 100M credits
+- Block reward: ~6,000 credits/block
+- Difficulty: 1,000,000
+
+**High fee burn epoch** (lots of transactions):
+- Gross emission: 300,000 credits
+- Fees burned: 100,000 credits
+- Net emission: 200,000 credits
+- Target: 250,000 credits (2% annualized)
+- Ratio: 0.8 → **Decrease difficulty by 20%**
+
+**Low fee burn epoch** (quiet period):
+- Gross emission: 300,000 credits
+- Fees burned: 10,000 credits
+- Net emission: 290,000 credits
+- Target: 250,000 credits
+- Ratio: 1.16 → **Increase difficulty by 16%**
+
+This creates a feedback loop where high transaction activity (fee burns) leads to faster blocks, maintaining stable monetary growth.
+
+#### Block Time Bounds
+
+Difficulty adjustments are bounded to prevent extreme block times:
+
+```rust
+min_block_time_secs: 30,   // Fastest allowed
+max_block_time_secs: 300,  // Slowest allowed
+
+// Difficulty bounded to keep blocks within range
+```
+
+**Implementation:** `cluster-tax/src/monetary.rs` - `DifficultyController`
 
 ### Transaction Fees
 
-Fees are **burned** (destroyed) rather than paid to miners. This creates deflationary pressure that the Adaptive Emission Controller compensates for.
+Fees are **burned** (destroyed) rather than paid to miners. This creates deflationary pressure that the DifficultyController compensates for during the tail emission phase by adjusting block production rate.
 
 - Progressive fees based on cluster wealth (0.05%-0.3% for plain, 0.2%-1.2% for hidden)
 - Mining transactions have no fee (creates new coins)
@@ -375,14 +504,21 @@ pub fn validate_transaction_fee(
 
 #### Implementation Tasks
 
-- [ ] Add `MEMO_FEE_RATE` constant to `cluster-tax/src/lib.rs`
-- [ ] Implement `compute_memo_factor()` in `cluster-tax/src/fee_curve.rs`
-- [ ] Update `compute_minimum_fee()` to include memo factor
-- [ ] Update `validate_transaction_fee()` to count memos
-- [ ] Update wallet/transaction builder to estimate memo fees
+**Completed:**
+- [x] Add `MEMO_FEE_RATE_BPS` constant to `cluster-tax/src/lib.rs` (500 bps = 5%)
+- [x] Add `memo_fee_rate_bps` field to `FeeConfig` struct
+- [x] Implement `compute_memo_factor()` in `cluster-tax/src/fee_curve.rs`
+- [x] Implement `fee_rate_bps_with_memos()` and `compute_fee_with_memos()`
+- [x] Add `minimum_fee()` convenience method for validation
+- [x] Add comprehensive tests for memo fee calculation
+- [x] Document memo counting in `validate_transaction_fee()`
+
+**Remaining (wallet integration):**
+- [ ] Add cluster-tax dependency to botho mempool
+- [ ] Compute memo-adjusted minimum fee in mempool validation
+- [ ] Update wallet transaction builder to estimate memo fees
 - [ ] Add fee estimation API to JSON-RPC (`estimateFee` method)
 - [ ] Update `botho send` to show memo fee breakdown
-- [ ] Add tests for memo fee calculation
 - [ ] Document in wallet user guide
 
 #### Future Considerations
@@ -647,20 +783,24 @@ enum ConsensusEvent {
    - Mining tx validation now checks `timestamp >= parent_timestamp`
    - Rejects blocks with timestamps before their parent
 
-7. **Peer Reputation Integration** - Wire reputation into peer selection
+7. ~~**Peer Reputation Integration**~~ ✅ FIXED - Wire reputation into peer selection
    - `network/reputation.rs` fully implemented with EMA tracking
-   - Needs integration into sync peer selection logic
-   - Ban peers with < 25% success rate
+   - `ChainSyncManager` now includes `ReputationManager`
+   - `best_peer()` excludes banned peers and prefers better reputation
+   - `on_blocks()` and `on_failure()` track peer reliability
 
-8. **Ring Signatures** - Replace simple Schnorr with ring signatures for sender privacy
-   - Currently uses plain Ed25519 signatures
-   - Need to add decoy inputs and ring construction
-   - Would complete Monero-style sender unlinkability
+8. ~~**Ring Signatures**~~ ✅ FIXED - Ring signatures for sender privacy
+   - `TxInputs` enum with `Simple` and `Ring` variants
+   - `RingTxInput` with MLSAG signatures and key images
+   - `Wallet::create_private_transaction()` for creating private txs
+   - `botho send --private` CLI flag for private transactions
+   - Key image tracking in ledger for double-spend prevention
 
-9. **Error Handling Cleanup** - Replace unwrap() calls
-   - 40+ `unwrap()` calls in hot paths (`rpc/mod.rs`, `node/mod.rs`, `run.rs`)
-   - Can cause panics/DoS if invariants violated
-   - Replace with proper error handling
+9. **Error Handling Cleanup** - ✅ REVIEWED (safe patterns)
+   - RwLock unwrap() is correct (panic on poisoned lock prevents corrupted state)
+   - try_into() unwrap() on fixed-size slices is compile-time safe
+   - Literal string parsing is compile-time safe
+   - No unsafe patterns found requiring changes
 
 ### Lower Priority
 
@@ -725,7 +865,7 @@ enum ConsensusEvent {
 | T3 integration | Removed | Not needed |
 | Watcher thread | Removed | Simplified |
 | Complex config | Single TOML | Everything in one file |
-| Ring signatures | Plain Ed25519 | Simplified (for now) |
+| RingCT amounts | Visible amounts | Ring sigs for sender, amounts public |
 
 ## Code Reuse from MobileCoin
 
@@ -831,18 +971,17 @@ botho/src/
 ## Security Audit
 
 **Last Audit:** 2025-12-29
-**Full Report:** `docs/SECURITY_AUDIT.md`
 
 ### Summary
 
 | Severity | Count | Status |
 |----------|-------|--------|
 | Critical | 2 | ✅ Fixed |
-| High | 2 | 1 fixed, 1 open |
-| Medium | 4 | Should fix |
-| Low | 2 | Nice to fix |
+| High | 3 | 1 fixed, 2 open |
+| Medium | 4 | 2 open, 2 deferred |
+| Low | 3 | Nice to fix |
 
-### Critical Issues
+### Critical Issues (Fixed)
 
 | Issue | Location | Status |
 |-------|----------|--------|
@@ -853,17 +992,43 @@ botho/src/
 
 | Issue | Location | Status |
 |-------|----------|--------|
-| No Windows file permissions | `botho-wallet/src/storage.rs:150-153` | ❌ Open |
+| Integer overflow in ring input sum | `mempool.rs:229` | ⏳ In Progress |
+| Integer overflow in output sum | `mempool.rs:90` | ⏳ In Progress |
 | Float precision loss in amounts | `commands/send.rs` | ✅ Fixed |
+
+**Details:**
+- `saturating_add()` silently caps at `u64::MAX` instead of rejecting malicious inputs
+- `tx.outputs.iter().sum()` can overflow without detection
+
+### Medium Issues
+
+| Issue | Location | Status |
+|-------|----------|--------|
+| SystemTime fallback to 0 | `validation.rs:151-154` | ⏳ In Progress |
+| Panic on missing ring member | `wallet.rs:237` | ⏳ In Progress |
+| Windows file permissions | `storage.rs:150-165` | ✅ Fixed (ACL) |
+| Deserialization error leakage | `validation.rs:236-241` | ⚠️ Deferred |
+
+### Low Issues
+
+| Issue | Location | Status |
+|-------|----------|--------|
+| secure_zero may be optimized | `storage.rs:308-314` | ⏳ In Progress |
+| Magic constants not in config | `validation.rs:77` | ⚠️ Deferred |
+| Unsafe unwrap on array slicing | `block.rs:71,188,196` | ⚠️ Safe (invariant) |
+
+**Note:** The `try_into().unwrap()` on hash slices is safe because `hash[0..8]` always produces exactly 8 bytes, which matches `[u8; 8]`. The invariant is guaranteed by the slice bounds.
 
 ### Positive Findings
 
 - No `unsafe` code in botho/
 - ChaCha20-Poly1305 + Argon2id for wallet encryption
+- Strong KDF parameters (64MB memory, 3 iterations Argon2id)
+- Unix 0600 file permissions for wallet files
 - DDoS protections (rate limiting, size limits)
-- Double-spend detection in mempool
-- Overflow protection with `checked_add()`
-- `OsRng` used correctly in main node (issue is wallet crate only)
+- Double-spend detection via key image tracking
+- LMDB NO_OVERWRITE prevents key image overwrites
+- `OsRng` used correctly throughout codebase
 
 ## Quantum Resistance
 

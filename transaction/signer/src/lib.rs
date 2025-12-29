@@ -313,3 +313,146 @@ impl TxSignReq {
         ))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bth_account_keys::AccountKey;
+    use bth_core::account::Account;
+    use rand::{rngs::StdRng, SeedableRng};
+    use tempfile::TempDir;
+
+    fn create_test_account() -> Account {
+        let mut rng = StdRng::from_seed([42u8; 32]);
+        let account_key = AccountKey::random(&mut rng);
+        Account::new(
+            account_key.view_private_key().clone().into(),
+            account_key.spend_private_key().clone().into(),
+        )
+    }
+
+    #[test]
+    fn operations_account_index_get_account() {
+        let op = Operations::GetAccount {
+            account: 5,
+            output: "test.json".to_string(),
+        };
+        assert_eq!(op.account_index(), 5);
+    }
+
+    #[test]
+    fn operations_account_index_sync_txos() {
+        let op = Operations::SyncTxos {
+            account: 10,
+            input: "input.json".to_string(),
+            output: "output.json".to_string(),
+        };
+        assert_eq!(op.account_index(), 10);
+    }
+
+    #[test]
+    fn operations_account_index_sign_tx() {
+        let op = Operations::SignTx {
+            account: 15,
+            input: "input.json".to_string(),
+            output: "output.json".to_string(),
+        };
+        assert_eq!(op.account_index(), 15);
+    }
+
+    #[test]
+    fn read_input_json() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("test.json");
+        std::fs::write(&path, r#"{"value": 42}"#).unwrap();
+
+        #[derive(serde::Deserialize)]
+        struct TestData {
+            value: i32,
+        }
+
+        let result: TestData = read_input(path.to_str().unwrap()).unwrap();
+        assert_eq!(result.value, 42);
+    }
+
+    #[test]
+    fn read_input_unsupported_format() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("test.xml");
+        std::fs::write(&path, "<data>test</data>").unwrap();
+
+        let result: Result<serde_json::Value, _> = read_input(path.to_str().unwrap());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn write_output_json() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("test.json");
+
+        #[derive(serde::Serialize)]
+        struct TestData {
+            value: i32,
+        }
+
+        let data = TestData { value: 42 };
+        write_output(path.to_str().unwrap(), &data).unwrap();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("42"));
+    }
+
+    #[test]
+    fn write_output_unsupported_format() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("test.xml");
+
+        #[derive(serde::Serialize)]
+        struct TestData {
+            value: i32,
+        }
+
+        let data = TestData { value: 42 };
+        let result = write_output(path.to_str().unwrap(), &data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn get_account_writes_account_info() {
+        let account = create_test_account();
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("account.json");
+
+        Operations::get_account(&account, 0, path.to_str().unwrap()).unwrap();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        let parsed: AccountInfo = serde_json::from_str(&content).unwrap();
+        assert_eq!(parsed.account_index, 0);
+    }
+
+    #[test]
+    fn sync_txos_empty_list() {
+        let account = create_test_account();
+        let temp_dir = TempDir::new().unwrap();
+        let input_path = temp_dir.path().join("input.json");
+        let output_path = temp_dir.path().join("output.json");
+
+        // Write empty sync request
+        let req = TxoSyncReq {
+            account_id: [0x42; 32].into(),
+            txos: vec![],
+        };
+        std::fs::write(&input_path, serde_json::to_string(&req).unwrap()).unwrap();
+
+        Operations::sync_txos(
+            &account,
+            input_path.to_str().unwrap(),
+            output_path.to_str().unwrap(),
+        ).unwrap();
+
+        let content = std::fs::read_to_string(&output_path).unwrap();
+        let resp: TxoSyncResp = serde_json::from_str(&content).unwrap();
+        assert!(resp.txos.is_empty());
+        assert_eq!(resp.account_id, req.account_id);
+    }
+}

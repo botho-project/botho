@@ -864,7 +864,7 @@ mod tests {
 
     #[test]
     fn test_transaction_hash_deterministic() {
-        let tx = Transaction::new(
+        let tx = Transaction::new_simple(
             vec![TxInput {
                 tx_hash: [1u8; 32],
                 output_index: 0,
@@ -882,7 +882,7 @@ mod tests {
     #[test]
     fn test_signing_hash_excludes_signatures() {
         // Create two transactions with different signatures but same content
-        let tx1 = Transaction::new(
+        let tx1 = Transaction::new_simple(
             vec![TxInput {
                 tx_hash: [1u8; 32],
                 output_index: 0,
@@ -893,7 +893,7 @@ mod tests {
             1,
         );
 
-        let tx2 = Transaction::new(
+        let tx2 = Transaction::new_simple(
             vec![TxInput {
                 tx_hash: [1u8; 32],
                 output_index: 0,
@@ -910,7 +910,7 @@ mod tests {
 
     #[test]
     fn test_signing_hash_changes_with_content() {
-        let tx1 = Transaction::new(
+        let tx1 = Transaction::new_simple(
             vec![TxInput {
                 tx_hash: [1u8; 32],
                 output_index: 0,
@@ -921,7 +921,7 @@ mod tests {
             1,
         );
 
-        let tx2 = Transaction::new(
+        let tx2 = Transaction::new_simple(
             vec![TxInput {
                 tx_hash: [1u8; 32],
                 output_index: 0,
@@ -938,7 +938,7 @@ mod tests {
 
     #[test]
     fn test_transaction_is_valid_structure_no_inputs() {
-        let tx = Transaction::new(
+        let tx = Transaction::new_simple(
             vec![],
             vec![test_output(1000, [2u8; 32], [3u8; 32])],
             100,
@@ -949,7 +949,7 @@ mod tests {
 
     #[test]
     fn test_transaction_is_valid_structure_no_outputs() {
-        let tx = Transaction::new(
+        let tx = Transaction::new_simple(
             vec![TxInput {
                 tx_hash: [1u8; 32],
                 output_index: 0,
@@ -964,7 +964,7 @@ mod tests {
 
     #[test]
     fn test_transaction_is_valid_structure_valid() {
-        let tx = Transaction::new(
+        let tx = Transaction::new_simple(
             vec![TxInput {
                 tx_hash: [1u8; 32],
                 output_index: 0,

@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 use tracing::{debug, warn};
 
 use crate::block::Block;
+use super::reputation::ReputationManager;
 
 // ============================================================================
 // DDoS Protection Constants
@@ -342,6 +343,8 @@ pub struct ChainSyncManager {
     rate_limiter: SyncRateLimiter,
     /// Retry backoff duration
     retry_backoff: Duration,
+    /// Peer reputation tracking for sync selection
+    reputation: ReputationManager,
 }
 
 impl ChainSyncManager {
@@ -354,7 +357,18 @@ impl ChainSyncManager {
             download_height: local_height,
             rate_limiter: SyncRateLimiter::default(),
             retry_backoff: Duration::from_secs(5),
+            reputation: ReputationManager::new(),
         }
+    }
+
+    /// Get access to the reputation manager
+    pub fn reputation_mut(&mut self) -> &mut ReputationManager {
+        &mut self.reputation
+    }
+
+    /// Record that a request was sent to a peer (for latency tracking)
+    pub fn on_request_sent(&mut self, peer: PeerId) {
+        self.reputation.request_sent(peer);
     }
 
     /// Get current state
@@ -409,7 +423,10 @@ impl ChainSyncManager {
     }
 
     /// Handle blocks response from a peer
-    pub fn on_blocks(&mut self, blocks: Vec<Block>, has_more: bool) -> Option<SyncAction> {
+    pub fn on_blocks(&mut self, peer: &PeerId, blocks: Vec<Block>, has_more: bool) -> Option<SyncAction> {
+        // Record successful response in reputation
+        self.reputation.response_received(peer);
+
         if blocks.is_empty() {
             return None;
         }
@@ -419,6 +436,7 @@ impl ChainSyncManager {
             count = blocks.len(),
             last_height,
             has_more,
+            %peer,
             "Received blocks"
         );
 
@@ -444,8 +462,15 @@ impl ChainSyncManager {
     }
 
     /// Handle sync failure
-    pub fn on_failure(&mut self, reason: String) {
-        warn!(%reason, "Sync failed");
+    pub fn on_failure(&mut self, peer: Option<&PeerId>, reason: String) {
+        // Record failure in reputation if we know which peer failed
+        if let Some(p) = peer {
+            self.reputation.request_failed(p);
+            warn!(%reason, %p, "Sync failed from peer");
+        } else {
+            warn!(%reason, "Sync failed");
+        }
+
         self.state = SyncState::Failed {
             reason,
             retry_at: Instant::now() + self.retry_backoff,
@@ -469,11 +494,66 @@ impl ChainSyncManager {
     }
 
     /// Get the best peer to sync from
+    ///
+    /// Selection criteria (in order of priority):
+    /// 1. Exclude banned peers (< 25% success rate)
+    /// 2. Among peers at similar height (within 10 blocks), prefer better reputation
+    /// 3. For peers at very different heights, prefer higher height
     fn best_peer(&self) -> Option<(PeerId, &PeerStatus)> {
-        self.peer_statuses
+        // Filter out banned peers
+        let candidates: Vec<_> = self
+            .peer_statuses
             .iter()
-            .max_by_key(|(_, status)| status.height)
-            .map(|(peer, status)| (*peer, status))
+            .filter(|(peer, _)| !self.reputation.is_banned(peer))
+            .collect();
+
+        if candidates.is_empty() {
+            return None;
+        }
+
+        // Find max height among candidates
+        let max_height = candidates
+            .iter()
+            .map(|(_, status)| status.height)
+            .max()
+            .unwrap_or(0);
+
+        // Height threshold: peers within this range are considered "equivalent"
+        const HEIGHT_EQUIVALENCE_THRESHOLD: u64 = 10;
+
+        // Filter to peers at or near max height
+        let top_peers: Vec<_> = candidates
+            .iter()
+            .filter(|(_, status)| status.height + HEIGHT_EQUIVALENCE_THRESHOLD >= max_height)
+            .collect();
+
+        // Among top peers, select by reputation score (lower is better)
+        top_peers
+            .into_iter()
+            .min_by(|(a_peer, a_status), (b_peer, b_status)| {
+                // First compare heights (higher is better)
+                let height_cmp = b_status.height.cmp(&a_status.height);
+                if height_cmp != std::cmp::Ordering::Equal {
+                    return height_cmp;
+                }
+
+                // Same height: compare reputation (lower score is better)
+                let score_a = self
+                    .reputation
+                    .get(a_peer)
+                    .map(|r| r.score())
+                    .unwrap_or(500.0);
+                let score_b = self
+                    .reputation
+                    .get(b_peer)
+                    .map(|r| r.score())
+                    .unwrap_or(500.0);
+
+                score_a
+                    .partial_cmp(&score_b)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|(peer, status)| (**peer, *status))
     }
 
     /// Drive the state machine, returns next action to take

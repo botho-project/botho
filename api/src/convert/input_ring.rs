@@ -115,7 +115,6 @@ impl TryFrom<&external::SignableInputRing> for SignableInputRing {
 mod tests {
     use super::*;
     use bth_account_keys::AccountKey;
-    use mc_fog_report_validation_test_utils::MockFogResolver;
     use bth_transaction_builder::{
         test_utils::get_input_credentials, EmptyMemoBuilder, TransactionBuilder,
     };
@@ -133,12 +132,9 @@ mod tests {
             let alice = AccountKey::random(&mut rng);
             let bob = AccountKey::random(&mut rng);
 
-            let fpr = MockFogResolver::default();
-
             let mut transaction_builder = TransactionBuilder::new(
                 block_version,
                 Amount::new(Mob::MINIMUM_FEE, Mob::ID),
-                fpr.clone(),
             )
             .unwrap();
 
@@ -146,7 +142,6 @@ mod tests {
                 block_version,
                 Amount::new(65536 + Mob::MINIMUM_FEE, Mob::ID),
                 &alice,
-                &fpr,
                 &mut rng,
             ));
             transaction_builder

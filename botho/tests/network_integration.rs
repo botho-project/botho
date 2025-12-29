@@ -533,7 +533,7 @@ fn test_sync_manager_full_workflow() {
 
     // Simulate receiving blocks
     let blocks = vec![Block::genesis()]; // Simplified
-    manager.on_blocks(blocks, true);
+    manager.on_blocks(&peer, blocks, true);
 
     // Mark blocks as added
     manager.on_blocks_added(50);
@@ -761,7 +761,7 @@ fn test_sync_response_error_handling() {
     manager.on_status(peer, 100, [1u8; 32]);
 
     // Simulate failure
-    manager.on_failure("Connection timeout".to_string());
+    manager.on_failure(Some(&peer), "Connection timeout".to_string());
 
     // Should be in failed state, not synced
     assert!(!manager.is_synced());
@@ -774,9 +774,10 @@ fn test_sync_response_error_handling() {
 #[test]
 fn test_empty_blocks_response() {
     let mut manager = ChainSyncManager::new(0);
+    let peer = PeerId::random();
 
     // Empty blocks should return None action
-    let action = manager.on_blocks(vec![], false);
+    let action = manager.on_blocks(&peer, vec![], false);
     assert!(action.is_none());
 }
 

@@ -213,12 +213,7 @@ pub mod tx_out_store_tests {
     use bth_account_keys::AccountKey;
     use bth_common::Hash;
     use bth_crypto_keys::{CompressedRistrettoPublic, RistrettoPrivate};
-    use bth_transaction_core::{
-        encrypted_fog_hint::{EncryptedFogHint, ENCRYPTED_FOG_HINT_LEN},
-        tokens::Mob,
-        tx::TxOut,
-        Amount, BlockVersion, Token,
-    };
+    use bth_transaction_core::{tokens::Mob, tx::TxOut, Amount, BlockVersion, Token};
     use bth_util_from_random::FromRandom;
     use rand::{rngs::StdRng, SeedableRng};
     use std::path::Path;
@@ -261,7 +256,6 @@ pub mod tx_out_store_tests {
                 amount,
                 &recipient_account.default_subaddress(),
                 &tx_private_key,
-                EncryptedFogHint::new(&[7u8; ENCRYPTED_FOG_HINT_LEN]),
             )
             .unwrap();
             tx_outs.push(tx_out);

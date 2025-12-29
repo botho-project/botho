@@ -5,9 +5,7 @@ use bth_blockchain_test_utils::get_blocks_with_recipients;
 use bth_blockchain_types::{Block, BlockVersion};
 use bth_crypto_digestible_test_utils::*;
 use bth_crypto_keys::RistrettoPrivate;
-use bth_transaction_core::{
-    encrypted_fog_hint::EncryptedFogHint, tokens::Mob, tx::TxOut, Amount, Token,
-};
+use bth_transaction_core::{tokens::Mob, tx::TxOut, Amount, Token};
 use bth_util_from_random::FromRandom;
 use bth_util_test_helper::{RngCore, RngType as FixedRng, SeedableRng};
 
@@ -32,7 +30,6 @@ fn test_origin_tx_outs() -> Vec<TxOut> {
                 },
                 &acct.default_subaddress(),
                 &RistrettoPrivate::from_random(&mut rng),
-                EncryptedFogHint::fake_onetime_hint(&mut rng),
             )
             .expect("Could not create TxOut")
         })
@@ -85,17 +82,7 @@ fn tx_out_digestible_ast() {
                     51, 60, 205, 41, 220, 180, 61, 236, 162, 72, 97, 136, 209, 89, 88,
                 ],
             }),
-            ASTNode::from(ASTPrimitive {
-                context: b"e_fog_hint",
-                type_name: b"bytes",
-                data: vec![
-                    200, 11, 233, 27, 169, 243, 29, 190, 229, 212, 251, 154, 83, 218, 228, 86, 44,
-                    229, 34, 224, 224, 95, 146, 9, 253, 162, 167, 75, 132, 164, 252, 102, 67, 184,
-                    108, 150, 246, 214, 15, 106, 92, 189, 148, 227, 237, 135, 44, 121, 190, 52,
-                    189, 0, 67, 68, 68, 248, 208, 231, 145, 194, 4, 77, 47, 49, 238, 63, 235, 28,
-                    20, 201, 174, 217, 208, 221, 186, 140, 194, 244, 240, 69, 26, 77, 1, 0,
-                ],
-            }),
+            // Note: e_fog_hint was removed as part of fog removal
         ],
     });
 

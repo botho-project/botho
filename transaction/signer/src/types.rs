@@ -347,3 +347,138 @@ impl<const N: usize> serde::de::Visitor<'_> for ConstArrayVisitor<N> {
         Ok(b)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn account_id_display() {
+        let bytes = [0xAB; 32];
+        let id = AccountId::from(bytes);
+        let display = format!("{}", id);
+        assert_eq!(display, "ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB");
+    }
+
+    #[test]
+    fn account_id_debug() {
+        let bytes = [0x12; 32];
+        let id = AccountId::from(bytes);
+        let debug = format!("{:?}", id);
+        assert!(debug.starts_with("AccountId("));
+        assert!(debug.ends_with(")"));
+        assert!(debug.contains("1212121212"));
+    }
+
+    #[test]
+    fn account_id_from_bytes() {
+        let bytes = [0x42; 32];
+        let id = AccountId::from(bytes);
+        assert_eq!(id.as_ref(), &bytes);
+    }
+
+    #[test]
+    fn account_id_from_ref_bytes() {
+        let bytes = [0x42; 32];
+        let id = AccountId::from(&bytes);
+        assert_eq!(id.as_ref(), &bytes);
+    }
+
+    #[test]
+    fn account_id_try_from_string() {
+        let hex_str = "ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB".to_string();
+        let id = AccountId::try_from(hex_str).unwrap();
+        assert_eq!(id.as_ref(), &[0xAB; 32]);
+    }
+
+    #[test]
+    fn account_id_try_from_string_invalid() {
+        let hex_str = "not_valid_hex".to_string();
+        let result = AccountId::try_from(hex_str);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn account_id_try_from_string_wrong_length() {
+        let hex_str = "ABAB".to_string();
+        let result = AccountId::try_from(hex_str);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn account_id_equality() {
+        let id1 = AccountId::from([0x42; 32]);
+        let id2 = AccountId::from([0x42; 32]);
+        let id3 = AccountId::from([0x43; 32]);
+        assert_eq!(id1, id2);
+        assert_ne!(id1, id3);
+    }
+
+    #[test]
+    fn account_id_clone() {
+        let id1 = AccountId::from([0x42; 32]);
+        let id2 = id1.clone();
+        assert_eq!(id1, id2);
+    }
+
+    #[test]
+    fn txo_unsynced_serialization() {
+        use bth_crypto_keys::RistrettoPublic;
+        use bth_util_from_random::FromRandom;
+        use rand::{rngs::StdRng, SeedableRng};
+
+        let mut rng = StdRng::from_seed([42u8; 32]);
+        let public = RistrettoPublic::from_random(&mut rng);
+        let tx_out_public_key = TxOutPublic::from(public);
+
+        let unsynced = TxoUnsynced {
+            subaddress: 42,
+            tx_out_public_key,
+        };
+
+        let json = serde_json::to_string(&unsynced).unwrap();
+        let parsed: TxoUnsynced = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.subaddress, 42);
+    }
+
+    #[test]
+    fn txo_sync_req_serialization() {
+        let req = TxoSyncReq {
+            account_id: AccountId::from([0x42; 32]),
+            txos: vec![],
+        };
+
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: TxoSyncReq = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.account_id, req.account_id);
+        assert!(parsed.txos.is_empty());
+    }
+
+    #[test]
+    fn txo_sync_resp_serialization() {
+        let resp = TxoSyncResp {
+            account_id: AccountId::from([0x42; 32]),
+            txos: vec![],
+        };
+
+        let json = serde_json::to_string(&resp).unwrap();
+        let parsed: TxoSyncResp = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.account_id, resp.account_id);
+        assert!(parsed.txos.is_empty());
+    }
+
+    #[test]
+    fn const_array_visitor_valid_hex() {
+        use serde::Deserialize;
+
+        #[derive(Deserialize)]
+        struct TestWrapper {
+            #[serde(with = "super::const_array_hex")]
+            data: [u8; 4],
+        }
+
+        let json = r#"{"data": "DEADBEEF"}"#;
+        let parsed: TestWrapper = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.data, [0xDE, 0xAD, 0xBE, 0xEF]);
+    }
+}

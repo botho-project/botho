@@ -34,6 +34,9 @@ bth-core = { path = "../core" }
 bth-util-from-random = { path = "../util/from-random" }
 rand_core = "0.6"
 
+# Monetary Policy
+bth-cluster-tax = { path = "../cluster-tax" }
+
 # Networking & Consensus
 bth-gossip = { path = "../gossip" }
 bth-common = { path = "../common", features = ["std"] }

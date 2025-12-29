@@ -68,7 +68,6 @@ mod tests {
     use bth_account_keys::AccountKey;
     use bth_blockchain_types::BlockVersion;
     use bth_crypto_ring_signature_signer::NoKeysRingSigner;
-    use mc_fog_report_validation_test_utils::MockFogResolver;
     use bth_transaction_builder::{
         test_utils::get_input_credentials, EmptyMemoBuilder, ReservedSubaddresses,
         SignedContingentInputBuilder, TransactionBuilder,
@@ -88,20 +87,16 @@ mod tests {
         let charlie = AccountKey::random(&mut rng);
 
         let token2 = TokenId::from(2);
-        let fpr = MockFogResolver::default();
 
         let input_credentials_sci = get_input_credentials(
             block_version,
             Amount::new(1000, token2),
             &charlie,
-            &fpr,
             &mut rng,
         );
-        let proofs = input_credentials_sci.membership_proofs.clone();
         let mut sci_builder = SignedContingentInputBuilder::new(
             block_version,
             input_credentials_sci.clone(),
-            fpr.clone(),
             EmptyMemoBuilder,
         )
         .unwrap();
@@ -112,20 +107,17 @@ mod tests {
                 &mut rng,
             )
             .unwrap();
-        let mut sci = sci_builder.build(&NoKeysRingSigner {}, &mut rng).unwrap();
-        sci.tx_in.proofs = proofs;
+        let sci = sci_builder.build(&NoKeysRingSigner {}, &mut rng).unwrap();
 
         let mut transaction_builder = TransactionBuilder::new(
             block_version,
             Amount::new(Mob::MINIMUM_FEE, Mob::ID),
-            fpr.clone(),
         )
         .unwrap();
         transaction_builder.add_input(get_input_credentials(
             block_version,
             Amount::new(1475 * MILLIMOB_TO_PICOMOB, Mob::ID),
             &alice,
-            &fpr,
             &mut rng,
         ));
         transaction_builder.add_presigned_input(sci).unwrap();

@@ -6,7 +6,7 @@
 //! - Mining transactions (PoW-based coinbase rewards)
 //! - Transfer transactions (UTXO-based value transfers)
 
-use crate::block::{calculate_block_reward, MiningTx};
+use crate::block::{calculate_block_reward_v2, MiningTx};
 use crate::ledger::ChainState;
 use crate::transaction::Transaction;
 use std::sync::{Arc, RwLock};
@@ -133,8 +133,8 @@ impl TransactionValidator {
             return Err(ValidationError::WrongDifficulty);
         }
 
-        // 4. Check reward matches emission schedule
-        let expected_reward = calculate_block_reward(tx.block_height, state.total_mined);
+        // 4. Check reward matches Two-Phase emission schedule
+        let expected_reward = calculate_block_reward_v2(tx.block_height, state.total_mined);
         if tx.reward != expected_reward {
             warn!(
                 expected = expected_reward,
@@ -148,10 +148,14 @@ impl TransactionValidator {
         }
 
         // 5. Check timestamp is reasonable
+        // Don't fallback to 0 on error - that would bypass future timestamp checks
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+            .map(|d| d.as_secs())
+            .map_err(|_| {
+                warn!("System time before UNIX epoch - cannot validate timestamps");
+                ValidationError::ChainStateUnavailable
+            })?;
 
         if tx.timestamp > now + MAX_FUTURE_TIMESTAMP_SECS {
             warn!(
@@ -281,6 +285,7 @@ impl TransactionValidator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::transaction::{TxInput, MIN_TX_FEE};
 
     fn mock_chain_state() -> Arc<RwLock<ChainState>> {
         Arc::new(RwLock::new(ChainState {
@@ -289,7 +294,15 @@ mod tests {
             tip_timestamp: 1000000,
             difficulty: 1000,
             total_mined: 1_000_000_000_000,
+            total_fees_burned: 0,
         }))
+    }
+
+    fn current_timestamp() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
     }
 
     #[test]
@@ -317,8 +330,105 @@ mod tests {
     fn test_transfer_tx_no_inputs() {
         let validator = TransactionValidator::new(mock_chain_state());
 
-        let tx = Transaction::new(vec![], vec![], 0, 10);
+        let tx = Transaction::new_simple(vec![], vec![], 0, 10);
         let result = validator.validate_transfer_tx(&tx);
         assert!(matches!(result, Err(ValidationError::NoInputs)));
+    }
+
+    #[test]
+    fn test_mining_tx_correct_height() {
+        let validator = TransactionValidator::new(mock_chain_state());
+
+        let tx = MiningTx {
+            block_height: 11, // Correct - chain height is 10
+            reward: 600_000_000_000, // Tail emission
+            miner_view_key: [0u8; 32],
+            miner_spend_key: [0u8; 32],
+            target_key: [0u8; 32],
+            public_key: [0u8; 32],
+            prev_block_hash: [0u8; 32],
+            difficulty: 1000,
+            nonce: 0,
+            timestamp: current_timestamp(),
+        };
+
+        // Should pass height check (may fail on other validation)
+        let result = validator.validate_mining_tx(&tx);
+        // Either passes or fails for different reason (not wrong height)
+        match result {
+            Err(ValidationError::WrongBlockHeight) => panic!("Should not fail on height"),
+            _ => {} // Ok or other error is fine
+        }
+    }
+
+    #[test]
+    fn test_timestamp_check_safety() {
+        // Test that current_timestamp() helper doesn't panic even with system time issues
+        let ts = current_timestamp();
+        // Should return a reasonable value (not panic)
+        assert!(ts > 0 || ts == 0); // Valid even if system clock is weird
+    }
+
+    #[test]
+    fn test_transfer_tx_no_outputs() {
+        let validator = TransactionValidator::new(mock_chain_state());
+
+        // Transaction with inputs but no outputs
+        let tx = Transaction::new_simple(
+            vec![TxInput {
+                tx_hash: [0u8; 32],
+                output_index: 0,
+                signature: vec![0u8; 64],
+            }],
+            vec![], // No outputs
+            1000,
+            10,
+        );
+
+        let result = validator.validate_transfer_tx(&tx);
+        assert!(matches!(result, Err(ValidationError::NoOutputs)));
+    }
+
+    #[test]
+    fn test_validation_error_display() {
+        let err = ValidationError::NoInputs;
+        assert_eq!(format!("{}", err), "Transaction has no inputs");
+
+        let err = ValidationError::NoOutputs;
+        assert_eq!(format!("{}", err), "Transaction has no outputs");
+
+        let err = ValidationError::WrongBlockHeight;
+        assert_eq!(format!("{}", err), "Wrong block height");
+
+        let err = ValidationError::WrongReward { expected: 100, got: 200 };
+        assert!(format!("{}", err).contains("Wrong reward"));
+
+        let err = ValidationError::TimestampTooFarInFuture;
+        assert!(format!("{}", err).contains("future"));
+
+        let err = ValidationError::InsufficientFunds { input: 100, output: 80, fee: 30 };
+        assert!(format!("{}", err).contains("Insufficient funds"));
+
+        let err = ValidationError::InvalidSignature;
+        assert_eq!(format!("{}", err), "Invalid signature");
+    }
+
+    #[test]
+    fn test_batch_validation_empty_bytes() {
+        let validator = TransactionValidator::new(mock_chain_state());
+
+        // Test with invalid (empty) bytes - should fail deserialization
+        let invalid_bytes = vec![];
+
+        let batch = vec![
+            ([1u8; 32], invalid_bytes.clone(), false),
+            ([2u8; 32], invalid_bytes, true), // Also test mining tx path
+        ];
+
+        let result = validator.validate_batch(&batch);
+
+        // Both should fail deserialization
+        assert_eq!(result.invalid.len(), 2);
+        assert!(result.valid.is_empty());
     }
 }

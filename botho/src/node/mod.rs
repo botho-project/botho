@@ -121,10 +121,22 @@ impl Node {
     }
 
     fn print_status(&self) -> Result<()> {
+        use crate::monetary::mainnet_policy;
+
         let ledger = self.ledger.read().unwrap();
         let state = ledger
             .get_chain_state()
             .map_err(|e| anyhow::anyhow!("Failed to get chain state: {}", e))?;
+
+        // Calculate monetary stats
+        let policy = mainnet_policy();
+        let net_supply = state.total_mined.saturating_sub(state.total_fees_burned);
+        let phase = if policy.is_halving_phase(state.height) {
+            "Halving"
+        } else {
+            "Tail Emission"
+        };
+        let current_reward = crate::block::calculate_block_reward_v2(state.height + 1, net_supply);
 
         println!();
         println!("=== Botho Node ===");
@@ -133,9 +145,16 @@ impl Node {
             self.wallet.address_string().replace('\n', ", ")
         );
         println!("Chain height: {}", state.height);
+        println!("Phase: {}", phase);
         println!(
-            "Total mined: {} credits",
-            state.total_mined as f64 / 1_000_000_000_000.0
+            "Block reward: {:.6} credits",
+            current_reward as f64 / 1_000_000_000_000.0
+        );
+        println!(
+            "Net supply: {:.6} credits (mined: {:.6}, burned: {:.6})",
+            net_supply as f64 / 1_000_000_000_000.0,
+            state.total_mined as f64 / 1_000_000_000_000.0,
+            state.total_fees_burned as f64 / 1_000_000_000_000.0
         );
         println!("Bootstrap peers: {} configured", self.config.network.bootstrap_peers.len());
         if self.config.network.bootstrap_peers.is_empty() {
@@ -345,12 +364,13 @@ impl Node {
                 .get_chain_state()
                 .map_err(|e| anyhow::anyhow!("Failed to get chain state: {}", e))?;
 
+            let net_supply = state.total_mined.saturating_sub(state.total_fees_burned);
             println!(
-                "[Mining] Height: {} | Hashrate: {:.2} H/s | Txs found: {} | Mined: {:.6} credits",
+                "[Mining] Height: {} | Hashrate: {:.2} H/s | Txs found: {} | Supply: {:.6} credits",
                 state.height,
                 stats.hashrate(),
                 stats.txs_found,
-                state.total_mined as f64 / 1_000_000_000_000.0
+                net_supply as f64 / 1_000_000_000_000.0
             );
         }
         Ok(())

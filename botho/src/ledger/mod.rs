@@ -35,8 +35,12 @@ pub struct ChainState {
     /// Timestamp of the tip block
     pub tip_timestamp: u64,
 
-    /// Total credits mined so far
+    /// Total credits mined so far (gross emission)
     pub total_mined: u64,
+
+    /// Total transaction fees burned (removed from supply)
+    /// Net supply = total_mined - total_fees_burned
+    pub total_fees_burned: u64,
 
     /// Current mining difficulty
     pub difficulty: u64,
@@ -49,6 +53,7 @@ impl Default for ChainState {
             tip_hash: [0u8; 32],
             tip_timestamp: 0,
             total_mined: 0,
+            total_fees_burned: 0,
             difficulty: super::node::miner::INITIAL_DIFFICULTY,
         }
     }

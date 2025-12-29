@@ -7,17 +7,22 @@ use std::path::Path;
 
 use crate::config::{ledger_db_path_from_config, Config};
 use crate::ledger::Ledger;
-use crate::transaction::{Transaction, TxInput, TxOutput, UtxoId};
+use crate::transaction::{Transaction, TxInput, TxOutput};
 use crate::wallet::Wallet;
 
 /// Minimum transaction fee in picocredits (0.0001 credits)
 const MIN_FEE: u64 = 100_000_000;
 
+/// Private transaction fee multiplier (ring signatures are larger)
+const PRIVATE_FEE_MULTIPLIER: u64 = 4;
+
 /// Pending transactions file name
 const PENDING_TXS_FILE: &str = "pending_txs.bin";
 
 /// Send credits to an address
-pub fn run(config_path: &Path, address_str: &str, amount_str: &str) -> Result<()> {
+///
+/// If `private` is true, uses ring signatures to hide which UTXO is being spent.
+pub fn run(config_path: &Path, address_str: &str, amount_str: &str, private: bool) -> Result<()> {
     let config = Config::load(config_path)
         .context("No wallet found. Run 'botho init' first.")?;
 
@@ -45,15 +50,22 @@ pub fn run(config_path: &Path, address_str: &str, amount_str: &str) -> Result<()
         .get_utxos_for_address(&our_address)
         .map_err(|e| anyhow::anyhow!("Failed to get UTXOs: {}", e))?;
 
+    // Calculate fee based on transaction type
+    let fee = if private {
+        MIN_FEE * PRIVATE_FEE_MULTIPLIER
+    } else {
+        MIN_FEE
+    };
+
     let total_balance: u64 = utxos.iter().map(|u| u.output.amount).sum();
-    let required = amount + MIN_FEE;
+    let required = amount + fee;
 
     if total_balance < required {
         return Err(anyhow::anyhow!(
             "Insufficient balance: have {:.12} credits, need {:.12} credits (including {:.12} fee)",
             total_balance as f64 / 1_000_000_000_000.0,
             required as f64 / 1_000_000_000_000.0,
-            MIN_FEE as f64 / 1_000_000_000_000.0
+            fee as f64 / 1_000_000_000_000.0
         ));
     }
 
@@ -69,16 +81,6 @@ pub fn run(config_path: &Path, address_str: &str, amount_str: &str) -> Result<()
         selected_amount += utxo.output.amount;
     }
 
-    // Build inputs (signatures will be added after transaction is constructed)
-    let inputs: Vec<TxInput> = selected_utxos
-        .iter()
-        .map(|utxo| TxInput {
-            tx_hash: utxo.id.tx_hash,
-            output_index: utxo.id.output_index,
-            signature: Vec::new(), // Will be signed below
-        })
-        .collect();
-
     // Build outputs
     let mut outputs = Vec::new();
 
@@ -86,29 +88,58 @@ pub fn run(config_path: &Path, address_str: &str, amount_str: &str) -> Result<()
     outputs.push(TxOutput::new(amount, &recipient));
 
     // Change output (if any)
-    let change = selected_amount - amount - MIN_FEE;
+    let change = selected_amount - amount - fee;
     if change > 0 {
         outputs.push(TxOutput::new(change, &our_address));
     }
 
-    // Create the transaction
-    let num_inputs = inputs.len();
-    let mut tx = Transaction::new(inputs, outputs, MIN_FEE, state.height);
+    // Create the transaction (simple or private)
+    let tx = if private {
+        // Private transaction: uses ring signatures to hide sender
+        println!();
+        println!("Creating private transaction with ring signatures...");
 
-    // Sign the transaction with our wallet's spend key
-    wallet.sign_transaction(&mut tx, &ledger)?;
+        wallet.create_private_transaction(
+            &selected_utxos,
+            outputs,
+            fee,
+            state.height,
+            &ledger,
+        )?
+    } else {
+        // Simple transaction: visible sender
+        let inputs: Vec<TxInput> = selected_utxos
+            .iter()
+            .map(|utxo| TxInput {
+                tx_hash: utxo.id.tx_hash,
+                output_index: utxo.id.output_index,
+                signature: Vec::new(), // Will be signed below
+            })
+            .collect();
+
+        let mut tx = Transaction::new_simple(inputs, outputs, fee, state.height);
+
+        // Sign the transaction with our wallet's spend key
+        wallet.sign_transaction(&mut tx, &ledger)?;
+        tx
+    };
 
     let tx_hash = tx.hash();
+    let num_inputs = tx.inputs.len();
+    let tx_type = if private { "Private" } else { "Simple" };
 
     // Display transaction details
     println!();
-    println!("=== Transaction Created ===");
+    println!("=== {} Transaction Created ===", tx_type);
     println!("From: your wallet");
     println!("To: {}", address_str);
     println!("Amount: {:.12} credits", amount as f64 / 1_000_000_000_000.0);
-    println!("Fee: {:.12} credits", MIN_FEE as f64 / 1_000_000_000_000.0);
+    println!("Fee: {:.12} credits", fee as f64 / 1_000_000_000_000.0);
     if change > 0 {
         println!("Change: {:.12} credits", change as f64 / 1_000_000_000_000.0);
+    }
+    if private {
+        println!("Privacy: Ring signatures hide which UTXO was spent");
     }
     println!();
     println!("Transaction hash: {}", hex::encode(&tx_hash[0..16]));

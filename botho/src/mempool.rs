@@ -87,8 +87,15 @@ impl Mempool {
         };
 
         // Validate outputs + fee <= inputs
-        let output_sum: u64 = tx.outputs.iter().map(|o| o.amount).sum();
-        if output_sum + tx.fee > input_sum {
+        // Use checked arithmetic to detect overflow from malicious transactions
+        let output_sum: u64 = tx.outputs.iter()
+            .try_fold(0u64, |acc, o| acc.checked_add(o.amount))
+            .ok_or_else(|| MempoolError::InvalidTransaction("Output sum overflow".to_string()))?;
+
+        let total_output = output_sum.checked_add(tx.fee)
+            .ok_or_else(|| MempoolError::InvalidTransaction("Output + fee overflow".to_string()))?;
+
+        if total_output > input_sum {
             return Err(MempoolError::InsufficientInputs {
                 inputs: input_sum,
                 outputs: output_sum,
@@ -190,11 +197,51 @@ impl Mempool {
         tx.verify_ring_signatures()
             .map_err(|_| MempoolError::InvalidSignature)?;
 
-        // With ring signatures and trivial commitments, we can't know exact
-        // input amounts without revealing which ring member is real.
-        // For now, return MAX and let higher-level validation handle amounts.
-        // TODO: Implement proper balance verification with commitments
-        Ok(u64::MAX) // Allow through, block validation will catch issues
+        // Validate potential input amounts from ring members.
+        // Since we use trivial commitments (zero blinding), amounts are public.
+        // For each ring, find the maximum amount among ring members to get a
+        // conservative upper bound on potential input value.
+        //
+        // Note: This doesn't reveal which ring member is the real input, but
+        // ensures the transaction COULD be valid if the right member is spent.
+        let mut potential_input_sum: u64 = 0;
+
+        for ring_input in ring_inputs {
+            // Find maximum amount among ring members by looking up UTXOs
+            let mut max_ring_amount: u64 = 0;
+            let mut found_any = false;
+
+            for member in &ring_input.ring {
+                // Look up the UTXO by target_key to get its amount
+                if let Ok(Some(utxo)) = ledger.get_utxo_by_target_key(&member.target_key) {
+                    max_ring_amount = max_ring_amount.max(utxo.output.amount);
+                    found_any = true;
+                }
+                // Ring members that can't be found might be spent or from older blocks
+                // The ring signature verification ensures at least one is valid
+            }
+
+            // If we couldn't find any ring member amounts, reject the transaction.
+            // All ring members should exist in the UTXO set for proper validation.
+            if !found_any {
+                warn!(
+                    "Could not lookup ring member amounts for key image {}",
+                    hex::encode(&ring_input.key_image[0..8])
+                );
+                return Err(MempoolError::InvalidTransaction(
+                    "Cannot verify ring input amounts - no ring members found in UTXO set".to_string()
+                ));
+            }
+
+            // Use checked_add to reject transactions with overflowing input sums
+            // rather than silently capping at u64::MAX (which could allow invalid txs)
+            potential_input_sum = potential_input_sum.checked_add(max_ring_amount)
+                .ok_or_else(|| MempoolError::InvalidTransaction(
+                    "Ring input sum overflow".to_string()
+                ))?;
+        }
+
+        Ok(potential_input_sum)
     }
 
     /// Remove a transaction from the mempool
@@ -392,5 +439,208 @@ mod tests {
         let mempool = Mempool::new();
         assert!(mempool.is_empty());
         assert_eq!(mempool.len(), 0);
+    }
+
+    #[test]
+    fn test_mempool_default() {
+        let mempool = Mempool::default();
+        assert!(mempool.is_empty());
+        assert_eq!(mempool.total_fees(), 0);
+    }
+
+    #[test]
+    fn test_pending_tx_fee_per_byte() {
+        // Create a minimal transaction to test fee calculation
+        let tx = Transaction::new_simple(vec![], vec![], 1000, 0);
+
+        let pending = PendingTx::new(tx);
+        assert!(pending.fee_per_byte > 0);
+    }
+
+    #[test]
+    fn test_mempool_contains() {
+        let mut mempool = Mempool::new();
+        let tx_hash: [u8; 32] = [0x42; 32];
+
+        assert!(!mempool.contains(&tx_hash));
+
+        // Manually insert a transaction for testing
+        let tx = Transaction::new_simple(vec![], vec![], 100, 0);
+        let pending = PendingTx::new(tx);
+        mempool.txs.insert(tx_hash, pending);
+
+        assert!(mempool.contains(&tx_hash));
+    }
+
+    #[test]
+    fn test_mempool_remove_tx() {
+        let mut mempool = Mempool::new();
+        let tx_hash: [u8; 32] = [0x11; 32];
+
+        let tx = Transaction::new_simple(vec![], vec![], 500, 0);
+        let pending = PendingTx::new(tx.clone());
+        mempool.txs.insert(tx_hash, pending);
+
+        assert_eq!(mempool.len(), 1);
+
+        let removed = mempool.remove_tx(&tx_hash);
+        assert!(removed.is_some());
+        assert_eq!(mempool.len(), 0);
+
+        // Removing again should return None
+        let removed_again = mempool.remove_tx(&tx_hash);
+        assert!(removed_again.is_none());
+    }
+
+    #[test]
+    fn test_mempool_get_transactions_sorted_by_fee() {
+        let mut mempool = Mempool::new();
+
+        // Add transactions with different fees (use created_at_height to make each unique)
+        for (i, fee) in [100u64, 500, 200, 1000, 50].iter().enumerate() {
+            let tx = Transaction::new_simple(vec![], vec![], *fee, i as u64);
+            let tx_hash = tx.hash();
+            let pending = PendingTx::new(tx);
+            mempool.txs.insert(tx_hash, pending);
+        }
+
+        assert_eq!(mempool.len(), 5);
+
+        // Get top 3 transactions - should be sorted by fee_per_byte
+        let top_txs = mempool.get_transactions(3);
+        assert_eq!(top_txs.len(), 3);
+
+        // Highest fee should be first
+        assert_eq!(top_txs[0].fee, 1000);
+    }
+
+    #[test]
+    fn test_mempool_total_fees() {
+        let mut mempool = Mempool::new();
+
+        for (i, fee) in [100u64, 200, 300].iter().enumerate() {
+            let tx = Transaction::new_simple(vec![], vec![], *fee, i as u64);
+            let tx_hash = tx.hash();
+            let pending = PendingTx::new(tx);
+            mempool.txs.insert(tx_hash, pending);
+        }
+
+        assert_eq!(mempool.total_fees(), 600);
+    }
+
+    #[test]
+    fn test_mempool_get() {
+        let mut mempool = Mempool::new();
+
+        let tx = Transaction::new_simple(vec![], vec![], 999, 0);
+        let tx_hash = tx.hash();
+        let pending = PendingTx::new(tx);
+        mempool.txs.insert(tx_hash, pending);
+
+        let retrieved = mempool.get(&tx_hash);
+        assert!(retrieved.is_some());
+        assert_eq!(retrieved.unwrap().fee, 999);
+
+        // Non-existent transaction
+        let fake_hash: [u8; 32] = [0xFF; 32];
+        assert!(mempool.get(&fake_hash).is_none());
+    }
+
+    #[test]
+    fn test_mempool_spent_utxos_tracking() {
+        let mut mempool = Mempool::new();
+
+        // Create a UTXO ID
+        let utxo_id = UtxoId::new([0x11; 32], 0);
+
+        // Add it to spent set
+        mempool.spent_utxos.insert(utxo_id);
+
+        assert!(mempool.spent_utxos.contains(&utxo_id));
+        assert_eq!(mempool.spent_utxos.len(), 1);
+    }
+
+    #[test]
+    fn test_mempool_spent_key_images_tracking() {
+        let mut mempool = Mempool::new();
+
+        let key_image: [u8; 32] = [0xDE; 32];
+
+        mempool.spent_key_images.insert(key_image);
+
+        assert!(mempool.spent_key_images.contains(&key_image));
+        assert_eq!(mempool.spent_key_images.len(), 1);
+    }
+
+    #[test]
+    fn test_remove_confirmed_clears_transactions() {
+        let mut mempool = Mempool::new();
+
+        // Add some transactions (use different created_at_height to make them unique)
+        let tx1 = Transaction::new_simple(vec![], vec![], 100, 1);
+        let tx2 = Transaction::new_simple(vec![], vec![], 200, 2);
+
+        let tx1_hash = tx1.hash();
+        let tx2_hash = tx2.hash();
+
+        mempool.txs.insert(tx1_hash, PendingTx::new(tx1.clone()));
+        mempool.txs.insert(tx2_hash, PendingTx::new(tx2.clone()));
+
+        assert_eq!(mempool.len(), 2);
+
+        // Remove confirmed transaction
+        mempool.remove_confirmed(&[tx1]);
+
+        assert_eq!(mempool.len(), 1);
+        assert!(!mempool.contains(&tx1_hash));
+        assert!(mempool.contains(&tx2_hash));
+    }
+
+    #[test]
+    fn test_mempool_error_display() {
+        let err = MempoolError::AlreadyExists;
+        assert_eq!(format!("{}", err), "Transaction already in mempool");
+
+        let err = MempoolError::DoubleSpend;
+        assert_eq!(format!("{}", err), "Double-spend detected");
+
+        let err = MempoolError::InvalidSignature;
+        assert_eq!(format!("{}", err), "Invalid transaction signature");
+
+        let err = MempoolError::Full;
+        assert_eq!(format!("{}", err), "Mempool is full");
+
+        let err = MempoolError::InsufficientInputs {
+            inputs: 100,
+            outputs: 80,
+            fee: 30,
+        };
+        assert!(format!("{}", err).contains("Insufficient inputs"));
+
+        let key_image: [u8; 32] = [0xAB; 32];
+        let err = MempoolError::KeyImageSpent(key_image);
+        assert!(format!("{}", err).contains("Key image already spent"));
+    }
+
+    #[test]
+    fn test_shared_mempool() {
+        let shared = new_shared_mempool();
+
+        {
+            let mempool = shared.read().unwrap();
+            assert!(mempool.is_empty());
+        }
+
+        {
+            let mut mempool = shared.write().unwrap();
+            let tx = Transaction::new_simple(vec![], vec![], 100, 1);
+            let tx_hash = tx.hash();
+            mempool.txs.insert(tx_hash, PendingTx::new(tx));
+        }
+
+        {
+            let mempool = shared.read().unwrap();
+            assert_eq!(mempool.len(), 1);
+        }
     }
 }

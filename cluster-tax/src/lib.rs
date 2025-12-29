@@ -49,9 +49,32 @@ mod tag;
 mod transfer;
 
 pub use cluster::{ClusterId, ClusterWealth};
-pub use emission::{EmissionConfig, EmissionController, EmissionState};
-pub use fee_curve::{ClusterFactorCurve, FeeConfig, FeeCurve, FeeRateBps, TransactionType};
+
+// ============================================================================
+// Monetary Policy (Canonical)
+// ============================================================================
+//
+// The Two-Phase Monetary Model is the canonical approach:
+// - Phase 1 (Halving): Fixed rewards with halving schedule, timing-based difficulty
+// - Phase 2 (Tail): Fixed tail reward, inflation-targeting difficulty
+//
+// Key insight: Difficulty should adapt to hit monetary targets, not rewards.
+// This gives miners predictable income while absorbing fee volatility.
 pub use monetary::{DifficultyController, MonetaryPolicy, MonetaryState, MonetaryStats};
+
+// ============================================================================
+// Legacy Emission Controller (Deprecated)
+// ============================================================================
+//
+// The adaptive-reward model is deprecated. It adjusted block rewards based on
+// fee burns, which caused reward volatility that's problematic for miners.
+// Preserved for backwards compatibility; new code should use DifficultyController.
+#[allow(deprecated)]
+pub use emission::{EmissionConfig, EmissionController, EmissionState};
+
+pub use fee_curve::{
+    ClusterFactorCurve, FeeConfig, FeeCurve, FeeRateBps, TransactionType, count_outputs_with_memos,
+};
 pub use tag::{TagVector, TagWeight, TAG_WEIGHT_SCALE};
 pub use transfer::{execute_transfer, mint, Account, TransferConfig, TransferError, TransferResult};
 pub use validate::{

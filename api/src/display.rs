@@ -76,9 +76,7 @@ mod display_tests {
         external,
         printable::{printable_wrapper, PaymentRequest, PrintableWrapper, TransferPayload},
     };
-    use bth_test_vectors_b58_encodings::{
-        B58EncodePublicAddressWithFog, B58EncodePublicAddressWithoutFog,
-    };
+    use bth_test_vectors_b58_encodings::B58EncodePublicAddressWithoutFog;
     use bth_util_test_vector::TestVector;
     use bth_util_test_with_data::test_with_data;
 
@@ -90,7 +88,6 @@ mod display_tests {
             spend_public_key: Some(external::CompressedRistretto {
                 data: vec![1u8; 32],
             }),
-            fog_report_url: "botho://fog.example.com".to_string(),
             ..Default::default()
         }
     }
@@ -137,38 +134,7 @@ mod display_tests {
         assert_eq!(decoded_wrapper, expected);
     }
 
-    fn printable_wrapper_from_b58_encode_public_address_with_fog(
-        case: &B58EncodePublicAddressWithFog,
-    ) -> PrintableWrapper {
-        let public_address = external::PublicAddress {
-            view_public_key: Some(external::CompressedRistretto {
-                data: case.view_public_key.to_vec(),
-            }),
-            spend_public_key: Some(external::CompressedRistretto {
-                data: case.spend_public_key.to_vec(),
-            }),
-            fog_report_url: case.fog_report_url.clone(),
-            fog_report_id: case.fog_report_id.clone(),
-            fog_authority_sig: case.fog_authority_sig.clone(),
-        };
-
-        PrintableWrapper {
-            wrapper: Some(printable_wrapper::Wrapper::PublicAddress(public_address)),
-        }
-    }
-
-    #[test_with_data(B58EncodePublicAddressWithFog::from_jsonl("../test-vectors/vectors"))]
-    fn test_b58_encode_public_address_with_fog(case: B58EncodePublicAddressWithFog) {
-        let wrapper = printable_wrapper_from_b58_encode_public_address_with_fog(&case);
-        assert_eq!(wrapper.b58_encode().unwrap(), case.b58_encoded);
-    }
-
-    #[test_with_data(B58EncodePublicAddressWithFog::from_jsonl("../test-vectors/vectors"))]
-    fn test_b58_decode_public_address_with_fog(case: B58EncodePublicAddressWithFog) {
-        let decoded_wrapper = PrintableWrapper::b58_decode(case.b58_encoded.clone()).unwrap();
-        let expected = printable_wrapper_from_b58_encode_public_address_with_fog(&case);
-        assert_eq!(decoded_wrapper, expected);
-    }
+    // Fog-related tests removed (fog_report_url, fog_report_id, fog_authority_sig no longer in PublicAddress)
 
     #[test]
     fn test_payment_request_roundtrip() {

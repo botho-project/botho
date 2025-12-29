@@ -31,6 +31,7 @@ pub struct Ledger {
 const META_HEIGHT: &[u8; 6] = b"height";
 const META_TIP_HASH: &[u8; 8] = b"tip_hash";
 const META_TOTAL_MINED: &[u8; 11] = b"total_mined";
+const META_FEES_BURNED: &[u8; 11] = b"fees_burned";
 const META_DIFFICULTY: &[u8; 10] = b"difficulty";
 
 impl Ledger {
@@ -94,6 +95,7 @@ impl Ledger {
         txn.put(self.meta_db, META_HEIGHT, &0u64.to_le_bytes(), WriteFlags::empty())?;
         txn.put(self.meta_db, META_TIP_HASH, &genesis_hash, WriteFlags::empty())?;
         txn.put(self.meta_db, META_TOTAL_MINED, &0u64.to_le_bytes(), WriteFlags::empty())?;
+        txn.put(self.meta_db, META_FEES_BURNED, &0u64.to_le_bytes(), WriteFlags::empty())?;
         txn.put(
             self.meta_db,
             META_DIFFICULTY,
@@ -127,6 +129,12 @@ impl Ledger {
             Err(e) => return Err(e.into()),
         };
 
+        let total_fees_burned = match txn.get(self.meta_db, &META_FEES_BURNED) {
+            Ok(bytes) => u64::from_le_bytes(bytes.try_into().unwrap_or([0; 8])),
+            Err(lmdb::Error::NotFound) => 0,
+            Err(e) => return Err(e.into()),
+        };
+
         let difficulty = match txn.get(self.meta_db, &META_DIFFICULTY) {
             Ok(bytes) => u64::from_le_bytes(bytes.try_into().unwrap_or([0; 8])),
             Err(lmdb::Error::NotFound) => crate::node::miner::INITIAL_DIFFICULTY,
@@ -154,6 +162,7 @@ impl Ledger {
             tip_hash,
             tip_timestamp,
             total_mined,
+            total_fees_burned,
             difficulty,
         })
     }
@@ -217,6 +226,10 @@ impl Ledger {
         let new_hash = block.hash();
         let new_height = block.height();
         let new_total_mined = state.total_mined + block.mining_tx.reward;
+
+        // Sum transaction fees (these are burned, reducing circulating supply)
+        let block_fees: u64 = block.transactions.iter().map(|tx| tx.fee).sum();
+        let new_total_fees_burned = state.total_fees_burned + block_fees;
 
         // Create UTXO from mining reward (coinbase)
         // Use block hash as the "tx_hash" for mining rewards
@@ -311,14 +324,21 @@ impl Ledger {
             &new_total_mined.to_le_bytes(),
             WriteFlags::empty(),
         )?;
+        txn.put(
+            self.meta_db,
+            META_FEES_BURNED,
+            &new_total_fees_burned.to_le_bytes(),
+            WriteFlags::empty(),
+        )?;
 
         txn.commit()?;
 
         info!(
-            "Added block {} with hash {} ({} txs)",
+            "Added block {} with hash {} ({} txs, {} fees burned)",
             new_height,
             hex::encode(&new_hash[0..8]),
-            block.transactions.len()
+            block.transactions.len(),
+            block_fees
         );
 
         Ok(())
@@ -419,6 +439,34 @@ impl Ledger {
             Err(lmdb::Error::NotFound) => Ok(false),
             Err(e) => Err(e.into()),
         }
+    }
+
+    /// Get a UTXO by its target_key (one-time stealth public key)
+    ///
+    /// This is useful for ring signature validation where we need to look up
+    /// UTXOs by their target_key to determine their amounts.
+    pub fn get_utxo_by_target_key(&self, target_key: &[u8; 32]) -> Result<Option<Utxo>, LedgerError> {
+        let txn = self.env.begin_ro_txn()?;
+
+        // Look up UTXO IDs from the target_key index
+        let id_bytes = match txn.get(self.address_index_db, target_key) {
+            Ok(bytes) => bytes,
+            Err(lmdb::Error::NotFound) => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
+
+        // Get the first UTXO ID (there should typically be only one per target_key)
+        if id_bytes.len() >= 36 {
+            if let Some(utxo_id) = UtxoId::from_bytes(&id_bytes[0..36]) {
+                if let Ok(utxo_bytes) = txn.get(self.utxo_db, &utxo_id.to_bytes()) {
+                    if let Ok(utxo) = bincode::deserialize::<Utxo>(utxo_bytes) {
+                        return Ok(Some(utxo));
+                    }
+                }
+            }
+        }
+
+        Ok(None)
     }
 
     /// Compute address key from view and spend keys for index lookup
@@ -732,5 +780,186 @@ mod tests {
 
         let tip = ledger.get_tip().unwrap();
         assert_eq!(tip.height(), 0);
+    }
+
+    #[test]
+    fn test_key_image_tracking() {
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+
+        let key_image: [u8; 32] = [0xAB; 32];
+
+        // Key image should not be spent initially
+        assert!(ledger.is_key_image_spent(&key_image).unwrap().is_none());
+
+        // Record key image as spent at height 10
+        {
+            let mut txn = ledger.env.begin_rw_txn().unwrap();
+            ledger.record_key_image(&mut txn, &key_image, 10).unwrap();
+            txn.commit().unwrap();
+        }
+
+        // Now it should be spent
+        let spent_height = ledger.is_key_image_spent(&key_image).unwrap();
+        assert_eq!(spent_height, Some(10));
+    }
+
+    #[test]
+    fn test_key_image_double_spend_rejected() {
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+
+        let key_image: [u8; 32] = [0xCD; 32];
+
+        // Record first spend
+        {
+            let mut txn = ledger.env.begin_rw_txn().unwrap();
+            ledger.record_key_image(&mut txn, &key_image, 5).unwrap();
+            txn.commit().unwrap();
+        }
+
+        // Try to record same key image again - should fail
+        {
+            let mut txn = ledger.env.begin_rw_txn().unwrap();
+            let result = ledger.record_key_image(&mut txn, &key_image, 10);
+            assert!(result.is_err());
+        }
+    }
+
+    #[test]
+    fn test_get_utxo_by_target_key() {
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+
+        // Create a test UTXO
+        let target_key: [u8; 32] = [0x42; 32];
+        let utxo_id = UtxoId::new([0x11; 32], 0);
+        let output = TxOutput {
+            amount: 1_000_000,
+            target_key,
+            public_key: [0x33; 32],
+        };
+        let utxo = Utxo {
+            id: utxo_id,
+            output,
+            created_at: 1,
+        };
+
+        // Store the UTXO
+        {
+            let mut txn = ledger.env.begin_rw_txn().unwrap();
+            let utxo_bytes = bincode::serialize(&utxo).unwrap();
+            txn.put(
+                ledger.utxo_db,
+                &utxo_id.to_bytes(),
+                &utxo_bytes,
+                lmdb::WriteFlags::empty(),
+            ).unwrap();
+            ledger.add_to_address_index(&mut txn, &utxo).unwrap();
+            txn.commit().unwrap();
+        }
+
+        // Look up by target_key
+        let found = ledger.get_utxo_by_target_key(&target_key).unwrap();
+        assert!(found.is_some());
+        let found_utxo = found.unwrap();
+        assert_eq!(found_utxo.output.amount, 1_000_000);
+        assert_eq!(found_utxo.output.target_key, target_key);
+    }
+
+    #[test]
+    fn test_get_utxo_by_target_key_not_found() {
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+
+        let nonexistent_key: [u8; 32] = [0xFF; 32];
+        let result = ledger.get_utxo_by_target_key(&nonexistent_key).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_utxo_exists() {
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+
+        let utxo_id = UtxoId::new([0xDE; 32], 5);
+
+        // Should not exist initially
+        assert!(!ledger.utxo_exists(&utxo_id).unwrap());
+
+        // Create and store UTXO
+        let utxo = Utxo {
+            id: utxo_id,
+            output: TxOutput {
+                amount: 500,
+                target_key: [0x11; 32],
+                public_key: [0x22; 32],
+            },
+            created_at: 0,
+        };
+
+        {
+            let mut txn = ledger.env.begin_rw_txn().unwrap();
+            let utxo_bytes = bincode::serialize(&utxo).unwrap();
+            txn.put(
+                ledger.utxo_db,
+                &utxo_id.to_bytes(),
+                &utxo_bytes,
+                lmdb::WriteFlags::empty(),
+            ).unwrap();
+            txn.commit().unwrap();
+        }
+
+        // Now should exist
+        assert!(ledger.utxo_exists(&utxo_id).unwrap());
+    }
+
+    #[test]
+    fn test_get_utxo() {
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+
+        let utxo_id = UtxoId::new([0xAA; 32], 0);
+        let amount = 12345u64;
+
+        // Store UTXO
+        let utxo = Utxo {
+            id: utxo_id,
+            output: TxOutput {
+                amount,
+                target_key: [0xBB; 32],
+                public_key: [0xCC; 32],
+            },
+            created_at: 100,
+        };
+
+        {
+            let mut txn = ledger.env.begin_rw_txn().unwrap();
+            let utxo_bytes = bincode::serialize(&utxo).unwrap();
+            txn.put(
+                ledger.utxo_db,
+                &utxo_id.to_bytes(),
+                &utxo_bytes,
+                lmdb::WriteFlags::empty(),
+            ).unwrap();
+            txn.commit().unwrap();
+        }
+
+        // Retrieve and verify
+        let retrieved = ledger.get_utxo(&utxo_id).unwrap().unwrap();
+        assert_eq!(retrieved.output.amount, amount);
+        assert_eq!(retrieved.created_at, 100);
+    }
+
+    #[test]
+    fn test_set_difficulty() {
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+
+        let new_difficulty = 0x00FF_FFFF_0000_0000u64;
+        ledger.set_difficulty(new_difficulty).unwrap();
+
+        let state = ledger.get_chain_state().unwrap();
+        assert_eq!(state.difficulty, new_difficulty);
     }
 }

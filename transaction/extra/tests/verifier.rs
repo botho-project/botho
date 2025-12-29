@@ -1,51 +1,31 @@
-// Copyright (c) 2018-2023 The Botho Foundation
+// Copyright (c) 2018-2024 The Botho Foundation
 
 //! Tests of the streaming verifier
 
 use bth_account_keys::{AccountKey, ShortAddressHash};
-use bth_crypto_keys::{RistrettoPrivate, RistrettoPublic};
 use bth_crypto_ring_signature_signer::NoKeysRingSigner;
 use bth_transaction_builder::{
-    test_utils::{get_input_credentials, get_unsigned_transaction},
+    test_utils::{get_input_credentials, get_ring_global_indices, get_unsigned_transaction},
     EmptyMemoBuilder, ReservedSubaddresses, SignedContingentInputBuilder, TransactionBuilder,
 };
 use bth_transaction_core::{
-    constants::{MAX_INPUTS, MAX_OUTPUTS, MILLIMOB_TO_PICOMOB, RING_SIZE},
+    constants::{MAX_INPUTS, MAX_OUTPUTS, MILLIMOB_TO_PICOMOB},
     tokens::Mob,
     tx::Tx,
     Amount, BlockVersion, Token, TokenId,
 };
 use bth_transaction_extra::UnsignedTx;
 use bth_transaction_summary::{verify_tx_summary, TotalKind, TransactionEntity};
-use bth_util_from_random::FromRandom;
 use bth_util_serial::encode;
 use rand::{rngs::StdRng, SeedableRng};
 use rand_core::CryptoRngCore;
-use std::collections::BTreeMap;
 
 // Get an unsigned Tx and the sender account keys with the maximum allowed size
-// right now
 fn get_current_max_size_transaction(
     rng: &mut impl CryptoRngCore,
 ) -> (UnsignedTx, AccountKey, AccountKey) {
-    let sender = AccountKey::random_with_fog(rng);
-    let recipient = AccountKey::random_with_fog(rng);
-
-    let ingest_private_key = RistrettoPrivate::from_random(rng);
-
-    let mut fog_map = BTreeMap::default();
-    fog_map.insert(
-        recipient
-            .default_subaddress()
-            .fog_report_url()
-            .unwrap()
-            .to_string(),
-        FullyValidatedFogPubkey {
-            pubkey: RistrettoPublic::from(&ingest_private_key),
-            pubkey_expiry: 1000,
-        },
-    );
-    let fog_resolver = MockFogResolver(fog_map);
+    let sender = AccountKey::random(rng);
+    let recipient = AccountKey::random(rng);
 
     (
         get_unsigned_transaction(
@@ -55,7 +35,6 @@ fn get_current_max_size_transaction(
             MAX_OUTPUTS as usize,
             &sender,
             &recipient,
-            fog_resolver,
             rng,
         )
         .unwrap(),
@@ -65,28 +44,11 @@ fn get_current_max_size_transaction(
 }
 
 // Get an unsigned Tx and the sender account keys with the minimum possible size
-// right now
 fn get_current_min_size_transaction(
     rng: &mut impl CryptoRngCore,
 ) -> (UnsignedTx, AccountKey, AccountKey) {
-    let sender = AccountKey::random_with_fog(rng);
-    let recipient = AccountKey::random_with_fog(rng);
-
-    let ingest_private_key = RistrettoPrivate::from_random(rng);
-
-    let mut fog_map = BTreeMap::default();
-    fog_map.insert(
-        recipient
-            .default_subaddress()
-            .fog_report_url()
-            .unwrap()
-            .to_string(),
-        FullyValidatedFogPubkey {
-            pubkey: RistrettoPublic::from(&ingest_private_key),
-            pubkey_expiry: 1000,
-        },
-    );
-    let fog_resolver = MockFogResolver(fog_map);
+    let sender = AccountKey::random(rng);
+    let recipient = AccountKey::random(rng);
 
     (
         get_unsigned_transaction(
@@ -96,7 +58,6 @@ fn get_current_min_size_transaction(
             1,
             &sender,
             &recipient,
-            fog_resolver,
             rng,
         )
         .unwrap(),
@@ -122,10 +83,8 @@ fn test_max_size_tx_payload_sizes() {
     };
 
     assert_eq!(tx.prefix.inputs.len(), MAX_INPUTS as usize);
-    // Note: proofs were removed from TxIn as part of SGX removal
 
-    let tx_wire = encode(&tx);
-    // Wire format size changed with proof removal - update expected size when tests run
+    let _tx_wire = encode(&tx);
 
     let tx_summary_wire = encode(&tx_summary);
     assert_eq!(tx_summary_wire.len(), 2726);
@@ -162,10 +121,8 @@ fn test_min_size_tx_payload_sizes() {
     };
 
     assert_eq!(tx.prefix.inputs.len(), 1_usize);
-    // Note: proofs were removed from TxIn as part of SGX removal
 
-    let tx_wire = encode(&tx);
-    // Wire format size changed with proof removal - update expected size when tests run
+    let _tx_wire = encode(&tx);
 
     let tx_summary_wire = encode(&tx_summary);
     assert_eq!(tx_summary_wire.len(), 176);
@@ -269,7 +226,6 @@ fn test_two_input_tx_with_change_tx_summary_verification() {
 
     let block_version = BlockVersion::MAX;
     for token_id in [TokenId::from(0), TokenId::from(1)] {
-        let fog_resolver = MockFogResolver::default();
         let sender = AccountKey::random(&mut rng);
         let sender_change_dest = ReservedSubaddresses::from(&sender);
         let recipient = AccountKey::random(&mut rng);
@@ -281,7 +237,6 @@ fn test_two_input_tx_with_change_tx_summary_verification() {
         let mut transaction_builder = TransactionBuilder::new(
             block_version,
             Amount::new(Mob::MINIMUM_FEE, token_id),
-            fog_resolver.clone(),
         )
         .unwrap();
 
@@ -291,7 +246,6 @@ fn test_two_input_tx_with_change_tx_summary_verification() {
             block_version,
             Amount::new(value, token_id),
             &sender,
-            &fog_resolver,
             &mut rng,
         );
         transaction_builder.add_input(input_credentials);
@@ -299,7 +253,6 @@ fn test_two_input_tx_with_change_tx_summary_verification() {
             block_version,
             Amount::new(value2, token_id),
             &sender,
-            &fog_resolver,
             &mut rng,
         );
         transaction_builder.add_input(input_credentials);
@@ -369,7 +322,6 @@ fn test_simple_tx_with_change_tx_summary_verification() {
 
     let block_version = BlockVersion::MAX;
     for token_id in [TokenId::from(0), TokenId::from(1)] {
-        let fog_resolver = MockFogResolver::default();
         let sender = AccountKey::random(&mut rng);
         let sender_change_dest = ReservedSubaddresses::from(&sender);
         let recipient = AccountKey::random(&mut rng);
@@ -380,7 +332,6 @@ fn test_simple_tx_with_change_tx_summary_verification() {
         let mut transaction_builder = TransactionBuilder::new(
             block_version,
             Amount::new(Mob::MINIMUM_FEE, token_id),
-            fog_resolver.clone(),
         )
         .unwrap();
 
@@ -390,7 +341,6 @@ fn test_simple_tx_with_change_tx_summary_verification() {
             block_version,
             Amount::new(value, token_id),
             &sender,
-            &fog_resolver,
             &mut rng,
         );
         transaction_builder.add_input(input_credentials);
@@ -456,7 +406,6 @@ fn test_two_output_tx_with_change_tx_summary_verification() {
 
     let block_version = BlockVersion::MAX;
     for token_id in [TokenId::from(0), TokenId::from(1)] {
-        let fog_resolver = MockFogResolver::default();
         let sender = AccountKey::random(&mut rng);
         let sender_change_dest = ReservedSubaddresses::from(&sender);
         let recipient = AccountKey::random(&mut rng);
@@ -470,7 +419,6 @@ fn test_two_output_tx_with_change_tx_summary_verification() {
         let mut transaction_builder = TransactionBuilder::new(
             block_version,
             Amount::new(Mob::MINIMUM_FEE, token_id),
-            fog_resolver.clone(),
         )
         .unwrap();
 
@@ -480,7 +428,6 @@ fn test_two_output_tx_with_change_tx_summary_verification() {
             block_version,
             Amount::new(value + value2 + change_value + Mob::MINIMUM_FEE, token_id),
             &sender,
-            &fog_resolver,
             &mut rng,
         );
         transaction_builder.add_input(input_credentials);
@@ -557,8 +504,6 @@ fn test_sci_tx_summary_verification() {
 
     let block_version = BlockVersion::MAX;
 
-    let fog_resolver = MockFogResolver::default();
-
     let alice = AccountKey::random(&mut rng);
     let bob = AccountKey::random(&mut rng);
 
@@ -570,14 +515,14 @@ fn test_sci_tx_summary_verification() {
 
     // Alice provides amount of Mob
     let input_credentials =
-        get_input_credentials(block_version, amount, &alice, &fog_resolver, &mut rng);
+        get_input_credentials(block_version, amount, &alice, &mut rng);
 
-    let proofs = input_credentials.membership_proofs.clone();
+    let ring_global_indices = get_ring_global_indices(input_credentials.ring.len());
 
     let mut builder = SignedContingentInputBuilder::new(
         block_version,
         input_credentials,
-        fog_resolver.clone(),
+        ring_global_indices,
         EmptyMemoBuilder,
     )
     .unwrap();
@@ -587,7 +532,7 @@ fn test_sci_tx_summary_verification() {
         .add_required_output(amount2, &alice.default_subaddress(), &mut rng)
         .unwrap();
 
-    let mut sci = builder.build(&NoKeysRingSigner {}, &mut rng).unwrap();
+    let sci = builder.build(&NoKeysRingSigner {}, &mut rng).unwrap();
 
     // The contingent input should have a valid signature.
     sci.validate().unwrap();
@@ -597,14 +542,12 @@ fn test_sci_tx_summary_verification() {
         block_version,
         Amount::new(300_000, token2),
         &bob,
-        &fog_resolver,
         &mut rng,
     );
 
     let mut builder = TransactionBuilder::new(
         block_version,
         Amount::new(Mob::MINIMUM_FEE, Mob::ID),
-        fog_resolver,
     )
     .unwrap();
 
@@ -612,7 +555,6 @@ fn test_sci_tx_summary_verification() {
     builder.add_input(input_credentials);
 
     // Bob adds the presigned input, which also adds the required outputs
-    sci.tx_in.proofs = proofs;
     builder.add_presigned_input(sci).unwrap();
 
     let bob_change_dest = ReservedSubaddresses::from(&bob);
@@ -668,134 +610,6 @@ fn test_sci_tx_summary_verification() {
             Mob::ID,
             (value - Mob::MINIMUM_FEE) as u128,
         ),
-    ];
-    outputs.sort();
-    assert_eq!(&report.outputs[..], &outputs[..]);
-
-    assert_eq!(report.network_fee, Amount::new(Mob::MINIMUM_FEE, Mob::ID));
-}
-
-// Build a transaction using a signed contingent input that sends to a friend,
-// and test TxSummary verifier
-#[test]
-fn test_sci_three_way_tx_summary_verification() {
-    let mut rng: StdRng = SeedableRng::from_seed([1u8; 32]);
-
-    let block_version = BlockVersion::MAX;
-
-    let fog_resolver = MockFogResolver::default();
-
-    let alice = AccountKey::random(&mut rng);
-    let bob = AccountKey::random(&mut rng);
-    let charlie = AccountKey::random(&mut rng);
-
-    let value = 1475 * MILLIMOB_TO_PICOMOB;
-    let amount = Amount::new(value, Mob::ID);
-    let token2 = TokenId::from(2);
-    let value2 = 100_000;
-    let amount2 = Amount::new(value2, token2);
-
-    // Alice provides amount of Mob
-    let input_credentials =
-        get_input_credentials(block_version, amount, &alice, &fog_resolver, &mut rng);
-
-    let proofs = input_credentials.membership_proofs.clone();
-
-    let mut builder = SignedContingentInputBuilder::new(
-        block_version,
-        input_credentials,
-        fog_resolver.clone(),
-        EmptyMemoBuilder,
-    )
-    .unwrap();
-
-    // Alice requests amount2 worth of token id 2 in exchange
-    let (_txout, _confirmation) = builder
-        .add_required_output(amount2, &alice.default_subaddress(), &mut rng)
-        .unwrap();
-
-    let mut sci = builder.build(&NoKeysRingSigner {}, &mut rng).unwrap();
-
-    // The contingent input should have a valid signature.
-    sci.validate().unwrap();
-
-    // Bob has 3x worth of token id 2
-    let input_credentials = get_input_credentials(
-        block_version,
-        Amount::new(300_000, token2),
-        &bob,
-        &fog_resolver,
-        &mut rng,
-    );
-
-    let mut builder = TransactionBuilder::new(
-        block_version,
-        Amount::new(Mob::MINIMUM_FEE, Mob::ID),
-        fog_resolver,
-    )
-    .unwrap();
-
-    // Bob supplies his (excess) token id 2
-    builder.add_input(input_credentials);
-
-    // Bob adds the presigned input, which also adds the required outputs
-    sci.tx_in.proofs = proofs;
-    builder.add_presigned_input(sci).unwrap();
-
-    let bob_change_dest = ReservedSubaddresses::from(&bob);
-
-    // Bob keeps the change from token id 2
-    builder
-        .add_change_output(Amount::new(200_000, token2), &bob_change_dest, &mut rng)
-        .unwrap();
-
-    // Bob sends the Mob that Alice supplies, less fees, to his friend Charlie
-    builder
-        .add_output(
-            Amount::new(value - Mob::MINIMUM_FEE, Mob::ID),
-            &charlie.default_subaddress(),
-            &mut rng,
-        )
-        .unwrap();
-
-    let unsigned_tx = builder.build_unsigned(EmptyMemoBuilder).unwrap();
-
-    let (signing_data, tx_summary, tx_summary_unblinding_data, extended_message_digest) =
-        unsigned_tx.get_signing_data(&mut rng).unwrap();
-
-    let (mlsag_signing_digest, report) = verify_tx_summary(
-        &extended_message_digest.0.try_into().unwrap(),
-        &tx_summary,
-        &tx_summary_unblinding_data,
-        *bob.view_private_key(),
-        bob.change_subaddress(),
-    )
-    .unwrap();
-    assert_eq!(
-        &mlsag_signing_digest[..],
-        &signing_data.mlsag_signing_digest[..]
-    );
-
-    let charlie_hash = ShortAddressHash::from(&charlie.default_subaddress());
-
-    assert_eq!(
-        &report.totals,
-        &[
-            // Bob's spend to create the transaction
-            (token2, TotalKind::Ours, value2 as i128),
-            // SCI inputs used in the transaction
-            (Mob::ID, TotalKind::Sci, value as i128),
-        ]
-    );
-    let mut outputs = [
-        // Converted output to charlie, - fee paid from Mob input
-        (
-            TransactionEntity::OtherAddress(charlie_hash),
-            Mob::ID,
-            (value - Mob::MINIMUM_FEE) as u128,
-        ),
-        // Output to swap counterparty
-        (TransactionEntity::Swap, token2, value2 as u128),
     ];
     outputs.sort();
     assert_eq!(&report.outputs[..], &outputs[..]);

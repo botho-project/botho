@@ -571,7 +571,6 @@ mod tests {
                     *amount,
                     receive_subaddress,
                     &tx_private_key,
-                    Default::default(),
                 )
                 .unwrap();
 
@@ -629,7 +628,6 @@ mod tests {
                     *amount,
                     &sender_subaddress,
                     &tx_private_key,
-                    Default::default(),
                 )
                 .unwrap();
 

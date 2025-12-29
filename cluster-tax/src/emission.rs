@@ -1,13 +1,27 @@
 //! Adaptive emission controller for Botho's monetary policy.
 //!
-//! Botho uses an adaptive emission model that adjusts block rewards based on
-//! fee burn rates to achieve a target net inflation rate.
+//! # ⚠️ DEPRECATED
 //!
-//! ## Design Goals
+//! **This module is superseded by [`crate::monetary::DifficultyController`].**
 //!
-//! 1. **Stable purchasing power**: Target a predictable inflation rate (e.g., 2% annually)
-//! 2. **Fee-burn offset**: When fees are burned, increase emission to compensate
-//! 3. **Smooth adjustments**: Avoid sudden reward changes that could destabilize mining
+//! The Two-Phase Monetary Model (in `monetary.rs`) is the canonical approach:
+//! - **Phase 1**: Halving schedule with timing-based difficulty adjustment
+//! - **Phase 2**: Tail emission with inflation-targeting difficulty adjustment
+//!
+//! The key insight is that **difficulty should adapt, not rewards**:
+//! - Miners need predictable per-block income to plan operations
+//! - Variable block time (45-90s) is less disruptive than variable rewards
+//! - Fee burn volatility is absorbed by block rate, not reward rate
+//!
+//! This module is preserved for reference and backwards compatibility.
+//! New code should use `DifficultyController` from `monetary.rs`.
+//!
+//! ---
+//!
+//! # Original Design (Legacy)
+//!
+//! This module implemented an adaptive emission model that adjusts block rewards
+//! based on fee burn rates to achieve a target net inflation rate.
 //!
 //! ## Formula
 //!
@@ -17,22 +31,35 @@
 //! block_reward = required_gross_emission / blocks_per_epoch
 //! ```
 //!
-//! ## Example
+//! ## Problems with this Approach
 //!
-//! With 100M supply, 2% target inflation, 1000 blocks/epoch, 365 epochs/year:
-//! - Target net emission per epoch: 100M × 0.02 / 365 ≈ 5,479 coins
-//! - If 2,000 coins were burned in fees last epoch:
-//! - Gross emission needed: 5,479 + 2,000 = 7,479 coins
-//! - Block reward: 7,479 / 1000 ≈ 7.48 coins per block
+//! 1. **Reward volatility**: Fee spikes cause reward spikes (unpredictable for miners)
+//! 2. **Gaming potential**: Strategic fee burns could manipulate rewards
+//! 3. **No early adoption incentive**: No halving schedule to reward early participants
 //!
-//! ## Bounds
+//! ## Migration
 //!
-//! To prevent runaway emission or deflation:
-//! - `min_block_reward`: Floor to ensure miners are always compensated
-//! - `max_block_reward`: Ceiling to prevent hyperinflation if fees spike
-//! - `max_adjustment_rate`: Limit how fast rewards can change between epochs
+//! Replace:
+//! ```ignore
+//! let controller = EmissionController::new(config, initial_supply);
+//! let reward = controller.process_block();
+//! ```
+//!
+//! With:
+//! ```ignore
+//! let controller = DifficultyController::new(policy, initial_supply, initial_difficulty, start_time);
+//! let reward = controller.process_block(current_time);
+//! ```
 
 /// Configuration for the adaptive emission controller.
+///
+/// # Deprecated
+///
+/// Use [`crate::MonetaryPolicy`] instead. See module docs for migration guide.
+#[deprecated(
+    since = "0.2.0",
+    note = "Use MonetaryPolicy and DifficultyController from monetary.rs instead"
+)]
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct EmissionConfig {
@@ -89,6 +116,14 @@ impl EmissionConfig {
 }
 
 /// Tracks emission state across epochs.
+///
+/// # Deprecated
+///
+/// Use [`crate::MonetaryState`] instead. See module docs for migration guide.
+#[deprecated(
+    since = "0.2.0",
+    note = "Use MonetaryState and DifficultyController from monetary.rs instead"
+)]
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct EmissionState {
@@ -157,6 +192,19 @@ impl EmissionState {
 }
 
 /// Adaptive emission controller.
+///
+/// # Deprecated
+///
+/// Use [`crate::DifficultyController`] instead. See module docs for migration guide.
+///
+/// The Two-Phase model is preferred because:
+/// - Miners get predictable rewards (fixed per halving period)
+/// - Fee volatility is absorbed by block rate, not reward rate
+/// - Halving schedule incentivizes early adoption
+#[deprecated(
+    since = "0.2.0",
+    note = "Use DifficultyController from monetary.rs instead"
+)]
 #[derive(Clone, Debug)]
 pub struct EmissionController {
     pub config: EmissionConfig,

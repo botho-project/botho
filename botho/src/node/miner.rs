@@ -11,7 +11,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Instant;
 use tracing::info;
 
-use crate::block::{calculate_block_reward, MiningTx};
+use crate::block::{calculate_block_reward_v2, MiningTx};
 
 /// Mining difficulty target (lower = harder)
 /// Start with a very easy target for testing
@@ -51,6 +51,8 @@ pub struct MiningWork {
     pub prev_block_hash: [u8; 32],
     pub height: u64,
     pub difficulty: u64,
+    /// Total mined (gross emission). Used as proxy for supply in reward calculation.
+    /// Note: For accurate supply tracking, subtract total_fees_burned (not yet tracked).
     pub total_mined: u64,
 }
 
@@ -212,12 +214,14 @@ fn mine_loop(
             // Found a valid mining transaction!
             txs_found.fetch_add(1, Ordering::Relaxed);
 
-            let reward = calculate_block_reward(work.height, work.total_mined);
+            // Use Two-Phase model: total_mined is used as proxy for supply
+            // (accurate supply = total_mined - fees_burned, but fees not yet tracked)
+            let reward = calculate_block_reward_v2(work.height, work.total_mined);
 
             let timestamp = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs();
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
 
             // Create the mining transaction with stealth output and PoW proof
             // Includes both miner identity (for PoW binding) and stealth keys (for private output)

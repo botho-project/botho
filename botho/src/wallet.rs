@@ -3,9 +3,13 @@ use bip39::{Language, Mnemonic};
 use bth_account_keys::{AccountKey, PublicAddress};
 use bth_core::slip10::Slip10KeyGenerator;
 use bth_crypto_keys::RistrettoSignature;
+use rand::rngs::OsRng;
+use rand::seq::SliceRandom;
 
 use crate::ledger::Ledger;
-use crate::transaction::{Transaction, TxInputs, UtxoId};
+use crate::transaction::{
+    RingMember, RingTxInput, Transaction, TxInputs, TxOutput, Utxo, UtxoId, MIN_RING_SIZE,
+};
 
 /// Wallet manages a single account derived from a BIP39 mnemonic
 pub struct Wallet {
@@ -117,6 +121,140 @@ impl Wallet {
         }
 
         Ok(())
+    }
+
+    /// Create a private (ring signature) transaction for sender privacy.
+    ///
+    /// Ring signatures hide which UTXO is actually being spent by mixing it
+    /// with decoy outputs from the ledger. The signature proves ownership
+    /// of one ring member without revealing which one.
+    ///
+    /// # Arguments
+    /// * `utxos_to_spend` - The wallet's UTXOs to spend
+    /// * `outputs` - Transaction outputs to create
+    /// * `fee` - Transaction fee
+    /// * `current_height` - Current blockchain height
+    /// * `ledger` - Ledger for fetching decoy outputs
+    ///
+    /// # Returns
+    /// A fully signed private transaction ready for broadcast
+    pub fn create_private_transaction(
+        &self,
+        utxos_to_spend: &[Utxo],
+        outputs: Vec<TxOutput>,
+        fee: u64,
+        current_height: u64,
+        ledger: &Ledger,
+    ) -> Result<Transaction> {
+        if utxos_to_spend.is_empty() {
+            return Err(anyhow::anyhow!("No UTXOs to spend"));
+        }
+
+        // Calculate total output amount for the signing message
+        let total_output: u64 = outputs.iter().map(|o| o.amount).sum::<u64>() + fee;
+
+        // Build a preliminary transaction to get the signing hash
+        // We'll replace the inputs with real ring inputs after signing
+        let preliminary_tx = Transaction::new_private(Vec::new(), outputs.clone(), fee, current_height);
+        let signing_hash = preliminary_tx.signing_hash();
+
+        // Number of decoys per ring (MIN_RING_SIZE - 1 since real input is included)
+        let decoys_needed = MIN_RING_SIZE - 1;
+
+        // Collect target keys of our real inputs to exclude from decoys
+        let exclude_keys: Vec<[u8; 32]> = utxos_to_spend
+            .iter()
+            .map(|u| u.output.target_key)
+            .collect();
+
+        // Get decoy outputs from ledger (need enough for all inputs)
+        let total_decoys_needed = decoys_needed * utxos_to_spend.len();
+        let decoys = ledger
+            .get_decoy_outputs(total_decoys_needed, &exclude_keys, 10)
+            .map_err(|e| anyhow::anyhow!("Failed to get decoy outputs: {}", e))?;
+
+        if decoys.len() < total_decoys_needed {
+            return Err(anyhow::anyhow!(
+                "Not enough decoy outputs in ledger. Need {}, found {}. \
+                 The ledger needs at least {} confirmed outputs for private transactions.",
+                total_decoys_needed,
+                decoys.len(),
+                MIN_RING_SIZE
+            ));
+        }
+
+        // Build ring inputs
+        let mut ring_inputs = Vec::with_capacity(utxos_to_spend.len());
+        let mut decoy_offset = 0;
+
+        for utxo in utxos_to_spend {
+            // Verify ownership and recover one-time private key
+            let subaddress_index = utxo.output.belongs_to(&self.account_key).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "UTXO does not belong to this wallet: {}",
+                    hex::encode(&utxo.id.tx_hash[0..8])
+                )
+            })?;
+
+            let onetime_private = utxo
+                .output
+                .recover_spend_key(&self.account_key, subaddress_index)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Failed to recover spend key for UTXO {}",
+                        hex::encode(&utxo.id.tx_hash[0..8])
+                    )
+                })?;
+
+            // Build ring: real output + decoys
+            let mut ring: Vec<RingMember> = Vec::with_capacity(MIN_RING_SIZE);
+
+            // Add the real input
+            ring.push(RingMember::from_output(&utxo.output));
+
+            // Add decoys
+            for i in 0..decoys_needed {
+                let decoy = &decoys[decoy_offset + i];
+                ring.push(RingMember::from_output(decoy));
+            }
+            decoy_offset += decoys_needed;
+
+            // Shuffle ring and find the new position of the real input
+            let mut rng = OsRng;
+            let real_target_key = utxo.output.target_key;
+
+            // Create indices and shuffle them
+            let mut indices: Vec<usize> = (0..ring.len()).collect();
+            indices.shuffle(&mut rng);
+
+            // Reorder ring according to shuffled indices
+            let shuffled_ring: Vec<RingMember> = indices.iter().map(|&i| ring[i].clone()).collect();
+
+            // Find where the real input ended up
+            let real_index = shuffled_ring
+                .iter()
+                .position(|m| m.target_key == real_target_key)
+                .expect("Real input must be in ring");
+
+            // Create ring input with MLSAG signature
+            let ring_input = RingTxInput::new(
+                shuffled_ring,
+                real_index,
+                &onetime_private,
+                utxo.output.amount,
+                total_output,
+                &signing_hash,
+                &mut rng,
+            )
+            .map_err(|e| anyhow::anyhow!("Failed to create ring signature: {}", e))?;
+
+            ring_inputs.push(ring_input);
+        }
+
+        // Create the final transaction with ring inputs
+        let tx = Transaction::new_private(ring_inputs, outputs, fee, current_height);
+
+        Ok(tx)
     }
 }
 

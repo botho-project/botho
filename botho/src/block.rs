@@ -290,8 +290,8 @@ impl Block {
         let prev_hash = prev_block.hash();
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
 
         let miner_view_key = miner_address.view_public_key().to_bytes();
         let miner_spend_key = miner_address.spend_public_key().to_bytes();
@@ -345,9 +345,23 @@ impl Block {
     }
 }
 
-/// Calculate block reward based on emission schedule
+/// Calculate block reward based on emission schedule.
+///
+/// # Deprecated
+///
+/// This function uses the legacy Monero-style smooth emission curve.
+/// New code should use [`crate::monetary::MonetarySystem`] which implements
+/// the Two-Phase Monetary Model (halving schedule + inflation-targeting).
+///
+/// For backwards compatibility during migration, this function remains available
+/// but will be removed in a future version.
+#[deprecated(
+    since = "0.2.0",
+    note = "Use monetary::MonetarySystem::block_reward() instead"
+)]
 pub fn calculate_block_reward(_height: u64, total_mined: u64) -> u64 {
-    // Monero-style emission with tail
+    // Legacy Monero-style emission with tail
+    // TODO: Remove once all callers migrate to MonetarySystem
     const TOTAL_SUPPLY: u64 = 18_446_744_073_709_551_615; // ~18.4 quintillion picocredits
     const EMISSION_SPEED_FACTOR: u64 = 20;
     const TAIL_EMISSION: u64 = 600_000_000_000; // 0.6 credits per block in picocredits
@@ -356,6 +370,33 @@ pub fn calculate_block_reward(_height: u64, total_mined: u64) -> u64 {
     let main_reward = remaining >> EMISSION_SPEED_FACTOR;
 
     std::cmp::max(TAIL_EMISSION, main_reward)
+}
+
+/// Calculate block reward using the Two-Phase Monetary Model.
+///
+/// This is a convenience function for code that doesn't have access to a
+/// `MonetarySystem` instance. For stateful monetary policy (with difficulty
+/// adjustment and fee burn tracking), use `MonetarySystem` directly.
+///
+/// # Arguments
+/// * `height` - Current block height
+/// * `total_supply` - Current total supply (for tail emission calculation)
+///
+/// # Returns
+/// The block reward for the given height.
+pub fn calculate_block_reward_v2(height: u64, total_supply: u64) -> u64 {
+    use bth_cluster_tax::MonetaryPolicy;
+
+    let policy = crate::monetary::mainnet_policy();
+
+    // Check which phase we're in
+    if policy.is_halving_phase(height) {
+        // Phase 1: Halving schedule
+        policy.halving_reward(height).unwrap_or(1)
+    } else {
+        // Phase 2: Calculate tail reward based on supply
+        policy.calculate_tail_reward(total_supply)
+    }
 }
 
 /// Difficulty adjustment constants
@@ -441,16 +482,45 @@ mod tests {
     }
 
     #[test]
-    fn test_block_reward_tail_emission() {
-        // At very high total mined, should get tail emission
+    #[allow(deprecated)]
+    fn test_block_reward_tail_emission_legacy() {
+        // Legacy Monero-style: At very high total mined, should get tail emission
         let reward = calculate_block_reward(1_000_000, u64::MAX - 1000);
         assert_eq!(reward, 600_000_000_000);
     }
 
     #[test]
-    fn test_block_reward_early() {
-        // Early blocks should get more than tail
+    #[allow(deprecated)]
+    fn test_block_reward_early_legacy() {
+        // Legacy Monero-style: Early blocks should get more than tail
         let reward = calculate_block_reward(1, 0);
         assert!(reward > 600_000_000_000);
+    }
+
+    #[test]
+    fn test_block_reward_v2_halving() {
+        // Two-Phase model: First halving period
+        let policy = crate::monetary::mainnet_policy();
+        let reward = calculate_block_reward_v2(0, 0);
+        assert_eq!(reward, policy.initial_reward);
+
+        // After first halving
+        let reward_after = calculate_block_reward_v2(policy.halving_interval, 0);
+        assert_eq!(reward_after, policy.initial_reward / 2);
+    }
+
+    #[test]
+    fn test_block_reward_v2_tail() {
+        // Two-Phase model: Tail emission phase
+        let policy = crate::monetary::mainnet_policy();
+        let tail_start = policy.tail_emission_start_height();
+        let supply = 100_000_000_000_000_000u64; // 100M BTH in picocredits
+
+        let reward = calculate_block_reward_v2(tail_start + 100, supply);
+
+        // Should be based on supply and inflation target
+        assert!(reward > 0);
+        // Tail reward should be much smaller than initial
+        assert!(reward < policy.initial_reward);
     }
 }

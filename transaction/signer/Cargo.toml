@@ -40,3 +40,9 @@ bth-transaction-core = { workspace = true }
 bth-transaction-summary = { workspace = true }
 bth-util-repr-bytes = { workspace = true }
 bth-util-serial = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+rand = { workspace = true }
+rand_hc = { workspace = true }
+bth-util-from-random = { workspace = true }

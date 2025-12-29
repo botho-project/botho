@@ -859,4 +859,291 @@ mod tests {
         }
         assert_eq!(controller.blocks_until_next_halving(), None);
     }
+
+    // === Edge Case Tests ===
+
+    #[test]
+    fn test_zero_initial_supply() {
+        let policy = MonetaryPolicy::fast_test();
+        let mut controller = DifficultyController::new(policy, 0, 1000, 0);
+
+        // Should still work - mining creates supply
+        let reward = controller.process_block(1);
+        assert!(reward > 0);
+        assert_eq!(controller.state.total_supply, reward);
+    }
+
+    #[test]
+    fn test_minimum_difficulty() {
+        let policy = MonetaryPolicy::fast_test();
+        let mut controller = DifficultyController::new(policy, 100_000, 1, 0);
+
+        // Difficulty should never go below 1
+        assert_eq!(controller.state.difficulty, 1);
+
+        // Even with slow blocks, difficulty shouldn't go to 0
+        for i in 1..=10 {
+            controller.process_block(i * 1000); // Very slow blocks
+        }
+        assert!(
+            controller.state.difficulty >= 1,
+            "Difficulty should never be 0: {}",
+            controller.state.difficulty
+        );
+    }
+
+    #[test]
+    fn test_fee_burn_exceeds_rewards() {
+        let policy = MonetaryPolicy {
+            initial_reward: 100,
+            halving_interval: 10,
+            halving_count: 1,
+            tail_inflation_bps: 200,
+            difficulty_adjustment_interval: 5,
+            max_difficulty_adjustment_bps: 5000,
+            ..MonetaryPolicy::fast_test()
+        };
+        let mut controller = DifficultyController::new(policy, 100_000, 1000, 0);
+
+        // Get to tail emission
+        for i in 1..=10 {
+            controller.process_block(i * 10);
+        }
+
+        // Burn more than rewards in epoch
+        let epoch_start_difficulty = controller.state.difficulty;
+        controller.record_fee_burn(100_000); // Massive burn
+
+        // Mine through an epoch
+        for i in 11..=15 {
+            controller.process_block(i * 10);
+        }
+
+        // In deflation: difficulty should decrease to speed up blocks
+        assert!(
+            controller.state.difficulty < epoch_start_difficulty,
+            "Difficulty should decrease in deflation: {} vs {}",
+            controller.state.difficulty,
+            epoch_start_difficulty
+        );
+    }
+
+    #[test]
+    fn test_very_slow_blocks() {
+        let policy = MonetaryPolicy {
+            target_block_time_secs: 10,
+            difficulty_adjustment_interval: 5,
+            max_difficulty_adjustment_bps: 5000,
+            ..MonetaryPolicy::fast_test()
+        };
+        let mut controller = DifficultyController::new(policy, 100_000, 1000, 0);
+
+        // Blocks come 10x slower than target
+        for i in 1..=5 {
+            controller.process_block(i * 100); // 100 secs each vs 10 target
+        }
+
+        // Difficulty should decrease
+        assert!(
+            controller.state.difficulty < 1000,
+            "Difficulty should decrease for slow blocks: {}",
+            controller.state.difficulty
+        );
+    }
+
+    #[test]
+    fn test_instant_blocks() {
+        let policy = MonetaryPolicy {
+            target_block_time_secs: 60,
+            difficulty_adjustment_interval: 5,
+            max_difficulty_adjustment_bps: 2500,
+            ..MonetaryPolicy::fast_test()
+        };
+        let mut controller = DifficultyController::new(policy, 100_000, 1000, 0);
+
+        // All blocks at same timestamp (elapsed = 0 edge case)
+        for _ in 1..=5 {
+            controller.process_block(0); // All at time 0
+        }
+
+        // Should handle gracefully - difficulty should stay same or increase
+        assert!(
+            controller.state.difficulty >= 1000,
+            "Difficulty should not crash with zero elapsed: {}",
+            controller.state.difficulty
+        );
+    }
+
+    #[test]
+    fn test_effective_inflation_at_genesis() {
+        let policy = MonetaryPolicy::fast_test();
+        let controller = DifficultyController::new(policy, 0, 1000, 0);
+
+        // At height 0 with 0 supply, should return 0 without panic
+        let inflation = controller.state.effective_inflation_bps(&controller.policy);
+        assert_eq!(inflation, 0);
+    }
+
+    #[test]
+    fn test_estimated_block_time_empty_epoch() {
+        let policy = MonetaryPolicy::fast_test();
+        let controller = DifficultyController::new(policy, 100_000, 1000, 0);
+
+        // At epoch start, no blocks mined yet
+        let est = controller.estimated_block_time(0);
+        assert_eq!(
+            est,
+            controller.policy.target_block_time_secs as f64,
+            "Should return target block time when no blocks in epoch"
+        );
+    }
+
+    #[test]
+    fn test_halving_with_single_halving() {
+        let policy = MonetaryPolicy {
+            initial_reward: 1000,
+            halving_interval: 10,
+            halving_count: 1,
+            ..MonetaryPolicy::fast_test()
+        };
+
+        // At height 9: still halving phase with reward 1000
+        assert!(policy.is_halving_phase(9));
+        assert_eq!(policy.halving_reward(9), Some(1000));
+
+        // At height 10: tail emission
+        assert!(!policy.is_halving_phase(10));
+        assert_eq!(policy.halving_reward(10), None);
+    }
+
+    #[test]
+    fn test_large_supply_tail_reward() {
+        let policy = MonetaryPolicy {
+            tail_inflation_bps: 200,
+            expected_fee_burn_rate_bps: 50,
+            target_block_time_secs: 60,
+            ..Default::default()
+        };
+
+        // Test with very large supply (near u64 max / 10)
+        let large_supply = u64::MAX / 10;
+        let tail_reward = policy.calculate_tail_reward(large_supply);
+
+        // Should not overflow and should return a sensible value
+        assert!(tail_reward > 0);
+        assert!(tail_reward < large_supply); // Reward should be much smaller than supply
+    }
+
+    #[test]
+    fn test_multiple_epochs() {
+        let policy = MonetaryPolicy {
+            target_block_time_secs: 10,
+            difficulty_adjustment_interval: 5,
+            max_difficulty_adjustment_bps: 2500,
+            initial_reward: 100,
+            halving_interval: 1000, // Stay in halving phase
+            halving_count: 10,
+            ..MonetaryPolicy::fast_test()
+        };
+        let mut controller = DifficultyController::new(policy, 100_000, 1000, 0);
+
+        // Track adjustments across multiple epochs
+        let mut difficulties = vec![controller.state.difficulty];
+
+        for epoch in 0..5 {
+            // Each epoch: 5 blocks at consistent timing
+            let base_time = epoch * 50;
+            for i in 1..=5 {
+                controller.process_block(base_time + i * 10);
+            }
+            difficulties.push(controller.state.difficulty);
+        }
+
+        // With consistent timing, difficulty should stabilize
+        // Last two values should be close
+        let last = *difficulties.last().unwrap() as i64;
+        let second_last = difficulties[difficulties.len() - 2] as i64;
+        assert!(
+            (last - second_last).abs() < 200,
+            "Difficulty should stabilize: {:?}",
+            difficulties
+        );
+    }
+
+    #[test]
+    fn test_adjustment_count_increments() {
+        let policy = MonetaryPolicy {
+            difficulty_adjustment_interval: 3,
+            ..MonetaryPolicy::fast_test()
+        };
+        let mut controller = DifficultyController::new(policy, 100_000, 1000, 0);
+
+        assert_eq!(controller.state.adjustment_count, 0);
+
+        // First epoch
+        for i in 1..=3 {
+            controller.process_block(i);
+        }
+        assert_eq!(controller.state.adjustment_count, 1);
+
+        // Second epoch
+        for i in 4..=6 {
+            controller.process_block(i);
+        }
+        assert_eq!(controller.state.adjustment_count, 2);
+    }
+
+    #[test]
+    fn test_epoch_counters_reset() {
+        let policy = MonetaryPolicy {
+            difficulty_adjustment_interval: 3,
+            ..MonetaryPolicy::fast_test()
+        };
+        let mut controller = DifficultyController::new(policy, 100_000, 1000, 0);
+
+        // Mine some blocks and record fees
+        controller.process_block(1);
+        controller.process_block(2);
+        controller.record_fee_burn(100);
+
+        assert!(controller.state.epoch_rewards_emitted > 0);
+        assert_eq!(controller.state.epoch_fees_burned, 100);
+
+        // Trigger adjustment
+        controller.process_block(30); // time=30 for this block
+
+        // Epoch counters should reset
+        assert_eq!(controller.state.epoch_rewards_emitted, 0);
+        assert_eq!(controller.state.epoch_fees_burned, 0);
+        assert_eq!(controller.state.epoch_start_height, 3); // After 3 blocks
+        assert_eq!(controller.state.epoch_start_time, 30);
+    }
+
+    #[test]
+    fn test_current_halving_number() {
+        let policy = MonetaryPolicy {
+            halving_interval: 10,
+            halving_count: 3,
+            ..MonetaryPolicy::fast_test()
+        };
+        let mut controller = DifficultyController::new(policy, 100_000, 1000, 0);
+
+        assert_eq!(controller.current_halving(), Some(0));
+
+        for i in 1..=10 {
+            controller.process_block(i);
+        }
+        assert_eq!(controller.current_halving(), Some(1));
+
+        for i in 11..=20 {
+            controller.process_block(i);
+        }
+        assert_eq!(controller.current_halving(), Some(2));
+
+        // Transition to tail
+        for i in 21..=30 {
+            controller.process_block(i);
+        }
+        assert_eq!(controller.current_halving(), None);
+    }
 }
