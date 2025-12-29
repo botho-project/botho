@@ -22,19 +22,16 @@
 //! proofs prove properties about the aggregate without revealing which
 //! inputs contributed.
 
-use crate::{ClusterId, TagWeight, TAG_WEIGHT_SCALE};
+use crate::{ClusterId, TagWeight};
 use super::committed_tags::{
-    blinding_generator, cluster_generator, CommittedTagMass, CommittedTagVector,
-    CommittedTagVectorSecret, SchnorrProof, TagConservationProof,
-    TagConservationProver, TagConservationVerifier,
+    CommittedTagMass, CommittedTagVector, CommittedTagVectorSecret, SchnorrProof,
+    TagConservationProof, TagConservationProver, TagConservationVerifier,
 };
-use curve25519_dalek::{
-    ristretto::{CompressedRistretto, RistrettoPoint},
-    scalar::Scalar,
-    traits::Identity,
-};
-use sha2::{Digest, Sha512};
-use std::collections::BTreeMap;
+use curve25519_dalek::scalar::Scalar;
+
+// TAG_WEIGHT_SCALE is used in tests
+#[cfg(test)]
+use crate::TAG_WEIGHT_SCALE;
 
 /// Domain separator for tag pseudo-output proofs.
 const TAG_PSEUDO_OUTPUT_DOMAIN: &[u8] = b"mc_tag_pseudo_output_proof";
@@ -180,7 +177,7 @@ impl ExtendedSignatureBuilder {
     fn create_pseudo_tag_output<R: rand_core::RngCore + rand_core::CryptoRng>(
         &self,
         input_idx: usize,
-        ring_data: &RingTagData,
+        _ring_data: &RingTagData,
         real_secret: &CommittedTagVectorSecret,
         rng: &mut R,
     ) -> Option<(PseudoTagOutput, CommittedTagVectorSecret)> {
@@ -223,11 +220,11 @@ impl ExtendedSignatureBuilder {
 
         // Create pseudo total commitment
         let pseudo_total_blinding = Scalar::random(rng);
-        let total_blinding_diff = pseudo_total_blinding - real_secret.total_blinding;
 
         // Note: We could add a total inheritance proof here too, but since we
         // prove each cluster individually and the total is just a sum, it's
-        // redundant.
+        // redundant. The blinding difference would be:
+        // _total_blinding_diff = pseudo_total_blinding - real_secret.total_blinding
 
         let pseudo_secret = CommittedTagVectorSecret {
             entries: pseudo_secret_entries,
@@ -470,33 +467,12 @@ mod tests {
         let ring1 = vec![input1_commitment.clone(), fake.clone()];
         let ring2 = vec![fake.clone(), input2_commitment.clone()];
 
-        // Compute combined decayed output
-        // Total input mass for cluster 1: 600k + 500k = 1100k
-        // After decay: 1100k * 0.95 = 1045k
-        // Total input mass for cluster 2: 400k
-        // After decay: 400k * 0.95 = 380k
-
-        let output_value = 1_500_000 - 1000; // Minus some fee
-        let decay_factor = TAG_WEIGHT_SCALE - decay_rate;
-
-        // Properly compute output tags
-        let cluster1_input_mass = (1_000_000u64 * 600_000 / TAG_WEIGHT_SCALE as u64)
-            + (500_000u64 * TAG_WEIGHT_SCALE as u64 / TAG_WEIGHT_SCALE as u64);
-        let cluster2_input_mass = 1_000_000u64 * 400_000 / TAG_WEIGHT_SCALE as u64;
-
-        let cluster1_output_mass =
-            cluster1_input_mass * decay_factor as u64 / TAG_WEIGHT_SCALE as u64;
-        let cluster2_output_mass =
-            cluster2_input_mass * decay_factor as u64 / TAG_WEIGHT_SCALE as u64;
-
-        // Convert back to weights for the output
-        let cluster1_weight =
-            (cluster1_output_mass * TAG_WEIGHT_SCALE as u64 / output_value) as u32;
-        let cluster2_weight =
-            (cluster2_output_mass * TAG_WEIGHT_SCALE as u64 / output_value) as u32;
-
-        let output_secret =
-            create_test_secret(output_value, &[(1, cluster1_weight), (2, cluster2_weight)]);
+        // Properly compute output by merging inputs and applying decay
+        let merged = CommittedTagVectorSecret::merge(
+            &[input1_secret.clone(), input2_secret.clone()],
+            &mut OsRng,
+        );
+        let output_secret = merged.apply_decay(decay_rate, &mut OsRng);
         let output_commitment = output_secret.commit();
 
         // Build signature

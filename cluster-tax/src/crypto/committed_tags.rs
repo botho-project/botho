@@ -274,6 +274,39 @@ impl CommittedTagVectorSecret {
             total_blinding: Scalar::random(rng),
         }
     }
+
+    /// Merge multiple secrets into one (for combining inputs).
+    ///
+    /// Sums masses per cluster across all inputs.
+    pub fn merge<R: rand_core::RngCore + rand_core::CryptoRng>(
+        secrets: &[Self],
+        rng: &mut R,
+    ) -> Self {
+        let mut cluster_masses: HashMap<ClusterId, u64> = HashMap::new();
+
+        for secret in secrets {
+            for entry in &secret.entries {
+                *cluster_masses.entry(entry.cluster_id).or_insert(0) += entry.mass;
+            }
+        }
+
+        let entries: Vec<TagMassSecret> = cluster_masses
+            .into_iter()
+            .map(|(cluster_id, mass)| TagMassSecret {
+                cluster_id,
+                mass,
+                blinding: Scalar::random(rng),
+            })
+            .collect();
+
+        let total_mass: u64 = entries.iter().map(|e| e.mass).sum();
+
+        Self {
+            entries,
+            total_mass,
+            total_blinding: Scalar::random(rng),
+        }
+    }
 }
 
 /// Proof that tag masses are conserved with decay.

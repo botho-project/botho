@@ -24,7 +24,7 @@ displaydoc = { workspace = true }
 hex = { workspace = true }
 pem = { workspace = true }
 serde = { workspace = true, features = ["alloc", "derive"] }
-serde_json = { workspace = true }
+serde_json = { workspace = true, features = ["std"] }
 serde_with = { workspace = true }
 toml = { workspace = true }
 

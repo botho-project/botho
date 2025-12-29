@@ -45,7 +45,7 @@ Mining rewards follow a smooth decay curve with perpetual tail emission:
 | Initial reward | 50 CAD |
 | Halving period | ~6,307,200 blocks (~4 years at 20-sec blocks) |
 | Tail emission | 0.6 CAD per block (perpetual) |
-| Total supply | 21 million CAD |
+| Total supply | ~18 million CAD (pre-tail) |
 
 ### Difficulty Adjustment
 
@@ -110,6 +110,16 @@ This project is in early development. We are actively:
 - Implementing the mining mechanism
 - Simplifying the codebase (removing SGX dependencies, Fog, and other MobileCoin-specific components)
 - Developing and validating the progressive fee mechanism through economic simulation
+
+### Simplifications from MobileCoin
+
+By removing SGX enclaves, we eliminate the need for:
+
+- **Oblivious database access patterns**: MobileCoin used ORAM and other techniques to hide which records were accessed inside enclaves. Without SGX, standard database access is fine.
+- **Remote attestation**: No need for Intel attestation infrastructure or verification.
+- **Sealed storage**: Encryption keys can use standard key management instead of SGX sealing.
+
+This allows significant code simplification throughout the codebase.
 
 ## Building
 

@@ -2,6 +2,7 @@
 
 use anyhow::{Context, Result};
 use mc_account_keys::PublicAddress;
+use std::fs;
 use std::path::Path;
 
 use crate::config::{ledger_db_path_from_config, Config};
@@ -11,6 +12,9 @@ use crate::wallet::Wallet;
 
 /// Minimum transaction fee in picocredits (0.0001 credits)
 const MIN_FEE: u64 = 100_000_000;
+
+/// Pending transactions file name
+const PENDING_TXS_FILE: &str = "pending_txs.bin";
 
 /// Send credits to an address
 pub fn run(config_path: &Path, address_str: &str, amount_str: &str) -> Result<()> {
@@ -90,6 +94,8 @@ pub fn run(config_path: &Path, address_str: &str, amount_str: &str) -> Result<()
     // Create the transaction
     let tx = Transaction::new(inputs, outputs, MIN_FEE, state.height);
 
+    let tx_hash = tx.hash();
+
     // Display transaction details
     println!();
     println!("=== Transaction Created ===");
@@ -101,17 +107,69 @@ pub fn run(config_path: &Path, address_str: &str, amount_str: &str) -> Result<()
         println!("Change: {:.12} credits", change as f64 / 1_000_000_000_000.0);
     }
     println!();
-    println!("Transaction hash: {}", hex::encode(&tx.hash()[0..16]));
+    println!("Transaction hash: {}", hex::encode(&tx_hash[0..16]));
     println!("Inputs: {}", tx.inputs.len());
     println!("Outputs: {}", tx.outputs.len());
+
+    // Save transaction to pending file
+    let pending_path = config_path.parent()
+        .unwrap_or(Path::new("."))
+        .join(PENDING_TXS_FILE);
+
+    save_pending_tx(&pending_path, &tx)?;
+
     println!();
-    println!("Transaction created but NOT YET BROADCAST.");
-    println!("(Transaction broadcasting requires running a node with 'cadence run')");
+    println!("Transaction saved to pending queue.");
+    println!("Start the node with 'cadence run' to broadcast it.");
     println!();
 
-    // TODO: Store transaction in mempool or broadcast to network
-    // For now, we just show the transaction details
+    Ok(())
+}
 
+/// Save a transaction to the pending transactions file
+fn save_pending_tx(path: &Path, tx: &Transaction) -> Result<()> {
+    // Load existing pending transactions
+    let mut pending: Vec<Transaction> = load_pending_txs(path).unwrap_or_default();
+
+    // Check if already exists
+    let tx_hash = tx.hash();
+    if pending.iter().any(|t| t.hash() == tx_hash) {
+        return Err(anyhow::anyhow!("Transaction already in pending queue"));
+    }
+
+    // Add new transaction
+    pending.push(tx.clone());
+
+    // Save back
+    let bytes = bincode::serialize(&pending)
+        .context("Failed to serialize pending transactions")?;
+    fs::write(path, bytes)
+        .context("Failed to save pending transactions")?;
+
+    Ok(())
+}
+
+/// Load pending transactions from file
+pub fn load_pending_txs(path: &Path) -> Result<Vec<Transaction>> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let bytes = fs::read(path)
+        .context("Failed to read pending transactions")?;
+
+    let pending: Vec<Transaction> = bincode::deserialize(&bytes)
+        .context("Failed to deserialize pending transactions")?;
+
+    Ok(pending)
+}
+
+/// Clear pending transactions file
+pub fn clear_pending_txs(path: &Path) -> Result<()> {
+    if path.exists() {
+        fs::remove_file(path)
+            .context("Failed to remove pending transactions file")?;
+    }
     Ok(())
 }
 

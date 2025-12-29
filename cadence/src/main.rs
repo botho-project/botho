@@ -6,6 +6,7 @@ mod commands;
 mod config;
 mod consensus;
 mod ledger;
+mod mempool;
 mod network;
 mod node;
 mod transaction;

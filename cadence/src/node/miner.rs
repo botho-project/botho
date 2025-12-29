@@ -7,7 +7,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Instant;
 use tracing::info;
 
-use crate::block::{calculate_block_reward, Block, BlockHeader, MiningTx};
+use crate::block::{calculate_block_reward, MiningTx};
 
 /// Mining difficulty target (lower = harder)
 /// Start with a very easy target for testing
@@ -17,7 +17,7 @@ pub const INITIAL_DIFFICULTY: u64 = 0x00FF_FFFF_FFFF_FFFF;
 #[derive(Debug, Clone)]
 pub struct MiningStats {
     pub total_hashes: u64,
-    pub blocks_found: u64,
+    pub txs_found: u64,
     pub start_time: Instant,
 }
 
@@ -32,10 +32,13 @@ impl MiningStats {
     }
 }
 
-/// A found block ready to be added to the ledger
-#[derive(Debug)]
-pub struct MinedBlock {
-    pub block: Block,
+/// A mined mining transaction ready to be submitted to consensus
+#[derive(Debug, Clone)]
+pub struct MinedMiningTx {
+    /// The mining transaction with valid PoW
+    pub mining_tx: MiningTx,
+    /// PoW priority (higher = harder/better PoW)
+    pub pow_priority: u64,
 }
 
 /// Work unit for miners - what they should be mining on
@@ -53,13 +56,13 @@ pub struct Miner {
     address: PublicAddress,
     shutdown: Arc<AtomicBool>,
     total_hashes: Arc<AtomicU64>,
-    blocks_found: Arc<AtomicU64>,
+    txs_found: Arc<AtomicU64>,
     start_time: Instant,
     handles: Vec<JoinHandle<()>>,
-    /// Channel for found blocks
-    block_sender: Sender<MinedBlock>,
-    /// Receiver for found blocks (taken by the node)
-    block_receiver: Option<Receiver<MinedBlock>>,
+    /// Channel for found mining transactions
+    tx_sender: Sender<MinedMiningTx>,
+    /// Receiver for found mining transactions (taken by the node)
+    tx_receiver: Option<Receiver<MinedMiningTx>>,
     /// Current work (shared with threads)
     current_work: Arc<std::sync::RwLock<MiningWork>>,
     /// Signal to update work
@@ -68,7 +71,7 @@ pub struct Miner {
 
 impl Miner {
     pub fn new(threads: usize, address: PublicAddress, shutdown: Arc<AtomicBool>) -> Self {
-        let (block_sender, block_receiver) = channel();
+        let (tx_sender, tx_receiver) = channel();
 
         // Initialize with default work (will be updated before mining starts)
         let initial_work = MiningWork {
@@ -83,19 +86,19 @@ impl Miner {
             address,
             shutdown,
             total_hashes: Arc::new(AtomicU64::new(0)),
-            blocks_found: Arc::new(AtomicU64::new(0)),
+            txs_found: Arc::new(AtomicU64::new(0)),
             start_time: Instant::now(),
             handles: Vec::new(),
-            block_sender,
-            block_receiver: Some(block_receiver),
+            tx_sender,
+            tx_receiver: Some(tx_receiver),
             current_work: Arc::new(std::sync::RwLock::new(initial_work)),
             work_version: Arc::new(AtomicU64::new(0)),
         }
     }
 
-    /// Take the block receiver (can only be called once)
-    pub fn take_block_receiver(&mut self) -> Option<Receiver<MinedBlock>> {
-        self.block_receiver.take()
+    /// Take the mining tx receiver (can only be called once)
+    pub fn take_tx_receiver(&mut self) -> Option<Receiver<MinedMiningTx>> {
+        self.tx_receiver.take()
     }
 
     /// Update the work for all mining threads
@@ -221,6 +224,10 @@ fn mine_loop(
                     recipient_view_key: miner_view_key,
                     recipient_spend_key: miner_spend_key,
                     output_public_key: [0u8; 32], // TODO: generate one-time key
+                    prev_block_hash: work.prev_block_hash,
+                    difficulty: work.difficulty,
+                    nonce,
+                    timestamp,
                 },
                 transactions: Vec::new(),
             };

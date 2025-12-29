@@ -16,6 +16,7 @@
 //! - Full privacy for tag distribution
 
 mod committed_tags;
+mod extended_signature;
 mod tagged_output;
 mod validation;
 
@@ -24,6 +25,10 @@ pub use committed_tags::{
     CommittedTagMass, CommittedTagVector, CommittedTagVectorSecret,
     TagMassSecret, TagConservationProof, ClusterConservationProof, SchnorrProof,
     TagConservationProver, TagConservationVerifier,
+};
+pub use extended_signature::{
+    PseudoTagOutput, TagInheritanceProof, ExtendedTxSignature,
+    ExtendedSignatureBuilder, ExtendedSignatureVerifier, RingTagData,
 };
 pub use tagged_output::{TaggedTxOut, CompactTagVector};
 pub use validation::{validate_tag_inheritance, TagValidationError};

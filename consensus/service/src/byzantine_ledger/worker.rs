@@ -918,8 +918,9 @@ mod tests {
     use mc_account_keys::AccountKey;
     use mc_blockchain_types::{AttestationEvidence, Block, BlockContents, BlockVersion};
     use mc_common::{logger::test_with_logger, NodeID};
-    use mc_consensus_enclave::GovernorsMap;
-    use mc_consensus_enclave_mock::{ConsensusServiceMockEnclave, MockConsensusEnclave};
+    use mc_consensus_service_config::GovernorsMap;
+    // Note: MockConsensusEnclave is provided by crate::enclave_stubs::MockConsensusEnclave
+    use crate::enclave_stubs::MockConsensusEnclave;
     use mc_consensus_scp::{
         msg::{NominatePayload, Topic::Nominate},
         slot::SlotMetrics,

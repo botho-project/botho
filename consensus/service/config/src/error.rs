@@ -2,7 +2,7 @@
 
 //! Configuration error data type
 
-use crate::signer_identity::Error as SignerIdentityError;
+use crate::{governors::GovernorsMapError, signer_identity::Error as SignerIdentityError};
 use displaydoc::Display;
 use mc_common::ResponderId;
 use mc_crypto_keys::SignatureError;

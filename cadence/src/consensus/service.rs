@@ -2,17 +2,15 @@
 
 //! Consensus service managing SCP node and message handling.
 
+use super::validation::TransactionValidator;
 use super::value::ConsensusValue;
+use crate::ledger::ChainState;
 use mc_common::{logger::create_null_logger, NodeID};
-use mc_consensus_scp::{
-    msg::Msg as ScpMsg,
-    node::Node,
-    ScpNode, QuorumSet, SlotIndex,
-};
+use mc_consensus_scp::{msg::Msg as ScpMsg, node::Node, QuorumSet, ScpNode, SlotIndex};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use tracing::{debug, info, warn};
 
@@ -71,6 +69,23 @@ pub struct ScpMessage {
     pub payload: Vec<u8>,
 }
 
+/// Transaction cache entry with metadata
+#[derive(Clone)]
+struct TxCacheEntry {
+    /// Serialized transaction bytes
+    data: Vec<u8>,
+    /// Whether this is a mining transaction
+    is_mining_tx: bool,
+}
+
+/// Shared state for validation callbacks
+struct SharedValidationState {
+    /// Transaction cache (hash -> entry)
+    tx_cache: HashMap<[u8; 32], TxCacheEntry>,
+    /// Chain state for validation
+    chain_state: ChainState,
+}
+
 /// The consensus service manages SCP participation
 pub struct ConsensusService {
     /// Our node ID
@@ -91,8 +106,11 @@ pub struct ConsensusService {
     /// Values we've already proposed in current slot
     proposed_values: BTreeSet<ConsensusValue>,
 
-    /// Transaction data cache (hash -> full tx bytes)
-    tx_cache: HashMap<[u8; 32], Vec<u8>>,
+    /// Shared validation state (for SCP callbacks)
+    shared_state: Arc<RwLock<SharedValidationState>>,
+
+    /// Transaction validator
+    validator: TransactionValidator,
 
     /// Outgoing events
     events: VecDeque<ConsensusEvent>,
@@ -110,21 +128,66 @@ impl ConsensusService {
         node_id: NodeID,
         quorum_set: QuorumSet,
         config: ConsensusConfig,
+        initial_chain_state: ChainState,
     ) -> Self {
-        // Validation callback - we accept all properly formatted values
-        let validity_fn: Arc<dyn Fn(&ConsensusValue) -> Result<(), String> + Send + Sync> =
-            Arc::new(|_value: &ConsensusValue| Ok(()));
+        // Create shared state for validation callbacks
+        let shared_state = Arc::new(RwLock::new(SharedValidationState {
+            tx_cache: HashMap::new(),
+            chain_state: initial_chain_state.clone(),
+        }));
 
-        // Combine callback - how to combine multiple values (note: takes slice of values, not slice of refs)
-        let combine_fn: Arc<dyn Fn(&[ConsensusValue]) -> Result<Vec<ConsensusValue>, String> + Send + Sync> =
-            Arc::new(|values: &[ConsensusValue]| {
-                // Sort by priority (highest first) then by hash for determinism
-                let mut sorted: Vec<_> = values.to_vec();
-                sorted.sort_by(|a, b| {
-                    b.priority.cmp(&a.priority).then_with(|| a.tx_hash.cmp(&b.tx_hash))
-                });
-                Ok(sorted)
+        // Create chain state reference for the validator
+        let chain_state_ref = Arc::new(RwLock::new(initial_chain_state));
+        let validator = TransactionValidator::new(chain_state_ref.clone());
+
+        // Validation callback - validates transactions using shared state
+        let validation_state = shared_state.clone();
+        let validity_fn: Arc<dyn Fn(&ConsensusValue) -> Result<(), String> + Send + Sync> =
+            Arc::new(move |value: &ConsensusValue| {
+                let state = validation_state
+                    .read()
+                    .map_err(|_| "Failed to acquire validation state lock".to_string())?;
+
+                // Look up transaction in cache
+                let entry = state
+                    .tx_cache
+                    .get(&value.tx_hash)
+                    .ok_or_else(|| format!("Transaction not in cache: {:?}", &value.tx_hash[0..8]))?;
+
+                // Create a temporary validator for this check
+                let temp_state = Arc::new(RwLock::new(state.chain_state.clone()));
+                let temp_validator = TransactionValidator::new(temp_state);
+
+                // Validate based on transaction type
+                temp_validator
+                    .validate_from_bytes(&entry.data, entry.is_mining_tx)
+                    .map_err(|e| e.to_string())
             });
+
+        // Combine callback - how to combine multiple values
+        // Mining transactions are prioritized by PoW difficulty (higher priority = harder PoW)
+        // This ensures the "best" mining tx wins if there are multiple
+        let combine_fn: Arc<
+            dyn Fn(&[ConsensusValue]) -> Result<Vec<ConsensusValue>, String> + Send + Sync,
+        > = Arc::new(|values: &[ConsensusValue]| {
+            // Separate mining txs from regular txs
+            let mut mining_txs: Vec<_> = values.iter().filter(|v| v.is_mining_tx).cloned().collect();
+            let mut regular_txs: Vec<_> = values.iter().filter(|v| !v.is_mining_tx).cloned().collect();
+
+            // Sort mining txs by priority (highest first) - best PoW wins
+            mining_txs.sort_by(|a, b| b.priority.cmp(&a.priority).then_with(|| a.tx_hash.cmp(&b.tx_hash)));
+
+            // Only keep the best mining tx (one coinbase per block)
+            mining_txs.truncate(1);
+
+            // Sort regular txs by priority (fee), then hash for determinism
+            regular_txs.sort_by(|a, b| b.priority.cmp(&a.priority).then_with(|| a.tx_hash.cmp(&b.tx_hash)));
+
+            // Combine: best mining tx first, then regular txs
+            let mut combined = mining_txs;
+            combined.extend(regular_txs);
+            Ok(combined)
+        });
 
         // Create the SCP node
         let scp_node = Node::new(
@@ -143,10 +206,18 @@ impl ConsensusService {
             config,
             pending_values: BTreeSet::new(),
             proposed_values: BTreeSet::new(),
-            tx_cache: HashMap::new(),
+            shared_state,
+            validator,
             events: VecDeque::new(),
             last_slot_attempt: Instant::now(),
             externalized: None,
+        }
+    }
+
+    /// Update the chain state (call when chain tip changes)
+    pub fn update_chain_state(&mut self, chain_state: ChainState) {
+        if let Ok(mut state) = self.shared_state.write() {
+            state.chain_state = chain_state;
         }
     }
 
@@ -163,7 +234,18 @@ impl ConsensusService {
     /// Submit a transaction for consensus
     pub fn submit_transaction(&mut self, tx_hash: [u8; 32], tx_data: Vec<u8>) {
         let value = ConsensusValue::from_transaction(tx_hash);
-        self.tx_cache.insert(tx_hash, tx_data);
+
+        // Add to shared cache for validation callback
+        if let Ok(mut state) = self.shared_state.write() {
+            state.tx_cache.insert(
+                tx_hash,
+                TxCacheEntry {
+                    data: tx_data,
+                    is_mining_tx: false,
+                },
+            );
+        }
+
         self.pending_values.insert(value);
         debug!(?value, "Transaction submitted for consensus");
     }
@@ -171,7 +253,18 @@ impl ConsensusService {
     /// Submit a mining transaction for consensus
     pub fn submit_mining_tx(&mut self, tx_hash: [u8; 32], pow_priority: u64, tx_data: Vec<u8>) {
         let value = ConsensusValue::from_mining_tx(tx_hash, pow_priority);
-        self.tx_cache.insert(tx_hash, tx_data);
+
+        // Add to shared cache for validation callback
+        if let Ok(mut state) = self.shared_state.write() {
+            state.tx_cache.insert(
+                tx_hash,
+                TxCacheEntry {
+                    data: tx_data,
+                    is_mining_tx: true,
+                },
+            );
+        }
+
         self.pending_values.insert(value);
         info!(?value, "Mining transaction submitted for consensus");
     }
@@ -302,12 +395,32 @@ impl ConsensusService {
     }
 
     /// Get cached transaction data
-    pub fn get_tx_data(&self, tx_hash: &[u8; 32]) -> Option<&Vec<u8>> {
-        self.tx_cache.get(tx_hash)
+    pub fn get_tx_data(&self, tx_hash: &[u8; 32]) -> Option<Vec<u8>> {
+        self.shared_state
+            .read()
+            .ok()
+            .and_then(|state| state.tx_cache.get(tx_hash).map(|e| e.data.clone()))
+    }
+
+    /// Get cached transaction entry (data + type info)
+    pub fn get_tx_entry(&self, tx_hash: &[u8; 32]) -> Option<(Vec<u8>, bool)> {
+        self.shared_state
+            .read()
+            .ok()
+            .and_then(|state| state.tx_cache.get(tx_hash).map(|e| (e.data.clone(), e.is_mining_tx)))
     }
 
     /// Advance to next slot (called after processing externalized values)
     pub fn advance_slot(&mut self) {
+        // Clean up externalized transactions from cache
+        if let Some(ref values) = self.externalized {
+            if let Ok(mut state) = self.shared_state.write() {
+                for v in values {
+                    state.tx_cache.remove(&v.tx_hash);
+                }
+            }
+        }
+
         self.externalized = None;
         self.proposed_values.clear();
         // SCP node automatically advances after externalization

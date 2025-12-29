@@ -431,8 +431,7 @@ mod client_api_tests {
         consensus_client::{ConsensusClientApiClient, MintValidationResultCode},
         consensus_common::ProposeTxResult,
     };
-    use mc_consensus_enclave::{Error as EnclaveError, TxContext};
-    use mc_consensus_enclave_mock::MockConsensusEnclave;
+    use crate::enclave_stubs::{Error as EnclaveError, MockConsensusEnclave, TxContext};
     use mc_consensus_service_config::Config;
     use mc_crypto_keys::Ed25519Pair;
     use mc_ledger_db::MockLedger;

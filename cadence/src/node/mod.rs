@@ -11,6 +11,8 @@ use tracing::{error, info, warn};
 use crate::block::difficulty::{calculate_new_difficulty, ADJUSTMENT_WINDOW};
 use crate::config::{ledger_db_path_from_config, Config};
 use crate::ledger::Ledger;
+use crate::mempool::{Mempool, MempoolError, SharedMempool, new_shared_mempool};
+use crate::transaction::Transaction;
 use crate::wallet::Wallet;
 
 pub use miner::{MinedBlock, Miner, MiningWork};
@@ -20,6 +22,7 @@ pub struct Node {
     config: Config,
     wallet: Wallet,
     ledger: Ledger,
+    mempool: SharedMempool,
     shutdown: Arc<AtomicBool>,
     miner: Option<Miner>,
     block_receiver: Option<Receiver<MinedBlock>>,
@@ -35,10 +38,14 @@ impl Node {
         let ledger = Ledger::open(&ledger_path)
             .map_err(|e| anyhow::anyhow!("Failed to open ledger: {}", e))?;
 
+        // Create mempool
+        let mempool = new_shared_mempool();
+
         Ok(Self {
             config,
             wallet,
             ledger,
+            mempool,
             shutdown: Arc::new(AtomicBool::new(false)),
             miner: None,
             block_receiver: None,
@@ -306,6 +313,13 @@ impl Node {
             .add_block(block)
             .map_err(|e| anyhow::anyhow!("Failed to add network block: {}", e))?;
 
+        // Remove confirmed transactions from mempool
+        if let Ok(mut mempool) = self.mempool.write() {
+            mempool.remove_confirmed(&block.transactions);
+            // Also clean up any now-invalid transactions
+            mempool.remove_invalid(&self.ledger);
+        }
+
         // Check if we need to adjust difficulty
         let new_height = block.height();
         if new_height > 0 && new_height % ADJUSTMENT_WINDOW == 0 {
@@ -368,9 +382,53 @@ impl Node {
                     miner.update_work(work);
                 }
 
+                // Remove confirmed transactions from mempool
+                if let Ok(mut mempool) = self.mempool.write() {
+                    mempool.remove_confirmed(&mined.block.transactions);
+                }
+
                 return Ok(Some(mined.block));
             }
         }
         Ok(None)
+    }
+
+    // --- Mempool methods ---
+
+    /// Submit a transaction to the mempool
+    pub fn submit_transaction(&self, tx: Transaction) -> Result<[u8; 32], MempoolError> {
+        let mut mempool = self.mempool.write()
+            .map_err(|_| MempoolError::LedgerError("Mempool lock poisoned".to_string()))?;
+        mempool.add_tx(tx, &self.ledger)
+    }
+
+    /// Get pending transaction count
+    pub fn pending_tx_count(&self) -> usize {
+        self.mempool.read().map(|m| m.len()).unwrap_or(0)
+    }
+
+    /// Get transactions from mempool for block building
+    pub fn get_pending_transactions(&self, max_count: usize) -> Vec<Transaction> {
+        self.mempool.read()
+            .map(|m| m.get_transactions(max_count))
+            .unwrap_or_default()
+    }
+
+    /// Get the shared mempool reference
+    pub fn mempool(&self) -> &SharedMempool {
+        &self.mempool
+    }
+
+    /// Get the ledger reference
+    pub fn ledger(&self) -> &Ledger {
+        &self.ledger
+    }
+
+    /// Clean up invalid transactions from mempool
+    pub fn cleanup_mempool(&self) {
+        if let Ok(mut mempool) = self.mempool.write() {
+            mempool.remove_invalid(&self.ledger);
+            mempool.evict_old();
+        }
     }
 }

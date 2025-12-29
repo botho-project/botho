@@ -8,28 +8,29 @@
 
 use core::cmp::max;
 
-/// Atomic units per CAD (10^12, same as MobileCoin's picoMOB)
+/// Atomic units per CAD (10^12 picoCAD per CAD)
 pub const PICO_CAD: u64 = 1_000_000_000_000;
+
+/// Target block time in seconds
+pub const TARGET_BLOCK_TIME_SECS: u64 = 20;
 
 /// Initial mining reward in atomic units (50 CAD = 50 * 10^12 picoCAD)
 pub const INITIAL_REWARD: u64 = 50 * PICO_CAD;
 
 /// Controls how quickly the reward decreases.
 /// The reward halves approximately every EMISSION_SPEED_FACTOR blocks.
-/// With a value of 2^18 = 262,144 blocks, and ~2 minute blocks,
-/// this gives roughly annual halvings.
-pub const EMISSION_SPEED_FACTOR: u64 = 1 << 18;
+/// With 20-second blocks, 6,307,200 blocks ≈ 4 years.
+pub const EMISSION_SPEED_FACTOR: u64 = 6_307_200;
 
 /// Minimum reward per mining transaction (tail emission).
 /// Set to 0.6 CAD to maintain miner incentives indefinitely.
 pub const TAIL_EMISSION: u64 = 600_000_000_000; // 0.6 CAD
 
 /// Maximum theoretical supply in atomic units (picoCAD).
-/// Due to the halving schedule and tail emission, the actual supply
-/// will asymptotically approach this value but never exceed it.
-/// Approximately 18 million CAD max (fits in u64 safely)
-/// Using 18_000_000 CAD = 18 * 10^18 picoCAD - just under u64::MAX
-pub const MAX_SUPPLY: u64 = 18_000_000_000_000_000_000;
+/// With 10^12 picoCAD per CAD, u64 can hold ~18.4 million CAD max.
+/// Note: With tail emission, supply grows indefinitely but very slowly.
+/// This represents the approximate cap from the initial emission curve.
+pub const MAX_SUPPLY: u64 = 18_000_000 * PICO_CAD;
 
 /// Calculate the mining reward for a given block height using smooth emission.
 ///
@@ -70,8 +71,10 @@ pub fn block_reward(height: u64) -> u64 {
 
     // Linear interpolation within the period
     // reward = start - (start - end) * position / period_length
-    let reward_decrease =
-        (period_start_reward - period_end_reward) * position_in_period / EMISSION_SPEED_FACTOR;
+    // Use u128 to avoid overflow with large EMISSION_SPEED_FACTOR
+    let reward_decrease = ((period_start_reward - period_end_reward) as u128
+        * position_in_period as u128
+        / EMISSION_SPEED_FACTOR as u128) as u64;
     let reward = period_start_reward - reward_decrease;
 
     // Apply tail emission floor

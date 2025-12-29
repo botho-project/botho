@@ -177,6 +177,10 @@ impl Block {
                 recipient_view_key: [0u8; 32],
                 recipient_spend_key: [0u8; 32],
                 output_public_key: [0u8; 32],
+                prev_block_hash: [0u8; 32],
+                difficulty: u64::MAX,
+                nonce: 0,
+                timestamp: 0,
             },
             transactions: Vec::new(),
         }
@@ -240,6 +244,10 @@ impl Block {
                 recipient_view_key: miner_view_key,
                 recipient_spend_key: miner_spend_key,
                 output_public_key: [0u8; 32], // TODO: generate one-time key
+                prev_block_hash: prev_hash,
+                difficulty,
+                nonce: 0,
+                timestamp,
             },
             transactions,
         }
