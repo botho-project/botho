@@ -1,8 +1,7 @@
 import { cn } from '@/lib/utils'
 import {
-  Activity,
-  Blocks,
   Cpu,
+  Database,
   Home,
   Network,
   Settings,
@@ -12,11 +11,10 @@ import { Link, useLocation } from 'react-router-dom'
 
 const navigation = [
   { name: 'Dashboard', href: '/', icon: Home },
-  { name: 'Blocks', href: '/blocks', icon: Blocks },
-  { name: 'Transactions', href: '/transactions', icon: Activity },
+  { name: 'Wallet', href: '/wallet', icon: Wallet },
+  { name: 'Ledger', href: '/ledger', icon: Database },
   { name: 'Network', href: '/network', icon: Network },
   { name: 'Mining', href: '/mining', icon: Cpu },
-  { name: 'Wallet', href: '/wallet', icon: Wallet },
 ]
 
 export function Sidebar() {

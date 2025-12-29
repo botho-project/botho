@@ -1,18 +1,21 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { Layout } from '@/components/layout'
 import { DashboardPage } from '@/pages/dashboard'
+import { WalletPage } from '@/pages/wallet'
+import { LedgerPage } from '@/pages/ledger'
+import { NetworkPage } from '@/pages/network'
 
 function App() {
   return (
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<DashboardPage />} />
-        {/* Additional routes will be added here */}
-        <Route path="/blocks" element={<PlaceholderPage title="Blocks" />} />
-        <Route path="/transactions" element={<PlaceholderPage title="Transactions" />} />
-        <Route path="/network" element={<PlaceholderPage title="Network" />} />
+        <Route path="/wallet" element={<WalletPage />} />
+        <Route path="/ledger" element={<LedgerPage />} />
+        <Route path="/blocks" element={<LedgerPage />} />
+        <Route path="/transactions" element={<LedgerPage />} />
+        <Route path="/network" element={<NetworkPage />} />
         <Route path="/mining" element={<PlaceholderPage title="Mining" />} />
-        <Route path="/wallet" element={<PlaceholderPage title="Wallet" />} />
         <Route path="/settings" element={<PlaceholderPage title="Settings" />} />
       </Routes>
     </BrowserRouter>
