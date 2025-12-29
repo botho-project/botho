@@ -1010,83 +1010,39 @@ Tasks:
 
 ### Implementation Details
 
-| Priority | Optimization | Effort | Impact | Status |
-|----------|--------------|--------|--------|--------|
-| 1 | Replace nodes_map Mutex with DashMap | Low | High | ✅ Done |
-| 2 | Blocking channel receive | Low | Medium | ✅ Done |
-| 3 | Arc<Msg> instead of cloning | Medium | Medium | ⏳ Pending |
-| 4 | Quorum HashSet optimization | High | High | ✅ Done |
-| 5 | Cache to_propose BTreeSet | Low | Low | ✅ Done |
+#### 1. DashMap for Lock-Free Broadcasting ✅
 
-#### 1. Lock Contention in Message Broadcasting
+**File:** `consensus/scp/tests/mock_network/mod.rs`
 
-**Location:** `consensus/scp/tests/scp_sim.rs:598-612` - `broadcast_msg()`
+Replaced `Arc<Mutex<HashMap<NodeID, SCPNode>>>` with `Arc<DashMap<NodeID, SCPNode>>` for concurrent access without global locking during message broadcasts.
 
-**Problem:** Global `Mutex<HashMap<NodeID, SimNode>>` is locked for every broadcast. With N nodes × M messages, this creates O(N×M) sequential lock acquisitions.
+#### 2. Blocking Channel Receive ✅
 
-**Solution Options:**
-- Replace with `DashMap` (concurrent HashMap)
-- Use per-node channels directly (eliminate lookup during broadcast)
-- Pre-compute peer sender handles at startup
+**File:** `consensus/scp/tests/mock_network/mod.rs`
 
-**Estimated Impact:** 30-50% throughput improvement
+Changed busy-wait `try_recv() + yield_now()` to `recv_timeout(Duration::from_micros(100))` for efficient blocking when no messages are available.
 
-#### 2. Busy-Wait Loop in Node Thread
+#### 3. Quorum HashSet Backtracking ✅
 
-**Location:** `consensus/scp/tests/scp_sim.rs:542-544`
+**File:** `consensus/scp/src/quorum_set_ext.rs`
 
-```rust
-Err(crossbeam_channel::TryRecvError::Empty) => {
-    thread::yield_now();  // CPU spinning
-}
-```
+New `findQuorumHelperMut` function uses mutable `&mut HashSet` with backtracking instead of cloning at each recursive branch. Reduces O(2^n) allocations to O(n).
 
-**Problem:** Wastes CPU cycles spinning when no messages available.
+#### 4. BTreeSet Caching ✅
 
-**Solution:** Use `recv_timeout()` or `select!` macro for blocking receive.
+**File:** `consensus/scp/tests/mock_network/mod.rs`
 
-**Estimated Impact:** Lower CPU usage, better latency under load
+Added `pending_values_changed` flag and `cached_values_to_propose` to avoid rebuilding the BTreeSet on every loop iteration.
 
-#### 3. Quorum Finding Recursion with HashSet Cloning
+### Remaining Optimizations
 
-**Location:** `consensus/scp/src/quorum_set_ext.rs:155-156`
-
-```rust
-let mut nodes_so_far_with_N = nodes_so_far.clone();  // Clone on every branch!
-nodes_so_far_with_N.insert(N.clone());
-```
-
-**Problem:** `findQuorumHelper` creates new HashSet clones at each recursive step. Worst case O(2^n) memory allocations.
-
-**Solution Options:**
-- Use a mutable `&mut HashSet` with backtracking
-- Use a bitset representation for small node sets
-- Cache quorum computation results
-
-**Estimated Impact:** 20-40% reduction in allocation overhead
-
-### Medium Impact Optimizations
-
-#### 4. Message Cloning in Protocol
+#### Arc<Msg> for Message Sharing ⏳
 
 **Location:** `consensus/scp/src/slot.rs:333, 385`
 
 ```rust
 self.handle_messages(&[msg.clone()])  // Clone on every message
-self.M.insert(msg.sender_id.clone(), msg.clone());
-```
-
-**Solution:** Use `Arc<Msg<V>>` throughout to share ownership without cloning.
-
-#### 5. Repeated BTreeSet Creation
-
-**Location:** `consensus/scp/tests/scp_sim.rs:550-554`
-
-```rust
-let to_propose: BTreeSet<TxValue> = pending_values
-    .iter()
-    .take(max_slot_values)
-    .cloned()
+self.M.insert(msg.sender_id.clone(), msg.clone())
     .collect();  // Rebuilt every loop iteration!
 ```
 
