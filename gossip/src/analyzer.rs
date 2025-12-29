@@ -604,4 +604,357 @@ mod tests {
         assert_eq!(stats.consensus_nodes, 2);
         assert!(stats.avg_quorum_set_size > 0.0);
     }
+
+    #[test]
+    fn test_empty_store_stats() {
+        let store = Arc::new(PeerStore::new(PeerStoreConfig::default()));
+        let analyzer = TopologyAnalyzer::new(store);
+        let stats = analyzer.stats();
+
+        assert_eq!(stats.total_nodes, 0);
+        assert_eq!(stats.consensus_nodes, 0);
+        assert_eq!(stats.avg_quorum_set_size, 0.0);
+        assert_eq!(stats.avg_threshold_pct, 0.0);
+        assert_eq!(stats.cluster_count, 0);
+        assert!(stats.most_trusted_node.is_none());
+        assert_eq!(stats.max_trust_count, 0);
+    }
+
+    #[test]
+    fn test_find_trust_clusters_empty() {
+        let store = Arc::new(PeerStore::new(PeerStoreConfig::default()));
+        let analyzer = TopologyAnalyzer::new(store);
+        let clusters = analyzer.find_trust_clusters();
+        assert!(clusters.is_empty());
+    }
+
+    #[test]
+    fn test_find_trust_clusters_mutual_trust() {
+        let store = Arc::new(PeerStore::new(PeerStoreConfig::default()));
+
+        {
+            let mut guard = store.announcements.write().unwrap();
+
+            // Create nodes that trust a common set of external nodes
+            // This ensures high Jaccard similarity (> 0.5 threshold)
+            // All nodes trust the exact same set for maximum overlap
+            let common_trusted = vec!["trusted1", "trusted2", "trusted3", "trusted4"];
+
+            let ann1 = make_announcement("node1", common_trusted.clone(), 1000);
+            guard.insert(ann1.node_id.responder_id.clone(), ann1);
+
+            let ann2 = make_announcement("node2", common_trusted.clone(), 1000);
+            guard.insert(ann2.node_id.responder_id.clone(), ann2);
+
+            let ann3 = make_announcement("node3", common_trusted.clone(), 1000);
+            guard.insert(ann3.node_id.responder_id.clone(), ann3);
+        }
+
+        let analyzer = TopologyAnalyzer::new(store);
+        let clusters = analyzer.find_trust_clusters();
+
+        // Should find at least one cluster since all nodes trust same set
+        assert!(!clusters.is_empty());
+        // Cluster members should have identical trust sets so cohesion should be high
+        // (cohesion measures how much members trust each other, not external nodes)
+        assert!(clusters[0].members.len() >= 2);
+    }
+
+    #[test]
+    fn test_suggest_top_n() {
+        let store = Arc::new(PeerStore::new(PeerStoreConfig::default()));
+
+        {
+            let mut guard = store.announcements.write().unwrap();
+
+            let ann1 = make_announcement("node1", vec!["node2", "node3"], 1000);
+            guard.insert(ann1.node_id.responder_id.clone(), ann1);
+
+            let ann2 = make_announcement("node2", vec!["node1", "node3"], 1000);
+            guard.insert(ann2.node_id.responder_id.clone(), ann2);
+
+            let ann3 = make_announcement("node3", vec!["node1", "node2"], 1000);
+            guard.insert(ann3.node_id.responder_id.clone(), ann3);
+        }
+
+        let analyzer = TopologyAnalyzer::new(store);
+        let suggestion = analyzer.suggest_top_n(3, 67);
+
+        assert!(suggestion.is_some());
+        let suggestion = suggestion.unwrap();
+        assert_eq!(suggestion.strategy, QuorumStrategy::TopN);
+        assert!(suggestion.confidence > 0.0);
+        assert!(!suggestion.rationale.is_empty());
+    }
+
+    #[test]
+    fn test_suggest_top_n_empty_store() {
+        let store = Arc::new(PeerStore::new(PeerStoreConfig::default()));
+        let analyzer = TopologyAnalyzer::new(store);
+        let suggestion = analyzer.suggest_top_n(3, 67);
+        assert!(suggestion.is_none());
+    }
+
+    #[test]
+    fn test_suggest_quorum_set_strategies() {
+        let store = Arc::new(PeerStore::new(PeerStoreConfig::default()));
+
+        {
+            let mut guard = store.announcements.write().unwrap();
+
+            let ann1 = make_announcement("node1", vec!["node2", "node3"], 1000);
+            guard.insert(ann1.node_id.responder_id.clone(), ann1);
+
+            let ann2 = make_announcement("node2", vec!["node1", "node3"], 1000);
+            guard.insert(ann2.node_id.responder_id.clone(), ann2);
+
+            let ann3 = make_announcement("node3", vec!["node1", "node2"], 1000);
+            guard.insert(ann3.node_id.responder_id.clone(), ann3);
+        }
+
+        let analyzer = TopologyAnalyzer::new(store);
+
+        // Test TopN strategy
+        let suggestion = analyzer.suggest_quorum_set(QuorumStrategy::TopN);
+        assert!(suggestion.is_some());
+        assert_eq!(suggestion.unwrap().strategy, QuorumStrategy::TopN);
+
+        // Test Conservative strategy
+        let suggestion = analyzer.suggest_quorum_set(QuorumStrategy::Conservative);
+        assert!(suggestion.is_some());
+
+        // Test Aggressive strategy
+        let suggestion = analyzer.suggest_quorum_set(QuorumStrategy::Aggressive);
+        assert!(suggestion.is_some());
+    }
+
+    #[test]
+    fn test_get_all_suggestions() {
+        let store = Arc::new(PeerStore::new(PeerStoreConfig::default()));
+
+        {
+            let mut guard = store.announcements.write().unwrap();
+
+            let ann1 = make_announcement("node1", vec!["node2", "node3"], 1000);
+            guard.insert(ann1.node_id.responder_id.clone(), ann1);
+
+            let ann2 = make_announcement("node2", vec!["node1", "node3"], 1000);
+            guard.insert(ann2.node_id.responder_id.clone(), ann2);
+
+            let ann3 = make_announcement("node3", vec!["node1", "node2"], 1000);
+            guard.insert(ann3.node_id.responder_id.clone(), ann3);
+        }
+
+        let analyzer = TopologyAnalyzer::new(store);
+        let suggestions = analyzer.get_all_suggestions();
+
+        // Should have suggestions for multiple strategies
+        assert!(!suggestions.is_empty());
+    }
+
+    #[test]
+    fn test_validate_quorum_set_valid() {
+        let store = Arc::new(PeerStore::new(PeerStoreConfig::default()));
+
+        {
+            let mut guard = store.announcements.write().unwrap();
+
+            let ann1 = make_announcement("node1", vec!["node2", "node3"], 1000);
+            guard.insert(ann1.node_id.responder_id.clone(), ann1);
+
+            let ann2 = make_announcement("node2", vec!["node1", "node3"], 1000);
+            guard.insert(ann2.node_id.responder_id.clone(), ann2);
+
+            let ann3 = make_announcement("node3", vec!["node1", "node2"], 1000);
+            guard.insert(ann3.node_id.responder_id.clone(), ann3);
+        }
+
+        let analyzer = TopologyAnalyzer::new(store);
+
+        // Create a valid quorum set with known nodes
+        let quorum_set = QuorumSet::new(
+            2,
+            vec![
+                QuorumSetMember::Node(ResponderId::from_str("node1:8443").unwrap()),
+                QuorumSetMember::Node(ResponderId::from_str("node2:8443").unwrap()),
+                QuorumSetMember::Node(ResponderId::from_str("node3:8443").unwrap()),
+            ],
+        );
+
+        let validation = analyzer.validate_quorum_set(&quorum_set);
+        assert!(validation.is_valid);
+        assert!(validation.unknown_nodes.is_empty());
+    }
+
+    #[test]
+    fn test_validate_quorum_set_unknown_nodes() {
+        let store = Arc::new(PeerStore::new(PeerStoreConfig::default()));
+        let analyzer = TopologyAnalyzer::new(store);
+
+        // Create a quorum set with unknown nodes
+        let quorum_set = QuorumSet::new(
+            2,
+            vec![
+                QuorumSetMember::Node(ResponderId::from_str("unknown1:8443").unwrap()),
+                QuorumSetMember::Node(ResponderId::from_str("unknown2:8443").unwrap()),
+                QuorumSetMember::Node(ResponderId::from_str("unknown3:8443").unwrap()),
+            ],
+        );
+
+        let validation = analyzer.validate_quorum_set(&quorum_set);
+        assert!(!validation.unknown_nodes.is_empty());
+        assert!(validation.warnings.iter().any(|w| w.contains("not known")));
+    }
+
+    #[test]
+    fn test_validate_quorum_set_too_few_members() {
+        let store = Arc::new(PeerStore::new(PeerStoreConfig::default()));
+        let analyzer = TopologyAnalyzer::new(store);
+
+        // Create a quorum set with only 2 members
+        let quorum_set = QuorumSet::new(
+            1,
+            vec![
+                QuorumSetMember::Node(ResponderId::from_str("node1:8443").unwrap()),
+                QuorumSetMember::Node(ResponderId::from_str("node2:8443").unwrap()),
+            ],
+        );
+
+        let validation = analyzer.validate_quorum_set(&quorum_set);
+        assert!(!validation.is_valid);
+        assert!(validation.warnings.iter().any(|w| w.contains("fewer than 3")));
+    }
+
+    #[test]
+    fn test_quorum_strategy_equality() {
+        assert_eq!(QuorumStrategy::TopN, QuorumStrategy::TopN);
+        assert_ne!(QuorumStrategy::TopN, QuorumStrategy::Conservative);
+        assert_eq!(QuorumStrategy::MirrorNode, QuorumStrategy::MirrorNode);
+        assert_eq!(QuorumStrategy::Hierarchical, QuorumStrategy::Hierarchical);
+        assert_eq!(QuorumStrategy::Aggressive, QuorumStrategy::Aggressive);
+    }
+
+    #[test]
+    fn test_trust_cluster_structure() {
+        let cluster = TrustCluster {
+            name: "test-cluster".to_string(),
+            members: vec![ResponderId::from_str("node1:8443").unwrap()],
+            cohesion: 0.8,
+            network_coverage: 0.5,
+        };
+
+        assert_eq!(cluster.name, "test-cluster");
+        assert_eq!(cluster.members.len(), 1);
+        assert_eq!(cluster.cohesion, 0.8);
+        assert_eq!(cluster.network_coverage, 0.5);
+    }
+
+    #[test]
+    fn test_quorum_set_validation_structure() {
+        let validation = QuorumSetValidation {
+            is_valid: true,
+            warnings: vec!["test warning".to_string()],
+            unknown_nodes: vec![],
+            low_trust_nodes: vec![],
+            threshold_pct: 67.0,
+        };
+
+        assert!(validation.is_valid);
+        assert_eq!(validation.warnings.len(), 1);
+        assert!(validation.unknown_nodes.is_empty());
+        assert!(validation.low_trust_nodes.is_empty());
+        assert_eq!(validation.threshold_pct, 67.0);
+    }
+
+    #[test]
+    fn test_topology_stats_default() {
+        let stats = TopologyStats::default();
+
+        assert_eq!(stats.total_nodes, 0);
+        assert_eq!(stats.consensus_nodes, 0);
+        assert_eq!(stats.avg_quorum_set_size, 0.0);
+        assert_eq!(stats.avg_threshold_pct, 0.0);
+        assert_eq!(stats.cluster_count, 0);
+        assert!(stats.most_trusted_node.is_none());
+        assert_eq!(stats.max_trust_count, 0);
+    }
+
+    #[test]
+    fn test_quorum_set_suggestion_structure() {
+        let suggestion = QuorumSetSuggestion {
+            quorum_set: QuorumSet::new(1, vec![]),
+            confidence: 0.9,
+            rationale: "Test rationale".to_string(),
+            strategy: QuorumStrategy::TopN,
+        };
+
+        assert_eq!(suggestion.confidence, 0.9);
+        assert_eq!(suggestion.rationale, "Test rationale");
+        assert_eq!(suggestion.strategy, QuorumStrategy::TopN);
+    }
+
+    #[test]
+    fn test_popular_nodes_min_trust_filter() {
+        let store = Arc::new(PeerStore::new(PeerStoreConfig::default()));
+
+        {
+            let mut guard = store.announcements.write().unwrap();
+
+            // node1 trusted by 3 nodes
+            let ann1 = make_announcement("node1", vec![], 1000);
+            guard.insert(ann1.node_id.responder_id.clone(), ann1);
+
+            let ann2 = make_announcement("node2", vec!["node1"], 1000);
+            guard.insert(ann2.node_id.responder_id.clone(), ann2);
+
+            let ann3 = make_announcement("node3", vec!["node1"], 1000);
+            guard.insert(ann3.node_id.responder_id.clone(), ann3);
+
+            let ann4 = make_announcement("node4", vec!["node1"], 1000);
+            guard.insert(ann4.node_id.responder_id.clone(), ann4);
+        }
+
+        let analyzer = TopologyAnalyzer::new(store);
+
+        // With min_trust_count = 2, node1 should be included (trusted by 3)
+        let popular = analyzer.get_popular_nodes(2);
+        assert_eq!(popular.len(), 1);
+        assert_eq!(popular[0].0, ResponderId::from_str("node1:8443").unwrap());
+
+        // With min_trust_count = 5, no nodes should be included
+        let popular = analyzer.get_popular_nodes(5);
+        assert!(popular.is_empty());
+    }
+
+    #[test]
+    fn test_suggest_mirror_node_exists() {
+        let store = Arc::new(PeerStore::new(PeerStoreConfig::default()));
+
+        {
+            let mut guard = store.announcements.write().unwrap();
+
+            let ann1 = make_announcement("node1", vec!["node2", "node3"], 1000);
+            guard.insert(ann1.node_id.responder_id.clone(), ann1);
+        }
+
+        let analyzer = TopologyAnalyzer::new(store);
+        let node_id = ResponderId::from_str("node1:8443").unwrap();
+        let suggestion = analyzer.suggest_mirror_node(&node_id);
+
+        assert!(suggestion.is_some());
+        let suggestion = suggestion.unwrap();
+        assert_eq!(suggestion.strategy, QuorumStrategy::MirrorNode);
+        assert!(suggestion.rationale.contains("node1"));
+    }
+
+    #[test]
+    fn test_suggest_mirror_node_not_found() {
+        let store = Arc::new(PeerStore::new(PeerStoreConfig::default()));
+        let analyzer = TopologyAnalyzer::new(store);
+
+        let node_id = ResponderId::from_str("unknown:8443").unwrap();
+        let suggestion = analyzer.suggest_mirror_node(&node_id);
+
+        assert!(suggestion.is_none());
+    }
 }

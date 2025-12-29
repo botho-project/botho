@@ -588,4 +588,100 @@ mod tests {
         // The announcement should have a valid signature
         assert!(announcement.verify_signature());
     }
+
+    #[test]
+    fn test_store_access() {
+        let service = make_test_service();
+
+        // store() should return a reference to the peer store
+        let store = service.store();
+        assert!(store.announcements.read().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_shared_store() {
+        let service = make_test_service();
+
+        // shared_store() should return a clone of the Arc
+        let store1 = service.shared_store();
+        let store2 = service.shared_store();
+
+        // Both should point to the same underlying store
+        assert!(Arc::ptr_eq(&store1, &store2));
+    }
+
+    #[test]
+    fn test_handle_before_start() {
+        let service = make_test_service();
+
+        // handle() should return None before start() is called
+        assert!(service.handle().is_none());
+    }
+
+    #[test]
+    fn test_announcement_contains_correct_data() {
+        let signing_key = Ed25519Pair::from_random(&mut rand::thread_rng());
+        let public_key = signing_key.public_key();
+
+        let node_id = NodeID {
+            responder_id: ResponderId::from_str("my-node:8443").unwrap(),
+            public_key,
+        };
+
+        let mut quorum_set = QuorumSet::empty();
+        quorum_set.threshold = 2;
+
+        let endpoints = vec![
+            "mcp://my-node:8443".to_string(),
+            "mcp://my-node:8444".to_string(),
+        ];
+
+        let capabilities = NodeCapabilities::CONSENSUS | NodeCapabilities::GOSSIP;
+        let version = "2.0.0".to_string();
+
+        let service = GossipService::new(
+            node_id.clone(),
+            Arc::new(signing_key),
+            quorum_set.clone(),
+            endpoints.clone(),
+            capabilities,
+            version.clone(),
+            GossipConfig::default(),
+        );
+
+        let announcement = service.create_announcement();
+
+        assert_eq!(announcement.node_id, node_id);
+        assert_eq!(announcement.endpoints, endpoints);
+        assert_eq!(announcement.quorum_set, quorum_set);
+        assert_eq!(announcement.capabilities, capabilities);
+        assert_eq!(announcement.version, version);
+    }
+
+    #[test]
+    fn test_announcement_timestamp_is_recent() {
+        let service = make_test_service();
+        let announcement = service.create_announcement();
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        // Timestamp should be within the last second
+        assert!(announcement.timestamp <= now);
+        assert!(announcement.timestamp >= now - 1);
+    }
+
+    #[test]
+    fn test_different_services_have_different_announcements() {
+        let service1 = make_test_service();
+        let service2 = make_test_service();
+
+        let ann1 = service1.create_announcement();
+        let ann2 = service2.create_announcement();
+
+        // Different keypairs should produce different public keys
+        assert_ne!(ann1.node_id.public_key, ann2.node_id.public_key);
+    }
 }

@@ -240,4 +240,212 @@ mod test {
             assert_eq!(account_key.spend_private_key(), &expected_spend_key,);
         }
     }
+
+    /// Test wallet_path function returns correct BIP32 path components
+    #[test]
+    fn test_wallet_path() {
+        let path = wallet_path(0);
+        assert_eq!(path.len(), 3);
+
+        // First component: 44' (BIP44 usage)
+        assert_eq!(path[0], BIP39_SECURE | USAGE_BIP44);
+        assert_eq!(path[0], 0x8000002C); // 44 with hardened flag
+
+        // Second component: 866' (Botho coin type)
+        assert_eq!(path[1], BIP39_SECURE | COINTYPE_BOTHO);
+        assert_eq!(path[1], 0x80000362); // 866 with hardened flag
+
+        // Third component: account index with hardened flag
+        assert_eq!(path[2], BIP39_SECURE | 0);
+    }
+
+    /// Test wallet_path with different account indices
+    #[test]
+    fn test_wallet_path_different_indices() {
+        let path_0 = wallet_path(0);
+        let path_1 = wallet_path(1);
+        let path_100 = wallet_path(100);
+
+        // First two components should be the same
+        assert_eq!(path_0[0], path_1[0]);
+        assert_eq!(path_0[1], path_1[1]);
+        assert_eq!(path_1[0], path_100[0]);
+        assert_eq!(path_1[1], path_100[1]);
+
+        // Third component should differ based on account index
+        assert_ne!(path_0[2], path_1[2]);
+        assert_ne!(path_1[2], path_100[2]);
+
+        assert_eq!(path_0[2], BIP39_SECURE | 0);
+        assert_eq!(path_1[2], BIP39_SECURE | 1);
+        assert_eq!(path_100[2], BIP39_SECURE | 100);
+    }
+
+    /// Test Slip10Key AsRef implementation
+    #[test]
+    fn test_slip10key_as_ref() {
+        let key_bytes = [42u8; 32];
+        let slip10_key = Slip10Key(key_bytes);
+
+        let as_ref: &[u8] = slip10_key.as_ref();
+        assert_eq!(as_ref.len(), 32);
+        assert_eq!(as_ref, &key_bytes[..]);
+    }
+
+    /// Test that same Slip10Key produces same Account
+    #[test]
+    fn test_slip10key_deterministic() {
+        let key_bytes = [42u8; 32];
+        let slip10_key_1 = Slip10Key(key_bytes);
+        let slip10_key_2 = Slip10Key(key_bytes);
+
+        let account_1 = Account::from(&slip10_key_1);
+        let account_2 = Account::from(&slip10_key_2);
+
+        assert_eq!(
+            account_1.view_private_key().to_bytes(),
+            account_2.view_private_key().to_bytes()
+        );
+        assert_eq!(
+            account_1.spend_private_key().to_bytes(),
+            account_2.spend_private_key().to_bytes()
+        );
+    }
+
+    /// Test that different Slip10Keys produce different Accounts
+    #[test]
+    fn test_different_slip10keys_produce_different_accounts() {
+        let slip10_key_1 = Slip10Key([1u8; 32]);
+        let slip10_key_2 = Slip10Key([2u8; 32]);
+
+        let account_1 = Account::from(&slip10_key_1);
+        let account_2 = Account::from(&slip10_key_2);
+
+        assert_ne!(
+            account_1.view_private_key().to_bytes(),
+            account_2.view_private_key().to_bytes()
+        );
+        assert_ne!(
+            account_1.spend_private_key().to_bytes(),
+            account_2.spend_private_key().to_bytes()
+        );
+    }
+
+    /// Test RootViewPrivate derivation from Slip10Key
+    #[test]
+    fn test_root_view_private_from_slip10key() {
+        let slip10_key = Slip10Key([42u8; 32]);
+        let view_private = RootViewPrivate::from(&slip10_key);
+
+        // View private key should be 32 bytes
+        assert_eq!(view_private.to_bytes().len(), 32);
+
+        // Same key should produce same result
+        let view_private_2 = RootViewPrivate::from(&Slip10Key([42u8; 32]));
+        assert_eq!(view_private.to_bytes(), view_private_2.to_bytes());
+    }
+
+    /// Test RootSpendPrivate derivation from Slip10Key
+    #[test]
+    fn test_root_spend_private_from_slip10key() {
+        let slip10_key = Slip10Key([42u8; 32]);
+        let spend_private = RootSpendPrivate::from(&slip10_key);
+
+        // Spend private key should be 32 bytes
+        assert_eq!(spend_private.to_bytes().len(), 32);
+
+        // Same key should produce same result
+        let spend_private_2 = RootSpendPrivate::from(&Slip10Key([42u8; 32]));
+        assert_eq!(spend_private.to_bytes(), spend_private_2.to_bytes());
+    }
+
+    /// Test view and spend keys are different from same Slip10Key
+    #[test]
+    fn test_view_and_spend_are_different() {
+        let slip10_key = Slip10Key([42u8; 32]);
+        let view_private = RootViewPrivate::from(&slip10_key);
+        let spend_private = RootSpendPrivate::from(&slip10_key);
+
+        // View and spend private keys should be different
+        assert_ne!(view_private.to_bytes(), spend_private.to_bytes());
+    }
+
+    /// Test different mnemonic phrases produce different keys
+    #[test]
+    #[cfg(feature = "bip39")]
+    fn test_different_mnemonics_different_keys() {
+        // Use two different valid BIP39 phrases
+        let phrase1 = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        let phrase2 = "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo wrong";
+
+        let mnemonic1 = Mnemonic::from_phrase(phrase1, Language::English).unwrap();
+        let mnemonic2 = Mnemonic::from_phrase(phrase2, Language::English).unwrap();
+
+        let key1 = mnemonic1.derive_slip10_key(0);
+        let key2 = mnemonic2.derive_slip10_key(0);
+
+        let account1 = Account::from(&key1);
+        let account2 = Account::from(&key2);
+
+        // Different mnemonics should produce different keys
+        assert_ne!(
+            account1.view_private_key().to_bytes(),
+            account2.view_private_key().to_bytes()
+        );
+        assert_ne!(
+            account1.spend_private_key().to_bytes(),
+            account2.spend_private_key().to_bytes()
+        );
+    }
+
+    /// Test same mnemonic with different account indices
+    #[test]
+    #[cfg(feature = "bip39")]
+    fn test_same_mnemonic_different_indices() {
+        let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        let mnemonic1 = Mnemonic::from_phrase(phrase, Language::English).unwrap();
+        let mnemonic2 = Mnemonic::from_phrase(phrase, Language::English).unwrap();
+
+        let key1 = mnemonic1.derive_slip10_key(0);
+        let key2 = mnemonic2.derive_slip10_key(1);
+
+        let account1 = Account::from(&key1);
+        let account2 = Account::from(&key2);
+
+        // Different account indices should produce different keys
+        assert_ne!(
+            account1.view_private_key().to_bytes(),
+            account2.view_private_key().to_bytes()
+        );
+        assert_ne!(
+            account1.spend_private_key().to_bytes(),
+            account2.spend_private_key().to_bytes()
+        );
+    }
+
+    /// Test mnemonic derivation is deterministic
+    #[test]
+    #[cfg(feature = "bip39")]
+    fn test_mnemonic_derivation_deterministic() {
+        let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+        let mnemonic1 = Mnemonic::from_phrase(phrase, Language::English).unwrap();
+        let mnemonic2 = Mnemonic::from_phrase(phrase, Language::English).unwrap();
+
+        let key1 = mnemonic1.derive_slip10_key(0);
+        let key2 = mnemonic2.derive_slip10_key(0);
+
+        let account1 = Account::from(&key1);
+        let account2 = Account::from(&key2);
+
+        // Same mnemonic and index should produce identical keys
+        assert_eq!(
+            account1.view_private_key().to_bytes(),
+            account2.view_private_key().to_bytes()
+        );
+        assert_eq!(
+            account1.spend_private_key().to_bytes(),
+            account2.spend_private_key().to_bytes()
+        );
+    }
 }
