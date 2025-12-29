@@ -207,7 +207,7 @@ botho/src/
 
 ## Cryptographic Foundations
 
-Botho inherits battle-tested cryptography from Botho:
+Botho inherits battle-tested cryptography from MobileCoin:
 
 | Component | Implementation |
 |-----------|----------------|
@@ -216,9 +216,9 @@ Botho inherits battle-tested cryptography from Botho:
 | Stealth addresses | CryptoNote protocol |
 | Hashing | SHA-256 (PoW), Blake2b (general) |
 
-## Differences from Botho
+## Differences from MobileCoin
 
-| Botho | Botho | Notes |
+| MobileCoin | Botho | Notes |
 |------------|---------|-------|
 | gRPC daemon | CLI foreground | No server process |
 | Multi-monitor | Single wallet | One mnemonic, one account |

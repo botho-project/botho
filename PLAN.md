@@ -623,12 +623,17 @@ botho/src/
 | `yaml-rust` | Removed (unused) | ⚠️ Still in workspace, unused |
 | `serde_cbor` | `ciborium` | ⚠️ Both present, migration incomplete |
 
+### Recently Completed
+
+| Old | New | Status |
+|-----|-----|--------|
+| `grpcio` | `tonic` | ✅ Complete - watcher/SGX excluded, all active crates use tonic |
+
 ### Pending
 
 | Old | New | Status |
 |-----|-----|--------|
 | `rusoto_*` | `aws-sdk-*` | ⏳ Used in ledger/distribution |
-| `grpcio` | `tonic` | ⏳ Large migration, botho uses libp2p instead |
 | `slog` | `tracing` | ⏳ botho/ already migrated, inherited crates remain |
 | `mbedtls` | `rustls` | ⏳ Low priority |
 | `lmdb-rkv` | `heed` or `redb` | ⏳ Low priority |

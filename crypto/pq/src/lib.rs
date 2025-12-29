@@ -42,7 +42,7 @@ mod error;
 mod kem;
 mod sig;
 
-pub use derive::{derive_pq_keys, PqKeyMaterial};
+pub use derive::{derive_onetime_sig_keypair, derive_pq_keys, PqKeyMaterial};
 pub use error::PqError;
 pub use kem::{
     MlKem768Ciphertext, MlKem768KeyPair, MlKem768PublicKey, MlKem768SecretKey, MlKem768SharedSecret,
