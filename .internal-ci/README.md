@@ -19,7 +19,7 @@ We use [Semver 2](https://semver.org/) for general versioning.
 - `feature/my-awesome-feature` valid characters `[a-z][0-9]-`
 - Feature branch names will be normalized for versioning, namespaces, dns...
   - `feature/` prefix will be removed
-  - namespaces will be prefixed with `mc-`
+  - namespaces will be prefixed with `bt-`
   - semver portion will be set to `v0`.
 
 format:
@@ -38,7 +38,7 @@ v0.0.0-my-awesome-feature.21.sha-abcd1234
 
 - `release/v2` valid characters `v[0-9]+`
 - Release branches will be normalized for versioning, namespaces, dns...
-  - namespaces will be prefixed with `mc-`
+  - namespaces will be prefixed with `bt-`
   - semver portion will be set to `v0`.
 
 format:
@@ -57,7 +57,7 @@ v0-21.sha-abcd1234
 
 - `v2.0.0` valid characters `v[0-9]+\.[0-9]+\.[0-9]+`
 - Tags will be normalized for versioning, namespaces, dns...
-  - namespaces will be prefixed with `mc-`
+  - namespaces will be prefixed with `bt-`
   - semver will be set to match the branch name.
   - tags will create a `v{tag}-dev` release for use in static environments
 

@@ -978,7 +978,7 @@ Tasks:
 
 ## Performance Optimization
 
-### Baseline Benchmarks (Release Build)
+### Baseline Benchmarks (Pre-Optimization)
 
 | Nodes | k | Throughput | p50 (ms) | p95 (ms) | p99 (ms) |
 |-------|---|------------|----------|----------|----------|
@@ -986,7 +986,29 @@ Tasks:
 | 5 | 3 | 6819 tx/s | 12.47 | 96.63 | 96.73 |
 | 7 | 4 | 6258 tx/s | 27.69 | 75.56 | 83.03 |
 
-### High Impact Optimizations
+### Post-Optimization Benchmarks (Release Build, 10k values)
+
+| Nodes | k | Throughput | Notes |
+|-------|---|------------|-------|
+| 1 | 0 | 13,438 tx/s | Single node baseline |
+| 2 | 1 | 12,192 tx/s | Minimal consensus |
+| 3 | 1 | 8,090 tx/s | Low threshold |
+| 3 | 2 | 7,126 tx/s | Standard quorum |
+| 4 | 3 | 5,002 tx/s | Higher threshold |
+| 5 | 3 | 3,699 tx/s | 5-node network |
+| 5 | 4 | 2,326 tx/s | Near-unanimous |
+
+### Optimizations Implemented
+
+| Priority | Optimization | Effort | Impact | Status |
+|----------|--------------|--------|--------|--------|
+| 1 | Replace nodes_map Mutex with DashMap | Low | High | ✅ Done |
+| 2 | Blocking channel receive (recv_timeout) | Low | Medium | ✅ Done |
+| 3 | Arc<Msg> instead of cloning | Medium | Medium | ⏳ Pending |
+| 4 | Quorum HashSet backtracking | High | High | ✅ Done |
+| 5 | Cache to_propose BTreeSet | Low | Low | ✅ Done |
+
+### Implementation Details
 
 | Priority | Optimization | Effort | Impact | Status |
 |----------|--------------|--------|--------|--------|
