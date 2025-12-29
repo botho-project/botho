@@ -71,12 +71,14 @@ mnemonic = "word1 word2 word3 ... word24"
 
 [network]
 # Port for gossip protocol
-gossip_port = 8443
+gossip_port = 7100
+
+# Port for JSON-RPC API
+rpc_port = 7101
 
 # Bootstrap peers for network discovery
 bootstrap_peers = [
-    "/ip4/192.168.1.100/tcp/8443",
-    "/ip4/192.168.1.101/tcp/8443",
+    "/ip4/98.95.2.200/tcp/7100/p2p/12D3KooWBrjTYjNrEwi9MM3AKFenmymyWVXtXbQiSx7eDnDwv9qQ",
 ]
 
 # Quorum configuration for consensus
@@ -180,10 +182,9 @@ struct RingMember {
 
 struct TxOutput {
     amount: u64,                   // In picocredits
-    recipient_view_key: [u8; 32],
-    recipient_spend_key: [u8; 32],
-    target_key: [u8; 32],          // One-time output key
+    target_key: [u8; 32],          // One-time output key (stealth)
     public_key: [u8; 32],          // Ephemeral ECDH key (R = r*G)
+    // PLANNED: e_memo: Option<EncryptedMemo>,  // 66 bytes: 2-byte type + 64-byte payload
 }
 ```
 
@@ -388,6 +389,92 @@ Fees are **burned** (destroyed) rather than paid to miners. This creates deflati
 - Mining transactions have no fee (creates new coins)
 - Mempool prioritizes by fee rate
 
+### Fee Market Philosophy
+
+**Why We Don't Need Dynamic Fee Estimation**
+
+Many blockchains implement complex fee estimation algorithms (EIP-1559, Bitcoin's fee bumping, etc.). Botho deliberately avoids this complexity. Here's why:
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    FEE MARKET: SIMPLE BY DESIGN                          │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│   USER LAYER                           SYSTEM LAYER                      │
+│   ──────────                           ────────────                      │
+│                                                                          │
+│   ┌─────────────────────┐              ┌─────────────────────────────┐  │
+│   │ User wants to send  │              │  DifficultyController       │  │
+│   │                     │              │                             │  │
+│   │ 1. Check minimum    │              │  Monitors: gross_emission   │  │
+│   │    fee (cluster-tax)│              │           - fees_burned     │  │
+│   │                     │              │           = net_inflation   │  │
+│   │ 2. Observe recent   │              │                             │  │
+│   │    blocks for       │◄────────────►│  If net > target: ↑ diff    │  │
+│   │    congestion       │              │  If net < target: ↓ diff    │  │
+│   │                     │              │                             │  │
+│   │ 3. Choose fee       │              │  High fees burned →         │  │
+│   │    (min or higher)  │              │    faster blocks →          │  │
+│   └─────────────────────┘              │    more capacity            │  │
+│            │                           └─────────────────────────────┘  │
+│            ▼                                                             │
+│   ┌─────────────────────┐                                               │
+│   │ Mempool             │                                               │
+│   │                     │                                               │
+│   │ Prioritizes by fee  │◄── Higher fee = faster confirmation          │
+│   │ rate (fee / size)   │                                               │
+│   └─────────────────────┘                                               │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**The Three-Part Design:**
+
+1. **Minimum Fee Floor (Cluster-Tax)**
+   - Prevents spam
+   - Progressive: higher fees for wealthier senders
+   - Privacy costs more (ring signatures have larger footprint)
+
+2. **User-Driven Priority**
+   - Users can always pay above the minimum
+   - Mempool orders by fee rate (fee ÷ tx size)
+   - Miners include highest-fee transactions first
+   - Users can observe recent blocks to gauge what fee clears
+
+3. **System-Level Adaptation (DifficultyController)**
+   - Fees are burned, not paid to miners
+   - High fee burn → difficulty decreases → faster blocks → more throughput
+   - Low fee burn → difficulty increases → slower blocks → less emission
+   - **This is the "automatic" adjustment** — it happens at the monetary policy level
+
+**Why This Is Better Than Fee Estimation Algorithms:**
+
+| Approach | Complexity | Gameable? | User Agency |
+|----------|------------|-----------|-------------|
+| Fixed minimum + user choice | Low | No | High |
+| EIP-1559 base fee | Medium | Somewhat | Medium |
+| Bitcoin RBF/CPFP | High | Yes | Low |
+| Algorithmic estimation | High | Yes | Low |
+
+**Key Insight**: The "dynamic" part of the fee market already exists — it's the DifficultyController. When network activity is high (lots of fees burned), the system responds by producing blocks faster, which increases capacity. Users don't need an algorithm to tell them what fee to pay; they can look at recent blocks and decide for themselves.
+
+**What Users Actually Do:**
+
+1. **Normal conditions**: Pay minimum fee, transaction confirms in ~1 block
+2. **Congested conditions**:
+   - Check recent blocks: "Minimum-fee txs are waiting 3 blocks"
+   - Decide: pay 2x minimum for faster confirmation, or wait
+3. **Urgent transaction**: Pay 5-10x minimum, virtually guaranteed next block
+
+**No Estimation Needed Because:**
+
+- The minimum fee is known (cluster-tax formula)
+- The mempool state is observable (JSON-RPC: `getMempoolInfo`)
+- Recent blocks show what fees are clearing
+- Users have full agency to choose their fee/speed tradeoff
+
+This design philosophy: **simple rules, emergent behavior, user agency**.
+
 ### Memo Fee Economics
 
 **Philosophy**: Pay for CPU and ledger storage. Memos consume both, so they should cost more.
@@ -513,9 +600,9 @@ pub fn validate_transaction_fee(
 - [x] Add comprehensive tests for memo fee calculation
 - [x] Document memo counting in `validate_transaction_fee()`
 
-**Remaining (wallet integration):**
-- [ ] Add cluster-tax dependency to botho mempool
-- [ ] Compute memo-adjusted minimum fee in mempool validation
+**Wallet integration (partial):**
+- [x] Add cluster-tax dependency to botho mempool
+- [x] Compute memo-adjusted minimum fee in mempool validation
 - [ ] Update wallet transaction builder to estimate memo fees
 - [ ] Add fee estimation API to JSON-RPC (`estimateFee` method)
 - [ ] Update `botho send` to show memo fee breakdown
@@ -768,9 +855,9 @@ enum ConsensusEvent {
    - Fixed: NodeID derived from local PeerId
    - Fixed: Slot index syncs with ledger height
 
-4. **Windows File Permissions** - Security issue for Windows users
-   - `botho-wallet/src/storage.rs:150-153` has no permission restrictions on Windows
-   - Need Windows ACL API integration
+4. ~~**Windows File Permissions**~~ ✅ FIXED
+   - `botho-wallet/src/storage.rs:151-165` uses Windows ACL API
+   - Sets owner-only access (equivalent to Unix 0600)
 
 5. ~~**Amount Parsing Safety**~~ ✅ FIXED
    - `commands/send.rs` now uses explicit rounding and bounds checking
@@ -804,16 +891,29 @@ enum ConsensusEvent {
 
 ### Lower Priority
 
-10. **Fee Market** - Dynamic fee based on mempool congestion
-    - Currently uses fixed minimum fee (0.0001 credits)
-    - Could add fee estimation based on recent blocks
+10. **Fee Market** - ✅ COMPLETE (by design)
+    - See "Fee Market Philosophy" section for rationale
 
 11. **Web Dashboard Polish** - Improve the web-based dashboard
-    - Currently has mining, network, wallet, ledger pages
-    - Add real-time updates via WebSocket
-    - Improve mobile responsiveness
+    - ✅ Wallet page: Balance display, transaction history, send modal with privacy levels
+    - ✅ Mining page: Mining controls with SCP visualization
+    - ✅ Network page: Interactive SCP consensus visualization
+    - ⏳ Ledger page: Block explorer (in progress)
+    - ⏳ Real-time updates via WebSocket/SSE
+    - ⏳ Mobile responsiveness improvements
 
 12. **Transaction Size Limits** - Add max size validation before deserialization
+
+13. **Add Memo Field to TxOutput** - ⏳ Pending
+    - Botho's TxOutput currently lacks a memo field
+    - Required to enable the memo fee system documented in "Memo Fee Economics"
+    - Tasks:
+      - [ ] Add `e_memo: Option<EncryptedMemo>` to `TxOutput` in `botho/src/transaction.rs`
+      - [ ] Define `EncryptedMemo` type (66 bytes: 2-byte type + 64-byte encrypted payload)
+      - [ ] Update serialization/deserialization
+      - [ ] Add memo creation helpers to wallet transaction builder
+      - [ ] Wire memo counting into mempool validation (uses existing cluster-tax fee calculation)
+      - [ ] Update `botho send` to optionally attach memos
 
 ## Recently Completed
 
@@ -976,10 +1076,10 @@ botho/src/
 
 | Severity | Count | Status |
 |----------|-------|--------|
-| Critical | 2 | ✅ Fixed |
-| High | 3 | 1 fixed, 2 open |
-| Medium | 4 | 2 open, 2 deferred |
-| Low | 3 | Nice to fix |
+| Critical | 2 | ✅ All Fixed |
+| High | 3 | ✅ All Fixed |
+| Medium | 4 | 3 fixed, 1 deferred |
+| Low | 3 | 1 fixed, 2 deferred/safe |
 
 ### Critical Issues (Fixed)
 
@@ -992,20 +1092,20 @@ botho/src/
 
 | Issue | Location | Status |
 |-------|----------|--------|
-| Integer overflow in ring input sum | `mempool.rs:229` | ⏳ In Progress |
-| Integer overflow in output sum | `mempool.rs:90` | ⏳ In Progress |
+| Integer overflow in ring input sum | `mempool.rs:236-241` | ✅ Fixed |
+| Integer overflow in output sum | `mempool.rs:91-96` | ✅ Fixed |
 | Float precision loss in amounts | `commands/send.rs` | ✅ Fixed |
 
-**Details:**
-- `saturating_add()` silently caps at `u64::MAX` instead of rejecting malicious inputs
-- `tx.outputs.iter().sum()` can overflow without detection
+**Fix details:**
+- Replaced `saturating_add()` with `checked_add()` that returns error on overflow
+- Used `try_fold()` with `checked_add()` for output sum to detect overflow
 
 ### Medium Issues
 
 | Issue | Location | Status |
 |-------|----------|--------|
-| SystemTime fallback to 0 | `validation.rs:151-154` | ⏳ In Progress |
-| Panic on missing ring member | `wallet.rs:237` | ⏳ In Progress |
+| SystemTime fallback to 0 | `validation.rs:151-158` | ✅ Fixed |
+| Panic on missing ring member | `wallet.rs:235-240` | ✅ Fixed |
 | Windows file permissions | `storage.rs:150-165` | ✅ Fixed (ACL) |
 | Deserialization error leakage | `validation.rs:236-241` | ⚠️ Deferred |
 
@@ -1013,7 +1113,7 @@ botho/src/
 
 | Issue | Location | Status |
 |-------|----------|--------|
-| secure_zero may be optimized | `storage.rs:308-314` | ⏳ In Progress |
+| secure_zero may be optimized | `storage.rs:308-313` | ✅ Fixed (zeroize) |
 | Magic constants not in config | `validation.rs:77` | ⚠️ Deferred |
 | Unsafe unwrap on array slicing | `block.rs:71,188,196` | ⚠️ Safe (invariant) |
 
@@ -1036,30 +1136,56 @@ botho/src/
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                    HARVEST NOW, DECRYPT LATER                           │
+│                    HARVEST NOW, DECRYPT LATER (HNDL)                     │
 ├─────────────────────────────────────────────────────────────────────────┤
-│                                                                         │
-│   2025: Adversary archives blockchain                                   │
-│         ↓                                                               │
-│   2035: Adversary obtains quantum computer                              │
-│         ↓                                                               │
-│   Shor's algorithm breaks ECDLP:                                        │
-│   - Recover view private keys → de-anonymize ALL historical outputs     │
-│   - Recover spend private keys → steal funds from old addresses         │
-│                                                                         │
-│   PRIVACY LOSS IS IRREVERSIBLE. THEFT IS MITIGABLE VIA HARD FORK.       │
-│                                                                         │
+│                                                                          │
+│   2025: Adversary (nation-state) archives all blockchain traffic         │
+│         ↓                                                                │
+│   2035: Adversary obtains Cryptographically Relevant Quantum Computer    │
+│         ↓                                                                │
+│   Shor's algorithm breaks ECDLP in hours:                                │
+│   - Recover view private keys → de-anonymize ALL historical outputs      │
+│   - Build complete transaction graph: who paid whom, when, how much      │
+│   - Recover spend private keys → steal funds from unmigrated addresses   │
+│                                                                          │
+│   ┌─────────────────────────────────────────────────────────────────┐   │
+│   │  PRIVACY LOSS IS IRREVERSIBLE. THEFT IS MITIGABLE VIA FORK.    │   │
+│   └─────────────────────────────────────────────────────────────────┘   │
+│                                                                          │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
+
+### Threat Analysis by Component
+
+| Component | Classical Crypto | Attack Vector | Impact | Urgency | PQ Solution |
+|-----------|-----------------|---------------|--------|---------|-------------|
+| Stealth key exchange | ECDH | Recover view key | Output ownership revealed | **Immediate** | ML-KEM hybrid |
+| Simple tx signatures | Schnorr | Recover spend key | Theft (mitigable) | Medium | ML-DSA hybrid |
+| Ring signatures | MLSAG | Break all ring keys | Sender revealed + theft | **Immediate** | **Open problem** |
+| Amounts | Plaintext | N/A | Already public | None | None needed |
+
+**Key advantage**: Botho uses visible amounts (no RingCT), avoiding Pedersen commitment vulnerabilities.
+
+### Ring Signatures: The Hard Problem
+
+No mature post-quantum ring signature scheme exists. Current options:
+
+1. **Accept partial loss**: Historical rings will be broken, but post-fork rings use PQ
+2. **Lattice-based ring sigs**: Research stage, signatures ~100KB+ (impractical)
+3. **ZK replacement**: Replace rings with zero-knowledge proofs (different privacy model)
+
+**Current stance**: Document as open research. Ring privacy for historical transactions
+will likely be lost when quantum computers arrive. New transactions post-fork can use
+alternative PQ privacy mechanisms.
 
 ### Strategy: Quantum-Safe Private Transactions
 
 **Key Insight**: Only private transactions need post-quantum protection NOW.
 
-| Concern | Urgency | Mitigation |
-|---------|---------|------------|
-| Privacy | **Immediate** | PQ crypto on private tx (harvest-now threat) |
-| Theft | Deferrable | Hard fork when QC imminent (require new addresses) |
+| Concern | Reversible? | Urgency | Mitigation |
+|---------|-------------|---------|------------|
+| Privacy loss | **NO** — data already archived | **Immediate** | PQ crypto on `--private` tx |
+| Theft | Yes — hard fork can require migration | Deferrable | Hard fork when QC imminent |
 
 Standard transactions continue using classical crypto. When quantum computers
 become practical, a hard fork will require:
@@ -1074,12 +1200,73 @@ become practical, a hard fork will require:
 | Primitive | Algorithm | Sizes | Use Case |
 |-----------|-----------|-------|----------|
 | KEM | ML-KEM-768 (Kyber) | pk: 1184 B, ct: 1088 B, ss: 32 B | Stealth address key exchange |
-| Signature | ML-DSA-65 (Dilithium) | pk: 1952 B, sig: 2420 B | Transaction signing |
+| Signature | ML-DSA-65 (Dilithium) | pk: 1952 B, sig: 3309 B | Transaction signing |
 
-**Rust Crates:**
-- `pqcrypto-kyber` - ML-KEM implementation
-- `pqcrypto-dilithium` - ML-DSA implementation
-- Both from the `pqcrypto` family (wraps PQClean)
+**Rust Crates (RustCrypto):**
+- `ml-kem` - Pure Rust ML-KEM, supports custom RNG for deterministic keygen
+- `ml-dsa` - Pure Rust ML-DSA, supports custom RNG for deterministic keygen
+- Preferred over `pqcrypto` for deterministic key derivation from mnemonic
+
+### Deterministic Key Derivation
+
+**Requirement**: PQ keys MUST be deterministically derived from the mnemonic.
+Users should not need to backup anything extra.
+
+```
+mnemonic (24 words)
+       ↓ BIP39
+512-bit master seed
+       ↓ HKDF-SHA256
+       ├── info = "botho-pq-kem-v1" ──→ 32-byte KEM seed
+       │                                      ↓
+       │                              ChaCha20Rng::from_seed()
+       │                                      ↓
+       │                              MlKem768::generate(&mut rng)
+       │                                      ↓
+       │                              Deterministic ML-KEM keypair
+       │
+       └── info = "botho-pq-sig-v1" ──→ 32-byte SIG seed
+                                              ↓
+                                      ChaCha20Rng::from_seed()
+                                              ↓
+                                      MlDsa65::generate(&mut rng)
+                                              ↓
+                                      Deterministic ML-DSA keypair
+```
+
+**Implementation:**
+
+```rust
+use ml_kem::MlKem768;
+use ml_dsa::MlDsa65;
+use rand_chacha::ChaCha20Rng;
+use rand::SeedableRng;
+use hkdf::Hkdf;
+use sha2::Sha256;
+
+fn derive_pq_keys(mnemonic: &str) -> (MlKem768KeyPair, MlDsa65KeyPair) {
+    let bip39_seed = Mnemonic::from_phrase(mnemonic)?.to_seed("");
+    let hkdf = Hkdf::<Sha256>::new(None, &bip39_seed);
+
+    // Derive KEM keypair
+    let mut kem_seed = [0u8; 32];
+    hkdf.expand(b"botho-pq-kem-v1", &mut kem_seed).unwrap();
+    let mut kem_rng = ChaCha20Rng::from_seed(kem_seed);
+    let kem_keypair = MlKem768::generate(&mut kem_rng);
+
+    // Derive SIG keypair
+    let mut sig_seed = [0u8; 32];
+    hkdf.expand(b"botho-pq-sig-v1", &mut sig_seed).unwrap();
+    let mut sig_rng = ChaCha20Rng::from_seed(sig_seed);
+    let sig_keypair = MlDsa65::generate(&mut sig_rng);
+
+    (kem_keypair, sig_keypair)
+}
+```
+
+**Domain separators** (versioned for future-proofing):
+- `b"botho-pq-kem-v1"` — ML-KEM key derivation
+- `b"botho-pq-sig-v1"` — ML-DSA key derivation
 
 ### Transaction Types
 
@@ -1247,39 +1434,78 @@ Quantum-Private Transaction (2 inputs, 2 outputs):
 
 ### Implementation Phases
 
-#### Phase 1: Cryptographic Foundation
+#### Phase 1: Cryptographic Foundation ⚠️ MIGRATION NEEDED
 
-**New crate: `crypto/pq/`**
+**Crate: `crypto/pq/` (bth-crypto-pq)**
+
+**Current state**: Uses `pqcrypto-*` crates which don't support seeded keygen.
+**Target state**: Switch to RustCrypto `ml-kem` + `ml-dsa` for deterministic derivation.
 
 ```
 crypto/pq/
-├── Cargo.toml          # pqcrypto-kyber, pqcrypto-dilithium deps
+├── Cargo.toml          # ml-kem, ml-dsa, rand_chacha deps
 ├── src/
-│   ├── lib.rs
-│   ├── kem.rs          # ML-KEM-768 wrapper
-│   ├── sig.rs          # ML-DSA-65 wrapper
-│   └── derive.rs       # Deterministic key derivation from seed
+│   ├── lib.rs          # Re-exports, domain separator constants
+│   ├── kem.rs          # ML-KEM-768 wrapper with deterministic keygen
+│   └── sig.rs          # ML-DSA-65 wrapper with deterministic keygen
+└── tests/
+    └── integration_tests.rs  # Determinism tests, roundtrip tests
 ```
 
-Tasks:
-- [ ] Add `pqcrypto` dependencies to workspace
-- [ ] Implement `MlKem768` wrapper with Encaps/Decaps
-- [ ] Implement `MlDsa65` wrapper with Sign/Verify
-- [ ] Implement deterministic keygen from 32-byte seed
-- [ ] Unit tests for all primitives
+**Migration Tasks:**
+- [ ] Replace `pqcrypto-kyber` with `ml-kem` (RustCrypto)
+- [ ] Replace `pqcrypto-dilithium` with `ml-dsa` (RustCrypto)
+- [ ] Add `rand_chacha` for seeded DRBG
+- [ ] Implement deterministic `derive_pq_keys(mnemonic)` using ChaCha20Rng
+- [ ] Update `derive_onetime_sig_keypair()` to use seeded RNG
+- [ ] Add determinism tests: same mnemonic → same keys
+- [ ] Verify key sizes match expectations
 - [ ] Benchmark: keygen, encaps, sign latency
+- [ ] Update all dependent code (account-keys, botho-wallet)
 
-#### Phase 2: Key Management
+**Completed (to preserve):**
+- [x] API design for `MlKem768KeyPair`, `MlDsa65KeyPair`
+- [x] Domain separators: `b"botho-pq-kem-v1"`, `b"botho-pq-sig-v1"`
+- [x] Serde serialization for key types
+- [x] Zeroize on drop for secret material
+- [x] Integration test structure
 
-**Extend `account-keys/`**
+#### Phase 2: Key Management ⚠️ NEEDS UPDATE AFTER PHASE 1
+
+**Extended `account-keys/` and `botho-wallet/`**
+
+**Note**: After Phase 1 migration to RustCrypto, this code will need updates to use
+the new deterministic derivation. The API should remain similar.
+
+```
+account-keys/src/
+├── quantum_safe.rs     # QuantumSafeAccountKey, QuantumSafePublicAddress, AddressParseError
+└── lib.rs              # pq feature gate for PQ exports
+
+botho-wallet/
+├── Cargo.toml          # pq feature (default enabled)
+└── src/keys.rs         # pq_account_key(), pq_public_address(), pq_address_string()
+└── src/commands/address.rs  # --pq flag for quantum-safe address display
+```
+
+**Implemented:**
+- `QuantumSafeAccountKey`: Combines classical AccountKey with ML-KEM + ML-DSA keypairs
+- `QuantumSafePublicAddress`: Extended address with classical + PQ public keys (~3200 bytes)
+- `from_mnemonic()`: Derives both classical and PQ keys from same mnemonic
+- `to_address_string()` / `from_address_string()`: `botho-pq://1/<base58>` encoding/decoding
+- Wallet CLI: `botho-wallet address --pq` shows quantum-safe address
+- Zero-migration: PQ keys derived automatically from existing mnemonic
 
 Tasks:
-- [ ] Add `QuantumSafeAccountKeys` struct
-- [ ] Derive PQ keys from mnemonic via HKDF
-- [ ] Extended address format with PQ public keys
-- [ ] Address encoding/decoding (botho-pq:// scheme)
-- [ ] Wallet storage for PQ keypairs
-- [ ] Migration path for existing wallets (derive PQ keys on unlock)
+- [x] Add `QuantumSafeAccountKey` struct
+- [x] Derive PQ keys from mnemonic via HKDF
+- [x] Extended address format with PQ public keys
+- [x] Address encoding (`to_address_string()`)
+- [x] Address decoding (`from_address_string()`)
+- [x] Wallet CLI support (`--pq` flag)
+- [x] Migration path: automatic (PQ keys derived from same mnemonic)
+- [x] Tests for address roundtrip, key sizes, address parsing errors
+- [ ] **NOTE**: Keys not yet deterministic due to pqcrypto API limitation
 
 #### Phase 3: Transaction Types
 
@@ -1366,11 +1592,17 @@ Phase    Network State                    Action
 ### PQ Dependencies
 
 ```toml
-# Already added to Cargo.toml
+# Target dependencies (RustCrypto - supports deterministic keygen)
 [dependencies]
-pqcrypto-kyber = "0.8"       # ML-KEM-768
-pqcrypto-dilithium = "0.5"   # ML-DSA-65
-pqcrypto-traits = "0.3"      # Common traits
+ml-kem = "0.1"               # ML-KEM-768 (pure Rust, FIPS 203)
+ml-dsa = "0.1"               # ML-DSA-65 (pure Rust, FIPS 204)
+rand_chacha = "0.3"          # ChaCha20Rng for seeded DRBG
+hkdf = "0.12"                # Key derivation from mnemonic
+sha2 = "0.10"                # SHA-256 for HKDF
+
+# Legacy (to be replaced)
+# pqcrypto-kyber = "0.8"     # No seeded keygen API
+# pqcrypto-dilithium = "0.5" # No seeded keygen API
 ```
 
 ### References
@@ -1542,8 +1774,8 @@ Region:        us-east-1 (or closest to target users)
 ```
 Inbound:
   - SSH (22)           : Your IP only (or bastion)
-  - P2P Gossip (8443)  : 0.0.0.0/0 (required for network)
-  - JSON-RPC (8080)    : 0.0.0.0/0 (optional, for public API)
+  - P2P Gossip (7100)  : 0.0.0.0/0 (required for network)
+  - JSON-RPC (7101)    : 0.0.0.0/0 (optional, for public API)
 
 Outbound:
   - All traffic        : 0.0.0.0/0
@@ -1790,40 +2022,51 @@ aws cloudwatch put-metric-alarm \
 
 #### Pre-Launch
 
-- [ ] AWS account created and billing configured
-- [ ] IAM user with appropriate permissions
-- [ ] AWS CLI configured locally (`aws configure`)
-- [ ] SSH key pair created
-- [ ] Domain registered (botho.io)
+- [x] AWS account created and billing configured (dev@2amlogic, ID: 312394852470)
+- [x] IAM user with appropriate permissions
+- [x] AWS CLI configured locally (`aws configure`)
+- [x] SSH key pair created (~/.ssh/botho-seed.pem)
+- [x] Domain registered (botho.io)
 
 #### Seed Node (seed.botho.io)
 
-- [ ] EC2 instance launched
-- [ ] Security group configured
-- [ ] Elastic IP allocated and associated
-- [ ] Botho binary built and installed
-- [ ] Wallet initialized (mnemonic backed up securely!)
-- [ ] Systemd service enabled
-- [ ] DNS A record created
-- [ ] Firewall ports verified open
-- [ ] CloudWatch alarms configured
+- [x] EC2 instance launched (i-03f2b4b35fa7e86ce, t3.large)
+- [x] Security group configured (sg-02c188e6dadcee979: ports 22, 7100, 7101)
+- [x] Elastic IP allocated and associated (98.95.2.200)
+- [x] Botho binary built and installed
+- [x] Wallet initialized (mnemonic backed up securely!)
+- [x] Systemd service enabled (botho.service)
+- [x] DNS A record created (seed.botho.io → 98.95.2.200, DNS-only)
+- [x] Firewall ports verified open (nc -zv 98.95.2.200 7100 succeeds)
+- [ ] Monitoring configured (CloudWatch or Datadog TBD)
+
+**Seed Node Details:**
+```
+Instance:  i-03f2b4b35fa7e86ce (t3.large, us-east-1)
+Elastic IP: 98.95.2.200
+Peer ID:    12D3KooWBrjTYjNrEwi9MM3AKFenmymyWVXtXbQiSx7eDnDwv9qQ
+Mode:       Relay (no wallet)
+Gossip:     tcp/7100
+RPC:        tcp/7101
+SSH Key:    ~/.ssh/botho-seed.pem
+```
 
 #### Web Hosting (botho.io)
 
-- [ ] Cloudflare Pages project created
-- [ ] GitHub repo connected
-- [ ] Build settings configured (pnpm build:web)
-- [ ] Custom domain added (botho.io, www.botho.io)
-- [ ] SSL certificate provisioned (automatic)
-- [ ] DNS CNAME records pointing to pages.dev
+- [x] Cloudflare Pages project created (botho-6cu.pages.dev)
+- [x] GitHub repo connected
+- [x] Build settings configured (pnpm build:web)
+- [x] Custom domain added (botho.io, www.botho.io)
+- [x] SSL certificate provisioned (automatic)
+- [x] DNS CNAME records pointing to pages.dev
 
 #### Post-Launch
 
 - [ ] Verify seed node is discoverable (`botho status` from another machine)
-- [ ] Verify website loads at https://botho.io
-- [ ] Test P2P connectivity from external network
+- [x] Verify website loads at https://botho-6cu.pages.dev
+- [x] Test P2P connectivity from external network
 - [ ] Monitor CloudWatch metrics for 24 hours
-- [ ] Document Elastic IP and instance IDs
+- [x] Document Elastic IP and instance IDs
 
 ### Backup Strategy
 

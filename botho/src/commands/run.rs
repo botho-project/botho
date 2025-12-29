@@ -15,7 +15,8 @@ use tracing::{debug, error, info, warn};
 
 use crate::block::MiningTx;
 use crate::config::{Config, QuorumMode};
-use crate::consensus::{BlockBuilder, ConsensusConfig, ConsensusEvent, ConsensusService};
+use crate::consensus::{BlockBuilder, ConsensusConfig, ConsensusEvent, ConsensusService, TransactionValidator};
+use crate::ledger::ChainState;
 use crate::network::{NetworkDiscovery, NetworkEvent, QuorumBuilder};
 use crate::node::Node;
 use crate::rpc::{start_rpc_server, RpcState};
@@ -64,9 +65,20 @@ fn check_mining_eligibility(
 
 /// Run the node
 pub fn run(config_path: &Path, mine: bool) -> Result<()> {
-    let config = Config::load(config_path).context("No wallet found. Run 'botho init' first.")?;
+    let config = Config::load(config_path).context("Config not found. Run 'botho init' first.")?;
 
-    println!("Botho node starting. Press Ctrl+C to stop.");
+    // Check if mining is requested without a wallet
+    if mine && !config.has_wallet() {
+        return Err(anyhow::anyhow!(
+            "Cannot mine without a wallet. Run 'botho init' to create one, or remove --mine flag."
+        ));
+    }
+
+    if config.has_wallet() {
+        println!("Botho node starting. Press Ctrl+C to stop.");
+    } else {
+        println!("Botho relay node starting (no wallet). Press Ctrl+C to stop.");
+    }
 
     // Create tokio runtime for async networking
     let rt = tokio::runtime::Runtime::new()?;
@@ -173,6 +185,7 @@ async fn run_async(config: Config, config_path: &Path, mine: bool) -> Result<()>
         peer_count.clone(),
         node.wallet_view_key(),
         node.wallet_spend_key(),
+        config.network.cors_origins.clone(),
     ));
 
     // Spawn RPC server task
@@ -187,7 +200,9 @@ async fn run_async(config: Config, config_path: &Path, mine: bool) -> Result<()>
 
     // Get chain state for consensus
     let ledger = node.shared_ledger();
-    let chain_state = ledger.read().unwrap().get_chain_state()
+    let chain_state = ledger.read()
+        .map_err(|_| anyhow::anyhow!("Ledger lock poisoned"))?
+        .get_chain_state()
         .map_err(|e| anyhow::anyhow!("Failed to get chain state: {}", e))?;
 
     // Create consensus service using local peer ID for node identity
@@ -217,7 +232,9 @@ async fn run_async(config: Config, config_path: &Path, mine: bool) -> Result<()>
         info!("Starting mining - {}", quorum_message);
         node.start_mining_public()?;
         mining_enabled = true;
-        *mining_active.write().unwrap() = true;
+        if let Ok(mut active) = mining_active.write() {
+            *active = true;
+        }
     } else if mine {
         warn!("Mining requested but {}", quorum_message);
         println!("Mining will start when quorum is satisfied.");
@@ -260,9 +277,10 @@ async fn run_async(config: Config, config_path: &Path, mine: bool) -> Result<()>
                                 warn!("Failed to add network block: {}", e);
                             } else {
                                 // Update consensus chain state
-                                let state = node.shared_ledger().read().unwrap().get_chain_state();
-                                if let Ok(state) = state {
-                                    consensus.update_chain_state(state);
+                                if let Ok(ledger) = node.shared_ledger().read() {
+                                    if let Ok(state) = ledger.get_chain_state() {
+                                        consensus.update_chain_state(state);
+                                    }
                                 }
                             }
                         }
@@ -283,7 +301,9 @@ async fn run_async(config: Config, config_path: &Path, mine: bool) -> Result<()>
                         NetworkEvent::PeerDiscovered(peer_id) => {
                             info!("Peer connected: {}", peer_id);
                             // Update RPC peer count
-                            *peer_count.write().unwrap() = discovery.peer_count();
+                            if let Ok(mut count) = peer_count.write() {
+                                *count = discovery.peer_count();
+                            }
 
                             // Re-evaluate mining eligibility
                             if mine && !mining_enabled {
@@ -295,7 +315,9 @@ async fn run_async(config: Config, config_path: &Path, mine: bool) -> Result<()>
                                         warn!("Failed to start mining: {}", e);
                                     } else {
                                         mining_enabled = true;
-                                        *mining_active.write().unwrap() = true;
+                                        if let Ok(mut active) = mining_active.write() {
+                                            *active = true;
+                                        }
                                     }
                                 }
                             }
@@ -303,7 +325,9 @@ async fn run_async(config: Config, config_path: &Path, mine: bool) -> Result<()>
                         NetworkEvent::PeerDisconnected(peer_id) => {
                             warn!("Peer disconnected: {}", peer_id);
                             // Update RPC peer count
-                            *peer_count.write().unwrap() = discovery.peer_count();
+                            if let Ok(mut count) = peer_count.write() {
+                                *count = discovery.peer_count();
+                            }
 
                             // Re-evaluate mining eligibility
                             if mining_enabled {
@@ -313,7 +337,9 @@ async fn run_async(config: Config, config_path: &Path, mine: bool) -> Result<()>
                                     warn!("Quorum lost! {} - stopping mining", msg);
                                     node.stop_mining_public();
                                     mining_enabled = false;
-                                    *mining_active.write().unwrap() = false;
+                                    if let Ok(mut active) = mining_active.write() {
+                                        *active = false;
+                                    }
                                 }
                             }
                         }
@@ -322,29 +348,30 @@ async fn run_async(config: Config, config_path: &Path, mine: bool) -> Result<()>
                             debug!("Sync request from {:?}: {:?}", peer, request);
                             // Handle the sync request
                             let shared_ledger = node.shared_ledger();
-                            let response = match request {
-                                SyncRequest::GetStatus => {
-                                    let ledger = shared_ledger.read().unwrap();
-                                    let state = ledger.get_chain_state().unwrap_or_default();
-                                    SyncResponse::Status {
-                                        height: state.height,
-                                        tip_hash: state.tip_hash,
-                                    }
-                                }
-                                SyncRequest::GetBlocks { start_height, count } => {
-                                    let ledger = shared_ledger.read().unwrap();
-                                    let mut blocks = Vec::new();
-                                    let end_height = start_height.saturating_add(count as u64).saturating_sub(1);
-                                    for height in start_height..=end_height.min(start_height + 99) {
-                                        if let Ok(block) = ledger.get_block(height) {
-                                            blocks.push(block);
-                                        } else {
-                                            break;
+                            let response = match shared_ledger.read() {
+                                Ok(ledger) => match request {
+                                    SyncRequest::GetStatus => {
+                                        let state = ledger.get_chain_state().unwrap_or_default();
+                                        SyncResponse::Status {
+                                            height: state.height,
+                                            tip_hash: state.tip_hash,
                                         }
                                     }
-                                    let has_more = blocks.len() == count as usize;
-                                    SyncResponse::Blocks { blocks, has_more }
-                                }
+                                    SyncRequest::GetBlocks { start_height, count } => {
+                                        let mut blocks = Vec::new();
+                                        let end_height = start_height.saturating_add(count as u64).saturating_sub(1);
+                                        for height in start_height..=end_height.min(start_height + 99) {
+                                            if let Ok(block) = ledger.get_block(height) {
+                                                blocks.push(block);
+                                            } else {
+                                                break;
+                                            }
+                                        }
+                                        let has_more = blocks.len() == count as usize;
+                                        SyncResponse::Blocks { blocks, has_more }
+                                    }
+                                },
+                                Err(_) => SyncResponse::Error("Internal error".to_string()),
                             };
                             // Send response
                             if let Err(e) = NetworkDiscovery::send_sync_response(&mut swarm, channel, response) {
@@ -363,10 +390,10 @@ async fn run_async(config: Config, config_path: &Path, mine: bool) -> Result<()>
                                         }
                                     }
                                     // Update consensus chain state
-                                    let shared_ledger = node.shared_ledger();
-                                    let state = shared_ledger.read().unwrap().get_chain_state();
-                                    if let Ok(state) = state {
-                                        consensus.update_chain_state(state);
+                                    if let Ok(ledger) = node.shared_ledger().read() {
+                                        if let Ok(state) = ledger.get_chain_state() {
+                                            consensus.update_chain_state(state);
+                                        }
                                     }
                                 }
                                 SyncResponse::Status { height, tip_hash } => {
@@ -401,9 +428,10 @@ async fn run_async(config: Config, config_path: &Path, mine: bool) -> Result<()>
                                         warn!("Failed to add consensus block: {}", e);
                                     } else {
                                         // Update consensus chain state
-                                        let state = node.shared_ledger().read().unwrap().get_chain_state();
-                                        if let Ok(state) = state {
-                                            consensus.update_chain_state(state);
+                                        if let Ok(ledger) = node.shared_ledger().read() {
+                                            if let Ok(state) = ledger.get_chain_state() {
+                                                consensus.update_chain_state(state);
+                                            }
                                         }
 
                                         // Broadcast block to network
@@ -453,6 +481,35 @@ async fn run_async(config: Config, config_path: &Path, mine: bool) -> Result<()>
                 }
                 if let Some(mined_tx) = node.check_mined_mining_tx()? {
                     let mining_tx = &mined_tx.mining_tx;
+
+                    // Pre-validate the mining transaction before submitting to consensus
+                    // This catches stale/invalid transactions early
+                    let chain_state = match node.shared_ledger().read() {
+                        Ok(ledger) => match ledger.get_chain_state() {
+                            Ok(state) => state,
+                            Err(e) => {
+                                warn!("Cannot get chain state for validation: {}", e);
+                                continue;
+                            }
+                        },
+                        Err(_) => {
+                            warn!("Cannot acquire ledger lock for validation");
+                            continue;
+                        }
+                    };
+
+                    let temp_state = Arc::new(RwLock::new(chain_state));
+                    let validator = TransactionValidator::new(temp_state);
+
+                    if let Err(e) = validator.validate_mining_tx(mining_tx) {
+                        debug!(
+                            height = mining_tx.block_height,
+                            error = %e,
+                            "Discarding stale mining tx (chain advanced)"
+                        );
+                        continue;
+                    }
+
                     info!(
                         height = mining_tx.block_height,
                         priority = mined_tx.pow_priority,
@@ -488,7 +545,9 @@ async fn run_async(config: Config, config_path: &Path, mine: bool) -> Result<()>
 
     node.stop_mining_public();
     // Update RPC mining status
-    *mining_active.write().unwrap() = false;
+    if let Ok(mut active) = mining_active.write() {
+        *active = false;
+    }
     Ok(())
 }
 

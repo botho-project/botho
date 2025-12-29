@@ -21,11 +21,15 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Initialize a new wallet
+    /// Initialize a new wallet or relay node
     Init {
         /// Recover wallet from existing mnemonic
         #[arg(long)]
         recover: bool,
+
+        /// Create a relay node config (no wallet, for seed/infrastructure nodes)
+        #[arg(long)]
+        relay: bool,
     },
 
     /// Run the node (sync, scan wallet, optionally mine)
@@ -80,8 +84,8 @@ fn main() -> Result<()> {
 
     // Execute command
     match cli.command {
-        Commands::Init { recover } => {
-            commands::init::run(&config_path, recover)
+        Commands::Init { recover, relay } => {
+            commands::init::run(&config_path, recover, relay)
         }
         Commands::Run { mine } => {
             commands::run::run(&config_path, mine)

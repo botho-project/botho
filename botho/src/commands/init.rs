@@ -7,32 +7,49 @@ use tracing::info;
 use crate::config::Config;
 
 /// Run the init command
-pub fn run(config_path: &Path, recover: bool) -> Result<()> {
+pub fn run(config_path: &Path, recover: bool, relay: bool) -> Result<()> {
     // Check if config already exists
     if Config::exists(config_path) {
         bail!(
-            "Wallet already exists at {}\nUse a different --config path or delete the existing config.",
+            "Config already exists at {}\nUse a different --config path or delete the existing config.",
             config_path.display()
         );
     }
 
-    let mnemonic = if recover {
-        recover_mnemonic()?
+    if relay {
+        // Create relay node config (no wallet)
+        let config = Config::new_relay();
+        config.save(config_path)?;
+
+        info!("Relay node initialized at {}", config_path.display());
+        println!("\nRelay node configuration created (no wallet).");
+        println!("Config saved to: {}", config_path.display());
+        println!("\nThis node will:");
+        println!("  - Relay blocks and transactions");
+        println!("  - Help with peer discovery");
+        println!("  - NOT mine or receive funds");
+        println!("\nNext steps:");
+        println!("  1. Add bootstrap_peers to your config file");
+        println!("  2. Run 'botho run' to start the relay node");
     } else {
-        generate_new_mnemonic()?
-    };
+        let mnemonic = if recover {
+            recover_mnemonic()?
+        } else {
+            generate_new_mnemonic()?
+        };
 
-    // Create and save config
-    let config = Config::new(mnemonic.phrase().to_string());
-    config.save(config_path)?;
+        // Create and save config
+        let config = Config::new(mnemonic.phrase().to_string());
+        config.save(config_path)?;
 
-    info!("Wallet initialized at {}", config_path.display());
-    println!("\nYour wallet has been created.");
-    println!("Config saved to: {}", config_path.display());
-    println!("\nNext steps:");
-    println!("  1. Add peers to your config file");
-    println!("  2. Run 'botho run' to start syncing");
-    println!("  3. Run 'botho run --mine' to start mining");
+        info!("Wallet initialized at {}", config_path.display());
+        println!("\nYour wallet has been created.");
+        println!("Config saved to: {}", config_path.display());
+        println!("\nNext steps:");
+        println!("  1. Add peers to your config file");
+        println!("  2. Run 'botho run' to start syncing");
+        println!("  3. Run 'botho run --mine' to start mining");
+    }
 
     Ok(())
 }

@@ -31,7 +31,8 @@ pub use miner::{MinedMiningTx, Miner, MiningWork};
 /// The main Botho node
 pub struct Node {
     config: Config,
-    wallet: Wallet,
+    /// Wallet is optional - relay/seed nodes don't need one
+    wallet: Option<Wallet>,
     ledger: SharedLedger,
     mempool: SharedMempool,
     shutdown: Arc<AtomicBool>,
@@ -45,7 +46,13 @@ pub struct Node {
 impl Node {
     /// Create a new node from config
     pub fn new(config: Config, config_path: &Path) -> Result<Self> {
-        let wallet = Wallet::from_mnemonic(&config.wallet.mnemonic)?;
+        // Wallet is optional - only create if mnemonic is configured
+        let wallet = if let Some(mnemonic) = config.mnemonic() {
+            Some(Wallet::from_mnemonic(mnemonic)?)
+        } else {
+            info!("Running in relay mode (no wallet configured)");
+            None
+        };
 
         // Open the ledger database (in same directory as config)
         let ledger_path = ledger_db_path_from_config(config_path);
@@ -74,7 +81,17 @@ impl Node {
         })
     }
 
-    /// Run the node (blocks until shutdown)
+    /// Check if this node has a wallet configured
+    pub fn has_wallet(&self) -> bool {
+        self.wallet.is_some()
+    }
+
+    /// Run the node in standalone mode (blocks until shutdown)
+    ///
+    /// DEPRECATED: This method bypasses consensus and builds blocks directly.
+    /// For networked operation with consensus, use `commands::run::run()` instead.
+    /// This method is preserved for single-node testing/debugging only.
+    #[deprecated(note = "Use commands::run::run() for proper consensus integration")]
     pub fn run(&mut self, enable_mining: bool) -> Result<()> {
         info!("Starting Botho node");
 
@@ -123,7 +140,8 @@ impl Node {
     fn print_status(&self) -> Result<()> {
         use crate::monetary::mainnet_policy;
 
-        let ledger = self.ledger.read().unwrap();
+        let ledger = self.ledger.read()
+            .map_err(|_| anyhow::anyhow!("Ledger lock poisoned"))?;
         let state = ledger
             .get_chain_state()
             .map_err(|e| anyhow::anyhow!("Failed to get chain state: {}", e))?;
@@ -140,10 +158,14 @@ impl Node {
 
         println!();
         println!("=== Botho Node ===");
-        println!(
-            "Address: {}",
-            self.wallet.address_string().replace('\n', ", ")
-        );
+        if let Some(ref wallet) = self.wallet {
+            println!(
+                "Address: {}",
+                wallet.address_string().replace('\n', ", ")
+            );
+        } else {
+            println!("Mode: Relay (no wallet)");
+        }
         println!("Chain height: {}", state.height);
         println!("Phase: {}", phase);
         println!(
@@ -165,6 +187,10 @@ impl Node {
     }
 
     fn start_mining(&mut self) -> Result<()> {
+        // Mining requires a wallet to receive rewards
+        let wallet = self.wallet.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Cannot mine without a wallet. Run 'botho init' to create one."))?;
+
         let threads = if self.config.mining.threads == 0 {
             num_cpus::get()
         } else {
@@ -173,13 +199,14 @@ impl Node {
 
         info!("Starting mining with {} threads", threads);
 
-        let mut miner = Miner::new(threads, self.wallet.default_address(), self.shutdown.clone());
+        let mut miner = Miner::new(threads, wallet.default_address(), self.shutdown.clone());
 
         // Take the mining tx receiver
         self.mining_tx_receiver = miner.take_tx_receiver();
 
         // Set initial work from chain state
-        let ledger = self.ledger.read().unwrap();
+        let ledger = self.ledger.read()
+            .map_err(|_| anyhow::anyhow!("Ledger lock poisoned"))?;
         let state = ledger
             .get_chain_state()
             .map_err(|e| anyhow::anyhow!("Failed to get chain state: {}", e))?;
@@ -205,6 +232,12 @@ impl Node {
         }
     }
 
+    /// Process mined blocks in standalone mode (bypasses consensus)
+    ///
+    /// DEPRECATED: This method builds blocks directly without consensus.
+    /// The consensus path in `commands::run::run_async()` uses `check_mined_mining_tx()`
+    /// and submits to `ConsensusService` instead.
+    #[allow(dead_code)]
     fn process_mined_blocks(&mut self) -> Result<()> {
         // Collect mining transactions first to avoid borrow issues
         let mining_txs: Vec<MinedMiningTx> = if let Some(ref receiver) = self.mining_tx_receiver {
@@ -218,7 +251,7 @@ impl Node {
         };
 
         // Process collected mining transactions
-        // TODO: Submit to consensus instead of building blocks directly
+        // NOTE: This bypasses consensus - use run_async() for proper operation
         for mined in mining_txs {
             let mining_tx = &mined.mining_tx;
             info!(
@@ -246,7 +279,15 @@ impl Node {
             // Build a block from the mining transaction and pending txs
             // (In full consensus mode, this would come from externalized values)
             // Get miner's public address for block header (for PoW binding)
-            let miner_address = self.wallet.default_address();
+            // Note: wallet is guaranteed to exist here since mining requires a wallet
+            let wallet = match self.wallet.as_ref() {
+                Some(w) => w,
+                None => {
+                    error!("Cannot build block without wallet");
+                    continue;
+                }
+            };
+            let miner_address = wallet.default_address();
             let miner_view_key = miner_address.view_public_key().to_bytes();
             let miner_spend_key = miner_address.spend_public_key().to_bytes();
 
@@ -267,7 +308,13 @@ impl Node {
             };
 
             // Add to ledger
-            let add_result = self.ledger.write().unwrap().add_block(&block);
+            let add_result = match self.ledger.write() {
+                Ok(mut ledger) => ledger.add_block(&block),
+                Err(_) => {
+                    error!("Ledger lock poisoned");
+                    continue;
+                }
+            };
             match add_result {
                 Ok(()) => {
                     info!(
@@ -292,7 +339,8 @@ impl Node {
 
                     // Update miner with new work
                     if let Some(ref miner) = self.miner {
-                        let ledger = self.ledger.read().unwrap();
+                        let ledger = self.ledger.read()
+                            .map_err(|_| anyhow::anyhow!("Ledger lock poisoned"))?;
                         let state = ledger.get_chain_state().map_err(|e| {
                             anyhow::anyhow!("Failed to get chain state: {}", e)
                         })?;
@@ -320,7 +368,8 @@ impl Node {
         let window_start = current_height.saturating_sub(ADJUSTMENT_WINDOW);
 
         // Get start and end blocks
-        let ledger = self.ledger.read().unwrap();
+        let ledger = self.ledger.read()
+            .map_err(|_| anyhow::anyhow!("Ledger lock poisoned"))?;
         let start_block = ledger
             .get_block(window_start)
             .map_err(|e| anyhow::anyhow!("Failed to get start block: {}", e))?;
@@ -348,7 +397,8 @@ impl Node {
                 new_difficulty as f64 / current_difficulty as f64
             );
 
-            self.ledger.write().unwrap()
+            self.ledger.write()
+                .map_err(|_| anyhow::anyhow!("Ledger lock poisoned"))?
                 .set_difficulty(new_difficulty)
                 .map_err(|e| anyhow::anyhow!("Failed to set difficulty: {}", e))?;
         }
@@ -359,7 +409,8 @@ impl Node {
     fn print_mining_status(&self) -> Result<()> {
         if let Some(ref miner) = self.miner {
             let stats = miner.stats();
-            let ledger = self.ledger.read().unwrap();
+            let ledger = self.ledger.read()
+                .map_err(|_| anyhow::anyhow!("Ledger lock poisoned"))?;
             let state = ledger
                 .get_chain_state()
                 .map_err(|e| anyhow::anyhow!("Failed to get chain state: {}", e))?;
@@ -406,16 +457,18 @@ impl Node {
             hex::encode(&block.hash()[0..8])
         );
 
-        self.ledger.write().unwrap()
+        self.ledger.write()
+            .map_err(|_| anyhow::anyhow!("Ledger lock poisoned"))?
             .add_block(block)
             .map_err(|e| anyhow::anyhow!("Failed to add network block: {}", e))?;
 
         // Remove confirmed transactions from mempool
         if let Ok(mut mempool) = self.mempool.write() {
-            let ledger = self.ledger.read().unwrap();
             mempool.remove_confirmed(&block.transactions);
             // Also clean up any now-invalid transactions
-            mempool.remove_invalid(&*ledger);
+            if let Ok(ledger) = self.ledger.read() {
+                mempool.remove_invalid(&*ledger);
+            }
         }
 
         // Check if we need to adjust difficulty
@@ -426,18 +479,17 @@ impl Node {
 
         // Update miner with new work if mining
         if let Some(ref miner) = self.miner {
-            let ledger = self.ledger.read().unwrap();
-            let state = ledger
-                .get_chain_state()
-                .map_err(|e| anyhow::anyhow!("Failed to get chain state: {}", e))?;
-
-            let work = MiningWork {
-                prev_block_hash: state.tip_hash,
-                height: state.height + 1,
-                difficulty: state.difficulty,
-                total_mined: state.total_mined,
-            };
-            miner.update_work(work);
+            if let Ok(ledger) = self.ledger.read() {
+                if let Ok(state) = ledger.get_chain_state() {
+                    let work = MiningWork {
+                        prev_block_hash: state.tip_hash,
+                        height: state.height + 1,
+                        difficulty: state.difficulty,
+                        total_mined: state.total_mined,
+                    };
+                    miner.update_work(work);
+                }
+            }
         }
 
         Ok(())
@@ -445,7 +497,11 @@ impl Node {
 
     /// Check if we've mined a mining transaction (non-blocking)
     /// Returns a block built from the mining transaction
-    /// TODO: In full consensus mode, this would submit to consensus instead
+    ///
+    /// DEPRECATED: This method builds blocks directly without consensus.
+    /// Use `check_mined_mining_tx()` to get the raw mining tx for consensus submission.
+    #[deprecated(note = "Use check_mined_mining_tx() and submit to ConsensusService")]
+    #[allow(dead_code)]
     pub fn check_mined_block(&mut self) -> Result<Option<crate::block::Block>> {
         if let Some(ref receiver) = self.mining_tx_receiver {
             if let Ok(mined) = receiver.try_recv() {
@@ -473,7 +529,10 @@ impl Node {
 
                 // Build a block from the mining transaction
                 // Get miner's public address for block header (for PoW binding)
-                let miner_address = self.wallet.default_address();
+                // Note: wallet is guaranteed to exist here since mining requires a wallet
+                let wallet = self.wallet.as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("Cannot build block without wallet"))?;
+                let miner_address = wallet.default_address();
                 let miner_view_key = miner_address.view_public_key().to_bytes();
                 let miner_spend_key = miner_address.spend_public_key().to_bytes();
 
@@ -494,7 +553,8 @@ impl Node {
                 };
 
                 // Add to our ledger
-                self.ledger.write().unwrap()
+                self.ledger.write()
+                    .map_err(|_| anyhow::anyhow!("Ledger lock poisoned"))?
                     .add_block(&block)
                     .map_err(|e| anyhow::anyhow!("Failed to add mined block: {}", e))?;
 
@@ -506,18 +566,17 @@ impl Node {
 
                 // Update miner with new work
                 if let Some(ref miner) = self.miner {
-                    let ledger = self.ledger.read().unwrap();
-                    let state = ledger
-                        .get_chain_state()
-                        .map_err(|e| anyhow::anyhow!("Failed to get chain state: {}", e))?;
-
-                    let work = MiningWork {
-                        prev_block_hash: state.tip_hash,
-                        height: state.height + 1,
-                        difficulty: state.difficulty,
-                        total_mined: state.total_mined,
-                    };
-                    miner.update_work(work);
+                    if let Ok(ledger) = self.ledger.read() {
+                        if let Ok(state) = ledger.get_chain_state() {
+                            let work = MiningWork {
+                                prev_block_hash: state.tip_hash,
+                                height: state.height + 1,
+                                difficulty: state.difficulty,
+                                total_mined: state.total_mined,
+                            };
+                            miner.update_work(work);
+                        }
+                    }
                 }
 
                 // Remove confirmed transactions from mempool
@@ -577,21 +636,22 @@ impl Node {
         self.ledger.clone()
     }
 
-    /// Get the wallet's view public key bytes
-    pub fn wallet_view_key(&self) -> [u8; 32] {
-        self.wallet.default_address().view_public_key().to_bytes()
+    /// Get the wallet's view public key bytes (None if no wallet configured)
+    pub fn wallet_view_key(&self) -> Option<[u8; 32]> {
+        self.wallet.as_ref().map(|w| w.default_address().view_public_key().to_bytes())
     }
 
-    /// Get the wallet's spend public key bytes
-    pub fn wallet_spend_key(&self) -> [u8; 32] {
-        self.wallet.default_address().spend_public_key().to_bytes()
+    /// Get the wallet's spend public key bytes (None if no wallet configured)
+    pub fn wallet_spend_key(&self) -> Option<[u8; 32]> {
+        self.wallet.as_ref().map(|w| w.default_address().spend_public_key().to_bytes())
     }
 
     /// Clean up invalid transactions from mempool
     pub fn cleanup_mempool(&self) {
         if let Ok(mut mempool) = self.mempool.write() {
-            let ledger = self.ledger.read().unwrap();
-            mempool.remove_invalid(&*ledger);
+            if let Ok(ledger) = self.ledger.read() {
+                mempool.remove_invalid(&*ledger);
+            }
             mempool.evict_old();
         }
     }

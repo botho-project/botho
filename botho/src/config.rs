@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 /// Main configuration for Botho
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    pub wallet: WalletConfig,
+    /// Wallet configuration (optional for relay/seed nodes)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wallet: Option<WalletConfig>,
     pub network: NetworkConfig,
     pub mining: MiningConfig,
 }
@@ -15,6 +17,18 @@ pub struct Config {
 pub struct WalletConfig {
     /// BIP39 mnemonic phrase (24 words)
     pub mnemonic: String,
+}
+
+impl Config {
+    /// Check if this config has a wallet configured
+    pub fn has_wallet(&self) -> bool {
+        self.wallet.is_some()
+    }
+
+    /// Get the mnemonic if wallet is configured
+    pub fn mnemonic(&self) -> Option<&str> {
+        self.wallet.as_ref().map(|w| w.mnemonic.as_str())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -27,6 +41,12 @@ pub struct NetworkConfig {
     #[serde(default = "default_rpc_port")]
     pub rpc_port: u16,
 
+    /// Allowed CORS origins for RPC server.
+    /// Default is ["http://localhost:*", "http://127.0.0.1:*"] for security.
+    /// Use ["*"] to allow all origins (not recommended for production).
+    #[serde(default = "default_cors_origins")]
+    pub cors_origins: Vec<String>,
+
     /// Bootstrap peers for initial discovery (multiaddr format)
     #[serde(default)]
     pub bootstrap_peers: Vec<String>,
@@ -34,6 +54,13 @@ pub struct NetworkConfig {
     /// Quorum configuration
     #[serde(default)]
     pub quorum: QuorumConfig,
+}
+
+fn default_cors_origins() -> Vec<String> {
+    vec![
+        "http://localhost".to_string(),
+        "http://127.0.0.1".to_string(),
+    ]
 }
 
 fn default_gossip_port() -> u16 {
@@ -174,6 +201,7 @@ impl Default for NetworkConfig {
         Self {
             gossip_port: default_gossip_port(),
             rpc_port: default_rpc_port(),
+            cors_origins: default_cors_origins(),
             bootstrap_peers: Vec::new(),
             quorum: QuorumConfig::default(),
         }
@@ -193,7 +221,16 @@ impl Config {
     /// Create a new config with the given mnemonic
     pub fn new(mnemonic: String) -> Self {
         Self {
-            wallet: WalletConfig { mnemonic },
+            wallet: Some(WalletConfig { mnemonic }),
+            network: NetworkConfig::default(),
+            mining: MiningConfig::default(),
+        }
+    }
+
+    /// Create a new config without a wallet (for relay/seed nodes)
+    pub fn new_relay() -> Self {
+        Self {
+            wallet: None,
             network: NetworkConfig::default(),
             mining: MiningConfig::default(),
         }
@@ -284,7 +321,21 @@ mod tests {
         config.save(&path).unwrap();
 
         let loaded = Config::load(&path).unwrap();
-        assert_eq!(loaded.wallet.mnemonic, "word1 word2 word3");
+        assert_eq!(loaded.mnemonic(), Some("word1 word2 word3"));
+    }
+
+    #[test]
+    fn test_config_relay_mode() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+
+        let config = Config::new_relay();
+        assert!(!config.has_wallet());
+        config.save(&path).unwrap();
+
+        let loaded = Config::load(&path).unwrap();
+        assert!(!loaded.has_wallet());
+        assert_eq!(loaded.mnemonic(), None);
     }
 
     #[test]
