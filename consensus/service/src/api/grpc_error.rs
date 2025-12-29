@@ -8,7 +8,6 @@ use mc_consensus_api::{
     consensus_client::{MintValidationResult, ProposeMintConfigTxResponse, ProposeMintTxResponse},
     consensus_common::{ProposeTxResponse, ProposeTxResult},
 };
-use mc_consensus_enclave::Error as EnclaveError;
 use mc_consensus_service_config::Error as ConfigError;
 use mc_ledger_db::Error as LedgerError;
 use mc_transaction_core::{mint::MintValidationError, validation::TransactionValidationError};

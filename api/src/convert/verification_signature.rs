@@ -3,19 +3,21 @@
 //! Convert to/from external::VerificationSignature
 
 use crate::external;
-use mc_attest_verifier_types::VerificationSignature;
+use mc_blockchain_types::VerificationSignature;
 
 impl From<&VerificationSignature> for external::VerificationSignature {
     fn from(src: &VerificationSignature) -> Self {
         Self {
-            contents: src.clone().into(),
+            contents: src.contents.clone(),
         }
     }
 }
 
 impl From<&external::VerificationSignature> for VerificationSignature {
     fn from(src: &external::VerificationSignature) -> Self {
-        src.contents.clone().into()
+        VerificationSignature {
+            contents: src.contents.clone(),
+        }
     }
 }
 
@@ -26,7 +28,9 @@ mod tests {
     /// Test round-trip conversion of prost to protobuf to prost
     #[test]
     fn prost_to_proto_roundtrip() {
-        let sig = VerificationSignature::from(&b"this is a fake signature"[..]);
+        let sig = VerificationSignature {
+            contents: b"this is a fake signature".to_vec(),
+        };
 
         // external -> prost
         let proto_sig = external::VerificationSignature::from(&sig);

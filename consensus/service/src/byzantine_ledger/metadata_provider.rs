@@ -2,12 +2,10 @@
 
 use std::sync::Arc;
 
-use mc_attest_verifier_types::prost;
 use mc_blockchain_types::{BlockData, BlockMetadata, BlockMetadataContents, QuorumSet};
 use mc_common::ResponderId;
 use mc_crypto_keys::Ed25519Pair;
 use mc_ledger_sync::BlockMetadataProvider;
-use mc_sgx_report_cache_api::ReportableEnclave;
 
 /// A [BlockMetadataProvider] that builds metadata from the configured quorum
 /// set, enclave's AVR, and message signing key.

@@ -1,6 +1,0 @@
-// Copyright (c) 2018-2022 The MobileCoin Foundation
-
-enclave {
-    from "sgx_debug.edl" import *;
-    from "sgx_panic.edl" import *;
-}

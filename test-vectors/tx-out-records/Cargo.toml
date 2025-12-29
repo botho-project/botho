@@ -16,10 +16,6 @@ hex = { workspace = true }
 mc-account-keys = { workspace = true }
 mc-common = { workspace = true }
 mc-crypto-keys = { workspace = true }
-mc-fog-ingest-enclave-api = { workspace = true }
-mc-fog-ingest-enclave-impl = { workspace = true }
-mc-fog-types = { workspace = true }
-mc-fog-view-protocol = { workspace = true }
 mc-oblivious-traits = { workspace = true }
 mc-test-vectors-definitions = { workspace = true }
 mc-transaction-core = { workspace = true }

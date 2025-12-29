@@ -12,7 +12,6 @@ mc-blockchain-types = { workspace = true }
 mc-common = { workspace = true }
 mc-connection = { workspace = true }
 mc-consensus-api = { workspace = true }
-mc-consensus-enclave-api = { workspace = true }
 mc-consensus-scp = { workspace = true, features = ["test_utils"] }
 mc-crypto-keys = { workspace = true }
 mc-ledger-db = { workspace = true, features = ["test_utils"] }

@@ -2,7 +2,6 @@
 
 use mc_blockchain_types::{BlockVersionError, ConvertError};
 use mc_crypto_keys::{KeyError, SignatureError};
-use mc_sgx_dcap_types::Quote3Error;
 use mc_transaction_core::ring_signature::Error as RingSigError;
 use mc_util_serial::prost::DecodeError;
 use mc_util_uri::{UriConversionError, UriParseError};
@@ -101,27 +100,5 @@ impl From<UriConversionError> for ConversionError {
 impl From<DecodeError> for ConversionError {
     fn from(_: DecodeError) -> Self {
         Self::InvalidContents
-    }
-}
-
-impl From<Quote3Error> for ConversionError {
-    fn from(_: Quote3Error) -> Self {
-        Self::InvalidContents
-    }
-}
-
-impl From<mc_attest_verifier_types::ConversionError> for ConversionError {
-    fn from(src: mc_attest_verifier_types::ConversionError) -> Self {
-        match src {
-            mc_attest_verifier_types::ConversionError::InvalidContents(_) => Self::InvalidContents,
-            mc_attest_verifier_types::ConversionError::Other(_) => Self::Other,
-            mc_attest_verifier_types::ConversionError::LengthMismatch { .. } => {
-                Self::InvalidContents
-            }
-            mc_attest_verifier_types::ConversionError::Key(key) => Self::Key(key),
-            mc_attest_verifier_types::ConversionError::MissingField(field) => {
-                Self::MissingField(field)
-            }
-        }
     }
 }

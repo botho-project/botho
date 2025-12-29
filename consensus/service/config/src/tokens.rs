@@ -7,7 +7,6 @@ use crate::{
     signer_identity::{SignerIdentity, SignerIdentityMap},
 };
 use mc_common::HashSet;
-use mc_consensus_enclave_api::{GovernorsMap, GovernorsVerifier};
 use mc_crypto_keys::{Ed25519Public, Ed25519Signature};
 use mc_crypto_multisig::SignerSet;
 use mc_transaction_core::{tokens::Mob, FeeMap, Token, TokenId};

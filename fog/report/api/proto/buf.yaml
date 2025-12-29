@@ -1,7 +1,0 @@
-version: v1
-name: buf.build/mobilecoin/fog-report-api
-deps:
-  - buf.build/mobilecoin/api
-breaking:
-  use:
-    - FILE

@@ -12,7 +12,6 @@ use mc_blockchain_types::{
     BlockData, BlockID, BlockMetadata, BlockVersion, QuorumSet, VerificationReport,
 };
 use mc_crypto_ring_signature_signer::NoKeysRingSigner;
-use mc_fog_report_validation_test_utils::{FullyValidatedFogPubkey, MockFogResolver};
 use mc_transaction_builder::{
     test_utils::get_input_credentials, EmptyMemoBuilder, ReservedSubaddresses,
     SignedContingentInputBuilder,

@@ -5,7 +5,6 @@
 use mc_account_keys::{AccountKey, ShortAddressHash};
 use mc_crypto_keys::{RistrettoPrivate, RistrettoPublic};
 use mc_crypto_ring_signature_signer::NoKeysRingSigner;
-use mc_fog_report_validation_test_utils::{FullyValidatedFogPubkey, MockFogResolver};
 use mc_transaction_builder::{
     test_utils::{get_input_credentials, get_unsigned_transaction},
     EmptyMemoBuilder, ReservedSubaddresses, SignedContingentInputBuilder, TransactionBuilder,

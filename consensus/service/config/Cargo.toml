@@ -7,10 +7,8 @@ license = "GPL-3.0"
 rust-version = { workspace = true }
 
 [dependencies]
-mc-attest-core = { workspace = true }
 mc-blockchain-types = { workspace = true }
 mc-common = { workspace = true }
-mc-consensus-enclave-api = { workspace = true }
 mc-consensus-scp = { workspace = true }
 mc-crypto-digestible = { workspace = true, features = ["derive"] }
 mc-crypto-keys = { workspace = true }

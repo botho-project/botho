@@ -44,7 +44,6 @@ assert_matches = { workspace = true }
 maplit = { workspace = true }
 yaml-rust = { workspace = true }
 
-mc-fog-report-validation-test-utils = { workspace = true }
 mc-transaction-builder = { workspace = true, features = ["test-only"] }
 mc-util-from-random = { workspace = true }
 mc-util-test-helper = { workspace = true }

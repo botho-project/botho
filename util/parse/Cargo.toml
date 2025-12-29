@@ -11,4 +11,3 @@ rust-version = { workspace = true }
 [dependencies]
 hex = { workspace = true }
 itertools = { workspace = true }
-mc-sgx-css = { workspace = true }

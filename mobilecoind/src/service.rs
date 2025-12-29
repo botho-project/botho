@@ -31,7 +31,6 @@ use mc_common::{
 use mc_connection::{BlockInfo, BlockchainConnection, UserTxConnection};
 use mc_core::slip10::Slip10KeyGenerator;
 use mc_crypto_keys::{CompressedRistrettoPublic, RistrettoPrivate, RistrettoPublic};
-use mc_fog_report_validation::FogPubkeyResolver;
 use mc_ledger_db::{Error as LedgerError, Ledger, LedgerDB};
 use mc_ledger_sync::{NetworkState, PollingNetworkState};
 use mc_mobilecoind_api::{

@@ -1,4 +1,5 @@
 // Copyright (c) 2018-2024 The MobileCoin Foundation
+// Copyright (c) 2024 Cadence Foundation
 
 //! A builder object for signed contingent inputs (see MCIP #31)
 //! This plays a similar role to the transaction builder.
@@ -8,12 +9,11 @@ use crate::{
     TxBuilderError,
 };
 use alloc::{boxed::Box, vec::Vec};
-use core::cmp::min;
 use mc_account_keys::PublicAddress;
 use mc_crypto_keys::RistrettoPrivate;
 use mc_crypto_ring_signature_signer::{RingSigner, SignableInputRing};
-use mc_fog_report_validation::FogPubkeyResolver;
 use mc_transaction_core::{
+    encrypted_fog_hint::EncryptedFogHint,
     ring_ct::OutputSecret,
     ring_signature::Scalar,
     tx::{TxIn, TxOut},
@@ -25,19 +25,19 @@ use mc_util_from_random::FromRandom;
 use rand_core::{CryptoRng, RngCore};
 
 /// Helper utility for creating signed contingent inputs with required outputs,
-/// and attaching fog hint and memos as appropriate.
+/// and attaching memos as appropriate.
 ///
-/// This is generic over FogPubkeyResolver because there are several reasonable
-/// implementations of that.
-///
-/// This is generic over MemoBuilder to allow injecting a policy for how to
-/// use the memos in the TxOuts.
+/// Note: Cadence does not use Fog services. All encrypted fog hints are fake
+/// placeholders for protocol compatibility.
 #[derive(Debug)]
-pub struct SignedContingentInputBuilder<FPR: FogPubkeyResolver> {
+pub struct SignedContingentInputBuilder {
     /// The block version that we are targeting for this input
     block_version: BlockVersion,
     /// The input which is being signed
     input_credentials: InputCredentials,
+    /// Global ledger indices for each TxOut in the ring. These are used by
+    /// SCI recipients to look up ring members from the ledger.
+    ring_global_indices: Vec<u64>,
     /// The outputs required by the rules for this signed input, and associated
     /// secrets
     required_outputs_and_secrets: Vec<(TxOut, OutputSecret)>,
@@ -55,12 +55,6 @@ pub struct SignedContingentInputBuilder<FPR: FogPubkeyResolver> {
     /// The minimum partial fill value, if any. This is in the token id of the
     /// partial fill change output. (See MCIP #42).
     min_partial_fill_value: u64,
-    /// The source of validated fog pubkeys used for this signed contingent
-    /// input
-    fog_resolver: FPR,
-    /// The limit on the tombstone block value imposed by pubkey_expiry values
-    /// in fog pubkeys used so far
-    fog_tombstone_block_limit: u64,
     /// A policy object implementing MemoBuilder which constructs memos for
     /// the outputs which are required by the rules.
     ///
@@ -71,28 +65,27 @@ pub struct SignedContingentInputBuilder<FPR: FogPubkeyResolver> {
     memo_builder: Option<Box<dyn MemoBuilder + 'static + Send + Sync>>,
 }
 
-impl<FPR: FogPubkeyResolver> SignedContingentInputBuilder<FPR> {
+impl SignedContingentInputBuilder {
     /// Initializes a new SignedContingentInputBuilder.
     ///
     /// # Arguments
     /// * `block_version` - The block version rules to use when signing the
     ///   input
     /// * `input_credentials` - Credentials for the input we are signing
-    /// * `tx_out_global_indices` - Global indices for the tx out's in the ring
-    /// * `fog_resolver` - Source of validated fog keys to use with outputs for
-    ///   this signed contingent input
+    /// * `ring_global_indices` - Global ledger indices for each TxOut in the
+    ///   ring
     /// * `memo_builder` - An object which creates memos for the TxOuts in this
     ///   signed contingent input
     pub fn new<MB: MemoBuilder + 'static + Send + Sync>(
         block_version: BlockVersion,
         input_credentials: InputCredentials,
-        fog_resolver: FPR,
+        ring_global_indices: Vec<u64>,
         memo_builder: MB,
     ) -> Result<Self, SignedContingentInputBuilderError> {
         Self::new_with_box(
             block_version,
             input_credentials,
-            fog_resolver,
+            ring_global_indices,
             Box::new(memo_builder),
         )
     }
@@ -103,21 +96,20 @@ impl<FPR: FogPubkeyResolver> SignedContingentInputBuilder<FPR> {
     /// # Arguments
     /// * `block_version` - The block version to use when signing the input
     /// * `input_credentials` - Credentials for the input we are signing
-    /// * `tx_out_global_indices` - Global indices for the tx out's in the ring
-    /// * `fog_resolver` - Source of validated fog keys to use with outputs for
-    ///   this signed contingent input
+    /// * `ring_global_indices` - Global ledger indices for each TxOut in the
+    ///   ring
     /// * `memo_builder` - An object which creates memos for the TxOuts in this
     ///   signed contingent input
     pub fn new_with_box(
         block_version: BlockVersion,
         input_credentials: InputCredentials,
-        fog_resolver: FPR,
+        ring_global_indices: Vec<u64>,
         mut memo_builder: Box<dyn MemoBuilder + Send + Sync>,
     ) -> Result<Self, SignedContingentInputBuilderError> {
-        if input_credentials.ring.len() != input_credentials.membership_proofs.len() {
-            return Err(SignedContingentInputBuilderError::MissingProofs(
+        if ring_global_indices.len() != input_credentials.ring.len() {
+            return Err(SignedContingentInputBuilderError::RingIndicesMismatch(
                 input_credentials.ring.len(),
-                input_credentials.membership_proofs.len(),
+                ring_global_indices.len(),
             ));
         }
         // The fee is paid by the party using the transaction builder, not the
@@ -127,13 +119,12 @@ impl<FPR: FogPubkeyResolver> SignedContingentInputBuilder<FPR> {
         Ok(Self {
             block_version,
             input_credentials,
+            ring_global_indices,
             required_outputs_and_secrets: Vec::new(),
             tombstone_block: u64::MAX,
             partial_fill_outputs: Vec::new(),
             partial_fill_change: None,
             min_partial_fill_value: 0u64,
-            fog_resolver,
-            fog_tombstone_block_limit: u64::MAX,
             memo_builder: Some(memo_builder),
         })
     }
@@ -161,9 +152,8 @@ impl<FPR: FogPubkeyResolver> SignedContingentInputBuilder<FPR> {
             .memo_builder
             .take()
             .expect("memo builder is missing, this is a logic error");
-        let result = self.add_required_output_with_fog_hint_address(
+        let result = self.add_required_output_internal(
             amount,
-            recipient,
             recipient,
             |memo_ctxt| mb.make_memo_for_output(amount, recipient, memo_ctxt),
             rng,
@@ -192,10 +182,9 @@ impl<FPR: FogPubkeyResolver> SignedContingentInputBuilder<FPR> {
     /// # Arguments
     /// * `amount` - The amount of this change output.
     /// * `change_destination` - An object including both a primary address and
-    ///   a change subaddress to use to create this change output. The primary
-    ///   address is used for the fog hint, the change subaddress owns the
-    ///   change output. These can both be obtained from an account key, but
-    ///   this API does not require the account key.
+    ///   a change subaddress to use to create this change output. The change
+    ///   subaddress owns the change output. These can both be obtained from an
+    ///   account key, but this API does not require the account key.
     /// * `rng` - RNG used to generate blinding for commitment
     pub fn add_required_change_output<RNG: CryptoRng + RngCore>(
         &mut self,
@@ -210,10 +199,9 @@ impl<FPR: FogPubkeyResolver> SignedContingentInputBuilder<FPR> {
             .memo_builder
             .take()
             .expect("memo builder is missing, this is a logic error");
-        let result = self.add_required_output_with_fog_hint_address(
+        let result = self.add_required_output_internal(
             amount,
             &change_destination.change_subaddress,
-            &change_destination.primary_address,
             |memo_ctxt| mb.make_memo_for_change_output(amount, change_destination, memo_ctxt),
             rng,
         );
@@ -222,34 +210,22 @@ impl<FPR: FogPubkeyResolver> SignedContingentInputBuilder<FPR> {
         result
     }
 
-    /// Add a required output to the rules, using `fog_hint_address` to
-    /// construct the fog hint.
-    ///
-    /// This is a private implementation detail, and generally, fog users expect
-    /// that the transactions that they receive from fog belong to the account
-    /// that they are using. The only known use-case where recipient and
-    /// fog_hint_address are different is when sending change transactions
-    /// to oneself, when oneself is a fog user. Sending the change to the
-    /// main subaddress means that you don't have to hit fog once for the
-    /// main subaddress and once for the change subaddress, so it cuts the
-    /// number of requests in half.
+    /// Add a required output to the rules.
     ///
     /// # Arguments
     /// * `amount` - The amount of this output
     /// * `recipient` - The recipient's public address
-    /// * `fog_hint_address` - The public address used to create the fog hint
     /// * `memo_fn` - The memo function to use (see TxOut::new_with_memo)
     /// * `rng` - RNG used to generate blinding for commitment
-    fn add_required_output_with_fog_hint_address<RNG: CryptoRng + RngCore>(
+    fn add_required_output_internal<RNG: CryptoRng + RngCore>(
         &mut self,
         amount: Amount,
         recipient: &PublicAddress,
-        fog_hint_address: &PublicAddress,
         memo_fn: impl FnOnce(MemoContext) -> Result<MemoPayload, NewMemoError>,
         rng: &mut RNG,
     ) -> Result<(TxOut, TxOutConfirmationNumber), TxBuilderError> {
-        let (hint, pubkey_expiry) =
-            crate::transaction_builder::create_fog_hint(fog_hint_address, &self.fog_resolver, rng)?;
+        // Cadence doesn't use Fog - use fake hint for protocol compatibility
+        let hint = EncryptedFogHint::fake_onetime_hint(rng);
 
         let tx_private_key = RistrettoPrivate::from_random(rng);
         let (tx_out, shared_secret) = crate::transaction_builder::create_output_with_fog_hint(
@@ -268,8 +244,6 @@ impl<FPR: FogPubkeyResolver> SignedContingentInputBuilder<FPR> {
             .expect("SignedContingentInputBuilder created an invalid Amount");
         let output_secret = OutputSecret { amount, blinding };
 
-        self.impose_tombstone_block_limit(pubkey_expiry);
-
         self.required_outputs_and_secrets
             .push((tx_out.clone(), output_secret));
 
@@ -278,22 +252,13 @@ impl<FPR: FogPubkeyResolver> SignedContingentInputBuilder<FPR> {
         Ok((tx_out, confirmation))
     }
 
-    /// Sets the tombstone block, clamping to smallest pubkey expiry value.
+    /// Sets the tombstone block.
     ///
     /// # Arguments
     /// * `tombstone_block` - Tombstone block number.
     pub fn set_tombstone_block(&mut self, tombstone_block: u64) -> u64 {
-        self.tombstone_block = min(tombstone_block, self.fog_tombstone_block_limit);
+        self.tombstone_block = tombstone_block;
         self.tombstone_block
-    }
-
-    /// Reduce the fog_tombstone_block_limit value by the amount specified,
-    /// and propagate this constraint to self.tombstone_block
-    fn impose_tombstone_block_limit(&mut self, pubkey_expiry: u64) {
-        // Reduce fog tombstone block limit value if necessary
-        self.fog_tombstone_block_limit = min(self.fog_tombstone_block_limit, pubkey_expiry);
-        // Reduce tombstone_block value if necessary
-        self.tombstone_block = min(self.fog_tombstone_block_limit, self.tombstone_block);
     }
 
     /// Add a non-change partial fill output to the input rules.
@@ -319,9 +284,8 @@ impl<FPR: FogPubkeyResolver> SignedContingentInputBuilder<FPR> {
             .memo_builder
             .take()
             .expect("memo builder is missing, this is a logic error");
-        let result = self.make_partial_fill_output_with_fog_hint_address(
+        let result = self.make_partial_fill_output_internal(
             amount,
-            recipient,
             recipient,
             |memo_ctxt| mb.make_memo_for_output(amount, recipient, memo_ctxt),
             rng,
@@ -349,10 +313,9 @@ impl<FPR: FogPubkeyResolver> SignedContingentInputBuilder<FPR> {
     /// # Arguments
     /// * `amount` - The amount of this change output.
     /// * `change_destination` - An object including both a primary address and
-    ///   a change subaddress to use to create this change output. The primary
-    ///   address is used for the fog hint, the change subaddress owns the
-    ///   change output. These can both be obtained from an account key, but
-    ///   this API does not require the account key.
+    ///   a change subaddress to use to create this change output. The change
+    ///   subaddress owns the change output. These can both be obtained from an
+    ///   account key, but this API does not require the account key.
     /// * `rng` - RNG used to generate blinding for commitment
     pub fn add_partial_fill_change_output<RNG: CryptoRng + RngCore>(
         &mut self,
@@ -371,10 +334,9 @@ impl<FPR: FogPubkeyResolver> SignedContingentInputBuilder<FPR> {
             .memo_builder
             .take()
             .expect("memo builder is missing, this is a logic error");
-        let result = self.make_partial_fill_output_with_fog_hint_address(
+        let result = self.make_partial_fill_output_internal(
             amount,
             &change_destination.change_subaddress,
-            &change_destination.primary_address,
             |memo_ctxt| mb.make_memo_for_change_output(amount, change_destination, memo_ctxt),
             rng,
         );
@@ -385,22 +347,19 @@ impl<FPR: FogPubkeyResolver> SignedContingentInputBuilder<FPR> {
         Ok((revealed_tx_out.tx_out, confirmation_number))
     }
 
-    /// Create a partial fill output for the rules, using `fog_hint_address` to
-    /// construct the fog hint.
+    /// Create a partial fill output for the rules.
     ///
     /// This is a private implementation detail.
     ///
     /// # Arguments
     /// * `amount` - The amount of this output
     /// * `recipient` - The recipient's public address
-    /// * `fog_hint_address` - The public address used to create the fog hint
     /// * `memo_fn` - The memo function to use (see TxOut::new_with_memo)
     /// * `rng` - RNG used to generate blinding for commitment
-    fn make_partial_fill_output_with_fog_hint_address<RNG: CryptoRng + RngCore>(
+    fn make_partial_fill_output_internal<RNG: CryptoRng + RngCore>(
         &mut self,
         amount: Amount,
         recipient: &PublicAddress,
-        fog_hint_address: &PublicAddress,
         memo_fn: impl FnOnce(MemoContext) -> Result<MemoPayload, NewMemoError>,
         rng: &mut RNG,
     ) -> Result<(RevealedTxOut, TxOutConfirmationNumber), TxBuilderError> {
@@ -411,8 +370,8 @@ impl<FPR: FogPubkeyResolver> SignedContingentInputBuilder<FPR> {
             ));
         }
 
-        let (hint, pubkey_expiry) =
-            crate::transaction_builder::create_fog_hint(fog_hint_address, &self.fog_resolver, rng)?;
+        // Cadence doesn't use Fog - use fake hint for protocol compatibility
+        let hint = EncryptedFogHint::fake_onetime_hint(rng);
 
         let tx_private_key = RistrettoPrivate::from_random(rng);
         let (tx_out, shared_secret) = crate::transaction_builder::create_output_with_fog_hint(
@@ -423,7 +382,6 @@ impl<FPR: FogPubkeyResolver> SignedContingentInputBuilder<FPR> {
             memo_fn,
             &tx_private_key,
         )?;
-        self.impose_tombstone_block_limit(pubkey_expiry);
 
         let amount_shared_secret =
             MaskedAmount::compute_amount_shared_secret(self.block_version, &shared_secret)?;
@@ -495,21 +453,12 @@ impl<FPR: FogPubkeyResolver> SignedContingentInputBuilder<FPR> {
             min_partial_fill_value: self.min_partial_fill_value,
         };
 
-        // Get the tx out indices from the proofs in the input credentials,
-        // after sorting has happened
-        let tx_out_global_indices: Vec<u64> = self
-            .input_credentials
-            .membership_proofs
-            .iter()
-            .map(|proof| proof.index)
-            .collect();
+        // Use the ring global indices provided at construction time
+        let tx_out_global_indices = self.ring_global_indices;
 
         // Now we can create the mlsag
         let mut tx_in = TxIn::from(&self.input_credentials);
         tx_in.input_rules = Some(input_rules);
-        // Clear the merkle proofs, because this makes the SCI smaller,
-        // and the recipient needs to regenerate them later most likely anyways.
-        tx_in.proofs.clear();
         let ring = SignableInputRing::try_from(self.input_credentials)?;
 
         let pseudo_output_blinding = Scalar::random(rng);

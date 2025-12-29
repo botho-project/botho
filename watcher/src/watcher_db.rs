@@ -21,7 +21,6 @@ use lmdb::{
     Cursor, Database, DatabaseFlags, Environment, EnvironmentFlags, RwTransaction, Transaction,
     WriteFlags,
 };
-use mc_attest_core::EvidenceKind;
 use mc_util_repr_bytes::typenum::Unsigned;
 use std::{
     path::Path,

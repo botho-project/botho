@@ -11,15 +11,12 @@ use crate::{
     SVC_COUNTERS,
 };
 use grpcio::{RpcContext, RpcStatus, UnarySink};
-use mc_attest_api::attest::Message;
-use mc_attest_enclave_api::ClientSession;
 use mc_common::{logger::Logger, LruCache};
 use mc_consensus_api::{
     consensus_client::{ConsensusClientApi, ProposeMintConfigTxResponse, ProposeMintTxResponse},
     consensus_common::ProposeTxResponse,
     consensus_config::{ConsensusNodeConfig, TokenConfig},
 };
-use mc_consensus_enclave::ConsensusEnclave;
 use mc_consensus_service_config::Config;
 use mc_ledger_db::Ledger;
 use mc_peers::ConsensusValue;

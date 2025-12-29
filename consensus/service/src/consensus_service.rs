@@ -18,8 +18,6 @@ use base64::{engine::general_purpose::URL_SAFE as URL_SAFE_BASE64_ENGINE, Engine
 use displaydoc::Display;
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment, Server, ServerBuilder};
-use mc_attest_api::attest::create_attested_api;
-use mc_attest_enclave_api::{ClientSession, PeerSession};
 use mc_common::{
     logger::{log, Logger},
     time::TimeProvider,
@@ -27,12 +25,10 @@ use mc_common::{
 };
 use mc_connection::{Connection, ConnectionManager};
 use mc_consensus_api::{consensus_client, consensus_common, consensus_peer};
-use mc_consensus_enclave::{ConsensusEnclave, Error as ConsensusEnclaveError};
 use mc_consensus_service_config::{Config, Error as ConfigError};
 use mc_crypto_keys::DistinguishedEncoding;
 use mc_ledger_db::{Error as LedgerDbError, Ledger, LedgerDB};
 use mc_peers::{ConsensusValue, PeerConnection, ThreadedBroadcaster, VerifiedConsensusMsg};
-use mc_sgx_report_cache_untrusted::{Error as ReportCacheError, ReportCacheThread};
 use mc_util_grpc::{
     AdminServer, AnonymousAuthenticator, Authenticator, BuildInfoService,
     ConnectionUriGrpcioServer, GetConfigJsonFn, HealthCheckStatus, HealthService,

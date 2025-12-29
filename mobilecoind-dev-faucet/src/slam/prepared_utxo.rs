@@ -5,7 +5,6 @@ use mc_account_keys::{AccountKey, PublicAddress};
 use mc_api::ConversionError;
 use mc_common::logger::{log, Logger};
 use mc_crypto_ring_signature_signer::{LocalRingSigner, OneTimeKeyDeriveData};
-use mc_fog_report_resolver::FogResolver;
 use mc_mobilecoind_api::{self as api, mobilecoind_api::MobilecoindApiClient};
 use mc_transaction_builder::{EmptyMemoBuilder, InputCredentials, TransactionBuilder};
 use mc_transaction_core::{

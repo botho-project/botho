@@ -9,7 +9,6 @@ rust-version = { workspace = true }
 [dependencies]
 # MobileCoin dependencies
 mc-account-keys = { workspace = true }
-mc-attest-verifier-types = { workspace = true }
 mc-common = { workspace = true }
 mc-consensus-scp-types = { workspace = true }
 mc-crypto-digestible = { workspace = true, features = ["dalek", "derive"] }

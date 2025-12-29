@@ -1,13 +1,12 @@
 // Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2024 Cadence Foundation
 #![deny(missing_docs)]
 
 //! Miscellaneous parsing and formatting utilities
 
 use core::fmt::Display;
 use itertools::Itertools;
-use std::{fs, str::FromStr, time::Duration};
-
-pub use mc_sgx_css::Signature as CssSignature;
+use std::{str::FromStr, time::Duration};
 
 mod hex;
 pub use crate::hex::parse_hex;
@@ -24,17 +23,6 @@ pub fn parse_duration_in_seconds(src: &str) -> Result<Duration, std::num::ParseI
 /// This can be used with Clap
 pub fn parse_duration_in_millis(src: &str) -> Result<Duration, std::num::ParseIntError> {
     Ok(Duration::from_millis(u64::from_str(src)?))
-}
-
-/// Load a CSS file from disk. This represents a signature over an enclave,
-/// and contains attestation parameters like MRENCLAVE and MRSIGNER as well
-/// as other stuff.
-pub fn load_css_file(filename: &str) -> Result<CssSignature, String> {
-    let bytes =
-        fs::read(filename).map_err(|err| format!("Failed reading file '{filename}': {err}"))?;
-    let signature = CssSignature::try_from(&bytes[..])
-        .map_err(|err| format!("Failed parsing CSS file '{filename}': {err}"))?;
-    Ok(signature)
 }
 
 /// Helper to format a sequence as a comma-separated list

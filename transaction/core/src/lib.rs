@@ -1,7 +1,8 @@
 // Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2024 Cadence Foundation
 
-//! MobileCoin transaction data types, transaction construction and validation
-//! routines
+//! Cadence transaction data types, transaction construction and validation
+//! routines. Includes proof-of-work mining transaction support.
 
 #![no_std]
 #![deny(missing_docs)]
@@ -18,9 +19,11 @@ mod revealed_tx_out;
 mod token;
 mod tx_error;
 
+pub mod emission;
 pub mod encrypted_fog_hint;
 pub mod fog_hint;
 pub mod membership_proofs;
+pub mod mining_tx;
 pub mod mint;
 pub mod range_proofs;
 pub mod ring_ct;
@@ -28,9 +31,11 @@ pub mod tx;
 pub mod tx_summary;
 pub mod validation;
 
+pub use emission::{block_reward, INITIAL_REWARD, MAX_SUPPLY, TAIL_EMISSION};
 pub use fee_map::{Error as FeeMapError, FeeMap, SMALLEST_MINIMUM_FEE_LOG2};
 pub use input_rules::{InputRuleError, InputRules};
 pub use memo::{EncryptedMemo, MemoError, MemoPayload};
+pub use mining_tx::{DifficultyTarget, MiningTx, MiningTxError};
 pub use revealed_tx_out::{try_reveal_amount, RevealedTxOut, RevealedTxOutError};
 pub use token::{tokens, Token};
 pub use tx::MemoContext;

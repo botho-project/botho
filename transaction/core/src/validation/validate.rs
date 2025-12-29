@@ -7,8 +7,7 @@ extern crate alloc;
 use super::error::{TransactionValidationError, TransactionValidationResult};
 use crate::{
     constants::*,
-    membership_proofs::{derive_proof_at_index, is_membership_proof_valid},
-    tx::{Tx, TxOut, TxOutMembershipProof, TxPrefix},
+    tx::{Tx, TxOut, TxPrefix},
     Amount, BlockVersion, TokenId,
 };
 use alloc::{format, vec::Vec};
@@ -23,16 +22,16 @@ use rand_core::{CryptoRng, RngCore};
 /// * `current_block_index` - The index of the current block that is being
 ///   built.
 /// * `block_version` - The version of the transaction rules we are testing
-/// * `root_proofs` - Membership proofs for each input ring element contained in
-///   `tx`.
 /// * `minimum_fee` - The minimum fee for the token indicated by
 ///   tx.prefix.fee_token_id
 /// * `csprng` - Cryptographically secure random number generator.
+///
+/// Note: Cadence does not use merkle membership proofs. Ring members are
+/// validated directly against the UTXO set.
 pub fn validate<R: RngCore + CryptoRng>(
     tx: &Tx,
     current_block_index: u64,
     block_version: BlockVersion,
-    root_proofs: &[TxOutMembershipProof],
     minimum_fee: u64,
     csprng: &mut R,
 ) -> TransactionValidationResult<()> {
@@ -54,7 +53,8 @@ pub fn validate<R: RngCore + CryptoRng>(
 
     validate_inputs_are_sorted(&tx.prefix)?;
 
-    validate_membership_proofs(&tx.prefix, root_proofs)?;
+    // Note: Cadence does not use merkle membership proofs - ring members
+    // are validated directly against the UTXO set by the validator.
 
     validate_signature(block_version, tx, csprng)?;
 
@@ -330,116 +330,9 @@ pub fn validate_transaction_fee(tx: &Tx, minimum_fee: u64) -> TransactionValidat
     }
 }
 
-/// Validate TxOut membership proofs.
-///
-/// # Arguments
-/// * `tx_prefix` - Prefix of the transaction being validated.
-/// * `root_proofs` - Proofs of membership, provided by the untrusted system,
-///   that are used to check the root hashes of the transaction's membership
-///   proofs.
-pub fn validate_membership_proofs(
-    tx_prefix: &TxPrefix,
-    root_proofs: &[TxOutMembershipProof],
-) -> TransactionValidationResult<()> {
-    // Each ring element must have a corresponding membership proof.
-    for tx_in in &tx_prefix.inputs {
-        if tx_in.ring.len() != tx_in.proofs.len() {
-            return Err(TransactionValidationError::MissingTxOutMembershipProof);
-        }
-    }
-
-    let tx_out_with_membership_proof: Vec<(&TxOut, &TxOutMembershipProof)> = tx_prefix
-        .inputs
-        .iter()
-        .flat_map(|tx_in| {
-            let zipped: Vec<(&TxOut, &TxOutMembershipProof)> =
-                tx_in.ring.iter().zip(&tx_in.proofs).collect();
-            zipped
-        })
-        .collect();
-
-    // Each TxOut used as input must have a corresponding "root proof".
-    // This could later be optimized if multiple input TxOuts have membership proofs
-    // that share the same root hash.
-    if tx_out_with_membership_proof.len() != root_proofs.len() {
-        return Err(TransactionValidationError::InvalidLedgerContext);
-    }
-
-    // Each root proof must contain valid ranges.
-    // (Ranges in the transaction's membership proofs are checked in
-    // `is_membership_proof_valid`).
-    for root_proof in root_proofs {
-        if root_proof
-            .elements
-            .iter()
-            .any(|element| element.range.from > element.range.to)
-        {
-            return Err(TransactionValidationError::MembershipProofValidationError);
-        }
-    }
-
-    struct TxOutWithProofs<'a> {
-        /// A TxOut used as an input ring element.
-        tx_out: &'a TxOut,
-
-        /// A membership proof for `tx_out` provided by the transaction author.
-        membership_proof: &'a TxOutMembershipProof,
-
-        /// A "root" membership proof, provided by the untrusted ledger server.
-        root_proof: &'a TxOutMembershipProof,
-    }
-
-    let mut tx_outs_with_proofs: Vec<TxOutWithProofs> = Vec::new();
-    for (i, (tx_out, membership_proof)) in tx_out_with_membership_proof.iter().enumerate() {
-        let root_proof: &TxOutMembershipProof = &root_proofs[i];
-        let tx_out_with_proofs = TxOutWithProofs {
-            tx_out,
-            membership_proof,
-            root_proof,
-        };
-        tx_outs_with_proofs.push(tx_out_with_proofs);
-    }
-
-    // Validate the membership proof for each TxOut used as an input ring element.
-    for tx_out_with_proofs in tx_outs_with_proofs {
-        match derive_proof_at_index(tx_out_with_proofs.root_proof) {
-            Err(_e) => {
-                return Err(TransactionValidationError::InvalidLedgerContext);
-            }
-            Ok(derived_proof) => {
-                match crate::membership_proofs::compute_implied_merkle_root(&derived_proof) {
-                    Err(_) => {
-                        return Err(TransactionValidationError::InvalidLedgerContext);
-                    }
-                    Ok(root_element) => {
-                        // Check the tx_out's membership proof against this root hash.
-                        match is_membership_proof_valid(
-                            tx_out_with_proofs.tx_out,
-                            tx_out_with_proofs.membership_proof,
-                            root_element.hash.as_ref(),
-                        ) {
-                            Err(_e) => {
-                                return Err(
-                                    TransactionValidationError::MembershipProofValidationError,
-                                );
-                            }
-                            Ok(is_valid) => {
-                                if !is_valid {
-                                    return Err(
-                                        TransactionValidationError::InvalidTxOutMembershipProof,
-                                    );
-                                }
-                                // Else, the membership proof is valid.
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(())
-}
+// Note: validate_membership_proofs was removed as part of Cadence fork.
+// Cadence does not use merkle membership proofs - ring members are validated
+// directly against the UTXO set.
 
 /// The transaction must be not have expired, or be too long-lived.
 ///

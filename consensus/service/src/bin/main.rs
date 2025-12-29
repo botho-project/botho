@@ -4,12 +4,10 @@
 
 //! Entrypoint for the MobileCoin server.
 
-use mc_attest_verifier::DEBUG_ENCLAVE;
 use mc_common::{
     logger::{create_app_logger, log, o},
     time::SystemTimeProvider,
 };
-use mc_consensus_enclave::{BlockchainConfig, ConsensusServiceSgxEnclave, ENCLAVE_FILE};
 use mc_consensus_service::{
     consensus_service::{ConsensusService, ConsensusServiceError},
     mint_tx_manager::MintTxManagerImpl,

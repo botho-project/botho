@@ -11,7 +11,6 @@ use mc_connection::{
     Result as ConnectionResult,
 };
 use mc_consensus_api::consensus_peer::{ConsensusMsgResponse, ConsensusMsgResult};
-use mc_consensus_enclave_api::{TxContext, WellFormedEncryptedTx};
 use mc_consensus_scp::{
     msg::{Msg, NominatePayload},
     QuorumSet, SlotIndex, Topic,

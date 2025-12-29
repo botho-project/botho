@@ -9,12 +9,10 @@
 
 #![allow(clippy::result_large_err)]
 use crate::counters;
-use mc_attest_enclave_api::{EnclaveMessage, PeerSession};
 use mc_common::{
     logger::{log, Logger},
     HashMap, HashSet,
 };
-use mc_consensus_enclave::{
     ConsensusEnclave, TxContext, WellFormedEncryptedTx, WellFormedTxContext,
 };
 use mc_transaction_core::{

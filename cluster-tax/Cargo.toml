@@ -1,0 +1,25 @@
+[package]
+name = "mc-cluster-tax"
+version = "0.1.0"
+edition = "2021"
+rust-version = { workspace = true }
+description = "Cluster-based progressive transaction fees"
+
+[[bin]]
+name = "cluster-tax-sim"
+path = "src/bin/sim.rs"
+
+[dependencies]
+# Serialization (optional for now)
+serde = { workspace = true, features = ["derive"], optional = true }
+# For CLI
+clap = { workspace = true, features = ["derive"], optional = true }
+# For random simulation
+rand = { workspace = true, features = ["std", "std_rng"], optional = true }
+
+[dev-dependencies]
+
+[features]
+default = []
+serde = ["dep:serde"]
+cli = ["dep:clap", "dep:rand"]

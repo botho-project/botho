@@ -1,7 +1,7 @@
 // Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2024 Cadence Foundation
 
-//! Utilities for creating MobileCoin transactions, intended for client-side
-//! use and not intended to be used inside of enclaves.
+//! Utilities for creating Cadence transactions, intended for client-side use.
 #![no_std]
 #![deny(missing_docs)]
 

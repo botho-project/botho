@@ -4,13 +4,8 @@
 
 use grpcio::Environment;
 use mc_account_keys::PublicAddress;
-use mc_attestation_verifier::{TrustedIdentity, TrustedMrSignerIdentity};
 use mc_common::logger::Logger;
-use mc_fog_report_connection::GrpcFogReportConnection;
-use mc_fog_report_resolver::FogResolver;
-use mc_fog_report_validation::{FogPubkeyResolver, FullyValidatedFogPubkey};
 use mc_rand::McRng;
-use mc_sgx_css::Signature;
 use mc_transaction_core::{encrypted_fog_hint::EncryptedFogHint, fog_hint::FogHint};
 use mc_util_uri::FogUri;
 use std::{str::FromStr, sync::Arc};

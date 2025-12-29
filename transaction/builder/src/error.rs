@@ -1,8 +1,8 @@
 // Copyright (c) 2018-2022 The MobileCoin Foundation
+// Copyright (c) 2024 Cadence Foundation
 
 use displaydoc::Display;
 use mc_crypto_ring_signature_signer::Error as SignerError;
-use mc_fog_report_validation::FogPubkeyError;
 use mc_transaction_core::{
     ring_ct::Error as RingCtError, AmountError, NewMemoError, NewTxError, TokenId,
     TxOutConversionError,
@@ -40,9 +40,6 @@ pub enum TxBuilderError {
 
     /// No inputs
     NoInputs,
-
-    /// Fog public key: {0}
-    FogPublicKey(FogPubkeyError),
 
     /// Key: {0}
     KeyError(mc_crypto_keys::KeyError),
@@ -117,12 +114,6 @@ impl From<SignerError> for TxBuilderError {
     }
 }
 
-impl From<FogPubkeyError> for TxBuilderError {
-    fn from(src: FogPubkeyError) -> Self {
-        TxBuilderError::FogPublicKey(src)
-    }
-}
-
 impl From<NewMemoError> for TxBuilderError {
     fn from(src: NewMemoError) -> Self {
         TxBuilderError::Memo(src)
@@ -138,8 +129,8 @@ impl From<TxOutConversionError> for TxBuilderError {
 /// An error that can occur when creating a signed contingent input builder
 #[derive(Debug, Display)]
 pub enum SignedContingentInputBuilderError {
-    /// Missing proofs: {0} ring elements, {1} proofs
-    MissingProofs(usize, usize),
+    /// Ring indices mismatch: {0} ring elements, {1} indices
+    RingIndicesMismatch(usize, usize),
     /// Memo: {0}
     Memo(NewMemoError),
 }

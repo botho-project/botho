@@ -5,12 +5,8 @@
 use crate::{config::SourceConfig, watcher_db::WatcherDB};
 use aes_gcm::Aes256Gcm;
 use grpcio::{CallOption, ChannelBuilder, Environment, MetadataBuilder};
-use mc_attest_ake::{
     AuthRequestOutput, ClientInitiate, Start, Transition, UnverifiedAttestationEvidence,
 };
-use mc_attest_api::attest::{AttestedApiClient, AuthMessage};
-use mc_attest_core::{EvidenceKind, VerificationReport, VerificationReportData};
-use mc_attest_verifier_types::prost;
 use mc_common::{
     logger::{log, Logger},
     time::SystemTimeProvider,

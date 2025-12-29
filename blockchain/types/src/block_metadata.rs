@@ -6,33 +6,24 @@ use crate::{
 };
 use ::prost::Message;
 use displaydoc::Display;
-use mc_attest_verifier_types::prost;
 use mc_common::ResponderId;
 use mc_crypto_digestible::Digestible;
 use mc_crypto_keys::{Ed25519Pair, Ed25519Public, Ed25519Signature, SignatureError};
 use serde::{Deserialize, Serialize};
 
 /// The attestation evidence variants for a block.
+/// Note: DcapEvidence removed in Cadence (SGX not used)
 #[derive(Clone, ::prost::Oneof, Deserialize, Display, Eq, PartialEq, Serialize, Digestible)]
 #[digestible(transparent)]
 pub enum AttestationEvidence {
     /// The attestation evidence is a [VerificationReport].
     #[prost(message, tag = 3)]
     VerificationReport(VerificationReport),
-    /// DCAP evidence
-    #[prost(message, tag = 5)]
-    DcapEvidence(prost::DcapEvidence),
 }
 
 impl From<VerificationReport> for AttestationEvidence {
     fn from(report: VerificationReport) -> Self {
         Self::VerificationReport(report)
-    }
-}
-
-impl From<prost::DcapEvidence> for AttestationEvidence {
-    fn from(evidence: prost::DcapEvidence) -> Self {
-        Self::DcapEvidence(evidence)
     }
 }
 

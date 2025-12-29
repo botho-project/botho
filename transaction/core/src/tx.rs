@@ -111,14 +111,8 @@ pub struct Tx {
     /// The transaction signature.
     #[prost(message, required, tag = "2")]
     pub signature: SignatureRctBulletproofs,
-
-    /// Client's belief about the minimum fee map, expressed as a merlin digest.
-    ///
-    /// The enclave must reject the proposal if this doesn't match the enclave's
-    /// belief, to protect the client from information disclosure attacks.
-    /// (This is TOB-MCCT-5)
-    #[prost(bytes, tag = "3")]
-    pub fee_map_digest: Vec<u8>,
+    // Field 3 was `fee_map_digest: Vec<u8>` - removed as part of SGX removal.
+    // It was used for enclave fee map verification (TOB-MCCT-5).
 }
 
 impl fmt::Display for Tx {
@@ -136,12 +130,6 @@ impl Tx {
     /// Key images "spent" by this transaction.
     pub fn key_images(&self) -> Vec<KeyImage> {
         self.signature.key_images()
-    }
-
-    /// Get the highest index of each membership proof referenced by the
-    /// transaction.
-    pub fn get_membership_proof_highest_indices(&self) -> Vec<u64> {
-        self.prefix.get_membership_proof_highest_indices()
     }
 
     /// Output public keys contained in this transaction.
@@ -212,22 +200,6 @@ impl TxPrefix {
         TxHash::from(self.digest32::<MerlinTranscript>(b"mobilecoin-tx-prefix"))
     }
 
-    /// Return the `highest_index` for each tx_out membership proof in this
-    /// transaction.
-    pub fn get_membership_proof_highest_indices(&self) -> Vec<u64> {
-        self.inputs
-            .iter()
-            .flat_map(|tx_in| {
-                let indices: Vec<u64> = tx_in
-                    .proofs
-                    .iter()
-                    .map(|tx_out_membership_proof| tx_out_membership_proof.highest_index)
-                    .collect();
-                indices
-            })
-            .collect()
-    }
-
     /// Get all output commitments.
     pub fn output_commitments(&self) -> Result<Vec<&CompressedCommitment>, TxOutConversionError> {
         self.outputs
@@ -251,11 +223,7 @@ pub struct TxIn {
     #[prost(message, repeated, tag = "1")]
     pub ring: Vec<TxOut>,
 
-    /// Proof that each TxOut in `ring` is in the ledger.
-    /// It would be nice to use [TxOutMembershipProof; RING_SIZE] here, but
-    /// Prost only works with Vec.
-    #[prost(message, repeated, tag = "2")]
-    pub proofs: Vec<TxOutMembershipProof>,
+    // Field 2 was `proofs: Vec<TxOutMembershipProof>` - removed as part of SGX removal
 
     /// Any rules associated to this input, per MCIP #31
     #[prost(message, tag = "3")]
@@ -269,14 +237,9 @@ impl TxIn {
     /// See MCIP #31 for rationale -- by not signing the whole TxPrefix, we
     /// allow that someone can create this signature who does not have the
     /// whole TxPrefix.
-    ///
-    /// The membership proofs are not signed, because it is useful to allow that
-    /// someone later may update those proofs. See MCIP #31 for discussion.
     pub fn signed_digest(&self) -> Option<[u8; 32]> {
         if self.input_rules.is_some() {
-            let mut this = self.clone();
-            this.proofs.clear();
-            Some(this.digest32::<MerlinTranscript>(b"mc-input-rules-digest"))
+            Some(self.digest32::<MerlinTranscript>(b"mc-input-rules-digest"))
         } else {
             None
         }
@@ -690,7 +653,6 @@ mod tests {
 
             let tx_in = TxIn {
                 ring: vec![tx_out.clone()],
-                proofs: vec![],
                 input_rules: None,
             };
 
@@ -713,11 +675,7 @@ mod tests {
             // TODO: use a meaningful signature.
             let signature = SignatureRctBulletproofs::default();
 
-            let tx = Tx {
-                prefix,
-                signature,
-                fee_map_digest: vec![],
-            };
+            let tx = Tx { prefix, signature };
 
             let recovered_tx: Tx = Tx::decode(&tx.encode_to_vec()[..]).unwrap();
             assert_eq!(tx, recovered_tx);

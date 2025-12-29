@@ -11,7 +11,6 @@ rust-version = { workspace = true }
 
 [dependencies]
 mc-account-keys = { workspace = true }
-mc-attest-verifier-types = { workspace = true }
 mc-blockchain-types = { workspace = true }
 mc-common = { workspace = true }
 mc-crypto-keys = { workspace = true }
@@ -29,8 +28,6 @@ mc-watcher-api = { workspace = true }
 bs58 = { workspace = true }
 crc = { workspace = true }
 displaydoc = { workspace = true }
-mc-sgx-core-types = { workspace = true }
-mc-sgx-dcap-types = { workspace = true }
 
 curve25519-dalek = { workspace = true }
 prost = { workspace = true }
@@ -42,11 +39,9 @@ mc-util-build-script = { workspace = true }
 cargo-emit = { workspace = true }
 
 [dev-dependencies]
-mc-attest-untrusted = { workspace = true }
 mc-blockchain-test-utils = { workspace = true }
 mc-crypto-ring-signature-signer = { workspace = true }
 mc-crypto-x509-test-vectors = { workspace = true }
-mc-fog-report-validation-test-utils = { workspace = true }
 mc-test-vectors-b58-encodings = { workspace = true }
 mc-transaction-builder = { workspace = true, features = ["test-only"] }
 mc-util-from-random = { workspace = true }

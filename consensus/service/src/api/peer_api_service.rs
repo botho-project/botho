@@ -11,8 +11,6 @@ use crate::{
     SVC_COUNTERS,
 };
 use grpcio::{RpcContext, RpcStatus, UnarySink};
-use mc_attest_api::attest::Message;
-use mc_attest_enclave_api::{EnclaveMessage, PeerSession};
 use mc_common::{
     logger::{log, Logger},
     ResponderId,
@@ -25,7 +23,6 @@ use mc_consensus_api::{
         TxHashesNotInCache,
     },
 };
-use mc_consensus_enclave::{ConsensusEnclave, Error};
 use mc_ledger_db::Ledger;
 use mc_peers::{ConsensusValue, TxProposeAAD};
 use mc_transaction_core::tx::TxHash;

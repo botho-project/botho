@@ -17,10 +17,6 @@ path = "src/bin/db-dump.rs"
 
 [dependencies]
 mc-api = { workspace = true }
-mc-attest-ake = { workspace = true }
-mc-attest-api = { workspace = true }
-mc-attest-core = { workspace = true }
-mc-attest-verifier-types = { workspace = true }
 mc-blockchain-types = { workspace = true }
 mc-common = { workspace = true, features = ["log"] }
 mc-connection = { workspace = true }

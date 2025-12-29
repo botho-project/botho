@@ -15,7 +15,6 @@ use mc_common::{
 };
 use mc_connection::{Connection, ConnectionManager, SyncConnection};
 use mc_consensus_api::consensus_peer::ConsensusMsgResult;
-use mc_consensus_enclave_api::WellFormedEncryptedTx;
 use mc_crypto_digestible::{Digestible, MerlinTranscript};
 use mc_transaction_core::tx::TxHash;
 use mc_util_uri::ConnectionUri;

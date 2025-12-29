@@ -11,7 +11,6 @@ rust-version = { workspace = true }
 
 [dependencies]
 mc-api = { workspace = true }
-mc-attest-api = { workspace = true }
 mc-ledger-db = { workspace = true }
 mc-transaction-core = { workspace = true }
 

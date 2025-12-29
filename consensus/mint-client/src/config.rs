@@ -12,7 +12,6 @@ use mc_crypto_keys::{
     DistinguishedEncoding, Ed25519Pair, Ed25519Private, Ed25519Public, Ed25519Signature, Signer,
 };
 use mc_crypto_multisig::MultiSig;
-use mc_sgx_css::Signature;
 use mc_transaction_core::{
     mint::{constants::NONCE_LENGTH, MintConfigTx, MintConfigTxPrefix, MintTx, MintTxPrefix},
     TokenId,

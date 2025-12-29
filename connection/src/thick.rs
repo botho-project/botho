@@ -21,12 +21,8 @@ use grpcio::{
     MetadataBuilder,
 };
 use mc_api::blockchain;
-use mc_attest_ake::{
     AuthResponseInput, ClientInitiate, Error as AkeError, Ready, Start, Transition,
 };
-use mc_attest_api::attest::{AttestedApiClient, Message};
-use mc_attest_core::EvidenceKind;
-use mc_attestation_verifier::TrustedIdentity;
 use mc_blockchain_types::{Block, BlockID, BlockIndex};
 use mc_common::{
     logger::{log, o, Logger},

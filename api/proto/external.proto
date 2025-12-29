@@ -236,8 +236,9 @@ message TxIn {
     // "Ring" of inputs, one of which is actually being spent.
     repeated TxOut ring = 1;
 
-    // Proof that each TxOut in `ring` is in the ledger.
-    repeated TxOutMembershipProof proofs = 2;
+    // Field 2 was `proofs` - removed as part of SGX removal
+    reserved 2;
+    reserved "proofs";
 
     // Any rules specified by the signed input
     InputRules input_rules = 3;
@@ -359,12 +360,9 @@ message Tx {
     // The RingCT signature on the prefix.
     SignatureRctBulletproofs signature = 2;
 
-    // Client's belief about the minimum fee map, expressed as a merlin digest.
-    //
-    // The enclave must reject the proposal if this doesn't match the enclave's
-    // belief, to protect the client from information disclosure attacks.
-    // (This is TOB-MCCT-5)
-    bytes fee_map_digest = 3;
+    // Field 3 was fee_map_digest (SGX enclave fee map verification) - removed
+    reserved 3;
+    reserved "fee_map_digest";
 }
 
 message TxHash {

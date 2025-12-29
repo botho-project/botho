@@ -23,7 +23,6 @@
 //! and might be renamed in the future to match this.
 
 use crate::tx_manager::UntrustedInterfaces as TxManagerUntrustedInterfaces;
-use mc_consensus_enclave::{TxContext, WellFormedTxContext};
 use mc_crypto_keys::CompressedRistrettoPublic;
 use mc_ledger_db::{Error as LedgerError, Ledger};
 use mc_transaction_core::{

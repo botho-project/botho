@@ -4,7 +4,6 @@
 
 use crate::error::{Result, RetryResult};
 use grpcio::Error as GrpcError;
-use mc_attest_core::EvidenceKind;
 use mc_blockchain_types::{Block, BlockID, BlockIndex};
 use mc_consensus_api::consensus_common::LastBlockInfoResponse;
 use mc_transaction_core::{tokens::Mob, tx::Tx, Token, TokenId};

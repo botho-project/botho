@@ -7,7 +7,7 @@ pub use mc_consensus_scp_types::test_utils::test_node_id;
 
 use mc_blockchain_types::{
     Block, BlockContents, BlockData, BlockID, BlockMetadata, BlockMetadataContents, BlockSignature,
-    BlockVersion, QuorumSet, VerificationReport,
+    BlockVersion, QuorumSet, VerificationReport, VerificationSignature,
 };
 use mc_common::ResponderId;
 use mc_crypto_keys::Ed25519Pair;
@@ -150,7 +150,9 @@ pub fn make_quorum_set(rng: &mut (impl RngCore + CryptoRng)) -> QuorumSet {
 
 /// Generate a [VerificationReport] from random bytes.
 pub fn make_verification_report(rng: &mut (impl RngCore + CryptoRng)) -> VerificationReport {
-    let sig = random_bytes_vec(42, rng).into();
+    let sig = Some(VerificationSignature {
+        contents: random_bytes_vec(42, rng),
+    });
     let chain_len = rng.gen_range(2..42);
     let chain = (1..=chain_len)
         .map(|n| random_bytes_vec(n as usize, rng))

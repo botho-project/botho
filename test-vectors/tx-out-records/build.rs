@@ -3,13 +3,9 @@
 use mc_account_keys::AccountKey;
 use mc_common::ResponderId;
 use mc_crypto_keys::RistrettoPrivate;
-use mc_fog_ingest_enclave_api::{IngestEnclave, IngestEnclaveInitParams};
-use mc_fog_ingest_enclave_impl::SgxIngestEnclave;
-use mc_fog_types::{
     ingest::TxsForIngest,
     view::{FogTxOut, TxOutRecord},
 };
-use mc_fog_view_protocol::UserPrivate;
 use mc_oblivious_traits::HeapORAMStorageCreator;
 use mc_test_vectors_definitions::tx_out_records::{
     CorrectTxOutRecordData, IncorrectTxOutRecordData,

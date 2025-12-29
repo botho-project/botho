@@ -19,7 +19,6 @@ use mc_common::{
     logger::{log, Logger},
     HashSet,
 };
-use mc_consensus_enclave::GovernorsMap;
 use mc_ledger_db::{Error as LedgerError, Ledger};
 use mc_transaction_core::{
     mint::{

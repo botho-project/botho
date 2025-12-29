@@ -20,28 +20,21 @@ test_utils = []
 [dependencies]
 mc-account-keys = { workspace = true }
 mc-api = { workspace = true }
-mc-attest-core = { workspace = true }
 mc-blockchain-types = { workspace = true }
 mc-common = { workspace = true, features = ["log"] }
 mc-connection = { workspace = true }
 mc-consensus-api = { workspace = true }
-mc-consensus-enclave-api = { workspace = true }
-mc-consensus-enclave-measurement = { workspace = true }
 mc-consensus-scp = { workspace = true }
 mc-core = { workspace = true, features = ["bip39"] }
 mc-crypto-digestible = { workspace = true, features = ["derive"] }
 mc-crypto-hashes = { workspace = true }
 mc-crypto-keys = { workspace = true }
 mc-crypto-ring-signature-signer = { workspace = true }
-mc-fog-report-connection = { workspace = true }
-mc-fog-report-resolver = { workspace = true }
-mc-fog-report-validation = { workspace = true }
 mc-ledger-db = { workspace = true }
 mc-ledger-migration = { workspace = true }
 mc-ledger-sync = { workspace = true }
 mc-mobilecoind-api = { workspace = true }
 mc-rand = { workspace = true }
-mc-sgx-css = { workspace = true }
 mc-t3-api = { workspace = true }
 mc-t3-connection = { workspace = true }
 mc-transaction-builder = { workspace = true }
@@ -65,7 +58,6 @@ displaydoc = { workspace = true }
 grpcio = { workspace = true, features = ["prost-codec"] }
 hex_fmt = { workspace = true }
 lmdb-rkv = { workspace = true }
-mc-attestation-verifier = { workspace = true }
 num_cpus = { workspace = true }
 prost = { workspace = true, features = ["prost-derive"] }
 rand = { workspace = true }
@@ -83,8 +75,6 @@ libz-sys = { workspace = true }
 mc-blockchain-test-utils = { workspace = true }
 mc-common = { workspace = true, features = ["loggers"] }
 mc-connection-test-utils = { workspace = true }
-mc-fog-report-validation = { workspace = true, features = ["automock"] }
-mc-fog-report-validation-test-utils = { workspace = true }
 mc-util-from-random = { workspace = true }
 
 hex = { workspace = true }

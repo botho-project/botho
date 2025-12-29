@@ -1,4 +1,5 @@
 // Copyright (c) 2018-2024 The MobileCoin Foundation
+// Copyright (c) 2024 Cadence Foundation
 
 //! Utilities that help with testing the transaction builder and related objects
 
@@ -10,13 +11,12 @@ use alloc::vec::Vec;
 use mc_account_keys::{AccountKey, PublicAddress, DEFAULT_SUBADDRESS_INDEX};
 use mc_crypto_keys::{RistrettoPrivate, RistrettoPublic};
 use mc_crypto_ring_signature_signer::{NoKeysRingSigner, OneTimeKeyDeriveData};
-use mc_fog_report_validation::FogPubkeyResolver;
 use mc_transaction_core::{
     constants::RING_SIZE,
-    membership_proofs::Range,
+    encrypted_fog_hint::EncryptedFogHint,
     onetime_keys::*,
     tokens::Mob,
-    tx::{Tx, TxOut, TxOutMembershipElement, TxOutMembershipProof},
+    tx::{Tx, TxOut},
     Amount, BlockVersion, MemoContext, MemoPayload, NewMemoError, Token, TokenId,
 };
 use mc_transaction_extra::UnsignedTx;
@@ -28,22 +28,21 @@ use rand::{rngs::StdRng, CryptoRng, RngCore, SeedableRng};
 /// Note: This is only used in test code
 ///
 /// # Arguments
-/// * `value` - Value of the output, in picoMOB.
+/// * `block_version` - Block version for the TxOut
+/// * `amount` - Amount of the output
 /// * `recipient` - Recipient's address.
-/// * `fog_resolver` - Set of prefetched fog public keys to choose from
 /// * `rng` - Entropy for the encryption.
 ///
 /// # Returns
 /// * A transaction output, and the shared secret for this TxOut.
-pub fn create_output<RNG: CryptoRng + RngCore, FPR: FogPubkeyResolver>(
+pub fn create_output<RNG: CryptoRng + RngCore>(
     block_version: BlockVersion,
     amount: Amount,
     recipient: &PublicAddress,
-    fog_resolver: &FPR,
     rng: &mut RNG,
 ) -> Result<(TxOut, RistrettoPublic), TxBuilderError> {
-    let (hint, _pubkey_expiry) =
-        crate::transaction_builder::create_fog_hint(recipient, fog_resolver, rng)?;
+    // Cadence doesn't use Fog - use fake hint for protocol compatibility
+    let hint = EncryptedFogHint::fake_onetime_hint(rng);
     let tx_private_key = RistrettoPrivate::from_random(rng);
     let (tx_out, shared_secret) = crate::transaction_builder::create_output_with_fog_hint(
         block_version,
@@ -60,20 +59,17 @@ pub fn create_output<RNG: CryptoRng + RngCore, FPR: FogPubkeyResolver>(
 ///
 /// # Arguments
 /// * `block_version` - The block version for the TxOut's
-/// * `token_id` - The token id for the real element
+/// * `amount` - Amount for the real element
 /// * `ring_size` - Number of elements in the ring.
 /// * `account` - Owner of one of the ring elements.
-/// * `value` - Value of the real element.
-/// * `fog_resolver` - Fog public keys
 /// * `rng` - Randomness.
 ///
 /// Returns (ring, real_index)
-pub fn get_ring<RNG: CryptoRng + RngCore, FPR: FogPubkeyResolver>(
+pub fn get_ring<RNG: CryptoRng + RngCore>(
     block_version: BlockVersion,
     amount: Amount,
     ring_size: usize,
     account: &AccountKey,
-    fog_resolver: &FPR,
     rng: &mut RNG,
 ) -> (Vec<TxOut>, usize) {
     let mut ring: Vec<TxOut> = Vec::new();
@@ -88,7 +84,7 @@ pub fn get_ring<RNG: CryptoRng + RngCore, FPR: FogPubkeyResolver>(
         };
         let amount = Amount::new(amount.value, token_id);
         let (tx_out, _) =
-            create_output(block_version, amount, &address, fog_resolver, rng).unwrap();
+            create_output(block_version, amount, &address, rng).unwrap();
         ring.push(tx_out);
     }
 
@@ -98,7 +94,6 @@ pub fn get_ring<RNG: CryptoRng + RngCore, FPR: FogPubkeyResolver>(
         block_version,
         amount,
         &account.default_subaddress(),
-        fog_resolver,
         rng,
     )
     .unwrap();
@@ -112,21 +107,18 @@ pub fn get_ring<RNG: CryptoRng + RngCore, FPR: FogPubkeyResolver>(
 ///
 /// # Arguments
 /// * `block_version` - Block version to use for the tx outs
-/// * `token_id` - Token id for the real element
+/// * `amount` - Amount for the real element
 /// * `account` - Owner of one of the ring elements.
-/// * `value` - Value of the real element.
-/// * `fog_resolver` - Fog public keys
 /// * `rng` - Randomness.
 ///
 /// Returns (input_credentials)
-pub fn get_input_credentials<RNG: CryptoRng + RngCore, FPR: FogPubkeyResolver>(
+pub fn get_input_credentials<RNG: CryptoRng + RngCore>(
     block_version: BlockVersion,
     amount: Amount,
     account: &AccountKey,
-    fog_resolver: &FPR,
     rng: &mut RNG,
 ) -> InputCredentials {
-    let (ring, real_index) = get_ring(block_version, amount, RING_SIZE, account, fog_resolver, rng);
+    let (ring, real_index) = get_ring(block_version, amount, RING_SIZE, account, rng);
     let real_output = ring[real_index].clone();
 
     let onetime_private_key = recover_onetime_private_key(
@@ -136,26 +128,8 @@ pub fn get_input_credentials<RNG: CryptoRng + RngCore, FPR: FogPubkeyResolver>(
     );
     let onetime_key_derive_data = OneTimeKeyDeriveData::OneTimeKey(onetime_private_key);
 
-    let membership_proofs: Vec<TxOutMembershipProof> = ring
-        .iter()
-        .map(|_tx_out| {
-            // TransactionBuilder does not validate membership proofs, but does require one
-            // for each ring member.
-            TxOutMembershipProof::new(
-                real_index as u64,
-                ring.len() as u64,
-                (0..32)
-                    .map(|_| TxOutMembershipElement::new(Range::new(0, 1).unwrap(), [2u8; 32]))
-                    .collect(),
-            )
-        })
-        .collect();
-    assert_eq!(membership_proofs.len(), RING_SIZE);
-    assert_eq!(membership_proofs[0].elements.len(), 32);
-
     InputCredentials::new(
         ring,
-        membership_proofs,
         real_index,
         onetime_key_derive_data,
         *account.view_private_key(),
@@ -163,21 +137,25 @@ pub fn get_input_credentials<RNG: CryptoRng + RngCore, FPR: FogPubkeyResolver>(
     .unwrap()
 }
 
+/// Generate fake ring global indices for testing.
+/// These are just sequential indices starting from 0.
+pub fn get_ring_global_indices(ring_size: usize) -> Vec<u64> {
+    (0..ring_size).map(|i| i as u64).collect()
+}
+
 /// Uses TransactionBuilder to build a generic transaction for testing.
-pub fn get_unsigned_transaction<RNG: RngCore + CryptoRng, FPR: FogPubkeyResolver + Clone>(
+pub fn get_unsigned_transaction<RNG: RngCore + CryptoRng>(
     block_version: BlockVersion,
     token_id: TokenId,
     num_inputs: usize,
     num_outputs: usize,
     sender: &AccountKey,
     recipient: &AccountKey,
-    fog_resolver: FPR,
     rng: &mut RNG,
 ) -> Result<UnsignedTx, TxBuilderError> {
     let mut transaction_builder = TransactionBuilder::new(
         block_version,
         Amount::new(Mob::MINIMUM_FEE, token_id),
-        fog_resolver.clone(),
     )
     .unwrap();
     let input_value = 1000;
@@ -196,7 +174,6 @@ pub fn get_unsigned_transaction<RNG: RngCore + CryptoRng, FPR: FogPubkeyResolver
                 token_id,
             },
             sender,
-            &fog_resolver,
             rng,
         );
         transaction_builder.add_input(input_credentials);
@@ -216,14 +193,13 @@ pub fn get_unsigned_transaction<RNG: RngCore + CryptoRng, FPR: FogPubkeyResolver
 }
 
 /// Uses TransactionBuilder to build a generic transaction for testing.
-pub fn get_transaction<RNG: RngCore + CryptoRng, FPR: FogPubkeyResolver + Clone>(
+pub fn get_transaction<RNG: RngCore + CryptoRng>(
     block_version: BlockVersion,
     token_id: TokenId,
     num_inputs: usize,
     num_outputs: usize,
     sender: &AccountKey,
     recipient: &AccountKey,
-    fog_resolver: FPR,
     rng: &mut RNG,
 ) -> Result<Tx, TxBuilderError> {
     let unsigned_tx = get_unsigned_transaction(
@@ -233,7 +209,6 @@ pub fn get_transaction<RNG: RngCore + CryptoRng, FPR: FogPubkeyResolver + Clone>
         num_outputs,
         sender,
         recipient,
-        fog_resolver,
         rng,
     )?;
     Ok(unsigned_tx.sign(&NoKeysRingSigner {}, None, rng)?)

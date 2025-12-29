@@ -1,0 +1,49 @@
+[package]
+name = "mc-gossip"
+version = "0.1.0"
+authors = ["Cadence Foundation"]
+edition = "2021"
+license = "Apache-2.0"
+rust-version = { workspace = true }
+description = "Gossip-based peer discovery and topology sharing for Cadence"
+
+[dependencies]
+# Workspace dependencies
+mc-common = { workspace = true, features = ["std"] }
+mc-consensus-scp-types = { workspace = true }
+mc-crypto-keys = { workspace = true }
+mc-crypto-digestible = { workspace = true }
+mc-util-serial = { workspace = true }
+mc-util-uri = { workspace = true }
+
+# External dependencies
+bitflags = { workspace = true, features = ["serde"] }
+displaydoc = { workspace = true }
+futures = { workspace = true }
+hex = { workspace = true, features = ["serde"] }
+libp2p = { workspace = true, features = [
+    "tokio",
+    "gossipsub",
+    "kad",
+    "identify",
+    "request-response",
+    "noise",
+    "tcp",
+    "yamux",
+    "macros",
+    "ed25519",
+    "cbor",
+] }
+prost = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true, features = ["std"] }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio-test = "0.4"
+rand = { workspace = true }
+
+[features]
+default = []

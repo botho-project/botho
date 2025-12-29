@@ -1,3 +1,0 @@
-## attest
-
-Remote attestation primitives.

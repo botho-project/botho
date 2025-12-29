@@ -1,0 +1,38 @@
+[package]
+name = "mc-discover"
+version = "0.1.0"
+authors = ["Cadence Foundation"]
+edition = "2021"
+license = "Apache-2.0"
+rust-version = { workspace = true }
+description = "CLI tool for discovering Cadence network topology and generating configurations"
+
+[[bin]]
+name = "mc-discover"
+path = "src/main.rs"
+
+[dependencies]
+# Workspace dependencies
+mc-common = { workspace = true, features = ["std"] }
+mc-consensus-scp-types = { workspace = true }
+mc-crypto-keys = { workspace = true }
+mc-gossip = { workspace = true }
+mc-util-from-random = { workspace = true }
+mc-util-uri = { workspace = true }
+
+# External dependencies
+anyhow = { workspace = true }
+clap = { workspace = true, features = ["derive", "env"] }
+futures = { workspace = true }
+hex = { workspace = true }
+libp2p = { workspace = true, features = ["tokio"] }
+rand = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true, features = ["std"] }
+tokio = { workspace = true, features = ["full"] }
+toml = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[features]
+default = []

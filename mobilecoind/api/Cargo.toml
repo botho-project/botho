@@ -11,8 +11,6 @@ rust-version = { workspace = true }
 
 [dependencies]
 mc-api = { workspace = true }
-mc-attest-api = { workspace = true }
-mc-fog-api = { workspace = true }
 mc-util-uri = { workspace = true }
 
 futures = { workspace = true }

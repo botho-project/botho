@@ -10,7 +10,6 @@ impl From<&tx::TxIn> for external::TxIn {
     fn from(source: &tx::TxIn) -> Self {
         Self {
             ring: source.ring.iter().map(Into::into).collect(),
-            proofs: source.proofs.iter().map(Into::into).collect(),
             input_rules: source.input_rules.as_ref().map(Into::into),
         }
     }
@@ -26,22 +25,13 @@ impl TryFrom<&external::TxIn> for tx::TxIn {
             .iter()
             .map(TryFrom::try_from)
             .collect::<Result<Vec<_>, _>>()?;
-        let proofs = source
-            .proofs
-            .iter()
-            .map(TryFrom::try_from)
-            .collect::<Result<Vec<_>, _>>()?;
         let input_rules = source
             .input_rules
             .as_ref()
             .map(InputRules::try_from)
             .transpose()?;
 
-        let tx_in = tx::TxIn {
-            ring,
-            proofs,
-            input_rules,
-        };
+        let tx_in = tx::TxIn { ring, input_rules };
         Ok(tx_in)
     }
 }

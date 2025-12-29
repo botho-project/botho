@@ -9,7 +9,6 @@ use crate::{
 use mc_common::{NodeID, ResponderId};
 use mc_connection::Connection;
 use mc_consensus_api::consensus_peer::ConsensusMsgResponse;
-use mc_consensus_enclave_api::{TxContext, WellFormedEncryptedTx};
 use mc_transaction_core::tx::TxHash;
 use std::time::Duration;
 

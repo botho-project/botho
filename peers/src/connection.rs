@@ -9,9 +9,6 @@ use crate::{
 };
 use core::fmt::{Display, Formatter, Result as FmtResult};
 use grpcio::{ChannelBuilder, Environment, Error as GrpcError};
-use mc_attest_api::attest::AttestedApiClient;
-use mc_attest_core::EvidenceKind;
-use mc_attest_enclave_api::PeerSession;
 use mc_blockchain_types::{Block, BlockID, BlockIndex};
 use mc_common::{
     logger::{log, o, Logger},
@@ -30,7 +27,6 @@ use mc_consensus_api::{
     },
     ConversionError,
 };
-use mc_consensus_enclave_api::{ConsensusEnclave, TxContext, WellFormedEncryptedTx};
 use mc_transaction_core::tx::TxHash;
 use mc_util_grpc::ConnectionUriGrpcioChannel;
 use mc_util_serial::{deserialize, serialize};

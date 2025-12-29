@@ -5,7 +5,6 @@
 use crate::signer_identity::Error as SignerIdentityError;
 use displaydoc::Display;
 use mc_common::ResponderId;
-use mc_consensus_enclave_api::GovernorsMapError;
 use mc_crypto_keys::SignatureError;
 use mc_transaction_core::{FeeMapError, TokenId};
 use mc_util_uri::UriConversionError;

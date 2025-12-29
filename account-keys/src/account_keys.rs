@@ -32,7 +32,6 @@ use mc_core::{
 };
 use mc_crypto_digestible::{Digestible, MerlinTranscript};
 use mc_crypto_keys::{RistrettoPrivate, RistrettoPublic};
-use mc_fog_sig_authority::{Signer as AuthoritySigner, Verifier as AuthorityVerifier};
 use mc_util_from_random::FromRandom;
 #[cfg(feature = "prost")]
 use prost::Message;
@@ -226,15 +225,6 @@ impl From<&PublicAddress> for mc_core::account::PublicSubaddress {
             view_public: value.view_public_key.into(),
             spend_public: value.spend_public_key.into(),
         }
-    }
-}
-
-impl AuthorityVerifier for PublicAddress {
-    type Sig = <RistrettoPublic as AuthorityVerifier>::Sig;
-    type Error = <RistrettoPublic as AuthorityVerifier>::Error;
-
-    fn verify_authority(&self, spki_bytes: &[u8], sig: &Self::Sig) -> Result<(), Self::Error> {
-        self.view_public_key.verify_authority(spki_bytes, sig)
     }
 }
 
@@ -475,16 +465,8 @@ impl AccountKey {
             RistrettoPublic::from(&subaddress_spend_private)
         };
 
-        let fog_authority_sig = if !self.fog_report_url.is_empty() {
-            let sig = self
-                .subaddress_view_private(index)
-                .sign_authority(&self.fog_authority_spki)
-                .expect("Could not sign authority bytes with view-key private address");
-            let sig_bytes: &[u8] = sig.as_ref();
-            sig_bytes.to_vec()
-        } else {
-            Vec::default()
-        };
+        // Fog authority signing removed - Cadence does not use Fog
+        let fog_authority_sig = Vec::default();
 
         PublicAddress {
             view_public_key,

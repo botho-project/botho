@@ -9,10 +9,7 @@ use std::str::FromStr;
 
 impl From<&BlockMetadataContents> for blockchain::BlockMetadataContents {
     fn from(src: &BlockMetadataContents) -> Self {
-        let attesetation_evidence = match src.attestation_evidence() {
-            AttestationEvidence::DcapEvidence(evidence) => {
-                block_metadata_contents::AttestationEvidence::DcapEvidence(evidence.into())
-            }
+        let attestation_evidence = match src.attestation_evidence() {
             AttestationEvidence::VerificationReport(report) => {
                 block_metadata_contents::AttestationEvidence::VerificationReport(report.into())
             }
@@ -21,7 +18,7 @@ impl From<&BlockMetadataContents> for blockchain::BlockMetadataContents {
             block_id: Some(src.block_id().into()),
             quorum_set: Some(src.quorum_set().into()),
             responder_id: src.responder_id().to_string(),
-            attestation_evidence: Some(attesetation_evidence),
+            attestation_evidence: Some(attestation_evidence),
         }
     }
 }
@@ -41,15 +38,11 @@ impl TryFrom<&blockchain::BlockMetadataContents> for BlockMetadataContents {
             .unwrap_or(&Default::default())
             .try_into()?;
         let attestation_evidence = match &src.attestation_evidence {
-            Some(block_metadata_contents::AttestationEvidence::DcapEvidence(evidence)) => {
-                let evidence = evidence.into();
-                AttestationEvidence::DcapEvidence(evidence)
-            }
             Some(block_metadata_contents::AttestationEvidence::VerificationReport(report)) => {
                 let report = report.into();
                 AttestationEvidence::VerificationReport(report)
             }
-            None => {
+            _ => {
                 return Err(ConversionError::MissingField(
                     "attestation_evidence".to_string(),
                 ))

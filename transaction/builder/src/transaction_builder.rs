@@ -8,18 +8,16 @@ use crate::{
     input_materials::InputMaterials, InputCredentials, MemoBuilder, ReservedSubaddresses,
     TxBlueprint, TxBlueprintOutput, TxBuilderError,
 };
-use alloc::{sync::Arc, vec::Vec};
+use alloc::vec::Vec;
 use core::{
-    cmp::{min, Ordering},
+    cmp::Ordering,
     fmt::Debug,
 };
 use mc_account_keys::PublicAddress;
 use mc_crypto_keys::{CompressedRistrettoPublic, RistrettoPrivate, RistrettoPublic};
 use mc_crypto_ring_signature_signer::RingSigner;
-use mc_fog_report_validation::FogPubkeyResolver;
 use mc_transaction_core::{
     encrypted_fog_hint::EncryptedFogHint,
-    fog_hint::FogHint,
     onetime_keys::{create_shared_secret, create_tx_out_public_key},
     ring_ct::{InputRing, OutputSecret},
     ring_signature::Scalar,
@@ -66,15 +64,12 @@ pub struct TxOutContext {
 }
 
 /// Helper utility for building and signing a CryptoNote-style transaction,
-/// and attaching fog hint and memos as appropriate.
+/// and attaching memos as appropriate.
 ///
-/// This is generic over FogPubkeyResolver because there are several reasonable
-/// implementations of that.
-///
-/// This is generic over MemoBuilder to allow injecting a policy for how to
-/// use the memos in the TxOuts.
+/// Note: Cadence does not use Fog services. All encrypted fog hints are fake
+/// placeholders for protocol compatibility.
 #[derive(Clone, Debug)]
-pub struct TransactionBuilder<FPR: FogPubkeyResolver> {
+pub struct TransactionBuilder {
     /// The block version that we are targeting for this transaction
     block_version: BlockVersion,
     /// The input materials used to form the transaction.
@@ -89,16 +84,11 @@ pub struct TransactionBuilder<FPR: FogPubkeyResolver> {
     /// If mixed transactions feature is off, then everything must be this token
     /// id.
     fee: Amount,
-    /// The source of validated fog pubkeys used for this transaction
-    fog_resolver: Arc<FPR>,
-    /// The limit on the tombstone block value imposed pubkey_expiry values in
-    /// fog pubkeys used so far
-    fog_tombstone_block_limit: u64,
     /// The minimum fee map, if available.
     fee_map: Option<FeeMap>,
 }
 
-impl<FPR: FogPubkeyResolver> TransactionBuilder<FPR> {
+impl TransactionBuilder {
     /// Initializes a new TransactionBuilder.
     ///
     /// # Arguments
@@ -108,19 +98,14 @@ impl<FPR: FogPubkeyResolver> TransactionBuilder<FPR> {
     ///   fee token id cannot be changed later, and before mixed transactions
     ///   feature, every input and output must have the same token id as the
     ///   fee.
-    /// * `fog_resolver` - Source of validated fog keys to use with this
-    ///   transaction
     pub fn new(
         block_version: BlockVersion,
         fee: Amount,
-        fog_resolver: FPR,
     ) -> Result<Self, TxBuilderError> {
         Ok(Self {
             block_version,
             fee,
             fee_map: None,
-            fog_resolver: Arc::new(fog_resolver),
-            fog_tombstone_block_limit: u64::MAX,
             input_materials: Vec::new(),
             outputs: Vec::new(),
             tombstone_block: u64::MAX,
@@ -200,11 +185,7 @@ impl<FPR: FogPubkeyResolver> TransactionBuilder<FPR> {
                 ),
             );
         }
-        // Check if the sci already has membership proofs, the caller is supposed to do
-        // that
-        if sci.tx_in.ring.len() != sci.tx_in.proofs.len() {
-            return Err(SignedContingentInputError::MissingProofs);
-        }
+        // Note: Cadence does not use membership proofs
         let rules = sci
             .tx_in
             .input_rules
@@ -320,11 +301,7 @@ impl<FPR: FogPubkeyResolver> TransactionBuilder<FPR> {
                 sci.block_version,
             ));
         }
-        // Check if the sci already has membership proofs, the caller is supposed to do
-        // that
-        if sci.tx_in.ring.len() != sci.tx_in.proofs.len() {
-            return Err(SignedContingentInputError::MissingProofs);
-        }
+        // Note: Cadence does not use membership proofs
 
         let rules = sci
             .tx_in
@@ -358,7 +335,7 @@ impl<FPR: FogPubkeyResolver> TransactionBuilder<FPR> {
         }
         // 2. Max tombstone block
         if rules.max_tombstone_block != 0 {
-            self.impose_tombstone_block_limit(rules.max_tombstone_block);
+            self.set_tombstone_block(rules.max_tombstone_block);
         }
 
         // Don't do anything about partial fill rules, caller was supposed to do
@@ -450,7 +427,7 @@ impl<FPR: FogPubkeyResolver> TransactionBuilder<FPR> {
         tx_private_key: Option<RistrettoPrivate>,
         rng: &mut RNG,
     ) -> Result<TxOutContext, TxBuilderError> {
-        self.add_output_with_fog_hint_address(amount, recipient, recipient, tx_private_key, rng)
+        self.add_output_internal(amount, recipient, tx_private_key, rng)
     }
 
     /// Add a standard change output to the transaction.
@@ -488,10 +465,9 @@ impl<FPR: FogPubkeyResolver> TransactionBuilder<FPR> {
     /// # Arguments
     /// * `amount` - The amount of this change output.
     /// * `change_destination` - An object including both a primary address and
-    ///   a change subaddress to use to create this change output. The primary
-    ///   address is used for the fog hint, the change subaddress owns the
-    ///   change output. These can both be obtained from an account key, but
-    ///   this API does not require the account key.
+    ///   a change subaddress to use to create this change output. The change
+    ///   subaddress owns the change output. These can both be obtained from an
+    ///   account key, but this API does not require the account key.
     /// * `rng` - RNG used to generate blinding for commitment
     pub fn add_change_output<RNG: CryptoRng + RngCore>(
         &mut self,
@@ -499,11 +475,8 @@ impl<FPR: FogPubkeyResolver> TransactionBuilder<FPR> {
         change_destination: &ReservedSubaddresses,
         rng: &mut RNG,
     ) -> Result<TxOutContext, TxBuilderError> {
-        let (hint, pubkey_expiry) = create_fog_hint(
-            &change_destination.primary_address,
-            &*self.fog_resolver,
-            rng,
-        )?;
+        // Cadence doesn't use Fog - use fake hint for protocol compatibility
+        let hint = EncryptedFogHint::fake_onetime_hint(rng);
 
         if !self.block_version.mixed_transactions_are_supported()
             && self.fee.token_id != amount.token_id
@@ -522,8 +495,6 @@ impl<FPR: FogPubkeyResolver> TransactionBuilder<FPR> {
             e_fog_hint: hint,
             tx_private_key,
         });
-
-        self.impose_tombstone_block_limit(pubkey_expiry);
 
         let shared_secret = create_shared_secret(
             change_destination.change_subaddress.view_public_key(),
@@ -547,23 +518,16 @@ impl<FPR: FogPubkeyResolver> TransactionBuilder<FPR> {
     /// Add an output to the reserved subaddress for gift codes
     ///
     /// The gift code subaddress is meant for reserving TxOuts for usage
-    /// at a later time. This method creates outputs to that address in
-    /// a way that Fog can track by creating a Fog hint for the primary
-    /// account. This allows Fog users who send TxOuts to this address to
-    /// track reserved TxOuts and if they desire, let other Fog users find
-    /// these TxOuts and spend them at a later time. This enables
-    /// functionality like sending "gift codes" to individuals who may not
-    /// have a MobileCoin account and "red envelopes".
+    /// at a later time. This enables functionality like sending "gift codes"
+    /// to individuals who may not have a Cadence account and "red envelopes".
     ///
     /// The caller should ensure that the math adds up, and that
     /// change_value + gift_code_amount + fee = total_input_value
     ///
     /// # Arguments
     /// * `amount` - The amount of the "gift code"
-    /// * `reserved_subaddreses` - A ReservedSubaddresses object which provides
-    ///   all standard reserved addresses for the caller. This is used to set
-    ///   the caller's primary address as the Fog hint address and set their
-    ///   gift code subaddresses as the TxOut recipient.
+    /// * `reserved_subaddresses` - A ReservedSubaddresses object which provides
+    ///   all standard reserved addresses for the caller.
     /// * `rng` - RNG used to generate blinding for commitment
     pub fn add_gift_code_output<RNG: CryptoRng + RngCore>(
         &mut self,
@@ -571,45 +535,31 @@ impl<FPR: FogPubkeyResolver> TransactionBuilder<FPR> {
         reserved_subaddresses: &ReservedSubaddresses,
         rng: &mut RNG,
     ) -> Result<TxOutContext, TxBuilderError> {
-        self.add_output_with_fog_hint_address(
+        self.add_output_internal(
             amount,
             &reserved_subaddresses.gift_code_subaddress,
-            &reserved_subaddresses.primary_address,
             None,
             rng,
         )
     }
 
-    /// Add an output to the transaction, using `fog_hint_address` to construct
-    /// the fog hint.
-    ///
-    /// This is a private implementation detail, and generally, fog users expect
-    /// that the transactions that they recieve from fog belong to the account
-    /// that they are using. The only known use-case where recipient and
-    /// fog_hint_address are different is when sending change transactions
-    /// to oneself, when oneself is a fog user. Sending the change to the
-    /// main subaddress means that you don't have to hit fog once for the
-    /// main subaddress and once for the change subaddress, so it cuts the
-    /// number of requests in half.
+    /// Add an output to the transaction.
     ///
     /// # Arguments
     /// * `amount` - The amount of this output
     /// * `recipient` - The recipient's public address
-    /// * `fog_hint_address` - The public address used to create the fog hint
     /// * `tx_private_key` - Optional. If unspecified, generated randomly using
     ///   rng.
-    /// * `memo_fn` - The memo function to use (see TxOut::new_with_memo)
-    /// * `rng` - RNG used to generate tx private key (if not specified), and
-    ///   encrypted fog hint
-    fn add_output_with_fog_hint_address<RNG: CryptoRng + RngCore>(
+    /// * `rng` - RNG used to generate tx private key (if not specified)
+    fn add_output_internal<RNG: CryptoRng + RngCore>(
         &mut self,
         amount: Amount,
         recipient: &PublicAddress,
-        fog_hint_address: &PublicAddress,
         tx_private_key: Option<RistrettoPrivate>,
         rng: &mut RNG,
     ) -> Result<TxOutContext, TxBuilderError> {
-        let (hint, pubkey_expiry) = create_fog_hint(fog_hint_address, &*self.fog_resolver, rng)?;
+        // Cadence doesn't use Fog - use fake hint for protocol compatibility
+        let hint = EncryptedFogHint::fake_onetime_hint(rng);
 
         if !self.block_version.mixed_transactions_are_supported()
             && self.fee.token_id != amount.token_id
@@ -629,8 +579,6 @@ impl<FPR: FogPubkeyResolver> TransactionBuilder<FPR> {
             tx_private_key,
         });
 
-        self.impose_tombstone_block_limit(pubkey_expiry);
-
         let shared_secret = create_shared_secret(recipient.view_public_key(), &tx_private_key);
         let confirmation = TxOutConfirmationNumber::from(&shared_secret);
 
@@ -644,22 +592,13 @@ impl<FPR: FogPubkeyResolver> TransactionBuilder<FPR> {
         })
     }
 
-    /// Sets the tombstone block, clamping to smallest pubkey expiry value.
+    /// Sets the tombstone block.
     ///
     /// # Arguments
     /// * `tombstone_block` - Tombstone block number.
     pub fn set_tombstone_block(&mut self, tombstone_block: u64) -> u64 {
-        self.tombstone_block = min(tombstone_block, self.fog_tombstone_block_limit);
+        self.tombstone_block = tombstone_block;
         self.tombstone_block
-    }
-
-    /// Reduce the fog_tombstone_block_limit value by the amount specified,
-    /// and propagate this constraint to self.tombstone_block
-    fn impose_tombstone_block_limit(&mut self, pubkey_expiry: u64) {
-        // Reduce fog tombstone block limit value if necessary
-        self.fog_tombstone_block_limit = min(self.fog_tombstone_block_limit, pubkey_expiry);
-        // Reduce tombstone_block value if necessary
-        self.tombstone_block = min(self.fog_tombstone_block_limit, self.tombstone_block);
     }
 
     /// Sets the transaction fee.
@@ -744,23 +683,12 @@ impl<FPR: FogPubkeyResolver> TransactionBuilder<FPR> {
                 ));
             }
 
-            match input {
-                InputMaterials::Presigned(input) => {
-                    if !self.block_version.signed_input_rules_are_supported() {
-                        return Err(TxBuilderError::SignedInputRulesNotAllowed);
-                    }
-                    // TODO: Also validate membership proofs?
-                    if input.tx_in.ring.len() != input.tx_in.proofs.len() {
-                        return Err(TxBuilderError::MissingMembershipProofs);
-                    }
-                }
-                InputMaterials::Signable(input) => {
-                    // TODO: Also validate membership proofs?
-                    if input.ring.len() != input.membership_proofs.len() {
-                        return Err(TxBuilderError::MissingMembershipProofs);
-                    }
+            if let InputMaterials::Presigned(_) = input {
+                if !self.block_version.signed_input_rules_are_supported() {
+                    return Err(TxBuilderError::SignedInputRulesNotAllowed);
                 }
             }
+            // Note: Cadence does not use membership proofs
         }
 
         // Construct a list of sorted inputs.
@@ -895,34 +823,6 @@ pub(crate) fn create_output_with_fog_hint(
     Ok((tx_out, shared_secret))
 }
 
-/// Create a fog hint, using the fog_resolver collection in self.
-///
-/// # Arguments
-/// * `recipient` - Recipient's address.
-/// * `fog_resolver` - Set of validated fog pubkey data
-/// * `rng` - Entropy for the encryption.
-///
-/// # Returns
-/// * `encrypted_fog_hint` - The fog hint to use for a TxOut.
-/// * `pubkey_expiry` - The block at which this fog pubkey expires, or u64::MAX
-///   Imposes a limit on tombstone block for the transaction
-pub(crate) fn create_fog_hint<RNG: RngCore + CryptoRng, FPR: FogPubkeyResolver>(
-    recipient: &PublicAddress,
-    fog_resolver: &FPR,
-    rng: &mut RNG,
-) -> Result<(EncryptedFogHint, u64), TxBuilderError> {
-    if recipient.fog_report_url().is_none() {
-        return Ok((EncryptedFogHint::fake_onetime_hint(rng), u64::MAX));
-    }
-
-    // Find fog pubkey from set of pre-fetched fog pubkeys
-    let validated_fog_pubkey = fog_resolver.get_fog_pubkey(recipient)?;
-
-    Ok((
-        FogHint::from(recipient).encrypt(&validated_fog_pubkey.pubkey, rng),
-        validated_fog_pubkey.pubkey_expiry,
-    ))
-}
 
 #[cfg(test)]
 pub mod transaction_builder_tests {
@@ -933,15 +833,13 @@ pub mod transaction_builder_tests {
         GiftCodeCancellationMemoBuilder, GiftCodeFundingMemoBuilder, GiftCodeSenderMemoBuilder,
         RTHMemoBuilder,
     };
-    use alloc::{string::ToString, vec};
+    use alloc::vec;
     use assert_matches::assert_matches;
-    use maplit::btreemap;
     use mc_account_keys::{
         burn_address, burn_address_view_private, AccountKey, ShortAddressHash,
         CHANGE_SUBADDRESS_INDEX, DEFAULT_SUBADDRESS_INDEX, GIFT_CODE_SUBADDRESS_INDEX,
     };
     use mc_crypto_ring_signature_signer::{InputSecret, NoKeysRingSigner};
-    use mc_fog_report_validation_test_utils::{FullyValidatedFogPubkey, MockFogResolver};
     use mc_transaction_core::{
         constants::{MAX_INPUTS, MAX_OUTPUTS, MILLIMOB_TO_PICOMOB},
         get_tx_out_shared_secret,
@@ -967,17 +865,15 @@ pub mod transaction_builder_tests {
         ]
     }
 
-    fn single_input_transaction_builder<FPR: FogPubkeyResolver + Clone>(
+    fn single_input_transaction_builder(
         block_version: BlockVersion,
         token_id: TokenId,
         input_amount: u64,
-        fog_resolver: &FPR,
         rng: &mut StdRng,
-    ) -> TransactionBuilder<FPR> {
+    ) -> TransactionBuilder {
         let mut transaction_builder = TransactionBuilder::new(
             block_version,
             Amount::new(Mob::MINIMUM_FEE, token_id),
-            fog_resolver.clone(),
         )
         .unwrap();
         transaction_builder.set_tombstone_block(2000);
@@ -985,7 +881,6 @@ pub mod transaction_builder_tests {
             block_version,
             Amount::new(input_amount, token_id),
             &AccountKey::random(rng),
-            fog_resolver,
             rng,
         ));
         transaction_builder

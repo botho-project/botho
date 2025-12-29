@@ -11,7 +11,6 @@ impl From<&tx::Tx> for external::Tx {
         Self {
             prefix: Some((&source.prefix).into()),
             signature: Some((&source.signature).into()),
-            fee_map_digest: source.fee_map_digest.clone(),
         }
     }
 }
@@ -31,11 +30,7 @@ impl TryFrom<&external::Tx> for tx::Tx {
             .as_ref()
             .unwrap_or(&Default::default())
             .try_into()?;
-        Ok(tx::Tx {
-            prefix,
-            signature,
-            fee_map_digest: source.fee_map_digest.clone(),
-        })
+        Ok(tx::Tx { prefix, signature })
     }
 }
 

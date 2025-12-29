@@ -2,7 +2,6 @@ use crate::service::Service;
 use futures::executor::block_on;
 use grpcio::{Server as GrpcioServer, ServerBuilder};
 use mc_common::logger::{log, Logger};
-use mc_fog_report_api::fog_report;
 use mc_util_grpc::{ConnectionUriGrpcioServer, HealthService};
 use mc_util_uri::{ConnectionUri, FogUri};
 use std::sync::Arc;

@@ -8,6 +8,7 @@
 extern crate alloc;
 
 pub mod crypto;
+mod attestation_stubs;
 
 mod block;
 mod block_contents;
@@ -27,7 +28,8 @@ pub use crate::{
     error::ConvertError,
 };
 
-pub use mc_attest_verifier_types::{VerificationReport, VerificationSignature};
+// Use stub types instead of removed mc-attest-verifier-types
+pub use crate::attestation_stubs::{VerificationReport, VerificationSignature};
 pub use mc_common::NodeID;
 pub use mc_consensus_scp_types::{QuorumSet, QuorumSetMember, QuorumSetMemberWrapper};
 pub use mc_transaction_types::{BlockVersion, BlockVersionError, BlockVersionIterator};

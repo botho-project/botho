@@ -4,13 +4,10 @@
 
 use crate::SVC_COUNTERS;
 use grpcio::{RpcContext, UnarySink};
-use mc_attest_api::attest::{AttestedApi, AuthMessage};
-use mc_attest_enclave_api::{ClientSession, PeerSession, Session};
 use mc_common::{
     logger::{log, Logger},
     HashSet,
 };
-use mc_consensus_enclave::ConsensusEnclave;
 use mc_util_grpc::{
     check_request_chain_id, rpc_logger, rpc_permissions_error, send_result, Authenticator,
 };

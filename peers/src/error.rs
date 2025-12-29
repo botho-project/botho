@@ -7,7 +7,6 @@ use displaydoc::Display;
 use grpcio::Error as GrpcError;
 use mc_connection::AttestationError;
 use mc_consensus_api::ConversionError;
-use mc_consensus_enclave_api::Error as EnclaveError;
 use mc_transaction_core::tx::TxHash;
 use mc_util_serial::{
     decode::Error as RmpDecodeError, encode::Error as RmpEncodeError,

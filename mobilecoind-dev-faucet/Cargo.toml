@@ -16,9 +16,7 @@ mc-account-keys = { workspace = true }
 mc-api = { workspace = true }
 mc-common = { workspace = true, features = ["loggers"] }
 mc-connection = { workspace = true }
-mc-consensus-enclave-measurement = { workspace = true }
 mc-crypto-ring-signature-signer = { workspace = true }
-mc-fog-report-resolver = { workspace = true }
 mc-mobilecoind-api = { workspace = true }
 mc-transaction-builder = { workspace = true }
 mc-transaction-core = { workspace = true }
@@ -32,7 +30,6 @@ clap = { workspace = true, features = ["derive", "env"] }
 displaydoc = { workspace = true }
 grpcio = { workspace = true, features = ["prost-codec"] }
 hex = { workspace = true }
-mc-attestation-verifier = { workspace = true }
 rand = { workspace = true }
 rocket = { workspace = true, features = ["json"] }
 serde = { workspace = true }

@@ -28,7 +28,6 @@ mc-account-keys = { workspace = true }
 mc-crypto-hashes = { workspace = true }
 mc-crypto-keys = { workspace = true }
 mc-crypto-ring-signature-signer = { workspace = true }
-mc-fog-report-validation = { workspace = true }
 mc-transaction-core = { workspace = true }
 mc-transaction-extra = { workspace = true }
 mc-transaction-summary = { workspace = true }
@@ -45,5 +44,4 @@ assert_matches = { workspace = true }
 maplit = { workspace = true }
 yaml-rust = { workspace = true }
 
-mc-fog-report-validation-test-utils = { workspace = true }
 mc-util-test-helper = { workspace = true }

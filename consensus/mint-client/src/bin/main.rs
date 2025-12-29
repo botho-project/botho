@@ -8,7 +8,6 @@ use mc_common::logger::{create_app_logger, o};
 use mc_consensus_api::{
     consensus_client::ConsensusClientApiClient, consensus_common::BlockchainApiClient,
 };
-use mc_consensus_enclave_api::GovernorsSigner;
 use mc_consensus_mint_client::{printers, Commands, Config, FogContext};
 use mc_consensus_mint_client_types::TxFile;
 use mc_crypto_keys::{Ed25519Pair, Ed25519Private, Signer, Verifier};

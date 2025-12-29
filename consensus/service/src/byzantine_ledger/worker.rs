@@ -9,7 +9,6 @@ use crate::{
     mint_tx_manager::MintTxManager,
     tx_manager::TxManager,
 };
-use mc_attest_verifier_types::prost;
 use mc_blockchain_types::{BlockData, BlockID, BlockMetadata, BlockMetadataContents};
 use mc_common::{
     logger::{log, Logger},
@@ -19,7 +18,6 @@ use mc_connection::{
     BlockchainConnection, ConnectionManager,
     _retry::{delay::Fibonacci, Error as RetryError},
 };
-use mc_consensus_enclave::{ConsensusEnclave, FormBlockInputs};
 use mc_consensus_scp::{slot::Phase, Msg, ScpNode, SlotIndex};
 use mc_crypto_keys::Ed25519Pair;
 use mc_ledger_db::Ledger;

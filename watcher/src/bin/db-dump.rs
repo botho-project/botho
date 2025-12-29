@@ -4,7 +4,6 @@
 //! A utility for examining the contents of a given watcher db.
 
 use clap::Parser;
-use mc_attest_core::{EvidenceKind, VerificationReportData};
 use mc_common::logger::{create_app_logger, o};
 use mc_crypto_keys::Ed25519Public;
 use mc_util_repr_bytes::ReprBytes;
