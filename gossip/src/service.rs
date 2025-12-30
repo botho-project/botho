@@ -533,7 +533,7 @@ async fn handle_behaviour_event(
 
         // Request-response events
         crate::behaviour::GossipBehaviourEvent::TopologySync(
-            request_response::Event::Message { peer, message },
+            request_response::Event::Message { peer, message, .. },
         ) => {
             match message {
                 request_response::Message::Request {
