@@ -8,10 +8,11 @@ import {
   type SendFormData,
   type SendResult,
 } from '@botho/features'
-import { motion } from 'motion/react'
-import { Lock, RefreshCw, Send, Wallet, Zap } from 'lucide-react'
+import { motion, AnimatePresence } from 'motion/react'
+import { FileKey, Key, Lock, RefreshCw, Save, Send, Unlock, Wallet, Zap } from 'lucide-react'
 import { useWallet } from '../contexts/wallet'
 import { useConnection } from '../contexts/connection'
+import { isValidMnemonic } from '@botho/core'
 
 // Address setup component
 function AddressSetup({ onComplete }: { onComplete: (address: string) => void }) {
@@ -70,6 +71,384 @@ function AddressSetup({ onComplete }: { onComplete: (address: string) => void })
   )
 }
 
+type UnlockMode = 'choose' | 'file' | 'mnemonic' | 'save'
+
+// Wallet unlock component with file support
+function WalletUnlock({
+  onUnlock,
+  onCancel,
+  hasWalletFile,
+  walletFilePath,
+  onUnlockFromFile,
+  onSaveToFile,
+}: {
+  onUnlock: (mnemonic: string) => void
+  onCancel: () => void
+  hasWalletFile: boolean
+  walletFilePath: string | null
+  onUnlockFromFile: (password: string) => Promise<{ success: boolean; error?: string }>
+  onSaveToFile: (mnemonic: string, password: string) => Promise<{ success: boolean; error?: string }>
+}) {
+  const [mode, setMode] = useState<UnlockMode>(hasWalletFile ? 'choose' : 'mnemonic')
+  const [mnemonic, setMnemonic] = useState('')
+  const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [isLoading, setIsLoading] = useState(false)
+
+  const handleUnlockFromFile = async () => {
+    if (!password) {
+      setError('Please enter your password')
+      return
+    }
+
+    setIsLoading(true)
+    setError(null)
+
+    const result = await onUnlockFromFile(password)
+
+    setIsLoading(false)
+
+    if (!result.success) {
+      setError(result.error || 'Failed to unlock wallet')
+    }
+  }
+
+  const handleUnlockWithMnemonic = () => {
+    const trimmed = mnemonic.trim()
+    if (!trimmed) {
+      setError('Please enter your recovery phrase')
+      return
+    }
+
+    if (!isValidMnemonic(trimmed)) {
+      setError('Invalid recovery phrase. Please check your words.')
+      return
+    }
+
+    onUnlock(trimmed)
+  }
+
+  const handleSaveToFile = async () => {
+    const trimmed = mnemonic.trim()
+
+    if (!trimmed) {
+      setError('Please enter your recovery phrase')
+      return
+    }
+
+    if (!isValidMnemonic(trimmed)) {
+      setError('Invalid recovery phrase. Please check your words.')
+      return
+    }
+
+    if (!password) {
+      setError('Please enter a password')
+      return
+    }
+
+    if (password.length < 8) {
+      setError('Password must be at least 8 characters')
+      return
+    }
+
+    if (password !== confirmPassword) {
+      setError('Passwords do not match')
+      return
+    }
+
+    setIsLoading(true)
+    setError(null)
+
+    const result = await onSaveToFile(trimmed, password)
+
+    setIsLoading(false)
+
+    if (result.success) {
+      // Unlock the wallet after saving
+      onUnlock(trimmed)
+    } else {
+      setError(result.error || 'Failed to save wallet')
+    }
+  }
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+      onClick={onCancel}
+    >
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95, y: 20 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.95, y: 20 }}
+        onClick={(e) => e.stopPropagation()}
+        className="relative w-full max-w-md rounded-2xl border border-[--color-steel] bg-[--color-abyss] p-6 shadow-2xl"
+      >
+        <div className="mb-6 flex items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[--color-warning]/20">
+            <Lock className="h-5 w-5 text-[--color-warning]" />
+          </div>
+          <div>
+            <h2 className="font-display text-lg font-bold text-[--color-light]">Unlock Wallet</h2>
+            <p className="text-sm text-[--color-dim]">
+              {mode === 'choose' && 'Choose how to unlock'}
+              {mode === 'file' && 'Enter your wallet password'}
+              {mode === 'mnemonic' && 'Enter your recovery phrase'}
+              {mode === 'save' && 'Save your wallet securely'}
+            </p>
+          </div>
+        </div>
+
+        <AnimatePresence mode="wait">
+          {/* Choose mode */}
+          {mode === 'choose' && (
+            <motion.div
+              key="choose"
+              initial={{ opacity: 0, x: -20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: 20 }}
+              className="space-y-3"
+            >
+              <button
+                onClick={() => setMode('file')}
+                className="flex w-full items-center gap-4 rounded-xl border border-[--color-steel] bg-[--color-void] p-4 text-left transition-colors hover:border-[--color-pulse] hover:bg-[--color-steel]/30"
+              >
+                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[--color-pulse]/20">
+                  <FileKey className="h-5 w-5 text-[--color-pulse]" />
+                </div>
+                <div>
+                  <div className="font-medium text-[--color-light]">Load from File</div>
+                  <div className="text-xs text-[--color-dim]">
+                    Use your encrypted wallet file
+                  </div>
+                </div>
+              </button>
+
+              <button
+                onClick={() => setMode('mnemonic')}
+                className="flex w-full items-center gap-4 rounded-xl border border-[--color-steel] bg-[--color-void] p-4 text-left transition-colors hover:border-[--color-pulse] hover:bg-[--color-steel]/30"
+              >
+                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[--color-ghost]/20">
+                  <Key className="h-5 w-5 text-[--color-ghost]" />
+                </div>
+                <div>
+                  <div className="font-medium text-[--color-light]">Enter Recovery Phrase</div>
+                  <div className="text-xs text-[--color-dim]">
+                    Type your 24-word phrase manually
+                  </div>
+                </div>
+              </button>
+
+              <div className="pt-2">
+                <Button variant="secondary" onClick={onCancel} className="w-full">
+                  Cancel
+                </Button>
+              </div>
+            </motion.div>
+          )}
+
+          {/* File unlock mode */}
+          {mode === 'file' && (
+            <motion.div
+              key="file"
+              initial={{ opacity: 0, x: -20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: 20 }}
+              className="space-y-4"
+            >
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-[--color-ghost]">
+                  Wallet Password
+                </label>
+                <Input
+                  type="password"
+                  placeholder="Enter your password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleUnlockFromFile()}
+                />
+                {error && <p className="mt-1 text-sm text-[--color-danger]">{error}</p>}
+              </div>
+
+              {walletFilePath && (
+                <p className="text-xs text-[--color-dim]">
+                  Loading from: <span className="font-mono">{walletFilePath}</span>
+                </p>
+              )}
+
+              <div className="flex gap-3">
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    setMode('choose')
+                    setError(null)
+                    setPassword('')
+                  }}
+                  className="flex-1"
+                >
+                  Back
+                </Button>
+                <Button onClick={handleUnlockFromFile} disabled={isLoading} className="flex-1">
+                  {isLoading ? (
+                    <RefreshCw className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Unlock className="h-4 w-4" />
+                  )}
+                  Unlock
+                </Button>
+              </div>
+            </motion.div>
+          )}
+
+          {/* Mnemonic entry mode */}
+          {mode === 'mnemonic' && (
+            <motion.div
+              key="mnemonic"
+              initial={{ opacity: 0, x: -20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: 20 }}
+              className="space-y-4"
+            >
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-[--color-ghost]">
+                  Recovery Phrase (24 words)
+                </label>
+                <textarea
+                  placeholder="word1 word2 word3 ... word24"
+                  value={mnemonic}
+                  onChange={(e) => setMnemonic(e.target.value)}
+                  className="h-24 w-full resize-none rounded-xl border border-[--color-steel] bg-[--color-void] px-4 py-3 font-mono text-sm text-[--color-light] placeholder:text-[--color-dim] focus:border-[--color-pulse] focus:outline-none"
+                />
+                {error && <p className="mt-1 text-sm text-[--color-danger]">{error}</p>}
+              </div>
+
+              <p className="text-xs text-[--color-dim]">
+                Your recovery phrase is used to sign transactions and is never stored or sent to
+                any server.
+              </p>
+
+              <div className="flex gap-3">
+                {hasWalletFile ? (
+                  <Button
+                    variant="secondary"
+                    onClick={() => {
+                      setMode('choose')
+                      setError(null)
+                      setMnemonic('')
+                    }}
+                    className="flex-1"
+                  >
+                    Back
+                  </Button>
+                ) : (
+                  <Button variant="secondary" onClick={onCancel} className="flex-1">
+                    Cancel
+                  </Button>
+                )}
+                <Button onClick={handleUnlockWithMnemonic} className="flex-1">
+                  <Unlock className="h-4 w-4" />
+                  Unlock
+                </Button>
+              </div>
+
+              {!hasWalletFile && (
+                <button
+                  onClick={() => {
+                    setError(null)
+                    setMode('save')
+                  }}
+                  className="w-full text-center text-sm text-[--color-pulse] hover:underline"
+                >
+                  <Save className="mr-1 inline h-3 w-3" />
+                  Save wallet to file for easier access
+                </button>
+              )}
+            </motion.div>
+          )}
+
+          {/* Save to file mode */}
+          {mode === 'save' && (
+            <motion.div
+              key="save"
+              initial={{ opacity: 0, x: -20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: 20 }}
+              className="space-y-4"
+            >
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-[--color-ghost]">
+                  Recovery Phrase (24 words)
+                </label>
+                <textarea
+                  placeholder="word1 word2 word3 ... word24"
+                  value={mnemonic}
+                  onChange={(e) => setMnemonic(e.target.value)}
+                  className="h-20 w-full resize-none rounded-xl border border-[--color-steel] bg-[--color-void] px-4 py-3 font-mono text-sm text-[--color-light] placeholder:text-[--color-dim] focus:border-[--color-pulse] focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-[--color-ghost]">
+                  Create Password
+                </label>
+                <Input
+                  type="password"
+                  placeholder="At least 8 characters"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                />
+              </div>
+
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-[--color-ghost]">
+                  Confirm Password
+                </label>
+                <Input
+                  type="password"
+                  placeholder="Confirm your password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                />
+                {error && <p className="mt-1 text-sm text-[--color-danger]">{error}</p>}
+              </div>
+
+              <p className="text-xs text-[--color-dim]">
+                Your wallet will be encrypted with Argon2 + ChaCha20-Poly1305 and saved locally.
+              </p>
+
+              <div className="flex gap-3">
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    setMode('mnemonic')
+                    setError(null)
+                    setPassword('')
+                    setConfirmPassword('')
+                  }}
+                  className="flex-1"
+                >
+                  Back
+                </Button>
+                <Button onClick={handleSaveToFile} disabled={isLoading} className="flex-1">
+                  {isLoading ? (
+                    <RefreshCw className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Save className="h-4 w-4" />
+                  )}
+                  Save & Unlock
+                </Button>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </motion.div>
+    </motion.div>
+  )
+}
+
 // Main wallet page
 export function WalletPage() {
   const { connectedNode } = useConnection()
@@ -79,15 +458,54 @@ export function WalletPage() {
     transactions,
     isLoading,
     isSending,
+    isUnlocked,
+    hasWalletFile,
+    walletFilePath,
     error,
     refreshBalance,
     refreshTransactions,
     sendTransaction,
     estimateFee,
     setAddress,
+    unlockWallet,
+    unlockWalletFromFile,
+    saveWalletToFile,
+    lockWallet,
   } = useWallet()
 
   const [showSendModal, setShowSendModal] = useState(false)
+  const [showUnlockModal, setShowUnlockModal] = useState(false)
+
+  // Handle send button click
+  const handleSendClick = () => {
+    if (!isUnlocked) {
+      setShowUnlockModal(true)
+    } else {
+      setShowSendModal(true)
+    }
+  }
+
+  // Handle wallet unlock
+  const handleUnlock = (mnemonic: string) => {
+    unlockWallet(mnemonic)
+    setShowUnlockModal(false)
+    setShowSendModal(true)
+  }
+
+  // Handle wallet unlock from file
+  const handleUnlockFromFile = async (password: string) => {
+    const result = await unlockWalletFromFile(password)
+    if (result.success) {
+      setShowUnlockModal(false)
+      setShowSendModal(true)
+    }
+    return result
+  }
+
+  // Handle save wallet to file
+  const handleSaveToFile = async (mnemonic: string, password: string) => {
+    return saveWalletToFile(mnemonic, password)
+  }
 
   // Wrap sendTransaction to match SendModal interface
   const handleSend = useCallback(
@@ -97,6 +515,7 @@ export function WalletPage() {
         amount: data.amount,
         privacyLevel: data.privacyLevel,
         memo: data.memo,
+        customFee: data.customFee,
       })
     },
     [sendTransaction]
@@ -161,13 +580,30 @@ export function WalletPage() {
                 <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
                 Refresh
               </Button>
-              <Button onClick={() => setShowSendModal(true)}>
+              <Button onClick={handleSendClick}>
                 <Send className="h-4 w-4" />
                 Send
               </Button>
+              {isUnlocked && (
+                <Button variant="ghost" onClick={lockWallet} title="Lock wallet">
+                  <Lock className="h-4 w-4" />
+                </Button>
+              )}
             </>
           }
         />
+
+        {/* Unlock status indicator */}
+        {isUnlocked && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="flex items-center gap-2 rounded-lg border border-[--color-pulse]/30 bg-[--color-pulse]/10 px-4 py-2 text-sm text-[--color-pulse]"
+          >
+            <Unlock className="h-4 w-4" />
+            Wallet unlocked for sending
+          </motion.div>
+        )}
 
         {/* Error */}
         {error && (
@@ -189,6 +625,18 @@ export function WalletPage() {
           <TransactionList transactions={transactions} />
         </motion.div>
       </div>
+
+      {/* Unlock Modal */}
+      {showUnlockModal && (
+        <WalletUnlock
+          onUnlock={handleUnlock}
+          onCancel={() => setShowUnlockModal(false)}
+          hasWalletFile={hasWalletFile}
+          walletFilePath={walletFilePath}
+          onUnlockFromFile={handleUnlockFromFile}
+          onSaveToFile={handleSaveToFile}
+        />
+      )}
 
       {/* Send Modal */}
       <SendModal

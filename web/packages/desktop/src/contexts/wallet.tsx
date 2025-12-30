@@ -4,8 +4,10 @@ import {
   useEffect,
   useState,
   useCallback,
+  useRef,
   type ReactNode,
 } from 'react'
+import { invoke } from '@tauri-apps/api/core'
 import { LocalNodeAdapter } from '@botho/adapters'
 import type { Balance, Transaction, Address } from '@botho/core'
 import { useConnection } from './connection'
@@ -17,6 +19,11 @@ interface WalletState {
   isLoading: boolean
   isSending: boolean
   error: string | null
+  isUnlocked: boolean
+  /** Whether a wallet file exists at the default path */
+  hasWalletFile: boolean
+  /** The default wallet file path */
+  walletFilePath: string | null
 }
 
 interface SendTxParams {
@@ -24,6 +31,7 @@ interface SendTxParams {
   amount: bigint
   privacyLevel: 'standard' | 'private'
   memo?: string
+  customFee?: bigint
 }
 
 interface WalletContextValue extends WalletState {
@@ -32,6 +40,36 @@ interface WalletContextValue extends WalletState {
   sendTransaction: (params: SendTxParams) => Promise<{ success: boolean; txHash?: string; error?: string }>
   estimateFee: (amount: bigint, privacyLevel: 'standard' | 'private') => Promise<bigint>
   setAddress: (address: Address) => void
+  unlockWallet: (mnemonic: string) => void
+  unlockWalletFromFile: (password: string, path?: string) => Promise<{ success: boolean; error?: string }>
+  saveWalletToFile: (mnemonic: string, password: string, path?: string) => Promise<{ success: boolean; path?: string; error?: string }>
+  lockWallet: () => void
+  checkWalletFile: () => Promise<void>
+}
+
+// Tauri command response types
+interface SendTransactionResult {
+  success: boolean
+  txHash?: string
+  error?: string
+}
+
+interface LoadWalletFileResult {
+  success: boolean
+  mnemonic?: string
+  syncHeight: number
+  error?: string
+}
+
+interface SaveWalletFileResult {
+  success: boolean
+  path?: string
+  error?: string
+}
+
+interface WalletFileExistsResult {
+  exists: boolean
+  path: string
 }
 
 const WalletContext = createContext<WalletContextValue | null>(null)
@@ -40,6 +78,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const { connectedNode } = useConnection()
   const [adapter, setAdapter] = useState<LocalNodeAdapter | null>(null)
 
+  // Store mnemonic in memory only (never persisted)
+  const mnemonicRef = useRef<string | null>(null)
+
   const [state, setState] = useState<WalletState>({
     address: null,
     balance: null,
@@ -47,6 +88,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     isLoading: false,
     isSending: false,
     error: null,
+    isUnlocked: false,
+    hasWalletFile: false,
+    walletFilePath: null,
   })
 
   // Create adapter when connected
@@ -75,6 +119,74 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     if (saved) {
       setState(s => ({ ...s, address: saved }))
     }
+  }, [])
+
+  // Check for wallet file on mount
+  const checkWalletFile = useCallback(async () => {
+    try {
+      const result = await invoke<WalletFileExistsResult>('wallet_file_exists', { path: null })
+      setState(s => ({
+        ...s,
+        hasWalletFile: result.exists,
+        walletFilePath: result.path,
+      }))
+    } catch {
+      // Ignore errors - wallet file check is optional
+    }
+  }, [])
+
+  useEffect(() => {
+    checkWalletFile()
+  }, [checkWalletFile])
+
+  const unlockWallet = useCallback((mnemonic: string) => {
+    mnemonicRef.current = mnemonic
+    setState(s => ({ ...s, isUnlocked: true }))
+  }, [])
+
+  const unlockWalletFromFile = useCallback(async (password: string, path?: string) => {
+    try {
+      const result = await invoke<LoadWalletFileResult>('load_wallet_file', {
+        params: { password, path: path || null }
+      })
+
+      if (result.success && result.mnemonic) {
+        mnemonicRef.current = result.mnemonic
+        setState(s => ({ ...s, isUnlocked: true }))
+        return { success: true }
+      } else {
+        return { success: false, error: result.error || 'Failed to load wallet' }
+      }
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : 'Failed to load wallet' }
+    }
+  }, [])
+
+  const saveWalletToFile = useCallback(async (mnemonic: string, password: string, path?: string) => {
+    try {
+      const result = await invoke<SaveWalletFileResult>('save_wallet_file', {
+        params: { mnemonic, password, path: path || null }
+      })
+
+      if (result.success) {
+        // Update state to reflect that wallet file now exists
+        setState(s => ({
+          ...s,
+          hasWalletFile: true,
+          walletFilePath: result.path || s.walletFilePath,
+        }))
+        return { success: true, path: result.path }
+      } else {
+        return { success: false, error: result.error || 'Failed to save wallet' }
+      }
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : 'Failed to save wallet' }
+    }
+  }, [])
+
+  const lockWallet = useCallback(() => {
+    mnemonicRef.current = null
+    setState(s => ({ ...s, isUnlocked: false }))
   }, [])
 
   const refreshBalance = useCallback(async () => {
@@ -119,37 +231,49 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     return adapter.estimateFee(sizeBytes)
   }, [adapter])
 
-  const sendTransaction = useCallback(async (_params: SendTxParams) => {
-    if (!adapter) {
+  const sendTransaction = useCallback(async (params: SendTxParams) => {
+    if (!connectedNode) {
       return { success: false, error: 'Not connected to node' }
+    }
+
+    if (!mnemonicRef.current) {
+      return { success: false, error: 'Wallet is locked. Please unlock your wallet first.' }
     }
 
     setState(s => ({ ...s, isSending: true, error: null }))
 
     try {
-      // In a real implementation, this would:
-      // 1. Build the transaction locally using _params
-      // 2. Sign it with the wallet's private key
-      // 3. Submit via adapter.submitTransaction()
-
-      // For now, return a mock success to demonstrate the UI
-      await new Promise(resolve => setTimeout(resolve, 1500)) // Simulate network delay
-
-      const mockTxHash = `tx_${Date.now().toString(16)}_${Math.random().toString(16).slice(2, 10)}`
+      // Call the Tauri backend to build, sign, and submit the transaction
+      const result = await invoke<SendTransactionResult>('send_transaction', {
+        params: {
+          mnemonic: mnemonicRef.current,
+          recipient: params.recipient,
+          amount: params.amount.toString(),
+          privacyLevel: params.privacyLevel,
+          memo: params.memo,
+          customFee: params.customFee?.toString(),
+          nodeHost: connectedNode.host,
+          nodePort: connectedNode.port,
+        }
+      })
 
       setState(s => ({ ...s, isSending: false }))
 
-      // Refresh balance and transactions after send
-      await refreshBalance()
-      await refreshTransactions()
-
-      return { success: true, txHash: mockTxHash }
+      if (result.success) {
+        // Refresh balance and transactions after successful send
+        await refreshBalance()
+        await refreshTransactions()
+        return { success: true, txHash: result.txHash }
+      } else {
+        setState(s => ({ ...s, error: result.error || 'Transaction failed' }))
+        return { success: false, error: result.error }
+      }
     } catch (err) {
       const error = err instanceof Error ? err.message : 'Transaction failed'
       setState(s => ({ ...s, isSending: false, error }))
       return { success: false, error }
     }
-  }, [adapter, refreshBalance, refreshTransactions])
+  }, [connectedNode, refreshBalance, refreshTransactions])
 
   // Auto-refresh when address changes
   useEffect(() => {
@@ -180,6 +304,11 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         sendTransaction,
         estimateFee,
         setAddress,
+        unlockWallet,
+        unlockWalletFromFile,
+        saveWalletToFile,
+        lockWallet,
+        checkWalletFile,
       }}
     >
       {children}
