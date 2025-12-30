@@ -3,6 +3,7 @@ import { Link, useLocation } from 'react-router-dom'
 import { Logo } from '@botho/ui'
 import { ArrowLeft, Book, Code, Shield, Zap, Globe, Terminal, Menu, X, Coins } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 
 const sections = [
   {
@@ -976,7 +977,7 @@ export function DocsPage() {
             <h1 className="font-display text-2xl md:text-3xl font-bold">{currentSection.title}</h1>
           </div>
           <div className="prose prose-invert max-w-none prose-headings:font-display prose-h2:text-xl prose-h2:mt-8 prose-h2:mb-4 prose-h3:text-lg prose-h3:mt-6 prose-h3:mb-3 prose-p:text-ghost prose-p:leading-relaxed prose-li:text-ghost prose-code:bg-steel/50 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:text-pulse prose-code:before:content-none prose-code:after:content-none prose-pre:bg-void prose-pre:border prose-pre:border-steel prose-strong:text-light">
-            <ReactMarkdown>{currentSection.content.trim()}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{currentSection.content.trim()}</ReactMarkdown>
           </div>
         </div>
       </main>
