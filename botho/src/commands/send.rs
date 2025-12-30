@@ -1,7 +1,6 @@
 // Copyright (c) 2024 Botho Foundation
 
 use anyhow::{Context, Result};
-use bth_account_keys::PublicAddress;
 use bth_cluster_tax::{FeeConfig, TransactionType};
 use std::fs;
 use std::path::Path;
@@ -9,11 +8,9 @@ use std::path::Path;
 use crate::address::Address;
 use crate::config::{ledger_db_path_from_config, Config};
 use crate::ledger::Ledger;
-use crate::transaction::{MemoPayload, Transaction, TxInput, TxOutput};
+use crate::transaction::{MemoPayload, Transaction, TxOutput};
 use crate::wallet::Wallet;
 
-#[cfg(feature = "pq")]
-use bth_account_keys::QuantumSafePublicAddress;
 #[cfg(feature = "pq")]
 use crate::transaction_pq::QuantumPrivateTransaction;
 
@@ -73,18 +70,16 @@ pub fn run(config_path: &Path, address_str: &str, amount_str: &str, private: boo
         .map_err(|e| anyhow::anyhow!("Failed to get UTXOs: {}", e))?;
 
     // Calculate fee using the cluster-tax fee curve
+    // All transactions are now private (Standard-Private with CLSAG or PQ-Private with LION)
     let fee_config = FeeConfig::default();
-    let tx_type = if private {
-        TransactionType::Hidden
-    } else {
-        TransactionType::Plain
-    };
+    let tx_type = TransactionType::Hidden; // Standard-Private with CLSAG
+    let _ = private; // Deprecated: all transactions are now private
 
-    // Get fee rate (cluster_wealth = 0 for now)
+    // Estimate fee based on typical transaction size
+    // cluster_wealth = 0 for now (will be computed from UTXOs in production)
     let cluster_wealth = 0u64;
     let num_memos = if memo.is_some() { 1 } else { 0 };
-    let fee_rate_bps = fee_config.fee_rate_bps_with_memos(tx_type, cluster_wealth, num_memos);
-    let fee = fee_config.minimum_fee(tx_type, amount, cluster_wealth, num_memos);
+    let fee = fee_config.estimate_typical_fee(tx_type, cluster_wealth, num_memos);
 
     // Ensure minimum fee of at least 1 picocredit
     let fee = fee.max(1);
@@ -122,12 +117,13 @@ pub fn run(config_path: &Path, address_str: &str, amount_str: &str, private: boo
                 "Quantum transaction requires a quantum-safe address (botho://1q/...)"
             ))?;
 
+        // For PQ transactions, use PqHidden type to estimate fee
+        let pq_fee = fee_config.estimate_typical_fee(TransactionType::PqHidden, cluster_wealth, num_memos);
         return run_quantum(
             config_path,
             &pq_recipient,
             amount,
-            fee,
-            fee_rate_bps as u64,
+            pq_fee,
             selected_utxos,
             state.height,
             &wallet,
@@ -180,21 +176,19 @@ pub fn run(config_path: &Path, address_str: &str, amount_str: &str, private: boo
     println!("Amount: {:.12} BTH", amount as f64 / 1_000_000_000_000.0);
     println!();
     println!("Fee breakdown:");
-    println!("  Type: {} ({})", tx_type_str, if private { "ring signatures" } else { "visible sender" });
-    println!("  Rate: {} bps ({:.2}%)", fee_rate_bps, fee_rate_bps as f64 / 100.0);
+    println!("  Type: {} (ring signatures)", tx_type_str);
+    println!("  Base rate: {} per byte", fee_config.fee_per_byte);
     if let Some(memo_text) = memo {
-        println!("  Memo: \"{}\" (+{}% fee)",
+        println!("  Memo: \"{}\" (+{} per memo)",
             if memo_text.len() > 30 { format!("{}...", &memo_text[..30]) } else { memo_text.to_string() },
-            fee_config.memo_fee_rate_bps as f64 / 100.0);
+            fee_config.fee_per_memo);
     }
     println!("  Total fee: {:.12} BTH", fee as f64 / 1_000_000_000_000.0);
     println!();
     if change > 0 {
         println!("Change: {:.12} BTH", change as f64 / 1_000_000_000_000.0);
     }
-    if private {
-        println!("Privacy: Ring signatures hide which UTXO was spent");
-    }
+    println!("Privacy: Ring signatures hide which UTXO was spent");
     println!();
     println!("Transaction hash: {}", hex::encode(&tx_hash[0..16]));
     println!("Inputs: {}", num_inputs);
@@ -306,7 +300,6 @@ fn run_quantum(
     recipient: &bth_account_keys::QuantumSafePublicAddress,
     amount: u64,
     fee: u64,
-    fee_rate_bps: u64,
     selected_utxos: Vec<crate::transaction::Utxo>,
     current_height: u64,
     wallet: &Wallet,
@@ -351,10 +344,9 @@ fn run_quantum(
     println!("Amount: {:.12} BTH", amount as f64 / 1_000_000_000_000.0);
     println!();
     println!("Fee breakdown:");
-    println!("  Type: Quantum-Private (hybrid classical + PQ)");
-    println!("  Classical rate: {} bps ({:.2}%)", fee_rate_bps, fee_rate_bps as f64 / 100.0);
-    println!("  PQ overhead: ~19x larger than classical");
-    println!("  Total fee: {:.12} BTH", effective_fee as f64 / 1_000_000_000_000.0);
+    println!("  Type: PQ-Private (LION ring signatures)");
+    println!("  Size: ~65 KB (lattice-based signatures)");
+    println!("  Fee: {:.12} BTH (size-based)", effective_fee as f64 / 1_000_000_000_000.0);
     println!();
 
     let selected_amount: u64 = selected_utxos.iter().map(|u| u.output.amount).sum();

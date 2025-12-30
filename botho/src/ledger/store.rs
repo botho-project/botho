@@ -52,6 +52,13 @@ const META_TOTAL_MINED: &[u8] = b"total_mined";
 const META_FEES_BURNED: &[u8] = b"fees_burned";
 const META_DIFFICULTY: &[u8] = b"difficulty";
 
+// EmissionController state
+const META_TOTAL_TX: &[u8] = b"total_tx";
+const META_EPOCH_TX: &[u8] = b"epoch_tx";
+const META_EPOCH_EMISSION: &[u8] = b"epoch_emission";
+const META_EPOCH_BURNS: &[u8] = b"epoch_burns";
+const META_CURRENT_REWARD: &[u8] = b"current_reward";
+
 impl Ledger {
     /// Open or create a ledger at the given path (defaults to Testnet for backward compatibility)
     pub fn open(path: &Path) -> Result<Self, LedgerError> {
@@ -195,6 +202,32 @@ impl Ledger {
             0
         };
 
+        // EmissionController state
+        let total_tx = self.meta_db.get(&rtxn, META_TOTAL_TX)
+            .map_err(|e| LedgerError::Database(format!("Failed to get total_tx: {}", e)))?
+            .map(|b| u64::from_le_bytes(b.try_into().unwrap_or([0; 8])))
+            .unwrap_or(0);
+
+        let epoch_tx = self.meta_db.get(&rtxn, META_EPOCH_TX)
+            .map_err(|e| LedgerError::Database(format!("Failed to get epoch_tx: {}", e)))?
+            .map(|b| u64::from_le_bytes(b.try_into().unwrap_or([0; 8])))
+            .unwrap_or(0);
+
+        let epoch_emission = self.meta_db.get(&rtxn, META_EPOCH_EMISSION)
+            .map_err(|e| LedgerError::Database(format!("Failed to get epoch_emission: {}", e)))?
+            .map(|b| u64::from_le_bytes(b.try_into().unwrap_or([0; 8])))
+            .unwrap_or(0);
+
+        let epoch_burns = self.meta_db.get(&rtxn, META_EPOCH_BURNS)
+            .map_err(|e| LedgerError::Database(format!("Failed to get epoch_burns: {}", e)))?
+            .map(|b| u64::from_le_bytes(b.try_into().unwrap_or([0; 8])))
+            .unwrap_or(0);
+
+        let current_reward = self.meta_db.get(&rtxn, META_CURRENT_REWARD)
+            .map_err(|e| LedgerError::Database(format!("Failed to get current_reward: {}", e)))?
+            .map(|b| u64::from_le_bytes(b.try_into().unwrap_or([0; 8])))
+            .unwrap_or(crate::block::difficulty::INITIAL_REWARD);
+
         Ok(ChainState {
             height,
             tip_hash,
@@ -202,6 +235,11 @@ impl Ledger {
             total_mined,
             total_fees_burned,
             difficulty,
+            total_tx,
+            epoch_tx,
+            epoch_emission,
+            epoch_burns,
+            current_reward,
         })
     }
 
@@ -402,6 +440,37 @@ impl Ledger {
             .map_err(|e| LedgerError::Database(format!("Failed to start write txn: {}", e)))?;
         self.meta_db.put(&mut wtxn, META_DIFFICULTY, &difficulty.to_le_bytes())
             .map_err(|e| LedgerError::Database(format!("Failed to put difficulty: {}", e)))?;
+        wtxn.commit()
+            .map_err(|e| LedgerError::Database(format!("Failed to commit: {}", e)))?;
+        Ok(())
+    }
+
+    /// Update emission controller state in chain state
+    pub fn update_emission_state(
+        &self,
+        difficulty: u64,
+        total_tx: u64,
+        epoch_tx: u64,
+        epoch_emission: u64,
+        epoch_burns: u64,
+        current_reward: u64,
+    ) -> Result<(), LedgerError> {
+        let mut wtxn = self.env.write_txn()
+            .map_err(|e| LedgerError::Database(format!("Failed to start write txn: {}", e)))?;
+
+        self.meta_db.put(&mut wtxn, META_DIFFICULTY, &difficulty.to_le_bytes())
+            .map_err(|e| LedgerError::Database(format!("Failed to put difficulty: {}", e)))?;
+        self.meta_db.put(&mut wtxn, META_TOTAL_TX, &total_tx.to_le_bytes())
+            .map_err(|e| LedgerError::Database(format!("Failed to put total_tx: {}", e)))?;
+        self.meta_db.put(&mut wtxn, META_EPOCH_TX, &epoch_tx.to_le_bytes())
+            .map_err(|e| LedgerError::Database(format!("Failed to put epoch_tx: {}", e)))?;
+        self.meta_db.put(&mut wtxn, META_EPOCH_EMISSION, &epoch_emission.to_le_bytes())
+            .map_err(|e| LedgerError::Database(format!("Failed to put epoch_emission: {}", e)))?;
+        self.meta_db.put(&mut wtxn, META_EPOCH_BURNS, &epoch_burns.to_le_bytes())
+            .map_err(|e| LedgerError::Database(format!("Failed to put epoch_burns: {}", e)))?;
+        self.meta_db.put(&mut wtxn, META_CURRENT_REWARD, &current_reward.to_le_bytes())
+            .map_err(|e| LedgerError::Database(format!("Failed to put current_reward: {}", e)))?;
+
         wtxn.commit()
             .map_err(|e| LedgerError::Database(format!("Failed to commit: {}", e)))?;
         Ok(())

@@ -18,6 +18,7 @@ use tracing::{debug, info, warn};
 #[derive(Debug, Clone)]
 pub struct ConsensusConfig {
     /// Slot duration (how often to try to close a slot)
+    /// When dynamic_timing is enabled, this serves as the initial/fallback value
     pub slot_duration: Duration,
 
     /// Maximum transactions per slot
@@ -25,6 +26,10 @@ pub struct ConsensusConfig {
 
     /// Timeout before re-broadcasting our values
     pub rebroadcast_interval: Duration,
+
+    /// Enable dynamic block timing based on transaction load
+    /// When true, slot_duration adjusts based on recent block throughput
+    pub dynamic_timing: bool,
 }
 
 impl Default for ConsensusConfig {
@@ -33,6 +38,18 @@ impl Default for ConsensusConfig {
             slot_duration: Duration::from_secs(20),
             max_txs_per_slot: 100,
             rebroadcast_interval: Duration::from_secs(5),
+            dynamic_timing: true, // Enabled by default
+        }
+    }
+}
+
+impl ConsensusConfig {
+    /// Create config with dynamic timing disabled (fixed slot duration)
+    pub fn fixed_timing(slot_duration_secs: u64) -> Self {
+        Self {
+            slot_duration: Duration::from_secs(slot_duration_secs),
+            dynamic_timing: false,
+            ..Default::default()
         }
     }
 }
@@ -78,12 +95,23 @@ struct TxCacheEntry {
     is_minting_tx: bool,
 }
 
+/// Recent block info for dynamic timing calculation
+#[derive(Clone, Debug)]
+pub struct RecentBlockInfo {
+    /// Block timestamp
+    pub timestamp: u64,
+    /// Number of transactions in the block
+    pub tx_count: usize,
+}
+
 /// Shared state for validation callbacks
 struct SharedValidationState {
     /// Transaction cache (hash -> entry)
     tx_cache: HashMap<[u8; 32], TxCacheEntry>,
     /// Chain state for validation
     chain_state: ChainState,
+    /// Recent blocks for dynamic timing (newest last)
+    recent_blocks: VecDeque<RecentBlockInfo>,
 }
 
 /// The consensus service manages SCP participation
@@ -137,6 +165,7 @@ impl ConsensusService {
         let shared_state = Arc::new(RwLock::new(SharedValidationState {
             tx_cache: HashMap::new(),
             chain_state: initial_chain_state.clone(),
+            recent_blocks: VecDeque::new(),
         }));
 
         // Create chain state reference for the validator
@@ -228,6 +257,68 @@ impl ConsensusService {
         }
     }
 
+    /// Record a finalized block for dynamic timing calculation.
+    ///
+    /// Call this after each block is finalized to update the timing history.
+    pub fn record_block(&mut self, timestamp: u64, tx_count: usize) {
+        use crate::block::dynamic_timing::SMOOTHING_WINDOW;
+
+        if let Ok(mut state) = self.shared_state.write() {
+            state.recent_blocks.push_back(RecentBlockInfo { timestamp, tx_count });
+
+            // Keep only the last SMOOTHING_WINDOW blocks
+            while state.recent_blocks.len() > SMOOTHING_WINDOW {
+                state.recent_blocks.pop_front();
+            }
+        }
+    }
+
+    /// Get the current slot duration based on dynamic timing.
+    ///
+    /// If dynamic timing is disabled, returns the configured fixed duration.
+    /// Otherwise, computes based on recent transaction throughput.
+    pub fn current_slot_duration(&self) -> Duration {
+        if !self.config.dynamic_timing {
+            return self.config.slot_duration;
+        }
+
+        // Compute dynamic slot time from recent blocks
+        let block_time_secs = if let Ok(state) = self.shared_state.read() {
+            if state.recent_blocks.len() < 2 {
+                // Not enough history, use default
+                self.config.slot_duration.as_secs()
+            } else {
+                // Compute tx rate from recent blocks
+                let blocks: Vec<_> = state.recent_blocks.iter().collect();
+                let first = blocks.first().unwrap();
+                let last = blocks.last().unwrap();
+                let window_time = last.timestamp.saturating_sub(first.timestamp);
+
+                if window_time == 0 {
+                    self.config.slot_duration.as_secs()
+                } else {
+                    let total_txs: usize = blocks.iter().map(|b| b.tx_count).sum();
+                    let tx_rate = total_txs as f64 / window_time as f64;
+
+                    // Find appropriate level
+                    use crate::block::dynamic_timing::BLOCK_TIME_LEVELS;
+                    let mut block_time = crate::block::dynamic_timing::MAX_BLOCK_TIME;
+                    for (threshold, time) in BLOCK_TIME_LEVELS {
+                        if tx_rate >= threshold {
+                            block_time = time;
+                            break;
+                        }
+                    }
+                    block_time
+                }
+            }
+        } else {
+            self.config.slot_duration.as_secs()
+        };
+
+        Duration::from_secs(block_time_secs)
+    }
+
     /// Get our node ID
     pub fn node_id(&self) -> &NodeID {
         &self.node_id
@@ -302,9 +393,12 @@ impl ConsensusService {
             self.queue_broadcast(msg);
         }
 
+        // Get current slot duration (dynamic or fixed)
+        let slot_duration = self.current_slot_duration();
+
         // Try to propose values if we have pending ones
         if !self.pending_values.is_empty()
-            && self.last_slot_attempt.elapsed() >= self.config.slot_duration
+            && self.last_slot_attempt.elapsed() >= slot_duration
         {
             self.propose_pending_values();
             self.last_slot_attempt = Instant::now();

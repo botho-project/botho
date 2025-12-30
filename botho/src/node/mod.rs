@@ -2,12 +2,12 @@ pub mod minter;
 
 use anyhow::Result;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, RwLock};
 use tracing::{info, warn};
 
-use crate::block::difficulty::{calculate_new_difficulty, ADJUSTMENT_WINDOW};
+use crate::block::difficulty::EmissionController;
 use crate::commands::send::{load_pending_txs, clear_pending_txs};
 use crate::config::{ledger_db_path_from_config, Config};
 use crate::ledger::Ledger;
@@ -39,6 +39,8 @@ pub struct Node {
     minting_tx_receiver: Option<Receiver<MintedMintingTx>>,
     /// Directory containing config file (for finding pending_txs.bin)
     config_dir: PathBuf,
+    /// Emission controller for tx-based monetary policy
+    emission_controller: EmissionController,
 }
 
 impl Node {
@@ -56,6 +58,21 @@ impl Node {
         let ledger_path = ledger_db_path_from_config(config_path);
         let ledger = Ledger::open(&ledger_path)
             .map_err(|e| anyhow::anyhow!("Failed to open ledger: {}", e))?;
+
+        // Restore EmissionController from persisted chain state
+        let state = ledger
+            .get_chain_state()
+            .map_err(|e| anyhow::anyhow!("Failed to get chain state: {}", e))?;
+        let emission_controller = EmissionController::from_chain_state(
+            state.difficulty,
+            state.total_mined,
+            state.total_fees_burned,
+            state.total_tx,
+            state.epoch_tx,
+            state.epoch_emission,
+            state.epoch_burns,
+            state.current_reward,
+        );
 
         // Create shared ledger and mempool
         let ledger = Arc::new(RwLock::new(ledger));
@@ -76,6 +93,7 @@ impl Node {
             minter: None,
             minting_tx_receiver: None,
             config_dir,
+            emission_controller,
         })
     }
 
@@ -179,49 +197,6 @@ impl Node {
         }
     }
 
-    fn adjust_difficulty(&mut self, current_height: u64) -> Result<()> {
-        // Get the blocks in the adjustment window
-        let window_start = current_height.saturating_sub(ADJUSTMENT_WINDOW);
-
-        // Get start and end blocks
-        let ledger = self.ledger.read()
-            .map_err(|_| anyhow::anyhow!("Ledger lock poisoned"))?;
-        let start_block = ledger
-            .get_block(window_start)
-            .map_err(|e| anyhow::anyhow!("Failed to get start block: {}", e))?;
-        let end_block = ledger
-            .get_block(current_height)
-            .map_err(|e| anyhow::anyhow!("Failed to get end block: {}", e))?;
-        drop(ledger);
-
-        let current_difficulty = end_block.header.difficulty;
-        let blocks_in_window = current_height - window_start;
-
-        let new_difficulty = calculate_new_difficulty(
-            current_difficulty,
-            start_block.header.timestamp,
-            end_block.header.timestamp,
-            blocks_in_window,
-        );
-
-        if new_difficulty != current_difficulty {
-            info!(
-                "Difficulty adjustment at height {}: {} -> {} (ratio: {:.2}x)",
-                current_height,
-                current_difficulty,
-                new_difficulty,
-                new_difficulty as f64 / current_difficulty as f64
-            );
-
-            self.ledger.write()
-                .map_err(|_| anyhow::anyhow!("Ledger lock poisoned"))?
-                .set_difficulty(new_difficulty)
-                .map_err(|e| anyhow::anyhow!("Failed to set difficulty: {}", e))?;
-        }
-
-        Ok(())
-    }
-
     // --- Network integration methods ---
 
     /// Get the config
@@ -266,11 +241,40 @@ impl Node {
             }
         }
 
-        // Check if we need to adjust difficulty
-        let new_height = block.height();
-        if new_height > 0 && new_height % ADJUSTMENT_WINDOW == 0 {
-            self.adjust_difficulty(new_height)?;
+        // Update emission controller with block data
+        let tx_count = block.transactions.len() as u64;
+        let reward_paid = block.minting_tx.reward;
+        let fees_burned: u64 = block.transactions.iter().map(|tx| tx.fee).sum();
+
+        let old_difficulty = self.emission_controller.difficulty;
+        let (new_difficulty, new_reward) = self.emission_controller.record_block(
+            tx_count,
+            reward_paid,
+            fees_burned,
+        );
+
+        if new_difficulty != old_difficulty {
+            info!(
+                "Difficulty adjustment at tx {}: {} -> {} (ratio: {:.2}x)",
+                self.emission_controller.total_tx,
+                old_difficulty,
+                new_difficulty,
+                new_difficulty as f64 / old_difficulty as f64
+            );
         }
+
+        // Persist emission controller state
+        self.ledger.write()
+            .map_err(|_| anyhow::anyhow!("Ledger lock poisoned"))?
+            .update_emission_state(
+                new_difficulty,
+                self.emission_controller.total_tx,
+                self.emission_controller.epoch_tx,
+                self.emission_controller.epoch_emission,
+                self.emission_controller.epoch_burns,
+                new_reward,
+            )
+            .map_err(|e| anyhow::anyhow!("Failed to persist emission state: {}", e))?;
 
         // Update minter with new work if minting
         if let Some(ref minter) = self.minter {
@@ -279,7 +283,7 @@ impl Node {
                     let work = MintingWork {
                         prev_block_hash: state.tip_hash,
                         height: state.height + 1,
-                        difficulty: state.difficulty,
+                        difficulty: new_difficulty,
                         total_minted: state.total_mined,
                     };
                     info!(

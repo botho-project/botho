@@ -495,21 +495,21 @@ async fn handle_estimate_fee(id: Value, params: &Value, state: &RpcState) -> Jso
     let num_memos = params.get("memos").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
 
     // Determine transaction type from either "txType" (new) or "private" (legacy)
+    // Note: All transactions are now private (CLSAG or LION ring signatures)
     let tx_type = if let Some(tx_type_str) = params.get("txType").and_then(|v| v.as_str()) {
         match tx_type_str {
-            "plain" | "Plain" => bth_cluster_tax::TransactionType::Plain,
-            "hidden" | "Hidden" | "clsag" | "Clsag" => bth_cluster_tax::TransactionType::Hidden,
-            "pqHidden" | "PqHidden" | "lion" | "Lion" => bth_cluster_tax::TransactionType::PqHidden,
+            // "plain" maps to "hidden" for backwards compatibility
+            "plain" | "Plain" | "hidden" | "Hidden" | "clsag" | "Clsag" => {
+                bth_cluster_tax::TransactionType::Hidden
+            }
+            "pqHidden" | "PqHidden" | "lion" | "Lion" => {
+                bth_cluster_tax::TransactionType::PqHidden
+            }
             _ => bth_cluster_tax::TransactionType::Hidden, // Default to standard-private
         }
     } else {
-        // Legacy: use "private" boolean
-        let is_private = params.get("private").and_then(|v| v.as_bool()).unwrap_or(true);
-        if is_private {
-            bth_cluster_tax::TransactionType::Hidden
-        } else {
-            bth_cluster_tax::TransactionType::Plain
-        }
+        // Legacy: always use Hidden (private transactions required)
+        bth_cluster_tax::TransactionType::Hidden
     };
 
     let mempool = read_lock!(state.mempool, id.clone());
@@ -517,8 +517,8 @@ async fn handle_estimate_fee(id: Value, params: &Value, state: &RpcState) -> Jso
     // Calculate minimum fee using the fee curve
     let minimum_fee = mempool.estimate_fee(tx_type, amount, num_memos);
 
-    // Get fee rate in basis points for display
-    let fee_rate_bps = mempool.fee_rate_bps(tx_type);
+    // Get cluster factor for display (1000 = 1x, 6000 = 6x based on wealth)
+    let cluster_factor = mempool.cluster_factor(0); // 0 wealth for now
 
     // Calculate average mempool fee for priority estimation
     let avg_fee = if mempool.len() > 0 {
@@ -528,7 +528,6 @@ async fn handle_estimate_fee(id: Value, params: &Value, state: &RpcState) -> Jso
     };
 
     let tx_type_str = match tx_type {
-        bth_cluster_tax::TransactionType::Plain => "plain",
         bth_cluster_tax::TransactionType::Hidden => "hidden",
         bth_cluster_tax::TransactionType::PqHidden => "pqHidden",
         bth_cluster_tax::TransactionType::Minting => "minting",
@@ -536,7 +535,7 @@ async fn handle_estimate_fee(id: Value, params: &Value, state: &RpcState) -> Jso
 
     JsonRpcResponse::success(id, json!({
         "minimumFee": minimum_fee,
-        "feeRateBps": fee_rate_bps,
+        "clusterFactor": cluster_factor,  // 1000 = 1x, 6000 = 6x
         "recommendedFee": avg_fee.max(minimum_fee),
         "highPriorityFee": (avg_fee * 2).max(minimum_fee * 2),
         "params": {

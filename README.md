@@ -62,18 +62,26 @@ Botho combines proven cryptographic building blocks in a novel architecture:
 
 ### Transaction Types
 
-Botho offers three transaction types, balancing privacy, efficiency, and quantum resistance:
+Botho offers two private transaction types, balancing efficiency and quantum resistance:
 
-| Property | Plain | Standard-Private | PQ-Private |
-|:--|:--|:--|:--|
-| **Sender privacy** | Visible | Ring signature (CLSAG) | Ring signature (LION) |
-| **Recipient privacy** | ML-KEM-768 stealth | ML-KEM-768 stealth | ML-KEM-768 stealth |
-| **Amount privacy** | Pedersen + Bulletproofs | Pedersen + Bulletproofs | Pedersen + Bulletproofs |
-| **Ring size** | — | 20 decoys | 20 decoys |
-| **Signature size** | ~3.3 KB | ~0.7 KB/input | ~63 KB/input |
-| **Quantum resistance** | Recipient: full | Recipient: full, Sender: classical | Full |
-| **Base fee** | 0.05% | 0.2% | 1.0% |
-| **Use case** | Exchanges, auditing | Daily transactions | High-value, long-term privacy |
+| Property | Standard-Private | PQ-Private |
+|:--|:--|:--|
+| **Sender privacy** | Ring signature (CLSAG) | Ring signature (LION) |
+| **Recipient privacy** | ML-KEM-768 stealth | ML-KEM-768 stealth |
+| **Amount privacy** | Pedersen + Bulletproofs | Pedersen + Bulletproofs |
+| **Ring size** | 20 decoys | 11 decoys |
+| **Max inputs** | 16 | 8 |
+| **Signature size** | ~0.7 KB/input | ~36 KB/input |
+| **Quantum resistance** | Recipient: full, Sender: classical | Full |
+| **Fee** | size-based | size-based |
+| **Max tx size** | 100 KB | 512 KB |
+| **Use case** | Daily transactions | High-value, long-term privacy |
+
+Fees are calculated as: `fee = fee_per_byte × tx_size × cluster_factor`
+
+The cluster factor (1x to 6x) is a progressive multiplier that discourages wealth concentration.
+
+**Why different ring sizes?** LION signatures are ~50x larger than CLSAG per ring member. Ring size 11 provides 3.30 bits of measured privacy (95% efficiency) while keeping transactions manageable.
 
 **Why hybrid cryptography for Standard-Private?**
 

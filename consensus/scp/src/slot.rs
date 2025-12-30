@@ -379,7 +379,8 @@ impl<V: Value, ValidationError: Display> ScpSlot<V> for Slot<V, ValidationError>
                         }
                     }
 
-                    // TODO: Reject messages with incorrectly ordered values.
+                    // Note: Ballot value ordering is validated in Msg::validate() above.
+                    // Messages with incorrectly ordered values are rejected there.
 
                     // The msg is valid and should be processed.
                     self.M.insert(msg.sender_id.clone(), msg.clone());
@@ -2417,8 +2418,8 @@ mod ballot_protocol_tests {
     use maplit::btreeset;
     use bth_common::logger::test_with_logger;
 
-    // TODO: reject a message if it contains a ballot containing incorrectly ordered
-    // values.
+    // Note: Messages with incorrectly ordered ballot values are rejected by
+    // Msg::validate(). See ballot.rs for is_values_sorted() and msg.rs for validation.
 
     // === Handling "confirmed nominated" values ===
 
@@ -2911,7 +2912,7 @@ mod ballot_protocol_tests {
             logger,
         );
 
-        let ballot = Ballot::new(1, &[5678, 1234]);
+        let ballot = Ballot::new(1, &[1234, 5678]);
 
         // Node 2 has issued "vote-or-accept prepare(b)".
         {
@@ -3040,8 +3041,8 @@ mod ballot_protocol_tests {
                 node_2_quorum_set,
                 slot_index,
                 Topic::Prepare(PreparePayload {
-                    B: Ballot::new(3, &[5678, 1234]),
-                    P: Some(Ballot::new(3, &[5678, 1234])),
+                    B: Ballot::new(3, &[1234, 5678]),
+                    P: Some(Ballot::new(3, &[1234, 5678])),
                     PP: None,
                     HN: 0,
                     CN: 0,
@@ -3062,8 +3063,8 @@ mod ballot_protocol_tests {
             node_3_quorum_set,
             slot_index,
             Topic::Prepare(PreparePayload {
-                B: Ballot::new(3, &[5678, 1234]),
-                P: Some(Ballot::new(3, &[5678, 1234])),
+                B: Ballot::new(3, &[1234, 5678]),
+                P: Some(Ballot::new(3, &[1234, 5678])),
                 PP: None,
                 HN: 0,
                 CN: 0,
@@ -3086,8 +3087,8 @@ mod ballot_protocol_tests {
                         Y: BTreeSet::default(),
                     },
                     PreparePayload {
-                        B: Ballot::new(3, &[5678, 1234]),
-                        P: Some(Ballot::new(3, &[5678, 1234])),
+                        B: Ballot::new(3, &[1234, 5678]),
+                        P: Some(Ballot::new(3, &[1234, 5678])),
                         PP: None,
                         HN: 0,
                         CN: 0,
@@ -3129,7 +3130,7 @@ mod ballot_protocol_tests {
         );
 
         // Mutate slot so that it has issued `vote prepare<1,C>`.
-        let ballot = Ballot::new(1, &[5678, 1234]);
+        let ballot = Ballot::new(1, &[1234, 5678]);
 
         slot.phase = Phase::Prepare;
         slot.B = ballot.clone();
@@ -3167,8 +3168,8 @@ mod ballot_protocol_tests {
                 node_2_quorum_set,
                 slot_index,
                 Topic::Prepare(PreparePayload {
-                    B: Ballot::new(3, &[5678, 1234]),
-                    P: Some(Ballot::new(3, &[5678, 1234])),
+                    B: Ballot::new(3, &[1234, 5678]),
+                    P: Some(Ballot::new(3, &[1234, 5678])),
                     PP: None,
                     HN: 0,
                     CN: 0,
@@ -3189,8 +3190,8 @@ mod ballot_protocol_tests {
             node_3_quorum_set,
             slot_index,
             Topic::Prepare(PreparePayload {
-                B: Ballot::new(3, &[5678, 1234]),
-                P: Some(Ballot::new(3, &[5678, 1234])),
+                B: Ballot::new(3, &[1234, 5678]),
+                P: Some(Ballot::new(3, &[1234, 5678])),
                 PP: None,
                 HN: 0,
                 CN: 0,
@@ -3208,8 +3209,8 @@ mod ballot_protocol_tests {
                 local_node_quorum_set,
                 slot_index,
                 Topic::Prepare(PreparePayload {
-                    B: Ballot::new(3, &[5678, 1234]),
-                    P: Some(Ballot::new(3, &[5678, 1234])),
+                    B: Ballot::new(3, &[1234, 5678]),
+                    P: Some(Ballot::new(3, &[1234, 5678])),
                     PP: None,
                     HN: 0,
                     CN: 0,
@@ -3237,8 +3238,8 @@ mod ballot_protocol_tests {
             logger,
         );
 
-        let ballot = Ballot::new(3, &[8888, 5678, 1234]);
-        let prepared = Ballot::new(2, &[8888, 5678, 1234]);
+        let ballot = Ballot::new(3, &[1234, 5678, 8888]);
+        let prepared = Ballot::new(2, &[1234, 5678, 8888]);
         let prepared_prime = Ballot::new(1, &[1234]);
 
         slot.phase = Phase::NominatePrepare;
@@ -3380,7 +3381,7 @@ mod ballot_protocol_tests {
         );
 
         // Mutate prepare_state so that it has issued `vote prepare<1,C>`.
-        let ballot = Ballot::new(1, &[5678, 1234]);
+        let ballot = Ballot::new(1, &[1234, 5678]);
 
         slot.phase = Phase::Prepare;
         slot.B = ballot.clone();
@@ -3494,7 +3495,7 @@ mod ballot_protocol_tests {
         );
 
         // Node 1 has issued "vote-or-accept prepare(b)".
-        let ballot = Ballot::new(1, &[5678, 1234]);
+        let ballot = Ballot::new(1, &[1234, 5678]);
         slot.phase = Phase::Prepare;
         slot.B = ballot.clone();
         slot.last_sent_msg = slot.out_msg();
@@ -3515,7 +3516,7 @@ mod ballot_protocol_tests {
         }
 
         // Node 2 issues "vote-or-accept prepare(<2, b.X>)".
-        let ballot_two = Ballot::new(2, &[5678, 1234]);
+        let ballot_two = Ballot::new(2, &[1234, 5678]);
         let msg = Msg::new(
             node_2.0.clone(),
             node_2.1,
@@ -3675,7 +3676,7 @@ mod ballot_protocol_tests {
         );
 
         // Mutate slot so that it has issued `vote prepare<1,C>`.
-        let ballot = Ballot::new(1, &[5678, 1234]);
+        let ballot = Ballot::new(1, &[1234, 5678]);
 
         slot.phase = Phase::Prepare;
         slot.B = ballot.clone();
@@ -3918,7 +3919,7 @@ mod ballot_protocol_tests {
         );
 
         // Mutate prepare_state so that the local node has issued `accept prepare <n,C>.
-        let ballot = Ballot::new(7, &[5678, 1234]);
+        let ballot = Ballot::new(7, &[1234, 5678]);
 
         slot.phase = Phase::Prepare;
         slot.B = ballot.clone();

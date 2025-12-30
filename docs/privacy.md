@@ -7,7 +7,7 @@ Botho provides strong transaction privacy through a combination of cryptographic
 | Privacy Goal | Technique | Effectiveness |
 |--------------|-----------|---------------|
 | Hide recipient | PQ stealth addresses (ML-KEM-768) | Perfect (all transactions) |
-| Hide sender | Ring signatures (CLSAG or LION, ring=20) | ~10+ effective anonymity |
+| Hide sender | Ring signatures (CLSAG ring=20, LION ring=11) | ~10+ effective anonymity |
 | Hide amounts | Pedersen commitments + Bulletproofs | Perfect (all private types) |
 | Secure communication | Encrypted memos (AES-256-CTR) | Perfect (all transactions) |
 | Quantum resistance | Hybrid (see below) | Recipient: full PQ, Sender: choice |
@@ -16,12 +16,11 @@ Botho provides strong transaction privacy through a combination of cryptographic
 
 ## Transaction Types
 
-Botho supports four transaction types with different privacy trade-offs. See [Transaction Types](transactions.md) for complete details.
+Botho supports three transaction types with different privacy trade-offs. See [Transaction Types](transactions.md) for complete details.
 
 | Type | Recipient | Amount | Sender | Quantum Safety | Use Case |
 |------|-----------|--------|--------|----------------|----------|
 | **Minting** | Hidden | Public | Known | Full | Block rewards |
-| **Plain** | Hidden | Hidden | Visible | Full | Exchanges, auditing |
 | **Standard-Private** | Hidden | Hidden | Hidden (CLSAG) | Recipient only | Daily transactions |
 | **PQ-Private** | Hidden | Hidden | Hidden (LION) | Full | Maximum privacy |
 
@@ -130,9 +129,9 @@ Ring signature transactions hide the true sender among a group of possible signe
 | Scheme | Used In | Ring Size | Signature Size | Quantum Safety |
 |--------|---------|-----------|----------------|----------------|
 | **CLSAG** | Standard-Private | 20 | ~700 bytes | Classical |
-| **LION** | PQ-Private | 20 | ~63 KB | Post-quantum |
+| **LION** | PQ-Private | 11 | ~36 KB | Post-quantum |
 
-> **Note**: Ring signatures are only used in Standard-Private and PQ-Private transactions. Plain transactions use direct ML-DSA signatures (sender is visible).
+> **Note**: Ring signatures are used in all regular transactions. Minting transactions use ML-DSA signatures (minter is known).
 
 ### How Ring Signatures Work
 
@@ -236,45 +235,41 @@ This aligns with Botho's progressive philosophy—privacy is marginally more exp
 
 ## Transaction Types and Fees
 
-Botho supports four transaction types. See [Transaction Types](transactions.md) for complete technical details.
+Botho supports three transaction types. See [Transaction Types](transactions.md) for complete technical details.
 
 ### Transaction Types
 
 | Type | Amount Privacy | Sender Privacy | Signature | Use Case |
 |------|---------------|----------------|-----------|----------|
 | Minting | Public | Known (minter) | ML-DSA | Block rewards |
-| Plain | Hidden | Visible | ML-DSA | Exchanges, auditing |
 | Standard-Private | Hidden | Hidden (CLSAG ring=20) | CLSAG | Daily transactions |
-| PQ-Private | Hidden | Hidden (LION ring=20) | LION | Maximum privacy |
+| PQ-Private | Hidden | Hidden (LION ring=11) | LION | Maximum privacy |
 
 ### Fee Structure by Transaction Type
 
-| Transaction Type | Base Fee | Signature Size | Typical Total Size |
-|-----------------|----------|----------------|-------------------|
-| Minting | 0% | ~3.3 KB (ML-DSA) | ~1.5 KB |
-| Plain | 0.05% | ~3.3 KB (ML-DSA) | ~3-4 KB |
-| Standard-Private | 0.2% | ~0.7 KB (CLSAG) | ~4 KB |
-| PQ-Private | 1.0% | ~63 KB (LION) | ~65 KB |
+Botho uses size-based fees: `fee = fee_per_byte × tx_size × cluster_factor`
+
+| Transaction Type | Signature Size | Typical Total Size | Fee (1x cluster) |
+|-----------------|----------------|-------------------|------------------|
+| Minting | ~3.3 KB (ML-DSA) | ~1.5 KB | 0 |
+| Standard-Private | ~0.7 KB (CLSAG) | ~4 KB | ~4,000 nanoBTH |
+| PQ-Private | ~63 KB (LION) | ~65 KB | ~65,000 nanoBTH |
 
 **Why the difference?**
 
 - **Minting transactions** have no fee (they create coins, not transfer them)
-- **Plain transactions** use ML-DSA signatures (~3.3 KB per input)
 - **Standard-Private transactions** use CLSAG ring signatures (~700 bytes per input)
 - **PQ-Private transactions** use LION ring signatures (~63 KB per input)
 
-### Choosing Transaction Type
+Size-based fees naturally reflect the network resources each transaction type consumes.
 
-**Use Plain when:**
-- Sender transparency is acceptable or required
-- Depositing to exchanges
-- Business payments needing audit trails
-- Lowest possible fees
+### Choosing Transaction Type
 
 **Use Standard-Private (recommended default) when:**
 - You want sender privacy for everyday transactions
 - Classical adversaries are your threat model
 - Good balance of privacy and efficiency
+- Most transactions should use this type
 
 **Use PQ-Private when:**
 - Long-term privacy is critical (10+ year horizon)
@@ -287,14 +282,15 @@ Botho supports four transaction types. See [Transaction Types](transactions.md) 
 All fees follow this formula:
 
 ```
-total_fee = base_fee_rate * amount + cluster_fee
+total_fee = fee_per_byte * tx_size * cluster_factor
 ```
 
 Where:
-- `base_fee_rate` = 0.05% (Plain), 0.2% (Standard-Private), 1.0% (PQ-Private)
-- `cluster_fee` = progressive fee based on coin ancestry (0.05% - 30%)
+- `fee_per_byte` = 1 nanoBTH per byte (default)
+- `tx_size` = transaction size in bytes
+- `cluster_factor` = progressive multiplier (1x to 6x) based on sender's cluster wealth
 
-See [Tokenomics](/docs/tokenomics) for details on cluster-based progressive fees.
+See [Tokenomics](tokenomics.md) for details on cluster-based progressive fees.
 
 ## Confidential Amounts
 
@@ -381,18 +377,25 @@ Botho provides post-quantum protection where it matters most.
 | Component | Algorithm | Standard | Used In | Quantum Safety |
 |-----------|-----------|----------|---------|----------------|
 | Stealth addresses | ML-KEM-768 | FIPS 203 | All transactions | Full |
-| Plain signatures | ML-DSA-65 | FIPS 204 | Minting, Plain | Full |
+| Minting signatures | ML-DSA-65 | FIPS 204 | Minting | Full |
 | CLSAG ring signatures | CLSAG | curve25519 | Standard-Private | Classical |
 | LION ring signatures | LION | Module-LWE | PQ-Private | Full |
 
-### Ring Size 20
+### Ring Sizes
 
-Both CLSAG and LION use ring size 20 (larger than Monero's 16):
+Botho uses optimized ring sizes for each signature scheme:
 
-| Scheme | Ring Size | Signature Size | Effective Anonymity |
-|--------|-----------|----------------|---------------------|
-| CLSAG | 20 | ~700 bytes | 10+ members |
-| LION | 20 | ~63 KB | 10+ members |
+| Scheme | Ring Size | Signature Size | Privacy Bits | Efficiency |
+|--------|-----------|----------------|--------------|------------|
+| CLSAG | 20 | ~700 bytes | 4.32 bits | 94.8% |
+| LION | 11 | ~36 KB | 3.30 bits | 95.3% |
+
+**Why different ring sizes?**
+
+- **CLSAG** uses ring size 20 (larger than Monero's 16) because signatures are only ~700 bytes per input
+- **LION** uses ring size 11 because signatures are ~36 KB per input at ring-11 (~63 KB at ring-20)
+- Both achieve similar efficiency (94-95% of theoretical maximum privacy)
+- Ring size 11 still exceeds Monero's effective anonymity (~4.2 members from ring size 16)
 
 ### OSPEAD Decoy Selection
 
@@ -431,7 +434,6 @@ mnemonic → SLIP-10 seed → HKDF → {ML-KEM keypair, ML-DSA keypair, classica
 | Transaction Type | Size per Input | Size per Output |
 |-----------------|----------------|-----------------|
 | Minting | N/A (coinbase) | ~1.2 KB |
-| Plain | ~3.4 KB (ML-DSA) | ~1.2 KB |
 | Standard-Private | ~0.7 KB (CLSAG) | ~1.2 KB |
 | PQ-Private | ~63 KB (LION) | ~1.2 KB |
 
@@ -460,12 +462,11 @@ The LION signature size is the cost of quantum-resistant sender privacy. Users c
 | Ring signatures | Standard-Private (CLSAG), PQ-Private (LION) | All tx (CLSAG) | No |
 | Ring size | 20 | 16 | N/A |
 | **Effective anonymity** | **10+ of 20 (measured)** | ~11 of 16 (estimated) | Perfect (ZK) |
-| Confidential amounts | All private types | Yes | Shielded only |
+| Confidential amounts | All types | Yes | Shielded only |
 | Encrypted memos | Yes | No | Shielded only |
 | Post-quantum stealth | Yes (ML-KEM-768) | No | No |
 | Post-quantum sender privacy | PQ-Private tier (LION) | No | No |
 | Privacy by default | Yes | Yes | No (opt-in) |
-| Sender-visible option | Plain tx | No | Transparent tx |
 | Progressive fees | Yes (cluster tags) | No | No |
 | Consensus | SCP (Federated) | PoW (RandomX) | PoW (Equihash) |
 

@@ -152,7 +152,7 @@ Botho's term for mining — the process of creating new blocks and earning block
 A transaction type that creates new coins as block rewards. Minting transactions have no inputs, use ML-DSA signatures, and create new cluster origins. Amounts are public for supply auditability, but recipients are hidden via stealth addresses.
 
 ### ML-DSA (Dilithium)
-**Module Lattice Digital Signature Algorithm** — A post-quantum signature scheme standardized by NIST (FIPS 204). Botho uses ML-DSA-65 for Minting and Plain transaction authorization.
+**Module Lattice Digital Signature Algorithm** — A post-quantum signature scheme standardized by NIST (FIPS 204). Botho uses ML-DSA-65 for Minting transaction authorization.
 
 ### ML-KEM (Kyber)
 **Module Lattice Key Encapsulation Mechanism** — A post-quantum key exchange scheme standardized by NIST (FIPS 203). Botho uses ML-KEM-768 for post-quantum stealth addresses.
@@ -200,16 +200,13 @@ A cryptographic commitment that hides a value while allowing mathematical operat
 *Deprecated term.* See **nanoBTH** — the smallest unit of BTH. 1 BTH = 1,000,000,000 nanoBTH (10^9).
 
 ### Post-Quantum Cryptography
-Cryptographic algorithms believed to be secure against quantum computer attacks. Botho uses ML-KEM-768 for all stealth addresses (recipient privacy), ML-DSA-65 for Plain transaction signatures, and offers LION ring signatures for PQ-Private transactions. Standard-Private uses classical CLSAG for efficiency.
+Cryptographic algorithms believed to be secure against quantum computer attacks. Botho uses ML-KEM-768 for all stealth addresses (recipient privacy), ML-DSA-65 for minting transaction signatures, and offers LION ring signatures for PQ-Private transactions. Standard-Private uses classical CLSAG for efficiency.
 
 ### Private Key
 A secret value that controls your funds. Never share your private keys or mnemonic.
 
-### Plain Transaction
-A transaction type with visible sender but hidden recipient and amounts. Uses ML-DSA signatures (sender visible), Pedersen commitments with Bulletproofs (amounts hidden), and ML-KEM stealth addresses (recipient hidden). Lowest fees (0.05% base). Used for exchanges and audit trails.
-
 ### PQ-Private Transaction
-A transaction type providing maximum privacy with post-quantum security. Uses LION ring signatures (sender hidden among 20 members with PQ security), Pedersen commitments with Bulletproofs (amounts hidden), and ML-KEM stealth addresses (recipient hidden). Higher fees (1.0% base) due to ~63 KB signature size. Use for long-term privacy needs.
+A transaction type providing maximum privacy with post-quantum security. Uses LION ring signatures (sender hidden among 20 members with PQ security), Pedersen commitments with Bulletproofs (amounts hidden), and ML-KEM stealth addresses (recipient hidden). Size-based fees (~65 KB typical). Use for long-term privacy needs.
 
 ### Private Transaction
 *See* **Standard-Private Transaction** or **PQ-Private Transaction**. Botho offers two private transaction tiers with different performance/security trade-offs.
@@ -269,10 +266,10 @@ A well-known node used for initial peer discovery. Botho's seed node is `seed.bo
 The private key required to spend funds. Part of the view/spend key pair.
 
 ### Standard Transaction
-*See* **Plain Transaction** or **Standard-Private Transaction**. The term "standard" in Botho refers to classical (non-PQ) ring signatures when discussing sender privacy.
+*See* **Standard-Private Transaction**. The term "standard" in Botho refers to classical (non-PQ) ring signatures when discussing sender privacy.
 
 ### Standard-Private Transaction
-The recommended default transaction type for most transfers. Uses CLSAG ring signatures (sender hidden among 20 members with classical security), Pedersen commitments with Bulletproofs (amounts hidden), and ML-KEM stealth addresses (recipient hidden). Moderate fees (0.2% base) with ~700 byte signatures. Provides excellent privacy for everyday transactions.
+The recommended default transaction type for most transfers. Uses CLSAG ring signatures (sender hidden among 20 members with classical security), Pedersen commitments with Bulletproofs (amounts hidden), and ML-KEM stealth addresses (recipient hidden). Size-based fees (~4 KB typical) with ~700 byte signatures. Provides excellent privacy for everyday transactions.
 
 ### Stealth Address
 A privacy technique where each transaction creates a unique one-time address. Prevents linking payments to recipients.

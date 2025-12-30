@@ -1,47 +1,41 @@
-//! Fee calculation for Botho's three transaction types.
+//! Fee calculation for Botho's transaction types.
 //!
-//! Botho uses a dual-incentive fee model:
-//! - **Privacy as priced resource**: Private transactions cost more because
-//!   they impose verification burden and reduce transparency.
-//! - **Progressive wealth taxation**: ALL value transfers (plain and hidden)
-//!   apply progressive fees based on cluster wealth to reduce inequality.
+//! Botho uses a size-based fee model with progressive wealth taxation:
+//!
+//! ```text
+//! fee = fee_per_byte × tx_size × cluster_factor
+//! ```
 //!
 //! ## Transaction Types
 //!
-//! | Type    | Privacy | Fee Structure                                    |
-//! |---------|---------|--------------------------------------------------|
-//! | Plain   | None    | base_plain × cluster_factor (0.05% to 3%)        |
-//! | Hidden  | Full    | base_hidden × cluster_factor (0.2% to 12%)       |
-//! | Minting | N/A     | No fee (reward claim)                            |
+//! | Type            | Ring Signature | Typical Size | Fee Rate           |
+//! |-----------------|----------------|--------------|---------------------|
+//! | Standard-Private| CLSAG          | ~4 KB        | size × cluster_factor |
+//! | PQ-Private      | LION           | ~65 KB       | size × cluster_factor |
+//! | Minting         | N/A            | ~1.5 KB      | No fee              |
 //!
-//! ## Fee Formula
+//! ## Fee Components
 //!
-//! ```text
-//! fee_rate = base_rate × cluster_factor(sender_cluster_wealth)
-//! ```
+//! 1. **Size-based fee**: Larger transactions pay more (proportional to bytes)
+//! 2. **Progressive multiplier**: Cluster factor ranges from 1x to 6x based on
+//!    the sender's cluster wealth, ensuring wealthy clusters pay more
 //!
-//! Where:
-//! - `base_rate` differs by transaction type to reflect work/storage costs
-//! - `cluster_factor` ranges from 1x (small holders) to 6x (large holders)
+//! ## Size Rationale
 //!
-//! ## Base Rate Rationale (Work/Storage Prefactors)
+//! | Type            | Input Size    | Output Size | Typical Total |
+//! |-----------------|---------------|-------------|---------------|
+//! | Standard-Private| ~700 B (CLSAG)| ~1.2 KB     | ~4 KB         |
+//! | PQ-Private      | ~63 KB (LION) | ~1.2 KB     | ~65 KB        |
 //!
-//! | Type   | Base Rate | Justification                                    |
-//! |--------|-----------|--------------------------------------------------|
-//! | Plain  | 5 bps     | Minimal verification, small tx size (~250 bytes) |
-//! | Hidden | 20 bps    | Ring sigs, bulletproofs, ~2.5KB tx size (4x)     |
+//! PQ-Private transactions are ~16x larger due to lattice-based signatures,
+//! so they naturally cost ~16x more in size fees.
 //!
-//! The 4x multiplier for hidden transactions reflects:
-//! - ~10x more verification work (ring signature + bulletproof verification)
-//! - ~10x more storage (larger transaction size)
-//! - Averaged to 4x to keep privacy accessible while pricing the resource
+//! ## Progressive Taxation
 //!
-//! ## Progressive Taxation Rationale
-//!
-//! Applying progressive fees to BOTH transaction types ensures:
-//! - Large holders can't avoid progressive taxation by using plain transactions
-//! - Inequality reduction works regardless of privacy preference
-//! - Small holders still get cheap transactions in both modes
+//! The cluster factor ensures wealthy clusters pay higher fees:
+//! - Small clusters: 1x multiplier (just size fee)
+//! - Large clusters: up to 6x multiplier
+//! - Sigmoid curve provides smooth transition
 
 /// Fee rate as a fixed-point value (basis points, 1/10000).
 ///
@@ -81,16 +75,12 @@ where
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum TransactionType {
-    /// Transparent transaction (sender, receiver, amount all public).
-    /// No ring signatures, no decoys. Lowest fee.
-    Plain,
-
     /// Standard-private transaction with CLSAG ring signatures (~700B/input).
-    /// Fee depends on cluster wealth of the sender.
+    /// Fee = size × cluster_factor. Recommended for daily transactions.
     Hidden,
 
     /// PQ-private transaction with LION ring signatures (~63KB/input).
-    /// Higher fee due to much larger signature size.
+    /// Fee = size × cluster_factor. ~16x larger than Hidden due to lattice sigs.
     /// Recommended for high-value or long-term security needs.
     PqHidden,
 
@@ -100,164 +90,187 @@ pub enum TransactionType {
 }
 
 /// Fee configuration for transaction types.
+///
+/// Fees are calculated as: `fee_per_byte × tx_size × cluster_factor`
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FeeConfig {
-    /// Base fee rate for plain transactions before cluster multiplier.
-    /// Default: 5 bps (0.05%)
-    pub plain_base_fee_bps: FeeRateBps,
-
-    /// Base fee rate for hidden (CLSAG) transactions before cluster multiplier.
-    /// Default: 20 bps (0.2%)
-    pub hidden_base_fee_bps: FeeRateBps,
-
-    /// Base fee rate for PQ-hidden (LION) transactions before cluster multiplier.
-    /// Higher than hidden due to ~90x larger signature size.
-    /// Default: 100 bps (1.0%)
-    pub pq_hidden_base_fee_bps: FeeRateBps,
+    /// Fee per byte in nanoBTH.
+    /// Default: 1 nanoBTH per byte
+    pub fee_per_byte: u64,
 
     /// Cluster factor curve for progressive fee calculation.
-    /// Applied to both plain and hidden transactions.
+    /// Multiplier ranges from 1x (small clusters) to 6x (large clusters).
     pub cluster_curve: ClusterFactorCurve,
 
-    /// Fee rate per memo in basis points.
-    /// Each output with `e_memo.is_some()` adds this rate to the base fee.
-    /// Default: 500 bps (5%) per memo
-    pub memo_fee_rate_bps: FeeRateBps,
+    /// Fee per memo in nanoBTH.
+    /// Each output with `e_memo.is_some()` adds this flat fee.
+    /// Default: 100 nanoBTH per memo (66 bytes stored forever)
+    pub fee_per_memo: u64,
 }
 
 impl Default for FeeConfig {
     fn default() -> Self {
         Self {
-            plain_base_fee_bps: 5,         // 0.05% base (up to 0.3% with 6x factor)
-            hidden_base_fee_bps: 20,       // 0.2% base (up to 1.2% with 6x factor)
-            pq_hidden_base_fee_bps: 100,   // 1.0% base for LION (~90x larger signatures)
+            fee_per_byte: 1,               // 1 nanoBTH per byte
             cluster_curve: ClusterFactorCurve::default(),
-            memo_fee_rate_bps: 500,        // 5% per memo (500 bps = 0.05 multiplier per memo)
+            fee_per_memo: 100,             // 100 nanoBTH per memo
         }
     }
 }
 
 impl FeeConfig {
-    /// Compute the fee for a transaction.
+    /// Compute the fee for a transaction based on size and cluster wealth.
+    ///
+    /// Formula: `fee = (fee_per_byte × tx_size_bytes × cluster_factor) + memo_fees`
     ///
     /// # Arguments
-    /// * `tx_type` - The transaction type
-    /// * `amount` - Transfer amount
-    /// * `cluster_wealth` - Total wealth of sender's cluster (used for Plain and Hidden)
-    ///
-    /// # Returns
-    /// (fee_amount, net_amount_after_fee)
-    pub fn compute_fee(
-        &self,
-        tx_type: TransactionType,
-        amount: u64,
-        cluster_wealth: u64,
-    ) -> (u64, u64) {
-        self.compute_fee_with_memos(tx_type, amount, cluster_wealth, 0)
-    }
-
-    /// Compute the fee for a transaction with memo count.
-    ///
-    /// # Arguments
-    /// * `tx_type` - The transaction type
-    /// * `amount` - Transfer amount
+    /// * `tx_type` - The transaction type (Minting pays no fee)
+    /// * `tx_size_bytes` - Size of the transaction in bytes
     /// * `cluster_wealth` - Total wealth of sender's cluster
     /// * `num_memos` - Number of outputs with encrypted memos
     ///
     /// # Returns
-    /// (fee_amount, net_amount_after_fee)
-    pub fn compute_fee_with_memos(
+    /// The fee amount in nanoBTH
+    pub fn compute_fee(
         &self,
         tx_type: TransactionType,
-        amount: u64,
-        cluster_wealth: u64,
-        num_memos: usize,
-    ) -> (u64, u64) {
-        let rate_bps = self.fee_rate_bps_with_memos(tx_type, cluster_wealth, num_memos);
-        let fee = (amount as u128 * rate_bps as u128 / 10_000) as u64;
-        let net = amount.saturating_sub(fee);
-        (fee, net)
-    }
-
-    /// Get the fee rate in basis points for a transaction.
-    ///
-    /// Both Plain and Hidden transactions apply progressive fees based on
-    /// cluster wealth. The difference is the base rate:
-    /// - Plain: 5 bps base (reflects lower verification/storage cost)
-    /// - Hidden: 20 bps base (reflects higher verification/storage cost)
-    ///
-    /// Both are then multiplied by the cluster factor (1x-6x).
-    pub fn fee_rate_bps(&self, tx_type: TransactionType, cluster_wealth: u64) -> FeeRateBps {
-        self.fee_rate_bps_with_memos(tx_type, cluster_wealth, 0)
-    }
-
-    /// Get the fee rate in basis points for a transaction with memos.
-    ///
-    /// The formula is:
-    /// ```text
-    /// rate = base_rate × cluster_factor × memo_factor
-    /// where memo_factor = 1 + (memo_fee_rate_bps / 10000) × num_memos
-    /// ```
-    ///
-    /// # Arguments
-    /// * `tx_type` - The transaction type
-    /// * `cluster_wealth` - Total wealth of sender's cluster
-    /// * `num_memos` - Number of outputs with encrypted memos (`e_memo.is_some()`)
-    pub fn fee_rate_bps_with_memos(
-        &self,
-        tx_type: TransactionType,
-        cluster_wealth: u64,
-        num_memos: usize,
-    ) -> FeeRateBps {
-        let base_rate = match tx_type {
-            TransactionType::Plain => {
-                let factor = self.cluster_curve.factor(cluster_wealth);
-                (self.plain_base_fee_bps as u64 * factor / ClusterFactorCurve::FACTOR_SCALE) as FeeRateBps
-            }
-            TransactionType::Hidden => {
-                let factor = self.cluster_curve.factor(cluster_wealth);
-                (self.hidden_base_fee_bps as u64 * factor / ClusterFactorCurve::FACTOR_SCALE) as FeeRateBps
-            }
-            TransactionType::PqHidden => {
-                // PQ-hidden uses same cluster factor but higher base rate
-                let factor = self.cluster_curve.factor(cluster_wealth);
-                (self.pq_hidden_base_fee_bps as u64 * factor / ClusterFactorCurve::FACTOR_SCALE) as FeeRateBps
-            }
-            TransactionType::Minting => return 0,
-        };
-
-        // Apply memo multiplier: rate × (1 + memo_rate × num_memos)
-        // Using fixed point: rate × (10000 + memo_rate_bps × num_memos) / 10000
-        let memo_multiplier = 10_000u64 + (self.memo_fee_rate_bps as u64 * num_memos as u64);
-        ((base_rate as u64 * memo_multiplier) / 10_000) as FeeRateBps
-    }
-
-    /// Compute the memo factor as a multiplier (in 10000-scale fixed point).
-    ///
-    /// Returns 10000 for 1.0x, 10500 for 1.05x (one memo at 5%), etc.
-    pub fn memo_factor(&self, num_memos: usize) -> u64 {
-        10_000 + (self.memo_fee_rate_bps as u64 * num_memos as u64)
-    }
-
-    /// Compute the minimum fee for a transaction given type, wealth, and memo count.
-    ///
-    /// This is the canonical fee calculation for validation.
-    pub fn minimum_fee(
-        &self,
-        tx_type: TransactionType,
-        amount: u64,
+        tx_size_bytes: usize,
         cluster_wealth: u64,
         num_memos: usize,
     ) -> u64 {
-        let (fee, _) = self.compute_fee_with_memos(tx_type, amount, cluster_wealth, num_memos);
-        fee
+        if tx_type == TransactionType::Minting {
+            return 0;
+        }
+
+        // Get cluster factor (1x to 6x in 1000-scale fixed point)
+        let cluster_factor = self.cluster_curve.factor(cluster_wealth);
+
+        // Size-based fee: fee_per_byte × size × cluster_factor
+        let size_fee = self.fee_per_byte
+            .saturating_mul(tx_size_bytes as u64)
+            .saturating_mul(cluster_factor)
+            / ClusterFactorCurve::FACTOR_SCALE;
+
+        // Memo fees: flat fee per memo (already accounts for 66 bytes storage)
+        let memo_fee = self.fee_per_memo.saturating_mul(num_memos as u64);
+
+        size_fee.saturating_add(memo_fee)
+    }
+
+    /// Compute the fee without memos (convenience method).
+    pub fn compute_fee_no_memos(
+        &self,
+        tx_type: TransactionType,
+        tx_size_bytes: usize,
+        cluster_wealth: u64,
+    ) -> u64 {
+        self.compute_fee(tx_type, tx_size_bytes, cluster_wealth, 0)
+    }
+
+    /// Get the cluster factor for a given wealth level.
+    ///
+    /// Returns the multiplier as a fixed-point value (1000 = 1x, 6000 = 6x).
+    pub fn cluster_factor(&self, cluster_wealth: u64) -> u64 {
+        self.cluster_curve.factor(cluster_wealth)
+    }
+
+    /// Estimate fee for a typical transaction.
+    ///
+    /// Uses approximate sizes:
+    /// - Hidden (CLSAG): ~4 KB typical
+    /// - PqHidden (LION): ~65 KB typical
+    pub fn estimate_typical_fee(
+        &self,
+        tx_type: TransactionType,
+        cluster_wealth: u64,
+        num_memos: usize,
+    ) -> u64 {
+        let typical_size = match tx_type {
+            TransactionType::Hidden => 4_000,      // ~4 KB for CLSAG
+            TransactionType::PqHidden => 65_000,   // ~65 KB for LION
+            TransactionType::Minting => 1_500,     // ~1.5 KB for minting
+        };
+        self.compute_fee(tx_type, typical_size, cluster_wealth, num_memos)
+    }
+
+    /// Compute the minimum fee for a transaction (alias for validation).
+    pub fn minimum_fee(
+        &self,
+        tx_type: TransactionType,
+        tx_size_bytes: usize,
+        cluster_wealth: u64,
+        num_memos: usize,
+    ) -> u64 {
+        self.compute_fee(tx_type, tx_size_bytes, cluster_wealth, num_memos)
+    }
+
+    /// Compute fee with dynamic base adjustment for congestion control.
+    ///
+    /// This is the full fee formula:
+    /// ```text
+    /// fee = dynamic_base × tx_size × cluster_factor + memo_fees
+    /// ```
+    ///
+    /// # Arguments
+    /// * `tx_type` - Transaction type (Minting pays no fee)
+    /// * `tx_size_bytes` - Size of transaction in bytes
+    /// * `cluster_wealth` - Total wealth of sender's cluster
+    /// * `num_memos` - Number of outputs with encrypted memos
+    /// * `dynamic_base` - Current dynamic fee base (1 to 100 nanoBTH/byte)
+    ///
+    /// # Returns
+    /// Fee in nanoBTH
+    pub fn compute_fee_with_dynamic_base(
+        &self,
+        tx_type: TransactionType,
+        tx_size_bytes: usize,
+        cluster_wealth: u64,
+        num_memos: usize,
+        dynamic_base: u64,
+    ) -> u64 {
+        if tx_type == TransactionType::Minting {
+            return 0;
+        }
+
+        // Get cluster factor (1x to 6x in 1000-scale fixed point)
+        let cluster_factor = self.cluster_curve.factor(cluster_wealth);
+
+        // Size-based fee: dynamic_base × size × cluster_factor
+        let size_fee = dynamic_base
+            .saturating_mul(tx_size_bytes as u64)
+            .saturating_mul(cluster_factor)
+            / ClusterFactorCurve::FACTOR_SCALE;
+
+        // Memo fees scale with dynamic base too
+        let memo_base = std::cmp::max(self.fee_per_memo, dynamic_base * 100);
+        let memo_fee = memo_base.saturating_mul(num_memos as u64);
+
+        size_fee.saturating_add(memo_fee)
+    }
+
+    /// Compute minimum fee with dynamic base (alias for validation).
+    pub fn minimum_fee_dynamic(
+        &self,
+        tx_type: TransactionType,
+        tx_size_bytes: usize,
+        cluster_wealth: u64,
+        num_memos: usize,
+        dynamic_base: u64,
+    ) -> u64 {
+        self.compute_fee_with_dynamic_base(
+            tx_type,
+            tx_size_bytes,
+            cluster_wealth,
+            num_memos,
+            dynamic_base,
+        )
     }
 }
 
 /// Cluster factor curve: maps cluster wealth to a multiplier (1x to 6x).
 ///
-/// For both Plain and Hidden transactions, the fee = base_rate × cluster_factor.
+/// The fee formula is: `fee_per_byte × tx_size × cluster_factor`
 /// This creates progressive taxation where wealthy clusters pay more.
 ///
 /// Uses a sigmoid function:
@@ -409,46 +422,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_transaction_type_fees() {
+    fn test_size_based_fee() {
         let config = FeeConfig::default();
 
-        // Plain transaction with small cluster (0 wealth): base rate with low factor
-        // With sigmoid at low wealth, factor is ~1.6x, so rate ≈ 8 bps
-        let (fee, net) = config.compute_fee(TransactionType::Plain, 100_000, 0);
-        assert!(fee >= 50 && fee <= 100, "Small cluster Plain fee should be near base: {fee}");
-        assert_eq!(net, 100_000 - fee);
+        // 4 KB transaction (typical CLSAG) with small cluster
+        let fee_small = config.compute_fee(TransactionType::Hidden, 4_000, 0, 0);
+        // fee = 1 nanoBTH/byte × 4000 bytes × ~1.6x factor ≈ 6400 nanoBTH
+        assert!(fee_small >= 4_000 && fee_small <= 10_000,
+            "4KB tx with small cluster: {fee_small}");
 
-        // Plain transaction with large cluster (100M wealth): base rate with high factor
-        // Factor approaches 6x, so rate approaches 30 bps
-        let (fee_large, net_large) = config.compute_fee(TransactionType::Plain, 100_000, 100_000_000);
-        assert!(fee_large > fee, "Large cluster should pay more: {fee_large} > {fee}");
-        assert!(fee_large >= 250, "Large cluster Plain fee should be near 6x base: {fee_large}");
-        assert_eq!(net_large, 100_000 - fee_large);
+        // Same transaction with large cluster (6x factor)
+        let fee_large = config.compute_fee(TransactionType::Hidden, 4_000, 100_000_000, 0);
+        assert!(fee_large > fee_small * 2,
+            "Large cluster should pay more: {fee_large} > {fee_small}");
 
-        // Minting transaction: no fee
-        let (fee, net) = config.compute_fee(TransactionType::Minting, 100_000, 0);
+        // LION transaction (65 KB) should cost ~16x more
+        let fee_lion = config.compute_fee(TransactionType::PqHidden, 65_000, 0, 0);
+        assert!(fee_lion > fee_small * 10,
+            "LION should be much larger: {fee_lion} vs {fee_small}");
+    }
+
+    #[test]
+    fn test_minting_no_fee() {
+        let config = FeeConfig::default();
+
+        // Minting transactions always have 0 fee
+        let fee = config.compute_fee(TransactionType::Minting, 1_500, 0, 0);
         assert_eq!(fee, 0);
-        assert_eq!(net, 100_000);
-    }
 
-    #[test]
-    fn test_hidden_fee_small_cluster() {
-        let config = FeeConfig::default();
-
-        // Small cluster (0 wealth): factor ≈ 1x, fee ≈ 0.2%
-        let rate = config.fee_rate_bps(TransactionType::Hidden, 0);
-        // With sigmoid(-2) ≈ 0.119, factor ≈ 1.6x, so rate ≈ 32 bps
-        assert!(rate >= 20 && rate <= 50, "Small cluster rate should be near base: {rate}");
-    }
-
-    #[test]
-    fn test_hidden_fee_large_cluster() {
-        let config = FeeConfig::default();
-
-        // Large cluster (100M wealth): factor ≈ 6x, fee ≈ 1.2%
-        let rate = config.fee_rate_bps(TransactionType::Hidden, 100_000_000);
-        // Should be close to 20 * 6 = 120 bps
-        assert!(rate >= 100, "Large cluster should pay high rate: {rate}");
+        let fee_wealthy = config.compute_fee(TransactionType::Minting, 1_500, 100_000_000, 0);
+        assert_eq!(fee_wealthy, 0);
     }
 
     #[test]
@@ -470,7 +473,6 @@ mod tests {
         );
 
         // At midpoint, factor should be ~3.5x (halfway between 1x and 6x)
-        // Due to integer truncation in the calculation, we get 3000 (3x) instead of 3500
         let factor_mid = curve.factor(curve.w_mid);
         let expected_mid = (1 + 6) * ClusterFactorCurve::FACTOR_SCALE / 2; // 3500
         let tolerance = 600; // Allow for integer truncation
@@ -507,199 +509,65 @@ mod tests {
     }
 
     #[test]
-    fn test_fee_rate_calculation() {
-        // Test with a flat curve for predictable results
-        let config = FeeConfig {
-            plain_base_fee_bps: 5,
-            hidden_base_fee_bps: 20,
-            cluster_curve: ClusterFactorCurve::flat(2), // 2x multiplier
-            memo_fee_rate_bps: 500,  // 5% per memo
-        };
-
-        // Plain with 2x flat factor: 5 * 2 = 10 bps
-        assert_eq!(config.fee_rate_bps(TransactionType::Plain, 0), 10);
-        assert_eq!(config.fee_rate_bps(TransactionType::Plain, 1_000_000), 10);
-
-        // Hidden with 2x flat factor: 20 * 2 = 40 bps
-        assert_eq!(config.fee_rate_bps(TransactionType::Hidden, 0), 40);
-        assert_eq!(config.fee_rate_bps(TransactionType::Hidden, 1_000_000), 40);
-
-        // Minting: always 0
-        assert_eq!(config.fee_rate_bps(TransactionType::Minting, 0), 0);
-    }
-
-    #[test]
-    fn test_fee_computation() {
-        let config = FeeConfig {
-            plain_base_fee_bps: 100,  // 1% base for easy math
-            hidden_base_fee_bps: 100,
-            cluster_curve: ClusterFactorCurve::flat(1),  // 1x multiplier
-            memo_fee_rate_bps: 0,  // No memo fee for this test
-        };
-
-        // 1% base × 1x factor = 1% fee
-        let (fee, net) = config.compute_fee(TransactionType::Plain, 10_000, 0);
-        assert_eq!(fee, 100);  // 1% of 10,000
-        assert_eq!(net, 9_900);
-    }
-
-    #[test]
-    fn test_memo_fee_factor() {
-        let config = FeeConfig {
-            plain_base_fee_bps: 100,  // 1% base
-            hidden_base_fee_bps: 100,
-            cluster_curve: ClusterFactorCurve::flat(1),  // 1x multiplier
-            memo_fee_rate_bps: 500,  // 5% per memo
-        };
-
-        // No memos: memo_factor = 10000 (1.0x)
-        assert_eq!(config.memo_factor(0), 10_000);
-
-        // 1 memo: memo_factor = 10000 + 500 = 10500 (1.05x)
-        assert_eq!(config.memo_factor(1), 10_500);
-
-        // 3 memos: memo_factor = 10000 + 1500 = 11500 (1.15x)
-        assert_eq!(config.memo_factor(3), 11_500);
-
-        // 16 memos (max outputs): memo_factor = 10000 + 8000 = 18000 (1.8x)
-        assert_eq!(config.memo_factor(16), 18_000);
-    }
-
-    #[test]
-    fn test_memo_fee_rate() {
-        let config = FeeConfig {
-            plain_base_fee_bps: 100,  // 1% base
-            hidden_base_fee_bps: 100,
-            cluster_curve: ClusterFactorCurve::flat(1),  // 1x multiplier
-            memo_fee_rate_bps: 500,  // 5% per memo
-        };
-
-        // Base rate with no memos: 100 bps
-        assert_eq!(config.fee_rate_bps_with_memos(TransactionType::Plain, 0, 0), 100);
-
-        // With 1 memo: 100 * 1.05 = 105 bps
-        assert_eq!(config.fee_rate_bps_with_memos(TransactionType::Plain, 0, 1), 105);
-
-        // With 3 memos: 100 * 1.15 = 115 bps
-        assert_eq!(config.fee_rate_bps_with_memos(TransactionType::Plain, 0, 3), 115);
-
-        // Minting tx: always 0, regardless of memos
-        assert_eq!(config.fee_rate_bps_with_memos(TransactionType::Minting, 0, 10), 0);
-    }
-
-    #[test]
-    fn test_memo_fee_computation() {
-        let config = FeeConfig {
-            plain_base_fee_bps: 100,  // 1% base
-            hidden_base_fee_bps: 100,
-            cluster_curve: ClusterFactorCurve::flat(1),
-            memo_fee_rate_bps: 500,  // 5% per memo
-        };
-
-        // 10,000 amount, no memos: fee = 1% = 100
-        let (fee0, net0) = config.compute_fee_with_memos(TransactionType::Plain, 10_000, 0, 0);
-        assert_eq!(fee0, 100);
-        assert_eq!(net0, 9_900);
-
-        // 10,000 amount, 1 memo: fee = 1.05% = 105
-        let (fee1, net1) = config.compute_fee_with_memos(TransactionType::Plain, 10_000, 0, 1);
-        assert_eq!(fee1, 105);
-        assert_eq!(net1, 9_895);
-
-        // 10,000 amount, 3 memos: fee = 1.15% = 115
-        let (fee3, net3) = config.compute_fee_with_memos(TransactionType::Plain, 10_000, 0, 3);
-        assert_eq!(fee3, 115);
-        assert_eq!(net3, 9_885);
-    }
-
-    #[test]
-    fn test_memo_fee_with_cluster_factor() {
-        // Test that memo and cluster factors multiply together
-        let config = FeeConfig {
-            plain_base_fee_bps: 100,   // 1% base
-            hidden_base_fee_bps: 100,
-            cluster_curve: ClusterFactorCurve::flat(2),  // 2x cluster factor
-            memo_fee_rate_bps: 1000,   // 10% per memo for easy math
-        };
-
-        // Base rate with 2x cluster factor, no memos: 100 * 2 = 200 bps
-        let rate_no_memo = config.fee_rate_bps_with_memos(TransactionType::Plain, 0, 0);
-        assert_eq!(rate_no_memo, 200);
-
-        // With 1 memo: 200 * 1.10 = 220 bps
-        let rate_1_memo = config.fee_rate_bps_with_memos(TransactionType::Plain, 0, 1);
-        assert_eq!(rate_1_memo, 220);
-
-        // With 2 memos: 200 * 1.20 = 240 bps
-        let rate_2_memos = config.fee_rate_bps_with_memos(TransactionType::Plain, 0, 2);
-        assert_eq!(rate_2_memos, 240);
-    }
-
-    #[test]
-    fn test_memo_incentives() {
-        // Verify the economic incentives are correctly structured
+    fn test_memo_fees() {
         let config = FeeConfig::default();
 
-        // Memos should increase fees monotonically
-        let mut prev_rate = 0;
-        for num_memos in 0..=16 {
-            let rate = config.fee_rate_bps_with_memos(TransactionType::Plain, 0, num_memos);
-            assert!(
-                rate >= prev_rate,
-                "Rate should increase with memos: {} >= {} at {} memos",
-                rate, prev_rate, num_memos
-            );
-            prev_rate = rate;
-        }
+        // No memos
+        let fee_no_memo = config.compute_fee(TransactionType::Hidden, 4_000, 0, 0);
 
-        // 16 memos should cost significantly more than 0 memos
-        let rate_0 = config.fee_rate_bps_with_memos(TransactionType::Plain, 0, 0);
-        let rate_16 = config.fee_rate_bps_with_memos(TransactionType::Plain, 0, 16);
+        // 1 memo adds flat fee
+        let fee_1_memo = config.compute_fee(TransactionType::Hidden, 4_000, 0, 1);
+        assert_eq!(fee_1_memo, fee_no_memo + config.fee_per_memo);
+
+        // 3 memos add 3x flat fee
+        let fee_3_memo = config.compute_fee(TransactionType::Hidden, 4_000, 0, 3);
+        assert_eq!(fee_3_memo, fee_no_memo + 3 * config.fee_per_memo);
+    }
+
+    #[test]
+    fn test_typical_fee_estimates() {
+        let config = FeeConfig::default();
+
+        // Typical Hidden (CLSAG) transaction
+        let hidden_fee = config.estimate_typical_fee(TransactionType::Hidden, 0, 0);
+        assert!(hidden_fee > 0, "Hidden fee should be non-zero: {hidden_fee}");
+
+        // Typical PqHidden (LION) transaction should be much larger
+        let pq_fee = config.estimate_typical_fee(TransactionType::PqHidden, 0, 0);
+        assert!(pq_fee > hidden_fee * 10,
+            "LION should be ~16x larger: {pq_fee} vs {hidden_fee}");
+    }
+
+    #[test]
+    fn test_progressive_fees() {
+        let config = FeeConfig::default();
+        let tx_size = 4_000; // 4 KB
+
+        // Test that fees increase with cluster wealth
+        let fee_small = config.compute_fee(TransactionType::Hidden, tx_size, 0, 0);
+        let fee_mid = config.compute_fee(TransactionType::Hidden, tx_size, 10_000_000, 0);
+        let fee_large = config.compute_fee(TransactionType::Hidden, tx_size, 100_000_000, 0);
+
+        // Fees should increase monotonically
         assert!(
-            rate_16 > rate_0 * 150 / 100,
-            "16 memos should cost at least 50% more than 0 memos: {} vs {}",
-            rate_16, rate_0
+            fee_small < fee_mid && fee_mid < fee_large,
+            "Fees should be progressive: {} < {} < {}",
+            fee_small, fee_mid, fee_large
         );
     }
 
     #[test]
-    fn test_progressive_plain_fees() {
-        let config = FeeConfig::default();
+    fn test_size_proportional() {
+        let config = FeeConfig {
+            fee_per_byte: 1,
+            cluster_curve: ClusterFactorCurve::flat(1), // 1x for predictable results
+            fee_per_memo: 0,
+        };
 
-        // Test that Plain fees increase with cluster wealth
-        let rate_small = config.fee_rate_bps(TransactionType::Plain, 0);
-        let rate_mid = config.fee_rate_bps(TransactionType::Plain, 10_000_000);
-        let rate_large = config.fee_rate_bps(TransactionType::Plain, 100_000_000);
-
-        // Rates should increase monotonically
-        assert!(
-            rate_small < rate_mid && rate_mid < rate_large,
-            "Plain rates should be progressive: {} < {} < {}",
-            rate_small, rate_mid, rate_large
-        );
-
-        // Small cluster should be near base (5 bps × ~1.6x ≈ 8 bps)
-        assert!(rate_small >= 5 && rate_small <= 15, "Small cluster rate: {rate_small}");
-
-        // Large cluster should approach 6x base (5 × 6 = 30 bps)
-        assert!(rate_large >= 25, "Large cluster rate should approach 30 bps: {rate_large}");
-    }
-
-    #[test]
-    fn test_plain_hidden_ratio() {
-        let config = FeeConfig::default();
-
-        // At any wealth level, Hidden should be ~4x Plain (20/5 = 4)
-        for wealth in [0, 1_000_000, 10_000_000, 100_000_000] {
-            let plain_rate = config.fee_rate_bps(TransactionType::Plain, wealth);
-            let hidden_rate = config.fee_rate_bps(TransactionType::Hidden, wealth);
-
-            // Hidden should be exactly 4x Plain (since they use same curve)
-            assert_eq!(
-                hidden_rate, plain_rate * 4,
-                "Hidden should be 4x Plain at wealth {wealth}: {hidden_rate} vs {plain_rate}"
-            );
-        }
+        // Double the size should double the fee
+        let fee_1k = config.compute_fee(TransactionType::Hidden, 1_000, 0, 0);
+        let fee_2k = config.compute_fee(TransactionType::Hidden, 2_000, 0, 0);
+        assert_eq!(fee_2k, fee_1k * 2, "Fee should scale linearly with size");
     }
 }
 

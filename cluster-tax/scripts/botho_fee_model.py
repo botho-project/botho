@@ -2,17 +2,17 @@
 """
 Botho Fee Model Simulation
 
-Models the economic effects of Botho's dual-tier progressive fee structure:
-- Plain transactions: 5 bps base x cluster_factor (0.05% to 0.3%)
-- Hidden transactions: 20 bps base x cluster_factor (0.2% to 1.2%)
+Models the economic effects of Botho's size-based progressive fee structure:
+- Fee = fee_per_byte × tx_size × cluster_factor
+- Cluster factor ranges from 1x (small holders) to 6x (large holders)
 
-Both transaction types apply progressive fees based on cluster wealth,
-ensuring large holders can't avoid taxation by choosing plain transactions.
+Transaction types:
+- Standard-Private: CLSAG ring signatures (~700B/input, ~2-3 KB typical)
+- PQ-Private: LION ring signatures (~63 KB/input, ~65-70 KB typical)
+- Minting: No fee (block reward claims)
 
-The 4x privacy premium reflects:
-- ~10x more verification work (ring signatures + bulletproofs)
-- ~10x more storage (~2.5KB vs ~250 bytes)
-- Averaged to 4x to keep privacy accessible
+Size-based fees naturally price PQ-Private higher due to larger signatures.
+Progressive taxation via cluster factor discourages wealth concentration.
 """
 
 import os
@@ -37,8 +37,15 @@ except ImportError:
 # =============================================================================
 
 class TxType(Enum):
-    PLAIN = "plain"    # Transparent: 5 bps base
-    HIDDEN = "hidden"  # Private: 20 bps base
+    STANDARD_PRIVATE = "standard-private"  # CLSAG ~2-3 KB
+    PQ_PRIVATE = "pq-private"              # LION ~65 KB
+
+
+# Typical transaction sizes in bytes
+TX_SIZE = {
+    TxType.STANDARD_PRIVATE: 2500,   # ~2.5 KB for CLSAG tx
+    TxType.PQ_PRIVATE: 65000,        # ~65 KB for LION tx
+}
 
 
 # =============================================================================
@@ -47,14 +54,13 @@ class TxType(Enum):
 
 @dataclass
 class BothoFeeConfig:
-    """Botho's dual-tier progressive fee structure."""
+    """Botho's size-based progressive fee structure."""
     name: str
-    plain_base_bps: float = 5      # 0.05% base for plain
-    hidden_base_bps: float = 20    # 0.2% base for hidden (4x plain)
-    factor_min: float = 1.0        # Minimum multiplier (small clusters)
-    factor_max: float = 6.0        # Maximum multiplier (large clusters)
-    w_mid: float = 10_000_000      # Sigmoid midpoint
-    steepness: float = 5_000_000   # Sigmoid steepness
+    fee_per_byte: float = 1.0       # 1 nanoBTH per byte
+    factor_min: float = 1.0         # Minimum multiplier (small clusters)
+    factor_max: float = 6.0         # Maximum multiplier (large clusters)
+    w_mid: float = 10_000_000       # Sigmoid midpoint
+    steepness: float = 5_000_000    # Sigmoid steepness
 
     def cluster_factor(self, cluster_wealth: float) -> float:
         """Compute cluster factor (1x to 6x) based on wealth."""
@@ -66,17 +72,11 @@ class BothoFeeConfig:
         sigmoid = 1 / (1 + math.exp(-x))
         return self.factor_min + (self.factor_max - self.factor_min) * sigmoid
 
-    def rate_bps(self, tx_type: TxType, cluster_wealth: float) -> float:
-        """Get fee rate in basis points for a transaction."""
+    def compute_fee(self, tx_type: TxType, cluster_wealth: float) -> float:
+        """Compute fee for a transaction."""
+        tx_size = TX_SIZE[tx_type]
         factor = self.cluster_factor(cluster_wealth)
-        base = self.plain_base_bps if tx_type == TxType.PLAIN else self.hidden_base_bps
-        return base * factor
-
-    def compute_fee(self, tx_type: TxType, amount: float, cluster_wealth: float) -> Tuple[float, float]:
-        """Compute (fee, net_amount) for a transaction."""
-        rate = self.rate_bps(tx_type, cluster_wealth)
-        fee = amount * rate / 10_000
-        return fee, amount - fee
+        return self.fee_per_byte * tx_size * factor
 
 
 # =============================================================================
@@ -89,14 +89,14 @@ class Agent:
     balance: float
     agent_type: str  # "retail", "merchant", "whale"
     cluster_wealth: float = 0.0
-    privacy_preference: float = 0.5  # 0=always plain, 1=always hidden
+    pq_preference: float = 0.1  # 0=always standard, 1=always PQ
 
     def __post_init__(self):
         self.cluster_wealth = self.balance
 
     def choose_tx_type(self, rng: random.Random) -> TxType:
-        """Choose transaction type based on privacy preference."""
-        return TxType.HIDDEN if rng.random() < self.privacy_preference else TxType.PLAIN
+        """Choose transaction type based on PQ preference."""
+        return TxType.PQ_PRIVATE if rng.random() < self.pq_preference else TxType.STANDARD_PRIVATE
 
 
 # =============================================================================
@@ -109,11 +109,11 @@ class SimState:
     fee_config: BothoFeeConfig
     round: int = 0
     total_fees_burned: float = 0.0
-    plain_tx_count: int = 0
-    hidden_tx_count: int = 0
+    standard_tx_count: int = 0
+    pq_tx_count: int = 0
     gini_history: List[Tuple[int, float]] = field(default_factory=list)
     whale_share_history: List[Tuple[int, float]] = field(default_factory=list)
-    fee_history: List[Tuple[int, float, float]] = field(default_factory=list)  # (round, plain_fees, hidden_fees)
+    fee_history: List[Tuple[int, float, float]] = field(default_factory=list)
 
 
 # =============================================================================
@@ -131,18 +131,18 @@ def create_lognormal_agents(n: int, log_mean: float = 8.0, log_std: float = 1.8,
         pct = i / n
         if pct < 0.70:
             atype = "retail"
-            # Retail: moderate privacy preference (50-70%)
-            privacy = rng.uniform(0.5, 0.7)
+            # Retail: mostly standard-private (cheaper), rarely PQ
+            pq_pref = rng.uniform(0.05, 0.15)
         elif pct < 0.90:
             atype = "merchant"
-            # Merchants: low privacy preference (20-40%) - want transparent receipts
-            privacy = rng.uniform(0.2, 0.4)
+            # Merchants: standard-private for efficiency
+            pq_pref = rng.uniform(0.02, 0.10)
         else:
             atype = "whale"
-            # Whales: high privacy preference (70-90%) - want to hide large holdings
-            privacy = rng.uniform(0.7, 0.9)
+            # Whales: higher PQ preference for long-term security
+            pq_pref = rng.uniform(0.20, 0.40)
 
-        agents.append(Agent(id=i, balance=wealths[idx], agent_type=atype, privacy_preference=privacy))
+        agents.append(Agent(id=i, balance=wealths[idx], agent_type=atype, pq_preference=pq_pref))
     return agents
 
 
@@ -165,18 +165,25 @@ def transfer(state: SimState, sender: Agent, receiver: Agent, amount: float,
     if sender.balance < amount or amount <= 0:
         return False
 
-    fee, net = state.fee_config.compute_fee(tx_type, amount, sender.cluster_wealth)
+    fee = state.fee_config.compute_fee(tx_type, sender.cluster_wealth)
+
+    # Fee as percentage of amount for economic modeling
+    # In reality, fee is flat based on size, but for simulation
+    # we model it as a fraction of the transfer amount
+    fee_pct = min(fee / 1_000_000, 0.10)  # Cap at 10% for simulation
+    actual_fee = amount * fee_pct
+    net = amount - actual_fee
 
     sender.balance -= amount
     receiver.balance += net
     sender.cluster_wealth = max(0, sender.cluster_wealth - amount)
     receiver.cluster_wealth = receiver.cluster_wealth * (1 - decay) + net * decay
-    state.total_fees_burned += fee
+    state.total_fees_burned += actual_fee
 
-    if tx_type == TxType.PLAIN:
-        state.plain_tx_count += 1
+    if tx_type == TxType.STANDARD_PRIVATE:
+        state.standard_tx_count += 1
     else:
-        state.hidden_tx_count += 1
+        state.pq_tx_count += 1
 
     return True
 
@@ -269,25 +276,20 @@ def run_simulation(fee_config: BothoFeeConfig, n_agents: int = 500, rounds: int 
 def create_comparison_configs() -> List[BothoFeeConfig]:
     """Create fee configurations for comparison."""
     return [
-        # Baseline: Flat 1% fee (no progressivity)
-        BothoFeeConfig("Flat 1%", plain_base_bps=100, hidden_base_bps=100,
-                         factor_min=1, factor_max=1),
+        # Baseline: Flat fee (no progressivity)
+        BothoFeeConfig("Flat Fee", fee_per_byte=1.0, factor_min=1, factor_max=1),
 
-        # Current Botho defaults (5 bps plain, 20 bps hidden, 1x-6x)
-        BothoFeeConfig("Botho Default", plain_base_bps=5, hidden_base_bps=20,
-                         factor_min=1, factor_max=6),
+        # Current Botho defaults (1x-6x cluster factor)
+        BothoFeeConfig("Botho Default", fee_per_byte=1.0, factor_min=1, factor_max=6),
 
         # Aggressive: Higher max factor (1x-10x)
-        BothoFeeConfig("Botho 1x-10x", plain_base_bps=5, hidden_base_bps=20,
-                         factor_min=1, factor_max=10),
+        BothoFeeConfig("Botho 1x-10x", fee_per_byte=1.0, factor_min=1, factor_max=10),
 
-        # Very aggressive: Higher base + higher max
-        BothoFeeConfig("Botho 10/40 bps", plain_base_bps=10, hidden_base_bps=40,
-                         factor_min=1, factor_max=6),
+        # Higher base fee
+        BothoFeeConfig("Botho 2x Base", fee_per_byte=2.0, factor_min=1, factor_max=6),
 
         # Maximum progressivity
-        BothoFeeConfig("Botho 10/40 1x-10x", plain_base_bps=10, hidden_base_bps=40,
-                         factor_min=1, factor_max=10),
+        BothoFeeConfig("Botho 2x 1x-10x", fee_per_byte=2.0, factor_min=1, factor_max=10),
     ]
 
 
@@ -301,7 +303,7 @@ def plot_results(results: Dict[str, SimState], output_dir: str):
     gs = GridSpec(3, 2, figure=fig, height_ratios=[1, 1, 0.8])
 
     fig.suptitle('Botho Progressive Fee Model: GINI Impact Analysis\n'
-                 'Plain (5 bps base) vs Hidden (20 bps base) x Cluster Factor (1x-6x)',
+                 'Size-Based Fees: fee_per_byte x tx_size x cluster_factor (1x-6x)',
                  fontsize=14, fontweight='bold')
 
     # Plot 1: GINI evolution over time
@@ -364,13 +366,13 @@ def plot_results(results: Dict[str, SimState], output_dir: str):
 
     # Plot 4: Transaction type distribution
     ax4 = fig.add_subplot(gs[1, 1])
-    plain_counts = [results[n].plain_tx_count for n in names]
-    hidden_counts = [results[n].hidden_tx_count for n in names]
-    total_counts = [p + h for p, h in zip(plain_counts, hidden_counts)]
-    hidden_pcts = [h / t * 100 if t > 0 else 0 for h, t in zip(hidden_counts, total_counts)]
+    std_counts = [results[n].standard_tx_count for n in names]
+    pq_counts = [results[n].pq_tx_count for n in names]
+    total_counts = [s + p for s, p in zip(std_counts, pq_counts)]
+    pq_pcts = [p / t * 100 if t > 0 else 0 for p, t in zip(pq_counts, total_counts)]
 
-    bars1 = ax4.bar(x - 0.2, [p/1000 for p in plain_counts], 0.4, label='Plain', color='tab:green', alpha=0.7)
-    bars2 = ax4.bar(x + 0.2, [h/1000 for h in hidden_counts], 0.4, label='Hidden', color='tab:purple', alpha=0.7)
+    bars1 = ax4.bar(x - 0.2, [s/1000 for s in std_counts], 0.4, label='Standard-Private', color='tab:green', alpha=0.7)
+    bars2 = ax4.bar(x + 0.2, [p/1000 for p in pq_counts], 0.4, label='PQ-Private', color='tab:purple', alpha=0.7)
     ax4.set_xticks(x)
     ax4.set_xticklabels(names, rotation=45, ha='right', fontsize=9)
     ax4.set_ylabel('Transaction Count (thousands)')
@@ -378,7 +380,7 @@ def plot_results(results: Dict[str, SimState], output_dir: str):
     ax4.legend()
     ax4.grid(True, alpha=0.3, axis='y')
 
-    # Plot 5: Fee rate curves visualization
+    # Plot 5: Fee curves visualization
     ax5 = fig.add_subplot(gs[2, :])
 
     # Get botho default config for visualization
@@ -386,24 +388,17 @@ def plot_results(results: Dict[str, SimState], output_dir: str):
 
     # Sample wealth range
     wealth_range = np.logspace(3, 9, 100)
-    plain_rates = [botho_config.rate_bps(TxType.PLAIN, w) for w in wealth_range]
-    hidden_rates = [botho_config.rate_bps(TxType.HIDDEN, w) for w in wealth_range]
+    std_fees = [botho_config.compute_fee(TxType.STANDARD_PRIVATE, w) for w in wealth_range]
+    pq_fees = [botho_config.compute_fee(TxType.PQ_PRIVATE, w) for w in wealth_range]
 
-    ax5.semilogx(wealth_range, plain_rates, label='Plain (5 bps base)', color='tab:green', linewidth=2)
-    ax5.semilogx(wealth_range, hidden_rates, label='Hidden (20 bps base)', color='tab:purple', linewidth=2)
-
-    # Mark key points
-    ax5.axhline(y=5, color='tab:green', linestyle=':', alpha=0.5, label='Plain min (5 bps)')
-    ax5.axhline(y=30, color='tab:green', linestyle='--', alpha=0.5, label='Plain max (30 bps)')
-    ax5.axhline(y=20, color='tab:purple', linestyle=':', alpha=0.5, label='Hidden min (20 bps)')
-    ax5.axhline(y=120, color='tab:purple', linestyle='--', alpha=0.5, label='Hidden max (120 bps)')
+    ax5.semilogx(wealth_range, [f/1000 for f in std_fees], label='Standard-Private (~2.5 KB)', color='tab:green', linewidth=2)
+    ax5.semilogx(wealth_range, [f/1000 for f in pq_fees], label='PQ-Private (~65 KB)', color='tab:purple', linewidth=2)
 
     ax5.set_xlabel('Cluster Wealth')
-    ax5.set_ylabel('Fee Rate (basis points)')
-    ax5.set_title('Botho Fee Curves: Progressive Rates by Transaction Type')
+    ax5.set_ylabel('Fee (thousands of nanoBTH)')
+    ax5.set_title('Botho Size-Based Fee Curves: Progressive Fees by Transaction Size')
     ax5.legend(loc='center right', fontsize=9)
     ax5.grid(True, alpha=0.3)
-    ax5.set_ylim(0, 150)
 
     plt.tight_layout()
     plt.savefig(f"{output_dir}/botho_fee_model.png", dpi=150, bbox_inches='tight')
@@ -435,20 +430,16 @@ def print_summary(results: Dict[str, SimState]):
     print("FEE STRUCTURE SUMMARY")
     print("=" * 70)
     print("""
-Transaction Type    Base Rate    Min Fee (1x)    Max Fee (6x)
------------------------------------------------------------------
-Plain (transparent)    5 bps       0.05%           0.30%
-Hidden (private)      20 bps       0.20%           1.20%
+Transaction Type      Size       Fee (1x factor)    Fee (6x factor)
+---------------------------------------------------------------------------
+Standard-Private     ~2.5 KB    ~2,500 nanoBTH     ~15,000 nanoBTH
+PQ-Private          ~65 KB     ~65,000 nanoBTH    ~390,000 nanoBTH
 
-The 4x privacy premium reflects:
-- ~10x more verification work (ring signatures + bulletproofs)
-- ~10x more storage (~2.5KB vs ~250 bytes)
-- Averaged to 4x to keep privacy accessible
-
-Progressive taxation ensures:
-- Large holders can't avoid fees by using plain transactions
-- Small holders get cheap fees regardless of transaction type
-- Privacy remains accessible (only 4x premium, not punitive)
+Size-based fees ensure:
+- Larger transactions (PQ-Private) pay proportionally more
+- Small holders pay ~1x cluster factor (base fee only)
+- Large holders pay up to 6x cluster factor
+- Progressive taxation discourages wealth concentration
 """)
 
 
@@ -462,7 +453,7 @@ def main():
 
     print("=" * 70)
     print("BOTHO PROGRESSIVE FEE MODEL SIMULATION")
-    print("Modeling: Plain (5 bps) vs Hidden (20 bps) x Cluster Factor (1x-6x)")
+    print("Modeling: fee = fee_per_byte x tx_size x cluster_factor (1x-6x)")
     print("=" * 70)
 
     configs = create_comparison_configs()
@@ -477,7 +468,7 @@ def main():
         final = state.gini_history[-1][1]
         reduction = (initial - final) / initial * 100
         print(f"  GINI: {initial:.3f} -> {final:.3f} ({reduction:+.1f}%)")
-        print(f"  Transactions: {state.plain_tx_count:,} plain, {state.hidden_tx_count:,} hidden")
+        print(f"  Transactions: {state.standard_tx_count:,} standard, {state.pq_tx_count:,} PQ")
         print(f"  Fees burned: {state.total_fees_burned:,.0f}")
 
     plot_results(results, output_dir)

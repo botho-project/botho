@@ -16,7 +16,7 @@
 use std::collections::{HashMap, HashSet};
 use tracing::{debug, warn};
 
-use bth_cluster_tax::{FeeConfig, TransactionType as FeeTransactionType};
+use bth_cluster_tax::{DynamicFeeBase, DynamicFeeState, FeeConfig, FeeSuggestion, TransactionType as FeeTransactionType};
 use crate::ledger::Ledger;
 use crate::transaction::{Transaction, TxInputs, UtxoId};
 
@@ -54,6 +54,10 @@ pub struct Mempool {
     spent_key_images: HashSet<[u8; 32]>,
     /// Fee configuration for computing minimum fees
     fee_config: FeeConfig,
+    /// Dynamic fee base for congestion control
+    dynamic_fee: DynamicFeeBase,
+    /// Whether we're at minimum block time (triggers dynamic fee adjustment)
+    at_min_block_time: bool,
 }
 
 impl Mempool {
@@ -63,6 +67,8 @@ impl Mempool {
             txs: HashMap::new(),
             spent_key_images: HashSet::new(),
             fee_config: FeeConfig::default(),
+            dynamic_fee: DynamicFeeBase::default(),
+            at_min_block_time: false,
         }
     }
 
@@ -72,6 +78,19 @@ impl Mempool {
             txs: HashMap::new(),
             spent_key_images: HashSet::new(),
             fee_config,
+            dynamic_fee: DynamicFeeBase::default(),
+            at_min_block_time: false,
+        }
+    }
+
+    /// Create a new empty mempool with custom fee and dynamic fee configuration
+    pub fn with_dynamic_fee(fee_config: FeeConfig, dynamic_fee: DynamicFeeBase) -> Self {
+        Self {
+            txs: HashMap::new(),
+            spent_key_images: HashSet::new(),
+            fee_config,
+            dynamic_fee,
+            at_min_block_time: false,
         }
     }
 
@@ -80,20 +99,88 @@ impl Mempool {
         &self.fee_config
     }
 
-    /// Estimate the minimum fee for a transaction.
+    /// Get the dynamic fee configuration
+    pub fn dynamic_fee(&self) -> &DynamicFeeBase {
+        &self.dynamic_fee
+    }
+
+    /// Get mutable reference to dynamic fee for updates
+    pub fn dynamic_fee_mut(&mut self) -> &mut DynamicFeeBase {
+        &mut self.dynamic_fee
+    }
+
+    /// Get current dynamic fee state for diagnostics/RPC
+    pub fn dynamic_fee_state(&self) -> DynamicFeeState {
+        self.dynamic_fee.state(self.at_min_block_time)
+    }
+
+    /// Update dynamic fee state after a block is finalized.
+    ///
+    /// Call this after each block is confirmed to adjust fee base based on congestion.
     ///
     /// # Arguments
-    /// * `tx_type` - The transaction type (Plain, Hidden, or PqHidden)
-    /// * `amount` - The transfer amount in picocredits
-    /// * `num_memos` - Number of outputs with memos (currently unused, set to 0)
+    /// * `tx_count` - Number of transactions in the finalized block
+    /// * `max_tx_count` - Maximum transactions per block (from consensus config)
+    /// * `at_min_block_time` - Whether block timing is at minimum (3s blocks)
     ///
     /// # Returns
-    /// The minimum fee in picocredits
-    pub fn estimate_fee(&self, tx_type: FeeTransactionType, amount: u64, num_memos: usize) -> u64 {
+    /// The new fee base to use for the next block
+    pub fn update_dynamic_fee(
+        &mut self,
+        tx_count: usize,
+        max_tx_count: usize,
+        at_min_block_time: bool,
+    ) -> u64 {
+        self.at_min_block_time = at_min_block_time;
+        self.dynamic_fee.update(tx_count, max_tx_count, at_min_block_time)
+    }
+
+    /// Get the current dynamic fee base (in nanoBTH per byte)
+    pub fn current_fee_base(&self) -> u64 {
+        self.dynamic_fee.compute_base(self.at_min_block_time)
+    }
+
+    /// Get fee suggestions for wallets based on current network state.
+    ///
+    /// # Arguments
+    /// * `tx_size` - Estimated transaction size in bytes
+    /// * `cluster_wealth` - Sender's cluster wealth (0 if unknown)
+    pub fn suggest_fees(&self, tx_size: usize, cluster_wealth: u64) -> FeeSuggestion {
+        let cluster_factor = self.fee_config.cluster_factor(cluster_wealth);
+        self.dynamic_fee.suggest_fees(tx_size, cluster_factor, self.at_min_block_time)
+    }
+
+    /// Estimate the minimum fee for a transaction using typical size.
+    ///
+    /// This uses the current dynamic fee base, which adjusts based on network congestion.
+    ///
+    /// # Arguments
+    /// * `tx_type` - The transaction type (Hidden or PqHidden)
+    /// * `_amount` - The transfer amount (unused, fee is size-based)
+    /// * `num_memos` - Number of outputs with memos
+    ///
+    /// # Returns
+    /// The minimum fee in nanoBTH
+    pub fn estimate_fee(&self, tx_type: FeeTransactionType, _amount: u64, num_memos: usize) -> u64 {
         // cluster_wealth = 0 for now (cluster tracking not yet implemented)
         let cluster_wealth = 0u64;
 
-        self.fee_config.minimum_fee(tx_type, amount, cluster_wealth, num_memos)
+        // Get typical size for this tx type
+        let typical_size = match tx_type {
+            FeeTransactionType::Hidden => 4_000,      // ~4 KB for CLSAG
+            FeeTransactionType::PqHidden => 65_000,   // ~65 KB for LION
+            FeeTransactionType::Minting => 1_500,     // ~1.5 KB for minting
+        };
+
+        // Use dynamic fee calculation
+        let dynamic_base = self.dynamic_fee.compute_base(self.at_min_block_time);
+        self.fee_config.minimum_fee_dynamic(
+            tx_type,
+            typical_size,
+            cluster_wealth,
+            num_memos,
+            dynamic_base,
+        )
     }
 
     /// Estimate fee for standard-private (CLSAG) transactions.
@@ -106,22 +193,20 @@ impl Mempool {
         self.estimate_fee(FeeTransactionType::PqHidden, amount, num_memos)
     }
 
-    /// Get the fee rate in basis points for a transaction type.
+    /// Estimate fee using static base (ignoring current congestion).
     ///
-    /// Useful for displaying to users. 100 bps = 1%.
-    pub fn fee_rate_bps(&self, tx_type: FeeTransactionType) -> u32 {
-        // cluster_wealth = 0 for now
-        self.fee_config.fee_rate_bps(tx_type, 0)
+    /// Useful for testing or when you want the base fee regardless of network state.
+    pub fn estimate_fee_static(&self, tx_type: FeeTransactionType, num_memos: usize) -> u64 {
+        let cluster_wealth = 0u64;
+        self.fee_config.estimate_typical_fee(tx_type, cluster_wealth, num_memos)
     }
 
-    /// Get the fee rate in basis points for standard-private (CLSAG) transactions.
-    pub fn fee_rate_bps_standard(&self) -> u32 {
-        self.fee_rate_bps(FeeTransactionType::Hidden)
-    }
-
-    /// Get the fee rate in basis points for PQ-private (LION) transactions.
-    pub fn fee_rate_bps_pq(&self) -> u32 {
-        self.fee_rate_bps(FeeTransactionType::PqHidden)
+    /// Get the cluster factor for a given wealth level.
+    ///
+    /// Returns the multiplier as a fixed-point value (1000 = 1x, 6000 = 6x).
+    /// Useful for displaying progressive fee information to users.
+    pub fn cluster_factor(&self, cluster_wealth: u64) -> u64 {
+        self.fee_config.cluster_factor(cluster_wealth)
     }
 
     /// Add a transaction to the mempool
@@ -172,22 +257,30 @@ impl Mempool {
             });
         }
 
-        // Validate fee meets minimum based on transaction type and amount
+        // Validate fee meets minimum based on transaction type, size, and congestion
         let fee_tx_type = match &tx.inputs {
             TxInputs::Clsag(_) | TxInputs::Mlsag(_) => FeeTransactionType::Hidden,
-            TxInputs::Lion(_) => FeeTransactionType::PqHidden, // Higher fee for ~90x larger LION signatures
+            TxInputs::Lion(_) => FeeTransactionType::PqHidden, // Higher fee for ~16x larger LION signatures
         };
 
-        // Use output_sum as the transfer amount for fee calculation
+        // Estimate transaction size based on inputs and outputs
+        let tx_size_bytes = tx.estimate_size();
+
         // cluster_wealth = 0 for now (cluster tracking not yet implemented)
         let cluster_wealth = 0u64;
         // Count outputs with encrypted memos for fee calculation
         let num_memos = tx.outputs.iter().filter(|o| o.has_memo()).count();
-        let minimum_fee = self.fee_config.minimum_fee(
+
+        // Get the current dynamic fee base (adjusts based on congestion)
+        let dynamic_base = self.dynamic_fee.compute_base(self.at_min_block_time);
+
+        // Use dynamic fee calculation for minimum
+        let minimum_fee = self.fee_config.minimum_fee_dynamic(
             fee_tx_type,
-            output_sum,
+            tx_size_bytes,
             cluster_wealth,
             num_memos,
+            dynamic_base,
         );
 
         if tx.fee < minimum_fee {
@@ -650,6 +743,49 @@ impl std::error::Error for MempoolError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::transaction::{ClsagRingInput, RingMember, TxOutput, MIN_RING_SIZE, MIN_TX_FEE};
+
+    /// Helper to create a test output with raw bytes
+    fn test_output(amount: u64, id: u8) -> TxOutput {
+        TxOutput {
+            amount,
+            target_key: [id; 32],
+            public_key: [id.wrapping_add(1); 32],
+            e_memo: None,
+        }
+    }
+
+    /// Helper to create a minimal test ring member
+    fn test_ring_member(id: u8) -> RingMember {
+        RingMember {
+            target_key: [id; 32],
+            public_key: [id.wrapping_add(1); 32],
+            commitment: [id.wrapping_add(2); 32],
+        }
+    }
+
+    /// Helper to create a test CLSAG input with MIN_RING_SIZE members
+    fn test_clsag_input(ring_id: u8) -> ClsagRingInput {
+        let ring: Vec<RingMember> = (0..MIN_RING_SIZE)
+            .map(|i| test_ring_member(ring_id.wrapping_add(i as u8)))
+            .collect();
+        ClsagRingInput {
+            ring,
+            key_image: [ring_id; 32],
+            commitment_key_image: [ring_id.wrapping_add(100); 32],
+            clsag_signature: vec![0u8; 32 + 32 * MIN_RING_SIZE], // Fake signature
+        }
+    }
+
+    /// Create a test transaction with given fee and height
+    fn test_tx(fee: u64, height: u64) -> Transaction {
+        Transaction::new_clsag(
+            vec![test_clsag_input(height as u8)],
+            vec![test_output(1000, height as u8)],
+            fee.max(MIN_TX_FEE), // Ensure minimum fee
+            height,
+        )
+    }
 
     #[test]
     fn test_mempool_new() {
@@ -667,9 +803,7 @@ mod tests {
 
     #[test]
     fn test_pending_tx_fee_per_byte() {
-        // Create a minimal transaction to test fee calculation
-        let tx = Transaction::new_simple(vec![], vec![], 1000, 0);
-
+        let tx = test_tx(MIN_TX_FEE, 0);
         let pending = PendingTx::new(tx);
         assert!(pending.fee_per_byte > 0);
     }
@@ -681,8 +815,7 @@ mod tests {
 
         assert!(!mempool.contains(&tx_hash));
 
-        // Manually insert a transaction for testing
-        let tx = Transaction::new_simple(vec![], vec![], 100, 0);
+        let tx = test_tx(MIN_TX_FEE, 0);
         let pending = PendingTx::new(tx);
         mempool.txs.insert(tx_hash, pending);
 
@@ -694,7 +827,7 @@ mod tests {
         let mut mempool = Mempool::new();
         let tx_hash: [u8; 32] = [0x11; 32];
 
-        let tx = Transaction::new_simple(vec![], vec![], 500, 0);
+        let tx = test_tx(MIN_TX_FEE, 0);
         let pending = PendingTx::new(tx.clone());
         mempool.txs.insert(tx_hash, pending);
 
@@ -714,8 +847,8 @@ mod tests {
         let mut mempool = Mempool::new();
 
         // Add transactions with different fees (use created_at_height to make each unique)
-        for (i, fee) in [100u64, 500, 200, 1000, 50].iter().enumerate() {
-            let tx = Transaction::new_simple(vec![], vec![], *fee, i as u64);
+        for (i, fee) in [MIN_TX_FEE, MIN_TX_FEE * 5, MIN_TX_FEE * 2, MIN_TX_FEE * 10, MIN_TX_FEE].iter().enumerate() {
+            let tx = test_tx(*fee, i as u64);
             let tx_hash = tx.hash();
             let pending = PendingTx::new(tx);
             mempool.txs.insert(tx_hash, pending);
@@ -728,53 +861,40 @@ mod tests {
         assert_eq!(top_txs.len(), 3);
 
         // Highest fee should be first
-        assert_eq!(top_txs[0].fee, 1000);
+        assert_eq!(top_txs[0].fee, MIN_TX_FEE * 10);
     }
 
     #[test]
     fn test_mempool_total_fees() {
         let mut mempool = Mempool::new();
 
-        for (i, fee) in [100u64, 200, 300].iter().enumerate() {
-            let tx = Transaction::new_simple(vec![], vec![], *fee, i as u64);
+        for (i, fee) in [MIN_TX_FEE, MIN_TX_FEE * 2, MIN_TX_FEE * 3].iter().enumerate() {
+            let tx = test_tx(*fee, i as u64);
             let tx_hash = tx.hash();
             let pending = PendingTx::new(tx);
             mempool.txs.insert(tx_hash, pending);
         }
 
-        assert_eq!(mempool.total_fees(), 600);
+        assert_eq!(mempool.total_fees(), MIN_TX_FEE * 6);
     }
 
     #[test]
     fn test_mempool_get() {
         let mut mempool = Mempool::new();
 
-        let tx = Transaction::new_simple(vec![], vec![], 999, 0);
+        let tx = test_tx(MIN_TX_FEE * 9, 0);
         let tx_hash = tx.hash();
+        let expected_fee = tx.fee;
         let pending = PendingTx::new(tx);
         mempool.txs.insert(tx_hash, pending);
 
         let retrieved = mempool.get(&tx_hash);
         assert!(retrieved.is_some());
-        assert_eq!(retrieved.unwrap().fee, 999);
+        assert_eq!(retrieved.unwrap().fee, expected_fee);
 
         // Non-existent transaction
         let fake_hash: [u8; 32] = [0xFF; 32];
         assert!(mempool.get(&fake_hash).is_none());
-    }
-
-    #[test]
-    fn test_mempool_spent_utxos_tracking() {
-        let mut mempool = Mempool::new();
-
-        // Create a UTXO ID
-        let utxo_id = UtxoId::new([0x11; 32], 0);
-
-        // Add it to spent set
-        mempool.spent_utxos.insert(utxo_id);
-
-        assert!(mempool.spent_utxos.contains(&utxo_id));
-        assert_eq!(mempool.spent_utxos.len(), 1);
     }
 
     #[test]
@@ -794,8 +914,8 @@ mod tests {
         let mut mempool = Mempool::new();
 
         // Add some transactions (use different created_at_height to make them unique)
-        let tx1 = Transaction::new_simple(vec![], vec![], 100, 1);
-        let tx2 = Transaction::new_simple(vec![], vec![], 200, 2);
+        let tx1 = test_tx(MIN_TX_FEE, 1);
+        let tx2 = test_tx(MIN_TX_FEE * 2, 2);
 
         let tx1_hash = tx1.hash();
         let tx2_hash = tx2.hash();
@@ -850,7 +970,7 @@ mod tests {
 
         {
             let mut mempool = shared.write().unwrap();
-            let tx = Transaction::new_simple(vec![], vec![], 100, 1);
+            let tx = test_tx(MIN_TX_FEE, 1);
             let tx_hash = tx.hash();
             mempool.txs.insert(tx_hash, PendingTx::new(tx));
         }

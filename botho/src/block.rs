@@ -453,34 +453,494 @@ pub fn calculate_block_reward_v2(height: u64, total_supply: u64) -> u64 {
     }
 }
 
-/// Difficulty adjustment constants
+/// Dynamic block timing based on network load.
+///
+/// Adjusts block time to balance:
+/// - Overhead efficiency (slower when idle)
+/// - Finality latency (faster under load)
+///
+/// Uses discrete levels for stability and predictability.
+pub mod dynamic_timing {
+    use super::Block;
+
+    /// Minimum block time (consensus floor - SCP needs time to complete)
+    pub const MIN_BLOCK_TIME: u64 = 5;
+
+    /// Maximum block time (efficiency ceiling when idle)
+    pub const MAX_BLOCK_TIME: u64 = 40;
+
+    /// Number of recent blocks to analyze for load estimation
+    pub const SMOOTHING_WINDOW: usize = 10;
+
+    /// Block metadata overhead in bytes (header + minting_tx)
+    pub const BLOCK_METADATA_SIZE: u64 = 476;
+
+    /// Average transaction size estimate (CLSAG 1-in-2-out)
+    pub const AVG_TX_SIZE: u64 = 2800;
+
+    /// Discrete block time levels: (tx_rate_threshold, block_time_secs)
+    /// Higher load → faster blocks, lower load → slower blocks
+    pub const BLOCK_TIME_LEVELS: [(f64, u64); 5] = [
+        (20.0, 3),  // Very high load: 20+ tx/s → 3s blocks
+        (5.0, 5),   // High load: 5+ tx/s → 5s blocks
+        (1.0, 10),  // Medium load: 1+ tx/s → 10s blocks
+        (0.2, 20),  // Low load: 0.2+ tx/s → 20s blocks
+        (0.0, 40),  // Idle: <0.2 tx/s → 40s blocks
+    ];
+
+    /// Compute the target block time based on recent transaction load.
+    ///
+    /// This is deterministic from chain state, so all validators compute
+    /// the same value for a given chain tip.
+    ///
+    /// # Arguments
+    /// * `recent_blocks` - The last SMOOTHING_WINDOW blocks (newest last)
+    ///
+    /// # Returns
+    /// Target block time in seconds
+    pub fn compute_block_time(recent_blocks: &[Block]) -> u64 {
+        if recent_blocks.len() < 2 {
+            // Not enough data, use default
+            return 20;
+        }
+
+        // Compute total transaction count in the window
+        // (We use tx count rather than bytes since we'd need to serialize for exact bytes)
+
+        // Compute time span of the window
+        let first_time = recent_blocks.first().map(|b| b.header.timestamp).unwrap_or(0);
+        let last_time = recent_blocks.last().map(|b| b.header.timestamp).unwrap_or(0);
+        let window_time = last_time.saturating_sub(first_time);
+
+        if window_time == 0 {
+            return 20; // Avoid division by zero
+        }
+
+        // Compute transaction rate (tx/sec)
+        let total_txs: usize = recent_blocks.iter().map(|b| b.transactions.len()).sum();
+        let tx_rate = total_txs as f64 / window_time as f64;
+
+        // Find appropriate level
+        for (threshold, block_time) in BLOCK_TIME_LEVELS {
+            if tx_rate >= threshold {
+                return block_time;
+            }
+        }
+
+        MAX_BLOCK_TIME
+    }
+
+    /// Compute the overhead percentage at a given block time and tx rate.
+    ///
+    /// Returns the percentage of ledger space consumed by block metadata
+    /// vs actual transaction data.
+    pub fn compute_overhead_percent(block_time: u64, tx_rate: f64) -> f64 {
+        let tx_bytes_per_block = tx_rate * block_time as f64 * AVG_TX_SIZE as f64;
+        let total_bytes = BLOCK_METADATA_SIZE as f64 + tx_bytes_per_block;
+
+        if total_bytes == 0.0 {
+            return 100.0;
+        }
+
+        (BLOCK_METADATA_SIZE as f64 / total_bytes) * 100.0
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn test_block_time_levels() {
+            // Verify levels are sorted descending by threshold
+            let mut prev_threshold = f64::MAX;
+            for (threshold, _) in BLOCK_TIME_LEVELS {
+                assert!(threshold < prev_threshold, "Levels must be sorted descending");
+                prev_threshold = threshold;
+            }
+        }
+
+        #[test]
+        fn test_overhead_calculation() {
+            // At 1 tx/s with 20s blocks: 20 txs per block
+            // 20 * 2800 = 56000 bytes of tx data
+            // 476 / (476 + 56000) = 0.84% overhead
+            let overhead = compute_overhead_percent(20, 1.0);
+            assert!(overhead < 1.0, "1 tx/s at 20s blocks should have <1% overhead");
+
+            // At 0.1 tx/s with 20s blocks: 2 txs per block
+            // 2 * 2800 = 5600 bytes of tx data
+            // 476 / (476 + 5600) = 7.8% overhead
+            let overhead = compute_overhead_percent(20, 0.1);
+            assert!(overhead > 5.0 && overhead < 10.0, "0.1 tx/s at 20s should be ~8% overhead");
+        }
+    }
+}
+
+/// Difficulty as a monetary policy feedback controller.
+///
+/// Difficulty is the control variable that adjusts minting rate to hit targets:
+///
+/// **Phase 1 (Halving, ~10 years)**: High initial rewards to drive adoption
+///   - Halving schedule based on cumulative transaction count
+///   - Difficulty adjusts to hit target emission per tx-epoch
+///
+/// **Phase 2 (Tail emission)**: Sustainable 2% net inflation
+///   - Net inflation = gross emission - fee burns
+///   - Difficulty adjusts to maintain 2% target
+///
+/// The feedback loop:
+/// ```text
+///                        error
+/// target_emission ──────────┐
+///         rate              ▼
+///                     ┌───────────┐
+/// actual_emission ───>│ PI control│──> difficulty
+///         rate        └───────────┘
+/// ```
 pub mod difficulty {
     use crate::node::minter::INITIAL_DIFFICULTY;
 
-    /// Target block time in seconds
-    pub const TARGET_BLOCK_TIME: u64 = 60;
+    // --- Legacy constants for backward compatibility ---
 
-    /// Number of blocks in adjustment window
-    pub const ADJUSTMENT_WINDOW: u64 = 10;
+    /// Legacy: blocks between adjustments (for old block-based code)
+    pub const ADJUSTMENT_WINDOW: u64 = 180;
 
-    /// Maximum adjustment factor (prevent huge jumps)
-    pub const MAX_ADJUSTMENT_FACTOR: f64 = 4.0;
+    /// Legacy: target block time for old adjustment logic
+    pub const TARGET_BLOCK_TIME: u64 = 20;
 
-    /// Minimum difficulty (to prevent getting stuck)
+    // --- Core constants ---
+
+    /// Minimum difficulty (floor to prevent stuck chain)
     pub const MIN_DIFFICULTY: u64 = 1;
 
-    /// Maximum difficulty
+    /// Maximum difficulty (ceiling)
     pub const MAX_DIFFICULTY: u64 = INITIAL_DIFFICULTY;
 
-    /// Calculate new difficulty based on recent block times
+    /// Maximum adjustment factor per epoch (damping)
+    pub const MAX_ADJUSTMENT_FACTOR: f64 = 2.0;
+
+    /// Transactions per difficulty adjustment epoch.
+    /// Adjustment frequency scales with network usage.
+    pub const ADJUSTMENT_TX_COUNT: u64 = 1000;
+
+    /// Halving interval in cumulative transactions.
+    /// Ties monetary schedule to network adoption, not wall-clock time.
+    /// ~10M tx per halving → 5 halvings = ~50M tx for full adoption phase.
+    pub const HALVING_TX_INTERVAL: u64 = 10_000_000;
+
+    /// Number of halvings before tail emission
+    pub const HALVING_COUNT: u32 = 5;
+
+    /// Target tail inflation (basis points). 200 = 2%
+    pub const TAIL_INFLATION_BPS: u64 = 200;
+
+    /// Initial block reward (50 BTH in picocredits)
+    pub const INITIAL_REWARD: u64 = 50_000_000_000_000;
+
+    /// Expected transactions per block (for emission rate calc)
+    pub const EXPECTED_TX_PER_BLOCK: u64 = 20;
+
+    /// Monetary policy phase
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Phase {
+        /// Halving phase with epoch number (0-indexed)
+        Halving { epoch: u32 },
+        /// Tail emission phase
+        Tail,
+    }
+
+    /// Emission controller: difficulty as monetary policy.
     ///
-    /// Arguments:
-    /// - `current_difficulty`: Current difficulty target
-    /// - `window_start_time`: Timestamp of first block in window
-    /// - `window_end_time`: Timestamp of last block in window
-    /// - `blocks_in_window`: Number of blocks in the window
+    /// Tracks network state and adjusts difficulty to hit emission targets.
+    #[derive(Debug, Clone)]
+    pub struct EmissionController {
+        // --- State ---
+        /// Current PoW difficulty
+        pub difficulty: u64,
+        /// Cumulative transactions (drives halving schedule)
+        pub total_tx: u64,
+        /// Cumulative gross emission (picocredits minted)
+        pub total_emitted: u64,
+        /// Cumulative fees burned
+        pub total_burned: u64,
+
+        // --- Current epoch accumulators ---
+        /// Tx in current adjustment epoch
+        pub epoch_tx: u64,
+        /// Emission in current epoch
+        pub epoch_emission: u64,
+        /// Burns in current epoch
+        pub epoch_burns: u64,
+
+        // --- Derived ---
+        /// Current block reward
+        pub current_reward: u64,
+    }
+
+    impl Default for EmissionController {
+        fn default() -> Self {
+            Self::new(INITIAL_DIFFICULTY)
+        }
+    }
+
+    impl EmissionController {
+        pub fn new(initial_difficulty: u64) -> Self {
+            Self {
+                difficulty: initial_difficulty,
+                total_tx: 0,
+                total_emitted: 0,
+                total_burned: 0,
+                epoch_tx: 0,
+                epoch_emission: 0,
+                epoch_burns: 0,
+                current_reward: INITIAL_REWARD,
+            }
+        }
+
+        /// Restore from persisted chain state
+        pub fn from_chain_state(
+            difficulty: u64,
+            total_mined: u64,
+            total_fees_burned: u64,
+            total_tx: u64,
+            epoch_tx: u64,
+            epoch_emission: u64,
+            epoch_burns: u64,
+            current_reward: u64,
+        ) -> Self {
+            Self {
+                difficulty,
+                total_tx,
+                total_emitted: total_mined,
+                total_burned: total_fees_burned,
+                epoch_tx,
+                epoch_emission,
+                epoch_burns,
+                current_reward,
+            }
+        }
+
+        /// Current monetary phase
+        pub fn phase(&self) -> Phase {
+            let epoch = (self.total_tx / HALVING_TX_INTERVAL) as u32;
+            if epoch < HALVING_COUNT {
+                Phase::Halving { epoch }
+            } else {
+                Phase::Tail
+            }
+        }
+
+        /// Current block reward
+        pub fn block_reward(&self) -> u64 {
+            self.current_reward
+        }
+
+        /// Net circulating supply
+        pub fn net_supply(&self) -> u64 {
+            self.total_emitted.saturating_sub(self.total_burned)
+        }
+
+        /// Target emission rate (picocredits per tx) for feedback control
+        fn target_emission_per_tx(&self) -> u64 {
+            match self.phase() {
+                Phase::Halving { epoch } => {
+                    // Block reward / expected tx per block
+                    let halved_reward = INITIAL_REWARD >> epoch;
+                    halved_reward / EXPECTED_TX_PER_BLOCK
+                }
+                Phase::Tail => {
+                    // Target: 2% net inflation annually
+                    // Assuming ~10M tx/year at maturity
+                    // Use u128 to avoid overflow with large supplies
+                    let supply = self.net_supply() as u128;
+                    let target_annual_net = (supply * TAIL_INFLATION_BPS as u128 / 10_000) as u64;
+
+                    // Gross = net + expected burns
+                    // Estimate burn rate from history
+                    let burn_per_tx = if self.total_tx > 0 {
+                        self.total_burned / self.total_tx
+                    } else {
+                        0
+                    };
+
+                    // Per-tx target = annual / (10M tx/year) + burn_per_tx
+                    (target_annual_net / 10_000_000) + burn_per_tx
+                }
+            }
+        }
+
+        /// Record a finalized block and update controller.
+        ///
+        /// Returns (new_difficulty, new_block_reward)
+        pub fn record_block(
+            &mut self,
+            tx_count: u64,
+            reward_paid: u64,
+            fees_burned: u64,
+        ) -> (u64, u64) {
+            // Update totals
+            self.total_tx += tx_count;
+            self.total_emitted += reward_paid;
+            self.total_burned += fees_burned;
+
+            // Update epoch accumulators
+            self.epoch_tx += tx_count;
+            self.epoch_emission += reward_paid;
+            self.epoch_burns += fees_burned;
+
+            // Check halving
+            self.update_reward();
+
+            // Adjust difficulty at epoch boundary
+            if self.epoch_tx >= ADJUSTMENT_TX_COUNT {
+                self.adjust_difficulty();
+            }
+
+            (self.difficulty, self.current_reward)
+        }
+
+        /// Update block reward based on phase
+        fn update_reward(&mut self) {
+            match self.phase() {
+                Phase::Halving { epoch } => {
+                    self.current_reward = INITIAL_REWARD >> epoch;
+                }
+                Phase::Tail => {
+                    // Tail: reward = target annual inflation / expected blocks per year
+                    // ~500k blocks/year at 60s blocks (conservative estimate)
+                    // Use u128 to avoid overflow with large supplies
+                    let supply = self.net_supply() as u128;
+                    let annual_target = supply * TAIL_INFLATION_BPS as u128 / 10_000;
+                    self.current_reward = ((annual_target / 500_000) as u64).max(1);
+                }
+            }
+        }
+
+        /// Adjust difficulty based on emission rate error
+        fn adjust_difficulty(&mut self) {
+            if self.epoch_tx == 0 {
+                return;
+            }
+
+            let target = self.target_emission_per_tx();
+            if target == 0 {
+                self.reset_epoch();
+                return;
+            }
+
+            // Actual emission per tx this epoch
+            let actual = self.epoch_emission / self.epoch_tx;
+
+            // Error ratio: actual / target
+            // > 1: emitting too fast → harder difficulty (lower value)
+            // < 1: emitting too slow → easier difficulty (higher value)
+            let ratio = actual as f64 / target as f64;
+
+            // Invert for control direction and clamp
+            let adjustment = (1.0 / ratio).clamp(
+                1.0 / MAX_ADJUSTMENT_FACTOR,
+                MAX_ADJUSTMENT_FACTOR,
+            );
+
+            let new_diff = (self.difficulty as f64 * adjustment) as u64;
+            self.difficulty = new_diff.clamp(MIN_DIFFICULTY, MAX_DIFFICULTY);
+
+            self.reset_epoch();
+        }
+
+        fn reset_epoch(&mut self) {
+            self.epoch_tx = 0;
+            self.epoch_emission = 0;
+            self.epoch_burns = 0;
+        }
+
+        /// Transactions until next halving (0 if in tail phase)
+        pub fn tx_until_halving(&self) -> u64 {
+            match self.phase() {
+                Phase::Halving { epoch } => {
+                    let next = (epoch as u64 + 1) * HALVING_TX_INTERVAL;
+                    next.saturating_sub(self.total_tx)
+                }
+                Phase::Tail => 0,
+            }
+        }
+
+        /// Estimated current inflation rate (bps)
+        pub fn current_inflation_bps(&self) -> u64 {
+            let supply = self.net_supply();
+            if supply == 0 || self.total_tx == 0 {
+                return 0;
+            }
+            // Net emission per tx, annualized assuming 10M tx/year
+            let net_per_tx = self.total_emitted.saturating_sub(self.total_burned)
+                / self.total_tx;
+            let annual = net_per_tx * 10_000_000;
+            (annual * 10_000 / supply) as u64
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn test_initial_state() {
+            let ctrl = EmissionController::new(1000);
+            assert_eq!(ctrl.phase(), Phase::Halving { epoch: 0 });
+            assert_eq!(ctrl.block_reward(), INITIAL_REWARD);
+        }
+
+        #[test]
+        fn test_halving_transition() {
+            let mut ctrl = EmissionController::new(1000);
+            ctrl.total_tx = HALVING_TX_INTERVAL;
+            ctrl.update_reward();
+
+            assert_eq!(ctrl.phase(), Phase::Halving { epoch: 1 });
+            assert_eq!(ctrl.block_reward(), INITIAL_REWARD / 2);
+        }
+
+        #[test]
+        fn test_tail_phase() {
+            let mut ctrl = EmissionController::new(1000);
+            ctrl.total_tx = HALVING_TX_INTERVAL * HALVING_COUNT as u64;
+            ctrl.total_emitted = 100_000_000_000_000_000; // 100M BTH
+            ctrl.update_reward();
+
+            assert_eq!(ctrl.phase(), Phase::Tail);
+            assert!(ctrl.block_reward() > 0);
+            assert!(ctrl.block_reward() < INITIAL_REWARD);
+        }
+
+        #[test]
+        fn test_difficulty_decreases_when_over_emitting() {
+            let mut ctrl = EmissionController::new(1000);
+
+            // Emit 2x target per tx
+            let target = ctrl.target_emission_per_tx();
+            for _ in 0..10 {
+                ctrl.record_block(100, target * 200, 0); // 2x emission
+            }
+
+            assert!(ctrl.difficulty < 1000, "Should get harder when over-emitting");
+        }
+
+        #[test]
+        fn test_fee_burn_tracking() {
+            let mut ctrl = EmissionController::new(1000);
+            ctrl.record_block(10, 1000, 100);
+
+            assert_eq!(ctrl.total_burned, 100);
+            assert_eq!(ctrl.net_supply(), 900);
+        }
+    }
+
+    // --- Legacy functions for backward compatibility ---
+
+    /// Legacy: Calculate difficulty adjustment based on block window.
     ///
-    /// Returns the new difficulty target
+    /// This is the old block-time-based adjustment. Prefer `EmissionController`
+    /// for new code, which uses tx-count-based monetary policy.
     pub fn calculate_new_difficulty(
         current_difficulty: u64,
         window_start_time: u64,
@@ -491,27 +951,13 @@ pub mod difficulty {
             return current_difficulty;
         }
 
-        // Calculate actual time taken
         let actual_time = window_end_time - window_start_time;
-
-        // Calculate expected time
         let expected_time = blocks_in_window * TARGET_BLOCK_TIME;
 
-        // Calculate adjustment ratio
-        // If blocks are too fast (actual_time < expected_time), decrease difficulty (make it harder)
-        // If blocks are too slow (actual_time > expected_time), increase difficulty (make it easier)
-        // Note: Lower difficulty value = harder to find a hash below it
         let ratio = actual_time as f64 / expected_time as f64;
+        let clamped = ratio.clamp(1.0 / MAX_ADJUSTMENT_FACTOR, MAX_ADJUSTMENT_FACTOR);
 
-        // Clamp adjustment factor
-        let clamped_ratio = ratio.clamp(1.0 / MAX_ADJUSTMENT_FACTOR, MAX_ADJUSTMENT_FACTOR);
-
-        // Calculate new difficulty
-        // Higher ratio (slower blocks) = multiply difficulty by ratio (make easier)
-        // Lower ratio (faster blocks) = multiply difficulty by ratio (make harder)
-        let new_difficulty = (current_difficulty as f64 * clamped_ratio) as u64;
-
-        // Clamp to valid range
+        let new_difficulty = (current_difficulty as f64 * clamped) as u64;
         new_difficulty.clamp(MIN_DIFFICULTY, MAX_DIFFICULTY)
     }
 }

@@ -311,13 +311,24 @@ impl<V: Value, ID: GenericNodeId + DeserializeOwned> Msg<V, ID> {
             }
         };
 
+        let validate_ballot_ordering = |ballot: &Ballot<V>, name: &str| -> Result<(), String> {
+            if !ballot.is_values_sorted() {
+                return Err(format!("{name} ballot values not sorted, msg: {self}"));
+            }
+            Ok(())
+        };
+
         let validate_prepare = |payload: &PreparePayload<V>| -> Result<(), String> {
+            // Validate ballot value ordering for consensus safety
+            validate_ballot_ordering(&payload.B, "B")?;
             if let Some(P) = &payload.P {
+                validate_ballot_ordering(P, "P")?;
                 if payload.B < *P {
                     return Err(format!("B < P, msg: {self}"));
                 }
 
                 if let Some(PP) = &payload.PP {
+                    validate_ballot_ordering(PP, "PP")?;
                     if *PP >= *P {
                         return Err(format!("PP >= P, msg: {self}"));
                     }
@@ -349,12 +360,17 @@ impl<V: Value, ID: GenericNodeId + DeserializeOwned> Msg<V, ID> {
             }
 
             Commit(ref payload) => {
+                // Validate ballot value ordering for consensus safety
+                validate_ballot_ordering(&payload.B, "B")?;
                 if payload.CN > payload.HN {
                     return Err(format!("CN > HN, msg: {self}"));
                 }
             }
 
-            Externalize(_) => {}
+            Externalize(ref payload) => {
+                // Validate ballot value ordering for consensus safety
+                validate_ballot_ordering(&payload.C, "C")?;
+            }
         }
 
         Ok(())

@@ -98,12 +98,11 @@ All transactions hide the **recipient** (via ML-KEM stealth addresses). Other pr
 | Type | Recipient | Amount | Sender |
 |------|-----------|--------|--------|
 | Minting | Hidden | Public | Known (minter) |
-| Plain | Hidden | Hidden | Visible |
 | Standard-Private | Hidden | Hidden | Hidden (20-member ring) |
 | PQ-Private | Hidden | Hidden | Hidden (20-member ring, PQ) |
 
 **Sender privacy** depends on transaction type:
-- **Minting/Plain**: Sender is visible (ML-DSA signature)
+- **Minting**: Sender is visible (ML-DSA signature)
 - **Standard-Private**: Sender hidden via CLSAG ring signatures (classical)
 - **PQ-Private**: Sender hidden via LION ring signatures (post-quantum)
 
@@ -115,7 +114,7 @@ You can see that a transaction exists, but:
 - **Amount**: Hidden except for Minting transactions
 - **Sender**: Hidden for Standard-Private and PQ-Private transactions (ring signatures)
 
-For Plain transactions, the sender is visible but recipient and amount are hidden. For ring signature transactions (Standard-Private and PQ-Private), sender, recipient, and amount are all hidden.
+For ring signature transactions (Standard-Private and PQ-Private), sender, recipient, and amount are all hidden.
 
 ### What information is NOT hidden?
 
@@ -128,7 +127,6 @@ For Plain transactions, the sender is visible but recipient and amount are hidde
 Botho provides strong cryptographic privacy, but privacy is never absolute:
 
 - **Timing analysis** may reveal patterns if you transact predictably
-- **Transaction graph analysis** possible for Plain transactions (sender visible)
 - **IP tracking** is possible without Tor/VPN
 - **Exchange KYC** links your identity to addresses you deposit to/withdraw from
 

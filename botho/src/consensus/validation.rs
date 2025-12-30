@@ -411,7 +411,7 @@ impl TransactionValidator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transaction::{TxInput, MIN_TX_FEE};
+    use crate::transaction::{ClsagRingInput, RingMember, TxOutput, MIN_RING_SIZE, MIN_TX_FEE};
 
     fn mock_chain_state() -> Arc<RwLock<ChainState>> {
         Arc::new(RwLock::new(ChainState {
@@ -421,6 +421,12 @@ mod tests {
             difficulty: 1000,
             total_mined: 1_000_000_000_000,
             total_fees_burned: 0,
+            // EmissionController fields
+            total_tx: 0,
+            epoch_tx: 0,
+            epoch_emission: 0,
+            epoch_burns: 0,
+            current_reward: crate::block::difficulty::INITIAL_REWARD,
         }))
     }
 
@@ -429,6 +435,38 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0)
+    }
+
+    /// Helper to create a test output
+    fn test_output(amount: u64, id: u8) -> TxOutput {
+        TxOutput {
+            amount,
+            target_key: [id; 32],
+            public_key: [id.wrapping_add(1); 32],
+            e_memo: None,
+        }
+    }
+
+    /// Helper to create a test ring member
+    fn test_ring_member(id: u8) -> RingMember {
+        RingMember {
+            target_key: [id; 32],
+            public_key: [id.wrapping_add(1); 32],
+            commitment: [id.wrapping_add(2); 32],
+        }
+    }
+
+    /// Helper to create a test CLSAG input with MIN_RING_SIZE members
+    fn test_clsag_input(ring_id: u8) -> ClsagRingInput {
+        let ring: Vec<RingMember> = (0..MIN_RING_SIZE)
+            .map(|i| test_ring_member(ring_id.wrapping_add(i as u8)))
+            .collect();
+        ClsagRingInput {
+            ring,
+            key_image: [ring_id; 32],
+            commitment_key_image: [ring_id.wrapping_add(100); 32],
+            clsag_signature: vec![0u8; 32 + 32 * MIN_RING_SIZE],
+        }
     }
 
     #[test]
@@ -456,7 +494,8 @@ mod tests {
     fn test_transfer_tx_no_inputs() {
         let validator = TransactionValidator::new(mock_chain_state());
 
-        let tx = Transaction::new_simple(vec![], vec![], 0, 10);
+        // CLSAG transaction with empty inputs
+        let tx = Transaction::new_clsag(vec![], vec![test_output(1000, 1)], MIN_TX_FEE, 10);
         let result = validator.validate_transfer_tx(&tx);
         assert!(matches!(result, Err(ValidationError::NoInputs)));
     }
@@ -500,14 +539,10 @@ mod tests {
         let validator = TransactionValidator::new(mock_chain_state());
 
         // Transaction with inputs but no outputs
-        let tx = Transaction::new_simple(
-            vec![TxInput {
-                tx_hash: [0u8; 32],
-                output_index: 0,
-                signature: vec![0u8; 64],
-            }],
+        let tx = Transaction::new_clsag(
+            vec![test_clsag_input(1)],
             vec![], // No outputs
-            1000,
+            MIN_TX_FEE,
             10,
         );
 

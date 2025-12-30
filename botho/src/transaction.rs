@@ -462,14 +462,22 @@ impl TxInput {
 // Ring Signature Types (Version 2 Transactions)
 // ============================================================================
 
-/// Default ring size for ring signatures (real input + decoys).
+/// Default ring size for CLSAG (Standard-Private) ring signatures.
 /// Ring size 20 provides strong anonymity (larger than Monero's 16).
-/// Used for both CLSAG (classical) and LION (post-quantum) ring signatures.
 pub const DEFAULT_RING_SIZE: usize = 20;
 
-/// Minimum ring size for privacy guarantees.
-/// Ring size 20 provides strong anonymity set for both classical and PQ signatures.
+/// Minimum ring size for CLSAG (Standard-Private) transactions.
+/// Ring size 20 provides strong anonymity set with efficient ~700B signatures.
 pub const MIN_RING_SIZE: usize = 20;
+
+/// Ring size for LION (PQ-Private) ring signatures.
+/// Ring size 11 balances privacy with manageable ~36KB signature sizes.
+/// Still provides 3.30 bits of privacy (95% efficiency).
+pub const PQ_RING_SIZE: usize = 11;
+
+/// Minimum ring size for LION (PQ-Private) transactions.
+/// Matches PQ_RING_SIZE for validation.
+pub const MIN_PQ_RING_SIZE: usize = 11;
 
 /// A member of a ring (either the real input or a decoy).
 ///
@@ -1096,6 +1104,35 @@ impl Transaction {
     /// Get all key images from ring inputs (for double-spend checking)
     pub fn key_images(&self) -> Vec<[u8; 32]> {
         self.inputs.key_images()
+    }
+
+    /// Estimate the size of this transaction in bytes.
+    ///
+    /// Uses typical sizes for each component:
+    /// - CLSAG input: ~700 bytes (ring of 20 × 32-byte keys + signature)
+    /// - LION input: ~63 KB (lattice-based ring signature)
+    /// - MLSAG input: ~700 bytes (similar to CLSAG)
+    /// - Output: ~120 bytes (amount, target_key, public_key, optional memo)
+    /// - Header: ~50 bytes (fee, created_at_height, etc.)
+    pub fn estimate_size(&self) -> usize {
+        const CLSAG_INPUT_SIZE: usize = 700;
+        const LION_INPUT_SIZE: usize = 63_000;
+        const MLSAG_INPUT_SIZE: usize = 700;
+        const OUTPUT_SIZE: usize = 120;
+        const OUTPUT_MEMO_SIZE: usize = 66;
+        const HEADER_SIZE: usize = 50;
+
+        let input_size = match &self.inputs {
+            TxInputs::Clsag(inputs) => inputs.len() * CLSAG_INPUT_SIZE,
+            TxInputs::Lion(inputs) => inputs.len() * LION_INPUT_SIZE,
+            TxInputs::Mlsag(inputs) => inputs.len() * MLSAG_INPUT_SIZE,
+        };
+
+        let output_size: usize = self.outputs.iter()
+            .map(|o| OUTPUT_SIZE + if o.has_memo() { OUTPUT_MEMO_SIZE } else { 0 })
+            .sum();
+
+        HEADER_SIZE + input_size + output_size
     }
 
     /// Compute the transaction hash (includes signatures)

@@ -293,6 +293,9 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                             if let Err(e) = node.add_block_from_network(&block) {
                                 warn!("Failed to add network block: {}", e);
                             } else {
+                                // Record for dynamic timing
+                                consensus.record_block(block.header.timestamp, block.transactions.len());
+
                                 // Broadcast to WebSocket clients
                                 ws_broadcaster.new_block(
                                     block.height(),
@@ -436,6 +439,8 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                                             warn!("Failed to add synced block: {}", e);
                                             break;
                                         }
+                                        // Record for dynamic timing
+                                        consensus.record_block(block.header.timestamp, block.transactions.len());
                                     }
                                     // Update consensus chain state
                                     if let Ok(ledger) = node.shared_ledger().read() {
@@ -493,6 +498,9 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                                     if let Err(e) = node.add_block_from_network(&block) {
                                         warn!("Failed to add reconstructed block: {}", e);
                                     } else {
+                                        // Record for dynamic timing
+                                        consensus.record_block(block.header.timestamp, block.transactions.len());
+
                                         // Broadcast to WebSocket clients
                                         ws_broadcaster.new_block(
                                             block.height(),
@@ -612,6 +620,9 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                                         if let Err(e) = node.add_block_from_network(&block) {
                                             warn!("Failed to add completed block: {}", e);
                                         } else {
+                                            // Record for dynamic timing
+                                            consensus.record_block(block.header.timestamp, block.transactions.len());
+
                                             // Broadcast to WebSocket clients
                                             ws_broadcaster.new_block(
                                                 block.height(),
@@ -664,6 +675,9 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                                     if let Err(e) = node.add_block_from_network(&block) {
                                         warn!("Failed to add consensus block: {}", e);
                                     } else {
+                                        // Record for dynamic timing
+                                        consensus.record_block(block.header.timestamp, block.transactions.len());
+
                                         // Broadcast to WebSocket clients
                                         ws_broadcaster.new_block(
                                             block.height(),

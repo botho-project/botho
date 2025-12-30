@@ -40,6 +40,14 @@ impl<V: Value> Ballot<V> {
     pub fn is_zero(&self) -> bool {
         self.N == 0 && self.X.is_empty()
     }
+
+    /// Check whether the ballot's values are in canonical (sorted) order.
+    ///
+    /// For consensus safety, all nodes must process ballot values in the same order.
+    /// Values must be strictly sorted (no duplicates) in ascending order.
+    pub fn is_values_sorted(&self) -> bool {
+        self.X.windows(2).all(|w| w[0] < w[1])
+    }
 }
 
 // Ballots are totally ordered with N more significant than X.
@@ -218,5 +226,32 @@ mod tests {
         let empty: Ballot<u32> = Ballot::new(5, &[]);
         let non_empty: Ballot<u32> = Ballot::new(5, &[1]);
         assert!(empty < non_empty);
+    }
+
+    #[test]
+    fn test_is_values_sorted() {
+        // Empty ballot is considered sorted
+        let empty: Ballot<u32> = Ballot::new(0, &[]);
+        assert!(empty.is_values_sorted());
+
+        // Single value is sorted
+        let single: Ballot<u32> = Ballot::new(1, &[42]);
+        assert!(single.is_values_sorted());
+
+        // Correctly sorted values
+        let sorted: Ballot<u32> = Ballot::new(1, &[1, 2, 3, 4, 5]);
+        assert!(sorted.is_values_sorted());
+
+        // Unsorted values should fail
+        let unsorted: Ballot<u32> = Ballot::new(1, &[3, 1, 2]);
+        assert!(!unsorted.is_values_sorted());
+
+        // Duplicate values should fail (not strictly sorted)
+        let duplicates: Ballot<u32> = Ballot::new(1, &[1, 2, 2, 3]);
+        assert!(!duplicates.is_values_sorted());
+
+        // Reverse sorted should fail
+        let reverse: Ballot<u32> = Ballot::new(1, &[5, 4, 3, 2, 1]);
+        assert!(!reverse.is_values_sorted());
     }
 }

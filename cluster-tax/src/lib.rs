@@ -1,20 +1,20 @@
-//! Botho fee system with privacy-tiered pricing.
+//! Botho fee system with size-based progressive pricing.
 //!
-//! This module implements Botho's dual-incentive fee model:
+//! This module implements Botho's fee model with two key features:
 //!
-//! 1. **Privacy as a priced resource**: Private transactions cost more because
-//!    they impose verification burden and reduce network transparency.
+//! 1. **Size-based fees**: Fees scale with transaction size in bytes, ensuring
+//!    larger transactions (e.g., PQ-Private with ~63 KB signatures) pay more.
 //!
-//! 2. **Progressive wealth taxation**: For private transactions, wealthy clusters
-//!    pay a multiplier, limiting wealth concentration.
+//! 2. **Progressive wealth taxation**: A cluster factor (1x-6x) multiplies the
+//!    size fee, discouraging wealth concentration.
 //!
 //! ## Transaction Types
 //!
-//! | Type    | Privacy | Fee                                    |
-//! |---------|---------|----------------------------------------|
-//! | Plain   | None    | 0.05% flat (transparent, Bitcoin-like) |
-//! | Hidden  | Full    | 0.2% × cluster_factor (1x-6x)          |
-//! | Minting | N/A     | No fee (PoW reward claim)              |
+//! | Type             | Ring Signature | Fee Formula                           |
+//! |------------------|----------------|---------------------------------------|
+//! | Standard-Private | CLSAG (~700B)  | fee_per_byte × size × cluster_factor  |
+//! | PQ-Private       | LION (~63 KB)  | fee_per_byte × size × cluster_factor  |
+//! | Minting          | N/A            | No fee (PoW reward claim)             |
 //!
 //! ## Key Concepts
 //!
@@ -23,19 +23,18 @@
 //! - **Tag Vector**: Each UTXO carries weights indicating what fraction of its
 //!   value traces back to each cluster origin.
 //! - **Cluster Wealth**: Total value in the system tagged to a given cluster.
-//! - **Cluster Factor**: For hidden transactions, wealthy clusters pay 1x-6x
-//!   the base privacy fee.
+//! - **Cluster Factor**: Wealthy clusters pay 1x-6x the base fee.
 //!
 //! ## Rationale
 //!
-//! - **Plain transactions** enable cheap, auditable transfers for those who
-//!   don't need privacy (exchanges, public payments, transparency by choice).
-//! - **Hidden transactions** pay for the societal cost of moving money in the
-//!   dark. Whales can opt out by going transparent.
+//! - **Size-based fees** ensure fair pricing regardless of transaction type.
+//! - **Progressive taxation** discourages wealth concentration by increasing
+//!   fees for wealthy clusters.
 //! - **Minting transactions** create new coins via PoW and establish new clusters.
 
 pub mod analysis;
 pub mod crypto;
+pub mod dynamic_fee;
 pub mod monetary;
 #[cfg(feature = "cli")]
 pub mod simulation;
@@ -77,14 +76,5 @@ pub use signing::{
 pub use crypto::{
     CommittedTagVector, CommittedTagVectorSecret, RingTagData, ExtendedTxSignature,
 };
+pub use dynamic_fee::{DynamicFeeBase, DynamicFeeState, FeeSuggestion};
 
-/// Memo fee rate in basis points per memo (1 bps = 0.01%).
-///
-/// Each output with an encrypted memo (`e_memo.is_some()`) adds this percentage
-/// to the base fee. This incentivizes efficient memo usage and compensates for
-/// the 66 bytes of perpetual ledger storage each memo consumes.
-///
-/// Default: 500 bps = 5% per memo
-///
-/// Example: 3 memos → fee multiplier = 1.0 + (0.05 × 3) = 1.15
-pub const MEMO_FEE_RATE_BPS: u32 = 500;

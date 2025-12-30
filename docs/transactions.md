@@ -1,32 +1,33 @@
 # Transaction Types
 
-Botho supports four transaction types, each designed for specific use cases with different privacy, efficiency, and quantum-resistance trade-offs.
+Botho supports three transaction types, each designed for specific use cases with different privacy, efficiency, and quantum-resistance trade-offs.
 
 ## Overview
 
-| Property | Minting | Plain | Standard-Private | PQ-Private |
-|----------|---------|-------|------------------|------------|
-| **Purpose** | Block rewards | Exchanges, auditing | Daily transactions | Maximum privacy |
-| **Recipient Privacy** | Hidden (stealth) | Hidden (stealth) | Hidden (stealth) | Hidden (stealth) |
-| **Amount Privacy** | Public | Hidden | Hidden | Hidden |
-| **Sender Privacy** | Known (minter) | Visible | Hidden (CLSAG ring) | Hidden (LION ring) |
-| **Stealth Address** | ML-KEM-768 | ML-KEM-768 | ML-KEM-768 | ML-KEM-768 |
-| **Amount Encoding** | Plaintext | Pedersen + Bulletproofs | Pedersen + Bulletproofs | Pedersen + Bulletproofs |
-| **Authorization** | ML-DSA-65 | ML-DSA-65 | CLSAG (ring size 20) | LION (ring size 20) |
-| **Ring Size** | — | — | 20 decoys | 20 decoys |
-| **Quantum Resistance** | Full | Full | Recipient: full, Sender: classical | Full |
-| **Base Fee** | 0% | 0.05% | 0.2% | 1.0% |
-| **Approx. Size** | ~1.5 KB | ~3-4 KB | ~4 KB | ~65 KB |
+| Property | Minting | Standard-Private | PQ-Private |
+|----------|---------|------------------|------------|
+| **Purpose** | Block rewards | Daily transactions | Maximum privacy |
+| **Recipient Privacy** | Hidden (stealth) | Hidden (stealth) | Hidden (stealth) |
+| **Amount Privacy** | Public | Hidden | Hidden |
+| **Sender Privacy** | Known (minter) | Hidden (CLSAG ring) | Hidden (LION ring) |
+| **Stealth Address** | ML-KEM-768 | ML-KEM-768 | ML-KEM-768 |
+| **Amount Encoding** | Plaintext | Pedersen + Bulletproofs | Pedersen + Bulletproofs |
+| **Authorization** | ML-DSA-65 | CLSAG (ring size 20) | LION (ring size 11) |
+| **Ring Size** | — | 20 decoys | 11 decoys |
+| **Max Inputs** | 1 | 16 | 8 |
+| **Quantum Resistance** | Full | Recipient: full, Sender: classical | Full |
+| **Approx. Size** | ~1.5 KB | ~4 KB | ~40 KB |
+| **Max Tx Size** | N/A | 100 KB | 512 KB |
+| **Fee** | None | size-based | size-based |
 
-## Why Three Privacy Tiers?
+## Why Two Privacy Tiers?
 
 The main difference between Standard-Private and PQ-Private is the **ring signature scheme** (sender privacy):
 
-| Tier | Ring Signature | Size/Input | Quantum Resistance |
-|------|----------------|------------|-------------------|
-| Plain | None (ML-DSA) | ~3.3 KB | Full (ML-DSA is PQ) |
-| Standard-Private | CLSAG | ~0.7 KB | Classical only |
-| PQ-Private | LION | ~63 KB | Full (lattice-based) |
+| Tier | Ring Signature | Ring Size | Size/Input | Quantum Resistance |
+|------|----------------|-----------|------------|-------------------|
+| Standard-Private | CLSAG | 20 | ~0.7 KB | Classical only |
+| PQ-Private | LION | 11 | ~36 KB | Full (lattice-based) |
 
 **Why use ML-KEM stealth addresses in all tiers?**
 
@@ -47,9 +48,9 @@ Users who need quantum-resistant sender privacy should use PQ-Private: whistlebl
 | Stealth addresses | ML-KEM-768 | Recipient unlinkability | 1088 B ciphertext | Post-quantum |
 | Amount commitments | Pedersen | Hide transaction amounts | 32 B | Hiding: unconditional |
 | Range proofs | Bulletproofs | Prove amounts are valid | ~700 B | Classical |
-| Single-signer auth | ML-DSA-65 | Authorize spending (Plain) | 3309 B | Post-quantum |
-| Classical ring sig | CLSAG | Hide sender (Standard-Private) | ~700 B | Classical |
-| PQ ring sig | LION | Hide sender (PQ-Private) | ~63 KB | Post-quantum |
+| Minting auth | ML-DSA-65 | Authorize minting | 3309 B | Post-quantum |
+| Classical ring sig | CLSAG (ring=20) | Hide sender (Standard-Private) | ~700 B | Classical |
+| PQ ring sig | LION (ring=11) | Hide sender (PQ-Private) | ~36 KB | Post-quantum |
 | Key images | Scheme-derived | Prevent double-spending | 32 B (CLSAG), 1312 B (LION) | Matches scheme |
 
 ---
@@ -98,59 +99,6 @@ Each minting transaction creates a new cluster:
 - Cluster ID derived from: `H(block_height || minter_pubkey || output_index)`
 - Initial cluster tag weight: 1.0 (100%)
 - All descendant coins inherit this cluster attribution
-
----
-
-## Plain Transactions
-
-Plain transactions transfer value with hidden amounts but visible sender identity. This is the most efficient transaction type when sender privacy isn't needed.
-
-### Properties
-
-- **Inputs**: References to previous outputs + ML-DSA signatures
-- **Outputs**: Stealth addresses with committed amounts
-- **Authorization**: ML-DSA signature per input (sender is identifiable)
-- **Amount Privacy**: Hidden via Pedersen commitments + Bulletproofs
-- **Quantum Resistance**: Full (ML-DSA is post-quantum)
-
-### Structure
-
-```
-PlainTx {
-    inputs: Vec<PlainInput>,
-    outputs: Vec<TxOutput>,
-    fee: u64,
-    bulletproofs: AggregatedProof,  // Range proofs for all outputs
-}
-
-PlainInput {
-    tx_ref: TxOutRef,               // Previous output reference
-    signature: MlDsa65Signature,    // Authorizes spending (~3.3 KB)
-}
-
-TxOutput {
-    target_key: PqStealthAddress,   // ML-KEM one-time destination
-    public_key: MlKem768Ciphertext, // Ephemeral key for recipient
-    commitment: PedersenCommitment, // C = v*H + b*G
-    encrypted_amount: [u8; 32],     // For recipient decryption
-    cluster_tags: ClusterTagVector, // Inherited/mixed from inputs
-    memo: Option<EncryptedMemo>,    // Optional 66-byte encrypted memo
-}
-```
-
-### Sender Visibility
-
-In Plain transactions, the sender is identifiable because:
-- Each input directly references a specific previous output
-- The ML-DSA signature proves ownership of that specific output
-- No decoys or ring structure obscures the true spender
-
-### Use Cases
-
-- **Exchange deposits/withdrawals**: Exchanges often require identifiable senders
-- **Business payments**: When you need audit trails
-- **Lowest fees**: 0.05% base fee vs 0.2% for Standard-Private
-- **Compliance requirements**: When transparency is required
 
 ---
 
@@ -395,14 +343,28 @@ fee_rate = sigmoid(cluster_wealth)  // 0.05% to 30%
 
 ## Transaction Fees
 
-| Type | Base Fee | Signature Size | Total Size | Cluster Component |
-|------|----------|----------------|------------|-------------------|
-| Minting | 0% | ~3.3 KB (ML-DSA) | ~1.5 KB | 0 (creates new cluster) |
-| Plain | 0.05% | ~3.3 KB (ML-DSA) | ~3-4 KB | 0.05% - 30% of value |
-| Standard-Private | 0.2% | ~0.7 KB (CLSAG) | ~4 KB | 0.05% - 30% of value |
-| PQ-Private | 1.0% | ~63 KB (LION) | ~65 KB | 0.05% - 30% of value |
+Botho uses **size-based fees** with a **progressive cluster factor**:
 
-PQ-Private transactions cost more due to ~90x larger LION signatures, but provide quantum-resistant sender privacy.
+```
+fee = fee_per_byte × tx_size × cluster_factor
+```
+
+| Type | Ring Size | Signature Size | Typical Total Size | Fee (1x cluster) | Fee (6x cluster) |
+|------|-----------|----------------|-------------------|------------------|------------------|
+| Minting | — | ~3.3 KB (ML-DSA) | ~1.5 KB | 0 | 0 |
+| Standard-Private | 20 | ~0.7 KB (CLSAG) | ~4 KB | ~4,000 nanoBTH | ~24,000 nanoBTH |
+| PQ-Private | 11 | ~36 KB (LION) | ~40 KB | ~40,000 nanoBTH | ~240,000 nanoBTH |
+
+### Transaction Limits
+
+| Type | Ring Size | Max Inputs | Max Outputs | Max Tx Size |
+|------|-----------|------------|-------------|-------------|
+| Standard-Private | 20 | 16 | 16 | 100 KB |
+| PQ-Private | 11 | 8 | 16 | 512 KB |
+
+PQ-Private transactions use a smaller ring size (11 vs 20) and fewer max inputs (8 vs 16) to keep transaction sizes manageable while still providing strong privacy (3.30 bits, 95% efficiency).
+
+The cluster factor (1x to 6x) discourages wealth concentration by increasing fees for wealthy clusters.
 
 ---
 
@@ -417,49 +379,35 @@ PQ-Private transactions cost more due to ~90x larger LION signatures, but provid
                       │                │
                       ▼                ▼
                ┌──────────┐    ┌───────────────────┐
-               │ MINTING  │    │ Need sender       │
+               │ MINTING  │    │ Need PQ sender    │
                └──────────┘    │ privacy?          │
                                └─────────┬─────────┘
                                          │
                                No ───────┴────── Yes
                                  │                │
                                  ▼                ▼
-                          ┌──────────┐    ┌───────────────────┐
-                          │  PLAIN   │    │ Need PQ sender    │
-                          └──────────┘    │ privacy?          │
-                                          └─────────┬─────────┘
-                                                    │
-                                          No ───────┴────── Yes
-                                            │                │
-                                            ▼                ▼
-                                     ┌────────────┐   ┌────────────┐
-                                     │ STANDARD-  │   │ PQ-PRIVATE │
-                                     │ PRIVATE    │   │ (LION)     │
-                                     │ (CLSAG)    │   └────────────┘
-                                     └────────────┘
+                          ┌────────────┐   ┌────────────┐
+                          │ STANDARD-  │   │ PQ-PRIVATE │
+                          │ PRIVATE    │   │ (LION)     │
+                          │ (CLSAG)    │   └────────────┘
+                          └────────────┘
 ```
 
 ### Summary
 
-| If you need... | Use | Fee |
-|----------------|-----|-----|
-| Block rewards | Minting | 0% |
-| Audit trail, compliance | Plain | 0.05% |
-| Hidden sender (default) | Standard-Private | 0.2% |
-| Quantum-resistant sender | PQ-Private | 1.0% |
+| If you need... | Use | Size | Fee |
+|----------------|-----|------|-----|
+| Block rewards | Minting | ~1.5 KB | 0 |
+| Privacy (everyday) | Standard-Private | ~4 KB | size-based |
+| Privacy (quantum-safe) | PQ-Private | ~65 KB | size-based |
 
 ### Quick Decision Guide
-
-**Use Plain when:**
-- Sender transparency is acceptable or required
-- Depositing to exchanges
-- Business payments needing audit trails
-- Lowest possible fees
 
 **Use Standard-Private (recommended default) when:**
 - You want sender privacy for everyday transactions
 - Classical adversaries are your threat model
 - Good balance of privacy and efficiency
+- Most transactions should use this type
 
 **Use PQ-Private when:**
 - Long-term privacy is critical (10+ year horizon)
@@ -479,7 +427,7 @@ All transaction types provide strong quantum resistance where it matters most:
 |-----------|-------------------|----------------|------------------|
 | Stealth addresses | ECDH | Shor's algorithm | ML-KEM-768 (all types) |
 | Amount hiding | Pedersen | Grover (minimal) | Information-theoretic hiding |
-| Plain signatures | Schnorr | Shor's algorithm | ML-DSA-65 |
+| Minting signatures | Schnorr | Shor's algorithm | ML-DSA-65 |
 | Standard-Private ring | CLSAG | Shor's algorithm | Classical (acceptable trade-off) |
 | PQ-Private ring | — | — | LION (full PQ) |
 
@@ -493,14 +441,14 @@ All transaction types provide strong quantum resistance where it matters most:
 
 ### Transaction Graph Analysis
 
-| Attack | Plain | Standard-Private | PQ-Private |
-|--------|-------|------------------|------------|
-| Sender identification | Vulnerable | Mitigated (1-in-20) | Mitigated (1-in-20) |
-| Amount correlation | Protected | Protected | Protected |
-| Timing analysis | Partially vulnerable | Partially vulnerable | Partially vulnerable |
-| Recipient identification | Protected | Protected | Protected |
-| Quantum HNDL (sender) | N/A | Vulnerable (future) | Protected |
-| Quantum HNDL (recipient) | Protected | Protected | Protected |
+| Attack | Standard-Private | PQ-Private |
+|--------|------------------|------------|
+| Sender identification | Mitigated (1-in-20) | Mitigated (1-in-20) |
+| Amount correlation | Protected | Protected |
+| Timing analysis | Partially vulnerable | Partially vulnerable |
+| Recipient identification | Protected | Protected |
+| Quantum HNDL (sender) | Vulnerable (future) | Protected |
+| Quantum HNDL (recipient) | Protected | Protected |
 
 For maximum privacy, use PQ-Private transactions and follow [privacy best practices](privacy.md#privacy-best-practices).
 
