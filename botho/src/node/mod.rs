@@ -282,6 +282,11 @@ impl Node {
                         difficulty: state.difficulty,
                         total_minted: state.total_mined,
                     };
+                    info!(
+                        height = work.height,
+                        prev_hash = hex::encode(&work.prev_block_hash[0..8]),
+                        "Updating minter work after block"
+                    );
                     minter.update_work(work);
                 }
             }
@@ -299,6 +304,12 @@ impl Node {
             }
         }
         Ok(None)
+    }
+
+    /// Get the current work version from the minter
+    /// Returns 0 if minting is not active
+    pub fn current_minting_work_version(&self) -> u64 {
+        self.minter.as_ref().map(|m| m.current_work_version()).unwrap_or(0)
     }
 
     // --- Mempool methods ---

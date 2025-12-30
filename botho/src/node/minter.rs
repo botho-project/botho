@@ -43,6 +43,9 @@ pub struct MintedMintingTx {
     pub minting_tx: MintingTx,
     /// PoW priority (higher = harder/better PoW)
     pub pow_priority: u64,
+    /// Work version when this transaction was found
+    /// Used to discard stale transactions from the channel
+    pub work_version: u64,
 }
 
 /// Work unit for minters - what they should be minting
@@ -158,6 +161,12 @@ impl Minter {
             start_time: self.start_time,
         }
     }
+
+    /// Get the current work version
+    /// Used to filter out stale transactions from the channel
+    pub fn current_work_version(&self) -> u64 {
+        self.work_version.load(Ordering::SeqCst)
+    }
 }
 
 /// The actual minting loop
@@ -179,7 +188,12 @@ fn mint_loop(
 
     const BATCH_SIZE: u64 = 10000;
 
-    // Stealth keys for the current minting work
+    // Minter keys (constant for this session) - used in PoW hash
+    let minter_view_key = address.view_public_key().to_bytes();
+    let minter_spend_key = address.spend_public_key().to_bytes();
+    let minter_keys = [minter_view_key, minter_spend_key].concat();
+
+    // Stealth keys for the current minting work (regenerated when work changes)
     let mut cached_target_key = [0u8; 32];
     let mut cached_public_key = [0u8; 32];
 
@@ -193,6 +207,12 @@ fn mint_loop(
             };
             cached_work = Some(work_guard.clone());
             last_work_version = current_version;
+            info!(
+                thread = thread_id,
+                height = work_guard.height,
+                prev_hash = hex::encode(&work_guard.prev_block_hash[0..8]),
+                "Thread picked up new work"
+            );
             // Reset nonce when work changes to avoid collisions
             nonce = (thread_id as u64) << 56;
 
@@ -207,10 +227,9 @@ fn mint_loop(
 
         let work = cached_work.as_ref().unwrap();
 
-        // Compute PoW hash: SHA256(nonce || prev_block_hash || target_key || public_key)
-        // Using stealth keys in PoW binds the proof to the specific output
-        let stealth_bytes = [cached_target_key, cached_public_key].concat();
-        let hash = compute_pow_hash(nonce, &work.prev_block_hash, &stealth_bytes);
+        // Compute PoW hash: SHA256(nonce || prev_block_hash || minter_view_key || minter_spend_key)
+        // Using minter keys to match MintingTx::pow_hash() for verification
+        let hash = compute_pow_hash(nonce, &work.prev_block_hash, &minter_keys);
 
         // Check if hash meets difficulty target
         let hash_value = u64::from_be_bytes(hash[0..8].try_into().unwrap());
@@ -258,10 +277,12 @@ fn mint_loop(
             );
 
             // Send minting tx to main thread for consensus submission
+            // Include work version so stale transactions can be filtered
             if tx_sender
                 .send(MintedMintingTx {
                     minting_tx,
                     pow_priority,
+                    work_version: last_work_version,
                 })
                 .is_err()
             {

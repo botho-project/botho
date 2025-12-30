@@ -23,7 +23,7 @@ use crate::network::{
     BlockTxn, CompactBlock, GetBlockTxn, NetworkDiscovery, NetworkEvent, QuorumBuilder,
     ReconstructionResult,
 };
-use crate::node::Node;
+use crate::node::{MintedMintingTx, Node};
 use crate::rpc::{start_rpc_server, RpcState, WsBroadcaster};
 use crate::transaction::Transaction;
 
@@ -271,6 +271,7 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
     // Run the combined event loop
     let mut status_interval = tokio::time::interval(Duration::from_secs(10));
     let mut consensus_tick = tokio::time::interval(Duration::from_millis(500));
+    let mut minting_check_interval = tokio::time::interval(Duration::from_millis(100));
 
     // Track pending compact blocks awaiting missing transactions
     // Key: block hash, Value: (compact block, missing indices)
@@ -733,55 +734,80 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
             }
 
             // Check for minted minting transactions
-            _ = tokio::time::sleep(Duration::from_millis(100)) => {
+            _ = minting_check_interval.tick() => {
                 // Only check for mined transactions if minting is enabled
                 if !minting_enabled {
                     continue;
                 }
-                if let Some(minted_tx) = node.check_minted_minting_tx()? {
-                    let minting_tx = &minted_tx.minting_tx;
 
-                    // Pre-validate the minting transaction before submitting to consensus
-                    // This catches stale/invalid transactions early
-                    let chain_state = match node.shared_ledger().read() {
-                        Ok(ledger) => match ledger.get_chain_state() {
-                            Ok(state) => state,
-                            Err(e) => {
-                                warn!("Cannot get chain state for validation: {}", e);
-                                continue;
-                            }
-                        },
-                        Err(_) => {
-                            warn!("Cannot acquire ledger lock for validation");
-                            continue;
-                        }
-                    };
+                // Drain all available transactions from the channel
+                // This is important because many stale transactions may be queued
+                let current_version = node.current_minting_work_version();
+                let mut valid_tx: Option<MintedMintingTx> = None;
+                let mut stale_count = 0u64;
 
-                    let temp_state = Arc::new(RwLock::new(chain_state));
-                    let validator = TransactionValidator::new(temp_state);
-
-                    if let Err(e) = validator.validate_minting_tx(minting_tx) {
-                        debug!(
-                            height = minting_tx.block_height,
-                            error = %e,
-                            "Discarding stale minting tx (chain advanced)"
-                        );
+                while let Some(minted_tx) = node.check_minted_minting_tx()? {
+                    // Quick version check: discard stale transactions
+                    if minted_tx.work_version != current_version {
+                        stale_count += 1;
                         continue;
                     }
-
-                    info!(
-                        height = minting_tx.block_height,
-                        priority = minted_tx.pow_priority,
-                        "Submitting minting tx to consensus"
-                    );
-
-                    // Serialize and submit to consensus
-                    let tx_bytes = bincode::serialize(minting_tx)
-                        .expect("Failed to serialize minting tx");
-                    let tx_hash = minting_tx.hash();
-
-                    consensus.submit_minting_tx(tx_hash, minted_tx.pow_priority, tx_bytes);
+                    // Keep the transaction with highest priority
+                    if valid_tx.as_ref().map(|t| minted_tx.pow_priority > t.pow_priority).unwrap_or(true) {
+                        valid_tx = Some(minted_tx);
+                    }
                 }
+
+                if stale_count > 0 {
+                    debug!(stale_count, "Drained stale minting txs from channel");
+                }
+
+                let Some(minted_tx) = valid_tx else {
+                    continue;
+                };
+
+                let minting_tx = &minted_tx.minting_tx;
+
+                // Pre-validate the minting transaction before submitting to consensus
+                // This catches any remaining invalid transactions
+                let chain_state = match node.shared_ledger().read() {
+                    Ok(ledger) => match ledger.get_chain_state() {
+                        Ok(state) => state,
+                        Err(e) => {
+                            warn!("Cannot get chain state for validation: {}", e);
+                            continue;
+                        }
+                    },
+                    Err(_) => {
+                        warn!("Cannot acquire ledger lock for validation");
+                        continue;
+                    }
+                };
+
+                let temp_state = Arc::new(RwLock::new(chain_state));
+                let validator = TransactionValidator::new(temp_state);
+
+                if let Err(e) = validator.validate_minting_tx(minting_tx) {
+                    debug!(
+                        height = minting_tx.block_height,
+                        error = %e,
+                        "Discarding stale minting tx (chain advanced)"
+                    );
+                    continue;
+                }
+
+                info!(
+                    height = minting_tx.block_height,
+                    priority = minted_tx.pow_priority,
+                    "Submitting minting tx to consensus"
+                );
+
+                // Serialize and submit to consensus
+                let tx_bytes = bincode::serialize(minting_tx)
+                    .expect("Failed to serialize minting tx");
+                let tx_hash = minting_tx.hash();
+
+                consensus.submit_minting_tx(tx_hash, minted_tx.pow_priority, tx_bytes);
 
                 // Also check for pending transfer transactions in mempool
                 // and submit them to consensus

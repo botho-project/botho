@@ -30,9 +30,9 @@ pub struct ConsensusConfig {
 impl Default for ConsensusConfig {
     fn default() -> Self {
         Self {
-            slot_duration: Duration::from_secs(5),
+            slot_duration: Duration::from_secs(20),
             max_txs_per_slot: 100,
-            rebroadcast_interval: Duration::from_secs(2),
+            rebroadcast_interval: Duration::from_secs(5),
         }
     }
 }
