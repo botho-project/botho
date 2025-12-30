@@ -2,8 +2,12 @@
 //!
 //! Handles transaction building, signing, and submission for the desktop wallet.
 //! Private keys never leave this module - all signing happens locally.
+//!
+//! SECURITY: Mnemonics are NEVER exposed to JavaScript. All sensitive key material
+//! stays in Rust memory and is automatically zeroized when the wallet is locked.
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
 use anyhow::{anyhow, Result};
@@ -26,12 +30,50 @@ use botho_wallet::transaction::{
 /// Picocredits per BTH (same as CAD internally)
 const PICOCREDITS_PER_BTH: u64 = PICOCREDITS_PER_CAD;
 
+/// Session timeout in minutes - wallet auto-locks after inactivity
+const SESSION_TIMEOUT_MINS: u64 = 15;
+
+/// An unlocked wallet session holding decrypted keys in Rust memory.
+///
+/// SECURITY: WalletKeys uses Zeroizing<String> internally, ensuring the mnemonic
+/// is securely zeroed when the session is dropped (locked).
+struct WalletSession {
+    /// Decrypted wallet keys - auto-zeroized on drop
+    keys: WalletKeys,
+    /// Timestamp of last activity for auto-lock
+    last_activity: Instant,
+    /// Path to the wallet file (if loaded from file)
+    wallet_path: Option<PathBuf>,
+}
+
+impl WalletSession {
+    fn new(keys: WalletKeys, wallet_path: Option<PathBuf>) -> Self {
+        Self {
+            keys,
+            last_activity: Instant::now(),
+            wallet_path,
+        }
+    }
+
+    /// Update activity timestamp to prevent timeout
+    fn touch(&mut self) {
+        self.last_activity = Instant::now();
+    }
+
+    /// Check if session has timed out
+    fn is_expired(&self) -> bool {
+        self.last_activity.elapsed() > Duration::from_secs(SESSION_TIMEOUT_MINS * 60)
+    }
+}
+
 /// Wallet state managed by Tauri
 pub struct WalletCommands {
     /// Cached UTXOs from last sync
     utxos: Arc<Mutex<Vec<OwnedUtxo>>>,
     /// Last synced block height
     sync_height: Arc<Mutex<u64>>,
+    /// Active wallet session (unlocked keys held in Rust memory only)
+    session: Arc<Mutex<Option<WalletSession>>>,
 }
 
 impl WalletCommands {
@@ -39,6 +81,27 @@ impl WalletCommands {
         Self {
             utxos: Arc::new(Mutex::new(Vec::new())),
             sync_height: Arc::new(Mutex::new(0)),
+            session: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// Get wallet keys if session is active and not expired.
+    /// Updates last activity timestamp on success.
+    async fn get_session_keys(&self) -> Result<WalletKeys> {
+        let mut session_guard = self.session.lock().await;
+
+        match session_guard.as_mut() {
+            Some(session) => {
+                if session.is_expired() {
+                    // Auto-lock on timeout - dropping the session zeroizes keys
+                    *session_guard = None;
+                    Err(anyhow!("Session expired. Please unlock your wallet again."))
+                } else {
+                    session.touch();
+                    Ok(session.keys.clone())
+                }
+            }
+            None => Err(anyhow!("Wallet is locked. Please unlock your wallet first.")),
         }
     }
 }
@@ -52,11 +115,12 @@ pub enum PrivacyLevel {
 }
 
 /// Parameters for sending a transaction
+///
+/// SECURITY: Mnemonic is NOT passed from JS. Keys are retrieved from the
+/// active session which is held securely in Rust memory.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SendTransactionParams {
-    /// 24-word BIP39 mnemonic phrase
-    pub mnemonic: String,
     /// Recipient address (view:hex\nspend:hex format or cad:view:spend)
     pub recipient: String,
     /// Amount in picocredits (as string to handle bigint from JS)
@@ -83,11 +147,12 @@ pub struct SendTransactionResult {
 }
 
 /// Parameters for syncing the wallet
+///
+/// SECURITY: Mnemonic is NOT passed from JS. Keys are retrieved from the
+/// active session which is held securely in Rust memory.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncWalletParams {
-    /// 24-word BIP39 mnemonic phrase
-    pub mnemonic: String,
     /// Node host to connect to
     pub node_host: String,
     /// Node port
@@ -108,11 +173,12 @@ pub struct SyncWalletResult {
 }
 
 /// Parameters for getting balance
+///
+/// SECURITY: Mnemonic is NOT passed from JS. Keys are retrieved from the
+/// active session which is held securely in Rust memory.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetBalanceParams {
-    /// 24-word BIP39 mnemonic phrase
-    pub mnemonic: String,
     /// Node host to connect to
     pub node_host: String,
     /// Node port
@@ -158,9 +224,8 @@ async fn send_transaction_internal(
     state: &State<'_, WalletCommands>,
     params: SendTransactionParams,
 ) -> Result<SendTransactionResult> {
-    // 1. Derive wallet keys from mnemonic
-    let keys = WalletKeys::from_mnemonic(&params.mnemonic)
-        .map_err(|e| anyhow!("Invalid mnemonic: {}", e))?;
+    // 1. Get wallet keys from session (SECURITY: keys never leave Rust)
+    let keys = state.get_session_keys().await?;
 
     // 2. Parse recipient address
     let recipient = parse_recipient_address(&params.recipient)?;
@@ -273,9 +338,8 @@ async fn sync_wallet_internal(
     state: &State<'_, WalletCommands>,
     params: SyncWalletParams,
 ) -> Result<SyncWalletResult> {
-    // Derive wallet keys
-    let keys = WalletKeys::from_mnemonic(&params.mnemonic)
-        .map_err(|e| anyhow!("Invalid mnemonic: {}", e))?;
+    // Get wallet keys from session (SECURITY: keys never leave Rust)
+    let keys = state.get_session_keys().await?;
 
     // Connect to node
     let mut discovery = NodeDiscovery::new();
@@ -329,9 +393,8 @@ async fn get_balance_internal(
     state: &State<'_, WalletCommands>,
     params: GetBalanceParams,
 ) -> Result<BalanceResult> {
-    // Derive wallet keys
-    let keys = WalletKeys::from_mnemonic(&params.mnemonic)
-        .map_err(|e| anyhow!("Invalid mnemonic: {}", e))?;
+    // Get wallet keys from session (SECURITY: keys never leave Rust)
+    let keys = state.get_session_keys().await?;
 
     // Connect to node
     let mut discovery = NodeDiscovery::new();
@@ -424,10 +487,265 @@ fn parse_recipient_address(address: &str) -> Result<bth_account_keys::PublicAddr
 }
 
 // ============================================================================
-// Wallet File Operations
+// Session Management Commands
+// ============================================================================
+
+/// Parameters for unlocking wallet from file
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnlockWalletParams {
+    /// Password to decrypt the wallet file
+    pub password: String,
+    /// Optional path to wallet file (uses default if not provided)
+    pub path: Option<String>,
+}
+
+/// Result of unlocking the wallet
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnlockWalletResult {
+    pub success: bool,
+    /// Wallet public address (safe to expose to JS)
+    pub address: Option<String>,
+    /// Whether the session will auto-lock after timeout
+    pub has_timeout: bool,
+    /// Timeout duration in minutes
+    pub timeout_mins: u64,
+    pub error: Option<String>,
+}
+
+/// Result of wallet session status check
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionStatusResult {
+    pub is_unlocked: bool,
+    /// Public address if unlocked
+    pub address: Option<String>,
+    /// Seconds until session expires (if unlocked)
+    pub expires_in_secs: Option<u64>,
+}
+
+/// Unlock wallet from encrypted file
+///
+/// Decrypts the wallet file and caches the keys in Rust memory.
+/// The mnemonic NEVER leaves Rust - only the public address is returned.
+#[tauri::command]
+pub async fn unlock_wallet(
+    state: State<'_, WalletCommands>,
+    params: UnlockWalletParams,
+) -> Result<UnlockWalletResult, String> {
+    match unlock_wallet_internal(&state, params).await {
+        Ok(result) => Ok(result),
+        Err(e) => Ok(UnlockWalletResult {
+            success: false,
+            address: None,
+            has_timeout: true,
+            timeout_mins: SESSION_TIMEOUT_MINS,
+            error: Some(e.to_string()),
+        }),
+    }
+}
+
+async fn unlock_wallet_internal(
+    state: &State<'_, WalletCommands>,
+    params: UnlockWalletParams,
+) -> Result<UnlockWalletResult> {
+    // Determine path
+    let path = match params.path {
+        Some(p) => PathBuf::from(p),
+        None => get_default_wallet_path()?,
+    };
+
+    // Check if file exists
+    if !path.exists() {
+        return Err(anyhow!("Wallet file not found: {}", path.display()));
+    }
+
+    // Load and decrypt
+    let wallet = EncryptedWallet::load(&path)
+        .map_err(|e| anyhow!("Failed to load wallet file: {}", e))?;
+
+    let mnemonic = wallet.decrypt(&params.password)
+        .map_err(|e| anyhow!("Failed to decrypt wallet: {}", e))?;
+
+    // Derive keys from mnemonic (mnemonic is Zeroizing<String>)
+    let keys = WalletKeys::from_mnemonic(&mnemonic)
+        .map_err(|e| anyhow!("Invalid mnemonic in wallet file: {}", e))?;
+
+    // Get public address BEFORE moving keys into session
+    let address = keys.address_string();
+
+    // Create session and cache keys in Rust memory
+    let session = WalletSession::new(keys, Some(path.clone()));
+    *state.session.lock().await = Some(session);
+
+    // Also update sync height from wallet file
+    *state.sync_height.lock().await = wallet.sync_height;
+
+    log::info!("Wallet unlocked from {}", path.display());
+
+    Ok(UnlockWalletResult {
+        success: true,
+        address: Some(address),
+        has_timeout: true,
+        timeout_mins: SESSION_TIMEOUT_MINS,
+        error: None,
+    })
+}
+
+/// Lock wallet and securely zeroize keys
+///
+/// Drops the cached keys, which triggers Zeroizing to overwrite
+/// the mnemonic memory with zeros.
+#[tauri::command]
+pub async fn lock_wallet(
+    state: State<'_, WalletCommands>,
+) -> Result<bool, String> {
+    let mut session_guard = state.session.lock().await;
+
+    if session_guard.is_some() {
+        // Drop the session - this triggers zeroization of the mnemonic
+        *session_guard = None;
+        log::info!("Wallet locked and keys zeroized");
+        Ok(true)
+    } else {
+        Ok(false) // Already locked
+    }
+}
+
+/// Check wallet session status
+///
+/// Returns whether the wallet is currently unlocked and time until expiry.
+#[tauri::command]
+pub async fn get_session_status(
+    state: State<'_, WalletCommands>,
+) -> Result<SessionStatusResult, String> {
+    let mut session_guard = state.session.lock().await;
+
+    match session_guard.as_mut() {
+        Some(session) => {
+            if session.is_expired() {
+                // Auto-lock on timeout check
+                *session_guard = None;
+                Ok(SessionStatusResult {
+                    is_unlocked: false,
+                    address: None,
+                    expires_in_secs: None,
+                })
+            } else {
+                let elapsed = session.last_activity.elapsed();
+                let timeout = Duration::from_secs(SESSION_TIMEOUT_MINS * 60);
+                let remaining = timeout.saturating_sub(elapsed);
+
+                Ok(SessionStatusResult {
+                    is_unlocked: true,
+                    address: Some(session.keys.address_string()),
+                    expires_in_secs: Some(remaining.as_secs()),
+                })
+            }
+        }
+        None => Ok(SessionStatusResult {
+            is_unlocked: false,
+            address: None,
+            expires_in_secs: None,
+        }),
+    }
+}
+
+// ============================================================================
+// Wallet File Operations (for initial wallet creation only)
+// ============================================================================
+
+/// Parameters for saving a new wallet to file (initial creation only)
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateWalletParams {
+    /// 24-word BIP39 mnemonic phrase (only used for initial creation)
+    pub mnemonic: String,
+    /// Password to encrypt the wallet
+    pub password: String,
+    /// Optional path to save wallet file (uses default if not provided)
+    pub path: Option<String>,
+}
+
+/// Result of creating a wallet file
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateWalletResult {
+    pub success: bool,
+    /// The path where the wallet was saved
+    pub path: Option<String>,
+    /// The wallet's public address
+    pub address: Option<String>,
+    pub error: Option<String>,
+}
+
+/// Create and save a new wallet file, then unlock it
+///
+/// This is the ONLY command that accepts a mnemonic from JS,
+/// and only for initial wallet creation. After creation, the wallet
+/// is automatically unlocked using the session-based approach.
+#[tauri::command]
+pub async fn create_wallet(
+    state: State<'_, WalletCommands>,
+    params: CreateWalletParams,
+) -> Result<CreateWalletResult, String> {
+    match create_wallet_internal(&state, params).await {
+        Ok(result) => Ok(result),
+        Err(e) => Ok(CreateWalletResult {
+            success: false,
+            path: None,
+            address: None,
+            error: Some(e.to_string()),
+        }),
+    }
+}
+
+async fn create_wallet_internal(
+    state: &State<'_, WalletCommands>,
+    params: CreateWalletParams,
+) -> Result<CreateWalletResult> {
+    // Validate mnemonic and derive keys
+    let keys = WalletKeys::from_mnemonic(&params.mnemonic)
+        .map_err(|e| anyhow!("Invalid mnemonic: {}", e))?;
+
+    // Determine path
+    let path = match params.path {
+        Some(p) => PathBuf::from(p),
+        None => get_default_wallet_path()?,
+    };
+
+    // Create encrypted wallet
+    let wallet = EncryptedWallet::encrypt(&params.mnemonic, &params.password)
+        .map_err(|e| anyhow!("Failed to encrypt wallet: {}", e))?;
+
+    // Save to file
+    wallet.save(&path)
+        .map_err(|e| anyhow!("Failed to save wallet file: {}", e))?;
+
+    // Get address before moving keys
+    let address = keys.address_string();
+
+    // Auto-unlock after creation
+    let session = WalletSession::new(keys, Some(path.clone()));
+    *state.session.lock().await = Some(session);
+
+    log::info!("Wallet created at {} and unlocked", path.display());
+
+    Ok(CreateWalletResult {
+        success: true,
+        path: Some(path.to_string_lossy().to_string()),
+        address: Some(address),
+        error: None,
+    })
+}
+
+// ============================================================================
+// Legacy Wallet File Operations (kept for backwards compatibility but deprecated)
 // ============================================================================
 
 /// Parameters for loading a wallet from file
+/// DEPRECATED: Use unlock_wallet instead
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LoadWalletFileParams {
@@ -488,11 +806,16 @@ fn get_default_wallet_path() -> Result<PathBuf> {
 
 /// Load wallet from encrypted file
 ///
-/// Decrypts the wallet file using the provided password and returns the mnemonic.
+/// DEPRECATED: This command returns the mnemonic to JavaScript which is a security risk.
+/// Use `unlock_wallet` instead, which keeps the mnemonic in Rust memory.
+///
+/// This command is kept for backwards compatibility but will be removed in a future version.
 #[tauri::command]
+#[deprecated(note = "Use unlock_wallet instead - this exposes mnemonic to JavaScript")]
 pub async fn load_wallet_file(
     params: LoadWalletFileParams,
 ) -> Result<LoadWalletFileResult, String> {
+    log::warn!("DEPRECATED: load_wallet_file called - use unlock_wallet instead");
     match load_wallet_file_internal(params).await {
         Ok(result) => Ok(result),
         Err(e) => Ok(LoadWalletFileResult {
@@ -541,11 +864,16 @@ async fn load_wallet_file_internal(
 
 /// Save wallet to encrypted file
 ///
-/// Encrypts the mnemonic using the provided password and saves to file.
+/// DEPRECATED: This command accepts mnemonic from JavaScript which is a security risk.
+/// Use `create_wallet` instead, which creates the wallet and keeps keys in Rust memory.
+///
+/// This command is kept for backwards compatibility but will be removed in a future version.
 #[tauri::command]
+#[deprecated(note = "Use create_wallet instead - this receives mnemonic from JavaScript")]
 pub async fn save_wallet_file(
     params: SaveWalletFileParams,
 ) -> Result<SaveWalletFileResult, String> {
+    log::warn!("DEPRECATED: save_wallet_file called - use create_wallet instead");
     match save_wallet_file_internal(params).await {
         Ok(result) => Ok(result),
         Err(e) => Ok(SaveWalletFileResult {

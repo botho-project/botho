@@ -24,13 +24,21 @@ pub fn run() {
         })
         .manage(WalletCommands::new())
         .invoke_handler(tauri::generate_handler![
+            // Session-based commands (recommended)
+            wallet::unlock_wallet,
+            wallet::lock_wallet,
+            wallet::get_session_status,
+            wallet::create_wallet,
+            // Transaction commands (use session, no mnemonic)
             wallet::send_transaction,
             wallet::sync_wallet,
             wallet::get_balance,
-            wallet::load_wallet_file,
-            wallet::save_wallet_file,
+            // Utility commands
             wallet::wallet_file_exists,
             wallet::get_wallet_path,
+            // Legacy commands (deprecated, kept for backwards compatibility)
+            wallet::load_wallet_file,
+            wallet::save_wallet_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

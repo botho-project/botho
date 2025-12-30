@@ -4,7 +4,6 @@ import {
   useEffect,
   useState,
   useCallback,
-  useRef,
   type ReactNode,
 } from 'react'
 import { invoke } from '@tauri-apps/api/core'
@@ -24,6 +23,8 @@ interface WalletState {
   hasWalletFile: boolean
   /** The default wallet file path */
   walletFilePath: string | null
+  /** Seconds until session expires (if unlocked) */
+  sessionExpiresIn: number | null
 }
 
 interface SendTxParams {
@@ -40,11 +41,15 @@ interface WalletContextValue extends WalletState {
   sendTransaction: (params: SendTxParams) => Promise<{ success: boolean; txHash?: string; error?: string }>
   estimateFee: (amount: bigint, privacyLevel: 'standard' | 'private') => Promise<bigint>
   setAddress: (address: Address) => void
-  unlockWallet: (mnemonic: string) => void
-  unlockWalletFromFile: (password: string, path?: string) => Promise<{ success: boolean; error?: string }>
-  saveWalletToFile: (mnemonic: string, password: string, path?: string) => Promise<{ success: boolean; path?: string; error?: string }>
-  lockWallet: () => void
+  /** Unlock wallet from file using password (mnemonic stays in Rust) */
+  unlockWallet: (password: string, path?: string) => Promise<{ success: boolean; address?: string; error?: string }>
+  /** Create new wallet file and unlock it */
+  createWallet: (mnemonic: string, password: string, path?: string) => Promise<{ success: boolean; path?: string; address?: string; error?: string }>
+  /** Lock wallet and zeroize keys in Rust */
+  lockWallet: () => Promise<void>
   checkWalletFile: () => Promise<void>
+  /** Check session status */
+  checkSessionStatus: () => Promise<void>
 }
 
 // Tauri command response types
@@ -54,17 +59,25 @@ interface SendTransactionResult {
   error?: string
 }
 
-interface LoadWalletFileResult {
+interface UnlockWalletResult {
   success: boolean
-  mnemonic?: string
-  syncHeight: number
+  address?: string
+  hasTimeout: boolean
+  timeoutMins: number
   error?: string
 }
 
-interface SaveWalletFileResult {
+interface CreateWalletResult {
   success: boolean
   path?: string
+  address?: string
   error?: string
+}
+
+interface SessionStatusResult {
+  isUnlocked: boolean
+  address?: string
+  expiresInSecs?: number
 }
 
 interface WalletFileExistsResult {
@@ -78,8 +91,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const { connectedNode } = useConnection()
   const [adapter, setAdapter] = useState<LocalNodeAdapter | null>(null)
 
-  // Store mnemonic in memory only (never persisted)
-  const mnemonicRef = useRef<string | null>(null)
+  // SECURITY: Mnemonic is NEVER stored in JavaScript.
+  // All key material stays in Rust memory and is accessed via session.
 
   const [state, setState] = useState<WalletState>({
     address: null,
@@ -91,6 +104,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     isUnlocked: false,
     hasWalletFile: false,
     walletFilePath: null,
+    sessionExpiresIn: null,
   })
 
   // Create adapter when connected
@@ -139,54 +153,76 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     checkWalletFile()
   }, [checkWalletFile])
 
-  const unlockWallet = useCallback((mnemonic: string) => {
-    mnemonicRef.current = mnemonic
-    setState(s => ({ ...s, isUnlocked: true }))
-  }, [])
-
-  const unlockWalletFromFile = useCallback(async (password: string, path?: string) => {
+  // Check session status from Rust
+  const checkSessionStatus = useCallback(async () => {
     try {
-      const result = await invoke<LoadWalletFileResult>('load_wallet_file', {
-        params: { password, path: path || null }
-      })
-
-      if (result.success && result.mnemonic) {
-        mnemonicRef.current = result.mnemonic
-        setState(s => ({ ...s, isUnlocked: true }))
-        return { success: true }
-      } else {
-        return { success: false, error: result.error || 'Failed to load wallet' }
-      }
-    } catch (err) {
-      return { success: false, error: err instanceof Error ? err.message : 'Failed to load wallet' }
+      const result = await invoke<SessionStatusResult>('get_session_status')
+      setState(s => ({
+        ...s,
+        isUnlocked: result.isUnlocked,
+        address: result.address || s.address,
+        sessionExpiresIn: result.expiresInSecs ?? null,
+      }))
+    } catch {
+      // Ignore errors - session check is optional
     }
   }, [])
 
-  const saveWalletToFile = useCallback(async (mnemonic: string, password: string, path?: string) => {
+  // Unlock wallet from file (mnemonic stays in Rust)
+  const unlockWallet = useCallback(async (password: string, path?: string) => {
     try {
-      const result = await invoke<SaveWalletFileResult>('save_wallet_file', {
+      const result = await invoke<UnlockWalletResult>('unlock_wallet', {
+        params: { password, path: path || null }
+      })
+
+      if (result.success) {
+        setState(s => ({
+          ...s,
+          isUnlocked: true,
+          address: result.address || s.address,
+        }))
+        return { success: true, address: result.address }
+      } else {
+        return { success: false, error: result.error || 'Failed to unlock wallet' }
+      }
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : 'Failed to unlock wallet' }
+    }
+  }, [])
+
+  // Create new wallet file and unlock it
+  const createWallet = useCallback(async (mnemonic: string, password: string, path?: string) => {
+    try {
+      const result = await invoke<CreateWalletResult>('create_wallet', {
         params: { mnemonic, password, path: path || null }
       })
 
       if (result.success) {
-        // Update state to reflect that wallet file now exists
+        // Update state to reflect that wallet file now exists and is unlocked
         setState(s => ({
           ...s,
+          isUnlocked: true,
           hasWalletFile: true,
           walletFilePath: result.path || s.walletFilePath,
+          address: result.address || s.address,
         }))
-        return { success: true, path: result.path }
+        return { success: true, path: result.path, address: result.address }
       } else {
-        return { success: false, error: result.error || 'Failed to save wallet' }
+        return { success: false, error: result.error || 'Failed to create wallet' }
       }
     } catch (err) {
-      return { success: false, error: err instanceof Error ? err.message : 'Failed to save wallet' }
+      return { success: false, error: err instanceof Error ? err.message : 'Failed to create wallet' }
     }
   }, [])
 
-  const lockWallet = useCallback(() => {
-    mnemonicRef.current = null
-    setState(s => ({ ...s, isUnlocked: false }))
+  // Lock wallet (keys are zeroized in Rust)
+  const lockWallet = useCallback(async () => {
+    try {
+      await invoke<boolean>('lock_wallet')
+    } catch {
+      // Ignore errors
+    }
+    setState(s => ({ ...s, isUnlocked: false, sessionExpiresIn: null }))
   }, [])
 
   const refreshBalance = useCallback(async () => {
@@ -236,17 +272,14 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       return { success: false, error: 'Not connected to node' }
     }
 
-    if (!mnemonicRef.current) {
-      return { success: false, error: 'Wallet is locked. Please unlock your wallet first.' }
-    }
-
+    // SECURITY: No mnemonic is passed - Rust uses the cached session
     setState(s => ({ ...s, isSending: true, error: null }))
 
     try {
       // Call the Tauri backend to build, sign, and submit the transaction
+      // Keys are retrieved from the session in Rust - never exposed to JS
       const result = await invoke<SendTransactionResult>('send_transaction', {
         params: {
-          mnemonic: mnemonicRef.current,
           recipient: params.recipient,
           amount: params.amount.toString(),
           privacyLevel: params.privacyLevel,
@@ -295,6 +328,14 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     return unsubscribe
   }, [adapter, state.address, refreshBalance, refreshTransactions])
 
+  // Check session status on mount and periodically
+  useEffect(() => {
+    checkSessionStatus()
+    // Check every minute for session expiry
+    const interval = setInterval(checkSessionStatus, 60000)
+    return () => clearInterval(interval)
+  }, [checkSessionStatus])
+
   return (
     <WalletContext.Provider
       value={{
@@ -305,10 +346,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         estimateFee,
         setAddress,
         unlockWallet,
-        unlockWalletFromFile,
-        saveWalletToFile,
+        createWallet,
         lockWallet,
         checkWalletFile,
+        checkSessionStatus,
       }}
     >
       {children}
