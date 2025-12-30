@@ -4,7 +4,7 @@ import { Button, Card, Input, Logo, Toast } from '@botho/ui'
 import { createMnemonic12 } from '@botho/core'
 import { useCopyToClipboard, BalanceCard, TransactionList, SendModal, type SendFormData, type SendResult } from '@botho/features'
 import { useWallet } from '../contexts/wallet'
-import { Send, Download, RefreshCw, ArrowLeft, Shield, Eye, KeyRound, AlertCircle, Lock, Copy, Check, Settings, Trash2 } from 'lucide-react'
+import { Send, Download, RefreshCw, ArrowLeft, Shield, Eye, KeyRound, AlertCircle, Lock, Check, Settings, Trash2 } from 'lucide-react'
 
 function CreateWalletView({ onCreate }: { onCreate: (mnemonic: string, password?: string) => void }) {
   const [showMnemonic, setShowMnemonic] = useState(false)
