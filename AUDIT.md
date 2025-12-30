@@ -16,8 +16,10 @@ This document outlines security-critical areas requiring careful review before e
 8. [Medium Priority: Unsafe Rust Code](#8-medium-priority-unsafe-rust-code)
 9. [Medium Priority: Dependencies](#9-medium-priority-dependencies)
 10. [Known Issues & TODOs](#10-known-issues--todos)
+10.5. [Ring Structure & Minting Dynamics](#105-ring-structure--minting-dynamics-updated-2025-12)
 11. [Security Claims to Verify](#11-security-claims-to-verify)
 12. [Pre-Audit Checklist](#12-pre-audit-checklist)
+13. [Internal Audit Session - 2025-12-30](#13-internal-audit-session---2025-12-30)
 
 ---
 
@@ -69,12 +71,18 @@ W = mu_P * P + mu_C * Z  (aggregated public key)
 - [ ] Rejection sampling for uniform distribution
 - [ ] Module-LWE/SIS parameter selection (128-bit PQ security)
 - [ ] Key image linkability in lattice setting
-- [ ] Signature size (~17.5KB per input) acceptability
+- [ ] Signature size (~36KB per input) acceptability
 
 **Parameters (verify security level):**
 ```
-N = 256, Q = 8380417, K = L = 4, ring_size = 7
+N = 256, Q = 8380417, K = L = 4, RING_SIZE = 11
 ```
+
+**Ring Size Rationale (updated 2025-12):**
+- Ring size 11 provides 3.30 bits of measured privacy (95.3% efficiency)
+- Each ring member adds 3,072 bytes to signature
+- Ring 11: ~36KB signature vs Ring 20: ~63.5KB (+27KB overhead)
+- Ring 11 still exceeds Monero's effective anonymity (~4.2 of 16)
 
 ### 1.4 Pedersen Commitments
 
@@ -484,18 +492,104 @@ let env = unsafe {
 
 ---
 
+## 10.5 Ring Structure & Minting Dynamics (Updated 2025-12)
+
+### Ring Sizes by Transaction Type
+
+| Transaction Type | Ring Size | Signature Size | Privacy Bits | Rationale |
+|------------------|-----------|----------------|--------------|-----------|
+| **CLSAG (Standard-Private)** | 20 | ~700 bytes | 4.32 | Default for all txs, larger than Monero (16) |
+| **LION (PQ-Private)** | 11 | ~36 KB | 3.30 | Optimized for lattice signature overhead |
+
+**Key Constants:**
+- `transaction/types/src/constants.rs`: `RING_SIZE = 20`
+- `botho/src/transaction.rs`: `DEFAULT_RING_SIZE = 20`, `MIN_RING_SIZE = 20`
+- `crypto/lion/src/params.rs`: `RING_SIZE = 11`
+- `botho/src/transaction.rs`: `PQ_RING_SIZE = 11`, `MIN_PQ_RING_SIZE = 11`
+
+**Review Focus:**
+- [ ] Ring size enforcement at transaction validation
+- [ ] No bypass allowing smaller rings
+- [ ] Decoy selection doesn't repeat real input
+
+### Two-Phase Monetary Policy
+
+**Location:** `cluster-tax/src/monetary.rs`
+
+| Phase | Duration | Mechanism | Target |
+|-------|----------|-----------|--------|
+| **Phase 1: Halving** | Years 0-10 | 5 halvings every ~2 years | ~100M BTH distributed |
+| **Phase 2: Tail** | Year 10+ | Difficulty-adjusted minting | 2% NET annual inflation |
+
+**Phase 1 Emission Schedule:**
+```
+Halving 0 (years 0-2):  ~50 BTH/block    → ~26.3M BTH
+Halving 1 (years 2-4):  ~25 BTH/block    → ~13.1M BTH
+Halving 2 (years 4-6):  ~12.5 BTH/block  → ~6.6M BTH
+Halving 3 (years 6-8):  ~6.25 BTH/block  → ~3.3M BTH
+Halving 4 (years 8-10): ~3.125 BTH/block → ~1.6M BTH
+────────────────────────────────────────────────────
+Total Phase 1:                           ~100M BTH
+```
+
+**Phase 2 Dynamics:**
+- Block reward is fixed at transition
+- Difficulty adjusts to achieve NET 2% inflation
+- Fee burns reduce effective inflation (all cluster taxes burned)
+- Block time floats within 45-90 second bounds
+
+### Dynamic Block Timing
+
+**Location:** `botho/src/block.rs:dynamic_timing`
+
+| Transaction Rate | Block Time | Purpose |
+|------------------|------------|---------|
+| 20+ tx/s | 3 seconds | Very high load |
+| 5+ tx/s | 5 seconds | High load |
+| 1+ tx/s | 10 seconds | Medium load |
+| 0.2+ tx/s | 20 seconds | Low load |
+| <0.2 tx/s | 40 seconds | Idle |
+
+**Review Focus:**
+- [ ] Block time computation is deterministic from chain state
+- [ ] All validators compute same target for given tip
+- [ ] No timestamp manipulation attacks
+- [ ] Difficulty adjustment bounds (25% max change per epoch)
+
+### Difficulty Adjustment
+
+**Two parallel systems exist (review interaction):**
+
+1. **Transaction-based** (`block.rs:difficulty`):
+   - Adjusts every 1000 transactions
+   - Ties monetary policy to network usage
+   - `ADJUSTMENT_TX_COUNT = 1000`
+
+2. **Block-based** (`node/mod.rs`):
+   - Legacy: adjusts every `ADJUSTMENT_WINDOW = 180` blocks
+   - Used for network block synchronization
+
+**Review Focus:**
+- [ ] No conflict between adjustment mechanisms
+- [ ] Overflow safety verified for 270+ years
+- [ ] Difficulty cannot be manipulated for advantage
+
+---
+
 ## 11. Security Claims to Verify
 
 | Claim | Description | Verification Method |
 |-------|-------------|---------------------|
-| Privacy by Default | All transactions use ring size 20 | Code review, test |
+| Privacy by Default | CLSAG uses ring 20, LION uses ring 11 | Code review, test |
 | Double-Spend Prevention | Key images are unique and tracked | Formal analysis |
 | Amount Hiding | Pedersen commitments hide values | Cryptographic proof |
 | Recipient Privacy | Stealth addresses unlinkable | Protocol analysis |
 | Post-Quantum Ready | LION + ML-KEM-768 available | Feature flag test |
 | Consensus Safety | No conflicting values externalized | SCP formal proofs |
 | Consensus Liveness | Progress guaranteed | SCP formal proofs |
-| Decoy Privacy | 10+ plausible ring members | Statistical analysis |
+| Decoy Privacy | 19 decoys (CLSAG), 10 decoys (LION) | Statistical analysis |
+| Fee Burns | All cluster taxes burned (deflationary) | Code review |
+| Inflation Control | 2% NET target in Phase 2 | Simulation |
 
 ---
 
@@ -544,61 +638,36 @@ let env = unsafe {
 
 ---
 
-## 13. Internal Audit Session - 2025-12-30
+## 13. Internal Audit Process
 
-### Summary
+Internal security audits are tracked in the [`audits/`](audits/) directory.
 
-A systematic pass through the codebase was completed. All sections reviewed with the following outcomes:
+### Process Overview
 
-### Issues Fixed During This Session
+1. **Audit reports** are stored as dated markdown files (e.g., `audits/2025-12-30.md`)
+2. **Template** available at `audits/TEMPLATE.md`
+3. **Progress** tracked in `audits/README.md`
 
-1. **SCP Ballot Ordering** - CRITICAL
-   - Added `Ballot::is_values_sorted()` validation in `msg.rs`
-   - All 98 SCP tests pass with sorted ballot values
+### Path to External Audit
 
-2. **Build Errors** - Multiple stale references fixed:
-   - `wallet.rs`: `Transaction::new_private` -> `Transaction::new_clsag`
-   - `mempool.rs`: Removed `TxInputs::Simple/Ring/LegacyRing` references
-   - `rpc/mod.rs`: `tx.is_private()` -> `tx.privacy_tier()`
-   - `commands/send.rs`: Fixed `fee_rate_bps` and `memo_fee_rate_bps` references
-   - `block.rs`: Added missing `ADJUSTMENT_WINDOW` constant
+External audit will be commissioned when:
+- 3+ consecutive full audits with no Critical/High findings
+- All Medium findings from previous audits resolved
+- Test coverage > 80% on crypto code
+- Fuzz testing infrastructure operational
 
-3. **Dependency Vulnerabilities** - 2 of 3 fixed:
-   - `crossbeam-channel` 0.5.12 -> 0.5.15
-   - `tracing-subscriber` 0.3.6 -> 0.3.22
-   - `ring` 0.16.20 remains (low severity, transitive)
+### Current Status
 
-### Issues Requiring Future Work
+| Audit | Date | Critical | High | Medium | Status |
+|-------|------|----------|------|--------|--------|
+| [Full Audit](audits/2025-12-30.md) | 2025-12-30 | 0 (1 fixed) | 0 (1 fixed) | 2 open | Issues Found |
 
-| Issue | Severity | Location | Status |
-|-------|----------|----------|--------|
-| Wallet mnemonic not zeroized | HIGH | `wallet.rs:31` | Needs `Zeroize` derive on `Wallet` struct |
-| Cluster wealth tracking | MEDIUM | `mempool.rs:93` | Always returns 0, progressive fees disabled |
-| Empty cluster tags = max similarity | LOW | `decoy_selection.rs:136` | Potential fingerprinting for early outputs |
-| PQ validation deferred | LOW | `rpc/mod.rs:671` | By design, validated at block inclusion |
+### Open Issues Requiring Resolution
 
-### Verification Completed
-
-| Check | Result |
-|-------|--------|
-| `cargo build` | PASS |
-| `cargo test -p botho` | 229 tests passed |
-| `cargo test -p bth-consensus-scp` | 98 tests passed |
-| `cargo audit` | 1 low-severity remaining |
-
-### Unsafe Code Reviewed
-
-All `unsafe` blocks are well-justified:
-- `common/src/lru.rs:281` - LRU iterator with safety comment
-- `botho/src/ledger/store.rs:71` - LMDB EnvOpenOptions (standard pattern)
-- `botho-wallet/src/storage.rs` - Windows security FFI
-
-### Security Strengths Noted
-
-1. **Cryptographic crates deny unsafe**: `core`, `account-keys`, `account-keys/types` use `#![deny(unsafe_code)]`
-2. **Network DoS protection**: Message size limits, rate limiting, peer banning
-3. **Key zeroization**: `AccountKey`, `QuantumSafeAccountKey` properly implement `Zeroize`
-4. **Decoy selection**: OSPEAD gamma distribution, ring size 20
+| Issue | Severity | Location | Tracking |
+|-------|----------|----------|----------|
+| Cluster wealth tracking | MEDIUM | `mempool.rs:93` | Backlog |
+| Empty cluster tags similarity | LOW | `decoy_selection.rs:136` | Backlog |
 
 ---
 

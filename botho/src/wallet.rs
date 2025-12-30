@@ -6,6 +6,7 @@ use bth_crypto_keys::RistrettoSignature;
 use rand::rngs::OsRng;
 use rand::seq::SliceRandom;
 use tracing::debug;
+use zeroize::Zeroizing;
 
 #[cfg(feature = "pq")]
 use bth_account_keys::{QuantumSafeAccountKey, QuantumSafePublicAddress};
@@ -23,12 +24,18 @@ use crate::transaction_pq::{
     QuantumPrivateTransaction, QuantumPrivateTxInput, QuantumPrivateTxOutput,
 };
 
-/// Wallet manages a single account derived from a BIP39 mnemonic
+/// Wallet manages a single account derived from a BIP39 mnemonic.
+///
+/// Security: The mnemonic phrase is stored in a `Zeroizing<String>` wrapper
+/// that automatically overwrites the memory with zeros when dropped,
+/// preventing the sensitive recovery phrase from persisting in memory.
 pub struct Wallet {
     account_key: AccountKey,
     #[cfg(feature = "pq")]
     pq_account_key: QuantumSafeAccountKey,
-    mnemonic_phrase: String,
+    /// Mnemonic phrase wrapped in Zeroizing for secure memory cleanup on drop.
+    #[allow(dead_code)] // Stored for potential future recovery/export features
+    mnemonic_phrase: Zeroizing<String>,
 }
 
 impl Wallet {
@@ -65,7 +72,7 @@ impl Wallet {
             account_key,
             #[cfg(feature = "pq")]
             pq_account_key,
-            mnemonic_phrase: mnemonic_phrase.to_string(),
+            mnemonic_phrase: Zeroizing::new(mnemonic_phrase.to_string()),
         })
     }
 

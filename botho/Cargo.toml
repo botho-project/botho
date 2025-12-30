@@ -80,6 +80,9 @@ tracing-subscriber = "0.3"
 anyhow = "1"
 thiserror = "1"
 
+# Security
+zeroize = { workspace = true }
+
 # Async (for future networking)
 tokio = { version = "1", features = ["full"] }
 
