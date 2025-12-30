@@ -28,7 +28,8 @@
     "lucide-react": "^0.562.0",
     "motion": "^12.23.26",
     "tailwind-merge": "^3.4.0",
-    "tailwindcss": "^4.1.18"
+    "tailwindcss": "^4.1.18",
+    "@tailwindcss/typography": "^0.5.16"
   },
   "devDependencies": {
     "@types/react": "^19.2.7",
