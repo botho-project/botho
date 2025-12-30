@@ -1,36 +1,36 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Button, Logo } from '@botho/ui'
-import { Zap, Shuffle, Lock, EyeOff, ArrowRight, Github, Menu, X } from 'lucide-react'
+import { Shield, TrendingDown, Atom, Zap, ArrowRight, Github, Menu, X } from 'lucide-react'
 
 const features = [
   {
+    icon: Shield,
+    title: 'Private by Default',
+    description: 'Every transaction uses ring signatures. No transparent mode, no T-addr mistake. Privacy is the baseline, not a premium feature.',
+  },
+  {
+    icon: TrendingDown,
+    title: 'Anti-Hoarding Economics',
+    description: 'Progressive fees based on coin ancestry, not identity. Circulated coins pay 0.05%; hoarded coins pay up to 30%. Sybil-resistant—splitting wallets doesn\'t help.',
+  },
+  {
+    icon: Atom,
+    title: 'Post-Quantum Smart',
+    description: 'Recipient privacy is always ML-KEM-768 (permanent record). Sender privacy: CLSAG for speed, LION for quantum resistance. Pedersen commitments are already information-theoretic.',
+  },
+  {
     icon: Zap,
-    title: '3-40s Transaction Time',
-    description: 'Adaptive block times respond to network activity. High volume means faster blocks, quiet periods save resources. Instant finality—no waiting for confirmations.',
-  },
-  {
-    icon: Shuffle,
-    title: 'Sender Privacy: Your Choice',
-    description: 'Choose classical ring signatures (CLSAG) for speed, or post-quantum LION signatures for future-proof privacy. Either way, your identity stays hidden in the crowd.',
-  },
-  {
-    icon: Lock,
-    title: 'PQ Receiver Privacy',
-    description: 'Every payment uses one-time stealth addresses protected by post-quantum cryptography. Recipients are always unlinkable, even to quantum computers.',
-  },
-  {
-    icon: EyeOff,
-    title: 'PQ Amount Privacy',
-    description: 'Transaction amounts are hidden with post-quantum commitments. Only sender and receiver know what was transferred.',
+    title: 'Instant Finality',
+    description: 'SCP consensus means transactions are final in seconds. No reorgs, no 6-block waits, no double-spend risk.',
   },
 ]
 
 const stats = [
-  { label: 'Block Time', value: '3-40s', note: 'Adaptive to volume' },
-  { label: 'Finality', value: 'Instant', note: 'No confirmations needed' },
-  { label: 'Sender Privacy', value: 'Choice', note: 'CLSAG or LION' },
-  { label: 'Receiver + Amount', value: 'PQ Always', note: 'Quantum-safe' },
+  { label: 'Finality', value: 'Instant', note: 'SCP consensus' },
+  { label: 'Privacy', value: 'Default', note: 'All transactions' },
+  { label: 'Base Fee', value: '0.05%', note: 'Up to 30% for whales' },
+  { label: 'Recipient PQ', value: 'Always', note: 'ML-KEM-768' },
 ]
 
 export function LandingPage() {
@@ -119,12 +119,15 @@ export function LandingPage() {
               Production network pending
             </div>
           </div>
+          <p className="text-sm sm:text-base text-ghost mb-3 sm:mb-4 italic">
+            "Motho ke motho ka batho" — A person is a person through other people
+          </p>
           <h1 className="font-display text-4xl sm:text-5xl md:text-7xl font-bold mb-4 sm:mb-6 leading-tight">
-            Private Money for the{' '}
-            <span className="text-gradient">Quantum Age</span>
+            Money for{' '}
+            <span className="text-gradient">Community</span>
           </h1>
           <p className="text-base sm:text-lg md:text-xl text-ghost mb-8 sm:mb-10 max-w-2xl mx-auto px-2">
-            Fast transactions with complete privacy. Sender privacy your way, receiver and amount privacy always quantum-safe.
+            Privacy by default. Anti-hoarding economics. Post-quantum where it matters. A currency designed for circulation, not concentration.
           </p>
           <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 justify-center px-4 sm:px-0">
             <Link to="/wallet" className="w-full sm:w-auto">
@@ -163,7 +166,7 @@ export function LandingPage() {
       <section className="py-16 sm:py-24 px-4 sm:px-6">
         <div className="max-w-6xl mx-auto">
           <h2 className="font-display text-2xl sm:text-3xl md:text-4xl font-bold text-center mb-10 sm:mb-16">
-            Built for Privacy
+            Privacy, Fairness, Long-term
           </h2>
           <div className="grid sm:grid-cols-2 gap-4 sm:gap-6 md:gap-8">
             {features.map((feature) => (
