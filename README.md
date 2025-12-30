@@ -43,8 +43,8 @@ The system tracks coin *ancestry*, not identities. Coins that circulate through 
 Bitcoin's security budget will eventually depend entirely on transaction fees. Botho ensures permanent security through **perpetual tail emission**:
 
 - Initial reward: 50 BTH per block
-- Smooth decay with ~4-year halving
-- Permanent floor: 0.6 BTH per block forever
+- ~2-year halving schedule (5 halvings over 10 years)
+- Perpetual tail emission: ~4.76 BTH per block targeting 2% annual inflation
 
 This guarantees minters are always incentivized to secure the network, without relying on ever-increasing transaction volume.
 
@@ -68,10 +68,11 @@ Unlike Bitcoin's probabilistic finality (wait 6 blocks = 60 minutes to be "sure"
 
 | Parameter | Value |
 |:--|:--|
-| Block time | ~20 seconds |
-| Difficulty adjustment | Every 10 blocks |
-| Total supply | ~18 million BTH (pre-tail) + 0.6 BTH/block forever |
-| Native unit | credit (BTH) |
+| Block time | 60 seconds |
+| Difficulty adjustment | Every 1,440 blocks (~24 hours) |
+| Phase 1 supply | ~100 million BTH (10 years of halvings) |
+| Tail emission | ~4.76 BTH/block (2% net annual inflation) |
+| Native unit | BTH (9 decimal places) |
 
 ## Philosophy in Practice
 
@@ -124,9 +125,10 @@ Visit [botho.io](https://botho.io) to use the web wallet without running a node.
 |:--|:--|
 | [Getting Started](./docs/getting-started.md) | Build, install, and run your first node |
 | [Architecture](./docs/architecture.md) | System design and component overview |
+| [Tokenomics](./docs/tokenomics.md) | Emission schedule, fees, and supply |
 | [Minting](./docs/minting.md) | Mining setup and economics |
 | [Privacy](./docs/privacy.md) | Privacy features and cryptography |
-| [Progressive Fees](./docs/progressive-fees.md) | How the anti-hoarding fee system works |
+| [Configuration](./docs/configuration.md) | Node configuration options |
 
 ## Project Status
 
@@ -145,14 +147,15 @@ Botho is derived from [MobileCoin](https://github.com/mobilecoinfoundation/mobil
 
 | Directory | Description |
 |:--|:--|
-| [botho](./botho) | Main node binary |
-| [botho-wallet](./botho-wallet) | Wallet implementation |
-| [cluster-tax](./cluster-tax) | Progressive fee mechanism |
-| [consensus/scp](./consensus/scp) | Stellar Consensus Protocol |
-| [crypto](./crypto) | Cryptographic primitives |
-| [ledger](./ledger) | Blockchain storage |
-| [transaction](./transaction) | Private transaction construction |
-| [web](./web) | Web wallet and landing page |
+| [botho](./botho) | Main node binary with RPC server |
+| [botho-wallet](./botho-wallet) | CLI wallet implementation |
+| [cluster-tax](./cluster-tax) | Progressive fee mechanism and monetary policy |
+| [consensus/scp](./consensus/scp) | Stellar Consensus Protocol implementation |
+| [crypto](./crypto) | Cryptographic primitives (ring signatures, keys) |
+| [transaction](./transaction) | Private transaction construction and signing |
+| [ledger](./ledger) | Blockchain state and LMDB storage |
+| [gossip](./gossip) | libp2p networking and peer discovery |
+| [web](./web) | Web wallet, landing page, and UI components |
 
 ## Links
 
