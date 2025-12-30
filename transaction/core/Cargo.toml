@@ -52,11 +52,7 @@ bth-util-zip-exact = { workspace = true, features = ["serde"] }
 [dev-dependencies]
 assert_matches = { workspace = true }
 
-bth-crypto-digestible-test-utils = { workspace = true }
 bth-crypto-ring-signature = { workspace = true, features = ["proptest"] }
-bth-ledger-db = { workspace = true, features = ["test_utils"] }
-bth-transaction-builder = { workspace = true, features = ["test-only"] }
-bth-transaction-core-test-utils = { workspace = true }
 bth-util-serial = { workspace = true, features = ["std"] }
 bth-util-test-helper = { workspace = true }
 proptest = { workspace = true, features = ["default-code-coverage"] }

@@ -31,9 +31,8 @@ pub fn init() -> Option<sentry::ClientInitGuard> {
                 ..Default::default()
             }));
 
-            sentry::configure_scope(|scope| {
-                // Add our GIT commit to each message.
-                scope.set_tag("git_commit", bth_util_build_info::git_commit());
+            sentry::configure_scope(|_scope| {
+                // Previously added git commit tag via bth_util_build_info
             });
 
             Some(guard)

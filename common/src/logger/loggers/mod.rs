@@ -233,11 +233,7 @@ pub fn create_app_logger<T: slog::SendSyncRefUnwindSafeKV + 'static>(
     let guard = slog_scope::set_global_logger(app_logger.clone());
     slog_stdlog::init().expect("slog_stdlog::init failed");
 
-    {
-        let mut buf = String::new();
-        bth_util_build_info::write_report(&mut buf).expect("Getting build_info report failed");
-        log::info!(app_logger, "{} started: {}", current_exe, buf);
-    }
+    log::info!(app_logger, "{} started", current_exe);
 
     (app_logger, guard)
 }

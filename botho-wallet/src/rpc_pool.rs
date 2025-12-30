@@ -297,6 +297,14 @@ impl RpcPool {
         Ok(result.tx_hash)
     }
 
+    /// Submit a signed quantum-private transaction
+    pub async fn submit_pq_transaction(&mut self, tx_hex: &str) -> Result<String> {
+        let result: SubmitTxResult = self
+            .call("pq_tx_submit", json!({ "tx_hex": tx_hex }))
+            .await?;
+        Ok(result.tx_hash)
+    }
+
     /// Get fee estimate
     pub async fn estimate_fee(&mut self, priority: &str) -> Result<u64> {
         let result: FeeEstimate = self
@@ -408,7 +416,14 @@ pub struct BlockOutputs {
 pub struct TxOutput {
     pub tx_hash: String,
     pub output_index: u32,
+    /// One-time target key (stealth spend key)
+    #[serde(rename = "targetKey")]
+    pub target_key: String,
+    /// Ephemeral public key (for DH derivation)
+    #[serde(rename = "publicKey")]
     pub public_key: String,
+    /// Amount commitment (or plaintext amount)
+    #[serde(rename = "amountCommitment")]
     pub amount_commitment: String,
 }
 

@@ -18,6 +18,7 @@ path = "src/main.rs"
 # Crypto
 bth-account-keys = { path = "../account-keys" }
 bth-crypto-keys = { path = "../crypto/keys" }
+bth-crypto-ring-signature = { path = "../crypto/ring-signature" }
 bth-crypto-pq = { path = "../crypto/pq", optional = true }
 bth-transaction-core = { path = "../transaction/core" }
 bth-transaction-types = { path = "../transaction/types" }

@@ -233,7 +233,7 @@ async fn run_quantum_private(
 
     // Parse quantum-safe recipient address
     // The address is validated here; full transaction building will use it
-    let _pq_recipient = QuantumSafePublicAddress::from_address_string(address)
+    let pq_recipient = QuantumSafePublicAddress::from_address_string(address)
         .map_err(|e| anyhow!("Invalid quantum-safe address: {:?}", e))?;
 
     // Load and decrypt wallet
@@ -310,25 +310,30 @@ async fn run_quantum_private(
     println!();
     println!("Building quantum-private transaction...");
 
-    // TODO: Full PQ transaction building requires:
-    // 1. Selecting UTXOs
-    // 2. Creating PQ outputs with ML-KEM encapsulation
-    // 3. Signing with both Schnorr and ML-DSA
-    // 4. Submitting to network
-    //
-    // For now, we show the framework is in place but full implementation
-    // requires network protocol support for PQ transactions.
+    let tx = builder.build_pq_transfer(&pq_recipient, amount_picocredits, fee)?;
 
-    print_error("Full quantum-private transaction building is coming soon.");
-    println!();
-    println!("The cryptographic primitives are ready (ML-KEM-768, ML-DSA-65),");
-    println!("but network protocol support for PQ transactions is in development.");
-    println!();
-    println!("In the meantime, you can:");
-    println!("  • Generate your quantum-safe address: botho-wallet address --pq");
-    println!("  • Use classical transactions (still secure against current threats)");
+    // Serialize transaction for submission
+    println!("Signing transaction with dual signatures (Schnorr + ML-DSA)...");
+    let tx_bytes = bincode::serialize(&tx)
+        .map_err(|e| anyhow!("Failed to serialize transaction: {}", e))?;
+    let tx_hex = hex::encode(&tx_bytes);
 
-    // Update sync height anyway
+    // Submit transaction
+    println!("Submitting quantum-private transaction...");
+
+    // Use pq_tx_submit endpoint for PQ transactions
+    let tx_hash = rpc.submit_pq_transaction(&tx_hex).await?;
+
+    println!();
+    print_success("Quantum-private transaction sent!");
+    println!();
+    println!("Transaction hash: {}", tx_hash);
+    println!();
+    println!("This transaction uses:");
+    println!("  • ML-KEM-768 for key encapsulation (recipient output)");
+    println!("  • ML-DSA-65 for signatures (quantum-safe authentication)");
+
+    // Update sync height
     wallet.set_sync_height(height);
     wallet.set_discovery_state(rpc.discovery(), &password)?;
     wallet.save(wallet_path)?;

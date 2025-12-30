@@ -40,16 +40,23 @@ Core functionality complete. See README.md for features and usage.
      - Recipient decrypts using: `create_shared_secret(output_public_key, view_private_key)`
      - Compatible with existing fee system in `bth-cluster-tax`
 
-4. **Wallet PQ Integration** (requires network protocol support)
-   - [ ] Full PQ transaction building (UTXO selection, signing)
-   - [ ] Scan both classical and PQ outputs
-   - [ ] Show transaction type in history
+4. **Wallet PQ Integration** ✓ COMPLETE
+   - [x] Full PQ transaction building (UTXO selection, dual signing)
+   - [x] Stealth address output scanning with proper key recovery
+   - [x] `pq_tx_submit` RPC endpoint for quantum-private transactions
+   - [x] Extended OwnedUtxo with target_key, public_key, subaddress_index
+   - [ ] Show transaction type in history (future enhancement)
+   - Implementation notes:
+     - `TransactionBuilder::build_pq_transfer()` creates QuantumPrivateTransaction
+     - Dual signatures: Schnorr + ML-DSA-65 for each input
+     - Bridge mode: Classical UTXOs derive PQ secrets via HKDF
+     - `WalletScanner` uses proper stealth address detection
 
 ### Lower Priority
 
 5. **Dependency Modernization**
    - [ ] `slog` → `tracing` (botho/ migrated, inherited crates remain)
-   - [ ] `lmdb-rkv` → `heed` or `redb` (still works with patch)
+   - [x] `lmdb-rkv` removed (unused inherited crates deleted, botho uses `heed`)
 
 6. **Fee Estimation API** ✓ COMPLETE
    - [x] `estimateFee` / `tx_estimateFee` RPC method implemented

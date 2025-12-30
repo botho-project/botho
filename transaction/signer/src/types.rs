@@ -9,10 +9,29 @@ use bth_crypto_ring_signature::KeyImage;
 use bth_transaction_core::{
     ring_ct::{InputRing, OutputSecret},
     tx::{Tx, TxPrefix},
-    BlockVersion,
+    BlockVersion, UnmaskedAmount,
 };
-use bth_transaction_summary::TxOutSummaryUnblindingData;
 use serde::{Deserialize, Serialize};
+
+/// Summary unblinding data for a transaction output
+/// (Previously in bth_transaction_summary crate)
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TxOutSummaryUnblindingData {
+    /// The unmasked amount for this output
+    pub unmasked_amount: UnmaskedAmount,
+}
+
+/// Summary unblinding data for a full transaction
+/// (Previously in bth_transaction_summary crate)
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TxSummaryUnblindingData {
+    /// Block version
+    pub block_version: u32,
+    /// Output unblinding data
+    pub outputs: Vec<TxOutSummaryUnblindingData>,
+    /// Input unblinding data (unmasked amounts)
+    pub inputs: Vec<UnmaskedAmount>,
+}
 
 /// View account credentials produced by a signer implementation
 /// for import by full-service

@@ -109,7 +109,7 @@ export function LandingPage() {
       {/* Hero */}
       <section className="pt-28 sm:pt-32 pb-16 sm:pb-20 px-4 sm:px-6">
         <div className="max-w-4xl mx-auto text-center">
-          <div className="flex flex-col sm:flex-row items-center gap-2 sm:gap-3 mb-6 sm:mb-8">
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-2 sm:gap-3 mb-6 sm:mb-8">
             <div className="inline-flex items-center gap-2 px-3 sm:px-4 py-1.5 sm:py-2 rounded-full bg-steel/50 border border-muted text-xs sm:text-sm text-ghost">
               <span className="w-2 h-2 rounded-full bg-success animate-pulse" />
               Test network is live
@@ -135,7 +135,7 @@ export function LandingPage() {
               </Button>
             </Link>
             <Link to="/docs" className="w-full sm:w-auto">
-              <Button variant="secondary" size="lg" className="w-full sm:w-auto justify-center">
+              <Button variant="secondary" size="lg" className="w-full sm:w-auto justify-center px-11">
                 Read the Docs
               </Button>
             </Link>

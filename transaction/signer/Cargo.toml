@@ -37,7 +37,6 @@ bth-crypto-keys = { workspace = true }
 bth-crypto-ring-signature = { workspace = true }
 bth-crypto-ring-signature-signer = { workspace = true }
 bth-transaction-core = { workspace = true }
-bth-transaction-summary = { workspace = true }
 bth-util-repr-bytes = { workspace = true }
 bth-util-serial = { workspace = true }
 

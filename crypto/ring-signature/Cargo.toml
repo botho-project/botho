@@ -63,7 +63,6 @@ zeroize = { workspace = true }
 [dev-dependencies]
 
 bth-account-keys = { workspace = true }
-bth-crypto-digestible-test-utils = { workspace = true }
 bth-util-serial = { workspace = true, features = ["std"] }
 bth-util-test-helper = { workspace = true }
 proptest = { workspace = true, features = ["default-code-coverage"] }

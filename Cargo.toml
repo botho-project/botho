@@ -7,13 +7,7 @@ members = [
     "account-keys",
     "gossip",
     "account-keys/types",
-    "api",
-    "blockchain/types",
-    "blockchain/validators",
     "common",
-    "connection",
-    "connection/test-utils",
-    "consensus/api",
     "consensus/scp",
     "consensus/scp/play",
     "consensus/scp/types",
@@ -21,58 +15,29 @@ members = [
     "core/types",
     "crypto/box",
     "crypto/digestible",
-    "crypto/digestible/derive/test",
+    # "crypto/digestible/derive/test",  # Removed - depends on deleted test utilities
     "crypto/digestible/signature",
-    "crypto/digestible/test-utils",
     "crypto/keys",
-    "crypto/memo-mac",
     "crypto/multisig",
-    "crypto/noise",
     "crypto/pq",
     "crypto/ring-signature",
     "crypto/ring-signature/signer",
     "crypto/sig",
-    "ledger/db",
-    "ledger/migration",
-    "ledger/sync",
-    "peers",
-    "peers/test-utils",
-    "test-vectors/account-keys",
-    "test-vectors/b58-encodings",
-    "test-vectors/memos",
-    "transaction/builder",
     "transaction/core",
-    "transaction/core/test-utils",
-    "transaction/extra",
     "transaction/signer",
-    "transaction/summary",
     "transaction/types",
-    "util/build/grpc-tonic",
-    "util/build/script",
-    "util/cli",
     "util/from-random",
-    "util/grpc-tonic",
     "util/host-cert",
-    "util/keyfile",
-    "util/lmdb",
     "util/logger-macros",
-    "util/metered-channel",
-    "util/metrics",
-    "util/parse",
     "util/repr-bytes",
     "util/serial",
-    "util/telemetry",
     "util/test-helper",
-    "util/test-vector",
     "util/u64-ratio",
     "util/uri",
-    "util/vec-map",
     "util/zip-exact",
 ]
 exclude = [
-    # bth-util-serial should only be accessed via the `common` crate.
     "util/serial",
-    # Tauri desktop wallet has its own Cargo workspace
     "web/packages/desktop/src-tauri",
 ]
 
@@ -134,7 +99,6 @@ json = "0.12"
 lazy_static = "1"
 libc = "0.2"
 libp2p = { version = "0.54", default-features = false }
-lmdb-rkv = "0.14"
 log = "0.4"
 maplit = "1"
 mc-oblivious-aes-gcm = { version = "0.10", default-features = false }
@@ -145,18 +109,12 @@ mockall = "0.12"
 more-asserts = "0.3"
 num_cpus = "1"
 once_cell = { version = "1", default-features = false }
-opentelemetry = "0.25"
-opentelemetry-otlp = "0.25"
-opentelemetry_sdk = "0.25"
 p256 = { version = "0.13", default-features = false }
 pem = "3"
 percent-encoding = "2"
-# Post-quantum crypto now uses RustCrypto's ml-kem and ml-dsa crates
-# (previously used pqcrypto-* crates)
 predicates = "3"
 primitive-types = "0.12"
 proc-macro2 = "1"
-prometheus = "0.13"
 proptest = { version = "1", default-features = false }
 prost = { version = "0.12", default-features = false, features = ["derive"] }
 prost-build = "0.12"
@@ -203,8 +161,6 @@ tiny-bip39 = "1"
 tokio = "1"
 tokio-stream = "0.1"
 toml = "0.8"
-tonic = { version = "0.10", default-features = false }
-tonic-build = { version = "0.10", default-features = false }
 tracing = "0.1"
 url = "2"
 walkdir = "2"
@@ -218,14 +174,8 @@ zeroize = { version = "1", default-features = false }
 
 bth-account-keys = { path = "account-keys", default-features = false }
 bth-account-keys-types = { path = "account-keys/types" }
-bth-api = { path = "api" }
-bth-blockchain-test-utils = { path = "blockchain/test-utils" }
-bth-blockchain-types = { path = "blockchain/types" }
 bth-cluster-tax = { path = "cluster-tax" }
 bth-common = { path = "common", default-features = false }
-bth-connection = { path = "connection" }
-bth-connection-test-utils = { path = "connection/test-utils" }
-bth-consensus-api = { path = "consensus/api" }
 bth-consensus-scp = { path = "consensus/scp" }
 bth-consensus-scp-types = { path = "consensus/scp/types" }
 bth-core = { path = "core", default-features = false }
@@ -234,51 +184,22 @@ bth-crypto-box = { path = "crypto/box" }
 bth-crypto-digestible = { path = "crypto/digestible", default-features = false }
 bth-crypto-digestible-derive = { path = "crypto/digestible/derive", default-features = false }
 bth-crypto-digestible-signature = { path = "crypto/digestible/signature", default-features = false }
-bth-crypto-digestible-test-utils = { path = "crypto/digestible/test-utils" }
 bth-crypto-hashes = { path = "crypto/hashes", default-features = false }
 bth-crypto-keys = { path = "crypto/keys", default-features = false }
-bth-crypto-memo-mac = { path = "crypto/memo-mac" }
 bth-crypto-multisig = { path = "crypto/multisig", default-features = false }
-bth-crypto-noise = { path = "crypto/noise", default-features = false }
 bth-crypto-pq = { path = "crypto/pq", default-features = false }
 bth-crypto-ring-signature = { path = "crypto/ring-signature", default-features = false }
 bth-crypto-ring-signature-signer = { path = "crypto/ring-signature/signer", default-features = false }
-bth-ledger-db = { path = "ledger/db" }
-bth-ledger-migration = { path = "ledger/migration" }
-bth-ledger-sync = { path = "ledger/sync" }
-bth-peers = { path = "peers" }
-bth-peers-test-utils = { path = "peers/test-utils" }
-bth-test-vectors-account-keys = { path = "test-vectors/account-keys" }
-bth-test-vectors-b58-encodings = { path = "test-vectors/b58-encodings" }
-bth-test-vectors-definitions = { path = "test-vectors/definitions" }
-bth-transaction-builder = { path = "transaction/builder" }
 bth-transaction-core = { path = "transaction/core", default-features = false }
-bth-transaction-core-test-utils = { path = "transaction/core/test-utils" }
-bth-transaction-extra = { path = "transaction/extra" }
-bth-transaction-summary = { path = "transaction/summary" }
 bth-transaction-types = { path = "transaction/types", default-features = false }
-bth-util-build-grpc-tonic = { path = "util/build/grpc-tonic" }
-bth-util-build-info = { path = "util/build/info" }
-bth-util-build-script = { path = "util/build/script" }
-bth-util-cli = { path = "util/cli" }
 bth-util-from-random = { path = "util/from-random", default-features = false }
-bth-util-grpc-tonic = { path = "util/grpc-tonic" }
 bth-util-host-cert = { path = "util/host-cert", default-features = false }
-bth-util-keyfile = { path = "util/keyfile" }
-bth-util-lmdb = { path = "util/lmdb" }
 bth-util-logger-macros = { path = "util/logger-macros" }
-bth-util-metered-channel = { path = "util/metered-channel" }
-bth-util-metrics = { path = "util/metrics" }
-bth-util-parse = { path = "util/parse" }
 bth-util-repr-bytes = { path = "util/repr-bytes", default-features = false }
 bth-util-serial = { path = "util/serial", default-features = false }
-bth-util-telemetry = { path = "util/telemetry" }
 bth-util-test-helper = { path = "util/test-helper", default-features = false }
-bth-util-test-vector = { path = "util/test-vector" }
-bth-util-test-with-data = { path = "util/test-with-data" }
 bth-util-u64-ratio = { path = "util/u64-ratio" }
 bth-util-uri = { path = "util/uri" }
-bth-util-vec-map = { path = "util/vec-map" }
 bth-util-zip-exact = { path = "util/zip-exact", default-features = false }
 bth-gossip = { path = "gossip" }
 bth-discover = { path = "discover" }
@@ -304,24 +225,14 @@ inherits = "mobile"
 codegen-units = 1
 lto = false
 
-# Skip the need for LD_LIBRARY_PATH in `cargo test`
 [profile.test]
 rpath = true
 
 [profile.ci]
-# Build config.
 inherits = "test"
-# Enable some compiler optimizations.
 opt-level = 2
-# LLVM's Link-Time Optimization: Some, relatively quick to generate.
 lto = "thin"
 
 [patch.crates-io]
-# Fork and rename to use "OG" dalek-cryptography with latest dependencies.
 bulletproofs-og = { git = "https://github.com/mobilecoinfoundation/bulletproofs.git", rev = "9abfdc054d9ba65f1e185ea1e6eff3947ce879dc" }
-
-# Override lmdb-rkv for a necessary bugfix (see https://github.com/mozilla/lmdb-rs/pull/80)
-lmdb-rkv = { git = "https://github.com/mozilla/lmdb-rs", rev = "df1c2f5" }
-
-# Fork and rename to use "OG" dalek-cryptography.
 schnorrkel-og = { git = "https://github.com/mobilecoinfoundation/schnorrkel.git", rev = "049bf9d30f3bbe072e2ad1b5eefdf0f3c851215e" }

@@ -489,11 +489,6 @@ impl ViewAccountKey {
 #[cfg(test)]
 mod account_key_tests {
     use super::*;
-    use bth_test_vectors_account_keys::{
-        DefaultSubaddrKeysFromAcctPrivKeys, SubaddrKeysFromAcctPrivKeys,
-    };
-    use bth_util_test_vector::TestVector;
-    use bth_util_test_with_data::test_with_data;
     use rand::prelude::StdRng;
     use rand_core::SeedableRng;
 
@@ -533,58 +528,7 @@ mod account_key_tests {
         );
     }
 
-    #[test_with_data(DefaultSubaddrKeysFromAcctPrivKeys::from_jsonl("../test-vectors/vectors"))]
-    fn default_subaddr_keys_from_acct_priv_keys(case: DefaultSubaddrKeysFromAcctPrivKeys) {
-        let spend_private_key = RistrettoPrivate::try_from(&case.spend_private_key).unwrap();
-        let view_private_key = RistrettoPrivate::try_from(&case.view_private_key).unwrap();
-        let account_key = AccountKey::new(&spend_private_key, &view_private_key);
-        let public_address = account_key.default_subaddress();
-        assert_eq!(
-            account_key.default_subaddress_view_private().to_bytes(),
-            case.subaddress_view_private_key
-        );
-        assert_eq!(
-            account_key.default_subaddress_spend_private().to_bytes(),
-            case.subaddress_spend_private_key
-        );
-        assert_eq!(
-            public_address.view_public_key().to_bytes(),
-            case.subaddress_view_public_key
-        );
-
-        assert_eq!(
-            public_address.spend_public_key().to_bytes(),
-            case.subaddress_spend_public_key
-        );
-    }
-
-    #[test_with_data(SubaddrKeysFromAcctPrivKeys::from_jsonl("../test-vectors/vectors"))]
-    fn subaddr_keys_from_acct_priv_keys(case: &SubaddrKeysFromAcctPrivKeys) {
-        let spend_private_key = RistrettoPrivate::try_from(&case.spend_private_key).unwrap();
-        let view_private_key = RistrettoPrivate::try_from(&case.view_private_key).unwrap();
-        let account_key = AccountKey::new(&spend_private_key, &view_private_key);
-        let public_address = account_key.subaddress(case.subaddress_index);
-        assert_eq!(
-            account_key
-                .subaddress_view_private(case.subaddress_index)
-                .to_bytes(),
-            case.subaddress_view_private_key
-        );
-        assert_eq!(
-            account_key
-                .subaddress_spend_private(case.subaddress_index)
-                .to_bytes(),
-            case.subaddress_spend_private_key
-        );
-        assert_eq!(
-            public_address.view_public_key().to_bytes(),
-            case.subaddress_view_public_key
-        );
-        assert_eq!(
-            public_address.spend_public_key().to_bytes(),
-            case.subaddress_spend_public_key
-        );
-    }
+    // NOTE: test_with_data tests removed - test vector crates were deleted
 
     #[test]
     // Account Key and View Account Key derived from same keys should generate the

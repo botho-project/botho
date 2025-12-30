@@ -51,10 +51,7 @@ bth-util-serial = { workspace = true, optional = true }
 [dev-dependencies]
 criterion = { workspace = true }
 
-bth-test-vectors-account-keys = { workspace = true }
 bth-util-test-helper = { workspace = true }
-bth-util-test-vector = { workspace = true }
-bth-util-test-with-data = { workspace = true }
 rand = { workspace = true }
 rand_hc = { workspace = true }
 

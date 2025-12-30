@@ -516,11 +516,18 @@ fn test_pq_transaction_hashing_performance() {
     let elapsed = start.elapsed();
     let per_op = elapsed / iterations;
 
-    // Transaction hashing should be very fast (< 1ms per hash)
+    // Transaction hashing should be fast
+    // Debug mode is ~10x slower, so use different thresholds
+    #[cfg(debug_assertions)]
+    let threshold_micros = 10_000; // 10ms in debug mode
+    #[cfg(not(debug_assertions))]
+    let threshold_micros = 1_000; // 1ms in release mode
+
     assert!(
-        per_op.as_micros() < 1000,
-        "Transaction hashing too slow: {:?} per operation",
-        per_op
+        per_op.as_micros() < threshold_micros,
+        "Transaction hashing too slow: {:?} per operation (threshold: {}µs)",
+        per_op,
+        threshold_micros
     );
 }
 
@@ -529,6 +536,12 @@ fn test_pq_serialization_performance() {
     use std::time::Instant;
 
     let tx = create_mock_pq_transaction(4, 4, 200_000_000);
+
+    // Debug mode is ~10x slower, so use different thresholds
+    #[cfg(debug_assertions)]
+    let threshold_ms = 50; // 50ms in debug mode
+    #[cfg(not(debug_assertions))]
+    let threshold_ms = 5; // 5ms in release mode
 
     // Serialize performance
     let start = Instant::now();
@@ -542,11 +555,11 @@ fn test_pq_serialization_performance() {
     let serialize_elapsed = start.elapsed();
     let serialize_per_op = serialize_elapsed / iterations;
 
-    // Serialization should be fast (< 5ms per serialize)
     assert!(
-        serialize_per_op.as_millis() < 5,
-        "Serialization too slow: {:?} per operation",
-        serialize_per_op
+        serialize_per_op.as_millis() < threshold_ms,
+        "Serialization too slow: {:?} per operation (threshold: {}ms)",
+        serialize_per_op,
+        threshold_ms
     );
 
     // Deserialize performance
@@ -558,11 +571,11 @@ fn test_pq_serialization_performance() {
     let deserialize_elapsed = start.elapsed();
     let deserialize_per_op = deserialize_elapsed / iterations;
 
-    // Deserialization should be fast (< 5ms per deserialize)
     assert!(
-        deserialize_per_op.as_millis() < 5,
-        "Deserialization too slow: {:?} per operation",
-        deserialize_per_op
+        deserialize_per_op.as_millis() < threshold_ms,
+        "Deserialization too slow: {:?} per operation (threshold: {}ms)",
+        deserialize_per_op,
+        threshold_ms
     );
 }
 

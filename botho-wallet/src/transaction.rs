@@ -4,13 +4,22 @@
 //! All signing happens locally - private keys never leave the wallet.
 
 use anyhow::{anyhow, Result};
-use bth_account_keys::PublicAddress;
+use bth_account_keys::{AccountKey, PublicAddress};
+use bth_crypto_keys::{RistrettoPrivate, RistrettoPublic};
+use bth_crypto_ring_signature::onetime_keys::{
+    recover_onetime_private_key, recover_public_subaddress_spend_key,
+};
 use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::keys::WalletKeys;
 use crate::rpc_pool::{BlockOutputs, RpcPool};
+
+#[cfg(feature = "pq")]
+use bth_account_keys::QuantumSafePublicAddress;
+#[cfg(feature = "pq")]
+use botho::transaction_pq::{QuantumPrivateTransaction, QuantumPrivateTxInput, QuantumPrivateTxOutput};
 
 /// Picocredits per CAD
 pub const PICOCREDITS_PER_CAD: u64 = 1_000_000_000_000;
@@ -29,6 +38,12 @@ pub struct OwnedUtxo {
     pub amount: u64,
     /// Block height where created
     pub created_at: u64,
+    /// One-time target key (stealth spend key) - needed for signing
+    pub target_key: [u8; 32],
+    /// Ephemeral public key (for DH derivation) - needed for key recovery
+    pub public_key: [u8; 32],
+    /// Subaddress index that owns this output
+    pub subaddress_index: u64,
 }
 
 impl OwnedUtxo {
@@ -38,6 +53,39 @@ impl OwnedUtxo {
             tx_hash: self.tx_hash,
             output_index: self.output_index,
         }
+    }
+
+    /// Recover the one-time private key needed to spend this output
+    ///
+    /// Uses the stealth address protocol to derive the spend key from:
+    /// - The view private key (for DH shared secret)
+    /// - The subaddress spend private key
+    /// - The output's public key (ephemeral DH key)
+    pub fn recover_spend_key(&self, account_key: &AccountKey) -> Option<RistrettoPrivate> {
+        let public_key = RistrettoPublic::try_from(&self.public_key[..]).ok()?;
+        let view_private = account_key.view_private_key();
+        let subaddress_spend_private = account_key.subaddress_spend_private(self.subaddress_index);
+
+        Some(recover_onetime_private_key(
+            &public_key,
+            view_private,
+            &subaddress_spend_private,
+        ))
+    }
+
+    /// Derive a PQ shared secret for this output (bridge mode)
+    ///
+    /// For classical UTXOs that don't have PQ ciphertexts, we derive a
+    /// deterministic shared secret from the output's key material. This
+    /// provides forward secrecy: new PQ outputs will have proper ML-KEM.
+    #[cfg(feature = "pq")]
+    pub fn pq_bridge_secret(&self, view_private_bytes: &[u8; 32]) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(b"botho-pq-bridge-v1");
+        hasher.update(&self.target_key);
+        hasher.update(&self.public_key);
+        hasher.update(view_private_bytes);
+        hasher.finalize().into()
     }
 }
 
@@ -290,55 +338,221 @@ impl TransactionBuilder {
 
         Ok(())
     }
+
+    /// Build and sign a quantum-private transaction
+    ///
+    /// Creates a transaction with PQ outputs (ML-KEM encapsulation) and
+    /// dual-signed inputs (classical Schnorr + ML-DSA).
+    ///
+    /// # Arguments
+    /// * `recipient` - Quantum-safe recipient address
+    /// * `amount` - Amount to send in picocredits
+    /// * `fee` - Transaction fee
+    ///
+    /// # Returns
+    /// A fully signed quantum-private transaction ready for broadcast
+    #[cfg(feature = "pq")]
+    pub fn build_pq_transfer(
+        &self,
+        recipient: &QuantumSafePublicAddress,
+        amount: u64,
+        fee: u64,
+    ) -> Result<QuantumPrivateTransaction> {
+        // Validate amount
+        if amount == 0 {
+            return Err(anyhow!("Amount must be greater than 0"));
+        }
+
+        let total_needed = amount.checked_add(fee)
+            .ok_or_else(|| anyhow!("Amount overflow"))?;
+
+        // Select UTXOs
+        let (selected, total_selected) = self.select_utxos(total_needed)?;
+
+        // Calculate change
+        let change = total_selected.checked_sub(total_needed)
+            .ok_or_else(|| anyhow!("Insufficient funds"))?;
+
+        // Build PQ outputs
+        let mut outputs = Vec::new();
+
+        // Output to recipient
+        outputs.push(QuantumPrivateTxOutput::new(amount, recipient));
+
+        // Change output (if non-dust)
+        if change > MIN_FEE {
+            let change_addr = self.keys.pq_public_address();
+            outputs.push(QuantumPrivateTxOutput::new(change, &change_addr));
+        }
+
+        // Build a preliminary transaction to get signing hash
+        let preliminary_tx = QuantumPrivateTransaction::new(
+            Vec::new(),
+            outputs.clone(),
+            fee,
+            self.sync_height,
+        );
+        let signing_hash = preliminary_tx.signing_hash();
+
+        // Get view private key bytes for PQ bridge derivation
+        let view_private_bytes = self.keys.account_key().view_private_key().to_bytes();
+
+        // Build and sign inputs
+        let mut inputs = Vec::new();
+        let account_key = self.keys.account_key();
+
+        for utxo in &selected {
+            // Recover the one-time private key for classical signing
+            let onetime_private = utxo.recover_spend_key(account_key)
+                .ok_or_else(|| anyhow!(
+                    "Failed to recover spend key for UTXO {}",
+                    hex::encode(&utxo.tx_hash[0..8])
+                ))?;
+
+            // Derive PQ shared secret (bridge mode for classical UTXOs)
+            let pq_shared_secret = utxo.pq_bridge_secret(&view_private_bytes);
+
+            // Create quantum-private input with dual signatures
+            let input = QuantumPrivateTxInput::new(
+                utxo.tx_hash,
+                utxo.output_index,
+                &signing_hash,
+                &onetime_private,
+                &pq_shared_secret,
+            );
+
+            inputs.push(input);
+        }
+
+        // Create the final transaction
+        let tx = QuantumPrivateTransaction::new(inputs, outputs, fee, self.sync_height);
+
+        // Verify structure
+        tx.is_valid_structure()
+            .map_err(|e| anyhow!("Invalid transaction structure: {}", e))?;
+
+        Ok(tx)
+    }
 }
 
-/// Wallet scanner for finding owned outputs
-pub struct WalletScanner {
-    spend_key: [u8; 32],
+/// Wallet scanner for finding owned outputs using stealth address detection
+pub struct WalletScanner<'a> {
+    account_key: &'a AccountKey,
 }
 
-impl WalletScanner {
+impl<'a> WalletScanner<'a> {
     /// Create a new scanner for the given wallet keys
-    pub fn new(keys: &WalletKeys) -> Self {
+    pub fn new(keys: &'a WalletKeys) -> Self {
         Self {
-            spend_key: keys.spend_public_key_bytes(),
+            account_key: keys.account_key(),
         }
     }
 
     /// Scan block outputs for UTXOs belonging to this wallet
+    ///
+    /// Uses proper stealth address detection:
+    /// 1. Parse target_key and public_key from output
+    /// 2. Recover the expected spend public key using view private key
+    /// 3. Check against known subaddresses
     pub fn scan_outputs(&self, block_outputs: &[BlockOutputs]) -> Vec<OwnedUtxo> {
         let mut owned = Vec::new();
 
         for block in block_outputs {
             for output in &block.outputs {
-                // Parse the public key from hex
-                if let Ok(spend_key_bytes) = hex::decode(&output.public_key) {
-                    if spend_key_bytes.len() >= 32 {
-                        let mut key = [0u8; 32];
-                        key.copy_from_slice(&spend_key_bytes[..32]);
+                // Parse all required keys
+                let target_key = match Self::parse_key(&output.target_key) {
+                    Some(k) => k,
+                    None => continue,
+                };
+                let public_key = match Self::parse_key(&output.public_key) {
+                    Some(k) => k,
+                    None => continue,
+                };
+                let tx_hash = match Self::parse_hash(&output.tx_hash) {
+                    Some(h) => h,
+                    None => continue,
+                };
 
-                        if key == self.spend_key {
-                            // This output belongs to us
-                            if let Ok(tx_hash) = hex::decode(&output.tx_hash) {
-                                if tx_hash.len() >= 32 {
-                                    let mut hash = [0u8; 32];
-                                    hash.copy_from_slice(&tx_hash[..32]);
+                // Parse amount (stored as LE bytes in hex)
+                let amount = Self::parse_amount(&output.amount_commitment);
 
-                                    owned.push(OwnedUtxo {
-                                        tx_hash: hash,
-                                        output_index: output.output_index,
-                                        amount: 0, // Would need to decrypt amount commitment
-                                        created_at: block.height,
-                                    });
-                                }
-                            }
-                        }
-                    }
+                // Check if this output belongs to us using stealth address detection
+                if let Some(subaddress_index) = self.check_ownership(&target_key, &public_key) {
+                    owned.push(OwnedUtxo {
+                        tx_hash,
+                        output_index: output.output_index,
+                        amount,
+                        created_at: block.height,
+                        target_key,
+                        public_key,
+                        subaddress_index,
+                    });
                 }
             }
         }
 
         owned
+    }
+
+    /// Check if an output belongs to this wallet using stealth address derivation
+    ///
+    /// Returns `Some(subaddress_index)` if the output belongs to us, `None` otherwise.
+    fn check_ownership(&self, target_key: &[u8; 32], public_key: &[u8; 32]) -> Option<u64> {
+        let view_private = self.account_key.view_private_key();
+
+        // Parse keys
+        let public_key_point = RistrettoPublic::try_from(&public_key[..]).ok()?;
+        let target_key_point = RistrettoPublic::try_from(&target_key[..]).ok()?;
+
+        // Recover the spend public key that would correspond to this output
+        let recovered_spend_key =
+            recover_public_subaddress_spend_key(view_private, &target_key_point, &public_key_point);
+
+        // Check against default subaddress (index 0)
+        let default_subaddr = self.account_key.default_subaddress();
+        let default_spend = default_subaddr.spend_public_key();
+        if recovered_spend_key.to_bytes() == default_spend.to_bytes() {
+            return Some(0);
+        }
+
+        // Check against change subaddress (index 1)
+        let change_subaddr = self.account_key.change_subaddress();
+        let change_spend = change_subaddr.spend_public_key();
+        if recovered_spend_key.to_bytes() == change_spend.to_bytes() {
+            return Some(1);
+        }
+
+        None
+    }
+
+    /// Parse a 32-byte key from hex string
+    fn parse_key(hex_str: &str) -> Option<[u8; 32]> {
+        let bytes = hex::decode(hex_str).ok()?;
+        if bytes.len() >= 32 {
+            let mut key = [0u8; 32];
+            key.copy_from_slice(&bytes[..32]);
+            Some(key)
+        } else {
+            None
+        }
+    }
+
+    /// Parse a 32-byte hash from hex string
+    fn parse_hash(hex_str: &str) -> Option<[u8; 32]> {
+        Self::parse_key(hex_str)
+    }
+
+    /// Parse amount from commitment hex (stored as LE bytes)
+    fn parse_amount(hex_str: &str) -> u64 {
+        if let Ok(bytes) = hex::decode(hex_str) {
+            if bytes.len() >= 8 {
+                u64::from_le_bytes(bytes[..8].try_into().unwrap_or([0; 8]))
+            } else {
+                0
+            }
+        } else {
+            0
+        }
     }
 }
 
@@ -429,12 +643,18 @@ mod tests {
                 output_index: 0,
                 amount: 1_000_000_000_000, // 1 CAD
                 created_at: 1,
+                target_key: [0u8; 32],
+                public_key: [0u8; 32],
+                subaddress_index: 0,
             },
             OwnedUtxo {
                 tx_hash: [2u8; 32],
                 output_index: 0,
                 amount: 500_000_000_000, // 0.5 CAD
                 created_at: 2,
+                target_key: [0u8; 32],
+                public_key: [0u8; 32],
+                subaddress_index: 0,
             },
         ];
 

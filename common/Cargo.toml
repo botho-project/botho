@@ -23,7 +23,6 @@ loggers = [
     "std",
     # Dependencies
     "hostname",
-    "bth-util-build-info",
     "sentry",
     "slog-async",
     "slog-atomic",
@@ -37,8 +36,6 @@ loggers = [
 bth-crypto-digestible = { workspace = true }
 bth-crypto-keys = { workspace = true, features = ["serde", "alloc", "prost"] }
 mc-rand = { workspace = true }
-# loggers-only dependencies
-bth-util-build-info = { workspace = true, optional = true }
 # log- and loggers-only dependencies
 bth-util-logger-macros = { workspace = true, optional = true }
 # Note: bth-util-serial is an unused dependency, but anywhere we forward serde/std, we need to get rmp-serde/std also, or the build breaks.

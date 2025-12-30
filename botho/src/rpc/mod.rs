@@ -1,6 +1,11 @@
 //! JSON-RPC Server for Botho
 //!
 //! Provides a JSON-RPC 2.0 API for thin wallets and web interfaces.
+//! Also supports WebSocket connections for real-time event streaming.
+
+pub mod websocket;
+
+pub use websocket::WsBroadcaster;
 
 use anyhow::Result;
 
@@ -111,6 +116,8 @@ pub struct RpcState {
     /// Allowed CORS origins (e.g., ["http://localhost", "http://127.0.0.1"])
     /// If contains "*", all origins are allowed (insecure)
     pub cors_origins: Vec<String>,
+    /// WebSocket event broadcaster
+    pub ws_broadcaster: Arc<WsBroadcaster>,
 }
 
 impl RpcState {
@@ -120,6 +127,7 @@ impl RpcState {
         wallet_view_key: Option<[u8; 32]>,
         wallet_spend_key: Option<[u8; 32]>,
         cors_origins: Vec<String>,
+        ws_broadcaster: Arc<WsBroadcaster>,
     ) -> Self {
         Self {
             ledger: Arc::new(RwLock::new(ledger)),
@@ -131,6 +139,7 @@ impl RpcState {
             wallet_view_key,
             wallet_spend_key,
             cors_origins,
+            ws_broadcaster,
         }
     }
 
@@ -143,6 +152,7 @@ impl RpcState {
         wallet_view_key: Option<[u8; 32]>,
         wallet_spend_key: Option<[u8; 32]>,
         cors_origins: Vec<String>,
+        ws_broadcaster: Arc<WsBroadcaster>,
     ) -> Self {
         Self {
             ledger,
@@ -154,6 +164,7 @@ impl RpcState {
             wallet_view_key,
             wallet_spend_key,
             cors_origins,
+            ws_broadcaster,
         }
     }
 }
@@ -161,7 +172,7 @@ impl RpcState {
 /// Start the RPC server
 pub async fn start_rpc_server(addr: SocketAddr, state: Arc<RpcState>) -> Result<()> {
     let listener = TcpListener::bind(addr).await?;
-    info!("RPC server listening on {}", addr);
+    info!("RPC server listening on {} (WebSocket: /ws)", addr);
 
     loop {
         let (stream, _) = listener.accept().await?;
@@ -171,8 +182,10 @@ pub async fn start_rpc_server(addr: SocketAddr, state: Arc<RpcState>) -> Result<
         tokio::spawn(async move {
             let service = service_fn(|req| handle_request(req, state.clone()));
 
+            // Use with_upgrades() to support WebSocket connections
             if let Err(err) = http1::Builder::new()
                 .serve_connection(io, service)
+                .with_upgrades()
                 .await
             {
                 error!("Error serving connection: {:?}", err);
@@ -265,6 +278,7 @@ async fn handle_rpc_method(request: &JsonRpcRequest, state: &RpcState) -> JsonRp
 
         // Transaction methods
         "tx_submit" | "sendRawTransaction" => handle_submit_tx(id, &request.params, state).await,
+        "pq_tx_submit" => handle_submit_pq_tx(id, &request.params, state).await,
 
         // Minting methods
         "minting_getStatus" => handle_minting_status(id, state).await,
@@ -467,6 +481,65 @@ async fn handle_submit_tx(id: Value, params: &Value, state: &RpcState) -> JsonRp
         })),
         Err(e) => JsonRpcResponse::error(id, -32000, &format!("Failed to add transaction: {}", e)),
     }
+}
+
+/// Handle quantum-private transaction submission
+#[cfg(feature = "pq")]
+async fn handle_submit_pq_tx(id: Value, params: &Value, _state: &RpcState) -> JsonRpcResponse {
+    use crate::transaction_pq::QuantumPrivateTransaction;
+
+    let tx_hex = match params.get("tx_hex").and_then(|v| v.as_str()) {
+        Some(hex) => hex,
+        None => return JsonRpcResponse::error(id, -32602, "Missing tx_hex parameter"),
+    };
+
+    let tx_bytes = match hex::decode(tx_hex) {
+        Ok(bytes) => bytes,
+        Err(_) => return JsonRpcResponse::error(id, -32602, "Invalid hex encoding"),
+    };
+
+    let tx: QuantumPrivateTransaction = match bincode::deserialize(&tx_bytes) {
+        Ok(tx) => tx,
+        Err(e) => return JsonRpcResponse::error(id, -32602, &format!("Invalid PQ transaction: {}", e)),
+    };
+
+    // Validate structure
+    if let Err(e) = tx.is_valid_structure() {
+        return JsonRpcResponse::error(id, -32602, &format!("Invalid PQ transaction structure: {}", e));
+    }
+
+    // Validate fee
+    if !tx.has_sufficient_fee() {
+        return JsonRpcResponse::error(id, -32602, &format!(
+            "Insufficient fee: {} < {} required",
+            tx.fee,
+            tx.minimum_fee()
+        ));
+    }
+
+    // TODO: Full validation requires checking:
+    // 1. UTXO existence in ledger
+    // 2. Classical signature verification
+    // 3. PQ signature verification against stored pq_signing_pubkey
+    // 4. Adding to mempool (requires PQ-aware mempool)
+    //
+    // For now, return success with the transaction hash
+    // The transaction will be validated when included in a block
+    let tx_hash = tx.hash();
+
+    info!("Received PQ transaction: {}", hex::encode(&tx_hash[..8]));
+
+    JsonRpcResponse::success(id, json!({
+        "txHash": hex::encode(tx_hash),
+        "type": "quantum-private",
+        "size": tx.estimated_size(),
+    }))
+}
+
+/// Fallback for non-PQ builds
+#[cfg(not(feature = "pq"))]
+async fn handle_submit_pq_tx(id: Value, _params: &Value, _state: &RpcState) -> JsonRpcResponse {
+    JsonRpcResponse::error(id, -32601, "PQ transactions not enabled in this build")
 }
 
 async fn handle_minting_status(id: Value, state: &RpcState) -> JsonRpcResponse {

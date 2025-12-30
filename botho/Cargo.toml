@@ -84,6 +84,7 @@ hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
 serde_json = "1"
+tokio-tungstenite = "0.24"
 
 # For SCP simulation
 crossbeam-channel = "0.5"

@@ -22,7 +22,6 @@ use bth_transaction_core::{
     tx::Tx,
     Amount, TokenId, TxSummary, UnmaskedAmount,
 };
-use bth_transaction_summary::TxSummaryUnblindingData;
 
 pub mod types;
 use types::*;

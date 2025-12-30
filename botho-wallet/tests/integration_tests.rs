@@ -169,18 +169,27 @@ mod transaction_building {
                 output_index: 0,
                 amount: 10 * PICOCREDITS_PER_CAD, // 10 CAD
                 created_at: 100,
+                target_key: [0u8; 32],
+                public_key: [0u8; 32],
+                subaddress_index: 0,
             },
             OwnedUtxo {
                 tx_hash: [2u8; 32],
                 output_index: 0,
                 amount: 5 * PICOCREDITS_PER_CAD, // 5 CAD
                 created_at: 101,
+                target_key: [0u8; 32],
+                public_key: [0u8; 32],
+                subaddress_index: 0,
             },
             OwnedUtxo {
                 tx_hash: [3u8; 32],
                 output_index: 1,
                 amount: 1 * PICOCREDITS_PER_CAD, // 1 CAD
                 created_at: 102,
+                target_key: [0u8; 32],
+                public_key: [0u8; 32],
+                subaddress_index: 0,
             },
         ]
     }
@@ -220,6 +229,9 @@ mod transaction_building {
             output_index: 0,
             amount: 10 * PICOCREDITS_PER_CAD,
             created_at: 100,
+            target_key: [0u8; 32],
+            public_key: [0u8; 32],
+            subaddress_index: 0,
         }];
 
         let builder = TransactionBuilder::new(keys.clone(), utxos, 150);
@@ -248,6 +260,9 @@ mod transaction_building {
             output_index: 0,
             amount: exact_amount + fee,
             created_at: 100,
+            target_key: [0u8; 32],
+            public_key: [0u8; 32],
+            subaddress_index: 0,
         }];
 
         let builder = TransactionBuilder::new(keys.clone(), utxos, 150);
@@ -324,6 +339,9 @@ mod utxo_selection {
             output_index: 0,
             amount: PICOCREDITS_PER_CAD, // Only 1 CAD
             created_at: 100,
+            target_key: [0u8; 32],
+            public_key: [0u8; 32],
+            subaddress_index: 0,
         }];
 
         let builder = TransactionBuilder::new(keys.clone(), utxos, 150);
@@ -362,6 +380,9 @@ mod utxo_selection {
             output_index: 0,
             amount: PICOCREDITS_PER_CAD,
             created_at: 100,
+            target_key: [0u8; 32],
+            public_key: [0u8; 32],
+            subaddress_index: 0,
         }];
 
         let builder = TransactionBuilder::new(keys.clone(), utxos, 150);
@@ -383,18 +404,27 @@ mod utxo_selection {
                 output_index: 0,
                 amount: 1 * PICOCREDITS_PER_CAD, // 1 CAD - smallest
                 created_at: 100,
+                target_key: [0u8; 32],
+                public_key: [0u8; 32],
+                subaddress_index: 0,
             },
             OwnedUtxo {
                 tx_hash: [2u8; 32],
                 output_index: 0,
                 amount: 5 * PICOCREDITS_PER_CAD, // 5 CAD - largest
                 created_at: 101,
+                target_key: [0u8; 32],
+                public_key: [0u8; 32],
+                subaddress_index: 0,
             },
             OwnedUtxo {
                 tx_hash: [3u8; 32],
                 output_index: 0,
                 amount: 2 * PICOCREDITS_PER_CAD, // 2 CAD - medium
                 created_at: 102,
+                target_key: [0u8; 32],
+                public_key: [0u8; 32],
+                subaddress_index: 0,
             },
         ];
 
@@ -420,12 +450,18 @@ mod utxo_selection {
                 output_index: 0,
                 amount: 3 * PICOCREDITS_PER_CAD,
                 created_at: 100,
+                target_key: [0u8; 32],
+                public_key: [0u8; 32],
+                subaddress_index: 0,
             },
             OwnedUtxo {
                 tx_hash: [2u8; 32],
                 output_index: 0,
                 amount: 2 * PICOCREDITS_PER_CAD,
                 created_at: 101,
+                target_key: [0u8; 32],
+                public_key: [0u8; 32],
+                subaddress_index: 0,
             },
         ];
 
@@ -450,18 +486,27 @@ mod utxo_selection {
                 output_index: 0,
                 amount: 10 * PICOCREDITS_PER_CAD,
                 created_at: 100,
+                target_key: [0u8; 32],
+                public_key: [0u8; 32],
+                subaddress_index: 0,
             },
             OwnedUtxo {
                 tx_hash: [2u8; 32],
                 output_index: 0,
                 amount: 5 * PICOCREDITS_PER_CAD,
                 created_at: 101,
+                target_key: [0u8; 32],
+                public_key: [0u8; 32],
+                subaddress_index: 0,
             },
             OwnedUtxo {
                 tx_hash: [3u8; 32],
                 output_index: 0,
                 amount: 2 * PICOCREDITS_PER_CAD,
                 created_at: 102,
+                target_key: [0u8; 32],
+                public_key: [0u8; 32],
+                subaddress_index: 0,
             },
         ];
 
@@ -737,18 +782,27 @@ mod signing {
                 output_index: 0,
                 amount: PICOCREDITS_PER_CAD,
                 created_at: 100,
+                target_key: [0u8; 32],
+                public_key: [0u8; 32],
+                subaddress_index: 0,
             },
             OwnedUtxo {
                 tx_hash: [2u8; 32],
                 output_index: 0,
                 amount: PICOCREDITS_PER_CAD,
                 created_at: 101,
+                target_key: [0u8; 32],
+                public_key: [0u8; 32],
+                subaddress_index: 0,
             },
             OwnedUtxo {
                 tx_hash: [3u8; 32],
                 output_index: 0,
                 amount: PICOCREDITS_PER_CAD,
                 created_at: 102,
+                target_key: [0u8; 32],
+                public_key: [0u8; 32],
+                subaddress_index: 0,
             },
         ];
 
