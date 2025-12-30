@@ -1,12 +1,31 @@
 use bth_account_keys::PublicAddress;
 use bth_crypto_keys::RistrettoPrivate;
 use bth_crypto_ring_signature::onetime_keys::{create_tx_out_public_key, create_tx_out_target_key};
+use bth_transaction_types::Network;
 use bth_util_from_random::FromRandom;
 use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::transaction::{Transaction, TxOutput};
+
+/// Genesis block magic bytes for mainnet (stored in prev_block_hash).
+/// ASCII: "BOTHO_MAINNET_GENESIS_V1" padded to 32 bytes
+pub const MAINNET_GENESIS_MAGIC: [u8; 32] = [
+    0x42, 0x4F, 0x54, 0x48, 0x4F, 0x5F, 0x4D, 0x41, // BOTHO_MA
+    0x49, 0x4E, 0x4E, 0x45, 0x54, 0x5F, 0x47, 0x45, // INNET_GE
+    0x4E, 0x45, 0x53, 0x49, 0x53, 0x5F, 0x56, 0x31, // NESIS_V1
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // padding
+];
+
+/// Genesis block magic bytes for testnet (stored in prev_block_hash).
+/// ASCII: "BOTHO_TESTNET_GENESIS_V1" padded to 32 bytes
+pub const TESTNET_GENESIS_MAGIC: [u8; 32] = [
+    0x42, 0x4F, 0x54, 0x48, 0x4F, 0x5F, 0x54, 0x45, // BOTHO_TE
+    0x53, 0x54, 0x4E, 0x45, 0x54, 0x5F, 0x47, 0x45, // STNET_GE
+    0x4E, 0x45, 0x53, 0x49, 0x53, 0x5F, 0x56, 0x31, // NESIS_V1
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // padding
+];
 
 /// Block header containing PoW fields
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,11 +91,24 @@ impl BlockHeader {
         hash_value < self.difficulty
     }
 
-    /// Create header for genesis block
+    /// Create header for genesis block (defaults to testnet for backward compatibility)
     pub fn genesis() -> Self {
+        Self::genesis_for_network(Network::Testnet)
+    }
+
+    /// Create header for genesis block for a specific network.
+    ///
+    /// Each network has a unique genesis block with different magic bytes
+    /// in the prev_block_hash field, ensuring chain separation.
+    pub fn genesis_for_network(network: Network) -> Self {
+        let magic = match network {
+            Network::Mainnet => MAINNET_GENESIS_MAGIC,
+            Network::Testnet => TESTNET_GENESIS_MAGIC,
+        };
+
         Self {
             version: 1,
-            prev_block_hash: [0u8; 32],
+            prev_block_hash: magic, // Network-specific magic bytes
             tx_root: [0u8; 32],
             timestamp: 0,
             height: 0,
@@ -86,46 +118,71 @@ impl BlockHeader {
             miner_spend_key: [0u8; 32],
         }
     }
+
+    /// Check if this is a genesis block header by examining the magic bytes.
+    pub fn is_genesis(&self) -> bool {
+        self.height == 0
+            && (self.prev_block_hash == MAINNET_GENESIS_MAGIC
+                || self.prev_block_hash == TESTNET_GENESIS_MAGIC
+                || self.prev_block_hash == [0u8; 32]) // Legacy genesis
+    }
+
+    /// Get the network this genesis header belongs to, if it's a genesis block.
+    pub fn genesis_network(&self) -> Option<Network> {
+        if self.height != 0 {
+            return None;
+        }
+        if self.prev_block_hash == MAINNET_GENESIS_MAGIC {
+            Some(Network::Mainnet)
+        } else if self.prev_block_hash == TESTNET_GENESIS_MAGIC {
+            Some(Network::Testnet)
+        } else if self.prev_block_hash == [0u8; 32] {
+            // Legacy genesis defaults to testnet
+            Some(Network::Testnet)
+        } else {
+            None
+        }
+    }
 }
 
-/// A mining reward transaction (coinbase) with PoW proof and stealth addressing.
+/// A minting transaction (coinbase) that creates new coins via PoW.
 ///
-/// Uses CryptoNote-style stealth addresses for miner privacy:
-/// - `target_key`: One-time public key that only the miner can identify and spend
-/// - `public_key`: Ephemeral DH public key for miner to derive shared secret
+/// Uses CryptoNote-style stealth addresses for minter privacy:
+/// - `target_key`: One-time public key that only the minter can identify and spend
+/// - `public_key`: Ephemeral DH public key for minter to derive shared secret
 ///
-/// Even if the same miner wins multiple blocks, their rewards are unlinkable.
+/// Even if the same minter wins multiple blocks, their rewards are unlinkable.
 ///
-/// Also includes the miner's public address (view_key, spend_key) for:
-/// - PoW binding: The proof of work is tied to the miner's identity
+/// Also includes the minter's public address (view_key, spend_key) for:
+/// - PoW binding: The proof of work is tied to the minter's identity
 /// - Block header: Required for block construction and verification
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub struct MiningTx {
+pub struct MintingTx {
     /// Block height this reward is for
     pub block_height: u64,
 
     /// Reward amount in picocredits
     pub reward: u64,
 
-    /// Miner's view public key (for PoW binding and block header)
-    pub miner_view_key: [u8; 32],
+    /// Minter's view public key (for PoW binding and block header)
+    pub minter_view_key: [u8; 32],
 
-    /// Miner's spend public key (for PoW binding and block header)
-    pub miner_spend_key: [u8; 32],
+    /// Minter's spend public key (for PoW binding and block header)
+    pub minter_spend_key: [u8; 32],
 
     /// One-time target key: `Hs(r * C) * G + D`
-    /// This is the stealth spend public key that only the miner can identify.
+    /// This is the stealth spend public key that only the minter can identify.
     pub target_key: [u8; 32],
 
     /// Ephemeral public key: `r * D`
-    /// Used by miner to derive the shared secret for detecting ownership.
+    /// Used by minter to derive the shared secret for detecting ownership.
     pub public_key: [u8; 32],
 
     // PoW proof fields
-    /// Previous block hash this mining tx builds on
+    /// Previous block hash this minting tx builds on
     pub prev_block_hash: [u8; 32],
 
-    /// Difficulty target at time of mining
+    /// Difficulty target at time of minting
     pub difficulty: u64,
 
     /// PoW nonce (the solution)
@@ -135,33 +192,33 @@ pub struct MiningTx {
     pub timestamp: u64,
 }
 
-impl MiningTx {
-    /// Create a new mining transaction with stealth output for the given miner address.
+impl MintingTx {
+    /// Create a new minting transaction with stealth output for the given minter address.
     pub fn new(
         block_height: u64,
         reward: u64,
-        miner_address: &PublicAddress,
+        minter_address: &PublicAddress,
         prev_block_hash: [u8; 32],
         difficulty: u64,
         timestamp: u64,
     ) -> Self {
-        // Store miner's public address for PoW binding
-        let miner_view_key = miner_address.view_public_key().to_bytes();
-        let miner_spend_key = miner_address.spend_public_key().to_bytes();
+        // Store minter's public address for PoW binding
+        let minter_view_key = minter_address.view_public_key().to_bytes();
+        let minter_spend_key = minter_address.spend_public_key().to_bytes();
 
         // Generate random ephemeral key for stealth output
         let tx_private_key = RistrettoPrivate::from_random(&mut OsRng);
 
         // Create stealth keys for the reward output
-        let target_key = create_tx_out_target_key(&tx_private_key, miner_address);
+        let target_key = create_tx_out_target_key(&tx_private_key, minter_address);
         let public_key =
-            create_tx_out_public_key(&tx_private_key, miner_address.spend_public_key());
+            create_tx_out_public_key(&tx_private_key, minter_address.spend_public_key());
 
         Self {
             block_height,
             reward,
-            miner_view_key,
-            miner_spend_key,
+            minter_view_key,
+            minter_spend_key,
             target_key: target_key.to_bytes(),
             public_key: public_key.to_bytes(),
             prev_block_hash,
@@ -196,13 +253,13 @@ impl MiningTx {
         u64::MAX - u64::from_be_bytes(hash[0..8].try_into().unwrap())
     }
 
-    /// Compute the hash of this mining transaction (for consensus)
+    /// Compute the hash of this minting transaction (for consensus)
     pub fn hash(&self) -> [u8; 32] {
         let mut hasher = Sha256::new();
         hasher.update(self.block_height.to_le_bytes());
         hasher.update(self.reward.to_le_bytes());
-        hasher.update(self.miner_view_key);
-        hasher.update(self.miner_spend_key);
+        hasher.update(self.minter_view_key);
+        hasher.update(self.minter_spend_key);
         hasher.update(self.target_key);
         hasher.update(self.public_key);
         hasher.update(self.prev_block_hash);
@@ -212,9 +269,9 @@ impl MiningTx {
         hasher.finalize().into()
     }
 
-    /// Convert this mining transaction's output into a TxOutput for ledger storage.
+    /// Convert this minting transaction's output into a TxOutput for ledger storage.
     ///
-    /// This allows the ledger to store mining rewards using the same UTXO format
+    /// This allows the ledger to store minting rewards using the same UTXO format
     /// as regular transaction outputs.
     pub fn to_tx_output(&self) -> TxOutput {
         TxOutput {
@@ -236,10 +293,23 @@ pub struct Block {
 }
 
 impl Block {
-    /// Create the genesis block
+    /// Create the genesis block (defaults to testnet for backward compatibility)
     pub fn genesis() -> Self {
+        Self::genesis_for_network(Network::Testnet)
+    }
+
+    /// Create the genesis block for a specific network.
+    ///
+    /// Each network has a unique genesis block with different magic bytes,
+    /// ensuring that mainnet and testnet chains are completely separate.
+    pub fn genesis_for_network(network: Network) -> Self {
+        let genesis_magic = match network {
+            Network::Mainnet => MAINNET_GENESIS_MAGIC,
+            Network::Testnet => TESTNET_GENESIS_MAGIC,
+        };
+
         Self {
-            header: BlockHeader::genesis(),
+            header: BlockHeader::genesis_for_network(network),
             mining_tx: MiningTx {
                 block_height: 0,
                 reward: 0,
@@ -249,13 +319,23 @@ impl Block {
                 // Genesis has no stealth output - use zero keys
                 target_key: [0u8; 32],
                 public_key: [0u8; 32],
-                prev_block_hash: [0u8; 32],
+                prev_block_hash: genesis_magic, // Network-specific magic
                 difficulty: u64::MAX,
                 nonce: 0,
                 timestamp: 0,
             },
             transactions: Vec::new(),
         }
+    }
+
+    /// Check if this is a genesis block.
+    pub fn is_genesis(&self) -> bool {
+        self.header.is_genesis()
+    }
+
+    /// Get the network this genesis block belongs to, if it's a genesis block.
+    pub fn genesis_network(&self) -> Option<Network> {
+        self.header.genesis_network()
     }
 
     /// Get the block hash
@@ -442,9 +522,47 @@ mod tests {
 
     #[test]
     fn test_genesis_block() {
+        // Default genesis is testnet
         let genesis = Block::genesis();
         assert_eq!(genesis.height(), 0);
-        assert_eq!(genesis.header.prev_block_hash, [0u8; 32]);
+        assert_eq!(genesis.header.prev_block_hash, TESTNET_GENESIS_MAGIC);
+        assert!(genesis.is_genesis());
+        assert_eq!(genesis.genesis_network(), Some(Network::Testnet));
+    }
+
+    #[test]
+    fn test_genesis_blocks_per_network() {
+        let testnet_genesis = Block::genesis_for_network(Network::Testnet);
+        let mainnet_genesis = Block::genesis_for_network(Network::Mainnet);
+
+        // Both are genesis blocks
+        assert!(testnet_genesis.is_genesis());
+        assert!(mainnet_genesis.is_genesis());
+
+        // They have different magic bytes
+        assert_eq!(testnet_genesis.header.prev_block_hash, TESTNET_GENESIS_MAGIC);
+        assert_eq!(mainnet_genesis.header.prev_block_hash, MAINNET_GENESIS_MAGIC);
+        assert_ne!(
+            testnet_genesis.header.prev_block_hash,
+            mainnet_genesis.header.prev_block_hash
+        );
+
+        // They produce different hashes
+        assert_ne!(testnet_genesis.hash(), mainnet_genesis.hash());
+
+        // Network detection works
+        assert_eq!(testnet_genesis.genesis_network(), Some(Network::Testnet));
+        assert_eq!(mainnet_genesis.genesis_network(), Some(Network::Mainnet));
+    }
+
+    #[test]
+    fn test_genesis_magic_bytes_readable() {
+        // Verify the magic bytes are human-readable
+        let mainnet_str = std::str::from_utf8(&MAINNET_GENESIS_MAGIC[..24]).unwrap();
+        let testnet_str = std::str::from_utf8(&TESTNET_GENESIS_MAGIC[..24]).unwrap();
+
+        assert_eq!(mainnet_str, "BOTHO_MAINNET_GENESIS_V1");
+        assert_eq!(testnet_str, "BOTHO_TESTNET_GENESIS_V1");
     }
 
     #[test]

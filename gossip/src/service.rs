@@ -486,7 +486,7 @@ async fn handle_behaviour_event(
                 );
                 // Disconnect the peer - they're on a different network
                 let _ = swarm.disconnect_peer_id(peer_id);
-                continue;
+                return;
             }
 
             // Add peer addresses to Kademlia

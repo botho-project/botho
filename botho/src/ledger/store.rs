@@ -1,6 +1,7 @@
-use lmdb::{Cursor, Database, Environment, EnvironmentFlags, Transaction, WriteFlags};
 use bth_account_keys::PublicAddress;
 use bth_crypto_keys::{RistrettoPublic, RistrettoSignature};
+use bth_transaction_types::Network;
+use lmdb::{Cursor, Database, Environment, EnvironmentFlags, Transaction, WriteFlags};
 use std::fs;
 use std::path::Path;
 use tracing::{debug, info};
@@ -12,6 +13,8 @@ use crate::transaction::{Transaction as BothoTransaction, TxInputs, TxOutput, Ut
 /// LMDB-backed ledger storage
 pub struct Ledger {
     env: Environment,
+    /// The network this ledger belongs to
+    network: Network,
     /// blocks: height -> Block
     blocks_db: Database,
     /// metadata: key -> value (for chain state)
@@ -35,8 +38,16 @@ const META_FEES_BURNED: &[u8; 11] = b"fees_burned";
 const META_DIFFICULTY: &[u8; 10] = b"difficulty";
 
 impl Ledger {
-    /// Open or create a ledger at the given path
+    /// Open or create a ledger at the given path (defaults to Testnet for backward compatibility)
     pub fn open(path: &Path) -> Result<Self, LedgerError> {
+        Self::open_for_network(path, Network::Testnet)
+    }
+
+    /// Open or create a ledger at the given path for a specific network.
+    ///
+    /// The ledger will be initialized with the appropriate genesis block
+    /// for the specified network if it's empty.
+    pub fn open_for_network(path: &Path, network: Network) -> Result<Self, LedgerError> {
         // Create directory if needed
         fs::create_dir_all(path).map_err(|e| {
             LedgerError::Database(lmdb::Error::Other(e.raw_os_error().unwrap_or(0)))
@@ -56,6 +67,7 @@ impl Ledger {
 
         let ledger = Self {
             env,
+            network,
             blocks_db,
             meta_db,
             utxo_db,
@@ -67,7 +79,7 @@ impl Ledger {
         if ledger.get_chain_state()?.height == 0 {
             let state = ledger.get_chain_state()?;
             if state.tip_hash == [0u8; 32] {
-                info!("Initializing ledger with genesis block");
+                info!(network = %network, "Initializing ledger with genesis block");
                 ledger.init_genesis()?;
             }
         }
@@ -75,9 +87,14 @@ impl Ledger {
         Ok(ledger)
     }
 
-    /// Initialize the ledger with the genesis block
+    /// Get the network this ledger belongs to.
+    pub fn network(&self) -> Network {
+        self.network
+    }
+
+    /// Initialize the ledger with the genesis block for this network.
     fn init_genesis(&self) -> Result<(), LedgerError> {
-        let genesis = Block::genesis();
+        let genesis = Block::genesis_for_network(self.network);
         let mut txn = self.env.begin_rw_txn()?;
 
         // Store genesis block

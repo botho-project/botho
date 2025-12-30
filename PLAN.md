@@ -14,7 +14,7 @@ Core functionality complete. See README.md for features and usage.
    - [x] Wallet page: Balance, transaction history, send modal
    - [x] Mining page: Mining controls with SCP visualization
    - [x] Network page: Interactive SCP consensus visualization
-   - [ ] Ledger page: Block explorer
+   - [x] Ledger page: Block explorer (desktop wallet)
    - [ ] Real-time updates via WebSocket/SSE
    - [ ] Mobile responsiveness improvements
 

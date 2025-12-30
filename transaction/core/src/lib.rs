@@ -2,7 +2,7 @@
 // Copyright (c) 2024 Botho Foundation
 
 //! Botho transaction data types, transaction construction and validation
-//! routines. Includes proof-of-work mining transaction support.
+//! routines.
 
 #![no_std]
 #![deny(missing_docs)]
@@ -20,9 +20,7 @@ mod revealed_tx_out;
 mod token;
 mod tx_error;
 
-pub mod emission;
 pub mod membership_proofs;
-pub mod mining_tx;
 pub mod mint;
 pub mod range_proofs;
 pub mod ring_ct;
@@ -33,11 +31,9 @@ pub mod validation;
 #[cfg(feature = "pq")]
 pub mod quantum_private;
 
-pub use emission::{block_reward, INITIAL_REWARD, MAX_SUPPLY, PICO_CAD, TAIL_EMISSION};
 pub use fee_map::{Error as FeeMapError, FeeMap, SMALLEST_MINIMUM_FEE_LOG2};
 pub use input_rules::{InputRuleError, InputRules};
 pub use memo::{EncryptedMemo, MemoError, MemoPayload};
-pub use mining_tx::{DifficultyTarget, MiningTx, MiningTxError};
 pub use revealed_tx_out::{try_reveal_amount, RevealedTxOut, RevealedTxOutError};
 pub use token::{tokens, Token};
 pub use tx::MemoContext;

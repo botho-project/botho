@@ -13,6 +13,7 @@ extern crate alloc;
 pub use crate::{
     amount::{Amount, AmountError},
     block_version::{BlockVersion, BlockVersionError, BlockVersionIterator},
+    constants::Network,
     token::TokenId,
     unmasked_amount::UnmaskedAmount,
 };
