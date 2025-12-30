@@ -15,10 +15,14 @@ Core functionality complete. See README.md for features and usage.
    - [x] Minting page: Minting controls with SCP visualization
    - [x] Network page: Interactive SCP consensus visualization
    - [x] Ledger page: Block explorer (desktop wallet)
+   - [x] BIP39 mnemonic generation with optional password encryption
    - [ ] Real-time updates via WebSocket/SSE
    - [ ] Mobile responsiveness improvements
 
-2. **Transaction Size Limits** - Add max size validation before deserialization
+2. **Transaction Size Limits** ✓ COMPLETE
+   - MAX_TRANSACTION_SIZE (100KB), MAX_BLOCK_SIZE (20MB), MAX_SCP_MESSAGE_SIZE (1MB)
+   - Size checked before deserialization in gossip handler
+   - gossipsub max_transmit_size configured at libp2p level
 
 3. **Add Memo Field to TxOutput** ✓ COMPLETE
    - Botho's TxOutput now supports encrypted memos
