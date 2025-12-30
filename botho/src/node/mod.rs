@@ -232,7 +232,7 @@ impl Node {
             .add_block(block)
             .map_err(|e| anyhow::anyhow!("Failed to add network block: {}", e))?;
 
-        // Remove confirmed transactions from mempool
+        // Remove confirmed transactions from mempool and update dynamic fee state
         if let Ok(mut mempool) = self.mempool.write() {
             mempool.remove_confirmed(&block.transactions);
             // Also clean up any now-invalid transactions
@@ -240,6 +240,9 @@ impl Node {
                 mempool.remove_invalid(&*ledger);
             }
         }
+
+        // Note: Dynamic fee update is handled by the caller who has access to
+        // consensus timing information. See update_dynamic_fee_after_block().
 
         // Update emission controller with block data
         let tx_count = block.transactions.len() as u64;
@@ -367,6 +370,33 @@ impl Node {
             }
             mempool.evict_old();
         }
+    }
+
+    /// Update dynamic fee state after a block is finalized.
+    ///
+    /// Call this after each block is added to update fee calculations based on congestion.
+    ///
+    /// # Arguments
+    /// * `tx_count` - Number of transactions in the finalized block
+    /// * `max_tx_count` - Maximum transactions per block (from consensus config)
+    /// * `at_min_block_time` - Whether block timing is at minimum (triggers fee adjustment)
+    ///
+    /// # Returns
+    /// The new fee base, or None if mempool lock failed
+    pub fn update_dynamic_fee_after_block(
+        &self,
+        tx_count: usize,
+        max_tx_count: usize,
+        at_min_block_time: bool,
+    ) -> Option<u64> {
+        self.mempool.write().ok().map(|mut mempool| {
+            mempool.update_dynamic_fee(tx_count, max_tx_count, at_min_block_time)
+        })
+    }
+
+    /// Get the current dynamic fee state for diagnostics/RPC
+    pub fn dynamic_fee_state(&self) -> Option<bth_cluster_tax::DynamicFeeState> {
+        self.mempool.read().ok().map(|mempool| mempool.dynamic_fee_state())
     }
 
     /// Load pending transactions from file (created by `botho send`)

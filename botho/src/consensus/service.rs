@@ -44,6 +44,10 @@ impl Default for ConsensusConfig {
 }
 
 impl ConsensusConfig {
+    /// Minimum block time in seconds (from dynamic timing levels)
+    /// This is the fastest block time the network will use.
+    pub const MIN_BLOCK_TIME_SECS: u64 = 3;
+
     /// Create config with dynamic timing disabled (fixed slot duration)
     pub fn fixed_timing(slot_duration_secs: u64) -> Self {
         Self {
@@ -51,6 +55,11 @@ impl ConsensusConfig {
             dynamic_timing: false,
             ..Default::default()
         }
+    }
+
+    /// Check if a given slot duration is at the minimum (triggers dynamic fee adjustment)
+    pub fn is_at_min_block_time(&self, duration: Duration) -> bool {
+        duration.as_secs() <= Self::MIN_BLOCK_TIME_SECS
     }
 }
 

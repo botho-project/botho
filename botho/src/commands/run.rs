@@ -296,6 +296,19 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                                 // Record for dynamic timing
                                 consensus.record_block(block.header.timestamp, block.transactions.len());
 
+                                // Update dynamic fee based on congestion
+                                let slot_duration = consensus.current_slot_duration();
+                                let at_min_time = ConsensusConfig::is_at_min_block_time(
+                                    &ConsensusConfig::default(),
+                                    slot_duration,
+                                );
+                                let max_txs = ConsensusConfig::default().max_txs_per_slot;
+                                node.update_dynamic_fee_after_block(
+                                    block.transactions.len(),
+                                    max_txs,
+                                    at_min_time,
+                                );
+
                                 // Broadcast to WebSocket clients
                                 ws_broadcaster.new_block(
                                     block.height(),
@@ -434,13 +447,27 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                             match response {
                                 SyncResponse::Blocks { blocks, has_more: _ } => {
                                     debug!("Received {} blocks from sync", blocks.len());
-                                    for block in blocks {
-                                        if let Err(e) = node.add_block_from_network(&block) {
+                                    for block in &blocks {
+                                        if let Err(e) = node.add_block_from_network(block) {
                                             warn!("Failed to add synced block: {}", e);
                                             break;
                                         }
                                         // Record for dynamic timing
                                         consensus.record_block(block.header.timestamp, block.transactions.len());
+                                    }
+                                    // Update dynamic fee after syncing all blocks (use last block's tx count)
+                                    if let Some(last_block) = blocks.last() {
+                                        let slot_duration = consensus.current_slot_duration();
+                                        let at_min_time = ConsensusConfig::is_at_min_block_time(
+                                            &ConsensusConfig::default(),
+                                            slot_duration,
+                                        );
+                                        let max_txs = ConsensusConfig::default().max_txs_per_slot;
+                                        node.update_dynamic_fee_after_block(
+                                            last_block.transactions.len(),
+                                            max_txs,
+                                            at_min_time,
+                                        );
                                     }
                                     // Update consensus chain state
                                     if let Ok(ledger) = node.shared_ledger().read() {
@@ -500,6 +527,19 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                                     } else {
                                         // Record for dynamic timing
                                         consensus.record_block(block.header.timestamp, block.transactions.len());
+
+                                        // Update dynamic fee based on congestion
+                                        let slot_duration = consensus.current_slot_duration();
+                                        let at_min_time = ConsensusConfig::is_at_min_block_time(
+                                            &ConsensusConfig::default(),
+                                            slot_duration,
+                                        );
+                                        let max_txs = ConsensusConfig::default().max_txs_per_slot;
+                                        node.update_dynamic_fee_after_block(
+                                            block.transactions.len(),
+                                            max_txs,
+                                            at_min_time,
+                                        );
 
                                         // Broadcast to WebSocket clients
                                         ws_broadcaster.new_block(
@@ -622,6 +662,19 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                                         } else {
                                             // Record for dynamic timing
                                             consensus.record_block(block.header.timestamp, block.transactions.len());
+
+                                            // Update dynamic fee based on congestion
+                                            let slot_duration = consensus.current_slot_duration();
+                                            let at_min_time = ConsensusConfig::is_at_min_block_time(
+                                                &ConsensusConfig::default(),
+                                                slot_duration,
+                                            );
+                                            let max_txs = ConsensusConfig::default().max_txs_per_slot;
+                                            node.update_dynamic_fee_after_block(
+                                                block.transactions.len(),
+                                                max_txs,
+                                                at_min_time,
+                                            );
 
                                             // Broadcast to WebSocket clients
                                             ws_broadcaster.new_block(
