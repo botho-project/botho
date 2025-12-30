@@ -518,14 +518,18 @@ fn test_mempool_rejects_insufficient_fee() {
     let (sender_utxo, subaddr_idx) = &utxos[0];
     let state = ledger.get_chain_state().unwrap();
 
-    // Create transaction with zero fee
+    let send_amount = 10 * PICOCREDITS_PER_CREDIT;
+    let required_fee = calculate_fee(&mempool, send_amount);
+
+    // Create transaction with fee that's too low (half of required)
+    let insufficient_fee = required_fee / 2;
     let tx = create_signed_transaction(
         &miner_wallet,
         sender_utxo,
         *subaddr_idx,
         &recipient.public_address(),
-        10 * PICOCREDITS_PER_CREDIT,
-        0, // Zero fee
+        send_amount,
+        insufficient_fee,
         state.height,
     );
 
@@ -533,7 +537,7 @@ fn test_mempool_rejects_insufficient_fee() {
     let result = mempool.add_tx(tx, &ledger);
     assert!(
         matches!(result, Err(MempoolError::FeeTooLow { .. })),
-        "Transaction with zero fee should be rejected: {:?}",
+        "Transaction with insufficient fee should be rejected: {:?}",
         result
     );
 }
@@ -561,14 +565,17 @@ fn test_mempool_remove_invalid_after_block() {
     let (utxo2, subaddr2) = &utxos[1];
     let state = ledger.get_chain_state().unwrap();
 
-    // Create two transactions, each spending different UTXOs
+    // Create two transactions, each spending different UTXOs with proper fees
+    let send_amount = 10 * PICOCREDITS_PER_CREDIT;
+    let fee = calculate_fee(&mempool, send_amount);
+
     let tx1 = create_signed_transaction(
         &miner_wallet,
         utxo1,
         *subaddr1,
         &recipient1.public_address(),
-        10 * PICOCREDITS_PER_CREDIT,
-        MIN_TX_FEE,
+        send_amount,
+        fee,
         state.height,
     );
 
@@ -577,8 +584,8 @@ fn test_mempool_remove_invalid_after_block() {
         utxo2,
         *subaddr2,
         &recipient2.public_address(),
-        10 * PICOCREDITS_PER_CREDIT,
-        MIN_TX_FEE,
+        send_amount,
+        fee,
         state.height,
     );
 
@@ -917,13 +924,16 @@ fn test_mempool_already_exists_rejection() {
     let (utxo, subaddr) = &utxos[0];
     let state = ledger.get_chain_state().unwrap();
 
+    let send_amount = 10 * PICOCREDITS_PER_CREDIT;
+    let fee = calculate_fee(&mempool, send_amount);
+
     let tx = create_signed_transaction(
         &miner,
         utxo,
         *subaddr,
         &recipient.public_address(),
-        10 * PICOCREDITS_PER_CREDIT,
-        MIN_TX_FEE,
+        send_amount,
+        fee,
         state.height,
     );
 
@@ -959,31 +969,34 @@ fn test_mempool_transactions_sorted_by_fee() {
 
     let state = ledger.get_chain_state().unwrap();
 
-    // Create transactions with different fees
-    let fees = [MIN_TX_FEE, MIN_TX_FEE * 2, MIN_TX_FEE * 3];
-    let mut tx_hashes = vec![];
+    // Create transactions with different fees (base fee + multiplier)
+    let send_amount = 5 * PICOCREDITS_PER_CREDIT;
+    let base_fee = calculate_fee(&mempool, send_amount);
+    let fee_multipliers = [1u64, 2u64, 3u64];
+    let mut actual_fees = vec![];
 
-    for (i, fee) in fees.iter().enumerate() {
+    for (i, multiplier) in fee_multipliers.iter().enumerate() {
         let (utxo, subaddr) = &utxos[i];
+        let fee = base_fee * multiplier;
         let tx = create_signed_transaction(
             &miner,
             utxo,
             *subaddr,
             &recipient.public_address(),
-            5 * PICOCREDITS_PER_CREDIT,
-            *fee,
+            send_amount,
+            fee,
             state.height,
         );
-        tx_hashes.push((tx.hash(), *fee));
+        actual_fees.push(fee);
         mempool.add_tx(tx, &ledger).expect("Failed to add tx");
     }
 
-    // Get transactions (should be sorted by fee, highest first)
+    // Get transactions (should be sorted by fee per byte, highest first)
     let sorted_txs = mempool.get_transactions(10);
     assert_eq!(sorted_txs.len(), 3);
 
-    // Highest fee should be first
-    assert_eq!(sorted_txs[0].fee, MIN_TX_FEE * 3);
-    // Lowest fee should be last
-    assert_eq!(sorted_txs[2].fee, MIN_TX_FEE);
+    // Highest fee should be first (3x base)
+    assert_eq!(sorted_txs[0].fee, base_fee * 3);
+    // Lowest fee should be last (1x base)
+    assert_eq!(sorted_txs[2].fee, base_fee);
 }

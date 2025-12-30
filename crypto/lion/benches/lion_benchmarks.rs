@@ -223,6 +223,224 @@ fn bench_sizes(c: &mut Criterion) {
     });
 }
 
+// =============================================================================
+// Granular profiling benchmarks for identifying bottlenecks
+// =============================================================================
+
+use bth_crypto_lion::polynomial::{Poly, PolyMatrix, PolyVecK, PolyVecL};
+use bth_crypto_lion::params::TAU;
+
+/// Benchmark individual polynomial operations
+fn bench_poly_ops(c: &mut Criterion) {
+    let mut group = c.benchmark_group("Poly ops");
+
+    // Create test polynomials
+    let mut rng = ChaCha20Rng::seed_from_u64(42);
+    let mut p1 = Poly::zero();
+    let mut p2 = Poly::zero();
+    for i in 0..256 {
+        p1.coeffs[i] = rng.next_u32() % 8380417;
+        p2.coeffs[i] = rng.next_u32() % 8380417;
+    }
+
+    // NTT forward
+    group.bench_function("NTT forward", |b| {
+        let mut p = p1.clone();
+        b.iter(|| {
+            p.ntt();
+            black_box(&p);
+            // Reset for next iteration
+            p = p1.clone();
+        })
+    });
+
+    // NTT inverse
+    let mut p_ntt = p1.clone();
+    p_ntt.ntt();
+    group.bench_function("NTT inverse", |b| {
+        let mut p = p_ntt.clone();
+        b.iter(|| {
+            p.ntt_inv();
+            black_box(&p);
+            p = p_ntt.clone();
+        })
+    });
+
+    // Polynomial multiplication via NTT
+    group.bench_function("ntt_mul", |b| {
+        b.iter(|| {
+            black_box(p1.ntt_mul(&p2))
+        })
+    });
+
+    // Challenge polynomial sampling
+    let seed = [42u8; 32];
+    group.bench_function("sample_challenge", |b| {
+        b.iter(|| {
+            black_box(Poly::sample_challenge(&seed, TAU))
+        })
+    });
+
+    group.finish();
+}
+
+/// Benchmark matrix operations (most expensive)
+fn bench_matrix_ops(c: &mut Criterion) {
+    let mut group = c.benchmark_group("Matrix ops");
+
+    let seed = [42u8; 32];
+
+    // Matrix expansion from seed
+    group.bench_function("expand_a (K×L matrix)", |b| {
+        b.iter(|| {
+            black_box(PolyMatrix::expand_a(&seed))
+        })
+    });
+
+    // Matrix-vector multiplication
+    let a = PolyMatrix::expand_a(&seed);
+    let mut rng = ChaCha20Rng::seed_from_u64(123);
+    let mut v = PolyVecL::zero();
+    for poly in v.polys.iter_mut() {
+        for c in poly.coeffs.iter_mut() {
+            *c = rng.next_u32() % 8380417;
+        }
+    }
+
+    group.bench_function("mul_vec (A * v)", |b| {
+        b.iter(|| {
+            black_box(a.mul_vec(&v))
+        })
+    });
+
+    group.finish();
+}
+
+/// Benchmark vector operations
+fn bench_vector_ops(c: &mut Criterion) {
+    let mut group = c.benchmark_group("Vector ops");
+
+    let mut rng = ChaCha20Rng::seed_from_u64(456);
+
+    // Create test vectors
+    let mut v1 = PolyVecK::zero();
+    let mut v2 = PolyVecK::zero();
+    for poly in v1.polys.iter_mut() {
+        for c in poly.coeffs.iter_mut() {
+            *c = rng.next_u32() % 8380417;
+        }
+    }
+    for poly in v2.polys.iter_mut() {
+        for c in poly.coeffs.iter_mut() {
+            *c = rng.next_u32() % 8380417;
+        }
+    }
+
+    // Vector subtraction
+    group.bench_function("PolyVecK sub_assign", |b| {
+        let mut v = v1.clone();
+        b.iter(|| {
+            v.sub_assign(&v2);
+            black_box(&v);
+        })
+    });
+
+    // Infinity norm
+    let vl = PolyVecL::zero();
+    group.bench_function("PolyVecL infinity_norm", |b| {
+        b.iter(|| {
+            black_box(vl.infinity_norm())
+        })
+    });
+
+    group.finish();
+}
+
+/// Benchmark hashing operations
+fn bench_hash_ops(c: &mut Criterion) {
+    use sha3::{Shake256, digest::{ExtendableOutput, Update}};
+
+    let mut group = c.benchmark_group("Hash ops");
+
+    let fixtures = BenchFixtures::new();
+    let message = b"test message";
+
+    // Challenge hash (used in signing/verification loop)
+    group.bench_function("challenge hash (full)", |b| {
+        b.iter(|| {
+            let mut hasher = Shake256::default();
+            hasher.update(b"botho-lion-challenge-v1");
+            hasher.update(&(message.len() as u64).to_le_bytes());
+            hasher.update(message);
+            for pk in fixtures.ring.iter() {
+                hasher.update(&pk.to_bytes());
+            }
+            hasher.update(&fixtures.keypairs[0].key_image().to_bytes());
+            hasher.update(&(0u16).to_le_bytes());
+            // Add commitment bytes (simulated)
+            hasher.update(&[0u8; 3072]);
+            let mut reader = hasher.finalize_xof();
+            let mut seed = [0u8; 32];
+            sha3::digest::XofReader::read(&mut reader, &mut seed);
+            black_box(seed)
+        })
+    });
+
+    group.finish();
+}
+
+/// Breakdown of signing time by operation
+fn bench_sign_breakdown(c: &mut Criterion) {
+    let fixtures = BenchFixtures::new();
+
+    let mut group = c.benchmark_group("Sign breakdown");
+
+    // Time to expand all matrices (7 members)
+    group.bench_function("expand all A matrices (7)", |b| {
+        b.iter(|| {
+            for pk in fixtures.ring.iter() {
+                black_box(pk.expand_a());
+            }
+        })
+    });
+
+    // Pre-expand matrices
+    let matrices: Vec<_> = fixtures.ring.iter().map(|pk| pk.expand_a()).collect();
+
+    // Time for 7 matrix-vector multiplications
+    let mut rng = ChaCha20Rng::seed_from_u64(789);
+    let mut v = PolyVecL::zero();
+    for poly in v.polys.iter_mut() {
+        for c in poly.coeffs.iter_mut() {
+            *c = rng.next_u32() % 8380417;
+        }
+    }
+
+    group.bench_function("7× matrix-vector mul", |b| {
+        b.iter(|| {
+            for a in matrices.iter() {
+                black_box(a.mul_vec(&v));
+            }
+        })
+    });
+
+    // Time for polynomial-vector multiplications (c * t)
+    let challenge = Poly::sample_challenge(&[42u8; 32], TAU);
+    group.bench_function("7× poly-vec mul (c*t)", |b| {
+        b.iter(|| {
+            for pk in fixtures.ring.iter() {
+                let mut result = PolyVecK::zero();
+                for (r, t) in result.polys.iter_mut().zip(pk.t.polys.iter()) {
+                    *r = challenge.ntt_mul(t);
+                }
+                black_box(result);
+            }
+        })
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_keygen,
@@ -232,6 +450,12 @@ criterion_group!(
     bench_serialize,
     bench_full_cycle,
     bench_sizes,
+    // Profiling benchmarks
+    bench_poly_ops,
+    bench_matrix_ops,
+    bench_vector_ops,
+    bench_hash_ops,
+    bench_sign_breakdown,
 );
 
 criterion_main!(benches);

@@ -1119,7 +1119,7 @@ mod msg_tests {
             Prepare(PreparePayload {
                 B: Ballot::new(10, &["value"]),
                 P: Some(Ballot::new(5, &["value"])),
-                PP: Some(Ballot::new(5, &["other"])), // PP >= P (invalid)
+                PP: Some(Ballot::new(6, &["other"])), // PP >= P (invalid since PP.N > P.N)
                 CN: 0,
                 HN: 0,
             }),

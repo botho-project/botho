@@ -397,6 +397,9 @@ async fn handle_node_status(id: Value, state: &RpcState) -> JsonRpcResponse {
 
     JsonRpcResponse::success(id, json!({
         "version": env!("CARGO_PKG_VERSION"),
+        "gitCommit": option_env!("GIT_HASH").unwrap_or("unknown"),
+        "gitCommitShort": option_env!("GIT_HASH_SHORT").unwrap_or("unknown"),
+        "buildTime": option_env!("BUILD_TIME").unwrap_or("unknown"),
         "network": "botho-mainnet",
         "uptimeSeconds": state.start_time.elapsed().as_secs(),
         "syncStatus": "synced",
