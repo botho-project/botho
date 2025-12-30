@@ -16,6 +16,7 @@ use crate::{
     config::GossipConfig,
     error::{GossipError, GossipResult},
     messages::{NodeAnnouncement, NodeCapabilities, ANNOUNCEMENTS_TOPIC},
+    rate_limit::{PeerRateLimiter, RateLimitResult},
     store::{new_shared_store, SharedPeerStore},
 };
 use futures::StreamExt;
@@ -280,6 +281,9 @@ async fn run_swarm(
     let mut connected_peers: HashSet<PeerId> = HashSet::new();
     let mut bootstrapped = false;
 
+    // Initialize per-peer rate limiter
+    let mut rate_limiter = PeerRateLimiter::new(config.rate_limit.clone());
+
     // Store our initial announcement
     store.insert(initial_announcement.clone());
 
@@ -308,6 +312,7 @@ async fn run_swarm(
                     SwarmEvent::ConnectionClosed { peer_id, .. } => {
                         debug!(?peer_id, "Disconnected from peer");
                         connected_peers.remove(&peer_id);
+                        rate_limiter.remove_peer(&peer_id);
                         let _ = event_tx.send(GossipEvent::PeerDisconnected(peer_id)).await;
                     }
 
@@ -318,7 +323,14 @@ async fn run_swarm(
                             &store,
                             &config,
                             &event_tx,
+                            &mut rate_limiter,
                         ).await;
+
+                        // Disconnect peers that exceeded rate limits
+                        for peer_id in rate_limiter.take_flagged_peers() {
+                            warn!(?peer_id, "Disconnecting peer: rate limit exceeded");
+                            let _ = swarm.disconnect_peer_id(peer_id);
+                        }
                     }
 
                     _ => {}
@@ -424,6 +436,7 @@ async fn handle_behaviour_event(
     store: &SharedPeerStore,
     config: &GossipConfig,
     event_tx: &mpsc::Sender<GossipEvent>,
+    rate_limiter: &mut PeerRateLimiter,
 ) {
     match event {
         // Gossipsub events
@@ -432,6 +445,29 @@ async fn handle_behaviour_event(
             message,
             ..
         }) => {
+            // Check rate limit for this peer
+            match rate_limiter.record_message(&propagation_source) {
+                RateLimitResult::Allowed => {
+                    // Message allowed through, process it
+                }
+                RateLimitResult::RateLimited { violations, remaining } => {
+                    debug!(
+                        ?propagation_source,
+                        violations,
+                        remaining,
+                        "Rate limiting peer message"
+                    );
+                    return; // Drop the message
+                }
+                RateLimitResult::Disconnect => {
+                    warn!(
+                        ?propagation_source,
+                        "Peer exceeded rate limit threshold, flagged for disconnect"
+                    );
+                    return; // Drop the message, peer will be disconnected
+                }
+            }
+
             // Try to parse as a node announcement
             match serde_json::from_slice::<NodeAnnouncement>(&message.data) {
                 Ok(announcement) => {

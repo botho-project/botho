@@ -1,6 +1,7 @@
 // Copyright (c) 2018-2022 The Botho Foundation
 
 #![no_std]
+#![deny(unsafe_code)]
 
 pub use merlin::Transcript as MerlinTranscript;
 

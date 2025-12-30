@@ -268,15 +268,16 @@ impl<'a, K, V> Iterator for LruCacheMutIterator<'a, K, V> {
 
             let entry_index = self.cache.used_indexes[self.pos];
 
-            // Hack to get around the borrow checker. The borrow checker would prevent us
-            // from returning a mutable reference to an entry, since in order to
-            // get the entry we need to hold a reference to the Option inside
-            // `self.cache.entries`. However, since we're holding that
-            // reference, we will then be denied from creating another mutable
-            // reference.
-            // This code is safe because the list of entries is not going to be modified
-            // during iteration, since a mutable reference to the LruCache is
-            // held by the iterator.
+            // SAFETY: This unsafe block is sound because:
+            // 1. The iterator holds an exclusive mutable borrow of the entire LruCache
+            // 2. The entries vector is never reallocated or resized during iteration
+            // 3. Each entry_index is visited exactly once (guaranteed by used_indexes iteration)
+            // 4. No entry is accessed through any other path while the iterator exists
+            //
+            // The borrow checker cannot prove this is safe because it sees us creating
+            // multiple mutable references from the same Vec. However, since we access
+            // each index exactly once and hold the exclusive LruCache borrow, there is
+            // no aliasing.
             let entry =
                 unsafe { &mut *(&mut self.cache.entries[entry_index] as *mut Option<(Arc<K>, V)>) };
 

@@ -17,7 +17,7 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::discovery::NodeDiscovery;
 
@@ -28,6 +28,136 @@ const WALLET_VERSION: u32 = 1;
 const ARGON2_MEMORY_KB: u32 = 65536; // 64 MB
 const ARGON2_ITERATIONS: u32 = 3;
 const ARGON2_PARALLELISM: u32 = 4;
+
+/// Maximum failed attempts before lockout
+const MAX_FAILED_ATTEMPTS: u32 = 5;
+
+/// Base delay in milliseconds for exponential backoff
+const BASE_DELAY_MS: u64 = 1000;
+
+/// Maximum delay in milliseconds (5 minutes)
+const MAX_DELAY_MS: u64 = 300_000;
+
+/// Rate limiter for decryption attempts.
+///
+/// Implements exponential backoff to prevent brute-force password attacks.
+/// After MAX_FAILED_ATTEMPTS consecutive failures, a cooldown period is enforced.
+#[derive(Debug, Clone)]
+pub struct DecryptionRateLimiter {
+    /// Number of consecutive failed attempts
+    consecutive_failures: u32,
+    /// Timestamp of last failed attempt (Unix epoch milliseconds)
+    last_failure_time: Option<u64>,
+}
+
+impl Default for DecryptionRateLimiter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl DecryptionRateLimiter {
+    /// Create a new rate limiter.
+    pub fn new() -> Self {
+        Self {
+            consecutive_failures: 0,
+            last_failure_time: None,
+        }
+    }
+
+    /// Get the current number of consecutive failures.
+    pub fn failure_count(&self) -> u32 {
+        self.consecutive_failures
+    }
+
+    /// Check if we're currently in a cooldown period.
+    /// Returns Ok(()) if allowed to attempt, Err with remaining wait time otherwise.
+    pub fn check_rate_limit(&self) -> Result<()> {
+        if self.consecutive_failures == 0 {
+            return Ok(());
+        }
+
+        let Some(last_failure) = self.last_failure_time else {
+            return Ok(());
+        };
+
+        let now = Self::current_time_ms();
+        let required_delay = self.calculate_delay();
+        let elapsed = now.saturating_sub(last_failure);
+
+        if elapsed < required_delay {
+            let remaining_secs = (required_delay - elapsed) / 1000;
+            return Err(anyhow!(
+                "Rate limited: please wait {} seconds before retrying ({} failed attempts)",
+                remaining_secs + 1,
+                self.consecutive_failures
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Calculate the delay required based on consecutive failures.
+    /// Uses exponential backoff: delay = base * 2^(failures - 1), capped at MAX_DELAY_MS
+    fn calculate_delay(&self) -> u64 {
+        if self.consecutive_failures == 0 {
+            return 0;
+        }
+
+        let exponent = self.consecutive_failures.saturating_sub(1).min(10);
+        let delay = BASE_DELAY_MS.saturating_mul(1u64 << exponent);
+        delay.min(MAX_DELAY_MS)
+    }
+
+    /// Record a failed decryption attempt.
+    pub fn record_failure(&mut self) {
+        self.consecutive_failures = self.consecutive_failures.saturating_add(1);
+        self.last_failure_time = Some(Self::current_time_ms());
+    }
+
+    /// Record a successful decryption (resets the limiter).
+    pub fn record_success(&mut self) {
+        self.consecutive_failures = 0;
+        self.last_failure_time = None;
+    }
+
+    /// Check if the account is locked out (exceeded max attempts).
+    pub fn is_locked_out(&self) -> bool {
+        self.consecutive_failures >= MAX_FAILED_ATTEMPTS
+    }
+
+    /// Get the current time in milliseconds since Unix epoch.
+    fn current_time_ms() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0)
+    }
+
+    /// Get human-readable remaining lockout time.
+    pub fn remaining_lockout_time(&self) -> Option<String> {
+        let Some(last_failure) = self.last_failure_time else {
+            return None;
+        };
+
+        let now = Self::current_time_ms();
+        let required_delay = self.calculate_delay();
+        let elapsed = now.saturating_sub(last_failure);
+
+        if elapsed >= required_delay {
+            return None;
+        }
+
+        let remaining_ms = required_delay - elapsed;
+        let remaining_secs = remaining_ms / 1000;
+
+        if remaining_secs >= 60 {
+            Some(format!("{} minutes", remaining_secs / 60 + 1))
+        } else {
+            Some(format!("{} seconds", remaining_secs + 1))
+        }
+    }
+}
 
 /// Encrypted wallet file structure
 #[derive(Serialize, Deserialize)]
@@ -87,8 +217,12 @@ impl EncryptedWallet {
         })
     }
 
-    /// Decrypt the wallet to retrieve the mnemonic
-    pub fn decrypt(&self, password: &str) -> Result<String> {
+    /// Decrypt the wallet to retrieve the mnemonic.
+    ///
+    /// Security: Returns `Zeroizing<String>` which automatically overwrites
+    /// the memory with zeros when dropped, preventing the mnemonic from
+    /// persisting in memory after use.
+    pub fn decrypt(&self, password: &str) -> Result<Zeroizing<String>> {
         // Check version
         if self.version != WALLET_VERSION {
             return Err(anyhow!(
@@ -120,8 +254,70 @@ impl EncryptedWallet {
             .decrypt(nonce, ciphertext.as_slice())
             .map_err(|_| anyhow!("Decryption failed - wrong password?"))?;
 
-        String::from_utf8(plaintext)
-            .map_err(|_| anyhow!("Invalid mnemonic encoding"))
+        // Wrap in Zeroizing immediately for secure cleanup
+        let mnemonic = String::from_utf8(plaintext)
+            .map_err(|_| anyhow!("Invalid mnemonic encoding"))?;
+        Ok(Zeroizing::new(mnemonic))
+    }
+
+    /// Decrypt the wallet with rate limiting protection.
+    ///
+    /// This method enforces exponential backoff on failed attempts to protect
+    /// against brute-force password attacks. The rate limiter state is updated
+    /// based on success or failure.
+    ///
+    /// # Arguments
+    /// * `password` - The password to decrypt the wallet
+    /// * `rate_limiter` - A mutable reference to the rate limiter state
+    ///
+    /// # Returns
+    /// * `Ok(Zeroizing<String>)` - The decrypted mnemonic on success (auto-zeroized on drop)
+    /// * `Err` - Rate limit exceeded, or decryption failed
+    pub fn decrypt_with_rate_limit(
+        &self,
+        password: &str,
+        rate_limiter: &mut DecryptionRateLimiter,
+    ) -> Result<Zeroizing<String>> {
+        // Check if we're rate limited
+        rate_limiter.check_rate_limit()?;
+
+        // Check for lockout
+        if rate_limiter.is_locked_out() {
+            if let Some(remaining) = rate_limiter.remaining_lockout_time() {
+                return Err(anyhow!(
+                    "Account temporarily locked due to too many failed attempts. Try again in {}",
+                    remaining
+                ));
+            }
+        }
+
+        // Attempt decryption
+        match self.decrypt(password) {
+            Ok(mnemonic) => {
+                rate_limiter.record_success();
+                Ok(mnemonic)
+            }
+            Err(e) => {
+                rate_limiter.record_failure();
+
+                // Provide helpful error message based on failure count
+                let failures = rate_limiter.failure_count();
+                if failures >= MAX_FAILED_ATTEMPTS {
+                    Err(anyhow!(
+                        "Decryption failed. Account locked for {} due to {} failed attempts",
+                        rate_limiter.remaining_lockout_time().unwrap_or_else(|| "some time".to_string()),
+                        failures
+                    ))
+                } else {
+                    let remaining_attempts = MAX_FAILED_ATTEMPTS - failures;
+                    Err(anyhow!(
+                        "{}. {} attempt(s) remaining before temporary lockout",
+                        e,
+                        remaining_attempts
+                    ))
+                }
+            }
+        }
     }
 
     /// Save the wallet to a file
@@ -332,6 +528,10 @@ fn set_windows_owner_only_acl(path: &Path) -> Result<()> {
     use windows::core::PCWSTR;
 
     // Get current process token and user SID
+    // SAFETY: GetCurrentProcess returns a pseudo-handle that doesn't require closing.
+    // OpenProcessToken is called with valid parameters: the process handle, TOKEN_QUERY
+    // permission, and a valid mutable pointer to receive the token handle. The token
+    // handle is later closed with CloseHandle after use.
     let token = unsafe {
         let mut token = HANDLE::default();
         let current_process = windows::Win32::System::Threading::GetCurrentProcess();
@@ -345,11 +545,21 @@ fn set_windows_owner_only_acl(path: &Path) -> Result<()> {
 
     // Get token user info
     let mut token_info_len = 0u32;
+    // SAFETY: First call to GetTokenInformation with null buffer to query required size.
+    // The function is called with a valid token handle and writes the required buffer
+    // size to token_info_len. The return value is ignored as this call is expected to
+    // fail with ERROR_INSUFFICIENT_BUFFER.
     unsafe {
         let _ = GetTokenInformation(token, TokenUser, None, 0, &mut token_info_len);
     }
 
     let mut token_info = vec![0u8; token_info_len as usize];
+    // SAFETY: Second call to GetTokenInformation with properly sized buffer.
+    // - token is a valid handle obtained from OpenProcessToken above
+    // - token_info buffer is allocated with the exact size returned by the first call
+    // - token_info_len correctly reflects the buffer size
+    // - CloseHandle is called on the token handle which was successfully opened
+    // The token_info buffer will contain a valid TOKEN_USER structure after success.
     unsafe {
         GetTokenInformation(
             token,
@@ -361,6 +571,10 @@ fn set_windows_owner_only_acl(path: &Path) -> Result<()> {
         CloseHandle(token)?;
     }
 
+    // SAFETY: The token_info buffer was filled by GetTokenInformation with TokenUser class.
+    // The Windows API guarantees the buffer contains a valid TOKEN_USER structure when
+    // the call succeeds. The buffer is properly aligned (heap-allocated) and the
+    // reference is valid for the lifetime of token_info.
     let token_user = unsafe { &*(token_info.as_ptr() as *const TOKEN_USER) };
     let user_sid = token_user.User.Sid;
 
@@ -379,6 +593,11 @@ fn set_windows_owner_only_acl(path: &Path) -> Result<()> {
 
     // Create ACL with the explicit access entry
     let mut new_acl: *mut ACL = std::ptr::null_mut();
+    // SAFETY: SetEntriesInAclW is called with:
+    // - A valid slice containing one EXPLICIT_ACCESS_W entry
+    // - None for the existing ACL (creating a new one)
+    // - A valid mutable pointer to receive the new ACL
+    // The resulting ACL pointer must be freed with LocalFree when done.
     unsafe {
         SetEntriesInAclW(Some(&[ea]), None, &mut new_acl)?;
     }
@@ -390,6 +609,13 @@ fn set_windows_owner_only_acl(path: &Path) -> Result<()> {
         .collect();
 
     // Set the new DACL on the file
+    // SAFETY: SetNamedSecurityInfoW is called with:
+    // - A valid null-terminated wide string path (path_wide)
+    // - SE_FILE_OBJECT indicating this is a file path
+    // - Security info flags to set DACL with protection
+    // - Default (null) owner and group SIDs (not being modified)
+    // - The ACL created by SetEntriesInAclW above
+    // The path_wide Vec lives through this call, so the pointer remains valid.
     let result = unsafe {
         SetNamedSecurityInfoW(
             PCWSTR::from_raw(path_wide.as_ptr()),
@@ -403,6 +629,9 @@ fn set_windows_owner_only_acl(path: &Path) -> Result<()> {
     };
 
     // Free the ACL
+    // SAFETY: new_acl was allocated by SetEntriesInAclW and must be freed with LocalFree.
+    // We check for null before freeing. LocalFree takes ownership of the memory and
+    // invalidates the pointer - we don't use new_acl after this point.
     if !new_acl.is_null() {
         unsafe {
             let _ = LocalFree(HLOCAL(new_acl as *mut _));
@@ -429,7 +658,7 @@ mod tests {
     fn test_encrypt_decrypt() {
         let wallet = EncryptedWallet::encrypt(TEST_MNEMONIC, TEST_PASSWORD).unwrap();
         let decrypted = wallet.decrypt(TEST_PASSWORD).unwrap();
-        assert_eq!(decrypted, TEST_MNEMONIC);
+        assert_eq!(&*decrypted, TEST_MNEMONIC);
     }
 
     #[test]
@@ -449,7 +678,7 @@ mod tests {
 
         let loaded = EncryptedWallet::load(&wallet_path).unwrap();
         let decrypted = loaded.decrypt(TEST_PASSWORD).unwrap();
-        assert_eq!(decrypted, TEST_MNEMONIC);
+        assert_eq!(&*decrypted, TEST_MNEMONIC);
     }
 
     #[test]
@@ -464,7 +693,7 @@ mod tests {
 
         // New password should work
         let decrypted = wallet.decrypt(new_password).unwrap();
-        assert_eq!(decrypted, TEST_MNEMONIC);
+        assert_eq!(&*decrypted, TEST_MNEMONIC);
     }
 
     #[test]
@@ -487,5 +716,124 @@ mod tests {
 
         wallet.set_sync_height(12345);
         assert_eq!(wallet.sync_height, 12345);
+    }
+
+    #[test]
+    fn test_rate_limiter_initial_state() {
+        let limiter = DecryptionRateLimiter::new();
+        assert_eq!(limiter.failure_count(), 0);
+        assert!(!limiter.is_locked_out());
+        assert!(limiter.check_rate_limit().is_ok());
+    }
+
+    #[test]
+    fn test_rate_limiter_records_failures() {
+        let mut limiter = DecryptionRateLimiter::new();
+
+        limiter.record_failure();
+        assert_eq!(limiter.failure_count(), 1);
+
+        limiter.record_failure();
+        assert_eq!(limiter.failure_count(), 2);
+    }
+
+    #[test]
+    fn test_rate_limiter_resets_on_success() {
+        let mut limiter = DecryptionRateLimiter::new();
+
+        limiter.record_failure();
+        limiter.record_failure();
+        assert_eq!(limiter.failure_count(), 2);
+
+        limiter.record_success();
+        assert_eq!(limiter.failure_count(), 0);
+        assert!(!limiter.is_locked_out());
+    }
+
+    #[test]
+    fn test_rate_limiter_lockout_after_max_attempts() {
+        let mut limiter = DecryptionRateLimiter::new();
+
+        for _ in 0..MAX_FAILED_ATTEMPTS {
+            limiter.record_failure();
+        }
+
+        assert!(limiter.is_locked_out());
+        assert_eq!(limiter.failure_count(), MAX_FAILED_ATTEMPTS);
+    }
+
+    #[test]
+    fn test_decrypt_with_rate_limit_success() {
+        let wallet = EncryptedWallet::encrypt(TEST_MNEMONIC, TEST_PASSWORD).unwrap();
+        let mut limiter = DecryptionRateLimiter::new();
+
+        let result = wallet.decrypt_with_rate_limit(TEST_PASSWORD, &mut limiter);
+        assert!(result.is_ok());
+        assert_eq!(&*result.unwrap(), TEST_MNEMONIC);
+        assert_eq!(limiter.failure_count(), 0);
+    }
+
+    #[test]
+    fn test_decrypt_with_rate_limit_failure_increments() {
+        let wallet = EncryptedWallet::encrypt(TEST_MNEMONIC, TEST_PASSWORD).unwrap();
+        let mut limiter = DecryptionRateLimiter::new();
+
+        let result = wallet.decrypt_with_rate_limit("wrong-password", &mut limiter);
+        assert!(result.is_err());
+        assert_eq!(limiter.failure_count(), 1);
+
+        // Wait for rate limit delay (1 second for first failure)
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+
+        let result = wallet.decrypt_with_rate_limit("wrong-password", &mut limiter);
+        assert!(result.is_err());
+        assert_eq!(limiter.failure_count(), 2);
+    }
+
+    #[test]
+    fn test_decrypt_with_rate_limit_success_after_failure() {
+        let wallet = EncryptedWallet::encrypt(TEST_MNEMONIC, TEST_PASSWORD).unwrap();
+        let mut limiter = DecryptionRateLimiter::new();
+
+        // Fail once
+        let _ = wallet.decrypt_with_rate_limit("wrong-password", &mut limiter);
+        assert_eq!(limiter.failure_count(), 1);
+
+        // Wait for rate limit (in test we can skip this by checking immediately
+        // since the delay is 1 second for first failure)
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+
+        // Succeed
+        let result = wallet.decrypt_with_rate_limit(TEST_PASSWORD, &mut limiter);
+        assert!(result.is_ok());
+        assert_eq!(limiter.failure_count(), 0);
+    }
+
+    #[test]
+    fn test_exponential_backoff_calculation() {
+        let mut limiter = DecryptionRateLimiter::new();
+
+        // No delay with 0 failures
+        assert_eq!(limiter.calculate_delay(), 0);
+
+        // 1 second with 1 failure
+        limiter.record_failure();
+        assert_eq!(limiter.calculate_delay(), 1000);
+
+        // 2 seconds with 2 failures
+        limiter.record_failure();
+        assert_eq!(limiter.calculate_delay(), 2000);
+
+        // 4 seconds with 3 failures
+        limiter.record_failure();
+        assert_eq!(limiter.calculate_delay(), 4000);
+
+        // 8 seconds with 4 failures
+        limiter.record_failure();
+        assert_eq!(limiter.calculate_delay(), 8000);
+
+        // 16 seconds with 5 failures (lockout threshold)
+        limiter.record_failure();
+        assert_eq!(limiter.calculate_delay(), 16000);
     }
 }

@@ -1,4 +1,5 @@
 #![no_std]
+#![deny(unsafe_code)]
 
 //! Simplified API for using Schnorrkel in a deterministic manner, with simple
 //! ristretto key pairs, where the public key is a RistretoPoint and the private

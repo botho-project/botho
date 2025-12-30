@@ -95,6 +95,40 @@ pub struct GossipConfig {
 
     /// Minimum number of peers before we consider ourselves bootstrapped
     pub min_peers_for_bootstrap: usize,
+
+    /// Per-peer rate limiting configuration
+    pub rate_limit: PeerRateLimitConfig,
+}
+
+/// Configuration for per-peer gossipsub rate limiting.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PeerRateLimitConfig {
+    /// Maximum messages per second per peer before throttling
+    pub max_messages_per_second: u32,
+
+    /// Maximum messages in burst window before throttling
+    pub burst_limit: u32,
+
+    /// Burst window duration in milliseconds
+    pub burst_window_ms: u64,
+
+    /// Number of rate limit violations before disconnecting peer
+    pub disconnect_threshold: u32,
+
+    /// Whether to enable per-peer rate limiting
+    pub enabled: bool,
+}
+
+impl Default for PeerRateLimitConfig {
+    fn default() -> Self {
+        Self {
+            max_messages_per_second: 10,
+            burst_limit: 50,
+            burst_window_ms: 5000, // 5 second window
+            disconnect_threshold: 3,
+            enabled: true,
+        }
+    }
 }
 
 impl Default for GossipConfig {
@@ -114,6 +148,7 @@ impl Default for GossipConfig {
             request_timeout_secs: 30,
             accept_unknown_peers: true,
             min_peers_for_bootstrap: 3,
+            rate_limit: PeerRateLimitConfig::default(),
         }
     }
 }

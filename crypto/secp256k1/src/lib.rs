@@ -1,5 +1,7 @@
 // Copyright (c) 2024 The Botho Foundation
 
+#![deny(unsafe_code)]
+
 //! Secp256k1 key support for Ethereum compatibility.
 //!
 //! This crate provides Ethereum-compatible key derivation and signing using

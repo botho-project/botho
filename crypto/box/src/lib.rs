@@ -1,6 +1,7 @@
 // Copyright (c) 2018-2022 The Botho Foundation
 
 #![no_std]
+#![deny(unsafe_code)]
 
 //! This crate implements a simple authenticated public-key crypto API, for
 //! messages of arbitrary length.

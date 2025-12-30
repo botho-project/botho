@@ -5,12 +5,17 @@
 //!
 //! When the `pq` feature is enabled, this module also provides quantum-safe
 //! keys derived from the same mnemonic, using ML-KEM-768 and ML-DSA-65.
+//!
+//! Security: Mnemonic phrases are stored in `Zeroizing<String>` wrappers that
+//! automatically overwrite memory with zeros when dropped, preventing sensitive
+//! recovery phrases from persisting in memory.
 
 use anyhow::{anyhow, Result};
 use bip39::{Language, Mnemonic};
 use bth_account_keys::{AccountKey, PublicAddress};
 use bth_core::slip10::Slip10KeyGenerator;
 use bth_crypto_keys::RistrettoSignature;
+use zeroize::Zeroizing;
 
 #[cfg(feature = "pq")]
 use bth_account_keys::{QuantumSafeAccountKey, QuantumSafePublicAddress};
@@ -18,11 +23,15 @@ use bth_account_keys::{QuantumSafeAccountKey, QuantumSafePublicAddress};
 /// Number of words in the mnemonic phrase
 const MNEMONIC_WORDS: usize = 24;
 
-/// Wallet keys derived from a BIP39 mnemonic
+/// Wallet keys derived from a BIP39 mnemonic.
+///
+/// Security: The mnemonic phrase is stored in a `Zeroizing<String>` wrapper
+/// that automatically overwrites the memory with zeros when dropped,
+/// preventing the sensitive recovery phrase from persisting in memory.
 #[derive(Clone)]
 pub struct WalletKeys {
-    /// The mnemonic phrase (string, since Mnemonic doesn't implement Clone)
-    mnemonic_phrase: String,
+    /// Mnemonic phrase wrapped in Zeroizing for secure memory cleanup on drop.
+    mnemonic_phrase: Zeroizing<String>,
 
     /// The derived account key
     account_key: AccountKey,
@@ -56,7 +65,8 @@ impl WalletKeys {
 
     /// Internal constructor from validated mnemonic
     fn from_mnemonic_internal(mnemonic: Mnemonic) -> Result<Self> {
-        let phrase = mnemonic.phrase().to_string();
+        // Wrap in Zeroizing immediately to ensure secure cleanup
+        let phrase = Zeroizing::new(mnemonic.phrase().to_string());
 
         // Derive keys using SLIP-0010 (account index 0)
         let slip10_key = mnemonic.derive_slip10_key(0);

@@ -10,6 +10,7 @@
 
 #![cfg_attr(not(test), no_std)]
 #![deny(missing_docs)]
+#![deny(unsafe_code)]
 
 extern crate alloc;
 

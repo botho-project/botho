@@ -1,4 +1,5 @@
 #![no_std]
+#![deny(unsafe_code)]
 
 mod blake2b_256;
 pub use blake2::Blake2b512;

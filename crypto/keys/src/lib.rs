@@ -47,6 +47,7 @@
 //! ```
 
 #![no_std]
+#![deny(unsafe_code)]
 
 #[cfg(feature = "alloc")]
 extern crate alloc;

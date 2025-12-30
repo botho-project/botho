@@ -1,3 +1,5 @@
+#![deny(unsafe_code)]
+
 //! Post-Quantum Cryptographic Primitives for Botho
 //!
 //! This crate provides wrappers around NIST-standardized post-quantum algorithms:

@@ -5,6 +5,7 @@
 
 #![no_std]
 #![deny(missing_docs)]
+#![deny(unsafe_code)]
 #![cfg_attr(not(feature = "alloc"), allow(dead_code))]
 
 #[cfg(feature = "alloc")]

@@ -1,5 +1,8 @@
 // Copyright (c) 2024 Botho Foundation
 
+#![cfg_attr(not(feature = "std"), no_std)]
+#![deny(unsafe_code)]
+
 //! Lion: Lattice-based Linkable Ring Signatures for Botho
 //!
 //! This crate implements the Lion post-quantum ring signature scheme,
@@ -74,8 +77,6 @@
 //! | Secret Key | 800 bytes |
 //! | Key Image | 1,312 bytes |
 //! | Signature (7 members) | ~17.5 KB |
-
-#![cfg_attr(not(feature = "std"), no_std)]
 
 #[cfg(feature = "std")]
 extern crate std;

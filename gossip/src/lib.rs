@@ -94,6 +94,7 @@ pub mod config;
 pub mod consensus_integration;
 pub mod error;
 pub mod messages;
+pub mod rate_limit;
 pub mod service;
 pub mod store;
 
@@ -106,7 +107,8 @@ pub use behaviour::{GossipBehaviour, GossipCommand, GossipEvent, GossipHandle};
 pub use consensus_integration::{
     start_consensus_gossip, ConsensusGossipConfig, ConsensusGossipHandle,
 };
-pub use config::{GossipConfig, GossipConfigBuilder, NetworkId};
+pub use config::{GossipConfig, GossipConfigBuilder, NetworkId, PeerRateLimitConfig};
+pub use rate_limit::{PeerRateLimiter, PeerRateStats, RateLimitResult};
 pub use error::{GossipError, GossipResult};
 pub use messages::{
     BlockBroadcast, GossipMessage, NodeAnnouncement, NodeCapabilities, PeerInfo,

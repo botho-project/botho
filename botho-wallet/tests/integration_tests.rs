@@ -45,7 +45,7 @@ mod wallet_lifecycle {
 
         // 4. Decrypt and verify
         let decrypted = loaded.decrypt(TEST_PASSWORD).unwrap();
-        assert_eq!(decrypted, mnemonic);
+        assert_eq!(decrypted.as_str(), mnemonic.as_str());
 
         // 5. Restore keys from mnemonic
         let restored_keys = WalletKeys::from_mnemonic(&decrypted).unwrap();
