@@ -74,12 +74,6 @@ members = [
 exclude = [
     # bth-util-serial should only be accessed via the `common` crate.
     "util/serial",
-    # Watcher is SGX-specific and removed post-SGX
-    "watcher",
-    "watcher/api",
-    # grpcio utilities replaced by tonic
-    "util/grpc",
-    "util/build/grpc",
     # Tauri desktop wallet has its own Cargo workspace
     "web/packages/desktop/src-tauri",
 ]

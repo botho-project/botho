@@ -19,7 +19,6 @@ fn main() {
             "external.proto",
             "printable.proto",
             "quorum_set.proto",
-            "watcher.proto",
         ],
     );
 }
