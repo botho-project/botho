@@ -16,7 +16,7 @@ Botho supports three transaction types, each designed for specific use cases wit
 | **Ring Size** | — | 20 decoys | 11 decoys |
 | **Max Inputs** | 1 | 16 | 8 |
 | **Quantum Resistance** | Full | Recipient: full, Sender: classical | Full |
-| **Approx. Size** | ~1.5 KB | ~4 KB | ~40 KB |
+| **Approx. Size** | ~1.5 KB | ~4 KB | ~65 KB |
 | **Max Tx Size** | N/A | 100 KB | 512 KB |
 | **Fee** | None | size-based | size-based |
 
@@ -49,8 +49,8 @@ Users who need quantum-resistant sender privacy should use PQ-Private: whistlebl
 | Amount commitments | Pedersen | Hide transaction amounts | 32 B | Hiding: unconditional |
 | Range proofs | Bulletproofs | Prove amounts are valid | ~700 B | Classical |
 | Minting auth | ML-DSA-65 | Authorize minting | 3309 B | Post-quantum |
-| Classical ring sig | CLSAG (ring=20) | Hide sender (Standard-Private) | ~700 B | Classical |
-| PQ ring sig | LION (ring=11) | Hide sender (PQ-Private) | ~36 KB | Post-quantum |
+| Classical ring sig | CLSAG (ring=20) | Hide sender (Standard-Private) | ~700 B/input | Classical |
+| PQ ring sig | LION (ring=11) | Hide sender (PQ-Private) | ~36 KB/input | Post-quantum |
 | Key images | Scheme-derived | Prevent double-spending | 32 B (CLSAG), 1312 B (LION) | Matches scheme |
 
 ---
@@ -164,15 +164,15 @@ CLSAG (Concise Linkable Spontaneous Anonymous Group) provides:
 
 ## PQ-Private Transactions (LION)
 
-PQ-Private transactions provide maximum privacy by hiding the sender within a ring of 20 possible signers using LION post-quantum ring signatures.
+PQ-Private transactions provide maximum privacy by hiding the sender within a ring of 11 possible signers using LION post-quantum ring signatures.
 
 ### Properties
 
-- **Inputs**: Ring of 20 possible outputs + LION ring signature
+- **Inputs**: Ring of 11 possible outputs + LION ring signature
 - **Outputs**: Stealth addresses with committed amounts
-- **Authorization**: LION ring signature (sender hidden among 20 members)
+- **Authorization**: LION ring signature (sender hidden among 11 members)
 - **Amount Privacy**: Hidden via Pedersen commitments + Bulletproofs
-- **Sender Privacy**: Hidden via ring signature (1-in-20 anonymity)
+- **Sender Privacy**: Hidden via ring signature (1-in-11 anonymity)
 - **Quantum Resistance**: Full (both recipient and sender privacy are PQ)
 
 ### Structure
@@ -186,9 +186,9 @@ PqPrivateTx {
 }
 
 LionRingInput {
-    ring: [RingMember; 20],         // 20 possible source outputs
+    ring: [RingMember; 11],         // 11 possible source outputs
     key_image: [u8; 1312],          // LION key image (larger than CLSAG)
-    lion_signature: Vec<u8>,        // ~63 KB per input
+    lion_signature: Vec<u8>,        // ~36 KB per input
 }
 ```
 
@@ -198,10 +198,10 @@ LION (Lattice-based lInkable ring signatures fOr aNonymity) provides:
 
 | Property | Description |
 |----------|-------------|
-| **Sender anonymity** | Signature proves ownership of 1-of-20 outputs without revealing which |
+| **Sender anonymity** | Signature proves ownership of 1-of-11 outputs without revealing which |
 | **Linkability** | Key images prevent double-spending without revealing the signer |
 | **Post-quantum security** | Based on Module-LWE, ~128-bit PQ security level |
-| **Ring size** | 20 members |
+| **Ring size** | 11 members |
 
 ### Key Images
 
@@ -353,7 +353,7 @@ fee = fee_per_byte × tx_size × cluster_factor
 |------|-----------|----------------|-------------------|------------------|------------------|
 | Minting | — | ~3.3 KB (ML-DSA) | ~1.5 KB | 0 | 0 |
 | Standard-Private | 20 | ~0.7 KB (CLSAG) | ~4 KB | ~4,000 nanoBTH | ~24,000 nanoBTH |
-| PQ-Private | 11 | ~36 KB (LION) | ~40 KB | ~40,000 nanoBTH | ~240,000 nanoBTH |
+| PQ-Private | 11 | ~36 KB (LION) | ~65 KB | ~65,000 nanoBTH | ~390,000 nanoBTH |
 
 ### Transaction Limits
 
@@ -395,11 +395,11 @@ The cluster factor (1x to 6x) discourages wealth concentration by increasing fee
 
 ### Summary
 
-| If you need... | Use | Size | Fee |
-|----------------|-----|------|-----|
-| Block rewards | Minting | ~1.5 KB | 0 |
-| Privacy (everyday) | Standard-Private | ~4 KB | size-based |
-| Privacy (quantum-safe) | PQ-Private | ~65 KB | size-based |
+| If you need... | Use | Ring Size | Size | Fee |
+|----------------|-----|-----------|------|-----|
+| Block rewards | Minting | — | ~1.5 KB | 0 |
+| Privacy (everyday) | Standard-Private | 20 | ~4 KB | size-based |
+| Privacy (quantum-safe) | PQ-Private | 11 | ~65 KB | size-based |
 
 ### Quick Decision Guide
 
@@ -443,7 +443,7 @@ All transaction types provide strong quantum resistance where it matters most:
 
 | Attack | Standard-Private | PQ-Private |
 |--------|------------------|------------|
-| Sender identification | Mitigated (1-in-20) | Mitigated (1-in-20) |
+| Sender identification | Mitigated (1-in-20) | Mitigated (1-in-11) |
 | Amount correlation | Protected | Protected |
 | Timing analysis | Partially vulnerable | Partially vulnerable |
 | Recipient identification | Protected | Protected |

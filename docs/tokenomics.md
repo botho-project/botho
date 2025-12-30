@@ -10,7 +10,7 @@ Botho (BTH) uses a two-phase emission model designed for long-term sustainabilit
 | Smallest unit | nanoBTH (10⁻⁹ BTH) |
 | Pre-mine | None (100% mined) |
 | Phase 1 supply | ~100 million BTH |
-| Target block time | 20 seconds |
+| Block time | 3-40 seconds (dynamic based on load) |
 | Consensus | SCP (Stellar Consensus Protocol) |
 
 ## Unit System
@@ -67,21 +67,52 @@ At 100M BTH supply:
 
 ## Fee Structure
 
-Botho has a multi-layered fee system combining minimum fees with progressive taxation based on wealth concentration.
+Botho has a multi-layered fee system combining size-based fees, progressive wealth taxation, and dynamic congestion pricing.
 
-### Minimum Transaction Fee
+### Fee Formula
 
-| Parameter | Value |
-|-----------|-------|
-| Minimum fee | 400 µBTH (0.0004 BTH) |
-| Fee destination | Burned (removed from supply) |
-| Priority | Higher fees = faster confirmation |
+```
+fee = dynamic_base × tx_size × cluster_factor + memo_fees
+```
+
+| Component | Range | Description |
+|-----------|-------|-------------|
+| `dynamic_base` | 1-100 nanoBTH/byte | Adjusts based on network congestion |
+| `tx_size` | ~4-65 KB | Transaction size in bytes |
+| `cluster_factor` | 1x-6x | Progressive multiplier based on sender's cluster wealth |
+| `memo_fees` | 100 nanoBTH/memo | Additional fee for encrypted memos |
 
 All transaction fees are **burned**, creating deflationary pressure that offsets tail emission.
 
+### Size-Based Fees
+
+Fees are proportional to transaction size, ensuring larger transactions pay more:
+
+| Type | Ring Size | Typical Size | Base Fee (1x cluster) |
+|------|-----------|--------------|----------------------|
+| Standard-Private (CLSAG) | 20 | ~4 KB | ~4,000 nanoBTH |
+| PQ-Private (LION) | 11 | ~65 KB | ~65,000 nanoBTH |
+| Minting | — | ~1.5 KB | 0 (no fee) |
+
+### Dynamic Congestion Pricing
+
+The fee base adjusts based on network load using a **cascaded control system**:
+
+1. **Supply-side adaptation** (primary): Block timing adjusts from 40s to 3s based on transaction rate
+2. **Demand-side adaptation** (secondary): When at minimum block time and blocks are >75% full, fee base increases exponentially
+
+| Block Fullness | Fee Multiplier | Effect |
+|----------------|----------------|--------|
+| ≤75% | 1x | Fees at minimum |
+| 80% | ~1.5x | Gentle pressure |
+| 90% | ~3.3x | Moderate pressure |
+| 100% | ~7.4x | Strong back-pressure |
+
+This ensures fees stay low during normal operation while providing strong congestion control under extreme load.
+
 ### Cluster-Based Progressive Fees
 
-In addition to the minimum fee, Botho implements a novel **progressive fee system** that taxes wealth concentration without enabling Sybil attacks.
+Botho implements a novel **progressive fee system** that taxes wealth concentration without enabling Sybil attacks.
 
 **The Problem**: Traditional wealth taxes fail in cryptocurrency because users can split holdings across unlimited addresses.
 
@@ -92,19 +123,18 @@ In addition to the minimum fee, Botho implements a novel **progressive fee syste
 1. **Clusters**: Each minting reward creates a unique "cluster" identity
 2. **Tag Vectors**: Every UTXO carries a sparse vector tracking what fraction of its value traces back to each cluster origin
 3. **Cluster Wealth**: Total value in the system tagged to a given cluster: `W = Σ(balance × tag_weight)`
-4. **Progressive Rate**: Fee rate increases with cluster wealth via sigmoid curve
+4. **Progressive Multiplier**: Fee multiplier increases with cluster wealth via sigmoid curve
 
 ```
-fee_rate = sigmoid(cluster_wealth)
-         = min_rate + (max_rate - min_rate) / (1 + e^(-k(W - midpoint)))
+cluster_factor = 1 + 5 × sigmoid((W - midpoint) / steepness)
 ```
 
 #### Fee Parameters
 
 | Parameter | Value | Description |
 |-----------|-------|-------------|
-| Minimum rate | 0.05% | Small/diffused clusters |
-| Maximum rate | 30% | Large concentrated clusters |
+| Minimum multiplier | 1x | Small/diffused clusters |
+| Maximum multiplier | 6x | Large concentrated clusters |
 | Midpoint | 10M BTH | Sigmoid inflection point |
 | Decay rate | 5% per hop | Tag decay per transaction |
 
@@ -112,7 +142,7 @@ fee_rate = sigmoid(cluster_wealth)
 
 Splitting coins across addresses doesn't reduce fees because:
 
-- Fee rate depends on **cluster wealth**, not transaction size or account count
+- Fee multiplier depends on **cluster wealth**, not transaction size or account count
 - All UTXOs tracing to the same minting origin pay the same rate
 - The only way to reduce fees is genuine economic activity that diffuses coins
 
@@ -126,55 +156,74 @@ Tags decay by ~5% per transaction hop:
 
 **Economic effect**: Encourages velocity of money and discourages extreme wealth accumulation.
 
+## Block Timing
+
+Botho uses **dynamic block timing** that adapts to network load, providing faster finality under high load while conserving resources when idle.
+
+### Dynamic Timing Levels
+
+| Transaction Rate | Block Time | Capacity |
+|------------------|------------|----------|
+| 20+ tx/s | 3 seconds | ~600 tx/min |
+| 5+ tx/s | 5 seconds | ~300 tx/min |
+| 1+ tx/s | 10 seconds | ~100 tx/min |
+| 0.2+ tx/s | 20 seconds | ~50 tx/min |
+| <0.2 tx/s | 40 seconds | ~25 tx/min |
+
+This provides **13x capacity scaling** between idle and high-load conditions without protocol changes.
+
+### Why Dynamic Timing?
+
+- **Efficiency**: Slow blocks when idle reduce storage overhead
+- **Responsiveness**: Fast blocks under load improve user experience
+- **Congestion control**: Combined with dynamic fees, manages demand spikes
+
 ## Difficulty Adjustment
 
-Botho uses adaptive difficulty adjustment with different strategies for each phase.
+Botho uses **transaction-based difficulty adjustment** that targets monetary policy goals rather than block timing (which is handled by dynamic timing above).
 
 ### Parameters
 
 | Parameter | Value |
 |-----------|-------|
-| Target block time | 20 seconds |
-| Minimum block time | 15 seconds |
-| Maximum block time | 30 seconds |
-| Adjustment interval | 1,440 blocks (~8 hours) |
+| Adjustment epoch | 10,000 transactions |
+| Min difficulty | 1,000 |
 | Max adjustment | ±25% per epoch |
 
-### Phase 1: Time-Based Adjustment
+### Phase 1: Emission-Tracking Adjustment
 
-Standard difficulty adjustment targeting consistent block times:
+During the halving period, difficulty adjusts to maintain the target emission schedule:
 
 ```
-adjustment_ratio = expected_time / actual_time
+epoch_target_emission = halving_reward × target_blocks_per_epoch
+adjustment_ratio = epoch_target_emission / actual_epoch_emission
 new_difficulty = old_difficulty × clamp(ratio, 0.75, 1.25)
 ```
 
 ### Phase 2: Monetary-Aware Adjustment
 
-Blends timing consistency (30%) with inflation targeting (70%):
+After Phase 1, difficulty targets 2% net inflation by balancing gross emission against fee burns:
 
 ```
-timing_ratio = expected_time / actual_time
-monetary_ratio = target_net_emission / actual_net_emission
-
-blended_ratio = 0.3 × timing_ratio + 0.7 × monetary_ratio
-new_difficulty = old_difficulty × clamp(blended_ratio, 0.75, 1.25)
+target_gross = target_net_inflation + expected_fee_burns
+adjustment_ratio = target_gross / actual_gross
+new_difficulty = old_difficulty × clamp(ratio, 0.75, 1.25)
 ```
 
 This ensures:
-- If net emission is too high → difficulty increases → fewer blocks → less emission
-- If net emission is too low → difficulty decreases → more blocks → more emission
-- Block times stay within 15-30 second bounds regardless of monetary pressure
+- If net emission is too high → difficulty increases → fewer minting rewards
+- If net emission is too low → difficulty decreases → more minting rewards
+- Fee burn variations are automatically compensated
 
 ## Transaction Constraints
 
-| Parameter | Value |
-|-----------|-------|
-| Max transactions per block | 250 |
-| Max inputs per transaction | 16 |
-| Max outputs per transaction | 16 |
-| Ring size | 7 (for private transactions) |
-| Max tombstone | 20,160 blocks (~14 days) |
+| Parameter | Standard-Private | PQ-Private |
+|-----------|------------------|------------|
+| Max transactions per block | 100 | 100 |
+| Max inputs per transaction | 16 | 8 |
+| Max outputs per transaction | 16 | 16 |
+| Ring size | 20 (CLSAG) | 11 (LION) |
+| Max transaction size | 100 KB | 512 KB |
 
 ## Supply Projections
 
