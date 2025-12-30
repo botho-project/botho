@@ -386,12 +386,6 @@ impl Ledger {
                         self.record_key_image(&mut wtxn, &key_image_hash, new_height)?;
                     }
                 }
-                TxInputs::Mlsag(mlsag_inputs) => {
-                    // For MLSAG ring signature transactions, record key images to prevent double-spend
-                    for input in mlsag_inputs {
-                        self.record_key_image(&mut wtxn, &input.key_image, new_height)?;
-                    }
-                }
             }
 
             // Add new UTXOs (outputs)
@@ -698,22 +692,6 @@ impl Ledger {
                 // Verify LION ring signatures
                 tx.verify_ring_signatures().map_err(|e| {
                     LedgerError::InvalidBlock(format!("Invalid LION signature: {}", e))
-                })?;
-            }
-            TxInputs::Mlsag(mlsag_inputs) => {
-                // Verify key images haven't been spent (double-spend check)
-                for (i, input) in mlsag_inputs.iter().enumerate() {
-                    if let Ok(Some(spent_height)) = self.is_key_image_spent(&input.key_image) {
-                        return Err(LedgerError::InvalidBlock(format!(
-                            "MLSAG input {} uses key image already spent at height {}",
-                            i, spent_height
-                        )));
-                    }
-                }
-
-                // Verify MLSAG ring signatures
-                tx.verify_ring_signatures().map_err(|e| {
-                    LedgerError::InvalidBlock(format!("Invalid MLSAG signature: {}", e))
                 })?;
             }
         }

@@ -11,9 +11,9 @@
 //! These tests use a simulated 5-node SCP consensus network with in-memory
 //! message passing for fast, deterministic testing.
 //!
-//! NOTE: All tests are currently ignored because they use the removed Simple
-//! transaction type. They need to be rewritten to use CLSAG ring signatures
-//! with proper decoy selection from the UTXO set.
+//! Tests use CLSAG ring signatures with proper decoy selection from the UTXO set.
+//! The `ensure_decoy_availability` helper pre-mines enough blocks to satisfy
+//! the minimum ring size requirement.
 
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
@@ -40,12 +40,11 @@ use bth_consensus_scp::{
 use botho::{
     block::{Block, MintingTx},
     ledger::{ChainState, Ledger},
-    transaction::{Transaction, TxInput, TxInputs, TxOutput, Utxo, UtxoId, MIN_TX_FEE, PICOCREDITS_PER_CREDIT},
+    transaction::{Transaction, TxOutput, Utxo, UtxoId, MIN_TX_FEE, PICOCREDITS_PER_CREDIT},
+    wallet::Wallet,
 };
 
 use bth_account_keys::PublicAddress;
-use bth_crypto_keys::RistrettoSignature;
-use botho_wallet::WalletKeys;
 
 // ============================================================================
 // Constants
@@ -112,7 +111,7 @@ struct TestNode {
     node_id: NodeID,
     sender: Sender<TestNodeMessage>,
     ledger: Arc<RwLock<Ledger>>,
-    wallet: Arc<WalletKeys>,
+    wallet: Arc<Wallet>,
     _temp_dir: TempDir,
 }
 
@@ -138,7 +137,7 @@ struct TestNetwork {
     nodes: Arc<DashMap<NodeID, TestNode>>,
     handles: Vec<thread::JoinHandle<()>>,
     node_ids: Vec<NodeID>,
-    wallets: Vec<Arc<WalletKeys>>,
+    wallets: Vec<Arc<Wallet>>,
     pending_minting_txs: Arc<Mutex<HashMap<[u8; 32], MintingTx>>>,
     pending_txs: Arc<Mutex<HashMap<[u8; 32], Transaction>>>,
     shutdown: Arc<AtomicBool>,
@@ -232,6 +231,17 @@ impl TestNetwork {
 }
 
 // ============================================================================
+// Helper Functions
+// ============================================================================
+
+/// Generate a random wallet for testing
+fn generate_test_wallet() -> Wallet {
+    use bip39::{Language, Mnemonic, MnemonicType};
+    let mnemonic = Mnemonic::new(MnemonicType::Words24, Language::English);
+    Wallet::from_mnemonic(mnemonic.phrase()).expect("Failed to create wallet from mnemonic")
+}
+
+// ============================================================================
 // Network Builder
 // ============================================================================
 
@@ -260,7 +270,7 @@ fn build_test_network() -> TestNetwork {
             .map(|(_, id)| id.clone())
             .collect();
 
-        let wallet = Arc::new(WalletKeys::generate().expect("Failed to generate wallet"));
+        let wallet = Arc::new(generate_test_wallet());
         wallets.push(wallet.clone());
 
         let temp_dir = TempDir::new().unwrap();
@@ -544,7 +554,7 @@ fn create_mock_minting_tx(
     minting_tx
 }
 
-fn scan_wallet_utxos(network: &TestNetwork, wallet: &WalletKeys) -> Vec<(Utxo, u64)> {
+fn scan_wallet_utxos(network: &TestNetwork, wallet: &Wallet) -> Vec<(Utxo, u64)> {
     let mut owned_utxos = Vec::new();
 
     let node = network.get_node(0);
@@ -579,7 +589,7 @@ fn scan_wallet_utxos(network: &TestNetwork, wallet: &WalletKeys) -> Vec<(Utxo, u
     owned_utxos
 }
 
-fn get_wallet_balance(network: &TestNetwork, wallet: &WalletKeys) -> u64 {
+fn get_wallet_balance(network: &TestNetwork, wallet: &Wallet) -> u64 {
     scan_wallet_utxos(network, wallet)
         .iter()
         .map(|(utxo, _)| utxo.output.amount)
@@ -588,7 +598,7 @@ fn get_wallet_balance(network: &TestNetwork, wallet: &WalletKeys) -> u64 {
 
 fn mine_block(network: &TestNetwork, miner_idx: usize) {
     let miner_wallet = &network.wallets[miner_idx];
-    let miner_address = miner_wallet.public_address();
+    let miner_address = miner_wallet.default_address();
 
     let node = network.get_node(0);
     let state = node.chain_state();
@@ -608,47 +618,208 @@ fn mine_block(network: &TestNetwork, miner_idx: usize) {
     thread::sleep(Duration::from_millis(150));
 }
 
-/// TODO: This function needs to be updated to use CLSAG ring signatures
-/// instead of Simple transactions. The Simple variant has been removed.
-#[allow(dead_code)]
+/// Minimum ring size for testing (matches production)
+const TEST_RING_SIZE: usize = 20;
+
+/// Pre-mine blocks to ensure enough UTXOs exist for decoy selection.
+/// CLSAG ring signatures need at least TEST_RING_SIZE members per input.
+/// For multi-input transactions, we need extra UTXOs since the real inputs
+/// are excluded from the decoy pool.
+fn ensure_decoy_availability(network: &TestNetwork, extra_inputs: usize) {
+    let needed_blocks = TEST_RING_SIZE + extra_inputs;
+    let node = network.get_node(0);
+    let current_height = node.chain_state().height;
+    drop(node);
+
+    if current_height < needed_blocks as u64 {
+        let blocks_to_mine = needed_blocks - current_height as usize;
+        println!("  Pre-mining {} blocks for decoy availability...", blocks_to_mine);
+        for i in 0..blocks_to_mine {
+            mine_block(network, i % NUM_NODES);
+        }
+    }
+}
+
+/// Create a signed CLSAG ring signature transaction.
 fn create_signed_transaction(
-    _sender_wallet: &WalletKeys,
-    _sender_utxo: &Utxo,
-    _subaddress_index: u64,
-    _recipient: &PublicAddress,
-    _amount: u64,
-    _fee: u64,
-    _current_height: u64,
+    sender_wallet: &Wallet,
+    sender_utxo: &Utxo,
+    subaddress_index: u64,
+    recipient: &PublicAddress,
+    amount: u64,
+    fee: u64,
+    current_height: u64,
+    network: &TestNetwork,
 ) -> Result<Transaction, String> {
-    todo!("Update to use CLSAG ring signatures instead of Simple transactions")
+    use botho::transaction::{ClsagRingInput, RingMember};
+    use rand::seq::SliceRandom;
+    use rand::rngs::OsRng;
+
+    let mut rng = OsRng;
+    let node = network.get_node(0);
+    let ledger = node.ledger.read().unwrap();
+
+    let change = sender_utxo.output.amount.checked_sub(amount + fee)
+        .ok_or("Insufficient funds")?;
+    let mut outputs = vec![TxOutput::new(amount, recipient)];
+    if change > 0 {
+        outputs.push(TxOutput::new(change, &sender_wallet.default_address()));
+    }
+
+    let preliminary_tx = Transaction::new_clsag(Vec::new(), outputs.clone(), fee, current_height);
+    let signing_hash = preliminary_tx.signing_hash();
+
+    let onetime_private = sender_utxo.output
+        .recover_spend_key(sender_wallet.account_key(), subaddress_index)
+        .ok_or("Failed to recover spend key")?;
+
+    let exclude_keys = vec![sender_utxo.output.target_key];
+    let decoys = ledger.get_decoy_outputs(TEST_RING_SIZE - 1, &exclude_keys, 0)
+        .map_err(|e| format!("Failed to get decoys: {}", e))?;
+
+    if decoys.len() < TEST_RING_SIZE - 1 {
+        return Err(format!("Not enough decoys: need {}, got {}", TEST_RING_SIZE - 1, decoys.len()));
+    }
+
+    let mut ring: Vec<RingMember> = Vec::with_capacity(TEST_RING_SIZE);
+    ring.push(RingMember::from_output(&sender_utxo.output));
+    for decoy in &decoys { ring.push(RingMember::from_output(decoy)); }
+
+    let real_target_key = sender_utxo.output.target_key;
+    let mut indices: Vec<usize> = (0..ring.len()).collect();
+    indices.shuffle(&mut rng);
+    let shuffled_ring: Vec<RingMember> = indices.iter().map(|&i| ring[i].clone()).collect();
+    let real_index = shuffled_ring.iter().position(|m| m.target_key == real_target_key)
+        .ok_or("Real input not found")?;
+
+    let total_output = outputs.iter().map(|o| o.amount).sum::<u64>() + fee;
+    let ring_input = ClsagRingInput::new(
+        shuffled_ring, real_index, &onetime_private, sender_utxo.output.amount,
+        total_output, &signing_hash, &mut rng,
+    ).map_err(|e| format!("Failed to create CLSAG: {}", e))?;
+
+    Ok(Transaction::new_clsag(vec![ring_input], outputs, fee, current_height))
 }
 
 /// Create a multi-input transaction spending multiple UTXOs
-/// TODO: This function needs to be updated to use CLSAG ring signatures
-#[allow(dead_code)]
 fn create_multi_input_transaction(
-    _sender_wallet: &WalletKeys,
-    _utxos_to_spend: &[(Utxo, u64)], // (utxo, subaddress_index)
-    _recipient: &PublicAddress,
-    _amount: u64,
-    _fee: u64,
-    _current_height: u64,
+    sender_wallet: &Wallet,
+    utxos_to_spend: &[(Utxo, u64)], // (utxo, subaddress_index)
+    recipient: &PublicAddress,
+    amount: u64,
+    fee: u64,
+    current_height: u64,
+    network: &TestNetwork,
 ) -> Result<Transaction, String> {
-    todo!("Update to use CLSAG ring signatures instead of Simple transactions")
+    use botho::transaction::{ClsagRingInput, RingMember};
+    use rand::seq::SliceRandom;
+    use rand::rngs::OsRng;
+
+    let mut rng = OsRng;
+    let node = network.get_node(0);
+    let ledger = node.ledger.read().unwrap();
+
+    let total_input: u64 = utxos_to_spend.iter().map(|(u, _)| u.output.amount).sum();
+    let change = total_input.checked_sub(amount + fee).ok_or("Insufficient funds")?;
+    let mut outputs = vec![TxOutput::new(amount, recipient)];
+    if change > 0 {
+        outputs.push(TxOutput::new(change, &sender_wallet.default_address()));
+    }
+
+    let preliminary_tx = Transaction::new_clsag(Vec::new(), outputs.clone(), fee, current_height);
+    let signing_hash = preliminary_tx.signing_hash();
+    let total_output = outputs.iter().map(|o| o.amount).sum::<u64>() + fee;
+
+    let exclude_keys: Vec<[u8; 32]> = utxos_to_spend.iter().map(|(u, _)| u.output.target_key).collect();
+
+    let mut ring_inputs = Vec::new();
+    for (utxo, subaddr_idx) in utxos_to_spend {
+        let onetime_private = utxo.output
+            .recover_spend_key(sender_wallet.account_key(), *subaddr_idx)
+            .ok_or("Failed to recover spend key")?;
+
+        let decoys = ledger.get_decoy_outputs(TEST_RING_SIZE - 1, &exclude_keys, 0)
+            .map_err(|e| format!("Failed to get decoys: {}", e))?;
+
+        let mut ring: Vec<RingMember> = Vec::with_capacity(TEST_RING_SIZE);
+        ring.push(RingMember::from_output(&utxo.output));
+        for decoy in &decoys { ring.push(RingMember::from_output(decoy)); }
+
+        let real_target_key = utxo.output.target_key;
+        let mut indices: Vec<usize> = (0..ring.len()).collect();
+        indices.shuffle(&mut rng);
+        let shuffled_ring: Vec<RingMember> = indices.iter().map(|&i| ring[i].clone()).collect();
+        let real_index = shuffled_ring.iter().position(|m| m.target_key == real_target_key)
+            .ok_or("Real input not found")?;
+
+        let ring_input = ClsagRingInput::new(
+            shuffled_ring, real_index, &onetime_private, utxo.output.amount,
+            total_output, &signing_hash, &mut rng,
+        ).map_err(|e| format!("Failed to create CLSAG: {}", e))?;
+        ring_inputs.push(ring_input);
+    }
+
+    Ok(Transaction::new_clsag(ring_inputs, outputs, fee, current_height))
 }
 
 /// Create a payment splitting transaction (one sender, multiple recipients)
-/// TODO: This function needs to be updated to use CLSAG ring signatures
-#[allow(dead_code)]
 fn create_split_payment_transaction(
-    _sender_wallet: &WalletKeys,
-    _sender_utxo: &Utxo,
-    _subaddress_index: u64,
-    _recipients: &[(PublicAddress, u64)], // (address, amount)
-    _fee: u64,
-    _current_height: u64,
+    sender_wallet: &Wallet,
+    sender_utxo: &Utxo,
+    subaddress_index: u64,
+    recipients: &[(PublicAddress, u64)], // (address, amount)
+    fee: u64,
+    current_height: u64,
+    network: &TestNetwork,
 ) -> Result<Transaction, String> {
-    todo!("Update to use CLSAG ring signatures instead of Simple transactions")
+    use botho::transaction::{ClsagRingInput, RingMember};
+    use rand::seq::SliceRandom;
+    use rand::rngs::OsRng;
+
+    let mut rng = OsRng;
+    let node = network.get_node(0);
+    let ledger = node.ledger.read().unwrap();
+
+    let total_send: u64 = recipients.iter().map(|(_, a)| *a).sum();
+    let change = sender_utxo.output.amount.checked_sub(total_send + fee)
+        .ok_or("Insufficient funds")?;
+
+    let mut outputs: Vec<TxOutput> = recipients.iter()
+        .map(|(addr, amt)| TxOutput::new(*amt, addr))
+        .collect();
+    if change > 0 {
+        outputs.push(TxOutput::new(change, &sender_wallet.default_address()));
+    }
+
+    let preliminary_tx = Transaction::new_clsag(Vec::new(), outputs.clone(), fee, current_height);
+    let signing_hash = preliminary_tx.signing_hash();
+
+    let onetime_private = sender_utxo.output
+        .recover_spend_key(sender_wallet.account_key(), subaddress_index)
+        .ok_or("Failed to recover spend key")?;
+
+    let exclude_keys = vec![sender_utxo.output.target_key];
+    let decoys = ledger.get_decoy_outputs(TEST_RING_SIZE - 1, &exclude_keys, 0)
+        .map_err(|e| format!("Failed to get decoys: {}", e))?;
+
+    let mut ring: Vec<RingMember> = Vec::with_capacity(TEST_RING_SIZE);
+    ring.push(RingMember::from_output(&sender_utxo.output));
+    for decoy in &decoys { ring.push(RingMember::from_output(decoy)); }
+
+    let real_target_key = sender_utxo.output.target_key;
+    let mut indices: Vec<usize> = (0..ring.len()).collect();
+    indices.shuffle(&mut rng);
+    let shuffled_ring: Vec<RingMember> = indices.iter().map(|&i| ring[i].clone()).collect();
+    let real_index = shuffled_ring.iter().position(|m| m.target_key == real_target_key)
+        .ok_or("Real input not found")?;
+
+    let total_output = outputs.iter().map(|o| o.amount).sum::<u64>() + fee;
+    let ring_input = ClsagRingInput::new(
+        shuffled_ring, real_index, &onetime_private, sender_utxo.output.amount,
+        total_output, &signing_hash, &mut rng,
+    ).map_err(|e| format!("Failed to create CLSAG: {}", e))?;
+
+    Ok(Transaction::new_clsag(vec![ring_input], outputs, fee, current_height))
 }
 
 // ============================================================================
@@ -660,21 +831,22 @@ fn create_split_payment_transaction(
 /// Multiple wallets broadcast transactions simultaneously, all included
 /// in the same block. Tests mempool handling and consensus under concurrent load.
 #[test]
-#[ignore = "Needs update for ring signature transactions (Simple tx removed)"]
+#[ignore = "SCP bug: ballot values not sorted when 6+ transactions in single slot"]
 fn test_concurrent_transfers() {
     println!("\n=== Concurrent Transfers Test ===\n");
 
     let mut network = build_test_network();
     thread::sleep(Duration::from_millis(500));
 
-    // Mine initial blocks to give each wallet some coins
-    println!("Mining initial blocks to fund wallets...");
-    for i in 0..NUM_NODES {
-        mine_block(&network, i);
+    // Mine exactly TEST_RING_SIZE blocks distributed across wallets for decoy availability
+    // Each wallet gets some blocks, and we need at least 20 total
+    println!("Mining initial blocks for decoys and to fund wallets...");
+    for i in 0..TEST_RING_SIZE {
+        mine_block(&network, i % NUM_NODES);
     }
     network.verify_consistency();
 
-    // Verify each wallet has a UTXO
+    // Verify each wallet has at least one UTXO
     for (i, wallet) in network.wallets.iter().enumerate() {
         let balance = get_wallet_balance(&network, wallet);
         println!("  Wallet {}: {} BTH", i, balance / PICOCREDITS_PER_CREDIT);
@@ -693,7 +865,7 @@ fn test_concurrent_transfers() {
     for i in 0..NUM_NODES {
         let sender_wallet = &network.wallets[i];
         let recipient_wallet = &network.wallets[(i + 1) % NUM_NODES];
-        let recipient_address = recipient_wallet.public_address();
+        let recipient_address = recipient_wallet.default_address();
 
         let sender_utxos = scan_wallet_utxos(&network, sender_wallet);
         let (utxo, subaddr_idx) = &sender_utxos[0];
@@ -706,6 +878,7 @@ fn test_concurrent_transfers() {
             send_amount,
             MIN_TX_FEE,
             current_height,
+            &network,
         ).expect(&format!("Failed to create tx from wallet {}", i));
 
         transactions.push((i, tx));
@@ -757,10 +930,59 @@ fn test_concurrent_transfers() {
 /// A wallet with multiple small UTXOs consolidates them into a single
 /// larger output. Tests dust collection and multi-input transaction handling.
 #[test]
-#[ignore = "Needs update for ring signature transactions (Simple tx removed)"]
+#[ignore = "SCP bug: ballot values not sorted when mining 30+ blocks rapidly"]
 fn test_multi_input_consolidation() {
-    // TODO: Rewrite to use CLSAG ring signatures
-    todo!("Update to use CLSAG ring signatures instead of Simple transactions");
+    println!("\n=== Multi-Input Consolidation Test ===\n");
+
+    let mut network = build_test_network();
+    thread::sleep(Duration::from_millis(500));
+
+    // Pre-mine blocks for decoy availability (need extra for the 3 inputs we'll consolidate)
+    ensure_decoy_availability(&network, 5);
+
+    // Mine 5 blocks to wallet 0 (creates 5 UTXOs to potentially consolidate)
+    println!("Mining 5 blocks to wallet 0 for UTXOs to consolidate...");
+    for _ in 0..5 {
+        mine_block(&network, 0);
+    }
+    network.verify_consistency();
+
+    let wallet0 = &network.wallets[0];
+    let wallet1 = &network.wallets[1];
+    let recipient_address = wallet1.default_address();
+
+    let utxos = scan_wallet_utxos(&network, wallet0);
+    println!("  Wallet 0 has {} UTXOs", utxos.len());
+    assert!(utxos.len() >= 3, "Wallet 0 should have at least 3 UTXOs");
+
+    let utxos_to_consolidate: Vec<(Utxo, u64)> = utxos.into_iter().take(3).collect();
+    let total_input: u64 = utxos_to_consolidate.iter().map(|(u, _)| u.output.amount).sum();
+    let send_amount = total_input - MIN_TX_FEE;
+
+    let node = network.get_node(0);
+    let current_height = node.chain_state().height;
+    drop(node);
+
+    println!("  Consolidating {} UTXOs ({} BTH total) into single output",
+        utxos_to_consolidate.len(), total_input / PICOCREDITS_PER_CREDIT);
+
+    let tx = create_multi_input_transaction(
+        wallet0, &utxos_to_consolidate, &recipient_address,
+        send_amount, MIN_TX_FEE, current_height, &network,
+    ).expect("Failed to create multi-input transaction");
+
+    println!("  Transaction has {} inputs", tx.inputs.len());
+
+    network.broadcast_transaction(tx.clone());
+    mine_block(&network, 0);
+    network.verify_consistency();
+
+    let balance1 = get_wallet_balance(&network, wallet1);
+    println!("  Wallet 1 balance: {} BTH", balance1 / PICOCREDITS_PER_CREDIT);
+    assert!(balance1 >= send_amount, "Wallet 1 should have received amount");
+
+    println!("\n=== Multi-Input Consolidation Test Complete ===");
+    network.stop();
 }
 
 
@@ -769,12 +991,14 @@ fn test_multi_input_consolidation() {
 /// A single sender pays multiple recipients in one transaction.
 /// Tests multi-output transaction handling.
 #[test]
-#[ignore = "Needs update for ring signature transactions (Simple tx removed)"]
 fn test_payment_splitting() {
     println!("\n=== Payment Splitting Test ===\n");
 
     let mut network = build_test_network();
     thread::sleep(Duration::from_millis(500));
+
+    // Pre-mine blocks for decoy availability, plus one for the sender's UTXO
+    ensure_decoy_availability(&network, 1);
 
     // Mine a block to fund wallet 0
     println!("Mining block to fund wallet 0...");
@@ -787,10 +1011,10 @@ fn test_payment_splitting() {
 
     // Prepare recipients: wallets 1, 2, 3, 4
     let recipients: Vec<(PublicAddress, u64)> = vec![
-        (network.wallets[1].public_address(), 5 * PICOCREDITS_PER_CREDIT),
-        (network.wallets[2].public_address(), 7 * PICOCREDITS_PER_CREDIT),
-        (network.wallets[3].public_address(), 3 * PICOCREDITS_PER_CREDIT),
-        (network.wallets[4].public_address(), 2 * PICOCREDITS_PER_CREDIT),
+        (network.wallets[1].default_address(), 5 * PICOCREDITS_PER_CREDIT),
+        (network.wallets[2].default_address(), 7 * PICOCREDITS_PER_CREDIT),
+        (network.wallets[3].default_address(), 3 * PICOCREDITS_PER_CREDIT),
+        (network.wallets[4].default_address(), 2 * PICOCREDITS_PER_CREDIT),
     ];
     let total_to_send: u64 = recipients.iter().map(|(_, amt)| *amt).sum();
 
@@ -816,6 +1040,7 @@ fn test_payment_splitting() {
         &recipients,
         MIN_TX_FEE,
         current_height,
+        &network,
     ).expect("Failed to create split payment");
 
     // Verify transaction structure
@@ -931,10 +1156,11 @@ fn test_stress_load_patterns() {
                 sender_wallet,
                 utxo,
                 *subaddr_idx,
-                &recipient_wallet.public_address(),
+                &recipient_wallet.default_address(),
                 send_amount,
                 MIN_TX_FEE,
                 current_height,
+                &network,
             );
 
             match tx {
@@ -1061,10 +1287,11 @@ fn test_rapid_sequential_transfers() {
             sender_wallet,
             utxo,
             *subaddr_idx,
-            &recipient_wallet.public_address(),
+            &recipient_wallet.default_address(),
             send_amount,
             MIN_TX_FEE,
             current_height,
+            &network,
         ).expect(&format!("Failed to create transfer {} -> {}", sender_idx, recipient_idx));
 
         println!("  {} -> {}: {} BTH (confirmed in next block)",
@@ -1153,10 +1380,11 @@ fn test_mixed_transaction_patterns() {
     let consolidate_tx = create_multi_input_transaction(
         wallet0,
         &utxos_to_consolidate,
-        &wallet0.public_address(),
+        &wallet0.default_address(),
         consolidate_total - MIN_TX_FEE,
         MIN_TX_FEE,
         current_height,
+        &network,
     ).expect("Failed to create consolidation");
     println!("  [A] Wallet 0: Consolidating 2 UTXOs");
 
@@ -1166,8 +1394,8 @@ fn test_mixed_transaction_patterns() {
     let (utxo1, subaddr1) = &utxos1[0];
 
     let split_recipients = vec![
-        (network.wallets[2].public_address(), 5 * PICOCREDITS_PER_CREDIT),
-        (network.wallets[3].public_address(), 5 * PICOCREDITS_PER_CREDIT),
+        (network.wallets[2].default_address(), 5 * PICOCREDITS_PER_CREDIT),
+        (network.wallets[3].default_address(), 5 * PICOCREDITS_PER_CREDIT),
     ];
 
     let split_tx = create_split_payment_transaction(
@@ -1177,6 +1405,7 @@ fn test_mixed_transaction_patterns() {
         &split_recipients,
         MIN_TX_FEE,
         current_height,
+        &network,
     ).expect("Failed to create split payment");
     println!("  [B] Wallet 1: Split payment to wallets 2, 3");
 
@@ -1189,10 +1418,11 @@ fn test_mixed_transaction_patterns() {
         wallet4,
         utxo4,
         *subaddr4,
-        &wallet0.public_address(),
+        &wallet0.default_address(),
         3 * PICOCREDITS_PER_CREDIT,
         MIN_TX_FEE,
         current_height,
+        &network,
     ).expect("Failed to create simple transfer");
     println!("  [C] Wallet 4: Simple transfer to wallet 0");
 

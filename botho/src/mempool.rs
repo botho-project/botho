@@ -2,13 +2,13 @@
 
 //! Transaction mempool for storing pending transactions.
 //!
-//! All transactions are private by default using ring signatures (CLSAG, LION, or MLSAG).
+//! All transactions are private by default using ring signatures (CLSAG or LION).
 //! Tracks spent key images to prevent double-spending.
 //!
 //! ## Fee Validation
 //!
 //! Uses the cluster-tax fee system to compute minimum fees based on:
-//! - Transaction type (CLSAG/MLSAG = Hidden, LION = PqHidden)
+//! - Transaction type (CLSAG = Hidden, LION = PqHidden)
 //! - Transfer amount
 //! - Sender's cluster wealth (currently 0, cluster tracking not yet implemented)
 //! - Number of outputs with encrypted memos
@@ -235,9 +235,6 @@ impl Mempool {
             TxInputs::Lion(lion_inputs) => {
                 self.validate_lion_inputs(lion_inputs, &tx, ledger)?
             }
-            TxInputs::Mlsag(mlsag_inputs) => {
-                self.validate_mlsag_inputs(mlsag_inputs, &tx, ledger)?
-            }
         };
 
         // Validate outputs + fee <= inputs
@@ -259,7 +256,7 @@ impl Mempool {
 
         // Validate fee meets minimum based on transaction type, size, and congestion
         let fee_tx_type = match &tx.inputs {
-            TxInputs::Clsag(_) | TxInputs::Mlsag(_) => FeeTransactionType::Hidden,
+            TxInputs::Clsag(_) => FeeTransactionType::Hidden,
             TxInputs::Lion(_) => FeeTransactionType::PqHidden, // Higher fee for ~16x larger LION signatures
         };
 
@@ -307,11 +304,6 @@ impl Mempool {
                     self.spent_key_images.insert(key_image_hash);
                 }
             }
-            TxInputs::Mlsag(ring_inputs) => {
-                for ring_input in ring_inputs {
-                    self.spent_key_images.insert(ring_input.key_image);
-                }
-            }
         }
 
         // Add to mempool
@@ -320,78 +312,6 @@ impl Mempool {
 
         debug!("Added transaction {} to mempool", hex::encode(&tx_hash[0..8]));
         Ok(tx_hash)
-    }
-
-    /// Validate MLSAG ring signature transaction inputs
-    fn validate_mlsag_inputs(
-        &self,
-        ring_inputs: &[crate::transaction::RingTxInput],
-        tx: &Transaction,
-        ledger: &Ledger,
-    ) -> Result<u64, MempoolError> {
-        // Check for double-spends via key images (mempool)
-        for ring_input in ring_inputs {
-            if self.spent_key_images.contains(&ring_input.key_image) {
-                return Err(MempoolError::DoubleSpend);
-            }
-        }
-
-        // Check for double-spends via key images (ledger)
-        for ring_input in ring_inputs {
-            if let Ok(Some(_)) = ledger.is_key_image_spent(&ring_input.key_image) {
-                return Err(MempoolError::KeyImageSpent(ring_input.key_image));
-            }
-        }
-
-        // Verify ring signatures
-        tx.verify_ring_signatures()
-            .map_err(|_| MempoolError::InvalidSignature)?;
-
-        // Validate potential input amounts from ring members.
-        // Since we use trivial commitments (zero blinding), amounts are public.
-        // For each ring, find the maximum amount among ring members to get a
-        // conservative upper bound on potential input value.
-        //
-        // Note: This doesn't reveal which ring member is the real input, but
-        // ensures the transaction COULD be valid if the right member is spent.
-        let mut potential_input_sum: u64 = 0;
-
-        for ring_input in ring_inputs {
-            // Find maximum amount among ring members by looking up UTXOs
-            let mut max_ring_amount: u64 = 0;
-            let mut found_any = false;
-
-            for member in &ring_input.ring {
-                // Look up the UTXO by target_key to get its amount
-                if let Ok(Some(utxo)) = ledger.get_utxo_by_target_key(&member.target_key) {
-                    max_ring_amount = max_ring_amount.max(utxo.output.amount);
-                    found_any = true;
-                }
-                // Ring members that can't be found might be spent or from older blocks
-                // The ring signature verification ensures at least one is valid
-            }
-
-            // If we couldn't find any ring member amounts, reject the transaction.
-            // All ring members should exist in the UTXO set for proper validation.
-            if !found_any {
-                warn!(
-                    "Could not lookup ring member amounts for key image {}",
-                    hex::encode(&ring_input.key_image[0..8])
-                );
-                return Err(MempoolError::InvalidTransaction(
-                    "Cannot verify ring input amounts - no ring members found in UTXO set".to_string()
-                ));
-            }
-
-            // Use checked_add to reject transactions with overflowing input sums
-            // rather than silently capping at u64::MAX (which could allow invalid txs)
-            potential_input_sum = potential_input_sum.checked_add(max_ring_amount)
-                .ok_or_else(|| MempoolError::InvalidTransaction(
-                    "Ring input sum overflow".to_string()
-                ))?;
-        }
-
-        Ok(potential_input_sum)
     }
 
     /// Validate CLSAG (standard-private) transaction inputs
@@ -542,11 +462,6 @@ impl Mempool {
                         self.spent_key_images.remove(&key_image_hash);
                     }
                 }
-                TxInputs::Mlsag(ring_inputs) => {
-                    for ring_input in ring_inputs {
-                        self.spent_key_images.remove(&ring_input.key_image);
-                    }
-                }
             }
             Some(pending.tx)
         } else {
@@ -597,12 +512,6 @@ impl Mempool {
                         hasher.update(&input.key_image);
                         let key_image_hash: [u8; 32] = hasher.finalize().into();
                         matches!(ledger.is_key_image_spent(&key_image_hash), Ok(Some(_)))
-                    })
-                }
-                TxInputs::Mlsag(ring_inputs) => {
-                    // Check if any key image was spent in ledger
-                    ring_inputs.iter().any(|ri| {
-                        matches!(ledger.is_key_image_spent(&ri.key_image), Ok(Some(_)))
                     })
                 }
             };

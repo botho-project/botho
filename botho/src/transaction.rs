@@ -45,16 +45,16 @@
 //! **Recipient spends:**
 //! - Recovers private key: `x = Hs(a * R) + d` where `d` is spend private key
 //!
-//! # Ring Signature Protocol (MLSAG)
+//! # Ring Signature Protocol (CLSAG)
 //!
 //! When spending an output:
 //! 1. Select N-1 decoy outputs from the UTXO set (ring members)
 //! 2. Include the real output at a random position in the ring
 //! 3. Compute key image: `I = x * Hp(P)` where x is one-time private key
-//! 4. Sign using MLSAG over all ring members
+//! 4. Sign using CLSAG over all ring members
 //!
 //! Verification:
-//! - Verify the MLSAG signature against all ring members
+//! - Verify the CLSAG signature against all ring members
 //! - Check key image hasn't been used before (prevents double-spend)
 //! - Cannot determine which ring member is the real input
 
@@ -590,8 +590,6 @@ pub struct LionRingMember {
     pub commitment: [u8; 32],
 }
 
-// Keep the old name as an alias for backwards compatibility during refactoring
-pub type RingTxInput = ClsagRingInput;
 
 impl ClsagRingInput {
     /// Create a new CLSAG ring signature input.
@@ -896,10 +894,6 @@ pub enum TxInputs {
     /// Post-quantum cryptography with larger signatures.
     /// Recommended for high-value or long-term security needs.
     Lion(Vec<LionRingInput>),
-
-    /// MLSAG ring signatures - legacy format.
-    /// Use CLSAG for new transactions.
-    Mlsag(Vec<RingTxInput>),
 }
 
 /// Privacy tier for transactions.
@@ -922,15 +916,10 @@ impl TxInputs {
         matches!(self, TxInputs::Lion(_))
     }
 
-    /// Check if this is an MLSAG transaction
-    pub fn is_mlsag(&self) -> bool {
-        matches!(self, TxInputs::Mlsag(_))
-    }
-
     /// Get the privacy tier
     pub fn privacy_tier(&self) -> PrivacyTier {
         match self {
-            TxInputs::Clsag(_) | TxInputs::Mlsag(_) => PrivacyTier::StandardPrivate,
+            TxInputs::Clsag(_) => PrivacyTier::StandardPrivate,
             TxInputs::Lion(_) => PrivacyTier::PqPrivate,
         }
     }
@@ -951,20 +940,11 @@ impl TxInputs {
         }
     }
 
-    /// Get MLSAG inputs (if this is an Mlsag variant)
-    pub fn mlsag(&self) -> Option<&[RingTxInput]> {
-        match self {
-            TxInputs::Mlsag(inputs) => Some(inputs),
-            _ => None,
-        }
-    }
-
     /// Get the number of inputs
     pub fn len(&self) -> usize {
         match self {
             TxInputs::Clsag(inputs) => inputs.len(),
             TxInputs::Lion(inputs) => inputs.len(),
-            TxInputs::Mlsag(inputs) => inputs.len(),
         }
     }
 
@@ -986,7 +966,6 @@ impl TxInputs {
                     hasher.finalize().into()
                 }).collect()
             }
-            TxInputs::Mlsag(inputs) => inputs.iter().map(|ri| ri.key_image).collect(),
         }
     }
 
@@ -1069,23 +1048,6 @@ impl Transaction {
         }
     }
 
-    /// Create a new MLSAG transaction.
-    ///
-    /// Uses MLSAG ring signatures. Prefer new_clsag() for new transactions.
-    pub fn new_mlsag(
-        ring_inputs: Vec<RingTxInput>,
-        outputs: Vec<TxOutput>,
-        fee: u64,
-        created_at_height: u64,
-    ) -> Self {
-        Self {
-            inputs: TxInputs::Mlsag(ring_inputs),
-            outputs,
-            fee,
-            created_at_height,
-        }
-    }
-
     /// Get the privacy tier of this transaction.
     pub fn privacy_tier(&self) -> PrivacyTier {
         self.inputs.privacy_tier()
@@ -1111,13 +1073,11 @@ impl Transaction {
     /// Uses typical sizes for each component:
     /// - CLSAG input: ~700 bytes (ring of 20 × 32-byte keys + signature)
     /// - LION input: ~63 KB (lattice-based ring signature)
-    /// - MLSAG input: ~700 bytes (similar to CLSAG)
     /// - Output: ~120 bytes (amount, target_key, public_key, optional memo)
     /// - Header: ~50 bytes (fee, created_at_height, etc.)
     pub fn estimate_size(&self) -> usize {
         const CLSAG_INPUT_SIZE: usize = 700;
         const LION_INPUT_SIZE: usize = 63_000;
-        const MLSAG_INPUT_SIZE: usize = 700;
         const OUTPUT_SIZE: usize = 120;
         const OUTPUT_MEMO_SIZE: usize = 66;
         const HEADER_SIZE: usize = 50;
@@ -1125,7 +1085,6 @@ impl Transaction {
         let input_size = match &self.inputs {
             TxInputs::Clsag(inputs) => inputs.len() * CLSAG_INPUT_SIZE,
             TxInputs::Lion(inputs) => inputs.len() * LION_INPUT_SIZE,
-            TxInputs::Mlsag(inputs) => inputs.len() * MLSAG_INPUT_SIZE,
         };
 
         let output_size: usize = self.outputs.iter()
@@ -1151,12 +1110,6 @@ impl Transaction {
                 hasher.update(b"lion");
                 for input in inputs {
                     hasher.update(&input.key_image);
-                }
-            }
-            TxInputs::Mlsag(inputs) => {
-                hasher.update(b"mlsag");
-                for input in inputs {
-                    hasher.update(input.key_image);
                 }
             }
         }
@@ -1188,7 +1141,6 @@ impl Transaction {
         match &self.inputs {
             TxInputs::Clsag(_) => hasher.update(b"botho-tx-clsag"),
             TxInputs::Lion(_) => hasher.update(b"botho-tx-lion"),
-            TxInputs::Mlsag(_) => hasher.update(b"botho-tx-mlsag"),
         }
 
         // Include all outputs (stealth keys, not recipient identity)
@@ -1232,16 +1184,6 @@ impl Transaction {
                     }
                 }
             }
-            TxInputs::Mlsag(inputs) => {
-                if inputs.is_empty() {
-                    return Err("MLSAG transaction has no inputs");
-                }
-                for input in inputs {
-                    if input.ring.len() < MIN_RING_SIZE {
-                        return Err("MLSAG input has insufficient ring size");
-                    }
-                }
-            }
         }
 
         if self.outputs.is_empty() {
@@ -1258,7 +1200,7 @@ impl Transaction {
 
     /// Verify all ring signatures in this transaction.
     ///
-    /// Verifies CLSAG, LION, or MLSAG signatures depending on transaction type.
+    /// Verifies CLSAG or LION signatures depending on transaction type.
     pub fn verify_ring_signatures(&self) -> Result<(), &'static str> {
         let signing_hash = self.signing_hash();
         let total_output = self.total_output() + self.fee;
@@ -1276,14 +1218,6 @@ impl Transaction {
                 for input in inputs {
                     if !input.verify(&signing_hash) {
                         return Err("Invalid LION signature");
-                    }
-                }
-                Ok(())
-            }
-            TxInputs::Mlsag(inputs) => {
-                for input in inputs {
-                    if !input.verify(&signing_hash, total_output) {
-                        return Err("Invalid MLSAG signature");
                     }
                 }
                 Ok(())
@@ -1361,8 +1295,8 @@ mod tests {
         }
     }
 
-    /// Helper to create a test MLSAG input with MIN_RING_SIZE members
-    fn test_mlsag_input(ring_id: u8) -> ClsagRingInput {
+    /// Helper to create a test CLSAG input with MIN_RING_SIZE members
+    fn test_clsag_input(ring_id: u8) -> ClsagRingInput {
         let ring: Vec<RingMember> = (0..MIN_RING_SIZE)
             .map(|i| test_ring_member(ring_id.wrapping_add(i as u8)))
             .collect();
@@ -1385,7 +1319,7 @@ mod tests {
     #[test]
     fn test_transaction_hash_deterministic() {
         let tx = Transaction::new_clsag(
-            vec![test_mlsag_input(1)],
+            vec![test_clsag_input(1)],
             vec![test_output(1000, [2u8; 32], [3u8; 32])],
             MIN_TX_FEE,
             1,
@@ -1398,14 +1332,14 @@ mod tests {
     #[test]
     fn test_signing_hash_changes_with_content() {
         let tx1 = Transaction::new_clsag(
-            vec![test_mlsag_input(1)],
+            vec![test_clsag_input(1)],
             vec![test_output(1000, [2u8; 32], [3u8; 32])],
             MIN_TX_FEE,
             1,
         );
 
         let tx2 = Transaction::new_clsag(
-            vec![test_mlsag_input(1)],
+            vec![test_clsag_input(1)],
             vec![test_output(2000, [2u8; 32], [3u8; 32])], // Different amount
             MIN_TX_FEE,
             1,
@@ -1429,7 +1363,7 @@ mod tests {
     #[test]
     fn test_transaction_is_valid_structure_no_outputs() {
         let tx = Transaction::new_clsag(
-            vec![test_mlsag_input(1)],
+            vec![test_clsag_input(1)],
             vec![],
             MIN_TX_FEE,
             1,
@@ -1440,7 +1374,7 @@ mod tests {
     #[test]
     fn test_transaction_is_valid_structure_valid() {
         let tx = Transaction::new_clsag(
-            vec![test_mlsag_input(1)],
+            vec![test_clsag_input(1)],
             vec![test_output(1000, [2u8; 32], [3u8; 32])],
             MIN_TX_FEE,
             1,
@@ -1451,7 +1385,7 @@ mod tests {
     #[test]
     fn test_privacy_tier_clsag() {
         let tx = Transaction::new_clsag(
-            vec![test_mlsag_input(1)],
+            vec![test_clsag_input(1)],
             vec![test_output(1000, [2u8; 32], [3u8; 32])],
             MIN_TX_FEE,
             1,

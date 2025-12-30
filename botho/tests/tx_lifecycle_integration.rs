@@ -757,21 +757,27 @@ fn test_chained_transactions_in_sequence() {
 }
 
 #[test]
-#[ignore = "Needs update for ring signature transactions (Simple tx removed)"]
 fn test_multiple_transactions_in_single_block() {
     let (_temp_dir, ledger) = create_test_ledger();
     let miner = create_wallet(1);
     let recipient1 = create_wallet(2);
     let recipient2 = create_wallet(3);
 
-    // Mine two blocks to get two UTXOs
+    // Mine two blocks to miner (two UTXOs) + 18 more for decoys
     let miner_addr = miner.public_address();
     let block1 = mine_block(&ledger, &miner_addr, vec![]);
     ledger.add_block(&block1).expect("Failed to add block 1");
     let block2 = mine_block(&ledger, &miner_addr, vec![]);
     ledger.add_block(&block2).expect("Failed to add block 2");
 
-    // Get both UTXOs
+    // Mine 18 more blocks to other wallets for decoys
+    for i in 0..18 {
+        let other_wallet = create_wallet(100 + i);
+        let block = mine_block(&ledger, &other_wallet.public_address(), vec![]);
+        ledger.add_block(&block).expect(&format!("Failed to add decoy block {}", i + 3));
+    }
+
+    // Get both UTXOs belonging to miner
     let utxos = scan_wallet_utxos(&ledger, &miner);
     assert_eq!(utxos.len(), 2, "Should have 2 UTXOs");
 
@@ -788,6 +794,7 @@ fn test_multiple_transactions_in_single_block() {
         10 * PICOCREDITS_PER_CREDIT,
         MIN_TX_FEE,
         state.height,
+        &ledger,
     );
 
     let tx2 = create_signed_transaction(
@@ -798,11 +805,12 @@ fn test_multiple_transactions_in_single_block() {
         15 * PICOCREDITS_PER_CREDIT,
         MIN_TX_FEE,
         state.height,
+        &ledger,
     );
 
     // Mine block with both transactions
-    let block3 = mine_block(&ledger, &miner_addr, vec![tx1, tx2]);
-    ledger.add_block(&block3).expect("Failed to add block 3");
+    let block = mine_block(&ledger, &miner_addr, vec![tx1, tx2]);
+    ledger.add_block(&block).expect("Failed to add block with txs");
 
     // Verify both recipients received funds
     let balance1 = get_wallet_balance(&ledger, &recipient1);
@@ -821,16 +829,13 @@ fn test_multiple_transactions_in_single_block() {
 // ============================================================================
 
 #[test]
-#[ignore = "Needs update for ring signature transactions (Simple tx removed)"]
 fn test_utxo_set_consistency_after_transactions() {
     let (_temp_dir, ledger) = create_test_ledger();
     let miner = create_wallet(1);
     let recipient = create_wallet(2);
 
-    // Mine initial block
-    let miner_addr = miner.public_address();
-    let block1 = mine_block(&ledger, &miner_addr, vec![]);
-    ledger.add_block(&block1).expect("Failed to add block 1");
+    // Mine blocks to create enough decoys
+    mine_decoy_blocks(&ledger, &miner);
 
     // Count initial UTXOs
     let initial_utxos = scan_wallet_utxos(&ledger, &miner);
@@ -839,7 +844,7 @@ fn test_utxo_set_consistency_after_transactions() {
     // Create and apply transaction
     let (utxo, subaddr) = &initial_utxos[0];
     let state = ledger.get_chain_state().unwrap();
-    let input_utxo_id = utxo.id;
+    let miner_addr = miner.public_address();
 
     let tx = create_signed_transaction(
         &miner,
@@ -849,18 +854,13 @@ fn test_utxo_set_consistency_after_transactions() {
         10 * PICOCREDITS_PER_CREDIT,
         MIN_TX_FEE,
         state.height,
+        &ledger,
     );
 
-    let block2 = mine_block(&ledger, &miner_addr, vec![tx.clone()]);
-    ledger.add_block(&block2).expect("Failed to add block 2");
+    let block = mine_block(&ledger, &miner_addr, vec![tx.clone()]);
+    ledger.add_block(&block).expect("Failed to add block with tx");
 
-    // Verify old UTXO is gone
-    assert!(
-        !ledger.utxo_exists(&input_utxo_id).unwrap(),
-        "Input UTXO should be consumed"
-    );
-
-    // Verify new UTXOs exist (one for recipient, one for change, one for coinbase)
+    // Verify new UTXOs exist (one for recipient, one for change)
     let tx_hash = tx.hash();
 
     // Recipient output (index 0)
@@ -887,20 +887,18 @@ fn test_utxo_set_consistency_after_transactions() {
 }
 
 #[test]
-#[ignore = "Needs update for ring signature transactions (Simple tx removed)"]
 fn test_transaction_index_lookup() {
     let (_temp_dir, ledger) = create_test_ledger();
     let miner = create_wallet(1);
     let recipient = create_wallet(2);
 
-    // Mine and add transaction
-    let miner_addr = miner.public_address();
-    let block1 = mine_block(&ledger, &miner_addr, vec![]);
-    ledger.add_block(&block1).expect("Failed to add block 1");
+    // Mine blocks to create enough decoys
+    mine_decoy_blocks(&ledger, &miner);
 
     let utxos = scan_wallet_utxos(&ledger, &miner);
     let (utxo, subaddr) = &utxos[0];
     let state = ledger.get_chain_state().unwrap();
+    let miner_addr = miner.public_address();
 
     let tx = create_signed_transaction(
         &miner,
@@ -910,18 +908,20 @@ fn test_transaction_index_lookup() {
         10 * PICOCREDITS_PER_CREDIT,
         MIN_TX_FEE,
         state.height,
+        &ledger,
     );
     let tx_hash = tx.hash();
 
-    let block2 = mine_block(&ledger, &miner_addr, vec![tx]);
-    ledger.add_block(&block2).expect("Failed to add block 2");
+    let block = mine_block(&ledger, &miner_addr, vec![tx]);
+    let tx_block_height = state.height + 1;
+    ledger.add_block(&block).expect("Failed to add block with tx");
 
     // Look up transaction by hash
     let tx_location = ledger.get_transaction_location(&tx_hash).expect("Failed to get tx location");
     assert!(tx_location.is_some(), "Transaction should be indexed");
 
     let location = tx_location.unwrap();
-    assert_eq!(location.block_height, 2, "Transaction should be in block 2");
+    assert_eq!(location.block_height, tx_block_height, "Transaction should be in correct block");
     assert_eq!(location.tx_index, 0, "Transaction should be at index 0");
 
     // Verify we can retrieve the block and find the transaction
@@ -935,24 +935,56 @@ fn test_transaction_index_lookup() {
 // ============================================================================
 
 #[test]
-#[ignore = "Needs update for ring signature transactions (Simple tx removed)"]
 fn test_exact_amount_spend_no_change() {
-    // TODO: Rewrite to use CLSAG ring signatures
-    todo!("Update to use CLSAG ring signatures instead of Simple transactions");
+    let (_temp_dir, ledger) = create_test_ledger();
+    let miner = create_wallet(1);
+    let recipient = create_wallet(2);
+
+    // Mine blocks to create enough decoys
+    mine_decoy_blocks(&ledger, &miner);
+
+    let utxos = scan_wallet_utxos(&ledger, &miner);
+    let (utxo, subaddr) = &utxos[0];
+    let state = ledger.get_chain_state().unwrap();
+    let miner_addr = miner.public_address();
+
+    // Spend exact amount (no change)
+    let exact_amount = utxo.output.amount - MIN_TX_FEE;
+
+    // Note: create_signed_transaction always creates change output if change > 0
+    // This test verifies spending with minimal change
+    let tx = create_signed_transaction(
+        &miner,
+        utxo,
+        *subaddr,
+        &recipient.public_address(),
+        exact_amount,
+        MIN_TX_FEE,
+        state.height,
+        &ledger,
+    );
+
+    // Should have exactly 1 output (recipient only, no change)
+    assert_eq!(tx.outputs.len(), 1, "Should have only recipient output (no change)");
+    assert_eq!(tx.outputs[0].amount, exact_amount);
+
+    // Mine and verify
+    let block = mine_block(&ledger, &miner_addr, vec![tx]);
+    ledger.add_block(&block).expect("Failed to add block");
+
+    let recipient_balance = get_wallet_balance(&ledger, &recipient);
+    assert_eq!(recipient_balance, exact_amount, "Recipient should receive exact amount");
 }
 
 #[test]
-#[ignore = "Needs update for ring signature transactions (Simple tx removed)"]
 fn test_mempool_already_exists_rejection() {
     let (_temp_dir, ledger) = create_test_ledger();
     let mut mempool = Mempool::new();
     let miner = create_wallet(1);
     let recipient = create_wallet(2);
 
-    // Mine a block
-    let miner_addr = miner.public_address();
-    let block1 = mine_block(&ledger, &miner_addr, vec![]);
-    ledger.add_block(&block1).expect("Failed to add block 1");
+    // Mine blocks to create enough decoys
+    mine_decoy_blocks(&ledger, &miner);
 
     let utxos = scan_wallet_utxos(&ledger, &miner);
     let (utxo, subaddr) = &utxos[0];
@@ -969,6 +1001,7 @@ fn test_mempool_already_exists_rejection() {
         send_amount,
         fee,
         state.height,
+        &ledger,
     );
 
     // Add transaction once
@@ -984,21 +1017,25 @@ fn test_mempool_already_exists_rejection() {
 }
 
 #[test]
-#[ignore = "Needs update for ring signature transactions (Simple tx removed)"]
 fn test_mempool_transactions_sorted_by_fee() {
     let (_temp_dir, ledger) = create_test_ledger();
     let mut mempool = Mempool::new();
     let miner = create_wallet(1);
     let recipient = create_wallet(2);
 
-    // Mine three blocks
+    // Mine three blocks to miner (three UTXOs) + 17 more for decoys
     let miner_addr = miner.public_address();
     for _ in 0..3 {
         let block = mine_block(&ledger, &miner_addr, vec![]);
         ledger.add_block(&block).expect("Failed to add block");
     }
+    for i in 0..17 {
+        let other_wallet = create_wallet(100 + i);
+        let block = mine_block(&ledger, &other_wallet.public_address(), vec![]);
+        ledger.add_block(&block).expect("Failed to add decoy block");
+    }
 
-    // Get UTXOs
+    // Get UTXOs belonging to miner
     let utxos = scan_wallet_utxos(&ledger, &miner);
     assert!(utxos.len() >= 3, "Should have at least 3 UTXOs");
 
@@ -1006,10 +1043,8 @@ fn test_mempool_transactions_sorted_by_fee() {
 
     // Create transactions with different fees (base fee + multiplier)
     let send_amount = 5 * PICOCREDITS_PER_CREDIT;
-    // Use first UTXO's amount for base fee calculation
     let base_fee = calculate_fee_for_outputs(&mempool, utxos[0].0.output.amount);
     let fee_multipliers = [1u64, 2u64, 3u64];
-    let mut actual_fees = vec![];
 
     for (i, multiplier) in fee_multipliers.iter().enumerate() {
         let (utxo, subaddr) = &utxos[i];
@@ -1022,8 +1057,8 @@ fn test_mempool_transactions_sorted_by_fee() {
             send_amount,
             fee,
             state.height,
+            &ledger,
         );
-        actual_fees.push(fee);
         mempool.add_tx(tx, &ledger).expect("Failed to add tx");
     }
 

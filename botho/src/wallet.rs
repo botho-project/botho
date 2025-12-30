@@ -15,7 +15,7 @@ use bth_crypto_pq::{derive_pq_keys_from_seed, BIP39_SEED_SIZE};
 use crate::decoy_selection::GammaDecoySelector;
 use crate::ledger::Ledger;
 use crate::transaction::{
-    RingMember, RingTxInput, Transaction, TxInputs, TxOutput, Utxo, UtxoId, MIN_RING_SIZE,
+    ClsagRingInput, RingMember, Transaction, TxOutput, Utxo, MIN_RING_SIZE,
 };
 
 #[cfg(feature = "pq")]
@@ -318,7 +318,7 @@ impl Wallet {
             );
 
             // Create ring input with CLSAG signature
-            let ring_input = RingTxInput::new(
+            let ring_input = ClsagRingInput::new(
                 shuffled_ring,
                 real_index,
                 &onetime_private,
