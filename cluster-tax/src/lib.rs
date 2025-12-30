@@ -36,7 +36,6 @@
 
 pub mod analysis;
 pub mod crypto;
-pub mod emission;
 pub mod monetary;
 #[cfg(feature = "cli")]
 pub mod simulation;
@@ -61,16 +60,6 @@ pub use cluster::{ClusterId, ClusterWealth};
 // Key insight: Difficulty should adapt to hit monetary targets, not rewards.
 // This gives miners predictable income while absorbing fee volatility.
 pub use monetary::{DifficultyController, MonetaryPolicy, MonetaryState, MonetaryStats};
-
-// ============================================================================
-// Legacy Emission Controller (Deprecated)
-// ============================================================================
-//
-// The adaptive-reward model is deprecated. It adjusted block rewards based on
-// fee burns, which caused reward volatility that's problematic for miners.
-// Preserved for backwards compatibility; new code should use DifficultyController.
-#[allow(deprecated)]
-pub use emission::{EmissionConfig, EmissionController, EmissionState};
 
 pub use fee_curve::{
     ClusterFactorCurve, FeeConfig, FeeCurve, FeeRateBps, TransactionType, count_outputs_with_memos,

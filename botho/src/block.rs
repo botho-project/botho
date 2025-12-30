@@ -346,33 +346,6 @@ impl Block {
     }
 }
 
-/// Calculate block reward based on emission schedule.
-///
-/// # Deprecated
-///
-/// This function uses the legacy Monero-style smooth emission curve.
-/// New code should use [`crate::monetary::MonetarySystem`] which implements
-/// the Two-Phase Monetary Model (halving schedule + inflation-targeting).
-///
-/// For backwards compatibility during migration, this function remains available
-/// but will be removed in a future version.
-#[deprecated(
-    since = "0.2.0",
-    note = "Use monetary::MonetarySystem::block_reward() instead"
-)]
-pub fn calculate_block_reward(_height: u64, total_mined: u64) -> u64 {
-    // Legacy Monero-style emission with tail
-    // TODO: Remove once all callers migrate to MonetarySystem
-    const TOTAL_SUPPLY: u64 = 18_446_744_073_709_551_615; // ~18.4 quintillion picocredits
-    const EMISSION_SPEED_FACTOR: u64 = 20;
-    const TAIL_EMISSION: u64 = 600_000_000_000; // 0.6 credits per block in picocredits
-
-    let remaining = TOTAL_SUPPLY.saturating_sub(total_mined);
-    let main_reward = remaining >> EMISSION_SPEED_FACTOR;
-
-    std::cmp::max(TAIL_EMISSION, main_reward)
-}
-
 /// Calculate block reward using the Two-Phase Monetary Model.
 ///
 /// This is a convenience function for code that doesn't have access to a

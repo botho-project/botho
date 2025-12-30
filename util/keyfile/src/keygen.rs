@@ -113,15 +113,6 @@ pub fn read_default_mnemonics<P: AsRef<Path>>(path: P) -> Result<Vec<AccountKey>
         .collect()
 }
 
-/// Read default root entropies
-#[deprecated]
-pub fn read_default_root_entropies<P: AsRef<Path>>(path: P) -> Result<Vec<RootIdentity>, Error> {
-    get_default_keyfile_paths(path)?
-        .into_iter()
-        .map(read_root_entropy_keyfile)
-        .collect()
-}
-
 /// Read default key files in either format
 pub fn read_default_keyfiles<P: AsRef<Path>>(path: P) -> Result<Vec<AccountKey>, Error> {
     get_default_keyfile_paths(path)?

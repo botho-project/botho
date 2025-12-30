@@ -821,17 +821,6 @@ impl Transaction {
         }
     }
 
-    /// Backward compatibility: create simple transaction
-    #[deprecated(note = "Use new_simple() or new_private() instead")]
-    pub fn new(
-        inputs: Vec<TxInput>,
-        outputs: Vec<TxOutput>,
-        fee: u64,
-        created_at_height: u64,
-    ) -> Self {
-        Self::new_simple(inputs, outputs, fee, created_at_height)
-    }
-
     /// Check if this is a ring signature (private) transaction
     pub fn is_private(&self) -> bool {
         self.inputs.is_ring()
