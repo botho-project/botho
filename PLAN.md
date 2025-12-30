@@ -6,6 +6,28 @@ Core functionality complete. Internal security audit (2025-12-30) identified **3
 
 ---
 
+## Task Dependencies
+
+```
+Rate limiting ──────────────┐
+Observability ──────────────┼──→ External Audit
+E2E tests ──────────────────┘
+Compact blocks ─────────────────→ PQ Ring Signatures
+Observability ──────────────────→ Multiple Seed Nodes
+Performance benchmarks ─────────→ v0.2.0 Release
+```
+
+## Definition of Done
+
+| Priority | Response Time | Requirements |
+|----------|---------------|--------------|
+| **Critical** | Blocks release. Fix within 24h | All tests pass, code review |
+| **High** | Blocks next minor version | Full code review, no regressions |
+| **Medium** | Complete within 30 days | May defer with justification |
+| **Low** | Backlog | Complete when convenient |
+
+---
+
 ## Security Hardening (Audit-Driven)
 
 ### Critical Priority (Block Release)
@@ -14,6 +36,9 @@ Core functionality complete. Internal security audit (2025-12-30) identified **3
    - [ ] Zeroize `WalletKeys.mnemonic_phrase` in `botho-wallet/src/keys.rs`
    - [ ] Redesign Tauri wallet to keep mnemonics in Rust only (never expose to JS)
    - [ ] Add test mnemonic detection for production builds
+   - [ ] Use `mlock`/`VirtualLock` to prevent mnemonic swapping to disk
+   - [ ] Ensure constant-time comparison for password verification
+   - [ ] Add secure enclave support (iOS Keychain, Android Keystore) for mobile
 
 2. **Dependency Vulnerability**
    - [ ] Update `reqwest` to 0.12.x (uses ring 0.17.x)
@@ -31,26 +56,100 @@ Core functionality complete. Internal security audit (2025-12-30) identified **3
    - [ ] Add `// SAFETY:` comments to Windows FFI code
    - [ ] Add `#![deny(unsafe_code)]` to all 13 remaining crypto crates
 
-5. **Rate Limiting**
+5. **Rate Limiting & DoS Protection**
    - [ ] Add wallet decryption rate limiting (exponential backoff)
    - [ ] Add per-peer rate limiting on gossipsub messages
+   - [ ] Add per-IP connection rate limiting (max 10 connections/IP)
+   - [ ] Add RPC rate limiting per API key (100 req/min default)
+   - [ ] Consider PoW challenge for new peer connections (Sybil resistance)
+
+6. **Code Hygiene**
+   - [ ] Migrate ~989 `println!` statements to `tracing` spans
+   - [ ] Systematic `unwrap()`/`panic!()` replacement across all crates
+   - [ ] Add `#![deny(clippy::unwrap_used)]` to `consensus/scp`
+   - [ ] Add `#![deny(clippy::print_stdout)]` to all library crates
 
 ### Medium Priority (30 Days)
 
-6. **Transaction Validation**
+7. **Transaction Validation**
    - [ ] Add within-tx key image collision check
    - [ ] Implement cluster wealth tracking (currently hardcoded to 0)
    - [ ] Add dust threshold for minimum output amounts
 
-7. **Dependency Hygiene**
+8. **Dependency Hygiene**
    - [ ] Create `deny.toml` for automated security scanning
    - [ ] Fix yanked dependencies (futures-util, block-buffer)
    - [ ] Update `clap` to fix unsound `anstream`
 
-8. **Documentation & Standards**
+9. **Documentation & Standards**
    - [ ] Standardize unit naming (nanoBTH vs picocredits)
    - [ ] Clarify block timing (60s vs 5-40s dynamic)
    - [ ] Document LION rejection sampling margin justification
+
+---
+
+## Infrastructure & Operations
+
+### Performance & Benchmarking (Required for v0.2.0)
+
+- [ ] Define TPS targets (current: unmeasured, target: 100+ tx/s at ring-20)
+- [ ] Add `criterion` benchmarks for:
+  - [ ] CLSAG signing/verification
+  - [ ] LION signing/verification
+  - [ ] Block validation
+  - [ ] Mempool insertion/eviction
+- [ ] Add benchmark regression CI step (fail if >10% regression)
+- [ ] Profile memory usage under load (target: <4GB for full node)
+- [ ] Measure initial sync time (baseline for compact block work)
+- [ ] Add `perf` flamegraph generation script
+
+### Observability Stack (Required for Production)
+
+- [ ] Add Prometheus metrics endpoint (`:9090/metrics`)
+  - Peer count, mempool size, block height, TPS, validation latency
+  - Consensus round duration, nomination count
+- [ ] Add OpenTelemetry tracing for consensus messages
+- [ ] Define alert thresholds:
+  - Peer count < 3: CRITICAL
+  - Block height stale > 10 min: CRITICAL
+  - Mempool > 900: WARNING
+  - Validation latency > 500ms: WARNING
+- [ ] Create Grafana dashboard (commit to `monitoring/`)
+- [ ] Add `/health` and `/ready` endpoints for load balancers
+
+### E2E & Integration Testing (Required for v0.2.0)
+
+- [ ] Add `botho-testnet` binary for local multi-node simulation
+- [ ] Create integration tests:
+  - [ ] 5-node network achieves consensus within 2 minutes
+  - [ ] Transaction propagates to all nodes within 5 seconds
+  - [ ] Node crash during consensus, network continues
+  - [ ] Node rejoins after crash, syncs correctly
+- [ ] Create chaos tests:
+  - [ ] Network partition (split-brain), heals correctly
+  - [ ] 50% packet loss, consensus still progresses
+- [ ] Create load tests:
+  - [ ] Sustained 50 tx/s for 1 hour, no memory leak
+  - [ ] Mempool stress: 10,000 pending transactions
+- [ ] Document test scenarios in `tests/e2e/README.md`
+
+### Upgrade & Migration Strategy (Required for v0.2.0)
+
+- [ ] Define hard fork vs soft fork policy
+- [ ] Implement version negotiation in P2P handshake
+- [ ] Add upgrade notification via gossipsub announcement topic
+- [ ] Document rollback procedures for failed upgrades
+- [ ] Add feature flags for staged rollouts
+- [ ] Define backward compatibility guarantees (N-1 version support)
+- [ ] Create `UPGRADING.md` migration guide template
+
+### Reproducible Builds (Required for v1.0.0)
+
+- [ ] Add deterministic build script (`scripts/build-release.sh`)
+- [ ] Document build environment (Rust version, OS, compiler flags)
+- [ ] Add binary hash verification in release notes
+- [ ] Set up reproducible-builds.org verification
+- [ ] Consider GPG signing of release binaries
 
 ---
 
@@ -254,6 +353,23 @@ fit our existing model with acceptable size increase.
 3. **Address Size**: PQ addresses are ~4.4KB. Options: QR codes, address registry, hybrid derivation.
 4. **Compact Blocks**: Required for 26 KB transactions. Implement before PQ rings.
 
+### Classical → PQ Migration Path
+
+User migration from classical to post-quantum addresses:
+
+- [ ] Document user migration flow in `docs/pq-migration.md`
+- [ ] Add wallet command: `botho wallet migrate-to-pq`
+  - Generates new PQ address from existing seed
+  - Sweeps all UTXOs to new PQ address
+  - Preserves transaction history
+- [ ] Create migration guide for existing users
+- [ ] Address size solutions:
+  - [ ] Implement Base58Check encoding for ~4.4KB addresses
+  - [ ] Add QR code generation for address sharing
+  - [ ] Consider address registry service (optional, centralized convenience)
+  - [ ] Explore BIP-32-style HD derivation for PQ keys
+- [ ] Add deprecation warnings for classical addresses (future)
+
 ---
 
 ## Version Roadmap
@@ -272,21 +388,60 @@ v0.1.x (security patches) — NEXT
 ├── Update ring dependency (CRITICAL)
 ├── Fix SCP panic handling (HIGH)
 ├── Fix LRU unsafe code (HIGH)
-└── Add rate limiting (HIGH)
+├── Add rate limiting (HIGH)
+├── Migrate println! to tracing (NEW)
+├── Add /health endpoint (NEW)
+└── Add basic Prometheus metrics (NEW)
 
 v0.2.0 (hardened beta)
 ├── All Critical/High issues resolved
 ├── 3+ consecutive clean internal audits
 ├── deny.toml dependency policy
-├── Multiple seed nodes
-└── Mobile wallet support
+├── Performance benchmarks established and passing
+├── E2E test suite passing (5-node consensus)
+├── Observability stack operational
+├── Upgrade/migration strategy documented
+├── Multiple seed nodes (3 regions)
+└── Mobile wallet (see breakdown below)
+
+v0.3.0 (ecosystem)
+├── Exchange integration tested with 2+ partners
+├── Compact block relay implemented
+├── UTXO snapshots for fast initial sync
+├── Address registry or QR-based PQ address sharing
+├── Formal protocol specification published
+└── Community governance proposal process (BIP-style)
 
 v1.0.0 (production)
-├── External security audit passed
-├── 6+ months stable operation
-├── Community governance
-└── Full documentation
+├── External security audit passed (all findings resolved)
+├── Reproducible builds verified
+├── 6+ months stable mainnet operation
+├── Community governance active
+├── Full documentation with versioning
+└── Binary signing and release verification
 ```
+
+### Mobile Wallet Breakdown (v0.2.0)
+
+| Task | Platform | Status |
+|------|----------|--------|
+| Choose framework | Both | [ ] React Native vs Flutter vs Native |
+| iOS app shell | iOS | [ ] Basic structure with Keychain |
+| Balance & history view | iOS | [ ] Read-only wallet functionality |
+| QR code scanning | iOS | [ ] Address input via camera |
+| Send flow | iOS | [ ] Biometric confirmation required |
+| TestFlight beta | iOS | [ ] Internal testing release |
+| Android parity | Android | [ ] (v0.3.0) Full feature parity |
+
+### Bridge Service (Needs Scoping)
+
+The plan mentions updating `ethers`/`alloy` but bridge architecture is undefined:
+
+- [ ] Document bridge architecture (target chain: Ethereum? BSC? Multi-chain?)
+- [ ] Define trust model (federated signers? MPC? trustless with ZK proofs?)
+- [ ] Separate security audit for bridge (distinct attack surface)
+- [ ] Rate limit bridge transactions
+- [ ] Add bridge monitoring and alerting
 
 ---
 
@@ -312,6 +467,26 @@ Add regional seed nodes when network grows:
 - `seed-us.botho.io` (US-East)
 - `seed-eu.botho.io` (EU-West)
 - `seed-ap.botho.io` (AP-Southeast)
+
+### Disaster Recovery
+
+- [ ] Automated daily backup for seed node ledger (S3 snapshots)
+- [ ] Seed node failover procedure:
+  - [ ] DNS failover to secondary seed (Route53 health checks)
+  - [ ] Document manual failover runbook
+- [ ] Emergency rollback procedure for bad releases:
+  - [ ] Keep N-2 binaries available for download
+  - [ ] Document rollback steps in `UPGRADING.md`
+- [ ] Define RTO/RPO targets:
+  - RTO (Recovery Time Objective): < 1 hour
+  - RPO (Recovery Point Objective): < 5 minutes (last confirmed block)
+
+### Network Bootstrap Strategy
+
+- [ ] Implement DNS seed discovery (`seeds.botho.io` TXT records)
+- [ ] Add peer exchange protocol (PEX) for decentralized discovery
+- [ ] Define bootstrap node diversity requirements (min 3 geographic regions)
+- [ ] Add fallback to hardcoded seed list if DNS fails
 
 ---
 
