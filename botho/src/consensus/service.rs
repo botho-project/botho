@@ -5,8 +5,8 @@
 use super::validation::TransactionValidator;
 use super::value::ConsensusValue;
 use crate::ledger::ChainState;
-use bth_common::{logger::create_null_logger, NodeID};
-use bth_consensus_scp::{msg::Msg as ScpMsg, node::Node, QuorumSet, ScpNode, SlotIndex};
+use bth_common::NodeID;
+use bth_consensus_scp::{create_null_logger, msg::Msg as ScpMsg, node::Node, QuorumSet, ScpNode, SlotIndex};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::fmt;

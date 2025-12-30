@@ -590,7 +590,7 @@ fn run_node(
     });
 
     // Create SCP node with a stub logger
-    let logger = bth_common::logger::create_null_logger();
+    let logger = bth_consensus_scp::create_null_logger();
     let mut scp_node = Node::new(
         node_id.clone(),
         quorum_set,

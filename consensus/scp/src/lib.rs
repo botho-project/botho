@@ -27,3 +27,6 @@ pub use crate::{
     quorum_set::{QuorumSet, QuorumSetMember, QuorumSetMemberWrapper},
     quorum_set_ext::QuorumSetExt,
 };
+
+// Re-export logger utilities for consumers who need to construct SCP nodes
+pub use bth_common::logger::{create_null_logger, Logger};

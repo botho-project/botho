@@ -58,7 +58,7 @@ sentry = { workspace = true, features = ["backtrace", "contexts", "log", "panic"
 serde = { workspace = true, features = ["alloc", "derive"] }
 sha3 = { workspace = true }
 siphasher = { workspace = true }
-slog = { workspace = true, features = ["dynamic-keys", "max_level_trace", "release_max_level_trace"] }
+slog = { workspace = true, features = ["dynamic-keys", "max_level_trace", "release_max_level_trace"], optional = true }
 slog-async = { workspace = true, optional = true }
 slog-atomic = { workspace = true, optional = true }
 slog-envlogger = { workspace = true, optional = true }

@@ -2,7 +2,7 @@ use bth_account_keys::PublicAddress;
 use bth_crypto_keys::{RistrettoPublic, RistrettoSignature};
 use bth_transaction_types::Network;
 use heed::types::{Bytes, U64};
-use heed::{Database, Env, EnvOpenOptions, RoTxn, RwTxn};
+use heed::{Database, Env, EnvOpenOptions, RwTxn};
 use std::fs;
 use std::path::Path;
 use tracing::{debug, info};

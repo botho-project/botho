@@ -52,6 +52,8 @@ pub fn fast_hash(data: &[u8]) -> Hash {
     output
 }
 
+// slog-based logger module (requires slog feature)
+#[cfg(feature = "slog")]
 pub mod logger;
 
 // Loggers
