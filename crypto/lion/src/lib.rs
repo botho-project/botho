@@ -92,7 +92,7 @@ pub mod ring_signature;
 pub use error::{LionError, Result};
 pub use lattice::{LionKeyImage, LionKeyPair, LionPublicKey, LionSecretKey};
 pub use params::{KEY_IMAGE_BYTES, PUBLIC_KEY_BYTES, RING_SIZE, SECRET_KEY_BYTES, SIGNATURE_BYTES};
-pub use ring_signature::{sign, verify, LionRingSignature, Ring};
+pub use ring_signature::{sign, verify, verify_batch, verify_batch_all, BatchVerifyResult, LionRingSignature, Ring};
 
 #[cfg(test)]
 mod tests {

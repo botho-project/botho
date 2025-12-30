@@ -18,7 +18,7 @@ use bth_crypto_lion::{
     LionKeyImage,
 };
 use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
-use rand::SeedableRng;
+use rand::{SeedableRng, RngCore};
 use rand_chacha::ChaCha20Rng;
 
 /// Pre-generate test fixtures for benchmarking
@@ -254,19 +254,7 @@ fn bench_poly_ops(c: &mut Criterion) {
         })
     });
 
-    // NTT inverse
-    let mut p_ntt = p1.clone();
-    p_ntt.ntt();
-    group.bench_function("NTT inverse", |b| {
-        let mut p = p_ntt.clone();
-        b.iter(|| {
-            p.ntt_inv();
-            black_box(&p);
-            p = p_ntt.clone();
-        })
-    });
-
-    // Polynomial multiplication via NTT
+    // Polynomial multiplication via NTT (includes NTT forward + inverse internally)
     group.bench_function("ntt_mul", |b| {
         b.iter(|| {
             black_box(p1.ntt_mul(&p2))

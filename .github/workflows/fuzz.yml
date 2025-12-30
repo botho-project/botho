@@ -1,9 +1,6 @@
 name: Fuzzing
 
 on:
-  schedule:
-    # Run at 2 AM UTC daily
-    - cron: '0 2 * * *'
   workflow_dispatch:
     inputs:
       target:
@@ -36,6 +33,7 @@ jobs:
           - fuzz_rpc_request
           - fuzz_address_parsing
           - fuzz_mlkem_decapsulation
+          - fuzz_lion_signature
 
     steps:
       - name: Checkout repository

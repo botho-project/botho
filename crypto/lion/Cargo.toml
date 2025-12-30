@@ -10,6 +10,9 @@ description = "Lion lattice-based linkable ring signatures for Botho"
 [features]
 default = ["std"]
 std = []
+# Parallelism feature - currently not used at NTT level due to thread overhead.
+# May be useful for batch operations at higher levels.
+parallel = ["rayon"]
 serde = ["dep:serde"]
 
 [dependencies]
@@ -29,6 +32,9 @@ zeroize = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }
 subtle = { workspace = true }
 serde = { workspace = true, features = ["derive", "alloc"], optional = true }
+
+# Parallelism
+rayon = { workspace = true, optional = true }
 
 # Botho dependencies
 bth-crypto-digestible = { workspace = true }

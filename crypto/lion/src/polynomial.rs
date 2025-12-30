@@ -108,12 +108,13 @@ impl Poly {
 
     /// Pointwise multiplication in NTT domain with Montgomery reduction.
     /// Both self and other must be in NTT domain.
+    #[inline]
     pub fn pointwise_mul(&self, other: &Self) -> Self {
         let mut result = Self::zero();
         for i in 0..N {
-            let a = self.coeffs[i] as i32;
-            let b = other.coeffs[i] as i32;
-            let prod = montgomery_reduce(a as i64 * b as i64);
+            let a = self.coeffs[i] as i64;
+            let b = other.coeffs[i] as i64;
+            let prod = montgomery_reduce(a * b);
             result.coeffs[i] = caddq(prod) as u32;
         }
         result
@@ -371,7 +372,7 @@ const NTT_F: i32 = 41978;
 /// Montgomery reduction: compute a * 2^(-32) mod Q.
 ///
 /// For a in [-2^31*Q, 2^31*Q], returns r in (-Q, Q) with a ≡ r * 2^32 (mod Q).
-#[inline]
+#[inline(always)]
 fn montgomery_reduce(a: i64) -> i32 {
     let t = (a as i32).wrapping_mul(QINV as i32);
     ((a - (t as i64) * (Q as i64)) >> 32) as i32
@@ -398,6 +399,7 @@ fn caddq(a: i32) -> i32 {
 /// Output: coefficients in bit-reversed order, each in [0, Q).
 ///
 /// After NTT, polynomials can be multiplied pointwise.
+#[inline]
 fn ntt_forward(coeffs: &mut [u32; N]) {
     // Convert to signed for internal computation
     let mut a: [i32; N] = [0; N];
@@ -436,6 +438,7 @@ fn ntt_forward(coeffs: &mut [u32; N]) {
 /// Output: coefficients in standard order, each in [0, Q).
 ///
 /// Includes the 1/N scaling factor combined with Montgomery correction.
+#[inline]
 fn ntt_inverse(coeffs: &mut [u32; N]) {
     // Convert to signed for internal computation
     let mut a: [i32; N] = [0; N];
@@ -674,6 +677,8 @@ impl PolyMatrix {
 
     /// Apply NTT to all polynomials.
     pub fn ntt(&mut self) {
+        // Note: Parallelism at this level has too much overhead for 4 tasks.
+        // Keep serial for now; parallelize at higher levels (batch operations).
         for row in self.rows.iter_mut() {
             row.ntt();
         }
@@ -684,14 +689,12 @@ impl PolyMatrix {
     /// Result is also in NTT domain.
     pub fn mul_vec_ntt_domain(&self, s: &PolyVecL) -> PolyVecK {
         let mut result = PolyVecK::zero();
-
         for (i, row) in self.rows.iter().enumerate() {
             for (j, poly) in row.polys.iter().enumerate() {
                 let prod = poly.pointwise_mul(&s.polys[j]);
                 result.polys[i].add_assign(&prod);
             }
         }
-
         result
     }
 

@@ -229,13 +229,13 @@ impl MintingTx {
     }
 
     /// Compute the PoW hash.
-    /// Uses stealth keys (target_key, public_key) to bind PoW to the specific output.
+    /// Uses minter keys to match BlockHeader::pow_hash for block validation.
     pub fn pow_hash(&self) -> [u8; 32] {
         let mut hasher = Sha256::new();
         hasher.update(self.nonce.to_le_bytes());
         hasher.update(self.prev_block_hash);
-        hasher.update(self.target_key);
-        hasher.update(self.public_key);
+        hasher.update(self.minter_view_key);
+        hasher.update(self.minter_spend_key);
         hasher.finalize().into()
     }
 

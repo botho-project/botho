@@ -27,14 +27,19 @@ use botho::{
     mempool::{Mempool, MempoolError},
     transaction::{
         Transaction, TxInput, TxInputs, TxOutput, Utxo, UtxoId,
-        PICOCREDITS_PER_CREDIT,
+        MIN_TX_FEE, PICOCREDITS_PER_CREDIT,
     },
 };
 use botho_wallet::WalletKeys;
 
 /// Helper to calculate fee for simple (non-private) transactions
-fn calculate_fee(mempool: &Mempool, amount: u64) -> u64 {
-    mempool.estimate_fee(false, amount, 0)
+///
+/// NOTE: The mempool validates fees based on output_sum (total of all outputs),
+/// not just the send amount. Since output_sum = input_sum - fee, and for small
+/// fees this is approximately input_sum, we pass the input amount (UTXO value)
+/// to ensure the calculated fee covers the validation requirement.
+fn calculate_fee_for_outputs(mempool: &Mempool, output_sum: u64) -> u64 {
+    mempool.estimate_fee(false, output_sum, 0)
 }
 
 // ============================================================================
@@ -413,7 +418,9 @@ fn test_mempool_add_and_clear_on_block() {
     let (sender_utxo, subaddr_idx) = &utxos[0];
 
     let send_amount = 10 * PICOCREDITS_PER_CREDIT;
-    let fee = calculate_fee(&mempool, send_amount);
+    // Fee is calculated based on output_sum, which equals input_sum minus fee
+    // For simplicity, use input_sum (UTXO value) as an approximation
+    let fee = calculate_fee_for_outputs(&mempool, sender_utxo.output.amount);
     let state = ledger.get_chain_state().unwrap();
 
     let tx = create_signed_transaction(
@@ -465,7 +472,7 @@ fn test_mempool_rejects_double_spend() {
 
     // Create first transaction with proper fee
     let send_amount1 = 10 * PICOCREDITS_PER_CREDIT;
-    let fee1 = calculate_fee(&mempool, send_amount1);
+    let fee1 = calculate_fee_for_outputs(&mempool, sender_utxo.output.amount);
     let tx1 = create_signed_transaction(
         &miner_wallet,
         sender_utxo,
@@ -478,7 +485,7 @@ fn test_mempool_rejects_double_spend() {
 
     // Create second transaction spending the same UTXO with proper fee
     let send_amount2 = 15 * PICOCREDITS_PER_CREDIT;
-    let fee2 = calculate_fee(&mempool, send_amount2);
+    let fee2 = calculate_fee_for_outputs(&mempool, sender_utxo.output.amount);
     let tx2 = create_signed_transaction(
         &miner_wallet,
         sender_utxo,
@@ -519,7 +526,7 @@ fn test_mempool_rejects_insufficient_fee() {
     let state = ledger.get_chain_state().unwrap();
 
     let send_amount = 10 * PICOCREDITS_PER_CREDIT;
-    let required_fee = calculate_fee(&mempool, send_amount);
+    let required_fee = calculate_fee_for_outputs(&mempool, sender_utxo.output.amount);
 
     // Create transaction with fee that's too low (half of required)
     let insufficient_fee = required_fee / 2;
@@ -567,7 +574,8 @@ fn test_mempool_remove_invalid_after_block() {
 
     // Create two transactions, each spending different UTXOs with proper fees
     let send_amount = 10 * PICOCREDITS_PER_CREDIT;
-    let fee = calculate_fee(&mempool, send_amount);
+    // Use the first UTXO's value for fee calculation (both should be equal - block rewards)
+    let fee = calculate_fee_for_outputs(&mempool, utxo1.output.amount);
 
     let tx1 = create_signed_transaction(
         &miner_wallet,
@@ -925,7 +933,7 @@ fn test_mempool_already_exists_rejection() {
     let state = ledger.get_chain_state().unwrap();
 
     let send_amount = 10 * PICOCREDITS_PER_CREDIT;
-    let fee = calculate_fee(&mempool, send_amount);
+    let fee = calculate_fee_for_outputs(&mempool, utxo.output.amount);
 
     let tx = create_signed_transaction(
         &miner,
@@ -971,7 +979,8 @@ fn test_mempool_transactions_sorted_by_fee() {
 
     // Create transactions with different fees (base fee + multiplier)
     let send_amount = 5 * PICOCREDITS_PER_CREDIT;
-    let base_fee = calculate_fee(&mempool, send_amount);
+    // Use first UTXO's amount for base fee calculation
+    let base_fee = calculate_fee_for_outputs(&mempool, utxos[0].0.output.amount);
     let fee_multipliers = [1u64, 2u64, 3u64];
     let mut actual_fees = vec![];
 

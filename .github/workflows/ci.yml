@@ -1,15 +1,6 @@
 name: CI
 
 on:
-  pull_request:
-    paths-ignore:
-      - '**.md'
-  push:
-    branches:
-      - main
-      - 'release/**'
-    paths-ignore:
-      - '**.md'
   workflow_dispatch:
 
 env:

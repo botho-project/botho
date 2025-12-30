@@ -219,8 +219,8 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
     let local_peer_id = discovery.local_peer_id();
     let node_id = peer_id_to_node_id(&local_peer_id);
 
-    // Build SCP quorum set from connected peers
-    let scp_quorum_set = build_scp_quorum_set(&quorum);
+    // Build SCP quorum set from connected peers (or just ourselves for solo mining)
+    let scp_quorum_set = build_scp_quorum_set(&quorum, &local_peer_id);
 
     let mut consensus = ConsensusService::new(
         node_id,
@@ -704,6 +704,14 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                             if let Err(e) = NetworkDiscovery::broadcast_scp(&mut swarm, &msg) {
                                 warn!("Failed to broadcast SCP message: {}", e);
                             }
+
+                            // For solo mining: loop our own message back to ourselves
+                            // This is required because SCP needs to see its own messages to advance
+                            if discovery.peer_count() == 0 {
+                                if let Err(e) = consensus.handle_message(msg) {
+                                    debug!("Failed to process own SCP message: {}", e);
+                                }
+                            }
                         }
                         ConsensusEvent::Progress { slot_index, phase } => {
                             debug!(slot = slot_index, phase = %phase, "Consensus progress");
@@ -803,11 +811,12 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
 }
 
 /// Build SCP quorum set from QuorumBuilder
-fn build_scp_quorum_set(quorum: &QuorumBuilder) -> QuorumSet {
+/// For solo mining (no peers), includes the local node as the only member
+fn build_scp_quorum_set(quorum: &QuorumBuilder, local_peer_id: &libp2p::PeerId) -> QuorumSet {
     use bth_consensus_scp_types::QuorumSetMember;
 
     // Create NodeIDs from actual PeerIds
-    let members: Vec<QuorumSetMember<NodeID>> = quorum
+    let mut members: Vec<QuorumSetMember<NodeID>> = quorum
         .members()
         .into_iter()
         .map(|peer_id| {
@@ -816,7 +825,16 @@ fn build_scp_quorum_set(quorum: &QuorumBuilder) -> QuorumSet {
         })
         .collect();
 
-    QuorumSet::new(quorum.threshold() as u32, members)
+    // For solo mining: if no peers, include ourselves as the only quorum member
+    if members.is_empty() {
+        let local_node_id = peer_id_to_node_id(local_peer_id);
+        members.push(QuorumSetMember::Node(local_node_id));
+    }
+
+    // Threshold is 1 for solo mining, otherwise use configured threshold
+    let threshold = if members.len() == 1 { 1 } else { quorum.threshold() as u32 };
+
+    QuorumSet::new(threshold, members)
 }
 
 /// Convert a libp2p PeerId to an SCP NodeID

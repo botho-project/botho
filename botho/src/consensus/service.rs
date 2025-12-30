@@ -314,6 +314,11 @@ impl ConsensusService {
         self.check_externalized();
     }
 
+    /// Check if we're in solo mining mode (1-of-1 quorum with ourselves)
+    fn is_solo_mode(&self) -> bool {
+        self.quorum_set.threshold == 1 && self.quorum_set.members.len() == 1
+    }
+
     /// Propose pending values to SCP
     fn propose_pending_values(&mut self) {
         if self.pending_values.is_empty() {
@@ -333,12 +338,33 @@ impl ConsensusService {
             return;
         }
 
+        let slot = self.scp_node.current_slot_index();
         info!(
-            slot = self.scp_node.current_slot_index(),
+            slot = slot,
             count = to_propose.len(),
             "Proposing values to SCP"
         );
 
+        // Solo mining mode: bypass SCP and directly externalize
+        // This is safe because we're the only validator in a 1-of-1 quorum
+        if self.is_solo_mode() {
+            let values: Vec<ConsensusValue> = to_propose.iter().cloned().collect();
+            info!(slot, count = values.len(), "Solo mode: directly externalizing values");
+
+            // Remove values from pending
+            for v in &values {
+                self.pending_values.remove(v);
+            }
+
+            self.externalized = Some(values.clone());
+            self.events.push_back(ConsensusEvent::SlotExternalized {
+                slot_index: slot,
+                values,
+            });
+            return;
+        }
+
+        // Normal SCP path for multi-node consensus
         match self.scp_node.propose_values(to_propose.clone()) {
             Ok(Some(msg)) => {
                 self.proposed_values.extend(to_propose);
@@ -430,7 +456,15 @@ impl ConsensusService {
 
         self.externalized = None;
         self.proposed_values.clear();
-        // SCP node automatically advances after externalization
+
+        // For solo mode, we need to explicitly advance the SCP slot
+        // since we bypassed the normal SCP externalization path
+        if self.is_solo_mode() {
+            let next_slot = self.scp_node.current_slot_index() + 1;
+            self.scp_node.reset_slot_index(next_slot);
+            info!(slot = next_slot, "Advanced to next slot (solo mode)");
+        }
+        // In multi-node mode, SCP node automatically advances after externalization
     }
 
     /// Get pending transaction count

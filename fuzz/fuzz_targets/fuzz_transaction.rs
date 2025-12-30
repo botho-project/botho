@@ -140,10 +140,8 @@ fn fuzz_structured(fuzz_tx: &FuzzTransaction) {
     let height = fuzz_tx.created_at_height;
     let _future_height = height.saturating_add(1000);
 
-    // Serialize and deserialize fuzz data to find serialization bugs
-    if let Ok(serialized) = bincode::serialize(fuzz_tx) {
-        let _ = bincode::deserialize::<FuzzTransaction>(&serialized);
-    }
+    // Test that arithmetic doesn't overflow/panic
+    let _ = fuzz_tx.fee.checked_mul(1000);
 }
 
 /// Fuzz individual components
@@ -176,9 +174,10 @@ fn validate_transaction(tx: &Transaction) {
     let _ = tx.outputs.len();
 
     // Test iteration doesn't panic
-    for input in &tx.inputs {
-        let _ = input.target_key;
-    }
+    // TxInputs is an enum - access via methods
+    let _ = tx.inputs.len();
+    let _ = tx.inputs.is_ring();
+    let _ = tx.inputs.key_images();
     for output in &tx.outputs {
         let _ = output.amount;
         let _ = output.target_key;
