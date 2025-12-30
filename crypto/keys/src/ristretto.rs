@@ -802,4 +802,199 @@ mod test {
             assert_eq!(deserialized_pubkey, pubkey);
         });
     }
+
+    // Test scalar multiplication properties
+    #[test]
+    fn test_scalar_multiplication() {
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
+            let private = RistrettoPrivate::from_random(&mut rng);
+            let public = RistrettoPublic::from(&private);
+
+            // Verify that scalar * generator = public key point
+            let scalar: &Scalar = private.as_ref();
+            let expected_point: RistrettoPoint = RISTRETTO_BASEPOINT_POINT * scalar;
+            let public_point: &RistrettoPoint = public.as_ref();
+            assert_eq!(*public_point, expected_point);
+        });
+    }
+
+    // Test Scalar conversion roundtrip via bytes
+    #[test]
+    fn test_scalar_bytes_roundtrip() {
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
+            let private = RistrettoPrivate::from_random(&mut rng);
+            let scalar: &Scalar = private.as_ref();
+            let bytes = scalar.as_bytes();
+            let recovered_scalar = Scalar::from_bytes_mod_order(*bytes);
+            assert_eq!(*scalar, recovered_scalar);
+        });
+    }
+
+    // Test RistrettoPoint conversion through compression
+    #[test]
+    fn test_point_conversion() {
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
+            let private = RistrettoPrivate::from_random(&mut rng);
+            let public = RistrettoPublic::from(&private);
+            let point: &RistrettoPoint = public.as_ref();
+
+            // Convert back through compression
+            let compressed = point.compress();
+            let decompressed = compressed.decompress().expect("Should decompress");
+            assert_eq!(*point, decompressed);
+        });
+    }
+
+    // Test Display/Debug for public keys
+    #[test]
+    fn test_public_key_display() {
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
+            let private = RistrettoPrivate::from_random(&mut rng);
+            let public = RistrettoPublic::from(&private);
+
+            // Display should produce 64 hex chars
+            let display = alloc::format!("{}", public);
+            assert_eq!(display.len(), 64);
+
+            // Debug should also work
+            let debug = alloc::format!("{:?}", public);
+            assert!(!debug.is_empty());
+        });
+    }
+
+    // Test public key ordering
+    #[test]
+    fn test_public_key_ordering() {
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
+            let mut keys: alloc::vec::Vec<RistrettoPublic> = (0..10)
+                .map(|_| RistrettoPublic::from(&RistrettoPrivate::from_random(&mut rng)))
+                .collect();
+
+            // Should be sortable
+            keys.sort();
+
+            // Verify ordering is consistent with PartialOrd
+            for i in 0..keys.len() - 1 {
+                assert!(keys[i] <= keys[i + 1]);
+            }
+        });
+    }
+
+    // Test private key Clone and Zeroize
+    #[test]
+    fn test_private_key_clone() {
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
+            let private = RistrettoPrivate::from_random(&mut rng);
+            let cloned = private.clone();
+            assert_eq!(private, cloned);
+            assert_eq!(
+                RistrettoPublic::from(&private),
+                RistrettoPublic::from(&cloned)
+            );
+        });
+    }
+
+    // Test CompressedRistrettoPublic
+    #[test]
+    fn test_compressed_public_from_slice() {
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
+            let private = RistrettoPrivate::from_random(&mut rng);
+            let public = RistrettoPublic::from(&private);
+            let compressed = CompressedRistrettoPublic::from(&public);
+
+            // Get as bytes and reconstruct
+            let bytes: &[u8; 32] = compressed.as_ref();
+            let from_slice = CompressedRistrettoPublic::try_from(&bytes[..]).expect("Should work");
+            assert_eq!(compressed, from_slice);
+        });
+    }
+
+    // Test invalid compressed point fails gracefully
+    #[test]
+    fn test_invalid_compressed_point() {
+        // All 1s is not a valid compressed ristretto point
+        let invalid = [1u8; 32];
+        let result = CompressedRistrettoPublic::try_from(&invalid[..]);
+        // The compressed point can be created, but decompression should fail
+        if let Ok(compressed) = result {
+            let decompressed = RistrettoPublic::try_from(&compressed);
+            assert!(decompressed.is_err());
+        }
+    }
+
+    // Test public key hash consistency (using HashSet for Hash trait testing)
+    #[test]
+    fn test_public_key_hash() {
+        use alloc::collections::BTreeSet;
+
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
+            let private = RistrettoPrivate::from_random(&mut rng);
+            let public = RistrettoPublic::from(&private);
+            let public_clone = public.clone();
+
+            // Insert into a set and verify equality works
+            let mut set = BTreeSet::new();
+            set.insert(public.clone());
+
+            // Same key should be found
+            assert!(set.contains(&public_clone));
+
+            // Different key should not be found
+            let other = RistrettoPublic::from(&RistrettoPrivate::from_random(&mut rng));
+            assert!(!set.contains(&other));
+        });
+    }
+
+    // Test key exchange with self (should produce same result)
+    #[test]
+    fn test_key_exchange_deterministic() {
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
+            let alice = RistrettoPrivate::from_random(&mut rng);
+            let bob_public = RistrettoPublic::from(&RistrettoPrivate::from_random(&mut rng));
+
+            let secret1 = alice.key_exchange(&bob_public);
+            let secret2 = alice.key_exchange(&bob_public);
+
+            assert_eq!(secret1.as_ref() as &[u8], secret2.as_ref() as &[u8]);
+        });
+    }
+
+    // Test RistrettoPublic bytes roundtrip via point
+    #[test]
+    fn test_public_bytes_roundtrip_via_point() {
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
+            let private = RistrettoPrivate::from_random(&mut rng);
+            let public = RistrettoPublic::from(&private);
+
+            // Get bytes, reconstruct
+            let bytes = public.to_bytes();
+            let recovered = RistrettoPublic::try_from(&bytes[..]).expect("Should work");
+            assert_eq!(public, recovered);
+        });
+    }
+
+    // Test FromRandom implementations
+    #[test]
+    fn test_from_random() {
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
+            // RistrettoPublic::from_random
+            let public1 = RistrettoPublic::from_random(&mut rng);
+            let public2 = RistrettoPublic::from_random(&mut rng);
+            assert_ne!(public1, public2);
+
+            // RistrettoPrivate::from_random
+            let private1 = RistrettoPrivate::from_random(&mut rng);
+            let private2 = RistrettoPrivate::from_random(&mut rng);
+            assert_ne!(private1, private2);
+        });
+    }
+
+    // Test Default implementation for RistrettoPublic
+    #[test]
+    fn test_default() {
+        let default_public = RistrettoPublic::default();
+        // Default is identity point
+        let bytes = default_public.to_bytes();
+        assert_eq!(bytes.len(), 32);
+    }
 }

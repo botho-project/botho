@@ -68,6 +68,7 @@ bth-crypto-hashes = { workspace = true }
 bth-util-test-helper = { workspace = true }
 
 pem = { workspace = true }
+rand_core = { workspace = true, features = ["getrandom"] }
 rand_hc = { workspace = true }
 semver = { workspace = true }
 serde_json = { workspace = true }

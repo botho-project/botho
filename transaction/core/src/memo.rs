@@ -282,4 +282,174 @@ mod tests {
             "decrypting with wrong key succeeded"
         );
     }
+
+    #[test]
+    fn test_memo_payload_new() {
+        let memo_type = [0x01, 0x02];
+        let memo_data = [0xAB; 64];
+        let memo = MemoPayload::new(memo_type, memo_data);
+
+        assert_eq!(memo.get_memo_type(), &memo_type);
+        assert_eq!(memo.get_memo_data(), &memo_data);
+    }
+
+    #[test]
+    fn test_memo_payload_default() {
+        let memo = MemoPayload::default();
+        assert_eq!(memo.get_memo_type(), &[0u8, 0u8]);
+        assert_eq!(memo.get_memo_data(), &[0u8; 64]);
+    }
+
+    #[test]
+    fn test_encrypted_memo_try_from_valid_slice() {
+        let bytes = [0u8; 66];
+        let result = EncryptedMemo::try_from(&bytes[..]);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_encrypted_memo_try_from_invalid_slice() {
+        let short_bytes = [0u8; 32];
+        let result = EncryptedMemo::try_from(&short_bytes[..]);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), MemoError::BadLength(32));
+
+        let long_bytes = [0u8; 100];
+        let result2 = EncryptedMemo::try_from(&long_bytes[..]);
+        assert!(result2.is_err());
+        assert_eq!(result2.unwrap_err(), MemoError::BadLength(100));
+    }
+
+    #[test]
+    fn test_memo_payload_try_from_valid_slice() {
+        let bytes = [0u8; 66];
+        let result = MemoPayload::try_from(&bytes[..]);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_memo_payload_try_from_invalid_slice() {
+        let short_bytes = [0u8; 32];
+        let result = MemoPayload::try_from(&short_bytes[..]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_encrypted_memo_as_ref() {
+        let mut rng = RngType::seed_from_u64(42);
+        let key = RistrettoPublic::from_random(&mut rng);
+        let memo = MemoPayload::new([1, 2], [3; 64]);
+        let encrypted = memo.encrypt(&key);
+
+        let slice: &[u8] = encrypted.as_ref();
+        assert_eq!(slice.len(), 66);
+    }
+
+    #[test]
+    fn test_memo_payload_as_ref() {
+        let memo = MemoPayload::new([1, 2], [3; 64]);
+        let slice: &[u8] = memo.as_ref();
+        assert_eq!(slice.len(), 66);
+        assert_eq!(slice[0], 1);
+        assert_eq!(slice[1], 2);
+    }
+
+    #[test]
+    fn test_encrypted_memo_from_generic_array() {
+        let arr = GenericArray::<u8, U66>::default();
+        let encrypted = EncryptedMemo::from(arr.clone());
+        let recovered: GenericArray<u8, U66> = encrypted.into();
+        assert_eq!(arr, recovered);
+    }
+
+    #[test]
+    fn test_memo_payload_from_generic_array() {
+        let arr = GenericArray::<u8, U66>::default();
+        let memo = MemoPayload::from(arr.clone());
+        let recovered: GenericArray<u8, U66> = memo.into();
+        assert_eq!(arr, recovered);
+    }
+
+    #[test]
+    fn test_memo_payload_ordering() {
+        let memo1 = MemoPayload::new([0, 0], [0; 64]);
+        let memo2 = MemoPayload::new([0, 1], [0; 64]);
+        let memo3 = MemoPayload::new([1, 0], [0; 64]);
+
+        assert!(memo1 < memo2);
+        assert!(memo2 < memo3);
+        assert!(memo1 < memo3);
+    }
+
+    #[test]
+    fn test_memo_payload_equality() {
+        let memo1 = MemoPayload::new([1, 2], [3; 64]);
+        let memo2 = MemoPayload::new([1, 2], [3; 64]);
+        let memo3 = MemoPayload::new([1, 2], [4; 64]);
+
+        assert_eq!(memo1, memo2);
+        assert_ne!(memo1, memo3);
+    }
+
+    #[test]
+    fn test_encrypted_memo_default() {
+        let encrypted = EncryptedMemo::default();
+        let slice: &[u8] = encrypted.as_ref();
+        assert!(slice.iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn test_memo_error_variants() {
+        use alloc::string::ToString;
+
+        let err1 = MemoError::BadLength(100);
+        assert!(err1.to_string().contains("100"));
+
+        let err2 = MemoError::Utf8Decoding;
+        assert!(!err2.to_string().is_empty());
+
+        let err3 = MemoError::MaxFeeExceeded(100, 200);
+        assert!(err3.to_string().contains("100"));
+        assert!(err3.to_string().contains("200"));
+    }
+
+    #[test]
+    fn test_memo_error_equality() {
+        let err1 = MemoError::BadLength(100);
+        let err2 = MemoError::BadLength(100);
+        let err3 = MemoError::BadLength(200);
+
+        assert_eq!(err1, err2);
+        assert_ne!(err1, err3);
+    }
+
+    #[test]
+    fn test_encryption_is_deterministic() {
+        let mut rng = RngType::seed_from_u64(123);
+        let key = RistrettoPublic::from_random(&mut rng);
+
+        let memo1 = MemoPayload::new([1, 2], [3; 64]);
+        let memo2 = MemoPayload::new([1, 2], [3; 64]);
+
+        let encrypted1 = memo1.encrypt(&key);
+        let encrypted2 = memo2.encrypt(&key);
+
+        // Same memo with same key should produce same ciphertext
+        assert_eq!(encrypted1.as_ref() as &[u8], encrypted2.as_ref() as &[u8]);
+    }
+
+    #[test]
+    fn test_different_keys_produce_different_ciphertext() {
+        let mut rng = RngType::seed_from_u64(456);
+        let key1 = RistrettoPublic::from_random(&mut rng);
+        let key2 = RistrettoPublic::from_random(&mut rng);
+
+        let memo = MemoPayload::new([1, 2], [3; 64]);
+
+        let encrypted1 = memo.clone().encrypt(&key1);
+        let encrypted2 = memo.encrypt(&key2);
+
+        // Same memo with different keys should produce different ciphertext
+        assert_ne!(encrypted1.as_ref() as &[u8], encrypted2.as_ref() as &[u8]);
+    }
 }

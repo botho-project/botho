@@ -164,7 +164,9 @@ pub enum Error {
 #[cfg(test)]
 mod test {
     use super::*;
+    use alloc::string::ToString;
     use alloc::vec;
+    use alloc::vec::Vec;
 
     /// Valid fee maps ids should be accepted
     #[test]
@@ -224,5 +226,144 @@ mod test {
             FeeMap::try_from_iter([(Bth::ID, 1024), (TokenId::from(2), 80001)]),
             Err(Error::InvalidFeeNotDivisible(TokenId::from(2), 80001))
         );
+    }
+
+    #[test]
+    fn test_fee_map_default() {
+        let fee_map = FeeMap::default();
+        assert!(fee_map.get_fee_for_token(&Bth::ID).is_some());
+        assert_eq!(fee_map.get_fee_for_token(&Bth::ID).unwrap(), Bth::MINIMUM_FEE);
+    }
+
+    #[test]
+    fn test_fee_map_get_nonexistent_token() {
+        let fee_map = FeeMap::default();
+        let fake_token = TokenId::from(999);
+        assert!(fee_map.get_fee_for_token(&fake_token).is_none());
+    }
+
+    #[test]
+    fn test_fee_map_iter() {
+        let fee_map = FeeMap::try_from_iter([
+            (Bth::ID, 1024),
+            (TokenId::from(2), 2048),
+            (TokenId::from(3), 4096),
+        ])
+        .unwrap();
+
+        let entries: Vec<_> = fee_map.iter().collect();
+        assert_eq!(entries.len(), 3);
+    }
+
+    #[test]
+    fn test_fee_map_as_ref() {
+        let fee_map = FeeMap::default();
+        let map_ref: &BTreeMap<TokenId, u64> = fee_map.as_ref();
+        assert!(map_ref.contains_key(&Bth::ID));
+    }
+
+    #[test]
+    fn test_fee_map_update_or_default_with_some() {
+        let mut fee_map = FeeMap::default();
+        let new_fees = BTreeMap::from_iter(vec![
+            (Bth::ID, 2048),
+            (TokenId::from(2), 4096),
+        ]);
+
+        fee_map.update_or_default(Some(new_fees)).unwrap();
+        assert_eq!(fee_map.get_fee_for_token(&Bth::ID).unwrap(), 2048);
+        assert_eq!(fee_map.get_fee_for_token(&TokenId::from(2)).unwrap(), 4096);
+    }
+
+    #[test]
+    fn test_fee_map_update_or_default_with_none() {
+        let mut fee_map = FeeMap::try_from_iter([
+            (Bth::ID, 2048),
+            (TokenId::from(2), 4096),
+        ])
+        .unwrap();
+
+        fee_map.update_or_default(None).unwrap();
+        // Should reset to default
+        assert_eq!(fee_map.get_fee_for_token(&Bth::ID).unwrap(), Bth::MINIMUM_FEE);
+        assert!(fee_map.get_fee_for_token(&TokenId::from(2)).is_none());
+    }
+
+    #[test]
+    fn test_fee_map_update_or_default_with_invalid() {
+        let mut fee_map = FeeMap::default();
+        let invalid_fees = BTreeMap::from_iter(vec![
+            (Bth::ID, 100), // Too small
+        ]);
+
+        let result = fee_map.update_or_default(Some(invalid_fees));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_fee_map_canonical_digest_deterministic() {
+        let fee_map1 = FeeMap::try_from_iter([
+            (Bth::ID, 1024),
+            (TokenId::from(2), 2048),
+        ])
+        .unwrap();
+
+        let fee_map2 = FeeMap::try_from_iter([
+            (TokenId::from(2), 2048), // Different order
+            (Bth::ID, 1024),
+        ])
+        .unwrap();
+
+        // Canonical digest should be the same regardless of insertion order
+        assert_eq!(fee_map1.canonical_digest(), fee_map2.canonical_digest());
+    }
+
+    #[test]
+    fn test_fee_map_canonical_digest_different_for_different_fees() {
+        let fee_map1 = FeeMap::try_from_iter([(Bth::ID, 1024)]).unwrap();
+        let fee_map2 = FeeMap::try_from_iter([(Bth::ID, 2048)]).unwrap();
+
+        assert_ne!(fee_map1.canonical_digest(), fee_map2.canonical_digest());
+    }
+
+    #[test]
+    fn test_fee_map_clone() {
+        let fee_map = FeeMap::try_from_iter([
+            (Bth::ID, 1024),
+            (TokenId::from(2), 2048),
+        ])
+        .unwrap();
+
+        let cloned = fee_map.clone();
+        assert_eq!(fee_map, cloned);
+    }
+
+    #[test]
+    fn test_fee_map_try_from_btreemap() {
+        let map = BTreeMap::from_iter(vec![
+            (Bth::ID, 1024),
+            (TokenId::from(2), 2048),
+        ]);
+
+        let fee_map = FeeMap::try_from(map).unwrap();
+        assert_eq!(fee_map.get_fee_for_token(&Bth::ID).unwrap(), 1024);
+    }
+
+    #[test]
+    fn test_error_display() {
+        let err1 = Error::InvalidFeeTooSmall(Bth::ID, 10);
+        assert!(err1.to_string().contains("too small"));
+
+        let err2 = Error::InvalidFeeNotDivisible(Bth::ID, 1023);
+        assert!(err2.to_string().contains("not divisible"));
+
+        let err3 = Error::MissingFee(Bth::ID);
+        assert!(err3.to_string().contains("missing"));
+    }
+
+    #[test]
+    fn test_smallest_minimum_fee_log2() {
+        assert_eq!(SMALLEST_MINIMUM_FEE_LOG2, 7);
+        assert_eq!(1u64 << SMALLEST_MINIMUM_FEE_LOG2, 128);
     }
 }

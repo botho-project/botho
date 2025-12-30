@@ -31,3 +31,30 @@ pub mod tokens {
         const MINIMUM_FEE: u64 = 400 * MICROBTH_TO_NANOBTH;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::constants::MICROBTH_TO_NANOBTH;
+
+    #[test]
+    fn test_bth_token_id() {
+        assert_eq!(tokens::Bth::ID, TokenId::BTH);
+    }
+
+    #[test]
+    fn test_bth_minimum_fee() {
+        // Minimum fee should be 400 microBTH in nanoBTH
+        let expected_fee = 400 * MICROBTH_TO_NANOBTH;
+        assert_eq!(tokens::Bth::MINIMUM_FEE, expected_fee);
+    }
+
+    #[test]
+    fn test_bth_minimum_fee_is_valid() {
+        // The minimum fee should be >= 128 (SMALLEST_MINIMUM_FEE)
+        // and divisible by 128
+        let fee = tokens::Bth::MINIMUM_FEE;
+        assert!(fee >= 128);
+        assert_eq!(fee % 128, 0);
+    }
+}
