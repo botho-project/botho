@@ -23,6 +23,12 @@ use bth_account_keys::{QuantumSafeAccountKey, QuantumSafePublicAddress};
 /// Number of words in the mnemonic phrase
 const MNEMONIC_WORDS: usize = 24;
 
+/// Known test mnemonics that must not be used in production
+const TEST_MNEMONIC_PREFIXES: &[&str] = &[
+    "abandon abandon abandon", // BIP39 test vector prefix
+    "zoo zoo zoo",             // Common test pattern
+];
+
 /// Wallet keys derived from a BIP39 mnemonic.
 ///
 /// Security: The mnemonic phrase is stored in a `Zeroizing<String>` wrapper
@@ -131,6 +137,37 @@ impl WalletKeys {
     /// Compares the output's spend key against our spend public key.
     pub fn owns_output(&self, spend_key_bytes: &[u8; 32]) -> bool {
         &self.spend_public_key_bytes() == spend_key_bytes
+    }
+
+    /// Check if this mnemonic is a known test phrase.
+    ///
+    /// In release builds, this returns an error for test mnemonics to prevent
+    /// accidental use of insecure keys in production.
+    #[cfg(not(debug_assertions))]
+    pub fn validate_not_test_mnemonic(&self) -> Result<()> {
+        let phrase = self.mnemonic_phrase();
+        for test_prefix in TEST_MNEMONIC_PREFIXES {
+            if phrase.starts_with(test_prefix) {
+                return Err(anyhow!("Test mnemonic detected in production build"));
+            }
+        }
+        Ok(())
+    }
+
+    /// Check if this mnemonic is a known test phrase.
+    ///
+    /// In debug builds, this always succeeds to allow testing with test mnemonics.
+    #[cfg(debug_assertions)]
+    pub fn validate_not_test_mnemonic(&self) -> Result<()> {
+        Ok(())
+    }
+
+    /// Returns true if this is a known test mnemonic.
+    pub fn is_test_mnemonic(&self) -> bool {
+        let phrase = self.mnemonic_phrase();
+        TEST_MNEMONIC_PREFIXES
+            .iter()
+            .any(|prefix| phrase.starts_with(prefix))
     }
 
     // ===== Post-Quantum Key Methods (pq feature) =====
@@ -281,6 +318,24 @@ mod tests {
 
         // Schnorrkel signatures are 64 bytes
         assert_eq!(signature.len(), 64);
+    }
+
+    #[test]
+    fn test_is_test_mnemonic() {
+        // The standard test mnemonic should be detected
+        let keys = WalletKeys::from_mnemonic(TEST_MNEMONIC).unwrap();
+        assert!(keys.is_test_mnemonic());
+
+        // A randomly generated wallet should not be a test mnemonic
+        let random_keys = WalletKeys::generate().unwrap();
+        assert!(!random_keys.is_test_mnemonic());
+    }
+
+    #[test]
+    fn test_validate_not_test_mnemonic_in_debug() {
+        // In debug builds, validate_not_test_mnemonic always succeeds
+        let keys = WalletKeys::from_mnemonic(TEST_MNEMONIC).unwrap();
+        assert!(keys.validate_not_test_mnemonic().is_ok());
     }
 
     #[cfg(feature = "pq")]

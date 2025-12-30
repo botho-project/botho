@@ -543,7 +543,7 @@ impl NetworkDiscovery {
 
             // Handle sync request-response events
             SwarmEvent::Behaviour(BothoBehaviourEvent::Sync(
-                request_response::Event::Message { peer, message },
+                request_response::Event::Message { peer, message, .. },
             )) => match message {
                 request_response::Message::Request {
                     request_id,
@@ -576,6 +576,7 @@ impl NetworkDiscovery {
                     peer,
                     request_id,
                     error,
+                    ..
                 },
             )) => {
                 warn!(%peer, ?request_id, %error, "Sync request failed");
@@ -591,6 +592,7 @@ impl NetworkDiscovery {
                     peer,
                     request_id,
                     error,
+                    ..
                 },
             )) => {
                 warn!(%peer, ?request_id, %error, "Inbound sync request failed");
