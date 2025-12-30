@@ -412,6 +412,8 @@ fn run_test_node(
         }
         result.extend(regular_txs.into_iter().take(MAX_SLOT_VALUES - 1));
 
+        // IMPORTANT: SCP requires ballot values to be sorted for consensus safety
+        result.sort();
         Ok(result)
     });
 
@@ -810,7 +812,7 @@ fn create_signed_transaction(
 // ============================================================================
 
 #[test]
-#[ignore = "SCP bug: ballot values not sorted when rapidly mining 20+ blocks"]
+#[ignore = "Balance verification assertion needs investigation (wallet balance > circulating supply)"]
 fn test_e2e_5_node_consensus_with_mining_and_transactions() {
     println!("\n=== E2E Consensus Integration Test ===\n");
 

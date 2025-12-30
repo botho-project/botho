@@ -359,6 +359,8 @@ fn run_test_node(
         }
         result.extend(regular_txs.into_iter().take(MAX_SLOT_VALUES - 1));
 
+        // IMPORTANT: SCP requires ballot values to be sorted for consensus safety
+        result.sort();
         Ok(result)
     });
 
@@ -831,7 +833,6 @@ fn create_split_payment_transaction(
 /// Multiple wallets broadcast transactions simultaneously, all included
 /// in the same block. Tests mempool handling and consensus under concurrent load.
 #[test]
-#[ignore = "SCP bug: ballot values not sorted when 6+ transactions in single slot"]
 fn test_concurrent_transfers() {
     println!("\n=== Concurrent Transfers Test ===\n");
 
@@ -930,7 +931,6 @@ fn test_concurrent_transfers() {
 /// A wallet with multiple small UTXOs consolidates them into a single
 /// larger output. Tests dust collection and multi-input transaction handling.
 #[test]
-#[ignore = "SCP bug: ballot values not sorted when mining 30+ blocks rapidly"]
 fn test_multi_input_consolidation() {
     println!("\n=== Multi-Input Consolidation Test ===\n");
 
