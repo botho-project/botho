@@ -1,16 +1,26 @@
 # Privacy Features
 
-Botho provides strong transaction privacy through a combination of cryptographic techniques inherited from the CryptoNote protocol, enhanced with post-quantum cryptography for future-proof security.
+Botho provides strong transaction privacy through a combination of cryptographic techniques, designed from the ground up with post-quantum security. All cryptographic primitives use NIST-standardized post-quantum algorithms.
 
 ## Overview
 
-| Privacy Goal | Technique | Status |
-|--------------|-----------|--------|
-| Hide recipient | Stealth addresses (one-time keys) | Implemented |
-| Hide sender | Ring signatures (MLSAG / LION) | Implemented |
-| Hide amounts | RingCT (confidential transactions) | Planned |
-| Secure communication | Encrypted memos (AES-256-CTR) | Implemented |
-| Quantum resistance | LION lattice-based ring signatures | Implemented |
+| Privacy Goal | Technique | Applies To |
+|--------------|-----------|------------|
+| Hide recipient | PQ stealth addresses (ML-KEM-768) | All transactions |
+| Hide sender | LION lattice-based ring signatures | Private transactions |
+| Hide amounts | Pedersen commitments + Bulletproofs | Standard & Private |
+| Secure communication | Encrypted memos (AES-256-CTR) | All transactions |
+| Quantum resistance | Pure PQ throughout (no classical fallback) | All transactions |
+
+## Transaction Types
+
+Botho supports three transaction types with different privacy trade-offs. See [Transaction Types](transactions.md) for complete details.
+
+| Type | Recipient | Amount | Sender | Use Case |
+|------|-----------|--------|--------|----------|
+| **Minting** | Hidden | Public | Known | Block rewards |
+| **Standard** | Hidden | Hidden | Visible | Most transfers |
+| **Private** | Hidden | Hidden | Hidden | Maximum privacy |
 
 ## Stealth Addresses
 
@@ -22,21 +32,30 @@ Every transaction creates a **unique one-time destination address**, ensuring th
 
 ### How It Works
 
-Botho implements CryptoNote-style stealth addresses:
+Botho implements post-quantum stealth addresses using ML-KEM-768:
 
 1. **Sender creates transaction:**
-   - Generates a random ephemeral key pair `(r, R)` where `R = r*G`
-   - Computes one-time destination key: `P = H(r*A)*G + B`
-   - Where `(A, B)` are recipient's view and spend public keys
+   - Recipient publishes view public key `V` and spend public key `S`
+   - Sender encapsulates shared secret: `(ciphertext, shared_secret) = ML-KEM.Encapsulate(V)`
+   - Computes one-time destination key: `P = H(shared_secret)*G + S`
 
 2. **Transaction is published:**
-   - Contains the one-time key `P` and the public ephemeral key `R`
+   - Contains the one-time key `P` and the ML-KEM ciphertext
    - `P` looks random to everyone except the recipient
 
 3. **Recipient scans blockchain:**
-   - For each transaction, computes `P' = H(a*R)*G + B` using their view private key `a`
+   - Decapsulates: `shared_secret = ML-KEM.Decapsulate(ciphertext, view_secret_key)`
+   - Computes `P' = H(shared_secret)*G + S`
    - If `P' == P`, the transaction belongs to them
-   - Can then spend using private key `x = H(a*R) + b`
+   - Spending key: `x = H(shared_secret) + spend_secret_key`
+
+### Post-Quantum Security
+
+Unlike classical ECDH-based stealth addresses, ML-KEM provides:
+
+- **~192-bit post-quantum security**: Resistant to Shor's algorithm
+- **No classical fallback**: Pure PQ design, not hybrid
+- **Forward secrecy**: Compromised view key doesn't reveal past shared secrets
 
 ### Subaddresses
 
@@ -89,81 +108,82 @@ Tags decay by ~5% per transaction hop:
 | Decay rate | 5% per hop | Tag decay per transaction |
 | Midpoint | 10M credits | Sigmoid inflection point |
 
-## Ring Signatures
+## Ring Signatures (Private Transactions)
 
-Ring signatures hide the true sender among a group of possible signers using MLSAG (Multilayered Linkable Spontaneous Anonymous Group) signatures.
+Private transactions use ring signatures to hide the true sender among a group of possible signers. Botho uses LION (Lattice-based lInkable ring signatures fOr aNonymity), a post-quantum ring signature scheme.
+
+> **Note**: Ring signatures are only used in Private transactions. Standard transactions use direct ML-DSA signatures (sender is visible).
 
 ### How Ring Signatures Work
 
-1. **Decoy Selection**: When spending, the sender selects N-1 decoy outputs from the blockchain
-2. **Ring Construction**: Creates a signature that proves ownership of ONE of the N outputs, without revealing which
-3. **Ring Shuffling**: Decoys are randomly shuffled with the real input using cryptographically secure RNG
+1. **Decoy Selection**: When spending, the sender selects 6 decoy outputs from the blockchain
+2. **Ring Construction**: Creates a ring of 7 possible signers (1 real + 6 decoys)
+3. **LION Signing**: Produces a signature proving ownership of ONE ring member without revealing which
 4. **Verification**: Anyone can verify the signature is valid, but cannot determine the true signer
 
 ### Technical Implementation
 
-Botho uses MLSAG signatures with domain-separated signing digests:
+Botho uses LION lattice-based ring signatures:
 
 ```
-Ring = [decoy_1, decoy_2, ..., real_input, ..., decoy_n]  (shuffled)
-Signature = MLSAG.sign(ring, real_index, private_key)
+Ring = [decoy_1, decoy_2, ..., real_input, ..., decoy_6]  (shuffled, 7 total)
+Signature = LION.sign(ring, real_index, secret_key)
+KeyImage = LION.key_image(secret_key)
 ```
 
 The wallet's `create_private_transaction()` method handles:
-- Automatic decoy selection from the ledger
-- Ring construction with configurable size
+- Automatic decoy selection using OSPEAD algorithm
+- Ring construction with fixed size of 7
 - Cryptographically secure shuffling
-- Domain-separated transaction signing
+- Post-quantum secure signing
 
 ### Benefits
 
 - **Sender Unlinkability**: Observers cannot determine which input is being spent
-- **Plausible Deniability**: Any of the ring members could be the true sender
+- **Plausible Deniability**: Any of the 7 ring members could be the true sender
 - **No Coordination**: Decoys don't know they're being used
 - **Linkable**: Key images prevent double-spending without revealing the signer
+- **Post-Quantum**: Secure against quantum computer attacks
 
 ## Transaction Types and Fees
 
-Botho supports multiple transaction types with different privacy levels and fee structures.
+Botho supports three transaction types. See [Transaction Types](transactions.md) for complete technical details.
 
 ### Transaction Types
 
-| Type | Privacy Level | Ring Size | Signature | Use Case |
-|------|--------------|-----------|-----------|----------|
-| Open | None | N/A | Schnorr | Exchanges, auditable payments |
-| Private (MLSAG) | High | 7 | Classical ring sig | Standard private transfers |
-| Private (LION) | High + PQ | 7 | Post-quantum ring sig | Long-term private storage |
+| Type | Amount Privacy | Sender Privacy | Signature | Use Case |
+|------|---------------|----------------|-----------|----------|
+| Minting | Public | Known (minter) | ML-DSA | Block rewards |
+| Standard | Hidden | Visible | ML-DSA | Most transfers |
+| Private | Hidden | Hidden (ring) | LION (ring=7) | Maximum privacy |
 
 ### Fee Structure by Transaction Type
 
-| Transaction Type | Base Fee | Size Multiplier | Typical Total |
-|-----------------|----------|-----------------|---------------|
-| Open | 400 µBTH | ~100 bytes | ~400 µBTH |
-| Private (MLSAG) | 400 µBTH | ~500 bytes/input | ~600 µBTH |
-| Private (LION) | 400 µBTH | ~17 KB/input | ~2,000 µBTH |
+| Transaction Type | Base Fee | Size | Typical Total |
+|-----------------|----------|------|---------------|
+| Minting | 0 | ~1.5 KB | 0 (coinbase) |
+| Standard | 400 µBTH | ~3-4 KB | ~600 µBTH |
+| Private | 400 µBTH | ~22 KB | ~2,500 µBTH |
 
 **Why the difference?**
 
-- **Open transactions** are smallest - just a simple Schnorr signature per input
-- **Private (MLSAG)** requires ring signatures with 7 members, increasing size
-- **Private (LION)** uses lattice-based signatures which are inherently larger
+- **Minting transactions** have no fee (they create coins, not transfer them)
+- **Standard transactions** use ML-DSA signatures (~3.3 KB per input)
+- **Private transactions** use LION ring signatures (~17.5 KB per input)
 
 ### Choosing Transaction Type
 
-**Use Open transactions when:**
-- Sending to/from exchanges (they require transparent history)
+**Use Standard transactions when:**
+- Sender privacy isn't critical for this payment
+- You want lower fees
 - Business payments requiring audit trails
-- You don't need sender privacy for this payment
+- Sending to exchanges (they may prefer identifiable senders)
 
-**Use Private (MLSAG) transactions when:**
-- You want sender anonymity
-- Post-quantum security isn't critical for this payment
-- You prefer smaller transaction sizes
-
-**Use Private (LION) transactions when:**
-- Long-term privacy is essential (coins you'll hold for years)
-- You're protecting against "harvest now, decrypt later" attacks
-- Quantum resistance justifies the larger fee
+**Use Private transactions when:**
+- You need sender anonymity
+- Long-term privacy is essential
+- Sensitive or high-value transfers
+- Protection against transaction graph analysis
 
 ### Fee Calculation
 
@@ -180,21 +200,29 @@ Where:
 
 See [Tokenomics](/docs/tokenomics) for details on cluster-based progressive fees.
 
-## RingCT (Planned)
+## Confidential Amounts
 
-Ring Confidential Transactions will hide transaction amounts using Pedersen commitments and range proofs.
+Standard and Private transactions hide amounts using Pedersen commitments and Bulletproofs range proofs.
 
-### How RingCT Works
+### How It Works
 
-1. **Pedersen Commitments**: Amounts are encoded as `C = aG + bH` where `a` is the amount and `b` is a blinding factor
-2. **Balance Proof**: Proves that inputs equal outputs without revealing values
-3. **Range Proofs**: Proves amounts are positive without revealing them (using Bulletproofs)
+1. **Pedersen Commitments**: Amounts are encoded as `C = v*H + b*G` where `v` is the amount and `b` is a blinding factor
+2. **Balance Proof**: Proves that inputs equal outputs without revealing values (homomorphic property)
+3. **Range Proofs**: Bulletproofs prove amounts are in valid range `[0, 2^64)` without revealing them
 
 ### Benefits
 
 - **Amount Privacy**: Observers cannot see how much is being transferred
 - **Verifiable**: Network can still verify no coins are created from nothing
-- **Compact**: Bulletproofs provide efficient range proofs
+- **Compact**: Bulletproofs provide efficient, aggregatable range proofs
+
+### Security Note
+
+Pedersen commitments use classical elliptic curves. The **hiding** property is information-theoretic (unconditionally secure), but the **binding** property could theoretically be broken by quantum computers. This means:
+
+- **Amounts remain hidden** even against quantum adversaries
+- A quantum attacker could potentially forge invalid proofs, but not reveal hidden amounts
+- This is an acceptable trade-off vs. lattice-based commitments (which are much larger and less mature)
 
 ## Encrypted Memos
 
@@ -228,35 +256,36 @@ Supported memo types include:
 
 ## Post-Quantum Cryptography
 
-Botho implements **LION** (Lattice-based lInkable ring signatures fOr aNonymity), a purpose-built post-quantum ring signature scheme that provides both sender anonymity and quantum resistance in a single unified primitive.
+Botho is designed from the ground up with post-quantum security. All cryptographic primitives use NIST-standardized algorithms or equivalent security levels.
 
 ### Why Post-Quantum?
 
-Large-scale quantum computers could break classical elliptic curve cryptography. Adversaries may be recording encrypted transactions today to decrypt them later ("harvest now, decrypt later" attacks). LION provides:
+Large-scale quantum computers could break classical elliptic curve cryptography. Adversaries may be recording encrypted transactions today to decrypt them later ("harvest now, decrypt later" attacks). Botho provides:
 
-- **Unified design**: Single algorithm handles both privacy AND quantum resistance
-- **Simpler implementation**: One cryptographic primitive instead of hybrid combinations
+- **Pure PQ design**: No classical fallback—quantum-safe from day one
+- **NIST-standardized**: ML-KEM-768 and ML-DSA-65 from FIPS 203/204
 - **Future-proof privacy**: Transactions remain private even against quantum adversaries
-- **Linkable signatures**: Key images prevent double-spending without revealing the signer
+- **Consistent security level**: ~128-192 bit post-quantum security throughout
+
+### PQ Primitives Used
+
+| Component | Algorithm | Standard | Used In |
+|-----------|-----------|----------|---------|
+| Stealth addresses | ML-KEM-768 | FIPS 203 | All transactions |
+| Minting/Standard signatures | ML-DSA-65 | FIPS 204 | Minting, Standard |
+| Ring signatures | LION | Module-LWE | Private only |
+| Key images | LION-derived | Module-LWE | Private only |
 
 ### LION Ring Signatures
 
-LION is a lattice-based linkable ring signature scheme based on the Module-LWE problem, providing ~128-bit post-quantum security. It uses parameters similar to ML-DSA (Dilithium) for consistency and proven security.
+LION (Lattice-based lInkable ring signatures fOr aNonymity) provides sender privacy in Private transactions.
 
 | Parameter | Value | Description |
 |-----------|-------|-------------|
 | Ring size | 7 | Fixed ring size for privacy/efficiency balance |
 | Security level | ~128-bit PQ | Based on Module-LWE hardness |
 | Lattice dimension | N=256, K=L=4 | Module rank matches Dilithium-3 |
-| Signature size | ~17 KB | Per ring (includes all responses) |
-
-### How It Works
-
-1. **Key Generation**: Each user generates a LION keypair (public key, secret key)
-2. **Key Image**: When spending, compute `I = H(sk) * G` - unique per secret key
-3. **Ring Formation**: Select 6 decoys from the UTXO set to form a ring of 7
-4. **Sign**: Produce a LION signature proving ownership of ONE ring member
-5. **Verify**: Anyone can verify the signature without learning which member signed
+| Signature size | ~17.5 KB | Per ring (includes all responses) |
 
 ### OSPEAD Decoy Selection
 
@@ -264,25 +293,25 @@ Botho uses OSPEAD (Optimal Selection Probability to Evade Analysis of Decoys) to
 
 - **Gamma distribution**: Matches decoy ages to real spending patterns
 - **Age-weighted selection**: Prevents timing analysis attacks
-- **1-in-4+ effective anonymity**: At least 2 ring members appear equally likely
+- **Effective anonymity**: At least 2 ring members appear equally likely
 
 ### Key Derivation
 
-All LION keys derive deterministically from the BIP39 mnemonic:
+All keys derive deterministically from the BIP39 mnemonic:
 
 ```
-mnemonic → SLIP-10 seed → HKDF → LION keypair (pk, sk)
+mnemonic → SLIP-10 seed → HKDF → {ML-KEM keypair, ML-DSA keypair, LION keypair}
 ```
 
 ### Transaction Sizes
 
-| Transaction Type | Classical (MLSAG) | Post-Quantum (LION) |
-|-----------------|-------------------|---------------------|
-| Ring size | 7 | 7 |
-| Input (signature) | ~448 bytes | ~17 KB |
-| Output | ~100 bytes | ~100 bytes |
+| Transaction Type | Size per Input | Size per Output |
+|-----------------|----------------|-----------------|
+| Minting | N/A (coinbase) | ~1.2 KB |
+| Standard | ~3.4 KB | ~1.2 KB |
+| Private | ~17.5 KB | ~1.2 KB |
 
-The larger signature size is the cost of quantum resistance. LION signatures are larger than classical MLSAG but provide protection against future quantum attacks.
+The larger signature sizes are the cost of quantum resistance. This is a worthwhile trade-off for long-term privacy protection.
 
 ## Privacy Best Practices
 
@@ -290,8 +319,8 @@ The larger signature size is the cost of quantum resistance. LION signatures are
 
 1. **Use fresh addresses**: Generate new subaddresses for each payment request
 2. **Allow time between transactions**: Spacing transactions makes timing analysis harder
-3. **Use consistent ring sizes**: Use the default ring size to blend in with other transactions
-4. **Enable quantum-safe mode**: Use quantum-safe transactions for long-term privacy protection
+3. **Use Private transactions**: When sender privacy matters, use Private transactions
+4. **Don't reuse patterns**: Vary transaction amounts and timing to avoid fingerprinting
 
 ### Privacy Limitations
 
@@ -303,20 +332,20 @@ The larger signature size is the cost of quantum resistance. LION signatures are
 
 | Feature | Botho | Monero | Zcash |
 |---------|---------|--------|-------|
-| Stealth addresses | Yes | Yes | Shielded only |
-| Ring signatures | Yes (MLSAG/LION) | Yes (CLSAG) | No |
+| Stealth addresses | All tx (ML-KEM) | All tx (ECDH) | Shielded only |
+| Ring signatures | Private tx (LION) | All tx (CLSAG) | No |
 | Ring size | 7 | 16 | N/A |
-| Confidential amounts | Planned | Yes | Shielded only |
+| Confidential amounts | Standard & Private | Yes | Shielded only |
 | Encrypted memos | Yes | No | Shielded only |
-| Post-quantum crypto | Yes (LION) | No | No |
+| Post-quantum crypto | Yes (pure PQ) | No | No |
 | Privacy by default | Yes | Yes | No (opt-in) |
-| Open (transparent) tx | Optional | No | Yes |
+| Sender-visible option | Standard tx | No | Transparent tx |
 | Consensus | SCP (Federated) | PoW (RandomX) | PoW (Equihash) |
 
 ## Technical References
 
 - [CryptoNote Whitepaper](https://cryptonote.org/whitepaper.pdf) - Original stealth address specification
-- [Zero to Monero](https://web.getmonero.org/library/Zero-to-Monero-2-0-0.pdf) - Detailed ring signature construction
 - [Bulletproofs Paper](https://eprint.iacr.org/2017/1066.pdf) - Range proof system
 - [LION Ring Signatures](https://link.springer.com/chapter/10.1007/978-981-95-3540-8_17) - Lattice-based linkable ring signatures
-- [Module-LWE](https://eprint.iacr.org/2017/1066.pdf) - Underlying lattice problem for LION security
+- [ML-KEM (FIPS 203)](https://csrc.nist.gov/pubs/fips/203/final) - Post-quantum key encapsulation
+- [ML-DSA (FIPS 204)](https://csrc.nist.gov/pubs/fips/204/final) - Post-quantum digital signatures

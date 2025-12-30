@@ -107,7 +107,7 @@ A fixed-size output produced by a hash function. Used for block identification, 
 The speed at which a miner computes hashes, typically measured in H/s (hashes per second).
 
 ### Hybrid Cryptography
-Using both classical and post-quantum algorithms together. Both must verify for security. Provides defense-in-depth against quantum attacks.
+Using both classical and post-quantum algorithms together. Botho uses pure post-quantum cryptography rather than hybrid, providing simpler security assumptions.
 
 ---
 
@@ -145,14 +145,17 @@ The pool of unconfirmed transactions waiting to be included in a block. Transact
 ### Minting
 Botho's term for mining — the process of creating new blocks and earning block rewards.
 
+### Minting Transaction
+A transaction type that creates new coins as block rewards. Minting transactions have no inputs, use ML-DSA signatures, and create new cluster origins. Amounts are public for supply auditability, but recipients are hidden via stealth addresses.
+
 ### ML-DSA (Dilithium)
-**Module Lattice Digital Signature Algorithm** — A post-quantum signature scheme standardized by NIST (FIPS 204). LION uses similar lattice parameters.
+**Module Lattice Digital Signature Algorithm** — A post-quantum signature scheme standardized by NIST (FIPS 204). Botho uses ML-DSA-65 for Minting and Standard transaction authorization.
 
 ### ML-KEM (Kyber)
-**Module Lattice Key Encapsulation Mechanism** — A post-quantum key exchange scheme standardized by NIST (FIPS 203). Botho uses LION ring signatures instead for unified privacy + quantum security.
+**Module Lattice Key Encapsulation Mechanism** — A post-quantum key exchange scheme standardized by NIST (FIPS 203). Botho uses ML-KEM-768 for post-quantum stealth addresses.
 
 ### MLSAG
-**Multilayered Linkable Spontaneous Anonymous Group** signature — A ring signature scheme that hides the signer among a group while preventing double-spending.
+**Multilayered Linkable Spontaneous Anonymous Group** signature — A classical ring signature scheme. Botho uses LION (post-quantum) instead of MLSAG.
 
 ### Mnemonic
 A sequence of words (typically 24) that encodes your wallet's master seed. Used for backup and recovery.
@@ -194,10 +197,13 @@ A cryptographic commitment that hides a value while allowing mathematical operat
 Internal unit for BTH amounts. 1 BTH = 1,000,000,000,000 picocredits (10^12).
 
 ### Post-Quantum Cryptography
-Cryptographic algorithms believed to be secure against quantum computer attacks. Botho uses LION lattice-based ring signatures.
+Cryptographic algorithms believed to be secure against quantum computer attacks. Botho uses ML-KEM for stealth addresses, ML-DSA for standard signatures, and LION for ring signatures.
 
 ### Private Key
 A secret value that controls your funds. Never share your private keys or mnemonic.
+
+### Private Transaction
+A transaction type providing maximum privacy. Private transactions use LION ring signatures (sender hidden among 7 members), Pedersen commitments with Bulletproofs (amounts hidden), and ML-KEM stealth addresses (recipient hidden). Higher fees due to larger signature size but provides full sender anonymity.
 
 ### Proof-of-Work (PoW)
 A consensus mechanism where miners prove they've done computational work. Botho uses SHA-256 PoW.
@@ -252,6 +258,9 @@ A well-known node used for initial peer discovery. Botho's seed node is `seed.bo
 
 ### Spend Key
 The private key required to spend funds. Part of the view/spend key pair.
+
+### Standard Transaction
+A transaction type for normal value transfers. Standard transactions use ML-DSA signatures (sender is visible), Pedersen commitments with Bulletproofs (amounts hidden), and ML-KEM stealth addresses (recipient hidden). Lower fees than Private transactions but no sender privacy.
 
 ### Stealth Address
 A privacy technique where each transaction creates a unique one-time address. Prevents linking payments to recipients.
