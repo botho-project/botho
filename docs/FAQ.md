@@ -32,16 +32,17 @@ Both prioritize privacy, but differ in economics and consensus:
 | Finality | ~20 minutes (10 confirmations) | ~3-5 seconds |
 | Fee destination | To miners | Burned |
 | Wealth redistribution | None | Progressive cluster fees |
-| Quantum resistance | Not yet | Hybrid ML-KEM + ML-DSA |
+| Quantum resistance | Not yet | LION ring signatures |
 
 ### Is Botho quantum-resistant?
 
-Yes. Botho uses hybrid cryptography combining classical algorithms with NIST-standardized post-quantum algorithms:
+Yes. Botho uses **LION** (Lattice-based lInkable ring signatures fOr aNonymity), a purpose-built post-quantum ring signature scheme that provides both sender privacy AND quantum resistance in a single unified algorithm.
 
-- **Key exchange**: ECDH + ML-KEM-768 (Kyber)
-- **Signatures**: Schnorr + ML-DSA-65 (Dilithium)
+- **Security**: ~128-bit post-quantum security based on Module-LWE
+- **Ring size**: 7 members for privacy
+- **Signature size**: ~17 KB per input
 
-Both must verify for a transaction to be valid, providing defense-in-depth against quantum attacks.
+LION provides simpler implementation than hybrid approaches while still protecting against "harvest now, decrypt later" attacks.
 
 ---
 

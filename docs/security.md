@@ -23,7 +23,7 @@ Security in Botho operates at multiple layers:
 |--------|------------|
 | Transaction surveillance | Stealth addresses, ring signatures |
 | Amount analysis | Confidential transactions (planned) |
-| Quantum computers | Hybrid ML-KEM + ML-DSA cryptography |
+| Quantum computers | LION lattice-based ring signatures |
 | Double-spending | SCP consensus, key images |
 | Replay attacks | Tombstone blocks |
 | Network-level attacks | Peer reputation, rate limiting |

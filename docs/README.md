@@ -51,8 +51,8 @@ Welcome to the Botho documentation. Botho is a privacy-preserving, mined cryptoc
 Botho combines:
 
 - **Proof-of-Work Minting**: SHA-256 minting with variable difficulty
-- **Full Transaction Privacy**: Stealth addresses, ring signatures (MLSAG), and encrypted memos
-- **Post-Quantum Security**: Hybrid classical + ML-KEM/ML-DSA cryptography
+- **Full Transaction Privacy**: Stealth addresses, ring signatures (MLSAG/LION), and encrypted memos
+- **Post-Quantum Security**: LION lattice-based ring signatures for unified privacy + quantum resistance
 - **Byzantine Fault Tolerance**: Stellar Consensus Protocol (SCP) for consensus
 - **Progressive Fees**: Cluster-based taxation that discourages wealth concentration
 

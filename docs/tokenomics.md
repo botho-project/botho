@@ -173,7 +173,7 @@ This ensures:
 | Max transactions per block | 5,000 |
 | Max inputs per transaction | 16 |
 | Max outputs per transaction | 16 |
-| Ring size | 11 (for sender privacy) |
+| Ring size | 7 (for private transactions) |
 | Max tombstone | 20,160 blocks (~14 days) |
 
 ## Supply Projections

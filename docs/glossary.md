@@ -58,7 +58,7 @@ In ring signatures, a decoy is a transaction output included to hide the true se
 A measure of how hard it is to find a valid proof-of-work. Difficulty adjusts to maintain target block times.
 
 ### Dilithium
-See **ML-DSA**.
+A lattice-based signature scheme (now standardized as ML-DSA). LION uses similar parameters for consistency.
 
 ---
 
@@ -117,7 +117,7 @@ Using both classical and post-quantum algorithms together. Both must verify for 
 A cryptographic value derived from a spent output that prevents double-spending without revealing which output was spent. Essential for ring signature systems.
 
 ### Kyber
-See **ML-KEM**.
+A lattice-based key encapsulation mechanism (now standardized as ML-KEM). Botho uses LION ring signatures instead for unified privacy + PQ security.
 
 ---
 
@@ -125,6 +125,9 @@ See **ML-KEM**.
 
 ### Ledger
 The complete record of all transactions, stored as a blockchain. Botho uses LMDB for ledger storage.
+
+### LION
+**Lattice-based lInkable ring signatures fOr aNonymity** — Botho's post-quantum ring signature scheme. Provides both sender privacy AND quantum resistance in a single unified algorithm. Uses Module-LWE for ~128-bit post-quantum security.
 
 ### libp2p
 A modular networking stack used by Botho for peer-to-peer communication.
@@ -143,10 +146,10 @@ The pool of unconfirmed transactions waiting to be included in a block. Transact
 Botho's term for mining — the process of creating new blocks and earning block rewards.
 
 ### ML-DSA (Dilithium)
-**Module Lattice Digital Signature Algorithm** — A post-quantum signature scheme standardized by NIST (FIPS 204). Botho uses ML-DSA-65.
+**Module Lattice Digital Signature Algorithm** — A post-quantum signature scheme standardized by NIST (FIPS 204). LION uses similar lattice parameters.
 
 ### ML-KEM (Kyber)
-**Module Lattice Key Encapsulation Mechanism** — A post-quantum key exchange scheme standardized by NIST (FIPS 203). Botho uses ML-KEM-768.
+**Module Lattice Key Encapsulation Mechanism** — A post-quantum key exchange scheme standardized by NIST (FIPS 203). Botho uses LION ring signatures instead for unified privacy + quantum security.
 
 ### MLSAG
 **Multilayered Linkable Spontaneous Anonymous Group** signature — A ring signature scheme that hides the signer among a group while preventing double-spending.
@@ -191,7 +194,7 @@ A cryptographic commitment that hides a value while allowing mathematical operat
 Internal unit for BTH amounts. 1 BTH = 1,000,000,000,000 picocredits (10^12).
 
 ### Post-Quantum Cryptography
-Cryptographic algorithms believed to be secure against quantum computer attacks. Botho uses ML-KEM and ML-DSA.
+Cryptographic algorithms believed to be secure against quantum computer attacks. Botho uses LION lattice-based ring signatures.
 
 ### Private Key
 A secret value that controls your funds. Never share your private keys or mnemonic.

@@ -84,7 +84,7 @@ Botho's cluster-based progressive fees make hoarding expensive without compromis
 
 Monero uses classical cryptography vulnerable to future quantum computers.
 
-Botho uses hybrid classical + post-quantum cryptography (ML-KEM-768, ML-DSA-65), protecting against "harvest now, decrypt later" attacks.
+Botho uses LION lattice-based ring signatures, providing both privacy AND quantum resistance in a single unified primitive, protecting against "harvest now, decrypt later" attacks.
 
 **Block Selection**
 
@@ -169,12 +169,12 @@ Secret Network focuses on programmable privacy (smart contracts). Botho focuses 
 
 | Component | Botho | Bitcoin | Monero | Zcash |
 |-----------|-------|---------|--------|-------|
-| Signatures | Schnorr + ML-DSA | ECDSA/Schnorr | CLSAG | RedDSA |
-| Key exchange | ECDH + ML-KEM | N/A | ECDH | DH |
+| Signatures | Schnorr / LION | ECDSA/Schnorr | CLSAG | RedDSA |
+| Key exchange | ECDH | N/A | ECDH | DH |
 | Stealth addresses | Yes | No | Yes | Shielded only |
-| Ring signatures | Yes (MLSAG) | No | Yes (CLSAG) | No |
+| Ring signatures | Yes (MLSAG/LION) | No | Yes (CLSAG) | No |
 | Zero-knowledge | Planned | No | Bulletproofs | Halo2 |
-| Quantum-safe | Yes | No | No | No |
+| Quantum-safe | Yes (LION) | No | No | No |
 
 ### Consensus
 
