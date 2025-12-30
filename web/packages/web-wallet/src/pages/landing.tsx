@@ -6,13 +6,13 @@ import { Shield, Zap, Lock, Globe, ArrowRight, Github, Menu, X } from 'lucide-re
 const features = [
   {
     icon: Shield,
-    title: 'Privacy First',
-    description: 'Stealth addresses ensure your transactions remain unlinkable and untraceable.',
+    title: 'Triple-Layer Privacy',
+    description: 'Sender privacy via ring signatures, receiver privacy via stealth addresses, and amount privacy via confidential transactions. Your financial activity stays yours.',
   },
   {
     icon: Zap,
-    title: 'Fast Consensus',
-    description: 'Stellar Consensus Protocol enables fast finality without energy-intensive minting.',
+    title: 'Adaptive Speed',
+    description: 'Block times adapt to network activity—3 seconds during high volume, up to 40 seconds when quiet. Instant finality means no waiting for confirmations.',
   },
   {
     icon: Lock,
@@ -27,9 +27,9 @@ const features = [
 ]
 
 const stats = [
-  { label: 'Block Time', value: '~20s' },
+  { label: 'Block Time', value: '3-40s', note: 'Adapts to volume' },
   { label: 'Finality', value: 'Instant' },
-  { label: 'Privacy', value: 'Stealth' },
+  { label: 'Privacy', value: 'Complete', note: 'Sender · Receiver · Amount' },
   { label: 'Consensus', value: 'SCP' },
 ]
 
@@ -124,7 +124,7 @@ export function LandingPage() {
             <span className="text-gradient">Quantum Age</span>
           </h1>
           <p className="text-base sm:text-lg md:text-xl text-ghost mb-8 sm:mb-10 max-w-2xl mx-auto px-2">
-            Botho is a privacy-focused cryptocurrency with fast consensus, and post-quantum cryptography.
+            Complete transaction privacy—sender, receiver, and amount—with adaptive consensus and post-quantum cryptography.
           </p>
           <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 justify-center px-4 sm:px-0">
             <Link to="/wallet" className="w-full sm:w-auto">
@@ -151,6 +151,9 @@ export function LandingPage() {
                 {stat.value}
               </div>
               <div className="text-xs sm:text-sm text-ghost">{stat.label}</div>
+              {stat.note && (
+                <div className="text-[10px] sm:text-xs text-muted mt-0.5">{stat.note}</div>
+              )}
             </div>
           ))}
         </div>
