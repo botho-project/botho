@@ -12,7 +12,6 @@ extern crate alloc;
 #[macro_use]
 extern crate lazy_static;
 
-pub mod encrypted_fog_hint;
 mod fee_map;
 mod input_rules;
 mod memo;
@@ -39,9 +38,6 @@ pub use token::{tokens, Token};
 pub use tx::MemoContext;
 pub use tx_error::{NewMemoError, NewTxError, TxOutConversionError, ViewKeyMatchError};
 pub use tx_summary::TxSummaryNew;
-
-// Re-export encrypted_fog_hint stub for backwards compatibility
-pub use encrypted_fog_hint::{EncryptedFogHint, ENCRYPTED_FOG_HINT_LEN};
 
 // Re-export from transaction-types, and some from RingSignature crate.
 pub use bth_crypto_ring_signature::{Commitment, CompressedCommitment};
