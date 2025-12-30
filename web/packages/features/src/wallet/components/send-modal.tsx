@@ -3,7 +3,7 @@ import type { Balance } from '@botho/core'
 import { formatBTH, parseBTH } from '@botho/core'
 import { Button, Input } from '@botho/ui'
 import { motion, AnimatePresence } from 'motion/react'
-import { Loader2, Send, Shield, X, Zap } from 'lucide-react'
+import { ChevronDown, ChevronUp, Loader2, Send, Shield, X, Zap } from 'lucide-react'
 
 export type SendPrivacyLevel = 'standard' | 'private'
 
@@ -12,6 +12,8 @@ export interface SendFormData {
   amount: bigint
   privacyLevel: SendPrivacyLevel
   memo?: string
+  /** Custom fee override (if not provided, uses estimated fee) */
+  customFee?: bigint
 }
 
 export interface SendResult {
@@ -53,6 +55,9 @@ export function SendModal({
   const [fee, setFee] = useState<bigint>(BigInt(0))
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
+  const [showAdvanced, setShowAdvanced] = useState(false)
+  const [useCustomFee, setUseCustomFee] = useState(false)
+  const [customFeeInput, setCustomFeeInput] = useState('')
 
   // Reset form when modal closes
   useEffect(() => {
@@ -62,6 +67,9 @@ export function SendModal({
       setMemo('')
       setError(null)
       setSuccess(null)
+      setShowAdvanced(false)
+      setUseCustomFee(false)
+      setCustomFeeInput('')
     }
   }, [isOpen])
 
@@ -76,6 +84,17 @@ export function SendModal({
       }
     }
   }, [amount, privacyLevel, estimateFee])
+
+  // Compute effective fee (custom or estimated)
+  const effectiveFee = useCustomFee && customFeeInput
+    ? (() => {
+        try {
+          return parseBTH(customFeeInput)
+        } catch {
+          return fee
+        }
+      })()
+    : fee
 
   const handleSend = async () => {
     setError(null)
@@ -93,7 +112,7 @@ export function SendModal({
 
     try {
       const amountBigInt = parseBTH(amount)
-      const total = amountBigInt + fee
+      const total = amountBigInt + effectiveFee
 
       if (balance && total > balance.available) {
         setError('Insufficient balance')
@@ -105,6 +124,7 @@ export function SendModal({
         amount: amountBigInt,
         privacyLevel,
         memo: memo || undefined,
+        customFee: useCustomFee ? effectiveFee : undefined,
       })
 
       if (result.success) {
@@ -247,17 +267,80 @@ export function SendModal({
               />
             </div>
 
+            {/* Advanced Options */}
+            <div>
+              <button
+                type="button"
+                onClick={() => setShowAdvanced(!showAdvanced)}
+                className="flex w-full items-center justify-between rounded-lg border border-[--color-steel] bg-[--color-slate]/50 px-3 py-2 text-sm text-[--color-ghost] transition-colors hover:border-[--color-pulse]/50"
+              >
+                <span>Advanced Options</span>
+                {showAdvanced ? (
+                  <ChevronUp className="h-4 w-4" />
+                ) : (
+                  <ChevronDown className="h-4 w-4" />
+                )}
+              </button>
+
+              {showAdvanced && (
+                <div className="mt-2 space-y-3 rounded-lg border border-[--color-steel] bg-[--color-slate]/30 p-3">
+                  {/* Custom Fee Toggle */}
+                  <label className="flex cursor-pointer items-center justify-between">
+                    <div>
+                      <span className="text-sm text-[--color-ghost]">Custom Fee</span>
+                      <p className="text-xs text-[--color-dim]">Override the estimated network fee</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setUseCustomFee(!useCustomFee)}
+                      className={`relative h-6 w-11 rounded-full transition-colors ${
+                        useCustomFee ? 'bg-[--color-pulse]' : 'bg-[--color-steel]'
+                      }`}
+                    >
+                      <span
+                        className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition-transform ${
+                          useCustomFee ? 'left-[22px]' : 'left-0.5'
+                        }`}
+                      />
+                    </button>
+                  </label>
+
+                  {useCustomFee && (
+                    <div>
+                      <div className="relative">
+                        <Input
+                          type="text"
+                          placeholder="0.00"
+                          value={customFeeInput}
+                          onChange={(e) => setCustomFeeInput(e.target.value)}
+                          className="pr-16 font-mono"
+                        />
+                        <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm font-medium text-[--color-dim]">
+                          BTH
+                        </span>
+                      </div>
+                      <p className="mt-1 text-xs text-[--color-dim]">
+                        Estimated fee: {formatBTH(fee)} BTH
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
             {/* Fee Summary */}
             <div className="rounded-lg border border-[--color-steel] bg-[--color-slate]/50 p-3">
               <div className="flex items-center justify-between text-sm">
-                <span className="text-[--color-ghost]">Network Fee</span>
-                <span className="font-mono text-[--color-light]">{formatBTH(fee)} BTH</span>
+                <span className="text-[--color-ghost]">
+                  Network Fee{useCustomFee && ' (custom)'}
+                </span>
+                <span className="font-mono text-[--color-light]">{formatBTH(effectiveFee)} BTH</span>
               </div>
               {amount && (
                 <div className="mt-2 flex items-center justify-between border-t border-[--color-steel] pt-2 text-sm">
                   <span className="font-medium text-[--color-ghost]">Total</span>
                   <span className="font-mono font-semibold text-[--color-pulse]">
-                    {formatBTH(parseBTH(amount || '0') + fee)} BTH
+                    {formatBTH(parseBTH(amount || '0') + effectiveFee)} BTH
                   </span>
                 </div>
               )}
