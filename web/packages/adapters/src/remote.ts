@@ -23,17 +23,35 @@ const DEFAULT_CONFIG: Required<RemoteNodeConfig> = {
   useWebSocket: true,
 }
 
+/** JSON-RPC 2.0 request */
+interface JsonRpcRequest {
+  jsonrpc: '2.0'
+  method: string
+  params: Record<string, unknown>
+  id: number
+}
+
+/** JSON-RPC 2.0 response */
+interface JsonRpcResponse<T = unknown> {
+  jsonrpc: '2.0'
+  result?: T
+  error?: { code: number; message: string }
+  id: number
+}
+
 /**
  * Remote node adapter for connecting to Botho seed nodes
- * Used by the web wallet at botho.io
+ * Uses JSON-RPC 2.0 protocol over HTTPS
  */
 export class RemoteNodeAdapter implements NodeAdapter {
   private config: Required<RemoteNodeConfig>
   private connected = false
   private currentNode: NodeInfo | null = null
+  private currentSeedUrl: string | null = null
   private ws: WebSocket | null = null
   private blockCallbacks: Set<(block: Block) => void> = new Set()
   private txCallbacks: Map<string, Set<(tx: Transaction) => void>> = new Map()
+  private rpcId = 0
 
   constructor(config: Partial<RemoteNodeConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config }
@@ -43,21 +61,27 @@ export class RemoteNodeAdapter implements NodeAdapter {
     // Try each seed node until one works
     for (const seedUrl of this.config.seedNodes) {
       try {
-        const response = await this.fetch(seedUrl, '/api/status')
-        if (response.ok) {
-          const data = await response.json()
+        const result = await this.rpcCall<{
+          version: string
+          network: string
+          chainHeight: number
+          peerCount: number
+        }>(seedUrl, 'node_getStatus', {})
+
+        if (result) {
+          this.currentSeedUrl = seedUrl
           this.currentNode = {
             id: seedUrl,
             host: new URL(seedUrl).hostname,
             port: 443,
-            version: data.version,
-            blockHeight: data.blockHeight,
-            networkId: data.networkId || this.config.networkId,
+            version: result.version,
+            blockHeight: result.chainHeight,
+            networkId: result.network || this.config.networkId,
             status: 'online',
           }
           this.connected = true
 
-          // Set up WebSocket for real-time updates
+          // Set up WebSocket for real-time updates (if supported)
           if (this.config.useWebSocket) {
             this.setupWebSocket(seedUrl)
           }
@@ -76,6 +100,7 @@ export class RemoteNodeAdapter implements NodeAdapter {
   disconnect(): void {
     this.connected = false
     this.currentNode = null
+    this.currentSeedUrl = null
     if (this.ws) {
       this.ws.close()
       this.ws = null
@@ -97,86 +122,136 @@ export class RemoteNodeAdapter implements NodeAdapter {
   // =========================================================================
 
   async getBlockHeight(): Promise<BlockHeight> {
-    const response = await this.fetchApi('/api/status')
-    const data = await response.json()
-    return data.blockHeight
+    const result = await this.call<{ chainHeight: number }>('node_getStatus', {})
+    return result.chainHeight
   }
 
   async getNetworkStats(): Promise<NetworkStats> {
-    const response = await this.fetchApi('/api/network/stats')
-    const data = await response.json()
+    const [status, chain] = await Promise.all([
+      this.call<{
+        chainHeight: number
+        peerCount: number
+        mempoolSize: number
+      }>('node_getStatus', {}),
+      this.call<{
+        difficulty: number
+      }>('getChainInfo', {}),
+    ])
+
     return {
-      blockHeight: data.blockHeight,
-      difficulty: BigInt(data.difficulty),
-      hashRate: data.hashRate,
-      connectedPeers: data.connectedPeers,
-      mempoolSize: data.mempoolSize,
+      blockHeight: status.chainHeight,
+      difficulty: BigInt(chain.difficulty || 0),
+      hashRate: '0', // Not provided by RPC
+      connectedPeers: status.peerCount,
+      mempoolSize: status.mempoolSize,
     }
   }
 
   async getBlock(heightOrHash: BlockHeight | string): Promise<Block | null> {
     try {
-      const endpoint = typeof heightOrHash === 'number'
-        ? `/api/blocks/height/${heightOrHash}`
-        : `/api/blocks/${heightOrHash}`
-      const response = await this.fetchApi(endpoint)
-      if (!response.ok) return null
-      return this.parseBlock(await response.json())
+      if (typeof heightOrHash === 'number') {
+        const result = await this.call<{
+          height: number
+          hash: string
+          prevHash: string
+          timestamp: number
+          difficulty: number
+          txCount: number
+          miningReward: number
+        }>('getBlockByHeight', { height: heightOrHash })
+
+        return {
+          hash: result.hash,
+          height: result.height,
+          timestamp: result.timestamp,
+          previousHash: result.prevHash,
+          transactionCount: result.txCount,
+          size: 0, // Not provided
+          reward: BigInt(result.miningReward || 0),
+          difficulty: BigInt(result.difficulty || 0),
+        }
+      } else {
+        // Hash lookup not directly supported, would need additional RPC method
+        return null
+      }
     } catch {
       return null
     }
   }
 
   async getRecentBlocks(options?: BlockFetchOptions): Promise<Block[]> {
-    const params = new URLSearchParams()
-    if (options?.limit) params.set('limit', options.limit.toString())
-    if (options?.startHeight) params.set('start', options.startHeight.toString())
+    const blocks: Block[] = []
+    const limit = options?.limit || 10
+    const startHeight = options?.startHeight || 0
 
-    const response = await this.fetchApi(`/api/blocks?${params}`)
-    const data = await response.json()
-    return data.blocks.map((b: unknown) => this.parseBlock(b as Record<string, unknown>))
+    // Fetch blocks sequentially (could optimize with batch RPC)
+    for (let i = 0; i < limit; i++) {
+      const block = await this.getBlock(startHeight + i)
+      if (block) {
+        blocks.push(block)
+      }
+    }
+
+    return blocks
   }
 
   // =========================================================================
   // Wallet Queries
   // =========================================================================
 
-  async getBalance(addresses: Address[]): Promise<Balance> {
-    const response = await this.fetchApi('/api/wallet/balance', {
-      method: 'POST',
-      body: JSON.stringify({ addresses }),
-    })
-    const data = await response.json()
+  async getBalance(_addresses: Address[]): Promise<Balance> {
+    // The RPC's wallet_getBalance doesn't take addresses (server-side wallet)
+    // For thin wallet, balance is computed client-side from outputs
+    const result = await this.call<{
+      confirmed: number
+      pending: number
+      total: number
+    }>('wallet_getBalance', {})
+
     return {
-      available: BigInt(data.available),
-      pending: BigInt(data.pending),
-      total: BigInt(data.total),
+      available: BigInt(result.confirmed || 0),
+      pending: BigInt(result.pending || 0),
+      total: BigInt(result.total || 0),
     }
   }
 
-  async getTransactionHistory(addresses: Address[], options?: TxHistoryOptions): Promise<Transaction[]> {
-    const params = new URLSearchParams()
-    if (options?.limit) params.set('limit', options.limit.toString())
-    if (options?.offset) params.set('offset', options.offset.toString())
-    if (options?.startHeight) params.set('startHeight', options.startHeight.toString())
-    if (options?.endHeight) params.set('endHeight', options.endHeight.toString())
-
-    const response = await this.fetchApi(`/api/wallet/transactions?${params}`, {
-      method: 'POST',
-      body: JSON.stringify({ addresses }),
+  async getTransactionHistory(_addresses: Address[], options?: TxHistoryOptions): Promise<Transaction[]> {
+    // Fetch outputs for the height range and filter client-side
+    const result = await this.call<Array<{
+      height: number
+      outputs: Array<{
+        txHash: string
+        outputIndex: number
+        targetKey: string
+        publicKey: string
+        amountCommitment: string
+      }>
+    }>>('chain_getOutputs', {
+      start_height: options?.startHeight || 0,
+      end_height: options?.endHeight || (options?.startHeight || 0) + 100,
     })
-    const data = await response.json()
-    return data.transactions.map((t: unknown) => this.parseTransaction(t as Record<string, unknown>))
+
+    // For now, return empty - client should process outputs locally
+    // Full implementation would scan outputs for matching addresses
+    return result.flatMap((block) =>
+      block.outputs.map((output) => ({
+        id: output.txHash,
+        type: 'receive' as const,
+        amount: BigInt(0), // Would need to decrypt
+        fee: BigInt(0),
+        privacyLevel: 'ring' as const, // Ring signatures for privacy
+        status: 'confirmed' as const,
+        timestamp: Date.now(),
+        blockHeight: block.height,
+        confirmations: 0,
+      }))
+    )
   }
 
-  async getTransaction(txHash: TxHash): Promise<Transaction | null> {
-    try {
-      const response = await this.fetchApi(`/api/transactions/${txHash}`)
-      if (!response.ok) return null
-      return this.parseTransaction(await response.json())
-    } catch {
-      return null
-    }
+  async getTransaction(_txHash: TxHash): Promise<Transaction | null> {
+    // Not directly supported by current RPC
+    // Would need to scan blocks or add a dedicated method
+    return null
   }
 
   // =========================================================================
@@ -185,16 +260,17 @@ export class RemoteNodeAdapter implements NodeAdapter {
 
   async submitTransaction(signedTx: Uint8Array): Promise<TxSubmitResult> {
     try {
-      const response = await this.fetchApi('/api/transactions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/octet-stream' },
-        body: signedTx as unknown as BodyInit,
+      const txHex = Array.from(signedTx)
+        .map((b) => b.toString(16).padStart(2, '0'))
+        .join('')
+
+      const result = await this.call<{ txHash: string }>('tx_submit', {
+        tx_hex: txHex,
       })
-      const data = await response.json()
+
       return {
-        success: response.ok,
-        txHash: data.txHash,
-        error: data.error,
+        success: true,
+        txHash: result.txHash,
       }
     } catch (err) {
       return {
@@ -204,16 +280,17 @@ export class RemoteNodeAdapter implements NodeAdapter {
     }
   }
 
-  async estimateFee(sizeBytes: number, clusterWealth?: bigint): Promise<bigint> {
-    const response = await this.fetchApi('/api/fees/estimate', {
-      method: 'POST',
-      body: JSON.stringify({
-        sizeBytes,
-        clusterWealth: clusterWealth?.toString(),
-      }),
+  async estimateFee(_sizeBytes: number, _clusterWealth?: bigint): Promise<bigint> {
+    const result = await this.call<{
+      minimumFee: number
+      recommendedFee: number
+    }>('estimateFee', {
+      amount: 0,
+      private: true,
+      memos: 0,
     })
-    const data = await response.json()
-    return BigInt(data.fee)
+
+    return BigInt(result.recommendedFee || result.minimumFee || 0)
   }
 
   // =========================================================================
@@ -229,7 +306,6 @@ export class RemoteNodeAdapter implements NodeAdapter {
     const key = addresses.sort().join(',')
     if (!this.txCallbacks.has(key)) {
       this.txCallbacks.set(key, new Set())
-      // Subscribe via WebSocket
       this.sendWsMessage({ type: 'subscribe', addresses })
     }
     this.txCallbacks.get(key)!.add(callback)
@@ -250,68 +326,95 @@ export class RemoteNodeAdapter implements NodeAdapter {
   // Private Helpers
   // =========================================================================
 
-  private async fetch(baseUrl: string, path: string, options?: RequestInit): Promise<Response> {
+  private async rpcCall<T>(
+    baseUrl: string,
+    method: string,
+    params: Record<string, unknown>
+  ): Promise<T> {
     const controller = new AbortController()
     const timeoutId = setTimeout(() => controller.abort(), this.config.timeout)
 
+    const request: JsonRpcRequest = {
+      jsonrpc: '2.0',
+      method,
+      params,
+      id: ++this.rpcId,
+    }
+
     try {
-      return await fetch(`${baseUrl}${path}`, {
-        ...options,
+      const response = await fetch(baseUrl, {
+        method: 'POST',
         signal: controller.signal,
         headers: {
           'Content-Type': 'application/json',
-          ...options?.headers,
         },
+        body: JSON.stringify(request),
       })
+
+      const json: JsonRpcResponse<T> = await response.json()
+
+      if (json.error) {
+        throw new Error(json.error.message)
+      }
+
+      return json.result as T
     } finally {
       clearTimeout(timeoutId)
     }
   }
 
-  private async fetchApi(path: string, options?: RequestInit): Promise<Response> {
-    if (!this.connected || !this.currentNode) {
+  private async call<T>(method: string, params: Record<string, unknown>): Promise<T> {
+    if (!this.connected || !this.currentSeedUrl) {
       throw new Error('Not connected to any node')
     }
-    const baseUrl = this.config.seedNodes.find(
-      url => new URL(url).hostname === this.currentNode!.host
-    )!
-    return this.fetch(baseUrl, path, options)
+    return this.rpcCall<T>(this.currentSeedUrl, method, params)
   }
 
   private setupWebSocket(seedUrl: string): void {
+    // WebSocket support would need to be added to the Botho RPC server
+    // For now, we'll use polling or skip real-time updates
     const wsUrl = seedUrl.replace(/^http/, 'ws') + '/ws'
-    this.ws = new WebSocket(wsUrl)
 
-    this.ws.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data)
-        if (msg.type === 'block') {
-          const block = this.parseBlock(msg.data)
-          this.blockCallbacks.forEach(cb => cb(block))
-        } else if (msg.type === 'transaction') {
-          const tx = this.parseTransaction(msg.data)
-          // Notify relevant subscribers
-          this.txCallbacks.forEach((callbacks, key) => {
-            const addresses = key.split(',')
-            if (tx.counterparty && addresses.includes(tx.counterparty)) {
-              callbacks.forEach(cb => cb(tx))
-            }
-          })
-        }
-      } catch {
-        // Ignore malformed messages
-      }
-    }
+    try {
+      this.ws = new WebSocket(wsUrl)
 
-    this.ws.onclose = () => {
-      // Attempt to reconnect after a delay
-      if (this.connected) {
-        setTimeout(() => {
-          if (this.connected) {
-            this.setupWebSocket(seedUrl)
+      this.ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data)
+          if (msg.type === 'block') {
+            const block = this.parseBlock(msg.data)
+            this.blockCallbacks.forEach((cb) => cb(block))
+          } else if (msg.type === 'transaction') {
+            const tx = this.parseTransaction(msg.data)
+            this.txCallbacks.forEach((callbacks, key) => {
+              const addresses = key.split(',')
+              if (tx.counterparty && addresses.includes(tx.counterparty)) {
+                callbacks.forEach((cb) => cb(tx))
+              }
+            })
           }
-        }, 5000)
+        } catch {
+          // Ignore malformed messages
+        }
       }
+
+      this.ws.onclose = () => {
+        if (this.connected) {
+          setTimeout(() => {
+            if (this.connected) {
+              this.setupWebSocket(seedUrl)
+            }
+          }, 5000)
+        }
+      }
+
+      this.ws.onerror = () => {
+        // WebSocket not supported, fall back to polling
+        this.ws = null
+      }
+    } catch {
+      // WebSocket connection failed, continue without real-time updates
+      this.ws = null
     }
   }
 

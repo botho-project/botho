@@ -7,7 +7,8 @@ import {
   useRef,
   type ReactNode,
 } from 'react'
-import { LocalNodeAdapter } from '@botho/adapters'
+import { LocalNodeAdapter, RemoteNodeAdapter } from '@botho/adapters'
+import type { NodeAdapter } from '@botho/adapters'
 import type { NodeInfo } from '@botho/core'
 
 interface ConnectionState {
@@ -23,12 +24,15 @@ interface ConnectionContextValue extends ConnectionState {
   disconnect: () => void
   addCustomNode: (host: string, port: number) => Promise<void>
   /** The connected adapter for making API calls */
-  adapter: LocalNodeAdapter | null
+  adapter: NodeAdapter | null
 }
 
 const ConnectionContext = createContext<ConnectionContextValue | null>(null)
 
-const scanAdapter = new LocalNodeAdapter()
+const localScanAdapter = new LocalNodeAdapter()
+
+// Remote seed nodes to try when no local nodes are found
+const SEED_NODES = ['https://seed.botho.io']
 
 export function ConnectionProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<ConnectionState>({
@@ -37,18 +41,51 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     connectedNode: null,
     error: null,
   })
-  const adapterRef = useRef<LocalNodeAdapter | null>(null)
+  const adapterRef = useRef<NodeAdapter | null>(null)
 
   const scanForNodes = useCallback(async () => {
     setState((s) => ({ ...s, isScanning: true, error: null }))
 
     try {
-      const nodes = await scanAdapter.scanForNodes()
-      setState((s) => ({
-        ...s,
-        isScanning: false,
-        discoveredNodes: nodes,
-      }))
+      // First, scan for local nodes
+      const localNodes = await localScanAdapter.scanForNodes()
+
+      // If no local nodes, try remote seed nodes
+      if (localNodes.length === 0) {
+        const remoteNodes: NodeInfo[] = []
+
+        for (const seedUrl of SEED_NODES) {
+          try {
+            const remoteAdapter = new RemoteNodeAdapter({ seedNodes: [seedUrl] })
+            await remoteAdapter.connect()
+            const nodeInfo = remoteAdapter.getNodeInfo()
+            if (nodeInfo) {
+              // Mark as remote node
+              remoteNodes.push({
+                ...nodeInfo,
+                id: seedUrl,
+                host: new URL(seedUrl).hostname,
+                port: 443,
+              })
+            }
+            remoteAdapter.disconnect()
+          } catch {
+            // Seed node not reachable, continue
+          }
+        }
+
+        setState((s) => ({
+          ...s,
+          isScanning: false,
+          discoveredNodes: remoteNodes,
+        }))
+      } else {
+        setState((s) => ({
+          ...s,
+          isScanning: false,
+          discoveredNodes: localNodes,
+        }))
+      }
     } catch (err) {
       setState((s) => ({
         ...s,
@@ -71,11 +108,23 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
         adapterRef.current.disconnect()
       }
 
-      // Create a new adapter for this specific node
-      const nodeAdapter = new LocalNodeAdapter({
-        host: node.host,
-        port: node.port,
-      })
+      let nodeAdapter: NodeAdapter
+
+      // Check if this is a remote node (port 443 or hostname is a seed)
+      const isRemote = node.port === 443 || SEED_NODES.some((s) => s.includes(node.host))
+
+      if (isRemote) {
+        // Use RemoteNodeAdapter for seed nodes
+        const seedUrl = `https://${node.host}`
+        nodeAdapter = new RemoteNodeAdapter({ seedNodes: [seedUrl] })
+      } else {
+        // Use LocalNodeAdapter for local nodes
+        nodeAdapter = new LocalNodeAdapter({
+          host: node.host,
+          port: node.port,
+        })
+      }
+
       await nodeAdapter.connect()
 
       adapterRef.current = nodeAdapter
@@ -113,9 +162,18 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     setState((s) => ({ ...s, isScanning: true, error: null }))
 
     try {
-      const customAdapter = new LocalNodeAdapter({ host, port })
-      await customAdapter.connect()
-      const node = customAdapter.getNodeInfo()
+      // Determine if custom node is remote (port 443) or local
+      const isRemote = port === 443
+
+      let nodeAdapter: NodeAdapter
+      if (isRemote) {
+        nodeAdapter = new RemoteNodeAdapter({ seedNodes: [`https://${host}`] })
+      } else {
+        nodeAdapter = new LocalNodeAdapter({ host, port })
+      }
+
+      await nodeAdapter.connect()
+      const node = nodeAdapter.getNodeInfo()
 
       if (node) {
         setState((s) => ({
@@ -146,10 +204,18 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       if (lastNode) {
         try {
           const node = JSON.parse(lastNode) as NodeInfo
-          const nodeAdapter = new LocalNodeAdapter({
-            host: node.host,
-            port: node.port,
-          })
+          const isRemote = node.port === 443 || SEED_NODES.some((s) => s.includes(node.host))
+
+          let nodeAdapter: NodeAdapter
+          if (isRemote) {
+            nodeAdapter = new RemoteNodeAdapter({ seedNodes: [`https://${node.host}`] })
+          } else {
+            nodeAdapter = new LocalNodeAdapter({
+              host: node.host,
+              port: node.port,
+            })
+          }
+
           await nodeAdapter.connect()
           const connectedNode = nodeAdapter.getNodeInfo()
           if (connectedNode) {

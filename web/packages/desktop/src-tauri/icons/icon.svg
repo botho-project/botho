@@ -1,0 +1,23 @@
+<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="logo-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#06b6d4"/>
+      <stop offset="100%" stop-color="#8b5cf6"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background circle -->
+  <circle cx="256" cy="256" r="240" fill="#0a0b0f"/>
+
+  <!-- Outer ring -->
+  <circle cx="256" cy="256" r="224" fill="none" stroke="url(#logo-gradient)" stroke-width="16"/>
+
+  <!-- Wave pattern - static sine wave -->
+  <path
+    d="M96 256 Q160 176, 256 256 T416 256"
+    fill="none"
+    stroke="url(#logo-gradient)"
+    stroke-width="16"
+    stroke-linecap="round"
+  />
+</svg>
