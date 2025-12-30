@@ -24,6 +24,4 @@ fn main() {
             .collect::<Vec<_>>()
     })
     .expect("Unable to write test vectors");
-
-    // Note: B58EncodePublicAddressWithFog test vectors removed - fog support removed
 }
