@@ -159,19 +159,19 @@ KeyImage = x * Hp(P)  // 32 bytes
 LION (Lattice-based lInkable ring signatures fOr aNonymity) is a post-quantum ring signature:
 
 ```
-Ring = [decoy_1, ..., real_input, ..., decoy_19]  (shuffled, 20 total)
+Ring = [decoy_1, ..., real_input, ..., decoy_10]  (shuffled, 11 total)
 Signature = LION.sign(ring, real_index, secret_key)
 KeyImage = LION.key_image(secret_key)  // 1312 bytes
 ```
 
 - **Based on Module-LWE** (lattice hardness)
 - **~128-bit post-quantum security**
-- **~90x larger than CLSAG** (the cost of quantum resistance)
+- **~50x larger than CLSAG** (the cost of quantum resistance)
 
 ### Benefits
 
 - **Sender Unlinkability**: Observers cannot determine which input is being spent
-- **Plausible Deniability**: Any of the 20 ring members could be the true sender
+- **Plausible Deniability**: Any of the ring members could be the true sender (20 for CLSAG, 11 for LION)
 - **No Coordination**: Decoys don't know they're being used
 - **Linkable**: Key images prevent double-spending without revealing the signer
 - **Choice of quantum resistance**: CLSAG for efficiency, LION for maximum security
@@ -253,13 +253,13 @@ Botho uses size-based fees: `fee = fee_per_byte × tx_size × cluster_factor`
 |-----------------|----------------|-------------------|------------------|
 | Minting | ~3.3 KB (ML-DSA) | ~1.5 KB | 0 |
 | Standard-Private | ~0.7 KB (CLSAG) | ~4 KB | ~4,000 nanoBTH |
-| PQ-Private | ~63 KB (LION) | ~65 KB | ~65,000 nanoBTH |
+| PQ-Private | ~36 KB (LION) | ~38 KB | ~38,000 nanoBTH |
 
 **Why the difference?**
 
 - **Minting transactions** have no fee (they create coins, not transfer them)
 - **Standard-Private transactions** use CLSAG ring signatures (~700 bytes per input)
-- **PQ-Private transactions** use LION ring signatures (~63 KB per input)
+- **PQ-Private transactions** use LION ring signatures (~36 KB per input)
 
 Size-based fees naturally reflect the network resources each transaction type consumes.
 
@@ -404,7 +404,7 @@ Both Standard-Private and PQ-Private transactions use OSPEAD (Optimal Selection 
 - **Gamma distribution**: Matches decoy ages to real spending patterns
 - **Age-weighted selection**: Newer outputs more likely to be selected
 - **Cluster similarity**: Prefers decoys with similar cluster tag profiles (≥70% cosine similarity)
-- **Effective anonymity**: With ring size 20, achieves 10+ effective anonymity
+- **Effective anonymity**: Achieves 10+ effective anonymity (CLSAG ring=20), 7+ effective anonymity (LION ring=11)
 
 #### Cluster-Aware Selection
 
@@ -435,7 +435,7 @@ mnemonic → SLIP-10 seed → HKDF → {ML-KEM keypair, ML-DSA keypair, classica
 |-----------------|----------------|-----------------|
 | Minting | N/A (coinbase) | ~1.2 KB |
 | Standard-Private | ~0.7 KB (CLSAG) | ~1.2 KB |
-| PQ-Private | ~63 KB (LION) | ~1.2 KB |
+| PQ-Private | ~36 KB (LION) | ~1.2 KB |
 
 The LION signature size is the cost of quantum-resistant sender privacy. Users choose this trade-off explicitly when needed.
 
@@ -460,8 +460,8 @@ The LION signature size is the cost of quantum-resistant sender privacy. Users c
 |---------|---------|--------|-------|
 | Stealth addresses | All tx (ML-KEM) | All tx (ECDH) | Shielded only |
 | Ring signatures | Standard-Private (CLSAG), PQ-Private (LION) | All tx (CLSAG) | No |
-| Ring size | 20 | 16 | N/A |
-| **Effective anonymity** | **10+ of 20 (measured)** | ~11 of 16 (estimated) | Perfect (ZK) |
+| Ring size | CLSAG=20, LION=11 | 16 | N/A |
+| **Effective anonymity** | **CLSAG: 10+ of 20, LION: 7+ of 11** | ~11 of 16 (estimated) | Perfect (ZK) |
 | Confidential amounts | All types | Yes | Shielded only |
 | Encrypted memos | Yes | No | Shielded only |
 | Post-quantum stealth | Yes (ML-KEM-768) | No | No |
@@ -470,7 +470,7 @@ The LION signature size is the cost of quantum-resistant sender privacy. Users c
 | Progressive fees | Yes (cluster tags) | No | No |
 | Consensus | SCP (Federated) | PoW (RandomX) | PoW (Equihash) |
 
-**Note on effective anonymity**: Botho's 10+ of 20 effective ring members reflects cluster-aware decoy selection mitigating fingerprinting attacks. Monero's estimate is based on similar age-based heuristic analysis. Zcash shielded transactions use zero-knowledge proofs with perfect hiding.
+**Note on effective anonymity**: Botho's effective anonymity (10+ of 20 for CLSAG, 7+ of 11 for LION) reflects cluster-aware decoy selection mitigating fingerprinting attacks. Monero's estimate is based on similar age-based heuristic analysis. Zcash shielded transactions use zero-knowledge proofs with perfect hiding.
 
 **Botho's unique position**: We're the only privacy coin offering both classical (CLSAG) and post-quantum (LION) sender privacy tiers, with post-quantum recipient privacy in all transaction types.
 
