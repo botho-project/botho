@@ -13,6 +13,7 @@
   "dependencies": {
     "@botho/adapters": "workspace:*",
     "@botho/core": "workspace:*",
+    "@botho/features": "workspace:*",
     "@botho/ui": "workspace:*",
     "@xyflow/react": "^12.10.0",
     "lucide-react": "^0.511.0",

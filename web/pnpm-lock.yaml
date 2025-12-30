@@ -61,6 +61,9 @@ importers:
       '@botho/core':
         specifier: workspace:*
         version: link:../core
+      '@botho/features':
+        specifier: workspace:*
+        version: link:../features
       '@botho/ui':
         specifier: workspace:*
         version: link:../ui
@@ -107,6 +110,37 @@ importers:
       vite:
         specifier: ^7.2.4
         version: 7.3.0(jiti@2.6.1)(lightningcss@1.30.2)
+
+  packages/features:
+    dependencies:
+      '@botho/core':
+        specifier: workspace:*
+        version: link:../core
+      '@botho/ui':
+        specifier: workspace:*
+        version: link:../ui
+      lucide-react:
+        specifier: ^0.562.0
+        version: 0.562.0(react@19.2.3)
+      motion:
+        specifier: ^12.23.26
+        version: 12.23.26(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
+      react:
+        specifier: ^19.0.0
+        version: 19.2.3
+      react-dom:
+        specifier: ^19.0.0
+        version: 19.2.3(react@19.2.3)
+    devDependencies:
+      '@types/react':
+        specifier: ^19.2.7
+        version: 19.2.7
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.7)
+      typescript:
+        specifier: ~5.9.3
+        version: 5.9.3
 
   packages/ui:
     dependencies:
@@ -168,12 +202,18 @@ importers:
       '@botho/core':
         specifier: workspace:*
         version: link:../core
+      '@botho/features':
+        specifier: workspace:*
+        version: link:../features
       '@botho/ui':
         specifier: workspace:*
         version: link:../ui
       lucide-react:
         specifier: ^0.562.0
         version: 0.562.0(react@19.2.3)
+      motion:
+        specifier: ^12.23.26
+        version: 12.23.26(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
       react:
         specifier: ^19.2.3
         version: 19.2.3

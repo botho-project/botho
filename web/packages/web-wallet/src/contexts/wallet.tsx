@@ -306,3 +306,11 @@ export function useWallet() {
   }
   return context
 }
+
+/**
+ * Get the adapter for use with explorer/blockchain queries
+ * Returns the RemoteNodeAdapter instance
+ */
+export function useAdapter() {
+  return adapter
+}

@@ -12,8 +12,10 @@
   "dependencies": {
     "@botho/adapters": "workspace:*",
     "@botho/core": "workspace:*",
+    "@botho/features": "workspace:*",
     "@botho/ui": "workspace:*",
     "lucide-react": "^0.562.0",
+    "motion": "^12.23.26",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
     "react-markdown": "^10.1.0",
