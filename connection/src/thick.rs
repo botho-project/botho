@@ -144,7 +144,6 @@ impl<CP: CredentialsProvider> ThickClient<CP> {
     pub fn new(
         chain_id: String,
         uri: ClientUri,
-        _identities: impl Into<Vec<()>>, // Unused, kept for API compat
         credentials_provider: CP,
         logger: Logger,
     ) -> Result<Self> {

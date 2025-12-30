@@ -96,7 +96,6 @@ fn main() {
             ThickClient::new(
                 String::default(), // chain_id
                 node_uri.clone(),
-                Vec::<()>::new(), // identities (unused post-SGX)
                 HardcodedCredentialsProvider::from(&node_uri),
                 logger.clone(),
             )

@@ -58,7 +58,7 @@ else
 fi
 
 printf "${PREFIX} Checking for bad whitespace ... "
-WHITESPACE_OUTPUT=$(git diff-index --color=always --check --cached $against -- 2>&1 | grep -v '^[^a-zA-Z]' | egrep -v '^sgx/sgx_(tcrypto|urts|types)' | grep -v '.*.patch' )
+WHITESPACE_OUTPUT=$(git diff-index --color=always --check --cached $against -- 2>&1 | grep -v '^[^a-zA-Z]' | grep -v '.*.patch' )
 if [[ -n "$WHITESPACE_OUTPUT" ]]; then
 	FAILED=1
 	printf "${FAILURE}\n"
@@ -108,7 +108,7 @@ CARGOFMT="cargo fmt -- --unstable-features --skip-children"
 printf "${PREFIX} Checking formatting ... "
 FMTRESULT=0
 diff=""
-for file in $(git diff --name-only --cached --diff-filter=d | egrep -v '^sgx/sgx_(tcrypto|urts|types)');
+for file in $(git diff --name-only --cached --diff-filter=d);
 do
 	if [[ ${file: -3} == ".rs" ]]; then
 		newdiff=$($CARGOFMT --check $file | grep '^Diff in ' | awk -F' ' '{print $3;}')
@@ -151,7 +151,7 @@ YEAR=$(date +%Y)
 COPYRIGHT_LINE="// Copyright (c) 2018-${YEAR} The Botho Foundation"
 missing_copyright=""
 wrong_copyright=""
-for file in $(git diff --name-only --cached --diff-filter=d | egrep -v '^sgx/sgx_(tcrypto|urts|types)');
+for file in $(git diff --name-only --cached --diff-filter=d);
 do
 	if [[ ${file: -3} == ".rs" ]]; then
 	    FIRST_LINE=$(head -n 1 ${file})
