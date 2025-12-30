@@ -32,7 +32,7 @@ Bitcoin transactions are fully transparent. Anyone can see:
 - Amount transferred
 - Full transaction history
 
-Botho transactions reveal none of this. Every transaction uses stealth addresses (hiding recipients) and ring signatures (hiding senders).
+Botho transactions reveal none of this. Every transaction uses stealth addresses (hiding recipients), and ring signature transactions hide senders among 20 decoys.
 
 **Finality**
 
@@ -84,7 +84,7 @@ Botho's cluster-based progressive fees make hoarding expensive without compromis
 
 Monero uses classical cryptography vulnerable to future quantum computers.
 
-Botho uses LION lattice-based ring signatures, providing both privacy AND quantum resistance in a single unified primitive, protecting against "harvest now, decrypt later" attacks.
+Botho uses a hybrid approach: ML-KEM-768 for all stealth addresses (post-quantum recipient privacy), with CLSAG (classical, efficient) or LION (post-quantum) ring signatures for sender privacy. This protects against "harvest now, decrypt later" attacks on recipient privacy while offering efficient everyday transactions.
 
 **Block Selection**
 
@@ -169,12 +169,14 @@ Secret Network focuses on programmable privacy (smart contracts). Botho focuses 
 
 | Component | Botho | Bitcoin | Monero | Zcash |
 |-----------|-------|---------|--------|-------|
-| Signatures | Schnorr / LION | ECDSA/Schnorr | CLSAG | RedDSA |
-| Key exchange | ECDH | N/A | ECDH | DH |
-| Stealth addresses | Yes | No | Yes | Shielded only |
-| Ring signatures | Yes (MLSAG/LION) | No | Yes (CLSAG) | No |
-| Zero-knowledge | Planned | No | Bulletproofs | Halo2 |
-| Quantum-safe | Yes (LION) | No | No | No |
+| Signatures | ML-DSA / CLSAG / LION | ECDSA/Schnorr | CLSAG | RedDSA |
+| Key exchange | ML-KEM-768 | N/A | ECDH | DH |
+| Stealth addresses | Yes (PQ) | No | Yes | Shielded only |
+| Ring signatures | Yes (CLSAG/LION) | No | Yes (CLSAG) | No |
+| Ring size | 20 | N/A | 16 | N/A |
+| Zero-knowledge | Bulletproofs | No | Bulletproofs | Halo2 |
+| Quantum-safe stealth | Yes (ML-KEM) | No | No | No |
+| Quantum-safe sender | Optional (LION) | No | No | No |
 
 ### Consensus
 

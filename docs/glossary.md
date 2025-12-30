@@ -26,7 +26,7 @@ The amount of BTH created when a new block is mined. Botho starts at 50 BTH per 
 The native currency unit of Botho. 1 BTH = 1,000,000,000 nanoBTH.
 
 ### Bulletproofs
-A type of zero-knowledge proof used for range proofs. Ensures transaction amounts are positive without revealing the actual values. Used in Standard and Private transactions.
+A type of zero-knowledge proof used for range proofs. Ensures transaction amounts are positive without revealing the actual values. Used in Plain, Standard-Private, and PQ-Private transactions (all types except Minting).
 
 ### Byzantine Fault Tolerance (BFT)
 The ability of a system to continue operating correctly even if some participants are malicious or faulty. SCP provides BFT for Botho consensus.
@@ -46,6 +46,9 @@ The process by which network nodes agree on the current state of the blockchain.
 
 ### CryptoNote
 A protocol for private cryptocurrency transactions, originally developed for Bytecoin and used by Monero. Botho implements CryptoNote-style stealth addresses.
+
+### CLSAG
+**Concise Linkable Spontaneous Anonymous Group** signature — An efficient classical ring signature scheme used for Standard-Private transactions. CLSAG is 45% smaller than MLSAG through response aggregation. Provides ~128-bit classical security with ring size 20.
 
 ---
 
@@ -107,7 +110,7 @@ A fixed-size output produced by a hash function. Used for block identification, 
 The speed at which a miner computes hashes, typically measured in H/s (hashes per second).
 
 ### Hybrid Cryptography
-Using both classical and post-quantum algorithms together. Botho uses pure post-quantum cryptography rather than hybrid, providing simpler security assumptions.
+Using both classical and post-quantum algorithms together. Botho uses a strategic hybrid approach: ML-KEM-768 (post-quantum) for all stealth addresses, with a choice of CLSAG (classical) or LION (post-quantum) for ring signatures. This prioritizes permanent recipient privacy while offering efficiency for sender privacy.
 
 ---
 
@@ -149,13 +152,13 @@ Botho's term for mining — the process of creating new blocks and earning block
 A transaction type that creates new coins as block rewards. Minting transactions have no inputs, use ML-DSA signatures, and create new cluster origins. Amounts are public for supply auditability, but recipients are hidden via stealth addresses.
 
 ### ML-DSA (Dilithium)
-**Module Lattice Digital Signature Algorithm** — A post-quantum signature scheme standardized by NIST (FIPS 204). Botho uses ML-DSA-65 for Minting and Standard transaction authorization.
+**Module Lattice Digital Signature Algorithm** — A post-quantum signature scheme standardized by NIST (FIPS 204). Botho uses ML-DSA-65 for Minting and Plain transaction authorization.
 
 ### ML-KEM (Kyber)
 **Module Lattice Key Encapsulation Mechanism** — A post-quantum key exchange scheme standardized by NIST (FIPS 203). Botho uses ML-KEM-768 for post-quantum stealth addresses.
 
 ### MLSAG
-**Multilayered Linkable Spontaneous Anonymous Group** signature — A classical ring signature scheme. Botho uses LION (post-quantum) instead of MLSAG.
+**Multilayered Linkable Spontaneous Anonymous Group** signature — A classical ring signature scheme. Botho uses CLSAG (a more efficient variant) for Standard-Private transactions and LION (post-quantum) for PQ-Private transactions.
 
 ### Mnemonic
 A sequence of words (typically 24) that encodes your wallet's master seed. Used for backup and recovery.
@@ -197,13 +200,19 @@ A cryptographic commitment that hides a value while allowing mathematical operat
 *Deprecated term.* See **nanoBTH** — the smallest unit of BTH. 1 BTH = 1,000,000,000 nanoBTH (10^9).
 
 ### Post-Quantum Cryptography
-Cryptographic algorithms believed to be secure against quantum computer attacks. Botho uses ML-KEM for stealth addresses, ML-DSA for standard signatures, and LION for ring signatures.
+Cryptographic algorithms believed to be secure against quantum computer attacks. Botho uses ML-KEM-768 for all stealth addresses (recipient privacy), ML-DSA-65 for Plain transaction signatures, and offers LION ring signatures for PQ-Private transactions. Standard-Private uses classical CLSAG for efficiency.
 
 ### Private Key
 A secret value that controls your funds. Never share your private keys or mnemonic.
 
+### Plain Transaction
+A transaction type with visible sender but hidden recipient and amounts. Uses ML-DSA signatures (sender visible), Pedersen commitments with Bulletproofs (amounts hidden), and ML-KEM stealth addresses (recipient hidden). Lowest fees (0.05% base). Used for exchanges and audit trails.
+
+### PQ-Private Transaction
+A transaction type providing maximum privacy with post-quantum security. Uses LION ring signatures (sender hidden among 20 members with PQ security), Pedersen commitments with Bulletproofs (amounts hidden), and ML-KEM stealth addresses (recipient hidden). Higher fees (1.0% base) due to ~63 KB signature size. Use for long-term privacy needs.
+
 ### Private Transaction
-A transaction type providing maximum privacy. Private transactions use LION ring signatures (sender hidden among 7 members), Pedersen commitments with Bulletproofs (amounts hidden), and ML-KEM stealth addresses (recipient hidden). Higher fees due to larger signature size but provides full sender anonymity.
+*See* **Standard-Private Transaction** or **PQ-Private Transaction**. Botho offers two private transaction tiers with different performance/security trade-offs.
 
 ### Proof-of-Work (PoW)
 A consensus mechanism where miners prove they've done computational work. Botho uses SHA-256 PoW.
@@ -260,7 +269,10 @@ A well-known node used for initial peer discovery. Botho's seed node is `seed.bo
 The private key required to spend funds. Part of the view/spend key pair.
 
 ### Standard Transaction
-A transaction type for normal value transfers. Standard transactions use ML-DSA signatures (sender is visible), Pedersen commitments with Bulletproofs (amounts hidden), and ML-KEM stealth addresses (recipient hidden). Lower fees than Private transactions but no sender privacy.
+*See* **Plain Transaction** or **Standard-Private Transaction**. The term "standard" in Botho refers to classical (non-PQ) ring signatures when discussing sender privacy.
+
+### Standard-Private Transaction
+The recommended default transaction type for most transfers. Uses CLSAG ring signatures (sender hidden among 20 members with classical security), Pedersen commitments with Bulletproofs (amounts hidden), and ML-KEM stealth addresses (recipient hidden). Moderate fees (0.2% base) with ~700 byte signatures. Provides excellent privacy for everyday transactions.
 
 ### Stealth Address
 A privacy technique where each transaction creates a unique one-time address. Prevents linking payments to recipients.

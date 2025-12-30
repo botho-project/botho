@@ -298,7 +298,7 @@ See [Tokenomics](/docs/tokenomics) for details on cluster-based progressive fees
 
 ## Confidential Amounts
 
-Standard and Private transactions hide amounts using Pedersen commitments and Bulletproofs range proofs.
+All transaction types except Minting hide amounts using Pedersen commitments and Bulletproofs range proofs.
 
 ### How It Works
 
@@ -443,7 +443,7 @@ The LION signature size is the cost of quantum-resistant sender privacy. Users c
 
 1. **Use fresh addresses**: Generate new subaddresses for each payment request
 2. **Allow time between transactions**: Spacing transactions makes timing analysis harder
-3. **Use Private transactions**: When sender privacy matters, use Private transactions
+3. **Use ring signature transactions**: When sender privacy matters, use Standard-Private or PQ-Private
 4. **Don't reuse patterns**: Vary transaction amounts and timing to avoid fingerprinting
 
 ### Privacy Limitations

@@ -319,9 +319,9 @@ All transaction types use ML-KEM-768 stealth addresses for recipient privacy.
 
 ---
 
-## Amount Privacy (Standard & Private)
+## Amount Privacy
 
-Standard and Private transactions hide amounts using Pedersen commitments and Bulletproofs.
+All transaction types except Minting hide amounts using Pedersen commitments and Bulletproofs.
 
 ### Pedersen Commitments
 

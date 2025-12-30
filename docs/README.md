@@ -16,7 +16,7 @@ Welcome to the Botho documentation. Botho is a privacy-preserving, mined cryptoc
 |----------|-------------|
 | [Why Botho?](comparison.md) | Comparison with Bitcoin, Monero, Zcash |
 | [Architecture](architecture.md) | System design and component overview |
-| [Transaction Types](transactions.md) | Minting, Standard, and Private transactions |
+| [Transaction Types](transactions.md) | Minting, Plain, Standard-Private, and PQ-Private transactions |
 | [Privacy](privacy.md) | Privacy features and cryptography |
 | [Tokenomics](tokenomics.md) | Supply, emission, fees, and economics |
 | [Monetary Policy](monetary-policy.md) | Difficulty adjustment, epochs, and fork upgrades |
@@ -53,8 +53,8 @@ Welcome to the Botho documentation. Botho is a privacy-preserving, mined cryptoc
 Botho combines:
 
 - **Proof-of-Work Minting**: SHA-256 minting with variable difficulty
-- **Three Transaction Types**: Minting (block rewards), Standard (hidden amounts), Private (hidden sender + amounts)
-- **Pure Post-Quantum Security**: ML-KEM stealth addresses, ML-DSA signatures, LION ring signatures
+- **Four Transaction Types**: Minting (block rewards), Plain (visible sender), Standard-Private (CLSAG ring), PQ-Private (LION ring)
+- **Hybrid Post-Quantum Security**: ML-KEM stealth addresses (all types), CLSAG or LION ring signatures
 - **Confidential Amounts**: Pedersen commitments with Bulletproofs range proofs
 - **Byzantine Fault Tolerance**: Stellar Consensus Protocol (SCP) for consensus
 - **Progressive Fees**: Cluster-based taxation that discourages wealth concentration

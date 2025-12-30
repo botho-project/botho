@@ -32,17 +32,22 @@ Both prioritize privacy, but differ in economics and consensus:
 | Finality | ~20 minutes (10 confirmations) | ~3-5 seconds |
 | Fee destination | To miners | Burned |
 | Wealth redistribution | None | Progressive cluster fees |
-| Quantum resistance | Not yet | LION ring signatures |
+| Quantum resistance | Not yet | Hybrid (see below) |
 
 ### Is Botho quantum-resistant?
 
-Yes. Botho uses **LION** (Lattice-based lInkable ring signatures fOr aNonymity), a purpose-built post-quantum ring signature scheme that provides both sender privacy AND quantum resistance in a single unified algorithm.
+Yes, with a strategic hybrid approach:
 
-- **Security**: ~128-bit post-quantum security based on Module-LWE
-- **Ring size**: 7 members for privacy
-- **Signature size**: ~17 KB per input
+- **Recipient privacy**: ML-KEM-768 (post-quantum) for all stealth addresses
+- **Sender privacy**: Choice of CLSAG (classical, efficient) or LION (post-quantum)
+- **Amount privacy**: Pedersen commitments (hiding is information-theoretic, quantum-safe)
 
-LION provides simpler implementation than hybrid approaches while still protecting against "harvest now, decrypt later" attacks.
+| Tier | Ring Signature | Ring Size | Signature Size | Quantum Safety |
+|------|---------------|-----------|----------------|----------------|
+| Standard-Private | CLSAG | 20 | ~700 bytes | Classical |
+| PQ-Private | LION | 20 | ~63 KB | Post-quantum |
+
+Recipient privacy is permanent (on-chain forever), so we use ML-KEM-768 for all transactions. Sender privacy is ephemeral, so we offer efficient CLSAG for daily use with LION available for high-value transfers needing long-term quantum protection.
 
 ---
 
@@ -88,25 +93,29 @@ With a fresh network, sync is nearly instant. As the blockchain grows, initial s
 
 ### Are all transactions private?
 
-All transactions hide the **recipient** and (for Standard/Private transactions) the **amount**:
+All transactions hide the **recipient** (via ML-KEM stealth addresses). Other privacy depends on type:
 
-- **Stealth addresses** — Recipients get unique one-time addresses (all transactions)
-- **Confidential amounts** — Amounts hidden via Pedersen commitments (Standard & Private)
-- **Encrypted memos** — Optional messages are encrypted (all transactions)
+| Type | Recipient | Amount | Sender |
+|------|-----------|--------|--------|
+| Minting | Hidden | Public | Known (minter) |
+| Plain | Hidden | Hidden | Visible |
+| Standard-Private | Hidden | Hidden | Hidden (20-member ring) |
+| PQ-Private | Hidden | Hidden | Hidden (20-member ring, PQ) |
 
 **Sender privacy** depends on transaction type:
-- **Minting/Standard transactions**: Sender is visible (ML-DSA signature)
-- **Private transactions**: Sender hidden among 7 ring members (LION ring signatures)
+- **Minting/Plain**: Sender is visible (ML-DSA signature)
+- **Standard-Private**: Sender hidden via CLSAG ring signatures (classical)
+- **PQ-Private**: Sender hidden via LION ring signatures (post-quantum)
 
 ### Can I see my transaction on a block explorer?
 
 You can see that a transaction exists, but:
 
 - **Recipient**: Always hidden (stealth addresses)
-- **Amount**: Hidden for Standard/Private transactions (Pedersen commitments)
-- **Sender**: Hidden only for Private transactions (ring signatures)
+- **Amount**: Hidden except for Minting transactions
+- **Sender**: Hidden for Standard-Private and PQ-Private transactions (ring signatures)
 
-For Standard transactions, the sender is visible but recipient and amount are hidden. For Private transactions, sender, recipient, and amount are all hidden.
+For Plain transactions, the sender is visible but recipient and amount are hidden. For ring signature transactions (Standard-Private and PQ-Private), sender, recipient, and amount are all hidden.
 
 ### What information is NOT hidden?
 
@@ -119,11 +128,11 @@ For Standard transactions, the sender is visible but recipient and amount are hi
 Botho provides strong cryptographic privacy, but privacy is never absolute:
 
 - **Timing analysis** may reveal patterns if you transact predictably
-- **Transaction graph analysis** possible for Standard transactions (sender visible)
+- **Transaction graph analysis** possible for Plain transactions (sender visible)
 - **IP tracking** is possible without Tor/VPN
 - **Exchange KYC** links your identity to addresses you deposit to/withdraw from
 
-For maximum privacy, use the [privacy best practices](privacy.md#privacy-best-practices).
+For maximum privacy, use Standard-Private or PQ-Private transactions and follow the [privacy best practices](privacy.md#privacy-best-practices).
 
 ---
 
