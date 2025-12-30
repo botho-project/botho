@@ -51,9 +51,10 @@ Core functionality complete. See README.md for features and usage.
    - [ ] `slog` → `tracing` (botho/ migrated, inherited crates remain)
    - [ ] `lmdb-rkv` → `heed` or `redb` (still works with patch)
 
-6. **Fee Estimation API**
-   - [ ] Add `estimateFee` method to JSON-RPC
-   - [ ] Update `botho send` to show memo fee breakdown
+6. **Fee Estimation API** ✓ COMPLETE
+   - [x] `estimateFee` / `tx_estimateFee` RPC method implemented
+   - [x] Returns: minimumFee, feeRateBps, recommendedFee, highPriorityFee
+   - [x] `botho send` shows fee breakdown (type, rate, memo surcharge)
 
 ---
 
