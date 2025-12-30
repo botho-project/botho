@@ -76,7 +76,8 @@ pub fn run(config_path: &Path, address_str: &str, amount_str: &str, private: boo
     let _ = private; // Deprecated: all transactions are now private
 
     // Estimate fee based on typical transaction size
-    // cluster_wealth = 0 for now (will be computed from UTXOs in production)
+    // TODO: Compute cluster wealth from input UTXO cluster_tags
+    // See botho/src/mempool.rs module docs for implementation requirements
     let cluster_wealth = 0u64;
     let num_memos = if memo.is_some() { 1 } else { 0 };
     let fee = fee_config.estimate_typical_fee(tx_type, cluster_wealth, num_memos);

@@ -667,35 +667,58 @@ impl<V: Value, ValidationError: Display> Slot<V, ValidationError> {
     // Prepare-specific methods
     ///////////////////////////////////////////////////////////////////////////
 
-    fn check_prepare_phase_invariants(&self) {
-        assert!(
-            self.phase == Phase::NominatePrepare || self.phase == Phase::Prepare,
-            "self.phase: {:?}",
-            self.phase
-        );
+    /// Check invariants for the prepare phase.
+    /// Returns an error if any invariant is violated, allowing graceful error handling.
+    fn check_prepare_phase_invariants(&self) -> Result<(), String> {
+        if self.phase != Phase::NominatePrepare && self.phase != Phase::Prepare {
+            return Err(format!(
+                "Prepare invariant violated: unexpected phase {:?}",
+                self.phase
+            ));
+        }
 
         // When some ballot has been accepted prepared...
         if let (Some(P), Some(PP)) = (&self.P, &self.PP) {
             // PP is less-than-and-incompatible-with P
-            assert!(PP < P);
-            assert_ne!(PP.X, P.X);
+            if PP >= P {
+                return Err(format!(
+                    "Prepare invariant violated: PP ({:?}) >= P ({:?})",
+                    PP, P
+                ));
+            }
+            if PP.X == P.X {
+                return Err("Prepare invariant violated: PP.X == P.X".to_string());
+            }
         }
 
         // When some ballot has been voted committed...
         if let Some(C) = &self.C {
             // C is less-than-and-compatible-with H
             if let Some(H) = &self.H {
-                assert!(C.N <= H.N, "C.N: {}, H.N: {}", C.N, H.N);
-                assert_eq!(C.X, H.X);
+                if C.N > H.N {
+                    return Err(format!(
+                        "Prepare invariant violated: C.N ({}) > H.N ({})",
+                        C.N, H.N
+                    ));
+                }
+                if C.X != H.X {
+                    return Err("Prepare invariant violated: C.X != H.X".to_string());
+                }
             } else {
-                panic!("C is Some but H is None");
+                return Err("Prepare invariant violated: C is Some but H is None".to_string());
             }
         }
+
+        Ok(())
     }
 
     /// Prepare phase message handling.
     fn do_prepare_phase(&mut self) {
-        self.check_prepare_phase_invariants();
+        if let Err(e) = self.check_prepare_phase_invariants() {
+            log::error!(self.logger, "SCP invariant error: {}", e);
+            debug_assert!(false, "Prepare phase invariant violated: {}", e);
+            return;
+        }
         // Note: P and PP must be non-decreasing within the Prepare phase.
         // Note: H must be non-decreasing within the Prepare phase.
 
@@ -993,45 +1016,80 @@ impl<V: Value, ValidationError: Display> Slot<V, ValidationError> {
         }
 
         // Check invariants.
-        self.check_prepare_phase_invariants();
+        if let Err(e) = self.check_prepare_phase_invariants() {
+            log::error!(self.logger, "SCP invariant error at end of prepare: {}", e);
+            debug_assert!(false, "Prepare phase invariant violated: {}", e);
+        }
     }
 
     ///////////////////////////////////////////////////////////////////////////
     // Commit-specific methods
     ///////////////////////////////////////////////////////////////////////////
 
-    fn check_commit_phase_invariants(&self) {
-        assert_eq!(self.phase, Phase::Commit);
-        assert!(!self.B.is_zero());
+    /// Check invariants for the commit phase.
+    /// Returns an error if any invariant is violated, allowing graceful error handling.
+    fn check_commit_phase_invariants(&self) -> Result<(), String> {
+        if self.phase != Phase::Commit {
+            return Err(format!(
+                "Commit invariant violated: unexpected phase {:?}",
+                self.phase
+            ));
+        }
+        if self.B.is_zero() {
+            return Err("Commit invariant violated: B is zero".to_string());
+        }
 
         if let Some(P) = &self.P {
-            assert_eq!(P.X, self.B.X);
+            if P.X != self.B.X {
+                return Err(format!(
+                    "Commit invariant violated: P.X ({:?}) != B.X ({:?})",
+                    P.X, self.B.X
+                ));
+            }
         } else {
-            panic!(
-                "Commit: P is None. self.B: {:?}, self.H: {:?}, self.C: {:?}",
-                self.B, self.C, self.H
-            );
+            return Err(format!(
+                "Commit invariant violated: P is None. B: {:?}, H: {:?}, C: {:?}",
+                self.B, self.H, self.C
+            ));
         }
 
         // PP is not used in the commit phase.
-        assert!(self.PP.is_none());
+        if self.PP.is_some() {
+            return Err("Commit invariant violated: PP should be None".to_string());
+        }
 
         if let Some(H) = &self.H {
-            assert_eq!(H.X, self.B.X);
+            if H.X != self.B.X {
+                return Err(format!(
+                    "Commit invariant violated: H.X ({:?}) != B.X ({:?})",
+                    H.X, self.B.X
+                ));
+            }
         } else {
-            panic!("Commit: H is None.");
+            return Err("Commit invariant violated: H is None".to_string());
         }
 
         if let Some(C) = &self.C {
-            assert_eq!(C.X, self.B.X);
+            if C.X != self.B.X {
+                return Err(format!(
+                    "Commit invariant violated: C.X ({:?}) != B.X ({:?})",
+                    C.X, self.B.X
+                ));
+            }
         } else {
-            panic!("Commit: C is None.");
+            return Err("Commit invariant violated: C is None".to_string());
         }
+
+        Ok(())
     }
 
     // Commit phase message handling.
     fn do_commit_phase(&mut self) {
-        self.check_commit_phase_invariants();
+        if let Err(e) = self.check_commit_phase_invariants() {
+            log::error!(self.logger, "SCP invariant error: {}", e);
+            debug_assert!(false, "Commit phase invariant violated: {}", e);
+            return;
+        }
 
         // (5) Set P to the highest accepted prepared ballot such that P.x = B.x.
 
@@ -1106,50 +1164,86 @@ impl<V: Value, ValidationError: Display> Slot<V, ValidationError> {
             self.do_commit_phase();
         }
 
-        self.check_commit_phase_invariants();
+        if let Err(e) = self.check_commit_phase_invariants() {
+            log::error!(self.logger, "SCP invariant error at end of commit: {}", e);
+            debug_assert!(false, "Commit phase invariant violated: {}", e);
+        }
     }
 
-    fn check_externalize_phase_invariants(&self) {
-        assert_eq!(self.phase, Phase::Externalize);
-        assert!(!self.B.is_zero());
+    /// Check invariants for the externalize phase.
+    /// Returns an error if any invariant is violated, allowing graceful error handling.
+    fn check_externalize_phase_invariants(&self) -> Result<(), String> {
+        if self.phase != Phase::Externalize {
+            return Err(format!(
+                "Externalize invariant violated: unexpected phase {:?}",
+                self.phase
+            ));
+        }
+        if self.B.is_zero() {
+            return Err("Externalize invariant violated: B is zero".to_string());
+        }
 
         // H is the highest confirmed committed ballot.
         if let Some(H) = &self.H {
-            assert_eq!(H.X, self.B.X);
+            if H.X != self.B.X {
+                return Err(format!(
+                    "Externalize invariant violated: H.X ({:?}) != B.X ({:?})",
+                    H.X, self.B.X
+                ));
+            }
         } else {
-            panic!("Externalize: H is None.");
+            return Err("Externalize invariant violated: H is None".to_string());
         }
 
         // C is the lowest confirmed committed ballot.
         if let Some(C) = &self.C {
-            assert_eq!(C.X, self.B.X);
+            if C.X != self.B.X {
+                return Err(format!(
+                    "Externalize invariant violated: C.X ({:?}) != B.X ({:?})",
+                    C.X, self.B.X
+                ));
+            }
         } else {
-            panic!("Externalize: C is None.");
+            return Err("Externalize invariant violated: C is None".to_string());
         }
 
         // PP is not used in the Externalize phase.
-        assert!(self.PP.is_none());
+        if self.PP.is_some() {
+            return Err("Externalize invariant violated: PP should be None".to_string());
+        }
+
+        Ok(())
     }
 
     fn do_externalize_phase(&mut self) {
-        self.check_externalize_phase_invariants();
+        if let Err(e) = self.check_externalize_phase_invariants() {
+            log::error!(self.logger, "SCP invariant error: {}", e);
+            debug_assert!(false, "Externalize phase invariant violated: {}", e);
+            return;
+        }
 
         // Update H.N to the highest ballot confirmed committed.
         if let Some((_cn, hn)) = self.ballots_confirmed_committed() {
             // The highest ballot confirmed committed.
-            if hn >= self.H.as_ref().unwrap().N {
-                self.H.as_mut().unwrap().N = hn;
-            } else {
-                log::debug!(
-                    self.logger,
-                    "Externalize: Ignoring decreasing H. self.H.N: {:?}, hn: {:?}",
-                    self.H.as_ref().unwrap().N,
-                    hn,
-                );
+            // Safe to use if-let since invariant check passed
+            if let Some(h) = self.H.as_mut() {
+                if hn >= h.N {
+                    h.N = hn;
+                } else {
+                    log::debug!(
+                        self.logger,
+                        "Externalize: Ignoring decreasing H. self.H.N: {:?}, hn: {:?}",
+                        h.N,
+                        hn,
+                    );
+                }
             }
         }
 
-        self.check_externalize_phase_invariants();
+        if let Err(e) = self.check_externalize_phase_invariants() {
+            log::error!(self.logger, "SCP invariant error at end of externalize: {}", e);
+            debug_assert!(false, "Externalize phase invariant violated: {}", e);
+        }
     }
 
     ///////////////////////////////////////////////////////////////////////////

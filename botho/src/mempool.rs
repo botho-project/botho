@@ -10,15 +10,55 @@
 //! Uses the cluster-tax fee system to compute minimum fees based on:
 //! - Transaction type (CLSAG = Hidden, LION = PqHidden)
 //! - Transfer amount
-//! - Sender's cluster wealth (currently 0, cluster tracking not yet implemented)
+//! - Sender's cluster wealth (see note below)
 //! - Number of outputs with encrypted memos
+//!
+//! ## Cluster Wealth Tracking
+//!
+//! The progressive fee system charges higher fees to wealthier clusters (1x-6x multiplier).
+//! Cluster wealth is computed from transaction outputs, which inherit merged+decayed tags
+//! from inputs. This means:
+//!
+//! - Fresh mints start with weight=100% for a new cluster ID
+//! - Each transaction decays weights by 5% (DEFAULT_CLUSTER_DECAY_RATE)
+//! - Mixed inputs produce merged tag vectors weighted by amount
+//! - Maximum cluster wealth determines the fee multiplier
+//!
+//! For fee estimation (wallets), use `Wallet::compute_cluster_wealth()` on UTXOs.
+//! For fee validation (mempool), cluster wealth is computed from output tags.
 
 use std::collections::{HashMap, HashSet};
 use tracing::{debug, warn};
 
 use bth_cluster_tax::{DynamicFeeBase, DynamicFeeState, FeeConfig, FeeSuggestion, TransactionType as FeeTransactionType};
+use bth_transaction_types::TAG_WEIGHT_SCALE;
 use crate::ledger::Ledger;
-use crate::transaction::{Transaction, TxInputs, UtxoId};
+use crate::transaction::{Transaction, TxInputs, TxOutput, UtxoId};
+
+/// Compute the maximum cluster wealth from transaction outputs.
+///
+/// This computes cluster wealth from outputs (which inherit from inputs via merge_weighted).
+/// For each cluster, wealth contribution = sum(output_amount × tag_weight / TAG_WEIGHT_SCALE).
+/// Returns the maximum wealth across all clusters, which is used for progressive fee calculation.
+///
+/// This is appropriate for fee validation because:
+/// 1. Outputs inherit merged+decayed tags from inputs
+/// 2. The sender's cluster profile is preserved through inheritance
+/// 3. Higher cluster concentration → higher output tag weights → higher computed wealth
+fn compute_cluster_wealth_from_outputs(outputs: &[TxOutput]) -> u64 {
+    let mut cluster_wealths: HashMap<u64, u64> = HashMap::new();
+
+    for output in outputs {
+        let value = output.amount;
+        for entry in &output.cluster_tags.entries {
+            let contribution = ((value as u128) * (entry.weight as u128)
+                / (TAG_WEIGHT_SCALE as u128)) as u64;
+            *cluster_wealths.entry(entry.cluster_id.0).or_insert(0) += contribution;
+        }
+    }
+
+    cluster_wealths.values().copied().max().unwrap_or(0)
+}
 
 /// Maximum transactions in mempool
 const MAX_MEMPOOL_SIZE: usize = 1000;
@@ -162,7 +202,8 @@ impl Mempool {
     /// # Returns
     /// The minimum fee in nanoBTH
     pub fn estimate_fee(&self, tx_type: FeeTransactionType, _amount: u64, num_memos: usize) -> u64 {
-        // cluster_wealth = 0 for now (cluster tracking not yet implemented)
+        // Use 0 for estimation - wallets should use Wallet::compute_cluster_wealth()
+        // and call suggest_fees() with their actual cluster wealth for accurate estimates
         let cluster_wealth = 0u64;
 
         // Get typical size for this tx type
@@ -196,6 +237,8 @@ impl Mempool {
     /// Estimate fee using static base (ignoring current congestion).
     ///
     /// Useful for testing or when you want the base fee regardless of network state.
+    /// Returns minimum fee (cluster_wealth=0). For accurate estimates with your
+    /// cluster profile, use `suggest_fees()` with computed cluster wealth.
     pub fn estimate_fee_static(&self, tx_type: FeeTransactionType, num_memos: usize) -> u64 {
         let cluster_wealth = 0u64;
         self.fee_config.estimate_typical_fee(tx_type, cluster_wealth, num_memos)
@@ -263,8 +306,8 @@ impl Mempool {
         // Estimate transaction size based on inputs and outputs
         let tx_size_bytes = tx.estimate_size();
 
-        // cluster_wealth = 0 for now (cluster tracking not yet implemented)
-        let cluster_wealth = 0u64;
+        // Compute cluster wealth from transaction outputs (which inherit from inputs)
+        let cluster_wealth = compute_cluster_wealth_from_outputs(&tx.outputs);
         // Count outputs with encrypted memos for fee calculation
         let num_memos = tx.outputs.iter().filter(|o| o.has_memo()).count();
 
@@ -653,6 +696,7 @@ impl std::error::Error for MempoolError {}
 mod tests {
     use super::*;
     use crate::transaction::{ClsagRingInput, RingMember, TxOutput, MIN_RING_SIZE, MIN_TX_FEE};
+    use bth_transaction_types::ClusterTagVector;
 
     /// Helper to create a test output with raw bytes
     fn test_output(amount: u64, id: u8) -> TxOutput {
@@ -661,6 +705,7 @@ mod tests {
             target_key: [id; 32],
             public_key: [id.wrapping_add(1); 32],
             e_memo: None,
+            cluster_tags: ClusterTagVector::empty(),
         }
     }
 

@@ -61,6 +61,7 @@
 use aes::cipher::{KeyIvInit, StreamCipher};
 use aes::Aes256;
 use bth_account_keys::{AccountKey, PublicAddress};
+use bth_transaction_types::ClusterTagVector;
 use bth_crypto_keys::{CompressedRistrettoPublic, RistrettoPrivate, RistrettoPublic, RistrettoSignature};
 use bth_crypto_ring_signature::{
     onetime_keys::{
@@ -79,12 +80,18 @@ use hkdf::Hkdf;
 use rand_core::{CryptoRng, OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256, Sha512};
+use std::collections::HashSet;
 
 /// Minimum transaction fee in picocredits (0.0001 credits = 100_000_000 picocredits)
 pub const MIN_TX_FEE: u64 = 100_000_000;
 
 /// Picocredits per credit (10^12)
 pub const PICOCREDITS_PER_CREDIT: u64 = 1_000_000_000_000;
+
+/// Dust threshold - minimum output amount in picocredits.
+/// Outputs below this value are rejected to prevent dust attacks.
+/// Set to 1 microcredit (0.000001 credits = 1_000_000 picocredits).
+pub const DUST_THRESHOLD: u64 = 1_000_000;
 
 /// Size of an encrypted memo in bytes (2-byte type + 64-byte payload)
 pub const ENCRYPTED_MEMO_SIZE: usize = 66;
@@ -236,6 +243,7 @@ fn apply_memo_keystream(data: &mut [u8; ENCRYPTED_MEMO_SIZE], shared_secret: &Ri
 /// - `target_key`: One-time public key that only the recipient can identify and spend
 /// - `public_key`: Ephemeral DH public key for recipient to derive shared secret
 /// - `e_memo`: Optional encrypted memo (66 bytes) readable only by recipient
+/// - `cluster_tags`: Cluster ancestry for progressive fee tracking
 ///
 /// The recipient's actual address is not stored in the output, making outputs
 /// unlinkable even for the same recipient.
@@ -257,6 +265,12 @@ pub struct TxOutput {
     /// Only the recipient can decrypt this using their view key.
     #[serde(default)]
     pub e_memo: Option<EncryptedMemo>,
+
+    /// Cluster ancestry tags for progressive fee computation.
+    /// Tracks what fraction of this output's value traces to each cluster origin.
+    /// Used by the cluster-tax system to apply higher fees to concentrated wealth.
+    #[serde(default)]
+    pub cluster_tags: ClusterTagVector,
 }
 
 impl TxOutput {
@@ -297,6 +311,39 @@ impl TxOutput {
             target_key: target_key.to_bytes(),
             public_key: public_key.to_bytes(),
             e_memo,
+            cluster_tags: ClusterTagVector::empty(),
+        }
+    }
+
+    /// Create a new stealth output with cluster tags for progressive fees.
+    ///
+    /// This is the primary constructor for transactions that properly inherit
+    /// cluster ancestry from their inputs.
+    pub fn new_with_cluster_tags(
+        amount: u64,
+        recipient: &PublicAddress,
+        memo: Option<MemoPayload>,
+        cluster_tags: ClusterTagVector,
+    ) -> Self {
+        // Generate random ephemeral private key
+        let tx_private_key = RistrettoPrivate::from_random(&mut OsRng);
+
+        // Create stealth output keys
+        let target_key = create_tx_out_target_key(&tx_private_key, recipient);
+        let public_key = create_tx_out_public_key(&tx_private_key, recipient.spend_public_key());
+
+        // Encrypt memo if provided
+        let e_memo = memo.map(|m| {
+            let shared_secret = create_shared_secret(recipient.view_public_key(), &tx_private_key);
+            m.encrypt(&shared_secret)
+        });
+
+        Self {
+            amount,
+            target_key: target_key.to_bytes(),
+            public_key: public_key.to_bytes(),
+            e_memo,
+            cluster_tags,
         }
     }
 
@@ -314,6 +361,7 @@ impl TxOutput {
             target_key: target_key.to_bytes(),
             public_key: public_key.to_bytes(),
             e_memo: None,
+            cluster_tags: ClusterTagVector::empty(),
         }
     }
 
@@ -1186,11 +1234,23 @@ impl Transaction {
             }
         }
 
+        // Check for duplicate key images within this transaction
+        // (double-spend attempt within a single tx)
+        let key_images = self.key_images();
+        let unique_count = key_images.iter().collect::<HashSet<_>>().len();
+        if unique_count != key_images.len() {
+            return Err("Transaction has duplicate key images");
+        }
+
         if self.outputs.is_empty() {
             return Err("Transaction has no outputs");
         }
         if self.outputs.iter().any(|o| o.amount == 0) {
             return Err("Transaction has zero-amount output");
+        }
+        // Check for dust outputs (below minimum threshold)
+        if self.outputs.iter().any(|o| o.amount < DUST_THRESHOLD) {
+            return Err("Transaction has output below dust threshold");
         }
         if self.fee < MIN_TX_FEE {
             return Err("Transaction fee below minimum");
@@ -1283,8 +1343,12 @@ mod tests {
             target_key: target,
             public_key: public,
             e_memo: None,
+            cluster_tags: ClusterTagVector::empty(),
         }
     }
+
+    /// Default test amount that's above the dust threshold
+    const TEST_AMOUNT: u64 = DUST_THRESHOLD * 10;
 
     /// Helper to create a minimal test ring member
     fn test_ring_member(id: u8) -> RingMember {
@@ -1320,7 +1384,7 @@ mod tests {
     fn test_transaction_hash_deterministic() {
         let tx = Transaction::new_clsag(
             vec![test_clsag_input(1)],
-            vec![test_output(1000, [2u8; 32], [3u8; 32])],
+            vec![test_output(TEST_AMOUNT, [2u8; 32], [3u8; 32])],
             MIN_TX_FEE,
             1,
         );
@@ -1333,14 +1397,14 @@ mod tests {
     fn test_signing_hash_changes_with_content() {
         let tx1 = Transaction::new_clsag(
             vec![test_clsag_input(1)],
-            vec![test_output(1000, [2u8; 32], [3u8; 32])],
+            vec![test_output(TEST_AMOUNT, [2u8; 32], [3u8; 32])],
             MIN_TX_FEE,
             1,
         );
 
         let tx2 = Transaction::new_clsag(
             vec![test_clsag_input(1)],
-            vec![test_output(2000, [2u8; 32], [3u8; 32])], // Different amount
+            vec![test_output(TEST_AMOUNT * 2, [2u8; 32], [3u8; 32])], // Different amount
             MIN_TX_FEE,
             1,
         );
@@ -1353,7 +1417,7 @@ mod tests {
     fn test_transaction_is_valid_structure_no_inputs() {
         let tx = Transaction::new_clsag(
             vec![],
-            vec![test_output(1000, [2u8; 32], [3u8; 32])],
+            vec![test_output(TEST_AMOUNT, [2u8; 32], [3u8; 32])],
             MIN_TX_FEE,
             1,
         );
@@ -1375,7 +1439,69 @@ mod tests {
     fn test_transaction_is_valid_structure_valid() {
         let tx = Transaction::new_clsag(
             vec![test_clsag_input(1)],
-            vec![test_output(1000, [2u8; 32], [3u8; 32])],
+            vec![test_output(TEST_AMOUNT, [2u8; 32], [3u8; 32])],
+            MIN_TX_FEE,
+            1,
+        );
+        assert!(tx.is_valid_structure().is_ok());
+    }
+
+    #[test]
+    fn test_transaction_dust_output_rejected() {
+        // Output below dust threshold should be rejected
+        let tx = Transaction::new_clsag(
+            vec![test_clsag_input(1)],
+            vec![test_output(DUST_THRESHOLD - 1, [2u8; 32], [3u8; 32])],
+            MIN_TX_FEE,
+            1,
+        );
+        assert_eq!(
+            tx.is_valid_structure().unwrap_err(),
+            "Transaction has output below dust threshold"
+        );
+    }
+
+    #[test]
+    fn test_transaction_at_dust_threshold_accepted() {
+        // Output exactly at dust threshold should be accepted
+        let tx = Transaction::new_clsag(
+            vec![test_clsag_input(1)],
+            vec![test_output(DUST_THRESHOLD, [2u8; 32], [3u8; 32])],
+            MIN_TX_FEE,
+            1,
+        );
+        assert!(tx.is_valid_structure().is_ok());
+    }
+
+    #[test]
+    fn test_transaction_duplicate_key_images_rejected() {
+        // Create two inputs with the same key image (simulated double-spend)
+        let mut input1 = test_clsag_input(1);
+        let mut input2 = test_clsag_input(2);
+        // Force same key image on both inputs
+        input2.key_image = input1.key_image;
+
+        let tx = Transaction::new_clsag(
+            vec![input1, input2],
+            vec![test_output(TEST_AMOUNT, [2u8; 32], [3u8; 32])],
+            MIN_TX_FEE,
+            1,
+        );
+        assert_eq!(
+            tx.is_valid_structure().unwrap_err(),
+            "Transaction has duplicate key images"
+        );
+    }
+
+    #[test]
+    fn test_transaction_unique_key_images_accepted() {
+        // Two inputs with different key images should be valid
+        let input1 = test_clsag_input(1);
+        let input2 = test_clsag_input(2); // Different ring_id = different key image
+
+        let tx = Transaction::new_clsag(
+            vec![input1, input2],
+            vec![test_output(TEST_AMOUNT, [2u8; 32], [3u8; 32])],
             MIN_TX_FEE,
             1,
         );
@@ -1386,7 +1512,7 @@ mod tests {
     fn test_privacy_tier_clsag() {
         let tx = Transaction::new_clsag(
             vec![test_clsag_input(1)],
-            vec![test_output(1000, [2u8; 32], [3u8; 32])],
+            vec![test_output(TEST_AMOUNT, [2u8; 32], [3u8; 32])],
             MIN_TX_FEE,
             1,
         );

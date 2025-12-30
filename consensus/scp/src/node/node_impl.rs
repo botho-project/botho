@@ -253,15 +253,18 @@ impl<V: Value, ValidationError: Clone + Display + 'static> ScpNode<V> for Node<V
 
     /// Get externalized values for a given slot index, if any.
     fn get_externalized_values(&self, slot_index: SlotIndex) -> Option<Vec<V>> {
-        self.get_externalized_slot(slot_index).map(|slot| {
-            if let Topic::Externalize(payload) = slot
-                .get_last_message_sent()
-                .expect("Previous slots must have a message")
-                .topic
-            {
-                payload.C.X
+        self.get_externalized_slot(slot_index).and_then(|slot| {
+            let msg = slot.get_last_message_sent()?;
+            if let Topic::Externalize(payload) = msg.topic {
+                Some(payload.C.X)
             } else {
-                panic!("Previous slot has not externalized?");
+                // Slot exists but hasn't externalized - shouldn't happen but handle gracefully
+                log::warn!(
+                    self.logger,
+                    "Unexpected: externalized slot {} has non-Externalize message",
+                    slot_index
+                );
+                None
             }
         })
     }
