@@ -65,6 +65,58 @@ Core functionality complete. See README.md for features and usage.
 
 ---
 
+## Documentation
+
+### Critical: Parameter Inconsistencies ✓ FIXED
+
+- [x] **Sync minting.md with current monetary policy**
+  - Fixed block time (20s → 60s)
+  - Fixed total supply (~18M → ~100M BTH)
+  - Fixed tail emission (0.6 → ~4.76 BTH/block)
+  - Fixed halving period (4y → 2y)
+  - Fixed fee destination (to minter → burned)
+- [x] Fixed desktop wallet minting page (20s → 60s block time)
+- [x] Fixed getting-started.md (Rust version 1.70 → 1.83, correct git URL)
+- [x] Fixed configuration.md (added RPC port, CORS, correct ports)
+
+### New Documentation Created
+
+- [x] `docs/api.md` — Complete JSON-RPC and WebSocket API reference
+- [x] `docs/troubleshooting.md` — Common issues and solutions
+- [x] Updated `docs/README.md` and main `README.md` with new doc links
+
+### Tier 1: Clarity & Onboarding
+
+- [ ] Create `docs/FAQ.md` — Top 10 newcomer questions
+- [ ] Create `docs/comparison.md` — Why Botho vs Monero, Zcash, Bitcoin
+- [ ] Create `docs/glossary.md` — Define technical terms (stealth address, ring signature, SCP, cluster tags, etc.)
+
+### Tier 2: Developer Experience
+
+- [ ] Create `docs/developer-guide.md` — Build your first app on Botho
+- [x] Add RPC examples to `docs/api.md` — curl examples included
+- [ ] Create `docs/testing.md` — How to run and write tests
+
+### Tier 3: Operations & Security
+
+- [ ] Create `docs/deployment.md` — systemd, Docker, monitoring setup
+- [ ] Create `docs/security.md` — Key management, threat model, best practices
+- [ ] Create `docs/backup.md` — Wallet backup and recovery procedures
+
+### Tier 4: Ecosystem Growth
+
+- [ ] Exchange integration guide
+- [ ] Merchant acceptance guide
+
+### Structural Improvements
+
+- [x] Docs landing page on botho.io with navigation
+- [ ] Add "Concepts" section — visual explainers for stealth addresses, ring sigs, SCP
+- [ ] Add diagrams — transaction flow, fee calculation, consensus visualization
+- [ ] Version docs to match releases
+
+---
+
 ## Post-Quantum: Future Phases
 
 ### Phase 8: Lattice Ring Signatures (Research)
