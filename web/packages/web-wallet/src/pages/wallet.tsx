@@ -27,18 +27,18 @@ function CreateWalletView({ onCreate }: { onCreate: (mnemonic: string, password?
   }
 
   return (
-    <div className="max-w-lg mx-auto">
-      <Card className="p-8">
-        <div className="text-center mb-8">
-          <div className="w-16 h-16 rounded-full bg-pulse/10 flex items-center justify-center mx-auto mb-4">
-            <Shield className="text-pulse" size={32} />
+    <div className="max-w-lg mx-auto px-4 sm:px-0">
+      <Card className="p-5 sm:p-8">
+        <div className="text-center mb-6 sm:mb-8">
+          <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-pulse/10 flex items-center justify-center mx-auto mb-3 sm:mb-4">
+            <Shield className="text-pulse" size={28} />
           </div>
-          <h2 className="font-display text-2xl font-bold mb-2">Create New Wallet</h2>
-          <p className="text-ghost">Write down your recovery phrase and store it safely.</p>
+          <h2 className="font-display text-xl sm:text-2xl font-bold mb-2">Create New Wallet</h2>
+          <p className="text-ghost text-sm sm:text-base">Write down your recovery phrase and store it safely.</p>
         </div>
 
-        <div className="relative mb-6">
-          <div className={`p-4 rounded-lg bg-abyss border border-steel font-mono text-sm leading-relaxed ${showMnemonic ? '' : 'blur-sm select-none'}`}>
+        <div className="relative mb-5 sm:mb-6">
+          <div className={`p-3 sm:p-4 rounded-lg bg-abyss border border-steel font-mono text-xs sm:text-sm leading-relaxed ${showMnemonic ? '' : 'blur-sm select-none'}`}>
             {mnemonic}
           </div>
           {!showMnemonic && (
@@ -47,22 +47,22 @@ function CreateWalletView({ onCreate }: { onCreate: (mnemonic: string, password?
               className="absolute inset-0 flex items-center justify-center gap-2 text-ghost hover:text-light transition-colors"
             >
               <Eye size={20} />
-              Click to reveal
+              <span className="text-sm">Click to reveal</span>
             </button>
           )}
         </div>
 
         <label className="flex items-start gap-3 mb-4 cursor-pointer">
-          <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} className="mt-1" />
+          <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} className="mt-1 w-4 h-4" />
           <span className="text-sm text-ghost">I have written down my recovery phrase and stored it in a safe place.</span>
         </label>
 
-        <div className="border-t border-steel pt-4 mb-6">
+        <div className="border-t border-steel pt-4 mb-5 sm:mb-6">
           <label className="flex items-start gap-3 cursor-pointer">
-            <input type="checkbox" checked={usePassword} onChange={(e) => setUsePassword(e.target.checked)} className="mt-1" />
+            <input type="checkbox" checked={usePassword} onChange={(e) => setUsePassword(e.target.checked)} className="mt-1 w-4 h-4" />
             <div>
               <span className="text-sm text-light">Protect with password</span>
-              <p className="text-xs text-ghost mt-1">Add a password to encrypt your wallet in this browser. You'll need to enter it each time you open the wallet.</p>
+              <p className="text-xs text-ghost mt-1">Add a password to encrypt your wallet in this browser.</p>
             </div>
           </label>
 
@@ -124,14 +124,14 @@ function ImportWalletView({ onImport }: { onImport: (mnemonic: string, password?
   }
 
   return (
-    <div className="max-w-lg mx-auto">
-      <Card className="p-8">
-        <div className="text-center mb-8">
-          <div className="w-16 h-16 rounded-full bg-pulse/10 flex items-center justify-center mx-auto mb-4">
-            <KeyRound className="text-pulse" size={32} />
+    <div className="max-w-lg mx-auto px-4 sm:px-0">
+      <Card className="p-5 sm:p-8">
+        <div className="text-center mb-6 sm:mb-8">
+          <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-pulse/10 flex items-center justify-center mx-auto mb-3 sm:mb-4">
+            <KeyRound className="text-pulse" size={28} />
           </div>
-          <h2 className="font-display text-2xl font-bold mb-2">Import Wallet</h2>
-          <p className="text-ghost">Enter your 12 or 24 word recovery phrase to restore your wallet.</p>
+          <h2 className="font-display text-xl sm:text-2xl font-bold mb-2">Import Wallet</h2>
+          <p className="text-ghost text-sm sm:text-base">Enter your 12 or 24 word recovery phrase to restore your wallet.</p>
         </div>
 
         <div className="space-y-4">
@@ -145,7 +145,7 @@ function ImportWalletView({ onImport }: { onImport: (mnemonic: string, password?
               }}
               placeholder="Enter your recovery phrase, separating each word with a space..."
               rows={4}
-              className="w-full p-4 rounded-lg bg-abyss border border-steel font-mono text-sm leading-relaxed resize-none focus:outline-none focus:ring-2 focus:ring-pulse/50 focus:border-pulse placeholder:text-ghost/50"
+              className="w-full p-3 sm:p-4 rounded-lg bg-abyss border border-steel font-mono text-xs sm:text-sm leading-relaxed resize-none focus:outline-none focus:ring-2 focus:ring-pulse/50 focus:border-pulse placeholder:text-ghost/50"
             />
             <div className="flex justify-between items-center mt-2">
               <span className="text-xs text-ghost">
@@ -159,7 +159,7 @@ function ImportWalletView({ onImport }: { onImport: (mnemonic: string, password?
 
           <div className="border-t border-steel pt-4">
             <label className="flex items-start gap-3 cursor-pointer">
-              <input type="checkbox" checked={usePassword} onChange={(e) => setUsePassword(e.target.checked)} className="mt-1" />
+              <input type="checkbox" checked={usePassword} onChange={(e) => setUsePassword(e.target.checked)} className="mt-1 w-4 h-4" />
               <div>
                 <span className="text-sm text-light">Protect with password</span>
                 <p className="text-xs text-ghost mt-1">Encrypt your wallet in this browser.</p>
@@ -191,8 +191,8 @@ function ImportWalletView({ onImport }: { onImport: (mnemonic: string, password?
 
           {error && (
             <div className="flex items-center gap-2 p-3 rounded-lg bg-danger/10 border border-danger/20 text-danger text-sm">
-              <AlertCircle size={16} />
-              {error}
+              <AlertCircle size={16} className="shrink-0" />
+              <span>{error}</span>
             </div>
           )}
 
@@ -228,16 +228,16 @@ function WalletDashboard() {
   }
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6">
-      <Card className="p-8">
-        <div className="flex items-start justify-between mb-6">
+    <div className="max-w-4xl mx-auto space-y-4 sm:space-y-6 px-4 sm:px-0">
+      <Card className="p-4 sm:p-6 md:p-8">
+        <div className="flex items-start justify-between mb-4 sm:mb-6">
           <div>
-            <p className="text-ghost text-sm mb-1">Total Balance</p>
-            <h2 className="font-display text-4xl font-bold">
+            <p className="text-ghost text-xs sm:text-sm mb-1">Total Balance</p>
+            <h2 className="font-display text-2xl sm:text-3xl md:text-4xl font-bold">
               {isConnecting ? (
-                <span className="shimmer inline-block w-48 h-10 rounded" />
+                <span className="shimmer inline-block w-32 sm:w-48 h-8 sm:h-10 rounded" />
               ) : (
-                <>{formatAmount(balance?.total ?? 0n)} <span className="text-xl text-ghost">BTH</span></>
+                <>{formatAmount(balance?.total ?? 0n)} <span className="text-base sm:text-lg md:text-xl text-ghost">BTH</span></>
               )}
             </h2>
           </div>
@@ -246,40 +246,44 @@ function WalletDashboard() {
           </Button>
         </div>
 
-        <div className="flex items-center gap-2 p-3 rounded-lg bg-abyss border border-steel">
-          <span className="text-ghost text-sm truncate flex-1 font-mono">{address ?? 'Loading...'}</span>
-          <button onClick={copyAddress} className="p-2 text-ghost hover:text-light transition-colors">
+        <div className="flex items-center gap-2 p-2.5 sm:p-3 rounded-lg bg-abyss border border-steel">
+          <span className="text-ghost text-xs sm:text-sm truncate flex-1 font-mono">{address ?? 'Loading...'}</span>
+          <button onClick={copyAddress} className="p-1.5 sm:p-2 text-ghost hover:text-light transition-colors shrink-0">
             {copied ? <Check size={16} className="text-success" /> : <Copy size={16} />}
           </button>
         </div>
 
-        <div className="flex gap-4 mt-6">
-          <Button onClick={() => setSendOpen(true)} className="flex-1"><Send size={16} className="mr-2" />Send</Button>
-          <Button variant="secondary" onClick={() => setReceiveOpen(true)} className="flex-1"><Download size={16} className="mr-2" />Receive</Button>
+        <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 mt-4 sm:mt-6">
+          <Button onClick={() => setSendOpen(true)} className="flex-1 justify-center">
+            <Send size={16} className="mr-2" />Send
+          </Button>
+          <Button variant="secondary" onClick={() => setReceiveOpen(true)} className="flex-1 justify-center">
+            <Download size={16} className="mr-2" />Receive
+          </Button>
         </div>
       </Card>
 
-      <Card className="p-6">
-        <h3 className="font-display text-lg font-semibold mb-4">Recent Transactions</h3>
+      <Card className="p-4 sm:p-6">
+        <h3 className="font-display text-base sm:text-lg font-semibold mb-3 sm:mb-4">Recent Transactions</h3>
         {transactions.length === 0 ? (
-          <div className="text-center py-12 text-ghost">
-            <Wallet size={48} className="mx-auto mb-4 opacity-50" />
-            <p>No transactions yet</p>
+          <div className="text-center py-8 sm:py-12 text-ghost">
+            <Wallet size={40} className="mx-auto mb-3 sm:mb-4 opacity-50" />
+            <p className="text-sm sm:text-base">No transactions yet</p>
           </div>
         ) : (
-          <div className="space-y-3">
+          <div className="space-y-2 sm:space-y-3">
             {transactions.map((tx) => (
-              <div key={tx.id} className="flex items-center justify-between p-4 rounded-lg bg-abyss border border-steel">
-                <div className="flex items-center gap-3">
-                  <div className={`w-10 h-10 rounded-full flex items-center justify-center ${tx.type === 'receive' ? 'bg-success/10 text-success' : 'bg-danger/10 text-danger'}`}>
-                    {tx.type === 'receive' ? <Download size={18} /> : <Send size={18} />}
+              <div key={tx.id} className="flex items-center justify-between p-3 sm:p-4 rounded-lg bg-abyss border border-steel">
+                <div className="flex items-center gap-2 sm:gap-3">
+                  <div className={`w-8 h-8 sm:w-10 sm:h-10 rounded-full flex items-center justify-center shrink-0 ${tx.type === 'receive' ? 'bg-success/10 text-success' : 'bg-danger/10 text-danger'}`}>
+                    {tx.type === 'receive' ? <Download size={16} /> : <Send size={16} />}
                   </div>
-                  <div>
-                    <p className="font-medium capitalize">{tx.type}</p>
-                    <p className="text-sm text-ghost">{tx.confirmations} confirmations</p>
+                  <div className="min-w-0">
+                    <p className="font-medium text-sm sm:text-base capitalize">{tx.type}</p>
+                    <p className="text-xs sm:text-sm text-ghost">{tx.confirmations} confirmations</p>
                   </div>
                 </div>
-                <p className={`font-mono font-medium ${tx.type === 'send' ? 'text-danger' : 'text-success'}`}>
+                <p className={`font-mono font-medium text-sm sm:text-base shrink-0 ${tx.type === 'send' ? 'text-danger' : 'text-success'}`}>
                   {tx.type === 'send' ? '-' : '+'}{formatAmount(tx.amount)} BTH
                 </p>
               </div>
@@ -289,15 +293,21 @@ function WalletDashboard() {
       </Card>
 
       {sendOpen && (
-        <div className="fixed inset-0 bg-void/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <Card className="w-full max-w-md p-6">
-            <h3 className="font-display text-xl font-semibold mb-6">Send BTH</h3>
+        <div className="fixed inset-0 bg-void/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 z-50">
+          <Card className="w-full sm:max-w-md p-5 sm:p-6 rounded-t-2xl sm:rounded-2xl max-h-[90vh] overflow-y-auto">
+            <h3 className="font-display text-lg sm:text-xl font-semibold mb-5 sm:mb-6">Send BTH</h3>
             <div className="space-y-4">
-              <div><label className="block text-sm text-ghost mb-2">Recipient Address</label><Input placeholder="botho://1/..." /></div>
-              <div><label className="block text-sm text-ghost mb-2">Amount</label><Input type="number" placeholder="0.00" /></div>
-              <div className="flex gap-3 mt-6">
-                <Button variant="secondary" onClick={() => setSendOpen(false)} className="flex-1">Cancel</Button>
-                <Button className="flex-1">Send</Button>
+              <div>
+                <label className="block text-sm text-ghost mb-2">Recipient Address</label>
+                <Input placeholder="botho://1/..." />
+              </div>
+              <div>
+                <label className="block text-sm text-ghost mb-2">Amount</label>
+                <Input type="number" placeholder="0.00" />
+              </div>
+              <div className="flex flex-col-reverse sm:flex-row gap-3 mt-6">
+                <Button variant="secondary" onClick={() => setSendOpen(false)} className="flex-1 justify-center">Cancel</Button>
+                <Button className="flex-1 justify-center">Send</Button>
               </div>
             </div>
           </Card>
@@ -305,19 +315,19 @@ function WalletDashboard() {
       )}
 
       {receiveOpen && (
-        <div className="fixed inset-0 bg-void/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <Card className="w-full max-w-md p-6">
-            <div className="text-center mb-6">
-              <div className="w-16 h-16 rounded-full bg-success/10 flex items-center justify-center mx-auto mb-4">
-                <Download className="text-success" size={32} />
+        <div className="fixed inset-0 bg-void/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 z-50">
+          <Card className="w-full sm:max-w-md p-5 sm:p-6 rounded-t-2xl sm:rounded-2xl max-h-[90vh] overflow-y-auto">
+            <div className="text-center mb-5 sm:mb-6">
+              <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-success/10 flex items-center justify-center mx-auto mb-3 sm:mb-4">
+                <Download className="text-success" size={28} />
               </div>
-              <h3 className="font-display text-xl font-semibold mb-2">Receive BTH</h3>
+              <h3 className="font-display text-lg sm:text-xl font-semibold mb-2">Receive BTH</h3>
               <p className="text-ghost text-sm">Share your address to receive payments</p>
             </div>
             <div className="space-y-4">
               <div>
                 <label className="block text-sm text-ghost mb-2">Your Wallet Address</label>
-                <div className="p-4 rounded-lg bg-abyss border border-steel font-mono text-sm break-all select-all">
+                <div className="p-3 sm:p-4 rounded-lg bg-abyss border border-steel font-mono text-xs sm:text-sm break-all select-all">
                   {address ?? 'Loading...'}
                 </div>
               </div>
@@ -326,11 +336,11 @@ function WalletDashboard() {
                   copyAddress()
                   setTimeout(() => setReceiveOpen(false), 1500)
                 }}
-                className="w-full"
+                className="w-full justify-center"
               >
                 {copied ? <><Check size={16} className="mr-2" />Copied!</> : <><Copy size={16} className="mr-2" />Copy Address</>}
               </Button>
-              <Button variant="secondary" onClick={() => setReceiveOpen(false)} className="w-full">
+              <Button variant="secondary" onClick={() => setReceiveOpen(false)} className="w-full justify-center">
                 Close
               </Button>
             </div>
@@ -365,16 +375,16 @@ function UnlockWalletView({ onUnlock, address }: { onUnlock: (password: string) 
   }
 
   return (
-    <div className="max-w-lg mx-auto">
-      <Card className="p-8">
-        <div className="text-center mb-8">
-          <div className="w-16 h-16 rounded-full bg-pulse/10 flex items-center justify-center mx-auto mb-4">
-            <Lock className="text-pulse" size={32} />
+    <div className="max-w-lg mx-auto px-4 sm:px-0">
+      <Card className="p-5 sm:p-8">
+        <div className="text-center mb-6 sm:mb-8">
+          <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-pulse/10 flex items-center justify-center mx-auto mb-3 sm:mb-4">
+            <Lock className="text-pulse" size={28} />
           </div>
-          <h2 className="font-display text-2xl font-bold mb-2">Unlock Wallet</h2>
-          <p className="text-ghost">Enter your password to access your wallet.</p>
+          <h2 className="font-display text-xl sm:text-2xl font-bold mb-2">Unlock Wallet</h2>
+          <p className="text-ghost text-sm sm:text-base">Enter your password to access your wallet.</p>
           {address && (
-            <p className="text-xs text-ghost mt-2 font-mono truncate">{address}</p>
+            <p className="text-xs text-ghost mt-2 font-mono truncate px-4">{address}</p>
           )}
         </div>
 
@@ -393,8 +403,8 @@ function UnlockWalletView({ onUnlock, address }: { onUnlock: (password: string) 
 
           {error && (
             <div className="flex items-center gap-2 p-3 rounded-lg bg-danger/10 border border-danger/20 text-danger text-sm">
-              <AlertCircle size={16} />
-              {error}
+              <AlertCircle size={16} className="shrink-0" />
+              <span>{error}</span>
             </div>
           )}
 
@@ -421,12 +431,12 @@ function WalletSetup({ onCreate, onImport }: { onCreate: (mnemonic: string, pass
   const [mode, setMode] = useState<WalletMode>('create')
 
   return (
-    <div className="space-y-6">
-      <div className="max-w-lg mx-auto">
+    <div className="space-y-5 sm:space-y-6">
+      <div className="max-w-lg mx-auto px-4 sm:px-0">
         <div className="flex rounded-lg bg-abyss border border-steel p-1">
           <button
             onClick={() => setMode('create')}
-            className={`flex-1 py-2 px-4 rounded-md text-sm font-medium transition-colors ${
+            className={`flex-1 py-2.5 sm:py-2 px-4 rounded-md text-sm font-medium transition-colors ${
               mode === 'create'
                 ? 'bg-steel text-light'
                 : 'text-ghost hover:text-light'
@@ -436,7 +446,7 @@ function WalletSetup({ onCreate, onImport }: { onCreate: (mnemonic: string, pass
           </button>
           <button
             onClick={() => setMode('import')}
-            className={`flex-1 py-2 px-4 rounded-md text-sm font-medium transition-colors ${
+            className={`flex-1 py-2.5 sm:py-2 px-4 rounded-md text-sm font-medium transition-colors ${
               mode === 'import'
                 ? 'bg-steel text-light'
                 : 'text-ghost hover:text-light'
@@ -489,15 +499,16 @@ export function WalletPage() {
   return (
     <div className="min-h-screen">
       <header className="border-b border-steel bg-abyss/50 backdrop-blur-md sticky top-0 z-40">
-        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
-          <Link to="/" className="flex items-center gap-3">
-            <ArrowLeft size={20} className="text-ghost" />
-            <Logo size="md" showText={false} />
-            <span className="font-display text-lg font-semibold">Botho Wallet</span>
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-3 sm:py-4 flex items-center justify-between">
+          <Link to="/" className="flex items-center gap-2 sm:gap-3">
+            <ArrowLeft size={18} className="text-ghost" />
+            <Logo size="sm" showText={false} />
+            <span className="font-display text-base sm:text-lg font-semibold hidden sm:inline">Botho Wallet</span>
+            <span className="font-display text-base font-semibold sm:hidden">Wallet</span>
           </Link>
         </div>
       </header>
-      <main className="py-12 px-6">
+      <main className="py-6 sm:py-8 md:py-12">
         {renderContent()}
       </main>
     </div>
