@@ -124,11 +124,18 @@ Visit [botho.io](https://botho.io) to use the web wallet without running a node.
 | Document | Description |
 |:--|:--|
 | [Getting Started](./docs/getting-started.md) | Build, install, and run your first node |
+| [FAQ](./docs/FAQ.md) | Frequently asked questions |
+| [Why Botho?](./docs/comparison.md) | Comparison with Bitcoin, Monero, Zcash |
 | [Architecture](./docs/architecture.md) | System design and component overview |
 | [Tokenomics](./docs/tokenomics.md) | Emission schedule, fees, and supply |
 | [Minting](./docs/minting.md) | Mining setup and economics |
 | [Privacy](./docs/privacy.md) | Privacy features and cryptography |
 | [Configuration](./docs/configuration.md) | Node configuration options |
+| [API Reference](./docs/api.md) | JSON-RPC and WebSocket API |
+| [Developer Guide](./docs/developer-guide.md) | Build applications with Botho |
+| [Testing](./docs/testing.md) | Run and write tests |
+| [Troubleshooting](./docs/troubleshooting.md) | Common issues and solutions |
+| [Glossary](./docs/glossary.md) | Technical terms explained |
 
 ## Project Status
 

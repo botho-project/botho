@@ -4,7 +4,7 @@ This guide walks you through building Botho, creating a wallet, and running a no
 
 ## Prerequisites
 
-- **Rust** (1.70 or later)
+- **Rust** (1.83.0 or later)
 - **Cargo** (comes with Rust)
 
 Install Rust via [rustup](https://rustup.rs/):
@@ -18,7 +18,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 Clone the repository and build:
 
 ```bash
-git clone https://github.com/yourusername/botho.git
+git clone https://github.com/botho-project/botho.git
 cd botho
 cargo build --release
 ```
@@ -134,4 +134,6 @@ All Botho data is stored in `~/.botho/`:
 
 - [Configuration Reference](configuration.md) - Customize your node settings
 - [Minting Guide](minting.md) - Learn about minting economics and setup
+- [API Reference](api.md) - JSON-RPC and WebSocket API documentation
 - [Architecture](architecture.md) - Understand how Botho works
+- [Troubleshooting](troubleshooting.md) - Common issues and solutions

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use bip39::{Language, Mnemonic};
+use bip39::{Language, Mnemonic, Seed};
 use bth_account_keys::{AccountKey, PublicAddress};
 use bth_core::slip10::Slip10KeyGenerator;
 use bth_crypto_keys::RistrettoSignature;
@@ -8,6 +8,8 @@ use rand::seq::SliceRandom;
 
 #[cfg(feature = "pq")]
 use bth_account_keys::{QuantumSafeAccountKey, QuantumSafePublicAddress};
+#[cfg(feature = "pq")]
+use bth_crypto_pq::{derive_pq_keys_from_seed, BIP39_SEED_SIZE};
 
 use crate::ledger::Ledger;
 use crate::transaction::{
@@ -37,16 +39,23 @@ impl Wallet {
         let mnemonic = Mnemonic::from_phrase(mnemonic_phrase, Language::English)
             .map_err(|e| anyhow::anyhow!("Invalid mnemonic: {}", e))?;
 
+        // Derive PQ keys first (before mnemonic is moved by SLIP-10 derivation)
+        // PQ keys are derived from the full BIP39 seed (with PBKDF2 key stretching)
+        #[cfg(feature = "pq")]
+        let bip39_seed = Seed::new(&mnemonic, "");
+
         // Derive classical keys via SLIP-10 (standard BIP39 path)
+        // This consumes the mnemonic
         let slip10_key = mnemonic.derive_slip10_key(0);
         let account_key = AccountKey::from(slip10_key);
 
-        // Derive PQ keys and create unified quantum-safe account
+        // Create unified quantum-safe account from BIP39 seed
         // IMPORTANT: Uses the SAME classical keys to maintain single identity
         #[cfg(feature = "pq")]
         let pq_account_key = {
-            use bth_crypto_pq::derive_pq_keys;
-            let pq_keys = derive_pq_keys(mnemonic_phrase.as_bytes());
+            let seed_bytes: &[u8; BIP39_SEED_SIZE] = bip39_seed.as_bytes().try_into()
+                .expect("BIP39 seed is always 64 bytes");
+            let pq_keys = derive_pq_keys_from_seed(seed_bytes);
             QuantumSafeAccountKey::from_parts(account_key.clone(), pq_keys)
         };
 

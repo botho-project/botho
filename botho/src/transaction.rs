@@ -701,7 +701,6 @@ impl RingTxInput {
 /// ring signature (private) transactions without version numbers or
 /// optional fields.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
 pub enum TxInputs {
     /// Simple Schnorr signatures - sender is visible on chain.
     /// Used for bootstrap period and testing. Will be deprecated
@@ -881,19 +880,17 @@ impl Transaction {
                     hasher.update(input.output_index.to_le_bytes());
                 }
             }
-            TxInputs::Ring(ring_inputs) => {
+            TxInputs::Ring(_ring_inputs) => {
+                // For ring signatures, we do NOT include ring members or key images
+                // in the signing hash. This is because:
+                // 1. Ring members aren't known until decoys are selected
+                // 2. Key images are computed inside the MLSAG signing
+                // 3. The hash must be consistent between signing and verification
+                //
+                // The signing hash only commits to outputs/fee/height, which are
+                // known before ring construction. The ring signature itself proves
+                // ownership of one of the ring members.
                 hasher.update(b"botho-tx-ring");
-                // Include ring members and key images (but NOT ring signatures)
-                for ring_input in ring_inputs {
-                    // Include all ring members (decoys + real)
-                    for member in &ring_input.ring {
-                        hasher.update(member.target_key);
-                        hasher.update(member.public_key);
-                        hasher.update(member.commitment);
-                    }
-                    // Include key image (deterministic from private key)
-                    hasher.update(ring_input.key_image);
-                }
             }
         }
 

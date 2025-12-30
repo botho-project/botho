@@ -8,11 +8,15 @@
 //! - Suggesting and validating quorum set configurations
 //! - Chain synchronization with DDoS protections
 
+mod compact_block;
 mod discovery;
 mod quorum;
 mod reputation;
 mod sync;
 
+pub use compact_block::{
+    BlockTxn, CompactBlock, GetBlockTxn, PrefilledTx, ReconstructionResult, ShortId,
+};
 pub use discovery::{BothoBehaviour, NetworkDiscovery, NetworkEvent, PeerTableEntry};
 pub use quorum::{QuorumBuilder, QuorumValidation};
 pub use reputation::{PeerReputation, ReputationManager};

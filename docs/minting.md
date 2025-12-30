@@ -75,53 +75,81 @@ For dedicated minting machines, leave at 0. For machines doing other work, set t
 
 ## Emission Schedule
 
-Minting rewards follow a smooth decay curve with perpetual tail emission:
+Minting rewards follow a two-phase model: halvings followed by perpetual tail emission.
+
+### Phase 1: Halving Period (~10 years)
 
 | Parameter | Value |
 |-----------|-------|
 | Initial reward | 50 BTH |
-| Halving period | ~6,307,200 blocks (~4 years at 20-sec blocks) |
-| Tail emission | 0.6 BTH per block (perpetual) |
-| Total supply | ~18 million BTH (pre-tail) |
+| Halving interval | 1,051,200 blocks (~2 years at 60s blocks) |
+| Number of halvings | 5 |
+| Phase 1 supply | ~100 million BTH |
 
-### Reward Formula
+| Period | Years | Block Reward | Cumulative Supply |
+|--------|-------|--------------|-------------------|
+| Halving 0 | 0-2 | 50 BTH | ~52.6M BTH |
+| Halving 1 | 2-4 | 25 BTH | ~78.9M BTH |
+| Halving 2 | 4-6 | 12.5 BTH | ~92.0M BTH |
+| Halving 3 | 6-8 | 6.25 BTH | ~98.6M BTH |
+| Halving 4 | 8-10 | 3.125 BTH | ~100M BTH |
 
-```
-reward = max(TAIL_EMISSION, (TOTAL_SUPPLY - total_mined) >> EMISSION_SPEED_FACTOR)
-```
+### Phase 2: Tail Emission (Year 10+)
 
-Where:
-- `TOTAL_SUPPLY` = ~18.4 quintillion picocredits
-- `EMISSION_SPEED_FACTOR` = 20
-- `TAIL_EMISSION` = 0.6 credits per block
+After Phase 1, Botho transitions to perpetual tail emission targeting **2% annual net inflation**.
+
+| Parameter | Value |
+|-----------|-------|
+| Target net inflation | 2% annually |
+| Tail reward | ~4.76 BTH per block |
+| Fee burn offset | ~0.5% expected |
+
+**Why tail emission?**
+- Ensures minters always have incentive to secure the network
+- Compensates for coins lost to forgotten keys
+- Provides predictable, sustainable monetary policy
+
+## Block Timing
+
+| Parameter | Value |
+|-----------|-------|
+| Target block time | 60 seconds |
+| Minimum block time | 45 seconds |
+| Maximum block time | 90 seconds |
 
 ## Difficulty Adjustment
 
 | Parameter | Value |
 |-----------|-------|
-| Target block time | 20 seconds |
-| Adjustment window | Every 10 blocks |
-| Maximum adjustment | 4x change per window |
+| Adjustment interval | 1,440 blocks (~24 hours) |
+| Maximum adjustment | ±25% per epoch |
 
 ### Algorithm
 
 ```
-new_difficulty = current_difficulty * (expected_time / actual_time)
+adjustment_ratio = expected_time / actual_time
+new_difficulty = current_difficulty × clamp(ratio, 0.75, 1.25)
 ```
 
-Clamped to prevent extreme swings (max 4x up or down per adjustment).
+In Phase 2, difficulty also factors in inflation targeting to maintain 2% net emission.
 
 ## Transaction Fees
 
-Minters collect transaction fees in addition to block rewards.
+Transaction fees in Botho are **burned** (removed from circulation), creating deflationary pressure that offsets tail emission.
 
 | Parameter | Value |
 |-----------|-------|
-| Minimum fee | 0.0001 credits |
-| Fee allocation | 100% to block minter |
-| Priority | Fee-per-byte |
+| Minimum fee | 400 µBTH (0.0004 BTH) |
+| Fee destination | Burned |
+| Priority | Higher fees = faster confirmation |
 
-The mempool prioritizes transactions by fee-per-byte, so higher-fee transactions get included first.
+Minters earn block rewards only—fees are not collected by minters but instead removed from the total supply.
+
+### Net Supply Formula
+
+```
+net_supply = total_mined - total_fees_burned
+```
 
 ## Monitoring
 
@@ -137,13 +165,15 @@ Shows:
 - Network difficulty
 - Quorum status
 
-### Web Dashboard
+### RPC API
 
-When running with `botho run`, a web dashboard is available showing:
-- Minting statistics
-- Network topology
-- Wallet information
-- Recent blocks
+Query minting status programmatically:
+
+```bash
+curl -X POST http://localhost:7101/ \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"minting_getStatus","params":{},"id":1}'
+```
 
 ## Profitability Considerations
 
@@ -166,9 +196,9 @@ Your node doesn't have enough peers to satisfy the quorum requirements.
 
 **Solutions:**
 - Check your internet connection
-- Verify bootstrap peers are correct
+- Verify bootstrap peers are correct in config
 - Lower `min_peers` in recommended mode
-- Ensure firewall allows port 8443
+- Ensure firewall allows port 7100
 
 ### "Minting paused - peer disconnected"
 
@@ -199,3 +229,17 @@ A peer required for your quorum went offline.
 | Threshold too high | Halt more often |
 
 **Economic incentive**: Mined coins are only valuable if the main cluster accepts your blocks. Bad configuration = wasted electricity.
+
+## Quick Reference
+
+| Parameter | Mainnet Value |
+|-----------|---------------|
+| Block time | 60 seconds |
+| Initial reward | 50 BTH |
+| Halving interval | ~2 years |
+| Number of halvings | 5 |
+| Tail emission | ~4.76 BTH/block |
+| Tail inflation target | 2% net |
+| Difficulty adjustment | Every 24 hours |
+| Gossip port | 7100 |
+| RPC port | 7101 |

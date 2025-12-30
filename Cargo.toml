@@ -37,6 +37,7 @@ members = [
     "util/zip-exact",
 ]
 exclude = [
+    "fuzz",
     "util/serial",
     "web/packages/desktop/src-tauri",
 ]

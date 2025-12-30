@@ -445,7 +445,9 @@ version = "0.1.0"
 dependencies = [
  "aes",
  "anyhow",
+ "base64 0.22.1",
  "bincode",
+ "botho-wallet",
  "bs58 0.5.1",
  "bth-account-keys",
  "bth-cluster-tax",
@@ -458,6 +460,7 @@ dependencies = [
  "bth-crypto-pq",
  "bth-crypto-ring-signature",
  "bth-gossip",
+ "bth-transaction-core",
  "bth-transaction-types",
  "bth-util-from-random",
  "clap",
@@ -479,6 +482,7 @@ dependencies = [
  "rand_core 0.6.4",
  "serde",
  "serde_json",
+ "sha1",
  "sha2",
  "tempfile",
  "thiserror 1.0.69",
@@ -571,6 +575,7 @@ dependencies = [
  "serde",
  "sha2",
  "subtle",
+ "tiny-bip39",
  "zeroize",
 ]
 
@@ -831,6 +836,7 @@ dependencies = [
  "hybrid-array 0.4.5",
  "ml-dsa",
  "ml-kem",
+ "proptest",
  "rand 0.8.5",
  "rand 0.9.2",
  "rand_chacha 0.3.1",

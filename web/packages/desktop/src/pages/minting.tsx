@@ -150,7 +150,7 @@ export function MintingPage() {
             <CardContent>
               <p className="text-sm text-[--color-ghost]">
                 Minting contributes to network security and earns you BTH rewards.
-                The difficulty adjusts every 10 blocks to maintain ~20 second block times.
+                The difficulty adjusts to maintain ~60 second block times.
               </p>
             </CardContent>
           </Card>

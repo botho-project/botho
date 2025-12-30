@@ -11,7 +11,7 @@ rust-version = { workspace = true }
 std = ["bth-util-repr-bytes/alloc"]
 prost = ["dep:prost", "bth-util-repr-bytes/prost", "bth-crypto-keys/prost"]
 serde = ["dep:serde", "bth-crypto-keys/serde", "curve25519-dalek/serde"]
-pq = ["dep:bth-crypto-pq", "dep:bs58", "dep:sha2", "std"]  # Post-quantum keys require std
+pq = ["dep:bth-crypto-pq", "dep:bs58", "dep:sha2", "dep:tiny-bip39", "std"]  # Post-quantum keys require std
 default = [
     "std",
     "prost",
@@ -35,6 +35,7 @@ rand_core = { workspace = true }
 serde = { workspace = true, features = ["alloc", "derive"], optional = true }
 sha2 = { workspace = true, optional = true }
 subtle = { workspace = true }
+tiny-bip39 = { workspace = true, optional = true }
 zeroize = { workspace = true }
 
 # Botho dependencies

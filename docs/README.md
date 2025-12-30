@@ -4,14 +4,41 @@ Welcome to the Botho documentation. Botho is a privacy-preserving, mined cryptoc
 
 ## Quick Links
 
+### Getting Started
 | Document | Description |
 |----------|-------------|
 | [Getting Started](getting-started.md) | Build, install, and run your first node |
+| [FAQ](FAQ.md) | Frequently asked questions |
+| [Glossary](glossary.md) | Technical terms explained |
+
+### Understanding Botho
+| Document | Description |
+|----------|-------------|
+| [Why Botho?](comparison.md) | Comparison with Bitcoin, Monero, Zcash |
 | [Architecture](architecture.md) | System design and component overview |
-| [Configuration](configuration.md) | Complete configuration reference |
-| [Minting](minting.md) | Minting setup and guide |
-| [Tokenomics](tokenomics.md) | Supply, emission, fees, and economics |
 | [Privacy](privacy.md) | Privacy features and cryptography |
+| [Tokenomics](tokenomics.md) | Supply, emission, fees, and economics |
+
+### Running a Node
+| Document | Description |
+|----------|-------------|
+| [Configuration](configuration.md) | Complete configuration reference |
+| [Minting](minting.md) | Mining setup and economics |
+| [API Reference](api.md) | JSON-RPC and WebSocket API |
+| [Troubleshooting](troubleshooting.md) | Common issues and solutions |
+
+### For Developers
+| Document | Description |
+|----------|-------------|
+| [Developer Guide](developer-guide.md) | Build applications with Botho |
+| [Testing Guide](testing.md) | Run and write tests |
+
+### Operations & Security
+| Document | Description |
+|----------|-------------|
+| [Deployment](deployment.md) | systemd, Docker, monitoring |
+| [Security](security.md) | Key management, threat model |
+| [Backup & Recovery](backup.md) | Wallet backup procedures |
 
 ## What is Botho?
 

@@ -669,8 +669,109 @@ derive_prost_message_from_repr_bytes!(RistrettoSignature);
 mod test {
     extern crate bth_util_test_helper;
 
-    #[cfg(feature = "serde")]
     use super::*;
+
+    // Test private key generation is random
+    #[test]
+    fn test_private_key_random() {
+        let mut rng = rand_core::OsRng;
+        let key1 = RistrettoPrivate::from_random(&mut rng);
+        let key2 = RistrettoPrivate::from_random(&mut rng);
+        assert_ne!(key1, key2);
+    }
+
+    // Test public key derivation is deterministic
+    #[test]
+    fn test_public_from_private_deterministic() {
+        let mut rng = rand_core::OsRng;
+        let private = RistrettoPrivate::from_random(&mut rng);
+        let public1 = RistrettoPublic::from(&private);
+        let public2 = RistrettoPublic::from(&private);
+        assert_eq!(public1, public2);
+    }
+
+    // Test different private keys produce different public keys
+    #[test]
+    fn test_different_privates_different_publics() {
+        let mut rng = rand_core::OsRng;
+        let private1 = RistrettoPrivate::from_random(&mut rng);
+        let private2 = RistrettoPrivate::from_random(&mut rng);
+        let public1 = RistrettoPublic::from(&private1);
+        let public2 = RistrettoPublic::from(&private2);
+        assert_ne!(public1, public2);
+    }
+
+    // Test bytes roundtrip for private key
+    #[test]
+    fn test_private_key_bytes_roundtrip() {
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
+            let private = RistrettoPrivate::from_random(&mut rng);
+            let bytes: &[u8; 32] = private.as_ref();
+            let recovered = RistrettoPrivate::try_from(bytes).expect("Should recover private key");
+            assert_eq!(private, recovered);
+        });
+    }
+
+    // Test bytes roundtrip for public key
+    #[test]
+    fn test_public_key_bytes_roundtrip() {
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
+            let private = RistrettoPrivate::from_random(&mut rng);
+            let public = RistrettoPublic::from(&private);
+            let bytes = public.to_bytes();
+            let recovered = RistrettoPublic::try_from(&bytes[..]).expect("Should recover public key");
+            assert_eq!(public, recovered);
+        });
+    }
+
+    // Test compressed public key roundtrip
+    #[test]
+    fn test_compressed_public_roundtrip() {
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
+            let private = RistrettoPrivate::from_random(&mut rng);
+            let public = RistrettoPublic::from(&private);
+            let compressed = CompressedRistrettoPublic::from(&public);
+            let decompressed = RistrettoPublic::try_from(&compressed).expect("Should decompress");
+            assert_eq!(public, decompressed);
+        });
+    }
+
+    // Test key exchange produces same shared secret on both sides
+    #[test]
+    fn test_key_exchange() {
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
+            let alice_private = RistrettoPrivate::from_random(&mut rng);
+            let alice_public = RistrettoPublic::from(&alice_private);
+
+            let bob_private = RistrettoPrivate::from_random(&mut rng);
+            let bob_public = RistrettoPublic::from(&bob_private);
+
+            // Alice computes shared secret with Bob's public key
+            let alice_secret = alice_private.key_exchange(&bob_public);
+
+            // Bob computes shared secret with Alice's public key
+            let bob_secret = bob_private.key_exchange(&alice_public);
+
+            // Compare the underlying bytes since RistrettoSecret doesn't impl PartialEq
+            assert_eq!(alice_secret.as_ref() as &[u8], bob_secret.as_ref() as &[u8]);
+        });
+    }
+
+    // Test invalid bytes produce error
+    #[test]
+    fn test_invalid_bytes() {
+        // All zeros is not a valid scalar
+        let invalid_bytes = [0u8; 32];
+        // This should still work because zero is a valid scalar
+        let result = RistrettoPrivate::try_from(&invalid_bytes);
+        // Zero scalar is actually valid in curve25519-dalek
+        assert!(result.is_ok());
+
+        // Invalid compressed point (all 0xff)
+        let invalid_point = [0xffu8; 32];
+        let result = RistrettoPublic::try_from(&invalid_point[..]);
+        assert!(result.is_err());
+    }
 
     // Test that mc-util-serial can serialize a pubkey
     #[test]
@@ -701,6 +802,4 @@ mod test {
             assert_eq!(deserialized_pubkey, pubkey);
         });
     }
-
-    // Note: serde_json currently fails on RistrettoPublic and RistrettoPrivate
 }

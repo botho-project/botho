@@ -1,0 +1,66 @@
+[package]
+name = "botho-fuzz"
+version = "0.0.0"
+authors = ["Botho Foundation"]
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+# Fuzz crate must be in its own workspace to resolve git dependencies correctly
+[workspace]
+
+# Required git patches (same as parent workspace)
+[patch.crates-io]
+bulletproofs-og = { git = "https://github.com/mobilecoinfoundation/bulletproofs.git", rev = "9abfdc054d9ba65f1e185ea1e6eff3947ce879dc" }
+schnorrkel-og = { git = "https://github.com/mobilecoinfoundation/schnorrkel.git", rev = "049bf9d30f3bbe072e2ad1b5eefdf0f3c851215e" }
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+
+# Target crates
+botho = { path = "../botho" }
+bth-crypto-pq = { path = "../crypto/pq" }
+bth-crypto-keys = { path = "../crypto/keys" }
+bth-transaction-core = { path = "../transaction/core", features = ["pq"] }
+
+# Serialization
+bincode = "1"
+serde = { version = "1", features = ["derive"] }
+
+[[bin]]
+name = "fuzz_transaction"
+path = "fuzz_targets/fuzz_transaction.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_pq_transaction"
+path = "fuzz_targets/fuzz_pq_transaction.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_block"
+path = "fuzz_targets/fuzz_block.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_pq_keys"
+path = "fuzz_targets/fuzz_pq_keys.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_network_messages"
+path = "fuzz_targets/fuzz_network_messages.rs"
+test = false
+doc = false
+bench = false

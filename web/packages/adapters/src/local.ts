@@ -31,6 +31,7 @@ export class LocalNodeAdapter implements NodeAdapter {
   private config: Required<LocalNodeConfig>
   private connected = false
   private currentNode: NodeInfo | null = null
+  private ws: WebSocket | null = null
   private eventSource: EventSource | null = null
   private blockCallbacks: Set<(block: Block) => void> = new Set()
   private txCallbacks: Map<string, Set<(tx: Transaction) => void>> = new Map()
@@ -46,7 +47,7 @@ export class LocalNodeAdapter implements NodeAdapter {
       if (node) {
         this.currentNode = node
         this.connected = true
-        this.setupEventSource()
+        this.setupRealtime()
         return
       }
     }
@@ -57,7 +58,7 @@ export class LocalNodeAdapter implements NodeAdapter {
       if (node) {
         this.currentNode = node
         this.connected = true
-        this.setupEventSource()
+        this.setupRealtime()
         return
       }
     }
@@ -68,6 +69,10 @@ export class LocalNodeAdapter implements NodeAdapter {
   disconnect(): void {
     this.connected = false
     this.currentNode = null
+    if (this.ws) {
+      this.ws.close()
+      this.ws = null
+    }
     if (this.eventSource) {
       this.eventSource.close()
       this.eventSource = null
@@ -320,6 +325,76 @@ export class LocalNodeAdapter implements NodeAdapter {
     }
   }
 
+  /** Set up real-time event streaming (WebSocket preferred, SSE fallback) */
+  private setupRealtime(): void {
+    if (!this.currentNode) return
+
+    // Try WebSocket first (same port as RPC)
+    this.setupWebSocket()
+  }
+
+  /** Set up WebSocket connection for real-time events */
+  private setupWebSocket(): void {
+    if (!this.currentNode) return
+
+    const wsUrl = `ws://${this.currentNode.host}:${this.currentNode.port}/ws`
+
+    try {
+      this.ws = new WebSocket(wsUrl)
+
+      this.ws.onopen = () => {
+        // Subscribe to all events
+        this.sendWsMessage({ type: 'subscribe', events: ['blocks', 'transactions', 'mempool', 'peers', 'minting'] })
+      }
+
+      this.ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data)
+          if (msg.type === 'event') {
+            if (msg.event === 'block') {
+              const block = this.parseBlockEvent(msg.data)
+              this.blockCallbacks.forEach(cb => cb(block))
+            } else if (msg.event === 'transaction') {
+              const tx = this.parseTransactionEvent(msg.data)
+              this.txCallbacks.forEach((callbacks) => {
+                callbacks.forEach(cb => cb(tx))
+              })
+            }
+          }
+        } catch {
+          // Ignore malformed events
+        }
+      }
+
+      this.ws.onclose = () => {
+        if (this.connected) {
+          // Reconnect after delay
+          setTimeout(() => {
+            if (this.connected) {
+              this.setupWebSocket()
+            }
+          }, 5000)
+        }
+      }
+
+      this.ws.onerror = () => {
+        // WebSocket failed, fall back to SSE
+        this.ws = null
+        this.setupEventSource()
+      }
+    } catch {
+      // WebSocket not available, use SSE
+      this.setupEventSource()
+    }
+  }
+
+  private sendWsMessage(msg: unknown): void {
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify(msg))
+    }
+  }
+
+  /** Set up SSE connection (fallback for older nodes) */
   private setupEventSource(): void {
     if (!this.currentNode) return
 
@@ -360,6 +435,35 @@ export class LocalNodeAdapter implements NodeAdapter {
           }
         }, 5000)
       }
+    }
+  }
+
+  /** Parse block from WebSocket event */
+  private parseBlockEvent(data: Record<string, unknown>): Block {
+    return {
+      hash: data.hash as string,
+      height: data.height as number,
+      timestamp: data.timestamp as number,
+      previousHash: '', // Not in WS event
+      transactionCount: data.tx_count as number,
+      size: 0,
+      reward: BigInt(0),
+      difficulty: BigInt((data.difficulty as number) || 0),
+    }
+  }
+
+  /** Parse transaction from WebSocket event */
+  private parseTransactionEvent(data: Record<string, unknown>): Transaction {
+    return {
+      id: data.hash as string,
+      type: 'receive' as const,
+      amount: BigInt(0), // Private
+      fee: BigInt((data.fee as number) || 0),
+      privacyLevel: 'ring' as const,
+      status: data.in_block ? 'confirmed' as const : 'pending' as const,
+      timestamp: Date.now(),
+      blockHeight: data.in_block as number | undefined,
+      confirmations: data.in_block ? 1 : 0,
     }
   }
 

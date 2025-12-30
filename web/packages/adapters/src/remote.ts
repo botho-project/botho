@@ -371,27 +371,34 @@ export class RemoteNodeAdapter implements NodeAdapter {
   }
 
   private setupWebSocket(seedUrl: string): void {
-    // WebSocket support would need to be added to the Botho RPC server
-    // For now, we'll use polling or skip real-time updates
+    // Connect to node WebSocket endpoint for real-time events
     const wsUrl = seedUrl.replace(/^http/, 'ws') + '/ws'
 
     try {
       this.ws = new WebSocket(wsUrl)
 
+      this.ws.onopen = () => {
+        // Subscribe to block events by default
+        this.sendWsMessage({ type: 'subscribe', events: ['blocks', 'transactions'] })
+      }
+
       this.ws.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data)
-          if (msg.type === 'block') {
-            const block = this.parseBlock(msg.data)
-            this.blockCallbacks.forEach((cb) => cb(block))
-          } else if (msg.type === 'transaction') {
-            const tx = this.parseTransaction(msg.data)
-            this.txCallbacks.forEach((callbacks, key) => {
-              const addresses = key.split(',')
-              if (tx.counterparty && addresses.includes(tx.counterparty)) {
+          if (msg.type === 'event') {
+            // New event format: { type: "event", event: "block", data: {...} }
+            if (msg.event === 'block') {
+              const block = this.parseBlockEvent(msg.data)
+              this.blockCallbacks.forEach((cb) => cb(block))
+            } else if (msg.event === 'transaction') {
+              const tx = this.parseTransactionEvent(msg.data)
+              this.txCallbacks.forEach((callbacks) => {
                 callbacks.forEach((cb) => cb(tx))
-              }
-            })
+              })
+            }
+          } else if (msg.type === 'subscribed') {
+            // Subscription confirmed
+            console.debug('WebSocket subscribed to:', msg.events)
           }
         } catch {
           // Ignore malformed messages
@@ -400,6 +407,7 @@ export class RemoteNodeAdapter implements NodeAdapter {
 
       this.ws.onclose = () => {
         if (this.connected) {
+          // Exponential backoff reconnection
           setTimeout(() => {
             if (this.connected) {
               this.setupWebSocket(seedUrl)
@@ -424,33 +432,32 @@ export class RemoteNodeAdapter implements NodeAdapter {
     }
   }
 
-  private parseBlock(data: Record<string, unknown>): Block {
+  /** Parse block from WebSocket event */
+  private parseBlockEvent(data: Record<string, unknown>): Block {
     return {
       hash: data.hash as string,
       height: data.height as number,
       timestamp: data.timestamp as number,
-      previousHash: data.previousHash as string,
-      transactionCount: data.transactionCount as number,
-      size: data.size as number,
-      minter: data.minter as string | undefined,
-      reward: BigInt((data.reward as string) || '0'),
-      difficulty: BigInt((data.difficulty as string) || '0'),
+      previousHash: '', // Not included in WS event
+      transactionCount: data.tx_count as number,
+      size: 0, // Not included in WS event
+      reward: BigInt(0), // Not included in WS event
+      difficulty: BigInt((data.difficulty as number) || 0),
     }
   }
 
-  private parseTransaction(data: Record<string, unknown>): Transaction {
+  /** Parse transaction from WebSocket event */
+  private parseTransactionEvent(data: Record<string, unknown>): Transaction {
     return {
-      id: data.id as string,
-      type: data.type as Transaction['type'],
-      amount: BigInt((data.amount as string) || '0'),
-      fee: BigInt((data.fee as string) || '0'),
-      privacyLevel: data.privacyLevel as Transaction['privacyLevel'],
-      status: data.status as Transaction['status'],
-      timestamp: data.timestamp as number,
-      blockHeight: data.blockHeight as number | undefined,
-      confirmations: data.confirmations as number,
-      counterparty: data.counterparty as string | undefined,
-      memo: data.memo as string | undefined,
+      id: data.hash as string,
+      type: 'receive' as const,
+      amount: BigInt(0), // Private - not visible
+      fee: BigInt((data.fee as number) || 0),
+      privacyLevel: 'ring' as const,
+      status: data.in_block ? 'confirmed' as const : 'pending' as const,
+      timestamp: Date.now(),
+      blockHeight: data.in_block as number | undefined,
+      confirmations: data.in_block ? 1 : 0,
     }
   }
 }

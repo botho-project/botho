@@ -143,9 +143,20 @@ pub struct QuantumPrivateTxOutput {
 impl QuantumPrivateTxOutput {
     /// Create a new quantum-private output for a recipient.
     ///
-    /// This creates both classical and PQ stealth components with proper binding.
-    /// The PQ shared secret influences the classical output creation, ensuring
-    /// that the two layers are cryptographically bound together.
+    /// This creates both classical and PQ stealth components with cryptographic binding.
+    /// The PQ shared secret is mixed into the classical ephemeral key derivation,
+    /// ensuring that both layers are bound together. An adversary cannot modify
+    /// either layer independently without invalidating the other.
+    ///
+    /// # Binding Mechanism
+    ///
+    /// The classical ephemeral key is derived as:
+    /// `k = HKDF(IKM=random || pq_shared_secret, salt="botho-pq-binding", info="ephemeral")`
+    ///
+    /// This ensures:
+    /// 1. The classical stealth address incorporates PQ entropy
+    /// 2. An adversary with only quantum capabilities still needs to solve classical DH
+    /// 3. An adversary with only classical capabilities still needs to break ML-KEM
     ///
     /// # Arguments
     /// * `amount` - Amount in picocredits
@@ -155,19 +166,38 @@ impl QuantumPrivateTxOutput {
     /// A new quantum-private output with both classical and PQ components.
     #[cfg(feature = "pq")]
     pub fn new(amount: u64, recipient: &QuantumSafePublicAddress) -> Self {
+        use bth_crypto_keys::RistrettoPrivate;
         use bth_crypto_pq::derive_onetime_sig_keypair;
+        use hkdf::Hkdf;
+        use rand_core::{OsRng, RngCore};
+        use sha2::Sha256;
 
         // Step 1: Encapsulate to recipient's PQ KEM public key FIRST
         // This shared_secret will be used to bind the classical layer
         let (ciphertext, shared_secret) = recipient.pq_kem_public_key().encapsulate();
 
-        // Step 2: Create classical stealth output
-        // Note: In a full binding implementation, we'd mix shared_secret into
-        // the classical random value. For now, we create independently but
-        // verify both during ownership checks.
-        let classical = TxOutput::new(amount, recipient.classical());
+        // Step 2: Generate random entropy for classical ephemeral key
+        let mut random_seed = [0u8; 32];
+        OsRng.fill_bytes(&mut random_seed);
 
-        // Step 3: Derive PQ one-time keypair from shared secret
+        // Step 3: Bind classical and PQ layers by deriving ephemeral key from both
+        // IKM = random || pq_shared_secret (64 bytes total)
+        let mut ikm = [0u8; 64];
+        ikm[..32].copy_from_slice(&random_seed);
+        ikm[32..].copy_from_slice(shared_secret.as_bytes());
+
+        let hk = Hkdf::<Sha256>::new(Some(b"botho-pq-binding"), &ikm);
+        let mut bound_ephemeral = [0u8; 32];
+        hk.expand(b"ephemeral", &mut bound_ephemeral)
+            .expect("32 bytes is valid for HKDF-SHA256");
+
+        // Create classical ephemeral private key from the bound value
+        let tx_private_key = RistrettoPrivate::from_bytes_mod_order(&bound_ephemeral);
+
+        // Step 4: Create classical stealth output with the bound ephemeral key
+        let classical = TxOutput::new_with_key(amount, recipient.classical(), &tx_private_key);
+
+        // Step 5: Derive PQ one-time keypair from shared secret
         // The PUBLIC KEY is stored in the output so validators can verify signatures
         let pq_keypair = derive_onetime_sig_keypair(shared_secret.as_bytes(), 0);
         let pq_signing_pubkey = pq_keypair.public_key().as_bytes().to_vec();

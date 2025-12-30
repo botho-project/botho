@@ -37,6 +37,7 @@ hybrid-array = "0.4"
 rand = { workspace = true }
 hex = { workspace = true }
 criterion = "0.5"
+proptest = { workspace = true, features = ["default-code-coverage"] }
 
 [[bench]]
 name = "pq_benchmarks"

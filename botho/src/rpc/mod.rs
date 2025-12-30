@@ -214,7 +214,12 @@ async fn handle_request(
         return Ok(cors_response(Response::new(Full::new(Bytes::new())), allowed_origin_ref));
     }
 
-    // Only accept POST
+    // Check for WebSocket upgrade request at /ws
+    if req.method() == Method::GET && req.uri().path() == "/ws" {
+        return handle_websocket_upgrade(req, state).await;
+    }
+
+    // Only accept POST for JSON-RPC
     if req.method() != Method::POST {
         return Ok(cors_response(
             Response::builder()
@@ -256,6 +261,74 @@ async fn handle_request(
     let response = handle_rpc_method(&rpc_request, &state).await;
 
     Ok(json_response(response, allowed_origin_ref))
+}
+
+/// Handle WebSocket upgrade request
+async fn handle_websocket_upgrade(
+    req: Request<hyper::body::Incoming>,
+    state: Arc<RpcState>,
+) -> Result<Response<Full<Bytes>>, Infallible> {
+    // Check for required WebSocket headers
+    let has_upgrade = req
+        .headers()
+        .get("Upgrade")
+        .map(|v| v.to_str().unwrap_or("").eq_ignore_ascii_case("websocket"))
+        .unwrap_or(false);
+
+    let has_connection = req
+        .headers()
+        .get("Connection")
+        .map(|v| v.to_str().unwrap_or("").to_lowercase().contains("upgrade"))
+        .unwrap_or(false);
+
+    let sec_websocket_key = req.headers().get("Sec-WebSocket-Key").cloned();
+
+    if !has_upgrade || !has_connection || sec_websocket_key.is_none() {
+        return Ok(Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .body(Full::new(Bytes::from("Missing WebSocket headers")))
+            .unwrap());
+    }
+
+    // Calculate the accept key
+    let key = sec_websocket_key.unwrap();
+    let accept_key = compute_websocket_accept_key(key.to_str().unwrap_or(""));
+
+    // Spawn task to handle the WebSocket connection after upgrade
+    let broadcaster = state.ws_broadcaster.clone();
+    tokio::spawn(async move {
+        match hyper::upgrade::on(req).await {
+            Ok(upgraded) => {
+                websocket::handle_websocket(upgraded, broadcaster).await;
+            }
+            Err(e) => {
+                error!("WebSocket upgrade failed: {}", e);
+            }
+        }
+    });
+
+    // Return 101 Switching Protocols
+    Ok(Response::builder()
+        .status(StatusCode::SWITCHING_PROTOCOLS)
+        .header("Upgrade", "websocket")
+        .header("Connection", "Upgrade")
+        .header("Sec-WebSocket-Accept", accept_key)
+        .body(Full::new(Bytes::new()))
+        .unwrap())
+}
+
+/// Compute the Sec-WebSocket-Accept header value
+fn compute_websocket_accept_key(key: &str) -> String {
+    use sha1::{Digest, Sha1};
+    const WEBSOCKET_GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+
+    let mut hasher = Sha1::new();
+    hasher.update(key.as_bytes());
+    hasher.update(WEBSOCKET_GUID.as_bytes());
+    let result = hasher.finalize();
+
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(result)
 }
 
 async fn handle_rpc_method(request: &JsonRpcRequest, state: &RpcState) -> JsonRpcResponse {

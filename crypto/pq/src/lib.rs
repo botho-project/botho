@@ -42,7 +42,9 @@ mod error;
 mod kem;
 mod sig;
 
-pub use derive::{derive_onetime_sig_keypair, derive_pq_keys, PqKeyMaterial};
+#[allow(deprecated)]
+pub use derive::derive_pq_keys;
+pub use derive::{derive_onetime_sig_keypair, derive_pq_keys_from_seed, PqKeyMaterial, BIP39_SEED_SIZE};
 pub use error::PqError;
 pub use kem::{
     MlKem768Ciphertext, MlKem768KeyPair, MlKem768PublicKey, MlKem768SecretKey, MlKem768SharedSecret,
@@ -108,12 +110,13 @@ mod tests {
     }
 
     #[test]
-    fn test_derive_pq_keys_deterministic() {
-        let mnemonic = b"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-        let keys1 = derive_pq_keys(mnemonic);
-        let keys2 = derive_pq_keys(mnemonic);
+    fn test_derive_pq_keys_from_seed_deterministic() {
+        // Use a mock BIP39 seed (64 bytes)
+        let seed: [u8; BIP39_SEED_SIZE] = [42u8; 64];
+        let keys1 = derive_pq_keys_from_seed(&seed);
+        let keys2 = derive_pq_keys_from_seed(&seed);
 
-        // Same mnemonic produces same keys
+        // Same seed produces same keys
         assert_eq!(
             keys1.kem_keypair.public_key().as_bytes(),
             keys2.kem_keypair.public_key().as_bytes()
@@ -132,5 +135,39 @@ mod tests {
         let msg = b"test message";
         let sig = keys1.sig_keypair.sign(msg);
         assert!(keys1.sig_keypair.public_key().verify(msg, &sig).is_ok());
+    }
+
+    #[test]
+    fn test_different_seeds_produce_different_keys() {
+        let seed1: [u8; BIP39_SEED_SIZE] = [1u8; 64];
+        let seed2: [u8; BIP39_SEED_SIZE] = [2u8; 64];
+
+        let keys1 = derive_pq_keys_from_seed(&seed1);
+        let keys2 = derive_pq_keys_from_seed(&seed2);
+
+        // Different seeds produce different keys
+        assert_ne!(
+            keys1.kem_keypair.public_key().as_bytes(),
+            keys2.kem_keypair.public_key().as_bytes()
+        );
+        assert_ne!(
+            keys1.sig_keypair.public_key().as_bytes(),
+            keys2.sig_keypair.public_key().as_bytes()
+        );
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn test_deprecated_derive_pq_keys_still_works() {
+        // Test backwards compatibility
+        let input = b"some input bytes";
+        let keys1 = derive_pq_keys(input);
+        let keys2 = derive_pq_keys(input);
+
+        // Same input produces same keys
+        assert_eq!(
+            keys1.kem_keypair.public_key().as_bytes(),
+            keys2.kem_keypair.public_key().as_bytes()
+        );
     }
 }

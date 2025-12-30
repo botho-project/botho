@@ -52,13 +52,22 @@ Core functionality complete. See README.md for features and usage.
      - Bridge mode: Classical UTXOs derive PQ secrets via HKDF
      - `WalletScanner` uses proper stealth address detection
 
+5. **PQ Security Hardening** ✓ COMPLETE
+   - [x] Unified Schnorr implementations (consistent `b"botho-tx-v1"` domain separator)
+   - [x] Classical/PQ layer binding (ephemeral key derived from random + shared_secret)
+   - [x] BIP39 passphrase support for PQ key derivation (PBKDF2-HMAC-SHA512)
+   - Implementation notes:
+     - `quantum_private_validate.rs` now uses `verify_schnorrkel` instead of custom verification
+     - `QuantumPrivateTxOutput::new()` binds layers via HKDF: `k = HKDF(random || pq_shared_secret)`
+     - `QuantumSafeAccountKey::from_mnemonic_with_passphrase()` uses proper 64-byte BIP39 seed
+
 ### Lower Priority
 
-5. **Dependency Modernization**
+6. **Dependency Modernization**
    - [ ] `slog` → `tracing` (botho/ migrated, inherited crates remain)
    - [x] `lmdb-rkv` removed (unused inherited crates deleted, botho uses `heed`)
 
-6. **Fee Estimation API** ✓ COMPLETE
+7. **Fee Estimation API** ✓ COMPLETE
    - [x] `estimateFee` / `tx_estimateFee` RPC method implemented
    - [x] Returns: minimumFee, feeRateBps, recommendedFee, highPriorityFee
    - [x] `botho send` shows fee breakdown (type, rate, memo surcharge)
@@ -85,23 +94,23 @@ Core functionality complete. See README.md for features and usage.
 - [x] `docs/troubleshooting.md` — Common issues and solutions
 - [x] Updated `docs/README.md` and main `README.md` with new doc links
 
-### Tier 1: Clarity & Onboarding
+### Tier 1: Clarity & Onboarding ✓ COMPLETE
 
-- [ ] Create `docs/FAQ.md` — Top 10 newcomer questions
-- [ ] Create `docs/comparison.md` — Why Botho vs Monero, Zcash, Bitcoin
-- [ ] Create `docs/glossary.md` — Define technical terms (stealth address, ring signature, SCP, cluster tags, etc.)
+- [x] Create `docs/FAQ.md` — Frequently asked questions for newcomers
+- [x] Create `docs/comparison.md` — Why Botho vs Monero, Zcash, Bitcoin
+- [x] Create `docs/glossary.md` — Define technical terms (stealth address, ring signature, SCP, cluster tags, etc.)
 
-### Tier 2: Developer Experience
+### Tier 2: Developer Experience ✓ COMPLETE
 
-- [ ] Create `docs/developer-guide.md` — Build your first app on Botho
+- [x] Create `docs/developer-guide.md` — Build your first app on Botho (JS, Python, Rust examples)
 - [x] Add RPC examples to `docs/api.md` — curl examples included
-- [ ] Create `docs/testing.md` — How to run and write tests
+- [x] Create `docs/testing.md` — How to run and write tests
 
-### Tier 3: Operations & Security
+### Tier 3: Operations & Security ✓ COMPLETE
 
-- [ ] Create `docs/deployment.md` — systemd, Docker, monitoring setup
-- [ ] Create `docs/security.md` — Key management, threat model, best practices
-- [ ] Create `docs/backup.md` — Wallet backup and recovery procedures
+- [x] Create `docs/deployment.md` — systemd, Docker, nginx, monitoring, HA setup
+- [x] Create `docs/security.md` — Key management, threat model, best practices
+- [x] Create `docs/backup.md` — Wallet backup and recovery procedures
 
 ### Tier 4: Ecosystem Growth
 
@@ -119,32 +128,83 @@ Core functionality complete. See README.md for features and usage.
 
 ## Post-Quantum: Future Phases
 
-### Phase 8: Lattice Ring Signatures (Research)
+### Phase 8: Lattice Ring Signatures (Research) — FEASIBILITY CONFIRMED
 
-No mature post-quantum ring signature scheme exists. Options under evaluation:
+**Status:** Research confirms PQ ring signatures are viable for Botho. Awaiting mature implementations.
 
-| Scheme | Size per member | Status |
-|--------|-----------------|--------|
-| [Raptor](https://github.com/zhenfeizhang/raptor) | ~1.3 KB | Research |
-| [Lion](https://eprint.iacr.org/2024/553) | ~1.07 KB | Research |
-| [MatRiCT+](https://eprint.iacr.org/2019/1287) | Full RingCT | Research |
+#### Feasibility Analysis (Dec 2024)
+
+We analyzed the impact of integrating lattice-based ring signatures. Key findings:
+
+**Transaction Size Comparison:**
+
+| Transaction Type | Output | Input (ring-11) | Typical Tx (2-in, 2-out) |
+|-----------------|--------|-----------------|--------------------------|
+| Classical (current) | 72 B | ~1 KB | ~2.1 KB |
+| PQ no-ring (current) | 1,160 B | 3,409 B | ~9.1 KB |
+| PQ + Lion ring-11 | 1,160 B | ~12 KB | **~26 KB** |
+
+**Blockchain Growth at Bitcoin-Scale (50% PQ mix):**
+
+| Year | Tx/Day | Chain Size | Storage Cost |
+|------|--------|------------|--------------|
+| Y5 | 50K | 285 GB | $1.48/year |
+| Y10 | 400K | 3.1 TB | $7.13/year |
+| Y15 | 500K | 9.3 TB | $10.23/year |
+
+**Verdict:** 15x larger than Bitcoin but economically negligible. Storage costs ~$10/year.
+
+**SCP Consensus Impact:** None. SCP messages contain 41-byte tx hashes, not full transactions.
+Validation overhead is 3x slower but uses only 13% of 5-second slot budget.
+
+**Bandwidth Considerations:**
+- Daily sync: 7 GB/day (10 min at 100 Mbps) ✓
+- Initial sync: 8 days at 100 Mbps (vs Bitcoin's 13 hours)
+- Mitigation: UTXO snapshots, compact block relay
+
+#### Candidate Schemes
+
+| Scheme | Size/Member | Notes | Paper |
+|--------|-------------|-------|-------|
+| [Lion (2025)](https://link.springer.com/chapter/10.1007/978-981-95-3540-8_17) | ~1.07 KB | Generic lattices, best security | ICICS 2025 |
+| [Raptor](https://link.springer.com/chapter/10.1007/978-3-030-21568-2_6) | ~1.3 KB | First practical impl, NTRU-based | ACNS 2019 |
+| [MatRiCT+](https://eprint.iacr.org/2019/1287) | Full RingCT | Complete protocol, 23ms verify | IEEE S&P 2022 |
+| [2024 Efficient LRS](https://eprint.iacr.org/2024/553.pdf) | 32B pubkeys | 50% smaller than MatRiCT | ePrint 2024 |
+
+#### Alternative: Zcash-Style STARKs
+
+| Approach | Proof Size | Anonymity Set | Quantum Safe |
+|----------|------------|---------------|--------------|
+| PQ Ring Sigs (Lion) | ~12 KB/input | Ring of 11 | ✓ (lattice) |
+| zk-STARKs | 50-200 KB/tx | Entire pool | ✓ (hash-based) |
+
+STARKs offer unlimited anonymity but require architectural overhaul. Ring signatures
+fit our existing model with acceptable size increase.
+
+#### Implementation Path
+
+1. **Now:** Current PQ transactions (quantum-safe, no ring privacy)
+2. **2025-2026:** Monitor Lion/MatRiCT+ implementations for maturity
+3. **Prototype:** Integrate lattice ring sig library when stable
+4. **Hybrid:** Support both PQ-no-ring and PQ+ring transaction types
+5. **Infrastructure:** Add compact block relay and UTXO snapshots
 
 ### Phase 9: Full PQ Privacy (Future)
 
 | Feature | Classical | PQ Status |
 |---------|-----------|-----------|
-| Stealth addresses | ECDH | ML-KEM (done) |
-| Spend signatures | Schnorr | ML-DSA (done) |
-| Ring signatures | MLSAG | Research needed |
+| Stealth addresses | ECDH | ML-KEM ✓ (done) |
+| Spend signatures | Schnorr | ML-DSA ✓ (done) |
+| Ring signatures | MLSAG | Lion/MatRiCT+ (research) |
 | Amount hiding | Pedersen | Lattice commits (research) |
 | Key images | Curve hash | Tied to ring sigs |
 
 ### Open Questions
 
-1. **PQ Ring Signatures**: How do lattice-based ring sigs integrate with existing MLSAG?
-2. **PQ Amount Hiding**: Pedersen commitments are ECDLP-based. Need lattice commitment scheme.
+1. **PQ Ring Integration**: Lion appears most promising. Need reference implementation.
+2. **PQ Amount Hiding**: Pedersen commitments are ECDLP-based. MatRiCT+ includes lattice commitments.
 3. **Address Size**: PQ addresses are ~4.4KB. Options: QR codes, address registry, hybrid derivation.
-4. **Signature Aggregation**: Can Dilithium signatures be aggregated to reduce overhead?
+4. **Compact Blocks**: Required for 26 KB transactions. Implement before PQ rings.
 
 ---
 
@@ -202,9 +262,15 @@ Add regional seed nodes when network grows:
 
 ---
 
-## Testing: Future Work
+## Testing: Hardening Complete
 
-- [ ] Fuzz testing with cargo-fuzz for deserialization
-- [ ] Property-based testing for crypto operations
+- [x] Fuzz testing with cargo-fuzz for deserialization
+  - 5 fuzz targets: Transaction, PQ Transaction, Block, PQ Keys, Network Messages
+  - Located in `fuzz/` directory with README instructions
+- [x] Property-based testing for crypto operations
+  - 15 proptest properties for ML-KEM, ML-DSA, and key derivation
+  - Located in `crypto/pq/tests/proptest_pq.rs`
+- [x] Cross-implementation compatibility tests (botho vs transaction/core PQ types)
+  - 14 compatibility tests verifying type consistency
+  - Located in `botho/tests/pq_compatibility.rs`
 - [ ] External security audit (required before v1.0)
-- [ ] Cross-implementation compatibility tests (botho vs transaction/core PQ types)

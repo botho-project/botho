@@ -35,9 +35,10 @@
 use alloc::{string::String, vec::Vec};
 use core::fmt;
 
+use bip39::{Language, Mnemonic, Seed};
 use bth_crypto_pq::{
-    derive_pq_keys, MlDsa65KeyPair, MlDsa65PublicKey, MlKem768KeyPair, MlKem768PublicKey,
-    PqKeyMaterial, ML_DSA_65_PUBLIC_KEY_BYTES, ML_KEM_768_PUBLIC_KEY_BYTES,
+    derive_pq_keys_from_seed, MlDsa65KeyPair, MlDsa65PublicKey, MlKem768KeyPair, MlKem768PublicKey,
+    PqKeyMaterial, BIP39_SEED_SIZE, ML_DSA_65_PUBLIC_KEY_BYTES, ML_KEM_768_PUBLIC_KEY_BYTES,
 };
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -113,6 +114,9 @@ impl QuantumSafeAccountKey {
     /// keypairs from the same mnemonic. The classical keys use the standard
     /// SLIP-0010 derivation path, while PQ keys use HKDF with domain separation.
     ///
+    /// The PQ keys are derived from the full BIP39 seed (512 bits) which includes
+    /// PBKDF2-HMAC-SHA512 key stretching with 2048 iterations.
+    ///
     /// # Arguments
     ///
     /// * `mnemonic` - A BIP39 mnemonic phrase (typically 24 words)
@@ -123,12 +127,45 @@ impl QuantumSafeAccountKey {
     /// let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
     /// let account = QuantumSafeAccountKey::from_mnemonic(mnemonic);
     /// ```
-    pub fn from_mnemonic(mnemonic: &str) -> Self {
-        // Derive classical keys using existing infrastructure
-        let classical = Self::derive_classical_from_mnemonic(mnemonic);
+    pub fn from_mnemonic(mnemonic_phrase: &str) -> Self {
+        Self::from_mnemonic_with_passphrase(mnemonic_phrase, "")
+    }
 
-        // Derive PQ keys from the same mnemonic
-        let pq_keys = derive_pq_keys(mnemonic.as_bytes());
+    /// Create a quantum-safe account key from a mnemonic phrase with optional passphrase
+    ///
+    /// This derives both classical (Ristretto) and post-quantum (ML-KEM, ML-DSA)
+    /// keypairs from the same mnemonic. The passphrase provides an additional
+    /// layer of security - different passphrases produce completely different keys.
+    ///
+    /// The PQ keys are derived from the full BIP39 seed (512 bits) which includes
+    /// PBKDF2-HMAC-SHA512 key stretching with 2048 iterations.
+    ///
+    /// # Arguments
+    ///
+    /// * `mnemonic_phrase` - A BIP39 mnemonic phrase (typically 24 words)
+    /// * `passphrase` - Optional passphrase (can be empty string for no passphrase)
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    /// let account = QuantumSafeAccountKey::from_mnemonic_with_passphrase(mnemonic, "my secret");
+    /// ```
+    pub fn from_mnemonic_with_passphrase(mnemonic_phrase: &str, passphrase: &str) -> Self {
+        // Parse the mnemonic phrase
+        let mnemonic = Mnemonic::from_phrase(mnemonic_phrase, Language::English)
+            .expect("invalid mnemonic phrase");
+
+        // Derive the BIP39 seed with full PBKDF2 key stretching (2048 iterations)
+        let seed = Seed::new(&mnemonic, passphrase);
+        let seed_bytes: &[u8; BIP39_SEED_SIZE] = seed.as_bytes().try_into()
+            .expect("BIP39 seed is always 64 bytes");
+
+        // Derive classical keys using existing infrastructure
+        let classical = Self::derive_classical_from_mnemonic(mnemonic_phrase);
+
+        // Derive PQ keys from the BIP39 seed (with proper key stretching)
+        let pq_keys = derive_pq_keys_from_seed(seed_bytes);
 
         Self {
             classical,
@@ -624,6 +661,61 @@ mod tests {
         assert_ne!(
             account1.pq_sig_keypair().public_key().as_bytes(),
             account2.pq_sig_keypair().public_key().as_bytes()
+        );
+    }
+
+    #[test]
+    fn test_passphrase_produces_different_pq_keys() {
+        // Same mnemonic with different passphrases should produce different PQ keys
+        let account_no_pass = QuantumSafeAccountKey::from_mnemonic_with_passphrase(TEST_MNEMONIC, "");
+        let account_with_pass = QuantumSafeAccountKey::from_mnemonic_with_passphrase(TEST_MNEMONIC, "my secret passphrase");
+
+        // PQ keys should be completely different with a passphrase
+        assert_ne!(
+            account_no_pass.pq_kem_keypair().public_key().as_bytes(),
+            account_with_pass.pq_kem_keypair().public_key().as_bytes(),
+            "PQ KEM keys should differ with different passphrases"
+        );
+        assert_ne!(
+            account_no_pass.pq_sig_keypair().public_key().as_bytes(),
+            account_with_pass.pq_sig_keypair().public_key().as_bytes(),
+            "PQ signature keys should differ with different passphrases"
+        );
+    }
+
+    #[test]
+    fn test_passphrase_deterministic() {
+        // Same mnemonic + passphrase should always produce identical keys
+        let account1 = QuantumSafeAccountKey::from_mnemonic_with_passphrase(TEST_MNEMONIC, "deterministic");
+        let account2 = QuantumSafeAccountKey::from_mnemonic_with_passphrase(TEST_MNEMONIC, "deterministic");
+
+        assert_eq!(
+            account1.pq_kem_keypair().public_key().as_bytes(),
+            account2.pq_kem_keypair().public_key().as_bytes(),
+            "Same passphrase should produce identical PQ KEM keys"
+        );
+        assert_eq!(
+            account1.pq_sig_keypair().public_key().as_bytes(),
+            account2.pq_sig_keypair().public_key().as_bytes(),
+            "Same passphrase should produce identical PQ signature keys"
+        );
+    }
+
+    #[test]
+    fn test_from_mnemonic_equals_empty_passphrase() {
+        // from_mnemonic() should be equivalent to from_mnemonic_with_passphrase(_, "")
+        let account1 = QuantumSafeAccountKey::from_mnemonic(TEST_MNEMONIC);
+        let account2 = QuantumSafeAccountKey::from_mnemonic_with_passphrase(TEST_MNEMONIC, "");
+
+        assert_eq!(
+            account1.pq_kem_keypair().public_key().as_bytes(),
+            account2.pq_kem_keypair().public_key().as_bytes(),
+            "from_mnemonic should equal empty passphrase"
+        );
+        assert_eq!(
+            account1.pq_sig_keypair().public_key().as_bytes(),
+            account2.pq_sig_keypair().public_key().as_bytes(),
+            "from_mnemonic should equal empty passphrase"
         );
     }
 }

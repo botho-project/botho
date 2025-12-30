@@ -19,7 +19,7 @@ use crate::consensus::{BlockBuilder, ConsensusConfig, ConsensusEvent, ConsensusS
 use crate::ledger::ChainState;
 use crate::network::{NetworkDiscovery, NetworkEvent, QuorumBuilder};
 use crate::node::Node;
-use crate::rpc::{start_rpc_server, RpcState};
+use crate::rpc::{start_rpc_server, RpcState, WsBroadcaster};
 use crate::transaction::Transaction;
 
 /// Timeout for initial peer discovery (seconds)
@@ -180,6 +180,7 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
     // Create shared state for RPC
     let minting_active = Arc::new(RwLock::new(false));
     let peer_count = Arc::new(RwLock::new(discovery.peer_count()));
+    let ws_broadcaster = Arc::new(WsBroadcaster::new(1024));
 
     let rpc_state = Arc::new(RpcState::from_shared(
         node.shared_ledger(),
@@ -189,6 +190,7 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
         node.wallet_view_key(),
         node.wallet_spend_key(),
         config.network.cors_origins.clone(),
+        ws_broadcaster.clone(),
     ));
 
     // Spawn RPC server task
@@ -238,6 +240,8 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
         if let Ok(mut active) = minting_active.write() {
             *active = true;
         }
+        // Broadcast initial minting status to WebSocket clients
+        ws_broadcaster.minting_status(true, 0.0, 0);
     } else if mint {
         warn!("Minting requested but {}", quorum_message);
         println!("Minting will start when quorum is satisfied.");
@@ -279,6 +283,15 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                             if let Err(e) = node.add_block_from_network(&block) {
                                 warn!("Failed to add network block: {}", e);
                             } else {
+                                // Broadcast to WebSocket clients
+                                ws_broadcaster.new_block(
+                                    block.height(),
+                                    &block.hash(),
+                                    block.header.timestamp,
+                                    block.transactions.len(),
+                                    block.header.difficulty,
+                                );
+
                                 // Update consensus chain state
                                 if let Ok(ledger) = node.shared_ledger().read() {
                                     if let Ok(state) = ledger.get_chain_state() {
@@ -289,9 +302,17 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                         }
                         NetworkEvent::NewTransaction(tx) => {
                             debug!("Received transaction {} from network", hex::encode(&tx.hash()[0..8]));
+                            let tx_hash = tx.hash();
+                            let tx_fee = tx.fee;
                             // Add to mempool for inclusion in next block
                             if let Err(e) = node.submit_transaction(tx) {
                                 debug!("Failed to add network transaction to mempool: {}", e);
+                            } else {
+                                // Broadcast transaction and mempool update to WebSocket clients
+                                ws_broadcaster.new_transaction(&tx_hash, tx_fee, None);
+                                if let Ok(mempool) = node.shared_mempool().read() {
+                                    ws_broadcaster.mempool_update(mempool.len(), mempool.total_fees());
+                                }
                             }
                         }
                         NetworkEvent::ScpMessage(msg) => {
@@ -303,10 +324,15 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                         }
                         NetworkEvent::PeerDiscovered(peer_id) => {
                             info!("Peer connected: {}", peer_id);
+                            let new_peer_count = discovery.peer_count();
+
                             // Update RPC peer count
                             if let Ok(mut count) = peer_count.write() {
-                                *count = discovery.peer_count();
+                                *count = new_peer_count;
                             }
+
+                            // Broadcast peer event to WebSocket clients
+                            ws_broadcaster.peer_connected(new_peer_count, &peer_id.to_string());
 
                             // Re-evaluate minting eligibility
                             if mint && !minting_enabled {
@@ -321,16 +347,23 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                                         if let Ok(mut active) = minting_active.write() {
                                             *active = true;
                                         }
+                                        // Broadcast minting status change
+                                        ws_broadcaster.minting_status(true, 0.0, 0);
                                     }
                                 }
                             }
                         }
                         NetworkEvent::PeerDisconnected(peer_id) => {
                             warn!("Peer disconnected: {}", peer_id);
+                            let new_peer_count = discovery.peer_count();
+
                             // Update RPC peer count
                             if let Ok(mut count) = peer_count.write() {
-                                *count = discovery.peer_count();
+                                *count = new_peer_count;
                             }
+
+                            // Broadcast peer event to WebSocket clients
+                            ws_broadcaster.peer_disconnected(new_peer_count, &peer_id.to_string());
 
                             // Re-evaluate minting eligibility
                             if minting_enabled {
@@ -343,6 +376,8 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                                     if let Ok(mut active) = minting_active.write() {
                                         *active = false;
                                     }
+                                    // Broadcast minting status change
+                                    ws_broadcaster.minting_status(false, 0.0, 0);
                                 }
                             }
                         }
@@ -430,6 +465,15 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                                     if let Err(e) = node.add_block_from_network(&block) {
                                         warn!("Failed to add consensus block: {}", e);
                                     } else {
+                                        // Broadcast to WebSocket clients
+                                        ws_broadcaster.new_block(
+                                            block.height(),
+                                            &block.hash(),
+                                            block.header.timestamp,
+                                            block.transactions.len(),
+                                            block.header.difficulty,
+                                        );
+
                                         // Update consensus chain state
                                         if let Ok(ledger) = node.shared_ledger().read() {
                                             if let Ok(state) = ledger.get_chain_state() {

@@ -125,74 +125,33 @@ pub fn verify_quantum_private_signatures(
     Ok(())
 }
 
+/// Domain separator for quantum-private transaction Schnorr signatures.
+///
+/// IMPORTANT: This MUST match the context used in transaction_pq.rs for signing.
+/// Both signing and verification use the same Schnorrkel context to ensure compatibility.
+const SCHNORR_CONTEXT: &[u8] = b"botho-tx-v1";
+
 /// Verify the classical Schnorr signature on a quantum-private input.
 ///
-/// Uses a standard Schnorr signature scheme: sig = (R, s) where
-/// s = k + c*x, c = H(R || P || m), and verification checks s*G = R + c*P.
+/// Uses the same Schnorrkel verification as regular transactions to ensure
+/// consistency across the codebase. The signature was created with
+/// `RistrettoPrivate::sign_schnorrkel(SCHNORR_CONTEXT, message)`.
 fn verify_schnorr_signature(
     tx_in: &QuantumPrivateTxIn,
     message: &[u8],
     public_key: &bth_crypto_keys::RistrettoPublic,
 ) -> TransactionValidationResult<()> {
-    use bth_crypto_digestible::{DigestTranscript, Digestible, MerlinTranscript};
-    use curve25519_dalek::{
-        constants::RISTRETTO_BASEPOINT_POINT,
-        ristretto::CompressedRistretto,
-        scalar::Scalar,
-    };
+    use bth_crypto_keys::RistrettoSignature;
 
-    // Get the signature bytes
-    let signature_bytes: [u8; 64] = tx_in
-        .schnorr_signature
-        .as_slice()
-        .try_into()
+    // Parse the signature bytes
+    let signature = RistrettoSignature::try_from(tx_in.schnorr_signature.as_slice())
         .map_err(|_| TransactionValidationError::QuantumPrivateSchnorrVerificationFailed)?;
 
-    // Parse signature as (R, s) - 32 bytes each
-    let r_bytes: [u8; 32] = signature_bytes[..32]
-        .try_into()
+    // Use the same verify_schnorrkel method as transaction_pq.rs
+    // This ensures domain separation is consistent with signing
+    public_key
+        .verify_schnorrkel(SCHNORR_CONTEXT, message, &signature)
         .map_err(|_| TransactionValidationError::QuantumPrivateSchnorrVerificationFailed)?;
-    let s_bytes: [u8; 32] = signature_bytes[32..]
-        .try_into()
-        .map_err(|_| TransactionValidationError::QuantumPrivateSchnorrVerificationFailed)?;
-
-    // Parse R as a compressed Ristretto point
-    let r_compressed = CompressedRistretto::from_slice(&r_bytes)
-        .map_err(|_| TransactionValidationError::QuantumPrivateSchnorrVerificationFailed)?;
-    let r_point = r_compressed
-        .decompress()
-        .ok_or(TransactionValidationError::QuantumPrivateSchnorrVerificationFailed)?;
-
-    // Parse s as a scalar
-    let s = Scalar::from_canonical_bytes(s_bytes)
-        .into_option()
-        .ok_or(TransactionValidationError::QuantumPrivateSchnorrVerificationFailed)?;
-
-    // Get public key point from compressed bytes
-    let pk_bytes: [u8; 32] = public_key.to_bytes();
-    let pk_compressed = CompressedRistretto::from_slice(&pk_bytes)
-        .map_err(|_| TransactionValidationError::QuantumPrivateSchnorrVerificationFailed)?;
-    let pk_point = pk_compressed
-        .decompress()
-        .ok_or(TransactionValidationError::QuantumPrivateSchnorrVerificationFailed)?;
-
-    // Compute challenge: c = H(R || P || message)
-    let mut transcript = MerlinTranscript::new(b"quantum-private-schnorr");
-    r_bytes.append_to_transcript(b"R", &mut transcript);
-    pk_bytes.as_slice().append_to_transcript(b"P", &mut transcript);
-    message.append_to_transcript(b"msg", &mut transcript);
-
-    let mut challenge_bytes = [0u8; 32];
-    transcript.extract_digest(&mut challenge_bytes);
-    let c = Scalar::from_bytes_mod_order(challenge_bytes);
-
-    // Verify: s*G == R + c*P
-    let lhs = s * RISTRETTO_BASEPOINT_POINT;
-    let rhs = r_point + c * pk_point;
-
-    if lhs != rhs {
-        return Err(TransactionValidationError::QuantumPrivateSchnorrVerificationFailed);
-    }
 
     Ok(())
 }
