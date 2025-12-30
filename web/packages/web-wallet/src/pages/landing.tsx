@@ -124,8 +124,7 @@ export function LandingPage() {
             <span className="text-gradient">Quantum Age</span>
           </h1>
           <p className="text-base sm:text-lg md:text-xl text-ghost mb-8 sm:mb-10 max-w-2xl mx-auto px-2">
-            Botho is a privacy-focused cryptocurrency with stealth addresses,
-            fast consensus, and post-quantum cryptography.
+            Botho is a privacy-focused cryptocurrency with fast consensus, and post-quantum cryptography.
           </p>
           <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 justify-center px-4 sm:px-0">
             <Link to="/wallet" className="w-full sm:w-auto">

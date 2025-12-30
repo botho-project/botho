@@ -10,7 +10,7 @@ Botho (BTH) uses a two-phase emission model designed for long-term sustainabilit
 | Smallest unit | nanoBTH (10⁻⁹ BTH) |
 | Pre-mine | None (100% mined) |
 | Phase 1 supply | ~100 million BTH |
-| Target block time | 60 seconds |
+| Target block time | 20 seconds |
 | Consensus | SCP (Stellar Consensus Protocol) |
 
 ## Unit System
@@ -38,7 +38,7 @@ Block rewards halve every ~2 years, distributing approximately 100 million BTH o
 | Halving 3 | 6-8 | 6.25 BTH | ~98.6M BTH |
 | Halving 4 | 8-10 | 3.125 BTH | ~100M BTH |
 
-**Halving interval**: 1,051,200 blocks (~2 years at 60-second blocks)
+**Halving interval**: 3,153,600 blocks (~2 years at 20-second blocks)
 
 ### Phase 2: Tail Emission (Year 10+)
 
@@ -62,8 +62,8 @@ At 100M BTH supply:
 - Target net emission: 2% × 100M = 2M BTH/year
 - Expected fee burns: 0.5% × 100M = 0.5M BTH/year
 - Gross emission needed: 2.5M BTH/year
-- Blocks per year: 525,600
-- **Tail reward: ~4.76 BTH/block**
+- Blocks per year: 1,576,800
+- **Tail reward: ~1.59 BTH/block**
 
 ## Fee Structure
 
@@ -134,9 +134,9 @@ Botho uses adaptive difficulty adjustment with different strategies for each pha
 
 | Parameter | Value |
 |-----------|-------|
-| Target block time | 60 seconds |
-| Minimum block time | 45 seconds |
-| Maximum block time | 90 seconds |
+| Target block time | 20 seconds |
+| Minimum block time | 15 seconds |
+| Maximum block time | 30 seconds |
 | Adjustment interval | 1,440 blocks (~24 hours) |
 | Max adjustment | ±25% per epoch |
 
@@ -170,7 +170,7 @@ This ensures:
 
 | Parameter | Value |
 |-----------|-------|
-| Max transactions per block | 5,000 |
+| Max transactions per block | 250 |
 | Max inputs per transaction | 16 |
 | Max outputs per transaction | 16 |
 | Ring size | 7 (for private transactions) |
@@ -226,7 +226,7 @@ This ensures:
 | Pre-mine | None | None | None | ~72M ETH |
 | Fee destination | Burned | To minters | To minters | Partially burned |
 | Progressive fees | Yes (cluster-based) | No | No | No |
-| Block time | 60s | 600s | 120s | 12s |
+| Block time | 20s | 600s | 120s | 12s |
 
 ## Technical References
 

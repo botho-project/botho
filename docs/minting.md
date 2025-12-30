@@ -82,7 +82,7 @@ Minting rewards follow a two-phase model: halvings followed by perpetual tail em
 | Parameter | Value |
 |-----------|-------|
 | Initial reward | 50 BTH |
-| Halving interval | 1,051,200 blocks (~2 years at 60s blocks) |
+| Halving interval | 3,153,600 blocks (~2 years at 20s blocks) |
 | Number of halvings | 5 |
 | Phase 1 supply | ~100 million BTH |
 
@@ -101,7 +101,7 @@ After Phase 1, Botho transitions to perpetual tail emission targeting **2% annua
 | Parameter | Value |
 |-----------|-------|
 | Target net inflation | 2% annually |
-| Tail reward | ~4.76 BTH per block |
+| Tail reward | ~1.59 BTH per block |
 | Fee burn offset | ~0.5% expected |
 
 **Why tail emission?**
@@ -113,9 +113,9 @@ After Phase 1, Botho transitions to perpetual tail emission targeting **2% annua
 
 | Parameter | Value |
 |-----------|-------|
-| Target block time | 60 seconds |
-| Minimum block time | 45 seconds |
-| Maximum block time | 90 seconds |
+| Target block time | 20 seconds |
+| Minimum block time | 15 seconds |
+| Maximum block time | 30 seconds |
 
 ## Difficulty Adjustment
 
@@ -234,11 +234,11 @@ A peer required for your quorum went offline.
 
 | Parameter | Mainnet Value |
 |-----------|---------------|
-| Block time | 60 seconds |
+| Block time | 20 seconds |
 | Initial reward | 50 BTH |
 | Halving interval | ~2 years |
 | Number of halvings | 5 |
-| Tail emission | ~4.76 BTH/block |
+| Tail emission | ~1.59 BTH/block |
 | Tail inflation target | 2% net |
 | Difficulty adjustment | Every 24 hours |
 | Gossip port | 7100 |

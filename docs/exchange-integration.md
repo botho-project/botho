@@ -12,7 +12,7 @@ Botho is a privacy-preserving cryptocurrency using stealth addresses and ring si
 |----------|-------|
 | Native unit | BTH (credit) |
 | Smallest unit | 1 credit (10^-12 BTH) |
-| Block time | ~60 seconds |
+| Block time | ~20 seconds |
 | Confirmations | 10 recommended for deposits |
 | Address format | Stealth addresses (view + spend public keys) |
 | Transaction privacy | Ring signatures, stealth addresses |

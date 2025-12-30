@@ -22,7 +22,7 @@ Traditional cryptocurrencies like Bitcoin have transparent blockchains where any
 Botho takes a different approach:
 
 - **Stealth addresses** ensure that each payment you receive goes to a unique one-time address, making it impossible to link your transactions together by watching the blockchain
-- **Optional post-quantum cryptography** protects your privacy against adversaries with quantum computers
+- **Post-quantum cryptography** protects your privacy against adversaries with quantum computers
 - **Federated Byzantine Agreement** provides fast finality without energy-intensive mining
 - **Fee burning** creates a deflationary monetary policy where transaction fees are permanently removed from circulation
 
@@ -71,12 +71,13 @@ Transactions are final once confirmed—there are no chargebacks or reversals in
 
 ### Transaction Fees
 
-Every Botho transaction requires a small fee. These fees serve two purposes:
+Every Botho transaction requires a small fee. These fees serve three purposes:
 
 1. **Spam prevention** - Fees make it expensive to flood the network with junk transactions
 2. **Deflationary pressure** - All fees are permanently burned, reducing the total supply over time
+3. **Progressive taxation** - Fees scale based on cluster wealth, discouraging concentration without enabling Sybil attacks
 
-The minimum fee is currently 1 microcredit (0.000001 BTH), though you can include a higher fee for priority during periods of high network activity.
+Botho uses a cluster-based progressive fee system where fee rates range from 0.05% for diffused holdings to 30% for concentrated wealth. See the Fee Structure section for details.
 
 ### Security Best Practices
 
@@ -177,8 +178,7 @@ To maximize your privacy when using Botho:
 
 1. **Run your own node** - This prevents revealing your addresses to third-party servers
 2. **Use a new address for each context** - While stealth addresses protect received funds, using separate addresses for work vs personal adds another layer
-3. **Enable post-quantum mode for savings** - Protect against harvest-now-decrypt-later attacks
-4. **Be mindful of metadata** - Privacy on-chain doesn't help if you reveal information off-chain
+3. **Be mindful of metadata** - Privacy on-chain doesn't help if you reveal information off-chain
     `,
   },
   {
@@ -275,6 +275,8 @@ Running your own Botho node gives you the highest level of privacy and helps str
 **Verification:** Your node independently validates every transaction and block. You don't have to trust anyone's claims about the state of the network.
 
 **Network health:** More nodes make the network more resilient. Your node relays transactions and blocks, helping the network function.
+
+**Minting advantage:** Running your own node gives you lower latency in the minting competition. Nodes that receive new blocks faster can begin working on the next block sooner, increasing their chances of earning minting rewards.
 
 **Participation:** If you want to mint new blocks or participate in consensus, you need a full node.
 
@@ -658,9 +660,9 @@ Botho uses libp2p for networking, which supports multiple discovery mechanisms:
 
 | Parameter | Value | Description |
 |-----------|-------|-------------|
-| Target block time | 60 seconds | Average time between blocks |
+| Target block time | 20 seconds | Average time between blocks |
 | Max block size | 1 MB | Maximum serialized block size |
-| Max transactions per block | 1000 | Transaction count limit |
+| Max transactions per block | 250 | Transaction count limit |
 
 **Transaction Limits:**
 
@@ -675,7 +677,7 @@ Botho uses libp2p for networking, which supports multiple discovery mechanisms:
 
 | Parameter | Value | Description |
 |-----------|-------|-------------|
-| Minimum fee | 1 nanoBTH | Floor fee for any transaction |
+| Minimum fee | 400 µBTH | Floor fee for any transaction |
 | Fee calculation | Size-based | Larger transactions pay more |
 | Fee destination | Burned | All fees are permanently destroyed |
 
@@ -739,7 +741,7 @@ Botho (BTH) uses a two-phase emission model designed for long-term sustainabilit
 | Smallest unit | nanoBTH (10⁻⁹ BTH) |
 | Pre-mine | None (100% mined) |
 | Phase 1 supply | ~100 million BTH |
-| Target block time | 60 seconds |
+| Target block time | 20 seconds |
 
 ### Unit System
 
@@ -766,7 +768,7 @@ Minting rewards halve every ~2 years, distributing approximately 100 million BTH
 | Halving 3 | 6-8 | 6.25 BTH | ~98.6M BTH |
 | Halving 4 | 8-10 | 3.125 BTH | ~100M BTH |
 
-**Halving interval**: 1,051,200 blocks (~2 years at 60-second blocks)
+**Halving interval**: 3,153,600 blocks (~2 years at 20-second blocks)
 
 ### Phase 2: Tail Emission (Year 10+)
 
@@ -778,7 +780,7 @@ After Phase 1, Botho transitions to perpetual tail emission targeting **2% annua
 - **Lost coin replacement** - Compensates for coins lost to forgotten keys
 - **Predictable monetary policy** - 2% is below typical fiat inflation
 
-At 100M BTH supply, the tail minting reward works out to approximately **4.76 BTH per slot**.
+At 100M BTH supply, the tail minting reward works out to approximately **1.59 BTH per block**.
 
 ---
 
