@@ -319,6 +319,34 @@ impl RpcPool {
         Ok(result.peers)
     }
 
+    // ========================================================================
+    // Exchange Integration Methods
+    // ========================================================================
+
+    /// Get transaction by hash (for exchange integration)
+    ///
+    /// Returns transaction info including status, block height, and confirmations.
+    pub async fn get_transaction(&mut self, tx_hash: &str) -> Result<TransactionInfo> {
+        self.call("getTransaction", json!({ "tx_hash": tx_hash }))
+            .await
+    }
+
+    /// Get transaction status (lightweight version)
+    ///
+    /// Returns just the confirmation status without full transaction details.
+    pub async fn get_transaction_status(&mut self, tx_hash: &str) -> Result<TransactionStatus> {
+        self.call("getTransactionStatus", json!({ "tx_hash": tx_hash }))
+            .await
+    }
+
+    /// Validate a Botho address
+    ///
+    /// Returns address info including network and type (classical/quantum).
+    pub async fn validate_address(&mut self, address: &str) -> Result<AddressValidation> {
+        self.call("validateAddress", json!({ "address": address }))
+            .await
+    }
+
     /// Get mutable reference to discovery
     pub fn discovery_mut(&mut self) -> &mut NodeDiscovery {
         &mut self.discovery
@@ -444,6 +472,70 @@ struct FeeEstimate {
 #[derive(Debug, Deserialize)]
 struct PeersResult {
     peers: Vec<SocketAddr>,
+}
+
+// ============================================================================
+// Exchange Integration Response Types
+// ============================================================================
+
+/// Transaction information returned by getTransaction
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransactionInfo {
+    /// Transaction hash (hex)
+    pub tx_hash: String,
+    /// Transaction status: "pending", "confirmed", or "unknown"
+    pub status: String,
+    /// Block height (null if pending)
+    pub block_height: Option<u64>,
+    /// Number of confirmations (0 if pending)
+    pub confirmations: u64,
+    /// Whether the transaction is in the mempool
+    pub in_mempool: bool,
+    /// Transaction type: "simple" or "ring"
+    #[serde(rename = "type")]
+    pub tx_type: Option<String>,
+    /// Transaction fee in picocredits
+    pub fee: Option<u64>,
+    /// Number of outputs
+    pub output_count: Option<usize>,
+    /// Total output amount in picocredits
+    pub total_output: Option<u64>,
+    /// Block height when transaction was created
+    pub created_at_height: Option<u64>,
+}
+
+/// Transaction status returned by getTransactionStatus
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransactionStatus {
+    /// Transaction hash (hex)
+    pub tx_hash: String,
+    /// Transaction status: "pending", "confirmed", or "unknown"
+    pub status: String,
+    /// Number of confirmations (0 if pending or unknown)
+    pub confirmations: u64,
+    /// Whether the transaction is confirmed (at least 1 confirmation)
+    pub confirmed: bool,
+}
+
+/// Address validation result returned by validateAddress
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddressValidation {
+    /// Whether the address is valid
+    pub valid: bool,
+    /// The address (canonical form if valid, original if invalid)
+    pub address: String,
+    /// Network name: "Mainnet" or "Testnet" (only if valid)
+    pub network: Option<String>,
+    /// Address type: "classical" or "quantum" (only if valid)
+    #[serde(rename = "type")]
+    pub address_type: Option<String>,
+    /// Whether this is a quantum-safe address (only if valid)
+    pub is_quantum: Option<bool>,
+    /// Error message (only if invalid)
+    pub error: Option<String>,
 }
 
 #[cfg(test)]

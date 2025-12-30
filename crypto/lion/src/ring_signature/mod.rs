@@ -1,0 +1,308 @@
+//! Lion linkable ring signature scheme.
+//!
+//! This module implements the core ring signature operations:
+//! signing and verification.
+
+mod signer;
+mod verifier;
+
+pub use signer::sign;
+pub use verifier::verify;
+
+use crate::{
+    error::{LionError, Result},
+    lattice::{LionKeyImage, LionPublicKey},
+    params::*,
+    polynomial::PolyVecL,
+};
+
+/// A Lion ring signature.
+///
+/// Contains all the data needed to verify the signature:
+/// - Challenge seed (used to derive per-member challenges)
+/// - Key image (for linkability/double-spend detection)
+/// - Response vectors for each ring member
+#[derive(Clone, Debug)]
+pub struct LionRingSignature {
+    /// Seed for challenge derivation.
+    pub challenge_seed: [u8; 32],
+
+    /// Key image for linkability.
+    pub key_image: LionKeyImage,
+
+    /// Response vector z for each ring member.
+    /// z_i = y_i + c_i * s for real signer, random for others.
+    pub responses: Vec<LionResponse>,
+}
+
+/// Response for a single ring member.
+#[derive(Clone, Debug)]
+pub struct LionResponse {
+    /// Response vector z.
+    pub z: PolyVecL,
+}
+
+impl LionResponse {
+    /// Serialize to bytes.
+    pub fn to_bytes(&self) -> [u8; RESPONSE_BYTES] {
+        let mut bytes = [0u8; RESPONSE_BYTES];
+
+        // Serialize each polynomial (3 bytes per coefficient)
+        let mut offset = 0;
+        for poly in self.z.polys.iter() {
+            let poly_bytes = poly.to_bytes();
+            bytes[offset..offset + 768].copy_from_slice(&poly_bytes);
+            offset += 768;
+        }
+
+        bytes
+    }
+
+    /// Deserialize from bytes.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        if bytes.len() != RESPONSE_BYTES {
+            return Err(LionError::InvalidSignature);
+        }
+
+        let mut z = PolyVecL::zero();
+
+        for (i, poly) in z.polys.iter_mut().enumerate() {
+            let offset = i * 768;
+            let poly_bytes: [u8; 768] = bytes[offset..offset + 768]
+                .try_into()
+                .map_err(|_| LionError::DeserializationError("invalid response bytes"))?;
+
+            *poly = Poly::from_bytes(&poly_bytes)
+                .ok_or(LionError::DeserializationError("invalid polynomial in response"))?;
+        }
+
+        Ok(Self { z })
+    }
+}
+
+impl LionRingSignature {
+    /// Serialize the signature to bytes.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(signature_size(self.responses.len()));
+
+        // Challenge seed
+        bytes.extend_from_slice(&self.challenge_seed);
+
+        // Key image
+        bytes.extend_from_slice(&self.key_image.to_bytes());
+
+        // Responses
+        for response in &self.responses {
+            bytes.extend_from_slice(&response.to_bytes());
+        }
+
+        bytes
+    }
+
+    /// Deserialize from bytes.
+    pub fn from_bytes(bytes: &[u8], ring_size: usize) -> Result<Self> {
+        let expected_size = signature_size(ring_size);
+        if bytes.len() != expected_size {
+            return Err(LionError::InvalidSignature);
+        }
+
+        // Challenge seed
+        let mut challenge_seed = [0u8; 32];
+        challenge_seed.copy_from_slice(&bytes[..32]);
+
+        // Key image
+        let key_image = LionKeyImage::from_bytes(&bytes[32..32 + KEY_IMAGE_BYTES])?;
+
+        // Responses
+        let mut offset = 32 + KEY_IMAGE_BYTES;
+        let mut responses = Vec::with_capacity(ring_size);
+        for _ in 0..ring_size {
+            let response_bytes = &bytes[offset..offset + RESPONSE_BYTES];
+            responses.push(LionResponse::from_bytes(response_bytes)?);
+            offset += RESPONSE_BYTES;
+        }
+
+        Ok(Self {
+            challenge_seed,
+            key_image,
+            responses,
+        })
+    }
+
+    /// Get the size of this signature in bytes.
+    pub fn size(&self) -> usize {
+        signature_size(self.responses.len())
+    }
+}
+
+/// Trait for ring operations.
+pub trait Ring {
+    /// Get the number of members in the ring.
+    fn size(&self) -> usize;
+
+    /// Get the public key at the given index.
+    fn get(&self, index: usize) -> Result<&LionPublicKey>;
+
+    /// Validate the ring.
+    fn validate(&self) -> Result<()> {
+        if self.size() != RING_SIZE {
+            return Err(LionError::InvalidRingSize {
+                expected: RING_SIZE,
+                got: self.size(),
+            });
+        }
+        Ok(())
+    }
+}
+
+impl Ring for &[LionPublicKey] {
+    fn size(&self) -> usize {
+        self.len()
+    }
+
+    fn get(&self, index: usize) -> Result<&LionPublicKey> {
+        <[LionPublicKey]>::get(self, index).ok_or(LionError::IndexOutOfBounds {
+            index,
+            ring_size: self.len(),
+        })
+    }
+}
+
+impl Ring for Vec<LionPublicKey> {
+    fn size(&self) -> usize {
+        self.len()
+    }
+
+    fn get(&self, index: usize) -> Result<&LionPublicKey> {
+        <[LionPublicKey]>::get(self.as_slice(), index).ok_or(LionError::IndexOutOfBounds {
+            index,
+            ring_size: self.len(),
+        })
+    }
+}
+
+impl Ring for &Vec<LionPublicKey> {
+    fn size(&self) -> usize {
+        self.len()
+    }
+
+    fn get(&self, index: usize) -> Result<&LionPublicKey> {
+        <[LionPublicKey]>::get(self.as_slice(), index).ok_or(LionError::IndexOutOfBounds {
+            index,
+            ring_size: self.len(),
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lattice::LionKeyPair;
+    use rand::SeedableRng;
+    use rand_chacha::ChaCha20Rng;
+
+    #[test]
+    fn test_sign_verify_roundtrip() {
+        let mut rng = ChaCha20Rng::seed_from_u64(42);
+        let message = b"test message for ring signature";
+
+        // Generate ring of 7 keypairs
+        let keypairs: Vec<LionKeyPair> = (0..RING_SIZE)
+            .map(|i| LionKeyPair::from_seed(&[i as u8; 32]))
+            .collect();
+
+        let ring: Vec<LionPublicKey> = keypairs.iter()
+            .map(|kp| kp.public_key.clone())
+            .collect();
+
+        // Real signer is at index 3
+        let real_index = 3;
+        let secret_key = &keypairs[real_index].secret_key;
+
+        // Sign
+        let signature = sign(message, &ring, real_index, secret_key, &mut rng)
+            .expect("signing should succeed");
+
+        // Verify
+        assert!(verify(message, &ring, &signature).is_ok());
+    }
+
+    #[test]
+    fn test_verify_rejects_wrong_message() {
+        let mut rng = ChaCha20Rng::seed_from_u64(123);
+
+        let keypairs: Vec<LionKeyPair> = (0..RING_SIZE)
+            .map(|i| LionKeyPair::from_seed(&[i as u8; 32]))
+            .collect();
+
+        let ring: Vec<LionPublicKey> = keypairs.iter()
+            .map(|kp| kp.public_key.clone())
+            .collect();
+
+        let signature = sign(
+            b"correct message",
+            &ring,
+            0,
+            &keypairs[0].secret_key,
+            &mut rng,
+        ).expect("signing should succeed");
+
+        // Verification with wrong message should fail
+        assert!(verify(b"wrong message", &ring, &signature).is_err());
+    }
+
+    #[test]
+    fn test_signature_serialization() {
+        let mut rng = ChaCha20Rng::seed_from_u64(456);
+
+        let keypairs: Vec<LionKeyPair> = (0..RING_SIZE)
+            .map(|i| LionKeyPair::from_seed(&[i as u8; 32]))
+            .collect();
+
+        let ring: Vec<LionPublicKey> = keypairs.iter()
+            .map(|kp| kp.public_key.clone())
+            .collect();
+
+        let signature = sign(
+            b"test",
+            &ring,
+            2,
+            &keypairs[2].secret_key,
+            &mut rng,
+        ).expect("signing should succeed");
+
+        let bytes = signature.to_bytes();
+        let recovered = LionRingSignature::from_bytes(&bytes, RING_SIZE)
+            .expect("deserialization should succeed");
+
+        // Recovered signature should still verify
+        assert!(verify(b"test", &ring, &recovered).is_ok());
+    }
+
+    #[test]
+    fn test_key_image_linkability() {
+        let mut rng = ChaCha20Rng::seed_from_u64(789);
+
+        let keypairs: Vec<LionKeyPair> = (0..RING_SIZE)
+            .map(|i| LionKeyPair::from_seed(&[i as u8; 32]))
+            .collect();
+
+        let ring: Vec<LionPublicKey> = keypairs.iter()
+            .map(|kp| kp.public_key.clone())
+            .collect();
+
+        // Sign twice with the same key
+        let sig1 = sign(b"message1", &ring, 0, &keypairs[0].secret_key, &mut rng)
+            .expect("signing should succeed");
+        let sig2 = sign(b"message2", &ring, 0, &keypairs[0].secret_key, &mut rng)
+            .expect("signing should succeed");
+
+        // Key images should be the same (linkable)
+        assert_eq!(sig1.key_image, sig2.key_image);
+
+        // But with a different key, key image should be different
+        let sig3 = sign(b"message3", &ring, 1, &keypairs[1].secret_key, &mut rng)
+            .expect("signing should succeed");
+        assert_ne!(sig1.key_image, sig3.key_image);
+    }
+}

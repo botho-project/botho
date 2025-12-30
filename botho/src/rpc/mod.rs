@@ -45,6 +45,7 @@ use std::sync::{Arc, RwLock};
 use tokio::net::TcpListener;
 use tracing::{debug, error, info};
 
+use crate::address::Address;
 use crate::ledger::Ledger;
 use crate::mempool::Mempool;
 
@@ -352,6 +353,11 @@ async fn handle_rpc_method(request: &JsonRpcRequest, state: &RpcState) -> JsonRp
         // Transaction methods
         "tx_submit" | "sendRawTransaction" => handle_submit_tx(id, &request.params, state).await,
         "pq_tx_submit" => handle_submit_pq_tx(id, &request.params, state).await,
+        "getTransaction" | "tx_get" => handle_get_transaction(id, &request.params, state).await,
+        "getTransactionStatus" | "tx_getStatus" => handle_get_transaction_status(id, &request.params, state).await,
+
+        // Address methods (for exchange integration)
+        "validateAddress" | "address_validate" => handle_validate_address(id, &request.params, state).await,
 
         // Minting methods
         "minting_getStatus" => handle_minting_status(id, state).await,
@@ -613,6 +619,163 @@ async fn handle_submit_pq_tx(id: Value, params: &Value, _state: &RpcState) -> Js
 #[cfg(not(feature = "pq"))]
 async fn handle_submit_pq_tx(id: Value, _params: &Value, _state: &RpcState) -> JsonRpcResponse {
     JsonRpcResponse::error(id, -32601, "PQ transactions not enabled in this build")
+}
+
+/// Get a transaction by hash (for exchange integration)
+///
+/// Returns transaction details including block height, confirmations, and status.
+async fn handle_get_transaction(id: Value, params: &Value, state: &RpcState) -> JsonRpcResponse {
+    // Parse tx_hash parameter
+    let tx_hash_hex = match params.get("tx_hash").or_else(|| params.get("hash")).and_then(|v| v.as_str()) {
+        Some(hex) => hex,
+        None => return JsonRpcResponse::error(id, -32602, "Missing tx_hash parameter"),
+    };
+
+    let tx_hash: [u8; 32] = match hex::decode(tx_hash_hex) {
+        Ok(bytes) if bytes.len() == 32 => {
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(&bytes);
+            arr
+        }
+        _ => return JsonRpcResponse::error(id, -32602, "Invalid tx_hash: expected 32-byte hex string"),
+    };
+
+    let ledger = read_lock!(state.ledger, id.clone());
+
+    // First check mempool
+    let mempool = read_lock!(state.mempool, id.clone());
+    if mempool.contains(&tx_hash) {
+        return JsonRpcResponse::success(id, json!({
+            "txHash": tx_hash_hex,
+            "status": "pending",
+            "blockHeight": null,
+            "confirmations": 0,
+            "inMempool": true,
+        }));
+    }
+    drop(mempool);
+
+    // Look up in blockchain
+    match ledger.get_transaction(&tx_hash) {
+        Ok(Some((tx, block_height, confirmations))) => {
+            let tx_type = if tx.is_private() { "ring" } else { "simple" };
+            let output_count = tx.outputs.len();
+            let total_output: u64 = tx.outputs.iter().map(|o| o.amount).sum();
+
+            JsonRpcResponse::success(id, json!({
+                "txHash": tx_hash_hex,
+                "status": "confirmed",
+                "blockHeight": block_height,
+                "confirmations": confirmations,
+                "inMempool": false,
+                "type": tx_type,
+                "fee": tx.fee,
+                "outputCount": output_count,
+                "totalOutput": total_output,
+                "createdAtHeight": tx.created_at_height,
+            }))
+        }
+        Ok(None) => {
+            JsonRpcResponse::error(id, -32000, "Transaction not found")
+        }
+        Err(e) => {
+            JsonRpcResponse::error(id, -32000, &format!("Failed to get transaction: {}", e))
+        }
+    }
+}
+
+/// Get transaction status and confirmation count (for exchange integration)
+///
+/// Lightweight version of getTransaction that only returns status info.
+async fn handle_get_transaction_status(id: Value, params: &Value, state: &RpcState) -> JsonRpcResponse {
+    // Parse tx_hash parameter
+    let tx_hash_hex = match params.get("tx_hash").or_else(|| params.get("hash")).and_then(|v| v.as_str()) {
+        Some(hex) => hex,
+        None => return JsonRpcResponse::error(id, -32602, "Missing tx_hash parameter"),
+    };
+
+    let tx_hash: [u8; 32] = match hex::decode(tx_hash_hex) {
+        Ok(bytes) if bytes.len() == 32 => {
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(&bytes);
+            arr
+        }
+        _ => return JsonRpcResponse::error(id, -32602, "Invalid tx_hash: expected 32-byte hex string"),
+    };
+
+    // Check mempool first
+    let mempool = read_lock!(state.mempool, id.clone());
+    if mempool.contains(&tx_hash) {
+        return JsonRpcResponse::success(id, json!({
+            "txHash": tx_hash_hex,
+            "status": "pending",
+            "confirmations": 0,
+            "confirmed": false,
+        }));
+    }
+    drop(mempool);
+
+    // Look up in blockchain
+    let ledger = read_lock!(state.ledger, id.clone());
+    match ledger.get_transaction_confirmations(&tx_hash) {
+        Ok(Some(confirmations)) => {
+            JsonRpcResponse::success(id, json!({
+                "txHash": tx_hash_hex,
+                "status": "confirmed",
+                "confirmations": confirmations,
+                "confirmed": true,
+            }))
+        }
+        Ok(None) => {
+            JsonRpcResponse::success(id, json!({
+                "txHash": tx_hash_hex,
+                "status": "unknown",
+                "confirmations": 0,
+                "confirmed": false,
+            }))
+        }
+        Err(e) => {
+            JsonRpcResponse::error(id, -32000, &format!("Failed to get transaction status: {}", e))
+        }
+    }
+}
+
+/// Validate an address (for exchange integration)
+///
+/// Parses and validates a Botho address, returning its properties.
+async fn handle_validate_address(id: Value, params: &Value, _state: &RpcState) -> JsonRpcResponse {
+    // Parse address parameter
+    let address_str = match params.get("address").and_then(|v| v.as_str()) {
+        Some(addr) => addr,
+        None => return JsonRpcResponse::error(id, -32602, "Missing address parameter"),
+    };
+
+    // Try to parse the address
+    match Address::parse(address_str) {
+        Ok(addr) => {
+            let network = addr.network.display_name();
+            let is_quantum = addr.is_quantum();
+            let address_type = if is_quantum { "quantum" } else { "classical" };
+
+            // Get the canonical form
+            let canonical = addr.to_address_string();
+
+            JsonRpcResponse::success(id, json!({
+                "valid": true,
+                "address": canonical,
+                "network": network,
+                "type": address_type,
+                "isQuantum": is_quantum,
+            }))
+        }
+        Err(e) => {
+            JsonRpcResponse::success(id, json!({
+                "valid": false,
+                "error": e.to_string(),
+                "address": address_str,
+            }))
+        }
+    }
 }
 
 async fn handle_minting_status(id: Value, state: &RpcState) -> JsonRpcResponse {

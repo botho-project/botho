@@ -13,11 +13,16 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tracing::{debug, error, info, warn};
 
+use std::collections::HashMap;
+
 use crate::block::MintingTx;
 use crate::config::{Config, QuorumMode};
 use crate::consensus::{BlockBuilder, ConsensusConfig, ConsensusEvent, ConsensusService, TransactionValidator};
 use crate::ledger::ChainState;
-use crate::network::{NetworkDiscovery, NetworkEvent, QuorumBuilder};
+use crate::network::{
+    BlockTxn, CompactBlock, GetBlockTxn, NetworkDiscovery, NetworkEvent, QuorumBuilder,
+    ReconstructionResult,
+};
 use crate::node::Node;
 use crate::rpc::{start_rpc_server, RpcState, WsBroadcaster};
 use crate::transaction::Transaction;
@@ -267,6 +272,10 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
     let mut status_interval = tokio::time::interval(Duration::from_secs(10));
     let mut consensus_tick = tokio::time::interval(Duration::from_millis(500));
 
+    // Track pending compact blocks awaiting missing transactions
+    // Key: block hash, Value: (compact block, missing indices)
+    let mut pending_compact_blocks: HashMap<[u8; 32], (CompactBlock, Vec<u16>)> = HashMap::new();
+
     loop {
         if shutdown.load(Ordering::SeqCst) {
             info!("Shutting down...");
@@ -442,6 +451,195 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                                 }
                             }
                         }
+
+                        // Compact block relay events
+                        NetworkEvent::NewCompactBlock(compact_block) => {
+                            let block_hash = compact_block.hash();
+                            let height = compact_block.height();
+                            info!(
+                                height = height,
+                                txs = compact_block.short_ids.len(),
+                                "Received compact block"
+                            );
+
+                            // Check if we already have this block
+                            if let Ok(ledger) = node.shared_ledger().read() {
+                                if let Ok(state) = ledger.get_chain_state() {
+                                    if state.height >= height {
+                                        debug!("Already have block {}, ignoring compact block", height);
+                                        continue;
+                                    }
+                                }
+                            }
+
+                            // Attempt reconstruction from mempool
+                            let mempool = node.shared_mempool();
+                            let reconstruction_result = if let Ok(mempool_guard) = mempool.read() {
+                                compact_block.reconstruct(&*mempool_guard)
+                            } else {
+                                warn!("Failed to lock mempool for compact block reconstruction");
+                                continue;
+                            };
+
+                            match reconstruction_result {
+                                ReconstructionResult::Complete(block) => {
+                                    info!(height = height, "Reconstructed block from compact block");
+
+                                    // Remove from pending if it was there
+                                    pending_compact_blocks.remove(&block_hash);
+
+                                    // Add to ledger
+                                    if let Err(e) = node.add_block_from_network(&block) {
+                                        warn!("Failed to add reconstructed block: {}", e);
+                                    } else {
+                                        // Broadcast to WebSocket clients
+                                        ws_broadcaster.new_block(
+                                            block.height(),
+                                            &block.hash(),
+                                            block.header.timestamp,
+                                            block.transactions.len(),
+                                            block.header.difficulty,
+                                        );
+
+                                        // Update consensus chain state
+                                        if let Ok(ledger) = node.shared_ledger().read() {
+                                            if let Ok(state) = ledger.get_chain_state() {
+                                                consensus.update_chain_state(state);
+                                            }
+                                        }
+                                    }
+                                }
+                                ReconstructionResult::Incomplete { missing_indices } => {
+                                    info!(
+                                        height = height,
+                                        missing = missing_indices.len(),
+                                        "Compact block missing {} transactions, requesting",
+                                        missing_indices.len()
+                                    );
+
+                                    // Store pending and request missing transactions
+                                    pending_compact_blocks.insert(
+                                        block_hash,
+                                        (compact_block, missing_indices.clone()),
+                                    );
+
+                                    let request = GetBlockTxn {
+                                        block_hash,
+                                        indices: missing_indices,
+                                    };
+
+                                    if let Err(e) = NetworkDiscovery::request_block_txns(&mut swarm, &request) {
+                                        warn!("Failed to request missing transactions: {}", e);
+                                    }
+                                }
+                            }
+                        }
+
+                        NetworkEvent::GetBlockTxn { peer: _, request } => {
+                            debug!(
+                                block = hex::encode(&request.block_hash[0..8]),
+                                indices = request.indices.len(),
+                                "Received GetBlockTxn request"
+                            );
+
+                            // Look up the block and extract requested transactions
+                            let response = if let Ok(ledger) = node.shared_ledger().read() {
+                                // Search recent blocks (last 100) for the requested hash
+                                match ledger.get_block_by_hash(&request.block_hash, 100) {
+                                    Ok(Some(block)) => {
+                                        let txs: Vec<Transaction> = request
+                                            .indices
+                                            .iter()
+                                            .filter_map(|&idx| block.transactions.get(idx as usize).cloned())
+                                            .collect();
+
+                                        Some(BlockTxn {
+                                            block_hash: request.block_hash,
+                                            txs,
+                                        })
+                                    }
+                                    Ok(None) => {
+                                        debug!("Block not found for GetBlockTxn request");
+                                        None
+                                    }
+                                    Err(e) => {
+                                        warn!("Error looking up block: {}", e);
+                                        None
+                                    }
+                                }
+                            } else {
+                                None
+                            };
+
+                            if let Some(response) = response {
+                                if let Err(e) = NetworkDiscovery::respond_block_txns(&mut swarm, &response) {
+                                    warn!("Failed to send BlockTxn response: {}", e);
+                                }
+                            }
+                        }
+
+                        NetworkEvent::BlockTxn(response) => {
+                            debug!(
+                                block = hex::encode(&response.block_hash[0..8]),
+                                txs = response.txs.len(),
+                                "Received BlockTxn response"
+                            );
+
+                            // Find the pending compact block
+                            if let Some((mut compact_block, missing_indices)) =
+                                pending_compact_blocks.remove(&response.block_hash)
+                            {
+                                // Add received transactions as prefilled
+                                compact_block.add_transactions(&missing_indices, response.txs);
+
+                                // Retry reconstruction
+                                let mempool = node.shared_mempool();
+                                let reconstruction_result = if let Ok(mempool_guard) = mempool.read() {
+                                    compact_block.reconstruct(&*mempool_guard)
+                                } else {
+                                    warn!("Failed to lock mempool for retry reconstruction");
+                                    continue;
+                                };
+
+                                match reconstruction_result {
+                                    ReconstructionResult::Complete(block) => {
+                                        info!(
+                                            height = block.height(),
+                                            "Completed block reconstruction after receiving missing txs"
+                                        );
+
+                                        if let Err(e) = node.add_block_from_network(&block) {
+                                            warn!("Failed to add completed block: {}", e);
+                                        } else {
+                                            // Broadcast to WebSocket clients
+                                            ws_broadcaster.new_block(
+                                                block.height(),
+                                                &block.hash(),
+                                                block.header.timestamp,
+                                                block.transactions.len(),
+                                                block.header.difficulty,
+                                            );
+
+                                            // Update consensus chain state
+                                            if let Ok(ledger) = node.shared_ledger().read() {
+                                                if let Ok(state) = ledger.get_chain_state() {
+                                                    consensus.update_chain_state(state);
+                                                }
+                                            }
+                                        }
+                                    }
+                                    ReconstructionResult::Incomplete { missing_indices: still_missing } => {
+                                        warn!(
+                                            "Block still incomplete after BlockTxn, {} txs still missing",
+                                            still_missing.len()
+                                        );
+                                        // Give up - will get full block from fallback
+                                    }
+                                }
+                            } else {
+                                debug!("Received BlockTxn for unknown compact block, ignoring");
+                            }
+                        }
                     }
                 }
             }
@@ -481,8 +679,14 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                                             }
                                         }
 
-                                        // Broadcast block to network
-                                        if let Err(e) = NetworkDiscovery::broadcast_block(&mut swarm, &block) {
+                                        // Broadcast block with bandwidth optimization
+                                        // Only send full block if there are legacy peers
+                                        let legacy_peers = discovery.legacy_peer_count() > 0;
+                                        if let Err(e) = NetworkDiscovery::broadcast_block_smart(
+                                            &mut swarm,
+                                            &block,
+                                            legacy_peers,
+                                        ) {
                                             warn!("Failed to broadcast block: {}", e);
                                         }
                                     }

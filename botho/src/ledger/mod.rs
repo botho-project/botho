@@ -1,6 +1,6 @@
 mod store;
 
-pub use store::Ledger;
+pub use store::{Ledger, TxLocation};
 
 use thiserror::Error;
 

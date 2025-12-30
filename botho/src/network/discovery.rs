@@ -10,7 +10,7 @@ use libp2p::{
     swarm::{NetworkBehaviour, SwarmEvent},
     tcp, yamux, Multiaddr, PeerId, Swarm,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
@@ -19,6 +19,7 @@ use bth_transaction_types::{MAX_BLOCK_SIZE, MAX_SCP_MESSAGE_SIZE, MAX_TRANSACTIO
 
 use crate::block::Block;
 use crate::consensus::ScpMessage;
+use crate::network::compact_block::{BlockTxn, CompactBlock, GetBlockTxn};
 use crate::network::sync::{create_sync_behaviour, SyncCodec, SyncRequest, SyncResponse};
 use crate::transaction::Transaction;
 
@@ -30,6 +31,9 @@ const TRANSACTIONS_TOPIC: &str = "botho/transactions/1.0.0";
 
 /// Topic for SCP consensus messages
 const SCP_TOPIC: &str = "botho/scp/1.0.0";
+
+/// Topic for compact block announcements
+const COMPACT_BLOCKS_TOPIC: &str = "botho/compact-blocks/1.0.0";
 
 /// Entry in the peer table
 #[derive(Debug, Clone)]
@@ -48,6 +52,15 @@ pub enum NetworkEvent {
     NewTransaction(Transaction),
     /// An SCP consensus message was received
     ScpMessage(ScpMessage),
+    /// A compact block was received (for bandwidth-efficient relay)
+    NewCompactBlock(CompactBlock),
+    /// A request for missing transactions was received
+    GetBlockTxn {
+        peer: PeerId,
+        request: GetBlockTxn,
+    },
+    /// Missing transactions were received
+    BlockTxn(BlockTxn),
     /// A new peer was discovered
     PeerDiscovered(PeerId),
     /// A peer disconnected
@@ -90,6 +103,8 @@ pub struct NetworkDiscovery {
     event_rx: Option<mpsc::Receiver<NetworkEvent>>,
     /// Known peers
     peers: HashMap<PeerId, PeerTableEntry>,
+    /// Peers subscribed to compact blocks topic (support bandwidth optimization)
+    compact_block_peers: HashSet<PeerId>,
 }
 
 impl NetworkDiscovery {
@@ -110,6 +125,7 @@ impl NetworkDiscovery {
             event_tx,
             event_rx: Some(event_rx),
             peers: HashMap::new(),
+            compact_block_peers: HashSet::new(),
         }
     }
 
@@ -131,6 +147,28 @@ impl NetworkDiscovery {
     /// Get peer table entries
     pub fn peer_table(&self) -> Vec<PeerTableEntry> {
         self.peers.values().cloned().collect()
+    }
+
+    /// Check if a peer supports compact blocks (subscribed to the topic)
+    pub fn peer_supports_compact_blocks(&self, peer_id: &PeerId) -> bool {
+        self.compact_block_peers.contains(peer_id)
+    }
+
+    /// Count of connected peers that don't support compact blocks
+    ///
+    /// These "legacy" peers need full block broadcasts.
+    pub fn legacy_peer_count(&self) -> usize {
+        self.peers
+            .keys()
+            .filter(|p| !self.compact_block_peers.contains(p))
+            .count()
+    }
+
+    /// Check if all connected peers support compact blocks
+    pub fn all_peers_support_compact_blocks(&self) -> bool {
+        self.peers
+            .keys()
+            .all(|p| self.compact_block_peers.contains(p))
     }
 
     /// Start the network service (runs in background)
@@ -178,6 +216,10 @@ impl NetworkDiscovery {
         // Subscribe to SCP consensus topic
         let scp_topic = IdentTopic::new(SCP_TOPIC);
         swarm.behaviour_mut().gossipsub.subscribe(&scp_topic)?;
+
+        // Subscribe to compact blocks topic
+        let compact_blocks_topic = IdentTopic::new(COMPACT_BLOCKS_TOPIC);
+        swarm.behaviour_mut().gossipsub.subscribe(&compact_blocks_topic)?;
 
         // Listen on the configured port
         let listen_addr: Multiaddr = format!("/ip4/0.0.0.0/tcp/{}", self.port).parse()?;
@@ -246,6 +288,102 @@ impl NetworkDiscovery {
             .map_err(|e| anyhow::anyhow!("Failed to publish SCP message: {:?}", e))?;
 
         debug!(slot = msg.slot_index, "Broadcast SCP message");
+        Ok(())
+    }
+
+    /// Broadcast a compact block to the network (bandwidth-efficient relay)
+    pub fn broadcast_compact_block(
+        swarm: &mut Swarm<BothoBehaviour>,
+        compact_block: &CompactBlock,
+    ) -> anyhow::Result<()> {
+        let topic = IdentTopic::new(COMPACT_BLOCKS_TOPIC);
+        let bytes = bincode::serialize(compact_block)?;
+
+        swarm
+            .behaviour_mut()
+            .gossipsub
+            .publish(topic, bytes)
+            .map_err(|e| anyhow::anyhow!("Failed to publish compact block: {:?}", e))?;
+
+        debug!(
+            height = compact_block.height(),
+            txs = compact_block.short_ids.len(),
+            "Broadcast compact block"
+        );
+        Ok(())
+    }
+
+    /// Request missing transactions for compact block reconstruction
+    pub fn request_block_txns(
+        swarm: &mut Swarm<BothoBehaviour>,
+        request: &GetBlockTxn,
+    ) -> anyhow::Result<()> {
+        let topic = IdentTopic::new(COMPACT_BLOCKS_TOPIC);
+        let bytes = bincode::serialize(request)?;
+
+        swarm
+            .behaviour_mut()
+            .gossipsub
+            .publish(topic, bytes)
+            .map_err(|e| anyhow::anyhow!("Failed to publish GetBlockTxn: {:?}", e))?;
+
+        debug!(
+            block = hex::encode(&request.block_hash[0..8]),
+            missing = request.indices.len(),
+            "Requested missing transactions"
+        );
+        Ok(())
+    }
+
+    /// Respond with missing transactions for compact block reconstruction
+    pub fn respond_block_txns(
+        swarm: &mut Swarm<BothoBehaviour>,
+        response: &BlockTxn,
+    ) -> anyhow::Result<()> {
+        let topic = IdentTopic::new(COMPACT_BLOCKS_TOPIC);
+        let bytes = bincode::serialize(response)?;
+
+        swarm
+            .behaviour_mut()
+            .gossipsub
+            .publish(topic, bytes)
+            .map_err(|e| anyhow::anyhow!("Failed to publish BlockTxn: {:?}", e))?;
+
+        debug!(
+            block = hex::encode(&response.block_hash[0..8]),
+            txs = response.txs.len(),
+            "Sent missing transactions"
+        );
+        Ok(())
+    }
+
+    /// Broadcast a block with bandwidth optimization.
+    ///
+    /// Always sends a compact block. Only sends the full block if there are
+    /// legacy peers that don't support compact block relay.
+    pub fn broadcast_block_smart(
+        swarm: &mut Swarm<BothoBehaviour>,
+        block: &Block,
+        legacy_peers_exist: bool,
+    ) -> anyhow::Result<()> {
+        // Always send compact block (bandwidth-efficient for upgraded peers)
+        let compact_block = CompactBlock::from_block(block);
+        Self::broadcast_compact_block(swarm, &compact_block)?;
+
+        // Only send full block if there are legacy peers
+        if legacy_peers_exist {
+            Self::broadcast_block(swarm, block)?;
+            debug!(
+                height = block.height(),
+                "Sent full block for legacy peers"
+            );
+        } else {
+            debug!(
+                height = block.height(),
+                "Skipped full block - all peers support compact blocks"
+            );
+        }
+
         Ok(())
     }
 
@@ -331,8 +469,75 @@ impl NetworkDiscovery {
                             warn!("Failed to deserialize SCP message from gossip: {}", e);
                         }
                     }
+                } else if topic == COMPACT_BLOCKS_TOPIC {
+                    // Compact block messages can be: CompactBlock, GetBlockTxn, or BlockTxn
+                    // Size limit is same as full blocks
+                    if message.data.len() > MAX_BLOCK_SIZE {
+                        warn!(
+                            "Rejected oversized compact block message: {} bytes (max: {})",
+                            message.data.len(),
+                            MAX_BLOCK_SIZE
+                        );
+                        return None;
+                    }
+
+                    // Try to deserialize as CompactBlock first (most common)
+                    if let Ok(compact_block) = bincode::deserialize::<CompactBlock>(&message.data) {
+                        info!(
+                            "Received compact block {} from network ({} txs, {} bytes)",
+                            compact_block.height(),
+                            compact_block.short_ids.len(),
+                            message.data.len()
+                        );
+                        return Some(NetworkEvent::NewCompactBlock(compact_block));
+                    }
+
+                    // Try GetBlockTxn
+                    if let Ok(request) = bincode::deserialize::<GetBlockTxn>(&message.data) {
+                        debug!(
+                            "Received GetBlockTxn for block {} ({} indices)",
+                            hex::encode(&request.block_hash[0..8]),
+                            request.indices.len()
+                        );
+                        let peer = message.source.unwrap_or(PeerId::random());
+                        return Some(NetworkEvent::GetBlockTxn { peer, request });
+                    }
+
+                    // Try BlockTxn
+                    if let Ok(response) = bincode::deserialize::<BlockTxn>(&message.data) {
+                        debug!(
+                            "Received BlockTxn for block {} ({} txs)",
+                            hex::encode(&response.block_hash[0..8]),
+                            response.txs.len()
+                        );
+                        return Some(NetworkEvent::BlockTxn(response));
+                    }
+
+                    warn!("Failed to deserialize compact block message");
                 }
 
+                None
+            }
+
+            // Track peers subscribing to compact blocks topic
+            SwarmEvent::Behaviour(BothoBehaviourEvent::Gossipsub(
+                gossipsub::Event::Subscribed { peer_id, topic },
+            )) => {
+                if topic.as_str() == COMPACT_BLOCKS_TOPIC {
+                    self.compact_block_peers.insert(peer_id);
+                    debug!(%peer_id, "Peer subscribed to compact blocks");
+                }
+                None
+            }
+
+            // Track peers unsubscribing from compact blocks topic
+            SwarmEvent::Behaviour(BothoBehaviourEvent::Gossipsub(
+                gossipsub::Event::Unsubscribed { peer_id, topic },
+            )) => {
+                if topic.as_str() == COMPACT_BLOCKS_TOPIC {
+                    self.compact_block_peers.remove(&peer_id);
+                    debug!(%peer_id, "Peer unsubscribed from compact blocks");
+                }
                 None
             }
 
@@ -415,6 +620,7 @@ impl NetworkDiscovery {
             SwarmEvent::ConnectionClosed { peer_id, .. } => {
                 info!("Disconnected from peer: {}", peer_id);
                 self.peers.remove(&peer_id);
+                self.compact_block_peers.remove(&peer_id);
                 Some(NetworkEvent::PeerDisconnected(peer_id))
             }
             _ => None,
@@ -593,5 +799,40 @@ mod tests {
         assert_ne!(BLOCKS_TOPIC, TRANSACTIONS_TOPIC);
         assert_ne!(BLOCKS_TOPIC, SCP_TOPIC);
         assert_ne!(TRANSACTIONS_TOPIC, SCP_TOPIC);
+    }
+
+    // ========================================================================
+    // Compact block subscription tracking tests
+    // ========================================================================
+
+    #[test]
+    fn test_compact_blocks_topic_constant() {
+        assert_eq!(COMPACT_BLOCKS_TOPIC, "botho/compact-blocks/1.0.0");
+        assert!(COMPACT_BLOCKS_TOPIC.starts_with("botho/"));
+        assert!(COMPACT_BLOCKS_TOPIC.contains("/1.0.0"));
+    }
+
+    #[test]
+    fn test_compact_block_peers_initially_empty() {
+        let discovery = NetworkDiscovery::new(9000, vec![]);
+        assert_eq!(discovery.legacy_peer_count(), 0);
+        assert!(discovery.all_peers_support_compact_blocks());
+    }
+
+    #[test]
+    fn test_peer_supports_compact_blocks_false_for_unknown() {
+        let discovery = NetworkDiscovery::new(9000, vec![]);
+        let peer_id = PeerId::random();
+
+        assert!(!discovery.peer_supports_compact_blocks(&peer_id));
+    }
+
+    #[test]
+    fn test_legacy_peer_count_with_no_peers() {
+        let discovery = NetworkDiscovery::new(9000, vec![]);
+
+        // No peers = no legacy peers
+        assert_eq!(discovery.legacy_peer_count(), 0);
+        assert!(discovery.all_peers_support_compact_blocks());
     }
 }

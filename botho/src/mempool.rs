@@ -463,6 +463,13 @@ impl Mempool {
     pub fn get(&self, tx_hash: &[u8; 32]) -> Option<&Transaction> {
         self.txs.get(tx_hash).map(|p| &p.tx)
     }
+
+    /// Iterate over all transactions with their hashes.
+    ///
+    /// Used for compact block reconstruction to build the short ID → tx mapping.
+    pub fn iter_with_hashes(&self) -> impl Iterator<Item = ([u8; 32], &Transaction)> {
+        self.txs.iter().map(|(hash, pending)| (*hash, &pending.tx))
+    }
 }
 
 impl Default for Mempool {

@@ -1,0 +1,45 @@
+[package]
+name = "bth-crypto-lion"
+version = "0.1.0"
+authors = ["Botho Foundation"]
+edition = "2021"
+license = "Apache-2.0"
+rust-version = { workspace = true }
+description = "Lion lattice-based linkable ring signatures for Botho"
+
+[features]
+default = ["std"]
+std = []
+serde = ["dep:serde"]
+
+[dependencies]
+# Hashing (SHAKE128/256 for lattice-based crypto)
+sha3 = { workspace = true }
+sha2 = { workspace = true }
+
+# Key derivation
+hkdf = { workspace = true }
+
+# Randomness
+rand_core = { workspace = true }
+rand_chacha = { workspace = true }
+
+# Utilities
+zeroize = { workspace = true, features = ["derive"] }
+thiserror = { workspace = true }
+subtle = { workspace = true }
+serde = { workspace = true, features = ["derive", "alloc"], optional = true }
+
+# Botho dependencies
+bth-crypto-digestible = { workspace = true }
+bth-crypto-hashes = { workspace = true }
+
+[dev-dependencies]
+rand = { workspace = true }
+hex = { workspace = true }
+criterion = { workspace = true }
+proptest = { workspace = true, features = ["default-code-coverage"] }
+
+[[bench]]
+name = "lion_benchmarks"
+harness = false

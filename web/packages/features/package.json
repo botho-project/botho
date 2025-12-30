@@ -1,0 +1,30 @@
+{
+  "name": "@botho/features",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./explorer": "./src/explorer/index.ts",
+    "./explorer/*": "./src/explorer/*"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "dependencies": {
+    "@botho/core": "workspace:*",
+    "@botho/ui": "workspace:*",
+    "lucide-react": "^0.562.0",
+    "motion": "^12.23.26"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
+    "typescript": "~5.9.3"
+  }
+}

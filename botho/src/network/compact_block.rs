@@ -289,11 +289,17 @@ mod tests {
 
     #[test]
     fn test_derive_nonce() {
-        let block_hash = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x00; 4].concat();
-        let mut arr = [0u8; 32];
-        arr.copy_from_slice(&block_hash[..32]);
+        let mut block_hash = [0u8; 32];
+        block_hash[0] = 0x01;
+        block_hash[1] = 0x02;
+        block_hash[2] = 0x03;
+        block_hash[3] = 0x04;
+        block_hash[4] = 0x05;
+        block_hash[5] = 0x06;
+        block_hash[6] = 0x07;
+        block_hash[7] = 0x08;
 
-        let nonce = derive_nonce(&arr);
+        let nonce = derive_nonce(&block_hash);
         assert_eq!(nonce, 0x0807060504030201, "Nonce should be little-endian");
     }
 

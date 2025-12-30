@@ -1,0 +1,25 @@
+[package]
+name = "bth-crypto-secp256k1"
+version = "0.1.0"
+authors = ["Botho"]
+edition = "2021"
+description = "Secp256k1 key support for Ethereum compatibility"
+license = "Apache-2.0"
+rust-version = { workspace = true }
+
+[features]
+default = ["std"]
+std = ["k256/std", "sha3/std"]
+
+[dependencies]
+k256 = { version = "0.13", default-features = false, features = ["ecdsa", "schnorr"] }
+sha3 = { workspace = true }
+bip32 = { version = "0.5", default-features = false, features = ["secp256k1"] }
+tiny-bip39 = { workspace = true }
+zeroize = { workspace = true, features = ["derive"] }
+hex = { workspace = true }
+thiserror = { workspace = true }
+rand_core = { workspace = true }
+
+[dev-dependencies]
+rand = { workspace = true }
