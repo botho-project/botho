@@ -81,7 +81,7 @@ export function TransactionDetail({ transaction, className }: TransactionDetailP
               label="Privacy"
               value={transaction.privacyLevel}
               valueClass={
-                transaction.privacyLevel === 'ring'
+                transaction.privacyLevel === 'private'
                   ? 'text-[--color-success]'
                   : 'text-[--color-ghost]'
               }

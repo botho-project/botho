@@ -459,7 +459,7 @@ export class LocalNodeAdapter implements NodeAdapter {
       type: 'receive' as const,
       amount: BigInt(0), // Private
       fee: BigInt((data.fee as number) || 0),
-      privacyLevel: 'ring' as const,
+      privacyLevel: 'private' as const,
       status: data.in_block ? 'confirmed' as const : 'pending' as const,
       timestamp: Date.now(),
       blockHeight: data.in_block as number | undefined,

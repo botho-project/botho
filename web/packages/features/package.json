@@ -7,7 +7,9 @@
   "exports": {
     ".": "./src/index.ts",
     "./explorer": "./src/explorer/index.ts",
-    "./explorer/*": "./src/explorer/*"
+    "./explorer/*": "./src/explorer/*",
+    "./wallet": "./src/wallet/index.ts",
+    "./wallet/*": "./src/wallet/*"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"

@@ -3,7 +3,7 @@ import type { Balance } from '@botho/core'
 import { formatBTH, parseBTH } from '@botho/core'
 import { Button, Input } from '@botho/ui'
 import { motion, AnimatePresence } from 'motion/react'
-import { Eye, Loader2, Send, Shield, X, Zap } from 'lucide-react'
+import { Loader2, Send, Shield, X, Zap } from 'lucide-react'
 
 export type SendPrivacyLevel = 'standard' | 'private'
 

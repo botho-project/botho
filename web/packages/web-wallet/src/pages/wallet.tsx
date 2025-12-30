@@ -2,13 +2,9 @@ import { useState, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { Button, Card, Input, Logo } from '@botho/ui'
 import { createMnemonic12 } from '@botho/core'
+import { useCopyToClipboard, BalanceCard, TransactionList, SendModal, type SendFormData, type SendResult } from '@botho/features'
 import { useWallet } from '../contexts/wallet'
-import { Wallet, Send, Download, RefreshCw, Copy, Check, ArrowLeft, Shield, Eye, KeyRound, AlertCircle, Lock } from 'lucide-react'
-
-function formatAmount(picocredits: bigint): string {
-  const credits = Number(picocredits) / 1e12
-  return credits.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 6 })
-}
+import { Send, Download, RefreshCw, ArrowLeft, Shield, Eye, KeyRound, AlertCircle, Lock, Copy, Check } from 'lucide-react'
 
 function CreateWalletView({ onCreate }: { onCreate: (mnemonic: string, password?: string) => void }) {
   const [showMnemonic, setShowMnemonic] = useState(false)
@@ -215,104 +211,76 @@ function ImportWalletView({ onImport }: { onImport: (mnemonic: string, password?
 
 function WalletDashboard() {
   const { address, balance, transactions, isConnecting, refreshBalance } = useWallet()
-  const [copied, setCopied] = useState(false)
+  const { copied, copy } = useCopyToClipboard()
   const [sendOpen, setSendOpen] = useState(false)
   const [receiveOpen, setReceiveOpen] = useState(false)
+  const [isSending, setIsSending] = useState(false)
 
-  const copyAddress = async () => {
+  const copyAddress = () => {
     if (address) {
-      await navigator.clipboard.writeText(address)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
+      copy(address)
     }
   }
 
+  const handleSend = async (_data: SendFormData): Promise<SendResult> => {
+    setIsSending(true)
+    try {
+      // TODO: Implement actual transaction signing
+      await new Promise(resolve => setTimeout(resolve, 1500))
+      const mockTxHash = `tx_${Date.now().toString(16)}_${Math.random().toString(16).slice(2, 10)}`
+      return { success: true, txHash: mockTxHash }
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : 'Transaction failed' }
+    } finally {
+      setIsSending(false)
+    }
+  }
+
+  const estimateFee = async (_amount: bigint, privacyLevel: 'standard' | 'private'): Promise<bigint> => {
+    // Estimate based on transaction size
+    const sizeBytes = privacyLevel === 'private' ? 22000 : 4000
+    // Simple fee calculation: 1 picocredit per byte
+    return BigInt(sizeBytes)
+  }
+
+  const actionButtons = (
+    <>
+      <Button onClick={() => setSendOpen(true)}>
+        <Send size={16} className="mr-2" />Send
+      </Button>
+      <Button variant="secondary" onClick={() => setReceiveOpen(true)}>
+        <Download size={16} className="mr-2" />Receive
+      </Button>
+      <Button variant="ghost" size="sm" onClick={refreshBalance} disabled={isConnecting}>
+        <RefreshCw size={16} className={isConnecting ? 'animate-spin' : ''} />
+      </Button>
+    </>
+  )
+
   return (
     <div className="max-w-4xl mx-auto space-y-4 sm:space-y-6 px-4 sm:px-0">
-      <Card className="p-4 sm:p-6 md:p-8">
-        <div className="flex items-start justify-between mb-4 sm:mb-6">
-          <div>
-            <p className="text-ghost text-xs sm:text-sm mb-1">Total Balance</p>
-            <h2 className="font-display text-2xl sm:text-3xl md:text-4xl font-bold">
-              {isConnecting ? (
-                <span className="shimmer inline-block w-32 sm:w-48 h-8 sm:h-10 rounded" />
-              ) : (
-                <>{formatAmount(balance?.total ?? 0n)} <span className="text-base sm:text-lg md:text-xl text-ghost">BTH</span></>
-              )}
-            </h2>
-          </div>
-          <Button variant="ghost" size="sm" onClick={refreshBalance} disabled={isConnecting}>
-            <RefreshCw size={16} className={isConnecting ? 'animate-spin' : ''} />
-          </Button>
-        </div>
+      <BalanceCard
+        balance={balance}
+        address={address}
+        isLoading={isConnecting}
+        actions={actionButtons}
+      />
 
-        <div className="flex items-center gap-2 p-2.5 sm:p-3 rounded-lg bg-abyss border border-steel">
-          <span className="text-ghost text-xs sm:text-sm truncate flex-1 font-mono">{address ?? 'Loading...'}</span>
-          <button onClick={copyAddress} className="p-1.5 sm:p-2 text-ghost hover:text-light transition-colors shrink-0">
-            {copied ? <Check size={16} className="text-success" /> : <Copy size={16} />}
-          </button>
-        </div>
+      <TransactionList
+        transactions={transactions}
+        title="Recent Transactions"
+        showPrivacy={true}
+        showChevron={false}
+      />
 
-        <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 mt-4 sm:mt-6">
-          <Button onClick={() => setSendOpen(true)} className="flex-1 justify-center">
-            <Send size={16} className="mr-2" />Send
-          </Button>
-          <Button variant="secondary" onClick={() => setReceiveOpen(true)} className="flex-1 justify-center">
-            <Download size={16} className="mr-2" />Receive
-          </Button>
-        </div>
-      </Card>
-
-      <Card className="p-4 sm:p-6">
-        <h3 className="font-display text-base sm:text-lg font-semibold mb-3 sm:mb-4">Recent Transactions</h3>
-        {transactions.length === 0 ? (
-          <div className="text-center py-8 sm:py-12 text-ghost">
-            <Wallet size={40} className="mx-auto mb-3 sm:mb-4 opacity-50" />
-            <p className="text-sm sm:text-base">No transactions yet</p>
-          </div>
-        ) : (
-          <div className="space-y-2 sm:space-y-3">
-            {transactions.map((tx) => (
-              <div key={tx.id} className="flex items-center justify-between p-3 sm:p-4 rounded-lg bg-abyss border border-steel">
-                <div className="flex items-center gap-2 sm:gap-3">
-                  <div className={`w-8 h-8 sm:w-10 sm:h-10 rounded-full flex items-center justify-center shrink-0 ${tx.type === 'receive' ? 'bg-success/10 text-success' : 'bg-danger/10 text-danger'}`}>
-                    {tx.type === 'receive' ? <Download size={16} /> : <Send size={16} />}
-                  </div>
-                  <div className="min-w-0">
-                    <p className="font-medium text-sm sm:text-base capitalize">{tx.type}</p>
-                    <p className="text-xs sm:text-sm text-ghost">{tx.confirmations} confirmations</p>
-                  </div>
-                </div>
-                <p className={`font-mono font-medium text-sm sm:text-base shrink-0 ${tx.type === 'send' ? 'text-danger' : 'text-success'}`}>
-                  {tx.type === 'send' ? '-' : '+'}{formatAmount(tx.amount)} BTH
-                </p>
-              </div>
-            ))}
-          </div>
-        )}
-      </Card>
-
-      {sendOpen && (
-        <div className="fixed inset-0 bg-void/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 z-50">
-          <Card className="w-full sm:max-w-md p-5 sm:p-6 rounded-t-2xl sm:rounded-2xl max-h-[90vh] overflow-y-auto">
-            <h3 className="font-display text-lg sm:text-xl font-semibold mb-5 sm:mb-6">Send BTH</h3>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm text-ghost mb-2">Recipient Address</label>
-                <Input placeholder="botho://1/..." />
-              </div>
-              <div>
-                <label className="block text-sm text-ghost mb-2">Amount</label>
-                <Input type="number" placeholder="0.00" />
-              </div>
-              <div className="flex flex-col-reverse sm:flex-row gap-3 mt-6">
-                <Button variant="secondary" onClick={() => setSendOpen(false)} className="flex-1 justify-center">Cancel</Button>
-                <Button className="flex-1 justify-center">Send</Button>
-              </div>
-            </div>
-          </Card>
-        </div>
-      )}
+      <SendModal
+        isOpen={sendOpen}
+        onClose={() => setSendOpen(false)}
+        balance={balance}
+        estimateFee={estimateFee}
+        onSend={handleSend}
+        isSending={isSending}
+      />
 
       {receiveOpen && (
         <div className="fixed inset-0 bg-void/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 z-50">
