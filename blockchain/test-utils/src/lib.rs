@@ -7,13 +7,13 @@ pub use bth_consensus_scp_types::test_utils::test_node_id;
 
 use bth_blockchain_types::{
     Block, BlockContents, BlockData, BlockID, BlockMetadata, BlockMetadataContents, BlockSignature,
-    BlockVersion, QuorumSet, VerificationReport, VerificationSignature,
+    BlockVersion, QuorumSet,
 };
 use bth_common::ResponderId;
 use bth_crypto_keys::Ed25519Pair;
 use bth_transaction_core_test_utils::{get_outputs, Amount, KeyImage};
 use bth_util_from_random::FromRandom;
-use bth_util_test_helper::{random_bytes_vec, AccountKey, CryptoRng, PublicAddress, Rng, RngCore};
+use bth_util_test_helper::{AccountKey, CryptoRng, PublicAddress, Rng, RngCore};
 use std::str::FromStr;
 
 /// Get blocks with custom contents to simulate conditions seen in production.
@@ -148,22 +148,6 @@ pub fn make_quorum_set(rng: &mut (impl RngCore + CryptoRng)) -> QuorumSet {
     make_quorum_set_with_count(rng.gen_range(1..=42), rng)
 }
 
-/// Generate a [VerificationReport] from random bytes.
-pub fn make_verification_report(rng: &mut (impl RngCore + CryptoRng)) -> VerificationReport {
-    let sig = Some(VerificationSignature {
-        contents: random_bytes_vec(42, rng),
-    });
-    let chain_len = rng.gen_range(2..42);
-    let chain = (1..=chain_len)
-        .map(|n| random_bytes_vec(n as usize, rng))
-        .collect();
-    VerificationReport {
-        sig,
-        chain,
-        http_body: "testing".to_owned(),
-    }
-}
-
 /// Generate a [BlockMetadataContents] for the given block ID, and otherwise
 /// random contents.
 pub fn make_block_metadata_contents(
@@ -173,7 +157,6 @@ pub fn make_block_metadata_contents(
     BlockMetadataContents::new(
         block_id,
         make_quorum_set(rng),
-        make_verification_report(rng).into(),
         ResponderId::from_str("test.botho.com:443").unwrap(),
     )
 }

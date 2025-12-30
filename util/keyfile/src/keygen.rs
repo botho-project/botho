@@ -5,11 +5,10 @@
 //! `bth_account_keys::PublicAddress` respectively.
 
 use crate::{
-    error::Error, read_keyfile, read_pubfile, read_root_entropy_keyfile, write_b58pubfile,
-    write_keyfile, write_pubfile,
+    error::Error, read_keyfile, read_pubfile, write_b58pubfile, write_keyfile, write_pubfile,
 };
 use bip39::{Language, Mnemonic};
-use bth_account_keys::{AccountKey, PublicAddress, RootIdentity};
+use bth_account_keys::{AccountKey, PublicAddress};
 use bth_core::slip10::Slip10KeyGenerator;
 use rand_core::{RngCore, SeedableRng};
 use rand_hc::Hc128Rng;

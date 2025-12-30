@@ -5,8 +5,8 @@
 
 use bth_account_keys::{AccountKey, PublicAddress, RootIdentity};
 use bth_api::{blockchain, external, quorum_set};
-use bth_blockchain_test_utils::{get_blocks, make_block_metadata, make_quorum_set, make_verification_report};
-use bth_blockchain_types::{BlockData, BlockID, BlockMetadata, BlockVersion, QuorumSet, VerificationReport};
+use bth_blockchain_test_utils::{get_blocks, make_block_metadata, make_quorum_set};
+use bth_blockchain_types::{BlockData, BlockID, BlockMetadata, BlockVersion, QuorumSet};
 use bth_util_from_random::FromRandom;
 use bth_util_serial::round_trip_message;
 use bth_util_test_helper::{run_with_several_seeds, CryptoRng, RngCore};
@@ -52,9 +52,6 @@ fn public_address_round_trip() {
     })
 }
 
-// NOTE: SignedContingentInput round trip test removed - requires fog functionality
-// which was removed as part of the fog removal.
-
 #[test]
 fn block_metadata_round_trip() {
     run_with_several_seeds(|mut rng| {
@@ -69,14 +66,6 @@ fn quorum_set_round_trip() {
     run_with_several_seeds(|mut rng| {
         let qs = make_quorum_set(&mut rng);
         round_trip_message::<QuorumSet, quorum_set::QuorumSet>(&qs)
-    })
-}
-
-#[test]
-fn verification_report_round_trip() {
-    run_with_several_seeds(|mut rng| {
-        let report = make_verification_report(&mut rng);
-        round_trip_message::<VerificationReport, external::VerificationReport>(&report)
     })
 }
 

@@ -53,8 +53,6 @@ mod tx_out_membership_proof;
 mod tx_prefix;
 mod unsigned_tx;
 mod validated_mint_config;
-mod verification_report;
-mod verification_signature;
 
 // printable
 mod tx_out_gift_code;

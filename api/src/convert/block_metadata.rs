@@ -2,23 +2,17 @@
 
 //! Convert to/from blockchain::BlockMetadataContents.
 
-use crate::{blockchain, blockchain::block_metadata_contents, ConversionError};
-use bth_blockchain_types::{AttestationEvidence, BlockMetadata, BlockMetadataContents};
+use crate::{blockchain, ConversionError};
+use bth_blockchain_types::{BlockMetadata, BlockMetadataContents};
 use bth_common::ResponderId;
 use std::str::FromStr;
 
 impl From<&BlockMetadataContents> for blockchain::BlockMetadataContents {
     fn from(src: &BlockMetadataContents) -> Self {
-        let attestation_evidence = match src.attestation_evidence() {
-            AttestationEvidence::VerificationReport(report) => {
-                block_metadata_contents::AttestationEvidence::VerificationReport(report.into())
-            }
-        };
         Self {
             block_id: Some(src.block_id().into()),
             quorum_set: Some(src.quorum_set().into()),
             responder_id: src.responder_id().to_string(),
-            attestation_evidence: Some(attestation_evidence),
         }
     }
 }
@@ -37,23 +31,11 @@ impl TryFrom<&blockchain::BlockMetadataContents> for BlockMetadataContents {
             .as_ref()
             .unwrap_or(&Default::default())
             .try_into()?;
-        let attestation_evidence = match &src.attestation_evidence {
-            Some(block_metadata_contents::AttestationEvidence::VerificationReport(report)) => {
-                let report = report.into();
-                AttestationEvidence::VerificationReport(report)
-            }
-            _ => {
-                return Err(ConversionError::MissingField(
-                    "attestation_evidence".to_string(),
-                ))
-            }
-        };
         let responder_id = ResponderId::from_str(&src.responder_id)
             .map_err(|_| ConversionError::InvalidContents)?;
         Ok(BlockMetadataContents::new(
             block_id,
             quorum_set,
-            attestation_evidence,
             responder_id,
         ))
     }

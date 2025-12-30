@@ -2,7 +2,7 @@
 
 use crate::{
     crypto::metadata::{MetadataSigner, MetadataVerifier},
-    BlockID, QuorumSet, VerificationReport,
+    BlockID, QuorumSet,
 };
 use ::prost::Message;
 use displaydoc::Display;
@@ -10,22 +10,6 @@ use bth_common::ResponderId;
 use bth_crypto_digestible::Digestible;
 use bth_crypto_keys::{Ed25519Pair, Ed25519Public, Ed25519Signature, SignatureError};
 use serde::{Deserialize, Serialize};
-
-/// The attestation evidence variants for a block.
-/// Note: DcapEvidence removed in Botho (SGX not used)
-#[derive(Clone, ::prost::Oneof, Deserialize, Display, Eq, PartialEq, Serialize, Digestible)]
-#[digestible(transparent)]
-pub enum AttestationEvidence {
-    /// The attestation evidence is a [VerificationReport].
-    #[prost(message, tag = 3)]
-    VerificationReport(VerificationReport),
-}
-
-impl From<VerificationReport> for AttestationEvidence {
-    fn from(report: VerificationReport) -> Self {
-        Self::VerificationReport(report)
-    }
-}
 
 /// Metadata for a block.
 #[derive(Clone, Deserialize, Digestible, Display, Eq, Message, PartialEq, Serialize)]
@@ -38,11 +22,6 @@ pub struct BlockMetadataContents {
     #[prost(message, required, tag = 2)]
     quorum_set: QuorumSet,
 
-    /// Attestation evidence for the enclave which generated the signature.
-    #[prost(oneof = "AttestationEvidence", tags = "3, 5")]
-    #[digestible(name = "verification_report")]
-    attestation_evidence: Option<AttestationEvidence>,
-
     /// Responder ID of the consensus node that externalized this block.
     #[prost(message, required, tag = 4)]
     responder_id: ResponderId,
@@ -53,13 +32,11 @@ impl BlockMetadataContents {
     pub fn new(
         block_id: BlockID,
         quorum_set: QuorumSet,
-        attestation_evidence: AttestationEvidence,
         responder_id: ResponderId,
     ) -> Self {
         Self {
             block_id,
             quorum_set,
-            attestation_evidence: Some(attestation_evidence),
             responder_id,
         }
     }
@@ -72,13 +49,6 @@ impl BlockMetadataContents {
     /// Get the [QuorumSet].
     pub fn quorum_set(&self) -> &QuorumSet {
         &self.quorum_set
-    }
-
-    /// Get the Attestation evidence.
-    pub fn attestation_evidence(&self) -> &AttestationEvidence {
-        self.attestation_evidence
-            .as_ref()
-            .expect("Attestation evidence is always set")
     }
 
     /// Get the [ResponderId].
@@ -152,7 +122,7 @@ impl BlockMetadata {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloc::{string::ToString, vec::Vec};
+    use alloc::vec::Vec;
     use core::str::FromStr;
     use bth_util_from_random::FromRandom;
     use rand::{rngs::StdRng, SeedableRng};
@@ -172,11 +142,6 @@ mod tests {
         ResponderId::from_str("test-node:8080").unwrap()
     }
 
-    /// Create a test VerificationReport
-    fn make_test_verification_report() -> VerificationReport {
-        VerificationReport::default()
-    }
-
     /// Create a test Ed25519Pair with a deterministic seed
     fn make_test_keypair() -> Ed25519Pair {
         let mut rng = StdRng::seed_from_u64(42);
@@ -190,33 +155,19 @@ mod tests {
     }
 
     #[test]
-    fn test_attestation_evidence_from_verification_report() {
-        let report = make_test_verification_report();
-        let evidence = AttestationEvidence::from(report.clone());
-
-        match evidence {
-            AttestationEvidence::VerificationReport(r) => assert_eq!(r, report),
-        }
-    }
-
-    #[test]
     fn test_block_metadata_contents_new() {
         let block_id = make_test_block_id();
         let quorum_set = make_test_quorum_set();
-        let report = make_test_verification_report();
-        let evidence = AttestationEvidence::from(report);
         let responder_id = make_test_responder_id();
 
         let contents = BlockMetadataContents::new(
             block_id.clone(),
             quorum_set.clone(),
-            evidence.clone(),
             responder_id.clone(),
         );
 
         assert_eq!(contents.block_id(), &block_id);
         assert_eq!(contents.quorum_set(), &quorum_set);
-        assert_eq!(contents.attestation_evidence(), &evidence);
         assert_eq!(contents.responder_id(), &responder_id);
     }
 
@@ -224,21 +175,17 @@ mod tests {
     fn test_block_metadata_contents_getters() {
         let block_id = make_test_block_id();
         let quorum_set = make_test_quorum_set();
-        let report = make_test_verification_report();
-        let evidence = AttestationEvidence::from(report);
         let responder_id = make_test_responder_id();
 
         let contents = BlockMetadataContents::new(
             block_id.clone(),
             quorum_set.clone(),
-            evidence.clone(),
             responder_id.clone(),
         );
 
         // Test all getter methods
         assert_eq!(*contents.block_id(), block_id);
         assert_eq!(*contents.quorum_set(), quorum_set);
-        assert_eq!(*contents.attestation_evidence(), evidence);
         assert_eq!(contents.responder_id().to_string(), "test-node:8080");
     }
 
@@ -246,14 +193,11 @@ mod tests {
     fn test_block_metadata_new() {
         let block_id = make_test_block_id();
         let quorum_set = make_test_quorum_set();
-        let report = make_test_verification_report();
-        let evidence = AttestationEvidence::from(report);
         let responder_id = make_test_responder_id();
 
         let contents = BlockMetadataContents::new(
             block_id,
             quorum_set,
-            evidence,
             responder_id,
         );
 
@@ -272,14 +216,11 @@ mod tests {
     fn test_block_metadata_from_contents_and_keypair() {
         let block_id = make_test_block_id();
         let quorum_set = make_test_quorum_set();
-        let report = make_test_verification_report();
-        let evidence = AttestationEvidence::from(report);
         let responder_id = make_test_responder_id();
 
         let contents = BlockMetadataContents::new(
             block_id,
             quorum_set,
-            evidence,
             responder_id,
         );
 
@@ -295,14 +236,11 @@ mod tests {
     fn test_block_metadata_verify_valid_signature() {
         let block_id = make_test_block_id();
         let quorum_set = make_test_quorum_set();
-        let report = make_test_verification_report();
-        let evidence = AttestationEvidence::from(report);
         let responder_id = make_test_responder_id();
 
         let contents = BlockMetadataContents::new(
             block_id,
             quorum_set,
-            evidence,
             responder_id,
         );
 
@@ -317,14 +255,11 @@ mod tests {
     fn test_block_metadata_verify_invalid_signature() {
         let block_id = make_test_block_id();
         let quorum_set = make_test_quorum_set();
-        let report = make_test_verification_report();
-        let evidence = AttestationEvidence::from(report);
         let responder_id = make_test_responder_id();
 
         let contents = BlockMetadataContents::new(
             block_id,
             quorum_set,
-            evidence,
             responder_id,
         );
 
@@ -345,21 +280,17 @@ mod tests {
     fn test_block_metadata_contents_equality() {
         let block_id = make_test_block_id();
         let quorum_set = make_test_quorum_set();
-        let report = make_test_verification_report();
-        let evidence = AttestationEvidence::from(report);
         let responder_id = make_test_responder_id();
 
         let contents1 = BlockMetadataContents::new(
             block_id.clone(),
             quorum_set.clone(),
-            evidence.clone(),
             responder_id.clone(),
         );
 
         let contents2 = BlockMetadataContents::new(
             block_id,
             quorum_set,
-            evidence,
             responder_id,
         );
 
@@ -370,14 +301,11 @@ mod tests {
     fn test_block_metadata_clone() {
         let block_id = make_test_block_id();
         let quorum_set = make_test_quorum_set();
-        let report = make_test_verification_report();
-        let evidence = AttestationEvidence::from(report);
         let responder_id = make_test_responder_id();
 
         let contents = BlockMetadataContents::new(
             block_id,
             quorum_set,
-            evidence,
             responder_id,
         );
 
@@ -389,28 +317,14 @@ mod tests {
     }
 
     #[test]
-    fn test_attestation_evidence_equality() {
-        let report1 = make_test_verification_report();
-        let report2 = make_test_verification_report();
-
-        let evidence1 = AttestationEvidence::from(report1);
-        let evidence2 = AttestationEvidence::from(report2);
-
-        assert_eq!(evidence1, evidence2);
-    }
-
-    #[test]
     fn test_block_metadata_prost_encode_decode() {
         let block_id = make_test_block_id();
         let quorum_set = make_test_quorum_set();
-        let report = make_test_verification_report();
-        let evidence = AttestationEvidence::from(report);
         let responder_id = make_test_responder_id();
 
         let contents = BlockMetadataContents::new(
             block_id,
             quorum_set,
-            evidence,
             responder_id,
         );
 
