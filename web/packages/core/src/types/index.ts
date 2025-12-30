@@ -26,7 +26,7 @@ export type Timestamp = number
 
 export type TransactionType = 'send' | 'receive' | 'minting'
 export type TransactionStatus = 'pending' | 'confirmed' | 'failed'
-export type PrivacyLevel = 'plain' | 'hidden' | 'ring' // ring = ring signatures
+export type PrivacyLevel = 'standard' | 'private' // standard = ML-DSA, private = LION ring signatures
 
 export interface Transaction {
   id: TxHash

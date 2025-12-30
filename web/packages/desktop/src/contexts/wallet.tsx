@@ -22,7 +22,7 @@ interface WalletState {
 interface SendTxParams {
   recipient: Address
   amount: bigint
-  privacyLevel: 'plain' | 'hidden'
+  privacyLevel: 'standard' | 'private'
   memo?: string
 }
 
@@ -30,31 +30,11 @@ interface WalletContextValue extends WalletState {
   refreshBalance: () => Promise<void>
   refreshTransactions: () => Promise<void>
   sendTransaction: (params: SendTxParams) => Promise<{ success: boolean; txHash?: string; error?: string }>
-  estimateFee: (amount: bigint, privacyLevel: 'plain' | 'hidden') => Promise<bigint>
+  estimateFee: (amount: bigint, privacyLevel: 'standard' | 'private') => Promise<bigint>
   setAddress: (address: Address) => void
 }
 
 const WalletContext = createContext<WalletContextValue | null>(null)
-
-// Format BTH amount from smallest unit (like satoshis)
-export function formatBTH(amount: bigint): string {
-  const whole = amount / BigInt(1_000_000)
-  const fraction = amount % BigInt(1_000_000)
-  const fractionStr = fraction.toString().padStart(6, '0').replace(/0+$/, '')
-  if (fractionStr) {
-    return `${whole.toLocaleString()}.${fractionStr}`
-  }
-  return whole.toLocaleString()
-}
-
-// Parse BTH string to smallest unit
-export function parseBTH(str: string): bigint {
-  const [whole, fraction = ''] = str.split('.')
-  const wholeAmount = BigInt(whole.replace(/,/g, '')) * BigInt(1_000_000)
-  const fractionPadded = fraction.padEnd(6, '0').slice(0, 6)
-  const fractionAmount = BigInt(fractionPadded)
-  return wholeAmount + fractionAmount
-}
 
 export function WalletProvider({ children }: { children: ReactNode }) {
   const { connectedNode } = useConnection()
@@ -129,12 +109,13 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     }
   }, [adapter, state.address])
 
-  const estimateFee = useCallback(async (_amount: bigint, privacyLevel: 'plain' | 'hidden'): Promise<bigint> => {
+  const estimateFee = useCallback(async (_amount: bigint, privacyLevel: 'standard' | 'private'): Promise<bigint> => {
     if (!adapter) return BigInt(0)
 
     // Estimate transaction size based on privacy level
-    // Amount is used for memo-adjusted fee calculation (TODO: implement)
-    const sizeBytes = privacyLevel === 'hidden' ? 2500 : 250
+    // Standard: ML-DSA signature (~3.4 KB per input)
+    // Private: LION ring signature (~17.5 KB per input)
+    const sizeBytes = privacyLevel === 'private' ? 22000 : 4000
     return adapter.estimateFee(sizeBytes)
   }, [adapter])
 

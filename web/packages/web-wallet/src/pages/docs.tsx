@@ -122,43 +122,54 @@ Stealth addresses are the foundation of Botho's privacy model. Here's how they w
 
 The result: Even if you publish your address publicly, no one watching the blockchain can determine how many payments you've received, when you received them, or how much they were for.
 
-### Ring Signatures
+### Ring Signatures (Private Transactions)
 
-When you spend funds, Botho uses **ring signatures** to hide which specific coins you're spending. Your transaction references multiple possible inputs (a "ring"), and the signature proves you own one of them without revealing which one.
+When you choose a **Private transaction**, Botho uses **LION ring signatures** to hide which specific coins you're spending. Your transaction references 7 possible inputs (a "ring"), and the signature proves you own one of them without revealing which one.
+
+LION (Lattice-based lInkable ring signatures fOr aNonymity) is a post-quantum ring signature scheme that provides both sender privacy AND quantum resistance.
 
 This breaks the transaction graph that would otherwise allow tracing funds through the blockchain. An observer sees that *someone* in the ring spent *some* coins, but cannot determine which participant or which specific coins.
 
+> **Note:** Standard transactions don't use ring signatures—the sender is visible but amounts remain hidden. Choose Private transactions when you need sender anonymity.
+
 ### Confidential Amounts
 
-Transaction amounts in Botho are hidden using **Pedersen commitments**. These cryptographic constructs allow the network to verify that transactions balance (inputs equal outputs plus fees) without revealing the actual amounts.
+In **Standard** and **Private** transactions, amounts are hidden using **Pedersen commitments** with **Bulletproofs** range proofs. These cryptographic constructs allow the network to verify that transactions balance (inputs equal outputs plus fees) without revealing the actual amounts.
 
 Validators can confirm:
 - No new money is created from thin air
 - The sender has sufficient funds
 - The fee is at least the minimum required
+- All amounts are positive (via Bulletproofs)
 
 But they cannot determine:
 - How much is being transferred
 - The sender's total balance
 - The recipient's total balance
 
+> **Note:** Minting transactions (block rewards) have public amounts for supply auditability, but recipients are still hidden via stealth addresses.
+
 ### Post-Quantum Cryptography
 
-Quantum computers pose a future threat to the cryptographic algorithms that secure most cryptocurrencies today. Botho offers **optional hybrid post-quantum transactions** that combine classical cryptography with quantum-resistant algorithms.
+Quantum computers pose a future threat to the cryptographic algorithms that secure most cryptocurrencies today. Botho is designed from the ground up with **pure post-quantum security**—all transactions use quantum-resistant algorithms by default.
 
-**Supported Algorithms:**
+**Algorithms Used:**
 
-- **ML-KEM-768** (formerly Kyber) - A lattice-based key encapsulation mechanism for secure key exchange
-- **ML-DSA-65** (formerly Dilithium) - A lattice-based digital signature algorithm
+- **ML-KEM-768** (FIPS 203) - Post-quantum key encapsulation for stealth addresses (all transactions)
+- **ML-DSA-65** (FIPS 204) - Post-quantum signatures for Standard and Minting transactions
+- **LION** - Lattice-based ring signatures for Private transactions (~128-bit PQ security)
 
-These algorithms were selected by NIST as standards after years of rigorous cryptanalysis. The "hybrid" approach means transactions are secured by both classical and post-quantum algorithms—an attacker would need to break both to compromise your funds.
+These algorithms were standardized by NIST after years of rigorous cryptanalysis.
 
-**When to Use PQ Mode:**
+**Transaction Types:**
 
-Post-quantum transactions are larger and take more time to verify. We recommend them for:
-- Long-term savings you won't touch for years
-- High-value transfers where the extra security is worth the cost
-- Users who believe quantum computers may arrive sooner than expected
+| Type | Recipient | Amount | Sender | Use Case |
+|------|-----------|--------|--------|----------|
+| Minting | Hidden | Public | Known | Block rewards |
+| Standard | Hidden | Hidden | Visible | Most transfers (~3-4 KB) |
+| Private | Hidden | Hidden | Hidden | Maximum privacy (~22 KB) |
+
+All transactions are quantum-safe from day one—no need to choose a "PQ mode."
 
 ### Privacy Best Practices
 
@@ -657,7 +668,7 @@ Botho uses libp2p for networking, which supports multiple discovery mechanisms:
 |-----------|-------|-------------|
 | Max inputs | 16 | Maximum inputs per transaction |
 | Max outputs | 16 | Maximum outputs per transaction |
-| Ring size | 11 | Number of decoys in ring signature |
+| Ring size | 7 | Number of members in LION ring signature |
 | Max tx size | 100 KB | Maximum serialized transaction size |
 
 **Fees:**
