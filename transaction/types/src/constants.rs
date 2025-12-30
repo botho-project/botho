@@ -34,11 +34,33 @@ pub const MAX_OUTPUTS: u64 = 16;
 /// multi-sig.
 pub const MAX_TOMBSTONE_BLOCKS: u64 = 20160;
 
-/// The Botho network will contain an initial supply of 250 million BTH.
-/// Note: With 2% annual inflation, supply will grow ~7.24x over 100 years.
-/// Using nanoBTH (1e9) as the smallest unit ensures no u64 overflow:
-/// 250M * 1e9 * 7.24 ≈ 1.81e18 < u64::MAX (1.84e19)
-pub const TOTAL_BTH: u64 = 250_000_000;
+// =============================================================================
+// BTH Tokenomics
+// =============================================================================
+//
+// The Botho network has NO pre-mine. Initial supply is 0 BTH.
+// All BTH is created through mining rewards.
+//
+// Phase 1 (Years 0-10): Halving schedule distributes ~100M BTH
+//   - Initial reward: ~50 BTH per block
+//   - 5 halvings every 2 years
+//
+// Phase 2 (Year 10+): 2% annual net inflation target
+//   - Difficulty adjusts to achieve target net inflation
+//   - Fee burns reduce effective inflation
+//
+// Overflow Safety:
+//   - Using nanoBTH (1e9) as smallest unit
+//   - 100M BTH at year 10 = 10^17 nanoBTH
+//   - u64::MAX / 10^17 = 184x max growth capacity
+//   - At 2% annual inflation: (1.02)^263 ≈ 184x is the limit
+//   - Safe for ~260 years after Phase 1 (~270 years from genesis)
+//
+// For detailed monetary policy, see: cluster-tax/src/monetary.rs
+
+/// Approximate BTH distributed during Phase 1 (10 years of halvings).
+/// This is NOT a hard cap - inflation continues in Phase 2.
+pub const PHASE1_BTH_DISTRIBUTION: u64 = 100_000_000;
 
 /// one microBTH = 1e3 nanoBTH
 pub const MICROBTH_TO_NANOBTH: u64 = 1_000;
@@ -108,9 +130,9 @@ mod tests {
     }
 
     #[test]
-    fn test_total_bth_supply() {
-        // Total BTH initial supply should be 250 million
-        assert_eq!(TOTAL_BTH, 250_000_000);
+    fn test_phase1_bth_distribution() {
+        // Phase 1 distributes approximately 100 million BTH
+        assert_eq!(PHASE1_BTH_DISTRIBUTION, 100_000_000);
     }
 
     #[test]
@@ -147,32 +169,49 @@ mod tests {
         // 1 BTH = 1e9 nanoBTH
         assert_eq!(BTH_TO_NANOBTH, 1_000_000_000u64);
 
-        // Total supply in nanoBTH should NOT overflow u64
-        let total_nanobth = TOTAL_BTH.checked_mul(BTH_TO_NANOBTH);
-        assert!(total_nanobth.is_some(), "Total supply in nanoBTH fits in u64");
-        assert_eq!(total_nanobth.unwrap(), 250_000_000_000_000_000u64); // 2.5e17
+        // Phase 1 distribution in nanoBTH should NOT overflow u64
+        let phase1_nanobth = PHASE1_BTH_DISTRIBUTION.checked_mul(BTH_TO_NANOBTH);
+        assert!(phase1_nanobth.is_some(), "Phase 1 distribution in nanoBTH fits in u64");
+        assert_eq!(phase1_nanobth.unwrap(), 100_000_000_000_000_000u64); // 10^17
 
-        // With 2% annual inflation over 100 years (~7.24x), still fits
+        // With 2% annual inflation over 100 years from year 10 (~7.24x), still fits
         // (1.02)^100 ≈ 7.244
-        let max_inflated_supply = (total_nanobth.unwrap() as f64 * 7.244) as u64;
+        let max_inflated_supply = (phase1_nanobth.unwrap() as f64 * 7.244) as u64;
         assert!(max_inflated_supply < u64::MAX, "100-year inflated supply fits in u64");
     }
 
     #[test]
     fn test_inflation_headroom() {
-        // Verify we have headroom for 2% annual inflation over 100+ years
-        let initial_supply_nanobth = TOTAL_BTH as u128 * BTH_TO_NANOBTH as u128;
+        // Verify we have headroom for 2% annual inflation over 250+ years
+        // Starting from 100M BTH at end of Phase 1
+        let phase1_supply_nanobth = PHASE1_BTH_DISTRIBUTION as u128 * BTH_TO_NANOBTH as u128;
 
         // (1.02)^100 ≈ 7.244
         let inflation_factor_100y = 7244u128; // scaled by 1000
-        let supply_100y = initial_supply_nanobth * inflation_factor_100y / 1000;
+        let supply_100y = phase1_supply_nanobth * inflation_factor_100y / 1000;
 
-        // (1.02)^150 ≈ 19.22
-        let inflation_factor_150y = 19220u128; // scaled by 1000
-        let supply_150y = initial_supply_nanobth * inflation_factor_150y / 1000;
+        // (1.02)^200 ≈ 52.5
+        let inflation_factor_200y = 52485u128; // scaled by 1000
+        let supply_200y = phase1_supply_nanobth * inflation_factor_200y / 1000;
+
+        // (1.02)^250 ≈ 144.2
+        let inflation_factor_250y = 144210u128; // scaled by 1000
+        let supply_250y = phase1_supply_nanobth * inflation_factor_250y / 1000;
 
         assert!(supply_100y < u64::MAX as u128, "100-year supply fits in u64");
-        assert!(supply_150y < u64::MAX as u128, "150-year supply fits in u64");
+        assert!(supply_200y < u64::MAX as u128, "200-year supply fits in u64");
+        assert!(supply_250y < u64::MAX as u128, "250-year supply fits in u64");
+
+        // Calculate the theoretical maximum years before overflow
+        // max_multiplier = u64::MAX / phase1_supply_nanobth
+        //                = 1.84e19 / 1e17 = 184
+        // (1.02)^x = 184 → x = ln(184) / ln(1.02) ≈ 263 years
+        //
+        // So we're safe for ~260 years after Phase 1 (year 10)
+        // That means safe until approximately year 270 from genesis
+        let max_safe_multiplier = u64::MAX as u128 / phase1_supply_nanobth;
+        assert!(max_safe_multiplier > 100, "At least 100x growth capacity (>230 years)");
+        assert!(max_safe_multiplier > 180, "At least 180x growth capacity (>260 years)");
     }
 
     #[test]

@@ -1,14 +1,16 @@
 # Privacy Features
 
-Botho provides strong transaction privacy through a combination of cryptographic techniques inherited from the CryptoNote protocol.
+Botho provides strong transaction privacy through a combination of cryptographic techniques inherited from the CryptoNote protocol, enhanced with post-quantum cryptography for future-proof security.
 
 ## Overview
 
 | Privacy Goal | Technique | Status |
 |--------------|-----------|--------|
 | Hide recipient | Stealth addresses (one-time keys) | Implemented |
-| Hide sender | Ring signatures | Planned |
+| Hide sender | Ring signatures (MLSAG) | Implemented |
 | Hide amounts | RingCT (confidential transactions) | Planned |
+| Secure communication | Encrypted memos (AES-256-CTR) | Implemented |
+| Quantum resistance | Hybrid classical + PQ (ML-KEM/ML-DSA) | Implemented |
 
 ## Stealth Addresses
 
@@ -87,25 +89,38 @@ Tags decay by ~5% per transaction hop:
 | Decay rate | 5% per hop | Tag decay per transaction |
 | Midpoint | 10M credits | Sigmoid inflection point |
 
-## Ring Signatures (Planned)
+## Ring Signatures
 
-Ring signatures will hide the true sender among a group of possible signers.
+Ring signatures hide the true sender among a group of possible signers using MLSAG (Multilayered Linkable Spontaneous Anonymous Group) signatures.
 
 ### How Ring Signatures Work
 
 1. **Decoy Selection**: When spending, the sender selects N-1 decoy outputs from the blockchain
 2. **Ring Construction**: Creates a signature that proves ownership of ONE of the N outputs, without revealing which
-3. **Verification**: Anyone can verify the signature is valid, but cannot determine the true signer
+3. **Ring Shuffling**: Decoys are randomly shuffled with the real input using cryptographically secure RNG
+4. **Verification**: Anyone can verify the signature is valid, but cannot determine the true signer
+
+### Technical Implementation
+
+Botho uses MLSAG signatures with domain-separated signing digests:
+
+```
+Ring = [decoy_1, decoy_2, ..., real_input, ..., decoy_n]  (shuffled)
+Signature = MLSAG.sign(ring, real_index, private_key)
+```
+
+The wallet's `create_private_transaction()` method handles:
+- Automatic decoy selection from the ledger
+- Ring construction with configurable size
+- Cryptographically secure shuffling
+- Domain-separated transaction signing
 
 ### Benefits
 
 - **Sender Unlinkability**: Observers cannot determine which input is being spent
 - **Plausible Deniability**: Any of the ring members could be the true sender
 - **No Coordination**: Decoys don't know they're being used
-
-### Current Status
-
-Currently uses plain Ed25519 signatures. Ring signature implementation is planned for a future release.
+- **Linkable**: Key images prevent double-spending without revealing the signer
 
 ## RingCT (Planned)
 
@@ -123,13 +138,97 @@ Ring Confidential Transactions will hide transaction amounts using Pedersen comm
 - **Verifiable**: Network can still verify no coins are created from nothing
 - **Compact**: Bulletproofs provide efficient range proofs
 
+## Encrypted Memos
+
+Botho provides an encrypted communication channel between sender and recipient, protecting memo content from blockchain observers.
+
+### How It Works
+
+Each transaction output includes a 66-byte encrypted payload:
+
+1. **Key Derivation**: Uses HKDF with Blake2b to derive an encryption key from the transaction's shared secret
+2. **Encryption**: AES-256-CTR with authenticated encryption protects the memo content
+3. **Decryption**: Only the recipient (with their view key) can decrypt the memo
+
+### Memo Format
+
+```
+| 2 bytes |   64 bytes   |
+|  type   |     data     |
+```
+
+Supported memo types include:
+- **Destination memos**: Authenticated destination information
+- **Sender memos**: Payment request IDs and sender identification
+- **Gift code memos**: For redeemable payment codes
+
+### Privacy Properties
+
+- Memo content is invisible to blockchain observers
+- Only the recipient can decrypt using their view private key
+- Sender identity can be optionally included (authenticated)
+
+## Post-Quantum Cryptography
+
+Botho implements hybrid classical + post-quantum cryptography to protect against future quantum computer attacks, including "harvest now, decrypt later" threats.
+
+### Why Post-Quantum?
+
+Large-scale quantum computers could break classical elliptic curve cryptography. Adversaries may be recording encrypted transactions today to decrypt them later. Botho's hybrid approach provides:
+
+- **Defense in depth**: Both classical AND post-quantum signatures must verify
+- **Fallback security**: If either cryptosystem is broken, the other still protects you
+- **Future-proof privacy**: Transactions remain private even against quantum adversaries
+
+### Algorithms Used
+
+| Component | Classical | Post-Quantum | Standard |
+|-----------|-----------|--------------|----------|
+| Key Exchange | ECDH (Ristretto) | ML-KEM-768 (Kyber) | NIST FIPS 203 |
+| Signatures | Schnorr (Ed25519) | ML-DSA-65 (Dilithium) | NIST FIPS 204 |
+
+### How It Works
+
+**Quantum-Safe Stealth Addresses:**
+
+1. Sender generates classical ephemeral key AND ML-KEM encapsulation
+2. Transaction output contains both the one-time key `P` and the ML-KEM ciphertext (1088 bytes)
+3. Recipient decapsulates using their ML-KEM private key to recover the shared secret
+4. Both key exchanges must succeed for the transaction to be recognized
+
+**Quantum-Safe Signatures:**
+
+1. Transaction inputs require BOTH classical Schnorr AND ML-DSA-65 signatures
+2. Validators verify both signatures independently
+3. Transaction is only valid if both signatures verify
+
+### Key Derivation
+
+All quantum-safe keys derive deterministically from the same BIP39 mnemonic:
+
+```
+mnemonic → SLIP-10 → classical keys (view, spend)
+                   → ML-KEM-768 keys (encapsulation)
+                   → ML-DSA-65 keys (signing)
+```
+
+### Transaction Sizes
+
+| Transaction Type | Classical | Quantum-Safe |
+|-----------------|-----------|--------------|
+| Output | ~100 bytes | ~1160 bytes |
+| Input (signature) | ~64 bytes | ~2520 bytes |
+
+The size increase is the cost of quantum resistance. As post-quantum algorithms mature, sizes may decrease.
+
 ## Privacy Best Practices
 
 ### For Users
 
 1. **Use fresh addresses**: Generate new subaddresses for each payment request
 2. **Allow time between transactions**: Spacing transactions makes timing analysis harder
-3. **Use consistent ring sizes**: When ring signatures are implemented, use the default ring size
+3. **Use consistent ring sizes**: Use the default ring size to blend in with other transactions
+4. **Enable quantum-safe mode**: Use quantum-safe transactions for long-term privacy protection
 
 ### Privacy Limitations
 
@@ -142,13 +241,17 @@ Ring Confidential Transactions will hide transaction amounts using Pedersen comm
 | Feature | Botho | Monero | Zcash |
 |---------|---------|--------|-------|
 | Stealth addresses | Yes | Yes | Shielded only |
-| Ring signatures | Planned | Yes | No |
+| Ring signatures | Yes (MLSAG) | Yes (CLSAG) | No |
 | Confidential amounts | Planned | Yes | Shielded only |
+| Encrypted memos | Yes | No | Shielded only |
+| Post-quantum crypto | Yes (hybrid) | No | No |
 | Privacy by default | Yes | Yes | No (opt-in) |
-| Proof of work | SHA-256 | RandomX | Equihash |
+| Consensus | SCP (Federated) | PoW (RandomX) | PoW (Equihash) |
 
 ## Technical References
 
 - [CryptoNote Whitepaper](https://cryptonote.org/whitepaper.pdf) - Original stealth address specification
-- [Ring Signatures Paper](https://web.getmonero.org/library/Zero-to-Monero-2-0-0.pdf) - Detailed ring signature construction
+- [Zero to Monero](https://web.getmonero.org/library/Zero-to-Monero-2-0-0.pdf) - Detailed ring signature construction
 - [Bulletproofs Paper](https://eprint.iacr.org/2017/1066.pdf) - Range proof system
+- [NIST FIPS 203](https://csrc.nist.gov/pubs/fips/203/final) - ML-KEM (Kyber) specification
+- [NIST FIPS 204](https://csrc.nist.gov/pubs/fips/204/final) - ML-DSA (Dilithium) specification

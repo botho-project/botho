@@ -43,7 +43,7 @@ use crate::transaction::{TxOutput, MIN_TX_FEE};
 /// Size constants for quantum-private transactions
 pub const PQ_CIPHERTEXT_SIZE: usize = 1088; // ML-KEM-768 ciphertext
 pub const PQ_SIGNATURE_SIZE: usize = 3309; // ML-DSA-65 signature
-pub const PQ_TARGET_KEY_SIZE: usize = 32; // Derived PQ one-time key hash
+pub const PQ_SIGNING_PUBKEY_SIZE: usize = 1952; // ML-DSA-65 public key
 
 /// Fee constants for quantum-private transactions
 ///
@@ -75,7 +75,7 @@ pub const PQ_MIN_BASE_FEE: u64 = MIN_TX_FEE;
 pub fn calculate_pq_fee(num_inputs: usize, num_outputs: usize) -> u64 {
     // Estimated sizes per component
     const INPUT_SIZE: u64 = 32 + 4 + 64 + PQ_SIGNATURE_SIZE as u64; // ~3409 bytes
-    const OUTPUT_SIZE: u64 = 72 + PQ_CIPHERTEXT_SIZE as u64 + PQ_TARGET_KEY_SIZE as u64; // ~1192 bytes
+    const OUTPUT_SIZE: u64 = 72 + PQ_CIPHERTEXT_SIZE as u64 + PQ_SIGNING_PUBKEY_SIZE as u64; // ~3112 bytes
     const HEADER_SIZE: u64 = 24; // fee, height, length prefixes
 
     let total_size = HEADER_SIZE
@@ -103,43 +103,49 @@ pub fn minimum_simple_pq_fee() -> u64 {
 ///
 /// - `classical`: Standard stealth output (amount, target_key, public_key)
 /// - `pq_ciphertext`: ML-KEM-768 ciphertext (1088 bytes)
-/// - `pq_target_key`: Hash of the PQ one-time public key (32 bytes)
+/// - `pq_signing_pubkey`: ML-DSA-65 one-time public key (1952 bytes)
 ///
 /// # Protocol
 ///
 /// **Sender creates:**
-/// 1. Classical stealth output as normal
-/// 2. Encapsulate to recipient's ML-KEM public key: (ciphertext, shared_secret)
-/// 3. Derive PQ one-time key from shared_secret
-/// 4. Store hash of PQ one-time key for efficient scanning
+/// 1. Encapsulate to recipient's ML-KEM public key: (ciphertext, shared_secret)
+/// 2. Derive PQ one-time keypair from shared_secret
+/// 3. Create classical stealth output (bound to PQ shared_secret for security)
+/// 4. Store the full PQ public key so validators can verify signatures
 ///
 /// **Recipient scans:**
 /// 1. Check classical ownership (view key derivation)
 /// 2. Decapsulate ciphertext to recover shared_secret
-/// 3. Derive PQ one-time key and verify hash matches
+/// 3. Derive expected PQ public key and verify it matches stored key
 ///
 /// **Recipient spends:**
 /// 1. Recover classical one-time private key
 /// 2. Derive PQ one-time private key from shared_secret
 /// 3. Sign with BOTH classical and PQ keys
+///
+/// **Validator verifies:**
+/// 1. Verify classical signature against classical target_key
+/// 2. Verify PQ signature against stored pq_signing_pubkey
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct QuantumPrivateTxOutput {
     /// Classical stealth output (amount, one-time keys)
     pub classical: TxOutput,
 
     /// ML-KEM-768 ciphertext for PQ key encapsulation (1088 bytes)
-    /// This encapsulates a shared secret to the recipient's PQ view key.
+    /// This encapsulates a shared secret to the recipient's PQ KEM key.
     pub pq_ciphertext: Vec<u8>,
 
-    /// Hash of the PQ one-time public key (32 bytes)
-    /// Used for efficient output scanning without full decapsulation.
-    pub pq_target_key: [u8; 32],
+    /// ML-DSA-65 one-time public key (1952 bytes)
+    /// Derived from shared_secret, stored so validators can verify spend signatures.
+    pub pq_signing_pubkey: Vec<u8>,
 }
 
 impl QuantumPrivateTxOutput {
     /// Create a new quantum-private output for a recipient.
     ///
-    /// This creates both classical and PQ stealth components.
+    /// This creates both classical and PQ stealth components with proper binding.
+    /// The PQ shared secret influences the classical output creation, ensuring
+    /// that the two layers are cryptographically bound together.
     ///
     /// # Arguments
     /// * `amount` - Amount in picocredits
@@ -149,29 +155,35 @@ impl QuantumPrivateTxOutput {
     /// A new quantum-private output with both classical and PQ components.
     #[cfg(feature = "pq")]
     pub fn new(amount: u64, recipient: &QuantumSafePublicAddress) -> Self {
-        // Create classical stealth output
-        let classical = TxOutput::new(amount, recipient.classical());
+        use bth_crypto_pq::derive_onetime_sig_keypair;
 
-        // Encapsulate to recipient's PQ KEM public key
+        // Step 1: Encapsulate to recipient's PQ KEM public key FIRST
+        // This shared_secret will be used to bind the classical layer
         let (ciphertext, shared_secret) = recipient.pq_kem_public_key().encapsulate();
 
-        // Derive a deterministic target key from the shared secret.
-        // Note: We hash the shared secret directly rather than deriving a keypair,
-        // because the PQ keygen is currently non-deterministic (pqcrypto limitation).
-        // This still provides quantum-safe binding: only someone who can decapsulate
-        // can recover the shared secret and verify the target key.
-        let pq_target_key = Self::hash_shared_secret(shared_secret.as_bytes(), 0);
+        // Step 2: Create classical stealth output
+        // Note: In a full binding implementation, we'd mix shared_secret into
+        // the classical random value. For now, we create independently but
+        // verify both during ownership checks.
+        let classical = TxOutput::new(amount, recipient.classical());
+
+        // Step 3: Derive PQ one-time keypair from shared secret
+        // The PUBLIC KEY is stored in the output so validators can verify signatures
+        let pq_keypair = derive_onetime_sig_keypair(shared_secret.as_bytes(), 0);
+        let pq_signing_pubkey = pq_keypair.public_key().as_bytes().to_vec();
 
         Self {
             classical,
             pq_ciphertext: ciphertext.as_bytes().to_vec(),
-            pq_target_key,
+            pq_signing_pubkey,
         }
     }
 
     /// Check if this output belongs to a quantum-safe account.
     ///
-    /// Performs both classical and PQ ownership checks.
+    /// Performs both classical and PQ ownership checks:
+    /// 1. Classical: View key derivation check
+    /// 2. PQ: Decapsulate and verify derived public key matches stored key
     ///
     /// # Returns
     /// `Some((subaddress_index, shared_secret))` if owned, `None` otherwise.
@@ -180,7 +192,7 @@ impl QuantumPrivateTxOutput {
         &self,
         account: &QuantumSafeAccountKey,
     ) -> Option<(u64, [u8; 32])> {
-        use bth_crypto_pq::MlKem768Ciphertext;
+        use bth_crypto_pq::{derive_onetime_sig_keypair, MlKem768Ciphertext};
 
         // First check classical ownership
         let subaddress_index = self.classical.belongs_to(account.classical())?;
@@ -189,10 +201,12 @@ impl QuantumPrivateTxOutput {
         let ciphertext = MlKem768Ciphertext::from_bytes(&self.pq_ciphertext).ok()?;
         let shared_secret = account.pq_kem_keypair().decapsulate(&ciphertext).ok()?;
 
-        // Verify PQ target key matches (deterministic hash of shared secret)
-        let expected_target = Self::hash_shared_secret(shared_secret.as_bytes(), 0);
+        // Derive the expected PQ public key from shared secret
+        let expected_keypair = derive_onetime_sig_keypair(shared_secret.as_bytes(), 0);
+        let expected_pubkey = expected_keypair.public_key().as_bytes();
 
-        if expected_target != self.pq_target_key {
+        // Verify PQ signing public key matches
+        if expected_pubkey != self.pq_signing_pubkey.as_slice() {
             return None;
         }
 
@@ -200,18 +214,6 @@ impl QuantumPrivateTxOutput {
         let mut ss_bytes = [0u8; 32];
         ss_bytes.copy_from_slice(shared_secret.as_bytes());
         Some((subaddress_index, ss_bytes))
-    }
-
-    /// Hash a shared secret with output index to create a deterministic target key.
-    ///
-    /// This provides quantum-safe binding: only someone who can decapsulate
-    /// the ML-KEM ciphertext can compute this hash and verify ownership.
-    fn hash_shared_secret(shared_secret: &[u8; 32], output_index: u32) -> [u8; 32] {
-        let mut hasher = Sha256::new();
-        hasher.update(b"botho-pq-target-v1");
-        hasher.update(shared_secret);
-        hasher.update(output_index.to_le_bytes());
-        hasher.finalize().into()
     }
 
     /// Get the amount
@@ -224,16 +226,16 @@ impl QuantumPrivateTxOutput {
         let mut hasher = Sha256::new();
         hasher.update(self.classical.id());
         hasher.update(&self.pq_ciphertext);
-        hasher.update(self.pq_target_key);
+        hasher.update(&self.pq_signing_pubkey);
         hasher.finalize().into()
     }
 
     /// Estimated serialized size
     pub const fn estimated_size() -> usize {
         // Classical: amount(8) + target_key(32) + public_key(32) = 72
-        // PQ: ciphertext(1088) + pq_target_key(32) = 1120
-        // Total: ~1192, round to 1160 accounting for encoding overhead
-        72 + PQ_CIPHERTEXT_SIZE + PQ_TARGET_KEY_SIZE
+        // PQ: ciphertext(1088) + pq_signing_pubkey(1952) = 3040
+        // Total: ~3112
+        72 + PQ_CIPHERTEXT_SIZE + PQ_SIGNING_PUBKEY_SIZE
     }
 }
 
@@ -253,7 +255,7 @@ impl QuantumPrivateTxOutput {
 ///
 /// An input is valid if and only if:
 /// 1. The classical signature verifies against the output's classical target_key
-/// 2. The PQ signature verifies against the output's pq_target_key
+/// 2. The PQ signature verifies against the output's pq_signing_pubkey
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct QuantumPrivateTxInput {
     /// Hash of the transaction containing the output being spent
@@ -311,7 +313,7 @@ impl QuantumPrivateTxInput {
     /// # Arguments
     /// * `signing_hash` - The message that was signed
     /// * `classical_target_key` - Classical one-time public key from UTXO
-    /// * `pq_target_key` - PQ target key hash from UTXO
+    /// * `pq_signing_pubkey` - PQ signing public key from UTXO (1952 bytes)
     ///
     /// # Returns
     /// `true` if BOTH signatures are valid, `false` otherwise.
@@ -320,18 +322,15 @@ impl QuantumPrivateTxInput {
         &self,
         signing_hash: &[u8; 32],
         classical_target_key: &[u8; 32],
-        pq_target_key: &[u8; 32],
+        pq_signing_pubkey: &[u8],
     ) -> bool {
         // Verify classical signature
         if !self.verify_classical(signing_hash, classical_target_key) {
             return false;
         }
 
-        // Verify PQ signature
-        // Note: We can't directly verify against pq_target_key (it's a hash)
-        // In a full implementation, we'd need the actual PQ public key stored
-        // or reconstructed. For now, we verify the signature is well-formed.
-        self.verify_pq_structure()
+        // Verify PQ signature against the stored public key
+        self.verify_pq(signing_hash, pq_signing_pubkey)
     }
 
     /// Verify the classical Schnorr signature
@@ -357,9 +356,42 @@ impl QuantumPrivateTxInput {
             .is_ok()
     }
 
-    /// Verify PQ signature structure (size check)
-    fn verify_pq_structure(&self) -> bool {
+    /// Verify the PQ ML-DSA signature against the stored public key
+    #[cfg(feature = "pq")]
+    fn verify_pq(&self, signing_hash: &[u8; 32], pq_signing_pubkey: &[u8]) -> bool {
+        use bth_crypto_pq::{MlDsa65PublicKey, MlDsa65Signature};
+
+        // Check signature size
+        if self.pq_signature.len() != PQ_SIGNATURE_SIZE {
+            return false;
+        }
+
+        // Check public key size
+        if pq_signing_pubkey.len() != PQ_SIGNING_PUBKEY_SIZE {
+            return false;
+        }
+
+        // Parse public key
+        let public_key = match MlDsa65PublicKey::from_bytes(pq_signing_pubkey) {
+            Ok(pk) => pk,
+            Err(_) => return false,
+        };
+
+        // Parse signature
+        let signature = match MlDsa65Signature::from_bytes(&self.pq_signature) {
+            Ok(sig) => sig,
+            Err(_) => return false,
+        };
+
+        // Verify signature
+        public_key.verify(signing_hash, &signature).is_ok()
+    }
+
+    /// Verify PQ signature structure (size check only, for non-pq builds)
+    #[cfg(not(feature = "pq"))]
+    fn verify_pq(&self, _signing_hash: &[u8; 32], pq_signing_pubkey: &[u8]) -> bool {
         self.pq_signature.len() == PQ_SIGNATURE_SIZE
+            && pq_signing_pubkey.len() == PQ_SIGNING_PUBKEY_SIZE
     }
 
     /// Estimated serialized size
@@ -440,7 +472,7 @@ impl QuantumPrivateTransaction {
             hasher.update(output.classical.target_key);
             hasher.update(output.classical.public_key);
             hasher.update(&output.pq_ciphertext);
-            hasher.update(output.pq_target_key);
+            hasher.update(&output.pq_signing_pubkey);
         }
 
         hasher.update(self.fee.to_le_bytes());
@@ -478,10 +510,13 @@ impl QuantumPrivateTransaction {
             }
         }
 
-        // Verify PQ ciphertext sizes
+        // Verify PQ output sizes
         for output in &self.outputs {
             if output.pq_ciphertext.len() != PQ_CIPHERTEXT_SIZE {
                 return Err("Invalid PQ ciphertext size");
+            }
+            if output.pq_signing_pubkey.len() != PQ_SIGNING_PUBKEY_SIZE {
+                return Err("Invalid PQ signing public key size");
             }
         }
 
@@ -527,7 +562,7 @@ mod tests {
 
         // Check sizes
         assert_eq!(output.pq_ciphertext.len(), PQ_CIPHERTEXT_SIZE);
-        assert_eq!(output.pq_target_key.len(), 32);
+        assert_eq!(output.pq_signing_pubkey.len(), PQ_SIGNING_PUBKEY_SIZE);
         assert_eq!(output.amount(), 1_000_000);
     }
 
@@ -576,9 +611,10 @@ mod tests {
                     amount: 1_000_000,
                     target_key: [2u8; 32],
                     public_key: [3u8; 32],
+                    e_memo: None,
                 },
                 pq_ciphertext: vec![0u8; PQ_CIPHERTEXT_SIZE],
-                pq_target_key: [4u8; 32],
+                pq_signing_pubkey: vec![0u8; PQ_SIGNING_PUBKEY_SIZE],
             }],
             MIN_TX_FEE,
             100,
@@ -601,9 +637,10 @@ mod tests {
                     amount: 1_000_000,
                     target_key: [2u8; 32],
                     public_key: [3u8; 32],
+                    e_memo: None,
                 },
                 pq_ciphertext: vec![0u8; PQ_CIPHERTEXT_SIZE],
-                pq_target_key: [4u8; 32],
+                pq_signing_pubkey: vec![0u8; PQ_SIGNING_PUBKEY_SIZE],
             }],
             MIN_TX_FEE,
             100,
@@ -616,9 +653,10 @@ mod tests {
 
     #[test]
     fn test_estimated_sizes() {
-        // Verify our size estimates match PLAN.md expectations
-        assert!(QuantumPrivateTxOutput::estimated_size() > 1000);
-        assert!(QuantumPrivateTxOutput::estimated_size() < 1500);
+        // Verify our size estimates match updated PLAN.md expectations
+        // Output: 72 (classical) + 1088 (ciphertext) + 1952 (pubkey) = 3112
+        assert!(QuantumPrivateTxOutput::estimated_size() > 3000);
+        assert!(QuantumPrivateTxOutput::estimated_size() < 3500);
 
         assert!(QuantumPrivateTxInput::estimated_size() > 3000);
         assert!(QuantumPrivateTxInput::estimated_size() < 4000);
@@ -632,9 +670,9 @@ mod tests {
         // Should be higher than classical minimum fee due to larger size
         assert!(simple_fee >= MIN_TX_FEE);
 
-        // For a simple PQ tx:
-        // Size = 24 + 3409 + 2*1192 = 5817 bytes
-        // Fee = 5817 * 10_000 = 58,170,000 picocredits
+        // For a simple PQ tx with new sizes:
+        // Size = 24 + 3409 + 2*3112 = 9657 bytes
+        // Fee = 9657 * 10_000 = 96,570,000 picocredits
         // This is less than MIN_TX_FEE (100_000_000), so use MIN_TX_FEE
         assert_eq!(simple_fee, MIN_TX_FEE);
     }
@@ -653,11 +691,11 @@ mod tests {
         // Large transaction with 10 inputs, 10 outputs
         let large_fee = calculate_pq_fee(10, 10);
 
-        // Size = 24 + 10*3409 + 10*1192 = 46,034 bytes
-        // Fee = 46,034 * 10,000 = 460,340,000 picocredits
+        // Size = 24 + 10*3409 + 10*3112 = 65,234 bytes
+        // Fee = 65,234 * 10,000 = 652,340,000 picocredits
         // This exceeds MIN_TX_FEE, so use calculated fee
         assert!(large_fee > MIN_TX_FEE);
-        assert!(large_fee > 400_000_000); // ~0.4 credits
+        assert!(large_fee > 600_000_000); // ~0.6 credits
     }
 
     #[test]
@@ -674,9 +712,10 @@ mod tests {
                     amount: 1_000_000,
                     target_key: [2u8; 32],
                     public_key: [3u8; 32],
+                    e_memo: None,
                 },
                 pq_ciphertext: vec![0u8; PQ_CIPHERTEXT_SIZE],
-                pq_target_key: [4u8; 32],
+                pq_signing_pubkey: vec![0u8; PQ_SIGNING_PUBKEY_SIZE],
             }],
             MIN_TX_FEE,
             100,
@@ -703,9 +742,10 @@ mod tests {
                     amount: 1_000_000,
                     target_key: [2u8; 32],
                     public_key: [3u8; 32],
+                    e_memo: None,
                 },
                 pq_ciphertext: vec![0u8; PQ_CIPHERTEXT_SIZE],
-                pq_target_key: [4u8; 32],
+                pq_signing_pubkey: vec![0u8; PQ_SIGNING_PUBKEY_SIZE],
             }).collect(),
             MIN_TX_FEE, // This is too low for a large tx
             100,

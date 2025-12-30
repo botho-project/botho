@@ -5,6 +5,7 @@
 //! This library provides the core functionality for the Botho node,
 //! including blockchain types, networking, consensus, and wallet support.
 
+pub mod address;
 pub mod block;
 pub mod config;
 pub mod consensus;

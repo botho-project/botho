@@ -6,26 +6,56 @@ use bth_crypto_keys::RistrettoSignature;
 use rand::rngs::OsRng;
 use rand::seq::SliceRandom;
 
+#[cfg(feature = "pq")]
+use bth_account_keys::{QuantumSafeAccountKey, QuantumSafePublicAddress};
+
 use crate::ledger::Ledger;
 use crate::transaction::{
     RingMember, RingTxInput, Transaction, TxInputs, TxOutput, Utxo, UtxoId, MIN_RING_SIZE,
 };
 
+#[cfg(feature = "pq")]
+use crate::transaction_pq::{
+    QuantumPrivateTransaction, QuantumPrivateTxInput, QuantumPrivateTxOutput,
+};
+
 /// Wallet manages a single account derived from a BIP39 mnemonic
 pub struct Wallet {
     account_key: AccountKey,
+    #[cfg(feature = "pq")]
+    pq_account_key: QuantumSafeAccountKey,
+    mnemonic_phrase: String,
 }
 
 impl Wallet {
     /// Create a wallet from a mnemonic phrase
+    ///
+    /// All keys (classical and post-quantum) derive from the same mnemonic,
+    /// ensuring a single unified identity. The classical keys use SLIP-10
+    /// derivation (BIP39 compliant), while PQ keys use HKDF from the mnemonic.
     pub fn from_mnemonic(mnemonic_phrase: &str) -> Result<Self> {
         let mnemonic = Mnemonic::from_phrase(mnemonic_phrase, Language::English)
             .map_err(|e| anyhow::anyhow!("Invalid mnemonic: {}", e))?;
 
+        // Derive classical keys via SLIP-10 (standard BIP39 path)
         let slip10_key = mnemonic.derive_slip10_key(0);
         let account_key = AccountKey::from(slip10_key);
 
-        Ok(Self { account_key })
+        // Derive PQ keys and create unified quantum-safe account
+        // IMPORTANT: Uses the SAME classical keys to maintain single identity
+        #[cfg(feature = "pq")]
+        let pq_account_key = {
+            use bth_crypto_pq::derive_pq_keys;
+            let pq_keys = derive_pq_keys(mnemonic_phrase.as_bytes());
+            QuantumSafeAccountKey::from_parts(account_key.clone(), pq_keys)
+        };
+
+        Ok(Self {
+            account_key,
+            #[cfg(feature = "pq")]
+            pq_account_key,
+            mnemonic_phrase: mnemonic_phrase.to_string(),
+        })
     }
 
     /// Get the default public address for receiving funds
@@ -47,6 +77,24 @@ impl Wallet {
             hex::encode(addr.view_public_key().to_bytes()),
             hex::encode(addr.spend_public_key().to_bytes())
         )
+    }
+
+    /// Get the quantum-safe public address for receiving funds
+    #[cfg(feature = "pq")]
+    pub fn quantum_safe_address(&self) -> QuantumSafePublicAddress {
+        self.pq_account_key.default_subaddress()
+    }
+
+    /// Format the quantum-safe public address as a string for display
+    #[cfg(feature = "pq")]
+    pub fn quantum_safe_address_string(&self) -> String {
+        self.quantum_safe_address().to_address_string()
+    }
+
+    /// Get the quantum-safe account key
+    #[cfg(feature = "pq")]
+    pub fn pq_account_key(&self) -> &QuantumSafeAccountKey {
+        &self.pq_account_key
     }
 
     /// Sign all inputs of a transaction using stealth address keys
@@ -256,6 +304,124 @@ impl Wallet {
 
         // Create the final transaction with ring inputs
         let tx = Transaction::new_private(ring_inputs, outputs, fee, current_height);
+
+        Ok(tx)
+    }
+
+    /// Create a quantum-private transaction for post-quantum security.
+    ///
+    /// Quantum-private transactions use hybrid classical + post-quantum cryptography:
+    /// - Outputs: Classical stealth keys + ML-KEM-768 encapsulation
+    /// - Inputs: Schnorr signature + ML-DSA-65 (Dilithium) signature
+    ///
+    /// This provides protection against "harvest now, decrypt later" attacks where
+    /// adversaries archive blockchain data for future quantum cryptanalysis.
+    ///
+    /// # Arguments
+    /// * `utxos_to_spend` - The wallet's UTXOs to spend
+    /// * `recipient` - Recipient's quantum-safe public address
+    /// * `amount` - Amount to send
+    /// * `fee` - Transaction fee
+    /// * `current_height` - Current blockchain height
+    ///
+    /// # Returns
+    /// A fully signed quantum-private transaction ready for broadcast
+    #[cfg(feature = "pq")]
+    pub fn create_quantum_private_transaction(
+        &self,
+        utxos_to_spend: &[Utxo],
+        recipient: &QuantumSafePublicAddress,
+        amount: u64,
+        fee: u64,
+        current_height: u64,
+    ) -> Result<QuantumPrivateTransaction> {
+
+        if utxos_to_spend.is_empty() {
+            return Err(anyhow::anyhow!("No UTXOs to spend"));
+        }
+
+        // Calculate total input value
+        let total_input: u64 = utxos_to_spend.iter().map(|u| u.output.amount).sum();
+        let change = total_input.checked_sub(amount + fee)
+            .ok_or_else(|| anyhow::anyhow!("Insufficient funds for amount + fee"))?;
+
+        // Build outputs
+        let mut outputs = Vec::new();
+
+        // Output to recipient
+        outputs.push(QuantumPrivateTxOutput::new(amount, recipient));
+
+        // Change output (if any)
+        if change > 0 {
+            let change_addr = self.quantum_safe_address();
+            outputs.push(QuantumPrivateTxOutput::new(change, &change_addr));
+        }
+
+        // Build a preliminary transaction to get signing hash
+        let preliminary_tx = QuantumPrivateTransaction::new(
+            Vec::new(),
+            outputs.clone(),
+            fee,
+            current_height,
+        );
+        let signing_hash = preliminary_tx.signing_hash();
+
+        // Build and sign inputs
+        let mut inputs = Vec::new();
+
+        for utxo in utxos_to_spend {
+            // Verify ownership and recover classical one-time private key
+            let subaddress_index = utxo.output.belongs_to(&self.account_key).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "UTXO does not belong to this wallet: {}",
+                    hex::encode(&utxo.id.tx_hash[0..8])
+                )
+            })?;
+
+            let onetime_private = utxo
+                .output
+                .recover_spend_key(&self.account_key, subaddress_index)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Failed to recover spend key for UTXO {}",
+                        hex::encode(&utxo.id.tx_hash[0..8])
+                    )
+                })?;
+
+            // For PQ inputs, we need to derive the PQ one-time keypair.
+            // Since existing UTXOs don't have PQ ciphertexts yet, we use a
+            // deterministic derivation from the output's key material.
+            // This provides forward secrecy: new quantum-private outputs will
+            // have proper ML-KEM encapsulation.
+            //
+            // We compute: shared_secret = SHA256("botho-pq-bridge" || target_key || public_key || view_private)
+            // This binds the PQ signature to the specific output and the wallet's view key.
+            let pq_shared_secret = {
+                use sha2::{Sha256, Digest};
+                let view_private_bytes = self.account_key.view_private_key().to_bytes();
+                let mut hasher = Sha256::new();
+                hasher.update(b"botho-pq-bridge-v1");
+                hasher.update(&utxo.output.target_key);
+                hasher.update(&utxo.output.public_key);
+                hasher.update(&view_private_bytes);
+                let hash: [u8; 32] = hasher.finalize().into();
+                hash
+            };
+
+            // Create quantum-private input with dual signatures
+            let input = QuantumPrivateTxInput::new(
+                utxo.id.tx_hash,
+                utxo.id.output_index,
+                &signing_hash,
+                &onetime_private,
+                &pq_shared_secret,
+            );
+
+            inputs.push(input);
+        }
+
+        // Create the final transaction
+        let tx = QuantumPrivateTransaction::new(inputs, outputs, fee, current_height);
 
         Ok(tx)
     }

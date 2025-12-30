@@ -48,7 +48,8 @@ pub struct NetworkConfig {
     pub cors_origins: Vec<String>,
 
     /// Bootstrap peers for initial discovery (multiaddr format)
-    #[serde(default)]
+    /// Defaults to official seed nodes if not specified.
+    #[serde(default = "default_bootstrap_peers")]
     pub bootstrap_peers: Vec<String>,
 
     /// Quorum configuration
@@ -69,6 +70,15 @@ fn default_gossip_port() -> u16 {
 
 fn default_rpc_port() -> u16 {
     7101
+}
+
+/// Default bootstrap peer for network discovery.
+/// Format: /dns4/<hostname>/tcp/7100/p2p/<peer_id>
+fn default_bootstrap_peers() -> Vec<String> {
+    vec![
+        // seed.botho.io (98.95.2.200)
+        "/dns4/seed.botho.io/tcp/7100/p2p/12D3KooWBrjTYjNrEwi9MM3AKFenmymyWVXtXbQiSx7eDnDwv9qQ".to_string(),
+    ]
 }
 
 /// Quorum configuration mode
@@ -202,7 +212,7 @@ impl Default for NetworkConfig {
             gossip_port: default_gossip_port(),
             rpc_port: default_rpc_port(),
             cors_origins: default_cors_origins(),
-            bootstrap_peers: Vec::new(),
+            bootstrap_peers: default_bootstrap_peers(),
             quorum: QuorumConfig::default(),
         }
     }

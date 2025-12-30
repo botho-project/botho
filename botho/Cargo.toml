@@ -6,7 +6,7 @@ description = "A privacy-preserving mined cryptocurrency"
 license = "GPL-3.0"
 
 [features]
-default = []
+default = ["pq"]
 pq = ["bth-account-keys/pq", "bth-crypto-pq"]
 
 [lib]
@@ -38,6 +38,9 @@ bth-crypto-ring-signature = { path = "../crypto/ring-signature" }
 bth-core = { path = "../core" }
 bth-util-from-random = { path = "../util/from-random" }
 rand_core = "0.6"
+aes = { workspace = true }
+ctr = { workspace = true }
+hkdf = { workspace = true }
 
 # Monetary Policy
 bth-cluster-tax = { path = "../cluster-tax" }
@@ -54,6 +57,7 @@ bip39 = { package = "tiny-bip39", version = "1" }
 rand = "0.8"
 hex = "0.4"
 sha2 = "0.10"
+bs58 = "0.5"
 
 # System
 ctrlc = "3"

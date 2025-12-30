@@ -1,26 +1,62 @@
-//! Two-phase monetary policy for Botho.
+//! Two-phase monetary policy for Botho (BTH).
 //!
-//! ## Design Goals
+//! # BTH Tokenomics Summary
+//!
+//! - **Initial supply**: 0 BTH (100% mined, no pre-mine)
+//! - **Unit**: 1 BTH = 10^9 nanoBTH (9 decimal places)
+//! - **Phase 1 (Years 0-10)**: Halving schedule distributes ~100M BTH
+//! - **Phase 2 (Year 10+)**: 2% target annual inflation
+//! - **Fee burns**: All cluster taxes are burned, reducing effective inflation
+//!
+//! # Overflow Safety
+//!
+//! With nanoBTH (10^9) as the smallest unit:
+//! - 100M BTH at year 10 = 10^17 nanoBTH
+//! - u64::MAX ≈ 1.84 × 10^19, giving ~184x growth capacity
+//! - At 2% annual inflation: (1.02)^263 ≈ 184x is the limit
+//! - Safe for ~260 years after Phase 1 (~270 years from genesis)
+//!
+//! # Design Goals
 //!
 //! 1. **Early adoption incentives**: Halving schedule for ~10 years rewards early adopters
 //! 2. **Long-term stability**: 2% net inflation after halving period
 //! 3. **Fee burn integration**: Progressive cluster taxes are always burned
 //! 4. **Predictable mining**: Fixed reward per block, variable block rate
 //!
-//! ## Two-Phase Model
+//! # Two-Phase Model
 //!
-//! ### Phase 1: Adoption (Years 0-10)
-//! - Block reward follows halving schedule (e.g., halves every 2 years)
-//! - Difficulty adjusts traditionally to maintain target block time
+//! ## Phase 1: Adoption (Years 0-10)
+//!
+//! - Block reward follows halving schedule (halves every 2 years, 5 halvings total)
+//! - Initial reward: ~50 BTH per block
+//! - Difficulty adjusts traditionally to maintain target block time (1 minute)
 //! - Fee burns create bonus deflation (not compensated)
 //!
-//! ### Phase 2: Stability (Years 10+)
+//! Emission schedule:
+//! ```text
+//! Halving 0 (years 0-2):  ~50 BTH/block  → ~26.3M BTH
+//! Halving 1 (years 2-4):  ~25 BTH/block  → ~13.1M BTH
+//! Halving 2 (years 4-6):  ~12.5 BTH/block → ~6.6M BTH
+//! Halving 3 (years 6-8):   ~6.25 BTH/block → ~3.3M BTH
+//! Halving 4 (years 8-10):  ~3.125 BTH/block → ~1.6M BTH
+//! ─────────────────────────────────────────────────────
+//! Total Phase 1:                          ~100M BTH
+//! ```
+//!
+//! ## Phase 2: Stability (Years 10+)
+//!
 //! - Block reward is fixed (set at transition based on supply)
 //! - Difficulty adjusts to achieve target NET inflation (2%)
-//! - Block time floats within bounds (e.g., 8-12 minutes)
+//! - Block time floats within bounds (45-90 seconds)
 //! - Higher fees → faster blocks → more gross emission → stable net
 //!
-//! ## Key Insight
+//! Example at year 10 with 100M BTH supply:
+//! - 2% target = 2M BTH/year net emission
+//! - With 0.5% fee burn = 0.5M BTH/year burned
+//! - Gross needed = 2.5M BTH/year
+//! - At ~525k blocks/year = ~4.76 BTH/block tail reward
+//!
+//! # Key Insight
 //!
 //! Instead of adjusting reward per block (unpredictable for miners),
 //! we adjust how many blocks are produced (via difficulty):
@@ -35,11 +71,15 @@
 //! ```
 
 /// Monetary policy configuration.
+///
+/// All monetary values are denominated in nanoBTH (10^-9 BTH).
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MonetaryPolicy {
     // === Phase 1: Halving ===
-    /// Initial block reward (smallest unit, e.g., picoMOB).
+    /// Initial block reward in nanoBTH.
+    ///
+    /// Default: 50 BTH = 50_000_000_000 nanoBTH
     pub initial_reward: u64,
 
     /// Number of blocks between halvings.
@@ -83,11 +123,14 @@ impl Default for MonetaryPolicy {
     fn default() -> Self {
         Self {
             // Phase 1: ~10 years of halvings
-            initial_reward: 50_000_000_000, // 50 tokens in smallest unit
-            halving_interval: 1_051_200,     // ~2 years at 1 min blocks
+            // Initial reward: 50 BTH = 50_000_000_000 nanoBTH
+            // Over 5 halvings: 50 + 25 + 12.5 + 6.25 + 3.125 ≈ 96.9 BTH/block-equivalent
+            // With ~1.05M blocks/halving → ~100M BTH distributed in Phase 1
+            initial_reward: 50_000_000_000,
+            halving_interval: 1_051_200,     // ~2 years at 1 min blocks (525,600 blocks/year)
             halving_count: 5,                // 5 halvings = 10 years
 
-            // Phase 2: 2% target
+            // Phase 2: 2% net inflation target
             tail_inflation_bps: 200,
 
             // Block time: 1 minute target, 45s-90s bounds
@@ -95,11 +138,11 @@ impl Default for MonetaryPolicy {
             min_block_time_secs: 45,
             max_block_time_secs: 90,
 
-            // Difficulty: adjust every 1440 blocks (~1 day at 1 min)
+            // Difficulty: adjust every 1440 blocks (~1 day at 1 min blocks)
             difficulty_adjustment_interval: 1440,
-            max_difficulty_adjustment_bps: 2500, // 25% max change
+            max_difficulty_adjustment_bps: 2500, // 25% max change per epoch
 
-            // Assume ~0.5% of supply burned in fees annually
+            // Expected ~0.5% of supply burned in cluster fees annually
             expected_fee_burn_rate_bps: 50,
         }
     }
@@ -1145,5 +1188,136 @@ mod tests {
             controller.process_block(i);
         }
         assert_eq!(controller.current_halving(), None);
+    }
+
+    // === BTH Tokenomics Tests ===
+
+    /// Verify the documented BTH emission schedule produces ~100M BTH in Phase 1.
+    #[test]
+    fn test_bth_phase1_total_emission() {
+        // Use default policy (50 BTH initial reward, 5 halvings, 1,051,200 blocks/halving)
+        let policy = MonetaryPolicy::default();
+
+        // Verify halving parameters
+        assert_eq!(policy.halving_count, 5, "5 halvings expected");
+        assert_eq!(policy.halving_interval, 1_051_200, "~2 years per halving at 1 min blocks");
+
+        // Calculate total emission in Phase 1
+        // R + R/2 + R/4 + R/8 + R/16 per halving_interval blocks
+        let r = policy.initial_reward as u128;
+        let h = policy.halving_interval as u128;
+
+        let total_phase1_nanobth =
+            h * r +           // Halving 0: 50 BTH/block
+            h * (r / 2) +     // Halving 1: 25 BTH/block
+            h * (r / 4) +     // Halving 2: 12.5 BTH/block
+            h * (r / 8) +     // Halving 3: 6.25 BTH/block
+            h * (r / 16);     // Halving 4: 3.125 BTH/block
+
+        // Convert to BTH (from nanoBTH)
+        let bth_to_nanobth = 1_000_000_000u128;
+        let total_phase1_bth = total_phase1_nanobth / bth_to_nanobth;
+
+        // Should be approximately 100M BTH (within 5% tolerance)
+        let expected = 100_000_000u128;
+        let tolerance = expected / 20; // 5%
+        assert!(
+            (total_phase1_bth as i128 - expected as i128).unsigned_abs() < tolerance as u128,
+            "Phase 1 emission {} BTH should be ~{} BTH (± {})",
+            total_phase1_bth,
+            expected,
+            tolerance
+        );
+    }
+
+    /// Verify Phase 2 tail reward calculation with BTH values.
+    #[test]
+    fn test_bth_phase2_tail_reward() {
+        let policy = MonetaryPolicy::default();
+
+        // At end of Phase 1, supply is ~100M BTH = 10^17 nanoBTH
+        let supply_at_phase2 = 100_000_000u64 * 1_000_000_000u64; // 100M BTH in nanoBTH
+
+        let tail_reward = policy.calculate_tail_reward(supply_at_phase2);
+
+        // Expected calculation:
+        // Target NET inflation: 2% of 100M = 2M BTH/year
+        // Expected fee burns: 0.5% of 100M = 0.5M BTH/year
+        // Gross needed: 2.5M BTH/year
+        // Blocks per year at 1 min: 525,600
+        // Tail reward = 2.5M BTH / 525,600 ≈ 4.76 BTH/block
+        let expected_bth_per_block = 4.76;
+        let actual_bth_per_block = tail_reward as f64 / 1_000_000_000.0;
+
+        assert!(
+            (actual_bth_per_block - expected_bth_per_block).abs() < 0.5,
+            "Tail reward {} BTH/block should be ~{} BTH/block",
+            actual_bth_per_block,
+            expected_bth_per_block
+        );
+    }
+
+    /// Verify u64 overflow safety for 260+ years.
+    #[test]
+    fn test_bth_overflow_safety() {
+        // Phase 1 supply: 100M BTH = 10^17 nanoBTH
+        let phase1_supply_nanobth = 100_000_000u128 * 1_000_000_000u128;
+
+        // Maximum multiplier before u64 overflow
+        let max_multiplier = u64::MAX as u128 / phase1_supply_nanobth;
+
+        // Should have at least 184x growth capacity
+        assert!(
+            max_multiplier >= 184,
+            "Should support 184x growth (got {}x)",
+            max_multiplier
+        );
+
+        // Verify 250 years of 2% inflation fits
+        // (1.02)^250 ≈ 144.2
+        let supply_250y = phase1_supply_nanobth * 144_210 / 1_000;
+        assert!(
+            supply_250y < u64::MAX as u128,
+            "250-year supply {} should fit in u64 (max {})",
+            supply_250y,
+            u64::MAX
+        );
+    }
+
+    /// Simulate full Phase 1 with default policy and verify supply.
+    #[test]
+    fn test_bth_full_phase1_simulation() {
+        let policy = MonetaryPolicy {
+            // Use smaller intervals for faster test
+            halving_interval: 100,
+            halving_count: 5,
+            initial_reward: 50_000_000_000, // 50 BTH in nanoBTH
+            difficulty_adjustment_interval: 1000, // Avoid adjustments during test
+            ..Default::default()
+        };
+
+        let mut controller = DifficultyController::new(policy.clone(), 0, 1000, 0);
+
+        // Mine through all of Phase 1
+        let total_blocks = policy.halving_interval * policy.halving_count as u64;
+        for block in 1..=total_blocks {
+            controller.process_block(block);
+        }
+
+        // Verify we're now in tail emission
+        assert_eq!(controller.phase(), "Tail Emission");
+        assert!(controller.state.tail_reward.is_some());
+
+        // Verify supply was created (exact calculation for test params)
+        // R × 100 × (1 + 0.5 + 0.25 + 0.125 + 0.0625) = R × 100 × 1.9375
+        let expected_supply = 50_000_000_000u128 * 100 * 1937 / 1000;
+        let actual_supply = controller.state.total_supply as u128;
+
+        assert!(
+            (actual_supply as i128 - expected_supply as i128).unsigned_abs() < expected_supply / 100,
+            "Supply {} should be ~{} (within 1%)",
+            actual_supply,
+            expected_supply
+        );
     }
 }

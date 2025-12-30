@@ -6,18 +6,30 @@ use bth_cluster_tax::{FeeConfig, TransactionType};
 use std::fs;
 use std::path::Path;
 
+use crate::address::Address;
 use crate::config::{ledger_db_path_from_config, Config};
 use crate::ledger::Ledger;
 use crate::transaction::{Transaction, TxInput, TxOutput};
 use crate::wallet::Wallet;
 
+#[cfg(feature = "pq")]
+use bth_account_keys::QuantumSafePublicAddress;
+#[cfg(feature = "pq")]
+use crate::transaction_pq::QuantumPrivateTransaction;
+
 /// Pending transactions file name
 const PENDING_TXS_FILE: &str = "pending_txs.bin";
+
+/// Pending quantum-private transactions file name
+#[cfg(feature = "pq")]
+const PENDING_PQ_TXS_FILE: &str = "pending_pq_txs.bin";
 
 /// Send credits to an address
 ///
 /// If `private` is true, uses ring signatures to hide which UTXO is being spent.
-pub fn run(config_path: &Path, address_str: &str, amount_str: &str, private: bool) -> Result<()> {
+/// If `quantum` is true, uses post-quantum cryptography (ML-KEM + ML-DSA).
+/// If recipient has a quantum address (botho://1q/), quantum mode is auto-enabled.
+pub fn run(config_path: &Path, address_str: &str, amount_str: &str, private: bool, quantum: bool) -> Result<()> {
     let config = Config::load(config_path)
         .context("No wallet found. Run 'botho init' first.")?;
 
@@ -28,8 +40,15 @@ pub fn run(config_path: &Path, address_str: &str, amount_str: &str, private: boo
     let wallet = Wallet::from_mnemonic(&wallet_config.mnemonic)?;
     let our_address = wallet.default_address();
 
-    // Parse recipient address (format: "view:<hex>,spend:<hex>")
-    let recipient = parse_address(address_str)?;
+    // Parse recipient address (auto-detects format)
+    let parsed_address = Address::parse(address_str)?;
+
+    // Auto-enable quantum mode if recipient has a quantum address
+    #[cfg(feature = "pq")]
+    let quantum = quantum || parsed_address.is_quantum();
+
+    // Get the classical address for standard operations
+    let recipient = parsed_address.classical();
 
     // Parse amount (in credits, convert to picocredits)
     let amount = parse_amount(amount_str)?;
@@ -88,6 +107,34 @@ pub fn run(config_path: &Path, address_str: &str, amount_str: &str, private: boo
         }
         selected_utxos.push(utxo.clone());
         selected_amount += utxo.output.amount;
+    }
+
+    // Handle quantum-private transactions
+    #[cfg(feature = "pq")]
+    if quantum {
+        let pq_recipient = parsed_address.quantum()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!(
+                "Quantum transaction requires a quantum-safe address (botho://1q/...)"
+            ))?;
+
+        return run_quantum(
+            config_path,
+            &pq_recipient,
+            amount,
+            fee,
+            fee_rate_bps as u64,
+            selected_utxos,
+            state.height,
+            &wallet,
+        );
+    }
+
+    #[cfg(not(feature = "pq"))]
+    if quantum {
+        return Err(anyhow::anyhow!(
+            "Quantum-private transactions require the 'pq' feature. Rebuild with: cargo build --features pq"
+        ));
     }
 
     // Build outputs
@@ -225,47 +272,6 @@ pub fn clear_pending_txs(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Parse an address string in the format "view:<hex>,spend:<hex>"
-fn parse_address(s: &str) -> Result<PublicAddress> {
-    // Expected format: "view:abcd1234...,spend:efgh5678..."
-    let parts: Vec<&str> = s.split(',').collect();
-    if parts.len() != 2 {
-        return Err(anyhow::anyhow!(
-            "Invalid address format. Expected: view:<hex>,spend:<hex>"
-        ));
-    }
-
-    let view_part = parts[0].trim();
-    let spend_part = parts[1].trim();
-
-    if !view_part.starts_with("view:") {
-        return Err(anyhow::anyhow!("Address must start with 'view:'"));
-    }
-    if !spend_part.starts_with("spend:") {
-        return Err(anyhow::anyhow!("Address must contain 'spend:'"));
-    }
-
-    let view_hex = &view_part[5..];
-    let spend_hex = &spend_part[6..];
-
-    let view_bytes = hex::decode(view_hex)
-        .context("Invalid hex in view key")?;
-    let spend_bytes = hex::decode(spend_hex)
-        .context("Invalid hex in spend key")?;
-
-    if view_bytes.len() != 32 || spend_bytes.len() != 32 {
-        return Err(anyhow::anyhow!("View and spend keys must be 32 bytes each"));
-    }
-
-    // Create PublicAddress from the keys
-    let view_key = bth_crypto_keys::RistrettoPublic::try_from(&view_bytes[..])
-        .map_err(|e| anyhow::anyhow!("Invalid view key: {}", e))?;
-    let spend_key = bth_crypto_keys::RistrettoPublic::try_from(&spend_bytes[..])
-        .map_err(|e| anyhow::anyhow!("Invalid spend key: {}", e))?;
-
-    Ok(PublicAddress::new(&spend_key, &view_key))
-}
-
 /// Parse an amount string (in credits) to picocredits
 fn parse_amount(s: &str) -> Result<u64> {
     let amount: f64 = s.parse()
@@ -301,4 +307,132 @@ fn parse_amount(s: &str) -> Result<u64> {
     }
 
     Ok(picocredits)
+}
+
+/// Handle quantum-private transaction creation
+#[cfg(feature = "pq")]
+fn run_quantum(
+    config_path: &Path,
+    recipient: &bth_account_keys::QuantumSafePublicAddress,
+    amount: u64,
+    fee: u64,
+    fee_rate_bps: u64,
+    selected_utxos: Vec<crate::transaction::Utxo>,
+    current_height: u64,
+    wallet: &Wallet,
+) -> Result<()> {
+    use crate::transaction_pq::calculate_pq_fee;
+    use crate::address::format_quantum_address;
+
+    // Calculate quantum-safe fee (larger transactions)
+    let pq_fee = calculate_pq_fee(selected_utxos.len(), 2); // 2 outputs: recipient + change
+    let effective_fee = std::cmp::max(fee, pq_fee);
+
+    println!();
+    println!("Creating quantum-private transaction...");
+    println!("Using ML-KEM-768 for key exchange, ML-DSA-65 for signatures");
+
+    // Create the quantum-private transaction
+    let tx = wallet.create_quantum_private_transaction(
+        &selected_utxos,
+        recipient,
+        amount,
+        effective_fee,
+        current_height,
+    )?;
+
+    let tx_hash = tx.hash();
+    let num_inputs = tx.inputs.len();
+
+    // Format address for display (truncate long PQ address)
+    let addr_display = format_quantum_address(recipient);
+    let addr_short = if addr_display.len() > 60 {
+        format!("{}...{}", &addr_display[..30], &addr_display[addr_display.len()-20..])
+    } else {
+        addr_display
+    };
+
+    // Display transaction details
+    println!();
+    println!("=== Quantum-Private Transaction Created ===");
+    println!("From: your wallet");
+    println!("To: {}", addr_short);
+    println!("Amount: {:.12} credits", amount as f64 / 1_000_000_000_000.0);
+    println!();
+    println!("Fee breakdown:");
+    println!("  Type: Quantum-Private (hybrid classical + PQ)");
+    println!("  Classical rate: {} bps ({:.2}%)", fee_rate_bps, fee_rate_bps as f64 / 100.0);
+    println!("  PQ overhead: ~19x larger than classical");
+    println!("  Total fee: {:.12} credits", effective_fee as f64 / 1_000_000_000_000.0);
+    println!();
+
+    let selected_amount: u64 = selected_utxos.iter().map(|u| u.output.amount).sum();
+    let change = selected_amount - amount - effective_fee;
+    if change > 0 {
+        println!("Change: {:.12} credits", change as f64 / 1_000_000_000_000.0);
+    }
+
+    println!();
+    println!("Security:");
+    println!("  - Outputs: ML-KEM-768 encapsulation (1088 bytes)");
+    println!("  - Inputs: Schnorr + ML-DSA-65 signatures (64 + 3309 bytes)");
+    println!("  - Protected against \"harvest now, decrypt later\" attacks");
+    println!();
+    println!("Transaction hash: {}", hex::encode(&tx_hash[0..16]));
+    println!("Inputs: {}", num_inputs);
+    println!("Outputs: {}", tx.outputs.len());
+
+    // Save transaction to pending file
+    let pending_path = config_path.parent()
+        .unwrap_or(Path::new("."))
+        .join(PENDING_PQ_TXS_FILE);
+
+    save_pending_pq_tx(&pending_path, &tx)?;
+
+    println!();
+    println!("Quantum-private transaction saved to pending queue.");
+    println!("Start the node with 'botho run' to broadcast it.");
+    println!();
+
+    Ok(())
+}
+
+/// Save a quantum-private transaction to the pending transactions file
+#[cfg(feature = "pq")]
+fn save_pending_pq_tx(path: &Path, tx: &QuantumPrivateTransaction) -> Result<()> {
+    // Load existing pending transactions
+    let mut pending: Vec<QuantumPrivateTransaction> = load_pending_pq_txs(path).unwrap_or_default();
+
+    // Check if already exists
+    let tx_hash = tx.hash();
+    if pending.iter().any(|t| t.hash() == tx_hash) {
+        return Err(anyhow::anyhow!("Transaction already in pending queue"));
+    }
+
+    // Add new transaction
+    pending.push(tx.clone());
+
+    // Save back
+    let bytes = bincode::serialize(&pending)
+        .context("Failed to serialize pending quantum-private transactions")?;
+    fs::write(path, bytes)
+        .context("Failed to save pending quantum-private transactions")?;
+
+    Ok(())
+}
+
+/// Load pending quantum-private transactions from file
+#[cfg(feature = "pq")]
+pub fn load_pending_pq_txs(path: &Path) -> Result<Vec<QuantumPrivateTransaction>> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let bytes = fs::read(path)
+        .context("Failed to read pending quantum-private transactions")?;
+
+    let pending: Vec<QuantumPrivateTransaction> = bincode::deserialize(&bytes)
+        .context("Failed to deserialize pending quantum-private transactions")?;
+
+    Ok(pending)
 }

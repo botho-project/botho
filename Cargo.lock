@@ -560,8 +560,10 @@ dependencies = [
 name = "botho"
 version = "0.1.0"
 dependencies = [
+ "aes",
  "anyhow",
  "bincode",
+ "bs58 0.5.1",
  "bth-account-keys",
  "bth-cluster-tax",
  "bth-common",
@@ -576,11 +578,13 @@ dependencies = [
  "bth-util-from-random",
  "clap",
  "crossbeam-channel",
+ "ctr",
  "ctrlc",
  "dashmap 6.1.0",
  "dirs",
  "futures",
  "hex",
+ "hkdf",
  "http-body-util",
  "hyper 1.6.0",
  "hyper-util",
@@ -1148,6 +1152,7 @@ dependencies = [
 name = "bth-crypto-pq"
 version = "0.1.0"
 dependencies = [
+ "criterion",
  "hex",
  "hkdf",
  "hybrid-array 0.4.5",

@@ -9,7 +9,8 @@ Welcome to the Botho documentation. Botho is a privacy-preserving, mined cryptoc
 | [Getting Started](getting-started.md) | Build, install, and run your first node |
 | [Architecture](architecture.md) | System design and component overview |
 | [Configuration](configuration.md) | Complete configuration reference |
-| [Mining](mining.md) | Mining setup and economics |
+| [Mining](mining.md) | Mining setup and guide |
+| [Tokenomics](tokenomics.md) | Supply, emission, fees, and economics |
 | [Privacy](privacy.md) | Privacy features and cryptography |
 
 ## What is Botho?
@@ -17,9 +18,10 @@ Welcome to the Botho documentation. Botho is a privacy-preserving, mined cryptoc
 Botho combines:
 
 - **Proof-of-Work Mining**: SHA-256 mining with variable difficulty
-- **Full Transaction Privacy**: Stealth addresses, with ring signatures and confidential transactions planned
+- **Full Transaction Privacy**: Stealth addresses, ring signatures (MLSAG), and encrypted memos
+- **Post-Quantum Security**: Hybrid classical + ML-KEM/ML-DSA cryptography
 - **Byzantine Fault Tolerance**: Stellar Consensus Protocol (SCP) for consensus
-- **Simple Design**: Single binary, focused on essentials
+- **Progressive Fees**: Cluster-based taxation that discourages wealth concentration
 
 The native currency unit is the **credit** (BTH).
 

@@ -267,4 +267,325 @@ mod tests {
 
         assert_eq!(best, Some(fast_peer));
     }
+
+    // ========================================================================
+    // Additional PeerReputation tests
+    // ========================================================================
+
+    #[test]
+    fn test_record_failure() {
+        let mut rep = PeerReputation::new();
+        rep.record_failure();
+
+        assert_eq!(rep.failures, 1);
+        assert_eq!(rep.successes, 0);
+        assert_eq!(rep.avg_latency_ms, FAILURE_LATENCY_MS as f64);
+    }
+
+    #[test]
+    fn test_total_requests() {
+        let mut rep = PeerReputation::new();
+        assert_eq!(rep.total_requests(), 0);
+
+        rep.record_success(Duration::from_millis(100));
+        assert_eq!(rep.total_requests(), 1);
+
+        rep.record_failure();
+        assert_eq!(rep.total_requests(), 2);
+    }
+
+    #[test]
+    fn test_success_rate_calculations() {
+        let mut rep = PeerReputation::new();
+
+        // 0 requests = 100% success rate (optimistic default)
+        assert_eq!(rep.success_rate(), 1.0);
+
+        // 1 success = 100%
+        rep.record_success(Duration::from_millis(100));
+        assert_eq!(rep.success_rate(), 1.0);
+
+        // 1 success, 1 failure = 50%
+        rep.record_failure();
+        assert!((rep.success_rate() - 0.5).abs() < 0.001);
+
+        // 1 success, 2 failures = 33.3%
+        rep.record_failure();
+        assert!((rep.success_rate() - 0.333).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_score_for_new_peer() {
+        let rep = PeerReputation::new();
+        // New peers get neutral score (500) before MIN_SAMPLES
+        assert_eq!(rep.score(), 500.0);
+    }
+
+    #[test]
+    fn test_score_after_min_samples() {
+        let mut rep = PeerReputation::new();
+
+        // Record MIN_SAMPLES successes with 100ms latency
+        for _ in 0..MIN_SAMPLES {
+            rep.record_success(Duration::from_millis(100));
+        }
+
+        // Score should be based on actual latency now
+        // With 100% success rate, reliability_factor = 2.0 - 1.0 = 1.0
+        // Score = 100.0 * 1.0 = 100.0 (approximately, due to EMA)
+        assert!(rep.score() < 200.0);
+        assert!(rep.score() > 50.0);
+    }
+
+    #[test]
+    fn test_score_penalizes_unreliability() {
+        let mut reliable = PeerReputation::new();
+        let mut unreliable = PeerReputation::new();
+
+        // Reliable: 3 successes
+        for _ in 0..3 {
+            reliable.record_success(Duration::from_millis(100));
+        }
+
+        // Unreliable: 1 success, 2 failures
+        unreliable.record_success(Duration::from_millis(100));
+        unreliable.record_failure();
+        unreliable.record_failure();
+
+        // Unreliable should have worse (higher) score
+        assert!(unreliable.score() > reliable.score());
+    }
+
+    #[test]
+    fn test_ban_not_applied_before_min_samples() {
+        let mut rep = PeerReputation::new();
+        // 2 failures is < MIN_SAMPLES
+        rep.record_failure();
+        rep.record_failure();
+
+        // Should not be banned yet (not enough samples)
+        assert!(!rep.is_banned());
+    }
+
+    #[test]
+    fn test_ban_threshold_exactly_25_percent() {
+        let mut rep = PeerReputation::new();
+        // 1 success, 3 failures = 25% (at threshold, not banned)
+        rep.record_success(Duration::from_millis(100));
+        rep.record_failure();
+        rep.record_failure();
+        rep.record_failure();
+
+        // 25% is not < 25%, so should not be banned
+        assert!(!rep.is_banned());
+    }
+
+    #[test]
+    fn test_last_response_updated() {
+        let mut rep = PeerReputation::new();
+        assert!(rep.last_response.is_none());
+
+        rep.record_success(Duration::from_millis(100));
+        assert!(rep.last_response.is_some());
+    }
+
+    #[test]
+    fn test_default_trait() {
+        let rep = PeerReputation::default();
+        assert_eq!(rep.successes, 0);
+        assert_eq!(rep.failures, 0);
+    }
+
+    // ========================================================================
+    // Additional ReputationManager tests
+    // ========================================================================
+
+    #[test]
+    fn test_manager_get_nonexistent_peer() {
+        let manager = ReputationManager::new();
+        let peer = PeerId::random();
+
+        assert!(manager.get(&peer).is_none());
+    }
+
+    #[test]
+    fn test_manager_get_or_create_creates() {
+        let mut manager = ReputationManager::new();
+        let peer = PeerId::random();
+
+        // Should create new entry
+        let rep = manager.get_or_create(&peer);
+        assert_eq!(rep.total_requests(), 0);
+
+        // Should return same entry
+        rep.record_success(Duration::from_millis(100));
+        let rep2 = manager.get(&peer).unwrap();
+        assert_eq!(rep2.total_requests(), 1);
+    }
+
+    #[test]
+    fn test_manager_request_sent_tracking() {
+        let mut manager = ReputationManager::new();
+        let peer = PeerId::random();
+
+        manager.request_sent(peer);
+
+        // Peer should now exist
+        assert!(manager.get(&peer).is_some());
+    }
+
+    #[test]
+    fn test_manager_response_received_with_pending() {
+        let mut manager = ReputationManager::new();
+        let peer = PeerId::random();
+
+        manager.request_sent(peer);
+        std::thread::sleep(Duration::from_millis(10));
+        manager.response_received(&peer);
+
+        let rep = manager.get(&peer).unwrap();
+        assert_eq!(rep.successes, 1);
+        assert!(rep.avg_latency_ms >= 10.0);
+    }
+
+    #[test]
+    fn test_manager_response_without_pending() {
+        let mut manager = ReputationManager::new();
+        let peer = PeerId::random();
+
+        // Response without prior request_sent
+        manager.response_received(&peer);
+
+        let rep = manager.get(&peer).unwrap();
+        assert_eq!(rep.successes, 1);
+        // Should use default 100ms
+        assert_eq!(rep.avg_latency_ms, 100.0);
+    }
+
+    #[test]
+    fn test_manager_request_failed() {
+        let mut manager = ReputationManager::new();
+        let peer = PeerId::random();
+
+        manager.request_sent(peer);
+        manager.request_failed(&peer);
+
+        let rep = manager.get(&peer).unwrap();
+        assert_eq!(rep.failures, 1);
+    }
+
+    #[test]
+    fn test_manager_is_banned() {
+        let mut manager = ReputationManager::new();
+        let peer = PeerId::random();
+
+        // Not banned: unknown peer
+        assert!(!manager.is_banned(&peer));
+
+        // Get 4 failures to trigger ban
+        for _ in 0..4 {
+            manager.get_or_create(&peer).record_failure();
+        }
+
+        assert!(manager.is_banned(&peer));
+    }
+
+    #[test]
+    fn test_manager_best_peer_excludes_banned() {
+        let mut manager = ReputationManager::new();
+
+        let good_peer = PeerId::random();
+        let banned_peer = PeerId::random();
+
+        // Good peer: 3 successes
+        for _ in 0..3 {
+            manager
+                .get_or_create(&good_peer)
+                .record_success(Duration::from_millis(200));
+        }
+
+        // Banned peer: 4 failures (even if it had faster times)
+        for _ in 0..4 {
+            manager.get_or_create(&banned_peer).record_failure();
+        }
+
+        let candidates = vec![good_peer, banned_peer];
+        let best = manager.best_peer(&candidates);
+
+        assert_eq!(best, Some(good_peer));
+    }
+
+    #[test]
+    fn test_manager_best_peer_with_unknown_candidates() {
+        let manager = ReputationManager::new();
+        let peer1 = PeerId::random();
+        let peer2 = PeerId::random();
+
+        // Unknown peers get neutral score (500)
+        let candidates = vec![peer1, peer2];
+        let best = manager.best_peer(&candidates);
+
+        // Should return one of them (both have same neutral score)
+        assert!(best.is_some());
+    }
+
+    #[test]
+    fn test_manager_best_peer_empty_candidates() {
+        let manager = ReputationManager::new();
+        let candidates: Vec<PeerId> = vec![];
+
+        assert!(manager.best_peer(&candidates).is_none());
+    }
+
+    #[test]
+    fn test_manager_best_peer_all_banned() {
+        let mut manager = ReputationManager::new();
+        let peer1 = PeerId::random();
+        let peer2 = PeerId::random();
+
+        // Ban both peers
+        for _ in 0..4 {
+            manager.get_or_create(&peer1).record_failure();
+            manager.get_or_create(&peer2).record_failure();
+        }
+
+        let candidates = vec![peer1, peer2];
+        assert!(manager.best_peer(&candidates).is_none());
+    }
+
+    #[test]
+    fn test_manager_all_scores() {
+        let mut manager = ReputationManager::new();
+        let peer1 = PeerId::random();
+        let peer2 = PeerId::random();
+
+        manager
+            .get_or_create(&peer1)
+            .record_success(Duration::from_millis(100));
+        manager.get_or_create(&peer2).record_failure();
+
+        let scores = manager.all_scores();
+        assert_eq!(scores.len(), 2);
+
+        // Find peer1's entry
+        let p1_score = scores.iter().find(|(id, _, _, _)| *id == peer1);
+        assert!(p1_score.is_some());
+        let (_, _, successes, failures) = p1_score.unwrap();
+        assert_eq!(*successes, 1);
+        assert_eq!(*failures, 0);
+
+        // Find peer2's entry
+        let p2_score = scores.iter().find(|(id, _, _, _)| *id == peer2);
+        assert!(p2_score.is_some());
+        let (_, _, successes, failures) = p2_score.unwrap();
+        assert_eq!(*successes, 0);
+        assert_eq!(*failures, 1);
+    }
+
+    #[test]
+    fn test_manager_default_trait() {
+        let manager = ReputationManager::default();
+        let peer = PeerId::random();
+        assert!(manager.get(&peer).is_none());
+    }
 }

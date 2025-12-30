@@ -221,6 +221,7 @@ impl MiningTx {
             amount: self.reward,
             target_key: self.target_key,
             public_key: self.public_key,
+            e_memo: None, // Mining rewards don't have memos
         }
     }
 }

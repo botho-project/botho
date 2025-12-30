@@ -563,7 +563,7 @@ mod tests {
         use super::*;
         use crate::transaction_pq::{
             QuantumPrivateTransaction, QuantumPrivateTxInput, QuantumPrivateTxOutput,
-            PQ_CIPHERTEXT_SIZE, PQ_SIGNATURE_SIZE,
+            PQ_CIPHERTEXT_SIZE, PQ_SIGNATURE_SIZE, PQ_SIGNING_PUBKEY_SIZE,
         };
         use crate::transaction::TxOutput;
 
@@ -575,7 +575,7 @@ mod tests {
                     public_key: [2u8; 32],
                 },
                 pq_ciphertext: vec![0u8; PQ_CIPHERTEXT_SIZE],
-                pq_target_key: [3u8; 32],
+                pq_signing_pubkey: vec![0u8; PQ_SIGNING_PUBKEY_SIZE],
             }
         }
 

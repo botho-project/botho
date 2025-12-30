@@ -52,19 +52,23 @@
 //! - Check key image hasn't been used before (prevents double-spend)
 //! - Cannot determine which ring member is the real input
 
+use aes::cipher::{KeyIvInit, StreamCipher};
+use aes::Aes256;
 use bth_account_keys::{AccountKey, PublicAddress};
 use bth_crypto_keys::{CompressedRistrettoPublic, RistrettoPrivate, RistrettoPublic, RistrettoSignature};
 use bth_crypto_ring_signature::{
     onetime_keys::{
-        create_tx_out_public_key, create_tx_out_target_key, recover_onetime_private_key,
-        recover_public_subaddress_spend_key,
+        create_shared_secret, create_tx_out_public_key, create_tx_out_target_key,
+        recover_onetime_private_key, recover_public_subaddress_spend_key,
     },
     generators, CompressedCommitment, CurveScalar, KeyImage, ReducedTxOut, RingMLSAG, Scalar,
 };
 use bth_util_from_random::FromRandom;
+use ctr::Ctr64BE;
+use hkdf::Hkdf;
 use rand_core::{CryptoRng, OsRng, RngCore};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+use sha2::{Digest, Sha256, Sha512};
 
 /// Minimum transaction fee in picocredits (0.0001 credits = 100_000_000 picocredits)
 pub const MIN_TX_FEE: u64 = 100_000_000;
@@ -72,11 +76,156 @@ pub const MIN_TX_FEE: u64 = 100_000_000;
 /// Picocredits per credit (10^12)
 pub const PICOCREDITS_PER_CREDIT: u64 = 1_000_000_000_000;
 
+/// Size of an encrypted memo in bytes (2-byte type + 64-byte payload)
+pub const ENCRYPTED_MEMO_SIZE: usize = 66;
+
+// ============================================================================
+// Encrypted Memo Types
+// ============================================================================
+
+/// An encrypted memo attached to a transaction output.
+///
+/// Memos are 66 bytes: 2-byte type identifier + 64-byte encrypted payload.
+/// They are encrypted using AES-256-CTR with a key derived from the TxOut's
+/// shared secret (HKDF-SHA512).
+///
+/// Only the recipient (who has the view private key) can decrypt the memo.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EncryptedMemo {
+    /// The encrypted memo bytes (always 66 bytes)
+    pub ciphertext: Vec<u8>,
+}
+
+impl EncryptedMemo {
+    /// Create an encrypted memo from raw bytes
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() != ENCRYPTED_MEMO_SIZE {
+            return None;
+        }
+        Some(Self { ciphertext: bytes.to_vec() })
+    }
+
+    /// Get the raw bytes
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.ciphertext
+    }
+
+    /// Decrypt this memo using the TxOut's shared secret.
+    ///
+    /// The shared_secret is computed as: tx_private_key * view_public_key
+    /// which equals view_private_key * tx_public_key (by DH symmetry).
+    pub fn decrypt(&self, shared_secret: &RistrettoPublic) -> Option<MemoPayload> {
+        if self.ciphertext.len() != ENCRYPTED_MEMO_SIZE {
+            return None;
+        }
+        let mut plaintext = [0u8; ENCRYPTED_MEMO_SIZE];
+        plaintext.copy_from_slice(&self.ciphertext);
+        apply_memo_keystream(&mut plaintext, shared_secret);
+        Some(MemoPayload { data: plaintext })
+    }
+}
+
+/// A plaintext memo payload (66 bytes: 2-byte type + 64-byte data).
+///
+/// Known memo types:
+/// - `[0x00, 0x00]`: Unused/empty memo
+/// - `[0x01, 0x00]`: Authenticated sender memo (includes sender address hash)
+/// - `[0x02, 0x00]`: Destination memo (payment ID or reference)
+/// - `[0x03, 0x00]`: Gift code memo
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoPayload {
+    /// The plaintext memo data (66 bytes)
+    pub data: [u8; ENCRYPTED_MEMO_SIZE],
+}
+
+impl MemoPayload {
+    /// Create an empty/unused memo
+    pub fn unused() -> Self {
+        Self { data: [0u8; ENCRYPTED_MEMO_SIZE] }
+    }
+
+    /// Create a destination memo with a text message (up to 64 bytes).
+    ///
+    /// The message is stored in the 64-byte data portion.
+    /// Longer messages are truncated, shorter ones are zero-padded.
+    pub fn destination(message: &str) -> Self {
+        let mut data = [0u8; ENCRYPTED_MEMO_SIZE];
+        // Type: 0x0200 = Destination memo
+        data[0] = 0x02;
+        data[1] = 0x00;
+        // Copy message bytes (up to 64 bytes)
+        let msg_bytes = message.as_bytes();
+        let copy_len = msg_bytes.len().min(64);
+        data[2..2 + copy_len].copy_from_slice(&msg_bytes[..copy_len]);
+        Self { data }
+    }
+
+    /// Get the memo type bytes (first 2 bytes)
+    pub fn memo_type(&self) -> [u8; 2] {
+        [self.data[0], self.data[1]]
+    }
+
+    /// Get the memo data (remaining 64 bytes)
+    pub fn memo_data(&self) -> &[u8; 64] {
+        self.data[2..66].try_into().expect("slice is exactly 64 bytes")
+    }
+
+    /// Check if this is an unused/empty memo
+    pub fn is_unused(&self) -> bool {
+        self.memo_type() == [0x00, 0x00]
+    }
+
+    /// Try to interpret the memo data as a UTF-8 string.
+    /// Returns None if the data is not valid UTF-8 or is empty.
+    pub fn as_text(&self) -> Option<&str> {
+        let data = self.memo_data();
+        // Find the first null byte or end of data
+        let end = data.iter().position(|&b| b == 0).unwrap_or(64);
+        if end == 0 {
+            return None;
+        }
+        std::str::from_utf8(&data[..end]).ok()
+    }
+
+    /// Encrypt this memo using the TxOut's shared secret.
+    pub fn encrypt(&self, shared_secret: &RistrettoPublic) -> EncryptedMemo {
+        let mut ciphertext = self.data;
+        apply_memo_keystream(&mut ciphertext, shared_secret);
+        EncryptedMemo { ciphertext: ciphertext.to_vec() }
+    }
+}
+
+/// Apply AES-256-CTR keystream to memo data for encryption/decryption.
+///
+/// Uses HKDF-SHA512 to derive the AES key and nonce from the shared secret.
+fn apply_memo_keystream(data: &mut [u8; ENCRYPTED_MEMO_SIZE], shared_secret: &RistrettoPublic) {
+    // Derive key material using HKDF
+    let shared_secret_compressed = CompressedRistrettoPublic::from(shared_secret);
+    let hkdf = Hkdf::<Sha512>::new(Some(b"mc-memo-okm"), shared_secret_compressed.as_ref());
+
+    // Get 48 bytes: 32 for AES key + 16 for nonce
+    let mut okm = [0u8; 48];
+    hkdf.expand(b"", &mut okm).expect("48 bytes is valid for SHA512");
+
+    let key: [u8; 32] = okm[0..32].try_into().unwrap();
+    let nonce: [u8; 16] = okm[32..48].try_into().unwrap();
+
+    // Apply AES-256-CTR keystream
+    type Aes256Ctr = Ctr64BE<Aes256>;
+    let mut cipher = Aes256Ctr::new((&key).into(), (&nonce).into());
+    cipher.apply_keystream(data);
+}
+
+// ============================================================================
+// Transaction Output
+// ============================================================================
+
 /// A transaction output (UTXO) with stealth addressing.
 ///
 /// Uses CryptoNote-style one-time keys for recipient privacy:
 /// - `target_key`: One-time public key that only the recipient can identify and spend
 /// - `public_key`: Ephemeral DH public key for recipient to derive shared secret
+/// - `e_memo`: Optional encrypted memo (66 bytes) readable only by recipient
 ///
 /// The recipient's actual address is not stored in the output, making outputs
 /// unlinkable even for the same recipient.
@@ -92,10 +241,16 @@ pub struct TxOutput {
     /// Ephemeral public key: `r * D`
     /// Used by recipient to derive the shared secret for detecting ownership.
     pub public_key: [u8; 32],
+
+    /// Optional encrypted memo (66 bytes).
+    /// Contains payment notes, reference IDs, or sender information.
+    /// Only the recipient can decrypt this using their view key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub e_memo: Option<EncryptedMemo>,
 }
 
 impl TxOutput {
-    /// Create a new stealth output for a recipient.
+    /// Create a new stealth output for a recipient (no memo).
     ///
     /// Generates a random ephemeral key and computes:
     /// - `target_key = Hs(r * C) * G + D` (one-time spend key)
@@ -104,6 +259,14 @@ impl TxOutput {
     /// Only the recipient with view key `a` (where `C = a * D`) can detect
     /// this output belongs to them by checking if `P - Hs(a * R) * G == D`.
     pub fn new(amount: u64, recipient: &PublicAddress) -> Self {
+        Self::new_with_memo(amount, recipient, None)
+    }
+
+    /// Create a new stealth output with an optional memo.
+    ///
+    /// The memo is encrypted using a shared secret derived from the ephemeral
+    /// key, so only the recipient can read it.
+    pub fn new_with_memo(amount: u64, recipient: &PublicAddress, memo: Option<MemoPayload>) -> Self {
         // Generate random ephemeral private key
         let tx_private_key = RistrettoPrivate::from_random(&mut OsRng);
 
@@ -111,10 +274,19 @@ impl TxOutput {
         let target_key = create_tx_out_target_key(&tx_private_key, recipient);
         let public_key = create_tx_out_public_key(&tx_private_key, recipient.spend_public_key());
 
+        // Encrypt memo if provided
+        let e_memo = memo.map(|m| {
+            // Compute shared secret: tx_private_key * view_public_key
+            // The recipient can compute the same secret as: view_private_key * public_key
+            let shared_secret = create_shared_secret(recipient.view_public_key(), &tx_private_key);
+            m.encrypt(&shared_secret)
+        });
+
         Self {
             amount,
             target_key: target_key.to_bytes(),
             public_key: public_key.to_bytes(),
+            e_memo,
         }
     }
 
@@ -131,7 +303,29 @@ impl TxOutput {
             amount,
             target_key: target_key.to_bytes(),
             public_key: public_key.to_bytes(),
+            e_memo: None,
         }
+    }
+
+    /// Check if this output has an encrypted memo.
+    pub fn has_memo(&self) -> bool {
+        self.e_memo.is_some()
+    }
+
+    /// Decrypt the memo using the recipient's view private key.
+    ///
+    /// Returns None if there's no memo or decryption fails.
+    pub fn decrypt_memo(&self, account: &AccountKey) -> Option<MemoPayload> {
+        let e_memo = self.e_memo.as_ref()?;
+
+        // Parse the public key (ephemeral DH key from sender)
+        let public_key = RistrettoPublic::try_from(&self.public_key[..]).ok()?;
+
+        // Compute shared secret: view_private_key * public_key
+        // This equals: tx_private_key * view_public_key (by DH symmetry)
+        let shared_secret = create_shared_secret(&public_key, account.view_private_key());
+
+        e_memo.decrypt(&shared_secret)
     }
 
     /// Compute a unique identifier for this output.

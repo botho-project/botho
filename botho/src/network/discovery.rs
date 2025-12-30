@@ -405,3 +405,159 @@ impl NetworkDiscovery {
         swarm.behaviour_mut().sync.send_response(channel, response)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ========================================================================
+    // PeerTableEntry tests
+    // ========================================================================
+
+    #[test]
+    fn test_peer_table_entry_creation() {
+        let peer_id = PeerId::random();
+        let entry = PeerTableEntry {
+            peer_id,
+            address: None,
+            last_seen: std::time::Instant::now(),
+        };
+
+        assert_eq!(entry.peer_id, peer_id);
+        assert!(entry.address.is_none());
+    }
+
+    #[test]
+    fn test_peer_table_entry_with_address() {
+        let peer_id = PeerId::random();
+        let addr: Multiaddr = "/ip4/127.0.0.1/tcp/9000".parse().unwrap();
+        let entry = PeerTableEntry {
+            peer_id,
+            address: Some(addr.clone()),
+            last_seen: std::time::Instant::now(),
+        };
+
+        assert_eq!(entry.address, Some(addr));
+    }
+
+    #[test]
+    fn test_peer_table_entry_clone() {
+        let peer_id = PeerId::random();
+        let entry = PeerTableEntry {
+            peer_id,
+            address: None,
+            last_seen: std::time::Instant::now(),
+        };
+
+        let cloned = entry.clone();
+        assert_eq!(cloned.peer_id, entry.peer_id);
+    }
+
+    // ========================================================================
+    // NetworkDiscovery tests
+    // ========================================================================
+
+    #[test]
+    fn test_network_discovery_new() {
+        let discovery = NetworkDiscovery::new(9000, vec![]);
+
+        assert_eq!(discovery.peer_count(), 0);
+        assert!(discovery.peer_table().is_empty());
+    }
+
+    #[test]
+    fn test_network_discovery_with_bootstrap_peers() {
+        let bootstrap = vec![
+            "/ip4/192.168.1.1/tcp/9000".to_string(),
+            "/ip4/192.168.1.2/tcp/9000".to_string(),
+        ];
+        let discovery = NetworkDiscovery::new(9001, bootstrap);
+
+        // Bootstrap peers are stored but not yet connected
+        assert_eq!(discovery.peer_count(), 0);
+    }
+
+    #[test]
+    fn test_network_discovery_local_peer_id() {
+        let discovery = NetworkDiscovery::new(9000, vec![]);
+        let peer_id = discovery.local_peer_id();
+
+        // Should be a valid peer ID
+        assert!(!peer_id.to_string().is_empty());
+    }
+
+    #[test]
+    fn test_network_discovery_take_event_receiver_once() {
+        let mut discovery = NetworkDiscovery::new(9000, vec![]);
+
+        // First take should succeed
+        let rx1 = discovery.take_event_receiver();
+        assert!(rx1.is_some());
+
+        // Second take should return None
+        let rx2 = discovery.take_event_receiver();
+        assert!(rx2.is_none());
+    }
+
+    #[test]
+    fn test_network_discovery_peer_table_empty() {
+        let discovery = NetworkDiscovery::new(9000, vec![]);
+        let table = discovery.peer_table();
+
+        assert!(table.is_empty());
+        assert_eq!(discovery.peer_count(), 0);
+    }
+
+    // ========================================================================
+    // NetworkEvent tests
+    // ========================================================================
+
+    #[test]
+    fn test_network_event_peer_discovered_debug() {
+        let peer_id = PeerId::random();
+        let event = NetworkEvent::PeerDiscovered(peer_id);
+
+        // Should implement Debug
+        let debug_str = format!("{:?}", event);
+        assert!(debug_str.contains("PeerDiscovered"));
+    }
+
+    #[test]
+    fn test_network_event_peer_disconnected_debug() {
+        let peer_id = PeerId::random();
+        let event = NetworkEvent::PeerDisconnected(peer_id);
+
+        let debug_str = format!("{:?}", event);
+        assert!(debug_str.contains("PeerDisconnected"));
+    }
+
+    // ========================================================================
+    // Topic constant tests
+    // ========================================================================
+
+    #[test]
+    fn test_topic_constants_are_valid() {
+        assert!(!BLOCKS_TOPIC.is_empty());
+        assert!(!TRANSACTIONS_TOPIC.is_empty());
+        assert!(!SCP_TOPIC.is_empty());
+
+        // Topics should follow naming convention
+        assert!(BLOCKS_TOPIC.starts_with("botho/"));
+        assert!(TRANSACTIONS_TOPIC.starts_with("botho/"));
+        assert!(SCP_TOPIC.starts_with("botho/"));
+    }
+
+    #[test]
+    fn test_topics_are_versioned() {
+        assert!(BLOCKS_TOPIC.contains("/1.0.0"));
+        assert!(TRANSACTIONS_TOPIC.contains("/1.0.0"));
+        assert!(SCP_TOPIC.contains("/1.0.0"));
+    }
+
+    #[test]
+    fn test_topics_are_unique() {
+        assert_ne!(BLOCKS_TOPIC, TRANSACTIONS_TOPIC);
+        assert_ne!(BLOCKS_TOPIC, SCP_TOPIC);
+        assert_ne!(TRANSACTIONS_TOPIC, SCP_TOPIC);
+    }
+}

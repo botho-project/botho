@@ -46,7 +46,11 @@ enum Commands {
     Balance,
 
     /// Show receiving address
-    Address,
+    Address {
+        /// Save address to a file (use .botho for classical, .pq for quantum)
+        #[arg(long)]
+        save: Option<String>,
+    },
 
     /// Send credits to an address
     Send {
@@ -59,6 +63,11 @@ enum Commands {
         /// Use ring signatures for sender privacy (hides which UTXO you spent)
         #[arg(long)]
         private: bool,
+
+        /// Use quantum-safe cryptography for post-quantum security
+        /// Outputs use ML-KEM-768, inputs use Schnorr + ML-DSA-65 signatures
+        #[arg(long)]
+        quantum: bool,
     },
 }
 
@@ -96,11 +105,11 @@ fn main() -> Result<()> {
         Commands::Balance => {
             commands::balance::run(&config_path)
         }
-        Commands::Address => {
-            commands::address::run(&config_path)
+        Commands::Address { save } => {
+            commands::address::run(&config_path, save.as_deref())
         }
-        Commands::Send { address, amount, private } => {
-            commands::send::run(&config_path, &address, &amount, private)
+        Commands::Send { address, amount, private, quantum } => {
+            commands::send::run(&config_path, &address, &amount, private, quantum)
         }
     }
 }
