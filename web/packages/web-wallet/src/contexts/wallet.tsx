@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from 'react'
 import { RemoteNodeAdapter } from '@botho/adapters'
-import { AddressBook, saveWallet, loadWallet, getWalletInfo, deriveAddress, isValidMnemonic } from '@botho/core'
+import { AddressBook, saveWallet, loadWallet, getWalletInfo, deriveAddress, isValidMnemonic, clearWallet } from '@botho/core'
 import type { Balance, Contact, NodeInfo, Transaction } from '@botho/core'
 
 interface WalletState {
@@ -40,6 +40,7 @@ interface WalletContextValue extends WalletState {
   importWallet: (seedPhrase: string, password?: string) => Promise<void>
   unlockWallet: (password: string) => Promise<void>
   exportWallet: (password?: string) => Promise<string | null>
+  resetWallet: () => void
 
   // Transactions
   send: (to: string, amount: bigint, memo?: string) => Promise<string>
@@ -235,6 +236,23 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     return stored?.mnemonic ?? null
   }, [])
 
+  const resetWallet = useCallback(() => {
+    // Clear stored wallet from localStorage
+    clearWallet()
+    // Clear mnemonic from memory
+    mnemonicRef.current = null
+    // Reset state to initial
+    setState(s => ({
+      ...s,
+      hasWallet: false,
+      isEncrypted: false,
+      isLocked: false,
+      address: null,
+      balance: null,
+      transactions: [],
+    }))
+  }, [])
+
   const send = useCallback(async (to: string, amount: bigint, memo?: string): Promise<string> => {
     // TODO: Implement actual transaction signing and submission
     console.log('Sending', { to, amount, memo })
@@ -285,6 +303,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         importWallet,
         unlockWallet,
         exportWallet,
+        resetWallet,
         send,
         refreshBalance,
         refreshTransactions,

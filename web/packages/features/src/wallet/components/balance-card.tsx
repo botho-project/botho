@@ -3,7 +3,7 @@ import type { Balance } from '@botho/core'
 import { formatBTH } from '@botho/core'
 import { Card, CardContent } from '@botho/ui'
 import { motion } from 'motion/react'
-import { Wallet, Check, Copy } from 'lucide-react'
+import { Wallet, Check, Copy, Wifi, WifiOff, RefreshCw } from 'lucide-react'
 import { useCopyToClipboard } from '../hooks'
 
 export interface BalanceCardProps {
@@ -13,8 +13,14 @@ export interface BalanceCardProps {
   address: string | null
   /** Whether balance is loading */
   isLoading?: boolean
+  /** Whether connected to blockchain */
+  isConnected?: boolean
+  /** Whether currently syncing */
+  isSyncing?: boolean
   /** Action buttons (Send, Receive, etc.) */
   actions?: ReactNode
+  /** Whether to show the address (default: false) */
+  showAddress?: boolean
   /** Custom class name */
   className?: string
 }
@@ -26,7 +32,10 @@ export function BalanceCard({
   balance,
   address,
   isLoading = false,
+  isConnected = true,
+  isSyncing = false,
   actions,
+  showAddress = false,
   className = '',
 }: BalanceCardProps) {
   const { copied, copy } = useCopyToClipboard()
@@ -38,6 +47,26 @@ export function BalanceCard({
         <div className="absolute inset-0 bg-gradient-to-br from-[--color-pulse]/5 via-transparent to-[--color-purple]/5" />
 
         <CardContent className="relative">
+          {/* Sync status indicator */}
+          <div className="absolute top-4 right-4">
+            {isSyncing ? (
+              <div className="flex items-center gap-1.5 text-xs text-[--color-warning]">
+                <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                <span>Syncing</span>
+              </div>
+            ) : isConnected ? (
+              <div className="flex items-center gap-1.5 text-xs text-[--color-success]">
+                <Wifi className="h-3.5 w-3.5" />
+                <span>Synced</span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1.5 text-xs text-[--color-danger]">
+                <WifiOff className="h-3.5 w-3.5" />
+                <span>Offline</span>
+              </div>
+            )}
+          </div>
+
           <div className="flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
             {/* Balance */}
             <div>
@@ -87,8 +116,8 @@ export function BalanceCard({
             {actions && <div className="flex gap-3">{actions}</div>}
           </div>
 
-          {/* Address */}
-          {address && (
+          {/* Address (optional) */}
+          {showAddress && address && (
             <div className="mt-6 flex items-center gap-2 rounded-lg border border-[--color-steel] bg-[--color-slate]/50 p-3">
               <span className="text-sm text-[--color-dim]">Address:</span>
               <code className="flex-1 truncate font-mono text-sm text-[--color-ghost]">

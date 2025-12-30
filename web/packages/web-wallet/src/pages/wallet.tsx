@@ -4,7 +4,7 @@ import { Button, Card, Input, Logo, Toast } from '@botho/ui'
 import { createMnemonic12 } from '@botho/core'
 import { useCopyToClipboard, BalanceCard, TransactionList, SendModal, type SendFormData, type SendResult } from '@botho/features'
 import { useWallet } from '../contexts/wallet'
-import { Send, Download, RefreshCw, ArrowLeft, Shield, Eye, KeyRound, AlertCircle, Lock, Copy, Check } from 'lucide-react'
+import { Send, Download, RefreshCw, ArrowLeft, Shield, Eye, KeyRound, AlertCircle, Lock, Copy, Check, Settings, Trash2 } from 'lucide-react'
 
 function CreateWalletView({ onCreate }: { onCreate: (mnemonic: string, password?: string) => void }) {
   const [showMnemonic, setShowMnemonic] = useState(false)
@@ -210,17 +210,23 @@ function ImportWalletView({ onImport }: { onImport: (mnemonic: string, password?
 }
 
 function WalletDashboard() {
-  const { address, balance, transactions, isConnecting, refreshBalance } = useWallet()
-  const { copied, copy } = useCopyToClipboard()
+  const { address, balance, transactions, isConnecting, isConnected, refreshBalance, resetWallet } = useWallet()
+  const { copy } = useCopyToClipboard()
   const [sendOpen, setSendOpen] = useState(false)
   const [isSending, setIsSending] = useState(false)
   const [showCopiedToast, setShowCopiedToast] = useState(false)
+  const [showResetConfirm, setShowResetConfirm] = useState(false)
 
   const handleReceive = () => {
     if (address) {
       copy(address)
       setShowCopiedToast(true)
     }
+  }
+
+  const handleReset = () => {
+    resetWallet()
+    setShowResetConfirm(false)
   }
 
   const handleSend = async (_data: SendFormData): Promise<SendResult> => {
@@ -255,6 +261,9 @@ function WalletDashboard() {
       <Button variant="ghost" size="sm" onClick={refreshBalance} disabled={isConnecting}>
         <RefreshCw size={16} className={isConnecting ? 'animate-spin' : ''} />
       </Button>
+      <Button variant="ghost" size="sm" onClick={() => setShowResetConfirm(true)} title="Reset wallet">
+        <Settings size={16} />
+      </Button>
     </>
   )
 
@@ -264,6 +273,8 @@ function WalletDashboard() {
         balance={balance}
         address={address}
         isLoading={isConnecting}
+        isConnected={isConnected}
+        isSyncing={isConnecting}
         actions={actionButtons}
       />
 
@@ -289,6 +300,28 @@ function WalletDashboard() {
         onHide={() => setShowCopiedToast(false)}
         icon={<Check size={16} className="text-success" />}
       />
+
+      {showResetConfirm && (
+        <div className="fixed inset-0 bg-void/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 z-50">
+          <Card className="w-full sm:max-w-md p-5 sm:p-6 rounded-t-2xl sm:rounded-2xl">
+            <div className="text-center mb-5 sm:mb-6">
+              <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-danger/10 flex items-center justify-center mx-auto mb-3 sm:mb-4">
+                <Trash2 className="text-danger" size={28} />
+              </div>
+              <h3 className="font-display text-lg sm:text-xl font-semibold mb-2">Reset Wallet</h3>
+              <p className="text-ghost text-sm">This will remove your wallet from this device. Make sure you have your recovery phrase saved before continuing.</p>
+            </div>
+            <div className="space-y-3">
+              <Button variant="danger" onClick={handleReset} className="w-full justify-center">
+                Reset & Start Over
+              </Button>
+              <Button variant="secondary" onClick={() => setShowResetConfirm(false)} className="w-full justify-center">
+                Cancel
+              </Button>
+            </div>
+          </Card>
+        </div>
+      )}
     </div>
   )
 }
