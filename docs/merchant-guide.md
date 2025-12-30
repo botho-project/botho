@@ -93,7 +93,7 @@ class PaymentRequest:
         # Store pending payment
         self.pending_payments[memo] = {
             'order_id': order_id,
-            'amount': int(amount_bth * 1e12),  # Convert to credits
+            'amount': int(amount_bth * 1e9),  # Convert to nanoBTH
             'created_at': time.time(),
             'expires_at': time.time() + 3600,  # 1 hour expiry
             'status': 'pending'
@@ -102,7 +102,7 @@ class PaymentRequest:
         return {
             'address': address,
             'amount_bth': amount_bth,
-            'amount_credits': int(amount_bth * 1e12),
+            'amount_nanobth': int(amount_bth * 1e9),
             'memo': memo,
             'expires_at': self.pending_payments[memo]['expires_at'],
             'payment_uri': self.build_payment_uri(address, amount_bth, memo)

@@ -275,7 +275,7 @@ Estimate the transaction fee.
 **Parameters:**
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `amount` | integer | No | 0 | Transaction amount in credits |
+| `amount` | integer | No | 0 | Transaction amount in nanoBTH |
 | `private` | boolean | No | true | Whether transaction uses privacy features |
 | `memos` | integer | No | 0 | Number of encrypted memos |
 

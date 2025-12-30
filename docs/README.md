@@ -19,6 +19,7 @@ Welcome to the Botho documentation. Botho is a privacy-preserving, mined cryptoc
 | [Transaction Types](transactions.md) | Minting, Standard, and Private transactions |
 | [Privacy](privacy.md) | Privacy features and cryptography |
 | [Tokenomics](tokenomics.md) | Supply, emission, fees, and economics |
+| [Monetary Policy](monetary-policy.md) | Difficulty adjustment, epochs, and fork upgrades |
 
 ### Running a Node
 | Document | Description |
@@ -58,7 +59,7 @@ Botho combines:
 - **Byzantine Fault Tolerance**: Stellar Consensus Protocol (SCP) for consensus
 - **Progressive Fees**: Cluster-based taxation that discourages wealth concentration
 
-The native currency unit is the **credit** (BTH).
+The native currency unit is **BTH** (1 BTH = 1,000,000,000 nanoBTH).
 
 ## Quick Start
 
@@ -87,7 +88,7 @@ botho run --mint
 | `botho status` | Show sync status, balance, minting stats |
 | `botho balance` | Show wallet balance |
 | `botho address` | Show receiving address |
-| `botho send <addr> <amt>` | Send credits |
+| `botho send <addr> <amt>` | Send BTH |
 
 ## Project Status
 

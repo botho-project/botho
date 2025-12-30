@@ -3,10 +3,17 @@
 //! This module provides infrastructure for simulating diverse economic actors
 //! (whales, merchants, retail users, etc.) interacting under the cluster tax
 //! mechanism, allowing empirical validation of parameter choices.
+//!
+//! ## Privacy Simulation
+//!
+//! The `privacy` submodule models the effective bits of privacy that users can
+//! expect from ring signatures under various adversary models and network conditions.
 
 mod agent;
 pub mod agents;
 mod metrics;
+#[cfg(any(feature = "cli", test))]
+pub mod privacy;
 mod runner;
 mod state;
 

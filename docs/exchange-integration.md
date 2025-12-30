@@ -327,31 +327,31 @@ Botho transactions are built and signed by the node's integrated wallet:
 def process_withdrawal(user_address, amount_bth):
     """
     Process a withdrawal request.
-    Amount is in BTH, converted to credits internally.
+    Amount is in BTH, converted to nanoBTH internally.
     """
-    amount_credits = int(amount_bth * 1e12)
+    amount_nanobth = int(amount_bth * 1e9)
 
     # 1. Estimate fee
     fee_response = rpc('estimateFee', {
-        'amount': amount_credits,
+        'amount': amount_nanobth,
         'private': True
     })
     fee = fee_response['recommendedFee']
 
     # 2. Check balance
     balance = rpc('wallet_getBalance')
-    if balance['confirmed'] < amount_credits + fee:
+    if balance['confirmed'] < amount_nanobth + fee:
         raise InsufficientFundsError()
 
     # 3. Build and submit transaction
     # Note: This requires the node to support tx building via RPC
     # Currently, use the CLI or Rust crates for transaction building
-    result = execute_withdrawal_cli(user_address, amount_credits)
+    result = execute_withdrawal_cli(user_address, amount_nanobth)
 
     return {
         'tx_hash': result['txHash'],
         'fee': fee,
-        'amount': amount_credits
+        'amount': amount_nanobth
     }
 
 def execute_withdrawal_cli(address, amount):

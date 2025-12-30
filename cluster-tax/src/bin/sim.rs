@@ -204,6 +204,60 @@ mod cli {
             #[arg(long, default_value = "100")]
             flat_rate: u32,
         },
+
+        /// Analyze ring size cost/benefit tradeoffs
+        RingSize {
+            /// Ring sizes to analyze (comma-separated)
+            #[arg(long, default_value = "5,7,9,11,13")]
+            sizes: String,
+
+            /// Run privacy simulations for each ring size
+            #[arg(long)]
+            simulate: bool,
+
+            /// Number of simulations per ring size (if --simulate)
+            #[arg(short = 'n', long, default_value = "1000")]
+            simulations: usize,
+
+            /// UTXO pool size for simulations
+            #[arg(long, default_value = "50000")]
+            pool_size: usize,
+        },
+
+        /// Simulate ring signature privacy under various adversary models
+        Privacy {
+            /// Number of ring simulations to run
+            #[arg(short = 'n', long, default_value = "10000")]
+            simulations: usize,
+
+            /// Size of the UTXO pool
+            #[arg(long, default_value = "100000")]
+            pool_size: usize,
+
+            /// Fraction of standard transactions (0.0 to 1.0)
+            #[arg(long, default_value = "0.50")]
+            standard_fraction: f64,
+
+            /// Fraction of exchange transactions
+            #[arg(long, default_value = "0.25")]
+            exchange_fraction: f64,
+
+            /// Fraction of whale transactions
+            #[arg(long, default_value = "0.10")]
+            whale_fraction: f64,
+
+            /// Cluster decay rate per hop (percent)
+            #[arg(long, default_value = "5.0")]
+            decay_rate: f64,
+
+            /// Enable cluster-aware decoy selection
+            #[arg(long, default_value = "true")]
+            cluster_aware: bool,
+
+            /// Minimum cluster similarity threshold
+            #[arg(long, default_value = "0.70")]
+            min_similarity: f64,
+        },
     }
 
     pub fn run(cli: Cli) {
@@ -248,6 +302,31 @@ mod cli {
                 output,
                 flat_rate,
             } => run_compare(retail_users, merchants, whales, whale_fraction, rounds, output, flat_rate),
+            Command::RingSize {
+                sizes,
+                simulate,
+                simulations,
+                pool_size,
+            } => run_ring_size_analysis(&sizes, simulate, simulations, pool_size),
+            Command::Privacy {
+                simulations,
+                pool_size,
+                standard_fraction,
+                exchange_fraction,
+                whale_fraction,
+                decay_rate,
+                cluster_aware,
+                min_similarity,
+            } => run_privacy_simulation(
+                simulations,
+                pool_size,
+                standard_fraction,
+                exchange_fraction,
+                whale_fraction,
+                decay_rate,
+                cluster_aware,
+                min_similarity,
+            ),
         }
     }
 
@@ -1298,6 +1377,238 @@ mod cli {
 
         println!("\nTo plot results, run:");
         println!("  python3 cluster-tax/scripts/plot_gini.py {output_dir}");
+    }
+
+    fn run_privacy_simulation(
+        num_simulations: usize,
+        pool_size: usize,
+        standard_fraction: f64,
+        exchange_fraction: f64,
+        whale_fraction: f64,
+        decay_rate_pct: f64,
+        cluster_aware: bool,
+        min_similarity: f64,
+    ) {
+        use bth_cluster_tax::simulation::privacy::{
+            format_monte_carlo_report, run_monte_carlo, MonteCarloConfig, PoolConfig, RingSimConfig,
+            RING_SIZE,
+        };
+
+        // Normalize fractions
+        let total_specified = standard_fraction + exchange_fraction + whale_fraction;
+        let coinbase_fraction = 0.10;
+        let mixed_fraction = 1.0 - total_specified - coinbase_fraction;
+
+        let pool_config = PoolConfig {
+            pool_size,
+            standard_fraction,
+            exchange_fraction,
+            whale_fraction,
+            coinbase_fraction,
+            mixed_fraction: mixed_fraction.max(0.0),
+            num_clusters: 1_000,
+            decay_rate: decay_rate_pct / 100.0,
+            max_age_blocks: 525_600,
+        };
+
+        let ring_config = RingSimConfig {
+            ring_size: RING_SIZE,
+            min_cluster_similarity: min_similarity,
+            cluster_aware_selection: cluster_aware,
+        };
+
+        let config = MonteCarloConfig {
+            num_simulations,
+            pool_config,
+            ring_config,
+        };
+
+        println!("Running privacy simulation...");
+        println!("  Simulations: {num_simulations}");
+        println!("  Pool size: {pool_size}");
+        println!("  Standard tx fraction: {:.0}%", standard_fraction * 100.0);
+        println!("  Decay rate: {decay_rate_pct}% per hop");
+        println!("  Cluster-aware selection: {cluster_aware}");
+        println!("  Min similarity threshold: {:.0}%\n", min_similarity * 100.0);
+
+        let mut rng = rand::thread_rng();
+        let results = run_monte_carlo(&config, &mut rng);
+
+        println!("{}", format_monte_carlo_report(&results));
+
+        // Print interpretation
+        println!("\nINTERPRETATION:");
+        println!("───────────────────────────────────────────────────────────────────");
+
+        if let Some(combined_stats) = results.bits_of_privacy_stats.get("Combined") {
+            let mean_bits = combined_stats.mean;
+            let median_bits = combined_stats.median;
+            let worst_case = combined_stats.percentile_5;
+
+            println!("Against a sophisticated adversary using both age and cluster heuristics:");
+            println!();
+            println!("  • Average privacy:   {:.2} bits ({:.1} effective ring members)",
+                mean_bits, 2.0_f64.powf(mean_bits));
+            println!("  • Median privacy:    {:.2} bits ({:.1} effective ring members)",
+                median_bits, 2.0_f64.powf(median_bits));
+            println!("  • Worst case (5th%): {:.2} bits ({:.1} effective ring members)",
+                worst_case, 2.0_f64.powf(worst_case));
+            println!();
+
+            let max_bits = (RING_SIZE as f64).log2();
+            let efficiency = mean_bits / max_bits * 100.0;
+            println!("  • Privacy efficiency: {:.1}% of theoretical maximum ({:.2} bits)",
+                efficiency, max_bits);
+
+            if let Some(id_rate) = results.identified_rate.get("Combined") {
+                println!("  • Identification rate: {:.1}% (adversary guesses correctly as #1 suspect)",
+                    id_rate * 100.0);
+            }
+
+            println!();
+            println!("For comparison:");
+            if let Some(naive_stats) = results.bits_of_privacy_stats.get("Naive") {
+                println!("  • Perfect (naive): {:.2} bits", naive_stats.mean);
+            }
+            if let Some(age_stats) = results.bits_of_privacy_stats.get("Age-Heuristic") {
+                println!("  • Age-only attack: {:.2} bits", age_stats.mean);
+            }
+            if let Some(cluster_stats) = results.bits_of_privacy_stats.get("Cluster-Fingerprint") {
+                println!("  • Cluster-only attack: {:.2} bits", cluster_stats.mean);
+            }
+        }
+
+        println!();
+        println!("Note: Higher bits = better privacy. Theoretical max for ring size 7 is 2.81 bits.");
+    }
+
+    fn run_ring_size_analysis(sizes_str: &str, simulate: bool, num_sims: usize, pool_size: usize) {
+        use bth_cluster_tax::simulation::privacy::{
+            analyze_ring_sizes, format_ring_size_analysis, run_monte_carlo,
+            MonteCarloConfig, PoolConfig, RingSimConfig,
+        };
+
+        // Parse ring sizes
+        let sizes: Vec<usize> = sizes_str
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .filter(|&s| s >= 3 && s <= 31)
+            .collect();
+
+        if sizes.is_empty() {
+            eprintln!("Error: No valid ring sizes provided. Use odd numbers between 3 and 31.");
+            return;
+        }
+
+        // Run cost analysis
+        let mut analyses = analyze_ring_sizes(&sizes);
+        println!("{}", format_ring_size_analysis(&analyses));
+
+        // Optionally run simulations for each ring size
+        if simulate {
+            println!("\nRUNNING PRIVACY SIMULATIONS\n");
+            println!("─────────────────────────────────────────────────────────────────────────────────");
+            println!("Ring   Theoretical   Measured    Efficiency   Cluster      ID Rate");
+            println!("Size   Max (bits)    (bits)      (%)          Leakage      (Combined)");
+            println!("─────────────────────────────────────────────────────────────────────────────────");
+
+            let mut rng = rand::thread_rng();
+
+            for analysis in &mut analyses {
+                let pool_config = PoolConfig {
+                    pool_size,
+                    ..Default::default()
+                };
+
+                let ring_config = RingSimConfig {
+                    ring_size: analysis.ring_size,
+                    min_cluster_similarity: 0.70,
+                    cluster_aware_selection: true,
+                };
+
+                let config = MonteCarloConfig {
+                    num_simulations: num_sims,
+                    pool_config,
+                    ring_config,
+                };
+
+                let results = run_monte_carlo(&config, &mut rng);
+
+                if let Some(combined_stats) = results.bits_of_privacy_stats.get("Combined") {
+                    let measured = combined_stats.mean;
+                    let theoretical = analysis.theoretical_max_bits;
+                    let efficiency = (measured / theoretical) * 100.0;
+                    let leakage = theoretical - measured;
+                    let id_rate = results.identified_rate.get("Combined").copied().unwrap_or(0.0);
+
+                    analysis.measured_bits = Some(measured);
+                    analysis.measured_efficiency = Some(efficiency);
+
+                    println!(
+                        "{:>4}   {:>6.2}        {:>6.2}      {:>5.1}%       {:>5.2}        {:>5.1}%",
+                        analysis.ring_size,
+                        theoretical,
+                        measured,
+                        efficiency,
+                        leakage,
+                        id_rate * 100.0
+                    );
+                }
+            }
+
+            // Summary and recommendation
+            println!("\n");
+            println!("─────────────────────────────────────────────────────────────────────────────────");
+            println!("ANALYSIS SUMMARY");
+            println!("─────────────────────────────────────────────────────────────────────────────────");
+
+            // Find the sweet spot (best bits per KB)
+            let best_efficiency = analyses.iter()
+                .max_by(|a, b| a.bits_per_kb.partial_cmp(&b.bits_per_kb).unwrap())
+                .unwrap();
+
+            println!("\nBest bits-per-KB efficiency: Ring size {} ({:.3} bits/KB)",
+                best_efficiency.ring_size, best_efficiency.bits_per_kb);
+
+            // Compare ring 7 to alternatives
+            if let Some(ring7) = analyses.iter().find(|a| a.ring_size == 7) {
+                println!("\nWhy ring size 7 is the sweet spot:");
+                println!();
+
+                // Compare to smaller
+                if let Some(ring5) = analyses.iter().find(|a| a.ring_size == 5) {
+                    let size_saved = ring7.signature_bytes - ring5.signature_bytes;
+                    let privacy_lost = ring7.theoretical_max_bits - ring5.theoretical_max_bits;
+                    println!("  vs Ring 5: +{:.1} KB (+{:.0}%) for +{:.2} bits (+{:.0}% privacy)",
+                        size_saved as f64 / 1024.0,
+                        (size_saved as f64 / ring5.signature_bytes as f64) * 100.0,
+                        privacy_lost,
+                        (privacy_lost / ring5.theoretical_max_bits) * 100.0);
+                }
+
+                // Compare to larger
+                for &compare_size in &[9, 11, 13] {
+                    if let Some(larger) = analyses.iter().find(|a| a.ring_size == compare_size) {
+                        let size_cost = larger.signature_bytes - ring7.signature_bytes;
+                        let privacy_gain = larger.theoretical_max_bits - ring7.theoretical_max_bits;
+                        println!("  vs Ring {}: +{:.1} KB (+{:.0}%) for only +{:.2} bits (+{:.0}% privacy)",
+                            compare_size,
+                            size_cost as f64 / 1024.0,
+                            (size_cost as f64 / ring7.signature_bytes as f64) * 100.0,
+                            privacy_gain,
+                            (privacy_gain / ring7.theoretical_max_bits) * 100.0);
+                    }
+                }
+
+                println!();
+                println!("Ring 7 provides {} of {} theoretical bits ({:.1}% efficiency)",
+                    ring7.measured_bits.map(|b| format!("{:.2}", b)).unwrap_or("N/A".to_string()),
+                    format!("{:.2}", ring7.theoretical_max_bits),
+                    ring7.measured_efficiency.unwrap_or(0.0));
+            }
+        } else {
+            println!("\nRun with --simulate to measure actual privacy for each ring size.");
+        }
     }
 }
 

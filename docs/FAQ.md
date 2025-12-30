@@ -88,23 +88,25 @@ With a fresh network, sync is nearly instant. As the blockchain grows, initial s
 
 ### Are all transactions private?
 
-Yes. Every transaction uses:
+All transactions hide the **recipient** and (for Standard/Private transactions) the **amount**:
 
-- **Stealth addresses** — Recipients get unique one-time addresses
-- **Ring signatures** — Senders are hidden among decoys
-- **Encrypted memos** — Optional messages are encrypted
+- **Stealth addresses** — Recipients get unique one-time addresses (all transactions)
+- **Confidential amounts** — Amounts hidden via Pedersen commitments (Standard & Private)
+- **Encrypted memos** — Optional messages are encrypted (all transactions)
 
-There's no "transparent mode" — privacy is the only option.
+**Sender privacy** depends on transaction type:
+- **Minting/Standard transactions**: Sender is visible (ML-DSA signature)
+- **Private transactions**: Sender hidden among 7 ring members (LION ring signatures)
 
 ### Can I see my transaction on a block explorer?
 
 You can see that a transaction exists, but:
 
-- You cannot see who sent it (ring signatures)
-- You cannot see who received it (stealth addresses)
-- You cannot see the amount (coming soon with RingCT)
+- **Recipient**: Always hidden (stealth addresses)
+- **Amount**: Hidden for Standard/Private transactions (Pedersen commitments)
+- **Sender**: Hidden only for Private transactions (ring signatures)
 
-Only the sender and recipient can identify their own transactions.
+For Standard transactions, the sender is visible but recipient and amount are hidden. For Private transactions, sender, recipient, and amount are all hidden.
 
 ### What information is NOT hidden?
 
@@ -117,7 +119,7 @@ Only the sender and recipient can identify their own transactions.
 Botho provides strong cryptographic privacy, but privacy is never absolute:
 
 - **Timing analysis** may reveal patterns if you transact predictably
-- **Amount correlation** may be possible until RingCT is implemented
+- **Transaction graph analysis** possible for Standard transactions (sender visible)
 - **IP tracking** is possible without Tor/VPN
 - **Exchange KYC** links your identity to addresses you deposit to/withdraw from
 

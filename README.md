@@ -128,6 +128,7 @@ Visit [botho.io](https://botho.io) to use the web wallet without running a node.
 | [Why Botho?](./docs/comparison.md) | Comparison with Bitcoin, Monero, Zcash |
 | [Architecture](./docs/architecture.md) | System design and component overview |
 | [Tokenomics](./docs/tokenomics.md) | Emission schedule, fees, and supply |
+| [Monetary Policy](./docs/monetary-policy.md) | Difficulty adjustment, epochs, and upgrades |
 | [Minting](./docs/minting.md) | Mining setup and economics |
 | [Privacy](./docs/privacy.md) | Privacy features and cryptography |
 | [Configuration](./docs/configuration.md) | Node configuration options |

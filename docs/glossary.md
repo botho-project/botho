@@ -26,7 +26,7 @@ The amount of BTH created when a new block is mined. Botho starts at 50 BTH per 
 The native currency unit of Botho. 1 BTH = 1,000,000,000 nanoBTH.
 
 ### Bulletproofs
-A type of zero-knowledge proof used for range proofs. Ensures transaction amounts are positive without revealing the actual values. (Planned for Botho)
+A type of zero-knowledge proof used for range proofs. Ensures transaction amounts are positive without revealing the actual values. Used in Standard and Private transactions.
 
 ### Byzantine Fault Tolerance (BFT)
 The ability of a system to continue operating correctly even if some participants are malicious or faulty. SCP provides BFT for Botho consensus.
@@ -194,7 +194,7 @@ Another node connected to your node in the P2P network.
 A cryptographic commitment that hides a value while allowing mathematical operations. Used in confidential transactions.
 
 ### Picocredits
-Internal unit for BTH amounts. 1 BTH = 1,000,000,000,000 picocredits (10^12).
+*Deprecated term.* See **nanoBTH** — the smallest unit of BTH. 1 BTH = 1,000,000,000 nanoBTH (10^9).
 
 ### Post-Quantum Cryptography
 Cryptographic algorithms believed to be secure against quantum computer attacks. Botho uses ML-KEM for stealth addresses, ML-DSA for standard signatures, and LION for ring signatures.
@@ -235,7 +235,7 @@ A zero-knowledge proof that a hidden value falls within a valid range (e.g., is 
 A cryptographic signature that proves one member of a group signed a message, without revealing which one. Used to hide transaction senders.
 
 ### RingCT
-**Ring Confidential Transactions** — Combines ring signatures with confidential amounts. Planned for Botho.
+**Ring Confidential Transactions** — Combines ring signatures with confidential amounts. Botho implements this via LION ring signatures (for sender privacy) combined with Pedersen commitments and Bulletproofs (for amount privacy).
 
 ### RPC
 **Remote Procedure Call** — A protocol for making requests to a node. Botho provides a JSON-RPC API on port 7101.
