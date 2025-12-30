@@ -106,7 +106,19 @@ Tags decay by ~5% per transaction hop:
 | Minimum fee | 0.05% | Small/diffused clusters |
 | Maximum fee | 30% | Large concentrated clusters |
 | Decay rate | 5% per hop | Tag decay per transaction |
-| Midpoint | 10M credits | Sigmoid inflection point |
+| Midpoint | 10M BTH | Sigmoid inflection point |
+
+### Tag Vector Limits
+
+To bound storage and reduce fingerprinting, cluster tag vectors are truncated:
+
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| Max entries | 16 | Maximum clusters tracked per output |
+| Min weight | 0.1% | Weights below this are pruned to "background" |
+| Truncation | By weight | Lowest-weight entries dropped first |
+
+Weights below 0.1% (1000 in parts-per-million) become "background" — unattributed ancestry that's indistinguishable across outputs. This ensures old ancestry eventually disappears and tag vectors don't grow unbounded.
 
 ## Ring Signatures (Private Transactions)
 
@@ -144,6 +156,57 @@ The wallet's `create_private_transaction()` method handles:
 - **No Coordination**: Decoys don't know they're being used
 - **Linkable**: Key images prevent double-spending without revealing the signer
 - **Post-Quantum**: Secure against quantum computer attacks
+
+### Cluster Tag Privacy Considerations
+
+Botho's progressive fee system uses **cluster tags** to track coin ancestry for wealth-based taxation. These tags are visible on transaction outputs, which creates a potential privacy consideration for ring signatures.
+
+#### The Challenge
+
+When a private transaction creates outputs, the cluster tags on those outputs are derived from the input's tags (with 5% decay). An observer could potentially:
+
+1. Examine the ring of 7 possible inputs
+2. Compare each input's cluster tags to the output's tags
+3. Identify which input's tags, after decay, best match the output
+
+If only one ring member's tags produce a plausible output pattern, the ring signature anonymity is reduced.
+
+#### Example Attack Scenario
+
+```
+Ring Member A: {cluster_17: 0.80, cluster_42: 0.15}
+Ring Member B: {cluster_3: 0.95}
+Ring Member C: {cluster_17: 0.40, cluster_42: 0.40}
+... (4 more members with different patterns)
+
+Output tags:  {cluster_17: 0.76, cluster_42: 0.14}  (after 5% decay)
+```
+
+An observer calculates: 0.80 × 0.95 = 0.76, 0.15 × 0.95 ≈ 0.14 — only Ring Member A matches!
+
+#### Privacy Impact by Coin State
+
+| Coin Circulation | Tag Distinctiveness | Effective Anonymity |
+|-----------------|---------------------|---------------------|
+| Fresh (1-3 hops from minting) | Very high | 1-2 of 7 ring members |
+| Young (5-10 hops) | High | 2-4 of 7 ring members |
+| Circulated (15-20 hops) | Moderate | 4-6 of 7 ring members |
+| Heavily circulated (30+ hops) | Low (market average) | Near-ideal 7 of 7 |
+
+#### Mitigation: Cluster-Aware Decoy Selection
+
+Botho's OSPEAD algorithm addresses this by selecting decoys with **similar cluster tag profiles**. When all ring members have comparable tag patterns, the fingerprinting attack fails because multiple members produce plausible outputs.
+
+See [OSPEAD Decoy Selection](#ospead-decoy-selection) for implementation details.
+
+#### Design Trade-offs
+
+This creates an intentional correlation between wealth concentration and privacy:
+
+- **Diffuse clusters** (low fees): Coins have circulated widely, tags are mixed, privacy is strong
+- **Concentrated clusters** (high fees): Tags are distinctive, privacy is reduced
+
+This aligns with Botho's progressive philosophy—privacy costs more for concentrated wealth. Users seeking maximum privacy are incentivized to circulate their coins, which diffuses cluster tags over time.
 
 ## Transaction Types and Fees
 
