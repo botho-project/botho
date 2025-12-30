@@ -23,3 +23,12 @@ pub const HASH_TO_SCALAR_DOMAIN_TAG: &str = "mc_onetime_key_hash_to_scalar";
 
 /// Domain separator for RingMLSAG's challenges.
 pub const RING_MLSAG_CHALLENGE_DOMAIN_TAG: &str = "mc_ring_mlsag_challenge";
+
+/// Domain separator for CLSAG aggregation coefficient mu_P (for public keys).
+pub const CLSAG_AGG_COEFF_P_DOMAIN_TAG: &str = "bth_clsag_agg_p";
+
+/// Domain separator for CLSAG aggregation coefficient mu_C (for commitments).
+pub const CLSAG_AGG_COEFF_C_DOMAIN_TAG: &str = "bth_clsag_agg_c";
+
+/// Domain separator for CLSAG round hash (challenge computation).
+pub const CLSAG_ROUND_HASH_DOMAIN_TAG: &str = "bth_clsag_round";
