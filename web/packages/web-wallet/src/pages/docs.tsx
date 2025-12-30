@@ -745,9 +745,9 @@ BTH uses 9-decimal precision:
 
 ### Phase 1: Halving Period (Years 0-10)
 
-Block rewards halve every ~2 years, distributing approximately 100 million BTH over 10 years.
+Minting rewards halve every ~2 years, distributing approximately 100 million BTH over 10 years.
 
-| Period | Years | Block Reward | Cumulative Supply |
+| Period | Years | Minting Reward | Cumulative Supply |
 |--------|-------|--------------|-------------------|
 | Halving 0 | 0-2 | 50 BTH | ~52.6M BTH |
 | Halving 1 | 2-4 | 25 BTH | ~78.9M BTH |
@@ -767,7 +767,7 @@ After Phase 1, Botho transitions to perpetual tail emission targeting **2% annua
 - **Lost coin replacement** - Compensates for coins lost to forgotten keys
 - **Predictable monetary policy** - 2% is below typical fiat inflation
 
-At 100M BTH supply, the tail reward works out to approximately **4.76 BTH per block**.
+At 100M BTH supply, the tail minting reward works out to approximately **4.76 BTH per slot**.
 
 ---
 
