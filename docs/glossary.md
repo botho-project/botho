@@ -52,7 +52,7 @@ A protocol for private cryptocurrency transactions, originally developed for Byt
 ## D
 
 ### Decoy
-In ring signatures, a decoy is a transaction output included to hide the true sender. Decoys are randomly selected from the blockchain.
+In ring signatures, a decoy is a transaction output included to hide the true sender. Decoys are selected using OSPEAD criteria: age distribution, cluster tag similarity, and amount plausibility.
 
 ### Difficulty
 A measure of how hard it is to find a valid proof-of-work. Difficulty adjusts to maintain target block times.

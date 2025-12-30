@@ -202,7 +202,10 @@ Botho uses OSPEAD (Optimal Selection Probability to Evade Analysis of Decoys):
 
 - **Gamma distribution**: Matches decoy ages to real spending patterns
 - **Age-weighted selection**: Newer outputs more likely to be selected
-- **Effective anonymity**: At least 2 ring members appear equally likely to be the spender
+- **Cluster similarity**: Prefers decoys with similar cluster tag profiles
+- **Effective anonymity**: Multiple ring members appear equally likely to be the spender
+
+Cluster-aware selection prevents fingerprinting attacks where an observer matches output cluster tags to specific inputs. By selecting decoys with similar cluster profiles, all ring members produce plausible output patterns.
 
 ### Use Cases
 

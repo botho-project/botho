@@ -292,8 +292,24 @@ LION (Lattice-based lInkable ring signatures fOr aNonymity) provides sender priv
 Botho uses OSPEAD (Optimal Selection Probability to Evade Analysis of Decoys) to select ring decoys:
 
 - **Gamma distribution**: Matches decoy ages to real spending patterns
-- **Age-weighted selection**: Prevents timing analysis attacks
-- **Effective anonymity**: At least 2 ring members appear equally likely
+- **Age-weighted selection**: Newer outputs more likely to be selected
+- **Cluster similarity**: Prefers decoys with similar cluster tag profiles
+- **Effective anonymity**: Multiple ring members appear equally likely
+
+#### Cluster-Aware Selection
+
+Because cluster tags are visible on transaction outputs, an observer could potentially identify the true sender by matching output tags to input tags. To prevent this, OSPEAD prioritizes decoys with similar cluster profiles:
+
+```
+similarity(a, b) = cosine(a.cluster_tags, b.cluster_tags)
+```
+
+Selection criteria:
+1. Dominant clusters overlap (top-3 clusters match)
+2. Tag weights within ~20% of each other
+3. Age and amount remain plausible
+
+This ensures all ring members would produce similar output tag patterns, preventing fingerprinting attacks. The trade-off is a smaller candidate pool, but this improves as the network matures and coins circulate more widely.
 
 ### Key Derivation
 
