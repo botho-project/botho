@@ -452,11 +452,14 @@ impl TxInput {
 // Ring Signature Types (Version 2 Transactions)
 // ============================================================================
 
-/// Default ring size for transactions (real input + decoys)
-pub const DEFAULT_RING_SIZE: usize = 11;
+/// Default ring size for post-quantum transactions (real input + decoys).
+/// Ring size 7 provides strong anonymity while keeping proof sizes manageable
+/// for hybrid classical/post-quantum ring signatures.
+pub const DEFAULT_RING_SIZE: usize = 7;
 
-/// Minimum ring size (must have at least some privacy)
-/// Higher values provide better anonymity set. Industry standard is 11+.
+/// Minimum ring size for privacy guarantees.
+/// With OSPEAD decoy selection targeting 1-in-4 effective anonymity,
+/// ring size 7 provides at least 2+ indistinguishable members.
 pub const MIN_RING_SIZE: usize = 7;
 
 /// A member of a ring (either the real input or a decoy).

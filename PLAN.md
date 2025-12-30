@@ -112,10 +112,10 @@ Core functionality complete. See README.md for features and usage.
 - [x] Create `docs/security.md` — Key management, threat model, best practices
 - [x] Create `docs/backup.md` — Wallet backup and recovery procedures
 
-### Tier 4: Ecosystem Growth
+### Tier 4: Ecosystem Growth ✓ COMPLETE
 
-- [ ] Exchange integration guide
-- [ ] Merchant acceptance guide
+- [x] Create `docs/exchange-integration.md` — Exchange listing guide with deposit/withdrawal handling
+- [x] Create `docs/merchant-guide.md` — Merchant acceptance guide for e-commerce and POS
 
 ### Structural Improvements
 

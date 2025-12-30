@@ -9,6 +9,7 @@ pub mod address;
 pub mod block;
 pub mod config;
 pub mod consensus;
+pub mod decoy_selection;
 pub mod ledger;
 pub mod mempool;
 pub mod monetary;

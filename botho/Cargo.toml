@@ -56,6 +56,7 @@ libp2p = { version = "0.54", features = ["tokio"] }
 futures = "0.3"
 bip39 = { package = "tiny-bip39", version = "1" }
 rand = "0.8"
+rand_distr = "0.4"
 hex = "0.4"
 sha2 = "0.10"
 bs58 = "0.5"

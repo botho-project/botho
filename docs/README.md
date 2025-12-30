@@ -40,6 +40,12 @@ Welcome to the Botho documentation. Botho is a privacy-preserving, mined cryptoc
 | [Security](security.md) | Key management, threat model |
 | [Backup & Recovery](backup.md) | Wallet backup procedures |
 
+### Ecosystem
+| Document | Description |
+|----------|-------------|
+| [Exchange Integration](exchange-integration.md) | List BTH on your exchange |
+| [Merchant Guide](merchant-guide.md) | Accept BTH payments |
+
 ## What is Botho?
 
 Botho combines:

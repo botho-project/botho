@@ -3,12 +3,14 @@ use bth_crypto_keys::{RistrettoPublic, RistrettoSignature};
 use bth_transaction_types::Network;
 use heed::types::{Bytes, U64};
 use heed::{Database, Env, EnvOpenOptions, RwTxn};
+use rand::Rng;
 use std::fs;
 use std::path::Path;
 use tracing::{debug, info};
 
 use super::{ChainState, LedgerError};
 use crate::block::Block;
+use crate::decoy_selection::{DecoySelectionError, GammaDecoySelector, OutputCandidate};
 use crate::transaction::{Transaction as BothoTransaction, TxInputs, TxOutput, Utxo, UtxoId};
 
 /// LMDB-backed ledger storage using heed
@@ -28,11 +30,24 @@ pub struct Ledger {
     /// key_images: key_image (32 bytes) -> height (8 bytes)
     /// Tracks spent key images to prevent double-spending with ring signatures.
     key_images_db: Database<Bytes, Bytes>,
+    /// tx_index: tx_hash (32 bytes) -> TxLocation (12 bytes: height u64 + tx_index u32)
+    /// Maps transaction hashes to their location for fast lookups (exchange integration).
+    tx_index_db: Database<Bytes, Bytes>,
 }
 
 // Metadata keys
 const META_HEIGHT: &[u8] = b"height";
 const META_TIP_HASH: &[u8] = b"tip_hash";
+
+/// Location of a transaction in the blockchain.
+/// Used for fast transaction lookups (exchange integration).
+#[derive(Debug, Clone, Copy)]
+pub struct TxLocation {
+    /// Block height containing the transaction
+    pub block_height: u64,
+    /// Index of the transaction within the block
+    pub tx_index: u32,
+}
 const META_TOTAL_MINED: &[u8] = b"total_mined";
 const META_FEES_BURNED: &[u8] = b"fees_burned";
 const META_DIFFICULTY: &[u8] = b"difficulty";
@@ -55,7 +70,7 @@ impl Ledger {
 
         let env = unsafe {
             EnvOpenOptions::new()
-                .max_dbs(5)
+                .max_dbs(6)  // Increased for tx_index_db
                 .map_size(1024 * 1024 * 1024) // 1GB
                 .open(path)
         }.map_err(|e| LedgerError::Database(format!("Failed to open environment: {}", e)))?;
@@ -74,6 +89,8 @@ impl Ledger {
             .map_err(|e| LedgerError::Database(format!("Failed to create address_index db: {}", e)))?;
         let key_images_db = env.create_database(&mut wtxn, Some("key_images"))
             .map_err(|e| LedgerError::Database(format!("Failed to create key_images db: {}", e)))?;
+        let tx_index_db = env.create_database(&mut wtxn, Some("tx_index"))
+            .map_err(|e| LedgerError::Database(format!("Failed to create tx_index db: {}", e)))?;
 
         wtxn.commit()
             .map_err(|e| LedgerError::Database(format!("Failed to commit: {}", e)))?;
@@ -86,6 +103,7 @@ impl Ledger {
             utxo_db,
             address_index_db,
             key_images_db,
+            tx_index_db,
         };
 
         // Initialize with genesis if empty
@@ -205,6 +223,41 @@ impl Ledger {
         self.get_block(state.height)
     }
 
+    /// Get a block by its hash.
+    ///
+    /// Searches recent blocks (up to `lookback` blocks from tip) for a matching hash.
+    /// This is used for compact block reconstruction when responding to GetBlockTxn requests.
+    ///
+    /// Returns `Ok(None)` if the block is not found within the lookback window.
+    pub fn get_block_by_hash(
+        &self,
+        hash: &[u8; 32],
+        lookback: u64,
+    ) -> Result<Option<Block>, LedgerError> {
+        let state = self.get_chain_state()?;
+
+        // Quick check: is it the tip?
+        if &state.tip_hash == hash {
+            return self.get_block(state.height).map(Some);
+        }
+
+        // Search recent blocks
+        let start_height = state.height.saturating_sub(lookback);
+        for height in (start_height..state.height).rev() {
+            match self.get_block(height) {
+                Ok(block) => {
+                    if &block.hash() == hash {
+                        return Ok(Some(block));
+                    }
+                }
+                Err(LedgerError::BlockNotFound(_)) => continue,
+                Err(e) => return Err(e),
+            }
+        }
+
+        Ok(None)
+    }
+
     /// Add a new block to the chain
     pub fn add_block(&self, block: &Block) -> Result<(), LedgerError> {
         let state = self.get_chain_state()?;
@@ -265,11 +318,14 @@ impl Ledger {
         debug!("Created coinbase UTXO at height {}", new_height);
 
         // Verify and process regular transactions
-        for tx in &block.transactions {
+        for (tx_idx, tx) in block.transactions.iter().enumerate() {
             // Verify transaction signatures before processing
             self.verify_transaction(tx)?;
 
             let tx_hash = tx.hash();
+
+            // Index transaction for fast lookups (exchange integration)
+            self.add_tx_to_index(&mut wtxn, &tx_hash, new_height, tx_idx as u32)?;
 
             // Process spent inputs based on type
             match &tx.inputs {
@@ -682,6 +738,233 @@ impl Ledger {
         candidates.truncate(count);
 
         Ok(candidates)
+    }
+
+    /// Get decoys using OSPEAD-style gamma-weighted selection.
+    ///
+    /// This method selects decoys to match expected spend age patterns, making it
+    /// harder for observers to distinguish real spends from decoys based on output age.
+    /// Uses a gamma distribution to model real-world spending behavior.
+    ///
+    /// # Arguments
+    /// * `count` - Number of decoys to select
+    /// * `exclude` - Target keys to exclude (the real inputs)
+    /// * `min_confirmations` - Minimum block confirmations required
+    /// * `selector` - Optional custom gamma selector (uses default if None)
+    ///
+    /// # Returns
+    /// Selected decoys weighted by age distribution
+    pub fn get_decoy_outputs_ospead<R: Rng>(
+        &self,
+        count: usize,
+        exclude: &[[u8; 32]],
+        min_confirmations: u64,
+        selector: Option<&GammaDecoySelector>,
+        rng: &mut R,
+    ) -> Result<Vec<TxOutput>, LedgerError> {
+        let state = self.get_chain_state()?;
+        let current_height = state.height;
+        let max_height = current_height.saturating_sub(min_confirmations);
+
+        let rtxn = self.env.read_txn()
+            .map_err(|e| LedgerError::Database(format!("Failed to start read txn: {}", e)))?;
+
+        // Collect all eligible UTXOs with age information
+        let mut candidates: Vec<OutputCandidate> = Vec::new();
+
+        let iter = self.utxo_db.iter(&rtxn)
+            .map_err(|e| LedgerError::Database(format!("Failed to create iterator: {}", e)))?;
+
+        for result in iter {
+            if let Ok((_, value)) = result {
+                if let Ok(utxo) = bincode::deserialize::<Utxo>(value) {
+                    // Check confirmations
+                    if utxo.created_at <= max_height {
+                        // Check exclusion list
+                        if !exclude.contains(&utxo.output.target_key) {
+                            candidates.push(OutputCandidate::from_utxo(&utxo, current_height));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Use provided selector or create default
+        let default_selector = GammaDecoySelector::new();
+        let selector = selector.unwrap_or(&default_selector);
+
+        // Use OSPEAD selection
+        selector
+            .select_decoys(&candidates, count, exclude, current_height, rng)
+            .map_err(|e| match e {
+                DecoySelectionError::InsufficientCandidates { required, available } => {
+                    LedgerError::InvalidBlock(format!(
+                        "Insufficient decoy candidates: need {}, have {}. \
+                         The ledger needs more confirmed outputs for private transactions.",
+                        required, available
+                    ))
+                }
+                DecoySelectionError::InvalidDistribution => {
+                    LedgerError::InvalidBlock("Invalid gamma distribution parameters".to_string())
+                }
+            })
+    }
+
+    /// Get decoys using OSPEAD selection, targeting specific ages for better anonymity.
+    ///
+    /// This version samples decoy ages based on the gamma distribution, then finds
+    /// outputs that best match those ages. This creates rings where the age distribution
+    /// matches expected real spending patterns.
+    ///
+    /// # Arguments
+    /// * `count` - Number of decoys to select
+    /// * `exclude` - Target keys to exclude
+    /// * `min_confirmations` - Minimum block confirmations
+    /// * `real_input_age` - Age in blocks of the real input being spent
+    /// * `selector` - Optional custom gamma selector
+    ///
+    /// # Returns
+    /// Selected decoys with age distribution matching spend patterns
+    pub fn get_decoy_outputs_for_input<R: Rng>(
+        &self,
+        count: usize,
+        exclude: &[[u8; 32]],
+        min_confirmations: u64,
+        real_input_age: u64,
+        selector: Option<&GammaDecoySelector>,
+        rng: &mut R,
+    ) -> Result<Vec<TxOutput>, LedgerError> {
+        let state = self.get_chain_state()?;
+        let current_height = state.height;
+        let max_height = current_height.saturating_sub(min_confirmations);
+
+        let rtxn = self.env.read_txn()
+            .map_err(|e| LedgerError::Database(format!("Failed to start read txn: {}", e)))?;
+
+        let mut candidates: Vec<OutputCandidate> = Vec::new();
+
+        let iter = self.utxo_db.iter(&rtxn)
+            .map_err(|e| LedgerError::Database(format!("Failed to create iterator: {}", e)))?;
+
+        for result in iter {
+            if let Ok((_, value)) = result {
+                if let Ok(utxo) = bincode::deserialize::<Utxo>(value) {
+                    if utxo.created_at <= max_height {
+                        if !exclude.contains(&utxo.output.target_key) {
+                            candidates.push(OutputCandidate::from_utxo(&utxo, current_height));
+                        }
+                    }
+                }
+            }
+        }
+
+        let default_selector = GammaDecoySelector::new();
+        let selector = selector.unwrap_or(&default_selector);
+
+        selector
+            .select_decoys_for_input(&candidates, count, exclude, real_input_age, rng)
+            .map_err(|e| match e {
+                DecoySelectionError::InsufficientCandidates { required, available } => {
+                    LedgerError::InvalidBlock(format!(
+                        "Insufficient decoy candidates: need {}, have {}",
+                        required, available
+                    ))
+                }
+                DecoySelectionError::InvalidDistribution => {
+                    LedgerError::InvalidBlock("Invalid gamma distribution parameters".to_string())
+                }
+            })
+    }
+
+    /// Calculate effective anonymity for a ring given member ages.
+    ///
+    /// Returns a value between 1 (no privacy) and ring_size (perfect privacy).
+    /// A value of 4+ with ring size 7 indicates good anonymity (1-in-4 or better).
+    pub fn effective_anonymity(ring_ages: &[u64], selector: Option<&GammaDecoySelector>) -> f64 {
+        let default_selector = GammaDecoySelector::new();
+        let selector = selector.unwrap_or(&default_selector);
+        selector.effective_anonymity(ring_ages)
+    }
+
+    // ========================================================================
+    // Transaction Index (for Exchange Integration)
+    // ========================================================================
+
+    /// Add a transaction to the index.
+    fn add_tx_to_index(
+        &self,
+        wtxn: &mut RwTxn,
+        tx_hash: &[u8; 32],
+        block_height: u64,
+        tx_index: u32,
+    ) -> Result<(), LedgerError> {
+        // Encode location as 12 bytes: height (8) + tx_index (4)
+        let mut location_bytes = [0u8; 12];
+        location_bytes[0..8].copy_from_slice(&block_height.to_le_bytes());
+        location_bytes[8..12].copy_from_slice(&tx_index.to_le_bytes());
+
+        self.tx_index_db
+            .put(wtxn, tx_hash.as_slice(), &location_bytes)
+            .map_err(|e| LedgerError::Database(format!("Failed to index transaction: {}", e)))
+    }
+
+    /// Get the location of a transaction by its hash.
+    ///
+    /// Returns `Ok(Some(TxLocation))` if found, `Ok(None)` if not found.
+    pub fn get_transaction_location(&self, tx_hash: &[u8; 32]) -> Result<Option<TxLocation>, LedgerError> {
+        let rtxn = self.env.read_txn()
+            .map_err(|e| LedgerError::Database(format!("Failed to start read txn: {}", e)))?;
+
+        match self.tx_index_db.get(&rtxn, tx_hash.as_slice()) {
+            Ok(Some(bytes)) if bytes.len() == 12 => {
+                let block_height = u64::from_le_bytes(bytes[0..8].try_into().unwrap());
+                let tx_index = u32::from_le_bytes(bytes[8..12].try_into().unwrap());
+                Ok(Some(TxLocation { block_height, tx_index }))
+            }
+            Ok(_) => Ok(None),
+            Err(e) => Err(LedgerError::Database(format!("Failed to get tx location: {}", e))),
+        }
+    }
+
+    /// Get a transaction by its hash.
+    ///
+    /// Returns the transaction along with its block height and confirmation count.
+    pub fn get_transaction(&self, tx_hash: &[u8; 32]) -> Result<Option<(BothoTransaction, u64, u64)>, LedgerError> {
+        // Look up location in index
+        let location = match self.get_transaction_location(tx_hash)? {
+            Some(loc) => loc,
+            None => return Ok(None),
+        };
+
+        // Get the block
+        let block = self.get_block(location.block_height)?;
+
+        // Get the transaction from the block
+        let tx = block
+            .transactions
+            .get(location.tx_index as usize)
+            .ok_or_else(|| LedgerError::Database("Transaction index out of bounds".to_string()))?;
+
+        // Calculate confirmations
+        let chain_state = self.get_chain_state()?;
+        let confirmations = chain_state.height.saturating_sub(location.block_height) + 1;
+
+        Ok(Some((tx.clone(), location.block_height, confirmations)))
+    }
+
+    /// Get the confirmation count for a transaction.
+    ///
+    /// Returns `Ok(Some(confirmations))` if found, `Ok(None)` if not found.
+    /// Confirmations = current_height - tx_block_height + 1
+    pub fn get_transaction_confirmations(&self, tx_hash: &[u8; 32]) -> Result<Option<u64>, LedgerError> {
+        let location = match self.get_transaction_location(tx_hash)? {
+            Some(loc) => loc,
+            None => return Ok(None),
+        };
+
+        let chain_state = self.get_chain_state()?;
+        let confirmations = chain_state.height.saturating_sub(location.block_height) + 1;
+        Ok(Some(confirmations))
     }
 }
 
