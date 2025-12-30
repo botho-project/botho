@@ -142,7 +142,7 @@ impl OrderProcessor {
 
         match order.dest_chain {
             Chain::Ethereum => {
-                // TODO: Implement actual ETH minting via ethers-rs
+                // TODO: Implement actual ETH minting via alloy
                 // For now, just log and update status
                 info!("Would mint {} wBTH on Ethereum to {}", order.net_amount(), order.dest_address);
 

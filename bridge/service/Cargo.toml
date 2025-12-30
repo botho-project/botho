@@ -26,8 +26,8 @@ futures = { workspace = true }
 # Database
 rusqlite = { version = "0.31", features = ["bundled"] }
 
-# Ethereum
-ethers = { version = "2.0", features = ["rustls", "ws"] }
+# Ethereum (alloy replaces ethers)
+alloy = { version = "0.8", default-features = false, features = ["provider-ws", "signer-local", "network"] }
 
 # Solana (optional for now, adds significant compile time)
 # solana-sdk = "1.18"

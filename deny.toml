@@ -1,0 +1,134 @@
+# cargo-deny configuration
+# Run with: cargo deny check
+# Documentation: https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+# Only analyze these targets
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+]
+all-features = false
+
+[advisories]
+# The database of security advisories
+db-path = "~/.cargo/advisory-db"
+# Ignore specific advisories (transitive deps we can't easily update)
+ignore = [
+    # GTK3/GTK4 bindings from Tauri - transitive dependencies
+    "RUSTSEC-2024-0370",  # proc-macro-error (unmaintained)
+    "RUSTSEC-2024-0411",  # gtk3 unmaintained (system-deps)
+    "RUSTSEC-2024-0412",  # gtk3 unmaintained (gdkx11)
+    "RUSTSEC-2024-0413",  # gdk
+    "RUSTSEC-2024-0414",  # gdkwayland
+    "RUSTSEC-2024-0415",  # webkit2gtk
+    "RUSTSEC-2024-0416",  # gtk
+    "RUSTSEC-2024-0417",  # gdk-pixbuf
+    "RUSTSEC-2024-0418",  # atk
+    "RUSTSEC-2024-0419",  # cairo-rs
+    "RUSTSEC-2024-0420",  # gio
+    "RUSTSEC-2024-0429",  # glib unsoundness
+    "RUSTSEC-2024-0436",  # paste unmaintained
+    # adler/miniz_oxide - unmaintained, transitive from multiple deps
+    "RUSTSEC-2025-0056",
+    # fxhash - unmaintained, transitive from wry/tauri
+    "RUSTSEC-2025-0057",
+    # unic-* - unmaintained, transitive from tauri
+    "RUSTSEC-2025-0075",
+    "RUSTSEC-2025-0080",
+    "RUSTSEC-2025-0081",
+    # rustls-pemfile unmaintained - using v2 via reqwest 0.12
+    "RUSTSEC-2025-0098",
+    # num-bigint-dig reciprocal_mg10 unsoundness
+    "RUSTSEC-2025-0100",
+    # cxx-build unmaintained
+    "RUSTSEC-2025-0134",
+    # cxx unmaintained
+    "RUSTSEC-2025-0137",
+]
+
+[licenses]
+# Allow common permissive and copyleft licenses
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "0BSD",
+    "CC0-1.0",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "BSL-1.0",
+    # GPL licenses
+    "GPL-3.0-only",
+    "GPL-3.0-or-later",
+    "LGPL-3.0-only",
+    "LGPL-3.0-or-later",
+    # For webpki-roots
+    "CDLA-Permissive-2.0",
+]
+# Allow workspace crates without explicit licenses
+private = { ignore = true }
+confidence-threshold = 0.8
+# Exceptions for deprecated GPL-3.0 identifier (our workspace crates)
+exceptions = [
+    { crate = "botho", allow = ["GPL-3.0"] },
+    { crate = "bth-consensus-scp", allow = ["GPL-3.0"] },
+    { crate = "bth-consensus-scp-play", allow = ["GPL-3.0"] },
+    { crate = "bth-consensus-scp-types", allow = ["GPL-3.0"] },
+    { crate = "bth-util-logger-macros", allow = ["GPL-3.0"] },
+    { crate = "bth-util-test-helper", allow = ["GPL-3.0"] },
+]
+
+[[licenses.clarify]]
+# ring uses a custom license that is ISC-compatible
+crate = "ring"
+expression = "ISC AND MIT AND OpenSSL"
+license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
+
+[[licenses.clarify]]
+crate = "webpki"
+expression = "ISC"
+license-files = [{ path = "LICENSE", hash = 0x001c7e6c }]
+
+[bans]
+# Deny multiple versions of the same crate (with exceptions)
+multiple-versions = "warn"
+# Deny crates we want to avoid
+deny = [
+    # Vulnerable versions of ring (0.16.x)
+    { crate = "ring@=0.16", wrappers = [] },
+]
+# Allow specific crates that may have duplicates
+skip = [
+    # Common crates that often have multiple versions
+    { crate = "syn@1", reason = "Many proc-macro crates still use syn 1.x" },
+    { crate = "hashbrown@0.13", reason = "Different deps use different hashbrown versions" },
+    { crate = "hashbrown@0.14", reason = "Different deps use different hashbrown versions" },
+    { crate = "base64@0.13", reason = "Transitively used by older deps" },
+    { crate = "base64@0.21", reason = "Newer base64 version" },
+    { crate = "webpki-roots@0.25", reason = "TLS dependencies" },
+    { crate = "webpki-roots@0.26", reason = "TLS dependencies" },
+    { crate = "itertools@0.12", reason = "Different deps use different versions" },
+    { crate = "itertools@0.13", reason = "Different deps use different versions" },
+]
+# Skip when these crates are transitive deps
+skip-tree = [
+    # bulletproofs-og is a patched crate with specific dep versions
+    { crate = "bulletproofs-og", reason = "Patched fork with pinned deps" },
+    { crate = "schnorrkel-og", reason = "Patched fork with pinned deps" },
+]
+
+[sources]
+# Only allow crates from crates.io and specific git repos
+unknown-registry = "deny"
+unknown-git = "warn"
+allow-git = [
+    "https://github.com/mobilecoinfoundation/bulletproofs.git",
+    "https://github.com/mobilecoinfoundation/schnorrkel.git",
+]

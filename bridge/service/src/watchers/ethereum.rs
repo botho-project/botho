@@ -54,7 +54,7 @@ impl EthereumWatcher {
     /// Poll for burn events.
     async fn poll_for_burns(&self) {
         // TODO: In a full implementation, we would:
-        // 1. Use ethers-rs to subscribe to BridgeBurn events
+        // 1. Use alloy to subscribe to BridgeBurn events
         // 2. Parse the burn amount and BTH address from the event
         // 3. Create a burn order in the database
         //

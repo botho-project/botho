@@ -533,7 +533,7 @@ async fn load_wallet_file_internal(
 
     Ok(LoadWalletFileResult {
         success: true,
-        mnemonic: Some(mnemonic),
+        mnemonic: Some(mnemonic.to_string()),
         sync_height: wallet.sync_height,
         error: None,
     })
