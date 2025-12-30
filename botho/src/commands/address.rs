@@ -34,14 +34,14 @@ pub fn run(config_path: &Path, save_path: Option<&str>) -> Result<()> {
             let addr = Address::quantum(wallet.quantum_safe_address(), network);
             addr.save_to_file(path)?;
             println!("Quantum-safe address saved to: {}", path);
-            println!("Share this file with anyone who wants to send you credits with PQ protection.");
+            println!("Share this file with anyone who wants to send you BTH with PQ protection.");
             return Ok(());
         }
 
         let addr = Address::classical(wallet.default_address(), network);
         addr.save_to_file(path)?;
         println!("Classical address saved to: {}", path);
-        println!("Share this file with anyone who wants to send you credits.");
+        println!("Share this file with anyone who wants to send you BTH.");
         return Ok(());
     }
 
@@ -73,7 +73,7 @@ pub fn run(config_path: &Path, save_path: Option<&str>) -> Result<()> {
     #[cfg(not(feature = "pq"))]
     {
         println!("---");
-        println!("Share this address to receive credits.");
+        println!("Share this address to receive BTH.");
     }
 
     Ok(())

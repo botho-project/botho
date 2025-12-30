@@ -121,7 +121,7 @@ After Phase 1, Botho transitions to perpetual tail emission targeting **2% annua
 
 | Parameter | Value |
 |-----------|-------|
-| Adjustment interval | 1,440 blocks (~24 hours) |
+| Adjustment interval | 1,440 blocks (~8 hours) |
 | Maximum adjustment | ±25% per epoch |
 
 ### Algorithm

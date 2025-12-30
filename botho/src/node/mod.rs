@@ -116,11 +116,11 @@ impl Node {
         println!("Chain height: {}", state.height);
         println!("Phase: {}", phase);
         println!(
-            "Block reward: {:.6} credits",
+            "Block reward: {:.6} BTH",
             current_reward as f64 / 1_000_000_000_000.0
         );
         println!(
-            "Net supply: {:.6} credits (mined: {:.6}, burned: {:.6})",
+            "Net supply: {:.6} BTH (mined: {:.6}, burned: {:.6})",
             net_supply as f64 / 1_000_000_000_000.0,
             state.total_mined as f64 / 1_000_000_000_000.0,
             state.total_fees_burned as f64 / 1_000_000_000_000.0

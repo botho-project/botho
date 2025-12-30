@@ -35,16 +35,16 @@ pub fn run(config_path: &Path) -> Result<()> {
     let balance: u64 = utxos.iter().map(|u| u.output.amount).sum();
     let utxo_count = utxos.len();
 
-    // Convert from picocredits to credits
-    let credits = balance as f64 / 1_000_000_000_000.0;
+    // Convert from picocredits to BTH
+    let bth = balance as f64 / 1_000_000_000_000.0;
 
     println!();
     println!("=== Wallet Balance ===");
-    println!("Balance: {:.12} credits ({} picocredits)", credits, balance);
+    println!("Balance: {:.12} BTH ({} picocredits)", bth, balance);
     println!("UTXOs: {}", utxo_count);
     println!();
     println!("Chain height: {}", state.height);
-    println!("Total network mined: {:.12} credits", state.total_mined as f64 / 1_000_000_000_000.0);
+    println!("Total network mined: {:.12} BTH", state.total_mined as f64 / 1_000_000_000_000.0);
     println!();
 
     Ok(())

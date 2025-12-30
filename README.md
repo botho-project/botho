@@ -44,7 +44,7 @@ Bitcoin's security budget will eventually depend entirely on transaction fees. B
 
 - Initial reward: 50 BTH per block
 - ~2-year halving schedule (5 halvings over 10 years)
-- Perpetual tail emission: ~4.76 BTH per block targeting 2% annual inflation
+- Perpetual tail emission: ~1.59 BTH per block targeting 2% annual inflation
 
 This guarantees minters are always incentivized to secure the network, without relying on ever-increasing transaction volume.
 
@@ -68,10 +68,10 @@ Unlike Bitcoin's probabilistic finality (wait 6 blocks = 60 minutes to be "sure"
 
 | Parameter | Value |
 |:--|:--|
-| Block time | 60 seconds |
-| Difficulty adjustment | Every 1,440 blocks (~24 hours) |
+| Block time | 20 seconds |
+| Difficulty adjustment | Every 1,440 blocks (~8 hours) |
 | Phase 1 supply | ~100 million BTH (10 years of halvings) |
-| Tail emission | ~4.76 BTH/block (2% net annual inflation) |
+| Tail emission | ~1.59 BTH/block (2% net annual inflation) |
 | Native unit | BTH (9 decimal places) |
 
 ## Philosophy in Practice
@@ -113,7 +113,7 @@ cargo build --release
 | `botho status` | Show sync and wallet status |
 | `botho balance` | Show wallet balance |
 | `botho address` | Show receiving address |
-| `botho send <addr> <amt>` | Send credits |
+| `botho send <addr> <amt>` | Send BTH |
 
 ### Web Wallet
 

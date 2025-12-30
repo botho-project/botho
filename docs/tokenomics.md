@@ -137,7 +137,7 @@ Botho uses adaptive difficulty adjustment with different strategies for each pha
 | Target block time | 20 seconds |
 | Minimum block time | 15 seconds |
 | Maximum block time | 30 seconds |
-| Adjustment interval | 1,440 blocks (~24 hours) |
+| Adjustment interval | 1,440 blocks (~8 hours) |
 | Max adjustment | ±25% per epoch |
 
 ### Phase 1: Time-Based Adjustment
@@ -164,7 +164,7 @@ new_difficulty = old_difficulty × clamp(blended_ratio, 0.75, 1.25)
 This ensures:
 - If net emission is too high → difficulty increases → fewer blocks → less emission
 - If net emission is too low → difficulty decreases → more blocks → more emission
-- Block times stay within 45-90 second bounds regardless of monetary pressure
+- Block times stay within 15-30 second bounds regardless of monetary pressure
 
 ## Transaction Constraints
 

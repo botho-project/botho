@@ -24,7 +24,7 @@ const PENDING_TXS_FILE: &str = "pending_txs.bin";
 #[cfg(feature = "pq")]
 const PENDING_PQ_TXS_FILE: &str = "pending_pq_txs.bin";
 
-/// Send credits to an address
+/// Send BTH to an address
 ///
 /// If `private` is true, uses ring signatures to hide which UTXO is being spent.
 /// If `quantum` is true, uses post-quantum cryptography (ML-KEM + ML-DSA).
@@ -94,7 +94,7 @@ pub fn run(config_path: &Path, address_str: &str, amount_str: &str, private: boo
 
     if total_balance < required {
         return Err(anyhow::anyhow!(
-            "Insufficient balance: have {:.12} credits, need {:.12} credits (including {:.12} fee)",
+            "Insufficient balance: have {:.12} BTH, need {:.12} BTH (including {:.12} fee)",
             total_balance as f64 / 1_000_000_000_000.0,
             required as f64 / 1_000_000_000_000.0,
             fee as f64 / 1_000_000_000_000.0
@@ -195,7 +195,7 @@ pub fn run(config_path: &Path, address_str: &str, amount_str: &str, private: boo
     println!("=== {} Transaction Created ===", tx_type_str);
     println!("From: your wallet");
     println!("To: {}", address_str);
-    println!("Amount: {:.12} credits", amount as f64 / 1_000_000_000_000.0);
+    println!("Amount: {:.12} BTH", amount as f64 / 1_000_000_000_000.0);
     println!();
     println!("Fee breakdown:");
     println!("  Type: {} ({})", tx_type_str, if private { "ring signatures" } else { "visible sender" });
@@ -205,10 +205,10 @@ pub fn run(config_path: &Path, address_str: &str, amount_str: &str, private: boo
             if memo_text.len() > 30 { format!("{}...", &memo_text[..30]) } else { memo_text.to_string() },
             fee_config.memo_fee_rate_bps as f64 / 100.0);
     }
-    println!("  Total fee: {:.12} credits", fee as f64 / 1_000_000_000_000.0);
+    println!("  Total fee: {:.12} BTH", fee as f64 / 1_000_000_000_000.0);
     println!();
     if change > 0 {
-        println!("Change: {:.12} credits", change as f64 / 1_000_000_000_000.0);
+        println!("Change: {:.12} BTH", change as f64 / 1_000_000_000_000.0);
     }
     if private {
         println!("Privacy: Ring signatures hide which UTXO was spent");
@@ -366,19 +366,19 @@ fn run_quantum(
     println!("=== Quantum-Private Transaction Created ===");
     println!("From: your wallet");
     println!("To: {}", addr_short);
-    println!("Amount: {:.12} credits", amount as f64 / 1_000_000_000_000.0);
+    println!("Amount: {:.12} BTH", amount as f64 / 1_000_000_000_000.0);
     println!();
     println!("Fee breakdown:");
     println!("  Type: Quantum-Private (hybrid classical + PQ)");
     println!("  Classical rate: {} bps ({:.2}%)", fee_rate_bps, fee_rate_bps as f64 / 100.0);
     println!("  PQ overhead: ~19x larger than classical");
-    println!("  Total fee: {:.12} credits", effective_fee as f64 / 1_000_000_000_000.0);
+    println!("  Total fee: {:.12} BTH", effective_fee as f64 / 1_000_000_000_000.0);
     println!();
 
     let selected_amount: u64 = selected_utxos.iter().map(|u| u.output.amount).sum();
     let change = selected_amount - amount - effective_fee;
     if change > 0 {
-        println!("Change: {:.12} credits", change as f64 / 1_000_000_000_000.0);
+        println!("Change: {:.12} BTH", change as f64 / 1_000_000_000_000.0);
     }
 
     println!();

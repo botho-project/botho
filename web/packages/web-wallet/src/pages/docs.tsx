@@ -50,7 +50,7 @@ You can safely share this address with anyone who wants to send you funds. Thank
 
 ### Receiving Your First Payment
 
-When someone sends you Botho credits:
+When someone sends you BTH:
 
 1. They use your public address to derive a unique one-time address
 2. The transaction is broadcast to the network and included in a block
@@ -59,7 +59,7 @@ When someone sends you Botho credits:
 
 ### Sending Payments
 
-To send credits to someone else:
+To send BTH to someone else:
 
 1. Click the **Send** button in your wallet
 2. Enter the recipient's Botho address
@@ -353,7 +353,7 @@ cargo build --release
 | \`botho init\` | Create a new wallet with a 12-word mnemonic |
 | \`botho balance\` | Show your current wallet balance |
 | \`botho address\` | Display your receiving address |
-| \`botho send <address> <amount>\` | Send credits to another address |
+| \`botho send <address> <amount>\` | Send BTH to another address |
 
 **Node Commands:**
 

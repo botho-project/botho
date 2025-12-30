@@ -39,7 +39,7 @@ pub fn run(config_path: &Path) -> Result<()> {
     println!("  Height: {}", state.height);
     println!("  Tip hash: {}", hex::encode(&state.tip_hash[0..8]));
     println!(
-        "  Total mined: {:.12} credits",
+        "  Total mined: {:.12} BTH",
         state.total_mined as f64 / 1_000_000_000_000.0
     );
     println!(

@@ -72,12 +72,12 @@ enum Commands {
         save: Option<String>,
     },
 
-    /// Send credits to an address
+    /// Send BTH to an address
     Send {
         /// Recipient address
         address: String,
 
-        /// Amount to send (in credits)
+        /// Amount to send (in BTH)
         amount: String,
 
         /// Use ring signatures for sender privacy (hides which UTXO you spent)
