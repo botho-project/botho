@@ -61,6 +61,47 @@ pub struct NetworkConfig {
     /// Quorum configuration
     #[serde(default)]
     pub quorum: QuorumConfig,
+
+    /// API keys for authenticated exchange endpoints.
+    /// If empty, authentication is disabled for exchange endpoints.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub api_keys: Vec<ApiKeyEntry>,
+}
+
+/// API key entry for exchange authentication.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApiKeyEntry {
+    /// Unique identifier for this API key
+    pub key_id: String,
+    /// Secret key for HMAC signing
+    pub key_secret: String,
+    /// Permissions for this key
+    #[serde(default)]
+    pub permissions: ApiKeyPermissions,
+    /// Rate limit (requests per minute)
+    #[serde(default = "default_rate_limit")]
+    pub rate_limit: u32,
+    /// Optional IP whitelist (empty = allow all)
+    #[serde(default)]
+    pub ip_whitelist: Vec<String>,
+}
+
+fn default_rate_limit() -> u32 {
+    100
+}
+
+/// Permissions for an API key.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ApiKeyPermissions {
+    /// Can access exchange-specific endpoints
+    #[serde(default)]
+    pub exchange_api: bool,
+    /// Can register view keys for deposit notifications
+    #[serde(default)]
+    pub register_view_keys: bool,
+    /// Can submit transactions
+    #[serde(default)]
+    pub submit_transactions: bool,
 }
 
 fn default_cors_origins() -> Vec<String> {
@@ -238,6 +279,7 @@ impl Default for NetworkConfig {
             cors_origins: default_cors_origins(),
             bootstrap_peers: Vec::new(),  // Uses network-specific defaults
             quorum: QuorumConfig::default(),
+            api_keys: Vec::new(),
         }
     }
 }

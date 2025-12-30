@@ -1,0 +1,20 @@
+[package]
+name = "bth-bridge-core"
+version = "0.1.0"
+authors = ["Botho"]
+edition = "2021"
+description = "Core types and logic for BTH bridge"
+license = "Apache-2.0"
+rust-version = { workspace = true }
+
+[features]
+default = ["std"]
+std = []
+
+[dependencies]
+serde = { workspace = true, features = ["derive", "alloc"] }
+thiserror = { workspace = true }
+chrono = { workspace = true, features = ["serde", "std", "clock"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+toml = { workspace = true }
+hex = { workspace = true }

@@ -2,6 +2,9 @@
 members = [
     "botho",
     "botho-wallet",
+    "botho-exchange-scanner",
+    "bridge/core",
+    "bridge/service",
     "cluster-tax",
     "discover",
     "account-keys",
@@ -23,6 +26,7 @@ members = [
     "crypto/lion",
     "crypto/ring-signature",
     "crypto/ring-signature/signer",
+    "crypto/secp256k1",
     "crypto/sig",
     "transaction/core",
     "transaction/signer",
@@ -38,6 +42,7 @@ members = [
     "util/zip-exact",
 ]
 exclude = [
+    "contracts",
     "fuzz",
     "util/serial",
     "web/packages/desktop/src-tauri",
@@ -193,6 +198,9 @@ bth-crypto-pq = { path = "crypto/pq", default-features = false }
 bth-crypto-lion = { path = "crypto/lion", default-features = false }
 bth-crypto-ring-signature = { path = "crypto/ring-signature", default-features = false }
 bth-crypto-ring-signature-signer = { path = "crypto/ring-signature/signer", default-features = false }
+bth-crypto-secp256k1 = { path = "crypto/secp256k1", default-features = false }
+bth-bridge-core = { path = "bridge/core", default-features = false }
+bth-bridge-service = { path = "bridge/service" }
 bth-transaction-core = { path = "transaction/core", default-features = false }
 bth-transaction-types = { path = "transaction/types", default-features = false }
 bth-util-from-random = { path = "util/from-random", default-features = false }

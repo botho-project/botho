@@ -269,3 +269,293 @@ impl core::fmt::Display for ShortAddressHash {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    extern crate alloc;
+
+    use super::*;
+    use alloc::string::ToString;
+    use bth_crypto_keys::RistrettoPrivate;
+    use bth_util_from_random::FromRandom;
+
+    #[test]
+    fn test_account_creation() {
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
+            let view_private = RistrettoPrivate::from_random(&mut rng);
+            let spend_private = RistrettoPrivate::from_random(&mut rng);
+            let account = Account::new(view_private.into(), spend_private.into());
+            // Just verify we can create and access keys
+            let _ = account.view_public_key();
+            let _ = account.spend_public_key();
+        });
+    }
+
+    #[test]
+    fn test_account_view_public_deterministic() {
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
+            let view_private = RistrettoPrivate::from_random(&mut rng);
+            let spend_private = RistrettoPrivate::from_random(&mut rng);
+            let account = Account::new(view_private.into(), spend_private.into());
+            let pub1 = account.view_public_key();
+            let pub2 = account.view_public_key();
+            assert_eq!(pub1, pub2);
+        });
+    }
+
+    #[test]
+    fn test_account_spend_public_deterministic() {
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
+            let view_private = RistrettoPrivate::from_random(&mut rng);
+            let spend_private = RistrettoPrivate::from_random(&mut rng);
+            let account = Account::new(view_private.into(), spend_private.into());
+            let pub1 = account.spend_public_key();
+            let pub2 = account.spend_public_key();
+            assert_eq!(pub1, pub2);
+        });
+    }
+
+    #[test]
+    fn test_different_accounts_different_keys() {
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
+            let account1 = Account::new(
+                RistrettoPrivate::from_random(&mut rng).into(),
+                RistrettoPrivate::from_random(&mut rng).into(),
+            );
+            let account2 = Account::new(
+                RistrettoPrivate::from_random(&mut rng).into(),
+                RistrettoPrivate::from_random(&mut rng).into(),
+            );
+            assert_ne!(account1.view_public_key(), account2.view_public_key());
+            assert_ne!(account1.spend_public_key(), account2.spend_public_key());
+        });
+    }
+
+    #[test]
+    fn test_view_account_from_account() {
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
+            let view_private = RistrettoPrivate::from_random(&mut rng);
+            let spend_private = RistrettoPrivate::from_random(&mut rng);
+            let account = Account::new(view_private.into(), spend_private.into());
+            let view_account = ViewAccount::from(&account);
+            assert_eq!(account.view_public_key(), view_account.view_public_key());
+            assert_eq!(account.spend_public_key(), *view_account.spend_public_key());
+        });
+    }
+
+    #[test]
+    fn test_view_account_creation() {
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
+            let view_private = RistrettoPrivate::from_random(&mut rng);
+            let spend_private = RistrettoPrivate::from_random(&mut rng);
+            let spend_public: RootSpendPublic = RootSpendPublic::from(&RootSpendPrivate::from(spend_private));
+
+            let view_account = ViewAccount::new(view_private.into(), spend_public.clone());
+            assert_eq!(*view_account.spend_public_key(), spend_public);
+        });
+    }
+
+    #[test]
+    fn test_spend_subaddress_ring_ct_address() {
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
+            let view_private: SubaddressViewPrivate = RistrettoPrivate::from_random(&mut rng).into();
+            let spend_private: SubaddressSpendPrivate = RistrettoPrivate::from_random(&mut rng).into();
+
+            let subaddr = SpendSubaddress {
+                view_private: view_private.clone(),
+                spend_private: spend_private.clone(),
+            };
+
+            let view_pub = subaddr.view_public_key();
+            let spend_pub = subaddr.spend_public_key();
+
+            // Verify determinism
+            assert_eq!(view_pub, SubaddressViewPublic::from(&view_private));
+            assert_eq!(spend_pub, SubaddressSpendPublic::from(&spend_private));
+        });
+    }
+
+    #[test]
+    fn test_spend_subaddress_accessors() {
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
+            let view_private: SubaddressViewPrivate = RistrettoPrivate::from_random(&mut rng).into();
+            let spend_private: SubaddressSpendPrivate = RistrettoPrivate::from_random(&mut rng).into();
+
+            let subaddr = SpendSubaddress {
+                view_private: view_private.clone(),
+                spend_private: spend_private.clone(),
+            };
+
+            assert_eq!(*subaddr.view_private_key(), view_private);
+            assert_eq!(*subaddr.spend_private_key(), spend_private);
+        });
+    }
+
+    #[test]
+    fn test_view_subaddress_ring_ct_address() {
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
+            let view_private: SubaddressViewPrivate = RistrettoPrivate::from_random(&mut rng).into();
+            let spend_public: SubaddressSpendPublic = SubaddressSpendPublic::from(
+                &SubaddressSpendPrivate::from(RistrettoPrivate::from_random(&mut rng)),
+            );
+
+            let subaddr = ViewSubaddress {
+                view_private: view_private.clone(),
+                spend_public: spend_public.clone(),
+            };
+
+            assert_eq!(subaddr.view_public_key(), SubaddressViewPublic::from(&view_private));
+            assert_eq!(subaddr.spend_public_key(), spend_public);
+        });
+    }
+
+    #[test]
+    fn test_public_subaddress_from_spend() {
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
+            let view_private: SubaddressViewPrivate = RistrettoPrivate::from_random(&mut rng).into();
+            let spend_private: SubaddressSpendPrivate = RistrettoPrivate::from_random(&mut rng).into();
+
+            let spend_subaddr = SpendSubaddress {
+                view_private,
+                spend_private,
+            };
+
+            let public_subaddr = PublicSubaddress::from(&spend_subaddr);
+            assert_eq!(public_subaddr.view_public_key(), spend_subaddr.view_public_key());
+            assert_eq!(public_subaddr.spend_public_key(), spend_subaddr.spend_public_key());
+        });
+    }
+
+    #[test]
+    fn test_public_subaddress_from_view() {
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
+            let view_private: SubaddressViewPrivate = RistrettoPrivate::from_random(&mut rng).into();
+            let spend_public: SubaddressSpendPublic = SubaddressSpendPublic::from(
+                &SubaddressSpendPrivate::from(RistrettoPrivate::from_random(&mut rng)),
+            );
+
+            let view_subaddr = ViewSubaddress {
+                view_private,
+                spend_public,
+            };
+
+            let public_subaddr = PublicSubaddress::from(&view_subaddr);
+            assert_eq!(public_subaddr.view_public_key(), view_subaddr.view_public_key());
+            assert_eq!(public_subaddr.spend_public_key(), view_subaddr.spend_public_key());
+        });
+    }
+
+    #[test]
+    fn test_ring_ct_address_ref_impl() {
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
+            let view_private: SubaddressViewPrivate = RistrettoPrivate::from_random(&mut rng).into();
+            let spend_private: SubaddressSpendPrivate = RistrettoPrivate::from_random(&mut rng).into();
+
+            let subaddr = SpendSubaddress {
+                view_private,
+                spend_private,
+            };
+
+            // Test that &T implements RingCtAddress when T does
+            let subaddr_ref = &subaddr;
+            assert_eq!(subaddr_ref.view_public_key(), subaddr.view_public_key());
+            assert_eq!(subaddr_ref.spend_public_key(), subaddr.spend_public_key());
+        });
+    }
+
+    #[test]
+    fn test_short_address_hash_from_bytes() {
+        let bytes: [u8; 16] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+        let hash = ShortAddressHash::from(bytes);
+        let recovered: [u8; 16] = hash.into();
+        assert_eq!(bytes, recovered);
+    }
+
+    #[test]
+    fn test_short_address_hash_as_ref() {
+        let bytes: [u8; 16] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+        let hash = ShortAddressHash::from(bytes);
+        assert_eq!(hash.as_ref(), &bytes);
+    }
+
+    #[test]
+    fn test_short_address_hash_default() {
+        let default = ShortAddressHash::default();
+        assert_eq!(default.as_ref(), &[0u8; 16]);
+    }
+
+    #[test]
+    fn test_short_address_hash_display() {
+        let bytes: [u8; 16] = [0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
+                               0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32, 0x10];
+        let hash = ShortAddressHash::from(bytes);
+        let display = hash.to_string();
+        assert_eq!(display, "0123456789abcdeffedcba9876543210");
+    }
+
+    #[test]
+    fn test_short_address_hash_eq() {
+        let bytes1: [u8; 16] = [1; 16];
+        let bytes2: [u8; 16] = [1; 16];
+        let bytes3: [u8; 16] = [2; 16];
+
+        let hash1 = ShortAddressHash::from(bytes1);
+        let hash2 = ShortAddressHash::from(bytes2);
+        let hash3 = ShortAddressHash::from(bytes3);
+
+        assert_eq!(hash1, hash2);
+        assert_ne!(hash1, hash3);
+    }
+
+    #[test]
+    fn test_short_address_hash_constant_time_eq() {
+        use subtle::ConstantTimeEq;
+
+        let bytes1: [u8; 16] = [1; 16];
+        let bytes2: [u8; 16] = [1; 16];
+        let bytes3: [u8; 16] = [2; 16];
+
+        let hash1 = ShortAddressHash::from(bytes1);
+        let hash2 = ShortAddressHash::from(bytes2);
+        let hash3 = ShortAddressHash::from(bytes3);
+
+        assert!(bool::from(hash1.ct_eq(&hash2)));
+        assert!(!bool::from(hash1.ct_eq(&hash3)));
+    }
+
+    #[test]
+    fn test_short_address_hash_ord() {
+        let bytes1: [u8; 16] = [0; 16];
+        let bytes2: [u8; 16] = [1; 16];
+
+        let hash1 = ShortAddressHash::from(bytes1);
+        let hash2 = ShortAddressHash::from(bytes2);
+
+        assert!(hash1 < hash2);
+    }
+
+    #[test]
+    fn test_short_address_hash_hash() {
+        use core::hash::{Hash, Hasher};
+
+        struct SimpleHasher(u64);
+        impl Hasher for SimpleHasher {
+            fn finish(&self) -> u64 { self.0 }
+            fn write(&mut self, bytes: &[u8]) {
+                for b in bytes {
+                    self.0 = self.0.wrapping_add(*b as u64);
+                }
+            }
+        }
+
+        let bytes: [u8; 16] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+        let hash = ShortAddressHash::from(bytes);
+
+        let mut hasher = SimpleHasher(0);
+        hash.hash(&mut hasher);
+        let hash_value = hasher.finish();
+
+        // Just verify it produces a hash
+        assert!(hash_value > 0);
+    }
+}

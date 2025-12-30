@@ -3,8 +3,14 @@
 //! Provides a JSON-RPC 2.0 API for thin wallets and web interfaces.
 //! Also supports WebSocket connections for real-time event streaming.
 
+pub mod auth;
+pub mod deposit_scanner;
+pub mod view_keys;
 pub mod websocket;
 
+pub use auth::{ApiKeyConfig, ApiPermissions, AuthError, HmacAuthenticator};
+pub use deposit_scanner::{DepositScanner, ScanResult};
+pub use view_keys::{RegistryError, ViewKeyInfo, ViewKeyRegistry};
 pub use websocket::WsBroadcaster;
 
 use anyhow::Result;
@@ -119,6 +125,8 @@ pub struct RpcState {
     pub cors_origins: Vec<String>,
     /// WebSocket event broadcaster
     pub ws_broadcaster: Arc<WsBroadcaster>,
+    /// View key registry for exchange deposit notifications
+    pub view_key_registry: Arc<ViewKeyRegistry>,
 }
 
 impl RpcState {
@@ -141,6 +149,7 @@ impl RpcState {
             wallet_spend_key,
             cors_origins,
             ws_broadcaster,
+            view_key_registry: Arc::new(ViewKeyRegistry::new()),
         }
     }
 
@@ -166,6 +175,7 @@ impl RpcState {
             wallet_spend_key,
             cors_origins,
             ws_broadcaster,
+            view_key_registry: Arc::new(ViewKeyRegistry::new()),
         }
     }
 }
@@ -341,6 +351,7 @@ async fn handle_rpc_method(request: &JsonRpcRequest, state: &RpcState) -> JsonRp
 
         // Chain methods
         "getChainInfo" => handle_chain_info(id, state).await,
+        "getSupplyInfo" => handle_supply_info(id, state).await,
         "getBlockByHeight" => handle_get_block(id, &request.params, state).await,
         "getMempoolInfo" => handle_mempool_info(id, state).await,
         "estimateFee" | "tx_estimateFee" => handle_estimate_fee(id, &request.params, state).await,
@@ -365,6 +376,11 @@ async fn handle_rpc_method(request: &JsonRpcRequest, state: &RpcState) -> JsonRp
         // Network methods
         "network_getInfo" => handle_network_info(id, state).await,
         "network_getPeers" => handle_get_peers(id, state).await,
+
+        // Exchange integration methods
+        "exchange_registerViewKey" => handle_register_view_key(id, &request.params, state).await,
+        "exchange_unregisterViewKey" => handle_unregister_view_key(id, &request.params, state).await,
+        "exchange_listViewKeys" => handle_list_view_keys(id, &request.params, state).await,
 
         _ => JsonRpcResponse::error(id, -32601, &format!("Method not found: {}", request.method)),
     }
@@ -397,13 +413,43 @@ async fn handle_chain_info(id: Value, state: &RpcState) -> JsonRpcResponse {
     let chain_state = ledger.get_chain_state().unwrap_or_default();
     let mempool = read_lock!(state.mempool, id.clone());
 
+    // Calculate circulating supply: total mined minus fees burned
+    let circulating_supply = chain_state
+        .total_mined
+        .saturating_sub(chain_state.total_fees_burned);
+
     JsonRpcResponse::success(id, json!({
         "height": chain_state.height,
         "tipHash": hex::encode(chain_state.tip_hash),
         "difficulty": chain_state.difficulty,
         "totalMined": chain_state.total_mined,
+        "totalFeesBurned": chain_state.total_fees_burned,
+        "circulatingSupply": circulating_supply,
         "mempoolSize": mempool.len(),
         "mempoolFees": mempool.total_fees(),
+    }))
+}
+
+/// Get supply information for accurate circulating supply measurement
+///
+/// Returns:
+/// - `totalMined`: Gross emission from block rewards (all BTH ever created)
+/// - `totalFeesBurned`: Cumulative transaction fees burned (removed from supply)
+/// - `circulatingSupply`: Net supply = totalMined - totalFeesBurned
+async fn handle_supply_info(id: Value, state: &RpcState) -> JsonRpcResponse {
+    let ledger = read_lock!(state.ledger, id.clone());
+    let chain_state = ledger.get_chain_state().unwrap_or_default();
+
+    // Calculate circulating supply: total mined minus fees burned
+    let circulating_supply = chain_state
+        .total_mined
+        .saturating_sub(chain_state.total_fees_burned);
+
+    JsonRpcResponse::success(id, json!({
+        "height": chain_state.height,
+        "totalMined": chain_state.total_mined,
+        "totalFeesBurned": chain_state.total_fees_burned,
+        "circulatingSupply": circulating_supply,
     }))
 }
 
@@ -865,6 +911,152 @@ fn json_response(response: JsonRpcResponse, allowed_origin: Option<&str>) -> Res
             .unwrap(),
         allowed_origin,
     )
+}
+
+// ============================================================================
+// Exchange Integration Handlers
+// ============================================================================
+
+/// Register a view key for deposit notifications.
+///
+/// # Parameters
+/// - `id`: Unique identifier for this registration
+/// - `view_private_key`: 64-character hex string (32 bytes)
+/// - `spend_public_key`: 64-character hex string (32 bytes)
+/// - `subaddress_min`: Minimum subaddress index to scan (default: 0)
+/// - `subaddress_max`: Maximum subaddress index to scan (default: 1000)
+/// - `api_key_id`: API key making this registration (for auth tracking)
+async fn handle_register_view_key(id: Value, params: &Value, state: &RpcState) -> JsonRpcResponse {
+    use bth_crypto_keys::{RistrettoPrivate, RistrettoPublic};
+
+    // Parse registration ID
+    let reg_id = match params.get("id").and_then(|v| v.as_str()) {
+        Some(id) => id.to_string(),
+        None => return JsonRpcResponse::error(id, -32602, "Missing 'id' parameter"),
+    };
+
+    // Parse view private key
+    let view_key_hex = match params.get("view_private_key").and_then(|v| v.as_str()) {
+        Some(hex) => hex,
+        None => return JsonRpcResponse::error(id, -32602, "Missing 'view_private_key' parameter"),
+    };
+
+    if view_key_hex.len() != 64 {
+        return JsonRpcResponse::error(id, -32602, "view_private_key must be 64 hex characters");
+    }
+
+    let view_private_bytes: [u8; 32] = match hex::decode(view_key_hex) {
+        Ok(bytes) if bytes.len() == 32 => bytes.try_into().unwrap(),
+        _ => return JsonRpcResponse::error(id, -32602, "Invalid view_private_key hex"),
+    };
+
+    let view_private = match RistrettoPrivate::try_from(&view_private_bytes[..]) {
+        Ok(k) => k,
+        Err(_) => return JsonRpcResponse::error(id, -32602, "Invalid view private key format"),
+    };
+
+    // Parse spend public key
+    let spend_key_hex = match params.get("spend_public_key").and_then(|v| v.as_str()) {
+        Some(hex) => hex,
+        None => return JsonRpcResponse::error(id, -32602, "Missing 'spend_public_key' parameter"),
+    };
+
+    if spend_key_hex.len() != 64 {
+        return JsonRpcResponse::error(id, -32602, "spend_public_key must be 64 hex characters");
+    }
+
+    let spend_public_bytes: [u8; 32] = match hex::decode(spend_key_hex) {
+        Ok(bytes) if bytes.len() == 32 => bytes.try_into().unwrap(),
+        _ => return JsonRpcResponse::error(id, -32602, "Invalid spend_public_key hex"),
+    };
+
+    let spend_public = match RistrettoPublic::try_from(&spend_public_bytes[..]) {
+        Ok(k) => k,
+        Err(_) => return JsonRpcResponse::error(id, -32602, "Invalid spend public key format"),
+    };
+
+    // Parse subaddress range
+    let subaddress_min = params.get("subaddress_min").and_then(|v| v.as_u64()).unwrap_or(0);
+    let subaddress_max = params.get("subaddress_max").and_then(|v| v.as_u64()).unwrap_or(1000);
+
+    // API key ID (in production, this would come from auth middleware)
+    let api_key_id = params
+        .get("api_key_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("default")
+        .to_string();
+
+    // Register
+    match state.view_key_registry.register(
+        reg_id.clone(),
+        view_private,
+        spend_public,
+        subaddress_min,
+        subaddress_max,
+        api_key_id,
+    ) {
+        Ok(()) => JsonRpcResponse::success(
+            id,
+            json!({
+                "registered": true,
+                "id": reg_id,
+                "subaddress_min": subaddress_min,
+                "subaddress_max": subaddress_max,
+                "subaddress_count": subaddress_max - subaddress_min + 1,
+            }),
+        ),
+        Err(e) => JsonRpcResponse::error(id, -32000, &format!("Registration failed: {}", e)),
+    }
+}
+
+/// Unregister a view key.
+///
+/// # Parameters
+/// - `id`: Registration ID to remove
+/// - `api_key_id`: API key that registered this key (for authorization)
+async fn handle_unregister_view_key(id: Value, params: &Value, state: &RpcState) -> JsonRpcResponse {
+    let reg_id = match params.get("id").and_then(|v| v.as_str()) {
+        Some(id) => id,
+        None => return JsonRpcResponse::error(id, -32602, "Missing 'id' parameter"),
+    };
+
+    let api_key_id = params
+        .get("api_key_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("default");
+
+    match state.view_key_registry.unregister(reg_id, api_key_id) {
+        Ok(()) => JsonRpcResponse::success(
+            id,
+            json!({
+                "unregistered": true,
+                "id": reg_id,
+            }),
+        ),
+        Err(e) => JsonRpcResponse::error(id, -32000, &format!("Unregistration failed: {}", e)),
+    }
+}
+
+/// List view keys registered by an API key.
+///
+/// # Parameters
+/// - `api_key_id`: API key to list registrations for
+async fn handle_list_view_keys(id: Value, params: &Value, state: &RpcState) -> JsonRpcResponse {
+    let api_key_id = params
+        .get("api_key_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("default");
+
+    match state.view_key_registry.list_by_api_key(api_key_id) {
+        Ok(keys) => JsonRpcResponse::success(
+            id,
+            json!({
+                "count": keys.len(),
+                "view_keys": keys,
+            }),
+        ),
+        Err(e) => JsonRpcResponse::error(id, -32000, &format!("List failed: {}", e)),
+    }
 }
 
 #[cfg(test)]

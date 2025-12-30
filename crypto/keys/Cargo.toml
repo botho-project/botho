@@ -9,6 +9,7 @@ readme = "README.md"
 rust-version = { workspace = true }
 
 [features]
+std = ["alloc"]
 alloc = [
     "base64/alloc",
     "curve25519-dalek/alloc",

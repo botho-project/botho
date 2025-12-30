@@ -53,6 +53,36 @@ pub enum WsEvent {
         hashrate: f64,
         blocks_found: u64,
     },
+    /// Deposit detected for a registered view key (exchange integration)
+    #[serde(rename = "deposit")]
+    DepositDetected {
+        /// Identifier for the registered view key
+        view_key_id: String,
+        /// Subaddress index that received the deposit
+        subaddress_index: u64,
+        /// Transaction hash (hex)
+        tx_hash: String,
+        /// Output index within the transaction
+        output_index: u32,
+        /// Amount in picocredits
+        amount: u64,
+        /// Current confirmations
+        confirmations: u64,
+        /// Block height
+        block_height: u64,
+    },
+    /// Deposit confirmation update (existing deposit gained confirmations)
+    #[serde(rename = "deposit_confirmed")]
+    DepositConfirmationUpdate {
+        /// Identifier for the registered view key
+        view_key_id: String,
+        /// Transaction hash (hex)
+        tx_hash: String,
+        /// Output index
+        output_index: u32,
+        /// New confirmation count
+        confirmations: u64,
+    },
 }
 
 /// Peer connection events
@@ -73,6 +103,8 @@ pub enum EventType {
     Mempool,
     Peers,
     Minting,
+    /// Deposit events for exchange integration
+    Deposits,
 }
 
 impl WsEvent {
@@ -84,6 +116,9 @@ impl WsEvent {
             WsEvent::MempoolUpdate { .. } => EventType::Mempool,
             WsEvent::PeerStatus { .. } => EventType::Peers,
             WsEvent::MintingStatus { .. } => EventType::Minting,
+            WsEvent::DepositDetected { .. } | WsEvent::DepositConfirmationUpdate { .. } => {
+                EventType::Deposits
+            }
         }
     }
 }
@@ -115,6 +150,7 @@ impl WsSubscription {
         self.events.insert(EventType::Mempool);
         self.events.insert(EventType::Peers);
         self.events.insert(EventType::Minting);
+        self.events.insert(EventType::Deposits);
     }
 
     fn is_subscribed(&self, event_type: EventType) -> bool {
@@ -239,6 +275,45 @@ impl WsBroadcaster {
             blocks_found,
         });
     }
+
+    /// Send a deposit detected event (for exchange integration)
+    #[allow(clippy::too_many_arguments)]
+    pub fn deposit_detected(
+        &self,
+        view_key_id: &str,
+        subaddress_index: u64,
+        tx_hash: &[u8],
+        output_index: u32,
+        amount: u64,
+        confirmations: u64,
+        block_height: u64,
+    ) {
+        self.send(WsEvent::DepositDetected {
+            view_key_id: view_key_id.to_string(),
+            subaddress_index,
+            tx_hash: hex::encode(tx_hash),
+            output_index,
+            amount,
+            confirmations,
+            block_height,
+        });
+    }
+
+    /// Send a deposit confirmation update event
+    pub fn deposit_confirmation_update(
+        &self,
+        view_key_id: &str,
+        tx_hash: &[u8],
+        output_index: u32,
+        confirmations: u64,
+    ) {
+        self.send(WsEvent::DepositConfirmationUpdate {
+            view_key_id: view_key_id.to_string(),
+            tx_hash: hex::encode(tx_hash),
+            output_index,
+            confirmations,
+        });
+    }
 }
 
 /// Handle a WebSocket connection
@@ -275,6 +350,7 @@ pub async fn handle_websocket(upgraded: Upgraded, broadcaster: Arc<WsBroadcaster
                                         EventType::Mempool => "mempool",
                                         EventType::Peers => "peers",
                                         EventType::Minting => "minting",
+                                        EventType::Deposits => "deposits",
                                     })
                                     .collect();
                                 let response = ServerMessage::Subscribed { events: subscribed };

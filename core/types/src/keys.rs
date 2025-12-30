@@ -425,3 +425,236 @@ where
         <KEY as prost::Message>::clear(&mut self.key)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    extern crate alloc;
+
+    use super::*;
+    use alloc::format;
+    use alloc::string::ToString;
+    use bth_util_from_random::FromRandom;
+
+    #[test]
+    fn test_root_private_key_creation() {
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
+            let private = RistrettoPrivate::from_random(&mut rng);
+            let root_view: RootViewPrivate = private.into();
+            assert_eq!(root_view.to_bytes().len(), 32);
+        });
+    }
+
+    #[test]
+    fn test_public_from_private_deterministic() {
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
+            let private = RistrettoPrivate::from_random(&mut rng);
+            let root_spend: RootSpendPrivate = private.into();
+            let public1 = RootSpendPublic::from(&root_spend);
+            let public2 = RootSpendPublic::from(&root_spend);
+            assert_eq!(public1, public2);
+        });
+    }
+
+    #[test]
+    fn test_different_privates_different_publics() {
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
+            let private1 = RistrettoPrivate::from_random(&mut rng);
+            let private2 = RistrettoPrivate::from_random(&mut rng);
+            let root1: RootViewPrivate = private1.into();
+            let root2: RootViewPrivate = private2.into();
+            let public1 = RootViewPublic::from(&root1);
+            let public2 = RootViewPublic::from(&root2);
+            assert_ne!(public1, public2);
+        });
+    }
+
+    #[test]
+    fn test_public_key_bytes_roundtrip() {
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
+            let private = RistrettoPrivate::from_random(&mut rng);
+            let root_view: RootViewPrivate = private.into();
+            let public = RootViewPublic::from(&root_view);
+            let bytes = public.to_bytes();
+            let recovered = RootViewPublic::try_from(&bytes).expect("Should recover public key");
+            assert_eq!(public, recovered);
+        });
+    }
+
+    #[test]
+    fn test_private_key_bytes_roundtrip() {
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
+            let private = RistrettoPrivate::from_random(&mut rng);
+            let root_spend: RootSpendPrivate = private.into();
+            let bytes = root_spend.to_bytes();
+            let recovered = RootSpendPrivate::try_from(&bytes).expect("Should recover private key");
+            assert_eq!(root_spend, recovered);
+        });
+    }
+
+    #[test]
+    fn test_subaddress_key_types() {
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
+            let private = RistrettoPrivate::from_random(&mut rng);
+            let sub_view: SubaddressViewPrivate = private.into();
+            let sub_view_pub = SubaddressViewPublic::from(&sub_view);
+
+            let bytes = sub_view_pub.to_bytes();
+            let recovered = SubaddressViewPublic::try_from(&bytes).expect("Should recover");
+            assert_eq!(sub_view_pub, recovered);
+        });
+    }
+
+    #[test]
+    fn test_key_inner() {
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
+            let private = RistrettoPrivate::from_random(&mut rng);
+            let root_view: RootViewPrivate = private.clone().into();
+            let inner = root_view.inner();
+            assert_eq!(inner, private);
+        });
+    }
+
+    #[test]
+    fn test_key_as_ref() {
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
+            let private = RistrettoPrivate::from_random(&mut rng);
+            let root_view: RootViewPrivate = private.clone().into();
+            let key_ref: &RistrettoPrivate = root_view.as_ref();
+            assert_eq!(*key_ref, private);
+        });
+    }
+
+    #[test]
+    fn test_key_default() {
+        let default_key: RootViewPublic = Default::default();
+        let bytes = default_key.to_bytes();
+        // Default should produce a valid key (identity point)
+        assert_eq!(bytes.len(), 32);
+    }
+
+    #[test]
+    fn test_txout_key_types() {
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
+            let private = RistrettoPrivate::from_random(&mut rng);
+            let public = RistrettoPublic::from(&private);
+            let txout_pub: TxOutPublic = public.into();
+            let bytes = txout_pub.to_bytes();
+            let recovered = TxOutPublic::try_from(&bytes).expect("Should recover TxOutPublic");
+            assert_eq!(txout_pub, recovered);
+        });
+    }
+
+    #[test]
+    fn test_invalid_public_key_bytes() {
+        let invalid_bytes = [0xffu8; 32];
+        let result = RootViewPublic::try_from(&invalid_bytes);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_scalar_conversion() {
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
+            let private = RistrettoPrivate::from_random(&mut rng);
+            let root_spend: RootSpendPrivate = private.into();
+            let scalar: Scalar = (&root_spend).into();
+            let recovered: RootSpendPrivate = scalar.into();
+            assert_eq!(root_spend, recovered);
+        });
+    }
+
+    #[test]
+    fn test_ristretto_point_conversion() {
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
+            let private = RistrettoPrivate::from_random(&mut rng);
+            let public = RistrettoPublic::from(&private);
+            let root_pub: RootSpendPublic = public.into();
+            let point: RistrettoPoint = (&root_pub).into();
+            // Verify point is valid by checking it's not identity
+            assert_ne!(point, RistrettoPoint::default());
+        });
+    }
+
+    #[test]
+    fn test_public_key_display() {
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
+            let private = RistrettoPrivate::from_random(&mut rng);
+            let public = RistrettoPublic::from(&private);
+            let root_pub: RootViewPublic = public.into();
+            let display = root_pub.to_string();
+            assert_eq!(display.len(), 64); // 32 bytes = 64 hex chars
+        });
+    }
+
+    #[test]
+    fn test_public_key_lower_hex() {
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
+            let private = RistrettoPrivate::from_random(&mut rng);
+            let public = RistrettoPublic::from(&private);
+            let root_pub: RootViewPublic = public.into();
+            let hex = format!("{:x}", root_pub);
+            assert_eq!(hex.len(), 64);
+            for c in hex.chars() {
+                assert!(c.is_ascii_hexdigit() && !c.is_ascii_uppercase());
+            }
+        });
+    }
+
+    #[test]
+    fn test_public_key_upper_hex() {
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
+            let private = RistrettoPrivate::from_random(&mut rng);
+            let public = RistrettoPublic::from(&private);
+            let root_pub: RootViewPublic = public.into();
+            let hex = format!("{:X}", root_pub);
+            assert_eq!(hex.len(), 64);
+            for c in hex.chars() {
+                assert!(c.is_ascii_hexdigit() && !c.is_ascii_lowercase());
+            }
+        });
+    }
+
+    #[test]
+    fn test_private_key_display() {
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
+            let private = RistrettoPrivate::from_random(&mut rng);
+            let root_priv: RootSpendPrivate = private.into();
+            let display = root_priv.to_string();
+            assert!(display.starts_with("pub("));
+            assert!(display.ends_with(")"));
+        });
+    }
+
+    #[test]
+    fn test_partial_eq_with_ristretto_public() {
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
+            let private = RistrettoPrivate::from_random(&mut rng);
+            let public = RistrettoPublic::from(&private);
+            let root_pub: RootViewPublic = public.clone().into();
+            assert!(root_pub == public);
+            assert!(public == root_pub);
+        });
+    }
+
+    #[test]
+    fn test_partial_eq_with_ristretto_private() {
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
+            let private = RistrettoPrivate::from_random(&mut rng);
+            let root_priv: RootSpendPrivate = private.clone().into();
+            assert!(root_priv == private);
+            assert!(private == root_priv);
+        });
+    }
+
+    #[test]
+    fn test_repr_bytes_roundtrip() {
+        bth_util_test_helper::run_with_several_seeds(|mut rng| {
+            let private = RistrettoPrivate::from_random(&mut rng);
+            let public = RistrettoPublic::from(&private);
+            let root_pub: RootViewPublic = public.into();
+
+            let bytes = ReprBytes::to_bytes(&root_pub);
+            let recovered: RootViewPublic = ReprBytes::from_bytes(&bytes).expect("Should recover");
+            assert_eq!(root_pub, recovered);
+        });
+    }
+}

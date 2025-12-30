@@ -41,6 +41,7 @@ rand_core = "0.6"
 aes = { workspace = true }
 ctr = { workspace = true }
 hkdf = { workspace = true }
+hmac = { workspace = true }
 
 # Monetary Policy
 bth-cluster-tax = { path = "../cluster-tax" }
@@ -98,3 +99,5 @@ dashmap = "6"
 tempfile = "3"
 botho-wallet = { path = "../botho-wallet" }
 bth-transaction-core = { path = "../transaction/core", features = ["pq"] }
+reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"] }
+futures = "0.3"

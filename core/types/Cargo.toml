@@ -22,3 +22,9 @@ zeroize = { workspace = true }
 
 # Botho dependencies
 bth-crypto-keys = { workspace = true }
+
+[dev-dependencies]
+bth-util-from-random = { workspace = true }
+bth-util-test-helper = { workspace = true }
+rand_core = { workspace = true, features = ["getrandom"] }
+rand_hc = { workspace = true }

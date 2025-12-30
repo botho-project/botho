@@ -24,11 +24,16 @@ arbitrary = { version = "1", features = ["derive"] }
 botho = { path = "../botho" }
 bth-crypto-pq = { path = "../crypto/pq" }
 bth-crypto-keys = { path = "../crypto/keys" }
+bth-crypto-ring-signature = { path = "../crypto/ring-signature" }
+bth-crypto-hashes = { path = "../crypto/hashes" }
 bth-transaction-core = { path = "../transaction/core", features = ["pq"] }
 
 # Serialization
 bincode = "1"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hex = "0.4"
+bs58 = "0.5"
 
 [[bin]]
 name = "fuzz_transaction"
@@ -61,6 +66,34 @@ bench = false
 [[bin]]
 name = "fuzz_network_messages"
 path = "fuzz_targets/fuzz_network_messages.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_ring_signature"
+path = "fuzz_targets/fuzz_ring_signature.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_rpc_request"
+path = "fuzz_targets/fuzz_rpc_request.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_address_parsing"
+path = "fuzz_targets/fuzz_address_parsing.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_mlkem_decapsulation"
+path = "fuzz_targets/fuzz_mlkem_decapsulation.rs"
 test = false
 doc = false
 bench = false

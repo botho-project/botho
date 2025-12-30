@@ -86,7 +86,7 @@ curl -X POST http://localhost:7101/ \
 
 ### `getChainInfo`
 
-Get blockchain information.
+Get blockchain information including supply metrics.
 
 **Parameters:** None
 
@@ -96,9 +96,57 @@ Get blockchain information.
 | `height` | integer | Current block height |
 | `tipHash` | string | Hash of the latest block (hex) |
 | `difficulty` | integer | Current mining difficulty |
-| `totalMined` | integer | Total credits mined |
+| `totalMined` | integer | Gross emission (all BTH ever minted), in nanoBTH |
+| `totalFeesBurned` | integer | Cumulative transaction fees burned, in nanoBTH |
+| `circulatingSupply` | integer | Net supply (totalMined - totalFeesBurned), in nanoBTH |
 | `mempoolSize` | integer | Pending transaction count |
 | `mempoolFees` | integer | Total fees in mempool |
+
+**Example:**
+```bash
+curl -X POST http://localhost:7101/ \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"getChainInfo","params":{},"id":1}'
+```
+
+---
+
+### `getSupplyInfo`
+
+Get circulating supply information. Useful for exchanges and block explorers to accurately report BTH supply.
+
+**Parameters:** None
+
+**Response:**
+| Field | Type | Description |
+|-------|------|-------------|
+| `height` | integer | Current block height |
+| `totalMined` | integer | Gross emission (all BTH ever minted), in nanoBTH |
+| `totalFeesBurned` | integer | Cumulative transaction fees burned, in nanoBTH |
+| `circulatingSupply` | integer | Net supply (totalMined - totalFeesBurned), in nanoBTH |
+
+**Note:** All values are in nanoBTH (1 BTH = 1,000,000,000 nanoBTH). Transaction fees are burned (removed from circulation), which is why circulating supply = totalMined - totalFeesBurned.
+
+**Example:**
+```bash
+curl -X POST http://localhost:7101/ \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"getSupplyInfo","params":{},"id":1}'
+```
+
+**Response:**
+```json
+{
+  "jsonrpc": "2.0",
+  "result": {
+    "height": 12345,
+    "totalMined": 50000000000000000,
+    "totalFeesBurned": 123456789000,
+    "circulatingSupply": 49999876543211000
+  },
+  "id": 1
+}
+```
 
 ---
 

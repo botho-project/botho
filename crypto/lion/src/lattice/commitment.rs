@@ -23,20 +23,15 @@ pub struct Commitment {
 impl Commitment {
     /// Compute a commitment from randomness y and matrix A.
     ///
-    /// Computes w = A * y in the NTT domain.
+    /// Computes w = A * y.
     pub fn compute(a: &PolyMatrix, y: &PolyVecL) -> Self {
-        let mut y_ntt = y.clone();
-        y_ntt.ntt();
-
-        let mut w = a.mul_vec(&y_ntt);
-        w.inv_ntt();
-
+        let w = a.mul_vec(y);
         Self { w }
     }
 
     /// Serialize to bytes for hashing.
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(4 * 736);
+        let mut bytes = Vec::with_capacity(4 * 768);
         for poly in self.w.polys.iter() {
             bytes.extend_from_slice(&poly.to_bytes());
         }
@@ -226,8 +221,8 @@ mod tests {
         let mut rng = ChaCha20Rng::seed_from_u64(123);
         let seed = [0u8; 32];
 
-        let mut a = PolyMatrix::expand_a(&seed);
-        a.ntt();
+        // Matrix should be in standard form - mul_vec does NTT internally
+        let a = PolyMatrix::expand_a(&seed);
 
         let y = sample_y(&mut rng);
         let commitment = Commitment::compute(&a, &y);

@@ -3,7 +3,7 @@
 //! Polynomials are elements of R_q = Z_q[X]/(X^N + 1) where N = 256 and Q = 8380417.
 //! NTT (Number Theoretic Transform) is used for efficient multiplication.
 
-use crate::params::{N, Q, QINV, ZETA};
+use crate::params::{N, Q, QINV};
 use core::ops::{Add, AddAssign, Neg, Sub, SubAssign};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -106,15 +106,53 @@ impl Poly {
         ntt_inverse(&mut self.coeffs);
     }
 
-    /// Pointwise multiplication in NTT domain.
+    /// Pointwise multiplication in NTT domain with Montgomery reduction.
     /// Both self and other must be in NTT domain.
     pub fn pointwise_mul(&self, other: &Self) -> Self {
         let mut result = Self::zero();
         for i in 0..N {
-            let a = self.coeffs[i] as u64;
-            let b = other.coeffs[i] as u64;
-            result.coeffs[i] = montgomery_reduce(a * b);
+            let a = self.coeffs[i] as i32;
+            let b = other.coeffs[i] as i32;
+            let prod = montgomery_reduce(a as i64 * b as i64);
+            result.coeffs[i] = caddq(prod) as u32;
         }
+        result
+    }
+
+    /// Multiply two polynomials using NTT.
+    /// This is the fast O(N log N) multiplication method.
+    pub fn ntt_mul(&self, other: &Self) -> Self {
+        let mut a = self.clone();
+        let mut b = other.clone();
+        a.ntt();
+        b.ntt();
+        let mut c = a.pointwise_mul(&b);
+        c.inv_ntt();
+        c
+    }
+
+    /// Naive polynomial multiplication in R_q = Z_q[X]/(X^N + 1).
+    /// Slower than NTT but guaranteed correct.
+    pub fn naive_mul(&self, other: &Self) -> Self {
+        let mut result = Self::zero();
+
+        // Compute product modulo X^N + 1
+        for i in 0..N {
+            for j in 0..N {
+                let k = i + j;
+                let prod = (self.coeffs[i] as u64 * other.coeffs[j] as u64) % Q as u64;
+
+                if k < N {
+                    // Normal addition
+                    result.coeffs[k] = (result.coeffs[k] as u64 + prod) as u32 % Q;
+                } else {
+                    // Wrap around with negation (due to X^N = -1)
+                    let idx = k - N;
+                    result.coeffs[idx] = (result.coeffs[idx] as u64 + Q as u64 - prod) as u32 % Q;
+                }
+            }
+        }
+
         result
     }
 
@@ -278,70 +316,97 @@ impl SubAssign<&Poly> for Poly {
 // ============================================================================
 // NTT implementation
 // ============================================================================
+//
+// This NTT implementation is ported from the Dilithium reference implementation
+// (pq-crystals/dilithium). The zetas are precomputed in Montgomery form with
+// the correct bit-reversed ordering for the Cooley-Tukey butterfly structure.
+//
+// Key properties:
+// - Works over Z_q[X]/(X^N + 1) with Q = 8380417, N = 256
+// - Uses Montgomery representation for efficient modular arithmetic
+// - Zetas are ζ^(brv(k)) in Montgomery form, where brv is bit-reversal
 
-/// Precomputed powers of zeta for NTT.
-const ZETAS: [u32; N] = compute_zetas();
+/// Precomputed zetas for forward NTT in Montgomery form.
+/// These are ζ^(brv(k)) * 2^32 mod Q for the Cooley-Tukey butterfly.
+/// Ported from Dilithium reference implementation.
+const ZETAS: [i32; N] = [
+    0, 25847, -2608894, -518909, 237124, -777960, -876248, 466468,
+    1826347, 2353451, -359251, -2091905, 3119733, -2884855, 3111497, 2680103,
+    2725464, 1024112, -1079900, 3585928, -549488, -1119584, 2619752, -2108549,
+    -2118186, -3859737, -1399561, -3277672, 1757237, -19422, 4010497, 280005,
+    2706023, 95776, 3077325, 3530437, -1661693, -3592148, -2537516, 3915439,
+    -3861115, -3043716, 3574422, -2867647, 3539968, -300467, 2348700, -539299,
+    -1699267, -1643818, 3505694, -3821735, 3507263, -2140649, -1600420, 3699596,
+    811944, 531354, 954230, 3881043, 3900724, -2556880, 2071892, -2797779,
+    -3930395, -1528703, -3677745, -3041255, -1452451, 3475950, 2176455, -1585221,
+    -1257611, 1939314, -4083598, -1000202, -3190144, -3157330, -3632928, 126922,
+    3412210, -983419, 2147896, 2715295, -2967645, -3693493, -411027, -2477047,
+    -671102, -1228525, -22981, -1308169, -381987, 1349076, 1852771, -1430430,
+    -3343383, 264944, 508951, 3097992, 44288, -1100098, 904516, 3958618,
+    -3724342, -8578, 1653064, -3249728, 2389356, -210977, 759969, -1316856,
+    189548, -3553272, 3159746, -1851402, -2409325, -177440, 1315589, 1341330,
+    1285669, -1584928, -812732, -1439742, -3019102, -3881060, -3628969, 3839961,
+    2091667, 3407706, 2316500, 3817976, -3342478, 2244091, -2446433, -3562462,
+    266997, 2434439, -1235728, 3513181, -3520352, -3759364, -1197226, -3193378,
+    900702, 1859098, 909542, 819034, 495491, -1613174, -43260, -522500,
+    -655327, -3122442, 2031748, 3207046, -3556995, -525098, -768622, -3595838,
+    342297, 286988, -2437823, 4108315, 3437287, -3342277, 1735879, 203044,
+    2842341, 2691481, -2590150, 1265009, 4055324, 1247620, 2486353, 1595974,
+    -3767016, 1250494, 2635921, -3548272, -2994039, 1869119, 1903435, -1050970,
+    -1333058, 1237275, -3318210, -1430225, -451100, 1312455, 3306115, -1962642,
+    -1279661, 1917081, -2546312, -1374803, 1500165, 777191, 2235880, 3406031,
+    -542412, -2831860, -1671176, -1846953, -2584293, -3724270, 594136, -3776993,
+    -2013608, 2432395, 2454455, -164721, 1957272, 3369112, 185531, -1207385,
+    -3183426, 162844, 1616392, 3014001, 810149, 1652634, -3694233, -1799107,
+    -3038916, 3523897, 3866901, 269760, 2213111, -975884, 1717735, 472078,
+    -426683, 1723600, -1803090, 1910376, -1667432, -1104333, -260646, -3833893,
+    -2939036, -2235985, -420899, -2286327, 183443, -976891, 1612842, -3545687,
+    -554416, 3919660, -48306, -1362209, 3937738, 1400424, -846154, 1976782,
+];
 
-/// Precomputed powers of zeta inverse for inverse NTT.
-const ZETAS_INV: [u32; N] = compute_zetas_inv();
+/// Scaling factor for inverse NTT: f = mont^2 / 256 mod Q
+/// This combines the 1/N scaling with Montgomery correction.
+const NTT_F: i32 = 41978;
 
-const fn compute_zetas() -> [u32; N] {
-    let mut zetas = [0u32; N];
-    let mut zeta_power = 1u64;
-
-    let mut i = 0;
-    while i < N {
-        zetas[i] = zeta_power as u32;
-        zeta_power = (zeta_power * ZETA as u64) % Q as u64;
-        i += 1;
-    }
-    zetas
-}
-
-const fn compute_zetas_inv() -> [u32; N] {
-    let mut zetas_inv = [0u32; N];
-    let zetas = compute_zetas();
-
-    // Compute modular inverse using Fermat's little theorem: a^(-1) = a^(Q-2) mod Q
-    let mut i = 0;
-    while i < N {
-        zetas_inv[i] = mod_pow(zetas[i], Q - 2);
-        i += 1;
-    }
-    zetas_inv
-}
-
-const fn mod_pow(base: u32, exp: u32) -> u32 {
-    let mut result = 1u64;
-    let mut base = base as u64;
-    let mut exp = exp;
-
-    while exp > 0 {
-        if exp & 1 == 1 {
-            result = (result * base) % Q as u64;
-        }
-        base = (base * base) % Q as u64;
-        exp >>= 1;
-    }
-    result as u32
-}
-
-/// Montgomery reduction: compute a * R^(-1) mod Q.
+/// Montgomery reduction: compute a * 2^(-32) mod Q.
+///
+/// For a in [-2^31*Q, 2^31*Q], returns r in (-Q, Q) with a ≡ r * 2^32 (mod Q).
 #[inline]
-fn montgomery_reduce(a: u64) -> u32 {
-    let t = ((a as u32).wrapping_mul(QINV)) as u64;
-    let reduced = ((a + t * Q as u64) >> 32) as u32;
-    if reduced >= Q {
-        reduced - Q
-    } else {
-        reduced
-    }
+fn montgomery_reduce(a: i64) -> i32 {
+    let t = (a as i32).wrapping_mul(QINV as i32);
+    ((a - (t as i64) * (Q as i64)) >> 32) as i32
 }
 
-/// Forward NTT transformation (Cooley-Tukey).
+/// Reduce a coefficient to the range [0, Q).
+#[inline]
+fn reduce32(a: i32) -> i32 {
+    let t = (a + (1 << 22)) >> 23;
+    a - t * (Q as i32)
+}
+
+/// Conditionally add Q to ensure positive value.
+#[inline]
+fn caddq(a: i32) -> i32 {
+    let mut a = a;
+    a += (a >> 31) & (Q as i32);
+    a
+}
+
+/// Forward NTT transformation (Cooley-Tukey, decimation-in-frequency).
+///
+/// Input: coefficients in standard order, each in [0, Q).
+/// Output: coefficients in bit-reversed order, each in [0, Q).
+///
+/// After NTT, polynomials can be multiplied pointwise.
 fn ntt_forward(coeffs: &mut [u32; N]) {
-    let mut k = 0;
-    let mut len = N / 2;
+    // Convert to signed for internal computation
+    let mut a: [i32; N] = [0; N];
+    for i in 0..N {
+        a[i] = coeffs[i] as i32;
+    }
+
+    let mut k = 0usize;
+    let mut len = 128;
 
     while len >= 1 {
         let mut start = 0;
@@ -350,18 +415,34 @@ fn ntt_forward(coeffs: &mut [u32; N]) {
             let zeta = ZETAS[k];
 
             for j in start..(start + len) {
-                let t = montgomery_reduce(zeta as u64 * coeffs[j + len] as u64);
-                coeffs[j + len] = (coeffs[j] + Q - t) % Q;
-                coeffs[j] = (coeffs[j] + t) % Q;
+                let t = montgomery_reduce(zeta as i64 * a[j + len] as i64);
+                a[j + len] = a[j] - t;
+                a[j] = a[j] + t;
             }
             start += 2 * len;
         }
-        len /= 2;
+        len >>= 1;
+    }
+
+    // Convert back to unsigned, reducing to [0, Q)
+    for i in 0..N {
+        coeffs[i] = caddq(reduce32(a[i])) as u32;
     }
 }
 
-/// Inverse NTT transformation (Gentleman-Sande).
+/// Inverse NTT transformation (Gentleman-Sande, decimation-in-time).
+///
+/// Input: coefficients in bit-reversed order (from forward NTT).
+/// Output: coefficients in standard order, each in [0, Q).
+///
+/// Includes the 1/N scaling factor combined with Montgomery correction.
 fn ntt_inverse(coeffs: &mut [u32; N]) {
+    // Convert to signed for internal computation
+    let mut a: [i32; N] = [0; N];
+    for i in 0..N {
+        a[i] = coeffs[i] as i32;
+    }
+
     let mut k = N;
     let mut len = 1;
 
@@ -369,24 +450,27 @@ fn ntt_inverse(coeffs: &mut [u32; N]) {
         let mut start = 0;
         while start < N {
             k -= 1;
-            let zeta_inv = ZETAS_INV[k];
+            let zeta = -ZETAS[k];
 
             for j in start..(start + len) {
-                let t = coeffs[j];
-                coeffs[j] = (t + coeffs[j + len]) % Q;
-                coeffs[j + len] = montgomery_reduce(
-                    zeta_inv as u64 * ((t + Q - coeffs[j + len]) % Q) as u64,
-                );
+                let t = a[j];
+                a[j] = t + a[j + len];
+                a[j + len] = t - a[j + len];
+                a[j + len] = montgomery_reduce(zeta as i64 * a[j + len] as i64);
             }
             start += 2 * len;
         }
-        len *= 2;
+        len <<= 1;
     }
 
-    // Multiply by N^(-1) mod Q
-    let n_inv = mod_pow(N as u32, Q - 2);
-    for c in coeffs.iter_mut() {
-        *c = montgomery_reduce(*c as u64 * n_inv as u64);
+    // Final scaling by f = mont^2/256 to get proper coefficients
+    for i in 0..N {
+        a[i] = montgomery_reduce(NTT_F as i64 * a[i] as i64);
+    }
+
+    // Convert back to unsigned, reducing to [0, Q)
+    for i in 0..N {
+        coeffs[i] = caddq(reduce32(a[i])) as u32;
     }
 }
 
@@ -595,9 +679,10 @@ impl PolyMatrix {
         }
     }
 
-    /// Matrix-vector multiplication: A * s (in NTT domain).
-    /// Both matrix and vector must be in NTT domain.
-    pub fn mul_vec(&self, s: &PolyVecL) -> PolyVecK {
+    /// Matrix-vector multiplication: A * s (both in NTT domain).
+    /// Both matrix and vector must already be in NTT domain.
+    /// Result is also in NTT domain.
+    pub fn mul_vec_ntt_domain(&self, s: &PolyVecL) -> PolyVecK {
         let mut result = PolyVecK::zero();
 
         for (i, row) in self.rows.iter().enumerate() {
@@ -609,12 +694,46 @@ impl PolyMatrix {
 
         result
     }
+
+    /// Matrix-vector multiplication using NTT.
+    /// Takes matrix and vector in standard form, returns result in standard form.
+    /// This is the fast O(N log N) multiplication method.
+    pub fn mul_vec(&self, s: &PolyVecL) -> PolyVecK {
+        // Transform matrix and vector to NTT domain
+        let mut a_ntt = self.clone();
+        let mut s_ntt = s.clone();
+        a_ntt.ntt();
+        s_ntt.ntt();
+
+        // Multiply in NTT domain
+        let mut result = a_ntt.mul_vec_ntt_domain(&s_ntt);
+
+        // Transform result back to standard form
+        result.inv_ntt();
+
+        result
+    }
+
+    /// Matrix-vector multiplication using naive polynomial multiplication.
+    /// This is slower O(N²) but uses no NTT domain transformations.
+    pub fn mul_vec_naive(&self, s: &PolyVecL) -> PolyVecK {
+        let mut result = PolyVecK::zero();
+
+        for (i, row) in self.rows.iter().enumerate() {
+            for (j, poly) in row.polys.iter().enumerate() {
+                let prod = poly.naive_mul(&s.polys[j]);
+                result.polys[i].add_assign(&prod);
+            }
+        }
+
+        result
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::SeedableRng;
+    use rand_core::SeedableRng;
     use rand_chacha::ChaCha20Rng;
 
     #[test]
@@ -633,16 +752,20 @@ mod tests {
     }
 
     #[test]
-    fn test_ntt_roundtrip() {
+    fn test_ntt_roundtrip_via_multiplication() {
+        // Note: The Dilithium-style NTT doesn't support direct roundtrip
+        // (ntt followed by inv_ntt) because of Montgomery domain handling.
+        // The Montgomery factors only cancel properly during multiplication.
+        // So we test roundtrip by multiplying by 1.
         let mut rng = ChaCha20Rng::seed_from_u64(123);
         let original = Poly::sample_uniform(&mut rng);
 
-        let mut transformed = original.clone();
-        transformed.ntt();
-        transformed.inv_ntt();
+        // Multiply by 1 should return the same polynomial
+        let one = Poly::constant(1);
+        let result = original.ntt_mul(&one);
 
         for i in 0..N {
-            assert_eq!(transformed.coeffs[i], original.coeffs[i]);
+            assert_eq!(result.coeffs[i], original.coeffs[i]);
         }
     }
 
@@ -696,5 +819,110 @@ mod tests {
         let a1 = PolyMatrix::expand_a(&seed);
         let a2 = PolyMatrix::expand_a(&seed);
         assert_eq!(a1, a2);
+    }
+
+    #[test]
+    fn test_matrix_mul_vec_matches_naive() {
+        // NTT-based matrix-vector multiplication must match naive version
+        let seed = [42u8; 32];
+        let a = PolyMatrix::expand_a(&seed);
+
+        let mut rng = ChaCha20Rng::seed_from_u64(123);
+        let s = PolyVecL::sample_small(&mut rng, 2);
+
+        let ntt_result = a.mul_vec(&s);
+        let naive_result = a.mul_vec_naive(&s);
+
+        for i in 0..4 {
+            for j in 0..N {
+                assert_eq!(
+                    ntt_result.polys[i].coeffs[j],
+                    naive_result.polys[i].coeffs[j],
+                    "NTT and naive matrix mul differ at poly {} coeff {}",
+                    i, j
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_ntt_mul_matches_naive() {
+        // This is the critical correctness test: NTT multiplication
+        // must produce the same result as naive multiplication.
+
+        // Test with multiple random polynomial pairs
+        for seed in 0..10u64 {
+            let mut rng = ChaCha20Rng::seed_from_u64(seed);
+            let a = Poly::sample_uniform(&mut rng);
+            let b = Poly::sample_uniform(&mut rng);
+
+            let naive_result = a.naive_mul(&b);
+            let ntt_result = a.ntt_mul(&b);
+
+            for i in 0..N {
+                assert_eq!(
+                    ntt_result.coeffs[i], naive_result.coeffs[i],
+                    "NTT and naive multiplication differ at coefficient {} (seed {})",
+                    i, seed
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_ntt_mul_with_small_polys() {
+        // Test with small coefficient polynomials (typical for signatures)
+        let mut rng = ChaCha20Rng::seed_from_u64(42);
+
+        for _ in 0..5 {
+            let a = Poly::sample_small(&mut rng, 2);
+            let b = Poly::sample_small(&mut rng, 2);
+
+            let naive_result = a.naive_mul(&b);
+            let ntt_result = a.ntt_mul(&b);
+
+            assert_eq!(ntt_result, naive_result);
+        }
+    }
+
+    #[test]
+    fn test_ntt_mul_identity() {
+        // Multiplying by 1 (constant polynomial) should return the same polynomial
+        let mut rng = ChaCha20Rng::seed_from_u64(123);
+        let a = Poly::sample_uniform(&mut rng);
+        let one = Poly::constant(1);
+
+        let result = a.ntt_mul(&one);
+
+        for i in 0..N {
+            assert_eq!(result.coeffs[i], a.coeffs[i]);
+        }
+    }
+
+    #[test]
+    fn test_ntt_mul_zero() {
+        // Multiplying by 0 should return zero
+        let mut rng = ChaCha20Rng::seed_from_u64(456);
+        let a = Poly::sample_uniform(&mut rng);
+        let zero = Poly::zero();
+
+        let result = a.ntt_mul(&zero);
+
+        for i in 0..N {
+            assert_eq!(result.coeffs[i], 0);
+        }
+    }
+
+    #[test]
+    fn test_ntt_mul_commutativity() {
+        // a * b == b * a
+        let mut rng = ChaCha20Rng::seed_from_u64(789);
+        let a = Poly::sample_uniform(&mut rng);
+        let b = Poly::sample_uniform(&mut rng);
+
+        let ab = a.ntt_mul(&b);
+        let ba = b.ntt_mul(&a);
+
+        assert_eq!(ab, ba);
     }
 }

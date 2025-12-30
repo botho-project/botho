@@ -13,19 +13,23 @@ use crate::{
     error::{LionError, Result},
     lattice::{LionKeyImage, LionPublicKey},
     params::*,
-    polynomial::PolyVecL,
+    polynomial::{Poly, PolyVecL},
 };
 
 /// A Lion ring signature.
 ///
+/// Uses a sequential ring structure where each challenge depends on
+/// the previous commitment, breaking the circular dependency.
+///
 /// Contains all the data needed to verify the signature:
-/// - Challenge seed (used to derive per-member challenges)
+/// - Starting challenge c0 (the first challenge in the ring)
 /// - Key image (for linkability/double-spend detection)
 /// - Response vectors for each ring member
 #[derive(Clone, Debug)]
 pub struct LionRingSignature {
-    /// Seed for challenge derivation.
-    pub challenge_seed: [u8; 32],
+    /// Starting challenge (at index 0).
+    /// Other challenges are computed sequentially during verification.
+    pub c0: Poly,
 
     /// Key image for linkability.
     pub key_image: LionKeyImage,
@@ -85,8 +89,8 @@ impl LionRingSignature {
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(signature_size(self.responses.len()));
 
-        // Challenge seed
-        bytes.extend_from_slice(&self.challenge_seed);
+        // Starting challenge c0 (768 bytes for a polynomial)
+        bytes.extend_from_slice(&self.c0.to_bytes());
 
         // Key image
         bytes.extend_from_slice(&self.key_image.to_bytes());
@@ -106,15 +110,18 @@ impl LionRingSignature {
             return Err(LionError::InvalidSignature);
         }
 
-        // Challenge seed
-        let mut challenge_seed = [0u8; 32];
-        challenge_seed.copy_from_slice(&bytes[..32]);
+        // Starting challenge c0
+        let c0_bytes: [u8; POLY_BYTES] = bytes[..POLY_BYTES]
+            .try_into()
+            .map_err(|_| LionError::DeserializationError("invalid c0 bytes"))?;
+        let c0 = Poly::from_bytes(&c0_bytes)
+            .ok_or(LionError::DeserializationError("invalid c0 polynomial"))?;
 
         // Key image
-        let key_image = LionKeyImage::from_bytes(&bytes[32..32 + KEY_IMAGE_BYTES])?;
+        let key_image = LionKeyImage::from_bytes(&bytes[POLY_BYTES..POLY_BYTES + KEY_IMAGE_BYTES])?;
 
         // Responses
-        let mut offset = 32 + KEY_IMAGE_BYTES;
+        let mut offset = POLY_BYTES + KEY_IMAGE_BYTES;
         let mut responses = Vec::with_capacity(ring_size);
         for _ in 0..ring_size {
             let response_bytes = &bytes[offset..offset + RESPONSE_BYTES];
@@ -123,7 +130,7 @@ impl LionRingSignature {
         }
 
         Ok(Self {
-            challenge_seed,
+            c0,
             key_image,
             responses,
         })
@@ -224,6 +231,30 @@ mod tests {
             .expect("signing should succeed");
 
         // Verify
+        let result = verify(message, &ring, &signature);
+        if let Err(ref e) = result {
+            eprintln!("Verification failed: {:?}", e);
+        }
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_sign_verify_at_position_zero() {
+        // Test signing at position 0 (edge case for sequential ring)
+        let mut rng = ChaCha20Rng::seed_from_u64(999);
+        let message = b"test position zero";
+
+        let keypairs: Vec<LionKeyPair> = (0..RING_SIZE)
+            .map(|i| LionKeyPair::from_seed(&[i as u8; 32]))
+            .collect();
+
+        let ring: Vec<LionPublicKey> = keypairs.iter()
+            .map(|kp| kp.public_key.clone())
+            .collect();
+
+        let signature = sign(message, &ring, 0, &keypairs[0].secret_key, &mut rng)
+            .expect("signing should succeed");
+
         assert!(verify(message, &ring, &signature).is_ok());
     }
 

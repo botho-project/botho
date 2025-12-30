@@ -1,0 +1,52 @@
+[package]
+name = "botho-exchange-scanner"
+version = "0.1.0"
+edition = "2021"
+description = "Exchange deposit scanner for Botho cryptocurrency"
+license = "Apache-2.0"
+readme = "README.md"
+
+[features]
+default = []
+
+[[bin]]
+name = "botho-exchange-scanner"
+path = "src/main.rs"
+
+[dependencies]
+# Core crypto
+bth-account-keys = { path = "../account-keys" }
+bth-crypto-keys = { path = "../crypto/keys" }
+bth-crypto-ring-signature = { path = "../crypto/ring-signature" }
+bth-core = { path = "../core" }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+hex = { version = "0.4", features = ["std"] }
+
+# HTTP client for RPC
+reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"] }
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Error handling
+anyhow = "1"
+thiserror = "1"
+
+# Utilities
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+async-trait = "0.1"
+
+[dev-dependencies]
+tempfile = "3"
+rand = "0.8"

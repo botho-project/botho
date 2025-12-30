@@ -73,12 +73,13 @@ pub const KEY_IMAGE_BYTES: usize = PUBLIC_KEY_BYTES; // 1312 bytes
 /// Contains z (L polynomials with coefficients mod Q).
 pub const RESPONSE_BYTES: usize = L * POLY_BYTES; // 4 * 768 = 3072 bytes
 
-/// Base signature size (challenge seed + key image).
-pub const SIGNATURE_BASE_BYTES: usize = 32 + KEY_IMAGE_BYTES; // 32 + 1312 = 1344 bytes
+/// Base signature size (starting challenge c0 + key image).
+/// c0 is a full polynomial (POLY_BYTES) in the sequential ring structure.
+pub const SIGNATURE_BASE_BYTES: usize = POLY_BYTES + KEY_IMAGE_BYTES; // 768 + 1312 = 2080 bytes
 
 /// Total signature size for a ring of RING_SIZE members.
-/// Includes challenge seed, key image, and responses for each member.
-pub const SIGNATURE_BYTES: usize = SIGNATURE_BASE_BYTES + RING_SIZE * RESPONSE_BYTES; // 1344 + 7 * 2304 = 17472 bytes
+/// Includes starting challenge c0, key image, and responses for each member.
+pub const SIGNATURE_BYTES: usize = SIGNATURE_BASE_BYTES + RING_SIZE * RESPONSE_BYTES; // 2080 + 7 * 3072 = 23584 bytes
 
 // ============================================================================
 // NTT constants
@@ -118,9 +119,10 @@ pub const DOMAIN_EXPAND: &[u8] = b"botho-lion-expand-v1";
 // ============================================================================
 
 /// Compute the expected signature size for a given ring size.
+/// Uses sequential ring structure with c0 (POLY_BYTES) + key_image + responses.
 #[inline]
 pub const fn signature_size(ring_size: usize) -> usize {
-    SIGNATURE_BASE_BYTES + ring_size * RESPONSE_BYTES
+    POLY_BYTES + KEY_IMAGE_BYTES + ring_size * RESPONSE_BYTES
 }
 
 /// Check if a value is a valid coefficient (< Q).

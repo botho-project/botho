@@ -1042,4 +1042,338 @@ mod msg_tests {
 
         assert_eq!(payload, payload2);
     }
+
+    #[test]
+    fn test_msg_validate_valid_nominate() {
+        let quorum_set = QuorumSet::new_with_node_ids(1, vec![test_node_id(2)]);
+        let msg = Msg::new(
+            test_node_id(1),
+            quorum_set,
+            1,
+            Nominate(NominatePayload {
+                X: BTreeSet::from_iter([1, 2, 3]),
+                Y: BTreeSet::from_iter([10, 20, 30]),
+            }),
+        );
+        assert!(msg.validate().is_ok());
+    }
+
+    #[test]
+    fn test_msg_validate_invalid_nominate_x_intersects_y() {
+        let quorum_set = QuorumSet::new_with_node_ids(1, vec![test_node_id(2)]);
+        let msg = Msg::new(
+            test_node_id(1),
+            quorum_set,
+            1,
+            Nominate(NominatePayload {
+                X: BTreeSet::from_iter([1, 2, 3]),
+                Y: BTreeSet::from_iter([2, 20, 30]), // 2 overlaps with X
+            }),
+        );
+        assert!(msg.validate().is_err());
+    }
+
+    #[test]
+    fn test_msg_validate_valid_prepare() {
+        let quorum_set = QuorumSet::new_with_node_ids(1, vec![test_node_id(2)]);
+        let msg = Msg::new(
+            test_node_id(1),
+            quorum_set,
+            1,
+            Prepare(PreparePayload {
+                B: Ballot::new(10, &["value"]),
+                P: Some(Ballot::new(5, &["value"])),
+                PP: Some(Ballot::new(3, &["other"])),
+                CN: 1,
+                HN: 5,
+            }),
+        );
+        assert!(msg.validate().is_ok());
+    }
+
+    #[test]
+    fn test_msg_validate_invalid_prepare_b_less_than_p() {
+        let quorum_set = QuorumSet::new_with_node_ids(1, vec![test_node_id(2)]);
+        let msg = Msg::new(
+            test_node_id(1),
+            quorum_set,
+            1,
+            Prepare(PreparePayload {
+                B: Ballot::new(5, &["value"]),     // B < P (invalid)
+                P: Some(Ballot::new(10, &["value"])),
+                PP: None,
+                CN: 0,
+                HN: 0,
+            }),
+        );
+        assert!(msg.validate().is_err());
+    }
+
+    #[test]
+    fn test_msg_validate_invalid_prepare_pp_ge_p() {
+        let quorum_set = QuorumSet::new_with_node_ids(1, vec![test_node_id(2)]);
+        let msg = Msg::new(
+            test_node_id(1),
+            quorum_set,
+            1,
+            Prepare(PreparePayload {
+                B: Ballot::new(10, &["value"]),
+                P: Some(Ballot::new(5, &["value"])),
+                PP: Some(Ballot::new(5, &["other"])), // PP >= P (invalid)
+                CN: 0,
+                HN: 0,
+            }),
+        );
+        assert!(msg.validate().is_err());
+    }
+
+    #[test]
+    fn test_msg_validate_invalid_prepare_cn_gt_hn() {
+        let quorum_set = QuorumSet::new_with_node_ids(1, vec![test_node_id(2)]);
+        let msg = Msg::new(
+            test_node_id(1),
+            quorum_set,
+            1,
+            Prepare(PreparePayload {
+                B: Ballot::new(10, &["value"]),
+                P: None,
+                PP: None,
+                CN: 5,  // CN > HN (invalid)
+                HN: 3,
+            }),
+        );
+        assert!(msg.validate().is_err());
+    }
+
+    #[test]
+    fn test_msg_validate_invalid_prepare_hn_gt_bn() {
+        let quorum_set = QuorumSet::new_with_node_ids(1, vec![test_node_id(2)]);
+        let msg = Msg::new(
+            test_node_id(1),
+            quorum_set,
+            1,
+            Prepare(PreparePayload {
+                B: Ballot::new(5, &["value"]),
+                P: None,
+                PP: None,
+                CN: 0,
+                HN: 10,  // HN > B.N (invalid)
+            }),
+        );
+        assert!(msg.validate().is_err());
+    }
+
+    #[test]
+    fn test_msg_validate_valid_commit() {
+        let quorum_set = QuorumSet::new_with_node_ids(1, vec![test_node_id(2)]);
+        let msg = Msg::new(
+            test_node_id(1),
+            quorum_set,
+            1,
+            Commit(CommitPayload {
+                B: Ballot::new(10, &["value"]),
+                PN: 8,
+                CN: 5,
+                HN: 8,
+            }),
+        );
+        assert!(msg.validate().is_ok());
+    }
+
+    #[test]
+    fn test_msg_validate_invalid_commit_cn_gt_hn() {
+        let quorum_set = QuorumSet::new_with_node_ids(1, vec![test_node_id(2)]);
+        let msg = Msg::new(
+            test_node_id(1),
+            quorum_set,
+            1,
+            Commit(CommitPayload {
+                B: Ballot::new(10, &["value"]),
+                PN: 8,
+                CN: 10,  // CN > HN (invalid)
+                HN: 5,
+            }),
+        );
+        assert!(msg.validate().is_err());
+    }
+
+    #[test]
+    fn test_msg_bn_returns_correct_values() {
+        let quorum_set = QuorumSet::new_with_node_ids(1, vec![test_node_id(2)]);
+
+        // Nominate returns 0
+        let nominate_msg = Msg::new(
+            test_node_id(1),
+            quorum_set.clone(),
+            1,
+            Nominate(NominatePayload {
+                X: BTreeSet::from_iter([1]),
+                Y: BTreeSet::new(),
+            }),
+        );
+        assert_eq!(nominate_msg.bN(), 0);
+
+        // Prepare returns B.N
+        let prepare_msg = Msg::new(
+            test_node_id(1),
+            quorum_set.clone(),
+            1,
+            Prepare(PreparePayload {
+                B: Ballot::new(7, &[1]),
+                P: None,
+                PP: None,
+                CN: 0,
+                HN: 0,
+            }),
+        );
+        assert_eq!(prepare_msg.bN(), 7);
+
+        // Commit returns B.N
+        let commit_msg = Msg::new(
+            test_node_id(1),
+            quorum_set.clone(),
+            1,
+            Commit(CommitPayload {
+                B: Ballot::new(15, &[1]),
+                PN: 10,
+                CN: 5,
+                HN: 12,
+            }),
+        );
+        assert_eq!(commit_msg.bN(), 15);
+
+        // Externalize returns INFINITY
+        let externalize_msg = Msg::new(
+            test_node_id(1),
+            quorum_set,
+            1,
+            Externalize(ExternalizePayload {
+                C: Ballot::new(10, &[1]),
+                HN: 15,
+            }),
+        );
+        assert_eq!(externalize_msg.bN(), INFINITY);
+    }
+
+    #[test]
+    fn test_msg_values_extracts_all_values() {
+        let quorum_set = QuorumSet::new_with_node_ids(1, vec![test_node_id(2)]);
+
+        let msg = Msg::new(
+            test_node_id(1),
+            quorum_set,
+            1,
+            Prepare(PreparePayload {
+                B: Ballot::new(10, &["a", "b"]),
+                P: Some(Ballot::new(5, &["c"])),
+                PP: Some(Ballot::new(3, &["d"])),
+                CN: 0,
+                HN: 0,
+            }),
+        );
+
+        let values = msg.values();
+        assert_eq!(values, BTreeSet::from_iter(["a", "b", "c", "d"]));
+    }
+
+    #[test]
+    fn test_topic_ordering() {
+        let nominate = Nominate(NominatePayload {
+            X: BTreeSet::from_iter([1]),
+            Y: BTreeSet::new(),
+        });
+
+        let prepare = Prepare(PreparePayload {
+            B: Ballot::new(1, &[1]),
+            P: None,
+            PP: None,
+            CN: 0,
+            HN: 0,
+        });
+
+        let commit = Commit(CommitPayload {
+            B: Ballot::new(1, &[1]),
+            PN: 0,
+            CN: 0,
+            HN: 0,
+        });
+
+        let externalize = Externalize(ExternalizePayload {
+            C: Ballot::new(1, &[1]),
+            HN: 1,
+        });
+
+        // Ordering: Nominate < Prepare < Commit < Externalize
+        assert!(nominate < prepare);
+        assert!(prepare < commit);
+        assert!(commit < externalize);
+        assert!(nominate < externalize);
+    }
+
+    #[test]
+    fn test_nominatepayload_ordering() {
+        // Y is more significant than X
+        let p1 = NominatePayload::<u32> {
+            X: BTreeSet::from_iter([100]),
+            Y: BTreeSet::from_iter([1]),
+        };
+        let p2 = NominatePayload::<u32> {
+            X: BTreeSet::from_iter([1]),
+            Y: BTreeSet::from_iter([1, 2]),
+        };
+        // p2 has more Y values, so p2 > p1
+        assert!(p2 > p1);
+
+        // Same Y length, compare Y values
+        let p3 = NominatePayload::<u32> {
+            X: BTreeSet::new(),
+            Y: BTreeSet::from_iter([1]),
+        };
+        let p4 = NominatePayload::<u32> {
+            X: BTreeSet::new(),
+            Y: BTreeSet::from_iter([2]),
+        };
+        assert!(p4 > p3);
+    }
+
+    #[test]
+    fn test_preparepayload_ordering() {
+        // B is most significant
+        let p1 = PreparePayload::<u32> {
+            B: Ballot::new(1, &[1]),
+            P: None,
+            PP: None,
+            CN: 0,
+            HN: 100,
+        };
+        let p2 = PreparePayload::<u32> {
+            B: Ballot::new(2, &[1]),
+            P: None,
+            PP: None,
+            CN: 0,
+            HN: 0,
+        };
+        assert!(p2 > p1);
+    }
+
+    #[test]
+    fn test_msg_display() {
+        let quorum_set = QuorumSet::new_with_node_ids(1, vec![test_node_id(2)]);
+        let msg = Msg::new(
+            test_node_id(1),
+            quorum_set,
+            1,
+            Prepare(PreparePayload {
+                B: Ballot::new(5, &["test"]),
+                P: None,
+                PP: None,
+                CN: 0,
+                HN: 0,
+            }),
+        );
+
+        let display = format!("{}", msg);
+        assert!(display.contains("PREP"));
+        assert!(display.contains("I=1")); // slot index
+    }
 }

@@ -1,0 +1,159 @@
+name: Fuzzing
+
+on:
+  schedule:
+    # Run at 2 AM UTC daily
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Specific fuzz target to run (leave empty for all)'
+        required: false
+        default: ''
+      duration:
+        description: 'Fuzzing duration in seconds per target'
+        required: false
+        default: '3600'
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  fuzz:
+    name: Fuzz ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - fuzz_transaction
+          - fuzz_pq_transaction
+          - fuzz_block
+          - fuzz_pq_keys
+          - fuzz_network_messages
+          - fuzz_ring_signature
+          - fuzz_rpc_request
+          - fuzz_address_parsing
+          - fuzz_mlkem_decapsulation
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: ${{ runner.os }}-cargo-fuzz-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-fuzz-
+
+      - name: Cache fuzz corpus
+        uses: actions/cache@v4
+        with:
+          path: fuzz/corpus/${{ matrix.target }}
+          key: ${{ runner.os }}-fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-fuzz-corpus-${{ matrix.target }}-
+
+      - name: Run fuzzer
+        if: github.event.inputs.target == '' || github.event.inputs.target == matrix.target
+        run: |
+          cd fuzz
+          DURATION="${{ github.event.inputs.duration || '3600' }}"
+          echo "Running ${{ matrix.target }} for ${DURATION} seconds"
+          cargo +nightly fuzz run ${{ matrix.target }} -- \
+            -max_total_time=${DURATION} \
+            -print_final_stats=1
+        continue-on-error: true
+
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashes-${{ matrix.target }}
+          path: |
+            fuzz/artifacts/${{ matrix.target }}/
+          retention-days: 30
+
+      - name: Upload corpus
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-corpus-${{ matrix.target }}
+          path: |
+            fuzz/corpus/${{ matrix.target }}/
+          retention-days: 7
+
+  report:
+    name: Fuzzing Report
+    runs-on: ubuntu-latest
+    needs: fuzz
+    if: always()
+
+    steps:
+      - name: Download all crash artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: fuzz-crashes-*
+          path: crashes/
+          merge-multiple: false
+        continue-on-error: true
+
+      - name: Check for crashes
+        id: check_crashes
+        run: |
+          if [ -d "crashes" ] && [ "$(ls -A crashes 2>/dev/null)" ]; then
+            echo "has_crashes=true" >> $GITHUB_OUTPUT
+            echo "::warning::Fuzzing found crashes! Check artifacts for details."
+            find crashes -type f | head -20
+          else
+            echo "has_crashes=false" >> $GITHUB_OUTPUT
+            echo "No crashes found during fuzzing run."
+          fi
+
+      - name: Create issue on crashes
+        if: steps.check_crashes.outputs.has_crashes == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${context.runId}`;
+
+            // Check if there's already an open fuzzing issue
+            const issues = await github.rest.issues.listForRepo({
+              owner,
+              repo,
+              state: 'open',
+              labels: 'fuzzing,bug'
+            });
+
+            if (issues.data.length === 0) {
+              await github.rest.issues.create({
+                owner,
+                repo,
+                title: '🐛 Fuzzing found potential issues',
+                body: `The nightly fuzzing run found potential crashes.\n\nCheck the [workflow run](${runUrl}) for details and crash artifacts.`,
+                labels: ['fuzzing', 'bug', 'needs-triage']
+              });
+            } else {
+              // Add a comment to existing issue
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: issues.data[0].number,
+                body: `New crashes found in [workflow run](${runUrl}).`
+              });
+            }
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
