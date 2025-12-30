@@ -54,9 +54,9 @@ enum Commands {
 
     /// Run the node (sync, scan wallet, optionally mine)
     Run {
-        /// Enable mining
+        /// Enable minting
         #[arg(long)]
-        mine: bool,
+        mint: bool,
     },
 
     /// Show node and wallet status
@@ -134,8 +134,8 @@ fn main() -> Result<()> {
         Commands::Init { recover, relay } => {
             commands::init::run(&config_path, recover, relay, network)
         }
-        Commands::Run { mine } => {
-            commands::run::run(&config_path, mine)
+        Commands::Run { mint } => {
+            commands::run::run(&config_path, mint)
         }
         Commands::Status => {
             commands::status::run(&config_path)

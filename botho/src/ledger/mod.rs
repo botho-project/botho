@@ -2,13 +2,12 @@ mod store;
 
 pub use store::Ledger;
 
-use crate::block::Block;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum LedgerError {
     #[error("Database error: {0}")]
-    Database(#[from] lmdb::Error),
+    Database(String),
 
     #[error("Serialization error: {0}")]
     Serialization(String),
@@ -42,7 +41,7 @@ pub struct ChainState {
     /// Net supply = total_mined - total_fees_burned
     pub total_fees_burned: u64,
 
-    /// Current mining difficulty
+    /// Current minting difficulty
     pub difficulty: u64,
 }
 
@@ -54,7 +53,7 @@ impl Default for ChainState {
             tip_timestamp: 0,
             total_mined: 0,
             total_fees_burned: 0,
-            difficulty: super::node::miner::INITIAL_DIFFICULTY,
+            difficulty: super::node::minter::INITIAL_DIFFICULTY,
         }
     }
 }

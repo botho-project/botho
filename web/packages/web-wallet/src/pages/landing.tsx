@@ -11,7 +11,7 @@ const features = [
   {
     icon: Zap,
     title: 'Fast Consensus',
-    description: 'Stellar Consensus Protocol enables fast finality without energy-intensive mining.',
+    description: 'Stellar Consensus Protocol enables fast finality without energy-intensive minting.',
   },
   {
     icon: Lock,

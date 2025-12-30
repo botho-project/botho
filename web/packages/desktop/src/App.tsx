@@ -1,13 +1,13 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { ConnectionProvider, useConnection } from './contexts/connection'
-import { MiningProvider } from './contexts/mining'
+import { MintingProvider } from './contexts/minting'
 import { WalletProvider } from './contexts/wallet'
 import { SplashScreen } from './components/splash-screen'
 import { DashboardPage } from './pages/dashboard'
 import { WalletPage } from './pages/wallet'
 import { LedgerPage } from './pages/ledger'
 import { NetworkPage } from './pages/network'
-import { MiningPage } from './pages/mining'
+import { MintingPage } from './pages/minting'
 import { SettingsPage } from './pages/settings'
 
 function AppRoutes() {
@@ -18,7 +18,7 @@ function AppRoutes() {
   }
 
   return (
-    <MiningProvider>
+    <MintingProvider>
       <WalletProvider>
         <BrowserRouter>
           <Routes>
@@ -28,12 +28,12 @@ function AppRoutes() {
             <Route path="/blocks" element={<LedgerPage />} />
             <Route path="/transactions" element={<LedgerPage />} />
             <Route path="/network" element={<NetworkPage />} />
-            <Route path="/mining" element={<MiningPage />} />
+            <Route path="/minting" element={<MintingPage />} />
             <Route path="/settings" element={<SettingsPage />} />
           </Routes>
         </BrowserRouter>
       </WalletProvider>
-    </MiningProvider>
+    </MintingProvider>
   )
 }
 

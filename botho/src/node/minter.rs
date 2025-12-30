@@ -11,21 +11,21 @@ use std::thread::{self, JoinHandle};
 use std::time::Instant;
 use tracing::info;
 
-use crate::block::{calculate_block_reward_v2, MiningTx};
+use crate::block::{calculate_block_reward_v2, MintingTx};
 
-/// Mining difficulty target (lower = harder)
+/// Minting difficulty target (lower = harder)
 /// Start with a very easy target for testing
 pub const INITIAL_DIFFICULTY: u64 = 0x00FF_FFFF_FFFF_FFFF;
 
-/// Mining statistics
+/// Minting statistics
 #[derive(Debug, Clone)]
-pub struct MiningStats {
+pub struct MintingStats {
     pub total_hashes: u64,
     pub txs_found: u64,
     pub start_time: Instant,
 }
 
-impl MiningStats {
+impl MintingStats {
     pub fn hashrate(&self) -> f64 {
         let elapsed = self.start_time.elapsed().as_secs_f64();
         if elapsed > 0.0 {
@@ -36,28 +36,28 @@ impl MiningStats {
     }
 }
 
-/// A mined mining transaction ready to be submitted to consensus
+/// A minted minting transaction ready to be submitted to consensus
 #[derive(Debug, Clone)]
-pub struct MinedMiningTx {
-    /// The mining transaction with valid PoW
-    pub mining_tx: MiningTx,
+pub struct MintedMintingTx {
+    /// The minting transaction with valid PoW
+    pub minting_tx: MintingTx,
     /// PoW priority (higher = harder/better PoW)
     pub pow_priority: u64,
 }
 
-/// Work unit for miners - what they should be mining on
+/// Work unit for minters - what they should be minting
 #[derive(Clone)]
-pub struct MiningWork {
+pub struct MintingWork {
     pub prev_block_hash: [u8; 32],
     pub height: u64,
     pub difficulty: u64,
-    /// Total mined (gross emission). Used as proxy for supply in reward calculation.
+    /// Total minted (gross emission). Used as proxy for supply in reward calculation.
     /// Note: For accurate supply tracking, subtract total_fees_burned (not yet tracked).
-    pub total_mined: u64,
+    pub total_minted: u64,
 }
 
-/// The miner manages mining threads
-pub struct Miner {
+/// The minter manages minting threads
+pub struct Minter {
     threads: usize,
     address: PublicAddress,
     shutdown: Arc<AtomicBool>,
@@ -65,26 +65,26 @@ pub struct Miner {
     txs_found: Arc<AtomicU64>,
     start_time: Instant,
     handles: Vec<JoinHandle<()>>,
-    /// Channel for found mining transactions
-    tx_sender: Sender<MinedMiningTx>,
-    /// Receiver for found mining transactions (taken by the node)
-    tx_receiver: Option<Receiver<MinedMiningTx>>,
+    /// Channel for found minting transactions
+    tx_sender: Sender<MintedMintingTx>,
+    /// Receiver for found minting transactions (taken by the node)
+    tx_receiver: Option<Receiver<MintedMintingTx>>,
     /// Current work (shared with threads)
-    current_work: Arc<std::sync::RwLock<MiningWork>>,
+    current_work: Arc<std::sync::RwLock<MintingWork>>,
     /// Signal to update work
     work_version: Arc<AtomicU64>,
 }
 
-impl Miner {
+impl Minter {
     pub fn new(threads: usize, address: PublicAddress, shutdown: Arc<AtomicBool>) -> Self {
         let (tx_sender, tx_receiver) = channel();
 
-        // Initialize with default work (will be updated before mining starts)
-        let initial_work = MiningWork {
+        // Initialize with default work (will be updated before minting starts)
+        let initial_work = MintingWork {
             prev_block_hash: [0u8; 32],
             height: 1,
             difficulty: INITIAL_DIFFICULTY,
-            total_mined: 0,
+            total_minted: 0,
         };
 
         Self {
@@ -102,19 +102,19 @@ impl Miner {
         }
     }
 
-    /// Take the mining tx receiver (can only be called once)
-    pub fn take_tx_receiver(&mut self) -> Option<Receiver<MinedMiningTx>> {
+    /// Take the minting tx receiver (can only be called once)
+    pub fn take_tx_receiver(&mut self) -> Option<Receiver<MintedMintingTx>> {
         self.tx_receiver.take()
     }
 
-    /// Update the work for all mining threads
-    pub fn update_work(&self, work: MiningWork) {
+    /// Update the work for all minting threads
+    pub fn update_work(&self, work: MintingWork) {
         if let Ok(mut current) = self.current_work.write() {
             *current = work;
             drop(current);
             self.work_version.fetch_add(1, Ordering::SeqCst);
         }
-        // If lock is poisoned, mining threads will detect stale work and exit
+        // If lock is poisoned, minting threads will detect stale work and exit
     }
 
     pub fn start(&mut self) {
@@ -128,7 +128,7 @@ impl Miner {
             let work_version = self.work_version.clone();
 
             let handle = thread::spawn(move || {
-                mine_loop(
+                mint_loop(
                     thread_id,
                     address,
                     shutdown,
@@ -151,8 +151,8 @@ impl Miner {
         }
     }
 
-    pub fn stats(&self) -> MiningStats {
-        MiningStats {
+    pub fn stats(&self) -> MintingStats {
+        MintingStats {
             total_hashes: self.total_hashes.load(Ordering::Relaxed),
             txs_found: self.txs_found.load(Ordering::Relaxed),
             start_time: self.start_time,
@@ -160,26 +160,26 @@ impl Miner {
     }
 }
 
-/// The actual mining loop
-fn mine_loop(
+/// The actual minting loop
+fn mint_loop(
     thread_id: usize,
     address: PublicAddress,
     shutdown: Arc<AtomicBool>,
     total_hashes: Arc<AtomicU64>,
     txs_found: Arc<AtomicU64>,
-    tx_sender: Sender<MinedMiningTx>,
-    current_work: Arc<std::sync::RwLock<MiningWork>>,
+    tx_sender: Sender<MintedMintingTx>,
+    current_work: Arc<std::sync::RwLock<MintingWork>>,
     work_version: Arc<AtomicU64>,
 ) {
     // Each thread starts at a different nonce to avoid overlap
     let mut nonce: u64 = (thread_id as u64) << 56;
     let mut local_hashes: u64 = 0;
     let mut last_work_version = 0u64;
-    let mut cached_work: Option<MiningWork> = None;
+    let mut cached_work: Option<MintingWork> = None;
 
     const BATCH_SIZE: u64 = 10000;
 
-    // Stealth keys for the current mining work
+    // Stealth keys for the current minting work
     let mut cached_target_key = [0u8; 32];
     let mut cached_public_key = [0u8; 32];
 
@@ -187,7 +187,7 @@ fn mine_loop(
         // Check if work has been updated
         let current_version = work_version.load(Ordering::Relaxed);
         if current_version != last_work_version || cached_work.is_none() {
-            // If lock is poisoned, exit the mining loop gracefully
+            // If lock is poisoned, exit the minting loop gracefully
             let Ok(work_guard) = current_work.read() else {
                 break;
             };
@@ -216,25 +216,25 @@ fn mine_loop(
         let hash_value = u64::from_be_bytes(hash[0..8].try_into().unwrap());
 
         if hash_value < work.difficulty {
-            // Found a valid mining transaction!
+            // Found a valid minting transaction!
             txs_found.fetch_add(1, Ordering::Relaxed);
 
-            // Use Two-Phase model: total_mined is used as proxy for supply
-            // (accurate supply = total_mined - fees_burned, but fees not yet tracked)
-            let reward = calculate_block_reward_v2(work.height, work.total_mined);
+            // Use Two-Phase model: total_minted is used as proxy for supply
+            // (accurate supply = total_minted - fees_burned, but fees not yet tracked)
+            let reward = calculate_block_reward_v2(work.height, work.total_minted);
 
             let timestamp = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
 
-            // Create the mining transaction with stealth output and PoW proof
-            // Includes both miner identity (for PoW binding) and stealth keys (for private output)
-            let mining_tx = MiningTx {
+            // Create the minting transaction with stealth output and PoW proof
+            // Includes both minter identity (for PoW binding) and stealth keys (for private output)
+            let minting_tx = MintingTx {
                 block_height: work.height,
                 reward,
-                miner_view_key: address.view_public_key().to_bytes(),
-                miner_spend_key: address.spend_public_key().to_bytes(),
+                minter_view_key: address.view_public_key().to_bytes(),
+                minter_spend_key: address.spend_public_key().to_bytes(),
                 target_key: cached_target_key,
                 public_key: cached_public_key,
                 prev_block_hash: work.prev_block_hash,
@@ -248,7 +248,7 @@ fn mine_loop(
             let pow_priority = u64::MAX - hash_value;
 
             info!(
-                "Thread {} found mining tx for height {}! Nonce: {}, Hash: {}, Priority: {}, Reward: {} picocredits",
+                "Thread {} found minting tx for height {}! Nonce: {}, Hash: {}, Priority: {}, Reward: {} picocredits",
                 thread_id,
                 work.height,
                 nonce,
@@ -257,10 +257,10 @@ fn mine_loop(
                 reward
             );
 
-            // Send mining tx to main thread for consensus submission
+            // Send minting tx to main thread for consensus submission
             if tx_sender
-                .send(MinedMiningTx {
-                    mining_tx,
+                .send(MintedMintingTx {
+                    minting_tx,
                     pow_priority,
                 })
                 .is_err()
@@ -269,7 +269,7 @@ fn mine_loop(
                 break;
             }
 
-            // Continue mining - multiple miners may find valid PoW
+            // Continue minting - multiple minters may find valid PoW
             // The best one (highest priority) will win in consensus
         }
 

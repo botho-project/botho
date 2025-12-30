@@ -49,7 +49,7 @@ pub fn run(config_path: &Path, recover: bool, relay: bool, network: Network) -> 
         println!("Config saved to: {}", config_path.display());
         println!("\nNext steps:");
         println!("  1. Run 'botho run' to start syncing");
-        println!("  2. Run 'botho run --mine' to start mining");
+        println!("  2. Run 'botho run --mint' to start minting");
         if !network.is_production() {
             println!("\nNote: This is a testnet wallet. Coins have no real value.");
         }

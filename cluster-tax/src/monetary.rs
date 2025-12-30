@@ -21,7 +21,7 @@
 //! 1. **Early adoption incentives**: Halving schedule for ~10 years rewards early adopters
 //! 2. **Long-term stability**: 2% net inflation after halving period
 //! 3. **Fee burn integration**: Progressive cluster taxes are always burned
-//! 4. **Predictable mining**: Fixed reward per block, variable block rate
+//! 4. **Predictable minting**: Fixed reward per block, variable block rate
 //!
 //! # Two-Phase Model
 //!
@@ -58,7 +58,7 @@
 //!
 //! # Key Insight
 //!
-//! Instead of adjusting reward per block (unpredictable for miners),
+//! Instead of adjusting reward per block (unpredictable for minters),
 //! we adjust how many blocks are produced (via difficulty):
 //!
 //! ```text
@@ -260,7 +260,7 @@ pub struct MonetaryState {
     /// Total circulating supply.
     pub total_supply: u64,
 
-    /// Current mining difficulty.
+    /// Current minting difficulty.
     /// Higher = harder to mine = slower blocks.
     pub difficulty: u64,
 
@@ -910,7 +910,7 @@ mod tests {
         let policy = MonetaryPolicy::fast_test();
         let mut controller = DifficultyController::new(policy, 0, 1000, 0);
 
-        // Should still work - mining creates supply
+        // Should still work - minting creates supply
         let reward = controller.process_block(1);
         assert!(reward > 0);
         assert_eq!(controller.state.total_supply, reward);

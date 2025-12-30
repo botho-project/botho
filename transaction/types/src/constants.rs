@@ -114,6 +114,34 @@ impl fmt::Display for Network {
 /// Maximum number of transactions that may be included in a Block.
 pub const MAX_TRANSACTIONS_PER_BLOCK: usize = 5000;
 
+// =============================================================================
+// Message Size Limits (DoS Protection)
+// =============================================================================
+
+/// Maximum serialized size of a single transaction in bytes (100 KB).
+///
+/// Rationale: A maximally-sized ring transaction has:
+/// - 16 inputs × (32B key_image + 11 ring members × ~100B + ~100B signature) ≈ 20KB
+/// - 16 outputs × ~140B ≈ 2.2KB
+/// - Overhead: ~500B
+/// Total: ~25KB typical max, 100KB limit provides margin for future expansion.
+///
+/// Messages exceeding this size are rejected before deserialization to prevent
+/// resource exhaustion attacks.
+pub const MAX_TRANSACTION_SIZE: usize = 100 * 1024; // 100 KB
+
+/// Maximum serialized size of a single block in bytes (20 MB).
+///
+/// Rationale: With MAX_TRANSACTIONS_PER_BLOCK (5000) and average tx size of ~2KB,
+/// typical full blocks are ~10MB. 20MB limit provides headroom.
+pub const MAX_BLOCK_SIZE: usize = 20 * 1024 * 1024; // 20 MB
+
+/// Maximum serialized size of an SCP consensus message in bytes (1 MB).
+///
+/// SCP messages contain nominations and ballot state, which can reference
+/// transaction hashes but not full transaction data.
+pub const MAX_SCP_MESSAGE_SIZE: usize = 1024 * 1024; // 1 MB
+
 /// Each input ring must contain this many elements.
 pub const RING_SIZE: usize = 11;
 
@@ -146,7 +174,7 @@ pub const MAX_TOMBSTONE_BLOCKS: u64 = 20160;
 // =============================================================================
 //
 // The Botho network has NO pre-mine. Initial supply is 0 BTH.
-// All BTH is created through mining rewards.
+// All BTH is created through minting rewards.
 //
 // Phase 1 (Years 0-10): Halving schedule distributes ~100M BTH
 //   - Initial reward: ~50 BTH per block
@@ -426,5 +454,44 @@ mod tests {
         // MAX_INPUTS rings * RING_SIZE elements should be reasonable
         let total_ring_elements = (MAX_INPUTS as usize) * RING_SIZE;
         assert!(total_ring_elements <= 1000, "Total ring elements should be bounded");
+    }
+
+    // =========================================================================
+    // Message Size Limit Tests
+    // =========================================================================
+
+    #[test]
+    fn test_max_transaction_size() {
+        // 100 KB limit
+        assert_eq!(MAX_TRANSACTION_SIZE, 100 * 1024);
+        // Should be enough for a max ring tx (16 inputs × 11 ring × ~100B + 16 outputs × ~140B + overhead ≈ 20KB)
+        assert!(MAX_TRANSACTION_SIZE > 50_000, "Should fit largest ring transactions");
+        // But not too large for DoS protection
+        assert!(MAX_TRANSACTION_SIZE <= 1024 * 1024, "Should be under 1MB for DoS protection");
+    }
+
+    #[test]
+    fn test_max_block_size() {
+        // 20 MB limit
+        assert_eq!(MAX_BLOCK_SIZE, 20 * 1024 * 1024);
+        // Should fit MAX_TRANSACTIONS_PER_BLOCK average-sized transactions
+        // Average tx ~2KB, 5000 txs = 10MB, with 2x headroom
+        assert!(MAX_BLOCK_SIZE >= MAX_TRANSACTIONS_PER_BLOCK * 2048);
+    }
+
+    #[test]
+    fn test_max_scp_message_size() {
+        // 1 MB limit
+        assert_eq!(MAX_SCP_MESSAGE_SIZE, 1024 * 1024);
+        // SCP messages reference tx hashes, not full txs
+        // 5000 txs × 32 bytes = 160KB, plus ballot state overhead
+        assert!(MAX_SCP_MESSAGE_SIZE >= MAX_TRANSACTIONS_PER_BLOCK * 32);
+    }
+
+    #[test]
+    fn test_size_limits_ordering() {
+        // Transaction < SCP < Block
+        assert!(MAX_TRANSACTION_SIZE < MAX_SCP_MESSAGE_SIZE);
+        assert!(MAX_SCP_MESSAGE_SIZE < MAX_BLOCK_SIZE);
     }
 }

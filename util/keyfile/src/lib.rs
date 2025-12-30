@@ -30,9 +30,6 @@ pub fn write_keyfile<P: AsRef<Path>>(
     let json = UncheckedMnemonicAccount {
         mnemonic: Some(mnemonic.clone().into_phrase()),
         account_index: Some(account_index),
-        fog_report_url: None,        // Fog support removed
-        fog_report_id: None,         // Fog support removed
-        fog_authority_spki: None,    // Fog support removed
     };
     Ok(serde_json::to_writer(File::create(path)?, &json)?)
 }

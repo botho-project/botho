@@ -371,7 +371,7 @@ export class LocalNodeAdapter implements NodeAdapter {
       previousHash: data.previousHash as string,
       transactionCount: data.transactionCount as number,
       size: data.size as number,
-      miner: data.miner as string | undefined,
+      minter: data.minter as string | undefined,
       reward: BigInt((data.reward as string) || '0'),
       difficulty: BigInt((data.difficulty as string) || '0'),
     }

@@ -100,8 +100,8 @@ impl JsonRpcResponse {
 pub struct RpcState {
     pub ledger: Arc<RwLock<Ledger>>,
     pub mempool: Arc<RwLock<Mempool>>,
-    pub mining_active: Arc<RwLock<bool>>,
-    pub mining_threads: usize,
+    pub minting_active: Arc<RwLock<bool>>,
+    pub minting_threads: usize,
     pub peer_count: Arc<RwLock<usize>>,
     pub start_time: std::time::Instant,
     /// Wallet view key (None if running in relay mode)
@@ -124,8 +124,8 @@ impl RpcState {
         Self {
             ledger: Arc::new(RwLock::new(ledger)),
             mempool: Arc::new(RwLock::new(mempool)),
-            mining_active: Arc::new(RwLock::new(false)),
-            mining_threads: num_cpus::get(),
+            minting_active: Arc::new(RwLock::new(false)),
+            minting_threads: num_cpus::get(),
             peer_count: Arc::new(RwLock::new(0)),
             start_time: std::time::Instant::now(),
             wallet_view_key,
@@ -138,7 +138,7 @@ impl RpcState {
     pub fn from_shared(
         ledger: Arc<RwLock<Ledger>>,
         mempool: Arc<RwLock<Mempool>>,
-        mining_active: Arc<RwLock<bool>>,
+        minting_active: Arc<RwLock<bool>>,
         peer_count: Arc<RwLock<usize>>,
         wallet_view_key: Option<[u8; 32]>,
         wallet_spend_key: Option<[u8; 32]>,
@@ -147,8 +147,8 @@ impl RpcState {
         Self {
             ledger,
             mempool,
-            mining_active,
-            mining_threads: num_cpus::get(),
+            minting_active,
+            minting_threads: num_cpus::get(),
             peer_count,
             start_time: std::time::Instant::now(),
             wallet_view_key,
@@ -266,8 +266,8 @@ async fn handle_rpc_method(request: &JsonRpcRequest, state: &RpcState) -> JsonRp
         // Transaction methods
         "tx_submit" | "sendRawTransaction" => handle_submit_tx(id, &request.params, state).await,
 
-        // Mining methods
-        "mining_getStatus" => handle_mining_status(id, state).await,
+        // Minting methods
+        "minting_getStatus" => handle_minting_status(id, state).await,
 
         // Network methods
         "network_getInfo" => handle_network_info(id, state).await,
@@ -282,7 +282,7 @@ async fn handle_rpc_method(request: &JsonRpcRequest, state: &RpcState) -> JsonRp
 async fn handle_node_status(id: Value, state: &RpcState) -> JsonRpcResponse {
     let ledger = read_lock!(state.ledger, id.clone());
     let chain_state = ledger.get_chain_state().unwrap_or_default();
-    let mining = *read_lock!(state.mining_active, id.clone());
+    let minting = *read_lock!(state.minting_active, id.clone());
     let mempool = read_lock!(state.mempool, id.clone());
     let peers = *read_lock!(state.peer_count, id.clone());
 
@@ -295,7 +295,7 @@ async fn handle_node_status(id: Value, state: &RpcState) -> JsonRpcResponse {
         "tipHash": hex::encode(chain_state.tip_hash),
         "peerCount": peers,
         "mempoolSize": mempool.len(),
-        "miningActive": mining,
+        "mintingActive": minting,
     }))
 }
 
@@ -327,7 +327,7 @@ async fn handle_get_block(id: Value, params: &Value, state: &RpcState) -> JsonRp
             "difficulty": block.header.difficulty,
             "nonce": block.header.nonce,
             "txCount": block.transactions.len(),
-            "miningReward": block.mining_tx.reward,
+            "mintingReward": block.minting_tx.reward,
         })),
         Err(e) => JsonRpcResponse::error(id, -32000, &format!("Block not found: {}", e)),
     }
@@ -469,14 +469,14 @@ async fn handle_submit_tx(id: Value, params: &Value, state: &RpcState) -> JsonRp
     }
 }
 
-async fn handle_mining_status(id: Value, state: &RpcState) -> JsonRpcResponse {
-    let active = *read_lock!(state.mining_active, id.clone());
+async fn handle_minting_status(id: Value, state: &RpcState) -> JsonRpcResponse {
+    let active = *read_lock!(state.minting_active, id.clone());
     let ledger = read_lock!(state.ledger, id.clone());
     let chain_state = ledger.get_chain_state().unwrap_or_default();
 
     JsonRpcResponse::success(id, json!({
         "active": active,
-        "threads": state.mining_threads,
+        "threads": state.minting_threads,
         "hashrate": 0.0, // TODO: track actual hashrate
         "totalHashes": 0,
         "blocksFound": 0, // TODO: track blocks found

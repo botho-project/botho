@@ -69,15 +69,15 @@ The node will:
 3. Scan for transactions belonging to your wallet
 4. Listen for new blocks and transactions
 
-### Running with Mining
+### Running with Minting
 
-To run the node with mining enabled:
+To run the node with minting enabled:
 
 ```bash
-botho run --mine
+botho run --mint
 ```
 
-Mining requires a satisfiable quorum (at least one other peer). Solo mining is not possible by design.
+Minting requires a satisfiable quorum (at least one other peer). Solo minting is not possible by design.
 
 ## Basic Commands
 
@@ -114,7 +114,7 @@ botho status
 Shows:
 - Sync status (current height vs network height)
 - Wallet balance
-- Mining statistics (if mining)
+- Minting statistics (if minting)
 - Connected peers
 
 ## Data Directory
@@ -133,5 +133,5 @@ All Botho data is stored in `~/.botho/`:
 ## Next Steps
 
 - [Configuration Reference](configuration.md) - Customize your node settings
-- [Mining Guide](mining.md) - Learn about mining economics and setup
+- [Minting Guide](minting.md) - Learn about minting economics and setup
 - [Architecture](architecture.md) - Understand how Botho works

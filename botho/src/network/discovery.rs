@@ -15,6 +15,8 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
+use bth_transaction_types::{MAX_BLOCK_SIZE, MAX_SCP_MESSAGE_SIZE, MAX_TRANSACTION_SIZE};
+
 use crate::block::Block;
 use crate::consensus::ScpMessage;
 use crate::network::sync::{create_sync_behaviour, SyncCodec, SyncRequest, SyncResponse};
@@ -142,10 +144,12 @@ impl NetworkDiscovery {
                 yamux::Config::default,
             )?
             .with_behaviour(|key| {
-                // Configure gossipsub
+                // Configure gossipsub with message size limits
+                // Use MAX_BLOCK_SIZE as the limit since blocks are the largest messages
                 let gossipsub_config = gossipsub::ConfigBuilder::default()
                     .heartbeat_interval(Duration::from_secs(1))
                     .validation_mode(gossipsub::ValidationMode::Strict)
+                    .max_transmit_size(MAX_BLOCK_SIZE)
                     .build()
                     .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
 
@@ -258,6 +262,16 @@ impl NetworkDiscovery {
                 let topic = message.topic.as_str();
 
                 if topic == BLOCKS_TOPIC {
+                    // Check size before deserialization (DoS protection)
+                    if message.data.len() > MAX_BLOCK_SIZE {
+                        warn!(
+                            "Rejected oversized block message: {} bytes (max: {})",
+                            message.data.len(),
+                            MAX_BLOCK_SIZE
+                        );
+                        return None;
+                    }
+
                     // Try to deserialize as a block
                     match bincode::deserialize::<Block>(&message.data) {
                         Ok(block) => {
@@ -273,6 +287,16 @@ impl NetworkDiscovery {
                         }
                     }
                 } else if topic == TRANSACTIONS_TOPIC {
+                    // Check size before deserialization (DoS protection)
+                    if message.data.len() > MAX_TRANSACTION_SIZE {
+                        warn!(
+                            "Rejected oversized transaction message: {} bytes (max: {})",
+                            message.data.len(),
+                            MAX_TRANSACTION_SIZE
+                        );
+                        return None;
+                    }
+
                     // Try to deserialize as a transaction
                     match bincode::deserialize::<Transaction>(&message.data) {
                         Ok(tx) => {
@@ -287,6 +311,16 @@ impl NetworkDiscovery {
                         }
                     }
                 } else if topic == SCP_TOPIC {
+                    // Check size before deserialization (DoS protection)
+                    if message.data.len() > MAX_SCP_MESSAGE_SIZE {
+                        warn!(
+                            "Rejected oversized SCP message: {} bytes (max: {})",
+                            message.data.len(),
+                            MAX_SCP_MESSAGE_SIZE
+                        );
+                        return None;
+                    }
+
                     // Try to deserialize as an SCP message
                     match bincode::deserialize::<ScpMessage>(&message.data) {
                         Ok(scp_msg) => {

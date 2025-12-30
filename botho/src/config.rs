@@ -14,7 +14,7 @@ pub struct Config {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wallet: Option<WalletConfig>,
     pub network: NetworkConfig,
-    pub mining: MiningConfig,
+    pub minting: MintingConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -136,7 +136,7 @@ pub struct QuorumConfig {
     #[serde(default)]
     pub members: Vec<String>,
 
-    /// For recommended mode: minimum peers before mining can start
+    /// For recommended mode: minimum peers before minting can start
     #[serde(default = "default_min_peers")]
     pub min_peers: u32,
 }
@@ -216,12 +216,12 @@ fn default_min_peers() -> u32 {
 pub const MAX_QUORUM_MEMBERS: usize = 5;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MiningConfig {
-    /// Whether mining is enabled
+pub struct MintingConfig {
+    /// Whether minting is enabled
     #[serde(default)]
     pub enabled: bool,
 
-    /// Number of mining threads (0 = auto-detect)
+    /// Number of minting threads (0 = auto-detect)
     #[serde(default = "default_threads")]
     pub threads: u32,
 }
@@ -242,7 +242,7 @@ impl Default for NetworkConfig {
     }
 }
 
-impl Default for MiningConfig {
+impl Default for MintingConfig {
     fn default() -> Self {
         Self {
             enabled: false,
@@ -258,7 +258,7 @@ impl Config {
             network_type,
             wallet: Some(WalletConfig { mnemonic }),
             network: NetworkConfig::default(),
-            mining: MiningConfig::default(),
+            minting: MintingConfig::default(),
         }
     }
 
@@ -268,7 +268,7 @@ impl Config {
             network_type,
             wallet: None,
             network: NetworkConfig::default(),
-            mining: MiningConfig::default(),
+            minting: MintingConfig::default(),
         }
     }
 

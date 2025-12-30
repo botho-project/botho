@@ -29,7 +29,7 @@ pub struct SimulationConfig {
     /// Monetary policy (optional - enables two-phase emission).
     pub monetary_policy: Option<MonetaryPolicy>,
 
-    /// Initial mining difficulty.
+    /// Initial minting difficulty.
     pub initial_difficulty: u64,
 
     /// Blocks per round (for monetary simulation).
@@ -162,11 +162,11 @@ pub fn run_simulation(
         state.init_monetary(monetary_policy.clone(), config.initial_difficulty);
     }
 
-    // Find miner indices for reward distribution
-    let miner_indices: Vec<usize> = agents
+    // Find minter indices for reward distribution
+    let minter_indices: Vec<usize> = agents
         .iter()
         .enumerate()
-        .filter(|(_, a)| a.agent_type() == "Miner")
+        .filter(|(_, a)| a.agent_type() == "Minter")
         .map(|(i, _)| i)
         .collect();
 
@@ -353,8 +353,8 @@ pub fn run_simulation(
         }
         state.transaction_count += round_transactions;
 
-        // Process blocks and distribute rewards to miners
-        if state.monetary_controller.is_some() && !miner_indices.is_empty() {
+        // Process blocks and distribute rewards to minters
+        if state.monetary_controller.is_some() && !minter_indices.is_empty() {
             for block_in_round in 0..config.blocks_per_round {
                 // Calculate simulated block time
                 let block_time = state.simulated_time
@@ -363,13 +363,13 @@ pub fn run_simulation(
                 if reward > 0 {
                     round_rewards += reward;
 
-                    // Distribute reward to a miner (round-robin for simplicity)
-                    let miner_idx = miner_indices[round as usize % miner_indices.len()];
+                    // Distribute reward to a minter (round-robin for simplicity)
+                    let minter_idx = minter_indices[round as usize % minter_indices.len()];
                     let cluster_id = state.next_cluster_id();
 
-                    // Mint reward to miner's account
-                    let miner_account = agents[miner_idx].account_mut();
-                    crate::mint(miner_account, reward, cluster_id, &mut state.cluster_wealth);
+                    // Mint reward to minter's account
+                    let minter_account = agents[minter_idx].account_mut();
+                    crate::mint(minter_account, reward, cluster_id, &mut state.cluster_wealth);
                 }
             }
         }
@@ -514,7 +514,7 @@ fn collect_metrics(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::simulation::agents::{MerchantAgent, MinerAgent, RetailUserAgent};
+    use crate::simulation::agents::{MerchantAgent, MinterAgent, RetailUserAgent};
     use crate::MonetaryPolicy;
 
     #[test]
@@ -540,16 +540,16 @@ mod tests {
 
     #[test]
     fn test_simulation_with_monetary_policy() {
-        // Create a simple economy with a miner (who doesn't sell) and a merchant
-        // Using a miner with no buyers so they just accumulate rewards
+        // Create a simple economy with a minter (who doesn't sell) and a merchant
+        // Using a minter with no buyers so they just accumulate rewards
         let mut agents: Vec<Box<dyn Agent>> = vec![
-            Box::new(MinerAgent::new(AgentId(1))), // No buyers - won't sell
+            Box::new(MinterAgent::new(AgentId(1))), // No buyers - won't sell
             Box::new(MerchantAgent::new(AgentId(2))),
             Box::new(RetailUserAgent::new(AgentId(3)).with_merchants(vec![AgentId(2)])),
         ];
 
         // Initial balances
-        agents[0].account_mut().balance = 10_000; // Miner
+        agents[0].account_mut().balance = 10_000; // Minter
         agents[1].account_mut().balance = 5_000;  // Merchant
         agents[2].account_mut().balance = 5_000;  // Retail
 
@@ -580,13 +580,13 @@ mod tests {
             stats.total_emitted
         );
 
-        // Miner should have received all rewards (no selling)
-        let miner_balance = *result.final_state.agent_balances.get(&AgentId(1)).unwrap();
+        // Minter should have received all rewards (no selling)
+        let minter_balance = *result.final_state.agent_balances.get(&AgentId(1)).unwrap();
         let expected_balance = 10_000 + stats.total_emitted;
         assert_eq!(
-            miner_balance, expected_balance,
-            "Miner should have initial 10_000 + {} rewards = {}, got: {}",
-            stats.total_emitted, expected_balance, miner_balance
+            minter_balance, expected_balance,
+            "Minter should have initial 10_000 + {} rewards = {}, got: {}",
+            stats.total_emitted, expected_balance, minter_balance
         );
     }
 
@@ -594,7 +594,7 @@ mod tests {
     fn test_fee_burn_affects_difficulty() {
         // Test that fee burns cause difficulty adjustments in tail phase
         let mut agents: Vec<Box<dyn Agent>> = vec![
-            Box::new(MinerAgent::new(AgentId(1)).with_buyers(vec![AgentId(2)])),
+            Box::new(MinterAgent::new(AgentId(1)).with_buyers(vec![AgentId(2)])),
             Box::new(MerchantAgent::new(AgentId(2))),
             Box::new(
                 RetailUserAgent::new(AgentId(3))
@@ -641,8 +641,8 @@ mod tests {
     }
 
     #[test]
-    fn test_monetary_without_miners() {
-        // Test graceful behavior when no miners exist
+    fn test_monetary_without_minters() {
+        // Test graceful behavior when no minters exist
         let mut agents: Vec<Box<dyn Agent>> = vec![
             Box::new(MerchantAgent::new(AgentId(1))),
             Box::new(RetailUserAgent::new(AgentId(2)).with_merchants(vec![AgentId(1)])),
@@ -665,17 +665,17 @@ mod tests {
         assert!(result.monetary_stats.is_some());
         let stats = result.monetary_stats.unwrap();
 
-        // Blocks should still be processed even without miners
+        // Blocks should still be processed even without minters
         assert!(
             stats.total_emitted == 0,
-            "No rewards should be emitted without miners"
+            "No rewards should be emitted without minters"
         );
     }
 
     #[test]
     fn test_round_summary_with_monetary() {
         let mut agents: Vec<Box<dyn Agent>> = vec![
-            Box::new(MinerAgent::new(AgentId(1))),
+            Box::new(MinterAgent::new(AgentId(1))),
             Box::new(MerchantAgent::new(AgentId(2))),
         ];
 
@@ -715,7 +715,7 @@ mod tests {
     #[test]
     fn test_multiple_blocks_per_round() {
         let mut agents: Vec<Box<dyn Agent>> = vec![
-            Box::new(MinerAgent::new(AgentId(1))),
+            Box::new(MinterAgent::new(AgentId(1))),
             Box::new(MerchantAgent::new(AgentId(2))),
         ];
 
@@ -752,7 +752,7 @@ mod tests {
     fn test_halving_transition() {
         // Test that halvings occur correctly
         let mut agents: Vec<Box<dyn Agent>> = vec![
-            Box::new(MinerAgent::new(AgentId(1))),
+            Box::new(MinterAgent::new(AgentId(1))),
             Box::new(MerchantAgent::new(AgentId(2))),
         ];
 

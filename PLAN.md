@@ -12,7 +12,7 @@ Core functionality complete. See README.md for features and usage.
 
 1. **Web Dashboard Polish**
    - [x] Wallet page: Balance, transaction history, send modal
-   - [x] Mining page: Mining controls with SCP visualization
+   - [x] Minting page: Minting controls with SCP visualization
    - [x] Network page: Interactive SCP consensus visualization
    - [x] Ledger page: Block explorer (desktop wallet)
    - [ ] Real-time updates via WebSocket/SSE

@@ -1,4 +1,4 @@
-pub mod miner;
+pub mod minter;
 
 use anyhow::Result;
 use std::path::{Path, PathBuf};
@@ -24,7 +24,7 @@ pub type SharedMempool = Arc<RwLock<Mempool>>;
 /// Pending transactions file name
 const PENDING_TXS_FILE: &str = "pending_txs.bin";
 
-pub use miner::{MinedMiningTx, Miner, MiningWork};
+pub use minter::{MintedMintingTx, Minter, MintingWork};
 
 /// The main Botho node
 pub struct Node {
@@ -34,9 +34,9 @@ pub struct Node {
     ledger: SharedLedger,
     mempool: SharedMempool,
     shutdown: Arc<AtomicBool>,
-    miner: Option<Miner>,
-    /// Receiver for mined mining transactions (to be submitted to consensus)
-    mining_tx_receiver: Option<Receiver<MinedMiningTx>>,
+    minter: Option<Minter>,
+    /// Receiver for minted minting transactions (to be submitted to consensus)
+    minting_tx_receiver: Option<Receiver<MintedMintingTx>>,
     /// Directory containing config file (for finding pending_txs.bin)
     config_dir: PathBuf,
 }
@@ -73,8 +73,8 @@ impl Node {
             ledger,
             mempool,
             shutdown: Arc::new(AtomicBool::new(false)),
-            miner: None,
-            mining_tx_receiver: None,
+            minter: None,
+            minting_tx_receiver: None,
             config_dir,
         })
     }
@@ -133,23 +133,23 @@ impl Node {
         Ok(())
     }
 
-    fn start_mining(&mut self) -> Result<()> {
-        // Mining requires a wallet to receive rewards
+    fn start_minting(&mut self) -> Result<()> {
+        // Minting requires a wallet to receive rewards
         let wallet = self.wallet.as_ref()
             .ok_or_else(|| anyhow::anyhow!("Cannot mine without a wallet. Run 'botho init' to create one."))?;
 
-        let threads = if self.config.mining.threads == 0 {
+        let threads = if self.config.minting.threads == 0 {
             num_cpus::get()
         } else {
-            self.config.mining.threads as usize
+            self.config.minting.threads as usize
         };
 
-        info!("Starting mining with {} threads", threads);
+        info!("Starting minting with {} threads", threads);
 
-        let mut miner = Miner::new(threads, wallet.default_address(), self.shutdown.clone());
+        let mut minter = Minter::new(threads, wallet.default_address(), self.shutdown.clone());
 
-        // Take the mining tx receiver
-        self.mining_tx_receiver = miner.take_tx_receiver();
+        // Take the minting tx receiver
+        self.minting_tx_receiver = minter.take_tx_receiver();
 
         // Set initial work from chain state
         let ledger = self.ledger.read()
@@ -159,23 +159,23 @@ impl Node {
             .map_err(|e| anyhow::anyhow!("Failed to get chain state: {}", e))?;
         drop(ledger);
 
-        let work = MiningWork {
+        let work = MintingWork {
             prev_block_hash: state.tip_hash,
             height: state.height + 1,
             difficulty: state.difficulty,
-            total_mined: state.total_mined,
+            total_minted: state.total_mined,
         };
-        miner.update_work(work);
+        minter.update_work(work);
 
-        miner.start();
-        self.miner = Some(miner);
+        minter.start();
+        self.minter = Some(minter);
 
         Ok(())
     }
 
-    fn stop_mining(&mut self) {
-        if let Some(miner) = self.miner.take() {
-            miner.stop();
+    fn stop_minting(&mut self) {
+        if let Some(minter) = self.minter.take() {
+            minter.stop();
         }
     }
 
@@ -229,14 +229,14 @@ impl Node {
         &self.config
     }
 
-    /// Start mining (public for network integration)
-    pub fn start_mining_public(&mut self) -> Result<()> {
-        self.start_mining()
+    /// Start minting (public for network integration)
+    pub fn start_minting_public(&mut self) -> Result<()> {
+        self.start_minting()
     }
 
-    /// Stop mining (public for network integration)
-    pub fn stop_mining_public(&mut self) {
-        self.stop_mining()
+    /// Stop minting (public for network integration)
+    pub fn stop_minting_public(&mut self) {
+        self.stop_minting()
     }
 
     /// Print status (public for network integration)
@@ -272,17 +272,17 @@ impl Node {
             self.adjust_difficulty(new_height)?;
         }
 
-        // Update miner with new work if mining
-        if let Some(ref miner) = self.miner {
+        // Update minter with new work if minting
+        if let Some(ref minter) = self.minter {
             if let Ok(ledger) = self.ledger.read() {
                 if let Ok(state) = ledger.get_chain_state() {
-                    let work = MiningWork {
+                    let work = MintingWork {
                         prev_block_hash: state.tip_hash,
                         height: state.height + 1,
                         difficulty: state.difficulty,
-                        total_mined: state.total_mined,
+                        total_minted: state.total_mined,
                     };
-                    miner.update_work(work);
+                    minter.update_work(work);
                 }
             }
         }
@@ -290,10 +290,10 @@ impl Node {
         Ok(())
     }
 
-    /// Check if we've mined a mining transaction (non-blocking)
-    /// Returns the raw MinedMiningTx for consensus submission (doesn't build block)
-    pub fn check_mined_mining_tx(&mut self) -> Result<Option<MinedMiningTx>> {
-        if let Some(ref receiver) = self.mining_tx_receiver {
+    /// Check if we've minted a minting transaction (non-blocking)
+    /// Returns the raw MintedMintingTx for consensus submission (doesn't build block)
+    pub fn check_minted_minting_tx(&mut self) -> Result<Option<MintedMintingTx>> {
+        if let Some(ref receiver) = self.minting_tx_receiver {
             if let Ok(mined) = receiver.try_recv() {
                 return Ok(Some(mined));
             }

@@ -28,7 +28,7 @@ Where:
 |------|-----------|---------|---------|-------------|
 | **Plain** | 5 bps | 0.05% | 0.30% | Transparent transactions |
 | **Hidden** | 20 bps | 0.20% | 1.20% | Private (ring signatures + bulletproofs) |
-| **Mining** | 0 | 0% | 0% | Block reward claims |
+| **Minting** | 0 | 0% | 0% | Block reward claims |
 
 ### The 4x Privacy Premium
 

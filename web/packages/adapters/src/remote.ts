@@ -157,7 +157,7 @@ export class RemoteNodeAdapter implements NodeAdapter {
           timestamp: number
           difficulty: number
           txCount: number
-          miningReward: number
+          mintingReward: number
         }>('getBlockByHeight', { height: heightOrHash })
 
         return {
@@ -167,7 +167,7 @@ export class RemoteNodeAdapter implements NodeAdapter {
           previousHash: result.prevHash,
           transactionCount: result.txCount,
           size: 0, // Not provided
-          reward: BigInt(result.miningReward || 0),
+          reward: BigInt(result.mintingReward || 0),
           difficulty: BigInt(result.difficulty || 0),
         }
       } else {
@@ -432,7 +432,7 @@ export class RemoteNodeAdapter implements NodeAdapter {
       previousHash: data.previousHash as string,
       transactionCount: data.transactionCount as number,
       size: data.size as number,
-      miner: data.miner as string | undefined,
+      minter: data.minter as string | undefined,
       reward: BigInt((data.reward as string) || '0'),
       difficulty: BigInt((data.difficulty as string) || '0'),
     }

@@ -9,7 +9,7 @@ Botho is a privacy-preserving, mined cryptocurrency built as a single binary tha
 │                               botho                                   │
 │                                                                       │
 │  ┌─────────────┐  ┌─────────────┐  ┌──────────┐  ┌───────────────┐  │
-│  │   Network   │  │   Wallet    │  │  Miner   │  │   Consensus   │  │
+│  │   Network   │  │   Wallet    │  │  Minter   │  │   Consensus   │  │
 │  │  Discovery  │  │             │  │          │  │    Service    │  │
 │  └──────┬──────┘  └──────┬──────┘  └────┬─────┘  └───────┬───────┘  │
 │         │                │               │                │          │
@@ -50,7 +50,7 @@ The network layer uses **libp2p** with gossipsub for peer-to-peer communication.
 Botho uses the **Stellar Consensus Protocol (SCP)** for Byzantine fault tolerance. Unlike Bitcoin where the first valid block to propagate wins, Botho separates proof-of-work from block selection.
 
 **How it works:**
-1. Miners find valid PoW nonces and submit mining transactions
+1. Minters find valid PoW nonces and submit minting transactions
 2. Multiple valid solutions may exist simultaneously
 3. The SCP quorum determines which block is accepted
 4. Byzantine fault tolerance ensures consensus even with malicious nodes
@@ -69,18 +69,18 @@ The wallet uses **BIP39 mnemonics** (24 words) for key derivation with a single 
 - Spend key for signing outgoing transactions
 - Change subaddress for privacy
 
-### Miner
+### Minter
 
-Multi-threaded proof-of-work mining integrated with the consensus layer.
+Multi-threaded proof-of-work minting integrated with the consensus layer.
 
 **PoW Algorithm:**
 ```
-SHA256(nonce || prev_block_hash || miner_view_key || miner_spend_key) < difficulty_target
+SHA256(nonce || prev_block_hash || minter_view_key || minter_spend_key) < difficulty_target
 ```
 
 **Key Properties:**
-- Mining requires a satisfiable quorum (solo mining is impossible)
-- Mining automatically pauses when quorum is lost
+- Minting requires a satisfiable quorum (solo minting is impossible)
+- Minting automatically pauses when quorum is lost
 - Work updates when new blocks arrive
 
 ### Ledger
@@ -107,7 +107,7 @@ Transaction pool with fee-based priority ordering.
 ### Block Production
 
 ```
-Mining Transaction Found
+Minting Transaction Found
          │
          ▼
 ┌─────────────────┐
@@ -154,7 +154,7 @@ User creates transaction
          │
          ▼
 ┌─────────────────┐
-│  Miner includes │
+│  Minter includes │
 │  in Block       │
 └────────┬────────┘
          │
@@ -171,7 +171,7 @@ User creates transaction
 botho/src/
 ├── main.rs              # Entry point, CLI parser
 ├── config.rs            # TOML config loading/saving
-├── block.rs             # Block, BlockHeader, MiningTx, emission schedule
+├── block.rs             # Block, BlockHeader, MintingTx, emission schedule
 ├── transaction.rs       # Transaction, TxInput, TxOutput with stealth addresses
 ├── wallet.rs            # BIP39 mnemonic, key derivation, signing
 ├── mempool.rs           # Transaction pool with fee-based priority
@@ -180,12 +180,12 @@ botho/src/
 │   └── store.rs         # LMDB storage for blocks and UTXOs
 ├── node/
 │   ├── mod.rs           # Node orchestrator
-│   └── miner.rs         # Multi-threaded PoW mining
+│   └── minter.rs         # Multi-threaded PoW minting
 ├── consensus/
 │   ├── mod.rs           # Module exports
 │   ├── service.rs       # SCP wrapper (ConsensusService)
 │   ├── value.rs         # ConsensusValue type
-│   ├── validation.rs    # Mining tx and transfer tx validation
+│   ├── validation.rs    # Minting tx and transfer tx validation
 │   └── block_builder.rs # Build blocks from consensus output
 ├── network/
 │   ├── mod.rs           # Module exports

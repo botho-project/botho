@@ -32,7 +32,7 @@ pub const MIN_STORED_WEIGHT: u32 = 1000;
 /// Scale factor for tag weights (1_000_000 = 100%).
 pub const TAG_WEIGHT_SCALE: u32 = 1_000_000;
 
-/// A cluster identifier derived from coin creation (e.g., mining rewards).
+/// A cluster identifier derived from coin creation (e.g., minting rewards).
 ///
 /// Not a group of accounts, but a lineage marker that fades through trade.
 /// Cluster IDs are assigned when coins are minted and propagate through

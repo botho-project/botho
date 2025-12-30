@@ -33,18 +33,6 @@ pub struct UncheckedMnemonicAccount {
     /// The account index the mnemonic is intended to work with
     #[prost(uint32, optional, tag = "2")]
     pub account_index: Option<u32>,
-    /// The Fog URL for this account (deprecated, ignored)
-    #[prost(string, optional, tag = "3")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fog_report_url: Option<String>,
-    /// The Fog Report ID string (deprecated, ignored)
-    #[prost(string, optional, tag = "4")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fog_report_id: Option<String>,
-    /// The Fog Authority subjectPublicKeyInfo (deprecated, ignored)
-    #[prost(bytes, optional, tag = "5")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fog_authority_spki: Option<Vec<u8>>,
 }
 
 impl TryFrom<UncheckedMnemonicAccount> for AccountKey {
@@ -57,13 +45,12 @@ impl TryFrom<UncheckedMnemonicAccount> for AccountKey {
         )
         .map_err(|e| Error::InvalidMnemonic(format!("{e}")))?;
         let slip10 = mnemonic.derive_slip10_key(src.account_index.ok_or(Error::NoAccountIndex)?);
-        // Note: fog fields in UncheckedMnemonicAccount are ignored - fog support removed
         Ok(AccountKey::from(slip10))
     }
 }
 
 impl UncheckedMnemonicAccount {
-    /// Construct an identity without fog and with a random mnemonic key
+    /// Construct an identity with a random mnemonic key
     pub fn random<T: RngCore + CryptoRng>(rng: &mut T) -> Self {
         let mut entropy = [0u8; 32];
         rng.fill_bytes(&mut entropy[..]);

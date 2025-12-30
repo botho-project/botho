@@ -527,9 +527,9 @@ function BlockDetail({
                 }
               />
             </div>
-            {block.miner && (
+            {block.minter && (
               <div className="col-span-2">
-                <DetailRow label="Miner" value={formatHash(block.miner, 16)} mono />
+                <DetailRow label="Minter" value={formatHash(block.minter, 16)} mono />
               </div>
             )}
           </div>
@@ -547,7 +547,7 @@ function BlockDetail({
         <CardContent>
           {block.transactionCount === 0 ? (
             <p className="py-8 text-center text-sm text-[--color-dim]">
-              No transactions in this block (mining reward only)
+              No transactions in this block (minting reward only)
             </p>
           ) : (
             <p className="py-8 text-center text-sm text-[--color-dim]">
@@ -581,7 +581,7 @@ function TransactionDetail({
   const typeColors = {
     send: 'text-[--color-danger]',
     receive: 'text-[--color-success]',
-    mining: 'text-[--color-pulse]',
+    minting: 'text-[--color-pulse]',
   }
 
   return (

@@ -16,7 +16,7 @@
 //! ## Key Insight
 //!
 //! Rewards are predictable (fixed per phase), difficulty adapts to monetary goals.
-//! This gives miners stable income while absorbing fee burn volatility.
+//! This gives minters stable income while absorbing fee burn volatility.
 
 use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};

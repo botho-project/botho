@@ -1,20 +1,20 @@
-//! Miner agent: Receives block rewards, sells coins for goods/services.
+//! Minter agent: Receives block rewards, sells coins for goods/services.
 
 use crate::simulation::agent::{Action, Agent, AgentId};
 use crate::simulation::state::SimulationState;
 use crate::tag::TagVector;
 use crate::Account;
 
-/// Miner that receives fresh coin rewards and sells them.
+/// Minter that receives fresh coin rewards and sells them.
 #[derive(Debug)]
-pub struct MinerAgent {
+pub struct MinterAgent {
     account: Account,
     /// Agents to sell coins to (merchants, exchanges, etc.).
     buyers: Vec<AgentId>,
-    /// Block reward per "mining" round.
+    /// Block reward per "minting" round.
     block_reward: u64,
-    /// Rounds between mining rewards.
-    mining_interval: u64,
+    /// Rounds between minting rewards.
+    minting_interval: u64,
     /// Fraction of balance to sell each round.
     sell_fraction: f64,
     /// Total coins mined.
@@ -25,14 +25,14 @@ pub struct MinerAgent {
     rng_state: u64,
 }
 
-impl MinerAgent {
-    /// Create a new miner.
+impl MinterAgent {
+    /// Create a new minter.
     pub fn new(id: AgentId) -> Self {
         Self {
             account: Account::new(id.0),
             buyers: Vec::new(),
             block_reward: 1000,
-            mining_interval: 10,
+            minting_interval: 10,
             sell_fraction: 0.2,
             total_mined: 0,
             total_sold: 0,
@@ -52,9 +52,9 @@ impl MinerAgent {
         self
     }
 
-    /// Set mining interval.
-    pub fn with_mining_interval(mut self, interval: u64) -> Self {
-        self.mining_interval = interval.max(1);
+    /// Set minting interval.
+    pub fn with_minting_interval(mut self, interval: u64) -> Self {
+        self.minting_interval = interval.max(1);
         self
     }
 
@@ -64,8 +64,8 @@ impl MinerAgent {
         self
     }
 
-    /// Record mining reward (called externally).
-    pub fn record_mining(&mut self, amount: u64) {
+    /// Record minting reward (called externally).
+    pub fn record_minting(&mut self, amount: u64) {
         self.total_mined += amount;
     }
 
@@ -87,9 +87,9 @@ impl MinerAgent {
         (self.total_mined, self.total_sold)
     }
 
-    /// Check if this round is a mining round.
-    pub fn is_mining_round(&self, round: u64) -> bool {
-        round % self.mining_interval == 0
+    /// Check if this round is a minting round.
+    pub fn is_minting_round(&self, round: u64) -> bool {
+        round % self.minting_interval == 0
     }
 
     /// Get block reward amount.
@@ -98,7 +98,7 @@ impl MinerAgent {
     }
 }
 
-impl Agent for MinerAgent {
+impl Agent for MinterAgent {
     fn id(&self) -> AgentId {
         AgentId(self.account.id)
     }
@@ -136,11 +136,11 @@ impl Agent for MinerAgent {
     }
 
     fn on_receive_payment(&mut self, _amount: u64, _from: AgentId) {
-        // Miners typically don't receive payments (only block rewards)
+        // Minters typically don't receive payments (only block rewards)
     }
 
     fn agent_type(&self) -> &'static str {
-        "Miner"
+        "Minter"
     }
 }
 
@@ -150,16 +150,16 @@ mod tests {
     use crate::{FeeCurve, TransferConfig};
 
     #[test]
-    fn test_miner_sells() {
+    fn test_minter_sells() {
         let buyers = vec![AgentId(100), AgentId(101)];
-        let mut miner = MinerAgent::new(AgentId(1))
+        let mut minter = MinterAgent::new(AgentId(1))
             .with_buyers(buyers)
             .with_sell_fraction(0.5);
 
-        miner.account.balance = 1000;
+        minter.account.balance = 1000;
 
         let state = SimulationState::new(1000, FeeCurve::default(), TransferConfig::default());
-        let action = miner.decide_action(&state);
+        let action = minter.decide_action(&state);
 
         match action {
             Some(Action::Transfer { amount, .. }) => {
@@ -170,12 +170,12 @@ mod tests {
     }
 
     #[test]
-    fn test_mining_interval() {
-        let miner = MinerAgent::new(AgentId(1)).with_mining_interval(10);
+    fn test_minting_interval() {
+        let minter = MinterAgent::new(AgentId(1)).with_minting_interval(10);
 
-        assert!(miner.is_mining_round(0));
-        assert!(!miner.is_mining_round(5));
-        assert!(miner.is_mining_round(10));
-        assert!(miner.is_mining_round(20));
+        assert!(minter.is_minting_round(0));
+        assert!(!minter.is_minting_round(5));
+        assert!(minter.is_minting_round(10));
+        assert!(minter.is_minting_round(20));
     }
 }

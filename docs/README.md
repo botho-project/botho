@@ -9,7 +9,7 @@ Welcome to the Botho documentation. Botho is a privacy-preserving, mined cryptoc
 | [Getting Started](getting-started.md) | Build, install, and run your first node |
 | [Architecture](architecture.md) | System design and component overview |
 | [Configuration](configuration.md) | Complete configuration reference |
-| [Mining](mining.md) | Mining setup and guide |
+| [Minting](minting.md) | Minting setup and guide |
 | [Tokenomics](tokenomics.md) | Supply, emission, fees, and economics |
 | [Privacy](privacy.md) | Privacy features and cryptography |
 
@@ -17,7 +17,7 @@ Welcome to the Botho documentation. Botho is a privacy-preserving, mined cryptoc
 
 Botho combines:
 
-- **Proof-of-Work Mining**: SHA-256 mining with variable difficulty
+- **Proof-of-Work Minting**: SHA-256 minting with variable difficulty
 - **Full Transaction Privacy**: Stealth addresses, ring signatures (MLSAG), and encrypted memos
 - **Post-Quantum Security**: Hybrid classical + ML-KEM/ML-DSA cryptography
 - **Byzantine Fault Tolerance**: Stellar Consensus Protocol (SCP) for consensus
@@ -37,8 +37,8 @@ botho init
 # Run node
 botho run
 
-# Run with mining
-botho run --mine
+# Run with minting
+botho run --mint
 ```
 
 ## Commands
@@ -48,8 +48,8 @@ botho run --mine
 | `botho init` | Create wallet with 24-word mnemonic |
 | `botho init --recover` | Recover wallet from existing mnemonic |
 | `botho run` | Sync blockchain and scan wallet |
-| `botho run --mine` | Run with mining enabled |
-| `botho status` | Show sync status, balance, mining stats |
+| `botho run --mint` | Run with minting enabled |
+| `botho status` | Show sync status, balance, minting stats |
 | `botho balance` | Show wallet balance |
 | `botho address` | Show receiving address |
 | `botho send <addr> <amt>` | Send credits |

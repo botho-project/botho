@@ -74,8 +74,8 @@ pub struct ScpMessage {
 struct TxCacheEntry {
     /// Serialized transaction bytes
     data: Vec<u8>,
-    /// Whether this is a mining transaction
-    is_mining_tx: bool,
+    /// Whether this is a minting transaction
+    is_minting_tx: bool,
 }
 
 /// Shared state for validation callbacks
@@ -163,31 +163,31 @@ impl ConsensusService {
 
                 // Validate based on transaction type
                 temp_validator
-                    .validate_from_bytes(&entry.data, entry.is_mining_tx)
+                    .validate_from_bytes(&entry.data, entry.is_minting_tx)
                     .map_err(|e| e.to_string())
             });
 
         // Combine callback - how to combine multiple values
-        // Mining transactions are prioritized by PoW difficulty (higher priority = harder PoW)
-        // This ensures the "best" mining tx wins if there are multiple
+        // Minting transactions are prioritized by PoW difficulty (higher priority = harder PoW)
+        // This ensures the "best" minting tx wins if there are multiple
         let combine_fn: Arc<
             dyn Fn(&[ConsensusValue]) -> Result<Vec<ConsensusValue>, String> + Send + Sync,
         > = Arc::new(|values: &[ConsensusValue]| {
-            // Separate mining txs from regular txs
-            let mut mining_txs: Vec<_> = values.iter().filter(|v| v.is_mining_tx).cloned().collect();
-            let mut regular_txs: Vec<_> = values.iter().filter(|v| !v.is_mining_tx).cloned().collect();
+            // Separate minting txs from regular txs
+            let mut minting_txs: Vec<_> = values.iter().filter(|v| v.is_minting_tx).cloned().collect();
+            let mut regular_txs: Vec<_> = values.iter().filter(|v| !v.is_minting_tx).cloned().collect();
 
-            // Sort mining txs by priority (highest first) - best PoW wins
-            mining_txs.sort_by(|a, b| b.priority.cmp(&a.priority).then_with(|| a.tx_hash.cmp(&b.tx_hash)));
+            // Sort minting txs by priority (highest first) - best PoW wins
+            minting_txs.sort_by(|a, b| b.priority.cmp(&a.priority).then_with(|| a.tx_hash.cmp(&b.tx_hash)));
 
-            // Only keep the best mining tx (one coinbase per block)
-            mining_txs.truncate(1);
+            // Only keep the best minting tx (one coinbase per block)
+            minting_txs.truncate(1);
 
             // Sort regular txs by priority (fee), then hash for determinism
             regular_txs.sort_by(|a, b| b.priority.cmp(&a.priority).then_with(|| a.tx_hash.cmp(&b.tx_hash)));
 
-            // Combine: best mining tx first, then regular txs
-            let mut combined = mining_txs;
+            // Combine: best minting tx first, then regular txs
+            let mut combined = minting_txs;
             combined.extend(regular_txs);
             Ok(combined)
         });
@@ -248,7 +248,7 @@ impl ConsensusService {
                 tx_hash,
                 TxCacheEntry {
                     data: tx_data,
-                    is_mining_tx: false,
+                    is_minting_tx: false,
                 },
             );
         }
@@ -257,9 +257,9 @@ impl ConsensusService {
         debug!(?value, "Transaction submitted for consensus");
     }
 
-    /// Submit a mining transaction for consensus
-    pub fn submit_mining_tx(&mut self, tx_hash: [u8; 32], pow_priority: u64, tx_data: Vec<u8>) {
-        let value = ConsensusValue::from_mining_tx(tx_hash, pow_priority);
+    /// Submit a minting transaction for consensus
+    pub fn submit_minting_tx(&mut self, tx_hash: [u8; 32], pow_priority: u64, tx_data: Vec<u8>) {
+        let value = ConsensusValue::from_minting_tx(tx_hash, pow_priority);
 
         // Add to shared cache for validation callback
         if let Ok(mut state) = self.shared_state.write() {
@@ -267,13 +267,13 @@ impl ConsensusService {
                 tx_hash,
                 TxCacheEntry {
                     data: tx_data,
-                    is_mining_tx: true,
+                    is_minting_tx: true,
                 },
             );
         }
 
         self.pending_values.insert(value);
-        info!(?value, "Mining transaction submitted for consensus");
+        info!(?value, "Minting transaction submitted for consensus");
     }
 
     /// Handle an incoming SCP message from gossip
@@ -414,7 +414,7 @@ impl ConsensusService {
         self.shared_state
             .read()
             .ok()
-            .and_then(|state| state.tx_cache.get(tx_hash).map(|e| (e.data.clone(), e.is_mining_tx)))
+            .and_then(|state| state.tx_cache.get(tx_hash).map(|e| (e.data.clone(), e.is_minting_tx)))
     }
 
     /// Advance to next slot (called after processing externalized values)

@@ -19,7 +19,7 @@ const navigation = [
   { name: 'Wallet', href: '/wallet', icon: Wallet },
   { name: 'Ledger', href: '/ledger', icon: Database },
   { name: 'Network', href: '/network', icon: Network },
-  { name: 'Mining', href: '/mining', icon: Cpu },
+  { name: 'Minting', href: '/minting', icon: Cpu },
 ]
 
 interface LayoutProps {

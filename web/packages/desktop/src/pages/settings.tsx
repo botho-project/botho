@@ -9,7 +9,7 @@ import {
 } from 'lucide-react'
 
 export function SettingsPage() {
-  const [minerThreads, setMinerThreads] = useState('4')
+  const [minterThreads, setMinterThreads] = useState('4')
   const [dataDir, setDataDir] = useState('~/.botho')
 
   return (
@@ -38,27 +38,27 @@ export function SettingsPage() {
           </CardContent>
         </Card>
 
-        {/* Mining settings */}
+        {/* Minting settings */}
         <Card>
           <CardHeader>
             <div className="flex items-center gap-2">
               <Cpu className="h-4 w-4 text-[--color-pulse]" />
-              <CardTitle>Mining Configuration</CardTitle>
+              <CardTitle>Minting Configuration</CardTitle>
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
             <div>
-              <label className="text-sm text-[--color-ghost]">Mining Threads</label>
+              <label className="text-sm text-[--color-ghost]">Minting Threads</label>
               <Input
                 type="number"
-                value={minerThreads}
-                onChange={(e) => setMinerThreads(e.target.value)}
+                value={minterThreads}
+                onChange={(e) => setMinterThreads(e.target.value)}
                 min="1"
                 max="64"
                 className="mt-1"
               />
               <p className="mt-1 text-xs text-[--color-dim]">
-                Number of CPU threads to use for mining (1-64)
+                Number of CPU threads to use for minting (1-64)
               </p>
             </div>
           </CardContent>

@@ -12,7 +12,7 @@
 //! |---------|---------|--------------------------------------------------|
 //! | Plain   | None    | base_plain × cluster_factor (0.05% to 3%)        |
 //! | Hidden  | Full    | base_hidden × cluster_factor (0.2% to 12%)       |
-//! | Mining  | N/A     | No fee (reward claim)                            |
+//! | Minting | N/A     | No fee (reward claim)                            |
 //!
 //! ## Fee Formula
 //!
@@ -89,9 +89,9 @@ pub enum TransactionType {
     /// Fee depends on cluster wealth of the sender.
     Hidden,
 
-    /// Mining transaction claiming PoW reward.
+    /// Minting transaction claiming PoW reward.
     /// No fee (creates new coins).
-    Mining,
+    Minting,
 }
 
 /// Fee configuration for the three transaction types.
@@ -208,7 +208,7 @@ impl FeeConfig {
                 let factor = self.cluster_curve.factor(cluster_wealth);
                 (self.hidden_base_fee_bps as u64 * factor / ClusterFactorCurve::FACTOR_SCALE) as FeeRateBps
             }
-            TransactionType::Mining => return 0,
+            TransactionType::Minting => return 0,
         };
 
         // Apply memo multiplier: rate × (1 + memo_rate × num_memos)
@@ -409,8 +409,8 @@ mod tests {
         assert!(fee_large >= 250, "Large cluster Plain fee should be near 6x base: {fee_large}");
         assert_eq!(net_large, 100_000 - fee_large);
 
-        // Mining transaction: no fee
-        let (fee, net) = config.compute_fee(TransactionType::Mining, 100_000, 0);
+        // Minting transaction: no fee
+        let (fee, net) = config.compute_fee(TransactionType::Minting, 100_000, 0);
         assert_eq!(fee, 0);
         assert_eq!(net, 100_000);
     }
@@ -508,8 +508,8 @@ mod tests {
         assert_eq!(config.fee_rate_bps(TransactionType::Hidden, 0), 40);
         assert_eq!(config.fee_rate_bps(TransactionType::Hidden, 1_000_000), 40);
 
-        // Mining: always 0
-        assert_eq!(config.fee_rate_bps(TransactionType::Mining, 0), 0);
+        // Minting: always 0
+        assert_eq!(config.fee_rate_bps(TransactionType::Minting, 0), 0);
     }
 
     #[test]
@@ -567,8 +567,8 @@ mod tests {
         // With 3 memos: 100 * 1.15 = 115 bps
         assert_eq!(config.fee_rate_bps_with_memos(TransactionType::Plain, 0, 3), 115);
 
-        // Mining tx: always 0, regardless of memos
-        assert_eq!(config.fee_rate_bps_with_memos(TransactionType::Mining, 0, 10), 0);
+        // Minting tx: always 0, regardless of memos
+        assert_eq!(config.fee_rate_bps_with_memos(TransactionType::Minting, 0, 10), 0);
     }
 
     #[test]

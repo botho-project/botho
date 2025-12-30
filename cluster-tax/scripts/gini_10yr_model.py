@@ -358,7 +358,7 @@ To halve inequality over 10 years:
    - For 50% reduction, fees must be REDISTRIBUTED
 
 3. ALTERNATIVES if redistribution not feasible:
-   - Mining rewards weighted toward small holders
+   - Minting rewards weighted toward small holders
    - Periodic fee dividends to all holders
    - Longer time horizon (20-30 years with burn model)
 """)

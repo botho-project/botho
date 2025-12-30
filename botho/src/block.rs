@@ -45,17 +45,17 @@ pub struct BlockHeader {
     /// Block height
     pub height: u64,
 
-    /// Mining difficulty target
+    /// Minting difficulty target
     pub difficulty: u64,
 
-    /// PoW nonce (the mining solution)
+    /// PoW nonce (the minting solution)
     pub nonce: u64,
 
-    /// Miner's view public key
-    pub miner_view_key: [u8; 32],
+    /// Minter's view public key
+    pub minter_view_key: [u8; 32],
 
-    /// Miner's spend public key
-    pub miner_spend_key: [u8; 32],
+    /// Minter's spend public key
+    pub minter_spend_key: [u8; 32],
 }
 
 impl BlockHeader {
@@ -69,18 +69,18 @@ impl BlockHeader {
         hasher.update(self.height.to_le_bytes());
         hasher.update(self.difficulty.to_le_bytes());
         hasher.update(self.nonce.to_le_bytes());
-        hasher.update(self.miner_view_key);
-        hasher.update(self.miner_spend_key);
+        hasher.update(self.minter_view_key);
+        hasher.update(self.minter_spend_key);
         hasher.finalize().into()
     }
 
-    /// Compute the PoW hash (what miners are trying to get below target)
+    /// Compute the PoW hash (what minters are trying to get below target)
     pub fn pow_hash(&self) -> [u8; 32] {
         let mut hasher = Sha256::new();
         hasher.update(self.nonce.to_le_bytes());
         hasher.update(self.prev_block_hash);
-        hasher.update(self.miner_view_key);
-        hasher.update(self.miner_spend_key);
+        hasher.update(self.minter_view_key);
+        hasher.update(self.minter_spend_key);
         hasher.finalize().into()
     }
 
@@ -114,8 +114,8 @@ impl BlockHeader {
             height: 0,
             difficulty: u64::MAX, // Genesis has no PoW requirement
             nonce: 0,
-            miner_view_key: [0u8; 32],
-            miner_spend_key: [0u8; 32],
+            minter_view_key: [0u8; 32],
+            minter_spend_key: [0u8; 32],
         }
     }
 
@@ -188,7 +188,7 @@ pub struct MintingTx {
     /// PoW nonce (the solution)
     pub nonce: u64,
 
-    /// Timestamp when mined
+    /// Timestamp when minted
     pub timestamp: u64,
 }
 
@@ -278,7 +278,7 @@ impl MintingTx {
             amount: self.reward,
             target_key: self.target_key,
             public_key: self.public_key,
-            e_memo: None, // Mining rewards don't have memos
+            e_memo: None, // Minting rewards don't have memos
         }
     }
 }
@@ -287,7 +287,7 @@ impl MintingTx {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Block {
     pub header: BlockHeader,
-    pub mining_tx: MiningTx,
+    pub minting_tx: MintingTx,
     /// Regular transactions included in this block
     pub transactions: Vec<Transaction>,
 }
@@ -310,12 +310,12 @@ impl Block {
 
         Self {
             header: BlockHeader::genesis_for_network(network),
-            mining_tx: MiningTx {
+            minting_tx: MintingTx {
                 block_height: 0,
                 reward: 0,
-                // Genesis has no real miner - use zero keys
-                miner_view_key: [0u8; 32],
-                miner_spend_key: [0u8; 32],
+                // Genesis has no real minter - use zero keys
+                minter_view_key: [0u8; 32],
+                minter_spend_key: [0u8; 32],
                 // Genesis has no stealth output - use zero keys
                 target_key: [0u8; 32],
                 public_key: [0u8; 32],
@@ -348,22 +348,22 @@ impl Block {
         self.header.height
     }
 
-    /// Create a new block template for mining (without transactions)
+    /// Create a new block template for minting (without transactions)
     pub fn new_template(
         prev_block: &Block,
-        miner_address: &PublicAddress,
+        minter_address: &PublicAddress,
         difficulty: u64,
         reward: u64,
     ) -> Self {
-        Self::new_template_with_txs(prev_block, miner_address, difficulty, reward, Vec::new())
+        Self::new_template_with_txs(prev_block, minter_address, difficulty, reward, Vec::new())
     }
 
-    /// Create a new block template for mining with transactions.
+    /// Create a new block template for minting with transactions.
     ///
-    /// The mining reward output uses stealth addressing for miner privacy.
+    /// The minting reward output uses stealth addressing for minter privacy.
     pub fn new_template_with_txs(
         prev_block: &Block,
-        miner_address: &PublicAddress,
+        minter_address: &PublicAddress,
         difficulty: u64,
         reward: u64,
         transactions: Vec<Transaction>,
@@ -374,17 +374,17 @@ impl Block {
             .map(|d| d.as_secs())
             .unwrap_or(0);
 
-        let miner_view_key = miner_address.view_public_key().to_bytes();
-        let miner_spend_key = miner_address.spend_public_key().to_bytes();
+        let minter_view_key = minter_address.view_public_key().to_bytes();
+        let minter_spend_key = minter_address.spend_public_key().to_bytes();
 
         // Compute transaction root from all transactions
         let tx_root = Self::compute_tx_root(&transactions);
 
-        // Create stealth output for mining reward
-        let mining_tx = MiningTx::new(
+        // Create stealth output for minting reward
+        let minting_tx = MintingTx::new(
             prev_block.height() + 1,
             reward,
-            miner_address,
+            minter_address,
             prev_hash,
             difficulty,
             timestamp,
@@ -399,10 +399,10 @@ impl Block {
                 height: prev_block.height() + 1,
                 difficulty,
                 nonce: 0,
-                miner_view_key,
-                miner_spend_key,
+                minter_view_key: minter_view_key,
+                minter_spend_key: minter_spend_key,
             },
-            mining_tx,
+            minting_tx,
             transactions,
         }
     }
@@ -455,7 +455,7 @@ pub fn calculate_block_reward_v2(height: u64, total_supply: u64) -> u64 {
 
 /// Difficulty adjustment constants
 pub mod difficulty {
-    use crate::node::miner::INITIAL_DIFFICULTY;
+    use crate::node::minter::INITIAL_DIFFICULTY;
 
     /// Target block time in seconds
     pub const TARGET_BLOCK_TIME: u64 = 60;

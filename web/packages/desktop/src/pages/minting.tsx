@@ -1,6 +1,6 @@
 import { Layout } from '../components/layout'
 import { Card, CardHeader, CardTitle, CardContent, Button } from '@botho/ui'
-import { useMining } from '../contexts/mining'
+import { useMinting } from '../contexts/minting'
 import { motion } from 'motion/react'
 import {
   Cpu,
@@ -12,21 +12,21 @@ import {
   Coins,
 } from 'lucide-react'
 
-export function MiningPage() {
-  const { stats, start, stop, pause } = useMining()
+export function MintingPage() {
+  const { stats, start, stop, pause } = useMinting()
 
-  const isActive = stats.status === 'mining'
+  const isActive = stats.status === 'minting'
   const isPaused = stats.status === 'paused'
 
   return (
-    <Layout title="Mining" subtitle="Contribute to the network">
+    <Layout title="Minting" subtitle="Contribute to the network">
       <div className="grid gap-6 lg:grid-cols-3">
-        {/* Mining controls */}
+        {/* Minting controls */}
         <Card className="lg:col-span-2">
           <CardHeader>
             <div className="flex items-center gap-2">
               <Cpu className="h-4 w-4 text-[--color-pulse]" />
-              <CardTitle>Mining Status</CardTitle>
+              <CardTitle>Minting Status</CardTitle>
             </div>
           </CardHeader>
           <CardContent>
@@ -59,7 +59,7 @@ export function MiningPage() {
               </motion.div>
 
               <p className="mt-6 font-display text-2xl font-bold text-[--color-light]">
-                {isActive ? 'Mining Active' : isPaused ? 'Mining Paused' : 'Mining Stopped'}
+                {isActive ? 'Minting Active' : isPaused ? 'Minting Paused' : 'Minting Stopped'}
               </p>
 
               {isActive && (
@@ -72,7 +72,7 @@ export function MiningPage() {
                 {!isActive && (
                   <Button onClick={start}>
                     <Play className="h-4 w-4" />
-                    Start Mining
+                    Start Minting
                   </Button>
                 )}
                 {isActive && (
@@ -104,7 +104,7 @@ export function MiningPage() {
           </CardContent>
         </Card>
 
-        {/* Mining stats */}
+        {/* Minting stats */}
         <div className="space-y-6">
           <Card>
             <CardContent className="space-y-4">
@@ -149,7 +149,7 @@ export function MiningPage() {
           <Card>
             <CardContent>
               <p className="text-sm text-[--color-ghost]">
-                Mining contributes to network security and earns you BTH rewards.
+                Minting contributes to network security and earns you BTH rewards.
                 The difficulty adjusts every 10 blocks to maintain ~20 second block times.
               </p>
             </CardContent>

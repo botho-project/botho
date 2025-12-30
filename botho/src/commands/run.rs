@@ -13,7 +13,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tracing::{debug, error, info, warn};
 
-use crate::block::MiningTx;
+use crate::block::MintingTx;
 use crate::config::{Config, QuorumMode};
 use crate::consensus::{BlockBuilder, ConsensusConfig, ConsensusEvent, ConsensusService, TransactionValidator};
 use crate::ledger::ChainState;
@@ -34,14 +34,14 @@ fn get_connected_peer_ids(discovery: &NetworkDiscovery) -> Vec<String> {
         .collect()
 }
 
-/// Check if mining should be enabled based on quorum config and connected peers
-fn check_mining_eligibility(
+/// Check if minting should be enabled based on quorum config and connected peers
+fn check_minting_eligibility(
     config: &Config,
     connected_peers: &[String],
-    want_to_mine: bool,
+    want_to_mint: bool,
 ) -> (bool, String) {
-    if !want_to_mine {
-        return (false, "Mining not requested".to_string());
+    if !want_to_mint {
+        return (false, "Minting not requested".to_string());
     }
 
     let (can_reach, quorum_size, threshold) = config.network.quorum.can_reach_quorum(connected_peers);
@@ -64,13 +64,13 @@ fn check_mining_eligibility(
 }
 
 /// Run the node
-pub fn run(config_path: &Path, mine: bool) -> Result<()> {
+pub fn run(config_path: &Path, mint: bool) -> Result<()> {
     let config = Config::load(config_path).context("Config not found. Run 'botho init' first.")?;
 
-    // Check if mining is requested without a wallet
-    if mine && !config.has_wallet() {
+    // Check if minting is requested without a wallet
+    if mint && !config.has_wallet() {
         return Err(anyhow::anyhow!(
-            "Cannot mine without a wallet. Run 'botho init' to create one, or remove --mine flag."
+            "Cannot mine without a wallet. Run 'botho init' to create one, or remove --mint flag."
         ));
     }
 
@@ -82,10 +82,10 @@ pub fn run(config_path: &Path, mine: bool) -> Result<()> {
 
     // Create tokio runtime for async networking
     let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(async { run_async(config, config_path, mine).await })
+    rt.block_on(async { run_async(config, config_path, mint).await })
 }
 
-async fn run_async(config: Config, config_path: &Path, mine: bool) -> Result<()> {
+async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()> {
     // Set up shutdown signal
     let shutdown = Arc::new(AtomicBool::new(false));
     let shutdown_clone = shutdown.clone();
@@ -153,7 +153,7 @@ async fn run_async(config: Config, config_path: &Path, mine: bool) -> Result<()>
     println!();
 
     // Check quorum status using new config-based logic
-    let (can_mine_now, quorum_message) = check_mining_eligibility(&config, &connected_peers, mine);
+    let (can_mint_now, quorum_message) = check_minting_eligibility(&config, &connected_peers, mint);
 
     // Display quorum status
     let mode_str = match config.network.quorum.mode {
@@ -178,13 +178,13 @@ async fn run_async(config: Config, config_path: &Path, mine: bool) -> Result<()>
         .expect("Invalid RPC address");
 
     // Create shared state for RPC
-    let mining_active = Arc::new(RwLock::new(false));
+    let minting_active = Arc::new(RwLock::new(false));
     let peer_count = Arc::new(RwLock::new(discovery.peer_count()));
 
     let rpc_state = Arc::new(RpcState::from_shared(
         node.shared_ledger(),
         node.shared_mempool(),
-        mining_active.clone(),
+        minting_active.clone(),
         peer_count.clone(),
         node.wallet_view_key(),
         node.wallet_spend_key(),
@@ -224,23 +224,23 @@ async fn run_async(config: Config, config_path: &Path, mine: bool) -> Result<()>
 
     info!("Consensus service initialized at slot {}", consensus.current_slot());
 
-    // Track mining state - can change as peers connect/disconnect
-    let mut mining_enabled = false;
+    // Track minting state - can change as peers connect/disconnect
+    let mut minting_enabled = false;
 
     println!();
     node.print_status_public()?;
 
-    // Start mining if quorum is satisfied
-    if can_mine_now {
-        info!("Starting mining - {}", quorum_message);
-        node.start_mining_public()?;
-        mining_enabled = true;
-        if let Ok(mut active) = mining_active.write() {
+    // Start minting if quorum is satisfied
+    if can_mint_now {
+        info!("Starting minting - {}", quorum_message);
+        node.start_minting_public()?;
+        minting_enabled = true;
+        if let Ok(mut active) = minting_active.write() {
             *active = true;
         }
-    } else if mine {
-        warn!("Mining requested but {}", quorum_message);
-        println!("Mining will start when quorum is satisfied.");
+    } else if mint {
+        warn!("Minting requested but {}", quorum_message);
+        println!("Minting will start when quorum is satisfied.");
     }
 
     // Load pending transactions from file and broadcast them
@@ -308,17 +308,17 @@ async fn run_async(config: Config, config_path: &Path, mine: bool) -> Result<()>
                                 *count = discovery.peer_count();
                             }
 
-                            // Re-evaluate mining eligibility
-                            if mine && !mining_enabled {
+                            // Re-evaluate minting eligibility
+                            if mint && !minting_enabled {
                                 let connected = get_connected_peer_ids(&discovery);
-                                let (can_mine_now, msg) = check_mining_eligibility(&config, &connected, mine);
-                                if can_mine_now {
+                                let (can_mint_now, msg) = check_minting_eligibility(&config, &connected, mint);
+                                if can_mint_now {
                                     info!("Quorum reached! {}", msg);
-                                    if let Err(e) = node.start_mining_public() {
-                                        warn!("Failed to start mining: {}", e);
+                                    if let Err(e) = node.start_minting_public() {
+                                        warn!("Failed to start minting: {}", e);
                                     } else {
-                                        mining_enabled = true;
-                                        if let Ok(mut active) = mining_active.write() {
+                                        minting_enabled = true;
+                                        if let Ok(mut active) = minting_active.write() {
                                             *active = true;
                                         }
                                     }
@@ -332,15 +332,15 @@ async fn run_async(config: Config, config_path: &Path, mine: bool) -> Result<()>
                                 *count = discovery.peer_count();
                             }
 
-                            // Re-evaluate mining eligibility
-                            if mining_enabled {
+                            // Re-evaluate minting eligibility
+                            if minting_enabled {
                                 let connected = get_connected_peer_ids(&discovery);
-                                let (can_mine_now, msg) = check_mining_eligibility(&config, &connected, mine);
-                                if !can_mine_now {
-                                    warn!("Quorum lost! {} - stopping mining", msg);
-                                    node.stop_mining_public();
-                                    mining_enabled = false;
-                                    if let Ok(mut active) = mining_active.write() {
+                                let (can_mint_now, msg) = check_minting_eligibility(&config, &connected, mint);
+                                if !can_mint_now {
+                                    warn!("Quorum lost! {} - stopping minting", msg);
+                                    node.stop_minting_public();
+                                    minting_enabled = false;
+                                    if let Ok(mut active) = minting_active.write() {
                                         *active = false;
                                     }
                                 }
@@ -467,25 +467,25 @@ async fn run_async(config: Config, config_path: &Path, mine: bool) -> Result<()>
             // Periodic status
             _ = status_interval.tick() => {
                 let connected = get_connected_peer_ids(&discovery);
-                let (_, quorum_status) = check_mining_eligibility(&config, &connected, mine);
+                let (_, quorum_status) = check_minting_eligibility(&config, &connected, mint);
                 info!(
-                    "Peers: {} | Mining: {} | {}",
+                    "Peers: {} | Minting: {} | {}",
                     connected.len(),
-                    if mining_enabled { "active" } else { "inactive" },
+                    if minting_enabled { "active" } else { "inactive" },
                     quorum_status
                 );
             }
 
-            // Check for mined mining transactions
+            // Check for minted minting transactions
             _ = tokio::time::sleep(Duration::from_millis(100)) => {
-                // Only check for mined transactions if mining is enabled
-                if !mining_enabled {
+                // Only check for mined transactions if minting is enabled
+                if !minting_enabled {
                     continue;
                 }
-                if let Some(mined_tx) = node.check_mined_mining_tx()? {
-                    let mining_tx = &mined_tx.mining_tx;
+                if let Some(minted_tx) = node.check_minted_minting_tx()? {
+                    let minting_tx = &minted_tx.minting_tx;
 
-                    // Pre-validate the mining transaction before submitting to consensus
+                    // Pre-validate the minting transaction before submitting to consensus
                     // This catches stale/invalid transactions early
                     let chain_state = match node.shared_ledger().read() {
                         Ok(ledger) => match ledger.get_chain_state() {
@@ -504,27 +504,27 @@ async fn run_async(config: Config, config_path: &Path, mine: bool) -> Result<()>
                     let temp_state = Arc::new(RwLock::new(chain_state));
                     let validator = TransactionValidator::new(temp_state);
 
-                    if let Err(e) = validator.validate_mining_tx(mining_tx) {
+                    if let Err(e) = validator.validate_minting_tx(minting_tx) {
                         debug!(
-                            height = mining_tx.block_height,
+                            height = minting_tx.block_height,
                             error = %e,
-                            "Discarding stale mining tx (chain advanced)"
+                            "Discarding stale minting tx (chain advanced)"
                         );
                         continue;
                     }
 
                     info!(
-                        height = mining_tx.block_height,
-                        priority = mined_tx.pow_priority,
-                        "Submitting mining tx to consensus"
+                        height = minting_tx.block_height,
+                        priority = minted_tx.pow_priority,
+                        "Submitting minting tx to consensus"
                     );
 
                     // Serialize and submit to consensus
-                    let tx_bytes = bincode::serialize(mining_tx)
-                        .expect("Failed to serialize mining tx");
-                    let tx_hash = mining_tx.hash();
+                    let tx_bytes = bincode::serialize(minting_tx)
+                        .expect("Failed to serialize minting tx");
+                    let tx_hash = minting_tx.hash();
 
-                    consensus.submit_mining_tx(tx_hash, mined_tx.pow_priority, tx_bytes);
+                    consensus.submit_minting_tx(tx_hash, minted_tx.pow_priority, tx_bytes);
                 }
 
                 // Also check for pending transfer transactions in mempool
@@ -546,9 +546,9 @@ async fn run_async(config: Config, config_path: &Path, mine: bool) -> Result<()>
         }
     }
 
-    node.stop_mining_public();
-    // Update RPC mining status
-    if let Ok(mut active) = mining_active.write() {
+    node.stop_minting_public();
+    // Update RPC minting status
+    if let Ok(mut active) = minting_active.write() {
         *active = false;
     }
     Ok(())
@@ -601,9 +601,9 @@ fn build_block_from_externalized(
     BlockBuilder::build_from_externalized(
         values,
         |hash| {
-            // Get mining tx from consensus cache
+            // Get minting tx from consensus cache
             consensus.get_tx_data(hash).and_then(|bytes| {
-                bincode::deserialize::<MiningTx>(&bytes).ok()
+                bincode::deserialize::<MintingTx>(&bytes).ok()
             })
         },
         |hash| {

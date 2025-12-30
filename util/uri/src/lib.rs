@@ -13,7 +13,7 @@ mod uri;
 pub use uri::{Uri, UriParseError};
 
 //
-// Mobile-coin specific uri schemes and objects associated to them
+// Botho-specific URI schemes
 //
 
 /// A URI with the Admin scheme ([insecure-]mca://)
@@ -22,10 +22,6 @@ pub type AdminUri = Uri<AdminScheme>;
 pub type ConsensusClientUri = Uri<ConsensusClientScheme>;
 /// A URI with the Consensus Peer scheme ([insecure-]mcp://)
 pub type ConsensusPeerUri = Uri<ConsensusPeerScheme>;
-/// A URI with the Fog scheme ([insecure-]fog://)
-pub type FogUri = Uri<FogScheme>;
-/// A URI with the Watcher scheme ([insecure-]watcher://)
-pub type WatcherUri = Uri<WatcherScheme>;
 
 // Conversions
 
@@ -91,35 +87,6 @@ impl UriScheme for AdminScheme {
     const DEFAULT_INSECURE_PORT: u16 = 9090;
 }
 
-/// Fog Uri Scheme
-/// Used in public addresses, and when talking to fog report server
-#[derive(Debug, Hash, Ord, PartialOrd, Eq, PartialEq, Clone)]
-pub struct FogScheme {}
-
-impl UriScheme for FogScheme {
-    /// The part before the '://' of a URL.
-    const SCHEME_SECURE: &'static str = "fog";
-    const SCHEME_INSECURE: &'static str = "insecure-fog";
-
-    /// Default port numbers
-    const DEFAULT_SECURE_PORT: u16 = 443;
-    const DEFAULT_INSECURE_PORT: u16 = 3225;
-}
-
-/// Watcher Uri Scheme
-/// Used in public addresses, and when talking to fog report server
-#[derive(Debug, Hash, Ord, PartialOrd, Eq, PartialEq, Clone)]
-pub struct WatcherScheme {}
-
-impl UriScheme for WatcherScheme {
-    /// The part before the '://' of a URL.
-    const SCHEME_SECURE: &'static str = "watcher";
-    const SCHEME_INSECURE: &'static str = "insecure-watcher";
-
-    /// Default port numbers
-    const DEFAULT_SECURE_PORT: u16 = 443;
-    const DEFAULT_INSECURE_PORT: u16 = 3226;
-}
 
 #[cfg(test)]
 mod consensus_client_uri_tests {

@@ -46,7 +46,7 @@ Bitcoin's security budget will eventually depend entirely on transaction fees. B
 - Smooth decay with ~4-year halving
 - Permanent floor: 0.6 BTH per block forever
 
-This guarantees miners are always incentivized to secure the network, without relying on ever-increasing transaction volume.
+This guarantees minters are always incentivized to secure the network, without relying on ever-increasing transaction volume.
 
 ## Technical Foundation
 
@@ -55,7 +55,7 @@ Botho combines proven cryptographic building blocks in a novel architecture:
 | Component | Technology | Benefit |
 |:--|:--|:--|
 | Consensus | Stellar Consensus Protocol (SCP) | 3-5 second finality, Byzantine fault tolerance |
-| Mining | Parallel proof-of-work | Fair block selection, not fastest-propagation-wins |
+| Minting | Parallel proof-of-work | Fair block selection, not fastest-propagation-wins |
 | Privacy | CryptoNote stealth addresses | Unlinkable transactions |
 | Quantum safety | ML-KEM-768 + ML-DSA-65 | Future-proof key exchange and signatures |
 | Fee system | Cluster-tagged progressive fees | Economic equality without identity |
@@ -98,8 +98,8 @@ cargo build --release
 # Start node
 ./target/release/botho run
 
-# Start node with mining
-./target/release/botho run --mine
+# Start node with minting
+./target/release/botho run --mint
 ```
 
 ### CLI Commands
@@ -108,7 +108,7 @@ cargo build --release
 |:--|:--|
 | `botho init` | Create wallet with recovery phrase |
 | `botho run` | Start node and sync blockchain |
-| `botho run --mine` | Start node with mining enabled |
+| `botho run --mint` | Start node with minting enabled |
 | `botho status` | Show sync and wallet status |
 | `botho balance` | Show wallet balance |
 | `botho address` | Show receiving address |
@@ -124,7 +124,7 @@ Visit [botho.io](https://botho.io) to use the web wallet without running a node.
 |:--|:--|
 | [Getting Started](./docs/getting-started.md) | Build, install, and run your first node |
 | [Architecture](./docs/architecture.md) | System design and component overview |
-| [Mining](./docs/mining.md) | Mining setup and economics |
+| [Minting](./docs/minting.md) | Mining setup and economics |
 | [Privacy](./docs/privacy.md) | Privacy features and cryptography |
 | [Progressive Fees](./docs/progressive-fees.md) | How the anti-hoarding fee system works |
 

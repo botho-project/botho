@@ -51,12 +51,12 @@ Botho supports hybrid quantum-safe transactions using ML-KEM-768 and ML-DSA-65.
     content: `
 ## Stellar Consensus Protocol
 
-Botho uses the Stellar Consensus Protocol (SCP) for consensus, providing fast finality without proof-of-work mining.
+Botho uses the Stellar Consensus Protocol (SCP) for consensus, providing fast finality without proof-of-work minting.
 
 ### Key Properties
 
 - Fast finality: Transactions are final in seconds
-- Low energy: No energy-intensive mining
+- Low energy: No energy-intensive minting
 - Decentralized: Each node chooses its own quorum
 - Byzantine fault tolerant: Survives malicious nodes
     `,
@@ -84,7 +84,7 @@ cargo build --release
 
 - botho init: Create wallet with 24-word mnemonic
 - botho run: Start node and sync blockchain
-- botho run --mine: Start node with mining enabled
+- botho run --mint: Start node with minting enabled
 - botho status: Show sync and wallet status
 - botho balance: Show wallet balance
 - botho address: Show receiving address

@@ -65,7 +65,7 @@ ctrlc = "3"
 num_cpus = "1"
 
 # Storage
-lmdb = { package = "lmdb-rkv", version = "0.14" }
+heed = "0.20"
 bincode = "1"
 
 # Logging

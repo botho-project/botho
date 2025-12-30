@@ -12,7 +12,7 @@ mod state;
 
 pub use agent::{Action, Agent, AgentId};
 pub use agents::{
-    MarketMakerAgent, MerchantAgent, MinerAgent, MixerServiceAgent, RetailUserAgent, WhaleAgent,
+    MarketMakerAgent, MerchantAgent, MinterAgent, MixerServiceAgent, RetailUserAgent, WhaleAgent,
     WhaleStrategy,
 };
 pub use metrics::{Metrics, SimulationMetrics};

@@ -20,11 +20,11 @@ pub struct ConsensusValue {
     /// The transaction hash (32 bytes)
     pub tx_hash: [u8; 32],
 
-    /// Whether this is a mining transaction
-    pub is_mining_tx: bool,
+    /// Whether this is a minting transaction
+    pub is_minting_tx: bool,
 
     /// Priority (higher = more likely to be included first)
-    /// Mining transactions use their PoW hash as priority
+    /// Minting transactions use their PoW hash as priority
     pub priority: u64,
 }
 
@@ -39,16 +39,16 @@ impl ConsensusValue {
 
         Self {
             tx_hash,
-            is_mining_tx: false,
+            is_minting_tx: false,
             priority,
         }
     }
 
-    /// Create a new consensus value for a mining transaction
-    pub fn from_mining_tx(tx_hash: [u8; 32], pow_priority: u64) -> Self {
+    /// Create a new consensus value for a minting transaction
+    pub fn from_minting_tx(tx_hash: [u8; 32], pow_priority: u64) -> Self {
         Self {
             tx_hash,
-            is_mining_tx: true,
+            is_minting_tx: true,
             priority: pow_priority,
         }
     }
@@ -57,7 +57,7 @@ impl ConsensusValue {
     pub fn hash(&self) -> ConsensusValueHash {
         let mut hasher = Sha256::new();
         hasher.update(self.tx_hash);
-        hasher.update([self.is_mining_tx as u8]);
+        hasher.update([self.is_minting_tx as u8]);
         hasher.update(self.priority.to_le_bytes());
         ConsensusValueHash(hasher.finalize().into())
     }
@@ -67,7 +67,7 @@ impl fmt::Debug for ConsensusValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ConsensusValue")
             .field("tx_hash", &hex::encode(&self.tx_hash[..8]))
-            .field("is_mining_tx", &self.is_mining_tx)
+            .field("is_minting_tx", &self.is_minting_tx)
             .field("priority", &self.priority)
             .finish()
     }
@@ -75,7 +75,7 @@ impl fmt::Debug for ConsensusValue {
 
 impl fmt::Display for ConsensusValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let prefix = if self.is_mining_tx { "mining" } else { "tx" };
+        let prefix = if self.is_minting_tx { "minting" } else { "tx" };
         write!(f, "{}:{}", prefix, hex::encode(&self.tx_hash[..8]))
     }
 }
@@ -104,19 +104,19 @@ mod tests {
     }
 
     #[test]
-    fn test_mining_vs_regular() {
-        let mining = ConsensusValue::from_mining_tx([1u8; 32], 1000);
+    fn test_minting_vs_regular() {
+        let minting = ConsensusValue::from_minting_tx([1u8; 32], 1000);
         let regular = ConsensusValue::from_transaction([1u8; 32]);
 
-        assert!(mining.is_mining_tx);
-        assert!(!regular.is_mining_tx);
+        assert!(minting.is_minting_tx);
+        assert!(!regular.is_minting_tx);
     }
 
     #[test]
     fn test_hash_deterministic() {
         let v = ConsensusValue {
             tx_hash: [42u8; 32],
-            is_mining_tx: true,
+            is_minting_tx: true,
             priority: 12345,
         };
 

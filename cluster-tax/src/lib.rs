@@ -14,11 +14,11 @@
 //! |---------|---------|----------------------------------------|
 //! | Plain   | None    | 0.05% flat (transparent, Bitcoin-like) |
 //! | Hidden  | Full    | 0.2% × cluster_factor (1x-6x)          |
-//! | Mining  | N/A     | No fee (PoW reward claim)              |
+//! | Minting | N/A     | No fee (PoW reward claim)              |
 //!
 //! ## Key Concepts
 //!
-//! - **Cluster**: An identity derived from coin creation (mining rewards).
+//! - **Cluster**: An identity derived from coin creation (minting rewards).
 //!   A lineage marker that fades through trade via decay.
 //! - **Tag Vector**: Each UTXO carries weights indicating what fraction of its
 //!   value traces back to each cluster origin.
@@ -32,7 +32,7 @@
 //!   don't need privacy (exchanges, public payments, transparency by choice).
 //! - **Hidden transactions** pay for the societal cost of moving money in the
 //!   dark. Whales can opt out by going transparent.
-//! - **Mining transactions** create new coins via PoW and establish new clusters.
+//! - **Minting transactions** create new coins via PoW and establish new clusters.
 
 pub mod analysis;
 pub mod crypto;
@@ -58,7 +58,7 @@ pub use cluster::{ClusterId, ClusterWealth};
 // - Phase 2 (Tail): Fixed tail reward, inflation-targeting difficulty
 //
 // Key insight: Difficulty should adapt to hit monetary targets, not rewards.
-// This gives miners predictable income while absorbing fee volatility.
+// This gives minters predictable income while absorbing fee volatility.
 pub use monetary::{DifficultyController, MonetaryPolicy, MonetaryState, MonetaryStats};
 
 pub use fee_curve::{

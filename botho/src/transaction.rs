@@ -764,8 +764,8 @@ impl TxInputs {
 
 /// A transfer transaction (user-initiated, spending existing UTXOs).
 ///
-/// This is the main transaction type for value transfers. Mining/coinbase
-/// transactions are handled separately by `MiningTx` in block.rs.
+/// This is the main transaction type for value transfers. Minting/coinbase
+/// transactions are handled separately by `MintingTx` in block.rs.
 ///
 /// # Privacy Model
 ///

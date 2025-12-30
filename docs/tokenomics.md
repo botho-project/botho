@@ -46,7 +46,7 @@ After Phase 1, Botho transitions to perpetual tail emission targeting **2% annua
 
 **Why tail emission?**
 
-- **Security budget**: Ensures miners always have incentive to secure the network
+- **Security budget**: Ensures minters always have incentive to secure the network
 - **Lost coin replacement**: Compensates for coins lost to forgotten keys, deaths, etc.
 - **Predictable monetary policy**: 2% is below typical fiat inflation
 
@@ -89,7 +89,7 @@ In addition to the minimum fee, Botho implements a novel **progressive fee syste
 
 #### How It Works
 
-1. **Clusters**: Each mining reward creates a unique "cluster" identity
+1. **Clusters**: Each minting reward creates a unique "cluster" identity
 2. **Tag Vectors**: Every UTXO carries a sparse vector tracking what fraction of its value traces back to each cluster origin
 3. **Cluster Wealth**: Total value in the system tagged to a given cluster: `W = Σ(balance × tag_weight)`
 4. **Progressive Rate**: Fee rate increases with cluster wealth via sigmoid curve
@@ -113,7 +113,7 @@ fee_rate = sigmoid(cluster_wealth)
 Splitting coins across addresses doesn't reduce fees because:
 
 - Fee rate depends on **cluster wealth**, not transaction size or account count
-- All UTXOs tracing to the same mining origin pay the same rate
+- All UTXOs tracing to the same minting origin pay the same rate
 - The only way to reduce fees is genuine economic activity that diffuses coins
 
 #### Tag Decay
@@ -201,7 +201,7 @@ This ensures:
 
 ### Why No Pre-mine?
 
-- **Fair distribution**: Everyone starts equal; early miners take on risk
+- **Fair distribution**: Everyone starts equal; early minters take on risk
 - **Credibility**: No insider advantage or founder enrichment
 - **Decentralization**: No concentrated holdings from day one
 
@@ -224,7 +224,7 @@ This ensures:
 |--------|-------|---------|--------|----------|
 | Max supply | Unlimited (2% tail) | 21M | Unlimited (0.8% tail) | Unlimited |
 | Pre-mine | None | None | None | ~72M ETH |
-| Fee destination | Burned | To miners | To miners | Partially burned |
+| Fee destination | Burned | To minters | To minters | Partially burned |
 | Progressive fees | Yes (cluster-based) | No | No | No |
 | Block time | 60s | 600s | 120s | 12s |
 

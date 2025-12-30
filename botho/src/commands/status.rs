@@ -53,20 +53,20 @@ pub fn run(config_path: &Path) -> Result<()> {
     println!("  Gossip port: {}", config.network.gossip_port(network));
     println!("  Bootstrap peers: {}", config.network.bootstrap_peers(network).len());
     if config.network.bootstrap_peers.is_empty() {
-        println!("  (No bootstrap peers - solo mining only)");
+        println!("  (No bootstrap peers - solo minting only)");
     }
     println!();
-    println!("Mining:");
+    println!("Minting:");
     println!(
         "  Enabled in config: {}",
-        if config.mining.enabled { "yes" } else { "no" }
+        if config.minting.enabled { "yes" } else { "no" }
     );
     println!(
         "  Threads: {}",
-        if config.mining.threads == 0 {
+        if config.minting.threads == 0 {
             "auto".to_string()
         } else {
-            config.mining.threads.to_string()
+            config.minting.threads.to_string()
         }
     );
     println!();

@@ -8,7 +8,10 @@ rust-version = { workspace = true }
 
 [features]
 std = ["displaydoc/std", "bth-util-serial/std"]
+# Enable slog-based logging (required for SCP tests and legacy code)
+slog = ["dep:slog"]
 log = [
+    "slog",
     "backtrace",
     "chrono/clock",
     "bth-util-logger-macros",

@@ -22,11 +22,11 @@ bootstrap_peers = [
 # Quorum configuration for consensus
 [network.quorum]
 mode = "recommended"  # or "explicit"
-min_peers = 1         # For recommended mode: minimum peers before mining
+min_peers = 1         # For recommended mode: minimum peers before minting
 threshold = 2         # For explicit mode: required agreement count
 members = []          # For explicit mode: list of trusted peer IDs
 
-[mining]
+[minting]
 enabled = false
 threads = 0  # 0 = auto-detect CPU count
 ```
@@ -57,7 +57,7 @@ Controls how the node participates in SCP consensus.
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `mode` | string | "recommended" | Either "recommended" or "explicit" |
-| `min_peers` | integer | 1 | (Recommended mode) Minimum peers before mining |
+| `min_peers` | integer | 1 | (Recommended mode) Minimum peers before minting |
 | `threshold` | integer | 2 | (Explicit mode) Required agreement count |
 | `members` | array | [] | (Explicit mode) List of trusted peer IDs |
 
@@ -92,7 +92,7 @@ mode = "explicit"
 threshold = 2
 members = [
     "12D3KooWBootstrap...",
-    "12D3KooWMiner1...",
+    "12D3KooWMinter1...",
 ]
 ```
 
@@ -101,19 +101,19 @@ Use explicit mode for:
 - Specific trust relationships
 - High-security deployments
 
-### [mining]
+### [minting]
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `enabled` | boolean | false | Whether to mine |
-| `threads` | integer | 0 | Number of mining threads (0 = auto-detect) |
+| `threads` | integer | 0 | Number of minting threads (0 = auto-detect) |
 
 ## Example Configurations
 
-### First Miner Joining Network
+### First Minter Joining Network
 
 ```toml
-[mining]
+[minting]
 enabled = true
 threads = 4
 
@@ -123,10 +123,10 @@ threshold = 2
 members = ["12D3KooWBootstrapPeerIdHere..."]
 ```
 
-### Established Miner (Auto-Trust)
+### Established Minter (Auto-Trust)
 
 ```toml
-[mining]
+[minting]
 enabled = true
 
 [network.quorum]
@@ -134,10 +134,10 @@ mode = "recommended"
 min_peers = 2
 ```
 
-### Bootstrap Server (No Mining)
+### Bootstrap Server (No Minting)
 
 ```toml
-[mining]
+[minting]
 enabled = false
 
 [network.quorum]
@@ -145,10 +145,10 @@ mode = "recommended"
 min_peers = 1
 ```
 
-### Non-Mining Full Node
+### Non-Minting Full Node
 
 ```toml
-[mining]
+[minting]
 enabled = false
 
 [network]

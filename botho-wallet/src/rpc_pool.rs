@@ -385,7 +385,7 @@ pub struct NodeStatus {
     pub tip_hash: String,
     pub peer_count: usize,
     pub mempool_size: usize,
-    pub mining_active: bool,
+    pub minting_active: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]

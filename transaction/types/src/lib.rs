@@ -13,7 +13,10 @@ extern crate alloc;
 pub use crate::{
     amount::{Amount, AmountError},
     block_version::{BlockVersion, BlockVersionError, BlockVersionIterator},
-    constants::Network,
+    constants::{
+        Network, MAX_BLOCK_SIZE, MAX_INPUTS, MAX_OUTPUTS, MAX_SCP_MESSAGE_SIZE,
+        MAX_TOMBSTONE_BLOCKS, MAX_TRANSACTIONS_PER_BLOCK, MAX_TRANSACTION_SIZE, RING_SIZE,
+    },
     token::TokenId,
     unmasked_amount::UnmaskedAmount,
 };

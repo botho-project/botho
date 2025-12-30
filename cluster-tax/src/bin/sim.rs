@@ -617,7 +617,7 @@ mod cli {
         verbose: bool,
     ) {
         use bth_cluster_tax::simulation::{
-            run_simulation, Agent, AgentId, MerchantAgent, MinerAgent, MixerServiceAgent,
+            run_simulation, Agent, AgentId, MerchantAgent, MinterAgent, MixerServiceAgent,
             RetailUserAgent, SimulationConfig, WhaleAgent,
         };
         use bth_cluster_tax::simulation::agents::whale::WhaleStrategy;
@@ -632,10 +632,10 @@ mod cli {
         // Calculate total supply
         let retail_balance = 1000u64;
         let merchant_balance = 5000u64;
-        let miner_balance = 10000u64;
+        let minter_balance = 10000u64;
         let base_supply = (num_retail as u64 * retail_balance)
             + (num_merchants as u64 * merchant_balance)
-            + miner_balance;
+            + minter_balance;
         let whale_wealth = (base_supply as f64 * whale_fraction / (1.0 - whale_fraction)) as u64;
         let total_supply = base_supply + whale_wealth;
 
@@ -683,15 +683,15 @@ mod cli {
         whale.account_mut_ref().balance = whale_wealth;
         agents.push(Box::new(whale));
 
-        // Create miner
-        let miner_id = AgentId(next_id);
+        // Create minter
+        let minter_id = AgentId(next_id);
         next_id += 1;
-        let mut miner = MinerAgent::new(miner_id)
+        let mut minter = MinterAgent::new(minter_id)
             .with_buyers(merchant_ids)
             .with_block_reward(100)
-            .with_mining_interval(10);
-        miner.account_mut_ref().balance = miner_balance;
-        agents.push(Box::new(miner));
+            .with_minting_interval(10);
+        minter.account_mut_ref().balance = minter_balance;
+        agents.push(Box::new(minter));
 
         // Create mixer
         let mixer_id = AgentId(next_id);
@@ -1099,7 +1099,7 @@ mod cli {
         flat_rate_bps: u32,
     ) {
         use bth_cluster_tax::simulation::{
-            run_simulation, Agent, AgentId, MerchantAgent, MinerAgent,
+            run_simulation, Agent, AgentId, MerchantAgent, MinterAgent,
             RetailUserAgent, SimulationConfig, WhaleAgent,
         };
         use bth_cluster_tax::simulation::agents::whale::WhaleStrategy;
@@ -1132,10 +1132,10 @@ mod cli {
             // Calculate total supply
             let retail_balance = 1_000u64;
             let merchant_balance = 10_000u64;
-            let miner_balance = 5_000u64;
+            let minter_balance = 5_000u64;
             let base_supply = (num_retail as u64 * retail_balance)
                 + (num_merchants as u64 * merchant_balance)
-                + miner_balance;
+                + minter_balance;
             let whale_wealth_total = (base_supply as f64 * whale_fraction / (1.0 - whale_fraction)) as u64;
             let whale_wealth_each = whale_wealth_total / num_whales.max(1) as u64;
 
@@ -1179,14 +1179,14 @@ mod cli {
                 agents.push(Box::new(whale));
             }
 
-            // Create miner
-            let miner_id = AgentId(next_id);
-            let mut miner = MinerAgent::new(miner_id)
+            // Create minter
+            let minter_id = AgentId(next_id);
+            let mut minter = MinterAgent::new(minter_id)
                 .with_buyers(merchant_ids)
                 .with_block_reward(100)
-                .with_mining_interval(10);
-            miner.account_mut_ref().balance = miner_balance;
-            agents.push(Box::new(miner));
+                .with_minting_interval(10);
+            minter.account_mut_ref().balance = minter_balance;
+            agents.push(Box::new(minter));
 
             let total_supply = base_supply + whale_wealth_total;
             (agents, total_supply)

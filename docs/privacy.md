@@ -55,7 +55,7 @@ Botho implements a novel **cluster-based progressive fee** system designed to re
 
 Transaction fees are based on coin *ancestry*, not account identity:
 
-1. **Clusters**: Each coin-creation event (mining reward) spawns a new "cluster" identity
+1. **Clusters**: Each coin-creation event (minting reward) spawns a new "cluster" identity
 2. **Tag Vectors**: Every account carries a sparse vector of weights indicating what fraction of its coins trace back to each cluster origin
 3. **Cluster Wealth**: The total value in the system tagged to a given cluster (`W = Σ balance × tag_weight`)
 4. **Progressive Fees**: Fee rate increases with cluster wealth via a sigmoid curve
@@ -69,7 +69,7 @@ Fee Rate = sigmoid(cluster_wealth) → ranges from 0.05% to 30%
 Splitting transactions or creating multiple accounts doesn't reduce fees because:
 
 - Fee rate depends on **cluster wealth**, not transaction size or account count
-- All accounts holding coins from the same mining origin pay the same rate
+- All accounts holding coins from the same minting origin pay the same rate
 - The only way to reduce fees is through genuine economic activity that diffuses coins
 
 ### Tag Decay

@@ -1,35 +1,35 @@
-# Mining Guide
+# Minting Guide
 
 Botho uses a **parallel proof-of-work** mechanism integrated with Stellar Consensus Protocol (SCP) for Byzantine fault tolerance.
 
-## How Mining Works
+## How Minting Works
 
-### The Mining Process
+### The Minting Process
 
-1. **Find a Valid Nonce**: Miners search for a nonce that produces a hash below the difficulty target:
+1. **Find a Valid Nonce**: Minters search for a nonce that produces a hash below the difficulty target:
 
    ```
-   SHA256(nonce || prev_block_hash || miner_view_key || miner_spend_key) < difficulty_target
+   SHA256(nonce || prev_block_hash || minter_view_key || minter_spend_key) < difficulty_target
    ```
 
-2. **Submit Mining Transaction**: Valid proofs are wrapped in a `MiningTx` and submitted to the consensus network
+2. **Submit Minting Transaction**: Valid proofs are wrapped in a `MintingTx` and submitted to the consensus network
 
-3. **SCP Decides the Winner**: Multiple miners may find valid solutions simultaneously—the SCP quorum determines which block is accepted
+3. **SCP Decides the Winner**: Multiple minters may find valid solutions simultaneously—the SCP quorum determines which block is accepted
 
-### Why Parallel Mining?
+### Why Parallel Minting?
 
 Unlike Bitcoin where the first valid block to propagate "wins," Botho separates proof-of-work from block selection:
 
-- **Multiple Valid Solutions**: Any miner who finds a valid nonce can submit a mining transaction
-- **Consensus-Based Selection**: The SCP quorum (not network propagation speed) determines which miner's block is included
+- **Multiple Valid Solutions**: Any minter who finds a valid nonce can submit a minting transaction
+- **Consensus-Based Selection**: The SCP quorum (not network propagation speed) determines which minter's block is included
 - **Byzantine Fault Tolerance**: Even if some nodes are malicious or offline, consensus proceeds correctly
 - **Fair Selection**: Network latency doesn't determine the winner—the quorum does
 
 ## Quorum Requirements
 
-**Solo mining is impossible by design.** Mining requires a satisfiable quorum with at least one other peer.
+**Solo minting is impossible by design.** Minting requires a satisfiable quorum with at least one other peer.
 
-### Mining State Machine
+### Minting State Machine
 
 ```
 ┌──────────┐  peer connects    ┌──────────┐
@@ -40,10 +40,10 @@ Unlike Bitcoin where the first valid block to propagate "wins," Botho separates 
               quorum lost
 ```
 
-- On peer connect: Re-evaluate quorum, start mining if satisfied
-- On peer disconnect: Re-evaluate quorum, stop mining if lost
+- On peer connect: Re-evaluate quorum, start minting if satisfied
+- On peer disconnect: Re-evaluate quorum, stop minting if lost
 
-## Starting Mining
+## Starting Minting
 
 ### Basic Setup
 
@@ -54,14 +54,14 @@ Unlike Bitcoin where the first valid block to propagate "wins," Botho separates 
 
 2. Edit `~/.botho/config.toml`:
    ```toml
-   [mining]
+   [minting]
    enabled = true
    threads = 0  # 0 = auto-detect CPU count
    ```
 
-3. Run with mining:
+3. Run with minting:
    ```bash
-   botho run --mine
+   botho run --mint
    ```
 
 ### Thread Configuration
@@ -71,11 +71,11 @@ Unlike Bitcoin where the first valid block to propagate "wins," Botho separates 
 | 0       | Auto-detect (uses all available CPUs) |
 | 1-N     | Use exactly N threads |
 
-For dedicated mining machines, leave at 0. For machines doing other work, set to fewer threads than your CPU count.
+For dedicated minting machines, leave at 0. For machines doing other work, set to fewer threads than your CPU count.
 
 ## Emission Schedule
 
-Mining rewards follow a smooth decay curve with perpetual tail emission:
+Minting rewards follow a smooth decay curve with perpetual tail emission:
 
 | Parameter | Value |
 |-----------|-------|
@@ -113,19 +113,19 @@ Clamped to prevent extreme swings (max 4x up or down per adjustment).
 
 ## Transaction Fees
 
-Miners collect transaction fees in addition to block rewards.
+Minters collect transaction fees in addition to block rewards.
 
 | Parameter | Value |
 |-----------|-------|
 | Minimum fee | 0.0001 credits |
-| Fee allocation | 100% to block miner |
+| Fee allocation | 100% to block minter |
 | Priority | Fee-per-byte |
 
 The mempool prioritizes transactions by fee-per-byte, so higher-fee transactions get included first.
 
 ## Monitoring
 
-### Check Mining Status
+### Check Minting Status
 
 ```bash
 botho status
@@ -140,7 +140,7 @@ Shows:
 ### Web Dashboard
 
 When running with `botho run`, a web dashboard is available showing:
-- Mining statistics
+- Minting statistics
 - Network topology
 - Wallet information
 - Recent blocks
@@ -150,13 +150,13 @@ When running with `botho run`, a web dashboard is available showing:
 ### Factors Affecting Profitability
 
 1. **Hardware**: More CPU cores = higher hashrate
-2. **Electricity costs**: PoW mining consumes significant power
+2. **Electricity costs**: PoW minting consumes significant power
 3. **Network difficulty**: Adjusts based on total network hashrate
-4. **Quorum stability**: Unstable peers can interrupt mining
+4. **Quorum stability**: Unstable peers can interrupt minting
 
 ### No GPU/ASIC Advantage (Currently)
 
-Botho uses SHA-256 for proof-of-work. While this is ASIC-friendly, the small network size means CPU mining is currently viable.
+Botho uses SHA-256 for proof-of-work. While this is ASIC-friendly, the small network size means CPU minting is currently viable.
 
 ## Troubleshooting
 
@@ -170,7 +170,7 @@ Your node doesn't have enough peers to satisfy the quorum requirements.
 - Lower `min_peers` in recommended mode
 - Ensure firewall allows port 8443
 
-### "Mining paused - peer disconnected"
+### "Minting paused - peer disconnected"
 
 A peer required for your quorum went offline.
 

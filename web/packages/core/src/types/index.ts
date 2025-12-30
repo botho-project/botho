@@ -24,7 +24,7 @@ export type Timestamp = number
 // Transaction Types
 // ============================================================================
 
-export type TransactionType = 'send' | 'receive' | 'mining'
+export type TransactionType = 'send' | 'receive' | 'minting'
 export type TransactionStatus = 'pending' | 'confirmed' | 'failed'
 export type PrivacyLevel = 'plain' | 'hidden' | 'ring' // ring = ring signatures
 
@@ -112,19 +112,19 @@ export interface Block {
   previousHash: BlockHash
   transactionCount: number
   size: number
-  miner?: Address
+  minter?: Address
   reward: Amount
   difficulty: bigint
 }
 
 // ============================================================================
-// Mining Types
+// Minting Types
 // ============================================================================
 
-export type MiningStatus = 'idle' | 'mining' | 'paused'
+export type MintingStatus = 'idle' | 'minting' | 'paused'
 
-export interface MiningStats {
-  status: MiningStatus
+export interface MintingStats {
+  status: MintingStatus
   hashRate: number
   blocksFound: number
   totalRewards: Amount

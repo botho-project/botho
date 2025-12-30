@@ -1,7 +1,8 @@
 use bth_account_keys::PublicAddress;
 use bth_crypto_keys::{RistrettoPublic, RistrettoSignature};
 use bth_transaction_types::Network;
-use lmdb::{Cursor, Database, Environment, EnvironmentFlags, Transaction, WriteFlags};
+use heed::types::{Bytes, U64};
+use heed::{Database, Env, EnvOpenOptions, RoTxn, RwTxn};
 use std::fs;
 use std::path::Path;
 use tracing::{debug, info};
@@ -10,32 +11,31 @@ use super::{ChainState, LedgerError};
 use crate::block::Block;
 use crate::transaction::{Transaction as BothoTransaction, TxInputs, TxOutput, Utxo, UtxoId};
 
-/// LMDB-backed ledger storage
+/// LMDB-backed ledger storage using heed
 pub struct Ledger {
-    env: Environment,
+    env: Env,
     /// The network this ledger belongs to
     network: Network,
-    /// blocks: height -> Block
-    blocks_db: Database,
-    /// metadata: key -> value (for chain state)
-    meta_db: Database,
-    /// utxos: UtxoId (36 bytes) -> Utxo
-    utxo_db: Database,
-    /// address_index: (view_key || spend_key) (64 bytes) -> [UtxoId (36 bytes), ...]
-    /// Maps addresses to their UTXOs for efficient balance lookups
-    address_index_db: Database,
+    /// blocks: height (u64) -> Block (bytes)
+    blocks_db: Database<U64<heed::byteorder::LE>, Bytes>,
+    /// metadata: key (bytes) -> value (bytes)
+    meta_db: Database<Bytes, Bytes>,
+    /// utxos: UtxoId (36 bytes) -> Utxo (bytes)
+    utxo_db: Database<Bytes, Bytes>,
+    /// address_index: target_key (32 bytes) -> [UtxoId (36 bytes), ...]
+    /// Maps target keys to their UTXOs for efficient lookups
+    address_index_db: Database<Bytes, Bytes>,
     /// key_images: key_image (32 bytes) -> height (8 bytes)
     /// Tracks spent key images to prevent double-spending with ring signatures.
-    /// Value is the block height where the key image was first seen.
-    key_images_db: Database,
+    key_images_db: Database<Bytes, Bytes>,
 }
 
-// Metadata keys (fixed size for LMDB compatibility)
-const META_HEIGHT: &[u8; 6] = b"height";
-const META_TIP_HASH: &[u8; 8] = b"tip_hash";
-const META_TOTAL_MINED: &[u8; 11] = b"total_mined";
-const META_FEES_BURNED: &[u8; 11] = b"fees_burned";
-const META_DIFFICULTY: &[u8; 10] = b"difficulty";
+// Metadata keys
+const META_HEIGHT: &[u8] = b"height";
+const META_TIP_HASH: &[u8] = b"tip_hash";
+const META_TOTAL_MINED: &[u8] = b"total_mined";
+const META_FEES_BURNED: &[u8] = b"fees_burned";
+const META_DIFFICULTY: &[u8] = b"difficulty";
 
 impl Ledger {
     /// Open or create a ledger at the given path (defaults to Testnet for backward compatibility)
@@ -50,20 +50,33 @@ impl Ledger {
     pub fn open_for_network(path: &Path, network: Network) -> Result<Self, LedgerError> {
         // Create directory if needed
         fs::create_dir_all(path).map_err(|e| {
-            LedgerError::Database(lmdb::Error::Other(e.raw_os_error().unwrap_or(0)))
+            LedgerError::Database(format!("Failed to create directory: {}", e))
         })?;
 
-        let env = Environment::new()
-            .set_flags(EnvironmentFlags::NO_SUB_DIR)
-            .set_max_dbs(5)
-            .set_map_size(1024 * 1024 * 1024) // 1GB
-            .open(path.join("ledger.mdb").as_ref())?;
+        let env = unsafe {
+            EnvOpenOptions::new()
+                .max_dbs(5)
+                .map_size(1024 * 1024 * 1024) // 1GB
+                .open(path)
+        }.map_err(|e| LedgerError::Database(format!("Failed to open environment: {}", e)))?;
 
-        let blocks_db = env.create_db(Some("blocks"), lmdb::DatabaseFlags::empty())?;
-        let meta_db = env.create_db(Some("meta"), lmdb::DatabaseFlags::empty())?;
-        let utxo_db = env.create_db(Some("utxos"), lmdb::DatabaseFlags::empty())?;
-        let address_index_db = env.create_db(Some("address_index"), lmdb::DatabaseFlags::empty())?;
-        let key_images_db = env.create_db(Some("key_images"), lmdb::DatabaseFlags::empty())?;
+        // Create/open databases
+        let mut wtxn = env.write_txn()
+            .map_err(|e| LedgerError::Database(format!("Failed to start write txn: {}", e)))?;
+
+        let blocks_db = env.create_database(&mut wtxn, Some("blocks"))
+            .map_err(|e| LedgerError::Database(format!("Failed to create blocks db: {}", e)))?;
+        let meta_db = env.create_database(&mut wtxn, Some("meta"))
+            .map_err(|e| LedgerError::Database(format!("Failed to create meta db: {}", e)))?;
+        let utxo_db = env.create_database(&mut wtxn, Some("utxos"))
+            .map_err(|e| LedgerError::Database(format!("Failed to create utxos db: {}", e)))?;
+        let address_index_db = env.create_database(&mut wtxn, Some("address_index"))
+            .map_err(|e| LedgerError::Database(format!("Failed to create address_index db: {}", e)))?;
+        let key_images_db = env.create_database(&mut wtxn, Some("key_images"))
+            .map_err(|e| LedgerError::Database(format!("Failed to create key_images db: {}", e)))?;
+
+        wtxn.commit()
+            .map_err(|e| LedgerError::Database(format!("Failed to commit: {}", e)))?;
 
         let ledger = Self {
             env,
@@ -95,81 +108,71 @@ impl Ledger {
     /// Initialize the ledger with the genesis block for this network.
     fn init_genesis(&self) -> Result<(), LedgerError> {
         let genesis = Block::genesis_for_network(self.network);
-        let mut txn = self.env.begin_rw_txn()?;
+        let mut wtxn = self.env.write_txn()
+            .map_err(|e| LedgerError::Database(format!("Failed to start write txn: {}", e)))?;
 
         // Store genesis block
         let block_bytes = bincode::serialize(&genesis)
             .map_err(|e| LedgerError::Serialization(e.to_string()))?;
-        txn.put(
-            self.blocks_db,
-            &0u64.to_le_bytes(),
-            &block_bytes,
-            WriteFlags::empty(),
-        )?;
+        self.blocks_db.put(&mut wtxn, &0u64, &block_bytes)
+            .map_err(|e| LedgerError::Database(format!("Failed to put block: {}", e)))?;
 
         // Initialize metadata
         let genesis_hash = genesis.hash();
-        txn.put(self.meta_db, META_HEIGHT, &0u64.to_le_bytes(), WriteFlags::empty())?;
-        txn.put(self.meta_db, META_TIP_HASH, &genesis_hash, WriteFlags::empty())?;
-        txn.put(self.meta_db, META_TOTAL_MINED, &0u64.to_le_bytes(), WriteFlags::empty())?;
-        txn.put(self.meta_db, META_FEES_BURNED, &0u64.to_le_bytes(), WriteFlags::empty())?;
-        txn.put(
-            self.meta_db,
-            META_DIFFICULTY,
-            &crate::node::miner::INITIAL_DIFFICULTY.to_le_bytes(),
-            WriteFlags::empty(),
-        )?;
+        self.meta_db.put(&mut wtxn, META_HEIGHT, &0u64.to_le_bytes())
+            .map_err(|e| LedgerError::Database(format!("Failed to put height: {}", e)))?;
+        self.meta_db.put(&mut wtxn, META_TIP_HASH, &genesis_hash)
+            .map_err(|e| LedgerError::Database(format!("Failed to put tip_hash: {}", e)))?;
+        self.meta_db.put(&mut wtxn, META_TOTAL_MINED, &0u64.to_le_bytes())
+            .map_err(|e| LedgerError::Database(format!("Failed to put total_mined: {}", e)))?;
+        self.meta_db.put(&mut wtxn, META_FEES_BURNED, &0u64.to_le_bytes())
+            .map_err(|e| LedgerError::Database(format!("Failed to put fees_burned: {}", e)))?;
+        self.meta_db.put(&mut wtxn, META_DIFFICULTY, &crate::node::minter::INITIAL_DIFFICULTY.to_le_bytes())
+            .map_err(|e| LedgerError::Database(format!("Failed to put difficulty: {}", e)))?;
 
-        txn.commit()?;
+        wtxn.commit()
+            .map_err(|e| LedgerError::Database(format!("Failed to commit: {}", e)))?;
         Ok(())
     }
 
     /// Get the current chain state
     pub fn get_chain_state(&self) -> Result<ChainState, LedgerError> {
-        let txn = self.env.begin_ro_txn()?;
+        let rtxn = self.env.read_txn()
+            .map_err(|e| LedgerError::Database(format!("Failed to start read txn: {}", e)))?;
 
-        let height = match txn.get(self.meta_db, &META_HEIGHT) {
-            Ok(bytes) => u64::from_le_bytes(bytes.try_into().unwrap_or([0; 8])),
-            Err(lmdb::Error::NotFound) => 0,
-            Err(e) => return Err(e.into()),
-        };
+        let height = self.meta_db.get(&rtxn, META_HEIGHT)
+            .map_err(|e| LedgerError::Database(format!("Failed to get height: {}", e)))?
+            .map(|b| u64::from_le_bytes(b.try_into().unwrap_or([0; 8])))
+            .unwrap_or(0);
 
-        let tip_hash = match txn.get(self.meta_db, &META_TIP_HASH) {
-            Ok(bytes) => bytes.try_into().unwrap_or([0u8; 32]),
-            Err(lmdb::Error::NotFound) => [0u8; 32],
-            Err(e) => return Err(e.into()),
-        };
+        let tip_hash = self.meta_db.get(&rtxn, META_TIP_HASH)
+            .map_err(|e| LedgerError::Database(format!("Failed to get tip_hash: {}", e)))?
+            .map(|b| b.try_into().unwrap_or([0u8; 32]))
+            .unwrap_or([0u8; 32]);
 
-        let total_mined = match txn.get(self.meta_db, &META_TOTAL_MINED) {
-            Ok(bytes) => u64::from_le_bytes(bytes.try_into().unwrap_or([0; 8])),
-            Err(lmdb::Error::NotFound) => 0,
-            Err(e) => return Err(e.into()),
-        };
+        let total_mined = self.meta_db.get(&rtxn, META_TOTAL_MINED)
+            .map_err(|e| LedgerError::Database(format!("Failed to get total_mined: {}", e)))?
+            .map(|b| u64::from_le_bytes(b.try_into().unwrap_or([0; 8])))
+            .unwrap_or(0);
 
-        let total_fees_burned = match txn.get(self.meta_db, &META_FEES_BURNED) {
-            Ok(bytes) => u64::from_le_bytes(bytes.try_into().unwrap_or([0; 8])),
-            Err(lmdb::Error::NotFound) => 0,
-            Err(e) => return Err(e.into()),
-        };
+        let total_fees_burned = self.meta_db.get(&rtxn, META_FEES_BURNED)
+            .map_err(|e| LedgerError::Database(format!("Failed to get fees_burned: {}", e)))?
+            .map(|b| u64::from_le_bytes(b.try_into().unwrap_or([0; 8])))
+            .unwrap_or(0);
 
-        let difficulty = match txn.get(self.meta_db, &META_DIFFICULTY) {
-            Ok(bytes) => u64::from_le_bytes(bytes.try_into().unwrap_or([0; 8])),
-            Err(lmdb::Error::NotFound) => crate::node::miner::INITIAL_DIFFICULTY,
-            Err(e) => return Err(e.into()),
-        };
+        let difficulty = self.meta_db.get(&rtxn, META_DIFFICULTY)
+            .map_err(|e| LedgerError::Database(format!("Failed to get difficulty: {}", e)))?
+            .map(|b| u64::from_le_bytes(b.try_into().unwrap_or([0; 8])))
+            .unwrap_or(crate::node::minter::INITIAL_DIFFICULTY);
 
         // Get tip timestamp from the tip block (if exists)
         let tip_timestamp = if height > 0 {
-            match txn.get(self.blocks_db, &height.to_le_bytes()) {
-                Ok(bytes) => {
-                    if let Ok(block) = bincode::deserialize::<Block>(bytes) {
-                        block.header.timestamp
-                    } else {
-                        0
-                    }
-                }
-                Err(_) => 0,
-            }
+            self.blocks_db.get(&rtxn, &height)
+                .ok()
+                .flatten()
+                .and_then(|bytes| bincode::deserialize::<Block>(bytes).ok())
+                .map(|block| block.header.timestamp)
+                .unwrap_or(0)
         } else {
             0
         };
@@ -186,11 +189,12 @@ impl Ledger {
 
     /// Get a block by height
     pub fn get_block(&self, height: u64) -> Result<Block, LedgerError> {
-        let txn = self.env.begin_ro_txn()?;
+        let rtxn = self.env.read_txn()
+            .map_err(|e| LedgerError::Database(format!("Failed to start read txn: {}", e)))?;
 
-        let bytes = txn
-            .get(self.blocks_db, &height.to_le_bytes())
-            .map_err(|_| LedgerError::BlockNotFound(height))?;
+        let bytes = self.blocks_db.get(&rtxn, &height)
+            .map_err(|e| LedgerError::Database(format!("Failed to get block: {}", e)))?
+            .ok_or(LedgerError::BlockNotFound(height))?;
 
         bincode::deserialize(bytes).map_err(|e| LedgerError::Serialization(e.to_string()))
     }
@@ -228,45 +232,36 @@ impl Ledger {
         }
 
         // Store block and update metadata
-        let mut txn = self.env.begin_rw_txn()?;
+        let mut wtxn = self.env.write_txn()
+            .map_err(|e| LedgerError::Database(format!("Failed to start write txn: {}", e)))?;
 
         let block_bytes =
             bincode::serialize(block).map_err(|e| LedgerError::Serialization(e.to_string()))?;
 
-        txn.put(
-            self.blocks_db,
-            &block.height().to_le_bytes(),
-            &block_bytes,
-            WriteFlags::empty(),
-        )?;
+        self.blocks_db.put(&mut wtxn, &block.height(), &block_bytes)
+            .map_err(|e| LedgerError::Database(format!("Failed to put block: {}", e)))?;
 
         let new_hash = block.hash();
         let new_height = block.height();
-        let new_total_mined = state.total_mined + block.mining_tx.reward;
+        let new_total_mined = state.total_mined + block.minting_tx.reward;
 
         // Sum transaction fees (these are burned, reducing circulating supply)
         let block_fees: u64 = block.transactions.iter().map(|tx| tx.fee).sum();
         let new_total_fees_burned = state.total_fees_burned + block_fees;
 
-        // Create UTXO from mining reward (coinbase)
-        // Use block hash as the "tx_hash" for mining rewards
-        // The mining tx has stealth output keys (target_key, public_key)
+        // Create UTXO from minting reward (coinbase)
         let coinbase_utxo_id = UtxoId::new(new_hash, 0);
         let coinbase_utxo = Utxo {
             id: coinbase_utxo_id,
-            output: block.mining_tx.to_tx_output(),
+            output: block.minting_tx.to_tx_output(),
             created_at: new_height,
         };
         let coinbase_bytes = bincode::serialize(&coinbase_utxo)
             .map_err(|e| LedgerError::Serialization(e.to_string()))?;
-        txn.put(
-            self.utxo_db,
-            &coinbase_utxo_id.to_bytes(),
-            &coinbase_bytes,
-            WriteFlags::empty(),
-        )?;
+        self.utxo_db.put(&mut wtxn, &coinbase_utxo_id.to_bytes(), &coinbase_bytes)
+            .map_err(|e| LedgerError::Database(format!("Failed to put coinbase utxo: {}", e)))?;
         // Add to address index
-        self.add_to_address_index(&mut txn, &coinbase_utxo)?;
+        self.add_to_address_index(&mut wtxn, &coinbase_utxo)?;
         debug!("Created coinbase UTXO at height {}", new_height);
 
         // Verify and process regular transactions
@@ -284,25 +279,25 @@ impl Ledger {
                         let spent_id = UtxoId::new(input.tx_hash, input.output_index);
 
                         // Get the UTXO first so we can remove it from the address index
-                        if let Ok(utxo_bytes) = txn.get(self.utxo_db, &spent_id.to_bytes()) {
+                        if let Some(utxo_bytes) = self.utxo_db.get(&wtxn, &spent_id.to_bytes())
+                            .map_err(|e| LedgerError::Database(format!("Failed to get utxo: {}", e)))? {
                             if let Ok(spent_utxo) = bincode::deserialize::<Utxo>(utxo_bytes) {
                                 // Remove from address index
-                                self.remove_from_address_index(&mut txn, &spent_utxo)?;
+                                self.remove_from_address_index(&mut wtxn, &spent_utxo)?;
                             }
                             // Remove from UTXO database
-                            txn.del(self.utxo_db, &spent_id.to_bytes(), None)?;
+                            self.utxo_db.delete(&mut wtxn, &spent_id.to_bytes())
+                                .map_err(|e| LedgerError::Database(format!("Failed to delete utxo: {}", e)))?;
                         } else {
                             // UTXO not found - this is a validation error
-                            // For now, log and continue (validation should catch this earlier)
                             debug!("Warning: UTXO not found when spending");
                         }
                     }
                 }
                 TxInputs::Ring(ring_inputs) => {
                     // For ring signature transactions, record key images to prevent double-spend
-                    // The actual UTXO being spent is hidden within the ring
                     for ring_input in ring_inputs {
-                        self.record_key_image(&mut txn, &ring_input.key_image, new_height)?;
+                        self.record_key_image(&mut wtxn, &ring_input.key_image, new_height)?;
                     }
                 }
             }
@@ -317,38 +312,24 @@ impl Ledger {
                 };
                 let utxo_bytes = bincode::serialize(&utxo)
                     .map_err(|e| LedgerError::Serialization(e.to_string()))?;
-                txn.put(
-                    self.utxo_db,
-                    &utxo_id.to_bytes(),
-                    &utxo_bytes,
-                    WriteFlags::empty(),
-                )?;
+                self.utxo_db.put(&mut wtxn, &utxo_id.to_bytes(), &utxo_bytes)
+                    .map_err(|e| LedgerError::Database(format!("Failed to put utxo: {}", e)))?;
                 // Add to address index
-                self.add_to_address_index(&mut txn, &utxo)?;
+                self.add_to_address_index(&mut wtxn, &utxo)?;
             }
         }
 
-        txn.put(
-            self.meta_db,
-            META_HEIGHT,
-            &new_height.to_le_bytes(),
-            WriteFlags::empty(),
-        )?;
-        txn.put(self.meta_db, META_TIP_HASH, &new_hash, WriteFlags::empty())?;
-        txn.put(
-            self.meta_db,
-            META_TOTAL_MINED,
-            &new_total_mined.to_le_bytes(),
-            WriteFlags::empty(),
-        )?;
-        txn.put(
-            self.meta_db,
-            META_FEES_BURNED,
-            &new_total_fees_burned.to_le_bytes(),
-            WriteFlags::empty(),
-        )?;
+        self.meta_db.put(&mut wtxn, META_HEIGHT, &new_height.to_le_bytes())
+            .map_err(|e| LedgerError::Database(format!("Failed to put height: {}", e)))?;
+        self.meta_db.put(&mut wtxn, META_TIP_HASH, &new_hash)
+            .map_err(|e| LedgerError::Database(format!("Failed to put tip_hash: {}", e)))?;
+        self.meta_db.put(&mut wtxn, META_TOTAL_MINED, &new_total_mined.to_le_bytes())
+            .map_err(|e| LedgerError::Database(format!("Failed to put total_mined: {}", e)))?;
+        self.meta_db.put(&mut wtxn, META_FEES_BURNED, &new_total_fees_burned.to_le_bytes())
+            .map_err(|e| LedgerError::Database(format!("Failed to put fees_burned: {}", e)))?;
 
-        txn.commit()?;
+        wtxn.commit()
+            .map_err(|e| LedgerError::Database(format!("Failed to commit: {}", e)))?;
 
         info!(
             "Added block {} with hash {} ({} txs, {} fees burned)",
@@ -363,31 +344,30 @@ impl Ledger {
 
     /// Update the difficulty in chain state
     pub fn set_difficulty(&self, difficulty: u64) -> Result<(), LedgerError> {
-        let mut txn = self.env.begin_rw_txn()?;
-        txn.put(
-            self.meta_db,
-            META_DIFFICULTY,
-            &difficulty.to_le_bytes(),
-            WriteFlags::empty(),
-        )?;
-        txn.commit()?;
+        let mut wtxn = self.env.write_txn()
+            .map_err(|e| LedgerError::Database(format!("Failed to start write txn: {}", e)))?;
+        self.meta_db.put(&mut wtxn, META_DIFFICULTY, &difficulty.to_le_bytes())
+            .map_err(|e| LedgerError::Database(format!("Failed to put difficulty: {}", e)))?;
+        wtxn.commit()
+            .map_err(|e| LedgerError::Database(format!("Failed to commit: {}", e)))?;
         Ok(())
     }
 
     /// Get blocks in a range (for syncing)
     pub fn get_blocks(&self, start_height: u64, count: usize) -> Result<Vec<Block>, LedgerError> {
-        let txn = self.env.begin_ro_txn()?;
+        let rtxn = self.env.read_txn()
+            .map_err(|e| LedgerError::Database(format!("Failed to start read txn: {}", e)))?;
         let mut blocks = Vec::with_capacity(count);
 
         for height in start_height..(start_height + count as u64) {
-            match txn.get(self.blocks_db, &height.to_le_bytes()) {
-                Ok(bytes) => {
+            match self.blocks_db.get(&rtxn, &height) {
+                Ok(Some(bytes)) => {
                     let block: Block = bincode::deserialize(bytes)
                         .map_err(|e| LedgerError::Serialization(e.to_string()))?;
                     blocks.push(block);
                 }
-                Err(lmdb::Error::NotFound) => break,
-                Err(e) => return Err(e.into()),
+                Ok(None) => break,
+                Err(e) => return Err(LedgerError::Database(format!("Failed to get block: {}", e))),
             }
         }
 
@@ -396,16 +376,17 @@ impl Ledger {
 
     /// Get a specific UTXO by ID
     pub fn get_utxo(&self, id: &UtxoId) -> Result<Option<Utxo>, LedgerError> {
-        let txn = self.env.begin_ro_txn()?;
+        let rtxn = self.env.read_txn()
+            .map_err(|e| LedgerError::Database(format!("Failed to start read txn: {}", e)))?;
 
-        match txn.get(self.utxo_db, &id.to_bytes()) {
-            Ok(bytes) => {
+        match self.utxo_db.get(&rtxn, &id.to_bytes()) {
+            Ok(Some(bytes)) => {
                 let utxo: Utxo = bincode::deserialize(bytes)
                     .map_err(|e| LedgerError::Serialization(e.to_string()))?;
                 Ok(Some(utxo))
             }
-            Err(lmdb::Error::NotFound) => Ok(None),
-            Err(e) => Err(e.into()),
+            Ok(None) => Ok(None),
+            Err(e) => Err(LedgerError::Database(format!("Failed to get utxo: {}", e))),
         }
     }
 
@@ -415,13 +396,14 @@ impl Ledger {
         let spend_key = address.spend_public_key().to_bytes();
         let addr_key = Self::address_key(&view_key, &spend_key);
 
-        let txn = self.env.begin_ro_txn()?;
+        let rtxn = self.env.read_txn()
+            .map_err(|e| LedgerError::Database(format!("Failed to start read txn: {}", e)))?;
 
         // Look up UTXO IDs from the address index
-        let id_bytes = match txn.get(self.address_index_db, &addr_key) {
-            Ok(bytes) => bytes,
-            Err(lmdb::Error::NotFound) => return Ok(Vec::new()),
-            Err(e) => return Err(e.into()),
+        let id_bytes = match self.address_index_db.get(&rtxn, &addr_key) {
+            Ok(Some(bytes)) => bytes.to_vec(),
+            Ok(None) => return Ok(Vec::new()),
+            Err(e) => return Err(LedgerError::Database(format!("Failed to get address index: {}", e))),
         };
 
         // Parse each 36-byte UTXO ID and fetch the corresponding UTXO
@@ -430,7 +412,7 @@ impl Ledger {
             if chunk.len() == 36 {
                 if let Some(utxo_id) = UtxoId::from_bytes(chunk) {
                     // Fetch the UTXO by ID
-                    if let Ok(utxo_bytes) = txn.get(self.utxo_db, &utxo_id.to_bytes()) {
+                    if let Ok(Some(utxo_bytes)) = self.utxo_db.get(&rtxn, &utxo_id.to_bytes()) {
                         if let Ok(utxo) = bincode::deserialize::<Utxo>(utxo_bytes) {
                             utxos.push(utxo);
                         }
@@ -450,32 +432,31 @@ impl Ledger {
 
     /// Check if a UTXO exists (for transaction validation)
     pub fn utxo_exists(&self, id: &UtxoId) -> Result<bool, LedgerError> {
-        let txn = self.env.begin_ro_txn()?;
-        match txn.get(self.utxo_db, &id.to_bytes()) {
-            Ok(_) => Ok(true),
-            Err(lmdb::Error::NotFound) => Ok(false),
-            Err(e) => Err(e.into()),
+        let rtxn = self.env.read_txn()
+            .map_err(|e| LedgerError::Database(format!("Failed to start read txn: {}", e)))?;
+        match self.utxo_db.get(&rtxn, &id.to_bytes()) {
+            Ok(Some(_)) => Ok(true),
+            Ok(None) => Ok(false),
+            Err(e) => Err(LedgerError::Database(format!("Failed to get utxo: {}", e))),
         }
     }
 
     /// Get a UTXO by its target_key (one-time stealth public key)
-    ///
-    /// This is useful for ring signature validation where we need to look up
-    /// UTXOs by their target_key to determine their amounts.
     pub fn get_utxo_by_target_key(&self, target_key: &[u8; 32]) -> Result<Option<Utxo>, LedgerError> {
-        let txn = self.env.begin_ro_txn()?;
+        let rtxn = self.env.read_txn()
+            .map_err(|e| LedgerError::Database(format!("Failed to start read txn: {}", e)))?;
 
         // Look up UTXO IDs from the target_key index
-        let id_bytes = match txn.get(self.address_index_db, target_key) {
-            Ok(bytes) => bytes,
-            Err(lmdb::Error::NotFound) => return Ok(None),
-            Err(e) => return Err(e.into()),
+        let id_bytes = match self.address_index_db.get(&rtxn, target_key.as_slice()) {
+            Ok(Some(bytes)) => bytes,
+            Ok(None) => return Ok(None),
+            Err(e) => return Err(LedgerError::Database(format!("Failed to get address index: {}", e))),
         };
 
         // Get the first UTXO ID (there should typically be only one per target_key)
         if id_bytes.len() >= 36 {
             if let Some(utxo_id) = UtxoId::from_bytes(&id_bytes[0..36]) {
-                if let Ok(utxo_bytes) = txn.get(self.utxo_db, &utxo_id.to_bytes()) {
+                if let Ok(Some(utxo_bytes)) = self.utxo_db.get(&rtxn, &utxo_id.to_bytes()) {
                     if let Ok(utxo) = bincode::deserialize::<Utxo>(utxo_bytes) {
                         return Ok(Some(utxo));
                     }
@@ -495,54 +476,44 @@ impl Ledger {
     }
 
     /// Add a UTXO ID to the address index
-    ///
-    /// NOTE: With stealth addresses, we index by target_key (one-time key) instead of
-    /// recipient address. This allows retrieving UTXOs after the wallet has identified
-    /// them via stealth scanning, but doesn't reveal address linkage.
     fn add_to_address_index(
         &self,
-        txn: &mut lmdb::RwTransaction,
+        wtxn: &mut RwTxn,
         utxo: &Utxo,
     ) -> Result<(), LedgerError> {
         // Index by target_key for UTXO retrieval after stealth detection
         let target_key = &utxo.output.target_key;
 
         // Get existing IDs or empty vec
-        let existing = match txn.get(self.address_index_db, target_key) {
-            Ok(bytes) => bytes.to_vec(),
-            Err(lmdb::Error::NotFound) => Vec::new(),
-            Err(e) => return Err(e.into()),
+        let existing = match self.address_index_db.get(wtxn, target_key.as_slice()) {
+            Ok(Some(bytes)) => bytes.to_vec(),
+            Ok(None) => Vec::new(),
+            Err(e) => return Err(LedgerError::Database(format!("Failed to get address index: {}", e))),
         };
 
         // Append the new UTXO ID
         let mut ids = existing;
         ids.extend_from_slice(&utxo.id.to_bytes());
 
-        txn.put(
-            self.address_index_db,
-            target_key,
-            &ids,
-            WriteFlags::empty(),
-        )?;
+        self.address_index_db.put(wtxn, target_key.as_slice(), &ids)
+            .map_err(|e| LedgerError::Database(format!("Failed to put address index: {}", e)))?;
 
         Ok(())
     }
 
     /// Remove a UTXO ID from the address index
-    ///
-    /// NOTE: With stealth addresses, UTXOs are indexed by target_key (one-time key).
     fn remove_from_address_index(
         &self,
-        txn: &mut lmdb::RwTransaction,
+        wtxn: &mut RwTxn,
         utxo: &Utxo,
     ) -> Result<(), LedgerError> {
         let target_key = &utxo.output.target_key;
 
         // Get existing IDs
-        let existing = match txn.get(self.address_index_db, target_key) {
-            Ok(bytes) => bytes.to_vec(),
-            Err(lmdb::Error::NotFound) => return Ok(()), // Nothing to remove
-            Err(e) => return Err(e.into()),
+        let existing = match self.address_index_db.get(wtxn, target_key.as_slice()) {
+            Ok(Some(bytes)) => bytes.to_vec(),
+            Ok(None) => return Ok(()), // Nothing to remove
+            Err(e) => return Err(LedgerError::Database(format!("Failed to get address index: {}", e))),
         };
 
         // Filter out the removed UTXO ID
@@ -555,30 +526,16 @@ impl Ledger {
 
         if filtered.is_empty() {
             // No more UTXOs for this target key, remove the entry
-            let _ = txn.del(self.address_index_db, target_key, None);
+            let _ = self.address_index_db.delete(wtxn, target_key.as_slice());
         } else {
-            txn.put(
-                self.address_index_db,
-                target_key,
-                &filtered,
-                WriteFlags::empty(),
-            )?;
+            self.address_index_db.put(wtxn, target_key.as_slice(), &filtered)
+                .map_err(|e| LedgerError::Database(format!("Failed to put address index: {}", e)))?;
         }
 
         Ok(())
     }
 
     /// Verify all signatures in a transaction
-    ///
-    /// For Simple inputs: looks up the UTXO being spent and verifies
-    /// the signature against the UTXO's one-time target key (stealth address).
-    ///
-    /// For Ring inputs: verifies the ring signature and checks that key images
-    /// haven't been spent (double-spend prevention).
-    ///
-    /// With stealth addresses, the target_key is the one-time public spend key
-    /// `P = Hs(r * C) * G + D`. The spender proves ownership using the
-    /// corresponding one-time private key `x = Hs(a * R) + d`.
     pub fn verify_transaction(&self, tx: &BothoTransaction) -> Result<(), LedgerError> {
         match &tx.inputs {
             TxInputs::Simple(inputs) => {
@@ -653,79 +610,37 @@ impl Ledger {
     // ========================================================================
 
     /// Check if a key image has already been spent.
-    ///
-    /// Key images are used with ring signatures to prevent double-spending
-    /// without revealing which output was actually spent. Each output can
-    /// only produce one unique key image, so tracking spent key images
-    /// prevents the same output from being spent twice.
-    ///
-    /// # Arguments
-    /// * `key_image` - The 32-byte key image to check
-    ///
-    /// # Returns
-    /// `Some(height)` if the key image was spent at that block height,
-    /// `None` if the key image has never been seen.
     pub fn is_key_image_spent(&self, key_image: &[u8; 32]) -> Result<Option<u64>, LedgerError> {
-        let txn = self.env.begin_ro_txn()?;
+        let rtxn = self.env.read_txn()
+            .map_err(|e| LedgerError::Database(format!("Failed to start read txn: {}", e)))?;
 
-        match txn.get(self.key_images_db, key_image) {
-            Ok(bytes) => {
-                if bytes.len() == 8 {
-                    let height = u64::from_le_bytes(bytes.try_into().unwrap());
-                    Ok(Some(height))
-                } else {
-                    Ok(None)
-                }
+        match self.key_images_db.get(&rtxn, key_image.as_slice()) {
+            Ok(Some(bytes)) if bytes.len() == 8 => {
+                let height = u64::from_le_bytes(bytes.try_into().unwrap());
+                Ok(Some(height))
             }
-            Err(lmdb::Error::NotFound) => Ok(None),
-            Err(e) => Err(e.into()),
+            Ok(_) => Ok(None),
+            Err(e) => Err(LedgerError::Database(format!("Failed to get key image: {}", e))),
         }
     }
 
     /// Record a key image as spent at the given block height.
-    ///
-    /// This should be called when processing a block that contains
-    /// ring signature transactions. The key image is recorded along
-    /// with the height where it was first seen.
-    ///
-    /// # Arguments
-    /// * `txn` - The write transaction to use
-    /// * `key_image` - The 32-byte key image to record
-    /// * `height` - The block height where this key image was spent
     pub fn record_key_image(
         &self,
-        txn: &mut lmdb::RwTransaction,
+        wtxn: &mut RwTxn,
         key_image: &[u8; 32],
         height: u64,
     ) -> Result<(), LedgerError> {
-        txn.put(
-            self.key_images_db,
-            key_image,
-            &height.to_le_bytes(),
-            WriteFlags::NO_OVERWRITE, // Fail if already exists (double-spend attempt)
-        )
-        .map_err(|e| {
-            if matches!(e, lmdb::Error::KeyExist) {
-                LedgerError::InvalidBlock("Key image already spent (double-spend)".to_string())
-            } else {
-                e.into()
-            }
-        })
+        // Check if already exists
+        if let Ok(Some(_)) = self.key_images_db.get(wtxn, key_image.as_slice()) {
+            return Err(LedgerError::InvalidBlock("Key image already spent (double-spend)".to_string()));
+        }
+
+        self.key_images_db.put(wtxn, key_image.as_slice(), &height.to_le_bytes())
+            .map_err(|e| LedgerError::Database(format!("Failed to put key image: {}", e)))
     }
 
     /// Get a random sample of UTXOs for use as decoys in ring signatures.
-    ///
-    /// Selects UTXOs that are suitable for use as decoys:
-    /// - Must have been confirmed for at least `min_confirmations` blocks
-    /// - Excludes the specified real inputs to avoid including them as decoys
-    ///
-    /// # Arguments
-    /// * `count` - Number of decoy UTXOs to return
-    /// * `exclude` - UTXOs to exclude (the real inputs)
-    /// * `min_confirmations` - Minimum confirmations required for decoys
-    ///
-    /// # Returns
-    /// A vector of TxOutputs suitable for use as ring decoys.
     pub fn get_decoy_outputs(
         &self,
         count: usize,
@@ -737,17 +652,17 @@ impl Ledger {
         let state = self.get_chain_state()?;
         let max_height = state.height.saturating_sub(min_confirmations);
 
-        let txn = self.env.begin_ro_txn()?;
+        let rtxn = self.env.read_txn()
+            .map_err(|e| LedgerError::Database(format!("Failed to start read txn: {}", e)))?;
 
         // Collect all eligible UTXOs
-        // Note: This is a simple implementation that scans all UTXOs.
-        // For production, consider using a separate index or reservoir sampling.
         let mut candidates: Vec<TxOutput> = Vec::new();
 
-        // Create a cursor to iterate over all UTXOs
-        let mut cursor = txn.open_ro_cursor(self.utxo_db)?;
+        // Iterate over all UTXOs
+        let iter = self.utxo_db.iter(&rtxn)
+            .map_err(|e| LedgerError::Database(format!("Failed to create iterator: {}", e)))?;
 
-        for result in cursor.iter() {
+        for result in iter {
             if let Ok((_, value)) = result {
                 if let Ok(utxo) = bincode::deserialize::<Utxo>(value) {
                     // Check confirmations
@@ -760,9 +675,6 @@ impl Ledger {
                 }
             }
         }
-
-        drop(cursor);
-        drop(txn);
 
         // Randomly sample from candidates
         let mut rng = rand::thread_rng();
@@ -811,9 +723,9 @@ mod tests {
 
         // Record key image as spent at height 10
         {
-            let mut txn = ledger.env.begin_rw_txn().unwrap();
-            ledger.record_key_image(&mut txn, &key_image, 10).unwrap();
-            txn.commit().unwrap();
+            let mut wtxn = ledger.env.write_txn().unwrap();
+            ledger.record_key_image(&mut wtxn, &key_image, 10).unwrap();
+            wtxn.commit().unwrap();
         }
 
         // Now it should be spent
@@ -830,15 +742,15 @@ mod tests {
 
         // Record first spend
         {
-            let mut txn = ledger.env.begin_rw_txn().unwrap();
-            ledger.record_key_image(&mut txn, &key_image, 5).unwrap();
-            txn.commit().unwrap();
+            let mut wtxn = ledger.env.write_txn().unwrap();
+            ledger.record_key_image(&mut wtxn, &key_image, 5).unwrap();
+            wtxn.commit().unwrap();
         }
 
         // Try to record same key image again - should fail
         {
-            let mut txn = ledger.env.begin_rw_txn().unwrap();
-            let result = ledger.record_key_image(&mut txn, &key_image, 10);
+            let mut wtxn = ledger.env.write_txn().unwrap();
+            let result = ledger.record_key_image(&mut wtxn, &key_image, 10);
             assert!(result.is_err());
         }
     }
@@ -865,16 +777,11 @@ mod tests {
 
         // Store the UTXO
         {
-            let mut txn = ledger.env.begin_rw_txn().unwrap();
+            let mut wtxn = ledger.env.write_txn().unwrap();
             let utxo_bytes = bincode::serialize(&utxo).unwrap();
-            txn.put(
-                ledger.utxo_db,
-                &utxo_id.to_bytes(),
-                &utxo_bytes,
-                lmdb::WriteFlags::empty(),
-            ).unwrap();
-            ledger.add_to_address_index(&mut txn, &utxo).unwrap();
-            txn.commit().unwrap();
+            ledger.utxo_db.put(&mut wtxn, &utxo_id.to_bytes(), &utxo_bytes).unwrap();
+            ledger.add_to_address_index(&mut wtxn, &utxo).unwrap();
+            wtxn.commit().unwrap();
         }
 
         // Look up by target_key
@@ -918,15 +825,10 @@ mod tests {
         };
 
         {
-            let mut txn = ledger.env.begin_rw_txn().unwrap();
+            let mut wtxn = ledger.env.write_txn().unwrap();
             let utxo_bytes = bincode::serialize(&utxo).unwrap();
-            txn.put(
-                ledger.utxo_db,
-                &utxo_id.to_bytes(),
-                &utxo_bytes,
-                lmdb::WriteFlags::empty(),
-            ).unwrap();
-            txn.commit().unwrap();
+            ledger.utxo_db.put(&mut wtxn, &utxo_id.to_bytes(), &utxo_bytes).unwrap();
+            wtxn.commit().unwrap();
         }
 
         // Now should exist
@@ -954,15 +856,10 @@ mod tests {
         };
 
         {
-            let mut txn = ledger.env.begin_rw_txn().unwrap();
+            let mut wtxn = ledger.env.write_txn().unwrap();
             let utxo_bytes = bincode::serialize(&utxo).unwrap();
-            txn.put(
-                ledger.utxo_db,
-                &utxo_id.to_bytes(),
-                &utxo_bytes,
-                lmdb::WriteFlags::empty(),
-            ).unwrap();
-            txn.commit().unwrap();
+            ledger.utxo_db.put(&mut wtxn, &utxo_id.to_bytes(), &utxo_bytes).unwrap();
+            wtxn.commit().unwrap();
         }
 
         // Retrieve and verify

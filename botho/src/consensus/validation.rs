@@ -3,10 +3,10 @@
 //! Transaction validation for consensus.
 //!
 //! This module provides separate validation logic for:
-//! - Mining transactions (PoW-based coinbase rewards)
+//! - Minting transactions (PoW-based coinbase rewards)
 //! - Transfer transactions (UTXO-based value transfers)
 
-use crate::block::{calculate_block_reward_v2, MiningTx};
+use crate::block::{calculate_block_reward_v2, MintingTx};
 use crate::ledger::ChainState;
 use crate::transaction::Transaction;
 #[cfg(feature = "pq")]
@@ -17,7 +17,7 @@ use tracing::{debug, warn};
 /// Validation errors for transactions
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ValidationError {
-    // Mining transaction errors
+    // Minting transaction errors
     InvalidPoW,
     WrongPrevBlockHash,
     WrongBlockHeight,
@@ -108,8 +108,8 @@ impl TransactionValidator {
         Self { chain_state }
     }
 
-    /// Validate a mining transaction
-    pub fn validate_mining_tx(&self, tx: &MiningTx) -> Result<(), ValidationError> {
+    /// Validate a minting transaction
+    pub fn validate_minting_tx(&self, tx: &MintingTx) -> Result<(), ValidationError> {
         let state = self
             .chain_state
             .read()
@@ -117,7 +117,7 @@ impl TransactionValidator {
 
         debug!(
             height = tx.block_height,
-            "Validating mining transaction"
+            "Validating minting transaction"
         );
 
         // Check cheap validations first before expensive PoW verification
@@ -127,7 +127,7 @@ impl TransactionValidator {
             warn!(
                 expected = hex::encode(&state.tip_hash[0..8]),
                 got = hex::encode(&tx.prev_block_hash[0..8]),
-                "Mining tx has wrong prev_block_hash"
+                "Minting tx has wrong prev_block_hash"
             );
             return Err(ValidationError::WrongPrevBlockHash);
         }
@@ -138,7 +138,7 @@ impl TransactionValidator {
             warn!(
                 expected = expected_height,
                 got = tx.block_height,
-                "Mining tx has wrong block height"
+                "Minting tx has wrong block height"
             );
             return Err(ValidationError::WrongBlockHeight);
         }
@@ -148,7 +148,7 @@ impl TransactionValidator {
             warn!(
                 expected = state.difficulty,
                 got = tx.difficulty,
-                "Mining tx has wrong difficulty"
+                "Minting tx has wrong difficulty"
             );
             return Err(ValidationError::WrongDifficulty);
         }
@@ -159,7 +159,7 @@ impl TransactionValidator {
             warn!(
                 expected = expected_reward,
                 got = tx.reward,
-                "Mining tx has wrong reward"
+                "Minting tx has wrong reward"
             );
             return Err(ValidationError::WrongReward {
                 expected: expected_reward,
@@ -181,7 +181,7 @@ impl TransactionValidator {
             warn!(
                 timestamp = tx.timestamp,
                 now = now,
-                "Mining tx timestamp too far in future"
+                "Minting tx timestamp too far in future"
             );
             return Err(ValidationError::TimestampTooFarInFuture);
         }
@@ -191,20 +191,20 @@ impl TransactionValidator {
             warn!(
                 timestamp = tx.timestamp,
                 parent_timestamp = state.tip_timestamp,
-                "Mining tx timestamp before parent block"
+                "Minting tx timestamp before parent block"
             );
             return Err(ValidationError::TimestampBeforeParent);
         }
 
         // 6. Verify PoW (hash < difficulty) - expensive, so do last
         if !tx.verify_pow() {
-            warn!("Mining tx failed PoW verification");
+            warn!("Minting tx failed PoW verification");
             return Err(ValidationError::InvalidPoW);
         }
 
         debug!(
             height = tx.block_height,
-            "Mining transaction validated successfully"
+            "Minting transaction validated successfully"
         );
         Ok(())
     }
@@ -360,12 +360,12 @@ impl TransactionValidator {
     pub fn validate_from_bytes(
         &self,
         tx_bytes: &[u8],
-        is_mining_tx: bool,
+        is_minting_tx: bool,
     ) -> Result<(), ValidationError> {
-        if is_mining_tx {
-            let tx: MiningTx = bincode::deserialize(tx_bytes)
+        if is_minting_tx {
+            let tx: MintingTx = bincode::deserialize(tx_bytes)
                 .map_err(|e| ValidationError::DeserializationFailed(e.to_string()))?;
-            self.validate_mining_tx(&tx)
+            self.validate_minting_tx(&tx)
         } else {
             let tx: Transaction = bincode::deserialize(tx_bytes)
                 .map_err(|e| ValidationError::DeserializationFailed(e.to_string()))?;
@@ -392,13 +392,13 @@ impl TransactionValidator {
     /// Validate multiple transactions, separating valid from invalid
     pub fn validate_batch(
         &self,
-        txs: &[([u8; 32], Vec<u8>, bool)], // (hash, bytes, is_mining_tx)
+        txs: &[([u8; 32], Vec<u8>, bool)], // (hash, bytes, is_minting_tx)
     ) -> BatchValidationResult {
         let mut valid = Vec::new();
         let mut invalid = Vec::new();
 
-        for (hash, bytes, is_mining_tx) in txs {
-            match self.validate_from_bytes(bytes, *is_mining_tx) {
+        for (hash, bytes, is_minting_tx) in txs {
+            match self.validate_from_bytes(bytes, *is_minting_tx) {
                 Ok(()) => valid.push(*hash),
                 Err(e) => invalid.push((*hash, e)),
             }
@@ -432,14 +432,14 @@ mod tests {
     }
 
     #[test]
-    fn test_mining_tx_wrong_height() {
+    fn test_minting_tx_wrong_height() {
         let validator = TransactionValidator::new(mock_chain_state());
 
-        let tx = MiningTx {
+        let tx = MintingTx {
             block_height: 5, // Wrong - should be 11
             reward: 600_000_000_000,
-            miner_view_key: [0u8; 32],
-            miner_spend_key: [0u8; 32],
+            minter_view_key: [0u8; 32],
+            minter_spend_key: [0u8; 32],
             target_key: [0u8; 32],
             public_key: [0u8; 32],
             prev_block_hash: [0u8; 32],
@@ -448,7 +448,7 @@ mod tests {
             timestamp: 0,
         };
 
-        let result = validator.validate_mining_tx(&tx);
+        let result = validator.validate_minting_tx(&tx);
         assert!(matches!(result, Err(ValidationError::WrongBlockHeight)));
     }
 
@@ -462,14 +462,14 @@ mod tests {
     }
 
     #[test]
-    fn test_mining_tx_correct_height() {
+    fn test_minting_tx_correct_height() {
         let validator = TransactionValidator::new(mock_chain_state());
 
-        let tx = MiningTx {
+        let tx = MintingTx {
             block_height: 11, // Correct - chain height is 10
             reward: 600_000_000_000, // Tail emission
-            miner_view_key: [0u8; 32],
-            miner_spend_key: [0u8; 32],
+            minter_view_key: [0u8; 32],
+            minter_spend_key: [0u8; 32],
             target_key: [0u8; 32],
             public_key: [0u8; 32],
             prev_block_hash: [0u8; 32],
@@ -479,7 +479,7 @@ mod tests {
         };
 
         // Should pass height check (may fail on other validation)
-        let result = validator.validate_mining_tx(&tx);
+        let result = validator.validate_minting_tx(&tx);
         // Either passes or fails for different reason (not wrong height)
         match result {
             Err(ValidationError::WrongBlockHeight) => panic!("Should not fail on height"),
@@ -548,7 +548,7 @@ mod tests {
 
         let batch = vec![
             ([1u8; 32], invalid_bytes.clone(), false),
-            ([2u8; 32], invalid_bytes, true), // Also test mining tx path
+            ([2u8; 32], invalid_bytes, true), // Also test minting tx path
         ];
 
         let result = validator.validate_batch(&batch);

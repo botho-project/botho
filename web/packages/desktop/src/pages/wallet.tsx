@@ -64,8 +64,8 @@ function PrivacyBadge({ level }: { level: PrivacyLevel }) {
 
 // Transaction row component
 function TransactionRow({ tx, index }: { tx: Transaction; index: number }) {
-  const isReceive = tx.type === 'receive' || tx.type === 'mining'
-  const Icon = tx.type === 'mining' ? Sparkles : isReceive ? ArrowDownLeft : ArrowUpRight
+  const isReceive = tx.type === 'receive' || tx.type === 'minting'
+  const Icon = tx.type === 'minting' ? Sparkles : isReceive ? ArrowDownLeft : ArrowUpRight
 
   const statusConfig = {
     pending: { color: 'text-[--color-warning]', icon: Clock },
@@ -84,7 +84,7 @@ function TransactionRow({ tx, index }: { tx: Transaction; index: number }) {
     >
       {/* Icon */}
       <div className={`flex h-10 w-10 items-center justify-center rounded-lg ${
-        tx.type === 'mining'
+        tx.type === 'minting'
           ? 'bg-[--color-purple]/20 text-[--color-purple]'
           : isReceive
             ? 'bg-[--color-success]/20 text-[--color-success]'
@@ -97,7 +97,7 @@ function TransactionRow({ tx, index }: { tx: Transaction; index: number }) {
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
           <span className="font-display font-medium text-[--color-light]">
-            {tx.type === 'mining' ? 'Mining Reward' : isReceive ? 'Received' : 'Sent'}
+            {tx.type === 'minting' ? 'Minting Reward' : isReceive ? 'Received' : 'Sent'}
           </span>
           <PrivacyBadge level={tx.privacyLevel} />
         </div>
