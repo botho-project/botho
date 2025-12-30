@@ -5,10 +5,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, RwLock};
-use std::time::{Duration, Instant};
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
-use crate::block::{Block, BlockHeader};
+use crate::block::Block;
 use crate::block::difficulty::{calculate_new_difficulty, ADJUSTMENT_WINDOW};
 use crate::commands::send::{load_pending_txs, clear_pending_txs};
 use crate::config::{ledger_db_path_from_config, Config};
@@ -84,57 +83,6 @@ impl Node {
     /// Check if this node has a wallet configured
     pub fn has_wallet(&self) -> bool {
         self.wallet.is_some()
-    }
-
-    /// Run the node in standalone mode (blocks until shutdown)
-    ///
-    /// DEPRECATED: This method bypasses consensus and builds blocks directly.
-    /// For networked operation with consensus, use `commands::run::run()` instead.
-    /// This method is preserved for single-node testing/debugging only.
-    #[deprecated(note = "Use commands::run::run() for proper consensus integration")]
-    pub fn run(&mut self, enable_mining: bool) -> Result<()> {
-        info!("Starting Botho node");
-
-        // Set up Ctrl+C handler
-        let shutdown = self.shutdown.clone();
-        ctrlc::set_handler(move || {
-            shutdown.store(true, Ordering::SeqCst);
-        })?;
-
-        // Load any pending transactions from file (created by `botho send`)
-        let _ = self.load_pending_transactions_from_file()?;
-
-        // Display node info
-        self.print_status()?;
-
-        // Start mining if enabled
-        if enable_mining {
-            self.start_mining()?;
-        }
-
-        // Main loop
-        let mut last_status = Instant::now();
-        while !self.shutdown.load(Ordering::SeqCst) {
-            // Check for found blocks
-            self.process_mined_blocks()?;
-
-            // TODO: Sync blocks from peers
-            // TODO: Scan wallet for transactions
-            // TODO: Process incoming transactions
-
-            // Print status every 10 seconds
-            if last_status.elapsed() >= Duration::from_secs(10) {
-                self.print_mining_status()?;
-                last_status = Instant::now();
-            }
-
-            std::thread::sleep(Duration::from_millis(100));
-        }
-
-        info!("Shutting down...");
-        self.stop_mining();
-
-        Ok(())
     }
 
     fn print_status(&self) -> Result<()> {
@@ -232,137 +180,6 @@ impl Node {
         }
     }
 
-    /// Process mined blocks in standalone mode (bypasses consensus)
-    ///
-    /// DEPRECATED: This method builds blocks directly without consensus.
-    /// The consensus path in `commands::run::run_async()` uses `check_mined_mining_tx()`
-    /// and submits to `ConsensusService` instead.
-    #[allow(dead_code)]
-    fn process_mined_blocks(&mut self) -> Result<()> {
-        // Collect mining transactions first to avoid borrow issues
-        let mining_txs: Vec<MinedMiningTx> = if let Some(ref receiver) = self.mining_tx_receiver {
-            let mut collected = Vec::new();
-            while let Ok(mined) = receiver.try_recv() {
-                collected.push(mined);
-            }
-            collected
-        } else {
-            Vec::new()
-        };
-
-        // Process collected mining transactions
-        // NOTE: This bypasses consensus - use run_async() for proper operation
-        for mined in mining_txs {
-            let mining_tx = &mined.mining_tx;
-            info!(
-                "Processing mining tx for height {} with priority {}",
-                mining_tx.block_height,
-                mined.pow_priority
-            );
-
-            // Get pending transactions from mempool (limit to 100 per block)
-            let pending_txs = self.get_pending_transactions(100);
-            let tx_count = pending_txs.len();
-
-            // Calculate transaction merkle root
-            let tx_root = if pending_txs.is_empty() {
-                [0u8; 32]
-            } else {
-                use sha2::{Digest, Sha256};
-                let mut hasher = Sha256::new();
-                for tx in &pending_txs {
-                    hasher.update(tx.hash());
-                }
-                hasher.finalize().into()
-            };
-
-            // Build a block from the mining transaction and pending txs
-            // (In full consensus mode, this would come from externalized values)
-            // Get miner's public address for block header (for PoW binding)
-            // Note: wallet is guaranteed to exist here since mining requires a wallet
-            let wallet = match self.wallet.as_ref() {
-                Some(w) => w,
-                None => {
-                    error!("Cannot build block without wallet");
-                    continue;
-                }
-            };
-            let miner_address = wallet.default_address();
-            let miner_view_key = miner_address.view_public_key().to_bytes();
-            let miner_spend_key = miner_address.spend_public_key().to_bytes();
-
-            let block = Block {
-                header: BlockHeader {
-                    version: 1,
-                    prev_block_hash: mining_tx.prev_block_hash,
-                    tx_root,
-                    timestamp: mining_tx.timestamp,
-                    height: mining_tx.block_height,
-                    difficulty: mining_tx.difficulty,
-                    nonce: mining_tx.nonce,
-                    miner_view_key,
-                    miner_spend_key,
-                },
-                mining_tx: mining_tx.clone(),
-                transactions: pending_txs,
-            };
-
-            // Add to ledger
-            let add_result = match self.ledger.write() {
-                Ok(mut ledger) => ledger.add_block(&block),
-                Err(_) => {
-                    error!("Ledger lock poisoned");
-                    continue;
-                }
-            };
-            match add_result {
-                Ok(()) => {
-                    info!(
-                        "Block {} added to ledger! Reward: {} credits, {} txs included",
-                        block.height(),
-                        mining_tx.reward as f64 / 1_000_000_000_000.0,
-                        tx_count
-                    );
-
-                    // Remove confirmed transactions from mempool
-                    if !block.transactions.is_empty() {
-                        if let Ok(mut mempool) = self.mempool.write() {
-                            mempool.remove_confirmed(&block.transactions);
-                        }
-                    }
-
-                    // Check if we need to adjust difficulty
-                    let new_height = block.height();
-                    if new_height > 0 && new_height % ADJUSTMENT_WINDOW == 0 {
-                        self.adjust_difficulty(new_height)?;
-                    }
-
-                    // Update miner with new work
-                    if let Some(ref miner) = self.miner {
-                        let ledger = self.ledger.read()
-                            .map_err(|_| anyhow::anyhow!("Ledger lock poisoned"))?;
-                        let state = ledger.get_chain_state().map_err(|e| {
-                            anyhow::anyhow!("Failed to get chain state: {}", e)
-                        })?;
-
-                        let work = MiningWork {
-                            prev_block_hash: state.tip_hash,
-                            height: state.height + 1,
-                            difficulty: state.difficulty,
-                            total_mined: state.total_mined,
-                        };
-                        miner.update_work(work);
-                    }
-                }
-                Err(e) => {
-                    // Block might be stale (we already have a block at this height)
-                    error!("Failed to add block: {}", e);
-                }
-            }
-        }
-        Ok(())
-    }
-
     fn adjust_difficulty(&mut self, current_height: u64) -> Result<()> {
         // Get the blocks in the adjustment window
         let window_start = current_height.saturating_sub(ADJUSTMENT_WINDOW);
@@ -403,27 +220,6 @@ impl Node {
                 .map_err(|e| anyhow::anyhow!("Failed to set difficulty: {}", e))?;
         }
 
-        Ok(())
-    }
-
-    fn print_mining_status(&self) -> Result<()> {
-        if let Some(ref miner) = self.miner {
-            let stats = miner.stats();
-            let ledger = self.ledger.read()
-                .map_err(|_| anyhow::anyhow!("Ledger lock poisoned"))?;
-            let state = ledger
-                .get_chain_state()
-                .map_err(|e| anyhow::anyhow!("Failed to get chain state: {}", e))?;
-
-            let net_supply = state.total_mined.saturating_sub(state.total_fees_burned);
-            println!(
-                "[Mining] Height: {} | Hashrate: {:.2} H/s | Txs found: {} | Supply: {:.6} credits",
-                state.height,
-                stats.hashrate(),
-                stats.txs_found,
-                net_supply as f64 / 1_000_000_000_000.0
-            );
-        }
         Ok(())
     }
 
@@ -493,103 +289,6 @@ impl Node {
         }
 
         Ok(())
-    }
-
-    /// Check if we've mined a mining transaction (non-blocking)
-    /// Returns a block built from the mining transaction
-    ///
-    /// DEPRECATED: This method builds blocks directly without consensus.
-    /// Use `check_mined_mining_tx()` to get the raw mining tx for consensus submission.
-    #[deprecated(note = "Use check_mined_mining_tx() and submit to ConsensusService")]
-    #[allow(dead_code)]
-    pub fn check_mined_block(&mut self) -> Result<Option<crate::block::Block>> {
-        if let Some(ref receiver) = self.mining_tx_receiver {
-            if let Ok(mined) = receiver.try_recv() {
-                let mining_tx = &mined.mining_tx;
-                info!(
-                    "Mined mining tx for height {} with priority {}",
-                    mining_tx.block_height,
-                    mined.pow_priority
-                );
-
-                // Get pending transactions from mempool
-                let pending_txs = self.get_pending_transactions(100);
-
-                // Calculate transaction merkle root
-                let tx_root = if pending_txs.is_empty() {
-                    [0u8; 32]
-                } else {
-                    use sha2::{Digest, Sha256};
-                    let mut hasher = Sha256::new();
-                    for tx in &pending_txs {
-                        hasher.update(tx.hash());
-                    }
-                    hasher.finalize().into()
-                };
-
-                // Build a block from the mining transaction
-                // Get miner's public address for block header (for PoW binding)
-                // Note: wallet is guaranteed to exist here since mining requires a wallet
-                let wallet = self.wallet.as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("Cannot build block without wallet"))?;
-                let miner_address = wallet.default_address();
-                let miner_view_key = miner_address.view_public_key().to_bytes();
-                let miner_spend_key = miner_address.spend_public_key().to_bytes();
-
-                let block = Block {
-                    header: BlockHeader {
-                        version: 1,
-                        prev_block_hash: mining_tx.prev_block_hash,
-                        tx_root,
-                        timestamp: mining_tx.timestamp,
-                        height: mining_tx.block_height,
-                        difficulty: mining_tx.difficulty,
-                        nonce: mining_tx.nonce,
-                        miner_view_key,
-                        miner_spend_key,
-                    },
-                    mining_tx: mining_tx.clone(),
-                    transactions: pending_txs,
-                };
-
-                // Add to our ledger
-                self.ledger.write()
-                    .map_err(|_| anyhow::anyhow!("Ledger lock poisoned"))?
-                    .add_block(&block)
-                    .map_err(|e| anyhow::anyhow!("Failed to add mined block: {}", e))?;
-
-                // Check if we need to adjust difficulty
-                let new_height = block.height();
-                if new_height > 0 && new_height % ADJUSTMENT_WINDOW == 0 {
-                    self.adjust_difficulty(new_height)?;
-                }
-
-                // Update miner with new work
-                if let Some(ref miner) = self.miner {
-                    if let Ok(ledger) = self.ledger.read() {
-                        if let Ok(state) = ledger.get_chain_state() {
-                            let work = MiningWork {
-                                prev_block_hash: state.tip_hash,
-                                height: state.height + 1,
-                                difficulty: state.difficulty,
-                                total_mined: state.total_mined,
-                            };
-                            miner.update_work(work);
-                        }
-                    }
-                }
-
-                // Remove confirmed transactions from mempool
-                if !block.transactions.is_empty() {
-                    if let Ok(mut mempool) = self.mempool.write() {
-                        mempool.remove_confirmed(&block.transactions);
-                    }
-                }
-
-                return Ok(Some(block));
-            }
-        }
-        Ok(None)
     }
 
     /// Check if we've mined a mining transaction (non-blocking)
