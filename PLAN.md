@@ -1,8 +1,56 @@
 # Botho - Work In Progress & Roadmap
 
-## Current Status: v0.1.0-beta Ready
+## Current Status: v0.1.0-beta (Security Hardening Required)
 
-Core functionality complete. See README.md for features and usage.
+Core functionality complete. Internal security audit (2025-12-30) identified **3 critical, 7 high severity issues** requiring fixes before production. See `audits/` for full reports.
+
+---
+
+## Security Hardening (Audit-Driven)
+
+### Critical Priority (Block Release)
+
+1. **Wallet Mnemonic Security**
+   - [ ] Zeroize `WalletKeys.mnemonic_phrase` in `botho-wallet/src/keys.rs`
+   - [ ] Redesign Tauri wallet to keep mnemonics in Rust only (never expose to JS)
+   - [ ] Add test mnemonic detection for production builds
+
+2. **Dependency Vulnerability**
+   - [ ] Update `reqwest` to 0.12.x (uses ring 0.17.x)
+   - [ ] Update `ethers` or migrate to `alloy` for bridge service
+   - [ ] Eliminate `ring 0.16.20` from dependency tree
+
+### High Priority (Before Production)
+
+3. **Consensus Robustness**
+   - [ ] Replace `unwrap()`/`panic!()` in SCP critical paths with error handling
+   - [ ] Add duplicate node detection in `QuorumSet::is_valid()`
+
+4. **Unsafe Code Cleanup**
+   - [ ] Remove or replace unsafe LRU cache iterator (`common/src/lru.rs:281`)
+   - [ ] Add `// SAFETY:` comments to Windows FFI code
+   - [ ] Add `#![deny(unsafe_code)]` to all 13 remaining crypto crates
+
+5. **Rate Limiting**
+   - [ ] Add wallet decryption rate limiting (exponential backoff)
+   - [ ] Add per-peer rate limiting on gossipsub messages
+
+### Medium Priority (30 Days)
+
+6. **Transaction Validation**
+   - [ ] Add within-tx key image collision check
+   - [ ] Implement cluster wealth tracking (currently hardcoded to 0)
+   - [ ] Add dust threshold for minimum output amounts
+
+7. **Dependency Hygiene**
+   - [ ] Create `deny.toml` for automated security scanning
+   - [ ] Fix yanked dependencies (futures-util, block-buffer)
+   - [ ] Update `clap` to fix unsound `anstream`
+
+8. **Documentation & Standards**
+   - [ ] Standardize unit naming (nanoBTH vs picocredits)
+   - [ ] Clarify block timing (60s vs 5-40s dynamic)
+   - [ ] Document LION rejection sampling margin justification
 
 ---
 
@@ -211,25 +259,30 @@ fit our existing model with acceptable size increase.
 ## Version Roadmap
 
 ```
-v0.1.0-beta  ← Current
+v0.1.0-beta  ← Current (Security Hardening)
 ├── Core functionality complete
 ├── PQ crypto working
 ├── Single seed node (seed.botho.io)
-└── CLI wallet operational
+├── CLI wallet operational
+└── ⚠️ 3 critical, 7 high security issues identified
 
-v0.1.x (patches)
-├── Bug fixes from beta feedback
-├── Encrypted memos
-└── Wallet UX improvements
+v0.1.x (security patches) — NEXT
+├── Fix wallet mnemonic zeroization (CRITICAL)
+├── Fix Tauri wallet architecture (CRITICAL)
+├── Update ring dependency (CRITICAL)
+├── Fix SCP panic handling (HIGH)
+├── Fix LRU unsafe code (HIGH)
+└── Add rate limiting (HIGH)
 
-v0.2.0
+v0.2.0 (hardened beta)
+├── All Critical/High issues resolved
+├── 3+ consecutive clean internal audits
+├── deny.toml dependency policy
 ├── Multiple seed nodes
-├── Mobile wallet support
-├── Fuzz testing
-└── Dashboard improvements
+└── Mobile wallet support
 
 v1.0.0 (production)
-├── External security audit
+├── External security audit passed
 ├── 6+ months stable operation
 ├── Community governance
 └── Full documentation
@@ -262,7 +315,9 @@ Add regional seed nodes when network grows:
 
 ---
 
-## Testing: Hardening Complete
+## Testing & Security Auditing
+
+### Test Infrastructure Complete
 
 - [x] Fuzz testing with cargo-fuzz for deserialization
   - 5 fuzz targets: Transaction, PQ Transaction, Block, PQ Keys, Network Messages
@@ -273,4 +328,18 @@ Add regional seed nodes when network grows:
 - [x] Cross-implementation compatibility tests (botho vs transaction/core PQ types)
   - 14 compatibility tests verifying type consistency
   - Located in `botho/tests/pq_compatibility.rs`
+
+### Internal Audit Process Established
+
+- [x] Created `AUDIT.md` — 10-section security checklist
+- [x] Created `audits/` directory with template and process docs
+- [x] Completed 2 full internal audit cycles (2025-12-30)
+- [ ] 3+ consecutive clean audits required before external audit
 - [ ] External security audit (required before v1.0)
+
+### Audit History
+
+| Date | Cycle | Critical | High | Status |
+|------|-------|----------|------|--------|
+| 2025-12-30 | 2 | 3 | 7 | Issues Found |
+| 2025-12-30 | 1 | 1 (fixed) | 1 | Issues Found |
