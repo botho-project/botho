@@ -1,4 +1,5 @@
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
+use bth_transaction_types::Network;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -6,6 +7,9 @@ use std::path::{Path, PathBuf};
 /// Main configuration for Botho
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    /// Network type (mainnet or testnet)
+    #[serde(default)]
+    pub network_type: Network,
     /// Wallet configuration (optional for relay/seed nodes)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wallet: Option<WalletConfig>,

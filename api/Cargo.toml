@@ -40,7 +40,6 @@ cargo-emit = { workspace = true }
 [dev-dependencies]
 bth-blockchain-test-utils = { workspace = true }
 bth-crypto-ring-signature-signer = { workspace = true }
-# bth-crypto-x509-test-vectors = { workspace = true }  # Removed: requires openssl
 bth-test-vectors-b58-encodings = { workspace = true }
 bth-transaction-builder = { workspace = true, features = ["test-only"] }
 bth-util-from-random = { workspace = true }

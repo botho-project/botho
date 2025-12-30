@@ -790,6 +790,7 @@ fn create_mock_pq_output(amount: u64) -> QuantumPrivateTxOutput {
             amount,
             target_key: [2u8; 32],
             public_key: [3u8; 32],
+            e_memo: None,
         },
         pq_ciphertext: vec![0u8; PQ_CIPHERTEXT_SIZE],
         pq_signing_pubkey: vec![0u8; PQ_SIGNING_PUBKEY_SIZE],

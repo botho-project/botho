@@ -838,6 +838,7 @@ mod tests {
             amount: 1_000_000,
             target_key,
             public_key: [0x33; 32],
+            e_memo: None,
         };
         let utxo = Utxo {
             id: utxo_id,
@@ -894,6 +895,7 @@ mod tests {
                 amount: 500,
                 target_key: [0x11; 32],
                 public_key: [0x22; 32],
+                e_memo: None,
             },
             created_at: 0,
         };
@@ -929,6 +931,7 @@ mod tests {
                 amount,
                 target_key: [0xBB; 32],
                 public_key: [0xCC; 32],
+                e_memo: None,
             },
             created_at: 100,
         };

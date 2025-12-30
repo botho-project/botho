@@ -573,6 +573,7 @@ mod tests {
                     amount: 1_000_000,
                     target_key: [1u8; 32],
                     public_key: [2u8; 32],
+                    e_memo: None,
                 },
                 pq_ciphertext: vec![0u8; PQ_CIPHERTEXT_SIZE],
                 pq_signing_pubkey: vec![0u8; PQ_SIGNING_PUBKEY_SIZE],

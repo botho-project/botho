@@ -50,7 +50,6 @@ tiny-bip39 = { workspace = true }
 x509-signature = { workspace = true }
 
 [dev-dependencies]
-# bth-crypto-x509-test-vectors = { workspace = true }  # Removed: requires openssl
 bth-util-test-helper = { workspace = true }
 
 tempfile = { workspace = true }

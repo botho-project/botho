@@ -245,7 +245,7 @@ pub struct TxOutput {
     /// Optional encrypted memo (66 bytes).
     /// Contains payment notes, reference IDs, or sender information.
     /// Only the recipient can decrypt this using their view key.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub e_memo: Option<EncryptedMemo>,
 }
 
@@ -1046,6 +1046,7 @@ mod tests {
             amount,
             target_key: target,
             public_key: public,
+            e_memo: None,
         }
     }
 

@@ -3,6 +3,113 @@
 //! Botho Transaction Constants.
 
 use bth_crypto_ring_signature::Scalar;
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
+use std::fmt;
+
+// =============================================================================
+// Network Configuration
+// =============================================================================
+
+/// The network type (mainnet or testnet)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
+pub enum Network {
+    /// Production network with real value
+    Mainnet,
+    /// Test network for development and testing (default during beta)
+    #[default]
+    Testnet,
+}
+
+impl Network {
+    /// Address prefix for this network
+    ///
+    /// Different prefixes prevent accidental cross-network sends.
+    pub const fn address_prefix(&self) -> &'static str {
+        match self {
+            Network::Mainnet => "botho://1/",
+            Network::Testnet => "tbotho://1/",
+        }
+    }
+
+    /// Quantum-safe address prefix for this network
+    #[cfg(feature = "pq")]
+    pub const fn quantum_address_prefix(&self) -> &'static str {
+        match self {
+            Network::Mainnet => "botho://1q/",
+            Network::Testnet => "tbotho://1q/",
+        }
+    }
+
+    /// Default gossip port for this network
+    pub const fn default_gossip_port(&self) -> u16 {
+        match self {
+            Network::Mainnet => 7100,
+            Network::Testnet => 17100,
+        }
+    }
+
+    /// Default RPC port for this network
+    pub const fn default_rpc_port(&self) -> u16 {
+        match self {
+            Network::Mainnet => 7101,
+            Network::Testnet => 17101,
+        }
+    }
+
+    /// Magic bytes for protocol handshake
+    ///
+    /// Nodes reject connections from different networks.
+    pub const fn magic_bytes(&self) -> [u8; 4] {
+        match self {
+            Network::Mainnet => [0x42, 0x54, 0x48, 0x4D], // "BTHM"
+            Network::Testnet => [0x42, 0x54, 0x48, 0x54], // "BTHT"
+        }
+    }
+
+    /// Network name as a string
+    pub const fn name(&self) -> &'static str {
+        match self {
+            Network::Mainnet => "mainnet",
+            Network::Testnet => "testnet",
+        }
+    }
+
+    /// Short display name for CLI output
+    pub const fn display_name(&self) -> &'static str {
+        match self {
+            Network::Mainnet => "MAINNET",
+            Network::Testnet => "TESTNET",
+        }
+    }
+
+    /// Directory name suffix for this network (e.g., "testnet" or "mainnet")
+    pub const fn dir_name(&self) -> &'static str {
+        self.name()
+    }
+
+    /// Whether this network is suitable for real value
+    pub const fn is_production(&self) -> bool {
+        matches!(self, Network::Mainnet)
+    }
+
+    /// Parse from string
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "mainnet" | "main" => Some(Network::Mainnet),
+            "testnet" | "test" => Some(Network::Testnet),
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for Network {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.name())
+    }
+}
 
 /// Maximum number of transactions that may be included in a Block.
 pub const MAX_TRANSACTIONS_PER_BLOCK: usize = 5000;
@@ -77,6 +184,97 @@ pub const FEE_BLINDING: Scalar = Scalar::ZERO;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // =========================================================================
+    // Network Tests
+    // =========================================================================
+
+    #[test]
+    fn test_network_default_is_testnet() {
+        assert_eq!(Network::default(), Network::Testnet);
+    }
+
+    #[test]
+    fn test_network_names() {
+        assert_eq!(Network::Mainnet.name(), "mainnet");
+        assert_eq!(Network::Testnet.name(), "testnet");
+    }
+
+    #[test]
+    fn test_network_display_names() {
+        assert_eq!(Network::Mainnet.display_name(), "MAINNET");
+        assert_eq!(Network::Testnet.display_name(), "TESTNET");
+    }
+
+    #[test]
+    fn test_network_address_prefixes_are_distinct() {
+        assert_ne!(
+            Network::Mainnet.address_prefix(),
+            Network::Testnet.address_prefix()
+        );
+        // Testnet prefix should start with 't'
+        assert!(Network::Testnet.address_prefix().starts_with('t'));
+        // Mainnet prefix should not start with 't'
+        assert!(!Network::Mainnet.address_prefix().starts_with('t'));
+    }
+
+    #[test]
+    fn test_network_ports_are_distinct() {
+        assert_ne!(
+            Network::Mainnet.default_gossip_port(),
+            Network::Testnet.default_gossip_port()
+        );
+        assert_ne!(
+            Network::Mainnet.default_rpc_port(),
+            Network::Testnet.default_rpc_port()
+        );
+        // Testnet ports should be offset by 10000
+        assert_eq!(
+            Network::Testnet.default_gossip_port(),
+            Network::Mainnet.default_gossip_port() + 10000
+        );
+    }
+
+    #[test]
+    fn test_network_magic_bytes_are_distinct() {
+        assert_ne!(
+            Network::Mainnet.magic_bytes(),
+            Network::Testnet.magic_bytes()
+        );
+        // Both should start with "BTH"
+        assert_eq!(&Network::Mainnet.magic_bytes()[..3], b"BTH");
+        assert_eq!(&Network::Testnet.magic_bytes()[..3], b"BTH");
+        // Mainnet ends with 'M', Testnet with 'T'
+        assert_eq!(Network::Mainnet.magic_bytes()[3], b'M');
+        assert_eq!(Network::Testnet.magic_bytes()[3], b'T');
+    }
+
+    #[test]
+    fn test_network_is_production() {
+        assert!(Network::Mainnet.is_production());
+        assert!(!Network::Testnet.is_production());
+    }
+
+    #[test]
+    fn test_network_from_str() {
+        assert_eq!(Network::from_str("mainnet"), Some(Network::Mainnet));
+        assert_eq!(Network::from_str("main"), Some(Network::Mainnet));
+        assert_eq!(Network::from_str("MAINNET"), Some(Network::Mainnet));
+        assert_eq!(Network::from_str("testnet"), Some(Network::Testnet));
+        assert_eq!(Network::from_str("test"), Some(Network::Testnet));
+        assert_eq!(Network::from_str("TESTNET"), Some(Network::Testnet));
+        assert_eq!(Network::from_str("invalid"), None);
+    }
+
+    #[test]
+    fn test_network_display() {
+        assert_eq!(format!("{}", Network::Mainnet), "mainnet");
+        assert_eq!(format!("{}", Network::Testnet), "testnet");
+    }
+
+    // =========================================================================
+    // Original Tests
+    // =========================================================================
 
     #[test]
     fn test_max_transactions_per_block() {

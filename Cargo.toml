@@ -32,7 +32,6 @@ members = [
     "crypto/ring-signature",
     "crypto/ring-signature/signer",
     "crypto/sig",
-    # "crypto/x509/test-vectors",  # Removed: requires openssl for cert generation
     "ledger/db",
     "ledger/migration",
     "ledger/sync",
@@ -41,7 +40,6 @@ members = [
     "test-vectors/account-keys",
     "test-vectors/b58-encodings",
     "test-vectors/memos",
-    # "test-vectors/tx-out-records",  # Removed: fog-dependent
     "transaction/builder",
     "transaction/core",
     "transaction/core/test-utils",
@@ -245,7 +243,6 @@ bth-crypto-noise = { path = "crypto/noise", default-features = false }
 bth-crypto-pq = { path = "crypto/pq", default-features = false }
 bth-crypto-ring-signature = { path = "crypto/ring-signature", default-features = false }
 bth-crypto-ring-signature-signer = { path = "crypto/ring-signature/signer", default-features = false }
-# bth-crypto-x509-test-vectors = { path = "crypto/x509/test-vectors" }  # Removed: requires openssl
 bth-ledger-db = { path = "ledger/db" }
 bth-ledger-migration = { path = "ledger/migration" }
 bth-ledger-sync = { path = "ledger/sync" }
@@ -254,7 +251,6 @@ bth-peers-test-utils = { path = "peers/test-utils" }
 bth-test-vectors-account-keys = { path = "test-vectors/account-keys" }
 bth-test-vectors-b58-encodings = { path = "test-vectors/b58-encodings" }
 bth-test-vectors-definitions = { path = "test-vectors/definitions" }
-# bth-test-vectors-tx-out-records = { path = "test-vectors/tx-out-records" }  # Removed: fog-dependent
 bth-transaction-builder = { path = "transaction/builder" }
 bth-transaction-core = { path = "transaction/core", default-features = false }
 bth-transaction-core-test-utils = { path = "transaction/core/test-utils" }

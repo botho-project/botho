@@ -12,7 +12,7 @@
 //! - Transaction type (Simple = Plain, Ring = Hidden)
 //! - Transfer amount
 //! - Sender's cluster wealth (currently 0, cluster tracking not yet implemented)
-//! - Number of memos (currently 0, memos not yet implemented)
+//! - Number of outputs with encrypted memos
 
 use std::collections::{HashMap, HashSet};
 use tracing::{debug, warn};
@@ -174,9 +174,9 @@ impl Mempool {
 
         // Use output_sum as the transfer amount for fee calculation
         // cluster_wealth = 0 for now (cluster tracking not yet implemented)
-        // num_memos = 0 for now (memos not yet implemented)
         let cluster_wealth = 0u64;
-        let num_memos = 0usize;
+        // Count outputs with encrypted memos for fee calculation
+        let num_memos = tx.outputs.iter().filter(|o| o.has_memo()).count();
         let minimum_fee = self.fee_config.minimum_fee(
             fee_tx_type,
             output_sum,

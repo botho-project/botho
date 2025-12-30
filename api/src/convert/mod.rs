@@ -21,13 +21,10 @@ mod block_signature;
 mod account_key;
 mod amount;
 mod cluster_tags;
-// mod collateral; // Removed: SGX-related
 mod compressed_ristretto;
 mod curve_scalar;
-// mod dcap_evidence; // Removed: SGX-related
 mod ed25519_multisig;
 mod ed25519_signature;
-// mod enclave_report_data_contents; // Removed: SGX-related
 mod input_ring;
 mod input_secret;
 mod key_image;
@@ -37,7 +34,6 @@ mod node;
 mod output_secret;
 mod public_address;
 mod quorum_set;
-// mod quote3; // Removed: SGX-related
 mod reduced_tx_out;
 mod reserved_subaddresses;
 mod ring_mlsag;
@@ -59,7 +55,6 @@ mod unsigned_tx;
 mod validated_mint_config;
 mod verification_report;
 mod verification_signature;
-// mod watcher; // Removed: SGX/Fog-specific
 
 // printable
 mod tx_out_gift_code;

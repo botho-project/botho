@@ -68,6 +68,11 @@ enum Commands {
         /// Outputs use ML-KEM-768, inputs use Schnorr + ML-DSA-65 signatures
         #[arg(long)]
         quantum: bool,
+
+        /// Attach an encrypted memo to the transaction (max 62 bytes)
+        /// Only the recipient can decrypt and read this message
+        #[arg(long)]
+        memo: Option<String>,
     },
 }
 
