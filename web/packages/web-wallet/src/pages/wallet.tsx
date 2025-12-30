@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react'
 import { Link } from 'react-router-dom'
-import { Button, Card, Input, Logo } from '@botho/ui'
+import { Button, Card, Input, Logo, Toast } from '@botho/ui'
 import { createMnemonic12 } from '@botho/core'
 import { useCopyToClipboard, BalanceCard, TransactionList, SendModal, type SendFormData, type SendResult } from '@botho/features'
 import { useWallet } from '../contexts/wallet'
@@ -213,12 +213,13 @@ function WalletDashboard() {
   const { address, balance, transactions, isConnecting, refreshBalance } = useWallet()
   const { copied, copy } = useCopyToClipboard()
   const [sendOpen, setSendOpen] = useState(false)
-  const [receiveOpen, setReceiveOpen] = useState(false)
   const [isSending, setIsSending] = useState(false)
+  const [showCopiedToast, setShowCopiedToast] = useState(false)
 
-  const copyAddress = () => {
+  const handleReceive = () => {
     if (address) {
       copy(address)
+      setShowCopiedToast(true)
     }
   }
 
@@ -248,7 +249,7 @@ function WalletDashboard() {
       <Button onClick={() => setSendOpen(true)}>
         <Send size={16} className="mr-2" />Send
       </Button>
-      <Button variant="secondary" onClick={() => setReceiveOpen(true)}>
+      <Button variant="secondary" onClick={handleReceive}>
         <Download size={16} className="mr-2" />Receive
       </Button>
       <Button variant="ghost" size="sm" onClick={refreshBalance} disabled={isConnecting}>
@@ -282,39 +283,12 @@ function WalletDashboard() {
         isSending={isSending}
       />
 
-      {receiveOpen && (
-        <div className="fixed inset-0 bg-void/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 z-50">
-          <Card className="w-full sm:max-w-md p-5 sm:p-6 rounded-t-2xl sm:rounded-2xl max-h-[90vh] overflow-y-auto">
-            <div className="text-center mb-5 sm:mb-6">
-              <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-success/10 flex items-center justify-center mx-auto mb-3 sm:mb-4">
-                <Download className="text-success" size={28} />
-              </div>
-              <h3 className="font-display text-lg sm:text-xl font-semibold mb-2">Receive BTH</h3>
-              <p className="text-ghost text-sm">Share your address to receive payments</p>
-            </div>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm text-ghost mb-2">Your Wallet Address</label>
-                <div className="p-3 sm:p-4 rounded-lg bg-abyss border border-steel font-mono text-xs sm:text-sm break-all select-all">
-                  {address ?? 'Loading...'}
-                </div>
-              </div>
-              <Button
-                onClick={() => {
-                  copyAddress()
-                  setTimeout(() => setReceiveOpen(false), 1500)
-                }}
-                className="w-full justify-center"
-              >
-                {copied ? <><Check size={16} className="mr-2" />Copied!</> : <><Copy size={16} className="mr-2" />Copy Address</>}
-              </Button>
-              <Button variant="secondary" onClick={() => setReceiveOpen(false)} className="w-full justify-center">
-                Close
-              </Button>
-            </div>
-          </Card>
-        </div>
-      )}
+      <Toast
+        message="Address copied to clipboard"
+        visible={showCopiedToast}
+        onHide={() => setShowCopiedToast(false)}
+        icon={<Check size={16} className="text-success" />}
+      />
     </div>
   )
 }
