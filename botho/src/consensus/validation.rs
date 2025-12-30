@@ -412,6 +412,7 @@ impl TransactionValidator {
 mod tests {
     use super::*;
     use crate::transaction::{ClsagRingInput, RingMember, TxOutput, MIN_RING_SIZE, MIN_TX_FEE};
+    use bth_transaction_types::ClusterTagVector;
 
     fn mock_chain_state() -> Arc<RwLock<ChainState>> {
         Arc::new(RwLock::new(ChainState {
@@ -444,6 +445,7 @@ mod tests {
             target_key: [id; 32],
             public_key: [id.wrapping_add(1); 32],
             e_memo: None,
+            cluster_tags: ClusterTagVector::empty(),
         }
     }
 
@@ -601,6 +603,7 @@ mod tests {
             PQ_CIPHERTEXT_SIZE, PQ_SIGNATURE_SIZE, PQ_SIGNING_PUBKEY_SIZE,
         };
         use crate::transaction::TxOutput;
+        use bth_transaction_types::ClusterTagVector;
 
         fn mock_pq_output() -> QuantumPrivateTxOutput {
             QuantumPrivateTxOutput {
@@ -609,6 +612,7 @@ mod tests {
                     target_key: [1u8; 32],
                     public_key: [2u8; 32],
                     e_memo: None,
+                    cluster_tags: ClusterTagVector::empty(),
                 },
                 pq_ciphertext: vec![0u8; PQ_CIPHERTEXT_SIZE],
                 pq_signing_pubkey: vec![0u8; PQ_SIGNING_PUBKEY_SIZE],

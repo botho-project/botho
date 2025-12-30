@@ -1,6 +1,6 @@
 use bth_account_keys::PublicAddress;
 use bth_crypto_keys::{RistrettoPublic, RistrettoSignature};
-use bth_transaction_types::Network;
+use bth_transaction_types::{ClusterTagVector, Network};
 use heed::types::{Bytes, U64};
 use heed::{Database, Env, EnvOpenOptions, RwTxn};
 use rand::Rng;
@@ -75,6 +75,12 @@ impl Ledger {
             LedgerError::Database(format!("Failed to create directory: {}", e))
         })?;
 
+        // SAFETY: LMDB environment opening is marked unsafe in heed because:
+        // 1. The same LMDB environment must not be opened multiple times concurrently
+        // 2. The path must exist and be accessible
+        // 3. The environment must not outlive the filesystem path
+        // We satisfy these by: only opening once per LedgerStore, creating the directory
+        // first, and storing the Env in the struct which owns it for its lifetime.
         let env = unsafe {
             EnvOpenOptions::new()
                 .max_dbs(6)  // Increased for tx_index_db
@@ -1089,6 +1095,7 @@ mod tests {
             target_key,
             public_key: [0x33; 32],
             e_memo: None,
+            cluster_tags: ClusterTagVector::empty(),
         };
         let utxo = Utxo {
             id: utxo_id,
@@ -1141,6 +1148,7 @@ mod tests {
                 target_key: [0x11; 32],
                 public_key: [0x22; 32],
                 e_memo: None,
+                cluster_tags: ClusterTagVector::empty(),
             },
             created_at: 0,
         };
@@ -1172,6 +1180,7 @@ mod tests {
                 target_key: [0xBB; 32],
                 public_key: [0xCC; 32],
                 e_memo: None,
+                cluster_tags: ClusterTagVector::empty(),
             },
             created_at: 100,
         };

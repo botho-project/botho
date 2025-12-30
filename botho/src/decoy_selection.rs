@@ -37,6 +37,7 @@ use rand_distr::{Distribution, Gamma};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::transaction::{TxOutput, Utxo};
+use bth_transaction_types::ClusterTagVector;
 
 // ============================================================================
 // Cluster Tag Types (simplified for decoy selection)
@@ -974,6 +975,7 @@ mod tests {
                 target_key,
                 public_key: [0u8; 32],
                 e_memo: None,
+                cluster_tags: ClusterTagVector::empty(),
             },
             created_at: current_height.saturating_sub(age_blocks),
             age_blocks,
@@ -993,6 +995,7 @@ mod tests {
                 target_key,
                 public_key: [0u8; 32],
                 e_memo: None,
+                cluster_tags: ClusterTagVector::empty(),
             },
             created_at: current_height.saturating_sub(age_blocks),
             age_blocks,

@@ -580,6 +580,7 @@ impl QuantumPrivateTransaction {
 #[cfg(all(test, feature = "pq"))]
 mod tests {
     use super::*;
+    use bth_transaction_types::ClusterTagVector;
 
     const TEST_MNEMONIC: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 
@@ -642,6 +643,7 @@ mod tests {
                     target_key: [2u8; 32],
                     public_key: [3u8; 32],
                     e_memo: None,
+                    cluster_tags: ClusterTagVector::empty(),
                 },
                 pq_ciphertext: vec![0u8; PQ_CIPHERTEXT_SIZE],
                 pq_signing_pubkey: vec![0u8; PQ_SIGNING_PUBKEY_SIZE],
@@ -668,6 +670,7 @@ mod tests {
                     target_key: [2u8; 32],
                     public_key: [3u8; 32],
                     e_memo: None,
+                    cluster_tags: ClusterTagVector::empty(),
                 },
                 pq_ciphertext: vec![0u8; PQ_CIPHERTEXT_SIZE],
                 pq_signing_pubkey: vec![0u8; PQ_SIGNING_PUBKEY_SIZE],
@@ -743,6 +746,7 @@ mod tests {
                     target_key: [2u8; 32],
                     public_key: [3u8; 32],
                     e_memo: None,
+                    cluster_tags: ClusterTagVector::empty(),
                 },
                 pq_ciphertext: vec![0u8; PQ_CIPHERTEXT_SIZE],
                 pq_signing_pubkey: vec![0u8; PQ_SIGNING_PUBKEY_SIZE],
@@ -773,6 +777,7 @@ mod tests {
                     target_key: [2u8; 32],
                     public_key: [3u8; 32],
                     e_memo: None,
+                    cluster_tags: ClusterTagVector::empty(),
                 },
                 pq_ciphertext: vec![0u8; PQ_CIPHERTEXT_SIZE],
                 pq_signing_pubkey: vec![0u8; PQ_SIGNING_PUBKEY_SIZE],

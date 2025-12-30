@@ -3,8 +3,10 @@ use bip39::{Language, Mnemonic, Seed};
 use bth_account_keys::{AccountKey, PublicAddress};
 use bth_core::slip10::Slip10KeyGenerator;
 use bth_crypto_keys::RistrettoSignature;
+use bth_transaction_types::{ClusterTagVector, TAG_WEIGHT_SCALE};
 use rand::rngs::OsRng;
 use rand::seq::SliceRandom;
+use std::collections::HashMap;
 use tracing::debug;
 use zeroize::Zeroizing;
 
@@ -18,6 +20,10 @@ use crate::ledger::Ledger;
 use crate::transaction::{
     ClsagRingInput, RingMember, Transaction, TxOutput, Utxo, MIN_RING_SIZE,
 };
+
+/// Default decay rate for cluster tags when transferring coins.
+/// 5% decay per transaction (50,000 / 1,000,000 = 5%).
+pub const DEFAULT_CLUSTER_DECAY_RATE: u32 = 50_000;
 
 #[cfg(feature = "pq")]
 use crate::transaction_pq::{
@@ -84,6 +90,56 @@ impl Wallet {
     /// Get the account key (needed for transaction signing)
     pub fn account_key(&self) -> &AccountKey {
         &self.account_key
+    }
+
+    /// Compute cluster wealth from a set of UTXOs.
+    ///
+    /// For progressive fee computation, we need to know the maximum cluster wealth
+    /// among all clusters the wallet's coins are tagged with. Higher cluster wealth
+    /// = higher fee multiplier (1x to 6x).
+    ///
+    /// The cluster wealth for cluster C is: W_C = Σ (utxo_value × tag_weight_C / TAG_WEIGHT_SCALE)
+    ///
+    /// This method returns the **maximum** cluster wealth across all clusters,
+    /// as that determines the fee rate.
+    pub fn compute_cluster_wealth(utxos: &[Utxo]) -> u64 {
+        // Accumulate wealth per cluster: cluster_id -> total weighted value
+        let mut cluster_wealths: HashMap<u64, u64> = HashMap::new();
+
+        for utxo in utxos {
+            let value = utxo.output.amount;
+            for entry in &utxo.output.cluster_tags.entries {
+                // Contribution = value × weight / TAG_WEIGHT_SCALE
+                // Use u128 to avoid overflow during multiplication
+                let contribution = ((value as u128) * (entry.weight as u128)
+                    / (TAG_WEIGHT_SCALE as u128)) as u64;
+
+                *cluster_wealths.entry(entry.cluster_id.0).or_insert(0) += contribution;
+            }
+        }
+
+        // Return the maximum cluster wealth (determines fee rate)
+        cluster_wealths.values().copied().max().unwrap_or(0)
+    }
+
+    /// Compute inherited cluster tags for transaction outputs.
+    ///
+    /// When creating a transaction, outputs inherit tags from inputs with decay.
+    /// This ensures coin lineage is tracked through the transaction graph.
+    ///
+    /// # Arguments
+    /// * `utxos` - The UTXOs being spent as inputs
+    /// * `decay_rate` - Decay to apply (parts per TAG_WEIGHT_SCALE, e.g., 50_000 = 5%)
+    ///
+    /// # Returns
+    /// A ClusterTagVector representing the merged and decayed tags.
+    pub fn compute_inherited_tags(utxos: &[Utxo], decay_rate: u32) -> ClusterTagVector {
+        let inputs: Vec<(ClusterTagVector, u64)> = utxos
+            .iter()
+            .map(|u| (u.output.cluster_tags.clone(), u.output.amount))
+            .collect();
+
+        ClusterTagVector::merge_weighted(&inputs, decay_rate)
     }
 
     /// Format the public address as a string for display
@@ -209,6 +265,19 @@ impl Wallet {
         if utxos_to_spend.is_empty() {
             return Err(anyhow::anyhow!("No UTXOs to spend"));
         }
+
+        // Compute inherited cluster tags from inputs with default decay
+        // All outputs inherit the same merged+decayed tag vector from inputs
+        let inherited_tags = Self::compute_inherited_tags(utxos_to_spend, DEFAULT_CLUSTER_DECAY_RATE);
+
+        // Apply inherited tags to all outputs
+        let outputs: Vec<TxOutput> = outputs
+            .into_iter()
+            .map(|mut o| {
+                o.cluster_tags = inherited_tags.clone();
+                o
+            })
+            .collect();
 
         // Calculate total output amount for the signing message
         let total_output: u64 = outputs.iter().map(|o| o.amount).sum::<u64>() + fee;
@@ -508,6 +577,8 @@ impl Wallet {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::transaction::UtxoId;
+    use bth_transaction_types::{ClusterId, ClusterTagEntry};
 
     #[test]
     fn test_wallet_from_mnemonic() {
@@ -516,5 +587,112 @@ mod tests {
         let addr = wallet.default_address();
         // Just verify we get a valid address
         assert!(!addr.view_public_key().to_bytes().is_empty());
+    }
+
+    fn make_utxo(amount: u64, cluster_tags: ClusterTagVector) -> Utxo {
+        Utxo {
+            id: UtxoId::new([0u8; 32], 0),
+            output: TxOutput {
+                amount,
+                target_key: [0u8; 32],
+                public_key: [0u8; 32],
+                e_memo: None,
+                cluster_tags,
+            },
+            created_at: 0,
+        }
+    }
+
+    #[test]
+    fn test_cluster_wealth_empty() {
+        let utxos: Vec<Utxo> = vec![];
+        assert_eq!(Wallet::compute_cluster_wealth(&utxos), 0);
+    }
+
+    #[test]
+    fn test_cluster_wealth_single_cluster() {
+        // Single UTXO with 100% in one cluster
+        let tags = ClusterTagVector::single(ClusterId(42));
+        let utxos = vec![make_utxo(1_000_000, tags)];
+
+        // Wealth = 1_000_000 * 1_000_000 / 1_000_000 = 1_000_000
+        assert_eq!(Wallet::compute_cluster_wealth(&utxos), 1_000_000);
+    }
+
+    #[test]
+    fn test_cluster_wealth_multiple_utxos_same_cluster() {
+        // Multiple UTXOs all in the same cluster
+        let tags = ClusterTagVector::single(ClusterId(42));
+        let utxos = vec![
+            make_utxo(1_000_000, tags.clone()),
+            make_utxo(2_000_000, tags.clone()),
+            make_utxo(500_000, tags),
+        ];
+
+        // Total wealth = 1M + 2M + 0.5M = 3.5M
+        assert_eq!(Wallet::compute_cluster_wealth(&utxos), 3_500_000);
+    }
+
+    #[test]
+    fn test_cluster_wealth_multiple_clusters() {
+        // UTXOs in different clusters - should return max
+        let tags1 = ClusterTagVector::single(ClusterId(1));
+        let tags2 = ClusterTagVector::single(ClusterId(2));
+        let utxos = vec![
+            make_utxo(1_000_000, tags1),  // Cluster 1: 1M
+            make_utxo(3_000_000, tags2),  // Cluster 2: 3M
+        ];
+
+        // Max cluster wealth = 3M (cluster 2)
+        assert_eq!(Wallet::compute_cluster_wealth(&utxos), 3_000_000);
+    }
+
+    #[test]
+    fn test_cluster_wealth_partial_tags() {
+        // UTXO with 50% in each of two clusters
+        let mut tags = ClusterTagVector::empty();
+        tags.entries.push(ClusterTagEntry {
+            cluster_id: ClusterId(1),
+            weight: 500_000, // 50%
+        });
+        tags.entries.push(ClusterTagEntry {
+            cluster_id: ClusterId(2),
+            weight: 500_000, // 50%
+        });
+
+        let utxos = vec![make_utxo(2_000_000, tags)];
+
+        // Each cluster gets 2M * 50% = 1M
+        assert_eq!(Wallet::compute_cluster_wealth(&utxos), 1_000_000);
+    }
+
+    #[test]
+    fn test_inherited_tags_single_input() {
+        let tags = ClusterTagVector::single(ClusterId(42));
+        let utxos = vec![make_utxo(1_000_000, tags)];
+
+        // No decay
+        let inherited = Wallet::compute_inherited_tags(&utxos, 0);
+        assert_eq!(inherited.get_weight(ClusterId(42)), TAG_WEIGHT_SCALE);
+
+        // 10% decay
+        let inherited = Wallet::compute_inherited_tags(&utxos, 100_000);
+        assert_eq!(inherited.get_weight(ClusterId(42)), 900_000); // 90%
+    }
+
+    #[test]
+    fn test_inherited_tags_multiple_inputs() {
+        // Two equal-value inputs from different clusters
+        let tags1 = ClusterTagVector::single(ClusterId(1));
+        let tags2 = ClusterTagVector::single(ClusterId(2));
+        let utxos = vec![
+            make_utxo(1_000_000, tags1),
+            make_utxo(1_000_000, tags2),
+        ];
+
+        let inherited = Wallet::compute_inherited_tags(&utxos, 0);
+        // Each cluster should have 50%
+        assert_eq!(inherited.get_weight(ClusterId(1)), 500_000);
+        assert_eq!(inherited.get_weight(ClusterId(2)), 500_000);
     }
 }

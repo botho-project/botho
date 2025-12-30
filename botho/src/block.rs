@@ -1,7 +1,7 @@
 use bth_account_keys::PublicAddress;
 use bth_crypto_keys::RistrettoPrivate;
 use bth_crypto_ring_signature::onetime_keys::{create_tx_out_public_key, create_tx_out_target_key};
-use bth_transaction_types::Network;
+use bth_transaction_types::{ClusterId, ClusterTagVector, Network};
 use bth_util_from_random::FromRandom;
 use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
@@ -273,12 +273,21 @@ impl MintingTx {
     ///
     /// This allows the ledger to store minting rewards using the same UTXO format
     /// as regular transaction outputs.
+    ///
+    /// Minting creates a **new cluster origin** - the output is tagged with 100%
+    /// attribution to a new cluster derived from the minting tx hash. This is how
+    /// coin lineage tracking begins.
     pub fn to_tx_output(&self) -> TxOutput {
+        // Create a new cluster ID from the first 8 bytes of the minting tx hash
+        let tx_hash = self.hash();
+        let cluster_id = ClusterId(u64::from_le_bytes(tx_hash[0..8].try_into().unwrap()));
+
         TxOutput {
             amount: self.reward,
             target_key: self.target_key,
             public_key: self.public_key,
             e_memo: None, // Minting rewards don't have memos
+            cluster_tags: ClusterTagVector::single(cluster_id),
         }
     }
 }

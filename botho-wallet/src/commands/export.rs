@@ -52,7 +52,7 @@ pub async fn run(wallet_path: &Path, output: Option<String>) -> Result<()> {
              {}\n",
             chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC"),
             keys.address_string(),
-            mnemonic
+            mnemonic.as_str()
         );
 
         // Write with restricted permissions
