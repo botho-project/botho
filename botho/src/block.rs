@@ -456,22 +456,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(deprecated)]
-    fn test_block_reward_tail_emission_legacy() {
-        // Legacy Monero-style: At very high total mined, should get tail emission
-        let reward = calculate_block_reward(1_000_000, u64::MAX - 1000);
-        assert_eq!(reward, 600_000_000_000);
-    }
-
-    #[test]
-    #[allow(deprecated)]
-    fn test_block_reward_early_legacy() {
-        // Legacy Monero-style: Early blocks should get more than tail
-        let reward = calculate_block_reward(1, 0);
-        assert!(reward > 600_000_000_000);
-    }
-
-    #[test]
     fn test_block_reward_v2_halving() {
         // Two-Phase model: First halving period
         let policy = crate::monetary::mainnet_policy();

@@ -93,10 +93,13 @@ async fn run_async(config: Config, config_path: &Path, mine: bool) -> Result<()>
         shutdown_clone.store(true, Ordering::SeqCst);
     })?;
 
+    // Get network type for port/peer defaults
+    let network_type = config.network_type();
+
     // Start network discovery
     let mut discovery = NetworkDiscovery::new(
-        config.network.gossip_port,
-        config.network.bootstrap_peers.clone(),
+        config.network.gossip_port(network_type),
+        config.network.bootstrap_peers(network_type),
     );
 
     let mut swarm = discovery.start().await?;
@@ -170,7 +173,7 @@ async fn run_async(config: Config, config_path: &Path, mine: bool) -> Result<()>
     let mut node = Node::new(config.clone(), config_path)?;
 
     // Start RPC server for thin wallet connections
-    let rpc_addr: SocketAddr = format!("0.0.0.0:{}", config.network.rpc_port)
+    let rpc_addr: SocketAddr = format!("0.0.0.0:{}", config.network.rpc_port(network_type))
         .parse()
         .expect("Invalid RPC address");
 

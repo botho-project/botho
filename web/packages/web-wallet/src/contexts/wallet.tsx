@@ -4,10 +4,11 @@ import {
   useEffect,
   useState,
   useCallback,
+  useRef,
   type ReactNode,
 } from 'react'
 import { RemoteNodeAdapter } from '@botho/adapters'
-import { AddressBook } from '@botho/core'
+import { AddressBook, saveWallet, loadWallet, getWalletInfo, deriveAddress, isValidMnemonic } from '@botho/core'
 import type { Balance, Contact, NodeInfo, Transaction } from '@botho/core'
 
 interface WalletState {
@@ -19,6 +20,8 @@ interface WalletState {
 
   // Wallet
   hasWallet: boolean
+  isEncrypted: boolean
+  isLocked: boolean
   address: string | null
   balance: Balance | null
   transactions: Transaction[]
@@ -33,9 +36,10 @@ interface WalletContextValue extends WalletState {
   disconnect: () => void
 
   // Wallet
-  createWallet: () => Promise<void>
-  importWallet: (seedPhrase: string) => Promise<void>
-  exportWallet: () => string | null
+  createWallet: (mnemonic: string, password?: string) => Promise<void>
+  importWallet: (seedPhrase: string, password?: string) => Promise<void>
+  unlockWallet: (password: string) => Promise<void>
+  exportWallet: (password?: string) => Promise<string | null>
 
   // Transactions
   send: (to: string, amount: bigint, memo?: string) => Promise<string>
@@ -65,11 +69,16 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     nodeInfo: null,
     connectionError: null,
     hasWallet: false,
+    isEncrypted: false,
+    isLocked: false,
     address: null,
     balance: null,
     transactions: [],
     contacts: [],
   })
+
+  // Store mnemonic in memory after unlock (cleared on page refresh)
+  const mnemonicRef = useRef<string | null>(null)
 
   // Load address book on mount
   useEffect(() => {
@@ -97,15 +106,24 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       }))
 
       // Check for stored wallet
-      const storedAddress = localStorage.getItem('botho-wallet-address')
-      if (storedAddress) {
-        setState(s => ({ ...s, hasWallet: true, address: storedAddress }))
-        // Fetch balance and transactions
-        const [balance, transactions] = await Promise.all([
-          adapter.getBalance([storedAddress]),
-          adapter.getTransactionHistory([storedAddress], { limit: 50 }),
-        ])
-        setState(s => ({ ...s, balance, transactions }))
+      const walletInfo = getWalletInfo()
+      if (walletInfo.exists) {
+        setState(s => ({
+          ...s,
+          hasWallet: true,
+          isEncrypted: walletInfo.isEncrypted,
+          isLocked: walletInfo.isEncrypted, // Encrypted wallets start locked
+          address: walletInfo.address,
+        }))
+
+        // If not encrypted, load balance immediately
+        if (!walletInfo.isEncrypted && walletInfo.address) {
+          const [balance, transactions] = await Promise.all([
+            adapter.getBalance([walletInfo.address]),
+            adapter.getTransactionHistory([walletInfo.address], { limit: 50 }),
+          ])
+          setState(s => ({ ...s, balance, transactions }))
+        }
       }
     } catch (err) {
       setState(s => ({
@@ -125,56 +143,96 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     }))
   }, [])
 
-  const createWallet = useCallback(async () => {
-    // TODO: Implement actual wallet creation with crypto
-    // For now, generate a placeholder address
-    const mockAddress = 'bth1' + Array.from(crypto.getRandomValues(new Uint8Array(32)))
-      .map(b => b.toString(16).padStart(2, '0'))
-      .join('')
-      .slice(0, 40)
+  const createWallet = useCallback(async (mnemonic: string, password?: string) => {
+    if (!isValidMnemonic(mnemonic)) {
+      throw new Error('Invalid mnemonic provided')
+    }
 
-    localStorage.setItem('botho-wallet-address', mockAddress)
+    // Save wallet (mnemonic + derived address) to localStorage
+    await saveWallet(mnemonic, password)
+    const address = deriveAddress(mnemonic)
+
+    // Store mnemonic in memory
+    mnemonicRef.current = mnemonic
+
     setState(s => ({
       ...s,
       hasWallet: true,
-      address: mockAddress,
+      isEncrypted: !!password,
+      isLocked: false,
+      address,
       balance: { available: 0n, pending: 0n, total: 0n },
       transactions: [],
     }))
   }, [])
 
-  const importWallet = useCallback(async (seedPhrase: string) => {
-    // TODO: Implement actual wallet import
-    // Validate seed phrase and derive address
-    if (seedPhrase.split(' ').length !== 24) {
-      throw new Error('Invalid seed phrase. Expected 24 words.')
+  const importWallet = useCallback(async (seedPhrase: string, password?: string) => {
+    // Normalize input: trim, lowercase, collapse whitespace
+    const normalized = seedPhrase.trim().toLowerCase().replace(/\s+/g, ' ')
+
+    // Validate mnemonic (supports 12 or 24 words)
+    const wordCount = normalized.split(' ').length
+    if (wordCount !== 12 && wordCount !== 24) {
+      throw new Error('Invalid recovery phrase. Expected 12 or 24 words.')
     }
 
-    const mockAddress = 'bth1' + Array.from(crypto.getRandomValues(new Uint8Array(32)))
-      .map(b => b.toString(16).padStart(2, '0'))
-      .join('')
-      .slice(0, 40)
+    if (!isValidMnemonic(normalized)) {
+      throw new Error('Invalid recovery phrase. Please check your words and try again.')
+    }
 
-    localStorage.setItem('botho-wallet-address', mockAddress)
-    localStorage.setItem('botho-wallet-seed', seedPhrase) // TODO: Encrypt this!
+    // Save wallet using proper derivation
+    await saveWallet(normalized, password)
+    const address = deriveAddress(normalized)
+
+    // Store mnemonic in memory
+    mnemonicRef.current = normalized
 
     setState(s => ({
       ...s,
       hasWallet: true,
-      address: mockAddress,
+      isEncrypted: !!password,
+      isLocked: false,
+      address,
     }))
 
     // Fetch balance
     if (adapter.isConnected()) {
-      const balance = await adapter.getBalance([mockAddress])
-      const transactions = await adapter.getTransactionHistory([mockAddress], { limit: 50 })
+      const balance = await adapter.getBalance([address])
+      const transactions = await adapter.getTransactionHistory([address], { limit: 50 })
       setState(s => ({ ...s, balance, transactions }))
     }
   }, [])
 
-  const exportWallet = useCallback(() => {
-    // TODO: Implement actual seed phrase export
-    return localStorage.getItem('botho-wallet-seed')
+  const unlockWallet = useCallback(async (password: string) => {
+    const stored = await loadWallet(password)
+    if (!stored) {
+      throw new Error('No wallet found')
+    }
+
+    // Store mnemonic in memory
+    mnemonicRef.current = stored.mnemonic
+
+    setState(s => ({ ...s, isLocked: false }))
+
+    // Fetch balance now that we're unlocked
+    if (adapter.isConnected() && stored.address) {
+      const [balance, transactions] = await Promise.all([
+        adapter.getBalance([stored.address]),
+        adapter.getTransactionHistory([stored.address], { limit: 50 }),
+      ])
+      setState(s => ({ ...s, balance, transactions }))
+    }
+  }, [])
+
+  const exportWallet = useCallback(async (password?: string) => {
+    // If we have mnemonic in memory, use it
+    if (mnemonicRef.current) {
+      return mnemonicRef.current
+    }
+
+    // Otherwise try to load from storage
+    const stored = await loadWallet(password)
+    return stored?.mnemonic ?? null
   }, [])
 
   const send = useCallback(async (to: string, amount: bigint, memo?: string): Promise<string> => {
@@ -225,6 +283,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         disconnect,
         createWallet,
         importWallet,
+        unlockWallet,
         exportWallet,
         send,
         refreshBalance,

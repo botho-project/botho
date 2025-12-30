@@ -20,16 +20,21 @@ Core functionality complete. See README.md for features and usage.
 
 2. **Transaction Size Limits** - Add max size validation before deserialization
 
-3. **Add Memo Field to TxOutput**
-   - Botho's TxOutput currently lacks a memo field
-   - Required to enable the memo fee system
+3. **Add Memo Field to TxOutput** ✓ COMPLETE
+   - Botho's TxOutput now supports encrypted memos
+   - Memo fee system is wired into mempool validation
    - Tasks:
-     - [ ] Add `e_memo: Option<EncryptedMemo>` to `TxOutput` in `botho/src/transaction.rs`
-     - [ ] Define `EncryptedMemo` type (66 bytes: 2-byte type + 64-byte encrypted payload)
-     - [ ] Update serialization/deserialization
-     - [ ] Add memo creation helpers to wallet transaction builder
-     - [ ] Wire memo counting into mempool validation
-     - [ ] Update `botho send` to optionally attach memos
+     - [x] Add `e_memo: Option<EncryptedMemo>` to `TxOutput` in `botho/src/transaction.rs`
+     - [x] Define `EncryptedMemo` type (66 bytes: 2-byte type + 64-byte encrypted payload)
+     - [x] Update serialization/deserialization (bincode-compatible)
+     - [x] Add memo creation helpers (`MemoPayload::destination()`, `encrypt()`)
+     - [x] Wire memo counting into mempool validation
+     - [x] Add `--memo` flag to `botho send` CLI
+   - Implementation notes:
+     - Uses AES-256-CTR encryption with HKDF-SHA512 key derivation
+     - Shared secret: `create_shared_secret(recipient_view_key, tx_private_key)`
+     - Recipient decrypts using: `create_shared_secret(output_public_key, view_private_key)`
+     - Compatible with existing fee system in `bth-cluster-tax`
 
 4. **Wallet PQ Integration** (requires network protocol support)
    - [ ] Full PQ transaction building (UTXO selection, signing)

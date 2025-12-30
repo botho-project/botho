@@ -47,9 +47,11 @@ pub fn run(config_path: &Path) -> Result<()> {
         state.difficulty, state.difficulty
     );
     println!();
+    let network = config.network_type();
     println!("Network:");
-    println!("  Gossip port: {}", config.network.gossip_port);
-    println!("  Bootstrap peers: {}", config.network.bootstrap_peers.len());
+    println!("  Type: {}", network.display_name());
+    println!("  Gossip port: {}", config.network.gossip_port(network));
+    println!("  Bootstrap peers: {}", config.network.bootstrap_peers(network).len());
     if config.network.bootstrap_peers.is_empty() {
         println!("  (No bootstrap peers - solo mining only)");
     }

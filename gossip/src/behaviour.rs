@@ -239,9 +239,10 @@ impl GossipBehaviour {
         // Configure Kademlia
         let kademlia = kad::Behaviour::new(local_peer_id, MemoryStore::new(local_peer_id));
 
-        // Configure identify
+        // Configure identify with network-specific protocol version
+        let protocol_version = config.network_id.protocol_version();
         let identify = identify::Behaviour::new(identify::Config::new(
-            "/botho/1.0.0".to_string(),
+            protocol_version,
             libp2p::identity::Keypair::generate_ed25519().public(),
         ));
 

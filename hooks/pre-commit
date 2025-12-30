@@ -2,7 +2,7 @@
 
 # Inspired by https://github.com/google/tarpc/blob/master/hooks/pre-commit
 #
-# Pre-commit hook for the mobilenode repository. To use this hook, copy it or
+# Pre-commit hook for the Botho repository. To use this hook, copy it or
 # add a symlink to it in .git/hooks in your repository root
 #
 # This precommit checks the following:
@@ -148,7 +148,7 @@ fi
 # Similarly, check if copyright statements are missing and offer to add them if they are
 printf "${PREFIX} Checking copyright statements ... "
 YEAR=$(date +%Y)
-COPYRIGHT_LINE="// Copyright (c) 2018-${YEAR} The MobileCoin Foundation"
+COPYRIGHT_LINE="// Copyright (c) 2018-${YEAR} The Botho Foundation"
 missing_copyright=""
 wrong_copyright=""
 for file in $(git diff --name-only --cached --diff-filter=d | egrep -v '^sgx/sgx_(tcrypto|urts|types)');

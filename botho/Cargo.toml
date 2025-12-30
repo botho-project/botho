@@ -44,6 +44,7 @@ hkdf = { workspace = true }
 
 # Monetary Policy
 bth-cluster-tax = { path = "../cluster-tax" }
+bth-transaction-types = { path = "../transaction/types", default-features = true }
 
 # Networking & Consensus
 bth-gossip = { path = "../gossip" }

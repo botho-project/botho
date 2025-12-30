@@ -7,7 +7,6 @@ use std::sync::mpsc::Receiver;
 use std::sync::{Arc, RwLock};
 use tracing::{info, warn};
 
-use crate::block::Block;
 use crate::block::difficulty::{calculate_new_difficulty, ADJUSTMENT_WINDOW};
 use crate::commands::send::{load_pending_txs, clear_pending_txs};
 use crate::config::{ledger_db_path_from_config, Config};

@@ -4,15 +4,22 @@
 //!
 //! Supports both classical and quantum-safe addresses with a clean URI format:
 //!
+//! Mainnet:
 //! - Classical: `botho://1/<base58(view||spend)>` (~90 chars)
 //! - Quantum:   `botho://1q/<base58(view||spend||kem||sig)>` (~4400 chars)
 //!
+//! Testnet:
+//! - Classical: `tbotho://1/<base58(view||spend)>` (~91 chars)
+//! - Quantum:   `tbotho://1q/<base58(view||spend||kem||sig)>` (~4401 chars)
+//!
 //! The version number (1) allows for future format upgrades.
 //! The 'q' suffix indicates quantum-safe addresses.
+//! The 't' prefix indicates testnet addresses.
 
 use anyhow::{anyhow, Result};
 use bth_account_keys::PublicAddress;
 use bth_crypto_keys::RistrettoPublic;
+use bth_transaction_types::constants::Network;
 
 #[cfg(feature = "pq")]
 use bth_account_keys::QuantumSafePublicAddress;
@@ -20,15 +27,30 @@ use bth_account_keys::QuantumSafePublicAddress;
 /// Address format version
 pub const ADDRESS_VERSION: u8 = 1;
 
-/// Classical address prefix
-pub const CLASSICAL_PREFIX: &str = "botho://1/";
+/// Classical address prefixes by network
+pub const MAINNET_CLASSICAL_PREFIX: &str = "botho://1/";
+pub const TESTNET_CLASSICAL_PREFIX: &str = "tbotho://1/";
 
-/// Quantum-safe address prefix
-pub const QUANTUM_PREFIX: &str = "botho://1q/";
+/// Quantum-safe address prefixes by network
+pub const MAINNET_QUANTUM_PREFIX: &str = "botho://1q/";
+pub const TESTNET_QUANTUM_PREFIX: &str = "tbotho://1q/";
 
-/// Represents either a classical or quantum-safe address
+// Legacy prefixes for backwards compatibility
+pub const CLASSICAL_PREFIX: &str = MAINNET_CLASSICAL_PREFIX;
+pub const QUANTUM_PREFIX: &str = MAINNET_QUANTUM_PREFIX;
+
+/// Represents either a classical or quantum-safe address, with network info
 #[derive(Debug, Clone)]
-pub enum Address {
+pub struct Address {
+    /// The network this address belongs to
+    pub network: Network,
+    /// The address type (classical or quantum)
+    pub kind: AddressKind,
+}
+
+/// The type of address (classical or quantum-safe)
+#[derive(Debug, Clone)]
+pub enum AddressKind {
     /// Classical address (view + spend keys, ~64 bytes)
     Classical(PublicAddress),
     /// Quantum-safe address (view + spend + KEM + sig keys, ~3200 bytes)
@@ -37,7 +59,24 @@ pub enum Address {
 }
 
 impl Address {
-    /// Parse an address from a string, auto-detecting the type
+    /// Create a new classical address for a network
+    pub fn classical(addr: PublicAddress, network: Network) -> Self {
+        Self {
+            network,
+            kind: AddressKind::Classical(addr),
+        }
+    }
+
+    /// Create a new quantum-safe address for a network
+    #[cfg(feature = "pq")]
+    pub fn quantum(addr: QuantumSafePublicAddress, network: Network) -> Self {
+        Self {
+            network,
+            kind: AddressKind::Quantum(addr),
+        }
+    }
+
+    /// Parse an address from a string, auto-detecting the type and network
     pub fn parse(s: &str) -> Result<Self> {
         let s = s.trim();
 
@@ -46,39 +85,66 @@ impl Address {
             return Self::from_file(s);
         }
 
-        // Check for quantum prefix first (more specific)
+        // Check for testnet quantum prefix first (most specific)
         #[cfg(feature = "pq")]
-        if s.starts_with(QUANTUM_PREFIX) {
-            let addr = parse_quantum_address(s)?;
-            return Ok(Address::Quantum(addr));
+        if s.starts_with(TESTNET_QUANTUM_PREFIX) {
+            let addr = parse_quantum_address(s, Network::Testnet)?;
+            return Ok(Address::quantum(addr, Network::Testnet));
         }
 
-        // Check for classical prefix
-        if s.starts_with(CLASSICAL_PREFIX) {
-            let addr = parse_classical_address(s)?;
-            return Ok(Address::Classical(addr));
+        // Check for mainnet quantum prefix
+        #[cfg(feature = "pq")]
+        if s.starts_with(MAINNET_QUANTUM_PREFIX) {
+            let addr = parse_quantum_address(s, Network::Mainnet)?;
+            return Ok(Address::quantum(addr, Network::Mainnet));
         }
 
-        // Try legacy format: "view:<hex>,spend:<hex>"
+        // Check for testnet classical prefix
+        if s.starts_with(TESTNET_CLASSICAL_PREFIX) {
+            let addr = parse_classical_address(s, Network::Testnet)?;
+            return Ok(Address::classical(addr, Network::Testnet));
+        }
+
+        // Check for mainnet classical prefix
+        if s.starts_with(MAINNET_CLASSICAL_PREFIX) {
+            let addr = parse_classical_address(s, Network::Mainnet)?;
+            return Ok(Address::classical(addr, Network::Mainnet));
+        }
+
+        // Try legacy format: "view:<hex>,spend:<hex>" (assume mainnet)
         if s.starts_with("view:") {
             let addr = parse_legacy_address(s)?;
-            return Ok(Address::Classical(addr));
+            return Ok(Address::classical(addr, Network::Mainnet));
         }
 
-        // Try legacy PQ format: "botho-pq://1/"
+        // Try legacy PQ format: "botho-pq://1/" (assume mainnet)
         #[cfg(feature = "pq")]
         if s.starts_with("botho-pq://1/") {
             let addr = QuantumSafePublicAddress::from_address_string(s)
                 .map_err(|e| anyhow!("Invalid legacy quantum address: {}", e))?;
-            return Ok(Address::Quantum(addr));
+            return Ok(Address::quantum(addr, Network::Mainnet));
         }
 
         Err(anyhow!(
             "Invalid address format. Expected:\n  \
-             Classical: botho://1/<base58>\n  \
-             Quantum:   botho://1q/<base58>\n  \
-             Legacy:    view:<hex>,spend:<hex>"
+             Mainnet:  botho://1/<base58>  or  botho://1q/<base58>\n  \
+             Testnet:  tbotho://1/<base58> or  tbotho://1q/<base58>\n  \
+             Legacy:   view:<hex>,spend:<hex>"
         ))
+    }
+
+    /// Parse an address, validating it matches the expected network
+    pub fn parse_for_network(s: &str, expected: Network) -> Result<Self> {
+        let addr = Self::parse(s)?;
+        if addr.network != expected {
+            return Err(anyhow!(
+                "Address is for {} but expected {}.\n\
+                 Sending to the wrong network would result in lost funds.",
+                addr.network.display_name(),
+                expected.display_name()
+            ));
+        }
+        Ok(addr)
     }
 
     /// Load an address from a file
@@ -96,37 +162,37 @@ impl Address {
 
     /// Check if this is a quantum-safe address
     pub fn is_quantum(&self) -> bool {
-        match self {
-            Address::Classical(_) => false,
+        match &self.kind {
+            AddressKind::Classical(_) => false,
             #[cfg(feature = "pq")]
-            Address::Quantum(_) => true,
+            AddressKind::Quantum(_) => true,
         }
     }
 
-    /// Get the classical address (works for both types since quantum includes classical)
-    pub fn classical(&self) -> PublicAddress {
-        match self {
-            Address::Classical(addr) => addr.clone(),
+    /// Get the classical public address (works for both types since quantum includes classical)
+    pub fn public_address(&self) -> PublicAddress {
+        match &self.kind {
+            AddressKind::Classical(addr) => addr.clone(),
             #[cfg(feature = "pq")]
-            Address::Quantum(addr) => addr.classical().clone(),
+            AddressKind::Quantum(addr) => addr.classical().clone(),
         }
     }
 
     /// Get the quantum-safe address if available
     #[cfg(feature = "pq")]
-    pub fn quantum(&self) -> Option<&QuantumSafePublicAddress> {
-        match self {
-            Address::Classical(_) => None,
-            Address::Quantum(addr) => Some(addr),
+    pub fn quantum_address(&self) -> Option<&QuantumSafePublicAddress> {
+        match &self.kind {
+            AddressKind::Classical(_) => None,
+            AddressKind::Quantum(addr) => Some(addr),
         }
     }
 
     /// Format as a string
-    pub fn to_string(&self) -> String {
-        match self {
-            Address::Classical(addr) => format_classical_address(addr),
+    pub fn to_address_string(&self) -> String {
+        match &self.kind {
+            AddressKind::Classical(addr) => format_classical_address(addr, self.network),
             #[cfg(feature = "pq")]
-            Address::Quantum(addr) => format_quantum_address(addr),
+            AddressKind::Quantum(addr) => format_quantum_address(addr, self.network),
         }
     }
 
@@ -134,12 +200,14 @@ impl Address {
     pub fn save_to_file(&self, path: &str) -> Result<()> {
         let content = format!(
             "# Botho Address\n\
+             # Network: {}\n\
              # Type: {}\n\
              # Created: {}\n\n\
              {}\n",
+            self.network.display_name(),
             if self.is_quantum() { "Quantum-Safe" } else { "Classical" },
             chrono_lite_now(),
-            self.to_string()
+            self.to_address_string()
         );
 
         std::fs::write(path, content)
@@ -147,20 +215,44 @@ impl Address {
     }
 }
 
-/// Format a classical address as `botho://1/<base58>`
-pub fn format_classical_address(addr: &PublicAddress) -> String {
+impl std::fmt::Display for Address {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.to_address_string())
+    }
+}
+
+/// Get the classical address prefix for a network
+fn classical_prefix(network: Network) -> &'static str {
+    match network {
+        Network::Mainnet => MAINNET_CLASSICAL_PREFIX,
+        Network::Testnet => TESTNET_CLASSICAL_PREFIX,
+    }
+}
+
+/// Get the quantum address prefix for a network
+#[cfg(feature = "pq")]
+fn quantum_prefix(network: Network) -> &'static str {
+    match network {
+        Network::Mainnet => MAINNET_QUANTUM_PREFIX,
+        Network::Testnet => TESTNET_QUANTUM_PREFIX,
+    }
+}
+
+/// Format a classical address as `botho://1/<base58>` or `tbotho://1/<base58>`
+pub fn format_classical_address(addr: &PublicAddress, network: Network) -> String {
     let mut bytes = Vec::with_capacity(64);
     bytes.extend_from_slice(&addr.view_public_key().to_bytes());
     bytes.extend_from_slice(&addr.spend_public_key().to_bytes());
 
     let encoded = bs58::encode(&bytes).into_string();
-    format!("{}{}", CLASSICAL_PREFIX, encoded)
+    format!("{}{}", classical_prefix(network), encoded)
 }
 
-/// Parse a classical address from `botho://1/<base58>`
-pub fn parse_classical_address(s: &str) -> Result<PublicAddress> {
-    let encoded = s.strip_prefix(CLASSICAL_PREFIX)
-        .ok_or_else(|| anyhow!("Invalid classical address prefix"))?;
+/// Parse a classical address from `botho://1/<base58>` or `tbotho://1/<base58>`
+pub fn parse_classical_address(s: &str, network: Network) -> Result<PublicAddress> {
+    let prefix = classical_prefix(network);
+    let encoded = s.strip_prefix(prefix)
+        .ok_or_else(|| anyhow!("Invalid classical address prefix for {}", network))?;
 
     let bytes = bs58::decode(encoded)
         .into_vec()
@@ -181,19 +273,20 @@ pub fn parse_classical_address(s: &str) -> Result<PublicAddress> {
     Ok(PublicAddress::new(&spend_key, &view_key))
 }
 
-/// Format a quantum-safe address as `botho://1q/<base58>`
+/// Format a quantum-safe address as `botho://1q/<base58>` or `tbotho://1q/<base58>`
 #[cfg(feature = "pq")]
-pub fn format_quantum_address(addr: &QuantumSafePublicAddress) -> String {
+pub fn format_quantum_address(addr: &QuantumSafePublicAddress, network: Network) -> String {
     let bytes = addr.to_bytes();
     let encoded = bs58::encode(&bytes).into_string();
-    format!("{}{}", QUANTUM_PREFIX, encoded)
+    format!("{}{}", quantum_prefix(network), encoded)
 }
 
-/// Parse a quantum-safe address from `botho://1q/<base58>`
+/// Parse a quantum-safe address from `botho://1q/<base58>` or `tbotho://1q/<base58>`
 #[cfg(feature = "pq")]
-pub fn parse_quantum_address(s: &str) -> Result<QuantumSafePublicAddress> {
-    let encoded = s.strip_prefix(QUANTUM_PREFIX)
-        .ok_or_else(|| anyhow!("Invalid quantum address prefix"))?;
+pub fn parse_quantum_address(s: &str, network: Network) -> Result<QuantumSafePublicAddress> {
+    let prefix = quantum_prefix(network);
+    let encoded = s.strip_prefix(prefix)
+        .ok_or_else(|| anyhow!("Invalid quantum address prefix for {}", network))?;
 
     let bytes = bs58::decode(encoded)
         .into_vec()
@@ -262,18 +355,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_classical_roundtrip() {
-        // Create a test address
+    fn test_mainnet_prefix() {
         let view_bytes = [1u8; 32];
         let spend_bytes = [2u8; 32];
 
-        // These won't be valid Ristretto points, but we can test the format
         let formatted = format!("{}{}",
-            CLASSICAL_PREFIX,
+            MAINNET_CLASSICAL_PREFIX,
             bs58::encode([view_bytes, spend_bytes].concat()).into_string()
         );
 
-        assert!(formatted.starts_with(CLASSICAL_PREFIX));
+        assert!(formatted.starts_with("botho://1/"));
+        assert!(!formatted.starts_with("tbotho://"));
+    }
+
+    #[test]
+    fn test_testnet_prefix() {
+        let view_bytes = [1u8; 32];
+        let spend_bytes = [2u8; 32];
+
+        let formatted = format!("{}{}",
+            TESTNET_CLASSICAL_PREFIX,
+            bs58::encode([view_bytes, spend_bytes].concat()).into_string()
+        );
+
+        assert!(formatted.starts_with("tbotho://1/"));
     }
 
     #[test]
@@ -287,11 +392,25 @@ mod tests {
     }
 
     #[test]
-    fn test_address_type_detection() {
-        assert!(CLASSICAL_PREFIX.starts_with("botho://1/"));
-        assert!(QUANTUM_PREFIX.starts_with("botho://1q/"));
+    fn test_address_prefixes_are_distinct() {
+        // Mainnet prefixes
+        assert!(MAINNET_CLASSICAL_PREFIX.starts_with("botho://1/"));
+        assert!(MAINNET_QUANTUM_PREFIX.starts_with("botho://1q/"));
 
-        // Quantum prefix is more specific, check it first
-        assert!(!QUANTUM_PREFIX.starts_with(CLASSICAL_PREFIX));
+        // Testnet prefixes
+        assert!(TESTNET_CLASSICAL_PREFIX.starts_with("tbotho://1/"));
+        assert!(TESTNET_QUANTUM_PREFIX.starts_with("tbotho://1q/"));
+
+        // Testnet can be distinguished from mainnet
+        assert!(TESTNET_CLASSICAL_PREFIX.starts_with('t'));
+        assert!(TESTNET_QUANTUM_PREFIX.starts_with('t'));
+        assert!(!MAINNET_CLASSICAL_PREFIX.starts_with('t'));
+        assert!(!MAINNET_QUANTUM_PREFIX.starts_with('t'));
+    }
+
+    #[test]
+    fn test_network_prefixes_match_constants() {
+        assert_eq!(classical_prefix(Network::Mainnet), MAINNET_CLASSICAL_PREFIX);
+        assert_eq!(classical_prefix(Network::Testnet), TESTNET_CLASSICAL_PREFIX);
     }
 }

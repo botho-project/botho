@@ -575,6 +575,7 @@ dependencies = [
  "bth-crypto-pq",
  "bth-crypto-ring-signature",
  "bth-gossip",
+ "bth-transaction-types",
  "bth-util-from-random",
  "clap",
  "crossbeam-channel",

@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Context, Result};
-use bth_transaction_types::Network;
+use bth_transaction_types::constants::Network;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -37,13 +37,15 @@ impl Config {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetworkConfig {
-    /// Port for gossip (libp2p) connections
-    #[serde(default = "default_gossip_port")]
-    pub gossip_port: u16,
+    /// Port for gossip (libp2p) connections.
+    /// If not set, uses network-specific default (7100 for mainnet, 17100 for testnet).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gossip_port: Option<u16>,
 
-    /// Port for JSON-RPC server (for thin wallet connections)
-    #[serde(default = "default_rpc_port")]
-    pub rpc_port: u16,
+    /// Port for JSON-RPC server (for thin wallet connections).
+    /// If not set, uses network-specific default (7101 for mainnet, 17101 for testnet).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rpc_port: Option<u16>,
 
     /// Allowed CORS origins for RPC server.
     /// Default is ["http://localhost:*", "http://127.0.0.1:*"] for security.
@@ -51,9 +53,9 @@ pub struct NetworkConfig {
     #[serde(default = "default_cors_origins")]
     pub cors_origins: Vec<String>,
 
-    /// Bootstrap peers for initial discovery (multiaddr format)
-    /// Defaults to official seed nodes if not specified.
-    #[serde(default = "default_bootstrap_peers")]
+    /// Bootstrap peers for initial discovery (multiaddr format).
+    /// If not set, uses network-specific seed nodes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bootstrap_peers: Vec<String>,
 
     /// Quorum configuration
@@ -68,21 +70,39 @@ fn default_cors_origins() -> Vec<String> {
     ]
 }
 
-fn default_gossip_port() -> u16 {
-    7100
+/// Default bootstrap peers for network discovery, by network.
+fn default_bootstrap_peers(network: Network) -> Vec<String> {
+    match network {
+        Network::Mainnet => vec![
+            // Mainnet seed node
+            "/dns4/seed.botho.io/tcp/7100/p2p/12D3KooWBrjTYjNrEwi9MM3AKFenmymyWVXtXbQiSx7eDnDwv9qQ".to_string(),
+        ],
+        Network::Testnet => vec![
+            // Testnet seed node
+            "/dns4/testnet.botho.io/tcp/17100/p2p/12D3KooWBrjTYjNrEwi9MM3AKFenmymyWVXtXbQiSx7eDnDwv9qQ".to_string(),
+        ],
+    }
 }
 
-fn default_rpc_port() -> u16 {
-    7101
-}
+impl NetworkConfig {
+    /// Get the gossip port, using network default if not explicitly set
+    pub fn gossip_port(&self, network: Network) -> u16 {
+        self.gossip_port.unwrap_or_else(|| network.default_gossip_port())
+    }
 
-/// Default bootstrap peer for network discovery.
-/// Format: /dns4/<hostname>/tcp/7100/p2p/<peer_id>
-fn default_bootstrap_peers() -> Vec<String> {
-    vec![
-        // seed.botho.io (98.95.2.200)
-        "/dns4/seed.botho.io/tcp/7100/p2p/12D3KooWBrjTYjNrEwi9MM3AKFenmymyWVXtXbQiSx7eDnDwv9qQ".to_string(),
-    ]
+    /// Get the RPC port, using network default if not explicitly set
+    pub fn rpc_port(&self, network: Network) -> u16 {
+        self.rpc_port.unwrap_or_else(|| network.default_rpc_port())
+    }
+
+    /// Get bootstrap peers, using network defaults if not explicitly set
+    pub fn bootstrap_peers(&self, network: Network) -> Vec<String> {
+        if self.bootstrap_peers.is_empty() {
+            default_bootstrap_peers(network)
+        } else {
+            self.bootstrap_peers.clone()
+        }
+    }
 }
 
 /// Quorum configuration mode
@@ -213,10 +233,10 @@ fn default_threads() -> u32 {
 impl Default for NetworkConfig {
     fn default() -> Self {
         Self {
-            gossip_port: default_gossip_port(),
-            rpc_port: default_rpc_port(),
+            gossip_port: None,  // Uses network-specific default
+            rpc_port: None,     // Uses network-specific default
             cors_origins: default_cors_origins(),
-            bootstrap_peers: default_bootstrap_peers(),
+            bootstrap_peers: Vec::new(),  // Uses network-specific defaults
             quorum: QuorumConfig::default(),
         }
     }
@@ -233,8 +253,9 @@ impl Default for MiningConfig {
 
 impl Config {
     /// Create a new config with the given mnemonic
-    pub fn new(mnemonic: String) -> Self {
+    pub fn new(mnemonic: String, network_type: Network) -> Self {
         Self {
+            network_type,
             wallet: Some(WalletConfig { mnemonic }),
             network: NetworkConfig::default(),
             mining: MiningConfig::default(),
@@ -242,12 +263,18 @@ impl Config {
     }
 
     /// Create a new config without a wallet (for relay/seed nodes)
-    pub fn new_relay() -> Self {
+    pub fn new_relay(network_type: Network) -> Self {
         Self {
+            network_type,
             wallet: None,
             network: NetworkConfig::default(),
             mining: MiningConfig::default(),
         }
+    }
+
+    /// Get the network type
+    pub fn network_type(&self) -> Network {
+        self.network_type
     }
 
     /// Load config from a file
@@ -291,21 +318,26 @@ impl Config {
     }
 }
 
-/// Get the default config directory path
-pub fn default_data_dir() -> PathBuf {
+/// Get the base botho directory (~/.botho)
+pub fn base_data_dir() -> PathBuf {
     dirs::home_dir()
         .expect("Could not determine home directory")
         .join(".botho")
 }
 
-/// Get the default config file path
-pub fn default_config_path() -> PathBuf {
-    default_data_dir().join("config.toml")
+/// Get the network-specific data directory (~/.botho/testnet or ~/.botho/mainnet)
+pub fn data_dir(network: Network) -> PathBuf {
+    base_data_dir().join(network.dir_name())
 }
 
-/// Get the ledger database path (relative to a base directory)
-pub fn ledger_db_path() -> PathBuf {
-    default_data_dir().join("ledger")
+/// Get the config file path for a network
+pub fn config_path(network: Network) -> PathBuf {
+    data_dir(network).join("config.toml")
+}
+
+/// Get the ledger database path for a network
+pub fn ledger_db_path(network: Network) -> PathBuf {
+    data_dir(network).join("ledger")
 }
 
 /// Get the ledger database path from config file path
@@ -316,9 +348,38 @@ pub fn ledger_db_path_from_config(config_path: &Path) -> PathBuf {
         .join("ledger")
 }
 
-/// Get the wallet database path
-pub fn wallet_db_path() -> PathBuf {
-    default_data_dir().join("wallet")
+/// Get the wallet database path for a network
+pub fn wallet_db_path(network: Network) -> PathBuf {
+    data_dir(network).join("wallet")
+}
+
+/// Check if mainnet is enabled
+///
+/// During beta, mainnet is disabled by default.
+/// Set BOTHO_ENABLE_MAINNET=1 to enable.
+pub fn is_mainnet_enabled() -> bool {
+    std::env::var("BOTHO_ENABLE_MAINNET")
+        .map(|v| v == "1" || v.to_lowercase() == "true")
+        .unwrap_or(false)
+}
+
+/// Validate that the requested network can be used.
+/// Returns an error if mainnet is requested but not enabled.
+pub fn validate_network(network: Network) -> Result<()> {
+    if network == Network::Mainnet && !is_mainnet_enabled() {
+        return Err(anyhow!(
+            "Mainnet is not yet enabled.\n\
+             \n\
+             Botho is currently in beta. Only testnet is available.\n\
+             \n\
+             To use testnet (recommended):\n\
+             $ botho --testnet init\n\
+             \n\
+             To enable mainnet (for developers only):\n\
+             $ BOTHO_ENABLE_MAINNET=1 botho --mainnet init"
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -331,11 +392,12 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("config.toml");
 
-        let config = Config::new("word1 word2 word3".to_string());
+        let config = Config::new("word1 word2 word3".to_string(), Network::Testnet);
         config.save(&path).unwrap();
 
         let loaded = Config::load(&path).unwrap();
         assert_eq!(loaded.mnemonic(), Some("word1 word2 word3"));
+        assert_eq!(loaded.network_type(), Network::Testnet);
     }
 
     #[test]
@@ -343,13 +405,49 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("config.toml");
 
-        let config = Config::new_relay();
+        let config = Config::new_relay(Network::Testnet);
         assert!(!config.has_wallet());
         config.save(&path).unwrap();
 
         let loaded = Config::load(&path).unwrap();
         assert!(!loaded.has_wallet());
         assert_eq!(loaded.mnemonic(), None);
+    }
+
+    #[test]
+    fn test_network_specific_paths() {
+        let testnet_dir = data_dir(Network::Testnet);
+        let mainnet_dir = data_dir(Network::Mainnet);
+
+        assert!(testnet_dir.ends_with("testnet"));
+        assert!(mainnet_dir.ends_with("mainnet"));
+        assert_ne!(testnet_dir, mainnet_dir);
+    }
+
+    #[test]
+    fn test_network_specific_ports() {
+        let config = NetworkConfig::default();
+
+        // Testnet ports should be offset by 10000
+        assert_eq!(config.gossip_port(Network::Testnet), 17100);
+        assert_eq!(config.gossip_port(Network::Mainnet), 7100);
+        assert_eq!(config.rpc_port(Network::Testnet), 17101);
+        assert_eq!(config.rpc_port(Network::Mainnet), 7101);
+    }
+
+    #[test]
+    fn test_validate_network_testnet() {
+        // Testnet should always be valid
+        assert!(validate_network(Network::Testnet).is_ok());
+    }
+
+    #[test]
+    fn test_validate_network_mainnet() {
+        // Mainnet should be invalid unless env var is set
+        // (We can't easily test the enabled case without affecting other tests)
+        if !is_mainnet_enabled() {
+            assert!(validate_network(Network::Mainnet).is_err());
+        }
     }
 
     #[test]

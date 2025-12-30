@@ -1,4 +1,5 @@
 use anyhow::Result;
+use bth_transaction_types::constants::Network;
 use clap::{Parser, Subcommand};
 
 use botho::{commands, config};
@@ -7,7 +8,15 @@ use botho::{commands, config};
 #[command(name = "botho")]
 #[command(about = "A privacy-preserving mined cryptocurrency", long_about = None)]
 struct Cli {
-    /// Path to config file (default: ~/.botho/config.toml)
+    /// Use testnet (default during beta)
+    #[arg(long, global = true, conflicts_with = "mainnet")]
+    testnet: bool,
+
+    /// Use mainnet (requires BOTHO_ENABLE_MAINNET=1)
+    #[arg(long, global = true, conflicts_with = "testnet")]
+    mainnet: bool,
+
+    /// Path to config file (default: ~/.botho/{network}/config.toml)
     #[arg(short, long, global = true)]
     config: Option<String>,
 
@@ -17,6 +26,17 @@ struct Cli {
 
     #[command(subcommand)]
     command: Commands,
+}
+
+impl Cli {
+    /// Determine the network from CLI flags (defaults to testnet)
+    fn network(&self) -> Network {
+        if self.mainnet {
+            Network::Mainnet
+        } else {
+            Network::Testnet
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -79,6 +99,12 @@ enum Commands {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    // Determine network (defaults to testnet)
+    let network = cli.network();
+
+    // Validate network is enabled
+    config::validate_network(network)?;
+
     // Initialize simple logging
     let level = if cli.verbose {
         tracing::Level::DEBUG
@@ -91,15 +117,22 @@ fn main() -> Result<()> {
         .with_target(false)
         .init();
 
-    // Determine config path
+    // Show network indicator
+    if network.is_production() {
+        eprintln!("[MAINNET] Using production network - transactions have real value!");
+    } else {
+        eprintln!("[TESTNET] Using test network - coins have no real value");
+    }
+
+    // Determine config path (network-specific by default)
     let config_path = cli.config
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(config::default_config_path);
+        .unwrap_or_else(|| config::config_path(network));
 
     // Execute command
     match cli.command {
         Commands::Init { recover, relay } => {
-            commands::init::run(&config_path, recover, relay)
+            commands::init::run(&config_path, recover, relay, network)
         }
         Commands::Run { mine } => {
             commands::run::run(&config_path, mine)
@@ -113,8 +146,8 @@ fn main() -> Result<()> {
         Commands::Address { save } => {
             commands::address::run(&config_path, save.as_deref())
         }
-        Commands::Send { address, amount, private, quantum } => {
-            commands::send::run(&config_path, &address, &amount, private, quantum)
+        Commands::Send { address, amount, private, quantum, memo } => {
+            commands::send::run(&config_path, &address, &amount, private, quantum, memo.as_deref())
         }
     }
 }

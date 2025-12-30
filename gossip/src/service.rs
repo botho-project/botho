@@ -476,6 +476,19 @@ async fn handle_behaviour_event(
         }) => {
             debug!(?peer_id, protocol = ?info.protocol_version, "Identified peer");
 
+            // Validate network ID matches
+            if !config.network_id.matches_protocol(&info.protocol_version) {
+                warn!(
+                    ?peer_id,
+                    their_protocol = ?info.protocol_version,
+                    our_network = %config.network_id,
+                    "Disconnecting peer: network mismatch"
+                );
+                // Disconnect the peer - they're on a different network
+                let _ = swarm.disconnect_peer_id(peer_id);
+                continue;
+            }
+
             // Add peer addresses to Kademlia
             for addr in info.listen_addrs {
                 swarm.behaviour_mut().kademlia.add_address(&peer_id, addr);

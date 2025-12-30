@@ -1,5 +1,6 @@
 use anyhow::{bail, Context, Result};
 use bip39::{Language, Mnemonic, MnemonicType};
+use bth_transaction_types::constants::Network;
 use std::io::{self, BufRead, Write};
 use std::path::Path;
 use tracing::info;
@@ -7,7 +8,7 @@ use tracing::info;
 use crate::config::Config;
 
 /// Run the init command
-pub fn run(config_path: &Path, recover: bool, relay: bool) -> Result<()> {
+pub fn run(config_path: &Path, recover: bool, relay: bool, network: Network) -> Result<()> {
     // Check if config already exists
     if Config::exists(config_path) {
         bail!(
@@ -16,50 +17,53 @@ pub fn run(config_path: &Path, recover: bool, relay: bool) -> Result<()> {
         );
     }
 
+    let network_name = network.display_name();
+
     if relay {
         // Create relay node config (no wallet)
-        let config = Config::new_relay();
+        let config = Config::new_relay(network);
         config.save(config_path)?;
 
         info!("Relay node initialized at {}", config_path.display());
-        println!("\nRelay node configuration created (no wallet).");
+        println!("\n[{}] Relay node configuration created (no wallet).", network_name);
         println!("Config saved to: {}", config_path.display());
         println!("\nThis node will:");
-        println!("  - Relay blocks and transactions");
+        println!("  - Relay blocks and transactions on {}", network);
         println!("  - Help with peer discovery");
         println!("  - NOT mine or receive funds");
         println!("\nNext steps:");
-        println!("  1. Add bootstrap_peers to your config file");
-        println!("  2. Run 'botho run' to start the relay node");
+        println!("  1. Run 'botho run' to start the relay node");
     } else {
         let mnemonic = if recover {
             recover_mnemonic()?
         } else {
-            generate_new_mnemonic()?
+            generate_new_mnemonic(network)?
         };
 
         // Create and save config
-        let config = Config::new(mnemonic.phrase().to_string());
+        let config = Config::new(mnemonic.phrase().to_string(), network);
         config.save(config_path)?;
 
         info!("Wallet initialized at {}", config_path.display());
-        println!("\nYour wallet has been created.");
+        println!("\n[{}] Your wallet has been created.", network_name);
         println!("Config saved to: {}", config_path.display());
         println!("\nNext steps:");
-        println!("  1. Add peers to your config file");
-        println!("  2. Run 'botho run' to start syncing");
-        println!("  3. Run 'botho run --mine' to start mining");
+        println!("  1. Run 'botho run' to start syncing");
+        println!("  2. Run 'botho run --mine' to start mining");
+        if !network.is_production() {
+            println!("\nNote: This is a testnet wallet. Coins have no real value.");
+        }
     }
 
     Ok(())
 }
 
 /// Generate a new BIP39 mnemonic
-fn generate_new_mnemonic() -> Result<Mnemonic> {
+fn generate_new_mnemonic(network: Network) -> Result<Mnemonic> {
     let mnemonic = Mnemonic::new(MnemonicType::Words24, Language::English);
 
     println!("\n{}", "=".repeat(60));
-    println!("IMPORTANT: Write down your recovery phrase!");
+    println!("[{}] IMPORTANT: Write down your recovery phrase!", network.display_name());
     println!("This is the ONLY way to recover your wallet.");
     println!("{}", "=".repeat(60));
     println!("\nYour 24-word recovery phrase:\n");

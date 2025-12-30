@@ -11,10 +11,19 @@
     "build:desktop": "pnpm --filter @botho/desktop build",
     "preview": "pnpm --filter @botho/web-wallet preview",
     "typecheck": "pnpm -r typecheck",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "deploy": "pnpm build:web && wrangler pages deploy packages/web-wallet/dist --project-name=botho",
     "deploy:preview": "pnpm build:web && wrangler pages deploy packages/web-wallet/dist --project-name=botho --branch=preview"
   },
   "devDependencies": {
-    "typescript": "~5.9.3"
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/react": "^16.3.1",
+    "@testing-library/user-event": "^14.6.1",
+    "@vitest/coverage-v8": "^4.0.16",
+    "jsdom": "^27.4.0",
+    "typescript": "~5.9.3",
+    "vitest": "^4.0.16"
   }
 }

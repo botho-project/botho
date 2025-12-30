@@ -7,9 +7,56 @@ use libp2p::Multiaddr;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
+/// Network identifier for protocol version matching.
+/// Peers with different network IDs will be disconnected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NetworkId {
+    /// Production mainnet
+    Mainnet,
+    /// Test network (default during beta)
+    Testnet,
+}
+
+impl Default for NetworkId {
+    fn default() -> Self {
+        NetworkId::Testnet
+    }
+}
+
+impl NetworkId {
+    /// Get the protocol version string for this network.
+    /// Format: /botho/{network}/1.0.0
+    pub fn protocol_version(&self) -> String {
+        match self {
+            NetworkId::Mainnet => "/botho/mainnet/1.0.0".to_string(),
+            NetworkId::Testnet => "/botho/testnet/1.0.0".to_string(),
+        }
+    }
+
+    /// Check if a protocol version matches this network.
+    pub fn matches_protocol(&self, protocol: &str) -> bool {
+        protocol == self.protocol_version()
+    }
+}
+
+impl std::fmt::Display for NetworkId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NetworkId::Mainnet => write!(f, "mainnet"),
+            NetworkId::Testnet => write!(f, "testnet"),
+        }
+    }
+}
+
 /// Configuration for the gossip service.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GossipConfig {
+    /// Network identifier (mainnet or testnet)
+    /// Peers with mismatched network IDs are disconnected.
+    #[serde(default)]
+    pub network_id: NetworkId,
+
     /// Port to listen on for libp2p connections
     pub listen_port: u16,
 
@@ -53,6 +100,7 @@ pub struct GossipConfig {
 impl Default for GossipConfig {
     fn default() -> Self {
         Self {
+            network_id: NetworkId::default(),
             listen_port: 7100,
             bootstrap_peers: Vec::new(),
             announce_interval_secs: 300,      // 5 minutes
@@ -136,6 +184,12 @@ impl GossipConfigBuilder {
         Self::default()
     }
 
+    /// Set the network ID.
+    pub fn network_id(mut self, id: NetworkId) -> Self {
+        self.config.network_id = id;
+        self
+    }
+
     /// Set the listen port.
     pub fn listen_port(mut self, port: u16) -> Self {
         self.config.listen_port = port;
@@ -201,8 +255,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_network_id_default() {
+        assert_eq!(NetworkId::default(), NetworkId::Testnet);
+    }
+
+    #[test]
+    fn test_network_id_protocol_version() {
+        assert_eq!(
+            NetworkId::Mainnet.protocol_version(),
+            "/botho/mainnet/1.0.0"
+        );
+        assert_eq!(
+            NetworkId::Testnet.protocol_version(),
+            "/botho/testnet/1.0.0"
+        );
+    }
+
+    #[test]
+    fn test_network_id_matches_protocol() {
+        assert!(NetworkId::Mainnet.matches_protocol("/botho/mainnet/1.0.0"));
+        assert!(!NetworkId::Mainnet.matches_protocol("/botho/testnet/1.0.0"));
+        assert!(NetworkId::Testnet.matches_protocol("/botho/testnet/1.0.0"));
+        assert!(!NetworkId::Testnet.matches_protocol("/botho/mainnet/1.0.0"));
+        // Old protocol version should not match either
+        assert!(!NetworkId::Testnet.matches_protocol("/botho/1.0.0"));
+    }
+
+    #[test]
     fn test_default_config() {
         let config = GossipConfig::default();
+        assert_eq!(config.network_id, NetworkId::Testnet);
         assert_eq!(config.listen_port, 7100);
         assert!(config.enable_gossipsub);
         assert!(config.enable_kademlia);

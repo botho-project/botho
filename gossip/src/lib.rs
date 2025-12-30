@@ -106,7 +106,7 @@ pub use behaviour::{GossipBehaviour, GossipCommand, GossipEvent, GossipHandle};
 pub use consensus_integration::{
     start_consensus_gossip, ConsensusGossipConfig, ConsensusGossipHandle,
 };
-pub use config::{GossipConfig, GossipConfigBuilder};
+pub use config::{GossipConfig, GossipConfigBuilder, NetworkId};
 pub use error::{GossipError, GossipResult};
 pub use messages::{
     BlockBroadcast, GossipMessage, NodeAnnouncement, NodeCapabilities, PeerInfo,

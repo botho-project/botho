@@ -3,9 +3,9 @@
 //! Botho Transaction Constants.
 
 use bth_crypto_ring_signature::Scalar;
+use core::fmt;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
-use std::fmt;
 
 // =============================================================================
 // Network Configuration
@@ -268,8 +268,10 @@ mod tests {
 
     #[test]
     fn test_network_display() {
-        assert_eq!(format!("{}", Network::Mainnet), "mainnet");
-        assert_eq!(format!("{}", Network::Testnet), "testnet");
+        // Use alloc::format for no_std compatibility
+        extern crate alloc;
+        assert_eq!(alloc::format!("{}", Network::Mainnet), "mainnet");
+        assert_eq!(alloc::format!("{}", Network::Testnet), "testnet");
     }
 
     // =========================================================================

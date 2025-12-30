@@ -9,7 +9,7 @@ use std::path::Path;
 use crate::address::Address;
 use crate::config::{ledger_db_path_from_config, Config};
 use crate::ledger::Ledger;
-use crate::transaction::{Transaction, TxInput, TxOutput};
+use crate::transaction::{MemoPayload, Transaction, TxInput, TxOutput};
 use crate::wallet::Wallet;
 
 #[cfg(feature = "pq")]
@@ -29,7 +29,8 @@ const PENDING_PQ_TXS_FILE: &str = "pending_pq_txs.bin";
 /// If `private` is true, uses ring signatures to hide which UTXO is being spent.
 /// If `quantum` is true, uses post-quantum cryptography (ML-KEM + ML-DSA).
 /// If recipient has a quantum address (botho://1q/), quantum mode is auto-enabled.
-pub fn run(config_path: &Path, address_str: &str, amount_str: &str, private: bool, quantum: bool) -> Result<()> {
+/// If `memo` is provided, it will be encrypted and attached to the recipient's output.
+pub fn run(config_path: &Path, address_str: &str, amount_str: &str, private: bool, quantum: bool, memo: Option<&str>) -> Result<()> {
     let config = Config::load(config_path)
         .context("No wallet found. Run 'botho init' first.")?;
 
@@ -40,15 +41,18 @@ pub fn run(config_path: &Path, address_str: &str, amount_str: &str, private: boo
     let wallet = Wallet::from_mnemonic(&wallet_config.mnemonic)?;
     let our_address = wallet.default_address();
 
-    // Parse recipient address (auto-detects format)
-    let parsed_address = Address::parse(address_str)?;
+    // Get the network type
+    let network = config.network_type();
+
+    // Parse recipient address and validate it's for the correct network
+    let parsed_address = Address::parse_for_network(address_str, network)?;
 
     // Auto-enable quantum mode if recipient has a quantum address
     #[cfg(feature = "pq")]
     let quantum = quantum || parsed_address.is_quantum();
 
     // Get the classical address for standard operations
-    let recipient = parsed_address.classical();
+    let recipient = parsed_address.public_address();
 
     // Parse amount (in credits, convert to picocredits)
     let amount = parse_amount(amount_str)?;
@@ -76,9 +80,9 @@ pub fn run(config_path: &Path, address_str: &str, amount_str: &str, private: boo
         TransactionType::Plain
     };
 
-    // Get fee rate (cluster_wealth = 0 for now, num_memos = 0)
+    // Get fee rate (cluster_wealth = 0 for now)
     let cluster_wealth = 0u64;
-    let num_memos = 0usize; // Memos not yet implemented
+    let num_memos = if memo.is_some() { 1 } else { 0 };
     let fee_rate_bps = fee_config.fee_rate_bps_with_memos(tx_type, cluster_wealth, num_memos);
     let fee = fee_config.minimum_fee(tx_type, amount, cluster_wealth, num_memos);
 
@@ -112,7 +116,7 @@ pub fn run(config_path: &Path, address_str: &str, amount_str: &str, private: boo
     // Handle quantum-private transactions
     #[cfg(feature = "pq")]
     if quantum {
-        let pq_recipient = parsed_address.quantum()
+        let pq_recipient = parsed_address.quantum_address()
             .cloned()
             .ok_or_else(|| anyhow::anyhow!(
                 "Quantum transaction requires a quantum-safe address (botho://1q/...)"
@@ -127,6 +131,7 @@ pub fn run(config_path: &Path, address_str: &str, amount_str: &str, private: boo
             selected_utxos,
             state.height,
             &wallet,
+            network,
         );
     }
 
@@ -140,10 +145,11 @@ pub fn run(config_path: &Path, address_str: &str, amount_str: &str, private: boo
     // Build outputs
     let mut outputs = Vec::new();
 
-    // Output to recipient
-    outputs.push(TxOutput::new(amount, &recipient));
+    // Output to recipient (with optional memo)
+    let memo_payload = memo.map(MemoPayload::destination);
+    outputs.push(TxOutput::new_with_memo(amount, &recipient, memo_payload));
 
-    // Change output (if any)
+    // Change output (if any) - no memo on change
     let change = selected_amount - amount - fee;
     if change > 0 {
         outputs.push(TxOutput::new(change, &our_address));
@@ -194,8 +200,10 @@ pub fn run(config_path: &Path, address_str: &str, amount_str: &str, private: boo
     println!("Fee breakdown:");
     println!("  Type: {} ({})", tx_type_str, if private { "ring signatures" } else { "visible sender" });
     println!("  Rate: {} bps ({:.2}%)", fee_rate_bps, fee_rate_bps as f64 / 100.0);
-    if num_memos > 0 {
-        println!("  Memos: {} (+{}% each)", num_memos, fee_config.memo_fee_rate_bps as f64 / 100.0);
+    if let Some(memo_text) = memo {
+        println!("  Memo: \"{}\" (+{}% fee)",
+            if memo_text.len() > 30 { format!("{}...", &memo_text[..30]) } else { memo_text.to_string() },
+            fee_config.memo_fee_rate_bps as f64 / 100.0);
     }
     println!("  Total fee: {:.12} credits", fee as f64 / 1_000_000_000_000.0);
     println!();
@@ -320,6 +328,7 @@ fn run_quantum(
     selected_utxos: Vec<crate::transaction::Utxo>,
     current_height: u64,
     wallet: &Wallet,
+    network: bth_transaction_types::constants::Network,
 ) -> Result<()> {
     use crate::transaction_pq::calculate_pq_fee;
     use crate::address::format_quantum_address;
@@ -345,7 +354,7 @@ fn run_quantum(
     let num_inputs = tx.inputs.len();
 
     // Format address for display (truncate long PQ address)
-    let addr_display = format_quantum_address(recipient);
+    let addr_display = format_quantum_address(recipient, network);
     let addr_short = if addr_display.len() > 60 {
         format!("{}...{}", &addr_display[..30], &addr_display[addr_display.len()-20..])
     } else {
