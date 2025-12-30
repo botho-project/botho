@@ -879,14 +879,6 @@ impl LionRingInput {
 /// Both tiers provide ring size 20 (larger than Monero's 16) for strong anonymity.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TxInputs {
-    /// Simple inputs with direct signatures (transparent sender).
-    /// Legacy mode - being phased out in favor of ring signatures.
-    Simple(Vec<TxInput>),
-
-    /// Ring signature inputs (MLSAG) - standard private tier.
-    /// Hides which input is actually being spent.
-    Ring(Vec<RingTxInput>),
-
     /// CLSAG ring signatures - standard-private tier.
     /// Classical cryptography with compact signatures.
     /// Recommended for most transactions.
@@ -897,10 +889,9 @@ pub enum TxInputs {
     /// Recommended for high-value or long-term security needs.
     Lion(Vec<LionRingInput>),
 
-    /// Legacy ring signatures (MLSAG) - for backwards compatibility.
-    /// Will be phased out in favor of CLSAG.
-    #[serde(rename = "LegacyRing")]
-    LegacyRing(Vec<RingTxInput>),
+    /// MLSAG ring signatures - legacy format.
+    /// Use CLSAG for new transactions.
+    Mlsag(Vec<RingTxInput>),
 }
 
 /// Privacy tier for transactions.
@@ -913,16 +904,6 @@ pub enum PrivacyTier {
 }
 
 impl TxInputs {
-    /// Check if these are ring signature inputs
-    pub fn is_ring(&self) -> bool {
-        !matches!(self, TxInputs::Simple(_))
-    }
-
-    /// Check if this is a simple (transparent sender) transaction
-    pub fn is_simple(&self) -> bool {
-        matches!(self, TxInputs::Simple(_))
-    }
-
     /// Check if this is a CLSAG (standard-private) transaction
     pub fn is_clsag(&self) -> bool {
         matches!(self, TxInputs::Clsag(_))
@@ -933,27 +914,16 @@ impl TxInputs {
         matches!(self, TxInputs::Lion(_))
     }
 
+    /// Check if this is an MLSAG transaction
+    pub fn is_mlsag(&self) -> bool {
+        matches!(self, TxInputs::Mlsag(_))
+    }
+
     /// Get the privacy tier
     pub fn privacy_tier(&self) -> PrivacyTier {
         match self {
-            TxInputs::Simple(_) | TxInputs::Clsag(_) | TxInputs::Ring(_) | TxInputs::LegacyRing(_) => PrivacyTier::StandardPrivate,
+            TxInputs::Clsag(_) | TxInputs::Mlsag(_) => PrivacyTier::StandardPrivate,
             TxInputs::Lion(_) => PrivacyTier::PqPrivate,
-        }
-    }
-
-    /// Get simple inputs (if this is a Simple variant)
-    pub fn simple(&self) -> Option<&[TxInput]> {
-        match self {
-            TxInputs::Simple(inputs) => Some(inputs),
-            _ => None,
-        }
-    }
-
-    /// Get ring inputs (if this is a Ring variant)
-    pub fn ring(&self) -> Option<&[RingTxInput]> {
-        match self {
-            TxInputs::Ring(inputs) => Some(inputs),
-            _ => None,
         }
     }
 
@@ -973,10 +943,10 @@ impl TxInputs {
         }
     }
 
-    /// Get legacy ring inputs (if this is a LegacyRing variant)
-    pub fn legacy_ring(&self) -> Option<&[RingTxInput]> {
+    /// Get MLSAG inputs (if this is an Mlsag variant)
+    pub fn mlsag(&self) -> Option<&[RingTxInput]> {
         match self {
-            TxInputs::LegacyRing(inputs) => Some(inputs),
+            TxInputs::Mlsag(inputs) => Some(inputs),
             _ => None,
         }
     }
@@ -984,11 +954,9 @@ impl TxInputs {
     /// Get the number of inputs
     pub fn len(&self) -> usize {
         match self {
-            TxInputs::Simple(inputs) => inputs.len(),
-            TxInputs::Ring(inputs) => inputs.len(),
             TxInputs::Clsag(inputs) => inputs.len(),
             TxInputs::Lion(inputs) => inputs.len(),
-            TxInputs::LegacyRing(inputs) => inputs.len(),
+            TxInputs::Mlsag(inputs) => inputs.len(),
         }
     }
 
@@ -999,11 +967,8 @@ impl TxInputs {
 
     /// Get all key images (32-byte classical key images).
     /// For LION, this extracts a 32-byte hash of the full key image.
-    /// For Simple inputs, returns empty (no key images).
     pub fn key_images(&self) -> Vec<[u8; 32]> {
         match self {
-            TxInputs::Simple(_) => vec![], // Simple inputs don't have key images
-            TxInputs::Ring(inputs) => inputs.iter().map(|ri| ri.key_image).collect(),
             TxInputs::Clsag(inputs) => inputs.iter().map(|ri| ri.key_image).collect(),
             TxInputs::Lion(inputs) => {
                 // Hash LION key images to 32 bytes for storage/indexing
@@ -1013,7 +978,7 @@ impl TxInputs {
                     hasher.finalize().into()
                 }).collect()
             }
-            TxInputs::LegacyRing(inputs) => inputs.iter().map(|ri| ri.key_image).collect(),
+            TxInputs::Mlsag(inputs) => inputs.iter().map(|ri| ri.key_image).collect(),
         }
     }
 
@@ -1060,43 +1025,10 @@ pub struct Transaction {
 }
 
 impl Transaction {
-    /// Create a new simple transaction (transparent sender).
-    ///
-    /// Legacy mode - direct signatures reveal which UTXOs are spent.
-    pub fn new_simple(
-        inputs: Vec<TxInput>,
-        outputs: Vec<TxOutput>,
-        fee: u64,
-        created_at_height: u64,
-    ) -> Self {
-        Self {
-            inputs: TxInputs::Simple(inputs),
-            outputs,
-            fee,
-            created_at_height,
-        }
-    }
-
-    /// Create a new ring signature transaction (MLSAG).
-    ///
-    /// Uses MLSAG ring signatures with ~1.3KB per input.
-    pub fn new_ring(
-        ring_inputs: Vec<RingTxInput>,
-        outputs: Vec<TxOutput>,
-        fee: u64,
-        created_at_height: u64,
-    ) -> Self {
-        Self {
-            inputs: TxInputs::Ring(ring_inputs),
-            outputs,
-            fee,
-            created_at_height,
-        }
-    }
-
     /// Create a new CLSAG transaction (standard-private).
     ///
     /// Uses classical CLSAG ring signatures with ~700 bytes per input.
+    /// This is the recommended default for most transactions.
     pub fn new_clsag(
         inputs: Vec<ClsagRingInput>,
         outputs: Vec<TxOutput>,
@@ -1114,6 +1046,7 @@ impl Transaction {
     /// Create a new LION transaction (pq-private).
     ///
     /// Uses post-quantum LION ring signatures with ~63KB per input.
+    /// Recommended for high-value or long-term security needs.
     pub fn new_lion(
         inputs: Vec<LionRingInput>,
         outputs: Vec<TxOutput>,
@@ -1128,26 +1061,21 @@ impl Transaction {
         }
     }
 
-    /// Create a new private transaction (hidden sender - standard).
-    /// Alias for new_clsag() for backwards compatibility.
-    #[deprecated(since = "0.2.0", note = "Use new_clsag() or new_lion() instead")]
-    pub fn new_private(
+    /// Create a new MLSAG transaction.
+    ///
+    /// Uses MLSAG ring signatures. Prefer new_clsag() for new transactions.
+    pub fn new_mlsag(
         ring_inputs: Vec<RingTxInput>,
         outputs: Vec<TxOutput>,
         fee: u64,
         created_at_height: u64,
     ) -> Self {
         Self {
-            inputs: TxInputs::LegacyRing(ring_inputs),
+            inputs: TxInputs::Mlsag(ring_inputs),
             outputs,
             fee,
             created_at_height,
         }
-    }
-
-    /// Check if this is a ring signature (private) transaction.
-    pub fn is_private(&self) -> bool {
-        self.inputs.is_ring()
     }
 
     /// Get the privacy tier of this transaction.
@@ -1176,19 +1104,6 @@ impl Transaction {
 
         // Include input type tag and key images
         match &self.inputs {
-            TxInputs::Simple(inputs) => {
-                hasher.update(b"simple");
-                for input in inputs {
-                    hasher.update(input.tx_hash);
-                    hasher.update(input.output_index.to_le_bytes());
-                }
-            }
-            TxInputs::Ring(ring_inputs) => {
-                hasher.update(b"ring");
-                for ring_input in ring_inputs {
-                    hasher.update(ring_input.key_image);
-                }
-            }
             TxInputs::Clsag(inputs) => {
                 hasher.update(b"clsag");
                 for input in inputs {
@@ -1201,10 +1116,10 @@ impl Transaction {
                     hasher.update(&input.key_image);
                 }
             }
-            TxInputs::LegacyRing(ring_inputs) => {
-                hasher.update(b"legacyring");
-                for ring_input in ring_inputs {
-                    hasher.update(ring_input.key_image);
+            TxInputs::Mlsag(inputs) => {
+                hasher.update(b"mlsag");
+                for input in inputs {
+                    hasher.update(input.key_image);
                 }
             }
         }
@@ -1234,18 +1149,9 @@ impl Transaction {
         // 2. Key images are computed inside the signing
         // 3. The hash must be consistent between signing and verification
         match &self.inputs {
-            TxInputs::Simple(inputs) => {
-                hasher.update(b"botho-tx-simple");
-                // For simple inputs, include the input references (but not signatures)
-                for input in inputs {
-                    hasher.update(input.tx_hash);
-                    hasher.update(input.output_index.to_le_bytes());
-                }
-            }
-            TxInputs::Ring(_) => hasher.update(b"botho-tx-ring"),
             TxInputs::Clsag(_) => hasher.update(b"botho-tx-clsag"),
             TxInputs::Lion(_) => hasher.update(b"botho-tx-lion"),
-            TxInputs::LegacyRing(_) => hasher.update(b"botho-tx-legacyring"),
+            TxInputs::Mlsag(_) => hasher.update(b"botho-tx-mlsag"),
         }
 
         // Include all outputs (stealth keys, not recipient identity)
@@ -1269,21 +1175,6 @@ impl Transaction {
     pub fn is_valid_structure(&self) -> Result<(), &'static str> {
         // Check inputs based on type
         match &self.inputs {
-            TxInputs::Simple(inputs) => {
-                if inputs.is_empty() {
-                    return Err("Simple transaction has no inputs");
-                }
-            }
-            TxInputs::Ring(ring_inputs) => {
-                if ring_inputs.is_empty() {
-                    return Err("Ring transaction has no inputs");
-                }
-                for ring_input in ring_inputs {
-                    if ring_input.ring.len() < MIN_RING_SIZE {
-                        return Err("Ring input has insufficient ring size");
-                    }
-                }
-            }
             TxInputs::Clsag(inputs) => {
                 if inputs.is_empty() {
                     return Err("CLSAG transaction has no inputs");
@@ -1304,13 +1195,13 @@ impl Transaction {
                     }
                 }
             }
-            TxInputs::LegacyRing(ring_inputs) => {
-                if ring_inputs.is_empty() {
-                    return Err("Legacy ring transaction has no inputs");
+            TxInputs::Mlsag(inputs) => {
+                if inputs.is_empty() {
+                    return Err("MLSAG transaction has no inputs");
                 }
-                for ring_input in ring_inputs {
-                    if ring_input.ring.len() < MIN_RING_SIZE {
-                        return Err("Legacy ring input has insufficient ring size");
+                for input in inputs {
+                    if input.ring.len() < MIN_RING_SIZE {
+                        return Err("MLSAG input has insufficient ring size");
                     }
                 }
             }
@@ -1330,25 +1221,12 @@ impl Transaction {
 
     /// Verify all ring signatures in this transaction.
     ///
-    /// Verifies CLSAG, LION, or legacy MLSAG signatures depending on transaction type.
-    /// For Simple transactions, this is a no-op (signatures verified separately).
+    /// Verifies CLSAG, LION, or MLSAG signatures depending on transaction type.
     pub fn verify_ring_signatures(&self) -> Result<(), &'static str> {
         let signing_hash = self.signing_hash();
         let total_output = self.total_output() + self.fee;
 
         match &self.inputs {
-            TxInputs::Simple(_) => {
-                // Simple signatures are verified separately against UTXO target keys
-                Ok(())
-            }
-            TxInputs::Ring(ring_inputs) => {
-                for ring_input in ring_inputs {
-                    if !ring_input.verify(&signing_hash, total_output) {
-                        return Err("Invalid ring signature");
-                    }
-                }
-                Ok(())
-            }
             TxInputs::Clsag(inputs) => {
                 for input in inputs {
                     if !input.verify(&signing_hash, total_output) {
@@ -1365,10 +1243,10 @@ impl Transaction {
                 }
                 Ok(())
             }
-            TxInputs::LegacyRing(ring_inputs) => {
-                for ring_input in ring_inputs {
-                    if !ring_input.verify(&signing_hash, total_output) {
-                        return Err("Invalid legacy ring signature");
+            TxInputs::Mlsag(inputs) => {
+                for input in inputs {
+                    if !input.verify(&signing_hash, total_output) {
+                        return Err("Invalid MLSAG signature");
                     }
                 }
                 Ok(())
@@ -1437,6 +1315,28 @@ mod tests {
         }
     }
 
+    /// Helper to create a minimal test ring member
+    fn test_ring_member(id: u8) -> RingMember {
+        RingMember {
+            target_key: [id; 32],
+            public_key: [id.wrapping_add(1); 32],
+            commitment: [id.wrapping_add(2); 32],
+        }
+    }
+
+    /// Helper to create a test MLSAG input with MIN_RING_SIZE members
+    fn test_mlsag_input(ring_id: u8) -> ClsagRingInput {
+        let ring: Vec<RingMember> = (0..MIN_RING_SIZE)
+            .map(|i| test_ring_member(ring_id.wrapping_add(i as u8)))
+            .collect();
+        ClsagRingInput {
+            ring,
+            key_image: [ring_id; 32],
+            commitment_key_image: [ring_id.wrapping_add(100); 32],
+            clsag_signature: vec![0u8; 32 + 32 * MIN_RING_SIZE], // Fake signature
+        }
+    }
+
     #[test]
     fn test_utxo_id_roundtrip() {
         let id = UtxoId::new([1u8; 32], 42);
@@ -1447,14 +1347,10 @@ mod tests {
 
     #[test]
     fn test_transaction_hash_deterministic() {
-        let tx = Transaction::new_simple(
-            vec![TxInput {
-                tx_hash: [1u8; 32],
-                output_index: 0,
-                signature: vec![0u8; 64],
-            }],
+        let tx = Transaction::new_clsag(
+            vec![test_mlsag_input(1)],
             vec![test_output(1000, [2u8; 32], [3u8; 32])],
-            100,
+            MIN_TX_FEE,
             1,
         );
         let hash1 = tx.hash();
@@ -1463,55 +1359,18 @@ mod tests {
     }
 
     #[test]
-    fn test_signing_hash_excludes_signatures() {
-        // Create two transactions with different signatures but same content
-        let tx1 = Transaction::new_simple(
-            vec![TxInput {
-                tx_hash: [1u8; 32],
-                output_index: 0,
-                signature: vec![0u8; 64], // zeros
-            }],
-            vec![test_output(1000, [2u8; 32], [3u8; 32])],
-            100,
-            1,
-        );
-
-        let tx2 = Transaction::new_simple(
-            vec![TxInput {
-                tx_hash: [1u8; 32],
-                output_index: 0,
-                signature: vec![0xff; 64], // ones
-            }],
-            vec![test_output(1000, [2u8; 32], [3u8; 32])],
-            100,
-            1,
-        );
-
-        // signing_hash should be the same (excludes signatures)
-        assert_eq!(tx1.signing_hash(), tx2.signing_hash());
-    }
-
-    #[test]
     fn test_signing_hash_changes_with_content() {
-        let tx1 = Transaction::new_simple(
-            vec![TxInput {
-                tx_hash: [1u8; 32],
-                output_index: 0,
-                signature: vec![],
-            }],
+        let tx1 = Transaction::new_clsag(
+            vec![test_mlsag_input(1)],
             vec![test_output(1000, [2u8; 32], [3u8; 32])],
-            100,
+            MIN_TX_FEE,
             1,
         );
 
-        let tx2 = Transaction::new_simple(
-            vec![TxInput {
-                tx_hash: [1u8; 32],
-                output_index: 0,
-                signature: vec![],
-            }],
+        let tx2 = Transaction::new_clsag(
+            vec![test_mlsag_input(1)],
             vec![test_output(2000, [2u8; 32], [3u8; 32])], // Different amount
-            100,
+            MIN_TX_FEE,
             1,
         );
 
@@ -1521,10 +1380,10 @@ mod tests {
 
     #[test]
     fn test_transaction_is_valid_structure_no_inputs() {
-        let tx = Transaction::new_simple(
+        let tx = Transaction::new_clsag(
             vec![],
             vec![test_output(1000, [2u8; 32], [3u8; 32])],
-            100,
+            MIN_TX_FEE,
             1,
         );
         assert!(tx.is_valid_structure().is_err());
@@ -1532,14 +1391,10 @@ mod tests {
 
     #[test]
     fn test_transaction_is_valid_structure_no_outputs() {
-        let tx = Transaction::new_simple(
-            vec![TxInput {
-                tx_hash: [1u8; 32],
-                output_index: 0,
-                signature: vec![],
-            }],
+        let tx = Transaction::new_clsag(
+            vec![test_mlsag_input(1)],
             vec![],
-            100,
+            MIN_TX_FEE,
             1,
         );
         assert!(tx.is_valid_structure().is_err());
@@ -1547,12 +1402,8 @@ mod tests {
 
     #[test]
     fn test_transaction_is_valid_structure_valid() {
-        let tx = Transaction::new_simple(
-            vec![TxInput {
-                tx_hash: [1u8; 32],
-                output_index: 0,
-                signature: vec![],
-            }],
+        let tx = Transaction::new_clsag(
+            vec![test_mlsag_input(1)],
             vec![test_output(1000, [2u8; 32], [3u8; 32])],
             MIN_TX_FEE,
             1,
@@ -1560,5 +1411,16 @@ mod tests {
         assert!(tx.is_valid_structure().is_ok());
     }
 
-    // Stealth address tests require actual crypto keys - see wallet tests
+    #[test]
+    fn test_privacy_tier_clsag() {
+        let tx = Transaction::new_clsag(
+            vec![test_mlsag_input(1)],
+            vec![test_output(1000, [2u8; 32], [3u8; 32])],
+            MIN_TX_FEE,
+            1,
+        );
+        assert_eq!(tx.privacy_tier(), PrivacyTier::StandardPrivate);
+    }
+
+    // Ring signature verification tests require actual crypto keys - see wallet tests
 }

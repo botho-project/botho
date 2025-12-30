@@ -221,7 +221,8 @@ async fn test_estimate_fee() {
 
     // Verify fee parameters were echoed back
     assert_eq!(result["params"]["amount"], 10_000_000_000_000u64);
-    assert_eq!(result["params"]["private"], true);
+    // Note: "private: true" is converted to "txType: hidden" in the response
+    assert_eq!(result["params"]["txType"], "hidden");
     assert_eq!(result["params"]["memos"], 1);
 }
 

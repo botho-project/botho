@@ -85,16 +85,21 @@ pub enum TransactionType {
     /// No ring signatures, no decoys. Lowest fee.
     Plain,
 
-    /// Private transaction with ring signatures and hidden amounts.
+    /// Standard-private transaction with CLSAG ring signatures (~700B/input).
     /// Fee depends on cluster wealth of the sender.
     Hidden,
+
+    /// PQ-private transaction with LION ring signatures (~63KB/input).
+    /// Higher fee due to much larger signature size.
+    /// Recommended for high-value or long-term security needs.
+    PqHidden,
 
     /// Minting transaction claiming PoW reward.
     /// No fee (creates new coins).
     Minting,
 }
 
-/// Fee configuration for the three transaction types.
+/// Fee configuration for transaction types.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FeeConfig {
@@ -102,9 +107,14 @@ pub struct FeeConfig {
     /// Default: 5 bps (0.05%)
     pub plain_base_fee_bps: FeeRateBps,
 
-    /// Base fee rate for hidden transactions before cluster multiplier.
+    /// Base fee rate for hidden (CLSAG) transactions before cluster multiplier.
     /// Default: 20 bps (0.2%)
     pub hidden_base_fee_bps: FeeRateBps,
+
+    /// Base fee rate for PQ-hidden (LION) transactions before cluster multiplier.
+    /// Higher than hidden due to ~90x larger signature size.
+    /// Default: 100 bps (1.0%)
+    pub pq_hidden_base_fee_bps: FeeRateBps,
 
     /// Cluster factor curve for progressive fee calculation.
     /// Applied to both plain and hidden transactions.
@@ -119,10 +129,11 @@ pub struct FeeConfig {
 impl Default for FeeConfig {
     fn default() -> Self {
         Self {
-            plain_base_fee_bps: 5,      // 0.05% base (up to 0.3% with 6x factor)
-            hidden_base_fee_bps: 20,    // 0.2% base (up to 1.2% with 6x factor)
+            plain_base_fee_bps: 5,         // 0.05% base (up to 0.3% with 6x factor)
+            hidden_base_fee_bps: 20,       // 0.2% base (up to 1.2% with 6x factor)
+            pq_hidden_base_fee_bps: 100,   // 1.0% base for LION (~90x larger signatures)
             cluster_curve: ClusterFactorCurve::default(),
-            memo_fee_rate_bps: 500,     // 5% per memo (500 bps = 0.05 multiplier per memo)
+            memo_fee_rate_bps: 500,        // 5% per memo (500 bps = 0.05 multiplier per memo)
         }
     }
 }
@@ -207,6 +218,11 @@ impl FeeConfig {
             TransactionType::Hidden => {
                 let factor = self.cluster_curve.factor(cluster_wealth);
                 (self.hidden_base_fee_bps as u64 * factor / ClusterFactorCurve::FACTOR_SCALE) as FeeRateBps
+            }
+            TransactionType::PqHidden => {
+                // PQ-hidden uses same cluster factor but higher base rate
+                let factor = self.cluster_curve.factor(cluster_wealth);
+                (self.pq_hidden_base_fee_bps as u64 * factor / ClusterFactorCurve::FACTOR_SCALE) as FeeRateBps
             }
             TransactionType::Minting => return 0,
         };

@@ -18,7 +18,8 @@ pub const K: usize = 4;
 pub const L: usize = 4;
 
 /// Fixed ring size for Lion ring signatures.
-pub const RING_SIZE: usize = 7;
+/// Set to 20 for strong anonymity (larger than Monero's 16).
+pub const RING_SIZE: usize = 20;
 
 /// Bound for secret key coefficients (sampled from [-ETA, ETA]).
 pub const ETA: u32 = 2;
@@ -79,7 +80,7 @@ pub const SIGNATURE_BASE_BYTES: usize = POLY_BYTES + KEY_IMAGE_BYTES; // 768 + 1
 
 /// Total signature size for a ring of RING_SIZE members.
 /// Includes starting challenge c0, key image, and responses for each member.
-pub const SIGNATURE_BYTES: usize = SIGNATURE_BASE_BYTES + RING_SIZE * RESPONSE_BYTES; // 2080 + 7 * 3072 = 23584 bytes
+pub const SIGNATURE_BYTES: usize = SIGNATURE_BASE_BYTES + RING_SIZE * RESPONSE_BYTES; // 2080 + 20 * 3072 = 63520 bytes
 
 // ============================================================================
 // NTT constants
@@ -158,15 +159,15 @@ mod tests {
         assert!(N.is_power_of_two());
         // Q must be prime (basic check: Q is 8380417, known prime)
         assert_eq!(Q, 8380417);
-        // Ring size is 7
-        assert_eq!(RING_SIZE, 7);
+        // Ring size is 20 (larger than Monero's 16)
+        assert_eq!(RING_SIZE, 20);
         // Beta = tau * eta
         assert_eq!(BETA, TAU as u32 * ETA);
     }
 
     #[test]
     fn test_signature_size() {
-        assert_eq!(signature_size(7), SIGNATURE_BYTES);
+        assert_eq!(signature_size(RING_SIZE), SIGNATURE_BYTES);
         assert_eq!(signature_size(1), SIGNATURE_BASE_BYTES + RESPONSE_BYTES);
     }
 

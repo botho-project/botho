@@ -35,6 +35,7 @@ bth-account-keys = { path = "../account-keys" }
 bth-crypto-keys = { path = "../crypto/keys" }
 bth-crypto-pq = { path = "../crypto/pq", optional = true }
 bth-crypto-ring-signature = { path = "../crypto/ring-signature" }
+bth-crypto-lion = { path = "../crypto/lion" }
 bth-core = { path = "../core" }
 bth-util-from-random = { path = "../util/from-random" }
 rand_core = "0.6"

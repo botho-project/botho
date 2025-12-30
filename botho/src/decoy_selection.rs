@@ -20,15 +20,17 @@
 //! Botho's progressive fee system uses cluster tags to track coin ancestry. These tags are
 //! visible on transaction outputs, which could enable fingerprinting attacks:
 //!
-//! 1. Observer examines the ring of 7 possible inputs
+//! 1. Observer examines the ring of 20 possible inputs
 //! 2. Compares each input's cluster tags to the output's tags (after decay)
 //! 3. Identifies which input's tags best match the output pattern
 //!
 //! To mitigate this, OSPEAD prioritizes decoys with **similar cluster profiles**, ensuring
 //! multiple ring members would produce plausible output patterns.
 //!
-//! Target: Achieve 4+ effective anonymity with ring size 7, meaning at least 4 ring
+//! Target: Achieve 10+ effective anonymity with ring size 20, meaning at least 10 ring
 //! members should be equally plausible based on both age and cluster patterns.
+//!
+//! Note: Ring size 20 is larger than Monero's 16, providing stronger sender privacy.
 
 use rand::Rng;
 use rand_distr::{Distribution, Gamma};
@@ -1295,12 +1297,12 @@ mod tests {
         real_key[0] = 255;
         let real_input = make_candidate_with_tags(real_key, 5000, current_height, real_tags.clone());
 
-        // Ring where all members have similar clusters
-        let similar_ring: Vec<OutputCandidate> = (0u64..7)
+        // Ring where all members have similar clusters (ring size 20)
+        let similar_ring: Vec<OutputCandidate> = (0u64..20)
             .map(|i| {
                 let mut key = [0u8; 32];
                 key[0] = i as u8;
-                let tags = ClusterTags::from_pairs(&[(1, 900_000 + (i as u32) * 10_000)]);
+                let tags = ClusterTags::from_pairs(&[(1, 900_000 + (i as u32) * 5_000)]);
                 make_candidate_with_tags(key, 5000 + i * 100, current_height, tags)
             })
             .collect();
@@ -1308,8 +1310,9 @@ mod tests {
         let anon = selector.effective_anonymity_with_clusters(&similar_ring, &real_input);
         println!("Similar clusters effective anonymity: {:.2}", anon);
 
-        // With 7 similar-cluster ring members, effective anonymity should be high (>5)
-        assert!(anon > 5.0, "Expected high anonymity with similar clusters, got {:.2}", anon);
+        // With 20 similar-cluster ring members, effective anonymity should be high (>10)
+        // Note: 12+ indicates excellent anonymity set (more than half the ring is plausible)
+        assert!(anon > 10.0, "Expected high anonymity with similar clusters, got {:.2}", anon);
 
         // Verify combined_similarity works as expected
         let high_match = ClusterTags::single(1);

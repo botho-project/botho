@@ -14,7 +14,7 @@
 //! ## Assumptions
 //!
 //! Default simulation parameters:
-//! - Ring size: 7 (1 real + 6 decoys)
+//! - Ring size: 20 (1 real + 19 decoys)
 //! - Cluster decay rate: 5% per hop
 //! - Background standard transactions: 50%
 //! - Gamma distribution for spend ages (k=19.28, θ=1.61 days)
@@ -29,8 +29,9 @@ use crate::tag::TAG_WEIGHT_SCALE;
 // Configuration
 // ============================================================================
 
-/// Default ring size (1 real signer + 6 decoys).
-pub const RING_SIZE: usize = 7;
+/// Default ring size (1 real signer + 19 decoys).
+/// Ring size 20 provides strong anonymity (larger than Monero's 16).
+pub const RING_SIZE: usize = 20;
 
 /// Number of decoys to select.
 pub const DECOY_COUNT: usize = RING_SIZE - 1;

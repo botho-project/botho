@@ -143,7 +143,8 @@ pub const MAX_BLOCK_SIZE: usize = 20 * 1024 * 1024; // 20 MB
 pub const MAX_SCP_MESSAGE_SIZE: usize = 1024 * 1024; // 1 MB
 
 /// Each input ring must contain this many elements.
-pub const RING_SIZE: usize = 11;
+/// Ring size 20 provides strong anonymity (larger than Monero's 16).
+pub const RING_SIZE: usize = 20;
 
 /// Each transaction must contain no more than this many inputs (rings).
 pub const MAX_INPUTS: u64 = 16;
@@ -317,12 +318,12 @@ mod tests {
 
     #[test]
     fn test_ring_size() {
-        // Ring size must be exactly 11 for privacy guarantees
-        assert_eq!(RING_SIZE, 11);
-        // Ring size should be odd for anonymity set properties
-        assert!(RING_SIZE % 2 == 1);
+        // Ring size must be 20 for strong anonymity (larger than Monero's 16)
+        assert_eq!(RING_SIZE, 20);
         // Ring size should be at least 3 for meaningful privacy
         assert!(RING_SIZE >= 3);
+        // Ring size should be reasonable for transaction size
+        assert!(RING_SIZE <= 64);
     }
 
     #[test]

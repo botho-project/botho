@@ -155,40 +155,22 @@ pub fn run(config_path: &Path, address_str: &str, amount_str: &str, private: boo
         outputs.push(TxOutput::new(change, &our_address));
     }
 
-    // Create the transaction (simple or private)
-    let tx = if private {
-        // Private transaction: uses ring signatures to hide sender
-        println!();
-        println!("Creating private transaction with ring signatures...");
+    // Create the transaction (always private with CLSAG ring signatures)
+    // Note: All transactions are now private by default for sender anonymity
+    println!();
+    println!("Creating private transaction with CLSAG ring signatures...");
 
-        wallet.create_private_transaction(
-            &selected_utxos,
-            outputs,
-            fee,
-            state.height,
-            &ledger,
-        )?
-    } else {
-        // Simple transaction: visible sender
-        let inputs: Vec<TxInput> = selected_utxos
-            .iter()
-            .map(|utxo| TxInput {
-                tx_hash: utxo.id.tx_hash,
-                output_index: utxo.id.output_index,
-                signature: Vec::new(), // Will be signed below
-            })
-            .collect();
-
-        let mut tx = Transaction::new_simple(inputs, outputs, fee, state.height);
-
-        // Sign the transaction with our wallet's spend key
-        wallet.sign_transaction(&mut tx, &ledger)?;
-        tx
-    };
+    let tx = wallet.create_private_transaction(
+        &selected_utxos,
+        outputs,
+        fee,
+        state.height,
+        &ledger,
+    )?;
 
     let tx_hash = tx.hash();
     let num_inputs = tx.inputs.len();
-    let tx_type_str = if private { "Private" } else { "Simple" };
+    let tx_type_str = "Private";
 
     // Display transaction details
     println!();

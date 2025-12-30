@@ -119,77 +119,56 @@ impl Wallet {
     /// Note: This method only signs Simple inputs. Ring inputs use MLSAG
     /// signatures which are created during transaction construction.
     ///
-    /// Returns an error if:
-    /// - A referenced UTXO doesn't exist
-    /// - The wallet doesn't own the UTXO (stealth detection fails)
-    /// - The transaction uses Ring inputs (not supported by this method)
-    pub fn sign_transaction(&self, tx: &mut Transaction, ledger: &Ledger) -> Result<()> {
-        let signing_hash = tx.signing_hash();
-
-        let inputs = match &mut tx.inputs {
-            TxInputs::Simple(inputs) => inputs,
-            TxInputs::Ring(_) => {
-                return Err(anyhow::anyhow!(
-                    "Ring signature transactions must be signed during construction"
-                ));
-            }
-        };
-
-        for input in inputs {
-            // Look up the UTXO being spent
-            let utxo_id = UtxoId::new(input.tx_hash, input.output_index);
-            let utxo = ledger
-                .get_utxo(&utxo_id)
-                .map_err(|e| anyhow::anyhow!("Failed to get UTXO: {}", e))?
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "UTXO not found: {}:{}",
-                        hex::encode(&input.tx_hash[0..8]),
-                        input.output_index
-                    )
-                })?;
-
-            // Use stealth detection to verify ownership and get subaddress index
-            let subaddress_index = utxo.output.belongs_to(&self.account_key).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "UTXO {}:{} does not belong to this wallet",
-                    hex::encode(&input.tx_hash[0..8]),
-                    input.output_index
-                )
-            })?;
-
-            // Recover the one-time private key for this stealth output
-            let onetime_private = utxo
-                .output
-                .recover_spend_key(&self.account_key, subaddress_index)
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "Failed to recover spend key for UTXO {}:{}",
-                        hex::encode(&input.tx_hash[0..8]),
-                        input.output_index
-                    )
-                })?;
-
-            // Sign the transaction with the one-time private key
-            let signature: RistrettoSignature =
-                onetime_private.sign_schnorrkel(b"botho-tx-v1", &signing_hash);
-
-            // Store the 64-byte signature
-            let sig_bytes: &[u8] = signature.as_ref();
-            input.signature = sig_bytes.to_vec();
-        }
-
-        Ok(())
+    /// Note: This method is deprecated. All transactions now use ring signatures
+    /// (CLSAG or LION) which are signed during construction.
+    ///
+    /// Returns an error for all transaction types since Simple transactions
+    /// have been removed in favor of privacy-by-default.
+    #[deprecated(note = "All transactions now use ring signatures, signed during construction")]
+    #[allow(dead_code)]
+    pub fn sign_transaction(&self, _tx: &mut Transaction, _ledger: &Ledger) -> Result<()> {
+        // All transaction types now use ring signatures
+        Err(anyhow::anyhow!(
+            "Ring signature transactions (CLSAG/LION) must be signed during construction. \
+             Use create_private_transaction() instead."
+        ))
     }
 
-    /// Create a private (ring signature) transaction for sender privacy.
+    /// Create a standard-private (CLSAG) transaction for sender privacy.
+    ///
+    /// Uses CLSAG ring signatures with 20 decoys for sender anonymity.
+    /// This is the recommended option for most transactions.
+    ///
+    /// For post-quantum security, use `create_lion_transaction()` instead.
+    ///
+    /// # Arguments
+    /// * `utxos_to_spend` - The wallet's UTXOs to spend
+    /// * `outputs` - Transaction outputs to create
+    /// * `fee` - Transaction fee
+    /// * `current_height` - Current blockchain height
+    /// * `ledger` - Ledger for fetching decoy outputs
+    ///
+    /// # Returns
+    /// A fully signed CLSAG transaction ready for broadcast
+    pub fn create_clsag_transaction(
+        &self,
+        utxos_to_spend: &[Utxo],
+        outputs: Vec<TxOutput>,
+        fee: u64,
+        current_height: u64,
+        ledger: &Ledger,
+    ) -> Result<Transaction> {
+        self.create_private_transaction_impl(utxos_to_spend, outputs, fee, current_height, ledger)
+    }
+
+    /// Alias for `create_clsag_transaction` for backwards compatibility.
     ///
     /// Ring signatures hide which UTXO is actually being spent by mixing it
     /// with decoy outputs from the ledger. The signature proves ownership
     /// of one ring member without revealing which one.
     ///
     /// Uses OSPEAD-style gamma-weighted decoy selection to match real spending
-    /// patterns, achieving 1-in-4+ effective anonymity with ring size 7.
+    /// patterns, achieving 1-in-10+ effective anonymity with ring size 20.
     ///
     /// # Arguments
     /// * `utxos_to_spend` - The wallet's UTXOs to spend
@@ -208,6 +187,18 @@ impl Wallet {
         current_height: u64,
         ledger: &Ledger,
     ) -> Result<Transaction> {
+        self.create_private_transaction_impl(utxos_to_spend, outputs, fee, current_height, ledger)
+    }
+
+    /// Internal implementation for CLSAG private transactions.
+    fn create_private_transaction_impl(
+        &self,
+        utxos_to_spend: &[Utxo],
+        outputs: Vec<TxOutput>,
+        fee: u64,
+        current_height: u64,
+        ledger: &Ledger,
+    ) -> Result<Transaction> {
         if utxos_to_spend.is_empty() {
             return Err(anyhow::anyhow!("No UTXOs to spend"));
         }
@@ -217,7 +208,7 @@ impl Wallet {
 
         // Build a preliminary transaction to get the signing hash
         // We'll replace the inputs with real ring inputs after signing
-        let preliminary_tx = Transaction::new_private(Vec::new(), outputs.clone(), fee, current_height);
+        let preliminary_tx = Transaction::new_clsag(Vec::new(), outputs.clone(), fee, current_height);
         let signing_hash = preliminary_tx.signing_hash();
 
         // Number of decoys per ring (MIN_RING_SIZE - 1 since real input is included)
@@ -322,11 +313,11 @@ impl Wallet {
                 .collect();
             let eff_anon = Ledger::effective_anonymity(&ring_ages, Some(&selector));
             debug!(
-                "Ring effective anonymity: {:.2} (target: 1.75+ for 1-in-4)",
+                "Ring effective anonymity: {:.2} (target: 5+ for 1-in-10)",
                 eff_anon
             );
 
-            // Create ring input with MLSAG signature
+            // Create ring input with CLSAG signature
             let ring_input = RingTxInput::new(
                 shuffled_ring,
                 real_index,
@@ -341,10 +332,51 @@ impl Wallet {
             ring_inputs.push(ring_input);
         }
 
-        // Create the final transaction with ring inputs
-        let tx = Transaction::new_private(ring_inputs, outputs, fee, current_height);
+        // Create the final transaction with CLSAG ring inputs
+        let tx = Transaction::new_clsag(ring_inputs, outputs, fee, current_height);
 
         Ok(tx)
+    }
+
+    /// Create a PQ-private (LION) transaction for post-quantum sender privacy.
+    ///
+    /// Uses LION lattice-based ring signatures with 20 decoys for sender anonymity
+    /// with post-quantum security. Signatures are ~90x larger than CLSAG (~63KB vs ~700B)
+    /// but provide protection against quantum computers.
+    ///
+    /// For most transactions, `create_clsag_transaction()` is recommended.
+    /// Use LION for high-value transactions or when long-term quantum security is needed.
+    ///
+    /// # Arguments
+    /// * `utxos_to_spend` - The wallet's UTXOs to spend (must have LION keys)
+    /// * `outputs` - Transaction outputs to create
+    /// * `fee` - Transaction fee (higher than CLSAG due to larger signature size)
+    /// * `current_height` - Current blockchain height
+    /// * `ledger` - Ledger for fetching decoy outputs
+    ///
+    /// # Returns
+    /// A fully signed LION transaction ready for broadcast
+    #[cfg(feature = "pq")]
+    pub fn create_lion_transaction(
+        &self,
+        _utxos_to_spend: &[Utxo],
+        _outputs: Vec<TxOutput>,
+        _fee: u64,
+        _current_height: u64,
+        _ledger: &Ledger,
+    ) -> Result<Transaction> {
+        // TODO: Implement LION ring signature transaction creation
+        // This requires:
+        // 1. LION keys in the wallet (QuantumSafeAccountKey)
+        // 2. LION public keys stored in UTXOs/outputs
+        // 3. Decoy selection for LION outputs
+        //
+        // For now, return an error indicating this is not yet fully implemented
+        Err(anyhow::anyhow!(
+            "LION ring signature transactions are not yet fully implemented. \
+             Use create_clsag_transaction() for standard privacy, or \
+             create_quantum_private_transaction() for individual PQ signatures."
+        ))
     }
 
     /// Create a quantum-private transaction for post-quantum security.

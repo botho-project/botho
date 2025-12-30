@@ -327,33 +327,31 @@ impl Ledger {
             // Index transaction for fast lookups (exchange integration)
             self.add_tx_to_index(&mut wtxn, &tx_hash, new_height, tx_idx as u32)?;
 
-            // Process spent inputs based on type
+            // Process spent inputs based on type - record key images to prevent double-spend
             match &tx.inputs {
-                TxInputs::Simple(inputs) => {
-                    // Remove spent UTXOs (inputs)
-                    for input in inputs {
-                        let spent_id = UtxoId::new(input.tx_hash, input.output_index);
-
-                        // Get the UTXO first so we can remove it from the address index
-                        if let Some(utxo_bytes) = self.utxo_db.get(&wtxn, &spent_id.to_bytes())
-                            .map_err(|e| LedgerError::Database(format!("Failed to get utxo: {}", e)))? {
-                            if let Ok(spent_utxo) = bincode::deserialize::<Utxo>(utxo_bytes) {
-                                // Remove from address index
-                                self.remove_from_address_index(&mut wtxn, &spent_utxo)?;
-                            }
-                            // Remove from UTXO database
-                            self.utxo_db.delete(&mut wtxn, &spent_id.to_bytes())
-                                .map_err(|e| LedgerError::Database(format!("Failed to delete utxo: {}", e)))?;
-                        } else {
-                            // UTXO not found - this is a validation error
-                            debug!("Warning: UTXO not found when spending");
-                        }
+                TxInputs::Clsag(clsag_inputs) => {
+                    // For CLSAG ring signature transactions, record key images to prevent double-spend
+                    for input in clsag_inputs {
+                        self.record_key_image(&mut wtxn, &input.key_image, new_height)?;
                     }
                 }
-                TxInputs::Ring(ring_inputs) => {
-                    // For ring signature transactions, record key images to prevent double-spend
-                    for ring_input in ring_inputs {
-                        self.record_key_image(&mut wtxn, &ring_input.key_image, new_height)?;
+                TxInputs::Lion(lion_inputs) => {
+                    // For LION (PQ) ring signature transactions, record key images to prevent double-spend
+                    for input in lion_inputs {
+                        // LION key images are larger (1312 bytes) - use first 32 bytes as lookup key
+                        let key_image_hash: [u8; 32] = {
+                            use sha2::{Sha256, Digest};
+                            let mut hasher = Sha256::new();
+                            hasher.update(&input.key_image);
+                            hasher.finalize().into()
+                        };
+                        self.record_key_image(&mut wtxn, &key_image_hash, new_height)?;
+                    }
+                }
+                TxInputs::Mlsag(mlsag_inputs) => {
+                    // For MLSAG ring signature transactions, record key images to prevent double-spend
+                    for input in mlsag_inputs {
+                        self.record_key_image(&mut wtxn, &input.key_image, new_height)?;
                     }
                 }
             }
@@ -594,66 +592,59 @@ impl Ledger {
     /// Verify all signatures in a transaction
     pub fn verify_transaction(&self, tx: &BothoTransaction) -> Result<(), LedgerError> {
         match &tx.inputs {
-            TxInputs::Simple(inputs) => {
-                let signing_hash = tx.signing_hash();
-
-                for (i, input) in inputs.iter().enumerate() {
-                    // Look up the UTXO being spent
-                    let utxo_id = UtxoId::new(input.tx_hash, input.output_index);
-                    let utxo = self.get_utxo(&utxo_id)?.ok_or_else(|| {
-                        LedgerError::InvalidBlock(format!(
-                            "Input {} references non-existent UTXO {}:{}",
-                            i,
-                            hex::encode(&input.tx_hash[0..8]),
-                            input.output_index
-                        ))
-                    })?;
-
-                    // Get the one-time target key (stealth spend public key)
-                    let target_public = RistrettoPublic::try_from(&utxo.output.target_key[..])
-                        .map_err(|_| {
-                            LedgerError::InvalidBlock(format!(
-                                "Input {} has invalid target key in UTXO",
-                                i
-                            ))
-                        })?;
-
-                    // Parse the signature
-                    let signature = RistrettoSignature::try_from(input.signature.as_slice()).map_err(
-                        |_| {
-                            LedgerError::InvalidBlock(format!(
-                                "Input {} has invalid signature format (expected 64 bytes, got {})",
-                                i,
-                                input.signature.len()
-                            ))
-                        },
-                    )?;
-
-                    // Verify the signature against the one-time target key
-                    target_public
-                        .verify_schnorrkel(b"botho-tx-v1", &signing_hash, &signature)
-                        .map_err(|_| {
-                            LedgerError::InvalidBlock(format!(
-                                "Input {} has invalid signature",
-                                i
-                            ))
-                        })?;
-                }
-            }
-            TxInputs::Ring(ring_inputs) => {
+            TxInputs::Clsag(clsag_inputs) => {
                 // Verify key images haven't been spent (double-spend check)
-                for (i, ring_input) in ring_inputs.iter().enumerate() {
-                    if let Ok(Some(spent_height)) = self.is_key_image_spent(&ring_input.key_image) {
+                for (i, input) in clsag_inputs.iter().enumerate() {
+                    if let Ok(Some(spent_height)) = self.is_key_image_spent(&input.key_image) {
                         return Err(LedgerError::InvalidBlock(format!(
-                            "Ring input {} uses key image already spent at height {}",
+                            "CLSAG input {} uses key image already spent at height {}",
                             i, spent_height
                         )));
                     }
                 }
 
-                // Verify ring signatures
+                // Verify CLSAG ring signatures
                 tx.verify_ring_signatures().map_err(|e| {
-                    LedgerError::InvalidBlock(format!("Invalid ring signature: {}", e))
+                    LedgerError::InvalidBlock(format!("Invalid CLSAG signature: {}", e))
+                })?;
+            }
+            TxInputs::Lion(lion_inputs) => {
+                // Verify key images haven't been spent (double-spend check)
+                for (i, input) in lion_inputs.iter().enumerate() {
+                    // LION key images are larger - hash to 32 bytes for lookup
+                    let key_image_hash: [u8; 32] = {
+                        use sha2::{Sha256, Digest};
+                        let mut hasher = Sha256::new();
+                        hasher.update(&input.key_image);
+                        hasher.finalize().into()
+                    };
+                    if let Ok(Some(spent_height)) = self.is_key_image_spent(&key_image_hash) {
+                        return Err(LedgerError::InvalidBlock(format!(
+                            "LION input {} uses key image already spent at height {}",
+                            i, spent_height
+                        )));
+                    }
+                }
+
+                // Verify LION ring signatures
+                tx.verify_ring_signatures().map_err(|e| {
+                    LedgerError::InvalidBlock(format!("Invalid LION signature: {}", e))
+                })?;
+            }
+            TxInputs::Mlsag(mlsag_inputs) => {
+                // Verify key images haven't been spent (double-spend check)
+                for (i, input) in mlsag_inputs.iter().enumerate() {
+                    if let Ok(Some(spent_height)) = self.is_key_image_spent(&input.key_image) {
+                        return Err(LedgerError::InvalidBlock(format!(
+                            "MLSAG input {} uses key image already spent at height {}",
+                            i, spent_height
+                        )));
+                    }
+                }
+
+                // Verify MLSAG ring signatures
+                tx.verify_ring_signatures().map_err(|e| {
+                    LedgerError::InvalidBlock(format!("Invalid MLSAG signature: {}", e))
                 })?;
             }
         }
@@ -879,7 +870,7 @@ impl Ledger {
     /// Calculate effective anonymity for a ring given member ages.
     ///
     /// Returns a value between 1 (no privacy) and ring_size (perfect privacy).
-    /// A value of 4+ with ring size 7 indicates good anonymity (1-in-4 or better).
+    /// A value of 10+ with ring size 20 indicates good anonymity (1-in-10 or better).
     pub fn effective_anonymity(ring_ages: &[u64], selector: Option<&GammaDecoySelector>) -> f64 {
         let default_selector = GammaDecoySelector::new();
         let selector = selector.unwrap_or(&default_selector);

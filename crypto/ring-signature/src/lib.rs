@@ -29,7 +29,7 @@ pub use ring_signature::{
 };
 
 #[cfg(feature = "alloc")]
-pub use ring_signature::{BatchVerifyResult, RingMLSAG, mlsag_verify_batch, mlsag_verify_batch_all};
+pub use ring_signature::{BatchVerifyResult, Clsag, RingMLSAG, mlsag_verify_batch, mlsag_verify_batch_all};
 
 #[cfg(feature = "internals")]
 pub use ring_signature::{MlsagSignCtx, MlsagSignParams, MlsagVerify, Ring};

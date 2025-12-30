@@ -492,22 +492,46 @@ async fn handle_mempool_info(id: Value, state: &RpcState) -> JsonRpcResponse {
 async fn handle_estimate_fee(id: Value, params: &Value, state: &RpcState) -> JsonRpcResponse {
     // Parse parameters
     let amount = params.get("amount").and_then(|v| v.as_u64()).unwrap_or(0);
-    let is_private = params.get("private").and_then(|v| v.as_bool()).unwrap_or(true);
     let num_memos = params.get("memos").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+
+    // Determine transaction type from either "txType" (new) or "private" (legacy)
+    let tx_type = if let Some(tx_type_str) = params.get("txType").and_then(|v| v.as_str()) {
+        match tx_type_str {
+            "plain" | "Plain" => bth_cluster_tax::TransactionType::Plain,
+            "hidden" | "Hidden" | "clsag" | "Clsag" => bth_cluster_tax::TransactionType::Hidden,
+            "pqHidden" | "PqHidden" | "lion" | "Lion" => bth_cluster_tax::TransactionType::PqHidden,
+            _ => bth_cluster_tax::TransactionType::Hidden, // Default to standard-private
+        }
+    } else {
+        // Legacy: use "private" boolean
+        let is_private = params.get("private").and_then(|v| v.as_bool()).unwrap_or(true);
+        if is_private {
+            bth_cluster_tax::TransactionType::Hidden
+        } else {
+            bth_cluster_tax::TransactionType::Plain
+        }
+    };
 
     let mempool = read_lock!(state.mempool, id.clone());
 
     // Calculate minimum fee using the fee curve
-    let minimum_fee = mempool.estimate_fee(is_private, amount, num_memos);
+    let minimum_fee = mempool.estimate_fee(tx_type, amount, num_memos);
 
     // Get fee rate in basis points for display
-    let fee_rate_bps = mempool.fee_rate_bps(is_private);
+    let fee_rate_bps = mempool.fee_rate_bps(tx_type);
 
     // Calculate average mempool fee for priority estimation
     let avg_fee = if mempool.len() > 0 {
         mempool.total_fees() / mempool.len() as u64
     } else {
         minimum_fee
+    };
+
+    let tx_type_str = match tx_type {
+        bth_cluster_tax::TransactionType::Plain => "plain",
+        bth_cluster_tax::TransactionType::Hidden => "hidden",
+        bth_cluster_tax::TransactionType::PqHidden => "pqHidden",
+        bth_cluster_tax::TransactionType::Minting => "minting",
     };
 
     JsonRpcResponse::success(id, json!({
@@ -517,7 +541,7 @@ async fn handle_estimate_fee(id: Value, params: &Value, state: &RpcState) -> Jso
         "highPriorityFee": (avg_fee * 2).max(minimum_fee * 2),
         "params": {
             "amount": amount,
-            "private": is_private,
+            "txType": tx_type_str,
             "memos": num_memos,
         }
     }))
@@ -707,7 +731,10 @@ async fn handle_get_transaction(id: Value, params: &Value, state: &RpcState) -> 
     // Look up in blockchain
     match ledger.get_transaction(&tx_hash) {
         Ok(Some((tx, block_height, confirmations))) => {
-            let tx_type = if tx.is_private() { "ring" } else { "simple" };
+            let tx_type = match tx.privacy_tier() {
+                crate::transaction::PrivacyTier::StandardPrivate => "clsag",
+                crate::transaction::PrivacyTier::PqPrivate => "lion",
+            };
             let output_count = tx.outputs.len();
             let total_output: u64 = tx.outputs.iter().map(|o| o.amount).sum();
 

@@ -2,14 +2,13 @@
 
 //! Transaction mempool for storing pending transactions.
 //!
-//! Handles both simple (visible sender) and private (ring signature) transactions.
-//! For simple transactions, tracks spent UTXOs. For private transactions, tracks
-//! spent key images to prevent double-spending.
+//! All transactions are private by default using ring signatures (CLSAG, LION, or MLSAG).
+//! Tracks spent key images to prevent double-spending.
 //!
 //! ## Fee Validation
 //!
 //! Uses the cluster-tax fee system to compute minimum fees based on:
-//! - Transaction type (Simple = Plain, Ring = Hidden)
+//! - Transaction type (CLSAG/MLSAG = Hidden, LION = PqHidden)
 //! - Transfer amount
 //! - Sender's cluster wealth (currently 0, cluster tracking not yet implemented)
 //! - Number of outputs with encrypted memos
@@ -51,9 +50,7 @@ impl PendingTx {
 pub struct Mempool {
     /// Pending transactions by hash
     txs: HashMap<[u8; 32], PendingTx>,
-    /// Spent UTXOs in mempool (for simple transactions)
-    spent_utxos: HashSet<UtxoId>,
-    /// Spent key images in mempool (for private transactions)
+    /// Spent key images in mempool (for double-spend prevention)
     spent_key_images: HashSet<[u8; 32]>,
     /// Fee configuration for computing minimum fees
     fee_config: FeeConfig,
@@ -64,7 +61,6 @@ impl Mempool {
     pub fn new() -> Self {
         Self {
             txs: HashMap::new(),
-            spent_utxos: HashSet::new(),
             spent_key_images: HashSet::new(),
             fee_config: FeeConfig::default(),
         }
@@ -74,7 +70,6 @@ impl Mempool {
     pub fn with_fee_config(fee_config: FeeConfig) -> Self {
         Self {
             txs: HashMap::new(),
-            spent_utxos: HashSet::new(),
             spent_key_images: HashSet::new(),
             fee_config,
         }
@@ -149,17 +144,14 @@ impl Mempool {
 
         // Validate based on input type
         let input_sum = match &tx.inputs {
-            TxInputs::Simple(inputs) => {
-                self.validate_simple_inputs(inputs, &tx, ledger)?
-            }
-            TxInputs::Ring(ring_inputs) | TxInputs::LegacyRing(ring_inputs) => {
-                self.validate_ring_inputs(ring_inputs, &tx, ledger)?
-            }
             TxInputs::Clsag(clsag_inputs) => {
                 self.validate_clsag_inputs(clsag_inputs, &tx, ledger)?
             }
             TxInputs::Lion(lion_inputs) => {
                 self.validate_lion_inputs(lion_inputs, &tx, ledger)?
+            }
+            TxInputs::Mlsag(mlsag_inputs) => {
+                self.validate_mlsag_inputs(mlsag_inputs, &tx, ledger)?
             }
         };
 
@@ -182,8 +174,7 @@ impl Mempool {
 
         // Validate fee meets minimum based on transaction type and amount
         let fee_tx_type = match &tx.inputs {
-            TxInputs::Simple(_) => FeeTransactionType::Plain,
-            TxInputs::Ring(_) | TxInputs::LegacyRing(_) | TxInputs::Clsag(_) => FeeTransactionType::Hidden,
+            TxInputs::Clsag(_) | TxInputs::Mlsag(_) => FeeTransactionType::Hidden,
             TxInputs::Lion(_) => FeeTransactionType::PqHidden, // Higher fee for ~90x larger LION signatures
         };
 
@@ -208,17 +199,6 @@ impl Mempool {
 
         // Mark inputs as spent
         match &tx.inputs {
-            TxInputs::Simple(inputs) => {
-                for input in inputs {
-                    let utxo_id = UtxoId::new(input.tx_hash, input.output_index);
-                    self.spent_utxos.insert(utxo_id);
-                }
-            }
-            TxInputs::Ring(ring_inputs) | TxInputs::LegacyRing(ring_inputs) => {
-                for ring_input in ring_inputs {
-                    self.spent_key_images.insert(ring_input.key_image);
-                }
-            }
             TxInputs::Clsag(clsag_inputs) => {
                 for input in clsag_inputs {
                     self.spent_key_images.insert(input.key_image);
@@ -234,6 +214,11 @@ impl Mempool {
                     self.spent_key_images.insert(key_image_hash);
                 }
             }
+            TxInputs::Mlsag(ring_inputs) => {
+                for ring_input in ring_inputs {
+                    self.spent_key_images.insert(ring_input.key_image);
+                }
+            }
         }
 
         // Add to mempool
@@ -244,54 +229,8 @@ impl Mempool {
         Ok(tx_hash)
     }
 
-    /// Validate simple (visible) transaction inputs
-    fn validate_simple_inputs(
-        &self,
-        inputs: &[crate::transaction::TxInput],
-        tx: &Transaction,
-        ledger: &Ledger,
-    ) -> Result<u64, MempoolError> {
-        let signing_hash = tx.signing_hash();
-        let mut input_sum = 0u64;
-
-        // Check for double-spends within mempool
-        for input in inputs {
-            let utxo_id = UtxoId::new(input.tx_hash, input.output_index);
-            if self.spent_utxos.contains(&utxo_id) {
-                return Err(MempoolError::DoubleSpend);
-            }
-        }
-
-        // Validate inputs exist in ledger and verify signatures
-        for input in inputs {
-            let utxo_id = UtxoId::new(input.tx_hash, input.output_index);
-            match ledger.get_utxo(&utxo_id) {
-                Ok(Some(utxo)) => {
-                    // Verify signature against the UTXO's target_key
-                    if !input.verify_signature(&signing_hash, &utxo.output.target_key) {
-                        warn!(
-                            "Invalid signature for input {}:{}",
-                            hex::encode(&input.tx_hash[0..8]),
-                            input.output_index
-                        );
-                        return Err(MempoolError::InvalidSignature);
-                    }
-                    input_sum += utxo.output.amount;
-                }
-                Ok(None) => {
-                    return Err(MempoolError::UtxoNotFound(utxo_id));
-                }
-                Err(e) => {
-                    return Err(MempoolError::LedgerError(e.to_string()));
-                }
-            }
-        }
-
-        Ok(input_sum)
-    }
-
-    /// Validate ring signature (private) transaction inputs
-    fn validate_ring_inputs(
+    /// Validate MLSAG ring signature transaction inputs
+    fn validate_mlsag_inputs(
         &self,
         ring_inputs: &[crate::transaction::RingTxInput],
         tx: &Transaction,
@@ -496,17 +435,6 @@ impl Mempool {
         if let Some(pending) = self.txs.remove(tx_hash) {
             // Remove spent inputs
             match &pending.tx.inputs {
-                TxInputs::Simple(inputs) => {
-                    for input in inputs {
-                        let utxo_id = UtxoId::new(input.tx_hash, input.output_index);
-                        self.spent_utxos.remove(&utxo_id);
-                    }
-                }
-                TxInputs::Ring(ring_inputs) | TxInputs::LegacyRing(ring_inputs) => {
-                    for ring_input in ring_inputs {
-                        self.spent_key_images.remove(&ring_input.key_image);
-                    }
-                }
                 TxInputs::Clsag(clsag_inputs) => {
                     for input in clsag_inputs {
                         self.spent_key_images.remove(&input.key_image);
@@ -519,6 +447,11 @@ impl Mempool {
                         hasher.update(&input.key_image);
                         let key_image_hash: [u8; 32] = hasher.finalize().into();
                         self.spent_key_images.remove(&key_image_hash);
+                    }
+                }
+                TxInputs::Mlsag(ring_inputs) => {
+                    for ring_input in ring_inputs {
+                        self.spent_key_images.remove(&ring_input.key_image);
                     }
                 }
             }
@@ -551,26 +484,12 @@ impl Mempool {
 
     /// Remove transactions that are no longer valid
     ///
-    /// For simple transactions: checks if UTXOs still exist
-    /// For private transactions: checks if key images were spent
+    /// Checks if any key images were spent in the ledger.
     pub fn remove_invalid(&mut self, ledger: &Ledger) {
         let mut to_remove = Vec::new();
 
         for (tx_hash, pending) in &self.txs {
             let is_invalid = match &pending.tx.inputs {
-                TxInputs::Simple(inputs) => {
-                    // Check if any input UTXO no longer exists
-                    inputs.iter().any(|input| {
-                        let utxo_id = UtxoId::new(input.tx_hash, input.output_index);
-                        matches!(ledger.get_utxo(&utxo_id), Ok(None) | Err(_))
-                    })
-                }
-                TxInputs::Ring(ring_inputs) | TxInputs::LegacyRing(ring_inputs) => {
-                    // Check if any key image was spent in ledger
-                    ring_inputs.iter().any(|ri| {
-                        matches!(ledger.is_key_image_spent(&ri.key_image), Ok(Some(_)))
-                    })
-                }
                 TxInputs::Clsag(clsag_inputs) => {
                     // Check if any key image was spent in ledger
                     clsag_inputs.iter().any(|input| {
@@ -585,6 +504,12 @@ impl Mempool {
                         hasher.update(&input.key_image);
                         let key_image_hash: [u8; 32] = hasher.finalize().into();
                         matches!(ledger.is_key_image_spent(&key_image_hash), Ok(Some(_)))
+                    })
+                }
+                TxInputs::Mlsag(ring_inputs) => {
+                    // Check if any key image was spent in ledger
+                    ring_inputs.iter().any(|ri| {
+                        matches!(ledger.is_key_image_spent(&ri.key_image), Ok(Some(_)))
                     })
                 }
             };

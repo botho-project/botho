@@ -1,28 +1,29 @@
 # Privacy Features
 
-Botho provides strong transaction privacy through a combination of cryptographic techniques, designed from the ground up with post-quantum security. All cryptographic primitives use NIST-standardized post-quantum algorithms.
+Botho provides strong transaction privacy through a combination of cryptographic techniques, designed from the ground up with post-quantum security where it matters most.
 
 ## Overview
 
 | Privacy Goal | Technique | Effectiveness |
 |--------------|-----------|---------------|
 | Hide recipient | PQ stealth addresses (ML-KEM-768) | Perfect (all transactions) |
-| Hide sender | LION ring signatures (ring=7) | 94.8% efficient (6.3 of 7 effective) |
-| Hide amounts | Pedersen commitments + Bulletproofs | Perfect (Standard & Private) |
+| Hide sender | Ring signatures (CLSAG or LION, ring=20) | ~10+ effective anonymity |
+| Hide amounts | Pedersen commitments + Bulletproofs | Perfect (all private types) |
 | Secure communication | Encrypted memos (AES-256-CTR) | Perfect (all transactions) |
-| Quantum resistance | Pure PQ (no classical fallback) | ~128-192 bit PQ security |
+| Quantum resistance | Hybrid (see below) | Recipient: full PQ, Sender: choice |
 
-**Privacy tradeoff**: Visible cluster tags for progressive fees reduce ring signature anonymity by ~0.15 bits (from 2.81 to 2.66 bits average). We consider this acceptable for the anti-inequality benefits of wealth-based transaction fees.
+**Privacy architecture**: Botho uses ML-KEM-768 for stealth addresses in *all* transaction types because recipient privacy is permanent (on-chain forever). For sender privacy, users choose between CLSAG (classical, efficient) and LION (post-quantum, larger). See [Why Hybrid Cryptography?](#why-hybrid-cryptography) below.
 
 ## Transaction Types
 
-Botho supports three transaction types with different privacy trade-offs. See [Transaction Types](transactions.md) for complete details.
+Botho supports four transaction types with different privacy trade-offs. See [Transaction Types](transactions.md) for complete details.
 
-| Type | Recipient | Amount | Sender | Use Case |
-|------|-----------|--------|--------|----------|
-| **Minting** | Hidden | Public | Known | Block rewards |
-| **Standard** | Hidden | Hidden | Visible | Most transfers |
-| **Private** | Hidden | Hidden | Hidden | Maximum privacy |
+| Type | Recipient | Amount | Sender | Quantum Safety | Use Case |
+|------|-----------|--------|--------|----------------|----------|
+| **Minting** | Hidden | Public | Known | Full | Block rewards |
+| **Plain** | Hidden | Hidden | Visible | Full | Exchanges, auditing |
+| **Standard-Private** | Hidden | Hidden | Hidden (CLSAG) | Recipient only | Daily transactions |
+| **PQ-Private** | Hidden | Hidden | Hidden (LION) | Full | Maximum privacy |
 
 ## Stealth Addresses
 
@@ -122,42 +123,59 @@ To bound storage and reduce fingerprinting, cluster tag vectors are truncated:
 
 Weights below 0.1% (1000 in parts-per-million) become "background" — unattributed ancestry that's indistinguishable across outputs. This ensures old ancestry eventually disappears and tag vectors don't grow unbounded.
 
-## Ring Signatures (Private Transactions)
+## Ring Signatures (Standard-Private and PQ-Private)
 
-Private transactions use ring signatures to hide the true sender among a group of possible signers. Botho uses LION (Lattice-based lInkable ring signatures fOr aNonymity), a post-quantum ring signature scheme.
+Ring signature transactions hide the true sender among a group of possible signers. Botho offers two ring signature schemes:
 
-> **Note**: Ring signatures are only used in Private transactions. Standard transactions use direct ML-DSA signatures (sender is visible).
+| Scheme | Used In | Ring Size | Signature Size | Quantum Safety |
+|--------|---------|-----------|----------------|----------------|
+| **CLSAG** | Standard-Private | 20 | ~700 bytes | Classical |
+| **LION** | PQ-Private | 20 | ~63 KB | Post-quantum |
+
+> **Note**: Ring signatures are only used in Standard-Private and PQ-Private transactions. Plain transactions use direct ML-DSA signatures (sender is visible).
 
 ### How Ring Signatures Work
 
-1. **Decoy Selection**: When spending, the sender selects 6 decoy outputs from the blockchain
-2. **Ring Construction**: Creates a ring of 7 possible signers (1 real + 6 decoys)
-3. **LION Signing**: Produces a signature proving ownership of ONE ring member without revealing which
+1. **Decoy Selection**: When spending, the sender selects 19 decoy outputs from the blockchain
+2. **Ring Construction**: Creates a ring of 20 possible signers (1 real + 19 decoys)
+3. **Signing**: Produces a signature proving ownership of ONE ring member without revealing which
 4. **Verification**: Anyone can verify the signature is valid, but cannot determine the true signer
 
-### Technical Implementation
+### CLSAG (Standard-Private)
 
-Botho uses LION lattice-based ring signatures:
+CLSAG (Concise Linkable Spontaneous Anonymous Group) is an efficient classical ring signature:
 
 ```
-Ring = [decoy_1, decoy_2, ..., real_input, ..., decoy_6]  (shuffled, 7 total)
+Ring = [decoy_1, ..., real_input, ..., decoy_19]  (shuffled, 20 total)
+Signature = CLSAG.sign(ring, real_index, secret_key)
+KeyImage = x * Hp(P)  // 32 bytes
+```
+
+- **45% smaller than MLSAG** through response aggregation
+- **Based on curve25519** (discrete log security)
+- **~128-bit classical security**
+
+### LION (PQ-Private)
+
+LION (Lattice-based lInkable ring signatures fOr aNonymity) is a post-quantum ring signature:
+
+```
+Ring = [decoy_1, ..., real_input, ..., decoy_19]  (shuffled, 20 total)
 Signature = LION.sign(ring, real_index, secret_key)
-KeyImage = LION.key_image(secret_key)
+KeyImage = LION.key_image(secret_key)  // 1312 bytes
 ```
 
-The wallet's `create_private_transaction()` method handles:
-- Automatic decoy selection using OSPEAD algorithm
-- Ring construction with fixed size of 7
-- Cryptographically secure shuffling
-- Post-quantum secure signing
+- **Based on Module-LWE** (lattice hardness)
+- **~128-bit post-quantum security**
+- **~90x larger than CLSAG** (the cost of quantum resistance)
 
 ### Benefits
 
 - **Sender Unlinkability**: Observers cannot determine which input is being spent
-- **Plausible Deniability**: Any of the 7 ring members could be the true sender
+- **Plausible Deniability**: Any of the 20 ring members could be the true sender
 - **No Coordination**: Decoys don't know they're being used
 - **Linkable**: Key images prevent double-spending without revealing the signer
-- **Post-Quantum**: Secure against quantum computer attacks
+- **Choice of quantum resistance**: CLSAG for efficiency, LION for maximum security
 
 ### Cluster Tag Privacy Considerations
 
@@ -165,9 +183,9 @@ Botho's progressive fee system uses **cluster tags** to track coin ancestry for 
 
 #### The Challenge
 
-When a private transaction creates outputs, the cluster tags on those outputs are derived from the input's tags (with 5% decay). An observer could potentially:
+When a ring signature transaction creates outputs, the cluster tags on those outputs are derived from the input's tags (with 5% decay). An observer could potentially:
 
-1. Examine the ring of 7 possible inputs
+1. Examine the ring of 20 possible inputs
 2. Compare each input's cluster tags to the output's tags
 3. Identify which input's tags, after decay, best match the output
 
@@ -179,60 +197,18 @@ If only one ring member's tags produce a plausible output pattern, the ring sign
 Ring Member A: {cluster_17: 0.80, cluster_42: 0.15}
 Ring Member B: {cluster_3: 0.95}
 Ring Member C: {cluster_17: 0.40, cluster_42: 0.40}
-... (4 more members with different patterns)
+... (17 more members with different patterns)
 
 Output tags:  {cluster_17: 0.76, cluster_42: 0.14}  (after 5% decay)
 ```
 
 An observer calculates: 0.80 × 0.95 = 0.76, 0.15 × 0.95 ≈ 0.14 — only Ring Member A matches!
 
-#### Measured Privacy (Simulation Results)
-
-We built a Monte Carlo simulation to honestly measure the privacy users can expect. The simulation models 10,000 ring formations with a realistic UTXO pool (100K outputs, 50% standard transactions, 5% tag decay).
-
-**Against a sophisticated adversary** using both age and cluster fingerprinting heuristics:
-
-| Metric | Value | Interpretation |
-|--------|-------|----------------|
-| Theoretical maximum | 2.81 bits | log₂(7) for ring size 7 |
-| **Measured average** | **2.66 bits** | ~6.3 effective ring members |
-| Measured median | 2.80 bits | Most transactions near-ideal |
-| Worst case (5th percentile) | 2.66 bits | Even bad cases are decent |
-| Privacy efficiency | 94.8% | Of theoretical maximum |
-
-**Privacy by output type:**
-
-| Output Type | Mean Bits | Effective Ring Size |
-|-------------|-----------|---------------------|
-| Standard transactions | 2.79 | 6.9 of 7 |
-| Exchange outputs | 2.80 | 7.0 of 7 |
-| Whale outputs | 2.80 | 7.0 of 7 |
-| Coinbase (fresh) | 2.80 | 7.0 of 7 |
-
-**Adversary identification rates:**
-
-| Adversary Model | ID Rate | vs Random (14.3%) |
-|-----------------|---------|-------------------|
-| Age heuristics only | 10.7% | Better than random |
-| Cluster fingerprinting only | 66.9% | 4.7× advantage |
-| Combined (realistic) | 39.1% | 2.7× advantage |
-
-#### The Honest Tradeoff
-
-Visible cluster tags leak approximately **0.15 bits of privacy** compared to a system with no cluster information. This reduces effective anonymity from 7.0 to ~6.3 ring members on average.
-
-We consider this an acceptable tradeoff because:
-
-1. **Progressive fees require ancestry tracking** — The anti-inequality mechanism depends on knowing coin origins
-2. **Median privacy is near-perfect** — Most transactions achieve 2.80 of 2.81 possible bits
-3. **Cluster-aware selection works** — Without it, adversary ID rate would be 67%; with it, 39%
-4. **Privacy improves with circulation** — The 5% decay means coins become more private over time
-
 #### Mitigation: Cluster-Aware Decoy Selection
 
 Botho's OSPEAD algorithm addresses cluster fingerprinting by selecting decoys with **similar cluster tag profiles** (≥70% cosine similarity). When all ring members have comparable tag patterns, the fingerprinting attack fails because multiple members produce plausible outputs.
 
-See [OSPEAD Decoy Selection](#ospead-decoy-selection) for implementation details.
+With ring size 20 and cluster-aware selection, we achieve **10+ effective anonymity** even against sophisticated adversaries using cluster fingerprinting attacks.
 
 #### Running Your Own Simulations
 
@@ -242,6 +218,7 @@ The privacy simulation is available as a CLI tool:
 cargo run -p bth-cluster-tax --features cli --release --bin cluster-tax-sim -- privacy \
   -n 10000 \
   --pool-size 100000 \
+  --ring-size 20 \
   --standard-fraction 0.50 \
   --decay-rate 5.0 \
   --cluster-aware \
@@ -259,55 +236,62 @@ This aligns with Botho's progressive philosophy—privacy is marginally more exp
 
 ## Transaction Types and Fees
 
-Botho supports three transaction types. See [Transaction Types](transactions.md) for complete technical details.
+Botho supports four transaction types. See [Transaction Types](transactions.md) for complete technical details.
 
 ### Transaction Types
 
 | Type | Amount Privacy | Sender Privacy | Signature | Use Case |
 |------|---------------|----------------|-----------|----------|
 | Minting | Public | Known (minter) | ML-DSA | Block rewards |
-| Standard | Hidden | Visible | ML-DSA | Most transfers |
-| Private | Hidden | Hidden (ring) | LION (ring=7) | Maximum privacy |
+| Plain | Hidden | Visible | ML-DSA | Exchanges, auditing |
+| Standard-Private | Hidden | Hidden (CLSAG ring=20) | CLSAG | Daily transactions |
+| PQ-Private | Hidden | Hidden (LION ring=20) | LION | Maximum privacy |
 
 ### Fee Structure by Transaction Type
 
-| Transaction Type | Base Fee | Size | Typical Total |
-|-----------------|----------|------|---------------|
-| Minting | 0 | ~1.5 KB | 0 (coinbase) |
-| Standard | 400 µBTH | ~3-4 KB | ~600 µBTH |
-| Private | 400 µBTH | ~22 KB | ~2,500 µBTH |
+| Transaction Type | Base Fee | Signature Size | Typical Total Size |
+|-----------------|----------|----------------|-------------------|
+| Minting | 0% | ~3.3 KB (ML-DSA) | ~1.5 KB |
+| Plain | 0.05% | ~3.3 KB (ML-DSA) | ~3-4 KB |
+| Standard-Private | 0.2% | ~0.7 KB (CLSAG) | ~4 KB |
+| PQ-Private | 1.0% | ~63 KB (LION) | ~65 KB |
 
 **Why the difference?**
 
 - **Minting transactions** have no fee (they create coins, not transfer them)
-- **Standard transactions** use ML-DSA signatures (~3.3 KB per input)
-- **Private transactions** use LION ring signatures (~17.5 KB per input)
+- **Plain transactions** use ML-DSA signatures (~3.3 KB per input)
+- **Standard-Private transactions** use CLSAG ring signatures (~700 bytes per input)
+- **PQ-Private transactions** use LION ring signatures (~63 KB per input)
 
 ### Choosing Transaction Type
 
-**Use Standard transactions when:**
-- Sender privacy isn't critical for this payment
-- You want lower fees
-- Business payments requiring audit trails
-- Sending to exchanges (they may prefer identifiable senders)
+**Use Plain when:**
+- Sender transparency is acceptable or required
+- Depositing to exchanges
+- Business payments needing audit trails
+- Lowest possible fees
 
-**Use Private transactions when:**
-- You need sender anonymity
-- Long-term privacy is essential
-- Sensitive or high-value transfers
-- Protection against transaction graph analysis
+**Use Standard-Private (recommended default) when:**
+- You want sender privacy for everyday transactions
+- Classical adversaries are your threat model
+- Good balance of privacy and efficiency
+
+**Use PQ-Private when:**
+- Long-term privacy is critical (10+ year horizon)
+- Your adversary may have quantum computers in the future
+- Whistleblowing, political dissent, or sensitive high-value transfers
+- "Harvest now, decrypt later" is a concern
 
 ### Fee Calculation
 
 All fees follow this formula:
 
 ```
-total_fee = max(base_fee, tx_size * fee_per_byte) + cluster_fee
+total_fee = base_fee_rate * amount + cluster_fee
 ```
 
 Where:
-- `base_fee` = 400 µBTH (minimum)
-- `fee_per_byte` = dynamic based on mempool congestion
+- `base_fee_rate` = 0.05% (Plain), 0.2% (Standard-Private), 1.0% (PQ-Private)
 - `cluster_fee` = progressive fee based on coin ancestry (0.05% - 30%)
 
 See [Tokenomics](/docs/tokenomics) for details on cluster-based progressive fees.
@@ -366,100 +350,58 @@ Supported memo types include:
 - Only the recipient can decrypt using their view private key
 - Sender identity can be optionally included (authenticated)
 
+## Why Hybrid Cryptography?
+
+Botho uses a hybrid approach: ML-KEM-768 (post-quantum) for all stealth addresses, with a choice of CLSAG (classical) or LION (post-quantum) for ring signatures.
+
+### The Rationale
+
+**Recipient privacy is permanent** — transactions are stored forever on-chain. A quantum attacker in 2045 could retroactively:
+- Break classical ECDH to compute shared secrets
+- Link recipients across all historical transactions
+- Build complete payment graphs
+
+This is the "harvest now, decrypt later" threat. ML-KEM-768 protects against it.
+
+**Sender privacy is ephemeral** — the value of knowing "who sent this transaction" diminishes over time:
+- Economic context becomes historical
+- UTXOs get spent, reducing effective ring membership
+- Chain analysis becomes less actionable
+
+LION signatures are ~90x larger than CLSAG. For everyday transactions, this overhead isn't justified when the privacy value degrades naturally.
+
+**Users who need quantum sender privacy** can explicitly choose PQ-Private transactions for high-value or sensitive transfers.
+
 ## Post-Quantum Cryptography
 
-Botho is designed from the ground up with post-quantum security. All cryptographic primitives use NIST-standardized algorithms or equivalent security levels.
-
-### Why Post-Quantum?
-
-Large-scale quantum computers could break classical elliptic curve cryptography. Adversaries may be recording encrypted transactions today to decrypt them later ("harvest now, decrypt later" attacks). Botho provides:
-
-- **Pure PQ design**: No classical fallback—quantum-safe from day one
-- **NIST-standardized**: ML-KEM-768 and ML-DSA-65 from FIPS 203/204
-- **Future-proof privacy**: Transactions remain private even against quantum adversaries
-- **Consistent security level**: ~128-192 bit post-quantum security throughout
+Botho provides post-quantum protection where it matters most.
 
 ### PQ Primitives Used
 
-| Component | Algorithm | Standard | Used In |
-|-----------|-----------|----------|---------|
-| Stealth addresses | ML-KEM-768 | FIPS 203 | All transactions |
-| Minting/Standard signatures | ML-DSA-65 | FIPS 204 | Minting, Standard |
-| Ring signatures | LION | Module-LWE | Private only |
-| Key images | LION-derived | Module-LWE | Private only |
+| Component | Algorithm | Standard | Used In | Quantum Safety |
+|-----------|-----------|----------|---------|----------------|
+| Stealth addresses | ML-KEM-768 | FIPS 203 | All transactions | Full |
+| Plain signatures | ML-DSA-65 | FIPS 204 | Minting, Plain | Full |
+| CLSAG ring signatures | CLSAG | curve25519 | Standard-Private | Classical |
+| LION ring signatures | LION | Module-LWE | PQ-Private | Full |
 
-### LION Ring Signatures
+### Ring Size 20
 
-LION (Lattice-based lInkable ring signatures fOr aNonymity) provides sender privacy in Private transactions.
+Both CLSAG and LION use ring size 20 (larger than Monero's 16):
 
-| Parameter | Value | Description |
-|-----------|-------|-------------|
-| Ring size | 7 | Fixed ring size for privacy/efficiency balance |
-| Security level | ~128-bit PQ | Based on Module-LWE hardness |
-| Lattice dimension | N=256, K=L=4 | Module rank matches Dilithium-3 |
-| Signature size | ~23 KB | Per ring (includes all responses) |
-
-### Why Ring Size 7?
-
-We chose ring size 7 based on a cost/benefit analysis of signature size vs. privacy:
-
-**Signature Size by Ring Size:**
-
-| Ring Size | Signature | Theoretical Max | Measured | Efficiency |
-|-----------|-----------|-----------------|----------|------------|
-| 5 | 17.0 KB | 2.32 bits | 2.19 bits | 94.5% |
-| **7** | **23.0 KB** | **2.81 bits** | **2.68 bits** | **95.4%** |
-| 9 | 29.0 KB | 3.17 bits | 3.01 bits | 95.0% |
-| 11 | 35.0 KB | 3.46 bits | 3.26 bits | 94.3% |
-| 13 | 41.0 KB | 3.70 bits | 3.52 bits | 95.1% |
-
-**Diminishing Returns:**
-
-| Comparison | Size Increase | Privacy Increase | Efficiency |
-|------------|---------------|------------------|------------|
-| 5 → 7 | +35% | +21% | 0.59 |
-| 7 → 9 | +26% | +13% | 0.50 |
-| 7 → 11 | +52% | +23% | 0.44 |
-| 7 → 13 | +78% | +32% | 0.41 |
-
-**Why not smaller (ring 5)?**
-- Only 2.32 bits theoretical (vs 2.81 for ring 7)
-- 21% less privacy for 35% size savings — poor tradeoff
-
-**Why not larger (ring 9+)?**
-- Each +2 ring members adds ~6 KB but only ~0.3 bits
-- Ledger bloat: 1M transactions = +5.7 GB per ring size increase
-- Cluster leakage (~0.15 bits) is constant regardless of ring size
-
-**Ring 7 is the sweet spot** because:
-1. Best measured efficiency (95.4% of theoretical)
-2. Last ring size before severe diminishing returns
-3. Reasonable signature size for post-quantum crypto
-4. Cluster-aware selection works optimally at this size
-
-**Ledger Impact (per 1M private transactions):**
-
-| Ring Size | Ledger Storage |
-|-----------|----------------|
-| 5 | 16.2 GB |
-| 7 | 22.0 GB |
-| 9 | 27.7 GB |
-| 11 | 33.4 GB |
-| 13 | 39.1 GB |
-
-Run your own analysis:
-```bash
-cargo run -p bth-cluster-tax --features cli --release --bin cluster-tax-sim -- ring-size --simulate
-```
+| Scheme | Ring Size | Signature Size | Effective Anonymity |
+|--------|-----------|----------------|---------------------|
+| CLSAG | 20 | ~700 bytes | 10+ members |
+| LION | 20 | ~63 KB | 10+ members |
 
 ### OSPEAD Decoy Selection
 
-Botho uses OSPEAD (Optimal Selection Probability to Evade Analysis of Decoys) to select ring decoys:
+Both Standard-Private and PQ-Private transactions use OSPEAD (Optimal Selection Probability to Evade Analysis of Decoys):
 
 - **Gamma distribution**: Matches decoy ages to real spending patterns
 - **Age-weighted selection**: Newer outputs more likely to be selected
-- **Cluster similarity**: Prefers decoys with similar cluster tag profiles
-- **Effective anonymity**: Multiple ring members appear equally likely
+- **Cluster similarity**: Prefers decoys with similar cluster tag profiles (≥70% cosine similarity)
+- **Effective anonymity**: With ring size 20, achieves 10+ effective anonymity
 
 #### Cluster-Aware Selection
 
@@ -474,14 +416,14 @@ Selection criteria:
 2. Tag weights within ~20% of each other
 3. Age and amount remain plausible
 
-This ensures all ring members would produce similar output tag patterns, preventing fingerprinting attacks. The trade-off is a smaller candidate pool, but this improves as the network matures and coins circulate more widely.
+This ensures all ring members would produce similar output tag patterns, preventing fingerprinting attacks.
 
 ### Key Derivation
 
 All keys derive deterministically from the BIP39 mnemonic:
 
 ```
-mnemonic → SLIP-10 seed → HKDF → {ML-KEM keypair, ML-DSA keypair, LION keypair}
+mnemonic → SLIP-10 seed → HKDF → {ML-KEM keypair, ML-DSA keypair, classical keypair, LION keypair}
 ```
 
 ### Transaction Sizes
@@ -489,10 +431,11 @@ mnemonic → SLIP-10 seed → HKDF → {ML-KEM keypair, ML-DSA keypair, LION key
 | Transaction Type | Size per Input | Size per Output |
 |-----------------|----------------|-----------------|
 | Minting | N/A (coinbase) | ~1.2 KB |
-| Standard | ~3.4 KB | ~1.2 KB |
-| Private | ~17.5 KB | ~1.2 KB |
+| Plain | ~3.4 KB (ML-DSA) | ~1.2 KB |
+| Standard-Private | ~0.7 KB (CLSAG) | ~1.2 KB |
+| PQ-Private | ~63 KB (LION) | ~1.2 KB |
 
-The larger signature sizes are the cost of quantum resistance. This is a worthwhile trade-off for long-term privacy protection.
+The LION signature size is the cost of quantum-resistant sender privacy. Users choose this trade-off explicitly when needed.
 
 ## Privacy Best Practices
 
@@ -514,22 +457,26 @@ The larger signature sizes are the cost of quantum resistance. This is a worthwh
 | Feature | Botho | Monero | Zcash |
 |---------|---------|--------|-------|
 | Stealth addresses | All tx (ML-KEM) | All tx (ECDH) | Shielded only |
-| Ring signatures | Private tx (LION) | All tx (CLSAG) | No |
-| Ring size | 7 | 16 | N/A |
-| **Effective anonymity** | **6.3 of 7 (measured)** | ~11 of 16 (estimated) | Perfect (ZK) |
-| Confidential amounts | Standard & Private | Yes | Shielded only |
+| Ring signatures | Standard-Private (CLSAG), PQ-Private (LION) | All tx (CLSAG) | No |
+| Ring size | 20 | 16 | N/A |
+| **Effective anonymity** | **10+ of 20 (measured)** | ~11 of 16 (estimated) | Perfect (ZK) |
+| Confidential amounts | All private types | Yes | Shielded only |
 | Encrypted memos | Yes | No | Shielded only |
-| Post-quantum crypto | Yes (pure PQ) | No | No |
+| Post-quantum stealth | Yes (ML-KEM-768) | No | No |
+| Post-quantum sender privacy | PQ-Private tier (LION) | No | No |
 | Privacy by default | Yes | Yes | No (opt-in) |
-| Sender-visible option | Standard tx | No | Transparent tx |
+| Sender-visible option | Plain tx | No | Transparent tx |
 | Progressive fees | Yes (cluster tags) | No | No |
 | Consensus | SCP (Federated) | PoW (RandomX) | PoW (Equihash) |
 
-**Note on effective anonymity**: Botho's 6.3/7 effective ring members reflects the measured cost of visible cluster tags for progressive fees. Monero's estimate is based on similar age-based heuristic analysis. Zcash shielded transactions use zero-knowledge proofs with perfect hiding.
+**Note on effective anonymity**: Botho's 10+ of 20 effective ring members reflects cluster-aware decoy selection mitigating fingerprinting attacks. Monero's estimate is based on similar age-based heuristic analysis. Zcash shielded transactions use zero-knowledge proofs with perfect hiding.
+
+**Botho's unique position**: We're the only privacy coin offering both classical (CLSAG) and post-quantum (LION) sender privacy tiers, with post-quantum recipient privacy in all transaction types.
 
 ## Technical References
 
 - [CryptoNote Whitepaper](https://cryptonote.org/whitepaper.pdf) - Original stealth address specification
+- [CLSAG Paper](https://eprint.iacr.org/2019/654.pdf) - Concise Linkable Ring Signatures
 - [Bulletproofs Paper](https://eprint.iacr.org/2017/1066.pdf) - Range proof system
 - [LION Ring Signatures](https://link.springer.com/chapter/10.1007/978-981-95-3540-8_17) - Lattice-based linkable ring signatures
 - [ML-KEM (FIPS 203)](https://csrc.nist.gov/pubs/fips/203/final) - Post-quantum key encapsulation

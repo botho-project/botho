@@ -39,7 +39,8 @@ use botho_wallet::WalletKeys;
 /// fees this is approximately input_sum, we pass the input amount (UTXO value)
 /// to ensure the calculated fee covers the validation requirement.
 fn calculate_fee_for_outputs(mempool: &Mempool, output_sum: u64) -> u64 {
-    mempool.estimate_fee(false, output_sum, 0)
+    use bth_cluster_tax::TransactionType;
+    mempool.estimate_fee(TransactionType::Plain, output_sum, 0)
 }
 
 // ============================================================================

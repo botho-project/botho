@@ -60,6 +60,35 @@ Botho combines proven cryptographic building blocks in a novel architecture:
 | Quantum safety | ML-KEM-768 + ML-DSA-65 | Future-proof key exchange and signatures |
 | Fee system | Cluster-tagged progressive fees | Economic equality without identity |
 
+### Transaction Types
+
+Botho offers three transaction types, balancing privacy, efficiency, and quantum resistance:
+
+| Property | Plain | Standard-Private | PQ-Private |
+|:--|:--|:--|:--|
+| **Sender privacy** | Visible | Ring signature (CLSAG) | Ring signature (LION) |
+| **Recipient privacy** | ML-KEM-768 stealth | ML-KEM-768 stealth | ML-KEM-768 stealth |
+| **Amount privacy** | Pedersen + Bulletproofs | Pedersen + Bulletproofs | Pedersen + Bulletproofs |
+| **Ring size** | — | 20 decoys | 20 decoys |
+| **Signature size** | ~3.3 KB | ~0.7 KB/input | ~63 KB/input |
+| **Quantum resistance** | Recipient: full | Recipient: full, Sender: classical | Full |
+| **Base fee** | 0.05% | 0.2% | 1.0% |
+| **Use case** | Exchanges, auditing | Daily transactions | High-value, long-term privacy |
+
+**Why hybrid cryptography for Standard-Private?**
+
+The main difference between Standard-Private and PQ-Private is the ring signature scheme (sender privacy). We use ML-KEM-768 for stealth addresses in *all* transaction types because:
+
+1. **Recipient privacy is permanent** — transactions are recorded forever on-chain. A quantum attacker in 2045 could retroactively link recipients from 2025 transactions if we used classical ECDH.
+
+2. **Sender privacy is ephemeral** — the value of knowing "who sent this" diminishes over time as the economic context becomes historical.
+
+3. **Size matters** — LION signatures are ~90x larger than CLSAG. For everyday transactions, this overhead isn't justified.
+
+4. **Amount hiding is already quantum-safe** — Pedersen commitments have information-theoretic hiding. A quantum computer can't reveal amounts; it could only enable detectable inflation attacks.
+
+Users who need quantum-resistant sender privacy (whistleblowers, political dissidents, long-term holdings) should use PQ-Private transactions.
+
 ### Fast Finality
 
 Unlike Bitcoin's probabilistic finality (wait 6 blocks = 60 minutes to be "sure"), Botho transactions are final in seconds. The SCP quorum reaches consensus, and that's it—no reorgs, no double-spend risk.

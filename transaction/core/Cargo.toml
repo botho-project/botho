@@ -51,9 +51,14 @@ bth-util-zip-exact = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
 assert_matches = { workspace = true }
+criterion = { workspace = true }
 
 bth-crypto-ring-signature = { workspace = true, features = ["proptest"] }
 bth-util-serial = { workspace = true, features = ["std"] }
 bth-util-test-helper = { workspace = true }
 proptest = { workspace = true, features = ["default-code-coverage"] }
 rand = { workspace = true }
+
+[[bench]]
+name = "transaction_benchmarks"
+harness = false
