@@ -1,36 +1,36 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Button, Logo } from '@botho/ui'
-import { Shield, Zap, Lock, Globe, ArrowRight, Github, Menu, X } from 'lucide-react'
+import { Zap, Shuffle, Lock, EyeOff, ArrowRight, Github, Menu, X } from 'lucide-react'
 
 const features = [
   {
-    icon: Shield,
-    title: 'Triple-Layer Privacy',
-    description: 'Sender privacy via ring signatures, receiver privacy via stealth addresses, and amount privacy via confidential transactions. Your financial activity stays yours.',
+    icon: Zap,
+    title: '3-40s Transaction Time',
+    description: 'Adaptive block times respond to network activity. High volume means faster blocks, quiet periods save resources. Instant finality—no waiting for confirmations.',
   },
   {
-    icon: Zap,
-    title: 'Adaptive Speed',
-    description: 'Block times adapt to network activity—3 seconds during high volume, up to 40 seconds when quiet. Instant finality means no waiting for confirmations.',
+    icon: Shuffle,
+    title: 'Sender Privacy: Your Choice',
+    description: 'Choose classical ring signatures (CLSAG) for speed, or post-quantum LION signatures for future-proof privacy. Either way, your identity stays hidden in the crowd.',
   },
   {
     icon: Lock,
-    title: 'Quantum Ready',
-    description: 'Post-quantum cryptography protects your privacy against future threats.',
+    title: 'PQ Receiver Privacy',
+    description: 'Every payment uses one-time stealth addresses protected by post-quantum cryptography. Recipients are always unlinkable, even to quantum computers.',
   },
   {
-    icon: Globe,
-    title: 'Decentralized',
-    description: 'Self-organizing quorum with no central authority or trusted third parties.',
+    icon: EyeOff,
+    title: 'PQ Amount Privacy',
+    description: 'Transaction amounts are hidden with post-quantum commitments. Only sender and receiver know what was transferred.',
   },
 ]
 
 const stats = [
-  { label: 'Block Time', value: '3-40s', note: 'Adapts to volume' },
-  { label: 'Finality', value: 'Instant' },
-  { label: 'Privacy', value: 'Complete', note: 'Sender · Receiver · Amount' },
-  { label: 'Consensus', value: 'SCP' },
+  { label: 'Block Time', value: '3-40s', note: 'Adaptive to volume' },
+  { label: 'Finality', value: 'Instant', note: 'No confirmations needed' },
+  { label: 'Sender Privacy', value: 'Choice', note: 'CLSAG or LION' },
+  { label: 'Receiver + Amount', value: 'PQ Always', note: 'Quantum-safe' },
 ]
 
 export function LandingPage() {
@@ -124,7 +124,7 @@ export function LandingPage() {
             <span className="text-gradient">Quantum Age</span>
           </h1>
           <p className="text-base sm:text-lg md:text-xl text-ghost mb-8 sm:mb-10 max-w-2xl mx-auto px-2">
-            Complete transaction privacy—sender, receiver, and amount—with adaptive consensus and post-quantum cryptography.
+            Fast transactions with complete privacy. Sender privacy your way, receiver and amount privacy always quantum-safe.
           </p>
           <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 justify-center px-4 sm:px-0">
             <Link to="/wallet" className="w-full sm:w-auto">

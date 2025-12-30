@@ -73,6 +73,7 @@ bth-util-test-helper = { workspace = true }
 proptest = { workspace = true, features = ["default-code-coverage"] }
 criterion = { workspace = true }
 rand = { workspace = true }
+rand_core = { workspace = true, features = ["getrandom"] }
 
 [[bench]]
 name = "ring_signature_benchmarks"

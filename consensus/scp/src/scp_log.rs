@@ -284,8 +284,9 @@ impl<V: Value, N: ScpNode<V>> ScpNode<V> for LoggingScpNode<V, N> {
         let out_msgs = self.node.process_timeouts();
 
         if !out_msgs.is_empty() {
-            self.write(LoggedMsg::ProcessTimeouts(out_msgs.clone()))
-                .expect("failed writing");
+            if let Err(e) = self.write(LoggedMsg::ProcessTimeouts(out_msgs.clone())) {
+                log::error!(self.logger, "Failed to write process_timeouts log: {:?}", e);
+            }
         }
 
         out_msgs
@@ -322,7 +323,8 @@ impl<V: Value> ScpLogReader<V> {
         let mut files: Vec<_> = read_dir(path)
             .map_err(|e| format!("failed reading dir {path:?}: {e:?}"))?
             .filter_map(|entry| {
-                let entry = entry.unwrap().path();
+                // Skip entries that fail to read
+                let entry = entry.ok()?.path();
                 if entry.is_file() {
                     Some(entry)
                 } else {
@@ -343,11 +345,23 @@ impl<V: serde::de::DeserializeOwned + Value> Iterator for ScpLogReader<V> {
     type Item = StoredMsg<V>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let path = self.files.pop_front()?;
-        let bytes = read(&path).unwrap_or_else(|_| panic!("failed reading {path:?}"));
-        let data: Self::Item = bth_util_serial::deserialize(&bytes)
-            .unwrap_or_else(|_| panic!("failed deserializing {path:?}"));
-        Some(data)
+        // Try reading files until we find one that can be successfully read and deserialized
+        while let Some(path) = self.files.pop_front() {
+            match read(&path) {
+                Ok(bytes) => match bth_util_serial::deserialize(&bytes) {
+                    Ok(data) => return Some(data),
+                    Err(_e) => {
+                        // Skip files that fail to deserialize
+                        continue;
+                    }
+                },
+                Err(_e) => {
+                    // Skip files that fail to read
+                    continue;
+                }
+            }
+        }
+        None
     }
 }
 

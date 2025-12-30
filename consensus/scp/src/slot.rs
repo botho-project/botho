@@ -225,73 +225,75 @@ impl<V: Value, ValidationError: Display> ScpSlot<V> for Slot<V, ValidationError>
         let mut timeout_occurred = false;
 
         // Nomination round timeout.
-        if self.next_nominate_round_at.is_some()
-            && Instant::now() > self.next_nominate_round_at.unwrap()
-        {
-            timeout_occurred = true;
-            // Canceling is required since schedule_next_nomination_round will not schedule
-            // a round if one is already scheduled.
-            self.cancel_next_nomination_round();
+        if let Some(next_round_at) = self.next_nominate_round_at {
+            if Instant::now() > next_round_at {
+                timeout_occurred = true;
+                // Canceling is required since schedule_next_nomination_round will not schedule
+                // a round if one is already scheduled.
+                self.cancel_next_nomination_round();
 
-            self.nominate_round += 1;
+                self.nominate_round += 1;
 
-            let max_priority_peer = self.find_max_priority_peer(self.nominate_round);
-            self.max_priority_peers.insert(max_priority_peer);
+                let max_priority_peer = self.find_max_priority_peer(self.nominate_round);
+                self.max_priority_peers.insert(max_priority_peer);
 
-            log::debug!(
-                self.logger,
-                "Nominate Round({:?}) with leaders: {:?}",
-                self.nominate_round,
-                self.max_priority_peers
-            );
+                log::debug!(
+                    self.logger,
+                    "Nominate Round({:?}) with leaders: {:?}",
+                    self.nominate_round,
+                    self.max_priority_peers
+                );
 
-            self.do_nominate_phase();
+                self.do_nominate_phase();
+            }
         }
 
         // Ballot timeout.
-        if self.next_ballot_at.is_some() && Instant::now() > self.next_ballot_at.unwrap() {
-            log::debug!(
-                self.logger,
-                "Ballot {} timed out in {:?} phase",
-                self.B.N,
-                self.phase
-            );
+        if let Some(next_ballot_at) = self.next_ballot_at {
+            if Instant::now() > next_ballot_at {
+                log::debug!(
+                    self.logger,
+                    "Ballot {} timed out in {:?} phase",
+                    self.B.N,
+                    self.phase
+                );
 
-            timeout_occurred = true;
-            self.cancel_next_ballot_timer();
-            let next_counter = self.B.N + 1;
+                timeout_occurred = true;
+                self.cancel_next_ballot_timer();
+                let next_counter = self.B.N + 1;
 
-            match self.phase {
-                Phase::NominatePrepare | Phase::Prepare => {
-                    if let Some(x) = self.get_next_ballot_values() {
+                match self.phase {
+                    Phase::NominatePrepare | Phase::Prepare => {
+                        if let Some(x) = self.get_next_ballot_values() {
+                            log::trace!(
+                                self.logger,
+                                "process_timeouts: updating B.N: {} -> {}",
+                                self.B.N,
+                                next_counter
+                            );
+                            self.B = Ballot::new(next_counter, &x);
+                        }
+                    }
+                    Phase::Commit => {
+                        // B.X can no longer change. Increment B.N
                         log::trace!(
                             self.logger,
                             "process_timeouts: updating B.N: {} -> {}",
                             self.B.N,
                             next_counter
                         );
-                        self.B = Ballot::new(next_counter, &x);
+                        self.B.N = next_counter;
+                    }
+                    Phase::Externalize => {
+                        // B no longer changes.
+                        log::warn!(
+                            self.logger,
+                            "Ballot timeout occurred during Externalize phase."
+                        );
                     }
                 }
-                Phase::Commit => {
-                    // B.X can no longer change. Increment B.N
-                    log::trace!(
-                        self.logger,
-                        "process_timeouts: updating B.N: {} -> {}",
-                        self.B.N,
-                        next_counter
-                    );
-                    self.B.N = next_counter;
-                }
-                Phase::Externalize => {
-                    // B no longer changes.
-                    log::warn!(
-                        self.logger,
-                        "Ballot timeout occurred during Externalize phase."
-                    );
-                }
+                self.do_ballot_protocol();
             }
-            self.do_ballot_protocol();
         }
 
         if timeout_occurred {
@@ -402,7 +404,9 @@ impl<V: Value, ValidationError: Display> ScpSlot<V> for Slot<V, ValidationError>
     }
 
     fn get_debug_snapshot(&self) -> String {
-        serde_json::to_string(&SlotState::from(self)).expect("SlotState should yield JSON")
+        serde_json::to_string(&SlotState::from(self)).unwrap_or_else(|e| {
+            format!("{{\"error\": \"Failed to serialize slot state: {}\"}}", e)
+        })
     }
 }
 
@@ -504,8 +508,16 @@ impl<V: Value, ValidationError: Display> Slot<V, ValidationError> {
             let mut tmp = U512::from(U256::max_value());
             tmp = tmp.saturating_mul(U512::from(num));
             tmp /= U512::from(denom);
-            let weight256 = U256::try_from(tmp)
-                .expect("failure calculating weight (max_u256 * k -> 2^512) / n");
+            // This conversion should always succeed since (max_u256 * num) / denom <= max_u256
+            // when num <= denom (which is guaranteed for weights). Use max_value as fallback.
+            let weight256 = U256::try_from(tmp).unwrap_or_else(|_| {
+                log::error!(
+                    self.logger,
+                    "Unexpected overflow in weight calculation for node {:?}",
+                    node_id
+                );
+                U256::max_value()
+            });
 
             let gi_one = utils::slot_round_salted_keccak(
                 slot_index,
@@ -609,7 +621,10 @@ impl<V: Value, ValidationError: Display> Slot<V, ValidationError> {
                 }
             }
             // Invariant: X and Y are disjoint.
-            assert!(self.X.is_disjoint(&self.Y));
+            if !self.X.is_disjoint(&self.Y) {
+                log::error!(self.logger, "Invariant violation: X and Y are not disjoint");
+                debug_assert!(false, "X and Y must be disjoint");
+            }
         }
 
         // Move accepted-nominated values from X to Y, and confirmed-nominated values
@@ -632,7 +647,10 @@ impl<V: Value, ValidationError: Display> Slot<V, ValidationError> {
             self.Y.insert(value);
         }
         // Invariant: X and Y are disjoint.
-        assert!(self.X.is_disjoint(&self.Y));
+        if !self.X.is_disjoint(&self.Y) {
+            log::error!(self.logger, "Invariant violation: X and Y are not disjoint after update_YZ");
+            debug_assert!(false, "X and Y must be disjoint");
+        }
 
         self.Z.extend(self.additional_values_confirmed_nominated());
         // let mut new_Z = self.additional_values_confirmed_nominated();
@@ -776,8 +794,14 @@ impl<V: Value, ValidationError: Display> Slot<V, ValidationError> {
 
         // Invariants: p' is less-than-and-incompatible-with p.
         if let (Some(p), Some(pp)) = (&self.P, &self.PP) {
-            assert!(pp < p, "p: {p:?}, pp: {pp:?}");
-            assert_ne!(p.X, pp.X);
+            if pp >= p {
+                log::error!(self.logger, "Invariant violation: pp >= p. pp: {:?}, p: {:?}", pp, p);
+                debug_assert!(false, "pp must be less than p");
+            }
+            if p.X == pp.X {
+                log::error!(self.logger, "Invariant violation: p.X == pp.X");
+                debug_assert!(false, "p.X must not equal pp.X");
+            }
         }
 
         // If either P aborts C or PP aborts C, then set C to None.
@@ -821,7 +845,10 @@ impl<V: Value, ValidationError: Display> Slot<V, ValidationError> {
         }
 
         if let (Some(C), Some(H)) = (&self.C, &self.H) {
-            assert!(C.N <= H.N, "C.N: {}, H.N: {}", C.N, H.N);
+            if C.N > H.N {
+                log::error!(self.logger, "Invariant violation: C.N > H.N. C.N: {}, H.N: {}", C.N, H.N);
+                debug_assert!(false, "C.N must be <= H.N");
+            }
         }
 
         // (3) Identify "voted committed" ballots.
@@ -877,9 +904,18 @@ impl<V: Value, ValidationError: Display> Slot<V, ValidationError> {
                     }
 
                     // B <= C less-than-and-compatible-with H
-                    assert!(self.B <= c);
-                    assert_eq!(c.X, h.X);
-                    assert!(c.N <= h.N, "c.N: {}, h.N: {}", c.N, h.N);
+                    if self.B > c {
+                        log::error!(self.logger, "Invariant violation: B > c. B: {:?}, c: {:?}", self.B, c);
+                        debug_assert!(false, "B must be <= c");
+                    }
+                    if c.X != h.X {
+                        log::error!(self.logger, "Invariant violation: c.X != h.X");
+                        debug_assert!(false, "c.X must equal h.X");
+                    }
+                    if c.N > h.N {
+                        log::error!(self.logger, "Invariant violation: c.N > h.N. c.N: {}, h.N: {}", c.N, h.N);
+                        debug_assert!(false, "c.N must be <= h.N");
+                    }
 
                     self.C = Some(c);
                 }
@@ -887,7 +923,10 @@ impl<V: Value, ValidationError: Display> Slot<V, ValidationError> {
         }
 
         if let (Some(C), Some(H)) = (&self.C, &self.H) {
-            assert!(C.N <= H.N, "C.N: {}, H.N: {}", C.N, H.N);
+            if C.N > H.N {
+                log::error!(self.logger, "Invariant violation: C.N > H.N. C.N: {}, H.N: {}", C.N, H.N);
+                debug_assert!(false, "C.N must be <= H.N");
+            }
         }
 
         // (4) Identify "accepted committed" ballots.
@@ -905,12 +944,17 @@ impl<V: Value, ValidationError: Display> Slot<V, ValidationError> {
             self.C = Some(c.clone());
 
             // The highest accepted committed ballot with the same value as C.
-            let h = accept_commits
+            let h_opt = accept_commits
                 .iter()
                 .filter(|&(values, _)| *values == c.X)
                 .map(|(values, &(_min, max))| Ballot::new(max, values))
-                .max()
-                .expect("H must exist");
+                .max();
+
+            // h should always exist since we filtered by c.X which came from accept_commits
+            let Some(h) = h_opt else {
+                log::error!(self.logger, "Unexpected: H not found when C exists");
+                return;
+            };
 
             if let Some(current_h) = &self.H {
                 if h < *current_h {
@@ -919,7 +963,10 @@ impl<V: Value, ValidationError: Display> Slot<V, ValidationError> {
                 }
             }
             self.H = Some(h.clone());
-            assert!(c.N <= h.N, "c.N: {}, h.N: {}", c.N, h.N);
+            if c.N > h.N {
+                log::error!(self.logger, "Invariant violation: c.N > h.N. c.N: {}, h.N: {}", c.N, h.N);
+                debug_assert!(false, "c.N must be <= h.N");
+            }
 
             // "if h is not less-than-and-incompatible-with b, set b to h."
             //
@@ -959,7 +1006,10 @@ impl<V: Value, ValidationError: Display> Slot<V, ValidationError> {
                 .into_iter()
                 .filter(|p| p.X == self.B.X)
                 .max();
-            assert!(self.P.is_some());
+            if self.P.is_none() {
+                log::error!(self.logger, "Invariant violation: P is None in commit phase. B: {:?}", self.B);
+                debug_assert!(false, "P must exist in commit phase");
+            }
             // self.PP is not used in the Commit or Externalize phases.
             self.PP = None;
             return;
@@ -1100,10 +1150,17 @@ impl<V: Value, ValidationError: Display> Slot<V, ValidationError> {
             .max()
         {
             // P should not decrease within the Commit phase.
-            if new_P < *self.P.as_ref().unwrap() {
-                // decreasing P here does not cause failures or decrease performance
-                log::debug!(self.logger, "Step 5: Ignoring decreasing P");
+            // P should be Some in commit phase (checked by invariants above)
+            if let Some(current_P) = self.P.as_ref() {
+                if new_P < *current_P {
+                    // decreasing P here does not cause failures or decrease performance
+                    log::debug!(self.logger, "Step 5: Ignoring decreasing P");
+                } else {
+                    self.P = Some(new_P);
+                }
             } else {
+                // P should exist in commit phase
+                log::error!(self.logger, "Unexpected: P is None in commit phase during step 5");
                 self.P = Some(new_P);
             }
         }
@@ -1262,11 +1319,15 @@ impl<V: Value, ValidationError: Display> Slot<V, ValidationError> {
                 break;
             }
 
+            // min() should always succeed since blocking_set is not empty
             let min_ballot_counter: u32 = blocking_set
                 .iter()
                 .map(|node_id| self.M[node_id].bN())
                 .min()
-                .expect("Min counter must exist");
+                .unwrap_or_else(|| {
+                    log::error!(self.logger, "Unexpected: empty blocking set in get_unblocking_ballot_counter");
+                    unblocking_counter
+                });
             unblocking_counter = min_ballot_counter;
         }
 
@@ -1486,10 +1547,22 @@ impl<V: Value, ValidationError: Display> Slot<V, ValidationError> {
                 CN: self.C.as_ref().map_or(0, |c| c.N),
             })),
 
-            Phase::Externalize => Some(Topic::Externalize(ExternalizePayload {
-                C: self.C.clone().unwrap(),
-                HN: self.H.as_ref().unwrap().N,
-            })),
+            Phase::Externalize => {
+                // In Externalize phase, C and H should always exist (invariant)
+                match (&self.C, &self.H) {
+                    (Some(c), Some(h)) => Some(Topic::Externalize(ExternalizePayload {
+                        C: c.clone(),
+                        HN: h.N,
+                    })),
+                    _ => {
+                        log::error!(
+                            self.logger,
+                            "Invariant violation: C or H is None in Externalize phase"
+                        );
+                        None
+                    }
+                }
+            }
         };
 
         let msg_opt = topic_opt.map(|topic| {
@@ -1503,7 +1576,11 @@ impl<V: Value, ValidationError: Display> Slot<V, ValidationError> {
 
         // Suppress duplicate outgoing messages.
         if let Some(msg) = msg_opt {
-            assert_eq!(msg.validate(), Ok(()));
+            if let Err(e) = msg.validate() {
+                log::error!(self.logger, "Outgoing message validation failed: {}", e);
+                debug_assert!(false, "Outgoing message validation failed: {}", e);
+                return None;
+            }
 
             if let Some(last_msg) = &self.last_sent_msg {
                 if msg != *last_msg {

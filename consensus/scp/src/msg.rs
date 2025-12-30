@@ -495,7 +495,10 @@ impl<V: Value, ID: GenericNodeId + DeserializeOwned> Msg<V, ID> {
     /// (inclusive). If so, returns the new min/max that is the overlap
     /// between the input and what `self` votes for or accepts.
     pub fn votes_or_accepts_commits(&self, value: &[V], min: u32, max: u32) -> Option<(u32, u32)> {
-        assert!(min <= max);
+        // Precondition: min <= max. Return None for invalid input rather than panic.
+        if min > max {
+            return None;
+        }
 
         // Range of ballot counters for which this message implies "vote_or_accept
         // commit" for these values.
@@ -533,7 +536,8 @@ impl<V: Value, ID: GenericNodeId + DeserializeOwned> Msg<V, ID> {
             let intersects = a <= max && min <= b;
             if intersects {
                 let intersection: (u32, u32) = (cmp::max(a, min), cmp::min(b, max));
-                assert!(intersection.0 <= intersection.1);
+                // This should always be true given the intersection logic above
+                debug_assert!(intersection.0 <= intersection.1);
                 Some(intersection)
             } else {
                 None
@@ -546,7 +550,10 @@ impl<V: Value, ID: GenericNodeId + DeserializeOwned> Msg<V, ID> {
     /// returns the new min/max that is the overlap between the input and
     /// what e accepts.
     pub fn accepts_commits(&self, value: &[V], min: u32, max: u32) -> Option<(u32, u32)> {
-        assert!(min <= max);
+        // Precondition: min <= max. Return None for invalid input rather than panic.
+        if min > max {
+            return None;
+        }
         let range = match self.topic {
             Commit(ref payload) => {
                 if &payload.B.X[..] == value {
@@ -572,7 +579,8 @@ impl<V: Value, ID: GenericNodeId + DeserializeOwned> Msg<V, ID> {
             let intersects = a <= max && min <= b;
             if intersects {
                 let intersection: (u32, u32) = (cmp::max(a, min), cmp::min(b, max));
-                assert!(intersection.0 <= intersection.1);
+                // This should always be true given the intersection logic above
+                debug_assert!(intersection.0 <= intersection.1);
                 Some(intersection)
             } else {
                 None

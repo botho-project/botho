@@ -5,6 +5,7 @@
 #![deny(missing_docs)]
 
 pub mod ballot;
+mod error;
 pub mod msg;
 pub mod node;
 pub mod predicates;
@@ -22,6 +23,7 @@ pub use bth_consensus_scp_types::{core_types, quorum_set};
 #[doc(inline)]
 pub use crate::{
     core_types::{GenericNodeId, Identifier, SlotIndex, Value},
+    error::{ScpError, ScpResult},
     msg::{Msg, Topic},
     node::{MockScpNode, Node, ScpNode},
     quorum_set::{QuorumSet, QuorumSetMember, QuorumSetMemberWrapper},

@@ -19,7 +19,7 @@ use core::hash::Hash;
 use bth_crypto_digestible::Digestible;
 use bth_crypto_keys::{PublicKey, SignatureEncoding, SignatureError, Verifier};
 use prost::Message;
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 /// The maximum number of signatures that can be included in a multi-signature.
 pub const MAX_SIGNATURES: usize = 10;
@@ -28,6 +28,7 @@ pub const MAX_SIGNATURES: usize = 10;
 #[derive(
     Clone, Deserialize, Digestible, Eq, Hash, Message, Ord, PartialEq, PartialOrd, Serialize,
 )]
+#[serde(bound = "")]
 pub struct MultiSig<
     S: Clone
         + Default
@@ -39,6 +40,7 @@ pub struct MultiSig<
         + PartialEq
         + PartialOrd
         + Serialize
+        + DeserializeOwned
         + SignatureEncoding
         + AsRef<[u8]>,
 > {
@@ -57,6 +59,7 @@ impl<
             + PartialEq
             + PartialOrd
             + Serialize
+            + DeserializeOwned
             + SignatureEncoding
             + AsRef<[u8]>,
     > MultiSig<S>
@@ -78,7 +81,20 @@ impl<
     Clone, Deserialize, Digestible, Eq, Hash, Message, Ord, PartialEq, PartialOrd, Serialize,
 )]
 #[serde(bound = "")]
-pub struct SignerSet<P: Default + PublicKey + Message> {
+pub struct SignerSet<
+    P: Clone
+        + Default
+        + Digestible
+        + Eq
+        + Hash
+        + Message
+        + Ord
+        + PartialEq
+        + PartialOrd
+        + PublicKey
+        + Serialize
+        + DeserializeOwned,
+> {
     /// List of potential individual signers.
     #[prost(message, repeated, tag = "1")]
     #[digestible(name = "signers")]
@@ -103,7 +119,20 @@ pub struct SignerSet<P: Default + PublicKey + Message> {
     threshold: u32,
 }
 
-impl<P: Default + PublicKey + Message> SignerSet<P> {
+impl<
+    P: Clone
+        + Default
+        + Digestible
+        + Eq
+        + Hash
+        + Message
+        + Ord
+        + PartialEq
+        + PartialOrd
+        + PublicKey
+        + Serialize
+        + DeserializeOwned,
+> SignerSet<P> {
     /// Construct a new `SignerSet` from a list of public keys and threshold.
     pub fn new(individual_signers: Vec<P>, threshold: u32) -> Self {
         Self::new_with_multi(individual_signers, vec![], threshold)
@@ -170,6 +199,7 @@ impl<P: Default + PublicKey + Message> SignerSet<P> {
             + PartialEq
             + PartialOrd
             + Serialize
+            + DeserializeOwned
             + SignatureEncoding
             + AsRef<[u8]>,
     >(
@@ -276,7 +306,10 @@ mod test {
             + Hash
             + Message
             + Ord
+            + PartialEq
+            + PartialOrd
             + Serialize
+            + DeserializeOwned
             + SignatureEncoding
             + AsRef<[u8]>,
     {

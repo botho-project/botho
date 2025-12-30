@@ -379,6 +379,7 @@ mod clsag_tests {
     use bth_util_from_random::FromRandom;
     use bth_util_test_helper::{RngType, SeedableRng};
     use proptest::prelude::*;
+    use rand_core::RngCore;
 
     #[derive(Clone)]
     struct ClsagTestParams {

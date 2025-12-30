@@ -130,11 +130,8 @@ impl<V: Value> ValueSetPredicate<V> {
     pub fn filter_to_max_values(
         results: Vec<(HashSet<NodeID>, BTreeSet<V>)>,
     ) -> Option<BTreeSet<V>> {
-        if results.is_empty() {
-            return None;
-        }
-
-        let (_node_ids, max_values) = results
+        // Use max_by which returns Option, avoiding unwrap
+        results
             .into_iter()
             .max_by(|a, b| {
                 let (a_node_ids, a_values) = a;
@@ -145,9 +142,7 @@ impl<V: Value> ValueSetPredicate<V> {
                     a_values.cmp(b_values)
                 }
             })
-            .unwrap();
-
-        Some(max_values)
+            .map(|(_node_ids, max_values)| max_values)
     }
 }
 

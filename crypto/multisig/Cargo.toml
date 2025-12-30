@@ -8,15 +8,16 @@ license = "Apache-2.0"
 rust-version = { workspace = true }
 
 [dependencies]
-bth-crypto-digestible = { workspace = true }
+bth-crypto-digestible = { workspace = true, features = ["alloc", "derive"] }
 bth-crypto-keys = { workspace = true }
 
 prost = { workspace = true, features = ["prost-derive"] }
 serde = { workspace = true, features = ["alloc", "derive"] }
 
 [dev-dependencies]
+bth-crypto-keys = { workspace = true, features = ["serde", "prost"] }
 bth-util-from-random = { workspace = true }
 bth-util-serial = { workspace = true }
 
-rand_core = { workspace = true }
+rand_core = { workspace = true, features = ["getrandom"] }
 rand_hc = { workspace = true }

@@ -26,6 +26,7 @@ rand = { workspace = true }
 rand_hc = { workspace = true }
 serde = { workspace = true, features = ["alloc", "derive"] }
 serde_json = { workspace = true }
+thiserror = { workspace = true }
 
 [dev-dependencies]
 bth-common = { workspace = true, features = ["loggers"] }
