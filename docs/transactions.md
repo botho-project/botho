@@ -220,17 +220,18 @@ All transaction types use ML-KEM-768 stealth addresses for recipient privacy.
 ### Protocol
 
 **Sender (creating output):**
-1. Recipient publishes: view public key `V`, spend public key `S`
-2. Sender generates ephemeral keypair: `(e, E)` via ML-KEM
-3. Sender encapsulates shared secret: `(ciphertext, shared_secret) = ML-KEM.Encapsulate(V)`
-4. Sender computes one-time destination: `target = H(shared_secret) * G + S`
+1. Recipient publishes: ML-KEM public key `K`, spend public key `S`
+2. Sender encapsulates shared secret: `(ciphertext, ss) = ML-KEM.Encapsulate(K)`
+3. Sender derives scalar: `Hs = H(ss || output_index)`
+4. Sender computes one-time destination: `target = Hs * G + S`
 5. Output contains: `(target_key, ciphertext)`
 
 **Recipient (scanning):**
-1. For each output, decapsulate: `shared_secret = ML-KEM.Decapsulate(ciphertext, view_secret_key)`
-2. Compute expected target: `target' = H(shared_secret) * G + S`
-3. If `target' == target_key`, output belongs to recipient
-4. Spending key: `x = H(shared_secret) + spend_secret_key`
+1. For each output, decapsulate: `ss = ML-KEM.Decapsulate(ciphertext, kem_secret_key)`
+2. Derive scalar: `Hs = H(ss || output_index)`
+3. Compute expected target: `target' = Hs * G + S`
+4. If `target' == target_key`, output belongs to recipient
+5. Spending key: `x = Hs + spend_secret_key`
 
 ### Properties
 

@@ -8,6 +8,7 @@ readme = "README.md"
 rust-version = { workspace = true }
 
 [features]
+std = ["alloc"]
 alloc = [
     "serde?/alloc",
     "bth-crypto-digestible/alloc",
@@ -23,6 +24,7 @@ serde = [
 ]
 prost = ["dep:prost", "bth-crypto-keys/prost", "bth-util-serial"]
 internals = []
+pq = ["dep:bth-crypto-pq"]
 
 default = [
     "alloc",
@@ -48,6 +50,7 @@ bth-core-types = { workspace = true }
 bth-crypto-digestible = { workspace = true, features = ["dalek", "derive"] }
 bth-crypto-hashes = { workspace = true }
 bth-crypto-keys = { workspace = true }
+bth-crypto-pq = { workspace = true, optional = true }
 bth-util-from-random = { workspace = true }
 bth-util-repr-bytes = { workspace = true }
 bth-util-serial = { workspace = true, optional = true }
