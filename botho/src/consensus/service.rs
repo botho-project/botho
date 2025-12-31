@@ -12,7 +12,7 @@ use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::fmt;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
-use tracing::{debug, info, warn};
+use tracing::{debug, info, instrument, trace, warn, Span};
 
 /// Configuration for the consensus service
 #[derive(Debug, Clone)]
@@ -377,12 +377,24 @@ impl ConsensusService {
     }
 
     /// Handle an incoming SCP message from gossip
+    #[instrument(
+        name = "consensus.handle_message",
+        skip(self, msg),
+        fields(
+            slot_index = msg.slot_index,
+            peer_id = %hex::encode(&msg.sender.get(..8).unwrap_or(&msg.sender)),
+            msg_size = msg.payload.len(),
+        )
+    )]
     pub fn handle_message(&mut self, msg: ScpMessage) -> Result<(), String> {
         // Deserialize the SCP message
         let scp_msg: ScpMsg<ConsensusValue> = bincode::deserialize(&msg.payload)
             .map_err(|e| format!("Failed to deserialize SCP message: {}", e))?;
 
-        debug!(slot = msg.slot_index, "Received SCP message");
+        // Record message type in current span
+        let msg_type = crate::telemetry::msg_type_name(&scp_msg.topic);
+        Span::current().record("msg_type", msg_type);
+        trace!(msg_type, "Processing SCP message");
 
         // Handle the message
         if let Some(response) = self.scp_node.handle_message(&scp_msg)? {
@@ -396,10 +408,22 @@ impl ConsensusService {
     }
 
     /// Process timeouts and periodic tasks
+    #[instrument(
+        name = "consensus.tick",
+        skip(self),
+        fields(
+            slot_index = self.scp_node.current_slot_index(),
+            pending_count = self.pending_values.len(),
+        )
+    )]
     pub fn tick(&mut self) {
         // Process SCP timeouts
-        for msg in self.scp_node.process_timeouts() {
-            self.queue_broadcast(msg);
+        let timeout_msgs = self.scp_node.process_timeouts();
+        if !timeout_msgs.is_empty() {
+            trace!(count = timeout_msgs.len(), "Processing SCP timeouts");
+            for msg in timeout_msgs {
+                self.queue_broadcast(msg);
+            }
         }
 
         // Get current slot duration (dynamic or fixed)
@@ -423,6 +447,15 @@ impl ConsensusService {
     }
 
     /// Propose pending values to SCP
+    #[instrument(
+        name = "consensus.propose_values",
+        skip(self),
+        fields(
+            slot_index = self.scp_node.current_slot_index(),
+            value_count = tracing::field::Empty,
+            solo_mode = self.is_solo_mode(),
+        )
+    )]
     fn propose_pending_values(&mut self) {
         if self.pending_values.is_empty() {
             return;
@@ -440,6 +473,8 @@ impl ConsensusService {
             // Already proposed all these
             return;
         }
+
+        Span::current().record("value_count", to_propose.len());
 
         let slot = self.scp_node.current_slot_index();
         info!(
@@ -470,11 +505,13 @@ impl ConsensusService {
         // Normal SCP path for multi-node consensus
         match self.scp_node.propose_values(to_propose.clone()) {
             Ok(Some(msg)) => {
+                trace!("Proposal accepted, broadcasting message");
                 self.proposed_values.extend(to_propose);
                 self.queue_broadcast(msg);
             }
             Ok(None) => {
                 // No message to send (might be waiting for quorum)
+                trace!("Proposal queued, waiting for quorum");
                 self.proposed_values.extend(to_propose);
             }
             Err(e) => {
@@ -484,11 +521,22 @@ impl ConsensusService {
     }
 
     /// Check if the current slot has externalized
+    #[instrument(
+        name = "consensus.check_externalized",
+        skip(self),
+        fields(
+            slot_index = self.scp_node.current_slot_index(),
+            externalized = tracing::field::Empty,
+            value_count = tracing::field::Empty,
+        )
+    )]
     fn check_externalized(&mut self) {
         let slot = self.scp_node.current_slot_index();
 
         if let Some(values) = self.scp_node.get_externalized_values(slot) {
             if self.externalized.is_none() {
+                Span::current().record("externalized", true);
+                Span::current().record("value_count", values.len());
                 info!(slot, count = values.len(), "Slot externalized!");
 
                 // Remove externalized values from pending
@@ -504,6 +552,8 @@ impl ConsensusService {
                     values,
                 });
             }
+        } else {
+            Span::current().record("externalized", false);
         }
     }
 

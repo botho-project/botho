@@ -17,6 +17,7 @@ use bth_common::{
     logger::{log, o, Logger},
     HashMap, HashSet, NodeID,
 };
+use tracing::{instrument, trace, Span};
 #[cfg(test)]
 use mockall::*;
 use primitive_types::{U256, U512};
@@ -306,10 +307,20 @@ impl<V: Value, ValidationError: Display> ScpSlot<V> for Slot<V, ValidationError>
     }
 
     /// Propose values for this node to nominate.
+    #[instrument(
+        name = "scp.propose_values",
+        skip(self, values),
+        fields(
+            slot_index = self.slot_index,
+            phase = ?self.phase,
+            value_count = values.len(),
+        )
+    )]
     fn propose_values(&mut self, values: &BTreeSet<V>) -> Result<Option<Msg<V>>, String> {
         // Only accept values during the Nominate phase and if no other values have been
         // confirmed nominated.
         if !(self.phase == Phase::NominatePrepare && self.Z.is_empty()) {
+            trace!("Rejecting proposal: not in NominatePrepare or Z is not empty");
             return Ok(self.out_msg());
         }
 
@@ -321,9 +332,11 @@ impl<V: Value, ValidationError: Display> ScpSlot<V> for Slot<V, ValidationError>
             .collect();
 
         if valid_values.is_empty() {
+            trace!("No valid values to propose");
             return Ok(None);
         }
 
+        trace!(valid_count = valid_values.len(), "Proposing valid values");
         self.W.extend(valid_values);
         self.do_nominate_phase();
         self.do_ballot_protocol();
@@ -337,6 +350,15 @@ impl<V: Value, ValidationError: Display> ScpSlot<V> for Slot<V, ValidationError>
 
     /// Handle incoming messages from peers. Messages for other slots are
     /// ignored.
+    #[instrument(
+        name = "scp.handle_messages",
+        skip(self, msgs),
+        fields(
+            slot_index = self.slot_index,
+            phase = ?self.phase,
+            msg_count = msgs.len(),
+        )
+    )]
     fn handle_messages(&mut self, msgs: &[Msg<V>]) -> Result<Option<Msg<V>>, String> {
         // Ignore messages from self.
         let (mut msgs_for_slot, msgs_for_other_slots): (Vec<_>, Vec<_>) = msgs
@@ -823,6 +845,13 @@ impl<V: Value, ValidationError: Display> Slot<V, ValidationError> {
             if self.phase == Phase::NominatePrepare {
                 // Nominate ends when some ballot has been confirmed prepared.
                 self.cancel_next_nomination_round();
+                trace!(
+                    slot_index = self.slot_index,
+                    from_phase = ?Phase::NominatePrepare,
+                    to_phase = ?Phase::Prepare,
+                    ballot_n = h.N,
+                    "SCP phase transition"
+                );
                 self.phase = Phase::Prepare;
             }
 
@@ -997,6 +1026,13 @@ impl<V: Value, ValidationError: Display> Slot<V, ValidationError> {
                 self.B = Ballot::new(core::cmp::max(self.B.N, h.N), &h.X);
             }
 
+            trace!(
+                slot_index = self.slot_index,
+                from_phase = ?self.phase,
+                to_phase = ?Phase::Commit,
+                ballot_n = self.B.N,
+                "SCP phase transition"
+            );
             self.phase = Phase::Commit;
             self.cancel_next_nomination_round();
 
@@ -1186,6 +1222,14 @@ impl<V: Value, ValidationError: Display> Slot<V, ValidationError> {
             // Ballot timeouts are not performed during the Externalize phase.
             self.cancel_next_nomination_round();
             self.cancel_next_ballot_timer();
+            trace!(
+                slot_index = self.slot_index,
+                from_phase = ?self.phase,
+                to_phase = ?Phase::Externalize,
+                ballot_n = self.B.N,
+                value_count = self.B.X.len(),
+                "SCP phase transition - slot externalized"
+            );
             self.phase = Phase::Externalize;
             return;
         }

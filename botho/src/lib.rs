@@ -18,6 +18,7 @@ pub mod monetary;
 pub mod network;
 pub mod node;
 pub mod rpc;
+pub mod telemetry;
 pub mod transaction;
 pub mod wallet;
 

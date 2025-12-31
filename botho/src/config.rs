@@ -15,6 +15,9 @@ pub struct Config {
     pub wallet: Option<WalletConfig>,
     pub network: NetworkConfig,
     pub minting: MintingConfig,
+    /// Telemetry configuration for distributed tracing
+    #[serde(default)]
+    pub telemetry: TelemetryConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -299,6 +302,50 @@ fn default_threads() -> u32 {
     0
 }
 
+/// Telemetry configuration for distributed tracing
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TelemetryConfig {
+    /// Whether telemetry export is enabled
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// OTLP endpoint (gRPC) for trace export
+    #[serde(default = "default_telemetry_endpoint")]
+    pub endpoint: String,
+
+    /// Service name for traces
+    #[serde(default = "default_service_name")]
+    pub service_name: String,
+
+    /// Sampling rate (0.0 to 1.0)
+    /// 0.1 = 10% of traces, 1.0 = all traces
+    #[serde(default = "default_sampling_rate")]
+    pub sampling_rate: f64,
+}
+
+fn default_telemetry_endpoint() -> String {
+    "http://localhost:4317".to_string()
+}
+
+fn default_service_name() -> String {
+    "botho-node".to_string()
+}
+
+fn default_sampling_rate() -> f64 {
+    1.0
+}
+
+impl Default for TelemetryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            endpoint: default_telemetry_endpoint(),
+            service_name: default_service_name(),
+            sampling_rate: default_sampling_rate(),
+        }
+    }
+}
+
 impl Default for NetworkConfig {
     fn default() -> Self {
         Self {
@@ -331,6 +378,7 @@ impl Config {
             wallet: Some(WalletConfig { mnemonic }),
             network: NetworkConfig::default(),
             minting: MintingConfig::default(),
+            telemetry: TelemetryConfig::default(),
         }
     }
 
@@ -341,6 +389,7 @@ impl Config {
             wallet: None,
             network: NetworkConfig::default(),
             minting: MintingConfig::default(),
+            telemetry: TelemetryConfig::default(),
         }
     }
 
