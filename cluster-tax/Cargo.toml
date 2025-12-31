@@ -24,6 +24,10 @@ clap = { workspace = true, features = ["derive"], optional = true }
 # For random simulation
 rand = { workspace = true, features = ["std", "std_rng"], optional = true }
 rand_distr = { workspace = true, optional = true }
+# For parallel simulation
+rayon = { workspace = true, optional = true }
+# For progress tracking
+indicatif = { workspace = true, optional = true }
 
 [dev-dependencies]
 rand_core = { workspace = true, features = ["getrandom"] }
@@ -33,4 +37,4 @@ rand_distr = { workspace = true }
 [features]
 default = []
 serde = ["dep:serde"]
-cli = ["dep:clap", "dep:rand", "dep:rand_distr"]
+cli = ["dep:clap", "dep:rand", "dep:rand_distr", "dep:rayon", "dep:indicatif"]
