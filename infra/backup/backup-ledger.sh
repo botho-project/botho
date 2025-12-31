@@ -282,7 +282,7 @@ send_cloudwatch_metric() {
 run_backup() {
     local start_time
     start_time=$(date +%s)
-    local backup_success=1
+    local backup_success=0  # CloudWatch convention: 0 = failure, 1 = success
 
     log_info "=========================================="
     log_info "Botho Seed Node Ledger Backup"
@@ -310,7 +310,7 @@ run_backup() {
 
     # Verify backup
     if verify_backup "$s3_uri"; then
-        backup_success=0
+        backup_success=1  # Success = 1 for CloudWatch alarm (alarm triggers when < 1)
     fi
 
     # Calculate duration
@@ -330,14 +330,15 @@ run_backup() {
     fi
 
     log_info "=========================================="
-    if [[ $backup_success -eq 0 ]]; then
+    if [[ $backup_success -eq 1 ]]; then
         log_info "Backup completed successfully in ${duration}s"
+        log_info "=========================================="
+        return 0
     else
         log_error "Backup completed with errors in ${duration}s"
+        log_info "=========================================="
+        return 1
     fi
-    log_info "=========================================="
-
-    return $backup_success
 }
 
 # Verify-only mode
