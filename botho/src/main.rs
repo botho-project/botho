@@ -2,7 +2,7 @@ use anyhow::Result;
 use bth_transaction_types::constants::Network;
 use clap::{Parser, Subcommand};
 
-use botho::{commands, config};
+use botho::{commands, config, telemetry};
 
 #[derive(Parser)]
 #[command(name = "botho")]
@@ -105,17 +105,36 @@ fn main() -> Result<()> {
     // Validate network is enabled
     config::validate_network(network)?;
 
-    // Initialize simple logging
-    let level = if cli.verbose {
-        tracing::Level::DEBUG
-    } else {
-        tracing::Level::INFO
-    };
+    // Determine config path (network-specific by default)
+    let config_path = cli.config
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| config::config_path(network));
 
-    tracing_subscriber::fmt()
-        .with_max_level(level)
-        .with_target(false)
-        .init();
+    // For commands that run with an existing config, try to use telemetry settings.
+    // For init command (no config yet), use basic logging.
+    let _telemetry_guard = match &cli.command {
+        Commands::Run { .. } => {
+            // Try to load config for telemetry settings
+            if let Ok(config) = config::Config::load(&config_path) {
+                let telemetry_config = telemetry::TelemetryConfig {
+                    enabled: config.telemetry.enabled,
+                    endpoint: config.telemetry.endpoint.clone(),
+                    service_name: config.telemetry.service_name.clone(),
+                    sampling_rate: config.telemetry.sampling_rate,
+                };
+                telemetry::init_tracing(&telemetry_config, cli.verbose)?
+            } else {
+                // Config doesn't exist yet, use basic logging
+                init_basic_tracing(cli.verbose);
+                None
+            }
+        }
+        _ => {
+            // Other commands use basic logging
+            init_basic_tracing(cli.verbose);
+            None
+        }
+    };
 
     // Show network indicator
     if network.is_production() {
@@ -123,11 +142,6 @@ fn main() -> Result<()> {
     } else {
         eprintln!("[TESTNET] Using test network - coins have no real value");
     }
-
-    // Determine config path (network-specific by default)
-    let config_path = cli.config
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| config::config_path(network));
 
     // Execute command
     match cli.command {
@@ -150,4 +164,18 @@ fn main() -> Result<()> {
             commands::send::run(&config_path, &address, &amount, private, quantum, memo.as_deref())
         }
     }
+}
+
+/// Initialize basic tracing without OpenTelemetry
+fn init_basic_tracing(verbose: bool) {
+    let level = if verbose {
+        tracing::Level::DEBUG
+    } else {
+        tracing::Level::INFO
+    };
+
+    tracing_subscriber::fmt()
+        .with_max_level(level)
+        .with_target(false)
+        .init();
 }

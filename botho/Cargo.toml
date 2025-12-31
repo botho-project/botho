@@ -72,9 +72,13 @@ num_cpus = "1"
 heed = "0.20"
 bincode = "1"
 
-# Logging
+# Logging & Telemetry
 tracing = "0.1"
-tracing-subscriber = "0.3"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-opentelemetry = "0.22"
+opentelemetry = { version = "0.21", features = ["trace"] }
+opentelemetry_sdk = { version = "0.21", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.14", features = ["tonic"] }
 
 # Error handling
 anyhow = "1"
