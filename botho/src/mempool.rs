@@ -234,6 +234,45 @@ impl Mempool {
         self.estimate_fee(FeeTransactionType::PqHidden, amount, num_memos)
     }
 
+    /// Estimate fee with actual cluster wealth for accurate progressive fee calculation.
+    ///
+    /// Wallets should use this method after calling `cluster_getWealthByTargetKeys` RPC
+    /// to get their actual cluster wealth. This enables accurate progressive fee
+    /// estimation where wealthy clusters pay higher fees.
+    ///
+    /// # Arguments
+    /// * `tx_type` - Type of transaction (affects base size)
+    /// * `_amount` - Transaction amount (currently unused, reserved for future)
+    /// * `num_memos` - Number of output memos
+    /// * `cluster_wealth` - Sender's cluster wealth from cluster_getWealthByTargetKeys
+    ///
+    /// # Returns
+    /// Estimated fee in nanoBTH including cluster factor multiplier
+    pub fn estimate_fee_with_wealth(
+        &self,
+        tx_type: FeeTransactionType,
+        _amount: u64,
+        num_memos: usize,
+        cluster_wealth: u64,
+    ) -> u64 {
+        // Get typical size for this tx type
+        let typical_size = match tx_type {
+            FeeTransactionType::Hidden => 4_000,      // ~4 KB for CLSAG
+            FeeTransactionType::PqHidden => 65_000,   // ~65 KB for LION
+            FeeTransactionType::Minting => 1_500,     // ~1.5 KB for minting
+        };
+
+        // Use dynamic fee calculation with actual cluster wealth
+        let dynamic_base = self.dynamic_fee.compute_base(self.at_min_block_time);
+        self.fee_config.minimum_fee_dynamic(
+            tx_type,
+            typical_size,
+            cluster_wealth,
+            num_memos,
+            dynamic_base,
+        )
+    }
+
     /// Estimate fee using static base (ignoring current congestion).
     ///
     /// Useful for testing or when you want the base fee regardless of network state.

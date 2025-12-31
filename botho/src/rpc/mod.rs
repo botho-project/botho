@@ -529,6 +529,11 @@ async fn handle_rpc_method(request: &JsonRpcRequest, state: &RpcState) -> JsonRp
         }
         "exchange_listViewKeys" => handle_list_view_keys(id, &request.params, state).await,
 
+        // Cluster wealth methods (for progressive fee estimation)
+        "cluster_getWealth" => handle_cluster_get_wealth(id, &request.params, state).await,
+        "cluster_getWealthByTargetKeys" => handle_cluster_get_wealth_by_target_keys(id, &request.params, state).await,
+        "cluster_getAllWealth" => handle_cluster_get_all_wealth(id, state).await,
+
         _ => JsonRpcResponse::error(id, -32601, &format!("Method not found: {}", request.method)),
     }
 }
@@ -657,6 +662,10 @@ async fn handle_estimate_fee(id: Value, params: &Value, state: &RpcState) -> Jso
     let amount = params.get("amount").and_then(|v| v.as_u64()).unwrap_or(0);
     let num_memos = params.get("memos").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
 
+    // Parse optional cluster_wealth for accurate progressive fee calculation
+    // Wallets can get this from cluster_getWealthByTargetKeys
+    let cluster_wealth = params.get("cluster_wealth").and_then(|v| v.as_u64()).unwrap_or(0);
+
     // Determine transaction type from either "txType" (new) or "private" (legacy)
     // Note: All transactions are now private (CLSAG or LION ring signatures)
     let tx_type = if let Some(tx_type_str) = params.get("txType").and_then(|v| v.as_str()) {
@@ -675,11 +684,11 @@ async fn handle_estimate_fee(id: Value, params: &Value, state: &RpcState) -> Jso
 
     let mempool = read_lock!(state.mempool, id.clone());
 
-    // Calculate minimum fee using the fee curve
-    let minimum_fee = mempool.estimate_fee(tx_type, amount, num_memos);
+    // Calculate minimum fee using the fee curve with cluster wealth
+    let minimum_fee = mempool.estimate_fee_with_wealth(tx_type, amount, num_memos, cluster_wealth);
 
     // Get cluster factor for display (1000 = 1x, 6000 = 6x based on wealth)
-    let cluster_factor = mempool.cluster_factor(0); // 0 wealth for now
+    let cluster_factor = mempool.cluster_factor(cluster_wealth);
 
     // Calculate average mempool fee for priority estimation
     let avg_fee = if mempool.len() > 0 {
@@ -699,12 +708,15 @@ async fn handle_estimate_fee(id: Value, params: &Value, state: &RpcState) -> Jso
         json!({
             "minimumFee": minimum_fee,
             "clusterFactor": cluster_factor,  // 1000 = 1x, 6000 = 6x
+            "clusterFactorDisplay": format!("{:.2}x", cluster_factor as f64 / 1000.0),
             "recommendedFee": avg_fee.max(minimum_fee),
             "highPriorityFee": (avg_fee * 2).max(minimum_fee * 2),
+            "clusterWealth": cluster_wealth,
             "params": {
                 "amount": amount,
                 "txType": tx_type_str,
                 "memos": num_memos,
+                "clusterWealth": cluster_wealth,
             }
         }),
     )
@@ -1434,6 +1446,168 @@ async fn handle_list_view_keys(id: Value, params: &Value, state: &RpcState) -> J
             }),
         ),
         Err(e) => JsonRpcResponse::error(id, -32000, &format!("List failed: {}", e)),
+    }
+}
+
+// ============================================================================
+// Cluster Wealth Handlers (for Progressive Fee Estimation)
+// ============================================================================
+//
+// # Privacy Implications
+//
+// These endpoints expose cluster wealth information from the public UTXO set.
+// Users should understand:
+//
+// 1. Cluster tags are public on-chain data - anyone can compute cluster wealth
+//    by scanning UTXOs. These endpoints just make the lookup efficient.
+//
+// 2. Wealth aggregates reveal concentration, not individual balances. A cluster
+//    with 10M BTH could belong to one whale or 1000 small holders.
+//
+// 3. Ring signatures protect spending privacy. Even if cluster wealth is known,
+//    observers cannot determine which UTXO was spent in a transaction.
+//
+// 4. Wallets should use `cluster_getWealthByTargetKeys` for accurate fee
+//    estimation rather than querying global cluster wealth.
+
+/// Get the total wealth attributed to a specific cluster.
+///
+/// # Parameters
+/// - `cluster_id`: The cluster identifier (numeric string or number)
+///
+/// # Returns
+/// The total wealth in nanoBTH attributed to this cluster across all UTXOs.
+async fn handle_cluster_get_wealth(id: Value, params: &Value, state: &RpcState) -> JsonRpcResponse {
+    // Parse cluster_id parameter (accept both string and number)
+    let cluster_id = if let Some(id_str) = params.get("cluster_id").and_then(|v| v.as_str()) {
+        match id_str.parse::<u64>() {
+            Ok(id) => id,
+            Err(_) => return JsonRpcResponse::error(id, -32602, "Invalid cluster_id: expected numeric value"),
+        }
+    } else if let Some(id_num) = params.get("cluster_id").and_then(|v| v.as_u64()) {
+        id_num
+    } else {
+        return JsonRpcResponse::error(id, -32602, "Missing cluster_id parameter");
+    };
+
+    let ledger = read_lock!(state.ledger, id.clone());
+
+    match ledger.get_cluster_wealth(cluster_id) {
+        Ok(wealth) => JsonRpcResponse::success(id, json!({
+            "cluster_id": cluster_id.to_string(),
+            "wealth": wealth,
+            "wealth_btd": format!("{:.9}", wealth as f64 / 1_000_000_000_000.0),
+        })),
+        Err(e) => JsonRpcResponse::error(id, -32000, &format!("Failed to get cluster wealth: {}", e)),
+    }
+}
+
+/// Compute cluster wealth for a set of UTXOs identified by target keys.
+///
+/// This is the primary method for wallets to estimate their cluster wealth
+/// for accurate fee calculation. Wallets provide the target keys of their
+/// UTXOs, and this method returns comprehensive wealth information.
+///
+/// # Parameters
+/// - `target_keys`: Array of target key hex strings (32 bytes each)
+///
+/// # Returns
+/// Cluster wealth information including max wealth, breakdown, and fee multiplier.
+async fn handle_cluster_get_wealth_by_target_keys(id: Value, params: &Value, state: &RpcState) -> JsonRpcResponse {
+    // Parse target_keys parameter
+    let target_keys_hex = match params.get("target_keys").and_then(|v| v.as_array()) {
+        Some(arr) => arr,
+        None => return JsonRpcResponse::error(id, -32602, "Missing target_keys parameter (expected array)"),
+    };
+
+    // Parse hex strings to [u8; 32] arrays
+    let mut target_keys: Vec<[u8; 32]> = Vec::with_capacity(target_keys_hex.len());
+    for (i, key_val) in target_keys_hex.iter().enumerate() {
+        let key_hex = match key_val.as_str() {
+            Some(hex) => hex,
+            None => return JsonRpcResponse::error(id, -32602, &format!("target_keys[{}]: expected hex string", i)),
+        };
+
+        if key_hex.len() != 64 {
+            return JsonRpcResponse::error(id, -32602, &format!("target_keys[{}]: expected 64 hex characters", i));
+        }
+
+        match hex::decode(key_hex) {
+            Ok(bytes) if bytes.len() == 32 => {
+                let mut arr = [0u8; 32];
+                arr.copy_from_slice(&bytes);
+                target_keys.push(arr);
+            }
+            _ => return JsonRpcResponse::error(id, -32602, &format!("target_keys[{}]: invalid hex", i)),
+        }
+    }
+
+    if target_keys.is_empty() {
+        return JsonRpcResponse::error(id, -32602, "target_keys cannot be empty");
+    }
+
+    let ledger = read_lock!(state.ledger, id.clone());
+    let mempool = read_lock!(state.mempool, id.clone());
+
+    match ledger.compute_cluster_wealth_for_utxos(&target_keys) {
+        Ok(info) => {
+            // Calculate the fee multiplier for this wealth level
+            let cluster_factor = mempool.cluster_factor(info.max_cluster_wealth);
+
+            // Format cluster breakdown for response
+            let breakdown: Vec<Value> = info.cluster_breakdown
+                .iter()
+                .map(|(cluster_id, wealth)| json!({
+                    "cluster_id": cluster_id.to_string(),
+                    "wealth": wealth,
+                }))
+                .collect();
+
+            JsonRpcResponse::success(id, json!({
+                "max_cluster_wealth": info.max_cluster_wealth,
+                "max_cluster_wealth_btd": format!("{:.9}", info.max_cluster_wealth as f64 / 1_000_000_000_000.0),
+                "total_value": info.total_value,
+                "utxo_count": info.utxo_count,
+                "dominant_cluster_id": info.dominant_cluster_id.map(|id| id.to_string()),
+                "cluster_factor": cluster_factor,  // 1000 = 1x, 6000 = 6x
+                "cluster_factor_display": format!("{:.2}x", cluster_factor as f64 / 1000.0),
+                "cluster_breakdown": breakdown,
+            }))
+        }
+        Err(e) => JsonRpcResponse::error(id, -32000, &format!("Failed to compute cluster wealth: {}", e)),
+    }
+}
+
+/// Get all cluster wealth entries for network-wide wealth distribution analysis.
+///
+/// # Returns
+/// Array of all tracked clusters and their total wealth.
+///
+/// # Note
+/// This is primarily for analytics. The number of entries grows with unique
+/// cluster IDs in the UTXO set.
+async fn handle_cluster_get_all_wealth(id: Value, state: &RpcState) -> JsonRpcResponse {
+    let ledger = read_lock!(state.ledger, id.clone());
+
+    match ledger.get_all_cluster_wealth() {
+        Ok(clusters) => {
+            let total_tracked: u64 = clusters.iter().map(|(_, w)| w).sum();
+
+            let entries: Vec<Value> = clusters
+                .iter()
+                .map(|(cluster_id, wealth)| json!({
+                    "cluster_id": cluster_id.to_string(),
+                    "wealth": wealth,
+                }))
+                .collect();
+
+            JsonRpcResponse::success(id, json!({
+                "count": clusters.len(),
+                "total_tracked_wealth": total_tracked,
+                "clusters": entries,
+            }))
+        }
+        Err(e) => JsonRpcResponse::error(id, -32000, &format!("Failed to get all cluster wealth: {}", e)),
     }
 }
 
