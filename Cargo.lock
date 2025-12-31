@@ -1384,6 +1384,7 @@ dependencies = [
  "hyper-util",
  "libp2p",
  "num_cpus",
+ "parking_lot",
  "prometheus",
  "rand 0.8.5",
  "rand_core 0.6.4",
@@ -11331,6 +11332,6 @@ dependencies = [
 
 [[package]]
 name = "zmij"
-version = "1.0.4"
+version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77cc0158b0d3103d58e9e82bdbe9cf9289d80dbcf4e686ff16730eb9e5814d1a"
+checksum = "e3280a1b827474fcd5dbef4b35a674deb52ba5c312363aef9135317df179d81b"
