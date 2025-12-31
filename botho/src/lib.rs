@@ -5,6 +5,8 @@
 //! This library provides the core functionality for the Botho node,
 //! including blockchain types, networking, consensus, and wallet support.
 
+#![deny(clippy::print_stdout)]
+
 pub mod address;
 pub mod block;
 pub mod config;

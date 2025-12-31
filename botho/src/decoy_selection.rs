@@ -1123,8 +1123,8 @@ mod tests {
 
         // Similar ages should provide better anonymity
         assert!(similar_anon > diverse_anon);
-        println!("Similar ages anonymity: {:.2}", similar_anon);
-        println!("Diverse ages anonymity: {:.2}", diverse_anon);
+        eprintln!("Similar ages anonymity: {:.2}", similar_anon);
+        eprintln!("Diverse ages anonymity: {:.2}", diverse_anon);
     }
 
     #[test]
@@ -1137,9 +1137,9 @@ mod tests {
         let weight_medium = selector.weight_for_age(21600); // 30 days
         let weight_old = selector.weight_for_age(525600);   // 2 years
 
-        println!("Weight at 100 blocks: {}", weight_young);
-        println!("Weight at 21600 blocks: {}", weight_medium);
-        println!("Weight at 525600 blocks: {}", weight_old);
+        eprintln!("Weight at 100 blocks: {}", weight_young);
+        eprintln!("Weight at 21600 blocks: {}", weight_medium);
+        eprintln!("Weight at 525600 blocks: {}", weight_old);
 
         // Medium-aged outputs should be preferred
         assert!(weight_medium > weight_young);
@@ -1285,7 +1285,7 @@ mod tests {
             .filter(|d| d.target_key[0] < 10)
             .count();
 
-        println!("Selected {} decoys from similar cluster group", similar_count);
+        eprintln!("Selected {} decoys from similar cluster group", similar_count);
         assert!(similar_count >= 4, "Expected at least 4 similar, got {similar_count}");
     }
 
@@ -1311,7 +1311,7 @@ mod tests {
             .collect();
 
         let anon = selector.effective_anonymity_with_clusters(&similar_ring, &real_input);
-        println!("Similar clusters effective anonymity: {:.2}", anon);
+        eprintln!("Similar clusters effective anonymity: {:.2}", anon);
 
         // With 20 similar-cluster ring members, effective anonymity should be high (>10)
         // Note: 12+ indicates excellent anonymity set (more than half the ring is plausible)
@@ -1323,7 +1323,7 @@ mod tests {
         let high_sim = real_tags.combined_similarity(&high_match);
         let low_sim = real_tags.combined_similarity(&low_match);
 
-        println!("High match similarity: {:.2}, Low match: {:.2}", high_sim, low_sim);
+        eprintln!("High match similarity: {:.2}, Low match: {:.2}", high_sim, low_sim);
         assert!(high_sim > low_sim, "Matching cluster should have higher similarity");
     }
 }

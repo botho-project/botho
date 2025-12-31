@@ -48,6 +48,7 @@
 
 #![no_std]
 #![deny(unsafe_code)]
+#![deny(clippy::print_stdout)]
 
 #[cfg(feature = "alloc")]
 extern crate alloc;

@@ -2,6 +2,7 @@
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![deny(unsafe_code)]
+#![deny(clippy::print_stdout)]
 
 //! Lion: Lattice-based Linkable Ring Signatures for Botho
 //!

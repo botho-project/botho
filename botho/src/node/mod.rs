@@ -121,33 +121,34 @@ impl Node {
         };
         let current_reward = crate::block::calculate_block_reward_v2(state.height + 1, net_supply);
 
-        println!();
-        println!("=== Botho Node ===");
+        info!("=== Botho Node ===");
         if let Some(ref wallet) = self.wallet {
-            println!(
-                "Address: {}",
-                wallet.address_string().replace('\n', ", ")
+            info!(
+                address = %wallet.address_string().replace('\n', ", "),
+                "Wallet configured"
             );
         } else {
-            println!("Mode: Relay (no wallet)");
+            info!("Mode: Relay (no wallet)");
         }
-        println!("Chain height: {}", state.height);
-        println!("Phase: {}", phase);
-        println!(
+        info!(height = state.height, phase = phase, "Chain status");
+        info!(
+            block_reward_bth = current_reward as f64 / 1_000_000_000_000.0,
             "Block reward: {:.6} BTH",
             current_reward as f64 / 1_000_000_000_000.0
         );
-        println!(
+        info!(
+            net_supply_bth = net_supply as f64 / 1_000_000_000_000.0,
+            mined_bth = state.total_mined as f64 / 1_000_000_000_000.0,
+            burned_bth = state.total_fees_burned as f64 / 1_000_000_000_000.0,
             "Net supply: {:.6} BTH (mined: {:.6}, burned: {:.6})",
             net_supply as f64 / 1_000_000_000_000.0,
             state.total_mined as f64 / 1_000_000_000_000.0,
             state.total_fees_burned as f64 / 1_000_000_000_000.0
         );
-        println!("Bootstrap peers: {} configured", self.config.network.bootstrap_peers.len());
+        info!(peer_count = self.config.network.bootstrap_peers.len(), "Bootstrap peers configured");
         if self.config.network.bootstrap_peers.is_empty() {
             warn!("No bootstrap peers configured - add bootstrap_peers to config.toml");
         }
-        println!();
         Ok(())
     }
 
