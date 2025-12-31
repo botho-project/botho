@@ -1024,7 +1024,7 @@ mod tests {
         assert_eq!(hash1, hash2);
     }
 
-    // Note: Tests for block-height-based halving (calculate_block_reward_v2) were removed.
-    // Halving is now based on transaction count via EmissionController.
-    // See difficulty::EmissionController tests for tx-based halving tests.
+    // Note: Block reward calculation uses calculate_block_reward() which is based on
+    // block height via MonetaryPolicy (5s block assumption). Tests for the halving
+    // schedule are in the monetary.rs and validation.rs test modules.
 }
