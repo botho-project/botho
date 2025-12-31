@@ -2,16 +2,52 @@
 //!
 //! Provides health, readiness, and Prometheus metrics endpoints for
 //! production monitoring and load balancer integration.
+//!
+//! ## Metrics Exported
+//!
+//! - `botho_peers_connected` - Number of connected peers (gauge)
+//! - `botho_mempool_size` - Transactions in mempool (gauge)
+//! - `botho_block_height` - Current block height (gauge)
+//! - `botho_tps` - Transactions per second, 5-minute average (gauge)
+//! - `botho_validation_latency_seconds` - Transaction validation latency (histogram)
+//! - `botho_consensus_round_duration_seconds` - SCP consensus round duration (histogram)
+//! - `botho_consensus_nominations_total` - Total SCP nominations (counter)
+//!
+//! ## Usage
+//!
+//! ```bash
+//! # Start node with metrics enabled
+//! botho run --metrics-port 9090
+//!
+//! # Scrape metrics
+//! curl http://localhost:9090/metrics
+//! ```
 
+use http_body_util::Full;
+use hyper::body::Bytes;
+use hyper::server::conn::http1;
+use hyper::service::service_fn;
+use hyper::{Request, Response, StatusCode};
+use hyper_util::rt::TokioIo;
+use lazy_static::lazy_static;
 use prometheus::{
-    Counter, CounterVec, Encoder, Gauge, Opts, Registry, TextEncoder,
+    Counter, CounterVec, Encoder, Gauge, Histogram, HistogramOpts, IntCounter, IntGauge, Opts,
+    Registry, TextEncoder,
 };
 use serde::Serialize;
+use std::convert::Infallible;
+use std::net::SocketAddr;
 use std::sync::Arc;
+use tokio::net::TcpListener;
+use tracing::{error, info};
 
 use super::RpcState;
 
-/// Prometheus metrics for the Botho node
+// ============================================================================
+// Per-instance NodeMetrics (for RpcState)
+// ============================================================================
+
+/// Prometheus metrics for the Botho node (per RpcState instance)
 pub struct NodeMetrics {
     registry: Registry,
     /// Current blockchain height
@@ -31,34 +67,50 @@ impl NodeMetrics {
     pub fn new() -> Self {
         let registry = Registry::new();
 
-        let block_height = Gauge::with_opts(
-            Opts::new("botho_block_height", "Current blockchain height")
-        ).expect("metric can be created");
+        let block_height = Gauge::with_opts(Opts::new(
+            "botho_block_height",
+            "Current blockchain height",
+        ))
+        .expect("metric can be created");
 
-        let peer_count = Gauge::with_opts(
-            Opts::new("botho_peer_count", "Number of connected peers")
-        ).expect("metric can be created");
+        let peer_count =
+            Gauge::with_opts(Opts::new("botho_peer_count", "Number of connected peers"))
+                .expect("metric can be created");
 
-        let mempool_size = Gauge::with_opts(
-            Opts::new("botho_mempool_size", "Number of transactions in mempool")
-        ).expect("metric can be created");
+        let mempool_size = Gauge::with_opts(Opts::new(
+            "botho_mempool_size",
+            "Number of transactions in mempool",
+        ))
+        .expect("metric can be created");
 
         let rpc_requests_total = CounterVec::new(
             Opts::new("botho_rpc_requests_total", "Total RPC requests"),
             &["method"],
-        ).expect("metric can be created");
+        )
+        .expect("metric can be created");
 
         let rpc_errors_total = CounterVec::new(
             Opts::new("botho_rpc_errors_total", "Total RPC errors"),
             &["method"],
-        ).expect("metric can be created");
+        )
+        .expect("metric can be created");
 
         // Register all metrics
-        registry.register(Box::new(block_height.clone())).expect("collector can be registered");
-        registry.register(Box::new(peer_count.clone())).expect("collector can be registered");
-        registry.register(Box::new(mempool_size.clone())).expect("collector can be registered");
-        registry.register(Box::new(rpc_requests_total.clone())).expect("collector can be registered");
-        registry.register(Box::new(rpc_errors_total.clone())).expect("collector can be registered");
+        registry
+            .register(Box::new(block_height.clone()))
+            .expect("collector can be registered");
+        registry
+            .register(Box::new(peer_count.clone()))
+            .expect("collector can be registered");
+        registry
+            .register(Box::new(mempool_size.clone()))
+            .expect("collector can be registered");
+        registry
+            .register(Box::new(rpc_requests_total.clone()))
+            .expect("collector can be registered");
+        registry
+            .register(Box::new(rpc_errors_total.clone()))
+            .expect("collector can be registered");
 
         Self {
             registry,
@@ -115,6 +167,10 @@ impl Default for NodeMetrics {
         Self::new()
     }
 }
+
+// ============================================================================
+// Health & Readiness Checks
+// ============================================================================
 
 /// Health status of the node
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -202,6 +258,353 @@ pub fn check_ready(state: &RpcState) -> ReadyResponse {
     }
 }
 
+// ============================================================================
+// Global Prometheus Metrics (for standalone metrics server)
+// ============================================================================
+
+lazy_static! {
+    /// Global Prometheus registry for all metrics.
+    pub static ref REGISTRY: Registry = Registry::new();
+
+    // ============================================================================
+    // Gauges (current values)
+    // ============================================================================
+
+    /// Number of connected peers.
+    pub static ref PEERS_CONNECTED: IntGauge = IntGauge::new(
+        "botho_peers_connected",
+        "Number of connected peers"
+    ).expect("Failed to create peers_connected metric");
+
+    /// Number of transactions in the mempool.
+    pub static ref MEMPOOL_SIZE_GLOBAL: IntGauge = IntGauge::new(
+        "botho_mempool_size",
+        "Number of transactions in the mempool"
+    ).expect("Failed to create mempool_size metric");
+
+    /// Current block height.
+    pub static ref BLOCK_HEIGHT_GLOBAL: IntGauge = IntGauge::new(
+        "botho_block_height",
+        "Current block height"
+    ).expect("Failed to create block_height metric");
+
+    /// Transactions per second (5-minute rolling average).
+    pub static ref TPS: prometheus::Gauge = prometheus::Gauge::new(
+        "botho_tps",
+        "Transactions per second (5-minute rolling average)"
+    ).expect("Failed to create tps metric");
+
+    /// Current mining difficulty.
+    pub static ref DIFFICULTY: IntGauge = IntGauge::new(
+        "botho_difficulty",
+        "Current mining difficulty"
+    ).expect("Failed to create difficulty metric");
+
+    /// Total minted supply (in atomic units).
+    pub static ref TOTAL_MINTED: IntGauge = IntGauge::new(
+        "botho_total_minted",
+        "Total minted supply in atomic units"
+    ).expect("Failed to create total_minted metric");
+
+    /// Total fees burned (in atomic units).
+    pub static ref TOTAL_FEES_BURNED: IntGauge = IntGauge::new(
+        "botho_total_fees_burned",
+        "Total fees burned in atomic units"
+    ).expect("Failed to create total_fees_burned metric");
+
+    /// Whether minting is active (1) or not (0).
+    pub static ref MINTING_ACTIVE: IntGauge = IntGauge::new(
+        "botho_minting_active",
+        "Whether minting is active (1) or not (0)"
+    ).expect("Failed to create minting_active metric");
+
+    // ============================================================================
+    // Histograms (latency measurements)
+    // ============================================================================
+
+    /// Transaction validation latency in seconds.
+    pub static ref VALIDATION_LATENCY: Histogram = Histogram::with_opts(
+        HistogramOpts::new(
+            "botho_validation_latency_seconds",
+            "Transaction validation latency in seconds"
+        ).buckets(vec![0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5])
+    ).expect("Failed to create validation_latency metric");
+
+    /// SCP consensus round duration in seconds.
+    pub static ref CONSENSUS_ROUND_DURATION: Histogram = Histogram::with_opts(
+        HistogramOpts::new(
+            "botho_consensus_round_duration_seconds",
+            "SCP consensus round duration in seconds"
+        ).buckets(vec![0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0])
+    ).expect("Failed to create consensus_round_duration metric");
+
+    /// Block processing latency in seconds.
+    pub static ref BLOCK_PROCESSING_LATENCY: Histogram = Histogram::with_opts(
+        HistogramOpts::new(
+            "botho_block_processing_seconds",
+            "Block processing latency in seconds"
+        ).buckets(vec![0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0])
+    ).expect("Failed to create block_processing metric");
+
+    // ============================================================================
+    // Counters (cumulative values)
+    // ============================================================================
+
+    /// Total SCP nominations sent.
+    pub static ref CONSENSUS_NOMINATIONS: IntCounter = IntCounter::new(
+        "botho_consensus_nominations_total",
+        "Total SCP nominations sent"
+    ).expect("Failed to create consensus_nominations metric");
+
+    /// Total transactions processed.
+    pub static ref TRANSACTIONS_PROCESSED: IntCounter = IntCounter::new(
+        "botho_transactions_processed_total",
+        "Total transactions processed"
+    ).expect("Failed to create transactions_processed metric");
+
+    /// Total blocks processed.
+    pub static ref BLOCKS_PROCESSED: IntCounter = IntCounter::new(
+        "botho_blocks_processed_total",
+        "Total blocks processed"
+    ).expect("Failed to create blocks_processed metric");
+
+    /// Total validation failures.
+    pub static ref VALIDATION_FAILURES: IntCounter = IntCounter::new(
+        "botho_validation_failures_total",
+        "Total transaction validation failures"
+    ).expect("Failed to create validation_failures metric");
+}
+
+/// Initialize all metrics and register them with the global registry.
+///
+/// This function should be called once at node startup.
+pub fn init_metrics() {
+    // Register gauges
+    REGISTRY
+        .register(Box::new(PEERS_CONNECTED.clone()))
+        .expect("Failed to register peers_connected");
+    REGISTRY
+        .register(Box::new(MEMPOOL_SIZE_GLOBAL.clone()))
+        .expect("Failed to register mempool_size");
+    REGISTRY
+        .register(Box::new(BLOCK_HEIGHT_GLOBAL.clone()))
+        .expect("Failed to register block_height");
+    REGISTRY
+        .register(Box::new(TPS.clone()))
+        .expect("Failed to register tps");
+    REGISTRY
+        .register(Box::new(DIFFICULTY.clone()))
+        .expect("Failed to register difficulty");
+    REGISTRY
+        .register(Box::new(TOTAL_MINTED.clone()))
+        .expect("Failed to register total_minted");
+    REGISTRY
+        .register(Box::new(TOTAL_FEES_BURNED.clone()))
+        .expect("Failed to register total_fees_burned");
+    REGISTRY
+        .register(Box::new(MINTING_ACTIVE.clone()))
+        .expect("Failed to register minting_active");
+
+    // Register histograms
+    REGISTRY
+        .register(Box::new(VALIDATION_LATENCY.clone()))
+        .expect("Failed to register validation_latency");
+    REGISTRY
+        .register(Box::new(CONSENSUS_ROUND_DURATION.clone()))
+        .expect("Failed to register consensus_round_duration");
+    REGISTRY
+        .register(Box::new(BLOCK_PROCESSING_LATENCY.clone()))
+        .expect("Failed to register block_processing_latency");
+
+    // Register counters
+    REGISTRY
+        .register(Box::new(CONSENSUS_NOMINATIONS.clone()))
+        .expect("Failed to register consensus_nominations");
+    REGISTRY
+        .register(Box::new(TRANSACTIONS_PROCESSED.clone()))
+        .expect("Failed to register transactions_processed");
+    REGISTRY
+        .register(Box::new(BLOCKS_PROCESSED.clone()))
+        .expect("Failed to register blocks_processed");
+    REGISTRY
+        .register(Box::new(VALIDATION_FAILURES.clone()))
+        .expect("Failed to register validation_failures");
+
+    info!("Prometheus metrics initialized");
+}
+
+/// Start the Prometheus metrics HTTP server.
+///
+/// This spawns a simple HTTP server that responds to GET requests on `/metrics`
+/// with Prometheus-formatted metrics data.
+pub async fn start_metrics_server(addr: SocketAddr) -> anyhow::Result<()> {
+    let listener = TcpListener::bind(addr).await?;
+    info!(
+        "Prometheus metrics server listening on http://{}/metrics",
+        addr
+    );
+
+    loop {
+        let (stream, _) = listener.accept().await?;
+        let io = TokioIo::new(stream);
+
+        tokio::spawn(async move {
+            let service = service_fn(handle_metrics_request);
+
+            if let Err(err) = http1::Builder::new().serve_connection(io, service).await {
+                error!("Error serving metrics connection: {:?}", err);
+            }
+        });
+    }
+}
+
+/// Handle HTTP requests to the metrics endpoint.
+async fn handle_metrics_request(
+    req: Request<hyper::body::Incoming>,
+) -> Result<Response<Full<Bytes>>, Infallible> {
+    // Only respond to GET /metrics
+    if req.method() != hyper::Method::GET {
+        return Ok(Response::builder()
+            .status(StatusCode::METHOD_NOT_ALLOWED)
+            .body(Full::new(Bytes::from("Method not allowed")))
+            .unwrap());
+    }
+
+    let path = req.uri().path();
+    if path != "/metrics" && path != "/" {
+        return Ok(Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body(Full::new(Bytes::from("Not found. Try /metrics")))
+            .unwrap());
+    }
+
+    // Gather and encode metrics
+    let encoder = TextEncoder::new();
+    let metric_families = REGISTRY.gather();
+    let mut buffer = Vec::new();
+
+    if let Err(e) = encoder.encode(&metric_families, &mut buffer) {
+        error!("Failed to encode metrics: {}", e);
+        return Ok(Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .body(Full::new(Bytes::from(format!(
+                "Failed to encode metrics: {}",
+                e
+            ))))
+            .unwrap());
+    }
+
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", encoder.format_type())
+        .body(Full::new(Bytes::from(buffer)))
+        .unwrap())
+}
+
+/// Shared metrics state that can be updated from various components.
+///
+/// This provides a convenient interface for updating metrics from
+/// components that don't want to use the global statics directly.
+#[derive(Clone)]
+pub struct MetricsUpdater {
+    _inner: Arc<()>, // Placeholder for potential future state
+}
+
+impl Default for MetricsUpdater {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl MetricsUpdater {
+    /// Create a new metrics updater.
+    pub fn new() -> Self {
+        Self {
+            _inner: Arc::new(()),
+        }
+    }
+
+    /// Update the peer count metric.
+    pub fn set_peer_count(&self, count: usize) {
+        PEERS_CONNECTED.set(count as i64);
+    }
+
+    /// Update the mempool size metric.
+    pub fn set_mempool_size(&self, size: usize) {
+        MEMPOOL_SIZE_GLOBAL.set(size as i64);
+    }
+
+    /// Update the block height metric.
+    pub fn set_block_height(&self, height: u64) {
+        BLOCK_HEIGHT_GLOBAL.set(height as i64);
+    }
+
+    /// Update the TPS metric.
+    pub fn set_tps(&self, tps: f64) {
+        TPS.set(tps);
+    }
+
+    /// Update the difficulty metric.
+    pub fn set_difficulty(&self, difficulty: u64) {
+        DIFFICULTY.set(difficulty as i64);
+    }
+
+    /// Update the total minted metric.
+    pub fn set_total_minted(&self, total: u64) {
+        TOTAL_MINTED.set(total as i64);
+    }
+
+    /// Update the total fees burned metric.
+    pub fn set_total_fees_burned(&self, total: u64) {
+        TOTAL_FEES_BURNED.set(total as i64);
+    }
+
+    /// Update the minting active metric.
+    pub fn set_minting_active(&self, active: bool) {
+        MINTING_ACTIVE.set(if active { 1 } else { 0 });
+    }
+
+    /// Record a validation latency observation.
+    pub fn observe_validation_latency(&self, seconds: f64) {
+        VALIDATION_LATENCY.observe(seconds);
+    }
+
+    /// Record a consensus round duration observation.
+    pub fn observe_consensus_round(&self, seconds: f64) {
+        CONSENSUS_ROUND_DURATION.observe(seconds);
+    }
+
+    /// Record a block processing latency observation.
+    pub fn observe_block_processing(&self, seconds: f64) {
+        BLOCK_PROCESSING_LATENCY.observe(seconds);
+    }
+
+    /// Increment the consensus nominations counter.
+    pub fn inc_consensus_nominations(&self) {
+        CONSENSUS_NOMINATIONS.inc();
+    }
+
+    /// Increment the transactions processed counter.
+    pub fn inc_transactions_processed(&self) {
+        TRANSACTIONS_PROCESSED.inc();
+    }
+
+    /// Add to the transactions processed counter.
+    pub fn add_transactions_processed(&self, count: u64) {
+        TRANSACTIONS_PROCESSED.inc_by(count);
+    }
+
+    /// Increment the blocks processed counter.
+    pub fn inc_blocks_processed(&self) {
+        BLOCKS_PROCESSED.inc();
+    }
+
+    /// Increment the validation failures counter.
+    pub fn inc_validation_failures(&self) {
+        VALIDATION_FAILURES.inc();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -274,5 +677,58 @@ mod tests {
         assert!(json.contains("\"synced\":false"));
         assert!(json.contains("\"peers\":0"));
         assert!(json.contains("\"block_height\":0"));
+    }
+
+    #[test]
+    fn test_metrics_registration() {
+        // This test verifies that metrics can be created without panicking
+        // We can't easily test the full registration in a unit test because
+        // the global registry can only register each metric once
+        assert!(PEERS_CONNECTED.get() >= 0);
+        assert!(MEMPOOL_SIZE_GLOBAL.get() >= 0);
+        assert!(BLOCK_HEIGHT_GLOBAL.get() >= 0);
+    }
+
+    #[test]
+    fn test_metrics_updater() {
+        let updater = MetricsUpdater::new();
+
+        updater.set_peer_count(5);
+        assert_eq!(PEERS_CONNECTED.get(), 5);
+
+        updater.set_mempool_size(100);
+        assert_eq!(MEMPOOL_SIZE_GLOBAL.get(), 100);
+
+        updater.set_block_height(12345);
+        assert_eq!(BLOCK_HEIGHT_GLOBAL.get(), 12345);
+
+        updater.set_minting_active(true);
+        assert_eq!(MINTING_ACTIVE.get(), 1);
+
+        updater.set_minting_active(false);
+        assert_eq!(MINTING_ACTIVE.get(), 0);
+    }
+
+    #[test]
+    fn test_histogram_observations() {
+        let updater = MetricsUpdater::new();
+
+        // These should not panic
+        updater.observe_validation_latency(0.05);
+        updater.observe_consensus_round(1.5);
+        updater.observe_block_processing(0.25);
+    }
+
+    #[test]
+    fn test_counter_increments() {
+        let updater = MetricsUpdater::new();
+
+        let before = CONSENSUS_NOMINATIONS.get();
+        updater.inc_consensus_nominations();
+        assert_eq!(CONSENSUS_NOMINATIONS.get(), before + 1);
+
+        let before = TRANSACTIONS_PROCESSED.get();
+        updater.add_transactions_processed(10);
+        assert_eq!(TRANSACTIONS_PROCESSED.get(), before + 10);
     }
 }

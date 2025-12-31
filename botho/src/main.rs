@@ -57,6 +57,10 @@ enum Commands {
         /// Enable minting
         #[arg(long)]
         mint: bool,
+
+        /// Port for Prometheus metrics endpoint (overrides config, 0 to disable)
+        #[arg(long)]
+        metrics_port: Option<u16>,
     },
 
     /// Show node and wallet status
@@ -148,8 +152,8 @@ fn main() -> Result<()> {
         Commands::Init { recover, relay } => {
             commands::init::run(&config_path, recover, relay, network)
         }
-        Commands::Run { mint } => {
-            commands::run::run(&config_path, mint)
+        Commands::Run { mint, metrics_port } => {
+            commands::run::run(&config_path, mint, metrics_port)
         }
         Commands::Status => {
             commands::status::run(&config_path)

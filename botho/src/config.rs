@@ -50,6 +50,12 @@ pub struct NetworkConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rpc_port: Option<u16>,
 
+    /// Port for Prometheus metrics endpoint.
+    /// If not set, uses network-specific default (9090 for mainnet, 19090 for testnet).
+    /// Set to 0 to disable the metrics server.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metrics_port: Option<u16>,
+
     /// Allowed CORS origins for RPC server.
     /// Default is ["http://localhost:*", "http://127.0.0.1:*"] for security.
     /// Use ["*"] to allow all origins (not recommended for production).
@@ -151,6 +157,24 @@ impl NetworkConfig {
     /// Get the RPC port, using network default if not explicitly set
     pub fn rpc_port(&self, network: Network) -> u16 {
         self.rpc_port.unwrap_or_else(|| network.default_rpc_port())
+    }
+
+    /// Get the metrics port, using network default if not explicitly set.
+    ///
+    /// Returns None if metrics are disabled (port set to 0).
+    /// Default ports: 9090 for mainnet, 19090 for testnet.
+    pub fn metrics_port(&self, network: Network) -> Option<u16> {
+        match self.metrics_port {
+            Some(0) => None, // Explicitly disabled
+            Some(port) => Some(port),
+            None => {
+                // Network-specific defaults
+                Some(match network {
+                    Network::Mainnet => 9090,
+                    Network::Testnet => 19090,
+                })
+            }
+        }
     }
 
     /// Get bootstrap peers, using network defaults if not explicitly set
@@ -351,6 +375,7 @@ impl Default for NetworkConfig {
         Self {
             gossip_port: None,  // Uses network-specific default
             rpc_port: None,     // Uses network-specific default
+            metrics_port: None, // Uses network-specific default (9090/19090)
             cors_origins: default_cors_origins(),
             bootstrap_peers: Vec::new(),  // Uses network-specific defaults
             quorum: QuorumConfig::default(),

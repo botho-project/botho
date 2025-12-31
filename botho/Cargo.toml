@@ -99,8 +99,9 @@ tokio-tungstenite = "0.24"
 sha1 = "0.10"
 base64 = "0.22"
 
-# Observability
-prometheus = "0.13"
+# Metrics
+prometheus = { version = "0.13", features = ["process"] }
+lazy_static = "1.4"
 
 # For SCP simulation
 crossbeam-channel = "0.5"
