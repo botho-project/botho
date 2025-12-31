@@ -85,6 +85,48 @@ use std::collections::HashSet;
 /// Minimum transaction fee in picocredits (0.0001 credits = 100_000_000 picocredits)
 pub const MIN_TX_FEE: u64 = 100_000_000;
 
+// ============================================================================
+// Transaction Structure Errors
+// ============================================================================
+
+/// Errors that can occur during transaction structure validation.
+///
+/// These are checked by `Transaction::is_valid_structure()` before any
+/// cryptographic signature verification or UTXO lookups.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TransactionStructureError {
+    /// Transaction has no inputs (CLSAG or LION)
+    NoInputs,
+    /// Transaction has no outputs
+    NoOutputs,
+    /// One or more outputs have zero amount
+    ZeroAmountOutput,
+    /// One or more outputs are below the dust threshold
+    DustOutput,
+    /// Transaction fee is below the minimum required
+    FeeBelowMinimum,
+    /// Ring size is below the minimum required for privacy
+    InsufficientRingSize,
+    /// Two or more inputs use the same key image (within-tx double-spend attempt)
+    DuplicateKeyImage,
+}
+
+impl std::fmt::Display for TransactionStructureError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoInputs => write!(f, "Transaction has no inputs"),
+            Self::NoOutputs => write!(f, "Transaction has no outputs"),
+            Self::ZeroAmountOutput => write!(f, "Transaction has zero-amount output"),
+            Self::DustOutput => write!(f, "Transaction has output below dust threshold"),
+            Self::FeeBelowMinimum => write!(f, "Transaction fee below minimum"),
+            Self::InsufficientRingSize => write!(f, "Ring size below minimum required"),
+            Self::DuplicateKeyImage => write!(f, "Transaction has duplicate key images"),
+        }
+    }
+}
+
+impl std::error::Error for TransactionStructureError {}
+
 /// Picocredits per credit (10^12)
 pub const PICOCREDITS_PER_CREDIT: u64 = 1_000_000_000_000;
 
@@ -1209,26 +1251,26 @@ impl Transaction {
     }
 
     /// Check basic transaction validity (structure only, not signatures or UTXO existence)
-    pub fn is_valid_structure(&self) -> Result<(), &'static str> {
+    pub fn is_valid_structure(&self) -> Result<(), TransactionStructureError> {
         // Check inputs based on type
         match &self.inputs {
             TxInputs::Clsag(inputs) => {
                 if inputs.is_empty() {
-                    return Err("CLSAG transaction has no inputs");
+                    return Err(TransactionStructureError::NoInputs);
                 }
                 for input in inputs {
                     if input.ring.len() < MIN_RING_SIZE {
-                        return Err("CLSAG input has insufficient ring size");
+                        return Err(TransactionStructureError::InsufficientRingSize);
                     }
                 }
             }
             TxInputs::Lion(inputs) => {
                 if inputs.is_empty() {
-                    return Err("LION transaction has no inputs");
+                    return Err(TransactionStructureError::NoInputs);
                 }
                 for input in inputs {
                     if input.ring.len() < MIN_RING_SIZE {
-                        return Err("LION input has insufficient ring size");
+                        return Err(TransactionStructureError::InsufficientRingSize);
                     }
                 }
             }
@@ -1239,21 +1281,21 @@ impl Transaction {
         let key_images = self.key_images();
         let unique_count = key_images.iter().collect::<HashSet<_>>().len();
         if unique_count != key_images.len() {
-            return Err("Transaction has duplicate key images");
+            return Err(TransactionStructureError::DuplicateKeyImage);
         }
 
         if self.outputs.is_empty() {
-            return Err("Transaction has no outputs");
+            return Err(TransactionStructureError::NoOutputs);
         }
         if self.outputs.iter().any(|o| o.amount == 0) {
-            return Err("Transaction has zero-amount output");
+            return Err(TransactionStructureError::ZeroAmountOutput);
         }
         // Check for dust outputs (below minimum threshold)
         if self.outputs.iter().any(|o| o.amount < DUST_THRESHOLD) {
-            return Err("Transaction has output below dust threshold");
+            return Err(TransactionStructureError::DustOutput);
         }
         if self.fee < MIN_TX_FEE {
-            return Err("Transaction fee below minimum");
+            return Err(TransactionStructureError::FeeBelowMinimum);
         }
         Ok(())
     }
@@ -1457,7 +1499,7 @@ mod tests {
         );
         assert_eq!(
             tx.is_valid_structure().unwrap_err(),
-            "Transaction has output below dust threshold"
+            TransactionStructureError::DustOutput
         );
     }
 
@@ -1476,7 +1518,7 @@ mod tests {
     #[test]
     fn test_transaction_duplicate_key_images_rejected() {
         // Create two inputs with the same key image (simulated double-spend)
-        let mut input1 = test_clsag_input(1);
+        let input1 = test_clsag_input(1);
         let mut input2 = test_clsag_input(2);
         // Force same key image on both inputs
         input2.key_image = input1.key_image;
@@ -1489,7 +1531,7 @@ mod tests {
         );
         assert_eq!(
             tx.is_valid_structure().unwrap_err(),
-            "Transaction has duplicate key images"
+            TransactionStructureError::DuplicateKeyImage
         );
     }
 
@@ -1517,6 +1559,31 @@ mod tests {
             1,
         );
         assert_eq!(tx.privacy_tier(), PrivacyTier::StandardPrivate);
+    }
+
+    #[test]
+    fn test_transaction_structure_error_display() {
+        // Test that all error variants have meaningful display messages
+        assert_eq!(
+            format!("{}", TransactionStructureError::DuplicateKeyImage),
+            "Transaction has duplicate key images"
+        );
+        assert_eq!(
+            format!("{}", TransactionStructureError::NoInputs),
+            "Transaction has no inputs"
+        );
+        assert_eq!(
+            format!("{}", TransactionStructureError::NoOutputs),
+            "Transaction has no outputs"
+        );
+        assert_eq!(
+            format!("{}", TransactionStructureError::DustOutput),
+            "Transaction has output below dust threshold"
+        );
+        assert_eq!(
+            format!("{}", TransactionStructureError::InsufficientRingSize),
+            "Ring size below minimum required"
+        );
     }
 
     // Ring signature verification tests require actual crypto keys - see wallet tests
