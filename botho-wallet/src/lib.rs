@@ -13,6 +13,7 @@
 pub mod discovery;
 pub mod keys;
 pub mod rpc_pool;
+pub mod secmem;
 pub mod storage;
 pub mod transaction;
 

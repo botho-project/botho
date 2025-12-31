@@ -10,6 +10,7 @@ mod commands;
 mod discovery;
 mod keys;
 mod rpc_pool;
+mod secmem;
 mod storage;
 mod transaction;
 
