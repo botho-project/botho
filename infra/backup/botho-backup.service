@@ -1,0 +1,43 @@
+[Unit]
+Description=Botho Seed Node Ledger Backup
+Documentation=https://github.com/botho-project/botho/blob/main/docs/seed-node-backup.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+
+# Run as root to access ledger database
+User=root
+Group=root
+
+# Working directory
+WorkingDirectory=/opt/botho
+
+# Environment configuration
+EnvironmentFile=-/etc/botho/backup.env
+
+# Execute backup script
+ExecStart=/opt/botho/infra/backup/backup-ledger.sh
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=botho-backup
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadOnlyPaths=/
+ReadWritePaths=/tmp /var/log /var/lib/botho
+
+# Restart policy for failures
+Restart=no
+
+# Timeout (allow time for large backups)
+TimeoutStartSec=1800
+
+[Install]
+WantedBy=multi-user.target
