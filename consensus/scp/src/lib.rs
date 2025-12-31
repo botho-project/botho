@@ -3,6 +3,9 @@
 #![doc = include_str!("../README.md")]
 #![allow(non_snake_case)]
 #![deny(missing_docs)]
+#![deny(clippy::unwrap_used)]
+#![deny(clippy::expect_used)]
+#![deny(clippy::panic)]
 
 pub mod ballot;
 mod error;

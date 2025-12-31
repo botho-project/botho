@@ -677,6 +677,7 @@ impl<V: Value, ID: GenericNodeId> fmt::Display for Msg<V, ID> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod msg_tests {
     use super::*;
     use crate::test_utils::test_node_id;
