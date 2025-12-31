@@ -15,23 +15,24 @@ use crate::{
     },
     config::GossipConfig,
     error::{GossipError, GossipResult},
-    messages::{NodeAnnouncement, NodeCapabilities, ANNOUNCEMENTS_TOPIC},
-    rate_limit::{PeerRateLimiter, RateLimitResult},
+    messages::{
+        BlockBroadcast, NodeAnnouncement, NodeCapabilities, TransactionBroadcast,
+        ANNOUNCEMENTS_TOPIC, BLOCKS_TOPIC, TRANSACTIONS_TOPIC,
+    },
+    rate_limit::{GossipMessageType, PeerRateLimiter, RateLimitResult},
     store::{new_shared_store, SharedPeerStore},
-};
-use futures::StreamExt;
-use libp2p::{
-    gossipsub::{self, IdentTopic},
-    identify,
-    kad,
-    noise,
-    request_response::{self, ResponseChannel},
-    swarm::SwarmEvent,
-    tcp, yamux, Multiaddr, PeerId, Swarm, SwarmBuilder,
 };
 use bth_common::{NodeID, ResponderId};
 use bth_consensus_scp_types::QuorumSet;
 use bth_crypto_keys::{Ed25519Pair, Signer};
+use futures::StreamExt;
+use libp2p::{
+    gossipsub::{self, IdentTopic},
+    identify, kad, noise,
+    request_response::{self, ResponseChannel},
+    swarm::SwarmEvent,
+    tcp, yamux, Multiaddr, PeerId, Swarm, SwarmBuilder,
+};
 use std::{
     collections::HashSet,
     sync::Arc,
@@ -161,7 +162,8 @@ impl GossipService {
 
         // Spawn the swarm task
         tokio::spawn(async move {
-            if let Err(e) = run_swarm(config, store, command_rx, event_tx, initial_announcement).await
+            if let Err(e) =
+                run_swarm(config, store, command_rx, event_tx, initial_announcement).await
             {
                 error!("Swarm task failed: {:?}", e);
             }
@@ -445,14 +447,31 @@ async fn handle_behaviour_event(
             message,
             ..
         }) => {
-            // Check rate limit for this peer
-            match rate_limiter.record_message(&propagation_source) {
+            // Determine message type from topic
+            let topic_str = message.topic.as_str();
+            let msg_type = if topic_str == TRANSACTIONS_TOPIC {
+                GossipMessageType::Transaction
+            } else if topic_str == BLOCKS_TOPIC {
+                GossipMessageType::Block
+            } else if topic_str == ANNOUNCEMENTS_TOPIC {
+                GossipMessageType::Announcement
+            } else {
+                GossipMessageType::Other
+            };
+
+            // Check rate limit for this peer with message type
+            match rate_limiter.record_message_typed(&propagation_source, msg_type) {
                 RateLimitResult::Allowed => {
                     // Message allowed through, process it
                 }
-                RateLimitResult::RateLimited { violations, remaining } => {
+                RateLimitResult::RateLimited {
+                    violations,
+                    remaining,
+                    message_type,
+                } => {
                     debug!(
                         ?propagation_source,
+                        ?message_type,
                         violations,
                         remaining,
                         "Rate limiting peer message"
@@ -462,28 +481,82 @@ async fn handle_behaviour_event(
                 RateLimitResult::Disconnect => {
                     warn!(
                         ?propagation_source,
+                        ?msg_type,
                         "Peer exceeded rate limit threshold, flagged for disconnect"
                     );
                     return; // Drop the message, peer will be disconnected
                 }
             }
 
-            // Try to parse as a node announcement
-            match serde_json::from_slice::<NodeAnnouncement>(&message.data) {
-                Ok(announcement) => {
-                    debug!(
-                        responder_id = %announcement.node_id.responder_id,
-                        "Received announcement"
-                    );
-
-                    if store.insert(announcement.clone()) {
-                        let _ = event_tx
-                            .send(GossipEvent::AnnouncementReceived(announcement))
-                            .await;
+            // Process based on message type
+            match msg_type {
+                GossipMessageType::Transaction => {
+                    // Try to parse as transaction broadcast
+                    match serde_json::from_slice::<TransactionBroadcast>(&message.data) {
+                        Ok(tx_broadcast) => {
+                            trace!(
+                                tx_hash = ?hex::encode(&tx_broadcast.tx_hash[..8]),
+                                "Received transaction broadcast"
+                            );
+                            let _ = event_tx
+                                .send(GossipEvent::TransactionReceived(tx_broadcast))
+                                .await;
+                        }
+                        Err(e) => {
+                            trace!(?e, "Failed to parse transaction broadcast");
+                        }
                     }
                 }
-                Err(e) => {
-                    trace!(?e, "Failed to parse gossipsub message");
+                GossipMessageType::Block => {
+                    // Try to parse as block broadcast
+                    match serde_json::from_slice::<BlockBroadcast>(&message.data) {
+                        Ok(block_broadcast) => {
+                            debug!(height = block_broadcast.height, "Received block broadcast");
+                            let _ = event_tx
+                                .send(GossipEvent::BlockReceived(block_broadcast))
+                                .await;
+                        }
+                        Err(e) => {
+                            trace!(?e, "Failed to parse block broadcast");
+                        }
+                    }
+                }
+                GossipMessageType::Announcement => {
+                    // Try to parse as a node announcement
+                    match serde_json::from_slice::<NodeAnnouncement>(&message.data) {
+                        Ok(announcement) => {
+                            debug!(
+                                responder_id = %announcement.node_id.responder_id,
+                                "Received announcement"
+                            );
+
+                            if store.insert(announcement.clone()) {
+                                let _ = event_tx
+                                    .send(GossipEvent::AnnouncementReceived(announcement))
+                                    .await;
+                            }
+                        }
+                        Err(e) => {
+                            trace!(?e, "Failed to parse node announcement");
+                        }
+                    }
+                }
+                _ => {
+                    // Try to parse as a node announcement (fallback for unknown topics)
+                    if let Ok(announcement) =
+                        serde_json::from_slice::<NodeAnnouncement>(&message.data)
+                    {
+                        debug!(
+                            responder_id = %announcement.node_id.responder_id,
+                            "Received announcement (unknown topic)"
+                        );
+
+                        if store.insert(announcement.clone()) {
+                            let _ = event_tx
+                                .send(GossipEvent::AnnouncementReceived(announcement))
+                                .await;
+                        }
+                    }
                 }
             }
         }
@@ -539,7 +612,11 @@ async fn handle_behaviour_event(
                 request_response::Message::Request {
                     request, channel, ..
                 } => {
-                    debug!(?peer, since = request.since_timestamp, "Topology sync request");
+                    debug!(
+                        ?peer,
+                        since = request.since_timestamp,
+                        "Topology sync request"
+                    );
 
                     // Get announcements from store
                     let announcements = store.get_since(request.since_timestamp);

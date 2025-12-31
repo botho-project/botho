@@ -7,10 +7,7 @@
 //! join the network by recommending trust configurations based on
 //! what other nodes in the network are doing.
 
-use crate::{
-    messages::NodeAnnouncement,
-    store::SharedPeerStore,
-};
+use crate::{messages::NodeAnnouncement, store::SharedPeerStore};
 use bth_common::{HashMap, HashSet, ResponderId};
 use bth_consensus_scp_types::{QuorumSet, QuorumSetMember};
 use std::sync::Arc;
@@ -381,15 +378,8 @@ impl TopologyAnalyzer {
     }
 
     /// Validate a proposed quorum set against the known network.
-    pub fn validate_quorum_set(
-        &self,
-        quorum_set: &QuorumSet<ResponderId>,
-    ) -> QuorumSetValidation {
-        let known_nodes: HashSet<_> = self
-            .store
-            .get_responder_ids()
-            .into_iter()
-            .collect();
+    pub fn validate_quorum_set(&self, quorum_set: &QuorumSet<ResponderId>) -> QuorumSetValidation {
+        let known_nodes: HashSet<_> = self.store.get_responder_ids().into_iter().collect();
 
         let qs_nodes = quorum_set.nodes();
         let unknown_nodes: Vec<_> = qs_nodes
@@ -490,11 +480,7 @@ mod tests {
         }
     }
 
-    fn make_announcement(
-        name: &str,
-        trusted: Vec<&str>,
-        timestamp: u64,
-    ) -> NodeAnnouncement {
+    fn make_announcement(name: &str, trusted: Vec<&str>, timestamp: u64) -> NodeAnnouncement {
         let node_id = make_node_id(name);
         let quorum_set = QuorumSet::new(
             ((trusted.len() as u32 * 67) / 100).max(1),
@@ -576,10 +562,7 @@ mod tests {
 
         assert!(!popular.is_empty());
         // node1 should be most popular (trusted by 2)
-        assert_eq!(
-            popular[0].0,
-            ResponderId::from_str("node1:8443").unwrap()
-        );
+        assert_eq!(popular[0].0, ResponderId::from_str("node1:8443").unwrap());
         assert_eq!(popular[0].1, 2);
     }
 
@@ -822,7 +805,10 @@ mod tests {
 
         let validation = analyzer.validate_quorum_set(&quorum_set);
         assert!(!validation.is_valid);
-        assert!(validation.warnings.iter().any(|w| w.contains("fewer than 3")));
+        assert!(validation
+            .warnings
+            .iter()
+            .any(|w| w.contains("fewer than 3")));
     }
 
     #[test]

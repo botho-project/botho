@@ -127,7 +127,10 @@ impl NodeAnnouncement {
     pub fn verify_signature(&self) -> bool {
         use bth_crypto_keys::Verifier;
         let bytes = self.signing_bytes();
-        self.node_id.public_key.verify(&bytes, &self.signature).is_ok()
+        self.node_id
+            .public_key
+            .verify(&bytes, &self.signature)
+            .is_ok()
     }
 
     /// Check if this announcement is newer than another.
@@ -334,7 +337,9 @@ mod tests {
 
         assert_eq!(announcement.node_id, node_id);
         assert_eq!(announcement.endpoints.len(), 1);
-        assert!(announcement.capabilities.contains(NodeCapabilities::CONSENSUS));
+        assert!(announcement
+            .capabilities
+            .contains(NodeCapabilities::CONSENSUS));
     }
 
     #[test]

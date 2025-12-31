@@ -61,15 +61,15 @@
 //!
 //! The gossip protocol uses several message types:
 //!
-//! - [`NodeAnnouncement`]: Signed advertisement of a node's identity, endpoints,
-//!   quorum set, and capabilities
+//! - [`NodeAnnouncement`]: Signed advertisement of a node's identity,
+//!   endpoints, quorum set, and capabilities
 //! - [`GossipMessage`]: Wrapper enum for all protocol messages
 //! - [`PeerInfo`]: Lightweight peer information for peer exchange
 //!
 //! # Peer Store
 //!
-//! The [`PeerStore`] maintains the view of known peers and their configurations.
-//! It provides:
+//! The [`PeerStore`] maintains the view of known peers and their
+//! configurations. It provides:
 //!
 //! - Signature verification for announcements
 //! - Deduplication and freshness checks
@@ -104,16 +104,21 @@ pub use analyzer::{
     TrustCluster,
 };
 pub use behaviour::{GossipBehaviour, GossipCommand, GossipEvent, GossipHandle};
+pub use config::{
+    GossipConfig, GossipConfigBuilder, MessageTypeLimits, NetworkId, PeerRateLimitConfig,
+};
 pub use consensus_integration::{
     start_consensus_gossip, ConsensusGossipConfig, ConsensusGossipHandle,
 };
-pub use config::{GossipConfig, GossipConfigBuilder, NetworkId, PeerRateLimitConfig};
-pub use rate_limit::{PeerRateLimiter, PeerRateStats, RateLimitResult};
 pub use error::{GossipError, GossipResult};
 pub use messages::{
     BlockBroadcast, GossipMessage, NodeAnnouncement, NodeCapabilities, PeerInfo,
     TransactionBroadcast, ANNOUNCEMENTS_TOPIC, BLOCKS_TOPIC, PEER_EXCHANGE_TOPIC,
     TOPOLOGY_SYNC_PROTOCOL, TRANSACTIONS_TOPIC,
+};
+pub use rate_limit::{
+    GossipMessageType, PeerRateLimiter, PeerRateStats, RateLimitMetrics, RateLimitMetricsSnapshot,
+    RateLimitResult,
 };
 pub use service::GossipService;
 pub use store::{new_shared_store, PeerStore, PeerStoreConfig, PeerStoreStats, SharedPeerStore};

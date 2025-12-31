@@ -84,7 +84,8 @@ impl PeerStore {
 
     /// Insert or update an announcement.
     ///
-    /// Returns `true` if the announcement was accepted (new or newer than existing).
+    /// Returns `true` if the announcement was accepted (new or newer than
+    /// existing).
     pub fn insert(&self, announcement: NodeAnnouncement) -> bool {
         // Verify signature before accepting
         if !announcement.verify_signature() {
@@ -234,10 +235,16 @@ impl PeerStore {
         };
 
         for announcement in announcements.values() {
-            if announcement.capabilities.contains(NodeCapabilities::CONSENSUS) {
+            if announcement
+                .capabilities
+                .contains(NodeCapabilities::CONSENSUS)
+            {
                 stats.consensus_nodes += 1;
             }
-            if announcement.capabilities.contains(NodeCapabilities::ARCHIVE) {
+            if announcement
+                .capabilities
+                .contains(NodeCapabilities::ARCHIVE)
+            {
                 stats.archive_nodes += 1;
             }
             if announcement.capabilities.contains(NodeCapabilities::RELAY) {
@@ -377,7 +384,8 @@ mod tests {
         // In real usage, announcements would be signed
 
         // For testing, we need to bypass signature verification
-        // This is a limitation of the test - in production, all announcements are signed
+        // This is a limitation of the test - in production, all announcements are
+        // signed
         let announcements = &store.announcements;
         {
             let mut guard = announcements.write().unwrap();
@@ -455,10 +463,7 @@ mod tests {
 
             let mut consensus_node = make_test_announcement("consensus", 1000);
             consensus_node.capabilities = NodeCapabilities::CONSENSUS;
-            guard.insert(
-                consensus_node.node_id.responder_id.clone(),
-                consensus_node,
-            );
+            guard.insert(consensus_node.node_id.responder_id.clone(), consensus_node);
 
             let mut relay_node = make_test_announcement("relay", 1000);
             relay_node.capabilities = NodeCapabilities::RELAY;
