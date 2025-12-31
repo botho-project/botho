@@ -7,7 +7,7 @@ use crate::discovery::NodeDiscovery;
 use crate::keys::WalletKeys;
 use crate::rpc_pool::RpcPool;
 use crate::storage::EncryptedWallet;
-use crate::transaction::{format_amount, parse_amount, sync_wallet, TransactionBuilder};
+use crate::transaction::{format_amount, parse_amount, sync_wallet, TransactionBuilder, DUST_THRESHOLD};
 
 use super::{print_error, print_success, print_warning, prompt_confirm, prompt_password};
 
@@ -57,6 +57,27 @@ async fn run_classical(
         return Err(anyhow!("Amount must be greater than 0"));
     }
 
+    // Warn if amount is below dust threshold
+    if amount_picocredits < DUST_THRESHOLD {
+        print_error(&format!(
+            "Amount {} is below the dust threshold of {}",
+            format_amount(amount_picocredits),
+            format_amount(DUST_THRESHOLD)
+        ));
+        println!("Outputs this small would be unspendable (cost more in fees than they're worth).");
+        return Ok(());
+    }
+
+    // Warn if amount is close to dust threshold (within 10x)
+    if amount_picocredits < DUST_THRESHOLD * 10 {
+        print_warning(&format!(
+            "Note: {} is a small output (close to dust threshold of {}).",
+            format_amount(amount_picocredits),
+            format_amount(DUST_THRESHOLD)
+        ));
+        println!("         Small outputs may cost more in fees to spend later.");
+    }
+
     // Load and decrypt wallet
     let mut wallet = EncryptedWallet::load(wallet_path)?;
     let password = prompt_password("Enter wallet password: ")?;
@@ -104,15 +125,32 @@ async fn run_classical(
         return Ok(());
     }
 
+    // Calculate expected change to warn about dust absorption
+    let expected_change = balance - total_needed;
+    let (actual_fee, dust_absorbed) = if expected_change > 0 && expected_change < DUST_THRESHOLD {
+        // Dust change will be absorbed into fee
+        (fee + expected_change, true)
+    } else {
+        (fee, false)
+    };
+
     // Show transaction details
     println!();
     println!("Transaction details:");
     println!("  Recipient: {}", address);
     println!("  Amount:    {}", format_amount(amount_picocredits));
-    println!("  Fee:       {}", format_amount(fee));
-    println!("  Total:     {}", format_amount(total_needed));
+    if dust_absorbed {
+        println!("  Fee:       {} (includes {} dust change)", format_amount(actual_fee), format_amount(expected_change));
+        print_warning("Change is below dust threshold - will be added to fee.");
+    } else {
+        println!("  Fee:       {}", format_amount(fee));
+    }
+    println!("  Total:     {}", format_amount(amount_picocredits + actual_fee));
     println!();
-    println!("  Balance after: {}", format_amount(balance - total_needed));
+    if !dust_absorbed && expected_change > 0 {
+        println!("  Change:        {}", format_amount(expected_change));
+    }
+    println!("  Balance after: {}", format_amount(balance - amount_picocredits - actual_fee));
 
     // Confirm
     if !skip_confirm {
@@ -231,6 +269,27 @@ async fn run_quantum_private(
         return Err(anyhow!("Amount must be greater than 0"));
     }
 
+    // Warn if amount is below dust threshold
+    if amount_picocredits < DUST_THRESHOLD {
+        print_error(&format!(
+            "Amount {} is below the dust threshold of {}",
+            format_amount(amount_picocredits),
+            format_amount(DUST_THRESHOLD)
+        ));
+        println!("Outputs this small would be unspendable (cost more in fees than they're worth).");
+        return Ok(());
+    }
+
+    // Warn if amount is close to dust threshold (within 10x)
+    if amount_picocredits < DUST_THRESHOLD * 10 {
+        print_warning(&format!(
+            "Note: {} is a small output (close to dust threshold of {}).",
+            format_amount(amount_picocredits),
+            format_amount(DUST_THRESHOLD)
+        ));
+        println!("         Small outputs may cost more in fees to spend later.");
+    }
+
     // Parse quantum-safe recipient address
     // The address is validated here; full transaction building will use it
     let pq_recipient = QuantumSafePublicAddress::from_address_string(address)
@@ -283,16 +342,33 @@ async fn run_quantum_private(
         return Ok(());
     }
 
+    // Calculate expected change to warn about dust absorption
+    let expected_change = balance - total_needed;
+    let (actual_fee, dust_absorbed) = if expected_change > 0 && expected_change < DUST_THRESHOLD {
+        // Dust change will be absorbed into fee
+        (fee + expected_change, true)
+    } else {
+        (fee, false)
+    };
+
     // Show transaction details
     println!();
     println!("Quantum-Private Transaction Details:");
     println!("  Type:      Post-Quantum (ML-KEM-768 + ML-DSA-65)");
     println!("  Recipient: {}...", &address[..std::cmp::min(50, address.len())]);
     println!("  Amount:    {}", format_amount(amount_picocredits));
-    println!("  Fee:       {} (higher due to ~19x larger tx size)", format_amount(fee));
-    println!("  Total:     {}", format_amount(total_needed));
+    if dust_absorbed {
+        println!("  Fee:       {} (includes {} dust change, ~19x larger tx)", format_amount(actual_fee), format_amount(expected_change));
+        print_warning("Change is below dust threshold - will be added to fee.");
+    } else {
+        println!("  Fee:       {} (higher due to ~19x larger tx size)", format_amount(fee));
+    }
+    println!("  Total:     {}", format_amount(amount_picocredits + actual_fee));
     println!();
-    println!("  Balance after: {}", format_amount(balance - total_needed));
+    if !dust_absorbed && expected_change > 0 {
+        println!("  Change:        {}", format_amount(expected_change));
+    }
+    println!("  Balance after: {}", format_amount(balance - amount_picocredits - actual_fee));
     println!();
     print_warning("Quantum-private transactions are larger and cost more in fees,");
     println!("         but provide protection against future quantum computers.");

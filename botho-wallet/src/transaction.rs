@@ -27,6 +27,12 @@ pub const PICOCREDITS_PER_CAD: u64 = 1_000_000_000_000;
 /// Minimum transaction fee
 pub const MIN_FEE: u64 = 1_000_000; // 0.000001 CAD
 
+/// Dust threshold - minimum output amount in picocredits.
+/// Outputs below this value are rejected to prevent unspendable UTXOs.
+/// Set to 1 microcredit (0.000001 CAD = 1_000_000 picocredits).
+/// Change outputs below this threshold are added to the transaction fee instead.
+pub const DUST_THRESHOLD: u64 = 1_000_000;
+
 /// A UTXO owned by this wallet
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OwnedUtxo {
@@ -246,6 +252,12 @@ impl TransactionBuilder {
     }
 
     /// Build and sign a transaction
+    ///
+    /// If the change amount is below `DUST_THRESHOLD`, it is added to the fee
+    /// instead of creating an unspendable output.
+    ///
+    /// Returns the transaction and the actual fee (which may be higher than
+    /// the requested fee if dust change was absorbed).
     pub fn build_transfer(
         &self,
         recipient: &PublicAddress,
@@ -255,6 +267,15 @@ impl TransactionBuilder {
         // Validate amount
         if amount == 0 {
             return Err(anyhow!("Amount must be greater than 0"));
+        }
+
+        // Validate amount is above dust threshold
+        if amount < DUST_THRESHOLD {
+            return Err(anyhow!(
+                "Amount {} is below dust threshold of {} picocredits",
+                amount,
+                DUST_THRESHOLD
+            ));
         }
 
         let total_needed = amount.checked_add(fee)
@@ -280,13 +301,18 @@ impl TransactionBuilder {
         // Create outputs
         let mut outputs = vec![TxOutput::new(amount, recipient)];
 
-        // Add change output if non-dust
-        if change > MIN_FEE {
+        // Handle change: if above dust threshold, create change output
+        // Otherwise, add dust to fee (prevents unspendable UTXOs)
+        let actual_fee = if change >= DUST_THRESHOLD {
             outputs.push(TxOutput::new(change, &self.keys.public_address()));
-        }
+            fee
+        } else {
+            // Dust change is absorbed into fee
+            fee + change
+        };
 
         // Create transaction
-        let mut tx = Transaction::new(inputs, outputs, fee, self.sync_height);
+        let mut tx = Transaction::new(inputs, outputs, actual_fee, self.sync_height);
 
         // Sign all inputs
         self.sign_transaction(&mut tx)?;
@@ -363,6 +389,15 @@ impl TransactionBuilder {
             return Err(anyhow!("Amount must be greater than 0"));
         }
 
+        // Validate amount is above dust threshold
+        if amount < DUST_THRESHOLD {
+            return Err(anyhow!(
+                "Amount {} is below dust threshold of {} picocredits",
+                amount,
+                DUST_THRESHOLD
+            ));
+        }
+
         let total_needed = amount.checked_add(fee)
             .ok_or_else(|| anyhow!("Amount overflow"))?;
 
@@ -379,17 +414,22 @@ impl TransactionBuilder {
         // Output to recipient
         outputs.push(QuantumPrivateTxOutput::new(amount, recipient));
 
-        // Change output (if non-dust)
-        if change > MIN_FEE {
+        // Handle change: if above dust threshold, create change output
+        // Otherwise, add dust to fee (prevents unspendable UTXOs)
+        let actual_fee = if change >= DUST_THRESHOLD {
             let change_addr = self.keys.pq_public_address();
             outputs.push(QuantumPrivateTxOutput::new(change, &change_addr));
-        }
+            fee
+        } else {
+            // Dust change is absorbed into fee
+            fee + change
+        };
 
         // Build a preliminary transaction to get signing hash
         let preliminary_tx = QuantumPrivateTransaction::new(
             Vec::new(),
             outputs.clone(),
-            fee,
+            actual_fee,
             self.sync_height,
         );
         let signing_hash = preliminary_tx.signing_hash();
@@ -425,7 +465,7 @@ impl TransactionBuilder {
         }
 
         // Create the final transaction
-        let tx = QuantumPrivateTransaction::new(inputs, outputs, fee, self.sync_height);
+        let tx = QuantumPrivateTransaction::new(inputs, outputs, actual_fee, self.sync_height);
 
         // Verify structure
         tx.is_valid_structure()
