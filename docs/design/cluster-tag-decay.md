@@ -2,7 +2,12 @@
 
 ## Overview
 
-This document specifies the **AND-based decay with epoch cap** mechanism for cluster tag decay in Botho's progressive fee system. This design prevents wash trading attacks while ensuring wealthy clusters cannot passively reduce their tax burden.
+This document specifies the decay mechanisms for cluster tags in Botho's progressive fee system. Two approaches are detailed:
+
+1. **Age-Based Decay** (Recommended) - Stateless, privacy-preserving
+2. **AND-Based Decay with Epoch Cap** - Stateful, reference implementation
+
+Both designs prevent wash trading attacks while ensuring wealthy clusters cannot passively reduce their tax burden. **Age-based decay is recommended** because it achieves equivalent security with zero additional metadata.
 
 ## Problem Statement
 
@@ -27,7 +32,93 @@ This attack is cheap (only base fees) and fast (can execute in minutes).
 3. **No passive decay** - Holding coins without trading should not reduce cluster attribution
 4. **Enable legitimate privacy** - Real economic activity should still enable tag diffusion
 
-## Mathematical Model
+## Age-Based Decay (Recommended)
+
+### Key Insight
+
+Every UTXO already has a **creation block** - this is public information inherent to the blockchain structure. We can use this existing data to gate decay eligibility without adding any new metadata:
+
+> Decay only applies when spending a UTXO that is at least `min_age` blocks old.
+
+### Configuration
+
+```rust
+pub struct AgeDecayConfig {
+    pub min_age_blocks: u64,    // 720 blocks (~2 hours at 10s/block)
+    pub decay_rate: TagWeight,   // 50_000 = 5%
+}
+```
+
+### Eligibility Function
+
+```rust
+pub fn is_eligible(&self, utxo_creation_block: u64, current_block: u64) -> bool {
+    current_block.saturating_sub(utxo_creation_block) >= self.min_age_blocks
+}
+```
+
+### How Epoch Cap Emerges Naturally
+
+With `min_age = 720 blocks` (~2 hours):
+- A wash trader creates output O₁ at block B
+- O₁ becomes eligible at block B + 720
+- If spent immediately, output O₂ is created at B + 720
+- O₂ becomes eligible at block B + 1440
+- And so on...
+
+**Maximum decay rate**: `blocks_per_day / min_age = 8640 / 720 = 12 decays/day`
+
+This matches the AND-based epoch cap (N_epoch = 12) **without any explicit tracking**!
+
+### Properties
+
+| Property | Achieved? | How |
+|----------|-----------|-----|
+| Rapid wash blocked | ✅ | New outputs are too young |
+| Max decay bounded | ✅ | Natural rate limit from age requirement |
+| No passive decay | ✅ | Only decays on spend |
+| Privacy preserved | ✅ | No new metadata (creation block already public) |
+
+### Privacy Analysis
+
+| State Field | AND-Based | Age-Based |
+|------------|-----------|-----------|
+| `last_decay_block` | Required (leaks timing) | **Not needed** |
+| `decays_this_epoch` | Required (leaks activity) | **Not needed** |
+| `epoch_start_block` | Required | **Not needed** |
+| `utxo_creation_block` | Already public | Already public |
+
+**Result**: Zero additional metadata leaked.
+
+### Ring Signature Implications
+
+For ring signatures, we need to consider decay eligibility of decoy UTXOs:
+
+```rust
+pub struct RingDecayInfo {
+    pub member_eligibility: Vec<bool>,  // Which ring members are decay-eligible?
+}
+
+impl RingDecayInfo {
+    pub fn all_eligible(&self) -> bool;    // Simplest ZK case
+    pub fn none_eligible(&self) -> bool;   // Simplest ZK case
+    pub fn mixed_eligibility(&self) -> bool;  // Requires more complex proof
+}
+```
+
+Since UTXO creation blocks are public, ring eligibility is deterministic and verifiable.
+
+### Implementation
+
+See `cluster-tax/src/age_decay.rs` for the complete implementation.
+
+---
+
+## AND-Based Decay with Epoch Cap (Reference)
+
+The following sections document the AND-based approach for reference. While functional, **age-based decay is preferred** due to its privacy advantages.
+
+## Mathematical Model (AND-Based)
 
 ### Definitions
 
@@ -224,13 +315,16 @@ On reorg, UTXO metadata (including decay state) is reconstructed from the canoni
 
 ## Comparison with Alternatives
 
-| Property | Hop-Based | Block-Based | Rate-Limited | AND + Epoch |
-|----------|-----------|-------------|--------------|-------------|
-| Rapid wash trading | ❌ Vulnerable | ✅ Resistant | ✅ Resistant | ✅ Resistant |
-| Patient wash trading | ❌ Vulnerable | ✅ Resistant | ⚠️ Unbounded | ✅ Bounded |
-| Passive decay | ✅ None | ❌ Occurs | ✅ None | ✅ None |
-| Complexity | Simple | Simple | Medium | Medium |
-| State required | Tags only | Tags + block | Tags + block | Tags + block + epoch |
+| Property | Hop-Based | Block-Based | Rate-Limited | AND + Epoch | Age-Based |
+|----------|-----------|-------------|--------------|-------------|-----------|
+| Rapid wash trading | ❌ Vulnerable | ✅ Resistant | ✅ Resistant | ✅ Resistant | ✅ Resistant |
+| Patient wash trading | ❌ Vulnerable | ✅ Resistant | ⚠️ Unbounded | ✅ Bounded | ✅ Bounded |
+| Passive decay | ✅ None | ❌ Occurs | ✅ None | ✅ None | ✅ None |
+| Privacy preserved | ✅ Yes | ✅ Yes | ⚠️ Timing leak | ⚠️ Activity leak | ✅ Yes |
+| Complexity | Simple | Simple | Medium | Medium | Simple |
+| State required | Tags only | Tags + block | Tags + block | Tags + block + epoch | Tags only |
+
+**Recommendation**: Use **Age-Based Decay** for production. It achieves the same attack resistance as AND + Epoch with zero additional metadata.
 
 ## Verification
 
@@ -267,10 +361,13 @@ On reorg, UTXO metadata (including decay state) is reconstructed from the canoni
 
 ## References
 
-- `cluster-tax/src/block_decay.rs` - Implementation
+- `cluster-tax/src/age_decay.rs` - Age-based decay implementation (recommended)
+- `cluster-tax/src/block_decay.rs` - AND-based decay implementation (reference)
 - `experiments/ANALYSIS.md` - Experimental results
 - GitHub Issue #85 - Research tracking
+- GitHub Issue #91 - Privacy analysis and decision
 
 ## Changelog
 
-- 2024-12-31: Initial design specification
+- 2025-12-31: Added Age-Based Decay as recommended approach (resolves #91)
+- 2024-12-31: Initial design specification with AND-based decay

@@ -44,6 +44,7 @@ pub mod signing;
 pub mod simulation;
 pub mod validate;
 
+mod age_decay;
 mod block_decay;
 mod cluster;
 mod fee_curve;
@@ -74,6 +75,7 @@ pub use signing::{
     create_tag_signature, verify_tag_signature, TagSigningConfig, TagSigningError, TagSigningInput,
     TagSigningOutput, TagSigningResult,
 };
+pub use age_decay::{apply_age_decay, AgeDecayConfig, RingDecayInfo};
 pub use block_decay::{
     AndDecayConfig, AndTagVector, BlockAwareTagVector, BlockDecayConfig, RateLimitedDecayConfig,
     RateLimitedTagVector,
