@@ -60,8 +60,12 @@ fn compute_cluster_wealth_from_outputs(outputs: &[TxOutput]) -> u64 {
     cluster_wealths.values().copied().max().unwrap_or(0)
 }
 
-/// Maximum transactions in mempool
-const MAX_MEMPOOL_SIZE: usize = 1000;
+/// Maximum transactions in mempool.
+///
+/// Increased from 1000 to 10000 to support higher transaction throughput.
+/// Memory impact: ~50-650MB depending on transaction type (CLSAG ~5KB, LION ~65KB).
+/// See docs/memory-budget.md for detailed memory planning.
+const MAX_MEMPOOL_SIZE: usize = 10_000;
 
 /// Maximum age of a transaction in seconds before eviction
 const MAX_TX_AGE_SECS: u64 = 3600; // 1 hour
@@ -75,8 +79,15 @@ pub struct PendingTx {
 }
 
 impl PendingTx {
+    /// Create a new pending transaction.
+    ///
+    /// Uses `tx.estimate_size()` instead of serialization to avoid
+    /// unnecessary heap allocation when computing fee per byte.
+    /// This is critical for memory efficiency with 10K+ mempool capacity.
     pub fn new(tx: Transaction) -> Self {
-        let tx_size = bincode::serialize(&tx).map(|b| b.len()).unwrap_or(1);
+        // Use estimate_size() which computes size from structure without allocation,
+        // instead of bincode::serialize() which allocates the full transaction.
+        let tx_size = tx.estimate_size().max(1);
         let fee_per_byte = tx.fee / tx_size as u64;
         Self {
             tx,
