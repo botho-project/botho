@@ -3,11 +3,13 @@
 //! This module provides the integration layer between the cluster tax
 //! cryptographic primitives and the transaction signing flow.
 
-use crate::crypto::{
-    CommittedTagVector, CommittedTagVectorSecret, ExtendedSignatureBuilder,
-    ExtendedTxSignature, RingTagData,
+use crate::{
+    crypto::{
+        CommittedTagVector, CommittedTagVectorSecret, ExtendedSignatureBuilder,
+        ExtendedTxSignature, RingTagData,
+    },
+    TagWeight,
 };
-use crate::TagWeight;
 
 /// Input information for tag signing.
 ///
@@ -63,7 +65,11 @@ pub enum TagSigningError {
     NoOutputs,
 
     /// Real index out of bounds for ring.
-    InvalidRealIndex { input: usize, real_index: usize, ring_size: usize },
+    InvalidRealIndex {
+        input: usize,
+        real_index: usize,
+        ring_size: usize,
+    },
 }
 
 impl std::fmt::Display for TagSigningError {
@@ -72,8 +78,15 @@ impl std::fmt::Display for TagSigningError {
             Self::SignatureBuildFailed => write!(f, "Failed to build tag signature"),
             Self::NoInputs => write!(f, "No inputs provided"),
             Self::NoOutputs => write!(f, "No outputs provided"),
-            Self::InvalidRealIndex { input, real_index, ring_size } => {
-                write!(f, "Input {input}: real_index {real_index} >= ring_size {ring_size}")
+            Self::InvalidRealIndex {
+                input,
+                real_index,
+                ring_size,
+            } => {
+                write!(
+                    f,
+                    "Input {input}: real_index {real_index} >= ring_size {ring_size}"
+                )
             }
         }
     }
@@ -138,7 +151,8 @@ pub fn create_tag_signature<R: rand_core::RngCore + rand_core::CryptoRng>(
         builder.add_output(output.tag_secret.clone());
     }
 
-    let signature = builder.build(rng)
+    let signature = builder
+        .build(rng)
         .ok_or(TagSigningError::SignatureBuildFailed)?;
 
     Ok(signature.to_bytes())
@@ -150,7 +164,8 @@ pub fn create_tag_signature<R: rand_core::RngCore + rand_core::CryptoRng>(
 ///
 /// # Arguments
 /// * `signature_bytes` - Serialized extended tag signature
-/// * `input_rings` - Tag data for each input ring (only commitments, not secrets)
+/// * `input_rings` - Tag data for each input ring (only commitments, not
+///   secrets)
 /// * `output_tags` - Committed tag vectors for each output
 /// * `decay_rate` - Expected decay rate
 ///
@@ -169,11 +184,8 @@ pub fn verify_tag_signature(
         .map_err(|_| TagSigningError::SignatureBuildFailed)?;
 
     // Verify
-    let verifier = ExtendedSignatureVerifier::new(
-        input_rings.to_vec(),
-        output_tags.to_vec(),
-        decay_rate,
-    );
+    let verifier =
+        ExtendedSignatureVerifier::new(input_rings.to_vec(), output_tags.to_vec(), decay_rate);
 
     if verifier.verify(&signature) {
         Ok(())
@@ -234,8 +246,13 @@ mod tests {
             real_index: 0,
         };
 
-        verify_tag_signature(&sig_bytes, &[ring_data], &[output_commitment], config.decay_rate)
-            .expect("Should verify");
+        verify_tag_signature(
+            &sig_bytes,
+            &[ring_data],
+            &[output_commitment],
+            config.decay_rate,
+        )
+        .expect("Should verify");
     }
 
     #[test]
@@ -258,7 +275,10 @@ mod tests {
         };
 
         let result = create_tag_signature(&[input], &[output], &config, &mut OsRng);
-        assert!(matches!(result, Err(TagSigningError::InvalidRealIndex { .. })));
+        assert!(matches!(
+            result,
+            Err(TagSigningError::InvalidRealIndex { .. })
+        ));
     }
 
     #[test]

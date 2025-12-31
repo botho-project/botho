@@ -296,7 +296,8 @@ mod cli {
             blocks: u64,
         },
 
-        /// Compare all three decay mechanisms: hop-based, block-based, rate-limited hybrid
+        /// Compare all three decay mechanisms: hop-based, block-based,
+        /// rate-limited hybrid
         DecayCompareAll {
             /// Initial cluster wealth for simulation
             #[arg(long, default_value = "100000000")]
@@ -323,7 +324,8 @@ mod cli {
             blocks: u64,
         },
 
-        /// Compare all four decay mechanisms including AND-based (time AND hop required)
+        /// Compare all four decay mechanisms including AND-based (time AND hop
+        /// required)
         DecayCompareFour {
             /// Initial cluster wealth for simulation
             #[arg(long, default_value = "100000000")]
@@ -337,7 +339,8 @@ mod cli {
             #[arg(long, default_value = "60480")]
             half_life: u64,
 
-            /// Minimum blocks between eligible decays (for rate-limited and AND models)
+            /// Minimum blocks between eligible decays (for rate-limited and AND
+            /// models)
             #[arg(long, default_value = "360")]
             min_blocks: u64,
 
@@ -382,7 +385,14 @@ mod cli {
                 rounds,
                 verbose,
                 progress,
-            } => run_scenario_baseline(retail_users, merchants, whale_fraction, rounds, verbose, progress),
+            } => run_scenario_baseline(
+                retail_users,
+                merchants,
+                whale_fraction,
+                rounds,
+                verbose,
+                progress,
+            ),
             Command::ScenarioWhale {
                 whale_wealth,
                 participants,
@@ -455,7 +465,9 @@ mod cli {
                 min_blocks,
                 wash_txs,
                 blocks,
-            } => run_decay_comparison_all(wealth, hop_decay, half_life, min_blocks, wash_txs, blocks),
+            } => {
+                run_decay_comparison_all(wealth, hop_decay, half_life, min_blocks, wash_txs, blocks)
+            }
             Command::DecayCompareFour {
                 wealth,
                 hop_decay,
@@ -464,7 +476,15 @@ mod cli {
                 max_per_day,
                 wash_txs,
                 blocks,
-            } => run_decay_comparison_four(wealth, hop_decay, half_life, min_blocks, max_per_day, wash_txs, blocks),
+            } => run_decay_comparison_four(
+                wealth,
+                hop_decay,
+                half_life,
+                min_blocks,
+                max_per_day,
+                wash_txs,
+                blocks,
+            ),
         }
     }
 
@@ -1601,8 +1621,8 @@ mod cli {
         show_progress: bool,
     ) {
         use bth_cluster_tax::simulation::privacy::{
-            format_monte_carlo_report, run_monte_carlo, run_monte_carlo_parallel,
-            MonteCarloConfig, PoolConfig, RingSimConfig, RING_SIZE,
+            format_monte_carlo_report, run_monte_carlo, run_monte_carlo_parallel, MonteCarloConfig,
+            PoolConfig, RingSimConfig, RING_SIZE,
         };
 
         // Normalize fractions
@@ -1641,10 +1661,7 @@ mod cli {
         println!("  Standard tx fraction: {:.0}%", standard_fraction * 100.0);
         println!("  Decay rate: {decay_rate_pct}% per hop");
         println!("  Cluster-aware selection: {cluster_aware}");
-        println!(
-            "  Min similarity threshold: {:.0}%",
-            min_similarity * 100.0
-        );
+        println!("  Min similarity threshold: {:.0}%", min_similarity * 100.0);
         if use_parallel {
             println!("  Parallel execution: {} threads", num_threads);
         } else {
@@ -1747,7 +1764,10 @@ mod cli {
         // Optionally run simulations for each ring size
         if simulate {
             let num_threads = rayon::current_num_threads();
-            println!("\nRUNNING PRIVACY SIMULATIONS (parallel, {} threads)\n", num_threads);
+            println!(
+                "\nRUNNING PRIVACY SIMULATIONS (parallel, {} threads)\n",
+                num_threads
+            );
             println!(
                 "─────────────────────────────────────────────────────────────────────────────────"
             );
@@ -1887,12 +1907,23 @@ mod cli {
         println!("╔══════════════════════════════════════════════════════════════════╗");
         println!("║        DECAY MECHANISM COMPARISON: Block vs Hop                  ║");
         println!("╠══════════════════════════════════════════════════════════════════╣");
-        println!("║  Cluster Wealth: {:>12}                                    ║", wealth);
-        println!("║  Hop Decay Rate: {:>5.1}% per transfer                           ║", hop_decay_pct);
-        println!("║  Block Half-Life: {:>6} blocks (~{:.1} days @ 10s/block)        ║",
-            half_life_blocks, half_life_blocks as f64 / 8640.0);
-        println!("║  Wash Trading Simulation: {} txs in {} blocks                   ║",
-            wash_txs, blocks_elapsed);
+        println!(
+            "║  Cluster Wealth: {:>12}                                    ║",
+            wealth
+        );
+        println!(
+            "║  Hop Decay Rate: {:>5.1}% per transfer                           ║",
+            hop_decay_pct
+        );
+        println!(
+            "║  Block Half-Life: {:>6} blocks (~{:.1} days @ 10s/block)        ║",
+            half_life_blocks,
+            half_life_blocks as f64 / 8640.0
+        );
+        println!(
+            "║  Wash Trading Simulation: {} txs in {} blocks                   ║",
+            wash_txs, blocks_elapsed
+        );
         println!("╚══════════════════════════════════════════════════════════════════╝");
         println!();
 
@@ -1948,40 +1979,71 @@ mod cli {
         println!("─────────────────────────────────────────────────────────────────────");
         println!("{:<25} {:>15} {:>15}", "Metric", "Hop-Based", "Block-Based");
         println!("─────────────────────────────────────────────────────────────────────");
-        println!("{:<25} {:>14.1}% {:>14.1}%", "Cluster Tag Remaining",
-            hop_remaining * 100.0, block_remaining * 100.0);
-        println!("{:<25} {:>14.1}% {:>14.1}%", "Background (Anonymous)",
-            hop_background * 100.0, block_background * 100.0);
-        println!("{:<25} {:>13} bps {:>12} bps", "Initial Fee Rate",
-            initial_rate, initial_rate);
-        println!("{:<25} {:>13} bps {:>12} bps", "Final Fee Rate",
-            hop_final_rate, block_final_rate);
-        println!("{:<25} {:>14.1}% {:>14.1}%", "Fee Rate Reduction",
+        println!(
+            "{:<25} {:>14.1}% {:>14.1}%",
+            "Cluster Tag Remaining",
+            hop_remaining * 100.0,
+            block_remaining * 100.0
+        );
+        println!(
+            "{:<25} {:>14.1}% {:>14.1}%",
+            "Background (Anonymous)",
+            hop_background * 100.0,
+            block_background * 100.0
+        );
+        println!(
+            "{:<25} {:>13} bps {:>12} bps",
+            "Initial Fee Rate", initial_rate, initial_rate
+        );
+        println!(
+            "{:<25} {:>13} bps {:>12} bps",
+            "Final Fee Rate", hop_final_rate, block_final_rate
+        );
+        println!(
+            "{:<25} {:>14.1}% {:>14.1}%",
+            "Fee Rate Reduction",
             (1.0 - hop_final_rate as f64 / initial_rate as f64) * 100.0,
-            (1.0 - block_final_rate as f64 / initial_rate as f64) * 100.0);
+            (1.0 - block_final_rate as f64 / initial_rate as f64) * 100.0
+        );
         println!("─────────────────────────────────────────────────────────────────────");
 
         // Economic analysis
         let hop_savings_pct = (initial_rate - hop_final_rate) as f64 / initial_rate as f64 * 100.0;
-        let block_savings_pct = (initial_rate - block_final_rate) as f64 / initial_rate as f64 * 100.0;
+        let block_savings_pct =
+            (initial_rate - block_final_rate) as f64 / initial_rate as f64 * 100.0;
 
         println!();
         println!("ECONOMIC ANALYSIS");
         println!("─────────────────────────────────────────────────────────────────────");
 
         if hop_savings_pct > 1.0 {
-            println!("⚠  HOP-BASED: Wash trading reduces fees by {:.1}%", hop_savings_pct);
-            println!("   After {} self-transfers, whale pays {:.1}x less in fees",
-                wash_txs, initial_rate as f64 / hop_final_rate as f64);
+            println!(
+                "⚠  HOP-BASED: Wash trading reduces fees by {:.1}%",
+                hop_savings_pct
+            );
+            println!(
+                "   After {} self-transfers, whale pays {:.1}x less in fees",
+                wash_txs,
+                initial_rate as f64 / hop_final_rate as f64
+            );
         } else {
-            println!("✓  HOP-BASED: Wash trading ineffective ({:.1}% savings)", hop_savings_pct);
+            println!(
+                "✓  HOP-BASED: Wash trading ineffective ({:.1}% savings)",
+                hop_savings_pct
+            );
         }
 
         if block_savings_pct > 1.0 {
-            println!("⚠  BLOCK-BASED: Time decay reduces fees by {:.1}%", block_savings_pct);
+            println!(
+                "⚠  BLOCK-BASED: Time decay reduces fees by {:.1}%",
+                block_savings_pct
+            );
         } else {
             println!("✓  BLOCK-BASED: Wash trading completely ineffective");
-            println!("   {} self-transfers provide {:.2}% fee reduction", wash_txs, block_savings_pct);
+            println!(
+                "   {} self-transfers provide {:.2}% fee reduction",
+                wash_txs, block_savings_pct
+            );
         }
 
         println!();
@@ -1989,9 +2051,14 @@ mod cli {
         println!("─────────────────────────────────────────────────────────────────────");
 
         if block_savings_pct < hop_savings_pct / 10.0 {
-            println!("✓  Block-based decay is {:.0}x more resistant to wash trading",
-                hop_savings_pct / block_savings_pct.max(0.01));
-            println!("   Switch to block-based decay with half-life of {} blocks", half_life_blocks);
+            println!(
+                "✓  Block-based decay is {:.0}x more resistant to wash trading",
+                hop_savings_pct / block_savings_pct.max(0.01)
+            );
+            println!(
+                "   Switch to block-based decay with half-life of {} blocks",
+                half_life_blocks
+            );
         } else {
             println!("   Both mechanisms show similar wash trading resistance");
             println!("   Consider increasing block half-life for better protection");
@@ -2001,8 +2068,10 @@ mod cli {
         println!();
         println!("SENSITIVITY ANALYSIS: Wash Trading at Different Scales");
         println!("─────────────────────────────────────────────────────────────────────");
-        println!("{:>6} {:>12} {:>12} {:>12} {:>12}",
-            "TXs", "Hop Remain", "Hop Fee", "Block Remain", "Block Fee");
+        println!(
+            "{:>6} {:>12} {:>12} {:>12} {:>12}",
+            "TXs", "Hop Remain", "Hop Fee", "Block Remain", "Block Fee"
+        );
         println!("─────────────────────────────────────────────────────────────────────");
 
         for &n_txs in &[10, 50, 100, 200, 500, 1000] {
@@ -2020,13 +2089,21 @@ mod cli {
             let b_remain = factor as f64 / TAG_WEIGHT_SCALE as f64;
             let b_rate = fee_curve.rate_bps((wealth as f64 * b_remain) as u64);
 
-            println!("{:>6} {:>11.1}% {:>10} bps {:>11.1}% {:>10} bps",
-                n_txs, h_remain * 100.0, h_rate, b_remain * 100.0, b_rate);
+            println!(
+                "{:>6} {:>11.1}% {:>10} bps {:>11.1}% {:>10} bps",
+                n_txs,
+                h_remain * 100.0,
+                h_rate,
+                b_remain * 100.0,
+                b_rate
+            );
         }
 
         println!("─────────────────────────────────────────────────────────────────────");
         println!();
-        println!("Note: Block-based decay resists wash trading because time passes at a fixed rate.");
+        println!(
+            "Note: Block-based decay resists wash trading because time passes at a fixed rate."
+        );
         println!("      Making more transactions does NOT accelerate tag decay.");
     }
 
@@ -2040,19 +2117,43 @@ mod cli {
     ) {
         use bth_cluster_tax::TagVector;
 
-        println!("╔══════════════════════════════════════════════════════════════════════════════╗");
-        println!("║            THREE-WAY DECAY MECHANISM COMPARISON                               ║");
-        println!("║         Hop-Based vs Block-Based vs Rate-Limited Hybrid                       ║");
-        println!("╠══════════════════════════════════════════════════════════════════════════════╣");
-        println!("║  Cluster Wealth:    {:>12}                                               ║", wealth);
-        println!("║  Hop Decay Rate:    {:>5.1}% per transfer                                      ║", hop_decay_pct);
-        println!("║  Block Half-Life:   {:>6} blocks (~{:.1} days @ 10s/block)                   ║",
-            half_life_blocks, half_life_blocks as f64 / 8640.0);
-        println!("║  Rate Limit:        {:>6} blocks (~{:.1} hours between eligible decays)      ║",
-            min_blocks_between, min_blocks_between as f64 / 360.0);
-        println!("║  Wash Trading Sim:  {} txs in {} blocks                                      ║",
-            wash_txs, blocks_elapsed);
-        println!("╚══════════════════════════════════════════════════════════════════════════════╝");
+        println!(
+            "╔══════════════════════════════════════════════════════════════════════════════╗"
+        );
+        println!(
+            "║            THREE-WAY DECAY MECHANISM COMPARISON                               ║"
+        );
+        println!(
+            "║         Hop-Based vs Block-Based vs Rate-Limited Hybrid                       ║"
+        );
+        println!(
+            "╠══════════════════════════════════════════════════════════════════════════════╣"
+        );
+        println!(
+            "║  Cluster Wealth:    {:>12}                                               ║",
+            wealth
+        );
+        println!(
+            "║  Hop Decay Rate:    {:>5.1}% per transfer                                      ║",
+            hop_decay_pct
+        );
+        println!(
+            "║  Block Half-Life:   {:>6} blocks (~{:.1} days @ 10s/block)                   ║",
+            half_life_blocks,
+            half_life_blocks as f64 / 8640.0
+        );
+        println!(
+            "║  Rate Limit:        {:>6} blocks (~{:.1} hours between eligible decays)      ║",
+            min_blocks_between,
+            min_blocks_between as f64 / 360.0
+        );
+        println!(
+            "║  Wash Trading Sim:  {} txs in {} blocks                                      ║",
+            wash_txs, blocks_elapsed
+        );
+        println!(
+            "╚══════════════════════════════════════════════════════════════════════════════╝"
+        );
         println!();
 
         let cluster = ClusterId::new(1);
@@ -2113,38 +2214,71 @@ mod cli {
         // Results Comparison
         // ============================================================
         println!("WASH TRADING RESISTANCE COMPARISON");
-        println!("────────────────────────────────────────────────────────────────────────────────");
-        println!("{:<30} {:>15} {:>15} {:>15}", "Metric", "Hop-Based", "Block-Based", "Rate-Limited");
-        println!("────────────────────────────────────────────────────────────────────────────────");
-        println!("{:<30} {:>14.2}% {:>14.2}% {:>14.2}%", "Cluster Tag Remaining",
-            hop_remaining * 100.0, block_remaining * 100.0, rate_remaining * 100.0);
-        println!("{:<30} {:>13} bps {:>12} bps {:>12} bps", "Initial Fee Rate",
-            initial_rate, initial_rate, initial_rate);
-        println!("{:<30} {:>13} bps {:>12} bps {:>12} bps", "Final Fee Rate",
-            hop_final_rate, block_final_rate, rate_final_rate);
+        println!(
+            "────────────────────────────────────────────────────────────────────────────────"
+        );
+        println!(
+            "{:<30} {:>15} {:>15} {:>15}",
+            "Metric", "Hop-Based", "Block-Based", "Rate-Limited"
+        );
+        println!(
+            "────────────────────────────────────────────────────────────────────────────────"
+        );
+        println!(
+            "{:<30} {:>14.2}% {:>14.2}% {:>14.2}%",
+            "Cluster Tag Remaining",
+            hop_remaining * 100.0,
+            block_remaining * 100.0,
+            rate_remaining * 100.0
+        );
+        println!(
+            "{:<30} {:>13} bps {:>12} bps {:>12} bps",
+            "Initial Fee Rate", initial_rate, initial_rate, initial_rate
+        );
+        println!(
+            "{:<30} {:>13} bps {:>12} bps {:>12} bps",
+            "Final Fee Rate", hop_final_rate, block_final_rate, rate_final_rate
+        );
 
         let hop_reduction = (1.0 - hop_final_rate as f64 / initial_rate as f64) * 100.0;
         let block_reduction = (1.0 - block_final_rate as f64 / initial_rate as f64) * 100.0;
         let rate_reduction = (1.0 - rate_final_rate as f64 / initial_rate as f64) * 100.0;
 
-        println!("{:<30} {:>14.1}% {:>14.1}% {:>14.1}%", "Fee Rate Reduction",
-            hop_reduction, block_reduction, rate_reduction);
-        println!("{:<30} {:>15} {:>15} {:>15}", "Eligible Decay Events",
-            wash_txs, "N/A (time)", eligible_decays);
-        println!("────────────────────────────────────────────────────────────────────────────────");
+        println!(
+            "{:<30} {:>14.1}% {:>14.1}% {:>14.1}%",
+            "Fee Rate Reduction", hop_reduction, block_reduction, rate_reduction
+        );
+        println!(
+            "{:<30} {:>15} {:>15} {:>15}",
+            "Eligible Decay Events", wash_txs, "N/A (time)", eligible_decays
+        );
+        println!(
+            "────────────────────────────────────────────────────────────────────────────────"
+        );
 
         // Interpretation
         println!();
         println!("ANALYSIS");
-        println!("────────────────────────────────────────────────────────────────────────────────");
+        println!(
+            "────────────────────────────────────────────────────────────────────────────────"
+        );
 
         // Hop-based
         if hop_reduction > 10.0 {
-            println!("⚠  HOP-BASED: Vulnerable to wash trading ({:.1}% fee reduction)", hop_reduction);
-            println!("   {} self-transfers reduce fees by {:.1}x", wash_txs,
-                initial_rate as f64 / hop_final_rate.max(1) as f64);
+            println!(
+                "⚠  HOP-BASED: Vulnerable to wash trading ({:.1}% fee reduction)",
+                hop_reduction
+            );
+            println!(
+                "   {} self-transfers reduce fees by {:.1}x",
+                wash_txs,
+                initial_rate as f64 / hop_final_rate.max(1) as f64
+            );
         } else {
-            println!("✓  HOP-BASED: Wash trading ineffective ({:.1}% reduction)", hop_reduction);
+            println!(
+                "✓  HOP-BASED: Wash trading ineffective ({:.1}% reduction)",
+                hop_reduction
+            );
         }
 
         // Block-based
@@ -2152,25 +2286,38 @@ mod cli {
             println!("✓  BLOCK-BASED: Completely wash-trading resistant");
             println!("   Only time affects decay, not transaction count");
         } else {
-            println!("○  BLOCK-BASED: {:.1}% natural decay over {} blocks", block_reduction, blocks_elapsed);
+            println!(
+                "○  BLOCK-BASED: {:.1}% natural decay over {} blocks",
+                block_reduction, blocks_elapsed
+            );
         }
 
         // Rate-limited
         let max_possible_decays = blocks_elapsed / min_blocks_between.max(1);
-        println!("○  RATE-LIMITED: {} of {} possible decay events triggered",
-            eligible_decays, max_possible_decays);
+        println!(
+            "○  RATE-LIMITED: {} of {} possible decay events triggered",
+            eligible_decays, max_possible_decays
+        );
         if rate_reduction < hop_reduction / 2.0 {
-            println!("✓  Rate limiting reduced attack effectiveness by {:.1}x",
-                hop_reduction / rate_reduction.max(0.01));
+            println!(
+                "✓  Rate limiting reduced attack effectiveness by {:.1}x",
+                hop_reduction / rate_reduction.max(0.01)
+            );
         }
 
         // Sweep: Different wash trading intensities
         println!();
         println!("SENSITIVITY: Wash Trading at Different Intensities");
-        println!("────────────────────────────────────────────────────────────────────────────────");
-        println!("{:>8} {:>12} {:>12} {:>12} {:>12}",
-            "TXs", "Hop Remain", "Block Remain", "Rate Remain", "Rate Decays");
-        println!("────────────────────────────────────────────────────────────────────────────────");
+        println!(
+            "────────────────────────────────────────────────────────────────────────────────"
+        );
+        println!(
+            "{:>8} {:>12} {:>12} {:>12} {:>12}",
+            "TXs", "Hop Remain", "Block Remain", "Rate Remain", "Rate Decays"
+        );
+        println!(
+            "────────────────────────────────────────────────────────────────────────────────"
+        );
 
         for &n_txs in &[10, 50, 100, 500, 1000, 5000] {
             // Hop decay
@@ -2194,14 +2341,22 @@ mod cli {
             }
             let r_remain = rate_t.get(cluster) as f64 / TAG_WEIGHT_SCALE as f64;
 
-            println!("{:>8} {:>11.2}% {:>11.2}% {:>11.2}% {:>12}",
-                n_txs, h_remain * 100.0, b_remain * 100.0, r_remain * 100.0, decays);
+            println!(
+                "{:>8} {:>11.2}% {:>11.2}% {:>11.2}% {:>12}",
+                n_txs,
+                h_remain * 100.0,
+                b_remain * 100.0,
+                r_remain * 100.0,
+                decays
+            );
         }
 
         // Recommendation
         println!();
         println!("RECOMMENDATION");
-        println!("────────────────────────────────────────────────────────────────────────────────");
+        println!(
+            "────────────────────────────────────────────────────────────────────────────────"
+        );
 
         if block_reduction < rate_reduction && block_reduction < hop_reduction {
             println!("✓  BLOCK-BASED decay is most resistant to wash trading");
@@ -2209,10 +2364,15 @@ mod cli {
         } else if rate_reduction < hop_reduction {
             println!("✓  RATE-LIMITED HYBRID is a good compromise:");
             println!("   • Keeps intuitive 'decay per hop' semantics");
-            println!("   • Limits max decay rate to 1 per {} blocks (~{:.1} hours)",
-                min_blocks_between, min_blocks_between as f64 / 360.0);
-            println!("   • {:.0}x more wash-trading resistant than pure hop-based",
-                hop_reduction / rate_reduction.max(0.01));
+            println!(
+                "   • Limits max decay rate to 1 per {} blocks (~{:.1} hours)",
+                min_blocks_between,
+                min_blocks_between as f64 / 360.0
+            );
+            println!(
+                "   • {:.0}x more wash-trading resistant than pure hop-based",
+                hop_reduction / rate_reduction.max(0.01)
+            );
         } else {
             println!("⚠  All mechanisms show similar behavior in this scenario");
             println!("   Consider adjusting parameters for better differentiation");
@@ -2221,7 +2381,9 @@ mod cli {
         println!();
         println!("Trade-offs:");
         println!("  • Block-based: Simplest, most resistant, but tags decay even without trading");
-        println!("  • Rate-limited: Keeps hop semantics, resistant to wash trading, slightly complex");
+        println!(
+            "  • Rate-limited: Keeps hop semantics, resistant to wash trading, slightly complex"
+        );
         println!("  • Hop-based: Most intuitive, but vulnerable to wash trading attacks");
     }
 
@@ -2261,7 +2423,11 @@ mod cli {
         // SCENARIO 1: RAPID WASH TRADING (all txs in short time)
         // ============================================================
         println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        println!("SCENARIO 1: RAPID WASH TRADING ({} txs in {} blocks)", wash_txs, blocks_elapsed.min(100));
+        println!(
+            "SCENARIO 1: RAPID WASH TRADING ({} txs in {} blocks)",
+            wash_txs,
+            blocks_elapsed.min(100)
+        );
         println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
         let rapid_blocks = blocks_elapsed.min(100);
@@ -2316,20 +2482,35 @@ mod cli {
         }
         let and_remain = and_tags.get(cluster) as f64 / TAG_WEIGHT_SCALE as f64;
 
-        println!("{:<20} {:>12} {:>12} {:>12} {:>12}", "Metric", "Hop-Based", "Block-Based", "Rate-Ltd", "AND-Based");
+        println!(
+            "{:<20} {:>12} {:>12} {:>12} {:>12}",
+            "Metric", "Hop-Based", "Block-Based", "Rate-Ltd", "AND-Based"
+        );
         println!("────────────────────────────────────────────────────────────────────────────────────────");
-        println!("{:<20} {:>11.2}% {:>11.2}% {:>11.2}% {:>11.2}%", "Tag Remaining",
-            hop_remain * 100.0, block_remain * 100.0, rate_remain * 100.0, and_remain * 100.0);
-        println!("{:<20} {:>12} {:>12} {:>12} {:>12}", "Decay Events",
-            wash_txs, "N/A", rate_decays, and_decays);
+        println!(
+            "{:<20} {:>11.2}% {:>11.2}% {:>11.2}% {:>11.2}%",
+            "Tag Remaining",
+            hop_remain * 100.0,
+            block_remain * 100.0,
+            rate_remain * 100.0,
+            and_remain * 100.0
+        );
+        println!(
+            "{:<20} {:>12} {:>12} {:>12} {:>12}",
+            "Decay Events", wash_txs, "N/A", rate_decays, and_decays
+        );
 
         // ============================================================
         // SCENARIO 2: PATIENT WASH TRADING (spaced out over time)
         // ============================================================
         println!();
         println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        println!("SCENARIO 2: PATIENT WASH TRADING ({} txs over {} blocks = {:.1} days)",
-            wash_txs, blocks_elapsed, blocks_elapsed as f64 / 8640.0);
+        println!(
+            "SCENARIO 2: PATIENT WASH TRADING ({} txs over {} blocks = {:.1} days)",
+            wash_txs,
+            blocks_elapsed,
+            blocks_elapsed as f64 / 8640.0
+        );
         println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
         // Model 1: Hop-based (same result)
@@ -2366,20 +2547,34 @@ mod cli {
         }
         let and_remain2 = and_tags2.get(cluster) as f64 / TAG_WEIGHT_SCALE as f64;
 
-        println!("{:<20} {:>12} {:>12} {:>12} {:>12}", "Metric", "Hop-Based", "Block-Based", "Rate-Ltd", "AND-Based");
+        println!(
+            "{:<20} {:>12} {:>12} {:>12} {:>12}",
+            "Metric", "Hop-Based", "Block-Based", "Rate-Ltd", "AND-Based"
+        );
         println!("────────────────────────────────────────────────────────────────────────────────────────");
-        println!("{:<20} {:>11.2}% {:>11.2}% {:>11.2}% {:>11.2}%", "Tag Remaining",
-            hop_remain2 * 100.0, block_remain2 * 100.0, rate_remain2 * 100.0, and_remain2 * 100.0);
-        println!("{:<20} {:>12} {:>12} {:>12} {:>12}", "Decay Events",
-            wash_txs, "N/A", rate_decays2, and_decays2);
+        println!(
+            "{:<20} {:>11.2}% {:>11.2}% {:>11.2}% {:>11.2}%",
+            "Tag Remaining",
+            hop_remain2 * 100.0,
+            block_remain2 * 100.0,
+            rate_remain2 * 100.0,
+            and_remain2 * 100.0
+        );
+        println!(
+            "{:<20} {:>12} {:>12} {:>12} {:>12}",
+            "Decay Events", wash_txs, "N/A", rate_decays2, and_decays2
+        );
 
         // ============================================================
         // SCENARIO 3: HOLDING WITHOUT TRADING (key differentiator!)
         // ============================================================
         println!();
         println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        println!("SCENARIO 3: HOLDING WITHOUT TRADING (0 txs over {} blocks = {:.1} days)",
-            blocks_elapsed, blocks_elapsed as f64 / 8640.0);
+        println!(
+            "SCENARIO 3: HOLDING WITHOUT TRADING (0 txs over {} blocks = {:.1} days)",
+            blocks_elapsed,
+            blocks_elapsed as f64 / 8640.0
+        );
         println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
         // Model 1: Hop-based - NO transactions = NO decay
@@ -2396,12 +2591,23 @@ mod cli {
         // Model 4: AND-based - NO transactions = NO decay
         let and_remain3 = 100.0; // No decay without hops
 
-        println!("{:<20} {:>12} {:>12} {:>12} {:>12}", "Metric", "Hop-Based", "Block-Based", "Rate-Ltd", "AND-Based");
+        println!(
+            "{:<20} {:>12} {:>12} {:>12} {:>12}",
+            "Metric", "Hop-Based", "Block-Based", "Rate-Ltd", "AND-Based"
+        );
         println!("────────────────────────────────────────────────────────────────────────────────────────");
-        println!("{:<20} {:>11.2}% {:>11.2}% {:>11.2}% {:>11.2}%", "Tag Remaining",
-            hop_remain3, block_remain3 * 100.0, rate_remain3, and_remain3);
-        println!("{:<20} {:>12} {:>12} {:>12} {:>12}", "Passive Decay?",
-            "NO", "YES", "NO", "NO");
+        println!(
+            "{:<20} {:>11.2}% {:>11.2}% {:>11.2}% {:>11.2}%",
+            "Tag Remaining",
+            hop_remain3,
+            block_remain3 * 100.0,
+            rate_remain3,
+            and_remain3
+        );
+        println!(
+            "{:<20} {:>12} {:>12} {:>12} {:>12}",
+            "Passive Decay?", "NO", "YES", "NO", "NO"
+        );
 
         // ============================================================
         // ANALYSIS & RECOMMENDATION
@@ -2413,37 +2619,64 @@ mod cli {
         println!();
 
         println!("Model Comparison:");
-        println!("  • HOP-BASED:   Rapid={:.1}%, Patient={:.1}%, Holding=100%",
-            hop_remain * 100.0, hop_remain2 * 100.0);
-        println!("  • BLOCK-BASED: Rapid={:.1}%, Patient={:.1}%, Holding={:.1}%",
-            block_remain * 100.0, block_remain2 * 100.0, block_remain3 * 100.0);
-        println!("  • RATE-LTD:    Rapid={:.1}%, Patient={:.1}%, Holding=100%",
-            rate_remain * 100.0, rate_remain2 * 100.0);
-        println!("  • AND-BASED:   Rapid={:.1}%, Patient={:.1}%, Holding=100%",
-            and_remain * 100.0, and_remain2 * 100.0);
+        println!(
+            "  • HOP-BASED:   Rapid={:.1}%, Patient={:.1}%, Holding=100%",
+            hop_remain * 100.0,
+            hop_remain2 * 100.0
+        );
+        println!(
+            "  • BLOCK-BASED: Rapid={:.1}%, Patient={:.1}%, Holding={:.1}%",
+            block_remain * 100.0,
+            block_remain2 * 100.0,
+            block_remain3 * 100.0
+        );
+        println!(
+            "  • RATE-LTD:    Rapid={:.1}%, Patient={:.1}%, Holding=100%",
+            rate_remain * 100.0,
+            rate_remain2 * 100.0
+        );
+        println!(
+            "  • AND-BASED:   Rapid={:.1}%, Patient={:.1}%, Holding=100%",
+            and_remain * 100.0,
+            and_remain2 * 100.0
+        );
 
         println!();
         println!("Key Insights:");
         if hop_remain < 10.0 {
-            println!("  ❌ HOP-BASED: Vulnerable to rapid wash trading ({:.1}% remaining)", hop_remain);
+            println!(
+                "  ❌ HOP-BASED: Vulnerable to rapid wash trading ({:.1}% remaining)",
+                hop_remain
+            );
         }
         if block_remain3 < 50.0 {
             println!("  ⚠️  BLOCK-BASED: Passive decay gives 'free' tax reduction over time");
         }
         if rate_remain < 50.0 && rate_remain2 < 10.0 {
-            println!("  ⚠️  RATE-LIMITED: Patient attackers can still decay to {:.1}%", rate_remain2);
+            println!(
+                "  ⚠️  RATE-LIMITED: Patient attackers can still decay to {:.1}%",
+                rate_remain2
+            );
         }
 
         // Check AND-based with epoch cap
         let max_decays_possible = max_per_day as u64 * (blocks_elapsed / 8640 + 1);
-        let decay_with_cap = (1.0 - hop_decay_pct / 100.0).powi(max_decays_possible.min(and_decays2 as u64) as i32);
+        let decay_with_cap =
+            (1.0 - hop_decay_pct / 100.0).powi(max_decays_possible.min(and_decays2 as u64) as i32);
         println!();
         println!("  ✓ AND-BASED advantages:");
         println!("    • Requires BOTH time AND transfers for decay");
         println!("    • Holding without trading: NO decay (wealthy must wash trade)");
-        println!("    • Epoch cap limits max decay to {} per day", max_per_day);
-        println!("    • Over {:.1} days: max {} decays = {:.1}% remaining",
-            blocks_elapsed as f64 / 8640.0, max_decays_possible.min(and_decays2 as u64), decay_with_cap * 100.0);
+        println!(
+            "    • Epoch cap limits max decay to {} per day",
+            max_per_day
+        );
+        println!(
+            "    • Over {:.1} days: max {} decays = {:.1}% remaining",
+            blocks_elapsed as f64 / 8640.0,
+            max_decays_possible.min(and_decays2 as u64),
+            decay_with_cap * 100.0
+        );
 
         println!();
         println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
@@ -2461,10 +2694,12 @@ mod cli {
         println!("  • min_blocks_between: 720 (~2 hours)");
         println!("  • max_decays_per_epoch: 12 per day");
         println!();
-        println!("This gives: Max decay of {:.1}% per day, {:.1}% per week, {:.1}% per month",
+        println!(
+            "This gives: Max decay of {:.1}% per day, {:.1}% per week, {:.1}% per month",
             (1.0 - 0.05_f64.powi(12)) * 100.0,
             (1.0 - 0.95_f64.powi(84)) * 100.0,
-            (1.0 - 0.95_f64.powi(360)) * 100.0);
+            (1.0 - 0.95_f64.powi(360)) * 100.0
+        );
     }
 }
 

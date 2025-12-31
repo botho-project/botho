@@ -22,11 +22,11 @@
 //! proofs prove properties about the aggregate without revealing which
 //! inputs contributed.
 
-use crate::{ClusterId, TagWeight};
 use super::committed_tags::{
     CommittedTagMass, CommittedTagVector, CommittedTagVectorSecret, SchnorrProof,
     TagConservationProof, TagConservationProver, TagConservationVerifier,
 };
+use crate::{ClusterId, TagWeight};
 use curve25519_dalek::scalar::Scalar;
 
 // TAG_WEIGHT_SCALE is used in tests
@@ -182,7 +182,8 @@ impl ExtendedSignatureBuilder {
         rng: &mut R,
     ) -> Option<(PseudoTagOutput, CommittedTagVectorSecret)> {
         // Create new blindings for the pseudo-output
-        // (can't reuse real input's blindings as that would leak which ring member is real)
+        // (can't reuse real input's blindings as that would leak which ring member is
+        // real)
         let mut pseudo_entries = Vec::new();
         let mut pseudo_secret_entries = Vec::new();
         let mut inheritance_proofs = Vec::new();
@@ -192,11 +193,8 @@ impl ExtendedSignatureBuilder {
             let pseudo_blinding = Scalar::random(rng);
 
             // Create pseudo commitment
-            let pseudo_commitment = CommittedTagMass::new(
-                entry.cluster_id,
-                entry.mass,
-                pseudo_blinding,
-            );
+            let pseudo_commitment =
+                CommittedTagMass::new(entry.cluster_id, entry.mass, pseudo_blinding);
 
             pseudo_entries.push(pseudo_commitment);
 
@@ -306,11 +304,8 @@ impl ExtendedSignatureVerifier {
             .map(|p| p.tags.clone())
             .collect();
 
-        let conservation_verifier = TagConservationVerifier::new(
-            pseudo_tags,
-            self.output_tags.clone(),
-            self.decay_rate,
-        );
+        let conservation_verifier =
+            TagConservationVerifier::new(pseudo_tags, self.output_tags.clone(), self.decay_rate);
 
         conservation_verifier.verify(&signature.conservation_proof)
     }
@@ -441,11 +436,8 @@ mod tests {
             member_tags: ring_tags,
             real_index,
         };
-        let verifier = ExtendedSignatureVerifier::new(
-            vec![ring_data],
-            vec![output_commitment],
-            decay_rate,
-        );
+        let verifier =
+            ExtendedSignatureVerifier::new(vec![ring_data], vec![output_commitment], decay_rate);
 
         assert!(verifier.verify(&signature), "Signature should verify");
     }

@@ -22,15 +22,14 @@ mod tagged_output;
 mod validation;
 
 pub use committed_tags::{
-    cluster_generator, blinding_generator, total_mass_generator,
-    CommittedTagMass, CommittedTagVector, CommittedTagVectorSecret,
-    TagMassSecret, TagConservationProof, ClusterConservationProof, SchnorrProof,
-    TagConservationProver, TagConservationVerifier,
+    blinding_generator, cluster_generator, total_mass_generator, ClusterConservationProof,
+    CommittedTagMass, CommittedTagVector, CommittedTagVectorSecret, SchnorrProof,
+    TagConservationProof, TagConservationProver, TagConservationVerifier, TagMassSecret,
 };
 pub use extended_signature::{
-    PseudoTagOutput, TagInheritanceProof, ExtendedTxSignature,
-    ExtendedSignatureBuilder, ExtendedSignatureVerifier, RingTagData,
+    ExtendedSignatureBuilder, ExtendedSignatureVerifier, ExtendedTxSignature, PseudoTagOutput,
+    RingTagData, TagInheritanceProof,
 };
 pub use serialization::DeserializeError;
-pub use tagged_output::{TaggedTxOut, CompactTagVector};
+pub use tagged_output::{CompactTagVector, TaggedTxOut};
 pub use validation::{validate_tag_inheritance, TagValidationError};

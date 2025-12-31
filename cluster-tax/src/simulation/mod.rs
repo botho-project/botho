@@ -7,7 +7,8 @@
 //! ## Privacy Simulation
 //!
 //! The `privacy` submodule models the effective bits of privacy that users can
-//! expect from ring signatures under various adversary models and network conditions.
+//! expect from ring signatures under various adversary models and network
+//! conditions.
 
 mod agent;
 pub mod agents;

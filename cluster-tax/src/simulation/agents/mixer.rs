@@ -1,9 +1,13 @@
 //! Mixer service agent: Accepts deposits, returns coins from pooled reserves.
 
-use crate::simulation::agent::{Action, Agent, AgentId};
-use crate::simulation::state::SimulationState;
-use crate::tag::TagVector;
-use crate::Account;
+use crate::{
+    simulation::{
+        agent::{Action, Agent, AgentId},
+        state::SimulationState,
+    },
+    tag::TagVector,
+    Account,
+};
 use std::collections::VecDeque;
 
 /// Pending withdrawal request.
@@ -184,8 +188,7 @@ mod tests {
 
     #[test]
     fn test_mixer_withdrawal_delay() {
-        let mut mixer =
-            MixerServiceAgent::new(AgentId(1)).with_withdrawal_delay(5);
+        let mut mixer = MixerServiceAgent::new(AgentId(1)).with_withdrawal_delay(5);
 
         mixer.account.balance = 10000;
         mixer.queue_withdrawal(AgentId(10), 500, 0);

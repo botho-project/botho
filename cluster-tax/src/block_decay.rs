@@ -100,8 +100,8 @@ impl BlockDecayConfig {
 
     /// Compute the decay factor for a given number of elapsed blocks.
     ///
-    /// Returns a value in [0, TAG_WEIGHT_SCALE] representing the fraction remaining.
-    /// e.g., 500_000 means 50% remains.
+    /// Returns a value in [0, TAG_WEIGHT_SCALE] representing the fraction
+    /// remaining. e.g., 500_000 means 50% remains.
     pub fn decay_factor(&self, blocks_elapsed: u64) -> TagWeight {
         if self.half_life_blocks == 0 || blocks_elapsed == 0 {
             return TAG_WEIGHT_SCALE;
@@ -130,9 +130,8 @@ impl BlockDecayConfig {
         // for the fractional part of the half-life
         if remaining_blocks > 0 && self.half_life_blocks > 0 {
             // fraction of half-life elapsed (in parts per SCALE)
-            let frac =
-                (remaining_blocks as u128 * TAG_WEIGHT_SCALE as u128 / self.half_life_blocks as u128)
-                    as u64;
+            let frac = (remaining_blocks as u128 * TAG_WEIGHT_SCALE as u128
+                / self.half_life_blocks as u128) as u64;
 
             // Decay by (1 - 0.5 * frac/SCALE) = 1 - frac/2/SCALE
             // This linearly interpolates from 1.0 to 0.5 over one half-life
@@ -245,7 +244,8 @@ impl BlockAwareTagVector {
 
     /// Apply decay up to the current block.
     ///
-    /// This mutates the tag vector to reflect decay, updating `last_decay_block`.
+    /// This mutates the tag vector to reflect decay, updating
+    /// `last_decay_block`.
     pub fn apply_block_decay(&mut self, current_block: u64, config: &BlockDecayConfig) {
         let blocks_elapsed = current_block.saturating_sub(self.last_decay_block);
 
@@ -275,8 +275,7 @@ impl BlockAwareTagVector {
         }
 
         for weight in self.tags.values_mut() {
-            let decay =
-                (*weight as u64 * decay_rate as u64 / TAG_WEIGHT_SCALE as u64) as TagWeight;
+            let decay = (*weight as u64 * decay_rate as u64 / TAG_WEIGHT_SCALE as u64) as TagWeight;
             *weight = weight.saturating_sub(decay);
         }
 
@@ -373,8 +372,7 @@ impl BlockAwareTagVector {
 
     /// Remove tags below threshold and enforce MAX_TAGS limit.
     fn prune(&mut self) {
-        self.tags
-            .retain(|_, &mut w| w >= Self::PRUNE_THRESHOLD);
+        self.tags.retain(|_, &mut w| w >= Self::PRUNE_THRESHOLD);
 
         if self.tags.len() > Self::MAX_TAGS {
             let mut entries: Vec<_> = self.tags.drain().collect();
@@ -424,7 +422,7 @@ pub struct RateLimitedDecayConfig {
 impl Default for RateLimitedDecayConfig {
     fn default() -> Self {
         Self {
-            decay_rate_per_hop: 50_000, // 5% per eligible hop
+            decay_rate_per_hop: 50_000,     // 5% per eligible hop
             min_blocks_between_decays: 360, // ~1 hour at 10s blocks
             passive_half_life_blocks: None, // No passive decay by default
         }
@@ -436,8 +434,8 @@ impl RateLimitedDecayConfig {
     /// Requires 1 hour between decays, with 5% decay per eligible hop.
     pub fn anti_wash_trading() -> Self {
         Self {
-            decay_rate_per_hop: 50_000, // 5%
-            min_blocks_between_decays: 360, // 1 hour
+            decay_rate_per_hop: 50_000,              // 5%
+            min_blocks_between_decays: 360,          // 1 hour
             passive_half_life_blocks: Some(262_800), // 1 month passive decay
         }
     }
@@ -541,8 +539,7 @@ impl RateLimitedTagVector {
         // Apply hop decay
         let decay_rate = config.decay_rate_per_hop;
         for weight in self.tags.values_mut() {
-            let decay =
-                (*weight as u64 * decay_rate as u64 / TAG_WEIGHT_SCALE as u64) as TagWeight;
+            let decay = (*weight as u64 * decay_rate as u64 / TAG_WEIGHT_SCALE as u64) as TagWeight;
             *weight = weight.saturating_sub(decay);
         }
 
@@ -559,9 +556,8 @@ impl RateLimitedTagVector {
                 min_decay_interval: 1,
                 hop_decay_rate: 0,
             };
-            let factor = block_config.decay_factor(
-                current_block.saturating_sub(self.last_decay_block)
-            );
+            let factor =
+                block_config.decay_factor(current_block.saturating_sub(self.last_decay_block));
 
             for weight in self.tags.values_mut() {
                 *weight = (*weight as u64 * factor as u64 / TAG_WEIGHT_SCALE as u64) as TagWeight;
@@ -656,10 +652,10 @@ pub struct AndDecayConfig {
 impl Default for AndDecayConfig {
     fn default() -> Self {
         Self {
-            decay_rate_per_hop: 50_000, // 5% per eligible hop
+            decay_rate_per_hop: 50_000,     // 5% per eligible hop
             min_blocks_between_decays: 360, // ~1 hour at 10s blocks
-            max_decays_per_epoch: 24,   // Max 24 decays per epoch
-            epoch_blocks: 8_640,        // ~1 day epoch
+            max_decays_per_epoch: 24,       // Max 24 decays per epoch
+            epoch_blocks: 8_640,            // ~1 day epoch
         }
     }
 }
@@ -774,11 +770,12 @@ impl AndTagVector {
 
     /// Check if a hop at the given block would trigger decay.
     ///
-    /// Note: This doesn't account for epoch resets - call after `try_apply_decay_on_transfer`
-    /// has handled epoch transitions, or use for informational purposes only.
+    /// Note: This doesn't account for epoch resets - call after
+    /// `try_apply_decay_on_transfer` has handled epoch transitions, or use
+    /// for informational purposes only.
     pub fn would_decay(&self, current_block: u64, config: &AndDecayConfig) -> bool {
-        // First decay ever is always eligible (never_decayed is true when last_decay_block == 0
-        // and we haven't applied any decays yet)
+        // First decay ever is always eligible (never_decayed is true when
+        // last_decay_block == 0 and we haven't applied any decays yet)
         let never_decayed = self.last_decay_block == 0 && self.decays_this_epoch == 0;
 
         // Check time condition (first decay bypasses this)
@@ -791,10 +788,10 @@ impl AndTagVector {
         }
 
         // Check epoch cap
-        if config.max_decays_per_epoch > 0 {
-            if self.decays_this_epoch >= config.max_decays_per_epoch {
-                return false; // Epoch cap reached
-            }
+        if config.max_decays_per_epoch > 0
+            && self.decays_this_epoch >= config.max_decays_per_epoch
+        {
+            return false; // Epoch cap reached
         }
 
         true
@@ -826,8 +823,7 @@ impl AndTagVector {
         // Apply hop decay
         let decay_rate = config.decay_rate_per_hop;
         for weight in self.tags.values_mut() {
-            let decay =
-                (*weight as u64 * decay_rate as u64 / TAG_WEIGHT_SCALE as u64) as TagWeight;
+            let decay = (*weight as u64 * decay_rate as u64 / TAG_WEIGHT_SCALE as u64) as TagWeight;
             *weight = weight.saturating_sub(decay);
         }
 
@@ -997,7 +993,7 @@ mod tests {
     fn test_and_decay_rapid_wash_trading_resistance() {
         // Attack: 100 rapid self-transfers in 100 blocks
         let config = AndDecayConfig {
-            decay_rate_per_hop: 50_000, // 5%
+            decay_rate_per_hop: 50_000,     // 5%
             min_blocks_between_decays: 360, // ~1 hour
             max_decays_per_epoch: 24,
             epoch_blocks: 8_640,
@@ -1058,9 +1054,9 @@ mod tests {
     #[test]
     fn test_and_decay_epoch_cap() {
         let config = AndDecayConfig {
-            decay_rate_per_hop: 50_000, // 5%
+            decay_rate_per_hop: 50_000,    // 5%
             min_blocks_between_decays: 10, // Low rate limit
-            max_decays_per_epoch: 5, // Strict epoch cap
+            max_decays_per_epoch: 5,       // Strict epoch cap
             epoch_blocks: 1000,
         };
 
@@ -1163,10 +1159,10 @@ mod tests {
     fn test_and_decay_weekly_bound() {
         // Verify the mathematical bound: max 84 decays per week with 12/day cap
         let config = AndDecayConfig {
-            decay_rate_per_hop: 50_000, // 5%
+            decay_rate_per_hop: 50_000,     // 5%
             min_blocks_between_decays: 360, // 1 hour
-            max_decays_per_epoch: 12, // 12 per day
-            epoch_blocks: 8_640, // 1 day
+            max_decays_per_epoch: 12,       // 12 per day
+            epoch_blocks: 8_640,            // 1 day
         };
 
         let cluster = ClusterId::new(1);
