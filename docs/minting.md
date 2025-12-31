@@ -103,7 +103,7 @@ After Phase 1, Botho transitions to perpetual tail emission targeting **2% annua
 | Parameter | Value |
 |-----------|-------|
 | Target net inflation | 2% annually |
-| Tail reward | ~4.76 BTH per block (at 5s blocks) |
+| Tail reward | ~0.40 BTH per block (at 5s blocks) |
 | Fee burn offset | ~0.5% expected |
 
 **Why tail emission?**
@@ -278,7 +278,7 @@ A peer required for your quorum went offline.
 | Initial reward | 50 BTH |
 | Halving interval | ~2 years (at 5s blocks) |
 | Number of halvings | 5 |
-| Tail emission | ~4.76 BTH/block |
+| Tail emission | ~0.40 BTH/block |
 | Tail inflation target | 2% net |
 | Difficulty adjustment | Every 17,280 blocks (~24h at 5s) |
 | Gossip port | 7100 |
