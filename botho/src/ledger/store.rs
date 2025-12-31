@@ -1,6 +1,6 @@
 use bth_account_keys::PublicAddress;
-use bth_crypto_keys::{RistrettoPublic, RistrettoSignature};
-use bth_transaction_types::{ClusterTagVector, Network};
+use bth_crypto_keys::RistrettoPublic;
+use bth_transaction_types::{Network, TAG_WEIGHT_SCALE};
 use heed::types::{Bytes, U64};
 use heed::{Database, Env, EnvOpenOptions, RwTxn};
 use rand::Rng;
@@ -33,6 +33,12 @@ pub struct Ledger {
     /// tx_index: tx_hash (32 bytes) -> TxLocation (12 bytes: height u64 + tx_index u32)
     /// Maps transaction hashes to their location for fast lookups (exchange integration).
     tx_index_db: Database<Bytes, Bytes>,
+    /// cluster_wealth: cluster_id (8 bytes) -> wealth (8 bytes)
+    /// Tracks total value per cluster tag across all UTXOs for progressive fee calculation.
+    /// Note: This is an approximation - with ring signatures, we cannot know which UTXO
+    /// was actually spent, so spent UTXOs still contribute to cluster wealth until
+    /// eventually removed by UTXO pruning (if implemented).
+    cluster_wealth_db: Database<Bytes, Bytes>,
 }
 
 // Metadata keys
@@ -83,7 +89,7 @@ impl Ledger {
         // first, and storing the Env in the struct which owns it for its lifetime.
         let env = unsafe {
             EnvOpenOptions::new()
-                .max_dbs(6)  // Increased for tx_index_db
+                .max_dbs(7)  // Increased for cluster_wealth_db
                 .map_size(1024 * 1024 * 1024) // 1GB
                 .open(path)
         }.map_err(|e| LedgerError::Database(format!("Failed to open environment: {}", e)))?;
@@ -104,6 +110,8 @@ impl Ledger {
             .map_err(|e| LedgerError::Database(format!("Failed to create key_images db: {}", e)))?;
         let tx_index_db = env.create_database(&mut wtxn, Some("tx_index"))
             .map_err(|e| LedgerError::Database(format!("Failed to create tx_index db: {}", e)))?;
+        let cluster_wealth_db = env.create_database(&mut wtxn, Some("cluster_wealth"))
+            .map_err(|e| LedgerError::Database(format!("Failed to create cluster_wealth db: {}", e)))?;
 
         wtxn.commit()
             .map_err(|e| LedgerError::Database(format!("Failed to commit: {}", e)))?;
@@ -117,6 +125,7 @@ impl Ledger {
             address_index_db,
             key_images_db,
             tx_index_db,
+            cluster_wealth_db,
         };
 
         // Initialize with genesis if empty
@@ -359,6 +368,8 @@ impl Ledger {
             .map_err(|e| LedgerError::Database(format!("Failed to put coinbase utxo: {}", e)))?;
         // Add to address index
         self.add_to_address_index(&mut wtxn, &coinbase_utxo)?;
+        // Update cluster wealth tracking
+        self.update_cluster_wealth_for_output(&mut wtxn, &coinbase_utxo.output)?;
         debug!("Created coinbase UTXO at height {}", new_height);
 
         // Verify and process regular transactions
@@ -408,6 +419,8 @@ impl Ledger {
                     .map_err(|e| LedgerError::Database(format!("Failed to put utxo: {}", e)))?;
                 // Add to address index
                 self.add_to_address_index(&mut wtxn, &utxo)?;
+                // Update cluster wealth tracking
+                self.update_cluster_wealth_for_output(&mut wtxn, output)?;
             }
         }
 
@@ -1010,11 +1023,240 @@ impl Ledger {
         let confirmations = chain_state.height.saturating_sub(location.block_height) + 1;
         Ok(Some(confirmations))
     }
+
+    // ========================================================================
+    // Cluster Wealth Tracking (for Progressive Fees)
+    // ========================================================================
+    //
+    // # Privacy Implications
+    //
+    // Cluster wealth tracking enables progressive transaction fees but has privacy
+    // considerations that users should understand:
+    //
+    // 1. **Cluster IDs are public**: Each transaction output has visible cluster tags
+    //    that show what fraction of its value traces back to each cluster origin.
+    //    This is inherent to the progressive fee design and visible on-chain.
+    //
+    // 2. **Wealth is observable**: Anyone can query cluster wealth from the public
+    //    UTXO set. This reveals aggregate wealth concentrations but NOT individual
+    //    wallet balances (UTXOs are stealth addresses).
+    //
+    // 3. **Ring signatures protect spending privacy**: While cluster wealth is visible,
+    //    ring signatures hide which UTXO was actually spent in a transaction. The
+    //    cluster tags on outputs inherit from the hidden real input's tags.
+    //
+    // 4. **Approximation due to ring signatures**: Since we cannot know which UTXO
+    //    was spent (ring signature privacy), cluster wealth tracking is an
+    //    approximation. Spent UTXOs continue contributing until explicitly pruned.
+    //
+    // 5. **Decay over time**: Cluster tags decay with each transaction (5% by default),
+    //    so wealth attribution naturally fades as coins circulate.
+    //
+    // The progressive fee system intentionally uses visible cluster wealth to ensure
+    // that large holders pay proportionally higher fees. This is a design choice that
+    // trades some wealth privacy for fairer fee distribution.
+
+    /// Update cluster wealth when a new output is created.
+    ///
+    /// Adds the output's weighted cluster contributions to the global wealth tracker.
+    fn update_cluster_wealth_for_output(
+        &self,
+        wtxn: &mut RwTxn,
+        output: &TxOutput,
+    ) -> Result<(), LedgerError> {
+        for entry in &output.cluster_tags.entries {
+            // Contribution = output_amount × tag_weight / TAG_WEIGHT_SCALE
+            let contribution = ((output.amount as u128) * (entry.weight as u128)
+                / (TAG_WEIGHT_SCALE as u128)) as u64;
+
+            if contribution > 0 {
+                let cluster_key = entry.cluster_id.0.to_le_bytes();
+
+                // Get current wealth
+                let current = self.cluster_wealth_db
+                    .get(wtxn, cluster_key.as_slice())
+                    .map_err(|e| LedgerError::Database(format!("Failed to get cluster wealth: {}", e)))?
+                    .map(|b: &[u8]| u64::from_le_bytes(b.try_into().unwrap_or([0; 8])))
+                    .unwrap_or(0);
+
+                // Add contribution
+                let new_wealth = current.saturating_add(contribution);
+                self.cluster_wealth_db
+                    .put(wtxn, cluster_key.as_slice(), &new_wealth.to_le_bytes())
+                    .map_err(|e| LedgerError::Database(format!("Failed to update cluster wealth: {}", e)))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Get the total wealth attributed to a specific cluster.
+    ///
+    /// Returns the sum of (amount × weight / TAG_WEIGHT_SCALE) for all UTXOs
+    /// with tags referencing this cluster.
+    pub fn get_cluster_wealth(&self, cluster_id: u64) -> Result<u64, LedgerError> {
+        let rtxn = self.env.read_txn()
+            .map_err(|e| LedgerError::Database(format!("Failed to start read txn: {}", e)))?;
+
+        let cluster_key = cluster_id.to_le_bytes();
+        match self.cluster_wealth_db.get(&rtxn, cluster_key.as_slice()) {
+            Ok(Some(bytes)) if bytes.len() == 8 => {
+                Ok(u64::from_le_bytes(bytes.try_into().unwrap()))
+            }
+            Ok(_) => Ok(0),
+            Err(e) => Err(LedgerError::Database(format!("Failed to get cluster wealth: {}", e))),
+        }
+    }
+
+    /// Compute cluster wealth for a set of UTXOs identified by target keys.
+    ///
+    /// This is the primary method for wallets to estimate their cluster wealth
+    /// for fee calculation. Wallets provide the target keys of their UTXOs,
+    /// and this method returns the maximum cluster wealth across those UTXOs.
+    ///
+    /// # Arguments
+    /// * `target_keys` - Target keys (stealth addresses) identifying the UTXOs
+    ///
+    /// # Returns
+    /// A `ClusterWealthInfo` containing the maximum cluster wealth and breakdown
+    pub fn compute_cluster_wealth_for_utxos(
+        &self,
+        target_keys: &[[u8; 32]],
+    ) -> Result<ClusterWealthInfo, LedgerError> {
+        use std::collections::HashMap;
+
+        let mut cluster_wealths: HashMap<u64, u64> = HashMap::new();
+        let mut total_value = 0u64;
+        let mut utxo_count = 0usize;
+
+        for target_key in target_keys {
+            if let Some(utxo) = self.get_utxo_by_target_key(target_key)? {
+                total_value = total_value.saturating_add(utxo.output.amount);
+                utxo_count += 1;
+
+                for entry in &utxo.output.cluster_tags.entries {
+                    let contribution = ((utxo.output.amount as u128) * (entry.weight as u128)
+                        / (TAG_WEIGHT_SCALE as u128)) as u64;
+                    *cluster_wealths.entry(entry.cluster_id.0).or_insert(0) += contribution;
+                }
+            }
+        }
+
+        let max_cluster_wealth = cluster_wealths.values().copied().max().unwrap_or(0);
+        let dominant_cluster = cluster_wealths
+            .iter()
+            .max_by_key(|(_, &wealth)| wealth)
+            .map(|(&id, _)| id);
+
+        Ok(ClusterWealthInfo {
+            max_cluster_wealth,
+            total_value,
+            utxo_count,
+            dominant_cluster_id: dominant_cluster,
+            cluster_breakdown: cluster_wealths.into_iter().collect(),
+        })
+    }
+
+    /// Get all cluster wealth entries for analytics.
+    ///
+    /// Returns all tracked cluster IDs and their total wealth.
+    /// Useful for network-wide wealth distribution analysis.
+    pub fn get_all_cluster_wealth(&self) -> Result<Vec<(u64, u64)>, LedgerError> {
+        let rtxn = self.env.read_txn()
+            .map_err(|e| LedgerError::Database(format!("Failed to start read txn: {}", e)))?;
+
+        let mut result = Vec::new();
+        let iter = self.cluster_wealth_db.iter(&rtxn)
+            .map_err(|e| LedgerError::Database(format!("Failed to iterate cluster wealth: {}", e)))?;
+
+        for item in iter {
+            if let Ok((key, value)) = item {
+                if key.len() == 8 && value.len() == 8 {
+                    let cluster_id = u64::from_le_bytes(key.try_into().unwrap());
+                    let wealth = u64::from_le_bytes(value.try_into().unwrap());
+                    result.push((cluster_id, wealth));
+                }
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// Rebuild cluster wealth index from UTXO set.
+    ///
+    /// Scans all UTXOs and rebuilds the cluster wealth index from scratch.
+    /// Useful for database repair or migration.
+    pub fn rebuild_cluster_wealth_index(&self) -> Result<usize, LedgerError> {
+        use std::collections::HashMap;
+
+        let rtxn = self.env.read_txn()
+            .map_err(|e| LedgerError::Database(format!("Failed to start read txn: {}", e)))?;
+
+        // First pass: compute wealth from all UTXOs
+        let mut cluster_wealths: HashMap<u64, u64> = HashMap::new();
+        let iter = self.utxo_db.iter(&rtxn)
+            .map_err(|e| LedgerError::Database(format!("Failed to iterate UTXOs: {}", e)))?;
+
+        for item in iter {
+            if let Ok((_, value)) = item {
+                if let Ok(utxo) = bincode::deserialize::<Utxo>(value) {
+                    for entry in &utxo.output.cluster_tags.entries {
+                        let contribution = ((utxo.output.amount as u128) * (entry.weight as u128)
+                            / (TAG_WEIGHT_SCALE as u128)) as u64;
+                        *cluster_wealths.entry(entry.cluster_id.0).or_insert(0) += contribution;
+                    }
+                }
+            }
+        }
+        drop(rtxn);
+
+        // Second pass: write to database
+        let mut wtxn = self.env.write_txn()
+            .map_err(|e| LedgerError::Database(format!("Failed to start write txn: {}", e)))?;
+
+        // Clear existing
+        self.cluster_wealth_db.clear(&mut wtxn)
+            .map_err(|e| LedgerError::Database(format!("Failed to clear cluster wealth: {}", e)))?;
+
+        // Write new values
+        for (cluster_id, wealth) in &cluster_wealths {
+            self.cluster_wealth_db
+                .put(&mut wtxn, &cluster_id.to_le_bytes(), &wealth.to_le_bytes())
+                .map_err(|e| LedgerError::Database(format!("Failed to write cluster wealth: {}", e)))?;
+        }
+
+        wtxn.commit()
+            .map_err(|e| LedgerError::Database(format!("Failed to commit: {}", e)))?;
+
+        Ok(cluster_wealths.len())
+    }
+}
+
+/// Information about cluster wealth for a set of UTXOs.
+///
+/// Used by wallets to understand their cluster profile and estimate fees.
+#[derive(Debug, Clone)]
+pub struct ClusterWealthInfo {
+    /// Maximum cluster wealth across all provided UTXOs.
+    /// This is the value used for fee calculation (progressive fees).
+    pub max_cluster_wealth: u64,
+
+    /// Total value of the provided UTXOs.
+    pub total_value: u64,
+
+    /// Number of UTXOs found.
+    pub utxo_count: usize,
+
+    /// The cluster ID with the highest wealth (if any).
+    pub dominant_cluster_id: Option<u64>,
+
+    /// Breakdown of wealth by cluster ID: (cluster_id, wealth)
+    pub cluster_breakdown: Vec<(u64, u64)>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bth_transaction_types::ClusterTagVector;
     use tempfile::tempdir;
 
     #[test]

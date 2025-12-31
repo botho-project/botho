@@ -1,6 +1,6 @@
 mod store;
 
-pub use store::{Ledger, TxLocation};
+pub use store::{ClusterWealthInfo, Ledger, TxLocation};
 
 use thiserror::Error;
 
