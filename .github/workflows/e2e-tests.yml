@@ -1,0 +1,223 @@
+name: E2E Integration Tests
+
+on:
+  # Nightly at 3 AM UTC
+  schedule:
+    - cron: '0 3 * * *'
+  # Manual trigger
+  workflow_dispatch:
+    inputs:
+      test_suite:
+        description: 'Test suite to run'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - timing
+          - chaos
+          - load
+          - byzantine
+      include_ignored:
+        description: 'Include ignored (long-running) tests'
+        required: false
+        default: true
+        type: boolean
+  # Also run on PRs that modify test files
+  pull_request:
+    paths:
+      - 'botho/tests/**'
+      - 'tests/e2e/**'
+      - '.github/workflows/e2e-tests.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # Extended timeouts for E2E tests
+  E2E_TIMEOUT_SECS: 60
+  # Reduce parallelism to avoid resource contention
+  RUST_TEST_THREADS: 1
+
+jobs:
+  timing-tests:
+    name: Timing Tests
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'schedule' ||
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'workflow_dispatch' &&
+       (github.event.inputs.test_suite == 'all' || github.event.inputs.test_suite == 'timing'))
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-e2e-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-e2e-
+            ${{ runner.os }}-cargo-
+
+      - name: Run timing tests
+        run: |
+          cargo test --package botho --test timing_tests -- --test-threads=1
+
+  chaos-tests:
+    name: Chaos Tests
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_dispatch' &&
+       (github.event.inputs.test_suite == 'all' || github.event.inputs.test_suite == 'chaos') &&
+       github.event.inputs.include_ignored == true)
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-e2e-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-e2e-
+
+      - name: Run chaos tests
+        run: |
+          cargo test --package botho --test chaos_tests -- --test-threads=1 --ignored
+
+  load-tests:
+    name: Load Tests
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_dispatch' &&
+       (github.event.inputs.test_suite == 'all' || github.event.inputs.test_suite == 'load') &&
+       github.event.inputs.include_ignored == true)
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-e2e-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-e2e-
+
+      - name: Run load tests
+        run: |
+          cargo test --package botho --test load_tests -- --test-threads=1 --ignored
+        env:
+          # Extended stack for load tests
+          RUST_MIN_STACK: 8388608
+
+  byzantine-tests:
+    name: Byzantine Tests
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'schedule' ||
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'workflow_dispatch' &&
+       (github.event.inputs.test_suite == 'all' || github.event.inputs.test_suite == 'byzantine'))
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-e2e-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-e2e-
+
+      - name: Run byzantine tests
+        run: |
+          cargo test --package botho --test byzantine_integration -- --test-threads=1
+
+  consensus-integration:
+    name: Consensus Integration Tests
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'schedule' ||
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.test_suite == 'all')
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-e2e-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-e2e-
+
+      - name: Run consensus integration tests
+        run: |
+          cargo test --package botho --test e2e_consensus_integration -- --test-threads=1
+          cargo test --package botho --test network_integration -- --test-threads=1
+
+  summary:
+    name: E2E Test Summary
+    runs-on: ubuntu-latest
+    needs: [timing-tests, chaos-tests, load-tests, byzantine-tests, consensus-integration]
+    if: always()
+    steps:
+      - name: Check results
+        run: |
+          echo "## E2E Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Test Suite | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Timing Tests | ${{ needs.timing-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Chaos Tests | ${{ needs.chaos-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Load Tests | ${{ needs.load-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Byzantine Tests | ${{ needs.byzantine-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Consensus Integration | ${{ needs.consensus-integration.result }} |" >> $GITHUB_STEP_SUMMARY

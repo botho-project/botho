@@ -1473,6 +1473,7 @@ dependencies = [
  "dirs 5.0.1",
  "futures",
  "hex",
+ "libc",
  "rand 0.8.5",
  "reqwest",
  "rpassword",
