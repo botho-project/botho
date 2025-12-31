@@ -7,8 +7,9 @@ use std::sync::mpsc::Receiver;
 use std::sync::{Arc, RwLock};
 use tracing::{info, warn};
 
-use crate::block::difficulty::EmissionController;
+use crate::block::{calculate_block_reward, difficulty::EmissionController};
 use crate::commands::send::{load_pending_txs, clear_pending_txs};
+use crate::monetary::mainnet_policy;
 use crate::config::{ledger_db_path_from_config, Config};
 use crate::ledger::Ledger;
 use crate::mempool::{Mempool, MempoolError};
@@ -111,13 +112,16 @@ impl Node {
 
         // Calculate monetary stats
         let net_supply = state.total_mined.saturating_sub(state.total_fees_burned);
-        // Use tx-based phase from EmissionController
-        let phase = match self.emission_controller.phase() {
-            crate::block::difficulty::Phase::Halving { epoch } => format!("Halving (epoch {})", epoch),
-            crate::block::difficulty::Phase::Tail => "Tail Emission".to_string(),
+        // Use block-based phase from MonetaryPolicy
+        let policy = mainnet_policy();
+        let phase = if policy.is_halving_phase(state.height) {
+            let halving_epoch = state.height / policy.halving_interval;
+            format!("Halving (epoch {})", halving_epoch)
+        } else {
+            "Tail Emission".to_string()
         };
-        // Use tx-based reward from EmissionController
-        let current_reward = self.emission_controller.current_reward;
+        // Use block-based reward calculation
+        let current_reward = calculate_block_reward(state.height + 1, state.total_mined);
 
         println!();
         println!("=== Botho Node ===");
@@ -180,7 +184,6 @@ impl Node {
             height: state.height + 1,
             difficulty: state.difficulty,
             total_minted: state.total_mined,
-            current_reward: self.emission_controller.current_reward,
         };
         minter.update_work(work);
 
@@ -287,7 +290,6 @@ impl Node {
                         height: state.height + 1,
                         difficulty: new_difficulty,
                         total_minted: state.total_mined,
-                        current_reward: self.emission_controller.current_reward,
                     };
                     info!(
                         height = work.height,

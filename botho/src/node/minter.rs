@@ -11,7 +11,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Instant;
 use tracing::info;
 
-use crate::block::MintingTx;
+use crate::block::{calculate_block_reward, MintingTx};
 
 /// Minting difficulty target (lower = harder)
 /// Start with a very easy target for testing
@@ -54,11 +54,8 @@ pub struct MintingWork {
     pub prev_block_hash: [u8; 32],
     pub height: u64,
     pub difficulty: u64,
-    /// Total minted (gross emission). Used for informational purposes.
+    /// Total minted (gross emission). Used for reward calculation.
     pub total_minted: u64,
-    /// Current block reward from EmissionController (tx-based halving).
-    /// This is the authoritative reward for minting transactions.
-    pub current_reward: u64,
 }
 
 /// The minter manages minting threads
@@ -90,7 +87,6 @@ impl Minter {
             height: 1,
             difficulty: INITIAL_DIFFICULTY,
             total_minted: 0,
-            current_reward: crate::block::difficulty::INITIAL_REWARD,
         };
 
         Self {
@@ -241,9 +237,9 @@ fn mint_loop(
             // Found a valid minting transaction!
             txs_found.fetch_add(1, Ordering::Relaxed);
 
-            // Use tx-based halving: reward comes from EmissionController
-            // which tracks halving progress based on cumulative transaction count
-            let reward = work.current_reward;
+            // Block-based halving: reward is calculated from height and total supply
+            // using MonetaryPolicy with 5s block assumption
+            let reward = calculate_block_reward(work.height, work.total_minted);
 
             let timestamp = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
