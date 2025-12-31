@@ -660,14 +660,29 @@ External audit will be commissioned when:
 
 | Audit | Date | Critical | High | Medium | Status |
 |-------|------|----------|------|--------|--------|
-| [Full Audit](audits/2025-12-30.md) | 2025-12-30 | 0 (1 fixed) | 0 (1 fixed) | 2 open | Issues Found |
+| [Cycle 3](audits/2025-12-30-cycle3.md) | 2025-12-30 | **0** | **1** | 3 | **Significant Progress** |
+| [Cycle 2](audits/2025-12-30-cycle2.md) | 2025-12-30 | 3 | 7 | 15+ | Issues Found |
+| [Cycle 1](audits/2025-12-30.md) | 2025-12-30 | 1 (fixed) | 1 (fixed) | 2 | Issues Found |
 
-### Open Issues Requiring Resolution
+### Issues Resolved in Cycle 3
 
-| Issue | Severity | Location | Tracking |
-|-------|----------|----------|----------|
-| Cluster wealth tracking | MEDIUM | `mempool.rs:93` | Backlog |
-| Empty cluster tags similarity | LOW | `decoy_selection.rs:136` | Backlog |
+| Issue | Severity | Resolution |
+|-------|----------|------------|
+| Mnemonic zeroization | CRITICAL | `Zeroizing<String>` wrapper in keys.rs |
+| Tauri mnemonic exposure | CRITICAL | Session-based architecture |
+| ring v0.16.20 vulnerability | CRITICAL | Updated to v0.17.14 |
+| Test mnemonic detection | HIGH | `validate_not_test_mnemonic()` |
+| LRU unsafe documentation | HIGH | SAFETY comments added |
+| Crypto deny(unsafe_code) | MEDIUM | 10/10 crates now enforced |
+
+### Remaining Issues
+
+| Issue | Severity | Location | Notes |
+|-------|----------|----------|-------|
+| Wallet decryption rate limiting | HIGH | `storage.rs` | Argon2id mitigates |
+| LION rejection sampling margin | MEDIUM | `lion/params.rs` | Needs crypto review |
+| Gossipsub rate limiting | MEDIUM | `network/` | Defense in depth |
+| Empty cluster tags similarity | LOW | `decoy_selection.rs:136` | Bootstrap edge case |
 
 ---
 

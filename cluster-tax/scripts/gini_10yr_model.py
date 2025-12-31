@@ -15,7 +15,7 @@ This script tests both mechanisms to find viable parameters.
 import os
 import sys
 from dataclasses import dataclass, field
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Optional
 import math
 import random
 
@@ -103,17 +103,32 @@ def calculate_gini(wealths: List[float]) -> float:
 
 def transfer(state: SimState, sender: Agent, receiver: Agent, amount: float,
              redistribute: bool = False, decay: float = 0.05) -> bool:
-    if sender.balance < amount or amount <= 0:
-        return False
+    """
+    Transfer `amount` to receiver. Fee is ON TOP - sender pays amount + fee.
+    Receiver always gets the full `amount`.
+    """
+    # Sender's tag rate: what fraction of their wealth is "tagged"
+    sender_tag_rate = sender.cluster_wealth / sender.balance if sender.balance > 0 else 0
 
     rate = state.fee_config.rate_bps(sender.cluster_wealth)
     fee = amount * rate / 10_000
-    net = amount - fee
+    total_cost = amount + fee
 
-    sender.balance -= amount
-    receiver.balance += net
-    sender.cluster_wealth = max(0, sender.cluster_wealth - amount)
-    receiver.cluster_wealth = receiver.cluster_wealth * (1 - decay) + net * decay
+    # Check if sender can afford amount + fee
+    if sender.balance < total_cost or amount <= 0:
+        return False
+
+    # Update balances - receiver gets full amount, sender pays amount + fee
+    sender.balance -= total_cost
+    receiver.balance += amount
+
+    # Sender's cluster_wealth decreases proportionally
+    sender.cluster_wealth = max(0, sender_tag_rate * sender.balance)
+
+    # Receiver inherits sender's tag concentration, with decay
+    incoming_tag = sender_tag_rate * amount * decay
+    receiver.cluster_wealth += incoming_tag
+
     state.total_fees += fee
 
     if redistribute and fee > 0:
@@ -169,8 +184,16 @@ def record_metrics(state: SimState):
     state.whale_share_history.append((state.round, whale_w / total if total > 0 else 0))
 
 
+@dataclass
+class SimStats:
+    total_burned: float = 0.0
+    successful_txs: int = 0
+    failed_txs: int = 0
+    initial_supply: float = 0.0
+    final_supply: float = 0.0
+
 def run_simulation(fee_config: FeeConfig, n_agents: int = 500, rounds: int = 10000,
-                   log_std: float = 1.8, seed: int = 42, redistribute: bool = False) -> SimState:
+                   log_std: float = 1.8, seed: int = 42, redistribute: bool = False) -> Tuple[SimState, SimStats]:
     rng = random.Random(seed)
     agents = create_lognormal_agents(n_agents, log_std=log_std, seed=seed)
 
@@ -184,6 +207,7 @@ def run_simulation(fee_config: FeeConfig, n_agents: int = 500, rounds: int = 100
         fee_config.steepness = p90 * 0.15
 
     state = SimState(agents=agents, fee_config=fee_config)
+    stats = SimStats(initial_supply=sum(a.balance for a in agents))
     record_metrics(state)
 
     for r in range(1, rounds + 1):
@@ -192,7 +216,9 @@ def run_simulation(fee_config: FeeConfig, n_agents: int = 500, rounds: int = 100
         if r % 100 == 0:
             record_metrics(state)
 
-    return state
+    stats.total_burned = state.total_fees
+    stats.final_supply = sum(a.balance for a in agents)
+    return state, stats
 
 
 # =============================================================================
@@ -220,20 +246,23 @@ def main():
     print("\n1. BURN MODE (fees destroyed - Botho model)")
     print("-" * 50)
     burn_results = {}
+    burn_stats = {}
     for name, config in configs:
-        state = run_simulation(FeeConfig(name, config.r_min_bps, config.r_max_bps, 0, 1),
+        state, stats = run_simulation(FeeConfig(name, config.r_min_bps, config.r_max_bps, 0, 1),
                               n_agents=500, rounds=10000, redistribute=False)
         initial = state.gini_history[0][1]
         final = state.gini_history[-1][1]
         reduction = (initial - final) / initial * 100
+        burn_pct = (stats.total_burned / stats.initial_supply) * 100
         burn_results[name] = state
-        print(f"  {name:20s}: {initial:.3f} → {final:.3f} ({reduction:+.1f}%)")
+        burn_stats[name] = stats
+        print(f"  {name:20s}: {initial:.3f} → {final:.3f} ({reduction:+.1f}%) | burned {burn_pct:.1f}% of supply")
 
     print("\n2. REDISTRIBUTE MODE (fees to small holders - UBI model)")
     print("-" * 50)
     redist_results = {}
     for name, config in configs:
-        state = run_simulation(FeeConfig(name, config.r_min_bps, config.r_max_bps, 0, 1),
+        state, stats = run_simulation(FeeConfig(name, config.r_min_bps, config.r_max_bps, 0, 1),
                               n_agents=500, rounds=10000, redistribute=True)
         initial = state.gini_history[0][1]
         final = state.gini_history[-1][1]

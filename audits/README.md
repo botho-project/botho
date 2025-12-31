@@ -45,6 +45,7 @@ Security auditing is iterative. Each internal audit:
 
 | Date | Auditor | Scope | Critical | High | Medium | Low | Status |
 |------|---------|-------|----------|------|--------|-----|--------|
+| 2025-12-30 (c3) | Internal | Verification | **0** | **1** | 3 | 2 | **Significant Progress** |
 | 2025-12-30 (c2) | Internal | Full | 3 | 7 | 15+ | 10+ | Issues Found |
 | 2025-12-30 (c1) | Internal | Full | 1 (fixed) | 1 | 2 | 2 | Issues Found |
 
@@ -60,5 +61,6 @@ External audit will be commissioned when:
 
 ## Report Index
 
+- [2025-12-30 Cycle 3](2025-12-30-cycle3.md) - Verification audit, all CRITICAL resolved
 - [2025-12-30 Cycle 2](2025-12-30-cycle2.md) - Full audit, wallet/dependency issues found
 - [2025-12-30 Cycle 1](2025-12-30.md) - Initial full audit, SCP ballot ordering fixed
