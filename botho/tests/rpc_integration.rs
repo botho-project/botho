@@ -616,3 +616,143 @@ async fn test_response_format() {
     let has_error = !response["error"].is_null();
     assert!(has_result != has_error, "Response should have exactly one of result or error");
 }
+
+// ============================================================================
+// Observability Endpoint Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_health_endpoint() {
+    let (_temp_dir, addr, _handle) = spawn_test_rpc_server().await;
+    let client = Client::new();
+    let url = format!("http://{}/health", addr);
+
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .expect("Failed to send request");
+
+    assert_eq!(response.status().as_u16(), 200);
+
+    let json: Value = response.json().await.expect("Failed to parse JSON");
+
+    // Verify health response structure
+    assert!(json["status"].is_string());
+    assert!(json["version"].is_string());
+    assert!(json["block_height"].is_number());
+    assert!(json["peer_count"].is_number());
+    assert!(json["synced"].is_boolean());
+
+    // Status should be one of the valid values
+    let status = json["status"].as_str().unwrap();
+    assert!(
+        status == "healthy" || status == "degraded" || status == "unhealthy",
+        "Invalid status: {}",
+        status
+    );
+}
+
+#[tokio::test]
+async fn test_ready_endpoint() {
+    let (_temp_dir, addr, _handle) = spawn_test_rpc_server().await;
+    let client = Client::new();
+    let url = format!("http://{}/ready", addr);
+
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .expect("Failed to send request");
+
+    // Status should be 200 or 503
+    let status = response.status().as_u16();
+    assert!(
+        status == 200 || status == 503,
+        "Unexpected status code: {}",
+        status
+    );
+
+    let json: Value = response.json().await.expect("Failed to parse JSON");
+
+    // Verify ready response structure
+    assert!(json["ready"].is_boolean());
+
+    // ready should match status code
+    let is_ready = json["ready"].as_bool().unwrap();
+    assert_eq!(is_ready, status == 200);
+}
+
+#[tokio::test]
+async fn test_metrics_endpoint() {
+    let (_temp_dir, addr, _handle) = spawn_test_rpc_server().await;
+    let client = Client::new();
+    let url = format!("http://{}/metrics", addr);
+
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .expect("Failed to send request");
+
+    assert_eq!(response.status().as_u16(), 200);
+
+    // Check content type is Prometheus format
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(
+        content_type.contains("text/plain"),
+        "Expected text/plain content type, got: {}",
+        content_type
+    );
+
+    let body = response.text().await.expect("Failed to get body");
+
+    // Verify Prometheus metrics are present
+    assert!(
+        body.contains("botho_block_height"),
+        "Missing botho_block_height metric"
+    );
+    assert!(
+        body.contains("botho_peer_count"),
+        "Missing botho_peer_count metric"
+    );
+    assert!(
+        body.contains("botho_mempool_size"),
+        "Missing botho_mempool_size metric"
+    );
+}
+
+#[tokio::test]
+async fn test_metrics_after_rpc_calls() {
+    let (_temp_dir, addr, _handle) = spawn_test_rpc_server().await;
+    let client = Client::new();
+
+    // Make some RPC calls to generate metrics
+    rpc_call(&client, addr, "node_getStatus", json!({})).await;
+    rpc_call(&client, addr, "node_getStatus", json!({})).await;
+    rpc_call(&client, addr, "getChainInfo", json!({})).await;
+
+    // Now check metrics endpoint
+    let url = format!("http://{}/metrics", addr);
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .expect("Failed to send request");
+
+    let body = response.text().await.expect("Failed to get body");
+
+    // Should see RPC request counters
+    assert!(
+        body.contains("botho_rpc_requests_total"),
+        "Missing botho_rpc_requests_total metric"
+    );
+    assert!(
+        body.contains("node_getStatus"),
+        "Missing node_getStatus in metrics"
+    );
+}

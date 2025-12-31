@@ -95,6 +95,9 @@ tokio-tungstenite = "0.24"
 sha1 = "0.10"
 base64 = "0.22"
 
+# Observability
+prometheus = "0.13"
+
 # For SCP simulation
 crossbeam-channel = "0.5"
 dashmap = "6"

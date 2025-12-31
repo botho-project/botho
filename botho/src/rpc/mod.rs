@@ -5,11 +5,13 @@
 
 pub mod auth;
 pub mod deposit_scanner;
+pub mod metrics;
 pub mod view_keys;
 pub mod websocket;
 
 pub use auth::{ApiKeyConfig, ApiPermissions, AuthError, HmacAuthenticator};
 pub use deposit_scanner::{DepositScanner, ScanResult};
+pub use metrics::{check_health, check_ready, HealthResponse, HealthStatus, NodeMetrics};
 pub use view_keys::{RegistryError, ViewKeyInfo, ViewKeyRegistry};
 pub use websocket::WsBroadcaster;
 
@@ -127,6 +129,8 @@ pub struct RpcState {
     pub ws_broadcaster: Arc<WsBroadcaster>,
     /// View key registry for exchange deposit notifications
     pub view_key_registry: Arc<ViewKeyRegistry>,
+    /// Prometheus metrics
+    pub metrics: Arc<NodeMetrics>,
 }
 
 impl RpcState {
@@ -150,6 +154,7 @@ impl RpcState {
             cors_origins,
             ws_broadcaster,
             view_key_registry: Arc::new(ViewKeyRegistry::new()),
+            metrics: Arc::new(NodeMetrics::new()),
         }
     }
 
@@ -176,6 +181,7 @@ impl RpcState {
             cors_origins,
             ws_broadcaster,
             view_key_registry: Arc::new(ViewKeyRegistry::new()),
+            metrics: Arc::new(NodeMetrics::new()),
         }
     }
 }
@@ -230,6 +236,55 @@ async fn handle_request(
         return handle_websocket_upgrade(req, state).await;
     }
 
+    // Handle observability endpoints (GET only, no auth required)
+    if req.method() == Method::GET {
+        match req.uri().path() {
+            "/health" => {
+                let health = check_health(&state);
+                let body = serde_json::to_string(&health).unwrap_or_default();
+                return Ok(cors_response(
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .header("Content-Type", "application/json")
+                        .body(Full::new(Bytes::from(body)))
+                        .unwrap(),
+                    allowed_origin_ref,
+                ));
+            }
+            "/ready" => {
+                let is_ready = check_ready(&state);
+                let status = if is_ready {
+                    StatusCode::OK
+                } else {
+                    StatusCode::SERVICE_UNAVAILABLE
+                };
+                let body = serde_json::to_string(&json!({ "ready": is_ready })).unwrap_or_default();
+                return Ok(cors_response(
+                    Response::builder()
+                        .status(status)
+                        .header("Content-Type", "application/json")
+                        .body(Full::new(Bytes::from(body)))
+                        .unwrap(),
+                    allowed_origin_ref,
+                ));
+            }
+            "/metrics" => {
+                // Update metrics from current state before encoding
+                state.metrics.update_from_state(&state);
+                let metrics_text = state.metrics.encode().unwrap_or_default();
+                return Ok(cors_response(
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+                        .body(Full::new(Bytes::from(metrics_text)))
+                        .unwrap(),
+                    allowed_origin_ref,
+                ));
+            }
+            _ => {}
+        }
+    }
+
     // Only accept POST for JSON-RPC
     if req.method() != Method::POST {
         return Ok(cors_response(
@@ -268,8 +323,16 @@ async fn handle_request(
 
     debug!("RPC request: {} (id: {})", rpc_request.method, rpc_request.id);
 
+    // Record metric for this request
+    state.metrics.record_request(&rpc_request.method);
+
     // Handle the request
     let response = handle_rpc_method(&rpc_request, &state).await;
+
+    // Record error if the response contains an error
+    if response.error.is_some() {
+        state.metrics.record_error(&rpc_request.method);
+    }
 
     Ok(json_response(response, allowed_origin_ref))
 }
