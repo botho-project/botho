@@ -156,13 +156,25 @@ fn poly_vec_mul_challenge(v: &PolyVecK, c: &Poly) -> PolyVecK {
 
 /// Sample a response vector with bounded infinity norm.
 ///
-/// For decoy responses, we need the norm to be < GAMMA1 - BETA so that
-/// verification doesn't reject them. We sample from a smaller range.
+/// For decoy responses, we sample z directly (rather than computing z = y + c×s₁).
+/// The infinity norm must satisfy ||z||∞ < γ₁ - β to pass verification.
+///
+/// We apply `REJECTION_SAMPLING_MARGIN` to ensure sampled values never exceed
+/// the verification bound. See `params::REJECTION_SAMPLING_MARGIN` for the
+/// cryptographic justification of this margin value.
+///
+/// # Sampling Strategy
+///
+/// Coefficients are sampled uniformly from [-bound, bound] where:
+///   bound = γ₁ - β - margin = 130894
+///
+/// This gives 2×bound + 1 ≈ 261,789 possible values per coefficient,
+/// providing ample entropy while guaranteeing verification will pass.
 fn sample_bounded_response<R: CryptoRngCore>(rng: &mut R) -> PolyVecL {
     let mut z = PolyVecL::zero();
-    // Sample from range that guarantees norm < GAMMA1 - BETA
-    // Use a margin to ensure we're safely under the bound
-    let bound = GAMMA1 - BETA - 100; // Safe margin
+    // Apply safety margin to ensure we never exceed the verification bound.
+    // See REJECTION_SAMPLING_MARGIN documentation for cryptographic justification.
+    let bound = GAMMA1 - BETA - REJECTION_SAMPLING_MARGIN;
     let range = 2 * bound;
 
     for poly in z.polys.iter_mut() {
