@@ -216,6 +216,102 @@ Botho inherits battle-tested cryptography from MobileCoin:
 | Stealth addresses | CryptoNote protocol |
 | Hashing | SHA-256 (PoW), Blake2b (general) |
 
+## Block Timing Architecture
+
+Botho uses a **dual timing system** that separates economic calculations from network efficiency:
+
+### 1. Monetary Policy Block Time (5s assumed)
+
+**Location**: `botho/src/monetary.rs` → `mainnet_policy()`
+
+The monetary policy assumes **5-second blocks** for all economic calculations:
+- Halving schedule
+- Block reward calculations
+- Inflation rate projections
+- Difficulty adjustment epochs
+
+This 5s assumption represents the **minimum block time under high load**. All emission schedules are calibrated to this baseline.
+
+```rust
+// From mainnet_policy():
+target_block_time_secs: 5,    // Assumed for monetary calculations
+min_block_time_secs: 3,       // Absolute floor (consensus needs time)
+max_block_time_secs: 60,      // Absolute ceiling
+halving_interval: 12_614_400, // ~2 years at 5s blocks
+```
+
+### 2. Dynamic Block Timing (5-40s actual)
+
+**Location**: `botho/src/block.rs` → `dynamic_timing` module
+
+Actual block production timing **adapts to network load**:
+
+| Transaction Rate | Block Time | Use Case |
+|------------------|------------|----------|
+| 20+ tx/s | 3s | Very high load |
+| 5+ tx/s | 5s | High load |
+| 1+ tx/s | 10s | Medium load |
+| 0.2+ tx/s | 20s | Low load |
+| < 0.2 tx/s | 40s | Idle network |
+
+### How They Interact
+
+These systems are **complementary**, not competing:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    MONETARY POLICY (5s assumed)                  │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │  Halving schedule, emission rate, difficulty targets     │   │
+│  │  All calculations assume busy network (5s blocks)        │   │
+│  └──────────────────────────────────────────────────────────┘   │
+│                              │                                   │
+│                              ▼                                   │
+│                     ┌────────────────┐                          │
+│                     │ Actual blocks  │                          │
+│                     │ 5-40s dynamic  │                          │
+│                     └────────────────┘                          │
+│                              │                                   │
+│                              ▼                                   │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │  EFFECTIVE INFLATION = scheduled emission × (5s/actual)  │   │
+│  └──────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Natural Inflation Dampening
+
+This design creates a **self-regulating inflation dampener**:
+
+| Actual Block Time | Effective Inflation | Halving Period |
+|-------------------|---------------------|----------------|
+| 5s (high load) | 2.0%/year (full) | ~2 years |
+| 20s (normal) | 0.5%/year | ~8 years |
+| 40s (idle) | 0.25%/year | ~16 years |
+
+**Benefits**:
+- Busy network (high utility) → Full emission rewards participants
+- Idle network (low utility) → Reduced inflation preserves value
+- No manual intervention required
+
+### Why Not Just 60s?
+
+The `cluster-tax` library provides a **configurable default** of 60s blocks:
+
+```rust
+// cluster-tax/src/monetary.rs - library defaults
+target_block_time_secs: 60,
+min_block_time_secs: 45,
+max_block_time_secs: 90,
+```
+
+Botho's **mainnet policy overrides** this with 5s baseline because:
+1. SCP consensus is faster than Bitcoin's probabilistic finality
+2. Dynamic timing provides efficiency without sacrificing finality latency
+3. Under load, users get faster confirmations
+
+The library default exists for projects that want simpler, more predictable timing.
+
 ## Differences from MobileCoin
 
 | MobileCoin | Botho | Notes |
