@@ -207,7 +207,12 @@ pub fn mainnet_policy() -> MonetaryPolicy {
         // Phase 2: 2% target net inflation
         tail_inflation_bps: 200,
 
-        // Block time: 60 seconds target, 45-90s bounds
+        // Block time: 60 seconds target, 45-90s bounds.
+        //
+        // NOTE: This is the **authoritative** block time for monetary policy calculations
+        // (difficulty adjustment, halving schedules, inflation targeting). It does NOT
+        // control actual block production timing, which uses `block::dynamic_timing`
+        // (5-40s range based on network load). See docs/architecture.md for details.
         target_block_time_secs: 60,
         min_block_time_secs: 45,
         max_block_time_secs: 90,

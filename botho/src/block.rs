@@ -469,6 +469,20 @@ pub fn calculate_block_reward_v2(height: u64, total_supply: u64) -> u64 {
 /// - Finality latency (faster under load)
 ///
 /// Uses discrete levels for stability and predictability.
+///
+/// # Relationship to Monetary Policy
+///
+/// This module controls **actual block production timing** (5-40s range) and is
+/// separate from `MonetaryPolicy::target_block_time_secs` (60s), which is used
+/// for **economic calculations** (difficulty adjustment, halving schedules).
+///
+/// The two systems serve different purposes:
+/// - **MonetaryPolicy (60s)**: Long-term emission schedule, reward calculations
+/// - **dynamic_timing (5-40s)**: Short-term network efficiency optimization
+///
+/// Dynamic timing does NOT affect monetary policy calculations. The emission
+/// schedule assumes 60s blocks for predictable economics, regardless of actual
+/// block production speed. See `docs/architecture.md` for the full explanation.
 pub mod dynamic_timing {
     use super::Block;
 

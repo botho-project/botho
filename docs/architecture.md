@@ -83,6 +83,56 @@ SHA256(nonce || prev_block_hash || minter_view_key || minter_spend_key) < diffic
 - Minting automatically pauses when quorum is lost
 - Work updates when new blocks arrive
 
+### Block Timing Architecture
+
+Botho uses a **dual-timing system** that separates economic scheduling from network efficiency:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    BLOCK TIMING ARCHITECTURE                     │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  MonetaryPolicy (60s)              dynamic_timing (5-40s)       │
+│  ═══════════════════               ═══════════════════════      │
+│  Purpose: Economics                Purpose: Network efficiency   │
+│                                                                  │
+│  • Difficulty adjustment           • Actual block production    │
+│  • Halving schedule                • Adapts to transaction load │
+│  • Inflation targeting             • Consensus timing           │
+│  • Reward calculations             • Overhead optimization      │
+│                                                                  │
+│  Location:                         Location:                    │
+│  monetary.rs                       block.rs::dynamic_timing     │
+│  cluster-tax/src/monetary.rs                                    │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Why Two Systems?**
+
+1. **Predictable Economics**: Monetary policy uses a fixed 60s assumption for stable, predictable emission schedules. This ensures halvings occur at predictable intervals regardless of network conditions.
+
+2. **Network Efficiency**: Dynamic timing adjusts actual block production (5-40s) based on transaction load:
+   - High load (20+ tx/s): 3-5s blocks for fast finality
+   - Medium load (1+ tx/s): 10s blocks
+   - Low load (<0.2 tx/s): 40s blocks to reduce overhead
+
+**How They Interact:**
+
+| Aspect | MonetaryPolicy (60s) | Dynamic Timing (5-40s) |
+|--------|---------------------|------------------------|
+| **Controls** | Rewards, difficulty | Block production speed |
+| **When used** | Emission calculations | Consensus timing |
+| **Adjusts to** | Long-term targets | Short-term load |
+| **Affects** | Supply schedule | Network efficiency |
+
+**Key Insight**: The emission schedule assumes 60s blocks for predictable economics. If dynamic timing averages 20s under load, more blocks are produced, but the difficulty adjusts to maintain the target emission rate. The monetary policy is self-correcting.
+
+**Code Locations:**
+- `botho/src/monetary.rs:211` - `target_block_time_secs: 60` (economic calculations)
+- `botho/src/block.rs:472` - `dynamic_timing` module (network efficiency)
+- `cluster-tax/src/monetary.rs` - `MonetaryPolicy` struct definition
+
 ### Ledger
 
 LMDB-backed storage for the blockchain.
