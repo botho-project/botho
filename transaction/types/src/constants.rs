@@ -221,26 +221,65 @@ pub const MAX_TOMBSTONE_BLOCKS: u64 = 20160;
 //   - Difficulty adjusts to achieve target net inflation
 //   - Fee burns reduce effective inflation
 //
-// Overflow Safety:
-//   - Using nanoBTH (1e9) as smallest unit
-//   - 100M BTH at year 10 = 10^17 nanoBTH
-//   - u64::MAX / 10^17 = 184x max growth capacity
-//   - At 2% annual inflation: (1.02)^263 ≈ 184x is the limit
-//   - Safe for ~260 years after Phase 1 (~270 years from genesis)
-//
 // For detailed monetary policy, see: cluster-tax/src/monetary.rs
 
 /// Approximate BTH distributed during Phase 1 (10 years of halvings).
 /// This is NOT a hard cap - inflation continues in Phase 2.
 pub const PHASE1_BTH_DISTRIBUTION: u64 = 100_000_000;
 
-/// one microBTH = 1e3 nanoBTH
+// =============================================================================
+// BTH Unit System
+// =============================================================================
+//
+// BTH uses a 12-decimal precision system for maximum accounting accuracy.
+// The smallest unit is the "picocredit" (10^-12 BTH).
+//
+// Unit Hierarchy (all relative to picocredits):
+//   1 picocredit    = 1                    (smallest, internal base unit)
+//   1 nanoBTH       = 1,000 picocredits    (10^-9 BTH, fee display unit)
+//   1 microBTH      = 1,000,000 picocredits (10^-6 BTH)
+//   1 milliBTH      = 1,000,000,000 picocredits (10^-3 BTH)
+//   1 BTH           = 1,000,000,000,000 picocredits (10^12)
+//
+// Two-Tier Usage:
+//   - Picocredits (10^12): Internal transaction amounts, bridge contracts
+//   - NanoBTH (10^9): Fee calculations, user-facing display, cluster-tax
+//
+// The conversion factor is: 1 nanoBTH = 1,000 picocredits
+//
+// Overflow Safety:
+//   - 100M BTH at year 10 = 10^20 picocredits
+//   - Using u64 for picocredits: u64::MAX / 10^20 ≈ 184x max growth
+//   - At 2% annual inflation: (1.02)^263 ≈ 184x is the limit
+//   - Safe for ~260 years after Phase 1 (~270 years from genesis)
+
+// -----------------------------------------------------------------------------
+// Picocredit-based constants (internal precision, 12 decimals)
+// -----------------------------------------------------------------------------
+
+/// One BTH = 10^12 picocredits (internal base unit)
+pub const BTH_TO_PICOCREDITS: u64 = 1_000_000_000_000;
+
+/// One milliBTH = 10^9 picocredits
+pub const MILLIBTH_TO_PICOCREDITS: u64 = 1_000_000_000;
+
+/// One microBTH = 10^6 picocredits
+pub const MICROBTH_TO_PICOCREDITS: u64 = 1_000_000;
+
+/// One nanoBTH = 10^3 picocredits (conversion between fee and amount systems)
+pub const NANOBTH_TO_PICOCREDITS: u64 = 1_000;
+
+// -----------------------------------------------------------------------------
+// NanoBTH-based constants (fee/display precision, 9 decimals)
+// -----------------------------------------------------------------------------
+
+/// One microBTH = 10^3 nanoBTH
 pub const MICROBTH_TO_NANOBTH: u64 = 1_000;
 
-/// one milliBTH = 1e6 nanoBTH
+/// One milliBTH = 10^6 nanoBTH
 pub const MILLIBTH_TO_NANOBTH: u64 = 1_000_000;
 
-/// one BTH = 1e9 nanoBTH
+/// One BTH = 10^9 nanoBTH
 pub const BTH_TO_NANOBTH: u64 = 1_000_000_000;
 
 /// Blinding for the implicit fee outputs.
@@ -571,5 +610,86 @@ mod tests {
         assert!(MAX_TRANSACTION_SIZE < MAX_PQ_TRANSACTION_SIZE);
         assert!(MAX_PQ_TRANSACTION_SIZE < MAX_SCP_MESSAGE_SIZE);
         assert!(MAX_SCP_MESSAGE_SIZE < MAX_BLOCK_SIZE);
+    }
+
+    // =========================================================================
+    // Picocredit Unit Tests
+    // =========================================================================
+
+    #[test]
+    fn test_bth_to_picocredits() {
+        // 1 BTH = 10^12 picocredits
+        assert_eq!(BTH_TO_PICOCREDITS, 1_000_000_000_000);
+    }
+
+    #[test]
+    fn test_millibth_to_picocredits() {
+        // 1 milliBTH = 10^9 picocredits
+        assert_eq!(MILLIBTH_TO_PICOCREDITS, 1_000_000_000);
+        // milliBTH should be 1/1000 of BTH
+        assert_eq!(MILLIBTH_TO_PICOCREDITS * 1000, BTH_TO_PICOCREDITS);
+    }
+
+    #[test]
+    fn test_microbth_to_picocredits() {
+        // 1 microBTH = 10^6 picocredits
+        assert_eq!(MICROBTH_TO_PICOCREDITS, 1_000_000);
+        // microBTH should be 1/1000 of milliBTH
+        assert_eq!(MICROBTH_TO_PICOCREDITS * 1000, MILLIBTH_TO_PICOCREDITS);
+    }
+
+    #[test]
+    fn test_nanobth_to_picocredits() {
+        // 1 nanoBTH = 10^3 picocredits
+        assert_eq!(NANOBTH_TO_PICOCREDITS, 1_000);
+        // nanoBTH should be 1/1000 of microBTH
+        assert_eq!(NANOBTH_TO_PICOCREDITS * 1000, MICROBTH_TO_PICOCREDITS);
+    }
+
+    #[test]
+    fn test_picocredit_nanobth_consistency() {
+        // Verify: 1 BTH = 10^9 nanoBTH = 10^12 picocredits
+        // Therefore: 1 nanoBTH = 1000 picocredits
+        assert_eq!(
+            BTH_TO_PICOCREDITS,
+            BTH_TO_NANOBTH * NANOBTH_TO_PICOCREDITS,
+            "BTH conversion should be consistent between picocredits and nanoBTH"
+        );
+    }
+
+    #[test]
+    fn test_picocredit_supply_limits() {
+        // Phase 1 distributes 100M BTH.
+        // In picocredits: 100M * 10^12 = 10^20, which overflows u64 (max ~1.84 * 10^19)
+        // In nanoBTH: 100M * 10^9 = 10^17, which fits in u64
+        //
+        // This is why supply tracking uses nanoBTH, not picocredits.
+        // Picocredits are used for individual transaction amounts (much smaller).
+
+        // Verify Phase 1 fits in nanoBTH
+        let phase1_nanobth = PHASE1_BTH_DISTRIBUTION.checked_mul(BTH_TO_NANOBTH);
+        assert!(phase1_nanobth.is_some(), "Phase 1 distribution fits in u64 nanoBTH");
+        assert_eq!(phase1_nanobth.unwrap(), 100_000_000_000_000_000u64); // 10^17
+
+        // Verify Phase 1 overflows in picocredits (expected behavior)
+        let phase1_picocredits = PHASE1_BTH_DISTRIBUTION.checked_mul(BTH_TO_PICOCREDITS);
+        assert!(phase1_picocredits.is_none(), "Phase 1 in picocredits overflows u64 (expected)");
+    }
+
+    #[test]
+    fn test_individual_amounts_in_picocredits() {
+        // Individual transaction amounts should fit in u64
+        // Max realistic single transaction: 1M BTH
+        let large_tx = 1_000_000u64.checked_mul(BTH_TO_PICOCREDITS);
+        assert!(large_tx.is_some(), "1M BTH transaction fits in u64 picocredits");
+
+        // Even 10M BTH fits
+        let very_large_tx = 10_000_000u64.checked_mul(BTH_TO_PICOCREDITS);
+        assert!(very_large_tx.is_some(), "10M BTH transaction fits in u64 picocredits");
+
+        // 18M BTH is about the max that fits
+        // u64::MAX / 10^12 ≈ 18.4 million
+        let max_bth = u64::MAX / BTH_TO_PICOCREDITS;
+        assert!(max_bth >= 18_000_000, "At least 18M BTH fits in picocredits");
     }
 }

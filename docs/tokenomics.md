@@ -7,7 +7,8 @@ Botho (BTH) uses a two-phase emission model designed for long-term sustainabilit
 | Parameter | Value |
 |-----------|-------|
 | Token symbol | BTH |
-| Smallest unit | nanoBTH (10⁻⁹ BTH) |
+| Internal precision | picocredits (10⁻¹² BTH) |
+| Display unit | nanoBTH (10⁻⁹ BTH) |
 | Pre-mine | None (100% mined) |
 | Phase 1 supply | ~100 million BTH |
 | Block time | 3-40 seconds (dynamic based on load) |
@@ -15,7 +16,23 @@ Botho (BTH) uses a two-phase emission model designed for long-term sustainabilit
 
 ## Unit System
 
-BTH uses a 9-decimal precision system:
+BTH uses a **two-tier precision system** for optimal balance between accuracy and usability:
+
+### Internal Precision (12 decimals)
+
+Transaction amounts use picocredits for maximum accounting precision:
+
+| Unit | Picocredits | BTH |
+|------|-------------|-----|
+| 1 picocredit | 1 | 0.000000000001 |
+| 1 nanoBTH | 1,000 | 0.000000001 |
+| 1 microBTH (µBTH) | 1,000,000 | 0.000001 |
+| 1 milliBTH (mBTH) | 1,000,000,000 | 0.001 |
+| 1 BTH | 1,000,000,000,000 | 1 |
+
+### Display Precision (9 decimals)
+
+User interfaces and fee calculations use nanoBTH for manageable numbers:
 
 | Unit | nanoBTH | BTH |
 |------|---------|-----|
@@ -23,6 +40,13 @@ BTH uses a 9-decimal precision system:
 | 1 microBTH (µBTH) | 1,000 | 0.000001 |
 | 1 milliBTH (mBTH) | 1,000,000 | 0.001 |
 | 1 BTH | 1,000,000,000 | 1 |
+
+### Why Two Tiers?
+
+- **Picocredits (10¹²)**: Used by bridge contracts, transaction amounts, and internal accounting. Provides sub-nanoBTH precision for exact calculations.
+- **NanoBTH (10⁹)**: Used for supply tracking, fee calculations, and user display. Fits in u64 for 100M+ BTH totals.
+
+**Conversion**: 1 nanoBTH = 1,000 picocredits
 
 ## Emission Schedule
 
