@@ -112,49 +112,61 @@ This ensures fees stay low during normal operation while providing strong conges
 
 ### Cluster-Based Progressive Fees
 
-Botho implements a novel **progressive fee system** that taxes wealth concentration without enabling Sybil attacks.
+Botho implements a novel **provenance-based progressive fee system** that taxes wealth concentration without enabling Sybil attacks.
+
+![Progressive Fee System](images/cluster-tax/system_overview.png)
 
 **The Problem**: Traditional wealth taxes fail in cryptocurrency because users can split holdings across unlimited addresses.
 
-**The Solution**: Tax based on coin *ancestry*, not account identity.
+**The Solution**: Tax based on coin *ancestry* (source_wealth), not account identity. Splitting doesn't help because provenance tags persist.
+
+![Split Resistance](images/cluster-tax/split_resistance.png)
 
 #### How It Works
 
-1. **Clusters**: Each minting reward creates a unique "cluster" identity
-2. **Tag Vectors**: Every UTXO carries a sparse vector tracking what fraction of its value traces back to each cluster origin
-3. **Cluster Wealth**: Total value in the system tagged to a given cluster: `W = Σ(balance × tag_weight)`
-4. **Progressive Multiplier**: Fee multiplier increases with cluster wealth via sigmoid curve
+1. **Source Wealth**: Every UTXO tracks the wealth of its original minter
+2. **Persistence**: Splitting doesn't change source_wealth—all pieces retain the original tag
+3. **Blending**: Combining UTXOs creates a value-weighted average source_wealth
+4. **Progressive Rate**: Fee rate increases with source_wealth via 3-segment curve
 
-```
-cluster_factor = 1 + 5 × sigmoid((W - midpoint) / steepness)
-```
+![Fee Curves](images/cluster-tax/fee_curves_comparison.png)
 
 #### Fee Parameters
 
 | Parameter | Value | Description |
 |-----------|-------|-------------|
-| Minimum multiplier | 1x | Small/diffused clusters |
-| Maximum multiplier | 6x | Large concentrated clusters |
-| Midpoint | 10M BTH | Sigmoid inflection point |
+| Poor segment | 0-15% of max | 1% flat rate |
+| Middle segment | 15-70% of max | 2% to 10% linear |
+| Rich segment | 70%+ of max | 15% flat rate |
 | Decay rate | 5% per hop | Tag decay per transaction |
+
+#### Simulation Results
+
+![Gini Reduction](images/cluster-tax/gini_reduction_comparison.png)
+
+The 3-segment model achieves **-0.2399 Gini reduction** (0.3% better than sigmoid) with **12.4% burn rate**.
 
 #### Why It's Sybil-Resistant
 
 Splitting coins across addresses doesn't reduce fees because:
 
-- Fee multiplier depends on **cluster wealth**, not transaction size or account count
-- All UTXOs tracing to the same minting origin pay the same rate
+- Fee rate depends on **source_wealth**, not transaction size or account count
+- All UTXOs from the same origin retain the same source_wealth tag
 - The only way to reduce fees is genuine economic activity that diffuses coins
 
-#### Tag Decay
+#### Natural Decay Through Commerce
 
-Tags decay by ~5% per transaction hop:
+![Provenance Decay](images/cluster-tax/provenance_decay.png)
+
+Tags decay through legitimate commerce:
 
 - Coins that circulate widely pay lower fees over time
-- Hoarded coins retain high cluster attribution → higher fees
-- ~14 transaction hops to halve a tag's weight
+- Hoarded coins retain high source_wealth → higher fees
+- ~10 transaction hops through merchants reduces source_wealth by 90%
 
 **Economic effect**: Encourages velocity of money and discourages extreme wealth accumulation.
+
+> **See also**: [Progressive Fees](progressive-fees.md) for detailed analysis, attack resistance proofs, and implementation details.
 
 ## Block Timing
 

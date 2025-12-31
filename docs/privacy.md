@@ -70,27 +70,25 @@ All subaddresses derive from the same mnemonic but are cryptographically unlinka
 
 ## Progressive Transaction Fees
 
-Botho implements a novel **cluster-based progressive fee** system designed to reduce wealth concentration without sacrificing privacy or enabling Sybil attacks.
+Botho implements a novel **provenance-based progressive fee** system designed to reduce wealth concentration without sacrificing privacy or enabling Sybil attacks.
+
+![Whale vs Poor Fees](images/cluster-tax/whale_vs_poor.png)
 
 ### How It Works
 
-Transaction fees are based on coin *ancestry*, not account identity:
+Transaction fees are based on coin *ancestry* (source_wealth), not account identity:
 
-1. **Clusters**: Each coin-creation event (minting reward) spawns a new "cluster" identity
-2. **Tag Vectors**: Every account carries a sparse vector of weights indicating what fraction of its coins trace back to each cluster origin
-3. **Cluster Wealth**: The total value in the system tagged to a given cluster (`W = Σ balance × tag_weight`)
-4. **Progressive Fees**: Fee rate increases with cluster wealth via a sigmoid curve
-
-```
-Fee Rate = sigmoid(cluster_wealth) → ranges from 0.05% to 30%
-```
+1. **Source Wealth**: Every UTXO tracks the wealth of its original minter
+2. **Persistence**: Splitting doesn't change source_wealth—provenance tags persist
+3. **Blending**: Combining UTXOs creates a value-weighted average
+4. **Progressive Rate**: Fee rate increases with source_wealth via 3-segment curve (1% → 15%)
 
 ### Why It's Sybil-Resistant
 
 Splitting transactions or creating multiple accounts doesn't reduce fees because:
 
-- Fee rate depends on **cluster wealth**, not transaction size or account count
-- All accounts holding coins from the same minting origin pay the same rate
+- Fee rate depends on **source_wealth**, not transaction size or account count
+- All UTXOs from the same origin retain the same provenance tag
 - The only way to reduce fees is through genuine economic activity that diffuses coins
 
 ### Tag Decay
@@ -98,17 +96,19 @@ Splitting transactions or creating multiple accounts doesn't reduce fees because
 Tags decay by ~5% per transaction hop:
 
 - Coins that circulate widely pay lower fees over time
-- Hoarded coins retain high cluster attribution and pay higher fees
-- ~14 transaction hops to halve a tag's weight
+- Hoarded coins retain high source_wealth → pay higher fees
+- ~10 transaction hops through merchants reduces source_wealth by 90%
 
 ### Parameters
 
 | Parameter | Value | Description |
 |-----------|-------|-------------|
-| Minimum fee | 0.05% | Small/diffused clusters |
-| Maximum fee | 30% | Large concentrated clusters |
+| Poor segment | 0-15% of max | 1% flat rate |
+| Middle segment | 15-70% of max | 2% to 10% linear |
+| Rich segment | 70%+ of max | 15% flat rate |
 | Decay rate | 5% per hop | Tag decay per transaction |
-| Midpoint | 10M BTH | Sigmoid inflection point |
+
+> **See also**: [Progressive Fees](progressive-fees.md) for detailed analysis, simulation results, and ZK compatibility.
 
 ### Tag Vector Limits
 

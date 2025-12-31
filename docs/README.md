@@ -19,6 +19,7 @@ Welcome to the Botho documentation. Botho is a privacy-preserving, mined cryptoc
 | [Transaction Types](transactions.md) | Minting, Plain, Standard-Private, and PQ-Private transactions |
 | [Privacy](privacy.md) | Privacy features and cryptography |
 | [Tokenomics](tokenomics.md) | Supply, emission, fees, and economics |
+| [Progressive Fees](progressive-fees.md) | Provenance-based taxation that defeats Sybil attacks |
 | [Monetary Policy](monetary-policy.md) | Difficulty adjustment, epochs, and fork upgrades |
 
 ### Running a Node
