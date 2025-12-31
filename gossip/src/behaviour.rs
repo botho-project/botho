@@ -11,8 +11,8 @@ use crate::{
     config::GossipConfig,
     error::{GossipError, GossipResult},
     messages::{
-        BlockBroadcast, NodeAnnouncement, TransactionBroadcast,
-        ANNOUNCEMENTS_TOPIC, BLOCKS_TOPIC, TRANSACTIONS_TOPIC, TOPOLOGY_SYNC_PROTOCOL,
+        BlockBroadcast, NodeAnnouncement, TransactionBroadcast, ANNOUNCEMENTS_TOPIC, BLOCKS_TOPIC,
+        TOPOLOGY_SYNC_PROTOCOL, TRANSACTIONS_TOPIC,
     },
     store::SharedPeerStore,
 };
@@ -26,12 +26,7 @@ use libp2p::{
     swarm::{NetworkBehaviour, SwarmEvent},
     tcp, yamux, Multiaddr, PeerId, Swarm, SwarmBuilder,
 };
-use std::{
-    collections::HashSet,
-    io,
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::HashSet, io, sync::Arc, time::Duration};
 use tokio::sync::mpsc;
 
 /// Events emitted by the gossip behaviour.
@@ -53,10 +48,7 @@ pub enum GossipEvent {
     BlockReceived(BlockBroadcast),
 
     /// Received a topology sync request
-    TopologySyncRequest {
-        peer: PeerId,
-        since_timestamp: u64,
-    },
+    TopologySyncRequest { peer: PeerId, since_timestamp: u64 },
 
     /// Received a topology sync response
     TopologySyncResponse {
@@ -97,11 +89,7 @@ impl Codec for TopologySyncCodec {
         _protocol: &'life1 Self::Protocol,
         io: &'life2 mut T,
     ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<Output = io::Result<Self::Request>>
-                + Send
-                + 'async_trait,
-        >,
+        Box<dyn std::future::Future<Output = io::Result<Self::Request>> + Send + 'async_trait>,
     >
     where
         T: futures::AsyncRead + Unpin + Send + 'async_trait,
@@ -114,8 +102,7 @@ impl Codec for TopologySyncCodec {
             use futures::AsyncReadExt;
             let mut buf = Vec::new();
             io.read_to_end(&mut buf).await?;
-            serde_json::from_slice(&buf)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+            serde_json::from_slice(&buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
         })
     }
 
@@ -124,11 +111,7 @@ impl Codec for TopologySyncCodec {
         _protocol: &'life1 Self::Protocol,
         io: &'life2 mut T,
     ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<Output = io::Result<Self::Response>>
-                + Send
-                + 'async_trait,
-        >,
+        Box<dyn std::future::Future<Output = io::Result<Self::Response>> + Send + 'async_trait>,
     >
     where
         T: futures::AsyncRead + Unpin + Send + 'async_trait,
@@ -141,8 +124,7 @@ impl Codec for TopologySyncCodec {
             use futures::AsyncReadExt;
             let mut buf = Vec::new();
             io.read_to_end(&mut buf).await?;
-            serde_json::from_slice(&buf)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+            serde_json::from_slice(&buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
         })
     }
 
@@ -151,9 +133,7 @@ impl Codec for TopologySyncCodec {
         _protocol: &'life1 Self::Protocol,
         io: &'life2 mut T,
         req: Self::Request,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = io::Result<()>> + Send + 'async_trait>,
-    >
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = io::Result<()>> + Send + 'async_trait>>
     where
         T: futures::AsyncWrite + Unpin + Send + 'async_trait,
         'life0: 'async_trait,
@@ -176,9 +156,7 @@ impl Codec for TopologySyncCodec {
         _protocol: &'life1 Self::Protocol,
         io: &'life2 mut T,
         resp: Self::Response,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = io::Result<()>> + Send + 'async_trait>,
-    >
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = io::Result<()>> + Send + 'async_trait>>
     where
         T: futures::AsyncWrite + Unpin + Send + 'async_trait,
         'life0: 'async_trait,
@@ -249,8 +227,7 @@ impl GossipBehaviour {
         // Configure request-response
         let topology_sync = request_response::Behaviour::new(
             [(TOPOLOGY_SYNC_PROTOCOL, ProtocolSupport::Full)],
-            request_response::Config::default()
-                .with_request_timeout(config.request_timeout()),
+            request_response::Config::default().with_request_timeout(config.request_timeout()),
         );
 
         Ok(Self {

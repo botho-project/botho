@@ -103,7 +103,7 @@ pub struct GossipConfig {
 /// Configuration for per-peer gossipsub rate limiting.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PeerRateLimitConfig {
-    /// Maximum messages per second per peer before throttling
+    /// Maximum messages per second per peer before throttling (global fallback)
     pub max_messages_per_second: u32,
 
     /// Maximum messages in burst window before throttling
@@ -117,6 +117,47 @@ pub struct PeerRateLimitConfig {
 
     /// Whether to enable per-peer rate limiting
     pub enabled: bool,
+
+    /// Per-message-type rate limits
+    pub message_limits: MessageTypeLimits,
+}
+
+/// Rate limits per message type (messages per minute).
+///
+/// These limits protect against flooding attacks on specific message types.
+/// Each message type has different network impact and expected frequency.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MessageTypeLimits {
+    /// Maximum transaction announcements per minute per peer.
+    /// Transactions are frequent but lightweight.
+    pub transactions_per_minute: u32,
+
+    /// Maximum block announcements per minute per peer.
+    /// Blocks are infrequent but important.
+    pub blocks_per_minute: u32,
+
+    /// Maximum consensus messages per minute per peer.
+    /// SCP messages are critical for consensus but should be bounded.
+    pub consensus_per_minute: u32,
+
+    /// Maximum topology/announcement messages per minute per peer.
+    /// Discovery messages are periodic and bounded.
+    pub announcements_per_minute: u32,
+}
+
+impl Default for MessageTypeLimits {
+    fn default() -> Self {
+        Self {
+            // From audit requirements:
+            // - Transaction announcements: 100/min
+            // - Block announcements: 10/min
+            // - Consensus messages: 50/min
+            transactions_per_minute: 100,
+            blocks_per_minute: 10,
+            consensus_per_minute: 50,
+            announcements_per_minute: 20,
+        }
+    }
 }
 
 impl Default for PeerRateLimitConfig {
@@ -127,6 +168,7 @@ impl Default for PeerRateLimitConfig {
             burst_window_ms: 5000, // 5 second window
             disconnect_threshold: 3,
             enabled: true,
+            message_limits: MessageTypeLimits::default(),
         }
     }
 }

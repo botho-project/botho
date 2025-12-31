@@ -33,7 +33,8 @@ pub struct ConsensusGossipConfig {
     /// Announce interval in seconds
     pub announce_interval_secs: u64,
 
-    /// Whether to automatically update peer connections based on discovered topology
+    /// Whether to automatically update peer connections based on discovered
+    /// topology
     pub auto_connect_peers: bool,
 
     /// Maximum peers to auto-connect to
@@ -135,7 +136,8 @@ pub async fn start_consensus_gossip(
         .sync_interval_secs(30)
         .build();
 
-    let capabilities = NodeCapabilities::CONSENSUS | NodeCapabilities::GOSSIP | NodeCapabilities::RELAY;
+    let capabilities =
+        NodeCapabilities::CONSENSUS | NodeCapabilities::GOSSIP | NodeCapabilities::RELAY;
 
     let mut service = GossipService::new(
         node_id.clone(),
@@ -157,7 +159,10 @@ pub async fn start_consensus_gossip(
 
     // Spawn task to forward events
     let task_handle = tokio::spawn(async move {
-        info!("Gossip integration started for node {}", node_id.responder_id);
+        info!(
+            "Gossip integration started for node {}",
+            node_id.responder_id
+        );
 
         loop {
             match service.next_event().await {
