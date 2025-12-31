@@ -3,6 +3,7 @@
 //! Common types and methods. no_std-compatible crate.
 
 #![deny(missing_docs)]
+#![deny(clippy::print_stdout)]
 #![warn(unused_extern_crates)]
 #![no_std]
 

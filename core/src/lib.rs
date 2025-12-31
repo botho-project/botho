@@ -7,6 +7,7 @@
 #![no_std]
 #![warn(missing_docs)]
 #![deny(unsafe_code)]
+#![deny(clippy::print_stdout)]
 
 // Re-export shared type modules
 pub use bth_core_types::{account, keys};

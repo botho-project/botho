@@ -404,7 +404,7 @@ pub fn run_simulation(
             metrics.record_snapshot(snapshot);
 
             if config.verbose {
-                println!(
+                eprintln!(
                     "Round {}: {} txs, {} fees, Gini={:.4}",
                     round,
                     round_transactions,
@@ -636,8 +636,8 @@ mod tests {
 
         // Net supply change can be positive or negative depending on fee burn rate
         // The key is the system adapts difficulty in response
-        println!("Net supply change: {}", stats.net_supply_change);
-        println!("Difficulty: {}", stats.difficulty);
+        eprintln!("Net supply change: {}", stats.net_supply_change);
+        eprintln!("Difficulty: {}", stats.difficulty);
     }
 
     #[test]

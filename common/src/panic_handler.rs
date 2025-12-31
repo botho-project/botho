@@ -4,9 +4,10 @@ use super::logger;
 use backtrace::Backtrace;
 use std::{
     boxed::Box,
-    env, format,
+    env,
+    eprintln, format,
     panic::{self, PanicHookInfo},
-    println, process,
+    process,
     string::ToString,
     thread, time,
 };
@@ -24,10 +25,10 @@ fn handle_panic(panic_info: &PanicHookInfo<'_>) {
     let thread_name = thread::current().name().unwrap_or("?").to_string();
     let process_name = env::args().next().unwrap_or_else(|| "?".to_string());
 
-    // First, print the crash details.
-    println!("OH NO, WE CRASHED :( thread {thread_name} on {process_name}");
-    println!("Details: {details}");
-    println!("{backtrace}");
+    // First, print the crash details to stderr (more reliable than tracing during panics).
+    eprintln!("OH NO, WE CRASHED :( thread {thread_name} on {process_name}");
+    eprintln!("Details: {details}");
+    eprintln!("{backtrace}");
 
     // Also attempt to log using the logger.
     logger::global_log::crit!(

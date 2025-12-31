@@ -1,3 +1,5 @@
+#![deny(clippy::print_stdout)]
+
 //! Botho fee system with size-based progressive pricing.
 //!
 //! This module implements Botho's fee model with two key features:

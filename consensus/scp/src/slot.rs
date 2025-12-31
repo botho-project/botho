@@ -2509,7 +2509,7 @@ mod nominate_protocol_tests {
             logger,
         );
 
-        println!("max_priority_peers: {:?}", slot.max_priority_peers);
+        eprintln!("max_priority_peers: {:?}", slot.max_priority_peers);
         // Ensure that the local node **is not** in max_priority_peers.
         assert!(!slot.max_priority_peers.contains(&local_node.0));
 
@@ -2535,7 +2535,7 @@ mod nominate_protocol_tests {
             logger,
         );
 
-        println!("max_priority_peers: {:?}", slot.max_priority_peers);
+        eprintln!("max_priority_peers: {:?}", slot.max_priority_peers);
         // Ensure that the local node **is** in max_priority_peers.
         slot.max_priority_peers.insert(local_node.0.clone());
 

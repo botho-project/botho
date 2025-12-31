@@ -87,6 +87,7 @@
 
 #![warn(missing_docs)]
 #![warn(unused_extern_crates)]
+#![deny(clippy::print_stdout)]
 
 pub mod analyzer;
 pub mod behaviour;
