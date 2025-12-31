@@ -81,3 +81,7 @@ go_build_artifacts/
 
 .env
 *.private
+.loom/state.json
+.loom/worktrees/
+.loom/*.log
+.loom/*.sock
