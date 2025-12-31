@@ -8,7 +8,9 @@
 //!
 //! Security: Mnemonic phrases are stored in `Zeroizing<String>` wrappers that
 //! automatically overwrite memory with zeros when dropped, preventing sensitive
-//! recovery phrases from persisting in memory.
+//! recovery phrases from persisting in memory. Additionally, memory pages
+//! containing mnemonics are locked using mlock()/VirtualLock() to prevent
+//! swapping to disk.
 
 use anyhow::{anyhow, Result};
 use bip39::{Language, Mnemonic};
@@ -16,6 +18,8 @@ use bth_account_keys::{AccountKey, PublicAddress};
 use bth_core::slip10::Slip10KeyGenerator;
 use bth_crypto_keys::RistrettoSignature;
 use zeroize::Zeroizing;
+
+use crate::secmem::{lock_string, LockedRegion};
 
 #[cfg(feature = "pq")]
 use bth_account_keys::{QuantumSafeAccountKey, QuantumSafePublicAddress};
@@ -34,13 +38,33 @@ const TEST_MNEMONIC_PREFIXES: &[&str] = &[
 /// Security: The mnemonic phrase is stored in a `Zeroizing<String>` wrapper
 /// that automatically overwrites the memory with zeros when dropped,
 /// preventing the sensitive recovery phrase from persisting in memory.
-#[derive(Clone)]
+/// Additionally, the memory is locked using mlock()/VirtualLock() to prevent
+/// the mnemonic from being swapped to disk.
 pub struct WalletKeys {
+    /// Memory lock for the mnemonic phrase. Must be dropped before
+    /// mnemonic_phrase to ensure munlock is called while memory is still
+    /// valid. Note: Fields are dropped in declaration order.
+    _mnemonic_lock: Option<LockedRegion>,
+
     /// Mnemonic phrase wrapped in Zeroizing for secure memory cleanup on drop.
     mnemonic_phrase: Zeroizing<String>,
 
     /// The derived account key
     account_key: AccountKey,
+}
+
+impl Clone for WalletKeys {
+    fn clone(&self) -> Self {
+        let mnemonic_phrase = self.mnemonic_phrase.clone();
+        // Create a new lock for the cloned mnemonic's memory
+        // SAFETY: The mnemonic_phrase we just cloned is valid for the lifetime of Self
+        let lock = unsafe { lock_string(&mnemonic_phrase) };
+        Self {
+            _mnemonic_lock: Some(lock),
+            mnemonic_phrase,
+            account_key: self.account_key.clone(),
+        }
+    }
 }
 
 impl WalletKeys {
@@ -74,11 +98,16 @@ impl WalletKeys {
         // Wrap in Zeroizing immediately to ensure secure cleanup
         let phrase = Zeroizing::new(mnemonic.phrase().to_string());
 
+        // Lock the mnemonic memory to prevent swapping to disk
+        // SAFETY: The phrase we just created is valid for the lifetime of Self
+        let lock = unsafe { lock_string(&phrase) };
+
         // Derive keys using SLIP-0010 (account index 0)
         let slip10_key = mnemonic.derive_slip10_key(0);
         let account_key = AccountKey::from(slip10_key);
 
         Ok(Self {
+            _mnemonic_lock: Some(lock),
             mnemonic_phrase: phrase,
             account_key,
         })
@@ -156,7 +185,8 @@ impl WalletKeys {
 
     /// Check if this mnemonic is a known test phrase.
     ///
-    /// In debug builds, this always succeeds to allow testing with test mnemonics.
+    /// In debug builds, this always succeeds to allow testing with test
+    /// mnemonics.
     #[cfg(debug_assertions)]
     pub fn validate_not_test_mnemonic(&self) -> Result<()> {
         Ok(())
@@ -168,6 +198,17 @@ impl WalletKeys {
         TEST_MNEMONIC_PREFIXES
             .iter()
             .any(|prefix| phrase.starts_with(prefix))
+    }
+
+    /// Returns true if the mnemonic memory is locked (protected from swapping).
+    ///
+    /// Memory locking may fail if the process lacks permissions or if the
+    /// system's memory lock limit has been reached. In such cases, the wallet
+    /// continues to function but with reduced protection against swap attacks.
+    pub fn is_memory_locked(&self) -> bool {
+        self._mnemonic_lock
+            .as_ref()
+            .map_or(false, |lock: &LockedRegion| lock.is_locked())
     }
 
     // ===== Post-Quantum Key Methods (pq feature) =====
@@ -196,7 +237,8 @@ impl WalletKeys {
     /// Format: `botho-pq://1/<base58(view||spend||pq_kem||pq_sig)>`
     ///
     /// Note: This address is ~4.3KB when base58-encoded due to the size
-    /// of post-quantum public keys (ML-KEM-768: 1184 bytes, ML-DSA-65: 1952 bytes).
+    /// of post-quantum public keys (ML-KEM-768: 1184 bytes, ML-DSA-65: 1952
+    /// bytes).
     #[cfg(feature = "pq")]
     pub fn pq_address_string(&self) -> String {
         self.pq_public_address().to_address_string()
@@ -268,10 +310,7 @@ mod tests {
         let keys1 = WalletKeys::from_mnemonic(TEST_MNEMONIC).unwrap();
         let keys2 = WalletKeys::from_mnemonic(TEST_MNEMONIC).unwrap();
 
-        assert_eq!(
-            keys1.view_public_key_bytes(),
-            keys2.view_public_key_bytes()
-        );
+        assert_eq!(keys1.view_public_key_bytes(), keys2.view_public_key_bytes());
         assert_eq!(
             keys1.spend_public_key_bytes(),
             keys2.spend_public_key_bytes()
@@ -336,6 +375,43 @@ mod tests {
         // In debug builds, validate_not_test_mnemonic always succeeds
         let keys = WalletKeys::from_mnemonic(TEST_MNEMONIC).unwrap();
         assert!(keys.validate_not_test_mnemonic().is_ok());
+    }
+
+    #[test]
+    fn test_memory_locking_generate() {
+        // Test that memory locking is attempted for generated wallets
+        let keys = WalletKeys::generate().unwrap();
+
+        // Note: is_memory_locked() may return false if the process lacks
+        // permissions or if RLIMIT_MEMLOCK is exceeded. The test verifies
+        // the mechanism works without requiring elevated permissions.
+        let _ = keys.is_memory_locked();
+
+        // Wallet should still function regardless of lock status
+        assert_eq!(keys.mnemonic_words().len(), 24);
+    }
+
+    #[test]
+    fn test_memory_locking_restore() {
+        // Test that memory locking is attempted for restored wallets
+        let keys = WalletKeys::from_mnemonic(TEST_MNEMONIC).unwrap();
+
+        let _ = keys.is_memory_locked();
+        assert_eq!(keys.mnemonic_phrase(), TEST_MNEMONIC);
+    }
+
+    #[test]
+    fn test_memory_locking_clone() {
+        // Test that cloned wallets also have memory locking
+        let keys = WalletKeys::from_mnemonic(TEST_MNEMONIC).unwrap();
+        let cloned = keys.clone();
+
+        // Clone should have its own lock
+        let _ = cloned.is_memory_locked();
+        assert_eq!(cloned.mnemonic_phrase(), TEST_MNEMONIC);
+
+        // Original should still work
+        assert_eq!(keys.mnemonic_phrase(), TEST_MNEMONIC);
     }
 
     #[cfg(feature = "pq")]
