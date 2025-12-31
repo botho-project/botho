@@ -6,7 +6,7 @@
 //! - Minting transactions (PoW-based coinbase rewards)
 //! - Transfer transactions (UTXO-based value transfers)
 
-use crate::block::{calculate_block_reward_v2, MintingTx};
+use crate::block::MintingTx;
 use crate::ledger::ChainState;
 use crate::transaction::Transaction;
 #[cfg(feature = "pq")]
@@ -153,8 +153,10 @@ impl TransactionValidator {
             return Err(ValidationError::WrongDifficulty);
         }
 
-        // 4. Check reward matches Two-Phase emission schedule
-        let expected_reward = calculate_block_reward_v2(tx.block_height, state.total_mined);
+        // 4. Check reward matches tx-based emission schedule
+        // The expected reward comes from EmissionController's current_reward,
+        // which is based on cumulative transaction count (tx-based halving).
+        let expected_reward = state.current_reward;
         if tx.reward != expected_reward {
             warn!(
                 expected = expected_reward,

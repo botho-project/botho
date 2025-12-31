@@ -17,6 +17,18 @@ The key insight is that **block production and emission are decoupled**:
 
 This separation allows precise monetary targeting without affecting transaction throughput.
 
+### Transaction-Based Halving (Implementation)
+
+> **Note**: The halving schedule is tied to **cumulative transaction count**, not block height.
+> This ties the monetary schedule to network adoption rather than wall-clock time.
+>
+> - Halving occurs every 10 million transactions (`HALVING_TX_INTERVAL`)
+> - 5 halvings total before tail emission (~50M transactions)
+> - See `block.rs::difficulty::EmissionController` for the authoritative implementation
+>
+> The block-height-based schedule in this document is for approximate timing reference only.
+> The actual halving trigger is transaction count, managed by `EmissionController`.
+
 ## The Economic Loop
 
 ```

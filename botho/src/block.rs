@@ -435,32 +435,10 @@ impl Block {
     }
 }
 
-/// Calculate block reward using the Two-Phase Monetary Model.
-///
-/// This is a convenience function for code that doesn't have access to a
-/// `MonetarySystem` instance. For stateful monetary policy (with difficulty
-/// adjustment and fee burn tracking), use `MonetarySystem` directly.
-///
-/// # Arguments
-/// * `height` - Current block height
-/// * `total_supply` - Current total supply (for tail emission calculation)
-///
-/// # Returns
-/// The block reward for the given height.
-pub fn calculate_block_reward_v2(height: u64, total_supply: u64) -> u64 {
-    use bth_cluster_tax::MonetaryPolicy;
-
-    let policy = crate::monetary::mainnet_policy();
-
-    // Check which phase we're in
-    if policy.is_halving_phase(height) {
-        // Phase 1: Halving schedule
-        policy.halving_reward(height).unwrap_or(1)
-    } else {
-        // Phase 2: Calculate tail reward based on supply
-        policy.calculate_tail_reward(total_supply)
-    }
-}
+// Note: calculate_block_reward_v2 was removed.
+// Block reward is now determined by EmissionController::current_reward,
+// which uses transaction-count-based halving (HALVING_TX_INTERVAL).
+// See difficulty::EmissionController for the authoritative implementation.
 
 /// Dynamic block timing based on network load.
 ///
@@ -1028,30 +1006,7 @@ mod tests {
         assert_eq!(hash1, hash2);
     }
 
-    #[test]
-    fn test_block_reward_v2_halving() {
-        // Two-Phase model: First halving period
-        let policy = crate::monetary::mainnet_policy();
-        let reward = calculate_block_reward_v2(0, 0);
-        assert_eq!(reward, policy.initial_reward);
-
-        // After first halving
-        let reward_after = calculate_block_reward_v2(policy.halving_interval, 0);
-        assert_eq!(reward_after, policy.initial_reward / 2);
-    }
-
-    #[test]
-    fn test_block_reward_v2_tail() {
-        // Two-Phase model: Tail emission phase
-        let policy = crate::monetary::mainnet_policy();
-        let tail_start = policy.tail_emission_start_height();
-        let supply = 100_000_000_000_000_000u64; // 100M BTH in picocredits
-
-        let reward = calculate_block_reward_v2(tail_start + 100, supply);
-
-        // Should be based on supply and inflation target
-        assert!(reward > 0);
-        // Tail reward should be much smaller than initial
-        assert!(reward < policy.initial_reward);
-    }
+    // Note: Tests for block-height-based halving (calculate_block_reward_v2) were removed.
+    // Halving is now based on transaction count via EmissionController.
+    // See difficulty::EmissionController tests for tx-based halving tests.
 }

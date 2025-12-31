@@ -103,8 +103,6 @@ impl Node {
     }
 
     fn print_status(&self) -> Result<()> {
-        use crate::monetary::mainnet_policy;
-
         let ledger = self.ledger.read()
             .map_err(|_| anyhow::anyhow!("Ledger lock poisoned"))?;
         let state = ledger
@@ -112,14 +110,14 @@ impl Node {
             .map_err(|e| anyhow::anyhow!("Failed to get chain state: {}", e))?;
 
         // Calculate monetary stats
-        let policy = mainnet_policy();
         let net_supply = state.total_mined.saturating_sub(state.total_fees_burned);
-        let phase = if policy.is_halving_phase(state.height) {
-            "Halving"
-        } else {
-            "Tail Emission"
+        // Use tx-based phase from EmissionController
+        let phase = match self.emission_controller.phase() {
+            crate::block::difficulty::Phase::Halving { epoch } => format!("Halving (epoch {})", epoch),
+            crate::block::difficulty::Phase::Tail => "Tail Emission".to_string(),
         };
-        let current_reward = crate::block::calculate_block_reward_v2(state.height + 1, net_supply);
+        // Use tx-based reward from EmissionController
+        let current_reward = self.emission_controller.current_reward;
 
         println!();
         println!("=== Botho Node ===");
@@ -182,6 +180,7 @@ impl Node {
             height: state.height + 1,
             difficulty: state.difficulty,
             total_minted: state.total_mined,
+            current_reward: self.emission_controller.current_reward,
         };
         minter.update_work(work);
 
@@ -288,6 +287,7 @@ impl Node {
                         height: state.height + 1,
                         difficulty: new_difficulty,
                         total_minted: state.total_mined,
+                        current_reward: self.emission_controller.current_reward,
                     };
                     info!(
                         height = work.height,
