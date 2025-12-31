@@ -350,6 +350,8 @@ sudo nginx -t && sudo systemctl reload nginx
 
 ## Monitoring
 
+> **CloudWatch Monitoring**: For AWS CloudWatch setup (EC2 instances), see [docs/monitoring.md](monitoring.md).
+
 ### Health Check Script
 
 ```bash
