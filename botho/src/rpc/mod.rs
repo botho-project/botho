@@ -12,7 +12,7 @@ pub mod websocket;
 
 pub use auth::{ApiKeyConfig, ApiPermissions, AuthError, HmacAuthenticator};
 pub use deposit_scanner::{DepositScanner, ScanResult};
-pub use metrics::{check_health, check_ready, HealthResponse, HealthStatus, NodeMetrics};
+pub use metrics::{check_health, check_ready, HealthResponse, HealthStatus, NodeMetrics, ReadyResponse};
 pub use rate_limit::{KeyTier, RateLimitInfo, RateLimiter};
 pub use view_keys::{RegistryError, ViewKeyInfo, ViewKeyRegistry};
 pub use websocket::WsBroadcaster;
@@ -313,13 +313,14 @@ async fn handle_request(
                 ));
             }
             "/ready" => {
-                let is_ready = check_ready(&state);
+                let ready_response = check_ready(&state);
+                let is_ready = ready_response.status == "ready";
                 let status = if is_ready {
                     StatusCode::OK
                 } else {
                     StatusCode::SERVICE_UNAVAILABLE
                 };
-                let body = serde_json::to_string(&json!({ "ready": is_ready })).unwrap_or_default();
+                let body = serde_json::to_string(&ready_response).unwrap_or_default();
                 return Ok(cors_response(
                     Response::builder()
                         .status(status)
