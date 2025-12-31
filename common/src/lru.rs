@@ -2,6 +2,10 @@
 
 //! A simple, safe LRU cache implementation.
 //!
+//! This module forbids unsafe code to ensure memory safety guarantees.
+
+#![forbid(unsafe_code)]
+//!
 //! This design tradeoffs some memory usage in favor of faster item lookup times
 //! by storing an additional HashMap that allows quickly checking if a key is
 //! already in the cache.
@@ -186,18 +190,45 @@ impl<K: PartialEq + Eq + Hash, V> LruCache<K, V> {
     }
 
     /// Iterate over the contents of this cache.
-    pub fn iter(&self) -> LruCacheIterator<K, V> {
+    pub fn iter(&self) -> LruCacheIterator<'_, K, V> {
         LruCacheIterator {
             pos: 0,
             cache: self,
         }
     }
 
-    /// Iterate over the contents of this cache.
-    pub fn iter_mut(&mut self) -> LruCacheMutIterator<K, V> {
-        LruCacheMutIterator {
-            pos: 0,
-            cache: self,
+    /// Applies a function to each key-value pair in most-recently-used to
+    /// least-recently-used order.
+    ///
+    /// This is a safe alternative to a mutable iterator. The callback pattern
+    /// ensures that only one mutable reference exists at a time, avoiding the
+    /// aliasing issues that would require unsafe code in a standard Iterator
+    /// implementation.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use bth_common::LruCache;
+    ///
+    /// let mut cache = LruCache::new(3);
+    /// cache.put("a", 1);
+    /// cache.put("b", 2);
+    /// cache.put("c", 3);
+    ///
+    /// // Double all values
+    /// cache.for_each_mut(|_key, val| {
+    ///     *val *= 2;
+    /// });
+    /// ```
+    pub fn for_each_mut<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&K, &mut V),
+    {
+        for i in 0..self.used_indexes.len() {
+            let entry_index = self.used_indexes[i];
+            if let Some((ref k, ref mut v)) = self.entries[entry_index] {
+                f(k, v);
+            }
         }
     }
 
@@ -250,49 +281,11 @@ impl<'a, K, V> Iterator for LruCacheIterator<'a, K, V> {
     }
 }
 
-/// Mutable Iterator over values in an LruCache, from most-recently-used to
-/// least-recently-used.
-pub struct LruCacheMutIterator<'a, K: 'a, V: 'a> {
-    cache: &'a mut LruCache<K, V>,
-    pos: usize,
-}
-
-impl<'a, K, V> Iterator for LruCacheMutIterator<'a, K, V> {
-    type Item = (&'a K, &'a mut V);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            if self.pos == self.cache.used_indexes.len() {
-                return None;
-            }
-
-            let entry_index = self.cache.used_indexes[self.pos];
-
-            // SAFETY: This unsafe block is sound because:
-            // 1. The iterator holds an exclusive mutable borrow of the entire LruCache
-            // 2. The entries vector is never reallocated or resized during iteration
-            // 3. Each entry_index is visited exactly once (guaranteed by used_indexes iteration)
-            // 4. No entry is accessed through any other path while the iterator exists
-            //
-            // The borrow checker cannot prove this is safe because it sees us creating
-            // multiple mutable references from the same Vec. However, since we access
-            // each index exactly once and hold the exclusive LruCache borrow, there is
-            // no aliasing.
-            let entry =
-                unsafe { &mut *(&mut self.cache.entries[entry_index] as *mut Option<(Arc<K>, V)>) };
-
-            self.pos += 1;
-
-            if let Some((ref k, ref mut v)) = entry.as_mut() {
-                return Some((k, v));
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     // Tests taken from https://raw.githubusercontent.com/jeromefroe/lru-rs/master/src/lib.rs @ a11d47ddc7ab86ff07e2308e96fa0a03bcc3f385
+
+    extern crate alloc;
 
     use super::LruCache;
     use core::fmt::Debug;
@@ -309,16 +302,6 @@ mod tests {
 
     fn assert_opt_eq_tuple<K: PartialEq + Debug, V: PartialEq + Debug>(
         opt: Option<(&K, &V)>,
-        kv: (K, V),
-    ) {
-        assert!(opt.is_some());
-        let res = opt.unwrap();
-        assert_eq!(res.0, &kv.0);
-        assert_eq!(res.1, &kv.1);
-    }
-
-    fn assert_opt_eq_mut_tuple<K: PartialEq + Debug, V: PartialEq + Debug>(
-        opt: Option<(&K, &mut V)>,
         kv: (K, V),
     ) {
         assert!(opt.is_some());
@@ -448,50 +431,56 @@ mod tests {
     }
 
     #[test]
-    fn test_iter_mut_forwards() {
+    fn test_for_each_mut_order() {
         let mut cache = LruCache::new(4);
         cache.put("a", 1);
         cache.put("b", 2);
         cache.put("c", 3);
         cache.put("d", 4);
 
-        let mut iter = cache.iter_mut();
-        assert_opt_eq_mut_tuple(iter.next(), ("d", 4));
-        assert_opt_eq_mut_tuple(iter.next(), ("c", 3));
-        assert_opt_eq_mut_tuple(iter.next(), ("b", 2));
-        assert_opt_eq_mut_tuple(iter.next(), ("a", 1));
-        assert_eq!(iter.next(), None);
+        // Collect key-value pairs in MRU order
+        let mut items: alloc::vec::Vec<(&str, i32)> = alloc::vec::Vec::new();
+        cache.for_each_mut(|k, v| {
+            items.push((*k, *v));
+        });
+        assert_eq!(items, alloc::vec![("d", 4), ("c", 3), ("b", 2), ("a", 1)]);
 
         // Get "b", that should move it to the front of the list.
         assert_opt_eq(cache.get(&"b"), 2);
 
-        let mut iter = cache.iter_mut();
-        assert_opt_eq_mut_tuple(iter.next(), ("b", 2));
-        assert_opt_eq_mut_tuple(iter.next(), ("d", 4));
-        assert_opt_eq_mut_tuple(iter.next(), ("c", 3));
-        assert_opt_eq_mut_tuple(iter.next(), ("a", 1));
-        assert_eq!(iter.next(), None);
+        // Now verify the new order
+        items.clear();
+        cache.for_each_mut(|k, v| {
+            items.push((*k, *v));
+        });
+        assert_eq!(items, alloc::vec![("b", 2), ("d", 4), ("c", 3), ("a", 1)]);
     }
 
     #[test]
-    fn test_iter_mut_mutates() {
+    fn test_for_each_mut_mutates() {
         let mut cache = LruCache::new(4);
         cache.put("a", 1);
         cache.put("b", 2);
         cache.put("c", 3);
         cache.put("d", 4);
 
-        for (i, (_key, val)) in cache.iter_mut().enumerate() {
-            assert_eq!(4 - i, *val);
-            *val = 100 + i;
-        }
+        // Mutate values during iteration
+        let mut i = 0usize;
+        cache.for_each_mut(|_key, val| {
+            assert_eq!(4 - i, *val as usize);
+            *val = 100 + i as i32;
+            i += 1;
+        });
 
-        let mut iter = cache.iter_mut();
-        assert_opt_eq_mut_tuple(iter.next(), ("d", 100));
-        assert_opt_eq_mut_tuple(iter.next(), ("c", 101));
-        assert_opt_eq_mut_tuple(iter.next(), ("b", 102));
-        assert_opt_eq_mut_tuple(iter.next(), ("a", 103));
-        assert_eq!(iter.next(), None);
+        // Verify the mutations took effect
+        let mut items: alloc::vec::Vec<(&str, i32)> = alloc::vec::Vec::new();
+        cache.for_each_mut(|k, v| {
+            items.push((*k, *v));
+        });
+        assert_eq!(
+            items,
+            alloc::vec![("d", 100), ("c", 101), ("b", 102), ("a", 103)]
+        );
     }
 
     #[test]
