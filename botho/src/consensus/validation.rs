@@ -6,7 +6,7 @@
 //! - Minting transactions (PoW-based coinbase rewards)
 //! - Transfer transactions (UTXO-based value transfers)
 
-use crate::block::{calculate_block_reward_v2, MintingTx};
+use crate::block::{calculate_block_reward, MintingTx};
 use crate::ledger::ChainState;
 use crate::transaction::Transaction;
 #[cfg(feature = "pq")]
@@ -155,8 +155,10 @@ impl TransactionValidator {
             return Err(ValidationError::WrongDifficulty);
         }
 
-        // 4. Check reward matches Two-Phase emission schedule
-        let expected_reward = calculate_block_reward_v2(tx.block_height, state.total_mined);
+        // 4. Check reward matches block-based emission schedule
+        // Block reward is calculated from height and total supply using
+        // MonetaryPolicy with 5s block assumption.
+        let expected_reward = calculate_block_reward(tx.block_height, state.total_mined);
         if tx.reward != expected_reward {
             warn!(
                 expected = expected_reward,

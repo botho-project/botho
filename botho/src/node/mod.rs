@@ -7,8 +7,9 @@ use std::sync::mpsc::Receiver;
 use std::sync::{Arc, RwLock};
 use tracing::{info, warn};
 
-use crate::block::difficulty::EmissionController;
+use crate::block::{calculate_block_reward, difficulty::EmissionController};
 use crate::commands::send::{load_pending_txs, clear_pending_txs};
+use crate::monetary::mainnet_policy;
 use crate::config::{ledger_db_path_from_config, Config};
 use crate::ledger::Ledger;
 use crate::mempool::{Mempool, MempoolError};
@@ -103,8 +104,6 @@ impl Node {
     }
 
     fn print_status(&self) -> Result<()> {
-        use crate::monetary::mainnet_policy;
-
         let ledger = self.ledger.read()
             .map_err(|_| anyhow::anyhow!("Ledger lock poisoned"))?;
         let state = ledger
@@ -112,14 +111,17 @@ impl Node {
             .map_err(|e| anyhow::anyhow!("Failed to get chain state: {}", e))?;
 
         // Calculate monetary stats
-        let policy = mainnet_policy();
         let net_supply = state.total_mined.saturating_sub(state.total_fees_burned);
+        // Use block-based phase from MonetaryPolicy
+        let policy = mainnet_policy();
         let phase = if policy.is_halving_phase(state.height) {
-            "Halving"
+            let halving_epoch = state.height / policy.halving_interval;
+            format!("Halving (epoch {})", halving_epoch)
         } else {
-            "Tail Emission"
+            "Tail Emission".to_string()
         };
-        let current_reward = crate::block::calculate_block_reward_v2(state.height + 1, net_supply);
+        // Use block-based reward calculation
+        let current_reward = calculate_block_reward(state.height + 1, state.total_mined);
 
         info!("=== Botho Node ===");
         if let Some(ref wallet) = self.wallet {

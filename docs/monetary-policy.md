@@ -17,6 +17,27 @@ The key insight is that **block production and emission are decoupled**:
 
 This separation allows precise monetary targeting without affecting transaction throughput.
 
+### Block-Based Halving (Design Decision)
+
+> **Block-Based Monetary Schedule**: The halving schedule is tied to **block height**,
+> using a 5-second block assumption for monetary calculations.
+>
+> - Halving occurs every 12,614,400 blocks (~2 years at 5s blocks)
+> - 5 halvings total before tail emission (~10 years at 5s blocks)
+> - See `monetary.rs::mainnet_policy()` for the authoritative implementation
+>
+> **Adaptive Inflation**: Since actual block times vary (5-40s based on network load),
+> effective inflation scales with network activity:
+>
+> | Block Time | Effective Inflation | Halving Period |
+> |------------|--------------------:|---------------:|
+> | 5s (high load) | 2.0%/year | 2 years |
+> | 20s (normal) | 0.5%/year | 8 years |
+> | 40s (idle) | 0.25%/year | 16 years |
+>
+> This creates a natural inflation dampener: busy network = full inflation,
+> idle network = reduced inflation.
+
 ## The Economic Loop
 
 ```

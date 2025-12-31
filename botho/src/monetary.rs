@@ -197,23 +197,44 @@ fn current_unix_time() -> u64 {
 }
 
 /// Default monetary policy for Botho mainnet.
+///
+/// # Block Time Assumption
+///
+/// All monetary calculations assume **5 second blocks** (the minimum block time
+/// under high load). When actual block times are slower (up to 40s when idle),
+/// effective inflation and halving pace will be proportionally lower.
+///
+/// This creates a natural inflation dampener: busy network = full inflation,
+/// idle network = reduced inflation.
+///
+/// | Actual Block Time | Effective Inflation | Halving Period |
+/// |-------------------|--------------------:|---------------:|
+/// | 5s (high load)    | 2.0%/year           | 2 years        |
+/// | 20s (normal)      | 0.5%/year           | 8 years        |
+/// | 40s (idle)        | 0.25%/year          | 16 years       |
 pub fn mainnet_policy() -> MonetaryPolicy {
-    MonetaryPolicy {
-        // Phase 1: ~10 years of halvings
-        initial_reward: 50_000_000_000_000, // 50 BTH in picocredits
-        halving_interval: 1_051_200,         // ~2 years at 60s blocks
-        halving_count: 5,                    // 5 halvings over ~10 years
+    // Constants based on 5-second blocks (minimum block time)
+    const SECS_PER_YEAR: u64 = 365 * 24 * 60 * 60;
+    const ASSUMED_BLOCK_TIME: u64 = 5;
+    const BLOCKS_PER_YEAR: u64 = SECS_PER_YEAR / ASSUMED_BLOCK_TIME; // 6,307,200
 
-        // Phase 2: 2% target net inflation
+    MonetaryPolicy {
+        // Phase 1: ~10 years of halvings (at 5s blocks under full load)
+        initial_reward: 50_000_000_000_000,         // 50 BTH in picocredits
+        halving_interval: BLOCKS_PER_YEAR * 2,      // 12,614,400 blocks (~2 years at 5s)
+        halving_count: 5,                           // 5 halvings over ~10 years
+
+        // Phase 2: 2% target net inflation (at 5s blocks)
         tail_inflation_bps: 200,
 
-        // Block time: 60 seconds target, 45-90s bounds
-        target_block_time_secs: 60,
-        min_block_time_secs: 45,
-        max_block_time_secs: 90,
+        // Block time: 5 seconds assumed for monetary calculations
+        // Actual block time varies 5-40s based on network load (see dynamic_timing)
+        target_block_time_secs: ASSUMED_BLOCK_TIME,
+        min_block_time_secs: 3,   // Absolute floor (consensus needs time)
+        max_block_time_secs: 60,  // Absolute ceiling
 
-        // Difficulty: adjust every ~24 hours (1440 blocks at 60s)
-        difficulty_adjustment_interval: 1440,
+        // Difficulty: adjust every ~24 hours at 5s blocks
+        difficulty_adjustment_interval: BLOCKS_PER_YEAR / 365, // 17,280 blocks
         max_difficulty_adjustment_bps: 2500, // 25% max change per epoch
 
         // Assume ~0.5% of supply burned in fees annually
@@ -222,20 +243,22 @@ pub fn mainnet_policy() -> MonetaryPolicy {
 }
 
 /// Test/development monetary policy with faster parameters.
+///
+/// Uses same 5s block assumption but with accelerated halving for testing.
 pub fn testnet_policy() -> MonetaryPolicy {
     MonetaryPolicy {
         initial_reward: 50_000_000_000_000, // 50 BTH
-        halving_interval: 10_000,            // ~7 days at 60s blocks
+        halving_interval: 120_000,           // ~1 week at 5s blocks
         halving_count: 5,
 
         tail_inflation_bps: 200,
 
-        target_block_time_secs: 60,
-        min_block_time_secs: 30,
-        max_block_time_secs: 120,
+        target_block_time_secs: 5,
+        min_block_time_secs: 3,
+        max_block_time_secs: 60,
 
-        difficulty_adjustment_interval: 100,  // Every ~1.5 hours
-        max_difficulty_adjustment_bps: 5000,  // 50% max change (faster convergence)
+        difficulty_adjustment_interval: 1000,  // Every ~1.4 hours at 5s
+        max_difficulty_adjustment_bps: 5000,   // 50% max change (faster convergence)
 
         expected_fee_burn_rate_bps: 100,
     }
@@ -300,6 +323,9 @@ mod tests {
 
         assert_eq!(policy.halving_count, 5);
         assert_eq!(policy.tail_inflation_bps, 200);
-        assert_eq!(policy.target_block_time_secs, 60);
+        // Block time is now 5s (assumed minimum under high load)
+        assert_eq!(policy.target_block_time_secs, 5);
+        // 2 years worth of 5s blocks
+        assert_eq!(policy.halving_interval, 12_614_400);
     }
 }
