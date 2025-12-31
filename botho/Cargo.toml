@@ -128,3 +128,13 @@ tempfile = "3"
 botho-wallet = { path = "../botho-wallet" }
 bth-transaction-core = { path = "../transaction/core", features = ["pq"] }
 futures = "0.3"
+criterion = { workspace = true }
+rand_chacha = { workspace = true }
+
+[[bench]]
+name = "block_benchmarks"
+harness = false
+
+[[bench]]
+name = "mempool_benchmarks"
+harness = false
