@@ -139,70 +139,67 @@ impl HealthStatus {
 #[derive(Debug, Serialize)]
 pub struct HealthResponse {
     pub status: HealthStatus,
-    pub version: String,
-    pub block_height: u64,
-    pub peer_count: usize,
+    pub uptime_seconds: u64,
+}
+
+/// Readiness check response
+#[derive(Debug, Serialize)]
+pub struct ReadyResponse {
+    pub status: &'static str,
     pub synced: bool,
+    pub peers: usize,
+    pub block_height: u64,
 }
 
 /// Check the health of the node
+///
+/// Returns a simple health status indicating if the node is alive.
+/// This endpoint is used by load balancers and Kubernetes liveness probes.
 pub fn check_health(state: &RpcState) -> HealthResponse {
-    let mut status = HealthStatus::Healthy;
-    let mut block_height = 0u64;
-    let mut peer_count = 0usize;
-    let synced: bool;
-
-    // Get block height
-    match state.ledger.read() {
-        Ok(ledger) => {
-            if let Ok(chain_state) = ledger.get_chain_state() {
-                block_height = chain_state.height;
-            }
-        }
-        Err(_) => {
-            status = HealthStatus::Unhealthy;
-        }
-    }
-
-    // Get peer count
-    match state.peer_count.read() {
-        Ok(peers) => {
-            peer_count = *peers;
-        }
-        Err(_) => {
-            status = HealthStatus::Unhealthy;
-        }
-    }
-
-    // Check if degraded (no peers but otherwise functional)
-    if status == HealthStatus::Healthy && peer_count == 0 {
-        status = HealthStatus::Degraded;
-    }
-
-    // For now, consider synced if we have any blocks
-    // In production, this would compare against known network height
-    synced = block_height > 0;
-
     HealthResponse {
-        status,
-        version: env!("CARGO_PKG_VERSION").to_string(),
-        block_height,
-        peer_count,
-        synced,
+        status: HealthStatus::Healthy,
+        uptime_seconds: state.start_time.elapsed().as_secs(),
     }
 }
 
 /// Check if the node is ready to accept requests
 ///
-/// Returns true if the node is synced and healthy enough to serve requests.
-/// This is used by load balancers to determine if traffic should be routed here.
-pub fn check_ready(state: &RpcState) -> bool {
-    let health = check_health(state);
+/// Returns readiness status with sync state, peer count, and block height.
+/// This is used by load balancers and Kubernetes readiness probes.
+///
+/// The node is considered ready if:
+/// - It has at least one block (synced)
+/// - It has at least one peer connected
+pub fn check_ready(state: &RpcState) -> ReadyResponse {
+    let mut block_height = 0u64;
+    let mut peers = 0usize;
 
-    // Ready if healthy or degraded (degraded = functional but no peers)
-    // and synced (has at least genesis block)
-    matches!(health.status, HealthStatus::Healthy | HealthStatus::Degraded)
-        && health.synced
+    // Get block height
+    if let Ok(ledger) = state.ledger.read() {
+        if let Ok(chain_state) = ledger.get_chain_state() {
+            block_height = chain_state.height;
+        }
+    }
+
+    // Get peer count
+    if let Ok(peer_count) = state.peer_count.read() {
+        peers = *peer_count;
+    }
+
+    // Consider synced if we have any blocks
+    // In production, this could compare against known network height
+    let synced = block_height > 0;
+
+    // Ready if synced and has peers
+    let is_ready = synced && peers > 0;
+    let status = if is_ready { "ready" } else { "not_ready" };
+
+    ReadyResponse {
+        status,
+        synced,
+        peers,
+        block_height,
+    }
 }
 
 #[cfg(test)]
@@ -233,5 +230,49 @@ mod tests {
         assert_eq!(HealthStatus::Healthy.as_str(), "healthy");
         assert_eq!(HealthStatus::Degraded.as_str(), "degraded");
         assert_eq!(HealthStatus::Unhealthy.as_str(), "unhealthy");
+    }
+
+    #[test]
+    fn test_health_response_format() {
+        let response = HealthResponse {
+            status: HealthStatus::Healthy,
+            uptime_seconds: 12345,
+        };
+
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"status\":\"healthy\""));
+        assert!(json.contains("\"uptime_seconds\":12345"));
+    }
+
+    #[test]
+    fn test_ready_response_format_ready() {
+        let response = ReadyResponse {
+            status: "ready",
+            synced: true,
+            peers: 5,
+            block_height: 12345,
+        };
+
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"status\":\"ready\""));
+        assert!(json.contains("\"synced\":true"));
+        assert!(json.contains("\"peers\":5"));
+        assert!(json.contains("\"block_height\":12345"));
+    }
+
+    #[test]
+    fn test_ready_response_format_not_ready() {
+        let response = ReadyResponse {
+            status: "not_ready",
+            synced: false,
+            peers: 0,
+            block_height: 0,
+        };
+
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"status\":\"not_ready\""));
+        assert!(json.contains("\"synced\":false"));
+        assert!(json.contains("\"peers\":0"));
+        assert!(json.contains("\"block_height\":0"));
     }
 }
