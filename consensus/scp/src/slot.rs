@@ -1988,6 +1988,7 @@ impl<V: Value, ValidationError: Display> Slot<V, ValidationError> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod nominate_protocol_tests {
     use super::*;
     use crate::test_utils::*;
@@ -2583,6 +2584,7 @@ mod nominate_protocol_tests {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod ballot_protocol_tests {
     use super::*;
     use crate::test_utils::*;
@@ -4637,6 +4639,7 @@ mod ballot_protocol_tests {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
     use crate::test_utils::*;

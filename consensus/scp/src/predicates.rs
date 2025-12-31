@@ -168,6 +168,7 @@ impl<V: Value, ID: GenericNodeId> Predicate<V, ID> for FuncPredicate<'_, V, ID> 
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod predicates_tests {
     use super::*;
     use crate::{msg::*, test_utils::test_node_id, QuorumSet, QuorumSetExt};

@@ -366,6 +366,7 @@ impl<V: serde::de::DeserializeOwned + Value> Iterator for ScpLogReader<V> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use crate::{node::MockScpNode, scp_log::LoggingScpNode};
     use bth_common::logger::{test_with_logger, Logger};
