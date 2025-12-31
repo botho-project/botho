@@ -52,6 +52,120 @@ Error:
 
 ---
 
+## Observability Endpoints
+
+These endpoints use HTTP GET requests (not JSON-RPC) and are designed for infrastructure monitoring, load balancers, and Prometheus integration. They require no authentication.
+
+### `GET /health`
+
+Returns the health status of the node as JSON.
+
+**Response:**
+| Field | Type | Description |
+|-------|------|-------------|
+| `status` | string | Health status: "healthy", "degraded", or "unhealthy" |
+| `version` | string | Node version |
+| `block_height` | integer | Current blockchain height |
+| `peer_count` | integer | Number of connected peers |
+| `synced` | boolean | Whether the node is synced with the network |
+
+**Status Values:**
+- `healthy`: Node is fully operational with peers connected
+- `degraded`: Node is functional but has no peers (may be isolated)
+- `unhealthy`: Node has critical issues (e.g., storage errors)
+
+**Example:**
+```bash
+curl http://localhost:7101/health
+```
+
+**Response:**
+```json
+{
+  "status": "healthy",
+  "version": "0.1.0",
+  "block_height": 12345,
+  "peer_count": 8,
+  "synced": true
+}
+```
+
+---
+
+### `GET /ready`
+
+Readiness probe for load balancers. Returns 200 if the node is ready to accept requests, or 503 if not ready.
+
+**Response Codes:**
+| Code | Meaning |
+|------|---------|
+| 200 | Node is ready (synced and healthy/degraded) |
+| 503 | Node is not ready (unhealthy or not synced) |
+
+**Response Body:**
+```json
+{
+  "ready": true
+}
+```
+
+**Example:**
+```bash
+curl -w "%{http_code}" http://localhost:7101/ready
+```
+
+**Use Case:** Kubernetes readinessProbe or AWS ALB health checks.
+
+---
+
+### `GET /metrics`
+
+Prometheus-format metrics endpoint for monitoring and alerting.
+
+**Content-Type:** `text/plain; version=0.0.4; charset=utf-8`
+
+**Available Metrics:**
+| Metric | Type | Description |
+|--------|------|-------------|
+| `botho_block_height` | Gauge | Current blockchain height |
+| `botho_peer_count` | Gauge | Number of connected peers |
+| `botho_mempool_size` | Gauge | Number of transactions in mempool |
+| `botho_rpc_requests_total` | Counter | Total RPC requests (labeled by method) |
+| `botho_rpc_errors_total` | Counter | Total RPC errors (labeled by method) |
+
+**Example:**
+```bash
+curl http://localhost:7101/metrics
+```
+
+**Response:**
+```
+# HELP botho_block_height Current blockchain height
+# TYPE botho_block_height gauge
+botho_block_height 12345
+# HELP botho_peer_count Number of connected peers
+# TYPE botho_peer_count gauge
+botho_peer_count 8
+# HELP botho_mempool_size Number of transactions in mempool
+# TYPE botho_mempool_size gauge
+botho_mempool_size 42
+# HELP botho_rpc_requests_total Total RPC requests
+# TYPE botho_rpc_requests_total counter
+botho_rpc_requests_total{method="node_getStatus"} 156
+botho_rpc_requests_total{method="getChainInfo"} 89
+```
+
+**Prometheus Configuration:**
+```yaml
+scrape_configs:
+  - job_name: 'botho'
+    static_configs:
+      - targets: ['localhost:7101']
+    metrics_path: '/metrics'
+```
+
+---
+
 ## Node Methods
 
 ### `node_getStatus`
