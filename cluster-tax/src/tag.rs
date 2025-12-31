@@ -15,8 +15,9 @@ pub const TAG_WEIGHT_SCALE: TagWeight = 1_000_000;
 /// Sparse vector of cluster tags for an account or UTXO.
 ///
 /// Maps cluster IDs to weights indicating what fraction of the value
-/// traces back to that cluster's origin. Weights sum to at most TAG_WEIGHT_SCALE,
-/// with any remainder representing "background" (fully diffused) attribution.
+/// traces back to that cluster's origin. Weights sum to at most
+/// TAG_WEIGHT_SCALE, with any remainder representing "background" (fully
+/// diffused) attribution.
 #[derive(Clone, Debug, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TagVector {
@@ -96,7 +97,8 @@ impl TagVector {
 
         for weight in self.tags.values_mut() {
             // new_weight = weight * (1 - decay_fraction / SCALE)
-            let decay_amount = (*weight as u64 * decay_fraction as u64 / TAG_WEIGHT_SCALE as u64) as TagWeight;
+            let decay_amount =
+                (*weight as u64 * decay_fraction as u64 / TAG_WEIGHT_SCALE as u64) as TagWeight;
             *weight = weight.saturating_sub(decay_amount);
         }
 
@@ -130,7 +132,8 @@ impl TagVector {
             let self_weight = self.get(cluster) as u64;
             let incoming_weight = incoming.get(cluster) as u64;
 
-            // new_weight = (self_value * self_weight + incoming_value * incoming_weight) / total_value
+            // new_weight = (self_value * self_weight + incoming_value * incoming_weight) /
+            // total_value
             let numerator = self_value * self_weight + incoming_value * incoming_weight;
             let new_weight = (numerator / total_value) as TagWeight;
 
@@ -189,7 +192,10 @@ mod tests {
 
         // Should have ~90% remaining
         let remaining = tags.get(c1);
-        assert!(remaining >= 890_000 && remaining <= 910_000, "Expected ~900000, got {remaining}");
+        assert!(
+            remaining >= 890_000 && remaining <= 910_000,
+            "Expected ~900000, got {remaining}"
+        );
         assert!(tags.background() > 0);
     }
 
@@ -198,8 +204,8 @@ mod tests {
         let c1 = ClusterId::new(1);
         let c2 = ClusterId::new(2);
 
-        let mut receiver = TagVector::single(c1);  // 100% c1
-        let incoming = TagVector::single(c2);       // 100% c2
+        let mut receiver = TagVector::single(c1); // 100% c1
+        let incoming = TagVector::single(c2); // 100% c2
 
         // Mix equal values
         receiver.mix(1000, &incoming, 1000);
@@ -208,8 +214,14 @@ mod tests {
         let w1 = receiver.get(c1);
         let w2 = receiver.get(c2);
 
-        assert!(w1 >= 490_000 && w1 <= 510_000, "Expected ~500000 for c1, got {w1}");
-        assert!(w2 >= 490_000 && w2 <= 510_000, "Expected ~500000 for c2, got {w2}");
+        assert!(
+            w1 >= 490_000 && w1 <= 510_000,
+            "Expected ~500000 for c1, got {w1}"
+        );
+        assert!(
+            w2 >= 490_000 && w2 <= 510_000,
+            "Expected ~500000 for c2, got {w2}"
+        );
     }
 
     #[test]
@@ -219,10 +231,10 @@ mod tests {
 
         // Set weight below threshold
         tags.set(c1, TagVector::PRUNE_THRESHOLD - 1);
-        assert_eq!(tags.get(c1), 0);  // Should be pruned
+        assert_eq!(tags.get(c1), 0); // Should be pruned
 
         // Set weight at threshold
         tags.set(c1, TagVector::PRUNE_THRESHOLD);
-        assert_eq!(tags.get(c1), TagVector::PRUNE_THRESHOLD);  // Should be kept
+        assert_eq!(tags.get(c1), TagVector::PRUNE_THRESHOLD); // Should be kept
     }
 }

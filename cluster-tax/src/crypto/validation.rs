@@ -3,12 +3,13 @@
 //! This module implements the rules for how tags must propagate from
 //! transaction inputs to outputs, ensuring correct progressive fee computation.
 
-use crate::{ClusterId, ClusterWealth, FeeCurve, FeeRateBps, TagWeight, TAG_WEIGHT_SCALE};
 use super::tagged_output::CompactTagVector;
+use crate::{ClusterId, ClusterWealth, FeeCurve, FeeRateBps, TagWeight, TAG_WEIGHT_SCALE};
 use std::collections::HashMap;
 
 /// Decay rate per transaction hop (parts per million).
 /// 50,000 = 5% decay, meaning 95% of tag weight survives each hop.
+#[allow(dead_code)]
 pub const DEFAULT_DECAY_RATE: TagWeight = 50_000;
 
 /// Errors in tag inheritance validation.
@@ -30,10 +31,7 @@ pub enum TagValidationError {
     },
 
     /// Fee paid is less than required by progressive rate.
-    InsufficientFee {
-        required_fee: u64,
-        actual_fee: u64,
-    },
+    InsufficientFee { required_fee: u64, actual_fee: u64 },
 
     /// Total output tag weights exceed 100%.
     InvalidTagWeights { output_index: usize },
@@ -61,6 +59,7 @@ pub struct TaggedOutput {
 
 /// Result of fee computation.
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub struct FeeComputation {
     /// Required minimum fee based on input tags.
     pub required_fee: u64,
@@ -105,8 +104,8 @@ pub fn compute_required_fee(
         let rate = fee_curve.rate_bps(cluster_w) as u128;
 
         // Contribution = (mass / total_value) * rate * transfer_value
-        let contribution = mass as u128 * rate * transfer_value as u128
-            / (total_input_value as u128 * 10_000);
+        let contribution =
+            mass as u128 * rate * transfer_value as u128 / (total_input_value as u128 * 10_000);
 
         weighted_rate_sum += mass as u128 * rate;
         cluster_contributions.insert(cluster, contribution as u64);
@@ -123,7 +122,9 @@ pub fn compute_required_fee(
 
     // Effective rate = weighted_rate_sum / total_input_value
     let effective_rate_bps = if total_input_value > 0 {
-        (weighted_rate_sum / (total_input_value as u128 * TAG_WEIGHT_SCALE as u128 / TAG_WEIGHT_SCALE as u128)) as FeeRateBps
+        (weighted_rate_sum
+            / (total_input_value as u128 * TAG_WEIGHT_SCALE as u128 / TAG_WEIGHT_SCALE as u128))
+            as FeeRateBps
     } else {
         fee_curve.background_rate_bps
     };
@@ -142,8 +143,8 @@ pub fn compute_required_fee(
 ///
 /// Rules:
 /// 1. Value conservation: sum(inputs) = sum(outputs) + fee
-/// 2. Tag mass conservation with decay: for each cluster k,
-///    sum(output_mass_k) = (1 - decay) * sum(input_mass_k)
+/// 2. Tag mass conservation with decay: for each cluster k, sum(output_mass_k)
+///    = (1 - decay) * sum(input_mass_k)
 /// 3. Fee sufficiency: fee >= compute_required_fee(inputs)
 ///
 /// Note: In Phase 1 (public tags), we can validate this directly.
@@ -236,6 +237,7 @@ pub fn validate_tag_inheritance(
 ///
 /// This is the "correct" way to compute output tags that will pass validation.
 /// Used by wallet software to construct valid transactions.
+#[allow(dead_code)]
 pub fn compute_output_tags(
     inputs: &[TaggedInput],
     output_values: &[u64],
@@ -311,7 +313,7 @@ mod tests {
     fn test_cluster_wealth() -> ClusterWealth {
         let mut cw = ClusterWealth::new();
         cw.set(ClusterId(1), 50_000_000); // Above midpoint
-        cw.set(ClusterId(2), 1_000_000);  // Below midpoint
+        cw.set(ClusterId(2), 1_000_000); // Below midpoint
         cw
     }
 

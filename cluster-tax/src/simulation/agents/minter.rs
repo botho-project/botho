@@ -1,9 +1,13 @@
 //! Minter agent: Receives block rewards, sells coins for goods/services.
 
-use crate::simulation::agent::{Action, Agent, AgentId};
-use crate::simulation::state::SimulationState;
-use crate::tag::TagVector;
-use crate::Account;
+use crate::{
+    simulation::{
+        agent::{Action, Agent, AgentId},
+        state::SimulationState,
+    },
+    tag::TagVector,
+    Account,
+};
 
 /// Minter that receives fresh coin rewards and sells them.
 #[derive(Debug)]

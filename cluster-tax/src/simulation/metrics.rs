@@ -7,8 +7,10 @@
 //! - Wash trading profitability
 //! - Mixer utilization
 
-use crate::tag::{TagVector, TAG_WEIGHT_SCALE};
-use crate::{ClusterWealth, FeeCurve};
+use crate::{
+    tag::{TagVector, TAG_WEIGHT_SCALE},
+    ClusterWealth, FeeCurve,
+};
 use std::collections::HashMap;
 
 use super::agent::AgentId;
@@ -19,7 +21,8 @@ pub struct Metrics {
     /// Simulation round.
     pub round: u64,
 
-    /// Gini coefficient of wealth (0 = perfect equality, 1 = perfect inequality).
+    /// Gini coefficient of wealth (0 = perfect equality, 1 = perfect
+    /// inequality).
     pub gini_coefficient: f64,
 
     /// Total wealth in the system.
@@ -172,7 +175,12 @@ impl SimulationMetrics {
         }
 
         let n = self.snapshots.len() as f64;
-        totals.iter().map(|&t| t / n).collect::<Vec<_>>().try_into().unwrap()
+        totals
+            .iter()
+            .map(|&t| t / n)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap()
     }
 
     /// Summary statistics.
@@ -412,7 +420,10 @@ mod tests {
     fn test_gini_perfect_equality() {
         let wealths = vec![100, 100, 100, 100, 100];
         let gini = calculate_gini(&wealths);
-        assert!(gini < 0.01, "Perfect equality should have Gini near 0: {gini}");
+        assert!(
+            gini < 0.01,
+            "Perfect equality should have Gini near 0: {gini}"
+        );
     }
 
     #[test]

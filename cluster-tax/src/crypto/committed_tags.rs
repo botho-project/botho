@@ -1,8 +1,8 @@
 //! Committed cluster tags with Pedersen commitments.
 //!
-//! Phase 2 implementation that hides tag weights using cryptographic commitments.
-//! This provides full privacy for cluster attribution while still allowing
-//! verification of tag conservation and fee sufficiency.
+//! Phase 2 implementation that hides tag weights using cryptographic
+//! commitments. This provides full privacy for cluster attribution while still
+//! allowing verification of tag conservation and fee sufficiency.
 
 use crate::{ClusterId, TagWeight, TAG_WEIGHT_SCALE};
 use curve25519_dalek::{
@@ -131,11 +131,8 @@ impl CommittedTagVector {
 
     /// Create from secrets.
     pub fn from_secrets(secrets: &CommittedTagVectorSecret) -> Self {
-        let mut entries: Vec<CommittedTagMass> = secrets
-            .entries
-            .iter()
-            .map(|s| s.commit())
-            .collect();
+        let mut entries: Vec<CommittedTagMass> =
+            secrets.entries.iter().map(|s| s.commit()).collect();
 
         // Sort by cluster_id for deterministic ordering
         entries.sort_by_key(|e| e.cluster_id.0);
@@ -143,8 +140,7 @@ impl CommittedTagVector {
         // Compute total commitment
         let h_total = total_mass_generator();
         let g = blinding_generator();
-        let total_point = Scalar::from(secrets.total_mass) * h_total
-            + secrets.total_blinding * g;
+        let total_point = Scalar::from(secrets.total_mass) * h_total + secrets.total_blinding * g;
 
         Self {
             entries,
@@ -434,11 +430,8 @@ impl TagConservationProver {
             let blinding_diff = output_blinding - scaled_input_blinding;
 
             // Create Schnorr proof for this blinding difference
-            let proof = SchnorrProof::prove(
-                blinding_diff,
-                &self.conservation_context(cluster_id),
-                rng,
-            );
+            let proof =
+                SchnorrProof::prove(blinding_diff, &self.conservation_context(cluster_id), rng);
 
             cluster_proofs.push(ClusterConservationProof { cluster_id, proof });
         }
@@ -580,7 +573,9 @@ impl TagConservationVerifier {
         let scaled_input = Scalar::from(decay_factor as u64) * scale_inv * input_total;
         let diff = output_total - scaled_input;
 
-        proof.total_proof.verify(&diff.compress(), b"total_conservation")
+        proof
+            .total_proof
+            .verify(&diff.compress(), b"total_conservation")
     }
 
     fn sum_cluster_commitments(
@@ -866,11 +861,8 @@ mod tests {
             CommittedTagVectorSecret::from_plaintext(output_value, &inflated_tags, &mut OsRng);
 
         let decay_rate = 50_000;
-        let prover = TagConservationProver::new(
-            vec![input_secret],
-            vec![inflated_output],
-            decay_rate,
-        );
+        let prover =
+            TagConservationProver::new(vec![input_secret], vec![inflated_output], decay_rate);
 
         // Should fail to generate proof
         let proof = prover.prove(&mut OsRng);
