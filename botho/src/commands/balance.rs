@@ -5,6 +5,12 @@ use crate::config::{ledger_db_path_from_config, Config};
 use crate::ledger::Ledger;
 use crate::wallet::Wallet;
 
+/// Picocredits per BTH (10^12) - internal precision
+const PICOCREDITS_PER_BTH: u64 = 1_000_000_000_000;
+
+/// Picocredits per nanoBTH (10^3) - for nanoBTH display
+const PICOCREDITS_PER_NANOBTH: u64 = 1_000;
+
 /// Show wallet balance
 pub fn run(config_path: &Path) -> Result<()> {
     let config = Config::load(config_path)
@@ -32,19 +38,22 @@ pub fn run(config_path: &Path) -> Result<()> {
         .get_utxos_for_address(&address)
         .map_err(|e| anyhow::anyhow!("Failed to get UTXOs: {}", e))?;
 
-    let balance: u64 = utxos.iter().map(|u| u.output.amount).sum();
+    let balance_picocredits: u64 = utxos.iter().map(|u| u.output.amount).sum();
     let utxo_count = utxos.len();
 
-    // Convert from picocredits to BTH
-    let bth = balance as f64 / 1_000_000_000_000.0;
+    // Convert to display units
+    let balance_bth = balance_picocredits as f64 / PICOCREDITS_PER_BTH as f64;
+    let balance_nanobth = balance_picocredits / PICOCREDITS_PER_NANOBTH;
 
     println!();
     println!("=== Wallet Balance ===");
-    println!("Balance: {:.12} BTH ({} picocredits)", bth, balance);
+    println!("Balance: {:.12} BTH", balance_bth);
+    println!("         {} nanoBTH", balance_nanobth);
+    println!("         {} picocredits (internal)", balance_picocredits);
     println!("UTXOs: {}", utxo_count);
     println!();
     println!("Chain height: {}", state.height);
-    println!("Total network mined: {:.12} BTH", state.total_mined as f64 / 1_000_000_000_000.0);
+    println!("Total network mined: {:.12} BTH", state.total_mined as f64 / PICOCREDITS_PER_BTH as f64);
     println!();
 
     Ok(())
