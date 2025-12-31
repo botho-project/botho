@@ -59,7 +59,7 @@ Performance benchmarks ─────────→ v0.2.0 Release
    - [x] Add `#![deny(unsafe_code)]` to crypto crates (10/10 crates complete)
 
 5. **Rate Limiting & DoS Protection**
-   - [ ] Add wallet decryption rate limiting (exponential backoff)
+   - [x] Add wallet decryption rate limiting (exponential backoff)
    - [ ] Add per-peer rate limiting on gossipsub messages
    - [ ] Add per-IP connection rate limiting (max 10 connections/IP)
    - [ ] Add RPC rate limiting per API key (100 req/min default)
