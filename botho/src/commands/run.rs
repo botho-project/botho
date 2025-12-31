@@ -18,13 +18,12 @@ use std::collections::HashMap;
 use crate::block::MintingTx;
 use crate::config::{Config, QuorumMode};
 use crate::consensus::{BlockBuilder, ConsensusConfig, ConsensusEvent, ConsensusService, TransactionValidator};
-use crate::ledger::ChainState;
 use crate::network::{
     BlockTxn, CompactBlock, GetBlockTxn, NetworkDiscovery, NetworkEvent, QuorumBuilder,
     ReconstructionResult,
 };
 use crate::node::{MintedMintingTx, Node};
-use crate::rpc::{start_rpc_server, RpcState, WsBroadcaster};
+use crate::rpc::{init_metrics, start_metrics_server, start_rpc_server, MetricsUpdater, RpcState, WsBroadcaster};
 use crate::transaction::Transaction;
 
 /// Timeout for initial peer discovery (seconds)
@@ -69,8 +68,13 @@ fn check_minting_eligibility(
 }
 
 /// Run the node
-pub fn run(config_path: &Path, mint: bool) -> Result<()> {
-    let config = Config::load(config_path).context("Config not found. Run 'botho init' first.")?;
+pub fn run(config_path: &Path, mint: bool, metrics_port_override: Option<u16>) -> Result<()> {
+    let mut config = Config::load(config_path).context("Config not found. Run 'botho init' first.")?;
+
+    // Apply metrics port override from CLI
+    if let Some(port) = metrics_port_override {
+        config.network.metrics_port = Some(port);
+    }
 
     // Check if minting is requested without a wallet
     if mint && !config.has_wallet() {
@@ -208,6 +212,24 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
 
     info!("RPC server listening on {}", rpc_addr);
 
+    // Initialize and start Prometheus metrics server
+    let metrics_updater = MetricsUpdater::new();
+    init_metrics();
+
+    if let Some(metrics_port) = config.network.metrics_port(network_type) {
+        let metrics_addr: SocketAddr = format!("0.0.0.0:{}", metrics_port)
+            .parse()
+            .expect("Invalid metrics address");
+
+        tokio::spawn(async move {
+            if let Err(e) = start_metrics_server(metrics_addr).await {
+                error!("Metrics server error: {}", e);
+            }
+        });
+    } else {
+        info!("Prometheus metrics disabled (metrics_port = 0)");
+    }
+
     // Get chain state for consensus
     let ledger = node.shared_ledger();
     let chain_state = ledger.read()
@@ -221,6 +243,16 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
 
     // Build SCP quorum set from connected peers (or just ourselves for solo mining)
     let scp_quorum_set = build_scp_quorum_set(&quorum, &local_peer_id);
+
+    // Update initial metrics before chain_state is moved
+    metrics_updater.set_block_height(chain_state.height);
+    metrics_updater.set_difficulty(chain_state.difficulty);
+    metrics_updater.set_total_minted(chain_state.total_mined);
+    metrics_updater.set_total_fees_burned(chain_state.total_fees_burned);
+    metrics_updater.set_peer_count(discovery.peer_count());
+    if let Ok(mempool) = node.shared_mempool().read() {
+        metrics_updater.set_mempool_size(mempool.len());
+    }
 
     let mut consensus = ConsensusService::new(
         node_id,
@@ -245,6 +277,8 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
         if let Ok(mut active) = minting_active.write() {
             *active = true;
         }
+        // Update metrics
+        metrics_updater.set_minting_active(true);
         // Broadcast initial minting status to WebSocket clients
         ws_broadcaster.minting_status(true, 0.0, 0);
     } else if mint {
@@ -290,9 +324,15 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                     match net_event {
                         NetworkEvent::NewBlock(block) => {
                             info!("Received block {} from network", block.height());
+                            let block_start = std::time::Instant::now();
                             if let Err(e) = node.add_block_from_network(&block) {
                                 warn!("Failed to add network block: {}", e);
                             } else {
+                                // Record block processing time
+                                metrics_updater.observe_block_processing(block_start.elapsed().as_secs_f64());
+                                metrics_updater.inc_blocks_processed();
+                                metrics_updater.add_transactions_processed(block.transactions.len() as u64);
+
                                 // Record for dynamic timing
                                 consensus.record_block(block.header.timestamp, block.transactions.len());
 
@@ -318,10 +358,14 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                                     block.header.difficulty,
                                 );
 
-                                // Update consensus chain state
+                                // Update consensus chain state and metrics
                                 if let Ok(ledger) = node.shared_ledger().read() {
                                     if let Ok(state) = ledger.get_chain_state() {
-                                        consensus.update_chain_state(state);
+                                        consensus.update_chain_state(state.clone());
+                                        metrics_updater.set_block_height(state.height);
+                                        metrics_updater.set_difficulty(state.difficulty);
+                                        metrics_updater.set_total_minted(state.total_mined);
+                                        metrics_updater.set_total_fees_burned(state.total_fees_burned);
                                     }
                                 }
                             }
@@ -338,6 +382,7 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                                 ws_broadcaster.new_transaction(&tx_hash, tx_fee, None);
                                 if let Ok(mempool) = node.shared_mempool().read() {
                                     ws_broadcaster.mempool_update(mempool.len(), mempool.total_fees());
+                                    metrics_updater.set_mempool_size(mempool.len());
                                 }
                             }
                         }
@@ -352,10 +397,11 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                             info!("Peer connected: {}", peer_id);
                             let new_peer_count = discovery.peer_count();
 
-                            // Update RPC peer count
+                            // Update RPC peer count and metrics
                             if let Ok(mut count) = peer_count.write() {
                                 *count = new_peer_count;
                             }
+                            metrics_updater.set_peer_count(new_peer_count);
 
                             // Broadcast peer event to WebSocket clients
                             ws_broadcaster.peer_connected(new_peer_count, &peer_id.to_string());
@@ -373,6 +419,8 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                                         if let Ok(mut active) = minting_active.write() {
                                             *active = true;
                                         }
+                                        // Update metrics
+                                        metrics_updater.set_minting_active(true);
                                         // Broadcast minting status change
                                         ws_broadcaster.minting_status(true, 0.0, 0);
                                     }
@@ -383,10 +431,11 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                             warn!("Peer disconnected: {}", peer_id);
                             let new_peer_count = discovery.peer_count();
 
-                            // Update RPC peer count
+                            // Update RPC peer count and metrics
                             if let Ok(mut count) = peer_count.write() {
                                 *count = new_peer_count;
                             }
+                            metrics_updater.set_peer_count(new_peer_count);
 
                             // Broadcast peer event to WebSocket clients
                             ws_broadcaster.peer_disconnected(new_peer_count, &peer_id.to_string());
@@ -402,6 +451,8 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                                     if let Ok(mut active) = minting_active.write() {
                                         *active = false;
                                     }
+                                    // Update metrics
+                                    metrics_updater.set_minting_active(false);
                                     // Broadcast minting status change
                                     ws_broadcaster.minting_status(false, 0.0, 0);
                                 }
@@ -896,10 +947,11 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
     }
 
     node.stop_minting_public();
-    // Update RPC minting status
+    // Update RPC minting status and metrics
     if let Ok(mut active) = minting_active.write() {
         *active = false;
     }
+    metrics_updater.set_minting_active(false);
     Ok(())
 }
 
