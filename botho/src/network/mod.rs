@@ -9,6 +9,7 @@
 //! - Chain synchronization with DDoS protections
 
 mod compact_block;
+mod connection_limiter;
 mod discovery;
 mod quorum;
 mod reputation;
@@ -16,6 +17,10 @@ mod sync;
 
 pub use compact_block::{
     BlockTxn, CompactBlock, GetBlockTxn, PrefilledTx, ReconstructionResult, ShortId,
+};
+pub use connection_limiter::{
+    ConnectionLimitExceeded, ConnectionLimiter, ConnectionLimiterMetrics,
+    DEFAULT_MAX_CONNECTIONS_PER_IP,
 };
 pub use discovery::{BothoBehaviour, NetworkDiscovery, NetworkEvent, PeerTableEntry};
 pub use quorum::{QuorumBuilder, QuorumValidation};

@@ -66,6 +66,16 @@ pub struct NetworkConfig {
     /// If empty, authentication is disabled for exchange endpoints.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub api_keys: Vec<ApiKeyEntry>,
+
+    /// Maximum connections allowed per IP address for Sybil protection.
+    /// Set to 0 to disable rate limiting. Default: 10.
+    #[serde(default = "default_max_connections_per_ip")]
+    pub max_connections_per_ip: u32,
+
+    /// IP addresses exempt from connection rate limiting.
+    /// Use for known validators or trusted infrastructure.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub connection_whitelist: Vec<String>,
 }
 
 /// API key entry for exchange authentication.
@@ -88,6 +98,10 @@ pub struct ApiKeyEntry {
 
 fn default_rate_limit() -> u32 {
     100
+}
+
+fn default_max_connections_per_ip() -> u32 {
+    10
 }
 
 /// Permissions for an API key.
@@ -143,6 +157,20 @@ impl NetworkConfig {
         } else {
             self.bootstrap_peers.clone()
         }
+    }
+
+    /// Parse the connection whitelist strings into IpAddr values.
+    /// Invalid addresses are logged and skipped.
+    pub fn parsed_connection_whitelist(&self) -> Vec<std::net::IpAddr> {
+        self.connection_whitelist
+            .iter()
+            .filter_map(|s| {
+                s.parse::<std::net::IpAddr>().ok().or_else(|| {
+                    tracing::warn!("Invalid IP address in connection whitelist: {}", s);
+                    None
+                })
+            })
+            .collect()
     }
 }
 
@@ -280,6 +308,8 @@ impl Default for NetworkConfig {
             bootstrap_peers: Vec::new(),  // Uses network-specific defaults
             quorum: QuorumConfig::default(),
             api_keys: Vec::new(),
+            max_connections_per_ip: default_max_connections_per_ip(),
+            connection_whitelist: Vec::new(),
         }
     }
 }
@@ -597,5 +627,47 @@ mod tests {
         assert!(can_mine);
         assert_eq!(size, 3);
         assert_eq!(thresh, 3);  // BFT: 3-of-3 for n=3
+    }
+
+    #[test]
+    fn test_connection_limiting_defaults() {
+        let config = NetworkConfig::default();
+        assert_eq!(config.max_connections_per_ip, 10);
+        assert!(config.connection_whitelist.is_empty());
+    }
+
+    #[test]
+    fn test_parsed_connection_whitelist() {
+        let mut config = NetworkConfig::default();
+        config.connection_whitelist = vec![
+            "127.0.0.1".to_string(),
+            "192.168.1.1".to_string(),
+            "::1".to_string(),
+            "invalid".to_string(), // Should be skipped
+        ];
+
+        let parsed = config.parsed_connection_whitelist();
+        assert_eq!(parsed.len(), 3);
+        assert!(parsed.contains(&"127.0.0.1".parse().unwrap()));
+        assert!(parsed.contains(&"192.168.1.1".parse().unwrap()));
+        assert!(parsed.contains(&"::1".parse().unwrap()));
+    }
+
+    #[test]
+    fn test_connection_whitelist_serialization() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+
+        let mut config = Config::new("test mnemonic".to_string(), Network::Testnet);
+        config.network.max_connections_per_ip = 5;
+        config.network.connection_whitelist = vec![
+            "10.0.0.1".to_string(),
+            "10.0.0.2".to_string(),
+        ];
+        config.save(&path).unwrap();
+
+        let loaded = Config::load(&path).unwrap();
+        assert_eq!(loaded.network.max_connections_per_ip, 5);
+        assert_eq!(loaded.network.connection_whitelist.len(), 2);
     }
 }

@@ -102,6 +102,9 @@ prometheus = "0.13"
 crossbeam-channel = "0.5"
 dashmap = "6"
 
+# Connection rate limiting
+parking_lot = "0.12"
+
 [build-dependencies]
 chrono = "0.4"
 
