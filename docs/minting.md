@@ -77,22 +77,24 @@ For dedicated minting machines, leave at 0. For machines doing other work, set t
 
 Minting rewards follow a two-phase model: halvings followed by perpetual tail emission.
 
-### Phase 1: Halving Period (~10 years)
+### Phase 1: Halving Period (~10 years at 5s blocks)
 
 | Parameter | Value |
 |-----------|-------|
 | Initial reward | 50 BTH |
-| Halving interval | 3,153,600 blocks (~2 years at 20s blocks) |
+| Halving interval | 12,614,400 blocks (~2 years at 5s blocks) |
 | Number of halvings | 5 |
 | Phase 1 supply | ~100 million BTH |
 
-| Period | Years | Block Reward | Cumulative Supply |
-|--------|-------|--------------|-------------------|
+| Period | Years (at 5s) | Block Reward | Cumulative Supply |
+|--------|---------------|--------------|-------------------|
 | Halving 0 | 0-2 | 50 BTH | ~52.6M BTH |
 | Halving 1 | 2-4 | 25 BTH | ~78.9M BTH |
 | Halving 2 | 4-6 | 12.5 BTH | ~92.0M BTH |
 | Halving 3 | 6-8 | 6.25 BTH | ~98.6M BTH |
 | Halving 4 | 8-10 | 3.125 BTH | ~100M BTH |
+
+**Note**: Actual halving periods depend on dynamic block timing. If average block time is 20s (typical for moderate load), halvings will occur ~4x slower (every ~8 years instead of ~2 years).
 
 ### Phase 2: Tail Emission (Year 10+)
 
@@ -101,7 +103,7 @@ After Phase 1, Botho transitions to perpetual tail emission targeting **2% annua
 | Parameter | Value |
 |-----------|-------|
 | Target net inflation | 2% annually |
-| Tail reward | ~1.59 BTH per block |
+| Tail reward | ~4.76 BTH per block (at 5s blocks) |
 | Fee burn offset | ~0.5% expected |
 
 **Why tail emission?**
@@ -109,29 +111,66 @@ After Phase 1, Botho transitions to perpetual tail emission targeting **2% annua
 - Compensates for coins lost to forgotten keys
 - Provides predictable, sustainable monetary policy
 
+**Note**: The tail reward calculation assumes 5s blocks (6.3M blocks/year). With slower actual blocks, fewer rewards are paid, naturally dampening inflation.
+
 ## Block Timing
+
+Botho uses **dynamic block timing** that adapts to network load while maintaining fixed emission calculations based on a 5-second baseline.
+
+### Monetary Baseline (5s)
+
+All monetary calculations (halving schedule, emission rate) assume 5-second blocks:
 
 | Parameter | Value |
 |-----------|-------|
-| Target block time | 20 seconds |
-| Minimum block time | 15 seconds |
-| Maximum block time | 30 seconds |
+| Assumed block time | 5 seconds |
+| Minimum (consensus floor) | 3 seconds |
+| Maximum (policy ceiling) | 60 seconds |
+
+### Dynamic Timing (Actual)
+
+Actual block production timing adjusts based on transaction rate:
+
+| Network Load | Transaction Rate | Block Time |
+|--------------|------------------|------------|
+| Very high | 20+ tx/s | 3s |
+| High | 5+ tx/s | 5s |
+| Medium | 1+ tx/s | 10s |
+| Low | 0.2+ tx/s | 20s |
+| Idle | < 0.2 tx/s | 40s |
+
+**Why dynamic timing?**
+- Faster blocks when the network is busy (better UX)
+- Slower blocks when idle (reduced overhead)
+- Emission rate self-adjusts: idle network = lower effective inflation
+
+See [Architecture: Block Timing](architecture.md#block-timing-architecture) for detailed design.
 
 ## Difficulty Adjustment
 
 | Parameter | Value |
 |-----------|-------|
-| Adjustment interval | 1,440 blocks (~8 hours) |
+| Adjustment interval | 17,280 blocks (~24h at 5s blocks) |
 | Maximum adjustment | ±25% per epoch |
 
 ### Algorithm
 
+**Phase 1 (Halving)**:
 ```
 adjustment_ratio = expected_time / actual_time
 new_difficulty = current_difficulty × clamp(ratio, 0.75, 1.25)
 ```
 
-In Phase 2, difficulty also factors in inflation targeting to maintain 2% net emission.
+**Phase 2 (Tail Emission)**:
+Difficulty adjustment blends timing (30%) and monetary targeting (70%) to maintain 2% net inflation:
+```
+timing_ratio = expected_time / actual_time
+monetary_ratio = actual_net_emission / target_net_emission
+combined_ratio = timing_ratio × 0.3 + monetary_ratio × 0.7
+new_difficulty = current_difficulty × clamp(combined_ratio, 0.75, 1.25)
+```
+
+This ensures the network can adapt block rate to hit inflation targets even when fee burns fluctuate.
 
 ## Transaction Fees
 
@@ -234,12 +273,13 @@ A peer required for your quorum went offline.
 
 | Parameter | Mainnet Value |
 |-----------|---------------|
-| Block time | 20 seconds |
+| Block time (monetary baseline) | 5 seconds |
+| Block time (actual range) | 3-40 seconds (dynamic) |
 | Initial reward | 50 BTH |
-| Halving interval | ~2 years |
+| Halving interval | ~2 years (at 5s blocks) |
 | Number of halvings | 5 |
-| Tail emission | ~1.59 BTH/block |
+| Tail emission | ~4.76 BTH/block |
 | Tail inflation target | 2% net |
-| Difficulty adjustment | Every 24 hours |
+| Difficulty adjustment | Every 17,280 blocks (~24h at 5s) |
 | Gossip port | 7100 |
 | RPC port | 7101 |

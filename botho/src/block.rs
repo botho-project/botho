@@ -467,6 +467,19 @@ pub fn calculate_block_reward(height: u64, total_supply: u64) -> u64 {
 /// - Finality latency (faster under load)
 ///
 /// Uses discrete levels for stability and predictability.
+///
+/// # Relationship with Monetary Policy
+///
+/// This module controls **actual block production timing** (3-40s), while
+/// `monetary.rs::mainnet_policy()` uses a **fixed 5s assumption** for economic
+/// calculations (halving schedule, emission rate, inflation projections).
+///
+/// When actual blocks are slower than 5s (e.g., 20s during moderate load),
+/// effective inflation is proportionally lower. This creates a natural
+/// "inflation dampener" where busy networks get full emission and idle
+/// networks preserve value.
+///
+/// See `docs/architecture.md#block-timing-architecture` for the full design.
 pub mod dynamic_timing {
     use super::Block;
 
