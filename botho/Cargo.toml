@@ -104,7 +104,7 @@ sha1 = "0.10"
 base64 = "0.22"
 
 # Metrics
-prometheus = { version = "0.13", features = ["process"] }
+prometheus = { version = "0.14", features = ["process"] }
 lazy_static = "1.4"
 
 # For SCP simulation
