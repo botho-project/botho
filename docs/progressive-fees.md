@@ -46,6 +46,27 @@ Coins remember where they came from. The fee is based on **source wealth**, not 
 
 The fee rate is determined by a **3-segment piecewise linear curve**:
 
+```mermaid
+flowchart LR
+    subgraph Inputs
+        A[Base Fee<br/>per byte]
+        B[Transaction<br/>Size]
+        C[Cluster Factor<br/>1x-6x]
+    end
+
+    A --> D((×))
+    B --> D
+    D --> E((×))
+    C --> E
+    E --> F[Total Fee]
+
+    style F fill:#22c55e,color:#000
+```
+
+**Formula**: `total_fee = base_fee × tx_size × cluster_factor`
+
+The **cluster factor** (1x to 6x) is derived from the sender's source wealth using the curve below:
+
 ![Fee Curves Comparison](images/cluster-tax/fee_curves_comparison.png)
 
 ```

@@ -51,6 +51,30 @@ Botho implements post-quantum stealth addresses using ML-KEM-768:
    - If `P' == P`, the transaction belongs to them
    - Spending key: `x = H(shared_secret) + spend_secret_key`
 
+```mermaid
+sequenceDiagram
+    participant S as Sender
+    participant B as Blockchain
+    participant R as Recipient
+
+    Note over R: Publishes V (view key) and S (spend key)
+
+    S->>S: Encapsulate shared secret using V
+    S->>S: Compute one-time address P = H(ss)*G + S
+    S->>B: Publish (P, ciphertext, amount)
+
+    R->>B: Scan new transactions
+    B-->>R: Return transaction with ciphertext
+    R->>R: Decapsulate shared secret using view key
+    R->>R: Compute P' = H(ss)*G + S
+    alt P' matches P
+        R->>R: Transaction is mine!
+        R->>R: Derive spend key x = H(ss) + s
+    else No match
+        R->>R: Not my transaction
+    end
+```
+
 ### Post-Quantum Security
 
 Unlike classical ECDH-based stealth addresses, ML-KEM provides:
@@ -139,6 +163,32 @@ Ring signature transactions hide the true sender among a group of possible signe
 2. **Ring Construction**: Creates a ring of 20 possible signers (1 real + 19 decoys)
 3. **Signing**: Produces a signature proving ownership of ONE ring member without revealing which
 4. **Verification**: Anyone can verify the signature is valid, but cannot determine the true signer
+
+```mermaid
+flowchart TB
+    subgraph Ring["Ring of 20 Possible Signers"]
+        direction LR
+        D1[Decoy 1]
+        D2[Decoy 2]
+        D3[...]
+        R[Real Signer]
+        D4[...]
+        D5[Decoy 19]
+    end
+
+    Ring --> SIG[Ring Signature]
+    SIG --> KI[Key Image]
+
+    KI --> V{Verifier}
+    V -->|Valid + New Key Image| ACCEPT[✓ Accept]
+    V -->|Duplicate Key Image| REJECT[✗ Reject<br/>Double Spend]
+
+    style R fill:#22c55e,color:#000
+    style ACCEPT fill:#22c55e,color:#000
+    style REJECT fill:#ef4444,color:#fff
+```
+
+**Key insight**: The verifier knows the signature is valid (one ring member signed) but cannot determine *which* member. The key image prevents double-spending without revealing the signer.
 
 ### CLSAG (Standard-Private)
 
