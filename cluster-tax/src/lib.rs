@@ -70,10 +70,17 @@ pub use block_decay::{
     AndDecayConfig, AndTagVector, BlockAwareTagVector, BlockDecayConfig, RateLimitedDecayConfig,
     RateLimitedTagVector,
 };
-pub use crypto::{CommittedTagVector, CommittedTagVectorSecret, ExtendedTxSignature, RingTagData};
+pub use crypto::{
+    CommittedTagVector, CommittedTagVectorSecret, ExtendedTxSignature, RingTagData,
+    // Phase 2/3: ZK fee verification
+    CommittedFeeProof, CommittedFeeProofBuilder, CommittedFeeProofVerifier,
+    CommittedFeeProver, CommittedFeeVerifier, SegmentOrProof,
+};
 pub use dynamic_fee::{DynamicFeeBase, DynamicFeeState, FeeSuggestion};
 pub use fee_curve::{
     count_outputs_with_memos, ClusterFactorCurve, FeeConfig, FeeCurve, FeeRateBps, TransactionType,
+    // Phase 2/3: ZK-compatible fee curve
+    ZkFeeCurve, SegmentParams,
 };
 pub use signing::{
     create_tag_signature, verify_tag_signature, TagSigningConfig, TagSigningError, TagSigningInput,
@@ -88,4 +95,6 @@ pub use transfer::{
 pub use validate::{
     validate_committed_tag_structure, validate_committed_tags, CommittedTagConfig,
     CommittedTagValidationError, CommittedTagValidationResult,
+    // Phase 2/3: Complete transaction validation
+    validate_committed_transaction, CommittedTransactionError, CommittedTransactionResult,
 };

@@ -1203,3 +1203,4 @@ impl Default for FeeCurve {
         Self::default_params()
     }
 }
+

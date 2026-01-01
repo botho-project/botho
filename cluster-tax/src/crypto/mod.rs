@@ -25,8 +25,11 @@ pub use committed_tags::{
     blinding_generator, cluster_generator, fee_generator, total_mass_generator, wealth_generator,
     ClusterConservationProof, CommittedTagMass, CommittedTagVector, CommittedTagVectorSecret,
     LinearRelationProof, RangeProof, SchnorrProof, SegmentFeeProof, SegmentOrProof,
-    SegmentOrProver, SegmentOrVerifier, SegmentProverSecret, TagConservationProof,
-    TagConservationProver, TagConservationVerifier, TagMassSecret,
+    TagConservationProof, TagConservationProver, TagConservationVerifier, TagMassSecret,
+    // Phase 2/3: ZK fee verification types
+    CommittedFeeProof, WealthLinkageProof,
+    CommittedFeeProver, CommittedFeeVerifier,
+    CommittedFeeProofBuilder, CommittedFeeProofVerifier,
 };
 pub use extended_signature::{
     ExtendedSignatureBuilder, ExtendedSignatureVerifier, ExtendedTxSignature, PseudoTagOutput,

@@ -112,6 +112,113 @@ impl Default for CommittedTagConfig {
     }
 }
 
+// ============================================================================
+// Phase 2/3: Complete Committed Transaction Validation
+// ============================================================================
+
+use crate::crypto::{
+    CommittedFeeProof, CommittedFeeProofVerifier, TagConservationProof, TagConservationVerifier,
+};
+use crate::fee_curve::ZkFeeCurve;
+use crate::ClusterId;
+use std::collections::HashMap;
+
+/// Complete validation result for Phase 2 committed transactions.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CommittedTransactionError {
+    /// Tag conservation proof failed
+    ConservationProofInvalid,
+    /// Fee proof failed
+    FeeProofInvalid,
+    /// Commitment structure invalid
+    InvalidCommitment,
+    /// Missing required proof
+    MissingProof,
+}
+
+/// Result type for committed transaction validation.
+pub type CommittedTransactionResult<T> = Result<T, CommittedTransactionError>;
+
+/// Complete Phase 2 transaction validation with committed tags.
+///
+/// This function validates both tag conservation and fee sufficiency
+/// using zero-knowledge proofs, without revealing the actual tag values
+/// or wealth levels.
+///
+/// # Arguments
+/// * `input_ring_tags` - Committed tag vectors for each input ring
+/// * `output_tags` - Committed tag vectors for each output
+/// * `tx_signature` - Extended transaction signature with tag proofs
+/// * `tag_conservation_proof` - Proof of tag mass conservation with decay
+/// * `fee_proof` - Proof of fee sufficiency for committed wealth
+/// * `cluster_wealth` - Public cluster wealth values
+/// * `fee_curve` - ZK-compatible fee curve
+/// * `fee_paid` - Public fee amount paid
+/// * `base_fee` - Public base fee (size-based)
+/// * `decay_rate` - Tag decay rate
+///
+/// # Returns
+/// * `Ok(())` if all proofs verify
+/// * `Err(CommittedTransactionError)` if any validation fails
+pub fn validate_committed_transaction(
+    input_commitments: &[CommittedTagVector],
+    output_commitments: &[CommittedTagVector],
+    tag_conservation_proof: &TagConservationProof,
+    fee_proof: &CommittedFeeProof,
+    cluster_wealth: &HashMap<ClusterId, u64>,
+    fee_curve: &ZkFeeCurve,
+    fee_paid: u64,
+    base_fee: u64,
+    decay_rate: TagWeight,
+) -> CommittedTransactionResult<()> {
+    // 1. Validate commitment structure
+    validate_commitment_structure(input_commitments)?;
+    validate_commitment_structure(output_commitments)?;
+
+    // 2. Verify tag conservation proof
+    let conservation_verifier = TagConservationVerifier::new(
+        input_commitments.to_vec(),
+        output_commitments.to_vec(),
+        decay_rate,
+    );
+
+    if !conservation_verifier.verify(tag_conservation_proof) {
+        return Err(CommittedTransactionError::ConservationProofInvalid);
+    }
+
+    // 3. Verify fee proof
+    let fee_verifier = CommittedFeeProofVerifier::new(
+        input_commitments.to_vec(),
+        cluster_wealth.clone(),
+        fee_curve.clone(),
+        fee_paid,
+        base_fee,
+    );
+
+    if !fee_verifier.verify(fee_proof) {
+        return Err(CommittedTransactionError::FeeProofInvalid);
+    }
+
+    Ok(())
+}
+
+// Helper to validate commitment structure (for transaction validation)
+fn validate_commitment_structure(
+    commitments: &[CommittedTagVector],
+) -> CommittedTransactionResult<()> {
+    for commitment in commitments {
+        if commitment.total_commitment.decompress().is_none() {
+            return Err(CommittedTransactionError::InvalidCommitment);
+        }
+        for entry in &commitment.entries {
+            if entry.decompress().is_none() {
+                return Err(CommittedTransactionError::InvalidCommitment);
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
