@@ -208,28 +208,28 @@ fn fuzz_special_indices(special: &SpecialIndexFuzz) {
     let view_private = RistrettoPrivate::from_random(&mut rng);
     let account_key = AccountKey::new(&spend_private, &view_private);
 
-    // Test default (index 0)
+    // Test default subaddress
     let default = account_key.default_subaddress();
     assert_eq!(
         default,
-        account_key.subaddress(0),
-        "Default should be index 0"
+        account_key.subaddress(DEFAULT_SUBADDRESS_INDEX),
+        "Default should be at DEFAULT_SUBADDRESS_INDEX"
     );
 
-    // Test change (index 1)
+    // Test change subaddress
     let change = account_key.change_subaddress();
     assert_eq!(
         change,
-        account_key.subaddress(1),
-        "Change should be index 1"
+        account_key.subaddress(CHANGE_SUBADDRESS_INDEX),
+        "Change should be at CHANGE_SUBADDRESS_INDEX"
     );
 
-    // Test gift code (index 2)
+    // Test gift code subaddress
     let gift = account_key.gift_code_subaddress();
     assert_eq!(
         gift,
-        account_key.subaddress(2),
-        "Gift code should be index 2"
+        account_key.subaddress(GIFT_CODE_SUBADDRESS_INDEX),
+        "Gift code should be at GIFT_CODE_SUBADDRESS_INDEX"
     );
 
     // All special subaddresses should be distinct
@@ -257,13 +257,22 @@ fn fuzz_index_range(range: &IndexRangeFuzz) {
     let view_private = RistrettoPrivate::from_random(&mut rng);
     let account_key = AccountKey::new(&spend_private, &view_private);
 
-    let count = (range.count as usize).min(50);
+    let requested_count = (range.count as usize).min(50);
+
+    // Limit count to avoid overflow - can only test up to (u64::MAX - start + 1) unique indices
+    let available_indices = u64::MAX.saturating_sub(range.start).saturating_add(1);
+    let count = requested_count.min(available_indices as usize);
+
+    if count < 2 {
+        // Not enough unique indices to test, skip
+        return;
+    }
 
     // All subaddresses in range should be unique
     let mut subaddresses: Vec<PublicAddress> = Vec::with_capacity(count);
 
     for i in 0..count {
-        let index = range.start.saturating_add(i as u64);
+        let index = range.start.checked_add(i as u64).unwrap();
         let subaddress = account_key.subaddress(index);
 
         // Check uniqueness
@@ -271,7 +280,7 @@ fn fuzz_index_range(range: &IndexRangeFuzz) {
             assert_ne!(
                 &subaddress, prev,
                 "Subaddresses at indices {} and {} must be unique",
-                range.start.saturating_add(j as u64),
+                range.start + j as u64,
                 index
             );
         }
