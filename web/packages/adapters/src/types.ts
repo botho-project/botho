@@ -10,6 +10,33 @@ import type {
 } from '@botho/core'
 
 /**
+ * WebSocket connection status
+ */
+export type WsConnectionStatus = 'connected' | 'connecting' | 'disconnected' | 'reconnecting'
+
+/**
+ * Mempool update event from WebSocket
+ */
+export interface MempoolUpdate {
+  /** Number of transactions in mempool */
+  size: number
+  /** Total fees in mempool (picocredits) */
+  totalFees: bigint
+}
+
+/**
+ * Peer status event from WebSocket
+ */
+export interface PeerStatus {
+  /** Current peer count */
+  peerCount: number
+  /** Event type */
+  event: 'connected' | 'disconnected' | 'count_changed'
+  /** Peer ID (if connect/disconnect) */
+  peerId?: string
+}
+
+/**
  * Result of submitting a transaction
  */
 export interface TxSubmitResult {
@@ -136,6 +163,30 @@ export interface NodeAdapter {
    * Subscribe to new transactions for watched addresses
    */
   onTransaction(addresses: Address[], callback: (tx: Transaction) => void): () => void
+
+  /**
+   * Subscribe to mempool updates
+   */
+  onMempoolUpdate(callback: (update: MempoolUpdate) => void): () => void
+
+  /**
+   * Subscribe to peer status changes
+   */
+  onPeerStatus(callback: (status: PeerStatus) => void): () => void
+
+  // =========================================================================
+  // WebSocket Status
+  // =========================================================================
+
+  /**
+   * Get current WebSocket connection status
+   */
+  getWsStatus(): WsConnectionStatus
+
+  /**
+   * Subscribe to WebSocket connection status changes
+   */
+  onWsStatusChange(callback: (status: WsConnectionStatus) => void): () => void
 }
 
 /**
