@@ -5,6 +5,7 @@
 //!
 //! ## Metrics Exported
 //!
+//! ### Application Metrics
 //! - `botho_peers_connected` - Number of connected peers (gauge)
 //! - `botho_mempool_size` - Transactions in mempool (gauge)
 //! - `botho_block_height` - Current block height (gauge)
@@ -12,6 +13,17 @@
 //! - `botho_validation_latency_seconds` - Transaction validation latency (histogram)
 //! - `botho_consensus_round_duration_seconds` - SCP consensus round duration (histogram)
 //! - `botho_consensus_nominations_total` - Total SCP nominations (counter)
+//!
+//! ### System Metrics
+//! - `botho_data_dir_usage_bytes` - Bytes used by the data directory (gauge)
+//!
+//! ### Process Metrics (Linux only)
+//! The following metrics are only available on Linux via the Prometheus process collector:
+//! - `process_resident_memory_bytes` - Process resident set size
+//! - `process_virtual_memory_bytes` - Process virtual memory size
+//! - `process_cpu_seconds_total` - Total CPU time used
+//! - `process_open_fds` - Number of open file descriptors
+//! - `process_start_time_seconds` - Process start time
 //!
 //! ## Usage
 //!
@@ -34,9 +46,12 @@ use prometheus::{
     Counter, CounterVec, Encoder, Gauge, Histogram, HistogramOpts, IntCounter, IntGauge, Opts,
     Registry, TextEncoder,
 };
+#[cfg(all(feature = "process", target_os = "linux"))]
+use prometheus::process_collector::ProcessCollector;
 use serde::Serialize;
 use std::convert::Infallible;
 use std::net::SocketAddr;
+use std::path::Path;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tracing::{error, info};
@@ -319,6 +334,16 @@ lazy_static! {
     ).expect("Failed to create minting_active metric");
 
     // ============================================================================
+    // System Metrics
+    // ============================================================================
+
+    /// Total bytes used by the node's data directory.
+    pub static ref DATA_DIR_USAGE_BYTES: IntGauge = IntGauge::new(
+        "botho_data_dir_usage_bytes",
+        "Total bytes used by the node's data directory"
+    ).expect("Failed to create data_dir_usage_bytes metric");
+
+    // ============================================================================
     // Histograms (latency measurements)
     // ============================================================================
 
@@ -429,6 +454,22 @@ pub fn init_metrics() {
     REGISTRY
         .register(Box::new(VALIDATION_FAILURES.clone()))
         .expect("Failed to register validation_failures");
+
+    // Register system metrics
+    REGISTRY
+        .register(Box::new(DATA_DIR_USAGE_BYTES.clone()))
+        .expect("Failed to register data_dir_usage_bytes");
+
+    // Register process collector for memory metrics (Linux only)
+    // This provides: process_resident_memory_bytes, process_virtual_memory_bytes,
+    // process_cpu_seconds_total, process_open_fds, process_start_time_seconds
+    #[cfg(all(feature = "process", target_os = "linux"))]
+    {
+        let process_collector = ProcessCollector::for_self();
+        REGISTRY
+            .register(Box::new(process_collector))
+            .expect("Failed to register process collector");
+    }
 
     info!("Prometheus metrics initialized");
 }
@@ -603,6 +644,38 @@ impl MetricsUpdater {
     pub fn inc_validation_failures(&self) {
         VALIDATION_FAILURES.inc();
     }
+
+    /// Update the data directory usage metric.
+    pub fn set_data_dir_usage(&self, bytes: u64) {
+        DATA_DIR_USAGE_BYTES.set(bytes as i64);
+    }
+}
+
+/// Calculate the total size of a directory recursively.
+///
+/// Returns the total bytes used by all files in the directory tree.
+/// Symbolic links are not followed to avoid counting the same files twice.
+pub fn calculate_dir_size(path: &Path) -> std::io::Result<u64> {
+    let mut total = 0u64;
+
+    if !path.is_dir() {
+        return Ok(0);
+    }
+
+    for entry in std::fs::read_dir(path)? {
+        let entry = entry?;
+        let metadata = entry.metadata()?;
+
+        if metadata.is_file() {
+            total += metadata.len();
+        } else if metadata.is_dir() {
+            // Recursively calculate subdirectory size
+            total += calculate_dir_size(&entry.path())?;
+        }
+        // Symbolic links are intentionally skipped
+    }
+
+    Ok(total)
 }
 
 #[cfg(test)]
@@ -730,5 +803,69 @@ mod tests {
         let before = TRANSACTIONS_PROCESSED.get();
         updater.add_transactions_processed(10);
         assert_eq!(TRANSACTIONS_PROCESSED.get(), before + 10);
+    }
+
+    #[test]
+    fn test_data_dir_usage_metric() {
+        let updater = MetricsUpdater::new();
+
+        updater.set_data_dir_usage(1024 * 1024 * 100); // 100 MB
+        assert_eq!(DATA_DIR_USAGE_BYTES.get(), 104857600);
+
+        updater.set_data_dir_usage(0);
+        assert_eq!(DATA_DIR_USAGE_BYTES.get(), 0);
+    }
+
+    #[test]
+    fn test_calculate_dir_size_empty() {
+        let temp_dir = std::env::temp_dir().join("botho_test_empty_dir");
+        let _ = std::fs::create_dir_all(&temp_dir);
+
+        let size = calculate_dir_size(&temp_dir).unwrap();
+        assert_eq!(size, 0);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_calculate_dir_size_with_files() {
+        let temp_dir = std::env::temp_dir().join("botho_test_files_dir");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        // Create a test file with known content
+        let test_file = temp_dir.join("test.txt");
+        std::fs::write(&test_file, "hello world").unwrap(); // 11 bytes
+
+        let size = calculate_dir_size(&temp_dir).unwrap();
+        assert_eq!(size, 11);
+
+        // Clean up
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_calculate_dir_size_nested() {
+        let temp_dir = std::env::temp_dir().join("botho_test_nested_dir");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(temp_dir.join("subdir")).unwrap();
+
+        // Create files in root and subdirectory
+        std::fs::write(temp_dir.join("root.txt"), "12345").unwrap(); // 5 bytes
+        std::fs::write(temp_dir.join("subdir/nested.txt"), "abcdefghij").unwrap(); // 10 bytes
+
+        let size = calculate_dir_size(&temp_dir).unwrap();
+        assert_eq!(size, 15);
+
+        // Clean up
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_calculate_dir_size_nonexistent() {
+        let path = std::path::Path::new("/nonexistent/path/that/does/not/exist");
+        let size = calculate_dir_size(path).unwrap();
+        // Returns 0 for non-directories
+        assert_eq!(size, 0);
     }
 }

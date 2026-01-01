@@ -23,7 +23,7 @@ use crate::network::{
     ReconstructionResult, UpgradeAnnouncement,
 };
 use crate::node::{MintedMintingTx, Node};
-use crate::rpc::{init_metrics, start_metrics_server, start_rpc_server, MetricsUpdater, RpcState, WsBroadcaster};
+use crate::rpc::{init_metrics, start_metrics_server, start_rpc_server, MetricsUpdater, RpcState, WsBroadcaster, calculate_dir_size, DATA_DIR_USAGE_BYTES};
 use crate::transaction::Transaction;
 
 /// Timeout for initial peer discovery (seconds)
@@ -223,6 +223,27 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
     // Initialize and start Prometheus metrics server
     let metrics_updater = MetricsUpdater::new();
     init_metrics();
+
+    // Update data directory size metric (initial + periodic updates every 60s)
+    let data_dir = config_path.parent().unwrap_or(config_path).to_path_buf();
+    // Initial update at startup
+    if let Ok(size) = calculate_dir_size(&data_dir) {
+        DATA_DIR_USAGE_BYTES.set(size as i64);
+        debug!("Initial data_dir_usage_bytes: {} bytes", size);
+    }
+    // Spawn background task for periodic updates
+    let data_dir_clone = data_dir.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(60));
+        interval.tick().await; // Skip the immediate first tick (already done above)
+        loop {
+            interval.tick().await;
+            if let Ok(size) = calculate_dir_size(&data_dir_clone) {
+                DATA_DIR_USAGE_BYTES.set(size as i64);
+                debug!("Updated data_dir_usage_bytes: {} bytes", size);
+            }
+        }
+    });
 
     if let Some(metrics_port) = config.network.metrics_port(network_type) {
         let metrics_addr: SocketAddr = format!("0.0.0.0:{}", metrics_port)
