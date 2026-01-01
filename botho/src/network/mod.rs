@@ -12,6 +12,7 @@ mod compact_block;
 mod connection_limiter;
 mod discovery;
 mod dns_seeds;
+mod pex;
 mod quorum;
 mod reputation;
 mod sync;
@@ -30,6 +31,11 @@ pub use discovery::{
 pub use dns_seeds::{DnsSeedDiscovery, DnsSeedError};
 pub use quorum::{QuorumBuilder, QuorumValidation};
 pub use reputation::{PeerReputation, ReputationManager};
+pub use pex::{
+    PeerSource, PexEntry, PexFilter, PexManager, PexMessage, PexRateLimiter, PexSourceTracker,
+    MAX_PEERS_PER_SUBNET, MAX_PEER_AGE_SECS, MAX_PEX_MESSAGE_SIZE, MAX_PEX_PEERS,
+    MAX_PEX_PER_HOUR, PEX_INTERVAL_SECS,
+};
 pub use sync::{
     create_sync_behaviour, ChainSyncManager, SyncAction, SyncCodec, SyncRateLimiter, SyncRequest,
     SyncResponse, SyncState, BLOCKS_PER_REQUEST, MAX_REQUEST_SIZE, MAX_REQUESTS_PER_MINUTE,
