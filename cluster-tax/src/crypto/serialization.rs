@@ -7,15 +7,14 @@
 //! Format: Fixed-size binary encoding without length prefixes where possible.
 
 use crate::ClusterId;
-use curve25519_dalek::ristretto::CompressedRistretto;
-use curve25519_dalek::scalar::Scalar;
+use curve25519_dalek::{ristretto::CompressedRistretto, scalar::Scalar};
 
-use super::committed_tags::{
-    ClusterConservationProof, CommittedTagMass, CommittedTagVector, SchnorrProof,
-    TagConservationProof,
-};
-use super::extended_signature::{
-    ExtendedTxSignature, PseudoTagOutput, TagInheritanceProof,
+use super::{
+    committed_tags::{
+        ClusterConservationProof, CommittedTagMass, CommittedTagVector, SchnorrProof,
+        TagConservationProof,
+    },
+    extended_signature::{ExtendedTxSignature, PseudoTagOutput, TagInheritanceProof},
 };
 
 /// Error type for deserialization.
@@ -131,7 +130,10 @@ impl SchnorrProof {
         let mut r = Reader::new(bytes);
         let commitment = r.read_point()?;
         let response = r.read_scalar()?;
-        Ok(Self { commitment, response })
+        Ok(Self {
+            commitment,
+            response,
+        })
     }
 }
 
@@ -149,7 +151,10 @@ impl CommittedTagMass {
         let mut r = Reader::new(bytes);
         let cluster_id = ClusterId(r.read_u64()?);
         let commitment = r.read_point()?;
-        Ok(Self { cluster_id, commitment })
+        Ok(Self {
+            cluster_id,
+            commitment,
+        })
     }
 }
 
@@ -189,7 +194,10 @@ impl CommittedTagVector {
 
         let total_commitment = r.read_point()?;
 
-        Ok(Self { entries, total_commitment })
+        Ok(Self {
+            entries,
+            total_commitment,
+        })
     }
 }
 
@@ -249,7 +257,10 @@ impl TagConservationProof {
         let total_proof_bytes = r.read_bytes(64)?;
         let total_proof = SchnorrProof::from_bytes(total_proof_bytes)?;
 
-        Ok(Self { cluster_proofs, total_proof })
+        Ok(Self {
+            cluster_proofs,
+            total_proof,
+        })
     }
 }
 
@@ -317,7 +328,10 @@ impl PseudoTagOutput {
             inheritance_proofs.push(TagInheritanceProof::from_bytes(ip_bytes)?);
         }
 
-        Ok(Self { tags, inheritance_proofs })
+        Ok(Self {
+            tags,
+            inheritance_proofs,
+        })
     }
 }
 
@@ -366,15 +380,20 @@ impl ExtendedTxSignature {
         let remaining = &r.data[r.pos..];
         let conservation_proof = TagConservationProof::from_bytes(remaining)?;
 
-        Ok(Self { pseudo_tag_outputs, conservation_proof })
+        Ok(Self {
+            pseudo_tag_outputs,
+            conservation_proof,
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crypto::{CommittedTagVectorSecret, ExtendedSignatureBuilder};
-    use crate::TAG_WEIGHT_SCALE;
+    use crate::{
+        crypto::{CommittedTagVectorSecret, ExtendedSignatureBuilder},
+        TAG_WEIGHT_SCALE,
+    };
     use rand_core::OsRng;
     use std::collections::HashMap;
 

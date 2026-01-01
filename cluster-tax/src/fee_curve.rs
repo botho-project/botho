@@ -80,8 +80,8 @@ pub enum TransactionType {
     Hidden,
 
     /// PQ-private transaction with LION ring signatures (~63KB/input).
-    /// Fee = size × cluster_factor. ~16x larger than Hidden due to lattice sigs.
-    /// Recommended for high-value or long-term security needs.
+    /// Fee = size × cluster_factor. ~16x larger than Hidden due to lattice
+    /// sigs. Recommended for high-value or long-term security needs.
     PqHidden,
 
     /// Minting transaction claiming PoW reward.
@@ -112,9 +112,9 @@ pub struct FeeConfig {
 impl Default for FeeConfig {
     fn default() -> Self {
         Self {
-            fee_per_byte: 1,               // 1 nanoBTH per byte
+            fee_per_byte: 1, // 1 nanoBTH per byte
             cluster_curve: ClusterFactorCurve::default(),
-            fee_per_memo: 100,             // 100 nanoBTH per memo
+            fee_per_memo: 100, // 100 nanoBTH per memo
         }
     }
 }
@@ -122,7 +122,8 @@ impl Default for FeeConfig {
 impl FeeConfig {
     /// Compute the fee for a transaction based on size and cluster wealth.
     ///
-    /// Formula: `fee = (fee_per_byte × tx_size_bytes × cluster_factor) + memo_fees`
+    /// Formula: `fee = (fee_per_byte × tx_size_bytes × cluster_factor) +
+    /// memo_fees`
     ///
     /// # Arguments
     /// * `tx_type` - The transaction type (Minting pays no fee)
@@ -147,7 +148,8 @@ impl FeeConfig {
         let cluster_factor = self.cluster_curve.factor(cluster_wealth);
 
         // Size-based fee: fee_per_byte × size × cluster_factor
-        let size_fee = self.fee_per_byte
+        let size_fee = self
+            .fee_per_byte
             .saturating_mul(tx_size_bytes as u64)
             .saturating_mul(cluster_factor)
             / ClusterFactorCurve::FACTOR_SCALE;
@@ -187,9 +189,9 @@ impl FeeConfig {
         num_memos: usize,
     ) -> u64 {
         let typical_size = match tx_type {
-            TransactionType::Hidden => 4_000,      // ~4 KB for CLSAG
-            TransactionType::PqHidden => 65_000,   // ~65 KB for LION
-            TransactionType::Minting => 1_500,     // ~1.5 KB for minting
+            TransactionType::Hidden => 4_000,    // ~4 KB for CLSAG
+            TransactionType::PqHidden => 65_000, // ~65 KB for LION
+            TransactionType::Minting => 1_500,   // ~1.5 KB for minting
         };
         self.compute_fee(tx_type, typical_size, cluster_wealth, num_memos)
     }
@@ -314,11 +316,11 @@ impl ClusterFactorCurve {
     /// - w_mid = 10M (inflection point)
     pub fn default_params() -> Self {
         Self {
-            factor_min: 1,          // 1x multiplier
-            factor_max: 6,          // 6x multiplier
-            w_mid: 10_000_000,      // inflection at 10M
-            steepness: 5_000_000,   // gradual transition
-            background_factor: 1,   // 1x for diffused coins
+            factor_min: 1,        // 1x multiplier
+            factor_max: 6,        // 6x multiplier
+            w_mid: 10_000_000,    // inflection at 10M
+            steepness: 5_000_000, // gradual transition
+            background_factor: 1, // 1x for diffused coins
         }
     }
 
@@ -374,13 +376,13 @@ impl ClusterFactorCurve {
 
         // Lookup table: (x * 1000, sigmoid(x) * SIGMOID_SCALE)
         const LUT: [(i64, u64); 7] = [
-            (-6000, 131),     // sigmoid(-6) ≈ 0.002
-            (-4000, 1180),    // sigmoid(-4) ≈ 0.018
-            (-2000, 7798),    // sigmoid(-2) ≈ 0.119
-            (0, 32768),       // sigmoid(0)  = 0.500
-            (2000, 57738),    // sigmoid(2)  ≈ 0.881
-            (4000, 64356),    // sigmoid(4)  ≈ 0.982
-            (6000, 65405),    // sigmoid(6)  ≈ 0.998
+            (-6000, 131),  // sigmoid(-6) ≈ 0.002
+            (-4000, 1180), // sigmoid(-4) ≈ 0.018
+            (-2000, 7798), // sigmoid(-2) ≈ 0.119
+            (0, 32768),    // sigmoid(0)  = 0.500
+            (2000, 57738), // sigmoid(2)  ≈ 0.881
+            (4000, 64356), // sigmoid(4)  ≈ 0.982
+            (6000, 65405), // sigmoid(6)  ≈ 0.998
         ];
 
         // Clamp to table range
@@ -428,18 +430,24 @@ mod tests {
         // 4 KB transaction (typical CLSAG) with small cluster
         let fee_small = config.compute_fee(TransactionType::Hidden, 4_000, 0, 0);
         // fee = 1 nanoBTH/byte × 4000 bytes × ~1.6x factor ≈ 6400 nanoBTH
-        assert!(fee_small >= 4_000 && fee_small <= 10_000,
-            "4KB tx with small cluster: {fee_small}");
+        assert!(
+            fee_small >= 4_000 && fee_small <= 10_000,
+            "4KB tx with small cluster: {fee_small}"
+        );
 
         // Same transaction with large cluster (6x factor)
         let fee_large = config.compute_fee(TransactionType::Hidden, 4_000, 100_000_000, 0);
-        assert!(fee_large > fee_small * 2,
-            "Large cluster should pay more: {fee_large} > {fee_small}");
+        assert!(
+            fee_large > fee_small * 2,
+            "Large cluster should pay more: {fee_large} > {fee_small}"
+        );
 
         // LION transaction (65 KB) should cost ~16x more
         let fee_lion = config.compute_fee(TransactionType::PqHidden, 65_000, 0, 0);
-        assert!(fee_lion > fee_small * 10,
-            "LION should be much larger: {fee_lion} vs {fee_small}");
+        assert!(
+            fee_lion > fee_small * 10,
+            "LION should be much larger: {fee_lion} vs {fee_small}"
+        );
     }
 
     #[test]
@@ -530,12 +538,17 @@ mod tests {
 
         // Typical Hidden (CLSAG) transaction
         let hidden_fee = config.estimate_typical_fee(TransactionType::Hidden, 0, 0);
-        assert!(hidden_fee > 0, "Hidden fee should be non-zero: {hidden_fee}");
+        assert!(
+            hidden_fee > 0,
+            "Hidden fee should be non-zero: {hidden_fee}"
+        );
 
         // Typical PqHidden (LION) transaction should be much larger
         let pq_fee = config.estimate_typical_fee(TransactionType::PqHidden, 0, 0);
-        assert!(pq_fee > hidden_fee * 10,
-            "LION should be ~16x larger: {pq_fee} vs {hidden_fee}");
+        assert!(
+            pq_fee > hidden_fee * 10,
+            "LION should be ~16x larger: {pq_fee} vs {hidden_fee}"
+        );
     }
 
     #[test]
@@ -552,7 +565,9 @@ mod tests {
         assert!(
             fee_small < fee_mid && fee_mid < fee_large,
             "Fees should be progressive: {} < {} < {}",
-            fee_small, fee_mid, fee_large
+            fee_small,
+            fee_mid,
+            fee_large
         );
     }
 
@@ -575,8 +590,9 @@ mod tests {
 // Backwards-compatible FeeCurve for simulation code
 // ============================================================================
 
-/// Backwards-compatible fee curve that maps cluster wealth directly to fee rate.
-/// Used by simulation code for comparing progressive vs flat fee scenarios.
+/// Backwards-compatible fee curve that maps cluster wealth directly to fee
+/// rate. Used by simulation code for comparing progressive vs flat fee
+/// scenarios.
 #[derive(Clone, Debug)]
 pub struct FeeCurve {
     pub r_min_bps: FeeRateBps,
@@ -588,21 +604,44 @@ pub struct FeeCurve {
 
 impl FeeCurve {
     pub fn default_params() -> Self {
-        Self { r_min_bps: 5, r_max_bps: 3000, w_mid: 10_000_000, steepness: 5_000_000, background_rate_bps: 10 }
+        Self {
+            r_min_bps: 5,
+            r_max_bps: 3000,
+            w_mid: 10_000_000,
+            steepness: 5_000_000,
+            background_rate_bps: 10,
+        }
     }
 
     pub fn flat(rate_bps: FeeRateBps) -> Self {
-        Self { r_min_bps: rate_bps, r_max_bps: rate_bps, w_mid: 0, steepness: 1, background_rate_bps: rate_bps }
+        Self {
+            r_min_bps: rate_bps,
+            r_max_bps: rate_bps,
+            w_mid: 0,
+            steepness: 1,
+            background_rate_bps: rate_bps,
+        }
     }
 
-    pub fn is_flat(&self) -> bool { self.r_min_bps == self.r_max_bps }
+    pub fn is_flat(&self) -> bool {
+        self.r_min_bps == self.r_max_bps
+    }
 
     pub fn rate_bps(&self, cluster_wealth: u64) -> FeeRateBps {
-        if self.is_flat() { return self.r_min_bps; }
-        let curve = ClusterFactorCurve { factor_min: self.r_min_bps, factor_max: self.r_max_bps, w_mid: self.w_mid, steepness: self.steepness, background_factor: self.background_rate_bps };
+        if self.is_flat() {
+            return self.r_min_bps;
+        }
+        let curve = ClusterFactorCurve {
+            factor_min: self.r_min_bps,
+            factor_max: self.r_max_bps,
+            w_mid: self.w_mid,
+            steepness: self.steepness,
+            background_factor: self.background_rate_bps,
+        };
         let sigmoid = curve.sigmoid_approx(cluster_wealth);
         let range = self.r_max_bps.saturating_sub(self.r_min_bps);
-        self.r_min_bps.saturating_add(((range as u64 * sigmoid) / ClusterFactorCurve::SIGMOID_SCALE) as u32)
+        self.r_min_bps
+            .saturating_add(((range as u64 * sigmoid) / ClusterFactorCurve::SIGMOID_SCALE) as u32)
     }
 
     pub fn compute_fee(&self, amount: u64, cluster_wealth: u64) -> (u64, u64) {
@@ -612,4 +651,8 @@ impl FeeCurve {
     }
 }
 
-impl Default for FeeCurve { fn default() -> Self { Self::default_params() } }
+impl Default for FeeCurve {
+    fn default() -> Self {
+        Self::default_params()
+    }
+}

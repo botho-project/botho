@@ -92,15 +92,12 @@ pub struct UtxoSnapshot {
     pub chain_state: ChainState,
 
     /// Serialized and compressed UTXO data
-    #[serde(with = "serde_bytes")]
     pub utxo_data: Vec<u8>,
 
     /// Serialized and compressed key image data
-    #[serde(with = "serde_bytes")]
     pub key_image_data: Vec<u8>,
 
     /// Serialized and compressed cluster wealth data
-    #[serde(with = "serde_bytes")]
     pub cluster_wealth_data: Vec<u8>,
 }
 

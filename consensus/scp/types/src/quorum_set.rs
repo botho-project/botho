@@ -164,6 +164,7 @@ impl<ID: GenericNodeId> QuorumSet<ID> {
     /// - The threshold does not exceed the number of members
     /// - All inner sets are valid
     /// - There are no duplicate node IDs at this level
+    /// - There are no duplicate node IDs across sibling inner sets
     /// - All members are Some (not None)
     pub fn is_valid(&self) -> bool {
         // Must have at least `threshold` members.
@@ -173,6 +174,9 @@ impl<ID: GenericNodeId> QuorumSet<ID> {
 
         // Track node IDs at this level to detect duplicates
         let mut seen_nodes = HashSet::<ID>::default();
+
+        // Track all node IDs from all inner sets to detect cross-inner-set duplicates
+        let mut all_inner_set_nodes = HashSet::<ID>::default();
 
         // All of our inner sets must be valid, and no duplicate node IDs.
         for member in self.members.iter() {
@@ -189,6 +193,13 @@ impl<ID: GenericNodeId> QuorumSet<ID> {
                 Some(QuorumSetMember::InnerSet(qs)) => {
                     if !qs.is_valid() {
                         return false;
+                    }
+                    // Collect all nodes from this inner set to check for cross-inner-set duplicates
+                    for inner_node in qs.nodes() {
+                        if !all_inner_set_nodes.insert(inner_node) {
+                            // Same node appears in multiple inner sets
+                            return false;
+                        }
                     }
                 }
                 None => {
@@ -545,5 +556,62 @@ mod quorum_set_tests {
             ],
         );
         assert!(qs.is_valid());
+
+        // Same node appearing in two different inner sets at the same level is invalid.
+        // This prevents malicious configurations from manipulating voting weight.
+        let qs = QuorumSet::new(
+            2,
+            vec![
+                QuorumSetMember::InnerSet(QuorumSet::new(
+                    1,
+                    vec![
+                        QuorumSetMember::Node(test_node_id(0)),
+                        QuorumSetMember::Node(test_node_id(1)),
+                    ],
+                )),
+                QuorumSetMember::InnerSet(QuorumSet::new(
+                    1,
+                    vec![
+                        QuorumSetMember::Node(test_node_id(0)), // Duplicate across inner sets!
+                        QuorumSetMember::Node(test_node_id(2)),
+                    ],
+                )),
+            ],
+        );
+        assert!(!qs.is_valid());
+
+        // Deeply nested duplicate across inner sets is also invalid.
+        let qs = QuorumSet::new(
+            2,
+            vec![
+                QuorumSetMember::InnerSet(QuorumSet::new(
+                    1,
+                    vec![
+                        QuorumSetMember::Node(test_node_id(1)),
+                        QuorumSetMember::InnerSet(QuorumSet::new(
+                            1,
+                            vec![
+                                QuorumSetMember::Node(test_node_id(5)),
+                                QuorumSetMember::Node(test_node_id(6)),
+                            ],
+                        )),
+                    ],
+                )),
+                QuorumSetMember::InnerSet(QuorumSet::new(
+                    1,
+                    vec![
+                        QuorumSetMember::Node(test_node_id(2)),
+                        QuorumSetMember::InnerSet(QuorumSet::new(
+                            1,
+                            vec![
+                                QuorumSetMember::Node(test_node_id(5)), // Duplicate nested in sibling!
+                                QuorumSetMember::Node(test_node_id(7)),
+                            ],
+                        )),
+                    ],
+                )),
+            ],
+        );
+        assert!(!qs.is_valid());
     }
 }

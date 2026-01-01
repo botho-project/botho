@@ -115,6 +115,9 @@ dashmap = "6"
 # Connection rate limiting
 parking_lot = "0.12"
 
+# DNS seed discovery
+hickory-resolver = { version = "0.25", features = ["tokio", "system-config"] }
+
 # For botho-testnet harness
 chrono = "0.4"
 nix = { version = "0.29", features = ["signal"] }
@@ -129,3 +132,13 @@ tempfile = "3"
 botho-wallet = { path = "../botho-wallet" }
 bth-transaction-core = { path = "../transaction/core", features = ["pq"] }
 futures = "0.3"
+criterion = { workspace = true }
+rand_chacha = { workspace = true }
+
+[[bench]]
+name = "block_benchmarks"
+harness = false
+
+[[bench]]
+name = "mempool_benchmarks"
+harness = false

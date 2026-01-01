@@ -66,6 +66,10 @@ pub use cluster::{ClusterId, ClusterWealth};
 // This gives minters predictable income while absorbing fee volatility.
 pub use monetary::{DifficultyController, MonetaryPolicy, MonetaryState, MonetaryStats};
 
+pub use block_decay::{
+    AndDecayConfig, AndTagVector, BlockAwareTagVector, BlockDecayConfig, RateLimitedDecayConfig,
+    RateLimitedTagVector,
+};
 pub use crypto::{CommittedTagVector, CommittedTagVectorSecret, ExtendedTxSignature, RingTagData};
 pub use dynamic_fee::{DynamicFeeBase, DynamicFeeState, FeeSuggestion};
 pub use fee_curve::{
@@ -76,13 +80,10 @@ pub use signing::{
     TagSigningOutput, TagSigningResult,
 };
 pub use age_decay::{apply_age_decay, AgeDecayConfig, RingDecayInfo};
-pub use block_decay::{
-    AndDecayConfig, AndTagVector, BlockAwareTagVector, BlockDecayConfig, RateLimitedDecayConfig,
-    RateLimitedTagVector,
-};
 pub use tag::{TagVector, TagWeight, TAG_WEIGHT_SCALE};
 pub use transfer::{
-    execute_transfer, mint, Account, TransferConfig, TransferError, TransferResult,
+    execute_transfer, execute_transfer_and, mint, mint_and, Account, AndTransferConfig,
+    AndTransferResult, BlockAwareAccount, TransferConfig, TransferError, TransferResult,
 };
 pub use validate::{
     validate_committed_tag_structure, validate_committed_tags, CommittedTagConfig,

@@ -6,15 +6,16 @@ use anyhow::{Context, Result};
 use std::path::Path;
 use tracing::info;
 
-use crate::config::Config;
+use crate::config::{ledger_db_path_from_config, Config};
 use crate::ledger::{Ledger, UtxoSnapshot};
 
 /// Create a snapshot of the current UTXO set.
 pub fn create(config_path: &Path, output: &str) -> Result<()> {
-    let config = Config::load(config_path)
+    let _config = Config::load(config_path)
         .context("Failed to load config. Run 'botho init' first.")?;
 
-    let ledger = Ledger::open(&config.data_dir)
+    let ledger_path = ledger_db_path_from_config(config_path);
+    let ledger = Ledger::open(&ledger_path)
         .context("Failed to open ledger")?;
 
     let output_path = Path::new(output);
@@ -46,10 +47,11 @@ pub fn create(config_path: &Path, output: &str) -> Result<()> {
 
 /// Load a snapshot from a file.
 pub fn load(config_path: &Path, input: &str, verify_hash: Option<&str>) -> Result<()> {
-    let config = Config::load(config_path)
+    let _config = Config::load(config_path)
         .context("Failed to load config. Run 'botho init' first.")?;
 
-    let ledger = Ledger::open(&config.data_dir)
+    let ledger_path = ledger_db_path_from_config(config_path);
+    let ledger = Ledger::open(&ledger_path)
         .context("Failed to open ledger")?;
 
     let input_path = Path::new(input);
