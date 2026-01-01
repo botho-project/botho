@@ -105,10 +105,18 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
     // Get network type for port/peer defaults
     let network_type = config.network_type();
 
+    // Discover bootstrap peers (uses DNS if enabled)
+    let bootstrap_peers = config.network.bootstrap_peers_async(network_type).await;
+    info!(
+        "Using {} bootstrap peers (DNS: {})",
+        bootstrap_peers.len(),
+        config.network.dns_seeds.enabled
+    );
+
     // Start network discovery
     let mut discovery = NetworkDiscovery::new(
         config.network.gossip_port(network_type),
-        config.network.bootstrap_peers(network_type),
+        bootstrap_peers,
     );
 
     let mut swarm = discovery.start().await?;
@@ -155,8 +163,8 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
         }
     } else {
         println!("=== No peers connected ===");
-        if config.network.bootstrap_peers.is_empty() {
-            warn!("No bootstrap peers configured. Add bootstrap_peers to config.toml");
+        if config.network.bootstrap_peers.is_empty() && !config.network.dns_seeds.enabled {
+            warn!("No bootstrap peers configured and DNS discovery disabled. Add bootstrap_peers to config.toml or enable dns_seeds");
         }
     }
     println!();

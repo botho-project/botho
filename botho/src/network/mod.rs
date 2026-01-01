@@ -11,6 +11,7 @@
 mod compact_block;
 mod connection_limiter;
 mod discovery;
+mod dns_seeds;
 mod quorum;
 mod reputation;
 mod sync;
@@ -26,6 +27,7 @@ pub use discovery::{
     BothoBehaviour, NetworkDiscovery, NetworkEvent, PeerTableEntry, ProtocolVersion,
     UpgradeAnnouncement, PROTOCOL_VERSION, MIN_SUPPORTED_PROTOCOL_VERSION,
 };
+pub use dns_seeds::{DnsSeedDiscovery, DnsSeedError};
 pub use quorum::{QuorumBuilder, QuorumValidation};
 pub use reputation::{PeerReputation, ReputationManager};
 pub use sync::{

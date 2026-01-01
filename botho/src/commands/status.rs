@@ -52,7 +52,14 @@ pub fn run(config_path: &Path) -> Result<()> {
     println!("  Type: {}", network.display_name());
     println!("  Gossip port: {}", config.network.gossip_port(network));
     println!("  Bootstrap peers: {}", config.network.bootstrap_peers(network).len());
-    if config.network.bootstrap_peers.is_empty() {
+    println!(
+        "  DNS seed discovery: {}",
+        if config.network.dns_seeds.enabled { "enabled" } else { "disabled" }
+    );
+    if let Some(ref domain) = config.network.dns_seeds.domain {
+        println!("  DNS seed domain: {}", domain);
+    }
+    if config.network.bootstrap_peers.is_empty() && !config.network.dns_seeds.enabled {
         println!("  (No bootstrap peers - solo minting only)");
     }
     println!();
