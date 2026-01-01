@@ -12,7 +12,7 @@ use crate::rpc_pool::RpcPool;
 use crate::storage::EncryptedWallet;
 use crate::transaction::{format_amount, sync_wallet, TransactionBuilder, DUST_THRESHOLD};
 
-use super::{print_error, print_success, print_warning, prompt_confirm, prompt_password};
+use super::{decrypt_wallet_with_rate_limiting, print_error, print_success, print_warning, prompt_confirm};
 
 /// Run the migrate-to-pq command
 #[cfg(feature = "pq")]
@@ -28,13 +28,8 @@ pub async fn run(
         return Ok(());
     }
 
-    // Load and decrypt wallet
-    let mut wallet = EncryptedWallet::load(wallet_path)?;
-    let password = prompt_password("Enter wallet password: ")?;
-
-    let mnemonic = wallet
-        .decrypt(&password)
-        .map_err(|_| anyhow!("Failed to decrypt wallet - wrong password?"))?;
+    // Load and decrypt wallet with rate limiting protection
+    let (mut wallet, mnemonic, password) = decrypt_wallet_with_rate_limiting(wallet_path)?;
 
     let keys = WalletKeys::from_mnemonic(&mnemonic)?;
 

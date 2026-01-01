@@ -1,13 +1,13 @@
 //! Wallet export/backup command
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use std::fs;
 use std::path::Path;
 
 use crate::keys::WalletKeys;
 use crate::storage::EncryptedWallet;
 
-use super::{print_error, print_success, print_warning, prompt_confirm, prompt_password};
+use super::{decrypt_wallet_with_rate_limiting, print_error, print_success, print_warning, prompt_confirm};
 
 /// Run the export command
 pub async fn run(wallet_path: &Path, output: Option<String>) -> Result<()> {
@@ -17,12 +17,8 @@ pub async fn run(wallet_path: &Path, output: Option<String>) -> Result<()> {
         return Ok(());
     }
 
-    // Load and decrypt wallet
-    let wallet = EncryptedWallet::load(wallet_path)?;
-    let password = prompt_password("Enter wallet password: ")?;
-
-    let mnemonic = wallet.decrypt(&password)
-        .map_err(|_| anyhow!("Failed to decrypt wallet - wrong password?"))?;
+    // Load and decrypt wallet with rate limiting protection
+    let (_wallet, mnemonic, _password) = decrypt_wallet_with_rate_limiting(wallet_path)?;
 
     let keys = WalletKeys::from_mnemonic(&mnemonic)?;
     let words = keys.mnemonic_words();
