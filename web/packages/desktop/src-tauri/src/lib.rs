@@ -36,9 +36,6 @@ pub fn run() {
             // Utility commands
             wallet::wallet_file_exists,
             wallet::get_wallet_path,
-            // Legacy commands (deprecated, kept for backwards compatibility)
-            wallet::load_wallet_file,
-            wallet::save_wallet_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
