@@ -867,6 +867,71 @@ impl AndTagVector {
         }
     }
 
+    /// Update decay state after a successful decay was applied to transferred coins.
+    ///
+    /// This should be called on the sender's tags after `try_apply_decay_on_transfer`
+    /// returned `true` on the transferred tags clone. This ensures subsequent
+    /// transfers from the same UTXO respect rate limiting.
+    pub fn record_decay_applied(&mut self, current_block: u64, config: &AndDecayConfig) {
+        // Check for epoch reset
+        if current_block.saturating_sub(self.epoch_start_block) >= config.epoch_blocks {
+            self.epoch_start_block = current_block;
+            self.decays_this_epoch = 1; // This decay counts in new epoch
+        } else {
+            self.decays_this_epoch += 1;
+        }
+        self.last_decay_block = current_block;
+    }
+
+    /// Mix incoming tags into this vector.
+    ///
+    /// Used when receiving coins: the receiver's tags become a weighted
+    /// average of their existing tags and the incoming tags.
+    ///
+    /// Unlike `BlockAwareTagVector::mix`, this does NOT apply additional decay -
+    /// decay is handled separately via `try_apply_decay_on_transfer`.
+    ///
+    /// - `self_value`: current value held
+    /// - `incoming`: tag vector of incoming coins
+    /// - `incoming_value`: value of incoming coins
+    pub fn mix(&mut self, self_value: u64, incoming: &AndTagVector, incoming_value: u64) {
+        let total_value = self_value + incoming_value;
+        if total_value == 0 {
+            return;
+        }
+
+        // Collect all cluster IDs
+        let mut all_clusters: Vec<ClusterId> = self.tags.keys().copied().collect();
+        for &cluster in incoming.tags.keys() {
+            if !self.tags.contains_key(&cluster) {
+                all_clusters.push(cluster);
+            }
+        }
+
+        // Compute weighted average
+        for cluster in all_clusters {
+            let self_weight = self.tags.get(&cluster).copied().unwrap_or(0) as u64;
+            let incoming_weight = incoming.tags.get(&cluster).copied().unwrap_or(0) as u64;
+
+            let numerator = self_value * self_weight + incoming_value * incoming_weight;
+            let new_weight = (numerator / total_value) as TagWeight;
+
+            if new_weight >= Self::PRUNE_THRESHOLD {
+                self.tags.insert(cluster, new_weight);
+            } else {
+                self.tags.remove(&cluster);
+            }
+        }
+
+        // Inherit the most recent decay state from incoming
+        // (use the most restrictive decay state from both)
+        self.last_decay_block = self.last_decay_block.max(incoming.last_decay_block);
+        self.epoch_start_block = self.epoch_start_block.min(incoming.epoch_start_block);
+        // Don't add decays_this_epoch - that's tracked per-UTXO
+
+        self.prune();
+    }
+
     /// Remove tags below threshold and enforce MAX_TAGS limit.
     fn prune(&mut self) {
         self.tags.retain(|_, &mut w| w >= Self::PRUNE_THRESHOLD);
