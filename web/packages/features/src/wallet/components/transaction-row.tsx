@@ -78,7 +78,7 @@ export function TransactionRow({
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="font-display font-medium text-[--color-light]">{label}</span>
-          {showPrivacy && <PrivacyBadge level={tx.privacyLevel} />}
+          {showPrivacy && <PrivacyBadge cryptoType={tx.cryptoType} />}
         </div>
         <div className="mt-0.5 flex items-center gap-2">
           <span className="max-w-[180px] truncate font-mono text-xs text-[--color-dim]">

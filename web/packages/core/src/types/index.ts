@@ -28,12 +28,17 @@ export type TransactionType = 'send' | 'receive' | 'minting'
 export type TransactionStatus = 'pending' | 'confirmed' | 'failed'
 export type PrivacyLevel = 'standard' | 'private' // standard = ML-DSA, private = LION ring signatures
 
+/** Cryptographic signature type used in transaction */
+export type CryptoType = 'clsag' | 'lion' | 'hybrid'
+
 export interface Transaction {
   id: TxHash
   type: TransactionType
   amount: Amount
   fee: Amount
   privacyLevel: PrivacyLevel
+  /** Ring signature type: clsag (classical), lion (quantum-safe), or hybrid */
+  cryptoType: CryptoType
   status: TransactionStatus
   timestamp: Timestamp
   blockHeight?: BlockHeight

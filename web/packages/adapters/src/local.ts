@@ -3,6 +3,7 @@ import type {
   Balance,
   Block,
   BlockHeight,
+  CryptoType,
   NetworkStats,
   NodeInfo,
   Transaction,
@@ -454,12 +455,22 @@ export class LocalNodeAdapter implements NodeAdapter {
 
   /** Parse transaction from WebSocket event */
   private parseTransactionEvent(data: Record<string, unknown>): Transaction {
+    // Map RPC type field to CryptoType
+    const rpcType = data.type as string | undefined
+    let cryptoType: CryptoType = 'clsag' // default
+    if (rpcType === 'lion') {
+      cryptoType = 'lion'
+    } else if (rpcType === 'hybrid') {
+      cryptoType = 'hybrid'
+    }
+
     return {
       id: data.hash as string,
       type: 'receive' as const,
       amount: BigInt(0), // Private
       fee: BigInt((data.fee as number) || 0),
       privacyLevel: 'private' as const,
+      cryptoType,
       status: data.in_block ? 'confirmed' as const : 'pending' as const,
       timestamp: Date.now(),
       blockHeight: data.in_block as number | undefined,
@@ -482,12 +493,24 @@ export class LocalNodeAdapter implements NodeAdapter {
   }
 
   private parseTransaction(data: Record<string, unknown>): Transaction {
+    // Map RPC type field to CryptoType (if present as cryptoType or type)
+    const rpcCryptoType = (data.cryptoType || data.crypto_type) as string | undefined
+    let cryptoType: CryptoType = 'clsag' // default
+    if (rpcCryptoType === 'lion') {
+      cryptoType = 'lion'
+    } else if (rpcCryptoType === 'hybrid') {
+      cryptoType = 'hybrid'
+    } else if (rpcCryptoType === 'clsag') {
+      cryptoType = 'clsag'
+    }
+
     return {
       id: data.id as string,
       type: data.type as Transaction['type'],
       amount: BigInt((data.amount as string) || '0'),
       fee: BigInt((data.fee as string) || '0'),
       privacyLevel: data.privacyLevel as Transaction['privacyLevel'],
+      cryptoType,
       status: data.status as Transaction['status'],
       timestamp: data.timestamp as number,
       blockHeight: data.blockHeight as number | undefined,

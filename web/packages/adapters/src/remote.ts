@@ -3,6 +3,7 @@ import type {
   Balance,
   Block,
   BlockHeight,
+  CryptoType,
   NetworkStats,
   NodeInfo,
   Transaction,
@@ -240,6 +241,7 @@ export class RemoteNodeAdapter implements NodeAdapter {
         amount: BigInt(0), // Would need to decrypt
         fee: BigInt(0),
         privacyLevel: 'private' as const, // Ring signatures for privacy
+        cryptoType: 'clsag' as CryptoType, // Default to classical, actual type from RPC
         status: 'confirmed' as const,
         timestamp: Date.now(),
         blockHeight: block.height,
@@ -448,12 +450,22 @@ export class RemoteNodeAdapter implements NodeAdapter {
 
   /** Parse transaction from WebSocket event */
   private parseTransactionEvent(data: Record<string, unknown>): Transaction {
+    // Map RPC type field to CryptoType
+    const rpcType = data.type as string | undefined
+    let cryptoType: CryptoType = 'clsag' // default
+    if (rpcType === 'lion') {
+      cryptoType = 'lion'
+    } else if (rpcType === 'hybrid') {
+      cryptoType = 'hybrid'
+    }
+
     return {
       id: data.hash as string,
       type: 'receive' as const,
       amount: BigInt(0), // Private - not visible
       fee: BigInt((data.fee as number) || 0),
       privacyLevel: 'private' as const,
+      cryptoType,
       status: data.in_block ? 'confirmed' as const : 'pending' as const,
       timestamp: Date.now(),
       blockHeight: data.in_block as number | undefined,
