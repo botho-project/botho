@@ -22,9 +22,11 @@ mod tagged_output;
 mod validation;
 
 pub use committed_tags::{
-    blinding_generator, cluster_generator, total_mass_generator, ClusterConservationProof,
-    CommittedTagMass, CommittedTagVector, CommittedTagVectorSecret, SchnorrProof,
-    TagConservationProof, TagConservationProver, TagConservationVerifier, TagMassSecret,
+    blinding_generator, cluster_generator, fee_generator, total_mass_generator, wealth_generator,
+    ClusterConservationProof, CommittedTagMass, CommittedTagVector, CommittedTagVectorSecret,
+    LinearRelationProof, RangeProof, SchnorrProof, SegmentFeeProof, SegmentOrProof,
+    SegmentOrProver, SegmentOrVerifier, SegmentProverSecret, TagConservationProof,
+    TagConservationProver, TagConservationVerifier, TagMassSecret,
 };
 pub use extended_signature::{
     ExtendedSignatureBuilder, ExtendedSignatureVerifier, ExtendedTxSignature, PseudoTagOutput,
