@@ -1229,6 +1229,324 @@ impl Ledger {
 
         Ok(cluster_wealths.len())
     }
+
+    // ========================================================================
+    // Snapshot Support
+    // ========================================================================
+
+    /// Create a UTXO snapshot at the current chain height.
+    ///
+    /// This captures the complete UTXO set, key images, and cluster wealth
+    /// for fast initial sync of new nodes.
+    ///
+    /// # Returns
+    ///
+    /// A `UtxoSnapshot` containing all state needed to bootstrap a node.
+    pub fn create_snapshot(&self) -> Result<super::UtxoSnapshot, LedgerError> {
+        use super::snapshot::UtxoSnapshot;
+
+        let chain_state = self.get_chain_state()?;
+        let tip = self.get_tip()?;
+        let block_hash = tip.hash();
+
+        let rtxn = self
+            .env
+            .read_txn()
+            .map_err(|e| LedgerError::Database(format!("Failed to start read txn: {}", e)))?;
+
+        // Collect all UTXOs
+        let mut utxos = Vec::new();
+        let utxo_iter = self
+            .utxo_db
+            .iter(&rtxn)
+            .map_err(|e| LedgerError::Database(format!("Failed to iterate UTXOs: {}", e)))?;
+
+        for result in utxo_iter {
+            if let Ok((_, value)) = result {
+                if let Ok(utxo) = bincode::deserialize::<Utxo>(value) {
+                    utxos.push(utxo);
+                }
+            }
+        }
+
+        // Collect all key images
+        let mut key_images = Vec::new();
+        let ki_iter = self
+            .key_images_db
+            .iter(&rtxn)
+            .map_err(|e| LedgerError::Database(format!("Failed to iterate key images: {}", e)))?;
+
+        for result in ki_iter {
+            if let Ok((key, value)) = result {
+                if key.len() == 32 && value.len() == 8 {
+                    let mut ki = [0u8; 32];
+                    ki.copy_from_slice(key);
+                    let height = u64::from_le_bytes(value.try_into().unwrap());
+                    key_images.push((ki, height));
+                }
+            }
+        }
+
+        // Collect cluster wealth data
+        let mut cluster_wealth = Vec::new();
+        let cw_iter = self.cluster_wealth_db.iter(&rtxn).map_err(|e| {
+            LedgerError::Database(format!("Failed to iterate cluster wealth: {}", e))
+        })?;
+
+        for result in cw_iter {
+            if let Ok((key, value)) = result {
+                if key.len() == 8 && value.len() == 8 {
+                    let cluster_id = u64::from_le_bytes(key.try_into().unwrap());
+                    let wealth = u64::from_le_bytes(value.try_into().unwrap());
+                    cluster_wealth.push((cluster_id, wealth));
+                }
+            }
+        }
+
+        drop(rtxn);
+
+        info!(
+            height = chain_state.height,
+            utxo_count = utxos.len(),
+            key_image_count = key_images.len(),
+            cluster_count = cluster_wealth.len(),
+            "Creating UTXO snapshot"
+        );
+
+        UtxoSnapshot::new(
+            chain_state.height,
+            block_hash,
+            chain_state,
+            utxos,
+            key_images,
+            cluster_wealth,
+        )
+        .map_err(|e| LedgerError::Serialization(e.to_string()))
+    }
+
+    /// Load ledger state from a snapshot.
+    ///
+    /// This replaces the current ledger state with the snapshot data.
+    /// The snapshot is verified before loading.
+    ///
+    /// # Arguments
+    ///
+    /// * `snapshot` - The snapshot to load
+    /// * `expected_block_hash` - Optional block hash to verify against
+    ///
+    /// # Returns
+    ///
+    /// The number of UTXOs loaded.
+    pub fn load_from_snapshot(
+        &self,
+        snapshot: &super::UtxoSnapshot,
+        expected_block_hash: Option<&[u8; 32]>,
+    ) -> Result<usize, LedgerError> {
+        // Verify snapshot integrity
+        snapshot
+            .verify()
+            .map_err(|e| LedgerError::InvalidBlock(format!("Snapshot verification failed: {}", e)))?;
+
+        // Verify block hash if provided
+        if let Some(expected) = expected_block_hash {
+            if &snapshot.block_hash != expected {
+                return Err(LedgerError::InvalidBlock(
+                    "Block hash mismatch".to_string(),
+                ));
+            }
+        }
+
+        info!(
+            height = snapshot.height,
+            utxo_count = snapshot.utxo_count,
+            key_image_count = snapshot.key_image_count,
+            "Loading ledger from snapshot"
+        );
+
+        // Extract data from snapshot
+        let utxos = snapshot
+            .get_utxos()
+            .map_err(|e| LedgerError::Serialization(e.to_string()))?;
+        let key_images = snapshot
+            .get_key_images()
+            .map_err(|e| LedgerError::Serialization(e.to_string()))?;
+        let cluster_wealth = snapshot
+            .get_cluster_wealth()
+            .map_err(|e| LedgerError::Serialization(e.to_string()))?;
+
+        let mut wtxn = self
+            .env
+            .write_txn()
+            .map_err(|e| LedgerError::Database(format!("Failed to start write txn: {}", e)))?;
+
+        // Clear existing data
+        self.utxo_db
+            .clear(&mut wtxn)
+            .map_err(|e| LedgerError::Database(format!("Failed to clear UTXO db: {}", e)))?;
+        self.key_images_db
+            .clear(&mut wtxn)
+            .map_err(|e| LedgerError::Database(format!("Failed to clear key images db: {}", e)))?;
+        self.address_index_db
+            .clear(&mut wtxn)
+            .map_err(|e| LedgerError::Database(format!("Failed to clear address index: {}", e)))?;
+        self.cluster_wealth_db
+            .clear(&mut wtxn)
+            .map_err(|e| LedgerError::Database(format!("Failed to clear cluster wealth: {}", e)))?;
+
+        // Load UTXOs
+        let utxo_count = utxos.len();
+        for utxo in utxos {
+            let utxo_bytes = bincode::serialize(&utxo)
+                .map_err(|e| LedgerError::Serialization(e.to_string()))?;
+            self.utxo_db
+                .put(&mut wtxn, &utxo.id.to_bytes(), &utxo_bytes)
+                .map_err(|e| LedgerError::Database(format!("Failed to put UTXO: {}", e)))?;
+
+            // Rebuild address index
+            self.add_to_address_index(&mut wtxn, &utxo)?;
+        }
+
+        // Load key images
+        for (ki, height) in key_images {
+            self.key_images_db
+                .put(&mut wtxn, &ki, &height.to_le_bytes())
+                .map_err(|e| LedgerError::Database(format!("Failed to put key image: {}", e)))?;
+        }
+
+        // Load cluster wealth
+        for (cluster_id, wealth) in cluster_wealth {
+            self.cluster_wealth_db
+                .put(&mut wtxn, &cluster_id.to_le_bytes(), &wealth.to_le_bytes())
+                .map_err(|e| {
+                    LedgerError::Database(format!("Failed to put cluster wealth: {}", e))
+                })?;
+        }
+
+        // Update metadata
+        self.meta_db
+            .put(
+                &mut wtxn,
+                META_HEIGHT,
+                &snapshot.chain_state.height.to_le_bytes(),
+            )
+            .map_err(|e| LedgerError::Database(format!("Failed to put height: {}", e)))?;
+        self.meta_db
+            .put(&mut wtxn, META_TIP_HASH, &snapshot.block_hash)
+            .map_err(|e| LedgerError::Database(format!("Failed to put tip_hash: {}", e)))?;
+        self.meta_db
+            .put(
+                &mut wtxn,
+                META_TOTAL_MINED,
+                &snapshot.chain_state.total_mined.to_le_bytes(),
+            )
+            .map_err(|e| LedgerError::Database(format!("Failed to put total_mined: {}", e)))?;
+        self.meta_db
+            .put(
+                &mut wtxn,
+                META_FEES_BURNED,
+                &snapshot.chain_state.total_fees_burned.to_le_bytes(),
+            )
+            .map_err(|e| LedgerError::Database(format!("Failed to put fees_burned: {}", e)))?;
+        self.meta_db
+            .put(
+                &mut wtxn,
+                META_DIFFICULTY,
+                &snapshot.chain_state.difficulty.to_le_bytes(),
+            )
+            .map_err(|e| LedgerError::Database(format!("Failed to put difficulty: {}", e)))?;
+        self.meta_db
+            .put(
+                &mut wtxn,
+                META_TOTAL_TX,
+                &snapshot.chain_state.total_tx.to_le_bytes(),
+            )
+            .map_err(|e| LedgerError::Database(format!("Failed to put total_tx: {}", e)))?;
+        self.meta_db
+            .put(
+                &mut wtxn,
+                META_EPOCH_TX,
+                &snapshot.chain_state.epoch_tx.to_le_bytes(),
+            )
+            .map_err(|e| LedgerError::Database(format!("Failed to put epoch_tx: {}", e)))?;
+        self.meta_db
+            .put(
+                &mut wtxn,
+                META_EPOCH_EMISSION,
+                &snapshot.chain_state.epoch_emission.to_le_bytes(),
+            )
+            .map_err(|e| LedgerError::Database(format!("Failed to put epoch_emission: {}", e)))?;
+        self.meta_db
+            .put(
+                &mut wtxn,
+                META_EPOCH_BURNS,
+                &snapshot.chain_state.epoch_burns.to_le_bytes(),
+            )
+            .map_err(|e| LedgerError::Database(format!("Failed to put epoch_burns: {}", e)))?;
+        self.meta_db
+            .put(
+                &mut wtxn,
+                META_CURRENT_REWARD,
+                &snapshot.chain_state.current_reward.to_le_bytes(),
+            )
+            .map_err(|e| LedgerError::Database(format!("Failed to put current_reward: {}", e)))?;
+
+        wtxn.commit()
+            .map_err(|e| LedgerError::Database(format!("Failed to commit: {}", e)))?;
+
+        info!(
+            utxo_count = utxo_count,
+            "Snapshot loaded successfully"
+        );
+
+        Ok(utxo_count)
+    }
+
+    /// Write a snapshot to a file.
+    pub fn write_snapshot_to_file(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<u64, LedgerError> {
+        let snapshot = self.create_snapshot()?;
+
+        let file = std::fs::File::create(path)
+            .map_err(|e| LedgerError::Database(format!("Failed to create file: {}", e)))?;
+
+        let mut writer = std::io::BufWriter::new(file);
+        snapshot
+            .write_to(&mut writer)
+            .map_err(|e| LedgerError::Serialization(e.to_string()))?;
+
+        let size = writer
+            .into_inner()
+            .map_err(|e| LedgerError::Database(format!("Failed to flush: {}", e)))?
+            .metadata()
+            .map_err(|e| LedgerError::Database(format!("Failed to get metadata: {}", e)))?
+            .len();
+
+        info!(
+            path = %path.display(),
+            size_bytes = size,
+            "Snapshot written to file"
+        );
+
+        Ok(size)
+    }
+
+    /// Load a snapshot from a file.
+    pub fn load_snapshot_from_file(
+        &self,
+        path: &std::path::Path,
+        expected_block_hash: Option<&[u8; 32]>,
+    ) -> Result<usize, LedgerError> {
+        let file = std::fs::File::open(path)
+            .map_err(|e| LedgerError::Database(format!("Failed to open file: {}", e)))?;
+
+        let reader = std::io::BufReader::new(file);
+        let snapshot = super::UtxoSnapshot::read_from(reader)
+            .map_err(|e| LedgerError::Serialization(e.to_string()))?;
+
+        self.load_from_snapshot(&snapshot, expected_block_hash)
+    }
 }
 
 /// Information about cluster wealth for a set of UTXOs.
