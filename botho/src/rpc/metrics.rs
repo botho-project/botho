@@ -16,11 +16,14 @@
 //!
 //! ### System Metrics
 //! - `botho_data_dir_usage_bytes` - Bytes used by the data directory (gauge)
-//! - `process_resident_memory_bytes` - Process resident set size (from process collector)
-//! - `process_virtual_memory_bytes` - Process virtual memory size (from process collector)
-//! - `process_cpu_seconds_total` - Total CPU time used (from process collector)
-//! - `process_open_fds` - Number of open file descriptors (from process collector)
-//! - `process_start_time_seconds` - Process start time (from process collector)
+//!
+//! ### Process Metrics (Linux only)
+//! The following metrics are only available on Linux via the Prometheus process collector:
+//! - `process_resident_memory_bytes` - Process resident set size
+//! - `process_virtual_memory_bytes` - Process virtual memory size
+//! - `process_cpu_seconds_total` - Total CPU time used
+//! - `process_open_fds` - Number of open file descriptors
+//! - `process_start_time_seconds` - Process start time
 //!
 //! ## Usage
 //!
@@ -40,9 +43,11 @@ use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use lazy_static::lazy_static;
 use prometheus::{
-    process_collector::ProcessCollector, Counter, CounterVec, Encoder, Gauge, Histogram,
-    HistogramOpts, IntCounter, IntGauge, Opts, Registry, TextEncoder,
+    Counter, CounterVec, Encoder, Gauge, Histogram, HistogramOpts, IntCounter, IntGauge, Opts,
+    Registry, TextEncoder,
 };
+#[cfg(all(feature = "process", target_os = "linux"))]
+use prometheus::process_collector::ProcessCollector;
 use serde::Serialize;
 use std::convert::Infallible;
 use std::net::SocketAddr;
@@ -455,13 +460,16 @@ pub fn init_metrics() {
         .register(Box::new(DATA_DIR_USAGE_BYTES.clone()))
         .expect("Failed to register data_dir_usage_bytes");
 
-    // Register process collector for memory metrics
+    // Register process collector for memory metrics (Linux only)
     // This provides: process_resident_memory_bytes, process_virtual_memory_bytes,
     // process_cpu_seconds_total, process_open_fds, process_start_time_seconds
-    let process_collector = ProcessCollector::for_self();
-    REGISTRY
-        .register(Box::new(process_collector))
-        .expect("Failed to register process collector");
+    #[cfg(all(feature = "process", target_os = "linux"))]
+    {
+        let process_collector = ProcessCollector::for_self();
+        REGISTRY
+            .register(Box::new(process_collector))
+            .expect("Failed to register process collector");
+    }
 
     info!("Prometheus metrics initialized");
 }
