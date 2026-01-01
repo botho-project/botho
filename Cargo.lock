@@ -1423,6 +1423,7 @@ dependencies = [
  "futures",
  "heed",
  "hex",
+ "hickory-resolver",
  "hkdf",
  "hmac",
  "http-body-util",
