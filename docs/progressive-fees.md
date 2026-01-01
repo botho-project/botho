@@ -153,7 +153,55 @@ See [Privacy](privacy.md#progressive-transaction-fees) for detailed analysis.
 | r_mid_start | 2% | Rate at start of middle segment |
 | r_mid_end | 10% | Rate at end of middle segment |
 | r_rich | 15% | Rate for rich segment |
-| Decay rate | 5% per hop | Tag decay per transaction |
+| Decay rate | 5% per eligible hop | Tag decay when UTXO meets age requirement |
+| min_age_blocks | 720 blocks (~2 hours) | Minimum UTXO age for decay eligibility |
+
+## Decay Mechanism: Age-Based Gating
+
+Botho uses **age-based decay** to prevent wash trading attacks while preserving privacy.
+
+### How It Works
+
+1. **Age Check**: When spending a UTXO, the system checks if it's at least `min_age_blocks` (720) old
+2. **If eligible**: Apply 5% tag decay
+3. **If too young**: No decay (prevents rapid self-transfers)
+
+### Natural Rate Limiting
+
+Since new UTXOs must wait ~2 hours before decay applies, a wash trader can achieve at most:
+
+```
+max_decays_per_day = blocks_per_day / min_age_blocks
+                   = 8640 / 720
+                   = 12 decays/day
+```
+
+This bounds maximum daily decay to:
+```
+1 - 0.95^12 ≈ 46% per day
+```
+
+### Privacy Advantage
+
+Unlike alternatives that track decay timing in UTXO metadata, age-based decay uses only the **UTXO creation block** — information that's already public on the blockchain. This means **zero additional metadata** is exposed:
+
+| Metadata Field | Required? |
+|----------------|-----------|
+| `last_decay_block` | ❌ Not needed |
+| `decays_this_epoch` | ❌ Not needed |
+| `epoch_start_block` | ❌ Not needed |
+| `utxo_creation_block` | ✅ Already public |
+
+### Attack Resistance
+
+| Attack | Transactions | Result |
+|--------|--------------|--------|
+| Rapid wash (1 minute) | 100 | 0% decay (all outputs too young) |
+| Patient wash (1 day) | 1000 | 46% decay (only 12 eligible) |
+| Patient wash (1 week) | 7000 | 97% decay (84 eligible) |
+| Holding without transacting | 0 | 0% decay (requires spending) |
+
+> **See also**: [Cluster Tag Decay Design](design/cluster-tag-decay.md) for mathematical proofs and simulation results.
 
 ## Economic Effects
 
