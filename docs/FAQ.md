@@ -198,6 +198,33 @@ This discourages hoarding and encourages economic activity — without tracking 
 
 Cluster tracking happens at the UTXO level, not the account level. The system knows "this coin traces back to minting event X" but doesn't know "this coin belongs to person Y." Ring signatures further obscure the connection.
 
+### Why do I pay higher fees than others?
+
+Fees are based on **source wealth** — where your coins originated. Coins traced back to large mining clusters pay higher fees (up to 15%), while well-circulated coins pay lower fees (~1%). This is Sybil-resistant because splitting coins doesn't change their origin.
+
+### How can I reduce my cluster attribution?
+
+Through legitimate economic activity. When you spend coins and they mix with others' coins in transactions, the cluster tags naturally decay. Key factors:
+
+- **Age**: UTXOs must be at least ~2 hours old before any decay applies
+- **Mixing**: Combining with coins from different sources dilutes tags
+- **Rate limit**: Maximum ~12 decay events per day, regardless of transaction count
+
+After ~10-20 hops through real commerce, original cluster attribution becomes negligible.
+
+### What is the maximum fee I can pay?
+
+The progressive fee curve caps at **15%** for the wealthiest clusters (those controlling 70%+ of maximum tracked wealth). Most users pay between 1-10% based on coin provenance.
+
+### How does trading affect my privacy?
+
+Trading improves privacy over time:
+
+- Each legitimate transaction allows tags to decay by 5%
+- After ~10-20 hops through real commerce, original cluster attribution is negligible
+- Ring signatures hide which specific input was spent
+- The age-based decay mechanism doesn't add any new trackable metadata (uses only the UTXO creation block, which is already public)
+
 ---
 
 ## Technical

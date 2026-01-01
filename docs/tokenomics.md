@@ -162,7 +162,18 @@ Botho implements a novel **provenance-based progressive fee system** that taxes 
 | Poor segment | 0-15% of max | 1% flat rate |
 | Middle segment | 15-70% of max | 2% to 10% linear |
 | Rich segment | 70%+ of max | 15% flat rate |
-| Decay rate | 5% per hop | Tag decay per transaction |
+| Decay rate | 5% per eligible hop | Tag decay when UTXO is old enough |
+| Min UTXO age | 720 blocks (~2 hours) | UTXOs must be this old before decay applies |
+
+#### Age-Based Decay
+
+Not every transaction triggers decay. To prevent **wash trading attacks** (rapid self-transfers to reduce fees), Botho uses **age-based decay gating**:
+
+- **Age requirement**: UTXOs must be at least 720 blocks (~2 hours) old before decay applies
+- **Rate limit**: This naturally caps decay to ~12 eligible transactions per day
+- **Privacy preserved**: Uses only the UTXO creation block (already public), no extra metadata
+
+This means a wash trader executing 100 rapid self-transfers gets 0% decay (all outputs too young), while legitimate commerce over time allows natural tag diffusion.
 
 #### Simulation Results
 
@@ -186,7 +197,13 @@ Tags decay through legitimate commerce:
 
 - Coins that circulate widely pay lower fees over time
 - Hoarded coins retain high source_wealth → higher fees
-- ~10 transaction hops through merchants reduces source_wealth by 90%
+- ~10-20 transaction hops through merchants reduces source_wealth by 90%+
+- Each hop must meet the 2-hour age requirement to trigger decay
+
+**Maximum decay rates** (due to age-based gating):
+- Per day: ~46% (12 eligible decays × 5% each)
+- Per week: ~97% (84 eligible decays)
+- Holding without transacting: 0% decay (requires spending)
 
 **Economic effect**: Encourages velocity of money and discourages extreme wealth accumulation.
 
