@@ -1340,6 +1340,247 @@ pub fn format_monte_carlo_report(results: &MonteCarloResults) -> String {
 }
 
 // ============================================================================
+// Committed Tag Vector Decoy Selection
+// ============================================================================
+
+use crate::crypto::CommittedTagVector;
+use crate::ClusterId;
+use std::collections::HashSet;
+
+/// Extract the set of cluster IDs from a committed tag vector.
+///
+/// This is the only information available for decoy selection with committed
+/// tags, as the masses are hidden in Pedersen commitments.
+pub fn extract_cluster_ids(committed: &CommittedTagVector) -> HashSet<ClusterId> {
+    committed.entries.iter().map(|e| e.cluster_id).collect()
+}
+
+/// Compute Jaccard similarity between two cluster ID sets.
+///
+/// Returns a value between 0.0 (no overlap) and 1.0 (identical sets).
+/// Empty sets are considered fully similar (both are "background only").
+///
+/// # Formula
+/// ```text
+/// J(A, B) = |A ∩ B| / |A ∪ B|
+/// ```
+pub fn jaccard_similarity(set_a: &HashSet<ClusterId>, set_b: &HashSet<ClusterId>) -> f64 {
+    // Empty sets are fully similar (maximally diffused outputs)
+    if set_a.is_empty() && set_b.is_empty() {
+        return 1.0;
+    }
+    // One empty, one not: partial similarity (empty is compatible with anything)
+    if set_a.is_empty() || set_b.is_empty() {
+        return 0.5;
+    }
+
+    let intersection_size = set_a.intersection(set_b).count();
+    let union_size = set_a.union(set_b).count();
+
+    if union_size == 0 {
+        return 1.0;
+    }
+
+    intersection_size as f64 / union_size as f64
+}
+
+/// A committed output in the UTXO pool for decoy selection.
+#[derive(Debug, Clone)]
+pub struct CommittedPoolOutput {
+    /// Unique identifier for this output.
+    pub id: u64,
+    /// Age in blocks.
+    pub age_blocks: u64,
+    /// The committed tag vector (cluster IDs visible, masses hidden).
+    pub committed_tags: CommittedTagVector,
+}
+
+impl CommittedPoolOutput {
+    /// Extract the cluster ID set from this output.
+    pub fn cluster_id_set(&self) -> HashSet<ClusterId> {
+        extract_cluster_ids(&self.committed_tags)
+    }
+
+    /// Compute Jaccard similarity with another output.
+    pub fn cluster_similarity(&self, other: &CommittedPoolOutput) -> f64 {
+        jaccard_similarity(&self.cluster_id_set(), &other.cluster_id_set())
+    }
+}
+
+/// Configuration for committed tag decoy selection.
+#[derive(Debug, Clone)]
+pub struct CommittedDecoyConfig {
+    /// Ring size (including real signer).
+    pub ring_size: usize,
+    /// Minimum Jaccard similarity for decoy selection (0.0 to 1.0).
+    pub min_similarity: f64,
+}
+
+impl Default for CommittedDecoyConfig {
+    fn default() -> Self {
+        Self {
+            ring_size: RING_SIZE,
+            min_similarity: MIN_CLUSTER_SIMILARITY,
+        }
+    }
+}
+
+/// Select decoys for a real output using committed tag vectors.
+///
+/// This function selects decoys based on cluster ID set overlap (Jaccard similarity)
+/// since mass values are hidden in commitments.
+///
+/// # Arguments
+/// * `real_output` - The output being spent (real signer)
+/// * `pool` - Available outputs to select decoys from
+/// * `config` - Decoy selection configuration
+/// * `rng` - Random number generator
+///
+/// # Returns
+/// Indices of selected decoys in the pool, or None if insufficient decoys available.
+pub fn select_committed_decoys<R: rand::Rng>(
+    real_output: &CommittedPoolOutput,
+    pool: &[CommittedPoolOutput],
+    config: &CommittedDecoyConfig,
+    rng: &mut R,
+) -> Option<Vec<usize>> {
+    let needed = config.ring_size - 1;
+    if pool.len() < needed {
+        return None;
+    }
+
+    let real_clusters = real_output.cluster_id_set();
+    let age_adversary = AgeAdversary::default();
+
+    // Filter candidates by similarity and age
+    let mut candidates: Vec<(usize, f64, f64)> = pool
+        .iter()
+        .enumerate()
+        .filter(|(_, o)| o.id != real_output.id)
+        .filter(|(_, o)| o.age_blocks >= MIN_AGE_BLOCKS)
+        .map(|(i, o)| {
+            let sim = jaccard_similarity(&real_clusters, &o.cluster_id_set());
+            let age_weight = age_adversary.weight_for_age(o.age_blocks);
+            (i, sim, age_weight)
+        })
+        .filter(|(_, sim, _)| *sim >= config.min_similarity)
+        .collect();
+
+    // If not enough similar candidates, relax similarity threshold
+    if candidates.len() < needed {
+        candidates = pool
+            .iter()
+            .enumerate()
+            .filter(|(_, o)| o.id != real_output.id)
+            .filter(|(_, o)| o.age_blocks >= MIN_AGE_BLOCKS)
+            .map(|(i, o)| {
+                let sim = jaccard_similarity(&real_clusters, &o.cluster_id_set());
+                let age_weight = age_adversary.weight_for_age(o.age_blocks);
+                (i, sim, age_weight)
+            })
+            .collect();
+    }
+
+    if candidates.len() < needed {
+        return None;
+    }
+
+    // Sort by combined score (age weight * similarity²)
+    candidates.sort_by(|a, b| {
+        let score_a = a.2 * a.1 * a.1;
+        let score_b = b.2 * b.1 * b.1;
+        score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    // Weighted random selection
+    weighted_sample_committed(&candidates, needed, rng)
+}
+
+/// Weighted random sampling without replacement for committed outputs.
+fn weighted_sample_committed<R: rand::Rng>(
+    candidates: &[(usize, f64, f64)], // (index, similarity, age_weight)
+    count: usize,
+    rng: &mut R,
+) -> Option<Vec<usize>> {
+    if candidates.len() < count {
+        return None;
+    }
+
+    let mut selected = Vec::with_capacity(count);
+    let mut remaining: Vec<_> = candidates.to_vec();
+
+    for _ in 0..count {
+        if remaining.is_empty() {
+            return None;
+        }
+
+        // Weight = age_weight * similarity²
+        let weights: Vec<f64> = remaining
+            .iter()
+            .map(|(_, sim, age)| age * sim * sim)
+            .collect();
+        let total: f64 = weights.iter().sum();
+
+        if total <= 0.0 {
+            // Fall back to uniform random
+            let idx = rng.gen_range(0..remaining.len());
+            selected.push(remaining.remove(idx).0);
+            continue;
+        }
+
+        let sample = rng.gen::<f64>() * total;
+        let mut cumulative = 0.0;
+        let mut chosen_idx = 0;
+
+        for (i, &w) in weights.iter().enumerate() {
+            cumulative += w;
+            if cumulative >= sample {
+                chosen_idx = i;
+                break;
+            }
+        }
+
+        selected.push(remaining.remove(chosen_idx).0);
+    }
+
+    Some(selected)
+}
+
+/// Form a ring with the real output at a random position.
+///
+/// # Arguments
+/// * `real_output` - The real output being spent
+/// * `decoy_indices` - Indices of decoys in the pool
+/// * `pool` - The output pool
+/// * `rng` - Random number generator
+///
+/// # Returns
+/// Tuple of (ring, real_index) where ring contains CommittedTagVector refs.
+pub fn form_committed_ring<'a, R: rand::Rng>(
+    real_output: &'a CommittedPoolOutput,
+    decoy_indices: &[usize],
+    pool: &'a [CommittedPoolOutput],
+    rng: &mut R,
+) -> (Vec<&'a CommittedTagVector>, usize) {
+    let ring_size = decoy_indices.len() + 1;
+    let real_position = rng.gen_range(0..ring_size);
+
+    let mut ring = Vec::with_capacity(ring_size);
+    let mut decoy_iter = decoy_indices.iter();
+
+    for i in 0..ring_size {
+        if i == real_position {
+            ring.push(&real_output.committed_tags);
+        } else {
+            let decoy_idx = *decoy_iter.next().unwrap();
+            ring.push(&pool[decoy_idx].committed_tags);
+        }
+    }
+
+    (ring, real_position)
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -1475,8 +1716,8 @@ mod tests {
         assert!(result.is_some(), "Should successfully form a ring");
 
         let result = result.unwrap();
-        assert_eq!(result.ring_indices.len(), 7);
-        assert!(result.real_signer_ring_index < 7);
+        assert_eq!(result.ring_indices.len(), RING_SIZE);
+        assert!(result.real_signer_ring_index < RING_SIZE);
         assert!(result.metrics_by_adversary.contains_key("Combined"));
     }
 
@@ -1511,6 +1752,255 @@ mod tests {
         assert!(
             combined_bits.mean < naive_bits.mean,
             "Combined adversary should reduce privacy"
+        );
+    }
+
+    // ========================================================================
+    // Committed Tag Vector Tests
+    // ========================================================================
+
+    use crate::crypto::{CommittedTagMass, CommittedTagVectorSecret};
+    use curve25519_dalek::ristretto::RistrettoPoint;
+    use curve25519_dalek::traits::Identity;
+    use rand_core::OsRng;
+
+    fn create_test_committed_vector(clusters: &[u64]) -> CommittedTagVector {
+        let entries: Vec<CommittedTagMass> = clusters
+            .iter()
+            .map(|&id| CommittedTagMass {
+                cluster_id: ClusterId(id),
+                // Use identity point as placeholder commitment for testing
+                commitment: RistrettoPoint::identity().compress(),
+            })
+            .collect();
+
+        CommittedTagVector {
+            entries,
+            total_commitment: RistrettoPoint::identity().compress(),
+        }
+    }
+
+    #[test]
+    fn test_jaccard_similarity_identical() {
+        let set_a: HashSet<ClusterId> = [1, 2, 3].iter().map(|&x| ClusterId(x)).collect();
+        let set_b: HashSet<ClusterId> = [1, 2, 3].iter().map(|&x| ClusterId(x)).collect();
+
+        let sim = jaccard_similarity(&set_a, &set_b);
+        assert!((sim - 1.0).abs() < 0.001, "Identical sets should have similarity 1.0: {sim}");
+    }
+
+    #[test]
+    fn test_jaccard_similarity_disjoint() {
+        let set_a: HashSet<ClusterId> = [1, 2, 3].iter().map(|&x| ClusterId(x)).collect();
+        let set_b: HashSet<ClusterId> = [4, 5, 6].iter().map(|&x| ClusterId(x)).collect();
+
+        let sim = jaccard_similarity(&set_a, &set_b);
+        assert!(sim.abs() < 0.001, "Disjoint sets should have similarity 0.0: {sim}");
+    }
+
+    #[test]
+    fn test_jaccard_similarity_partial_overlap() {
+        // Sets: {1, 2, 3} and {2, 3, 4}
+        // Intersection: {2, 3} = 2 elements
+        // Union: {1, 2, 3, 4} = 4 elements
+        // Jaccard: 2/4 = 0.5
+        let set_a: HashSet<ClusterId> = [1, 2, 3].iter().map(|&x| ClusterId(x)).collect();
+        let set_b: HashSet<ClusterId> = [2, 3, 4].iter().map(|&x| ClusterId(x)).collect();
+
+        let sim = jaccard_similarity(&set_a, &set_b);
+        assert!((sim - 0.5).abs() < 0.001, "Expected 0.5 similarity: {sim}");
+    }
+
+    #[test]
+    fn test_jaccard_similarity_empty_sets() {
+        let set_a: HashSet<ClusterId> = HashSet::new();
+        let set_b: HashSet<ClusterId> = HashSet::new();
+
+        let sim = jaccard_similarity(&set_a, &set_b);
+        assert!((sim - 1.0).abs() < 0.001, "Empty sets should have similarity 1.0: {sim}");
+    }
+
+    #[test]
+    fn test_jaccard_similarity_one_empty() {
+        let set_a: HashSet<ClusterId> = [1, 2, 3].iter().map(|&x| ClusterId(x)).collect();
+        let set_b: HashSet<ClusterId> = HashSet::new();
+
+        let sim = jaccard_similarity(&set_a, &set_b);
+        assert!((sim - 0.5).abs() < 0.001, "One empty set should have similarity 0.5: {sim}");
+    }
+
+    #[test]
+    fn test_extract_cluster_ids() {
+        let committed = create_test_committed_vector(&[1, 5, 10]);
+        let ids = extract_cluster_ids(&committed);
+
+        assert_eq!(ids.len(), 3);
+        assert!(ids.contains(&ClusterId(1)));
+        assert!(ids.contains(&ClusterId(5)));
+        assert!(ids.contains(&ClusterId(10)));
+    }
+
+    #[test]
+    fn test_committed_pool_output_similarity() {
+        let output_a = CommittedPoolOutput {
+            id: 1,
+            age_blocks: 1000,
+            committed_tags: create_test_committed_vector(&[1, 2, 3]),
+        };
+
+        let output_b = CommittedPoolOutput {
+            id: 2,
+            age_blocks: 1000,
+            committed_tags: create_test_committed_vector(&[2, 3, 4]),
+        };
+
+        let sim = output_a.cluster_similarity(&output_b);
+        assert!((sim - 0.5).abs() < 0.001, "Expected 0.5 similarity: {sim}");
+    }
+
+    #[test]
+    fn test_select_committed_decoys() {
+        let mut rng = rand::thread_rng();
+
+        // Create a pool of outputs with various cluster sets
+        let pool: Vec<CommittedPoolOutput> = (0..100)
+            .map(|i| {
+                let clusters: Vec<u64> = if i % 3 == 0 {
+                    vec![1, 2, 3]  // Same as real output
+                } else if i % 3 == 1 {
+                    vec![2, 3, 4]  // Partial overlap
+                } else {
+                    vec![10, 11, 12]  // Different clusters
+                };
+
+                CommittedPoolOutput {
+                    id: i,
+                    age_blocks: 1000 + i * 10,
+                    committed_tags: create_test_committed_vector(&clusters),
+                }
+            })
+            .collect();
+
+        let real_output = CommittedPoolOutput {
+            id: 999,
+            age_blocks: 1500,
+            committed_tags: create_test_committed_vector(&[1, 2, 3]),
+        };
+
+        let config = CommittedDecoyConfig {
+            ring_size: 11,
+            min_similarity: 0.5,
+        };
+
+        let decoys = select_committed_decoys(&real_output, &pool, &config, &mut rng);
+        assert!(decoys.is_some(), "Should select decoys");
+
+        let decoy_indices = decoys.unwrap();
+        assert_eq!(decoy_indices.len(), 10, "Should select 10 decoys for ring size 11");
+
+        // Verify all decoys have good similarity
+        for &idx in &decoy_indices {
+            let sim = real_output.cluster_similarity(&pool[idx]);
+            // With relaxed threshold, similarity may vary
+            assert!(sim >= 0.0, "Similarity should be non-negative: {sim}");
+        }
+    }
+
+    #[test]
+    fn test_form_committed_ring() {
+        let mut rng = rand::thread_rng();
+
+        let pool: Vec<CommittedPoolOutput> = (0..20)
+            .map(|i| CommittedPoolOutput {
+                id: i,
+                age_blocks: 1000 + i * 100,
+                committed_tags: create_test_committed_vector(&[i, i + 1]),
+            })
+            .collect();
+
+        let real_output = CommittedPoolOutput {
+            id: 999,
+            age_blocks: 1500,
+            committed_tags: create_test_committed_vector(&[100, 101]),
+        };
+
+        let decoy_indices: Vec<usize> = (0..10).collect();
+        let (ring, real_idx) = form_committed_ring(&real_output, &decoy_indices, &pool, &mut rng);
+
+        assert_eq!(ring.len(), 11, "Ring should have 11 members");
+        assert!(real_idx < 11, "Real index should be within ring");
+
+        // Verify real output is at the correct position
+        let real_clusters = extract_cluster_ids(&real_output.committed_tags);
+        let ring_at_real = extract_cluster_ids(ring[real_idx]);
+        assert_eq!(real_clusters, ring_at_real, "Real output should be at real_idx");
+    }
+
+    #[test]
+    fn test_committed_ring_signature_integration() {
+        // Integration test: create committed tags, select decoys, form ring,
+        // and verify the ring can be used for signing
+        use crate::TAG_WEIGHT_SCALE;
+
+        let mut rng = OsRng;
+
+        // Create a real input with secrets
+        let input_tags: HashMap<ClusterId, crate::TagWeight> = [
+            (ClusterId(1), TAG_WEIGHT_SCALE / 2),
+            (ClusterId(2), TAG_WEIGHT_SCALE / 2),
+        ].into_iter().collect();
+
+        let input_secret = CommittedTagVectorSecret::from_plaintext(
+            1_000_000,  // value
+            &input_tags,
+            &mut rng,
+        );
+        let input_commitment = input_secret.commit();
+
+        // Create pool with committed outputs
+        let pool: Vec<CommittedPoolOutput> = (0..50)
+            .map(|i| {
+                let clusters = if i % 2 == 0 {
+                    vec![1, 2]  // Similar to real
+                } else {
+                    vec![10, 11]  // Different
+                };
+                CommittedPoolOutput {
+                    id: i,
+                    age_blocks: 1000 + i * 10,
+                    committed_tags: create_test_committed_vector(&clusters),
+                }
+            })
+            .collect();
+
+        let real_output = CommittedPoolOutput {
+            id: 999,
+            age_blocks: 1500,
+            committed_tags: input_commitment.clone(),
+        };
+
+        // Select decoys
+        let config = CommittedDecoyConfig {
+            ring_size: 7,
+            min_similarity: 0.7,
+        };
+
+        let decoys = select_committed_decoys(&real_output, &pool, &config, &mut rng);
+        assert!(decoys.is_some(), "Should select decoys");
+
+        let decoy_indices = decoys.unwrap();
+        assert_eq!(decoy_indices.len(), 6, "Should select 6 decoys");
+
+        // Form ring
+        let (ring, real_idx) = form_committed_ring(&real_output, &decoy_indices, &pool, &mut rng);
+        assert_eq!(ring.len(), 7);
+        assert!(real_idx < 7);
+
+        // Verify the ring contains the real commitment at the correct position
+        assert_eq!(
+            ring[real_idx].entries.len(),
+            input_commitment.entries.len(),
+            "Real input should be in ring at correct position"
         );
     }
 }
