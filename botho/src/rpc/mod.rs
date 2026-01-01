@@ -12,7 +12,7 @@ pub mod websocket;
 
 pub use auth::{ApiKeyConfig, ApiPermissions, AuthError, HmacAuthenticator};
 pub use deposit_scanner::{DepositScanner, ScanResult};
-pub use metrics::{check_health, check_ready, HealthResponse, HealthStatus, NodeMetrics, ReadyResponse, init_metrics, start_metrics_server, MetricsUpdater};
+pub use metrics::{check_health, check_ready, HealthResponse, HealthStatus, NodeMetrics, ReadyResponse, init_metrics, start_metrics_server, MetricsUpdater, calculate_dir_size, DATA_DIR_USAGE_BYTES};
 pub use rate_limit::{KeyTier, RateLimitInfo, RateLimiter};
 pub use view_keys::{RegistryError, ViewKeyInfo, ViewKeyRegistry};
 pub use websocket::WsBroadcaster;
