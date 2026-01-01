@@ -22,12 +22,14 @@ arbitrary = { version = "1", features = ["derive"] }
 
 # Target crates
 botho = { path = "../botho" }
+bth-account-keys = { path = "../account-keys", features = ["pq"] }
 bth-crypto-pq = { path = "../crypto/pq" }
 bth-crypto-keys = { path = "../crypto/keys" }
-bth-crypto-ring-signature = { path = "../crypto/ring-signature" }
+bth-crypto-ring-signature = { path = "../crypto/ring-signature", features = ["alloc"] }
 bth-crypto-hashes = { path = "../crypto/hashes" }
-bth-crypto-lion = { path = "../crypto/lion" }
+bth-crypto-lion = { path = "../crypto/lion", features = ["std"] }
 bth-transaction-core = { path = "../transaction/core", features = ["pq"] }
+bth-util-from-random = { path = "../util/from-random" }
 
 # Serialization
 bincode = "1"
@@ -37,6 +39,8 @@ hex = "0.4"
 bs58 = "0.5"
 rand = "0.8"
 rand_chacha = "0.3"
+subtle = "2"
+curve25519-dalek = "4"
 
 [[bin]]
 name = "fuzz_transaction"
@@ -104,6 +108,27 @@ bench = false
 [[bin]]
 name = "fuzz_lion_signature"
 path = "fuzz_targets/fuzz_lion_signature.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_clsag"
+path = "fuzz_targets/fuzz_clsag.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_polynomial"
+path = "fuzz_targets/fuzz_polynomial.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_subaddress"
+path = "fuzz_targets/fuzz_subaddress.rs"
 test = false
 doc = false
 bench = false
