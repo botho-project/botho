@@ -1,13 +1,13 @@
 //! Node management command
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use std::path::Path;
 
 use crate::discovery::NodeDiscovery;
 use crate::rpc_pool::RpcPool;
 use crate::storage::EncryptedWallet;
 
-use super::{print_error, print_success, prompt_password};
+use super::{decrypt_wallet_with_rate_limiting, print_error, print_success};
 
 /// Run the nodes command
 pub async fn run(wallet_path: &Path, discover: bool) -> Result<()> {
@@ -17,13 +17,8 @@ pub async fn run(wallet_path: &Path, discover: bool) -> Result<()> {
         return Ok(());
     }
 
-    // Load wallet
-    let mut wallet = EncryptedWallet::load(wallet_path)?;
-    let password = prompt_password("Enter wallet password: ")?;
-
-    // Verify password
-    wallet.decrypt(&password)
-        .map_err(|_| anyhow!("Failed to decrypt wallet - wrong password?"))?;
+    // Load and decrypt wallet with rate limiting protection
+    let (mut wallet, _mnemonic, password) = decrypt_wallet_with_rate_limiting(wallet_path)?;
 
     // Get or create discovery state
     let mut discovery = wallet

@@ -1,7 +1,10 @@
+mod snapshot;
 mod store;
 
+pub use snapshot::{SnapshotError, UtxoSnapshot};
 pub use store::{ClusterWealthInfo, Ledger, TxLocation};
 
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -23,7 +26,7 @@ pub enum LedgerError {
 }
 
 /// Information about the current chain state
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChainState {
     /// Current block height
     pub height: u64,

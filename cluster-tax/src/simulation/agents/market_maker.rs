@@ -1,9 +1,13 @@
 //! Market maker agent: High velocity, many small trades, seeks low-tag coins.
 
-use crate::simulation::agent::{Action, Agent, AgentId};
-use crate::simulation::state::SimulationState;
-use crate::tag::TagVector;
-use crate::Account;
+use crate::{
+    simulation::{
+        agent::{Action, Agent, AgentId},
+        state::SimulationState,
+    },
+    tag::TagVector,
+    Account,
+};
 
 /// Market maker with high transaction velocity.
 #[derive(Debug)]

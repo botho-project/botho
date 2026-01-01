@@ -1,9 +1,13 @@
 //! Whale agent: Large holder that may attempt fee minimization strategies.
 
-use crate::simulation::agent::{Action, Agent, AgentId};
-use crate::simulation::state::SimulationState;
-use crate::tag::TagVector;
-use crate::Account;
+use crate::{
+    simulation::{
+        agent::{Action, Agent, AgentId},
+        state::SimulationState,
+    },
+    tag::TagVector,
+    Account,
+};
 
 /// Fee minimization strategy for whales.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -159,7 +163,8 @@ impl Agent for WhaleAgent {
                 if !self.spending_targets.is_empty() {
                     let amount = (self.account.balance as f64 * self.spending_rate) as u64;
                     if amount >= 100 {
-                        let target_idx = (self.next_random() as usize) % self.spending_targets.len();
+                        let target_idx =
+                            (self.next_random() as usize) % self.spending_targets.len();
                         return Some(Action::Transfer {
                             to: self.spending_targets[target_idx],
                             amount,
@@ -188,7 +193,8 @@ impl Agent for WhaleAgent {
                 if !self.spending_targets.is_empty() {
                     let amount = (self.account.balance as f64 * self.spending_rate) as u64;
                     if amount >= 100 {
-                        let target_idx = (self.next_random() as usize) % self.spending_targets.len();
+                        let target_idx =
+                            (self.next_random() as usize) % self.spending_targets.len();
                         return Some(Action::Transfer {
                             to: self.spending_targets[target_idx],
                             amount,
@@ -360,12 +366,12 @@ mod tests {
 
     #[test]
     fn test_whale_spending_rate_clamped() {
-        let whale1 = WhaleAgent::new(AgentId(1), 100, WhaleStrategy::Passive)
-            .with_spending_rate(2.0); // Above 1.0
+        let whale1 =
+            WhaleAgent::new(AgentId(1), 100, WhaleStrategy::Passive).with_spending_rate(2.0); // Above 1.0
         assert_eq!(whale1.spending_rate, 1.0);
 
-        let whale2 = WhaleAgent::new(AgentId(1), 100, WhaleStrategy::Passive)
-            .with_spending_rate(-0.5); // Below 0.0
+        let whale2 =
+            WhaleAgent::new(AgentId(1), 100, WhaleStrategy::Passive).with_spending_rate(-0.5); // Below 0.0
         assert_eq!(whale2.spending_rate, 0.0);
     }
 

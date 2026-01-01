@@ -1,0 +1,48 @@
+[package]
+name = "botho-mobile"
+version = "0.1.0"
+edition = "2021"
+description = "Mobile FFI bindings for Botho wallet"
+license = "Apache-2.0"
+rust-version = "1.75"
+
+[lib]
+crate-type = ["staticlib", "cdylib"]
+name = "botho_mobile"
+
+[dependencies]
+# Core wallet functionality
+botho-wallet = { path = "../../botho-wallet", default-features = false }
+bth-account-keys = { path = "../../account-keys" }
+bth-crypto-keys = { path = "../../crypto/keys" }
+
+# UniFFI for generating Swift/Kotlin bindings
+uniffi = { version = "0.25", features = ["cli"] }
+
+# Async runtime (minimal for mobile)
+tokio = { version = "1", features = ["rt", "sync"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hex = "0.4"
+
+# Error handling
+thiserror = "1"
+anyhow = "1"
+
+# Secure memory
+zeroize = { version = "1", features = ["derive"] }
+
+# BIP39 mnemonic generation
+bip39 = "2"
+
+[build-dependencies]
+uniffi = { version = "0.25", features = ["build"] }
+
+[features]
+default = []
+# Enable for iOS builds
+ios = []
+# Enable for Android builds
+android = []

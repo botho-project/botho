@@ -7,7 +7,7 @@ import {
   useRef,
   type ReactNode,
 } from 'react'
-import { RemoteNodeAdapter } from '@botho/adapters'
+import { RemoteNodeAdapter, type WsConnectionStatus } from '@botho/adapters'
 import { AddressBook, saveWallet, loadWallet, getWalletInfo, deriveAddress, isValidMnemonic, clearWallet } from '@botho/core'
 import type { Balance, Contact, NodeInfo, Transaction } from '@botho/core'
 
@@ -17,6 +17,9 @@ interface WalletState {
   isConnecting: boolean
   nodeInfo: NodeInfo | null
   connectionError: string | null
+
+  // WebSocket status
+  wsStatus: WsConnectionStatus
 
   // Wallet
   hasWallet: boolean
@@ -63,12 +66,16 @@ const adapter = new RemoteNodeAdapter({
 
 const addressBook = new AddressBook()
 
+/** Polling interval when WebSocket is disconnected (30 seconds) */
+const FALLBACK_POLL_INTERVAL = 30000
+
 export function WalletProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<WalletState>({
     isConnected: false,
     isConnecting: false,
     nodeInfo: null,
     connectionError: null,
+    wsStatus: 'disconnected',
     hasWallet: false,
     isEncrypted: false,
     isLocked: false,
@@ -93,6 +100,57 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     connect()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Subscribe to WebSocket status changes
+  useEffect(() => {
+    const unsubscribe = adapter.onWsStatusChange((wsStatus) => {
+      setState(s => ({ ...s, wsStatus }))
+    })
+    // Initialize with current status
+    setState(s => ({ ...s, wsStatus: adapter.getWsStatus() }))
+    return unsubscribe
+  }, [])
+
+  // Subscribe to real-time block updates for balance refresh
+  useEffect(() => {
+    if (!state.isConnected || !state.address || state.isLocked) return
+
+    const unsubscribe = adapter.onNewBlock(async () => {
+      // Refresh balance and transactions when new block arrives
+      try {
+        const [balance, transactions] = await Promise.all([
+          adapter.getBalance([state.address!]),
+          adapter.getTransactionHistory([state.address!], { limit: 50 }),
+        ])
+        setState(s => ({ ...s, balance, transactions }))
+      } catch {
+        // Ignore refresh errors - will retry on next block
+      }
+    })
+
+    return unsubscribe
+  }, [state.isConnected, state.address, state.isLocked])
+
+  // Fallback polling when WebSocket is disconnected
+  useEffect(() => {
+    // Only poll if connected to node but WebSocket is down
+    if (!state.isConnected || !state.address || state.isLocked) return
+    if (state.wsStatus === 'connected') return // Use WebSocket instead
+
+    const pollInterval = setInterval(async () => {
+      try {
+        const [balance, transactions] = await Promise.all([
+          adapter.getBalance([state.address!]),
+          adapter.getTransactionHistory([state.address!], { limit: 50 }),
+        ])
+        setState(s => ({ ...s, balance, transactions }))
+      } catch {
+        // Ignore polling errors
+      }
+    }, FALLBACK_POLL_INTERVAL)
+
+    return () => clearInterval(pollInterval)
+  }, [state.isConnected, state.address, state.isLocked, state.wsStatus])
 
   const connect = useCallback(async () => {
     setState(s => ({ ...s, isConnecting: true, connectionError: null }))

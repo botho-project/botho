@@ -1,0 +1,18 @@
+# Grafana Dashboard Screenshots
+
+This directory contains screenshots of the Botho node Grafana dashboard.
+
+## Capturing Screenshots
+
+To capture the dashboard screenshot:
+
+1. Import the dashboard to Grafana
+2. Connect to a running Botho node with metrics enabled
+3. Wait for metrics to populate (5+ minutes)
+4. Navigate to the Botho Node Dashboard
+5. Use Grafana's built-in screenshot feature or browser screenshot
+6. Save as `dashboard-overview.png`
+
+## Required Screenshots
+
+- `dashboard-overview.png` - Full dashboard view showing all panels

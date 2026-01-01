@@ -98,6 +98,39 @@ enum Commands {
         #[arg(long)]
         memo: Option<String>,
     },
+
+    /// Manage UTXO snapshots for fast initial sync
+    Snapshot {
+        #[command(subcommand)]
+        action: SnapshotAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum SnapshotAction {
+    /// Create a snapshot of the current UTXO set
+    Create {
+        /// Output file path for the snapshot
+        #[arg(short, long)]
+        output: String,
+    },
+
+    /// Load a snapshot from a file
+    Load {
+        /// Input file path for the snapshot
+        #[arg(short, long)]
+        input: String,
+
+        /// Expected block hash (hex) for verification
+        #[arg(long)]
+        verify_hash: Option<String>,
+    },
+
+    /// Show information about a snapshot file
+    Info {
+        /// Snapshot file path
+        file: String,
+    },
 }
 
 fn main() -> Result<()> {
@@ -166,6 +199,17 @@ fn main() -> Result<()> {
         }
         Commands::Send { address, amount, private, quantum, memo } => {
             commands::send::run(&config_path, &address, &amount, private, quantum, memo.as_deref())
+        }
+        Commands::Snapshot { action } => match action {
+            SnapshotAction::Create { output } => {
+                commands::snapshot::create(&config_path, &output)
+            }
+            SnapshotAction::Load { input, verify_hash } => {
+                commands::snapshot::load(&config_path, &input, verify_hash.as_deref())
+            }
+            SnapshotAction::Info { file } => {
+                commands::snapshot::info(&file)
+            }
         }
     }
 }

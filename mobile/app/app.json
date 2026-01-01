@@ -1,0 +1,54 @@
+{
+  "expo": {
+    "name": "Botho Wallet",
+    "slug": "botho-wallet",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#1a1a2e"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.botho.wallet",
+      "infoPlist": {
+        "NSFaceIDUsageDescription": "Authenticate to access your wallet",
+        "UIBackgroundModes": []
+      },
+      "entitlements": {
+        "keychain-access-groups": ["$(AppIdentifierPrefix)com.botho.wallet"]
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#1a1a2e"
+      },
+      "package": "com.botho.wallet",
+      "permissions": [
+        "USE_BIOMETRIC",
+        "USE_FINGERPRINT"
+      ]
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Allow $(PRODUCT_NAME) to use Face ID to unlock your wallet"
+        }
+      ]
+    ],
+    "scheme": "botho",
+    "experiments": {
+      "tsconfigPaths": true
+    }
+  }
+}

@@ -14,7 +14,7 @@ use crate::{
     utils, QuorumSet, QuorumSetExt, SlotIndex, Value,
 };
 use bth_common::{
-    logger::{log, o, Logger},
+    logger::{log, o, Logger, LoggerExt},
     HashMap, HashSet, NodeID,
 };
 use tracing::{instrument, trace, Span};

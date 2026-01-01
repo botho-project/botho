@@ -5,10 +5,10 @@
 //! proofs of tag inheritance and conservation without revealing the actual
 //! tag values.
 
-use crate::crypto::{
-    CommittedTagVector, ExtendedSignatureVerifier, ExtendedTxSignature, RingTagData,
+use crate::{
+    crypto::{CommittedTagVector, ExtendedSignatureVerifier, ExtendedTxSignature, RingTagData},
+    TagWeight,
 };
-use crate::TagWeight;
 
 /// Error type for committed tag validation.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -59,11 +59,8 @@ pub fn validate_committed_tags(
     }
 
     // Create verifier and run verification
-    let verifier = ExtendedSignatureVerifier::new(
-        input_ring_tags.to_vec(),
-        output_tags.to_vec(),
-        decay_rate,
-    );
+    let verifier =
+        ExtendedSignatureVerifier::new(input_ring_tags.to_vec(), output_tags.to_vec(), decay_rate);
 
     if verifier.verify(signature) {
         Ok(())
@@ -118,8 +115,10 @@ impl Default for CommittedTagConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crypto::{CommittedTagVectorSecret, ExtendedSignatureBuilder};
-    use crate::{ClusterId, TAG_WEIGHT_SCALE};
+    use crate::{
+        crypto::{CommittedTagVectorSecret, ExtendedSignatureBuilder},
+        ClusterId, TAG_WEIGHT_SCALE,
+    };
     use rand_core::OsRng;
     use std::collections::HashMap;
 
@@ -161,12 +160,8 @@ mod tests {
             real_index,
         };
 
-        let result = validate_committed_tags(
-            &[ring_data],
-            &[output_commitment],
-            &signature,
-            decay_rate,
-        );
+        let result =
+            validate_committed_tags(&[ring_data], &[output_commitment], &signature, decay_rate);
 
         assert!(result.is_ok(), "Should validate: {:?}", result);
     }
@@ -289,7 +284,11 @@ mod tests {
             decay_rate,
         );
 
-        assert!(result.is_ok(), "Multiple inputs should validate: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "Multiple inputs should validate: {:?}",
+            result
+        );
     }
 
     #[test]
@@ -314,12 +313,8 @@ mod tests {
             real_index: 0,
         };
 
-        let result = validate_committed_tags(
-            &[ring_data],
-            &[output_commitment],
-            &signature,
-            decay_rate,
-        );
+        let result =
+            validate_committed_tags(&[ring_data], &[output_commitment], &signature, decay_rate);
 
         assert!(result.is_ok(), "Zero decay should validate: {:?}", result);
     }
@@ -345,12 +340,8 @@ mod tests {
             real_index: 0,
         };
 
-        let result = validate_committed_tags(
-            &[ring_data],
-            &[output_commitment],
-            &signature,
-            decay_rate,
-        );
+        let result =
+            validate_committed_tags(&[ring_data], &[output_commitment], &signature, decay_rate);
 
         assert!(result.is_ok(), "High decay should validate: {:?}", result);
     }
@@ -385,9 +376,9 @@ mod tests {
         let input_secret = create_test_secret(
             1_000_000,
             &[
-                (1, 500_000),  // 50%
-                (2, 300_000),  // 30%
-                (3, 200_000),  // 20%
+                (1, 500_000), // 50%
+                (2, 300_000), // 30%
+                (3, 200_000), // 20%
             ],
         );
         let ring_tags = vec![input_secret.commit()];
@@ -406,13 +397,13 @@ mod tests {
             real_index: 0,
         };
 
-        let result = validate_committed_tags(
-            &[ring_data],
-            &[output_commitment],
-            &signature,
-            decay_rate,
-        );
+        let result =
+            validate_committed_tags(&[ring_data], &[output_commitment], &signature, decay_rate);
 
-        assert!(result.is_ok(), "Mixed clusters should validate: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "Mixed clusters should validate: {:?}",
+            result
+        );
     }
 }

@@ -63,9 +63,14 @@ pub struct NetworkConfig {
     pub cors_origins: Vec<String>,
 
     /// Bootstrap peers for initial discovery (multiaddr format).
-    /// If not set, uses network-specific seed nodes.
+    /// If not set, uses DNS discovery or network-specific seed nodes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bootstrap_peers: Vec<String>,
+
+    /// DNS seed discovery configuration.
+    /// When enabled, seeds are discovered via DNS TXT records.
+    #[serde(default)]
+    pub dns_seeds: DnsSeedConfig,
 
     /// Quorum configuration
     #[serde(default)]
@@ -134,6 +139,36 @@ fn default_cors_origins() -> Vec<String> {
     ]
 }
 
+/// DNS seed discovery configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DnsSeedConfig {
+    /// Enable DNS-based seed discovery.
+    /// When true, queries DNS TXT records for bootstrap peers.
+    /// Default: true
+    #[serde(default = "default_dns_seeds_enabled")]
+    pub enabled: bool,
+
+    /// Custom DNS seed domain (overrides network default).
+    /// Default domains:
+    /// - Mainnet: seeds.botho.io
+    /// - Testnet: seeds.testnet.botho.io
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain: Option<String>,
+}
+
+fn default_dns_seeds_enabled() -> bool {
+    true
+}
+
+impl Default for DnsSeedConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            domain: None,
+        }
+    }
+}
+
 /// Default bootstrap peers for network discovery, by network.
 fn default_bootstrap_peers(network: Network) -> Vec<String> {
     match network {
@@ -177,13 +212,44 @@ impl NetworkConfig {
         }
     }
 
-    /// Get bootstrap peers, using network defaults if not explicitly set
+    /// Get bootstrap peers synchronously (uses hardcoded seeds, not DNS).
+    ///
+    /// For DNS-based discovery, use `bootstrap_peers_async` instead.
     pub fn bootstrap_peers(&self, network: Network) -> Vec<String> {
         if self.bootstrap_peers.is_empty() {
             default_bootstrap_peers(network)
         } else {
             self.bootstrap_peers.clone()
         }
+    }
+
+    /// Get bootstrap peers asynchronously, using DNS discovery if enabled.
+    ///
+    /// Priority:
+    /// 1. Explicitly configured bootstrap_peers (if not empty)
+    /// 2. DNS TXT record discovery (if enabled)
+    /// 3. Hardcoded fallback seeds
+    pub async fn bootstrap_peers_async(&self, network: Network) -> Vec<String> {
+        // If explicit bootstrap peers are configured, use them
+        if !self.bootstrap_peers.is_empty() {
+            return self.bootstrap_peers.clone();
+        }
+
+        // If DNS discovery is enabled, try it
+        if self.dns_seeds.enabled {
+            use crate::network::DnsSeedDiscovery;
+
+            let discovery = if let Some(ref domain) = self.dns_seeds.domain {
+                DnsSeedDiscovery::with_domain(network, domain.clone())
+            } else {
+                DnsSeedDiscovery::new(network)
+            };
+
+            return discovery.discover_seeds().await;
+        }
+
+        // Fall back to hardcoded seeds
+        default_bootstrap_peers(network)
     }
 
     /// Parse the connection whitelist strings into IpAddr values.
@@ -377,7 +443,8 @@ impl Default for NetworkConfig {
             rpc_port: None,     // Uses network-specific default
             metrics_port: None, // Uses network-specific default (9090/19090)
             cors_origins: default_cors_origins(),
-            bootstrap_peers: Vec::new(),  // Uses network-specific defaults
+            bootstrap_peers: Vec::new(),  // Uses DNS discovery or network-specific defaults
+            dns_seeds: DnsSeedConfig::default(),
             quorum: QuorumConfig::default(),
             api_keys: Vec::new(),
             max_connections_per_ip: default_max_connections_per_ip(),

@@ -1,0 +1,19 @@
+[Unit]
+Description=Daily Botho Seed Node Ledger Backup
+Documentation=https://github.com/botho-project/botho/blob/main/docs/seed-node-backup.md
+
+[Timer]
+# Run daily at 2:00 AM UTC
+OnCalendar=*-*-* 02:00:00
+
+# Randomize start time by up to 15 minutes to avoid thundering herd
+RandomizedDelaySec=900
+
+# Persist timer across reboots - run missed backups
+Persistent=true
+
+# Accuracy of timer (allow 1 minute variance)
+AccuracySec=60s
+
+[Install]
+WantedBy=timers.target

@@ -5,8 +5,8 @@
 //!
 //! ## Key Concepts
 //!
-//! - **Effective Anonymity Set**: The number of ring members that appear equally
-//!   plausible to an adversary (e^entropy)
+//! - **Effective Anonymity Set**: The number of ring members that appear
+//!   equally plausible to an adversary (e^entropy)
 //! - **Bits of Privacy**: log₂(effective_anonymity) - the information-theoretic
 //!   privacy level
 //! - **Adversary Models**: Different attack strategies with varying knowledge
@@ -77,8 +77,16 @@ pub fn analyze_ring_sizes(ring_sizes: &[usize]) -> Vec<RingSizeAnalysis> {
         let sig_kb = sig_bytes as f64 / 1024.0;
         let theoretical_bits = (size as f64).log2();
 
-        let marginal_bytes = if prev_bytes > 0 { sig_bytes - prev_bytes } else { sig_bytes };
-        let marginal_bits = if prev_bits > 0.0 { theoretical_bits - prev_bits } else { theoretical_bits };
+        let marginal_bytes = if prev_bytes > 0 {
+            sig_bytes - prev_bytes
+        } else {
+            sig_bytes
+        };
+        let marginal_bits = if prev_bits > 0.0 {
+            theoretical_bits - prev_bits
+        } else {
+            theoretical_bits
+        };
 
         results.push(RingSizeAnalysis {
             ring_size: size,
@@ -103,24 +111,43 @@ pub fn analyze_ring_sizes(ring_sizes: &[usize]) -> Vec<RingSizeAnalysis> {
 pub fn format_ring_size_analysis(analyses: &[RingSizeAnalysis]) -> String {
     let mut report = String::new();
 
-    report.push_str("╔═══════════════════════════════════════════════════════════════════════════════╗\n");
-    report.push_str("║                    RING SIZE COST/BENEFIT ANALYSIS                            ║\n");
-    report.push_str("╠═══════════════════════════════════════════════════════════════════════════════╣\n");
-    report.push_str("║  Ring signatures provide plausible deniability by hiding the real signer      ║\n");
-    report.push_str("║  among decoys. Larger rings = more privacy but bigger signatures.             ║\n");
-    report.push_str("╚═══════════════════════════════════════════════════════════════════════════════╝\n\n");
+    report.push_str(
+        "╔═══════════════════════════════════════════════════════════════════════════════╗\n",
+    );
+    report.push_str(
+        "║                    RING SIZE COST/BENEFIT ANALYSIS                            ║\n",
+    );
+    report.push_str(
+        "╠═══════════════════════════════════════════════════════════════════════════════╣\n",
+    );
+    report.push_str(
+        "║  Ring signatures provide plausible deniability by hiding the real signer      ║\n",
+    );
+    report.push_str(
+        "║  among decoys. Larger rings = more privacy but bigger signatures.             ║\n",
+    );
+    report.push_str(
+        "╚═══════════════════════════════════════════════════════════════════════════════╝\n\n",
+    );
 
     report.push_str("SIGNATURE SIZE BY RING SIZE\n");
-    report.push_str("─────────────────────────────────────────────────────────────────────────────────\n");
+    report.push_str(
+        "─────────────────────────────────────────────────────────────────────────────────\n",
+    );
     report.push_str("Ring   Sig Size    Sig Size   Theoretical   Bits/KB   Marginal   Marginal\n");
     report.push_str("Size   (bytes)     (KB)       Max (bits)    Ratio     +Bytes     +Bits\n");
-    report.push_str("─────────────────────────────────────────────────────────────────────────────────\n");
+    report.push_str(
+        "─────────────────────────────────────────────────────────────────────────────────\n",
+    );
 
     for (i, a) in analyses.iter().enumerate() {
         let marginal_str = if i == 0 {
             format!("{:>8}   {:>+6.2}", "-", a.theoretical_max_bits)
         } else {
-            format!("{:>+8}   {:>+6.2}", a.marginal_bytes as i64, a.marginal_bits)
+            format!(
+                "{:>+8}   {:>+6.2}",
+                a.marginal_bytes as i64, a.marginal_bits
+            )
         };
 
         report.push_str(&format!(
@@ -136,12 +163,15 @@ pub fn format_ring_size_analysis(analyses: &[RingSizeAnalysis]) -> String {
 
     report.push_str("\n");
     report.push_str("COST ANALYSIS\n");
-    report.push_str("─────────────────────────────────────────────────────────────────────────────────\n");
+    report.push_str(
+        "─────────────────────────────────────────────────────────────────────────────────\n",
+    );
 
     // Calculate relative costs
     let base = &analyses[0];
     for a in analyses.iter().skip(1) {
-        let size_increase = ((a.signature_bytes as f64 / base.signature_bytes as f64) - 1.0) * 100.0;
+        let size_increase =
+            ((a.signature_bytes as f64 / base.signature_bytes as f64) - 1.0) * 100.0;
         let privacy_increase = ((a.theoretical_max_bits / base.theoretical_max_bits) - 1.0) * 100.0;
         let efficiency = privacy_increase / size_increase;
 
@@ -153,7 +183,9 @@ pub fn format_ring_size_analysis(analyses: &[RingSizeAnalysis]) -> String {
 
     report.push_str("\n");
     report.push_str("LEDGER IMPACT (per 1M private transactions)\n");
-    report.push_str("─────────────────────────────────────────────────────────────────────────────────\n");
+    report.push_str(
+        "─────────────────────────────────────────────────────────────────────────────────\n",
+    );
 
     for a in analyses {
         let ledger_gb = (a.signature_bytes as f64 * 1_000_000.0) / (1024.0 * 1024.0 * 1024.0);
@@ -224,7 +256,10 @@ pub struct SimulatedOutput {
 impl SimulatedOutput {
     /// Total attributed cluster weight (0 to 1_000_000).
     pub fn total_cluster_weight(&self) -> u32 {
-        self.cluster_tags.values().sum::<u32>().min(TAG_WEIGHT_SCALE)
+        self.cluster_tags
+            .values()
+            .sum::<u32>()
+            .min(TAG_WEIGHT_SCALE)
     }
 
     /// Background weight (unattributed portion).
@@ -315,11 +350,11 @@ impl Default for PoolConfig {
     fn default() -> Self {
         Self {
             pool_size: 100_000,
-            standard_fraction: 0.50,  // 50% standard retail
-            exchange_fraction: 0.25,  // 25% exchange activity
-            whale_fraction: 0.10,     // 10% whale movements
-            coinbase_fraction: 0.10,  // 10% mining rewards
-            mixed_fraction: 0.05,     // 5% intentionally mixed
+            standard_fraction: 0.50, // 50% standard retail
+            exchange_fraction: 0.25, // 25% exchange activity
+            whale_fraction: 0.10,    // 10% whale movements
+            coinbase_fraction: 0.10, // 10% mining rewards
+            mixed_fraction: 0.05,    // 5% intentionally mixed
             num_clusters: 1_000,
             decay_rate: DEFAULT_DECAY_RATE,
             max_age_blocks: MAX_AGE_BLOCKS,
@@ -369,22 +404,30 @@ impl OutputPoolGenerator {
             OutputType::Standard
         } else if r < self.config.standard_fraction + self.config.exchange_fraction {
             OutputType::Exchange
-        } else if r < self.config.standard_fraction + self.config.exchange_fraction + self.config.whale_fraction {
+        } else if r < self.config.standard_fraction
+            + self.config.exchange_fraction
+            + self.config.whale_fraction
+        {
             OutputType::Whale
-        } else if r < self.config.standard_fraction + self.config.exchange_fraction + self.config.whale_fraction + self.config.coinbase_fraction {
+        } else if r < self.config.standard_fraction
+            + self.config.exchange_fraction
+            + self.config.whale_fraction
+            + self.config.coinbase_fraction
+        {
             OutputType::Coinbase
         } else {
             OutputType::Mixed
         };
 
         // Generate age from gamma distribution (matching spend patterns)
-        let age_blocks = self
-            .gamma
-            .sample(rng)
-            .clamp(MIN_AGE_BLOCKS as f64, self.config.max_age_blocks as f64) as u64;
+        let age_blocks =
+            self.gamma
+                .sample(rng)
+                .clamp(MIN_AGE_BLOCKS as f64, self.config.max_age_blocks as f64) as u64;
 
         // Generate cluster tags and hops based on output type
-        let (cluster_tags, hops_since_mint) = self.generate_cluster_profile(rng, output_type, age_blocks);
+        let (cluster_tags, hops_since_mint) =
+            self.generate_cluster_profile(rng, output_type, age_blocks);
 
         SimulatedOutput {
             id,
@@ -500,7 +543,8 @@ pub trait Adversary {
     /// Returns a name for this adversary type.
     fn name(&self) -> &'static str;
 
-    /// Analyze a ring and return probabilities for each member being the real signer.
+    /// Analyze a ring and return probabilities for each member being the real
+    /// signer.
     ///
     /// The returned vector has the same length as the ring, with probabilities
     /// summing to 1.0.
@@ -521,7 +565,8 @@ impl Adversary for NaiveAdversary {
     }
 }
 
-/// Age-heuristic adversary: uses gamma distribution to weight by spend probability.
+/// Age-heuristic adversary: uses gamma distribution to weight by spend
+/// probability.
 pub struct AgeAdversary {
     gamma_shape: f64,
     gamma_scale_blocks: f64,
@@ -555,7 +600,10 @@ impl Adversary for AgeAdversary {
     }
 
     fn analyze(&self, ring: &[SimulatedOutput], _output_tags: &HashMap<u64, u32>) -> Vec<f64> {
-        let weights: Vec<f64> = ring.iter().map(|o| self.weight_for_age(o.age_blocks)).collect();
+        let weights: Vec<f64> = ring
+            .iter()
+            .map(|o| self.weight_for_age(o.age_blocks))
+            .collect();
         let total: f64 = weights.iter().sum();
 
         if total <= 0.0 {
@@ -634,7 +682,10 @@ impl Adversary for ClusterAdversary {
     }
 
     fn analyze(&self, ring: &[SimulatedOutput], output_tags: &HashMap<u64, u32>) -> Vec<f64> {
-        let scores: Vec<f64> = ring.iter().map(|o| self.match_score(o, output_tags)).collect();
+        let scores: Vec<f64> = ring
+            .iter()
+            .map(|o| self.match_score(o, output_tags))
+            .collect();
         let total: f64 = scores.iter().sum();
 
         if total <= 0.0 {
@@ -658,8 +709,8 @@ impl Default for CombinedAdversary {
         Self {
             age: AgeAdversary::default(),
             cluster: ClusterAdversary::default(),
-            age_weight: 0.3,      // Age is less reliable
-            cluster_weight: 0.7,  // Cluster fingerprinting is more powerful
+            age_weight: 0.3,     // Age is less reliable
+            cluster_weight: 0.7, // Cluster fingerprinting is more powerful
         }
     }
 }
@@ -690,9 +741,7 @@ impl Adversary for CombinedAdversary {
         let combined: Vec<f64> = age_probs
             .iter()
             .zip(cluster_probs.iter())
-            .map(|(&a, &c)| {
-                (a.powf(self.age_weight) * c.powf(self.cluster_weight)).max(1e-10)
-            })
+            .map(|(&a, &c)| (a.powf(self.age_weight) * c.powf(self.cluster_weight)).max(1e-10))
             .collect();
 
         let total: f64 = combined.iter().sum();
@@ -868,10 +917,7 @@ impl RingSimulator {
         let output_tags = self.simulate_output_tags(real_signer);
 
         // Build the ring for analysis
-        let ring: Vec<SimulatedOutput> = ring_indices
-            .iter()
-            .map(|&i| pool[i].clone())
-            .collect();
+        let ring: Vec<SimulatedOutput> = ring_indices.iter().map(|&i| pool[i].clone()).collect();
 
         // Analyze with each adversary
         let adversaries: Vec<Box<dyn Adversary>> = vec![
@@ -924,7 +970,9 @@ impl RingSimulator {
         compatible.sort_by(|a, b| {
             let score_a = a.2 * a.1 * a.1;
             let score_b = b.2 * b.1 * b.1;
-            score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
+            score_b
+                .partial_cmp(&score_a)
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
 
         // If not enough compatible, fall back to all candidates
@@ -1140,7 +1188,8 @@ pub fn run_monte_carlo<R: Rng>(config: &MonteCarloConfig, rng: &mut R) -> MonteC
 
     // Collect samples
     let mut samples_by_adversary: HashMap<String, Vec<RingPrivacyMetrics>> = HashMap::new();
-    let mut samples_by_type: HashMap<OutputType, HashMap<String, Vec<RingPrivacyMetrics>>> = HashMap::new();
+    let mut samples_by_type: HashMap<OutputType, HashMap<String, Vec<RingPrivacyMetrics>>> =
+        HashMap::new();
 
     for _ in 0..config.num_simulations {
         if let Some(result) = simulator.simulate_ring(&pool, rng) {
@@ -1173,7 +1222,8 @@ pub fn run_monte_carlo<R: Rng>(config: &MonteCarloConfig, rng: &mut R) -> MonteC
         let bits: Vec<f64> = metrics.iter().map(|m| m.bits_of_privacy).collect();
         let ranks: Vec<f64> = metrics.iter().map(|m| m.real_signer_rank as f64).collect();
 
-        effective_anonymity_stats.insert(adv_name.clone(), DistributionStats::from_samples(&eff_anon));
+        effective_anonymity_stats
+            .insert(adv_name.clone(), DistributionStats::from_samples(&eff_anon));
         bits_of_privacy_stats.insert(adv_name.clone(), DistributionStats::from_samples(&bits));
         real_signer_rank_stats.insert(adv_name.clone(), DistributionStats::from_samples(&ranks));
 
@@ -1209,8 +1259,10 @@ pub fn format_monte_carlo_report(results: &MonteCarloResults) -> String {
     report.push_str("╔══════════════════════════════════════════════════════════════════╗\n");
     report.push_str("║           RING SIGNATURE PRIVACY SIMULATION REPORT               ║\n");
     report.push_str("╠══════════════════════════════════════════════════════════════════╣\n");
-    report.push_str(&format!("║  Simulations: {:>6}    Ring Size: 7    Theoretical Max: 2.81 bits ║\n",
-        results.num_simulations));
+    report.push_str(&format!(
+        "║  Simulations: {:>6}    Ring Size: 7    Theoretical Max: 2.81 bits ║\n",
+        results.num_simulations
+    ));
     report.push_str("╚══════════════════════════════════════════════════════════════════╝\n\n");
 
     report.push_str("EFFECTIVE BITS OF PRIVACY BY ADVERSARY MODEL\n");
@@ -1244,11 +1296,7 @@ pub fn format_monte_carlo_report(results: &MonteCarloResults) -> String {
         if let Some(stats) = results.effective_anonymity_stats.get(adv) {
             report.push_str(&format!(
                 "{:<20} {:>5.2}  {:>5.2}  {:>5.2}   {:>5.2}\n",
-                adv,
-                stats.mean,
-                stats.percentile_5,
-                stats.median,
-                stats.percentile_95,
+                adv, stats.mean, stats.percentile_5, stats.median, stats.percentile_95,
             ));
         }
     }
@@ -1271,11 +1319,7 @@ pub fn format_monte_carlo_report(results: &MonteCarloResults) -> String {
             if let Some(stats) = type_stats.get("Combined") {
                 report.push_str(&format!(
                     "{:<20} {:>5.2}     {:>5.2}  {:>5.2}   {:>5.2}\n",
-                    name,
-                    stats.mean,
-                    stats.percentile_5,
-                    stats.median,
-                    stats.percentile_95,
+                    name, stats.mean, stats.percentile_5, stats.median, stats.percentile_95,
                 ));
             }
         }
@@ -1283,8 +1327,12 @@ pub fn format_monte_carlo_report(results: &MonteCarloResults) -> String {
 
     report.push_str("\n─────────────────────────────────────────────────────────────────────\n");
     report.push_str("LEGEND:\n");
-    report.push_str("  • Bits of Privacy: Information-theoretic privacy (log₂ of effective anonymity)\n");
-    report.push_str("  • ID Rate: Fraction of rings where adversary identified real signer as most likely\n");
+    report.push_str(
+        "  • Bits of Privacy: Information-theoretic privacy (log₂ of effective anonymity)\n",
+    );
+    report.push_str(
+        "  • ID Rate: Fraction of rings where adversary identified real signer as most likely\n",
+    );
     report.push_str("  • Lower ID Rate and higher Bits = better privacy\n");
     report.push_str("─────────────────────────────────────────────────────────────────────\n");
 
@@ -1312,10 +1360,16 @@ mod tests {
         assert_eq!(pool.len(), 1000);
 
         // Check distribution of types
-        let standard_count = pool.iter().filter(|o| o.output_type == OutputType::Standard).count();
+        let standard_count = pool
+            .iter()
+            .filter(|o| o.output_type == OutputType::Standard)
+            .count();
         // Should be roughly 50% (±10%)
-        assert!(standard_count > 400 && standard_count < 600,
-            "Expected ~50% standard, got {}", standard_count as f64 / 10.0);
+        assert!(
+            standard_count > 400 && standard_count < 600,
+            "Expected ~50% standard, got {}",
+            standard_count as f64 / 10.0
+        );
     }
 
     #[test]
@@ -1345,7 +1399,10 @@ mod tests {
         };
 
         let sim = o1.cluster_similarity(&o2);
-        assert!(sim > 0.95, "Similar clusters should have high similarity: {sim}");
+        assert!(
+            sim > 0.95,
+            "Similar clusters should have high similarity: {sim}"
+        );
     }
 
     #[test]
@@ -1365,27 +1422,39 @@ mod tests {
 
         assert_eq!(probs.len(), 7);
         for &p in &probs {
-            assert!((p - 1.0/7.0).abs() < 0.001, "Expected uniform distribution");
+            assert!(
+                (p - 1.0 / 7.0).abs() < 0.001,
+                "Expected uniform distribution"
+            );
         }
     }
 
     #[test]
     fn test_privacy_metrics() {
         // Uniform distribution: maximum privacy
-        let uniform = vec![1.0/7.0; 7];
+        let uniform = vec![1.0 / 7.0; 7];
         let metrics = calculate_privacy_metrics(&uniform, 3);
 
-        assert!((metrics.bits_of_privacy - 2.807).abs() < 0.01,
-            "Expected ~2.81 bits, got {}", metrics.bits_of_privacy);
-        assert!((metrics.effective_anonymity - 7.0).abs() < 0.01,
-            "Expected ~7.0 effective anonymity, got {}", metrics.effective_anonymity);
+        assert!(
+            (metrics.bits_of_privacy - 2.807).abs() < 0.01,
+            "Expected ~2.81 bits, got {}",
+            metrics.bits_of_privacy
+        );
+        assert!(
+            (metrics.effective_anonymity - 7.0).abs() < 0.01,
+            "Expected ~7.0 effective anonymity, got {}",
+            metrics.effective_anonymity
+        );
 
         // Highly skewed: minimal privacy
         let skewed = vec![0.8, 0.05, 0.05, 0.03, 0.03, 0.02, 0.02];
         let metrics = calculate_privacy_metrics(&skewed, 0);
 
-        assert!(metrics.bits_of_privacy < 2.0,
-            "Skewed distribution should have low bits: {}", metrics.bits_of_privacy);
+        assert!(
+            metrics.bits_of_privacy < 2.0,
+            "Skewed distribution should have low bits: {}",
+            metrics.bits_of_privacy
+        );
         assert_eq!(metrics.real_signer_rank, 1, "Real signer should be rank 1");
     }
 
@@ -1431,11 +1500,17 @@ mod tests {
 
         // Naive should have near-perfect privacy (uniform assumption)
         let naive_bits = results.bits_of_privacy_stats.get("Naive").unwrap();
-        assert!(naive_bits.mean > 2.7, "Naive should have ~2.81 bits: {}", naive_bits.mean);
+        assert!(
+            naive_bits.mean > 2.7,
+            "Naive should have ~2.81 bits: {}",
+            naive_bits.mean
+        );
 
         // Combined adversary should have lower privacy
         let combined_bits = results.bits_of_privacy_stats.get("Combined").unwrap();
-        assert!(combined_bits.mean < naive_bits.mean,
-            "Combined adversary should reduce privacy");
+        assert!(
+            combined_bits.mean < naive_bits.mean,
+            "Combined adversary should reduce privacy"
+        );
     }
 }

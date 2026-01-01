@@ -55,6 +55,29 @@ Botho uses the **Stellar Consensus Protocol (SCP)** for Byzantine fault toleranc
 3. The SCP quorum determines which block is accepted
 4. Byzantine fault tolerance ensures consensus even with malicious nodes
 
+```mermaid
+stateDiagram-v2
+    [*] --> Nomination: Slot opens
+
+    Nomination --> Voting: Quorum nominates value
+    Voting --> Accept: Quorum votes to accept
+    Accept --> Confirm: Quorum confirms
+    Confirm --> Externalize: Threshold reached
+
+    Externalize --> [*]: Block finalized
+
+    note right of Nomination: Nodes propose<br/>candidate values
+    note right of Voting: Nodes vote on<br/>a single value
+    note right of Confirm: Nodes confirm<br/>acceptance
+    note right of Externalize: Value is final<br/>and irreversible
+```
+
+**SCP Phases:**
+- **Nomination**: Nodes propose candidate block values
+- **Voting**: Quorum reaches agreement on a single value
+- **Accept/Confirm**: Progressive commitment with Byzantine fault tolerance
+- **Externalize**: Value is final — no rollbacks possible
+
 **Quorum Configuration:**
 - **Recommended mode**: Automatically trusts discovered peers, calculates BFT threshold as `ceil(2n/3)`
 - **Explicit mode**: User specifies trusted peer IDs and threshold

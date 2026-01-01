@@ -18,7 +18,8 @@
 //!
 //! # Design Goals
 //!
-//! 1. **Early adoption incentives**: Halving schedule for ~10 years rewards early adopters
+//! 1. **Early adoption incentives**: Halving schedule for ~10 years rewards
+//!    early adopters
 //! 2. **Long-term stability**: 2% net inflation after halving period
 //! 3. **Fee burn integration**: Progressive cluster taxes are always burned
 //! 4. **Predictable minting**: Fixed reward per block, variable block rate
@@ -27,7 +28,8 @@
 //!
 //! ## Phase 1: Adoption (Years 0-10)
 //!
-//! - Block reward follows halving schedule (halves every 2 years, 5 halvings total)
+//! - Block reward follows halving schedule (halves every 2 years, 5 halvings
+//!   total)
 //! - Initial reward: ~50 BTH per block
 //! - Difficulty adjusts traditionally to maintain target block time (1 minute)
 //! - Fee burns create bonus deflation (not compensated)
@@ -134,8 +136,8 @@ impl Default for MonetaryPolicy {
             // Over 5 halvings: 50 + 25 + 12.5 + 6.25 + 3.125 ≈ 96.9 BTH/block-equivalent
             // With ~1.05M blocks/halving → ~100M BTH distributed in Phase 1
             initial_reward: 50_000_000_000,
-            halving_interval: 1_051_200,     // ~2 years at 1 min blocks (525,600 blocks/year)
-            halving_count: 5,                // 5 halvings = 10 years
+            halving_interval: 1_051_200, // ~2 years at 1 min blocks (525,600 blocks/year)
+            halving_count: 5,            // 5 halvings = 10 years
 
             // Phase 2: 2% net inflation target
             tail_inflation_bps: 200,
@@ -156,18 +158,19 @@ impl Default for MonetaryPolicy {
 }
 
 impl MonetaryPolicy {
-    /// Create policy with Bitcoin-like parameters (10 min blocks, 4 year halvings).
+    /// Create policy with Bitcoin-like parameters (10 min blocks, 4 year
+    /// halvings).
     pub fn bitcoin_like() -> Self {
         Self {
             initial_reward: 50_000_000_000,
-            halving_interval: 210_000,       // ~4 years at 10 min blocks
+            halving_interval: 210_000, // ~4 years at 10 min blocks
             halving_count: 5,
 
             tail_inflation_bps: 200,
 
-            target_block_time_secs: 600,     // 10 minutes
-            min_block_time_secs: 480,        // 8 minutes
-            max_block_time_secs: 720,        // 12 minutes
+            target_block_time_secs: 600, // 10 minutes
+            min_block_time_secs: 480,    // 8 minutes
+            max_block_time_secs: 720,    // 12 minutes
 
             difficulty_adjustment_interval: 2016, // ~2 weeks
             max_difficulty_adjustment_bps: 2500,
@@ -220,17 +223,15 @@ impl MonetaryPolicy {
     /// Calculate the tail emission reward based on supply at transition.
     ///
     /// This is called once when transitioning to Phase 2.
-    /// The reward is set to achieve target_net + expected_fees at target block rate.
+    /// The reward is set to achieve target_net + expected_fees at target block
+    /// rate.
     pub fn calculate_tail_reward(&self, supply_at_transition: u64) -> u64 {
         // Target annual NET emission
-        let target_net = supply_at_transition as u128
-            * self.tail_inflation_bps as u128
-            / 10_000;
+        let target_net = supply_at_transition as u128 * self.tail_inflation_bps as u128 / 10_000;
 
         // Expected annual fee burns
-        let expected_burns = supply_at_transition as u128
-            * self.expected_fee_burn_rate_bps as u128
-            / 10_000;
+        let expected_burns =
+            supply_at_transition as u128 * self.expected_fee_burn_rate_bps as u128 / 10_000;
 
         // Gross emission needed
         let gross_needed = target_net + expected_burns;
@@ -359,7 +360,12 @@ pub struct DifficultyController {
 
 impl DifficultyController {
     /// Create a new difficulty controller.
-    pub fn new(policy: MonetaryPolicy, initial_supply: u64, initial_difficulty: u64, start_time: u64) -> Self {
+    pub fn new(
+        policy: MonetaryPolicy,
+        initial_supply: u64,
+        initial_difficulty: u64,
+        start_time: u64,
+    ) -> Self {
         Self {
             policy,
             state: MonetaryState::new(initial_supply, initial_difficulty, start_time),
@@ -395,13 +401,10 @@ impl DifficultyController {
         self.state.epoch_rewards_emitted += reward;
 
         // Check for phase transition
-        if self.state.tail_reward.is_none()
-            && !self.policy.is_halving_phase(self.state.height)
-        {
+        if self.state.tail_reward.is_none() && !self.policy.is_halving_phase(self.state.height) {
             // Transition to Phase 2
-            self.state.tail_reward = Some(
-                self.policy.calculate_tail_reward(self.state.total_supply)
-            );
+            self.state.tail_reward =
+                Some(self.policy.calculate_tail_reward(self.state.total_supply));
         }
 
         // Check for difficulty adjustment
@@ -462,14 +465,13 @@ impl DifficultyController {
 
         // === Monetary Component ===
         // Calculate actual net emission this epoch
-        let net_emission = self.state.epoch_rewards_emitted as i64
-            - self.state.epoch_fees_burned as i64;
+        let net_emission =
+            self.state.epoch_rewards_emitted as i64 - self.state.epoch_fees_burned as i64;
 
         // Calculate target net emission per epoch
         let epochs_per_year = self.policy.target_epochs_per_year();
-        let annual_target = self.state.total_supply as u128
-            * self.policy.tail_inflation_bps as u128
-            / 10_000;
+        let annual_target =
+            self.state.total_supply as u128 * self.policy.tail_inflation_bps as u128 / 10_000;
         let epoch_target = (annual_target / epochs_per_year as u128) as i64;
 
         // If net emission is too high, we need slower blocks (higher difficulty)
@@ -486,8 +488,7 @@ impl DifficultyController {
         } else if net_emission <= 0 {
             // We're in deflation! Speed up significantly (lower difficulty).
             0.5_f64.max(
-                self.policy.min_block_time_secs as f64
-                    / self.policy.max_block_time_secs as f64
+                self.policy.min_block_time_secs as f64 / self.policy.max_block_time_secs as f64,
             )
         } else {
             // Edge case: target is 0 or negative (shouldn't happen)
@@ -510,9 +511,8 @@ impl DifficultyController {
         let new = ((current as f64 * ratio) as u64).max(1);
 
         // Bound by max adjustment rate
-        let max_change = current as u128
-            * self.policy.max_difficulty_adjustment_bps as u128
-            / 10_000;
+        let max_change =
+            current as u128 * self.policy.max_difficulty_adjustment_bps as u128 / 10_000;
         let max_change = (max_change as u64).max(1);
 
         let rate_floor = current.saturating_sub(max_change);
@@ -531,9 +531,7 @@ impl DifficultyController {
         // implicitly maintained by the gradual rate limits over multiple epochs.
 
         // Apply rate bounds only
-        let bounded = new.clamp(rate_floor.max(1), rate_ceiling);
-
-        bounded
+        new.clamp(rate_floor.max(1), rate_ceiling)
     }
 
     /// Get current phase description.
@@ -828,18 +826,15 @@ mod tests {
         // Burn some fees
         controller.record_fee_burn(500);
 
-        assert_eq!(
-            controller.state.net_supply_change(),
-            rewards as i64 - 500
-        );
+        assert_eq!(controller.state.net_supply_change(), rewards as i64 - 500);
     }
 
     #[test]
     fn test_tail_reward_calculation() {
         let policy = MonetaryPolicy {
-            tail_inflation_bps: 200,           // 2%
-            expected_fee_burn_rate_bps: 50,    // 0.5%
-            target_block_time_secs: 60,        // 1 minute
+            tail_inflation_bps: 200,        // 2%
+            expected_fee_burn_rate_bps: 50, // 0.5%
+            target_block_time_secs: 60,     // 1 minute
             ..Default::default()
         };
 
@@ -1042,8 +1037,7 @@ mod tests {
         // At epoch start, no blocks mined yet
         let est = controller.estimated_block_time(0);
         assert_eq!(
-            est,
-            controller.policy.target_block_time_secs as f64,
+            est, controller.policy.target_block_time_secs as f64,
             "Should return target block time when no blocks in epoch"
         );
     }
@@ -1081,7 +1075,8 @@ mod tests {
 
         // Should not overflow and should return a sensible value
         assert!(tail_reward > 0);
-        assert!(tail_reward < large_supply); // Reward should be much smaller than supply
+        assert!(tail_reward < large_supply); // Reward should be much smaller
+                                             // than supply
     }
 
     #[test]
@@ -1199,27 +1194,31 @@ mod tests {
 
     // === BTH Tokenomics Tests ===
 
-    /// Verify the documented BTH emission schedule produces ~100M BTH in Phase 1.
+    /// Verify the documented BTH emission schedule produces ~100M BTH in Phase
+    /// 1.
     #[test]
     fn test_bth_phase1_total_emission() {
-        // Use default policy (50 BTH initial reward, 5 halvings, 1,051,200 blocks/halving)
+        // Use default policy (50 BTH initial reward, 5 halvings, 1,051,200
+        // blocks/halving)
         let policy = MonetaryPolicy::default();
 
         // Verify halving parameters
         assert_eq!(policy.halving_count, 5, "5 halvings expected");
-        assert_eq!(policy.halving_interval, 1_051_200, "~2 years per halving at 1 min blocks");
+        assert_eq!(
+            policy.halving_interval, 1_051_200,
+            "~2 years per halving at 1 min blocks"
+        );
 
         // Calculate total emission in Phase 1
         // R + R/2 + R/4 + R/8 + R/16 per halving_interval blocks
         let r = policy.initial_reward as u128;
         let h = policy.halving_interval as u128;
 
-        let total_phase1_nanobth =
-            h * r +           // Halving 0: 50 BTH/block
+        let total_phase1_nanobth = h * r +           // Halving 0: 50 BTH/block
             h * (r / 2) +     // Halving 1: 25 BTH/block
             h * (r / 4) +     // Halving 2: 12.5 BTH/block
             h * (r / 8) +     // Halving 3: 6.25 BTH/block
-            h * (r / 16);     // Halving 4: 3.125 BTH/block
+            h * (r / 16); // Halving 4: 3.125 BTH/block
 
         // Convert to BTH (from nanoBTH)
         let bth_to_nanobth = 1_000_000_000u128;
@@ -1298,7 +1297,7 @@ mod tests {
             // Use smaller intervals for faster test
             halving_interval: 100,
             halving_count: 5,
-            initial_reward: 50_000_000_000, // 50 BTH in nanoBTH
+            initial_reward: 50_000_000_000,       // 50 BTH in nanoBTH
             difficulty_adjustment_interval: 1000, // Avoid adjustments during test
             ..Default::default()
         };
@@ -1321,7 +1320,8 @@ mod tests {
         let actual_supply = controller.state.total_supply as u128;
 
         assert!(
-            (actual_supply as i128 - expected_supply as i128).unsigned_abs() < expected_supply / 100,
+            (actual_supply as i128 - expected_supply as i128).unsigned_abs()
+                < expected_supply / 100,
             "Supply {} should be ~{} (within 1%)",
             actual_supply,
             expected_supply

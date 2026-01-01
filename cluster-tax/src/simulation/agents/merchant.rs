@@ -1,9 +1,14 @@
-//! Merchant agent: Receives many small payments, makes occasional large payments.
+//! Merchant agent: Receives many small payments, makes occasional large
+//! payments.
 
-use crate::simulation::agent::{Action, Agent, AgentId};
-use crate::simulation::state::SimulationState;
-use crate::tag::TagVector;
-use crate::Account;
+use crate::{
+    simulation::{
+        agent::{Action, Agent, AgentId},
+        state::SimulationState,
+    },
+    tag::TagVector,
+    Account,
+};
 
 /// Merchant agent that receives frequent small payments and pays suppliers.
 #[derive(Debug)]

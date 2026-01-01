@@ -1,5 +1,6 @@
 export { Card, CardHeader, CardTitle, CardContent } from './card'
 export { Button } from './button'
+export { ConnectionIndicator } from './connection-indicator'
 export { Input } from './input'
 export { Logo } from './logo'
 export { Toast } from './toast'
