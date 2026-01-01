@@ -934,6 +934,64 @@ impl GammaDecoySelector {
 
         entropy.exp()
     }
+
+    /// Validate that a proposed ring will pass centroid-based consensus validation.
+    ///
+    /// This helps wallets verify their ring composition before creating the transaction.
+    /// The ring must have output tags sufficiently similar to the value-weighted centroid
+    /// of ring member tags.
+    ///
+    /// # Arguments
+    /// * `ring` - The proposed ring members (real + decoys)
+    /// * `output_tags` - The cluster tags that will be on the transaction outputs
+    /// * `threshold` - Minimum similarity required (recommend 0.7)
+    ///
+    /// # Returns
+    /// * `Ok(similarity)` if the ring is valid, returning the actual similarity
+    /// * `Err(similarity)` if the ring would fail validation, returning the similarity
+    pub fn validate_ring_centroid_compatibility(
+        &self,
+        ring: &[OutputCandidate],
+        output_tags: &ClusterTags,
+        threshold: f64,
+    ) -> Result<f64, f64> {
+        if ring.is_empty() {
+            // Empty ring is invalid, but empty tags are maximally similar
+            return if output_tags.is_empty() { Ok(1.0) } else { Err(0.0) };
+        }
+
+        // Compute value-weighted centroid
+        let total_value: u64 = ring.iter().map(|c| c.output.amount).sum();
+        if total_value == 0 {
+            return if output_tags.is_empty() { Ok(1.0) } else { Err(0.0) };
+        }
+
+        // Accumulate weighted cluster masses
+        let mut cluster_masses: std::collections::HashMap<ClusterId, u128> = std::collections::HashMap::new();
+
+        for candidate in ring {
+            for (cluster_id, weight) in candidate.cluster_tags.iter() {
+                let mass = (candidate.output.amount as u128) * (weight as u128);
+                *cluster_masses.entry(cluster_id).or_default() += mass;
+            }
+        }
+
+        // Convert to centroid weights
+        let centroid = ClusterTags::from_pairs(
+            &cluster_masses
+                .into_iter()
+                .map(|(id, mass)| (id, (mass / (total_value as u128)) as TagWeight))
+                .collect::<Vec<_>>(),
+        );
+
+        let similarity = centroid.cosine_similarity(output_tags);
+
+        if similarity >= threshold {
+            Ok(similarity)
+        } else {
+            Err(similarity)
+        }
+    }
 }
 
 /// Errors that can occur during decoy selection.

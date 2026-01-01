@@ -60,6 +60,172 @@ fn compute_cluster_wealth_from_outputs(outputs: &[TxOutput]) -> u64 {
     cluster_wealths.values().copied().max().unwrap_or(0)
 }
 
+// ============================================================================
+// Ring Tag Plausibility Validation
+// ============================================================================
+//
+// Prevents cluster tag manipulation attacks where a malicious wallet deliberately
+// selects decoys with much lower cluster tag weights than the real input to
+// evade progressive fees or fingerprint transactions.
+//
+// The solution uses centroid-based validation: output tags must have sufficient
+// similarity to the value-weighted centroid of ring member tags.
+
+/// Block height after which ring tag plausibility is enforced.
+/// Set to 0 to enforce from genesis, or higher to allow network bootstrapping.
+pub const RING_TAG_VALIDATION_ACTIVATION_HEIGHT: u64 = 10_000;
+
+/// Minimum UTXO pool size for strict enforcement.
+/// Below this threshold, validation is relaxed to allow bootstrapping.
+pub const SPARSE_POOL_THRESHOLD: usize = 50_000;
+
+/// Minimum cosine similarity between output tags and ring centroid.
+/// 0.7 means 70% similarity required.
+pub const RING_TAG_SIMILARITY_THRESHOLD: f64 = 0.7;
+
+/// Compute the value-weighted centroid of cluster tags from ring members.
+///
+/// Each ring member contributes to the centroid proportionally to its value.
+/// The result is a normalized tag vector representing the "average" cluster
+/// profile of the ring.
+///
+/// # Arguments
+/// * `ring_tags` - List of (ClusterTagVector, value) pairs for each ring member
+///
+/// # Returns
+/// A ClusterTagVector representing the weighted centroid
+fn compute_ring_centroid(ring_tags: &[(bth_transaction_types::ClusterTagVector, u64)]) -> bth_transaction_types::ClusterTagVector {
+    use bth_transaction_types::{ClusterId, ClusterTagVector};
+
+    let total_value: u64 = ring_tags.iter().map(|(_, v)| *v).sum();
+    if total_value == 0 {
+        return ClusterTagVector::empty();
+    }
+
+    // Accumulate value-weighted cluster masses
+    let mut cluster_masses: HashMap<u64, u128> = HashMap::new();
+
+    for (tags, value) in ring_tags {
+        for entry in &tags.entries {
+            // Mass contribution = value * weight / TAG_WEIGHT_SCALE
+            let mass = (*value as u128) * (entry.weight as u128);
+            *cluster_masses.entry(entry.cluster_id.0).or_default() += mass;
+        }
+    }
+
+    // Convert masses back to normalized weights relative to total_value
+    let pairs: Vec<(ClusterId, u32)> = cluster_masses
+        .into_iter()
+        .map(|(cluster_id, mass)| {
+            // weight = mass / total_value (already normalized by TAG_WEIGHT_SCALE from original weights)
+            let weight = (mass / (total_value as u128)) as u32;
+            (ClusterId(cluster_id), weight)
+        })
+        .collect();
+
+    ClusterTagVector::from_pairs(&pairs)
+}
+
+/// Compute cosine similarity between two cluster tag vectors.
+///
+/// Returns a value between 0.0 (completely different) and 1.0 (identical).
+/// Empty vectors are considered maximally similar to any vector (returns 1.0),
+/// which handles the bootstrapping case of heavily diffused coins.
+fn cosine_similarity(
+    a: &bth_transaction_types::ClusterTagVector,
+    b: &bth_transaction_types::ClusterTagVector,
+) -> f64 {
+    // If both are empty, they're identical
+    if a.entries.is_empty() && b.entries.is_empty() {
+        return 1.0;
+    }
+
+    // If one is empty (fully diffused), it's maximally similar to anything
+    // This handles the case of heavily circulated coins
+    if a.entries.is_empty() || b.entries.is_empty() {
+        return 1.0;
+    }
+
+    // Build weight maps for efficient lookup
+    let a_weights: HashMap<u64, u32> = a.entries.iter().map(|e| (e.cluster_id.0, e.weight)).collect();
+    let b_weights: HashMap<u64, u32> = b.entries.iter().map(|e| (e.cluster_id.0, e.weight)).collect();
+
+    // Collect all cluster IDs
+    let all_clusters: std::collections::HashSet<u64> = a_weights
+        .keys()
+        .chain(b_weights.keys())
+        .copied()
+        .collect();
+
+    // Compute dot product and magnitudes
+    let mut dot_product: f64 = 0.0;
+    let mut mag_a: f64 = 0.0;
+    let mut mag_b: f64 = 0.0;
+
+    for cluster in all_clusters {
+        let w1 = *a_weights.get(&cluster).unwrap_or(&0) as f64;
+        let w2 = *b_weights.get(&cluster).unwrap_or(&0) as f64;
+
+        dot_product += w1 * w2;
+        mag_a += w1 * w1;
+        mag_b += w2 * w2;
+    }
+
+    let magnitude = (mag_a.sqrt() * mag_b.sqrt()).max(1.0);
+    (dot_product / magnitude).clamp(0.0, 1.0)
+}
+
+/// Validate that a ring's composition is plausible for the claimed output tags.
+///
+/// The output tags must have sufficient similarity to the ring's weighted centroid.
+/// This prevents selecting extreme outlier decoys to manipulate apparent cluster wealth.
+///
+/// # Arguments
+/// * `ring_tags` - List of (ClusterTagVector, value) pairs for each ring member
+/// * `output_tags` - The cluster tags claimed for the transaction outputs
+/// * `threshold` - Minimum similarity required (recommend 0.7)
+/// * `current_height` - Current block height (for activation check)
+/// * `utxo_pool_size` - Current UTXO pool size (for sparse pool bypass)
+///
+/// # Returns
+/// * `Ok(())` if the ring composition is plausible
+/// * `Err((similarity_permille, threshold_permille))` if validation fails (values in parts per 1000)
+pub fn validate_ring_tag_plausibility(
+    ring_tags: &[(bth_transaction_types::ClusterTagVector, u64)],
+    output_tags: &bth_transaction_types::ClusterTagVector,
+    threshold: f64,
+    current_height: u64,
+    utxo_pool_size: usize,
+) -> Result<(), (u32, u32)> {
+    // Skip validation before activation height
+    if current_height < RING_TAG_VALIDATION_ACTIVATION_HEIGHT {
+        return Ok(());
+    }
+
+    // Compute value-weighted centroid of ring member tags
+    let centroid = compute_ring_centroid(ring_tags);
+
+    // Output must be plausible from the centroid (with decay tolerance)
+    let similarity = cosine_similarity(&centroid, output_tags);
+
+    if similarity < threshold {
+        // Allow bypass for sparse pool (bootstrapping)
+        if utxo_pool_size < SPARSE_POOL_THRESHOLD {
+            warn!(
+                "Relaxed ring tag consistency due to sparse UTXO pool ({} < {}): similarity={:.3}",
+                utxo_pool_size, SPARSE_POOL_THRESHOLD, similarity
+            );
+            return Ok(());
+        }
+        // Convert to permille for error return
+        let similarity_permille = (similarity * 1000.0) as u32;
+        let threshold_permille = (threshold * 1000.0) as u32;
+        return Err((similarity_permille, threshold_permille));
+    }
+
+    Ok(())
+}
+
 /// Maximum transactions in mempool.
 ///
 /// Increased from 1000 to 10000 to support higher transaction throughput.
@@ -433,7 +599,9 @@ impl Mempool {
             .map_err(|_| MempoolError::InvalidSignature)?;
 
         // Validate potential input amounts from ring members
+        // Also collect ring tags for plausibility validation
         let mut potential_input_sum: u64 = 0;
+        let mut all_ring_tags: Vec<(bth_transaction_types::ClusterTagVector, u64)> = Vec::new();
 
         for input in clsag_inputs {
             let mut max_ring_amount: u64 = 0;
@@ -443,6 +611,8 @@ impl Mempool {
                 if let Ok(Some(utxo)) = ledger.get_utxo_by_target_key(&member.target_key) {
                     max_ring_amount = max_ring_amount.max(utxo.output.amount);
                     found_any = true;
+                    // Collect ring member tags and amounts for plausibility check
+                    all_ring_tags.push((utxo.output.cluster_tags.clone(), utxo.output.amount));
                 }
             }
 
@@ -460,6 +630,31 @@ impl Mempool {
                 .ok_or_else(|| MempoolError::InvalidTransaction(
                     "CLSAG input sum overflow".to_string()
                 ))?;
+        }
+
+        // Validate ring tag plausibility (prevents decoy manipulation attacks)
+        // Get chain state for activation height check
+        let chain_state = ledger.get_chain_state()
+            .map_err(|e| MempoolError::InvalidTransaction(format!("Cannot get chain state: {}", e)))?;
+
+        // Estimate UTXO pool size as ~4 outputs per block (minting rewards)
+        // This is a reasonable approximation for the sparse pool check
+        let estimated_utxo_count = (chain_state.height as usize) * 4;
+
+        // Compute combined output tags for validation
+        let output_tags = bth_transaction_types::ClusterTagVector::merge_weighted(
+            &tx.outputs.iter().map(|o| (o.cluster_tags.clone(), o.amount)).collect::<Vec<_>>(),
+            0, // No decay for this comparison
+        );
+
+        if let Err((similarity_permille, threshold_permille)) = validate_ring_tag_plausibility(
+            &all_ring_tags,
+            &output_tags,
+            RING_TAG_SIMILARITY_THRESHOLD,
+            chain_state.height,
+            estimated_utxo_count,
+        ) {
+            return Err(MempoolError::RingTagMismatch { similarity_permille, threshold_permille });
         }
 
         Ok(potential_input_sum)
@@ -499,7 +694,9 @@ impl Mempool {
             .map_err(|_| MempoolError::InvalidSignature)?;
 
         // Validate potential input amounts from ring members
+        // Also collect ring tags for plausibility validation
         let mut potential_input_sum: u64 = 0;
+        let mut all_ring_tags: Vec<(bth_transaction_types::ClusterTagVector, u64)> = Vec::new();
 
         for input in lion_inputs {
             let mut max_ring_amount: u64 = 0;
@@ -509,6 +706,8 @@ impl Mempool {
                 if let Ok(Some(utxo)) = ledger.get_utxo_by_target_key(&member.target_key) {
                     max_ring_amount = max_ring_amount.max(utxo.output.amount);
                     found_any = true;
+                    // Collect ring member tags and amounts for plausibility check
+                    all_ring_tags.push((utxo.output.cluster_tags.clone(), utxo.output.amount));
                 }
             }
 
@@ -531,6 +730,31 @@ impl Mempool {
                 .ok_or_else(|| MempoolError::InvalidTransaction(
                     "LION input sum overflow".to_string()
                 ))?;
+        }
+
+        // Validate ring tag plausibility (prevents decoy manipulation attacks)
+        // Get chain state for activation height check
+        let chain_state = ledger.get_chain_state()
+            .map_err(|e| MempoolError::InvalidTransaction(format!("Cannot get chain state: {}", e)))?;
+
+        // Estimate UTXO pool size as ~4 outputs per block (minting rewards)
+        // This is a reasonable approximation for the sparse pool check
+        let estimated_utxo_count = (chain_state.height as usize) * 4;
+
+        // Compute combined output tags for validation
+        let output_tags = bth_transaction_types::ClusterTagVector::merge_weighted(
+            &tx.outputs.iter().map(|o| (o.cluster_tags.clone(), o.amount)).collect::<Vec<_>>(),
+            0, // No decay for this comparison
+        );
+
+        if let Err((similarity_permille, threshold_permille)) = validate_ring_tag_plausibility(
+            &all_ring_tags,
+            &output_tags,
+            RING_TAG_SIMILARITY_THRESHOLD,
+            chain_state.height,
+            estimated_utxo_count,
+        ) {
+            return Err(MempoolError::RingTagMismatch { similarity_permille, threshold_permille });
         }
 
         Ok(potential_input_sum)
@@ -717,6 +941,12 @@ pub enum MempoolError {
     Full,
     /// Key image was already spent (ring signature double-spend)
     KeyImageSpent([u8; 32]),
+    /// Ring tag plausibility check failed (potential decoy manipulation attack)
+    /// Values are in permille (parts per 1000): 700 = 70%
+    RingTagMismatch {
+        similarity_permille: u32,
+        threshold_permille: u32,
+    },
 }
 
 impl std::fmt::Display for MempoolError {
@@ -736,6 +966,9 @@ impl std::fmt::Display for MempoolError {
             Self::LedgerError(msg) => write!(f, "Ledger error: {}", msg),
             Self::Full => write!(f, "Mempool is full"),
             Self::KeyImageSpent(ki) => write!(f, "Key image already spent: {}", hex::encode(&ki[0..8])),
+            Self::RingTagMismatch { similarity_permille, threshold_permille } => {
+                write!(f, "Ring tag mismatch: similarity {}‰ < threshold {}‰", similarity_permille, threshold_permille)
+            }
         }
     }
 }
@@ -983,5 +1216,220 @@ mod tests {
             let mempool = shared.read().unwrap();
             assert_eq!(mempool.len(), 1);
         }
+    }
+
+    // =========== Ring Tag Plausibility Tests ===========
+
+    use bth_transaction_types::ClusterId;
+
+    /// Helper to create a tag vector with a single cluster at full weight
+    fn single_cluster_tags(cluster_id: u64) -> ClusterTagVector {
+        ClusterTagVector::single(ClusterId(cluster_id))
+    }
+
+    /// Helper to create a tag vector with specific (cluster, weight) pairs
+    fn multi_cluster_tags(pairs: &[(u64, u32)]) -> ClusterTagVector {
+        let pairs: Vec<(ClusterId, u32)> = pairs.iter().map(|(id, w)| (ClusterId(*id), *w)).collect();
+        ClusterTagVector::from_pairs(&pairs)
+    }
+
+    #[test]
+    fn test_cosine_similarity_identical() {
+        let tags1 = single_cluster_tags(1);
+        let tags2 = single_cluster_tags(1);
+        let sim = cosine_similarity(&tags1, &tags2);
+        assert!((sim - 1.0).abs() < 0.001, "Identical tags should have similarity 1.0");
+    }
+
+    #[test]
+    fn test_cosine_similarity_different() {
+        let tags1 = single_cluster_tags(1);
+        let tags2 = single_cluster_tags(2);
+        let sim = cosine_similarity(&tags1, &tags2);
+        assert!(sim < 0.1, "Completely different tags should have low similarity");
+    }
+
+    #[test]
+    fn test_cosine_similarity_empty() {
+        let empty1 = ClusterTagVector::empty();
+        let empty2 = ClusterTagVector::empty();
+        let tags = single_cluster_tags(1);
+
+        // Empty to empty is 1.0
+        assert!((cosine_similarity(&empty1, &empty2) - 1.0).abs() < 0.001);
+
+        // Empty to non-empty is 1.0 (maximally compatible)
+        assert!((cosine_similarity(&empty1, &tags) - 1.0).abs() < 0.001);
+        assert!((cosine_similarity(&tags, &empty1) - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_cosine_similarity_partial_overlap() {
+        // 50% cluster 1, 50% cluster 2
+        let tags1 = multi_cluster_tags(&[(1, 500_000), (2, 500_000)]);
+        // 100% cluster 1
+        let tags2 = single_cluster_tags(1);
+
+        let sim = cosine_similarity(&tags1, &tags2);
+        // Should be around 0.707 (cos 45°)
+        assert!(sim > 0.6 && sim < 0.8, "Partial overlap should give moderate similarity: {}", sim);
+    }
+
+    #[test]
+    fn test_compute_ring_centroid_single_member() {
+        let tags = single_cluster_tags(42);
+        let ring_tags = vec![(tags.clone(), 1000u64)];
+        let centroid = compute_ring_centroid(&ring_tags);
+
+        // Centroid of single member should equal that member's tags
+        let sim = cosine_similarity(&centroid, &tags);
+        assert!((sim - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_compute_ring_centroid_equal_weights() {
+        let tags1 = single_cluster_tags(1);
+        let tags2 = single_cluster_tags(2);
+        let ring_tags = vec![(tags1, 1000u64), (tags2, 1000u64)];
+        let centroid = compute_ring_centroid(&ring_tags);
+
+        // Centroid should have ~50% weight in each cluster
+        assert_eq!(centroid.entries.len(), 2);
+        let total_weight: u32 = centroid.entries.iter().map(|e| e.weight).sum();
+        assert!(total_weight > 900_000 && total_weight <= 1_000_000);
+    }
+
+    #[test]
+    fn test_compute_ring_centroid_weighted() {
+        let tags1 = single_cluster_tags(1);
+        let tags2 = single_cluster_tags(2);
+        // 3x more value in tags1
+        let ring_tags = vec![(tags1, 3000u64), (tags2, 1000u64)];
+        let centroid = compute_ring_centroid(&ring_tags);
+
+        // Cluster 1 should have higher weight (~75%)
+        let cluster1_weight = centroid.entries.iter()
+            .find(|e| e.cluster_id.0 == 1)
+            .map(|e| e.weight)
+            .unwrap_or(0);
+        let cluster2_weight = centroid.entries.iter()
+            .find(|e| e.cluster_id.0 == 2)
+            .map(|e| e.weight)
+            .unwrap_or(0);
+
+        assert!(cluster1_weight > cluster2_weight * 2,
+            "3x value should give >2x weight: c1={}, c2={}", cluster1_weight, cluster2_weight);
+    }
+
+    #[test]
+    fn test_validate_ring_tag_plausibility_valid_homogeneous() {
+        // All ring members have same cluster
+        let tags = single_cluster_tags(1);
+        let ring_tags = vec![
+            (tags.clone(), 1000),
+            (tags.clone(), 1000),
+            (tags.clone(), 1000),
+        ];
+
+        // Output also has same cluster (valid)
+        let result = validate_ring_tag_plausibility(
+            &ring_tags,
+            &tags,
+            RING_TAG_SIMILARITY_THRESHOLD,
+            20_000, // Above activation height
+            100_000, // Above sparse threshold
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_ring_tag_plausibility_valid_heterogeneous() {
+        // Mixed ring members
+        let tags1 = single_cluster_tags(1);
+        let tags2 = single_cluster_tags(2);
+        let ring_tags = vec![
+            (tags1.clone(), 1000),
+            (tags2.clone(), 1000),
+        ];
+
+        // Output is a blend (centroid-compatible)
+        let output_tags = multi_cluster_tags(&[(1, 500_000), (2, 500_000)]);
+
+        let result = validate_ring_tag_plausibility(
+            &ring_tags,
+            &output_tags,
+            RING_TAG_SIMILARITY_THRESHOLD,
+            20_000,
+            100_000,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_ring_tag_plausibility_invalid_outlier() {
+        // Ring has only cluster 2 and 3
+        let tags2 = single_cluster_tags(2);
+        let tags3 = single_cluster_tags(3);
+        let ring_tags = vec![
+            (tags2.clone(), 1000),
+            (tags3.clone(), 1000),
+        ];
+
+        // But output claims to be mostly cluster 1 (impossible!)
+        let output_tags = single_cluster_tags(1);
+
+        let result = validate_ring_tag_plausibility(
+            &ring_tags,
+            &output_tags,
+            RING_TAG_SIMILARITY_THRESHOLD,
+            20_000,
+            100_000,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_ring_tag_plausibility_skipped_before_activation() {
+        // Invalid ring (would normally fail)
+        let ring_tags = vec![(single_cluster_tags(2), 1000)];
+        let output_tags = single_cluster_tags(1);
+
+        // But before activation height, validation is skipped
+        let result = validate_ring_tag_plausibility(
+            &ring_tags,
+            &output_tags,
+            RING_TAG_SIMILARITY_THRESHOLD,
+            1_000, // Below RING_TAG_VALIDATION_ACTIVATION_HEIGHT
+            100_000,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_ring_tag_plausibility_sparse_pool_bypass() {
+        // Invalid ring (would normally fail)
+        let ring_tags = vec![(single_cluster_tags(2), 1000)];
+        let output_tags = single_cluster_tags(1);
+
+        // But with sparse pool, validation is relaxed
+        let result = validate_ring_tag_plausibility(
+            &ring_tags,
+            &output_tags,
+            RING_TAG_SIMILARITY_THRESHOLD,
+            20_000, // Above activation
+            10_000, // Below SPARSE_POOL_THRESHOLD
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_ring_tag_mismatch_error_display() {
+        let err = MempoolError::RingTagMismatch {
+            similarity_permille: 350,
+            threshold_permille: 700,
+        };
+        let msg = format!("{}", err);
+        assert!(msg.contains("350"));
+        assert!(msg.contains("700"));
     }
 }
