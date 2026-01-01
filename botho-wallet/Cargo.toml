@@ -8,7 +8,7 @@ rust-version = { workspace = true }
 
 [features]
 default = ["pq"]
-pq = ["bth-account-keys/pq", "bth-crypto-pq", "botho/pq"]
+pq = ["bth-account-keys/pq", "bth-crypto-pq", "bth-crypto-ring-signature/pq", "botho/pq"]
 
 [[bin]]
 name = "botho-wallet"
