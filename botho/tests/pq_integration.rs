@@ -311,14 +311,7 @@ fn test_pq_validation_ciphertext_size() {
     use botho::ledger::ChainState;
     use std::sync::{Arc, RwLock};
 
-    let chain_state = Arc::new(RwLock::new(ChainState {
-        height: 100,
-        tip_hash: [0u8; 32],
-        tip_timestamp: 1000000,
-        difficulty: 1000,
-        total_mined: 1_000_000_000_000,
-        total_fees_burned: 0,
-    }));
+    let chain_state = Arc::new(RwLock::new(ChainState::default()));
 
     let validator = TransactionValidator::new(chain_state);
 
@@ -340,14 +333,7 @@ fn test_pq_validation_signature_size() {
     use botho::ledger::ChainState;
     use std::sync::{Arc, RwLock};
 
-    let chain_state = Arc::new(RwLock::new(ChainState {
-        height: 100,
-        tip_hash: [0u8; 32],
-        tip_timestamp: 1000000,
-        difficulty: 1000,
-        total_mined: 1_000_000_000_000,
-        total_fees_burned: 0,
-    }));
+    let chain_state = Arc::new(RwLock::new(ChainState::default()));
 
     let validator = TransactionValidator::new(chain_state);
 
@@ -365,14 +351,7 @@ fn test_pq_validation_input_limit() {
     use botho::ledger::ChainState;
     use std::sync::{Arc, RwLock};
 
-    let chain_state = Arc::new(RwLock::new(ChainState {
-        height: 100,
-        tip_hash: [0u8; 32],
-        tip_timestamp: 1000000,
-        difficulty: 1000,
-        total_mined: 1_000_000_000_000,
-        total_fees_burned: 0,
-    }));
+    let chain_state = Arc::new(RwLock::new(ChainState::default()));
 
     let validator = TransactionValidator::new(chain_state);
 
@@ -798,12 +777,14 @@ fn create_mock_pq_input() -> QuantumPrivateTxInput {
 }
 
 fn create_mock_pq_output(amount: u64) -> QuantumPrivateTxOutput {
+    use bth_transaction_types::ClusterTagVector;
     QuantumPrivateTxOutput {
         classical: TxOutput {
             amount,
             target_key: [2u8; 32],
             public_key: [3u8; 32],
             e_memo: None,
+            cluster_tags: ClusterTagVector::empty(),
         },
         pq_ciphertext: vec![0u8; PQ_CIPHERTEXT_SIZE],
         pq_signing_pubkey: vec![0u8; PQ_SIGNING_PUBKEY_SIZE],

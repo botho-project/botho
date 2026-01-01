@@ -27,8 +27,6 @@ pub mod tx;
 pub mod tx_summary;
 pub mod validation;
 
-#[cfg(feature = "pq")]
-pub mod quantum_private;
 
 pub use fee_map::{Error as FeeMapError, FeeMap, SMALLEST_MINIMUM_FEE_LOG2};
 pub use input_rules::{InputRuleError, InputRules};
@@ -97,8 +95,3 @@ pub fn subaddress_matches_tx_out(
     Ok(sub_addr_spend == RistrettoPublic::from(&acct.subaddress_spend_private(subaddress_index)))
 }
 
-// Re-export quantum-private transaction types when pq feature is enabled
-#[cfg(feature = "pq")]
-pub use quantum_private::{
-    QuantumPrivateError, QuantumPrivateTxIn, QuantumPrivateTxOut, TransactionType,
-};
