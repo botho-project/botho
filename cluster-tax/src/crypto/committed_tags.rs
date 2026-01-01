@@ -1166,6 +1166,7 @@ const WEALTH_GENERATOR_DOMAIN_TAG: &[u8] = b"mc_zk_fee_wealth_generator";
 /// Domain separator for fee generator in fee proofs.
 const FEE_GENERATOR_DOMAIN_TAG: &[u8] = b"mc_zk_fee_fee_generator";
 
+
 /// Derive the generator for wealth commitments in fee proofs.
 pub fn wealth_generator() -> RistrettoPoint {
     let mut hasher = Sha512::new();
@@ -1180,4 +1181,349 @@ pub fn fee_generator() -> RistrettoPoint {
     RistrettoPoint::from_hash(hasher)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rand_core::OsRng;
 
+    #[test]
+    fn test_cluster_generators_unique() {
+        let g1 = cluster_generator(ClusterId(1));
+        let g2 = cluster_generator(ClusterId(2));
+        let g3 = cluster_generator(ClusterId(1));
+
+        // Different clusters have different generators
+        assert_ne!(g1, g2);
+
+        // Same cluster always gives same generator
+        assert_eq!(g1, g3);
+    }
+
+    #[test]
+    fn test_committed_tag_mass_creation() {
+        let cluster = ClusterId(42);
+        let mass = 500_000u64; // 50% weight on 1 unit value
+        let blinding = Scalar::random(&mut OsRng);
+
+        let committed = CommittedTagMass::new(cluster, mass, blinding);
+        assert_eq!(committed.cluster_id, cluster);
+        assert!(committed.decompress().is_some());
+    }
+
+    #[test]
+    fn test_commitment_homomorphism() {
+        let cluster = ClusterId(1);
+        let mass1 = 300_000u64;
+        let mass2 = 200_000u64;
+        let blinding1 = Scalar::random(&mut OsRng);
+        let blinding2 = Scalar::random(&mut OsRng);
+
+        let c1 = CommittedTagMass::new(cluster, mass1, blinding1);
+        let c2 = CommittedTagMass::new(cluster, mass2, blinding2);
+        let c_sum = CommittedTagMass::new(cluster, mass1 + mass2, blinding1 + blinding2);
+
+        // C1 + C2 should equal C_sum (homomorphic property)
+        let sum = c1.decompress().unwrap() + c2.decompress().unwrap();
+        assert_eq!(sum, c_sum.decompress().unwrap());
+    }
+
+    #[test]
+    fn test_committed_tag_vector_from_secrets() {
+        let mut tags = HashMap::new();
+        tags.insert(ClusterId(1), 500_000); // 50%
+        tags.insert(ClusterId(2), 300_000); // 30%
+
+        let value = 1000u64;
+        let secret = CommittedTagVectorSecret::from_plaintext(value, &tags, &mut OsRng);
+        let committed = secret.commit();
+
+        assert_eq!(committed.len(), 2);
+
+        // Entries should be sorted by cluster_id
+        assert_eq!(committed.entries[0].cluster_id, ClusterId(1));
+        assert_eq!(committed.entries[1].cluster_id, ClusterId(2));
+    }
+
+    #[test]
+    fn test_decay_application() {
+        let mut tags = HashMap::new();
+        tags.insert(ClusterId(1), TAG_WEIGHT_SCALE); // 100%
+
+        let value = 1_000_000u64;
+        let secret = CommittedTagVectorSecret::from_plaintext(value, &tags, &mut OsRng);
+
+        // 5% decay
+        let decay_rate = 50_000;
+        let decayed = secret.apply_decay(decay_rate, &mut OsRng);
+
+        // Mass should be 95% of original
+        let expected_mass = (value as u128 * 950_000 / TAG_WEIGHT_SCALE as u128) as u64;
+        assert_eq!(decayed.total_mass, expected_mass);
+    }
+
+    #[test]
+    fn test_schnorr_proof() {
+        let x = Scalar::random(&mut OsRng);
+        let p = (x * blinding_generator()).compress();
+
+        let proof = SchnorrProof::prove(x, b"test_context", &mut OsRng);
+        assert!(proof.verify(&p, b"test_context"));
+
+        // Wrong context should fail
+        assert!(!proof.verify(&p, b"wrong_context"));
+
+        // Wrong point should fail
+        let wrong_p = (Scalar::random(&mut OsRng) * blinding_generator()).compress();
+        assert!(!proof.verify(&wrong_p, b"test_context"));
+    }
+
+    #[test]
+    fn test_conservation_proof_valid() {
+        // Input: 1,000,000 units with 100% weight to cluster 1
+        let mut input_tags = HashMap::new();
+        input_tags.insert(ClusterId(1), TAG_WEIGHT_SCALE);
+
+        let input_value = 1_000_000u64;
+        let input_secret =
+            CommittedTagVectorSecret::from_plaintext(input_value, &input_tags, &mut OsRng);
+
+        // After 5% decay, output should have 95% of input mass
+        let decay_rate = 50_000; // 5%
+        let output_secret = input_secret.apply_decay(decay_rate, &mut OsRng);
+
+        // Create prover
+        let prover = TagConservationProver::new(
+            vec![input_secret.clone()],
+            vec![output_secret.clone()],
+            decay_rate,
+        );
+
+        // Generate proof
+        let proof = prover.prove(&mut OsRng);
+        assert!(proof.is_some(), "Should generate valid proof");
+        let proof = proof.unwrap();
+
+        // Create verifier with commitments
+        let input_commitment = input_secret.commit();
+        let output_commitment = output_secret.commit();
+
+        let verifier = TagConservationVerifier::new(
+            vec![input_commitment],
+            vec![output_commitment],
+            decay_rate,
+        );
+
+        // Verify
+        assert!(verifier.verify(&proof), "Proof should verify");
+    }
+
+    #[test]
+    fn test_conservation_proof_multiple_clusters() {
+        // Input: 50% cluster 1, 30% cluster 2
+        let mut input_tags = HashMap::new();
+        input_tags.insert(ClusterId(1), 500_000);
+        input_tags.insert(ClusterId(2), 300_000);
+
+        let input_value = 1_000_000u64;
+        let input_secret =
+            CommittedTagVectorSecret::from_plaintext(input_value, &input_tags, &mut OsRng);
+
+        let decay_rate = 50_000;
+        let output_secret = input_secret.apply_decay(decay_rate, &mut OsRng);
+
+        let prover = TagConservationProver::new(
+            vec![input_secret.clone()],
+            vec![output_secret.clone()],
+            decay_rate,
+        );
+
+        let proof = prover.prove(&mut OsRng).expect("Should generate proof");
+
+        // Should have proofs for both clusters
+        assert_eq!(proof.cluster_proofs.len(), 2);
+
+        let verifier = TagConservationVerifier::new(
+            vec![input_secret.commit()],
+            vec![output_secret.commit()],
+            decay_rate,
+        );
+
+        assert!(verifier.verify(&proof));
+    }
+
+    #[test]
+    fn test_conservation_proof_rejects_inflation() {
+        // Input: 50% to cluster 1
+        let mut input_tags = HashMap::new();
+        input_tags.insert(ClusterId(1), 500_000);
+
+        let input_value = 1_000_000u64;
+        let input_secret =
+            CommittedTagVectorSecret::from_plaintext(input_value, &input_tags, &mut OsRng);
+
+        // Try to create inflated output (more than decayed input)
+        let mut inflated_tags = HashMap::new();
+        inflated_tags.insert(ClusterId(1), 600_000); // 60% > 50% * 95%
+
+        let output_value = 1_000_000u64;
+        let inflated_output =
+            CommittedTagVectorSecret::from_plaintext(output_value, &inflated_tags, &mut OsRng);
+
+        let decay_rate = 50_000;
+        let prover = TagConservationProver::new(
+            vec![input_secret],
+            vec![inflated_output],
+            decay_rate,
+        );
+
+        // Should fail to generate proof
+        let proof = prover.prove(&mut OsRng);
+        assert!(proof.is_none(), "Should reject inflated tags");
+    }
+
+    // ========================================================================
+    // Proof Size Measurements (Issue #80)
+    // ========================================================================
+
+    /// Helper to create a secret with N clusters.
+    fn create_n_cluster_secret(num_clusters: usize, value: u64) -> CommittedTagVectorSecret {
+        let mut tags = HashMap::new();
+        let weight_per_cluster = TAG_WEIGHT_SCALE / num_clusters as u32;
+
+        for i in 0..num_clusters {
+            tags.insert(ClusterId(i as u64), weight_per_cluster);
+        }
+
+        CommittedTagVectorSecret::from_plaintext(value, &tags, &mut OsRng)
+    }
+
+    #[test]
+    fn test_schnorr_proof_size() {
+        let x = Scalar::random(&mut OsRng);
+        let proof = SchnorrProof::prove(x, b"test", &mut OsRng);
+        let bytes = proof.to_bytes();
+
+        // SchnorrProof: 32 (commitment) + 32 (response) = 64 bytes
+        assert_eq!(bytes.len(), 64, "SchnorrProof should be 64 bytes");
+    }
+
+    #[test]
+    fn test_committed_tag_vector_sizes() {
+        // Test sizes for different cluster counts
+        for num_clusters in [1, 3, 5, 8] {
+            let secret = create_n_cluster_secret(num_clusters, 1_000_000);
+            let committed = secret.commit();
+            let bytes = committed.to_bytes();
+
+            // Expected: 4 (entry count) + 40*n (entries) + 32 (total commitment)
+            // Entry: 8 (cluster_id) + 32 (commitment) = 40 bytes
+            let expected_size = 4 + (40 * num_clusters) + 32;
+            assert_eq!(
+                bytes.len(),
+                expected_size,
+                "CommittedTagVector with {} clusters should be {} bytes",
+                num_clusters,
+                expected_size
+            );
+        }
+    }
+
+    #[test]
+    fn test_conservation_proof_sizes() {
+        // Test sizes for different cluster counts
+        for num_clusters in [1, 3, 5, 8] {
+            let input_secret = create_n_cluster_secret(num_clusters, 1_000_000);
+            let decay_rate = 50_000;
+            let output_secret = input_secret.apply_decay(decay_rate, &mut OsRng);
+
+            let prover = TagConservationProver::new(
+                vec![input_secret],
+                vec![output_secret],
+                decay_rate,
+            );
+
+            let proof = prover.prove(&mut OsRng).expect("Should generate proof");
+            let bytes = proof.to_bytes();
+
+            // Expected: 4 (count) + 72*n (cluster proofs) + 64 (total proof)
+            // ClusterConservationProof: 8 (cluster_id) + 64 (schnorr) = 72 bytes
+            let expected_size = 4 + (72 * num_clusters) + 64;
+            assert_eq!(
+                bytes.len(),
+                expected_size,
+                "TagConservationProof with {} clusters should be {} bytes",
+                num_clusters,
+                expected_size
+            );
+        }
+    }
+
+    #[test]
+    fn test_proof_size_under_1kb_target() {
+        // Issue #80: Verify proof overhead < 1KB for typical 1-3 cluster transactions
+        for num_clusters in [1, 2, 3] {
+            let input_secret = create_n_cluster_secret(num_clusters, 1_000_000);
+            let decay_rate = 50_000;
+            let output_secret = input_secret.apply_decay(decay_rate, &mut OsRng);
+
+            let prover = TagConservationProver::new(
+                vec![input_secret.clone()],
+                vec![output_secret.clone()],
+                decay_rate,
+            );
+
+            let proof = prover.prove(&mut OsRng).expect("Should generate proof");
+
+            // Calculate total proof overhead (what goes in the transaction)
+            let conservation_proof_size = proof.to_bytes().len();
+            let input_vector_size = input_secret.commit().to_bytes().len();
+            let output_vector_size = output_secret.commit().to_bytes().len();
+
+            let total_overhead = conservation_proof_size + input_vector_size + output_vector_size;
+
+            assert!(
+                total_overhead < 1024,
+                "Total proof overhead for {} clusters should be < 1KB, got {} bytes",
+                num_clusters,
+                total_overhead
+            );
+        }
+    }
+
+    #[test]
+    fn test_proof_size_summary() {
+        // Print a summary table of proof sizes for documentation
+        // This test always passes but provides useful data
+
+        let scenarios = [1, 2, 3, 5, 8];
+        let decay_rate = 50_000;
+
+        for &num_clusters in &scenarios {
+            let input_secret = create_n_cluster_secret(num_clusters, 1_000_000);
+            let output_secret = input_secret.apply_decay(decay_rate, &mut OsRng);
+
+            let prover = TagConservationProver::new(
+                vec![input_secret.clone()],
+                vec![output_secret.clone()],
+                decay_rate,
+            );
+
+            let proof = prover.prove(&mut OsRng).expect("Should generate proof");
+
+            let conservation_size = proof.to_bytes().len();
+            let input_vec_size = input_secret.commit().to_bytes().len();
+            let output_vec_size = output_secret.commit().to_bytes().len();
+            let total = conservation_size + input_vec_size + output_vec_size;
+
+            // Verify expected sizes
+            assert_eq!(conservation_size, 4 + (72 * num_clusters) + 64);
+            assert_eq!(input_vec_size, 4 + (40 * num_clusters) + 32);
+            assert_eq!(output_vec_size, 4 + (40 * num_clusters) + 32);
+
+            // Document the relationship
+            let _expected_total = 4 + (72 * num_clusters) + 64  // conservation proof
+                + 2 * (4 + (40 * num_clusters) + 32);           // 2x tag vectors
+            assert_eq!(total, _expected_total);
+        }
+    }
+}
