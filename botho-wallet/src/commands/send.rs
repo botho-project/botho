@@ -9,7 +9,7 @@ use crate::rpc_pool::RpcPool;
 use crate::storage::EncryptedWallet;
 use crate::transaction::{format_amount, parse_amount, sync_wallet, TransactionBuilder, DUST_THRESHOLD};
 
-use super::{print_error, print_success, print_warning, prompt_confirm, prompt_password};
+use super::{decrypt_wallet_with_rate_limiting, print_error, print_success, print_warning, prompt_confirm};
 
 /// Run the send command
 pub async fn run(
@@ -78,12 +78,8 @@ async fn run_classical(
         println!("         Small outputs may cost more in fees to spend later.");
     }
 
-    // Load and decrypt wallet
-    let mut wallet = EncryptedWallet::load(wallet_path)?;
-    let password = prompt_password("Enter wallet password: ")?;
-
-    let mnemonic = wallet.decrypt(&password)
-        .map_err(|_| anyhow!("Failed to decrypt wallet - wrong password?"))?;
+    // Load and decrypt wallet with rate limiting protection
+    let (mut wallet, mnemonic, password) = decrypt_wallet_with_rate_limiting(wallet_path)?;
 
     let keys = WalletKeys::from_mnemonic(&mnemonic)?;
 
@@ -295,12 +291,8 @@ async fn run_quantum_private(
     let pq_recipient = QuantumSafePublicAddress::from_address_string(address)
         .map_err(|e| anyhow!("Invalid quantum-safe address: {:?}", e))?;
 
-    // Load and decrypt wallet
-    let mut wallet = EncryptedWallet::load(wallet_path)?;
-    let password = prompt_password("Enter wallet password: ")?;
-
-    let mnemonic = wallet.decrypt(&password)
-        .map_err(|_| anyhow!("Failed to decrypt wallet - wrong password?"))?;
+    // Load and decrypt wallet with rate limiting protection
+    let (mut wallet, mnemonic, password) = decrypt_wallet_with_rate_limiting(wallet_path)?;
 
     let keys = WalletKeys::from_mnemonic(&mnemonic)?;
 
