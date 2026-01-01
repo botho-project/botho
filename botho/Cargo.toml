@@ -75,6 +75,7 @@ num_cpus = "1"
 # Storage
 heed = "0.20"
 bincode = "1"
+zstd = "0.13"
 
 # Logging & Telemetry
 tracing = "0.1"
