@@ -53,7 +53,6 @@ bth-cluster-tax = { path = "../cluster-tax" }
 bth-transaction-types = { path = "../transaction/types", default-features = true }
 
 # Networking & Consensus
-bth-gossip = { path = "../gossip" }
 bth-common = { path = "../common", features = ["std"] }
 bth-consensus-scp = { path = "../consensus/scp", features = ["test_utils"] }
 bth-consensus-scp-types = { path = "../consensus/scp/types", features = ["test_utils"] }

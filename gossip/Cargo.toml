@@ -12,9 +12,7 @@ description = "Gossip-based peer discovery and topology sharing for Botho"
 bth-common = { workspace = true, features = ["std"] }
 bth-consensus-scp-types = { workspace = true }
 bth-crypto-keys = { workspace = true }
-bth-crypto-digestible = { workspace = true }
 bth-util-serial = { workspace = true }
-bth-util-uri = { workspace = true }
 
 # External dependencies
 bitflags = { workspace = true, features = ["serde"] }
@@ -34,7 +32,6 @@ libp2p = { workspace = true, features = [
     "ed25519",
     "cbor",
 ] }
-prost = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, features = ["std"] }
 thiserror = { workspace = true }

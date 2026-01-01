@@ -18,27 +18,20 @@ serde = []
 # External dependencies
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
-displaydoc = { workspace = true }
 hex = { workspace = true }
 log = { workspace = true }
 rand_core = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-subtle = { workspace = true, features = ["i128"] }
 tiny-bip39 = { workspace = true }
-zeroize = { workspace = true }
 
 # Botho dependencies
 bth-account-keys = { workspace = true }
-bth-common = { workspace = true, features = ["loggers"] }
 bth-core = { workspace = true, features = ["serde", "bip39"] }
-bth-core-types = { workspace = true, features = ["serde"] }
 bth-crypto-keys = { workspace = true }
 bth-crypto-ring-signature = { workspace = true }
 bth-crypto-ring-signature-signer = { workspace = true }
 bth-transaction-core = { workspace = true }
-bth-util-repr-bytes = { workspace = true }
-bth-util-serial = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

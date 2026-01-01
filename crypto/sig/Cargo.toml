@@ -9,9 +9,6 @@ rust-version = { workspace = true }
 [dependencies]
 bth-crypto-keys = { workspace = true }
 
-merlin = { workspace = true }
-rand_core = { workspace = true }
-rand_hc = { workspace = true }
 schnorrkel-og = { workspace = true }
 
 [dev-dependencies]

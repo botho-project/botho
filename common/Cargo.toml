@@ -41,8 +41,6 @@ cfg-if = { workspace = true }
 chrono = { workspace = true, optional = true }
 displaydoc = { workspace = true }
 hashbrown = { workspace = true, features = ["serde", "nightly"] }
-hex = { workspace = true }
-hex_fmt = { workspace = true }
 hostname = { workspace = true, optional = true }
 prost = { workspace = true, features = ["prost-derive"] }
 rand_core = { workspace = true }

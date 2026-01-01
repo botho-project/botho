@@ -18,12 +18,10 @@ bth-consensus-scp-types = { workspace = true }
 bth-crypto-keys = { workspace = true }
 bth-gossip = { workspace = true }
 bth-util-from-random = { workspace = true }
-bth-util-uri = { workspace = true }
 
 # External dependencies
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive", "env"] }
-futures = { workspace = true }
 hex = { workspace = true }
 libp2p = { workspace = true, features = ["tokio"] }
 rand = { workspace = true }

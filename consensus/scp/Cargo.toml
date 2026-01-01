@@ -16,14 +16,11 @@ test_utils = ["bth-consensus-scp-types/test_utils"]
 bth-common = { workspace = true, features = ["log"] }
 bth-consensus-scp-types = { workspace = true }
 bth-crypto-digestible = { workspace = true, features = ["derive"] }
-bth-crypto-keys = { workspace = true }
-bth-util-from-random = { workspace = true }
 bth-util-serial = { workspace = true, features = ["std"] }
 
 mockall = { workspace = true }
 primitive-types = { workspace = true }
 rand = { workspace = true }
-rand_hc = { workspace = true }
 serde = { workspace = true, features = ["alloc", "derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

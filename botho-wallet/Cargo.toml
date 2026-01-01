@@ -8,7 +8,7 @@ rust-version = { workspace = true }
 
 [features]
 default = ["pq"]
-pq = ["bth-account-keys/pq", "bth-crypto-pq", "bth-crypto-ring-signature/pq", "botho/pq"]
+pq = ["bth-account-keys/pq", "bth-crypto-ring-signature/pq", "botho/pq"]
 
 [[bin]]
 name = "botho-wallet"
@@ -19,15 +19,11 @@ path = "src/main.rs"
 bth-account-keys = { path = "../account-keys" }
 bth-crypto-keys = { path = "../crypto/keys" }
 bth-crypto-ring-signature = { path = "../crypto/ring-signature" }
-bth-crypto-pq = { path = "../crypto/pq", optional = true }
-bth-transaction-core = { path = "../transaction/core" }
-bth-transaction-types = { path = "../transaction/types" }
 bth-core = { path = "../core" }
 botho = { path = "../botho", optional = true }
 
-# BIP39 and key derivation
+# BIP39 mnemonic support
 tiny-bip39 = { workspace = true }
-slip10_ed25519 = { workspace = true }
 
 # Encryption
 argon2 = "0.5"
@@ -35,7 +31,6 @@ chacha20poly1305 = "0.10"
 
 # Async runtime
 tokio = { workspace = true, features = ["full"] }
-futures = { workspace = true }
 
 # HTTP client for RPC
 reqwest = { workspace = true, features = ["json", "rustls-tls"] }
@@ -49,13 +44,11 @@ sha2 = { workspace = true }
 # Serialization
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, features = ["std"] }
-toml = { workspace = true }
 bincode = { workspace = true }
 hex = { workspace = true, features = ["std"] }
 
 # Utils
 anyhow = { workspace = true }
-thiserror = { workspace = true }
 rand = { workspace = true }
 dirs = { workspace = true }
 tracing = { workspace = true }

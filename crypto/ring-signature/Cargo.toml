@@ -14,12 +14,10 @@ alloc = [
     "bth-crypto-digestible/alloc",
     "bth-util-repr-bytes/alloc",
     "curve25519-dalek/alloc",
-    "ed25519-dalek/alloc",
 ]
 serde = [
     "dep:serde",
     "curve25519-dalek/serde",
-    "ed25519-dalek/serde",
     "bth-crypto-keys/serde",
 ]
 prost = ["dep:prost", "bth-crypto-keys/prost", "bth-util-serial"]
@@ -44,8 +42,6 @@ curve25519-dalek = { workspace = true }
 
 # External dependencies
 displaydoc = { workspace = true }
-ed25519-dalek = { workspace = true }
-hex_fmt = { workspace = true, optional = true }
 
 # Botho dependencies
 bth-core-types = { workspace = true }
@@ -63,7 +59,6 @@ prost = { workspace = true, features = ["prost-derive"], optional = true }
 rand_core = { workspace = true }
 rayon = { workspace = true, optional = true }
 serde = { workspace = true, features = ["derive"], optional = true }
-subtle = { workspace = true, features = ["i128"] }
 zeroize = { workspace = true }
 
 [dev-dependencies]
