@@ -49,6 +49,7 @@ jobs:
 
       - name: Generate coverage report
         run: |
+          # Note: bth-crypto-secp256k1 excluded due to k256 nightly compatibility issue
           cargo llvm-cov \
             --package bth-crypto-box \
             --package bth-crypto-digestible \
@@ -60,7 +61,6 @@ jobs:
             --package bth-crypto-pq \
             --package bth-crypto-ring-signature \
             --package bth-crypto-ring-signature-signer \
-            --package bth-crypto-secp256k1 \
             --package bth-crypto-sig \
             --html --output-dir coverage-report
 
@@ -78,7 +78,6 @@ jobs:
             --package bth-crypto-pq \
             --package bth-crypto-ring-signature \
             --package bth-crypto-ring-signature-signer \
-            --package bth-crypto-secp256k1 \
             --package bth-crypto-sig \
             --json --summary-only 2>/dev/null)
 
