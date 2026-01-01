@@ -19,3 +19,4 @@ bth-util-uri = { workspace = true }
 
 clap = { workspace = true, features = ["derive", "env"] }
 serde_json = { workspace = true }
+tracing = { workspace = true }

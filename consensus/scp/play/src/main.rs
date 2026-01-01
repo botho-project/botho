@@ -58,8 +58,7 @@ fn parse_node_id_from_uri(src: &str) -> Result<NodeID, String> {
 }
 
 fn main() {
-    let (logger, _global_logger_guard) =
-        bth_common::logger::create_app_logger(bth_common::logger::o!());
+    let (logger, _global_logger_guard) = bth_common::logger::create_app_logger();
     let config = Config::parse();
 
     let validity_fn = Arc::new(trivial_validity_fn);
