@@ -6,8 +6,6 @@
 mod error;
 mod validate;
 
-#[cfg(feature = "pq")]
-mod quantum_private_validate;
 
 pub use self::{
     error::{TransactionValidationError, TransactionValidationResult},
@@ -24,10 +22,3 @@ pub use self::{
     },
 };
 
-#[cfg(feature = "pq")]
-pub use self::quantum_private_validate::{
-    validate_quantum_private_inputs, validate_quantum_private_outputs,
-    validate_quantum_private_tx_in_structure, validate_quantum_private_tx_out,
-    verify_all_quantum_private_signatures, verify_quantum_private_signatures,
-    QuantumPrivateOutputLookup,
-};

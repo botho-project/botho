@@ -365,113 +365,35 @@ impl TransactionBuilder {
         Ok(())
     }
 
-    /// Build and sign a quantum-private transaction
+    /// Build and sign a quantum-private transaction using LION ring signatures
     ///
-    /// Creates a transaction with PQ outputs (ML-KEM encapsulation) and
-    /// dual-signed inputs (classical Schnorr + ML-DSA).
+    /// # DEPRECATED
+    ///
+    /// The previous ML-DSA+Schnorr hybrid approach has been deprecated because
+    /// it sacrificed ring privacy (direct input references instead of ring signatures).
+    ///
+    /// LION integration is in progress. See issue #119 for status.
     ///
     /// # Arguments
-    /// * `recipient` - Quantum-safe recipient address
-    /// * `amount` - Amount to send in picocredits
-    /// * `fee` - Transaction fee
+    /// * `_recipient` - Quantum-safe recipient address (unused - LION pending)
+    /// * `_amount` - Amount to send in picocredits (unused - LION pending)
+    /// * `_fee` - Transaction fee (unused - LION pending)
     ///
     /// # Returns
-    /// A fully signed quantum-private transaction ready for broadcast
+    /// Always returns an error indicating LION integration is pending
     #[cfg(feature = "pq")]
+    #[deprecated(since = "0.1.0", note = "Use LION ring signatures instead - see issue #119")]
     pub fn build_pq_transfer(
         &self,
-        recipient: &QuantumSafePublicAddress,
-        amount: u64,
-        fee: u64,
+        _recipient: &QuantumSafePublicAddress,
+        _amount: u64,
+        _fee: u64,
     ) -> Result<QuantumPrivateTransaction> {
-        // Validate amount
-        if amount == 0 {
-            return Err(anyhow!("Amount must be greater than 0"));
-        }
-
-        // Validate amount is above dust threshold
-        if amount < DUST_THRESHOLD {
-            return Err(anyhow!(
-                "Amount {} is below dust threshold of {} picocredits",
-                amount,
-                DUST_THRESHOLD
-            ));
-        }
-
-        let total_needed = amount.checked_add(fee)
-            .ok_or_else(|| anyhow!("Amount overflow"))?;
-
-        // Select UTXOs
-        let (selected, total_selected) = self.select_utxos(total_needed)?;
-
-        // Calculate change
-        let change = total_selected.checked_sub(total_needed)
-            .ok_or_else(|| anyhow!("Insufficient funds"))?;
-
-        // Build PQ outputs
-        let mut outputs = Vec::new();
-
-        // Output to recipient
-        outputs.push(QuantumPrivateTxOutput::new(amount, recipient));
-
-        // Handle change: if above dust threshold, create change output
-        // Otherwise, add dust to fee (prevents unspendable UTXOs)
-        let actual_fee = if change >= DUST_THRESHOLD {
-            let change_addr = self.keys.pq_public_address();
-            outputs.push(QuantumPrivateTxOutput::new(change, &change_addr));
-            fee
-        } else {
-            // Dust change is absorbed into fee
-            fee + change
-        };
-
-        // Build a preliminary transaction to get signing hash
-        let preliminary_tx = QuantumPrivateTransaction::new(
-            Vec::new(),
-            outputs.clone(),
-            actual_fee,
-            self.sync_height,
-        );
-        let signing_hash = preliminary_tx.signing_hash();
-
-        // Get view private key bytes for PQ bridge derivation
-        let view_private_bytes = self.keys.account_key().view_private_key().to_bytes();
-
-        // Build and sign inputs
-        let mut inputs = Vec::new();
-        let account_key = self.keys.account_key();
-
-        for utxo in &selected {
-            // Recover the one-time private key for classical signing
-            let onetime_private = utxo.recover_spend_key(account_key)
-                .ok_or_else(|| anyhow!(
-                    "Failed to recover spend key for UTXO {}",
-                    hex::encode(&utxo.tx_hash[0..8])
-                ))?;
-
-            // Derive PQ shared secret (bridge mode for classical UTXOs)
-            let pq_shared_secret = utxo.pq_bridge_secret(&view_private_bytes);
-
-            // Create quantum-private input with dual signatures
-            let input = QuantumPrivateTxInput::new(
-                utxo.tx_hash,
-                utxo.output_index,
-                &signing_hash,
-                &onetime_private,
-                &pq_shared_secret,
-            );
-
-            inputs.push(input);
-        }
-
-        // Create the final transaction
-        let tx = QuantumPrivateTransaction::new(inputs, outputs, actual_fee, self.sync_height);
-
-        // Verify structure
-        tx.is_valid_structure()
-            .map_err(|e| anyhow!("Invalid transaction structure: {}", e))?;
-
-        Ok(tx)
+        Err(anyhow!(
+            "Quantum-private transactions are being migrated to LION ring signatures. \
+             The previous ML-DSA+Schnorr hybrid approach has been deprecated because \
+             it sacrificed ring privacy. See issue #119 for migration status."
+        ))
     }
 }
 
