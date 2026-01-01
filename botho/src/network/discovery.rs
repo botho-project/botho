@@ -17,7 +17,6 @@
 //! - **Upgrade Announcements**: A dedicated gossipsub topic allows validators
 //!   and seed nodes to broadcast upcoming network upgrades.
 
-use futures::StreamExt;
 use libp2p::{
     gossipsub::{self, IdentTopic, MessageAuthenticity},
     identify,
@@ -37,6 +36,7 @@ use bth_transaction_types::{BlockVersion, MAX_BLOCK_SIZE, MAX_SCP_MESSAGE_SIZE, 
 use crate::block::Block;
 use crate::consensus::ScpMessage;
 use crate::network::compact_block::{BlockTxn, CompactBlock, GetBlockTxn};
+use crate::network::pex::{PeerSource, PexManager, PexMessage, MAX_PEX_MESSAGE_SIZE};
 use crate::network::sync::{create_sync_behaviour, SyncCodec, SyncRequest, SyncResponse};
 use crate::transaction::Transaction;
 
@@ -67,6 +67,9 @@ const COMPACT_BLOCKS_TOPIC: &str = "botho/compact-blocks/1.0.0";
 /// Topic for upgrade announcements.
 /// Validators and seed nodes publish upcoming network upgrades here.
 const UPGRADE_ANNOUNCEMENTS_TOPIC: &str = "botho/upgrades/1.0.0";
+
+/// Topic for peer exchange (PEX) messages
+const PEX_TOPIC: &str = "botho/pex/1.0.0";
 
 /// Parsed protocol version from peer agent string.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -238,6 +241,8 @@ pub enum NetworkEvent {
         peer_version: ProtocolVersion,
         min_version: ProtocolVersion,
     },
+    /// New peer addresses received via PEX (connect to these)
+    PexAddresses(Vec<Multiaddr>),
 }
 
 /// Network behaviour combining gossipsub, identify, and sync request-response
@@ -267,6 +272,8 @@ pub struct NetworkDiscovery {
     peers: HashMap<PeerId, PeerTableEntry>,
     /// Peers subscribed to compact blocks topic (support bandwidth optimization)
     compact_block_peers: HashSet<PeerId>,
+    /// PEX manager for decentralized peer discovery
+    pex_manager: PexManager,
 }
 
 impl NetworkDiscovery {
@@ -288,6 +295,7 @@ impl NetworkDiscovery {
             event_rx: Some(event_rx),
             peers: HashMap::new(),
             compact_block_peers: HashSet::new(),
+            pex_manager: PexManager::new(),
         }
     }
 
@@ -415,6 +423,10 @@ impl NetworkDiscovery {
         // Subscribe to upgrade announcements topic
         let upgrade_topic = IdentTopic::new(UPGRADE_ANNOUNCEMENTS_TOPIC);
         swarm.behaviour_mut().gossipsub.subscribe(&upgrade_topic)?;
+
+        // Subscribe to PEX topic
+        let pex_topic = IdentTopic::new(PEX_TOPIC);
+        swarm.behaviour_mut().gossipsub.subscribe(&pex_topic)?;
 
         // Listen on the configured port
         let listen_addr: Multiaddr = format!("/ip4/0.0.0.0/tcp/{}", self.port).parse()?;
@@ -550,6 +562,89 @@ impl NetworkDiscovery {
             "Sent missing transactions"
         );
         Ok(())
+    }
+
+    /// Broadcast a PEX message with known peers
+    pub fn broadcast_pex(
+        swarm: &mut Swarm<BothoBehaviour>,
+        message: &PexMessage,
+    ) -> anyhow::Result<()> {
+        let topic = IdentTopic::new(PEX_TOPIC);
+        let bytes = bincode::serialize(message)?;
+
+        // Size check
+        if bytes.len() > MAX_PEX_MESSAGE_SIZE {
+            return Err(anyhow::anyhow!(
+                "PEX message too large: {} bytes (max: {})",
+                bytes.len(),
+                MAX_PEX_MESSAGE_SIZE
+            ));
+        }
+
+        swarm
+            .behaviour_mut()
+            .gossipsub
+            .publish(topic, bytes)
+            .map_err(|e| anyhow::anyhow!("Failed to publish PEX message: {:?}", e))?;
+
+        debug!(peers = message.entries.len(), "Broadcast PEX message");
+        Ok(())
+    }
+
+    /// Get the PEX manager for external use
+    pub fn pex_manager(&self) -> &PexManager {
+        &self.pex_manager
+    }
+
+    /// Get mutable PEX manager
+    pub fn pex_manager_mut(&mut self) -> &mut PexManager {
+        &mut self.pex_manager
+    }
+
+    /// Check if we should broadcast PEX and do it if ready
+    ///
+    /// Call this periodically (e.g., every minute) to share known peers.
+    pub fn maybe_broadcast_pex(&mut self, swarm: &mut Swarm<BothoBehaviour>) {
+        if !self.pex_manager.should_broadcast() {
+            return;
+        }
+
+        // Collect shareable peers
+        let current_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
+        let peers: Vec<_> = self
+            .peers
+            .values()
+            .filter_map(|entry| {
+                entry.address.as_ref().map(|addr| {
+                    let last_seen = current_time
+                        - entry
+                            .last_seen
+                            .elapsed()
+                            .as_secs()
+                            .min(current_time);
+                    (entry.peer_id, addr.clone(), last_seen)
+                })
+            })
+            .collect();
+
+        if let Some(message) = self.pex_manager.prepare_broadcast(peers) {
+            if let Err(e) = Self::broadcast_pex(swarm, &message) {
+                warn!("Failed to broadcast PEX: {}", e);
+            } else {
+                self.pex_manager.record_broadcast();
+            }
+        }
+    }
+
+    /// Record a peer with its discovery source for eclipse attack prevention
+    pub fn record_peer_source(&mut self, peer_id: PeerId, addr: &Multiaddr, source: PeerSource) {
+        self.pex_manager
+            .source_tracker
+            .record_peer(peer_id, addr, source);
     }
 
     /// Broadcast a block with bandwidth optimization.
@@ -760,6 +855,38 @@ impl NetworkDiscovery {
                         }
                         Err(e) => {
                             warn!("Failed to deserialize upgrade announcement: {}", e);
+                        }
+                    }
+                } else if topic == PEX_TOPIC {
+                    // Check size before deserialization (DoS protection)
+                    if message.data.len() > MAX_PEX_MESSAGE_SIZE {
+                        warn!(
+                            "Rejected oversized PEX message: {} bytes (max: {})",
+                            message.data.len(),
+                            MAX_PEX_MESSAGE_SIZE
+                        );
+                        return None;
+                    }
+
+                    // Try to deserialize as PEX message
+                    match bincode::deserialize::<PexMessage>(&message.data) {
+                        Ok(pex_msg) => {
+                            let peer = message.source.unwrap_or(PeerId::random());
+                            debug!(
+                                %peer,
+                                entries = pex_msg.entries.len(),
+                                "Received PEX message"
+                            );
+
+                            // Process through PEX manager
+                            let valid_addrs = self.pex_manager.process_incoming(&peer, &pex_msg);
+
+                            if !valid_addrs.is_empty() {
+                                return Some(NetworkEvent::PexAddresses(valid_addrs));
+                            }
+                        }
+                        Err(e) => {
+                            warn!("Failed to deserialize PEX message from gossip: {}", e);
                         }
                     }
                 }
@@ -1320,5 +1447,56 @@ mod tests {
         // No peers = no legacy peers
         assert_eq!(discovery.legacy_peer_count(), 0);
         assert!(discovery.all_peers_support_compact_blocks());
+    }
+
+    // ========================================================================
+    // PEX integration tests
+    // ========================================================================
+
+    #[test]
+    fn test_pex_topic_constant() {
+        assert_eq!(PEX_TOPIC, "botho/pex/1.0.0");
+        assert!(PEX_TOPIC.starts_with("botho/"));
+        assert!(PEX_TOPIC.contains("/1.0.0"));
+    }
+
+    #[test]
+    fn test_network_discovery_has_pex_manager() {
+        let discovery = NetworkDiscovery::new(9000, vec![]);
+
+        // PEX manager should be initialized
+        assert!(discovery.pex_manager().should_broadcast());
+    }
+
+    #[test]
+    fn test_pex_manager_access() {
+        let mut discovery = NetworkDiscovery::new(9000, vec![]);
+
+        // Should be able to access PEX manager mutably
+        discovery.pex_manager_mut().record_broadcast();
+        assert!(!discovery.pex_manager().should_broadcast());
+    }
+
+    #[test]
+    fn test_record_peer_source() {
+        let mut discovery = NetworkDiscovery::new(9000, vec![]);
+        let peer = PeerId::random();
+        let addr: Multiaddr = "/ip4/8.8.8.8/tcp/9000".parse().unwrap();
+
+        discovery.record_peer_source(peer, &addr, PeerSource::Bootstrap);
+
+        assert_eq!(
+            discovery.pex_manager().source_tracker.get_source(&peer),
+            Some(PeerSource::Bootstrap)
+        );
+    }
+
+    #[test]
+    fn test_network_event_pex_addresses() {
+        let addr: Multiaddr = "/ip4/8.8.8.8/tcp/9000".parse().unwrap();
+        let event = NetworkEvent::PexAddresses(vec![addr.clone()]);
+
+        let debug_str = format!("{:?}", event);
+        assert!(debug_str.contains("PexAddresses"));
     }
 }

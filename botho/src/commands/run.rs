@@ -794,6 +794,16 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                                 "Connected to peer with outdated protocol version"
                             );
                         }
+
+                        NetworkEvent::PexAddresses(addrs) => {
+                            // Connect to new peers discovered via PEX
+                            for addr in addrs {
+                                debug!("Connecting to PEX-discovered peer: {}", addr);
+                                if let Err(e) = swarm.dial(addr.clone()) {
+                                    debug!("Failed to dial PEX peer: {}", e);
+                                }
+                            }
+                        }
                     }
                 }
             }
