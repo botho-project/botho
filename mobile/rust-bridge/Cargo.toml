@@ -17,7 +17,7 @@ bth-account-keys = { path = "../../account-keys" }
 bth-crypto-keys = { path = "../../crypto/keys" }
 
 # UniFFI for generating Swift/Kotlin bindings
-uniffi = { version = "0.25", features = ["cli"] }
+uniffi = { version = "0.28", features = ["cli"] }
 
 # Async runtime (minimal for mobile)
 tokio = { version = "1", features = ["rt", "sync"] }
@@ -35,10 +35,10 @@ anyhow = "1"
 zeroize = { version = "1", features = ["derive"] }
 
 # BIP39 mnemonic generation
-bip39 = "2"
+bip39 = { version = "2", features = ["rand"] }
 
 [build-dependencies]
-uniffi = { version = "0.25", features = ["build"] }
+uniffi = { version = "0.28", features = ["build"] }
 
 [features]
 default = []

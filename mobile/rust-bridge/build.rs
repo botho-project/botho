@@ -1,3 +1,4 @@
 fn main() {
-    uniffi::generate_scaffolding("src/botho_mobile.udl").unwrap();
+    // Using proc-macro approach instead of UDL scaffolding
+    // uniffi::generate_scaffolding("src/botho_mobile.udl").unwrap();
 }

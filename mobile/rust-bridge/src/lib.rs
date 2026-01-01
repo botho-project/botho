@@ -14,7 +14,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use zeroize::Zeroizing;
 
-uniffi::include_scaffolding!("botho_mobile");
+uniffi::setup_scaffolding!();
 
 /// Errors that can occur in mobile wallet operations
 #[derive(Debug, thiserror::Error, uniffi::Error)]
