@@ -285,6 +285,7 @@ fn parse_key_32(hex_str: &str) -> Option<[u8; 32]> {
 mod tests {
     use super::*;
     use bth_crypto_keys::RistrettoPrivate;
+    use bth_util_from_random::FromRandom;
     use rand_core::SeedableRng;
 
     fn create_test_scanner() -> ExchangeScanner {

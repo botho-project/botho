@@ -127,6 +127,7 @@ pub fn derive_subaddress_from_hex(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bth_util_from_random::FromRandom;
     use rand_core::SeedableRng;
 
     fn create_test_keys() -> (RistrettoPrivate, RistrettoPublic) {

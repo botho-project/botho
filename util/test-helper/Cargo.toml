@@ -22,5 +22,6 @@ rand_hc = { workspace = true }
 
 [dev-dependencies]
 bth-common = { workspace = true, features = ["loggers"] }
+tracing = { workspace = true }
 
 itertools = { workspace = true }

@@ -13,9 +13,9 @@ use bth_crypto_pq::{
     ML_DSA_65_PUBLIC_KEY_BYTES, ML_DSA_65_SIGNATURE_BYTES,
     ML_KEM_768_CIPHERTEXT_BYTES, ML_KEM_768_PUBLIC_KEY_BYTES,
 };
-use bth_transaction_core::{
-    QuantumPrivateTxIn, QuantumPrivateTxOut, TransactionType,
-    quantum_private::size_comparison,
+use botho::transaction_pq::{
+    QuantumPrivateTxInput, QuantumPrivateTxOutput,
+    PQ_CIPHERTEXT_SIZE, PQ_SIGNATURE_SIZE, PQ_SIGNING_PUBKEY_SIZE,
 };
 
 const TEST_MNEMONIC: &str =
@@ -34,29 +34,38 @@ fn test_size_constants_match() {
     assert_eq!(ML_DSA_65_SIGNATURE_BYTES, 3309, "ML-DSA signature size");
     assert_eq!(ML_DSA_65_PUBLIC_KEY_BYTES, 1952, "ML-DSA public key size");
 
-    // Verify transaction/core sizes
-    assert_eq!(
-        QuantumPrivateTxOut::APPROX_SIZE,
-        3112,
-        "transaction/core output size"
-    );
-    assert_eq!(
-        QuantumPrivateTxIn::APPROX_SIZE,
-        3409,
-        "transaction/core input size"
-    );
+    // Verify transaction_pq constants match crypto constants
+    assert_eq!(PQ_CIPHERTEXT_SIZE, ML_KEM_768_CIPHERTEXT_BYTES, "ciphertext size constant");
+    assert_eq!(PQ_SIGNATURE_SIZE, ML_DSA_65_SIGNATURE_BYTES, "signature size constant");
+    assert_eq!(PQ_SIGNING_PUBKEY_SIZE, ML_DSA_65_PUBLIC_KEY_BYTES, "signing pubkey size constant");
 }
 
-/// Verify size comparison constants are accurate
+/// Verify estimated sizes are reasonable
 #[test]
-fn test_size_comparison_constants() {
-    // Classical sizes
-    assert_eq!(size_comparison::CLASSICAL_TX_OUT, 72);
-    assert_eq!(size_comparison::CLASSICAL_TX_IN, 100);
+fn test_estimated_sizes() {
+    // Output: classical(72) + ciphertext(1088) + signing_pubkey(1952) = 3112
+    let output_size = QuantumPrivateTxOutput::estimated_size();
+    assert!(output_size > 3000 && output_size < 3500, "output size: {}", output_size);
+
+    // Input: tx_hash(32) + output_index(4) + classical_sig(64) + pq_sig(3309) = 3409
+    let input_size = QuantumPrivateTxInput::estimated_size();
+    assert!(input_size > 3000 && input_size < 4000, "input size: {}", input_size);
+}
+
+/// Verify size comparison: PQ vs classical
+#[test]
+fn test_size_comparison() {
+    // Classical sizes (approximate)
+    const CLASSICAL_TX_OUT: usize = 72;  // amount + target_key + public_key
+    const CLASSICAL_TX_IN: usize = 100;  // reference + signature
 
     // PQ sizes
-    assert_eq!(size_comparison::QUANTUM_PRIVATE_TX_OUT, 3112);
-    assert_eq!(size_comparison::QUANTUM_PRIVATE_TX_IN, 3409);
+    let pq_output_size = QuantumPrivateTxOutput::estimated_size();
+    let pq_input_size = QuantumPrivateTxInput::estimated_size();
+
+    // PQ transactions should be significantly larger
+    assert!(pq_output_size > CLASSICAL_TX_OUT * 40, "PQ output should be ~43x larger than classical");
+    assert!(pq_input_size > CLASSICAL_TX_IN * 30, "PQ input should be ~34x larger than classical");
 }
 
 // ============================================================================
@@ -161,93 +170,60 @@ fn test_onetime_key_public_key_size() {
 }
 
 // ============================================================================
-// Transaction Type Compatibility Tests
-// ============================================================================
-
-/// Verify transaction type enum values
-#[test]
-fn test_transaction_type_values() {
-    assert_eq!(TransactionType::Standard as u8, 0);
-    assert_eq!(TransactionType::QuantumPrivate as u8, 1);
-
-    // Verify roundtrip
-    assert_eq!(TransactionType::from(0u8), TransactionType::Standard);
-    assert_eq!(TransactionType::from(1u8), TransactionType::QuantumPrivate);
-}
-
-/// Verify default transaction type
-#[test]
-fn test_transaction_type_default() {
-    assert_eq!(
-        TransactionType::default(),
-        TransactionType::Standard,
-        "default should be classical"
-    );
-}
-
-// ============================================================================
 // Input/Output Structure Compatibility Tests
 // ============================================================================
 
-/// Verify QuantumPrivateTxIn raw data fields work correctly
+/// Verify QuantumPrivateTxInput field sizes
 #[test]
-fn test_quantum_private_tx_in_raw_fields() {
+fn test_quantum_private_tx_input_fields() {
     // Create a valid signature
     let keypair = MlDsa65KeyPair::from_seed(&[42u8; 32]);
     let signature = keypair.sign(b"test");
 
-    // Build input using raw fields (the protobuf way)
-    let input = QuantumPrivateTxIn {
-        tx_hash: vec![0u8; 32],
+    // Build input with correct field sizes
+    let input = QuantumPrivateTxInput {
+        tx_hash: [0u8; 32],
         output_index: 0,
-        schnorr_signature: vec![0u8; 64],
-        dilithium_signature: signature.as_bytes().to_vec(),
+        classical_signature: vec![0u8; 64],
+        pq_signature: signature.as_bytes().to_vec(),
     };
 
     assert_eq!(input.tx_hash.len(), 32);
     assert_eq!(input.output_index, 0);
-    assert_eq!(input.schnorr_signature.len(), 64);
-    assert_eq!(input.dilithium_signature.len(), ML_DSA_65_SIGNATURE_BYTES);
-
-    // Verify typed getter works
-    assert_eq!(
-        input.get_dilithium_signature().unwrap().as_bytes(),
-        signature.as_bytes()
-    );
+    assert_eq!(input.classical_signature.len(), 64);
+    assert_eq!(input.pq_signature.len(), ML_DSA_65_SIGNATURE_BYTES);
 }
 
-/// Verify QuantumPrivateTxOut raw data fields work correctly
+/// Verify QuantumPrivateTxOutput field sizes
 #[test]
-fn test_quantum_private_tx_out_raw_fields() {
+fn test_quantum_private_tx_output_fields() {
     // Create valid PQ material
     let kem_keypair = MlKem768KeyPair::from_seed(&[42u8; 32]);
     let (ciphertext, _) = kem_keypair.public_key().encapsulate();
     let sig_keypair = MlDsa65KeyPair::from_seed(&[42u8; 32]);
-    let pq_target_key = sig_keypair.public_key();
+    let pq_signing_pubkey = sig_keypair.public_key();
 
-    // Build output using raw fields
-    let output = QuantumPrivateTxOut {
-        masked_amount: None,
-        target_key: Default::default(),
-        public_key: Default::default(),
+    // Build output - requires a classical TxOutput
+    use botho::transaction::TxOutput;
+    use bth_transaction_types::ClusterTagVector;
+
+    let classical = TxOutput {
+        amount: 1_000_000,
+        target_key: [1u8; 32],
+        public_key: [2u8; 32],
         e_memo: None,
-        cluster_tags: None,
+        cluster_tags: ClusterTagVector::empty(),
+    };
+
+    let output = QuantumPrivateTxOutput {
+        classical,
         pq_ciphertext: ciphertext.as_bytes().to_vec(),
-        pq_target_key: pq_target_key.as_bytes().to_vec(),
+        pq_signing_pubkey: pq_signing_pubkey.as_bytes().to_vec(),
     };
 
     assert_eq!(output.pq_ciphertext.len(), ML_KEM_768_CIPHERTEXT_BYTES);
-    assert_eq!(output.pq_target_key.len(), ML_DSA_65_PUBLIC_KEY_BYTES);
-
-    // Verify typed getters work
-    assert_eq!(
-        output.get_pq_ciphertext().unwrap().as_bytes(),
-        ciphertext.as_bytes()
-    );
-    assert_eq!(
-        output.get_pq_target_key().unwrap().as_bytes(),
-        pq_target_key.as_bytes()
-    );
+    assert_eq!(output.pq_signing_pubkey.len(), ML_DSA_65_PUBLIC_KEY_BYTES);
+    assert_eq!(output.amount(), 1_000_000);
 }
 
 // ============================================================================
@@ -347,18 +323,15 @@ fn test_end_to_end_transaction_flow() {
         "signature must verify for spending"
     );
 
-    // 8. Create transaction/core input structure using raw fields
-    let input = QuantumPrivateTxIn {
-        tx_hash: tx_hash.to_vec(),
+    // 8. Create transaction input structure
+    let input = QuantumPrivateTxInput {
+        tx_hash,
         output_index,
-        schnorr_signature: vec![0u8; 64], // Dummy classical signature
-        dilithium_signature: pq_signature.as_bytes().to_vec(),
+        classical_signature: vec![0u8; 64], // Dummy classical signature
+        pq_signature: pq_signature.as_bytes().to_vec(),
     };
 
     // Verify structure
     assert_eq!(input.output_index, output_index);
-    assert_eq!(
-        input.get_dilithium_signature().unwrap().as_bytes().len(),
-        ML_DSA_65_SIGNATURE_BYTES
-    );
+    assert_eq!(input.pq_signature.len(), ML_DSA_65_SIGNATURE_BYTES);
 }

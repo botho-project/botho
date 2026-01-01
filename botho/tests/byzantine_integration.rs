@@ -674,7 +674,7 @@ fn create_test_wallet(seed: u8) -> WalletKeys {
         "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art",
         "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo vote",
         "letter advice cage absurd amount doctor acoustic avoid letter advice cage absurd amount doctor acoustic avoid letter advice cage absurd amount doctor acoustic bless",
-        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "void come effort suffer camp survey warrior heavy shoot primary clutch crush open amazing screen patrol group space point ten exist slush involve unfold",
     ];
     let mnemonic = mnemonics[(seed as usize) % mnemonics.len()];
     WalletKeys::from_mnemonic(mnemonic).expect("Failed to create wallet from mnemonic")
