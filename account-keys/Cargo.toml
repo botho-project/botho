@@ -28,13 +28,11 @@ curve25519-dalek = { workspace = true }
 # External dependencies
 bs58 = { workspace = true, optional = true }
 displaydoc = { workspace = true }
-hex_fmt = { workspace = true }
 hkdf = { workspace = true }
 prost = { workspace = true, features = ["prost-derive"], optional = true }
 rand_core = { workspace = true }
 serde = { workspace = true, features = ["alloc", "derive"], optional = true }
 sha2 = { workspace = true, optional = true }
-subtle = { workspace = true }
 tiny-bip39 = { workspace = true, optional = true }
 zeroize = { workspace = true }
 

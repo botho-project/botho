@@ -12,29 +12,22 @@ serde = [
     "dep:serde",
     "bth-crypto-ring-signature/serde",
     "bth-transaction-types/serde",
-    "curve25519-dalek/serde",
 ]
-alloc = ["serde/alloc", "bth-crypto-ring-signature/alloc", "curve25519-dalek/alloc"]
+alloc = ["serde/alloc", "bth-crypto-ring-signature/alloc"]
 
-default = ["serde", "alloc", "curve25519-dalek/default"]
+default = ["serde", "alloc"]
 
 [dependencies]
-curve25519-dalek = { workspace = true }
 # External dependencies
 displaydoc = { workspace = true }
-generic-array = { workspace = true, features = ["serde", "more_lengths"] }
-hex_fmt = { workspace = true }
 
 # Botho dependencies
 bth-account-keys = { workspace = true }
 bth-crypto-keys = { workspace = true }
 bth-crypto-ring-signature = { workspace = true, features = ["alloc", "serde", "prost"] }
 bth-transaction-types = { workspace = true }
-bth-util-serial = { workspace = true }
-prost = { workspace = true, features = ["prost-derive"] }
 rand_core = { workspace = true }
 serde = { workspace = true, features = ["derive"], optional = true }
-subtle = { workspace = true, features = ["i128"] }
 zeroize = { workspace = true }
 
 [dev-dependencies]

@@ -15,7 +15,6 @@ pq = ["dep:bth-crypto-pq"]  # Post-quantum transaction types
 # External dependencies
 aes = { workspace = true }
 bulletproofs-og = { workspace = true }
-crc = { workspace = true }
 ctr = { workspace = true }
 curve25519-dalek = { workspace = true }
 displaydoc = { workspace = true }
@@ -34,7 +33,6 @@ zeroize = { workspace = true }
 # Botho dependencies
 bth-account-keys = { workspace = true }
 bth-common = { workspace = true }
-bth-crypto-box = { workspace = true }
 bth-crypto-digestible = { workspace = true, features = ["dalek", "derive"] }
 bth-crypto-hashes = { workspace = true }
 bth-crypto-keys = { workspace = true }
