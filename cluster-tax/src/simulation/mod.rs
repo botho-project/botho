@@ -9,9 +9,15 @@
 //! The `privacy` submodule models the effective bits of privacy that users can
 //! expect from ring signatures under various adversary models and network
 //! conditions.
+//!
+//! ## Lottery Simulation
+//!
+//! The `lottery` submodule models the lottery-based fee redistribution system
+//! as an alternative to cluster-based progressive fees.
 
 mod agent;
 pub mod agents;
+pub mod lottery;
 mod metrics;
 #[cfg(any(feature = "cli", test))]
 pub mod privacy;
@@ -22,6 +28,9 @@ pub use agent::{Action, Agent, AgentId};
 pub use agents::{
     MarketMakerAgent, MerchantAgent, MinterAgent, MixerServiceAgent, RetailUserAgent, WhaleAgent,
     WhaleStrategy,
+};
+pub use lottery::{
+    run_sybil_test, LotteryConfig, LotterySimulation, SybilStrategy, SybilTestResult,
 };
 pub use metrics::{Metrics, SimulationMetrics};
 pub use runner::{run_simulation, RoundSummary, SimulationConfig, SimulationResult};
