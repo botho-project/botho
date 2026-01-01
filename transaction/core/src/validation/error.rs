@@ -207,6 +207,10 @@ pub enum TransactionValidationError {
     /// Quantum-private input references invalid output
     #[cfg(feature = "pq")]
     InvalidPqOutputReference,
+
+    // =========== Ring Tag Plausibility Errors ===========
+    /** Ring tag centroid mismatch: output tags don't match ring composition. similarity_permille={0}, threshold_permille={1} (values in permille: 700 = 70%) */
+    RingTagMismatch(u32, u32),
 }
 
 impl From<bth_crypto_keys::KeyError> for TransactionValidationError {
