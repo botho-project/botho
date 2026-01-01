@@ -434,8 +434,67 @@ CloudWatch costs can add up. Optimize by:
 
 ---
 
+## Grafana Monitoring (Alternative)
+
+For self-hosted or local development environments, Botho provides a Grafana dashboard as an alternative to CloudWatch.
+
+### Overview
+
+The Grafana dashboard visualizes metrics from the Prometheus endpoint exposed by Botho nodes. It provides:
+
+- Real-time blockchain and node status
+- Transaction throughput and latency
+- Consensus round performance
+- Alert rules for critical conditions
+
+![Botho Grafana Dashboard](../infra/grafana/screenshots/dashboard-overview.png)
+
+### Quick Setup
+
+```bash
+# 1. Start Botho with metrics enabled
+botho run --metrics-port 9090
+
+# 2. Add to Prometheus config
+# prometheus.yml
+scrape_configs:
+  - job_name: 'botho'
+    static_configs:
+      - targets: ['localhost:9090']
+
+# 3. Import dashboard to Grafana
+# Upload: infra/grafana/dashboards/botho-node.json
+```
+
+### Included Alerts
+
+| Alert | Severity | Condition |
+|-------|----------|-----------|
+| Low Peer Count | Critical | `peers < 3` |
+| Block Height Stale | Critical | No blocks for 10m |
+| High Mempool Size | Warning | `mempool > 900` |
+| High Validation Latency | Warning | `p95 > 500ms` |
+
+### Documentation
+
+Full setup instructions: [infra/grafana/README.md](../infra/grafana/README.md)
+
+### CloudWatch vs Grafana
+
+| Feature | CloudWatch | Grafana |
+|---------|------------|---------|
+| Infrastructure | AWS-managed | Self-hosted |
+| Cost | Pay per metric/alarm | Free (open source) |
+| Setup | Automatic with agent | Manual Prometheus setup |
+| Best for | AWS production | Self-hosted / local dev |
+
+Use CloudWatch for AWS production environments and Grafana for local development or self-hosted deployments.
+
+---
+
 ## See Also
 
 - [Deployment Guide](deployment.md) - Full production setup
 - [Backup Strategy](backup.md) - Data protection
+- [Grafana Dashboard](../infra/grafana/README.md) - Self-hosted monitoring
 - [AWS CloudWatch Documentation](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/)
