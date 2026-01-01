@@ -1,2 +1,6 @@
 [toolchain]
-channel = "nightly"
+# Pinned nightly for reproducible builds
+# Update this date when upgrading Rust version
+channel = "nightly-2025-12-03"
+components = ["rustfmt", "clippy"]
+targets = ["x86_64-unknown-linux-gnu", "x86_64-apple-darwin", "aarch64-apple-darwin"]

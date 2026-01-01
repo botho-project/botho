@@ -1,0 +1,295 @@
+# Reproducible Release Build Workflow
+#
+# Triggers on version tags (v*) and produces deterministic binaries
+# for Linux, macOS (Intel + ARM), and Windows.
+#
+# The same source commit should produce identical binary hashes
+# across multiple builds, enabling third-party verification.
+
+name: Release Build
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (build but do not release)'
+        required: false
+        default: 'false'
+        type: boolean
+
+env:
+  CARGO_TERM_COLOR: always
+  # Pinned nightly version - must match rust-toolchain
+  RUST_TOOLCHAIN: nightly-2025-12-03
+
+jobs:
+  # ==========================================================================
+  # Build Matrix
+  # ==========================================================================
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux x86_64
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            artifact_name: linux-x86_64
+
+          # macOS Intel
+          - os: macos-13
+            target: x86_64-apple-darwin
+            artifact_name: macos-x86_64
+
+          # macOS ARM (Apple Silicon)
+          - os: macos-14
+            target: aarch64-apple-darwin
+            artifact_name: macos-aarch64
+
+          # Windows x86_64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: windows-x86_64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for git describe
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+
+      # Linux-specific: Install native dependencies
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libssl-dev
+
+      # Build using reproducible build script
+      - name: Build
+        shell: bash
+        run: |
+          chmod +x ./scripts/build-release.sh
+          ./scripts/build-release.sh --target ${{ matrix.target }}
+
+      # Upload artifacts
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.artifact_name }}
+          path: dist/
+          retention-days: 7
+
+  # ==========================================================================
+  # Verification Job
+  # ==========================================================================
+  verify:
+    name: Verify Reproducibility
+    needs: build
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: Display checksums
+        run: |
+          echo "=== Build Checksums ==="
+          for dir in artifacts/binaries-*/; do
+            platform=$(basename "$dir" | sed 's/binaries-//')
+            echo ""
+            echo "--- $platform ---"
+            if [[ -f "$dir/checksums.txt" ]]; then
+              cat "$dir/checksums.txt"
+            fi
+            if [[ -f "$dir/build-info.txt" ]]; then
+              echo ""
+              cat "$dir/build-info.txt"
+            fi
+          done
+
+      - name: Create combined checksums
+        run: |
+          mkdir -p release-checksums
+          for dir in artifacts/binaries-*/; do
+            platform=$(basename "$dir" | sed 's/binaries-//')
+            if [[ -f "$dir/checksums.txt" ]]; then
+              sed "s|^|$platform/|" "$dir/checksums.txt" >> release-checksums/all-checksums.txt
+            fi
+          done
+          cat release-checksums/all-checksums.txt
+
+      - name: Upload combined checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-checksums
+          path: release-checksums/
+          retention-days: 90
+
+  # ==========================================================================
+  # Release Job (only on tags)
+  # ==========================================================================
+  release:
+    name: Create Release
+    needs: [build, verify]
+    runs-on: ubuntu-22.04
+    if: startsWith(github.ref, 'refs/tags/v') && github.event.inputs.dry_run != 'true'
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release-assets
+
+          # Package each platform
+          for dir in artifacts/binaries-*/; do
+            platform=$(basename "$dir" | sed 's/binaries-//')
+
+            # Create tarball for Unix platforms
+            if [[ "$platform" != windows* ]]; then
+              tar -czvf "release-assets/botho-${GITHUB_REF_NAME}-${platform}.tar.gz" \
+                -C "$dir" \
+                --exclude='*.sha256' \
+                --exclude='*.sig' \
+                --exclude='*.txt' \
+                .
+            else
+              # Create zip for Windows
+              (cd "$dir" && zip -r "../../release-assets/botho-${GITHUB_REF_NAME}-${platform}.zip" \
+                . -x '*.sha256' -x '*.sig' -x '*.txt')
+            fi
+
+            # Copy checksums
+            cp "$dir/checksums.txt" "release-assets/checksums-${platform}.txt" || true
+            cp "$dir/build-info.txt" "release-assets/build-info-${platform}.txt" || true
+          done
+
+          # Create combined checksums
+          cat release-assets/checksums-*.txt > release-assets/SHA256SUMS.txt
+
+          ls -la release-assets/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: release-assets/*
+          generate_release_notes: true
+          body: |
+            ## Reproducible Build
+
+            These binaries were built using reproducible build infrastructure.
+            Third parties can verify the builds by:
+
+            1. Checking out this tag
+            2. Running `./scripts/build-release.sh`
+            3. Comparing SHA256 checksums
+
+            See `docs/REPRODUCIBLE_BUILDS.md` for detailed verification instructions.
+
+            ### Checksums
+
+            ```
+            $(cat release-assets/SHA256SUMS.txt)
+            ```
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ==========================================================================
+  # Reproducibility Check (rebuild and compare)
+  # ==========================================================================
+  reproducibility-check:
+    name: Reproducibility Check
+    needs: build
+    runs-on: ubuntu-22.04
+    if: github.event.inputs.dry_run != 'true'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Download original build
+        uses: actions/download-artifact@v4
+        with:
+          name: binaries-linux-x86_64
+          path: original-build/
+
+      - name: Rebuild
+        run: |
+          chmod +x ./scripts/build-release.sh
+          ./scripts/build-release.sh --target x86_64-unknown-linux-gnu
+
+      - name: Compare checksums
+        run: |
+          echo "=== Original Build ==="
+          cat original-build/checksums.txt
+
+          echo ""
+          echo "=== Rebuild ==="
+          cat dist/checksums.txt
+
+          echo ""
+          echo "=== Comparison ==="
+
+          # Compare each binary
+          MATCH=true
+          while IFS= read -r line; do
+            hash=$(echo "$line" | cut -d' ' -f1)
+            file=$(echo "$line" | cut -d' ' -f3)
+
+            if [[ -f "dist/$file" ]]; then
+              rebuild_hash=$(sha256sum "dist/$file" | cut -d' ' -f1)
+              if [[ "$hash" == "$rebuild_hash" ]]; then
+                echo "MATCH: $file"
+              else
+                echo "MISMATCH: $file"
+                echo "  Original: $hash"
+                echo "  Rebuild:  $rebuild_hash"
+                MATCH=false
+              fi
+            fi
+          done < original-build/checksums.txt
+
+          if [[ "$MATCH" == "true" ]]; then
+            echo ""
+            echo "SUCCESS: All binaries match - build is reproducible!"
+          else
+            echo ""
+            echo "FAILURE: Some binaries differ - build is NOT reproducible"
+            exit 1
+          fi
