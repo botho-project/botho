@@ -22,7 +22,10 @@ pub use connection_limiter::{
     ConnectionLimitExceeded, ConnectionLimiter, ConnectionLimiterMetrics,
     DEFAULT_MAX_CONNECTIONS_PER_IP,
 };
-pub use discovery::{BothoBehaviour, NetworkDiscovery, NetworkEvent, PeerTableEntry};
+pub use discovery::{
+    BothoBehaviour, NetworkDiscovery, NetworkEvent, PeerTableEntry, ProtocolVersion,
+    UpgradeAnnouncement, PROTOCOL_VERSION, MIN_SUPPORTED_PROTOCOL_VERSION,
+};
 pub use quorum::{QuorumBuilder, QuorumValidation};
 pub use reputation::{PeerReputation, ReputationManager};
 pub use sync::{

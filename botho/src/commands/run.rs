@@ -20,7 +20,7 @@ use crate::config::{Config, QuorumMode};
 use crate::consensus::{BlockBuilder, ConsensusConfig, ConsensusEvent, ConsensusService, TransactionValidator};
 use crate::network::{
     BlockTxn, CompactBlock, GetBlockTxn, NetworkDiscovery, NetworkEvent, QuorumBuilder,
-    ReconstructionResult,
+    ReconstructionResult, UpgradeAnnouncement,
 };
 use crate::node::{MintedMintingTx, Node};
 use crate::rpc::{init_metrics, start_metrics_server, start_rpc_server, MetricsUpdater, RpcState, WsBroadcaster};
@@ -755,6 +755,36 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                             } else {
                                 debug!("Received BlockTxn for unknown compact block, ignoring");
                             }
+                        }
+
+                        NetworkEvent::UpgradeAnnouncement(announcement) => {
+                            // Log upgrade announcements prominently
+                            if announcement.is_hard_fork {
+                                warn!(
+                                    target_version = %announcement.target_version,
+                                    target_block_version = announcement.target_block_version,
+                                    activation_height = ?announcement.activation_height,
+                                    activation_timestamp = ?announcement.activation_timestamp,
+                                    description = %announcement.description,
+                                    "⚠️  HARD FORK UPGRADE ANNOUNCED - Node upgrade required!"
+                                );
+                            } else {
+                                info!(
+                                    target_version = %announcement.target_version,
+                                    target_block_version = announcement.target_block_version,
+                                    description = %announcement.description,
+                                    "Soft fork upgrade announced"
+                                );
+                            }
+                        }
+
+                        NetworkEvent::PeerVersionWarning { peer, peer_version, min_version } => {
+                            warn!(
+                                %peer,
+                                peer_version = %peer_version,
+                                min_version = %min_version,
+                                "Connected to peer with outdated protocol version"
+                            );
                         }
                     }
                 }
