@@ -11,8 +11,8 @@
 //!    (maximum capacity), the fee base increases exponentially to shed excess
 //!    demand.
 //!
-//! This cascaded approach keeps fees low during normal operation while providing
-//! strong back-pressure during extreme load.
+//! This cascaded approach keeps fees low during normal operation while
+//! providing strong back-pressure during extreme load.
 //!
 //! # Fee Formula
 //!
@@ -170,14 +170,11 @@ impl DynamicFeeBase {
     ///
     /// # Arguments
     /// * `tx_count` - Number of transactions in the finalized block
-    /// * `max_tx_count` - Maximum transactions per block (from consensus config)
-    /// * `at_min_block_time` - Whether block timing is at minimum (cascaded trigger)
-    pub fn update(
-        &mut self,
-        tx_count: usize,
-        max_tx_count: usize,
-        at_min_block_time: bool,
-    ) -> u64 {
+    /// * `max_tx_count` - Maximum transactions per block (from consensus
+    ///   config)
+    /// * `at_min_block_time` - Whether block timing is at minimum (cascaded
+    ///   trigger)
+    pub fn update(&mut self, tx_count: usize, max_tx_count: usize, at_min_block_time: bool) -> u64 {
         let fullness = if max_tx_count > 0 {
             (tx_count as f64 / max_tx_count as f64).clamp(0.0, 1.0)
         } else {
@@ -403,7 +400,11 @@ mod tests {
         }
 
         let base = fee.compute_base(true);
-        assert!(base > fee.base_min, "Should increase above target: {}", base);
+        assert!(
+            base > fee.base_min,
+            "Should increase above target: {}",
+            base
+        );
         assert!(base <= fee.base_max, "Should not exceed max: {}", base);
 
         // At 90% with target 75%, excess = 0.15, k=8
@@ -493,7 +494,11 @@ mod tests {
         for _ in 0..50 {
             fee.update(100, 100, true);
         }
-        assert!(fee.current_fullness() > 0.95, "Should converge to ~100%: {}", fee.current_fullness());
+        assert!(
+            fee.current_fullness() > 0.95,
+            "Should converge to ~100%: {}",
+            fee.current_fullness()
+        );
 
         // Switch to 50% full - should converge in ~16-20 blocks (alpha=0.125)
         for i in 0..30 {
@@ -532,7 +537,11 @@ mod tests {
         // multiplier = e^(8 * 0.25) = e^2 ≈ 7.4x
         // This is below the 100x ceiling, so we won't hit it
         // The test should verify we're getting a reasonable high multiplier
-        assert!(base > fee.base_min * 5, "Should have significant multiplier at 100% load: {}", base);
+        assert!(
+            base > fee.base_min * 5,
+            "Should have significant multiplier at 100% load: {}",
+            base
+        );
         assert!(base <= fee.base_max, "Should not exceed ceiling: {}", base);
     }
 
@@ -629,12 +638,12 @@ mod tests {
         // Uses the update() method to build up the EMA, then checks multiplier
 
         let test_cases = [
-            (75, 1.0),   // At target: 1x
-            (80, 1.5),   // Slight excess: ~1.5x
-            (85, 2.2),   // Moderate excess: ~2.2x
-            (90, 3.3),   // High: ~3.3x
-            (95, 4.9),   // Very high: ~4.9x
-            (100, 7.4),  // Saturated: ~7.4x
+            (75, 1.0),  // At target: 1x
+            (80, 1.5),  // Slight excess: ~1.5x
+            (85, 2.2),  // Moderate excess: ~2.2x
+            (90, 3.3),  // High: ~3.3x
+            (95, 4.9),  // Very high: ~4.9x
+            (100, 7.4), // Saturated: ~7.4x
         ];
 
         for (fullness_pct, expected_approx) in test_cases {

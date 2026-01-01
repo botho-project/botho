@@ -1,6 +1,6 @@
 //! Balance check command
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use std::path::Path;
 
 use crate::discovery::NodeDiscovery;
@@ -9,7 +9,7 @@ use crate::rpc_pool::RpcPool;
 use crate::storage::EncryptedWallet;
 use crate::transaction::{format_amount, sync_wallet};
 
-use super::{print_error, print_success, prompt_password};
+use super::{decrypt_wallet_with_rate_limiting, print_error, print_success};
 
 /// Run the balance command
 pub async fn run(wallet_path: &Path, detailed: bool) -> Result<()> {
@@ -19,12 +19,8 @@ pub async fn run(wallet_path: &Path, detailed: bool) -> Result<()> {
         return Ok(());
     }
 
-    // Load and decrypt wallet
-    let wallet = EncryptedWallet::load(wallet_path)?;
-    let password = prompt_password("Enter wallet password: ")?;
-
-    let mnemonic = wallet.decrypt(&password)
-        .map_err(|_| anyhow!("Failed to decrypt wallet - wrong password?"))?;
+    // Load and decrypt wallet with rate limiting protection
+    let (wallet, mnemonic, password) = decrypt_wallet_with_rate_limiting(wallet_path)?;
 
     let keys = WalletKeys::from_mnemonic(&mnemonic)?;
 

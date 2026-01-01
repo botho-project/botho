@@ -4,9 +4,11 @@ use std::collections::HashMap;
 
 use crate::{execute_transfer, ClusterWealth, FeeCurve, MonetaryPolicy, TransferConfig};
 
-use super::agent::{Action, Agent, AgentId};
-use super::metrics::{snapshot_metrics, Metrics, SimulationMetrics};
-use super::state::SimulationState;
+use super::{
+    agent::{Action, Agent, AgentId},
+    metrics::{snapshot_metrics, Metrics, SimulationMetrics},
+    state::SimulationState,
+};
 
 /// Configuration for a simulation run.
 #[derive(Clone, Debug)]
@@ -37,7 +39,8 @@ pub struct SimulationConfig {
     pub blocks_per_round: u64,
 
     /// Simulated seconds per block (for difficulty adjustment).
-    /// This should match the policy's target_block_time_secs for stable simulation.
+    /// This should match the policy's target_block_time_secs for stable
+    /// simulation.
     pub secs_per_block: u64,
 }
 
@@ -141,7 +144,12 @@ pub fn run_simulation(
             // Mint the balance properly (sets up tags and cluster wealth)
             let account = agent.account_mut();
             account.balance = 0; // Reset before minting
-            crate::mint(account, initial_balance, cluster_id, &mut state.cluster_wealth);
+            crate::mint(
+                account,
+                initial_balance,
+                cluster_id,
+                &mut state.cluster_wealth,
+            );
         }
 
         state.update_agent_balance(agent.id(), agent.balance());
@@ -315,17 +323,18 @@ pub fn run_simulation(
 
                             // Self-transfer (simulated)
                             let hop_amount = amount / hops as u64;
-                            let rate = agent.effective_fee_rate(
-                                &state.cluster_wealth,
-                                &config.fee_curve,
-                            );
+                            let rate =
+                                agent.effective_fee_rate(&state.cluster_wealth, &config.fee_curve);
                             let fee = (hop_amount as u128 * rate as u128 / 10_000) as u64;
                             total_wash_fees += fee;
                             round_fees += fee;
                             round_transactions += 1;
 
                             // Apply decay to the account's tags
-                            agent.account_mut().tags.apply_decay(config.transfer_config.decay_rate);
+                            agent
+                                .account_mut()
+                                .tags
+                                .apply_decay(config.transfer_config.decay_rate);
                         }
 
                         let final_rate = agents[sender_idx]
@@ -357,8 +366,8 @@ pub fn run_simulation(
         if state.monetary_controller.is_some() && !minter_indices.is_empty() {
             for block_in_round in 0..config.blocks_per_round {
                 // Calculate simulated block time
-                let block_time = state.simulated_time
-                    + (block_in_round + 1) * config.secs_per_block;
+                let block_time =
+                    state.simulated_time + (block_in_round + 1) * config.secs_per_block;
                 let reward = state.process_block(block_time);
                 if reward > 0 {
                     round_rewards += reward;
@@ -369,7 +378,12 @@ pub fn run_simulation(
 
                     // Mint reward to minter's account
                     let minter_account = agents[minter_idx].account_mut();
-                    crate::mint(minter_account, reward, cluster_id, &mut state.cluster_wealth);
+                    crate::mint(
+                        minter_account,
+                        reward,
+                        cluster_id,
+                        &mut state.cluster_wealth,
+                    );
                 }
             }
         }
@@ -409,7 +423,11 @@ pub fn run_simulation(
                     round,
                     round_transactions,
                     round_fees,
-                    metrics.snapshots.last().map(|m| m.gini_coefficient).unwrap_or(0.0)
+                    metrics
+                        .snapshots
+                        .last()
+                        .map(|m| m.gini_coefficient)
+                        .unwrap_or(0.0)
                 );
             }
         }
@@ -467,7 +485,13 @@ fn execute_transfer_between_agents(
     let sender_account = sender.account_mut();
     let receiver_account = receiver.account_mut();
 
-    match execute_transfer(sender_account, receiver_account, amount, config, cluster_wealth) {
+    match execute_transfer(
+        sender_account,
+        receiver_account,
+        amount,
+        config,
+        cluster_wealth,
+    ) {
         Ok(result) => Some((result.fee, result.net_amount)),
         Err(_) => None,
     }
@@ -514,8 +538,10 @@ fn collect_metrics(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::simulation::agents::{MerchantAgent, MinterAgent, RetailUserAgent};
-    use crate::MonetaryPolicy;
+    use crate::{
+        simulation::agents::{MerchantAgent, MinterAgent, RetailUserAgent},
+        MonetaryPolicy,
+    };
 
     #[test]
     fn test_basic_simulation() {
@@ -550,8 +576,8 @@ mod tests {
 
         // Initial balances
         agents[0].account_mut().balance = 10_000; // Minter
-        agents[1].account_mut().balance = 5_000;  // Merchant
-        agents[2].account_mut().balance = 5_000;  // Retail
+        agents[1].account_mut().balance = 5_000; // Merchant
+        agents[2].account_mut().balance = 5_000; // Retail
 
         // Use fast test parameters for monetary policy
         let monetary_policy = MonetaryPolicy::fast_test();

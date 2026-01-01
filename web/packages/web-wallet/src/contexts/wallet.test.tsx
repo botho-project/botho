@@ -28,6 +28,12 @@ vi.mock('@botho/adapters', () => ({
     getNodeInfo = vi.fn().mockReturnValue({ version: '1.0.0', network: 'testnet' })
     getBalance = vi.fn().mockResolvedValue({ available: 1000000000000n, pending: 0n, total: 1000000000000n })
     getTransactionHistory = vi.fn().mockResolvedValue([])
+    onNewBlock = vi.fn().mockReturnValue(() => {})
+    onTransaction = vi.fn().mockReturnValue(() => {})
+    onMempoolUpdate = vi.fn().mockReturnValue(() => {})
+    onPeerStatus = vi.fn().mockReturnValue(() => {})
+    getWsStatus = vi.fn().mockReturnValue('connected')
+    onWsStatusChange = vi.fn().mockReturnValue(() => {})
   },
 }))
 

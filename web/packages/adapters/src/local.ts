@@ -12,9 +12,12 @@ import type {
 import type {
   BlockFetchOptions,
   LocalNodeConfig,
+  MempoolUpdate,
   NodeAdapter,
+  PeerStatus,
   TxHistoryOptions,
   TxSubmitResult,
+  WsConnectionStatus,
 } from './types'
 
 const DEFAULT_CONFIG: Required<LocalNodeConfig> = {
@@ -33,9 +36,13 @@ export class LocalNodeAdapter implements NodeAdapter {
   private connected = false
   private currentNode: NodeInfo | null = null
   private ws: WebSocket | null = null
+  private wsStatus: WsConnectionStatus = 'disconnected'
   private eventSource: EventSource | null = null
   private blockCallbacks: Set<(block: Block) => void> = new Set()
   private txCallbacks: Map<string, Set<(tx: Transaction) => void>> = new Map()
+  private mempoolCallbacks: Set<(update: MempoolUpdate) => void> = new Set()
+  private peerCallbacks: Set<(status: PeerStatus) => void> = new Set()
+  private wsStatusCallbacks: Set<(status: WsConnectionStatus) => void> = new Set()
 
   constructor(config: Partial<LocalNodeConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config }
@@ -78,8 +85,12 @@ export class LocalNodeAdapter implements NodeAdapter {
       this.eventSource.close()
       this.eventSource = null
     }
+    this.setWsStatus('disconnected')
     this.blockCallbacks.clear()
     this.txCallbacks.clear()
+    this.mempoolCallbacks.clear()
+    this.peerCallbacks.clear()
+    this.wsStatusCallbacks.clear()
   }
 
   isConnected(): boolean {
@@ -241,6 +252,36 @@ export class LocalNodeAdapter implements NodeAdapter {
     }
   }
 
+  onMempoolUpdate(callback: (update: MempoolUpdate) => void): () => void {
+    this.mempoolCallbacks.add(callback)
+    return () => this.mempoolCallbacks.delete(callback)
+  }
+
+  onPeerStatus(callback: (status: PeerStatus) => void): () => void {
+    this.peerCallbacks.add(callback)
+    return () => this.peerCallbacks.delete(callback)
+  }
+
+  // =========================================================================
+  // WebSocket Status
+  // =========================================================================
+
+  getWsStatus(): WsConnectionStatus {
+    return this.wsStatus
+  }
+
+  onWsStatusChange(callback: (status: WsConnectionStatus) => void): () => void {
+    this.wsStatusCallbacks.add(callback)
+    return () => this.wsStatusCallbacks.delete(callback)
+  }
+
+  private setWsStatus(status: WsConnectionStatus): void {
+    if (this.wsStatus !== status) {
+      this.wsStatus = status
+      this.wsStatusCallbacks.forEach((cb) => cb(status))
+    }
+  }
+
   // =========================================================================
   // Local-specific methods
   // =========================================================================
@@ -339,11 +380,13 @@ export class LocalNodeAdapter implements NodeAdapter {
     if (!this.currentNode) return
 
     const wsUrl = `ws://${this.currentNode.host}:${this.currentNode.port}/ws`
+    this.setWsStatus('connecting')
 
     try {
       this.ws = new WebSocket(wsUrl)
 
       this.ws.onopen = () => {
+        this.setWsStatus('connected')
         // Subscribe to all events
         this.sendWsMessage({ type: 'subscribe', events: ['blocks', 'transactions', 'mempool', 'peers', 'minting'] })
       }
@@ -360,6 +403,12 @@ export class LocalNodeAdapter implements NodeAdapter {
               this.txCallbacks.forEach((callbacks) => {
                 callbacks.forEach(cb => cb(tx))
               })
+            } else if (msg.event === 'mempool') {
+              const update = this.parseMempoolEvent(msg.data)
+              this.mempoolCallbacks.forEach(cb => cb(update))
+            } else if (msg.event === 'peers') {
+              const status = this.parsePeerEvent(msg.data)
+              this.peerCallbacks.forEach(cb => cb(status))
             }
           }
         } catch {
@@ -368,23 +417,29 @@ export class LocalNodeAdapter implements NodeAdapter {
       }
 
       this.ws.onclose = () => {
+        this.ws = null
         if (this.connected) {
+          this.setWsStatus('reconnecting')
           // Reconnect after delay
           setTimeout(() => {
             if (this.connected) {
               this.setupWebSocket()
             }
           }, 5000)
+        } else {
+          this.setWsStatus('disconnected')
         }
       }
 
       this.ws.onerror = () => {
         // WebSocket failed, fall back to SSE
         this.ws = null
+        this.setWsStatus('disconnected')
         this.setupEventSource()
       }
     } catch {
       // WebSocket not available, use SSE
+      this.setWsStatus('disconnected')
       this.setupEventSource()
     }
   }
@@ -475,6 +530,37 @@ export class LocalNodeAdapter implements NodeAdapter {
       timestamp: Date.now(),
       blockHeight: data.in_block as number | undefined,
       confirmations: data.in_block ? 1 : 0,
+    }
+  }
+
+  /** Parse mempool update from WebSocket event */
+  private parseMempoolEvent(data: Record<string, unknown>): MempoolUpdate {
+    return {
+      size: (data.size as number) || 0,
+      totalFees: BigInt((data.total_fees as number) || 0),
+    }
+  }
+
+  /** Parse peer status from WebSocket event */
+  private parsePeerEvent(data: Record<string, unknown>): PeerStatus {
+    const eventData = data.event as Record<string, unknown> | undefined
+    let event: PeerStatus['event'] = 'count_changed'
+    let peerId: string | undefined
+
+    if (eventData) {
+      if ('Connected' in eventData) {
+        event = 'connected'
+        peerId = (eventData.Connected as Record<string, unknown>)?.peer_id as string
+      } else if ('Disconnected' in eventData) {
+        event = 'disconnected'
+        peerId = (eventData.Disconnected as Record<string, unknown>)?.peer_id as string
+      }
+    }
+
+    return {
+      peerCount: (data.peer_count as number) || 0,
+      event,
+      peerId,
     }
   }
 

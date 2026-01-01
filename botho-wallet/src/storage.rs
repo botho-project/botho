@@ -42,7 +42,9 @@ const MAX_DELAY_MS: u64 = 300_000;
 ///
 /// Implements exponential backoff to prevent brute-force password attacks.
 /// After MAX_FAILED_ATTEMPTS consecutive failures, a cooldown period is enforced.
-#[derive(Debug, Clone)]
+///
+/// This struct can be persisted to disk to maintain rate limiting across CLI invocations.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DecryptionRateLimiter {
     /// Number of consecutive failed attempts
     consecutive_failures: u32,
@@ -156,6 +158,55 @@ impl DecryptionRateLimiter {
         } else {
             Some(format!("{} seconds", remaining_secs + 1))
         }
+    }
+
+    /// Get the default path for rate limiter state file.
+    ///
+    /// The rate limiter state is stored alongside the wallet file.
+    /// For a wallet at `~/.botho-wallet/wallet.dat`, the rate limiter
+    /// state is stored at `~/.botho-wallet/rate_limiter.json`.
+    pub fn default_path(wallet_path: &Path) -> std::path::PathBuf {
+        wallet_path
+            .parent()
+            .unwrap_or(Path::new("."))
+            .join("rate_limiter.json")
+    }
+
+    /// Save the rate limiter state to a file.
+    ///
+    /// The state is persisted as JSON to maintain rate limiting across
+    /// CLI invocations, preventing attackers from bypassing delays by
+    /// restarting the CLI.
+    pub fn save(&self, path: &Path) -> Result<()> {
+        let json = serde_json::to_string_pretty(self)?;
+        fs::write(path, json)?;
+        Ok(())
+    }
+
+    /// Load rate limiter state from a file.
+    ///
+    /// Returns a new (empty) rate limiter if the file doesn't exist
+    /// or can't be parsed. This ensures graceful degradation.
+    pub fn load(path: &Path) -> Self {
+        if !path.exists() {
+            return Self::new();
+        }
+
+        match fs::read_to_string(path) {
+            Ok(json) => serde_json::from_str(&json).unwrap_or_else(|_| Self::new()),
+            Err(_) => Self::new(),
+        }
+    }
+
+    /// Load rate limiter state, or create new if not found.
+    /// This is a convenience method that uses the default path.
+    pub fn load_for_wallet(wallet_path: &Path) -> Self {
+        Self::load(&Self::default_path(wallet_path))
+    }
+
+    /// Save rate limiter state using the default path.
+    pub fn save_for_wallet(&self, wallet_path: &Path) -> Result<()> {
+        self.save(&Self::default_path(wallet_path))
     }
 }
 
@@ -835,5 +886,153 @@ mod tests {
         // 16 seconds with 5 failures (lockout threshold)
         limiter.record_failure();
         assert_eq!(limiter.calculate_delay(), 16000);
+    }
+
+    #[test]
+    fn test_rate_limiter_serialization() {
+        let mut limiter = DecryptionRateLimiter::new();
+        limiter.record_failure();
+        limiter.record_failure();
+
+        // Serialize to JSON
+        let json = serde_json::to_string(&limiter).unwrap();
+        assert!(json.contains("consecutive_failures"));
+        assert!(json.contains("2"));
+
+        // Deserialize back
+        let restored: DecryptionRateLimiter = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.failure_count(), 2);
+    }
+
+    #[test]
+    fn test_rate_limiter_save_and_load() {
+        let temp_dir = TempDir::new().unwrap();
+        let limiter_path = temp_dir.path().join("rate_limiter.json");
+
+        // Create limiter with some failures
+        let mut limiter = DecryptionRateLimiter::new();
+        limiter.record_failure();
+        limiter.record_failure();
+        limiter.record_failure();
+
+        // Save
+        limiter.save(&limiter_path).unwrap();
+        assert!(limiter_path.exists());
+
+        // Load
+        let loaded = DecryptionRateLimiter::load(&limiter_path);
+        assert_eq!(loaded.failure_count(), 3);
+        assert!(loaded.last_failure_time.is_some());
+    }
+
+    #[test]
+    fn test_rate_limiter_load_nonexistent() {
+        let temp_dir = TempDir::new().unwrap();
+        let limiter_path = temp_dir.path().join("nonexistent.json");
+
+        // Loading nonexistent file returns fresh limiter
+        let limiter = DecryptionRateLimiter::load(&limiter_path);
+        assert_eq!(limiter.failure_count(), 0);
+        assert!(!limiter.is_locked_out());
+    }
+
+    #[test]
+    fn test_rate_limiter_load_invalid_json() {
+        let temp_dir = TempDir::new().unwrap();
+        let limiter_path = temp_dir.path().join("invalid.json");
+
+        // Write invalid JSON
+        fs::write(&limiter_path, "not valid json").unwrap();
+
+        // Loading invalid JSON returns fresh limiter
+        let limiter = DecryptionRateLimiter::load(&limiter_path);
+        assert_eq!(limiter.failure_count(), 0);
+    }
+
+    #[test]
+    fn test_rate_limiter_default_path() {
+        let wallet_path = Path::new("/home/user/.botho-wallet/wallet.dat");
+        let limiter_path = DecryptionRateLimiter::default_path(wallet_path);
+        assert_eq!(
+            limiter_path,
+            Path::new("/home/user/.botho-wallet/rate_limiter.json")
+        );
+    }
+
+    #[test]
+    fn test_rate_limiter_for_wallet() {
+        let temp_dir = TempDir::new().unwrap();
+        let wallet_path = temp_dir.path().join("wallet.dat");
+
+        // Create limiter with failures
+        let mut limiter = DecryptionRateLimiter::new();
+        limiter.record_failure();
+        limiter.record_failure();
+
+        // Save using wallet path
+        limiter.save_for_wallet(&wallet_path).unwrap();
+
+        // Load using wallet path
+        let loaded = DecryptionRateLimiter::load_for_wallet(&wallet_path);
+        assert_eq!(loaded.failure_count(), 2);
+    }
+
+    #[test]
+    fn test_rate_limiter_persistence_across_sessions() {
+        let temp_dir = TempDir::new().unwrap();
+        let wallet_path = temp_dir.path().join("wallet.dat");
+
+        // Session 1: Two failures
+        {
+            let mut limiter = DecryptionRateLimiter::load_for_wallet(&wallet_path);
+            limiter.record_failure();
+            limiter.record_failure();
+            limiter.save_for_wallet(&wallet_path).unwrap();
+        }
+
+        // Session 2: One more failure (should have 3 total)
+        {
+            let mut limiter = DecryptionRateLimiter::load_for_wallet(&wallet_path);
+            assert_eq!(limiter.failure_count(), 2); // Persisted from session 1
+            limiter.record_failure();
+            assert_eq!(limiter.failure_count(), 3);
+            limiter.save_for_wallet(&wallet_path).unwrap();
+        }
+
+        // Session 3: Verify count
+        {
+            let limiter = DecryptionRateLimiter::load_for_wallet(&wallet_path);
+            assert_eq!(limiter.failure_count(), 3);
+        }
+    }
+
+    #[test]
+    fn test_rate_limiter_success_resets_persisted_state() {
+        let temp_dir = TempDir::new().unwrap();
+        let wallet_path = temp_dir.path().join("wallet.dat");
+
+        // Session 1: Add failures
+        {
+            let mut limiter = DecryptionRateLimiter::load_for_wallet(&wallet_path);
+            limiter.record_failure();
+            limiter.record_failure();
+            limiter.record_failure();
+            limiter.save_for_wallet(&wallet_path).unwrap();
+        }
+
+        // Session 2: Success resets
+        {
+            let mut limiter = DecryptionRateLimiter::load_for_wallet(&wallet_path);
+            assert_eq!(limiter.failure_count(), 3);
+            limiter.record_success();
+            limiter.save_for_wallet(&wallet_path).unwrap();
+        }
+
+        // Session 3: Verify reset
+        {
+            let limiter = DecryptionRateLimiter::load_for_wallet(&wallet_path);
+            assert_eq!(limiter.failure_count(), 0);
+            assert!(!limiter.is_locked_out());
+        }
     }
 }

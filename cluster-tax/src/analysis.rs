@@ -6,8 +6,10 @@
 //! - Fee curve sensitivity
 //! - Structuring attack economics
 
-use crate::fee_curve::{FeeCurve, FeeRateBps};
-use crate::tag::{TagWeight, TAG_WEIGHT_SCALE};
+use crate::{
+    fee_curve::{FeeCurve, FeeRateBps},
+    tag::{TagWeight, TAG_WEIGHT_SCALE},
+};
 
 /// Calculate tag weight remaining after N hops with given decay rate.
 ///
@@ -309,7 +311,10 @@ mod tests {
 
         // Should require many transactions to break even (if ever)
         assert!(
-            analysis.break_even_transactions.map(|n| n > 10).unwrap_or(true),
+            analysis
+                .break_even_transactions
+                .map(|n| n > 10)
+                .unwrap_or(true),
             "Wash trading should not be easily profitable"
         );
     }

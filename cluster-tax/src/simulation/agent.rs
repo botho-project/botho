@@ -22,30 +22,19 @@ impl From<u64> for AgentId {
 #[derive(Clone, Debug)]
 pub enum Action {
     /// Transfer coins to another agent.
-    Transfer {
-        to: AgentId,
-        amount: u64,
-    },
+    Transfer { to: AgentId, amount: u64 },
 
     /// Hold coins (do nothing this round).
     Hold,
 
     /// Use a mixer service to diffuse tags.
-    UseMixer {
-        mixer_id: AgentId,
-        amount: u64,
-    },
+    UseMixer { mixer_id: AgentId, amount: u64 },
 
     /// Perform a wash trade (circular transfer through Sybils).
-    WashTrade {
-        amount: u64,
-        hops: u32,
-    },
+    WashTrade { amount: u64, hops: u32 },
 
     /// Perform multiple transfers (e.g., batch payments).
-    BatchTransfer {
-        transfers: Vec<(AgentId, u64)>,
-    },
+    BatchTransfer { transfers: Vec<(AgentId, u64)> },
 }
 
 /// Result of an agent's action execution.

@@ -1,13 +1,14 @@
 //! Transaction history command
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use std::path::Path;
 
+use crate::discovery::NodeDiscovery;
 use crate::rpc_pool::RpcPool;
 use crate::storage::EncryptedWallet;
 use crate::transaction::{format_amount, OwnedUtxo};
 
-use super::{print_error, print_success, print_warning, prompt_password};
+use super::{decrypt_wallet_with_rate_limiting, print_error, print_success, print_warning};
 
 /// Transaction type from RPC
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,13 +80,8 @@ pub async fn run(wallet_path: &Path, limit: usize) -> Result<()> {
         return Ok(());
     }
 
-    // Load wallet
-    let wallet = EncryptedWallet::load(wallet_path)?;
-    let password = prompt_password("Enter wallet password: ")?;
-
-    let _mnemonic = wallet
-        .decrypt(&password)
-        .map_err(|_| anyhow!("Failed to decrypt wallet - wrong password?"))?;
+    // Load and decrypt wallet with rate limiting protection (verify password)
+    let (wallet, _mnemonic, password) = decrypt_wallet_with_rate_limiting(wallet_path)?;
 
     // Get wallet's data directory for UTXO cache
     let data_dir = wallet_path.parent().unwrap_or(Path::new("."));
@@ -108,18 +104,20 @@ pub async fn run(wallet_path: &Path, limit: usize) -> Result<()> {
     }
 
     // Connect to RPC to get transaction details
-    let mut rpc = match RpcPool::new() {
-        Ok(rpc) => rpc,
-        Err(e) => {
-            print_warning(&format!(
-                "Could not connect to RPC: {}. Showing cached data only.",
-                e
-            ));
-            // Show basic history without crypto type
-            print_basic_history(&utxos, limit);
-            return Ok(());
-        }
-    };
+    let discovery = wallet
+        .get_discovery_state(&password)?
+        .unwrap_or_else(NodeDiscovery::new);
+
+    let mut rpc = RpcPool::new(discovery);
+    if let Err(e) = rpc.connect().await {
+        print_warning(&format!(
+            "Could not connect to RPC: {}. Showing cached data only.",
+            e
+        ));
+        // Show basic history without crypto type
+        print_basic_history(&utxos, limit);
+        return Ok(());
+    }
 
     // Fetch transaction details from RPC
     let mut history: Vec<HistoryEntry> = Vec::new();

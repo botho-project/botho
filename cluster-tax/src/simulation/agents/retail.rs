@@ -1,9 +1,13 @@
 //! Retail user agent: Small holder with occasional transactions.
 
-use crate::simulation::agent::{Action, Agent, AgentId};
-use crate::simulation::state::SimulationState;
-use crate::tag::TagVector;
-use crate::Account;
+use crate::{
+    simulation::{
+        agent::{Action, Agent, AgentId},
+        state::SimulationState,
+    },
+    tag::TagVector,
+    Account,
+};
 
 /// Retail user with small balance and occasional spending.
 #[derive(Debug)]

@@ -7,7 +7,7 @@
 #![allow(dead_code)]
 
 use bth_common::{
-    logger::{log, Logger},
+    logger::{log, Logger, LoggerExt},
     NodeID,
 };
 use bth_consensus_scp::{

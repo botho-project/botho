@@ -1,27 +1,56 @@
 // Copyright (c) 2024 Botho Foundation
 
 //! Peer discovery and gossip networking using libp2p.
+//!
+//! ## Protocol Versioning
+//!
+//! This module implements version negotiation for protocol upgrades:
+//!
+//! - **Protocol Version**: Embedded in the libp2p identify protocol's agent_version
+//!   field as `botho/<version>/<block_version>`. This allows peers to discover
+//!   compatibility during connection establishment.
+//!
+//! - **Minimum Supported Version**: Defines the oldest protocol version this node
+//!   will connect to. Peers below this threshold receive a warning but are not
+//!   disconnected (graceful degradation).
+//!
+//! - **Upgrade Announcements**: A dedicated gossipsub topic allows validators
+//!   and seed nodes to broadcast upcoming network upgrades.
 
-use futures::StreamExt;
 use libp2p::{
     gossipsub::{self, IdentTopic, MessageAuthenticity},
+    identify,
     identity, noise,
     request_response::{self, InboundRequestId, OutboundRequestId, ResponseChannel},
     swarm::{NetworkBehaviour, SwarmEvent},
     tcp, yamux, Multiaddr, PeerId, Swarm,
 };
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
-use bth_transaction_types::{MAX_BLOCK_SIZE, MAX_SCP_MESSAGE_SIZE, MAX_TRANSACTION_SIZE};
+use bth_transaction_types::{BlockVersion, MAX_BLOCK_SIZE, MAX_SCP_MESSAGE_SIZE, MAX_TRANSACTION_SIZE};
 
 use crate::block::Block;
 use crate::consensus::ScpMessage;
 use crate::network::compact_block::{BlockTxn, CompactBlock, GetBlockTxn};
+use crate::network::pex::{PeerSource, PexManager, PexMessage, MAX_PEX_MESSAGE_SIZE};
 use crate::network::sync::{create_sync_behaviour, SyncCodec, SyncRequest, SyncResponse};
 use crate::transaction::Transaction;
+
+/// Current protocol version string.
+/// Format: major.minor.patch
+/// - Major: Breaking changes requiring hard fork
+/// - Minor: Soft fork compatible changes
+/// - Patch: Bug fixes, no consensus impact
+pub const PROTOCOL_VERSION: &str = "1.0.0";
+
+/// Minimum supported protocol version.
+/// Peers below this version receive a warning but are not disconnected
+/// to allow graceful network upgrades.
+pub const MIN_SUPPORTED_PROTOCOL_VERSION: &str = "1.0.0";
 
 /// Topic for block announcements
 const BLOCKS_TOPIC: &str = "botho/blocks/1.0.0";
@@ -35,12 +64,136 @@ const SCP_TOPIC: &str = "botho/scp/1.0.0";
 /// Topic for compact block announcements
 const COMPACT_BLOCKS_TOPIC: &str = "botho/compact-blocks/1.0.0";
 
+/// Topic for upgrade announcements.
+/// Validators and seed nodes publish upcoming network upgrades here.
+const UPGRADE_ANNOUNCEMENTS_TOPIC: &str = "botho/upgrades/1.0.0";
+
+/// Topic for peer exchange (PEX) messages
+const PEX_TOPIC: &str = "botho/pex/1.0.0";
+
+/// Parsed protocol version from peer agent string.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProtocolVersion {
+    /// Major version (breaking changes)
+    pub major: u32,
+    /// Minor version (soft fork compatible)
+    pub minor: u32,
+    /// Patch version (bug fixes)
+    pub patch: u32,
+    /// Maximum block version supported by peer
+    pub block_version: Option<u32>,
+}
+
+impl ProtocolVersion {
+    /// Parse a version string like "1.0.0" or agent string like "botho/1.0.0/5"
+    pub fn parse(s: &str) -> Option<Self> {
+        // Handle full agent string format: "botho/1.0.0/5"
+        let version_str = if s.starts_with("botho/") {
+            let parts: Vec<&str> = s.split('/').collect();
+            if parts.len() >= 2 {
+                parts[1]
+            } else {
+                return None;
+            }
+        } else {
+            s
+        };
+
+        let parts: Vec<&str> = version_str.split('.').collect();
+        if parts.len() != 3 {
+            return None;
+        }
+
+        let major = parts[0].parse().ok()?;
+        let minor = parts[1].parse().ok()?;
+        let patch = parts[2].parse().ok()?;
+
+        // Try to parse block version from agent string
+        let block_version = if s.starts_with("botho/") {
+            let agent_parts: Vec<&str> = s.split('/').collect();
+            if agent_parts.len() >= 3 {
+                agent_parts[2].parse().ok()
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        Some(Self {
+            major,
+            minor,
+            patch,
+            block_version,
+        })
+    }
+
+    /// Check if this version is compatible with another version.
+    /// Returns true if major versions match and this version >= other.
+    pub fn is_compatible_with(&self, other: &Self) -> bool {
+        if self.major != other.major {
+            return false;
+        }
+        if self.minor > other.minor {
+            return true;
+        }
+        if self.minor == other.minor && self.patch >= other.patch {
+            return true;
+        }
+        false
+    }
+
+    /// Create agent version string for libp2p identify protocol.
+    pub fn to_agent_string(&self, block_version: u32) -> String {
+        format!(
+            "botho/{}.{}.{}/{}",
+            self.major, self.minor, self.patch, block_version
+        )
+    }
+}
+
+impl std::fmt::Display for ProtocolVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}.{}", self.major, self.minor, self.patch)?;
+        if let Some(bv) = self.block_version {
+            write!(f, " (block v{})", bv)?;
+        }
+        Ok(())
+    }
+}
+
 /// Entry in the peer table
 #[derive(Debug, Clone)]
 pub struct PeerTableEntry {
     pub peer_id: PeerId,
     pub address: Option<Multiaddr>,
     pub last_seen: std::time::Instant,
+    /// Peer's protocol version (parsed from identify agent_version)
+    pub protocol_version: Option<ProtocolVersion>,
+    /// Whether this peer's version is below minimum supported
+    pub version_warning: bool,
+}
+
+/// Upgrade announcement broadcast via gossipsub.
+///
+/// Validators and seed nodes publish these to notify the network
+/// of upcoming protocol upgrades.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpgradeAnnouncement {
+    /// New protocol version after upgrade
+    pub target_version: String,
+    /// Target block version after upgrade
+    pub target_block_version: u32,
+    /// Block height at which upgrade activates (0 = time-based)
+    pub activation_height: Option<u64>,
+    /// Unix timestamp at which upgrade activates (0 = height-based)
+    pub activation_timestamp: Option<u64>,
+    /// Human-readable description of the upgrade
+    pub description: String,
+    /// Whether this is a hard fork (breaking) or soft fork
+    pub is_hard_fork: bool,
+    /// Minimum version required after upgrade
+    pub min_version_after: String,
 }
 
 /// Events from the network layer
@@ -78,15 +231,29 @@ pub enum NetworkEvent {
         request_id: OutboundRequestId,
         response: SyncResponse,
     },
+    /// An upgrade announcement was received from the network.
+    /// Node operators should take action based on the announcement.
+    UpgradeAnnouncement(UpgradeAnnouncement),
+    /// A peer with an outdated protocol version was detected.
+    /// This is informational; the peer is not disconnected.
+    PeerVersionWarning {
+        peer: PeerId,
+        peer_version: ProtocolVersion,
+        min_version: ProtocolVersion,
+    },
+    /// New peer addresses received via PEX (connect to these)
+    PexAddresses(Vec<Multiaddr>),
 }
 
-/// Network behaviour combining gossipsub and sync request-response
+/// Network behaviour combining gossipsub, identify, and sync request-response
 #[derive(NetworkBehaviour)]
 pub struct BothoBehaviour {
     /// Gossipsub for block propagation
     pub gossipsub: gossipsub::Behaviour,
     /// Request-response for chain sync
     pub sync: request_response::Behaviour<SyncCodec>,
+    /// Identify protocol for version negotiation
+    pub identify: identify::Behaviour,
 }
 
 /// Network discovery and gossip service
@@ -105,6 +272,8 @@ pub struct NetworkDiscovery {
     peers: HashMap<PeerId, PeerTableEntry>,
     /// Peers subscribed to compact blocks topic (support bandwidth optimization)
     compact_block_peers: HashSet<PeerId>,
+    /// PEX manager for decentralized peer discovery
+    pex_manager: PexManager,
 }
 
 impl NetworkDiscovery {
@@ -126,6 +295,7 @@ impl NetworkDiscovery {
             event_rx: Some(event_rx),
             peers: HashMap::new(),
             compact_block_peers: HashSet::new(),
+            pex_manager: PexManager::new(),
         }
     }
 
@@ -171,6 +341,21 @@ impl NetworkDiscovery {
             .all(|p| self.compact_block_peers.contains(p))
     }
 
+    /// Get the current protocol version
+    pub fn protocol_version() -> &'static str {
+        PROTOCOL_VERSION
+    }
+
+    /// Get peers with version warnings (below minimum supported)
+    pub fn peers_with_version_warnings(&self) -> Vec<&PeerTableEntry> {
+        self.peers.values().filter(|p| p.version_warning).collect()
+    }
+
+    /// Get count of peers with outdated versions
+    pub fn outdated_peer_count(&self) -> usize {
+        self.peers.values().filter(|p| p.version_warning).count()
+    }
+
     /// Start the network service (runs in background)
     pub async fn start(&mut self) -> anyhow::Result<Swarm<BothoBehaviour>> {
         // Create swarm
@@ -200,7 +385,21 @@ impl NetworkDiscovery {
                 // Create sync request-response behaviour
                 let sync = create_sync_behaviour();
 
-                Ok(BothoBehaviour { gossipsub, sync })
+                // Configure identify protocol with version information
+                // Agent version format: "botho/<protocol_version>/<block_version>"
+                let agent_version = format!(
+                    "botho/{}/{}",
+                    PROTOCOL_VERSION,
+                    *BlockVersion::MAX
+                );
+                let identify_config = identify::Config::new(
+                    "/botho/id/1.0.0".to_string(),
+                    key.public(),
+                )
+                .with_agent_version(agent_version);
+                let identify = identify::Behaviour::new(identify_config);
+
+                Ok(BothoBehaviour { gossipsub, sync, identify })
             })?
             .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(60)))
             .build();
@@ -220,6 +419,14 @@ impl NetworkDiscovery {
         // Subscribe to compact blocks topic
         let compact_blocks_topic = IdentTopic::new(COMPACT_BLOCKS_TOPIC);
         swarm.behaviour_mut().gossipsub.subscribe(&compact_blocks_topic)?;
+
+        // Subscribe to upgrade announcements topic
+        let upgrade_topic = IdentTopic::new(UPGRADE_ANNOUNCEMENTS_TOPIC);
+        swarm.behaviour_mut().gossipsub.subscribe(&upgrade_topic)?;
+
+        // Subscribe to PEX topic
+        let pex_topic = IdentTopic::new(PEX_TOPIC);
+        swarm.behaviour_mut().gossipsub.subscribe(&pex_topic)?;
 
         // Listen on the configured port
         let listen_addr: Multiaddr = format!("/ip4/0.0.0.0/tcp/{}", self.port).parse()?;
@@ -357,6 +564,89 @@ impl NetworkDiscovery {
         Ok(())
     }
 
+    /// Broadcast a PEX message with known peers
+    pub fn broadcast_pex(
+        swarm: &mut Swarm<BothoBehaviour>,
+        message: &PexMessage,
+    ) -> anyhow::Result<()> {
+        let topic = IdentTopic::new(PEX_TOPIC);
+        let bytes = bincode::serialize(message)?;
+
+        // Size check
+        if bytes.len() > MAX_PEX_MESSAGE_SIZE {
+            return Err(anyhow::anyhow!(
+                "PEX message too large: {} bytes (max: {})",
+                bytes.len(),
+                MAX_PEX_MESSAGE_SIZE
+            ));
+        }
+
+        swarm
+            .behaviour_mut()
+            .gossipsub
+            .publish(topic, bytes)
+            .map_err(|e| anyhow::anyhow!("Failed to publish PEX message: {:?}", e))?;
+
+        debug!(peers = message.entries.len(), "Broadcast PEX message");
+        Ok(())
+    }
+
+    /// Get the PEX manager for external use
+    pub fn pex_manager(&self) -> &PexManager {
+        &self.pex_manager
+    }
+
+    /// Get mutable PEX manager
+    pub fn pex_manager_mut(&mut self) -> &mut PexManager {
+        &mut self.pex_manager
+    }
+
+    /// Check if we should broadcast PEX and do it if ready
+    ///
+    /// Call this periodically (e.g., every minute) to share known peers.
+    pub fn maybe_broadcast_pex(&mut self, swarm: &mut Swarm<BothoBehaviour>) {
+        if !self.pex_manager.should_broadcast() {
+            return;
+        }
+
+        // Collect shareable peers
+        let current_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
+        let peers: Vec<_> = self
+            .peers
+            .values()
+            .filter_map(|entry| {
+                entry.address.as_ref().map(|addr| {
+                    let last_seen = current_time
+                        - entry
+                            .last_seen
+                            .elapsed()
+                            .as_secs()
+                            .min(current_time);
+                    (entry.peer_id, addr.clone(), last_seen)
+                })
+            })
+            .collect();
+
+        if let Some(message) = self.pex_manager.prepare_broadcast(peers) {
+            if let Err(e) = Self::broadcast_pex(swarm, &message) {
+                warn!("Failed to broadcast PEX: {}", e);
+            } else {
+                self.pex_manager.record_broadcast();
+            }
+        }
+    }
+
+    /// Record a peer with its discovery source for eclipse attack prevention
+    pub fn record_peer_source(&mut self, peer_id: PeerId, addr: &Multiaddr, source: PeerSource) {
+        self.pex_manager
+            .source_tracker
+            .record_peer(peer_id, addr, source);
+    }
+
     /// Broadcast a block with bandwidth optimization.
     ///
     /// Always sends a compact block. Only sends the full block if there are
@@ -384,6 +674,32 @@ impl NetworkDiscovery {
             );
         }
 
+        Ok(())
+    }
+
+    /// Broadcast an upgrade announcement to the network.
+    ///
+    /// This should only be called by validators or seed nodes to notify
+    /// the network of upcoming protocol upgrades.
+    pub fn broadcast_upgrade_announcement(
+        swarm: &mut Swarm<BothoBehaviour>,
+        announcement: &UpgradeAnnouncement,
+    ) -> anyhow::Result<()> {
+        let topic = IdentTopic::new(UPGRADE_ANNOUNCEMENTS_TOPIC);
+        let bytes = bincode::serialize(announcement)?;
+
+        swarm
+            .behaviour_mut()
+            .gossipsub
+            .publish(topic, bytes)
+            .map_err(|e| anyhow::anyhow!("Failed to publish upgrade announcement: {:?}", e))?;
+
+        info!(
+            target_version = %announcement.target_version,
+            target_block_version = announcement.target_block_version,
+            is_hard_fork = announcement.is_hard_fork,
+            "Broadcast upgrade announcement"
+        );
         Ok(())
     }
 
@@ -514,6 +830,65 @@ impl NetworkDiscovery {
                     }
 
                     warn!("Failed to deserialize compact block message");
+                } else if topic == UPGRADE_ANNOUNCEMENTS_TOPIC {
+                    // Upgrade announcement messages are relatively small
+                    const MAX_UPGRADE_MESSAGE_SIZE: usize = 4096;
+                    if message.data.len() > MAX_UPGRADE_MESSAGE_SIZE {
+                        warn!(
+                            "Rejected oversized upgrade announcement: {} bytes (max: {})",
+                            message.data.len(),
+                            MAX_UPGRADE_MESSAGE_SIZE
+                        );
+                        return None;
+                    }
+
+                    match bincode::deserialize::<UpgradeAnnouncement>(&message.data) {
+                        Ok(announcement) => {
+                            info!(
+                                target_version = %announcement.target_version,
+                                target_block_version = announcement.target_block_version,
+                                is_hard_fork = announcement.is_hard_fork,
+                                description = %announcement.description,
+                                "Received upgrade announcement from network"
+                            );
+                            return Some(NetworkEvent::UpgradeAnnouncement(announcement));
+                        }
+                        Err(e) => {
+                            warn!("Failed to deserialize upgrade announcement: {}", e);
+                        }
+                    }
+                } else if topic == PEX_TOPIC {
+                    // Check size before deserialization (DoS protection)
+                    if message.data.len() > MAX_PEX_MESSAGE_SIZE {
+                        warn!(
+                            "Rejected oversized PEX message: {} bytes (max: {})",
+                            message.data.len(),
+                            MAX_PEX_MESSAGE_SIZE
+                        );
+                        return None;
+                    }
+
+                    // Try to deserialize as PEX message
+                    match bincode::deserialize::<PexMessage>(&message.data) {
+                        Ok(pex_msg) => {
+                            let peer = message.source.unwrap_or(PeerId::random());
+                            debug!(
+                                %peer,
+                                entries = pex_msg.entries.len(),
+                                "Received PEX message"
+                            );
+
+                            // Process through PEX manager
+                            let valid_addrs = self.pex_manager.process_incoming(&peer, &pex_msg);
+
+                            if !valid_addrs.is_empty() {
+                                return Some(NetworkEvent::PexAddresses(valid_addrs));
+                            }
+                        }
+                        Err(e) => {
+                            warn!("Failed to deserialize PEX message from gossip: {}", e);
+                        }
+                    }
                 }
 
                 None
@@ -603,6 +978,58 @@ impl NetworkDiscovery {
                 request_response::Event::ResponseSent { .. },
             )) => None,
 
+            // Handle identify protocol events for version tracking
+            SwarmEvent::Behaviour(BothoBehaviourEvent::Identify(
+                identify::Event::Received { peer_id, info, .. },
+            )) => {
+                // Parse the agent_version to extract protocol version
+                let peer_version = ProtocolVersion::parse(&info.agent_version);
+                let min_version = ProtocolVersion::parse(MIN_SUPPORTED_PROTOCOL_VERSION);
+
+                let version_warning = match (&peer_version, &min_version) {
+                    (Some(pv), Some(mv)) => !pv.is_compatible_with(mv),
+                    _ => false,
+                };
+
+                // Update peer entry with version information
+                if let Some(entry) = self.peers.get_mut(&peer_id) {
+                    entry.protocol_version = peer_version.clone();
+                    entry.version_warning = version_warning;
+                    entry.last_seen = std::time::Instant::now();
+                }
+
+                if version_warning {
+                    if let (Some(pv), Some(mv)) = (peer_version.clone(), min_version) {
+                        warn!(
+                            %peer_id,
+                            peer_version = %pv,
+                            min_version = %mv,
+                            "Peer has outdated protocol version"
+                        );
+                        return Some(NetworkEvent::PeerVersionWarning {
+                            peer: peer_id,
+                            peer_version: pv,
+                            min_version: mv,
+                        });
+                    }
+                }
+
+                if let Some(pv) = peer_version {
+                    debug!(
+                        %peer_id,
+                        protocol_version = %pv,
+                        agent_version = %info.agent_version,
+                        "Identified peer version"
+                    );
+                }
+
+                None
+            }
+
+            SwarmEvent::Behaviour(BothoBehaviourEvent::Identify(
+                identify::Event::Sent { .. } | identify::Event::Pushed { .. } | identify::Event::Error { .. },
+            )) => None,
+
             SwarmEvent::NewListenAddr { address, .. } => {
                 info!("Listening on {}", address);
                 None
@@ -615,6 +1042,8 @@ impl NetworkDiscovery {
                         peer_id,
                         address: None,
                         last_seen: std::time::Instant::now(),
+                        protocol_version: None, // Will be set when identify completes
+                        version_warning: false,
                     },
                 );
                 Some(NetworkEvent::PeerDiscovered(peer_id))
@@ -663,10 +1092,14 @@ mod tests {
             peer_id,
             address: None,
             last_seen: std::time::Instant::now(),
+            protocol_version: None,
+            version_warning: false,
         };
 
         assert_eq!(entry.peer_id, peer_id);
         assert!(entry.address.is_none());
+        assert!(entry.protocol_version.is_none());
+        assert!(!entry.version_warning);
     }
 
     #[test]
@@ -677,9 +1110,26 @@ mod tests {
             peer_id,
             address: Some(addr.clone()),
             last_seen: std::time::Instant::now(),
+            protocol_version: None,
+            version_warning: false,
         };
 
         assert_eq!(entry.address, Some(addr));
+    }
+
+    #[test]
+    fn test_peer_table_entry_with_version() {
+        let peer_id = PeerId::random();
+        let version = ProtocolVersion::parse("botho/1.0.0/5").unwrap();
+        let entry = PeerTableEntry {
+            peer_id,
+            address: None,
+            last_seen: std::time::Instant::now(),
+            protocol_version: Some(version.clone()),
+            version_warning: false,
+        };
+
+        assert_eq!(entry.protocol_version, Some(version));
     }
 
     #[test]
@@ -689,10 +1139,133 @@ mod tests {
             peer_id,
             address: None,
             last_seen: std::time::Instant::now(),
+            protocol_version: None,
+            version_warning: false,
         };
 
         let cloned = entry.clone();
         assert_eq!(cloned.peer_id, entry.peer_id);
+    }
+
+    // ========================================================================
+    // ProtocolVersion tests
+    // ========================================================================
+
+    #[test]
+    fn test_protocol_version_parse_simple() {
+        let version = ProtocolVersion::parse("1.0.0").unwrap();
+        assert_eq!(version.major, 1);
+        assert_eq!(version.minor, 0);
+        assert_eq!(version.patch, 0);
+        assert!(version.block_version.is_none());
+    }
+
+    #[test]
+    fn test_protocol_version_parse_agent_string() {
+        let version = ProtocolVersion::parse("botho/1.2.3/5").unwrap();
+        assert_eq!(version.major, 1);
+        assert_eq!(version.minor, 2);
+        assert_eq!(version.patch, 3);
+        assert_eq!(version.block_version, Some(5));
+    }
+
+    #[test]
+    fn test_protocol_version_parse_agent_without_block_version() {
+        let version = ProtocolVersion::parse("botho/1.0.0").unwrap();
+        assert_eq!(version.major, 1);
+        assert_eq!(version.minor, 0);
+        assert_eq!(version.patch, 0);
+        assert!(version.block_version.is_none());
+    }
+
+    #[test]
+    fn test_protocol_version_parse_invalid() {
+        assert!(ProtocolVersion::parse("invalid").is_none());
+        assert!(ProtocolVersion::parse("1.0").is_none());
+        assert!(ProtocolVersion::parse("").is_none());
+    }
+
+    #[test]
+    fn test_protocol_version_is_compatible() {
+        let v1_0_0 = ProtocolVersion::parse("1.0.0").unwrap();
+        let v1_0_1 = ProtocolVersion::parse("1.0.1").unwrap();
+        let v1_1_0 = ProtocolVersion::parse("1.1.0").unwrap();
+        let v2_0_0 = ProtocolVersion::parse("2.0.0").unwrap();
+
+        // Same version is compatible
+        assert!(v1_0_0.is_compatible_with(&v1_0_0));
+
+        // Higher patch is compatible with lower
+        assert!(v1_0_1.is_compatible_with(&v1_0_0));
+        assert!(!v1_0_0.is_compatible_with(&v1_0_1));
+
+        // Higher minor is compatible with lower
+        assert!(v1_1_0.is_compatible_with(&v1_0_0));
+        assert!(!v1_0_0.is_compatible_with(&v1_1_0));
+
+        // Different major is not compatible
+        assert!(!v2_0_0.is_compatible_with(&v1_0_0));
+        assert!(!v1_0_0.is_compatible_with(&v2_0_0));
+    }
+
+    #[test]
+    fn test_protocol_version_to_agent_string() {
+        let version = ProtocolVersion::parse("1.0.0").unwrap();
+        let agent = version.to_agent_string(5);
+        assert_eq!(agent, "botho/1.0.0/5");
+    }
+
+    #[test]
+    fn test_protocol_version_display() {
+        let version = ProtocolVersion::parse("botho/1.2.3/5").unwrap();
+        let display = format!("{}", version);
+        assert_eq!(display, "1.2.3 (block v5)");
+
+        let version_no_block = ProtocolVersion::parse("1.2.3").unwrap();
+        let display_no_block = format!("{}", version_no_block);
+        assert_eq!(display_no_block, "1.2.3");
+    }
+
+    // ========================================================================
+    // UpgradeAnnouncement tests
+    // ========================================================================
+
+    #[test]
+    fn test_upgrade_announcement_serialization() {
+        let announcement = UpgradeAnnouncement {
+            target_version: "1.1.0".to_string(),
+            target_block_version: 6,
+            activation_height: Some(100000),
+            activation_timestamp: None,
+            description: "Test upgrade".to_string(),
+            is_hard_fork: false,
+            min_version_after: "1.1.0".to_string(),
+        };
+
+        let serialized = bincode::serialize(&announcement).unwrap();
+        let deserialized: UpgradeAnnouncement = bincode::deserialize(&serialized).unwrap();
+
+        assert_eq!(deserialized.target_version, "1.1.0");
+        assert_eq!(deserialized.target_block_version, 6);
+        assert_eq!(deserialized.activation_height, Some(100000));
+        assert!(deserialized.activation_timestamp.is_none());
+        assert!(!deserialized.is_hard_fork);
+    }
+
+    #[test]
+    fn test_upgrade_announcement_hard_fork() {
+        let announcement = UpgradeAnnouncement {
+            target_version: "2.0.0".to_string(),
+            target_block_version: 7,
+            activation_height: None,
+            activation_timestamp: Some(1700000000),
+            description: "Major protocol upgrade".to_string(),
+            is_hard_fork: true,
+            min_version_after: "2.0.0".to_string(),
+        };
+
+        assert!(announcement.is_hard_fork);
+        assert_eq!(announcement.activation_timestamp, Some(1700000000));
     }
 
     // ========================================================================
@@ -782,11 +1355,13 @@ mod tests {
         assert!(!BLOCKS_TOPIC.is_empty());
         assert!(!TRANSACTIONS_TOPIC.is_empty());
         assert!(!SCP_TOPIC.is_empty());
+        assert!(!UPGRADE_ANNOUNCEMENTS_TOPIC.is_empty());
 
         // Topics should follow naming convention
         assert!(BLOCKS_TOPIC.starts_with("botho/"));
         assert!(TRANSACTIONS_TOPIC.starts_with("botho/"));
         assert!(SCP_TOPIC.starts_with("botho/"));
+        assert!(UPGRADE_ANNOUNCEMENTS_TOPIC.starts_with("botho/"));
     }
 
     #[test]
@@ -794,6 +1369,7 @@ mod tests {
         assert!(BLOCKS_TOPIC.contains("/1.0.0"));
         assert!(TRANSACTIONS_TOPIC.contains("/1.0.0"));
         assert!(SCP_TOPIC.contains("/1.0.0"));
+        assert!(UPGRADE_ANNOUNCEMENTS_TOPIC.contains("/1.0.0"));
     }
 
     #[test]
@@ -801,6 +1377,41 @@ mod tests {
         assert_ne!(BLOCKS_TOPIC, TRANSACTIONS_TOPIC);
         assert_ne!(BLOCKS_TOPIC, SCP_TOPIC);
         assert_ne!(TRANSACTIONS_TOPIC, SCP_TOPIC);
+        assert_ne!(UPGRADE_ANNOUNCEMENTS_TOPIC, BLOCKS_TOPIC);
+        assert_ne!(UPGRADE_ANNOUNCEMENTS_TOPIC, TRANSACTIONS_TOPIC);
+        assert_ne!(UPGRADE_ANNOUNCEMENTS_TOPIC, SCP_TOPIC);
+    }
+
+    #[test]
+    fn test_upgrade_announcements_topic() {
+        assert_eq!(UPGRADE_ANNOUNCEMENTS_TOPIC, "botho/upgrades/1.0.0");
+    }
+
+    // ========================================================================
+    // Protocol version constant tests
+    // ========================================================================
+
+    #[test]
+    fn test_protocol_version_constant() {
+        assert_eq!(PROTOCOL_VERSION, "1.0.0");
+        let parsed = ProtocolVersion::parse(PROTOCOL_VERSION).unwrap();
+        assert_eq!(parsed.major, 1);
+        assert_eq!(parsed.minor, 0);
+        assert_eq!(parsed.patch, 0);
+    }
+
+    #[test]
+    fn test_min_supported_protocol_version_constant() {
+        assert_eq!(MIN_SUPPORTED_PROTOCOL_VERSION, "1.0.0");
+        let parsed = ProtocolVersion::parse(MIN_SUPPORTED_PROTOCOL_VERSION).unwrap();
+        assert_eq!(parsed.major, 1);
+    }
+
+    #[test]
+    fn test_current_version_compatible_with_min() {
+        let current = ProtocolVersion::parse(PROTOCOL_VERSION).unwrap();
+        let min = ProtocolVersion::parse(MIN_SUPPORTED_PROTOCOL_VERSION).unwrap();
+        assert!(current.is_compatible_with(&min));
     }
 
     // ========================================================================
@@ -836,5 +1447,56 @@ mod tests {
         // No peers = no legacy peers
         assert_eq!(discovery.legacy_peer_count(), 0);
         assert!(discovery.all_peers_support_compact_blocks());
+    }
+
+    // ========================================================================
+    // PEX integration tests
+    // ========================================================================
+
+    #[test]
+    fn test_pex_topic_constant() {
+        assert_eq!(PEX_TOPIC, "botho/pex/1.0.0");
+        assert!(PEX_TOPIC.starts_with("botho/"));
+        assert!(PEX_TOPIC.contains("/1.0.0"));
+    }
+
+    #[test]
+    fn test_network_discovery_has_pex_manager() {
+        let discovery = NetworkDiscovery::new(9000, vec![]);
+
+        // PEX manager should be initialized
+        assert!(discovery.pex_manager().should_broadcast());
+    }
+
+    #[test]
+    fn test_pex_manager_access() {
+        let mut discovery = NetworkDiscovery::new(9000, vec![]);
+
+        // Should be able to access PEX manager mutably
+        discovery.pex_manager_mut().record_broadcast();
+        assert!(!discovery.pex_manager().should_broadcast());
+    }
+
+    #[test]
+    fn test_record_peer_source() {
+        let mut discovery = NetworkDiscovery::new(9000, vec![]);
+        let peer = PeerId::random();
+        let addr: Multiaddr = "/ip4/8.8.8.8/tcp/9000".parse().unwrap();
+
+        discovery.record_peer_source(peer, &addr, PeerSource::Bootstrap);
+
+        assert_eq!(
+            discovery.pex_manager().source_tracker.get_source(&peer),
+            Some(PeerSource::Bootstrap)
+        );
+    }
+
+    #[test]
+    fn test_network_event_pex_addresses() {
+        let addr: Multiaddr = "/ip4/8.8.8.8/tcp/9000".parse().unwrap();
+        let event = NetworkEvent::PexAddresses(vec![addr.clone()]);
+
+        let debug_str = format!("{:?}", event);
+        assert!(debug_str.contains("PexAddresses"));
     }
 }

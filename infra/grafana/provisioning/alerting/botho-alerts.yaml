@@ -1,0 +1,415 @@
+# Grafana Alerting Rules for Botho Node
+# Place this file in Grafana's provisioning/alerting directory
+#
+# These rules require Grafana 8.0+ with unified alerting enabled
+# Prometheus data source must be configured
+
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: Botho Node Alerts
+    folder: Botho
+    interval: 1m
+    rules:
+      # CRITICAL: Node has too few peers
+      - uid: botho-peers-critical
+        title: Botho Node - Low Peer Count (Critical)
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: botho_peers_connected
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: B
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params: []
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - B
+                  reducer:
+                    type: last
+              refId: B
+              type: reduce
+              reducer: last
+              expression: A
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 3
+                    type: lt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - C
+                  reducer:
+                    type: last
+              refId: C
+              type: threshold
+              expression: B
+        noDataState: Alerting
+        execErrState: Alerting
+        for: 5m
+        annotations:
+          summary: "Botho node has critically low peer count (< 3)"
+          description: "Instance {{ $labels.instance }} has only {{ $values.B }} connected peers. This may indicate network isolation."
+        labels:
+          severity: critical
+          team: infrastructure
+
+      # CRITICAL: Block height stale (no new blocks in 10 minutes)
+      - uid: botho-block-stale-critical
+        title: Botho Node - Block Height Stale (Critical)
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: increase(botho_block_height[10m])
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: B
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params: []
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - B
+                  reducer:
+                    type: last
+              refId: B
+              type: reduce
+              reducer: last
+              expression: A
+          - refId: C
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 1
+                    type: lt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - C
+                  reducer:
+                    type: last
+              refId: C
+              type: threshold
+              expression: B
+        noDataState: Alerting
+        execErrState: Alerting
+        for: 10m
+        annotations:
+          summary: "Botho node block height is stale (no new blocks in 10m)"
+          description: "Instance {{ $labels.instance }} has not received new blocks in 10 minutes. The node may be stuck or disconnected from consensus."
+        labels:
+          severity: critical
+          team: infrastructure
+
+      # WARNING: High mempool size
+      - uid: botho-mempool-warning
+        title: Botho Node - High Mempool Size (Warning)
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: botho_mempool_size
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: B
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params: []
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - B
+                  reducer:
+                    type: last
+              refId: B
+              type: reduce
+              reducer: last
+              expression: A
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 900
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - C
+                  reducer:
+                    type: last
+              refId: C
+              type: threshold
+              expression: B
+        noDataState: OK
+        execErrState: Alerting
+        for: 5m
+        annotations:
+          summary: "Botho node mempool is nearly full (> 900 transactions)"
+          description: "Instance {{ $labels.instance }} has {{ $values.B }} transactions in mempool. This indicates high transaction load or slow block production."
+        labels:
+          severity: warning
+          team: infrastructure
+
+      # WARNING: High validation latency
+      - uid: botho-validation-latency-warning
+        title: Botho Node - High Validation Latency (Warning)
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: histogram_quantile(0.95, sum(rate(botho_validation_latency_seconds_bucket[5m])) by (le, instance))
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: B
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params: []
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - B
+                  reducer:
+                    type: last
+              refId: B
+              type: reduce
+              reducer: last
+              expression: A
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 0.5
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - C
+                  reducer:
+                    type: last
+              refId: C
+              type: threshold
+              expression: B
+        noDataState: OK
+        execErrState: Alerting
+        for: 5m
+        annotations:
+          summary: "Botho node validation latency p95 is high (> 500ms)"
+          description: "Instance {{ $labels.instance }} has p95 validation latency of {{ $values.B }}s. This may indicate performance issues."
+        labels:
+          severity: warning
+          team: infrastructure
+
+      # WARNING: High validation failure rate
+      - uid: botho-validation-failures-warning
+        title: Botho Node - High Validation Failure Rate (Warning)
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: rate(botho_validation_failures_total[5m])
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: B
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params: []
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - B
+                  reducer:
+                    type: last
+              refId: B
+              type: reduce
+              reducer: last
+              expression: A
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 1
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - C
+                  reducer:
+                    type: last
+              refId: C
+              type: threshold
+              expression: B
+        noDataState: OK
+        execErrState: Alerting
+        for: 5m
+        annotations:
+          summary: "Botho node has high validation failure rate (> 1/s)"
+          description: "Instance {{ $labels.instance }} is experiencing {{ $values.B }} validation failures per second. This may indicate malformed transactions or attacks."
+        labels:
+          severity: warning
+          team: infrastructure
+
+      # INFO: Minting inactive
+      - uid: botho-minting-inactive-info
+        title: Botho Node - Minting Inactive (Info)
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: botho_minting_active
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: B
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params: []
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - B
+                  reducer:
+                    type: last
+              refId: B
+              type: reduce
+              reducer: last
+              expression: A
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 1
+                    type: lt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - C
+                  reducer:
+                    type: last
+              refId: C
+              type: threshold
+              expression: B
+        noDataState: OK
+        execErrState: OK
+        for: 15m
+        annotations:
+          summary: "Botho node minting is inactive"
+          description: "Instance {{ $labels.instance }} has minting disabled. This is informational and may be expected for non-validator nodes."
+        labels:
+          severity: info
+          team: infrastructure

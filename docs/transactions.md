@@ -20,6 +20,34 @@ Botho supports three transaction types, each designed for specific use cases wit
 | **Max Tx Size** | N/A | 100 KB | 512 KB |
 | **Fee** | None | size-based | size-based |
 
+### Transaction Flow
+
+The following diagram shows the lifecycle of a private transaction:
+
+```mermaid
+flowchart LR
+    subgraph Preparation
+        A[UTXO Selection] --> B[Ring Construction]
+    end
+    subgraph Signing
+        B --> C[Create Ring Signature]
+        C --> D[Generate Range Proofs]
+    end
+    subgraph Network
+        D --> E[Broadcast to Mempool]
+        E --> F[Include in Block]
+        F --> G[Consensus Confirmation]
+    end
+```
+
+**Steps explained:**
+1. **UTXO Selection**: Choose unspent outputs to spend
+2. **Ring Construction**: Select decoys (19 for CLSAG, 10 for LION) with similar cluster profiles
+3. **Ring Signature**: Prove ownership of one ring member without revealing which
+4. **Range Proofs**: Bulletproofs prove amounts are valid without revealing values
+5. **Broadcast**: Transaction enters mempool and propagates via gossipsub
+6. **Confirmation**: SCP consensus finalizes the block containing the transaction
+
 ## Why Two Privacy Tiers?
 
 The main difference between Standard-Private and PQ-Private is the **ring signature scheme** (sender privacy):
@@ -370,27 +398,16 @@ The cluster factor (1x to 6x) discourages wealth concentration by increasing fee
 
 ## Choosing a Transaction Type
 
-```
-                    ┌─────────────────────┐
-                    │ Creating new coins? │
-                    └─────────┬───────────┘
-                              │
-                    Yes ──────┴────── No
-                      │                │
-                      ▼                ▼
-               ┌──────────┐    ┌───────────────────┐
-               │ MINTING  │    │ Need PQ sender    │
-               └──────────┘    │ privacy?          │
-                               └─────────┬─────────┘
-                                         │
-                               No ───────┴────── Yes
-                                 │                │
-                                 ▼                ▼
-                          ┌────────────┐   ┌────────────┐
-                          │ STANDARD-  │   │ PQ-PRIVATE │
-                          │ PRIVATE    │   │ (LION)     │
-                          │ (CLSAG)    │   └────────────┘
-                          └────────────┘
+```mermaid
+flowchart TD
+    A{Creating new coins?} -->|Yes| B[MINTING]
+    A -->|No| C{Need PQ sender privacy?}
+    C -->|No| D[STANDARD-PRIVATE<br/>CLSAG ring=20]
+    C -->|Yes| E[PQ-PRIVATE<br/>LION ring=11]
+
+    style B fill:#22c55e,color:#000
+    style D fill:#3b82f6,color:#fff
+    style E fill:#8b5cf6,color:#fff
 ```
 
 ### Summary

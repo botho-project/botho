@@ -13,10 +13,12 @@ const buttonVariants = cva(
         danger: 'bg-[--color-danger] text-white hover:bg-[--color-danger]/80',
       },
       size: {
-        sm: 'h-8 px-3 text-xs',
-        md: 'h-10 px-4 text-sm',
+        // Mobile: min 44px touch targets per WCAG 2.1 SC 2.5.5
+        // Desktop (sm+): original compact sizes
+        sm: 'min-h-[44px] min-w-[44px] px-3 text-xs sm:min-h-0 sm:min-w-0 sm:h-8',
+        md: 'min-h-[44px] min-w-[44px] px-4 text-sm sm:min-h-0 sm:min-w-0 sm:h-10',
         lg: 'h-12 px-6 text-base',
-        icon: 'h-10 w-10',
+        icon: 'min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 sm:h-10 sm:w-10',
       },
     },
     defaultVariants: {

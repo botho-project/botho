@@ -41,6 +41,7 @@ members = [
     "util/uri",
     "util/zip-exact",
     "web/packages/desktop/src-tauri",
+    "mobile/rust-bridge",
 ]
 exclude = [
     "contracts",
@@ -99,6 +100,7 @@ hex = { version = "0.4", default-features = false, features = ["alloc"] }
 hex-literal = "0.4"
 hex_fmt = "0.3"
 hkdf = "0.12"
+indicatif = "0.17"
 hmac = "0.12"
 hostname = "0.3"
 itertools = "0.12"
@@ -152,14 +154,6 @@ signal-hook = "0.3"
 signature = { version = "2", default-features = false }
 siphasher = "1"
 slip10_ed25519 = "0.1"
-slog = { version = "2", default-features = false }
-slog-async = "2"
-slog-atomic = "3"
-slog-envlogger = "2"
-slog-json = "2"
-slog-scope = "4"
-slog-stdlog = "4"
-slog-term = "2"
 static_assertions = "1"
 subtle = { version = "2", default-features = false }
 syn = "2"
@@ -170,6 +164,7 @@ tokio = "1"
 tokio-stream = "0.1"
 toml = "0.9"
 tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false }
 url = "2"
 walkdir = "2"
 wasm-bindgen = "0.2"

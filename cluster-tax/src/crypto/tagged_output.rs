@@ -39,8 +39,10 @@ impl CompactTagVector {
 
     /// Create a tag vector fully attributed to one cluster.
     pub fn single(cluster_id: ClusterId) -> Self {
-        let mut result = Self::default();
-        result.count = 1;
+        let mut result = Self {
+            count: 1,
+            ..Default::default()
+        };
         result.cluster_ids[0] = cluster_id.0;
         result.weights[0] = TAG_WEIGHT_SCALE;
         result
@@ -103,7 +105,7 @@ impl CompactTagVector {
     pub const fn serialized_size() -> usize {
         1 + // count
         MAX_STORED_TAGS * 8 + // cluster_ids (u64)
-        MAX_STORED_TAGS * 4   // weights (u32)
+        MAX_STORED_TAGS * 4 // weights (u32)
     }
 
     /// Serialize to bytes.
@@ -130,18 +132,18 @@ impl CompactTagVector {
             return None;
         }
 
-        let mut result = Self::default();
-        result.count = count;
+        let mut result = Self {
+            count,
+            ..Default::default()
+        };
 
         let mut offset = 1;
         for i in 0..MAX_STORED_TAGS {
-            result.cluster_ids[i] =
-                u64::from_le_bytes(bytes[offset..offset + 8].try_into().ok()?);
+            result.cluster_ids[i] = u64::from_le_bytes(bytes[offset..offset + 8].try_into().ok()?);
             offset += 8;
         }
         for i in 0..MAX_STORED_TAGS {
-            result.weights[i] =
-                u32::from_le_bytes(bytes[offset..offset + 4].try_into().ok()?);
+            result.weights[i] = u32::from_le_bytes(bytes[offset..offset + 4].try_into().ok()?);
             offset += 4;
         }
 

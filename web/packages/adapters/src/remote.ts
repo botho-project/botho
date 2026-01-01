@@ -11,10 +11,13 @@ import type {
 } from '@botho/core'
 import type {
   BlockFetchOptions,
+  MempoolUpdate,
   NodeAdapter,
+  PeerStatus,
   RemoteNodeConfig,
   TxHistoryOptions,
   TxSubmitResult,
+  WsConnectionStatus,
 } from './types'
 
 const DEFAULT_CONFIG: Required<RemoteNodeConfig> = {
@@ -50,8 +53,14 @@ export class RemoteNodeAdapter implements NodeAdapter {
   private currentNode: NodeInfo | null = null
   private currentSeedUrl: string | null = null
   private ws: WebSocket | null = null
+  private wsStatus: WsConnectionStatus = 'disconnected'
+  private wsReconnectAttempt = 0
+  private wsReconnectTimer: ReturnType<typeof setTimeout> | null = null
   private blockCallbacks: Set<(block: Block) => void> = new Set()
   private txCallbacks: Map<string, Set<(tx: Transaction) => void>> = new Map()
+  private mempoolCallbacks: Set<(update: MempoolUpdate) => void> = new Set()
+  private peerCallbacks: Set<(status: PeerStatus) => void> = new Set()
+  private wsStatusCallbacks: Set<(status: WsConnectionStatus) => void> = new Set()
   private rpcId = 0
 
   constructor(config: Partial<RemoteNodeConfig> = {}) {
@@ -102,12 +111,20 @@ export class RemoteNodeAdapter implements NodeAdapter {
     this.connected = false
     this.currentNode = null
     this.currentSeedUrl = null
+    if (this.wsReconnectTimer) {
+      clearTimeout(this.wsReconnectTimer)
+      this.wsReconnectTimer = null
+    }
     if (this.ws) {
       this.ws.close()
       this.ws = null
     }
+    this.setWsStatus('disconnected')
     this.blockCallbacks.clear()
     this.txCallbacks.clear()
+    this.mempoolCallbacks.clear()
+    this.peerCallbacks.clear()
+    this.wsStatusCallbacks.clear()
   }
 
   isConnected(): boolean {
@@ -324,9 +341,39 @@ export class RemoteNodeAdapter implements NodeAdapter {
     }
   }
 
+  onMempoolUpdate(callback: (update: MempoolUpdate) => void): () => void {
+    this.mempoolCallbacks.add(callback)
+    return () => this.mempoolCallbacks.delete(callback)
+  }
+
+  onPeerStatus(callback: (status: PeerStatus) => void): () => void {
+    this.peerCallbacks.add(callback)
+    return () => this.peerCallbacks.delete(callback)
+  }
+
+  // =========================================================================
+  // WebSocket Status
+  // =========================================================================
+
+  getWsStatus(): WsConnectionStatus {
+    return this.wsStatus
+  }
+
+  onWsStatusChange(callback: (status: WsConnectionStatus) => void): () => void {
+    this.wsStatusCallbacks.add(callback)
+    return () => this.wsStatusCallbacks.delete(callback)
+  }
+
   // =========================================================================
   // Private Helpers
   // =========================================================================
+
+  private setWsStatus(status: WsConnectionStatus): void {
+    if (this.wsStatus !== status) {
+      this.wsStatus = status
+      this.wsStatusCallbacks.forEach((cb) => cb(status))
+    }
+  }
 
   private async rpcCall<T>(
     baseUrl: string,
@@ -376,12 +423,21 @@ export class RemoteNodeAdapter implements NodeAdapter {
     // Connect to node WebSocket endpoint for real-time events
     const wsUrl = seedUrl.replace(/^http/, 'ws') + '/ws'
 
+    this.setWsStatus(this.wsReconnectAttempt > 0 ? 'reconnecting' : 'connecting')
+
     try {
       this.ws = new WebSocket(wsUrl)
 
       this.ws.onopen = () => {
-        // Subscribe to block events by default
-        this.sendWsMessage({ type: 'subscribe', events: ['blocks', 'transactions'] })
+        // Reset reconnection state on successful connection
+        this.wsReconnectAttempt = 0
+        this.setWsStatus('connected')
+
+        // Subscribe to all event types
+        this.sendWsMessage({
+          type: 'subscribe',
+          events: ['blocks', 'transactions', 'mempool', 'peers']
+        })
       }
 
       this.ws.onmessage = (event) => {
@@ -397,6 +453,12 @@ export class RemoteNodeAdapter implements NodeAdapter {
               this.txCallbacks.forEach((callbacks) => {
                 callbacks.forEach((cb) => cb(tx))
               })
+            } else if (msg.event === 'mempool') {
+              const update = this.parseMempoolEvent(msg.data)
+              this.mempoolCallbacks.forEach((cb) => cb(update))
+            } else if (msg.event === 'peers') {
+              const status = this.parsePeerEvent(msg.data)
+              this.peerCallbacks.forEach((cb) => cb(status))
             }
           } else if (msg.type === 'subscribed') {
             // Subscription confirmed
@@ -408,23 +470,38 @@ export class RemoteNodeAdapter implements NodeAdapter {
       }
 
       this.ws.onclose = () => {
+        this.ws = null
         if (this.connected) {
-          // Exponential backoff reconnection
-          setTimeout(() => {
+          this.setWsStatus('reconnecting')
+          // Exponential backoff with jitter for reconnection
+          // Base delay: 1s, max delay: 30s
+          const baseDelay = 1000
+          const maxDelay = 30000
+          const delay = Math.min(baseDelay * Math.pow(2, this.wsReconnectAttempt), maxDelay)
+          // Add jitter (±25%)
+          const jitter = delay * 0.25 * (Math.random() * 2 - 1)
+          const finalDelay = Math.round(delay + jitter)
+
+          this.wsReconnectAttempt++
+          this.wsReconnectTimer = setTimeout(() => {
+            this.wsReconnectTimer = null
             if (this.connected) {
               this.setupWebSocket(seedUrl)
             }
-          }, 5000)
+          }, finalDelay)
+        } else {
+          this.setWsStatus('disconnected')
         }
       }
 
       this.ws.onerror = () => {
-        // WebSocket not supported, fall back to polling
-        this.ws = null
+        // WebSocket error - onclose will be called next, which handles reconnection
+        // Don't set ws to null here as onclose handles cleanup
       }
     } catch {
       // WebSocket connection failed, continue without real-time updates
       this.ws = null
+      this.setWsStatus('disconnected')
     }
   }
 
@@ -470,6 +547,37 @@ export class RemoteNodeAdapter implements NodeAdapter {
       timestamp: Date.now(),
       blockHeight: data.in_block as number | undefined,
       confirmations: data.in_block ? 1 : 0,
+    }
+  }
+
+  /** Parse mempool update from WebSocket event */
+  private parseMempoolEvent(data: Record<string, unknown>): MempoolUpdate {
+    return {
+      size: (data.size as number) || 0,
+      totalFees: BigInt((data.total_fees as number) || 0),
+    }
+  }
+
+  /** Parse peer status from WebSocket event */
+  private parsePeerEvent(data: Record<string, unknown>): PeerStatus {
+    const eventData = data.event as Record<string, unknown> | undefined
+    let event: PeerStatus['event'] = 'count_changed'
+    let peerId: string | undefined
+
+    if (eventData) {
+      if ('Connected' in eventData) {
+        event = 'connected'
+        peerId = (eventData.Connected as Record<string, unknown>)?.peer_id as string
+      } else if ('Disconnected' in eventData) {
+        event = 'disconnected'
+        peerId = (eventData.Disconnected as Record<string, unknown>)?.peer_id as string
+      }
+    }
+
+    return {
+      peerCount: (data.peer_count as number) || 0,
+      event,
+      peerId,
     }
   }
 }
