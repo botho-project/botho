@@ -41,6 +41,7 @@ members = [
     "util/uri",
     "util/zip-exact",
     "web/packages/desktop/src-tauri",
+    "mobile/rust-bridge",
 ]
 exclude = [
     "contracts",

@@ -1,0 +1,74 @@
+// Botho Mobile - UniFFI Interface Definition
+//
+// This file defines the FFI boundary between Rust and Swift/Kotlin.
+// UniFFI generates bindings from this definition.
+
+namespace botho_mobile {};
+
+[Error]
+enum MobileWalletError {
+    "WalletLocked",
+    "InvalidMnemonic",
+    "InvalidPassword",
+    "SessionExpired",
+    "NetworkError",
+    "InvalidAddress",
+    "InsufficientFunds",
+    "InternalError",
+};
+
+dictionary WalletAddress {
+    string view_public_key;
+    string spend_public_key;
+    string display;
+};
+
+dictionary WalletBalance {
+    u64 picocredits;
+    string formatted;
+    u32 utxo_count;
+    u64 sync_height;
+};
+
+dictionary TransactionEntry {
+    string tx_hash;
+    i64 amount;
+    u64 block_height;
+    u64 timestamp;
+    string direction;
+    string? counterparty;
+};
+
+dictionary SessionStatus {
+    boolean is_unlocked;
+    WalletAddress? address;
+    u64? expires_in_seconds;
+};
+
+interface MobileWallet {
+    constructor();
+
+    [Async]
+    void set_node_url(string url);
+
+    [Async, Throws=MobileWalletError]
+    string generate_wallet();
+
+    [Async, Throws=MobileWalletError]
+    WalletAddress unlock_with_mnemonic(string mnemonic);
+
+    [Async]
+    boolean lock();
+
+    [Async]
+    SessionStatus get_session_status();
+
+    [Async, Throws=MobileWalletError]
+    WalletBalance get_balance();
+
+    [Async, Throws=MobileWalletError]
+    sequence<TransactionEntry> get_transaction_history(u32 limit, u32 offset);
+
+    [Async, Throws=MobileWalletError]
+    WalletAddress get_address();
+};
