@@ -1,0 +1,118 @@
+name: Crypto Coverage
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crypto/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/coverage.yml'
+  pull_request:
+    paths:
+      - 'crypto/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/coverage.yml'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  coverage:
+    name: Generate Coverage Report
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-coverage-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-coverage-
+
+      - name: Generate coverage report
+        run: |
+          # Note: bth-crypto-secp256k1 excluded due to k256 nightly compatibility issue
+          cargo llvm-cov \
+            --package bth-crypto-box \
+            --package bth-crypto-digestible \
+            --package bth-crypto-digestible-signature \
+            --package bth-crypto-hashes \
+            --package bth-crypto-keys \
+            --package bth-crypto-lion \
+            --package bth-crypto-multisig \
+            --package bth-crypto-pq \
+            --package bth-crypto-ring-signature \
+            --package bth-crypto-ring-signature-signer \
+            --package bth-crypto-sig \
+            --html --output-dir coverage-report
+
+      - name: Generate coverage summary
+        id: coverage
+        run: |
+          COVERAGE_JSON=$(cargo llvm-cov \
+            --package bth-crypto-box \
+            --package bth-crypto-digestible \
+            --package bth-crypto-digestible-signature \
+            --package bth-crypto-hashes \
+            --package bth-crypto-keys \
+            --package bth-crypto-lion \
+            --package bth-crypto-multisig \
+            --package bth-crypto-pq \
+            --package bth-crypto-ring-signature \
+            --package bth-crypto-ring-signature-signer \
+            --package bth-crypto-sig \
+            --json --summary-only 2>/dev/null)
+
+          LINE_PERCENT=$(echo "$COVERAGE_JSON" | jq '.data[0].totals.lines.percent')
+          FUNC_PERCENT=$(echo "$COVERAGE_JSON" | jq '.data[0].totals.functions.percent')
+
+          echo "line_coverage=$LINE_PERCENT" >> $GITHUB_OUTPUT
+          echo "func_coverage=$FUNC_PERCENT" >> $GITHUB_OUTPUT
+
+          echo "## Crypto Code Coverage" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Metric | Percentage |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|------------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Line Coverage | ${LINE_PERCENT}% |" >> $GITHUB_STEP_SUMMARY
+          echo "| Function Coverage | ${FUNC_PERCENT}% |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Target: >80% line coverage" >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: crypto-coverage-report
+          path: coverage-report/
+          retention-days: 30
+
+      - name: Check coverage threshold
+        run: |
+          LINE_COV="${{ steps.coverage.outputs.line_coverage }}"
+          # Remove decimal for comparison
+          LINE_INT=$(echo "$LINE_COV" | cut -d'.' -f1)
+
+          echo "Line coverage: ${LINE_COV}%"
+
+          if [ "$LINE_INT" -lt 80 ]; then
+            echo "::warning::Coverage is below 80% target (current: ${LINE_COV}%)"
+          else
+            echo "::notice::Coverage meets 80% target (current: ${LINE_COV}%)"
+          fi
