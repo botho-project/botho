@@ -57,7 +57,18 @@ bth-common = { path = "../common", features = ["std"] }
 bth-consensus-scp = { path = "../consensus/scp", features = ["test_utils"] }
 bth-consensus-scp-types = { path = "../consensus/scp/types", features = ["test_utils"] }
 bth-crypto-digestible = { path = "../crypto/digestible" }
-libp2p = { workspace = true, features = ["tokio"] }
+libp2p = { workspace = true, features = [
+    "tokio",
+    "gossipsub",
+    "identify",
+    "request-response",
+    "noise",
+    "tcp",
+    "yamux",
+    "macros",
+    "ed25519",
+    "cbor",
+] }
 futures = "0.3"
 bip39 = { package = "tiny-bip39", version = "1" }
 rand = "0.8"
