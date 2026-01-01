@@ -49,6 +49,12 @@ Welcome to the Botho documentation. Botho is a privacy-preserving, mined cryptoc
 | [Exchange Integration](exchange-integration.md) | List BTH on your exchange |
 | [Merchant Guide](merchant-guide.md) | Accept BTH payments |
 
+### Protocol Specification
+| Document | Description |
+|----------|-------------|
+| [Specification](specification/README.md) | Formal protocol specification |
+| [Protocol v0.1.0](specification/protocol-v0.1.0.md) | Complete protocol reference (transactions, consensus, network, cryptography) |
+
 ## What is Botho?
 
 Botho combines:
