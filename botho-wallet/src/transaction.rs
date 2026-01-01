@@ -17,7 +17,11 @@ use crate::keys::WalletKeys;
 use crate::rpc_pool::{BlockOutputs, RpcPool};
 
 #[cfg(feature = "pq")]
-use bth_account_keys::QuantumSafePublicAddress;
+use bth_account_keys::{QuantumSafeAccountKey, QuantumSafePublicAddress};
+#[cfg(feature = "pq")]
+use bth_crypto_pq::MlKem768Ciphertext;
+#[cfg(feature = "pq")]
+use bth_crypto_ring_signature::pq_onetime_keys::check_pq_output_ownership;
 #[cfg(feature = "pq")]
 use botho::transaction_pq::{QuantumPrivateTransaction, QuantumPrivateTxInput, QuantumPrivateTxOutput};
 
@@ -100,6 +104,63 @@ impl OwnedUtxo {
 pub struct UtxoId {
     pub tx_hash: [u8; 32],
     pub output_index: u32,
+}
+
+/// A quantum-private UTXO owned by this wallet (ML-KEM encapsulated)
+///
+/// These outputs use post-quantum cryptography for stealth address
+/// derivation, protecting against "harvest now, decrypt later" attacks.
+#[cfg(feature = "pq")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PqOwnedUtxo {
+    /// Transaction hash that created this output
+    pub tx_hash: [u8; 32],
+    /// Output index in the transaction
+    pub output_index: u32,
+    /// Amount in picocredits
+    pub amount: u64,
+    /// Block height where created
+    pub created_at: u64,
+    /// ML-KEM-768 ciphertext (1088 bytes) for key decapsulation
+    pub kem_ciphertext: Vec<u8>,
+    /// One-time target key (Ristretto point)
+    pub target_key: [u8; 32],
+    /// Subaddress index that owns this output
+    pub subaddress_index: u64,
+}
+
+#[cfg(feature = "pq")]
+impl PqOwnedUtxo {
+    /// Create a UTXO identifier
+    pub fn id(&self) -> UtxoId {
+        UtxoId {
+            tx_hash: self.tx_hash,
+            output_index: self.output_index,
+        }
+    }
+
+    /// Recover the one-time private key needed to spend this PQ output
+    ///
+    /// Uses ML-KEM decapsulation to derive the shared secret, then
+    /// computes the one-time private key using the PQ stealth address protocol.
+    pub fn recover_spend_key(
+        &self,
+        pq_account_key: &QuantumSafeAccountKey,
+    ) -> Option<RistrettoPrivate> {
+        use bth_crypto_ring_signature::pq_onetime_keys::recover_pq_onetime_private_key;
+
+        let ciphertext = MlKem768Ciphertext::from_bytes(self.kem_ciphertext.as_slice()).ok()?;
+        let kem_keypair = pq_account_key.pq_kem_keypair();
+        let subaddress_spend_private = pq_account_key.classical().subaddress_spend_private(self.subaddress_index);
+
+        recover_pq_onetime_private_key(
+            kem_keypair,
+            &ciphertext,
+            &subaddress_spend_private,
+            self.output_index,
+        )
+        .ok()
+    }
 }
 
 /// A transaction output
@@ -518,6 +579,119 @@ impl<'a> WalletScanner<'a> {
     }
 }
 
+/// Quantum-private wallet scanner for finding PQ outputs using ML-KEM decapsulation
+#[cfg(feature = "pq")]
+pub struct PqWalletScanner<'a> {
+    pq_account_key: QuantumSafeAccountKey,
+    keys: &'a WalletKeys,
+}
+
+#[cfg(feature = "pq")]
+impl<'a> PqWalletScanner<'a> {
+    /// Create a new PQ scanner for the given wallet keys
+    pub fn new(keys: &'a WalletKeys) -> Self {
+        Self {
+            pq_account_key: keys.pq_account_key(),
+            keys,
+        }
+    }
+
+    /// Scan block outputs for quantum-private UTXOs belonging to this wallet
+    ///
+    /// Uses ML-KEM decapsulation to check ownership:
+    /// 1. Parse ciphertext and target_key from output
+    /// 2. Decapsulate shared secret using our KEM keypair
+    /// 3. Verify target key matches expected value
+    pub fn scan_pq_outputs(&self, block_outputs: &[BlockOutputs]) -> Vec<PqOwnedUtxo> {
+        let mut owned = Vec::new();
+
+        for block in block_outputs {
+            for output in &block.outputs {
+                // Skip non-PQ outputs
+                if !output.is_pq_output {
+                    continue;
+                }
+
+                // Parse PQ ciphertext
+                let ciphertext_bytes = match output.pq_ciphertext.as_ref().and_then(|s| hex::decode(s).ok()) {
+                    Some(bytes) => bytes,
+                    None => continue,
+                };
+
+                let ciphertext = match MlKem768Ciphertext::from_bytes(ciphertext_bytes.as_slice()) {
+                    Ok(ct) => ct,
+                    Err(_) => continue,
+                };
+
+                // Parse target key
+                let target_key = match WalletScanner::parse_key(&output.target_key) {
+                    Some(k) => k,
+                    None => continue,
+                };
+
+                let target_key_point = match RistrettoPublic::try_from(&target_key[..]) {
+                    Ok(pk) => pk,
+                    Err(_) => continue,
+                };
+
+                let tx_hash = match WalletScanner::parse_key(&output.tx_hash) {
+                    Some(h) => h,
+                    None => continue,
+                };
+
+                // Parse amount
+                let amount = WalletScanner::parse_amount(&output.amount_commitment);
+
+                // Check ownership against subaddresses
+                if let Some(subaddress_index) = self.check_pq_ownership(
+                    &ciphertext,
+                    &target_key_point,
+                    output.output_index,
+                ) {
+                    owned.push(PqOwnedUtxo {
+                        tx_hash,
+                        output_index: output.output_index,
+                        amount,
+                        created_at: block.height,
+                        kem_ciphertext: ciphertext_bytes,
+                        target_key,
+                        subaddress_index,
+                    });
+                }
+            }
+        }
+
+        owned
+    }
+
+    /// Check if a PQ output belongs to this wallet
+    fn check_pq_ownership(
+        &self,
+        ciphertext: &MlKem768Ciphertext,
+        target_key: &RistrettoPublic,
+        output_index: u32,
+    ) -> Option<u64> {
+        let kem_keypair = self.pq_account_key.pq_kem_keypair();
+        let account_key = self.keys.account_key();
+
+        // Check against default subaddress (index 0)
+        let default_subaddr = account_key.default_subaddress();
+        let default_spend = default_subaddr.spend_public_key();
+        if check_pq_output_ownership(kem_keypair, default_spend, ciphertext, target_key, output_index) {
+            return Some(0);
+        }
+
+        // Check against change subaddress (index 1)
+        let change_subaddr = account_key.change_subaddress();
+        let change_spend = change_subaddr.spend_public_key();
+        if check_pq_output_ownership(kem_keypair, change_spend, ciphertext, target_key, output_index) {
+            return Some(1);
+        }
+
+        None
+    }
+}
+
 /// Sync wallet UTXOs with the network
 pub async fn sync_wallet(
     rpc: &mut RpcPool,
@@ -550,6 +724,72 @@ pub async fn sync_wallet(
     }
 
     Ok((all_utxos, current_height))
+}
+
+/// Result of syncing both classical and PQ UTXOs
+#[cfg(feature = "pq")]
+pub struct SyncResult {
+    /// Classical (non-PQ) UTXOs
+    pub classical_utxos: Vec<OwnedUtxo>,
+    /// Quantum-private UTXOs (ML-KEM encapsulated)
+    pub pq_utxos: Vec<PqOwnedUtxo>,
+    /// Current chain height
+    pub height: u64,
+}
+
+/// Sync wallet UTXOs with the network, returning both classical and PQ outputs
+///
+/// This scans the blockchain for both:
+/// - Classical stealth address outputs (ECDH-based)
+/// - Quantum-private outputs (ML-KEM-based)
+#[cfg(feature = "pq")]
+pub async fn sync_wallet_all(
+    rpc: &mut RpcPool,
+    keys: &WalletKeys,
+    from_height: u64,
+) -> Result<SyncResult> {
+    // Get current chain height
+    let chain_info = rpc.get_chain_info().await?;
+    let current_height = chain_info.height;
+
+    if from_height >= current_height {
+        return Ok(SyncResult {
+            classical_utxos: vec![],
+            pq_utxos: vec![],
+            height: current_height,
+        });
+    }
+
+    let classical_scanner = WalletScanner::new(keys);
+    let pq_scanner = PqWalletScanner::new(keys);
+
+    let mut all_classical = Vec::new();
+    let mut all_pq = Vec::new();
+
+    // Scan in batches of 100 blocks
+    const BATCH_SIZE: u64 = 100;
+    let mut height = from_height;
+
+    while height < current_height {
+        let end_height = (height + BATCH_SIZE).min(current_height);
+
+        let outputs = rpc.get_outputs(height, end_height).await?;
+
+        // Scan for both types of outputs
+        let classical = classical_scanner.scan_outputs(&outputs);
+        let pq = pq_scanner.scan_pq_outputs(&outputs);
+
+        all_classical.extend(classical);
+        all_pq.extend(pq);
+
+        height = end_height;
+    }
+
+    Ok(SyncResult {
+        classical_utxos: all_classical,
+        pq_utxos: all_pq,
+        height: current_height,
+    })
 }
 
 /// Format an amount in picocredits as CAD
@@ -660,5 +900,136 @@ mod tests {
 
         // Signing hash should be the same regardless of signature content
         assert_eq!(tx1.signing_hash(), tx2.signing_hash());
+    }
+
+    #[cfg(feature = "pq")]
+    mod pq_tests {
+        use super::*;
+        use crate::rpc_pool::TxOutput as RpcTxOutput;
+
+        const TEST_MNEMONIC: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art";
+
+        #[test]
+        fn test_pq_owned_utxo_serialization() {
+            let utxo = PqOwnedUtxo {
+                tx_hash: [1u8; 32],
+                output_index: 0,
+                amount: 1_000_000_000_000,
+                created_at: 100,
+                kem_ciphertext: vec![0u8; 1088],
+                target_key: [2u8; 32],
+                subaddress_index: 0,
+            };
+
+            // Test serialization roundtrip
+            let serialized = bincode::serialize(&utxo).expect("serialize");
+            let deserialized: PqOwnedUtxo = bincode::deserialize(&serialized).expect("deserialize");
+
+            assert_eq!(utxo.tx_hash, deserialized.tx_hash);
+            assert_eq!(utxo.output_index, deserialized.output_index);
+            assert_eq!(utxo.amount, deserialized.amount);
+            assert_eq!(utxo.created_at, deserialized.created_at);
+            assert_eq!(utxo.kem_ciphertext, deserialized.kem_ciphertext);
+            assert_eq!(utxo.target_key, deserialized.target_key);
+            assert_eq!(utxo.subaddress_index, deserialized.subaddress_index);
+        }
+
+        #[test]
+        fn test_pq_owned_utxo_id() {
+            let utxo = PqOwnedUtxo {
+                tx_hash: [42u8; 32],
+                output_index: 7,
+                amount: 1_000_000,
+                created_at: 500,
+                kem_ciphertext: vec![0u8; 1088],
+                target_key: [0u8; 32],
+                subaddress_index: 0,
+            };
+
+            let id = utxo.id();
+            assert_eq!(id.tx_hash, [42u8; 32]);
+            assert_eq!(id.output_index, 7);
+        }
+
+        #[test]
+        fn test_pq_scanner_skips_non_pq_outputs() {
+            let keys = WalletKeys::from_mnemonic(TEST_MNEMONIC).unwrap();
+            let scanner = PqWalletScanner::new(&keys);
+
+            // Create a non-PQ output
+            let outputs = vec![BlockOutputs {
+                height: 100,
+                outputs: vec![RpcTxOutput {
+                    tx_hash: hex::encode([1u8; 32]),
+                    output_index: 0,
+                    target_key: hex::encode([2u8; 32]),
+                    public_key: hex::encode([3u8; 32]),
+                    amount_commitment: hex::encode(1000u64.to_le_bytes()),
+                    pq_ciphertext: None,
+                    is_pq_output: false, // Not a PQ output
+                }],
+            }];
+
+            let result = scanner.scan_pq_outputs(&outputs);
+            assert!(result.is_empty(), "Should not find any PQ outputs");
+        }
+
+        #[test]
+        fn test_pq_scanner_rejects_invalid_ciphertext() {
+            let keys = WalletKeys::from_mnemonic(TEST_MNEMONIC).unwrap();
+            let scanner = PqWalletScanner::new(&keys);
+
+            // Create a PQ output with invalid ciphertext (wrong size)
+            let outputs = vec![BlockOutputs {
+                height: 100,
+                outputs: vec![RpcTxOutput {
+                    tx_hash: hex::encode([1u8; 32]),
+                    output_index: 0,
+                    target_key: hex::encode([2u8; 32]),
+                    public_key: hex::encode([3u8; 32]),
+                    amount_commitment: hex::encode(1000u64.to_le_bytes()),
+                    pq_ciphertext: Some(hex::encode([0u8; 100])), // Wrong size
+                    is_pq_output: true,
+                }],
+            }];
+
+            let result = scanner.scan_pq_outputs(&outputs);
+            assert!(result.is_empty(), "Should reject invalid ciphertext size");
+        }
+
+        #[test]
+        fn test_sync_result_fields() {
+            let result = SyncResult {
+                classical_utxos: vec![OwnedUtxo {
+                    tx_hash: [1u8; 32],
+                    output_index: 0,
+                    amount: 1_000_000_000_000,
+                    created_at: 100,
+                    target_key: [0u8; 32],
+                    public_key: [0u8; 32],
+                    subaddress_index: 0,
+                }],
+                pq_utxos: vec![PqOwnedUtxo {
+                    tx_hash: [2u8; 32],
+                    output_index: 0,
+                    amount: 500_000_000_000,
+                    created_at: 101,
+                    kem_ciphertext: vec![0u8; 1088],
+                    target_key: [0u8; 32],
+                    subaddress_index: 0,
+                }],
+                height: 1000,
+            };
+
+            assert_eq!(result.classical_utxos.len(), 1);
+            assert_eq!(result.pq_utxos.len(), 1);
+            assert_eq!(result.height, 1000);
+
+            let classical_total: u64 = result.classical_utxos.iter().map(|u| u.amount).sum();
+            let pq_total: u64 = result.pq_utxos.iter().map(|u| u.amount).sum();
+
+            assert_eq!(classical_total, 1_000_000_000_000);
+            assert_eq!(pq_total, 500_000_000_000);
+        }
     }
 }

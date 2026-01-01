@@ -453,6 +453,13 @@ pub struct TxOutput {
     /// Amount commitment (or plaintext amount)
     #[serde(rename = "amountCommitment")]
     pub amount_commitment: String,
+    /// ML-KEM-768 ciphertext for PQ outputs (1088 bytes, hex-encoded)
+    /// Only present for QuantumPrivateTxOut outputs
+    #[serde(rename = "pqCiphertext")]
+    pub pq_ciphertext: Option<String>,
+    /// Indicates if this is a quantum-private output
+    #[serde(rename = "isPqOutput", default)]
+    pub is_pq_output: bool,
 }
 
 #[derive(Debug, Deserialize)]
