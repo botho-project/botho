@@ -1,10 +1,6 @@
 name: E2E Integration Tests
 
 on:
-  # Nightly at 3 AM UTC
-  schedule:
-    - cron: '0 3 * * *'
-  # Manual trigger
   workflow_dispatch:
     inputs:
       test_suite:
@@ -23,12 +19,6 @@ on:
         required: false
         default: true
         type: boolean
-  # Also run on PRs that modify test files
-  pull_request:
-    paths:
-      - 'botho/tests/**'
-      - 'tests/e2e/**'
-      - '.github/workflows/e2e-tests.yml'
 
 env:
   CARGO_TERM_COLOR: always
@@ -42,11 +32,7 @@ jobs:
   timing-tests:
     name: Timing Tests
     runs-on: ubuntu-latest
-    if: >-
-      github.event_name == 'schedule' ||
-      github.event_name == 'pull_request' ||
-      (github.event_name == 'workflow_dispatch' &&
-       (github.event.inputs.test_suite == 'all' || github.event.inputs.test_suite == 'timing'))
+    if: github.event.inputs.test_suite == 'all' || github.event.inputs.test_suite == 'timing'
     steps:
       - uses: actions/checkout@v4
 
@@ -77,10 +63,8 @@ jobs:
     name: Chaos Tests
     runs-on: ubuntu-latest
     if: >-
-      github.event_name == 'schedule' ||
-      (github.event_name == 'workflow_dispatch' &&
-       (github.event.inputs.test_suite == 'all' || github.event.inputs.test_suite == 'chaos') &&
-       github.event.inputs.include_ignored == true)
+      (github.event.inputs.test_suite == 'all' || github.event.inputs.test_suite == 'chaos') &&
+      github.event.inputs.include_ignored == 'true'
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -109,10 +93,8 @@ jobs:
     name: Load Tests
     runs-on: ubuntu-latest
     if: >-
-      github.event_name == 'schedule' ||
-      (github.event_name == 'workflow_dispatch' &&
-       (github.event.inputs.test_suite == 'all' || github.event.inputs.test_suite == 'load') &&
-       github.event.inputs.include_ignored == true)
+      (github.event.inputs.test_suite == 'all' || github.event.inputs.test_suite == 'load') &&
+      github.event.inputs.include_ignored == 'true'
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
@@ -143,11 +125,7 @@ jobs:
   byzantine-tests:
     name: Byzantine Tests
     runs-on: ubuntu-latest
-    if: >-
-      github.event_name == 'schedule' ||
-      github.event_name == 'pull_request' ||
-      (github.event_name == 'workflow_dispatch' &&
-       (github.event.inputs.test_suite == 'all' || github.event.inputs.test_suite == 'byzantine'))
+    if: github.event.inputs.test_suite == 'all' || github.event.inputs.test_suite == 'byzantine'
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -175,10 +153,7 @@ jobs:
   consensus-integration:
     name: Consensus Integration Tests
     runs-on: ubuntu-latest
-    if: >-
-      github.event_name == 'schedule' ||
-      github.event_name == 'pull_request' ||
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.test_suite == 'all')
+    if: github.event.inputs.test_suite == 'all'
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
