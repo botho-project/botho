@@ -217,6 +217,67 @@ impl ClusterTagVector {
         TAG_WEIGHT_SCALE.saturating_sub(self.total_weight())
     }
 
+    /// Calculate Shannon entropy of the full tag distribution including background.
+    ///
+    /// WARNING: This includes background in the entropy calculation, which means
+    /// entropy INCREASES with age as tags decay to background. This is NOT suitable
+    /// for lottery selection because it would give old coins an unfair advantage.
+    ///
+    /// For lottery weight calculation, use `cluster_entropy()` instead.
+    pub fn shannon_entropy(&self) -> f64 {
+        let scale = TAG_WEIGHT_SCALE as f64;
+        let mut entropy = 0.0;
+
+        // Entropy from each cluster tag
+        for entry in &self.entries {
+            if entry.weight > 0 {
+                let p = entry.weight as f64 / scale;
+                entropy -= p * p.log2();
+            }
+        }
+
+        // Entropy from background
+        let bg = self.background_weight();
+        if bg > 0 {
+            let p = bg as f64 / scale;
+            entropy -= p * p.log2();
+        }
+
+        entropy
+    }
+
+    /// Calculate Shannon entropy of the CLUSTER distribution only (excluding background).
+    ///
+    /// This is the correct entropy measure for lottery selection because it is
+    /// **decay-invariant**: natural tag decay doesn't change cluster entropy.
+    ///
+    /// The calculation renormalizes cluster weights to sum to 1.0, effectively
+    /// ignoring the background portion. This ensures:
+    /// - Fresh mint (100% one cluster): 0 bits
+    /// - After decay (90% one cluster, 10% bg): still 0 bits
+    /// - Commerce (50% A, 50% B): 1 bit
+    /// - Commerce after decay (40% A, 40% B, 20% bg): still 1 bit
+    pub fn cluster_entropy(&self) -> f64 {
+        let total_cluster = self.total_weight();
+        if total_cluster == 0 {
+            // Fully background = no cluster diversity = 0 entropy
+            return 0.0;
+        }
+
+        let scale = total_cluster as f64;
+        let mut entropy = 0.0;
+
+        // Entropy from each cluster tag, renormalized
+        for entry in &self.entries {
+            if entry.weight > 0 {
+                let p = entry.weight as f64 / scale;
+                entropy -= p * p.log2();
+            }
+        }
+
+        entropy
+    }
+
     /// Get the weight for a specific cluster.
     pub fn get_weight(&self, cluster_id: ClusterId) -> u32 {
         self.entries

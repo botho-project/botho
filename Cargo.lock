@@ -938,6 +938,7 @@ dependencies = [
 name = "bth-cluster-tax"
 version = "0.1.0"
 dependencies = [
+ "bth-transaction-types",
  "clap",
  "criterion",
  "curve25519-dalek",

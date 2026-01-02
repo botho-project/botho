@@ -159,7 +159,9 @@ Each UTXO has different tag vector → different entropy
 
 ```rust
 fn selection_weight(utxo: &Utxo, config: &Config) -> f64 {
-    let entropy = shannon_entropy(&utxo.tags);
+    // IMPORTANT: Use cluster_entropy(), not shannon_entropy()
+    // cluster_entropy() is decay-invariant - see Implementation section
+    let entropy = cluster_entropy(&utxo.tags);
     utxo.value as f64 * (1.0 + config.entropy_bonus * entropy)
 }
 ```
@@ -288,29 +290,50 @@ resistance in exchange for maintaining progressivity.
 3. **Add SelectionMode::EntropyWeighted** - New selection mode
 4. **Track tag vectors through splits** - Preserve tags when splitting
 
-### Computational Cost
+### Critical: Use cluster_entropy(), NOT shannon_entropy()
+
+**WARNING:** There are two entropy calculations. Using the wrong one creates a
+gaming opportunity where old coins gain unfair lottery advantage.
+
+| Method | Formula | Decay Behavior | Use Case |
+|--------|---------|----------------|----------|
+| `shannon_entropy()` | All sources including background | INCREASES with age | DO NOT USE for lottery |
+| `cluster_entropy()` | Cluster sources only, renormalized | STABLE with age | USE for lottery |
+
+The problem with `shannon_entropy()`:
+- Background (decayed weight) counts as a source
+- As coins age, background grows, adding "entropy" from decay
+- Old coins get unfair lottery advantage just by waiting
+
+The solution with `cluster_entropy()`:
+- Background is excluded from calculation
+- Cluster weights are renormalized to sum to 1.0
+- Entropy only increases through genuine commerce (mixing sources)
 
 ```rust
-fn shannon_entropy(tags: &TagVector) -> f64 {
-    let mut entropy = 0.0;
-    let scale = TAG_WEIGHT_SCALE as f64;
+/// CORRECT: Decay-invariant entropy for lottery selection
+fn cluster_entropy(tags: &TagVector) -> f64 {
+    let total_cluster = tags.total_attributed();
+    if total_cluster == 0 {
+        return 0.0; // Fully decayed = no diversity = 0 entropy
+    }
 
+    let scale = total_cluster as f64;
+    let mut entropy = 0.0;
+
+    // Renormalize cluster weights, excluding background
     for (_, weight) in tags.iter() {
-        let p = weight as f64 / scale;
-        if p > 0.0 {
+        if weight > 0 {
+            let p = weight as f64 / scale;
             entropy -= p * p.log2();
         }
     }
 
-    // Include background
-    let bg = tags.background() as f64 / scale;
-    if bg > 0.0 {
-        entropy -= bg * bg.log2();
-    }
-
-    entropy  // bits
+    entropy // bits
 }
 ```
+
+### Computational Cost
 
 Cost: O(number of tags per UTXO) = O(32) = O(1) per UTXO
 
@@ -325,6 +348,60 @@ Cost: O(number of tags per UTXO) = O(32) = O(1) per UTXO
 
 The entropy reveals whether a coin has "simple" (fresh/split) or "complex"
 (traded) provenance, but not the specific clusters involved.
+
+## Parameter Tuning: entropy_bonus
+
+The `entropy_bonus` parameter controls how much lottery weight advantage
+commerce coins get over fresh mints. The formula is:
+
+```
+weight = value × (1 + entropy_bonus × cluster_entropy)
+```
+
+### Effect of Different Values
+
+| entropy_bonus | Commerce Advantage | Weight Range | Fresh Mint Return |
+|---------------|-------------------|--------------|-------------------|
+| 0.25 | 1.5× | 1.0× - 1.75× | -17% vs avg |
+| **0.50** | **2.0×** | **1.0× - 2.50×** | **-29% vs avg** |
+| 0.75 | 2.5× | 1.0× - 3.25× | -38% vs avg |
+| 1.00 | 3.0× | 1.0× - 4.00× | -44% vs avg |
+
+*Commerce Advantage = heavy commerce (2 bits) vs fresh mint (0 bits)*
+*Fresh Mint Return assumes network mix: 40% fresh, 30% light, 20% medium, 10% heavy*
+
+### Key Insight: Sybil Resistance is Independent of entropy_bonus
+
+The entropy_bonus value does NOT affect Sybil resistance. For any bonus:
+
+```
+Before split: weight = V × (1 + b × E)
+After split:  weight = 10 × (V/10) × (1 + b × E) = V × (1 + b × E)
+```
+
+Total weight is preserved regardless of `b`. The bonus only affects the
+relative advantage of commerce coins vs fresh mints.
+
+### Recommended Starting Value: 0.5
+
+**Why 0.5:**
+- Commerce coins get 2× lottery weight advantage (meaningful but not extreme)
+- Fresh mints are disadvantaged but not excluded (-29% vs average)
+- Weight variance is moderate (1.0× to 2.5×)
+- Good balance of progressivity vs predictability
+
+**When to adjust:**
+- **Increase to 0.75-1.0** if >80% of UTXOs have entropy < 0.5 (weak commerce incentive)
+- **Decrease to 0.25** if lottery winners are too concentrated in high-entropy coins
+
+### Monitoring Metrics
+
+Track these in production to guide parameter adjustment:
+
+1. **Entropy distribution** - Histogram of cluster_entropy across all UTXOs
+2. **Winner concentration** - Gini coefficient of lottery winnings
+3. **Commerce participation** - % of transactions that increase entropy
+4. **Fresh mint competitiveness** - Win rate of fresh mints vs their weight share
 
 ## Conclusions
 
