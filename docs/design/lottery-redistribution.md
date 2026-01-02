@@ -4,7 +4,7 @@
 
 Botho uses a **lottery-based fee redistribution** system instead of burning transaction fees. This creates a progressive wealth redistribution effect where fees flow back to coin holders.
 
-**Recommended Design: Immediate Distribution with Superlinear Fees**
+**Design: Immediate Distribution with Superlinear Fees**
 
 ```
 Fee = base × cluster_factor × outputs²
@@ -12,13 +12,28 @@ Fee = base × cluster_factor × outputs²
      └─► 20% burned
 ```
 
-**Key properties:**
+**Intended properties:**
 - **Progressive via population statistics**: Random UTXO selection favors the many (poor) over the few (rich)
 - **Sybil-resistant**: Superlinear per-output fees make splitting prohibitively expensive
 - **Simple**: No activity tracking, no ticket accumulation, immediate distribution
-- **Effective**: Achieves up to 100% Gini reduction under realistic conditions
 
-## The Core Insight
+## ⚠️ Critical Finding: The Progressivity-Sybil Trade-off
+
+Stress testing revealed a **fundamental tension** between progressivity and Sybil resistance:
+
+| Selection Mode | Sybil Advantage | Progressive? | Verdict |
+|----------------|-----------------|--------------|---------|
+| **Uniform** | 9.3x | ✅ Yes | ❌ VULNERABLE |
+| **ValueWeighted** | 1.04x | ❌ No | ✅ Sybil-resistant |
+| **SqrtWeighted** | 5.0x | Partial | ❌ Still vulnerable |
+| **LogWeighted** | 8.5x | Partial | ❌ Nearly as bad |
+
+**Key insight**: In a privacy-preserving system without identity, **you cannot have both**:
+- Uniform selection is progressive but allows 9.3x gaming via UTXO splitting
+- Value-weighted selection is Sybil-resistant but not progressive (proportional to wealth)
+- Hybrid approaches (sqrt, log) don't successfully balance both properties
+
+## The Core Insight (and Its Limitation)
 
 In an unequal wealth distribution:
 - Many poor people, few rich people
@@ -36,30 +51,72 @@ If each person has 1 UTXO:
 - That's 9× progressive redistribution!
 ```
 
-## Problem Statement
+**The problem**: The assumption "each person has ~1 UTXO" is fragile:
+- Anyone can create multiple UTXOs over time through normal transactions
+- An attacker with 10 UTXOs gets ~9.3x more lottery winnings
+- Superlinear output fees only prevent *single-transaction* splitting
+- Patient accumulation over time bypasses this protection
 
-### Why Not Burn Fees?
+## Stress Test Results
 
-Burning fees creates deflationary pressure but doesn't actively redistribute wealth. The benefits accrue passively to all holders proportionally.
+### UTXO Accumulation Attack
 
-### Why Not Direct Taxation?
+```
+BASELINE (1 UTXO):   Winnings=3.3M, Fees=13.1M, Net=-9.8M
+GAMING (10 UTXOs):   Winnings=31.3M, Fees=39.5M, Net=-8.2M
 
-Our earlier cluster tax design had issues:
-- Primarily taxed minters on first spend, not accumulated wealth
-- Commerce wealth escaped (tags decay through trade)
-- Complex fee calculations at transaction time
-- Punitive framing ("pay more") vs. rewarding ("receive more")
+Winnings ratio: 9.4x more with 10 UTXOs
+Net result: Gaming strategy loses LESS money
+```
 
-### The Sybil Problem
+While both strategies are net negative (wealthy pay more fees), the attacker
+with multiple UTXOs **loses less**, creating an unfair advantage.
 
-Any naive redistribution faces Sybil attacks:
-- 1 ticket per UTXO → split into many UTXOs
-- Random selection → create many accounts
-- Without identity, how do we prevent gaming?
+### Selection Mode Comparison
 
-**Solution**: Make UTXO creation expensive enough that splitting is unprofitable.
+We tested alternative selection modes to mitigate gaming:
 
-## The Combined Design
+| Mode | 1 UTXO Winnings | 10 UTXO Winnings | Ratio | Verdict |
+|------|-----------------|------------------|-------|---------|
+| Uniform | 3.3M | 31.1M | 9.3x | VULNERABLE |
+| ValueWeighted | 16.7M | 17.4M | 1.04x | Sybil-resistant |
+| SqrtWeighted | 5.3M | 26.7M | 5.0x | Still vulnerable |
+| LogWeighted | 3.6M | 30.4M | 8.5x | Nearly as bad |
+
+**SqrtWeighted** was expected to give sqrt(10)≈3.16x advantage, but in practice
+shows 5x due to interaction with value-weighted transaction selection.
+
+### Exchange Entity Impact
+
+When exchanges hold funds for many users in few UTXOs:
+
+```
+Scenario: 3 exchanges (50% of funds, 3 UTXOs) vs 1000 retail (50%, 1000 UTXOs)
+
+Result:
+- Retail wins 99.7% of lottery (matches UTXO proportion)
+- Exchanges pay fees from user funds but win little
+- Net redistribution FROM exchanges TO retail users
+```
+
+This is actually a **positive** finding - the lottery redistributes from
+custodial entities to self-custody users.
+
+### Why "100% Gini Reduction" is Misleading
+
+The simulations show 100% Gini reduction because they run until wealth is
+essentially consumed through fees + 20% burn. In practice:
+
+1. Transaction volumes are much lower relative to total supply
+2. Most wealth sits idle (doesn't transact)
+3. Convergence would take decades, not days
+
+The simulation's "1 day to equilibrium" result uses 864K tx/day with only
+17 participants - an unrealistic ratio.
+
+## The Design
+
+Despite the limitations, the lottery mechanism still provides value:
 
 ### Components
 
@@ -79,33 +136,19 @@ Any naive redistribution faces Sybil attacks:
    5 outputs: 100 × 3 × 25 = 7,500 (3× per output)
    10 outputs: 100 × 3 × 100 = 30,000 (5× per output)
    ```
-   - Makes splitting prohibitively expensive
+   - Makes single-transaction splitting expensive
    - Normal transactions (2 outputs) are unaffected
 
 3. **Immediate Distribution to Random UTXOs**
    ```
    Each transaction:
    1. Pay fee F
-   2. 80% of F distributed to 4 random UTXOs (uniform selection)
+   2. 80% of F distributed to 4 random UTXOs
    3. 20% burned
    ```
    - No pool accumulation needed
    - No periodic drawings
    - Simple implementation
-
-4. **No Cluster Tracking for Lottery Eligibility**
-   - UTXOs selected uniformly regardless of cluster factor
-   - Cluster factor only affects fees paid, not lottery chances
-   - Simpler state management
-
-### Why It Works
-
-| Mechanism | Effect |
-|-----------|--------|
-| Cluster-factor fees | Rich fund the pool disproportionately |
-| Uniform UTXO selection | Poor win disproportionately (more of them) |
-| Superlinear output fees | Can't game by splitting (quadratic cost) |
-| Immediate distribution | Simple, no state to track |
 
 ### Fee Flow
 
@@ -124,30 +167,28 @@ Transaction (2 outputs)
               └──► UTXO D (randomly selected)
 ```
 
-## Sybil Resistance
+## Sybil Resistance Analysis
 
-### Why Splitting Doesn't Help
+### What Works
 
-With superlinear per-output fees:
-
+**Single-transaction splitting** is expensive:
 ```
 Creating 10 UTXOs in one transaction:
 - Fee = base × factor × 100 (quadratic)
 - Cost per UTXO = 10× normal
-
-Creating 10 UTXOs in 10 transactions:
-- Fee = 10 × base × factor × 4
-- Still 2× more expensive than 2 UTXOs total
 ```
 
-### Break-Even Analysis
+### What Doesn't Work
 
-For splitting to be profitable, expected lottery winnings must exceed creation cost.
+**Gradual accumulation** bypasses protections:
+- Normal 2-output transactions create 1 new UTXO (change)
+- Over time, an active user accumulates many UTXOs
+- No additional cost beyond normal transaction fees
+- Each UTXO provides additional lottery chances
+
+### Break-Even Analysis (Revised)
 
 ```
-Expected winnings per UTXO per tx = (prize_per_winner × 4) / total_UTXOs
-                                  = 0.8 × fee / total_UTXOs
-
 With 100,000 UTXOs and fee=1000:
 - Expected per UTXO per tx = 800 / 100,000 = 0.008
 
@@ -155,81 +196,46 @@ To break even on a 1000-fee creation cost:
 - Need 1000 / 0.008 = 125,000 transactions
 - At 10,000 tx/day = 12.5 days
 
-With superlinear fees (creating 10 outputs costs 25× more):
-- Need 25,000 / 0.008 = 3,125,000 transactions = 312 days
+This is NOT "nearly a year" - it's under two weeks.
 ```
 
-With superlinear fees, splitting takes nearly a year to break even. Most users won't bother.
+For small networks, break-even is even faster, making the lottery
+more vulnerable during bootstrap phase.
 
-## Simulation Results
+## Selection Mode Options
 
-### Design Comparison (ValueWeighted Transactions)
+The implementation supports multiple selection modes:
 
-| Design | Init Gini | Final Gini | Change |
-|--------|-----------|------------|--------|
-| Pooled + FeeProportional | 0.71 | 0.44 | +38.7% |
-| Pooled + PureValueWeighted | 0.71 | 0.29 | +59.9% |
-| Pooled + UniformPerUtxo | 0.71 | 0.09 | +86.8% |
-| **COMBINED (Immediate + Uniform + Superlinear)** | 0.71 | **0.00** | **+100%** |
-
-### Transaction Pattern Sensitivity
-
-| Design | ValueWeighted | Uniform |
-|--------|---------------|---------|
-| FeeProportional | +38.7% | +43.5% |
-| PureValueWeighted | +59.9% | -9.8% |
-| UniformPerUtxo | +86.8% | -23.1% |
-| **COMBINED** | **+100%** | +100%* |
-
-*Standard inequality. Extreme inequality with uniform transactions still shows some regression.
-
-### Key Finding
-
-The combined design achieves **perfect equality** (Gini 0.0) under realistic conditions (ValueWeighted transactions). Even with uniform transactions, it achieves 100% Gini reduction for standard inequality distributions.
-
-## Alternative Ticket Models
-
-We evaluated multiple ticket models before arriving at the combined design:
-
-### ActivityBased (Original)
-
+### Uniform (Default)
+```rust
+SelectionMode::Uniform
 ```
-tickets = (value / cluster_factor) × activity_multiplier
+- Each UTXO has equal probability
+- Most progressive, most vulnerable to gaming
+
+### Value-Weighted
+```rust
+SelectionMode::ValueWeighted
 ```
+- Probability proportional to UTXO value
+- Sybil-resistant but not progressive
+- Equivalent to passive holding benefit
 
-**Problem**: Gameable through wash trading (22,000× ROI).
-
-### FeeProportional
-
+### Sqrt-Weighted
+```rust
+SelectionMode::SqrtWeighted
 ```
-tickets = fee_paid × (max_factor - your_factor) / max_factor
+- Probability proportional to sqrt(value)
+- Theoretical 3.16x gaming advantage
+- In practice shows ~5x (still vulnerable)
+
+### Log-Weighted
+```rust
+SelectionMode::LogWeighted
 ```
-
-**Better**: Wash-resistant, but requires ticket state tracking.
-
-### PureValueWeighted
-
-```
-tickets = value / cluster_factor
-```
-
-**Simpler**: No state tracking, but fails under uniform transactions.
-
-### UniformPerUtxo (Population Statistics)
-
-```
-tickets = 1 (per UTXO, regardless of value)
-```
-
-**Insight**: Uses population statistics for progressivity. Works incredibly well (+86.8%) but still requires pooled distribution.
-
-### Combined (Recommended)
-
-```
-No tickets! Just immediate distribution to random UTXOs.
-```
-
-**Best**: Simplest implementation, best results, uses population statistics insight.
+- Probability proportional to 1 + log2(value)
+- Shows ~8.5x gaming advantage
+- Nearly as vulnerable as uniform
 
 ## Implementation
 
@@ -240,6 +246,7 @@ fn process_transaction(
     tx: &Transaction,
     utxo_set: &mut UtxoSet,
     cluster_factors: &ClusterFactors,
+    selection_mode: SelectionMode,
 ) {
     let spender = &tx.inputs[0];
     let factor = cluster_factors.get(spender);
@@ -259,7 +266,7 @@ fn process_transaction(
     let per_winner = to_distribute / 4;
 
     for _ in 0..4 {
-        let winner = utxo_set.random_utxo();
+        let winner = select_winner(utxo_set, selection_mode);
         utxo_set.add(winner, per_winner);
     }
 }
@@ -274,87 +281,79 @@ Per UTXO:
 Global:
 - None! No pool, no tickets, no tracking.
 
-### Consensus Changes
-
-1. Calculate fee with superlinear output component
-2. Select 4 random UTXOs deterministically (using block hash as seed)
-3. Distribute 80% of fee to selected UTXOs
-4. Burn remaining 20%
-
-### Wallet Changes
-
-1. Display expected lottery income based on UTXO count
-2. Warn when creating many outputs (superlinear fee)
-3. No ticket tracking needed
-
 ## Parameters
 
 | Parameter | Value | Rationale |
 |-----------|-------|-----------|
 | Pool fraction | 80% | Balance redistribution vs. deflation |
-| Burn fraction | 20% | Deflationary pressure, Sybil protection |
-| Winners per tx | 4 | Balance variance vs. gas cost |
-| Output exponent | 2.0 | Quadratic makes splitting expensive |
+| Burn fraction | 20% | Deflationary pressure |
+| Winners per tx | 4 | Balance variance vs. complexity |
+| Output exponent | 2.0 | Quadratic discourages batched splitting |
 | Base fee | 100 | Baseline transaction cost |
+| Selection mode | Uniform | Progressive (accept gaming risk) |
 
-## Privacy Analysis
+## Honest Assessment
 
-### What's Already Public
+### What the Lottery Achieves
 
-- UTXO values
-- Transaction outputs
-- Ring members
+1. **Redistributes FROM exchanges TO self-custody users** - Positive!
+2. **Provides income to long-term holders** - Incentivizes holding
+3. **Burns 20% of fees** - Deflationary pressure
+4. **Simple implementation** - No complex state tracking
 
-### What This Adds
+### What It Doesn't Achieve
 
-| Information | Visibility | Impact |
-|-------------|------------|--------|
-| Random winners | Deterministic from block hash | Low (anyone can compute) |
-| Lottery income | Added to UTXO value | Low (already visible) |
+1. **True Sybil resistance** - UTXO accumulation provides ~9x advantage
+2. **Guaranteed progressive redistribution** - Depends on assumptions about UTXO distribution
+3. **Wealth taxation** - Cannot tax accumulated wealth without identity
 
-### Why It's Privacy-Preserving
+### The Fundamental Trade-off
 
-1. Winner selection is deterministic from public data (block hash)
-2. No new information revealed about UTXO ownership
-3. No activity tracking creates no new linkability
+In a privacy-preserving system without identity:
 
-## Comparison to Alternatives
+| Property | Uniform Selection | Value Selection |
+|----------|-------------------|-----------------|
+| Progressive | ✅ Yes | ❌ No |
+| Sybil-resistant | ❌ No | ✅ Yes |
+| Privacy-preserving | ✅ Yes | ✅ Yes |
 
-| Approach | Progressive? | Sybil-Resistant? | Simple? | Effective? |
-|----------|-------------|------------------|---------|------------|
-| Burn fees | No | N/A | Yes | No redistribution |
-| Cluster tax | Weak | Yes | No | 7% Gini reduction |
-| Pooled lottery | Yes | Mostly | No | 38-60% reduction |
-| **Combined** | **Yes** | **Yes** | **Yes** | **100% reduction** |
+**You must choose between progressivity and Sybil resistance.**
+
+The current design chooses progressivity, accepting that sophisticated users
+can game the system by accumulating UTXOs.
+
+## Potential Mitigations (Not Implemented)
+
+1. **UTXO age weighting** - Older UTXOs get more weight, discouraging rapid accumulation
+2. **Minimum UTXO value** - Small UTXOs from splitting don't qualify
+3. **Output count limits** - Cap maximum outputs per transaction
+4. **Identity layer** - Defeats privacy, not recommended
 
 ## Philosophical Notes
 
-### Why This Works
+### What We Learned
 
-Traditional progressive systems require:
-1. **Identity**: Know who has what
-2. **Measurement**: Track wealth
-3. **Enforcement**: Compel payment
+The original insight (population statistics → progressivity) is mathematically
+sound but practically limited:
 
-We achieve progressivity without identity by:
-1. Using **population statistics**: More poor people = more poor UTXOs
-2. Using **cluster factors**: Rich pay higher fees
-3. Using **economic incentives**: Splitting is unprofitable
+1. The assumption "1 person ≈ 1 UTXO" doesn't hold in practice
+2. Patient actors can accumulate UTXOs without paying splitting fees
+3. Privacy and Sybil resistance are fundamentally in tension
 
-### Limitations
+### What This System Actually Does
 
-The system depends on **rich transacting proportionally more** than poor. This is realistic:
-- Wealthy entities have more economic activity
-- Businesses transact more than individuals
-- Investment activity scales with wealth
+This is not progressive wealth redistribution. It's closer to:
 
-Under pathological conditions (everyone transacts equally, extreme inequality), the system can still increase inequality. But this is unlikely in practice.
+1. **Transaction fee recycling** - 80% of fees go back to random holders
+2. **Anti-custodial incentive** - Redistributes from exchanges to individuals
+3. **Holding reward** - Each UTXO earns lottery income over time
 
-### What We're Redistributing
+### Realistic Expectations
 
-This is not a wealth tax. We can't tax accumulated wealth without identity.
-
-This is **seigniorage redistribution**: the privilege of money creation (minting) is taxed through cluster factors, and those taxes are redistributed to all participants weighted by population.
+- Don't expect dramatic Gini coefficient changes
+- Do expect modest redistribution from active transactors to passive holders
+- Do expect redistribution from custodial services to self-custody
+- Accept that sophisticated users will accumulate UTXOs for advantage
 
 ## References
 
