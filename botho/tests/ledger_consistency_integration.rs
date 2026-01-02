@@ -46,10 +46,11 @@ fn create_test_wallet(seed: u8) -> WalletKeys {
         "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art",
         "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo vote",
         "letter advice cage absurd amount doctor acoustic avoid letter advice cage absurd amount doctor acoustic avoid letter advice cage absurd amount doctor acoustic bless",
-        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "jelly better achieve collect unaware mountain thought cargo oxygen act hood bridge",
     ];
-    let mnemonic = mnemonics[(seed as usize) % mnemonics.len()];
-    WalletKeys::from_mnemonic(mnemonic).expect("Failed to create wallet from mnemonic")
+    // Generate a deterministic 24-word mnemonic from seed
+    let base_mnemonic = mnemonics[(seed as usize) % 3]; // Use only the 24-word ones
+    WalletKeys::from_mnemonic(base_mnemonic).expect("Failed to create wallet from mnemonic")
 }
 
 fn create_mock_minting_tx(
@@ -72,8 +73,8 @@ fn create_mock_minting_tx(
         timestamp,
     );
 
-    // Find a valid nonce
-    for nonce in 0..1000 {
+    // Find a valid nonce - with trivial difficulty this should always succeed quickly
+    for nonce in 0..u64::MAX {
         minting_tx.nonce = nonce;
         if minting_tx.verify_pow() {
             break;
