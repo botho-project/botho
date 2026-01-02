@@ -33,10 +33,28 @@ pub enum TicketModel {
     /// Option C: tickets = fee_paid × (max_factor - your_factor) / max_factor
     /// Wash-trading resistant (more washes = more fees = benefits others)
     FeeProportional,
+    /// Simplest: tickets = value / cluster_factor
+    /// No activity or fee tracking needed. Computed at draw time.
+    /// Wash trading has negative EV (costs fees, doesn't change value).
+    PureValueWeighted,
+    /// Uniform per UTXO: each UTXO = 1 ticket regardless of value.
+    /// Progressive via population statistics: more poor people than rich,
+    /// so random UTXO is more likely to belong to poor person.
+    /// Sybil-resistant if lottery_pool < UTXO_creation_cost × UTXO_count.
+    UniformPerUtxo,
 }
 
 /// Maximum cluster factor for fee-proportional ticket calculation.
 const MAX_CLUSTER_FACTOR: f64 = 6.0;
+
+/// Distribution mode for lottery winnings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DistributionMode {
+    /// Accumulate fees in pool, draw periodically.
+    Pooled,
+    /// Immediately distribute to N random UTXOs per transaction.
+    Immediate { winners_per_tx: u32 },
+}
 
 /// Configuration for the lottery system.
 #[derive(Clone, Debug)]
@@ -61,6 +79,13 @@ pub struct LotteryConfig {
 
     /// Ticket model: how lottery tickets are earned.
     pub ticket_model: TicketModel,
+
+    /// Distribution mode: pooled vs immediate.
+    pub distribution_mode: DistributionMode,
+
+    /// Per-output fee multiplier (for superlinear fees).
+    /// Total fee = base_fee × cluster_factor × outputs^output_fee_exponent
+    pub output_fee_exponent: f64,
 }
 
 impl Default for LotteryConfig {
@@ -73,6 +98,8 @@ impl Default for LotteryConfig {
             activity_lookback: 259_200, // ~30 days at 10s blocks
             base_fee: 1_000,
             ticket_model: TicketModel::ActivityBased,
+            distribution_mode: DistributionMode::Pooled,
+            output_fee_exponent: 1.0, // Linear by default
         }
     }
 }
@@ -134,6 +161,11 @@ impl LotteryUtxo {
         match model {
             TicketModel::ActivityBased => self.activity_tickets(),
             TicketModel::FeeProportional => self.tickets_from_fees,
+            // Simplest model: just value / cluster_factor, no state tracking
+            TicketModel::PureValueWeighted => self.base_tickets(),
+            // Uniform: each UTXO = 1 ticket regardless of value
+            // Progressive via population statistics
+            TicketModel::UniformPerUtxo => 1.0,
         }
     }
 
@@ -516,6 +548,151 @@ impl LotterySimulation {
             if let Some(utxo) = self.utxos.get_mut(&utxo_id) {
                 utxo.record_ring_participation(self.ring_size);
             }
+        }
+    }
+
+    /// Simulate a transaction with immediate distribution to random UTXOs.
+    ///
+    /// Combined design:
+    /// 1. Fee = base × cluster_factor × outputs^exponent (progressive + anti-Sybil)
+    /// 2. 80% of fee immediately distributed to N random UTXOs (uniform selection)
+    /// 3. 20% burned
+    ///
+    /// This is simpler than pooled distribution - no accumulation, no periodic draws.
+    pub fn simulate_transaction_immediate(
+        &mut self,
+        base_fee: u64,
+        num_outputs: u32,
+        tx_model: TransactionModel,
+    ) {
+        let mut rng = rand::thread_rng();
+
+        // Get all UTXOs (for lottery distribution, don't filter by min value)
+        let all_utxos: Vec<u64> = self.utxos.keys().copied().collect();
+        if all_utxos.len() < 2 {
+            return;
+        }
+
+        // Select spender based on transaction model
+        let spender_utxo_id = match tx_model {
+            TransactionModel::ValueWeighted => {
+                let eligible: Vec<(u64, u64)> = self
+                    .utxos
+                    .iter()
+                    .filter(|(_, u)| u.value > 0)
+                    .map(|(id, u)| (*id, u.value))
+                    .collect();
+                if eligible.is_empty() {
+                    return;
+                }
+                let total: u64 = eligible.iter().map(|(_, v)| v).sum();
+                if total == 0 {
+                    return;
+                }
+                let roll = rng.gen_range(0..total);
+                let mut cumulative = 0u64;
+                let mut selected = eligible[0].0;
+                for (id, value) in &eligible {
+                    cumulative += value;
+                    if cumulative > roll {
+                        selected = *id;
+                        break;
+                    }
+                }
+                selected
+            }
+            TransactionModel::Uniform => {
+                let eligible: Vec<u64> = self
+                    .utxos
+                    .iter()
+                    .filter(|(_, u)| u.value > 0)
+                    .map(|(id, _)| *id)
+                    .collect();
+                if eligible.is_empty() {
+                    return;
+                }
+                eligible[rng.gen_range(0..eligible.len())]
+            }
+        };
+
+        // Calculate fee: base × cluster_factor × outputs^exponent
+        let (actual_fee, cluster_factor) = {
+            let spender = match self.utxos.get(&spender_utxo_id) {
+                Some(s) => s,
+                None => return,
+            };
+            let output_multiplier = (num_outputs as f64).powf(self.config.output_fee_exponent);
+            let fee = (base_fee as f64 * spender.cluster_factor * output_multiplier) as u64;
+            let capped_fee = fee.min(spender.value / 2); // Don't take more than half
+            (capped_fee, spender.cluster_factor)
+        };
+
+        if actual_fee == 0 {
+            return;
+        }
+
+        // Deduct fee from spender
+        if let Some(spender) = self.utxos.get_mut(&spender_utxo_id) {
+            spender.value -= actual_fee;
+            let owner_id = spender.owner_id;
+            if let Some(owner) = self.owners.get_mut(&owner_id) {
+                owner.total_fees_paid += actual_fee;
+                owner.tx_count += 1;
+            }
+        }
+
+        self.metrics.total_fees_collected += actual_fee;
+
+        // Calculate distribution
+        let to_distribute = (actual_fee as f64 * self.config.pool_fraction) as u64;
+        let to_burn = actual_fee - to_distribute;
+        self.total_burned += to_burn;
+
+        // Immediately distribute to N random UTXOs (uniform selection)
+        let winners_per_tx = match self.config.distribution_mode {
+            DistributionMode::Immediate { winners_per_tx } => winners_per_tx,
+            DistributionMode::Pooled => 4, // Default fallback
+        };
+
+        if to_distribute > 0 && !all_utxos.is_empty() {
+            let per_winner = to_distribute / winners_per_tx as u64;
+            if per_winner > 0 {
+                // Select winners uniformly (the key insight: favors the many)
+                for _ in 0..winners_per_tx.min(all_utxos.len() as u32) {
+                    let winner_idx = rng.gen_range(0..all_utxos.len());
+                    let winner_id = all_utxos[winner_idx];
+
+                    if let Some(winner) = self.utxos.get_mut(&winner_id) {
+                        winner.value += per_winner;
+                        let owner_id = winner.owner_id;
+                        if let Some(owner) = self.owners.get_mut(&owner_id) {
+                            owner.total_winnings += per_winner;
+                        }
+                    }
+                    self.metrics.total_distributed += per_winner;
+                }
+            }
+        }
+    }
+
+    /// Advance blocks using immediate distribution mode.
+    pub fn advance_blocks_immediate(
+        &mut self,
+        blocks: u64,
+        txs_per_block: u32,
+        tx_model: TransactionModel,
+    ) {
+        for _ in 0..blocks {
+            self.current_block += 1;
+
+            for _ in 0..txs_per_block {
+                // Most transactions have 2 outputs (payment + change)
+                // Occasionally more (batched payments)
+                let num_outputs = 2; // Simplified
+                self.simulate_transaction_immediate(self.config.base_fee, num_outputs, tx_model);
+            }
+
+            // No periodic drawing needed - distribution is immediate
         }
     }
 
@@ -1351,5 +1528,741 @@ mod tests {
             poor_actual_rate,
             poor_rate_after
         );
+    }
+
+    /// Test PureValueWeighted model - the simplest possible lottery.
+    ///
+    /// tickets = value / cluster_factor
+    ///
+    /// Properties:
+    /// - No state tracking (computed at draw time)
+    /// - Sybil-resistant (splitting doesn't change total weight)
+    /// - Wash-resistant (value unchanged by transacting, just pay fees)
+    #[test]
+    fn test_pure_value_weighted_model() {
+        let total_wealth = 100_000_000u64;
+
+        let config = LotteryConfig {
+            base_fee: 100,
+            drawing_interval: 10,
+            ticket_model: TicketModel::PureValueWeighted,
+            ..LotteryConfig::default()
+        };
+        let fee_curve = FeeCurve::default_params();
+        let mut sim = LotterySimulation::new(config, fee_curve);
+
+        // 10 poor (0.5% each = 5%), 5 middle (5% each = 25%), 2 rich (35% each = 70%)
+        for _ in 0..10 {
+            sim.add_owner(total_wealth / 200, SybilStrategy::Normal);
+        }
+        for _ in 0..5 {
+            sim.add_owner(total_wealth * 5 / 100, SybilStrategy::Normal);
+        }
+        for _ in 0..2 {
+            sim.add_owner(total_wealth * 35 / 100, SybilStrategy::Normal);
+        }
+        sim.current_block = 1000;
+
+        let initial_gini = sim.calculate_gini();
+        sim.advance_blocks_with_model(30_000, 20, TransactionModel::ValueWeighted);
+        let final_gini_vw = sim.calculate_gini();
+        let fees_vw = sim.metrics.total_fees_collected;
+
+        // Reset and test with uniform
+        let mut sim2 = LotterySimulation::new(
+            LotteryConfig {
+                base_fee: 100,
+                drawing_interval: 10,
+                ticket_model: TicketModel::PureValueWeighted,
+                ..LotteryConfig::default()
+            },
+            FeeCurve::default_params(),
+        );
+        for _ in 0..10 {
+            sim2.add_owner(total_wealth / 200, SybilStrategy::Normal);
+        }
+        for _ in 0..5 {
+            sim2.add_owner(total_wealth * 5 / 100, SybilStrategy::Normal);
+        }
+        for _ in 0..2 {
+            sim2.add_owner(total_wealth * 35 / 100, SybilStrategy::Normal);
+        }
+        sim2.current_block = 1000;
+        sim2.advance_blocks_with_model(30_000, 20, TransactionModel::Uniform);
+        let final_gini_uniform = sim2.calculate_gini();
+        let fees_uniform = sim2.metrics.total_fees_collected;
+
+        eprintln!("\n=== PURE VALUE-WEIGHTED MODEL ===");
+        eprintln!("Initial Gini: {:.4}", initial_gini);
+        eprintln!("");
+        eprintln!("With ValueWeighted transactions (rich transact more):");
+        eprintln!("  Final Gini: {:.4}", final_gini_vw);
+        eprintln!("  Reduction: {:.1}%", (initial_gini - final_gini_vw) / initial_gini * 100.0);
+        eprintln!("  Fees: {}", fees_vw);
+        eprintln!("");
+        eprintln!("With Uniform transactions (everyone transacts equally):");
+        eprintln!("  Final Gini: {:.4}", final_gini_uniform);
+        eprintln!("  Reduction: {:.1}%", (initial_gini - final_gini_uniform) / initial_gini * 100.0);
+        eprintln!("  Fees: {}", fees_uniform);
+        eprintln!("==================================\n");
+
+        // PureValueWeighted reduces inequality with value-weighted transactions
+        assert!(final_gini_vw < initial_gini, "Should reduce Gini with value-weighted tx");
+
+        // NOTE: PureValueWeighted INCREASES inequality with uniform transactions!
+        // This is because tickets ∝ value/factor, so rich still have more tickets.
+        // Under uniform tx, rich don't pay proportionally more fees to fund the pool.
+        // Rich contribute ~25% of fees but win ~55% of drawings → net gain for rich.
+        //
+        // This is a KNOWN LIMITATION. PureValueWeighted only works when rich
+        // transact proportionally more than poor (realistic in practice).
+        assert!(
+            final_gini_uniform > initial_gini * 0.95,
+            "Expected PureValueWeighted to not significantly reduce Gini under uniform tx"
+        );
+    }
+
+    /// Test wash trading has negative EV with PureValueWeighted.
+    ///
+    /// Key insight: Your lottery weight = value / cluster_factor
+    /// Wash trading doesn't change your value (minus fees), so:
+    /// - Weight change ≈ 0 (or slightly negative due to fees)
+    /// - Cost = fees paid
+    /// - EV = -fees (always negative)
+    #[test]
+    fn test_pure_value_weighted_wash_resistance() {
+        let config = LotteryConfig {
+            base_fee: 1000,
+            drawing_interval: 1000,
+            ticket_model: TicketModel::PureValueWeighted,
+            ..LotteryConfig::default()
+        };
+        let fee_curve = FeeCurve::default_params();
+        let mut sim = LotterySimulation::new(config, fee_curve);
+
+        // Create a wash trader with significant wealth
+        let trader_id = sim.add_owner(10_000_000, SybilStrategy::Normal);
+        sim.add_owner(90_000_000, SybilStrategy::Normal); // Rest of economy
+        sim.current_block = 1000;
+
+        // Get initial state
+        let trader_utxo_id = *sim.owners.get(&trader_id).unwrap().utxo_ids.first().unwrap();
+        let initial_value = sim.utxos.get(&trader_utxo_id).unwrap().value;
+        let initial_factor = sim.utxos.get(&trader_utxo_id).unwrap().cluster_factor;
+        let initial_tickets = initial_value as f64 / initial_factor;
+
+        eprintln!("\n=== PURE VALUE-WEIGHTED WASH RESISTANCE ===");
+        eprintln!("Initial state:");
+        eprintln!("  Value: {}", initial_value);
+        eprintln!("  Factor: {:.4}", initial_factor);
+        eprintln!("  Tickets (value/factor): {:.2}", initial_tickets);
+
+        // Simulate 100 wash trades (sending to self)
+        let wash_count = 100;
+        let mut total_fees_paid = 0u64;
+
+        for _ in 0..wash_count {
+            // Find current UTXO for trader
+            let utxo_id = *sim.owners.get(&trader_id).unwrap().utxo_ids.first().unwrap();
+            let utxo = sim.utxos.get(&utxo_id).unwrap();
+            let fee = (sim.config.base_fee as f64 * utxo.cluster_factor) as u64;
+            total_fees_paid += fee;
+
+            // Execute wash trade (self-send)
+            // This destroys current UTXO and creates new one with value - fee
+            let new_value = utxo.value.saturating_sub(fee);
+            let new_id = sim.next_utxo_id;
+            sim.next_utxo_id += 1;
+
+            let new_utxo = LotteryUtxo::new(
+                new_id,
+                trader_id,
+                new_value,
+                utxo.cluster_factor, // Factor unchanged for self-send
+                sim.current_block,
+            );
+            sim.utxos.remove(&utxo_id);
+            sim.utxos.insert(new_id, new_utxo);
+            sim.owners.get_mut(&trader_id).unwrap().utxo_ids = vec![new_id];
+        }
+
+        // Get final state
+        let final_utxo_id = *sim.owners.get(&trader_id).unwrap().utxo_ids.first().unwrap();
+        let final_value = sim.utxos.get(&final_utxo_id).unwrap().value;
+        let final_factor = sim.utxos.get(&final_utxo_id).unwrap().cluster_factor;
+        let final_tickets = final_value as f64 / final_factor;
+
+        let ticket_change = final_tickets - initial_tickets;
+        let ticket_change_pct = ticket_change / initial_tickets * 100.0;
+
+        eprintln!("");
+        eprintln!("After {} wash trades:", wash_count);
+        eprintln!("  Value: {} (lost {})", final_value, initial_value - final_value);
+        eprintln!("  Factor: {:.4} (unchanged)", final_factor);
+        eprintln!("  Tickets: {:.2} ({:+.2}, {:+.2}%)", final_tickets, ticket_change, ticket_change_pct);
+        eprintln!("  Fees paid: {}", total_fees_paid);
+        eprintln!("");
+        eprintln!("Result: Wash trader LOST tickets (EV = -fees)");
+        eprintln!("============================================\n");
+
+        // Verify wash trading reduced tickets (negative EV)
+        assert!(
+            final_tickets < initial_tickets,
+            "Wash trading should reduce tickets (lost fees)"
+        );
+        assert!(
+            (initial_value - final_value) == total_fees_paid,
+            "Value loss should equal fees paid"
+        );
+    }
+
+    /// Comprehensive comparison of all three ticket models.
+    #[test]
+    fn test_all_ticket_models() {
+        let total_wealth = 100_000_000u64;
+
+        // Helper to create a simulation with specified ticket model
+        let create_sim = |ticket_model: TicketModel| {
+            let config = LotteryConfig {
+                base_fee: 100,
+                drawing_interval: 10,
+                ticket_model,
+                ..LotteryConfig::default()
+            };
+            let fee_curve = FeeCurve::default_params();
+            let mut sim = LotterySimulation::new(config, fee_curve);
+
+            // 10 poor (0.5% each = 5%), 5 middle (5% each = 25%), 2 rich (35% each = 70%)
+            for _ in 0..10 {
+                sim.add_owner(total_wealth / 200, SybilStrategy::Normal);
+            }
+            for _ in 0..5 {
+                sim.add_owner(total_wealth * 5 / 100, SybilStrategy::Normal);
+            }
+            for _ in 0..2 {
+                sim.add_owner(total_wealth * 35 / 100, SybilStrategy::Normal);
+            }
+            sim.current_block = 1000;
+            sim
+        };
+
+        // Run 8 scenarios: 4 ticket models × 2 transaction models
+        let scenarios = [
+            ("ActivityBased + ValueWeighted", TicketModel::ActivityBased, TransactionModel::ValueWeighted),
+            ("ActivityBased + Uniform", TicketModel::ActivityBased, TransactionModel::Uniform),
+            ("FeeProportional + ValueWeighted", TicketModel::FeeProportional, TransactionModel::ValueWeighted),
+            ("FeeProportional + Uniform", TicketModel::FeeProportional, TransactionModel::Uniform),
+            ("PureValueWeighted + ValueWeighted", TicketModel::PureValueWeighted, TransactionModel::ValueWeighted),
+            ("PureValueWeighted + Uniform", TicketModel::PureValueWeighted, TransactionModel::Uniform),
+            ("UniformPerUtxo + ValueWeighted", TicketModel::UniformPerUtxo, TransactionModel::ValueWeighted),
+            ("UniformPerUtxo + Uniform", TicketModel::UniformPerUtxo, TransactionModel::Uniform),
+        ];
+
+        eprintln!("\n=== ALL TICKET MODELS COMPARISON ===");
+        eprintln!("{:<40} {:>10} {:>10} {:>10} {:>15}", "Scenario", "Init Gini", "Final", "Change", "Fees");
+        eprintln!("{}", "-".repeat(90));
+
+        for (name, ticket_model, tx_model) in scenarios {
+            let mut sim = create_sim(ticket_model);
+            let initial_gini = sim.calculate_gini();
+            sim.advance_blocks_with_model(30_000, 20, tx_model);
+            let final_gini = sim.calculate_gini();
+            let change_pct = (initial_gini - final_gini) / initial_gini * 100.0;
+
+            eprintln!(
+                "{:<40} {:>10.4} {:>10.4} {:>+9.1}% {:>15}",
+                name,
+                initial_gini,
+                final_gini,
+                change_pct,
+                sim.metrics.total_fees_collected
+            );
+        }
+        eprintln!("====================================\n");
+    }
+
+    /// Test UniformPerUtxo with per-output fee economics.
+    ///
+    /// Key insight: In an unequal landscape, uniform random selection favors
+    /// the many (poor) over the few (rich). If we make UTXO creation expensive
+    /// enough, splitting becomes unprofitable, and the natural distribution
+    /// of UTXOs follows population, not wealth.
+    ///
+    /// This test verifies:
+    /// 1. The break-even economics of UTXO splitting
+    /// 2. Whether UniformPerUtxo reduces inequality without cluster tracking
+    #[test]
+    fn test_uniform_per_utxo_economics() {
+        // Economic parameters
+        let base_fee: u64 = 100;
+        let per_output_fee: u64 = 50; // Extra fee per output beyond 2
+        let pool_fraction = 0.8;
+        let winners_per_drawing = 4;
+        let drawings_per_period = 100; // e.g., 100 blocks
+
+        eprintln!("\n=== UNIFORM PER UTXO ECONOMICS ===");
+        eprintln!("Parameters:");
+        eprintln!("  Base fee: {}", base_fee);
+        eprintln!("  Per-output fee (beyond 2): {}", per_output_fee);
+        eprintln!("  Pool fraction: {:.0}%", pool_fraction * 100.0);
+        eprintln!("  Winners per drawing: {}", winners_per_drawing);
+        eprintln!("");
+
+        // Simulate a system with varying UTXO counts
+        for total_utxos in [1_000, 10_000, 100_000, 1_000_000u64] {
+            // Assume each transaction creates ~1.5 UTXOs on average
+            // and pool is funded from transaction fees
+            let txs_per_period = total_utxos as f64 / 1.5 * 0.1; // 10% turnover
+            let pool_per_period = txs_per_period * base_fee as f64 * pool_fraction;
+            let prize_per_winner = pool_per_period / (drawings_per_period * winners_per_drawing) as f64;
+
+            // Expected winnings per UTXO per period
+            let win_prob_per_drawing = winners_per_drawing as f64 / total_utxos as f64;
+            let expected_winnings = win_prob_per_drawing * prize_per_winner * drawings_per_period as f64;
+
+            // Cost to create one extra UTXO (splitting)
+            let split_cost = per_output_fee as f64;
+
+            // Break-even analysis
+            let periods_to_break_even = if expected_winnings > 0.0 {
+                split_cost / expected_winnings
+            } else {
+                f64::INFINITY
+            };
+
+            eprintln!(
+                "UTXOs: {:>10} | Prize/winner: {:>8.2} | EV/UTXO: {:>8.4} | Cost: {:>4} | Break-even: {:>8.1} periods",
+                total_utxos,
+                prize_per_winner,
+                expected_winnings,
+                per_output_fee,
+                periods_to_break_even
+            );
+        }
+
+        eprintln!("");
+        eprintln!("Interpretation:");
+        eprintln!("  If break-even > holding period, splitting is unprofitable.");
+        eprintln!("  With large UTXO counts, expected value per UTXO is tiny.");
+        eprintln!("  Per-output fees make splitting costly relative to expected winnings.");
+        eprintln!("");
+
+        // Now simulate the actual redistribution effect
+        let total_wealth = 100_000_000u64;
+        let config = LotteryConfig {
+            base_fee: 100,
+            drawing_interval: 10,
+            ticket_model: TicketModel::UniformPerUtxo,
+            ..LotteryConfig::default()
+        };
+        let fee_curve = FeeCurve::default_params();
+
+        // Key test: create population where poor OUTNUMBER rich significantly
+        // 100 poor people (100 BTH each = 10,000 total = 0.01%)
+        // 10 middle people (100,000 BTH each = 1,000,000 total = 1%)
+        // 1 rich person (98,990,000 BTH = 98.99%)
+        let mut sim = LotterySimulation::new(config.clone(), fee_curve.clone());
+
+        // Add 100 poor people
+        for _ in 0..100 {
+            sim.add_owner(100, SybilStrategy::Normal);
+        }
+        // Add 10 middle class
+        for _ in 0..10 {
+            sim.add_owner(100_000, SybilStrategy::Normal);
+        }
+        // Add 1 ultra-rich
+        sim.add_owner(98_990_000, SybilStrategy::Normal);
+
+        sim.current_block = 1000;
+
+        let initial_gini = sim.calculate_gini();
+        let initial_utxo_count = sim.utxos.len();
+
+        eprintln!("Population simulation:");
+        eprintln!("  100 poor (100 BTH each) = 0.01% of wealth, 90% of population");
+        eprintln!("  10 middle (100K BTH each) = 1% of wealth, 9% of population");
+        eprintln!("  1 rich (99M BTH) = 99% of wealth, 1% of population");
+        eprintln!("  Initial UTXOs: {}", initial_utxo_count);
+        eprintln!("  Initial Gini: {:.4}", initial_gini);
+        eprintln!("");
+
+        // Run simulation with uniform transaction pattern (everyone transacts equally)
+        // This is the KEY test - uniform transactions, uniform lottery
+        sim.advance_blocks_with_model(50_000, 20, TransactionModel::Uniform);
+
+        let final_gini = sim.calculate_gini();
+        let final_utxo_count = sim.utxos.len();
+        let gini_change = initial_gini - final_gini;
+        let gini_change_pct = gini_change / initial_gini * 100.0;
+
+        eprintln!("After 50,000 blocks with uniform transactions:");
+        eprintln!("  Final UTXOs: {}", final_utxo_count);
+        eprintln!("  Final Gini: {:.4}", final_gini);
+        eprintln!("  Gini change: {:+.4} ({:+.1}%)", gini_change, gini_change_pct);
+        eprintln!("  Fees collected: {}", sim.metrics.total_fees_collected);
+        eprintln!("  Pool distributed: {}", sim.metrics.total_distributed);
+        eprintln!("");
+
+        // The hypothesis: UniformPerUtxo with uniform transactions should be
+        // progressive because 90% of UTXOs belong to poor people (by count).
+        //
+        // Each UTXO has equal chance of winning. Poor have 100 UTXOs,
+        // rich has 1 UTXO. Poor win 100/111 = 90% of drawings!
+        //
+        // Meanwhile, fees might be paid more by the rich (higher value txs).
+        // Net effect: redistribution from rich to poor.
+
+        if gini_change > 0.0 {
+            eprintln!("SUCCESS: UniformPerUtxo reduced inequality!");
+            eprintln!("  This works because random UTXO selection favors the many (poor).");
+        } else {
+            eprintln!("NOTE: UniformPerUtxo did not reduce inequality in this scenario.");
+            eprintln!("  This could be due to:");
+            eprintln!("  - Rich fragmenting into many UTXOs through transactions");
+            eprintln!("  - Fee structure not penalizing fragmentation enough");
+        }
+        eprintln!("================================\n");
+
+        // The test passes regardless - we're gathering data about behavior
+    }
+
+    /// Test the "4 random winners per transaction" model.
+    ///
+    /// Instead of accumulating a pool and drawing periodically,
+    /// each transaction immediately distributes some of its fee
+    /// to 4 randomly selected UTXOs.
+    #[test]
+    fn test_immediate_distribution_model() {
+        eprintln!("\n=== IMMEDIATE DISTRIBUTION MODEL ===");
+        eprintln!("Each transaction picks 4 random UTXOs to receive a share of fees.");
+        eprintln!("");
+
+        // This is a simplified model:
+        // - Transaction pays fee F
+        // - 80% of F is distributed to 4 random UTXOs (20% each)
+        // - 20% of F is burned
+
+        let fee = 1000u64;
+        let distribution_fraction = 0.8;
+        let winners_per_tx = 4;
+        let per_winner = (fee as f64 * distribution_fraction) / winners_per_tx as f64;
+
+        eprintln!("Per transaction:");
+        eprintln!("  Fee: {}", fee);
+        eprintln!("  Distributed (80%): {}", (fee as f64 * distribution_fraction) as u64);
+        eprintln!("  Per winner (4 winners): {:.0}", per_winner);
+        eprintln!("  Burned (20%): {}", (fee as f64 * 0.2) as u64);
+        eprintln!("");
+
+        // Expected value analysis for different UTXO counts
+        for total_utxos in [100, 1000, 10000, 100000u64] {
+            // Probability of being selected as one of 4 winners
+            // Approximation: 4/N (assuming sampling with replacement or N >> 4)
+            let win_prob = 4.0 / total_utxos as f64;
+            let expected_per_tx = win_prob * per_winner;
+
+            eprintln!(
+                "UTXOs: {:>6} | Win prob: {:.6} | EV per tx: {:.4}",
+                total_utxos, win_prob, expected_per_tx
+            );
+        }
+
+        eprintln!("");
+        eprintln!("Key insight:");
+        eprintln!("  With many UTXOs, expected value per UTXO per transaction is tiny.");
+        eprintln!("  Creating an extra UTXO costs a full fee but gains tiny EV.");
+        eprintln!("  Therefore splitting is unprofitable with large UTXO counts.");
+        eprintln!("");
+
+        // Now let's verify the break-even
+        let total_utxos = 10000u64;
+        let txs_per_day = 10000u64; // Example
+        let win_prob = 4.0 / total_utxos as f64;
+        let ev_per_tx = win_prob * per_winner;
+        let ev_per_day = ev_per_tx * txs_per_day as f64;
+
+        eprintln!("Break-even analysis (10,000 UTXOs, 10,000 tx/day):");
+        eprintln!("  EV per UTXO per day: {:.2}", ev_per_day);
+        eprintln!("  Cost to create UTXO: {}", fee);
+        eprintln!("  Days to break even: {:.1}", fee as f64 / ev_per_day);
+
+        // If break-even is long enough, splitting isn't worth it
+        let days_to_break_even = fee as f64 / ev_per_day;
+        if days_to_break_even > 30.0 {
+            eprintln!("  -> Splitting takes >30 days to break even: UNPROFITABLE for most users");
+        } else {
+            eprintln!("  -> Splitting breaks even in <30 days: NEEDS HIGHER FEES");
+        }
+        eprintln!("====================================\n");
+    }
+
+    /// Test the combined design:
+    /// 1. Cluster-factor fees (progressive taxation)
+    /// 2. Superlinear per-output fees (anti-Sybil)
+    /// 3. Immediate random distribution to 4 UTXOs (simple lottery)
+    /// 4. No cluster tracking for lottery eligibility (simplicity)
+    #[test]
+    fn test_combined_design() {
+        eprintln!("\n=== COMBINED DESIGN TEST ===");
+        eprintln!("Design:");
+        eprintln!("  1. Fee = base × cluster_factor × outputs^2 (progressive + anti-split)");
+        eprintln!("  2. 80% immediately distributed to 4 random UTXOs");
+        eprintln!("  3. 20% burned");
+        eprintln!("  4. Uniform UTXO selection (no cluster tracking for lottery)");
+        eprintln!("");
+
+        let total_wealth = 100_000_000u64;
+
+        // Test with different transaction patterns
+        for (name, tx_model) in [
+            ("ValueWeighted (rich transact more)", TransactionModel::ValueWeighted),
+            ("Uniform (everyone transacts equally)", TransactionModel::Uniform),
+        ] {
+            let config = LotteryConfig {
+                base_fee: 100,
+                pool_fraction: 0.8,
+                distribution_mode: DistributionMode::Immediate { winners_per_tx: 4 },
+                output_fee_exponent: 2.0, // Quadratic: 2 outputs = 4×, 3 outputs = 9×
+                min_utxo_value: 0, // No minimum - everyone can participate
+                ..LotteryConfig::default()
+            };
+            let fee_curve = FeeCurve::default_params();
+            let mut sim = LotterySimulation::new(config, fee_curve);
+
+            // Create unequal population:
+            // 10 poor (0.5% each = 5% total), 5 middle (5% each = 25%), 2 rich (35% each = 70%)
+            for _ in 0..10 {
+                sim.add_owner(total_wealth / 200, SybilStrategy::Normal); // 500,000 each
+            }
+            for _ in 0..5 {
+                sim.add_owner(total_wealth * 5 / 100, SybilStrategy::Normal); // 5,000,000 each
+            }
+            for _ in 0..2 {
+                sim.add_owner(total_wealth * 35 / 100, SybilStrategy::Normal); // 35,000,000 each
+            }
+
+            sim.current_block = 1000;
+
+            let initial_gini = sim.calculate_gini();
+            let initial_utxos = sim.utxos.len();
+
+            // Run simulation with immediate distribution
+            sim.advance_blocks_immediate(30_000, 20, tx_model);
+
+            let final_gini = sim.calculate_gini();
+            let final_utxos = sim.utxos.len();
+            let gini_change = initial_gini - final_gini;
+            let gini_change_pct = gini_change / initial_gini * 100.0;
+
+            eprintln!("{}", name);
+            eprintln!("  Initial: Gini={:.4}, UTXOs={}", initial_gini, initial_utxos);
+            eprintln!("  Final:   Gini={:.4}, UTXOs={}", final_gini, final_utxos);
+            eprintln!("  Change:  {:+.4} ({:+.1}%)", gini_change, gini_change_pct);
+            eprintln!("  Fees collected: {}", sim.metrics.total_fees_collected);
+            eprintln!("  Distributed: {}", sim.metrics.total_distributed);
+            eprintln!("  Burned: {}", sim.total_burned);
+            eprintln!("");
+        }
+
+        // Now test with more extreme inequality to see population statistics effect
+        eprintln!("--- Extreme Inequality Test ---");
+        eprintln!("Population: 100 poor (0.01% each), 10 middle (1% each), 1 ultra-rich (89%)");
+        eprintln!("");
+
+        for (name, tx_model) in [
+            ("ValueWeighted", TransactionModel::ValueWeighted),
+            ("Uniform", TransactionModel::Uniform),
+        ] {
+            let config = LotteryConfig {
+                base_fee: 100,
+                pool_fraction: 0.8,
+                distribution_mode: DistributionMode::Immediate { winners_per_tx: 4 },
+                output_fee_exponent: 2.0,
+                min_utxo_value: 0,
+                ..LotteryConfig::default()
+            };
+            let fee_curve = FeeCurve::default_params();
+            let mut sim = LotterySimulation::new(config, fee_curve);
+
+            // 100 poor: 10,000 BTH each (0.01% each, 1% total)
+            for _ in 0..100 {
+                sim.add_owner(10_000, SybilStrategy::Normal);
+            }
+            // 10 middle: 1,000,000 BTH each (1% each, 10% total)
+            for _ in 0..10 {
+                sim.add_owner(1_000_000, SybilStrategy::Normal);
+            }
+            // 1 ultra-rich: 89,000,000 BTH (89% of total)
+            sim.add_owner(89_000_000, SybilStrategy::Normal);
+
+            sim.current_block = 1000;
+
+            let initial_gini = sim.calculate_gini();
+
+            // Key insight: 111 people, 111 UTXOs initially
+            // Poor have 100 UTXOs (90%), middle have 10 (9%), rich has 1 (1%)
+            // Random selection should heavily favor the poor!
+
+            sim.advance_blocks_immediate(50_000, 20, tx_model);
+
+            let final_gini = sim.calculate_gini();
+            let gini_change = initial_gini - final_gini;
+            let gini_change_pct = gini_change / initial_gini * 100.0;
+
+            eprintln!("{}: Gini {:.4} → {:.4} ({:+.1}%)",
+                name, initial_gini, final_gini, gini_change_pct);
+        }
+
+        eprintln!("");
+        eprintln!("================================\n");
+    }
+
+    /// Test superlinear fees discourage output splitting.
+    #[test]
+    fn test_superlinear_output_fees() {
+        eprintln!("\n=== SUPERLINEAR OUTPUT FEE TEST ===");
+        eprintln!("Fee = base × factor × outputs^exponent");
+        eprintln!("");
+
+        let base = 100u64;
+        let factor = 3.0; // Medium cluster factor
+
+        for exponent in [1.0, 1.5, 2.0, 3.0] {
+            eprintln!("Exponent: {}", exponent);
+            for outputs in 1..=10u32 {
+                let multiplier = (outputs as f64).powf(exponent);
+                let fee = (base as f64 * factor * multiplier) as u64;
+                let per_output = fee / outputs as u64;
+                eprintln!(
+                    "  {} outputs: fee={:>6}, per_output={:>5}",
+                    outputs, fee, per_output
+                );
+            }
+            eprintln!("");
+        }
+
+        // With exponent=2.0:
+        // 2 outputs: 100 × 3 × 4 = 1200 total, 600 per output
+        // 10 outputs: 100 × 3 × 100 = 30000 total, 3000 per output
+        // Cost per output scales 5× for going from 2→10 outputs
+
+        eprintln!("Key insight: With exponent=2.0, creating 10 outputs costs");
+        eprintln!("5× more per output than creating 2 outputs.");
+        eprintln!("This makes splitting prohibitively expensive.");
+        eprintln!("================================\n");
+    }
+
+    /// Compare all designs head-to-head.
+    #[test]
+    fn test_design_comparison() {
+        eprintln!("\n=== COMPREHENSIVE DESIGN COMPARISON ===");
+        eprintln!("");
+
+        let total_wealth = 100_000_000u64;
+
+        // Create a standardized population for fair comparison
+        let create_population = |sim: &mut LotterySimulation| {
+            // 10 poor (0.5% each), 5 middle (5% each), 2 rich (35% each)
+            for _ in 0..10 {
+                sim.add_owner(total_wealth / 200, SybilStrategy::Normal);
+            }
+            for _ in 0..5 {
+                sim.add_owner(total_wealth * 5 / 100, SybilStrategy::Normal);
+            }
+            for _ in 0..2 {
+                sim.add_owner(total_wealth * 35 / 100, SybilStrategy::Normal);
+            }
+            sim.current_block = 1000;
+        };
+
+        eprintln!("{:<50} {:>10} {:>10} {:>10}",
+            "Design", "Init Gini", "Final", "Change");
+        eprintln!("{}", "-".repeat(85));
+
+        // Test designs under ValueWeighted transactions
+        let tx_model = TransactionModel::ValueWeighted;
+
+        // 1. Pooled + FeeProportional (our previous best robust design)
+        {
+            let config = LotteryConfig {
+                base_fee: 100,
+                drawing_interval: 10,
+                ticket_model: TicketModel::FeeProportional,
+                distribution_mode: DistributionMode::Pooled,
+                ..LotteryConfig::default()
+            };
+            let mut sim = LotterySimulation::new(config, FeeCurve::default_params());
+            create_population(&mut sim);
+            let initial = sim.calculate_gini();
+            sim.advance_blocks_with_model(30_000, 20, tx_model);
+            let final_gini = sim.calculate_gini();
+            let change = (initial - final_gini) / initial * 100.0;
+            eprintln!("{:<50} {:>10.4} {:>10.4} {:>+9.1}%",
+                "Pooled + FeeProportional", initial, final_gini, change);
+        }
+
+        // 2. Pooled + PureValueWeighted
+        {
+            let config = LotteryConfig {
+                base_fee: 100,
+                drawing_interval: 10,
+                ticket_model: TicketModel::PureValueWeighted,
+                distribution_mode: DistributionMode::Pooled,
+                ..LotteryConfig::default()
+            };
+            let mut sim = LotterySimulation::new(config, FeeCurve::default_params());
+            create_population(&mut sim);
+            let initial = sim.calculate_gini();
+            sim.advance_blocks_with_model(30_000, 20, tx_model);
+            let final_gini = sim.calculate_gini();
+            let change = (initial - final_gini) / initial * 100.0;
+            eprintln!("{:<50} {:>10.4} {:>10.4} {:>+9.1}%",
+                "Pooled + PureValueWeighted", initial, final_gini, change);
+        }
+
+        // 3. Pooled + UniformPerUtxo (the statistical approach)
+        {
+            let config = LotteryConfig {
+                base_fee: 100,
+                drawing_interval: 10,
+                ticket_model: TicketModel::UniformPerUtxo,
+                distribution_mode: DistributionMode::Pooled,
+                min_utxo_value: 0,
+                ..LotteryConfig::default()
+            };
+            let mut sim = LotterySimulation::new(config, FeeCurve::default_params());
+            create_population(&mut sim);
+            let initial = sim.calculate_gini();
+            sim.advance_blocks_with_model(30_000, 20, tx_model);
+            let final_gini = sim.calculate_gini();
+            let change = (initial - final_gini) / initial * 100.0;
+            eprintln!("{:<50} {:>10.4} {:>10.4} {:>+9.1}%",
+                "Pooled + UniformPerUtxo", initial, final_gini, change);
+        }
+
+        // 4. COMBINED: Immediate + Uniform + Superlinear fees
+        {
+            let config = LotteryConfig {
+                base_fee: 100,
+                pool_fraction: 0.8,
+                distribution_mode: DistributionMode::Immediate { winners_per_tx: 4 },
+                output_fee_exponent: 2.0,
+                min_utxo_value: 0,
+                ..LotteryConfig::default()
+            };
+            let mut sim = LotterySimulation::new(config, FeeCurve::default_params());
+            create_population(&mut sim);
+            let initial = sim.calculate_gini();
+            sim.advance_blocks_immediate(30_000, 20, tx_model);
+            let final_gini = sim.calculate_gini();
+            let change = (initial - final_gini) / initial * 100.0;
+            eprintln!("{:<50} {:>10.4} {:>10.4} {:>+9.1}%",
+                "COMBINED: Immediate + Uniform + Superlinear", initial, final_gini, change);
+        }
+
+        eprintln!("");
+        eprintln!("Note: All tests use ValueWeighted transactions (realistic scenario)");
+        eprintln!("================================\n");
     }
 }

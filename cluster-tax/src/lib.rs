@@ -40,7 +40,7 @@ pub mod crypto;
 pub mod dynamic_fee;
 pub mod monetary;
 pub mod signing;
-#[cfg(feature = "cli")]
+#[cfg(any(feature = "cli", test))]
 pub mod simulation;
 pub mod validate;
 
