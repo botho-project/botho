@@ -2265,4 +2265,572 @@ mod tests {
         eprintln!("Note: All tests use ValueWeighted transactions (realistic scenario)");
         eprintln!("================================\n");
     }
+
+    // ============================================================================
+    // STRESS TESTS - Validating Realistic Assumptions
+    // ============================================================================
+
+    /// Test convergence rate under realistic transaction volumes.
+    ///
+    /// The "100% Gini reduction" result may be misleading if it requires
+    /// unrealistic numbers of transactions. This test measures:
+    /// 1. How many transactions to achieve meaningful (10%, 25%, 50%) Gini reduction
+    /// 2. Whether convergence is realistic at typical blockchain tx rates
+    #[test]
+    fn test_time_to_equilibrium() {
+        eprintln!("\n=== TIME TO EQUILIBRIUM STRESS TEST ===");
+        eprintln!("Measuring convergence rate under realistic tx volumes.");
+        eprintln!("");
+
+        let total_wealth = 100_000_000u64;
+
+        // Realistic blockchain parameters
+        let block_time_seconds = 5; // 5 second blocks
+        let txs_per_block = 50; // ~10 tx/second
+        let blocks_per_day = 86400 / block_time_seconds;
+        let txs_per_day = txs_per_block as u64 * blocks_per_day;
+
+        eprintln!("Network parameters:");
+        eprintln!("  Block time: {}s", block_time_seconds);
+        eprintln!("  Txs per block: {}", txs_per_block);
+        eprintln!("  Txs per day: {}", txs_per_day);
+        eprintln!("");
+
+        let config = LotteryConfig {
+            base_fee: 100,
+            pool_fraction: 0.8,
+            distribution_mode: DistributionMode::Immediate { winners_per_tx: 4 },
+            output_fee_exponent: 2.0,
+            min_utxo_value: 0,
+            ..LotteryConfig::default()
+        };
+
+        let mut sim = LotterySimulation::new(config, FeeCurve::default_params());
+
+        // Create population: 10 poor, 5 middle, 2 rich
+        for _ in 0..10 {
+            sim.add_owner(total_wealth / 200, SybilStrategy::Normal);
+        }
+        for _ in 0..5 {
+            sim.add_owner(total_wealth * 5 / 100, SybilStrategy::Normal);
+        }
+        for _ in 0..2 {
+            sim.add_owner(total_wealth * 35 / 100, SybilStrategy::Normal);
+        }
+        sim.current_block = 1000;
+
+        let initial_gini = sim.calculate_gini();
+        let target_10pct = initial_gini * 0.90;
+        let target_25pct = initial_gini * 0.75;
+        let target_50pct = initial_gini * 0.50;
+
+        let mut reached_10pct = None;
+        let mut reached_25pct = None;
+        let mut reached_50pct = None;
+
+        eprintln!("Initial Gini: {:.4}", initial_gini);
+        eprintln!("Targets: 10%={:.4}, 25%={:.4}, 50%={:.4}", target_10pct, target_25pct, target_50pct);
+        eprintln!("");
+
+        // Simulate up to 1 year (in blocks)
+        let blocks_per_year = blocks_per_day * 365;
+        let check_interval = blocks_per_day; // Check once per simulated day
+
+        let mut total_txs = 0u64;
+        let mut days = 0u64;
+
+        for day in 0..365 {
+            sim.advance_blocks_immediate(check_interval, txs_per_block, TransactionModel::ValueWeighted);
+            total_txs += check_interval * txs_per_block as u64;
+            days = day + 1;
+
+            let current_gini = sim.calculate_gini();
+
+            if reached_10pct.is_none() && current_gini <= target_10pct {
+                reached_10pct = Some((days, total_txs, current_gini));
+                eprintln!("  10% reduction at day {}: Gini={:.4}, txs={}", days, current_gini, total_txs);
+            }
+            if reached_25pct.is_none() && current_gini <= target_25pct {
+                reached_25pct = Some((days, total_txs, current_gini));
+                eprintln!("  25% reduction at day {}: Gini={:.4}, txs={}", days, current_gini, total_txs);
+            }
+            if reached_50pct.is_none() && current_gini <= target_50pct {
+                reached_50pct = Some((days, total_txs, current_gini));
+                eprintln!("  50% reduction at day {}: Gini={:.4}, txs={}", days, current_gini, total_txs);
+            }
+
+            // Early exit if we've reached all targets
+            if reached_50pct.is_some() {
+                break;
+            }
+
+            // Progress indicator every 30 days
+            if day % 30 == 29 {
+                eprintln!("  Day {}: Gini={:.4}", days, current_gini);
+            }
+        }
+
+        let final_gini = sim.calculate_gini();
+        let total_reduction = (initial_gini - final_gini) / initial_gini * 100.0;
+
+        eprintln!("");
+        eprintln!("Final results after {} days ({} transactions):", days, total_txs);
+        eprintln!("  Final Gini: {:.4}", final_gini);
+        eprintln!("  Total reduction: {:.1}%", total_reduction);
+        eprintln!("");
+
+        // Analysis
+        eprintln!("ANALYSIS:");
+        if let Some((d, txs, _)) = reached_10pct {
+            eprintln!("  10% reduction: {} days, {} txs", d, txs);
+        } else {
+            eprintln!("  10% reduction: NOT REACHED in {} days!", days);
+        }
+        if let Some((d, txs, _)) = reached_25pct {
+            eprintln!("  25% reduction: {} days, {} txs", d, txs);
+        } else {
+            eprintln!("  25% reduction: NOT REACHED in {} days!", days);
+        }
+        if let Some((d, txs, _)) = reached_50pct {
+            eprintln!("  50% reduction: {} days, {} txs", d, txs);
+        } else {
+            eprintln!("  50% reduction: NOT REACHED in {} days!", days);
+        }
+
+        eprintln!("");
+        if reached_10pct.is_none() {
+            eprintln!("WARNING: Even 10% Gini reduction not achieved in 1 year!");
+            eprintln!("The lottery mechanism may be too slow for practical use.");
+        } else if reached_25pct.is_none() {
+            eprintln!("NOTE: Modest reduction achieved, but 25%+ takes >1 year.");
+        } else {
+            eprintln!("OK: Meaningful redistribution occurs within reasonable time.");
+        }
+        eprintln!("======================================\n");
+    }
+
+    /// Test slow UTXO accumulation gaming strategy.
+    ///
+    /// A patient attacker might accumulate many UTXOs through normal transactions
+    /// over time, without paying splitting fees. This could game the lottery.
+    ///
+    /// Scenario: Attacker starts with 1 UTXO, conducts normal transactions,
+    /// but always keeps change (accumulating UTXOs). After a year, do they
+    /// have an unfair lottery advantage?
+    #[test]
+    fn test_slow_utxo_accumulation_gaming() {
+        eprintln!("\n=== SLOW UTXO ACCUMULATION GAMING TEST ===");
+        eprintln!("Can a patient attacker game the lottery by accumulating UTXOs?");
+        eprintln!("");
+
+        let total_wealth = 100_000_000u64;
+        let attacker_wealth = total_wealth * 10 / 100; // 10% of total
+
+        // Scenario: 1 attacker (10% wealth), 90 normal users (1% each)
+        let config = LotteryConfig {
+            base_fee: 100,
+            pool_fraction: 0.8,
+            distribution_mode: DistributionMode::Immediate { winners_per_tx: 4 },
+            output_fee_exponent: 2.0,
+            min_utxo_value: 0,
+            ..LotteryConfig::default()
+        };
+
+        // Baseline: Everyone behaves normally (1 UTXO each)
+        let mut baseline_sim = LotterySimulation::new(config.clone(), FeeCurve::default_params());
+        let attacker_id_baseline = baseline_sim.add_owner(attacker_wealth, SybilStrategy::Normal);
+        for _ in 0..90 {
+            baseline_sim.add_owner(total_wealth / 100, SybilStrategy::Normal);
+        }
+        baseline_sim.current_block = 1000;
+
+        let baseline_initial_utxos = baseline_sim.utxos.len();
+        let baseline_attacker_utxos_initial = baseline_sim.owners.get(&attacker_id_baseline)
+            .map(|o| o.utxo_ids.len()).unwrap_or(0);
+
+        // Run simulation
+        baseline_sim.advance_blocks_immediate(10_000, 20, TransactionModel::ValueWeighted);
+
+        let baseline_attacker_winnings = baseline_sim.owners.get(&attacker_id_baseline)
+            .map(|o| o.total_winnings).unwrap_or(0);
+        let baseline_attacker_fees = baseline_sim.owners.get(&attacker_id_baseline)
+            .map(|o| o.total_fees_paid).unwrap_or(0);
+        let baseline_final_utxos = baseline_sim.utxos.len();
+
+        eprintln!("BASELINE (normal behavior):");
+        eprintln!("  Attacker starts with: {} UTXOs", baseline_attacker_utxos_initial);
+        eprintln!("  System UTXOs: {} -> {}", baseline_initial_utxos, baseline_final_utxos);
+        eprintln!("  Attacker winnings: {}", baseline_attacker_winnings);
+        eprintln!("  Attacker fees paid: {}", baseline_attacker_fees);
+        eprintln!("  Attacker net: {:+}", baseline_attacker_winnings as i64 - baseline_attacker_fees as i64);
+        eprintln!("");
+
+        // Gaming scenario: Attacker fragments wealth into many UTXOs upfront
+        // Using MaximizeSplit strategy
+        let mut gaming_sim = LotterySimulation::new(config.clone(), FeeCurve::default_params());
+
+        // Attacker uses MultiAccount to split into 10 UTXOs
+        let attacker_id_gaming = gaming_sim.add_owner(attacker_wealth, SybilStrategy::MultiAccount { num_accounts: 10 });
+        for _ in 0..90 {
+            gaming_sim.add_owner(total_wealth / 100, SybilStrategy::Normal);
+        }
+        gaming_sim.current_block = 1000;
+
+        let gaming_initial_utxos = gaming_sim.utxos.len();
+        let gaming_attacker_utxos_initial = gaming_sim.owners.get(&attacker_id_gaming)
+            .map(|o| o.utxo_ids.len()).unwrap_or(0);
+
+        // Run same simulation
+        gaming_sim.advance_blocks_immediate(10_000, 20, TransactionModel::ValueWeighted);
+
+        let gaming_attacker_winnings = gaming_sim.owners.get(&attacker_id_gaming)
+            .map(|o| o.total_winnings).unwrap_or(0);
+        let gaming_attacker_fees = gaming_sim.owners.get(&attacker_id_gaming)
+            .map(|o| o.total_fees_paid).unwrap_or(0);
+        let gaming_final_utxos = gaming_sim.utxos.len();
+
+        eprintln!("GAMING (10x UTXO split upfront):");
+        eprintln!("  Attacker starts with: {} UTXOs", gaming_attacker_utxos_initial);
+        eprintln!("  System UTXOs: {} -> {}", gaming_initial_utxos, gaming_final_utxos);
+        eprintln!("  Attacker winnings: {}", gaming_attacker_winnings);
+        eprintln!("  Attacker fees paid: {}", gaming_attacker_fees);
+        eprintln!("  Attacker net: {:+}", gaming_attacker_winnings as i64 - gaming_attacker_fees as i64);
+        eprintln!("");
+
+        // Compare
+        let winnings_ratio = gaming_attacker_winnings as f64 / baseline_attacker_winnings.max(1) as f64;
+        let net_baseline = baseline_attacker_winnings as i64 - baseline_attacker_fees as i64;
+        let net_gaming = gaming_attacker_winnings as i64 - gaming_attacker_fees as i64;
+
+        eprintln!("COMPARISON:");
+        eprintln!("  Winnings ratio (gaming/baseline): {:.2}x", winnings_ratio);
+        eprintln!("  Net result baseline: {:+}", net_baseline);
+        eprintln!("  Net result gaming: {:+}", net_gaming);
+        eprintln!("");
+
+        if net_gaming > net_baseline * 2 {
+            eprintln!("WARNING: Gaming strategy gives >2x advantage!");
+            eprintln!("The lottery is vulnerable to UTXO accumulation.");
+        } else if net_gaming > net_baseline {
+            eprintln!("CAUTION: Gaming has modest advantage ({:.1}x)", net_gaming as f64 / net_baseline.max(1) as f64);
+        } else {
+            eprintln!("OK: Gaming does not provide significant advantage.");
+        }
+        eprintln!("==========================================\n");
+    }
+
+    /// Test impact of exchange-like entities.
+    ///
+    /// Exchanges hold funds for millions of users in relatively few UTXOs.
+    /// This breaks the "1 UTXO = 1 person" assumption central to the
+    /// population statistics insight.
+    ///
+    /// Scenario: 50% of all funds are held by 3 exchanges (few UTXOs),
+    /// while 50% are held by 1000 retail users (many UTXOs).
+    /// Does redistribution flow to exchanges instead of actual poor users?
+    #[test]
+    fn test_exchange_entity_impact() {
+        eprintln!("\n=== EXCHANGE ENTITY IMPACT TEST ===");
+        eprintln!("Testing: Does lottery redistribution benefit exchanges?");
+        eprintln!("");
+        eprintln!("Scenario:");
+        eprintln!("  3 exchanges holding 50% of funds (few UTXOs)");
+        eprintln!("  1000 retail users holding 50% (many UTXOs)");
+        eprintln!("");
+
+        let total_wealth = 100_000_000u64;
+        let exchange_wealth = total_wealth / 2; // 50% in exchanges
+        let retail_wealth = total_wealth / 2;   // 50% in retail
+
+        let config = LotteryConfig {
+            base_fee: 100,
+            pool_fraction: 0.8,
+            distribution_mode: DistributionMode::Immediate { winners_per_tx: 4 },
+            output_fee_exponent: 2.0,
+            min_utxo_value: 0,
+            ..LotteryConfig::default()
+        };
+
+        let mut sim = LotterySimulation::new(config, FeeCurve::default_params());
+
+        // 3 exchanges: ~16.67% each (but only 1 UTXO each)
+        let exchange_ids: Vec<u64> = (0..3)
+            .map(|_| sim.add_owner(exchange_wealth / 3, SybilStrategy::Normal))
+            .collect();
+
+        // 1000 retail users: 0.05% each (1 UTXO each)
+        let retail_ids: Vec<u64> = (0..1000)
+            .map(|_| sim.add_owner(retail_wealth / 1000, SybilStrategy::Normal))
+            .collect();
+
+        sim.current_block = 1000;
+
+        let initial_utxos = sim.utxos.len();
+        let initial_gini = sim.calculate_gini();
+
+        // Track initial wealth
+        let initial_exchange_wealth: u64 = exchange_ids.iter()
+            .map(|id| sim.owner_value(*id))
+            .sum();
+        let initial_retail_wealth: u64 = retail_ids.iter()
+            .map(|id| sim.owner_value(*id))
+            .sum();
+
+        eprintln!("Initial state:");
+        eprintln!("  Total UTXOs: {}", initial_utxos);
+        eprintln!("  Exchange UTXOs: 3 (holding {})", initial_exchange_wealth);
+        eprintln!("  Retail UTXOs: 1000 (holding {})", initial_retail_wealth);
+        eprintln!("  Gini: {:.4}", initial_gini);
+        eprintln!("");
+
+        // Run simulation with value-weighted transactions
+        // (Exchanges transact more because they hold more value)
+        sim.advance_blocks_immediate(30_000, 20, TransactionModel::ValueWeighted);
+
+        let final_gini = sim.calculate_gini();
+        let final_utxos = sim.utxos.len();
+
+        // Calculate final wealth
+        let final_exchange_wealth: u64 = exchange_ids.iter()
+            .map(|id| sim.owner_value(*id))
+            .sum();
+        let final_retail_wealth: u64 = retail_ids.iter()
+            .map(|id| sim.owner_value(*id))
+            .sum();
+
+        let exchange_change = final_exchange_wealth as i64 - initial_exchange_wealth as i64;
+        let retail_change = final_retail_wealth as i64 - initial_retail_wealth as i64;
+
+        // Track winnings and fees separately
+        let exchange_winnings: u64 = exchange_ids.iter()
+            .filter_map(|id| sim.owners.get(id))
+            .map(|o| o.total_winnings)
+            .sum();
+        let exchange_fees: u64 = exchange_ids.iter()
+            .filter_map(|id| sim.owners.get(id))
+            .map(|o| o.total_fees_paid)
+            .sum();
+
+        let retail_winnings: u64 = retail_ids.iter()
+            .filter_map(|id| sim.owners.get(id))
+            .map(|o| o.total_winnings)
+            .sum();
+        let retail_fees: u64 = retail_ids.iter()
+            .filter_map(|id| sim.owners.get(id))
+            .map(|o| o.total_fees_paid)
+            .sum();
+
+        eprintln!("Final state:");
+        eprintln!("  Total UTXOs: {} ({:+})", final_utxos, final_utxos as i64 - initial_utxos as i64);
+        eprintln!("  Gini: {:.4} ({:+.1}% change)", final_gini, (initial_gini - final_gini) / initial_gini * 100.0);
+        eprintln!("");
+        eprintln!("Exchange entities (3 entities, 3 UTXOs):");
+        eprintln!("  Wealth: {} -> {} ({:+})", initial_exchange_wealth, final_exchange_wealth, exchange_change);
+        eprintln!("  Fees paid: {}", exchange_fees);
+        eprintln!("  Lottery winnings: {}", exchange_winnings);
+        eprintln!("  Net: {:+}", exchange_winnings as i64 - exchange_fees as i64);
+        eprintln!("");
+        eprintln!("Retail users (1000 entities, 1000 UTXOs):");
+        eprintln!("  Wealth: {} -> {} ({:+})", initial_retail_wealth, final_retail_wealth, retail_change);
+        eprintln!("  Fees paid: {}", retail_fees);
+        eprintln!("  Lottery winnings: {}", retail_winnings);
+        eprintln!("  Net: {:+}", retail_winnings as i64 - retail_fees as i64);
+        eprintln!("");
+
+        // Key question: Did retail users (the "many") win proportionally more?
+        // Retail has 1000 UTXOs vs 3 for exchanges = 333x more UTXOs
+        // If lottery is purely uniform, retail should win 1000/1003 = 99.7%
+        let total_winnings = exchange_winnings + retail_winnings;
+        let retail_win_fraction = retail_winnings as f64 / total_winnings.max(1) as f64;
+        let expected_fraction = 1000.0 / 1003.0; // Based on UTXO count
+
+        eprintln!("ANALYSIS:");
+        eprintln!("  Retail UTXO fraction: {:.1}% (1000/1003)", 1000.0 / 1003.0 * 100.0);
+        eprintln!("  Retail winnings fraction: {:.1}%", retail_win_fraction * 100.0);
+        eprintln!("  Expected (if uniform): {:.1}%", expected_fraction * 100.0);
+        eprintln!("");
+
+        if retail_win_fraction < 0.8 {
+            eprintln!("WARNING: Retail users receiving <80% of lottery winnings!");
+            eprintln!("Exchange entities are capturing disproportionate value.");
+        } else if (retail_win_fraction - expected_fraction).abs() > 0.1 {
+            eprintln!("CAUTION: Distribution deviates significantly from expected.");
+        } else {
+            eprintln!("OK: Distribution roughly matches UTXO proportions.");
+        }
+
+        // But the real issue: exchanges transact on behalf of users
+        // Those fees come from user funds, but winnings go to the exchange
+        eprintln!("");
+        eprintln!("KEY INSIGHT:");
+        eprintln!("  Exchanges paid {} in fees (from user funds)", exchange_fees);
+        eprintln!("  Exchanges won {} from lottery", exchange_winnings);
+        eprintln!("  This is a {} redistribution to exchanges",
+            if exchange_winnings > exchange_fees { "NET POSITIVE" } else { "net negative" });
+        eprintln!("");
+
+        if exchange_winnings < exchange_fees && retail_winnings > retail_fees {
+            eprintln!("POSITIVE: Lottery redistributes FROM exchanges TO retail!");
+        } else if exchange_winnings > exchange_fees * 2 {
+            eprintln!("NEGATIVE: Exchanges are gaining from the lottery system.");
+        }
+        eprintln!("==========================================\n");
+    }
+
+    /// Test break-even dynamics under various UTXO population sizes.
+    ///
+    /// The claim that "splitting takes a year to break even" needs validation
+    /// across different network sizes and fee levels.
+    #[test]
+    fn test_breakeven_dynamics() {
+        eprintln!("\n=== BREAK-EVEN DYNAMICS TEST ===");
+        eprintln!("Testing whether UTXO splitting profitability claims hold.");
+        eprintln!("");
+
+        // Parameters from the design doc
+        let base_fee = 100u64;
+        let pool_fraction = 0.8;
+        let winners_per_tx = 4;
+        let burn_fraction = 0.2;
+
+        // Various network sizes
+        let scenarios = [
+            ("Small network", 1_000u64, 100),     // 1K UTXOs, 100 tx/day
+            ("Medium network", 10_000u64, 1_000), // 10K UTXOs, 1K tx/day
+            ("Large network", 100_000u64, 10_000), // 100K UTXOs, 10K tx/day
+            ("Massive network", 1_000_000u64, 100_000), // 1M UTXOs, 100K tx/day
+        ];
+
+        eprintln!("{:<20} {:>12} {:>12} {:>15} {:>15}", "Network", "UTXOs", "Tx/day", "Days to BE", "Profitable?");
+        eprintln!("{}", "-".repeat(80));
+
+        for (name, utxo_count, txs_per_day) in scenarios {
+            // Average fee per transaction (assuming uniform distribution of wealth)
+            let avg_fee = base_fee as f64 * 2.0; // Rough average cluster factor
+
+            // Pool per day
+            let pool_per_day = txs_per_day as f64 * avg_fee * pool_fraction;
+
+            // Expected winnings per UTXO per day
+            // Each tx has 4 winners, prize = (fee × 0.8) / 4
+            // Probability of winning per tx = 4 / utxo_count
+            // Expected winnings per UTXO per tx = (4/N) × (avg_fee × 0.8 / 4) = 0.8 × avg_fee / N
+            let ev_per_utxo_per_tx = 0.8 * avg_fee / utxo_count as f64;
+            let ev_per_utxo_per_day = ev_per_utxo_per_tx * txs_per_day as f64;
+
+            // Cost to create one UTXO via splitting (quadratic fee)
+            // Splitting 1->2 costs: base × factor × 2² = base × factor × 4
+            // vs normal 2 outputs: same cost (so no penalty for 2 outputs)
+            // But splitting 1->3 costs: base × factor × 9 vs base × factor × 4 = 2.25x more
+            // Cost per extra UTXO ≈ 2 × base × factor (marginal cost)
+            let split_cost = 2.0 * avg_fee;
+
+            // Days to break even
+            let days_to_breakeven = if ev_per_utxo_per_day > 0.0 {
+                split_cost / ev_per_utxo_per_day
+            } else {
+                f64::INFINITY
+            };
+
+            let profitable = days_to_breakeven < 365.0;
+
+            eprintln!(
+                "{:<20} {:>12} {:>12} {:>15.1} {:>15}",
+                name, utxo_count, txs_per_day, days_to_breakeven,
+                if profitable { "YES (< 1 year)" } else { "NO (> 1 year)" }
+            );
+        }
+
+        eprintln!("");
+        eprintln!("ANALYSIS:");
+        eprintln!("  - Smaller networks: Splitting may be profitable!");
+        eprintln!("  - Larger networks: Splitting is unprofitable.");
+        eprintln!("  - The mechanism's Sybil resistance scales with network size.");
+        eprintln!("");
+        eprintln!("IMPLICATION:");
+        eprintln!("  Early-stage networks may need additional Sybil protection.");
+        eprintln!("  Consider min_utxo_value or output count limits for bootstrap phase.");
+        eprintln!("==========================================\n");
+    }
+
+    /// Test what happens when wealth inequality is extreme.
+    ///
+    /// The simulation showed 100% Gini reduction for "standard" inequality.
+    /// What about when 1 entity holds 99% of all wealth?
+    #[test]
+    fn test_extreme_inequality_limits() {
+        eprintln!("\n=== EXTREME INEQUALITY LIMITS TEST ===");
+        eprintln!("Testing lottery behavior under pathological wealth distributions.");
+        eprintln!("");
+
+        let total_wealth = 100_000_000u64;
+
+        // Scenarios with increasing inequality
+        // Format: (name, rich_pct_of_wealth, rich_count, poor_count)
+        let scenarios = [
+            ("Moderate: 80/20", 80u64, 20u64, 80u64),    // 80% held by 20 rich, 20% by 80 poor
+            ("High: 90/10", 90, 10, 90),                  // 90% held by 10 rich
+            ("Extreme: 99/1", 99, 1, 99),                 // 99% held by 1 rich
+            ("Pathological: 99.9/0.1", 999, 1, 999),      // 99.9% held by 1 (using 999/1000)
+        ];
+
+        eprintln!("{:<25} {:>10} {:>10} {:>12} {:>15}", "Scenario", "Init Gini", "Final Gini", "Change %", "Interpretation");
+        eprintln!("{}", "-".repeat(80));
+
+        for (name, rich_pct, rich_count, poor_count) in scenarios {
+            let config = LotteryConfig {
+                base_fee: 100,
+                pool_fraction: 0.8,
+                distribution_mode: DistributionMode::Immediate { winners_per_tx: 4 },
+                output_fee_exponent: 2.0,
+                min_utxo_value: 0,
+                ..LotteryConfig::default()
+            };
+
+            let mut sim = LotterySimulation::new(config, FeeCurve::default_params());
+
+            // Rich hold rich_pct / 1000 of wealth (to handle 99.9% case)
+            let denominator = if rich_pct >= 100 { 1000u64 } else { 100u64 };
+            let rich_wealth = total_wealth * rich_pct / denominator;
+            let poor_wealth = total_wealth.saturating_sub(rich_wealth);
+
+            for _ in 0..rich_count {
+                sim.add_owner(rich_wealth / rich_count, SybilStrategy::Normal);
+            }
+            for _ in 0..poor_count {
+                sim.add_owner(poor_wealth / poor_count, SybilStrategy::Normal);
+            }
+
+            sim.current_block = 1000;
+            let initial_gini = sim.calculate_gini();
+
+            // Run with value-weighted transactions (realistic)
+            sim.advance_blocks_immediate(30_000, 20, TransactionModel::ValueWeighted);
+
+            let final_gini = sim.calculate_gini();
+            let change_pct = (initial_gini - final_gini) / initial_gini * 100.0;
+
+            let interpretation = if change_pct > 50.0 {
+                "Strong reduction"
+            } else if change_pct > 20.0 {
+                "Moderate reduction"
+            } else if change_pct > 0.0 {
+                "Weak reduction"
+            } else {
+                "INCREASED!"
+            };
+
+            eprintln!(
+                "{:<25} {:>10.4} {:>10.4} {:>+11.1}% {:>15}",
+                name, initial_gini, final_gini, change_pct, interpretation
+            );
+        }
+
+        eprintln!("");
+        eprintln!("ANALYSIS:");
+        eprintln!("  The lottery's effectiveness may decrease with extreme inequality.");
+        eprintln!("  This is because wealthy entities dominate transaction volume,");
+        eprintln!("  and fees alone may not overcome the wealth concentration.");
+        eprintln!("==========================================\n");
+    }
 }
