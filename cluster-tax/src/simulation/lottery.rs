@@ -56,6 +56,36 @@ pub enum DistributionMode {
     Immediate { winners_per_tx: u32 },
 }
 
+/// Selection mode for lottery winners.
+///
+/// This determines how lottery winners are selected from the UTXO set.
+/// Different modes trade off between progressivity and Sybil resistance.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SelectionMode {
+    /// Uniform: each UTXO has equal chance (progressive but gameable).
+    /// Vulnerability: 10 UTXOs = 10x lottery chances.
+    Uniform,
+
+    /// Value-weighted: probability proportional to UTXO value.
+    /// Sybil-resistant but not progressive (same as holding).
+    ValueWeighted,
+
+    /// Square-root weighted: probability proportional to sqrt(value).
+    /// Hybrid: some progressivity, harder to game.
+    /// 10 UTXOs of value V each = sqrt(V)*10 weight
+    /// 1 UTXO of value 10V = sqrt(10V) ≈ 3.16*sqrt(V) weight
+    /// So splitting gives 3.16x advantage instead of 10x.
+    SqrtWeighted,
+
+    /// Log-weighted: probability proportional to 1 + log2(value).
+    /// More progressive than sqrt, still Sybil-resistant.
+    LogWeighted,
+
+    /// Capped uniform: each UTXO = 1 ticket, but max N tickets per owner.
+    /// Requires owner tracking (not privacy-preserving).
+    CappedUniform { max_per_owner: u32 },
+}
+
 /// Configuration for the lottery system.
 #[derive(Clone, Debug)]
 pub struct LotteryConfig {
@@ -86,6 +116,9 @@ pub struct LotteryConfig {
     /// Per-output fee multiplier (for superlinear fees).
     /// Total fee = base_fee × cluster_factor × outputs^output_fee_exponent
     pub output_fee_exponent: f64,
+
+    /// Selection mode for lottery winners.
+    pub selection_mode: SelectionMode,
 }
 
 impl Default for LotteryConfig {
@@ -100,6 +133,7 @@ impl Default for LotteryConfig {
             ticket_model: TicketModel::ActivityBased,
             distribution_mode: DistributionMode::Pooled,
             output_fee_exponent: 1.0, // Linear by default
+            selection_mode: SelectionMode::Uniform, // Default to uniform for backwards compat
         }
     }
 }
@@ -657,10 +691,9 @@ impl LotterySimulation {
         if to_distribute > 0 && !all_utxos.is_empty() {
             let per_winner = to_distribute / winners_per_tx as u64;
             if per_winner > 0 {
-                // Select winners uniformly (the key insight: favors the many)
+                // Select winners based on selection mode
                 for _ in 0..winners_per_tx.min(all_utxos.len() as u32) {
-                    let winner_idx = rng.gen_range(0..all_utxos.len());
-                    let winner_id = all_utxos[winner_idx];
+                    let winner_id = self.select_winner_by_mode(&all_utxos, &mut rng);
 
                     if let Some(winner) = self.utxos.get_mut(&winner_id) {
                         winner.value += per_winner;
@@ -671,6 +704,108 @@ impl LotterySimulation {
                     }
                     self.metrics.total_distributed += per_winner;
                 }
+            }
+        }
+    }
+
+    /// Select a winner based on the configured selection mode.
+    fn select_winner_by_mode(&self, utxo_ids: &[u64], rng: &mut impl Rng) -> u64 {
+        match self.config.selection_mode {
+            SelectionMode::Uniform => {
+                // Each UTXO has equal chance
+                utxo_ids[rng.gen_range(0..utxo_ids.len())]
+            }
+            SelectionMode::ValueWeighted => {
+                // Probability proportional to value
+                let weights: Vec<(u64, u64)> = utxo_ids
+                    .iter()
+                    .filter_map(|id| self.utxos.get(id).map(|u| (*id, u.value)))
+                    .collect();
+                let total: u64 = weights.iter().map(|(_, v)| v).sum();
+                if total == 0 {
+                    return utxo_ids[rng.gen_range(0..utxo_ids.len())];
+                }
+                let roll = rng.gen_range(0..total);
+                let mut cumulative = 0u64;
+                for (id, value) in weights {
+                    cumulative += value;
+                    if cumulative > roll {
+                        return id;
+                    }
+                }
+                utxo_ids[0]
+            }
+            SelectionMode::SqrtWeighted => {
+                // Probability proportional to sqrt(value)
+                let weights: Vec<(u64, f64)> = utxo_ids
+                    .iter()
+                    .filter_map(|id| self.utxos.get(id).map(|u| (*id, (u.value as f64).sqrt())))
+                    .collect();
+                let total: f64 = weights.iter().map(|(_, w)| w).sum();
+                if total <= 0.0 {
+                    return utxo_ids[rng.gen_range(0..utxo_ids.len())];
+                }
+                let roll = rng.gen::<f64>() * total;
+                let mut cumulative = 0.0;
+                for (id, weight) in weights {
+                    cumulative += weight;
+                    if cumulative > roll {
+                        return id;
+                    }
+                }
+                utxo_ids[0]
+            }
+            SelectionMode::LogWeighted => {
+                // Probability proportional to 1 + log2(value)
+                let weights: Vec<(u64, f64)> = utxo_ids
+                    .iter()
+                    .filter_map(|id| {
+                        self.utxos.get(id).map(|u| {
+                            let w = if u.value > 0 {
+                                1.0 + (u.value as f64).log2()
+                            } else {
+                                1.0
+                            };
+                            (*id, w)
+                        })
+                    })
+                    .collect();
+                let total: f64 = weights.iter().map(|(_, w)| w).sum();
+                if total <= 0.0 {
+                    return utxo_ids[rng.gen_range(0..utxo_ids.len())];
+                }
+                let roll = rng.gen::<f64>() * total;
+                let mut cumulative = 0.0;
+                for (id, weight) in weights {
+                    cumulative += weight;
+                    if cumulative > roll {
+                        return id;
+                    }
+                }
+                utxo_ids[0]
+            }
+            SelectionMode::CappedUniform { max_per_owner } => {
+                // Count UTXOs per owner and cap at max_per_owner
+                let mut owner_counts: std::collections::HashMap<u64, u32> =
+                    std::collections::HashMap::new();
+                let eligible: Vec<u64> = utxo_ids
+                    .iter()
+                    .filter(|id| {
+                        if let Some(utxo) = self.utxos.get(id) {
+                            let count = owner_counts.entry(utxo.owner_id).or_insert(0);
+                            if *count < max_per_owner {
+                                *count += 1;
+                                return true;
+                            }
+                        }
+                        false
+                    })
+                    .copied()
+                    .collect();
+                if eligible.is_empty() {
+                    return utxo_ids[rng.gen_range(0..utxo_ids.len())];
+                }
+                eligible[rng.gen_range(0..eligible.len())]
             }
         }
     }
@@ -2831,6 +2966,175 @@ mod tests {
         eprintln!("  The lottery's effectiveness may decrease with extreme inequality.");
         eprintln!("  This is because wealthy entities dominate transaction volume,");
         eprintln!("  and fees alone may not overcome the wealth concentration.");
+        eprintln!("==========================================\n");
+    }
+
+    /// Compare selection modes for Sybil resistance.
+    ///
+    /// Tests whether alternative selection modes (sqrt, log, value-weighted)
+    /// can mitigate the UTXO accumulation gaming attack while maintaining
+    /// some level of progressivity.
+    #[test]
+    fn test_selection_mode_sybil_resistance() {
+        eprintln!("\n=== SELECTION MODE SYBIL RESISTANCE TEST ===");
+        eprintln!("Comparing how different selection modes handle UTXO splitting.");
+        eprintln!("");
+
+        let total_wealth = 100_000_000u64;
+        let attacker_wealth = total_wealth * 10 / 100; // 10% of total
+
+        // Selection modes to test
+        let modes = [
+            ("Uniform", SelectionMode::Uniform),
+            ("ValueWeighted", SelectionMode::ValueWeighted),
+            ("SqrtWeighted", SelectionMode::SqrtWeighted),
+            ("LogWeighted", SelectionMode::LogWeighted),
+        ];
+
+        eprintln!("{:<20} {:>15} {:>15} {:>15} {:>15} {:>12}",
+            "Mode", "1 UTXO Win", "10 UTXO Win", "Ratio", "Gaming Net", "Verdict");
+        eprintln!("{}", "-".repeat(95));
+
+        for (name, mode) in modes {
+            // Baseline: attacker with 1 UTXO
+            let baseline_winnings = {
+                let config = LotteryConfig {
+                    base_fee: 100,
+                    pool_fraction: 0.8,
+                    distribution_mode: DistributionMode::Immediate { winners_per_tx: 4 },
+                    output_fee_exponent: 2.0,
+                    min_utxo_value: 0,
+                    selection_mode: mode,
+                    ..LotteryConfig::default()
+                };
+                let mut sim = LotterySimulation::new(config, FeeCurve::default_params());
+                let attacker_id = sim.add_owner(attacker_wealth, SybilStrategy::Normal);
+                for _ in 0..90 {
+                    sim.add_owner(total_wealth / 100, SybilStrategy::Normal);
+                }
+                sim.current_block = 1000;
+                sim.advance_blocks_immediate(10_000, 20, TransactionModel::ValueWeighted);
+                sim.owners.get(&attacker_id).map(|o| o.total_winnings).unwrap_or(0)
+            };
+
+            // Gaming: attacker with 10 UTXOs
+            let (gaming_winnings, gaming_fees) = {
+                let config = LotteryConfig {
+                    base_fee: 100,
+                    pool_fraction: 0.8,
+                    distribution_mode: DistributionMode::Immediate { winners_per_tx: 4 },
+                    output_fee_exponent: 2.0,
+                    min_utxo_value: 0,
+                    selection_mode: mode,
+                    ..LotteryConfig::default()
+                };
+                let mut sim = LotterySimulation::new(config, FeeCurve::default_params());
+                let attacker_id = sim.add_owner(attacker_wealth, SybilStrategy::MultiAccount { num_accounts: 10 });
+                for _ in 0..90 {
+                    sim.add_owner(total_wealth / 100, SybilStrategy::Normal);
+                }
+                sim.current_block = 1000;
+                sim.advance_blocks_immediate(10_000, 20, TransactionModel::ValueWeighted);
+                let owner = sim.owners.get(&attacker_id);
+                (
+                    owner.map(|o| o.total_winnings).unwrap_or(0),
+                    owner.map(|o| o.total_fees_paid).unwrap_or(0),
+                )
+            };
+
+            let ratio = gaming_winnings as f64 / baseline_winnings.max(1) as f64;
+            let gaming_net = gaming_winnings as i64 - gaming_fees as i64;
+
+            let verdict = if ratio <= 1.5 {
+                "GOOD"
+            } else if ratio <= 3.0 {
+                "OK"
+            } else if ratio <= 5.0 {
+                "WEAK"
+            } else {
+                "VULNERABLE"
+            };
+
+            eprintln!(
+                "{:<20} {:>15} {:>15} {:>14.2}x {:>15} {:>12}",
+                name, baseline_winnings, gaming_winnings, ratio, gaming_net, verdict
+            );
+        }
+
+        eprintln!("");
+        eprintln!("ANALYSIS:");
+        eprintln!("  Uniform:       ~10x advantage from splitting (most vulnerable)");
+        eprintln!("  ValueWeighted: ~1x advantage (Sybil-resistant but not progressive)");
+        eprintln!("  SqrtWeighted:  ~3.16x theoretical advantage (balanced)");
+        eprintln!("  LogWeighted:   Variable advantage based on value distribution");
+        eprintln!("");
+        eprintln!("RECOMMENDATION:");
+        eprintln!("  SqrtWeighted offers best balance of progressivity and Sybil resistance.");
+        eprintln!("  It maintains sqrt(10) ≈ 3.16x advantage from splitting vs 10x uniform,");
+        eprintln!("  while still favoring smaller UTXOs over pure value-weighting.");
+        eprintln!("==========================================\n");
+    }
+
+    /// Test that SqrtWeighted selection still provides progressivity.
+    ///
+    /// The concern: if we switch from Uniform to SqrtWeighted, do we lose
+    /// the progressive redistribution effect?
+    #[test]
+    fn test_sqrt_weighted_progressivity() {
+        eprintln!("\n=== SQRT WEIGHTED PROGRESSIVITY TEST ===");
+        eprintln!("Testing whether SqrtWeighted maintains progressive redistribution.");
+        eprintln!("");
+
+        let total_wealth = 100_000_000u64;
+
+        // Compare Uniform vs SqrtWeighted for Gini reduction
+        for (name, mode) in [
+            ("Uniform", SelectionMode::Uniform),
+            ("SqrtWeighted", SelectionMode::SqrtWeighted),
+            ("ValueWeighted", SelectionMode::ValueWeighted),
+        ] {
+            let config = LotteryConfig {
+                base_fee: 100,
+                pool_fraction: 0.8,
+                distribution_mode: DistributionMode::Immediate { winners_per_tx: 4 },
+                output_fee_exponent: 2.0,
+                min_utxo_value: 0,
+                selection_mode: mode,
+                ..LotteryConfig::default()
+            };
+
+            let mut sim = LotterySimulation::new(config, FeeCurve::default_params());
+
+            // Create unequal population: 10 poor, 5 middle, 2 rich
+            for _ in 0..10 {
+                sim.add_owner(total_wealth / 200, SybilStrategy::Normal);
+            }
+            for _ in 0..5 {
+                sim.add_owner(total_wealth * 5 / 100, SybilStrategy::Normal);
+            }
+            for _ in 0..2 {
+                sim.add_owner(total_wealth * 35 / 100, SybilStrategy::Normal);
+            }
+
+            sim.current_block = 1000;
+            let initial_gini = sim.calculate_gini();
+
+            sim.advance_blocks_immediate(30_000, 20, TransactionModel::ValueWeighted);
+
+            let final_gini = sim.calculate_gini();
+            let change_pct = (initial_gini - final_gini) / initial_gini * 100.0;
+
+            eprintln!(
+                "{:<15}: Gini {:.4} -> {:.4} ({:+.1}% reduction)",
+                name, initial_gini, final_gini, change_pct
+            );
+        }
+
+        eprintln!("");
+        eprintln!("INTERPRETATION:");
+        eprintln!("  If SqrtWeighted achieves significant Gini reduction (>50%),");
+        eprintln!("  it can replace Uniform as the default while fixing the");
+        eprintln!("  UTXO accumulation vulnerability.");
         eprintln!("==========================================\n");
     }
 }
