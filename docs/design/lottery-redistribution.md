@@ -364,7 +364,7 @@ SelectionMode::AgeWeighted { max_age_blocks: 100_000, age_bonus: 5.0 }
 **Finding**: Age weighting provides ~3x preference for established coins over
 freshly split UTXOs, but doesn't fully solve Sybil resistance.
 
-### Cluster-Weighted Mode (Recommended)
+### Cluster-Weighted Mode (Conditionally Progressive)
 
 Uses existing cluster factor information—coins with lower cluster factors
 (more commercial activity) get higher lottery weight:
@@ -372,19 +372,25 @@ Uses existing cluster factor information—coins with lower cluster factors
 SelectionMode::ClusterWeighted
 ```
 
-| Metric | ValueWeighted | ClusterWeighted |
-|--------|---------------|-----------------|
-| Gaming Ratio | 1.04x | 1.00x |
-| Gini Δ% | 59.9% | 40.7% |
-| Poor Gain | +41% | +327% |
-| Rich Loss | -97% | -99.9% |
-| Privacy Cost | 0 bits | ~1.5 bits |
+**⚠️ CRITICAL CAVEAT**: ClusterWeighted progressivity depends entirely on
+the correlation between wealth and cluster factor.
 
-**Finding**: ClusterWeighted provides the best overall trade-off:
-- Fully Sybil-resistant (1.0x gaming ratio)
-- Strong progressivity (poor gain 327% vs 41%)
-- Uses information already tracked (cluster factor)
-- Privacy cost is acceptable (~1.5 bits = reveals coin origin category)
+| Scenario | Poor Factor | Rich Factor | Poor Δ | Rich Δ | Progressive? |
+|----------|-------------|-------------|--------|--------|--------------|
+| Same factors | 3.0 | 3.0 | -47% | -48% | ❌ NO |
+| Ideal (poor=low) | 1.5 | 5.0 | +928% | -99% | ✅ YES |
+| **Adverse (poor=high)** | **5.0** | **1.5** | **-98%** | **-21%** | **❌ REGRESSIVE** |
+
+**The problem**: In practice, new minters start with HIGH cluster factors (6.0)
+and only reduce them through trade. This means:
+- **New entrants (often poor)**: Start with high factors
+- **Established traders (potentially wealthy)**: Have low factors from commerce
+
+**ClusterWeighted could be REGRESSIVE** if factor-wealth correlation doesn't hold.
+
+**Finding**: ClusterWeighted is Sybil-resistant (1.0x gaming) but:
+- Progressivity depends on factor-wealth assumptions
+- NOT recommended without empirical validation of factor distribution
 
 ### Pareto-Optimal Summary
 

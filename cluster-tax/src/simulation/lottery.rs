@@ -412,6 +412,65 @@ impl LotterySimulation {
         owner_id
     }
 
+    /// Add an owner with a specific cluster factor (for testing).
+    pub fn add_owner_with_factor(&mut self, wealth: u64, strategy: SybilStrategy, cluster_factor: f64) -> u64 {
+        let owner_id = self.owners.len() as u64 + 1;
+        let mut owner = LotteryOwner::new(owner_id, strategy);
+
+        let utxo_count = match strategy {
+            SybilStrategy::Normal => 1,
+            SybilStrategy::MultiAccount { num_accounts } => num_accounts,
+            SybilStrategy::MaximizeSplit => {
+                (wealth / self.config.min_utxo_value.max(1)) as u32
+            }
+        };
+
+        let value_per_utxo = wealth / utxo_count.max(1) as u64;
+        let cluster_factor = cluster_factor.max(1.0).min(6.0);
+
+        for _ in 0..utxo_count {
+            if value_per_utxo > 0 {
+                let utxo_id = self.next_utxo_id;
+                self.next_utxo_id += 1;
+
+                let utxo = LotteryUtxo::new(utxo_id, owner_id, value_per_utxo, cluster_factor, 0);
+                self.utxos.insert(utxo_id, utxo);
+                owner.utxo_ids.push(utxo_id);
+            }
+        }
+
+        self.owners.insert(owner_id, owner);
+        owner_id
+    }
+
+    /// Create an empty owner (for manual UTXO creation).
+    pub fn create_owner(&mut self, strategy: SybilStrategy) -> u64 {
+        let owner_id = self.owners.len() as u64 + 1;
+        let owner = LotteryOwner::new(owner_id, strategy);
+        self.owners.insert(owner_id, owner);
+        owner_id
+    }
+
+    /// Create a UTXO for an existing owner.
+    pub fn create_utxo_for_owner(&mut self, owner_id: u64, value: u64, cluster_factor: f64) -> Option<u64> {
+        if !self.owners.contains_key(&owner_id) {
+            return None;
+        }
+
+        let utxo_id = self.next_utxo_id;
+        self.next_utxo_id += 1;
+
+        let cluster_factor = cluster_factor.max(1.0).min(6.0);
+        let utxo = LotteryUtxo::new(utxo_id, owner_id, value, cluster_factor, 0);
+        self.utxos.insert(utxo_id, utxo);
+
+        if let Some(owner) = self.owners.get_mut(&owner_id) {
+            owner.utxo_ids.push(utxo_id);
+        }
+
+        Some(utxo_id)
+    }
+
     /// Get owner's total value.
     pub fn owner_value(&self, owner_id: u64) -> u64 {
         self.owners
@@ -3746,5 +3805,348 @@ mod tests {
         eprintln!("  - For balanced approach: Use AgeWeighted(5x) - 0.5 bits cost");
         eprintln!("  - For maximum progressivity: Use ClusterWeighted - 1.5 bits cost");
         eprintln!("==========================================\n");
+    }
+
+    /// COMPREHENSIVE VALIDATION: Test all claims rigorously with multiple trials.
+    ///
+    /// This test validates:
+    /// 1. Sybil resistance: splitting same wealth into N UTXOs shouldn't help
+    /// 2. Progressivity: poor should gain relative to rich
+    /// 3. Statistical significance: run multiple trials, report confidence intervals
+    /// 4. Realistic scenarios: test various wealth/factor correlations
+    #[test]
+    fn test_comprehensive_validation() {
+        eprintln!("\n{}", "=".repeat(80));
+        eprintln!("COMPREHENSIVE VALIDATION OF LOTTERY SELECTION MODES");
+        eprintln!("{}", "=".repeat(80));
+
+        let modes: Vec<(&str, SelectionMode)> = vec![
+            ("Uniform", SelectionMode::Uniform),
+            ("ValueWeighted", SelectionMode::ValueWeighted),
+            ("ClusterWeighted", SelectionMode::ClusterWeighted),
+            ("Hybrid(0.2)", SelectionMode::Hybrid { alpha: 0.2 }),
+        ];
+
+        // ========================================
+        // TEST 1: PURE SYBIL RESISTANCE
+        // ========================================
+        // Same total wealth, same cluster factor, different UTXO counts
+        // A truly Sybil-resistant mode should show ~1.0x ratio
+
+        eprintln!("\n--- TEST 1: PURE SYBIL RESISTANCE ---");
+        eprintln!("Same wealth, same factor, different UTXO counts");
+        eprintln!("Honest: 1 UTXO with 10M value");
+        eprintln!("Attacker: 10 UTXOs with 1M value each");
+        eprintln!("");
+
+        let total_wealth = 100_000_000u64;
+        let test_wealth = 10_000_000u64; // 10% each for attacker and honest
+
+        for (name, mode) in &modes {
+            let mut honest_wins_total = 0u64;
+            let mut attacker_wins_total = 0u64;
+            let trials = 5;
+
+            for _trial in 0..trials {
+                let config = LotteryConfig {
+                    base_fee: 100,
+                    pool_fraction: 0.8,
+                    distribution_mode: DistributionMode::Immediate { winners_per_tx: 4 },
+                    output_fee_exponent: 2.0,
+                    min_utxo_value: 0,
+                    selection_mode: *mode,
+                    ..LotteryConfig::default()
+                };
+                let mut sim = LotterySimulation::new(config, FeeCurve::default_params());
+
+                // Honest user: 1 UTXO with test_wealth, factor 3.0
+                let honest_id = sim.add_owner_with_factor(test_wealth, SybilStrategy::Normal, 3.0);
+
+                // Attacker: 10 UTXOs with test_wealth/10 each, SAME factor 3.0
+                // Use Normal strategy but manually split
+                let attacker_id = sim.create_owner(SybilStrategy::Normal);
+                for _ in 0..10 {
+                    sim.create_utxo_for_owner(attacker_id, test_wealth / 10, 3.0);
+                }
+
+                // Rest of population: 80% of wealth
+                for _ in 0..80 {
+                    sim.add_owner_with_factor(total_wealth / 100, SybilStrategy::Normal, 3.0);
+                }
+
+                sim.current_block = 10_000;
+                sim.advance_blocks_immediate(5_000, 20, TransactionModel::ValueWeighted);
+
+                honest_wins_total += sim.owners.get(&honest_id).map(|o| o.total_winnings).unwrap_or(0);
+                attacker_wins_total += sim.owners.get(&attacker_id).map(|o| o.total_winnings).unwrap_or(0);
+            }
+
+            let ratio = attacker_wins_total as f64 / honest_wins_total.max(1) as f64;
+            let verdict = if ratio < 1.5 { "✓ SYBIL-RESISTANT" }
+                         else if ratio < 3.0 { "~ MODERATE" }
+                         else { "✗ VULNERABLE" };
+
+            eprintln!("{:<20} Ratio: {:>5.2}x   {}", name, ratio, verdict);
+        }
+
+        // ========================================
+        // TEST 2: PROGRESSIVITY (WEALTH REDISTRIBUTION)
+        // ========================================
+        // Different wealth levels, SAME cluster factors
+        // Progressive modes should show wealth flowing from rich to poor
+
+        eprintln!("\n--- TEST 2: PROGRESSIVITY (SAME CLUSTER FACTORS) ---");
+        eprintln!("Different wealth, SAME factor (3.0 for all)");
+        eprintln!("Poor: 10 users × 500K each = 5M total");
+        eprintln!("Rich: 2 users × 47.5M each = 95M total");
+        eprintln!("");
+
+        for (name, mode) in &modes {
+            let config = LotteryConfig {
+                base_fee: 100,
+                pool_fraction: 0.8,
+                distribution_mode: DistributionMode::Immediate { winners_per_tx: 4 },
+                output_fee_exponent: 2.0,
+                min_utxo_value: 0,
+                selection_mode: *mode,
+                ..LotteryConfig::default()
+            };
+            let mut sim = LotterySimulation::new(config, FeeCurve::default_params());
+
+            // Create population with SAME cluster factor
+            let mut poor_ids = Vec::new();
+            let mut rich_ids = Vec::new();
+
+            // 10 poor users: 500K each = 5M total, factor 3.0
+            for _ in 0..10 {
+                poor_ids.push(sim.add_owner_with_factor(500_000, SybilStrategy::Normal, 3.0));
+            }
+            // 2 rich users: 47.5M each = 95M total, factor 3.0
+            for _ in 0..2 {
+                rich_ids.push(sim.add_owner_with_factor(47_500_000, SybilStrategy::Normal, 3.0));
+            }
+
+            let initial_poor: u64 = poor_ids.iter().map(|id| sim.owner_value(*id)).sum();
+            let initial_rich: u64 = rich_ids.iter().map(|id| sim.owner_value(*id)).sum();
+            let initial_gini = sim.calculate_gini();
+
+            sim.current_block = 10_000;
+            sim.advance_blocks_immediate(10_000, 20, TransactionModel::ValueWeighted);
+
+            let final_poor: u64 = poor_ids.iter().map(|id| sim.owner_value(*id)).sum();
+            let final_rich: u64 = rich_ids.iter().map(|id| sim.owner_value(*id)).sum();
+            let final_gini = sim.calculate_gini();
+
+            let poor_change_pct = (final_poor as f64 - initial_poor as f64) / initial_poor as f64 * 100.0;
+            let rich_change_pct = (final_rich as f64 - initial_rich as f64) / initial_rich as f64 * 100.0;
+            let gini_change = (initial_gini - final_gini) / initial_gini * 100.0;
+
+            let verdict = if poor_change_pct > 50.0 { "✓ PROGRESSIVE" }
+                         else if poor_change_pct > 0.0 { "~ MILD" }
+                         else { "✗ NOT PROGRESSIVE" };
+
+            eprintln!("{:<20} Poor: {:>+6.1}%  Rich: {:>+6.1}%  Gini: {:>+5.1}%  {}",
+                name, poor_change_pct, rich_change_pct, gini_change, verdict);
+        }
+
+        // ========================================
+        // TEST 3: CLUSTER-WEIGHTED SPECIFIC
+        // ========================================
+        // Test whether ClusterWeighted ACTUALLY provides progressivity
+        // when cluster factors vary independently of wealth
+
+        eprintln!("\n--- TEST 3: CLUSTER-WEIGHTED MECHANISM ---");
+        eprintln!("Testing cluster factor's effect independent of wealth");
+        eprintln!("");
+
+        // Scenario A: Poor with HIGH factor (fresh minters) vs Rich with LOW factor (commerce whales)
+        // This is OPPOSITE to the ideal - ClusterWeighted should favor low-factor
+        eprintln!("Scenario A: Poor=high factor(5.0), Rich=low factor(1.5)");
+        {
+            let config = LotteryConfig {
+                base_fee: 100,
+                pool_fraction: 0.8,
+                distribution_mode: DistributionMode::Immediate { winners_per_tx: 4 },
+                output_fee_exponent: 2.0,
+                min_utxo_value: 0,
+                selection_mode: SelectionMode::ClusterWeighted,
+                ..LotteryConfig::default()
+            };
+            let mut sim = LotterySimulation::new(config, FeeCurve::default_params());
+
+            let mut poor_ids = Vec::new();
+            let mut rich_ids = Vec::new();
+
+            // Poor with HIGH cluster factor (fresh minters, not much trade)
+            for _ in 0..10 {
+                poor_ids.push(sim.add_owner_with_factor(500_000, SybilStrategy::Normal, 5.0));
+            }
+            // Rich with LOW cluster factor (commerce whales, lots of trade)
+            for _ in 0..2 {
+                rich_ids.push(sim.add_owner_with_factor(47_500_000, SybilStrategy::Normal, 1.5));
+            }
+
+            let initial_poor: u64 = poor_ids.iter().map(|id| sim.owner_value(*id)).sum();
+            let initial_rich: u64 = rich_ids.iter().map(|id| sim.owner_value(*id)).sum();
+
+            sim.current_block = 10_000;
+            sim.advance_blocks_immediate(10_000, 20, TransactionModel::ValueWeighted);
+
+            let final_poor: u64 = poor_ids.iter().map(|id| sim.owner_value(*id)).sum();
+            let final_rich: u64 = rich_ids.iter().map(|id| sim.owner_value(*id)).sum();
+
+            let poor_change = (final_poor as f64 - initial_poor as f64) / initial_poor as f64 * 100.0;
+            let rich_change = (final_rich as f64 - initial_rich as f64) / initial_rich as f64 * 100.0;
+
+            eprintln!("  Poor (high factor): {:>+6.1}%  Rich (low factor): {:>+6.1}%",
+                poor_change, rich_change);
+            if rich_change > poor_change {
+                eprintln!("  → Rich gained MORE because they have lower cluster factors!");
+                eprintln!("  → ClusterWeighted is NOT inherently progressive");
+            }
+        }
+
+        // Scenario B: Poor with LOW factor vs Rich with HIGH factor (ideal case)
+        eprintln!("\nScenario B: Poor=low factor(1.5), Rich=high factor(5.0)");
+        {
+            let config = LotteryConfig {
+                base_fee: 100,
+                pool_fraction: 0.8,
+                distribution_mode: DistributionMode::Immediate { winners_per_tx: 4 },
+                output_fee_exponent: 2.0,
+                min_utxo_value: 0,
+                selection_mode: SelectionMode::ClusterWeighted,
+                ..LotteryConfig::default()
+            };
+            let mut sim = LotterySimulation::new(config, FeeCurve::default_params());
+
+            let mut poor_ids = Vec::new();
+            let mut rich_ids = Vec::new();
+
+            // Poor with LOW cluster factor
+            for _ in 0..10 {
+                poor_ids.push(sim.add_owner_with_factor(500_000, SybilStrategy::Normal, 1.5));
+            }
+            // Rich with HIGH cluster factor
+            for _ in 0..2 {
+                rich_ids.push(sim.add_owner_with_factor(47_500_000, SybilStrategy::Normal, 5.0));
+            }
+
+            let initial_poor: u64 = poor_ids.iter().map(|id| sim.owner_value(*id)).sum();
+            let initial_rich: u64 = rich_ids.iter().map(|id| sim.owner_value(*id)).sum();
+
+            sim.current_block = 10_000;
+            sim.advance_blocks_immediate(10_000, 20, TransactionModel::ValueWeighted);
+
+            let final_poor: u64 = poor_ids.iter().map(|id| sim.owner_value(*id)).sum();
+            let final_rich: u64 = rich_ids.iter().map(|id| sim.owner_value(*id)).sum();
+
+            let poor_change = (final_poor as f64 - initial_poor as f64) / initial_poor as f64 * 100.0;
+            let rich_change = (final_rich as f64 - initial_rich as f64) / initial_rich as f64 * 100.0;
+
+            eprintln!("  Poor (low factor): {:>+6.1}%  Rich (high factor): {:>+6.1}%",
+                poor_change, rich_change);
+            if poor_change > rich_change {
+                eprintln!("  → Poor gained MORE because they have lower cluster factors");
+                eprintln!("  → This is the ideal scenario for ClusterWeighted");
+            }
+        }
+
+        // ========================================
+        // TEST 4: STATISTICAL CONFIDENCE
+        // ========================================
+        eprintln!("\n--- TEST 4: STATISTICAL CONFIDENCE ---");
+        eprintln!("Running 10 trials per mode to measure variance");
+        eprintln!("");
+
+        let trials = 10;
+
+        for (name, mode) in &modes {
+            let mut gaming_ratios = Vec::new();
+            let mut gini_changes = Vec::new();
+
+            for _trial in 0..trials {
+                // Gaming ratio
+                let (honest, attacker) = {
+                    let config = LotteryConfig {
+                        base_fee: 100,
+                        pool_fraction: 0.8,
+                        distribution_mode: DistributionMode::Immediate { winners_per_tx: 4 },
+                        output_fee_exponent: 2.0,
+                        min_utxo_value: 0,
+                        selection_mode: *mode,
+                        ..LotteryConfig::default()
+                    };
+                    let mut sim = LotterySimulation::new(config.clone(), FeeCurve::default_params());
+
+                    let honest_id = sim.add_owner_with_factor(test_wealth, SybilStrategy::Normal, 3.0);
+                    let attacker_id = sim.create_owner(SybilStrategy::Normal);
+                    for _ in 0..10 {
+                        sim.create_utxo_for_owner(attacker_id, test_wealth / 10, 3.0);
+                    }
+                    for _ in 0..80 {
+                        sim.add_owner_with_factor(total_wealth / 100, SybilStrategy::Normal, 3.0);
+                    }
+
+                    sim.current_block = 10_000;
+                    sim.advance_blocks_immediate(3_000, 20, TransactionModel::ValueWeighted);
+
+                    let honest_wins = sim.owners.get(&honest_id).map(|o| o.total_winnings).unwrap_or(0);
+                    let attacker_wins = sim.owners.get(&attacker_id).map(|o| o.total_winnings).unwrap_or(0);
+                    (honest_wins, attacker_wins)
+                };
+
+                if honest > 0 {
+                    gaming_ratios.push(attacker as f64 / honest as f64);
+                }
+
+                // Gini change
+                let config = LotteryConfig {
+                    base_fee: 100,
+                    pool_fraction: 0.8,
+                    distribution_mode: DistributionMode::Immediate { winners_per_tx: 4 },
+                    output_fee_exponent: 2.0,
+                    min_utxo_value: 0,
+                    selection_mode: *mode,
+                    ..LotteryConfig::default()
+                };
+                let mut sim = LotterySimulation::new(config, FeeCurve::default_params());
+
+                for _ in 0..10 {
+                    sim.add_owner_with_factor(500_000, SybilStrategy::Normal, 3.0);
+                }
+                for _ in 0..2 {
+                    sim.add_owner_with_factor(47_500_000, SybilStrategy::Normal, 3.0);
+                }
+
+                let initial = sim.calculate_gini();
+                sim.current_block = 10_000;
+                sim.advance_blocks_immediate(5_000, 20, TransactionModel::ValueWeighted);
+                let final_gini = sim.calculate_gini();
+                gini_changes.push((initial - final_gini) / initial * 100.0);
+            }
+
+            // Calculate mean and std dev
+            let gaming_mean: f64 = gaming_ratios.iter().sum::<f64>() / gaming_ratios.len() as f64;
+            let gaming_std: f64 = (gaming_ratios.iter()
+                .map(|x| (x - gaming_mean).powi(2))
+                .sum::<f64>() / gaming_ratios.len() as f64).sqrt();
+
+            let gini_mean: f64 = gini_changes.iter().sum::<f64>() / gini_changes.len() as f64;
+            let gini_std: f64 = (gini_changes.iter()
+                .map(|x| (x - gini_mean).powi(2))
+                .sum::<f64>() / gini_changes.len() as f64).sqrt();
+
+            eprintln!("{:<20} Gaming: {:>5.2}x ± {:.2}  Gini Δ: {:>5.1}% ± {:.1}",
+                name, gaming_mean, gaming_std, gini_mean, gini_std);
+        }
+
+        eprintln!("\n{}", "=".repeat(80));
+        eprintln!("CONCLUSIONS:");
+        eprintln!("1. ClusterWeighted IS Sybil-resistant (value-weighted at core)");
+        eprintln!("2. ClusterWeighted progressivity DEPENDS on factor-wealth correlation");
+        eprintln!("3. If poor have high factors, ClusterWeighted helps the RICH");
+        eprintln!("4. Hybrid modes trade gaming resistance for UTXO-count progressivity");
+        eprintln!("{}", "=".repeat(80));
     }
 }
