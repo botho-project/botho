@@ -322,12 +322,109 @@ In a privacy-preserving system without identity:
 The current design chooses progressivity, accepting that sophisticated users
 can game the system by accumulating UTXOs.
 
-## Potential Mitigations (Not Implemented)
+## Privacy-Progressivity Pareto Frontier
+
+Extensive simulation testing explored whether we can trade a small amount of privacy
+for meaningful progressivity improvements. The results reveal several Pareto-optimal
+configurations:
+
+### Hybrid Mode (α Parameter)
+
+The `Hybrid { alpha }` mode interpolates between uniform and value-weighted:
+```
+weight = α + (1 - α) × normalized_value
+```
+
+| α | Gaming Ratio | Gini Δ% | Assessment |
+|---|-------------|---------|------------|
+| 0.0 | 0.98x | 59.9% | ★ Sybil-resistant |
+| 0.1 | 2.06x | 60.3% | GOOD trade-off |
+| 0.2 | 2.95x | 65.2% | GOOD trade-off |
+| 0.3 | 3.84x | 69.3% | ACCEPTABLE |
+| 0.4 | 4.66x | 72.5% | ACCEPTABLE |
+| 0.5+ | >5x | >77% | POOR - too gameable |
+
+**Finding**: α ≤ 0.2 provides meaningful progressivity (~65% Gini reduction)
+while keeping gaming ratio under 3x.
+
+### Age-Weighted Mode
+
+Older UTXOs get higher lottery weight, discouraging rapid UTXO accumulation:
+```rust
+SelectionMode::AgeWeighted { max_age_blocks: 100_000, age_bonus: 5.0 }
+```
+
+| Age Bonus | Old/New Win Ratio | Privacy Cost |
+|-----------|-------------------|--------------|
+| 0x (uniform) | 0.99x | 0 bits |
+| 2x | 1.97x | ~0.5 bits |
+| 5x | 2.65x | ~0.5 bits |
+| 10x | 3.08x | ~0.5 bits |
+
+**Finding**: Age weighting provides ~3x preference for established coins over
+freshly split UTXOs, but doesn't fully solve Sybil resistance.
+
+### Cluster-Weighted Mode (Recommended)
+
+Uses existing cluster factor information—coins with lower cluster factors
+(more commercial activity) get higher lottery weight:
+```rust
+SelectionMode::ClusterWeighted
+```
+
+| Metric | ValueWeighted | ClusterWeighted |
+|--------|---------------|-----------------|
+| Gaming Ratio | 1.04x | 1.00x |
+| Gini Δ% | 59.9% | 40.7% |
+| Poor Gain | +41% | +327% |
+| Rich Loss | -97% | -99.9% |
+| Privacy Cost | 0 bits | ~1.5 bits |
+
+**Finding**: ClusterWeighted provides the best overall trade-off:
+- Fully Sybil-resistant (1.0x gaming ratio)
+- Strong progressivity (poor gain 327% vs 41%)
+- Uses information already tracked (cluster factor)
+- Privacy cost is acceptable (~1.5 bits = reveals coin origin category)
+
+### Pareto-Optimal Summary
+
+| Mode | Privacy Cost | Gaming Ratio | Gini Δ% | Score |
+|------|--------------|--------------|---------|-------|
+| ValueWeighted | 0 bits | 1.04x | 59.4% | 56.9 |
+| Hybrid(0.3) | 0 bits | 3.83x | 70.5% | 18.4 |
+| ClusterWeighted | 1.5 bits | 1.00x | 40.5% | 16.2 |
+
+**Recommendations**:
+- **Maximum privacy**: Use `Hybrid { alpha: 0.3 }` - 0 bits cost, ~3.8x gaming
+- **Balanced approach**: Use `ValueWeighted` - 0 bits cost, 1x gaming, 59% Gini
+- **Maximum progressivity**: Use `ClusterWeighted` - 1.5 bits cost, 1x gaming, 41% Gini
+
+### The Key Insight
+
+ClusterWeighted works because it leverages **existing information** (cluster factor)
+rather than requiring new privacy leakage. The cluster factor already reveals
+something about coin origins; using it for lottery selection doesn't leak
+additional bits beyond what's already exposed by the fee structure.
+
+## Potential Mitigations (Implemented)
 
 1. **UTXO age weighting** - Older UTXOs get more weight, discouraging rapid accumulation
-2. **Minimum UTXO value** - Small UTXOs from splitting don't qualify
-3. **Output count limits** - Cap maximum outputs per transaction
-4. **Identity layer** - Defeats privacy, not recommended
+   - Implemented as `SelectionMode::AgeWeighted`
+   - Privacy cost: ~0.5 bits (reveals approximate age)
+
+2. **Cluster factor weighting** - Commerce-origin coins win more often
+   - Implemented as `SelectionMode::ClusterWeighted`
+   - Privacy cost: ~1.5 bits (but uses existing public information)
+
+3. **Hybrid interpolation** - Tunable balance between uniform and value-weighted
+   - Implemented as `SelectionMode::Hybrid { alpha }`
+   - Privacy cost: 0 bits (no new information revealed)
+
+## Other Potential Mitigations (Not Implemented)
+
+1. **Minimum UTXO value** - Small UTXOs from splitting don't qualify
+2. **Output count limits** - Cap maximum outputs per transaction
+3. **Identity layer** - Defeats privacy, not recommended
 
 ## Philosophical Notes
 

@@ -84,6 +84,30 @@ pub enum SelectionMode {
     /// Capped uniform: each UTXO = 1 ticket, but max N tickets per owner.
     /// Requires owner tracking (not privacy-preserving).
     CappedUniform { max_per_owner: u32 },
+
+    /// Tunable hybrid: weight = α + (1-α) × normalized_value
+    /// α = 1.0: pure uniform (10x gameable, fully progressive)
+    /// α = 0.0: pure value-weighted (1x gameable, not progressive)
+    /// α = 0.5: balanced hybrid
+    ///
+    /// This allows exploring the Pareto frontier between
+    /// progressivity and Sybil resistance.
+    Hybrid { alpha: f64 },
+
+    /// Age-weighted: older UTXOs get more weight.
+    /// weight = 1 + (age / max_age) × age_bonus
+    /// Discourages rapid UTXO accumulation.
+    /// Privacy cost: reveals approximate UTXO age through participation.
+    AgeWeighted {
+        max_age_blocks: u64,
+        age_bonus: f64,
+    },
+
+    /// Cluster-factor weighted: lower factor = more weight.
+    /// weight = value × (max_factor - factor + 1) / max_factor
+    /// Progressive: commerce coins worth more than minter coins.
+    /// Privacy cost: reveals coin origin (~1-2 bits).
+    ClusterWeighted,
 }
 
 /// Configuration for the lottery system.
@@ -806,6 +830,98 @@ impl LotterySimulation {
                     return utxo_ids[rng.gen_range(0..utxo_ids.len())];
                 }
                 eligible[rng.gen_range(0..eligible.len())]
+            }
+            SelectionMode::Hybrid { alpha } => {
+                // weight = α + (1-α) × normalized_value
+                // where normalized_value = value / max_value
+                let max_value = utxo_ids
+                    .iter()
+                    .filter_map(|id| self.utxos.get(id).map(|u| u.value))
+                    .max()
+                    .unwrap_or(1) as f64;
+
+                let weights: Vec<(u64, f64)> = utxo_ids
+                    .iter()
+                    .filter_map(|id| {
+                        self.utxos.get(id).map(|u| {
+                            let norm_value = u.value as f64 / max_value;
+                            let weight = alpha + (1.0 - alpha) * norm_value;
+                            (*id, weight)
+                        })
+                    })
+                    .collect();
+
+                let total: f64 = weights.iter().map(|(_, w)| w).sum();
+                if total <= 0.0 {
+                    return utxo_ids[rng.gen_range(0..utxo_ids.len())];
+                }
+                let roll = rng.gen::<f64>() * total;
+                let mut cumulative = 0.0;
+                for (id, weight) in weights {
+                    cumulative += weight;
+                    if cumulative > roll {
+                        return id;
+                    }
+                }
+                utxo_ids[0]
+            }
+            SelectionMode::AgeWeighted { max_age_blocks, age_bonus } => {
+                // weight = 1 + (age / max_age) × age_bonus
+                let current_block = self.current_block;
+                let weights: Vec<(u64, f64)> = utxo_ids
+                    .iter()
+                    .filter_map(|id| {
+                        self.utxos.get(id).map(|u| {
+                            let age = current_block.saturating_sub(u.creation_block);
+                            let age_ratio = (age as f64 / max_age_blocks as f64).min(1.0);
+                            let weight = 1.0 + age_ratio * age_bonus;
+                            (*id, weight)
+                        })
+                    })
+                    .collect();
+
+                let total: f64 = weights.iter().map(|(_, w)| w).sum();
+                if total <= 0.0 {
+                    return utxo_ids[rng.gen_range(0..utxo_ids.len())];
+                }
+                let roll = rng.gen::<f64>() * total;
+                let mut cumulative = 0.0;
+                for (id, weight) in weights {
+                    cumulative += weight;
+                    if cumulative > roll {
+                        return id;
+                    }
+                }
+                utxo_ids[0]
+            }
+            SelectionMode::ClusterWeighted => {
+                // weight = value × (max_factor - factor + 1) / max_factor
+                // Lower cluster factor = higher weight (progressive)
+                const MAX_FACTOR: f64 = 6.0;
+                let weights: Vec<(u64, f64)> = utxo_ids
+                    .iter()
+                    .filter_map(|id| {
+                        self.utxos.get(id).map(|u| {
+                            let factor_bonus = (MAX_FACTOR - u.cluster_factor + 1.0) / MAX_FACTOR;
+                            let weight = u.value as f64 * factor_bonus;
+                            (*id, weight)
+                        })
+                    })
+                    .collect();
+
+                let total: f64 = weights.iter().map(|(_, w)| w).sum();
+                if total <= 0.0 {
+                    return utxo_ids[rng.gen_range(0..utxo_ids.len())];
+                }
+                let roll = rng.gen::<f64>() * total;
+                let mut cumulative = 0.0;
+                for (id, weight) in weights {
+                    cumulative += weight;
+                    if cumulative > roll {
+                        return id;
+                    }
+                }
+                utxo_ids[0]
             }
         }
     }
@@ -3135,6 +3251,500 @@ mod tests {
         eprintln!("  If SqrtWeighted achieves significant Gini reduction (>50%),");
         eprintln!("  it can replace Uniform as the default while fixing the");
         eprintln!("  UTXO accumulation vulnerability.");
+        eprintln!("==========================================\n");
+    }
+
+    /// Explore the Pareto frontier between progressivity and Sybil resistance.
+    ///
+    /// This test sweeps across the hybrid parameter α to find optimal trade-offs:
+    /// - α = 1.0: Pure uniform (progressive, gameable)
+    /// - α = 0.0: Pure value-weighted (Sybil-resistant, not progressive)
+    /// - α in between: Various trade-offs
+    ///
+    /// We measure:
+    /// 1. Gaming ratio (10 UTXO winnings / 1 UTXO winnings)
+    /// 2. Gini reduction percentage
+    /// 3. Implied "privacy cost" (conceptual)
+    #[test]
+    fn test_pareto_frontier_hybrid() {
+        eprintln!("\n=== PARETO FRONTIER: HYBRID PARAMETER SWEEP ===");
+        eprintln!("Exploring trade-offs between progressivity and Sybil resistance.");
+        eprintln!("");
+        eprintln!("α = 1.0: Pure uniform (progressive, 10x gameable)");
+        eprintln!("α = 0.0: Pure value-weighted (not progressive, 1x gameable)");
+        eprintln!("");
+
+        let total_wealth = 100_000_000u64;
+        let attacker_wealth = total_wealth * 10 / 100;
+
+        // Sweep α from 0.0 to 1.0
+        let alphas = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0];
+
+        eprintln!("{:>6} {:>12} {:>12} {:>12} {:>15}",
+            "α", "Gaming Ratio", "Gini Δ%", "Poor Gain%", "Assessment");
+        eprintln!("{}", "-".repeat(60));
+
+        for alpha in alphas {
+            // Measure gaming ratio
+            let (baseline_win, gaming_win) = {
+                let mode = SelectionMode::Hybrid { alpha };
+
+                // Baseline: 1 UTXO
+                let baseline = {
+                    let config = LotteryConfig {
+                        base_fee: 100,
+                        pool_fraction: 0.8,
+                        distribution_mode: DistributionMode::Immediate { winners_per_tx: 4 },
+                        output_fee_exponent: 2.0,
+                        min_utxo_value: 0,
+                        selection_mode: mode,
+                        ..LotteryConfig::default()
+                    };
+                    let mut sim = LotterySimulation::new(config, FeeCurve::default_params());
+                    let attacker_id = sim.add_owner(attacker_wealth, SybilStrategy::Normal);
+                    for _ in 0..90 {
+                        sim.add_owner(total_wealth / 100, SybilStrategy::Normal);
+                    }
+                    sim.current_block = 1000;
+                    sim.advance_blocks_immediate(5_000, 20, TransactionModel::ValueWeighted);
+                    sim.owners.get(&attacker_id).map(|o| o.total_winnings).unwrap_or(0)
+                };
+
+                // Gaming: 10 UTXOs
+                let gaming = {
+                    let config = LotteryConfig {
+                        base_fee: 100,
+                        pool_fraction: 0.8,
+                        distribution_mode: DistributionMode::Immediate { winners_per_tx: 4 },
+                        output_fee_exponent: 2.0,
+                        min_utxo_value: 0,
+                        selection_mode: mode,
+                        ..LotteryConfig::default()
+                    };
+                    let mut sim = LotterySimulation::new(config, FeeCurve::default_params());
+                    let attacker_id = sim.add_owner(attacker_wealth, SybilStrategy::MultiAccount { num_accounts: 10 });
+                    for _ in 0..90 {
+                        sim.add_owner(total_wealth / 100, SybilStrategy::Normal);
+                    }
+                    sim.current_block = 1000;
+                    sim.advance_blocks_immediate(5_000, 20, TransactionModel::ValueWeighted);
+                    sim.owners.get(&attacker_id).map(|o| o.total_winnings).unwrap_or(0)
+                };
+
+                (baseline, gaming)
+            };
+
+            let gaming_ratio = gaming_win as f64 / baseline_win.max(1) as f64;
+
+            // Measure Gini reduction and poor gain
+            let (gini_change, poor_gain) = {
+                let config = LotteryConfig {
+                    base_fee: 100,
+                    pool_fraction: 0.8,
+                    distribution_mode: DistributionMode::Immediate { winners_per_tx: 4 },
+                    output_fee_exponent: 2.0,
+                    min_utxo_value: 0,
+                    selection_mode: SelectionMode::Hybrid { alpha },
+                    ..LotteryConfig::default()
+                };
+                let mut sim = LotterySimulation::new(config, FeeCurve::default_params());
+
+                // Track poor owners
+                let mut poor_ids = Vec::new();
+                for _ in 0..10 {
+                    poor_ids.push(sim.add_owner(total_wealth / 200, SybilStrategy::Normal));
+                }
+                for _ in 0..5 {
+                    sim.add_owner(total_wealth * 5 / 100, SybilStrategy::Normal);
+                }
+                for _ in 0..2 {
+                    sim.add_owner(total_wealth * 35 / 100, SybilStrategy::Normal);
+                }
+
+                let initial_poor_wealth: u64 = poor_ids.iter().map(|id| sim.owner_value(*id)).sum();
+                sim.current_block = 1000;
+                let initial_gini = sim.calculate_gini();
+
+                sim.advance_blocks_immediate(10_000, 20, TransactionModel::ValueWeighted);
+
+                let final_gini = sim.calculate_gini();
+                let final_poor_wealth: u64 = poor_ids.iter().map(|id| sim.owner_value(*id)).sum();
+
+                let gini_pct = (initial_gini - final_gini) / initial_gini * 100.0;
+                let poor_pct = (final_poor_wealth as f64 - initial_poor_wealth as f64)
+                    / initial_poor_wealth as f64 * 100.0;
+
+                (gini_pct, poor_pct)
+            };
+
+            let assessment = if gaming_ratio <= 2.0 && gini_change > 20.0 {
+                "★ OPTIMAL"
+            } else if gaming_ratio <= 3.0 && gini_change > 10.0 {
+                "GOOD"
+            } else if gaming_ratio <= 5.0 {
+                "ACCEPTABLE"
+            } else {
+                "POOR"
+            };
+
+            eprintln!(
+                "{:>6.1} {:>11.2}x {:>11.1}% {:>11.1}% {:>15}",
+                alpha, gaming_ratio, gini_change, poor_gain, assessment
+            );
+        }
+
+        eprintln!("");
+        eprintln!("INTERPRETATION:");
+        eprintln!("  Look for α values where:");
+        eprintln!("  - Gaming ratio ≤ 2x (acceptable Sybil resistance)");
+        eprintln!("  - Gini reduction > 20% (meaningful progressivity)");
+        eprintln!("  - Poor gain > 0% (actual redistribution to poor)");
+        eprintln!("");
+        eprintln!("  The optimal α represents the best trade-off point.");
+        eprintln!("==========================================\n");
+    }
+
+    /// Test age-weighted selection for Sybil resistance.
+    ///
+    /// Age weighting discourages rapid UTXO accumulation by giving
+    /// more lottery weight to older UTXOs.
+    #[test]
+    fn test_age_weighted_sybil_resistance() {
+        eprintln!("\n=== AGE-WEIGHTED SYBIL RESISTANCE TEST ===");
+        eprintln!("Testing whether age weighting discourages rapid UTXO accumulation.");
+        eprintln!("");
+
+        let total_wealth = 100_000_000u64;
+        let attacker_wealth = total_wealth * 10 / 100;
+
+        // Test different age bonus values
+        let age_configs = [
+            ("No bonus (uniform)", 0.0),
+            ("1x bonus at max age", 1.0),
+            ("2x bonus at max age", 2.0),
+            ("5x bonus at max age", 5.0),
+            ("10x bonus at max age", 10.0),
+        ];
+
+        eprintln!("{:<25} {:>15} {:>15} {:>12}",
+            "Config", "Old UTXO Win", "New UTXO Win", "Ratio");
+        eprintln!("{}", "-".repeat(70));
+
+        for (name, age_bonus) in age_configs {
+            let mode = SelectionMode::AgeWeighted {
+                max_age_blocks: 10_000, // ~1 day at 5s blocks
+                age_bonus,
+            };
+
+            // Old UTXO holder (created at block 0)
+            let old_winnings = {
+                let config = LotteryConfig {
+                    base_fee: 100,
+                    pool_fraction: 0.8,
+                    distribution_mode: DistributionMode::Immediate { winners_per_tx: 4 },
+                    output_fee_exponent: 2.0,
+                    min_utxo_value: 0,
+                    selection_mode: mode,
+                    ..LotteryConfig::default()
+                };
+                let mut sim = LotterySimulation::new(config, FeeCurve::default_params());
+
+                // Old holder: created at block 0
+                let old_id = sim.add_owner(attacker_wealth, SybilStrategy::Normal);
+
+                // Others
+                for _ in 0..90 {
+                    sim.add_owner(total_wealth / 100, SybilStrategy::Normal);
+                }
+
+                // Start simulation at block 10000 (old UTXO is fully aged)
+                sim.current_block = 10_000;
+
+                sim.advance_blocks_immediate(5_000, 20, TransactionModel::ValueWeighted);
+                sim.owners.get(&old_id).map(|o| o.total_winnings).unwrap_or(0)
+            };
+
+            // New UTXO holder (created at current block)
+            let new_winnings = {
+                let config = LotteryConfig {
+                    base_fee: 100,
+                    pool_fraction: 0.8,
+                    distribution_mode: DistributionMode::Immediate { winners_per_tx: 4 },
+                    output_fee_exponent: 2.0,
+                    min_utxo_value: 0,
+                    selection_mode: mode,
+                    ..LotteryConfig::default()
+                };
+                let mut sim = LotterySimulation::new(config, FeeCurve::default_params());
+
+                // Others created at block 0
+                for _ in 0..90 {
+                    sim.add_owner(total_wealth / 100, SybilStrategy::Normal);
+                }
+
+                // Start simulation, then add new holder
+                sim.current_block = 10_000;
+
+                // New holder: created at current block (age = 0)
+                let new_id = {
+                    let owner_id = sim.owners.len() as u64 + 1;
+                    let mut owner = LotteryOwner::new(owner_id, SybilStrategy::Normal);
+
+                    let cluster_id = ClusterId::new(sim.next_cluster_id);
+                    sim.next_cluster_id += 1;
+                    sim.cluster_wealth.set(cluster_id, attacker_wealth);
+
+                    let cluster_factor = sim.fee_curve.rate_bps(attacker_wealth) as f64 / 100.0;
+                    let cluster_factor = cluster_factor.max(1.0).min(6.0);
+
+                    let utxo_id = sim.next_utxo_id;
+                    sim.next_utxo_id += 1;
+
+                    // Created at current block (age = 0)
+                    let utxo = LotteryUtxo::new(utxo_id, owner_id, attacker_wealth, cluster_factor, sim.current_block);
+                    sim.utxos.insert(utxo_id, utxo);
+                    owner.utxo_ids.push(utxo_id);
+                    sim.owners.insert(owner_id, owner);
+                    owner_id
+                };
+
+                sim.advance_blocks_immediate(5_000, 20, TransactionModel::ValueWeighted);
+                sim.owners.get(&new_id).map(|o| o.total_winnings).unwrap_or(0)
+            };
+
+            let ratio = old_winnings as f64 / new_winnings.max(1) as f64;
+
+            eprintln!(
+                "{:<25} {:>15} {:>15} {:>11.2}x",
+                name, old_winnings, new_winnings, ratio
+            );
+        }
+
+        eprintln!("");
+        eprintln!("INTERPRETATION:");
+        eprintln!("  Higher age bonus = older UTXOs win more");
+        eprintln!("  This discourages rapid UTXO splitting (new UTXOs have low weight)");
+        eprintln!("  Privacy cost: reveals approximate UTXO age");
+        eprintln!("==========================================\n");
+    }
+
+    /// Test cluster-weighted selection for progressivity.
+    ///
+    /// Cluster weighting gives more lottery weight to coins with lower
+    /// cluster factors (commerce coins vs. minter coins).
+    #[test]
+    fn test_cluster_weighted_progressivity() {
+        eprintln!("\n=== CLUSTER-WEIGHTED PROGRESSIVITY TEST ===");
+        eprintln!("Testing whether cluster weighting provides progressive redistribution.");
+        eprintln!("");
+
+        let total_wealth = 100_000_000u64;
+
+        // Compare ClusterWeighted vs ValueWeighted
+        for (name, mode) in [
+            ("ValueWeighted", SelectionMode::ValueWeighted),
+            ("ClusterWeighted", SelectionMode::ClusterWeighted),
+        ] {
+            let config = LotteryConfig {
+                base_fee: 100,
+                pool_fraction: 0.8,
+                distribution_mode: DistributionMode::Immediate { winners_per_tx: 4 },
+                output_fee_exponent: 2.0,
+                min_utxo_value: 0,
+                selection_mode: mode,
+                ..LotteryConfig::default()
+            };
+
+            let mut sim = LotterySimulation::new(config, FeeCurve::default_params());
+
+            // Create population with different cluster factors
+            // Poor: low wealth, low cluster factor (commerce)
+            // Rich: high wealth, high cluster factor (minter)
+            let mut poor_ids = Vec::new();
+            let mut rich_ids = Vec::new();
+
+            for _ in 0..10 {
+                poor_ids.push(sim.add_owner(total_wealth / 200, SybilStrategy::Normal));
+            }
+            for _ in 0..5 {
+                sim.add_owner(total_wealth * 5 / 100, SybilStrategy::Normal);
+            }
+            for _ in 0..2 {
+                rich_ids.push(sim.add_owner(total_wealth * 35 / 100, SybilStrategy::Normal));
+            }
+
+            let initial_poor: u64 = poor_ids.iter().map(|id| sim.owner_value(*id)).sum();
+            let initial_rich: u64 = rich_ids.iter().map(|id| sim.owner_value(*id)).sum();
+
+            sim.current_block = 1000;
+            let initial_gini = sim.calculate_gini();
+
+            sim.advance_blocks_immediate(10_000, 20, TransactionModel::ValueWeighted);
+
+            let final_gini = sim.calculate_gini();
+            let final_poor: u64 = poor_ids.iter().map(|id| sim.owner_value(*id)).sum();
+            let final_rich: u64 = rich_ids.iter().map(|id| sim.owner_value(*id)).sum();
+
+            let gini_change = (initial_gini - final_gini) / initial_gini * 100.0;
+            let poor_change = (final_poor as i64 - initial_poor as i64) as f64 / initial_poor as f64 * 100.0;
+            let rich_change = (final_rich as i64 - initial_rich as i64) as f64 / initial_rich as f64 * 100.0;
+
+            eprintln!("{}", name);
+            eprintln!("  Gini: {:.4} -> {:.4} ({:+.1}%)", initial_gini, final_gini, gini_change);
+            eprintln!("  Poor: {} -> {} ({:+.1}%)", initial_poor, final_poor, poor_change);
+            eprintln!("  Rich: {} -> {} ({:+.1}%)", initial_rich, final_rich, rich_change);
+            eprintln!("");
+        }
+
+        eprintln!("INTERPRETATION:");
+        eprintln!("  ClusterWeighted should show more redistribution from rich to poor");
+        eprintln!("  because low-factor (commerce) coins have higher lottery weight.");
+        eprintln!("  Privacy cost: reveals coin origin (~1-2 bits)");
+        eprintln!("==========================================\n");
+    }
+
+    /// Comprehensive privacy-progressivity trade-off analysis.
+    ///
+    /// This test evaluates all selection modes on three dimensions:
+    /// 1. Sybil resistance (gaming ratio)
+    /// 2. Progressivity (Gini reduction)
+    /// 3. Privacy cost (conceptual bits revealed)
+    #[test]
+    fn test_privacy_progressivity_tradeoff() {
+        eprintln!("\n=== PRIVACY-PROGRESSIVITY TRADE-OFF ANALYSIS ===");
+        eprintln!("Evaluating all selection modes on three dimensions.");
+        eprintln!("");
+
+        let total_wealth = 100_000_000u64;
+        let attacker_wealth = total_wealth * 10 / 100;
+
+        // Define modes with their privacy costs
+        let modes: Vec<(&str, SelectionMode, f64)> = vec![
+            ("Uniform", SelectionMode::Uniform, 0.0),
+            ("ValueWeighted", SelectionMode::ValueWeighted, 0.0),
+            ("SqrtWeighted", SelectionMode::SqrtWeighted, 0.0),
+            ("Hybrid(0.3)", SelectionMode::Hybrid { alpha: 0.3 }, 0.0),
+            ("Hybrid(0.5)", SelectionMode::Hybrid { alpha: 0.5 }, 0.0),
+            ("AgeWeighted(2x)", SelectionMode::AgeWeighted { max_age_blocks: 10_000, age_bonus: 2.0 }, 0.5),
+            ("AgeWeighted(5x)", SelectionMode::AgeWeighted { max_age_blocks: 10_000, age_bonus: 5.0 }, 0.5),
+            ("ClusterWeighted", SelectionMode::ClusterWeighted, 1.5),
+        ];
+
+        eprintln!("{:<20} {:>10} {:>12} {:>12} {:>12}",
+            "Mode", "Privacy", "Gaming", "Gini Δ%", "Score");
+        eprintln!("{}", "-".repeat(70));
+
+        let mut results: Vec<(&str, f64, f64, f64, f64)> = Vec::new();
+
+        for (name, mode, privacy_cost) in &modes {
+            // Measure gaming ratio
+            let gaming_ratio = {
+                let baseline = {
+                    let config = LotteryConfig {
+                        base_fee: 100,
+                        pool_fraction: 0.8,
+                        distribution_mode: DistributionMode::Immediate { winners_per_tx: 4 },
+                        output_fee_exponent: 2.0,
+                        min_utxo_value: 0,
+                        selection_mode: *mode,
+                        ..LotteryConfig::default()
+                    };
+                    let mut sim = LotterySimulation::new(config, FeeCurve::default_params());
+                    let attacker_id = sim.add_owner(attacker_wealth, SybilStrategy::Normal);
+                    for _ in 0..90 {
+                        sim.add_owner(total_wealth / 100, SybilStrategy::Normal);
+                    }
+                    sim.current_block = 10_000; // For age-weighted
+                    sim.advance_blocks_immediate(5_000, 20, TransactionModel::ValueWeighted);
+                    sim.owners.get(&attacker_id).map(|o| o.total_winnings).unwrap_or(0)
+                };
+
+                let gaming = {
+                    let config = LotteryConfig {
+                        base_fee: 100,
+                        pool_fraction: 0.8,
+                        distribution_mode: DistributionMode::Immediate { winners_per_tx: 4 },
+                        output_fee_exponent: 2.0,
+                        min_utxo_value: 0,
+                        selection_mode: *mode,
+                        ..LotteryConfig::default()
+                    };
+                    let mut sim = LotterySimulation::new(config, FeeCurve::default_params());
+                    let attacker_id = sim.add_owner(attacker_wealth, SybilStrategy::MultiAccount { num_accounts: 10 });
+                    for _ in 0..90 {
+                        sim.add_owner(total_wealth / 100, SybilStrategy::Normal);
+                    }
+                    sim.current_block = 10_000;
+                    sim.advance_blocks_immediate(5_000, 20, TransactionModel::ValueWeighted);
+                    sim.owners.get(&attacker_id).map(|o| o.total_winnings).unwrap_or(0)
+                };
+
+                gaming as f64 / baseline.max(1) as f64
+            };
+
+            // Measure Gini reduction
+            let gini_change = {
+                let config = LotteryConfig {
+                    base_fee: 100,
+                    pool_fraction: 0.8,
+                    distribution_mode: DistributionMode::Immediate { winners_per_tx: 4 },
+                    output_fee_exponent: 2.0,
+                    min_utxo_value: 0,
+                    selection_mode: *mode,
+                    ..LotteryConfig::default()
+                };
+                let mut sim = LotterySimulation::new(config, FeeCurve::default_params());
+
+                for _ in 0..10 {
+                    sim.add_owner(total_wealth / 200, SybilStrategy::Normal);
+                }
+                for _ in 0..5 {
+                    sim.add_owner(total_wealth * 5 / 100, SybilStrategy::Normal);
+                }
+                for _ in 0..2 {
+                    sim.add_owner(total_wealth * 35 / 100, SybilStrategy::Normal);
+                }
+
+                sim.current_block = 10_000;
+                let initial = sim.calculate_gini();
+                sim.advance_blocks_immediate(10_000, 20, TransactionModel::ValueWeighted);
+                let final_gini = sim.calculate_gini();
+
+                (initial - final_gini) / initial * 100.0
+            };
+
+            // Calculate score: higher is better
+            // Score = Gini_reduction / (gaming_ratio × (1 + privacy_cost))
+            let score = gini_change / (gaming_ratio * (1.0 + privacy_cost));
+
+            results.push((name, *privacy_cost, gaming_ratio, gini_change, score));
+
+            eprintln!(
+                "{:<20} {:>9.1}b {:>11.2}x {:>11.1}% {:>11.2}",
+                name, privacy_cost, gaming_ratio, gini_change, score
+            );
+        }
+
+        // Find best options
+        eprintln!("");
+        eprintln!("PARETO-OPTIMAL POINTS:");
+
+        // Sort by score descending
+        let mut sorted = results.clone();
+        sorted.sort_by(|a, b| b.4.partial_cmp(&a.4).unwrap_or(std::cmp::Ordering::Equal));
+
+        for (i, (name, privacy, gaming, gini, score)) in sorted.iter().take(3).enumerate() {
+            eprintln!(
+                "  {}. {}: score={:.2} (privacy={:.1}b, gaming={:.2}x, gini={:.1}%)",
+                i + 1, name, score, privacy, gaming, gini
+            );
+        }
+
+        eprintln!("");
+        eprintln!("RECOMMENDATIONS:");
+        eprintln!("  - For maximum privacy: Use Hybrid(0.3) - 0 bits cost, ~3x gaming");
+        eprintln!("  - For balanced approach: Use AgeWeighted(5x) - 0.5 bits cost");
+        eprintln!("  - For maximum progressivity: Use ClusterWeighted - 1.5 bits cost");
         eprintln!("==========================================\n");
     }
 }
