@@ -458,8 +458,19 @@ This is not progressive wealth redistribution. It's closer to:
 - Do expect redistribution from custodial services to self-custody
 - Accept that sophisticated users will accumulate UTXOs for advantage
 
+## Future Work: Provenance-Based Selection
+
+See [Provenance-Based Selection](provenance-based-selection.md) for a novel
+approach that may escape the progressivity-Sybil trade-off by leveraging
+cluster tag **distributions** (entropy) rather than scalar factors.
+
+Key insight: **Sybil splits preserve tag entropy** while requiring real
+economic activity to increase it. This creates a cost structure aligned
+with legitimate participation rather than gaming.
+
 ## References
 
+- [Provenance-Based Selection](provenance-based-selection.md) - Novel entropy-weighted approach
 - [Cluster Tag Decay](cluster-tag-decay.md) - How cluster factors decay through trade
 - [Progressive Fees](../progressive-fees.md) - Fee curve design
 - [Tokenomics](../tokenomics.md) - Overall economic model
