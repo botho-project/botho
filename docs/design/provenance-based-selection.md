@@ -320,6 +320,149 @@ Before claiming breakthrough status, test:
 4. Analyze exchange/merchant/retail distributions
 5. Parameter tuning for `entropy_bonus`
 
+## Economic Equilibrium Analysis
+
+### The Sybil Break-Even Condition
+
+For uniform lottery selection to be Sybil-resistant:
+
+```
+Cost to create k extra UTXOs > Expected lottery winnings from k extra UTXOs
+
+k × fee_per_utxo > k × (P/N) × L
+
+Where:
+  P = lottery pool per period
+  N = total UTXOs in system
+  L = expected lottery periods per UTXO lifetime
+
+Simplifying:
+  fee_per_utxo > P × L / N
+```
+
+### Realistic Parameter Analysis
+
+| Parameter | Value | Rationale |
+|-----------|-------|-----------|
+| Total UTXOs (N) | 1,000,000 | Moderate network |
+| Daily tx volume | 2,100,000 BTH | 10% of 21M supply |
+| Fee rate | 0.5% | Proportional to amount |
+| Daily fees | 10,500 BTH | 0.5% × volume |
+| Lottery pool (80%) | 8,400 BTH/day | After 20% burn |
+| Expected win/UTXO/day | 0.0084 BTH | 8,400 / 1M |
+| Expected win/UTXO/year | 3.07 BTH | × 365 |
+
+### Attack Cost Analysis
+
+**Mass Splitting (single transaction, 10 outputs):**
+```
+Cost = base_rate × amount × outputs²
+     = 0.5% × 10,000 × 100
+     = 500 BTH for 10 UTXOs = 50 BTH per UTXO
+
+Is 50 BTH > 3.07 BTH/year? YES - unprofitable even over 16 years!
+```
+
+**Patient Accumulation (100 normal 2-output transactions):**
+```
+Cost per tx = 0.5% × amount × 4 = 0.02 × amount
+If average tx = 1,000 BTH: cost = 20 BTH per UTXO created
+
+Is 20 BTH > 3.07 BTH/year? YES - unprofitable even over 6 years!
+```
+
+**Minimum Viable Attack (dust transactions):**
+```
+If min_utxo_value = 1,000 BTH:
+Cost to create = 0.5% × 1,000 × 4 = 20 BTH
+Plus 1,000 BTH capital locked
+
+Expected return over 10 years = 30.7 BTH
+But opportunity cost of 1,000 BTH locked >> 30.7 BTH return
+```
+
+### The Combined Defense
+
+With proportional fees + superlinear output penalty + entropy weighting:
+
+| Attack Vector | Defense Mechanism | Cost |
+|--------------|-------------------|------|
+| Mass splitting | Quadratic output fees | 100× for 10 outputs |
+| Patient accumulation | Proportional fees + entropy | Fee cost + no entropy bonus |
+| Dust spam | Minimum value requirement | Can't participate |
+| Fresh UTXOs | Minimum age requirement | Delayed eligibility |
+| Same-provenance Sybil | Entropy bonus | No advantage vs diverse coins |
+
+## The Complete Proposed Design
+
+```rust
+// === Fee Structure ===
+FeeConfig {
+    // Proportional to transfer value (taxes wealth movement)
+    base_rate: 0.005,        // 0.5% of transfer amount
+
+    // Superlinear output penalty
+    output_exponent: 2.0,    // Quadratic: fee × outputs²
+    free_outputs: 2,         // Recipient + change are baseline
+}
+
+// === Fee Distribution ===
+DistributionConfig {
+    burn_fraction: 0.20,     // 20% burned (deflationary pressure)
+    lottery_fraction: 0.80,  // 80% redistributed via lottery
+}
+
+// === Lottery Selection ===
+LotteryConfig {
+    // Eligibility requirements
+    min_value: 1000,         // Dust UTXOs excluded
+    min_age_blocks: 720,     // ~2 hours before eligible
+
+    // Selection: Sublinear value + entropy bonus
+    selection_mode: SelectionMode::EntropyWeighted {
+        value_transform: ValueTransform::Sqrt,  // sqrt(value)
+        entropy_bonus: 0.5,  // +50% weight per bit of entropy
+    },
+
+    // Immediate distribution
+    winners_per_tx: 4,
+}
+```
+
+### Why This Achieves Progressivity
+
+**Who pays into the pool (fees):**
+- Wealthy: Higher transfer amounts → proportionally higher fees
+- Active transactors: More transactions → more total fees
+- Splitters: Quadratic output penalty → much higher fees
+
+**Who wins from the pool (lottery):**
+- Numerous: More poor UTXOs exist → higher aggregate probability
+- Diverse: Entropy bonus favors commerce participants
+- Patient: Age requirement + multiple lottery rounds
+
+**Net wealth flow:**
+```
+FROM: Wealthy transactors, active traders, Sybil attackers
+TO:   Numerous small holders, commerce participants, patient holders
+```
+
+This is **progressive** in the sense that:
+1. Wealth MOVEMENT is taxed (proportional fees)
+2. Wealth CONCENTRATION is penalized (superlinear splits)
+3. Wealth PRESENCE is rewarded (lottery per UTXO)
+4. Economic PARTICIPATION is rewarded (entropy bonus)
+
+## Comparison: Pure Uniform vs. This Design
+
+| Aspect | Pure Uniform | Proportional + Entropy |
+|--------|--------------|------------------------|
+| **Sybil via splits** | 10× advantage | ~1× (quadratic fees) |
+| **Sybil via accumulation** | Profitable | Unprofitable (fees > returns) |
+| **Progressive** | Yes (by count) | Yes (by activity + count) |
+| **Privacy** | Full | Nearly full (~1 bit entropy leak) |
+| **Complexity** | Simple | Moderate |
+
 ## Conclusion
 
 Provenance-based selection may offer a novel point in the design space:
@@ -328,6 +471,10 @@ Sybil-resistant without identity, activity-rewarding without being gameable.
 The key insight is that **tag entropy is preserved across splits** while
 **requiring real economic activity to increase**. This creates a cost
 structure that aligns with legitimate participation rather than gaming.
+
+Combined with **proportional fees** (taxing wealth transfers) and
+**superlinear output penalties** (preventing mass splitting), the lottery
+mechanism can achieve statistical progressivity while remaining Sybil-resistant.
 
 Further validation is needed, but this represents a potentially novel
 contribution to the literature on mechanism design in private payment systems.
