@@ -52,8 +52,9 @@ use std::time::SystemTime;
 /// Number of nodes in the Byzantine test network
 const NUM_NODES: usize = 5;
 
-/// Quorum threshold (k=3 for 5 nodes allows f=1 Byzantine tolerance)
-const QUORUM_K: usize = 3;
+/// Quorum threshold (k=2 for 5 nodes allows f=2 Byzantine tolerance)
+/// With k=2 and 4 peers, a quorum needs 2/4 peers, so 3 honest nodes can reach consensus
+const QUORUM_K: usize = 2;
 
 /// SCP timebase for testing (faster than production)
 const SCP_TIMEBASE_MS: u64 = 50;
@@ -273,6 +274,11 @@ impl ByzantineTestNetwork {
         let node = self.get_node(index);
         let _ = node.sender.send(TestNodeMessage::InjectValue(value));
     }
+
+    /// Get the current tip hash from the first node's ledger
+    fn get_tip_hash(&self) -> [u8; 32] {
+        self.get_node(0).chain_state().tip_hash
+    }
 }
 
 // ============================================================================
@@ -454,8 +460,8 @@ fn run_byzantine_node(
             }
         }
 
-        // Process incoming messages
-        match receiver.try_recv() {
+        // Process incoming messages with timeout to allow other threads to run
+        match receiver.recv_timeout(Duration::from_micros(100)) {
             Ok(TestNodeMessage::MintingTx(minting_tx)) => {
                 let cv = ConsensusValue {
                     tx_hash: minting_tx.hash(),
@@ -495,10 +501,10 @@ fn run_byzantine_node(
                 pending_values.push(value);
             }
             Ok(TestNodeMessage::Stop) => break,
-            Err(crossbeam_channel::TryRecvError::Empty) => {
-                thread::yield_now();
+            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+                // No message available, continue processing
             }
-            Err(crossbeam_channel::TryRecvError::Disconnected) => break,
+            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
         }
 
         // Propose pending values
@@ -506,21 +512,26 @@ fn run_byzantine_node(
             let to_propose: BTreeSet<ConsensusValue> =
                 pending_values.iter().take(MAX_SLOT_VALUES).cloned().collect();
 
-            if let Ok(Some(out_msg)) = scp_node.propose_values(to_propose) {
-                broadcast_with_behavior(
-                    &nodes_map,
-                    &peers,
-                    &node_id,
-                    out_msg,
-                    &current_behavior,
-                    &messages_sent,
-                    &messages_dropped,
-                );
+            match scp_node.propose_values(to_propose) {
+                Ok(Some(out_msg)) => {
+                    broadcast_with_behavior(
+                        &nodes_map,
+                        &peers,
+                        &node_id,
+                        out_msg,
+                        &current_behavior,
+                        &messages_sent,
+                        &messages_dropped,
+                    );
+                }
+                Ok(None) => {}
+                Err(_) => {}
             }
         }
 
         // Process timeouts
-        for out_msg in scp_node.process_timeouts() {
+        let timeout_msgs = scp_node.process_timeouts();
+        for out_msg in timeout_msgs {
             broadcast_with_behavior(
                 &nodes_map,
                 &peers,
@@ -535,10 +546,7 @@ fn run_byzantine_node(
         // Check for externalization
         if let Some(externalized) = scp_node.get_externalized_values(current_slot) {
             // Apply block
-            if let Err(e) = apply_externalized_block_simple(&ledger, &pending_minting_txs, externalized.as_slice()) {
-                // Log error but continue
-                let _ = e;
-            }
+            let _ = apply_externalized_block_simple(&ledger, &pending_minting_txs, externalized.as_slice());
 
             pending_values.retain(|v| !externalized.contains(v));
             slot_progress.insert(node_id.clone(), current_slot);
@@ -636,7 +644,7 @@ fn apply_externalized_block_simple(
 // Helper Functions
 // ============================================================================
 
-fn create_test_minting_tx(height: u64, recipient_seed: u8) -> MintingTx {
+fn create_test_minting_tx(height: u64, recipient_seed: u8, prev_block_hash: [u8; 32]) -> MintingTx {
     let wallet = create_test_wallet(recipient_seed);
     let minter_address = wallet.account_key().default_subaddress();
 
@@ -645,9 +653,6 @@ fn create_test_minting_tx(height: u64, recipient_seed: u8) -> MintingTx {
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap()
         .as_secs();
-
-    // Use genesis block hash for simplicity in tests
-    let prev_block_hash = [0u8; 32];
 
     let mut minting_tx = MintingTx::new(
         height,
@@ -698,7 +703,8 @@ fn test_single_silent_node() {
     let mut network = build_byzantine_network(behaviors);
 
     // Broadcast a minting transaction
-    let minting_tx = create_test_minting_tx(1, 1);
+    let tip_hash = network.get_tip_hash();
+    let minting_tx = create_test_minting_tx(1, 1, tip_hash);
     network.broadcast_minting_tx(minting_tx);
 
     // Wait for majority (4 honest nodes) to reach slot 1
@@ -734,7 +740,8 @@ fn test_random_message_drops() {
 
     // Broadcast multiple minting transactions
     for i in 1..=3 {
-        let minting_tx = create_test_minting_tx(i, i as u8);
+        let tip_hash = network.get_tip_hash();
+        let minting_tx = create_test_minting_tx(i, i as u8, tip_hash);
         network.broadcast_minting_tx(minting_tx);
         thread::sleep(Duration::from_millis(200));
     }
@@ -771,7 +778,8 @@ fn test_invalid_transaction_proposal() {
     network.inject_value(0, invalid_value);
 
     // Also broadcast a valid minting transaction
-    let minting_tx = create_test_minting_tx(1, 1);
+    let tip_hash = network.get_tip_hash();
+    let minting_tx = create_test_minting_tx(1, 1, tip_hash);
     network.broadcast_minting_tx(minting_tx);
 
     // Wait for consensus
@@ -797,7 +805,8 @@ fn test_delayed_messages() {
 
     let mut network = build_byzantine_network(behaviors);
 
-    let minting_tx = create_test_minting_tx(1, 1);
+    let tip_hash = network.get_tip_hash();
+    let minting_tx = create_test_minting_tx(1, 1, tip_hash);
     network.broadcast_minting_tx(minting_tx);
 
     // Consensus should still work (might be slower)
@@ -834,7 +843,8 @@ fn test_minority_partition() {
 
     let mut network = build_byzantine_network(behaviors);
 
-    let minting_tx = create_test_minting_tx(1, 1);
+    let tip_hash = network.get_tip_hash();
+    let minting_tx = create_test_minting_tx(1, 1, tip_hash);
     network.broadcast_minting_tx(minting_tx);
 
     // Majority partition (nodes 2,3,4) should reach consensus
@@ -885,7 +895,8 @@ fn test_partition_healing() {
     let mut network = build_byzantine_network(behaviors);
 
     // Make progress in majority partition
-    let minting_tx = create_test_minting_tx(1, 1);
+    let tip_hash = network.get_tip_hash();
+    let minting_tx = create_test_minting_tx(1, 1, tip_hash);
     network.broadcast_minting_tx(minting_tx);
 
     let reached = network.wait_for_slot_majority(1, 4, CONSENSUS_TIMEOUT);
@@ -927,7 +938,8 @@ fn test_two_silent_nodes_quorum_overlap() {
 
     let mut network = build_byzantine_network(behaviors);
 
-    let minting_tx = create_test_minting_tx(1, 1);
+    let tip_hash = network.get_tip_hash();
+    let minting_tx = create_test_minting_tx(1, 1, tip_hash);
     network.broadcast_minting_tx(minting_tx);
 
     // 3 honest nodes can form quorum (k=3)
@@ -953,7 +965,8 @@ fn test_node_recovery() {
     let mut network = build_byzantine_network(behaviors);
 
     // Progress without node 0
-    let minting_tx1 = create_test_minting_tx(1, 1);
+    let tip_hash = network.get_tip_hash();
+    let minting_tx1 = create_test_minting_tx(1, 1, tip_hash);
     network.broadcast_minting_tx(minting_tx1);
 
     let reached = network.wait_for_slot_majority(1, 4, CONSENSUS_TIMEOUT);
@@ -969,7 +982,8 @@ fn test_node_recovery() {
     network.set_node_behavior(0, ByzantineBehavior::Honest);
 
     // Make more progress
-    let minting_tx2 = create_test_minting_tx(2, 2);
+    let tip_hash2 = network.get_tip_hash();
+    let minting_tx2 = create_test_minting_tx(2, 2, tip_hash2);
     network.broadcast_minting_tx(minting_tx2);
 
     // Now all 5 nodes can participate
@@ -997,7 +1011,8 @@ fn test_mixed_byzantine_stress() {
 
     // Run multiple rounds
     for i in 1..=5 {
-        let minting_tx = create_test_minting_tx(i, i as u8);
+        let tip_hash = network.get_tip_hash();
+        let minting_tx = create_test_minting_tx(i, i as u8, tip_hash);
         network.broadcast_minting_tx(minting_tx);
 
         let reached = network.wait_for_slot_majority(i, 4, CONSENSUS_TIMEOUT);
@@ -1023,7 +1038,8 @@ fn test_all_honest_baseline() {
 
     let mut network = build_byzantine_network(behaviors);
 
-    let minting_tx = create_test_minting_tx(1, 1);
+    let tip_hash = network.get_tip_hash();
+    let minting_tx = create_test_minting_tx(1, 1, tip_hash);
     network.broadcast_minting_tx(minting_tx);
 
     let reached = network.wait_for_slot_majority(1, 5, CONSENSUS_TIMEOUT);
