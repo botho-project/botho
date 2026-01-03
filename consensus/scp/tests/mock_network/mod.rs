@@ -5,9 +5,12 @@
 // We allow dead code because not all integration tests use all of the common
 // code. https://github.com/rust-lang/rust/issues/46379
 #![allow(dead_code)]
+// Test code intentionally uses expect/unwrap for clearer test failures.
+// These patterns are denied in production code via crate-level Clippy lints.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use bth_common::{
-    logger::{log, Logger, LoggerExt},
+    logger::{log, Logger},
     NodeID,
 };
 use bth_consensus_scp::{
@@ -204,16 +207,16 @@ impl SCPNetwork {
     fn push_value(&self, node_id: &NodeID, value: &str) {
         self.nodes_map
             .get(node_id)
-            .expect("could not find node_id in nodes_map")
+            .unwrap_or_else(|| panic!("could not find node {node_id} in nodes_map"))
             .send_value(value);
     }
 
     fn get_ledger(&self, node_id: &NodeID) -> Vec<Vec<String>> {
         self.shared_data_map
             .get(node_id)
-            .expect("could not find node_id in shared_data_map")
+            .unwrap_or_else(|| panic!("could not find node {node_id} in shared_data_map"))
             .lock()
-            .expect("lock failed on shared_data getting ledger")
+            .expect("lock poisoned getting ledger")
             .ledger
             .clone()
     }
@@ -221,26 +224,27 @@ impl SCPNetwork {
     fn get_ledger_size(&self, node_id: &NodeID) -> usize {
         self.shared_data_map
             .get(node_id)
-            .expect("could not find node_id in shared_data_map")
+            .unwrap_or_else(|| panic!("could not find node {node_id} in shared_data_map"))
             .lock()
-            .expect("lock failed on shared_data getting ledger size")
+            .expect("lock poisoned getting ledger size")
             .ledger_size()
     }
 
     fn broadcast_msg(
-        logger: Logger,
+        _logger: Logger,
         nodes_map: &Arc<DashMap<NodeID, SCPNode>>,
         peers: &HashSet<NodeID>,
         msg: Msg<String>,
     ) {
-        log::trace!(logger, "(broadcast) {}", msg);
+        // Note: logger available for debugging if needed
+        // log::trace!(logger, "(broadcast) {}", msg);
 
         let amsg = Arc::new(msg);
 
         for peer_id in peers {
             nodes_map
                 .get(peer_id)
-                .expect("failed to get peer from nodes_map")
+                .unwrap_or_else(|| panic!("failed to get peer {peer_id} from nodes_map"))
                 .send_msg(amsg.clone());
         }
     }
@@ -353,17 +357,18 @@ impl SCPNode {
                         // Propose pending values submitted to our node
                         if !pending_values.is_empty() {
                             // Only rebuild BTreeSet when pending_values changed
-                            let values_to_propose = if pending_values_changed || cached_values_to_propose.is_none() {
-                                let new_set: BTreeSet<String> = pending_values
-                                    .iter()
-                                    .take(max_slot_proposed_values)
-                                    .cloned()
-                                    .collect();
-                                cached_values_to_propose = Some(new_set.clone());
-                                pending_values_changed = false;
-                                new_set
-                            } else {
-                                cached_values_to_propose.clone().unwrap()
+                            let values_to_propose = match &cached_values_to_propose {
+                                Some(cached) if !pending_values_changed => cached.clone(),
+                                _ => {
+                                    let new_set: BTreeSet<String> = pending_values
+                                        .iter()
+                                        .take(max_slot_proposed_values)
+                                        .cloned()
+                                        .collect();
+                                    cached_values_to_propose = Some(new_set.clone());
+                                    pending_values_changed = false;
+                                    new_set
+                                }
                             };
 
                             let outgoing_msg: Option<Msg<String>> = thread_local_node
@@ -447,44 +452,26 @@ impl SCPNode {
     }
 
     /// Push value to this node's consensus task.
+    /// Silently ignores Disconnected errors (receiver thread ended during shutdown).
     pub fn send_value(&self, value: &str) {
-        match self
+        // Channel is unbounded, so only Disconnected errors are possible
+        let _ = self
             .sender
-            .try_send(SCPNodeTaskMessage::Value(value.to_owned()))
-        {
-            Ok(_) => {}
-            Err(err) => match err {
-                crossbeam_channel::TrySendError::Disconnected(_) => {}
-                _ => {
-                    panic!("send_value failed: {err:?}");
-                }
-            },
-        }
+            .try_send(SCPNodeTaskMessage::Value(value.to_owned()));
     }
 
     /// Feed message from the network to this node's consensus task.
+    /// Silently ignores Disconnected errors (receiver thread ended during shutdown).
     pub fn send_msg(&self, msg: Arc<Msg<String>>) {
-        match self.sender.try_send(SCPNodeTaskMessage::Msg(msg)) {
-            Ok(_) => {}
-            Err(err) => match err {
-                crossbeam_channel::TrySendError::Disconnected(_) => {}
-                _ => {
-                    panic!("send_msg failed: {err:?}");
-                }
-            },
-        }
+        // Channel is unbounded, so only Disconnected errors are possible
+        let _ = self.sender.try_send(SCPNodeTaskMessage::Msg(msg));
     }
 
+    /// Signal the node's consensus task to stop.
+    /// Silently ignores Disconnected errors (receiver thread already ended).
     pub fn send_stop(&self) {
-        match self.sender.try_send(SCPNodeTaskMessage::StopTrigger) {
-            Ok(_) => {}
-            Err(err) => match err {
-                crossbeam_channel::TrySendError::Disconnected(_) => {}
-                _ => {
-                    panic!("send_stop failed: {err:?}");
-                }
-            },
-        }
+        // Channel is unbounded, so only Disconnected errors are possible
+        let _ = self.sender.try_send(SCPNodeTaskMessage::StopTrigger);
     }
 }
 
