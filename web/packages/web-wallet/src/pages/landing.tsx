@@ -16,8 +16,8 @@ const features = [
   },
   {
     icon: Atom,
-    title: 'Post-Quantum Smart',
-    description: 'Recipient privacy is always ML-KEM-768 (permanent record). Sender privacy: CLSAG for speed, LION for quantum resistance. Pedersen commitments are already information-theoretic.',
+    title: 'Quantum-Safe Where It Matters',
+    description: 'Recipient addresses use ML-KEM-768—quantum computers can\'t trace who received funds. Amount commitments are information-theoretically secure. Sender privacy via efficient CLSAG ring signatures.',
   },
   {
     icon: Zap,
@@ -27,10 +27,10 @@ const features = [
 ]
 
 const stats = [
-  { label: 'Finality', value: 'Instant', note: 'SCP consensus' },
-  { label: 'Privacy', value: 'Default', note: 'All transactions' },
+  { label: 'Finality', value: '<5s', note: 'SCP consensus' },
+  { label: 'Ring Size', value: '20', note: 'CLSAG signatures' },
   { label: 'Base Fee', value: '0.05%', note: 'Up to 30% for whales' },
-  { label: 'Recipient PQ', value: 'Always', note: 'ML-KEM-768' },
+  { label: 'Addresses', value: 'ML-KEM', note: 'Quantum-safe' },
 ]
 
 export function LandingPage() {
@@ -119,15 +119,12 @@ export function LandingPage() {
               Production network pending
             </div>
           </div>
-          <p className="text-sm sm:text-base text-ghost mb-3 sm:mb-4 italic">
-            "Motho ke motho ka batho" — A person is a person through other people
-          </p>
           <h1 className="font-display text-4xl sm:text-5xl md:text-7xl font-bold mb-4 sm:mb-6 leading-tight">
-            Money for{' '}
-            <span className="text-gradient">Community</span>
+            Privacy Currency for the{' '}
+            <span className="text-gradient">Quantum Era</span>
           </h1>
           <p className="text-base sm:text-lg md:text-xl text-ghost mb-8 sm:mb-10 max-w-2xl mx-auto px-2">
-            Privacy by default. Anti-hoarding economics. Post-quantum where it matters. A currency designed for circulation, not concentration.
+            Instant SCP finality. Quantum-safe recipient addresses. Progressive economics that reward circulation over hoarding.
           </p>
           <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 justify-center px-4 sm:px-0">
             <Link to="/wallet" className="w-full sm:w-auto">
@@ -207,23 +204,30 @@ export function LandingPage() {
 
       {/* Footer */}
       <footer className="py-8 sm:py-12 px-4 sm:px-6 border-t border-steel">
-        <div className="max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4 sm:gap-6">
-          <div className="flex items-center gap-2 sm:gap-3">
-            <Logo size="sm" showText={false} />
-            <span className="text-ghost text-sm">Botho Project</span>
+        <div className="max-w-6xl mx-auto">
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-4 sm:gap-6 mb-6">
+            <div className="flex items-center gap-2 sm:gap-3">
+              <Logo size="sm" showText={false} />
+              <span className="text-ghost text-sm">Botho Project</span>
+            </div>
+            <div className="flex items-center gap-6 text-sm text-ghost">
+              <Link to="/docs" className="hover:text-light transition-colors">
+                Documentation
+              </Link>
+              <a
+                href="https://github.com/botho-project/botho"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="hover:text-light transition-colors"
+              >
+                GitHub
+              </a>
+            </div>
           </div>
-          <div className="flex items-center gap-6 text-sm text-ghost">
-            <Link to="/docs" className="hover:text-light transition-colors">
-              Documentation
-            </Link>
-            <a
-              href="https://github.com/botho-project/botho"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="hover:text-light transition-colors"
-            >
-              GitHub
-            </a>
+          <div className="text-center pt-6 border-t border-steel/50">
+            <p className="text-sm text-muted italic">
+              "Motho ke motho ka batho" — A person is a person through other people
+            </p>
           </div>
         </div>
       </footer>
