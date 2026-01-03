@@ -1,10 +1,8 @@
 # Botho Protocol Specification
 
-**Version**: 0.1.0
+**Version**: 0.2.0
 **Status**: Draft
-**Last Updated**: 2024-12-31
-
-> **⚠️ SUPERSEDED**: This specification has been replaced by [v0.2.0](protocol-v0.2.0.md). LION (PQ-Private) transactions described here have been **deprecated**. The current protocol uses only two transaction types: Minting (ML-DSA signatures) and Private (CLSAG ring signatures). See [ADR-0001](../decisions/0001-deprecate-lion-ring-signatures.md) for the deprecation decision.
+**Last Updated**: 2025-01-03
 
 ## Abstract
 
@@ -52,9 +50,20 @@ This specification covers:
 ### 1.3 Design Goals
 
 1. **Privacy**: Sender, receiver, and amount privacy through ring signatures and commitments
-2. **Quantum Resistance**: Hybrid classical/post-quantum security model
+2. **Quantum Resistance**: Hybrid security model with post-quantum stealth addresses
 3. **Scalability**: Compact block relay and efficient validation
 4. **Decentralization**: Byzantine fault-tolerant consensus via SCP
+
+### 1.4 Transaction Types
+
+Botho supports two transaction types:
+
+| Type | Purpose | Signature | Stealth Address |
+|------|---------|-----------|-----------------|
+| **Minting** | Block rewards | ML-DSA-65 | ML-KEM-768 |
+| **Private** | User transfers | CLSAG ring signature | ML-KEM-768 |
+
+Both transaction types use ML-KEM-768 for post-quantum secure stealth addresses, protecting recipient privacy against future quantum attacks.
 
 ---
 
@@ -89,32 +98,64 @@ All multi-byte integers are encoded in **little-endian** format unless otherwise
 
 ## 3. Transaction Format
 
-Botho supports two transaction types with distinct security properties:
+Botho supports two transaction types with distinct purposes:
 
-| Type | Ring Signature | Post-Quantum | Ring Size | Max Inputs |
-|------|---------------|--------------|-----------|------------|
-| Classical | CLSAG | Optional ML-KEM stealth | 20 | 16 |
-| PQ-Private | LION | ML-KEM + ML-DSA | 11 | 8 |
+| Type | Ring Signature | Ring Size | Max Inputs | Max Outputs | Max Size |
+|------|---------------|-----------|------------|-------------|----------|
+| Minting | None (ML-DSA) | N/A | 0 | 1 | 10 KB |
+| Private | CLSAG | 20 | 16 | 16 | 100 KB |
 
-### 3.1 Classical Transaction
+### 3.1 Minting Transaction
 
-#### 3.1.1 Transaction Structure
+Minting transactions create new coins as block rewards. They have no inputs and exactly one output.
+
+#### 3.1.1 Minting Transaction Structure
+
+```rust
+struct MintingTx {
+    block_height: u64,
+    reward: u64,                 // in picocredits
+    minter_view_key: [u8; 32],
+    minter_spend_key: [u8; 32],
+    target_key: [u8; 32],        // Stealth output
+    public_key: [u8; 32],        // Ephemeral key for stealth
+    ml_kem_ciphertext: [u8; 1088], // Post-quantum key encapsulation
+    prev_block_hash: [u8; 32],
+    difficulty: u64,
+    nonce: u64,
+    timestamp: u64,
+    signature: MlDsaSignature,   // ML-DSA-65 signature
+}
+```
+
+#### 3.1.2 Minting Validation
+
+1. **Height**: `block_height == current_chain_height + 1`
+2. **Reward**: Matches expected reward for height (see Section 8.2)
+3. **PoW**: Valid proof-of-work (see Section 7.2)
+4. **Signature**: Valid ML-DSA-65 signature over transaction data
+
+### 3.2 Private Transaction
+
+Private transactions transfer funds between users with full privacy (hidden sender, recipient, and amount).
+
+#### 3.2.1 Transaction Structure
 
 ```rust
 struct Transaction {
     prefix: TxPrefix,
-    signature: RingSignature,  // CLSAG
+    signature: ClsagSignature,  // Ring signature
 }
 
 struct TxPrefix {
-    inputs: Vec<TxInput>,      // max 16
-    outputs: Vec<TxOutput>,    // max 16
+    inputs: Vec<TxInput>,      // 1-16 inputs
+    outputs: Vec<TxOutput>,    // 1-16 outputs
     fee: u64,                  // in picocredits
     tombstone_block: u64,      // expiry height
 }
 ```
 
-#### 3.1.2 Transaction Input
+#### 3.2.2 Transaction Input
 
 ```rust
 struct TxInput {
@@ -134,39 +175,47 @@ Offset  Size    Field
 0x7A4   32      key_image
 ```
 
-#### 3.1.3 Transaction Output
+#### 3.2.3 Transaction Output
 
 ```rust
 struct TxOutput {
-    amount: MaskedAmount,           // encrypted value
-    target_key: CompressedRistretto, // [u8; 32]
-    public_key: CompressedRistretto, // [u8; 32]
-    e_memo: Option<EncryptedMemo>,   // encrypted memo
+    amount: MaskedAmount,              // encrypted value
+    target_key: CompressedRistretto,   // [u8; 32]
+    public_key: CompressedRistretto,   // [u8; 32]
+    ml_kem_ciphertext: [u8; 1088],     // Post-quantum stealth
+    e_memo: Option<EncryptedMemo>,     // encrypted memo
 }
 ```
 
-**Stealth Address Derivation**:
+#### 3.2.4 Stealth Address Derivation (Hybrid)
 
-For recipient with subaddress keys $(C_i, D_i)$:
+Botho uses a hybrid classical/post-quantum stealth address scheme:
 
-1. Sender generates random scalar $r \in \mathbb{Z}_q$
-2. Compute shared secret: $s = H_s(r \cdot C_i)$
-3. Compute target key: $\text{target\_key} = s \cdot G + D_i$
-4. Compute public key: $\text{public\_key} = r \cdot D_i$
+**Recipient Setup**:
+1. Generate classical keypairs: view $(a, A = a \cdot G)$, spend $(b, B = b \cdot G)$
+2. Generate ML-KEM keypair: $(pk_{kem}, sk_{kem})$
+3. Publish address containing $A$, $B$, and $pk_{kem}$
 
-**Recipient Detection**:
+**Sender Creates Output**:
+1. Generate random scalar $r \in \mathbb{Z}_q$
+2. Encapsulate PQ shared secret: $(ct, ss_{pq}) = \text{ML-KEM.Encaps}(pk_{kem})$
+3. Compute classical shared secret: $ss_c = r \cdot A$
+4. Combine secrets: $ss = H(ss_c \| ss_{pq})$
+5. Compute target key: $P = H_s(ss) \cdot G + B$
+6. Compute public key: $R = r \cdot G$
+7. Include $ct$ (1,088 bytes) in output
 
-1. For each output, compute: $s' = H_s(a \cdot \text{public\_key})$
-2. Compute candidate: $T' = s' \cdot G + D_i$
-3. If $T' = \text{target\_key}$, the output belongs to the recipient
+**Recipient Scans**:
+1. Decapsulate: $ss_{pq} = \text{ML-KEM.Decaps}(ct, sk_{kem})$
+2. Compute: $ss_c = a \cdot R$
+3. Combine: $ss = H(ss_c \| ss_{pq})$
+4. Compute candidate: $P' = H_s(ss) \cdot G + B$
+5. If $P' = P$, output belongs to recipient
 
-**Spending Key Recovery**:
+**Spending Key**:
+$$x = H_s(ss) + b$$
 
-$$x = H_s(a \cdot \text{public\_key}) + d$$
-
-where $a$ is the view private key and $d$ is the spend private key.
-
-#### 3.1.4 Masked Amount
+#### 3.2.5 Masked Amount
 
 ```rust
 struct MaskedAmountV2 {
@@ -179,62 +228,23 @@ struct MaskedAmountV2 {
 **Commitment**: $C = v \cdot H + b \cdot G$ where $v$ is value and $b$ is blinding factor.
 
 **Masking**:
-1. Derive mask: $\text{mask} = H_s(\text{"mc\_amount\_value"} \| \text{shared\_secret})$
+1. Derive mask: $\text{mask} = H_s(\text{"mc\_amount\_value"} \| ss)$
 2. Masked value: $\text{masked\_value} = v \oplus \text{mask}[0..8]$
-
-### 3.2 Post-Quantum Transaction
-
-PQ transactions provide defense-in-depth against quantum computers.
-
-#### 3.2.1 Hybrid Security Model
-
-Both classical AND post-quantum signatures must verify:
-
-```rust
-struct PqTransaction {
-    prefix: PqTxPrefix,
-    classical_signature: RingSignature,  // CLSAG
-    pq_signature: LionSignature,         // Lattice-based
-    pq_ciphertexts: Vec<MlKemCiphertext>, // Key encapsulation
-}
-```
-
-#### 3.2.2 PQ Constants
-
-| Parameter | Value | Notes |
-|-----------|-------|-------|
-| `PQ_RING_SIZE` | 11 | Optimized for signature size |
-| `MAX_PQ_INPUTS` | 8 | Reduced due to signature overhead |
-| `MAX_PQ_OUTPUTS` | 16 | Same as classical |
-| `MAX_PQ_TX_SIZE` | 512 KB | Larger for PQ signatures |
-| `PQ_CIPHERTEXT_SIZE` | 1,088 bytes | ML-KEM-768 |
-| `PQ_SIGNATURE_SIZE` | 3,309 bytes | ML-DSA-65 |
-| `PQ_SIGNING_PUBKEY_SIZE` | 1,952 bytes | ML-DSA-65 |
-
-#### 3.2.3 PQ Stealth Addresses
-
-Uses ML-KEM-768 (Kyber) for key encapsulation:
-
-1. Sender encapsulates to recipient's PQ public key
-2. Shared secret used for stealth address derivation
-3. Ciphertext included in transaction output
-
-**Address Format**: `botho://1q/<base58-encoded-keys>` (PQ-enabled)
 
 ### 3.3 Transaction Validation
 
 #### 3.3.1 Structural Validation
 
-1. Input count: $1 \leq |\text{inputs}| \leq 16$ (classical) or $\leq 8$ (PQ)
+1. Input count: $1 \leq |\text{inputs}| \leq 16$
 2. Output count: $1 \leq |\text{outputs}| \leq 16$
-3. Ring size: exactly 20 (classical) or 11 (PQ)
-4. Transaction size: $\leq 100$ KB (classical) or $\leq 512$ KB (PQ)
+3. Ring size: exactly 20
+4. Transaction size: $\leq 100$ KB
 5. Tombstone: $\text{current\_height} < \text{tombstone\_block} \leq \text{current\_height} + 20160$
 
 #### 3.3.2 Cryptographic Validation
 
 1. **Key Images**: No duplicates in blockchain history
-2. **Ring Signature**: Valid CLSAG (and LION for PQ)
+2. **Ring Signature**: Valid CLSAG signature
 3. **Balance Proof**: $\sum \text{pseudo\_outputs} = \sum \text{outputs} + \text{fee} \cdot H$
 4. **Range Proofs**: Valid Bulletproofs for all outputs
 
@@ -474,7 +484,7 @@ enum NetworkEvent {
 
 ### 6.1 CLSAG Ring Signatures
 
-Concise Linkable Spontaneous Anonymous Group signatures.
+Concise Linkable Spontaneous Anonymous Group signatures provide sender privacy.
 
 #### 6.1.1 Parameters
 
@@ -534,38 +544,11 @@ const CLSAG_AGG_COEFF_P_DOMAIN_TAG: &[u8] = b"CLSAG_agg_P";
 const CLSAG_AGG_COEFF_C_DOMAIN_TAG: &[u8] = b"CLSAG_agg_C";
 ```
 
-### 6.2 LION Lattice Signatures
+### 6.2 ML-KEM-768 (Kyber)
 
-Lattice-based Linkable Ring Signatures for post-quantum security.
+Key encapsulation mechanism for post-quantum stealth addresses.
 
-#### 6.2.1 Parameters
-
-| Parameter | Value | Description |
-|-----------|-------|-------------|
-| $N$ | 256 | Ring dimension |
-| $Q$ | 8,380,417 | Modulus |
-| $K, L$ | 4, 4 | Module dimensions |
-| Ring Size | 7 | Smaller than CLSAG due to size |
-| Security | ~128-bit | Post-quantum |
-
-#### 6.2.2 Key Sizes
-
-| Component | Size |
-|-----------|------|
-| Public Key | 1,312 bytes |
-| Secret Key | 800 bytes |
-| Key Image | 1,312 bytes |
-| Signature | ~17.5 KB (ring size 7) |
-
-#### 6.2.3 Security Basis
-
-Based on Module-LWE and Module-SIS hardness assumptions, believed to be quantum-resistant.
-
-### 6.3 ML-KEM-768 (Kyber)
-
-Key encapsulation mechanism for PQ stealth addresses.
-
-#### 6.3.1 Parameters (NIST Level 3)
+#### 6.2.1 Parameters (NIST Level 3)
 
 | Parameter | Value |
 |-----------|-------|
@@ -574,18 +557,22 @@ Key encapsulation mechanism for PQ stealth addresses.
 | Ciphertext | 1,088 bytes |
 | Shared Secret | 32 bytes |
 
-#### 6.3.2 Usage in Botho
+#### 6.2.2 Usage in Botho
 
-1. Recipient generates ML-KEM keypair
-2. Sender encapsulates to recipient's public key
-3. Shared secret used for stealth address derivation
-4. Ciphertext included in transaction output (1,088 bytes)
+ML-KEM-768 provides post-quantum security for recipient privacy:
 
-### 6.4 ML-DSA-65 (Dilithium)
+1. Recipient generates ML-KEM keypair alongside classical keys
+2. Sender encapsulates shared secret using recipient's ML-KEM public key
+3. Shared secret combined with classical ECDH for hybrid security
+4. Ciphertext (1,088 bytes) included in transaction output
 
-Digital signatures for PQ transaction authorization.
+This protects recipient addresses against future quantum attacks. Transaction data is recorded permanently on-chain, so recipient privacy must be quantum-resistant from day one.
 
-#### 6.4.1 Parameters (NIST Level 3)
+### 6.3 ML-DSA-65 (Dilithium)
+
+Digital signatures for minting transaction authorization.
+
+#### 6.3.1 Parameters (NIST Level 3)
 
 | Parameter | Value |
 |-----------|-------|
@@ -593,11 +580,19 @@ Digital signatures for PQ transaction authorization.
 | Secret Key | 4,032 bytes |
 | Signature | 3,309 bytes |
 
-### 6.5 Pedersen Commitments
+#### 6.3.2 Usage in Botho
+
+ML-DSA-65 is used exclusively for minting transactions:
+
+1. Minter generates ML-DSA keypair
+2. Minting transaction signed with ML-DSA private key
+3. Nodes verify signature against minter's public key in block header
+
+### 6.4 Pedersen Commitments
 
 Amount hiding with homomorphic properties.
 
-#### 6.5.1 Commitment Scheme
+#### 6.4.1 Commitment Scheme
 
 $$C = v \cdot H + b \cdot G$$
 
@@ -606,27 +601,27 @@ where:
 - $b \in \mathbb{Z}_q$ is the blinding factor
 - $G, H$ are independent generators
 
-#### 6.5.2 Properties
+#### 6.4.2 Properties
 
 1. **Hiding**: Given $C$, cannot determine $v$ or $b$
 2. **Binding**: Cannot find $(v', b') \neq (v, b)$ with same commitment
 3. **Homomorphic**: $C_1 + C_2 = (v_1 + v_2) \cdot H + (b_1 + b_2) \cdot G$
 
-### 6.6 Bulletproofs Range Proofs
+### 6.5 Bulletproofs Range Proofs
 
 Prove that committed values are in valid range without revealing them.
 
-#### 6.6.1 Purpose
+#### 6.5.1 Purpose
 
 Prove $v \in [0, 2^{64})$ for each output commitment.
 
-#### 6.6.2 Properties
+#### 6.5.2 Properties
 
 - Proof size: $O(\log n)$ for $n$ range bits
 - Aggregated: Single proof for multiple outputs
 - Zero-knowledge: Reveals nothing about values
 
-### 6.7 Domain Separators
+### 6.6 Domain Separators
 
 All hash functions use domain separation to prevent cross-protocol attacks:
 
@@ -707,26 +702,7 @@ height = 0
 difficulty = INITIAL_DIFFICULTY
 ```
 
-### 7.4 Minting Transaction (Coinbase)
-
-```rust
-struct MintingTx {
-    block_height: u64,
-    reward: u64,                 // in picocredits
-    minter_view_key: [u8; 32],
-    minter_spend_key: [u8; 32],
-    target_key: [u8; 32],        // Stealth output
-    public_key: [u8; 32],        // Ephemeral key
-    prev_block_hash: [u8; 32],
-    difficulty: u64,
-    nonce: u64,
-    timestamp: u64,
-}
-```
-
-**Privacy**: Minting rewards use stealth addresses, making repeat minters unlinkable.
-
-### 7.5 Block Body
+### 7.4 Block Body
 
 ```rust
 struct Block {
@@ -736,7 +712,7 @@ struct Block {
 }
 ```
 
-### 7.6 Block Limits
+### 7.5 Block Limits
 
 | Parameter | Value | Notes |
 |-----------|-------|-------|
@@ -791,8 +767,6 @@ Fees are proportional to transaction size:
 fee = max(MIN_TX_FEE, size_in_bytes * fee_per_byte)
 ```
 
-PQ transactions pay proportionally more (~19x classical) due to larger signatures.
-
 #### 8.3.3 Fee Blinding
 
 ```rust
@@ -820,9 +794,7 @@ Botho implements provenance-based taxation to discourage wealth concentration:
 | Mainnet | `botho://1/` | 7100 | 7101 | 0x4254484D |
 | Testnet | `tbotho://1/` | 17100 | 17101 | 0x42544854 |
 
-### 9.2 Address Formats
-
-#### 9.2.1 Classical Address
+### 9.2 Address Format
 
 ```
 botho://1/<base58check-encoded-keys>
@@ -831,16 +803,9 @@ botho://1/<base58check-encoded-keys>
 Components:
 - View public key (32 bytes)
 - Spend public key (32 bytes)
-
-#### 9.2.2 PQ-Enabled Address
-
-```
-botho://1q/<base58check-encoded-keys>
-```
-
-Additional components:
 - ML-KEM public key (1,184 bytes)
-- ML-DSA public key (1,952 bytes)
+
+All addresses include ML-KEM public keys for post-quantum stealth address derivation.
 
 ### 9.3 Block Timing
 
@@ -859,7 +824,7 @@ Additional components:
 #### 10.1.1 Assumptions
 
 1. Discrete logarithm problem is hard (classical security)
-2. Module-LWE/SIS problems are hard (post-quantum security)
+2. Module-LWE problem is hard (post-quantum security)
 3. SHA-256 and SHA-512 are collision-resistant
 4. Network adversary cannot control > 1/3 of consensus nodes
 
@@ -868,8 +833,7 @@ Additional components:
 - Transaction linkability (ring signatures)
 - Amount disclosure (Pedersen commitments)
 - Double-spending (key images)
-- Quantum attacks on key exchange (ML-KEM)
-- Quantum attacks on signatures (LION + ML-DSA)
+- Quantum attacks on recipient privacy (ML-KEM stealth addresses)
 
 ### 10.2 Ring Signature Security
 
@@ -891,31 +855,46 @@ Key images provide:
 - **Uniqueness**: Each output can only be spent once
 - **Unlinkability**: Key image reveals nothing about source output
 
-### 10.4 Post-Quantum Security
+### 10.4 Hybrid Post-Quantum Security
 
-#### 10.4.1 Hybrid Model
+#### 10.4.1 Security Model
 
-Both classical AND post-quantum signatures must verify:
+Botho uses a hybrid classical/post-quantum security model:
+
+| Component | Classical | Post-Quantum | Rationale |
+|-----------|-----------|--------------|-----------|
+| **Recipient privacy** | ECDH | ML-KEM-768 | On-chain forever, must be PQ-safe |
+| **Sender privacy** | CLSAG | — | Ephemeral value, classical sufficient |
+| **Amount hiding** | Pedersen | — | Information-theoretic hiding |
+| **Minting auth** | — | ML-DSA-65 | Block rewards need PQ signatures |
+
+#### 10.4.2 Rationale
+
+**Why hybrid stealth addresses?**
+
+Transaction data is recorded permanently on-chain. A quantum attacker in 2045 could retroactively link recipients from 2025 transactions if we used only classical ECDH. By using ML-KEM alongside ECDH, recipient privacy is protected against future quantum attacks.
+
+**Why classical ring signatures?**
+
+Sender anonymity is ephemeral—its value degrades over time as economic context becomes historical. Post-quantum ring signatures (like LION) are ~50x larger than CLSAG, making blockchain growth unsustainable for desktop nodes. The tradeoff favors compact classical signatures for sender privacy.
+
+See [ADR-0001](../decisions/0001-deprecate-lion-ring-signatures.md) for detailed analysis.
+
+#### 10.4.3 Security Properties
+
+Both classical AND post-quantum components must be broken to compromise recipient privacy:
 
 ```
-valid = verify_clsag(tx) AND verify_lion(tx)
+recipient_compromised = break_ecdh(output) AND break_mlkem(output)
 ```
 
-This provides:
-- Current security via classical signatures
-- Future security via lattice signatures
-- Defense-in-depth against implementation bugs
-
-#### 10.4.2 Migration Path
-
-Users can transition to PQ addresses before quantum computers arrive, protecting funds retroactively.
+This provides defense-in-depth against implementation bugs in either scheme.
 
 ### 10.5 Denial of Service
 
 #### 10.5.1 Transaction Size Limits
 
-- Classical: 100 KB max
-- PQ: 512 KB max
+- Maximum: 100 KB
 - Prevents memory exhaustion
 
 #### 10.5.2 Rate Limiting
@@ -936,13 +915,23 @@ Users can transition to PQ addresses before quantum computers arrive, protecting
 1. **CLSAG**: "Tighter Security Proofs for Money-Grubbing Ring Signatures" - MRL-0011
 2. **Bulletproofs**: Bunz et al., "Bulletproofs: Short Proofs for Confidential Transactions"
 3. **SCP**: Mazieres, "The Stellar Consensus Protocol"
-4. **ML-KEM**: NIST FIPS 203 (Draft), "Module-Lattice-Based Key-Encapsulation Mechanism"
-5. **ML-DSA**: NIST FIPS 204 (Draft), "Module-Lattice-Based Digital Signature Algorithm"
+4. **ML-KEM**: NIST FIPS 203, "Module-Lattice-Based Key-Encapsulation Mechanism"
+5. **ML-DSA**: NIST FIPS 204, "Module-Lattice-Based Digital Signature Algorithm"
 6. **Ristretto**: "Ristretto: A Technique for Constructing Elliptic Curve Groups"
 
 ---
 
 ## 12. Changelog
+
+### Version 0.2.0 (2025-01-03)
+
+- **BREAKING**: Removed LION ring signatures and PQ-Private transaction type
+- Simplified to two transaction types: Minting (ML-DSA) and Private (CLSAG)
+- All addresses now include ML-KEM public key for post-quantum stealth
+- Updated security model documentation to reflect hybrid approach
+- Clarified rationale for classical sender privacy vs PQ recipient privacy
+- Removed PQ transaction size limits (512 KB max no longer applicable)
+- Updated address format documentation
 
 ### Version 0.1.0 (2024-12-31)
 
@@ -957,4 +946,4 @@ Users can transition to PQ addresses before quantum computers arrive, protecting
 
 ---
 
-*This specification is maintained in the Botho repository at `docs/specification/protocol-v0.1.0.md`.*
+*This specification is maintained in the Botho repository at `docs/specification/protocol-v0.2.0.md`.*
