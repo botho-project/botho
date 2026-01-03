@@ -281,6 +281,17 @@ fn apply_memo_keystream(data: &mut [u8; ENCRYPTED_MEMO_SIZE], shared_secret: &Ri
 
 /// A transaction output (UTXO) with stealth addressing.
 ///
+/// # Classical Keys Only
+///
+/// This structure contains classical Ristretto keys (`target_key`, `public_key`).
+/// These keys are sufficient for CLSAG ring signatures but NOT for LION ring
+/// signatures, which require separate LION lattice public keys (1,312 bytes each).
+///
+/// To use LION ring signatures, outputs need associated LION key material.
+/// See `LionRingMember` for the extended structure used in PQ-Private transactions.
+///
+/// # Stealth Addressing
+///
 /// Uses CryptoNote-style one-time keys for recipient privacy:
 /// - `target_key`: One-time public key that only the recipient can identify and spend
 /// - `public_key`: Ephemeral DH public key for recipient to derive shared secret
@@ -966,13 +977,27 @@ impl LionRingInput {
 // Transaction Inputs (enum-based for type safety)
 // ============================================================================
 
-/// How transaction inputs are specified.
+/// How transaction inputs are authorized (ring signature scheme selection).
 ///
-/// All transactions in Botho are private by default. Users choose between:
-/// - **Clsag**: Standard-private with classical ring signatures (~700B/input)
-/// - **Lion**: PQ-private with post-quantum ring signatures (~63KB/input)
+/// # Ring Signature Schemes
 ///
-/// Both tiers provide ring size 20 (larger than Monero's 16) for strong anonymity.
+/// Users choose between two privacy tiers:
+/// - **Clsag**: Standard-private with classical ring signatures (~700B/input, ring=20)
+/// - **Lion**: PQ-private with post-quantum ring signatures (~36KB/input, ring=11)
+///
+/// Both tiers hide the sender within an anonymity set. CLSAG is recommended for
+/// everyday transactions; LION provides quantum-resistant sender privacy for
+/// high-value or long-term security needs.
+///
+/// # Key Requirements
+///
+/// The two schemes have different key requirements:
+/// - **CLSAG**: Uses classical Ristretto keys from `TxOutput` (32 bytes each)
+/// - **LION**: Requires LION lattice public keys (1,312 bytes each)
+///
+/// Standard-Private outputs (classical `TxOutput`) can only be spent with CLSAG.
+/// To spend with LION, outputs need associated LION key material. See the
+/// `LionRingMember` structure and the PQ migration guide for details.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TxInputs {
     /// CLSAG ring signatures - standard-private tier.

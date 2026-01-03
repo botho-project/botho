@@ -132,6 +132,31 @@ Botho provides strong cryptographic privacy, but privacy is never absolute:
 
 For maximum privacy, use Standard-Private or PQ-Private transactions and follow the [privacy best practices](privacy.md#privacy-best-practices).
 
+### Can I switch between Standard-Private and PQ-Private?
+
+**It depends on your current UTXOs:**
+
+| Your UTXOs | To CLSAG | To LION |
+|------------|----------|---------|
+| Standard-Private (classical) | ✓ Direct | Requires migration first |
+| PQ-Private (with LION keys) | ✓ Direct | ✓ Direct |
+
+**Why?** LION ring signatures require LION public keys (1,312 bytes each) for all ring members. Standard-Private outputs only have classical keys (32 bytes). You can't use an output in a LION ring unless it has an associated LION public key.
+
+**To upgrade Standard-Private UTXOs:**
+```bash
+# One-time migration to create PQ-capable outputs
+botho-wallet migrate-to-pq
+
+# After migration, you can choose per-transaction:
+botho-wallet send <address> 100                    # Uses CLSAG (cheaper)
+botho-wallet send <address> 100 --quantum-private  # Uses LION (PQ-safe)
+```
+
+**PQ outputs are flexible:** Once you have PQ-Private UTXOs, you can spend them with either CLSAG (cheaper) or LION (quantum-safe) depending on your needs.
+
+See [UTXO and Privacy Tier Relationship](transactions.md#utxo-and-privacy-tier-relationship) for technical details.
+
 ---
 
 ## Mining (Minting)

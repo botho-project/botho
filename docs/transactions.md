@@ -69,6 +69,85 @@ Sender privacy is ephemeral — the value of knowing "who sent this" diminishes 
 
 Users who need quantum-resistant sender privacy should use PQ-Private: whistleblowers, political dissidents, long-term holdings, or high-value transactions where "harvest now, decrypt later" attacks are a concern.
 
+## UTXO and Privacy Tier Relationship
+
+Understanding how outputs relate to privacy tiers is important for users choosing between Standard-Private (CLSAG) and PQ-Private (LION) transactions.
+
+### Output Format
+
+All transaction types produce outputs with stealth addressing:
+
+```
+TxOutput {
+    amount: u64,              // Hidden by Pedersen commitment
+    target_key: [u8; 32],     // One-time Ristretto destination
+    public_key: [u8; 32],     // Ephemeral DH key
+    e_memo: Option<EncryptedMemo>,
+    cluster_tags: ClusterTagVector,
+}
+```
+
+### Ring Signature Requirements
+
+The two ring signature schemes have different key requirements:
+
+| Scheme | Ring Members Need | Key Size | Notes |
+|--------|------------------|----------|-------|
+| CLSAG | Ristretto points (`target_key`) | 32 bytes | Uses existing TxOutput keys |
+| LION | LION lattice public keys | 1,312 bytes | Requires additional key material |
+
+**Key insight:** LION ring signatures require LION public keys for all ring members. These are lattice-based keys that cannot be derived from classical Ristretto points.
+
+### Tier Transition
+
+```mermaid
+flowchart TD
+    subgraph "Standard-Private Output"
+        A[TxOutput<br/>Classical keys only]
+    end
+    subgraph "Spending Options"
+        B[CLSAG Ring<br/>Uses target_key]
+        C[Cannot use LION<br/>No LION public key]
+    end
+    subgraph "PQ-Private Output"
+        D[TxOutput + LION keys<br/>Both key types]
+    end
+    subgraph "Spending Options 2"
+        E[CLSAG Ring<br/>Uses target_key]
+        F[LION Ring<br/>Uses lion_public_key]
+    end
+    A --> B
+    A -.->|Not possible| C
+    D --> E
+    D --> F
+```
+
+### What This Means for Users
+
+| Current UTXO | Want to Use | Action Required |
+|--------------|-------------|-----------------|
+| Standard-Private | CLSAG | Direct spend (default) |
+| Standard-Private | LION | Spend to PQ address first, then spend with LION |
+| PQ-Private | CLSAG | Direct spend (cheaper) |
+| PQ-Private | LION | Direct spend (quantum-safe) |
+
+### Migration Path
+
+To upgrade existing Standard-Private UTXOs to support LION spending:
+
+1. Spend your Standard-Private UTXOs using CLSAG (normal transaction)
+2. Send to your own PQ-enabled address (creates outputs with LION key material)
+3. Future spends from these outputs can use either CLSAG or LION
+
+This is what the `botho-wallet migrate-to-pq` command automates. See [Post-Quantum Migration Guide](pq-migration.md) for details.
+
+### Why This Architecture?
+
+1. **Efficiency**: Standard-Private outputs are compact (no 1,312-byte LION keys)
+2. **Backward compatibility**: Classical outputs work with existing infrastructure
+3. **Forward compatibility**: PQ outputs support both signature schemes
+4. **User choice**: Upgrade when quantum resistance is needed, not before
+
 ## Cryptographic Primitives
 
 | Primitive | Algorithm | Purpose | Size | Quantum Safety |

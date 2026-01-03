@@ -1,6 +1,41 @@
 # Post-Quantum Migration Guide
 
-This guide explains how to migrate your Botho wallet from classical addresses to quantum-safe (post-quantum) addresses to protect your funds against future quantum computer attacks.
+This guide explains how to upgrade your Botho funds to support LION post-quantum ring signatures for quantum-safe sender privacy.
+
+## Do I Need to Migrate?
+
+**Yes, if you want to use LION ring signatures for sender privacy.**
+
+LION ring signatures require LION public keys (1,312 bytes each) for all ring members. Standard-Private UTXOs only have classical Ristretto keys (32 bytes). To spend with LION, you first need UTXOs that have LION key material.
+
+### What Migration Does
+
+1. Spends your existing Standard-Private UTXOs using CLSAG
+2. Creates new outputs with both classical AND LION key material
+3. After migration, you can spend with either CLSAG or LION
+
+### After Migration
+
+Once migrated, you have flexibility:
+
+```bash
+# Use CLSAG for everyday transactions (cheaper, ~0.7 KB/input)
+botho-wallet send <address> <amount>
+
+# Use LION for quantum-safe sender privacy (~36 KB/input)
+botho-wallet send <address> <amount> --quantum-private
+```
+
+### Do I Need to Migrate Everything?
+
+**No.** You can:
+- Keep some funds as Standard-Private (smaller outputs, lower fees)
+- Migrate funds you want quantum-safe sender privacy for
+- Mix both types in your wallet
+
+Choose based on your threat model. For "harvest now, decrypt later" protection, migrated funds can use LION when spent.
+
+---
 
 ## Why Migrate?
 
