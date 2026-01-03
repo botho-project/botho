@@ -26,6 +26,19 @@ Every transaction is private by default. No surveillance, no tracking, no except
 
 Unlike "transparent by default" cryptocurrencies, Botho treats financial privacy the way cash does—as the baseline, not a premium feature.
 
+### Network-Level Privacy
+
+Cryptographic privacy isn't enough if network surveillance reveals who's transacting. Most privacy coins (including Monero and Zcash) broadcast transactions directly—allowing observers to identify originators by watching who broadcasts first.
+
+Botho implements **Onion Gossip**—defense-in-depth at the network layer:
+
+- **3-hop onion routing** hides transaction origin from network observers
+- **Every node is a relay**—no special relay class, everyone participates equally
+- **Dual-path routing**—fast path for consensus, private path for transactions
+- **Protocol obfuscation**—traffic can look like video calls (WebRTC framing)
+
+This means even a well-resourced adversary monitoring network traffic cannot determine who originated a transaction.
+
 ### Anti-Hoarding Economics
 
 Most cryptocurrencies reward early accumulators and punish late adopters. Botho inverts this with **progressive transaction fees** based on wealth concentration:
@@ -59,6 +72,7 @@ Botho combines proven cryptographic building blocks in a novel architecture:
 | Privacy | CryptoNote stealth addresses | Unlinkable transactions |
 | Quantum safety | ML-KEM-768 + ML-DSA-65 | Future-proof key exchange and signatures |
 | Fee system | Cluster-tagged progressive fees | Economic equality without identity |
+| Network privacy | Onion Gossip | Transaction origin hidden from observers |
 
 ### Transaction Types
 
@@ -168,6 +182,7 @@ Visit [botho.io](https://botho.io) to use the web wallet without running a node.
 | [Monetary Policy](./docs/monetary-policy.md) | Difficulty adjustment, epochs, and upgrades |
 | [Minting](./docs/minting.md) | Mining setup and economics |
 | [Privacy](./docs/privacy.md) | Privacy features and cryptography |
+| [Network Privacy](./docs/design/traffic-privacy-roadmap.md) | Traffic analysis resistance design |
 | [Configuration](./docs/configuration.md) | Node configuration options |
 | [API Reference](./docs/api.md) | JSON-RPC and WebSocket API |
 | [Developer Guide](./docs/developer-guide.md) | Build applications with Botho |
@@ -181,6 +196,7 @@ Botho is in active development. Current focus areas:
 
 - Core node implementation with SCP consensus
 - Stealth address transaction privacy
+- Network-level privacy (Onion Gossip)
 - Progressive fee mechanism
 - Web and desktop wallet applications
 
