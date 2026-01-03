@@ -357,7 +357,7 @@ async fn get_outputs(
             let amount = output
                 .get("amountCommitment")
                 .and_then(|v| v.as_str())
-                .and_then(|s| parse_amount_le(s))
+                .and_then(parse_amount_le)
                 .unwrap_or(0);
 
             outputs.push(RpcOutput {

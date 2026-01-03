@@ -7,10 +7,9 @@
 //! join the network by recommending trust configurations based on
 //! what other nodes in the network are doing.
 
-use crate::{messages::NodeAnnouncement, store::SharedPeerStore};
+use crate::store::SharedPeerStore;
 use bth_common::{HashMap, HashSet, ResponderId};
 use bth_consensus_scp_types::{QuorumSet, QuorumSetMember};
-use std::sync::Arc;
 
 /// A cluster of nodes that tend to trust each other.
 #[derive(Debug, Clone)]

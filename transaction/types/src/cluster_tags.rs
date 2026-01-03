@@ -379,7 +379,7 @@ impl ClusterTagVector {
         let pairs: Vec<(ClusterId, u32)> = cluster_weights
             .into_iter()
             .map(|(id, w)| {
-                let decayed = ((w as u64) * (retention as u64)) / (TAG_WEIGHT_SCALE as u64);
+                let decayed = (w * (retention as u64)) / (TAG_WEIGHT_SCALE as u64);
                 (id, decayed as u32)
             })
             .collect();
@@ -482,7 +482,7 @@ impl ClusterTagVector {
             cluster_weights
                 .into_iter()
                 .map(|(id, w)| {
-                    let decayed = ((w as u64) * (retention as u64)) / (TAG_WEIGHT_SCALE as u64);
+                    let decayed = (w * (retention as u64)) / (TAG_WEIGHT_SCALE as u64);
                     (id, decayed as u32)
                 })
                 .collect()

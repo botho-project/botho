@@ -95,7 +95,7 @@ impl ExchangeScanner {
             spend_key_lookup.insert(spend_bytes, index);
 
             // Log progress for large ranges
-            if range_size > 10_000 && (index - min_index + 1) % 10_000 == 0 {
+            if range_size > 10_000 && (index - min_index + 1).is_multiple_of(10_000) {
                 tracing::debug!(
                     "Precomputed {}/{} subaddress keys",
                     index - min_index + 1,

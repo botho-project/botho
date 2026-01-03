@@ -100,7 +100,7 @@ pub fn decompose(r: u32) -> (u32, i32) {
         ((r_centered - r0) / (2 * gamma2)) as u32
     };
 
-    (r1 % ((Q + 2 * GAMMA2 - 1) / (2 * GAMMA2)), r0)
+    (r1 % Q.div_ceil(2 * GAMMA2), r0)
 }
 
 /// Extract high bits from a polynomial.
@@ -156,10 +156,10 @@ pub fn use_hint(r: &Poly, hints: &[bool]) -> Poly {
         if hints.get(i).copied().unwrap_or(false) {
             // Hint indicates the high bits changed
             if r0 > 0 {
-                result.coeffs[i] = (h + 1) % ((Q + 2 * GAMMA2 - 1) / (2 * GAMMA2));
+                result.coeffs[i] = (h + 1) % Q.div_ceil(2 * GAMMA2);
             } else {
                 result.coeffs[i] = if h == 0 {
-                    (Q + 2 * GAMMA2 - 1) / (2 * GAMMA2) - 1
+                    Q.div_ceil(2 * GAMMA2) - 1
                 } else {
                     h - 1
                 };

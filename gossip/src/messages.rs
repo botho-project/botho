@@ -166,7 +166,7 @@ impl From<&NodeAnnouncement> for PeerInfo {
     fn from(ann: &NodeAnnouncement) -> Self {
         Self {
             responder_id: ann.node_id.responder_id.clone(),
-            public_key: ann.node_id.public_key.clone(),
+            public_key: ann.node_id.public_key,
             endpoint: ann.endpoints.first().cloned().unwrap_or_default(),
             last_seen: ann.timestamp,
         }

@@ -3,7 +3,7 @@
 //! SQLite database for bridge order tracking.
 
 use bth_bridge_core::{BridgeOrder, Chain, OrderStatus, OrderType};
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{TimeZone, Utc};
 use rusqlite::{params, Connection, Result as SqliteResult};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
@@ -146,7 +146,7 @@ impl Database {
 
         let result = stmt
             .query_row(params![id.to_string()], |row| {
-                Ok(Self::row_to_order(row)?)
+                Self::row_to_order(row)
             })
             .optional()
             .map_err(|e| format!("Query failed: {}", e))?;
@@ -172,7 +172,7 @@ impl Database {
 
         let orders = stmt
             .query_map(params![format!("{}%", status)], |row| {
-                Ok(Self::row_to_order(row)?)
+                Self::row_to_order(row)
             })
             .map_err(|e| format!("Query failed: {}", e))?
             .collect::<SqliteResult<Vec<_>>>()

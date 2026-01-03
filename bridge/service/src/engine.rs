@@ -3,7 +3,6 @@
 //! Bridge engine - coordinates watchers and order processing.
 
 use bth_bridge_core::{BridgeConfig, BridgeOrder, Chain, OrderStatus};
-use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::broadcast;
 use tracing::{error, info, warn};

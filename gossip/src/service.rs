@@ -10,7 +10,7 @@
 
 use crate::{
     behaviour::{
-        GossipBehaviour, GossipCommand, GossipEvent, GossipHandle, TopologySyncRequest,
+        GossipBehaviour, GossipCommand, GossipEvent, GossipHandle,
         TopologySyncResponse,
     },
     config::GossipConfig,
@@ -27,11 +27,11 @@ use bth_consensus_scp_types::QuorumSet;
 use bth_crypto_keys::{Ed25519Pair, Signer};
 use futures::StreamExt;
 use libp2p::{
-    gossipsub::{self, IdentTopic},
+    gossipsub::{self},
     identify, kad, noise,
-    request_response::{self, ResponseChannel},
+    request_response::{self},
     swarm::SwarmEvent,
-    tcp, yamux, Multiaddr, PeerId, Swarm, SwarmBuilder,
+    tcp, yamux, PeerId, Swarm, SwarmBuilder,
 };
 use std::{
     collections::HashSet,
@@ -41,7 +41,7 @@ use std::{
 use tokio::{
     select,
     sync::mpsc,
-    time::{interval, Interval},
+    time::interval,
 };
 use tracing::{debug, error, info, trace, warn};
 
@@ -564,7 +564,7 @@ async fn handle_behaviour_event(
         // Kademlia events
         crate::behaviour::GossipBehaviourEvent::Kademlia(kad::Event::RoutingUpdated {
             peer,
-            addresses,
+            addresses: _,
             ..
         }) => {
             debug!(?peer, "Kademlia routing updated");

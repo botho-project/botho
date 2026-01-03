@@ -5,7 +5,7 @@
 use bth_bridge_core::BthConfig;
 use std::time::Duration;
 use tokio::sync::broadcast;
-use tracing::{debug, error, info};
+use tracing::{debug, info};
 
 use crate::db::Database;
 use crate::engine::ShutdownSignal;

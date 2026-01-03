@@ -775,7 +775,7 @@ struct SimConfig {
 fn calculate_k(nodes: usize, quorum_k: Option<usize>) -> Result<usize, String> {
     let k = quorum_k.unwrap_or_else(|| {
         let peers = nodes - 1;
-        (2 * peers + 2) / 3
+        (2 * peers).div_ceil(3)
     });
 
     if k > nodes - 1 {

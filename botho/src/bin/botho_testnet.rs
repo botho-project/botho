@@ -476,7 +476,7 @@ fn cmd_status(verbose: bool) -> Result<()> {
             // Show consensus status
             println!();
             let running_count = state.nodes.iter().filter(|n| is_node_running(n)).count();
-            let quorum_threshold = (state.node_count + 1) / 2 + 1; // BFT threshold
+            let quorum_threshold = state.node_count.div_ceil(2) + 1; // BFT threshold
             if running_count >= quorum_threshold {
                 println!(
                     "Quorum: {}/{} nodes running (threshold: {})",
@@ -707,7 +707,7 @@ fn create_node_config(
 
     // Calculate quorum threshold (BFT optimal)
     let n = all_nodes.len();
-    let threshold = (n + 1) / 2 + 1; // ceil((n+1)/2)
+    let threshold = n.div_ceil(2) + 1; // ceil((n+1)/2)
 
     let config = format!(
         r#"# Auto-generated config for testnet node {}

@@ -14,19 +14,15 @@ use crate::{
         BlockBroadcast, NodeAnnouncement, TransactionBroadcast, ANNOUNCEMENTS_TOPIC, BLOCKS_TOPIC,
         TOPOLOGY_SYNC_PROTOCOL, TRANSACTIONS_TOPIC,
     },
-    store::SharedPeerStore,
 };
-use futures::StreamExt;
 use libp2p::{
     gossipsub::{self, IdentTopic, MessageAuthenticity, ValidationMode},
     identify,
     kad::{self, store::MemoryStore},
-    noise,
     request_response::{self, Codec, ProtocolSupport},
-    swarm::{NetworkBehaviour, SwarmEvent},
-    tcp, yamux, Multiaddr, PeerId, Swarm, SwarmBuilder,
+    swarm::NetworkBehaviour, Multiaddr, PeerId,
 };
-use std::{collections::HashSet, io, sync::Arc, time::Duration};
+use std::{io, time::Duration};
 use tokio::sync::mpsc;
 
 /// Events emitted by the gossip behaviour.

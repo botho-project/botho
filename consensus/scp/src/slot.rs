@@ -17,7 +17,7 @@ use bth_common::{
     logger::{log, o, Logger, LoggerExt},
     HashMap, HashSet, NodeID,
 };
-use tracing::{instrument, trace, Span};
+use tracing::{instrument, trace};
 #[cfg(test)]
 use mockall::*;
 use primitive_types::{U256, U512};
@@ -32,10 +32,10 @@ use std::{
 
 /// Application-specific function for combining multiple values. Must be
 /// deterministic.
-pub type CombineFn<V, E> = Arc<(dyn Fn(&[V]) -> Result<Vec<V>, E> + Sync + Send)>;
+pub type CombineFn<V, E> = Arc<dyn Fn(&[V]) -> Result<Vec<V>, E> + Sync + Send>;
 
 /// Application-specific validation of value.
-pub type ValidityFn<V, E> = Arc<(dyn Fn(&V) -> Result<(), E> + Sync + Send)>;
+pub type ValidityFn<V, E> = Arc<dyn Fn(&V) -> Result<(), E> + Sync + Send>;
 
 /// The various phases of the SCP protocol.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -830,8 +830,8 @@ impl<V: Value, ValidationError: Display> Slot<V, ValidationError> {
         // Note: This follows the Stellar IETF draft and differs slightly from the
         // Stellar whitepaper, which tests if p or p' abort H.
         if let Some(c) = &self.C {
-            let p_aborts_c = self.P.as_ref().map_or(false, |p| p > c && p.X != c.X);
-            let pp_aborts_c = self.PP.as_ref().map_or(false, |pp| pp > c && pp.X != c.X);
+            let p_aborts_c = self.P.as_ref().is_some_and(|p| p > c && p.X != c.X);
+            let pp_aborts_c = self.PP.as_ref().is_some_and(|pp| pp > c && pp.X != c.X);
             if p_aborts_c || pp_aborts_c {
                 self.C = None;
             }
@@ -886,10 +886,10 @@ impl<V: Value, ValidationError: Display> Slot<V, ValidationError> {
             // C may never have been set before, or may have been cleared in step (1).
             if self.B <= *h {
                 // "If p is greater-than-and-incompatible with h"
-                let p_aborts_h = self.P.as_ref().map_or(false, |p| p > h && p.X != h.X);
+                let p_aborts_h = self.P.as_ref().is_some_and(|p| p > h && p.X != h.X);
 
                 // "If pp is greater-than-and-incompatible with h"
-                let pp_aborts_h = self.PP.as_ref().map_or(false, |pp| pp > h && pp.X != h.X);
+                let pp_aborts_h = self.PP.as_ref().is_some_and(|pp| pp > h && pp.X != h.X);
 
                 if !p_aborts_h && !pp_aborts_h {
                     // Set C to the lowest ballot for which this node:

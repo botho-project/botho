@@ -51,7 +51,7 @@ fn hash_shared_secret_to_scalar(shared_secret: &MlKem768SharedSecret, output_ind
     hasher.update(HASH_TO_SCALAR_DOMAIN_TAG);
     hasher.update(PQ_STEALTH_DOMAIN_TAG);
     hasher.update(shared_secret.as_bytes());
-    hasher.update(&output_index.to_le_bytes());
+    hasher.update(output_index.to_le_bytes());
     Scalar::from_hash(hasher)
 }
 

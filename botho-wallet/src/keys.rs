@@ -208,7 +208,7 @@ impl WalletKeys {
     pub fn is_memory_locked(&self) -> bool {
         self._mnemonic_lock
             .as_ref()
-            .map_or(false, |lock: &LockedRegion| lock.is_locked())
+            .is_some_and(|lock: &LockedRegion| lock.is_locked())
     }
 
     // ===== Post-Quantum Key Methods (pq feature) =====

@@ -11,18 +11,15 @@ use std::time::Duration;
 /// Peers with different network IDs will be disconnected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum NetworkId {
     /// Production mainnet
     Mainnet,
     /// Test network (default during beta)
+    #[default]
     Testnet,
 }
 
-impl Default for NetworkId {
-    fn default() -> Self {
-        NetworkId::Testnet
-    }
-}
 
 impl NetworkId {
     /// Get the protocol version string for this network.

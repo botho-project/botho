@@ -8,7 +8,7 @@
 //! - Syncing discovered peers with the consensus peer manager
 
 use crate::{
-    GossipConfig, GossipConfigBuilder, GossipEvent, GossipService, NodeCapabilities,
+    GossipConfigBuilder, GossipEvent, GossipService, NodeCapabilities,
     SharedPeerStore,
 };
 use bth_common::{NodeID, ResponderId};
@@ -120,7 +120,7 @@ pub async fn start_consensus_gossip(
     signing_key: Arc<Ed25519Pair>,
     quorum_set: QuorumSet<ResponderId>,
     peer_endpoints: Vec<String>,
-    tx_source_urls: Vec<String>,
+    _tx_source_urls: Vec<String>,
     gossip_config: ConsensusGossipConfig,
 ) -> Result<ConsensusGossipHandle, crate::GossipError> {
     let config = GossipConfigBuilder::new()

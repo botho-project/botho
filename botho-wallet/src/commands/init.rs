@@ -121,7 +121,7 @@ fn prompt_mnemonic() -> Result<String> {
     io::stdin().read_line(&mut input)?;
 
     // Parse words
-    for word in input.trim().split_whitespace() {
+    for word in input.split_whitespace() {
         words.push(word.to_lowercase());
     }
 

@@ -28,12 +28,11 @@ pub async fn run(wallet_path: &Path, output: Option<String>) -> Result<()> {
         // Export to file
         let output_path = Path::new(&output_path);
 
-        if output_path.exists() {
-            if !prompt_confirm("Output file exists. Overwrite?")? {
+        if output_path.exists()
+            && !prompt_confirm("Output file exists. Overwrite?")? {
                 println!("Aborted.");
                 return Ok(());
             }
-        }
 
         // Create backup content
         let backup = format!(

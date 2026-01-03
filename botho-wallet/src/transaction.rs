@@ -23,7 +23,7 @@ use bth_crypto_pq::MlKem768Ciphertext;
 #[cfg(feature = "pq")]
 use bth_crypto_ring_signature::pq_onetime_keys::check_pq_output_ownership;
 #[cfg(feature = "pq")]
-use botho::transaction_pq::{QuantumPrivateTransaction, QuantumPrivateTxInput, QuantumPrivateTxOutput};
+use botho::transaction_pq::QuantumPrivateTransaction;
 
 /// Picocredits per CAD
 pub const PICOCREDITS_PER_CAD: u64 = 1_000_000_000_000;
@@ -92,8 +92,8 @@ impl OwnedUtxo {
     pub fn pq_bridge_secret(&self, view_private_bytes: &[u8; 32]) -> [u8; 32] {
         let mut hasher = Sha256::new();
         hasher.update(b"botho-pq-bridge-v1");
-        hasher.update(&self.target_key);
-        hasher.update(&self.public_key);
+        hasher.update(self.target_key);
+        hasher.update(self.public_key);
         hasher.update(view_private_bytes);
         hasher.finalize().into()
     }

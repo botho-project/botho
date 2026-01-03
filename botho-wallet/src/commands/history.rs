@@ -123,7 +123,7 @@ pub async fn run(wallet_path: &Path, limit: usize) -> Result<()> {
     let mut history: Vec<HistoryEntry> = Vec::new();
 
     for utxo in utxos.iter().take(limit) {
-        let tx_hash_hex = hex::encode(&utxo.tx_hash);
+        let tx_hash_hex = hex::encode(utxo.tx_hash);
 
         // Query RPC for transaction details
         match rpc.get_transaction(&tx_hash_hex).await {
@@ -195,19 +195,16 @@ pub async fn run(wallet_path: &Path, limit: usize) -> Result<()> {
     // Print legend
     println!("Transaction Types:");
     println!(
-        "  {}CLSAG{} = Classical ring signatures",
-        TxCryptoType::Clsag.color(),
-        "\x1b[0m"
+        "  {}CLSAG\x1b[0m = Classical ring signatures",
+        TxCryptoType::Clsag.color()
     );
     println!(
-        "  {}LION{}  = Quantum-safe lattice-based signatures",
-        TxCryptoType::Lion.color(),
-        "\x1b[0m"
+        "  {}LION\x1b[0m  = Quantum-safe lattice-based signatures",
+        TxCryptoType::Lion.color()
     );
     println!(
-        "  {}HYBRID{} = Both classical and quantum-safe",
-        TxCryptoType::Hybrid.color(),
-        "\x1b[0m"
+        "  {}HYBRID\x1b[0m = Both classical and quantum-safe",
+        TxCryptoType::Hybrid.color()
     );
     println!();
 
@@ -231,7 +228,7 @@ fn print_basic_history(utxos: &[OwnedUtxo], limit: usize) {
 
     for utxo in sorted.iter().take(limit) {
         let amount_str = format_amount(utxo.amount);
-        let tx_hash_hex = hex::encode(&utxo.tx_hash);
+        let tx_hash_hex = hex::encode(utxo.tx_hash);
         let tx_hash_short = &tx_hash_hex[..12];
 
         println!(

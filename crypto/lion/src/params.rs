@@ -120,7 +120,7 @@ pub const POLY_VEC_L_BYTES: usize = L * POLY_BYTES; // 2944 bytes
 
 /// Size of a packed small polynomial (coefficients in [-ETA, ETA]).
 /// 3 bits per coefficient is sufficient for ETA=2.
-pub const POLY_ETA_BYTES: usize = (N * 3 + 7) / 8; // 96 bytes
+pub const POLY_ETA_BYTES: usize = (N * 3).div_ceil(8); // 96 bytes
 
 /// Size of a compressed public key.
 /// t = As1 + s2, where t has K polynomials with coefficients mod Q.

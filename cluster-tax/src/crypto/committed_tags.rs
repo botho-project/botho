@@ -864,8 +864,8 @@ impl CommittedFeeProver {
     fn compute_total_challenge(&self, proofs: &[SegmentFeeProof]) -> Scalar {
         let mut hasher = Sha512::new();
         hasher.update(b"mc_segment_or_challenge");
-        hasher.update(&self.fee_paid.to_le_bytes());
-        hasher.update(&self.base_fee.to_le_bytes());
+        hasher.update(self.fee_paid.to_le_bytes());
+        hasher.update(self.base_fee.to_le_bytes());
 
         for proof in proofs {
             hasher.update(proof.range_proof.lower_commitment.as_bytes());
@@ -938,8 +938,8 @@ impl CommittedFeeVerifier {
     fn compute_expected_challenge(&self, proof: &SegmentOrProof) -> Scalar {
         let mut hasher = Sha512::new();
         hasher.update(b"mc_segment_or_challenge");
-        hasher.update(&self.fee_paid.to_le_bytes());
-        hasher.update(&self.base_fee.to_le_bytes());
+        hasher.update(self.fee_paid.to_le_bytes());
+        hasher.update(self.base_fee.to_le_bytes());
 
         for segment_proof in &proof.segment_proofs {
             hasher.update(segment_proof.range_proof.lower_commitment.as_bytes());

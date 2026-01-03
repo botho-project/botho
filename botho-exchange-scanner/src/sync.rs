@@ -8,6 +8,7 @@ use std::path::Path;
 
 /// Persistent sync state for the scanner.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct SyncState {
     /// Last fully scanned block height
     pub last_scanned_height: u64,
@@ -28,18 +29,6 @@ pub struct SyncState {
     pub total_outputs_scanned: u64,
 }
 
-impl Default for SyncState {
-    fn default() -> Self {
-        Self {
-            last_scanned_height: 0,
-            last_scanned_hash: String::new(),
-            last_sync_timestamp: 0,
-            total_deposits: 0,
-            total_amount: 0,
-            total_outputs_scanned: 0,
-        }
-    }
-}
 
 impl SyncState {
     /// Create a new empty sync state.

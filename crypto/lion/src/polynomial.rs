@@ -419,7 +419,7 @@ fn ntt_forward(coeffs: &mut [u32; N]) {
             for j in start..(start + len) {
                 let t = montgomery_reduce(zeta as i64 * a[j + len] as i64);
                 a[j + len] = a[j] - t;
-                a[j] = a[j] + t;
+                a[j] += t;
             }
             start += 2 * len;
         }
@@ -483,17 +483,11 @@ fn ntt_inverse(coeffs: &mut [u32; N]) {
 
 /// A vector of K polynomials.
 #[derive(Clone, Debug, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
+#[derive(Default)]
 pub struct PolyVecK {
     pub polys: [Poly; 4], // K = 4
 }
 
-impl Default for PolyVecK {
-    fn default() -> Self {
-        Self {
-            polys: [Poly::zero(), Poly::zero(), Poly::zero(), Poly::zero()],
-        }
-    }
-}
 
 impl PolyVecK {
     /// Create a zero vector.
@@ -554,17 +548,11 @@ impl PolyVecK {
 
 /// A vector of L polynomials.
 #[derive(Clone, Debug, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
+#[derive(Default)]
 pub struct PolyVecL {
     pub polys: [Poly; 4], // L = 4
 }
 
-impl Default for PolyVecL {
-    fn default() -> Self {
-        Self {
-            polys: [Poly::zero(), Poly::zero(), Poly::zero(), Poly::zero()],
-        }
-    }
-}
 
 impl PolyVecL {
     /// Create a zero vector.
