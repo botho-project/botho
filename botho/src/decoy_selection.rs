@@ -1024,6 +1024,7 @@ impl std::error::Error for DecoySelectionError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bth_transaction_types::ClusterTagVector;
 
     fn make_candidate(target_key: [u8; 32], age_blocks: u64, current_height: u64) -> OutputCandidate {
         OutputCandidate {
