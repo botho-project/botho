@@ -89,9 +89,10 @@ fee = fee_per_byte × tx_size × cluster_factor(sender_wealth)
 
 | Type | Ring Signature | Typical Size | Use Case |
 |------|---------------|--------------|----------|
-| **Hidden** (CLSAG) | ~700 bytes | 2-3 KB | Standard private transactions |
-| **PqHidden** (LION) | ~63 KB | 65-70 KB | Post-quantum secure |
-| **Minting** | N/A | ~1 KB | Block rewards (no fee) |
+| **Hidden** (CLSAG) | ~700 bytes | 2-4 KB | Standard private transactions |
+| **Minting** | N/A | ~1.5 KB | Block rewards (no fee) |
+
+*Note: LION post-quantum ring signatures were deprecated in ADR-0001. Quantum resistance is provided via ML-KEM-768 stealth addresses and ML-DSA-65 transaction authorization.*
 
 ### Progressive Taxation
 

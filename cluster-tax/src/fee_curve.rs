@@ -8,11 +8,10 @@
 //!
 //! ## Transaction Types
 //!
-//! | Type            | Ring Signature | Typical Size | Fee Rate           |
-//! |-----------------|----------------|--------------|---------------------|
-//! | Standard-Private| CLSAG          | ~4 KB        | size × cluster_factor |
-//! | PQ-Private      | LION           | ~65 KB       | size × cluster_factor |
-//! | Minting         | N/A            | ~1.5 KB      | No fee              |
+//! | Type     | Signature Type | Typical Size | Fee Rate              |
+//! |----------|----------------|--------------|------------------------|
+//! | Transfer | CLSAG          | ~4 KB        | size × cluster_factor  |
+//! | Minting  | N/A            | ~1.5 KB      | No fee                 |
 //!
 //! ## Fee Components
 //!
@@ -22,13 +21,11 @@
 //!
 //! ## Size Rationale
 //!
-//! | Type            | Input Size    | Output Size | Typical Total |
-//! |-----------------|---------------|-------------|---------------|
-//! | Standard-Private| ~700 B (CLSAG)| ~1.2 KB     | ~4 KB         |
-//! | PQ-Private      | ~63 KB (LION) | ~1.2 KB     | ~65 KB        |
+//! | Type     | Input Size      | Output Size | Typical Total |
+//! |----------|-----------------|-------------|---------------|
+//! | Transfer | ~700 B (CLSAG)  | ~1.2 KB     | ~4 KB         |
 //!
-//! PQ-Private transactions are ~16x larger due to lattice-based signatures,
-//! so they naturally cost ~16x more in size fees.
+//! All private transfers use CLSAG ring signatures for sender anonymity.
 //!
 //! ## Progressive Taxation
 //!
@@ -75,14 +72,9 @@ where
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum TransactionType {
-    /// Standard-private transaction with CLSAG ring signatures (~700B/input).
-    /// Fee = size × cluster_factor. Recommended for daily transactions.
+    /// Private transfer with CLSAG ring signatures (~700B/input).
+    /// Fee = size × cluster_factor.
     Hidden,
-
-    /// PQ-private transaction with LION ring signatures (~63KB/input).
-    /// Fee = size × cluster_factor. ~16x larger than Hidden due to lattice
-    /// sigs. Recommended for high-value or long-term security needs.
-    PqHidden,
 
     /// Minting transaction claiming PoW reward.
     /// No fee (creates new coins).
@@ -181,7 +173,7 @@ impl FeeConfig {
     ///
     /// Uses approximate sizes:
     /// - Hidden (CLSAG): ~4 KB typical
-    /// - PqHidden (LION): ~65 KB typical
+    /// - Minting: ~1.5 KB typical
     pub fn estimate_typical_fee(
         &self,
         tx_type: TransactionType,
@@ -189,9 +181,8 @@ impl FeeConfig {
         num_memos: usize,
     ) -> u64 {
         let typical_size = match tx_type {
-            TransactionType::Hidden => 4_000,    // ~4 KB for CLSAG
-            TransactionType::PqHidden => 65_000, // ~65 KB for LION
-            TransactionType::Minting => 1_500,   // ~1.5 KB for minting
+            TransactionType::Hidden => 4_000,  // ~4 KB for CLSAG
+            TransactionType::Minting => 1_500, // ~1.5 KB for minting
         };
         self.compute_fee(tx_type, typical_size, cluster_wealth, num_memos)
     }
@@ -725,12 +716,6 @@ mod tests {
             "Large cluster should pay more: {fee_large} > {fee_small}"
         );
 
-        // LION transaction (65 KB) should cost ~16x more
-        let fee_lion = config.compute_fee(TransactionType::PqHidden, 65_000, 0, 0);
-        assert!(
-            fee_lion > fee_small * 10,
-            "LION should be much larger: {fee_lion} vs {fee_small}"
-        );
     }
 
     #[test]
@@ -826,12 +811,6 @@ mod tests {
             "Hidden fee should be non-zero: {hidden_fee}"
         );
 
-        // Typical PqHidden (LION) transaction should be much larger
-        let pq_fee = config.estimate_typical_fee(TransactionType::PqHidden, 0, 0);
-        assert!(
-            pq_fee > hidden_fee * 10,
-            "LION should be ~16x larger: {pq_fee} vs {hidden_fee}"
-        );
     }
 
     #[test]

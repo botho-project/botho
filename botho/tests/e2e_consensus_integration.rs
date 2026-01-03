@@ -493,7 +493,8 @@ fn test_private_ring_signature_transaction() {
     drop(node);
 
     // Verify the transaction has CLSAG inputs
-    let clsag_inputs = private_tx.inputs.clsag().expect("Should have CLSAG inputs");
+    let clsag_inputs = private_tx.inputs.clsag();
+    assert!(!clsag_inputs.is_empty(), "Should have CLSAG inputs");
     println!(
         "  Created CLSAG ring signature with {} decoys per input",
         clsag_inputs[0].ring.len() - 1

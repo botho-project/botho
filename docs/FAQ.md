@@ -36,18 +36,23 @@ Both prioritize privacy, but differ in economics and consensus:
 
 ### Is Botho quantum-resistant?
 
-Yes, with a strategic hybrid approach:
+Yes, where it matters most:
 
-- **Recipient privacy**: ML-KEM-768 (post-quantum) for all stealth addresses
-- **Sender privacy**: Choice of CLSAG (classical, efficient) or LION (post-quantum)
-- **Amount privacy**: Pedersen commitments (hiding is information-theoretic, quantum-safe)
+| Component | Algorithm | Quantum Safety |
+|-----------|-----------|----------------|
+| **Recipient privacy** | ML-KEM-768 stealth addresses | ✓ PQ-safe |
+| **Amount privacy** | Pedersen hiding (info-theoretic) | ✓ PQ-safe |
+| **Sender anonymity** | CLSAG ring signatures | Classical |
 
-| Tier | Ring Signature | Ring Size | Signature Size | Quantum Safety |
-|------|---------------|-----------|----------------|----------------|
-| Standard-Private | CLSAG | 20 | ~700 bytes | Classical |
-| PQ-Private | LION | 20 | ~63 KB | Post-quantum |
+**Why is sender anonymity classical?**
 
-Recipient privacy is permanent (on-chain forever), so we use ML-KEM-768 for all transactions. Sender privacy is ephemeral, so we offer efficient CLSAG for daily use with LION available for high-value transfers needing long-term quantum protection.
+We prioritize PQ protection for recipient identity and amounts because these are permanent (on-chain forever). Sender anonymity uses classical CLSAG because:
+
+1. **Network-level attacks dominate** — IP correlation and timing analysis are more practical threats today
+2. **Compact transactions** — CLSAG (~700 bytes) keeps blockchain growth to ~100 GB/year, enabling desktop nodes
+3. **Larger anonymity sets** — More users can run nodes, improving privacy for everyone
+
+See [Why This Architecture?](privacy.md#why-this-architecture) for detailed rationale.
 
 ---
 
@@ -98,13 +103,11 @@ All transactions hide the **recipient** (via ML-KEM stealth addresses). Other pr
 | Type | Recipient | Amount | Sender |
 |------|-----------|--------|--------|
 | Minting | Hidden | Public | Known (minter) |
-| Standard-Private | Hidden | Hidden | Hidden (20-member ring) |
-| PQ-Private | Hidden | Hidden | Hidden (20-member ring, PQ) |
+| Private | Hidden | Hidden | Hidden (20-member ring) |
 
 **Sender privacy** depends on transaction type:
 - **Minting**: Sender is visible (ML-DSA signature)
-- **Standard-Private**: Sender hidden via CLSAG ring signatures (classical)
-- **PQ-Private**: Sender hidden via LION ring signatures (post-quantum)
+- **Private**: Sender hidden via CLSAG ring signatures (ring size 20)
 
 ### Can I see my transaction on a block explorer?
 
@@ -112,9 +115,9 @@ You can see that a transaction exists, but:
 
 - **Recipient**: Always hidden (stealth addresses)
 - **Amount**: Hidden except for Minting transactions
-- **Sender**: Hidden for Standard-Private and PQ-Private transactions (ring signatures)
+- **Sender**: Hidden for Private transactions (ring signatures)
 
-For ring signature transactions (Standard-Private and PQ-Private), sender, recipient, and amount are all hidden.
+For Private transactions, sender, recipient, and amount are all hidden.
 
 ### What information is NOT hidden?
 
@@ -130,32 +133,7 @@ Botho provides strong cryptographic privacy, but privacy is never absolute:
 - **IP tracking** is possible without Tor/VPN
 - **Exchange KYC** links your identity to addresses you deposit to/withdraw from
 
-For maximum privacy, use Standard-Private or PQ-Private transactions and follow the [privacy best practices](privacy.md#privacy-best-practices).
-
-### Can I switch between Standard-Private and PQ-Private?
-
-**It depends on your current UTXOs:**
-
-| Your UTXOs | To CLSAG | To LION |
-|------------|----------|---------|
-| Standard-Private (classical) | ✓ Direct | Requires migration first |
-| PQ-Private (with LION keys) | ✓ Direct | ✓ Direct |
-
-**Why?** LION ring signatures require LION public keys (1,312 bytes each) for all ring members. Standard-Private outputs only have classical keys (32 bytes). You can't use an output in a LION ring unless it has an associated LION public key.
-
-**To upgrade Standard-Private UTXOs:**
-```bash
-# One-time migration to create PQ-capable outputs
-botho-wallet migrate-to-pq
-
-# After migration, you can choose per-transaction:
-botho-wallet send <address> 100                    # Uses CLSAG (cheaper)
-botho-wallet send <address> 100 --quantum-private  # Uses LION (PQ-safe)
-```
-
-**PQ outputs are flexible:** Once you have PQ-Private UTXOs, you can spend them with either CLSAG (cheaper) or LION (quantum-safe) depending on your needs.
-
-See [UTXO and Privacy Tier Relationship](transactions.md#utxo-and-privacy-tier-relationship) for technical details.
+For maximum privacy, follow the [privacy best practices](privacy.md#privacy-best-practices).
 
 ---
 

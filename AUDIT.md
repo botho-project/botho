@@ -62,27 +62,20 @@ This document outlines security-critical areas requiring careful review before e
 W = mu_P * P + mu_C * Z  (aggregated public key)
 ```
 
-### 1.3 LION Post-Quantum Signatures
+### 1.3 ~~LION Post-Quantum Signatures~~ (DEPRECATED)
 
-**Location:** `crypto/lion/src/`
+**Status:** Removed in ADR-0001. See `docs/decisions/0001-deprecate-lion-ring-signatures.md`
 
-**Review Focus:**
-- [ ] Lattice basis reduction and LWE hardness assumptions
-- [ ] Rejection sampling for uniform distribution
-- [ ] Module-LWE/SIS parameter selection (128-bit PQ security)
-- [ ] Key image linkability in lattice setting
-- [ ] Signature size (~36KB per input) acceptability
+**Deprecation Rationale:**
+- ~36KB signatures caused ~175TB/year blockchain growth vs ~100GB target
+- Desktop node accessibility prioritized over on-chain sender privacy
+- Network-level attacks (IP correlation, timing) remain the dominant threat
+- Amount privacy (Pedersen commitments) and recipient privacy (ML-KEM stealth addresses) remain PQ-safe
 
-**Parameters (verify security level):**
-```
-N = 256, Q = 8380417, K = L = 4, RING_SIZE = 11
-```
-
-**Ring Size Rationale (updated 2025-12):**
-- Ring size 11 provides 3.30 bits of measured privacy (95.3% efficiency)
-- Each ring member adds 3,072 bytes to signature
-- Ring 11: ~36KB signature vs Ring 20: ~63.5KB (+27KB overhead)
-- Ring 11 still exceeds Monero's effective anonymity (~4.2 of 16)
+**Post-Quantum Strategy Going Forward:**
+- ML-KEM-768 for recipient address encapsulation (already implemented)
+- ML-DSA-65 for quantum-private transaction authorization (preserved)
+- CLSAG ring signatures for sender anonymity (~700B/input, practical)
 
 ### 1.4 Pedersen Commitments
 
@@ -208,7 +201,7 @@ slot.rs: "TODO: reject a message if it contains a ballot containing incorrectly 
 **Review Focus:**
 - [ ] Input existence verification in UTXO set
 - [ ] Key image uniqueness enforcement (double-spend)
-- [ ] Signature validity (MLSAG/CLSAG/LION dispatch)
+- [ ] Signature validity (MLSAG/CLSAG dispatch)
 - [ ] Value conservation: `sum(inputs) >= sum(outputs) + fee`
 - [ ] Output amount validity (no negative, no overflow)
 - [ ] Input/output canonical ordering
@@ -243,7 +236,7 @@ cluster_wealth = 0 // cluster tracking not yet implemented
 
 **Review Focus:**
 - [ ] Progressive fee curve correctness
-- [ ] Transaction type classification (Plain, Hidden, PqHidden)
+- [ ] Transaction type classification (Hidden, Minting)
 - [ ] Encrypted memo count factor
 - [ ] Cluster wealth impact (currently disabled)
 - [ ] Minimum fee enforcement
@@ -482,13 +475,15 @@ let env = unsafe {
 
 ### Document for Auditors
 
-1. **LION Transaction Creation**
-   - `wallet.rs`: "TODO: Implement LION ring signature transaction creation"
-   - Status: PQ signatures available but not integrated in wallet
+1. **Quantum-Private Transactions**
+   - Uses ML-KEM-768 for stealth addresses and ML-DSA-65 for authorization
+   - LION ring signatures deprecated (see ADR-0001)
+   - Status: ML-KEM/ML-DSA integrated, CLSAG used for ring signatures
 
 2. **Deprecated APIs**
    - `Wallet::sign_transaction()` marked deprecated
    - Simple transactions removed (privacy-by-default)
+   - LION ring signatures removed (blockchain growth concerns)
 
 ---
 
@@ -498,14 +493,13 @@ let env = unsafe {
 
 | Transaction Type | Ring Size | Signature Size | Privacy Bits | Rationale |
 |------------------|-----------|----------------|--------------|-----------|
-| **CLSAG (Standard-Private)** | 20 | ~700 bytes | 4.32 | Default for all txs, larger than Monero (16) |
-| **LION (PQ-Private)** | 11 | ~36 KB | 3.30 | Optimized for lattice signature overhead |
+| **CLSAG (Private)** | 20 | ~700 bytes | 4.32 | Default for all txs, larger than Monero (16) |
 
 **Key Constants:**
 - `transaction/types/src/constants.rs`: `RING_SIZE = 20`
 - `botho/src/transaction.rs`: `DEFAULT_RING_SIZE = 20`, `MIN_RING_SIZE = 20`
-- `crypto/lion/src/params.rs`: `RING_SIZE = 11`
-- `botho/src/transaction.rs`: `PQ_RING_SIZE = 11`, `MIN_PQ_RING_SIZE = 11`
+
+*Note: LION (PQ-Private) ring signatures were deprecated in ADR-0001 due to ~175TB/year blockchain growth.*
 
 **Review Focus:**
 - [ ] Ring size enforcement at transaction validation
@@ -580,14 +574,14 @@ Total Phase 1:                           ~100M BTH
 
 | Claim | Description | Verification Method |
 |-------|-------------|---------------------|
-| Privacy by Default | CLSAG uses ring 20, LION uses ring 11 | Code review, test |
+| Privacy by Default | All txs use CLSAG ring 20 | Code review, test |
 | Double-Spend Prevention | Key images are unique and tracked | Formal analysis |
 | Amount Hiding | Pedersen commitments hide values | Cryptographic proof |
 | Recipient Privacy | Stealth addresses unlinkable | Protocol analysis |
-| Post-Quantum Ready | LION + ML-KEM-768 available | Feature flag test |
+| Post-Quantum Ready | ML-KEM-768 + ML-DSA-65 available | Feature flag test |
 | Consensus Safety | No conflicting values externalized | SCP formal proofs |
 | Consensus Liveness | Progress guaranteed | SCP formal proofs |
-| Decoy Privacy | 19 decoys (CLSAG), 10 decoys (LION) | Statistical analysis |
+| Decoy Privacy | 19 decoys per input (CLSAG ring 20) | Statistical analysis |
 | Fee Burns | All cluster taxes burned (deflationary) | Code review |
 | Inflation Control | 2% NET target in Phase 2 | Simulation |
 
@@ -680,7 +674,6 @@ External audit will be commissioned when:
 | Issue | Severity | Location | Notes |
 |-------|----------|----------|-------|
 | Wallet decryption rate limiting | HIGH | `storage.rs` | Argon2id mitigates |
-| LION rejection sampling margin | MEDIUM | `lion/params.rs` | Needs crypto review |
 | Gossipsub rate limiting | MEDIUM | `network/` | Defense in depth |
 | Empty cluster tags similarity | LOW | `decoy_selection.rs:136` | Bootstrap edge case |
 
@@ -692,7 +685,7 @@ External audit will be commissioned when:
 |-----------|----------|
 | MLSAG | `crypto/ring-signature/src/ring_signature/mlsag*.rs` |
 | CLSAG | `crypto/ring-signature/src/ring_signature/clsag.rs` |
-| LION | `crypto/lion/src/` |
+| PQ Keys | `crypto/pq/src/` |
 | Account Keys | `account-keys/src/` |
 | One-Time Keys | `crypto/ring-signature/src/onetime_keys.rs` |
 | Commitments | `crypto/ring-signature/src/amount/` |

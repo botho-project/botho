@@ -23,7 +23,6 @@ members = [
     "crypto/keys",
     "crypto/multisig",
     "crypto/pq",
-    "crypto/lion",
     "crypto/ring-signature",
     "crypto/ring-signature/signer",
     "crypto/secp256k1",

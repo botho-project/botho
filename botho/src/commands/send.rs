@@ -70,9 +70,9 @@ pub fn run(config_path: &Path, address_str: &str, amount_str: &str, private: boo
         .map_err(|e| anyhow::anyhow!("Failed to get UTXOs: {}", e))?;
 
     // Calculate fee using the cluster-tax fee curve
-    // All transactions are now private (Standard-Private with CLSAG or PQ-Private with LION)
+    // All transactions are private (CLSAG ring signatures)
     let fee_config = FeeConfig::default();
-    let tx_type = TransactionType::Hidden; // Standard-Private with CLSAG
+    let tx_type = TransactionType::Hidden;
     let _ = private; // Deprecated: all transactions are now private
 
     // Estimate fee based on typical transaction size
@@ -118,8 +118,8 @@ pub fn run(config_path: &Path, address_str: &str, amount_str: &str, private: boo
                 "Quantum transaction requires a quantum-safe address (botho://1q/...)"
             ))?;
 
-        // For PQ transactions, use PqHidden type to estimate fee
-        let pq_fee = fee_config.estimate_typical_fee(TransactionType::PqHidden, cluster_wealth, num_memos);
+        // For quantum-private transactions, use Hidden type (same fee structure)
+        let pq_fee = fee_config.estimate_typical_fee(TransactionType::Hidden, cluster_wealth, num_memos);
         return run_quantum(
             config_path,
             &pq_recipient,
@@ -345,8 +345,8 @@ fn run_quantum(
     println!("Amount: {:.12} BTH", amount as f64 / 1_000_000_000_000.0);
     println!();
     println!("Fee breakdown:");
-    println!("  Type: PQ-Private (LION ring signatures)");
-    println!("  Size: ~65 KB (lattice-based signatures)");
+    println!("  Type: Quantum-Private (ML-KEM + ML-DSA)");
+    println!("  Size: ~6 KB (hybrid PQ signatures)");
     println!("  Fee: {:.12} BTH (size-based)", effective_fee as f64 / 1_000_000_000_000.0);
     println!();
 

@@ -1,24 +1,24 @@
 # Transaction Types
 
-Botho supports three transaction types, each designed for specific use cases with different privacy, efficiency, and quantum-resistance trade-offs.
+Botho supports two transaction types, each designed for specific use cases.
 
 ## Overview
 
-| Property | Minting | Standard-Private | PQ-Private |
-|----------|---------|------------------|------------|
-| **Purpose** | Block rewards | Daily transactions | Maximum privacy |
-| **Recipient Privacy** | Hidden (stealth) | Hidden (stealth) | Hidden (stealth) |
-| **Amount Privacy** | Public | Hidden | Hidden |
-| **Sender Privacy** | Known (minter) | Hidden (CLSAG ring) | Hidden (LION ring) |
-| **Stealth Address** | ML-KEM-768 | ML-KEM-768 | ML-KEM-768 |
-| **Amount Encoding** | Plaintext | Pedersen + Bulletproofs | Pedersen + Bulletproofs |
-| **Authorization** | ML-DSA-65 | CLSAG (ring size 20) | LION (ring size 11) |
-| **Ring Size** | — | 20 decoys | 11 decoys |
-| **Max Inputs** | 1 | 16 | 8 |
-| **Quantum Resistance** | Full | Recipient: full, Sender: classical | Full |
-| **Approx. Size** | ~1.5 KB | ~4 KB | ~65 KB |
-| **Max Tx Size** | N/A | 100 KB | 512 KB |
-| **Fee** | None | size-based | size-based |
+| Property | Minting | Private |
+|----------|---------|---------|
+| **Purpose** | Block rewards | All transfers |
+| **Recipient Privacy** | Hidden (stealth) | Hidden (stealth) |
+| **Amount Privacy** | Public | Hidden |
+| **Sender Privacy** | Known (minter) | Hidden (CLSAG ring) |
+| **Stealth Address** | ML-KEM-768 | ML-KEM-768 |
+| **Amount Encoding** | Plaintext | Pedersen + Bulletproofs |
+| **Authorization** | ML-DSA-65 | CLSAG (ring size 20) |
+| **Ring Size** | — | 20 decoys |
+| **Max Inputs** | 1 | 16 |
+| **Quantum Resistance** | Full | Recipient + Amount: full |
+| **Approx. Size** | ~1.5 KB | ~4 KB |
+| **Max Tx Size** | N/A | 100 KB |
+| **Fee** | None | size-based |
 
 ### Transaction Flow
 
@@ -42,38 +42,13 @@ flowchart LR
 
 **Steps explained:**
 1. **UTXO Selection**: Choose unspent outputs to spend
-2. **Ring Construction**: Select decoys (19 for CLSAG, 10 for LION) with similar cluster profiles
+2. **Ring Construction**: Select 19 decoys with similar cluster profiles
 3. **Ring Signature**: Prove ownership of one ring member without revealing which
 4. **Range Proofs**: Bulletproofs prove amounts are valid without revealing values
 5. **Broadcast**: Transaction enters mempool and propagates via gossipsub
 6. **Confirmation**: SCP consensus finalizes the block containing the transaction
 
-## Why Two Privacy Tiers?
-
-The main difference between Standard-Private and PQ-Private is the **ring signature scheme** (sender privacy):
-
-| Tier | Ring Signature | Ring Size | Size/Input | Quantum Resistance |
-|------|----------------|-----------|------------|-------------------|
-| Standard-Private | CLSAG | 20 | ~0.7 KB | Classical only |
-| PQ-Private | LION | 11 | ~36 KB | Full (lattice-based) |
-
-**Why use ML-KEM stealth addresses in all tiers?**
-
-Recipient privacy is permanent — transactions are recorded forever on-chain. A quantum attacker in 2045 could retroactively link recipients from 2025 transactions if we used classical ECDH. The ~1 KB overhead of ML-KEM-768 is worthwhile for quantum-resistant recipient unlinkability.
-
-**Why offer classical CLSAG for sender privacy?**
-
-Sender privacy is ephemeral — the value of knowing "who sent this" diminishes over time as the economic context becomes historical. LION signatures are ~90x larger than CLSAG, which isn't justified for everyday transactions.
-
-**When to use PQ-Private?**
-
-Users who need quantum-resistant sender privacy should use PQ-Private: whistleblowers, political dissidents, long-term holdings, or high-value transactions where "harvest now, decrypt later" attacks are a concern.
-
-## UTXO and Privacy Tier Relationship
-
-Understanding how outputs relate to privacy tiers is important for users choosing between Standard-Private (CLSAG) and PQ-Private (LION) transactions.
-
-### Output Format
+## Output Format
 
 All transaction types produce outputs with stealth addressing:
 
@@ -87,67 +62,6 @@ TxOutput {
 }
 ```
 
-### Ring Signature Requirements
-
-The two ring signature schemes have different key requirements:
-
-| Scheme | Ring Members Need | Key Size | Notes |
-|--------|------------------|----------|-------|
-| CLSAG | Ristretto points (`target_key`) | 32 bytes | Uses existing TxOutput keys |
-| LION | LION lattice public keys | 1,312 bytes | Requires additional key material |
-
-**Key insight:** LION ring signatures require LION public keys for all ring members. These are lattice-based keys that cannot be derived from classical Ristretto points.
-
-### Tier Transition
-
-```mermaid
-flowchart TD
-    subgraph "Standard-Private Output"
-        A[TxOutput<br/>Classical keys only]
-    end
-    subgraph "Spending Options"
-        B[CLSAG Ring<br/>Uses target_key]
-        C[Cannot use LION<br/>No LION public key]
-    end
-    subgraph "PQ-Private Output"
-        D[TxOutput + LION keys<br/>Both key types]
-    end
-    subgraph "Spending Options 2"
-        E[CLSAG Ring<br/>Uses target_key]
-        F[LION Ring<br/>Uses lion_public_key]
-    end
-    A --> B
-    A -.->|Not possible| C
-    D --> E
-    D --> F
-```
-
-### What This Means for Users
-
-| Current UTXO | Want to Use | Action Required |
-|--------------|-------------|-----------------|
-| Standard-Private | CLSAG | Direct spend (default) |
-| Standard-Private | LION | Spend to PQ address first, then spend with LION |
-| PQ-Private | CLSAG | Direct spend (cheaper) |
-| PQ-Private | LION | Direct spend (quantum-safe) |
-
-### Migration Path
-
-To upgrade existing Standard-Private UTXOs to support LION spending:
-
-1. Spend your Standard-Private UTXOs using CLSAG (normal transaction)
-2. Send to your own PQ-enabled address (creates outputs with LION key material)
-3. Future spends from these outputs can use either CLSAG or LION
-
-This is what the `botho-wallet migrate-to-pq` command automates. See [Post-Quantum Migration Guide](pq-migration.md) for details.
-
-### Why This Architecture?
-
-1. **Efficiency**: Standard-Private outputs are compact (no 1,312-byte LION keys)
-2. **Backward compatibility**: Classical outputs work with existing infrastructure
-3. **Forward compatibility**: PQ outputs support both signature schemes
-4. **User choice**: Upgrade when quantum resistance is needed, not before
-
 ## Cryptographic Primitives
 
 | Primitive | Algorithm | Purpose | Size | Quantum Safety |
@@ -156,9 +70,8 @@ This is what the `botho-wallet migrate-to-pq` command automates. See [Post-Quant
 | Amount commitments | Pedersen | Hide transaction amounts | 32 B | Hiding: unconditional |
 | Range proofs | Bulletproofs | Prove amounts are valid | ~700 B | Classical |
 | Minting auth | ML-DSA-65 | Authorize minting | 3309 B | Post-quantum |
-| Classical ring sig | CLSAG (ring=20) | Hide sender (Standard-Private) | ~700 B/input | Classical |
-| PQ ring sig | LION (ring=11) | Hide sender (PQ-Private) | ~36 KB/input | Post-quantum |
-| Key images | Scheme-derived | Prevent double-spending | 32 B (CLSAG), 1312 B (LION) | Matches scheme |
+| Ring signatures | CLSAG (ring=20) | Hide sender | ~700 B/input | Classical |
+| Key images | x * Hp(P) | Prevent double-spending | 32 B | Classical |
 
 ---
 
@@ -209,9 +122,9 @@ Each minting transaction creates a new cluster:
 
 ---
 
-## Standard-Private Transactions (CLSAG)
+## Private Transactions (CLSAG)
 
-Standard-Private transactions hide the sender within a ring of 20 possible signers using CLSAG ring signatures. This is the recommended default for most transactions.
+Private transactions hide the sender within a ring of 20 possible signers using CLSAG ring signatures.
 
 ### Properties
 
@@ -220,12 +133,12 @@ Standard-Private transactions hide the sender within a ring of 20 possible signe
 - **Authorization**: CLSAG ring signature (sender hidden among 20 members)
 - **Amount Privacy**: Hidden via Pedersen commitments + Bulletproofs
 - **Sender Privacy**: Hidden via ring signature (1-in-20 anonymity)
-- **Quantum Resistance**: Recipient privacy is PQ (ML-KEM), sender privacy is classical
+- **Quantum Resistance**: Recipient and amount privacy are PQ; sender anonymity is classical
 
 ### Structure
 
 ```
-StandardPrivateTx {
+PrivateTx {
     inputs: Vec<ClsagRingInput>,
     outputs: Vec<TxOutput>,
     fee: u64,
@@ -252,7 +165,7 @@ CLSAG (Concise Linkable Spontaneous Anonymous Group) provides:
 | **Ring size** | 20 members (larger than Monero's 16) |
 | **Efficiency** | 45% smaller than MLSAG through response aggregation |
 
-### Why CLSAG over MLSAG?
+### Why CLSAG?
 
 | Property | CLSAG | MLSAG |
 |----------|-------|-------|
@@ -261,61 +174,14 @@ CLSAG (Concise Linkable Spontaneous Anonymous Group) provides:
 | Security | Same | Same |
 | Performance | Slightly faster | Baseline |
 
-### Use Cases
-
-- **Daily transactions**: The default choice for most transfers
-- **Good privacy/efficiency balance**: 20-member ring with compact signatures
-- **When quantum sender privacy isn't critical**: Most adversaries today are classical
-
----
-
-## PQ-Private Transactions (LION)
-
-PQ-Private transactions provide maximum privacy by hiding the sender within a ring of 11 possible signers using LION post-quantum ring signatures.
-
-### Properties
-
-- **Inputs**: Ring of 11 possible outputs + LION ring signature
-- **Outputs**: Stealth addresses with committed amounts
-- **Authorization**: LION ring signature (sender hidden among 11 members)
-- **Amount Privacy**: Hidden via Pedersen commitments + Bulletproofs
-- **Sender Privacy**: Hidden via ring signature (1-in-11 anonymity)
-- **Quantum Resistance**: Full (both recipient and sender privacy are PQ)
-
-### Structure
-
-```
-PqPrivateTx {
-    inputs: Vec<LionRingInput>,
-    outputs: Vec<TxOutput>,
-    fee: u64,
-    bulletproofs: AggregatedProof,
-}
-
-LionRingInput {
-    ring: [RingMember; 11],         // 11 possible source outputs
-    key_image: [u8; 1312],          // LION key image (larger than CLSAG)
-    lion_signature: Vec<u8>,        // ~36 KB per input
-}
-```
-
-### LION Ring Signatures
-
-LION (Lattice-based lInkable ring signatures fOr aNonymity) provides:
-
-| Property | Description |
-|----------|-------------|
-| **Sender anonymity** | Signature proves ownership of 1-of-11 outputs without revealing which |
-| **Linkability** | Key images prevent double-spending without revealing the signer |
-| **Post-quantum security** | Based on Module-LWE, ~128-bit PQ security level |
-| **Ring size** | 11 members |
+Compact signatures enable desktop-friendly blockchain growth (~100 GB/year).
 
 ### Key Images
 
 Key images are deterministic values derived from the secret key:
 
 ```
-key_image = LION.KeyImage(secret_key)  // 1312 bytes for LION
+key_image = x * Hp(P)  // 32 bytes
 ```
 
 Properties:
@@ -328,7 +194,7 @@ If a key image appears twice, the transaction is rejected as a double-spend.
 
 ### Decoy Selection (OSPEAD)
 
-Both Standard-Private and PQ-Private use OSPEAD (Optimal Selection Probability to Evade Analysis of Decoys):
+Private transactions use OSPEAD (Optimal Selection Probability to Evade Analysis of Decoys):
 
 - **Gamma distribution**: Matches decoy ages to real spending patterns
 - **Age-weighted selection**: Newer outputs more likely to be selected
@@ -336,13 +202,6 @@ Both Standard-Private and PQ-Private use OSPEAD (Optimal Selection Probability t
 - **Effective anonymity**: With ring size 20, achieves 10+ effective anonymity
 
 Cluster-aware selection prevents fingerprinting attacks where an observer matches output cluster tags to specific inputs. By selecting decoys with similar cluster profiles, all ring members produce plausible output patterns.
-
-### Use Cases
-
-- **High-value transfers**: When privacy is worth the higher fee (1.0%)
-- **Long-term privacy**: Protection against "harvest now, decrypt later" attacks
-- **Whistleblowing**: When anonymity must withstand future quantum attacks
-- **Political dissidents**: When adversaries may have future quantum capabilities
 
 ---
 
@@ -459,17 +318,13 @@ fee = fee_per_byte × tx_size × cluster_factor
 | Type | Ring Size | Signature Size | Typical Total Size | Fee (1x cluster) | Fee (6x cluster) |
 |------|-----------|----------------|-------------------|------------------|------------------|
 | Minting | — | ~3.3 KB (ML-DSA) | ~1.5 KB | 0 | 0 |
-| Standard-Private | 20 | ~0.7 KB (CLSAG) | ~4 KB | ~4,000 nanoBTH | ~24,000 nanoBTH |
-| PQ-Private | 11 | ~36 KB (LION) | ~65 KB | ~65,000 nanoBTH | ~390,000 nanoBTH |
+| Private | 20 | ~0.7 KB (CLSAG) | ~4 KB | ~4,000 nanoBTH | ~24,000 nanoBTH |
 
 ### Transaction Limits
 
 | Type | Ring Size | Max Inputs | Max Outputs | Max Tx Size |
 |------|-----------|------------|-------------|-------------|
-| Standard-Private | 20 | 16 | 16 | 100 KB |
-| PQ-Private | 11 | 8 | 16 | 512 KB |
-
-PQ-Private transactions use a smaller ring size (11 vs 20) and fewer max inputs (8 vs 16) to keep transaction sizes manageable while still providing strong privacy (3.30 bits, 95% efficiency).
+| Private | 20 | 16 | 16 | 100 KB |
 
 The cluster factor (1x to 6x) discourages wealth concentration by increasing fees for wealthy clusters.
 
@@ -480,13 +335,10 @@ The cluster factor (1x to 6x) discourages wealth concentration by increasing fee
 ```mermaid
 flowchart TD
     A{Creating new coins?} -->|Yes| B[MINTING]
-    A -->|No| C{Need PQ sender privacy?}
-    C -->|No| D[STANDARD-PRIVATE<br/>CLSAG ring=20]
-    C -->|Yes| E[PQ-PRIVATE<br/>LION ring=11]
+    A -->|No| C[PRIVATE<br/>CLSAG ring=20]
 
     style B fill:#22c55e,color:#000
-    style D fill:#3b82f6,color:#fff
-    style E fill:#8b5cf6,color:#fff
+    style C fill:#3b82f6,color:#fff
 ```
 
 ### Summary
@@ -494,22 +346,12 @@ flowchart TD
 | If you need... | Use | Ring Size | Size | Fee |
 |----------------|-----|-----------|------|-----|
 | Block rewards | Minting | — | ~1.5 KB | 0 |
-| Privacy (everyday) | Standard-Private | 20 | ~4 KB | size-based |
-| Privacy (quantum-safe) | PQ-Private | 11 | ~65 KB | size-based |
+| All transfers | Private | 20 | ~4 KB | size-based |
 
-### Quick Decision Guide
-
-**Use Standard-Private (recommended default) when:**
-- You want sender privacy for everyday transactions
-- Classical adversaries are your threat model
-- Good balance of privacy and efficiency
-- Most transactions should use this type
-
-**Use PQ-Private when:**
-- Long-term privacy is critical (10+ year horizon)
-- Your adversary may have quantum computers in the future
-- Whistleblowing, political dissent, or sensitive high-value transfers
-- "Harvest now, decrypt later" is a concern
+Private transactions provide strong privacy for all transfers:
+- **Recipient privacy**: PQ-safe (ML-KEM stealth addresses)
+- **Amount privacy**: PQ-safe (information-theoretic Pedersen hiding)
+- **Sender anonymity**: Classical (CLSAG ring signatures)
 
 ---
 
@@ -517,36 +359,38 @@ flowchart TD
 
 ### Post-Quantum Security
 
-All transaction types provide strong quantum resistance where it matters most:
+Botho provides strong quantum resistance where it matters most:
 
 | Component | Classical Security | Quantum Threat | Botho Protection |
 |-----------|-------------------|----------------|------------------|
-| Stealth addresses | ECDH | Shor's algorithm | ML-KEM-768 (all types) |
+| Stealth addresses | ECDH | Shor's algorithm | ML-KEM-768 |
 | Amount hiding | Pedersen | Grover (minimal) | Information-theoretic hiding |
 | Minting signatures | Schnorr | Shor's algorithm | ML-DSA-65 |
-| Standard-Private ring | CLSAG | Shor's algorithm | Classical (acceptable trade-off) |
-| PQ-Private ring | — | — | LION (full PQ) |
+| Ring signatures | CLSAG | Shor's algorithm | Classical (see rationale) |
 
 **Why is classical CLSAG acceptable?**
 
-1. **Recipient privacy is permanent** — stored forever on-chain. We use ML-KEM-768 for all transaction types.
-2. **Sender privacy is ephemeral** — the value degrades over time. LION's 90x size overhead isn't justified for everyday use.
-3. **Users who need PQ sender privacy** can explicitly choose PQ-Private transactions.
+1. **Recipient privacy is permanent** — stored forever on-chain, protected by ML-KEM-768
+2. **Amount privacy is unconditional** — Pedersen hiding is information-theoretic, not computational
+3. **Sender privacy is ephemeral** — value degrades over time; network-level attacks dominate
+4. **Desktop accessibility** — compact transactions (~4 KB) enable widespread node operation
+
+See [Why This Architecture?](privacy.md#why-this-architecture) for detailed rationale.
 
 **Note on Pedersen commitments**: While quantum computers could break the binding property, this only allows creating invalid proofs—it does not reveal hidden amounts. The hiding property is information-theoretic and remains secure.
 
 ### Transaction Graph Analysis
 
-| Attack | Standard-Private | PQ-Private |
-|--------|------------------|------------|
-| Sender identification | Mitigated (1-in-20) | Mitigated (1-in-11) |
-| Amount correlation | Protected | Protected |
-| Timing analysis | Partially vulnerable | Partially vulnerable |
-| Recipient identification | Protected | Protected |
-| Quantum HNDL (sender) | Vulnerable (future) | Protected |
-| Quantum HNDL (recipient) | Protected | Protected |
+| Attack | Private Transactions |
+|--------|---------------------|
+| Sender identification | Mitigated (1-in-20) |
+| Amount correlation | Protected |
+| Timing analysis | Partially vulnerable |
+| Recipient identification | Protected (PQ) |
+| Quantum HNDL (recipient) | Protected |
+| Quantum HNDL (sender) | Classical only |
 
-For maximum privacy, use PQ-Private transactions and follow [privacy best practices](privacy.md#privacy-best-practices).
+For maximum privacy, follow [privacy best practices](privacy.md#privacy-best-practices).
 
 ---
 
@@ -555,6 +399,5 @@ For maximum privacy, use PQ-Private transactions and follow [privacy best practi
 - [ML-KEM (FIPS 203)](https://csrc.nist.gov/pubs/fips/203/final) - Post-quantum key encapsulation
 - [ML-DSA (FIPS 204)](https://csrc.nist.gov/pubs/fips/204/final) - Post-quantum signatures
 - [CLSAG Paper](https://eprint.iacr.org/2019/654.pdf) - Concise Linkable Ring Signatures
-- [LION Ring Signatures](https://link.springer.com/chapter/10.1007/978-981-95-3540-8_17) - Lattice-based linkable ring signatures
 - [Bulletproofs](https://eprint.iacr.org/2017/1066.pdf) - Range proofs
 - [Pedersen Commitments](https://link.springer.com/content/pdf/10.1007/3-540-46766-1_9.pdf) - Commitment scheme

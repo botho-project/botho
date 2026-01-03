@@ -10,7 +10,7 @@ use tracing::{debug, info};
 use super::{ChainState, LedgerError};
 use crate::block::Block;
 use crate::decoy_selection::{DecoySelectionError, GammaDecoySelector, OutputCandidate};
-use crate::transaction::{Transaction as BothoTransaction, TxInputs, TxOutput, Utxo, UtxoId};
+use crate::transaction::{Transaction as BothoTransaction, TxOutput, Utxo, UtxoId};
 
 /// LMDB-backed ledger storage using heed
 pub struct Ledger {
@@ -381,27 +381,9 @@ impl Ledger {
             // Index transaction for fast lookups (exchange integration)
             self.add_tx_to_index(&mut wtxn, &tx_hash, new_height, tx_idx as u32)?;
 
-            // Process spent inputs based on type - record key images to prevent double-spend
-            match &tx.inputs {
-                TxInputs::Clsag(clsag_inputs) => {
-                    // For CLSAG ring signature transactions, record key images to prevent double-spend
-                    for input in clsag_inputs {
-                        self.record_key_image(&mut wtxn, &input.key_image, new_height)?;
-                    }
-                }
-                TxInputs::Lion(lion_inputs) => {
-                    // For LION (PQ) ring signature transactions, record key images to prevent double-spend
-                    for input in lion_inputs {
-                        // LION key images are larger (1312 bytes) - use first 32 bytes as lookup key
-                        let key_image_hash: [u8; 32] = {
-                            use sha2::{Sha256, Digest};
-                            let mut hasher = Sha256::new();
-                            hasher.update(&input.key_image);
-                            hasher.finalize().into()
-                        };
-                        self.record_key_image(&mut wtxn, &key_image_hash, new_height)?;
-                    }
-                }
+            // Process spent inputs - record key images to prevent double-spend
+            for input in tx.inputs.clsag() {
+                self.record_key_image(&mut wtxn, &input.key_image, new_height)?;
             }
 
             // Add new UTXOs (outputs)
@@ -672,47 +654,20 @@ impl Ledger {
 
     /// Verify all signatures in a transaction
     pub fn verify_transaction(&self, tx: &BothoTransaction) -> Result<(), LedgerError> {
-        match &tx.inputs {
-            TxInputs::Clsag(clsag_inputs) => {
-                // Verify key images haven't been spent (double-spend check)
-                for (i, input) in clsag_inputs.iter().enumerate() {
-                    if let Ok(Some(spent_height)) = self.is_key_image_spent(&input.key_image) {
-                        return Err(LedgerError::InvalidBlock(format!(
-                            "CLSAG input {} uses key image already spent at height {}",
-                            i, spent_height
-                        )));
-                    }
-                }
-
-                // Verify CLSAG ring signatures
-                tx.verify_ring_signatures().map_err(|e| {
-                    LedgerError::InvalidBlock(format!("Invalid CLSAG signature: {}", e))
-                })?;
-            }
-            TxInputs::Lion(lion_inputs) => {
-                // Verify key images haven't been spent (double-spend check)
-                for (i, input) in lion_inputs.iter().enumerate() {
-                    // LION key images are larger - hash to 32 bytes for lookup
-                    let key_image_hash: [u8; 32] = {
-                        use sha2::{Sha256, Digest};
-                        let mut hasher = Sha256::new();
-                        hasher.update(&input.key_image);
-                        hasher.finalize().into()
-                    };
-                    if let Ok(Some(spent_height)) = self.is_key_image_spent(&key_image_hash) {
-                        return Err(LedgerError::InvalidBlock(format!(
-                            "LION input {} uses key image already spent at height {}",
-                            i, spent_height
-                        )));
-                    }
-                }
-
-                // Verify LION ring signatures
-                tx.verify_ring_signatures().map_err(|e| {
-                    LedgerError::InvalidBlock(format!("Invalid LION signature: {}", e))
-                })?;
+        // Verify key images haven't been spent (double-spend check)
+        for (i, input) in tx.inputs.clsag().iter().enumerate() {
+            if let Ok(Some(spent_height)) = self.is_key_image_spent(&input.key_image) {
+                return Err(LedgerError::InvalidBlock(format!(
+                    "Input {} uses key image already spent at height {}",
+                    i, spent_height
+                )));
             }
         }
+
+        // Verify CLSAG ring signatures
+        tx.verify_ring_signatures().map_err(|e| {
+            LedgerError::InvalidBlock(format!("Invalid ring signature: {}", e))
+        })?;
 
         Ok(())
     }

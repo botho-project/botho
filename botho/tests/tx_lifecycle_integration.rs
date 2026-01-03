@@ -391,7 +391,6 @@ fn test_basic_tx_lifecycle_utxo_creation_and_consumption() {
     );
 
     // Verify the transaction has valid ring signatures
-    assert!(tx.is_clsag(), "Transaction should use CLSAG signatures");
     assert!(tx.verify_ring_signatures().is_ok(), "Ring signatures should be valid");
 
     // Mine block with transaction

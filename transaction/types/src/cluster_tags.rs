@@ -232,7 +232,7 @@ impl ClusterTagVector {
         for entry in &self.entries {
             if entry.weight > 0 {
                 let p = entry.weight as f64 / scale;
-                entropy -= p * p.log2();
+                entropy -= p * libm::log2(p);
             }
         }
 
@@ -240,7 +240,7 @@ impl ClusterTagVector {
         let bg = self.background_weight();
         if bg > 0 {
             let p = bg as f64 / scale;
-            entropy -= p * p.log2();
+            entropy -= p * libm::log2(p);
         }
 
         entropy
@@ -271,7 +271,7 @@ impl ClusterTagVector {
         for entry in &self.entries {
             if entry.weight > 0 {
                 let p = entry.weight as f64 / scale;
-                entropy -= p * p.log2();
+                entropy -= p * libm::log2(p);
             }
         }
 

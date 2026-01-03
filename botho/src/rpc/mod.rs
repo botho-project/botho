@@ -667,21 +667,8 @@ async fn handle_estimate_fee(id: Value, params: &Value, state: &RpcState) -> Jso
     // Wallets can get this from cluster_getWealthByTargetKeys
     let cluster_wealth = params.get("cluster_wealth").and_then(|v| v.as_u64()).unwrap_or(0);
 
-    // Determine transaction type from either "txType" (new) or "private" (legacy)
-    // Note: All transactions are now private (CLSAG or LION ring signatures)
-    let tx_type = if let Some(tx_type_str) = params.get("txType").and_then(|v| v.as_str()) {
-        match tx_type_str {
-            // "plain" maps to "hidden" for backwards compatibility
-            "plain" | "Plain" | "hidden" | "Hidden" | "clsag" | "Clsag" => {
-                bth_cluster_tax::TransactionType::Hidden
-            }
-            "pqHidden" | "PqHidden" | "lion" | "Lion" => bth_cluster_tax::TransactionType::PqHidden,
-            _ => bth_cluster_tax::TransactionType::Hidden, // Default to standard-private
-        }
-    } else {
-        // Legacy: always use Hidden (private transactions required)
-        bth_cluster_tax::TransactionType::Hidden
-    };
+    // All transactions are private (CLSAG ring signatures)
+    let tx_type = bth_cluster_tax::TransactionType::Hidden;
 
     let mempool = read_lock!(state.mempool, id.clone());
 
@@ -700,7 +687,6 @@ async fn handle_estimate_fee(id: Value, params: &Value, state: &RpcState) -> Jso
 
     let tx_type_str = match tx_type {
         bth_cluster_tax::TransactionType::Hidden => "hidden",
-        bth_cluster_tax::TransactionType::PqHidden => "pqHidden",
         bth_cluster_tax::TransactionType::Minting => "minting",
     };
 
@@ -953,10 +939,7 @@ async fn handle_get_transaction(id: Value, params: &Value, state: &RpcState) -> 
     // Look up in blockchain
     match ledger.get_transaction(&tx_hash) {
         Ok(Some((tx, block_height, confirmations))) => {
-            let tx_type = match tx.privacy_tier() {
-                crate::transaction::PrivacyTier::StandardPrivate => "clsag",
-                crate::transaction::PrivacyTier::PqPrivate => "lion",
-            };
+            let tx_type = "clsag";
             let output_count = tx.outputs.len();
             let total_output: u64 = tx.outputs.iter().map(|o| o.amount).sum();
 

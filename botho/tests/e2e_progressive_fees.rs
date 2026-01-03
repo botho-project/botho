@@ -28,7 +28,7 @@ use rand::{rngs::OsRng, seq::SliceRandom};
 use botho::{
     mempool::{Mempool, MempoolError},
     transaction::{
-        ClsagRingInput, RingMember, Transaction, TxInputs, TxOutput, MIN_TX_FEE,
+        ClsagRingInput, RingMember, Transaction, TxOutput, MIN_TX_FEE,
         PICOCREDITS_PER_CREDIT,
     },
 };
@@ -51,10 +51,8 @@ use crate::common::{
 fn compute_expected_min_fee(tx: &Transaction, cluster_wealth: u64, dynamic_base: u64) -> u64 {
     let fee_config = FeeConfig::default();
     let tx_size = tx.estimate_size();
-    let tx_type = match &tx.inputs {
-        TxInputs::Clsag(_) => TransactionType::Hidden,
-        TxInputs::Lion(_) => TransactionType::PqHidden,
-    };
+    // All transactions now use CLSAG ring signatures (Hidden type)
+    let tx_type = TransactionType::Hidden;
     let num_memos = tx.outputs.iter().filter(|o| o.has_memo()).count();
     let fee_nanobth =
         fee_config.minimum_fee_dynamic(tx_type, tx_size, cluster_wealth, num_memos, dynamic_base);
@@ -685,21 +683,6 @@ fn test_size_based_fee_scaling() {
         (ratio - 2.0).abs() < 0.1,
         "Doubling size should ~double fee: {}x",
         ratio
-    );
-
-    // Compare CLSAG vs LION typical sizes
-    let clsag_fee = fee_config.compute_fee(TransactionType::Hidden, 4000, cluster_wealth, 0);
-    let lion_fee = fee_config.compute_fee(TransactionType::PqHidden, 65000, cluster_wealth, 0);
-    let pq_ratio = lion_fee as f64 / clsag_fee as f64;
-
-    println!("\nCLSAG (~4KB) fee: {} nanoBTH", clsag_fee);
-    println!("LION (~65KB) fee: {} nanoBTH", lion_fee);
-    println!("PQ/Standard ratio: {:.1}x", pq_ratio);
-
-    assert!(
-        pq_ratio > 10.0 && pq_ratio < 20.0,
-        "LION should be ~16x more expensive: {}x",
-        pq_ratio
     );
 
     println!("\n=== Size-Based Fee Scaling Test Complete ===\n");

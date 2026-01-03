@@ -131,18 +131,6 @@ pub const MAX_TRANSACTIONS_PER_BLOCK: usize = 5000;
 /// resource exhaustion attacks.
 pub const MAX_TRANSACTION_SIZE: usize = 100 * 1024; // 100 KB
 
-/// Maximum serialized size of a PQ-Private (LION) transaction in bytes (512 KB).
-///
-/// Rationale: LION ring signatures are ~36 KB per input (ring size 11):
-/// - 8 inputs × ~36 KB LION signature ≈ 288 KB
-/// - 16 outputs × ~1.2 KB ≈ 19 KB
-/// - Bulletproofs aggregated: ~2 KB
-/// - Overhead: ~1 KB
-/// - Total: ~310 KB typical max, 512 KB limit provides margin.
-///
-/// PQ-Private transactions accept larger sizes as the cost of quantum resistance.
-pub const MAX_PQ_TRANSACTION_SIZE: usize = 512 * 1024; // 512 KB
-
 /// Maximum serialized size of a single block in bytes (20 MB).
 ///
 /// Rationale: With MAX_TRANSACTIONS_PER_BLOCK (5000) and average tx size of ~2KB,
@@ -159,32 +147,20 @@ pub const MAX_SCP_MESSAGE_SIZE: usize = 1024 * 1024; // 1 MB
 // Ring Signature Parameters
 // =============================================================================
 
-/// Ring size for Standard-Private (CLSAG) transactions.
+/// Ring size for private (CLSAG) transactions.
 /// Ring size 20 provides strong anonymity (larger than Monero's 16).
 /// CLSAG signatures are ~700 bytes per input, so ring size 20 is efficient.
 pub const RING_SIZE: usize = 20;
-
-/// Ring size for PQ-Private (LION) transactions.
-/// Ring size 11 balances privacy with signature size.
-/// LION signatures are ~36 KB per input at ring size 11 (~63 KB at ring 20).
-/// Ring 11 still provides 3.30 bits of privacy (95% efficiency).
-pub const PQ_RING_SIZE: usize = 11;
 
 // =============================================================================
 // Transaction Limits
 // =============================================================================
 
-/// Maximum inputs for Standard-Private (CLSAG) transactions.
+/// Maximum inputs for private (CLSAG) transactions.
 /// 16 inputs × ~700B = ~11 KB signature data, well within 100 KB limit.
 pub const MAX_INPUTS: u64 = 16;
 
-/// Maximum inputs for PQ-Private (LION) transactions.
-/// 8 inputs × ~36 KB = ~288 KB signature data, within 512 KB limit.
-/// Reduced from 16 to manage transaction sizes for LION signatures.
-pub const MAX_PQ_INPUTS: u64 = 8;
-
 /// Each transaction must contain no more than this many outputs.
-/// Applies to both Standard-Private and PQ-Private transactions.
 /// Bulletproofs aggregation keeps proof sizes efficient for 16 outputs.
 pub const MAX_OUTPUTS: u64 = 16;
 
@@ -402,35 +378,12 @@ mod tests {
     }
 
     #[test]
-    fn test_pq_ring_size() {
-        // LION ring size is 11 (optimized for signature size while maintaining privacy)
-        assert_eq!(PQ_RING_SIZE, 11);
-        // Ring size should be at least 7 for meaningful privacy
-        assert!(PQ_RING_SIZE >= 7);
-        // Ring size should be reasonable for transaction size
-        assert!(PQ_RING_SIZE <= 64);
-        // PQ ring size should be smaller than CLSAG due to larger signatures
-        assert!(PQ_RING_SIZE < RING_SIZE);
-    }
-
-    #[test]
     fn test_max_inputs() {
         // Maximum CLSAG inputs should be 16
         assert_eq!(MAX_INPUTS, 16);
         // Should be reasonable limit
         assert!(MAX_INPUTS > 0);
         assert!(MAX_INPUTS <= 64);
-    }
-
-    #[test]
-    fn test_max_pq_inputs() {
-        // Maximum LION inputs should be 8 (due to larger signatures)
-        assert_eq!(MAX_PQ_INPUTS, 8);
-        // Should be reasonable limit
-        assert!(MAX_PQ_INPUTS > 0);
-        assert!(MAX_PQ_INPUTS <= 64);
-        // PQ inputs should be smaller than CLSAG due to larger signatures
-        assert!(MAX_PQ_INPUTS < MAX_INPUTS);
     }
 
     #[test]
@@ -543,10 +496,8 @@ mod tests {
 
     #[test]
     fn test_max_inputs_outputs_relationship() {
-        // CLSAG inputs and outputs limits should be equal
+        // Inputs and outputs limits should be equal
         assert_eq!(MAX_INPUTS, MAX_OUTPUTS);
-        // PQ inputs should be less than outputs due to signature size
-        assert!(MAX_PQ_INPUTS < MAX_OUTPUTS);
     }
 
     #[test]
@@ -554,10 +505,6 @@ mod tests {
         // A maximally sized CLSAG transaction with all rings should fit
         let clsag_elements = (MAX_INPUTS as usize) * RING_SIZE;
         assert!(clsag_elements <= 1000, "CLSAG ring elements should be bounded");
-
-        // A maximally sized LION transaction with all rings should fit
-        let lion_elements = (MAX_PQ_INPUTS as usize) * PQ_RING_SIZE;
-        assert!(lion_elements <= 1000, "LION ring elements should be bounded");
     }
 
     // =========================================================================
@@ -572,18 +519,6 @@ mod tests {
         assert!(MAX_TRANSACTION_SIZE > 50_000, "Should fit largest CLSAG transactions");
         // But not too large for DoS protection
         assert!(MAX_TRANSACTION_SIZE <= 1024 * 1024, "Should be under 1MB for DoS protection");
-    }
-
-    #[test]
-    fn test_max_pq_transaction_size() {
-        // 512 KB limit for PQ-Private (LION) transactions
-        assert_eq!(MAX_PQ_TRANSACTION_SIZE, 512 * 1024);
-        // Should be enough for a max LION tx (8 inputs × ~36KB + 16 outputs × ~1.2KB ≈ 310KB)
-        assert!(MAX_PQ_TRANSACTION_SIZE > 300_000, "Should fit largest LION transactions");
-        // But not too large for DoS protection
-        assert!(MAX_PQ_TRANSACTION_SIZE <= 2 * 1024 * 1024, "Should be under 2MB for DoS protection");
-        // PQ limit should be larger than standard limit
-        assert!(MAX_PQ_TRANSACTION_SIZE > MAX_TRANSACTION_SIZE);
     }
 
     #[test]
@@ -606,9 +541,8 @@ mod tests {
 
     #[test]
     fn test_size_limits_ordering() {
-        // Standard Transaction < PQ Transaction < SCP < Block
-        assert!(MAX_TRANSACTION_SIZE < MAX_PQ_TRANSACTION_SIZE);
-        assert!(MAX_PQ_TRANSACTION_SIZE < MAX_SCP_MESSAGE_SIZE);
+        // Transaction < SCP < Block
+        assert!(MAX_TRANSACTION_SIZE < MAX_SCP_MESSAGE_SIZE);
         assert!(MAX_SCP_MESSAGE_SIZE < MAX_BLOCK_SIZE);
     }
 

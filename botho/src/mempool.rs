@@ -2,13 +2,13 @@
 
 //! Transaction mempool for storing pending transactions.
 //!
-//! All transactions are private by default using ring signatures (CLSAG or LION).
+//! All transactions are private by default using CLSAG ring signatures.
 //! Tracks spent key images to prevent double-spending.
 //!
 //! ## Fee Validation
 //!
 //! Uses the cluster-tax fee system to compute minimum fees based on:
-//! - Transaction type (CLSAG = Hidden, LION = PqHidden)
+//! - Transaction type (Hidden for private, Minting for block rewards)
 //! - Transfer amount
 //! - Sender's cluster wealth (see note below)
 //! - Number of outputs with encrypted memos
@@ -33,7 +33,7 @@ use tracing::{debug, warn};
 use bth_cluster_tax::{DynamicFeeBase, DynamicFeeState, FeeConfig, FeeSuggestion, TransactionType as FeeTransactionType};
 use bth_transaction_types::TAG_WEIGHT_SCALE;
 use crate::ledger::Ledger;
-use crate::transaction::{Transaction, TxInputs, TxOutput, UtxoId};
+use crate::transaction::{Transaction, TxOutput, UtxoId};
 
 /// Compute the maximum cluster wealth from transaction outputs.
 ///
@@ -229,7 +229,7 @@ pub fn validate_ring_tag_plausibility(
 /// Maximum transactions in mempool.
 ///
 /// Increased from 1000 to 10000 to support higher transaction throughput.
-/// Memory impact: ~50-650MB depending on transaction type (CLSAG ~5KB, LION ~65KB).
+/// Memory impact: ~50MB at full capacity (CLSAG transactions ~5KB each).
 /// See docs/memory-budget.md for detailed memory planning.
 const MAX_MEMPOOL_SIZE: usize = 10_000;
 
@@ -372,7 +372,7 @@ impl Mempool {
     /// This uses the current dynamic fee base, which adjusts based on network congestion.
     ///
     /// # Arguments
-    /// * `tx_type` - The transaction type (Hidden or PqHidden)
+    /// * `tx_type` - The transaction type (Hidden or Minting)
     /// * `_amount` - The transfer amount (unused, fee is size-based)
     /// * `num_memos` - Number of outputs with memos
     ///
@@ -386,8 +386,8 @@ impl Mempool {
         // Get typical size for this tx type
         let typical_size = match tx_type {
             FeeTransactionType::Hidden => 4_000,      // ~4 KB for CLSAG
-            FeeTransactionType::PqHidden => 65_000,   // ~65 KB for LION
             FeeTransactionType::Minting => 1_500,     // ~1.5 KB for minting
+            _ => 4_000,                                // Default to CLSAG size
         };
 
         // Use dynamic fee calculation
@@ -401,14 +401,9 @@ impl Mempool {
         )
     }
 
-    /// Estimate fee for standard-private (CLSAG) transactions.
+    /// Estimate fee for private (CLSAG) transactions.
     pub fn estimate_fee_standard(&self, amount: u64, num_memos: usize) -> u64 {
         self.estimate_fee(FeeTransactionType::Hidden, amount, num_memos)
-    }
-
-    /// Estimate fee for PQ-private (LION) transactions.
-    pub fn estimate_fee_pq(&self, amount: u64, num_memos: usize) -> u64 {
-        self.estimate_fee(FeeTransactionType::PqHidden, amount, num_memos)
     }
 
     /// Estimate fee with actual cluster wealth for accurate progressive fee calculation.
@@ -435,8 +430,8 @@ impl Mempool {
         // Get typical size for this tx type
         let typical_size = match tx_type {
             FeeTransactionType::Hidden => 4_000,      // ~4 KB for CLSAG
-            FeeTransactionType::PqHidden => 65_000,   // ~65 KB for LION
             FeeTransactionType::Minting => 1_500,     // ~1.5 KB for minting
+            _ => 4_000,                                // Default to CLSAG size
         };
 
         // Use dynamic fee calculation with actual cluster wealth
@@ -486,15 +481,8 @@ impl Mempool {
         tx.is_valid_structure()
             .map_err(|e| MempoolError::InvalidTransaction(e.to_string()))?;
 
-        // Validate based on input type
-        let input_sum = match &tx.inputs {
-            TxInputs::Clsag(clsag_inputs) => {
-                self.validate_clsag_inputs(clsag_inputs, &tx, ledger)?
-            }
-            TxInputs::Lion(lion_inputs) => {
-                self.validate_lion_inputs(lion_inputs, &tx, ledger)?
-            }
-        };
+        // Validate inputs (all transactions use CLSAG ring signatures)
+        let input_sum = self.validate_clsag_inputs(tx.inputs.clsag(), &tx, ledger)?;
 
         // Validate outputs + fee <= inputs
         // Use checked arithmetic to detect overflow from malicious transactions
@@ -513,11 +501,8 @@ impl Mempool {
             });
         }
 
-        // Validate fee meets minimum based on transaction type, size, and congestion
-        let fee_tx_type = match &tx.inputs {
-            TxInputs::Clsag(_) => FeeTransactionType::Hidden,
-            TxInputs::Lion(_) => FeeTransactionType::PqHidden, // Higher fee for ~16x larger LION signatures
-        };
+        // Validate fee meets minimum based on transaction size and congestion
+        let fee_tx_type = FeeTransactionType::Hidden;
 
         // Estimate transaction size based on inputs and outputs
         let tx_size_bytes = tx.estimate_size();
@@ -547,22 +532,9 @@ impl Mempool {
         }
 
         // Mark inputs as spent
-        match &tx.inputs {
-            TxInputs::Clsag(clsag_inputs) => {
-                for input in clsag_inputs {
-                    self.spent_key_images.insert(input.key_image);
-                }
-            }
-            TxInputs::Lion(lion_inputs) => {
-                for input in lion_inputs {
-                    // LION key images are larger - hash to 32 bytes for tracking
-                    use sha2::{Sha256, Digest};
-                    let mut hasher = Sha256::new();
-                    hasher.update(&input.key_image);
-                    let key_image_hash: [u8; 32] = hasher.finalize().into();
-                    self.spent_key_images.insert(key_image_hash);
-                }
-            }
+        // Track spent key images to prevent double-spends in mempool
+        for input in tx.inputs.clsag() {
+            self.spent_key_images.insert(input.key_image);
         }
 
         // Add to mempool
@@ -660,125 +632,12 @@ impl Mempool {
         Ok(potential_input_sum)
     }
 
-    /// Validate LION (PQ-private) transaction inputs
-    fn validate_lion_inputs(
-        &self,
-        lion_inputs: &[crate::transaction::LionRingInput],
-        tx: &Transaction,
-        ledger: &Ledger,
-    ) -> Result<u64, MempoolError> {
-        use sha2::{Sha256, Digest};
-
-        // Check for double-spends via key images (mempool)
-        for input in lion_inputs {
-            let mut hasher = Sha256::new();
-            hasher.update(&input.key_image);
-            let key_image_hash: [u8; 32] = hasher.finalize().into();
-            if self.spent_key_images.contains(&key_image_hash) {
-                return Err(MempoolError::DoubleSpend);
-            }
-        }
-
-        // Check for double-spends via key images (ledger)
-        for input in lion_inputs {
-            let mut hasher = Sha256::new();
-            hasher.update(&input.key_image);
-            let key_image_hash: [u8; 32] = hasher.finalize().into();
-            if let Ok(Some(_)) = ledger.is_key_image_spent(&key_image_hash) {
-                return Err(MempoolError::KeyImageSpent(key_image_hash));
-            }
-        }
-
-        // Verify LION ring signatures
-        tx.verify_ring_signatures()
-            .map_err(|_| MempoolError::InvalidSignature)?;
-
-        // Validate potential input amounts from ring members
-        // Also collect ring tags for plausibility validation
-        let mut potential_input_sum: u64 = 0;
-        let mut all_ring_tags: Vec<(bth_transaction_types::ClusterTagVector, u64)> = Vec::new();
-
-        for input in lion_inputs {
-            let mut max_ring_amount: u64 = 0;
-            let mut found_any = false;
-
-            for member in &input.ring {
-                if let Ok(Some(utxo)) = ledger.get_utxo_by_target_key(&member.target_key) {
-                    max_ring_amount = max_ring_amount.max(utxo.output.amount);
-                    found_any = true;
-                    // Collect ring member tags and amounts for plausibility check
-                    all_ring_tags.push((utxo.output.cluster_tags.clone(), utxo.output.amount));
-                }
-            }
-
-            if !found_any {
-                let key_image_display = if input.key_image.len() >= 8 {
-                    hex::encode(&input.key_image[0..8])
-                } else {
-                    hex::encode(&input.key_image)
-                };
-                warn!(
-                    "Could not lookup ring member amounts for LION key image {}",
-                    key_image_display
-                );
-                return Err(MempoolError::InvalidTransaction(
-                    "Cannot verify LION input amounts - no ring members found in UTXO set".to_string()
-                ));
-            }
-
-            potential_input_sum = potential_input_sum.checked_add(max_ring_amount)
-                .ok_or_else(|| MempoolError::InvalidTransaction(
-                    "LION input sum overflow".to_string()
-                ))?;
-        }
-
-        // Validate ring tag plausibility (prevents decoy manipulation attacks)
-        // Get chain state for activation height check
-        let chain_state = ledger.get_chain_state()
-            .map_err(|e| MempoolError::InvalidTransaction(format!("Cannot get chain state: {}", e)))?;
-
-        // Estimate UTXO pool size as ~4 outputs per block (minting rewards)
-        // This is a reasonable approximation for the sparse pool check
-        let estimated_utxo_count = (chain_state.height as usize) * 4;
-
-        // Compute combined output tags for validation
-        let output_tags = bth_transaction_types::ClusterTagVector::merge_weighted(
-            &tx.outputs.iter().map(|o| (o.cluster_tags.clone(), o.amount)).collect::<Vec<_>>(),
-            0, // No decay for this comparison
-        );
-
-        if let Err((similarity_permille, threshold_permille)) = validate_ring_tag_plausibility(
-            &all_ring_tags,
-            &output_tags,
-            RING_TAG_SIMILARITY_THRESHOLD,
-            chain_state.height,
-            estimated_utxo_count,
-        ) {
-            return Err(MempoolError::RingTagMismatch { similarity_permille, threshold_permille });
-        }
-
-        Ok(potential_input_sum)
-    }
-
     /// Remove a transaction from the mempool
     pub fn remove_tx(&mut self, tx_hash: &[u8; 32]) -> Option<Transaction> {
         if let Some(pending) = self.txs.remove(tx_hash) {
-            // Remove spent inputs
-            match &pending.tx.inputs {
-                TxInputs::Clsag(clsag_inputs) => {
-                    for input in clsag_inputs {
-                        self.spent_key_images.remove(&input.key_image);
-                    }
-                }
-                TxInputs::Lion(lion_inputs) => {
-                    for input in lion_inputs {
-                        use sha2::{Sha256, Digest};
-                        let mut hasher = Sha256::new();
-                        hasher.update(&input.key_image);
-                        let key_image_hash: [u8; 32] = hasher.finalize().into();
-                        self.spent_key_images.remove(&key_image_hash);
-                    }
-                }
+            // Remove spent key images
+            for input in pending.tx.inputs.clsag() {
+                self.spent_key_images.remove(&input.key_image);
             }
             Some(pending.tx)
         } else {
@@ -814,24 +673,10 @@ impl Mempool {
         let mut to_remove = Vec::new();
 
         for (tx_hash, pending) in &self.txs {
-            let is_invalid = match &pending.tx.inputs {
-                TxInputs::Clsag(clsag_inputs) => {
-                    // Check if any key image was spent in ledger
-                    clsag_inputs.iter().any(|input| {
-                        matches!(ledger.is_key_image_spent(&input.key_image), Ok(Some(_)))
-                    })
-                }
-                TxInputs::Lion(lion_inputs) => {
-                    // Check if any key image was spent in ledger
-                    lion_inputs.iter().any(|input| {
-                        use sha2::{Sha256, Digest};
-                        let mut hasher = Sha256::new();
-                        hasher.update(&input.key_image);
-                        let key_image_hash: [u8; 32] = hasher.finalize().into();
-                        matches!(ledger.is_key_image_spent(&key_image_hash), Ok(Some(_)))
-                    })
-                }
-            };
+            // Check if any key image was spent in ledger
+            let is_invalid = pending.tx.inputs.clsag().iter().any(|input| {
+                matches!(ledger.is_key_image_spent(&input.key_image), Ok(Some(_)))
+            });
 
             if is_invalid {
                 to_remove.push(*tx_hash);

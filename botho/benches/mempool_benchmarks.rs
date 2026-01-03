@@ -140,15 +140,15 @@ fn bench_estimate_fee(c: &mut Criterion) {
         })
     });
 
-    group.bench_function("PqHidden (LION)", |b| {
-        b.iter(|| {
-            black_box(mempool.estimate_fee(TransactionType::PqHidden, 1_000_000_000_000, 0))
-        })
-    });
-
     group.bench_function("with memos", |b| {
         b.iter(|| {
             black_box(mempool.estimate_fee(TransactionType::Hidden, 1_000_000_000_000, 2))
+        })
+    });
+
+    group.bench_function("Minting", |b| {
+        b.iter(|| {
+            black_box(mempool.estimate_fee(TransactionType::Minting, 1_000_000_000_000, 0))
         })
     });
 
@@ -284,10 +284,6 @@ fn bench_estimate_fee_static(c: &mut Criterion) {
 
     group.bench_function("Hidden", |b| {
         b.iter(|| black_box(mempool.estimate_fee_static(TransactionType::Hidden, 1)))
-    });
-
-    group.bench_function("PqHidden", |b| {
-        b.iter(|| black_box(mempool.estimate_fee_static(TransactionType::PqHidden, 1)))
     });
 
     group.bench_function("Minting", |b| {

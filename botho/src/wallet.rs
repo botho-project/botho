@@ -181,8 +181,8 @@ impl Wallet {
     /// Note: This method only signs Simple inputs. Ring inputs use MLSAG
     /// signatures which are created during transaction construction.
     ///
-    /// Note: This method is deprecated. All transactions now use ring signatures
-    /// (CLSAG or LION) which are signed during construction.
+    /// Note: This method is deprecated. All transactions now use CLSAG ring signatures
+    /// which are signed during construction.
     ///
     /// Returns an error for all transaction types since Simple transactions
     /// have been removed in favor of privacy-by-default.
@@ -191,17 +191,15 @@ impl Wallet {
     pub fn sign_transaction(&self, _tx: &mut Transaction, _ledger: &Ledger) -> Result<()> {
         // All transaction types now use ring signatures
         Err(anyhow::anyhow!(
-            "Ring signature transactions (CLSAG/LION) must be signed during construction. \
+            "Ring signature transactions must be signed during construction. \
              Use create_private_transaction() instead."
         ))
     }
 
-    /// Create a standard-private (CLSAG) transaction for sender privacy.
+    /// Create a private (CLSAG) transaction for sender privacy.
     ///
     /// Uses CLSAG ring signatures with 20 decoys for sender anonymity.
-    /// This is the recommended option for most transactions.
-    ///
-    /// For post-quantum security, use `create_lion_transaction()` instead.
+    /// This is the recommended option for all private transactions.
     ///
     /// # Arguments
     /// * `utxos_to_spend` - The wallet's UTXOs to spend
@@ -411,47 +409,6 @@ impl Wallet {
         let tx = Transaction::new_clsag(ring_inputs, outputs, fee, current_height);
 
         Ok(tx)
-    }
-
-    /// Create a PQ-private (LION) transaction for post-quantum sender privacy.
-    ///
-    /// Uses LION lattice-based ring signatures with 20 decoys for sender anonymity
-    /// with post-quantum security. Signatures are ~90x larger than CLSAG (~63KB vs ~700B)
-    /// but provide protection against quantum computers.
-    ///
-    /// For most transactions, `create_clsag_transaction()` is recommended.
-    /// Use LION for high-value transactions or when long-term quantum security is needed.
-    ///
-    /// # Arguments
-    /// * `utxos_to_spend` - The wallet's UTXOs to spend (must have LION keys)
-    /// * `outputs` - Transaction outputs to create
-    /// * `fee` - Transaction fee (higher than CLSAG due to larger signature size)
-    /// * `current_height` - Current blockchain height
-    /// * `ledger` - Ledger for fetching decoy outputs
-    ///
-    /// # Returns
-    /// A fully signed LION transaction ready for broadcast
-    #[cfg(feature = "pq")]
-    pub fn create_lion_transaction(
-        &self,
-        _utxos_to_spend: &[Utxo],
-        _outputs: Vec<TxOutput>,
-        _fee: u64,
-        _current_height: u64,
-        _ledger: &Ledger,
-    ) -> Result<Transaction> {
-        // TODO: Implement LION ring signature transaction creation
-        // This requires:
-        // 1. LION keys in the wallet (QuantumSafeAccountKey)
-        // 2. LION public keys stored in UTXOs/outputs
-        // 3. Decoy selection for LION outputs
-        //
-        // For now, return an error indicating this is not yet fully implemented
-        Err(anyhow::anyhow!(
-            "LION ring signature transactions are not yet fully implemented. \
-             Use create_clsag_transaction() for standard privacy, or \
-             create_quantum_private_transaction() for individual PQ signatures."
-        ))
     }
 
     /// Create a quantum-private transaction for post-quantum security.
