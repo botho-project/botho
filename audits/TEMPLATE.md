@@ -30,9 +30,10 @@ Check off sections as reviewed. For each, note if clean or findings exist.
 - [ ] 1. Cryptographic Implementations
   - [ ] 1.1 MLSAG Ring Signatures
   - [ ] 1.2 CLSAG Ring Signatures
-  - [ ] 1.3 LION Post-Quantum Signatures
+  - [ ] 1.3 ~~LION~~ (Deprecated - see ADR-0001)
   - [ ] 1.4 Pedersen Commitments
   - [ ] 1.5 Bulletproofs Range Proofs
+  - [ ] 1.6 ML-KEM/ML-DSA Post-Quantum Keys
 - [ ] 2. Key Derivation & Management
 - [ ] 3. Consensus Protocol (SCP)
 - [ ] 4. Transaction Validation
