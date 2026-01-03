@@ -91,6 +91,22 @@ struct PendingWallet {
 /// Expiry time for pending wallet creation (5 minutes)
 const PENDING_WALLET_TIMEOUT_SECS: u64 = 300;
 
+/// Minimum password length requirement
+const MIN_PASSWORD_LENGTH: usize = 8;
+
+/// Validate password strength
+///
+/// Returns Ok(()) if password meets requirements, Err with message if not.
+fn validate_password_strength(password: &str) -> Result<()> {
+    if password.len() < MIN_PASSWORD_LENGTH {
+        return Err(anyhow!(
+            "Password must be at least {} characters",
+            MIN_PASSWORD_LENGTH
+        ));
+    }
+    Ok(())
+}
+
 impl PendingWallet {
     fn new(keys: WalletKeys) -> Self {
         let mut rng = rand::thread_rng();
@@ -810,8 +826,9 @@ async fn unlock_wallet_internal(
     let wallet = EncryptedWallet::load(path)
         .map_err(|e| anyhow!("Failed to load wallet file: {}", e))?;
 
+    // SECURITY: Use generic error message to avoid leaking password correctness
     let mnemonic = wallet.decrypt(&params.password)
-        .map_err(|e| anyhow!("Failed to decrypt wallet: {}", e))?;
+        .map_err(|_| anyhow!("Wallet unlock failed"))?;
 
     // Derive keys from mnemonic (mnemonic is Zeroizing<String>)
     let keys = WalletKeys::from_mnemonic(&mnemonic)
@@ -1024,6 +1041,9 @@ async fn confirm_new_wallet_internal(
     state: &State<'_, WalletCommands>,
     params: ConfirmNewWalletParams,
 ) -> Result<CreateWalletResult> {
+    // Validate password strength
+    validate_password_strength(&params.password)?;
+
     // Get and validate pending wallet
     let mut pending_guard = state.pending_wallet.lock().await;
 
@@ -1045,18 +1065,32 @@ async fn confirm_new_wallet_internal(
     let verify_indices = pending.verify_indices;
     let mnemonic_words = pending.keys.mnemonic_words();
 
+    // SECURITY: Use constant-time comparison to prevent timing attacks,
+    // and generic error message to avoid revealing which word failed
+    let mut verification_failed = false;
     for (i, word_idx) in verify_indices.iter().enumerate() {
         let expected = mnemonic_words[*word_idx].to_lowercase();
         let provided = params.verify_words[i].to_lowercase().trim().to_string();
 
-        if expected != provided {
-            // Put pending back so user can retry
-            *pending_guard = Some(pending);
-            return Err(anyhow!(
-                "Word {} is incorrect. Please check your backup.",
-                word_idx + 1
-            ));
+        // Use constant-time comparison via byte-by-byte XOR accumulation
+        // This prevents timing attacks that could reveal correct words
+        if expected.len() != provided.len() {
+            verification_failed = true;
+        } else {
+            let mut diff: u8 = 0;
+            for (a, b) in expected.bytes().zip(provided.bytes()) {
+                diff |= a ^ b;
+            }
+            if diff != 0 {
+                verification_failed = true;
+            }
         }
+    }
+
+    if verification_failed {
+        // Put pending back so user can retry
+        *pending_guard = Some(pending);
+        return Err(anyhow!("Verification failed. Please check your backup."));
     }
 
     // Verification passed! Create the wallet
@@ -1155,6 +1189,9 @@ async fn import_wallet_internal(
     state: &State<'_, WalletCommands>,
     params: ImportWalletParams,
 ) -> Result<CreateWalletResult> {
+    // Validate password strength
+    validate_password_strength(&params.password)?;
+
     // Validate mnemonic and derive keys
     let keys = WalletKeys::from_mnemonic(&params.mnemonic)
         .map_err(|e| anyhow!("Invalid mnemonic: {}", e))?;
