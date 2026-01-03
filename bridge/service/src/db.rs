@@ -398,12 +398,21 @@ mod tests {
         let db = Database::open_in_memory().unwrap();
         db.migrate().unwrap();
 
+        // Create an order first (required by foreign key constraint)
+        let order = BridgeOrder::new_mint(
+            Chain::Ethereum,
+            1_000_000_000_000,
+            1_000_000_000,
+            "bth_addr".to_string(),
+            "0xabc123".to_string(),
+        );
+        db.insert_order(&order).unwrap();
+
         let tx_hash = "0xabc123";
-        let order_id = Uuid::new_v4();
 
         assert!(!db.is_deposit_processed(tx_hash).unwrap());
 
-        db.mark_deposit_processed(tx_hash, &order_id).unwrap();
+        db.mark_deposit_processed(tx_hash, &order.id).unwrap();
 
         assert!(db.is_deposit_processed(tx_hash).unwrap());
     }
