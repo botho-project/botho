@@ -31,6 +31,9 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
+// Rate limiting
+use bth_gossip::{GossipMessageType, PeerRateLimitConfig, PeerRateLimiter, RateLimitResult};
+
 use bth_transaction_types::{BlockVersion, MAX_BLOCK_SIZE, MAX_SCP_MESSAGE_SIZE, MAX_TRANSACTION_SIZE};
 
 use crate::block::Block;
@@ -274,11 +277,22 @@ pub struct NetworkDiscovery {
     compact_block_peers: HashSet<PeerId>,
     /// PEX manager for decentralized peer discovery
     pex_manager: PexManager,
+    /// Per-peer rate limiter for gossipsub messages (DoS protection)
+    rate_limiter: PeerRateLimiter,
 }
 
 impl NetworkDiscovery {
     /// Create a new network discovery service
     pub fn new(port: u16, bootstrap_peers: Vec<String>) -> Self {
+        Self::with_rate_limit_config(port, bootstrap_peers, PeerRateLimitConfig::default())
+    }
+
+    /// Create a new network discovery service with custom rate limit configuration
+    pub fn with_rate_limit_config(
+        port: u16,
+        bootstrap_peers: Vec<String>,
+        rate_limit_config: PeerRateLimitConfig,
+    ) -> Self {
         let (event_tx, event_rx) = mpsc::channel(100);
 
         // Generate a random keypair for this node
@@ -286,6 +300,13 @@ impl NetworkDiscovery {
         let local_peer_id = PeerId::from(local_key.public());
 
         info!("Local peer ID: {}", local_peer_id);
+        info!(
+            "Rate limiting: {} (limits: tx={}/min, blocks={}/min, scp={}/min)",
+            if rate_limit_config.enabled { "enabled" } else { "disabled" },
+            rate_limit_config.message_limits.transactions_per_minute,
+            rate_limit_config.message_limits.blocks_per_minute,
+            rate_limit_config.message_limits.consensus_per_minute,
+        );
 
         Self {
             local_peer_id,
@@ -296,6 +317,7 @@ impl NetworkDiscovery {
             peers: HashMap::new(),
             compact_block_peers: HashSet::new(),
             pex_manager: PexManager::new(),
+            rate_limiter: PeerRateLimiter::new(rate_limit_config),
         }
     }
 
@@ -354,6 +376,39 @@ impl NetworkDiscovery {
     /// Get count of peers with outdated versions
     pub fn outdated_peer_count(&self) -> usize {
         self.peers.values().filter(|p| p.version_warning).count()
+    }
+
+    /// Map a gossipsub topic to a rate limit message type
+    fn topic_to_message_type(topic: &str) -> GossipMessageType {
+        if topic == BLOCKS_TOPIC || topic == COMPACT_BLOCKS_TOPIC {
+            GossipMessageType::Block
+        } else if topic == TRANSACTIONS_TOPIC {
+            GossipMessageType::Transaction
+        } else if topic == SCP_TOPIC {
+            GossipMessageType::Consensus
+        } else if topic == PEX_TOPIC {
+            GossipMessageType::PeerExchange
+        } else if topic == UPGRADE_ANNOUNCEMENTS_TOPIC {
+            GossipMessageType::Announcement
+        } else {
+            GossipMessageType::Other
+        }
+    }
+
+    /// Get peers flagged for disconnection due to rate limit violations
+    /// and clear the internal list.
+    pub fn take_rate_limited_peers(&mut self) -> Vec<PeerId> {
+        self.rate_limiter.take_flagged_peers()
+    }
+
+    /// Get the number of tracked peers in the rate limiter
+    pub fn rate_limited_peer_count(&self) -> usize {
+        self.rate_limiter.tracked_peer_count()
+    }
+
+    /// Remove a peer from rate limiting when disconnected
+    pub fn on_peer_disconnected(&mut self, peer: &PeerId) {
+        self.rate_limiter.remove_peer(peer);
     }
 
     /// Start the network service (runs in background)
@@ -715,6 +770,38 @@ impl NetworkDiscovery {
                 // Determine which topic this message is from
                 let topic = message.topic.as_str();
 
+                // Per-peer rate limiting (DoS protection)
+                // Check rate limit before processing message
+                if let Some(peer) = message.source {
+                    let msg_type = Self::topic_to_message_type(topic);
+                    match self.rate_limiter.record_message_typed(&peer, msg_type) {
+                        RateLimitResult::Allowed => {
+                            // Message allowed, continue processing
+                        }
+                        RateLimitResult::RateLimited {
+                            violations,
+                            remaining,
+                            message_type,
+                        } => {
+                            warn!(
+                                %peer,
+                                ?message_type,
+                                violations,
+                                remaining,
+                                "Rate limited message from peer"
+                            );
+                            return None;
+                        }
+                        RateLimitResult::Disconnect => {
+                            warn!(
+                                %peer,
+                                "Peer exceeded rate limit threshold, flagged for disconnection"
+                            );
+                            return None;
+                        }
+                    }
+                }
+
                 if topic == BLOCKS_TOPIC {
                     // Check size before deserialization (DoS protection)
                     if message.data.len() > MAX_BLOCK_SIZE {
@@ -1052,6 +1139,8 @@ impl NetworkDiscovery {
                 info!("Disconnected from peer: {}", peer_id);
                 self.peers.remove(&peer_id);
                 self.compact_block_peers.remove(&peer_id);
+                // Clean up rate limiter state for disconnected peer
+                self.rate_limiter.remove_peer(&peer_id);
                 Some(NetworkEvent::PeerDisconnected(peer_id))
             }
             _ => None,

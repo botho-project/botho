@@ -55,6 +55,7 @@ bth-transaction-types = { path = "../transaction/types", default-features = true
 bth-common = { path = "../common", features = ["std"] }
 bth-consensus-scp = { path = "../consensus/scp", features = ["test_utils"] }
 bth-consensus-scp-types = { path = "../consensus/scp/types", features = ["test_utils"] }
+bth-gossip = { path = "../gossip" }
 bth-crypto-digestible = { path = "../crypto/digestible" }
 libp2p = { workspace = true, features = [
     "tokio",

@@ -28,6 +28,8 @@ pub use discovery::{
     BothoBehaviour, NetworkDiscovery, NetworkEvent, PeerTableEntry, ProtocolVersion,
     UpgradeAnnouncement, PROTOCOL_VERSION, MIN_SUPPORTED_PROTOCOL_VERSION,
 };
+// Re-export rate limit configuration from bth-gossip for network setup
+pub use bth_gossip::{GossipMessageType, MessageTypeLimits, PeerRateLimitConfig};
 pub use dns_seeds::{DnsSeedDiscovery, DnsSeedError};
 pub use quorum::{QuorumBuilder, QuorumValidation};
 pub use reputation::{PeerReputation, ReputationManager};

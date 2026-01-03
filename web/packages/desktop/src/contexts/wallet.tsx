@@ -35,6 +35,18 @@ interface SendTxParams {
   customFee?: bigint
 }
 
+/** Result of generating a new mnemonic (secure flow) */
+interface GenerateMnemonicResult {
+  success: boolean
+  /** The 24 mnemonic words (display only, do NOT store) */
+  words?: string[]
+  /** 1-indexed word positions user must verify */
+  verifyPositions?: number[]
+  /** Seconds until this pending wallet expires */
+  expiresInSecs?: number
+  error?: string
+}
+
 interface WalletContextValue extends WalletState {
   refreshBalance: () => Promise<void>
   refreshTransactions: () => Promise<void>
@@ -43,8 +55,23 @@ interface WalletContextValue extends WalletState {
   setAddress: (address: Address) => void
   /** Unlock wallet from file using password (mnemonic stays in Rust) */
   unlockWallet: (password: string, path?: string) => Promise<{ success: boolean; address?: string; error?: string }>
-  /** Create new wallet file and unlock it */
-  createWallet: (mnemonic: string, password: string, path?: string) => Promise<{ success: boolean; path?: string; address?: string; error?: string }>
+  /**
+   * Generate a new mnemonic in Rust (SECURE - mnemonic never sent from JS).
+   * Returns words for display and positions to verify.
+   */
+  generateMnemonic: () => Promise<GenerateMnemonicResult>
+  /**
+   * Confirm new wallet creation using verification words (SECURE flow).
+   * The mnemonic is NEVER sent from JS - uses cached mnemonic from generateMnemonic().
+   */
+  confirmNewWallet: (password: string, verifyWords: string[], path?: string) => Promise<{ success: boolean; path?: string; address?: string; error?: string }>
+  /** Cancel pending wallet creation */
+  cancelPendingWallet: () => Promise<void>
+  /**
+   * Import an existing wallet from a mnemonic phrase.
+   * NOTE: Mnemonic must cross JS/Rust boundary (unavoidable for restore).
+   */
+  importWallet: (mnemonic: string, password: string, path?: string) => Promise<{ success: boolean; path?: string; address?: string; error?: string }>
   /** Lock wallet and zeroize keys in Rust */
   lockWallet: () => Promise<void>
   checkWalletFile: () => Promise<void>
@@ -190,11 +217,21 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  // Create new wallet file and unlock it
-  const createWallet = useCallback(async (mnemonic: string, password: string, path?: string) => {
+  // Generate mnemonic in Rust (SECURE - never accept mnemonic from JS for new wallets)
+  const generateMnemonic = useCallback(async (): Promise<GenerateMnemonicResult> => {
     try {
-      const result = await invoke<CreateWalletResult>('create_wallet', {
-        params: { mnemonic, password, path: path || null }
+      const result = await invoke<GenerateMnemonicResult>('generate_mnemonic')
+      return result
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : 'Failed to generate mnemonic' }
+    }
+  }, [])
+
+  // Confirm new wallet using verification words (SECURE flow)
+  const confirmNewWallet = useCallback(async (password: string, verifyWords: string[], path?: string) => {
+    try {
+      const result = await invoke<CreateWalletResult>('confirm_new_wallet', {
+        params: { password, verifyWords, path: path || null }
       })
 
       if (result.success) {
@@ -212,6 +249,40 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       }
     } catch (err) {
       return { success: false, error: err instanceof Error ? err.message : 'Failed to create wallet' }
+    }
+  }, [])
+
+  // Cancel pending wallet creation
+  const cancelPendingWallet = useCallback(async () => {
+    try {
+      await invoke<boolean>('cancel_pending_wallet')
+    } catch {
+      // Ignore errors
+    }
+  }, [])
+
+  // Import existing wallet from mnemonic (mnemonic crosses JS/Rust boundary - unavoidable for restore)
+  const importWallet = useCallback(async (mnemonic: string, password: string, path?: string) => {
+    try {
+      const result = await invoke<CreateWalletResult>('import_wallet', {
+        params: { mnemonic, password, path: path || null }
+      })
+
+      if (result.success) {
+        // Update state to reflect that wallet file now exists and is unlocked
+        setState(s => ({
+          ...s,
+          isUnlocked: true,
+          hasWalletFile: true,
+          walletFilePath: result.path || s.walletFilePath,
+          address: result.address || s.address,
+        }))
+        return { success: true, path: result.path, address: result.address }
+      } else {
+        return { success: false, error: result.error || 'Failed to import wallet' }
+      }
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : 'Failed to import wallet' }
     }
   }, [])
 
@@ -346,7 +417,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         estimateFee,
         setAddress,
         unlockWallet,
-        createWallet,
+        generateMnemonic,
+        confirmNewWallet,
+        cancelPendingWallet,
+        importWallet,
         lockWallet,
         checkWalletFile,
         checkSessionStatus,

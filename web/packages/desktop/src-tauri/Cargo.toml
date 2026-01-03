@@ -38,3 +38,4 @@ hex = { workspace = true, features = ["std"] }
 log = { workspace = true }
 anyhow = { workspace = true }
 dirs = { workspace = true }
+rand = { workspace = true }

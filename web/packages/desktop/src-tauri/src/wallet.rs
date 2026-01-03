@@ -3,12 +3,20 @@
 //! Handles transaction building, signing, and submission for the desktop wallet.
 //! Private keys never leave this module - all signing happens locally.
 //!
-//! SECURITY: Mnemonics are NEVER exposed to JavaScript. All sensitive key material
-//! stays in Rust memory and is automatically zeroized when the wallet is locked.
+//! SECURITY: For NEW wallets, mnemonics are generated in Rust and only briefly
+//! exposed to JavaScript for display. The mnemonic is NEVER accepted back from JS.
+//! For IMPORTED wallets, the mnemonic must cross the JS boundary (unavoidable for restore).
+//! All sensitive key material is automatically zeroized when the wallet is locked.
+//!
+//! SECURITY: Wallet unlock attempts are rate-limited with exponential backoff
+//! to prevent brute-force password attacks. After 5 consecutive failures, the
+//! wallet is locked out for increasing durations.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
+use rand::seq::SliceRandom;
 
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
@@ -66,6 +74,197 @@ impl WalletSession {
     }
 }
 
+/// Pending wallet creation - holds mnemonic generated in Rust for verification.
+///
+/// SECURITY: This allows new wallet creation without accepting mnemonic from JS.
+/// The mnemonic is generated in Rust, displayed to user, and user verifies by
+/// providing specific words at random positions.
+struct PendingWallet {
+    /// Generated wallet keys (contains Zeroizing mnemonic)
+    keys: WalletKeys,
+    /// Random word positions user must verify (0-indexed)
+    verify_indices: [usize; 3],
+    /// Timestamp for expiry (5 minutes)
+    created_at: Instant,
+}
+
+/// Expiry time for pending wallet creation (5 minutes)
+const PENDING_WALLET_TIMEOUT_SECS: u64 = 300;
+
+impl PendingWallet {
+    fn new(keys: WalletKeys) -> Self {
+        let mut rng = rand::thread_rng();
+        let mut indices: Vec<usize> = (0..24).collect();
+        indices.shuffle(&mut rng);
+        let verify_indices = [indices[0], indices[1], indices[2]];
+
+        Self {
+            keys,
+            verify_indices,
+            created_at: Instant::now(),
+        }
+    }
+
+    fn is_expired(&self) -> bool {
+        self.created_at.elapsed() > Duration::from_secs(PENDING_WALLET_TIMEOUT_SECS)
+    }
+}
+
+// ============================================================================
+// Unlock Rate Limiting (brute-force protection)
+// ============================================================================
+
+/// Maximum failed attempts before maximum lockout kicks in
+const MAX_FAILED_ATTEMPTS: u32 = 10;
+
+/// Maximum lockout duration (5 minutes)
+const MAX_LOCKOUT_SECS: u64 = 300;
+
+/// State tracking for a single wallet path's unlock attempts
+#[derive(Debug, Clone)]
+struct UnlockAttemptState {
+    /// Number of consecutive failed attempts
+    failed_attempts: u32,
+    /// Timestamp of last failed attempt
+    last_failed_at: Option<Instant>,
+    /// Timestamp when lockout expires (if locked out)
+    lockout_until: Option<Instant>,
+}
+
+impl Default for UnlockAttemptState {
+    fn default() -> Self {
+        Self {
+            failed_attempts: 0,
+            last_failed_at: None,
+            lockout_until: None,
+        }
+    }
+}
+
+impl UnlockAttemptState {
+    /// Check if currently locked out
+    fn is_locked_out(&self) -> bool {
+        if let Some(until) = self.lockout_until {
+            Instant::now() < until
+        } else {
+            false
+        }
+    }
+
+    /// Get remaining lockout duration in seconds
+    fn lockout_remaining_secs(&self) -> u64 {
+        if let Some(until) = self.lockout_until {
+            let now = Instant::now();
+            if now < until {
+                return (until - now).as_secs();
+            }
+        }
+        0
+    }
+
+    /// Calculate lockout duration using exponential backoff
+    /// 1s, 2s, 4s, 8s, 16s, 32s, 64s, 128s, 256s, 300s (capped)
+    fn calculate_lockout(&self) -> Duration {
+        if self.failed_attempts == 0 {
+            return Duration::ZERO;
+        }
+
+        // Exponential backoff: 2^(n-1) seconds, capped at MAX_LOCKOUT_SECS
+        let secs = (1u64 << (self.failed_attempts - 1).min(10))
+            .min(MAX_LOCKOUT_SECS);
+        Duration::from_secs(secs)
+    }
+
+    /// Record a failed unlock attempt
+    fn record_failure(&mut self) {
+        self.failed_attempts = self.failed_attempts.saturating_add(1).min(MAX_FAILED_ATTEMPTS);
+        self.last_failed_at = Some(Instant::now());
+
+        // Apply exponential backoff lockout
+        let lockout_duration = self.calculate_lockout();
+        if !lockout_duration.is_zero() {
+            self.lockout_until = Some(Instant::now() + lockout_duration);
+            log::warn!(
+                "Wallet unlock failed. Locked out for {} seconds ({} attempts)",
+                lockout_duration.as_secs(),
+                self.failed_attempts
+            );
+        }
+    }
+
+    /// Record a successful unlock (resets all counters)
+    fn record_success(&mut self) {
+        if self.failed_attempts > 0 {
+            log::info!("Wallet unlocked successfully after {} failed attempts", self.failed_attempts);
+        }
+        self.failed_attempts = 0;
+        self.last_failed_at = None;
+        self.lockout_until = None;
+    }
+}
+
+/// Rate limiter for wallet unlock attempts.
+///
+/// Tracks failed attempts per wallet path and applies exponential backoff
+/// to prevent brute-force password attacks.
+struct UnlockRateLimiter {
+    /// Per-wallet-path unlock attempt tracking
+    states: HashMap<PathBuf, UnlockAttemptState>,
+}
+
+impl Default for UnlockRateLimiter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl UnlockRateLimiter {
+    fn new() -> Self {
+        Self {
+            states: HashMap::new(),
+        }
+    }
+
+    /// Check if unlock is allowed for the given wallet path.
+    /// Returns Ok(()) if allowed, Err with message and remaining lockout time if not.
+    fn check_allowed(&self, path: &PathBuf) -> Result<(), (String, u64)> {
+        if let Some(state) = self.states.get(path) {
+            if state.is_locked_out() {
+                let remaining = state.lockout_remaining_secs();
+                return Err((
+                    format!(
+                        "Too many failed attempts. Please wait {} seconds before trying again.",
+                        remaining
+                    ),
+                    remaining,
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Record a failed unlock attempt for the given wallet path
+    fn record_failure(&mut self, path: PathBuf) {
+        let state = self.states.entry(path).or_default();
+        state.record_failure();
+    }
+
+    /// Record a successful unlock for the given wallet path
+    fn record_success(&mut self, path: PathBuf) {
+        let state = self.states.entry(path).or_default();
+        state.record_success();
+    }
+
+    /// Get current lockout info for a path (failed attempts, remaining lockout)
+    fn get_lockout_info(&self, path: &PathBuf) -> (u32, u64) {
+        if let Some(state) = self.states.get(path) {
+            (state.failed_attempts, state.lockout_remaining_secs())
+        } else {
+            (0, 0)
+        }
+    }
+}
+
 /// Wallet state managed by Tauri
 pub struct WalletCommands {
     /// Cached UTXOs from last sync
@@ -74,6 +273,10 @@ pub struct WalletCommands {
     sync_height: Arc<Mutex<u64>>,
     /// Active wallet session (unlocked keys held in Rust memory only)
     session: Arc<Mutex<Option<WalletSession>>>,
+    /// Pending wallet for secure creation flow (mnemonic generated in Rust)
+    pending_wallet: Arc<Mutex<Option<PendingWallet>>>,
+    /// Rate limiter for unlock attempts (brute-force protection)
+    unlock_rate_limiter: Arc<Mutex<UnlockRateLimiter>>,
 }
 
 impl WalletCommands {
@@ -82,6 +285,8 @@ impl WalletCommands {
             utxos: Arc::new(Mutex::new(Vec::new())),
             sync_height: Arc::new(Mutex::new(0)),
             session: Arc::new(Mutex::new(None)),
+            pending_wallet: Arc::new(Mutex::new(None)),
+            unlock_rate_limiter: Arc::new(Mutex::new(UnlockRateLimiter::new())),
         }
     }
 
@@ -511,6 +716,10 @@ pub struct UnlockWalletResult {
     pub has_timeout: bool,
     /// Timeout duration in minutes
     pub timeout_mins: u64,
+    /// Number of failed unlock attempts (for UI feedback)
+    pub failed_attempts: u32,
+    /// Seconds until lockout expires (0 if not locked out)
+    pub lockout_remaining_secs: u64,
     pub error: Option<String>,
 }
 
@@ -529,40 +738,76 @@ pub struct SessionStatusResult {
 ///
 /// Decrypts the wallet file and caches the keys in Rust memory.
 /// The mnemonic NEVER leaves Rust - only the public address is returned.
+///
+/// SECURITY: Rate-limited with exponential backoff to prevent brute-force attacks.
+/// After each failed attempt, the lockout duration doubles (1s, 2s, 4s, ... up to 5min).
 #[tauri::command]
 pub async fn unlock_wallet(
     state: State<'_, WalletCommands>,
     params: UnlockWalletParams,
 ) -> Result<UnlockWalletResult, String> {
-    match unlock_wallet_internal(&state, params).await {
-        Ok(result) => Ok(result),
-        Err(e) => Ok(UnlockWalletResult {
-            success: false,
-            address: None,
-            has_timeout: true,
-            timeout_mins: SESSION_TIMEOUT_MINS,
-            error: Some(e.to_string()),
-        }),
+    // Determine path first for rate limiting
+    let path = match &params.path {
+        Some(p) => PathBuf::from(p),
+        None => get_default_wallet_path().map_err(|e| e.to_string())?,
+    };
+
+    // Check rate limit BEFORE attempting unlock
+    {
+        let rate_limiter = state.unlock_rate_limiter.lock().await;
+        if let Err((msg, remaining)) = rate_limiter.check_allowed(&path) {
+            let (failed_attempts, _) = rate_limiter.get_lockout_info(&path);
+            return Ok(UnlockWalletResult {
+                success: false,
+                address: None,
+                has_timeout: true,
+                timeout_mins: SESSION_TIMEOUT_MINS,
+                failed_attempts,
+                lockout_remaining_secs: remaining,
+                error: Some(msg),
+            });
+        }
+    }
+
+    // Attempt unlock
+    match unlock_wallet_internal(&state, params, &path).await {
+        Ok(result) => {
+            // Success - reset rate limiter
+            let mut rate_limiter = state.unlock_rate_limiter.lock().await;
+            rate_limiter.record_success(path);
+            Ok(result)
+        }
+        Err(e) => {
+            // Failure - record in rate limiter
+            let mut rate_limiter = state.unlock_rate_limiter.lock().await;
+            rate_limiter.record_failure(path.clone());
+            let (failed_attempts, lockout_remaining) = rate_limiter.get_lockout_info(&path);
+
+            Ok(UnlockWalletResult {
+                success: false,
+                address: None,
+                has_timeout: true,
+                timeout_mins: SESSION_TIMEOUT_MINS,
+                failed_attempts,
+                lockout_remaining_secs: lockout_remaining,
+                error: Some(e.to_string()),
+            })
+        }
     }
 }
 
 async fn unlock_wallet_internal(
     state: &State<'_, WalletCommands>,
     params: UnlockWalletParams,
+    path: &PathBuf,
 ) -> Result<UnlockWalletResult> {
-    // Determine path
-    let path = match params.path {
-        Some(p) => PathBuf::from(p),
-        None => get_default_wallet_path()?,
-    };
-
     // Check if file exists
     if !path.exists() {
         return Err(anyhow!("Wallet file not found: {}", path.display()));
     }
 
     // Load and decrypt
-    let wallet = EncryptedWallet::load(&path)
+    let wallet = EncryptedWallet::load(path)
         .map_err(|e| anyhow!("Failed to load wallet file: {}", e))?;
 
     let mnemonic = wallet.decrypt(&params.password)
@@ -589,6 +834,8 @@ async fn unlock_wallet_internal(
         address: Some(address),
         has_timeout: true,
         timeout_mins: SESSION_TIMEOUT_MINS,
+        failed_attempts: 0,
+        lockout_remaining_secs: 0,
         error: None,
     })
 }
@@ -653,17 +900,89 @@ pub async fn get_session_status(
 }
 
 // ============================================================================
-// Wallet File Operations (for initial wallet creation only)
+// Secure Wallet Creation (mnemonic generated in Rust, never received from JS)
 // ============================================================================
 
-/// Parameters for saving a new wallet to file (initial creation only)
+/// Result of generating a new mnemonic
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GenerateMnemonicResult {
+    pub success: bool,
+    /// The 24 mnemonic words (displayed to user, not stored in JS)
+    pub words: Option<Vec<String>>,
+    /// 1-indexed word positions user must verify (e.g., [4, 8, 12])
+    pub verify_positions: Option<Vec<usize>>,
+    /// Expiry time in seconds
+    pub expires_in_secs: Option<u64>,
+    pub error: Option<String>,
+}
+
+/// Generate a new wallet mnemonic in Rust and cache it for confirmation.
+///
+/// SECURITY: Mnemonic is generated in Rust and only sent to JS for display.
+/// The mnemonic is NEVER accepted back from JS - instead, user provides
+/// specific words at random positions to prove they wrote it down.
+#[tauri::command]
+pub async fn generate_mnemonic(
+    state: State<'_, WalletCommands>,
+) -> Result<GenerateMnemonicResult, String> {
+    match generate_mnemonic_internal(&state).await {
+        Ok(result) => Ok(result),
+        Err(e) => Ok(GenerateMnemonicResult {
+            success: false,
+            words: None,
+            verify_positions: None,
+            expires_in_secs: None,
+            error: Some(e.to_string()),
+        }),
+    }
+}
+
+async fn generate_mnemonic_internal(
+    state: &State<'_, WalletCommands>,
+) -> Result<GenerateMnemonicResult> {
+    // Generate new wallet keys with random mnemonic
+    let keys = WalletKeys::generate()
+        .map_err(|e| anyhow!("Failed to generate mnemonic: {}", e))?;
+
+    // Get words before caching
+    let words: Vec<String> = keys.mnemonic_words()
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+
+    // Create pending wallet with random verification indices
+    let pending = PendingWallet::new(keys);
+
+    // Convert 0-indexed to 1-indexed for user display
+    let verify_positions: Vec<usize> = pending.verify_indices
+        .iter()
+        .map(|i| i + 1)
+        .collect();
+
+    // Cache the pending wallet
+    *state.pending_wallet.lock().await = Some(pending);
+
+    log::info!("New mnemonic generated, awaiting confirmation");
+
+    Ok(GenerateMnemonicResult {
+        success: true,
+        words: Some(words),
+        verify_positions: Some(verify_positions),
+        expires_in_secs: Some(PENDING_WALLET_TIMEOUT_SECS),
+        error: None,
+    })
+}
+
+/// Parameters for confirming a new wallet (after mnemonic was generated)
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CreateWalletParams {
-    /// 24-word BIP39 mnemonic phrase (only used for initial creation)
-    pub mnemonic: String,
+pub struct ConfirmNewWalletParams {
     /// Password to encrypt the wallet
     pub password: String,
+    /// Verification words at the positions returned by generate_mnemonic
+    /// Must match exactly (case-insensitive)
+    pub verify_words: Vec<String>,
     /// Optional path to save wallet file (uses default if not provided)
     pub path: Option<String>,
 }
@@ -680,17 +999,17 @@ pub struct CreateWalletResult {
     pub error: Option<String>,
 }
 
-/// Create and save a new wallet file, then unlock it
+/// Confirm and create a new wallet using the cached mnemonic.
 ///
-/// This is the ONLY command that accepts a mnemonic from JS,
-/// and only for initial wallet creation. After creation, the wallet
-/// is automatically unlocked using the session-based approach.
+/// SECURITY: The mnemonic is NEVER sent from JS to Rust. Instead,
+/// we use the mnemonic cached in Rust from generate_mnemonic() call.
+/// User proves they saved the mnemonic by providing specific words.
 #[tauri::command]
-pub async fn create_wallet(
+pub async fn confirm_new_wallet(
     state: State<'_, WalletCommands>,
-    params: CreateWalletParams,
+    params: ConfirmNewWalletParams,
 ) -> Result<CreateWalletResult, String> {
-    match create_wallet_internal(&state, params).await {
+    match confirm_new_wallet_internal(&state, params).await {
         Ok(result) => Ok(result),
         Err(e) => Ok(CreateWalletResult {
             success: false,
@@ -701,9 +1020,140 @@ pub async fn create_wallet(
     }
 }
 
-async fn create_wallet_internal(
+async fn confirm_new_wallet_internal(
     state: &State<'_, WalletCommands>,
-    params: CreateWalletParams,
+    params: ConfirmNewWalletParams,
+) -> Result<CreateWalletResult> {
+    // Get and validate pending wallet
+    let mut pending_guard = state.pending_wallet.lock().await;
+
+    let pending = pending_guard.take()
+        .ok_or_else(|| anyhow!("No pending wallet. Please call generate_mnemonic first."))?;
+
+    if pending.is_expired() {
+        return Err(anyhow!("Wallet creation timed out. Please generate a new mnemonic."));
+    }
+
+    // Verify the words at the specified positions
+    if params.verify_words.len() != 3 {
+        // Put pending back so user can retry
+        *pending_guard = Some(pending);
+        return Err(anyhow!("Expected 3 verification words"));
+    }
+
+    // Clone verify_indices to avoid borrow issues when putting pending back
+    let verify_indices = pending.verify_indices;
+    let mnemonic_words = pending.keys.mnemonic_words();
+
+    for (i, word_idx) in verify_indices.iter().enumerate() {
+        let expected = mnemonic_words[*word_idx].to_lowercase();
+        let provided = params.verify_words[i].to_lowercase().trim().to_string();
+
+        if expected != provided {
+            // Put pending back so user can retry
+            *pending_guard = Some(pending);
+            return Err(anyhow!(
+                "Word {} is incorrect. Please check your backup.",
+                word_idx + 1
+            ));
+        }
+    }
+
+    // Verification passed! Create the wallet
+    let keys = pending.keys;
+
+    // Determine path
+    let path = match params.path {
+        Some(p) => PathBuf::from(p),
+        None => get_default_wallet_path()?,
+    };
+
+    // Create parent directory if needed
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| anyhow!("Failed to create wallet directory: {}", e))?;
+    }
+
+    // Create encrypted wallet using the mnemonic phrase
+    let wallet = EncryptedWallet::encrypt(keys.mnemonic_phrase(), &params.password)
+        .map_err(|e| anyhow!("Failed to encrypt wallet: {}", e))?;
+
+    // Save to file
+    wallet.save(&path)
+        .map_err(|e| anyhow!("Failed to save wallet file: {}", e))?;
+
+    // Get address before moving keys into session
+    let address = keys.address_string();
+
+    // Auto-unlock after creation
+    let session = WalletSession::new(keys, Some(path.clone()));
+    *state.session.lock().await = Some(session);
+
+    log::info!("New wallet created at {} and unlocked (secure flow)", path.display());
+
+    Ok(CreateWalletResult {
+        success: true,
+        path: Some(path.to_string_lossy().to_string()),
+        address: Some(address),
+        error: None,
+    })
+}
+
+/// Cancel pending wallet creation
+#[tauri::command]
+pub async fn cancel_pending_wallet(
+    state: State<'_, WalletCommands>,
+) -> Result<bool, String> {
+    let mut pending_guard = state.pending_wallet.lock().await;
+    if pending_guard.is_some() {
+        *pending_guard = None;
+        log::info!("Pending wallet creation cancelled");
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+// ============================================================================
+// Wallet Import (for restoring existing wallets - mnemonic must come from JS)
+// ============================================================================
+
+/// Parameters for importing an existing wallet
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportWalletParams {
+    /// 24-word BIP39 mnemonic phrase from user input
+    pub mnemonic: String,
+    /// Password to encrypt the wallet
+    pub password: String,
+    /// Optional path to save wallet file (uses default if not provided)
+    pub path: Option<String>,
+}
+
+/// Import an existing wallet from a mnemonic phrase.
+///
+/// SECURITY NOTE: This command accepts mnemonic from JS because there's no
+/// alternative for wallet restoration - the user MUST provide their existing
+/// mnemonic. For NEW wallets, use generate_mnemonic + confirm_new_wallet instead.
+#[tauri::command]
+pub async fn import_wallet(
+    state: State<'_, WalletCommands>,
+    params: ImportWalletParams,
+) -> Result<CreateWalletResult, String> {
+    match import_wallet_internal(&state, params).await {
+        Ok(result) => Ok(result),
+        Err(e) => Ok(CreateWalletResult {
+            success: false,
+            path: None,
+            address: None,
+            error: Some(e.to_string()),
+        }),
+    }
+}
+
+async fn import_wallet_internal(
+    state: &State<'_, WalletCommands>,
+    params: ImportWalletParams,
 ) -> Result<CreateWalletResult> {
     // Validate mnemonic and derive keys
     let keys = WalletKeys::from_mnemonic(&params.mnemonic)
@@ -714,6 +1164,12 @@ async fn create_wallet_internal(
         Some(p) => PathBuf::from(p),
         None => get_default_wallet_path()?,
     };
+
+    // Create parent directory if needed
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| anyhow!("Failed to create wallet directory: {}", e))?;
+    }
 
     // Create encrypted wallet
     let wallet = EncryptedWallet::encrypt(&params.mnemonic, &params.password)
@@ -726,11 +1182,11 @@ async fn create_wallet_internal(
     // Get address before moving keys
     let address = keys.address_string();
 
-    // Auto-unlock after creation
+    // Auto-unlock after import
     let session = WalletSession::new(keys, Some(path.clone()));
     *state.session.lock().await = Some(session);
 
-    log::info!("Wallet created at {} and unlocked", path.display());
+    log::info!("Wallet imported to {} and unlocked", path.display());
 
     Ok(CreateWalletResult {
         success: true,
@@ -808,5 +1264,103 @@ mod tests {
         let result = parse_recipient_address("bth1abcdef1234567890");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not yet supported"));
+    }
+
+    // ========================================================================
+    // Unlock Rate Limiter Tests
+    // ========================================================================
+
+    #[test]
+    fn test_unlock_rate_limiter_allows_first_attempt() {
+        let rate_limiter = UnlockRateLimiter::new();
+        let path = PathBuf::from("/test/wallet.dat");
+
+        assert!(rate_limiter.check_allowed(&path).is_ok());
+    }
+
+    #[test]
+    fn test_unlock_rate_limiter_exponential_backoff() {
+        let mut state = UnlockAttemptState::default();
+
+        // First failure: 1 second lockout (2^0 = 1)
+        state.record_failure();
+        assert_eq!(state.failed_attempts, 1);
+        assert_eq!(state.calculate_lockout().as_secs(), 1);
+        assert!(state.is_locked_out()); // Should be locked out
+
+        // Simulate time passing by resetting lockout_until
+        state.lockout_until = None;
+
+        // Second failure: 2 seconds lockout (2^1 = 2)
+        state.record_failure();
+        assert_eq!(state.failed_attempts, 2);
+        assert_eq!(state.calculate_lockout().as_secs(), 2);
+
+        // Reset lockout
+        state.lockout_until = None;
+
+        // Third failure: 4 seconds lockout (2^2 = 4)
+        state.record_failure();
+        assert_eq!(state.failed_attempts, 3);
+        assert_eq!(state.calculate_lockout().as_secs(), 4);
+
+        // Fourth failure: 8 seconds (2^3 = 8)
+        state.lockout_until = None;
+        state.record_failure();
+        assert_eq!(state.failed_attempts, 4);
+        assert_eq!(state.calculate_lockout().as_secs(), 8);
+    }
+
+    #[test]
+    fn test_unlock_rate_limiter_success_resets() {
+        let mut rate_limiter = UnlockRateLimiter::new();
+        let path = PathBuf::from("/test/wallet.dat");
+
+        // Record some failures
+        rate_limiter.record_failure(path.clone());
+        rate_limiter.record_failure(path.clone());
+        rate_limiter.record_failure(path.clone());
+
+        let (failed_attempts, _) = rate_limiter.get_lockout_info(&path);
+        assert_eq!(failed_attempts, 3);
+
+        // Success should reset
+        rate_limiter.record_success(path.clone());
+        let (failed_attempts, _) = rate_limiter.get_lockout_info(&path);
+        assert_eq!(failed_attempts, 0);
+    }
+
+    #[test]
+    fn test_unlock_rate_limiter_max_lockout() {
+        let mut state = UnlockAttemptState::default();
+
+        // Simulate many failures - should cap at MAX_LOCKOUT_SECS
+        for _ in 0..15 {
+            state.lockout_until = None; // Clear lockout to allow more failures
+            state.record_failure();
+        }
+
+        // Lockout should be capped at MAX_LOCKOUT_SECS (300s)
+        let lockout = state.calculate_lockout();
+        assert!(lockout.as_secs() <= MAX_LOCKOUT_SECS);
+    }
+
+    #[test]
+    fn test_unlock_rate_limiter_per_path_tracking() {
+        let mut rate_limiter = UnlockRateLimiter::new();
+        let path1 = PathBuf::from("/test/wallet1.dat");
+        let path2 = PathBuf::from("/test/wallet2.dat");
+
+        // Failures on path1 shouldn't affect path2
+        rate_limiter.record_failure(path1.clone());
+        rate_limiter.record_failure(path1.clone());
+        rate_limiter.record_failure(path1.clone());
+
+        let (attempts1, _) = rate_limiter.get_lockout_info(&path1);
+        let (attempts2, _) = rate_limiter.get_lockout_info(&path2);
+
+        assert_eq!(attempts1, 3);
+        assert_eq!(attempts2, 0);
+        assert!(rate_limiter.check_allowed(&path2).is_ok());
     }
 }

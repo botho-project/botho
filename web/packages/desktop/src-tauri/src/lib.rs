@@ -24,11 +24,16 @@ pub fn run() {
         })
         .manage(WalletCommands::new())
         .invoke_handler(tauri::generate_handler![
-            // Session-based commands (recommended)
+            // Session-based commands
             wallet::unlock_wallet,
             wallet::lock_wallet,
             wallet::get_session_status,
-            wallet::create_wallet,
+            // Secure wallet creation (mnemonic generated in Rust)
+            wallet::generate_mnemonic,
+            wallet::confirm_new_wallet,
+            wallet::cancel_pending_wallet,
+            // Wallet import (mnemonic from JS - for restore only)
+            wallet::import_wallet,
             // Transaction commands (use session, no mnemonic)
             wallet::send_transaction,
             wallet::sync_wallet,
