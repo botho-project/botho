@@ -2,7 +2,6 @@ use anyhow::Result;
 use bip39::{Language, Mnemonic, Seed};
 use bth_account_keys::{AccountKey, PublicAddress};
 use bth_core::slip10::Slip10KeyGenerator;
-use bth_crypto_keys::RistrettoSignature;
 use bth_transaction_types::{ClusterTagVector, TAG_WEIGHT_SCALE};
 use rand::rngs::OsRng;
 use rand::seq::SliceRandom;

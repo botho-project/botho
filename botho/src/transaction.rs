@@ -72,7 +72,7 @@ use bth_crypto_ring_signature::{
 };
 use bth_crypto_lion::{
     self as lion,
-    LionKeyImage, LionKeyPair, LionPublicKey, LionSecretKey, LionRingSignature,
+    LionPublicKey, LionSecretKey, LionRingSignature,
 };
 use bth_util_from_random::FromRandom;
 use ctr::Ctr64BE;

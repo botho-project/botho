@@ -43,7 +43,7 @@ use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use lazy_static::lazy_static;
 use prometheus::{
-    Counter, CounterVec, Encoder, Gauge, Histogram, HistogramOpts, IntCounter, IntGauge, Opts,
+    CounterVec, Encoder, Gauge, Histogram, HistogramOpts, IntCounter, IntGauge, Opts,
     Registry, TextEncoder,
 };
 #[cfg(all(feature = "process", target_os = "linux"))]

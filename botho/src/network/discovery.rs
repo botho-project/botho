@@ -374,13 +374,13 @@ impl NetworkDiscovery {
                     .validation_mode(gossipsub::ValidationMode::Strict)
                     .max_transmit_size(MAX_BLOCK_SIZE)
                     .build()
-                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+                    .map_err(std::io::Error::other)?;
 
                 let gossipsub = gossipsub::Behaviour::new(
                     MessageAuthenticity::Signed(key.clone()),
                     gossipsub_config,
                 )
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+                .map_err(std::io::Error::other)?;
 
                 // Create sync request-response behaviour
                 let sync = create_sync_behaviour();

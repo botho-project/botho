@@ -4,7 +4,7 @@
 //! messages.
 use crate::{msg::Msg, slot::SlotMetrics, QuorumSet, ScpNode, SlotIndex, Value};
 use bth_common::{
-    logger::{log, Logger, LoggerExt},
+    logger::{log, Logger},
     NodeID,
 };
 use serde::{Deserialize, Serialize};

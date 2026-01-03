@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use bth_transaction_types::constants::Network;
 use std::path::Path;
 
 use crate::address::{format_classical_address, Address};

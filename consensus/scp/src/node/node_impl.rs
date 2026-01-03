@@ -8,7 +8,7 @@ use crate::{
     QuorumSet, ScpNode, SlotIndex, Value,
 };
 use bth_common::{
-    logger::{log, Logger, LoggerExt},
+    logger::{log, Logger},
     HashMap, NodeID,
 };
 use std::{collections::BTreeSet, fmt::Display, mem, time::Duration};

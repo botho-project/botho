@@ -20,7 +20,7 @@ use crate::config::{Config, QuorumMode};
 use crate::consensus::{BlockBuilder, ConsensusConfig, ConsensusEvent, ConsensusService, TransactionValidator};
 use crate::network::{
     BlockTxn, CompactBlock, GetBlockTxn, NetworkDiscovery, NetworkEvent, QuorumBuilder,
-    ReconstructionResult, UpgradeAnnouncement,
+    ReconstructionResult,
 };
 use crate::node::{MintedMintingTx, Node};
 use crate::rpc::{init_metrics, start_metrics_server, start_rpc_server, MetricsUpdater, RpcState, WsBroadcaster, calculate_dir_size, DATA_DIR_USAGE_BYTES};

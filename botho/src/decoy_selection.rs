@@ -37,7 +37,6 @@ use rand_distr::{Distribution, Gamma};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::transaction::{TxOutput, Utxo};
-use bth_transaction_types::ClusterTagVector;
 
 // ============================================================================
 // Cluster Tag Types (simplified for decoy selection)

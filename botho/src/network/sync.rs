@@ -109,7 +109,7 @@ impl SyncRateLimiter {
         let now = Instant::now();
         let window_start = now - self.window;
 
-        let requests = self.peer_requests.entry(*peer).or_insert_with(Vec::new);
+        let requests = self.peer_requests.entry(*peer).or_default();
 
         // Remove old requests outside the window
         requests.retain(|&t| t > window_start);

@@ -1,5 +1,4 @@
 use bth_account_keys::PublicAddress;
-use bth_crypto_keys::RistrettoPublic;
 use bth_transaction_types::{Network, TAG_WEIGHT_SCALE};
 use heed::types::{Bytes, U64};
 use heed::{Database, Env, EnvOpenOptions, RwTxn};

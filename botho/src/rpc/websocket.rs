@@ -354,7 +354,7 @@ pub async fn handle_websocket(upgraded: Upgraded, broadcaster: Arc<WsBroadcaster
                                     })
                                     .collect();
                                 let response = ServerMessage::Subscribed { events: subscribed };
-                                if let Err(e) = ws_sender.send(Message::Text(serde_json::to_string(&response).unwrap().into())).await {
+                                if let Err(e) = ws_sender.send(Message::Text(serde_json::to_string(&response).unwrap())).await {
                                     error!("Failed to send subscription confirmation: {}", e);
                                     break;
                                 }
@@ -366,7 +366,7 @@ pub async fn handle_websocket(upgraded: Upgraded, broadcaster: Arc<WsBroadcaster
                             }
                             Ok(ClientMessage::Ping) => {
                                 let response = ServerMessage::Pong;
-                                if let Err(e) = ws_sender.send(Message::Text(serde_json::to_string(&response).unwrap().into())).await {
+                                if let Err(e) = ws_sender.send(Message::Text(serde_json::to_string(&response).unwrap())).await {
                                     error!("Failed to send pong: {}", e);
                                     break;
                                 }
@@ -374,7 +374,7 @@ pub async fn handle_websocket(upgraded: Upgraded, broadcaster: Arc<WsBroadcaster
                             Err(e) => {
                                 warn!("Invalid client message: {}", e);
                                 let response = ServerMessage::Error { message: format!("Invalid message: {}", e) };
-                                if let Err(e) = ws_sender.send(Message::Text(serde_json::to_string(&response).unwrap().into())).await {
+                                if let Err(e) = ws_sender.send(Message::Text(serde_json::to_string(&response).unwrap())).await {
                                     error!("Failed to send error: {}", e);
                                     break;
                                 }
@@ -413,7 +413,7 @@ pub async fn handle_websocket(upgraded: Upgraded, broadcaster: Arc<WsBroadcaster
                         if subscription.is_subscribed(event.event_type()) {
                             let message = ServerMessage::Event { event: &event };
                             if let Ok(json) = serde_json::to_string(&message) {
-                                if let Err(e) = ws_sender.send(Message::Text(json.into())).await {
+                                if let Err(e) = ws_sender.send(Message::Text(json)).await {
                                     error!("Failed to send event: {}", e);
                                     break;
                                 }
