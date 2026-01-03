@@ -20,6 +20,7 @@ mod common;
 use std::{collections::HashMap, thread, time::Duration};
 
 use bth_account_keys::PublicAddress;
+use serial_test::serial;
 use bth_cluster_tax::{FeeConfig, TransactionType, TAG_WEIGHT_SCALE};
 use bth_transaction_types::{ClusterId, ClusterTagVector};
 use rand::{rngs::OsRng, seq::SliceRandom};
@@ -215,6 +216,7 @@ fn create_signed_transaction_with_tags(
 /// Verifies that the progressive fee system correctly applies higher
 /// cluster factors to transactions from wealthy clusters.
 #[test]
+#[serial]
 fn test_cluster_factor_wealthy_pay_more() {
     println!("\n=== Cluster Factor Test: Wealthy Pay More ===\n");
 
@@ -294,6 +296,7 @@ fn test_cluster_factor_wealthy_pay_more() {
 /// Verifies that the mempool correctly rejects transactions that don't
 /// pay the minimum required fee.
 #[test]
+#[serial]
 fn test_fee_rejection_below_minimum() {
     println!("\n=== Fee Rejection Test: Below Minimum ===\n");
 
@@ -394,6 +397,7 @@ fn test_fee_rejection_below_minimum() {
 
 /// Test 3: Fee Rejection with Cluster Wealth (Unit Test Style)
 #[test]
+#[serial]
 fn test_fee_rejection_wealthy_sender() {
     println!("\n=== Fee Rejection Test: Wealthy Sender ===\n");
 
@@ -497,6 +501,7 @@ fn test_fee_rejection_wealthy_sender() {
 
 /// Test 4: Minted coins create new clusters
 #[test]
+#[serial]
 fn test_minted_coins_create_clusters() {
     println!("\n=== Minted Coins Create Clusters Test ===\n");
 
@@ -562,6 +567,7 @@ fn test_minted_coins_create_clusters() {
 
 /// Test 5: Dynamic fee increases under congestion
 #[test]
+#[serial]
 fn test_dynamic_fee_congestion() {
     println!("\n=== Dynamic Fee Congestion Test ===\n");
 
@@ -641,6 +647,7 @@ fn test_dynamic_fee_congestion() {
 
 /// Test 6: Size-based fee scaling
 #[test]
+#[serial]
 fn test_size_based_fee_scaling() {
     println!("\n=== Size-Based Fee Scaling Test ===\n");
 
@@ -700,6 +707,7 @@ fn test_size_based_fee_scaling() {
 
 /// Test 7: Memo fees add to base fee
 #[test]
+#[serial]
 fn test_memo_fees() {
     println!("\n=== Memo Fees Test ===\n");
 
@@ -745,6 +753,7 @@ fn test_memo_fees() {
 
 /// Test 8: Combined cluster and congestion effects
 #[test]
+#[serial]
 fn test_combined_cluster_and_congestion() {
     println!("\n=== Combined Cluster and Congestion Test ===\n");
 
@@ -828,6 +837,7 @@ fn test_combined_cluster_and_congestion() {
 
 /// Test 9: End-to-end progressive fee with real transaction
 #[test]
+#[serial]
 fn test_e2e_progressive_fee_enforcement() {
     println!("\n=== E2E Progressive Fee Enforcement Test ===\n");
 

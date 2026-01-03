@@ -21,6 +21,7 @@
 
 use std::time::SystemTime;
 
+use serial_test::serial;
 use tempfile::TempDir;
 
 use bth_account_keys::PublicAddress;
@@ -346,6 +347,7 @@ fn create_signed_transaction(
 // ============================================================================
 
 #[test]
+#[serial]
 fn test_basic_tx_lifecycle_utxo_creation_and_consumption() {
     let (_temp_dir, ledger) = create_test_ledger();
     let miner_wallet = create_wallet(1);
@@ -411,6 +413,7 @@ fn test_basic_tx_lifecycle_utxo_creation_and_consumption() {
 }
 
 #[test]
+#[serial]
 fn test_tx_lifecycle_fee_burning() {
     let (_temp_dir, ledger) = create_test_ledger();
     let miner_wallet = create_wallet(1);
@@ -487,6 +490,7 @@ fn test_tx_lifecycle_fee_burning() {
 // ============================================================================
 
 #[test]
+#[serial]
 fn test_mempool_add_and_clear_on_block() {
     let (_temp_dir, ledger) = create_test_ledger();
     let mut mempool = Mempool::new();
@@ -536,6 +540,7 @@ fn test_mempool_add_and_clear_on_block() {
 }
 
 #[test]
+#[serial]
 fn test_mempool_rejects_double_spend() {
     let (_temp_dir, ledger) = create_test_ledger();
     let mut mempool = Mempool::new();
@@ -592,6 +597,7 @@ fn test_mempool_rejects_double_spend() {
 }
 
 #[test]
+#[serial]
 fn test_mempool_rejects_insufficient_fee() {
     let (_temp_dir, ledger) = create_test_ledger();
     let mut mempool = Mempool::new();
@@ -638,6 +644,7 @@ fn test_mempool_rejects_insufficient_fee() {
 }
 
 #[test]
+#[serial]
 fn test_mempool_remove_invalid_after_block() {
     let (_temp_dir, ledger) = create_test_ledger();
     let mut mempool = Mempool::new();
@@ -721,6 +728,7 @@ fn test_mempool_remove_invalid_after_block() {
 // ============================================================================
 
 #[test]
+#[serial]
 fn test_chained_transactions_in_sequence() {
     let (_temp_dir, ledger) = create_test_ledger();
     let wallet_a = create_wallet(1);
@@ -784,6 +792,7 @@ fn test_chained_transactions_in_sequence() {
 }
 
 #[test]
+#[serial]
 fn test_multiple_transactions_in_single_block() {
     let (_temp_dir, ledger) = create_test_ledger();
     let miner = create_wallet(1);
@@ -857,6 +866,7 @@ fn test_multiple_transactions_in_single_block() {
 // ============================================================================
 
 #[test]
+#[serial]
 fn test_utxo_set_consistency_after_transactions() {
     let (_temp_dir, ledger) = create_test_ledger();
     let miner = create_wallet(1);
@@ -915,6 +925,7 @@ fn test_utxo_set_consistency_after_transactions() {
 }
 
 #[test]
+#[serial]
 fn test_transaction_index_lookup() {
     let (_temp_dir, ledger) = create_test_ledger();
     let miner = create_wallet(1);
@@ -963,6 +974,7 @@ fn test_transaction_index_lookup() {
 // ============================================================================
 
 #[test]
+#[serial]
 fn test_exact_amount_spend_no_change() {
     let (_temp_dir, ledger) = create_test_ledger();
     let miner = create_wallet(1);
@@ -1005,6 +1017,7 @@ fn test_exact_amount_spend_no_change() {
 }
 
 #[test]
+#[serial]
 fn test_mempool_already_exists_rejection() {
     let (_temp_dir, ledger) = create_test_ledger();
     let mut mempool = Mempool::new();
@@ -1045,6 +1058,7 @@ fn test_mempool_already_exists_rejection() {
 }
 
 #[test]
+#[serial]
 fn test_mempool_transactions_sorted_by_fee() {
     let (_temp_dir, ledger) = create_test_ledger();
     let mut mempool = Mempool::new();

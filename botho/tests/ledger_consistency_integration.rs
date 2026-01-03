@@ -10,12 +10,12 @@
 //! - Reorg handling (block reorganization)
 
 use std::{
-    collections::HashSet,
     sync::{Arc, RwLock},
     thread,
     time::{Duration, SystemTime},
 };
 
+use serial_test::serial;
 use tempfile::TempDir;
 
 use bth_account_keys::PublicAddress;
@@ -124,6 +124,7 @@ fn mine_block(ledger: &Ledger, minter_address: &PublicAddress, transactions: Vec
 // ============================================================================
 
 #[test]
+#[serial]
 fn test_ledger_genesis_consistency() {
     let temp_dir = TempDir::new().unwrap();
     let ledger = Ledger::open(temp_dir.path()).unwrap();
@@ -140,6 +141,7 @@ fn test_ledger_genesis_consistency() {
 }
 
 #[test]
+#[serial]
 fn test_ledger_sequential_block_addition() {
     let temp_dir = TempDir::new().unwrap();
     let mut ledger = Ledger::open(temp_dir.path()).unwrap();
@@ -161,6 +163,7 @@ fn test_ledger_sequential_block_addition() {
 }
 
 #[test]
+#[serial]
 fn test_ledger_utxo_creation_from_minting() {
     let temp_dir = TempDir::new().unwrap();
     let mut ledger = Ledger::open(temp_dir.path()).unwrap();
@@ -182,6 +185,7 @@ fn test_ledger_utxo_creation_from_minting() {
 }
 
 #[test]
+#[serial]
 fn test_ledger_total_mined_tracking() {
     let temp_dir = TempDir::new().unwrap();
     let mut ledger = Ledger::open(temp_dir.path()).unwrap();
@@ -207,6 +211,7 @@ fn test_ledger_total_mined_tracking() {
 // ============================================================================
 
 #[test]
+#[serial]
 fn test_concurrent_reads() {
     let temp_dir = TempDir::new().unwrap();
     let mut ledger = Ledger::open(temp_dir.path()).unwrap();
@@ -247,6 +252,7 @@ fn test_concurrent_reads() {
 }
 
 #[test]
+#[serial]
 fn test_concurrent_read_write() {
     let temp_dir = TempDir::new().unwrap();
     let ledger = Ledger::open(temp_dir.path()).unwrap();
@@ -302,6 +308,7 @@ fn test_concurrent_read_write() {
 // ============================================================================
 
 #[test]
+#[serial]
 fn test_block_height_index_integrity() {
     let temp_dir = TempDir::new().unwrap();
     let mut ledger = Ledger::open(temp_dir.path()).unwrap();
@@ -335,6 +342,7 @@ fn test_block_height_index_integrity() {
 }
 
 #[test]
+#[serial]
 fn test_utxo_index_integrity() {
     let temp_dir = TempDir::new().unwrap();
     let mut ledger = Ledger::open(temp_dir.path()).unwrap();
@@ -360,6 +368,7 @@ fn test_utxo_index_integrity() {
 }
 
 #[test]
+#[serial]
 fn test_chain_state_consistency_after_multiple_blocks() {
     let temp_dir = TempDir::new().unwrap();
     let mut ledger = Ledger::open(temp_dir.path()).unwrap();
@@ -394,6 +403,7 @@ fn test_chain_state_consistency_after_multiple_blocks() {
 // ============================================================================
 
 #[test]
+#[serial]
 fn test_block_with_many_transactions() {
     let temp_dir = TempDir::new().unwrap();
     let mut ledger = Ledger::open(temp_dir.path()).unwrap();
@@ -423,6 +433,7 @@ fn test_block_with_many_transactions() {
 // ============================================================================
 
 #[test]
+#[serial]
 fn test_get_nonexistent_block() {
     let temp_dir = TempDir::new().unwrap();
     let ledger = Ledger::open(temp_dir.path()).unwrap();
@@ -433,6 +444,7 @@ fn test_get_nonexistent_block() {
 }
 
 #[test]
+#[serial]
 fn test_get_nonexistent_utxo() {
     let temp_dir = TempDir::new().unwrap();
     let ledger = Ledger::open(temp_dir.path()).unwrap();
@@ -444,6 +456,7 @@ fn test_get_nonexistent_utxo() {
 }
 
 #[test]
+#[serial]
 fn test_block_with_wrong_parent_hash() {
     let temp_dir = TempDir::new().unwrap();
     let mut ledger = Ledger::open(temp_dir.path()).unwrap();
@@ -494,6 +507,7 @@ fn test_block_with_wrong_parent_hash() {
 }
 
 #[test]
+#[serial]
 fn test_block_with_wrong_height() {
     let temp_dir = TempDir::new().unwrap();
     let mut ledger = Ledger::open(temp_dir.path()).unwrap();
@@ -550,6 +564,7 @@ fn test_block_with_wrong_height() {
 // ============================================================================
 
 #[test]
+#[serial]
 fn test_rapid_block_addition() {
     let temp_dir = TempDir::new().unwrap();
     let mut ledger = Ledger::open(temp_dir.path()).unwrap();
@@ -575,6 +590,7 @@ fn test_rapid_block_addition() {
 }
 
 #[test]
+#[serial]
 fn test_repeated_open_close() {
     let temp_dir = TempDir::new().unwrap();
     let miner = create_test_wallet(1);
@@ -607,6 +623,7 @@ fn test_repeated_open_close() {
 // ============================================================================
 
 #[test]
+#[serial]
 fn test_block_data_integrity() {
     let temp_dir = TempDir::new().unwrap();
     let mut ledger = Ledger::open(temp_dir.path()).unwrap();
@@ -629,6 +646,7 @@ fn test_block_data_integrity() {
 }
 
 #[test]
+#[serial]
 fn test_chain_tip_tracking() {
     let temp_dir = TempDir::new().unwrap();
     let mut ledger = Ledger::open(temp_dir.path()).unwrap();
@@ -653,6 +671,7 @@ fn test_chain_tip_tracking() {
 }
 
 #[test]
+#[serial]
 fn test_multiple_miners_consistency() {
     let temp_dir = TempDir::new().unwrap();
     let mut ledger = Ledger::open(temp_dir.path()).unwrap();

@@ -20,6 +20,7 @@ mod common;
 use std::{thread, time::Duration};
 
 use bth_account_keys::PublicAddress;
+use serial_test::serial;
 
 use botho::transaction::{Utxo, MIN_TX_FEE, PICOCREDITS_PER_CREDIT};
 
@@ -39,6 +40,7 @@ use crate::common::{
 /// in the same block. Tests mempool handling and consensus under concurrent
 /// load.
 #[test]
+#[serial]
 fn test_concurrent_transfers() {
     println!("\n=== Concurrent Transfers Test ===\n");
 
@@ -153,6 +155,7 @@ fn test_concurrent_transfers() {
 /// A wallet with multiple small UTXOs consolidates them into a single
 /// larger output. Tests dust collection and multi-input transaction handling.
 #[test]
+#[serial]
 fn test_multi_input_consolidation() {
     println!("\n=== Multi-Input Consolidation Test ===\n");
 
@@ -231,6 +234,7 @@ fn test_multi_input_consolidation() {
 /// A single sender pays multiple recipients in one transaction.
 /// Tests multi-output transaction handling.
 #[test]
+#[serial]
 fn test_payment_splitting() {
     println!("\n=== Payment Splitting Test ===\n");
 

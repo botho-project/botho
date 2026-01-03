@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use reqwest::Client;
 use serde_json::{json, Value};
+use serial_test::serial;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 
@@ -102,6 +103,7 @@ async fn rpc_call(client: &Client, addr: SocketAddr, method: &str, params: Value
 // ============================================================================
 
 #[tokio::test]
+#[serial]
 async fn test_node_get_status() {
     let (_temp_dir, addr, _handle) = spawn_test_rpc_server().await;
     let client = Client::new();
@@ -129,6 +131,7 @@ async fn test_node_get_status() {
 // ============================================================================
 
 #[tokio::test]
+#[serial]
 async fn test_get_chain_info() {
     let (_temp_dir, addr, _handle) = spawn_test_rpc_server().await;
     let client = Client::new();
@@ -147,6 +150,7 @@ async fn test_get_chain_info() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_get_block_by_height() {
     let (_temp_dir, addr, _handle) = spawn_test_rpc_server().await;
     let client = Client::new();
@@ -169,6 +173,7 @@ async fn test_get_block_by_height() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_get_block_invalid_height() {
     let (_temp_dir, addr, _handle) = spawn_test_rpc_server().await;
     let client = Client::new();
@@ -185,6 +190,7 @@ async fn test_get_block_invalid_height() {
 // ============================================================================
 
 #[tokio::test]
+#[serial]
 async fn test_get_mempool_info() {
     let (_temp_dir, addr, _handle) = spawn_test_rpc_server().await;
     let client = Client::new();
@@ -200,6 +206,7 @@ async fn test_get_mempool_info() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_estimate_fee() {
     let (_temp_dir, addr, _handle) = spawn_test_rpc_server().await;
     let client = Client::new();
@@ -207,21 +214,20 @@ async fn test_estimate_fee() {
     // Estimate fee for a 10 BTH private transaction
     let response = rpc_call(&client, addr, "estimateFee", json!({
         "amount": 10_000_000_000_000u64,  // 10 BTH in picocredits
-        "private": true,
+        "txType": "hidden",
         "memos": 1
     })).await;
 
-    assert!(response["error"].is_null());
+    assert!(response["error"].is_null(), "Unexpected error: {:?}", response["error"]);
     let result = &response["result"];
 
     assert!(result["minimumFee"].is_number());
-    assert!(result["feeRateBps"].is_number());
+    assert!(result["clusterFactor"].is_number());
     assert!(result["recommendedFee"].is_number());
     assert!(result["highPriorityFee"].is_number());
 
     // Verify fee parameters were echoed back
     assert_eq!(result["params"]["amount"], 10_000_000_000_000u64);
-    // Note: "private: true" is converted to "txType: hidden" in the response
     assert_eq!(result["params"]["txType"], "hidden");
     assert_eq!(result["params"]["memos"], 1);
 }
@@ -231,6 +237,7 @@ async fn test_estimate_fee() {
 // ============================================================================
 
 #[tokio::test]
+#[serial]
 async fn test_submit_tx_invalid_hex() {
     let (_temp_dir, addr, _handle) = spawn_test_rpc_server().await;
     let client = Client::new();
@@ -245,6 +252,7 @@ async fn test_submit_tx_invalid_hex() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_submit_tx_invalid_format() {
     let (_temp_dir, addr, _handle) = spawn_test_rpc_server().await;
     let client = Client::new();
@@ -259,6 +267,7 @@ async fn test_submit_tx_invalid_format() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_submit_tx_missing_param() {
     let (_temp_dir, addr, _handle) = spawn_test_rpc_server().await;
     let client = Client::new();
@@ -271,6 +280,7 @@ async fn test_submit_tx_missing_param() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_get_transaction_not_found() {
     let (_temp_dir, addr, _handle) = spawn_test_rpc_server().await;
     let client = Client::new();
@@ -286,6 +296,7 @@ async fn test_get_transaction_not_found() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_get_transaction_invalid_hash() {
     let (_temp_dir, addr, _handle) = spawn_test_rpc_server().await;
     let client = Client::new();
@@ -300,6 +311,7 @@ async fn test_get_transaction_invalid_hash() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_get_transaction_status_unknown() {
     let (_temp_dir, addr, _handle) = spawn_test_rpc_server().await;
     let client = Client::new();
@@ -323,6 +335,7 @@ async fn test_get_transaction_status_unknown() {
 // ============================================================================
 
 #[tokio::test]
+#[serial]
 async fn test_validate_address_missing_param() {
     let (_temp_dir, addr, _handle) = spawn_test_rpc_server().await;
     let client = Client::new();
@@ -334,6 +347,7 @@ async fn test_validate_address_missing_param() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_validate_address_invalid() {
     let (_temp_dir, addr, _handle) = spawn_test_rpc_server().await;
     let client = Client::new();
@@ -354,6 +368,7 @@ async fn test_validate_address_invalid() {
 // ============================================================================
 
 #[tokio::test]
+#[serial]
 async fn test_get_network_info() {
     let (_temp_dir, addr, _handle) = spawn_test_rpc_server().await;
     let client = Client::new();
@@ -368,6 +383,7 @@ async fn test_get_network_info() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_get_peers() {
     let (_temp_dir, addr, _handle) = spawn_test_rpc_server().await;
     let client = Client::new();
@@ -384,6 +400,7 @@ async fn test_get_peers() {
 // ============================================================================
 
 #[tokio::test]
+#[serial]
 async fn test_minting_get_status() {
     let (_temp_dir, addr, _handle) = spawn_test_rpc_server().await;
     let client = Client::new();
@@ -404,6 +421,7 @@ async fn test_minting_get_status() {
 // ============================================================================
 
 #[tokio::test]
+#[serial]
 async fn test_method_not_found() {
     let (_temp_dir, addr, _handle) = spawn_test_rpc_server().await;
     let client = Client::new();
@@ -416,6 +434,7 @@ async fn test_method_not_found() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_parse_error_invalid_json() {
     let (_temp_dir, addr, _handle) = spawn_test_rpc_server().await;
     let client = Client::new();
@@ -436,6 +455,7 @@ async fn test_parse_error_invalid_json() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_method_not_allowed() {
     let (_temp_dir, addr, _handle) = spawn_test_rpc_server().await;
     let client = Client::new();
@@ -456,6 +476,7 @@ async fn test_method_not_allowed() {
 // ============================================================================
 
 #[tokio::test]
+#[serial]
 async fn test_wallet_get_balance() {
     let (_temp_dir, addr, _handle) = spawn_test_rpc_server().await;
     let client = Client::new();
@@ -472,6 +493,7 @@ async fn test_wallet_get_balance() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_wallet_get_address() {
     let (_temp_dir, addr, _handle) = spawn_test_rpc_server().await;
     let client = Client::new();
@@ -490,6 +512,7 @@ async fn test_wallet_get_address() {
 // ============================================================================
 
 #[tokio::test]
+#[serial]
 async fn test_exchange_register_view_key_missing_params() {
     let (_temp_dir, addr, _handle) = spawn_test_rpc_server().await;
     let client = Client::new();
@@ -502,6 +525,7 @@ async fn test_exchange_register_view_key_missing_params() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_exchange_register_view_key_invalid_key() {
     let (_temp_dir, addr, _handle) = spawn_test_rpc_server().await;
     let client = Client::new();
@@ -518,6 +542,7 @@ async fn test_exchange_register_view_key_invalid_key() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_exchange_list_view_keys() {
     let (_temp_dir, addr, _handle) = spawn_test_rpc_server().await;
     let client = Client::new();
@@ -539,6 +564,7 @@ async fn test_exchange_list_view_keys() {
 // ============================================================================
 
 #[tokio::test]
+#[serial]
 async fn test_method_aliases() {
     let (_temp_dir, addr, _handle) = spawn_test_rpc_server().await;
     let client = Client::new();
@@ -573,6 +599,7 @@ async fn test_method_aliases() {
 // ============================================================================
 
 #[tokio::test]
+#[serial]
 async fn test_concurrent_requests() {
     let (_temp_dir, addr, _handle) = spawn_test_rpc_server().await;
     let client = Client::new();
@@ -601,6 +628,7 @@ async fn test_concurrent_requests() {
 // ============================================================================
 
 #[tokio::test]
+#[serial]
 async fn test_response_format() {
     let (_temp_dir, addr, _handle) = spawn_test_rpc_server().await;
     let client = Client::new();
@@ -622,6 +650,7 @@ async fn test_response_format() {
 // ============================================================================
 
 #[tokio::test]
+#[serial]
 async fn test_health_endpoint() {
     let (_temp_dir, addr, _handle) = spawn_test_rpc_server().await;
     let client = Client::new();
@@ -637,12 +666,9 @@ async fn test_health_endpoint() {
 
     let json: Value = response.json().await.expect("Failed to parse JSON");
 
-    // Verify health response structure
+    // Verify health response structure (HealthResponse: status, uptime_seconds)
     assert!(json["status"].is_string());
-    assert!(json["version"].is_string());
-    assert!(json["block_height"].is_number());
-    assert!(json["peer_count"].is_number());
-    assert!(json["synced"].is_boolean());
+    assert!(json["uptime_seconds"].is_number());
 
     // Status should be one of the valid values
     let status = json["status"].as_str().unwrap();
@@ -654,6 +680,7 @@ async fn test_health_endpoint() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_ready_endpoint() {
     let (_temp_dir, addr, _handle) = spawn_test_rpc_server().await;
     let client = Client::new();
@@ -675,15 +702,19 @@ async fn test_ready_endpoint() {
 
     let json: Value = response.json().await.expect("Failed to parse JSON");
 
-    // Verify ready response structure
-    assert!(json["ready"].is_boolean());
+    // Verify ready response structure (ReadyResponse: status, synced, peers, block_height)
+    assert!(json["status"].is_string());
+    assert!(json["synced"].is_boolean());
+    assert!(json["peers"].is_number());
+    assert!(json["block_height"].is_number());
 
-    // ready should match status code
-    let is_ready = json["ready"].as_bool().unwrap();
+    // status should be "ready" or "not_ready" matching the HTTP status code
+    let is_ready = json["status"].as_str().unwrap() == "ready";
     assert_eq!(is_ready, status == 200);
 }
 
 #[tokio::test]
+#[serial]
 async fn test_metrics_endpoint() {
     let (_temp_dir, addr, _handle) = spawn_test_rpc_server().await;
     let client = Client::new();
@@ -727,6 +758,7 @@ async fn test_metrics_endpoint() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_metrics_after_rpc_calls() {
     let (_temp_dir, addr, _handle) = spawn_test_rpc_server().await;
     let client = Client::new();
