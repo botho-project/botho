@@ -209,11 +209,11 @@ BIP39 Mnemonic (24 words)
 | **Sender Privacy** | Sender identity is hidden | Ring signatures (CLSAG) with 20 decoys |
 | **Recipient Privacy** | Recipient address not on chain | Stealth addresses (one-time keys) |
 | **Consensus Safety** | No conflicting finalization | SCP with quorum intersection |
-| **Post-Quantum Ready** | Optional PQ signatures | LION lattice ring signatures |
+| **Post-Quantum Ready** | PQ stealth addresses and minting | ML-KEM-768, ML-DSA-65 |
 
 ## Related Documentation
 
 - [AUDIT.md](../../AUDIT.md) - Security audit preparation checklist
-- [docs/privacy.md](../privacy.md) - Privacy model and guarantees
-- [docs/security.md](../security.md) - Security considerations
-- [docs/transactions.md](../transactions.md) - Transaction format details
+- [docs/privacy.md](../concepts/privacy.md) - Privacy model and guarantees
+- [docs/security.md](../concepts/security.md) - Security considerations
+- [docs/transactions.md](../concepts/transactions.md) - Transaction format details

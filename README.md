@@ -76,40 +76,28 @@ Botho combines proven cryptographic building blocks in a novel architecture:
 
 ### Transaction Types
 
-Botho offers two private transaction types, balancing efficiency and quantum resistance:
+Botho has two transaction types:
 
-| Property | Standard-Private | PQ-Private |
-|:--|:--|:--|
-| **Sender privacy** | Ring signature (CLSAG) | Ring signature (LION) |
-| **Recipient privacy** | ML-KEM-768 stealth | ML-KEM-768 stealth |
-| **Amount privacy** | Pedersen + Bulletproofs | Pedersen + Bulletproofs |
-| **Ring size** | 20 decoys | 11 decoys |
-| **Max inputs** | 16 | 8 |
-| **Signature size** | ~0.7 KB/input | ~36 KB/input |
-| **Quantum resistance** | Recipient: full, Sender: classical | Full |
-| **Fee** | size-based | size-based |
-| **Max tx size** | 100 KB | 512 KB |
-| **Use case** | Daily transactions | High-value, long-term privacy |
+| Type | Sender | Recipient | Amount | Use Case |
+|:--|:--|:--|:--|:--|
+| **Minting** | Known (minter) | Hidden (ML-KEM) | Public | Block rewards |
+| **Private** | Hidden (CLSAG ring=20) | Hidden (ML-KEM) | Hidden | All transfers |
 
 Fees are calculated as: `fee = fee_per_byte × tx_size × cluster_factor`
 
 The cluster factor (1x to 6x) is a progressive multiplier that discourages wealth concentration.
 
-**Why different ring sizes?** LION signatures are ~50x larger than CLSAG per ring member. Ring size 11 provides 3.30 bits of measured privacy (95% efficiency) while keeping transactions manageable.
+**Why this architecture?**
 
-**Why hybrid cryptography for Standard-Private?**
+We use ML-KEM-768 (post-quantum) for stealth addresses and CLSAG (classical) for ring signatures because:
 
-The main difference between Standard-Private and PQ-Private is the ring signature scheme (sender privacy). We use ML-KEM-768 for stealth addresses in *all* transaction types because:
+1. **Recipient privacy is permanent** — transactions are recorded forever on-chain. A quantum attacker in 2045 could retroactively link recipients from 2025 transactions if we used classical ECDH. ML-KEM protects against this.
 
-1. **Recipient privacy is permanent** — transactions are recorded forever on-chain. A quantum attacker in 2045 could retroactively link recipients from 2025 transactions if we used classical ECDH.
+2. **Sender privacy is ephemeral** — the value of knowing "who sent this" diminishes over time as the economic context becomes historical. Classical CLSAG is sufficient.
 
-2. **Sender privacy is ephemeral** — the value of knowing "who sent this" diminishes over time as the economic context becomes historical.
+3. **Size matters** — Post-quantum ring signatures would be ~50x larger than CLSAG, making blockchain growth unsustainable for desktop nodes. See [ADR-0001](./docs/decisions/0001-deprecate-lion-ring-signatures.md).
 
-3. **Size matters** — LION signatures are ~90x larger than CLSAG. For everyday transactions, this overhead isn't justified.
-
-4. **Amount hiding is already quantum-safe** — Pedersen commitments have information-theoretic hiding. A quantum computer can't reveal amounts; it could only enable detectable inflation attacks.
-
-Users who need quantum-resistant sender privacy (whistleblowers, political dissidents, long-term holdings) should use PQ-Private transactions.
+4. **Amount hiding is already quantum-safe** — Pedersen commitments have information-theoretic hiding. A quantum computer can't reveal amounts.
 
 ### Fast Finality
 
@@ -119,11 +107,15 @@ Unlike Bitcoin's probabilistic finality (wait 6 blocks = 60 minutes to be "sure"
 
 | Parameter | Value |
 |:--|:--|
-| Block time | 20 seconds |
+| Slot interval | 20 seconds (SCP consensus cycle) |
+| Dynamic block time | 5-40 seconds (adapts to network load) |
+| Monetary baseline | 5 seconds (for emission calculations) |
 | Difficulty adjustment | Every 1,440 blocks (~8 hours) |
 | Phase 1 supply | ~100 million BTH (10 years of halvings) |
 | Tail emission | ~1.59 BTH/block (2% net annual inflation) |
 | Native unit | BTH (9 decimal places) |
+
+Block timing adapts to network activity: busy networks produce faster blocks (5s), idle networks produce slower blocks (40s). This creates natural inflation dampening—less activity means less emission.
 
 ## Philosophy in Practice
 
@@ -176,18 +168,18 @@ Visit [botho.io](https://botho.io) to use the web wallet without running a node.
 |:--|:--|
 | [Getting Started](./docs/getting-started.md) | Build, install, and run your first node |
 | [FAQ](./docs/FAQ.md) | Frequently asked questions |
-| [Why Botho?](./docs/comparison.md) | Comparison with Bitcoin, Monero, Zcash |
-| [Architecture](./docs/architecture.md) | System design and component overview |
-| [Tokenomics](./docs/tokenomics.md) | Emission schedule, fees, and supply |
-| [Monetary Policy](./docs/monetary-policy.md) | Difficulty adjustment, epochs, and upgrades |
+| [Why Botho?](./docs/concepts/comparison.md) | Comparison with Bitcoin, Monero, Zcash |
+| [Architecture](./docs/concepts/architecture.md) | System design and component overview |
+| [Tokenomics](./docs/concepts/tokenomics.md) | Emission schedule, fees, and supply |
+| [Monetary Policy](./docs/concepts/monetary-policy.md) | Difficulty adjustment, epochs, and upgrades |
 | [Minting](./docs/minting.md) | Mining setup and economics |
-| [Privacy](./docs/privacy.md) | Privacy features and cryptography |
+| [Privacy](./docs/concepts/privacy.md) | Privacy features and cryptography |
 | [Network Privacy](./docs/design/traffic-privacy-roadmap.md) | Traffic analysis resistance design |
-| [Configuration](./docs/configuration.md) | Node configuration options |
+| [Configuration](./docs/operations/configuration.md) | Node configuration options |
 | [API Reference](./docs/api.md) | JSON-RPC and WebSocket API |
 | [Developer Guide](./docs/developer-guide.md) | Build applications with Botho |
 | [Testing](./docs/testing.md) | Run and write tests |
-| [Troubleshooting](./docs/troubleshooting.md) | Common issues and solutions |
+| [Troubleshooting](./docs/operations/troubleshooting.md) | Common issues and solutions |
 | [Glossary](./docs/glossary.md) | Technical terms explained |
 
 ## Project Status

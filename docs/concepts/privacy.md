@@ -531,7 +531,7 @@ Compact transaction sizes enable desktop-friendly blockchain growth while mainta
 
 1. **Use fresh addresses**: Generate new subaddresses for each payment request
 2. **Allow time between transactions**: Spacing transactions makes timing analysis harder
-3. **Use ring signature transactions**: When sender privacy matters, use Standard-Private or PQ-Private
+3. **Use private transactions**: All value transfers use ring signatures for sender privacy
 4. **Don't reuse patterns**: Vary transaction amounts and timing to avoid fingerprinting
 
 ### Privacy Limitations

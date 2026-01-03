@@ -12,7 +12,7 @@ Botho's monetary policy achieves predictable inflation through the interaction o
 
 The key insight is that **block production and emission are decoupled**:
 
-- **Block production**: Controlled by SCP consensus (~20 second target)
+- **Block production**: Controlled by SCP consensus (20-second slots, 5-40s dynamic based on load)
 - **Emission rate**: Controlled by mining difficulty (how many blocks include minting rewards)
 
 This separation allows precise monetary targeting without affecting transaction throughput.

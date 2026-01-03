@@ -477,7 +477,7 @@ scrape_configs:
 
 ### Documentation
 
-Full setup instructions: [infra/grafana/README.md](../infra/grafana/README.md)
+Full setup instructions: [infra/grafana/README.md](../../infra/grafana/README.md)
 
 ### CloudWatch vs Grafana
 
@@ -496,5 +496,5 @@ Use CloudWatch for AWS production environments and Grafana for local development
 
 - [Deployment Guide](deployment.md) - Full production setup
 - [Backup Strategy](backup.md) - Data protection
-- [Grafana Dashboard](../infra/grafana/README.md) - Self-hosted monitoring
+- [Grafana Dashboard](../../infra/grafana/README.md) - Self-hosted monitoring
 - [AWS CloudWatch Documentation](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/)

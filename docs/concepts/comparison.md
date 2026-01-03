@@ -84,7 +84,7 @@ Botho's cluster-based progressive fees make hoarding expensive without compromis
 
 Monero uses classical cryptography vulnerable to future quantum computers.
 
-Botho uses a hybrid approach: ML-KEM-768 for all stealth addresses (post-quantum recipient privacy), with CLSAG (classical, efficient) or LION (post-quantum) ring signatures for sender privacy. This protects against "harvest now, decrypt later" attacks on recipient privacy while offering efficient everyday transactions.
+Botho uses ML-KEM-768 for all stealth addresses, providing post-quantum recipient privacy. Ring signatures use classical CLSAG for efficiency—sender privacy is ephemeral (value degrades over time), while recipient privacy is permanent (on-chain forever). This protects against "harvest now, decrypt later" attacks on the data that matters most.
 
 **Block Selection**
 
@@ -169,21 +169,21 @@ Secret Network focuses on programmable privacy (smart contracts). Botho focuses 
 
 | Component | Botho | Bitcoin | Monero | Zcash |
 |-----------|-------|---------|--------|-------|
-| Signatures | ML-DSA / CLSAG / LION | ECDSA/Schnorr | CLSAG | RedDSA |
+| Signatures | ML-DSA (minting) / CLSAG (transfers) | ECDSA/Schnorr | CLSAG | RedDSA |
 | Key exchange | ML-KEM-768 | N/A | ECDH | DH |
 | Stealth addresses | Yes (PQ) | No | Yes | Shielded only |
-| Ring signatures | Yes (CLSAG/LION) | No | Yes (CLSAG) | No |
+| Ring signatures | Yes (CLSAG) | No | Yes (CLSAG) | No |
 | Ring size | 20 | N/A | 16 | N/A |
 | Zero-knowledge | Bulletproofs | No | Bulletproofs | Halo2 |
 | Quantum-safe stealth | Yes (ML-KEM) | No | No | No |
-| Quantum-safe sender | Optional (LION) | No | No | No |
+| Quantum-safe amounts | Yes (info-theoretic) | No | No | No |
 
 ### Consensus
 
 | Aspect | Botho | Bitcoin | Monero | Zcash |
 |--------|-------|---------|--------|-------|
 | Mechanism | PoW + SCP | PoW (SHA-256) | PoW (RandomX) | PoW (Equihash) |
-| Block time | 20 sec | 600 sec | 120 sec | 75 sec |
+| Block time | 5-40 sec (dynamic) | 600 sec | 120 sec | 75 sec |
 | Finality | Immediate | Probabilistic | Probabilistic | Probabilistic |
 | Fault tolerance | Byzantine | Crash | Crash | Crash |
 

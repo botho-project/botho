@@ -552,5 +552,5 @@ fn test_with_tracing() {
 ## Next Steps
 
 - [Developer Guide](developer-guide.md) — Build applications with Botho
-- [Architecture](architecture.md) — Understand the codebase structure
+- [Architecture](concepts/architecture.md) — Understand the codebase structure
 - [Contributing](../CONTRIBUTING.md) — Submit your changes

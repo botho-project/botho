@@ -272,4 +272,4 @@ If attacker drained funds before you could act:
 ## Related Documentation
 
 - [Backup & Recovery Guide](../backup.md)
-- [Security Guide](../security.md)
+- [Security Guide](../../concepts/security.md)

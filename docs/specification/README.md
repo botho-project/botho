@@ -15,7 +15,7 @@ The Botho protocol specification provides complete documentation for:
 - **Transaction Format**: Classical and post-quantum transaction structures
 - **Consensus (SCP)**: Stellar Consensus Protocol implementation
 - **Network Protocol**: P2P messaging and synchronization
-- **Cryptographic Primitives**: CLSAG, LION, ML-KEM, ML-DSA, Bulletproofs
+- **Cryptographic Primitives**: CLSAG, ML-KEM, ML-DSA, Bulletproofs (LION deprecated per ADR-0001)
 - **Block Structure**: Headers, PoW, and minting transactions
 - **Monetary System**: Units, supply schedule, and fee structure
 - **Network Configuration**: Ports, addresses, and parameters
@@ -49,7 +49,7 @@ To propose specification changes:
 
 ## Related Documentation
 
-- [Architecture](../architecture.md): System design overview
-- [Transactions](../transactions.md): User-facing transaction guide
-- [Privacy](../privacy.md): Privacy features and cryptography
+- [Architecture](../concepts/architecture.md): System design overview
+- [Transactions](../concepts/transactions.md): User-facing transaction guide
+- [Privacy](../concepts/privacy.md): Privacy features and cryptography
 - [API Reference](../api.md): JSON-RPC and WebSocket API

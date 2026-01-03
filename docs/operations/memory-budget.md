@@ -19,16 +19,14 @@ The mempool stores pending transactions awaiting inclusion in blocks.
 | Component | Formula | Estimate (10K tx) |
 |-----------|---------|-------------------|
 | Transaction HashMap | 10K × (32 + 8 + ptr) | ~0.5 MB |
-| CLSAG Transactions | 10K × ~5 KB each | ~50 MB |
-| LION Transactions | 10K × ~65 KB each | ~650 MB |
+| Private Transactions (CLSAG) | 10K × ~4 KB each | ~40 MB |
+| Minting Transactions | 10K × ~1.5 KB each | ~15 MB |
 | Key Images HashSet | 10K × 32 bytes | ~0.3 MB |
-| **Total (CLSAG only)** | | **~51 MB** |
-| **Total (LION only)** | | **~651 MB** |
-| **Total (mixed)** | 80% CLSAG, 20% LION | **~170 MB** |
+| **Total (typical mix)** | | **~41 MB** |
 
 **Notes:**
-- LION (post-quantum) signatures are ~13x larger than CLSAG
-- Real-world mix depends on wallet adoption of PQ privacy features
+- Private transactions use CLSAG ring signatures (~700 bytes per input)
+- Minting transactions are smaller (no ring signatures)
 - Memory is released when transactions are confirmed or evicted
 
 ### Ledger (LMDB) (`botho/src/ledger/store.rs`)
@@ -64,8 +62,8 @@ Ring signature operations have significant stack requirements:
 | Operation | Memory | Duration |
 |-----------|--------|----------|
 | CLSAG Verification | ~10 KB stack | ~2 ms |
-| LION Verification | ~100 KB stack | ~50 ms |
-| Batch Verification (10 tx) | ~1 MB stack | ~500 ms |
+| ML-DSA Verification | ~50 KB stack | ~5 ms |
+| Batch Verification (10 tx) | ~200 KB stack | ~50 ms |
 
 **Notes:**
 - Stack allocations are temporary during verification

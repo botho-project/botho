@@ -280,7 +280,7 @@ Together, they get the benefits of both approaches.
 3. Ensure port 7100 isn't blocked by firewall
 4. Try restarting the node
 
-See [Troubleshooting Guide](troubleshooting.md) for more.
+See [Troubleshooting Guide](operations/troubleshooting.md) for more.
 
 ### My balance shows 0 but I received funds
 

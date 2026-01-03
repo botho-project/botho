@@ -446,5 +446,5 @@ Limit backup access to:
 
 - [Monitoring Guide](monitoring.md) — CloudWatch monitoring setup
 - [Wallet Backup Guide](backup.md) — User wallet backup (mnemonic)
-- [Security Guide](security.md) — Complete security practices
-- [Operations Guide](operations.md) — Seed node operations
+- [Security Guide](../concepts/security.md) — Complete security practices
+- [Disaster Recovery](disaster-recovery.md) — Seed node operations

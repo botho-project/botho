@@ -202,14 +202,6 @@ pub struct Wallet {
 │  │    - Create ring [P_0, ..., P_19] with real at random index           │  │
 │  │    - Generate CLSAG signature (c_0, s[], I, D)                        │  │
 │  │    - Verify signature locally before broadcast                        │  │
-│  └──────────────────────────────────────┬────────────────────────────────┘  │
-│                                         │                                    │
-│  6. (OPTIONAL) SIGN WITH LION           ▼                                    │
-│  ┌───────────────────────────────────────────────────────────────────────┐  │
-│  │  If PQ mode enabled:                                                  │  │
-│  │    - Select 10 decoys (ring size 11 for LION)                         │  │
-│  │    - Generate LION lattice ring signature                             │  │
-│  │    - Attach as secondary signature                                    │  │
 │  └───────────────────────────────────────────────────────────────────────┘  │
 │                                                                              │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -217,12 +209,12 @@ pub struct Wallet {
 
 ### Ring Composition
 
-| Parameter | CLSAG | LION |
-|-----------|-------|------|
-| Ring Size | 20 | 11 |
-| Real Inputs | 1 | 1 |
-| Decoys | 19 | 10 |
-| Min Ring Size | 20 | 11 |
+| Parameter | CLSAG |
+|-----------|-------|
+| Ring Size | 20 |
+| Real Inputs | 1 |
+| Decoys | 19 |
+| Min Ring Size | 20 |
 
 ### Key Image Computation
 

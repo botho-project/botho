@@ -222,7 +222,7 @@ Unlike alternatives that track decay timing in UTXO metadata, age-based decay us
 | Patient wash (1 week) | 7000 | 97% decay (84 eligible) |
 | Holding without transacting | 0 | 0% decay (requires spending) |
 
-> **See also**: [Cluster Tag Decay Design](design/cluster-tag-decay.md) for mathematical proofs and simulation results.
+> **See also**: [Cluster Tag Decay Design](../design/cluster-tag-decay.md) for mathematical proofs and simulation results.
 
 ## Economic Effects
 

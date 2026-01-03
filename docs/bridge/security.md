@@ -301,5 +301,5 @@ Depending on jurisdiction, consider:
 ## Related Documentation
 
 - [Architecture](architecture.md) - Bridge system design
-- [Monitoring](../monitoring.md) - General monitoring setup
-- [Deployment](../deployment.md) - Production deployment guide
+- [Monitoring](../operations/monitoring.md) - General monitoring setup
+- [Deployment](../operations/deployment.md) - Production deployment guide

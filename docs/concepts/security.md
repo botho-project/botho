@@ -22,8 +22,9 @@ Security in Botho operates at multiple layers:
 | Threat | Protection |
 |--------|------------|
 | Transaction surveillance | Stealth addresses, ring signatures |
-| Amount analysis | Confidential transactions (planned) |
-| Quantum computers | LION lattice-based ring signatures |
+| Amount analysis | Confidential transactions (Pedersen + Bulletproofs) |
+| Quantum computers (recipients) | ML-KEM-768 stealth addresses |
+| Quantum computers (minting) | ML-DSA-65 signatures |
 | Double-spending | SCP consensus, key images |
 | Replay attacks | Tombstone blocks |
 | Network-level attacks | Peer reputation, rate limiting |
@@ -362,7 +363,7 @@ If you discover a security vulnerability:
 1. **DO NOT** disclose publicly
 2. Email security details to the maintainers
 3. Allow time for a fix before disclosure
-4. See [SECURITY.md](../SECURITY.md) for full policy
+4. See [SECURITY.md](../../SECURITY.md) for full policy
 
 ### Getting Help
 
@@ -404,7 +405,7 @@ Tools like `ssss` can help, but understand the risks:
 
 ## Further Reading
 
-- [Backup & Recovery](backup.md) — Detailed backup procedures
-- [Deployment](deployment.md) — Production deployment security
+- [Backup & Recovery](../operations/backup.md) — Detailed backup procedures
+- [Deployment](../operations/deployment.md) — Production deployment security
 - [Privacy Features](privacy.md) — How Botho protects privacy
-- [SECURITY.md](../SECURITY.md) — Vulnerability disclosure policy
+- [SECURITY.md](../../SECURITY.md) — Vulnerability disclosure policy

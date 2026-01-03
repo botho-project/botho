@@ -7,7 +7,7 @@ This document describes Botho's cryptographic primitives, key hierarchy, and sig
 1. [Key Hierarchy](#key-hierarchy)
 2. [Stealth Addresses](#stealth-addresses)
 3. [Ring Signatures (CLSAG)](#ring-signatures-clsag)
-4. [Post-Quantum Extensions (LION)](#post-quantum-extensions-lion)
+4. [Post-Quantum Extensions (Deprecated LION)](#post-quantum-extensions-deprecated-lion)
 5. [Pedersen Commitments](#pedersen-commitments)
 6. [Range Proofs (Bulletproofs)](#range-proofs-bulletproofs)
 7. [Domain Separators](#domain-separators)
@@ -232,45 +232,33 @@ The key image `I = x * Hp(P)` is:
 
 ---
 
-## Post-Quantum Extensions (LION)
+## Post-Quantum Extensions (Deprecated LION)
 
-LION provides lattice-based ring signatures for quantum resistance.
+> **Note**: LION ring signatures were deprecated due to size concerns. See [ADR-0001](../decisions/0001-deprecate-lion-ring-signatures.md).
 
-### Parameters
+LION was a lattice-based ring signature scheme considered for post-quantum sender privacy but was not adopted due to impractical signature sizes (~50x larger than CLSAG). The code remains in the repository for research purposes.
 
-| Parameter | Value | Description |
-|-----------|-------|-------------|
-| N | 256 | Ring dimension |
-| Q | 8,380,417 | Prime modulus |
-| K, L | 4 | Module dimensions |
-| Ring Size | 7-11 | Decoys + real |
-
-### Size Comparison
+### Size Comparison (Why LION Was Deprecated)
 
 | Signature Type | Ring Size | Signature Size | Privacy Bits |
 |----------------|-----------|----------------|--------------|
-| CLSAG | 20 | ~700 bytes | 4.32 |
-| LION | 11 | ~36 KB | 3.30 |
+| CLSAG (used) | 20 | ~700 bytes | 4.32 |
+| LION (deprecated) | 11 | ~36 KB | 3.30 |
 
-### Security Assumptions
+### Current Post-Quantum Architecture
 
-- **Module-LWE**: Learning With Errors over module lattices
-- **Module-SIS**: Short Integer Solution over module lattices
-- **Target Security**: 128-bit post-quantum
+Instead of LION, Botho uses a hybrid approach:
 
-### Hybrid Mode
+| Component | Algorithm | Quantum Safety |
+|-----------|-----------|----------------|
+| Stealth addresses | ML-KEM-768 | Post-quantum |
+| Minting signatures | ML-DSA-65 | Post-quantum |
+| Ring signatures | CLSAG | Classical |
+| Amount hiding | Pedersen | Info-theoretic |
 
-When post-quantum security is enabled:
+This provides post-quantum protection for permanent data (recipient identity) while keeping transactions small enough for desktop nodes.
 
-```
-Transaction Signature = CLSAG + LION
-
-Both signatures must verify for the transaction to be valid.
-Classical-only clients can verify CLSAG.
-PQ-aware clients verify both.
-```
-
-**Code Reference:** `crypto/lion/src/`
+**Code Reference:** `crypto/lion/src/` (research only)
 
 ---
 
@@ -392,6 +380,6 @@ Properties:
 - [ ] Value conservation enforced at validation
 
 ### Post-Quantum
-- [ ] LION parameters provide 128-bit security
-- [ ] Rejection sampling is uniform
-- [ ] Hybrid signatures both verify
+- [ ] ML-KEM-768 parameters provide 192-bit security
+- [ ] ML-DSA-65 parameters provide 128-bit security
+- [ ] Stealth address key encapsulation verified

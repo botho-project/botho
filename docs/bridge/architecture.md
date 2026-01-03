@@ -315,5 +315,5 @@ status.is_actionable()  // DepositConfirmed, MintPending, BurnConfirmed, Release
 ## Related Documentation
 
 - [Security](security.md) - Hot wallet security and incident response
-- [Transactions](../transactions.md) - BTH transaction format
+- [Transactions](../concepts/transactions.md) - BTH transaction format
 - [API](../api.md) - RPC endpoints for bridge interaction

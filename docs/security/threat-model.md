@@ -24,7 +24,7 @@ The following assets require protection in the Botho system:
 |----------|---------|------------------|-------------------|
 | Spend Private Key | Authorizes fund transfers | Encrypted wallet file | Complete fund loss |
 | View Private Key | Scans incoming transactions | Encrypted wallet file | Privacy loss (incoming) |
-| LION Private Key | PQ-Private transaction signing | Encrypted wallet file | Future PQ fund loss |
+| ML-DSA Private Key | Minting transaction signing | Encrypted wallet file | Minting capability loss |
 | Mnemonic (24 words) | Master seed for all keys | User responsibility | Complete fund loss |
 
 **File references:**
@@ -36,13 +36,13 @@ The following assets require protection in the Botho system:
 | Privacy Goal | Technique | Protected Data |
 |--------------|-----------|----------------|
 | Recipient hiding | ML-KEM-768 stealth addresses | Recipient identity |
-| Sender hiding | CLSAG/LION ring signatures | Sender identity |
+| Sender hiding | CLSAG ring signatures (ring=20) | Sender identity |
 | Amount hiding | Pedersen commitments + Bulletproofs | Transaction values |
 | Memo privacy | AES-256-CTR encryption | Payment metadata |
 
 **File references:**
 - Stealth addresses: `crypto/ring-signature/src/pq_onetime_keys.rs`
-- Ring signatures: `crypto/ring-signature/src/ring_signature/clsag.rs`, `crypto/lion/src/ring_signature/`
+- Ring signatures: `crypto/ring-signature/src/ring_signature/clsag.rs`
 - Confidential amounts: `crypto/ring-signature/src/amount/commitment.rs`
 
 ### 3. Wallet Files
@@ -164,9 +164,10 @@ The following assets require protection in the Botho system:
 
 **Cannot:**
 - Break ML-KEM-768 stealth addresses
-- Break LION ring signatures
 - Break ML-DSA minting signatures
 - Reverse hash functions
+
+**Note:** CLSAG ring signatures are classical and vulnerable to quantum attacks. However, sender privacy is ephemeral—its value degrades over time as economic context becomes historical. See [ADR-0001](../decisions/0001-deprecate-lion-ring-signatures.md) for the rationale.
 
 **Mitigation level:** High (PQ cryptography for critical paths)
 
@@ -174,8 +175,7 @@ The following assets require protection in the Botho system:
 |-----------|-----------|----------------|
 | Stealth addresses | ML-KEM-768 | Full |
 | Minting signatures | ML-DSA-65 | Full |
-| Standard-Private sender | CLSAG | Classical only |
-| PQ-Private sender | LION | Full |
+| Private sender | CLSAG | Classical (ephemeral privacy) |
 | Commitments (hiding) | Pedersen | Information-theoretic |
 | Commitments (binding) | Pedersen | Classical only |
 
@@ -189,7 +189,7 @@ The following assets require protection in the Botho system:
 |------------|-----------|----------------------|
 | Discrete Log (DLOG) | curve25519 | CLSAG signatures forgeable |
 | Decisional Diffie-Hellman (DDH) | curve25519 | Pedersen binding broken |
-| Learning With Errors (LWE) | ML-KEM, ML-DSA, LION | PQ protections broken |
+| Learning With Errors (LWE) | ML-KEM, ML-DSA | PQ protections broken |
 | Collision Resistance | SHA-256, Blake2b | PoW and hashing compromised |
 
 ### Consensus Assumptions
@@ -228,7 +228,6 @@ The following assets require protection in the Botho system:
 | Entry Point | Input | Validation | Reference |
 |-------------|-------|------------|-----------|
 | `tx_submit` | Transaction hex | Structure, signatures, fees | `botho/src/rpc/mod.rs:507` |
-| `pq_tx_submit` | PQ Transaction hex | PQ structure, LION signatures | `botho/src/rpc/mod.rs:508` |
 | `exchange_registerViewKey` | View key hex | 64-char hex, valid curve point | `botho/src/rpc/mod.rs:527` |
 | `getBlocks` | Block range | Bounds checking | `botho/src/rpc/mod.rs:493` |
 | `cluster_getWealth` | Cluster ID | Numeric validation | `botho/src/rpc/mod.rs:534` |
@@ -329,7 +328,7 @@ Pr[adversary correctly determines R1 = R2 | blockchain] ≤ negl(λ)
 
 **Achieved via:**
 - Stealth addresses (one-time destination keys)
-- Ring signatures (CLSAG ring=20, LION ring=11)
+- Ring signatures (CLSAG ring=20)
 - Cluster-aware decoy selection (≥70% cosine similarity)
 
 **Limitations:**
@@ -423,9 +422,9 @@ where Δ depends on network conditions and fee priority
 | Threat | Mitigation | Implementation |
 |--------|------------|----------------|
 | Key compromise | Argon2id + ChaCha20-Poly1305 | `storage.rs:189-220` |
-| Signature forgery | Ed25519, CLSAG, LION verification | `transaction.rs:1335-1357` |
+| Signature forgery | Ed25519, CLSAG, ML-DSA verification | `transaction.rs:1335-1357` |
 | Quantum harvest-now-decrypt-later | ML-KEM-768 for stealth addresses | `pq_onetime_keys.rs` |
-| Replay attacks | Key images (CLSAG/LION) | `ledger/store.rs:800-845` |
+| Replay attacks | Key images (CLSAG) | `ledger/store.rs:800-845` |
 
 #### 2. Network Attacks
 
@@ -494,10 +493,10 @@ where Δ depends on network conditions and fee priority
 ## References
 
 ### Internal Documentation
-- [Architecture](../architecture.md) - System component overview
-- [Security Guide](../security.md) - Operational security practices
-- [Privacy Features](../privacy.md) - Cryptographic privacy mechanisms
-- [Transactions](../transactions.md) - Transaction types and structure
+- [Architecture](../concepts/architecture.md) - System component overview
+- [Security Guide](../concepts/security.md) - Operational security practices
+- [Privacy Features](../concepts/privacy.md) - Cryptographic privacy mechanisms
+- [Transactions](../concepts/transactions.md) - Transaction types and structure
 
 ### External Standards
 - [NIST FIPS 203](https://csrc.nist.gov/pubs/fips/203/final) - ML-KEM specification

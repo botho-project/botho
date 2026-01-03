@@ -4,6 +4,8 @@
 **Status**: Draft
 **Last Updated**: 2024-12-31
 
+> **Note**: This specification describes LION (PQ-Private) transactions which have been **deprecated**. The current protocol uses only two transaction types: Minting (ML-DSA signatures) and Private (CLSAG ring signatures). See [ADR-0001](../decisions/0001-deprecate-lion-ring-signatures.md) for the deprecation decision. A v0.2.0 specification update is planned.
+
 ## Abstract
 
 Botho is a privacy-preserving cryptocurrency protocol that combines Ring Confidential Transactions (RingCT) with hybrid post-quantum cryptography. This specification defines the complete protocol including transaction formats, consensus mechanism, network protocol, and cryptographic primitives.

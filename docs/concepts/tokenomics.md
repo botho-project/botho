@@ -114,8 +114,7 @@ Fees are proportional to transaction size, ensuring larger transactions pay more
 
 | Type | Ring Size | Typical Size | Base Fee (1x cluster) |
 |------|-----------|--------------|----------------------|
-| Standard-Private (CLSAG) | 20 | ~4 KB | ~4,000 nanoBTH |
-| PQ-Private (LION) | 11 | ~65 KB | ~65,000 nanoBTH |
+| Private (CLSAG) | 20 | ~4 KB | ~4,000 nanoBTH |
 | Minting | — | ~1.5 KB | 0 (no fee) |
 
 ### Dynamic Congestion Pricing
@@ -270,13 +269,13 @@ This ensures:
 
 ## Transaction Constraints
 
-| Parameter | Standard-Private | PQ-Private |
-|-----------|------------------|------------|
-| Max transactions per block | 100 | 100 |
-| Max inputs per transaction | 16 | 8 |
+| Parameter | Private | Minting |
+|-----------|---------|---------|
+| Max transactions per block | 100 | 1 |
+| Max inputs per transaction | 16 | 0 |
 | Max outputs per transaction | 16 | 16 |
-| Ring size | 20 (CLSAG) | 11 (LION) |
-| Max transaction size | 100 KB | 512 KB |
+| Ring size | 20 (CLSAG) | — |
+| Max transaction size | 100 KB | 10 KB |
 
 ## Supply Projections
 

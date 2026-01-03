@@ -596,5 +596,5 @@ function validateAmount(amount) {
 ## Next Steps
 
 - [API Reference](api.md) — Complete RPC method documentation
-- [Architecture](architecture.md) — Understand how Botho works
+- [Architecture](concepts/architecture.md) — Understand how Botho works
 - [Testing Guide](testing.md) — Test your integration

@@ -472,5 +472,5 @@ with legitimate participation rather than gaming.
 
 - [Provenance-Based Selection](provenance-based-selection.md) - Novel entropy-weighted approach
 - [Cluster Tag Decay](cluster-tag-decay.md) - How cluster factors decay through trade
-- [Progressive Fees](../progressive-fees.md) - Fee curve design
-- [Tokenomics](../tokenomics.md) - Overall economic model
+- [Progressive Fees](../concepts/progressive-fees.md) - Fee curve design
+- [Tokenomics](../concepts/tokenomics.md) - Overall economic model

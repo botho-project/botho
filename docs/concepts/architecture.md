@@ -230,13 +230,15 @@ botho/src/
 
 ## Cryptographic Foundations
 
-Botho inherits battle-tested cryptography from MobileCoin:
+Botho uses battle-tested cryptography with post-quantum enhancements:
 
 | Component | Implementation |
 |-----------|----------------|
-| Key derivation | BIP39 + custom derivation |
-| Signatures | Ed25519 (Schnorr) |
-| Stealth addresses | CryptoNote protocol |
+| Key derivation | BIP39 + SLIP-10 + HKDF |
+| Minting signatures | ML-DSA-65 (post-quantum) |
+| Transfer signatures | CLSAG ring signatures (ring=20) |
+| Stealth addresses | ML-KEM-768 (post-quantum) |
+| Amount hiding | Pedersen commitments + Bulletproofs |
 | Hashing | SHA-256 (PoW), Blake2b (general) |
 
 ## Block Timing Architecture
@@ -343,4 +345,4 @@ The library default exists for projects that want simpler, more predictable timi
 | Multi-monitor | Single wallet | One mnemonic, one account |
 | SGX attestation | Simple TLS | No trusted enclaves |
 | Fog integration | Removed | Not needed |
-| Ring signatures | Plain Ed25519 | Simplified (ring sigs planned) |
+| Ring signatures | CLSAG (ring=20) | Full privacy with efficient signatures |

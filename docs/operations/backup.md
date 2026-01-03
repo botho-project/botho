@@ -368,6 +368,6 @@ Tools exist for partial recovery, but require significant computation.
 
 ## Related Documentation
 
-- [Security Guide](security.md) — Complete security practices
-- [Getting Started](getting-started.md) — Initial wallet setup
+- [Security Guide](../concepts/security.md) — Complete security practices
+- [Getting Started](../getting-started.md) — Initial wallet setup
 - [Troubleshooting](troubleshooting.md) — Recovery issues

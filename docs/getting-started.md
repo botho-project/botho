@@ -132,8 +132,8 @@ All Botho data is stored in `~/.botho/`:
 
 ## Next Steps
 
-- [Configuration Reference](configuration.md) - Customize your node settings
+- [Configuration Reference](operations/configuration.md) - Customize your node settings
 - [Minting Guide](minting.md) - Learn about minting economics and setup
 - [API Reference](api.md) - JSON-RPC and WebSocket API documentation
-- [Architecture](architecture.md) - Understand how Botho works
-- [Troubleshooting](troubleshooting.md) - Common issues and solutions
+- [Architecture](concepts/architecture.md) - Understand how Botho works
+- [Troubleshooting](operations/troubleshooting.md) - Common issues and solutions
