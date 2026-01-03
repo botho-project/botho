@@ -167,7 +167,7 @@ async fn run_scanner(
 
     // Main scanning loop
     loop {
-        match scan_batch(&client, &scanner, &handler, &mut sync_state, config).await {
+        match scan_batch(&client, &scanner, handler.as_ref(), &mut sync_state, config).await {
             Ok(deposits_found) => {
                 if deposits_found > 0 {
                     tracing::info!(
