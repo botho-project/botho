@@ -125,7 +125,7 @@ pub const MAX_TRANSACTIONS_PER_BLOCK: usize = 5000;
 /// - 16 outputs × ~1.2 KB (ML-KEM stealth + Pedersen) ≈ 19 KB
 /// - Bulletproofs aggregated: ~2 KB
 /// - Overhead: ~1 KB
-/// Total: ~33 KB typical max, 100 KB limit provides margin.
+/// - Total: ~33 KB typical max, 100 KB limit provides margin.
 ///
 /// Messages exceeding this size are rejected before deserialization to prevent
 /// resource exhaustion attacks.
@@ -138,7 +138,7 @@ pub const MAX_TRANSACTION_SIZE: usize = 100 * 1024; // 100 KB
 /// - 16 outputs × ~1.2 KB ≈ 19 KB
 /// - Bulletproofs aggregated: ~2 KB
 /// - Overhead: ~1 KB
-/// Total: ~310 KB typical max, 512 KB limit provides margin.
+/// - Total: ~310 KB typical max, 512 KB limit provides margin.
 ///
 /// PQ-Private transactions accept larger sizes as the cost of quantum resistance.
 pub const MAX_PQ_TRANSACTION_SIZE: usize = 512 * 1024; // 512 KB

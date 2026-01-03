@@ -11,6 +11,7 @@ use crate::db::Database;
 use crate::engine::ShutdownSignal;
 
 /// BTH watcher monitors the BTH chain for deposits to the bridge address.
+#[allow(dead_code)]
 pub struct BthWatcher {
     config: BthConfig,
     db: Database,

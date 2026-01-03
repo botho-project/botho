@@ -1046,7 +1046,7 @@ fn build_scp_quorum_set(quorum: &QuorumBuilder, local_peer_id: &libp2p::PeerId) 
     }
 
     // Threshold is 1 for solo mining, otherwise use configured threshold
-    let threshold = if members.len() == 1 { 1 } else { quorum.threshold() as u32 };
+    let threshold = if members.len() == 1 { 1 } else { quorum.threshold() };
 
     QuorumSet::new(threshold, members)
 }

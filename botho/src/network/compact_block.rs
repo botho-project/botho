@@ -246,7 +246,7 @@ impl CompactBlock {
         // Prefilled: variable
         let base_size = 200 + 300 + 8;
         let short_ids_size = self.short_ids.len() * 6;
-        let prefilled_size: usize = self.prefilled_txs.iter().map(|p| 2 + 500).sum(); // estimate
+        let prefilled_size: usize = self.prefilled_txs.iter().map(|_| 2 + 500).sum(); // estimate
 
         base_size + short_ids_size + prefilled_size
     }

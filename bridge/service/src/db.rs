@@ -14,6 +14,7 @@ pub struct Database {
     conn: Arc<Mutex<Connection>>,
 }
 
+#[allow(dead_code)]
 impl Database {
     /// Open or create the database.
     pub fn open(path: &str) -> Result<Self, String> {
@@ -346,10 +347,12 @@ fn parse_status(s: &str, error_msg: Option<String>) -> OrderStatus {
 }
 
 // Extension trait for rusqlite optional queries
+#[allow(dead_code)]
 trait OptionalExt<T> {
     fn optional(self) -> SqliteResult<Option<T>>;
 }
 
+#[allow(dead_code)]
 impl<T> OptionalExt<T> for SqliteResult<T> {
     fn optional(self) -> SqliteResult<Option<T>> {
         match self {

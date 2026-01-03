@@ -163,6 +163,7 @@ pub struct Slot<V: Value, ValidationError: Display> {
     pub(crate) valid_values: BTreeSet<V>,
 
     /// Logger.
+    #[allow(dead_code)]
     logger: Logger,
 
     /// This parameter sets the base interval for round timeout.
@@ -345,7 +346,7 @@ impl<V: Value, ValidationError: Display> ScpSlot<V> for Slot<V, ValidationError>
 
     /// Handle an incoming message from a peer.
     fn handle_message(&mut self, msg: &Msg<V>) -> Result<Option<Msg<V>>, String> {
-        self.handle_messages(&[msg.clone()])
+        self.handle_messages(std::slice::from_ref(msg))
     }
 
     /// Handle incoming messages from peers. Messages for other slots are

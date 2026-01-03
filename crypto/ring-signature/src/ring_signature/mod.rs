@@ -371,6 +371,7 @@ pub fn clsag_verify_batch<'a>(
 
 /// Verify multiple CLSAG signatures (serial version).
 #[cfg(all(feature = "alloc", not(feature = "parallel")))]
+#[allow(dead_code)]
 pub fn clsag_verify_batch<'a>(
     items: impl IntoIterator<Item = (&'a [u8], &'a [ReducedTxOut], &'a CompressedCommitment, &'a Clsag)>,
 ) -> alloc::vec::Vec<BatchVerifyResult> {
@@ -386,6 +387,7 @@ pub fn clsag_verify_batch<'a>(
 
 /// Check if all CLSAG signatures in a batch are valid (parallel version).
 #[cfg(all(feature = "alloc", feature = "parallel"))]
+#[allow(dead_code)]
 pub fn clsag_verify_batch_all<'a>(
     items: impl IntoIterator<Item = (&'a [u8], &'a [ReducedTxOut], &'a CompressedCommitment, &'a Clsag)>,
 ) -> Result<(), Error> {
@@ -400,6 +402,7 @@ pub fn clsag_verify_batch_all<'a>(
 
 /// Check if all CLSAG signatures in a batch are valid (serial version).
 #[cfg(all(feature = "alloc", not(feature = "parallel")))]
+#[allow(dead_code)]
 pub fn clsag_verify_batch_all<'a>(
     items: impl IntoIterator<Item = (&'a [u8], &'a [ReducedTxOut], &'a CompressedCommitment, &'a Clsag)>,
 ) -> Result<(), Error> {

@@ -176,7 +176,6 @@ impl ClusterTags {
             return true;
         }
 
-        let self_ids: HashSet<ClusterId> = self_top.iter().map(|(id, _)| *id).collect();
         let other_ids: HashSet<ClusterId> = other_top.iter().map(|(id, _)| *id).collect();
 
         // Count matching clusters with similar weights
@@ -335,7 +334,7 @@ impl SpendDistribution {
         self.spend_ages.push_back(age_blocks);
 
         // Update parameters periodically (every 100 observations)
-        if self.spend_ages.len() >= 100 && self.spend_ages.len() % 100 == 0 {
+        if self.spend_ages.len() >= 100 && self.spend_ages.len().is_multiple_of(100) {
             self.update_parameters();
         }
     }

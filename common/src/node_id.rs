@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 #[derive(
     Clone, Copy, Debug, Deserialize, Display, Hash, Eq, Ord, PartialEq, PartialOrd, Serialize,
 )]
+#[allow(dead_code)]
 pub enum NodeIDError {
     /// Could not create NodeID due to serialization failure
     Deserialization,

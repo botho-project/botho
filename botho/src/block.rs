@@ -868,7 +868,7 @@ pub mod difficulty {
             let net_per_tx = self.total_emitted.saturating_sub(self.total_burned)
                 / self.total_tx;
             let annual = net_per_tx * 10_000_000;
-            (annual * 10_000 / supply) as u64
+            annual * 10_000 / supply
         }
     }
 

@@ -49,7 +49,7 @@ pub const PQ_SIGNING_PUBKEY_SIZE: usize = 1952; // ML-DSA-65 public key
 ///
 /// Classical transactions have a minimum fee of 0.0001 credits (100_000_000 picocredits).
 /// PQ transactions are ~19x larger, so they pay proportionally more.
-
+///
 /// Fee per byte of transaction data (in picocredits)
 /// Set to ensure PQ transactions pay ~19x the classical fee for similar operations
 pub const PQ_FEE_PER_BYTE: u64 = 10_000; // 0.00001 credits per byte

@@ -692,7 +692,7 @@ async fn handle_estimate_fee(id: Value, params: &Value, state: &RpcState) -> Jso
     let cluster_factor = mempool.cluster_factor(cluster_wealth);
 
     // Calculate average mempool fee for priority estimation
-    let avg_fee = if mempool.len() > 0 {
+    let avg_fee = if !mempool.is_empty() {
         mempool.total_fees() / mempool.len() as u64
     } else {
         minimum_fee

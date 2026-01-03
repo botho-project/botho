@@ -210,11 +210,7 @@ impl HmacAuthenticator {
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
 
-        let skew = if now > timestamp {
-            now - timestamp
-        } else {
-            timestamp - now
-        };
+        let skew = now.abs_diff(timestamp);
 
         // Convert max skew to milliseconds for comparison
         if skew > self.max_timestamp_skew * 1000 {

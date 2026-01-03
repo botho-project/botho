@@ -11,6 +11,7 @@ use crate::db::Database;
 use crate::engine::ShutdownSignal;
 
 /// Ethereum watcher monitors the wBTH contract for burn events.
+#[allow(dead_code)]
 pub struct EthereumWatcher {
     config: EthereumConfig,
     db: Database,

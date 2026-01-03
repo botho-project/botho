@@ -46,6 +46,7 @@ pub struct LoggingScpNode<V: Value, N: ScpNode<V>> {
     slot_state_filenames: Vec<PathBuf>,
 
     /// Logger
+    #[allow(dead_code)]
     logger: Logger,
 
     _v: PhantomData<V>,

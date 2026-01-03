@@ -200,7 +200,7 @@ async fn run_scanner(
 async fn scan_batch(
     client: &reqwest::Client,
     scanner: &ExchangeScanner,
-    handler: &Box<dyn OutputHandler>,
+    handler: &dyn OutputHandler,
     sync_state: &mut SyncState,
     config: &ScannerConfig,
 ) -> Result<u64> {
