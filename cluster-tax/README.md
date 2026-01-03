@@ -1,145 +1,264 @@
-# Cluster Tax: Progressive Transaction Fees for Botho
+# Cluster Tax: Progressive Economics for Botho
 
-Botho implements a **size-based progressive fee model** that scales with transaction size while applying progressive taxation to discourage wealth concentration.
+The `cluster-tax` crate implements Botho's economic layer: progressive transaction fees, provenance tracking, lottery-based redistribution, and monetary policy.
 
-## The Problem
+## Overview
 
-Traditional cryptocurrencies face two challenges:
+Botho's economic system has four pillars:
 
-1. **Transaction size externalities**: Larger transactions consume more network resources (bandwidth, storage, verification) but flat fees don't reflect this cost difference.
+1. **Tag Vectors** - Track coin provenance through cluster attribution
+2. **Progressive Fees** - Size-based fees with wealth-dependent multipliers (1x-6x)
+3. **Lottery Redistribution** - 80% of fees redistributed to random UTXOs, 20% burned
+4. **Two-Phase Monetary Policy** - Halving schedule (years 0-10) then tail emission (2% target)
 
-2. **Wealth concentrates over time**: Without intervention, cryptocurrency wealth follows power-law distributions where the rich get richer through compound effects.
+## Key Concepts
 
-## The Solution
+### Clusters and Tag Vectors
 
-Botho addresses both problems with a single fee structure:
+Every UTXO carries a **tag vector** tracking what fraction of its value traces back to each origin cluster:
+
+```rust
+use bth_cluster_tax::{TagVector, TAG_WEIGHT_SCALE};
+
+// Fresh minted coin: 100% attributed to minter's cluster
+let minted = TagVector::single(cluster_id);
+
+// After trading: mixed provenance from multiple sources
+let traded = TagVector::from_weights(&[
+    (alice_cluster, 400_000),  // 40% from Alice's cluster
+    (bob_cluster, 350_000),    // 35% from Bob's cluster
+    // remaining 25% is "background" (fully diffused)
+]);
+```
+
+**Key properties:**
+- Weights sum to at most `TAG_WEIGHT_SCALE` (1,000,000 = 100%)
+- Remainder is "background" - value that has fully diffused through commerce
+- Maximum 32 tags per vector (oldest/smallest pruned)
+
+### Decay Mechanisms
+
+Tags decay over time, reflecting that provenance information becomes less relevant as coins change hands:
+
+| Decay Type | Trigger | Effect |
+|------------|---------|--------|
+| **Age-based** | Time passing | Old coins lose cluster attribution |
+| **Block-based** | New blocks mined | Attribution fades with chain growth |
+| **AND-based** | Epochs (7 days) | Wash trading resistance via epoch caps |
+
+```rust
+use bth_cluster_tax::{AndDecayConfig, AndTagVector};
+
+let config = AndDecayConfig::default();
+let mut tags = AndTagVector::new(initial_tags, current_block);
+
+// Apply decay when spending
+tags.apply_decay(current_block, &config);
+```
+
+### Cluster Entropy
+
+The **entropy** of a tag vector measures provenance diversity:
+
+```rust
+// Fresh mint: entropy = 0 (single source)
+// Self-split: entropy ≈ 0.5-1.0 (same sources)
+// Commerce coin: entropy ≈ 1.5-2.5 (mixed sources)
+// Exchange coin: entropy ≈ 2.5-3.5 (highly mixed)
+
+let entropy = tags.cluster_entropy(); // Decay-invariant
+```
+
+**Important:** Use `cluster_entropy()` (excludes background) not `shannon_entropy()` (includes background) for lottery selection. See [Provenance-Based Selection](../docs/design/provenance-based-selection.md).
+
+## Fee Model
+
+### Size-Based Progressive Fees
 
 ```
 fee = fee_per_byte × tx_size × cluster_factor(sender_wealth)
 ```
 
-Where:
-- `fee_per_byte` is the base rate per byte (e.g., 1 nanoBTH/byte)
-- `tx_size` is the transaction size in bytes
-- `cluster_factor` ranges from 1x to 6x based on sender's cluster wealth
+| Component | Description |
+|-----------|-------------|
+| `fee_per_byte` | Base rate (default: 1 nanoBTH/byte) |
+| `tx_size` | Transaction size in bytes |
+| `cluster_factor` | 1x-6x based on sender's cluster wealth |
 
 ### Transaction Types
 
-| Type | Ring Signature | Typical Size | Description |
-|------|---------------|--------------|-------------|
-| **Standard-Private** | CLSAG (~700B) | ~2-3 KB | Efficient classical ring signatures |
-| **PQ-Private** | LION (~63 KB) | ~65-70 KB | Post-quantum ring signatures |
-| **Minting** | N/A | ~1 KB | Block reward claims (no fee) |
-
-### Size-Based Pricing
-
-PQ-Private transactions naturally cost more because they're larger:
-- CLSAG signature: ~700 bytes per input
-- LION signature: ~63 KB per input
-
-This ensures fair pricing - you pay for what you use.
+| Type | Ring Signature | Typical Size | Use Case |
+|------|---------------|--------------|----------|
+| **Hidden** (CLSAG) | ~700 bytes | 2-3 KB | Standard private transactions |
+| **PqHidden** (LION) | ~63 KB | 65-70 KB | Post-quantum secure |
+| **Minting** | N/A | ~1 KB | Block rewards (no fee) |
 
 ### Progressive Taxation
 
-All transaction types apply the same cluster factor curve:
+The cluster factor curve ensures wealthy clusters pay more:
 
 ```
 cluster_factor(W) = 1 + 5 × sigmoid((W - w_mid) / steepness)
 ```
 
-This ensures:
-- **Small holders pay ~1x** (just the size-based fee)
-- **Large holders pay up to 6x** (progressively taxed)
-- **Smooth transition** around the midpoint
-
-## Economic Impact
-
-Agent-based simulations show this fee structure can **reduce inequality by ~48% over 10 years** through the burn mechanism alone (no redistribution required).
-
-![Botho Fee Model Simulation Results](gini_10yr/botho_fee_model.png)
-
-| Metric | Result |
-|--------|--------|
-| Initial GINI | 0.788 |
-| Final GINI | 0.409 |
-| Reduction | 48.1% |
-
-See [scripts/README.md](scripts/README.md) for detailed simulation methodology and results.
-
-## Implementation
-
-The fee calculation is implemented in [`src/fee_curve.rs`](src/fee_curve.rs):
+| Sender Wealth | Cluster Factor | Effect |
+|---------------|----------------|--------|
+| Small holder | ~1.0x | Base fee only |
+| Medium holder | ~2-3x | Moderate premium |
+| Large holder | ~6.0x | Maximum premium |
 
 ```rust
 use bth_cluster_tax::{FeeConfig, TransactionType};
 
 let config = FeeConfig::default();
 
-// Small Standard-Private transaction (2 KB, small holder)
+// Small holder: pays base fee
 let fee = config.compute_fee(TransactionType::Hidden, 2000, 1_000, 0);
-// fee ≈ 2000 nanoBTH (1x cluster factor)
+// ≈ 2000 nanoBTH
 
-// Same transaction, large holder (cluster_wealth = 100M)
+// Large holder: pays 6x premium
 let fee = config.compute_fee(TransactionType::Hidden, 2000, 100_000_000, 0);
-// fee ≈ 12000 nanoBTH (6x cluster factor)
-
-// PQ-Private transaction (~65 KB, small holder)
-let fee = config.compute_fee(TransactionType::PqHidden, 65000, 1_000, 0);
-// fee ≈ 65000 nanoBTH
-
-// Minting transactions are free
-let fee = config.compute_fee(TransactionType::Minting, 1000, 0, 0);
-// fee = 0
+// ≈ 12000 nanoBTH
 ```
 
-## Cluster Wealth Tracking
+## Fee Distribution: Lottery + Burn
 
-"Cluster wealth" is the total value associated with a sender's transaction graph cluster. This is tracked through:
+Fees are split between lottery redistribution and burning:
 
-1. **Output linking**: When outputs are spent together, they're linked to the same cluster
-2. **Decay over time**: Cluster associations decay as coins change hands
-3. **Privacy preservation**: For private transactions, cluster wealth is estimated from ring member analysis
+```
+┌─────────────────────────────────────────────────────────┐
+│                    Transaction Fee                       │
+├─────────────────────────────────────┬───────────────────┤
+│         80% Lottery Pool            │    20% Burned     │
+│  (redistributed to random UTXOs)    │  (deflationary)   │
+└─────────────────────────────────────┴───────────────────┘
+```
 
-## Design Rationale
+### Lottery Selection Modes
 
-### Why size-based fees?
+| Mode | Sybil Resistance | Progressive | Best For |
+|------|------------------|-------------|----------|
+| **Uniform** | Low (9x advantage) | High | N/A - vulnerable |
+| **ValueWeighted** | High (1x) | None | Pure Sybil resistance |
+| **EntropyWeighted** | Medium (6x) | Medium | Balanced approach |
 
-Size-based fees naturally capture the cost differences between transaction types:
-- Larger transactions use more network bandwidth
-- Larger transactions require more storage
-- Larger signatures take longer to verify
+**Recommended:** Entropy-weighted selection reduces Sybil advantage by ~35% while maintaining progressivity. See [Provenance-Based Selection](../docs/design/provenance-based-selection.md).
 
-This is fairer than flat fees and avoids arbitrary rate tables.
+### Entropy Bonus Parameter
 
-### Why not redistribute fees?
+The `entropy_bonus` parameter controls lottery weight advantage for high-entropy (commerce) coins:
 
-While redistribution achieves faster inequality reduction, burning has advantages:
+```
+weight = value × (1 + entropy_bonus × cluster_entropy)
+```
 
-- **Simpler**: No complex distribution mechanism
-- **Deflationary**: Creates scarcity, benefiting all holders proportionally
-- **No gaming**: Can't farm redistribution by creating fake small accounts
+| `entropy_bonus` | Commerce Advantage | Fresh Mint Penalty |
+|-----------------|-------------------|-------------------|
+| 0.25 | 1.5x | -17% vs average |
+| **0.50** (default) | 2.0x | -29% vs average |
+| 1.00 | 3.0x | -44% vs average |
 
-### Why 1x-6x and not more aggressive?
+## Monetary Policy
 
-The 6x maximum was chosen to:
+### Two-Phase Model
 
-- Achieve meaningful inequality reduction (~48% over 10 years)
-- Avoid punitive fees that drive large holders away
-- Keep the system usable for legitimate large transactions
+**Phase 1: Halving (Years 0-10)**
+- Initial reward: 50 BTH/block
+- Halves every 2 years (5 halvings total)
+- Total emission: ~100M BTH
+- Difficulty targets 5-second block time
 
-Simulations show diminishing returns beyond 6x - a 10x maximum only improves reduction by ~0.7%.
+```
+Year 0-2:   50.00 BTH/block  → ~52.6M BTH
+Year 2-4:   25.00 BTH/block  → ~26.3M BTH
+Year 4-6:   12.50 BTH/block  → ~13.1M BTH
+Year 6-8:    6.25 BTH/block  →  ~6.6M BTH
+Year 8-10:   3.125 BTH/block →  ~3.3M BTH
+────────────────────────────────────────
+Total Phase 1:               ~101.9M BTH
+```
+
+**Phase 2: Tail Emission (Year 10+)**
+- Fixed tail reward (~1.94 BTH/block)
+- Target: 2% annual NET inflation
+- Difficulty adjusts to hit inflation target
+- Fee burns reduce effective inflation
+
+```rust
+use bth_cluster_tax::{MonetaryPolicy, MonetaryState};
+
+let policy = MonetaryPolicy::default();
+let state = MonetaryState::genesis();
+
+let reward = policy.block_reward(current_height);
+let is_tail = policy.is_tail_emission(current_height);
+```
+
+### Key Insight
+
+Instead of variable rewards (unpredictable for minters), difficulty adjusts to hit monetary targets:
+
+```
+net_inflation = gross_emission - fees_burned
+              = (reward × blocks) - fees_burned
+
+blocks_needed = (target_net + fees_burned) / reward
+→ difficulty adjusts to produce this many blocks
+```
+
+## Simulation Framework
+
+The crate includes comprehensive agent-based simulations:
+
+```bash
+# Run lottery simulation
+cargo run --bin cluster-tax-sim --features cli -- lottery
+
+# Run with custom parameters
+cargo run --bin cluster-tax-sim --features cli -- lottery \
+    --epochs 100 \
+    --selection-mode entropy-weighted \
+    --entropy-bonus 0.5
+```
+
+### Agent Types
+
+| Agent | Behavior | Economic Role |
+|-------|----------|---------------|
+| **Retail** | Small, frequent transactions | Typical users |
+| **Whale** | Large, infrequent transactions | Wealthy holders |
+| **Merchant** | Receives many small payments | Commerce |
+| **Minter** | Claims block rewards | Supply creation |
+| **Mixer** | Consolidates/splits UTXOs | Privacy |
+| **MarketMaker** | High-frequency trading | Liquidity |
+
+### Metrics Tracked
+
+- GINI coefficient (wealth inequality)
+- Lottery win distribution
+- Fee burden by wealth class
+- Sybil attack profitability
+- Network size effects
+
+## Design Documents
+
+For detailed analysis and rationale:
+
+- **[Cluster Tag Decay](../docs/design/cluster-tag-decay.md)** - AND-based decay mechanism for wash trading resistance
+- **[Lottery Redistribution](../docs/design/lottery-redistribution.md)** - Lottery design and Sybil analysis
+- **[Provenance-Based Selection](../docs/design/provenance-based-selection.md)** - Entropy-weighted lottery selection
 
 ## Configuration
 
-Default parameters can be adjusted for different economic goals:
-
 ```rust
+use bth_cluster_tax::{FeeConfig, ClusterFactorCurve};
+
 let config = FeeConfig {
     fee_per_byte: 1,              // 1 nanoBTH per byte
     fee_per_memo: 100,            // 100 nanoBTH per memo
     cluster_curve: ClusterFactorCurve {
-        factor_min: 100,          // 1x minimum (100 = 1.00x)
-        factor_max: 600,          // 6x maximum (600 = 6.00x)
+        factor_min: 100,          // 1.00x minimum
+        factor_max: 600,          // 6.00x maximum
         w_mid: 10_000_000,        // Sigmoid midpoint
         steepness: 5_000_000,     // Transition smoothness
         ..Default::default()
@@ -147,11 +266,43 @@ let config = FeeConfig {
 };
 ```
 
+## Module Structure
+
+| Module | Description |
+|--------|-------------|
+| `tag` | Tag vectors and cluster attribution |
+| `fee_curve` | Progressive fee calculation |
+| `monetary` | Two-phase monetary policy |
+| `dynamic_fee` | Congestion-based fee adjustments |
+| `transfer` | UTXO transfers with tag propagation |
+| `crypto` | Committed tags for privacy |
+| `simulation` | Agent-based economic simulations |
+| `validate` | Transaction validation |
+
 ## Testing
 
 ```bash
+# Unit tests
 cargo test -p bth-cluster-tax
+
+# With simulation tests (slower)
+cargo test -p bth-cluster-tax --features cli
+
+# Benchmarks
+cargo bench -p bth-cluster-tax
 ```
+
+## Economic Impact
+
+Simulations show the combined fee + lottery system can significantly reduce wealth inequality:
+
+| Metric | Value |
+|--------|-------|
+| Initial GINI | 0.788 |
+| Final GINI (10 years) | 0.409 |
+| Reduction | 48.1% |
+
+The lottery mechanism provides additional redistribution beyond pure fee burning, though with trade-offs around Sybil resistance. See design documents for detailed analysis.
 
 ## License
 
