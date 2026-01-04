@@ -121,7 +121,7 @@ pub use negotiation::{
 };
 
 // Re-export error types
-pub use error::TransportError;
+pub use error::{TransportError, TransportResult, WebRtcError};
 
 // Re-export transport types
 pub use types::{TransportType, TransportTypeParseError};
