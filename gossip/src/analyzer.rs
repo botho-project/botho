@@ -465,7 +465,7 @@ pub struct QuorumSetValidation {
 mod tests {
     use super::*;
     use crate::{
-        messages::{NodeAnnouncement, NodeCapabilities},
+        messages::{NodeAnnouncement, NodeCapabilities, RelayCapacity},
         store::{PeerStore, PeerStoreConfig},
     };
     use bth_common::NodeID;
@@ -499,6 +499,7 @@ mod tests {
             NodeCapabilities::CONSENSUS | NodeCapabilities::GOSSIP,
             "1.0.0".to_string(),
             timestamp,
+            RelayCapacity::default(),
         )
     }
 
