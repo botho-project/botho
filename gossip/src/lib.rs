@@ -113,9 +113,10 @@ pub use consensus_integration::{
 };
 pub use error::{GossipError, GossipResult};
 pub use messages::{
-    BlockBroadcast, GossipMessage, NodeAnnouncement, NodeCapabilities, PeerInfo,
-    TransactionBroadcast, ANNOUNCEMENTS_TOPIC, BLOCKS_TOPIC, PEER_EXCHANGE_TOPIC,
-    TOPOLOGY_SYNC_PROTOCOL, TRANSACTIONS_TOPIC,
+    BlockBroadcast, CircuitDestroyReason, CircuitHandshakeMsg, CircuitId, GossipMessage,
+    NodeAnnouncement, NodeCapabilities, PeerInfo, TransactionBroadcast, ANNOUNCEMENTS_TOPIC,
+    BLOCKS_TOPIC, CIRCUIT_HANDSHAKE_PROTOCOL, PEER_EXCHANGE_TOPIC, TOPOLOGY_SYNC_PROTOCOL,
+    TRANSACTIONS_TOPIC,
 };
 pub use rate_limit::{
     GossipMessageType, PeerRateLimiter, PeerRateStats, RateLimitMetrics, RateLimitMetricsSnapshot,

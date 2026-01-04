@@ -10,7 +10,7 @@
 
 use bth_common::{NodeID, ResponderId};
 use bth_consensus_scp_types::QuorumSet;
-use bth_crypto_keys::{Ed25519Public, Ed25519Signature};
+use bth_crypto_keys::{Ed25519Public, Ed25519Signature, X25519Public};
 use serde::{Deserialize, Serialize};
 
 /// Capabilities advertised by a node.
@@ -223,6 +223,9 @@ pub const BLOCKS_TOPIC: &str = "/botho/blocks/1.0.0";
 /// Protocol ID for request-response topology sync.
 pub const TOPOLOGY_SYNC_PROTOCOL: &str = "/botho/topology-sync/1.0.0";
 
+/// Protocol ID for circuit handshake (onion gossip).
+pub const CIRCUIT_HANDSHAKE_PROTOCOL: &str = "/botho/circuit-handshake/1.0.0";
+
 /// A transaction broadcast message.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransactionBroadcast {
@@ -245,6 +248,136 @@ pub struct BlockBroadcast {
     pub height: u64,
     /// Timestamp when broadcast
     pub timestamp: u64,
+}
+
+// ============================================================================
+// Circuit Handshake Protocol Types (Phase 1: Onion Gossip)
+// ============================================================================
+
+/// Unique identifier for a circuit.
+///
+/// Circuit IDs are random 16-byte values that identify a specific circuit
+/// for both handshake and relay operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct CircuitId(pub [u8; 16]);
+
+impl CircuitId {
+    /// Generate a new random circuit ID.
+    pub fn random() -> Self {
+        let mut bytes = [0u8; 16];
+        // Use getrandom for cryptographic randomness
+        getrandom::getrandom(&mut bytes).expect("Failed to generate random bytes");
+        Self(bytes)
+    }
+
+    /// Get the circuit ID as bytes.
+    pub fn as_bytes(&self) -> &[u8; 16] {
+        &self.0
+    }
+}
+
+impl AsRef<[u8]> for CircuitId {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for CircuitId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", hex::encode(self.0))
+    }
+}
+
+/// Messages for establishing circuit keys through telescoping handshake.
+///
+/// The protocol builds circuits incrementally, one hop at a time:
+///
+/// ```text
+/// Step 1: Alice ←─X25519─→ Hop1
+///         Result: key1
+///
+/// Step 2: Alice ──[Encrypt_key1(handshake)]──→ Hop1 ──→ Hop2
+///         Hop2 ←─X25519─→ Alice (through Hop1)
+///         Result: key2
+///
+/// Step 3: Alice ──[Encrypt_key1(Encrypt_key2(handshake))]──→ Hop1 ──→ Hop2 ──→ Hop3
+///         Hop3 ←─X25519─→ Alice (through Hop1, Hop2)
+///         Result: key3
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum CircuitHandshakeMsg {
+    /// Initial CREATE message to first hop.
+    ///
+    /// Sent directly to the first hop of a new circuit. The receiver will
+    /// perform X25519 key agreement and respond with Created.
+    Create {
+        /// Unique circuit identifier
+        circuit_id: CircuitId,
+        /// Sender's ephemeral X25519 public key
+        #[serde(with = "x25519_pubkey_serde")]
+        ephemeral_pubkey: X25519Public,
+    },
+
+    /// Response to Create with hop's ephemeral key.
+    ///
+    /// Sent by the first hop after receiving Create. Contains the hop's
+    /// ephemeral public key for completing the X25519 key agreement.
+    Created {
+        /// Circuit identifier (must match the Create message)
+        circuit_id: CircuitId,
+        /// Hop's ephemeral X25519 public key
+        #[serde(with = "x25519_pubkey_serde")]
+        ephemeral_pubkey: X25519Public,
+    },
+
+    /// Extend circuit through existing hops.
+    ///
+    /// Sent to an existing hop to extend the circuit to a new hop.
+    /// The encrypted_create contains a Create message encrypted for the new
+    /// hop.
+    Extend {
+        /// Circuit identifier
+        circuit_id: CircuitId,
+        /// The next hop's peer ID to extend to
+        next_hop: String,
+        /// Encrypted Create message for the next hop
+        encrypted_create: Vec<u8>,
+    },
+
+    /// Response confirming circuit extension.
+    ///
+    /// Returned through the circuit after the new hop responds with Created.
+    /// The encrypted_created contains the new hop's Created message.
+    Extended {
+        /// Circuit identifier
+        circuit_id: CircuitId,
+        /// Encrypted Created message from the new hop
+        encrypted_created: Vec<u8>,
+    },
+
+    /// Circuit destruction message.
+    ///
+    /// Sent to tear down a circuit. Each hop should forward this message
+    /// and clean up circuit state.
+    Destroy {
+        /// Circuit identifier to destroy
+        circuit_id: CircuitId,
+        /// Reason for destruction (for logging only)
+        reason: CircuitDestroyReason,
+    },
+}
+
+/// Reason for circuit destruction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CircuitDestroyReason {
+    /// Normal teardown by circuit originator
+    Finished,
+    /// Circuit timed out
+    Timeout,
+    /// Error occurred during relay
+    Error,
+    /// Protocol violation detected
+    ProtocolViolation,
 }
 
 // Serde helpers for Ed25519 types
@@ -290,6 +423,28 @@ mod pubkey_serde {
         let hex_str = String::deserialize(deserializer)?;
         let bytes = hex::decode(&hex_str).map_err(serde::de::Error::custom)?;
         Ed25519Public::try_from(bytes.as_slice()).map_err(serde::de::Error::custom)
+    }
+}
+
+mod x25519_pubkey_serde {
+    use bth_crypto_keys::X25519Public;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S>(key: &X25519Public, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let bytes: &[u8] = key.as_ref();
+        hex::encode(bytes).serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<X25519Public, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let hex_str = String::deserialize(deserializer)?;
+        let bytes = hex::decode(&hex_str).map_err(serde::de::Error::custom)?;
+        X25519Public::try_from(bytes.as_slice()).map_err(serde::de::Error::custom)
     }
 }
 
