@@ -99,6 +99,7 @@ mod types;
 
 // Phase 2: Traffic normalization
 pub mod config;
+pub mod cover;
 
 // Re-export core types
 pub use types::{CircuitId, SymmetricKey, CIRCUIT_ID_LEN, SYMMETRIC_KEY_LEN};
@@ -186,4 +187,10 @@ pub use transmitter::{
 pub use config::{
     PrivacyConfig, PrivacyConfigBuilder, PrivacyConfigError, PrivacyLevel, PrivacyLevelParseError,
     DEFAULT_JITTER_MAX_MS, DEFAULT_JITTER_MIN_MS,
+};
+
+// Re-export cover traffic types
+pub use cover::{
+    CoverMessage, CoverMessageType, CoverTrafficConfig, CoverTrafficGenerator, CoverTrafficStats,
+    SizeCategory, DEFAULT_SIZE_WEIGHTS, MAX_COVER_SIZE, MIN_COVER_SIZE,
 };
