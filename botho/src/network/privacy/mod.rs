@@ -96,6 +96,9 @@ pub mod selection;
 pub mod transmitter;
 mod types;
 
+// Phase 2: Traffic normalization
+pub mod config;
+
 // Re-export core types
 pub use types::{CircuitId, SymmetricKey, CIRCUIT_ID_LEN, SYMMETRIC_KEY_LEN};
 
@@ -170,4 +173,10 @@ pub use transmitter::{
     ConstantRateConfig, ConstantRateTransmitter, OutgoingMessage, TransmitterMessageType,
     TransmitterMetrics, TransmitterMetricsSnapshot, DEFAULT_MAX_QUEUE_DEPTH,
     DEFAULT_MESSAGES_PER_SECOND,
+};
+
+// Re-export config types
+pub use config::{
+    PrivacyConfig, PrivacyConfigBuilder, PrivacyConfigError, PrivacyLevel, PrivacyLevelParseError,
+    DEFAULT_JITTER_MAX_MS, DEFAULT_JITTER_MIN_MS,
 };
