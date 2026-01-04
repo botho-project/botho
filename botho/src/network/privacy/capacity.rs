@@ -13,7 +13,8 @@
 //!
 //! # Core Types (from gossip crate)
 //!
-//! - [`RelayCapacity`]: Core capacity metrics (bandwidth, uptime, NAT type, load)
+//! - [`RelayCapacity`]: Core capacity metrics (bandwidth, uptime, NAT type,
+//!   load)
 //! - [`NatType`]: NAT classification affecting reachability
 //!
 //! # Utilities (this module)
@@ -138,7 +139,10 @@ pub trait NatTypeExt {
 impl NatTypeExt for NatType {
     /// Check if this NAT type allows good relay performance.
     fn is_relay_friendly(&self) -> bool {
-        matches!(self, NatType::Open | NatType::FullCone | NatType::Restricted)
+        matches!(
+            self,
+            NatType::Open | NatType::FullCone | NatType::Restricted
+        )
     }
 }
 

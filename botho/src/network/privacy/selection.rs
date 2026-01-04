@@ -7,7 +7,8 @@
 //!
 //! - **Subnet Diversity**: No two hops in the same /16 subnet
 //! - **Weighted Selection**: Higher relay scores increase selection probability
-//! - **Minimum Thresholds**: Only peers meeting quality requirements are considered
+//! - **Minimum Thresholds**: Only peers meeting quality requirements are
+//!   considered
 //! - **Non-determinism**: Random selection prevents prediction by adversaries
 //!
 //! # Security Properties
@@ -220,10 +221,9 @@ impl CircuitSelector {
     /// # Algorithm
     ///
     /// 1. Filter peers by minimum relay score
-    /// 2. Repeatedly:
-    ///    a. Filter out already-selected peers and used subnets
-    ///    b. Select one peer using weighted random selection
-    ///    c. Add to selected list and mark subnet as used
+    /// 2. Repeatedly: a. Filter out already-selected peers and used subnets b.
+    ///    Select one peer using weighted random selection c. Add to selected
+    ///    list and mark subnet as used
     /// 3. Return selected peers or error if insufficient diversity
     pub fn select_diverse_hops(
         &self,
@@ -639,7 +639,11 @@ mod tests {
         // With ~0.83 vs ~0.27 scores (based on relay_score calculation),
         // expect ~75% selection rate for high score peer.
         // Use threshold of 600 (well below expected ~755) to avoid flaky failures.
-        assert!(high_count > 600, "High score peer selected {} times (expected >600)", high_count);
+        assert!(
+            high_count > 600,
+            "High score peer selected {} times (expected >600)",
+            high_count
+        );
     }
 
     #[test]

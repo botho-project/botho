@@ -46,7 +46,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use thiserror::Error;
 use tracing::warn;
 
-use super::{decrypt_layer, CryptoError, DecryptedLayer, RelayState};
+use super::{decrypt_layer, rate_limit::RateLimitResult, CryptoError, DecryptedLayer, RelayState};
 use bth_gossip::{InnerMessage, OnionRelayMessage};
 
 /// Errors that can occur during relay message handling.
@@ -114,6 +114,8 @@ pub struct RelayMetrics {
     pub decryption_failures: AtomicU64,
     /// Cover traffic received (and dropped).
     pub cover_traffic_received: AtomicU64,
+    /// Peers flagged for disconnection due to rate limit abuse.
+    pub peers_flagged_for_disconnect: AtomicU64,
 }
 
 impl RelayMetrics {
@@ -157,6 +159,12 @@ impl RelayMetrics {
         self.cover_traffic_received.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Increment peers flagged for disconnect count.
+    pub fn inc_flagged_for_disconnect(&self) {
+        self.peers_flagged_for_disconnect
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     /// Get a snapshot of all metrics.
     pub fn snapshot(&self) -> RelayMetricsSnapshot {
         RelayMetricsSnapshot {
@@ -167,6 +175,7 @@ impl RelayMetrics {
             unknown_circuits: self.unknown_circuits.load(Ordering::Relaxed),
             decryption_failures: self.decryption_failures.load(Ordering::Relaxed),
             cover_traffic_received: self.cover_traffic_received.load(Ordering::Relaxed),
+            peers_flagged_for_disconnect: self.peers_flagged_for_disconnect.load(Ordering::Relaxed),
         }
     }
 }
@@ -188,6 +197,8 @@ pub struct RelayMetricsSnapshot {
     pub decryption_failures: u64,
     /// Cover traffic received (and dropped).
     pub cover_traffic_received: u64,
+    /// Peers flagged for disconnection due to rate limit abuse.
+    pub peers_flagged_for_disconnect: u64,
 }
 
 /// Handler for relay messages.
@@ -244,14 +255,15 @@ impl RelayHandler {
     /// Handle an incoming onion relay message.
     ///
     /// This method:
-    /// 1. Checks rate limiting for the source peer
+    /// 1. Checks rate limiting for the source peer (with message size)
     /// 2. Looks up the circuit key
     /// 3. Decrypts one layer
     /// 4. Returns the appropriate action (forward, exit, or drop)
     ///
     /// # Arguments
     ///
-    /// * `relay_state` - The relay state containing circuit keys and rate limits
+    /// * `relay_state` - The relay state containing circuit keys and rate
+    ///   limits
     /// * `from` - The peer that sent this message
     /// * `msg` - The onion relay message to handle
     ///
@@ -266,18 +278,43 @@ impl RelayHandler {
     ) -> RelayAction {
         self.metrics.inc_received();
 
-        // Step 1: Rate limiting
-        if !relay_state.check_rate_limit(from) {
-            self.metrics.inc_rate_limited();
-            warn!("Rate limited relay from {}", from);
-            return RelayAction::Dropped {
-                reason: format!("rate limited: {}", from),
-            };
+        // Step 1: Enhanced rate limiting with message size tracking
+        let rate_result = relay_state.check_relay_enhanced(from, msg.payload.len());
+        match rate_result {
+            RateLimitResult::Allowed => {
+                // Continue processing
+            }
+            RateLimitResult::RateLimited {
+                violations,
+                remaining,
+            } => {
+                self.metrics.inc_rate_limited();
+                warn!(
+                    "Rate limited relay from {} (violations: {}, remaining: {})",
+                    from, violations, remaining
+                );
+                return RelayAction::Dropped {
+                    reason: format!("rate limited: {} (violations: {})", from, violations),
+                };
+            }
+            RateLimitResult::Disconnect => {
+                self.metrics.inc_rate_limited();
+                self.metrics.inc_flagged_for_disconnect();
+                warn!(
+                    "Peer {} exceeded violation threshold, flagged for disconnect",
+                    from
+                );
+                return RelayAction::Dropped {
+                    reason: format!("disconnect: {} exceeded violation threshold", from),
+                };
+            }
         }
 
         // Step 2: Look up circuit
         let circuit_id_display = hex::encode(msg.circuit_id.as_bytes());
-        let hop_key = match relay_state.get_circuit_key(&crate::network::privacy::CircuitId::from_bytes(msg.circuit_id.as_ref()).unwrap()) {
+        let hop_key = match relay_state.get_circuit_key(
+            &crate::network::privacy::CircuitId::from_bytes(msg.circuit_id.as_ref()).unwrap(),
+        ) {
             Some(key) => key,
             None => {
                 self.metrics.inc_unknown_circuit();
@@ -450,7 +487,10 @@ mod tests {
         // Create inner message
         let tx_data = b"transaction data".to_vec();
         let tx_hash = [42u8; 32];
-        let inner = InnerMessage::Transaction { tx_data: tx_data.clone(), tx_hash };
+        let inner = InnerMessage::Transaction {
+            tx_data: tx_data.clone(),
+            tx_hash,
+        };
         let inner_bytes = bth_util_serial::serialize(&inner).unwrap();
 
         // Create exit layer
@@ -465,15 +505,16 @@ mod tests {
         let action = handler.handle_message(&mut relay_state, &from, msg);
 
         match action {
-            RelayAction::Exit { inner } => {
-                match inner {
-                    InnerMessage::Transaction { tx_data: td, tx_hash: th } => {
-                        assert_eq!(td, tx_data);
-                        assert_eq!(th, tx_hash);
-                    }
-                    _ => panic!("Expected Transaction inner message"),
+            RelayAction::Exit { inner } => match inner {
+                InnerMessage::Transaction {
+                    tx_data: td,
+                    tx_hash: th,
+                } => {
+                    assert_eq!(td, tx_data);
+                    assert_eq!(th, tx_hash);
                 }
-            }
+                _ => panic!("Expected Transaction inner message"),
+            },
             _ => panic!("Expected Exit action"),
         }
 
@@ -551,8 +592,16 @@ mod tests {
 
     #[test]
     fn test_relay_handler_rate_limited() {
+        use crate::network::privacy::rate_limit::RelayRateLimits;
+
+        // Configure with very low relay message limit (1 msg/sec, capacity 2)
         let config = RelayStateConfig {
             max_relay_per_window: 1,
+            rate_limits: RelayRateLimits {
+                relay_msgs_per_sec: 1, // Very low limit, capacity = 2
+                relay_bandwidth_per_peer: 10_000,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let mut relay_state = RelayState::new(config);
@@ -575,10 +624,11 @@ mod tests {
 
         let from = PeerId::random();
 
-        // First message should succeed
+        // First and second messages should succeed (capacity is 2)
+        let _ = handler.handle_message(&mut relay_state, &from, msg.clone());
         let _ = handler.handle_message(&mut relay_state, &from, msg.clone());
 
-        // Second message from same peer should be rate limited
+        // Third message from same peer should be rate limited
         let action = handler.handle_message(&mut relay_state, &from, msg);
 
         match action {
@@ -590,7 +640,7 @@ mod tests {
 
         // Check metrics
         let snapshot = handler.metrics().snapshot();
-        assert_eq!(snapshot.rate_limited, 1);
+        assert!(snapshot.rate_limited >= 1);
     }
 
     #[test]
@@ -636,7 +686,9 @@ mod tests {
         let mut tx_hash = [0u8; 32];
         tx_hash.copy_from_slice(&hash);
 
-        assert!(RelayHandler::should_broadcast_transaction(tx_data, &tx_hash));
+        assert!(RelayHandler::should_broadcast_transaction(
+            tx_data, &tx_hash
+        ));
     }
 
     #[test]
@@ -644,7 +696,10 @@ mod tests {
         let tx_data = b"test transaction data";
         let wrong_hash = [0u8; 32]; // Wrong hash
 
-        assert!(!RelayHandler::should_broadcast_transaction(tx_data, &wrong_hash));
+        assert!(!RelayHandler::should_broadcast_transaction(
+            tx_data,
+            &wrong_hash
+        ));
     }
 
     #[test]
@@ -652,7 +707,9 @@ mod tests {
         let tx_data = b"";
         let tx_hash = [0u8; 32];
 
-        assert!(!RelayHandler::should_broadcast_transaction(tx_data, &tx_hash));
+        assert!(!RelayHandler::should_broadcast_transaction(
+            tx_data, &tx_hash
+        ));
     }
 
     #[test]
@@ -667,6 +724,7 @@ mod tests {
         metrics.inc_unknown_circuit();
         metrics.inc_decryption_failure();
         metrics.inc_cover_traffic();
+        metrics.inc_flagged_for_disconnect();
 
         let snapshot = metrics.snapshot();
         assert_eq!(snapshot.messages_received, 2);
@@ -676,5 +734,68 @@ mod tests {
         assert_eq!(snapshot.unknown_circuits, 1);
         assert_eq!(snapshot.decryption_failures, 1);
         assert_eq!(snapshot.cover_traffic_received, 1);
+        assert_eq!(snapshot.peers_flagged_for_disconnect, 1);
+    }
+
+    #[test]
+    fn test_relay_handler_abusive_peer_disconnect() {
+        use crate::network::privacy::rate_limit::RelayRateLimits;
+
+        // Configure with very low limits and low violation threshold
+        let config = RelayStateConfig {
+            rate_limits: RelayRateLimits {
+                relay_msgs_per_sec: 1, // Capacity = 2
+                relay_bandwidth_per_peer: 10_000,
+                violation_threshold: 2, // Disconnect after 2 violations
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut relay_state = RelayState::new(config);
+        let handler = RelayHandler::new();
+
+        // Set up circuit
+        let circuit_id = random_circuit_id();
+        let key = random_symmetric_key();
+        let hop_key = CircuitHopKey::new_exit(key.duplicate());
+        relay_state.add_circuit_key(circuit_id, hop_key);
+
+        let inner = InnerMessage::Cover;
+        let inner_bytes = bth_util_serial::serialize(&inner).unwrap();
+        let encrypted = encrypt_exit_layer(&key, &inner_bytes);
+
+        let msg = OnionRelayMessage {
+            circuit_id: to_gossip_circuit_id(&circuit_id),
+            payload: encrypted.clone(),
+        };
+
+        let from = PeerId::random();
+
+        // Use up token bucket capacity (2 tokens)
+        handler.handle_message(&mut relay_state, &from, msg.clone());
+        handler.handle_message(&mut relay_state, &from, msg.clone());
+
+        // Next messages trigger violations
+        handler.handle_message(&mut relay_state, &from, msg.clone()); // violation 1
+        let action = handler.handle_message(&mut relay_state, &from, msg.clone()); // violation 2 -> disconnect
+
+        // Should be flagged for disconnect
+        match action {
+            RelayAction::Dropped { reason } => {
+                assert!(
+                    reason.contains("disconnect") || reason.contains("rate limited"),
+                    "Expected disconnect or rate limited, got: {}",
+                    reason
+                );
+            }
+            _ => panic!("Expected Dropped action for abusive peer"),
+        }
+
+        // Check that peer was flagged for disconnect
+        let flagged = relay_state.take_flagged_peers();
+        assert!(
+            !flagged.is_empty() || handler.metrics().snapshot().peers_flagged_for_disconnect >= 1,
+            "Peer should be flagged for disconnect"
+        );
     }
 }

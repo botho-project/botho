@@ -87,6 +87,7 @@ pub mod capacity;
 mod circuit;
 mod crypto;
 pub mod handshake;
+pub mod rate_limit;
 mod relay;
 pub mod relay_handler;
 pub mod routing;
@@ -130,6 +131,14 @@ pub use relay_handler::{
 // Re-export broadcaster types
 pub use broadcaster::{
     BroadcastError, BroadcastMetrics, BroadcastMetricsSnapshot, OnionBroadcaster,
+};
+
+// Re-export rate limiting types
+pub use rate_limit::{
+    BandwidthTracker, PeerRateLimitStats, PeerRelayLimiter, RateLimitResult, RelayRateLimitMetrics,
+    RelayRateLimitMetricsSnapshot, RelayRateLimiter, RelayRateLimits, TokenBucket,
+    DEFAULT_CIRCUIT_CREATES_PER_MIN, DEFAULT_RELAY_BANDWIDTH_PER_PEER, DEFAULT_RELAY_MSGS_PER_SEC,
+    DEFAULT_VIOLATION_THRESHOLD,
 };
 
 // Re-export capacity types

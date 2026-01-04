@@ -23,6 +23,7 @@ use std::{
 
 use super::{
     circuit::OutboundCircuit,
+    rate_limit::{RateLimitResult, RelayRateLimiter, RelayRateLimits},
     types::{CircuitId, SymmetricKey},
 };
 
@@ -205,8 +206,11 @@ pub struct RelayState {
     /// Circuits we've created (we're the origin).
     our_circuits: HashMap<CircuitId, OutboundCircuit>,
 
-    /// Rate limiting per peer.
+    /// Legacy rate limiting per peer (for backward compatibility).
     relay_limits: HashMap<PeerId, RateLimiter>,
+
+    /// Enhanced relay rate limiter with token buckets.
+    enhanced_limiter: RelayRateLimiter,
 
     /// Configuration.
     config: RelayStateConfig,
@@ -215,14 +219,17 @@ pub struct RelayState {
 /// Configuration for relay state.
 #[derive(Debug, Clone)]
 pub struct RelayStateConfig {
-    /// Maximum relay messages per peer per window.
+    /// Maximum relay messages per peer per window (legacy, for compatibility).
     pub max_relay_per_window: u32,
 
-    /// Rate limit window duration.
+    /// Rate limit window duration (legacy, for compatibility).
     pub rate_limit_window: Duration,
 
     /// How long to keep circuit keys.
     pub circuit_key_lifetime: Duration,
+
+    /// Enhanced rate limiting configuration.
+    pub rate_limits: RelayRateLimits,
 }
 
 impl Default for RelayStateConfig {
@@ -231,6 +238,7 @@ impl Default for RelayStateConfig {
             max_relay_per_window: DEFAULT_MAX_RELAY_PER_WINDOW,
             rate_limit_window: DEFAULT_RATE_LIMIT_WINDOW,
             circuit_key_lifetime: DEFAULT_CIRCUIT_KEY_LIFETIME,
+            rate_limits: RelayRateLimits::default(),
         }
     }
 }
@@ -238,10 +246,12 @@ impl Default for RelayStateConfig {
 impl RelayState {
     /// Create a new relay state with the given configuration.
     pub fn new(config: RelayStateConfig) -> Self {
+        let enhanced_limiter = RelayRateLimiter::new(config.rate_limits.clone());
         Self {
             circuit_keys: HashMap::new(),
             our_circuits: HashMap::new(),
             relay_limits: HashMap::new(),
+            enhanced_limiter,
             config,
         }
     }
@@ -327,6 +337,10 @@ impl RelayState {
     /// Check if a relay request from a peer should be allowed.
     ///
     /// Returns `true` if allowed, `false` if rate limited.
+    ///
+    /// This uses the legacy sliding window rate limiter for backward
+    /// compatibility. For enhanced rate limiting with token buckets, use
+    /// `check_relay_enhanced`.
     pub fn check_rate_limit(&mut self, peer: &PeerId) -> bool {
         self.relay_limits
             .entry(*peer)
@@ -339,6 +353,27 @@ impl RelayState {
             .check()
     }
 
+    /// Check if a relay message from a peer should be allowed (enhanced).
+    ///
+    /// Uses token bucket rate limiting with bandwidth tracking.
+    /// Returns the result indicating whether the request is allowed.
+    pub fn check_relay_enhanced(&mut self, peer: &PeerId, size: usize) -> RateLimitResult {
+        self.enhanced_limiter.check_relay(peer, size)
+    }
+
+    /// Check if a circuit CREATE request from a peer should be allowed.
+    ///
+    /// Uses token bucket rate limiting.
+    /// Returns the result indicating whether the request is allowed.
+    pub fn check_circuit_create(&mut self, peer: &PeerId) -> RateLimitResult {
+        self.enhanced_limiter.check_circuit_create(peer)
+    }
+
+    /// Take the list of peers flagged for disconnection.
+    pub fn take_flagged_peers(&mut self) -> Vec<PeerId> {
+        self.enhanced_limiter.take_flagged_peers()
+    }
+
     /// Get the current relay count for a peer.
     pub fn peer_relay_count(&self, peer: &PeerId) -> usize {
         self.relay_limits
@@ -347,10 +382,29 @@ impl RelayState {
             .unwrap_or(0)
     }
 
+    /// Get enhanced rate limiter statistics for a peer.
+    pub fn peer_rate_limit_stats(
+        &self,
+        peer: &PeerId,
+    ) -> Option<super::rate_limit::PeerRateLimitStats> {
+        self.enhanced_limiter.get_peer_stats(peer)
+    }
+
+    /// Get the enhanced rate limiter.
+    pub fn enhanced_limiter(&self) -> &RelayRateLimiter {
+        &self.enhanced_limiter
+    }
+
+    /// Get mutable reference to the enhanced rate limiter.
+    pub fn enhanced_limiter_mut(&mut self) -> &mut RelayRateLimiter {
+        &mut self.enhanced_limiter
+    }
+
     /// Clean up rate limiters for peers with no recent activity.
     pub fn cleanup_rate_limiters(&mut self) {
         self.relay_limits
             .retain(|_, limiter| limiter.current_count() > 0);
+        self.enhanced_limiter.cleanup_stale_peers();
     }
 
     // ========================================================================

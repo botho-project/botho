@@ -11,8 +11,7 @@ use botho::network::privacy::{
 };
 use bth_gossip::InnerMessage;
 use libp2p::PeerId;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 fn random_symmetric_key() -> SymmetricKey {
     SymmetricKey::random(&mut rand::thread_rng())
@@ -61,12 +60,18 @@ fn test_metrics_counters() {
 
     // Increment all counters
     for _ in 0..3 {
-        metrics.tx_broadcast_private.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        metrics
+            .tx_broadcast_private
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
     for _ in 0..2 {
-        metrics.tx_queued_no_circuit.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        metrics
+            .tx_queued_no_circuit
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
-    metrics.tx_broadcast_failed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    metrics
+        .tx_broadcast_failed
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     for _ in 0..5 {
         metrics.inc_exit_broadcast();
     }
@@ -81,7 +86,11 @@ fn test_metrics_counters() {
 /// Test onion wrapping produces valid layered encryption.
 #[test]
 fn test_onion_wrap_and_unwrap() {
-    let keys = [random_symmetric_key(), random_symmetric_key(), random_symmetric_key()];
+    let keys = [
+        random_symmetric_key(),
+        random_symmetric_key(),
+        random_symmetric_key(),
+    ];
     let hops = [PeerId::random(), PeerId::random(), PeerId::random()];
 
     // Create inner message
@@ -120,7 +129,10 @@ fn test_onion_wrap_and_unwrap() {
             // Deserialize inner message
             let inner_msg: InnerMessage = bth_util_serial::deserialize(&payload).unwrap();
             match inner_msg {
-                InnerMessage::Transaction { tx_data: td, tx_hash: th } => {
+                InnerMessage::Transaction {
+                    tx_data: td,
+                    tx_hash: th,
+                } => {
                     assert_eq!(td, tx_data);
                     assert_eq!(th, tx_hash);
                 }
@@ -189,8 +201,9 @@ fn test_circuit_expiration() {
     let mut pool = CircuitPool::new(CircuitPoolConfig::default());
 
     // Add a short-lived circuit (1ms lifetime + max jitter of 180s)
-    // Since jitter is random, we can't guarantee expiration timing in integration tests.
-    // Instead, test that remove_expired doesn't panic and works with fresh circuits.
+    // Since jitter is random, we can't guarantee expiration timing in integration
+    // tests. Instead, test that remove_expired doesn't panic and works with
+    // fresh circuits.
     pool.add_circuit(make_test_circuit(Duration::from_secs(600)));
     pool.add_circuit(make_test_circuit(Duration::from_secs(600)));
 
@@ -228,7 +241,10 @@ fn test_inner_message_serialization() {
     let sync_bytes = bth_util_serial::serialize(&sync_inner).unwrap();
     let sync_decoded: InnerMessage = bth_util_serial::deserialize(&sync_bytes).unwrap();
     match sync_decoded {
-        InnerMessage::SyncRequest { from_height, max_blocks } => {
+        InnerMessage::SyncRequest {
+            from_height,
+            max_blocks,
+        } => {
             assert_eq!(from_height, 12345);
             assert_eq!(max_blocks, 100);
         }
@@ -261,8 +277,12 @@ fn test_random_circuit_selection() {
     }
 
     // We should see more than one circuit (random selection)
-    // With 10 circuits and 20 selections, probability of seeing only 1 is (1/10)^19 ≈ 0
-    assert!(seen_ids.len() > 1, "Expected random selection to hit multiple circuits");
+    // With 10 circuits and 20 selections, probability of seeing only 1 is (1/10)^19
+    // ≈ 0
+    assert!(
+        seen_ids.len() > 1,
+        "Expected random selection to hit multiple circuits"
+    );
 }
 
 /// Test broadcast error types.

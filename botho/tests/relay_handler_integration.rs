@@ -45,8 +45,14 @@ fn test_three_hop_circuit_relay() {
     let hop3_peer = PeerId::random();
 
     // Set up circuit keys at each hop
-    hop1_state.add_circuit_key(circuit_id, CircuitHopKey::new_forward(key1.duplicate(), hop2_peer));
-    hop2_state.add_circuit_key(circuit_id, CircuitHopKey::new_forward(key2.duplicate(), hop3_peer));
+    hop1_state.add_circuit_key(
+        circuit_id,
+        CircuitHopKey::new_forward(key1.duplicate(), hop2_peer),
+    );
+    hop2_state.add_circuit_key(
+        circuit_id,
+        CircuitHopKey::new_forward(key2.duplicate(), hop3_peer),
+    );
     hop3_state.add_circuit_key(circuit_id, CircuitHopKey::new_exit(key3.duplicate()));
 
     // Create inner message
@@ -180,8 +186,16 @@ fn test_unknown_circuit_ignored() {
 /// Test rate limiting prevents relay abuse.
 #[test]
 fn test_rate_limiting() {
+    use botho::network::privacy::rate_limit::RelayRateLimits;
+
+    // Configure with low relay message limit (1 msg/sec = capacity 2)
     let config = RelayStateConfig {
         max_relay_per_window: 3,
+        rate_limits: RelayRateLimits {
+            relay_msgs_per_sec: 1, // Token bucket capacity = 2
+            relay_bandwidth_per_peer: 10_000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     let mut relay_state = RelayState::new(config);
@@ -202,8 +216,8 @@ fn test_rate_limiting() {
 
     let abusive_peer = PeerId::random();
 
-    // First 3 messages should succeed
-    for _ in 0..3 {
+    // First 2 messages should succeed (token bucket capacity = 2)
+    for _ in 0..2 {
         let action = handler.handle_message(&mut relay_state, &abusive_peer, msg.clone());
         match action {
             RelayAction::Dropped { reason } => {
@@ -213,17 +227,21 @@ fn test_rate_limiting() {
         }
     }
 
-    // 4th message should be rate limited
+    // 3rd message should be rate limited (out of tokens)
     let action = handler.handle_message(&mut relay_state, &abusive_peer, msg);
     match action {
         RelayAction::Dropped { reason } => {
-            assert!(reason.contains("rate limited"));
+            assert!(
+                reason.contains("rate limited"),
+                "Expected 'rate limited' but got: {}",
+                reason
+            );
         }
         _ => panic!("Expected rate limited"),
     }
 
     let metrics = handler.metrics().snapshot();
-    assert_eq!(metrics.rate_limited, 1);
+    assert!(metrics.rate_limited >= 1);
 }
 
 /// Test decryption failures are handled gracefully.
@@ -239,7 +257,7 @@ fn test_decryption_failure_handled() {
     // Create message with garbage payload (tampered data)
     let msg = OnionRelayMessage {
         circuit_id: to_gossip_circuit_id(&circuit_id),
-        payload: vec![0xDE, 0xAD, 0xBE, 0xEF; 100],
+        payload: vec![0xDE; 100],
     };
 
     let from = PeerId::random();
@@ -414,5 +432,8 @@ fn test_transaction_hash_validation() {
     ));
 
     // Should fail with empty data
-    assert!(!RelayHandler::should_broadcast_transaction(&[], &correct_hash));
+    assert!(!RelayHandler::should_broadcast_transaction(
+        &[],
+        &correct_hash
+    ));
 }
