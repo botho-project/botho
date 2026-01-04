@@ -1,0 +1,203 @@
+% ============================================================================
+% Section 2: Related Work
+% ============================================================================
+
+\section{Related Work}
+\label{sec:related}
+
+\subsection{Privacy Cryptocurrencies}
+
+\subsubsection{CryptoNote and Monero}
+
+The CryptoNote protocol introduced two foundational
+privacy techniques: \textit{stealth addresses} for recipient privacy and
+\textit{ring signatures} for sender privacy. Monero, the
+most widely adopted CryptoNote implementation, has evolved significantly
+since its 2014 launch.
+
+Monero's current protocol uses:
+\begin{itemize}
+  \item \textbf{CLSAG ring signatures}: Concise Linkable
+    Spontaneous Anonymous Group signatures, providing approximately 45\%
+    size reduction over the earlier MLSAG scheme.
+  \item \textbf{Pedersen commitments}: Amount hiding with additive
+    homomorphism for value conservation verification.
+  \item \textbf{Bulletproofs}: Logarithmic-size range
+    proofs ensuring committed amounts are non-negative.
+  \item \textbf{ECDH stealth addresses}: One-time keys derived via
+    elliptic curve Diffie-Hellman.
+\end{itemize}
+
+Monero achieves strong privacy but faces several limitations that \Botho
+addresses:
+\begin{enumerate}
+  \item \textbf{No quantum resistance}: All cryptographic primitives are
+    vulnerable to quantum attack.
+  \item \textbf{Probabilistic finality}: Nakamoto consensus requires
+    multiple confirmations; reorgs remain possible.
+  \item \textbf{No anti-hoarding mechanism}: No economic incentive against
+    wealth concentration.
+\end{enumerate}
+
+\subsubsection{Zcash}
+
+Zcash pioneered the use of zero-knowledge proofs
+(zk-SNARKs) for cryptocurrency privacy. Unlike ring
+signatures, which hide the sender among a set of decoys, zk-SNARKs
+prove transaction validity without revealing any transaction details.
+
+Zcash's privacy model differs fundamentally from \Botho:
+\begin{itemize}
+  \item \textbf{Opt-in privacy}: Most Zcash transactions are transparent;
+    shielded transactions require explicit user action.
+  \item \textbf{Trusted setup history}: The original Sprout ceremony
+    required trust in participant integrity. Later upgrades (Sapling,
+    Orchard) reduced but did not eliminate setup requirements.
+  \item \textbf{Computational cost}: Proof generation requires significant
+    computation, limiting usability on constrained devices.
+\end{itemize}
+
+\Botho chooses mandatory privacy with ring signatures---simpler, faster,
+and requiring no trusted setup---accepting the tradeoff of probabilistic
+rather than cryptographic anonymity.
+
+\subsubsection{MimbleWimble}
+
+MimbleWimble achieves privacy through transaction
+cut-through and kernel aggregation. Implementations include Grin and Beam.
+
+Key limitations addressed by \Botho:
+\begin{itemize}
+  \item \textbf{Interactive transactions}: MimbleWimble requires sender and
+    recipient to exchange data, complicating user experience.
+  \item \textbf{Linkability attacks}: Research has demonstrated significant
+    transaction graph leakage.
+\end{itemize}
+
+\subsection{Post-Quantum Approaches}
+
+\subsubsection{Quantum Threat Model}
+
+Shor's algorithm enables quantum computers to solve the discrete
+logarithm and integer factorization problems in polynomial time, breaking
+ECDSA, ECDH, and related schemes. Grover's algorithm provides
+quadratic speedup for symmetric key search, effectively halving security
+levels.
+
+The ``harvest now, decrypt later'' threat is particularly relevant for
+blockchain systems: adversaries may record encrypted/signed data today
+for decryption when quantum computers become available. Since blockchain
+data is permanent and public, this threat applies to all historical
+transactions.
+
+\subsubsection{Existing Post-Quantum Cryptocurrencies}
+
+\textbf{QRL (Quantum Resistant Ledger)} uses XMSS hash-based
+signatures. While quantum-resistant, XMSS is stateful---requiring careful
+key management to avoid catastrophic signature reuse.
+
+\textbf{IOTA} has explored Winternitz one-time signatures, facing similar
+statefulness challenges.
+
+Research proposals for post-quantum ring signatures
+exist but impose significant size overhead
+($\sim$50$\times$ classical signatures).
+
+\subsubsection{Hybrid Approaches}
+
+NIST's post-quantum cryptography standardization produced
+ML-KEM (formerly Kyber) for key encapsulation and ML-DSA (formerly
+Dilithium) for signatures. These lattice-based schemes provide strong
+post-quantum security with reasonable performance.
+
+\Botho's hybrid approach applies these standards strategically:
+\begin{itemize}
+  \item \textbf{ML-KEM-768} for stealth addresses: Recipient identity is
+    permanent on-chain data requiring permanent protection.
+  \item \textbf{ML-DSA-65} for minting: Block producer identity is public
+    and must be unforgeable long-term.
+  \item \textbf{CLSAG} for ring signatures: Sender privacy is ephemeral;
+    classical cryptography provides efficiency.
+\end{itemize}
+
+This selective application achieves meaningful quantum resistance while
+maintaining practical transaction sizes.
+
+\subsection{Consensus Mechanisms}
+
+\subsubsection{Nakamoto Consensus}
+
+Bitcoin's Nakamoto consensus achieves agreement
+through proof-of-work and longest-chain selection. Its key properties:
+\begin{itemize}
+  \item \textbf{Permissionless}: Anyone can participate by providing
+    hashpower.
+  \item \textbf{Probabilistic finality}: Transactions become exponentially
+    harder to reverse with additional confirmations, but reorgs remain
+    theoretically possible.
+  \item \textbf{Slow}: Bitcoin's 10-minute blocks and 6-confirmation
+    standard yield $\sim$60-minute finality.
+\end{itemize}
+
+\subsubsection{Classical BFT}
+
+Byzantine Fault Tolerant protocols like PBFT achieve
+deterministic finality with $3f+1$ nodes tolerating $f$ Byzantine failures.
+However, classical BFT requires:
+\begin{itemize}
+  \item Known, fixed participant set
+  \item $O(n^2)$ message complexity
+  \item Synchrony assumptions for liveness
+\end{itemize}
+
+These requirements conflict with permissionless cryptocurrency design.
+
+\subsubsection{Stellar Consensus Protocol}
+
+SCP introduces \textit{federated Byzantine agreement}, achieving
+BFT-like properties with open membership:
+\begin{itemize}
+  \item \textbf{Quorum slices}: Each node declares which nodes it trusts.
+  \item \textbf{Quorum intersection}: Safety requires overlapping quorums.
+  \item \textbf{Open membership}: New nodes can join by declaring trust
+    relationships.
+  \item \textbf{Fast finality}: Consensus typically completes in seconds.
+\end{itemize}
+
+\Botho combines PoW block proposal (for permissionless participation and
+fair distribution) with SCP finalization (for fast deterministic finality).
+
+\subsection{Economic Mechanisms}
+
+\subsubsection{Fixed Supply}
+
+Bitcoin's 21 million coin cap creates absolute scarcity but raises
+long-term security concerns. As block rewards diminish, network security
+depends increasingly on transaction fees. If fee revenue proves
+insufficient, security may degrade.
+
+\subsubsection{Tail Emission}
+
+Monero's perpetual tail emission ($\sim$0.6 XMR per block indefinitely)
+ensures permanent miner incentive. This trades absolute scarcity for
+security sustainability---a tradeoff \Botho embraces.
+
+\subsubsection{Demurrage}
+
+Demurrage currencies (Freigeld, Chiemgauer) impose holding costs through
+time-based value decay. While economically interesting, cryptographic
+implementation is challenging and user experience suffers.
+
+\subsubsection{Novel: Progressive Fees}
+
+\Botho introduces \textit{cluster-based progressive fees}---a novel
+mechanism that:
+\begin{itemize}
+  \item Increases transaction costs for concentrated wealth
+  \item Tracks coin \textit{ancestry} rather than current ownership
+  \item Resists Sybil attacks (splitting coins doesn't reduce fees)
+  \item Preserves privacy (no identity required)
+\end{itemize}
+
+Combined with fee burning, this creates economic pressure toward
+circulation without explicit demurrage.
