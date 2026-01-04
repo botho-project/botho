@@ -1,0 +1,97 @@
+// Copyright (c) 2024 Botho Foundation
+
+//! Privacy layer for traffic analysis resistance using Onion Gossip.
+//!
+//! This module implements the core data structures for Phase 1 of the
+//! traffic analysis resistance roadmap (see
+//! `docs/design/traffic-privacy-roadmap.md`).
+//!
+//! # Overview
+//!
+//! Onion Gossip merges onion routing with gossipsub. Every transaction is
+//! routed through a 3-hop circuit of randomly selected peers before being
+//! broadcast. Every node participates as a potential relay.
+//!
+//! ## Key Concepts
+//!
+//! - **Circuit**: A 3-hop path through the relay network
+//! - **Onion Encryption**: Each hop decrypts one layer of encryption
+//! - **Relay**: Any node can relay traffic for others
+//! - **Exit Hop**: The final hop broadcasts to gossipsub
+//!
+//! # Architecture
+//!
+//! ```text
+//! ┌─────────────────────────────────────────────────────────────┐
+//! │                    ONION GOSSIP FLOW                        │
+//! │                                                             │
+//! │   Alice wants to broadcast transaction T                   │
+//! │                                                             │
+//! │   1. Build Circuit: Select 3 random peers [X, Y, Z]        │
+//! │   2. Onion Wrap: Encrypt_X(Encrypt_Y(Encrypt_Z(T)))        │
+//! │   3. Send: Alice → X → Y → Z → Gossipsub                   │
+//! │                                                             │
+//! │   Result: No single node knows both origin AND content     │
+//! └─────────────────────────────────────────────────────────────┘
+//! ```
+//!
+//! # Module Structure
+//!
+//! - [`types`]: Core types (CircuitId, SymmetricKey)
+//! - [`circuit`]: Outbound circuit management (OutboundCircuit, CircuitPool)
+//! - [`relay`]: Relay state management (RelayState, CircuitHopKey)
+//!
+//! # Example
+//!
+//! ```
+//! use botho::network::privacy::{
+//!     CircuitId, SymmetricKey,
+//!     OutboundCircuit, CircuitPool, CircuitPoolConfig,
+//!     RelayState, RelayStateConfig, CircuitHopKey,
+//! };
+//! use libp2p::PeerId;
+//! use std::time::Duration;
+//!
+//! // Create a circuit pool for managing outbound circuits
+//! let mut pool = CircuitPool::new(CircuitPoolConfig::default());
+//!
+//! // Create relay state for handling incoming relay traffic
+//! let mut relay = RelayState::new(RelayStateConfig::default());
+//!
+//! // When we become a relay hop, store the circuit key
+//! let mut rng = rand::thread_rng();
+//! let circuit_id = CircuitId::random(&mut rng);
+//! let hop_key = CircuitHopKey::new_exit(SymmetricKey::random(&mut rng));
+//! relay.add_circuit_key(circuit_id, hop_key);
+//! ```
+//!
+//! # Security Considerations
+//!
+//! - All symmetric keys use [`zeroize`] for secure memory handling
+//! - Circuit IDs are random 16-byte values to prevent prediction
+//! - Per-peer rate limiting prevents relay flooding attacks
+//! - Circuit rotation prevents long-term correlation
+//!
+//! # References
+//!
+//! - Design document: `docs/design/traffic-privacy-roadmap.md`
+//! - Parent issue: #147 (Traffic Analysis Resistance - Phase 1)
+
+mod circuit;
+mod relay;
+mod types;
+
+// Re-export core types
+pub use types::{CircuitId, SymmetricKey, CIRCUIT_ID_LEN, SYMMETRIC_KEY_LEN};
+
+// Re-export circuit management types
+pub use circuit::{
+    CircuitPool, CircuitPoolConfig, OutboundCircuit, CIRCUIT_HOPS, DEFAULT_MIN_CIRCUITS,
+    DEFAULT_ROTATION_INTERVAL, MAX_LIFETIME_JITTER,
+};
+
+// Re-export relay management types
+pub use relay::{
+    CircuitHopKey, RateLimiter, RelayState, RelayStateConfig, DEFAULT_CIRCUIT_KEY_LIFETIME,
+    DEFAULT_MAX_RELAY_PER_WINDOW, DEFAULT_RATE_LIMIT_WINDOW,
+};
