@@ -156,3 +156,7 @@ harness = false
 [[bench]]
 name = "mempool_benchmarks"
 harness = false
+
+[[bench]]
+name = "traffic_normalization"
+harness = false
