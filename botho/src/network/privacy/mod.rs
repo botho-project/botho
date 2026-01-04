@@ -89,6 +89,7 @@ mod crypto;
 pub mod handshake;
 mod relay;
 pub mod relay_handler;
+pub mod selection;
 mod types;
 
 // Re-export core types
@@ -131,4 +132,10 @@ pub use broadcaster::{BroadcastError, BroadcastMetrics, BroadcastMetricsSnapshot
 // Re-export capacity types
 pub use capacity::{
     NatType, NatTypeExt, NodeStats, RelayCapacity, RelayCapacityExt, SimpleNodeStats,
+};
+
+// Re-export selection types
+pub use selection::{
+    CircuitSelector, RelayPeerInfo, SelectionConfig, SelectionError,
+    extract_ipv4_from_endpoint, extract_subnet_from_endpoint,
 };
