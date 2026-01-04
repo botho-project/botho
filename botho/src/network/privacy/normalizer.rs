@@ -122,6 +122,16 @@ impl NormalizerConfig {
         Self::default()
     }
 
+    /// Create config from a privacy level.
+    pub fn from_privacy_level(level: crate::network::privacy::PrivacyLevel) -> Self {
+        use crate::network::privacy::PrivacyLevel;
+        match level {
+            PrivacyLevel::Standard => Self::standard(),
+            PrivacyLevel::Enhanced => Self::enhanced(),
+            PrivacyLevel::Maximum => Self::maximum(),
+        }
+    }
+
     /// Create config for Enhanced privacy level (padding + jitter).
     pub fn enhanced() -> Self {
         Self {
