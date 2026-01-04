@@ -13,7 +13,7 @@ use crate::{
     config::GossipConfig,
     error::{GossipError, GossipResult},
     messages::{
-        BlockBroadcast, NodeAnnouncement, NodeCapabilities, TransactionBroadcast,
+        BlockBroadcast, NodeAnnouncement, NodeCapabilities, RelayCapacity, TransactionBroadcast,
         ANNOUNCEMENTS_TOPIC, BLOCKS_TOPIC, TRANSACTIONS_TOPIC,
     },
     rate_limit::{GossipMessageType, PeerRateLimiter, RateLimitResult},
@@ -128,6 +128,7 @@ impl GossipService {
             self.capabilities,
             self.version.clone(),
             timestamp,
+            RelayCapacity::default(), // TODO: Measure actual capacity
         );
 
         // Sign the announcement

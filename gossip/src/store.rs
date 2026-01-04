@@ -347,6 +347,7 @@ pub fn new_shared_store(config: PeerStoreConfig) -> SharedPeerStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::messages::RelayCapacity;
     use bth_consensus_scp_types::{QuorumSet, QuorumSetMember};
     use bth_crypto_keys::Ed25519Public;
     use std::str::FromStr;
@@ -373,6 +374,7 @@ mod tests {
             NodeCapabilities::CONSENSUS | NodeCapabilities::GOSSIP,
             "1.0.0".to_string(),
             timestamp,
+            RelayCapacity::default(),
         )
     }
 

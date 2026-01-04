@@ -83,6 +83,7 @@
 //! - Parent issue: #147 (Traffic Analysis Resistance - Phase 1)
 
 mod broadcaster;
+pub mod capacity;
 mod circuit;
 mod crypto;
 pub mod handshake;
@@ -126,3 +127,8 @@ pub use relay_handler::{
 
 // Re-export broadcaster types
 pub use broadcaster::{BroadcastError, BroadcastMetrics, BroadcastMetricsSnapshot, OnionBroadcaster};
+
+// Re-export capacity types
+pub use capacity::{
+    NatType, NatTypeExt, NodeStats, RelayCapacity, RelayCapacityExt, SimpleNodeStats,
+};

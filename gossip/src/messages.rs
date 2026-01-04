@@ -13,6 +13,102 @@ use bth_consensus_scp_types::QuorumSet;
 use bth_crypto_keys::{Ed25519Public, Ed25519Signature, X25519Public};
 use serde::{Deserialize, Serialize};
 
+// ============================================================================
+// Relay Capacity Advertisement (Phase 1: Onion Gossip)
+// ============================================================================
+
+/// Relay capacity metrics advertised by a node.
+///
+/// These metrics allow circuit builders to select appropriate relay hops
+/// based on node capabilities and current state.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RelayCapacity {
+    /// Available bandwidth for relaying (bytes/sec).
+    pub bandwidth_bps: u64,
+
+    /// Average uptime over last 24h (0.0 - 1.0).
+    pub uptime_ratio: f64,
+
+    /// NAT type affecting reachability.
+    pub nat_type: NatType,
+
+    /// Current relay load (0.0 - 1.0).
+    pub current_load: f64,
+}
+
+impl RelayCapacity {
+    /// Calculate the relay score for this node.
+    ///
+    /// The score is a weighted combination of capacity metrics:
+    /// - Bandwidth: up to 0.4 for 10 MB/s+
+    /// - Uptime: up to 0.3
+    /// - NAT bonus: up to 0.2
+    /// - Load penalty: reduces score by up to 50%
+    ///
+    /// Returns a score in the range [0.1, 1.0].
+    pub fn relay_score(&self) -> f64 {
+        let mut score = 0.0;
+
+        // Bandwidth: up to 0.4 for 10 MB/s+
+        let bandwidth_factor = (self.bandwidth_bps as f64 / 10_000_000.0).min(1.0);
+        score += bandwidth_factor * 0.4;
+
+        // Uptime: up to 0.3
+        let uptime = self.uptime_ratio.clamp(0.0, 1.0);
+        score += uptime * 0.3;
+
+        // NAT bonus
+        score += self.nat_type.bonus();
+
+        // Load penalty
+        let load = self.current_load.clamp(0.0, 1.0);
+        score *= 1.0 - (load * 0.5);
+
+        // Everyone participates (minimum score)
+        score.max(0.1)
+    }
+}
+
+impl Default for RelayCapacity {
+    fn default() -> Self {
+        Self {
+            bandwidth_bps: 1_000_000,
+            uptime_ratio: 0.5,
+            nat_type: NatType::Unknown,
+            current_load: 0.0,
+        }
+    }
+}
+
+/// NAT type classification affecting node reachability.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+pub enum NatType {
+    /// Directly reachable (no NAT or port forwarding configured).
+    Open,
+    /// Full cone NAT - reachable after outbound connection.
+    FullCone,
+    /// Port-restricted NAT.
+    Restricted,
+    /// Symmetric NAT - difficult to traverse.
+    Symmetric,
+    /// NAT type unknown or not yet detected.
+    #[default]
+    Unknown,
+}
+
+impl NatType {
+    /// Get the relay score bonus for this NAT type.
+    pub fn bonus(&self) -> f64 {
+        match self {
+            NatType::Open => 0.2,
+            NatType::FullCone => 0.15,
+            NatType::Restricted => 0.1,
+            NatType::Symmetric => 0.0,
+            NatType::Unknown => 0.0,
+        }
+    }
+}
+
 /// Capabilities advertised by a node.
 ///
 /// These flags indicate what services a node provides to the network.
@@ -43,7 +139,7 @@ impl Default for NodeCapabilities {
 /// This is the primary message type for peer discovery. Nodes periodically
 /// broadcast their announcements, and other nodes collect these to build
 /// a view of the network topology.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NodeAnnouncement {
     /// The node's identity (responder ID + public key)
     pub node_id: NodeID,
@@ -71,6 +167,12 @@ pub struct NodeAnnouncement {
     /// Used to determine freshness and prevent replay of old announcements.
     pub timestamp: u64,
 
+    /// Relay capacity metrics for circuit selection.
+    ///
+    /// This allows circuit builders to select appropriate hops based on
+    /// node bandwidth, uptime, NAT type, and current load.
+    pub relay_capacity: RelayCapacity,
+
     /// Signature over all fields above, proving the announcement came from
     /// the node with `node_id.public_key`.
     #[serde(with = "signature_serde")]
@@ -88,6 +190,7 @@ impl NodeAnnouncement {
         capabilities: NodeCapabilities,
         version: String,
         timestamp: u64,
+        relay_capacity: RelayCapacity,
     ) -> Self {
         Self {
             node_id,
@@ -97,6 +200,7 @@ impl NodeAnnouncement {
             capabilities,
             version,
             timestamp,
+            relay_capacity,
             signature: Ed25519Signature::default(),
         }
     }
@@ -120,6 +224,11 @@ impl NodeAnnouncement {
         bytes.extend_from_slice(&self.capabilities.bits().to_le_bytes());
         bytes.extend_from_slice(self.version.as_bytes());
         bytes.extend_from_slice(&self.timestamp.to_le_bytes());
+        // Include relay capacity in signed data
+        bytes.extend_from_slice(&self.relay_capacity.bandwidth_bps.to_le_bytes());
+        bytes.extend_from_slice(&self.relay_capacity.uptime_ratio.to_le_bytes());
+        bytes.push(self.relay_capacity.nat_type as u8);
+        bytes.extend_from_slice(&self.relay_capacity.current_load.to_le_bytes());
         bytes
     }
 
@@ -535,6 +644,7 @@ mod tests {
             NodeCapabilities::CONSENSUS | NodeCapabilities::RELAY,
             "1.0.0".to_string(),
             1234567890,
+            RelayCapacity::default(),
         );
 
         assert_eq!(announcement.node_id, node_id);
@@ -555,6 +665,7 @@ mod tests {
             NodeCapabilities::default(),
             "1.0.0".to_string(),
             1000,
+            RelayCapacity::default(),
         );
 
         // Not expired if current time is close
@@ -575,6 +686,7 @@ mod tests {
             NodeCapabilities::default(),
             "1.0.0".to_string(),
             1234567890,
+            RelayCapacity::default(),
         );
 
         let peer_info = PeerInfo::from(&announcement);
