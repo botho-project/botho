@@ -61,7 +61,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tracing::{debug, trace, warn};
 
-use super::timing::{apply_jitter, TimingJitter, TimingJitterConfig};
+use super::timing::{TimingJitter, TimingJitterConfig};
 use super::{wrap_onion, CircuitPool, OutboundCircuit};
 use crate::transaction::Transaction;
 
