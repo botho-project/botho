@@ -30,7 +30,8 @@ use libp2p::PeerId;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use zeroize::{Zeroize, ZeroizeOnDrop};
+
+use super::types::{CircuitId, SymmetricKey};
 
 /// Size of ChaCha20-Poly1305 nonce in bytes.
 pub const NONCE_SIZE: usize = 12;
@@ -67,47 +68,6 @@ impl LayerType {
             0x02 => Some(LayerType::Exit),
             _ => None,
         }
-    }
-}
-
-/// Symmetric key for onion layer encryption.
-///
-/// Uses 256-bit keys for ChaCha20-Poly1305.
-#[derive(Clone, Zeroize, ZeroizeOnDrop)]
-pub struct SymmetricKey([u8; 32]);
-
-impl SymmetricKey {
-    /// Create a new symmetric key from raw bytes.
-    pub fn from_bytes(bytes: [u8; 32]) -> Self {
-        Self(bytes)
-    }
-
-    /// Get the raw key bytes.
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
-    }
-}
-
-/// Unique identifier for a circuit.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct CircuitId([u8; 16]);
-
-impl CircuitId {
-    /// Generate a random circuit ID.
-    pub fn random() -> Self {
-        let mut bytes = [0u8; 16];
-        rand::thread_rng().fill_bytes(&mut bytes);
-        Self(bytes)
-    }
-
-    /// Create from raw bytes.
-    pub fn from_bytes(bytes: [u8; 16]) -> Self {
-        Self(bytes)
-    }
-
-    /// Get the raw bytes.
-    pub fn as_bytes(&self) -> &[u8; 16] {
-        &self.0
     }
 }
 
@@ -313,9 +273,8 @@ mod tests {
     use super::*;
 
     fn random_key() -> SymmetricKey {
-        let mut bytes = [0u8; 32];
-        rand::thread_rng().fill_bytes(&mut bytes);
-        SymmetricKey::from_bytes(bytes)
+        let mut rng = rand::thread_rng();
+        SymmetricKey::random(&mut rng)
     }
 
     fn random_peer_id() -> PeerId {
@@ -520,8 +479,9 @@ mod tests {
 
     #[test]
     fn test_circuit_id_random() {
-        let id1 = CircuitId::random();
-        let id2 = CircuitId::random();
+        let mut rng = rand::thread_rng();
+        let id1 = CircuitId::random(&mut rng);
+        let id2 = CircuitId::random(&mut rng);
 
         assert_ne!(id1.as_bytes(), id2.as_bytes());
     }

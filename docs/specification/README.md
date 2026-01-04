@@ -6,16 +6,17 @@ This directory contains the formal specification of the Botho protocol.
 
 | Version | Status | Date | Description |
 |---------|--------|------|-------------|
-| [v0.1.0](protocol-v0.1.0.md) | Draft | 2024-12-31 | Initial specification |
+| [v0.2.0](protocol-v0.2.0.md) | Draft | 2025-01-03 | Current specification (LION removed) |
+| [v0.1.0](protocol-v0.1.0.md) | Superseded | 2024-12-31 | Initial specification (includes deprecated LION) |
 
 ## Overview
 
 The Botho protocol specification provides complete documentation for:
 
-- **Transaction Format**: Classical and post-quantum transaction structures
+- **Transaction Format**: Minting and Private transaction structures
 - **Consensus (SCP)**: Stellar Consensus Protocol implementation
 - **Network Protocol**: P2P messaging and synchronization
-- **Cryptographic Primitives**: CLSAG, ML-KEM, ML-DSA, Bulletproofs (LION deprecated per ADR-0001)
+- **Cryptographic Primitives**: CLSAG, ML-KEM, ML-DSA, Bulletproofs
 - **Block Structure**: Headers, PoW, and minting transactions
 - **Monetary System**: Units, supply schedule, and fee structure
 - **Network Configuration**: Ports, addresses, and parameters
