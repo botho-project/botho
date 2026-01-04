@@ -47,6 +47,7 @@
 //!
 //! - Transactions exit from a different node than the origin
 //! - No single relay knows both origin and transaction content
+//! - Timing jitter prevents correlation of entry/exit timing (Phase 2)
 //! - Cover traffic normalizes message patterns (Phase 2)
 
 use std::sync::{
@@ -60,6 +61,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tracing::{debug, trace, warn};
 
+use super::timing::{TimingJitter, TimingJitterConfig};
 use super::{wrap_onion, CircuitPool, OutboundCircuit};
 use crate::transaction::Transaction;
 
@@ -97,6 +99,12 @@ pub struct BroadcastMetrics {
 
     /// Transactions we broadcast as exit node (received via relay).
     pub tx_exit_broadcast: AtomicU64,
+
+    /// Total jitter delay applied in milliseconds.
+    pub jitter_delay_total_ms: AtomicU64,
+
+    /// Number of broadcasts with jitter applied.
+    pub jitter_applied_count: AtomicU64,
 }
 
 impl BroadcastMetrics {
@@ -112,6 +120,8 @@ impl BroadcastMetrics {
             tx_queued_no_circuit: self.tx_queued_no_circuit.load(Ordering::Relaxed),
             tx_broadcast_failed: self.tx_broadcast_failed.load(Ordering::Relaxed),
             tx_exit_broadcast: self.tx_exit_broadcast.load(Ordering::Relaxed),
+            jitter_delay_total_ms: self.jitter_delay_total_ms.load(Ordering::Relaxed),
+            jitter_applied_count: self.jitter_applied_count.load(Ordering::Relaxed),
         }
     }
 
@@ -131,6 +141,13 @@ impl BroadcastMetrics {
     pub fn inc_exit_broadcast(&self) {
         self.tx_exit_broadcast.fetch_add(1, Ordering::Relaxed);
     }
+
+    /// Record jitter delay applied to a broadcast.
+    fn record_jitter(&self, delay_ms: u64) {
+        self.jitter_delay_total_ms
+            .fetch_add(delay_ms, Ordering::Relaxed);
+        self.jitter_applied_count.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 /// Snapshot of broadcast metrics (for RPC/monitoring).
@@ -144,6 +161,23 @@ pub struct BroadcastMetricsSnapshot {
     pub tx_broadcast_failed: u64,
     /// Transactions we broadcast as exit node.
     pub tx_exit_broadcast: u64,
+    /// Total jitter delay applied in milliseconds.
+    pub jitter_delay_total_ms: u64,
+    /// Number of broadcasts with jitter applied.
+    pub jitter_applied_count: u64,
+}
+
+impl BroadcastMetricsSnapshot {
+    /// Calculate average jitter delay in milliseconds.
+    ///
+    /// Returns 0 if no jitter has been applied yet.
+    pub fn avg_jitter_delay_ms(&self) -> u64 {
+        if self.jitter_applied_count == 0 {
+            0
+        } else {
+            self.jitter_delay_total_ms / self.jitter_applied_count
+        }
+    }
 }
 
 /// Privacy-preserving transaction broadcaster.
@@ -151,28 +185,64 @@ pub struct BroadcastMetricsSnapshot {
 /// Wraps transactions in onion layers and routes them through circuits
 /// before broadcast. This ensures the exit node (not the origin) appears
 /// as the source of the transaction.
+///
+/// # Timing Jitter
+///
+/// The broadcaster applies random timing jitter before sending messages
+/// to prevent timing correlation attacks. This is configurable and can
+/// be disabled for testing.
 #[derive(Debug)]
 pub struct OnionBroadcaster {
     /// Metrics for monitoring broadcast operations.
     metrics: Arc<BroadcastMetrics>,
+    /// Timing jitter configuration for anti-correlation.
+    jitter: TimingJitter,
 }
 
 impl OnionBroadcaster {
-    /// Create a new broadcaster.
+    /// Create a new broadcaster with default jitter (50-200ms).
     pub fn new() -> Self {
         Self {
             metrics: Arc::new(BroadcastMetrics::new()),
+            jitter: TimingJitter::default(),
         }
     }
 
-    /// Create a new broadcaster with shared metrics.
+    /// Create a new broadcaster with shared metrics and default jitter.
     pub fn with_metrics(metrics: Arc<BroadcastMetrics>) -> Self {
-        Self { metrics }
+        Self {
+            metrics,
+            jitter: TimingJitter::default(),
+        }
+    }
+
+    /// Create a new broadcaster with custom jitter configuration.
+    pub fn with_jitter(jitter_config: TimingJitterConfig) -> Self {
+        Self {
+            metrics: Arc::new(BroadcastMetrics::new()),
+            jitter: TimingJitter::new(jitter_config),
+        }
+    }
+
+    /// Create a new broadcaster with shared metrics and custom jitter.
+    pub fn with_metrics_and_jitter(
+        metrics: Arc<BroadcastMetrics>,
+        jitter_config: TimingJitterConfig,
+    ) -> Self {
+        Self {
+            metrics,
+            jitter: TimingJitter::new(jitter_config),
+        }
     }
 
     /// Get the broadcaster's metrics.
     pub fn metrics(&self) -> &Arc<BroadcastMetrics> {
         &self.metrics
+    }
+
+    /// Get the jitter configuration.
+    pub fn jitter(&self) -> &TimingJitter {
+        &self.jitter
     }
 
     /// Broadcast a transaction privately through an onion circuit.
@@ -259,6 +329,20 @@ impl OnionBroadcaster {
             circuit_id: gossip_circuit_id,
             payload: wrapped,
         };
+
+        // Apply timing jitter to prevent correlation attacks
+        // This is critical for privacy: without jitter, an observer could
+        // correlate the timing of message entry and exit from the circuit
+        let delay = self.jitter.delay();
+        if !delay.is_zero() {
+            trace!(
+                delay_ms = delay.as_millis(),
+                tx_hash = hex::encode(&tx_hash[..8]),
+                "Applying timing jitter before broadcast"
+            );
+            self.metrics.record_jitter(delay.as_millis() as u64);
+            tokio::time::sleep(delay).await;
+        }
 
         // Send to gossip network
         gossip_handle.send_onion_relay(msg).await.map_err(|e| {
@@ -389,6 +473,76 @@ mod tests {
         broadcaster.metrics().inc_private();
 
         // Should be visible via shared reference
+        assert_eq!(metrics.snapshot().tx_broadcast_private, 1);
+    }
+
+    #[test]
+    fn test_broadcaster_with_jitter() {
+        let config = TimingJitterConfig::new(100, 200);
+        let broadcaster = OnionBroadcaster::with_jitter(config);
+
+        // Verify jitter configuration
+        assert!(!broadcaster.jitter().is_disabled());
+        let jitter_config = broadcaster.jitter().config();
+        assert_eq!(jitter_config.min_delay_ms, 100);
+        assert_eq!(jitter_config.max_delay_ms, 200);
+    }
+
+    #[test]
+    fn test_broadcaster_with_disabled_jitter() {
+        let config = TimingJitterConfig::disabled();
+        let broadcaster = OnionBroadcaster::with_jitter(config);
+
+        assert!(broadcaster.jitter().is_disabled());
+    }
+
+    #[test]
+    fn test_broadcaster_default_jitter() {
+        let broadcaster = OnionBroadcaster::new();
+
+        // Default jitter should be 50-200ms
+        let config = broadcaster.jitter().config();
+        assert_eq!(config.min_delay_ms, 50);
+        assert_eq!(config.max_delay_ms, 200);
+    }
+
+    #[test]
+    fn test_jitter_metrics_recording() {
+        let metrics = BroadcastMetrics::new();
+
+        // Record some jitter
+        metrics.record_jitter(100);
+        metrics.record_jitter(150);
+        metrics.record_jitter(200);
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.jitter_applied_count, 3);
+        assert_eq!(snapshot.jitter_delay_total_ms, 450);
+        assert_eq!(snapshot.avg_jitter_delay_ms(), 150);
+    }
+
+    #[test]
+    fn test_jitter_avg_with_no_samples() {
+        let metrics = BroadcastMetrics::new();
+        let snapshot = metrics.snapshot();
+
+        // Should return 0 when no jitter has been recorded
+        assert_eq!(snapshot.avg_jitter_delay_ms(), 0);
+    }
+
+    #[test]
+    fn test_broadcaster_with_metrics_and_jitter() {
+        let metrics = Arc::new(BroadcastMetrics::new());
+        let config = TimingJitterConfig::new(10, 50);
+        let broadcaster = OnionBroadcaster::with_metrics_and_jitter(metrics.clone(), config);
+
+        // Verify both metrics and jitter are set correctly
+        let jitter_config = broadcaster.jitter().config();
+        assert_eq!(jitter_config.min_delay_ms, 10);
+        assert_eq!(jitter_config.max_delay_ms, 50);
+
+        // Shared metrics should work
+        broadcaster.metrics().inc_private();
         assert_eq!(metrics.snapshot().tx_broadcast_private, 1);
     }
 }
