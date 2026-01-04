@@ -2,63 +2,134 @@
 
 //! Pluggable transport layer for protocol obfuscation.
 //!
-//! This module implements Phase 3 of the traffic privacy roadmap: Protocol Obfuscation.
-//! It provides pluggable transports that make botho traffic indistinguishable from
-//! common protocols to prevent protocol-level blocking and deep packet inspection.
+//! This module implements Phase 3.1 of the traffic privacy roadmap:
+//! a pluggable transport interface that allows different transport
+//! implementations to be used interchangeably.
 //!
 //! # Overview
 //!
-//! Protocol obfuscation ensures that even if an adversary can observe our traffic,
-//! they cannot distinguish it from legitimate applications. This is achieved by
-//! wrapping our protocol in transports that mimic common protocols:
+//! The transport layer provides an abstraction over the raw network
+//! connection, allowing botho to use different protocols that are
+//! harder to detect and block:
 //!
-//! - **WebRTC**: Makes traffic look like video calls (Google Meet, Discord, etc.)
-//! - **TLS Tunnel**: Makes traffic look like HTTPS (future)
-//! - **obfs4**: Randomized transport for censorship resistance (future)
-//!
-//! # Current Status
-//!
-//! - ✅ DTLS configuration and certificate handling (Phase 3.3)
-//! - 🔲 WebRTC data channel transport (Phase 3.2)
-//! - 🔲 ICE/STUN NAT traversal (Phase 3.4)
-//! - 🔲 Signaling channel for SDP exchange (Phase 3.5)
-//! - 🔲 Transport negotiation protocol (Phase 3.6)
+//! - **Plain**: Standard TCP + Noise (default, best performance)
+//! - **WebRTC**: Looks like video call traffic (Phase 3.2)
+//! - **TLS Tunnel**: Looks like HTTPS traffic (Phase 3.7)
 //!
 //! # Architecture
 //!
 //! ```text
-//! ┌─────────────────────────────────────────────────────────────────┐
-//! │                    TRANSPORT LAYER                               │
-//! ├─────────────────────────────────────────────────────────────────┤
-//! │                                                                 │
-//! │   ┌─────────────┐  ┌─────────────┐  ┌─────────────┐             │
-//! │   │    Plain    │  │   WebRTC    │  │ TLS Tunnel  │   ...       │
-//! │   │  (current)  │  │  (primary)  │  │  (future)   │             │
-//! │   └──────┬──────┘  └──────┬──────┘  └──────┬──────┘             │
-//! │          │                │                │                    │
-//! │          └────────────────┼────────────────┘                    │
-//! │                           │                                     │
-//! │                    ┌──────▼──────┐                              │
-//! │                    │  Transport  │                              │
-//! │                    │   Manager   │                              │
-//! │                    └─────────────┘                              │
-//! │                                                                 │
-//! └─────────────────────────────────────────────────────────────────┘
+//! ┌─────────────────────────────────────────────────────────────┐
+//! │                    APPLICATION LAYER                        │
+//! │                    (Gossipsub, SCP)                         │
+//! └──────────────────────────┬──────────────────────────────────┘
+//!                            │
+//! ┌──────────────────────────▼──────────────────────────────────┐
+//! │                  TRANSPORT LAYER                            │
+//! │  ┌─────────────────────────────────────────────────────┐    │
+//! │  │            PluggableTransport Trait                 │    │
+//! │  └─────────────────────────────────────────────────────┘    │
+//! │         │                    │                    │         │
+//! │  ┌──────▼──────┐     ┌───────▼───────┐    ┌───────▼──────┐  │
+//! │  │    Plain    │     │    WebRTC     │    │  TLS Tunnel  │  │
+//! │  │ TCP + Noise │     │ DTLS + SCTP   │    │   TLS 1.3    │  │
+//! │  └─────────────┘     └───────────────┘    └──────────────┘  │
+//! └──────────────────────────┬──────────────────────────────────┘
+//!                            │
+//! ┌──────────────────────────▼──────────────────────────────────┐
+//! │                    NETWORK LAYER                            │
+//! │                    (TCP, UDP)                               │
+//! └─────────────────────────────────────────────────────────────┘
 //! ```
 //!
-//! # Modules
+//! # Usage
 //!
-//! - [`webrtc`]: WebRTC-based transport (makes traffic look like video calls)
-//!   - [`webrtc::dtls`]: DTLS configuration and certificate handling
+//! ```
+//! use botho::network::transport::{
+//!     PlainTransport, PluggableTransport, TransportType,
+//! };
+//!
+//! // Create the default transport
+//! let transport = PlainTransport::new();
+//! assert_eq!(transport.transport_type(), TransportType::Plain);
+//! assert_eq!(transport.name(), "plain");
+//!
+//! // Check transport properties
+//! assert!(!transport.transport_type().is_obfuscated());
+//! assert!(transport.is_available());
+//! ```
+//!
+//! # Transport Selection
+//!
+//! Transport selection is based on:
+//! 1. User preference (configured privacy level)
+//! 2. Peer capabilities (what transports both sides support)
+//! 3. Network conditions (NAT type, firewall rules)
+//!
+//! See the `TransportManager` (Phase 3.8) for automatic selection.
+//!
+//! # Security Considerations
+//!
+//! - All transports provide encryption (Noise, DTLS, or TLS)
+//! - Obfuscated transports (WebRTC, TLS) resist DPI detection
+//! - Transport negotiation is authenticated to prevent downgrade attacks
 //!
 //! # References
 //!
-//! - Design: `docs/design/traffic-privacy-roadmap.md` (Phase 3)
+//! - Design document: `docs/design/traffic-privacy-roadmap.md` (Phase 3)
+//! - Parent issue: #201 (Phase 3: Protocol Obfuscation)
+//! - Implementation issue: #202 (Pluggable transport interface)
 
+mod error;
+mod plain;
+mod traits;
+mod types;
 pub mod webrtc;
 
-// Re-export commonly used types
+// Re-export error types
+pub use error::TransportError;
+
+// Re-export transport types
+pub use types::{TransportType, TransportTypeParseError};
+
+// Re-export trait and connection types
+pub use traits::{BoxedConnection, ConnectionWrapper, PluggableTransport, TransportConnection};
+
+// Re-export transport implementations
+pub use plain::{PlainConnection, PlainTransport};
+
+// Re-export WebRTC DTLS types (Phase 3.3)
 pub use webrtc::dtls::{
     CertificateFingerprint, DtlsConfig, DtlsError, DtlsRole, DtlsState, DtlsVerification,
     EphemeralCertificate,
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_module_exports() {
+        // Verify all expected types are exported and usable
+        let _: TransportType = TransportType::Plain;
+        let _: PlainTransport = PlainTransport::new();
+
+        // Verify trait is usable
+        fn assert_transport<T: PluggableTransport>(_: &T) {}
+        let transport = PlainTransport::new();
+        assert_transport(&transport);
+    }
+
+    #[test]
+    fn test_plain_transport_is_default() {
+        let transport = PlainTransport::default();
+        assert_eq!(transport.transport_type(), TransportType::Plain);
+    }
+
+    #[test]
+    fn test_dtls_types_exported() {
+        // Verify DTLS types are accessible from transport module
+        let config = DtlsConfig::generate_ephemeral().unwrap();
+        assert_eq!(config.role(), DtlsRole::Auto);
+    }
+}
