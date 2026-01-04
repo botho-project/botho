@@ -82,6 +82,7 @@
 //! - Design document: `docs/design/traffic-privacy-roadmap.md`
 //! - Parent issue: #147 (Traffic Analysis Resistance - Phase 1)
 
+mod broadcaster;
 mod circuit;
 mod crypto;
 pub mod handshake;
@@ -120,3 +121,6 @@ pub use handshake::{
 pub use relay_handler::{
     RelayAction, RelayHandler, RelayHandlerError, RelayMetrics, RelayMetricsSnapshot,
 };
+
+// Re-export broadcaster types
+pub use broadcaster::{BroadcastError, BroadcastMetrics, BroadcastMetricsSnapshot, OnionBroadcaster};

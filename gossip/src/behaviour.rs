@@ -11,8 +11,9 @@ use crate::{
     config::GossipConfig,
     error::{GossipError, GossipResult},
     messages::{
-        BlockBroadcast, NodeAnnouncement, TransactionBroadcast, ANNOUNCEMENTS_TOPIC, BLOCKS_TOPIC,
-        TOPOLOGY_SYNC_PROTOCOL, TRANSACTIONS_TOPIC,
+        BlockBroadcast, NodeAnnouncement, OnionRelayMessage, TransactionBroadcast,
+        ANNOUNCEMENTS_TOPIC, BLOCKS_TOPIC, ONION_RELAY_TOPIC, TOPOLOGY_SYNC_PROTOCOL,
+        TRANSACTIONS_TOPIC,
     },
 };
 use libp2p::{
@@ -301,6 +302,22 @@ impl GossipBehaviour {
         Ok(())
     }
 
+    /// Publish an onion relay message to the network.
+    ///
+    /// This is used by exit nodes to broadcast transactions or by relays to forward
+    /// messages to the next hop via gossipsub.
+    pub fn publish_onion_relay(&mut self, msg: &OnionRelayMessage) -> GossipResult<()> {
+        let topic = IdentTopic::new(ONION_RELAY_TOPIC);
+        let data = serde_json::to_vec(msg)
+            .map_err(|e| GossipError::SerializationError(e.to_string()))?;
+
+        self.gossipsub
+            .publish(topic, data)
+            .map_err(|e| GossipError::Libp2pError(format!("Failed to publish: {:?}", e)))?;
+
+        Ok(())
+    }
+
     /// Add a peer to Kademlia for discovery.
     pub fn add_peer(&mut self, peer_id: PeerId, addr: Multiaddr) {
         self.kademlia.add_address(&peer_id, addr);
@@ -342,6 +359,9 @@ pub enum GossipCommand {
 
     /// Broadcast a block
     BroadcastBlock(BlockBroadcast),
+
+    /// Send an onion relay message (for private transaction routing)
+    SendOnionRelay(OnionRelayMessage),
 
     /// Request topology from a peer
     RequestTopology { peer: PeerId, since_timestamp: u64 },
@@ -385,6 +405,18 @@ impl GossipHandle {
     pub async fn broadcast_block(&self, block: BlockBroadcast) -> GossipResult<()> {
         self.command_tx
             .send(GossipCommand::BroadcastBlock(block))
+            .await
+            .map_err(|_| GossipError::ChannelClosed)
+    }
+
+    /// Send an onion relay message to the network.
+    ///
+    /// This is used for privacy-preserving transaction broadcast. The message
+    /// is published to the onion relay gossipsub topic where relays and exit
+    /// nodes can process it.
+    pub async fn send_onion_relay(&self, msg: OnionRelayMessage) -> GossipResult<()> {
+        self.command_tx
+            .send(GossipCommand::SendOnionRelay(msg))
             .await
             .map_err(|_| GossipError::ChannelClosed)
     }
