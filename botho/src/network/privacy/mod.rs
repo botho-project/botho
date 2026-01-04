@@ -89,6 +89,7 @@ mod crypto;
 pub mod handshake;
 pub mod metrics;
 pub mod normalizer;
+pub mod padding;
 pub mod rate_limit;
 mod relay;
 pub mod relay_handler;
@@ -200,4 +201,10 @@ pub use cover::{
 pub use normalizer::{
     unpad_message, NormalizerConfig, NormalizerMetrics, NormalizerMetricsSnapshot, PreparedMessage,
     TrafficNormalizer,
+};
+
+// Re-export padding types
+pub use padding::{
+    bucket_for_payload, is_valid_bucket, pad_to_bucket, padding_overhead, try_pad_to_bucket,
+    unpad, PaddingError, LENGTH_HEADER_SIZE, MAX_PAYLOAD_SIZE, SIZE_BUCKETS,
 };
