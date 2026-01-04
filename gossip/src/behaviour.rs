@@ -304,12 +304,12 @@ impl GossipBehaviour {
 
     /// Publish an onion relay message to the network.
     ///
-    /// This is used by exit nodes to broadcast transactions or by relays to forward
-    /// messages to the next hop via gossipsub.
+    /// This is used by exit nodes to broadcast transactions or by relays to
+    /// forward messages to the next hop via gossipsub.
     pub fn publish_onion_relay(&mut self, msg: &OnionRelayMessage) -> GossipResult<()> {
         let topic = IdentTopic::new(ONION_RELAY_TOPIC);
-        let data = serde_json::to_vec(msg)
-            .map_err(|e| GossipError::SerializationError(e.to_string()))?;
+        let data =
+            serde_json::to_vec(msg).map_err(|e| GossipError::SerializationError(e.to_string()))?;
 
         self.gossipsub
             .publish(topic, data)

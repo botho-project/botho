@@ -561,8 +561,7 @@ impl CircuitPoolMaintainer {
         let result = pool.maintain();
 
         // Record metrics
-        self.metrics
-            .record_circuits_expired(result.removed as u64);
+        self.metrics.record_circuits_expired(result.removed as u64);
         self.metrics.record_maintenance_cycle();
 
         debug!(
@@ -651,10 +650,7 @@ impl CircuitPoolMaintainer {
     /// This variant passes a reference to the shared pool to the builder
     /// function, which can be useful for checking pool state during circuit
     /// building.
-    pub fn spawn_with_pool<F, Fut>(
-        self,
-        mut build_circuit: F,
-    ) -> tokio::task::JoinHandle<()>
+    pub fn spawn_with_pool<F, Fut>(self, mut build_circuit: F) -> tokio::task::JoinHandle<()>
     where
         F: FnMut(SharedCircuitPool) -> Fut + Send + 'static,
         Fut: Future<Output = Result<OutboundCircuit, Box<dyn std::error::Error + Send + Sync>>>
@@ -1133,11 +1129,8 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(20)).await;
 
         // Run maintenance - should remove expired and report need for new circuits
-        let maintainer = CircuitPoolMaintainer::with_config(
-            Arc::clone(&pool),
-            Arc::clone(&metrics),
-            config,
-        );
+        let maintainer =
+            CircuitPoolMaintainer::with_config(Arc::clone(&pool), Arc::clone(&metrics), config);
 
         let result = maintainer.run_maintenance().await;
 

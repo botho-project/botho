@@ -49,8 +49,10 @@
 //! - No single relay knows both origin and transaction content
 //! - Cover traffic normalizes message patterns (Phase 2)
 
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+};
 
 use bth_gossip::{GossipHandle, InnerMessage, OnionRelayMessage};
 use libp2p::PeerId;
@@ -220,8 +222,8 @@ impl OnionBroadcaster {
         gossip_handle: &GossipHandle,
     ) -> Result<[u8; 32], BroadcastError> {
         // Serialize transaction
-        let tx_data =
-            bincode::serialize(tx).map_err(|e| BroadcastError::SerializationError(e.to_string()))?;
+        let tx_data = bincode::serialize(tx)
+            .map_err(|e| BroadcastError::SerializationError(e.to_string()))?;
 
         // Compute transaction hash
         let tx_hash = tx.hash();
@@ -234,10 +236,7 @@ impl OnionBroadcaster {
         );
 
         // Create inner message
-        let inner = InnerMessage::Transaction {
-            tx_data,
-            tx_hash,
-        };
+        let inner = InnerMessage::Transaction { tx_data, tx_hash };
 
         // Serialize inner message
         let inner_bytes = bth_util_serial::serialize(&inner)
@@ -262,13 +261,10 @@ impl OnionBroadcaster {
         };
 
         // Send to gossip network
-        gossip_handle
-            .send_onion_relay(msg)
-            .await
-            .map_err(|e| {
-                self.metrics.inc_failed();
-                BroadcastError::GossipError(e.to_string())
-            })?;
+        gossip_handle.send_onion_relay(msg).await.map_err(|e| {
+            self.metrics.inc_failed();
+            BroadcastError::GossipError(e.to_string())
+        })?;
 
         self.metrics.inc_private();
 
