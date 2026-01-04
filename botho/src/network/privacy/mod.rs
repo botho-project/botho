@@ -18,6 +18,7 @@
 //! - **Onion Encryption**: Each hop decrypts one layer of encryption
 //! - **Relay**: Any node can relay traffic for others
 //! - **Exit Hop**: The final hop broadcasts to gossipsub
+//! - **Handshake**: X25519 key exchange to establish per-hop symmetric keys
 //!
 //! # Architecture
 //!
@@ -28,8 +29,9 @@
 //! │   Alice wants to broadcast transaction T                   │
 //! │                                                             │
 //! │   1. Build Circuit: Select 3 random peers [X, Y, Z]        │
-//! │   2. Onion Wrap: Encrypt_X(Encrypt_Y(Encrypt_Z(T)))        │
-//! │   3. Send: Alice → X → Y → Z → Gossipsub                   │
+//! │   2. Handshake: Establish symmetric keys with each hop     │
+//! │   3. Onion Wrap: Encrypt_X(Encrypt_Y(Encrypt_Z(T)))        │
+//! │   4. Send: Alice → X → Y → Z → Gossipsub                   │
 //! │                                                             │
 //! │   Result: No single node knows both origin AND content     │
 //! └─────────────────────────────────────────────────────────────┘
@@ -41,6 +43,7 @@
 //! - [`crypto`]: Onion encryption and decryption primitives
 //! - [`circuit`]: Outbound circuit management (OutboundCircuit, CircuitPool)
 //! - [`relay`]: Relay state management (RelayState, CircuitHopKey)
+//! - [`handshake`]: Circuit handshake protocol (X25519 key exchange)
 //!
 //! # Example
 //!
@@ -72,6 +75,7 @@
 //! - Circuit IDs are random 16-byte values to prevent prediction
 //! - Per-peer rate limiting prevents relay flooding attacks
 //! - Circuit rotation prevents long-term correlation
+//! - Ephemeral X25519 keys are generated fresh for each handshake
 //!
 //! # References
 //!
@@ -80,6 +84,7 @@
 
 mod circuit;
 mod crypto;
+pub mod handshake;
 mod relay;
 mod types;
 
@@ -103,4 +108,9 @@ pub use circuit::{
 pub use relay::{
     CircuitHopKey, RateLimiter, RelayState, RelayStateConfig, DEFAULT_CIRCUIT_KEY_LIFETIME,
     DEFAULT_MAX_RELAY_PER_WINDOW, DEFAULT_RATE_LIMIT_WINDOW,
+};
+
+// Re-export handshake types
+pub use handshake::{
+    CircuitHandshake, HandshakeError, HandshakeResult, CIRCUIT_KEY_SIZE, HANDSHAKE_TIMEOUT_SECS,
 };

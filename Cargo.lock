@@ -1300,6 +1300,7 @@ dependencies = [
  "bth-util-serial",
  "displaydoc",
  "futures",
+ "getrandom 0.2.16",
  "hex",
  "libp2p",
  "rand 0.8.5",
