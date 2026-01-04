@@ -93,6 +93,7 @@ mod relay;
 pub mod relay_handler;
 pub mod routing;
 pub mod selection;
+pub mod transmitter;
 mod types;
 
 // Re-export core types
@@ -162,4 +163,11 @@ pub use routing::{
 // Re-export metrics types
 pub use metrics::{
     register_privacy_metrics, AlertingThresholds, PrivacyMetricsSnapshot, PrivacyMetricsUpdater,
+};
+
+// Re-export transmitter types (Phase 2: Traffic Normalization)
+pub use transmitter::{
+    ConstantRateConfig, ConstantRateTransmitter, OutgoingMessage, TransmitterMessageType,
+    TransmitterMetrics, TransmitterMetricsSnapshot, DEFAULT_MAX_QUEUE_DEPTH,
+    DEFAULT_MESSAGES_PER_SECOND,
 };
