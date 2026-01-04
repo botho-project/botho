@@ -84,6 +84,7 @@ mod error;
 mod plain;
 mod traits;
 mod types;
+pub mod webrtc;
 
 // Re-export error types
 pub use error::TransportError;
@@ -96,6 +97,12 @@ pub use traits::{BoxedConnection, ConnectionWrapper, PluggableTransport, Transpo
 
 // Re-export transport implementations
 pub use plain::{PlainConnection, PlainTransport};
+
+// Re-export WebRTC DTLS types (Phase 3.3)
+pub use webrtc::dtls::{
+    CertificateFingerprint, DtlsConfig, DtlsError, DtlsRole, DtlsState, DtlsVerification,
+    EphemeralCertificate,
+};
 
 #[cfg(test)]
 mod tests {
@@ -117,5 +124,12 @@ mod tests {
     fn test_plain_transport_is_default() {
         let transport = PlainTransport::default();
         assert_eq!(transport.transport_type(), TransportType::Plain);
+    }
+
+    #[test]
+    fn test_dtls_types_exported() {
+        // Verify DTLS types are accessible from transport module
+        let config = DtlsConfig::generate_ephemeral().unwrap();
+        assert_eq!(config.role(), DtlsRole::Auto);
     }
 }
