@@ -88,6 +88,7 @@ mod circuit;
 mod crypto;
 pub mod handshake;
 pub mod metrics;
+pub mod normalizer;
 pub mod rate_limit;
 mod relay;
 pub mod relay_handler;
@@ -193,4 +194,10 @@ pub use config::{
 pub use cover::{
     CoverMessage, CoverMessageType, CoverTrafficConfig, CoverTrafficGenerator, CoverTrafficStats,
     SizeCategory, DEFAULT_SIZE_WEIGHTS, MAX_COVER_SIZE, MIN_COVER_SIZE,
+};
+
+// Re-export normalizer types (Phase 2: Traffic Normalization)
+pub use normalizer::{
+    unpad_message, NormalizerConfig, NormalizerMetrics, NormalizerMetricsSnapshot, PreparedMessage,
+    TrafficNormalizer,
 };
