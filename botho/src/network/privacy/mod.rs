@@ -87,6 +87,7 @@ pub mod capacity;
 mod circuit;
 mod crypto;
 pub mod handshake;
+pub mod metrics;
 pub mod rate_limit;
 mod relay;
 pub mod relay_handler;
@@ -156,4 +157,9 @@ pub use selection::{
 pub use routing::{
     MessagePath, MessageType, PrivacyRouter, PrivacyRoutingConfig, RoutingDecision, RoutingMetrics,
     RoutingMetricsSnapshot,
+};
+
+// Re-export metrics types
+pub use metrics::{
+    register_privacy_metrics, AlertingThresholds, PrivacyMetricsSnapshot, PrivacyMetricsUpdater,
 };
