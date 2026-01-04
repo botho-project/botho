@@ -89,6 +89,7 @@ mod crypto;
 pub mod handshake;
 mod relay;
 pub mod relay_handler;
+pub mod routing;
 pub mod selection;
 mod types;
 
@@ -127,7 +128,9 @@ pub use relay_handler::{
 };
 
 // Re-export broadcaster types
-pub use broadcaster::{BroadcastError, BroadcastMetrics, BroadcastMetricsSnapshot, OnionBroadcaster};
+pub use broadcaster::{
+    BroadcastError, BroadcastMetrics, BroadcastMetricsSnapshot, OnionBroadcaster,
+};
 
 // Re-export capacity types
 pub use capacity::{
@@ -136,6 +139,12 @@ pub use capacity::{
 
 // Re-export selection types
 pub use selection::{
-    CircuitSelector, RelayPeerInfo, SelectionConfig, SelectionError,
-    extract_ipv4_from_endpoint, extract_subnet_from_endpoint,
+    extract_ipv4_from_endpoint, extract_subnet_from_endpoint, CircuitSelector, RelayPeerInfo,
+    SelectionConfig, SelectionError,
+};
+
+// Re-export routing types
+pub use routing::{
+    MessagePath, MessageType, PrivacyRouter, PrivacyRoutingConfig, RoutingDecision, RoutingMetrics,
+    RoutingMetricsSnapshot,
 };
