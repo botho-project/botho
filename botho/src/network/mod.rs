@@ -17,6 +17,7 @@ pub mod privacy;
 mod quorum;
 mod reputation;
 mod sync;
+pub mod transport;
 
 pub use compact_block::{
     BlockTxn, CompactBlock, GetBlockTxn, PrefilledTx, ReconstructionResult, ShortId,
