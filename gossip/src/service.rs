@@ -354,6 +354,12 @@ async fn run_swarm(
                         }
                     }
 
+                    GossipCommand::SendOnionRelay(onion_msg) => {
+                        if let Err(e) = swarm.behaviour_mut().publish_onion_relay(&onion_msg) {
+                            warn!(?e, "Failed to send onion relay message");
+                        }
+                    }
+
                     GossipCommand::RequestTopology { peer, since_timestamp } => {
                         swarm.behaviour_mut().request_topology(
                             peer,
