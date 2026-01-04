@@ -29,6 +29,7 @@
 //! - Domain separation ensures keys derived for different purposes are
 //!   independent
 
+use super::types::{SymmetricKey, SYMMETRIC_KEY_LEN};
 use bth_crypto_keys::{KexEphemeralPrivate, X25519EphemeralPrivate, X25519Public, X25519Secret};
 use bth_gossip::{CircuitHandshakeMsg, CircuitId};
 use bth_util_from_random::FromRandom;
@@ -36,10 +37,9 @@ use hkdf::Hkdf;
 use sha2::Sha256;
 use std::time::Duration;
 use thiserror::Error;
-use zeroize::ZeroizeOnDrop;
 
 /// Size of symmetric keys in bytes (256-bit).
-pub const CIRCUIT_KEY_SIZE: usize = 32;
+pub const CIRCUIT_KEY_SIZE: usize = SYMMETRIC_KEY_LEN;
 
 /// Timeout for handshake operations in seconds.
 pub const HANDSHAKE_TIMEOUT_SECS: u64 = 30;
@@ -49,49 +49,6 @@ const CIRCUIT_KEY_DOMAIN: &[u8] = b"botho-circuit-v1";
 
 /// Salt prefix for HKDF - combined with circuit ID for key derivation.
 const HKDF_SALT_PREFIX: &[u8] = b"botho-circuit-salt-";
-
-/// A 256-bit symmetric key derived from the circuit handshake.
-///
-/// This key is used for encrypting/decrypting onion layers.
-/// It automatically zeroizes its contents when dropped.
-#[derive(Clone, ZeroizeOnDrop)]
-pub struct SymmetricKey {
-    bytes: [u8; CIRCUIT_KEY_SIZE],
-}
-
-impl SymmetricKey {
-    /// Create a new symmetric key from raw bytes.
-    ///
-    /// # Arguments
-    ///
-    /// * `bytes` - The 32-byte key material
-    pub fn new(bytes: [u8; CIRCUIT_KEY_SIZE]) -> Self {
-        Self { bytes }
-    }
-
-    /// Get the key bytes.
-    ///
-    /// # Security
-    ///
-    /// The returned reference should not be held across await points
-    /// or stored in persistent memory.
-    pub fn as_bytes(&self) -> &[u8; CIRCUIT_KEY_SIZE] {
-        &self.bytes
-    }
-}
-
-impl AsRef<[u8]> for SymmetricKey {
-    fn as_ref(&self) -> &[u8] {
-        &self.bytes
-    }
-}
-
-impl std::fmt::Debug for SymmetricKey {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Don't leak key material in debug output
-        write!(f, "SymmetricKey([REDACTED])")
-    }
-}
 
 /// Errors that can occur during circuit handshake.
 #[derive(Debug, Error)]
@@ -364,7 +321,8 @@ fn derive_circuit_key(
     hkdf.expand(CIRCUIT_KEY_DOMAIN, &mut key_bytes)
         .map_err(|e| HandshakeError::KeyDerivationError(format!("HKDF expand failed: {}", e)))?;
 
-    Ok(SymmetricKey::new(key_bytes))
+    SymmetricKey::from_bytes(&key_bytes)
+        .ok_or_else(|| HandshakeError::KeyDerivationError("Invalid key length".to_string()))
 }
 
 #[cfg(test)]
@@ -381,13 +339,14 @@ mod tests {
     }
 
     #[test]
-    fn test_symmetric_key_debug_redacts() {
-        let key = SymmetricKey::new([42u8; CIRCUIT_KEY_SIZE]);
+    fn test_symmetric_key_debug_does_not_leak() {
+        let key = SymmetricKey::from_bytes(&[42u8; CIRCUIT_KEY_SIZE]).unwrap();
         let debug_str = format!("{:?}", key);
 
         // Should not contain the actual key bytes
-        assert!(!debug_str.contains("42"));
-        assert!(debug_str.contains("REDACTED"));
+        assert!(!debug_str.contains("42424242"));
+        // Should contain a hash fingerprint
+        assert!(debug_str.contains("sha256:"));
     }
 
     #[test]

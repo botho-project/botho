@@ -1,62 +1,116 @@
 // Copyright (c) 2024 Botho Foundation
 
-//! Privacy-preserving network layer for traffic analysis resistance.
+//! Privacy layer for traffic analysis resistance using Onion Gossip.
 //!
-//! This module implements the Onion Gossip protocol, which provides:
+//! This module implements the core data structures for Phase 1 of the
+//! traffic analysis resistance roadmap (see
+//! `docs/design/traffic-privacy-roadmap.md`).
 //!
-//! - **Sender Anonymity**: Onion routing through 3 random peers
-//! - **Relationship Anonymity**: Observers can't link sender to transaction
-//! - **Traffic Uniformity**: Padding and cover traffic normalize patterns
+//! # Overview
+//!
+//! Onion Gossip merges onion routing with gossipsub. Every transaction is
+//! routed through a 3-hop circuit of randomly selected peers before being
+//! broadcast. Every node participates as a potential relay.
+//!
+//! ## Key Concepts
+//!
+//! - **Circuit**: A 3-hop path through the relay network
+//! - **Onion Encryption**: Each hop decrypts one layer of encryption
+//! - **Relay**: Any node can relay traffic for others
+//! - **Exit Hop**: The final hop broadcasts to gossipsub
+//! - **Handshake**: X25519 key exchange to establish per-hop symmetric keys
 //!
 //! # Architecture
 //!
 //! ```text
-//! ┌─────────────────────────────────────────────────────────────────────────┐
-//! │                    UNIFIED PRIVACY ARCHITECTURE                          │
-//! ├─────────────────────────────────────────────────────────────────────────┤
-//! │                                                                         │
-//! │                        ┌─────────────────────┐                          │
-//! │                        │  EVERY NODE IS THE  │                          │
-//! │                        │       SAME          │                          │
-//! │                        │                     │                          │
-//! │                        │  • Sends traffic    │                          │
-//! │                        │  • Relays traffic   │                          │
-//! │                        │  • Receives traffic │                          │
-//! │                        └──────────┬──────────┘                          │
-//! │                                   │                                     │
-//! │         ┌─────────────────────────┼─────────────────────────┐           │
-//! │         │                         │                         │           │
-//! │         ▼                         ▼                         ▼           │
-//! │   ┌───────────┐           ┌───────────────┐          ┌────────────┐    │
-//! │   │   FAST    │           │    PRIVATE    │          │  PROTOCOL  │    │
-//! │   │   PATH    │           │     PATH      │          │ OBFUSCATION│    │
-//! │   ├───────────┤           ├───────────────┤          ├────────────┤    │
-//! │   │ Direct    │           │ Onion Gossip  │          │ WebRTC     │    │
-//! │   │ Gossipsub │           │ (3-hop relay) │          │ Framing    │    │
-//! │   └───────────┘           └───────────────┘          └────────────┘    │
-//! └─────────────────────────────────────────────────────────────────────────┘
+//! ┌─────────────────────────────────────────────────────────────┐
+//! │                    ONION GOSSIP FLOW                        │
+//! │                                                             │
+//! │   Alice wants to broadcast transaction T                   │
+//! │                                                             │
+//! │   1. Build Circuit: Select 3 random peers [X, Y, Z]        │
+//! │   2. Handshake: Establish symmetric keys with each hop     │
+//! │   3. Onion Wrap: Encrypt_X(Encrypt_Y(Encrypt_Z(T)))        │
+//! │   4. Send: Alice → X → Y → Z → Gossipsub                   │
+//! │                                                             │
+//! │   Result: No single node knows both origin AND content     │
+//! └─────────────────────────────────────────────────────────────┘
 //! ```
 //!
-//! # Usage
+//! # Module Structure
 //!
-//! ```ignore
-//! use botho::network::privacy::{CircuitHandshake, SymmetricKey};
+//! - [`types`]: Core types (CircuitId, SymmetricKey)
+//! - [`crypto`]: Onion encryption and decryption primitives
+//! - [`circuit`]: Outbound circuit management (OutboundCircuit, CircuitPool)
+//! - [`relay`]: Relay state management (RelayState, CircuitHopKey)
+//! - [`handshake`]: Circuit handshake protocol (X25519 key exchange)
 //!
-//! // Create a new handshake for circuit building
-//! let mut handshake = CircuitHandshake::new();
+//! # Example
 //!
-//! // Perform direct handshake with first hop
-//! let key1 = handshake.initiate_create(circuit_id);
-//! // ... send to first hop and receive Created response ...
-//! let symmetric_key1 = handshake.complete_create(&their_pubkey, circuit_id)?;
-//!
-//! // Extend to second hop through first hop
-//! // ... create encrypted Create message for hop2 ...
 //! ```
+//! use botho::network::privacy::{
+//!     CircuitId, SymmetricKey,
+//!     OutboundCircuit, CircuitPool, CircuitPoolConfig,
+//!     RelayState, RelayStateConfig, CircuitHopKey,
+//! };
+//! use libp2p::PeerId;
+//! use std::time::Duration;
+//!
+//! // Create a circuit pool for managing outbound circuits
+//! let mut pool = CircuitPool::new(CircuitPoolConfig::default());
+//!
+//! // Create relay state for handling incoming relay traffic
+//! let mut relay = RelayState::new(RelayStateConfig::default());
+//!
+//! // When we become a relay hop, store the circuit key
+//! let mut rng = rand::thread_rng();
+//! let circuit_id = CircuitId::random(&mut rng);
+//! let hop_key = CircuitHopKey::new_exit(SymmetricKey::random(&mut rng));
+//! relay.add_circuit_key(circuit_id, hop_key);
+//! ```
+//!
+//! # Security Considerations
+//!
+//! - All symmetric keys use [`zeroize`] for secure memory handling
+//! - Circuit IDs are random 16-byte values to prevent prediction
+//! - Per-peer rate limiting prevents relay flooding attacks
+//! - Circuit rotation prevents long-term correlation
+//! - Ephemeral X25519 keys are generated fresh for each handshake
+//!
+//! # References
+//!
+//! - Design document: `docs/design/traffic-privacy-roadmap.md`
+//! - Parent issue: #147 (Traffic Analysis Resistance - Phase 1)
 
+mod circuit;
+mod crypto;
 pub mod handshake;
+mod relay;
+mod types;
 
+// Re-export core types
+pub use types::{CircuitId, SymmetricKey, CIRCUIT_ID_LEN, SYMMETRIC_KEY_LEN};
+
+// Re-export crypto primitives
+pub use crypto::{
+    decrypt_layer, encrypt_exit_layer, encrypt_forward_layer, wrap_onion, CryptoError,
+    DecryptedLayer, LayerType, OnionMessage, MAX_PEER_ID_SIZE, MIN_LAYER_SIZE, NONCE_SIZE,
+    TAG_SIZE,
+};
+
+// Re-export circuit management types
+pub use circuit::{
+    CircuitPool, CircuitPoolConfig, OutboundCircuit, CIRCUIT_HOPS, DEFAULT_MIN_CIRCUITS,
+    DEFAULT_ROTATION_INTERVAL, MAX_LIFETIME_JITTER,
+};
+
+// Re-export relay management types
+pub use relay::{
+    CircuitHopKey, RateLimiter, RelayState, RelayStateConfig, DEFAULT_CIRCUIT_KEY_LIFETIME,
+    DEFAULT_MAX_RELAY_PER_WINDOW, DEFAULT_RATE_LIMIT_WINDOW,
+};
+
+// Re-export handshake types
 pub use handshake::{
-    CircuitHandshake, HandshakeError, HandshakeResult, SymmetricKey, CIRCUIT_KEY_SIZE,
-    HANDSHAKE_TIMEOUT_SECS,
+    CircuitHandshake, HandshakeError, HandshakeResult, CIRCUIT_KEY_SIZE, HANDSHAKE_TIMEOUT_SECS,
 };

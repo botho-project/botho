@@ -58,7 +58,7 @@ Welcome to the Botho documentation. Botho is a privacy-preserving, mined cryptoc
 | [Design Documents](design/README.md) | Proposals and roadmaps |
 | [Network Privacy](design/traffic-privacy-roadmap.md) | Traffic analysis resistance design |
 | [Research](research/README.md) | Analysis and comparisons |
-| [Decisions](decisions/0001-deprecate-lion-ring-signatures.md) | Architecture Decision Records |
+| [Decisions](decisions/README.md) | Architecture Decision Records |
 
 ### Protocol Specification
 | Document | Description |
@@ -168,7 +168,9 @@ docs/
 ├── design/                 # Proposals and roadmaps
 ├── research/               # Analysis and comparisons
 ├── specification/          # Formal protocol spec
-├── decisions/              # ADRs
+├── decisions/              # Architecture Decision Records
+│   ├── README.md           # ADR index and template
+│   └── 0001-*.md           # Individual decisions
 ├── security/               # Threat model
 └── bridge/                 # Cross-chain bridge
 ```
