@@ -1,0 +1,284 @@
+% ============================================================================
+% Section 10: Economic Analysis
+% ============================================================================
+
+\section{Economic Analysis}
+\label{sec:economics}
+
+This section analyzes the game-theoretic properties of \Botho's economic
+mechanisms and their long-term sustainability.
+
+\subsection{Incentive Alignment}
+
+\subsubsection{Miner Incentives}
+
+Miners (block proposers) are incentivized to:
+
+\begin{enumerate}
+  \item \textbf{Include transactions}: Larger blocks have no disadvantage
+    (fees are burned, not captured)
+  \item \textbf{Maintain network health}: Block rewards depend on network
+    value, not transaction ordering
+  \item \textbf{Stay honest}: Invalid blocks are rejected by SCP
+\end{enumerate}
+
+\textbf{Why fee burning works}:
+
+Without fee capture, miners have no incentive to:
+\begin{itemize}
+  \item Reorder transactions (MEV elimination)
+  \item Censor low-fee transactions beyond minimum
+  \item Create artificial congestion
+\end{itemize}
+
+\subsubsection{User Incentives}
+
+Users are incentivized to:
+
+\begin{enumerate}
+  \item \textbf{Circulate rather than hoard}: Progressive fees and tail
+    emission create holding costs
+  \item \textbf{Maintain privacy}: Default privacy eliminates coordination
+    problems
+  \item \textbf{Run nodes}: Reduced resource requirements enable
+    participation
+\end{enumerate}
+
+\subsubsection{Validator Incentives}
+
+SCP validators (consensus participants) are incentivized by:
+
+\begin{enumerate}
+  \item \textbf{Reputation}: Being in quorum slices requires trustworthiness
+  \item \textbf{Self-interest}: Validators typically also hold currency
+  \item \textbf{Community standing}: Non-economic incentives matter for
+    infrastructure nodes
+\end{enumerate}
+
+\subsection{Progressive Fee Analysis}
+
+\subsubsection{Fee Distribution}
+
+Under the cluster-based progressive fee system:
+
+\begin{equation}
+E[\text{fee}] = f_{\text{base}} \times \text{size} \times E[\text{cluster\_factor}]
+\end{equation}
+
+The expected cluster factor depends on wealth distribution:
+
+\begin{table}[h]
+\centering
+\caption{Expected fees by wealth percentile}
+\label{tab:fee-percentile}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\textbf{Percentile} & \textbf{Factor} & \textbf{4KB Tx Fee} \\
+\midrule
+0--50 & 1.0--1.5 & 4--6 $\mu$BTH \\
+50--90 & 1.5--3.0 & 6--12 $\mu$BTH \\
+90--99 & 3.0--5.0 & 12--20 $\mu$BTH \\
+99--100 & 5.0--6.0 & 20--24 $\mu$BTH \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Redistribution Effect}
+
+Fee burning redistributes wealth from high-cluster (concentrated) holdings
+to all holders proportionally:
+
+\begin{equation}
+\text{redistribution} = \sum_{\text{tx}} f_{\text{cluster}} - f_{\text{base}}
+\end{equation}
+
+This excess fee is burned, reducing total supply and benefiting all holders.
+
+\subsubsection{Anti-Hoarding Dynamics}
+
+The combination of:
+\begin{itemize}
+  \item Tail emission ($\sim$2\% annual supply increase)
+  \item Progressive fees (wealth-based costs)
+  \item Fee burning (deflationary pressure from activity)
+\end{itemize}
+
+Creates net pressure toward circulation:
+
+\begin{equation}
+\text{holding\_cost} = \text{dilution} + \text{opportunity\_cost}
+\end{equation}
+
+Active users who circulate currency maintain relative wealth; passive
+holders experience gradual dilution.
+
+\subsection{Game-Theoretic Analysis}
+
+\subsubsection{Miner Strategy}
+
+\textbf{Proposition}: Honest mining is a Nash equilibrium.
+
+\begin{proof}[Proof sketch]
+Consider miner $M$ with hashpower fraction $\alpha$:
+\begin{itemize}
+  \item Honest strategy: Expected reward $\alpha \times R$ per block
+  \item Withholding: Risk of block rejection by SCP (no benefit)
+  \item Invalid blocks: Rejected, wasted computation
+  \item Transaction censorship: No benefit (fees burned anyway)
+\end{itemize}
+No deviation improves expected payoff.
+\end{proof}
+
+\subsubsection{Validator Strategy}
+
+\textbf{Proposition}: Honest validation is incentive-compatible for
+economically invested validators.
+
+\begin{proof}[Proof sketch]
+Validators typically hold currency. Byzantine behavior risks:
+\begin{itemize}
+  \item Network failure (total loss of holdings)
+  \item Exclusion from quorum slices (loss of influence)
+  \item Reputation damage (non-economic but real)
+\end{itemize}
+The expected loss exceeds any potential gain from misbehavior.
+\end{proof}
+
+\subsubsection{User Strategy}
+
+\textbf{Proposition}: Using the system as designed is individually rational.
+
+Users face choices:
+\begin{itemize}
+  \item \textbf{Privacy}: Mandatory, so no choice to make
+  \item \textbf{Fee payment}: Required for transaction inclusion
+  \item \textbf{Holding vs. spending}: Mild pressure toward spending,
+    but not coercive
+\end{itemize}
+
+\subsection{Long-Term Sustainability}
+
+\subsubsection{Security Budget}
+
+The annual security budget (miner revenue) is:
+
+\begin{equation}
+\text{budget} = R_{\text{tail}} \times \text{blocks\_per\_year} \times \text{BTH\_price}
+\end{equation}
+
+With tail emission, this is guaranteed to be positive regardless of
+transaction volume.
+
+\subsubsection{Network Effect}
+
+Privacy creates positive network effects:
+
+\begin{itemize}
+  \item More users $\rightarrow$ larger anonymity sets
+  \item Larger anonymity sets $\rightarrow$ better privacy
+  \item Better privacy $\rightarrow$ more users
+\end{itemize}
+
+This creates a virtuous cycle encouraging adoption.
+
+\subsubsection{Fee Market Stability}
+
+Fee burning eliminates fee market volatility:
+
+\begin{itemize}
+  \item No bidding wars for block inclusion
+  \item Predictable costs for users
+  \item No miner incentive to manipulate fees
+\end{itemize}
+
+The minimum fee provides sufficient spam resistance while remaining
+affordable.
+
+\subsection{Comparison with Alternatives}
+
+\subsubsection{Bitcoin Model}
+
+\begin{table}[h]
+\centering
+\caption{Bitcoin vs Botho economic comparison}
+\label{tab:btc-comparison}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\textbf{Property} & \textbf{Bitcoin} & \textbf{\Botho} \\
+\midrule
+Supply cap & 21M & None (tail) \\
+Long-term inflation & 0\% & $\sim$2\% \\
+Security funding & Fees only & Emission + burn \\
+Fee predictability & Low & High \\
+Wealth concentration & High & Moderate \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Monero Model}
+
+\begin{table}[h]
+\centering
+\caption{Monero vs Botho economic comparison}
+\label{tab:xmr-comparison}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\textbf{Property} & \textbf{Monero} & \textbf{\Botho} \\
+\midrule
+Tail emission & Yes & Yes \\
+Fee destination & Miners & Burned \\
+Progressive fees & No & Yes \\
+Dynamic timing & No & Yes \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Economic Risks}
+
+\subsubsection{Low Adoption}
+
+If adoption remains low:
+\begin{itemize}
+  \item Tail emission maintains miner incentive
+  \item Progressive fees have minimal impact (few large holders)
+  \item Network can persist indefinitely at low scale
+\end{itemize}
+
+\subsubsection{Mining Centralization}
+
+Risks and mitigations:
+\begin{itemize}
+  \item \textbf{Risk}: ASIC development concentrates mining
+  \item \textbf{Mitigation}: CPU-friendly PoW (RandomX-based)
+  \item \textbf{Risk}: Pool concentration
+  \item \textbf{Mitigation}: Solo mining viable with tail emission
+\end{itemize}
+
+\subsubsection{Validator Cartel}
+
+If validators collude:
+\begin{itemize}
+  \item SCP's tiered structure provides defense
+  \item Community can adjust quorum slices
+  \item Economic self-interest opposes cartels
+\end{itemize}
+
+\subsection{Economic Constants Summary}
+
+\begin{table}[h]
+\centering
+\caption{Economic parameters}
+\label{tab:econ-params}
+\begin{tabular}{@{}lrl@{}}
+\toprule
+\textbf{Parameter} & \textbf{Value} & \textbf{Rationale} \\
+\midrule
+Tail inflation & $\sim$2\% & Security sustainability \\
+Max fee multiplier & 6$\times$ & Balance incentive/burden \\
+Ring size & 20 & Privacy/size tradeoff \\
+Min block time & 5s & Throughput ceiling \\
+Max block time & 40s & Emission floor \\
+\bottomrule
+\end{tabular}
+\end{table}
+

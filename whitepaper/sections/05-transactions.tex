@@ -1,0 +1,263 @@
+% ============================================================================
+% Section 5: Transaction Format
+% ============================================================================
+
+\section{Transaction Format}
+\label{sec:transactions}
+
+\subsection{Transaction Types}
+
+\Botho supports two transaction types:
+
+\begin{table}[h]
+\centering
+\caption{Transaction type comparison}
+\label{tab:tx-types}
+\begin{tabular}{@{}lccccl@{}}
+\toprule
+\textbf{Type} & \textbf{Inputs} & \textbf{Outputs} & \textbf{Signature} & \textbf{Size} & \textbf{Use Case} \\
+\midrule
+Minting & 0 & 1--16 & ML-DSA-65 & $\sim$2 KB & Block rewards \\
+Private & 1--16 & 1--16 & CLSAG & $\sim$4 KB & All transfers \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Private Transaction Structure}
+
+A private transaction transfers value while hiding sender, recipient,
+and amount.
+
+\subsubsection{Transaction Components}
+
+\begin{lstlisting}[language=,caption={Private transaction structure}]
+PrivateTransaction {
+    prefix: TransactionPrefix,
+    ring_signatures: Vec<CLSAGSignature>,
+    bulletproofs: AggregatedRangeProof,
+}
+
+TransactionPrefix {
+    version: u8,
+    inputs: Vec<TxInput>,
+    outputs: Vec<TxOutput>,
+    fee: u64,
+    extra: Vec<u8>,
+}
+\end{lstlisting}
+
+\subsubsection{Input Structure}
+
+Each input references a previously unspent output without revealing which:
+
+\begin{lstlisting}[language=,caption={Transaction input structure}]
+TxInput {
+    ring: [TxOutRef; RING_SIZE],  // RING_SIZE = 20
+    key_image: KeyImage,           // 32 bytes
+    cluster_tag: ClusterTag,       // 32 bytes
+}
+
+TxOutRef {
+    block_height: u64,
+    tx_index: u16,
+    output_index: u8,
+}
+\end{lstlisting}
+
+The \texttt{ring} contains references to 20 possible source outputs.
+The \texttt{key\_image} uniquely identifies the spent output (for
+double-spend prevention) without revealing which ring member it
+corresponds to.
+
+\subsubsection{Output Structure}
+
+Each output contains the encrypted amount and one-time keys:
+
+\begin{lstlisting}[language=,caption={Transaction output structure}]
+TxOutput {
+    commitment: CompressedPoint,      // Pedersen commitment (32 bytes)
+    one_time_key: CompressedPoint,    // One-time public key (32 bytes)
+    encrypted_amount: [u8; 32],       // AES-encrypted amount
+    ml_kem_ciphertext: [u8; 1088],    // ML-KEM ciphertext
+    cluster_tag: ClusterTag,          // Derived from input tags
+}
+\end{lstlisting}
+
+\subsection{Minting Transaction Structure}
+
+Minting transactions create new coins as block rewards:
+
+\begin{lstlisting}[language=,caption={Minting transaction structure}]
+MintingTransaction {
+    block_height: u64,
+    nonce: u64,
+    minter_public_key: MLDSAPublicKey,  // 1,952 bytes
+    outputs: Vec<TxOutput>,
+    signature: MLDSASignature,           // 3,309 bytes
+}
+\end{lstlisting}
+
+Unlike private transactions:
+\begin{itemize}
+  \item No inputs (new coins created)
+  \item Public amounts (for supply auditability)
+  \item Known sender (minter identity is public)
+  \item Recipients still hidden via stealth addresses
+\end{itemize}
+
+\subsection{Cluster Tags and Progressive Fees}
+\label{sec:cluster-tags}
+
+\subsubsection{Cluster Tag Derivation}
+
+Each output carries a \textit{cluster tag} derived from its ancestry:
+
+\begin{equation}
+\text{tag}_{\text{out}} = \Hash(\text{tag}_{\text{in}_1} \| \cdots \| \text{tag}_{\text{in}_k} \| \text{salt})
+\end{equation}
+
+For minting outputs, tags are initialized from the block hash.
+
+\subsubsection{Wealth Tracking}
+
+The cluster tag system enables approximate wealth tracking without
+requiring identity:
+\begin{itemize}
+  \item Tags that appear frequently indicate concentrated holdings
+  \item Tags that rarely appear indicate distributed holdings
+  \item Splitting coins preserves the ancestry information
+\end{itemize}
+
+\subsubsection{Progressive Fee Calculation}
+
+The fee multiplier increases with estimated cluster wealth:
+
+\begin{equation}
+\text{fee} = \text{base\_fee} \times \text{size\_bytes} \times \text{cluster\_factor}(\text{wealth})
+\end{equation}
+
+where:
+\begin{equation}
+\text{cluster\_factor}(\text{wealth}) = 1 + 5 \cdot \sigma\left(\frac{\text{wealth}}{\text{steepness}}\right)
+\end{equation}
+
+and $\sigma(x) = x/(1+x)$ is a sigmoid function.
+
+\begin{table}[h]
+\centering
+\caption{Progressive fee multipliers}
+\label{tab:fee-multipliers}
+\begin{tabular}{@{}lc@{}}
+\toprule
+\textbf{Wealth Percentile} & \textbf{Fee Multiplier} \\
+\midrule
+Bottom 50\% & 1.0$\times$ -- 1.5$\times$ \\
+50th -- 90th & 1.5$\times$ -- 3.0$\times$ \\
+Top 10\% & 3.0$\times$ -- 6.0$\times$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Sybil Resistance}
+
+The cluster tag system resists Sybil attacks:
+\begin{itemize}
+  \item \textbf{Splitting coins} does not reduce fees---child outputs
+    inherit the parent's ancestry.
+  \item \textbf{Mixing through exchanges} reduces cluster concentration
+    over time, but requires actual economic activity.
+  \item \textbf{Long-term holding} continuously increases the cluster
+    factor as the same tags accumulate.
+\end{itemize}
+
+\subsection{Validation Rules}
+
+A private transaction is valid if and only if:
+
+\begin{enumerate}
+  \item \textbf{Structure}: 1--16 inputs, 1--16 outputs, valid encoding
+
+  \item \textbf{Key Image Uniqueness}: All key images are:
+    \begin{itemize}
+      \item Distinct within this transaction
+      \item Not present in the key image database (no double-spend)
+    \end{itemize}
+
+  \item \textbf{Ring Validity}: For each input ring:
+    \begin{itemize}
+      \item All referenced outputs exist and are unspent
+      \item Ring members are sorted (canonical ordering)
+      \item Real output is among the ring members
+    \end{itemize}
+
+  \item \textbf{Signature Validity}: All CLSAG signatures verify
+
+  \item \textbf{Value Conservation}:
+    \begin{equation}
+    \sum_i C_{\text{in}}^{(i)} = \sum_j C_{\text{out}}^{(j)} + \text{fee} \cdot H
+    \end{equation}
+
+  \item \textbf{Range Proofs}: Bulletproofs verify for all output
+    commitments (amounts in $[0, 2^{64})$)
+
+  \item \textbf{Fee}: $\text{fee} \geq \text{min\_fee}(\text{size}, \text{cluster\_factor})$
+
+  \item \textbf{Size}: Total serialized size $\leq$ 100 KB
+\end{enumerate}
+
+\subsection{Transaction Size Analysis}
+
+\begin{table}[h]
+\centering
+\caption{Private transaction size breakdown (1-in-2-out)}
+\label{tab:tx-size}
+\begin{tabular}{@{}lr@{}}
+\toprule
+\textbf{Component} & \textbf{Size (bytes)} \\
+\midrule
+Transaction header & 32 \\
+Input (ring references, key image) & 680 \\
+Output $\times$ 2 (commitment, key, ciphertext) & 2,304 \\
+CLSAG signature & 704 \\
+Bulletproof (2 outputs, aggregated) & 736 \\
+Cluster tags & 96 \\
+\midrule
+\textbf{Total} & $\sim$4,552 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+For comparison, a post-quantum ring signature would add approximately
+35 KB per input, making transactions 10$\times$ larger.
+
+\subsection{Decoy Selection}
+
+Ring members are selected to maximize anonymity:
+
+\begin{enumerate}
+  \item \textbf{Age distribution}: Decoys follow the empirical spend-age
+    distribution (recent outputs are more likely to be real)
+
+  \item \textbf{Cluster similarity}: At least 70\% cosine similarity
+    between decoy and real cluster tags (prevents fingerprinting)
+
+  \item \textbf{Output type matching}: Decoys match the real output's
+    characteristics (amount range, if known)
+
+  \item \textbf{Randomization}: Subject to above constraints, selection
+    is randomized
+\end{enumerate}
+
+\subsection{Transaction Malleability}
+
+\Botho transactions resist malleability:
+\begin{itemize}
+  \item \textbf{Signature covers full prefix}: Modifying any field
+    invalidates signatures
+  \item \textbf{Canonical encoding}: Only one valid serialization exists
+  \item \textbf{Key image binding}: Key images are deterministic from
+    private keys
+\end{itemize}
+
+The transaction hash (txid) is computed over the canonical serialization
+of the complete transaction.

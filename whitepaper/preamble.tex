@@ -1,0 +1,139 @@
+% ============================================================================
+% Botho Whitepaper - Preamble (Basic TeX Live Compatible)
+% ============================================================================
+
+% Document class
+\documentclass[11pt,a4paper]{article}
+
+% ============================================================================
+% Packages (minimal set for basic TeX Live)
+% ============================================================================
+
+% Layout and formatting
+\usepackage[margin=1in]{geometry}
+
+% Fonts
+\usepackage[T1]{fontenc}
+
+% Math
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{amsthm}
+
+% Tables
+\usepackage{array}
+
+% Graphics
+\usepackage{graphicx}
+
+% Hyperlinks
+\usepackage{hyperref}
+\hypersetup{colorlinks=true,linkcolor=blue,citecolor=purple,urlcolor=blue}
+
+% ============================================================================
+% Custom Commands - Notation
+% ============================================================================
+
+% Groups and fields
+\newcommand{\G}{\mathbb{G}}
+\newcommand{\Zq}{\mathbb{Z}_q}
+\newcommand{\Rq}{R_q}
+\newcommand{\F}{\mathbb{F}}
+
+% Keys
+\newcommand{\sk}{\mathsf{sk}}
+\newcommand{\pk}{\mathsf{pk}}
+\newcommand{\vk}{\mathsf{vk}}
+\newcommand{\spk}{\mathsf{spk}}
+
+% Algorithms
+\newcommand{\KeyGen}{\mathsf{KeyGen}}
+\newcommand{\Sign}{\mathsf{Sign}}
+\newcommand{\Verify}{\mathsf{Verify}}
+\newcommand{\Encap}{\mathsf{Encap}}
+\newcommand{\Decap}{\mathsf{Decap}}
+\newcommand{\Commit}{\mathsf{Commit}}
+\newcommand{\Open}{\mathsf{Open}}
+
+% Hash functions
+\newcommand{\Hs}{H_s}
+\newcommand{\Hp}{H_p}
+\newcommand{\Hash}{\mathcal{H}}
+
+% Protocols
+\newcommand{\CLSAG}{\textsf{CLSAG}}
+\newcommand{\MLKEM}{\textsf{ML-KEM}}
+\newcommand{\MLDSA}{\textsf{ML-DSA}}
+\newcommand{\SCP}{\textsf{SCP}}
+\newcommand{\PoW}{\textsf{PoW}}
+
+% Misc
+\newcommand{\BTH}{\textsf{BTH}}
+\newcommand{\Botho}{\textsf{Botho}}
+\newcommand{\negl}{\mathsf{negl}}
+\newcommand{\poly}{\mathsf{poly}}
+\newcommand{\Adv}{\mathcal{A}}
+\newcommand{\Challenger}{\mathcal{C}}
+
+% ============================================================================
+% Theorem Environments
+% ============================================================================
+
+\theoremstyle{plain}
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{corollary}[theorem]{Corollary}
+
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{example}[theorem]{Example}
+
+\theoremstyle{remark}
+\newtheorem{remark}[theorem]{Remark}
+\newtheorem{property}[theorem]{Property}
+
+% ============================================================================
+% Simple replacements for missing packages
+% ============================================================================
+
+% Simple table rules (booktabs replacement)
+\newcommand{\toprule}{\hline\hline}
+\newcommand{\midrule}{\hline}
+\newcommand{\bottomrule}{\hline\hline}
+
+% Checkmark (only if not already defined)
+\providecommand{\checkmark}{$\surd$}
+
+% Epigraph replacement
+\newcommand{\epigraph}[2]{\begin{quote}\textit{#1}\\ \hfill---#2\end{quote}}
+
+% lstlisting replacement - use alltt which allows formatting
+\usepackage{alltt}
+\newenvironment{lstlisting}[1][]{\begin{alltt}\small}{\end{alltt}}
+
+% longtable replacement
+\newenvironment{longtable}[1]{\begin{tabular}{#1}}{\end{tabular}}
+\providecommand{\endhead}{}
+
+% multirow replacement
+\newcommand{\multirow}[3]{#3}
+
+% ============================================================================
+% Document Info
+% ============================================================================
+
+\title{%
+  \vspace{-1cm}
+  {\LARGE\bfseries Botho}\\[0.5em]
+  {\Large A Privacy-Preserving Cryptocurrency with}\\[0.3em]
+  {\Large Hybrid Post-Quantum Security and Fair Economics}\\[1em]
+  {\normalsize Version 1.0}
+}
+
+\author{%
+  The Botho Project\\
+  \texttt{https://botho.io}
+}
+
+\date{\today}

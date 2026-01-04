@@ -1,0 +1,283 @@
+% ============================================================================
+% Section 4: Cryptographic Protocol
+% ============================================================================
+
+\section{Cryptographic Protocol}
+\label{sec:cryptography}
+
+\subsection{Key Hierarchy}
+
+\Botho derives all cryptographic keys from a single BIP39
+mnemonic using SLIP-10 hierarchical derivation.
+
+\subsubsection{Master Seed Generation}
+
+A 24-word mnemonic encodes 256 bits of entropy. The master seed is derived
+via:
+\begin{equation}
+\text{seed} = \text{PBKDF2-SHA512}(\text{mnemonic}, \text{``mnemonic''} \| \text{passphrase}, 2048)
+\end{equation}
+
+This produces a 512-bit seed from which all keys are derived.
+
+\subsubsection{Account Key Derivation}
+
+Using SLIP-10 hardened derivation with path $m/44'/866'/\text{account}'$:
+
+\begin{align}
+\text{view\_key\_material} &= \text{SLIP10}(\text{seed}, m/44'/866'/0'/0') \\
+\text{spend\_key\_material} &= \text{SLIP10}(\text{seed}, m/44'/866'/0'/1')
+\end{align}
+
+These materials are then processed through HKDF-SHA512 to produce the
+final Ristretto255 scalars:
+
+\begin{align}
+a &= \text{HKDF}(\text{view\_key\_material}, \text{``botho-ristretto255-view''}) \mod q \\
+b &= \text{HKDF}(\text{spend\_key\_material}, \text{``botho-ristretto255-spend''}) \mod q
+\end{align}
+
+The corresponding public keys are:
+\begin{equation}
+A = aG, \quad B = bG
+\end{equation}
+
+The public address is the tuple $(A, B)$.
+
+\subsubsection{Subaddress Derivation}
+
+Subaddresses allow generation of unlimited unlinkable addresses from a
+single master key pair. For subaddress index $i$:
+
+\begin{align}
+\delta_i &= \Hs(\text{``SubAddr''} \| a \| i) \\
+c_i &= a + \delta_i \mod q \\
+d_i &= b + \delta_i \mod q
+\end{align}
+
+The subaddress public key pair is:
+\begin{equation}
+(C_i, D_i) = (c_i G, d_i G) = (A + \delta_i G, B + \delta_i G)
+\end{equation}
+
+\begin{theorem}[Subaddress Unlinkability]
+Without knowledge of the view key $a$, subaddresses $(C_i, D_i)$ and
+$(C_j, D_j)$ for $i \neq j$ are computationally indistinguishable from
+independent random points.
+\end{theorem}
+
+\subsection{Post-Quantum Stealth Addresses}
+\label{sec:pq-stealth}
+
+Traditional CryptoNote stealth addresses use ECDH for key exchange. \Botho
+replaces this with ML-KEM-768 to achieve post-quantum recipient privacy.
+
+\subsubsection{Protocol Description}
+
+Let the recipient have address $(A, B)$ where $A$ is interpreted as an
+ML-KEM public key (derived via a domain-separated hash from the Ristretto
+point).
+
+\textbf{Sender} (creating output for recipient):
+\begin{enumerate}
+  \item Derive ML-KEM public key: $\pk_{\text{kem}} = \text{DeriveKEM}(A)$
+  \item Encapsulate: $(c, K) \leftarrow \MLKEM.\Encap(\pk_{\text{kem}})$
+  \item Compute scalar: $s = \Hs(K \| \text{output\_index})$
+  \item Compute one-time public key: $P = sG + B$
+  \item Include ciphertext $c$ (1,088 bytes) in transaction output
+\end{enumerate}
+
+\textbf{Recipient} (scanning for received outputs):
+\begin{enumerate}
+  \item Derive ML-KEM secret key: $\sk_{\text{kem}} = \text{DeriveKEM}(a)$
+  \item For each output with ciphertext $c$:
+    \begin{enumerate}
+      \item Decapsulate: $K \leftarrow \MLKEM.\Decap(\sk_{\text{kem}}, c)$
+      \item Compute scalar: $s' = \Hs(K \| \text{output\_index})$
+      \item Compute expected key: $P' = s'G + B$
+      \item If $P' = P$ (output's public key), this output belongs to us
+      \item Compute private key: $x = s' + b \mod q$
+    \end{enumerate}
+\end{enumerate}
+
+\textbf{Verification}: The one-time private key $x$ satisfies
+$xG = (s + b)G = sG + B = P$.
+
+\subsubsection{Security Analysis}
+
+\begin{theorem}[Recipient Unlinkability]
+Under the IND-CCA2 security of ML-KEM-768, an adversary (including a
+quantum adversary) cannot link outputs to recipients with probability
+better than negligible, given only the blockchain.
+\end{theorem}
+
+\begin{proof}[Proof sketch]
+Each output contains an ML-KEM ciphertext $c$ and one-time key $P$.
+Without the recipient's secret key, the shared secret $K$ is
+indistinguishable from random (by IND-CCA2). Thus $s = \Hs(K \| \cdot)$
+is random, and $P = sG + B$ is uniformly distributed, independent of
+the recipient's public key $B$.
+\end{proof}
+
+\subsection{Ring Signatures (CLSAG)}
+\label{sec:clsag}
+
+\CLSAG (Concise Linkable Spontaneous Anonymous Group)
+provides efficient linkable ring signatures for sender privacy.
+
+\subsubsection{Ring Construction}
+
+For each input being spent, the sender:
+\begin{enumerate}
+  \item Selects $n-1$ decoy outputs from the blockchain (we use $n = 20$)
+  \item Forms a ring $\mathcal{R} = \{(P_0, C_0), \ldots, (P_{n-1}, C_{n-1})\}$
+    where each $(P_i, C_i)$ is a one-time public key and commitment
+  \item The real input is at secret index $\pi$
+\end{enumerate}
+
+\subsubsection{Signature Generation}
+
+Given:
+\begin{itemize}
+  \item Ring $\mathcal{R}$ with real index $\pi$
+  \item Private key $x_\pi$ and commitment blinding factor $z_\pi$
+  \item Message $m$ (transaction hash)
+\end{itemize}
+
+\textbf{Key Image}: $I = x_\pi \cdot \Hp(P_\pi)$
+
+The key image is deterministic given the private key and serves as a
+unique tag preventing double-spending.
+
+\textbf{Aggregation Coefficients}:
+\begin{align}
+\mu_P &= \Hash(\text{``CLSAG\_agg\_0''} \| \mathcal{R} \| I \| D) \\
+\mu_C &= \Hash(\text{``CLSAG\_agg\_1''} \| \mathcal{R} \| I \| D)
+\end{align}
+
+where $D$ is an auxiliary point for commitment verification.
+
+\textbf{Signature}: The signature $\sigma = (c_0, s_0, \ldots, s_{n-1}, I, D)$
+is computed via a Fiat-Shamir transform of an interactive protocol,
+forming a ``ring'' of challenges that closes only if the prover knows
+one of the private keys.
+
+\subsubsection{Verification}
+
+Given signature $\sigma$ and ring $\mathcal{R}$:
+\begin{enumerate}
+  \item Recompute aggregation coefficients $\mu_P$, $\mu_C$
+  \item For $i = 0, \ldots, n-1$:
+    \begin{align}
+      W_i &= \mu_P P_i + \mu_C (C_i - C_{\text{out}}) \\
+      L_i &= s_i G + c_i W_i \\
+      R_i &= s_i \Hp(P_i) + c_i (\mu_P I + \mu_C D) \\
+      c_{i+1} &= \Hash(\text{``CLSAG\_round''} \| \mathcal{R} \| L_i \| R_i \| m)
+    \end{align}
+  \item Accept if $c_n = c_0$ (ring closure)
+\end{enumerate}
+
+\subsubsection{Security Properties}
+
+\begin{theorem}[CLSAG Security]
+Under the DLP assumption in the random oracle model, CLSAG satisfies:
+\begin{enumerate}
+  \item \textbf{Unforgeability}: No PPT adversary can forge a signature
+    without knowing a ring member's private key.
+  \item \textbf{Anonymity}: The signer's identity is hidden among ring
+    members with probability $1/n$.
+  \item \textbf{Linkability}: Two signatures from the same key produce
+    the same key image; different keys produce different key images
+    (with overwhelming probability).
+\end{enumerate}
+\end{theorem}
+
+\subsection{Confidential Transactions}
+
+\subsubsection{Amount Commitment}
+
+Each output commits to its amount $v$ with blinding factor $r$:
+\begin{equation}
+C = vH + rG
+\end{equation}
+
+The blinding factor $r$ is derived deterministically from the shared
+secret to enable recipient recovery.
+
+\subsubsection{Value Conservation}
+
+For a transaction with inputs $\{C_{\text{in}}^{(i)}\}$ and outputs
+$\{C_{\text{out}}^{(j)}\}$, value conservation requires:
+\begin{equation}
+\sum_i C_{\text{in}}^{(i)} = \sum_j C_{\text{out}}^{(j)} + fH
+\end{equation}
+
+where $f$ is the transaction fee (public). This holds if and only if:
+\begin{equation}
+\sum_i v_{\text{in}}^{(i)} = \sum_j v_{\text{out}}^{(j)} + f
+\end{equation}
+
+Validators check commitment arithmetic without learning individual values.
+
+\subsubsection{Range Proofs}
+
+Each output includes a Bulletproof demonstrating:
+\begin{equation}
+v_{\text{out}}^{(j)} \in [0, 2^{64})
+\end{equation}
+
+This prevents:
+\begin{itemize}
+  \item Negative amounts (which would create coins from nothing)
+  \item Overflow attacks (amounts wrapping around)
+\end{itemize}
+
+\subsection{Minting Signatures}
+
+Block rewards (minting transactions) use ML-DSA-65 signatures since the
+minter's identity is public and must be verifiable long-term.
+
+\begin{equation}
+\sigma_{\text{mint}} = \MLDSA.\Sign(\sk_{\text{minter}}, \text{block\_hash} \| \text{nonce})
+\end{equation}
+
+The minter's ML-DSA public key is derived from the same seed as their
+Ristretto keys, enabling unified key management.
+
+\subsection{Hybrid Architecture Rationale}
+
+\begin{table}[h]
+\centering
+\caption{Cryptographic choices by data lifetime}
+\label{tab:hybrid}
+\begin{tabular}{@{}llll@{}}
+\toprule
+\textbf{Data} & \textbf{Lifetime} & \textbf{Algorithm} & \textbf{Rationale} \\
+\midrule
+Recipient identity & Permanent & ML-KEM-768 & On-chain forever; must be PQ \\
+Sender identity & Ephemeral & CLSAG & Value degrades; efficiency wins \\
+Amounts & Permanent & Pedersen & Information-theoretic hiding \\
+Minting authority & Permanent & ML-DSA-65 & Verifiable long-term \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Why not full post-quantum?}
+
+Post-quantum ring signatures (e.g., lattice-based constructions) impose
+approximately 50$\times$ size overhead. A CLSAG signature is $\sim$700
+bytes per input; a comparable lattice ring signature would be
+$\sim$35 KB. With multiple inputs, transactions would exceed 100 KB,
+making desktop nodes impractical.
+
+\textbf{Why is ephemeral sender privacy acceptable?}
+
+The value of sender deanonymization degrades over time. Learning who
+sent a transaction in 2025 from a 2045 perspective has minimal economic
+relevance---the goods have been delivered, contracts fulfilled, and
+economic context forgotten. In contrast, recipient identity remains
+valuable (``who owns this address?'') indefinitely.
+
+This asymmetry justifies asymmetric protection: permanent data gets
+permanent (post-quantum) protection; ephemeral data gets efficient
+(classical) protection.

@@ -38,6 +38,7 @@
 //! # Module Structure
 //!
 //! - [`types`]: Core types (CircuitId, SymmetricKey)
+//! - [`crypto`]: Onion encryption and decryption primitives
 //! - [`circuit`]: Outbound circuit management (OutboundCircuit, CircuitPool)
 //! - [`relay`]: Relay state management (RelayState, CircuitHopKey)
 //!
@@ -78,11 +79,19 @@
 //! - Parent issue: #147 (Traffic Analysis Resistance - Phase 1)
 
 mod circuit;
+mod crypto;
 mod relay;
 mod types;
 
 // Re-export core types
 pub use types::{CircuitId, SymmetricKey, CIRCUIT_ID_LEN, SYMMETRIC_KEY_LEN};
+
+// Re-export crypto primitives
+pub use crypto::{
+    decrypt_layer, encrypt_exit_layer, encrypt_forward_layer, wrap_onion, CryptoError,
+    DecryptedLayer, LayerType, OnionMessage, MAX_PEER_ID_SIZE, MIN_LAYER_SIZE, NONCE_SIZE,
+    TAG_SIZE,
+};
 
 // Re-export circuit management types
 pub use circuit::{

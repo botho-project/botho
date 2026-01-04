@@ -1,0 +1,314 @@
+% ============================================================================
+% Section 8: Network Protocol
+% ============================================================================
+
+\section{Network Protocol}
+\label{sec:network}
+
+\Botho employs a peer-to-peer network protocol optimized for privacy
+transaction propagation and consensus message delivery.
+
+\subsection{Network Architecture}
+
+\subsubsection{Node Types}
+
+\begin{itemize}
+  \item \textbf{Full nodes}: Store complete blockchain, validate all
+    transactions, participate in consensus
+  \item \textbf{Minting nodes}: Full nodes that additionally perform PoW
+    and propose blocks
+  \item \textbf{Light clients}: Store block headers only, verify
+    transactions via inclusion proofs
+\end{itemize}
+
+\subsubsection{Transport Layer}
+
+All peer-to-peer communication uses:
+\begin{itemize}
+  \item \textbf{TCP}: Reliable delivery for consensus messages
+  \item \textbf{Noise Protocol}: Authenticated encryption
+    with forward secrecy
+  \item \textbf{Multiplexed streams}: Separate channels for different
+    message types
+\end{itemize}
+
+\subsection{Peer Discovery}
+
+\subsubsection{Bootstrap Nodes}
+
+New nodes connect to hardcoded bootstrap nodes to discover initial peers:
+
+\begin{lstlisting}[language=,caption={Bootstrap node configuration}]
+BootstrapNodes {
+    dns_seeds: [
+        "seed1.botho.org",
+        "seed2.botho.org",
+        "seed3.botho.org",
+    ],
+    static_peers: [
+        "203.0.113.1:9732",
+        "203.0.113.2:9732",
+    ],
+}
+\end{lstlisting}
+
+\subsubsection{Kademlia DHT}
+
+Peer discovery uses a modified Kademlia DHT:
+
+\begin{itemize}
+  \item Node IDs derived from public keys (not chosen)
+  \item XOR distance metric for routing
+  \item Iterative lookup with parallel queries
+  \item Periodic bucket refresh
+\end{itemize}
+
+\subsubsection{Peer Limits}
+
+\begin{table}[h]
+\centering
+\caption{Connection limits}
+\label{tab:peer-limits}
+\begin{tabular}{@{}lc@{}}
+\toprule
+\textbf{Category} & \textbf{Limit} \\
+\midrule
+Outbound connections & 8 \\
+Inbound connections & 117 \\
+Total connections & 125 \\
+Connections per IP & 2 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Message Protocol}
+
+\subsubsection{Message Types}
+
+\begin{lstlisting}[language=,caption={Message enumeration}]
+enum Message {
+    // Handshake
+    Hello { version, genesis_hash, best_height },
+    HelloAck { version, genesis_hash, best_height },
+
+    // Block propagation
+    NewBlock { block },
+    GetBlocks { locator, stop_hash },
+    Blocks { blocks },
+
+    // Transaction propagation
+    NewTransaction { tx },
+    GetTransactions { hashes },
+    Transactions { txs },
+
+    // Consensus (SCP)
+    SCPNomination { msg },
+    SCPPrepare { msg },
+    SCPCommit { msg },
+    SCPExternalize { msg },
+
+    // Compact blocks
+    CompactBlock { header, short_ids },
+    GetBlockTxs { block_hash, indices },
+    BlockTxs { block_hash, txs },
+}
+\end{lstlisting}
+
+\subsubsection{Message Serialization}
+
+Messages are serialized using a canonical binary format:
+\begin{itemize}
+  \item Little-endian byte order
+  \item Varint encoding for lengths
+  \item No padding or alignment
+  \item Deterministic ordering of map keys
+\end{itemize}
+
+\subsection{Block Propagation}
+
+\subsubsection{Compact Block Relay}
+
+To reduce bandwidth, blocks are relayed in compact form:
+
+\begin{enumerate}
+  \item Sender transmits compact block (header + short transaction IDs)
+  \item Receiver reconstructs from mempool
+  \item Receiver requests missing transactions by index
+  \item Sender provides requested transactions
+\end{enumerate}
+
+\textbf{Short ID computation}:
+\begin{equation}
+\text{short\_id} = \text{SipHash}(\text{nonce} \| \text{txid})_{[0:6]}
+\end{equation}
+
+Average bandwidth savings: 90\% (most transactions already in mempool).
+
+\subsubsection{Block Validation}
+
+Upon receiving a block:
+\begin{enumerate}
+  \item Validate header (PoW, timestamp, difficulty)
+  \item Verify Merkle root
+  \item Validate each transaction
+  \item Verify minting transaction signature
+  \item Verify SCP proof (quorum agreement)
+  \item Apply to local state
+\end{enumerate}
+
+\subsection{Transaction Propagation}
+
+\subsubsection{Dandelion++}
+
+Transaction propagation uses Dandelion++ to protect
+sender network identity:
+
+\textbf{Stem phase}:
+\begin{itemize}
+  \item Transaction relayed along a random path
+  \item Each hop has probability $p$ to switch to fluff phase
+  \item Path length follows geometric distribution
+\end{itemize}
+
+\textbf{Fluff phase}:
+\begin{itemize}
+  \item Standard flooding to all peers
+  \item Cannot trace back to stem origin
+\end{itemize}
+
+% Dandelion++ propagation diagram:
+% O ---> S1 ---> S2 ---> F1, F2, F3
+% (stem phase: dashed, fluff phase: solid broadcast)
+
+\subsubsection{Transaction Validation}
+
+Transactions are validated before relay:
+\begin{enumerate}
+  \item Syntactic validity (correct encoding)
+  \item Semantic validity (signatures verify)
+  \item Contextual validity (references exist, no double-spend)
+  \item Fee sufficiency
+\end{enumerate}
+
+Invalid transactions are dropped; peers sending invalid transactions are
+deprioritized.
+
+\subsection{Synchronization}
+
+\subsubsection{Initial Block Download}
+
+New nodes synchronize via:
+\begin{enumerate}
+  \item Connect to peers and exchange best heights
+  \item Download block headers (verify PoW chain)
+  \item Request blocks in parallel from multiple peers
+  \item Validate and apply blocks sequentially
+  \item Join consensus once synchronized
+\end{enumerate}
+
+\subsubsection{Block Locator}
+
+Block requests include a locator to identify common ancestor:
+
+\begin{lstlisting}[language=,caption={Block locator construction}]
+fn block_locator(tip: Height) -> Vec<Hash> {
+    let mut locator = Vec::new();
+    let mut step = 1;
+    let mut height = tip;
+
+    while height > 0 {
+        locator.push(hash_at(height));
+        if locator.len() > 10 {
+            step *= 2;
+        }
+        height = height.saturating_sub(step);
+    }
+    locator.push(genesis_hash());
+    locator
+}
+\end{lstlisting}
+
+This logarithmic structure efficiently identifies divergence point.
+
+\subsubsection{Pruning}
+
+Full nodes may prune old blocks while retaining:
+\begin{itemize}
+  \item Recent blocks (configurable, default 10,000)
+  \item Block headers (all)
+  \item UTXO set (current state)
+  \item Key image set (all, for double-spend detection)
+\end{itemize}
+
+Pruned nodes cannot serve historical blocks but can fully validate new
+transactions.
+
+\subsection{Denial-of-Service Protection}
+
+\subsubsection{Rate Limiting}
+
+Per-peer rate limits:
+\begin{itemize}
+  \item Block requests: 10/second
+  \item Transaction announcements: 100/second
+  \item Consensus messages: 50/second
+\end{itemize}
+
+\subsubsection{Peer Scoring}
+
+Peers maintain reputation scores:
+\begin{itemize}
+  \item +1 for valid blocks/transactions
+  \item -10 for invalid data
+  \item -100 for protocol violations
+  \item Disconnect at score $<$ -1000
+\end{itemize}
+
+\subsubsection{Resource Bounds}
+
+\begin{itemize}
+  \item Maximum message size: 100 KB
+  \item Maximum block size: 2 MB
+  \item Maximum mempool size: 100 MB
+  \item Maximum pending requests: 1000
+\end{itemize}
+
+\subsection{Privacy Considerations}
+
+\subsubsection{Traffic Analysis Resistance}
+
+\begin{itemize}
+  \item \textbf{Dandelion++}: Hides transaction origin
+  \item \textbf{Encrypted transport}: Prevents content inspection
+  \item \textbf{No timing correlation}: Messages are batched and jittered
+\end{itemize}
+
+\subsubsection{Tor/I2P Support}
+
+Optional routing through anonymity networks:
+\begin{itemize}
+  \item Tor hidden service support
+  \item I2P integration planned
+  \item Mixed clearnet/onion peer connections
+\end{itemize}
+
+\subsection{Network Constants}
+
+\begin{table}[h]
+\centering
+\caption{Network protocol constants}
+\label{tab:network-constants}
+\begin{tabular}{@{}lrl@{}}
+\toprule
+\textbf{Parameter} & \textbf{Value} & \textbf{Description} \\
+\midrule
+Default port & 9732 & Main network \\
+Testnet port & 19732 & Test network \\
+Protocol version & 1 & Current version \\
+Magic bytes & \texttt{0xB07B0} & Network identifier \\
+Handshake timeout & 10s & Connection setup \\
+Ping interval & 60s & Keepalive \\
+\bottomrule
+\end{tabular}
+\end{table}
+

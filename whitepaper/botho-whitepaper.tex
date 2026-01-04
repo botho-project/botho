@@ -1,0 +1,83 @@
+% ============================================================================
+% Botho Whitepaper - Main Document
+% ============================================================================
+%
+% A Privacy-Preserving Cryptocurrency with Hybrid Post-Quantum Security
+% and Fair Economics
+%
+% ============================================================================
+
+\input{preamble}
+
+\begin{document}
+
+% ============================================================================
+% Title and Abstract
+% ============================================================================
+
+\maketitle
+
+\begin{abstract}
+\noindent
+We present \Botho, a privacy-preserving cryptocurrency that combines
+efficient ring signatures with post-quantum stealth addresses, achieving
+both strong privacy guarantees and practical performance. Unlike existing
+privacy coins that either lack quantum resistance or impose impractical
+overhead, \Botho employs a \emph{hybrid architecture} that applies
+post-quantum cryptography selectively---protecting permanent on-chain data
+(recipient identities) while using efficient classical cryptography for
+ephemeral privacy (sender anonymity).
+
+\Botho introduces a novel consensus mechanism combining proof-of-work
+block proposal with Stellar Consensus Protocol (SCP) finalization,
+achieving deterministic finality in approximately 5 seconds while
+maintaining permissionless participation. The protocol includes
+\emph{progressive fees} based on wealth concentration, creating economic
+incentives against hoarding without requiring identity or enabling Sybil
+attacks.
+
+Key parameters: ring size 20, transaction size $\sim$4~KB, 5-second finality,
+2\% target tail emission with dynamic inflation dampening. The reference
+implementation comprises approximately 50,000 lines of Rust code.
+\end{abstract}
+
+\vspace{1em}
+\noindent\textbf{Keywords:} cryptocurrency, privacy, ring signatures,
+post-quantum cryptography, consensus protocol, monetary policy
+
+\tableofcontents
+\newpage
+
+% ============================================================================
+% Main Content
+% ============================================================================
+
+\input{sections/01-introduction}
+\input{sections/02-related-work}
+\input{sections/03-preliminaries}
+\input{sections/04-cryptography}
+\input{sections/05-transactions}
+\input{sections/06-consensus}
+\input{sections/07-monetary}
+\input{sections/08-network}
+\input{sections/09-security}
+\input{sections/10-economics}
+\input{sections/11-implementation}
+\input{sections/12-conclusion}
+
+% ============================================================================
+% Bibliography
+% ============================================================================
+
+% Bibliography - uncomment when natbib is available
+% \bibliographystyle{plainnat}
+% \bibliography{refs}
+
+% ============================================================================
+% Appendices
+% ============================================================================
+
+\appendix
+\input{sections/appendix-notation}
+
+\end{document}

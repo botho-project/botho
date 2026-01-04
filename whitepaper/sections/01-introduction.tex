@@ -1,0 +1,170 @@
+% ============================================================================
+% Section 1: Introduction
+% ============================================================================
+
+\section{Introduction}
+\label{sec:introduction}
+
+\epigraph{\textit{``Motho ke motho ka batho''---A person is a person through other people.}}{Sesotho proverb}
+
+\subsection{The Privacy Problem}
+
+Financial surveillance has become pervasive in the digital age. Traditional
+banking systems create detailed records of every transaction, enabling
+comprehensive monitoring of individuals' economic activities. The emergence
+of Bitcoin and subsequent cryptocurrencies
+initially promised an alternative---yet most blockchain systems create
+permanent, public records that enable even more thorough surveillance than
+traditional finance.
+
+The transparency of Bitcoin's blockchain allows any observer to trace the
+flow of funds, link addresses to identities, and reconstruct complete
+financial histories. Chain analysis companies have built entire industries
+around deanonymizing cryptocurrency users. This surveillance capability
+extends not only to law enforcement but to any party with access to
+blockchain data---including authoritarian governments, stalkers, and
+criminals seeking targets.
+
+Privacy is not merely a preference; it is a prerequisite for human dignity.
+Financial privacy protects victims of domestic abuse, enables charitable
+giving without social pressure, preserves commercial confidentiality, and
+shields individuals from discrimination based on their economic activities.
+The Universal Declaration of Human Rights recognizes privacy as a
+fundamental right.
+
+Compounding this concern is the emerging quantum computing threat. Current
+cryptographic systems, including those protecting cryptocurrency addresses,
+rely on mathematical problems believed to be computationally hard for
+classical computers. Quantum computers, when sufficiently powerful, will
+render many of these protections obsolete. The ``harvest now, decrypt
+later'' threat model suggests that adversaries may already be collecting
+encrypted data for future decryption---including blockchain transactions
+that will remain on-chain indefinitely.
+
+\subsection{The Fairness Problem}
+
+Beyond privacy, existing cryptocurrencies exhibit troubling economic
+dynamics. Early adopter advantage creates extreme wealth concentration:
+those who acquired Bitcoin in 2010 for pennies now hold assets worth
+tens of thousands of dollars per coin. This dynamic transfers wealth
+from late adopters to early adopters without corresponding value creation.
+
+Traditional fee markets create perverse incentives. When fees flow to
+miners, there is pressure toward miner centralization---larger operations
+can offer lower fees through economies of scale. Fee volatility during
+network congestion disproportionately harms small transactions and users
+in developing economies.
+
+Fixed supply caps, while appealing for scarcity, create deflationary
+spirals that discourage spending and economic activity. The security
+budget problem looms: as Bitcoin's block rewards diminish toward zero,
+network security will depend entirely on transaction fees, creating
+uncertainty about long-term viability.
+
+\subsection{Design Philosophy}
+
+The name \textbf{Botho} (pronounced BOH-toh) comes from the Sesotho and
+Setswana languages of Southern Africa, meaning \textit{humanity},
+\textit{humaneness}, or \textit{ubuntu}. It is a national principle of
+Botswana and a core philosophy across many African cultures.
+
+The opening proverb---\textit{``Motho ke motho ka batho''}---translates
+to ``a person is a person through other people.'' It expresses the idea
+that our humanity is defined by our relationships and responsibilities
+to one another, not by individual accumulation.
+
+In currency design, this philosophy rejects the ``number go up'' mentality.
+Instead, \Botho asks: \textit{how can money serve community rather than
+concentrate power?}
+
+This philosophy manifests in concrete design decisions:
+
+\begin{itemize}
+  \item \textbf{Privacy as baseline}: All transactions are private by
+    default, not as a premium feature. Privacy protects the dignity of
+    all participants.
+
+  \item \textbf{Pragmatic security}: Rather than maximizing any single
+    property, we make deliberate tradeoffs based on actual threat models.
+    Permanent data receives permanent protection; ephemeral data can use
+    efficient classical cryptography.
+
+  \item \textbf{Fair economics}: Progressive fees discourage wealth
+    concentration. Perpetual tail emission ensures sustainable security.
+    Fee burning aligns incentives with network health.
+
+  \item \textbf{Community consensus}: The Stellar Consensus Protocol
+    enables decisions by community agreement rather than hashpower
+    dominance.
+\end{itemize}
+
+\subsection{Contributions}
+
+This paper presents \Botho, a privacy-preserving cryptocurrency with the
+following novel contributions:
+
+\begin{enumerate}
+  \item \textbf{Hybrid post-quantum architecture}: We introduce a principled
+    framework for applying post-quantum cryptography selectively based on
+    data lifetime. Recipient identities, which persist on-chain
+    indefinitely, are protected by \MLKEM-768. Sender privacy, which has
+    ephemeral value, uses efficient \CLSAG ring signatures. This achieves
+    meaningful quantum resistance while keeping transactions practical
+    ($\sim$4~KB vs.\ $\sim$65~KB for full post-quantum).
+
+  \item \textbf{PoW + SCP consensus}: We combine proof-of-work block
+    proposal with Stellar Consensus Protocol finalization. This achieves
+    permissionless participation (anyone can mine) with fast deterministic
+    finality ($\sim$5 seconds) and Byzantine fault tolerance.
+
+  \item \textbf{Progressive fee mechanism}: We introduce cluster-based
+    fees that increase with wealth concentration. Unlike identity-based
+    approaches, this preserves privacy while resisting Sybil attacks---fees
+    are based on coin \textit{ancestry}, not current ownership.
+
+  \item \textbf{Dynamic block timing}: Block intervals adapt to network
+    load (5--40 seconds), creating natural inflation dampening. Low
+    network utility produces fewer blocks and less emission; high utility
+    produces more blocks and rewards participants.
+\end{enumerate}
+
+\subsection{Paper Organization}
+
+The remainder of this paper is organized as follows:
+
+\begin{itemize}
+  \item \textbf{Section~\ref{sec:related}} reviews related work in privacy
+    cryptocurrencies, post-quantum approaches, consensus mechanisms, and
+    economic designs.
+
+  \item \textbf{Section~\ref{sec:preliminaries}} establishes notation and
+    reviews cryptographic building blocks.
+
+  \item \textbf{Section~\ref{sec:cryptography}} details the cryptographic
+    protocol including stealth addresses, ring signatures, and confidential
+    transactions.
+
+  \item \textbf{Section~\ref{sec:transactions}} specifies transaction
+    formats, validation rules, and the progressive fee mechanism.
+
+  \item \textbf{Section~\ref{sec:consensus}} describes the hybrid PoW + SCP
+    consensus mechanism.
+
+  \item \textbf{Section~\ref{sec:monetary}} presents the monetary policy
+    including emission schedule, dynamic timing, and fee economics.
+
+  \item \textbf{Section~\ref{sec:network}} outlines the peer-to-peer
+    network protocol.
+
+  \item \textbf{Section~\ref{sec:security}} provides security analysis
+    including threat models, privacy guarantees, and attack resistance.
+
+  \item \textbf{Section~\ref{sec:economics}} analyzes economic incentives
+    and long-term sustainability.
+
+  \item \textbf{Section~\ref{sec:implementation}} describes the reference
+    implementation and performance characteristics.
+
+  \item \textbf{Section~\ref{sec:conclusion}} concludes with a summary and
+    discussion of future work.
+\end{itemize}

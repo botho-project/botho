@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Button, Logo } from '@botho/ui'
-import { Shield, TrendingDown, Atom, Zap, ArrowRight, Github, Menu, X } from 'lucide-react'
+import { Shield, TrendingDown, Atom, Zap, ArrowRight, Github, Menu, X, FileText } from 'lucide-react'
 
 const features = [
   {
@@ -52,6 +52,15 @@ export function LandingPage() {
               Docs
             </Link>
             <a
+              href="/botho-whitepaper.pdf"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-ghost hover:text-light transition-colors flex items-center gap-2"
+            >
+              <FileText size={18} />
+              Whitepaper
+            </a>
+            <a
               href="https://github.com/botho-project/botho"
               target="_blank"
               rel="noopener noreferrer"
@@ -86,6 +95,16 @@ export function LandingPage() {
               >
                 Documentation
               </Link>
+              <a
+                href="/botho-whitepaper.pdf"
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => setMobileMenuOpen(false)}
+                className="flex items-center gap-2 px-4 py-3 rounded-lg text-ghost hover:text-light hover:bg-steel/50 transition-colors"
+              >
+                <FileText size={18} />
+                Whitepaper
+              </a>
               <a
                 href="https://github.com/botho-project/botho"
                 target="_blank"
@@ -214,6 +233,14 @@ export function LandingPage() {
               <Link to="/docs" className="hover:text-light transition-colors">
                 Documentation
               </Link>
+              <a
+                href="/botho-whitepaper.pdf"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="hover:text-light transition-colors"
+              >
+                Whitepaper
+              </a>
               <a
                 href="https://github.com/botho-project/botho"
                 target="_blank"

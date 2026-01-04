@@ -1,0 +1,194 @@
+% ============================================================================
+% Section 3: Preliminaries
+% ============================================================================
+
+\section{Preliminaries}
+\label{sec:preliminaries}
+
+\subsection{Notation}
+
+We establish the following notation used throughout this paper:
+
+\begin{center}
+\begin{tabular}{cl}
+\toprule
+\textbf{Symbol} & \textbf{Description} \\
+\midrule
+$\lambda$ & Security parameter \\
+$\G$ & Elliptic curve group (Ristretto255) \\
+$G$ & Generator of $\G$ \\
+$H$ & Secondary generator for Pedersen commitments \\
+$q$ & Order of $\G$ (prime) \\
+$\Zq$ & Integers modulo $q$ \\
+$\Rq$ & Polynomial ring $\mathbb{Z}_q[X]/(X^n + 1)$ for lattice operations \\
+\midrule
+$a, b$ & View and spend private keys (scalars) \\
+$A, B$ & View and spend public keys (points) \\
+$(C, D)$ & Subaddress public key pair \\
+$P$ & One-time public key \\
+$x$ & One-time private key \\
+$I$ & Key image \\
+\midrule
+$\Hs(\cdot)$ & Hash function to scalar \\
+$\Hp(\cdot)$ & Hash function to curve point \\
+$\Hash(\cdot)$ & General cryptographic hash \\
+\midrule
+$\{P_i\}_{i=0}^{n-1}$ & Ring of public keys \\
+$\pi$ & Secret index of real key in ring \\
+$\sigma$ & Signature \\
+$C_v$ & Pedersen commitment to value $v$ \\
+\midrule
+$\xleftarrow{\$}$ & Uniform random sampling \\
+$\|$ & Concatenation \\
+$\negl(\lambda)$ & Negligible function in $\lambda$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Cryptographic Assumptions}
+
+The security of \Botho relies on the following computational assumptions:
+
+\begin{definition}[Discrete Logarithm Problem (DLP)]
+Given $G \in \G$ and $Y = xG$ for random $x \xleftarrow{\$} \Zq$, compute $x$.
+\end{definition}
+
+\begin{definition}[Decisional Diffie-Hellman (DDH)]
+Distinguish $(G, aG, bG, abG)$ from $(G, aG, bG, cG)$ for random
+$a, b, c \xleftarrow{\$} \Zq$.
+\end{definition}
+
+\begin{definition}[Module Learning With Errors (MLWE)]
+Given $(\mathbf{A}, \mathbf{A}\mathbf{s} + \mathbf{e})$ where
+$\mathbf{A} \xleftarrow{\$} \Rq^{k \times l}$,
+$\mathbf{s} \xleftarrow{\$} \Rq^l$, and
+$\mathbf{e}$ is a small error vector,
+distinguish from $(\mathbf{A}, \mathbf{u})$ where
+$\mathbf{u} \xleftarrow{\$} \Rq^k$.
+\end{definition}
+
+\begin{definition}[Module Short Integer Solution (MSIS)]
+Given $\mathbf{A} \xleftarrow{\$} \Rq^{k \times l}$, find
+$\mathbf{x} \in \Rq^l$ with $\mathbf{Ax} = \mathbf{0}$ and
+$\|\mathbf{x}\| \leq \beta$ for bound $\beta$.
+\end{definition}
+
+\subsection{Building Blocks}
+
+\subsubsection{Elliptic Curve Group}
+
+\Botho uses the Ristretto255 group, a prime-order group
+constructed from Curve25519. Ristretto eliminates cofactor-related
+complexities, providing a clean abstraction with:
+\begin{itemize}
+  \item Prime order $q = 2^{252} + 27742317777372353535851937790883648493$
+  \item Efficient constant-time operations
+  \item Resistance to small-subgroup attacks
+\end{itemize}
+
+\subsubsection{Pedersen Commitments}
+
+A Pedersen commitment to value $v$ with blinding factor
+$r$ is:
+\begin{equation}
+C = vH + rG
+\end{equation}
+
+where $G$ and $H$ are independent generators (the discrete log of $H$
+with respect to $G$ is unknown).
+
+\begin{theorem}[Pedersen Commitment Properties]
+Pedersen commitments satisfy:
+\begin{enumerate}
+  \item \textbf{Hiding} (information-theoretic): $C$ reveals nothing
+    about $v$ without $r$.
+  \item \textbf{Binding} (computational): Finding $(v', r') \neq (v, r)$
+    with the same commitment requires solving DLP.
+  \item \textbf{Homomorphic}: $C_1 + C_2 = (v_1 + v_2)H + (r_1 + r_2)G$.
+\end{enumerate}
+\end{theorem}
+
+The homomorphic property enables verification that transaction inputs
+equal outputs plus fee, without revealing individual amounts.
+
+\subsubsection{Bulletproofs}
+
+Bulletproofs provide zero-knowledge range proofs with
+logarithmic size. For a commitment $C = vH + rG$, a Bulletproof proves:
+\begin{equation}
+v \in [0, 2^{64})
+\end{equation}
+
+This prevents negative amounts (which would allow coin creation) while
+keeping amounts confidential.
+
+\textbf{Aggregation}: Multiple range proofs can be aggregated, with size
+growing logarithmically in the number of proofs. A transaction with $m$
+outputs has proof size $O(\log m)$.
+
+\subsubsection{ML-KEM-768}
+
+ML-KEM (Module-Lattice-based Key-Encapsulation Mechanism),
+formerly known as Kyber, is a NIST-standardized post-quantum key
+encapsulation mechanism.
+
+\begin{itemize}
+  \item $(\pk, \sk) \leftarrow \MLKEM.\KeyGen()$: Generate keypair
+  \item $(c, K) \leftarrow \MLKEM.\Encap(\pk)$: Encapsulate to shared secret
+  \item $K \leftarrow \MLKEM.\Decap(\sk, c)$: Decapsulate to recover secret
+\end{itemize}
+
+ML-KEM-768 provides approximately 192-bit security against quantum
+attacks, with:
+\begin{itemize}
+  \item Public key size: 1,184 bytes
+  \item Ciphertext size: 1,088 bytes
+  \item Shared secret size: 32 bytes
+\end{itemize}
+
+\subsubsection{ML-DSA-65}
+
+ML-DSA (Module-Lattice-based Digital Signature Algorithm),
+formerly known as Dilithium, is a NIST-standardized post-quantum signature
+scheme.
+
+\begin{itemize}
+  \item $(\pk, \sk) \leftarrow \MLDSA.\KeyGen()$: Generate keypair
+  \item $\sigma \leftarrow \MLDSA.\Sign(\sk, m)$: Sign message
+  \item $\{0,1\} \leftarrow \MLDSA.\Verify(\pk, m, \sigma)$: Verify signature
+\end{itemize}
+
+ML-DSA-65 (security level 3) provides approximately 128-bit security
+against quantum attacks, with:
+\begin{itemize}
+  \item Public key size: 1,952 bytes
+  \item Secret key size: 4,032 bytes
+  \item Signature size: 3,309 bytes
+\end{itemize}
+
+\subsection{Security Definitions}
+
+\begin{definition}[Unforgeability (EUF-CMA)]
+A signature scheme is \textit{existentially unforgeable under chosen
+message attack} if no PPT adversary, given access to a signing oracle,
+can produce a valid signature on a message not queried to the oracle,
+except with negligible probability.
+\end{definition}
+
+\begin{definition}[Anonymity (Ring Signatures)]
+A ring signature scheme provides \textit{anonymity} if no PPT adversary
+can identify the actual signer among ring members with probability
+significantly better than $1/n$, where $n$ is the ring size.
+\end{definition}
+
+\begin{definition}[Linkability]
+A ring signature scheme is \textit{linkable} if there exists an efficient
+algorithm that, given two signatures from the same secret key, outputs 1;
+and given signatures from different keys, outputs 0 (with high probability).
+\end{definition}
+
+\begin{definition}[IND-CCA2 Security]
+A key encapsulation mechanism is \textit{IND-CCA2 secure} if no PPT
+adversary with access to a decapsulation oracle can distinguish real
+from random shared secrets, except with negligible advantage.
+\end{definition}

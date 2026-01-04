@@ -1,0 +1,152 @@
+% ============================================================================
+% Appendix A: Notation Reference
+% ============================================================================
+
+\section{Notation Reference}
+\label{app:notation}
+
+This appendix provides a comprehensive reference for notation used
+throughout the paper.
+
+\subsection{Mathematical Notation}
+
+\begin{longtable}{@{}cl@{}}
+\toprule
+\textbf{Symbol} & \textbf{Description} \\
+\midrule
+\endhead
+
+\multicolumn{2}{l}{\textit{Groups and Fields}} \\
+$\G$ & Elliptic curve group (Ristretto255) \\
+$G$ & Generator of $\G$ \\
+$H$ & Secondary generator for Pedersen commitments \\
+$q$ & Order of $\G$ (prime) \\
+$\Zq$ & Integers modulo $q$ \\
+$\Rq$ & Polynomial ring for lattice operations \\
+\\
+
+\multicolumn{2}{l}{\textit{Keys}} \\
+$a, b$ & View and spend private keys \\
+$A, B$ & View and spend public keys \\
+$(C_i, D_i)$ & Subaddress public key pair for index $i$ \\
+$P$ & One-time public key \\
+$x$ & One-time private key \\
+$I$ & Key image \\
+\\
+
+\multicolumn{2}{l}{\textit{Hash Functions}} \\
+$\Hs(\cdot)$ & Hash function to scalar \\
+$\Hp(\cdot)$ & Hash function to curve point \\
+$\Hash(\cdot)$ & General cryptographic hash \\
+\\
+
+\multicolumn{2}{l}{\textit{Ring Signatures}} \\
+$\{P_i\}_{i=0}^{n-1}$ & Ring of public keys \\
+$\pi$ & Secret index of real key in ring \\
+$\sigma$ & Signature \\
+$n$ & Ring size (default: 20) \\
+\\
+
+\multicolumn{2}{l}{\textit{Commitments}} \\
+$C$ & Pedersen commitment \\
+$C_v$ & Commitment to value $v$ \\
+$r$ & Blinding factor \\
+\\
+
+\multicolumn{2}{l}{\textit{Operations}} \\
+$\xleftarrow{\$}$ & Uniform random sampling \\
+$\|$ & Concatenation \\
+$\oplus$ & Bitwise XOR \\
+$\mod q$ & Modular reduction \\
+\\
+
+\multicolumn{2}{l}{\textit{Complexity}} \\
+$\negl(\lambda)$ & Negligible function in $\lambda$ \\
+$\poly(\lambda)$ & Polynomial function in $\lambda$ \\
+$\lambda$ & Security parameter \\
+\\
+
+\bottomrule
+\end{longtable}
+
+\subsection{Protocol Identifiers}
+
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{Identifier} & \textbf{Description} \\
+\midrule
+\CLSAG & Concise Linkable Spontaneous Anonymous Group signatures \\
+\MLKEM & Module-Lattice-based Key Encapsulation Mechanism \\
+\MLDSA & Module-Lattice-based Digital Signature Algorithm \\
+\SCP & Stellar Consensus Protocol \\
+\PoW & Proof of Work \\
+\BTH & Native currency unit (Botho) \\
+\bottomrule
+\end{tabular}
+
+\subsection{Network Constants}
+
+\begin{tabular}{@{}lrl@{}}
+\toprule
+\textbf{Parameter} & \textbf{Value} & \textbf{Description} \\
+\midrule
+Ring size & 20 & Decoys per input \\
+Min block time & 5s & At maximum utilization \\
+Max block time & 40s & At zero utilization \\
+Block size limit & 2 MB & Maximum block size \\
+Transaction limit & 100 KB & Maximum transaction size \\
+Default port & 9732 & Main network port \\
+\bottomrule
+\end{tabular}
+
+\subsection{Cryptographic Parameters}
+
+\begin{tabular}{@{}lrl@{}}
+\toprule
+\textbf{Algorithm} & \textbf{Parameter} & \textbf{Value} \\
+\midrule
+\multirow{2}{*}{ML-KEM-768} & Public key & 1,184 bytes \\
+ & Ciphertext & 1,088 bytes \\
+\midrule
+\multirow{2}{*}{ML-DSA-65} & Public key & 1,952 bytes \\
+ & Signature & 3,309 bytes \\
+\midrule
+\multirow{2}{*}{CLSAG} & Signature (ring=20) & 704 bytes \\
+ & Key image & 32 bytes \\
+\midrule
+\multirow{2}{*}{Bulletproofs} & 2-output proof & 736 bytes \\
+ & Aggregation & Logarithmic \\
+\bottomrule
+\end{tabular}
+
+\subsection{Transaction Sizes}
+
+\begin{tabular}{@{}lrl@{}}
+\toprule
+\textbf{Component} & \textbf{Size} & \textbf{Notes} \\
+\midrule
+Transaction header & 32 bytes & Version, prefix data \\
+Input (per) & 680 bytes & Ring refs + key image + tag \\
+Output (per) & 1,152 bytes & Commitment + key + ciphertext + tag \\
+CLSAG signature & 704 bytes & Per input \\
+Bulletproof & 736 bytes & 2 outputs, aggregated \\
+\midrule
+\textbf{1-in-2-out total} & $\sim$4,552 bytes & Typical transaction \\
+\bottomrule
+\end{tabular}
+
+\subsection{Monetary Parameters}
+
+\begin{tabular}{@{}lrl@{}}
+\toprule
+\textbf{Parameter} & \textbf{Value} & \textbf{Description} \\
+\midrule
+Initial block reward & 50 BTH & Genesis reward \\
+Halving period & 1,051,200 blocks & $\approx$2 years \\
+Tail emission & 0.3 BTH & Minimum reward \\
+Decimal places & 9 & Smallest: 1 nano-BTH \\
+Base fee rate & 1 nano-BTH/byte & Minimum fee \\
+Max cluster factor & 6.0$\times$ & Top 1\% multiplier \\
+\bottomrule
+\end{tabular}
+

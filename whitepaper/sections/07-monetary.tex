@@ -1,0 +1,333 @@
+% ============================================================================
+% Section 7: Monetary Policy
+% ============================================================================
+
+\section{Monetary Policy}
+\label{sec:monetary}
+
+\Botho's monetary policy balances long-term security sustainability with
+controlled inflation, using dynamic mechanisms that respond to network
+conditions.
+
+\subsection{Design Goals}
+
+\begin{enumerate}
+  \item \textbf{Sustainable security}: Perpetual miner incentive without
+    relying solely on transaction fees.
+  \item \textbf{Fair distribution}: Rewards distributed over time, not
+    front-loaded to early adopters.
+  \item \textbf{Anti-hoarding}: Economic pressure toward circulation rather
+    than accumulation.
+  \item \textbf{Predictability}: Clear, auditable emission schedule.
+\end{enumerate}
+
+\subsection{Emission Schedule}
+
+\subsubsection{Initial Emission}
+
+Block rewards follow a smooth decay curve rather than Bitcoin's abrupt
+halvings:
+
+\begin{equation}
+R(h) = R_0 \cdot \left(\frac{1}{2}\right)^{h/H}
+\end{equation}
+
+where:
+\begin{itemize}
+  \item $R(h)$ is the block reward at height $h$
+  \item $R_0 = 50$ BTH is the initial block reward
+  \item $H = 1{,}051{,}200$ blocks ($\approx$ 2 years at 60s blocks)
+    is the halving period
+\end{itemize}
+
+This creates continuous, gradual reduction rather than discrete shocks.
+
+\subsubsection{Tail Emission}
+
+Once block rewards decay below a threshold, perpetual tail emission begins:
+
+\begin{equation}
+R_{\text{tail}} = \max\left(R(h), 0.3 \text{ BTH}\right)
+\end{equation}
+
+At 5-second blocks (12 blocks per minute), this produces:
+\begin{equation}
+\text{Annual tail emission} = 0.3 \times 12 \times 60 \times 24 \times 365 = 1{,}892{,}160 \text{ BTH}
+\end{equation}
+
+\subsubsection{Supply Projection}
+
+\begin{table}[h]
+\centering
+\caption{Supply projection}
+\label{tab:supply}
+\begin{tabular}{@{}rrrr@{}}
+\toprule
+\textbf{Year} & \textbf{Circulating} & \textbf{New Emission} & \textbf{Inflation} \\
+\midrule
+1 & 15.8M BTH & 15.8M & --- \\
+2 & 23.7M BTH & 7.9M & 50\% \\
+3 & 27.6M BTH & 3.9M & 17\% \\
+5 & 30.2M BTH & 1.0M & 3.4\% \\
+10 & 33.1M BTH & 1.9M & 6.1\% \\
+20 & 52.0M BTH & 1.9M & 3.8\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Note}: Tail emission inflation is asymptotically declining---while
+nominal emission is constant, the percentage decreases as supply grows.
+After 50 years, annual inflation is approximately 2.1\%.
+
+\subsection{Dynamic Block Timing}
+\label{sec:dynamic-timing}
+
+\Botho introduces adaptive block intervals that respond to network
+utilization, creating natural inflation dampening.
+
+\subsubsection{Mechanism}
+
+Block time targets range from 5 to 40 seconds based on mempool pressure:
+
+\begin{equation}
+T_{\text{target}} = T_{\min} + (T_{\max} - T_{\min}) \cdot (1 - U)
+\end{equation}
+
+where:
+\begin{itemize}
+  \item $T_{\min} = 5$ seconds (minimum block time)
+  \item $T_{\max} = 40$ seconds (maximum block time)
+  \item $U \in [0, 1]$ is the normalized utilization factor
+\end{itemize}
+
+\subsubsection{Utilization Calculation}
+
+Utilization is computed from recent mempool activity:
+
+\begin{equation}
+U = \text{sigmoid}\left(\frac{\text{mempool\_weight} - \text{target\_weight}}{\text{sensitivity}}\right)
+\end{equation}
+
+\begin{table}[h]
+\centering
+\caption{Block timing by utilization}
+\label{tab:timing-util}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\textbf{Network State} & \textbf{Utilization} & \textbf{Block Time} \\
+\midrule
+Idle (no transactions) & 0\% & 40s \\
+Light usage & 25\% & 31s \\
+Moderate usage & 50\% & 23s \\
+Heavy usage & 75\% & 14s \\
+Maximum demand & 100\% & 5s \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Economic Implications}
+
+Dynamic timing creates feedback loops:
+
+\textbf{Low utilization}:
+\begin{itemize}
+  \item Longer block times $\rightarrow$ fewer blocks per hour
+  \item Fewer blocks $\rightarrow$ less emission
+  \item Less emission $\rightarrow$ reduced inflation when currency is
+    unused
+\end{itemize}
+
+\textbf{High utilization}:
+\begin{itemize}
+  \item Shorter block times $\rightarrow$ more blocks per hour
+  \item More blocks $\rightarrow$ higher throughput
+  \item Higher throughput $\rightarrow$ more rewards when currency is
+    actively used
+\end{itemize}
+
+This aligns miner incentives with network utility.
+
+\subsubsection{Emission Bounds}
+
+The effective annual emission varies with utilization:
+
+\begin{table}[h]
+\centering
+\caption{Tail emission by utilization}
+\label{tab:emission-util}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\textbf{Utilization} & \textbf{Blocks/Year} & \textbf{Emission/Year} \\
+\midrule
+0\% (idle) & 788,400 & 236,520 BTH \\
+50\% (moderate) & 1,370,087 & 411,026 BTH \\
+100\% (maximum) & 6,307,200 & 1,892,160 BTH \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Fee Economics}
+
+\subsubsection{Base Fee}
+
+The minimum fee per byte is:
+
+\begin{equation}
+f_{\text{base}} = 1 \text{ nano-BTH per byte}
+\end{equation}
+
+For a typical 4 KB transaction:
+\begin{equation}
+f_{\text{min}} = 4{,}000 \times 1 = 4{,}000 \text{ nano-BTH} = 0.000004 \text{ BTH}
+\end{equation}
+
+\subsubsection{Progressive Fee Multiplier}
+
+Transactions pay additional fees based on cluster wealth (see
+Section~\ref{sec:cluster-tags}):
+
+\begin{equation}
+f_{\text{total}} = f_{\text{base}} \times \text{size} \times \text{cluster\_factor}
+\end{equation}
+
+The cluster factor ranges from 1.0$\times$ (bottom 50\% wealth) to
+6.0$\times$ (top 1\% wealth).
+
+\subsubsection{Fee Burning}
+
+\textbf{All transaction fees are burned}, not paid to miners. This creates:
+
+\begin{itemize}
+  \item \textbf{Deflationary pressure}: High usage reduces supply
+  \item \textbf{Anti-MEV}: No incentive to reorder transactions for fees
+  \item \textbf{Alignment}: Miner income comes from block rewards only,
+    not transaction ordering
+\end{itemize}
+
+The effective inflation rate becomes:
+
+\begin{equation}
+\text{inflation}_{\text{effective}} = \frac{\text{emission} - \text{fees\_burned}}{\text{supply}}
+\end{equation}
+
+Under high utilization with progressive fees, burning may exceed tail
+emission, creating net deflation.
+
+\subsubsection{Fee Burning Analysis}
+
+\begin{table}[h]
+\centering
+\caption{Fee burning scenarios (1M daily transactions)}
+\label{tab:fee-burning}
+\begin{tabular}{@{}lrr@{}}
+\toprule
+\textbf{Wealth Distribution} & \textbf{Daily Burn} & \textbf{Annual Burn} \\
+\midrule
+Equal (factor 1.0) & 16 BTH & 5,840 BTH \\
+Current inequality & 48 BTH & 17,520 BTH \\
+High inequality & 96 BTH & 35,040 BTH \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Minter Incentives}
+
+\subsubsection{Block Reward Composition}
+
+Minters receive only the block reward:
+
+\begin{equation}
+\text{minter\_income} = R(h) \text{ (no fees)}
+\end{equation}
+
+This simplifies minting economics and eliminates fee-based attacks.
+
+\subsubsection{Profitability Analysis}
+
+Minting profitability depends on:
+\begin{itemize}
+  \item Hardware cost (one-time)
+  \item Electricity cost (ongoing)
+  \item Block reward value
+  \item Network hashrate (competition)
+\end{itemize}
+
+The tail emission ensures perpetual profitability for efficient miners,
+unlike Bitcoin where fee-only income creates uncertainty.
+
+\subsubsection{Decentralization Incentives}
+
+Several mechanisms encourage mining decentralization:
+
+\begin{itemize}
+  \item \textbf{CPU-friendly PoW}: Algorithm resists ASIC development
+    (RandomX-based)
+  \item \textbf{Solo mining viable}: Tail emission ensures consistent
+    income even at low hashrate
+  \item \textbf{No economy of scale}: Linear scaling of rewards with
+    hashpower
+\end{itemize}
+
+\subsection{Long-Term Sustainability}
+
+\subsubsection{Security Budget}
+
+The perpetual security budget (in BTH terms) is:
+
+\begin{equation}
+\text{security\_budget} = R_{\text{tail}} \times \text{blocks\_per\_year}
+\end{equation}
+
+This ranges from 236K BTH (idle) to 1.89M BTH (maximum utilization) annually.
+
+\subsubsection{Comparison with Fixed Supply}
+
+\begin{table}[h]
+\centering
+\caption{Security model comparison}
+\label{tab:security-comparison}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\textbf{Aspect} & \textbf{Fixed Supply} & \textbf{Tail Emission} \\
+\midrule
+Long-term miner income & Fees only & Rewards + fees \\
+Security if fees low & Degraded & Maintained \\
+Inflation & 0\% & $\sim$2--3\% \\
+Predictability & High & High \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Wealth Tax Equivalence}
+
+Tail emission functions as a mild wealth tax:
+
+\begin{equation}
+\text{effective\_tax} = \frac{\text{tail\_emission}}{\text{total\_supply}} \approx 2\%
+\end{equation}
+
+This encourages circulation: holding idle currency means gradual dilution,
+while active participation maintains relative wealth.
+
+\subsection{Monetary Constants}
+
+\begin{table}[h]
+\centering
+\caption{Monetary policy constants}
+\label{tab:constants}
+\begin{tabular}{@{}lrl@{}}
+\toprule
+\textbf{Parameter} & \textbf{Value} & \textbf{Description} \\
+\midrule
+Initial reward & 50 BTH & Block reward at genesis \\
+Halving period & 1,051,200 blocks & $\approx$ 2 years \\
+Tail emission & 0.3 BTH & Minimum block reward \\
+Min block time & 5 seconds & At maximum utilization \\
+Max block time & 40 seconds & At zero utilization \\
+Base fee rate & 1 nano-BTH/byte & Minimum transaction fee \\
+Max cluster factor & 6.0$\times$ & Top 1\% wealth multiplier \\
+Decimals & 9 & Smallest unit: 1 nano-BTH \\
+\bottomrule
+\end{tabular}
+\end{table}
+

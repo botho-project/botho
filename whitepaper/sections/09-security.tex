@@ -1,0 +1,382 @@
+% ============================================================================
+% Section 9: Security Analysis
+% ============================================================================
+
+\section{Security Analysis}
+\label{sec:security}
+
+This section analyzes \Botho's security properties, threat models, and
+resistance to various attacks.
+
+\subsection{Threat Model}
+
+\subsubsection{Adversary Capabilities}
+
+We consider adversaries with the following capabilities:
+
+\begin{itemize}
+  \item \textbf{Network}: Can observe, delay, and inject messages (but
+    not break encryption)
+  \item \textbf{Computational}: Polynomial-time bounded (or BQP for
+    quantum adversaries)
+  \item \textbf{Economic}: Can acquire significant hashpower or stake
+  \item \textbf{Passive}: Can collect and analyze blockchain data
+    indefinitely
+\end{itemize}
+
+\subsubsection{Security Goals}
+
+\begin{enumerate}
+  \item \textbf{Safety}: No double-spending; no unauthorized coin creation
+  \item \textbf{Liveness}: Valid transactions eventually confirm
+  \item \textbf{Privacy}: Transaction graph analysis does not reveal
+    sender, recipient, or amount
+  \item \textbf{Quantum resistance}: Long-term data remains protected
+    against quantum attacks
+\end{enumerate}
+
+\subsection{Privacy Analysis}
+
+\subsubsection{Recipient Unlinkability}
+
+\begin{theorem}[Post-Quantum Recipient Privacy]
+Under the IND-CCA2 security of ML-KEM-768, an adversary with access to
+a quantum computer cannot link outputs to recipient addresses with
+probability better than negligible.
+\end{theorem}
+
+\begin{proof}
+Each output contains:
+\begin{itemize}
+  \item ML-KEM ciphertext $c$ encapsulating shared secret $K$
+  \item One-time key $P = sG + B$ where $s = \Hs(K \| \text{index})$
+\end{itemize}
+
+Without the recipient's secret key, the shared secret $K$ is computationally
+indistinguishable from random (IND-CCA2 security holds against quantum
+adversaries for ML-KEM-768). Thus $s$ is random, and $P$ reveals nothing
+about the recipient's public key $B$.
+\end{proof}
+
+\subsubsection{Sender Anonymity}
+
+\begin{theorem}[Ring Signature Anonymity]
+Under the DLP assumption in the random oracle model, the probability that
+an adversary identifies the true signer among ring members is at most
+$1/n + \negl(\lambda)$, where $n = 20$ is the ring size.
+\end{theorem}
+
+\textbf{Caveat}: This is classical security. A quantum adversary with access
+to a sufficiently large quantum computer could potentially solve DLP and
+identify signers. However:
+\begin{itemize}
+  \item Sender identity has ephemeral value (see Section~\ref{sec:cryptography})
+  \item Ring signature data is not uniquely attributable even with private
+    key recovery
+  \item Retroactive deanonymization provides limited advantage
+\end{itemize}
+
+\subsubsection{Amount Confidentiality}
+
+\begin{theorem}[Information-Theoretic Amount Hiding]
+Transaction amounts are unconditionally hidden: no computational power
+(including quantum computers) can determine amounts from Pedersen
+commitments alone.
+\end{theorem}
+
+\begin{proof}
+A Pedersen commitment $C = vH + rG$ with random blinding factor $r$ is
+uniformly distributed over the curve, independent of $v$. For any
+commitment $C$ and any amount $v'$, there exists $r'$ such that
+$C = v'H + r'G$. Without the discrete log of $H$ base $G$, the commitment
+is perfectly hiding.
+\end{proof}
+
+\subsubsection{Anonymity Set Analysis}
+
+The effective anonymity set depends on decoy selection quality:
+
+\begin{table}[h]
+\centering
+\caption{Anonymity degradation factors}
+\label{tab:anonymity}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\textbf{Attack} & \textbf{Reduction} & \textbf{Mitigation} \\
+\midrule
+Timing analysis & $\sim$2--3$\times$ & Age distribution matching \\
+Output age heuristic & $\sim$1.5$\times$ & Recent output bias \\
+Cluster analysis & $\sim$1.2$\times$ & Cluster similarity requirement \\
+Repeated use & Cumulative & Transaction spacing \\
+\midrule
+\textbf{Effective ring size} & $\sim$5--8 & (from nominal 20) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Even with degradation, the effective anonymity set provides meaningful
+privacy protection for typical use cases.
+
+\subsection{Consensus Security}
+
+\subsubsection{Double-Spend Resistance}
+
+\begin{theorem}[Double-Spend Prevention]
+Under SCP's safety guarantees and assuming quorum intersection, no valid
+double-spend can be confirmed.
+\end{theorem}
+
+\begin{proof}
+Consider an attempt to double-spend output $O$ in transactions $T_1$ and
+$T_2$:
+\begin{enumerate}
+  \item Both transactions contain the same key image $I$
+  \item Key images are checked for uniqueness before block inclusion
+  \item If $T_1$ is included in block $B_1$ at height $h$, then $I$ is
+    added to the key image set
+  \item Any block $B_2$ at height $h' > h$ containing $T_2$ would fail
+    validation (duplicate key image)
+  \item By SCP safety, no alternative block can be externalized at height
+    $h$
+\end{enumerate}
+\end{proof}
+
+\subsubsection{Byzantine Fault Tolerance}
+
+The system tolerates Byzantine nodes within quorum thresholds:
+
+\begin{theorem}[Byzantine Resilience]
+If quorum intersection holds and each quorum can tolerate its failure
+threshold, honest nodes agree on the same externalized values.
+\end{theorem}
+
+With the default tiered structure (3-of-4 infrastructure + 2-of-3 community),
+the system tolerates:
+\begin{itemize}
+  \item 1 Byzantine infrastructure node, OR
+  \item 1 Byzantine community node, OR
+  \item Combinations below both thresholds
+\end{itemize}
+
+\subsubsection{51\% Attack Resistance}
+
+Unlike pure PoW, \Botho is resistant to hashpower-majority attacks:
+
+\begin{itemize}
+  \item \textbf{Block proposal}: Majority hashpower can propose blocks
+    more frequently
+  \item \textbf{Finalization}: SCP requires quorum agreement regardless
+    of hashpower
+  \item \textbf{Result}: Attacker can flood proposals but cannot force
+    finalization
+\end{itemize}
+
+An attacker would need to compromise both hashpower majority AND sufficient
+quorum members.
+
+\subsection{Cryptographic Security}
+
+\subsubsection{Hash Function Security}
+
+\Botho uses SHA3-256 and BLAKE3 for hashing:
+\begin{itemize}
+  \item Collision resistance: $2^{128}$ security (quantum: $2^{85}$)
+  \item Preimage resistance: $2^{256}$ security (quantum: $2^{128}$)
+  \item Sufficient for all security requirements
+\end{itemize}
+
+\subsubsection{Signature Security}
+
+\begin{table}[h]
+\centering
+\caption{Signature security levels}
+\label{tab:sig-security}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\textbf{Algorithm} & \textbf{Classical} & \textbf{Quantum} & \textbf{Use} \\
+\midrule
+CLSAG & 128-bit & 0 & Ring signatures \\
+ML-DSA-65 & 192-bit & 128-bit & Minting \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Key Encapsulation Security}
+
+ML-KEM-768 provides:
+\begin{itemize}
+  \item IND-CCA2 security against quantum adversaries
+  \item 192-bit classical security / 128-bit quantum security
+  \item Based on hardness of MLWE problem
+\end{itemize}
+
+\subsection{Attack Resistance}
+
+\subsubsection{Timing Attacks}
+
+\textbf{Transaction timing}:
+\begin{itemize}
+  \item Dandelion++ randomizes propagation timing
+  \item Batching obscures submission time
+  \item Mempool privacy prevents timing correlation
+\end{itemize}
+
+\textbf{Decoy selection}:
+\begin{itemize}
+  \item Age distribution matches empirical spend patterns
+  \item Randomization within constraints
+  \item No deterministic selection
+\end{itemize}
+
+\subsubsection{Transaction Graph Analysis}
+
+Several features resist graph analysis:
+
+\begin{itemize}
+  \item \textbf{Ring signatures}: True input hidden among 20 possibilities
+  \item \textbf{Stealth addresses}: Each output has unique one-time key
+  \item \textbf{Hidden amounts}: Cannot trace by amount matching
+  \item \textbf{Multiple outputs}: Change output indistinguishable
+\end{itemize}
+
+\subsubsection{Sybil Attacks}
+
+Cluster-based progressive fees resist Sybil attacks:
+
+\begin{itemize}
+  \item Splitting coins preserves cluster ancestry
+  \item Creating new identities doesn't reduce fees
+  \item Only genuine economic activity changes cluster factor
+\end{itemize}
+
+\subsubsection{Denial of Service}
+
+\textbf{Network-level}:
+\begin{itemize}
+  \item Rate limiting per peer
+  \item Reputation scoring
+  \item Connection limits
+  \item Resource bounds
+\end{itemize}
+
+\textbf{Consensus-level}:
+\begin{itemize}
+  \item PoW requires resources to propose blocks
+  \item Invalid proposals rejected before propagation
+  \item SCP messages bounded by quorum size
+\end{itemize}
+
+\textbf{Transaction-level}:
+\begin{itemize}
+  \item Minimum fee requirement
+  \item Validation before relay
+  \item Mempool size limits
+\end{itemize}
+
+\subsubsection{Eclipse Attacks}
+
+\textbf{Mitigation}:
+\begin{itemize}
+  \item Diverse peer selection (multiple ASNs, countries)
+  \item Outbound connection preference
+  \item Bootstrap node diversity
+  \item Detection of peer manipulation
+\end{itemize}
+
+\subsubsection{Selfish Mining}
+
+\Botho's hybrid consensus changes selfish mining dynamics:
+
+\begin{itemize}
+  \item Block withholding delays finalization but doesn't create advantage
+  \item SCP selects among available proposals, not necessarily first
+  \item No ``longest chain'' to game
+  \item Withholding risks losing the block entirely
+\end{itemize}
+
+\subsection{Formal Security Properties}
+
+\subsubsection{Safety}
+
+\begin{property}[Value Conservation]
+For any valid block, the sum of all transaction outputs plus fees equals
+the sum of all inputs plus block reward.
+\end{property}
+
+\begin{property}[No Inflation]
+The total supply at height $h$ is exactly the sum of all block rewards
+up to $h$, minus all burned fees.
+\end{property}
+
+\begin{property}[Key Image Uniqueness]
+Each output can be spent exactly once; the key image uniquely identifies
+the spent output.
+\end{property}
+
+\subsubsection{Liveness}
+
+\begin{property}[Transaction Inclusion]
+A valid transaction with sufficient fee will be included in a block within
+bounded time, assuming network synchrony and honest quorum majority.
+\end{property}
+
+\begin{property}[Consensus Progress]
+If the network is eventually synchronous and quorum intersection holds,
+SCP will eventually externalize a value for each slot.
+\end{property}
+
+\subsection{Security Comparison}
+
+\begin{table}[h]
+\centering
+\caption{Security comparison with other privacy coins}
+\label{tab:security-comparison}
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+\textbf{Property} & \textbf{\Botho} & \textbf{Monero} & \textbf{Zcash} & \textbf{Grin} \\
+\midrule
+PQ recipient privacy & \checkmark & --- & --- & --- \\
+Ring size & 20 & 16 & N/A & N/A \\
+Amount hiding & IT-secure & IT-secure & IT-secure & IT-secure \\
+Mandatory privacy & \checkmark & \checkmark & --- & \checkmark \\
+Deterministic finality & \checkmark & --- & --- & --- \\
+Trusted setup & --- & --- & \checkmark & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+(IT-secure = information-theoretically secure)
+
+\subsection{Known Limitations}
+
+\subsubsection{Classical Ring Signature Vulnerability}
+
+A sufficiently powerful quantum computer could break CLSAG and identify
+signers retroactively. Mitigation:
+\begin{itemize}
+  \item Ring signature data alone doesn't prove spending
+  \item Economic value of retroactive deanonymization is limited
+  \item Future protocol upgrade to post-quantum rings is possible
+\end{itemize}
+
+\subsubsection{Metadata Leakage}
+
+Despite cryptographic privacy:
+\begin{itemize}
+  \item Transaction size reveals input/output count
+  \item Timing correlation possible with powerful adversary
+  \item Network-level deanonymization without Tor/I2P
+\end{itemize}
+
+\subsubsection{Implementation Risks}
+
+\begin{itemize}
+  \item Side-channel attacks on key material
+  \item Random number generator quality
+  \item Memory safety issues
+  \item Timing side channels in cryptographic operations
+\end{itemize}
+
+All reference implementation cryptographic code uses constant-time
+algorithms and is subject to ongoing security audit.
+
