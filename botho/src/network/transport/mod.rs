@@ -2,7 +2,7 @@
 
 //! Pluggable transport layer for protocol obfuscation.
 //!
-//! This module implements Phase 3.1 of the traffic privacy roadmap:
+//! This module implements Phase 3 of the traffic privacy roadmap:
 //! a pluggable transport interface that allows different transport
 //! implementations to be used interchangeably.
 //!
@@ -42,6 +42,12 @@
 //! └─────────────────────────────────────────────────────────────┘
 //! ```
 //!
+//! # Modules
+//!
+//! - [`signaling`]: SDP exchange for WebRTC connection establishment (Phase 3.5)
+//! - [`webrtc`]: WebRTC data channel transport (Phase 3.2)
+//! - [`plain`]: Standard TCP + Noise transport
+//!
 //! # Usage
 //!
 //! ```
@@ -73,15 +79,19 @@
 //! - All transports provide encryption (Noise, DTLS, or TLS)
 //! - Obfuscated transports (WebRTC, TLS) resist DPI detection
 //! - Transport negotiation is authenticated to prevent downgrade attacks
+//! - Session IDs are random to prevent prediction
+//! - Timeout cleanup prevents resource exhaustion
 //!
 //! # References
 //!
 //! - Design document: `docs/design/traffic-privacy-roadmap.md` (Phase 3)
 //! - Parent issue: #201 (Phase 3: Protocol Obfuscation)
 //! - Implementation issue: #202 (Pluggable transport interface)
+//! - Signaling issue: #206 (Signaling channel for SDP exchange)
 
 mod error;
 mod plain;
+pub mod signaling;
 mod traits;
 mod types;
 pub mod webrtc;
@@ -102,6 +112,13 @@ pub use plain::{PlainConnection, PlainTransport};
 pub use webrtc::dtls::{
     CertificateFingerprint, DtlsConfig, DtlsError, DtlsRole, DtlsState, DtlsVerification,
     EphemeralCertificate,
+};
+
+// Re-export signaling types (Phase 3.5)
+pub use signaling::{
+    IceCandidate, SessionId, SignalingChannel, SignalingError, SignalingMessage, SignalingRole,
+    SignalingSession, SignalingState, DEFAULT_SIGNALING_TIMEOUT_SECS, MAX_ICE_CANDIDATES_PER_SESSION,
+    MAX_ICE_CANDIDATE_SIZE, MAX_SDP_SIZE, MAX_SESSIONS_PER_PEER, SESSION_ID_LEN,
 };
 
 #[cfg(test)]
