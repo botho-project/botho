@@ -86,6 +86,7 @@ mod circuit;
 mod crypto;
 pub mod handshake;
 mod relay;
+pub mod relay_handler;
 mod types;
 
 // Re-export core types
@@ -113,4 +114,9 @@ pub use relay::{
 // Re-export handshake types
 pub use handshake::{
     CircuitHandshake, HandshakeError, HandshakeResult, CIRCUIT_KEY_SIZE, HANDSHAKE_TIMEOUT_SECS,
+};
+
+// Re-export relay handler types
+pub use relay_handler::{
+    RelayAction, RelayHandler, RelayHandlerError, RelayMetrics, RelayMetricsSnapshot,
 };

@@ -251,6 +251,53 @@ pub struct BlockBroadcast {
 }
 
 // ============================================================================
+// Onion Relay Protocol Types (Phase 1: Onion Gossip)
+// ============================================================================
+
+/// Gossipsub topic for onion relay messages.
+pub const ONION_RELAY_TOPIC: &str = "/botho/onion-relay/1.0.0";
+
+/// An onion-encrypted relay message.
+///
+/// This message type is used for forwarding encrypted data through
+/// circuit hops. Each hop decrypts one layer and either forwards
+/// to the next hop or broadcasts the final payload.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OnionRelayMessage {
+    /// Circuit identifier for routing.
+    pub circuit_id: CircuitId,
+    /// Encrypted payload (one or more onion layers).
+    pub payload: Vec<u8>,
+}
+
+/// Inner message types that can be sent through onion circuits.
+///
+/// These are the final payloads that exit hops will process
+/// after decrypting all onion layers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum InnerMessage {
+    /// A transaction to broadcast via gossipsub.
+    Transaction {
+        /// Serialized transaction data
+        tx_data: Vec<u8>,
+        /// Transaction hash for deduplication
+        tx_hash: [u8; 32],
+    },
+    /// A sync request (for private block sync).
+    SyncRequest {
+        /// Block height to sync from
+        from_height: u64,
+        /// Maximum blocks to request
+        max_blocks: u32,
+    },
+    /// Cover traffic (dummy message for traffic normalization).
+    ///
+    /// Exit hops silently drop these messages. They exist to
+    /// make traffic analysis harder by normalizing message patterns.
+    Cover,
+}
+
+// ============================================================================
 // Circuit Handshake Protocol Types (Phase 1: Onion Gossip)
 // ============================================================================
 

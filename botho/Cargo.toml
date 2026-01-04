@@ -41,6 +41,7 @@ bth-crypto-pq = { path = "../crypto/pq", optional = true }
 bth-crypto-ring-signature = { path = "../crypto/ring-signature" }
 bth-core = { path = "../core" }
 bth-util-from-random = { path = "../util/from-random" }
+bth-util-serial = { workspace = true }
 rand_core = "0.6"
 aes = { workspace = true }
 ctr = { workspace = true }
