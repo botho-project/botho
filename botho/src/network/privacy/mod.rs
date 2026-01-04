@@ -102,7 +102,9 @@ pub use crypto::{
 
 // Re-export circuit management types
 pub use circuit::{
-    CircuitPool, CircuitPoolConfig, OutboundCircuit, CIRCUIT_HOPS, DEFAULT_MIN_CIRCUITS,
+    new_shared_pool, CircuitPool, CircuitPoolConfig, CircuitPoolMaintainer, CircuitPoolMetrics,
+    MaintenanceResult, OutboundCircuit, SharedCircuitPool, CIRCUIT_HOPS,
+    DEFAULT_MAINTENANCE_INTERVAL, DEFAULT_MIN_CIRCUITS, DEFAULT_REBUILD_THRESHOLD,
     DEFAULT_ROTATION_INTERVAL, MAX_LIFETIME_JITTER,
 };
 
