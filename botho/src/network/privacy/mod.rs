@@ -93,6 +93,7 @@ mod relay;
 pub mod relay_handler;
 pub mod routing;
 pub mod selection;
+pub mod timing;
 pub mod transmitter;
 mod types;
 
@@ -163,6 +164,12 @@ pub use routing::{
 // Re-export metrics types
 pub use metrics::{
     register_privacy_metrics, AlertingThresholds, PrivacyMetricsSnapshot, PrivacyMetricsUpdater,
+};
+
+// Re-export timing types
+pub use timing::{
+    apply_jitter, with_jitter, TimingJitter, TimingJitterConfig, DEFAULT_MAX_DELAY_MS,
+    DEFAULT_MIN_DELAY_MS,
 };
 
 // Re-export transmitter types (Phase 2: Traffic Normalization)
