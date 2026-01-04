@@ -114,6 +114,14 @@ pub use webrtc::dtls::{
     EphemeralCertificate,
 };
 
+// Re-export WebRTC ICE/STUN types (Phase 3.4)
+pub use webrtc::ice::{
+    IceCandidate as IceFullCandidate, IceCandidateType, IceConfig, IceConnectionState, IceError,
+    IceGatherer,
+};
+pub use webrtc::stun::{NatType, StunClient, StunConfig, StunError};
+pub use webrtc::{WebRtcConnection, WebRtcTransport};
+
 // Re-export signaling types (Phase 3.5)
 pub use signaling::{
     IceCandidate, SessionId, SignalingChannel, SignalingError, SignalingMessage, SignalingRole,
@@ -148,5 +156,21 @@ mod tests {
         // Verify DTLS types are accessible from transport module
         let config = DtlsConfig::generate_ephemeral().unwrap();
         assert_eq!(config.role(), DtlsRole::Auto);
+    }
+
+    #[test]
+    fn test_ice_stun_types_exported() {
+        // Verify ICE/STUN types are accessible from transport module
+        let ice_config = IceConfig::default();
+        assert!(!ice_config.stun_servers.is_empty());
+
+        let stun_config = StunConfig::default();
+        assert!(!stun_config.servers.is_empty());
+    }
+
+    #[test]
+    fn test_webrtc_transport_creation() {
+        let transport = WebRtcTransport::with_defaults();
+        assert!(!transport.ice_config().stun_servers.is_empty());
     }
 }
