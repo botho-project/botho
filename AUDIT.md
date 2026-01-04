@@ -654,11 +654,15 @@ External audit will be commissioned when:
 
 | Audit | Date | Critical | High | Medium | Status |
 |-------|------|----------|------|--------|--------|
-| [Cycle 3](audits/2025-12-30-cycle3.md) | 2025-12-30 | **0** | **1** | 3 | **Significant Progress** |
+| [Cycle 5](audits/2026-01-03-cycle5.md) | 2026-01-03 | **0** | **0** | 6 | **Clean** |
+| [Cycle 4](audits/2026-01-03-cycle4.md) | 2026-01-03 | **0** | **0** | 6 | **Clean** |
+| [Cycle 3](audits/2026-01-03-cycle3.md) | 2026-01-03 | **0** | **0** | 10 | **Clean** |
 | [Cycle 2](audits/2025-12-30-cycle2.md) | 2025-12-30 | 3 | 7 | 15+ | Issues Found |
 | [Cycle 1](audits/2025-12-30.md) | 2025-12-30 | 1 (fixed) | 1 (fixed) | 2 | Issues Found |
 
-### Issues Resolved in Cycle 3
+**3 consecutive clean audits achieved** - approaching external audit readiness.
+
+### Issues Resolved (Cycles 3-5)
 
 | Issue | Severity | Resolution |
 |-------|----------|------------|
@@ -666,16 +670,29 @@ External audit will be commissioned when:
 | Tauri mnemonic exposure | CRITICAL | Session-based architecture |
 | ring v0.16.20 vulnerability | CRITICAL | Updated to v0.17.14 |
 | Test mnemonic detection | HIGH | `validate_not_test_mnemonic()` |
-| LRU unsafe documentation | HIGH | SAFETY comments added |
-| Crypto deny(unsafe_code) | MEDIUM | 10/10 crates now enforced |
+| LRU unsafe code | HIGH | `#![forbid(unsafe_code)]` |
+| Crypto deny(unsafe_code) | HIGH | 9/9 crates now enforced |
+| SCP panic/unwrap | HIGH | Crate-level clippy denies |
+| Gossipsub rate limiting | HIGH | `PeerRateLimiter` integrated |
+| Wallet unlock rate limiting | HIGH | Exponential backoff |
+| Error message leakage | MEDIUM | Generic error messages |
+| Password strength validation | MEDIUM | 8-char minimum enforced |
+| Timing attack in word verification | LOW | Constant-time comparison |
 
 ### Remaining Issues
 
 | Issue | Severity | Location | Notes |
 |-------|----------|----------|-------|
-| Wallet decryption rate limiting | HIGH | `storage.rs` | Argon2id mitigates |
-| Gossipsub rate limiting | MEDIUM | `network/` | Defense in depth |
-| Empty cluster tags similarity | LOW | `decoy_selection.rs:136` | Bootstrap edge case |
+| Floating-point fee calculation | MEDIUM | `validate.rs:604` | Mitigated by minimum fee |
+| Sync response bandwidth | MEDIUM | `sync.rs` | 600 MB/min theoretical |
+| Cluster wealth tracking disabled | MEDIUM | `mempool.rs:408` | Hardcoded to 0 |
+| Block timing inconsistency | MEDIUM | Multiple | 60s vs 5-40s dynamic |
+| Unit naming confusion | MEDIUM | 62 files | picocredits vs nanoBTH |
+| Unsound glib v0.18.5 | MEDIUM | Tauri/GTK3 | Upstream issue |
+| Deprecated derive_pq_keys() | LOW | `derive.rs:114` | Kept for tests |
+| Version warnings not enforced | LOW | `discovery.rs` | Warns but doesn't disconnect |
+| Plaintext mnemonic export | LOW | `export.rs` | Design trade-off |
+| 20 unmaintained dependencies | LOW | GTK3/Tauri | Upstream issue |
 
 ---
 
@@ -695,6 +712,8 @@ External audit will be commissioned when:
 | Mempool | `botho/src/mempool.rs` |
 | Decoy Selection | `botho/src/decoy_selection.rs` |
 | Network | `botho/src/network/` |
+| **Onion Gossip** | `botho/src/network/privacy/` |
 | RPC | `botho/src/rpc/` |
 | Wallet | `botho/src/wallet.rs` |
 | Ledger | `botho/src/ledger/store.rs` |
+| Privacy Tests | `botho/tests/privacy_integration.rs` |

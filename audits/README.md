@@ -45,7 +45,9 @@ Security auditing is iterative. Each internal audit:
 
 | Date | Auditor | Scope | Critical | High | Medium | Low | Status |
 |------|---------|-------|----------|------|--------|-----|--------|
-| 2025-12-30 (c3) | Internal | Verification | **0** | **1** | 3 | 2 | **Significant Progress** |
+| 2026-01-03 (c5) | Internal | Full - Post Onion Gossip | **0** | **0** | 6 | 5 | **Clean** |
+| 2026-01-03 (c4) | Internal | Full - Post Security Fixes | **0** | **0** | 6 | 5 | **Clean** |
+| 2026-01-03 (c3) | Internal | Full - Post LION Deprecation | **0** | **0** | 10 | 8 | **Clean** |
 | 2025-12-30 (c2) | Internal | Full | 3 | 7 | 15+ | 10+ | Issues Found |
 | 2025-12-30 (c1) | Internal | Full | 1 (fixed) | 1 | 2 | 2 | Issues Found |
 
@@ -53,14 +55,16 @@ Security auditing is iterative. Each internal audit:
 
 External audit will be commissioned when:
 
-- [ ] 3+ consecutive full audits with no Critical/High findings
-- [ ] All Medium findings from previous audits resolved
+- [x] 3+ consecutive full audits with no Critical/High findings (**3/3 achieved: Cycles 3-5**)
+- [ ] All Medium findings from previous audits resolved (6 remaining)
 - [ ] Test coverage > 80% on crypto code
 - [ ] Fuzz testing infrastructure operational
-- [ ] Documentation complete (architecture, threat model)
+- [ ] Documentation complete (architecture, threat model) - Whitepaper added
 
 ## Report Index
 
-- [2025-12-30 Cycle 3](2025-12-30-cycle3.md) - Verification audit, all CRITICAL resolved
+- [2026-01-03 Cycle 5](2026-01-03-cycle5.md) - Onion Gossip Phase 1 audit, 531 tests (+39%)
+- [2026-01-03 Cycle 4](2026-01-03-cycle4.md) - Security fixes verified, clippy warnings reduced 76%
+- [2026-01-03 Cycle 3](2026-01-03-cycle3.md) - LION deprecation, all Critical/High resolved
 - [2025-12-30 Cycle 2](2025-12-30-cycle2.md) - Full audit, wallet/dependency issues found
 - [2025-12-30 Cycle 1](2025-12-30.md) - Initial full audit, SCP ballot ordering fixed
