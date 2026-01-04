@@ -26,4 +26,6 @@ pub mod wallet;
 pub mod transaction_pq;
 
 // Re-export commands module for CLI binary
+// Commands legitimately use println! for CLI output
+#[allow(clippy::print_stdout)]
 pub mod commands;
