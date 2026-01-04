@@ -466,7 +466,7 @@ pub struct SegmentParams {
 /// ## Example
 ///
 /// ```
-/// use cluster_tax::fee_curve::ZkFeeCurve;
+/// use bth_cluster_tax::ZkFeeCurve;
 ///
 /// let curve = ZkFeeCurve::default();
 ///
