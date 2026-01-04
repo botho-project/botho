@@ -450,7 +450,8 @@ mod test {
     }
 
     /// Regenerate slip10_key.json test vectors
-    /// Run with: cargo test -p bth-core --lib -- --nocapture --ignored regen_slip10_key_vectors
+    /// Run with: cargo test -p bth-core --lib -- --nocapture --ignored
+    /// regen_slip10_key_vectors
     #[test]
     #[ignore]
     fn regen_slip10_key_vectors() {
@@ -468,17 +469,23 @@ mod test {
             let mut spend_okm = [0u8; 64];
             spend_kdf.expand(b"", &mut spend_okm).unwrap();
 
-            std::println!(r#"    {{
+            std::println!(
+                r#"    {{
         "slip10_hex": "{}",
         "view_hex": "{}",
         "spend_hex": "{}"
-    }},"#, data.slip10_hex, hex::encode(view_okm), hex::encode(spend_okm));
+    }},"#,
+                data.slip10_hex,
+                hex::encode(view_okm),
+                hex::encode(spend_okm)
+            );
         }
         std::println!("]");
     }
 
     /// Regenerate slip10_mnemonic.json test vectors
-    /// Run with: cargo test -p bth-core --lib -- --nocapture --ignored regen_slip10_mnemonic_vectors
+    /// Run with: cargo test -p bth-core --lib -- --nocapture --ignored
+    /// regen_slip10_mnemonic_vectors
     #[test]
     #[ignore]
     #[cfg(feature = "bip39")]
@@ -498,12 +505,18 @@ mod test {
             let mut spend_okm = [0u8; 64];
             spend_kdf.expand(b"", &mut spend_okm).unwrap();
 
-            std::println!(r#"    {{
+            std::println!(
+                r#"    {{
         "phrase": "{}",
         "account_index": {},
         "view_hex": "{}",
         "spend_hex": "{}"
-    }},"#, data.phrase, data.account_index, hex::encode(view_okm), hex::encode(spend_okm));
+    }},"#,
+                data.phrase,
+                data.account_index,
+                hex::encode(view_okm),
+                hex::encode(spend_okm)
+            );
         }
         std::println!("]");
     }

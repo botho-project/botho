@@ -75,7 +75,14 @@ fn bench_minting_tx_hash(c: &mut Criterion) {
     let account = create_test_account();
     let address = account.default_subaddress();
     let prev_hash = [0u8; 32];
-    let minting_tx = MintingTx::new(1, 50_000_000_000_000, &address, prev_hash, u64::MAX / 2, 1234567890);
+    let minting_tx = MintingTx::new(
+        1,
+        50_000_000_000_000,
+        &address,
+        prev_hash,
+        u64::MAX / 2,
+        1234567890,
+    );
 
     c.bench_function("MintingTx hash", |b| {
         b.iter(|| black_box(minting_tx.hash()))
@@ -87,7 +94,14 @@ fn bench_minting_tx_pow(c: &mut Criterion) {
     let account = create_test_account();
     let address = account.default_subaddress();
     let prev_hash = [0u8; 32];
-    let minting_tx = MintingTx::new(1, 50_000_000_000_000, &address, prev_hash, u64::MAX / 2, 1234567890);
+    let minting_tx = MintingTx::new(
+        1,
+        50_000_000_000_000,
+        &address,
+        prev_hash,
+        u64::MAX / 2,
+        1234567890,
+    );
 
     c.bench_function("MintingTx verify_pow", |b| {
         b.iter(|| black_box(minting_tx.verify_pow()))
@@ -103,22 +117,18 @@ fn bench_block_template_creation(c: &mut Criterion) {
     let mut group = c.benchmark_group("Block template creation");
 
     for tx_count in [0, 10, 50].iter() {
-        group.bench_with_input(
-            BenchmarkId::new("txs", tx_count),
-            tx_count,
-            |b, _| {
-                let transactions = vec![];
-                b.iter(|| {
-                    black_box(Block::new_template_with_txs(
-                        &genesis,
-                        &address,
-                        u64::MAX / 2,
-                        50_000_000_000_000,
-                        transactions.clone(),
-                    ))
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("txs", tx_count), tx_count, |b, _| {
+            let transactions = vec![];
+            b.iter(|| {
+                black_box(Block::new_template_with_txs(
+                    &genesis,
+                    &address,
+                    u64::MAX / 2,
+                    50_000_000_000_000,
+                    transactions.clone(),
+                ))
+            })
+        });
     }
 
     group.finish();
@@ -143,9 +153,7 @@ fn bench_genesis_creation(c: &mut Criterion) {
 fn bench_block_hash(c: &mut Criterion) {
     let genesis = Block::genesis_for_network(Network::Testnet);
 
-    c.bench_function("Block hash", |b| {
-        b.iter(|| black_box(genesis.hash()))
-    });
+    c.bench_function("Block hash", |b| b.iter(|| black_box(genesis.hash())));
 }
 
 /// Benchmark MintingTx to_tx_output conversion
@@ -153,7 +161,14 @@ fn bench_minting_tx_to_output(c: &mut Criterion) {
     let account = create_test_account();
     let address = account.default_subaddress();
     let prev_hash = [0u8; 32];
-    let minting_tx = MintingTx::new(1, 50_000_000_000_000, &address, prev_hash, u64::MAX / 2, 1234567890);
+    let minting_tx = MintingTx::new(
+        1,
+        50_000_000_000_000,
+        &address,
+        prev_hash,
+        u64::MAX / 2,
+        1234567890,
+    );
 
     c.bench_function("MintingTx to_tx_output", |b| {
         b.iter(|| black_box(minting_tx.to_tx_output()))

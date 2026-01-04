@@ -3,11 +3,10 @@
 use anyhow::Result;
 use std::path::Path;
 
-use crate::discovery::NodeDiscovery;
-use crate::keys::WalletKeys;
-use crate::rpc_pool::RpcPool;
-use crate::storage::EncryptedWallet;
-use crate::transaction::format_amount;
+use crate::{
+    discovery::NodeDiscovery, keys::WalletKeys, rpc_pool::RpcPool, storage::EncryptedWallet,
+    transaction::format_amount,
+};
 
 #[cfg(not(feature = "pq"))]
 use crate::transaction::sync_wallet;

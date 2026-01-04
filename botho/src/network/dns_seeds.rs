@@ -24,9 +24,11 @@
 use bth_transaction_types::constants::Network;
 use hickory_resolver::Resolver;
 use parking_lot::RwLock;
-use std::net::IpAddr;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::{
+    net::IpAddr,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use tracing::{debug, info, warn};
 
 /// Default DNS seed domain for mainnet
@@ -116,11 +118,7 @@ impl DnsSeedDiscovery {
                     return self.hardcoded_seeds();
                 }
 
-                info!(
-                    "Discovered {} seeds via DNS (TTL: {:?})",
-                    peers.len(),
-                    ttl
-                );
+                info!("Discovered {} seeds via DNS (TTL: {:?})", peers.len(), ttl);
 
                 // Update cache
                 let mut cache = self.cache.write();
@@ -140,8 +138,7 @@ impl DnsSeedDiscovery {
 
     /// Query DNS TXT records for seeds
     async fn query_dns_seeds(&self) -> Result<(Vec<String>, Duration), DnsSeedError> {
-        use hickory_resolver::config::ResolverConfig;
-        use hickory_resolver::name_server::TokioConnectionProvider;
+        use hickory_resolver::{config::ResolverConfig, name_server::TokioConnectionProvider};
 
         let domain = self.seed_domain();
         debug!("Querying DNS TXT records for {}", domain);
@@ -322,8 +319,7 @@ mod tests {
     fn test_parse_seed_record_with_whitespace() {
         let discovery = DnsSeedDiscovery::new(Network::Testnet);
 
-        let record =
-            "  12D3KooWBrjTYjNrEwi9MM3AKFenmymyWVXtXbQiSx7eDnDwv9qQ @ 98.95.2.200:7100  ";
+        let record = "  12D3KooWBrjTYjNrEwi9MM3AKFenmymyWVXtXbQiSx7eDnDwv9qQ @ 98.95.2.200:7100  ";
         let result = discovery.parse_seed_record(record).unwrap();
 
         assert!(result.contains("/ip4/98.95.2.200/tcp/7100/p2p/"));

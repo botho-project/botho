@@ -32,9 +32,9 @@ use crate::{
 };
 
 use alloc::vec::Vec;
-use displaydoc::Display;
 use bth_crypto_hashes::Blake2b512;
 use bth_crypto_keys::{Kex, Ristretto};
+use displaydoc::Display;
 use mc_oblivious_aes_gcm::{Aes256Gcm, CtDecryptResult};
 use rand_core::{CryptoRng, RngCore};
 

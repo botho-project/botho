@@ -136,8 +136,8 @@ impl UtxoSnapshot {
         let key_image_merkle_root = compute_merkle_root(&key_image_hashes);
 
         // Serialize and compress UTXO data
-        let utxo_bytes = bincode::serialize(&utxos)
-            .map_err(|e| SnapshotError::Serialization(e.to_string()))?;
+        let utxo_bytes =
+            bincode::serialize(&utxos).map_err(|e| SnapshotError::Serialization(e.to_string()))?;
         let utxo_data = compress(&utxo_bytes)?;
 
         // Serialize and compress key image data
@@ -168,22 +168,19 @@ impl UtxoSnapshot {
     /// Decompress and deserialize the UTXO data.
     pub fn get_utxos(&self) -> Result<Vec<Utxo>, SnapshotError> {
         let decompressed = decompress(&self.utxo_data)?;
-        bincode::deserialize(&decompressed)
-            .map_err(|e| SnapshotError::Serialization(e.to_string()))
+        bincode::deserialize(&decompressed).map_err(|e| SnapshotError::Serialization(e.to_string()))
     }
 
     /// Decompress and deserialize the key image data.
     pub fn get_key_images(&self) -> Result<Vec<([u8; 32], u64)>, SnapshotError> {
         let decompressed = decompress(&self.key_image_data)?;
-        bincode::deserialize(&decompressed)
-            .map_err(|e| SnapshotError::Serialization(e.to_string()))
+        bincode::deserialize(&decompressed).map_err(|e| SnapshotError::Serialization(e.to_string()))
     }
 
     /// Decompress and deserialize the cluster wealth data.
     pub fn get_cluster_wealth(&self) -> Result<Vec<(u64, u64)>, SnapshotError> {
         let decompressed = decompress(&self.cluster_wealth_data)?;
-        bincode::deserialize(&decompressed)
-            .map_err(|e| SnapshotError::Serialization(e.to_string()))
+        bincode::deserialize(&decompressed).map_err(|e| SnapshotError::Serialization(e.to_string()))
     }
 
     /// Verify the UTXO Merkle root matches the data.
@@ -351,8 +348,7 @@ pub fn compute_merkle_root(leaves: &[[u8; 32]]) -> [u8; 32] {
 
 /// Compress data using zstd.
 fn compress(data: &[u8]) -> Result<Vec<u8>, SnapshotError> {
-    zstd::encode_all(data, COMPRESSION_LEVEL)
-        .map_err(|e| SnapshotError::Compression(e.to_string()))
+    zstd::encode_all(data, COMPRESSION_LEVEL).map_err(|e| SnapshotError::Compression(e.to_string()))
 }
 
 /// Decompress zstd-compressed data.
@@ -493,9 +489,15 @@ mod tests {
         let utxos = vec![test_utxo(1), test_utxo(2)];
         let key_images = vec![([1u8; 32], 100u64)];
 
-        let snapshot =
-            UtxoSnapshot::new(1000, [1u8; 32], test_chain_state(), utxos, key_images, vec![])
-                .unwrap();
+        let snapshot = UtxoSnapshot::new(
+            1000,
+            [1u8; 32],
+            test_chain_state(),
+            utxos,
+            key_images,
+            vec![],
+        )
+        .unwrap();
 
         assert!(snapshot.verify_utxo_merkle_root().unwrap());
         assert!(snapshot.verify_key_image_merkle_root().unwrap());

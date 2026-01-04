@@ -4,11 +4,15 @@ use bth_crypto_ring_signature::onetime_keys::{create_tx_out_public_key, create_t
 use bth_util_from_random::FromRandom;
 use rand_core::OsRng;
 use sha2::{Digest, Sha256};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::Arc;
-use std::thread::{self, JoinHandle};
-use std::time::Instant;
+use std::{
+    sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        mpsc::{channel, Receiver, Sender},
+        Arc,
+    },
+    thread::{self, JoinHandle},
+    time::Instant,
+};
 use tracing::info;
 
 use crate::block::{calculate_block_reward, MintingTx};
@@ -218,16 +222,16 @@ fn mint_loop(
             // Generate new stealth keys for this work unit
             let tx_private_key = RistrettoPrivate::from_random(&mut OsRng);
             let target_key = create_tx_out_target_key(&tx_private_key, &address);
-            let public_key =
-                create_tx_out_public_key(&tx_private_key, address.spend_public_key());
+            let public_key = create_tx_out_public_key(&tx_private_key, address.spend_public_key());
             cached_target_key = target_key.to_bytes();
             cached_public_key = public_key.to_bytes();
         }
 
         let work = cached_work.as_ref().unwrap();
 
-        // Compute PoW hash: SHA256(nonce || prev_block_hash || minter_view_key || minter_spend_key)
-        // Using minter keys to match MintingTx::pow_hash() for verification
+        // Compute PoW hash: SHA256(nonce || prev_block_hash || minter_view_key ||
+        // minter_spend_key) Using minter keys to match MintingTx::pow_hash()
+        // for verification
         let hash = compute_pow_hash(nonce, &work.prev_block_hash, &minter_keys);
 
         // Check if hash meets difficulty target
@@ -247,7 +251,8 @@ fn mint_loop(
                 .unwrap_or(0);
 
             // Create the minting transaction with stealth output and PoW proof
-            // Includes both minter identity (for PoW binding) and stealth keys (for private output)
+            // Includes both minter identity (for PoW binding) and stealth keys (for private
+            // output)
             let minting_tx = MintingTx {
                 block_height: work.height,
                 reward,

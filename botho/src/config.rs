@@ -1,8 +1,10 @@
 use anyhow::{anyhow, Context, Result};
 use bth_transaction_types::constants::Network;
 use serde::{Deserialize, Serialize};
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 /// Main configuration for Botho
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,18 +43,20 @@ impl Config {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetworkConfig {
     /// Port for gossip (libp2p) connections.
-    /// If not set, uses network-specific default (7100 for mainnet, 17100 for testnet).
+    /// If not set, uses network-specific default (7100 for mainnet, 17100 for
+    /// testnet).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gossip_port: Option<u16>,
 
     /// Port for JSON-RPC server (for thin wallet connections).
-    /// If not set, uses network-specific default (7101 for mainnet, 17101 for testnet).
+    /// If not set, uses network-specific default (7101 for mainnet, 17101 for
+    /// testnet).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rpc_port: Option<u16>,
 
     /// Port for Prometheus metrics endpoint.
-    /// If not set, uses network-specific default (9090 for mainnet, 19090 for testnet).
-    /// Set to 0 to disable the metrics server.
+    /// If not set, uses network-specific default (9090 for mainnet, 19090 for
+    /// testnet). Set to 0 to disable the metrics server.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metrics_port: Option<u16>,
 
@@ -186,7 +190,8 @@ fn default_bootstrap_peers(network: Network) -> Vec<String> {
 impl NetworkConfig {
     /// Get the gossip port, using network default if not explicitly set
     pub fn gossip_port(&self, network: Network) -> u16 {
-        self.gossip_port.unwrap_or_else(|| network.default_gossip_port())
+        self.gossip_port
+            .unwrap_or_else(|| network.default_gossip_port())
     }
 
     /// Get the RPC port, using network default if not explicitly set
@@ -289,8 +294,8 @@ pub struct QuorumConfig {
     #[serde(default)]
     pub mode: QuorumMode,
 
-    /// For explicit mode: number of peers required to agree (e.g., 2 in a 2-of-3)
-    /// For recommended mode: this is auto-calculated as ceil(2n/3)
+    /// For explicit mode: number of peers required to agree (e.g., 2 in a
+    /// 2-of-3) For recommended mode: this is auto-calculated as ceil(2n/3)
     #[serde(default = "default_threshold")]
     pub threshold: u32,
 
@@ -443,7 +448,7 @@ impl Default for NetworkConfig {
             rpc_port: None,     // Uses network-specific default
             metrics_port: None, // Uses network-specific default (9090/19090)
             cors_origins: default_cors_origins(),
-            bootstrap_peers: Vec::new(),  // Uses DNS discovery or network-specific defaults
+            bootstrap_peers: Vec::new(), // Uses DNS discovery or network-specific defaults
             dns_seeds: DnsSeedConfig::default(),
             quorum: QuorumConfig::default(),
             api_keys: Vec::new(),
@@ -507,8 +512,7 @@ impl Config {
                 .with_context(|| format!("Failed to create directory {}", parent.display()))?;
         }
 
-        let contents = toml::to_string_pretty(self)
-            .context("Failed to serialize config")?;
+        let contents = toml::to_string_pretty(self).context("Failed to serialize config")?;
 
         fs::write(path, contents)
             .with_context(|| format!("Failed to write config to {}", path.display()))?;
@@ -538,7 +542,8 @@ pub fn base_data_dir() -> PathBuf {
         .join(".botho")
 }
 
-/// Get the network-specific data directory (~/.botho/testnet or ~/.botho/mainnet)
+/// Get the network-specific data directory (~/.botho/testnet or
+/// ~/.botho/mainnet)
 pub fn data_dir(network: Network) -> PathBuf {
     base_data_dir().join(network.dir_name())
 }
@@ -555,10 +560,7 @@ pub fn ledger_db_path(network: Network) -> PathBuf {
 
 /// Get the ledger database path from config file path
 pub fn ledger_db_path_from_config(config_path: &Path) -> PathBuf {
-    config_path
-        .parent()
-        .unwrap_or(config_path)
-        .join("ledger")
+    config_path.parent().unwrap_or(config_path).join("ledger")
 }
 
 /// Get the wallet database path for a network
@@ -702,7 +704,7 @@ mod tests {
     fn test_quorum_recommended_mode() {
         let quorum = QuorumConfig {
             mode: QuorumMode::Recommended,
-            threshold: 2, // ignored in recommended mode
+            threshold: 2,    // ignored in recommended mode
             members: vec![], // ignored in recommended mode
             min_peers: 1,
         };
@@ -719,13 +721,12 @@ mod tests {
 
         // Two peers - can mine (3 nodes, threshold=3)
         // BFT with n=3: f=(3-1)/3=0, threshold=3-0=3
-        let (can_mine, size, thresh) = quorum.can_reach_quorum(&[
-            "peer1".to_string(),
-            "peer2".to_string(),
-        ]);
+        let (can_mine, size, thresh) =
+            quorum.can_reach_quorum(&["peer1".to_string(), "peer2".to_string()]);
         assert!(can_mine);
         assert_eq!(size, 3);
-        assert_eq!(thresh, 3); // 3-of-3 (can't tolerate any faults with 3 nodes)
+        assert_eq!(thresh, 3); // 3-of-3 (can't tolerate any faults with 3
+                               // nodes)
     }
 
     #[test]
@@ -739,12 +740,12 @@ mod tests {
         // n=5: f=1, threshold=4
         // n=6: f=1, threshold=5
         // n=7: f=2, threshold=5
-        assert_eq!(quorum.effective_threshold(1), 2);  // 2 nodes: 2-of-2
-        assert_eq!(quorum.effective_threshold(2), 3);  // 3 nodes: 3-of-3
-        assert_eq!(quorum.effective_threshold(3), 3);  // 4 nodes: 3-of-4
-        assert_eq!(quorum.effective_threshold(4), 4);  // 5 nodes: 4-of-5
-        assert_eq!(quorum.effective_threshold(5), 5);  // 6 nodes: 5-of-6
-        assert_eq!(quorum.effective_threshold(6), 5);  // 7 nodes: 5-of-7
+        assert_eq!(quorum.effective_threshold(1), 2); // 2 nodes: 2-of-2
+        assert_eq!(quorum.effective_threshold(2), 3); // 3 nodes: 3-of-3
+        assert_eq!(quorum.effective_threshold(3), 3); // 4 nodes: 3-of-4
+        assert_eq!(quorum.effective_threshold(4), 4); // 5 nodes: 4-of-5
+        assert_eq!(quorum.effective_threshold(5), 5); // 6 nodes: 5-of-6
+        assert_eq!(quorum.effective_threshold(6), 5); // 7 nodes: 5-of-7
     }
 
     #[test]
@@ -761,13 +762,11 @@ mod tests {
         assert!(!can_mine);
 
         // Two peers - enough (3 nodes, threshold=3 with BFT)
-        let (can_mine, size, thresh) = quorum.can_reach_quorum(&[
-            "peer1".to_string(),
-            "peer2".to_string(),
-        ]);
+        let (can_mine, size, thresh) =
+            quorum.can_reach_quorum(&["peer1".to_string(), "peer2".to_string()]);
         assert!(can_mine);
         assert_eq!(size, 3);
-        assert_eq!(thresh, 3);  // BFT: 3-of-3 for n=3
+        assert_eq!(thresh, 3); // BFT: 3-of-3 for n=3
     }
 
     #[test]
@@ -801,10 +800,7 @@ mod tests {
 
         let mut config = Config::new("test mnemonic".to_string(), Network::Testnet);
         config.network.max_connections_per_ip = 5;
-        config.network.connection_whitelist = vec![
-            "10.0.0.1".to_string(),
-            "10.0.0.2".to_string(),
-        ];
+        config.network.connection_whitelist = vec!["10.0.0.1".to_string(), "10.0.0.2".to_string()];
         config.save(&path).unwrap();
 
         let loaded = Config::load(&path).unwrap();

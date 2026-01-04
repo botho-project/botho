@@ -17,15 +17,15 @@
 //! network.stop();
 //! ```
 
-mod constants;
 mod consensus;
+mod constants;
 mod mining;
 mod network;
 mod transactions;
 mod wallets;
 
-pub use constants::*;
 pub use consensus::*;
+pub use constants::*;
 pub use mining::*;
 pub use network::*;
 pub use transactions::*;

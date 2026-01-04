@@ -3,7 +3,6 @@
 
 //! A utility to play back SCP messages logged by `LoggingScpNode`.
 
-use clap::Parser;
 use bth_common::{logger::log, NodeID};
 use bth_consensus_scp::{
     msg::Msg,
@@ -13,6 +12,7 @@ use bth_consensus_scp::{
 };
 use bth_transaction_core::{constants::MAX_TRANSACTIONS_PER_BLOCK, tx::TxHash};
 use bth_util_uri::ConsensusPeerUri as PeerUri;
+use clap::Parser;
 use std::{
     collections::VecDeque, path::PathBuf, str::FromStr, sync::Arc, thread::sleep, time::Duration,
 };

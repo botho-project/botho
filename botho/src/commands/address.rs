@@ -1,9 +1,11 @@
 use anyhow::{Context, Result};
 use std::path::Path;
 
-use crate::address::{format_classical_address, Address};
-use crate::config::Config;
-use crate::wallet::Wallet;
+use crate::{
+    address::{format_classical_address, Address},
+    config::Config,
+    wallet::Wallet,
+};
 
 #[cfg(feature = "pq")]
 use crate::address::format_quantum_address;
@@ -15,13 +17,12 @@ use crate::address::format_quantum_address;
 /// - `.pq` extension saves the quantum-safe address
 /// - Any other extension saves the classical address
 pub fn run(config_path: &Path, save_path: Option<&str>) -> Result<()> {
-    let config = Config::load(config_path)
-        .context("No wallet found. Run 'botho init' first.")?;
+    let config = Config::load(config_path).context("No wallet found. Run 'botho init' first.")?;
 
-    let mnemonic = config.mnemonic()
+    let mnemonic = config
+        .mnemonic()
         .context("No wallet configured. Run 'botho init' to create one.")?;
-    let wallet = Wallet::from_mnemonic(mnemonic)
-        .context("Failed to load wallet from mnemonic")?;
+    let wallet = Wallet::from_mnemonic(mnemonic).context("Failed to load wallet from mnemonic")?;
 
     // Get the network type from config
     let network = config.network_type();

@@ -1,15 +1,18 @@
 // Copyright (c) 2024 Botho Foundation
 
-//! Block builder for constructing blocks from externalized consensus transactions.
+//! Block builder for constructing blocks from externalized consensus
+//! transactions.
 //!
 //! This module handles:
 //! - Building blocks from externalized MintingTx and Transaction values
 //! - Computing merkle roots for transactions
 //! - Ensuring only one MintingTx per block (the consensus winner)
 
-use crate::block::{Block, BlockHeader, MintingTx};
-use crate::consensus::ConsensusValue;
-use crate::transaction::Transaction;
+use crate::{
+    block::{Block, BlockHeader, MintingTx},
+    consensus::ConsensusValue,
+    transaction::Transaction,
+};
 use sha2::{Digest, Sha256};
 use tracing::{debug, info, warn};
 
@@ -28,7 +31,8 @@ impl BlockBuilder {
     /// Build a block from externalized consensus values
     ///
     /// Arguments:
-    /// - `values`: The externalized ConsensusValues (must include exactly one MintingTx)
+    /// - `values`: The externalized ConsensusValues (must include exactly one
+    ///   MintingTx)
     /// - `get_minting_tx`: Callback to retrieve MintingTx data by hash
     /// - `get_transfer_tx`: Callback to retrieve Transaction data by hash
     ///
@@ -57,10 +61,12 @@ impl BlockBuilder {
             );
         }
 
-        // Get the winning minting transaction (first one has highest priority from combine_fn)
+        // Get the winning minting transaction (first one has highest priority from
+        // combine_fn)
         let winning_minting_value = minting_values[0];
-        let minting_tx = get_minting_tx(&winning_minting_value.tx_hash)
-            .ok_or(BlockBuildError::MintingTxNotFound(winning_minting_value.tx_hash))?;
+        let minting_tx = get_minting_tx(&winning_minting_value.tx_hash).ok_or(
+            BlockBuildError::MintingTxNotFound(winning_minting_value.tx_hash),
+        )?;
 
         debug!(
             height = minting_tx.block_height,
@@ -215,11 +221,7 @@ mod tests {
     fn test_build_from_externalized_no_minting_tx() {
         let values = vec![ConsensusValue::from_transaction([1u8; 32])];
 
-        let result = BlockBuilder::build_from_externalized(
-            &values,
-            |_| None,
-            |_| None,
-        );
+        let result = BlockBuilder::build_from_externalized(&values, |_| None, |_| None);
 
         assert!(matches!(result, Err(BlockBuildError::NoMintingTx)));
     }

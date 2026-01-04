@@ -4,8 +4,8 @@
 
 use crate::{tokens::Bth, Token, TokenId};
 use alloc::collections::BTreeMap;
-use displaydoc::Display;
 use bth_crypto_digestible::{Digestible, MerlinTranscript};
+use displaydoc::Display;
 use serde::{Deserialize, Serialize};
 
 /// The log base 2 of the smallest allowed minimum fee, in the smallest
@@ -164,9 +164,7 @@ pub enum Error {
 #[cfg(test)]
 mod test {
     use super::*;
-    use alloc::string::ToString;
-    use alloc::vec;
-    use alloc::vec::Vec;
+    use alloc::{string::ToString, vec, vec::Vec};
 
     /// Valid fee maps ids should be accepted
     #[test]
@@ -232,7 +230,10 @@ mod test {
     fn test_fee_map_default() {
         let fee_map = FeeMap::default();
         assert!(fee_map.get_fee_for_token(&Bth::ID).is_some());
-        assert_eq!(fee_map.get_fee_for_token(&Bth::ID).unwrap(), Bth::MINIMUM_FEE);
+        assert_eq!(
+            fee_map.get_fee_for_token(&Bth::ID).unwrap(),
+            Bth::MINIMUM_FEE
+        );
     }
 
     #[test]
@@ -265,10 +266,7 @@ mod test {
     #[test]
     fn test_fee_map_update_or_default_with_some() {
         let mut fee_map = FeeMap::default();
-        let new_fees = BTreeMap::from_iter(vec![
-            (Bth::ID, 2048),
-            (TokenId::from(2), 4096),
-        ]);
+        let new_fees = BTreeMap::from_iter(vec![(Bth::ID, 2048), (TokenId::from(2), 4096)]);
 
         fee_map.update_or_default(Some(new_fees)).unwrap();
         assert_eq!(fee_map.get_fee_for_token(&Bth::ID).unwrap(), 2048);
@@ -277,15 +275,15 @@ mod test {
 
     #[test]
     fn test_fee_map_update_or_default_with_none() {
-        let mut fee_map = FeeMap::try_from_iter([
-            (Bth::ID, 2048),
-            (TokenId::from(2), 4096),
-        ])
-        .unwrap();
+        let mut fee_map =
+            FeeMap::try_from_iter([(Bth::ID, 2048), (TokenId::from(2), 4096)]).unwrap();
 
         fee_map.update_or_default(None).unwrap();
         // Should reset to default
-        assert_eq!(fee_map.get_fee_for_token(&Bth::ID).unwrap(), Bth::MINIMUM_FEE);
+        assert_eq!(
+            fee_map.get_fee_for_token(&Bth::ID).unwrap(),
+            Bth::MINIMUM_FEE
+        );
         assert!(fee_map.get_fee_for_token(&TokenId::from(2)).is_none());
     }
 
@@ -302,11 +300,7 @@ mod test {
 
     #[test]
     fn test_fee_map_canonical_digest_deterministic() {
-        let fee_map1 = FeeMap::try_from_iter([
-            (Bth::ID, 1024),
-            (TokenId::from(2), 2048),
-        ])
-        .unwrap();
+        let fee_map1 = FeeMap::try_from_iter([(Bth::ID, 1024), (TokenId::from(2), 2048)]).unwrap();
 
         let fee_map2 = FeeMap::try_from_iter([
             (TokenId::from(2), 2048), // Different order
@@ -328,11 +322,7 @@ mod test {
 
     #[test]
     fn test_fee_map_clone() {
-        let fee_map = FeeMap::try_from_iter([
-            (Bth::ID, 1024),
-            (TokenId::from(2), 2048),
-        ])
-        .unwrap();
+        let fee_map = FeeMap::try_from_iter([(Bth::ID, 1024), (TokenId::from(2), 2048)]).unwrap();
 
         let cloned = fee_map.clone();
         assert_eq!(fee_map, cloned);
@@ -340,10 +330,7 @@ mod test {
 
     #[test]
     fn test_fee_map_try_from_btreemap() {
-        let map = BTreeMap::from_iter(vec![
-            (Bth::ID, 1024),
-            (TokenId::from(2), 2048),
-        ]);
+        let map = BTreeMap::from_iter(vec![(Bth::ID, 1024), (TokenId::from(2), 2048)]);
 
         let fee_map = FeeMap::try_from(map).unwrap();
         assert_eq!(fee_map.get_fee_for_token(&Bth::ID).unwrap(), 1024);

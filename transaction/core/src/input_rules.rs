@@ -14,10 +14,10 @@ use crate::{
     BlockVersion, RevealedTxOut, RevealedTxOutError,
 };
 use alloc::{collections::BTreeMap, vec::Vec};
-use displaydoc::Display;
 use bth_crypto_digestible::{Digestible, MerlinTranscript};
 use bth_crypto_keys::CompressedRistrettoPublic;
 use bth_util_u64_ratio::U64Ratio;
+use displaydoc::Display;
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;

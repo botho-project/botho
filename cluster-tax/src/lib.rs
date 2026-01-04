@@ -66,35 +66,53 @@ pub use cluster::{ClusterId, ClusterWealth};
 // This gives minters predictable income while absorbing fee volatility.
 pub use monetary::{DifficultyController, MonetaryPolicy, MonetaryState, MonetaryStats};
 
+pub use age_decay::{apply_age_decay, AgeDecayConfig, RingDecayInfo};
 pub use block_decay::{
     AndDecayConfig, AndTagVector, BlockAwareTagVector, BlockDecayConfig, RateLimitedDecayConfig,
     RateLimitedTagVector,
 };
 pub use crypto::{
-    CommittedTagVector, CommittedTagVectorSecret, ExtendedTxSignature, RingTagData,
     // Phase 2/3: ZK fee verification
-    CommittedFeeProof, CommittedFeeProofBuilder, CommittedFeeProofVerifier,
-    CommittedFeeProver, CommittedFeeVerifier, SegmentOrProof,
+    CommittedFeeProof,
+    CommittedFeeProofBuilder,
+    CommittedFeeProofVerifier,
+    CommittedFeeProver,
+    CommittedFeeVerifier,
+    CommittedTagVector,
+    CommittedTagVectorSecret,
+    ExtendedTxSignature,
+    RingTagData,
+    SegmentOrProof,
 };
 pub use dynamic_fee::{DynamicFeeBase, DynamicFeeState, FeeSuggestion};
 pub use fee_curve::{
-    count_outputs_with_memos, ClusterFactorCurve, FeeConfig, FeeCurve, FeeRateBps, TransactionType,
+    count_outputs_with_memos,
+    ClusterFactorCurve,
+    FeeConfig,
+    FeeCurve,
+    FeeRateBps,
+    SegmentParams,
+    TransactionType,
     // Phase 2/3: ZK-compatible fee curve
-    ZkFeeCurve, SegmentParams,
+    ZkFeeCurve,
 };
 pub use signing::{
     create_tag_signature, verify_tag_signature, TagSigningConfig, TagSigningError, TagSigningInput,
     TagSigningOutput, TagSigningResult,
 };
-pub use age_decay::{apply_age_decay, AgeDecayConfig, RingDecayInfo};
 pub use tag::{TagVector, TagWeight, TAG_WEIGHT_SCALE};
 pub use transfer::{
     execute_transfer, execute_transfer_and, mint, mint_and, Account, AndTransferConfig,
     AndTransferResult, BlockAwareAccount, TransferConfig, TransferError, TransferResult,
 };
 pub use validate::{
-    validate_committed_tag_structure, validate_committed_tags, CommittedTagConfig,
-    CommittedTagValidationError, CommittedTagValidationResult,
+    validate_committed_tag_structure,
+    validate_committed_tags,
     // Phase 2/3: Complete transaction validation
-    validate_committed_transaction, CommittedTransactionError, CommittedTransactionResult,
+    validate_committed_transaction,
+    CommittedTagConfig,
+    CommittedTagValidationError,
+    CommittedTagValidationResult,
+    CommittedTransactionError,
+    CommittedTransactionResult,
 };

@@ -1,7 +1,8 @@
 //! Property-based tests for post-quantum cryptographic primitives.
 //!
 //! These tests verify that the PQ crypto implementations satisfy essential
-//! mathematical and security properties for all inputs, not just fixed test vectors.
+//! mathematical and security properties for all inputs, not just fixed test
+//! vectors.
 
 use bth_crypto_pq::{
     derive_onetime_sig_keypair, derive_pq_keys_from_seed, MlDsa65KeyPair, MlKem768KeyPair,

@@ -18,8 +18,7 @@ pub struct Database {
 impl Database {
     /// Open or create the database.
     pub fn open(path: &str) -> Result<Self, String> {
-        let conn =
-            Connection::open(path).map_err(|e| format!("Failed to open database: {}", e))?;
+        let conn = Connection::open(path).map_err(|e| format!("Failed to open database: {}", e))?;
 
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -146,9 +145,7 @@ impl Database {
             .map_err(|e| format!("Prepare failed: {}", e))?;
 
         let result = stmt
-            .query_row(params![id.to_string()], |row| {
-                Self::row_to_order(row)
-            })
+            .query_row(params![id.to_string()], |row| Self::row_to_order(row))
             .optional()
             .map_err(|e| format!("Query failed: {}", e))?;
 
@@ -256,7 +253,12 @@ impl Database {
     }
 
     /// Log an audit event.
-    pub fn log_audit(&self, order_id: Option<&Uuid>, action: &str, details: &str) -> Result<(), String> {
+    pub fn log_audit(
+        &self,
+        order_id: Option<&Uuid>,
+        action: &str,
+        details: &str,
+    ) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
 
         conn.execute(

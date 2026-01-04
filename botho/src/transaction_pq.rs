@@ -47,11 +47,13 @@ pub const PQ_SIGNING_PUBKEY_SIZE: usize = 1952; // ML-DSA-65 public key
 
 /// Fee constants for quantum-private transactions
 ///
-/// Classical transactions have a minimum fee of 0.0001 credits (100_000_000 picocredits).
-/// PQ transactions are ~19x larger, so they pay proportionally more.
+/// Classical transactions have a minimum fee of 0.0001 credits (100_000_000
+/// picocredits). PQ transactions are ~19x larger, so they pay proportionally
+/// more.
 ///
 /// Fee per byte of transaction data (in picocredits)
-/// Set to ensure PQ transactions pay ~19x the classical fee for similar operations
+/// Set to ensure PQ transactions pay ~19x the classical fee for similar
+/// operations
 pub const PQ_FEE_PER_BYTE: u64 = 10_000; // 0.00001 credits per byte
 
 /// Minimum base fee for any PQ transaction (same as classical minimum)
@@ -78,9 +80,8 @@ pub fn calculate_pq_fee(num_inputs: usize, num_outputs: usize) -> u64 {
     const OUTPUT_SIZE: u64 = 72 + PQ_CIPHERTEXT_SIZE as u64 + PQ_SIGNING_PUBKEY_SIZE as u64; // ~3112 bytes
     const HEADER_SIZE: u64 = 24; // fee, height, length prefixes
 
-    let total_size = HEADER_SIZE
-        + (num_inputs as u64 * INPUT_SIZE)
-        + (num_outputs as u64 * OUTPUT_SIZE);
+    let total_size =
+        HEADER_SIZE + (num_inputs as u64 * INPUT_SIZE) + (num_outputs as u64 * OUTPUT_SIZE);
 
     let size_based_fee = total_size * PQ_FEE_PER_BYTE;
 
@@ -136,27 +137,32 @@ pub struct QuantumPrivateTxOutput {
     pub pq_ciphertext: Vec<u8>,
 
     /// ML-DSA-65 one-time public key (1952 bytes)
-    /// Derived from shared_secret, stored so validators can verify spend signatures.
+    /// Derived from shared_secret, stored so validators can verify spend
+    /// signatures.
     pub pq_signing_pubkey: Vec<u8>,
 }
 
 impl QuantumPrivateTxOutput {
     /// Create a new quantum-private output for a recipient.
     ///
-    /// This creates both classical and PQ stealth components with cryptographic binding.
-    /// The PQ shared secret is mixed into the classical ephemeral key derivation,
-    /// ensuring that both layers are bound together. An adversary cannot modify
-    /// either layer independently without invalidating the other.
+    /// This creates both classical and PQ stealth components with cryptographic
+    /// binding. The PQ shared secret is mixed into the classical ephemeral
+    /// key derivation, ensuring that both layers are bound together. An
+    /// adversary cannot modify either layer independently without
+    /// invalidating the other.
     ///
     /// # Binding Mechanism
     ///
     /// The classical ephemeral key is derived as:
-    /// `k = HKDF(IKM=random || pq_shared_secret, salt="botho-pq-binding", info="ephemeral")`
+    /// `k = HKDF(IKM=random || pq_shared_secret, salt="botho-pq-binding",
+    /// info="ephemeral")`
     ///
     /// This ensures:
     /// 1. The classical stealth address incorporates PQ entropy
-    /// 2. An adversary with only quantum capabilities still needs to solve classical DH
-    /// 3. An adversary with only classical capabilities still needs to break ML-KEM
+    /// 2. An adversary with only quantum capabilities still needs to solve
+    ///    classical DH
+    /// 3. An adversary with only classical capabilities still needs to break
+    ///    ML-KEM
     ///
     /// # Arguments
     /// * `amount` - Amount in picocredits
@@ -218,10 +224,7 @@ impl QuantumPrivateTxOutput {
     /// # Returns
     /// `Some((subaddress_index, shared_secret))` if owned, `None` otherwise.
     #[cfg(feature = "pq")]
-    pub fn belongs_to(
-        &self,
-        account: &QuantumSafeAccountKey,
-    ) -> Option<(u64, [u8; 32])> {
+    pub fn belongs_to(&self, account: &QuantumSafeAccountKey) -> Option<(u64, [u8; 32])> {
         use bth_crypto_pq::{derive_onetime_sig_keypair, MlKem768Ciphertext};
 
         // First check classical ownership
@@ -284,7 +287,8 @@ impl QuantumPrivateTxOutput {
 /// # Verification
 ///
 /// An input is valid if and only if:
-/// 1. The classical signature verifies against the output's classical target_key
+/// 1. The classical signature verifies against the output's classical
+///    target_key
 /// 2. The PQ signature verifies against the output's pq_signing_pubkey
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct QuantumPrivateTxInput {
@@ -765,23 +769,27 @@ mod tests {
     #[test]
     fn test_transaction_insufficient_fee() {
         let tx = QuantumPrivateTransaction::new(
-            (0..10).map(|_| QuantumPrivateTxInput {
-                tx_hash: [1u8; 32],
-                output_index: 0,
-                classical_signature: vec![0u8; 64],
-                pq_signature: vec![0u8; PQ_SIGNATURE_SIZE],
-            }).collect(),
-            (0..10).map(|_| QuantumPrivateTxOutput {
-                classical: TxOutput {
-                    amount: 1_000_000,
-                    target_key: [2u8; 32],
-                    public_key: [3u8; 32],
-                    e_memo: None,
-                    cluster_tags: ClusterTagVector::empty(),
-                },
-                pq_ciphertext: vec![0u8; PQ_CIPHERTEXT_SIZE],
-                pq_signing_pubkey: vec![0u8; PQ_SIGNING_PUBKEY_SIZE],
-            }).collect(),
+            (0..10)
+                .map(|_| QuantumPrivateTxInput {
+                    tx_hash: [1u8; 32],
+                    output_index: 0,
+                    classical_signature: vec![0u8; 64],
+                    pq_signature: vec![0u8; PQ_SIGNATURE_SIZE],
+                })
+                .collect(),
+            (0..10)
+                .map(|_| QuantumPrivateTxOutput {
+                    classical: TxOutput {
+                        amount: 1_000_000,
+                        target_key: [2u8; 32],
+                        public_key: [3u8; 32],
+                        e_memo: None,
+                        cluster_tags: ClusterTagVector::empty(),
+                    },
+                    pq_ciphertext: vec![0u8; PQ_CIPHERTEXT_SIZE],
+                    pq_signing_pubkey: vec![0u8; PQ_SIGNING_PUBKEY_SIZE],
+                })
+                .collect(),
             MIN_TX_FEE, // This is too low for a large tx
             100,
         );

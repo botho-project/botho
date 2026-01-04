@@ -9,11 +9,14 @@
 //! - PendingTx creation
 //! - Fee calculation and estimation
 //!
-//! Note: add_tx benchmarks require a mock ledger which adds significant complexity.
-//! These benchmarks focus on the isolated mempool operations that don't require ledger access.
+//! Note: add_tx benchmarks require a mock ledger which adds significant
+//! complexity. These benchmarks focus on the isolated mempool operations that
+//! don't require ledger access.
 
-use botho::mempool::{Mempool, PendingTx};
-use botho::transaction::{ClsagRingInput, RingMember, Transaction, TxOutput, MIN_RING_SIZE, MIN_TX_FEE};
+use botho::{
+    mempool::{Mempool, PendingTx},
+    transaction::{ClsagRingInput, RingMember, Transaction, TxOutput, MIN_RING_SIZE, MIN_TX_FEE},
+};
 use bth_cluster_tax::{FeeConfig, TransactionType};
 use bth_transaction_types::ClusterTagVector;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
@@ -79,9 +82,7 @@ fn bench_pending_tx_new(c: &mut Criterion) {
 
 /// Benchmark Mempool creation
 fn bench_mempool_new(c: &mut Criterion) {
-    c.bench_function("Mempool new", |b| {
-        b.iter(|| black_box(Mempool::new()))
-    });
+    c.bench_function("Mempool new", |b| b.iter(|| black_box(Mempool::new())));
 }
 
 /// Benchmark Mempool with_fee_config creation
@@ -135,21 +136,15 @@ fn bench_estimate_fee(c: &mut Criterion) {
     let mut group = c.benchmark_group("Mempool estimate_fee");
 
     group.bench_function("Hidden (CLSAG)", |b| {
-        b.iter(|| {
-            black_box(mempool.estimate_fee(TransactionType::Hidden, 1_000_000_000_000, 0))
-        })
+        b.iter(|| black_box(mempool.estimate_fee(TransactionType::Hidden, 1_000_000_000_000, 0)))
     });
 
     group.bench_function("with memos", |b| {
-        b.iter(|| {
-            black_box(mempool.estimate_fee(TransactionType::Hidden, 1_000_000_000_000, 2))
-        })
+        b.iter(|| black_box(mempool.estimate_fee(TransactionType::Hidden, 1_000_000_000_000, 2)))
     });
 
     group.bench_function("Minting", |b| {
-        b.iter(|| {
-            black_box(mempool.estimate_fee(TransactionType::Minting, 1_000_000_000_000, 0))
-        })
+        b.iter(|| black_box(mempool.estimate_fee(TransactionType::Minting, 1_000_000_000_000, 0)))
     });
 
     group.finish();
@@ -162,20 +157,16 @@ fn bench_estimate_fee_with_wealth(c: &mut Criterion) {
     let mut group = c.benchmark_group("Mempool estimate_fee_with_wealth");
 
     for wealth in [0u64, 1_000_000_000_000, 10_000_000_000_000_000].iter() {
-        group.bench_with_input(
-            BenchmarkId::new("wealth", wealth),
-            wealth,
-            |b, &wealth| {
-                b.iter(|| {
-                    black_box(mempool.estimate_fee_with_wealth(
-                        TransactionType::Hidden,
-                        1_000_000_000_000,
-                        1,
-                        wealth,
-                    ))
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("wealth", wealth), wealth, |b, &wealth| {
+            b.iter(|| {
+                black_box(mempool.estimate_fee_with_wealth(
+                    TransactionType::Hidden,
+                    1_000_000_000_000,
+                    1,
+                    wealth,
+                ))
+            })
+        });
     }
 
     group.finish();
@@ -188,13 +179,9 @@ fn bench_cluster_factor(c: &mut Criterion) {
     let mut group = c.benchmark_group("Mempool cluster_factor");
 
     for wealth in [0u64, 1_000_000_000_000, 10_000_000_000_000_000].iter() {
-        group.bench_with_input(
-            BenchmarkId::new("wealth", wealth),
-            wealth,
-            |b, &wealth| {
-                b.iter(|| black_box(mempool.cluster_factor(wealth)))
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("wealth", wealth), wealth, |b, &wealth| {
+            b.iter(|| black_box(mempool.cluster_factor(wealth)))
+        });
     }
 
     group.finish();
@@ -210,11 +197,7 @@ fn bench_suggest_fees(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::new("tx_size", tx_size),
             tx_size,
-            |b, &tx_size| {
-                b.iter(|| {
-                    black_box(mempool.suggest_fees(tx_size, 1_000_000_000_000))
-                })
-            },
+            |b, &tx_size| b.iter(|| black_box(mempool.suggest_fees(tx_size, 1_000_000_000_000))),
         );
     }
 
@@ -262,9 +245,7 @@ fn bench_total_fees(c: &mut Criterion) {
 fn bench_len(c: &mut Criterion) {
     let mempool = Mempool::new();
 
-    c.bench_function("Mempool len", |b| {
-        b.iter(|| black_box(mempool.len()))
-    });
+    c.bench_function("Mempool len", |b| b.iter(|| black_box(mempool.len())));
 }
 
 /// Benchmark is_empty() calls
@@ -300,13 +281,9 @@ fn bench_transaction_hash(c: &mut Criterion) {
     let mut group = c.benchmark_group("Transaction hash");
 
     for (i, tx) in transactions.iter().enumerate() {
-        group.bench_with_input(
-            BenchmarkId::new("tx", i),
-            tx,
-            |b, tx| {
-                b.iter(|| black_box(tx.hash()))
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("tx", i), tx, |b, tx| {
+            b.iter(|| black_box(tx.hash()))
+        });
     }
 
     group.finish();

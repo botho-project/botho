@@ -1,7 +1,7 @@
 // Copyright (c) 2018-2022 The Botho Foundation
 
-use criterion::{criterion_group, criterion_main, Criterion};
 use bth_account_keys::AccountKey;
+use criterion::{criterion_group, criterion_main, Criterion};
 use rand::{rngs::StdRng, SeedableRng};
 
 fn account_keys_benchmarks(c: &mut Criterion) {

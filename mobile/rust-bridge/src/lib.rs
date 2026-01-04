@@ -156,10 +156,11 @@ impl MobileWallet {
         use bip39::{Language, Mnemonic};
 
         // Generate random mnemonic
-        let mnemonic = Mnemonic::generate_in(Language::English, 24)
-            .map_err(|e| MobileWalletError::InternalError {
+        let mnemonic = Mnemonic::generate_in(Language::English, 24).map_err(|e| {
+            MobileWalletError::InternalError {
                 message: format!("Failed to generate mnemonic: {e}"),
-            })?;
+            }
+        })?;
 
         let phrase = mnemonic.to_string();
 

@@ -73,7 +73,8 @@ impl PqKeyMaterial {
 ///
 /// # Arguments
 ///
-/// * `seed` - A 64-byte BIP39 seed (from `bip39::Seed::new(&mnemonic, passphrase)`)
+/// * `seed` - A 64-byte BIP39 seed (from `bip39::Seed::new(&mnemonic,
+///   passphrase)`)
 ///
 /// # Returns
 ///
@@ -103,8 +104,9 @@ pub fn derive_pq_keys_from_seed(seed: &[u8; BIP39_SEED_SIZE]) -> PqKeyMaterial {
 
 /// Derive post-quantum keypairs from raw bytes (DEPRECATED)
 ///
-/// **WARNING**: This function is deprecated. Use `derive_pq_keys_from_seed` instead,
-/// which properly accepts a BIP39 seed with full PBKDF2 key stretching.
+/// **WARNING**: This function is deprecated. Use `derive_pq_keys_from_seed`
+/// instead, which properly accepts a BIP39 seed with full PBKDF2 key
+/// stretching.
 ///
 /// This function exists for backwards compatibility but bypasses BIP39's
 /// key stretching, making keys easier to brute-force if the mnemonic is

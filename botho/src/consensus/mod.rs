@@ -5,7 +5,8 @@
 //! This module provides:
 //! - ConsensusValue: The value type for SCP (transaction hashes)
 //! - ConsensusService: Manages SCP node and message handling
-//! - TransactionValidator: Separate validation for minting vs transfer transactions
+//! - TransactionValidator: Separate validation for minting vs transfer
+//!   transactions
 //! - BlockBuilder: Constructs blocks from externalized consensus values
 //! - Integration with gossip for SCP message propagation
 

@@ -6,6 +6,13 @@ use crate::{
     GenericArray, Kex, KexEphemeralPrivate, KexPrivate, KexPublic, KexReusablePrivate, KexSecret,
     KeyError, PrivateKey, PublicKey, SignatureEncoding, SignatureError,
 };
+use bth_crypto_digestible::{Digestible, MerlinTranscript};
+use bth_crypto_digestible_signature::{DigestibleSigner, DigestibleVerifier};
+use bth_util_from_random::FromRandom;
+use bth_util_repr_bytes::{
+    derive_core_cmp_from_as_ref, derive_debug_and_display_hex_from_as_ref,
+    derive_repr_bytes_from_as_ref_and_try_from, derive_try_from_slice_from_repr_bytes, ReprBytes,
+};
 use core::{
     cmp::Ordering,
     fmt::{Debug, Display, Formatter, Result as FmtResult},
@@ -18,13 +25,6 @@ use curve25519_dalek::{
 };
 use digest::generic_array::typenum::{U32, U64};
 use hex_fmt::HexFmt;
-use bth_crypto_digestible::{Digestible, MerlinTranscript};
-use bth_crypto_digestible_signature::{DigestibleSigner, DigestibleVerifier};
-use bth_util_from_random::FromRandom;
-use bth_util_repr_bytes::{
-    derive_core_cmp_from_as_ref, derive_debug_and_display_hex_from_as_ref,
-    derive_repr_bytes_from_as_ref_and_try_from, derive_try_from_slice_from_repr_bytes, ReprBytes,
-};
 use rand_core::{CryptoRng, RngCore, SeedableRng};
 use rand_hc::Hc128Rng;
 use schnorrkel_og::{
@@ -719,7 +719,8 @@ mod test {
             let private = RistrettoPrivate::from_random(&mut rng);
             let public = RistrettoPublic::from(&private);
             let bytes = public.to_bytes();
-            let recovered = RistrettoPublic::try_from(&bytes[..]).expect("Should recover public key");
+            let recovered =
+                RistrettoPublic::try_from(&bytes[..]).expect("Should recover public key");
             assert_eq!(public, recovered);
         });
     }

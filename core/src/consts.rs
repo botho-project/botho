@@ -96,15 +96,20 @@ mod tests {
 
         for i in 0..indices.len() {
             for j in (i + 1)..indices.len() {
-                assert_ne!(indices[i], indices[j], "Indices {} and {} should be distinct", i, j);
+                assert_ne!(
+                    indices[i], indices[j],
+                    "Indices {} and {} should be distinct",
+                    i, j
+                );
             }
         }
     }
 
     #[test]
     fn test_reserved_indices_leave_room_for_user_subaddresses() {
-        // There should be ample room for user subaddresses before hitting reserved indices
-        // User can use indices 1 through at least a billion without collision
+        // There should be ample room for user subaddresses before hitting reserved
+        // indices User can use indices 1 through at least a billion without
+        // collision
         let max_user_index = 1_000_000_000u64;
         assert!(max_user_index < GIFT_CODE_SUBADDRESS_INDEX);
         assert!(max_user_index < CHANGE_SUBADDRESS_INDEX);

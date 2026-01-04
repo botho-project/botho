@@ -51,11 +51,7 @@ fn test_e2e_5_node_consensus_with_mining_and_transactions() {
 
     for i in 0..blocks_to_mine {
         let miner_idx = i % DEFAULT_NUM_NODES;
-        println!(
-            "  Mining block {} (miner: node {})...",
-            i + 1,
-            miner_idx
-        );
+        println!("  Mining block {} (miner: node {})...", i + 1, miner_idx);
         mine_block(&network, miner_idx);
     }
 

@@ -6,7 +6,6 @@
 mod error;
 mod validate;
 
-
 pub use self::{
     error::{TransactionValidationError, TransactionValidationResult},
     validate::{
@@ -21,4 +20,3 @@ pub use self::{
         validate_transaction_fee, validate_tx_out, ClusterWealthLookup, ProgressiveFeeConfig,
     },
 };
-

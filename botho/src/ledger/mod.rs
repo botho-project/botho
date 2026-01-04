@@ -48,7 +48,6 @@ pub struct ChainState {
     pub difficulty: u64,
 
     // --- EmissionController state ---
-
     /// Total transactions processed (drives halving schedule)
     pub total_tx: u64,
 

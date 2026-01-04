@@ -26,10 +26,10 @@ export type Timestamp = number
 
 export type TransactionType = 'send' | 'receive' | 'minting'
 export type TransactionStatus = 'pending' | 'confirmed' | 'failed'
-export type PrivacyLevel = 'standard' | 'private' // standard = ML-DSA, private = LION ring signatures
+export type PrivacyLevel = 'standard' | 'private' // standard = Minting (ML-DSA), private = CLSAG ring signatures
 
 /** Cryptographic signature type used in transaction */
-export type CryptoType = 'clsag' | 'lion' | 'hybrid'
+export type CryptoType = 'clsag' | 'mldsa' | 'hybrid'
 
 export interface Transaction {
   id: TxHash
@@ -37,7 +37,7 @@ export interface Transaction {
   amount: Amount
   fee: Amount
   privacyLevel: PrivacyLevel
-  /** Ring signature type: clsag (classical), lion (quantum-safe), or hybrid */
+  /** Signature type: clsag (ring signatures for private tx), mldsa (minting tx), or hybrid */
   cryptoType: CryptoType
   status: TransactionStatus
   timestamp: Timestamp

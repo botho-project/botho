@@ -22,28 +22,31 @@
 //!
 //! # Architecture
 //!
-//! The simulation creates N nodes, each running in its own thread. Nodes communicate
-//! via crossbeam channels, simulating network message passing. A full mesh topology
-//! is used where every node is connected to every other node.
+//! The simulation creates N nodes, each running in its own thread. Nodes
+//! communicate via crossbeam channels, simulating network message passing. A
+//! full mesh topology is used where every node is connected to every other
+//! node.
 //!
 //! Key components:
 //! - **SimNode**: Wrapper holding the channel sender and ledger reference
 //! - **run_node**: Main event loop processing incoming values and SCP messages
-//! - **broadcast_msg**: Sends SCP messages to all peers using DashMap for concurrent access
+//! - **broadcast_msg**: Sends SCP messages to all peers using DashMap for
+//!   concurrent access
 //! - **Metrics**: Thread-safe counters for throughput and latency measurement
 //!
 //! # Performance Optimizations
 //!
-//! Several optimizations were explored during development. Here's what we learned:
+//! Several optimizations were explored during development. Here's what we
+//! learned:
 //!
 //! ## Successful: DashMap for Lock Contention
 //!
-//! **Problem**: The original design used `Arc<Mutex<HashMap<NodeID, SimNode>>>` to store
-//! node references. Every `broadcast_msg` call required acquiring this global lock,
-//! creating severe contention as node count increased.
+//! **Problem**: The original design used `Arc<Mutex<HashMap<NodeID, SimNode>>>`
+//! to store node references. Every `broadcast_msg` call required acquiring this
+//! global lock, creating severe contention as node count increased.
 //!
-//! **Solution**: Replaced with `Arc<DashMap<NodeID, SimNode>>`. DashMap uses internal
-//! sharding to allow concurrent reads without a global lock.
+//! **Solution**: Replaced with `Arc<DashMap<NodeID, SimNode>>`. DashMap uses
+//! internal sharding to allow concurrent reads without a global lock.
 //!
 //! **Result**: 50-250% throughput improvement depending on node count.
 //!
@@ -57,10 +60,11 @@
 //!
 //! ## Failed: recv_timeout Instead of Busy-Wait
 //!
-//! **Problem**: The event loop uses `try_recv()` + `thread::yield_now()`, which seemed
-//! wasteful compared to blocking on `recv_timeout()`.
+//! **Problem**: The event loop uses `try_recv()` + `thread::yield_now()`, which
+//! seemed wasteful compared to blocking on `recv_timeout()`.
 //!
-//! **Attempted**: Replace with `recv_timeout(Duration::from_micros(100))` or even 1μs.
+//! **Attempted**: Replace with `recv_timeout(Duration::from_micros(100))` or
+//! even 1μs.
 //!
 //! **Result**: Simulation hung. SCP consensus has tight timing requirements for
 //! processing timeouts and proposing values. Blocking even briefly breaks the
@@ -71,18 +75,19 @@
 //! **Problem**: Every iteration rebuilds `to_propose: BTreeSet<TxValue>` from
 //! `pending_values`, which seemed wasteful.
 //!
-//! **Attempted**: Cache the BTreeSet and only rebuild when `pending_values` changes.
+//! **Attempted**: Cache the BTreeSet and only rebuild when `pending_values`
+//! changes.
 //!
-//! **Result**: Performance decreased by 50-75%. At high transaction rates (10k tx/s),
-//! new values arrive constantly, so `pending_changed` was true on nearly every
-//! iteration. The caching added overhead (extra clone to cache, flag bookkeeping)
-//! without saving work. The simple rebuild-every-time approach is actually faster
-//! for this workload.
+//! **Result**: Performance decreased by 50-75%. At high transaction rates (10k
+//! tx/s), new values arrive constantly, so `pending_changed` was true on nearly
+//! every iteration. The caching added overhead (extra clone to cache, flag
+//! bookkeeping) without saving work. The simple rebuild-every-time approach is
+//! actually faster for this workload.
 //!
 //! ## Key Insight
 //!
-//! Not all "obvious" optimizations help. Understanding workload characteristics is
-//! essential:
+//! Not all "obvious" optimizations help. Understanding workload characteristics
+//! is essential:
 //! - Lock contention compounds with concurrency → DashMap helps significantly
 //! - Tight timing requirements → can't use blocking receives
 //! - High-frequency updates → caching adds overhead without benefit
@@ -109,9 +114,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use clap::{Parser, Subcommand};
-use crossbeam_channel::{unbounded, Receiver, Sender};
-use dashmap::DashMap;
 use bth_common::NodeID;
 use bth_consensus_scp::{
     msg::Msg,
@@ -119,6 +121,9 @@ use bth_consensus_scp::{
     test_utils::test_node_id,
     Node, QuorumSet, ScpNode, SlotIndex,
 };
+use clap::{Parser, Subcommand};
+use crossbeam_channel::{unbounded, Receiver, Sender};
+use dashmap::DashMap;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
 
@@ -289,7 +294,6 @@ impl Metrics {
             latency_stats,
         }
     }
-
 }
 
 /// Latency statistics in microseconds
@@ -391,11 +395,31 @@ impl std::fmt::Display for MetricsReportDisplay {
         writeln!(f, "Slots per Second:      {:.2}", self.slots_per_sec)?;
         writeln!(f, "Avg Values per Slot:   {:.1}", self.avg_values_per_slot)?;
         writeln!(f, "--------------------------------------------------")?;
-        writeln!(f, "Slot Latency (p50):    {:.2} ms", self.latency_stats.p50_us as f64 / 1000.0)?;
-        writeln!(f, "Slot Latency (p95):    {:.2} ms", self.latency_stats.p95_us as f64 / 1000.0)?;
-        writeln!(f, "Slot Latency (p99):    {:.2} ms", self.latency_stats.p99_us as f64 / 1000.0)?;
-        writeln!(f, "Slot Latency (mean):   {:.2} ms", self.latency_stats.mean_us / 1000.0)?;
-        writeln!(f, "Slot Latency (stddev): {:.2} ms", self.latency_stats.stddev_us / 1000.0)?;
+        writeln!(
+            f,
+            "Slot Latency (p50):    {:.2} ms",
+            self.latency_stats.p50_us as f64 / 1000.0
+        )?;
+        writeln!(
+            f,
+            "Slot Latency (p95):    {:.2} ms",
+            self.latency_stats.p95_us as f64 / 1000.0
+        )?;
+        writeln!(
+            f,
+            "Slot Latency (p99):    {:.2} ms",
+            self.latency_stats.p99_us as f64 / 1000.0
+        )?;
+        writeln!(
+            f,
+            "Slot Latency (mean):   {:.2} ms",
+            self.latency_stats.mean_us / 1000.0
+        )?;
+        writeln!(
+            f,
+            "Slot Latency (stddev): {:.2} ms",
+            self.latency_stats.stddev_us / 1000.0
+        )?;
         writeln!(f, "==================================================")?;
         Ok(())
     }
@@ -433,9 +457,18 @@ struct BenchmarkSummary {
 impl BenchmarkSummary {
     fn from_runs(runs: &[MetricsReport]) -> Self {
         let throughputs: Vec<f64> = runs.iter().map(|r| r.throughput_tps).collect();
-        let latency_p50s: Vec<f64> = runs.iter().map(|r| r.latency_stats.p50_us as f64 / 1000.0).collect();
-        let latency_p95s: Vec<f64> = runs.iter().map(|r| r.latency_stats.p95_us as f64 / 1000.0).collect();
-        let latency_p99s: Vec<f64> = runs.iter().map(|r| r.latency_stats.p99_us as f64 / 1000.0).collect();
+        let latency_p50s: Vec<f64> = runs
+            .iter()
+            .map(|r| r.latency_stats.p50_us as f64 / 1000.0)
+            .collect();
+        let latency_p95s: Vec<f64> = runs
+            .iter()
+            .map(|r| r.latency_stats.p95_us as f64 / 1000.0)
+            .collect();
+        let latency_p99s: Vec<f64> = runs
+            .iter()
+            .map(|r| r.latency_stats.p99_us as f64 / 1000.0)
+            .collect();
 
         let throughput_mean = mean(&throughputs);
         let throughput_stddev = stddev(&throughputs, throughput_mean);
@@ -444,7 +477,10 @@ impl BenchmarkSummary {
             throughput_mean,
             throughput_stddev,
             throughput_min: throughputs.iter().cloned().fold(f64::INFINITY, f64::min),
-            throughput_max: throughputs.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
+            throughput_max: throughputs
+                .iter()
+                .cloned()
+                .fold(f64::NEG_INFINITY, f64::max),
             latency_p50_mean_ms: mean(&latency_p50s),
             latency_p95_mean_ms: mean(&latency_p95s),
             latency_p99_mean_ms: mean(&latency_p99s),
@@ -463,7 +499,8 @@ fn stddev(values: &[f64], mean: f64) -> f64 {
     if values.len() < 2 {
         return 0.0;
     }
-    let variance = values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / (values.len() - 1) as f64;
+    let variance =
+        values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / (values.len() - 1) as f64;
     variance.sqrt()
 }
 
@@ -946,7 +983,10 @@ fn run_benchmark(
             }
         };
 
-        println!("\n========== Benchmarking {} nodes (k={}) ==========", nodes, k);
+        println!(
+            "\n========== Benchmarking {} nodes (k={}) ==========",
+            nodes, k
+        );
 
         let config = SimConfig {
             nodes,
@@ -1032,9 +1072,9 @@ fn run_comparison(
     println!("{}", "-".repeat(60));
 
     for &nodes in &node_counts {
-        let k_vals = k_values.clone().unwrap_or_else(|| {
-            vec![calculate_k(nodes, None).unwrap_or(nodes - 1)]
-        });
+        let k_vals = k_values
+            .clone()
+            .unwrap_or_else(|| vec![calculate_k(nodes, None).unwrap_or(nodes - 1)]);
 
         for &k in &k_vals {
             if k > nodes - 1 {
@@ -1086,9 +1126,7 @@ fn run_comparison(
 }
 
 fn parse_csv_usize(s: &str) -> Vec<usize> {
-    s.split(',')
-        .filter_map(|x| x.trim().parse().ok())
-        .collect()
+    s.split(',').filter_map(|x| x.trim().parse().ok()).collect()
 }
 
 fn save_results(results: &[BenchmarkResult], path: &str) -> std::io::Result<()> {

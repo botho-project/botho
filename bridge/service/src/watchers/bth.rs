@@ -7,8 +7,7 @@ use std::time::Duration;
 use tokio::sync::broadcast;
 use tracing::{debug, info};
 
-use crate::db::Database;
-use crate::engine::ShutdownSignal;
+use crate::{db::Database, engine::ShutdownSignal};
 
 /// BTH watcher monitors the BTH chain for deposits to the bridge address.
 #[allow(dead_code)]
@@ -39,8 +38,8 @@ impl BthWatcher {
                     info!("BTH watcher shutting down");
                     return Ok(());
                 }
-                Err(broadcast::error::TryRecvError::Empty) |
-                Err(broadcast::error::TryRecvError::Lagged(_)) => {
+                Err(broadcast::error::TryRecvError::Empty)
+                | Err(broadcast::error::TryRecvError::Lagged(_)) => {
                     // No shutdown signal, continue
                 }
             }

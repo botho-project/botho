@@ -3,13 +3,17 @@
 use anyhow::{anyhow, Result};
 use std::path::Path;
 
-use crate::discovery::NodeDiscovery;
-use crate::keys::WalletKeys;
-use crate::rpc_pool::RpcPool;
-use crate::storage::EncryptedWallet;
-use crate::transaction::{format_amount, parse_amount, sync_wallet, TransactionBuilder, DUST_THRESHOLD};
+use crate::{
+    discovery::NodeDiscovery,
+    keys::WalletKeys,
+    rpc_pool::RpcPool,
+    storage::EncryptedWallet,
+    transaction::{format_amount, parse_amount, sync_wallet, TransactionBuilder, DUST_THRESHOLD},
+};
 
-use super::{decrypt_wallet_with_rate_limiting, print_error, print_success, print_warning, prompt_confirm};
+use super::{
+    decrypt_wallet_with_rate_limiting, print_error, print_success, print_warning, prompt_confirm,
+};
 
 /// Run the send command
 pub async fn run(
@@ -136,17 +140,27 @@ async fn run_classical(
     println!("  Recipient: {}", address);
     println!("  Amount:    {}", format_amount(amount_picocredits));
     if dust_absorbed {
-        println!("  Fee:       {} (includes {} dust change)", format_amount(actual_fee), format_amount(expected_change));
+        println!(
+            "  Fee:       {} (includes {} dust change)",
+            format_amount(actual_fee),
+            format_amount(expected_change)
+        );
         print_warning("Change is below dust threshold - will be added to fee.");
     } else {
         println!("  Fee:       {}", format_amount(fee));
     }
-    println!("  Total:     {}", format_amount(amount_picocredits + actual_fee));
+    println!(
+        "  Total:     {}",
+        format_amount(amount_picocredits + actual_fee)
+    );
     println!();
     if !dust_absorbed && expected_change > 0 {
         println!("  Change:        {}", format_amount(expected_change));
     }
-    println!("  Balance after: {}", format_amount(balance - amount_picocredits - actual_fee));
+    println!(
+        "  Balance after: {}",
+        format_amount(balance - amount_picocredits - actual_fee)
+    );
 
     // Confirm
     if !skip_confirm {
@@ -192,10 +206,8 @@ fn parse_address(address: &str) -> Result<bth_account_keys::PublicAddress> {
             return Err(anyhow!("Invalid address format"));
         }
 
-        let view_bytes = hex::decode(parts[1])
-            .map_err(|_| anyhow!("Invalid view key hex"))?;
-        let spend_bytes = hex::decode(parts[2])
-            .map_err(|_| anyhow!("Invalid spend key hex"))?;
+        let view_bytes = hex::decode(parts[1]).map_err(|_| anyhow!("Invalid view key hex"))?;
+        let spend_bytes = hex::decode(parts[2]).map_err(|_| anyhow!("Invalid spend key hex"))?;
 
         // For now, we need the full 32-byte keys
         // The cad: format uses 16-byte prefixes for display

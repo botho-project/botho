@@ -91,7 +91,8 @@ impl BlockHeader {
         hash_value < self.difficulty
     }
 
-    /// Create header for genesis block (defaults to testnet for backward compatibility)
+    /// Create header for genesis block (defaults to testnet for backward
+    /// compatibility)
     pub fn genesis() -> Self {
         Self::genesis_for_network(Network::Testnet)
     }
@@ -148,7 +149,8 @@ impl BlockHeader {
 /// A minting transaction (coinbase) that creates new coins via PoW.
 ///
 /// Uses CryptoNote-style stealth addresses for minter privacy:
-/// - `target_key`: One-time public key that only the minter can identify and spend
+/// - `target_key`: One-time public key that only the minter can identify and
+///   spend
 /// - `public_key`: Ephemeral DH public key for minter to derive shared secret
 ///
 /// Even if the same minter wins multiple blocks, their rewards are unlinkable.
@@ -193,7 +195,8 @@ pub struct MintingTx {
 }
 
 impl MintingTx {
-    /// Create a new minting transaction with stealth output for the given minter address.
+    /// Create a new minting transaction with stealth output for the given
+    /// minter address.
     pub fn new(
         block_height: u64,
         reward: u64,
@@ -246,7 +249,8 @@ impl MintingTx {
         hash_value < self.difficulty
     }
 
-    /// Get the PoW hash value as u64 (lower = better, used for priority in consensus)
+    /// Get the PoW hash value as u64 (lower = better, used for priority in
+    /// consensus)
     pub fn pow_priority(&self) -> u64 {
         let hash = self.pow_hash();
         // Invert so that lower hash = higher priority
@@ -269,14 +273,15 @@ impl MintingTx {
         hasher.finalize().into()
     }
 
-    /// Convert this minting transaction's output into a TxOutput for ledger storage.
+    /// Convert this minting transaction's output into a TxOutput for ledger
+    /// storage.
     ///
-    /// This allows the ledger to store minting rewards using the same UTXO format
-    /// as regular transaction outputs.
+    /// This allows the ledger to store minting rewards using the same UTXO
+    /// format as regular transaction outputs.
     ///
-    /// Minting creates a **new cluster origin** - the output is tagged with 100%
-    /// attribution to a new cluster derived from the minting tx hash. This is how
-    /// coin lineage tracking begins.
+    /// Minting creates a **new cluster origin** - the output is tagged with
+    /// 100% attribution to a new cluster derived from the minting tx hash.
+    /// This is how coin lineage tracking begins.
     pub fn to_tx_output(&self) -> TxOutput {
         // Create a new cluster ID from the first 8 bytes of the minting tx hash
         let tx_hash = self.hash();
@@ -302,7 +307,8 @@ pub struct Block {
 }
 
 impl Block {
-    /// Create the genesis block (defaults to testnet for backward compatibility)
+    /// Create the genesis block (defaults to testnet for backward
+    /// compatibility)
     pub fn genesis() -> Self {
         Self::genesis_for_network(Network::Testnet)
     }
@@ -439,7 +445,8 @@ impl Block {
 ///
 /// This is the authoritative reward calculation for minting transactions.
 /// Uses `MonetaryPolicy` which assumes 5-second blocks. When actual blocks
-/// are slower (up to 40s when idle), effective inflation is proportionally lower.
+/// are slower (up to 40s when idle), effective inflation is proportionally
+/// lower.
 ///
 /// # Arguments
 /// * `height` - Current block height
@@ -501,11 +508,11 @@ pub mod dynamic_timing {
     /// Discrete block time levels: (tx_rate_threshold, block_time_secs)
     /// Higher load → faster blocks, lower load → slower blocks
     pub const BLOCK_TIME_LEVELS: [(f64, u64); 5] = [
-        (20.0, 3),  // Very high load: 20+ tx/s → 3s blocks
-        (5.0, 5),   // High load: 5+ tx/s → 5s blocks
-        (1.0, 10),  // Medium load: 1+ tx/s → 10s blocks
-        (0.2, 20),  // Low load: 0.2+ tx/s → 20s blocks
-        (0.0, 40),  // Idle: <0.2 tx/s → 40s blocks
+        (20.0, 3), // Very high load: 20+ tx/s → 3s blocks
+        (5.0, 5),  // High load: 5+ tx/s → 5s blocks
+        (1.0, 10), // Medium load: 1+ tx/s → 10s blocks
+        (0.2, 20), // Low load: 0.2+ tx/s → 20s blocks
+        (0.0, 40), // Idle: <0.2 tx/s → 40s blocks
     ];
 
     /// Compute the target block time based on recent transaction load.
@@ -525,11 +532,18 @@ pub mod dynamic_timing {
         }
 
         // Compute total transaction count in the window
-        // (We use tx count rather than bytes since we'd need to serialize for exact bytes)
+        // (We use tx count rather than bytes since we'd need to serialize for exact
+        // bytes)
 
         // Compute time span of the window
-        let first_time = recent_blocks.first().map(|b| b.header.timestamp).unwrap_or(0);
-        let last_time = recent_blocks.last().map(|b| b.header.timestamp).unwrap_or(0);
+        let first_time = recent_blocks
+            .first()
+            .map(|b| b.header.timestamp)
+            .unwrap_or(0);
+        let last_time = recent_blocks
+            .last()
+            .map(|b| b.header.timestamp)
+            .unwrap_or(0);
         let window_time = last_time.saturating_sub(first_time);
 
         if window_time == 0 {
@@ -574,7 +588,10 @@ pub mod dynamic_timing {
             // Verify levels are sorted descending by threshold
             let mut prev_threshold = f64::MAX;
             for (threshold, _) in BLOCK_TIME_LEVELS {
-                assert!(threshold < prev_threshold, "Levels must be sorted descending");
+                assert!(
+                    threshold < prev_threshold,
+                    "Levels must be sorted descending"
+                );
                 prev_threshold = threshold;
             }
         }
@@ -585,13 +602,19 @@ pub mod dynamic_timing {
             // 20 * 2800 = 56000 bytes of tx data
             // 476 / (476 + 56000) = 0.84% overhead
             let overhead = compute_overhead_percent(20, 1.0);
-            assert!(overhead < 1.0, "1 tx/s at 20s blocks should have <1% overhead");
+            assert!(
+                overhead < 1.0,
+                "1 tx/s at 20s blocks should have <1% overhead"
+            );
 
             // At 0.1 tx/s with 20s blocks: 2 txs per block
             // 2 * 2800 = 5600 bytes of tx data
             // 476 / (476 + 5600) = 7.8% overhead
             let overhead = compute_overhead_percent(20, 0.1);
-            assert!(overhead > 5.0 && overhead < 10.0, "0.1 tx/s at 20s should be ~8% overhead");
+            assert!(
+                overhead > 5.0 && overhead < 10.0,
+                "0.1 tx/s at 20s should be ~8% overhead"
+            );
         }
     }
 }
@@ -644,13 +667,14 @@ pub mod difficulty {
     pub const ADJUSTMENT_TX_COUNT: u64 = 1000;
 
     /// Initial block reward (50 BTH in picocredits)
-    /// Note: Block rewards are now calculated by `calculate_block_reward()` using
-    /// MonetaryPolicy with block-height-based halving (5s block assumption).
+    /// Note: Block rewards are now calculated by `calculate_block_reward()`
+    /// using MonetaryPolicy with block-height-based halving (5s block
+    /// assumption).
     pub const INITIAL_REWARD: u64 = 50_000_000_000_000;
 
     /// Monetary policy phase (for display/informational purposes).
-    /// Note: Block rewards are now calculated by `calculate_block_reward()` using
-    /// MonetaryPolicy with block-height-based halving.
+    /// Note: Block rewards are now calculated by `calculate_block_reward()`
+    /// using MonetaryPolicy with block-height-based halving.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum Phase {
         /// Halving phase with epoch number (0-indexed)
@@ -662,8 +686,9 @@ pub mod difficulty {
     /// Emission controller: difficulty adjustment based on emission rate.
     ///
     /// Tracks network state and adjusts difficulty to hit emission targets.
-    /// Note: Block rewards are calculated separately by `calculate_block_reward()`.
-    /// This controller focuses on difficulty adjustment only.
+    /// Note: Block rewards are calculated separately by
+    /// `calculate_block_reward()`. This controller focuses on difficulty
+    /// adjustment only.
     #[derive(Debug, Clone)]
     pub struct EmissionController {
         // --- State ---
@@ -685,7 +710,8 @@ pub mod difficulty {
         pub epoch_burns: u64,
 
         // --- Derived (for backward compatibility with persistence) ---
-        /// Current block reward (informational, actual rewards use calculate_block_reward)
+        /// Current block reward (informational, actual rewards use
+        /// calculate_block_reward)
         pub current_reward: u64,
     }
 
@@ -732,8 +758,9 @@ pub mod difficulty {
             }
         }
 
-        /// Current monetary phase (deprecated - use MonetaryPolicy for block-based halving)
-        /// This is kept for informational purposes and backward compatibility.
+        /// Current monetary phase (deprecated - use MonetaryPolicy for
+        /// block-based halving) This is kept for informational purposes
+        /// and backward compatibility.
         pub fn phase(&self) -> Phase {
             // Use a simplified approximation based on total emission
             // The actual halving is now block-height-based via MonetaryPolicy
@@ -750,13 +777,16 @@ pub mod difficulty {
                 // Rough epoch estimate based on emission
                 let per_epoch = initial_reward * halving_interval;
                 let epoch = (total_emitted / per_epoch) as u32;
-                Phase::Halving { epoch: epoch.min(policy.halving_count - 1) }
+                Phase::Halving {
+                    epoch: epoch.min(policy.halving_count - 1),
+                }
             } else {
                 Phase::Tail
             }
         }
 
-        /// Current block reward (informational - use calculate_block_reward() for actual rewards)
+        /// Current block reward (informational - use calculate_block_reward()
+        /// for actual rewards)
         pub fn block_reward(&self) -> u64 {
             self.current_reward
         }
@@ -783,8 +813,9 @@ pub mod difficulty {
         /// Record a finalized block and update controller.
         ///
         /// Returns (new_difficulty, new_block_reward)
-        /// Note: The returned block_reward is informational - actual rewards should be
-        /// calculated using `calculate_block_reward()` based on block height.
+        /// Note: The returned block_reward is informational - actual rewards
+        /// should be calculated using `calculate_block_reward()` based
+        /// on block height.
         pub fn record_block(
             &mut self,
             tx_count: u64,
@@ -833,10 +864,8 @@ pub mod difficulty {
             let ratio = actual as f64 / target as f64;
 
             // Invert for control direction and clamp
-            let adjustment = (1.0 / ratio).clamp(
-                1.0 / MAX_ADJUSTMENT_FACTOR,
-                MAX_ADJUSTMENT_FACTOR,
-            );
+            let adjustment =
+                (1.0 / ratio).clamp(1.0 / MAX_ADJUSTMENT_FACTOR, MAX_ADJUSTMENT_FACTOR);
 
             let new_diff = (self.difficulty as f64 * adjustment) as u64;
             self.difficulty = new_diff.clamp(MIN_DIFFICULTY, MAX_DIFFICULTY);
@@ -851,8 +880,8 @@ pub mod difficulty {
         }
 
         /// Deprecated: Halving is now block-height-based, not tx-based.
-        /// Use MonetaryPolicy.halving_interval and block height to calculate blocks until halving.
-        /// Returns 0 as a placeholder.
+        /// Use MonetaryPolicy.halving_interval and block height to calculate
+        /// blocks until halving. Returns 0 as a placeholder.
         #[deprecated(note = "Halving is now block-height-based via MonetaryPolicy")]
         pub fn tx_until_halving(&self) -> u64 {
             0
@@ -865,8 +894,7 @@ pub mod difficulty {
                 return 0;
             }
             // Net emission per tx, annualized assuming 10M tx/year
-            let net_per_tx = self.total_emitted.saturating_sub(self.total_burned)
-                / self.total_tx;
+            let net_per_tx = self.total_emitted.saturating_sub(self.total_burned) / self.total_tx;
             let annual = net_per_tx * 10_000_000;
             annual * 10_000 / supply
         }
@@ -887,15 +915,17 @@ pub mod difficulty {
         #[test]
         fn test_phase_estimation() {
             // Phase is now estimated from total_emitted, not total_tx
-            // Note: phase() is deprecated for EmissionController - use MonetaryPolicy instead
+            // Note: phase() is deprecated for EmissionController - use MonetaryPolicy
+            // instead
             let mut ctrl = EmissionController::new(1000);
 
             // At zero emission, should be epoch 0
             assert_eq!(ctrl.phase(), Phase::Halving { epoch: 0 });
 
-            // The phase() method approximates based on emission vs expected schedule
-            // With very large halving intervals (12.6M blocks), we need significant
-            // emission to advance phases. For practical purposes, phase 0 is expected
+            // The phase() method approximates based on emission vs expected
+            // schedule With very large halving intervals (12.6M
+            // blocks), we need significant emission to advance
+            // phases. For practical purposes, phase 0 is expected
             // for any reasonable emission amount in tests.
         }
 
@@ -929,7 +959,8 @@ pub mod difficulty {
 
             // After 1000 tx, difficulty should adjust
             assert_eq!(ctrl.total_tx, 1000);
-            // Difficulty may or may not change depending on target vs actual emission
+            // Difficulty may or may not change depending on target vs actual
+            // emission
         }
 
         #[test]
@@ -1004,8 +1035,14 @@ mod tests {
         assert!(mainnet_genesis.is_genesis());
 
         // They have different magic bytes
-        assert_eq!(testnet_genesis.header.prev_block_hash, TESTNET_GENESIS_MAGIC);
-        assert_eq!(mainnet_genesis.header.prev_block_hash, MAINNET_GENESIS_MAGIC);
+        assert_eq!(
+            testnet_genesis.header.prev_block_hash,
+            TESTNET_GENESIS_MAGIC
+        );
+        assert_eq!(
+            mainnet_genesis.header.prev_block_hash,
+            MAINNET_GENESIS_MAGIC
+        );
         assert_ne!(
             testnet_genesis.header.prev_block_hash,
             mainnet_genesis.header.prev_block_hash
@@ -1037,7 +1074,8 @@ mod tests {
         assert_eq!(hash1, hash2);
     }
 
-    // Note: Block reward calculation uses calculate_block_reward() which is based on
-    // block height via MonetaryPolicy (5s block assumption). Tests for the halving
-    // schedule are in the monetary.rs and validation.rs test modules.
+    // Note: Block reward calculation uses calculate_block_reward() which is
+    // based on block height via MonetaryPolicy (5s block assumption). Tests
+    // for the halving schedule are in the monetary.rs and validation.rs
+    // test modules.
 }

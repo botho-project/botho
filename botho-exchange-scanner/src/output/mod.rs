@@ -41,9 +41,7 @@ pub fn create_handler(
     _database_url: Option<&str>,
 ) -> anyhow::Result<Box<dyn OutputHandler>> {
     match output_mode {
-        crate::config::OutputMode::Stdout => {
-            Ok(Box::new(StdoutHandler::new()))
-        }
+        crate::config::OutputMode::Stdout => Ok(Box::new(StdoutHandler::new())),
         crate::config::OutputMode::Webhook => {
             let url = webhook_url
                 .ok_or_else(|| anyhow::anyhow!("webhook_url required for webhook output mode"))?;

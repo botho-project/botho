@@ -1124,7 +1124,7 @@ mod msg_tests {
             quorum_set,
             1,
             Prepare(PreparePayload {
-                B: Ballot::new(5, &["value"]),     // B < P (invalid)
+                B: Ballot::new(5, &["value"]), // B < P (invalid)
                 P: Some(Ballot::new(10, &["value"])),
                 PP: None,
                 CN: 0,
@@ -1163,7 +1163,7 @@ mod msg_tests {
                 B: Ballot::new(10, &["value"]),
                 P: None,
                 PP: None,
-                CN: 5,  // CN > HN (invalid)
+                CN: 5, // CN > HN (invalid)
                 HN: 3,
             }),
         );
@@ -1182,7 +1182,7 @@ mod msg_tests {
                 P: None,
                 PP: None,
                 CN: 0,
-                HN: 10,  // HN > B.N (invalid)
+                HN: 10, // HN > B.N (invalid)
             }),
         );
         assert!(msg.validate().is_err());
@@ -1215,7 +1215,7 @@ mod msg_tests {
             Commit(CommitPayload {
                 B: Ballot::new(10, &["value"]),
                 PN: 8,
-                CN: 10,  // CN > HN (invalid)
+                CN: 10, // CN > HN (invalid)
                 HN: 5,
             }),
         );

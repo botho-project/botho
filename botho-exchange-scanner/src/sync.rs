@@ -7,8 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 /// Persistent sync state for the scanner.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SyncState {
     /// Last fully scanned block height
     pub last_scanned_height: u64,
@@ -28,7 +27,6 @@ pub struct SyncState {
     /// Number of outputs scanned
     pub total_outputs_scanned: u64,
 }
-
 
 impl SyncState {
     /// Create a new empty sync state.
@@ -60,7 +58,8 @@ impl SyncState {
 
     /// Save sync state to a file.
     ///
-    /// Uses atomic write (write to temp file, then rename) to prevent corruption.
+    /// Uses atomic write (write to temp file, then rename) to prevent
+    /// corruption.
     pub fn save(&self, path: &Path) -> anyhow::Result<()> {
         let content = serde_json::to_string_pretty(self)?;
 
@@ -71,10 +70,7 @@ impl SyncState {
         // Atomic rename
         std::fs::rename(&temp_path, path)?;
 
-        tracing::debug!(
-            "Saved sync state: height={}",
-            self.last_scanned_height
-        );
+        tracing::debug!("Saved sync state: height={}", self.last_scanned_height);
 
         Ok(())
     }

@@ -41,8 +41,8 @@ use botho::{
 };
 use sha2::{Digest, Sha256};
 
-use bth_account_keys::PublicAddress;
 use botho_wallet::WalletKeys;
+use bth_account_keys::PublicAddress;
 use std::time::SystemTime;
 
 // ============================================================================
@@ -53,7 +53,8 @@ use std::time::SystemTime;
 const NUM_NODES: usize = 5;
 
 /// Quorum threshold (k=2 for 5 nodes allows f=2 Byzantine tolerance)
-/// With k=2 and 4 peers, a quorum needs 2/4 peers, so 3 honest nodes can reach consensus
+/// With k=2 and 4 peers, a quorum needs 2/4 peers, so 3 honest nodes can reach
+/// consensus
 const QUORUM_K: usize = 2;
 
 /// SCP timebase for testing (faster than production)
@@ -72,7 +73,9 @@ const TRIVIAL_DIFFICULTY: u64 = 0x00FF_FFFF_FFFF_FFFF;
 // Consensus Value Type
 // ============================================================================
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 struct ConsensusValue {
     pub tx_hash: [u8; 32],
     pub priority: u64,
@@ -210,12 +213,20 @@ impl ByzantineTestNetwork {
             .insert(hash, minting_tx.clone());
 
         for entry in self.nodes.iter() {
-            let _ = entry.value().sender.send(TestNodeMessage::MintingTx(minting_tx.clone()));
+            let _ = entry
+                .value()
+                .sender
+                .send(TestNodeMessage::MintingTx(minting_tx.clone()));
         }
     }
 
     /// Wait for at least `min_nodes` to reach the target slot
-    fn wait_for_slot_majority(&self, target_slot: SlotIndex, min_nodes: usize, timeout: Duration) -> bool {
+    fn wait_for_slot_majority(
+        &self,
+        target_slot: SlotIndex,
+        min_nodes: usize,
+        timeout: Duration,
+    ) -> bool {
         let deadline = Instant::now() + timeout;
 
         while Instant::now() < deadline {
@@ -509,8 +520,11 @@ fn run_byzantine_node(
 
         // Propose pending values
         if !pending_values.is_empty() {
-            let to_propose: BTreeSet<ConsensusValue> =
-                pending_values.iter().take(MAX_SLOT_VALUES).cloned().collect();
+            let to_propose: BTreeSet<ConsensusValue> = pending_values
+                .iter()
+                .take(MAX_SLOT_VALUES)
+                .cloned()
+                .collect();
 
             match scp_node.propose_values(to_propose) {
                 Ok(Some(out_msg)) => {
@@ -546,7 +560,11 @@ fn run_byzantine_node(
         // Check for externalization
         if let Some(externalized) = scp_node.get_externalized_values(current_slot) {
             // Apply block
-            let _ = apply_externalized_block_simple(&ledger, &pending_minting_txs, externalized.as_slice());
+            let _ = apply_externalized_block_simple(
+                &ledger,
+                &pending_minting_txs,
+                externalized.as_slice(),
+            );
 
             pending_values.retain(|v| !externalized.contains(v));
             slot_progress.insert(node_id.clone(), current_slot);
@@ -693,7 +711,7 @@ fn create_test_wallet(seed: u8) -> WalletKeys {
 #[test]
 fn test_single_silent_node() {
     let behaviors = vec![
-        ByzantineBehavior::Silent,  // Node 0 is silent
+        ByzantineBehavior::Silent, // Node 0 is silent
         ByzantineBehavior::Honest,
         ByzantineBehavior::Honest,
         ByzantineBehavior::Honest,
@@ -709,7 +727,10 @@ fn test_single_silent_node() {
 
     // Wait for majority (4 honest nodes) to reach slot 1
     let reached = network.wait_for_slot_majority(1, 4, CONSENSUS_TIMEOUT);
-    assert!(reached, "Honest nodes should reach consensus despite silent node");
+    assert!(
+        reached,
+        "Honest nodes should reach consensus despite silent node"
+    );
 
     // Verify honest nodes are consistent
     network.verify_honest_consistency(&[1, 2, 3, 4]);
@@ -719,7 +740,10 @@ fn test_single_silent_node() {
         let silent_node = network.get_node(0);
         let silent_state = silent_node.chain_state();
         assert_eq!(silent_state.height, 0, "Silent node should not advance");
-        assert!(silent_node.messages_dropped() > 0, "Silent node should have dropped messages");
+        assert!(
+            silent_node.messages_dropped() > 0,
+            "Silent node should have dropped messages"
+        );
     }
 
     network.stop();
@@ -729,7 +753,7 @@ fn test_single_silent_node() {
 #[test]
 fn test_random_message_drops() {
     let behaviors = vec![
-        ByzantineBehavior::RandomDrop(0.3),  // 30% drop rate
+        ByzantineBehavior::RandomDrop(0.3), // 30% drop rate
         ByzantineBehavior::Honest,
         ByzantineBehavior::Honest,
         ByzantineBehavior::Honest,
@@ -771,7 +795,7 @@ fn test_invalid_transaction_proposal() {
 
     // Inject an invalid value (marked with 0xFF prefix)
     let invalid_value = ConsensusValue {
-        tx_hash: [0xFF; 32],  // Invalid marker
+        tx_hash: [0xFF; 32], // Invalid marker
         priority: 999,
         is_minting: true,
     };
@@ -829,14 +853,18 @@ fn test_minority_partition() {
     let minority_set: HashSet<NodeID> = vec![node_ids[0].clone(), node_ids[1].clone()]
         .into_iter()
         .collect();
-    let majority_set: HashSet<NodeID> = vec![node_ids[2].clone(), node_ids[3].clone(), node_ids[4].clone()]
-        .into_iter()
-        .collect();
+    let majority_set: HashSet<NodeID> = vec![
+        node_ids[2].clone(),
+        node_ids[3].clone(),
+        node_ids[4].clone(),
+    ]
+    .into_iter()
+    .collect();
 
     let behaviors = vec![
-        ByzantineBehavior::Partitioned(minority_set.clone()),  // Can only reach node 1
-        ByzantineBehavior::Partitioned(minority_set.clone()),  // Can only reach node 0
-        ByzantineBehavior::Partitioned(majority_set.clone()),  // Majority partition
+        ByzantineBehavior::Partitioned(minority_set.clone()), // Can only reach node 1
+        ByzantineBehavior::Partitioned(minority_set.clone()), // Can only reach node 0
+        ByzantineBehavior::Partitioned(majority_set.clone()), // Majority partition
         ByzantineBehavior::Partitioned(majority_set.clone()),
         ByzantineBehavior::Partitioned(majority_set.clone()),
     ];
@@ -872,9 +900,7 @@ fn test_partition_healing() {
     // Start with a partition
     let node_ids: Vec<NodeID> = (0..NUM_NODES).map(|i| test_node_id(i as u32)).collect();
 
-    let minority_set: HashSet<NodeID> = vec![node_ids[0].clone()]
-        .into_iter()
-        .collect();
+    let minority_set: HashSet<NodeID> = vec![node_ids[0].clone()].into_iter().collect();
     let majority_set: HashSet<NodeID> = vec![
         node_ids[1].clone(),
         node_ids[2].clone(),
@@ -924,10 +950,12 @@ fn test_partition_healing() {
     network.stop();
 }
 
-/// Test: Two simultaneous silent nodes (still within f=1 tolerance when considering quorum overlap)
+/// Test: Two simultaneous silent nodes (still within f=1 tolerance when
+/// considering quorum overlap)
 #[test]
 fn test_two_silent_nodes_quorum_overlap() {
-    // With k=3 quorum and 2 silent nodes, remaining 3 honest nodes can still form quorum
+    // With k=3 quorum and 2 silent nodes, remaining 3 honest nodes can still form
+    // quorum
     let behaviors = vec![
         ByzantineBehavior::Silent,
         ByzantineBehavior::Silent,
@@ -944,7 +972,10 @@ fn test_two_silent_nodes_quorum_overlap() {
 
     // 3 honest nodes can form quorum (k=3)
     let reached = network.wait_for_slot_majority(1, 3, CONSENSUS_TIMEOUT);
-    assert!(reached, "3 honest nodes should reach consensus with k=3 quorum");
+    assert!(
+        reached,
+        "3 honest nodes should reach consensus with k=3 quorum"
+    );
 
     network.verify_honest_consistency(&[2, 3, 4]);
 
@@ -955,7 +986,7 @@ fn test_two_silent_nodes_quorum_overlap() {
 #[test]
 fn test_node_recovery() {
     let behaviors = vec![
-        ByzantineBehavior::Silent,  // Start silent
+        ByzantineBehavior::Silent, // Start silent
         ByzantineBehavior::Honest,
         ByzantineBehavior::Honest,
         ByzantineBehavior::Honest,
@@ -990,8 +1021,10 @@ fn test_node_recovery() {
     let reached = network.wait_for_slot_majority(2, 5, CONSENSUS_TIMEOUT);
     // Note: Node 0 may catch up depending on sync implementation
     // For now, verify majority continues to make progress
-    assert!(reached || network.wait_for_slot_majority(2, 4, CONSENSUS_TIMEOUT),
-            "Network should continue making progress");
+    assert!(
+        reached || network.wait_for_slot_majority(2, 4, CONSENSUS_TIMEOUT),
+        "Network should continue making progress"
+    );
 
     network.stop();
 }

@@ -6,12 +6,12 @@
 //! and depends on.
 use crate::GenericNodeId;
 use alloc::{vec, vec::Vec};
+use bth_common::{HashSet, NodeID, ResponderId};
+use bth_crypto_digestible::Digestible;
 use core::{
     hash::{Hash, Hasher},
     ops::{Deref, DerefMut},
 };
-use bth_common::{HashSet, NodeID, ResponderId};
-use bth_crypto_digestible::Digestible;
 use prost::{Message, Oneof};
 use serde::{Deserialize, Serialize};
 
@@ -267,8 +267,8 @@ impl<ID: GenericNodeId + AsRef<ResponderId>> From<&QuorumSet<ID>> for QuorumSet<
 mod quorum_set_tests {
     use super::*;
     use crate::test_utils::test_node_id;
-    use core::hash::BuildHasher;
     use bth_common::HasherBuilder;
+    use core::hash::BuildHasher;
 
     fn assert_quorum_sets_equal(quorum_set_1: &QuorumSet, quorum_set_2: &QuorumSet) {
         assert_eq!(quorum_set_1, quorum_set_2);
@@ -549,7 +549,8 @@ mod quorum_set_tests {
                 QuorumSetMember::InnerSet(QuorumSet::new(
                     1,
                     vec![
-                        QuorumSetMember::Node(test_node_id(0)), // Same as outer, but different level
+                        QuorumSetMember::Node(test_node_id(0)), /* Same as outer, but different
+                                                                 * level */
                         QuorumSetMember::Node(test_node_id(1)),
                     ],
                 )),
@@ -604,7 +605,8 @@ mod quorum_set_tests {
                         QuorumSetMember::InnerSet(QuorumSet::new(
                             1,
                             vec![
-                                QuorumSetMember::Node(test_node_id(5)), // Duplicate nested in sibling!
+                                QuorumSetMember::Node(test_node_id(5)), /* Duplicate nested in
+                                                                         * sibling! */
                                 QuorumSetMember::Node(test_node_id(7)),
                             ],
                         )),

@@ -6,13 +6,17 @@
 use anyhow::{anyhow, Result};
 use std::path::Path;
 
-use crate::discovery::NodeDiscovery;
-use crate::keys::WalletKeys;
-use crate::rpc_pool::RpcPool;
-use crate::storage::EncryptedWallet;
-use crate::transaction::{format_amount, sync_wallet, TransactionBuilder, DUST_THRESHOLD};
+use crate::{
+    discovery::NodeDiscovery,
+    keys::WalletKeys,
+    rpc_pool::RpcPool,
+    storage::EncryptedWallet,
+    transaction::{format_amount, sync_wallet, TransactionBuilder, DUST_THRESHOLD},
+};
 
-use super::{decrypt_wallet_with_rate_limiting, print_error, print_success, print_warning, prompt_confirm};
+use super::{
+    decrypt_wallet_with_rate_limiting, print_error, print_success, print_warning, prompt_confirm,
+};
 
 /// Run the migrate-to-pq command
 #[cfg(feature = "pq")]
@@ -55,8 +59,9 @@ pub async fn run(
     println!("Syncing wallet...");
     let (utxos, height) = sync_wallet(&mut rpc, &keys, wallet.sync_height).await?;
 
-    // For now, all scanned UTXOs are classical (detected via classical stealth addresses)
-    // Once PQ scanning is implemented, we'll be able to track PQ UTXOs separately
+    // For now, all scanned UTXOs are classical (detected via classical stealth
+    // addresses) Once PQ scanning is implemented, we'll be able to track PQ
+    // UTXOs separately
     let classical_utxos = utxos;
     let classical_balance: u64 = classical_utxos.iter().map(|u| u.amount).sum();
 
@@ -68,7 +73,11 @@ pub async fn run(
     if status_only {
         println!();
         println!("Migration Status:");
-        println!("  Classical UTXOs:    {} ({} BTH)", classical_utxos.len(), format_amount(classical_balance));
+        println!(
+            "  Classical UTXOs:    {} ({} BTH)",
+            classical_utxos.len(),
+            format_amount(classical_balance)
+        );
         println!("  Quantum-safe UTXOs: (tracking not yet implemented)");
         println!();
 
@@ -131,12 +140,24 @@ pub async fn run(
     println!();
     println!("Migration Plan:");
     println!("  Classical UTXOs to migrate: {}", classical_utxos.len());
-    println!("  Amount to migrate:          {}", format_amount(classical_balance));
-    println!("  Estimated fee:              {} (PQ tx ~19x larger)", format_amount(fee));
-    println!("  Amount after fee:           {}", format_amount(amount_after_fee));
+    println!(
+        "  Amount to migrate:          {}",
+        format_amount(classical_balance)
+    );
+    println!(
+        "  Estimated fee:              {} (PQ tx ~19x larger)",
+        format_amount(fee)
+    );
+    println!(
+        "  Amount after fee:           {}",
+        format_amount(amount_after_fee)
+    );
     println!();
     println!("  Destination (PQ address):");
-    println!("    {}...", &pq_address_str[..std::cmp::min(60, pq_address_str.len())]);
+    println!(
+        "    {}...",
+        &pq_address_str[..std::cmp::min(60, pq_address_str.len())]
+    );
     println!();
 
     // Dry run mode
@@ -171,8 +192,8 @@ pub async fn run(
 
     // Serialize and submit
     println!("Signing transaction with dual signatures (Schnorr + ML-DSA)...");
-    let tx_bytes = bincode::serialize(&tx)
-        .map_err(|e| anyhow!("Failed to serialize transaction: {}", e))?;
+    let tx_bytes =
+        bincode::serialize(&tx).map_err(|e| anyhow!("Failed to serialize transaction: {}", e))?;
     let tx_hex = hex::encode(&tx_bytes);
 
     println!("Submitting migration transaction...");
@@ -185,7 +206,10 @@ pub async fn run(
     println!();
     println!("Migration details:");
     println!("  • {} classical UTXOs consolidated", num_inputs);
-    println!("  • {} BTH migrated to quantum-safe output", format_amount(amount_after_fee));
+    println!(
+        "  • {} BTH migrated to quantum-safe output",
+        format_amount(amount_after_fee)
+    );
     println!("  • Protected by ML-KEM-768 + ML-DSA-65");
     println!();
     println!("Your funds are now protected against future quantum computers.");

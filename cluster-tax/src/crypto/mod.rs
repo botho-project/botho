@@ -22,14 +22,31 @@ mod tagged_output;
 mod validation;
 
 pub use committed_tags::{
-    blinding_generator, cluster_generator, fee_generator, total_mass_generator, wealth_generator,
-    ClusterConservationProof, CommittedTagMass, CommittedTagVector, CommittedTagVectorSecret,
-    LinearRelationProof, RangeProof, SchnorrProof, SegmentFeeProof, SegmentOrProof,
-    TagConservationProof, TagConservationProver, TagConservationVerifier, TagMassSecret,
+    blinding_generator,
+    cluster_generator,
+    fee_generator,
+    total_mass_generator,
+    wealth_generator,
+    ClusterConservationProof,
     // Phase 2/3: ZK fee verification types
-    CommittedFeeProof, WealthLinkageProof,
-    CommittedFeeProver, CommittedFeeVerifier,
-    CommittedFeeProofBuilder, CommittedFeeProofVerifier,
+    CommittedFeeProof,
+    CommittedFeeProofBuilder,
+    CommittedFeeProofVerifier,
+    CommittedFeeProver,
+    CommittedFeeVerifier,
+    CommittedTagMass,
+    CommittedTagVector,
+    CommittedTagVectorSecret,
+    LinearRelationProof,
+    RangeProof,
+    SchnorrProof,
+    SegmentFeeProof,
+    SegmentOrProof,
+    TagConservationProof,
+    TagConservationProver,
+    TagConservationVerifier,
+    TagMassSecret,
+    WealthLinkageProof,
 };
 pub use extended_signature::{
     ExtendedSignatureBuilder, ExtendedSignatureVerifier, ExtendedTxSignature, PseudoTagOutput,

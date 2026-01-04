@@ -7,12 +7,14 @@
 //! - Address formatting
 //! - Error handling
 
-use botho_wallet::discovery::NodeDiscovery;
-use botho_wallet::keys::{validate_mnemonic, WalletKeys};
-use botho_wallet::storage::EncryptedWallet;
-use botho_wallet::transaction::{
-    format_amount, parse_amount, OwnedUtxo, Transaction, TransactionBuilder, TxInput, TxOutput,
-    MIN_FEE, PICOCREDITS_PER_CAD,
+use botho_wallet::{
+    discovery::NodeDiscovery,
+    keys::{validate_mnemonic, WalletKeys},
+    storage::EncryptedWallet,
+    transaction::{
+        format_amount, parse_amount, OwnedUtxo, Transaction, TransactionBuilder, TxInput, TxOutput,
+        MIN_FEE, PICOCREDITS_PER_CAD,
+    },
 };
 use tempfile::TempDir;
 
@@ -77,10 +79,7 @@ mod wallet_lifecycle {
 
         // Keys should be identical
         assert_eq!(keys1.mnemonic_phrase(), keys2.mnemonic_phrase());
-        assert_eq!(
-            keys1.view_public_key_bytes(),
-            keys2.view_public_key_bytes()
-        );
+        assert_eq!(keys1.view_public_key_bytes(), keys2.view_public_key_bytes());
         assert_eq!(
             keys1.spend_public_key_bytes(),
             keys2.spend_public_key_bytes()
@@ -347,11 +346,8 @@ mod utxo_selection {
         let builder = TransactionBuilder::new(keys.clone(), utxos, 150);
 
         // Try to send 10 CAD - should fail
-        let result = builder.build_transfer(
-            &keys.public_address(),
-            10 * PICOCREDITS_PER_CAD,
-            MIN_FEE,
-        );
+        let result =
+            builder.build_transfer(&keys.public_address(), 10 * PICOCREDITS_PER_CAD, MIN_FEE);
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -365,8 +361,7 @@ mod utxo_selection {
 
         let builder = TransactionBuilder::new(keys.clone(), utxos, 150);
 
-        let result =
-            builder.build_transfer(&keys.public_address(), PICOCREDITS_PER_CAD, MIN_FEE);
+        let result = builder.build_transfer(&keys.public_address(), PICOCREDITS_PER_CAD, MIN_FEE);
 
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("No UTXOs"));

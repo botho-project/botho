@@ -6,11 +6,15 @@
 //! attempts to create many connections from the same IP address to
 //! overwhelm the network or gain disproportionate influence.
 
-use std::collections::HashMap;
-use std::net::IpAddr;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
 use parking_lot::RwLock;
+use std::{
+    collections::HashMap,
+    net::IpAddr,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+};
 use tracing::{debug, warn};
 
 /// Default maximum connections allowed per IP address.

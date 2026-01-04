@@ -1,8 +1,8 @@
 // Copyright (c) 2018-2022 The Botho Foundation
 
+use bth_crypto_digestible::Digestible;
 use core::{fmt, hash::Hash, ops::Deref, str::FromStr};
 use displaydoc::Display;
-use bth_crypto_digestible::Digestible;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};

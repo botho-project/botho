@@ -86,8 +86,8 @@ impl MlKem768PublicKey {
         type EkEncoded = Encoded<<MlKem768 as KemCore>::EncapsulationKey>;
 
         // Parse the public key bytes into Encoded, then into EncapsulationKey
-        let ek_encoded: EkEncoded = EkEncoded::try_from(&self.bytes[..])
-            .expect("invalid encapsulation key size");
+        let ek_encoded: EkEncoded =
+            EkEncoded::try_from(&self.bytes[..]).expect("invalid encapsulation key size");
         let ek = <MlKem768 as KemCore>::EncapsulationKey::from_bytes(&ek_encoded);
 
         // Encapsulate with random
@@ -266,14 +266,18 @@ impl MlKem768KeyPair {
     }
 
     /// Decapsulate a ciphertext to recover the shared secret
-    pub fn decapsulate(&self, ciphertext: &MlKem768Ciphertext) -> Result<MlKem768SharedSecret, PqError> {
+    pub fn decapsulate(
+        &self,
+        ciphertext: &MlKem768Ciphertext,
+    ) -> Result<MlKem768SharedSecret, PqError> {
         use ml_kem::kem::Decapsulate;
 
         // Type aliases for encoded types
         type DkEncoded = Encoded<<MlKem768 as KemCore>::DecapsulationKey>;
         type CtEncoded = ml_kem::Ciphertext<MlKem768>;
 
-        // Parse the secret key (decapsulation key) bytes into Encoded, then into DecapsulationKey
+        // Parse the secret key (decapsulation key) bytes into Encoded, then into
+        // DecapsulationKey
         let dk_encoded: DkEncoded = DkEncoded::try_from(&self.secret_key.bytes[..])
             .map_err(|_| PqError::InvalidSecretKey("invalid decapsulation key size".into()))?;
         let dk = <MlKem768 as KemCore>::DecapsulationKey::from_bytes(&dk_encoded);
@@ -283,7 +287,8 @@ impl MlKem768KeyPair {
             .map_err(|_| PqError::InvalidCiphertext("invalid ciphertext size".into()))?;
 
         // Decapsulate - returns Result<SharedSecret, ()> in newer ml-kem
-        let ss = dk.decapsulate(&ct)
+        let ss = dk
+            .decapsulate(&ct)
             .map_err(|_| PqError::DecapsulationFailed)?;
 
         let mut ss_bytes = [0u8; ML_KEM_768_SHARED_SECRET_BYTES];
@@ -309,8 +314,14 @@ mod tests {
     #[test]
     fn test_key_sizes() {
         let keypair = MlKem768KeyPair::generate();
-        assert_eq!(keypair.public_key().as_bytes().len(), ML_KEM_768_PUBLIC_KEY_BYTES);
-        assert_eq!(keypair.secret_key().as_bytes().len(), ML_KEM_768_SECRET_KEY_BYTES);
+        assert_eq!(
+            keypair.public_key().as_bytes().len(),
+            ML_KEM_768_PUBLIC_KEY_BYTES
+        );
+        assert_eq!(
+            keypair.secret_key().as_bytes().len(),
+            ML_KEM_768_SECRET_KEY_BYTES
+        );
     }
 
     #[test]
@@ -319,7 +330,10 @@ mod tests {
 
         let (ciphertext, shared_secret) = keypair.public_key().encapsulate();
         assert_eq!(ciphertext.as_bytes().len(), ML_KEM_768_CIPHERTEXT_BYTES);
-        assert_eq!(shared_secret.as_bytes().len(), ML_KEM_768_SHARED_SECRET_BYTES);
+        assert_eq!(
+            shared_secret.as_bytes().len(),
+            ML_KEM_768_SHARED_SECRET_BYTES
+        );
 
         let decapsulated = keypair.decapsulate(&ciphertext).unwrap();
         assert_eq!(shared_secret.as_bytes(), decapsulated.as_bytes());
@@ -333,12 +347,21 @@ mod tests {
         let keypair2 = MlKem768KeyPair::from_seed(&seed);
 
         // Same seed should produce same keys
-        assert_eq!(keypair1.public_key().as_bytes(), keypair2.public_key().as_bytes());
-        assert_eq!(keypair1.secret_key().as_bytes(), keypair2.secret_key().as_bytes());
+        assert_eq!(
+            keypair1.public_key().as_bytes(),
+            keypair2.public_key().as_bytes()
+        );
+        assert_eq!(
+            keypair1.secret_key().as_bytes(),
+            keypair2.secret_key().as_bytes()
+        );
 
         // Different seed should produce different keys
         let keypair3 = MlKem768KeyPair::from_seed(&[43u8; 32]);
-        assert_ne!(keypair1.public_key().as_bytes(), keypair3.public_key().as_bytes());
+        assert_ne!(
+            keypair1.public_key().as_bytes(),
+            keypair3.public_key().as_bytes()
+        );
     }
 
     #[test]

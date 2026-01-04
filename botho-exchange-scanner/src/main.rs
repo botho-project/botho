@@ -90,18 +90,12 @@ async fn main() -> Result<()> {
     };
 
     match cli.command {
-        Commands::Scan { from_height, once } => {
-            run_scanner(&config, from_height, once).await
-        }
-        Commands::DeriveAddress { index } => {
-            derive_address(&config, index)
-        }
+        Commands::Scan { from_height, once } => run_scanner(&config, from_height, once).await,
+        Commands::DeriveAddress { index } => derive_address(&config, index),
         Commands::DeriveAddressBatch { start, count } => {
             derive_address_batch(&config, start, count)
         }
-        Commands::Status => {
-            show_status(&config)
-        }
+        Commands::Status => show_status(&config),
         Commands::ValidateConfig => {
             println!("Configuration is valid.");
             println!("  RPC endpoints: {:?}", config.rpc_endpoints);
@@ -130,11 +124,7 @@ fn init_logging(level: &str) -> Result<()> {
     Ok(())
 }
 
-async fn run_scanner(
-    config: &ScannerConfig,
-    from_height: Option<u64>,
-    once: bool,
-) -> Result<()> {
+async fn run_scanner(config: &ScannerConfig, from_height: Option<u64>, once: bool) -> Result<()> {
     tracing::info!("Starting exchange scanner");
 
     // Initialize scanner
@@ -319,10 +309,7 @@ async fn get_outputs(
     let mut outputs = Vec::new();
 
     for block in blocks {
-        let block_height = block
-            .get("height")
-            .and_then(|h| h.as_u64())
-            .unwrap_or(0);
+        let block_height = block.get("height").and_then(|h| h.as_u64()).unwrap_or(0);
 
         let block_outputs = block
             .get("outputs")
@@ -384,11 +371,8 @@ fn parse_amount_le(hex_str: &str) -> Option<u64> {
 }
 
 fn derive_address(config: &ScannerConfig, index: u64) -> Result<()> {
-    let derived = derive_subaddress_from_hex(
-        &config.view_private_key,
-        &config.spend_public_key,
-        index,
-    )?;
+    let derived =
+        derive_subaddress_from_hex(&config.view_private_key, &config.spend_public_key, index)?;
 
     println!("Subaddress {}:", index);
     println!("  Address: {}", derived.address_string);
@@ -399,16 +383,16 @@ fn derive_address(config: &ScannerConfig, index: u64) -> Result<()> {
 }
 
 fn derive_address_batch(config: &ScannerConfig, start: u64, count: u64) -> Result<()> {
-    println!("Deriving {} subaddresses starting from index {}:", count, start);
+    println!(
+        "Deriving {} subaddresses starting from index {}:",
+        count, start
+    );
     println!();
 
     for i in 0..count {
         let index = start + i;
-        let derived = derive_subaddress_from_hex(
-            &config.view_private_key,
-            &config.spend_public_key,
-            index,
-        )?;
+        let derived =
+            derive_subaddress_from_hex(&config.view_private_key, &config.spend_public_key, index)?;
 
         println!("{}: {}", index, derived.address_string);
     }

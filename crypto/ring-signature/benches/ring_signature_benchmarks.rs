@@ -2,16 +2,16 @@
 //!
 //! Run with: cargo bench -p bth-crypto-ring-signature
 //!
-//! These benchmarks measure MLSAG sign/verify performance with different ring sizes.
+//! These benchmarks measure MLSAG sign/verify performance with different ring
+//! sizes.
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use bth_crypto_keys::{CompressedRistrettoPublic, RistrettoPrivate, RistrettoPublic};
 use bth_crypto_ring_signature::{
     generators, CompressedCommitment, PedersenGens, ReducedTxOut, RingMLSAG, Scalar,
 };
-use bth_crypto_keys::{CompressedRistrettoPublic, RistrettoPrivate, RistrettoPublic};
 use bth_util_from_random::FromRandom;
-use rand::{CryptoRng, RngCore, SeedableRng};
-use rand::rngs::StdRng;
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use rand::{rngs::StdRng, CryptoRng, RngCore, SeedableRng};
 
 /// Parameters for creating a test MLSAG
 struct TestRingParams {
@@ -61,7 +61,9 @@ impl TestRingParams {
 
         let real_index = num_mixins; // Put real input at the end
         ring.push(ReducedTxOut {
-            target_key: CompressedRistrettoPublic::from(RistrettoPublic::from(&onetime_private_key)),
+            target_key: CompressedRistrettoPublic::from(RistrettoPublic::from(
+                &onetime_private_key,
+            )),
             public_key: CompressedRistrettoPublic::from_random(&mut rng),
             commitment,
         });
@@ -89,7 +91,8 @@ impl TestRingParams {
             &self.pseudo_output_blinding,
             &self.generator,
             rng,
-        ).expect("signing should succeed")
+        )
+        .expect("signing should succeed")
     }
 
     fn output_commitment(&self) -> CompressedCommitment {
@@ -111,9 +114,7 @@ fn bench_mlsag_sign(c: &mut Criterion) {
             &ring_size,
             |b, _| {
                 let mut rng = StdRng::seed_from_u64(12345);
-                b.iter(|| {
-                    black_box(params.sign(&mut rng))
-                })
+                b.iter(|| black_box(params.sign(&mut rng)))
             },
         );
     }
@@ -178,7 +179,8 @@ fn bench_mlsag_verify_batch_serial(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark batch verification using mlsag_verify_batch (parallel when feature enabled)
+/// Benchmark batch verification using mlsag_verify_batch (parallel when feature
+/// enabled)
 fn bench_mlsag_verify_batch_api(c: &mut Criterion) {
     use bth_crypto_ring_signature::mlsag_verify_batch;
 
@@ -204,9 +206,15 @@ fn bench_mlsag_verify_batch_api(c: &mut Criterion) {
             &batch_size,
             |b, _| {
                 b.iter(|| {
-                    let batch_items: Vec<_> = items.iter()
+                    let batch_items: Vec<_> = items
+                        .iter()
                         .map(|(params, sig, output)| {
-                            (params.message.as_slice(), params.ring.as_slice(), output, sig)
+                            (
+                                params.message.as_slice(),
+                                params.ring.as_slice(),
+                                output,
+                                sig,
+                            )
                         })
                         .collect();
                     black_box(mlsag_verify_batch(batch_items))

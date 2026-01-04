@@ -26,21 +26,21 @@ export interface LegacyPrivacyBadgeProps {
 const cryptoConfig = {
   clsag: {
     icon: Lock,
-    label: 'Classical',
-    fullLabel: 'Classical (CLSAG)',
+    label: 'Private',
+    fullLabel: 'Private (CLSAG)',
     color: 'text-[#3B82F6]',
     bg: 'bg-[#3B82F6]/10',
     border: 'border-[#3B82F6]/30',
-    tooltip: 'Uses CLSAG ring signatures for transaction privacy',
+    tooltip: 'Uses CLSAG ring signatures to hide sender identity',
   },
-  lion: {
+  mldsa: {
     icon: Shield,
-    label: 'Quantum-Safe',
-    fullLabel: 'Quantum-Safe (LION)',
+    label: 'Minting',
+    fullLabel: 'Minting (ML-DSA)',
     color: 'text-[#8B5CF6]',
     bg: 'bg-[#8B5CF6]/10',
     border: 'border-[#8B5CF6]/30',
-    tooltip: 'Uses LION lattice-based signatures for post-quantum security',
+    tooltip: 'Uses ML-DSA post-quantum signatures for minting',
   },
   hybrid: {
     icon: Layers,
@@ -49,14 +49,14 @@ const cryptoConfig = {
     color: 'text-[#6366F1]',
     bg: 'bg-gradient-to-r from-[#3B82F6]/10 to-[#8B5CF6]/10',
     border: 'border-[#6366F1]/30',
-    tooltip: 'Uses both classical and quantum-safe cryptography',
+    tooltip: 'Uses both CLSAG and ML-DSA signatures',
   },
 }
 
 // Legacy config for backward compatibility
 const legacyConfig = {
-  standard: cryptoConfig.clsag,
-  private: cryptoConfig.lion,
+  standard: cryptoConfig.mldsa,
+  private: cryptoConfig.clsag,
 }
 
 /**

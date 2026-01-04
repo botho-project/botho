@@ -11,7 +11,8 @@
 //!
 //! # Properties
 //!
-//! - **Rapid wash trading**: Blocked (new outputs are too young to trigger decay)
+//! - **Rapid wash trading**: Blocked (new outputs are too young to trigger
+//!   decay)
 //! - **Patient wash trading**: Bounded (max 1 decay per `min_age` blocks)
 //! - **No passive decay**: Correct (only decays on spend)
 //! - **Privacy**: No additional metadata leaked!
@@ -100,11 +101,7 @@ pub struct RingDecayInfo {
 
 impl RingDecayInfo {
     /// Create decay info for a ring.
-    pub fn new(
-        ring_creation_blocks: &[u64],
-        current_block: u64,
-        config: &AgeDecayConfig,
-    ) -> Self {
+    pub fn new(ring_creation_blocks: &[u64], current_block: u64, config: &AgeDecayConfig) -> Self {
         let member_eligibility = ring_creation_blocks
             .iter()
             .map(|&creation_block| config.is_eligible(creation_block, current_block))
@@ -208,7 +205,9 @@ mod tests {
         let actual = tags.get(cluster);
         assert!(
             (actual as i64 - expected as i64).abs() < 5000,
-            "Expected ~{}, got {}", expected, actual
+            "Expected ~{}, got {}",
+            expected,
+            actual
         );
     }
 
@@ -226,7 +225,8 @@ mod tests {
         let min_remaining = config.min_tag_remaining_after_blocks(60_480);
         assert!(
             (min_remaining - 0.0135).abs() < 0.01,
-            "Expected ~1.35%, got {:.2}%", min_remaining * 100.0
+            "Expected ~1.35%, got {:.2}%",
+            min_remaining * 100.0
         );
     }
 
@@ -237,10 +237,10 @@ mod tests {
 
         // Ring with mixed ages
         let creation_blocks = vec![
-            9_500,  // 500 blocks old - not eligible
-            8_000,  // 2000 blocks old - eligible
-            9_900,  // 100 blocks old - not eligible
-            5_000,  // 5000 blocks old - eligible
+            9_500, // 500 blocks old - not eligible
+            8_000, // 2000 blocks old - eligible
+            9_900, // 100 blocks old - not eligible
+            5_000, // 5000 blocks old - eligible
         ];
 
         let info = RingDecayInfo::new(&creation_blocks, current_block, &config);

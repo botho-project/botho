@@ -1,7 +1,7 @@
 // Copyright (c) 2024 Botho Foundation
 
-//! Transaction types for value transfers with CryptoNote-style stealth addresses
-//! and ring signatures for sender privacy.
+//! Transaction types for value transfers with CryptoNote-style stealth
+//! addresses and ring signatures for sender privacy.
 //!
 //! # Privacy Model
 //!
@@ -15,7 +15,8 @@
 //!
 //! ## Sender Privacy (All Transactions)
 //! - All transactions use CLSAG ring signatures with 20 decoys
-//! - Key images prevent double-spending without revealing which output was spent
+//! - Key images prevent double-spending without revealing which output was
+//!   spent
 //! - Classical cryptography (compact ~700 bytes/input)
 //!
 //! # Stealth Address Protocol
@@ -48,18 +49,23 @@
 //! - Check key image hasn't been used before (prevents double-spend)
 //! - Cannot determine which ring member is the real input
 
-use aes::cipher::{KeyIvInit, StreamCipher};
-use aes::Aes256;
+use aes::{
+    cipher::{KeyIvInit, StreamCipher},
+    Aes256,
+};
 use bth_account_keys::{AccountKey, PublicAddress};
-use bth_transaction_types::ClusterTagVector;
-use bth_crypto_keys::{CompressedRistrettoPublic, RistrettoPrivate, RistrettoPublic, RistrettoSignature};
+use bth_crypto_keys::{
+    CompressedRistrettoPublic, RistrettoPrivate, RistrettoPublic, RistrettoSignature,
+};
 use bth_crypto_ring_signature::{
+    generators,
     onetime_keys::{
         create_shared_secret, create_tx_out_public_key, create_tx_out_target_key,
         recover_onetime_private_key, recover_public_subaddress_spend_key,
     },
-    generators, Clsag, CompressedCommitment, CurveScalar, KeyImage, ReducedTxOut, Scalar,
+    Clsag, CompressedCommitment, CurveScalar, KeyImage, ReducedTxOut, Scalar,
 };
+use bth_transaction_types::ClusterTagVector;
 use bth_util_from_random::FromRandom;
 use ctr::Ctr64BE;
 use hkdf::Hkdf;
@@ -68,7 +74,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256, Sha512};
 use std::collections::HashSet;
 
-/// Minimum transaction fee in picocredits (0.0001 credits = 100_000_000 picocredits)
+/// Minimum transaction fee in picocredits (0.0001 credits = 100_000_000
+/// picocredits)
 pub const MIN_TX_FEE: u64 = 100_000_000;
 
 // ============================================================================
@@ -93,7 +100,8 @@ pub enum TransactionStructureError {
     FeeBelowMinimum,
     /// Ring size is below the minimum required for privacy
     InsufficientRingSize,
-    /// Two or more inputs use the same key image (within-tx double-spend attempt)
+    /// Two or more inputs use the same key image (within-tx double-spend
+    /// attempt)
     DuplicateKeyImage,
 }
 
@@ -147,7 +155,9 @@ impl EncryptedMemo {
         if bytes.len() != ENCRYPTED_MEMO_SIZE {
             return None;
         }
-        Some(Self { ciphertext: bytes.to_vec() })
+        Some(Self {
+            ciphertext: bytes.to_vec(),
+        })
     }
 
     /// Get the raw bytes
@@ -186,7 +196,9 @@ pub struct MemoPayload {
 impl MemoPayload {
     /// Create an empty/unused memo
     pub fn unused() -> Self {
-        Self { data: [0u8; ENCRYPTED_MEMO_SIZE] }
+        Self {
+            data: [0u8; ENCRYPTED_MEMO_SIZE],
+        }
     }
 
     /// Create a destination memo with a text message (up to 64 bytes).
@@ -212,7 +224,9 @@ impl MemoPayload {
 
     /// Get the memo data (remaining 64 bytes)
     pub fn memo_data(&self) -> &[u8; 64] {
-        self.data[2..66].try_into().expect("slice is exactly 64 bytes")
+        self.data[2..66]
+            .try_into()
+            .expect("slice is exactly 64 bytes")
     }
 
     /// Check if this is an unused/empty memo
@@ -236,7 +250,9 @@ impl MemoPayload {
     pub fn encrypt(&self, shared_secret: &RistrettoPublic) -> EncryptedMemo {
         let mut ciphertext = self.data;
         apply_memo_keystream(&mut ciphertext, shared_secret);
-        EncryptedMemo { ciphertext: ciphertext.to_vec() }
+        EncryptedMemo {
+            ciphertext: ciphertext.to_vec(),
+        }
     }
 }
 
@@ -250,7 +266,8 @@ fn apply_memo_keystream(data: &mut [u8; ENCRYPTED_MEMO_SIZE], shared_secret: &Ri
 
     // Get 48 bytes: 32 for AES key + 16 for nonce
     let mut okm = [0u8; 48];
-    hkdf.expand(b"", &mut okm).expect("48 bytes is valid for SHA512");
+    hkdf.expand(b"", &mut okm)
+        .expect("48 bytes is valid for SHA512");
 
     let key: [u8; 32] = okm[0..32].try_into().unwrap();
     let nonce: [u8; 16] = okm[32..48].try_into().unwrap();
@@ -270,8 +287,10 @@ fn apply_memo_keystream(data: &mut [u8; ENCRYPTED_MEMO_SIZE], shared_secret: &Ri
 /// # Stealth Addressing
 ///
 /// Uses CryptoNote-style one-time keys for recipient privacy:
-/// - `target_key`: One-time public key that only the recipient can identify and spend
-/// - `public_key`: Ephemeral DH public key for recipient to derive shared secret
+/// - `target_key`: One-time public key that only the recipient can identify and
+///   spend
+/// - `public_key`: Ephemeral DH public key for recipient to derive shared
+///   secret
 /// - `e_memo`: Optional encrypted memo (66 bytes) readable only by recipient
 /// - `cluster_tags`: Cluster ancestry for progressive fee tracking
 ///
@@ -283,7 +302,8 @@ pub struct TxOutput {
     pub amount: u64,
 
     /// One-time target key: `Hs(r * C) * G + D`
-    /// This is the stealth spend public key that only the recipient can identify.
+    /// This is the stealth spend public key that only the recipient can
+    /// identify.
     pub target_key: [u8; 32],
 
     /// Ephemeral public key: `r * D`
@@ -297,8 +317,9 @@ pub struct TxOutput {
     pub e_memo: Option<EncryptedMemo>,
 
     /// Cluster ancestry tags for progressive fee computation.
-    /// Tracks what fraction of this output's value traces to each cluster origin.
-    /// Used by the cluster-tax system to apply higher fees to concentrated wealth.
+    /// Tracks what fraction of this output's value traces to each cluster
+    /// origin. Used by the cluster-tax system to apply higher fees to
+    /// concentrated wealth.
     #[serde(default)]
     pub cluster_tags: ClusterTagVector,
 }
@@ -320,7 +341,11 @@ impl TxOutput {
     ///
     /// The memo is encrypted using a shared secret derived from the ephemeral
     /// key, so only the recipient can read it.
-    pub fn new_with_memo(amount: u64, recipient: &PublicAddress, memo: Option<MemoPayload>) -> Self {
+    pub fn new_with_memo(
+        amount: u64,
+        recipient: &PublicAddress,
+        memo: Option<MemoPayload>,
+    ) -> Self {
         // Generate random ephemeral private key
         let tx_private_key = RistrettoPrivate::from_random(&mut OsRng);
 
@@ -506,7 +531,8 @@ impl TxInput {
     /// Verify the signature for this input.
     ///
     /// # Arguments
-    /// * `signing_hash` - The transaction's signing hash (from `Transaction::signing_hash()`)
+    /// * `signing_hash` - The transaction's signing hash (from
+    ///   `Transaction::signing_hash()`)
     /// * `target_key` - The one-time public key from the UTXO being spent
     ///
     /// # Returns
@@ -560,7 +586,8 @@ pub struct RingMember {
     /// Ephemeral public key from the output (for DH)
     pub public_key: [u8; 32],
 
-    /// Amount commitment (for RingCT - trivial commitment if amounts are public)
+    /// Amount commitment (for RingCT - trivial commitment if amounts are
+    /// public)
     pub commitment: [u8; 32],
 }
 
@@ -617,10 +644,10 @@ pub struct ClsagRingInput {
     pub commitment_key_image: [u8; 32],
 
     /// CLSAG ring signature proving ownership of one ring member.
-    /// Serialized as: c_zero (32) || responses (32 * ring_size) || key_image (32) || commitment_key_image (32)
+    /// Serialized as: c_zero (32) || responses (32 * ring_size) || key_image
+    /// (32) || commitment_key_image (32)
     pub clsag_signature: Vec<u8>,
 }
-
 
 impl ClsagRingInput {
     /// Create a new CLSAG ring signature input.
@@ -733,8 +760,7 @@ impl ClsagRingInput {
 
         // Create output commitment (trivial - zero blinding)
         let generator = generators(0);
-        let output_commitment =
-            generator.commit(Scalar::from(total_output_amount), Scalar::ZERO);
+        let output_commitment = generator.commit(Scalar::from(total_output_amount), Scalar::ZERO);
 
         // Verify the CLSAG
         clsag
@@ -805,7 +831,6 @@ impl ClsagRingInput {
         })
     }
 }
-
 
 // ============================================================================
 // Transaction Inputs
@@ -921,7 +946,9 @@ impl Transaction {
 
         let input_size = self.inputs.len() * CLSAG_INPUT_SIZE;
 
-        let output_size: usize = self.outputs.iter()
+        let output_size: usize = self
+            .outputs
+            .iter()
             .map(|o| OUTPUT_SIZE + if o.has_memo() { OUTPUT_MEMO_SIZE } else { 0 })
             .sum();
 
@@ -950,8 +977,9 @@ impl Transaction {
 
     /// Compute the signing hash (excludes signatures for deterministic signing)
     ///
-    /// This hash is used as the message for signing/verifying transaction inputs.
-    /// It includes all transaction data except the signatures themselves.
+    /// This hash is used as the message for signing/verifying transaction
+    /// inputs. It includes all transaction data except the signatures
+    /// themselves.
     pub fn signing_hash(&self) -> [u8; 32] {
         let mut hasher = Sha256::new();
 
@@ -975,7 +1003,8 @@ impl Transaction {
         self.outputs.iter().map(|o| o.amount).sum()
     }
 
-    /// Check basic transaction validity (structure only, not signatures or UTXO existence)
+    /// Check basic transaction validity (structure only, not signatures or UTXO
+    /// existence)
     pub fn is_valid_structure(&self) -> Result<(), TransactionStructureError> {
         if self.inputs.is_empty() {
             return Err(TransactionStructureError::NoInputs);
@@ -1164,12 +1193,7 @@ mod tests {
 
     #[test]
     fn test_transaction_is_valid_structure_no_outputs() {
-        let tx = Transaction::new_clsag(
-            vec![test_clsag_input(1)],
-            vec![],
-            MIN_TX_FEE,
-            1,
-        );
+        let tx = Transaction::new_clsag(vec![test_clsag_input(1)], vec![], MIN_TX_FEE, 1);
         assert!(tx.is_valid_structure().is_err());
     }
 
@@ -1271,5 +1295,6 @@ mod tests {
         );
     }
 
-    // Ring signature verification tests require actual crypto keys - see wallet tests
+    // Ring signature verification tests require actual crypto keys - see wallet
+    // tests
 }

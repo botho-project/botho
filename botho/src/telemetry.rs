@@ -2,9 +2,9 @@
 
 //! OpenTelemetry tracing configuration for distributed consensus debugging.
 //!
-//! This module provides optional OTLP (OpenTelemetry Protocol) export for tracing
-//! consensus messages across nodes. When enabled, traces are exported to a
-//! collector (such as Jaeger) for visualization and debugging.
+//! This module provides optional OTLP (OpenTelemetry Protocol) export for
+//! tracing consensus messages across nodes. When enabled, traces are exported
+//! to a collector (such as Jaeger) for visualization and debugging.
 //!
 //! # Configuration
 //!
@@ -19,13 +19,13 @@
 //! ```
 
 use anyhow::{Context, Result};
+use opentelemetry::KeyValue;
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::{
     runtime,
     trace::{RandomIdGenerator, Sampler, Tracer},
     Resource,
 };
-use opentelemetry::KeyValue;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 
 /// Telemetry configuration
@@ -97,9 +97,7 @@ pub fn init_tracing(config: &TelemetryConfig, verbose: bool) -> Result<Option<Te
 
         Ok(Some(TelemetryGuard))
     } else {
-        tracing_subscriber::registry()
-            .with(fmt_layer)
-            .init();
+        tracing_subscriber::registry().with(fmt_layer).init();
 
         Ok(None)
     }

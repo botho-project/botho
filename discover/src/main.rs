@@ -1,13 +1,13 @@
 // Copyright (c) 2024 Botho Foundation
 
-//! CLI tool for discovering Botho network topology and generating configurations.
+//! CLI tool for discovering Botho network topology and generating
+//! configurations.
 //!
 //! This tool connects to the gossip network, discovers peers, and helps users
-//! configure their nodes by suggesting quorum sets based on observed trust patterns.
+//! configure their nodes by suggesting quorum sets based on observed trust
+//! patterns.
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
-use libp2p::Multiaddr;
 use bth_common::ResponderId;
 use bth_consensus_scp_types::QuorumSet;
 use bth_gossip::{
@@ -15,11 +15,9 @@ use bth_gossip::{
     QuorumStrategy, TopologyAnalyzer,
 };
 use bth_util_from_random::FromRandom;
-use std::{
-    path::PathBuf,
-    str::FromStr,
-    time::Duration,
-};
+use clap::{Parser, Subcommand};
+use libp2p::Multiaddr;
+use std::{path::PathBuf, str::FromStr, time::Duration};
 use tokio::time::timeout;
 use tracing::{info, warn};
 
@@ -85,7 +83,8 @@ enum Commands {
         #[arg(short, long, default_value = "network.toml")]
         output: PathBuf,
 
-        /// Strategy for quorum set: top-n, hierarchical, conservative, aggressive
+        /// Strategy for quorum set: top-n, hierarchical, conservative,
+        /// aggressive
         #[arg(short, long, default_value = "top-n")]
         strategy: String,
 
@@ -136,9 +135,10 @@ async fn main() -> Result<()> {
         .build();
 
     match cli.command {
-        Commands::Peers { detailed, capability } => {
-            run_peers_command(config, cli.timeout, detailed, capability).await
-        }
+        Commands::Peers {
+            detailed,
+            capability,
+        } => run_peers_command(config, cli.timeout, detailed, capability).await,
         Commands::Stats => run_stats_command(config, cli.timeout).await,
         Commands::Suggest {
             strategy,
@@ -150,8 +150,12 @@ async fn main() -> Result<()> {
             strategy,
             format,
         } => run_generate_command(config, cli.timeout, output, &strategy, &format).await,
-        Commands::Validate { config: cfg_path } => run_validate_command(config, cli.timeout, cfg_path).await,
-        Commands::Trust { node, clusters } => run_trust_command(config, cli.timeout, node, clusters).await,
+        Commands::Validate { config: cfg_path } => {
+            run_validate_command(config, cli.timeout, cfg_path).await
+        }
+        Commands::Trust { node, clusters } => {
+            run_trust_command(config, cli.timeout, node, clusters).await
+        }
         Commands::Interactive => run_interactive(config).await,
     }
 }
@@ -167,7 +171,9 @@ async fn discover_network(
         public_key: bth_crypto_keys::Ed25519Public::default(),
     };
 
-    let signing_key = std::sync::Arc::new(bth_crypto_keys::Ed25519Pair::from_random(&mut rand::thread_rng()));
+    let signing_key = std::sync::Arc::new(bth_crypto_keys::Ed25519Pair::from_random(
+        &mut rand::thread_rng(),
+    ));
 
     let mut service = GossipService::new(
         node_id,
@@ -190,9 +196,7 @@ async fn discover_network(
     let start = std::time::Instant::now();
 
     while start.elapsed() < discovery_timeout {
-        if let Ok(Some(event)) =
-            timeout(Duration::from_millis(500), service.next_event()).await
-        {
+        if let Ok(Some(event)) = timeout(Duration::from_millis(500), service.next_event()).await {
             match event {
                 GossipEvent::Bootstrapped => {
                     info!("Connected to network");
@@ -278,11 +282,7 @@ async fn run_peers_command(
             .flatten()
             .collect();
 
-            println!(
-                "  {} [{}]",
-                ann.node_id.responder_id,
-                caps.join(", ")
-            );
+            println!("  {} [{}]", ann.node_id.responder_id, caps.join(", "));
         }
     }
 
@@ -446,20 +446,18 @@ async fn run_validate_command(
 
     // Read and parse the config file
     let content = std::fs::read_to_string(&cfg_path)?;
-    let network_config: NetworkConfigOutput = if cfg_path.extension().map(|e| e == "json").unwrap_or(false) {
-        serde_json::from_str(&content)?
-    } else {
-        toml::from_str(&content)?
-    };
+    let network_config: NetworkConfigOutput =
+        if cfg_path.extension().map(|e| e == "json").unwrap_or(false) {
+            serde_json::from_str(&content)?
+        } else {
+            toml::from_str(&content)?
+        };
 
     let validation = analyzer.validate_quorum_set(&network_config.quorum_set);
 
     println!("\nQuorum Set Validation:");
     println!("======================");
-    println!(
-        "Valid: {}",
-        if validation.is_valid { "Yes" } else { "No" }
-    );
+    println!("Valid: {}", if validation.is_valid { "Yes" } else { "No" });
     println!("Threshold: {:.1}%", validation.threshold_pct);
 
     if !validation.warnings.is_empty() {
@@ -496,8 +494,8 @@ async fn run_trust_command(
     let analyzer = TopologyAnalyzer::new(store.clone());
 
     if let Some(node_str) = node {
-        let responder_id = ResponderId::from_str(&node_str)
-            .context("Invalid node format. Use host:port")?;
+        let responder_id =
+            ResponderId::from_str(&node_str).context("Invalid node format. Use host:port")?;
 
         let trusters = store.get_trusters(&responder_id);
         println!("\nNodes that trust {}:", node_str);

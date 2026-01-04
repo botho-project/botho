@@ -20,16 +20,15 @@ mod common;
 use std::{collections::HashMap, thread, time::Duration};
 
 use bth_account_keys::PublicAddress;
-use serial_test::serial;
 use bth_cluster_tax::{FeeConfig, TransactionType, TAG_WEIGHT_SCALE};
 use bth_transaction_types::{ClusterId, ClusterTagVector};
 use rand::{rngs::OsRng, seq::SliceRandom};
+use serial_test::serial;
 
 use botho::{
     mempool::{Mempool, MempoolError},
     transaction::{
-        ClsagRingInput, RingMember, Transaction, TxOutput, MIN_TX_FEE,
-        PICOCREDITS_PER_CREDIT,
+        ClsagRingInput, RingMember, Transaction, TxOutput, MIN_TX_FEE, PICOCREDITS_PER_CREDIT,
     },
 };
 
@@ -433,12 +432,8 @@ fn test_fee_rejection_wealthy_sender() {
     let small_holder_fee_nano =
         fee_config.compute_fee(TransactionType::Hidden, tx_size_estimate, 0, 0);
     let wealthy_amount = 1_000_000 * PICOCREDITS_PER_CREDIT; // 1M BTH wealth
-    let wealthy_fee_nano = fee_config.compute_fee(
-        TransactionType::Hidden,
-        tx_size_estimate,
-        wealthy_amount,
-        0,
-    );
+    let wealthy_fee_nano =
+        fee_config.compute_fee(TransactionType::Hidden, tx_size_estimate, wealthy_amount, 0);
 
     println!("Fee comparison (both in nanoBTH):");
     println!("  Small holder fee: {} nanoBTH", small_holder_fee_nano);
@@ -712,12 +707,8 @@ fn test_memo_fees() {
     println!("{:>10} | {:>15} | {:>15}", 0, base_fee, 0);
 
     for num_memos in 1..=5 {
-        let fee = fee_config.compute_fee(
-            TransactionType::Hidden,
-            tx_size,
-            cluster_wealth,
-            num_memos,
-        );
+        let fee =
+            fee_config.compute_fee(TransactionType::Hidden, tx_size, cluster_wealth, num_memos);
         let memo_cost = fee - base_fee;
 
         println!("{:>10} | {:>15} | {:>15}", num_memos, fee, memo_cost);
@@ -751,8 +742,7 @@ fn test_combined_cluster_and_congestion() {
 
     // Calculate wealthy sender fee (no congestion)
     let wealthy_cluster = 100_000_000u64;
-    let wealthy_fee =
-        fee_config.compute_fee(TransactionType::Hidden, tx_size, wealthy_cluster, 0);
+    let wealthy_fee = fee_config.compute_fee(TransactionType::Hidden, tx_size, wealthy_cluster, 0);
     let cluster_multiplier = wealthy_fee as f64 / base_fee as f64;
     println!(
         "Wealthy sender fee (normal): {} nanoBTH ({:.2}x)",
@@ -875,8 +865,7 @@ fn test_e2e_progressive_fee_enforcement() {
     println!("  Progressive fee: {} nanoBTH", required_fee_nanobth);
 
     // Convert to picocredits and ensure at least MIN_TX_FEE
-    let required_fee_pico =
-        (required_fee_nanobth * PICOCREDITS_PER_NANOBTH).max(MIN_TX_FEE);
+    let required_fee_pico = (required_fee_nanobth * PICOCREDITS_PER_NANOBTH).max(MIN_TX_FEE);
     println!(
         "  Required fee: {} picocredits (MIN_TX_FEE floor: {})",
         required_fee_pico, MIN_TX_FEE

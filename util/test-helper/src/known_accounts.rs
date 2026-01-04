@@ -141,8 +141,8 @@ pub fn default_addresses() -> Vec<PublicAddress> {
 #[cfg(test)]
 mod testing {
     use super::*;
-    use itertools::Itertools;
     use bth_common::logger::{log, test_with_logger, Logger};
+    use itertools::Itertools;
     use std::time::Instant;
 
     #[test]

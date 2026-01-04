@@ -125,13 +125,13 @@ The result: Even if you publish your address publicly, no one watching the block
 
 ### Ring Signatures (Private Transactions)
 
-When you choose a **Private transaction**, Botho uses **LION ring signatures** to hide which specific coins you're spending. Your transaction references 7 possible inputs (a "ring"), and the signature proves you own one of them without revealing which one.
+When you send a **Private transaction**, Botho uses **CLSAG ring signatures** to hide which specific coins you're spending. Your transaction references 20 possible inputs (a "ring"), and the signature proves you own one of them without revealing which one.
 
-LION (Lattice-based lInkable ring signatures fOr aNonymity) is a post-quantum ring signature scheme that provides both sender privacy AND quantum resistance.
+CLSAG (Concise Linkable Spontaneous Anonymous Group) is an efficient ring signature scheme that provides strong sender privacy with compact signatures (~700 bytes per input).
 
 This breaks the transaction graph that would otherwise allow tracing funds through the blockchain. An observer sees that *someone* in the ring spent *some* coins, but cannot determine which participant or which specific coins.
 
-> **Note:** Standard transactions don't use ring signatures—the sender is visible but amounts remain hidden. Choose Private transactions when you need sender anonymity.
+> **Note:** All value transfers use ring signatures. Minting transactions (block rewards) use ML-DSA signatures since the minter is public.
 
 ### Confidential Amounts
 
@@ -152,25 +152,27 @@ But they cannot determine:
 
 ### Post-Quantum Cryptography
 
-Quantum computers pose a future threat to the cryptographic algorithms that secure most cryptocurrencies today. Botho is designed from the ground up with **pure post-quantum security**—all transactions use quantum-resistant algorithms by default.
+Quantum computers pose a future threat to the cryptographic algorithms that secure most cryptocurrencies today. Botho uses a **hybrid post-quantum architecture** that protects the most critical data while keeping transactions efficient.
 
 **Algorithms Used:**
 
-- **ML-KEM-768** (FIPS 203) - Post-quantum key encapsulation for stealth addresses (all transactions)
-- **ML-DSA-65** (FIPS 204) - Post-quantum signatures for Standard and Minting transactions
-- **LION** - Lattice-based ring signatures for Private transactions (~128-bit PQ security)
+- **ML-KEM-768** (FIPS 203) - Post-quantum stealth addresses (recipient privacy is permanent)
+- **ML-DSA-65** (FIPS 204) - Post-quantum signatures for minting transactions
+- **CLSAG** - Classical ring signatures for private transactions (sender privacy is ephemeral)
+- **Pedersen + Bulletproofs** - Information-theoretic amount hiding (quantum-safe)
 
-These algorithms were standardized by NIST after years of rigorous cryptanalysis.
+**Why This Architecture?**
+
+Recipient identity is recorded on-chain forever—a quantum attacker in 2045 could link recipients from 2025 transactions. ML-KEM protects against this "harvest now, decrypt later" threat. Sender privacy, however, is ephemeral—its value degrades over time as economic context becomes historical. Using classical CLSAG keeps transactions small (~4 KB vs ~65 KB for post-quantum alternatives).
 
 **Transaction Types:**
 
 | Type | Recipient | Amount | Sender | Use Case |
 |------|-----------|--------|--------|----------|
-| Minting | Hidden | Public | Known | Block rewards |
-| Standard | Hidden | Hidden | Visible | Most transfers (~3-4 KB) |
-| Private | Hidden | Hidden | Hidden | Maximum privacy (~22 KB) |
+| Minting | Hidden (ML-KEM) | Public | Known (ML-DSA) | Block rewards |
+| Private | Hidden (ML-KEM) | Hidden | Hidden (CLSAG ring=20) | All transfers (~4 KB) |
 
-All transactions are quantum-safe from day one—no need to choose a "PQ mode."
+Recipients and amounts are protected against quantum computers. Sender privacy uses efficient classical signatures.
 
 ### Privacy Best Practices
 
@@ -560,18 +562,6 @@ Submit a signed transaction.
 **Response:**
 - \`txHash\` - Transaction hash
 
-### pq_tx_submit
-
-Submit a quantum-private transaction (requires PQ build).
-
-**Parameters:**
-- \`tx_hex\` (string) - Hex-encoded quantum-private transaction
-
-**Response:**
-- \`txHash\` - Transaction hash
-- \`type\` - "quantum-private"
-- \`size\` - Transaction size in bytes
-
 ---
 
 ## Minting Methods
@@ -670,7 +660,7 @@ Botho uses libp2p for networking, which supports multiple discovery mechanisms:
 |-----------|-------|-------------|
 | Max inputs | 16 | Maximum inputs per transaction |
 | Max outputs | 16 | Maximum outputs per transaction |
-| Ring size | 7 | Number of members in LION ring signature |
+| Ring size | 20 | Number of members in CLSAG ring signature |
 | Max tx size | 100 KB | Maximum serialized transaction size |
 
 **Fees:**

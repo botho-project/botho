@@ -1,9 +1,11 @@
 use anyhow::{Context, Result};
 use std::path::Path;
 
-use crate::config::{ledger_db_path_from_config, Config};
-use crate::ledger::Ledger;
-use crate::wallet::Wallet;
+use crate::{
+    config::{ledger_db_path_from_config, Config},
+    ledger::Ledger,
+    wallet::Wallet,
+};
 
 /// Picocredits per BTH (10^12) - internal precision
 const PICOCREDITS_PER_BTH: u64 = 1_000_000_000_000;
@@ -13,10 +15,10 @@ const PICOCREDITS_PER_NANOBTH: u64 = 1_000;
 
 /// Show wallet balance
 pub fn run(config_path: &Path) -> Result<()> {
-    let config = Config::load(config_path)
-        .context("No wallet found. Run 'botho init' first.")?;
+    let config = Config::load(config_path).context("No wallet found. Run 'botho init' first.")?;
 
-    let wallet_config = config.wallet
+    let wallet_config = config
+        .wallet
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("No wallet configured. Run 'botho init' first."))?;
 
@@ -25,8 +27,8 @@ pub fn run(config_path: &Path) -> Result<()> {
 
     // Open ledger
     let ledger_path = ledger_db_path_from_config(config_path);
-    let ledger = Ledger::open(&ledger_path)
-        .map_err(|e| anyhow::anyhow!("Failed to open ledger: {}", e))?;
+    let ledger =
+        Ledger::open(&ledger_path).map_err(|e| anyhow::anyhow!("Failed to open ledger: {}", e))?;
 
     // Get chain state
     let state = ledger
@@ -53,7 +55,10 @@ pub fn run(config_path: &Path) -> Result<()> {
     println!("UTXOs: {}", utxo_count);
     println!();
     println!("Chain height: {}", state.height);
-    println!("Total network mined: {:.12} BTH", state.total_mined as f64 / PICOCREDITS_PER_BTH as f64);
+    println!(
+        "Total network mined: {:.12} BTH",
+        state.total_mined as f64 / PICOCREDITS_PER_BTH as f64
+    );
     println!();
 
     Ok(())

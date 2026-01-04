@@ -1,7 +1,8 @@
 //! Exchange scanner with precomputed subaddress lookup.
 //!
-//! This module provides efficient output scanning by precomputing all subaddress
-//! spend public keys at initialization time, enabling O(1) ownership detection.
+//! This module provides efficient output scanning by precomputing all
+//! subaddress spend public keys at initialization time, enabling O(1) ownership
+//! detection.
 
 use std::collections::HashMap;
 
@@ -9,8 +10,7 @@ use bth_account_keys::ViewAccountKey;
 use bth_crypto_keys::{RistrettoPrivate, RistrettoPublic};
 use bth_crypto_ring_signature::onetime_keys::recover_public_subaddress_spend_key;
 
-use crate::config::ScannerConfig;
-use crate::deposit::DetectedDeposit;
+use crate::{config::ScannerConfig, deposit::DetectedDeposit};
 
 /// Exchange scanner with precomputed subaddress lookup table.
 ///
@@ -162,11 +162,7 @@ impl ExchangeScanner {
     /// # Arguments
     /// * `outputs` - List of outputs to scan
     /// * `chain_height` - Current chain height (for calculating confirmations)
-    pub fn scan_outputs(
-        &self,
-        outputs: &[RpcOutput],
-        chain_height: u64,
-    ) -> Vec<DetectedDeposit> {
+    pub fn scan_outputs(&self, outputs: &[RpcOutput], chain_height: u64) -> Vec<DetectedDeposit> {
         let mut deposits = Vec::new();
 
         for output in outputs {
@@ -232,11 +228,7 @@ impl ExchangeScanner {
         }
         let elapsed = start.elapsed();
 
-        tracing::info!(
-            "Added {} subaddress keys in {:?}",
-            new_count,
-            elapsed
-        );
+        tracing::info!("Added {} subaddress keys in {:?}", new_count, elapsed);
 
         self.subaddress_max = new_max;
     }

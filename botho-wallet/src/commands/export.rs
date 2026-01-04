@@ -1,13 +1,13 @@
 //! Wallet export/backup command
 
 use anyhow::Result;
-use std::fs;
-use std::path::Path;
+use std::{fs, path::Path};
 
-use crate::keys::WalletKeys;
-use crate::storage::EncryptedWallet;
+use crate::{keys::WalletKeys, storage::EncryptedWallet};
 
-use super::{decrypt_wallet_with_rate_limiting, print_error, print_success, print_warning, prompt_confirm};
+use super::{
+    decrypt_wallet_with_rate_limiting, print_error, print_success, print_warning, prompt_confirm,
+};
 
 /// Run the export command
 pub async fn run(wallet_path: &Path, output: Option<String>) -> Result<()> {
@@ -28,11 +28,10 @@ pub async fn run(wallet_path: &Path, output: Option<String>) -> Result<()> {
         // Export to file
         let output_path = Path::new(&output_path);
 
-        if output_path.exists()
-            && !prompt_confirm("Output file exists. Overwrite?")? {
-                println!("Aborted.");
-                return Ok(());
-            }
+        if output_path.exists() && !prompt_confirm("Output file exists. Overwrite?")? {
+            println!("Aborted.");
+            return Ok(());
+        }
 
         // Create backup content
         let backup = format!(
@@ -72,7 +71,6 @@ pub async fn run(wallet_path: &Path, output: Option<String>) -> Result<()> {
         println!();
         print_success(&format!("Backup saved to: {}", output_path.display()));
         print_warning("Keep this file safe and secret!");
-
     } else {
         // Display on screen
         println!();

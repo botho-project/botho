@@ -2,35 +2,42 @@
 
 //! OSPEAD-Style Decoy Selection for Ring Signatures
 //!
-//! This module implements Optimal Selection Probability to Evade Analysis of Decoys (OSPEAD),
-//! which matches decoy age distribution to actual spending patterns using a gamma distribution.
+//! This module implements Optimal Selection Probability to Evade Analysis of
+//! Decoys (OSPEAD), which matches decoy age distribution to actual spending
+//! patterns using a gamma distribution.
 //!
 //! ## Key Concepts
 //!
-//! - **Spend Distribution**: Models how quickly outputs are typically spent after creation
-//! - **Gamma Distribution**: Real spending follows a gamma distribution - most outputs are
-//!   spent relatively quickly, with a long tail of outputs held for longer periods
-//! - **Age-Weighted Selection**: Decoys are selected to match the expected spend distribution,
-//!   making the real input indistinguishable from decoys
-//! - **Cluster-Aware Selection**: Decoys are selected with similar cluster tag profiles to
-//!   prevent fingerprinting attacks based on output tag inheritance
+//! - **Spend Distribution**: Models how quickly outputs are typically spent
+//!   after creation
+//! - **Gamma Distribution**: Real spending follows a gamma distribution - most
+//!   outputs are spent relatively quickly, with a long tail of outputs held for
+//!   longer periods
+//! - **Age-Weighted Selection**: Decoys are selected to match the expected
+//!   spend distribution, making the real input indistinguishable from decoys
+//! - **Cluster-Aware Selection**: Decoys are selected with similar cluster tag
+//!   profiles to prevent fingerprinting attacks based on output tag inheritance
 //!
 //! ## Cluster Tag Privacy
 //!
-//! Botho's progressive fee system uses cluster tags to track coin ancestry. These tags are
-//! visible on transaction outputs, which could enable fingerprinting attacks:
+//! Botho's progressive fee system uses cluster tags to track coin ancestry.
+//! These tags are visible on transaction outputs, which could enable
+//! fingerprinting attacks:
 //!
 //! 1. Observer examines the ring of 20 possible inputs
 //! 2. Compares each input's cluster tags to the output's tags (after decay)
 //! 3. Identifies which input's tags best match the output pattern
 //!
-//! To mitigate this, OSPEAD prioritizes decoys with **similar cluster profiles**, ensuring
-//! multiple ring members would produce plausible output patterns.
+//! To mitigate this, OSPEAD prioritizes decoys with **similar cluster
+//! profiles**, ensuring multiple ring members would produce plausible output
+//! patterns.
 //!
-//! Target: Achieve 10+ effective anonymity with ring size 20, meaning at least 10 ring
-//! members should be equally plausible based on both age and cluster patterns.
+//! Target: Achieve 10+ effective anonymity with ring size 20, meaning at least
+//! 10 ring members should be equally plausible based on both age and cluster
+//! patterns.
 //!
-//! Note: Ring size 20 is larger than Monero's 16, providing stronger sender privacy.
+//! Note: Ring size 20 is larger than Monero's 16, providing stronger sender
+//! privacy.
 
 use rand::Rng;
 use rand_distr::{Distribution, Gamma};
@@ -138,12 +145,8 @@ impl ClusterTags {
         }
 
         // Collect all cluster IDs
-        let all_clusters: HashSet<ClusterId> = self
-            .tags
-            .keys()
-            .chain(other.tags.keys())
-            .copied()
-            .collect();
+        let all_clusters: HashSet<ClusterId> =
+            self.tags.keys().chain(other.tags.keys()).copied().collect();
 
         // Compute dot product and magnitudes
         let mut dot_product: f64 = 0.0;
@@ -258,7 +261,11 @@ impl OutputCandidate {
     }
 
     /// Create a new output candidate with cluster tags.
-    pub fn from_utxo_with_tags(utxo: &Utxo, current_height: u64, cluster_tags: ClusterTags) -> Self {
+    pub fn from_utxo_with_tags(
+        utxo: &Utxo,
+        current_height: u64,
+        cluster_tags: ClusterTags,
+    ) -> Self {
         let age_blocks = current_height.saturating_sub(utxo.created_at);
         Self {
             output: utxo.output.clone(),
@@ -339,7 +346,8 @@ impl SpendDistribution {
         }
     }
 
-    /// Update gamma distribution parameters from observations using method of moments.
+    /// Update gamma distribution parameters from observations using method of
+    /// moments.
     fn update_parameters(&mut self) {
         if self.spend_ages.len() < 100 {
             return;
@@ -348,7 +356,8 @@ impl SpendDistribution {
         // Calculate mean and variance
         let n = self.spend_ages.len() as f64;
         let mean: f64 = self.spend_ages.iter().map(|&x| x as f64).sum::<f64>() / n;
-        let variance: f64 = self.spend_ages
+        let variance: f64 = self
+            .spend_ages
             .iter()
             .map(|&x| {
                 let diff = x as f64 - mean;
@@ -393,7 +402,8 @@ impl SpendDistribution {
         self.spend_ages.len()
     }
 
-    /// Calculate the probability density at a given age (for debugging/analysis).
+    /// Calculate the probability density at a given age (for
+    /// debugging/analysis).
     pub fn pdf(&self, age_blocks: u64) -> f64 {
         // Validate distribution parameters
         if Gamma::new(self.gamma_shape, self.gamma_scale_blocks).is_err() {
@@ -416,13 +426,12 @@ impl SpendDistribution {
 
 /// Approximation of log-gamma function using Stirling's formula.
 fn ln_gamma(x: f64) -> f64 {
-    // Using Lanczos approximation would be more accurate, but Stirling is sufficient
-    // for our purposes and simpler
+    // Using Lanczos approximation would be more accurate, but Stirling is
+    // sufficient for our purposes and simpler
     if x <= 0.0 {
         return f64::INFINITY;
     }
-    0.5 * (2.0 * std::f64::consts::PI).ln() + (x - 0.5) * x.ln() - x
-        + 1.0 / (12.0 * x)
+    0.5 * (2.0 * std::f64::consts::PI).ln() + (x - 0.5) * x.ln() - x + 1.0 / (12.0 * x)
         - 1.0 / (360.0 * x * x * x)
 }
 
@@ -487,8 +496,7 @@ impl GammaDecoySelector {
         let eligible: Vec<&OutputCandidate> = candidates
             .iter()
             .filter(|c| {
-                c.age_blocks >= MIN_DECOY_AGE_BLOCKS
-                    && !exclude_keys.contains(&c.output.target_key)
+                c.age_blocks >= MIN_DECOY_AGE_BLOCKS && !exclude_keys.contains(&c.output.target_key)
             })
             .collect();
 
@@ -500,8 +508,11 @@ impl GammaDecoySelector {
         }
 
         // Validate gamma distribution parameters
-        let _ = Gamma::new(self.distribution.gamma_shape, self.distribution.gamma_scale_blocks)
-            .map_err(|_| DecoySelectionError::InvalidDistribution)?;
+        let _ = Gamma::new(
+            self.distribution.gamma_shape,
+            self.distribution.gamma_scale_blocks,
+        )
+        .map_err(|_| DecoySelectionError::InvalidDistribution)?;
 
         // Calculate weights for each candidate based on gamma PDF
         let weights: Vec<f64> = eligible
@@ -600,8 +611,7 @@ impl GammaDecoySelector {
         let eligible: Vec<&OutputCandidate> = candidates
             .iter()
             .filter(|c| {
-                c.age_blocks >= MIN_DECOY_AGE_BLOCKS
-                    && !exclude_keys.contains(&c.output.target_key)
+                c.age_blocks >= MIN_DECOY_AGE_BLOCKS && !exclude_keys.contains(&c.output.target_key)
             })
             .collect();
 
@@ -612,8 +622,11 @@ impl GammaDecoySelector {
             });
         }
 
-        let gamma = Gamma::new(self.distribution.gamma_shape, self.distribution.gamma_scale_blocks)
-            .map_err(|_| DecoySelectionError::InvalidDistribution)?;
+        let gamma = Gamma::new(
+            self.distribution.gamma_shape,
+            self.distribution.gamma_scale_blocks,
+        )
+        .map_err(|_| DecoySelectionError::InvalidDistribution)?;
 
         // For each decoy slot, sample a target age and find best matching candidate
         let mut selected = Vec::with_capacity(count);
@@ -622,7 +635,8 @@ impl GammaDecoySelector {
         for _ in 0..count {
             // Sample target age from gamma distribution
             let target_age: f64 = gamma.sample(rng);
-            let target_age_blocks = (target_age as u64).clamp(MIN_DECOY_AGE_BLOCKS, MAX_DECOY_AGE_BLOCKS);
+            let target_age_blocks =
+                (target_age as u64).clamp(MIN_DECOY_AGE_BLOCKS, MAX_DECOY_AGE_BLOCKS);
 
             // Find best matching candidate not yet used
             let best = eligible
@@ -653,8 +667,8 @@ impl GammaDecoySelector {
 
     /// Calculate effective anonymity set size.
     ///
-    /// This estimates how many ring members appear equally likely to be the real spend
-    /// based on age distribution. A higher number is better.
+    /// This estimates how many ring members appear equally likely to be the
+    /// real spend based on age distribution. A higher number is better.
     ///
     /// Returns a value between 1 (no privacy) and ring_size (perfect privacy).
     pub fn effective_anonymity(&self, ring_ages: &[u64]) -> f64 {
@@ -700,12 +714,13 @@ impl GammaDecoySelector {
     /// * `exclude_keys` - Target keys to exclude
     ///
     /// # Returns
-    /// Selected decoys with similar cluster profiles, or error if insufficient candidates.
+    /// Selected decoys with similar cluster profiles, or error if insufficient
+    /// candidates.
     ///
     /// # Privacy Guarantee
-    /// When cluster-aware selection succeeds, at least `count` ring members will have
-    /// cluster profiles similar enough that an observer cannot distinguish them based
-    /// on output tag inheritance patterns.
+    /// When cluster-aware selection succeeds, at least `count` ring members
+    /// will have cluster profiles similar enough that an observer cannot
+    /// distinguish them based on output tag inheritance patterns.
     pub fn select_decoys_cluster_aware<R: Rng>(
         &self,
         candidates: &[OutputCandidate],
@@ -737,8 +752,7 @@ impl GammaDecoySelector {
         let eligible: Vec<&OutputCandidate> = candidates
             .iter()
             .filter(|c| {
-                c.age_blocks >= MIN_DECOY_AGE_BLOCKS
-                    && !exclude_keys.contains(&c.output.target_key)
+                c.age_blocks >= MIN_DECOY_AGE_BLOCKS && !exclude_keys.contains(&c.output.target_key)
             })
             .collect();
 
@@ -761,11 +775,17 @@ impl GammaDecoySelector {
         exclude_keys: &[[u8; 32]],
         rng: &mut R,
     ) -> Result<Vec<TxOutput>, DecoySelectionError> {
-        let _ = Gamma::new(self.distribution.gamma_shape, self.distribution.gamma_scale_blocks)
-            .map_err(|_| DecoySelectionError::InvalidDistribution)?;
+        let _ = Gamma::new(
+            self.distribution.gamma_shape,
+            self.distribution.gamma_scale_blocks,
+        )
+        .map_err(|_| DecoySelectionError::InvalidDistribution)?;
 
         // Calculate age-based weights
-        let weights: Vec<f64> = pool.iter().map(|c| self.weight_for_age(c.age_blocks)).collect();
+        let weights: Vec<f64> = pool
+            .iter()
+            .map(|c| self.weight_for_age(c.age_blocks))
+            .collect();
 
         let total_weight: f64 = weights.iter().sum();
         if total_weight <= 0.0 {
@@ -820,7 +840,8 @@ impl GammaDecoySelector {
 
     /// Select candidates with combined age and cluster scoring.
     ///
-    /// Used as fallback when strict cluster filtering yields insufficient candidates.
+    /// Used as fallback when strict cluster filtering yields insufficient
+    /// candidates.
     fn select_with_cluster_scoring<R: Rng>(
         &self,
         candidates: &[&OutputCandidate],
@@ -892,7 +913,8 @@ impl GammaDecoySelector {
         Ok(selected)
     }
 
-    /// Calculate effective anonymity considering both age and cluster similarity.
+    /// Calculate effective anonymity considering both age and cluster
+    /// similarity.
     ///
     /// This is a more accurate measure of privacy than age-only anonymity,
     /// as it accounts for cluster tag fingerprinting attacks.
@@ -933,20 +955,23 @@ impl GammaDecoySelector {
         entropy.exp()
     }
 
-    /// Validate that a proposed ring will pass centroid-based consensus validation.
+    /// Validate that a proposed ring will pass centroid-based consensus
+    /// validation.
     ///
-    /// This helps wallets verify their ring composition before creating the transaction.
-    /// The ring must have output tags sufficiently similar to the value-weighted centroid
-    /// of ring member tags.
+    /// This helps wallets verify their ring composition before creating the
+    /// transaction. The ring must have output tags sufficiently similar to
+    /// the value-weighted centroid of ring member tags.
     ///
     /// # Arguments
     /// * `ring` - The proposed ring members (real + decoys)
-    /// * `output_tags` - The cluster tags that will be on the transaction outputs
+    /// * `output_tags` - The cluster tags that will be on the transaction
+    ///   outputs
     /// * `threshold` - Minimum similarity required (recommend 0.7)
     ///
     /// # Returns
     /// * `Ok(similarity)` if the ring is valid, returning the actual similarity
-    /// * `Err(similarity)` if the ring would fail validation, returning the similarity
+    /// * `Err(similarity)` if the ring would fail validation, returning the
+    ///   similarity
     pub fn validate_ring_centroid_compatibility(
         &self,
         ring: &[OutputCandidate],
@@ -955,17 +980,26 @@ impl GammaDecoySelector {
     ) -> Result<f64, f64> {
         if ring.is_empty() {
             // Empty ring is invalid, but empty tags are maximally similar
-            return if output_tags.is_empty() { Ok(1.0) } else { Err(0.0) };
+            return if output_tags.is_empty() {
+                Ok(1.0)
+            } else {
+                Err(0.0)
+            };
         }
 
         // Compute value-weighted centroid
         let total_value: u64 = ring.iter().map(|c| c.output.amount).sum();
         if total_value == 0 {
-            return if output_tags.is_empty() { Ok(1.0) } else { Err(0.0) };
+            return if output_tags.is_empty() {
+                Ok(1.0)
+            } else {
+                Err(0.0)
+            };
         }
 
         // Accumulate weighted cluster masses
-        let mut cluster_masses: std::collections::HashMap<ClusterId, u128> = std::collections::HashMap::new();
+        let mut cluster_masses: std::collections::HashMap<ClusterId, u128> =
+            std::collections::HashMap::new();
 
         for candidate in ring {
             for (cluster_id, weight) in candidate.cluster_tags.iter() {
@@ -1004,7 +1038,10 @@ pub enum DecoySelectionError {
 impl std::fmt::Display for DecoySelectionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::InsufficientCandidates { required, available } => {
+            Self::InsufficientCandidates {
+                required,
+                available,
+            } => {
                 write!(
                     f,
                     "Insufficient decoy candidates: need {}, have {}",
@@ -1025,7 +1062,11 @@ mod tests {
     use super::*;
     use bth_transaction_types::ClusterTagVector;
 
-    fn make_candidate(target_key: [u8; 32], age_blocks: u64, current_height: u64) -> OutputCandidate {
+    fn make_candidate(
+        target_key: [u8; 32],
+        age_blocks: u64,
+        current_height: u64,
+    ) -> OutputCandidate {
         OutputCandidate {
             output: TxOutput {
                 amount: 1000,
@@ -1190,9 +1231,9 @@ mod tests {
 
         // With default parameters (mean ~30 days = ~21600 blocks),
         // ages around that range should have higher weight than extremes
-        let weight_young = selector.weight_for_age(100);    // 3 hours
+        let weight_young = selector.weight_for_age(100); // 3 hours
         let weight_medium = selector.weight_for_age(21600); // 30 days
-        let weight_old = selector.weight_for_age(525600);   // 2 years
+        let weight_old = selector.weight_for_age(525600); // 2 years
 
         eprintln!("Weight at 100 blocks: {}", weight_young);
         eprintln!("Weight at 21600 blocks: {}", weight_medium);
@@ -1227,9 +1268,9 @@ mod tests {
     #[test]
     fn test_cluster_tags_from_pairs() {
         let tags = ClusterTags::from_pairs(&[
-            (1, 500_000),  // 50%
-            (2, 300_000),  // 30%
-            (3, 200_000),  // 20%
+            (1, 500_000), // 50%
+            (2, 300_000), // 30%
+            (3, 200_000), // 20%
         ]);
         assert_eq!(tags.len(), 3);
         assert_eq!(tags.get(1), 500_000);
@@ -1260,7 +1301,10 @@ mod tests {
         let tags2 = ClusterTags::from_pairs(&[(1, 600_000), (3, 400_000)]);
         let sim = tags1.cosine_similarity(&tags2);
         // Should have partial similarity due to shared cluster 1
-        assert!(sim > 0.3 && sim < 0.9, "Expected partial similarity, got {sim}");
+        assert!(
+            sim > 0.3 && sim < 0.9,
+            "Expected partial similarity, got {sim}"
+        );
     }
 
     #[test]
@@ -1309,8 +1353,16 @@ mod tests {
         for i in 0..10 {
             let mut key = [0u8; 32];
             key[0] = i as u8;
-            let tags = ClusterTags::from_pairs(&[(1, 750_000 + (i as u32 * 10_000)), (2, 250_000 - (i as u32 * 10_000))]);
-            candidates.push(make_candidate_with_tags(key, 3000 + i * 100, current_height, tags));
+            let tags = ClusterTags::from_pairs(&[
+                (1, 750_000 + (i as u32 * 10_000)),
+                (2, 250_000 - (i as u32 * 10_000)),
+            ]);
+            candidates.push(make_candidate_with_tags(
+                key,
+                3000 + i * 100,
+                current_height,
+                tags,
+            ));
         }
 
         // Different cluster profiles
@@ -1318,32 +1370,35 @@ mod tests {
             let mut key = [0u8; 32];
             key[0] = i as u8;
             let tags = ClusterTags::from_pairs(&[(100, 900_000), (200, 100_000)]);
-            candidates.push(make_candidate_with_tags(key, 3000 + i * 100, current_height, tags));
+            candidates.push(make_candidate_with_tags(
+                key,
+                3000 + i * 100,
+                current_height,
+                tags,
+            ));
         }
 
         let mut rng = rand::thread_rng();
         let exclude = vec![real_key];
 
-        let result = selector.select_decoys_cluster_aware(
-            &candidates,
-            6,
-            &real_input,
-            &exclude,
-            &mut rng,
-        );
+        let result =
+            selector.select_decoys_cluster_aware(&candidates, 6, &real_input, &exclude, &mut rng);
 
         assert!(result.is_ok());
         let decoys = result.unwrap();
         assert_eq!(decoys.len(), 6);
 
         // Most selected decoys should be from the similar group (keys 0-9)
-        let similar_count = decoys
-            .iter()
-            .filter(|d| d.target_key[0] < 10)
-            .count();
+        let similar_count = decoys.iter().filter(|d| d.target_key[0] < 10).count();
 
-        eprintln!("Selected {} decoys from similar cluster group", similar_count);
-        assert!(similar_count >= 4, "Expected at least 4 similar, got {similar_count}");
+        eprintln!(
+            "Selected {} decoys from similar cluster group",
+            similar_count
+        );
+        assert!(
+            similar_count >= 4,
+            "Expected at least 4 similar, got {similar_count}"
+        );
     }
 
     #[test]
@@ -1355,7 +1410,8 @@ mod tests {
         let real_tags = ClusterTags::single(1);
         let mut real_key = [0u8; 32];
         real_key[0] = 255;
-        let real_input = make_candidate_with_tags(real_key, 5000, current_height, real_tags.clone());
+        let real_input =
+            make_candidate_with_tags(real_key, 5000, current_height, real_tags.clone());
 
         // Ring where all members have similar clusters (ring size 20)
         let similar_ring: Vec<OutputCandidate> = (0u64..20)
@@ -1370,9 +1426,14 @@ mod tests {
         let anon = selector.effective_anonymity_with_clusters(&similar_ring, &real_input);
         eprintln!("Similar clusters effective anonymity: {:.2}", anon);
 
-        // With 20 similar-cluster ring members, effective anonymity should be high (>10)
-        // Note: 12+ indicates excellent anonymity set (more than half the ring is plausible)
-        assert!(anon > 10.0, "Expected high anonymity with similar clusters, got {:.2}", anon);
+        // With 20 similar-cluster ring members, effective anonymity should be high
+        // (>10) Note: 12+ indicates excellent anonymity set (more than half the
+        // ring is plausible)
+        assert!(
+            anon > 10.0,
+            "Expected high anonymity with similar clusters, got {:.2}",
+            anon
+        );
 
         // Verify combined_similarity works as expected
         let high_match = ClusterTags::single(1);
@@ -1380,7 +1441,13 @@ mod tests {
         let high_sim = real_tags.combined_similarity(&high_match);
         let low_sim = real_tags.combined_similarity(&low_match);
 
-        eprintln!("High match similarity: {:.2}, Low match: {:.2}", high_sim, low_sim);
-        assert!(high_sim > low_sim, "Matching cluster should have higher similarity");
+        eprintln!(
+            "High match similarity: {:.2}, Low match: {:.2}",
+            high_sim, low_sim
+        );
+        assert!(
+            high_sim > low_sim,
+            "Matching cluster should have higher similarity"
+        );
     }
 }

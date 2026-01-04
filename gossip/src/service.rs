@@ -9,10 +9,7 @@
 //! - Integration with the peer store
 
 use crate::{
-    behaviour::{
-        GossipBehaviour, GossipCommand, GossipEvent, GossipHandle,
-        TopologySyncResponse,
-    },
+    behaviour::{GossipBehaviour, GossipCommand, GossipEvent, GossipHandle, TopologySyncResponse},
     config::GossipConfig,
     error::{GossipError, GossipResult},
     messages::{
@@ -38,11 +35,7 @@ use std::{
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use tokio::{
-    select,
-    sync::mpsc,
-    time::interval,
-};
+use tokio::{select, sync::mpsc, time::interval};
 use tracing::{debug, error, info, trace, warn};
 
 /// The gossip service manages the peer-to-peer network.

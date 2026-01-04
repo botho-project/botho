@@ -4,12 +4,12 @@ use crate::{
     ring_signature::{Error, PedersenGens, Scalar},
     Commitment,
 };
-use curve25519_dalek::ristretto::CompressedRistretto;
 use bth_crypto_digestible::Digestible;
 use bth_util_repr_bytes::{
     derive_core_cmp_from_as_ref, derive_debug_and_display_hex_from_as_ref,
     derive_try_from_slice_from_repr_bytes, typenum::U32, GenericArray, ReprBytes,
 };
+use curve25519_dalek::ristretto::CompressedRistretto;
 use zeroize::Zeroize;
 
 #[cfg(feature = "serde")]
@@ -95,8 +95,8 @@ mod compressed_commitment_tests {
         ring_signature::{generators, Scalar},
         CompressedCommitment,
     };
-    use curve25519_dalek::ristretto::CompressedRistretto;
     use bth_util_test_helper::{run_with_several_seeds, RngCore};
+    use curve25519_dalek::ristretto::CompressedRistretto;
 
     #[test]
     // Commitment::new should create the correct RistrettoPoint.

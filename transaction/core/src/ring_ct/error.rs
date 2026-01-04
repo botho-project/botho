@@ -4,10 +4,10 @@
 
 use crate::{range_proofs::error::Error as RangeProofError, TokenId};
 use alloc::string::{String, ToString};
-use displaydoc::Display;
 use bth_crypto_ring_signature::Error as RingSignatureError;
 use bth_crypto_ring_signature_signer::Error as SignerError;
 use bth_util_zip_exact::ZipExactError;
+use displaydoc::Display;
 use serde::{Deserialize, Serialize};
 
 /// An error which can occur in connection to a ring signature

@@ -6,9 +6,9 @@ use alloc::{format, string::String};
 use core::str::Utf8Error;
 
 use crate::MemoError;
-use displaydoc::Display;
 use bth_crypto_keys::KeyError;
 use bth_transaction_types::AmountError;
+use displaydoc::Display;
 use serde::{Deserialize, Serialize};
 
 /// An error that occurs when creating a new TxOut

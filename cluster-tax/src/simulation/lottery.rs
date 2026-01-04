@@ -1,8 +1,8 @@
 //! Lottery-based fee redistribution simulation.
 //!
-//! This module implements the lottery redistribution mechanism as an alternative
-//! to cluster-based progressive fees. Instead of charging higher fees to wealthy
-//! clusters, we redistribute fees to UTXO holders weighted by:
+//! This module implements the lottery redistribution mechanism as an
+//! alternative to cluster-based progressive fees. Instead of charging higher
+//! fees to wealthy clusters, we redistribute fees to UTXO holders weighted by:
 //!
 //! 1. **Value / cluster_factor**: Progressive (low factor = more tickets/BTH)
 //! 2. **Ring participation**: Rewards active anonymity set contributors
@@ -18,7 +18,8 @@ use crate::{ClusterId, ClusterWealth, FeeCurve};
 /// Transaction frequency model for simulation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TransactionModel {
-    /// Value-weighted: probability proportional to UTXO value (rich transact more)
+    /// Value-weighted: probability proportional to UTXO value (rich transact
+    /// more)
     ValueWeighted,
     /// Uniform: equal probability per UTXO (everyone transacts equally)
     Uniform,
@@ -98,10 +99,7 @@ pub enum SelectionMode {
     /// weight = 1 + (age / max_age) × age_bonus
     /// Discourages rapid UTXO accumulation.
     /// Privacy cost: reveals approximate UTXO age through participation.
-    AgeWeighted {
-        max_age_blocks: u64,
-        age_bonus: f64,
-    },
+    AgeWeighted { max_age_blocks: u64, age_bonus: f64 },
 
     /// Cluster-factor weighted: lower factor = more weight.
     /// weight = value × (max_factor - factor + 1) / max_factor
@@ -166,7 +164,7 @@ impl Default for LotteryConfig {
             base_fee: 1_000,
             ticket_model: TicketModel::ActivityBased,
             distribution_mode: DistributionMode::Pooled,
-            output_fee_exponent: 1.0, // Linear by default
+            output_fee_exponent: 1.0,               // Linear by default
             selection_mode: SelectionMode::Uniform, // Default to uniform for backwards compat
         }
     }
@@ -436,8 +434,7 @@ impl LotterySimulation {
                 let utxo_id = self.next_utxo_id;
                 self.next_utxo_id += 1;
 
-                let utxo =
-                    LotteryUtxo::new(utxo_id, owner_id, value_per_utxo, cluster_factor, 0);
+                let utxo = LotteryUtxo::new(utxo_id, owner_id, value_per_utxo, cluster_factor, 0);
 
                 self.utxos.insert(utxo_id, utxo);
                 owner.utxo_ids.push(utxo_id);
@@ -449,16 +446,19 @@ impl LotterySimulation {
     }
 
     /// Add an owner with a specific cluster factor (for testing).
-    pub fn add_owner_with_factor(&mut self, wealth: u64, strategy: SybilStrategy, cluster_factor: f64) -> u64 {
+    pub fn add_owner_with_factor(
+        &mut self,
+        wealth: u64,
+        strategy: SybilStrategy,
+        cluster_factor: f64,
+    ) -> u64 {
         let owner_id = self.owners.len() as u64 + 1;
         let mut owner = LotteryOwner::new(owner_id, strategy);
 
         let utxo_count = match strategy {
             SybilStrategy::Normal => 1,
             SybilStrategy::MultiAccount { num_accounts } => num_accounts,
-            SybilStrategy::MaximizeSplit => {
-                (wealth / self.config.min_utxo_value.max(1)) as u32
-            }
+            SybilStrategy::MaximizeSplit => (wealth / self.config.min_utxo_value.max(1)) as u32,
         };
 
         let value_per_utxo = wealth / utxo_count.max(1) as u64;
@@ -488,7 +488,12 @@ impl LotterySimulation {
     }
 
     /// Create a UTXO for an existing owner.
-    pub fn create_utxo_for_owner(&mut self, owner_id: u64, value: u64, cluster_factor: f64) -> Option<u64> {
+    pub fn create_utxo_for_owner(
+        &mut self,
+        owner_id: u64,
+        value: u64,
+        cluster_factor: f64,
+    ) -> Option<u64> {
         self.create_utxo_with_entropy(owner_id, value, cluster_factor, 0.0)
     }
 
@@ -508,14 +513,8 @@ impl LotterySimulation {
         self.next_utxo_id += 1;
 
         let cluster_factor = cluster_factor.max(1.0).min(6.0);
-        let utxo = LotteryUtxo::with_entropy(
-            utxo_id,
-            owner_id,
-            value,
-            cluster_factor,
-            0,
-            tag_entropy,
-        );
+        let utxo =
+            LotteryUtxo::with_entropy(utxo_id, owner_id, value, cluster_factor, 0, tag_entropy);
         self.utxos.insert(utxo_id, utxo);
 
         if let Some(owner) = self.owners.get_mut(&owner_id) {
@@ -602,8 +601,7 @@ impl LotterySimulation {
         // The first ring member is the "spender" - deduct fee from them
         if let Some(spender) = self.utxos.get_mut(&spender_utxo_id) {
             // Calculate fee based on cluster factor (progressive)
-            let actual_fee =
-                ((fee as f64 * spender.cluster_factor) as u64).min(spender.value / 10);
+            let actual_fee = ((fee as f64 * spender.cluster_factor) as u64).min(spender.value / 10);
 
             if actual_fee > 0 && spender.value > actual_fee {
                 spender.value -= actual_fee;
@@ -636,8 +634,9 @@ impl LotterySimulation {
     }
 
     /// Simulate a transaction (for ring participation).
-    /// Spender selection is value-weighted (more value = more likely to transact).
-    /// This models realistic transaction patterns where wealthier entities transact more.
+    /// Spender selection is value-weighted (more value = more likely to
+    /// transact). This models realistic transaction patterns where
+    /// wealthier entities transact more.
     pub fn simulate_transaction(&mut self, fee: u64) {
         // Select ring members (random UTXOs)
         let eligible_utxos: Vec<(u64, u64)> = self
@@ -689,8 +688,7 @@ impl LotterySimulation {
         // The first ring member is the "spender" - deduct fee from them
         if let Some(spender) = self.utxos.get_mut(&spender_utxo_id) {
             // Calculate fee based on cluster factor (progressive)
-            let actual_fee =
-                ((fee as f64 * spender.cluster_factor) as u64).min(spender.value / 10);
+            let actual_fee = ((fee as f64 * spender.cluster_factor) as u64).min(spender.value / 10);
 
             if actual_fee > 0 && spender.value > actual_fee {
                 spender.value -= actual_fee;
@@ -725,11 +723,14 @@ impl LotterySimulation {
     /// Simulate a transaction with immediate distribution to random UTXOs.
     ///
     /// Combined design:
-    /// 1. Fee = base × cluster_factor × outputs^exponent (progressive + anti-Sybil)
-    /// 2. 80% of fee immediately distributed to N random UTXOs (uniform selection)
+    /// 1. Fee = base × cluster_factor × outputs^exponent (progressive +
+    ///    anti-Sybil)
+    /// 2. 80% of fee immediately distributed to N random UTXOs (uniform
+    ///    selection)
     /// 3. 20% burned
     ///
-    /// This is simpler than pooled distribution - no accumulation, no periodic draws.
+    /// This is simpler than pooled distribution - no accumulation, no periodic
+    /// draws.
     pub fn simulate_transaction_immediate(
         &mut self,
         base_fee: u64,
@@ -978,7 +979,10 @@ impl LotterySimulation {
                 }
                 utxo_ids[0]
             }
-            SelectionMode::AgeWeighted { max_age_blocks, age_bonus } => {
+            SelectionMode::AgeWeighted {
+                max_age_blocks,
+                age_bonus,
+            } => {
                 // weight = 1 + (age / max_age) × age_bonus
                 let current_block = self.current_block;
                 let weights: Vec<(u64, f64)> = utxo_ids
@@ -1152,14 +1156,18 @@ impl LotterySimulation {
     /// Determine wealth quintile (0-4) for an owner.
     fn wealth_quintile(&self, owner_id: u64) -> usize {
         let owner_wealth = self.owner_value(owner_id);
-        let mut all_wealths: Vec<u64> = self.owners.keys().map(|id| self.owner_value(*id)).collect();
+        let mut all_wealths: Vec<u64> =
+            self.owners.keys().map(|id| self.owner_value(*id)).collect();
         all_wealths.sort();
 
         if all_wealths.is_empty() {
             return 2;
         }
 
-        let rank = all_wealths.iter().position(|&w| w >= owner_wealth).unwrap_or(0);
+        let rank = all_wealths
+            .iter()
+            .position(|&w| w >= owner_wealth)
+            .unwrap_or(0);
         let percentile = rank * 100 / all_wealths.len();
 
         match percentile {
@@ -1322,13 +1330,21 @@ pub fn run_sybil_test(
         .collect();
 
     let avg_normal_tickets_per_value = if !normal_results.is_empty() {
-        normal_results.iter().map(|r| r.tickets_per_value).sum::<f64>() / normal_results.len() as f64
+        normal_results
+            .iter()
+            .map(|r| r.tickets_per_value)
+            .sum::<f64>()
+            / normal_results.len() as f64
     } else {
         0.0
     };
 
     let avg_sybil_tickets_per_value = if !sybil_results.is_empty() {
-        sybil_results.iter().map(|r| r.tickets_per_value).sum::<f64>() / sybil_results.len() as f64
+        sybil_results
+            .iter()
+            .map(|r| r.tickets_per_value)
+            .sum::<f64>()
+            / sybil_results.len() as f64
     } else {
         0.0
     };
@@ -1352,10 +1368,30 @@ pub fn run_sybil_test(
         normal_avg_winnings: avg_normal_winnings,
         sybil_avg_winnings: avg_sybil_winnings,
         winnings_ratio: avg_sybil_winnings as f64 / avg_normal_winnings.max(1) as f64,
-        initial_gini: sim.metrics.gini_snapshots.first().map(|(_, g)| *g).unwrap_or(0.0),
-        final_gini: sim.metrics.gini_snapshots.last().map(|(_, g)| *g).unwrap_or(0.0),
-        gini_change: sim.metrics.gini_snapshots.last().map(|(_, g)| *g).unwrap_or(0.0)
-            - sim.metrics.gini_snapshots.first().map(|(_, g)| *g).unwrap_or(0.0),
+        initial_gini: sim
+            .metrics
+            .gini_snapshots
+            .first()
+            .map(|(_, g)| *g)
+            .unwrap_or(0.0),
+        final_gini: sim
+            .metrics
+            .gini_snapshots
+            .last()
+            .map(|(_, g)| *g)
+            .unwrap_or(0.0),
+        gini_change: sim
+            .metrics
+            .gini_snapshots
+            .last()
+            .map(|(_, g)| *g)
+            .unwrap_or(0.0)
+            - sim
+                .metrics
+                .gini_snapshots
+                .first()
+                .map(|(_, g)| *g)
+                .unwrap_or(0.0),
         sybil_profitable: avg_sybil_winnings > avg_normal_winnings,
     }
 }
@@ -1399,10 +1435,7 @@ mod tests {
         let normal_id = sim.add_owner(10_000_000, SybilStrategy::Normal);
 
         // Add one Sybil owner with 10,000 BTH split 10 ways
-        let sybil_id = sim.add_owner(
-            10_000_000,
-            SybilStrategy::MultiAccount { num_accounts: 10 },
-        );
+        let sybil_id = sim.add_owner(10_000_000, SybilStrategy::MultiAccount { num_accounts: 10 });
 
         // Make UTXOs eligible
         sim.current_block = 1000;
@@ -1462,10 +1495,7 @@ mod tests {
 
         // Two owners with same wealth, different UTXO counts
         let single_id = sim.add_owner(1_000_000, SybilStrategy::Normal);
-        let split_id = sim.add_owner(
-            1_000_000,
-            SybilStrategy::MultiAccount { num_accounts: 10 },
-        );
+        let split_id = sim.add_owner(1_000_000, SybilStrategy::MultiAccount { num_accounts: 10 });
 
         sim.current_block = 1000;
 
@@ -1582,10 +1612,7 @@ mod tests {
 
         // Total winnings should be positive (some distribution occurred)
         let total_winnings: u64 = sim.metrics.winnings_by_quintile.iter().sum();
-        assert!(
-            total_winnings > 0,
-            "Should have distributed some winnings"
-        );
+        assert!(total_winnings > 0, "Should have distributed some winnings");
     }
 
     /// Compare lottery redistribution vs cluster tax for Gini reduction.
@@ -1595,14 +1622,14 @@ mod tests {
     #[test]
     fn test_lottery_vs_cluster_tax_gini() {
         use crate::simulation::{
-            run_simulation, AgentId, MerchantAgent, MinterAgent, RetailUserAgent, SimulationConfig,
+            agent::Agent, run_simulation, AgentId, MerchantAgent, MinterAgent, RetailUserAgent,
+            SimulationConfig,
         };
-        use crate::simulation::agent::Agent;
 
         // === LOTTERY SIMULATION ===
         // Use lower fees to prevent poor UTXOs from being drained too quickly
         let lottery_config = LotteryConfig {
-            base_fee: 100, // Lower base fee for realistic simulation
+            base_fee: 100,        // Lower base fee for realistic simulation
             drawing_interval: 10, // More frequent drawings
             ..LotteryConfig::default()
         };
@@ -1619,10 +1646,12 @@ mod tests {
             lottery_sim.add_owner(total_wealth / 200, SybilStrategy::Normal); // 0.5%
         }
         for _ in 0..5 {
-            lottery_sim.add_owner(total_wealth * 5 / 100, SybilStrategy::Normal); // 5%
+            lottery_sim.add_owner(total_wealth * 5 / 100, SybilStrategy::Normal);
+            // 5%
         }
         for _ in 0..2 {
-            lottery_sim.add_owner(total_wealth * 35 / 100, SybilStrategy::Normal); // 35%
+            lottery_sim.add_owner(total_wealth * 35 / 100, SybilStrategy::Normal);
+            // 35%
         }
 
         lottery_sim.current_block = 1000;
@@ -1633,15 +1662,17 @@ mod tests {
         let lottery_final_gini = lottery_sim.calculate_gini();
         let lottery_gini_reduction = lottery_initial_gini - lottery_final_gini;
 
-
         // === CLUSTER TAX SIMULATION ===
         // Create equivalent agents for the cluster tax simulation
         let mut agents: Vec<Box<dyn Agent>> = Vec::new();
 
         // 10 poor retail users (0.5% each = 5%)
         for i in 0..10 {
-            let mut agent = RetailUserAgent::new(AgentId(i + 1))
-                .with_merchants(vec![AgentId(11), AgentId(12), AgentId(13)]);
+            let mut agent = RetailUserAgent::new(AgentId(i + 1)).with_merchants(vec![
+                AgentId(11),
+                AgentId(12),
+                AgentId(13),
+            ]);
             agent.account_mut().balance = total_wealth / 200;
             agents.push(Box::new(agent));
         }
@@ -1655,8 +1686,11 @@ mod tests {
 
         // 2 rich minters (35% each = 70%)
         for i in 0..2 {
-            let mut agent = MinterAgent::new(AgentId(i + 16))
-                .with_buyers(vec![AgentId(1), AgentId(2), AgentId(3)]);
+            let mut agent = MinterAgent::new(AgentId(i + 16)).with_buyers(vec![
+                AgentId(1),
+                AgentId(2),
+                AgentId(3),
+            ]);
             agent.account_mut().balance = total_wealth * 35 / 100;
             agents.push(Box::new(agent));
         }
@@ -1709,7 +1743,8 @@ mod tests {
         // This test primarily validates that both approaches work.
     }
 
-    /// Compare lottery effectiveness under different transaction frequency models.
+    /// Compare lottery effectiveness under different transaction frequency
+    /// models.
     ///
     /// This test compares:
     /// - Value-weighted: Rich transact more (proportional to holdings)
@@ -1761,20 +1796,41 @@ mod tests {
         eprintln!("Value-Weighted (rich transact more):");
         eprintln!("  Initial Gini: {:.4}", value_initial_gini);
         eprintln!("  Final Gini:   {:.4}", value_final_gini);
-        eprintln!("  Reduction:    {:.4} ({:.1}%)", value_reduction, value_reduction / value_initial_gini * 100.0);
-        eprintln!("  Fees collected: {}", sim_value.metrics.total_fees_collected);
-        eprintln!("  Pool distributed: {}", sim_value.metrics.total_distributed);
+        eprintln!(
+            "  Reduction:    {:.4} ({:.1}%)",
+            value_reduction,
+            value_reduction / value_initial_gini * 100.0
+        );
+        eprintln!(
+            "  Fees collected: {}",
+            sim_value.metrics.total_fees_collected
+        );
+        eprintln!(
+            "  Pool distributed: {}",
+            sim_value.metrics.total_distributed
+        );
         eprintln!("");
         eprintln!("Uniform (everyone transacts equally):");
         eprintln!("  Initial Gini: {:.4}", uniform_initial_gini);
         eprintln!("  Final Gini:   {:.4}", uniform_final_gini);
-        eprintln!("  Reduction:    {:.4} ({:.1}%)", uniform_reduction, uniform_reduction / uniform_initial_gini * 100.0);
-        eprintln!("  Fees collected: {}", sim_uniform.metrics.total_fees_collected);
-        eprintln!("  Pool distributed: {}", sim_uniform.metrics.total_distributed);
+        eprintln!(
+            "  Reduction:    {:.4} ({:.1}%)",
+            uniform_reduction,
+            uniform_reduction / uniform_initial_gini * 100.0
+        );
+        eprintln!(
+            "  Fees collected: {}",
+            sim_uniform.metrics.total_fees_collected
+        );
+        eprintln!(
+            "  Pool distributed: {}",
+            sim_uniform.metrics.total_distributed
+        );
         eprintln!("=====================================\n");
 
-        // Both models should be tested - we're interested in seeing the difference
-        // The test passes as long as it runs; the output tells us what happens
+        // Both models should be tested - we're interested in seeing the
+        // difference The test passes as long as it runs; the output
+        // tells us what happens
     }
 
     /// Compare ActivityBased vs FeeProportional ticket models.
@@ -1812,14 +1868,33 @@ mod tests {
 
         // Run 4 scenarios: 2 ticket models × 2 transaction models
         let scenarios = [
-            ("ActivityBased + ValueWeighted", TicketModel::ActivityBased, TransactionModel::ValueWeighted),
-            ("ActivityBased + Uniform", TicketModel::ActivityBased, TransactionModel::Uniform),
-            ("FeeProportional + ValueWeighted", TicketModel::FeeProportional, TransactionModel::ValueWeighted),
-            ("FeeProportional + Uniform", TicketModel::FeeProportional, TransactionModel::Uniform),
+            (
+                "ActivityBased + ValueWeighted",
+                TicketModel::ActivityBased,
+                TransactionModel::ValueWeighted,
+            ),
+            (
+                "ActivityBased + Uniform",
+                TicketModel::ActivityBased,
+                TransactionModel::Uniform,
+            ),
+            (
+                "FeeProportional + ValueWeighted",
+                TicketModel::FeeProportional,
+                TransactionModel::ValueWeighted,
+            ),
+            (
+                "FeeProportional + Uniform",
+                TicketModel::FeeProportional,
+                TransactionModel::Uniform,
+            ),
         ];
 
         eprintln!("\n=== TICKET MODEL COMPARISON ===");
-        eprintln!("{:<35} {:>12} {:>12} {:>12} {:>15}", "Scenario", "Init Gini", "Final Gini", "Change", "Fees Collected");
+        eprintln!(
+            "{:<35} {:>12} {:>12} {:>12} {:>15}",
+            "Scenario", "Init Gini", "Final Gini", "Change", "Fees Collected"
+        );
         eprintln!("{}", "-".repeat(90));
 
         for (name, ticket_model, tx_model) in scenarios {
@@ -1832,11 +1907,7 @@ mod tests {
 
             eprintln!(
                 "{:<35} {:>12.4} {:>12.4} {:>+11.1}% {:>15}",
-                name,
-                initial_gini,
-                final_gini,
-                change_pct,
-                sim.metrics.total_fees_collected
+                name, initial_gini, final_gini, change_pct, sim.metrics.total_fees_collected
             );
         }
         eprintln!("================================\n");
@@ -1844,8 +1915,9 @@ mod tests {
 
     /// Test that FeeProportional model is wash-trading resistant.
     ///
-    /// Key property: An individual's tickets/fee ratio is fixed by their cluster factor.
-    /// Wash trading cannot increase this ratio - you get exactly what you pay for.
+    /// Key property: An individual's tickets/fee ratio is fixed by their
+    /// cluster factor. Wash trading cannot increase this ratio - you get
+    /// exactly what you pay for.
     #[test]
     fn test_fee_proportional_wash_resistance() {
         // Test that individual ticket rates match expected formula
@@ -1877,8 +1949,14 @@ mod tests {
         let rich_expected_rate = (MAX_CLUSTER_FACTOR - rich_factor) / MAX_CLUSTER_FACTOR;
 
         eprintln!("\n=== FEE-PROPORTIONAL TICKET RATES ===");
-        eprintln!("Poor owner (factor {:.2}): expected rate = {:.4}", poor_factor, poor_expected_rate);
-        eprintln!("Rich owner (factor {:.2}): expected rate = {:.4}", rich_factor, rich_expected_rate);
+        eprintln!(
+            "Poor owner (factor {:.2}): expected rate = {:.4}",
+            poor_factor, poor_expected_rate
+        );
+        eprintln!(
+            "Rich owner (factor {:.2}): expected rate = {:.4}",
+            rich_factor, rich_expected_rate
+        );
 
         // Simulate some fees manually
         let test_fee = 1000u64;
@@ -1886,8 +1964,14 @@ mod tests {
         let rich_utxo_id = *sim.owners.get(&rich_id).unwrap().utxo_ids.first().unwrap();
 
         // Record fee payments
-        sim.utxos.get_mut(&poor_utxo_id).unwrap().record_fee_payment(test_fee);
-        sim.utxos.get_mut(&rich_utxo_id).unwrap().record_fee_payment(test_fee);
+        sim.utxos
+            .get_mut(&poor_utxo_id)
+            .unwrap()
+            .record_fee_payment(test_fee);
+        sim.utxos
+            .get_mut(&rich_utxo_id)
+            .unwrap()
+            .record_fee_payment(test_fee);
 
         let poor_tickets = sim.utxos.get(&poor_utxo_id).unwrap().tickets_from_fees;
         let rich_tickets = sim.utxos.get(&rich_utxo_id).unwrap().tickets_from_fees;
@@ -1895,9 +1979,18 @@ mod tests {
         let poor_actual_rate = poor_tickets / test_fee as f64;
         let rich_actual_rate = rich_tickets / test_fee as f64;
 
-        eprintln!("Poor actual rate: {:.4} (expected {:.4})", poor_actual_rate, poor_expected_rate);
-        eprintln!("Rich actual rate: {:.4} (expected {:.4})", rich_actual_rate, rich_expected_rate);
-        eprintln!("Poor gets {:.1}x more tickets per fee than rich", poor_actual_rate / rich_actual_rate);
+        eprintln!(
+            "Poor actual rate: {:.4} (expected {:.4})",
+            poor_actual_rate, poor_expected_rate
+        );
+        eprintln!(
+            "Rich actual rate: {:.4} (expected {:.4})",
+            rich_actual_rate, rich_expected_rate
+        );
+        eprintln!(
+            "Poor gets {:.1}x more tickets per fee than rich",
+            poor_actual_rate / rich_actual_rate
+        );
         eprintln!("======================================\n");
 
         // Verify rates match expected formula
@@ -1911,7 +2004,10 @@ mod tests {
         );
 
         // Key property: rate is fixed, doesn't increase with more fees
-        sim.utxos.get_mut(&poor_utxo_id).unwrap().record_fee_payment(test_fee * 100);
+        sim.utxos
+            .get_mut(&poor_utxo_id)
+            .unwrap()
+            .record_fee_payment(test_fee * 100);
         let poor_after_more = sim.utxos.get(&poor_utxo_id).unwrap().tickets_from_fees;
         let poor_rate_after = (poor_after_more - poor_tickets) / (test_fee * 100) as f64;
 
@@ -1990,17 +2086,26 @@ mod tests {
         eprintln!("");
         eprintln!("With ValueWeighted transactions (rich transact more):");
         eprintln!("  Final Gini: {:.4}", final_gini_vw);
-        eprintln!("  Reduction: {:.1}%", (initial_gini - final_gini_vw) / initial_gini * 100.0);
+        eprintln!(
+            "  Reduction: {:.1}%",
+            (initial_gini - final_gini_vw) / initial_gini * 100.0
+        );
         eprintln!("  Fees: {}", fees_vw);
         eprintln!("");
         eprintln!("With Uniform transactions (everyone transacts equally):");
         eprintln!("  Final Gini: {:.4}", final_gini_uniform);
-        eprintln!("  Reduction: {:.1}%", (initial_gini - final_gini_uniform) / initial_gini * 100.0);
+        eprintln!(
+            "  Reduction: {:.1}%",
+            (initial_gini - final_gini_uniform) / initial_gini * 100.0
+        );
         eprintln!("  Fees: {}", fees_uniform);
         eprintln!("==================================\n");
 
         // PureValueWeighted reduces inequality with value-weighted transactions
-        assert!(final_gini_vw < initial_gini, "Should reduce Gini with value-weighted tx");
+        assert!(
+            final_gini_vw < initial_gini,
+            "Should reduce Gini with value-weighted tx"
+        );
 
         // NOTE: PureValueWeighted INCREASES inequality with uniform transactions!
         // This is because tickets ∝ value/factor, so rich still have more tickets.
@@ -2039,7 +2144,13 @@ mod tests {
         sim.current_block = 1000;
 
         // Get initial state
-        let trader_utxo_id = *sim.owners.get(&trader_id).unwrap().utxo_ids.first().unwrap();
+        let trader_utxo_id = *sim
+            .owners
+            .get(&trader_id)
+            .unwrap()
+            .utxo_ids
+            .first()
+            .unwrap();
         let initial_value = sim.utxos.get(&trader_utxo_id).unwrap().value;
         let initial_factor = sim.utxos.get(&trader_utxo_id).unwrap().cluster_factor;
         let initial_tickets = initial_value as f64 / initial_factor;
@@ -2056,7 +2167,13 @@ mod tests {
 
         for _ in 0..wash_count {
             // Find current UTXO for trader
-            let utxo_id = *sim.owners.get(&trader_id).unwrap().utxo_ids.first().unwrap();
+            let utxo_id = *sim
+                .owners
+                .get(&trader_id)
+                .unwrap()
+                .utxo_ids
+                .first()
+                .unwrap();
             let utxo = sim.utxos.get(&utxo_id).unwrap();
             let fee = (sim.config.base_fee as f64 * utxo.cluster_factor) as u64;
             total_fees_paid += fee;
@@ -2080,7 +2197,13 @@ mod tests {
         }
 
         // Get final state
-        let final_utxo_id = *sim.owners.get(&trader_id).unwrap().utxo_ids.first().unwrap();
+        let final_utxo_id = *sim
+            .owners
+            .get(&trader_id)
+            .unwrap()
+            .utxo_ids
+            .first()
+            .unwrap();
         let final_value = sim.utxos.get(&final_utxo_id).unwrap().value;
         let final_factor = sim.utxos.get(&final_utxo_id).unwrap().cluster_factor;
         let final_tickets = final_value as f64 / final_factor;
@@ -2090,9 +2213,16 @@ mod tests {
 
         eprintln!("");
         eprintln!("After {} wash trades:", wash_count);
-        eprintln!("  Value: {} (lost {})", final_value, initial_value - final_value);
+        eprintln!(
+            "  Value: {} (lost {})",
+            final_value,
+            initial_value - final_value
+        );
         eprintln!("  Factor: {:.4} (unchanged)", final_factor);
-        eprintln!("  Tickets: {:.2} ({:+.2}, {:+.2}%)", final_tickets, ticket_change, ticket_change_pct);
+        eprintln!(
+            "  Tickets: {:.2} ({:+.2}, {:+.2}%)",
+            final_tickets, ticket_change, ticket_change_pct
+        );
         eprintln!("  Fees paid: {}", total_fees_paid);
         eprintln!("");
         eprintln!("Result: Wash trader LOST tickets (EV = -fees)");
@@ -2141,18 +2271,53 @@ mod tests {
 
         // Run 8 scenarios: 4 ticket models × 2 transaction models
         let scenarios = [
-            ("ActivityBased + ValueWeighted", TicketModel::ActivityBased, TransactionModel::ValueWeighted),
-            ("ActivityBased + Uniform", TicketModel::ActivityBased, TransactionModel::Uniform),
-            ("FeeProportional + ValueWeighted", TicketModel::FeeProportional, TransactionModel::ValueWeighted),
-            ("FeeProportional + Uniform", TicketModel::FeeProportional, TransactionModel::Uniform),
-            ("PureValueWeighted + ValueWeighted", TicketModel::PureValueWeighted, TransactionModel::ValueWeighted),
-            ("PureValueWeighted + Uniform", TicketModel::PureValueWeighted, TransactionModel::Uniform),
-            ("UniformPerUtxo + ValueWeighted", TicketModel::UniformPerUtxo, TransactionModel::ValueWeighted),
-            ("UniformPerUtxo + Uniform", TicketModel::UniformPerUtxo, TransactionModel::Uniform),
+            (
+                "ActivityBased + ValueWeighted",
+                TicketModel::ActivityBased,
+                TransactionModel::ValueWeighted,
+            ),
+            (
+                "ActivityBased + Uniform",
+                TicketModel::ActivityBased,
+                TransactionModel::Uniform,
+            ),
+            (
+                "FeeProportional + ValueWeighted",
+                TicketModel::FeeProportional,
+                TransactionModel::ValueWeighted,
+            ),
+            (
+                "FeeProportional + Uniform",
+                TicketModel::FeeProportional,
+                TransactionModel::Uniform,
+            ),
+            (
+                "PureValueWeighted + ValueWeighted",
+                TicketModel::PureValueWeighted,
+                TransactionModel::ValueWeighted,
+            ),
+            (
+                "PureValueWeighted + Uniform",
+                TicketModel::PureValueWeighted,
+                TransactionModel::Uniform,
+            ),
+            (
+                "UniformPerUtxo + ValueWeighted",
+                TicketModel::UniformPerUtxo,
+                TransactionModel::ValueWeighted,
+            ),
+            (
+                "UniformPerUtxo + Uniform",
+                TicketModel::UniformPerUtxo,
+                TransactionModel::Uniform,
+            ),
         ];
 
         eprintln!("\n=== ALL TICKET MODELS COMPARISON ===");
-        eprintln!("{:<40} {:>10} {:>10} {:>10} {:>15}", "Scenario", "Init Gini", "Final", "Change", "Fees");
+        eprintln!(
+            "{:<40} {:>10} {:>10} {:>10} {:>15}",
+            "Scenario", "Init Gini", "Final", "Change", "Fees"
+        );
         eprintln!("{}", "-".repeat(90));
 
         for (name, ticket_model, tx_model) in scenarios {
@@ -2164,11 +2329,7 @@ mod tests {
 
             eprintln!(
                 "{:<40} {:>10.4} {:>10.4} {:>+9.1}% {:>15}",
-                name,
-                initial_gini,
-                final_gini,
-                change_pct,
-                sim.metrics.total_fees_collected
+                name, initial_gini, final_gini, change_pct, sim.metrics.total_fees_collected
             );
         }
         eprintln!("====================================\n");
@@ -2207,11 +2368,13 @@ mod tests {
             // and pool is funded from transaction fees
             let txs_per_period = total_utxos as f64 / 1.5 * 0.1; // 10% turnover
             let pool_per_period = txs_per_period * base_fee as f64 * pool_fraction;
-            let prize_per_winner = pool_per_period / (drawings_per_period * winners_per_drawing) as f64;
+            let prize_per_winner =
+                pool_per_period / (drawings_per_period * winners_per_drawing) as f64;
 
             // Expected winnings per UTXO per period
             let win_prob_per_drawing = winners_per_drawing as f64 / total_utxos as f64;
-            let expected_winnings = win_prob_per_drawing * prize_per_winner * drawings_per_period as f64;
+            let expected_winnings =
+                win_prob_per_drawing * prize_per_winner * drawings_per_period as f64;
 
             // Cost to create one extra UTXO (splitting)
             let split_cost = per_output_fee as f64;
@@ -2292,7 +2455,10 @@ mod tests {
         eprintln!("After 50,000 blocks with uniform transactions:");
         eprintln!("  Final UTXOs: {}", final_utxo_count);
         eprintln!("  Final Gini: {:.4}", final_gini);
-        eprintln!("  Gini change: {:+.4} ({:+.1}%)", gini_change, gini_change_pct);
+        eprintln!(
+            "  Gini change: {:+.4} ({:+.1}%)",
+            gini_change, gini_change_pct
+        );
         eprintln!("  Fees collected: {}", sim.metrics.total_fees_collected);
         eprintln!("  Pool distributed: {}", sim.metrics.total_distributed);
         eprintln!("");
@@ -2343,7 +2509,10 @@ mod tests {
 
         eprintln!("Per transaction:");
         eprintln!("  Fee: {}", fee);
-        eprintln!("  Distributed (80%): {}", (fee as f64 * distribution_fraction) as u64);
+        eprintln!(
+            "  Distributed (80%): {}",
+            (fee as f64 * distribution_fraction) as u64
+        );
         eprintln!("  Per winner (4 winners): {:.0}", per_winner);
         eprintln!("  Burned (20%): {}", (fee as f64 * 0.2) as u64);
         eprintln!("");
@@ -2409,22 +2578,29 @@ mod tests {
 
         // Test with different transaction patterns
         for (name, tx_model) in [
-            ("ValueWeighted (rich transact more)", TransactionModel::ValueWeighted),
-            ("Uniform (everyone transacts equally)", TransactionModel::Uniform),
+            (
+                "ValueWeighted (rich transact more)",
+                TransactionModel::ValueWeighted,
+            ),
+            (
+                "Uniform (everyone transacts equally)",
+                TransactionModel::Uniform,
+            ),
         ] {
             let config = LotteryConfig {
                 base_fee: 100,
                 pool_fraction: 0.8,
                 distribution_mode: DistributionMode::Immediate { winners_per_tx: 4 },
                 output_fee_exponent: 2.0, // Quadratic: 2 outputs = 4×, 3 outputs = 9×
-                min_utxo_value: 0, // No minimum - everyone can participate
+                min_utxo_value: 0,        // No minimum - everyone can participate
                 ..LotteryConfig::default()
             };
             let fee_curve = FeeCurve::default_params();
             let mut sim = LotterySimulation::new(config, fee_curve);
 
             // Create unequal population:
-            // 10 poor (0.5% each = 5% total), 5 middle (5% each = 25%), 2 rich (35% each = 70%)
+            // 10 poor (0.5% each = 5% total), 5 middle (5% each = 25%), 2 rich (35% each =
+            // 70%)
             for _ in 0..10 {
                 sim.add_owner(total_wealth / 200, SybilStrategy::Normal); // 500,000 each
             }
@@ -2449,7 +2625,10 @@ mod tests {
             let gini_change_pct = gini_change / initial_gini * 100.0;
 
             eprintln!("{}", name);
-            eprintln!("  Initial: Gini={:.4}, UTXOs={}", initial_gini, initial_utxos);
+            eprintln!(
+                "  Initial: Gini={:.4}, UTXOs={}",
+                initial_gini, initial_utxos
+            );
             eprintln!("  Final:   Gini={:.4}, UTXOs={}", final_gini, final_utxos);
             eprintln!("  Change:  {:+.4} ({:+.1}%)", gini_change, gini_change_pct);
             eprintln!("  Fees collected: {}", sim.metrics.total_fees_collected);
@@ -2503,8 +2682,10 @@ mod tests {
             let gini_change = initial_gini - final_gini;
             let gini_change_pct = gini_change / initial_gini * 100.0;
 
-            eprintln!("{}: Gini {:.4} → {:.4} ({:+.1}%)",
-                name, initial_gini, final_gini, gini_change_pct);
+            eprintln!(
+                "{}: Gini {:.4} → {:.4} ({:+.1}%)",
+                name, initial_gini, final_gini, gini_change_pct
+            );
         }
 
         eprintln!("");
@@ -2569,8 +2750,10 @@ mod tests {
             sim.current_block = 1000;
         };
 
-        eprintln!("{:<50} {:>10} {:>10} {:>10}",
-            "Design", "Init Gini", "Final", "Change");
+        eprintln!(
+            "{:<50} {:>10} {:>10} {:>10}",
+            "Design", "Init Gini", "Final", "Change"
+        );
         eprintln!("{}", "-".repeat(85));
 
         // Test designs under ValueWeighted transactions
@@ -2591,8 +2774,10 @@ mod tests {
             sim.advance_blocks_with_model(30_000, 20, tx_model);
             let final_gini = sim.calculate_gini();
             let change = (initial - final_gini) / initial * 100.0;
-            eprintln!("{:<50} {:>10.4} {:>10.4} {:>+9.1}%",
-                "Pooled + FeeProportional", initial, final_gini, change);
+            eprintln!(
+                "{:<50} {:>10.4} {:>10.4} {:>+9.1}%",
+                "Pooled + FeeProportional", initial, final_gini, change
+            );
         }
 
         // 2. Pooled + PureValueWeighted
@@ -2610,8 +2795,10 @@ mod tests {
             sim.advance_blocks_with_model(30_000, 20, tx_model);
             let final_gini = sim.calculate_gini();
             let change = (initial - final_gini) / initial * 100.0;
-            eprintln!("{:<50} {:>10.4} {:>10.4} {:>+9.1}%",
-                "Pooled + PureValueWeighted", initial, final_gini, change);
+            eprintln!(
+                "{:<50} {:>10.4} {:>10.4} {:>+9.1}%",
+                "Pooled + PureValueWeighted", initial, final_gini, change
+            );
         }
 
         // 3. Pooled + UniformPerUtxo (the statistical approach)
@@ -2630,8 +2817,10 @@ mod tests {
             sim.advance_blocks_with_model(30_000, 20, tx_model);
             let final_gini = sim.calculate_gini();
             let change = (initial - final_gini) / initial * 100.0;
-            eprintln!("{:<50} {:>10.4} {:>10.4} {:>+9.1}%",
-                "Pooled + UniformPerUtxo", initial, final_gini, change);
+            eprintln!(
+                "{:<50} {:>10.4} {:>10.4} {:>+9.1}%",
+                "Pooled + UniformPerUtxo", initial, final_gini, change
+            );
         }
 
         // 4. COMBINED: Immediate + Uniform + Superlinear fees
@@ -2650,8 +2839,10 @@ mod tests {
             sim.advance_blocks_immediate(30_000, 20, tx_model);
             let final_gini = sim.calculate_gini();
             let change = (initial - final_gini) / initial * 100.0;
-            eprintln!("{:<50} {:>10.4} {:>10.4} {:>+9.1}%",
-                "COMBINED: Immediate + Uniform + Superlinear", initial, final_gini, change);
+            eprintln!(
+                "{:<50} {:>10.4} {:>10.4} {:>+9.1}%",
+                "COMBINED: Immediate + Uniform + Superlinear", initial, final_gini, change
+            );
         }
 
         eprintln!("");
@@ -2667,7 +2858,8 @@ mod tests {
     ///
     /// The "100% Gini reduction" result may be misleading if it requires
     /// unrealistic numbers of transactions. This test measures:
-    /// 1. How many transactions to achieve meaningful (10%, 25%, 50%) Gini reduction
+    /// 1. How many transactions to achieve meaningful (10%, 25%, 50%) Gini
+    ///    reduction
     /// 2. Whether convergence is realistic at typical blockchain tx rates
     #[test]
     fn test_time_to_equilibrium() {
@@ -2722,7 +2914,10 @@ mod tests {
         let mut reached_50pct = None;
 
         eprintln!("Initial Gini: {:.4}", initial_gini);
-        eprintln!("Targets: 10%={:.4}, 25%={:.4}, 50%={:.4}", target_10pct, target_25pct, target_50pct);
+        eprintln!(
+            "Targets: 10%={:.4}, 25%={:.4}, 50%={:.4}",
+            target_10pct, target_25pct, target_50pct
+        );
         eprintln!("");
 
         // Simulate up to 1 year (in blocks)
@@ -2733,7 +2928,11 @@ mod tests {
         let mut days = 0u64;
 
         for day in 0..365 {
-            sim.advance_blocks_immediate(check_interval, txs_per_block, TransactionModel::ValueWeighted);
+            sim.advance_blocks_immediate(
+                check_interval,
+                txs_per_block,
+                TransactionModel::ValueWeighted,
+            );
             total_txs += check_interval * txs_per_block as u64;
             days = day + 1;
 
@@ -2741,15 +2940,24 @@ mod tests {
 
             if reached_10pct.is_none() && current_gini <= target_10pct {
                 reached_10pct = Some((days, total_txs, current_gini));
-                eprintln!("  10% reduction at day {}: Gini={:.4}, txs={}", days, current_gini, total_txs);
+                eprintln!(
+                    "  10% reduction at day {}: Gini={:.4}, txs={}",
+                    days, current_gini, total_txs
+                );
             }
             if reached_25pct.is_none() && current_gini <= target_25pct {
                 reached_25pct = Some((days, total_txs, current_gini));
-                eprintln!("  25% reduction at day {}: Gini={:.4}, txs={}", days, current_gini, total_txs);
+                eprintln!(
+                    "  25% reduction at day {}: Gini={:.4}, txs={}",
+                    days, current_gini, total_txs
+                );
             }
             if reached_50pct.is_none() && current_gini <= target_50pct {
                 reached_50pct = Some((days, total_txs, current_gini));
-                eprintln!("  50% reduction at day {}: Gini={:.4}, txs={}", days, current_gini, total_txs);
+                eprintln!(
+                    "  50% reduction at day {}: Gini={:.4}, txs={}",
+                    days, current_gini, total_txs
+                );
             }
 
             // Early exit if we've reached all targets
@@ -2767,7 +2975,10 @@ mod tests {
         let total_reduction = (initial_gini - final_gini) / initial_gini * 100.0;
 
         eprintln!("");
-        eprintln!("Final results after {} days ({} transactions):", days, total_txs);
+        eprintln!(
+            "Final results after {} days ({} transactions):",
+            days, total_txs
+        );
         eprintln!("  Final Gini: {:.4}", final_gini);
         eprintln!("  Total reduction: {:.1}%", total_reduction);
         eprintln!("");
@@ -2804,8 +3015,9 @@ mod tests {
 
     /// Test slow UTXO accumulation gaming strategy.
     ///
-    /// A patient attacker might accumulate many UTXOs through normal transactions
-    /// over time, without paying splitting fees. This could game the lottery.
+    /// A patient attacker might accumulate many UTXOs through normal
+    /// transactions over time, without paying splitting fees. This could
+    /// game the lottery.
     ///
     /// Scenario: Attacker starts with 1 UTXO, conducts normal transactions,
     /// but always keeps change (accumulating UTXOs). After a year, do they
@@ -2838,24 +3050,42 @@ mod tests {
         baseline_sim.current_block = 1000;
 
         let baseline_initial_utxos = baseline_sim.utxos.len();
-        let baseline_attacker_utxos_initial = baseline_sim.owners.get(&attacker_id_baseline)
-            .map(|o| o.utxo_ids.len()).unwrap_or(0);
+        let baseline_attacker_utxos_initial = baseline_sim
+            .owners
+            .get(&attacker_id_baseline)
+            .map(|o| o.utxo_ids.len())
+            .unwrap_or(0);
 
         // Run simulation
         baseline_sim.advance_blocks_immediate(10_000, 20, TransactionModel::ValueWeighted);
 
-        let baseline_attacker_winnings = baseline_sim.owners.get(&attacker_id_baseline)
-            .map(|o| o.total_winnings).unwrap_or(0);
-        let baseline_attacker_fees = baseline_sim.owners.get(&attacker_id_baseline)
-            .map(|o| o.total_fees_paid).unwrap_or(0);
+        let baseline_attacker_winnings = baseline_sim
+            .owners
+            .get(&attacker_id_baseline)
+            .map(|o| o.total_winnings)
+            .unwrap_or(0);
+        let baseline_attacker_fees = baseline_sim
+            .owners
+            .get(&attacker_id_baseline)
+            .map(|o| o.total_fees_paid)
+            .unwrap_or(0);
         let baseline_final_utxos = baseline_sim.utxos.len();
 
         eprintln!("BASELINE (normal behavior):");
-        eprintln!("  Attacker starts with: {} UTXOs", baseline_attacker_utxos_initial);
-        eprintln!("  System UTXOs: {} -> {}", baseline_initial_utxos, baseline_final_utxos);
+        eprintln!(
+            "  Attacker starts with: {} UTXOs",
+            baseline_attacker_utxos_initial
+        );
+        eprintln!(
+            "  System UTXOs: {} -> {}",
+            baseline_initial_utxos, baseline_final_utxos
+        );
         eprintln!("  Attacker winnings: {}", baseline_attacker_winnings);
         eprintln!("  Attacker fees paid: {}", baseline_attacker_fees);
-        eprintln!("  Attacker net: {:+}", baseline_attacker_winnings as i64 - baseline_attacker_fees as i64);
+        eprintln!(
+            "  Attacker net: {:+}",
+            baseline_attacker_winnings as i64 - baseline_attacker_fees as i64
+        );
         eprintln!("");
 
         // Gaming scenario: Attacker fragments wealth into many UTXOs upfront
@@ -2863,35 +3093,57 @@ mod tests {
         let mut gaming_sim = LotterySimulation::new(config.clone(), FeeCurve::default_params());
 
         // Attacker uses MultiAccount to split into 10 UTXOs
-        let attacker_id_gaming = gaming_sim.add_owner(attacker_wealth, SybilStrategy::MultiAccount { num_accounts: 10 });
+        let attacker_id_gaming = gaming_sim.add_owner(
+            attacker_wealth,
+            SybilStrategy::MultiAccount { num_accounts: 10 },
+        );
         for _ in 0..90 {
             gaming_sim.add_owner(total_wealth / 100, SybilStrategy::Normal);
         }
         gaming_sim.current_block = 1000;
 
         let gaming_initial_utxos = gaming_sim.utxos.len();
-        let gaming_attacker_utxos_initial = gaming_sim.owners.get(&attacker_id_gaming)
-            .map(|o| o.utxo_ids.len()).unwrap_or(0);
+        let gaming_attacker_utxos_initial = gaming_sim
+            .owners
+            .get(&attacker_id_gaming)
+            .map(|o| o.utxo_ids.len())
+            .unwrap_or(0);
 
         // Run same simulation
         gaming_sim.advance_blocks_immediate(10_000, 20, TransactionModel::ValueWeighted);
 
-        let gaming_attacker_winnings = gaming_sim.owners.get(&attacker_id_gaming)
-            .map(|o| o.total_winnings).unwrap_or(0);
-        let gaming_attacker_fees = gaming_sim.owners.get(&attacker_id_gaming)
-            .map(|o| o.total_fees_paid).unwrap_or(0);
+        let gaming_attacker_winnings = gaming_sim
+            .owners
+            .get(&attacker_id_gaming)
+            .map(|o| o.total_winnings)
+            .unwrap_or(0);
+        let gaming_attacker_fees = gaming_sim
+            .owners
+            .get(&attacker_id_gaming)
+            .map(|o| o.total_fees_paid)
+            .unwrap_or(0);
         let gaming_final_utxos = gaming_sim.utxos.len();
 
         eprintln!("GAMING (10x UTXO split upfront):");
-        eprintln!("  Attacker starts with: {} UTXOs", gaming_attacker_utxos_initial);
-        eprintln!("  System UTXOs: {} -> {}", gaming_initial_utxos, gaming_final_utxos);
+        eprintln!(
+            "  Attacker starts with: {} UTXOs",
+            gaming_attacker_utxos_initial
+        );
+        eprintln!(
+            "  System UTXOs: {} -> {}",
+            gaming_initial_utxos, gaming_final_utxos
+        );
         eprintln!("  Attacker winnings: {}", gaming_attacker_winnings);
         eprintln!("  Attacker fees paid: {}", gaming_attacker_fees);
-        eprintln!("  Attacker net: {:+}", gaming_attacker_winnings as i64 - gaming_attacker_fees as i64);
+        eprintln!(
+            "  Attacker net: {:+}",
+            gaming_attacker_winnings as i64 - gaming_attacker_fees as i64
+        );
         eprintln!("");
 
         // Compare
-        let winnings_ratio = gaming_attacker_winnings as f64 / baseline_attacker_winnings.max(1) as f64;
+        let winnings_ratio =
+            gaming_attacker_winnings as f64 / baseline_attacker_winnings.max(1) as f64;
         let net_baseline = baseline_attacker_winnings as i64 - baseline_attacker_fees as i64;
         let net_gaming = gaming_attacker_winnings as i64 - gaming_attacker_fees as i64;
 
@@ -2905,7 +3157,10 @@ mod tests {
             eprintln!("WARNING: Gaming strategy gives >2x advantage!");
             eprintln!("The lottery is vulnerable to UTXO accumulation.");
         } else if net_gaming > net_baseline {
-            eprintln!("CAUTION: Gaming has modest advantage ({:.1}x)", net_gaming as f64 / net_baseline.max(1) as f64);
+            eprintln!(
+                "CAUTION: Gaming has modest advantage ({:.1}x)",
+                net_gaming as f64 / net_baseline.max(1) as f64
+            );
         } else {
             eprintln!("OK: Gaming does not provide significant advantage.");
         }
@@ -2933,7 +3188,7 @@ mod tests {
 
         let total_wealth = 100_000_000u64;
         let exchange_wealth = total_wealth / 2; // 50% in exchanges
-        let retail_wealth = total_wealth / 2;   // 50% in retail
+        let retail_wealth = total_wealth / 2; // 50% in retail
 
         let config = LotteryConfig {
             base_fee: 100,
@@ -2962,12 +3217,8 @@ mod tests {
         let initial_gini = sim.calculate_gini();
 
         // Track initial wealth
-        let initial_exchange_wealth: u64 = exchange_ids.iter()
-            .map(|id| sim.owner_value(*id))
-            .sum();
-        let initial_retail_wealth: u64 = retail_ids.iter()
-            .map(|id| sim.owner_value(*id))
-            .sum();
+        let initial_exchange_wealth: u64 = exchange_ids.iter().map(|id| sim.owner_value(*id)).sum();
+        let initial_retail_wealth: u64 = retail_ids.iter().map(|id| sim.owner_value(*id)).sum();
 
         eprintln!("Initial state:");
         eprintln!("  Total UTXOs: {}", initial_utxos);
@@ -2984,47 +3235,64 @@ mod tests {
         let final_utxos = sim.utxos.len();
 
         // Calculate final wealth
-        let final_exchange_wealth: u64 = exchange_ids.iter()
-            .map(|id| sim.owner_value(*id))
-            .sum();
-        let final_retail_wealth: u64 = retail_ids.iter()
-            .map(|id| sim.owner_value(*id))
-            .sum();
+        let final_exchange_wealth: u64 = exchange_ids.iter().map(|id| sim.owner_value(*id)).sum();
+        let final_retail_wealth: u64 = retail_ids.iter().map(|id| sim.owner_value(*id)).sum();
 
         let exchange_change = final_exchange_wealth as i64 - initial_exchange_wealth as i64;
         let retail_change = final_retail_wealth as i64 - initial_retail_wealth as i64;
 
         // Track winnings and fees separately
-        let exchange_winnings: u64 = exchange_ids.iter()
+        let exchange_winnings: u64 = exchange_ids
+            .iter()
             .filter_map(|id| sim.owners.get(id))
             .map(|o| o.total_winnings)
             .sum();
-        let exchange_fees: u64 = exchange_ids.iter()
+        let exchange_fees: u64 = exchange_ids
+            .iter()
             .filter_map(|id| sim.owners.get(id))
             .map(|o| o.total_fees_paid)
             .sum();
 
-        let retail_winnings: u64 = retail_ids.iter()
+        let retail_winnings: u64 = retail_ids
+            .iter()
             .filter_map(|id| sim.owners.get(id))
             .map(|o| o.total_winnings)
             .sum();
-        let retail_fees: u64 = retail_ids.iter()
+        let retail_fees: u64 = retail_ids
+            .iter()
             .filter_map(|id| sim.owners.get(id))
             .map(|o| o.total_fees_paid)
             .sum();
 
         eprintln!("Final state:");
-        eprintln!("  Total UTXOs: {} ({:+})", final_utxos, final_utxos as i64 - initial_utxos as i64);
-        eprintln!("  Gini: {:.4} ({:+.1}% change)", final_gini, (initial_gini - final_gini) / initial_gini * 100.0);
+        eprintln!(
+            "  Total UTXOs: {} ({:+})",
+            final_utxos,
+            final_utxos as i64 - initial_utxos as i64
+        );
+        eprintln!(
+            "  Gini: {:.4} ({:+.1}% change)",
+            final_gini,
+            (initial_gini - final_gini) / initial_gini * 100.0
+        );
         eprintln!("");
         eprintln!("Exchange entities (3 entities, 3 UTXOs):");
-        eprintln!("  Wealth: {} -> {} ({:+})", initial_exchange_wealth, final_exchange_wealth, exchange_change);
+        eprintln!(
+            "  Wealth: {} -> {} ({:+})",
+            initial_exchange_wealth, final_exchange_wealth, exchange_change
+        );
         eprintln!("  Fees paid: {}", exchange_fees);
         eprintln!("  Lottery winnings: {}", exchange_winnings);
-        eprintln!("  Net: {:+}", exchange_winnings as i64 - exchange_fees as i64);
+        eprintln!(
+            "  Net: {:+}",
+            exchange_winnings as i64 - exchange_fees as i64
+        );
         eprintln!("");
         eprintln!("Retail users (1000 entities, 1000 UTXOs):");
-        eprintln!("  Wealth: {} -> {} ({:+})", initial_retail_wealth, final_retail_wealth, retail_change);
+        eprintln!(
+            "  Wealth: {} -> {} ({:+})",
+            initial_retail_wealth, final_retail_wealth, retail_change
+        );
         eprintln!("  Fees paid: {}", retail_fees);
         eprintln!("  Lottery winnings: {}", retail_winnings);
         eprintln!("  Net: {:+}", retail_winnings as i64 - retail_fees as i64);
@@ -3038,8 +3306,14 @@ mod tests {
         let expected_fraction = 1000.0 / 1003.0; // Based on UTXO count
 
         eprintln!("ANALYSIS:");
-        eprintln!("  Retail UTXO fraction: {:.1}% (1000/1003)", 1000.0 / 1003.0 * 100.0);
-        eprintln!("  Retail winnings fraction: {:.1}%", retail_win_fraction * 100.0);
+        eprintln!(
+            "  Retail UTXO fraction: {:.1}% (1000/1003)",
+            1000.0 / 1003.0 * 100.0
+        );
+        eprintln!(
+            "  Retail winnings fraction: {:.1}%",
+            retail_win_fraction * 100.0
+        );
         eprintln!("  Expected (if uniform): {:.1}%", expected_fraction * 100.0);
         eprintln!("");
 
@@ -3056,10 +3330,19 @@ mod tests {
         // Those fees come from user funds, but winnings go to the exchange
         eprintln!("");
         eprintln!("KEY INSIGHT:");
-        eprintln!("  Exchanges paid {} in fees (from user funds)", exchange_fees);
+        eprintln!(
+            "  Exchanges paid {} in fees (from user funds)",
+            exchange_fees
+        );
         eprintln!("  Exchanges won {} from lottery", exchange_winnings);
-        eprintln!("  This is a {} redistribution to exchanges",
-            if exchange_winnings > exchange_fees { "NET POSITIVE" } else { "net negative" });
+        eprintln!(
+            "  This is a {} redistribution to exchanges",
+            if exchange_winnings > exchange_fees {
+                "NET POSITIVE"
+            } else {
+                "net negative"
+            }
+        );
         eprintln!("");
 
         if exchange_winnings < exchange_fees && retail_winnings > retail_fees {
@@ -3088,13 +3371,16 @@ mod tests {
 
         // Various network sizes
         let scenarios = [
-            ("Small network", 1_000u64, 100),     // 1K UTXOs, 100 tx/day
-            ("Medium network", 10_000u64, 1_000), // 10K UTXOs, 1K tx/day
-            ("Large network", 100_000u64, 10_000), // 100K UTXOs, 10K tx/day
+            ("Small network", 1_000u64, 100),           // 1K UTXOs, 100 tx/day
+            ("Medium network", 10_000u64, 1_000),       // 10K UTXOs, 1K tx/day
+            ("Large network", 100_000u64, 10_000),      // 100K UTXOs, 10K tx/day
             ("Massive network", 1_000_000u64, 100_000), // 1M UTXOs, 100K tx/day
         ];
 
-        eprintln!("{:<20} {:>12} {:>12} {:>15} {:>15}", "Network", "UTXOs", "Tx/day", "Days to BE", "Profitable?");
+        eprintln!(
+            "{:<20} {:>12} {:>12} {:>15} {:>15}",
+            "Network", "UTXOs", "Tx/day", "Days to BE", "Profitable?"
+        );
         eprintln!("{}", "-".repeat(80));
 
         for (name, utxo_count, txs_per_day) in scenarios {
@@ -3107,7 +3393,8 @@ mod tests {
             // Expected winnings per UTXO per day
             // Each tx has 4 winners, prize = (fee × 0.8) / 4
             // Probability of winning per tx = 4 / utxo_count
-            // Expected winnings per UTXO per tx = (4/N) × (avg_fee × 0.8 / 4) = 0.8 × avg_fee / N
+            // Expected winnings per UTXO per tx = (4/N) × (avg_fee × 0.8 / 4) = 0.8 ×
+            // avg_fee / N
             let ev_per_utxo_per_tx = 0.8 * avg_fee / utxo_count as f64;
             let ev_per_utxo_per_day = ev_per_utxo_per_tx * txs_per_day as f64;
 
@@ -3129,8 +3416,15 @@ mod tests {
 
             eprintln!(
                 "{:<20} {:>12} {:>12} {:>15.1} {:>15}",
-                name, utxo_count, txs_per_day, days_to_breakeven,
-                if profitable { "YES (< 1 year)" } else { "NO (> 1 year)" }
+                name,
+                utxo_count,
+                txs_per_day,
+                days_to_breakeven,
+                if profitable {
+                    "YES (< 1 year)"
+                } else {
+                    "NO (> 1 year)"
+                }
             );
         }
 
@@ -3161,13 +3455,16 @@ mod tests {
         // Scenarios with increasing inequality
         // Format: (name, rich_pct_of_wealth, rich_count, poor_count)
         let scenarios = [
-            ("Moderate: 80/20", 80u64, 20u64, 80u64),    // 80% held by 20 rich, 20% by 80 poor
-            ("High: 90/10", 90, 10, 90),                  // 90% held by 10 rich
-            ("Extreme: 99/1", 99, 1, 99),                 // 99% held by 1 rich
-            ("Pathological: 99.9/0.1", 999, 1, 999),      // 99.9% held by 1 (using 999/1000)
+            ("Moderate: 80/20", 80u64, 20u64, 80u64), // 80% held by 20 rich, 20% by 80 poor
+            ("High: 90/10", 90, 10, 90),              // 90% held by 10 rich
+            ("Extreme: 99/1", 99, 1, 99),             // 99% held by 1 rich
+            ("Pathological: 99.9/0.1", 999, 1, 999),  // 99.9% held by 1 (using 999/1000)
         ];
 
-        eprintln!("{:<25} {:>10} {:>10} {:>12} {:>15}", "Scenario", "Init Gini", "Final Gini", "Change %", "Interpretation");
+        eprintln!(
+            "{:<25} {:>10} {:>10} {:>12} {:>15}",
+            "Scenario", "Init Gini", "Final Gini", "Change %", "Interpretation"
+        );
         eprintln!("{}", "-".repeat(80));
 
         for (name, rich_pct, rich_count, poor_count) in scenarios {
@@ -3249,8 +3546,10 @@ mod tests {
             ("LogWeighted", SelectionMode::LogWeighted),
         ];
 
-        eprintln!("{:<20} {:>15} {:>15} {:>15} {:>15} {:>12}",
-            "Mode", "1 UTXO Win", "10 UTXO Win", "Ratio", "Gaming Net", "Verdict");
+        eprintln!(
+            "{:<20} {:>15} {:>15} {:>15} {:>15} {:>12}",
+            "Mode", "1 UTXO Win", "10 UTXO Win", "Ratio", "Gaming Net", "Verdict"
+        );
         eprintln!("{}", "-".repeat(95));
 
         for (name, mode) in modes {
@@ -3272,7 +3571,10 @@ mod tests {
                 }
                 sim.current_block = 1000;
                 sim.advance_blocks_immediate(10_000, 20, TransactionModel::ValueWeighted);
-                sim.owners.get(&attacker_id).map(|o| o.total_winnings).unwrap_or(0)
+                sim.owners
+                    .get(&attacker_id)
+                    .map(|o| o.total_winnings)
+                    .unwrap_or(0)
             };
 
             // Gaming: attacker with 10 UTXOs
@@ -3287,7 +3589,10 @@ mod tests {
                     ..LotteryConfig::default()
                 };
                 let mut sim = LotterySimulation::new(config, FeeCurve::default_params());
-                let attacker_id = sim.add_owner(attacker_wealth, SybilStrategy::MultiAccount { num_accounts: 10 });
+                let attacker_id = sim.add_owner(
+                    attacker_wealth,
+                    SybilStrategy::MultiAccount { num_accounts: 10 },
+                );
                 for _ in 0..90 {
                     sim.add_owner(total_wealth / 100, SybilStrategy::Normal);
                 }
@@ -3398,7 +3703,8 @@ mod tests {
 
     /// Explore the Pareto frontier between progressivity and Sybil resistance.
     ///
-    /// This test sweeps across the hybrid parameter α to find optimal trade-offs:
+    /// This test sweeps across the hybrid parameter α to find optimal
+    /// trade-offs:
     /// - α = 1.0: Pure uniform (progressive, gameable)
     /// - α = 0.0: Pure value-weighted (Sybil-resistant, not progressive)
     /// - α in between: Various trade-offs
@@ -3422,8 +3728,10 @@ mod tests {
         // Sweep α from 0.0 to 1.0
         let alphas = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0];
 
-        eprintln!("{:>6} {:>12} {:>12} {:>12} {:>15}",
-            "α", "Gaming Ratio", "Gini Δ%", "Poor Gain%", "Assessment");
+        eprintln!(
+            "{:>6} {:>12} {:>12} {:>12} {:>15}",
+            "α", "Gaming Ratio", "Gini Δ%", "Poor Gain%", "Assessment"
+        );
         eprintln!("{}", "-".repeat(60));
 
         for alpha in alphas {
@@ -3449,7 +3757,10 @@ mod tests {
                     }
                     sim.current_block = 1000;
                     sim.advance_blocks_immediate(5_000, 20, TransactionModel::ValueWeighted);
-                    sim.owners.get(&attacker_id).map(|o| o.total_winnings).unwrap_or(0)
+                    sim.owners
+                        .get(&attacker_id)
+                        .map(|o| o.total_winnings)
+                        .unwrap_or(0)
                 };
 
                 // Gaming: 10 UTXOs
@@ -3464,13 +3775,19 @@ mod tests {
                         ..LotteryConfig::default()
                     };
                     let mut sim = LotterySimulation::new(config, FeeCurve::default_params());
-                    let attacker_id = sim.add_owner(attacker_wealth, SybilStrategy::MultiAccount { num_accounts: 10 });
+                    let attacker_id = sim.add_owner(
+                        attacker_wealth,
+                        SybilStrategy::MultiAccount { num_accounts: 10 },
+                    );
                     for _ in 0..90 {
                         sim.add_owner(total_wealth / 100, SybilStrategy::Normal);
                     }
                     sim.current_block = 1000;
                     sim.advance_blocks_immediate(5_000, 20, TransactionModel::ValueWeighted);
-                    sim.owners.get(&attacker_id).map(|o| o.total_winnings).unwrap_or(0)
+                    sim.owners
+                        .get(&attacker_id)
+                        .map(|o| o.total_winnings)
+                        .unwrap_or(0)
                 };
 
                 (baseline, gaming)
@@ -3514,7 +3831,8 @@ mod tests {
 
                 let gini_pct = (initial_gini - final_gini) / initial_gini * 100.0;
                 let poor_pct = (final_poor_wealth as f64 - initial_poor_wealth as f64)
-                    / initial_poor_wealth as f64 * 100.0;
+                    / initial_poor_wealth as f64
+                    * 100.0;
 
                 (gini_pct, poor_pct)
             };
@@ -3568,8 +3886,10 @@ mod tests {
             ("10x bonus at max age", 10.0),
         ];
 
-        eprintln!("{:<25} {:>15} {:>15} {:>12}",
-            "Config", "Old UTXO Win", "New UTXO Win", "Ratio");
+        eprintln!(
+            "{:<25} {:>15} {:>15} {:>12}",
+            "Config", "Old UTXO Win", "New UTXO Win", "Ratio"
+        );
         eprintln!("{}", "-".repeat(70));
 
         for (name, age_bonus) in age_configs {
@@ -3603,7 +3923,10 @@ mod tests {
                 sim.current_block = 10_000;
 
                 sim.advance_blocks_immediate(5_000, 20, TransactionModel::ValueWeighted);
-                sim.owners.get(&old_id).map(|o| o.total_winnings).unwrap_or(0)
+                sim.owners
+                    .get(&old_id)
+                    .map(|o| o.total_winnings)
+                    .unwrap_or(0)
             };
 
             // New UTXO holder (created at current block)
@@ -3643,7 +3966,13 @@ mod tests {
                     sim.next_utxo_id += 1;
 
                     // Created at current block (age = 0)
-                    let utxo = LotteryUtxo::new(utxo_id, owner_id, attacker_wealth, cluster_factor, sim.current_block);
+                    let utxo = LotteryUtxo::new(
+                        utxo_id,
+                        owner_id,
+                        attacker_wealth,
+                        cluster_factor,
+                        sim.current_block,
+                    );
                     sim.utxos.insert(utxo_id, utxo);
                     owner.utxo_ids.push(utxo_id);
                     sim.owners.insert(owner_id, owner);
@@ -3651,7 +3980,10 @@ mod tests {
                 };
 
                 sim.advance_blocks_immediate(5_000, 20, TransactionModel::ValueWeighted);
-                sim.owners.get(&new_id).map(|o| o.total_winnings).unwrap_or(0)
+                sim.owners
+                    .get(&new_id)
+                    .map(|o| o.total_winnings)
+                    .unwrap_or(0)
             };
 
             let ratio = old_winnings as f64 / new_winnings.max(1) as f64;
@@ -3728,13 +4060,24 @@ mod tests {
             let final_rich: u64 = rich_ids.iter().map(|id| sim.owner_value(*id)).sum();
 
             let gini_change = (initial_gini - final_gini) / initial_gini * 100.0;
-            let poor_change = (final_poor as i64 - initial_poor as i64) as f64 / initial_poor as f64 * 100.0;
-            let rich_change = (final_rich as i64 - initial_rich as i64) as f64 / initial_rich as f64 * 100.0;
+            let poor_change =
+                (final_poor as i64 - initial_poor as i64) as f64 / initial_poor as f64 * 100.0;
+            let rich_change =
+                (final_rich as i64 - initial_rich as i64) as f64 / initial_rich as f64 * 100.0;
 
             eprintln!("{}", name);
-            eprintln!("  Gini: {:.4} -> {:.4} ({:+.1}%)", initial_gini, final_gini, gini_change);
-            eprintln!("  Poor: {} -> {} ({:+.1}%)", initial_poor, final_poor, poor_change);
-            eprintln!("  Rich: {} -> {} ({:+.1}%)", initial_rich, final_rich, rich_change);
+            eprintln!(
+                "  Gini: {:.4} -> {:.4} ({:+.1}%)",
+                initial_gini, final_gini, gini_change
+            );
+            eprintln!(
+                "  Poor: {} -> {} ({:+.1}%)",
+                initial_poor, final_poor, poor_change
+            );
+            eprintln!(
+                "  Rich: {} -> {} ({:+.1}%)",
+                initial_rich, final_rich, rich_change
+            );
             eprintln!("");
         }
 
@@ -3767,13 +4110,29 @@ mod tests {
             ("SqrtWeighted", SelectionMode::SqrtWeighted, 0.0),
             ("Hybrid(0.3)", SelectionMode::Hybrid { alpha: 0.3 }, 0.0),
             ("Hybrid(0.5)", SelectionMode::Hybrid { alpha: 0.5 }, 0.0),
-            ("AgeWeighted(2x)", SelectionMode::AgeWeighted { max_age_blocks: 10_000, age_bonus: 2.0 }, 0.5),
-            ("AgeWeighted(5x)", SelectionMode::AgeWeighted { max_age_blocks: 10_000, age_bonus: 5.0 }, 0.5),
+            (
+                "AgeWeighted(2x)",
+                SelectionMode::AgeWeighted {
+                    max_age_blocks: 10_000,
+                    age_bonus: 2.0,
+                },
+                0.5,
+            ),
+            (
+                "AgeWeighted(5x)",
+                SelectionMode::AgeWeighted {
+                    max_age_blocks: 10_000,
+                    age_bonus: 5.0,
+                },
+                0.5,
+            ),
             ("ClusterWeighted", SelectionMode::ClusterWeighted, 1.5),
         ];
 
-        eprintln!("{:<20} {:>10} {:>12} {:>12} {:>12}",
-            "Mode", "Privacy", "Gaming", "Gini Δ%", "Score");
+        eprintln!(
+            "{:<20} {:>10} {:>12} {:>12} {:>12}",
+            "Mode", "Privacy", "Gaming", "Gini Δ%", "Score"
+        );
         eprintln!("{}", "-".repeat(70));
 
         let mut results: Vec<(&str, f64, f64, f64, f64)> = Vec::new();
@@ -3798,7 +4157,10 @@ mod tests {
                     }
                     sim.current_block = 10_000; // For age-weighted
                     sim.advance_blocks_immediate(5_000, 20, TransactionModel::ValueWeighted);
-                    sim.owners.get(&attacker_id).map(|o| o.total_winnings).unwrap_or(0)
+                    sim.owners
+                        .get(&attacker_id)
+                        .map(|o| o.total_winnings)
+                        .unwrap_or(0)
                 };
 
                 let gaming = {
@@ -3812,13 +4174,19 @@ mod tests {
                         ..LotteryConfig::default()
                     };
                     let mut sim = LotterySimulation::new(config, FeeCurve::default_params());
-                    let attacker_id = sim.add_owner(attacker_wealth, SybilStrategy::MultiAccount { num_accounts: 10 });
+                    let attacker_id = sim.add_owner(
+                        attacker_wealth,
+                        SybilStrategy::MultiAccount { num_accounts: 10 },
+                    );
                     for _ in 0..90 {
                         sim.add_owner(total_wealth / 100, SybilStrategy::Normal);
                     }
                     sim.current_block = 10_000;
                     sim.advance_blocks_immediate(5_000, 20, TransactionModel::ValueWeighted);
-                    sim.owners.get(&attacker_id).map(|o| o.total_winnings).unwrap_or(0)
+                    sim.owners
+                        .get(&attacker_id)
+                        .map(|o| o.total_winnings)
+                        .unwrap_or(0)
                 };
 
                 gaming as f64 / baseline.max(1) as f64
@@ -3878,7 +4246,12 @@ mod tests {
         for (i, (name, privacy, gaming, gini, score)) in sorted.iter().take(3).enumerate() {
             eprintln!(
                 "  {}. {}: score={:.2} (privacy={:.1}b, gaming={:.2}x, gini={:.1}%)",
-                i + 1, name, score, privacy, gaming, gini
+                i + 1,
+                name,
+                score,
+                privacy,
+                gaming,
+                gini
             );
         }
 
@@ -3890,12 +4263,14 @@ mod tests {
         eprintln!("==========================================\n");
     }
 
-    /// COMPREHENSIVE VALIDATION: Test all claims rigorously with multiple trials.
+    /// COMPREHENSIVE VALIDATION: Test all claims rigorously with multiple
+    /// trials.
     ///
     /// This test validates:
     /// 1. Sybil resistance: splitting same wealth into N UTXOs shouldn't help
     /// 2. Progressivity: poor should gain relative to rich
-    /// 3. Statistical significance: run multiple trials, report confidence intervals
+    /// 3. Statistical significance: run multiple trials, report confidence
+    ///    intervals
     /// 4. Realistic scenarios: test various wealth/factor correlations
     #[test]
     fn test_comprehensive_validation() {
@@ -3960,14 +4335,26 @@ mod tests {
                 sim.current_block = 10_000;
                 sim.advance_blocks_immediate(5_000, 20, TransactionModel::ValueWeighted);
 
-                honest_wins_total += sim.owners.get(&honest_id).map(|o| o.total_winnings).unwrap_or(0);
-                attacker_wins_total += sim.owners.get(&attacker_id).map(|o| o.total_winnings).unwrap_or(0);
+                honest_wins_total += sim
+                    .owners
+                    .get(&honest_id)
+                    .map(|o| o.total_winnings)
+                    .unwrap_or(0);
+                attacker_wins_total += sim
+                    .owners
+                    .get(&attacker_id)
+                    .map(|o| o.total_winnings)
+                    .unwrap_or(0);
             }
 
             let ratio = attacker_wins_total as f64 / honest_wins_total.max(1) as f64;
-            let verdict = if ratio < 1.5 { "✓ SYBIL-RESISTANT" }
-                         else if ratio < 3.0 { "~ MODERATE" }
-                         else { "✗ VULNERABLE" };
+            let verdict = if ratio < 1.5 {
+                "✓ SYBIL-RESISTANT"
+            } else if ratio < 3.0 {
+                "~ MODERATE"
+            } else {
+                "✗ VULNERABLE"
+            };
 
             eprintln!("{:<20} Ratio: {:>5.2}x   {}", name, ratio, verdict);
         }
@@ -4020,16 +4407,24 @@ mod tests {
             let final_rich: u64 = rich_ids.iter().map(|id| sim.owner_value(*id)).sum();
             let final_gini = sim.calculate_gini();
 
-            let poor_change_pct = (final_poor as f64 - initial_poor as f64) / initial_poor as f64 * 100.0;
-            let rich_change_pct = (final_rich as f64 - initial_rich as f64) / initial_rich as f64 * 100.0;
+            let poor_change_pct =
+                (final_poor as f64 - initial_poor as f64) / initial_poor as f64 * 100.0;
+            let rich_change_pct =
+                (final_rich as f64 - initial_rich as f64) / initial_rich as f64 * 100.0;
             let gini_change = (initial_gini - final_gini) / initial_gini * 100.0;
 
-            let verdict = if poor_change_pct > 50.0 { "✓ PROGRESSIVE" }
-                         else if poor_change_pct > 0.0 { "~ MILD" }
-                         else { "✗ NOT PROGRESSIVE" };
+            let verdict = if poor_change_pct > 50.0 {
+                "✓ PROGRESSIVE"
+            } else if poor_change_pct > 0.0 {
+                "~ MILD"
+            } else {
+                "✗ NOT PROGRESSIVE"
+            };
 
-            eprintln!("{:<20} Poor: {:>+6.1}%  Rich: {:>+6.1}%  Gini: {:>+5.1}%  {}",
-                name, poor_change_pct, rich_change_pct, gini_change, verdict);
+            eprintln!(
+                "{:<20} Poor: {:>+6.1}%  Rich: {:>+6.1}%  Gini: {:>+5.1}%  {}",
+                name, poor_change_pct, rich_change_pct, gini_change, verdict
+            );
         }
 
         // ========================================
@@ -4042,8 +4437,9 @@ mod tests {
         eprintln!("Testing cluster factor's effect independent of wealth");
         eprintln!("");
 
-        // Scenario A: Poor with HIGH factor (fresh minters) vs Rich with LOW factor (commerce whales)
-        // This is OPPOSITE to the ideal - ClusterWeighted should favor low-factor
+        // Scenario A: Poor with HIGH factor (fresh minters) vs Rich with LOW factor
+        // (commerce whales) This is OPPOSITE to the ideal - ClusterWeighted
+        // should favor low-factor
         eprintln!("Scenario A: Poor=high factor(5.0), Rich=low factor(1.5)");
         {
             let config = LotteryConfig {
@@ -4078,11 +4474,15 @@ mod tests {
             let final_poor: u64 = poor_ids.iter().map(|id| sim.owner_value(*id)).sum();
             let final_rich: u64 = rich_ids.iter().map(|id| sim.owner_value(*id)).sum();
 
-            let poor_change = (final_poor as f64 - initial_poor as f64) / initial_poor as f64 * 100.0;
-            let rich_change = (final_rich as f64 - initial_rich as f64) / initial_rich as f64 * 100.0;
+            let poor_change =
+                (final_poor as f64 - initial_poor as f64) / initial_poor as f64 * 100.0;
+            let rich_change =
+                (final_rich as f64 - initial_rich as f64) / initial_rich as f64 * 100.0;
 
-            eprintln!("  Poor (high factor): {:>+6.1}%  Rich (low factor): {:>+6.1}%",
-                poor_change, rich_change);
+            eprintln!(
+                "  Poor (high factor): {:>+6.1}%  Rich (low factor): {:>+6.1}%",
+                poor_change, rich_change
+            );
             if rich_change > poor_change {
                 eprintln!("  → Rich gained MORE because they have lower cluster factors!");
                 eprintln!("  → ClusterWeighted is NOT inherently progressive");
@@ -4124,11 +4524,15 @@ mod tests {
             let final_poor: u64 = poor_ids.iter().map(|id| sim.owner_value(*id)).sum();
             let final_rich: u64 = rich_ids.iter().map(|id| sim.owner_value(*id)).sum();
 
-            let poor_change = (final_poor as f64 - initial_poor as f64) / initial_poor as f64 * 100.0;
-            let rich_change = (final_rich as f64 - initial_rich as f64) / initial_rich as f64 * 100.0;
+            let poor_change =
+                (final_poor as f64 - initial_poor as f64) / initial_poor as f64 * 100.0;
+            let rich_change =
+                (final_rich as f64 - initial_rich as f64) / initial_rich as f64 * 100.0;
 
-            eprintln!("  Poor (low factor): {:>+6.1}%  Rich (high factor): {:>+6.1}%",
-                poor_change, rich_change);
+            eprintln!(
+                "  Poor (low factor): {:>+6.1}%  Rich (high factor): {:>+6.1}%",
+                poor_change, rich_change
+            );
             if poor_change > rich_change {
                 eprintln!("  → Poor gained MORE because they have lower cluster factors");
                 eprintln!("  → This is the ideal scenario for ClusterWeighted");
@@ -4160,9 +4564,11 @@ mod tests {
                         selection_mode: *mode,
                         ..LotteryConfig::default()
                     };
-                    let mut sim = LotterySimulation::new(config.clone(), FeeCurve::default_params());
+                    let mut sim =
+                        LotterySimulation::new(config.clone(), FeeCurve::default_params());
 
-                    let honest_id = sim.add_owner_with_factor(test_wealth, SybilStrategy::Normal, 3.0);
+                    let honest_id =
+                        sim.add_owner_with_factor(test_wealth, SybilStrategy::Normal, 3.0);
                     let attacker_id = sim.create_owner(SybilStrategy::Normal);
                     for _ in 0..10 {
                         sim.create_utxo_for_owner(attacker_id, test_wealth / 10, 3.0);
@@ -4174,8 +4580,16 @@ mod tests {
                     sim.current_block = 10_000;
                     sim.advance_blocks_immediate(3_000, 20, TransactionModel::ValueWeighted);
 
-                    let honest_wins = sim.owners.get(&honest_id).map(|o| o.total_winnings).unwrap_or(0);
-                    let attacker_wins = sim.owners.get(&attacker_id).map(|o| o.total_winnings).unwrap_or(0);
+                    let honest_wins = sim
+                        .owners
+                        .get(&honest_id)
+                        .map(|o| o.total_winnings)
+                        .unwrap_or(0);
+                    let attacker_wins = sim
+                        .owners
+                        .get(&attacker_id)
+                        .map(|o| o.total_winnings)
+                        .unwrap_or(0);
                     (honest_wins, attacker_wins)
                 };
 
@@ -4211,17 +4625,25 @@ mod tests {
 
             // Calculate mean and std dev
             let gaming_mean: f64 = gaming_ratios.iter().sum::<f64>() / gaming_ratios.len() as f64;
-            let gaming_std: f64 = (gaming_ratios.iter()
+            let gaming_std: f64 = (gaming_ratios
+                .iter()
                 .map(|x| (x - gaming_mean).powi(2))
-                .sum::<f64>() / gaming_ratios.len() as f64).sqrt();
+                .sum::<f64>()
+                / gaming_ratios.len() as f64)
+                .sqrt();
 
             let gini_mean: f64 = gini_changes.iter().sum::<f64>() / gini_changes.len() as f64;
-            let gini_std: f64 = (gini_changes.iter()
+            let gini_std: f64 = (gini_changes
+                .iter()
                 .map(|x| (x - gini_mean).powi(2))
-                .sum::<f64>() / gini_changes.len() as f64).sqrt();
+                .sum::<f64>()
+                / gini_changes.len() as f64)
+                .sqrt();
 
-            eprintln!("{:<20} Gaming: {:>5.2}x ± {:.2}  Gini Δ: {:>5.1}% ± {:.1}",
-                name, gaming_mean, gaming_std, gini_mean, gini_std);
+            eprintln!(
+                "{:<20} Gaming: {:>5.2}x ± {:.2}  Gini Δ: {:>5.1}% ± {:.1}",
+                name, gaming_mean, gaming_std, gini_mean, gini_std
+            );
         }
 
         eprintln!("\n{}", "=".repeat(80));
@@ -4293,12 +4715,22 @@ mod tests {
             sim.current_block = 10_000;
             sim.advance_blocks_immediate(10_000, 20, TransactionModel::ValueWeighted);
 
-            let honest_wins = sim.owners.get(&honest_id).map(|o| o.total_winnings).unwrap_or(0);
-            let attacker_wins = sim.owners.get(&attacker_id).map(|o| o.total_winnings).unwrap_or(0);
+            let honest_wins = sim
+                .owners
+                .get(&honest_id)
+                .map(|o| o.total_winnings)
+                .unwrap_or(0);
+            let attacker_wins = sim
+                .owners
+                .get(&attacker_id)
+                .map(|o| o.total_winnings)
+                .unwrap_or(0);
             let ratio = attacker_wins as f64 / honest_wins.max(1) as f64;
 
-            eprintln!("Uniform: Honest wins={}, Attacker wins={}, Ratio={:.2}×",
-                honest_wins, attacker_wins, ratio);
+            eprintln!(
+                "Uniform: Honest wins={}, Attacker wins={}, Ratio={:.2}×",
+                honest_wins, attacker_wins, ratio
+            );
             eprintln!("Expected: ~10× (attacker has 10× more UTXOs)");
         }
 
@@ -4344,14 +4776,25 @@ mod tests {
             sim.current_block = 10_000;
             sim.advance_blocks_immediate(10_000, 20, TransactionModel::ValueWeighted);
 
-            let honest_wins = sim.owners.get(&honest_id).map(|o| o.total_winnings).unwrap_or(0);
-            let attacker_wins = sim.owners.get(&attacker_id).map(|o| o.total_winnings).unwrap_or(0);
+            let honest_wins = sim
+                .owners
+                .get(&honest_id)
+                .map(|o| o.total_winnings)
+                .unwrap_or(0);
+            let attacker_wins = sim
+                .owners
+                .get(&attacker_id)
+                .map(|o| o.total_winnings)
+                .unwrap_or(0);
             let ratio = attacker_wins as f64 / honest_wins.max(1) as f64;
             entropy_ratios.push(ratio);
         }
 
         let mean_ratio: f64 = entropy_ratios.iter().sum::<f64>() / entropy_ratios.len() as f64;
-        eprintln!("EntropyWeighted: Mean ratio = {:.2}× (over {} trials)", mean_ratio, trials);
+        eprintln!(
+            "EntropyWeighted: Mean ratio = {:.2}× (over {} trials)",
+            mean_ratio, trials
+        );
         eprintln!("Expected: ~6-7× (reduced from 10× but not eliminated)");
         eprintln!("");
 
@@ -4397,8 +4840,16 @@ mod tests {
             sim.current_block = 10_000;
             sim.advance_blocks_immediate(10_000, 20, TransactionModel::ValueWeighted);
 
-            let honest_wins = sim.owners.get(&honest_id).map(|o| o.total_winnings).unwrap_or(0);
-            let attacker_wins = sim.owners.get(&attacker_id).map(|o| o.total_winnings).unwrap_or(0);
+            let honest_wins = sim
+                .owners
+                .get(&honest_id)
+                .map(|o| o.total_winnings)
+                .unwrap_or(0);
+            let attacker_wins = sim
+                .owners
+                .get(&attacker_id)
+                .map(|o| o.total_winnings)
+                .unwrap_or(0);
             let ratio = attacker_wins as f64 / honest_wins.max(1) as f64;
 
             eprintln!("ValueWeighted: Ratio = {:.2}× (should be ~1.0×)", ratio);
@@ -4468,8 +4919,10 @@ mod tests {
             // Pool distributed = 100 blocks × 10 tx × fee × 0.8
             // Each UTXO wins = distributed / N
 
-            eprintln!("N = {:>6}: Avg winnings per UTXO = {:.2} BTH",
-                utxo_count, avg_per_utxo);
+            eprintln!(
+                "N = {:>6}: Avg winnings per UTXO = {:.2} BTH",
+                utxo_count, avg_per_utxo
+            );
         }
 
         eprintln!("");
@@ -4497,7 +4950,8 @@ mod tests {
             Self { id, value, tags }
         }
 
-        /// Split this UTXO into N children. Each child inherits the tag distribution.
+        /// Split this UTXO into N children. Each child inherits the tag
+        /// distribution.
         fn split(&self, n: usize, next_id: &mut u64) -> Vec<RealUtxo> {
             let child_value = self.value / n as u64;
             (0..n)
@@ -4561,12 +5015,18 @@ mod tests {
 
         // Split into 10 UTXOs
         let children = fresh_mint.split(10, &mut next_id);
-        let after_total_weight: f64 = children.iter().map(|u| u.lottery_weight(entropy_bonus)).sum();
+        let after_total_weight: f64 = children
+            .iter()
+            .map(|u| u.lottery_weight(entropy_bonus))
+            .sum();
         let after_entropy = children[0].tags.shannon_entropy();
 
         eprintln!("\nAfter split into 10 UTXOs:");
         eprintln!("  Per-child value: {} BTH", children[0].value);
-        eprintln!("  Per-child entropy: {:.3} bits (unchanged!)", after_entropy);
+        eprintln!(
+            "  Per-child entropy: {:.3} bits (unchanged!)",
+            after_entropy
+        );
         eprintln!("  Total lottery weight: {:.0}", after_total_weight);
 
         let weight_ratio = after_total_weight / before_weight;
@@ -4591,7 +5051,7 @@ mod tests {
         commerce_tags.set(ClusterId::new(20), 250_000); // 25%
         commerce_tags.set(ClusterId::new(30), 250_000); // 25%
         commerce_tags.set(ClusterId::new(40), 200_000); // 20%
-        // Note: sum = 100%, no background
+                                                        // Note: sum = 100%, no background
 
         let commerce_coin = RealUtxo::new(next_id, 10_000_000, commerce_tags);
         next_id += 1;
@@ -4601,17 +5061,26 @@ mod tests {
 
         eprintln!("Before split:");
         eprintln!("  Value: {} BTH", commerce_coin.value);
-        eprintln!("  Entropy: {:.3} bits (high - diverse commerce)", before_entropy);
+        eprintln!(
+            "  Entropy: {:.3} bits (high - diverse commerce)",
+            before_entropy
+        );
         eprintln!("  Lottery weight: {:.0}", before_weight);
 
         // Split into 10 UTXOs
         let children = commerce_coin.split(10, &mut next_id);
-        let after_total_weight: f64 = children.iter().map(|u| u.lottery_weight(entropy_bonus)).sum();
+        let after_total_weight: f64 = children
+            .iter()
+            .map(|u| u.lottery_weight(entropy_bonus))
+            .sum();
         let after_entropy = children[0].tags.shannon_entropy();
 
         eprintln!("\nAfter split into 10 UTXOs:");
         eprintln!("  Per-child value: {} BTH", children[0].value);
-        eprintln!("  Per-child entropy: {:.3} bits (unchanged!)", after_entropy);
+        eprintln!(
+            "  Per-child entropy: {:.3} bits (unchanged!)",
+            after_entropy
+        );
         eprintln!("  Total lottery weight: {:.0}", after_total_weight);
 
         let weight_ratio = after_total_weight / before_weight;
@@ -4642,14 +5111,24 @@ mod tests {
         let attacker_utxos = attacker_original.split(10, &mut next_id);
 
         let honest_weight = honest_utxo.lottery_weight(entropy_bonus);
-        let attacker_total_weight: f64 = attacker_utxos.iter().map(|u| u.lottery_weight(entropy_bonus)).sum();
+        let attacker_total_weight: f64 = attacker_utxos
+            .iter()
+            .map(|u| u.lottery_weight(entropy_bonus))
+            .sum();
 
         eprintln!("Honest user: 1 UTXO of {} BTH", honest_utxo.value);
         eprintln!("  Entropy: {:.3} bits", honest_utxo.tags.shannon_entropy());
         eprintln!("  Lottery weight: {:.0}", honest_weight);
 
-        eprintln!("\nAttacker: {} UTXOs of {} BTH each", attacker_utxos.len(), attacker_utxos[0].value);
-        eprintln!("  Per-UTXO entropy: {:.3} bits", attacker_utxos[0].tags.shannon_entropy());
+        eprintln!(
+            "\nAttacker: {} UTXOs of {} BTH each",
+            attacker_utxos.len(),
+            attacker_utxos[0].value
+        );
+        eprintln!(
+            "  Per-UTXO entropy: {:.3} bits",
+            attacker_utxos[0].tags.shannon_entropy()
+        );
         eprintln!("  Total lottery weight: {:.0}", attacker_total_weight);
 
         let advantage = attacker_total_weight / honest_weight;
@@ -4696,7 +5175,8 @@ mod tests {
         eprintln!("{}", "=".repeat(80));
     }
 
-    /// Test that increasing entropy through commerce is the ONLY way to increase weight.
+    /// Test that increasing entropy through commerce is the ONLY way to
+    /// increase weight.
     #[test]
     fn test_only_commerce_increases_weight() {
         use crate::{ClusterId, TagVector};
@@ -4718,13 +5198,19 @@ mod tests {
         eprintln!("Initial state (fresh mint):");
         eprintln!("  Value: {} BTH", user_utxo.value);
         eprintln!("  Entropy: {:.3} bits", user_utxo.tags.shannon_entropy());
-        eprintln!("  Lottery weight: {:.0}", user_utxo.lottery_weight(entropy_bonus));
+        eprintln!(
+            "  Lottery weight: {:.0}",
+            user_utxo.lottery_weight(entropy_bonus)
+        );
 
         // Attempt 1: Split (should NOT increase weight)
         eprintln!("\n--- Attempt 1: Split into 5 UTXOs ---");
         let splits = user_utxo.split(5, &mut next_id);
         let split_total_weight: f64 = splits.iter().map(|u| u.lottery_weight(entropy_bonus)).sum();
-        eprintln!("  Total weight after split: {:.0} (unchanged)", split_total_weight);
+        eprintln!(
+            "  Total weight after split: {:.0} (unchanged)",
+            split_total_weight
+        );
 
         // Reconsolidate back to one UTXO (simulating merge)
         let mut merged_tags = TagVector::new();
@@ -4736,7 +5222,10 @@ mod tests {
         user_utxo = RealUtxo::new(next_id, merged_value, merged_tags);
         next_id += 1;
 
-        eprintln!("  After reconsolidation: weight = {:.0}", user_utxo.lottery_weight(entropy_bonus));
+        eprintln!(
+            "  After reconsolidation: weight = {:.0}",
+            user_utxo.lottery_weight(entropy_bonus)
+        );
 
         // Attempt 2: Receive payment from different cluster (SHOULD increase weight)
         eprintln!("\n--- Attempt 2: Receive payment from different source ---");
@@ -4746,13 +5235,21 @@ mod tests {
         let incoming_value = 5_000_000u64;
 
         // Mix tags (simulating receiving coins with different provenance)
-        user_utxo.tags.mix(user_utxo.value, &incoming_tags, incoming_value);
+        user_utxo
+            .tags
+            .mix(user_utxo.value, &incoming_tags, incoming_value);
         user_utxo.value += incoming_value;
 
         eprintln!("  Received {} BTH from different cluster", incoming_value);
         eprintln!("  New value: {} BTH", user_utxo.value);
-        eprintln!("  New entropy: {:.3} bits (increased!)", user_utxo.tags.shannon_entropy());
-        eprintln!("  New lottery weight: {:.0} (increased!)", user_utxo.lottery_weight(entropy_bonus));
+        eprintln!(
+            "  New entropy: {:.3} bits (increased!)",
+            user_utxo.tags.shannon_entropy()
+        );
+        eprintln!(
+            "  New lottery weight: {:.0} (increased!)",
+            user_utxo.lottery_weight(entropy_bonus)
+        );
 
         // Attempt 3: Another trade increases entropy further
         eprintln!("\n--- Attempt 3: Another trade with third party ---");
@@ -4761,13 +5258,21 @@ mod tests {
         let third_tags = TagVector::single(third_cluster);
         let third_value = 3_000_000u64;
 
-        user_utxo.tags.mix(user_utxo.value, &third_tags, third_value);
+        user_utxo
+            .tags
+            .mix(user_utxo.value, &third_tags, third_value);
         user_utxo.value += third_value;
 
         eprintln!("  Received {} BTH from third cluster", third_value);
         eprintln!("  New value: {} BTH", user_utxo.value);
-        eprintln!("  New entropy: {:.3} bits (increased further!)", user_utxo.tags.shannon_entropy());
-        eprintln!("  New lottery weight: {:.0} (increased further!)", user_utxo.lottery_weight(entropy_bonus));
+        eprintln!(
+            "  New entropy: {:.3} bits (increased further!)",
+            user_utxo.tags.shannon_entropy()
+        );
+        eprintln!(
+            "  New lottery weight: {:.0} (increased further!)",
+            user_utxo.lottery_weight(entropy_bonus)
+        );
 
         // Calculate weight per BTH
         let final_weight = user_utxo.lottery_weight(entropy_bonus);
@@ -4775,8 +5280,10 @@ mod tests {
 
         eprintln!("\n--- SUMMARY ---");
         eprintln!("Splitting: NO effect on total weight");
-        eprintln!("Commerce:  INCREASES weight per BTH from {:.4} to {:.4}",
-            1.0, weight_per_bth);
+        eprintln!(
+            "Commerce:  INCREASES weight per BTH from {:.4} to {:.4}",
+            1.0, weight_per_bth
+        );
         eprintln!("");
         eprintln!("CONCLUSION: Only genuine economic activity increases lottery advantage.");
         eprintln!("{}", "=".repeat(80));
@@ -4822,16 +5329,33 @@ mod tests {
 
         // Calculate weights
         let weight_a = strategy_a.lottery_weight(entropy_bonus);
-        let weight_b: f64 = strategy_b.iter().map(|u| u.lottery_weight(entropy_bonus)).sum();
-        let weight_c: f64 = strategy_c.iter().map(|u| u.lottery_weight(entropy_bonus)).sum();
+        let weight_b: f64 = strategy_b
+            .iter()
+            .map(|u| u.lottery_weight(entropy_bonus))
+            .sum();
+        let weight_c: f64 = strategy_c
+            .iter()
+            .map(|u| u.lottery_weight(entropy_bonus))
+            .sum();
 
-        eprintln!("All attackers start with {} BTH (fresh mint, entropy = 0)", initial_value);
+        eprintln!(
+            "All attackers start with {} BTH (fresh mint, entropy = 0)",
+            initial_value
+        );
         eprintln!("");
         eprintln!("| Strategy | UTXOs | Total Weight | Advantage |");
         eprintln!("|----------|-------|--------------|-----------|");
         eprintln!("| A: Hold 1 UTXO | 1 | {:.0} | 1.00× |", weight_a);
-        eprintln!("| B: Split into 10 | 10 | {:.0} | {:.2}× |", weight_b, weight_b / weight_a);
-        eprintln!("| C: Split into 100 | 100 | {:.0} | {:.2}× |", weight_c, weight_c / weight_a);
+        eprintln!(
+            "| B: Split into 10 | 10 | {:.0} | {:.2}× |",
+            weight_b,
+            weight_b / weight_a
+        );
+        eprintln!(
+            "| C: Split into 100 | 100 | {:.0} | {:.2}× |",
+            weight_c,
+            weight_c / weight_a
+        );
         eprintln!("");
 
         // Verify no advantage
@@ -4861,14 +5385,23 @@ mod tests {
         eprintln!("");
         eprintln!("| Strategy | Entropy | Weight | Advantage |");
         eprintln!("|----------|---------|--------|-----------|");
-        eprintln!("| Sybil (any split) | {:.3} | {:.0} | 1.00× |",
-            strategy_a.tags.shannon_entropy(), weight_a);
-        eprintln!("| Commerce (3 trades) | {:.3} | {:.0} | {:.2}× |",
-            commerce.tags.shannon_entropy(), weight_commerce, weight_commerce / weight_a);
+        eprintln!(
+            "| Sybil (any split) | {:.3} | {:.0} | 1.00× |",
+            strategy_a.tags.shannon_entropy(),
+            weight_a
+        );
+        eprintln!(
+            "| Commerce (3 trades) | {:.3} | {:.0} | {:.2}× |",
+            commerce.tags.shannon_entropy(),
+            weight_commerce,
+            weight_commerce / weight_a
+        );
 
         eprintln!("");
-        eprintln!("CONCLUSION: Commerce provides {:.0}% more lottery weight than Sybil attacks.",
-            (weight_commerce / weight_a - 1.0) * 100.0);
+        eprintln!(
+            "CONCLUSION: Commerce provides {:.0}% more lottery weight than Sybil attacks.",
+            (weight_commerce / weight_a - 1.0) * 100.0
+        );
         eprintln!("{}", "=".repeat(80));
 
         // Assert commerce provides advantage
@@ -4926,7 +5459,8 @@ mod tests {
         }
 
         let honest_weight = honest.lottery_weight(entropy_bonus);
-        let attacker_total_weight: f64 = attacker_utxos.iter()
+        let attacker_total_weight: f64 = attacker_utxos
+            .iter()
             .map(|u| u.lottery_weight(entropy_bonus))
             .sum();
 
@@ -4935,12 +5469,19 @@ mod tests {
         eprintln!("  Lottery weight: {:.0}", honest_weight);
         eprintln!("");
 
-        eprintln!("Patient attacker: {} UTXOs, {} BTH total",
+        eprintln!(
+            "Patient attacker: {} UTXOs, {} BTH total",
             attacker_utxos.len(),
-            attacker_utxos.iter().map(|u| u.value).sum::<u64>());
+            attacker_utxos.iter().map(|u| u.value).sum::<u64>()
+        );
         for (i, utxo) in attacker_utxos.iter().enumerate() {
-            eprintln!("  UTXO {}: {} BTH, entropy {:.3} bits, weight {:.0}",
-                i + 1, utxo.value, utxo.tags.shannon_entropy(), utxo.lottery_weight(entropy_bonus));
+            eprintln!(
+                "  UTXO {}: {} BTH, entropy {:.3} bits, weight {:.0}",
+                i + 1,
+                utxo.value,
+                utxo.tags.shannon_entropy(),
+                utxo.lottery_weight(entropy_bonus)
+            );
         }
         eprintln!("  Total weight: {:.0}", attacker_total_weight);
 
@@ -4954,8 +5495,10 @@ mod tests {
         eprintln!("{}", "=".repeat(80));
         eprintln!("CONCLUSION:");
         eprintln!("");
-        eprintln!("Patient accumulation provides {:.0}% advantage even with entropy-weighting.",
-            (advantage - 1.0) * 100.0);
+        eprintln!(
+            "Patient accumulation provides {:.0}% advantage even with entropy-weighting.",
+            (advantage - 1.0) * 100.0
+        );
         eprintln!("");
         eprintln!("This is EXPECTED and DOCUMENTED. Entropy-weighting solves:");
         eprintln!("  ✓ Instant split attacks (same entropy = no advantage)");
@@ -4985,7 +5528,8 @@ mod tests {
         eprintln!("  consolidated UTXO has higher per-BTH entropy from mixing.");
     }
 
-    /// Final summary test documenting what the entropy-weighted system achieves.
+    /// Final summary test documenting what the entropy-weighted system
+    /// achieves.
     #[test]
     fn test_design_claims_summary() {
         use crate::{ClusterId, TagVector};
@@ -5011,18 +5555,25 @@ mod tests {
         let child_entropy = children[0].tags.shannon_entropy();
 
         assert!((parent_entropy - child_entropy).abs() < 0.001);
-        eprintln!("  ✓ VERIFIED: Parent entropy {:.3} = Child entropy {:.3}",
-            parent_entropy, child_entropy);
+        eprintln!(
+            "  ✓ VERIFIED: Parent entropy {:.3} = Child entropy {:.3}",
+            parent_entropy, child_entropy
+        );
 
         // Claim 2: Splitting provides no lottery advantage
         eprintln!("");
         eprintln!("CLAIM 2: Splitting provides no lottery advantage");
         let parent_weight = parent.lottery_weight(entropy_bonus);
-        let children_weight: f64 = children.iter().map(|c| c.lottery_weight(entropy_bonus)).sum();
+        let children_weight: f64 = children
+            .iter()
+            .map(|c| c.lottery_weight(entropy_bonus))
+            .sum();
 
         assert!((parent_weight - children_weight).abs() < 1.0);
-        eprintln!("  ✓ VERIFIED: Parent weight {:.0} = Children weight {:.0}",
-            parent_weight, children_weight);
+        eprintln!(
+            "  ✓ VERIFIED: Parent weight {:.0} = Children weight {:.0}",
+            parent_weight, children_weight
+        );
 
         // Claim 3: Commerce increases weight per BTH
         eprintln!("");
@@ -5039,9 +5590,12 @@ mod tests {
         let commerce_weight_per_bth = commerce.lottery_weight(entropy_bonus) / value as f64;
 
         assert!(commerce_weight_per_bth > fresh_weight_per_bth * 1.5);
-        eprintln!("  ✓ VERIFIED: Fresh mint {:.4} BTH⁻¹ < Commerce {:.4} BTH⁻¹ ({:.0}% increase)",
-            fresh_weight_per_bth, commerce_weight_per_bth,
-            (commerce_weight_per_bth / fresh_weight_per_bth - 1.0) * 100.0);
+        eprintln!(
+            "  ✓ VERIFIED: Fresh mint {:.4} BTH⁻¹ < Commerce {:.4} BTH⁻¹ ({:.0}% increase)",
+            fresh_weight_per_bth,
+            commerce_weight_per_bth,
+            (commerce_weight_per_bth / fresh_weight_per_bth - 1.0) * 100.0
+        );
 
         // Claim 4: Entropy weighting preserves value-weighted Sybil resistance
         eprintln!("");
@@ -5055,7 +5609,10 @@ mod tests {
 
         let ratio = parts_weight / whole_weight;
         assert!((ratio - 1.0).abs() < 0.01);
-        eprintln!("  ✓ VERIFIED: Weight ratio = {:.4}× (1.0× = perfectly Sybil-resistant)", ratio);
+        eprintln!(
+            "  ✓ VERIFIED: Weight ratio = {:.4}× (1.0× = perfectly Sybil-resistant)",
+            ratio
+        );
 
         eprintln!("");
         eprintln!("{}", "=".repeat(80));
@@ -5070,10 +5627,11 @@ mod tests {
     // These tests verify that cluster_entropy() provides decay-invariant lottery
     // weights, while shannon_entropy() incorrectly increases with age.
 
-    /// Test that cluster_entropy() is decay-invariant under production merge logic.
+    /// Test that cluster_entropy() is decay-invariant under production merge
+    /// logic.
     #[test]
     fn test_cluster_entropy_with_production_decay() {
-        use bth_transaction_types::{ClusterTagVector, ClusterId};
+        use bth_transaction_types::{ClusterId, ClusterTagVector};
 
         eprintln!("\n{}", "=".repeat(80));
         eprintln!("PRODUCTION DECAY TEST: cluster_entropy() is decay-invariant");
@@ -5153,12 +5711,18 @@ mod tests {
         let final_shannon_entropy = tags.shannon_entropy();
 
         eprintln!("\n--- COMPARISON ---");
-        eprintln!("cluster_entropy: {:.4} → {:.4} (change: {:.4})",
-            initial_cluster_entropy, final_cluster_entropy,
-            final_cluster_entropy - initial_cluster_entropy);
-        eprintln!("shannon_entropy: {:.4} → {:.4} (change: {:.4})",
-            initial_shannon_entropy, final_shannon_entropy,
-            final_shannon_entropy - initial_shannon_entropy);
+        eprintln!(
+            "cluster_entropy: {:.4} → {:.4} (change: {:.4})",
+            initial_cluster_entropy,
+            final_cluster_entropy,
+            final_cluster_entropy - initial_cluster_entropy
+        );
+        eprintln!(
+            "shannon_entropy: {:.4} → {:.4} (change: {:.4})",
+            initial_shannon_entropy,
+            final_shannon_entropy,
+            final_shannon_entropy - initial_shannon_entropy
+        );
 
         // ASSERT: cluster_entropy is decay-invariant (stays at 0 for single-source)
         assert!(
@@ -5180,7 +5744,7 @@ mod tests {
     /// Test lottery weight stability using cluster_entropy vs shannon_entropy.
     #[test]
     fn test_lottery_weight_comparison_under_decay() {
-        use bth_transaction_types::{ClusterTagVector, ClusterId};
+        use bth_transaction_types::{ClusterId, ClusterTagVector};
 
         eprintln!("\n{}", "=".repeat(80));
         eprintln!("LOTTERY WEIGHT COMPARISON: cluster_entropy vs shannon_entropy");
@@ -5229,19 +5793,34 @@ mod tests {
         // Hop 1
         let inputs = [(tags.clone(), value, 0u64)];
         let (tags, _) = ClusterTagVector::merge_weighted_with_and_decay(
-            &inputs, 500, decay_rate, min_blocks, max_decays, epoch_blocks,
+            &inputs,
+            500,
+            decay_rate,
+            min_blocks,
+            max_decays,
+            epoch_blocks,
         );
 
         // Hop 2
         let inputs = [(tags.clone(), value, 500u64)];
         let (tags, _) = ClusterTagVector::merge_weighted_with_and_decay(
-            &inputs, 1000, decay_rate, min_blocks, max_decays, epoch_blocks,
+            &inputs,
+            1000,
+            decay_rate,
+            min_blocks,
+            max_decays,
+            epoch_blocks,
         );
 
         // Hop 3
         let inputs = [(tags.clone(), value, 1000u64)];
         let (tags, _) = ClusterTagVector::merge_weighted_with_and_decay(
-            &inputs, 1500, decay_rate, min_blocks, max_decays, epoch_blocks,
+            &inputs,
+            1500,
+            decay_rate,
+            min_blocks,
+            max_decays,
+            epoch_blocks,
         );
 
         eprintln!("\nAfter 3 hops with decay:");
@@ -5286,7 +5865,7 @@ mod tests {
     /// Test that decay doesn't create Sybil advantage via age gaming.
     #[test]
     fn test_no_sybil_advantage_from_aging() {
-        use bth_transaction_types::{ClusterTagVector, ClusterId};
+        use bth_transaction_types::{ClusterId, ClusterTagVector};
 
         eprintln!("\n{}", "=".repeat(80));
         eprintln!("AGE GAMING TEST: Old coins should NOT have lottery advantage");
@@ -5322,14 +5901,26 @@ mod tests {
         }
 
         eprintln!("Fresh mint:");
-        eprintln!("  cluster_entropy: {:.4} bits", fresh_tags.cluster_entropy());
-        eprintln!("  shannon_entropy: {:.4} bits", fresh_tags.shannon_entropy());
-        eprintln!("  background: {}%", fresh_tags.background_weight() as f64 / 10_000.0);
+        eprintln!(
+            "  cluster_entropy: {:.4} bits",
+            fresh_tags.cluster_entropy()
+        );
+        eprintln!(
+            "  shannon_entropy: {:.4} bits",
+            fresh_tags.shannon_entropy()
+        );
+        eprintln!(
+            "  background: {}%",
+            fresh_tags.background_weight() as f64 / 10_000.0
+        );
 
         eprintln!("\nOld coin (10 hops):");
         eprintln!("  cluster_entropy: {:.4} bits", old_tags.cluster_entropy());
         eprintln!("  shannon_entropy: {:.4} bits", old_tags.shannon_entropy());
-        eprintln!("  background: {}%", old_tags.background_weight() as f64 / 10_000.0);
+        eprintln!(
+            "  background: {}%",
+            old_tags.background_weight() as f64 / 10_000.0
+        );
 
         // Calculate lottery weights with cluster_entropy (correct approach)
         let fresh_weight = value as f64 * (1.0 + entropy_bonus * fresh_tags.cluster_entropy());
@@ -5348,13 +5939,17 @@ mod tests {
         );
 
         // Show what would happen with shannon_entropy (wrong approach)
-        let fresh_weight_wrong = value as f64 * (1.0 + entropy_bonus * fresh_tags.shannon_entropy());
+        let fresh_weight_wrong =
+            value as f64 * (1.0 + entropy_bonus * fresh_tags.shannon_entropy());
         let old_weight_wrong = value as f64 * (1.0 + entropy_bonus * old_tags.shannon_entropy());
 
         eprintln!("\nLottery weights (using shannon_entropy - WRONG):");
         eprintln!("  Fresh: {:.0}", fresh_weight_wrong);
         eprintln!("  Old:   {:.0}", old_weight_wrong);
-        eprintln!("  Ratio: {:.4}× (GAMING OPPORTUNITY!)", old_weight_wrong / fresh_weight_wrong);
+        eprintln!(
+            "  Ratio: {:.4}× (GAMING OPPORTUNITY!)",
+            old_weight_wrong / fresh_weight_wrong
+        );
 
         // ASSERT: Shannon approach gives unfair advantage
         let wrong_ratio = old_weight_wrong / fresh_weight_wrong;

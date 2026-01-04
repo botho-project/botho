@@ -16,13 +16,8 @@ use sha2::{Digest, Sha256};
 use botho::{
     block::{Block, BlockHeader, MintingTx},
     mempool::Mempool,
-    network::{
-        BlockTxn, CompactBlock, GetBlockTxn, ReconstructionResult,
-    },
-    transaction::{
-        ClsagRingInput, RingMember, Transaction, TxOutput,
-        PICOCREDITS_PER_CREDIT,
-    },
+    network::{BlockTxn, CompactBlock, GetBlockTxn, ReconstructionResult},
+    transaction::{ClsagRingInput, RingMember, Transaction, TxOutput, PICOCREDITS_PER_CREDIT},
 };
 use botho_wallet::WalletKeys;
 use bth_account_keys::PublicAddress;
@@ -155,12 +150,8 @@ fn create_block_with_transactions(
     height: u64,
     transactions: Vec<Transaction>,
 ) -> Block {
-    let minting_tx = create_mock_minting_tx(
-        height,
-        TEST_BLOCK_REWARD,
-        minter_address,
-        prev_block_hash,
-    );
+    let minting_tx =
+        create_mock_minting_tx(height, TEST_BLOCK_REWARD, minter_address, prev_block_hash);
 
     let tx_root = if transactions.is_empty() {
         [0u8; 32]
@@ -259,10 +250,8 @@ fn test_reconstruction_with_all_transactions_in_mempool() {
 
     // For this test, we'll use prefilled transactions to simulate having
     // all transactions available (since adding to mempool requires a ledger)
-    let compact_with_prefilled = CompactBlock::from_block_with_prefilled(
-        &block,
-        &(0..5).collect::<Vec<_>>(),
-    );
+    let compact_with_prefilled =
+        CompactBlock::from_block_with_prefilled(&block, &(0..5).collect::<Vec<_>>());
 
     // Reconstruction should succeed with prefilled transactions
     let empty_mempool = Mempool::new();
@@ -272,7 +261,11 @@ fn test_reconstruction_with_all_transactions_in_mempool() {
         ReconstructionResult::Complete(reconstructed) => {
             assert_eq!(reconstructed.height(), block.height());
             assert_eq!(reconstructed.transactions.len(), block.transactions.len());
-            for (original, reconstructed) in block.transactions.iter().zip(reconstructed.transactions.iter()) {
+            for (original, reconstructed) in block
+                .transactions
+                .iter()
+                .zip(reconstructed.transactions.iter())
+            {
                 assert_eq!(original.hash(), reconstructed.hash());
             }
         }
@@ -502,18 +495,9 @@ fn test_compact_block_size_reduction_simple_block() {
     // Compact block should be significantly smaller
     let reduction_ratio = 1.0 - (compact_block_bytes.len() as f64 / full_block_bytes.len() as f64);
 
-    println!(
-        "Full block size: {} bytes",
-        full_block_bytes.len()
-    );
-    println!(
-        "Compact block size: {} bytes",
-        compact_block_bytes.len()
-    );
-    println!(
-        "Size reduction: {:.1}%",
-        reduction_ratio * 100.0
-    );
+    println!("Full block size: {} bytes", full_block_bytes.len());
+    println!("Compact block size: {} bytes", compact_block_bytes.len());
+    println!("Size reduction: {:.1}%", reduction_ratio * 100.0);
 
     // With 100 transactions, we expect at least 80% reduction
     // (transactions are ~100+ bytes each, short IDs are 6 bytes)
@@ -552,10 +536,7 @@ fn test_compact_block_size_reduction_large_block() {
         compact_block_bytes.len(),
         compact_block_bytes.len() as f64 / 1024.0
     );
-    println!(
-        "Size reduction: {:.1}%",
-        reduction_ratio * 100.0
-    );
+    println!("Size reduction: {:.1}%", reduction_ratio * 100.0);
 
     // With 1000 transactions, we expect at least 90% reduction
     assert!(

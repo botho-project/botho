@@ -1,11 +1,11 @@
 // Copyright (c) 2018-2022 The Botho Foundation
 
 //! Core types for Botho's implementation of SCP.
+use bth_crypto_digestible::Digestible;
 use core::{
     fmt::{Debug, Display},
     hash::Hash,
 };
-use bth_crypto_digestible::Digestible;
 use prost::Message;
 use serde::{de::DeserializeOwned, Serialize};
 

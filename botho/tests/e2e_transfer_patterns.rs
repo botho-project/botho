@@ -67,7 +67,10 @@ fn test_concurrent_transfers() {
     }
 
     // Create concurrent transfers: each wallet sends to the next
-    println!("\nCreating {} concurrent transactions...", DEFAULT_NUM_NODES);
+    println!(
+        "\nCreating {} concurrent transactions...",
+        DEFAULT_NUM_NODES
+    );
     let node = network.get_node(0);
     let current_height = node.chain_state().height;
     drop(node);
@@ -611,7 +614,10 @@ fn test_rapid_sequential_transfers() {
     // Final verification
     network.verify_consistency();
 
-    println!("\nFinal balances after {} rapid transfers:", DEFAULT_NUM_NODES);
+    println!(
+        "\nFinal balances after {} rapid transfers:",
+        DEFAULT_NUM_NODES
+    );
     for (i, wallet) in network.wallets.iter().enumerate() {
         let balance = get_wallet_balance(&network, wallet);
         println!("  Wallet {}: {} BTH", i, balance / PICOCREDITS_PER_CREDIT);

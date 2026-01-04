@@ -27,7 +27,6 @@ pub mod tx;
 pub mod tx_summary;
 pub mod validation;
 
-
 pub use fee_map::{Error as FeeMapError, FeeMap, SMALLEST_MINIMUM_FEE_LOG2};
 pub use input_rules::{InputRuleError, InputRules};
 pub use memo::{EncryptedMemo, MemoError, MemoPayload};
@@ -40,9 +39,9 @@ pub use tx_summary::TxSummaryNew;
 // Re-export from transaction-types, and some from RingSignature crate.
 pub use bth_crypto_ring_signature::{Commitment, CompressedCommitment};
 pub use bth_transaction_types::{
-    constants, domain_separators, Amount, AmountError, BlockVersion, BlockVersionError,
-    ClusterId, ClusterTagEntry, ClusterTagVector, MaskedAmount, MaskedAmountV1, MaskedAmountV2,
-    TokenId, TxSummary, UnmaskedAmount, MAX_CLUSTER_TAGS, MIN_STORED_WEIGHT, TAG_WEIGHT_SCALE,
+    constants, domain_separators, Amount, AmountError, BlockVersion, BlockVersionError, ClusterId,
+    ClusterTagEntry, ClusterTagVector, MaskedAmount, MaskedAmountV1, MaskedAmountV2, TokenId,
+    TxSummary, UnmaskedAmount, MAX_CLUSTER_TAGS, MIN_STORED_WEIGHT, TAG_WEIGHT_SCALE,
 };
 
 /// Re-export all of mc-crypto-ring-signature
@@ -94,4 +93,3 @@ pub fn subaddress_matches_tx_out(
     );
     Ok(sub_addr_spend == RistrettoPublic::from(&acct.subaddress_spend_private(subaddress_index)))
 }
-

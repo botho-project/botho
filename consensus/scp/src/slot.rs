@@ -17,7 +17,6 @@ use bth_common::{
     logger::{log, o, Logger, LoggerExt},
     HashMap, HashSet, NodeID,
 };
-use tracing::{instrument, trace};
 #[cfg(test)]
 use mockall::*;
 use primitive_types::{U256, U512};
@@ -29,6 +28,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
+use tracing::{instrument, trace};
 
 /// Application-specific function for combining multiple values. Must be
 /// deterministic.
@@ -427,9 +427,8 @@ impl<V: Value, ValidationError: Display> ScpSlot<V> for Slot<V, ValidationError>
     }
 
     fn get_debug_snapshot(&self) -> String {
-        serde_json::to_string(&SlotState::from(self)).unwrap_or_else(|e| {
-            format!("{{\"error\": \"Failed to serialize slot state: {}\"}}", e)
-        })
+        serde_json::to_string(&SlotState::from(self))
+            .unwrap_or_else(|e| format!("{{\"error\": \"Failed to serialize slot state: {}\"}}", e))
     }
 }
 
@@ -531,8 +530,9 @@ impl<V: Value, ValidationError: Display> Slot<V, ValidationError> {
             let mut tmp = U512::from(U256::max_value());
             tmp = tmp.saturating_mul(U512::from(num));
             tmp /= U512::from(denom);
-            // This conversion should always succeed since (max_u256 * num) / denom <= max_u256
-            // when num <= denom (which is guaranteed for weights). Use max_value as fallback.
+            // This conversion should always succeed since (max_u256 * num) / denom <=
+            // max_u256 when num <= denom (which is guaranteed for weights). Use
+            // max_value as fallback.
             let weight256 = U256::try_from(tmp).unwrap_or_else(|_| {
                 log::error!(
                     self.logger,
@@ -671,7 +671,10 @@ impl<V: Value, ValidationError: Display> Slot<V, ValidationError> {
         }
         // Invariant: X and Y are disjoint.
         if !self.X.is_disjoint(&self.Y) {
-            log::error!(self.logger, "Invariant violation: X and Y are not disjoint after update_YZ");
+            log::error!(
+                self.logger,
+                "Invariant violation: X and Y are not disjoint after update_YZ"
+            );
             debug_assert!(false, "X and Y must be disjoint");
         }
 
@@ -709,7 +712,8 @@ impl<V: Value, ValidationError: Display> Slot<V, ValidationError> {
     ///////////////////////////////////////////////////////////////////////////
 
     /// Check invariants for the prepare phase.
-    /// Returns an error if any invariant is violated, allowing graceful error handling.
+    /// Returns an error if any invariant is violated, allowing graceful error
+    /// handling.
     fn check_prepare_phase_invariants(&self) -> Result<(), String> {
         if self.phase != Phase::NominatePrepare && self.phase != Phase::Prepare {
             return Err(format!(
@@ -818,7 +822,12 @@ impl<V: Value, ValidationError: Display> Slot<V, ValidationError> {
         // Invariants: p' is less-than-and-incompatible-with p.
         if let (Some(p), Some(pp)) = (&self.P, &self.PP) {
             if pp >= p {
-                log::error!(self.logger, "Invariant violation: pp >= p. pp: {:?}, p: {:?}", pp, p);
+                log::error!(
+                    self.logger,
+                    "Invariant violation: pp >= p. pp: {:?}, p: {:?}",
+                    pp,
+                    p
+                );
                 debug_assert!(false, "pp must be less than p");
             }
             if p.X == pp.X {
@@ -876,7 +885,12 @@ impl<V: Value, ValidationError: Display> Slot<V, ValidationError> {
 
         if let (Some(C), Some(H)) = (&self.C, &self.H) {
             if C.N > H.N {
-                log::error!(self.logger, "Invariant violation: C.N > H.N. C.N: {}, H.N: {}", C.N, H.N);
+                log::error!(
+                    self.logger,
+                    "Invariant violation: C.N > H.N. C.N: {}, H.N: {}",
+                    C.N,
+                    H.N
+                );
                 debug_assert!(false, "C.N must be <= H.N");
             }
         }
@@ -935,7 +949,12 @@ impl<V: Value, ValidationError: Display> Slot<V, ValidationError> {
 
                     // B <= C less-than-and-compatible-with H
                     if self.B > c {
-                        log::error!(self.logger, "Invariant violation: B > c. B: {:?}, c: {:?}", self.B, c);
+                        log::error!(
+                            self.logger,
+                            "Invariant violation: B > c. B: {:?}, c: {:?}",
+                            self.B,
+                            c
+                        );
                         debug_assert!(false, "B must be <= c");
                     }
                     if c.X != h.X {
@@ -943,7 +962,12 @@ impl<V: Value, ValidationError: Display> Slot<V, ValidationError> {
                         debug_assert!(false, "c.X must equal h.X");
                     }
                     if c.N > h.N {
-                        log::error!(self.logger, "Invariant violation: c.N > h.N. c.N: {}, h.N: {}", c.N, h.N);
+                        log::error!(
+                            self.logger,
+                            "Invariant violation: c.N > h.N. c.N: {}, h.N: {}",
+                            c.N,
+                            h.N
+                        );
                         debug_assert!(false, "c.N must be <= h.N");
                     }
 
@@ -954,7 +978,12 @@ impl<V: Value, ValidationError: Display> Slot<V, ValidationError> {
 
         if let (Some(C), Some(H)) = (&self.C, &self.H) {
             if C.N > H.N {
-                log::error!(self.logger, "Invariant violation: C.N > H.N. C.N: {}, H.N: {}", C.N, H.N);
+                log::error!(
+                    self.logger,
+                    "Invariant violation: C.N > H.N. C.N: {}, H.N: {}",
+                    C.N,
+                    H.N
+                );
                 debug_assert!(false, "C.N must be <= H.N");
             }
         }
@@ -994,7 +1023,12 @@ impl<V: Value, ValidationError: Display> Slot<V, ValidationError> {
             }
             self.H = Some(h.clone());
             if c.N > h.N {
-                log::error!(self.logger, "Invariant violation: c.N > h.N. c.N: {}, h.N: {}", c.N, h.N);
+                log::error!(
+                    self.logger,
+                    "Invariant violation: c.N > h.N. c.N: {}, h.N: {}",
+                    c.N,
+                    h.N
+                );
                 debug_assert!(false, "c.N must be <= h.N");
             }
 
@@ -1044,7 +1078,11 @@ impl<V: Value, ValidationError: Display> Slot<V, ValidationError> {
                 .filter(|p| p.X == self.B.X)
                 .max();
             if self.P.is_none() {
-                log::error!(self.logger, "Invariant violation: P is None in commit phase. B: {:?}", self.B);
+                log::error!(
+                    self.logger,
+                    "Invariant violation: P is None in commit phase. B: {:?}",
+                    self.B
+                );
                 debug_assert!(false, "P must exist in commit phase");
             }
             // self.PP is not used in the Commit or Externalize phases.
@@ -1114,7 +1152,8 @@ impl<V: Value, ValidationError: Display> Slot<V, ValidationError> {
     ///////////////////////////////////////////////////////////////////////////
 
     /// Check invariants for the commit phase.
-    /// Returns an error if any invariant is violated, allowing graceful error handling.
+    /// Returns an error if any invariant is violated, allowing graceful error
+    /// handling.
     fn check_commit_phase_invariants(&self) -> Result<(), String> {
         if self.phase != Phase::Commit {
             return Err(format!(
@@ -1197,7 +1236,10 @@ impl<V: Value, ValidationError: Display> Slot<V, ValidationError> {
                 }
             } else {
                 // P should exist in commit phase
-                log::error!(self.logger, "Unexpected: P is None in commit phase during step 5");
+                log::error!(
+                    self.logger,
+                    "Unexpected: P is None in commit phase during step 5"
+                );
                 self.P = Some(new_P);
             }
         }
@@ -1273,7 +1315,8 @@ impl<V: Value, ValidationError: Display> Slot<V, ValidationError> {
     }
 
     /// Check invariants for the externalize phase.
-    /// Returns an error if any invariant is violated, allowing graceful error handling.
+    /// Returns an error if any invariant is violated, allowing graceful error
+    /// handling.
     fn check_externalize_phase_invariants(&self) -> Result<(), String> {
         if self.phase != Phase::Externalize {
             return Err(format!(
@@ -1343,7 +1386,11 @@ impl<V: Value, ValidationError: Display> Slot<V, ValidationError> {
         }
 
         if let Err(e) = self.check_externalize_phase_invariants() {
-            log::error!(self.logger, "SCP invariant error at end of externalize: {}", e);
+            log::error!(
+                self.logger,
+                "SCP invariant error at end of externalize: {}",
+                e
+            );
             debug_assert!(false, "Externalize phase invariant violated: {}", e);
         }
     }
@@ -1370,7 +1417,10 @@ impl<V: Value, ValidationError: Display> Slot<V, ValidationError> {
                 .map(|node_id| self.M[node_id].bN())
                 .min()
                 .unwrap_or_else(|| {
-                    log::error!(self.logger, "Unexpected: empty blocking set in get_unblocking_ballot_counter");
+                    log::error!(
+                        self.logger,
+                        "Unexpected: empty blocking set in get_unblocking_ballot_counter"
+                    );
                     unblocking_counter
                 });
             unblocking_counter = min_ballot_counter;
@@ -2037,8 +2087,8 @@ impl<V: Value, ValidationError: Display> Slot<V, ValidationError> {
 mod nominate_protocol_tests {
     use super::*;
     use crate::test_utils::*;
-    use maplit::btreeset;
     use bth_common::logger::test_with_logger;
+    use maplit::btreeset;
 
     #[test_with_logger]
     // Should return no values if none can be accepted nominated.
@@ -2633,11 +2683,12 @@ mod nominate_protocol_tests {
 mod ballot_protocol_tests {
     use super::*;
     use crate::test_utils::*;
-    use maplit::btreeset;
     use bth_common::logger::test_with_logger;
+    use maplit::btreeset;
 
     // Note: Messages with incorrectly ordered ballot values are rejected by
-    // Msg::validate(). See ballot.rs for is_values_sorted() and msg.rs for validation.
+    // Msg::validate(). See ballot.rs for is_values_sorted() and msg.rs for
+    // validation.
 
     // === Handling "confirmed nominated" values ===
 

@@ -1,11 +1,15 @@
 //! Wallet initialization command
 
 use anyhow::{anyhow, Result};
-use std::io::{self, Write};
-use std::path::Path;
+use std::{
+    io::{self, Write},
+    path::Path,
+};
 
-use crate::keys::{validate_mnemonic, WalletKeys};
-use crate::storage::EncryptedWallet;
+use crate::{
+    keys::{validate_mnemonic, WalletKeys},
+    storage::EncryptedWallet,
+};
 
 use super::{print_error, print_success, print_warning, prompt_confirm, prompt_password};
 
@@ -85,7 +89,9 @@ fn generate_mnemonic() -> Result<String> {
     // Verify the user has written it down
     println!();
     if !prompt_confirm("Have you written down your recovery phrase?")? {
-        return Err(anyhow!("Please write down your recovery phrase before continuing"));
+        return Err(anyhow!(
+            "Please write down your recovery phrase before continuing"
+        ));
     }
 
     // Verify by asking for a random word

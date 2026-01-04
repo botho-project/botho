@@ -2,17 +2,21 @@
 
 //! Post-Quantum Cryptographic Primitives for Botho
 //!
-//! This crate provides wrappers around NIST-standardized post-quantum algorithms:
+//! This crate provides wrappers around NIST-standardized post-quantum
+//! algorithms:
 //!
-//! - **ML-KEM-768** (Kyber): Key Encapsulation Mechanism for stealth address key exchange
+//! - **ML-KEM-768** (Kyber): Key Encapsulation Mechanism for stealth address
+//!   key exchange
 //! - **ML-DSA-65** (Dilithium): Digital signatures for transaction signing
 //!
 //! # Quantum Resistance Strategy
 //!
-//! Botho uses a hybrid classical + post-quantum approach for private transactions:
+//! Botho uses a hybrid classical + post-quantum approach for private
+//! transactions:
 //!
 //! 1. Classical layer (Schnorr/Ristretto) provides current security guarantees
-//! 2. Post-quantum layer (ML-KEM/ML-DSA) protects against future quantum computers
+//! 2. Post-quantum layer (ML-KEM/ML-DSA) protects against future quantum
+//!    computers
 //! 3. Both layers must verify for a transaction to be valid
 //!
 //! This protects privacy against "harvest now, decrypt later" attacks where
@@ -46,12 +50,14 @@ mod sig;
 
 #[allow(deprecated)]
 pub use derive::derive_pq_keys;
-pub use derive::{derive_onetime_sig_keypair, derive_pq_keys_from_seed, PqKeyMaterial, BIP39_SEED_SIZE};
+pub use derive::{
+    derive_onetime_sig_keypair, derive_pq_keys_from_seed, PqKeyMaterial, BIP39_SEED_SIZE,
+};
 pub use error::PqError;
 pub use kem::{
-    MlKem768Ciphertext, MlKem768KeyPair, MlKem768PublicKey, MlKem768SecretKey, MlKem768SharedSecret,
-    ML_KEM_768_CIPHERTEXT_BYTES, ML_KEM_768_PUBLIC_KEY_BYTES, ML_KEM_768_SECRET_KEY_BYTES,
-    ML_KEM_768_SHARED_SECRET_BYTES,
+    MlKem768Ciphertext, MlKem768KeyPair, MlKem768PublicKey, MlKem768SecretKey,
+    MlKem768SharedSecret, ML_KEM_768_CIPHERTEXT_BYTES, ML_KEM_768_PUBLIC_KEY_BYTES,
+    ML_KEM_768_SECRET_KEY_BYTES, ML_KEM_768_SHARED_SECRET_BYTES,
 };
 pub use sig::{
     MlDsa65KeyPair, MlDsa65PublicKey, MlDsa65SecretKey, MlDsa65Signature,
@@ -93,7 +99,10 @@ mod tests {
         let keypair = MlDsa65KeyPair::from_seed(&seed);
 
         let signature = keypair.sign(b"correct message");
-        assert!(keypair.public_key().verify(b"wrong message", &signature).is_err());
+        assert!(keypair
+            .public_key()
+            .verify(b"wrong message", &signature)
+            .is_err());
     }
 
     #[test]
@@ -103,7 +112,10 @@ mod tests {
         let keypair2 = MlKem768KeyPair::from_seed(&seed);
 
         // Same seed produces same keys
-        assert_eq!(keypair1.public_key().as_bytes(), keypair2.public_key().as_bytes());
+        assert_eq!(
+            keypair1.public_key().as_bytes(),
+            keypair2.public_key().as_bytes()
+        );
 
         // Verify the keypair works for encapsulation
         let (ct, ss) = keypair1.public_key().encapsulate();

@@ -250,8 +250,8 @@ export function SendModal({
               </div>
               <p className="mt-1.5 text-xs text-[--color-dim]">
                 {privacyLevel === 'standard'
-                  ? 'Hidden amounts, visible sender. Lower fees (~3-4 KB).'
-                  : 'Hidden amounts + sender (LION ring signature). Higher fees (~22 KB).'}
+                  ? 'Minting transactions only. Uses ML-DSA signatures.'
+                  : 'Hidden amounts + sender (CLSAG ring signature, ring=20). ~4 KB.'}
               </p>
             </div>
 

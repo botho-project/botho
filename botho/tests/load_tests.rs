@@ -107,7 +107,10 @@ impl std::fmt::Display for ConsensusValue {
 enum TestNodeMessage {
     MintingTx(MintingTx),
     /// Simulated transaction (lightweight for load testing)
-    SimulatedTx { hash: [u8; 32], priority: u64 },
+    SimulatedTx {
+        hash: [u8; 32],
+        priority: u64,
+    },
     ScpMsg(Arc<Msg<ConsensusValue>>),
     Stop,
 }
@@ -828,7 +831,8 @@ fn test_load_baseline() {
         let minting_tx = create_test_minting_tx(slot, slot as u8);
         network.broadcast_minting_tx(minting_tx);
 
-        let reached = network.wait_for_slot_majority(slot as SlotIndex, NUM_NODES, Duration::from_secs(30));
+        let reached =
+            network.wait_for_slot_majority(slot as SlotIndex, NUM_NODES, Duration::from_secs(30));
         assert!(reached, "Slot {} should complete", slot);
     }
 

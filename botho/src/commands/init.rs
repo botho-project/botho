@@ -1,8 +1,10 @@
 use anyhow::{bail, Context, Result};
 use bip39::{Language, Mnemonic, MnemonicType};
 use bth_transaction_types::constants::Network;
-use std::io::{self, BufRead, Write};
-use std::path::Path;
+use std::{
+    io::{self, BufRead, Write},
+    path::Path,
+};
 use tracing::info;
 
 use crate::config::Config;
@@ -25,7 +27,10 @@ pub fn run(config_path: &Path, recover: bool, relay: bool, network: Network) -> 
         config.save(config_path)?;
 
         info!("Relay node initialized at {}", config_path.display());
-        println!("\n[{}] Relay node configuration created (no wallet).", network_name);
+        println!(
+            "\n[{}] Relay node configuration created (no wallet).",
+            network_name
+        );
         println!("Config saved to: {}", config_path.display());
         println!("\nThis node will:");
         println!("  - Relay blocks and transactions on {}", network);
@@ -63,7 +68,10 @@ fn generate_new_mnemonic(network: Network) -> Result<Mnemonic> {
     let mnemonic = Mnemonic::new(MnemonicType::Words24, Language::English);
 
     println!("\n{}", "=".repeat(60));
-    println!("[{}] IMPORTANT: Write down your recovery phrase!", network.display_name());
+    println!(
+        "[{}] IMPORTANT: Write down your recovery phrase!",
+        network.display_name()
+    );
     println!("This is the ONLY way to recover your wallet.");
     println!("{}", "=".repeat(60));
     println!("\nYour 24-word recovery phrase:\n");
@@ -87,7 +95,10 @@ fn generate_new_mnemonic(network: Network) -> Result<Mnemonic> {
     io::stdout().flush()?;
 
     let stdin = io::stdin();
-    let response = stdin.lock().lines().next()
+    let response = stdin
+        .lock()
+        .lines()
+        .next()
         .context("Failed to read input")?
         .context("Failed to read input")?;
 
@@ -106,7 +117,10 @@ fn recover_mnemonic() -> Result<Mnemonic> {
     io::stdout().flush()?;
 
     let stdin = io::stdin();
-    let phrase = stdin.lock().lines().next()
+    let phrase = stdin
+        .lock()
+        .lines()
+        .next()
         .context("Failed to read input")?
         .context("Failed to read input")?;
 

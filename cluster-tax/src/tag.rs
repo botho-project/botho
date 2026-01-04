@@ -196,7 +196,8 @@ impl TagVector {
         entropy
     }
 
-    /// Calculate Shannon entropy of the CLUSTER distribution only (excluding background).
+    /// Calculate Shannon entropy of the CLUSTER distribution only (excluding
+    /// background).
     ///
     /// This is the correct entropy measure for lottery selection because it is
     /// **decay-invariant**: natural tag decay doesn't change cluster entropy.
@@ -466,7 +467,7 @@ mod tests {
         heavy_commerce.set(c2, 200_000); // 20%
         heavy_commerce.set(c3, 150_000); // 15%
         heavy_commerce.set(c4, 150_000); // 15%
-        // Remaining 30% is background
+                                         // Remaining 30% is background
         let heavy_entropy = heavy_commerce.shannon_entropy();
         assert!(
             heavy_entropy > 2.0 && heavy_entropy < 3.0,
@@ -753,8 +754,9 @@ mod tests {
         let mut commerce_decayed = TagVector::new();
         commerce_decayed.set(c1, 400_000); // 40%
         commerce_decayed.set(c2, 400_000); // 40%
-        // 20% is background
+                                           // 20% is background
         assert!((commerce_decayed.cluster_entropy() - 1.0).abs() < 0.1); // Still ~1 bit
-        assert!(commerce_decayed.shannon_entropy() > 1.4); // Higher due to background
+        assert!(commerce_decayed.shannon_entropy() > 1.4); // Higher due to
+                                                           // background
     }
 }

@@ -348,7 +348,8 @@ mod tests {
         bth_util_test_helper::run_with_several_seeds(|mut rng| {
             let view_private = RistrettoPrivate::from_random(&mut rng);
             let spend_private = RistrettoPrivate::from_random(&mut rng);
-            let spend_public: RootSpendPublic = RootSpendPublic::from(&RootSpendPrivate::from(spend_private));
+            let spend_public: RootSpendPublic =
+                RootSpendPublic::from(&RootSpendPrivate::from(spend_private));
 
             let view_account = ViewAccount::new(view_private.into(), spend_public.clone());
             assert_eq!(*view_account.spend_public_key(), spend_public);
@@ -358,8 +359,10 @@ mod tests {
     #[test]
     fn test_spend_subaddress_ring_ct_address() {
         bth_util_test_helper::run_with_several_seeds(|mut rng| {
-            let view_private: SubaddressViewPrivate = RistrettoPrivate::from_random(&mut rng).into();
-            let spend_private: SubaddressSpendPrivate = RistrettoPrivate::from_random(&mut rng).into();
+            let view_private: SubaddressViewPrivate =
+                RistrettoPrivate::from_random(&mut rng).into();
+            let spend_private: SubaddressSpendPrivate =
+                RistrettoPrivate::from_random(&mut rng).into();
 
             let subaddr = SpendSubaddress {
                 view_private: view_private.clone(),
@@ -378,8 +381,10 @@ mod tests {
     #[test]
     fn test_spend_subaddress_accessors() {
         bth_util_test_helper::run_with_several_seeds(|mut rng| {
-            let view_private: SubaddressViewPrivate = RistrettoPrivate::from_random(&mut rng).into();
-            let spend_private: SubaddressSpendPrivate = RistrettoPrivate::from_random(&mut rng).into();
+            let view_private: SubaddressViewPrivate =
+                RistrettoPrivate::from_random(&mut rng).into();
+            let spend_private: SubaddressSpendPrivate =
+                RistrettoPrivate::from_random(&mut rng).into();
 
             let subaddr = SpendSubaddress {
                 view_private: view_private.clone(),
@@ -394,7 +399,8 @@ mod tests {
     #[test]
     fn test_view_subaddress_ring_ct_address() {
         bth_util_test_helper::run_with_several_seeds(|mut rng| {
-            let view_private: SubaddressViewPrivate = RistrettoPrivate::from_random(&mut rng).into();
+            let view_private: SubaddressViewPrivate =
+                RistrettoPrivate::from_random(&mut rng).into();
             let spend_public: SubaddressSpendPublic = SubaddressSpendPublic::from(
                 &SubaddressSpendPrivate::from(RistrettoPrivate::from_random(&mut rng)),
             );
@@ -404,7 +410,10 @@ mod tests {
                 spend_public: spend_public.clone(),
             };
 
-            assert_eq!(subaddr.view_public_key(), SubaddressViewPublic::from(&view_private));
+            assert_eq!(
+                subaddr.view_public_key(),
+                SubaddressViewPublic::from(&view_private)
+            );
             assert_eq!(subaddr.spend_public_key(), spend_public);
         });
     }
@@ -412,8 +421,10 @@ mod tests {
     #[test]
     fn test_public_subaddress_from_spend() {
         bth_util_test_helper::run_with_several_seeds(|mut rng| {
-            let view_private: SubaddressViewPrivate = RistrettoPrivate::from_random(&mut rng).into();
-            let spend_private: SubaddressSpendPrivate = RistrettoPrivate::from_random(&mut rng).into();
+            let view_private: SubaddressViewPrivate =
+                RistrettoPrivate::from_random(&mut rng).into();
+            let spend_private: SubaddressSpendPrivate =
+                RistrettoPrivate::from_random(&mut rng).into();
 
             let spend_subaddr = SpendSubaddress {
                 view_private,
@@ -421,15 +432,22 @@ mod tests {
             };
 
             let public_subaddr = PublicSubaddress::from(&spend_subaddr);
-            assert_eq!(public_subaddr.view_public_key(), spend_subaddr.view_public_key());
-            assert_eq!(public_subaddr.spend_public_key(), spend_subaddr.spend_public_key());
+            assert_eq!(
+                public_subaddr.view_public_key(),
+                spend_subaddr.view_public_key()
+            );
+            assert_eq!(
+                public_subaddr.spend_public_key(),
+                spend_subaddr.spend_public_key()
+            );
         });
     }
 
     #[test]
     fn test_public_subaddress_from_view() {
         bth_util_test_helper::run_with_several_seeds(|mut rng| {
-            let view_private: SubaddressViewPrivate = RistrettoPrivate::from_random(&mut rng).into();
+            let view_private: SubaddressViewPrivate =
+                RistrettoPrivate::from_random(&mut rng).into();
             let spend_public: SubaddressSpendPublic = SubaddressSpendPublic::from(
                 &SubaddressSpendPrivate::from(RistrettoPrivate::from_random(&mut rng)),
             );
@@ -440,16 +458,24 @@ mod tests {
             };
 
             let public_subaddr = PublicSubaddress::from(&view_subaddr);
-            assert_eq!(public_subaddr.view_public_key(), view_subaddr.view_public_key());
-            assert_eq!(public_subaddr.spend_public_key(), view_subaddr.spend_public_key());
+            assert_eq!(
+                public_subaddr.view_public_key(),
+                view_subaddr.view_public_key()
+            );
+            assert_eq!(
+                public_subaddr.spend_public_key(),
+                view_subaddr.spend_public_key()
+            );
         });
     }
 
     #[test]
     fn test_ring_ct_address_ref_impl() {
         bth_util_test_helper::run_with_several_seeds(|mut rng| {
-            let view_private: SubaddressViewPrivate = RistrettoPrivate::from_random(&mut rng).into();
-            let spend_private: SubaddressSpendPrivate = RistrettoPrivate::from_random(&mut rng).into();
+            let view_private: SubaddressViewPrivate =
+                RistrettoPrivate::from_random(&mut rng).into();
+            let spend_private: SubaddressSpendPrivate =
+                RistrettoPrivate::from_random(&mut rng).into();
 
             let subaddr = SpendSubaddress {
                 view_private,
@@ -486,8 +512,10 @@ mod tests {
 
     #[test]
     fn test_short_address_hash_display() {
-        let bytes: [u8; 16] = [0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
-                               0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32, 0x10];
+        let bytes: [u8; 16] = [
+            0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54,
+            0x32, 0x10,
+        ];
         let hash = ShortAddressHash::from(bytes);
         let display = hash.to_string();
         assert_eq!(display, "0123456789abcdeffedcba9876543210");
@@ -540,7 +568,9 @@ mod tests {
 
         struct SimpleHasher(u64);
         impl Hasher for SimpleHasher {
-            fn finish(&self) -> u64 { self.0 }
+            fn finish(&self) -> u64 {
+                self.0
+            }
             fn write(&mut self, bytes: &[u8]) {
                 for b in bytes {
                     self.0 = self.0.wrapping_add(*b as u64);

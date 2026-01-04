@@ -12,10 +12,12 @@
 
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
-use std::collections::HashMap;
-use std::net::IpAddr;
-use std::sync::RwLock;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    collections::HashMap,
+    net::IpAddr,
+    sync::RwLock,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -152,10 +154,7 @@ pub struct HmacAuthenticator {
 impl HmacAuthenticator {
     /// Create a new authenticator with the given API keys.
     pub fn new(keys: Vec<ApiKeyConfig>) -> Self {
-        let api_keys = keys
-            .into_iter()
-            .map(|k| (k.key_id.clone(), k))
-            .collect();
+        let api_keys = keys.into_iter().map(|k| (k.key_id.clone(), k)).collect();
 
         Self {
             api_keys,
@@ -190,10 +189,7 @@ impl HmacAuthenticator {
         client_ip: Option<IpAddr>,
     ) -> Result<&ApiKeyConfig, AuthError> {
         // Get API key config
-        let key_config = self
-            .api_keys
-            .get(key_id)
-            .ok_or(AuthError::InvalidApiKey)?;
+        let key_config = self.api_keys.get(key_id).ok_or(AuthError::InvalidApiKey)?;
 
         // Check IP whitelist if configured
         if let Some(ref whitelist) = key_config.ip_whitelist {
@@ -235,7 +231,10 @@ impl HmacAuthenticator {
         // Check rate limit
         let now_secs = now / 1000;
         {
-            let mut limits = self.rate_limits.write().map_err(|_| AuthError::InternalError)?;
+            let mut limits = self
+                .rate_limits
+                .write()
+                .map_err(|_| AuthError::InternalError)?;
             let state = limits
                 .entry(key_id.to_string())
                 .or_insert_with(|| RateLimitState::new(key_config.rate_limit));

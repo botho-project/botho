@@ -3,8 +3,7 @@ use bip39::{Language, Mnemonic, Seed};
 use bth_account_keys::{AccountKey, PublicAddress};
 use bth_core::slip10::Slip10KeyGenerator;
 use bth_transaction_types::{ClusterTagVector, TAG_WEIGHT_SCALE};
-use rand::rngs::OsRng;
-use rand::seq::SliceRandom;
+use rand::{rngs::OsRng, seq::SliceRandom};
 use std::collections::HashMap;
 use tracing::debug;
 use zeroize::Zeroizing;
@@ -14,10 +13,10 @@ use bth_account_keys::{QuantumSafeAccountKey, QuantumSafePublicAddress};
 #[cfg(feature = "pq")]
 use bth_crypto_pq::{derive_pq_keys_from_seed, BIP39_SEED_SIZE};
 
-use crate::decoy_selection::GammaDecoySelector;
-use crate::ledger::Ledger;
-use crate::transaction::{
-    ClsagRingInput, RingMember, Transaction, TxOutput, Utxo, MIN_RING_SIZE,
+use crate::{
+    decoy_selection::GammaDecoySelector,
+    ledger::Ledger,
+    transaction::{ClsagRingInput, RingMember, Transaction, TxOutput, Utxo, MIN_RING_SIZE},
 };
 
 /// Default decay rate for cluster tags when transferring coins.
@@ -67,7 +66,9 @@ impl Wallet {
         // IMPORTANT: Uses the SAME classical keys to maintain single identity
         #[cfg(feature = "pq")]
         let pq_account_key = {
-            let seed_bytes: &[u8; BIP39_SEED_SIZE] = bip39_seed.as_bytes().try_into()
+            let seed_bytes: &[u8; BIP39_SEED_SIZE] = bip39_seed
+                .as_bytes()
+                .try_into()
                 .expect("BIP39 seed is always 64 bytes");
             let pq_keys = derive_pq_keys_from_seed(seed_bytes);
             QuantumSafeAccountKey::from_parts(account_key.clone(), pq_keys)
@@ -93,11 +94,12 @@ impl Wallet {
 
     /// Compute cluster wealth from a set of UTXOs.
     ///
-    /// For progressive fee computation, we need to know the maximum cluster wealth
-    /// among all clusters the wallet's coins are tagged with. Higher cluster wealth
-    /// = higher fee multiplier (1x to 6x).
+    /// For progressive fee computation, we need to know the maximum cluster
+    /// wealth among all clusters the wallet's coins are tagged with. Higher
+    /// cluster wealth = higher fee multiplier (1x to 6x).
     ///
-    /// The cluster wealth for cluster C is: W_C = Σ (utxo_value × tag_weight_C / TAG_WEIGHT_SCALE)
+    /// The cluster wealth for cluster C is: W_C = Σ (utxo_value × tag_weight_C
+    /// / TAG_WEIGHT_SCALE)
     ///
     /// This method returns the **maximum** cluster wealth across all clusters,
     /// as that determines the fee rate.
@@ -110,8 +112,8 @@ impl Wallet {
             for entry in &utxo.output.cluster_tags.entries {
                 // Contribution = value × weight / TAG_WEIGHT_SCALE
                 // Use u128 to avoid overflow during multiplication
-                let contribution = ((value as u128) * (entry.weight as u128)
-                    / (TAG_WEIGHT_SCALE as u128)) as u64;
+                let contribution =
+                    ((value as u128) * (entry.weight as u128) / (TAG_WEIGHT_SCALE as u128)) as u64;
 
                 *cluster_wealths.entry(entry.cluster_id.0).or_insert(0) += contribution;
             }
@@ -123,12 +125,14 @@ impl Wallet {
 
     /// Compute inherited cluster tags for transaction outputs.
     ///
-    /// When creating a transaction, outputs inherit tags from inputs with decay.
-    /// This ensures coin lineage is tracked through the transaction graph.
+    /// When creating a transaction, outputs inherit tags from inputs with
+    /// decay. This ensures coin lineage is tracked through the transaction
+    /// graph.
     ///
     /// # Arguments
     /// * `utxos` - The UTXOs being spent as inputs
-    /// * `decay_rate` - Decay to apply (parts per TAG_WEIGHT_SCALE, e.g., 50_000 = 5%)
+    /// * `decay_rate` - Decay to apply (parts per TAG_WEIGHT_SCALE, e.g.,
+    ///   50_000 = 5%)
     ///
     /// # Returns
     /// A ClusterTagVector representing the merged and decayed tags.
@@ -172,7 +176,8 @@ impl Wallet {
 
     /// Sign all inputs of a transaction using stealth address keys
     ///
-    /// With stealth addresses, each UTXO has a unique one-time key. This method:
+    /// With stealth addresses, each UTXO has a unique one-time key. This
+    /// method:
     /// 1. Looks up each UTXO being spent
     /// 2. Uses stealth scanning (belongs_to) to verify ownership
     /// 3. Recovers the one-time private key for signing
@@ -181,8 +186,8 @@ impl Wallet {
     /// Note: This method only signs Simple inputs. Ring inputs use MLSAG
     /// signatures which are created during transaction construction.
     ///
-    /// Note: This method is deprecated. All transactions now use CLSAG ring signatures
-    /// which are signed during construction.
+    /// Note: This method is deprecated. All transactions now use CLSAG ring
+    /// signatures which are signed during construction.
     ///
     /// Returns an error for all transaction types since Simple transactions
     /// have been removed in favor of privacy-by-default.
@@ -265,7 +270,8 @@ impl Wallet {
 
         // Compute inherited cluster tags from inputs with default decay
         // All outputs inherit the same merged+decayed tag vector from inputs
-        let inherited_tags = Self::compute_inherited_tags(utxos_to_spend, DEFAULT_CLUSTER_DECAY_RATE);
+        let inherited_tags =
+            Self::compute_inherited_tags(utxos_to_spend, DEFAULT_CLUSTER_DECAY_RATE);
 
         // Apply inherited tags to all outputs
         let outputs: Vec<TxOutput> = outputs
@@ -281,17 +287,16 @@ impl Wallet {
 
         // Build a preliminary transaction to get the signing hash
         // We'll replace the inputs with real ring inputs after signing
-        let preliminary_tx = Transaction::new_clsag(Vec::new(), outputs.clone(), fee, current_height);
+        let preliminary_tx =
+            Transaction::new_clsag(Vec::new(), outputs.clone(), fee, current_height);
         let signing_hash = preliminary_tx.signing_hash();
 
         // Number of decoys per ring (MIN_RING_SIZE - 1 since real input is included)
         let decoys_needed = MIN_RING_SIZE - 1;
 
         // Collect target keys of our real inputs to exclude from decoys
-        let exclude_keys: Vec<[u8; 32]> = utxos_to_spend
-            .iter()
-            .map(|u| u.output.target_key)
-            .collect();
+        let exclude_keys: Vec<[u8; 32]> =
+            utxos_to_spend.iter().map(|u| u.output.target_key).collect();
 
         // Use OSPEAD gamma-weighted decoy selector for realistic age distribution
         let selector = GammaDecoySelector::new();
@@ -370,13 +375,14 @@ impl Wallet {
             let real_index = shuffled_ring
                 .iter()
                 .position(|m| m.target_key == real_target_key)
-                .ok_or_else(|| anyhow::anyhow!(
-                    "Internal error: real input not found in ring after shuffle"
-                ))?;
+                .ok_or_else(|| {
+                    anyhow::anyhow!("Internal error: real input not found in ring after shuffle")
+                })?;
 
             // Log effective anonymity for this ring (debug)
             // Note: Since TxOutput doesn't contain created_at, we use placeholder ages
-            // for decoys. In practice, the OSPEAD selector already matched ages appropriately.
+            // for decoys. In practice, the OSPEAD selector already matched ages
+            // appropriately.
             let ring_ages: Vec<u64> = vec![real_input_age]
                 .into_iter()
                 .chain(decoys.iter().map(|_| {
@@ -413,12 +419,14 @@ impl Wallet {
 
     /// Create a quantum-private transaction for post-quantum security.
     ///
-    /// Quantum-private transactions use hybrid classical + post-quantum cryptography:
+    /// Quantum-private transactions use hybrid classical + post-quantum
+    /// cryptography:
     /// - Outputs: Classical stealth keys + ML-KEM-768 encapsulation
     /// - Inputs: Schnorr signature + ML-DSA-65 (Dilithium) signature
     ///
-    /// This provides protection against "harvest now, decrypt later" attacks where
-    /// adversaries archive blockchain data for future quantum cryptanalysis.
+    /// This provides protection against "harvest now, decrypt later" attacks
+    /// where adversaries archive blockchain data for future quantum
+    /// cryptanalysis.
     ///
     /// # Arguments
     /// * `utxos_to_spend` - The wallet's UTXOs to spend
@@ -438,14 +446,14 @@ impl Wallet {
         fee: u64,
         current_height: u64,
     ) -> Result<QuantumPrivateTransaction> {
-
         if utxos_to_spend.is_empty() {
             return Err(anyhow::anyhow!("No UTXOs to spend"));
         }
 
         // Calculate total input value
         let total_input: u64 = utxos_to_spend.iter().map(|u| u.output.amount).sum();
-        let change = total_input.checked_sub(amount + fee)
+        let change = total_input
+            .checked_sub(amount + fee)
             .ok_or_else(|| anyhow::anyhow!("Insufficient funds for amount + fee"))?;
 
         // Build outputs
@@ -461,12 +469,8 @@ impl Wallet {
         }
 
         // Build a preliminary transaction to get signing hash
-        let preliminary_tx = QuantumPrivateTransaction::new(
-            Vec::new(),
-            outputs.clone(),
-            fee,
-            current_height,
-        );
+        let preliminary_tx =
+            QuantumPrivateTransaction::new(Vec::new(), outputs.clone(), fee, current_height);
         let signing_hash = preliminary_tx.signing_hash();
 
         // Build and sign inputs
@@ -497,10 +501,11 @@ impl Wallet {
             // This provides forward secrecy: new quantum-private outputs will
             // have proper ML-KEM encapsulation.
             //
-            // We compute: shared_secret = SHA256("botho-pq-bridge" || target_key || public_key || view_private)
-            // This binds the PQ signature to the specific output and the wallet's view key.
+            // We compute: shared_secret = SHA256("botho-pq-bridge" || target_key ||
+            // public_key || view_private) This binds the PQ signature to the
+            // specific output and the wallet's view key.
             let pq_shared_secret = {
-                use sha2::{Sha256, Digest};
+                use sha2::{Digest, Sha256};
                 let view_private_bytes = self.account_key.view_private_key().to_bytes();
                 let mut hasher = Sha256::new();
                 hasher.update(b"botho-pq-bridge-v1");
@@ -595,8 +600,8 @@ mod tests {
         let tags1 = ClusterTagVector::single(ClusterId(1));
         let tags2 = ClusterTagVector::single(ClusterId(2));
         let utxos = vec![
-            make_utxo(1_000_000, tags1),  // Cluster 1: 1M
-            make_utxo(3_000_000, tags2),  // Cluster 2: 3M
+            make_utxo(1_000_000, tags1), // Cluster 1: 1M
+            make_utxo(3_000_000, tags2), // Cluster 2: 3M
         ];
 
         // Max cluster wealth = 3M (cluster 2)
@@ -641,10 +646,7 @@ mod tests {
         // Two equal-value inputs from different clusters
         let tags1 = ClusterTagVector::single(ClusterId(1));
         let tags2 = ClusterTagVector::single(ClusterId(2));
-        let utxos = vec![
-            make_utxo(1_000_000, tags1),
-            make_utxo(1_000_000, tags2),
-        ];
+        let utxos = vec![make_utxo(1_000_000, tags1), make_utxo(1_000_000, tags2)];
 
         let inherited = Wallet::compute_inherited_tags(&utxos, 0);
         // Each cluster should have 50%

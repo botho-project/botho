@@ -9,9 +9,9 @@
 
 extern crate alloc;
 use alloc::vec::Vec;
+use bth_crypto_ring_signature::PedersenGens;
 use bulletproofs_og::{BulletproofGens, PedersenGens as BPPedersenGens, RangeProof};
 use curve25519_dalek::{ristretto::CompressedRistretto, scalar::Scalar};
-use bth_crypto_ring_signature::PedersenGens;
 use merlin::Transcript;
 use rand_core::{CryptoRng, RngCore};
 
@@ -133,8 +133,8 @@ fn convert_gens(src: &PedersenGens) -> BPPedersenGens {
 pub mod tests {
     use super::*;
     use crate::ring_signature::generators;
-    use curve25519_dalek::ristretto::RistrettoPoint;
     use bth_util_test_helper::get_seeded_rng;
+    use curve25519_dalek::ristretto::RistrettoPoint;
 
     fn generate_and_check(values: Vec<u64>, blindings: Vec<Scalar>) {
         let mut rng = get_seeded_rng();

@@ -88,7 +88,9 @@ where
 
     type Error = <KEY as ReprBytes>::Error;
 
-    fn from_bytes(src: &bth_crypto_keys::GenericArray<u8, Self::Size>) -> Result<Self, Self::Error> {
+    fn from_bytes(
+        src: &bth_crypto_keys::GenericArray<u8, Self::Size>,
+    ) -> Result<Self, Self::Error> {
         let key = <KEY as ReprBytes>::from_bytes(src)?;
         Ok(Key {
             key,
@@ -431,8 +433,7 @@ mod tests {
     extern crate alloc;
 
     use super::*;
-    use alloc::format;
-    use alloc::string::ToString;
+    use alloc::{format, string::ToString};
     use bth_util_from_random::FromRandom;
 
     #[test]

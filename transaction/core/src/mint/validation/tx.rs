@@ -366,5 +366,4 @@ mod tests {
             Err(Error::InvalidSignature)
         );
     }
-
 }

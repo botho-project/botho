@@ -9,10 +9,12 @@ use crate::discovery::NodeDiscovery;
 use anyhow::{anyhow, Result};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashMap;
-use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashMap,
+    net::SocketAddr,
+    sync::atomic::{AtomicU64, Ordering},
+    time::{Duration, Instant},
+};
 use tracing::{debug, warn};
 
 /// Timeout for RPC requests
@@ -152,8 +154,12 @@ impl RpcPool {
             // Verify the node is responsive
             match client.call::<NodeStatus>("node_getStatus", json!({})).await {
                 Ok((status, latency)) => {
-                    debug!("Connected to {} (v{}, height {})", addr, status.version, status.chain_height);
-                    self.discovery.record_success(addr, latency, status.chain_height);
+                    debug!(
+                        "Connected to {} (v{}, height {})",
+                        addr, status.version, status.chain_height
+                    );
+                    self.discovery
+                        .record_success(addr, latency, status.chain_height);
                     self.clients.insert(addr, client);
 
                     if self.primary_addr.is_none() {
@@ -278,7 +284,11 @@ impl RpcPool {
     }
 
     /// Get outputs in a block range (for wallet sync)
-    pub async fn get_outputs(&mut self, start_height: u64, end_height: u64) -> Result<Vec<BlockOutputs>> {
+    pub async fn get_outputs(
+        &mut self,
+        start_height: u64,
+        end_height: u64,
+    ) -> Result<Vec<BlockOutputs>> {
         self.call(
             "chain_getOutputs",
             json!({
@@ -291,9 +301,7 @@ impl RpcPool {
 
     /// Submit a signed transaction
     pub async fn submit_transaction(&mut self, tx_hex: &str) -> Result<String> {
-        let result: SubmitTxResult = self
-            .call("tx_submit", json!({ "tx_hex": tx_hex }))
-            .await?;
+        let result: SubmitTxResult = self.call("tx_submit", json!({ "tx_hex": tx_hex })).await?;
         Ok(result.tx_hash)
     }
 
@@ -325,7 +333,8 @@ impl RpcPool {
 
     /// Get transaction by hash (for exchange integration)
     ///
-    /// Returns transaction info including status, block height, and confirmations.
+    /// Returns transaction info including status, block height, and
+    /// confirmations.
     pub async fn get_transaction(&mut self, tx_hash: &str) -> Result<TransactionInfo> {
         self.call("getTransaction", json!({ "tx_hash": tx_hash }))
             .await
@@ -394,8 +403,11 @@ impl RpcPool {
                 }
 
                 let client = RpcClient::new(addr);
-                if let Ok((status, latency)) = client.call::<NodeStatus>("node_getStatus", json!({})).await {
-                    self.discovery.record_success(addr, latency, status.chain_height);
+                if let Ok((status, latency)) =
+                    client.call::<NodeStatus>("node_getStatus", json!({})).await
+                {
+                    self.discovery
+                        .record_success(addr, latency, status.chain_height);
                     self.clients.insert(addr, client);
 
                     if self.primary_addr.is_none() {

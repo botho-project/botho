@@ -332,9 +332,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     if (!adapter) return BigInt(0)
 
     // Estimate transaction size based on privacy level
-    // Standard: ML-DSA signature (~3.4 KB per input)
-    // Private: LION ring signature (~17.5 KB per input)
-    const sizeBytes = privacyLevel === 'private' ? 22000 : 4000
+    // Standard: Minting transaction with ML-DSA signature
+    // Private: CLSAG ring signature (~700 bytes per input, ring=20)
+    const sizeBytes = privacyLevel === 'private' ? 4000 : 2000
     return adapter.estimateFee(sizeBytes)
   }, [adapter])
 

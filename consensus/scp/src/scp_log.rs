@@ -346,7 +346,8 @@ impl<V: serde::de::DeserializeOwned + Value> Iterator for ScpLogReader<V> {
     type Item = StoredMsg<V>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        // Try reading files until we find one that can be successfully read and deserialized
+        // Try reading files until we find one that can be successfully read and
+        // deserialized
         while let Some(path) = self.files.pop_front() {
             match read(&path) {
                 Ok(bytes) => match bth_util_serial::deserialize(&bytes) {

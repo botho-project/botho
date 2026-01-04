@@ -3,8 +3,7 @@
 use anyhow::Result;
 use std::path::Path;
 
-use crate::keys::WalletKeys;
-use crate::storage::EncryptedWallet;
+use crate::{keys::WalletKeys, storage::EncryptedWallet};
 
 use super::{decrypt_wallet_with_rate_limiting, print_error};
 

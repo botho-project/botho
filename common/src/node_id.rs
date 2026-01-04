@@ -3,14 +3,14 @@
 //! The Node ID type
 
 use crate::responder_id::ResponderId;
+use bth_crypto_digestible::Digestible;
+use bth_crypto_keys::{Ed25519Public, KeyError};
 use core::{
     cmp::Ordering,
     fmt::{Debug, Display, Formatter, Result as FmtResult},
     hash::{Hash, Hasher},
 };
 use displaydoc::Display;
-use bth_crypto_digestible::Digestible;
-use bth_crypto_keys::{Ed25519Public, KeyError};
 use prost::Message;
 use serde::{Deserialize, Serialize};
 

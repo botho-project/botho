@@ -52,7 +52,8 @@ pub mod encode {
 /// Serialize the given data structure using postcard format.
 ///
 /// Postcard is a compact, no_std-friendly binary format.
-/// Serialization can fail if `T`'s implementation of `Serialize` decides to fail.
+/// Serialization can fail if `T`'s implementation of `Serialize` decides to
+/// fail.
 pub fn serialize<T>(value: &T) -> Result<Vec<u8>, encode::Error>
 where
     T: Serialize + Sized,

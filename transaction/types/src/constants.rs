@@ -118,7 +118,8 @@ pub const MAX_TRANSACTIONS_PER_BLOCK: usize = 5000;
 // Message Size Limits (DoS Protection)
 // =============================================================================
 
-/// Maximum serialized size of a Standard-Private (CLSAG) transaction in bytes (100 KB).
+/// Maximum serialized size of a Standard-Private (CLSAG) transaction in bytes
+/// (100 KB).
 ///
 /// Rationale: A maximally-sized CLSAG ring transaction has:
 /// - 16 inputs × (~700B CLSAG signature per input) ≈ 11 KB
@@ -133,8 +134,8 @@ pub const MAX_TRANSACTION_SIZE: usize = 100 * 1024; // 100 KB
 
 /// Maximum serialized size of a single block in bytes (20 MB).
 ///
-/// Rationale: With MAX_TRANSACTIONS_PER_BLOCK (5000) and average tx size of ~2KB,
-/// typical full blocks are ~10MB. 20MB limit provides headroom.
+/// Rationale: With MAX_TRANSACTIONS_PER_BLOCK (5000) and average tx size of
+/// ~2KB, typical full blocks are ~10MB. 20MB limit provides headroom.
 pub const MAX_BLOCK_SIZE: usize = 20 * 1024 * 1024; // 20 MB
 
 /// Maximum serialized size of an SCP consensus message in bytes (1 MB).
@@ -451,13 +452,19 @@ mod tests {
 
         // Phase 1 distribution in nanoBTH should NOT overflow u64
         let phase1_nanobth = PHASE1_BTH_DISTRIBUTION.checked_mul(BTH_TO_NANOBTH);
-        assert!(phase1_nanobth.is_some(), "Phase 1 distribution in nanoBTH fits in u64");
+        assert!(
+            phase1_nanobth.is_some(),
+            "Phase 1 distribution in nanoBTH fits in u64"
+        );
         assert_eq!(phase1_nanobth.unwrap(), 100_000_000_000_000_000u64); // 10^17
 
         // With 2% annual inflation over 100 years from year 10 (~7.24x), still fits
         // (1.02)^100 ≈ 7.244
         let max_inflated_supply = (phase1_nanobth.unwrap() as f64 * 7.244) as u64;
-        assert!(max_inflated_supply < u64::MAX, "100-year inflated supply fits in u64");
+        assert!(
+            max_inflated_supply < u64::MAX,
+            "100-year inflated supply fits in u64"
+        );
     }
 
     #[test]
@@ -478,9 +485,18 @@ mod tests {
         let inflation_factor_250y = 144210u128; // scaled by 1000
         let supply_250y = phase1_supply_nanobth * inflation_factor_250y / 1000;
 
-        assert!(supply_100y < u64::MAX as u128, "100-year supply fits in u64");
-        assert!(supply_200y < u64::MAX as u128, "200-year supply fits in u64");
-        assert!(supply_250y < u64::MAX as u128, "250-year supply fits in u64");
+        assert!(
+            supply_100y < u64::MAX as u128,
+            "100-year supply fits in u64"
+        );
+        assert!(
+            supply_200y < u64::MAX as u128,
+            "200-year supply fits in u64"
+        );
+        assert!(
+            supply_250y < u64::MAX as u128,
+            "250-year supply fits in u64"
+        );
 
         // Calculate the theoretical maximum years before overflow
         // max_multiplier = u64::MAX / phase1_supply_nanobth
@@ -490,8 +506,14 @@ mod tests {
         // So we're safe for ~260 years after Phase 1 (year 10)
         // That means safe until approximately year 270 from genesis
         let max_safe_multiplier = u64::MAX as u128 / phase1_supply_nanobth;
-        assert!(max_safe_multiplier > 100, "At least 100x growth capacity (>230 years)");
-        assert!(max_safe_multiplier > 180, "At least 180x growth capacity (>260 years)");
+        assert!(
+            max_safe_multiplier > 100,
+            "At least 100x growth capacity (>230 years)"
+        );
+        assert!(
+            max_safe_multiplier > 180,
+            "At least 180x growth capacity (>260 years)"
+        );
     }
 
     #[test]
@@ -504,7 +526,10 @@ mod tests {
     fn test_ring_size_fits_in_block() {
         // A maximally sized CLSAG transaction with all rings should fit
         let clsag_elements = (MAX_INPUTS as usize) * RING_SIZE;
-        assert!(clsag_elements <= 1000, "CLSAG ring elements should be bounded");
+        assert!(
+            clsag_elements <= 1000,
+            "CLSAG ring elements should be bounded"
+        );
     }
 
     // =========================================================================
@@ -515,10 +540,17 @@ mod tests {
     fn test_max_transaction_size() {
         // 100 KB limit for Standard-Private (CLSAG) transactions
         assert_eq!(MAX_TRANSACTION_SIZE, 100 * 1024);
-        // Should be enough for a max CLSAG tx (16 inputs × ~700B + 16 outputs × ~1.2KB ≈ 33KB)
-        assert!(MAX_TRANSACTION_SIZE > 50_000, "Should fit largest CLSAG transactions");
+        // Should be enough for a max CLSAG tx (16 inputs × ~700B + 16 outputs × ~1.2KB
+        // ≈ 33KB)
+        assert!(
+            MAX_TRANSACTION_SIZE > 50_000,
+            "Should fit largest CLSAG transactions"
+        );
         // But not too large for DoS protection
-        assert!(MAX_TRANSACTION_SIZE <= 1024 * 1024, "Should be under 1MB for DoS protection");
+        assert!(
+            MAX_TRANSACTION_SIZE <= 1024 * 1024,
+            "Should be under 1MB for DoS protection"
+        );
     }
 
     #[test]
@@ -602,12 +634,18 @@ mod tests {
 
         // Verify Phase 1 fits in nanoBTH
         let phase1_nanobth = PHASE1_BTH_DISTRIBUTION.checked_mul(BTH_TO_NANOBTH);
-        assert!(phase1_nanobth.is_some(), "Phase 1 distribution fits in u64 nanoBTH");
+        assert!(
+            phase1_nanobth.is_some(),
+            "Phase 1 distribution fits in u64 nanoBTH"
+        );
         assert_eq!(phase1_nanobth.unwrap(), 100_000_000_000_000_000u64); // 10^17
 
         // Verify Phase 1 overflows in picocredits (expected behavior)
         let phase1_picocredits = PHASE1_BTH_DISTRIBUTION.checked_mul(BTH_TO_PICOCREDITS);
-        assert!(phase1_picocredits.is_none(), "Phase 1 in picocredits overflows u64 (expected)");
+        assert!(
+            phase1_picocredits.is_none(),
+            "Phase 1 in picocredits overflows u64 (expected)"
+        );
     }
 
     #[test]
@@ -615,15 +653,24 @@ mod tests {
         // Individual transaction amounts should fit in u64
         // Max realistic single transaction: 1M BTH
         let large_tx = 1_000_000u64.checked_mul(BTH_TO_PICOCREDITS);
-        assert!(large_tx.is_some(), "1M BTH transaction fits in u64 picocredits");
+        assert!(
+            large_tx.is_some(),
+            "1M BTH transaction fits in u64 picocredits"
+        );
 
         // Even 10M BTH fits
         let very_large_tx = 10_000_000u64.checked_mul(BTH_TO_PICOCREDITS);
-        assert!(very_large_tx.is_some(), "10M BTH transaction fits in u64 picocredits");
+        assert!(
+            very_large_tx.is_some(),
+            "10M BTH transaction fits in u64 picocredits"
+        );
 
         // 18M BTH is about the max that fits
         // u64::MAX / 10^12 ≈ 18.4 million
         let max_bth = u64::MAX / BTH_TO_PICOCREDITS;
-        assert!(max_bth >= 18_000_000, "At least 18M BTH fits in picocredits");
+        assert!(
+            max_bth >= 18_000_000,
+            "At least 18M BTH fits in picocredits"
+        );
     }
 }

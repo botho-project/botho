@@ -1,14 +1,14 @@
 //! View key registry for server-side deposit scanning.
 //!
 //! This module provides storage and scanning for registered exchange view keys.
-//! Exchanges can register their view keys to receive real-time deposit notifications
-//! via WebSocket when outputs matching their keys are detected in new blocks.
+//! Exchanges can register their view keys to receive real-time deposit
+//! notifications via WebSocket when outputs matching their keys are detected in
+//! new blocks.
 
 use bth_account_keys::ViewAccountKey;
 use bth_crypto_keys::{RistrettoPrivate, RistrettoPublic};
 use bth_crypto_ring_signature::onetime_keys::recover_public_subaddress_spend_key;
-use std::collections::HashMap;
-use std::sync::RwLock;
+use std::{collections::HashMap, sync::RwLock};
 
 /// A registered view key for deposit scanning.
 #[derive(Clone)]
@@ -58,8 +58,9 @@ impl RegisteredViewKey {
 
 /// View key registry for server-side scanning.
 ///
-/// This registry stores view keys registered by exchanges for deposit detection.
-/// When new blocks arrive, all registered view keys are scanned against the outputs.
+/// This registry stores view keys registered by exchanges for deposit
+/// detection. When new blocks arrive, all registered view keys are scanned
+/// against the outputs.
 pub struct ViewKeyRegistry {
     /// Registered view keys indexed by ID
     view_keys: RwLock<HashMap<String, RegisteredViewKey>>,
@@ -226,11 +227,7 @@ impl ViewKeyRegistry {
     /// Scan an output against all registered view keys.
     ///
     /// Returns a list of (view_key_id, subaddress_index) for all matches.
-    pub fn scan_output(
-        &self,
-        target_key: &[u8; 32],
-        public_key: &[u8; 32],
-    ) -> Vec<(String, u64)> {
+    pub fn scan_output(&self, target_key: &[u8; 32], public_key: &[u8; 32]) -> Vec<(String, u64)> {
         let keys = match self.view_keys.read() {
             Ok(k) => k,
             Err(_) => return Vec::new(),
@@ -249,10 +246,7 @@ impl ViewKeyRegistry {
 
     /// Get the number of registered view keys.
     pub fn count(&self) -> usize {
-        self.view_keys
-            .read()
-            .map(|k| k.len())
-            .unwrap_or(0)
+        self.view_keys.read().map(|k| k.len()).unwrap_or(0)
     }
 
     /// Check if a view key is registered.

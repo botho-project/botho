@@ -2,14 +2,15 @@
 
 use anyhow::{Context, Result};
 use bth_cluster_tax::{FeeConfig, TransactionType};
-use std::fs;
-use std::path::Path;
+use std::{fs, path::Path};
 
-use crate::address::Address;
-use crate::config::{ledger_db_path_from_config, Config};
-use crate::ledger::Ledger;
-use crate::transaction::{MemoPayload, Transaction, TxOutput};
-use crate::wallet::Wallet;
+use crate::{
+    address::Address,
+    config::{ledger_db_path_from_config, Config},
+    ledger::Ledger,
+    transaction::{MemoPayload, Transaction, TxOutput},
+    wallet::Wallet,
+};
 
 #[cfg(feature = "pq")]
 use crate::transaction_pq::QuantumPrivateTransaction;
@@ -23,15 +24,23 @@ const PENDING_PQ_TXS_FILE: &str = "pending_pq_txs.bin";
 
 /// Send BTH to an address
 ///
-/// If `private` is true, uses ring signatures to hide which UTXO is being spent.
-/// If `quantum` is true, uses post-quantum cryptography (ML-KEM + ML-DSA).
-/// If recipient has a quantum address (botho://1q/), quantum mode is auto-enabled.
-/// If `memo` is provided, it will be encrypted and attached to the recipient's output.
-pub fn run(config_path: &Path, address_str: &str, amount_str: &str, private: bool, quantum: bool, memo: Option<&str>) -> Result<()> {
-    let config = Config::load(config_path)
-        .context("No wallet found. Run 'botho init' first.")?;
+/// If `private` is true, uses ring signatures to hide which UTXO is being
+/// spent. If `quantum` is true, uses post-quantum cryptography (ML-KEM +
+/// ML-DSA). If recipient has a quantum address (botho://1q/), quantum mode is
+/// auto-enabled. If `memo` is provided, it will be encrypted and attached to
+/// the recipient's output.
+pub fn run(
+    config_path: &Path,
+    address_str: &str,
+    amount_str: &str,
+    private: bool,
+    quantum: bool,
+    memo: Option<&str>,
+) -> Result<()> {
+    let config = Config::load(config_path).context("No wallet found. Run 'botho init' first.")?;
 
-    let wallet_config = config.wallet
+    let wallet_config = config
+        .wallet
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("No wallet configured. Run 'botho init' first."))?;
 
@@ -56,8 +65,8 @@ pub fn run(config_path: &Path, address_str: &str, amount_str: &str, private: boo
 
     // Open ledger
     let ledger_path = ledger_db_path_from_config(config_path);
-    let ledger = Ledger::open(&ledger_path)
-        .map_err(|e| anyhow::anyhow!("Failed to open ledger: {}", e))?;
+    let ledger =
+        Ledger::open(&ledger_path).map_err(|e| anyhow::anyhow!("Failed to open ledger: {}", e))?;
 
     // Get chain state
     let state = ledger
@@ -112,14 +121,13 @@ pub fn run(config_path: &Path, address_str: &str, amount_str: &str, private: boo
     // Handle quantum-private transactions
     #[cfg(feature = "pq")]
     if quantum {
-        let pq_recipient = parsed_address.quantum_address()
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!(
-                "Quantum transaction requires a quantum-safe address (botho://1q/...)"
-            ))?;
+        let pq_recipient = parsed_address.quantum_address().cloned().ok_or_else(|| {
+            anyhow::anyhow!("Quantum transaction requires a quantum-safe address (botho://1q/...)")
+        })?;
 
         // For quantum-private transactions, use Hidden type (same fee structure)
-        let pq_fee = fee_config.estimate_typical_fee(TransactionType::Hidden, cluster_wealth, num_memos);
+        let pq_fee =
+            fee_config.estimate_typical_fee(TransactionType::Hidden, cluster_wealth, num_memos);
         return run_quantum(
             config_path,
             &pq_recipient,
@@ -157,13 +165,8 @@ pub fn run(config_path: &Path, address_str: &str, amount_str: &str, private: boo
     println!();
     println!("Creating private transaction with CLSAG ring signatures...");
 
-    let tx = wallet.create_private_transaction(
-        &selected_utxos,
-        outputs,
-        fee,
-        state.height,
-        &ledger,
-    )?;
+    let tx =
+        wallet.create_private_transaction(&selected_utxos, outputs, fee, state.height, &ledger)?;
 
     let tx_hash = tx.hash();
     let num_inputs = tx.inputs.len();
@@ -180,9 +183,15 @@ pub fn run(config_path: &Path, address_str: &str, amount_str: &str, private: boo
     println!("  Type: {} (ring signatures)", tx_type_str);
     println!("  Base rate: {} per byte", fee_config.fee_per_byte);
     if let Some(memo_text) = memo {
-        println!("  Memo: \"{}\" (+{} per memo)",
-            if memo_text.len() > 30 { format!("{}...", &memo_text[..30]) } else { memo_text.to_string() },
-            fee_config.fee_per_memo);
+        println!(
+            "  Memo: \"{}\" (+{} per memo)",
+            if memo_text.len() > 30 {
+                format!("{}...", &memo_text[..30])
+            } else {
+                memo_text.to_string()
+            },
+            fee_config.fee_per_memo
+        );
     }
     println!("  Total fee: {:.12} BTH", fee as f64 / 1_000_000_000_000.0);
     println!();
@@ -196,7 +205,8 @@ pub fn run(config_path: &Path, address_str: &str, amount_str: &str, private: boo
     println!("Outputs: {}", tx.outputs.len());
 
     // Save transaction to pending file
-    let pending_path = config_path.parent()
+    let pending_path = config_path
+        .parent()
         .unwrap_or(Path::new("."))
         .join(PENDING_TXS_FILE);
 
@@ -225,10 +235,8 @@ fn save_pending_tx(path: &Path, tx: &Transaction) -> Result<()> {
     pending.push(tx.clone());
 
     // Save back
-    let bytes = bincode::serialize(&pending)
-        .context("Failed to serialize pending transactions")?;
-    fs::write(path, bytes)
-        .context("Failed to save pending transactions")?;
+    let bytes = bincode::serialize(&pending).context("Failed to serialize pending transactions")?;
+    fs::write(path, bytes).context("Failed to save pending transactions")?;
 
     Ok(())
 }
@@ -239,11 +247,10 @@ pub fn load_pending_txs(path: &Path) -> Result<Vec<Transaction>> {
         return Ok(Vec::new());
     }
 
-    let bytes = fs::read(path)
-        .context("Failed to read pending transactions")?;
+    let bytes = fs::read(path).context("Failed to read pending transactions")?;
 
-    let pending: Vec<Transaction> = bincode::deserialize(&bytes)
-        .context("Failed to deserialize pending transactions")?;
+    let pending: Vec<Transaction> =
+        bincode::deserialize(&bytes).context("Failed to deserialize pending transactions")?;
 
     Ok(pending)
 }
@@ -251,15 +258,15 @@ pub fn load_pending_txs(path: &Path) -> Result<Vec<Transaction>> {
 /// Clear pending transactions file
 pub fn clear_pending_txs(path: &Path) -> Result<()> {
     if path.exists() {
-        fs::remove_file(path)
-            .context("Failed to remove pending transactions file")?;
+        fs::remove_file(path).context("Failed to remove pending transactions file")?;
     }
     Ok(())
 }
 
 /// Parse an amount string (in credits) to picocredits
 fn parse_amount(s: &str) -> Result<u64> {
-    let amount: f64 = s.parse()
+    let amount: f64 = s
+        .parse()
         .context("Invalid amount. Please enter a number.")?;
 
     if amount <= 0.0 {
@@ -306,8 +313,7 @@ fn run_quantum(
     wallet: &Wallet,
     network: bth_transaction_types::constants::Network,
 ) -> Result<()> {
-    use crate::transaction_pq::calculate_pq_fee;
-    use crate::address::format_quantum_address;
+    use crate::{address::format_quantum_address, transaction_pq::calculate_pq_fee};
 
     // Calculate quantum-safe fee (larger transactions)
     let pq_fee = calculate_pq_fee(selected_utxos.len(), 2); // 2 outputs: recipient + change
@@ -332,7 +338,11 @@ fn run_quantum(
     // Format address for display (truncate long PQ address)
     let addr_display = format_quantum_address(recipient, network);
     let addr_short = if addr_display.len() > 60 {
-        format!("{}...{}", &addr_display[..30], &addr_display[addr_display.len()-20..])
+        format!(
+            "{}...{}",
+            &addr_display[..30],
+            &addr_display[addr_display.len() - 20..]
+        )
     } else {
         addr_display
     };
@@ -347,7 +357,10 @@ fn run_quantum(
     println!("Fee breakdown:");
     println!("  Type: Quantum-Private (ML-KEM + ML-DSA)");
     println!("  Size: ~6 KB (hybrid PQ signatures)");
-    println!("  Fee: {:.12} BTH (size-based)", effective_fee as f64 / 1_000_000_000_000.0);
+    println!(
+        "  Fee: {:.12} BTH (size-based)",
+        effective_fee as f64 / 1_000_000_000_000.0
+    );
     println!();
 
     let selected_amount: u64 = selected_utxos.iter().map(|u| u.output.amount).sum();
@@ -367,7 +380,8 @@ fn run_quantum(
     println!("Outputs: {}", tx.outputs.len());
 
     // Save transaction to pending file
-    let pending_path = config_path.parent()
+    let pending_path = config_path
+        .parent()
         .unwrap_or(Path::new("."))
         .join(PENDING_PQ_TXS_FILE);
 
@@ -399,8 +413,7 @@ fn save_pending_pq_tx(path: &Path, tx: &QuantumPrivateTransaction) -> Result<()>
     // Save back
     let bytes = bincode::serialize(&pending)
         .context("Failed to serialize pending quantum-private transactions")?;
-    fs::write(path, bytes)
-        .context("Failed to save pending quantum-private transactions")?;
+    fs::write(path, bytes).context("Failed to save pending quantum-private transactions")?;
 
     Ok(())
 }
@@ -412,8 +425,7 @@ pub fn load_pending_pq_txs(path: &Path) -> Result<Vec<QuantumPrivateTransaction>
         return Ok(Vec::new());
     }
 
-    let bytes = fs::read(path)
-        .context("Failed to read pending quantum-private transactions")?;
+    let bytes = fs::read(path).context("Failed to read pending quantum-private transactions")?;
 
     let pending: Vec<QuantumPrivateTransaction> = bincode::deserialize(&bytes)
         .context("Failed to deserialize pending quantum-private transactions")?;

@@ -3,10 +3,12 @@
 use anyhow::Result;
 use std::path::Path;
 
-use crate::discovery::NodeDiscovery;
-use crate::rpc_pool::RpcPool;
-use crate::storage::EncryptedWallet;
-use crate::transaction::{format_amount, OwnedUtxo};
+use crate::{
+    discovery::NodeDiscovery,
+    rpc_pool::RpcPool,
+    storage::EncryptedWallet,
+    transaction::{format_amount, OwnedUtxo},
+};
 
 use super::{decrypt_wallet_with_rate_limiting, print_error, print_success, print_warning};
 

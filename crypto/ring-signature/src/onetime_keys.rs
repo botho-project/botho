@@ -72,12 +72,12 @@
 #![allow(non_snake_case)]
 
 use crate::domain_separators::HASH_TO_SCALAR_DOMAIN_TAG;
-use curve25519_dalek::{
-    constants::RISTRETTO_BASEPOINT_POINT, ristretto::RistrettoPoint, scalar::Scalar,
-};
 use bth_core_types::account::RingCtAddress;
 use bth_crypto_hashes::{Blake2b512, Digest};
 use bth_crypto_keys::{RistrettoPrivate, RistrettoPublic};
+use curve25519_dalek::{
+    constants::RISTRETTO_BASEPOINT_POINT, ristretto::RistrettoPoint, scalar::Scalar,
+};
 
 const G: RistrettoPoint = RISTRETTO_BASEPOINT_POINT;
 

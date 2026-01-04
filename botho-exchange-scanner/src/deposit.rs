@@ -125,30 +125,15 @@ mod tests {
     #[test]
     fn test_deposit_id() {
         let deposit = DetectedDeposit::new(
-            [0u8; 32],
-            5,
-            100,
-            1_000_000,
-            12345,
-            10,
-            [1u8; 32],
-            [2u8; 32],
+            [0u8; 32], 5, 100, 1_000_000, 12345, 10, [1u8; 32], [2u8; 32],
         );
         assert!(deposit.deposit_id().ends_with(":5"));
     }
 
     #[test]
     fn test_to_json() {
-        let deposit = DetectedDeposit::new(
-            [0u8; 32],
-            0,
-            0,
-            1_000_000,
-            100,
-            10,
-            [0u8; 32],
-            [0u8; 32],
-        );
+        let deposit =
+            DetectedDeposit::new([0u8; 32], 0, 0, 1_000_000, 100, 10, [0u8; 32], [0u8; 32]);
         let json = deposit.to_json();
         assert!(json.contains("\"amount\":1000000"));
     }

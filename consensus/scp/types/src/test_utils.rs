@@ -4,11 +4,11 @@
 
 use crate::QuorumSet;
 use alloc::{format, vec};
-use core::str::FromStr;
 use bth_common::{NodeID, ResponderId};
 use bth_crypto_keys::Ed25519Pair;
 use bth_util_from_random::FromRandom;
 use bth_util_test_helper::SeedableRng;
+use core::str::FromStr;
 use rand_hc::Hc128Rng as FixedRng;
 
 /// Creates NodeID from integer for testing.

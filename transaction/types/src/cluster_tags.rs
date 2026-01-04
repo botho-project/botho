@@ -41,10 +41,7 @@ pub const TAG_WEIGHT_SCALE: u32 = 1_000_000;
 #[cfg_attr(feature = "prost", derive(Message))]
 #[cfg_attr(not(feature = "prost"), derive(Debug, Default))]
 #[cfg_attr(feature = "serde", derive(Deserialize, Serialize))]
-pub struct ClusterId(
-    #[cfg_attr(feature = "prost", prost(fixed64, required, tag = "1"))]
-    pub u64,
-);
+pub struct ClusterId(#[cfg_attr(feature = "prost", prost(fixed64, required, tag = "1"))] pub u64);
 
 /// A single cluster tag entry: cluster ID and weight.
 #[derive(Clone, Copy, Digestible, Eq, Hash, PartialEq, Zeroize)]
@@ -72,7 +69,8 @@ pub struct ClusterTagEntry {
 #[cfg_attr(feature = "serde", derive(Deserialize, Serialize))]
 pub struct DecayState {
     /// Block height when decay was last applied.
-    /// Used for rate-limiting: decay only occurs if sufficient blocks have passed.
+    /// Used for rate-limiting: decay only occurs if sufficient blocks have
+    /// passed.
     #[cfg_attr(feature = "prost", prost(fixed64, required, tag = "1"))]
     pub last_decay_block: u64,
 
@@ -138,7 +136,8 @@ pub struct ClusterTagVector {
 
 #[cfg(feature = "alloc")]
 impl ClusterTagVector {
-    /// Create an empty tag vector (fully "background" - no cluster attribution).
+    /// Create an empty tag vector (fully "background" - no cluster
+    /// attribution).
     pub fn empty() -> Self {
         Self {
             entries: Vec::new(),
@@ -166,8 +165,8 @@ impl ClusterTagVector {
         }
     }
 
-    /// Create a tag vector fully attributed to one cluster at a specific block height.
-    /// Used when minting new coins with decay tracking.
+    /// Create a tag vector fully attributed to one cluster at a specific block
+    /// height. Used when minting new coins with decay tracking.
     pub fn single_at_block(cluster_id: ClusterId, block: u64) -> Self {
         Self {
             entries: alloc::vec![ClusterTagEntry {
@@ -180,7 +179,8 @@ impl ClusterTagVector {
 
     /// Get the decay state, or create a default "never decayed" state.
     pub fn decay_state_or_default(&self, creation_block: u64) -> DecayState {
-        self.decay_state.unwrap_or_else(|| DecayState::never_decayed(creation_block))
+        self.decay_state
+            .unwrap_or_else(|| DecayState::never_decayed(creation_block))
     }
 
     /// Get the last decay block, or the creation block if never decayed.
@@ -217,11 +217,13 @@ impl ClusterTagVector {
         TAG_WEIGHT_SCALE.saturating_sub(self.total_weight())
     }
 
-    /// Calculate Shannon entropy of the full tag distribution including background.
+    /// Calculate Shannon entropy of the full tag distribution including
+    /// background.
     ///
-    /// WARNING: This includes background in the entropy calculation, which means
-    /// entropy INCREASES with age as tags decay to background. This is NOT suitable
-    /// for lottery selection because it would give old coins an unfair advantage.
+    /// WARNING: This includes background in the entropy calculation, which
+    /// means entropy INCREASES with age as tags decay to background. This
+    /// is NOT suitable for lottery selection because it would give old
+    /// coins an unfair advantage.
     ///
     /// For lottery weight calculation, use `cluster_entropy()` instead.
     pub fn shannon_entropy(&self) -> f64 {
@@ -246,7 +248,8 @@ impl ClusterTagVector {
         entropy
     }
 
-    /// Calculate Shannon entropy of the CLUSTER distribution only (excluding background).
+    /// Calculate Shannon entropy of the CLUSTER distribution only (excluding
+    /// background).
     ///
     /// This is the correct entropy measure for lottery selection because it is
     /// **decay-invariant**: natural tag decay doesn't change cluster entropy.
@@ -333,19 +336,22 @@ impl ClusterTagVector {
     ///
     /// This is the core inheritance computation for cluster tags:
     /// - Each input contributes proportionally to its value
-    /// - An optional decay rate reduces weights (expressed as parts per TAG_WEIGHT_SCALE)
+    /// - An optional decay rate reduces weights (expressed as parts per
+    ///   TAG_WEIGHT_SCALE)
     /// - Weights below MIN_STORED_WEIGHT are pruned
     /// - Result is sorted by weight descending
     ///
-    /// Note: This is the legacy hop-based decay method. For AND-based decay with
-    /// rate limiting, use `merge_weighted_with_and_decay()` instead.
+    /// Note: This is the legacy hop-based decay method. For AND-based decay
+    /// with rate limiting, use `merge_weighted_with_and_decay()` instead.
     ///
     /// # Arguments
     /// * `inputs` - List of (ClusterTagVector, value) pairs for each input
-    /// * `decay_rate` - Decay to apply (0 = no decay, TAG_WEIGHT_SCALE = full decay)
+    /// * `decay_rate` - Decay to apply (0 = no decay, TAG_WEIGHT_SCALE = full
+    ///   decay)
     ///
     /// # Returns
-    /// A new ClusterTagVector representing the weighted merge with decay applied.
+    /// A new ClusterTagVector representing the weighted merge with decay
+    /// applied.
     pub fn merge_weighted(inputs: &[(ClusterTagVector, u64)], decay_rate: u32) -> Self {
         let total_value: u64 = inputs.iter().map(|(_, v)| *v).sum();
         if total_value == 0 {
@@ -374,7 +380,8 @@ impl ClusterTagVector {
             }
         }
 
-        // Apply decay: new_weight = weight * (TAG_WEIGHT_SCALE - decay_rate) / TAG_WEIGHT_SCALE
+        // Apply decay: new_weight = weight * (TAG_WEIGHT_SCALE - decay_rate) /
+        // TAG_WEIGHT_SCALE
         let retention = TAG_WEIGHT_SCALE.saturating_sub(decay_rate);
         let pairs: Vec<(ClusterId, u32)> = cluster_weights
             .into_iter()
@@ -387,17 +394,22 @@ impl ClusterTagVector {
         Self::from_pairs(&pairs)
     }
 
-    /// Compute inherited tags with AND-based decay (rate-limited and epoch-capped).
+    /// Compute inherited tags with AND-based decay (rate-limited and
+    /// epoch-capped).
     ///
-    /// This implements the AND-based decay mechanism that requires BOTH conditions:
-    /// 1. A transfer must occur (hop condition - implicit in calling this method)
+    /// This implements the AND-based decay mechanism that requires BOTH
+    /// conditions:
+    /// 1. A transfer must occur (hop condition - implicit in calling this
+    ///    method)
     /// 2. Sufficient time must have passed since last decay (rate limiting)
     /// 3. Epoch decay cap not exceeded (epoch capping)
     ///
     /// # Arguments
-    /// * `inputs` - List of (ClusterTagVector, value, creation_block) for each input
+    /// * `inputs` - List of (ClusterTagVector, value, creation_block) for each
+    ///   input
     /// * `current_block` - Current block height
-    /// * `decay_rate_per_hop` - Decay to apply if eligible (parts per TAG_WEIGHT_SCALE)
+    /// * `decay_rate_per_hop` - Decay to apply if eligible (parts per
+    ///   TAG_WEIGHT_SCALE)
     /// * `min_blocks_between_decays` - Minimum blocks between decay events
     /// * `max_decays_per_epoch` - Maximum decays per epoch (0 = unlimited)
     /// * `epoch_blocks` - Epoch length in blocks
@@ -430,14 +442,12 @@ impl ClusterTagVector {
             let decay_state = tags.decay_state_or_default(*creation_block);
 
             // Weight-average the decay state from inputs
-            combined_last_decay_block = combined_last_decay_block
-                .max(decay_state.last_decay_block);
-            combined_decays_this_epoch = combined_decays_this_epoch
-                .saturating_add(
-                    (decay_state.decays_this_epoch as u64 * *value / total_value.max(1)) as u32
-                );
-            combined_epoch_start_block = combined_epoch_start_block
-                .min(decay_state.epoch_start_block);
+            combined_last_decay_block = combined_last_decay_block.max(decay_state.last_decay_block);
+            combined_decays_this_epoch = combined_decays_this_epoch.saturating_add(
+                (decay_state.decays_this_epoch as u64 * *value / total_value.max(1)) as u32,
+            );
+            combined_epoch_start_block =
+                combined_epoch_start_block.min(decay_state.epoch_start_block);
 
             for entry in &tags.entries {
                 let contribution =
@@ -496,8 +506,16 @@ impl ClusterTagVector {
         // Build the result with updated decay state
         let mut result = Self::from_pairs(&pairs);
         result.decay_state = Some(DecayState {
-            last_decay_block: if decay_applies { current_block } else { combined_last_decay_block },
-            decays_this_epoch: if decay_applies { decays_this_epoch + 1 } else { decays_this_epoch },
+            last_decay_block: if decay_applies {
+                current_block
+            } else {
+                combined_last_decay_block
+            },
+            decays_this_epoch: if decay_applies {
+                decays_this_epoch + 1
+            } else {
+                decays_this_epoch
+            },
             epoch_start_block: epoch_start,
         });
 
@@ -805,12 +823,11 @@ mod tests {
         let inputs = vec![(tags, 1000u64, 0u64)];
 
         let (result, decay_applied) = ClusterTagVector::merge_weighted_with_and_decay(
-            &inputs,
-            100,      // current_block
-            50_000,   // 5% decay
-            360,      // min_blocks_between (1 hour)
-            12,       // max_decays_per_epoch
-            8_640,    // epoch_blocks (1 day)
+            &inputs, 100,    // current_block
+            50_000, // 5% decay
+            360,    // min_blocks_between (1 hour)
+            12,     // max_decays_per_epoch
+            8_640,  // epoch_blocks (1 day)
         );
 
         assert!(decay_applied, "First transfer should always decay");
@@ -836,12 +853,11 @@ mod tests {
 
         // Only 50 blocks since last decay (< 360 min)
         let (result, decay_applied) = ClusterTagVector::merge_weighted_with_and_decay(
-            &inputs,
-            150,      // current_block
-            50_000,   // 5% decay
-            360,      // min_blocks_between (1 hour)
-            12,       // max_decays_per_epoch
-            8_640,    // epoch_blocks
+            &inputs, 150,    // current_block
+            50_000, // 5% decay
+            360,    // min_blocks_between (1 hour)
+            12,     // max_decays_per_epoch
+            8_640,  // epoch_blocks
         );
 
         assert!(!decay_applied, "Rate limiting should block decay");
@@ -849,7 +865,7 @@ mod tests {
 
         let state = result.decay_state.unwrap();
         assert_eq!(state.last_decay_block, 100); // Unchanged
-        assert_eq!(state.decays_this_epoch, 1);  // Unchanged
+        assert_eq!(state.decays_this_epoch, 1); // Unchanged
     }
 
     #[test]
@@ -866,12 +882,11 @@ mod tests {
 
         // 400 blocks since last decay (>= 360 min)
         let (result, decay_applied) = ClusterTagVector::merge_weighted_with_and_decay(
-            &inputs,
-            500,      // current_block
-            50_000,   // 5% decay
-            360,      // min_blocks_between
-            12,       // max_decays_per_epoch
-            8_640,    // epoch_blocks
+            &inputs, 500,    // current_block
+            50_000, // 5% decay
+            360,    // min_blocks_between
+            12,     // max_decays_per_epoch
+            8_640,  // epoch_blocks
         );
 
         assert!(decay_applied, "Decay should apply after rate limit expires");
@@ -895,12 +910,11 @@ mod tests {
         let inputs = vec![(tags, 1000u64, 0u64)];
 
         let (result, decay_applied) = ClusterTagVector::merge_weighted_with_and_decay(
-            &inputs,
-            500,      // current_block
-            50_000,   // 5% decay
-            360,      // min_blocks_between
-            12,       // max_decays_per_epoch (at cap)
-            8_640,    // epoch_blocks
+            &inputs, 500,    // current_block
+            50_000, // 5% decay
+            360,    // min_blocks_between
+            12,     // max_decays_per_epoch (at cap)
+            8_640,  // epoch_blocks
         );
 
         assert!(!decay_applied, "Epoch cap should block decay");
@@ -921,12 +935,11 @@ mod tests {
 
         // 9000 blocks later (> 8640 epoch), new epoch starts
         let (result, decay_applied) = ClusterTagVector::merge_weighted_with_and_decay(
-            &inputs,
-            9100,     // current_block (new epoch)
-            50_000,   // 5% decay
-            360,      // min_blocks_between
-            12,       // max_decays_per_epoch
-            8_640,    // epoch_blocks
+            &inputs, 9100,   // current_block (new epoch)
+            50_000, // 5% decay
+            360,    // min_blocks_between
+            12,     // max_decays_per_epoch
+            8_640,  // epoch_blocks
         );
 
         assert!(decay_applied, "New epoch should allow decay");
@@ -934,7 +947,7 @@ mod tests {
 
         let state = result.decay_state.unwrap();
         assert_eq!(state.epoch_start_block, 9100); // Reset to current
-        assert_eq!(state.decays_this_epoch, 1);    // Reset counter
+        assert_eq!(state.decays_this_epoch, 1); // Reset counter
     }
 
     #[test]
@@ -949,7 +962,7 @@ mod tests {
 
         let mut tags2 = ClusterTagVector::single_at_block(ClusterId(2), 0);
         tags2.decay_state = Some(DecayState {
-            last_decay_block: 200,  // More recent
+            last_decay_block: 200, // More recent
             decays_this_epoch: 4,
             epoch_start_block: 0,
         });
@@ -957,12 +970,11 @@ mod tests {
         let inputs = vec![(tags1, 1000u64, 0u64), (tags2, 1000u64, 0u64)];
 
         let (result, decay_applied) = ClusterTagVector::merge_weighted_with_and_decay(
-            &inputs,
-            600,      // current_block (>= 200 + 360)
-            50_000,   // 5% decay
-            360,      // min_blocks_between
-            12,       // max_decays_per_epoch
-            8_640,    // epoch_blocks
+            &inputs, 600,    // current_block (>= 200 + 360)
+            50_000, // 5% decay
+            360,    // min_blocks_between
+            12,     // max_decays_per_epoch
+            8_640,  // epoch_blocks
         );
 
         assert!(decay_applied);
@@ -983,12 +995,11 @@ mod tests {
         let inputs = vec![(legacy, 1000u64, 500u64)]; // creation_block = 500
 
         let (result, decay_applied) = ClusterTagVector::merge_weighted_with_and_decay(
-            &inputs,
-            1000,     // current_block
-            50_000,   // 5% decay
-            360,      // min_blocks_between
-            12,       // max_decays_per_epoch
-            8_640,    // epoch_blocks
+            &inputs, 1000,   // current_block
+            50_000, // 5% decay
+            360,    // min_blocks_between
+            12,     // max_decays_per_epoch
+            8_640,  // epoch_blocks
         );
 
         // Should treat legacy as "never decayed" and apply first decay
@@ -1007,12 +1018,10 @@ mod tests {
             let inputs = vec![(tags.clone(), 1000u64, 0u64)];
 
             let (new_tags, decay_applied) = ClusterTagVector::merge_weighted_with_and_decay(
-                &inputs,
-                block,
-                50_000,   // 5% decay
-                360,      // min_blocks_between (1 hour)
-                12,       // max_decays_per_epoch
-                8_640,    // epoch_blocks
+                &inputs, block, 50_000, // 5% decay
+                360,    // min_blocks_between (1 hour)
+                12,     // max_decays_per_epoch
+                8_640,  // epoch_blocks
             );
 
             if decay_applied {
@@ -1022,7 +1031,14 @@ mod tests {
         }
 
         // Only the first transfer should have decayed
-        assert_eq!(total_decays, 1, "Rapid wash trading should only allow 1 decay");
-        assert_eq!(tags.get_weight(ClusterId(1)), 950_000, "Should be 95% (one 5% decay)");
+        assert_eq!(
+            total_decays, 1,
+            "Rapid wash trading should only allow 1 decay"
+        );
+        assert_eq!(
+            tags.get_weight(ClusterId(1)),
+            950_000,
+            "Should be 95% (one 5% decay)"
+        );
     }
 }

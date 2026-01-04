@@ -6,12 +6,12 @@ use alloc::{
     string::{String, ToString},
     vec::Vec,
 };
+use bth_crypto_digestible::Digestible;
 use core::{
     fmt::{Display, Formatter, Result as FmtResult},
     str::FromStr,
 };
 use displaydoc::Display;
-use bth_crypto_digestible::Digestible;
 use prost::{
     bytes::{Buf, BufMut},
     encoding, Message,

@@ -7,9 +7,9 @@ use crate::aead::{
     Error as AeadError,
 };
 use alloc::vec::Vec;
+use bth_crypto_keys::{Kex, KeyError};
 use core::ops::{Add, Sub};
 use displaydoc::Display;
-use bth_crypto_keys::{Kex, KeyError};
 use mc_oblivious_aes_gcm::CtDecryptResult;
 use rand_core::{CryptoRng, RngCore};
 

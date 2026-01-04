@@ -1,6 +1,7 @@
 //! Stdout output handler.
 //!
-//! Outputs deposits as JSON lines to stdout, suitable for piping to other tools.
+//! Outputs deposits as JSON lines to stdout, suitable for piping to other
+//! tools.
 
 use super::OutputHandler;
 use crate::deposit::DetectedDeposit;

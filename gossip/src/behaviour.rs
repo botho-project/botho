@@ -20,7 +20,8 @@ use libp2p::{
     identify,
     kad::{self, store::MemoryStore},
     request_response::{self, Codec, ProtocolSupport},
-    swarm::NetworkBehaviour, Multiaddr, PeerId,
+    swarm::NetworkBehaviour,
+    Multiaddr, PeerId,
 };
 use std::{io, time::Duration};
 use tokio::sync::mpsc;

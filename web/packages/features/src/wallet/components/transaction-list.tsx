@@ -25,8 +25,8 @@ export interface TransactionListProps {
 
 const filterOptions: { value: CryptoTypeFilter; label: string }[] = [
   { value: 'all', label: 'All Types' },
-  { value: 'clsag', label: 'Classical (CLSAG)' },
-  { value: 'lion', label: 'Quantum-Safe (LION)' },
+  { value: 'clsag', label: 'Private (CLSAG)' },
+  { value: 'mldsa', label: 'Minting (ML-DSA)' },
   { value: 'hybrid', label: 'Hybrid' },
 ]
 

@@ -15,9 +15,9 @@
 extern crate alloc;
 
 use alloc::{vec, vec::Vec};
-use core::hash::Hash;
 use bth_crypto_digestible::Digestible;
 use bth_crypto_keys::{PublicKey, SignatureEncoding, SignatureError, Verifier};
+use core::hash::Hash;
 use prost::Message;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
@@ -120,19 +120,20 @@ pub struct SignerSet<
 }
 
 impl<
-    P: Clone
-        + Default
-        + Digestible
-        + Eq
-        + Hash
-        + Message
-        + Ord
-        + PartialEq
-        + PartialOrd
-        + PublicKey
-        + Serialize
-        + DeserializeOwned,
-> SignerSet<P> {
+        P: Clone
+            + Default
+            + Digestible
+            + Eq
+            + Hash
+            + Message
+            + Ord
+            + PartialEq
+            + PartialOrd
+            + PublicKey
+            + Serialize
+            + DeserializeOwned,
+    > SignerSet<P>
+{
     /// Construct a new `SignerSet` from a list of public keys and threshold.
     pub fn new(individual_signers: Vec<P>, threshold: u32) -> Self {
         Self::new_with_multi(individual_signers, vec![], threshold)
@@ -735,7 +736,8 @@ mod test {
 
         assert_eq!(
             signer_set,
-            bth_util_serial::deserialize(&bth_util_serial::serialize(&signer_set).unwrap()).unwrap(),
+            bth_util_serial::deserialize(&bth_util_serial::serialize(&signer_set).unwrap())
+                .unwrap(),
         );
 
         let message = b"this is a test";

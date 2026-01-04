@@ -470,8 +470,7 @@ mod tests {
     };
     use bth_common::NodeID;
     use bth_crypto_keys::Ed25519Public;
-    use std::str::FromStr;
-    use std::sync::Arc;
+    use std::{str::FromStr, sync::Arc};
 
     fn make_node_id(name: &str) -> NodeID {
         NodeID {

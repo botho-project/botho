@@ -4,11 +4,11 @@
 
 use crate::domain_separators::MINT_TX_PREFIX_DOMAIN_TAG;
 use alloc::vec::Vec;
-use core::fmt;
 use bth_crypto_digestible::{Digestible, MerlinTranscript};
 use bth_crypto_keys::{Ed25519Signature, RistrettoPublic};
 use bth_crypto_multisig::MultiSig;
 use bth_util_serial::Message;
+use core::fmt;
 use serde::{Deserialize, Serialize};
 
 /// The contents of a mint-tx, which is a transaction to mint new tokens.
@@ -40,7 +40,6 @@ pub struct MintTxPrefix {
     /// The block index at which this transaction is no longer valid.
     #[prost(uint64, tag = "6")]
     pub tombstone_block: u64,
-
     // Field 7 was `e_fog_hint` - removed as part of fog removal
 }
 

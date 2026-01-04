@@ -147,7 +147,9 @@ mod tests {
         )
     }
 
-    fn create_test_tx_out_public_key(rng: &mut (impl rand::RngCore + rand::CryptoRng)) -> TxOutPublic {
+    fn create_test_tx_out_public_key(
+        rng: &mut (impl rand::RngCore + rand::CryptoRng),
+    ) -> TxOutPublic {
         let public = RistrettoPublic::from_random(rng);
         TxOutPublic::from(public)
     }

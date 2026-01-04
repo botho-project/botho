@@ -318,8 +318,8 @@ impl<V: Value, ValidationError: Clone + Display + 'static> ScpNode<V> for Node<V
 mod tests {
     use super::*;
     use crate::{ballot::Ballot, msg::*, slot::MockScpSlot, test_utils::*};
-    use maplit::btreeset;
     use bth_common::logger::test_with_logger;
+    use maplit::btreeset;
     use std::sync::Arc;
 
     fn get_node(

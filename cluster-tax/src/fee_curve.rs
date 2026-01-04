@@ -420,8 +420,8 @@ impl Default for ClusterFactorCurve {
 /// 1. Wealth falls within segment bounds: `w_lo <= wealth < w_hi`
 /// 2. Fee satisfies linear relation: `fee >= intercept + slope * wealth`
 ///
-/// The slope is scaled by `SLOPE_SCALE` (10^12) for precision in fixed-point arithmetic.
-/// The intercept is scaled by `FACTOR_SCALE` (10^3).
+/// The slope is scaled by `SLOPE_SCALE` (10^12) for precision in fixed-point
+/// arithmetic. The intercept is scaled by `FACTOR_SCALE` (10^3).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SegmentParams {
@@ -433,7 +433,8 @@ pub struct SegmentParams {
     /// For segment from (w_lo, f_lo) to (w_hi, f_hi):
     /// slope_scaled = (f_hi - f_lo) * SLOPE_SCALE / (w_hi - w_lo)
     ///
-    /// To compute factor: factor = f_lo + slope_scaled * (w - w_lo) / SLOPE_SCALE
+    /// To compute factor: factor = f_lo + slope_scaled * (w - w_lo) /
+    /// SLOPE_SCALE
     pub slope_scaled: i64,
     /// Y-intercept of the linear segment, scaled by FACTOR_SCALE (10^3).
     /// intercept_scaled = f_lo * FACTOR_SCALE
@@ -447,7 +448,8 @@ pub struct SegmentParams {
 ///
 /// ## Design
 ///
-/// The curve approximates the sigmoid's S-curve behavior with 3 linear segments:
+/// The curve approximates the sigmoid's S-curve behavior with 3 linear
+/// segments:
 /// - **Segment 1 (Poor)**: Low, flat factor for small wealth holders
 /// - **Segment 2 (Middle)**: Linear ramp where most redistribution occurs
 /// - **Segment 3 (Rich)**: High, flat factor plateau for large wealth holders
@@ -510,8 +512,8 @@ impl ZkFeeCurve {
 
     /// Default 3-segment balanced configuration.
     ///
-    /// This configuration was validated via simulation (`scripts/gini_3segment.py`)
-    /// and achieves:
+    /// This configuration was validated via simulation
+    /// (`scripts/gini_3segment.py`) and achieves:
     /// - **Better Gini reduction**: -0.2399 vs -0.2393 (sigmoid)
     /// - **Lower burn rate**: 12.4% vs 12.5%
     /// - **ZK-provable**: ~4.5 KB proof overhead
@@ -639,7 +641,8 @@ impl ZkFeeCurve {
         let f_lo = self.factors[segment] as i64;
         let f_hi = self.factors[segment + 1] as i64;
 
-        // Calculate slope with high precision: (f_hi - f_lo) * SLOPE_SCALE / (w_hi - w_lo)
+        // Calculate slope with high precision: (f_hi - f_lo) * SLOPE_SCALE / (w_hi -
+        // w_lo)
         let w_range = w_hi.saturating_sub(w_lo) as i128;
         let f_range = f_hi as i128 - f_lo as i128;
 
@@ -715,7 +718,6 @@ mod tests {
             fee_large > fee_small * 2,
             "Large cluster should pay more: {fee_large} > {fee_small}"
         );
-
     }
 
     #[test]
@@ -810,7 +812,6 @@ mod tests {
             hidden_fee > 0,
             "Hidden fee should be non-zero: {hidden_fee}"
         );
-
     }
 
     #[test]
@@ -891,7 +892,10 @@ mod tests {
 
         // Quarter point at 1.25M should give factor ~1250
         let quarter_factor = curve.factor(1_250_000);
-        assert_eq!(quarter_factor, 1250, "Segment 1 quarter point should be 1.25x");
+        assert_eq!(
+            quarter_factor, 1250,
+            "Segment 1 quarter point should be 1.25x"
+        );
     }
 
     #[test]
@@ -906,7 +910,10 @@ mod tests {
 
         // At 8.75M (quarter point), factor should be 2750
         let quarter_factor = curve.factor(8_750_000);
-        assert_eq!(quarter_factor, 2750, "Segment 2 quarter point should be 2.75x");
+        assert_eq!(
+            quarter_factor, 2750,
+            "Segment 2 quarter point should be 2.75x"
+        );
     }
 
     #[test]
@@ -922,8 +929,9 @@ mod tests {
         );
 
         // The rich segment has an enormous range (20M to u64::MAX ≈ 18 quintillion)
-        // so the linear interpolation produces negligible change for small wealth differences.
-        // At 21M, the factor is essentially still 5000 due to the tiny slope.
+        // so the linear interpolation produces negligible change for small wealth
+        // differences. At 21M, the factor is essentially still 5000 due to the
+        // tiny slope.
         let factor_21m = curve.factor(21_000_000);
         assert_eq!(
             factor_21m, 5000,
@@ -1182,4 +1190,3 @@ impl Default for FeeCurve {
         Self::default_params()
     }
 }
-

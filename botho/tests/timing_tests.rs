@@ -2,7 +2,8 @@
 //
 //! Transaction Propagation Timing Tests
 //!
-//! Verifies that transactions propagate through the network within expected timeframes:
+//! Verifies that transactions propagate through the network within expected
+//! timeframes:
 //! - Transaction reaches all nodes within 5 seconds
 //! - Consensus is achieved within timeout period
 //! - Block propagation meets latency requirements
@@ -727,7 +728,8 @@ fn test_consensus_latency_statistics() {
         let start = Instant::now();
         network.broadcast_minting_tx(minting_tx);
 
-        let reached = network.wait_for_slot_majority(round as SlotIndex, NUM_NODES, CONSENSUS_TIMEOUT);
+        let reached =
+            network.wait_for_slot_majority(round as SlotIndex, NUM_NODES, CONSENSUS_TIMEOUT);
         assert!(reached, "Round {} should complete", round);
 
         let latency = start.elapsed();

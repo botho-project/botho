@@ -24,17 +24,14 @@ use std::time::SystemTime;
 use serial_test::serial;
 use tempfile::TempDir;
 
-use bth_account_keys::PublicAddress;
 use botho::{
     block::{Block, BlockHeader, MintingTx},
     ledger::Ledger,
     mempool::{Mempool, MempoolError},
-    transaction::{
-        Transaction, TxOutput, Utxo, UtxoId,
-        MIN_TX_FEE, PICOCREDITS_PER_CREDIT,
-    },
+    transaction::{Transaction, TxOutput, Utxo, UtxoId, MIN_TX_FEE, PICOCREDITS_PER_CREDIT},
 };
 use botho_wallet::WalletKeys;
+use bth_account_keys::PublicAddress;
 
 /// Helper to calculate fee for transactions
 ///
@@ -43,8 +40,8 @@ use botho_wallet::WalletKeys;
 /// fees this is approximately input_sum, we pass the input amount (UTXO value)
 /// to ensure the calculated fee covers the validation requirement.
 ///
-/// All transactions are now private (Standard-Private with CLSAG ring signatures).
-/// Ensures the returned fee is at least MIN_TX_FEE.
+/// All transactions are now private (Standard-Private with CLSAG ring
+/// signatures). Ensures the returned fee is at least MIN_TX_FEE.
 fn calculate_fee_for_outputs(mempool: &Mempool, output_sum: u64) -> u64 {
     use bth_cluster_tax::TransactionType;
     let estimated = mempool.estimate_fee(TransactionType::Hidden, output_sum, 0);
@@ -170,8 +167,9 @@ fn mine_block(
 
 /// Scan wallet for unspent UTXOs
 ///
-/// For ring signature transactions, UTXOs are not directly removed from the set.
-/// Instead, we check if the key image for each owned output has been recorded as spent.
+/// For ring signature transactions, UTXOs are not directly removed from the
+/// set. Instead, we check if the key image for each owned output has been
+/// recorded as spent.
 fn scan_wallet_utxos(ledger: &Ledger, wallet: &WalletKeys) -> Vec<(Utxo, u64)> {
     use bth_crypto_ring_signature::KeyImage;
 
@@ -187,9 +185,16 @@ fn scan_wallet_utxos(ledger: &Ledger, wallet: &WalletKeys) -> Vec<(Utxo, u64)> {
                 let utxo_id = UtxoId::new(block_hash, 0);
                 if let Ok(Some(utxo)) = ledger.get_utxo(&utxo_id) {
                     // Check if this output's key image has been spent
-                    if let Some(onetime_private) = utxo.output.recover_spend_key(wallet.account_key(), subaddr_idx) {
+                    if let Some(onetime_private) = utxo
+                        .output
+                        .recover_spend_key(wallet.account_key(), subaddr_idx)
+                    {
                         let key_image = KeyImage::from(&onetime_private);
-                        if ledger.is_key_image_spent(key_image.as_bytes()).unwrap_or(None).is_none() {
+                        if ledger
+                            .is_key_image_spent(key_image.as_bytes())
+                            .unwrap_or(None)
+                            .is_none()
+                        {
                             owned_utxos.push((utxo, subaddr_idx));
                         }
                     }
@@ -204,9 +209,16 @@ fn scan_wallet_utxos(ledger: &Ledger, wallet: &WalletKeys) -> Vec<(Utxo, u64)> {
                         let utxo_id = UtxoId::new(tx_hash, idx as u32);
                         if let Ok(Some(utxo)) = ledger.get_utxo(&utxo_id) {
                             // Check if this output's key image has been spent
-                            if let Some(onetime_private) = utxo.output.recover_spend_key(wallet.account_key(), subaddr_idx) {
+                            if let Some(onetime_private) = utxo
+                                .output
+                                .recover_spend_key(wallet.account_key(), subaddr_idx)
+                            {
                                 let key_image = KeyImage::from(&onetime_private);
-                                if ledger.is_key_image_spent(key_image.as_bytes()).unwrap_or(None).is_none() {
+                                if ledger
+                                    .is_key_image_spent(key_image.as_bytes())
+                                    .unwrap_or(None)
+                                    .is_none()
+                                {
                                     owned_utxos.push((utxo, subaddr_idx));
                                 }
                             }
@@ -248,7 +260,9 @@ fn mine_decoy_blocks(ledger: &Ledger, primary_wallet: &WalletKeys) {
     // Mine 19 more blocks to the decoy wallet for ring signature decoys
     for i in 0..19 {
         let block = mine_block(ledger, &decoy_address, vec![]);
-        ledger.add_block(&block).expect(&format!("Failed to add decoy block {}", i + 2));
+        ledger
+            .add_block(&block)
+            .expect(&format!("Failed to add decoy block {}", i + 2));
     }
 }
 
@@ -258,7 +272,8 @@ fn mine_decoy_blocks(ledger: &Ledger, primary_wallet: &WalletKeys) {
 /// The real input is hidden among decoys selected from the ledger.
 ///
 /// # Requirements
-/// - The ledger must have at least MIN_RING_SIZE (20) unspent outputs for decoy selection
+/// - The ledger must have at least MIN_RING_SIZE (20) unspent outputs for decoy
+///   selection
 /// - The sender_utxo must belong to the sender_wallet
 fn create_signed_transaction(
     sender_wallet: &WalletKeys,
@@ -271,8 +286,7 @@ fn create_signed_transaction(
     ledger: &Ledger,
 ) -> Transaction {
     use botho::transaction::{ClsagRingInput, RingMember};
-    use rand::seq::SliceRandom;
-    use rand::rngs::OsRng;
+    use rand::{rngs::OsRng, seq::SliceRandom};
 
     let mut rng = OsRng;
 
@@ -361,7 +375,8 @@ fn test_basic_tx_lifecycle_utxo_creation_and_consumption() {
     // Mine enough blocks to have decoys for ring signatures
     mine_decoy_blocks(&ledger, &miner_wallet);
 
-    // Verify miner has coins (should have exactly 1 block reward from mine_decoy_blocks)
+    // Verify miner has coins (should have exactly 1 block reward from
+    // mine_decoy_blocks)
     let miner_balance = get_wallet_balance(&ledger, &miner_wallet);
     assert!(
         miner_balance >= TEST_BLOCK_REWARD,
@@ -391,15 +406,23 @@ fn test_basic_tx_lifecycle_utxo_creation_and_consumption() {
     );
 
     // Verify the transaction has valid ring signatures
-    assert!(tx.verify_ring_signatures().is_ok(), "Ring signatures should be valid");
+    assert!(
+        tx.verify_ring_signatures().is_ok(),
+        "Ring signatures should be valid"
+    );
 
     // Mine block with transaction
     let block = mine_block(&ledger, &miner_address, vec![tx.clone()]);
-    ledger.add_block(&block).expect("Failed to add block with tx");
+    ledger
+        .add_block(&block)
+        .expect("Failed to add block with tx");
 
     // Verify recipient received funds
     let recipient_balance = get_wallet_balance(&ledger, &recipient_wallet);
-    assert_eq!(recipient_balance, send_amount, "Recipient should have received funds");
+    assert_eq!(
+        recipient_balance, send_amount,
+        "Recipient should have received funds"
+    );
 
     // Verify miner's balance increased by the change + new block reward
     let miner_balance_after = get_wallet_balance(&ledger, &miner_wallet);
@@ -447,7 +470,9 @@ fn test_tx_lifecycle_fee_burning() {
 
     // Mine block with transaction
     let block = mine_block(&ledger, &miner_address, vec![tx]);
-    ledger.add_block(&block).expect("Failed to add block with tx");
+    ledger
+        .add_block(&block)
+        .expect("Failed to add block with tx");
 
     // Verify fee was burned
     let state = ledger.get_chain_state().unwrap();
@@ -473,7 +498,9 @@ fn test_tx_lifecycle_fee_burning() {
     );
 
     let block = mine_block(&ledger, &miner_address, vec![tx2]);
-    ledger.add_block(&block).expect("Failed to add block with tx2");
+    ledger
+        .add_block(&block)
+        .expect("Failed to add block with tx2");
 
     // Verify cumulative fees burned
     let state = ledger.get_chain_state().unwrap();
@@ -520,8 +547,13 @@ fn test_mempool_add_and_clear_on_block() {
     );
 
     // Add to mempool
-    let tx_hash = mempool.add_tx(tx.clone(), &ledger).expect("Failed to add tx to mempool");
-    assert!(mempool.contains(&tx_hash), "Mempool should contain transaction");
+    let tx_hash = mempool
+        .add_tx(tx.clone(), &ledger)
+        .expect("Failed to add tx to mempool");
+    assert!(
+        mempool.contains(&tx_hash),
+        "Mempool should contain transaction"
+    );
     assert_eq!(mempool.len(), 1, "Mempool should have 1 transaction");
 
     // Get transactions for block
@@ -530,12 +562,17 @@ fn test_mempool_add_and_clear_on_block() {
 
     // Mine block with transaction
     let block = mine_block(&ledger, &miner_address, vec![tx.clone()]);
-    ledger.add_block(&block).expect("Failed to add block with tx");
+    ledger
+        .add_block(&block)
+        .expect("Failed to add block with tx");
 
     // Clear confirmed transactions from mempool
     mempool.remove_confirmed(&[tx]);
     assert!(mempool.is_empty(), "Mempool should be empty after block");
-    assert!(!mempool.contains(&tx_hash), "Transaction should be removed from mempool");
+    assert!(
+        !mempool.contains(&tx_hash),
+        "Transaction should be removed from mempool"
+    );
 }
 
 #[test]
@@ -584,7 +621,9 @@ fn test_mempool_rejects_double_spend() {
     );
 
     // Add first transaction - should succeed
-    mempool.add_tx(tx1, &ledger).expect("First tx should succeed");
+    mempool
+        .add_tx(tx1, &ledger)
+        .expect("First tx should succeed");
 
     // Add second transaction - should fail (double spend via key image)
     let result = mempool.add_tx(tx2, &ledger);
@@ -613,10 +652,11 @@ fn test_mempool_rejects_insufficient_fee() {
 
     let send_amount = 10 * PICOCREDITS_PER_CREDIT;
 
-    // Create transaction with fee that's exactly at minimum - this should succeed structurally
-    // but may be rejected by mempool if dynamic fees are higher than MIN_TX_FEE.
-    // For this test, we use MIN_TX_FEE which passes structural validation.
-    // The mempool may or may not reject it based on dynamic fee calculation.
+    // Create transaction with fee that's exactly at minimum - this should succeed
+    // structurally but may be rejected by mempool if dynamic fees are higher
+    // than MIN_TX_FEE. For this test, we use MIN_TX_FEE which passes structural
+    // validation. The mempool may or may not reject it based on dynamic fee
+    // calculation.
     let tx = create_signed_transaction(
         &miner_wallet,
         sender_utxo,
@@ -632,9 +672,10 @@ fn test_mempool_rejects_insufficient_fee() {
     // rejected based on current mempool dynamic fees. Either way, this validates
     // that fee checking works.
     let result = mempool.add_tx(tx, &ledger);
-    // If dynamic fees are higher than MIN_TX_FEE, this will be rejected as FeeTooLow
-    // If dynamic fees are at MIN_TX_FEE, this will succeed
-    // Both outcomes are valid - the test verifies the mempool processes the fee correctly
+    // If dynamic fees are higher than MIN_TX_FEE, this will be rejected as
+    // FeeTooLow If dynamic fees are at MIN_TX_FEE, this will succeed
+    // Both outcomes are valid - the test verifies the mempool processes the fee
+    // correctly
     assert!(
         result.is_ok() || matches!(result, Err(MempoolError::FeeTooLow { .. })),
         "Transaction with insufficient fee should be rejected: {:?}",
@@ -659,12 +700,15 @@ fn test_mempool_remove_invalid_after_block() {
     ledger.add_block(&block2).expect("Failed to add block 2");
 
     // Mine 18 more blocks to a dedicated decoy wallet (seed 0)
-    // This prevents wallet collisions with miner (seed 1), recipient1 (seed 2), recipient2 (seed 3)
+    // This prevents wallet collisions with miner (seed 1), recipient1 (seed 2),
+    // recipient2 (seed 3)
     let decoy_wallet = create_wallet(0);
     let decoy_address = decoy_wallet.public_address();
     for i in 0..18 {
         let block = mine_block(&ledger, &decoy_address, vec![]);
-        ledger.add_block(&block).expect(&format!("Failed to add decoy block {}", i + 3));
+        ledger
+            .add_block(&block)
+            .expect(&format!("Failed to add decoy block {}", i + 3));
     }
 
     // Get both UTXOs belonging to miner
@@ -702,24 +746,37 @@ fn test_mempool_remove_invalid_after_block() {
     );
 
     // Add both to mempool
-    mempool.add_tx(tx1.clone(), &ledger).expect("Failed to add tx1");
-    mempool.add_tx(tx2.clone(), &ledger).expect("Failed to add tx2");
+    mempool
+        .add_tx(tx1.clone(), &ledger)
+        .expect("Failed to add tx1");
+    mempool
+        .add_tx(tx2.clone(), &ledger)
+        .expect("Failed to add tx2");
     assert_eq!(mempool.len(), 2, "Mempool should have 2 transactions");
 
     // Mine block with only tx1
     let block = mine_block(&ledger, &miner_address, vec![tx1.clone()]);
-    ledger.add_block(&block).expect("Failed to add block with tx1");
+    ledger
+        .add_block(&block)
+        .expect("Failed to add block with tx1");
 
     // Remove confirmed tx1
     mempool.remove_confirmed(&[tx1]);
-    assert_eq!(mempool.len(), 1, "Mempool should have 1 transaction after removing confirmed");
+    assert_eq!(
+        mempool.len(),
+        1,
+        "Mempool should have 1 transaction after removing confirmed"
+    );
 
     // tx2 should still be valid since it spent a different UTXO
     mempool.remove_invalid(&ledger);
     assert_eq!(mempool.len(), 1, "tx2 should still be valid");
 
     // Verify tx2 is still there
-    assert!(mempool.contains(&tx2.hash()), "tx2 should still be in mempool");
+    assert!(
+        mempool.contains(&tx2.hash()),
+        "tx2 should still be in mempool"
+    );
 }
 
 // ============================================================================
@@ -755,11 +812,17 @@ fn test_chained_transactions_in_sequence() {
     );
 
     let block = mine_block(&ledger, &addr_a, vec![tx1]);
-    ledger.add_block(&block).expect("Failed to add block with tx1");
+    ledger
+        .add_block(&block)
+        .expect("Failed to add block with tx1");
 
     // Verify B has 20 BTH
     let balance_b = get_wallet_balance(&ledger, &wallet_b);
-    assert_eq!(balance_b, 20 * PICOCREDITS_PER_CREDIT, "Wallet B should have 20 BTH");
+    assert_eq!(
+        balance_b,
+        20 * PICOCREDITS_PER_CREDIT,
+        "Wallet B should have 20 BTH"
+    );
 
     // B -> C: Send 10 BTH (spending the funds B received)
     let utxos = scan_wallet_utxos(&ledger, &wallet_b);
@@ -779,11 +842,17 @@ fn test_chained_transactions_in_sequence() {
     );
 
     let block = mine_block(&ledger, &addr_a, vec![tx2]);
-    ledger.add_block(&block).expect("Failed to add block with tx2");
+    ledger
+        .add_block(&block)
+        .expect("Failed to add block with tx2");
 
     // Verify final balances
     let balance_c = get_wallet_balance(&ledger, &wallet_c);
-    assert_eq!(balance_c, 10 * PICOCREDITS_PER_CREDIT, "Wallet C should have 10 BTH");
+    assert_eq!(
+        balance_c,
+        10 * PICOCREDITS_PER_CREDIT,
+        "Wallet C should have 10 BTH"
+    );
 
     let balance_b_final = get_wallet_balance(&ledger, &wallet_b);
     let expected_b = 20 * PICOCREDITS_PER_CREDIT - 10 * PICOCREDITS_PER_CREDIT - MIN_TX_FEE;
@@ -810,7 +879,9 @@ fn test_multiple_transactions_in_single_block() {
     let decoy_addr = decoy_wallet.public_address();
     for i in 0..18 {
         let block = mine_block(&ledger, &decoy_addr, vec![]);
-        ledger.add_block(&block).expect(&format!("Failed to add decoy block {}", i + 3));
+        ledger
+            .add_block(&block)
+            .expect(&format!("Failed to add decoy block {}", i + 3));
     }
 
     // Get both UTXOs belonging to miner
@@ -846,18 +917,32 @@ fn test_multiple_transactions_in_single_block() {
 
     // Mine block with both transactions
     let block = mine_block(&ledger, &miner_addr, vec![tx1, tx2]);
-    ledger.add_block(&block).expect("Failed to add block with txs");
+    ledger
+        .add_block(&block)
+        .expect("Failed to add block with txs");
 
     // Verify both recipients received funds
     let balance1 = get_wallet_balance(&ledger, &recipient1);
     let balance2 = get_wallet_balance(&ledger, &recipient2);
 
-    assert_eq!(balance1, 10 * PICOCREDITS_PER_CREDIT, "Recipient 1 should have 10 BTH");
-    assert_eq!(balance2, 15 * PICOCREDITS_PER_CREDIT, "Recipient 2 should have 15 BTH");
+    assert_eq!(
+        balance1,
+        10 * PICOCREDITS_PER_CREDIT,
+        "Recipient 1 should have 10 BTH"
+    );
+    assert_eq!(
+        balance2,
+        15 * PICOCREDITS_PER_CREDIT,
+        "Recipient 2 should have 15 BTH"
+    );
 
     // Verify fees burned (2 transactions)
     let state = ledger.get_chain_state().unwrap();
-    assert_eq!(state.total_fees_burned, MIN_TX_FEE * 2, "Both fees should be burned");
+    assert_eq!(
+        state.total_fees_burned,
+        MIN_TX_FEE * 2,
+        "Both fees should be burned"
+    );
 }
 
 // ============================================================================
@@ -895,7 +980,9 @@ fn test_utxo_set_consistency_after_transactions() {
     );
 
     let block = mine_block(&ledger, &miner_addr, vec![tx.clone()]);
-    ledger.add_block(&block).expect("Failed to add block with tx");
+    ledger
+        .add_block(&block)
+        .expect("Failed to add block with tx");
 
     // Verify new UTXOs exist (one for recipient, one for change)
     let tx_hash = tx.hash();
@@ -952,14 +1039,21 @@ fn test_transaction_index_lookup() {
 
     let block = mine_block(&ledger, &miner_addr, vec![tx]);
     let tx_block_height = state.height + 1;
-    ledger.add_block(&block).expect("Failed to add block with tx");
+    ledger
+        .add_block(&block)
+        .expect("Failed to add block with tx");
 
     // Look up transaction by hash
-    let tx_location = ledger.get_transaction_location(&tx_hash).expect("Failed to get tx location");
+    let tx_location = ledger
+        .get_transaction_location(&tx_hash)
+        .expect("Failed to get tx location");
     assert!(tx_location.is_some(), "Transaction should be indexed");
 
     let location = tx_location.unwrap();
-    assert_eq!(location.block_height, tx_block_height, "Transaction should be in correct block");
+    assert_eq!(
+        location.block_height, tx_block_height,
+        "Transaction should be in correct block"
+    );
     assert_eq!(location.tx_index, 0, "Transaction should be at index 0");
 
     // Verify we can retrieve the block and find the transaction
@@ -1004,7 +1098,11 @@ fn test_exact_amount_spend_no_change() {
     );
 
     // Should have exactly 1 output (recipient only, no change)
-    assert_eq!(tx.outputs.len(), 1, "Should have only recipient output (no change)");
+    assert_eq!(
+        tx.outputs.len(),
+        1,
+        "Should have only recipient output (no change)"
+    );
     assert_eq!(tx.outputs[0].amount, exact_amount);
 
     // Mine and verify
@@ -1012,7 +1110,10 @@ fn test_exact_amount_spend_no_change() {
     ledger.add_block(&block).expect("Failed to add block");
 
     let recipient_balance = get_wallet_balance(&ledger, &recipient);
-    assert_eq!(recipient_balance, exact_amount, "Recipient should receive exact amount");
+    assert_eq!(
+        recipient_balance, exact_amount,
+        "Recipient should receive exact amount"
+    );
 }
 
 #[test]
@@ -1045,7 +1146,9 @@ fn test_mempool_already_exists_rejection() {
     );
 
     // Add transaction once
-    mempool.add_tx(tx.clone(), &ledger).expect("First add should succeed");
+    mempool
+        .add_tx(tx.clone(), &ledger)
+        .expect("First add should succeed");
 
     // Try to add again
     let result = mempool.add_tx(tx, &ledger);

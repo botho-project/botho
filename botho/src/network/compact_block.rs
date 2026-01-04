@@ -2,13 +2,14 @@
 
 //! Compact block relay for bandwidth-efficient block propagation.
 //!
-//! This module implements BIP 152-style compact blocks, reducing block propagation
-//! bandwidth by 99%+ by sending short transaction IDs instead of full transactions.
-//! Receiving nodes reconstruct blocks from their mempool.
+//! This module implements BIP 152-style compact blocks, reducing block
+//! propagation bandwidth by 99%+ by sending short transaction IDs instead of
+//! full transactions. Receiving nodes reconstruct blocks from their mempool.
 //!
 //! # Protocol Flow
 //!
-//! 1. Miner creates block → broadcasts `CompactBlock` (header + 6-byte short IDs)
+//! 1. Miner creates block → broadcasts `CompactBlock` (header + 6-byte short
+//!    IDs)
 //! 2. Receiver attempts reconstruction from mempool using short ID mapping
 //! 3. If transactions are missing → sends `GetBlockTxn` request
 //! 4. Original node responds with `BlockTxn` containing missing transactions
@@ -23,19 +24,21 @@
 
 use serde::{Deserialize, Serialize};
 use siphasher::sip::SipHasher24;
-use std::collections::HashMap;
-use std::hash::Hasher;
+use std::{collections::HashMap, hash::Hasher};
 
-use crate::block::{Block, BlockHeader, MintingTx};
-use crate::mempool::Mempool;
-use crate::transaction::Transaction;
+use crate::{
+    block::{Block, BlockHeader, MintingTx},
+    mempool::Mempool,
+    transaction::Transaction,
+};
 
 /// A 6-byte short transaction ID derived via SipHash.
 ///
 /// The probability of collision with 1000 transactions is approximately 10^-9.
 pub type ShortId = [u8; 6];
 
-/// A compact block containing transaction short IDs instead of full transactions.
+/// A compact block containing transaction short IDs instead of full
+/// transactions.
 ///
 /// Receivers reconstruct the full block by mapping short IDs to transactions
 /// in their mempool.
@@ -97,8 +100,8 @@ pub enum ReconstructionResult {
 
 /// Compute a 6-byte short ID for a transaction.
 ///
-/// Uses SipHash-2-4 with keys derived from the transaction hash and block nonce.
-/// This provides collision resistance while keeping IDs small.
+/// Uses SipHash-2-4 with keys derived from the transaction hash and block
+/// nonce. This provides collision resistance while keeping IDs small.
 pub fn compute_short_id(tx_hash: &[u8; 32], nonce: u64) -> ShortId {
     // Use first 8 bytes of tx_hash as key0, nonce as key1
     let k0 = u64::from_le_bytes(tx_hash[0..8].try_into().unwrap());
@@ -114,7 +117,8 @@ pub fn compute_short_id(tx_hash: &[u8; 32], nonce: u64) -> ShortId {
 
 /// Derive the nonce from a block hash.
 ///
-/// The nonce is used in short ID computation to prevent pre-computation attacks.
+/// The nonce is used in short ID computation to prevent pre-computation
+/// attacks.
 pub fn derive_nonce(block_hash: &[u8; 32]) -> u64 {
     u64::from_le_bytes(block_hash[0..8].try_into().unwrap())
 }
@@ -142,7 +146,8 @@ impl CompactBlock {
 
     /// Create a compact block with pre-filled transactions.
     ///
-    /// Use this when you know certain transactions won't be in receivers' mempools.
+    /// Use this when you know certain transactions won't be in receivers'
+    /// mempools.
     pub fn from_block_with_prefilled(block: &Block, prefill_indices: &[usize]) -> Self {
         let block_hash = block.hash();
         let nonce = derive_nonce(&block_hash);
@@ -225,15 +230,14 @@ impl CompactBlock {
         }
     }
 
-    /// Add transactions received from a `BlockTxn` response and retry reconstruction.
+    /// Add transactions received from a `BlockTxn` response and retry
+    /// reconstruction.
     ///
-    /// The `received_txs` should be in the same order as the `requested_indices`.
+    /// The `received_txs` should be in the same order as the
+    /// `requested_indices`.
     pub fn add_transactions(&mut self, requested_indices: &[u16], received_txs: Vec<Transaction>) {
         for (idx, tx) in requested_indices.iter().zip(received_txs.into_iter()) {
-            self.prefilled_txs.push(PrefilledTx {
-                index: *idx,
-                tx,
-            });
+            self.prefilled_txs.push(PrefilledTx { index: *idx, tx });
         }
     }
 
@@ -325,6 +329,9 @@ mod tests {
 
         // With 6 bytes (48 bits), collision probability for 1000 items is ~10^-9
         // We should never see collisions in practice
-        assert_eq!(collisions, 0, "Expected no collisions with 1000 unique tx hashes");
+        assert_eq!(
+            collisions, 0,
+            "Expected no collisions with 1000 unique tx hashes"
+        );
     }
 }

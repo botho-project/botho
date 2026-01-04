@@ -118,10 +118,12 @@ impl<ID: GenericNodeId> QuorumSetExt<ID> for QuorumSet<ID> {
 /// * `msgs` - A map of ID -> Msg holding the newest message received from each
 ///   node.
 /// * `pred` - Predicate to apply to the messages.
-/// * `nodes_so_far` - Mutable set of nodes collected so far (modified in place).
+/// * `nodes_so_far` - Mutable set of nodes collected so far (modified in
+///   place).
 ///
 /// # Returns
-/// * `Some(pred)` if a quorum was found (nodes_so_far contains the quorum nodes)
+/// * `Some(pred)` if a quorum was found (nodes_so_far contains the quorum
+///   nodes)
 /// * `None` if no quorum was found (nodes_so_far is restored to original state)
 fn findQuorumHelperMut<ID: GenericNodeId, V: Value, P: Predicate<V, ID>>(
     threshold: u32,
@@ -190,21 +192,13 @@ fn findQuorumHelperMut<ID: GenericNodeId, V: Value, P: Predicate<V, ID>>(
             // track which specific nodes were added by the recursive call.
             let snapshot = nodes_so_far.clone();
 
-            if let Some(pred2) = findQuorumHelperMut(
-                Q.threshold,
-                &Q.members,
-                msgs,
-                pred.clone(),
-                nodes_so_far,
-            ) {
+            if let Some(pred2) =
+                findQuorumHelperMut(Q.threshold, &Q.members, msgs, pred.clone(), nodes_so_far)
+            {
                 // We found a quorum for the inner set, we need 1 validator less.
-                if let Some(final_pred) = findQuorumHelperMut(
-                    threshold - 1,
-                    &members[1..],
-                    msgs,
-                    pred2,
-                    nodes_so_far,
-                ) {
+                if let Some(final_pred) =
+                    findQuorumHelperMut(threshold - 1, &members[1..], msgs, pred2, nodes_so_far)
+                {
                     return Some(final_pred);
                 }
             }
@@ -231,7 +225,9 @@ fn findQuorumHelper<ID: GenericNodeId, V: Value, P: Predicate<V, ID>>(
     nodes_so_far: HashSet<ID>,
 ) -> (HashSet<ID>, P) {
     let mut nodes = nodes_so_far;
-    if let Some(final_pred) = findQuorumHelperMut(threshold, members, msgs, pred.clone(), &mut nodes) {
+    if let Some(final_pred) =
+        findQuorumHelperMut(threshold, members, msgs, pred.clone(), &mut nodes)
+    {
         (nodes, final_pred)
     } else {
         (HashSet::default(), pred)

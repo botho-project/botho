@@ -12,7 +12,10 @@ pub mod websocket;
 
 pub use auth::{ApiKeyConfig, ApiPermissions, AuthError, HmacAuthenticator};
 pub use deposit_scanner::{DepositScanner, ScanResult};
-pub use metrics::{check_health, check_ready, HealthResponse, HealthStatus, NodeMetrics, ReadyResponse, init_metrics, start_metrics_server, MetricsUpdater, calculate_dir_size, DATA_DIR_USAGE_BYTES};
+pub use metrics::{
+    calculate_dir_size, check_health, check_ready, init_metrics, start_metrics_server,
+    HealthResponse, HealthStatus, MetricsUpdater, NodeMetrics, ReadyResponse, DATA_DIR_USAGE_BYTES,
+};
 pub use rate_limit::{KeyTier, RateLimitInfo, RateLimiter};
 pub use view_keys::{RegistryError, ViewKeyInfo, ViewKeyRegistry};
 pub use websocket::WsBroadcaster;
@@ -532,7 +535,9 @@ async fn handle_rpc_method(request: &JsonRpcRequest, state: &RpcState) -> JsonRp
 
         // Cluster wealth methods (for progressive fee estimation)
         "cluster_getWealth" => handle_cluster_get_wealth(id, &request.params, state).await,
-        "cluster_getWealthByTargetKeys" => handle_cluster_get_wealth_by_target_keys(id, &request.params, state).await,
+        "cluster_getWealthByTargetKeys" => {
+            handle_cluster_get_wealth_by_target_keys(id, &request.params, state).await
+        }
         "cluster_getAllWealth" => handle_cluster_get_all_wealth(id, state).await,
 
         _ => JsonRpcResponse::error(id, -32601, &format!("Method not found: {}", request.method)),
@@ -665,7 +670,10 @@ async fn handle_estimate_fee(id: Value, params: &Value, state: &RpcState) -> Jso
 
     // Parse optional cluster_wealth for accurate progressive fee calculation
     // Wallets can get this from cluster_getWealthByTargetKeys
-    let cluster_wealth = params.get("cluster_wealth").and_then(|v| v.as_u64()).unwrap_or(0);
+    let cluster_wealth = params
+        .get("cluster_wealth")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
 
     // All transactions are private (CLSAG ring signatures)
     let tx_type = bth_cluster_tax::TransactionType::Hidden;
@@ -1466,7 +1474,13 @@ async fn handle_cluster_get_wealth(id: Value, params: &Value, state: &RpcState) 
     let cluster_id = if let Some(id_str) = params.get("cluster_id").and_then(|v| v.as_str()) {
         match id_str.parse::<u64>() {
             Ok(id) => id,
-            Err(_) => return JsonRpcResponse::error(id, -32602, "Invalid cluster_id: expected numeric value"),
+            Err(_) => {
+                return JsonRpcResponse::error(
+                    id,
+                    -32602,
+                    "Invalid cluster_id: expected numeric value",
+                )
+            }
         }
     } else if let Some(id_num) = params.get("cluster_id").and_then(|v| v.as_u64()) {
         id_num
@@ -1477,12 +1491,17 @@ async fn handle_cluster_get_wealth(id: Value, params: &Value, state: &RpcState) 
     let ledger = read_lock!(state.ledger, id.clone());
 
     match ledger.get_cluster_wealth(cluster_id) {
-        Ok(wealth) => JsonRpcResponse::success(id, json!({
-            "cluster_id": cluster_id.to_string(),
-            "wealth": wealth,
-            "wealth_btd": format!("{:.9}", wealth as f64 / 1_000_000_000_000.0),
-        })),
-        Err(e) => JsonRpcResponse::error(id, -32000, &format!("Failed to get cluster wealth: {}", e)),
+        Ok(wealth) => JsonRpcResponse::success(
+            id,
+            json!({
+                "cluster_id": cluster_id.to_string(),
+                "wealth": wealth,
+                "wealth_btd": format!("{:.9}", wealth as f64 / 1_000_000_000_000.0),
+            }),
+        ),
+        Err(e) => {
+            JsonRpcResponse::error(id, -32000, &format!("Failed to get cluster wealth: {}", e))
+        }
     }
 }
 
@@ -1496,12 +1515,23 @@ async fn handle_cluster_get_wealth(id: Value, params: &Value, state: &RpcState) 
 /// - `target_keys`: Array of target key hex strings (32 bytes each)
 ///
 /// # Returns
-/// Cluster wealth information including max wealth, breakdown, and fee multiplier.
-async fn handle_cluster_get_wealth_by_target_keys(id: Value, params: &Value, state: &RpcState) -> JsonRpcResponse {
+/// Cluster wealth information including max wealth, breakdown, and fee
+/// multiplier.
+async fn handle_cluster_get_wealth_by_target_keys(
+    id: Value,
+    params: &Value,
+    state: &RpcState,
+) -> JsonRpcResponse {
     // Parse target_keys parameter
     let target_keys_hex = match params.get("target_keys").and_then(|v| v.as_array()) {
         Some(arr) => arr,
-        None => return JsonRpcResponse::error(id, -32602, "Missing target_keys parameter (expected array)"),
+        None => {
+            return JsonRpcResponse::error(
+                id,
+                -32602,
+                "Missing target_keys parameter (expected array)",
+            )
+        }
     };
 
     // Parse hex strings to [u8; 32] arrays
@@ -1509,11 +1539,21 @@ async fn handle_cluster_get_wealth_by_target_keys(id: Value, params: &Value, sta
     for (i, key_val) in target_keys_hex.iter().enumerate() {
         let key_hex = match key_val.as_str() {
             Some(hex) => hex,
-            None => return JsonRpcResponse::error(id, -32602, &format!("target_keys[{}]: expected hex string", i)),
+            None => {
+                return JsonRpcResponse::error(
+                    id,
+                    -32602,
+                    &format!("target_keys[{}]: expected hex string", i),
+                )
+            }
         };
 
         if key_hex.len() != 64 {
-            return JsonRpcResponse::error(id, -32602, &format!("target_keys[{}]: expected 64 hex characters", i));
+            return JsonRpcResponse::error(
+                id,
+                -32602,
+                &format!("target_keys[{}]: expected 64 hex characters", i),
+            );
         }
 
         match hex::decode(key_hex) {
@@ -1522,7 +1562,13 @@ async fn handle_cluster_get_wealth_by_target_keys(id: Value, params: &Value, sta
                 arr.copy_from_slice(&bytes);
                 target_keys.push(arr);
             }
-            _ => return JsonRpcResponse::error(id, -32602, &format!("target_keys[{}]: invalid hex", i)),
+            _ => {
+                return JsonRpcResponse::error(
+                    id,
+                    -32602,
+                    &format!("target_keys[{}]: invalid hex", i),
+                )
+            }
         }
     }
 
@@ -1539,30 +1585,41 @@ async fn handle_cluster_get_wealth_by_target_keys(id: Value, params: &Value, sta
             let cluster_factor = mempool.cluster_factor(info.max_cluster_wealth);
 
             // Format cluster breakdown for response
-            let breakdown: Vec<Value> = info.cluster_breakdown
+            let breakdown: Vec<Value> = info
+                .cluster_breakdown
                 .iter()
-                .map(|(cluster_id, wealth)| json!({
-                    "cluster_id": cluster_id.to_string(),
-                    "wealth": wealth,
-                }))
+                .map(|(cluster_id, wealth)| {
+                    json!({
+                        "cluster_id": cluster_id.to_string(),
+                        "wealth": wealth,
+                    })
+                })
                 .collect();
 
-            JsonRpcResponse::success(id, json!({
-                "max_cluster_wealth": info.max_cluster_wealth,
-                "max_cluster_wealth_btd": format!("{:.9}", info.max_cluster_wealth as f64 / 1_000_000_000_000.0),
-                "total_value": info.total_value,
-                "utxo_count": info.utxo_count,
-                "dominant_cluster_id": info.dominant_cluster_id.map(|id| id.to_string()),
-                "cluster_factor": cluster_factor,  // 1000 = 1x, 6000 = 6x
-                "cluster_factor_display": format!("{:.2}x", cluster_factor as f64 / 1000.0),
-                "cluster_breakdown": breakdown,
-            }))
+            JsonRpcResponse::success(
+                id,
+                json!({
+                    "max_cluster_wealth": info.max_cluster_wealth,
+                    "max_cluster_wealth_btd": format!("{:.9}", info.max_cluster_wealth as f64 / 1_000_000_000_000.0),
+                    "total_value": info.total_value,
+                    "utxo_count": info.utxo_count,
+                    "dominant_cluster_id": info.dominant_cluster_id.map(|id| id.to_string()),
+                    "cluster_factor": cluster_factor,  // 1000 = 1x, 6000 = 6x
+                    "cluster_factor_display": format!("{:.2}x", cluster_factor as f64 / 1000.0),
+                    "cluster_breakdown": breakdown,
+                }),
+            )
         }
-        Err(e) => JsonRpcResponse::error(id, -32000, &format!("Failed to compute cluster wealth: {}", e)),
+        Err(e) => JsonRpcResponse::error(
+            id,
+            -32000,
+            &format!("Failed to compute cluster wealth: {}", e),
+        ),
     }
 }
 
-/// Get all cluster wealth entries for network-wide wealth distribution analysis.
+/// Get all cluster wealth entries for network-wide wealth distribution
+/// analysis.
 ///
 /// # Returns
 /// Array of all tracked clusters and their total wealth.
@@ -1579,19 +1636,28 @@ async fn handle_cluster_get_all_wealth(id: Value, state: &RpcState) -> JsonRpcRe
 
             let entries: Vec<Value> = clusters
                 .iter()
-                .map(|(cluster_id, wealth)| json!({
-                    "cluster_id": cluster_id.to_string(),
-                    "wealth": wealth,
-                }))
+                .map(|(cluster_id, wealth)| {
+                    json!({
+                        "cluster_id": cluster_id.to_string(),
+                        "wealth": wealth,
+                    })
+                })
                 .collect();
 
-            JsonRpcResponse::success(id, json!({
-                "count": clusters.len(),
-                "total_tracked_wealth": total_tracked,
-                "clusters": entries,
-            }))
+            JsonRpcResponse::success(
+                id,
+                json!({
+                    "count": clusters.len(),
+                    "total_tracked_wealth": total_tracked,
+                    "clusters": entries,
+                }),
+            )
         }
-        Err(e) => JsonRpcResponse::error(id, -32000, &format!("Failed to get all cluster wealth: {}", e)),
+        Err(e) => JsonRpcResponse::error(
+            id,
+            -32000,
+            &format!("Failed to get all cluster wealth: {}", e),
+        ),
     }
 }
 

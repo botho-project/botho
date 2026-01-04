@@ -1,21 +1,21 @@
 //! Cross-implementation compatibility tests for Post-Quantum types.
 //!
-//! These tests verify that PQ types in `botho` and `transaction/core` are compatible
-//! and can interoperate correctly. This is critical for ensuring that:
+//! These tests verify that PQ types in `botho` and `transaction/core` are
+//! compatible and can interoperate correctly. This is critical for ensuring
+//! that:
 //!
 //! 1. Transactions created by wallet code validate correctly in consensus
 //! 2. Size calculations match between implementations
 //! 3. Cryptographic operations produce consistent results
 
+use botho::transaction_pq::{
+    QuantumPrivateTxInput, QuantumPrivateTxOutput, PQ_CIPHERTEXT_SIZE, PQ_SIGNATURE_SIZE,
+    PQ_SIGNING_PUBKEY_SIZE,
+};
 use bth_account_keys::QuantumSafeAccountKey;
 use bth_crypto_pq::{
-    derive_onetime_sig_keypair, MlDsa65KeyPair, MlKem768KeyPair,
-    ML_DSA_65_PUBLIC_KEY_BYTES, ML_DSA_65_SIGNATURE_BYTES,
-    ML_KEM_768_CIPHERTEXT_BYTES, ML_KEM_768_PUBLIC_KEY_BYTES,
-};
-use botho::transaction_pq::{
-    QuantumPrivateTxInput, QuantumPrivateTxOutput,
-    PQ_CIPHERTEXT_SIZE, PQ_SIGNATURE_SIZE, PQ_SIGNING_PUBKEY_SIZE,
+    derive_onetime_sig_keypair, MlDsa65KeyPair, MlKem768KeyPair, ML_DSA_65_PUBLIC_KEY_BYTES,
+    ML_DSA_65_SIGNATURE_BYTES, ML_KEM_768_CIPHERTEXT_BYTES, ML_KEM_768_PUBLIC_KEY_BYTES,
 };
 
 const TEST_MNEMONIC: &str =
@@ -35,9 +35,18 @@ fn test_size_constants_match() {
     assert_eq!(ML_DSA_65_PUBLIC_KEY_BYTES, 1952, "ML-DSA public key size");
 
     // Verify transaction_pq constants match crypto constants
-    assert_eq!(PQ_CIPHERTEXT_SIZE, ML_KEM_768_CIPHERTEXT_BYTES, "ciphertext size constant");
-    assert_eq!(PQ_SIGNATURE_SIZE, ML_DSA_65_SIGNATURE_BYTES, "signature size constant");
-    assert_eq!(PQ_SIGNING_PUBKEY_SIZE, ML_DSA_65_PUBLIC_KEY_BYTES, "signing pubkey size constant");
+    assert_eq!(
+        PQ_CIPHERTEXT_SIZE, ML_KEM_768_CIPHERTEXT_BYTES,
+        "ciphertext size constant"
+    );
+    assert_eq!(
+        PQ_SIGNATURE_SIZE, ML_DSA_65_SIGNATURE_BYTES,
+        "signature size constant"
+    );
+    assert_eq!(
+        PQ_SIGNING_PUBKEY_SIZE, ML_DSA_65_PUBLIC_KEY_BYTES,
+        "signing pubkey size constant"
+    );
 }
 
 /// Verify estimated sizes are reasonable
@@ -45,27 +54,42 @@ fn test_size_constants_match() {
 fn test_estimated_sizes() {
     // Output: classical(72) + ciphertext(1088) + signing_pubkey(1952) = 3112
     let output_size = QuantumPrivateTxOutput::estimated_size();
-    assert!(output_size > 3000 && output_size < 3500, "output size: {}", output_size);
+    assert!(
+        output_size > 3000 && output_size < 3500,
+        "output size: {}",
+        output_size
+    );
 
-    // Input: tx_hash(32) + output_index(4) + classical_sig(64) + pq_sig(3309) = 3409
+    // Input: tx_hash(32) + output_index(4) + classical_sig(64) + pq_sig(3309) =
+    // 3409
     let input_size = QuantumPrivateTxInput::estimated_size();
-    assert!(input_size > 3000 && input_size < 4000, "input size: {}", input_size);
+    assert!(
+        input_size > 3000 && input_size < 4000,
+        "input size: {}",
+        input_size
+    );
 }
 
 /// Verify size comparison: PQ vs classical
 #[test]
 fn test_size_comparison() {
     // Classical sizes (approximate)
-    const CLASSICAL_TX_OUT: usize = 72;  // amount + target_key + public_key
-    const CLASSICAL_TX_IN: usize = 100;  // reference + signature
+    const CLASSICAL_TX_OUT: usize = 72; // amount + target_key + public_key
+    const CLASSICAL_TX_IN: usize = 100; // reference + signature
 
     // PQ sizes
     let pq_output_size = QuantumPrivateTxOutput::estimated_size();
     let pq_input_size = QuantumPrivateTxInput::estimated_size();
 
     // PQ transactions should be significantly larger
-    assert!(pq_output_size > CLASSICAL_TX_OUT * 40, "PQ output should be ~43x larger than classical");
-    assert!(pq_input_size > CLASSICAL_TX_IN * 30, "PQ input should be ~34x larger than classical");
+    assert!(
+        pq_output_size > CLASSICAL_TX_OUT * 40,
+        "PQ output should be ~43x larger than classical"
+    );
+    assert!(
+        pq_input_size > CLASSICAL_TX_IN * 30,
+        "PQ input should be ~34x larger than classical"
+    );
 }
 
 // ============================================================================
@@ -151,7 +175,10 @@ fn test_onetime_key_sign_verify_roundtrip() {
     let signature = sender_onetime.sign(message);
 
     assert!(
-        receiver_onetime.public_key().verify(message, &signature).is_ok(),
+        receiver_onetime
+            .public_key()
+            .verify(message, &signature)
+            .is_ok(),
         "receiver must be able to verify sender's signature"
     );
 }

@@ -1,24 +1,26 @@
 use anyhow::{Context, Result};
 use std::path::Path;
 
-use crate::config::{ledger_db_path_from_config, Config};
-use crate::ledger::Ledger;
-use crate::wallet::Wallet;
+use crate::{
+    config::{ledger_db_path_from_config, Config},
+    ledger::Ledger,
+    wallet::Wallet,
+};
 
 /// Show node and wallet status
 pub fn run(config_path: &Path) -> Result<()> {
-    let config = Config::load(config_path)
-        .context("No config found. Run 'botho init' first.")?;
+    let config = Config::load(config_path).context("No config found. Run 'botho init' first.")?;
 
     // Wallet is optional (relay nodes don't have one)
-    let wallet = config.wallet.as_ref().and_then(|w| {
-        Wallet::from_mnemonic(&w.mnemonic).ok()
-    });
+    let wallet = config
+        .wallet
+        .as_ref()
+        .and_then(|w| Wallet::from_mnemonic(&w.mnemonic).ok());
 
     // Open ledger
     let ledger_path = ledger_db_path_from_config(config_path);
-    let ledger = Ledger::open(&ledger_path)
-        .map_err(|e| anyhow::anyhow!("Failed to open ledger: {}", e))?;
+    let ledger =
+        Ledger::open(&ledger_path).map_err(|e| anyhow::anyhow!("Failed to open ledger: {}", e))?;
 
     // Get chain state
     let state = ledger
@@ -51,10 +53,17 @@ pub fn run(config_path: &Path) -> Result<()> {
     println!("Network:");
     println!("  Type: {}", network.display_name());
     println!("  Gossip port: {}", config.network.gossip_port(network));
-    println!("  Bootstrap peers: {}", config.network.bootstrap_peers(network).len());
+    println!(
+        "  Bootstrap peers: {}",
+        config.network.bootstrap_peers(network).len()
+    );
     println!(
         "  DNS seed discovery: {}",
-        if config.network.dns_seeds.enabled { "enabled" } else { "disabled" }
+        if config.network.dns_seeds.enabled {
+            "enabled"
+        } else {
+            "disabled"
+        }
     );
     if let Some(ref domain) = config.network.dns_seeds.domain {
         println!("  DNS seed domain: {}", domain);

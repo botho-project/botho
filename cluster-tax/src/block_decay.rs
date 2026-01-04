@@ -788,8 +788,7 @@ impl AndTagVector {
         }
 
         // Check epoch cap
-        if config.max_decays_per_epoch > 0
-            && self.decays_this_epoch >= config.max_decays_per_epoch
+        if config.max_decays_per_epoch > 0 && self.decays_this_epoch >= config.max_decays_per_epoch
         {
             return false; // Epoch cap reached
         }
@@ -867,11 +866,13 @@ impl AndTagVector {
         }
     }
 
-    /// Update decay state after a successful decay was applied to transferred coins.
+    /// Update decay state after a successful decay was applied to transferred
+    /// coins.
     ///
-    /// This should be called on the sender's tags after `try_apply_decay_on_transfer`
-    /// returned `true` on the transferred tags clone. This ensures subsequent
-    /// transfers from the same UTXO respect rate limiting.
+    /// This should be called on the sender's tags after
+    /// `try_apply_decay_on_transfer` returned `true` on the transferred
+    /// tags clone. This ensures subsequent transfers from the same UTXO
+    /// respect rate limiting.
     pub fn record_decay_applied(&mut self, current_block: u64, config: &AndDecayConfig) {
         // Check for epoch reset
         if current_block.saturating_sub(self.epoch_start_block) >= config.epoch_blocks {
@@ -888,8 +889,8 @@ impl AndTagVector {
     /// Used when receiving coins: the receiver's tags become a weighted
     /// average of their existing tags and the incoming tags.
     ///
-    /// Unlike `BlockAwareTagVector::mix`, this does NOT apply additional decay -
-    /// decay is handled separately via `try_apply_decay_on_transfer`.
+    /// Unlike `BlockAwareTagVector::mix`, this does NOT apply additional decay
+    /// - decay is handled separately via `try_apply_decay_on_transfer`.
     ///
     /// - `self_value`: current value held
     /// - `incoming`: tag vector of incoming coins

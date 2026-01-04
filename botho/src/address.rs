@@ -153,7 +153,8 @@ impl Address {
             .map_err(|e| anyhow!("Failed to read address file: {}", e))?;
 
         // Parse the first non-empty line
-        let line = content.lines()
+        let line = content
+            .lines()
             .find(|l| !l.trim().is_empty() && !l.starts_with('#'))
             .ok_or_else(|| anyhow!("Address file is empty"))?;
 
@@ -169,7 +170,8 @@ impl Address {
         }
     }
 
-    /// Get the classical public address (works for both types since quantum includes classical)
+    /// Get the classical public address (works for both types since quantum
+    /// includes classical)
     pub fn public_address(&self) -> PublicAddress {
         match &self.kind {
             AddressKind::Classical(addr) => addr.clone(),
@@ -205,13 +207,16 @@ impl Address {
              # Created: {}\n\n\
              {}\n",
             self.network.display_name(),
-            if self.is_quantum() { "Quantum-Safe" } else { "Classical" },
+            if self.is_quantum() {
+                "Quantum-Safe"
+            } else {
+                "Classical"
+            },
             chrono_lite_now(),
             self.to_address_string()
         );
 
-        std::fs::write(path, content)
-            .map_err(|e| anyhow!("Failed to write address file: {}", e))
+        std::fs::write(path, content).map_err(|e| anyhow!("Failed to write address file: {}", e))
     }
 }
 
@@ -251,7 +256,8 @@ pub fn format_classical_address(addr: &PublicAddress, network: Network) -> Strin
 /// Parse a classical address from `botho://1/<base58>` or `tbotho://1/<base58>`
 pub fn parse_classical_address(s: &str, network: Network) -> Result<PublicAddress> {
     let prefix = classical_prefix(network);
-    let encoded = s.strip_prefix(prefix)
+    let encoded = s
+        .strip_prefix(prefix)
         .ok_or_else(|| anyhow!("Invalid classical address prefix for {}", network))?;
 
     let bytes = bs58::decode(encoded)
@@ -265,15 +271,16 @@ pub fn parse_classical_address(s: &str, network: Network) -> Result<PublicAddres
         ));
     }
 
-    let view_key = RistrettoPublic::try_from(&bytes[0..32])
-        .map_err(|e| anyhow!("Invalid view key: {}", e))?;
+    let view_key =
+        RistrettoPublic::try_from(&bytes[0..32]).map_err(|e| anyhow!("Invalid view key: {}", e))?;
     let spend_key = RistrettoPublic::try_from(&bytes[32..64])
         .map_err(|e| anyhow!("Invalid spend key: {}", e))?;
 
     Ok(PublicAddress::new(&spend_key, &view_key))
 }
 
-/// Format a quantum-safe address as `botho://1q/<base58>` or `tbotho://1q/<base58>`
+/// Format a quantum-safe address as `botho://1q/<base58>` or
+/// `tbotho://1q/<base58>`
 #[cfg(feature = "pq")]
 pub fn format_quantum_address(addr: &QuantumSafePublicAddress, network: Network) -> String {
     let bytes = addr.to_bytes();
@@ -281,11 +288,13 @@ pub fn format_quantum_address(addr: &QuantumSafePublicAddress, network: Network)
     format!("{}{}", quantum_prefix(network), encoded)
 }
 
-/// Parse a quantum-safe address from `botho://1q/<base58>` or `tbotho://1q/<base58>`
+/// Parse a quantum-safe address from `botho://1q/<base58>` or
+/// `tbotho://1q/<base58>`
 #[cfg(feature = "pq")]
 pub fn parse_quantum_address(s: &str, network: Network) -> Result<QuantumSafePublicAddress> {
     let prefix = quantum_prefix(network);
-    let encoded = s.strip_prefix(prefix)
+    let encoded = s
+        .strip_prefix(prefix)
         .ok_or_else(|| anyhow!("Invalid quantum address prefix for {}", network))?;
 
     let bytes = bs58::decode(encoded)
@@ -313,10 +322,10 @@ fn parse_legacy_address(s: &str) -> Result<PublicAddress> {
     let view_hex = &view_part[5..];
     let spend_hex = &spend_part[6..];
 
-    let view_bytes = hex::decode(view_hex)
-        .map_err(|e| anyhow!("Invalid hex in view key: {}", e))?;
-    let spend_bytes = hex::decode(spend_hex)
-        .map_err(|e| anyhow!("Invalid hex in spend key: {}", e))?;
+    let view_bytes =
+        hex::decode(view_hex).map_err(|e| anyhow!("Invalid hex in view key: {}", e))?;
+    let spend_bytes =
+        hex::decode(spend_hex).map_err(|e| anyhow!("Invalid hex in spend key: {}", e))?;
 
     if view_bytes.len() != 32 || spend_bytes.len() != 32 {
         return Err(anyhow!("View and spend keys must be 32 bytes each"));
@@ -359,7 +368,8 @@ mod tests {
         let view_bytes = [1u8; 32];
         let spend_bytes = [2u8; 32];
 
-        let formatted = format!("{}{}",
+        let formatted = format!(
+            "{}{}",
             MAINNET_CLASSICAL_PREFIX,
             bs58::encode([view_bytes, spend_bytes].concat()).into_string()
         );
@@ -373,7 +383,8 @@ mod tests {
         let view_bytes = [1u8; 32];
         let spend_bytes = [2u8; 32];
 
-        let formatted = format!("{}{}",
+        let formatted = format!(
+            "{}{}",
             TESTNET_CLASSICAL_PREFIX,
             bs58::encode([view_bytes, spend_bytes].concat()).into_string()
         );

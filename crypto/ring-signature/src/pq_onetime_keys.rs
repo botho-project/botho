@@ -6,13 +6,16 @@
 //! # Protocol
 //!
 //! **Sender (creating output):**
-//! 1. Sender encapsulates shared secret: `(ciphertext, shared_secret) = ML-KEM.Encapsulate(recipient_kem_pk)`
+//! 1. Sender encapsulates shared secret: `(ciphertext, shared_secret) =
+//!    ML-KEM.Encapsulate(recipient_kem_pk)`
 //! 2. Sender derives scalar: `Hs = H(shared_secret || output_index)`
-//! 3. Sender computes one-time destination: `target_key = Hs * G + D` (recipient's spend public key)
+//! 3. Sender computes one-time destination: `target_key = Hs * G + D`
+//!    (recipient's spend public key)
 //! 4. Output contains: `(target_key, ciphertext)`
 //!
 //! **Recipient (scanning):**
-//! 1. Decapsulate: `shared_secret = ML-KEM.Decapsulate(ciphertext, kem_secret_key)`
+//! 1. Decapsulate: `shared_secret = ML-KEM.Decapsulate(ciphertext,
+//!    kem_secret_key)`
 //! 2. Derive scalar: `Hs = H(shared_secret || output_index)`
 //! 3. Compute expected target: `target' = Hs * G + D`
 //! 4. If `target' == target_key`, output belongs to recipient
@@ -23,18 +26,19 @@
 //! This is a hybrid approach:
 //! - **Post-quantum**: The shared secret derivation uses ML-KEM-768, which is
 //!   secure against quantum computers
-//! - **Classical**: The one-time keys are still Ristretto points, which provides
-//!   proven classical security and compatibility with existing infrastructure
+//! - **Classical**: The one-time keys are still Ristretto points, which
+//!   provides proven classical security and compatibility with existing
+//!   infrastructure
 //!
 //! This protects against "harvest now, decrypt later" attacks where adversaries
 //! archive ciphertexts today for future quantum cryptanalysis.
 
 use bth_crypto_hashes::{Blake2b512, Digest};
 use bth_crypto_keys::{RistrettoPrivate, RistrettoPublic};
-use bth_crypto_pq::{
-    MlKem768Ciphertext, MlKem768KeyPair, MlKem768PublicKey, MlKem768SharedSecret,
+use bth_crypto_pq::{MlKem768Ciphertext, MlKem768KeyPair, MlKem768PublicKey, MlKem768SharedSecret};
+use curve25519_dalek::{
+    constants::RISTRETTO_BASEPOINT_POINT, ristretto::RistrettoPoint, scalar::Scalar,
 };
-use curve25519_dalek::{constants::RISTRETTO_BASEPOINT_POINT, ristretto::RistrettoPoint, scalar::Scalar};
 
 use crate::domain_separators::HASH_TO_SCALAR_DOMAIN_TAG;
 
@@ -45,7 +49,8 @@ const PQ_STEALTH_DOMAIN_TAG: &[u8] = b"botho-pq-stealth-v1";
 
 /// Hashes a shared secret and output index to a Scalar.
 ///
-/// This replaces the ECDH-based `hash_to_scalar(r * C)` from classical stealth addresses.
+/// This replaces the ECDH-based `hash_to_scalar(r * C)` from classical stealth
+/// addresses.
 fn hash_shared_secret_to_scalar(shared_secret: &MlKem768SharedSecret, output_index: u32) -> Scalar {
     let mut hasher = Blake2b512::new();
     hasher.update(HASH_TO_SCALAR_DOMAIN_TAG);
@@ -67,8 +72,8 @@ pub struct PqStealthOutput {
 
 /// Creates a PQ stealth address output for a recipient.
 ///
-/// This function encapsulates a shared secret to the recipient's ML-KEM public key
-/// and derives a one-time target key for the output.
+/// This function encapsulates a shared secret to the recipient's ML-KEM public
+/// key and derives a one-time target key for the output.
 ///
 /// # Arguments
 /// * `recipient_kem_pk` - The recipient's ML-KEM-768 public key
@@ -76,7 +81,8 @@ pub struct PqStealthOutput {
 /// * `output_index` - The index of this output in the transaction
 ///
 /// # Returns
-/// A `PqStealthOutput` containing the target key, ciphertext, and shared secret.
+/// A `PqStealthOutput` containing the target key, ciphertext, and shared
+/// secret.
 pub fn create_pq_stealth_output(
     recipient_kem_pk: &MlKem768PublicKey,
     recipient_spend_pk: &RistrettoPublic,
@@ -130,7 +136,8 @@ pub fn create_pq_target_key(
 /// * `output_index` - The index of this output in the transaction
 ///
 /// # Returns
-/// The recovered subaddress spend public key, or an error if decapsulation fails.
+/// The recovered subaddress spend public key, or an error if decapsulation
+/// fails.
 pub fn recover_pq_subaddress_spend_key(
     kem_keypair: &MlKem768KeyPair,
     ciphertext: &MlKem768Ciphertext,
@@ -233,11 +240,7 @@ mod tests {
         let spend_public = RistrettoPublic::from(&spend_private);
 
         // Sender creates output
-        let output = create_pq_stealth_output(
-            kem_keypair.public_key(),
-            &spend_public,
-            0,
-        );
+        let output = create_pq_stealth_output(kem_keypair.public_key(), &spend_public, 0);
 
         // Recipient recovers spend key
         let recovered_spend = recover_pq_subaddress_spend_key(
@@ -245,7 +248,8 @@ mod tests {
             &output.ciphertext,
             &output.target_key,
             0,
-        ).expect("decapsulation should succeed");
+        )
+        .expect("decapsulation should succeed");
 
         // Should match
         assert_eq!(recovered_spend, spend_public);
@@ -259,11 +263,7 @@ mod tests {
         let spend_public = RistrettoPublic::from(&spend_private);
 
         // Sender creates output
-        let output = create_pq_stealth_output(
-            kem_keypair.public_key(),
-            &spend_public,
-            0,
-        );
+        let output = create_pq_stealth_output(kem_keypair.public_key(), &spend_public, 0);
 
         // Ownership check should pass for correct spend key
         assert!(check_pq_output_ownership(
@@ -293,19 +293,12 @@ mod tests {
         let spend_public = RistrettoPublic::from(&spend_private);
 
         // Sender creates output
-        let output = create_pq_stealth_output(
-            kem_keypair.public_key(),
-            &spend_public,
-            0,
-        );
+        let output = create_pq_stealth_output(kem_keypair.public_key(), &spend_public, 0);
 
         // Recipient recovers one-time private key
-        let onetime_private = recover_pq_onetime_private_key(
-            &kem_keypair,
-            &output.ciphertext,
-            &spend_private,
-            0,
-        ).expect("should recover key");
+        let onetime_private =
+            recover_pq_onetime_private_key(&kem_keypair, &output.ciphertext, &spend_private, 0)
+                .expect("should recover key");
 
         // The corresponding public key should equal the target key
         let onetime_public = RistrettoPublic::from(&onetime_private);
@@ -318,18 +311,11 @@ mod tests {
         let spend_public = RistrettoPublic::from(&RistrettoPrivate::from_random(&mut OsRng));
 
         // Create outputs at different indices
-        let output0 = create_pq_stealth_output(
-            kem_keypair.public_key(),
-            &spend_public,
-            0,
-        );
-        let output1 = create_pq_stealth_output(
-            kem_keypair.public_key(),
-            &spend_public,
-            1,
-        );
+        let output0 = create_pq_stealth_output(kem_keypair.public_key(), &spend_public, 0);
+        let output1 = create_pq_stealth_output(kem_keypair.public_key(), &spend_public, 1);
 
-        // Target keys should be different (different ciphertexts = different shared secrets)
+        // Target keys should be different (different ciphertexts = different shared
+        // secrets)
         assert_ne!(output0.target_key, output1.target_key);
     }
 
@@ -341,11 +327,7 @@ mod tests {
         let spend_public = RistrettoPublic::from(&RistrettoPrivate::from_random(&mut OsRng));
 
         // Sender creates output for keypair1
-        let output = create_pq_stealth_output(
-            kem_keypair1.public_key(),
-            &spend_public,
-            0,
-        );
+        let output = create_pq_stealth_output(kem_keypair1.public_key(), &spend_public, 0);
 
         // Ownership check with keypair2 should fail
         // (ML-KEM is IND-CCA2, so decapsulation "succeeds" but returns wrong secret)
@@ -364,18 +346,10 @@ mod tests {
         let spend_public = RistrettoPublic::from(&RistrettoPrivate::from_random(&mut OsRng));
 
         // Create output using full function
-        let output = create_pq_stealth_output(
-            kem_keypair.public_key(),
-            &spend_public,
-            0,
-        );
+        let output = create_pq_stealth_output(kem_keypair.public_key(), &spend_public, 0);
 
         // Recreate target key using shared secret
-        let target_key = create_pq_target_key(
-            &output.shared_secret,
-            &spend_public,
-            0,
-        );
+        let target_key = create_pq_target_key(&output.shared_secret, &spend_public, 0);
 
         // Should match
         assert_eq!(target_key, output.target_key);

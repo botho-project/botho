@@ -87,7 +87,6 @@ impl UriScheme for AdminScheme {
     const DEFAULT_INSECURE_PORT: u16 = 9090;
 }
 
-
 #[cfg(test)]
 mod consensus_client_uri_tests {
     use super::{ConnectionUri, ConsensusClientUri as ClientUri};
@@ -176,8 +175,7 @@ mod consensus_client_uri_tests {
         assert_eq!(uri.username(), "");
         assert_eq!(uri.password(), "");
 
-        let uri =
-            ClientUri::from_str("insecure-mc://coiner@node1.test.botho.com:666/").unwrap();
+        let uri = ClientUri::from_str("insecure-mc://coiner@node1.test.botho.com:666/").unwrap();
         assert_eq!(uri.addr(), "node1.test.botho.com:666");
         assert_eq!(
             uri.responder_id().unwrap(),
@@ -187,8 +185,7 @@ mod consensus_client_uri_tests {
         assert_eq!(uri.username(), "coiner");
         assert_eq!(uri.password(), "");
 
-        let uri =
-            ClientUri::from_str("insecure-mc://:passw0rd@node1.test.botho.com:666/").unwrap();
+        let uri = ClientUri::from_str("insecure-mc://:passw0rd@node1.test.botho.com:666/").unwrap();
         assert_eq!(uri.addr(), "node1.test.botho.com:666");
         assert_eq!(
             uri.responder_id().unwrap(),
@@ -198,8 +195,7 @@ mod consensus_client_uri_tests {
         assert_eq!(uri.username(), "");
         assert_eq!(uri.password(), "passw0rd");
 
-        let uri =
-            ClientUri::from_str("insecure-mc://abc:def@node1.test.botho.com:666/").unwrap();
+        let uri = ClientUri::from_str("insecure-mc://abc:def@node1.test.botho.com:666/").unwrap();
         assert_eq!(uri.addr(), "node1.test.botho.com:666");
         assert_eq!(
             uri.responder_id().unwrap(),
@@ -209,8 +205,8 @@ mod consensus_client_uri_tests {
         assert_eq!(uri.username(), "abc");
         assert_eq!(uri.password(), "def");
 
-        let uri = ClientUri::from_str("insecure-mc://abc:def:1:2:3@node1.test.botho.com:666/")
-            .unwrap();
+        let uri =
+            ClientUri::from_str("insecure-mc://abc:def:1:2:3@node1.test.botho.com:666/").unwrap();
         assert_eq!(uri.addr(), "node1.test.botho.com:666");
         assert_eq!(
             uri.responder_id().unwrap(),
@@ -268,10 +264,10 @@ mod consensus_client_uri_tests {
 #[cfg(test)]
 mod consensus_peer_uri_tests {
     use super::{ConnectionUri, ConsensusPeerUri as PeerUri};
-    use core::str::FromStr;
     use bth_common::{NodeID, ResponderId};
     use bth_crypto_keys::{Ed25519Pair, Ed25519Public};
     use bth_util_from_random::FromRandom;
+    use core::str::FromStr;
     use rand::SeedableRng;
     use rand_hc::Hc128Rng as FixedRng;
 
@@ -347,4 +343,3 @@ mod consensus_peer_uri_tests {
         assert!(PeerUri::from_str("mcp://    /").is_err());
     }
 }
-

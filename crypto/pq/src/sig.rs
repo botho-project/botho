@@ -14,7 +14,8 @@
 //! 1. Each output has an associated one-time ML-DSA public key
 //! 2. To spend, the owner derives the one-time private key and signs
 //! 3. Both classical (Schnorr) and PQ (ML-DSA) signatures must verify
-//! 4. This hybrid approach ensures security against both classical and quantum attacks
+//! 4. This hybrid approach ensures security against both classical and quantum
+//!    attacks
 
 use crate::error::PqError;
 use ml_dsa::{KeyGen, MlDsa65, SigningKey, VerifyingKey};
@@ -75,8 +76,8 @@ impl MlDsa65PublicKey {
         use ml_dsa::signature::Verifier;
 
         // Parse the public key using decode()
-        let vk_encoded = hybrid_array::Array::try_from(&self.bytes[..])
-            .expect("public key has correct size");
+        let vk_encoded =
+            hybrid_array::Array::try_from(&self.bytes[..]).expect("public key has correct size");
         let vk = VerifyingKey::<MlDsa65>::decode(&vk_encoded);
 
         // Parse the signature using decode()
@@ -196,12 +197,11 @@ impl MlDsa65KeyPair {
 
     /// Generate a keypair deterministically from a 32-byte seed
     ///
-    /// This uses ML-DSA's internal deterministic key generation (FIPS 204 KeyGen_internal).
-    /// The same seed always produces the same keypair.
+    /// This uses ML-DSA's internal deterministic key generation (FIPS 204
+    /// KeyGen_internal). The same seed always produces the same keypair.
     pub fn from_seed(seed: &[u8; 32]) -> Self {
         // Convert to ml-dsa's B32 type (Array<u8, U32>)
-        let seed_arr = hybrid_array::Array::try_from(&seed[..])
-            .expect("seed has correct size");
+        let seed_arr = hybrid_array::Array::try_from(&seed[..]).expect("seed has correct size");
 
         // Use KeyGen trait's from_seed method for deterministic generation
         // This completely avoids any RNG version conflicts!
@@ -268,8 +268,14 @@ mod tests {
     #[test]
     fn test_key_sizes() {
         let keypair = MlDsa65KeyPair::generate();
-        assert_eq!(keypair.public_key().as_bytes().len(), ML_DSA_65_PUBLIC_KEY_BYTES);
-        assert_eq!(keypair.secret_key().as_bytes().len(), ML_DSA_65_SECRET_KEY_BYTES);
+        assert_eq!(
+            keypair.public_key().as_bytes().len(),
+            ML_DSA_65_PUBLIC_KEY_BYTES
+        );
+        assert_eq!(
+            keypair.secret_key().as_bytes().len(),
+            ML_DSA_65_SECRET_KEY_BYTES
+        );
     }
 
     #[test]
@@ -292,12 +298,21 @@ mod tests {
         let keypair2 = MlDsa65KeyPair::from_seed(&seed);
 
         // Same seed should produce same keys
-        assert_eq!(keypair1.public_key().as_bytes(), keypair2.public_key().as_bytes());
-        assert_eq!(keypair1.secret_key().as_bytes(), keypair2.secret_key().as_bytes());
+        assert_eq!(
+            keypair1.public_key().as_bytes(),
+            keypair2.public_key().as_bytes()
+        );
+        assert_eq!(
+            keypair1.secret_key().as_bytes(),
+            keypair2.secret_key().as_bytes()
+        );
 
         // Different seed should produce different keys
         let keypair3 = MlDsa65KeyPair::from_seed(&[43u8; 32]);
-        assert_ne!(keypair1.public_key().as_bytes(), keypair3.public_key().as_bytes());
+        assert_ne!(
+            keypair1.public_key().as_bytes(),
+            keypair3.public_key().as_bytes()
+        );
     }
 
     #[test]

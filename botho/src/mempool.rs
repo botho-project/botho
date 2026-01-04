@@ -15,44 +15,52 @@
 //!
 //! ## Cluster Wealth Tracking
 //!
-//! The progressive fee system charges higher fees to wealthier clusters (1x-6x multiplier).
-//! Cluster wealth is computed from transaction outputs, which inherit merged+decayed tags
-//! from inputs. This means:
+//! The progressive fee system charges higher fees to wealthier clusters (1x-6x
+//! multiplier). Cluster wealth is computed from transaction outputs, which
+//! inherit merged+decayed tags from inputs. This means:
 //!
 //! - Fresh mints start with weight=100% for a new cluster ID
 //! - Each transaction decays weights by 5% (DEFAULT_CLUSTER_DECAY_RATE)
 //! - Mixed inputs produce merged tag vectors weighted by amount
 //! - Maximum cluster wealth determines the fee multiplier
 //!
-//! For fee estimation (wallets), use `Wallet::compute_cluster_wealth()` on UTXOs.
-//! For fee validation (mempool), cluster wealth is computed from output tags.
+//! For fee estimation (wallets), use `Wallet::compute_cluster_wealth()` on
+//! UTXOs. For fee validation (mempool), cluster wealth is computed from output
+//! tags.
 
 use std::collections::{HashMap, HashSet};
 use tracing::{debug, warn};
 
-use bth_cluster_tax::{DynamicFeeBase, DynamicFeeState, FeeConfig, FeeSuggestion, TransactionType as FeeTransactionType};
+use crate::{
+    ledger::Ledger,
+    transaction::{Transaction, TxOutput, UtxoId},
+};
+use bth_cluster_tax::{
+    DynamicFeeBase, DynamicFeeState, FeeConfig, FeeSuggestion,
+    TransactionType as FeeTransactionType,
+};
 use bth_transaction_types::TAG_WEIGHT_SCALE;
-use crate::ledger::Ledger;
-use crate::transaction::{Transaction, TxOutput, UtxoId};
 
 /// Compute the maximum cluster wealth from transaction outputs.
 ///
-/// This computes cluster wealth from outputs (which inherit from inputs via merge_weighted).
-/// For each cluster, wealth contribution = sum(output_amount × tag_weight / TAG_WEIGHT_SCALE).
-/// Returns the maximum wealth across all clusters, which is used for progressive fee calculation.
+/// This computes cluster wealth from outputs (which inherit from inputs via
+/// merge_weighted). For each cluster, wealth contribution = sum(output_amount ×
+/// tag_weight / TAG_WEIGHT_SCALE). Returns the maximum wealth across all
+/// clusters, which is used for progressive fee calculation.
 ///
 /// This is appropriate for fee validation because:
 /// 1. Outputs inherit merged+decayed tags from inputs
 /// 2. The sender's cluster profile is preserved through inheritance
-/// 3. Higher cluster concentration → higher output tag weights → higher computed wealth
+/// 3. Higher cluster concentration → higher output tag weights → higher
+///    computed wealth
 fn compute_cluster_wealth_from_outputs(outputs: &[TxOutput]) -> u64 {
     let mut cluster_wealths: HashMap<u64, u64> = HashMap::new();
 
     for output in outputs {
         let value = output.amount;
         for entry in &output.cluster_tags.entries {
-            let contribution = ((value as u128) * (entry.weight as u128)
-                / (TAG_WEIGHT_SCALE as u128)) as u64;
+            let contribution =
+                ((value as u128) * (entry.weight as u128) / (TAG_WEIGHT_SCALE as u128)) as u64;
             *cluster_wealths.entry(entry.cluster_id.0).or_insert(0) += contribution;
         }
     }
@@ -64,9 +72,9 @@ fn compute_cluster_wealth_from_outputs(outputs: &[TxOutput]) -> u64 {
 // Ring Tag Plausibility Validation
 // ============================================================================
 //
-// Prevents cluster tag manipulation attacks where a malicious wallet deliberately
-// selects decoys with much lower cluster tag weights than the real input to
-// evade progressive fees or fingerprint transactions.
+// Prevents cluster tag manipulation attacks where a malicious wallet
+// deliberately selects decoys with much lower cluster tag weights than the real
+// input to evade progressive fees or fingerprint transactions.
 //
 // The solution uses centroid-based validation: output tags must have sufficient
 // similarity to the value-weighted centroid of ring member tags.
@@ -94,7 +102,9 @@ pub const RING_TAG_SIMILARITY_THRESHOLD: f64 = 0.7;
 ///
 /// # Returns
 /// A ClusterTagVector representing the weighted centroid
-fn compute_ring_centroid(ring_tags: &[(bth_transaction_types::ClusterTagVector, u64)]) -> bth_transaction_types::ClusterTagVector {
+fn compute_ring_centroid(
+    ring_tags: &[(bth_transaction_types::ClusterTagVector, u64)],
+) -> bth_transaction_types::ClusterTagVector {
     use bth_transaction_types::{ClusterId, ClusterTagVector};
 
     let total_value: u64 = ring_tags.iter().map(|(_, v)| *v).sum();
@@ -117,7 +127,8 @@ fn compute_ring_centroid(ring_tags: &[(bth_transaction_types::ClusterTagVector, 
     let pairs: Vec<(ClusterId, u32)> = cluster_masses
         .into_iter()
         .map(|(cluster_id, mass)| {
-            // weight = mass / total_value (already normalized by TAG_WEIGHT_SCALE from original weights)
+            // weight = mass / total_value (already normalized by TAG_WEIGHT_SCALE from
+            // original weights)
             let weight = (mass / (total_value as u128)) as u32;
             (ClusterId(cluster_id), weight)
         })
@@ -147,15 +158,20 @@ fn cosine_similarity(
     }
 
     // Build weight maps for efficient lookup
-    let a_weights: HashMap<u64, u32> = a.entries.iter().map(|e| (e.cluster_id.0, e.weight)).collect();
-    let b_weights: HashMap<u64, u32> = b.entries.iter().map(|e| (e.cluster_id.0, e.weight)).collect();
+    let a_weights: HashMap<u64, u32> = a
+        .entries
+        .iter()
+        .map(|e| (e.cluster_id.0, e.weight))
+        .collect();
+    let b_weights: HashMap<u64, u32> = b
+        .entries
+        .iter()
+        .map(|e| (e.cluster_id.0, e.weight))
+        .collect();
 
     // Collect all cluster IDs
-    let all_clusters: std::collections::HashSet<u64> = a_weights
-        .keys()
-        .chain(b_weights.keys())
-        .copied()
-        .collect();
+    let all_clusters: std::collections::HashSet<u64> =
+        a_weights.keys().chain(b_weights.keys()).copied().collect();
 
     // Compute dot product and magnitudes
     let mut dot_product: f64 = 0.0;
@@ -177,8 +193,9 @@ fn cosine_similarity(
 
 /// Validate that a ring's composition is plausible for the claimed output tags.
 ///
-/// The output tags must have sufficient similarity to the ring's weighted centroid.
-/// This prevents selecting extreme outlier decoys to manipulate apparent cluster wealth.
+/// The output tags must have sufficient similarity to the ring's weighted
+/// centroid. This prevents selecting extreme outlier decoys to manipulate
+/// apparent cluster wealth.
 ///
 /// # Arguments
 /// * `ring_tags` - List of (ClusterTagVector, value) pairs for each ring member
@@ -189,7 +206,8 @@ fn cosine_similarity(
 ///
 /// # Returns
 /// * `Ok(())` if the ring composition is plausible
-/// * `Err((similarity_permille, threshold_permille))` if validation fails (values in parts per 1000)
+/// * `Err((similarity_permille, threshold_permille))` if validation fails
+///   (values in parts per 1000)
 pub fn validate_ring_tag_plausibility(
     ring_tags: &[(bth_transaction_types::ClusterTagVector, u64)],
     output_tags: &bth_transaction_types::ClusterTagVector,
@@ -333,11 +351,13 @@ impl Mempool {
 
     /// Update dynamic fee state after a block is finalized.
     ///
-    /// Call this after each block is confirmed to adjust fee base based on congestion.
+    /// Call this after each block is confirmed to adjust fee base based on
+    /// congestion.
     ///
     /// # Arguments
     /// * `tx_count` - Number of transactions in the finalized block
-    /// * `max_tx_count` - Maximum transactions per block (from consensus config)
+    /// * `max_tx_count` - Maximum transactions per block (from consensus
+    ///   config)
     /// * `at_min_block_time` - Whether block timing is at minimum (3s blocks)
     ///
     /// # Returns
@@ -349,7 +369,8 @@ impl Mempool {
         at_min_block_time: bool,
     ) -> u64 {
         self.at_min_block_time = at_min_block_time;
-        self.dynamic_fee.update(tx_count, max_tx_count, at_min_block_time)
+        self.dynamic_fee
+            .update(tx_count, max_tx_count, at_min_block_time)
     }
 
     /// Get the current dynamic fee base (in nanoBTH per byte)
@@ -364,12 +385,14 @@ impl Mempool {
     /// * `cluster_wealth` - Sender's cluster wealth (0 if unknown)
     pub fn suggest_fees(&self, tx_size: usize, cluster_wealth: u64) -> FeeSuggestion {
         let cluster_factor = self.fee_config.cluster_factor(cluster_wealth);
-        self.dynamic_fee.suggest_fees(tx_size, cluster_factor, self.at_min_block_time)
+        self.dynamic_fee
+            .suggest_fees(tx_size, cluster_factor, self.at_min_block_time)
     }
 
     /// Estimate the minimum fee for a transaction using typical size.
     ///
-    /// This uses the current dynamic fee base, which adjusts based on network congestion.
+    /// This uses the current dynamic fee base, which adjusts based on network
+    /// congestion.
     ///
     /// # Arguments
     /// * `tx_type` - The transaction type (Hidden or Minting)
@@ -380,14 +403,15 @@ impl Mempool {
     /// The minimum fee in nanoBTH
     pub fn estimate_fee(&self, tx_type: FeeTransactionType, _amount: u64, num_memos: usize) -> u64 {
         // Use 0 for estimation - wallets should use Wallet::compute_cluster_wealth()
-        // and call suggest_fees() with their actual cluster wealth for accurate estimates
+        // and call suggest_fees() with their actual cluster wealth for accurate
+        // estimates
         let cluster_wealth = 0u64;
 
         // Get typical size for this tx type
         let typical_size = match tx_type {
-            FeeTransactionType::Hidden => 4_000,      // ~4 KB for CLSAG
-            FeeTransactionType::Minting => 1_500,     // ~1.5 KB for minting
-            _ => 4_000,                                // Default to CLSAG size
+            FeeTransactionType::Hidden => 4_000,  // ~4 KB for CLSAG
+            FeeTransactionType::Minting => 1_500, // ~1.5 KB for minting
+            _ => 4_000,                           // Default to CLSAG size
         };
 
         // Use dynamic fee calculation
@@ -406,17 +430,20 @@ impl Mempool {
         self.estimate_fee(FeeTransactionType::Hidden, amount, num_memos)
     }
 
-    /// Estimate fee with actual cluster wealth for accurate progressive fee calculation.
+    /// Estimate fee with actual cluster wealth for accurate progressive fee
+    /// calculation.
     ///
-    /// Wallets should use this method after calling `cluster_getWealthByTargetKeys` RPC
-    /// to get their actual cluster wealth. This enables accurate progressive fee
-    /// estimation where wealthy clusters pay higher fees.
+    /// Wallets should use this method after calling
+    /// `cluster_getWealthByTargetKeys` RPC to get their actual cluster
+    /// wealth. This enables accurate progressive fee estimation where
+    /// wealthy clusters pay higher fees.
     ///
     /// # Arguments
     /// * `tx_type` - Type of transaction (affects base size)
     /// * `_amount` - Transaction amount (currently unused, reserved for future)
     /// * `num_memos` - Number of output memos
-    /// * `cluster_wealth` - Sender's cluster wealth from cluster_getWealthByTargetKeys
+    /// * `cluster_wealth` - Sender's cluster wealth from
+    ///   cluster_getWealthByTargetKeys
     ///
     /// # Returns
     /// Estimated fee in nanoBTH including cluster factor multiplier
@@ -429,9 +456,9 @@ impl Mempool {
     ) -> u64 {
         // Get typical size for this tx type
         let typical_size = match tx_type {
-            FeeTransactionType::Hidden => 4_000,      // ~4 KB for CLSAG
-            FeeTransactionType::Minting => 1_500,     // ~1.5 KB for minting
-            _ => 4_000,                                // Default to CLSAG size
+            FeeTransactionType::Hidden => 4_000,  // ~4 KB for CLSAG
+            FeeTransactionType::Minting => 1_500, // ~1.5 KB for minting
+            _ => 4_000,                           // Default to CLSAG size
         };
 
         // Use dynamic fee calculation with actual cluster wealth
@@ -447,12 +474,14 @@ impl Mempool {
 
     /// Estimate fee using static base (ignoring current congestion).
     ///
-    /// Useful for testing or when you want the base fee regardless of network state.
-    /// Returns minimum fee (cluster_wealth=0). For accurate estimates with your
-    /// cluster profile, use `suggest_fees()` with computed cluster wealth.
+    /// Useful for testing or when you want the base fee regardless of network
+    /// state. Returns minimum fee (cluster_wealth=0). For accurate
+    /// estimates with your cluster profile, use `suggest_fees()` with
+    /// computed cluster wealth.
     pub fn estimate_fee_static(&self, tx_type: FeeTransactionType, num_memos: usize) -> u64 {
         let cluster_wealth = 0u64;
-        self.fee_config.estimate_typical_fee(tx_type, cluster_wealth, num_memos)
+        self.fee_config
+            .estimate_typical_fee(tx_type, cluster_wealth, num_memos)
     }
 
     /// Get the cluster factor for a given wealth level.
@@ -486,11 +515,14 @@ impl Mempool {
 
         // Validate outputs + fee <= inputs
         // Use checked arithmetic to detect overflow from malicious transactions
-        let output_sum: u64 = tx.outputs.iter()
+        let output_sum: u64 = tx
+            .outputs
+            .iter()
             .try_fold(0u64, |acc, o| acc.checked_add(o.amount))
             .ok_or_else(|| MempoolError::InvalidTransaction("Output sum overflow".to_string()))?;
 
-        let total_output = output_sum.checked_add(tx.fee)
+        let total_output = output_sum
+            .checked_add(tx.fee)
             .ok_or_else(|| MempoolError::InvalidTransaction("Output + fee overflow".to_string()))?;
 
         if total_output > input_sum {
@@ -541,7 +573,10 @@ impl Mempool {
         let pending = PendingTx::new(tx);
         self.txs.insert(tx_hash, pending);
 
-        debug!("Added transaction {} to mempool", hex::encode(&tx_hash[0..8]));
+        debug!(
+            "Added transaction {} to mempool",
+            hex::encode(&tx_hash[0..8])
+        );
         Ok(tx_hash)
     }
 
@@ -594,20 +629,23 @@ impl Mempool {
                     hex::encode(&input.key_image[0..8])
                 );
                 return Err(MempoolError::InvalidTransaction(
-                    "Cannot verify CLSAG input amounts - no ring members found in UTXO set".to_string()
+                    "Cannot verify CLSAG input amounts - no ring members found in UTXO set"
+                        .to_string(),
                 ));
             }
 
-            potential_input_sum = potential_input_sum.checked_add(max_ring_amount)
-                .ok_or_else(|| MempoolError::InvalidTransaction(
-                    "CLSAG input sum overflow".to_string()
-                ))?;
+            potential_input_sum = potential_input_sum
+                .checked_add(max_ring_amount)
+                .ok_or_else(|| {
+                    MempoolError::InvalidTransaction("CLSAG input sum overflow".to_string())
+                })?;
         }
 
         // Validate ring tag plausibility (prevents decoy manipulation attacks)
         // Get chain state for activation height check
-        let chain_state = ledger.get_chain_state()
-            .map_err(|e| MempoolError::InvalidTransaction(format!("Cannot get chain state: {}", e)))?;
+        let chain_state = ledger.get_chain_state().map_err(|e| {
+            MempoolError::InvalidTransaction(format!("Cannot get chain state: {}", e))
+        })?;
 
         // Estimate UTXO pool size as ~4 outputs per block (minting rewards)
         // This is a reasonable approximation for the sparse pool check
@@ -615,7 +653,10 @@ impl Mempool {
 
         // Compute combined output tags for validation
         let output_tags = bth_transaction_types::ClusterTagVector::merge_weighted(
-            &tx.outputs.iter().map(|o| (o.cluster_tags.clone(), o.amount)).collect::<Vec<_>>(),
+            &tx.outputs
+                .iter()
+                .map(|o| (o.cluster_tags.clone(), o.amount))
+                .collect::<Vec<_>>(),
             0, // No decay for this comparison
         );
 
@@ -626,7 +667,10 @@ impl Mempool {
             chain_state.height,
             estimated_utxo_count,
         ) {
-            return Err(MempoolError::RingTagMismatch { similarity_permille, threshold_permille });
+            return Err(MempoolError::RingTagMismatch {
+                similarity_permille,
+                threshold_permille,
+            });
         }
 
         Ok(potential_input_sum)
@@ -674,9 +718,10 @@ impl Mempool {
 
         for (tx_hash, pending) in &self.txs {
             // Check if any key image was spent in ledger
-            let is_invalid = pending.tx.inputs.clsag().iter().any(|input| {
-                matches!(ledger.is_key_image_spent(&input.key_image), Ok(Some(_)))
-            });
+            let is_invalid =
+                pending.tx.inputs.clsag().iter().any(|input| {
+                    matches!(ledger.is_key_image_spent(&input.key_image), Ok(Some(_)))
+                });
 
             if is_invalid {
                 to_remove.push(*tx_hash);
@@ -685,7 +730,10 @@ impl Mempool {
 
         for tx_hash in to_remove {
             self.remove_tx(&tx_hash);
-            debug!("Removed invalid transaction {} from mempool", hex::encode(&tx_hash[0..8]));
+            debug!(
+                "Removed invalid transaction {} from mempool",
+                hex::encode(&tx_hash[0..8])
+            );
         }
     }
 
@@ -702,18 +750,26 @@ impl Mempool {
 
         for tx_hash in to_remove {
             self.remove_tx(&tx_hash);
-            debug!("Evicted old transaction {} from mempool", hex::encode(&tx_hash[0..8]));
+            debug!(
+                "Evicted old transaction {} from mempool",
+                hex::encode(&tx_hash[0..8])
+            );
         }
     }
 
     /// Evict lowest fee transaction
     fn evict_lowest_fee(&mut self) {
-        if let Some((tx_hash, _)) = self.txs.iter()
+        if let Some((tx_hash, _)) = self
+            .txs
+            .iter()
             .min_by_key(|(_, p)| p.fee_per_byte)
             .map(|(h, p)| (*h, p.clone()))
         {
             self.remove_tx(&tx_hash);
-            debug!("Evicted low-fee transaction {} from mempool", hex::encode(&tx_hash[0..8]));
+            debug!(
+                "Evicted low-fee transaction {} from mempool",
+                hex::encode(&tx_hash[0..8])
+            );
         }
     }
 
@@ -744,7 +800,8 @@ impl Mempool {
 
     /// Iterate over all transactions with their hashes.
     ///
-    /// Used for compact block reconstruction to build the short ID → tx mapping.
+    /// Used for compact block reconstruction to build the short ID → tx
+    /// mapping.
     pub fn iter_with_hashes(&self) -> impl Iterator<Item = ([u8; 32], &Transaction)> {
         self.txs.iter().map(|(hash, pending)| (*hash, &pending.tx))
     }
@@ -802,17 +859,34 @@ impl std::fmt::Display for MempoolError {
             Self::UtxoNotFound(id) => write!(f, "UTXO not found: {:?}", id),
             Self::InvalidTransaction(msg) => write!(f, "Invalid transaction: {}", msg),
             Self::InvalidSignature => write!(f, "Invalid transaction signature"),
-            Self::InsufficientInputs { inputs, outputs, fee } => {
+            Self::InsufficientInputs {
+                inputs,
+                outputs,
+                fee,
+            } => {
                 write!(f, "Insufficient inputs: {} < {} + {}", inputs, outputs, fee)
             }
             Self::FeeTooLow { minimum, provided } => {
-                write!(f, "Fee too low: {} provided, {} required", provided, minimum)
+                write!(
+                    f,
+                    "Fee too low: {} provided, {} required",
+                    provided, minimum
+                )
             }
             Self::LedgerError(msg) => write!(f, "Ledger error: {}", msg),
             Self::Full => write!(f, "Mempool is full"),
-            Self::KeyImageSpent(ki) => write!(f, "Key image already spent: {}", hex::encode(&ki[0..8])),
-            Self::RingTagMismatch { similarity_permille, threshold_permille } => {
-                write!(f, "Ring tag mismatch: similarity {}‰ < threshold {}‰", similarity_permille, threshold_permille)
+            Self::KeyImageSpent(ki) => {
+                write!(f, "Key image already spent: {}", hex::encode(&ki[0..8]))
+            }
+            Self::RingTagMismatch {
+                similarity_permille,
+                threshold_permille,
+            } => {
+                write!(
+                    f,
+                    "Ring tag mismatch: similarity {}‰ < threshold {}‰",
+                    similarity_permille, threshold_permille
+                )
             }
         }
     }
@@ -928,8 +1002,18 @@ mod tests {
     fn test_mempool_get_transactions_sorted_by_fee() {
         let mut mempool = Mempool::new();
 
-        // Add transactions with different fees (use created_at_height to make each unique)
-        for (i, fee) in [MIN_TX_FEE, MIN_TX_FEE * 5, MIN_TX_FEE * 2, MIN_TX_FEE * 10, MIN_TX_FEE].iter().enumerate() {
+        // Add transactions with different fees (use created_at_height to make each
+        // unique)
+        for (i, fee) in [
+            MIN_TX_FEE,
+            MIN_TX_FEE * 5,
+            MIN_TX_FEE * 2,
+            MIN_TX_FEE * 10,
+            MIN_TX_FEE,
+        ]
+        .iter()
+        .enumerate()
+        {
             let tx = test_tx(*fee, i as u64);
             let tx_hash = tx.hash();
             let pending = PendingTx::new(tx);
@@ -950,7 +1034,10 @@ mod tests {
     fn test_mempool_total_fees() {
         let mut mempool = Mempool::new();
 
-        for (i, fee) in [MIN_TX_FEE, MIN_TX_FEE * 2, MIN_TX_FEE * 3].iter().enumerate() {
+        for (i, fee) in [MIN_TX_FEE, MIN_TX_FEE * 2, MIN_TX_FEE * 3]
+            .iter()
+            .enumerate()
+        {
             let tx = test_tx(*fee, i as u64);
             let tx_hash = tx.hash();
             let pending = PendingTx::new(tx);
@@ -1074,7 +1161,8 @@ mod tests {
 
     /// Helper to create a tag vector with specific (cluster, weight) pairs
     fn multi_cluster_tags(pairs: &[(u64, u32)]) -> ClusterTagVector {
-        let pairs: Vec<(ClusterId, u32)> = pairs.iter().map(|(id, w)| (ClusterId(*id), *w)).collect();
+        let pairs: Vec<(ClusterId, u32)> =
+            pairs.iter().map(|(id, w)| (ClusterId(*id), *w)).collect();
         ClusterTagVector::from_pairs(&pairs)
     }
 
@@ -1083,7 +1171,10 @@ mod tests {
         let tags1 = single_cluster_tags(1);
         let tags2 = single_cluster_tags(1);
         let sim = cosine_similarity(&tags1, &tags2);
-        assert!((sim - 1.0).abs() < 0.001, "Identical tags should have similarity 1.0");
+        assert!(
+            (sim - 1.0).abs() < 0.001,
+            "Identical tags should have similarity 1.0"
+        );
     }
 
     #[test]
@@ -1091,7 +1182,10 @@ mod tests {
         let tags1 = single_cluster_tags(1);
         let tags2 = single_cluster_tags(2);
         let sim = cosine_similarity(&tags1, &tags2);
-        assert!(sim < 0.1, "Completely different tags should have low similarity");
+        assert!(
+            sim < 0.1,
+            "Completely different tags should have low similarity"
+        );
     }
 
     #[test]
@@ -1117,7 +1211,11 @@ mod tests {
 
         let sim = cosine_similarity(&tags1, &tags2);
         // Should be around 0.707 (cos 45°)
-        assert!(sim > 0.6 && sim < 0.8, "Partial overlap should give moderate similarity: {}", sim);
+        assert!(
+            sim > 0.6 && sim < 0.8,
+            "Partial overlap should give moderate similarity: {}",
+            sim
+        );
     }
 
     #[test]
@@ -1153,17 +1251,25 @@ mod tests {
         let centroid = compute_ring_centroid(&ring_tags);
 
         // Cluster 1 should have higher weight (~75%)
-        let cluster1_weight = centroid.entries.iter()
+        let cluster1_weight = centroid
+            .entries
+            .iter()
             .find(|e| e.cluster_id.0 == 1)
             .map(|e| e.weight)
             .unwrap_or(0);
-        let cluster2_weight = centroid.entries.iter()
+        let cluster2_weight = centroid
+            .entries
+            .iter()
             .find(|e| e.cluster_id.0 == 2)
             .map(|e| e.weight)
             .unwrap_or(0);
 
-        assert!(cluster1_weight > cluster2_weight * 2,
-            "3x value should give >2x weight: c1={}, c2={}", cluster1_weight, cluster2_weight);
+        assert!(
+            cluster1_weight > cluster2_weight * 2,
+            "3x value should give >2x weight: c1={}, c2={}",
+            cluster1_weight,
+            cluster2_weight
+        );
     }
 
     #[test]
@@ -1181,7 +1287,7 @@ mod tests {
             &ring_tags,
             &tags,
             RING_TAG_SIMILARITY_THRESHOLD,
-            20_000, // Above activation height
+            20_000,  // Above activation height
             100_000, // Above sparse threshold
         );
         assert!(result.is_ok());
@@ -1192,10 +1298,7 @@ mod tests {
         // Mixed ring members
         let tags1 = single_cluster_tags(1);
         let tags2 = single_cluster_tags(2);
-        let ring_tags = vec![
-            (tags1.clone(), 1000),
-            (tags2.clone(), 1000),
-        ];
+        let ring_tags = vec![(tags1.clone(), 1000), (tags2.clone(), 1000)];
 
         // Output is a blend (centroid-compatible)
         let output_tags = multi_cluster_tags(&[(1, 500_000), (2, 500_000)]);
@@ -1215,10 +1318,7 @@ mod tests {
         // Ring has only cluster 2 and 3
         let tags2 = single_cluster_tags(2);
         let tags3 = single_cluster_tags(3);
-        let ring_tags = vec![
-            (tags2.clone(), 1000),
-            (tags3.clone(), 1000),
-        ];
+        let ring_tags = vec![(tags2.clone(), 1000), (tags3.clone(), 1000)];
 
         // But output claims to be mostly cluster 1 (impossible!)
         let output_tags = single_cluster_tags(1);

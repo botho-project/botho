@@ -125,7 +125,8 @@ impl Default for MonetaryPolicy {
     /// Library defaults for monetary policy.
     ///
     /// **NOTE**: This is a generic library default assuming 60-second blocks.
-    /// Botho mainnet uses different parameters via `botho/src/monetary.rs::mainnet_policy()`:
+    /// Botho mainnet uses different parameters via
+    /// `botho/src/monetary.rs::mainnet_policy()`:
     /// - 5-second assumed block time (not 60s)
     /// - Dynamic timing adjusts actual blocks 3-40s based on network load
     /// - See `docs/architecture.md#block-timing-architecture` for details

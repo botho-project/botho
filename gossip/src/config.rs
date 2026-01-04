@@ -20,7 +20,6 @@ pub enum NetworkId {
     Testnet,
 }
 
-
 impl NetworkId {
     /// Get the protocol version string for this network.
     /// Format: /botho/{network}/1.0.0

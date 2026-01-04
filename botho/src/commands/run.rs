@@ -1,30 +1,41 @@
 // Copyright (c) 2024 Botho Foundation
 
 use anyhow::{Context, Result};
-use futures::StreamExt;
 use bth_common::{NodeID, ResponderId};
 use bth_consensus_scp::QuorumSet;
 use bth_crypto_keys::Ed25519Public;
-use std::net::SocketAddr;
-use std::path::Path;
-use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, RwLock};
-use std::time::Duration;
+use futures::StreamExt;
+use std::{
+    net::SocketAddr,
+    path::Path,
+    str::FromStr,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, RwLock,
+    },
+    time::Duration,
+};
 use tracing::{debug, error, info, warn};
 
 use std::collections::HashMap;
 
-use crate::block::MintingTx;
-use crate::config::{Config, QuorumMode};
-use crate::consensus::{BlockBuilder, ConsensusConfig, ConsensusEvent, ConsensusService, TransactionValidator};
-use crate::network::{
-    BlockTxn, CompactBlock, GetBlockTxn, NetworkDiscovery, NetworkEvent, QuorumBuilder,
-    ReconstructionResult,
+use crate::{
+    block::MintingTx,
+    config::{Config, QuorumMode},
+    consensus::{
+        BlockBuilder, ConsensusConfig, ConsensusEvent, ConsensusService, TransactionValidator,
+    },
+    network::{
+        BlockTxn, CompactBlock, GetBlockTxn, NetworkDiscovery, NetworkEvent, QuorumBuilder,
+        ReconstructionResult,
+    },
+    node::{MintedMintingTx, Node},
+    rpc::{
+        calculate_dir_size, init_metrics, start_metrics_server, start_rpc_server, MetricsUpdater,
+        RpcState, WsBroadcaster, DATA_DIR_USAGE_BYTES,
+    },
+    transaction::Transaction,
 };
-use crate::node::{MintedMintingTx, Node};
-use crate::rpc::{init_metrics, start_metrics_server, start_rpc_server, MetricsUpdater, RpcState, WsBroadcaster, calculate_dir_size, DATA_DIR_USAGE_BYTES};
-use crate::transaction::Transaction;
 
 /// Timeout for initial peer discovery (seconds)
 const DISCOVERY_TIMEOUT_SECS: u64 = 30;
@@ -38,7 +49,8 @@ fn get_connected_peer_ids(discovery: &NetworkDiscovery) -> Vec<String> {
         .collect()
 }
 
-/// Check if minting should be enabled based on quorum config and connected peers
+/// Check if minting should be enabled based on quorum config and connected
+/// peers
 fn check_minting_eligibility(
     config: &Config,
     connected_peers: &[String],
@@ -48,7 +60,8 @@ fn check_minting_eligibility(
         return (false, "Minting not requested".to_string());
     }
 
-    let (can_reach, quorum_size, threshold) = config.network.quorum.can_reach_quorum(connected_peers);
+    let (can_reach, quorum_size, threshold) =
+        config.network.quorum.can_reach_quorum(connected_peers);
 
     if !can_reach {
         let mode_str = match config.network.quorum.mode {
@@ -64,12 +77,16 @@ fn check_minting_eligibility(
         );
     }
 
-    (true, format!("Quorum satisfied: {}-of-{}", threshold, quorum_size))
+    (
+        true,
+        format!("Quorum satisfied: {}-of-{}", threshold, quorum_size),
+    )
 }
 
 /// Run the node
 pub fn run(config_path: &Path, mint: bool, metrics_port_override: Option<u16>) -> Result<()> {
-    let mut config = Config::load(config_path).context("Config not found. Run 'botho init' first.")?;
+    let mut config =
+        Config::load(config_path).context("Config not found. Run 'botho init' first.")?;
 
     // Apply metrics port override from CLI
     if let Some(port) = metrics_port_override {
@@ -114,10 +131,8 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
     );
 
     // Start network discovery
-    let mut discovery = NetworkDiscovery::new(
-        config.network.gossip_port(network_type),
-        bootstrap_peers,
-    );
+    let mut discovery =
+        NetworkDiscovery::new(config.network.gossip_port(network_type), bootstrap_peers);
 
     let mut swarm = discovery.start().await?;
 
@@ -174,8 +189,13 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
 
     // Display quorum status
     let mode_str = match config.network.quorum.mode {
-        QuorumMode::Explicit => format!("explicit (threshold: {})", config.network.quorum.threshold),
-        QuorumMode::Recommended => format!("recommended (min_peers: {})", config.network.quorum.min_peers),
+        QuorumMode::Explicit => {
+            format!("explicit (threshold: {})", config.network.quorum.threshold)
+        }
+        QuorumMode::Recommended => format!(
+            "recommended (min_peers: {})",
+            config.network.quorum.min_peers
+        ),
     };
     println!("Quorum mode: {}", mode_str);
     println!("Quorum status: {}", quorum_message);
@@ -261,7 +281,8 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
 
     // Get chain state for consensus
     let ledger = node.shared_ledger();
-    let chain_state = ledger.read()
+    let chain_state = ledger
+        .read()
         .map_err(|_| anyhow::anyhow!("Ledger lock poisoned"))?
         .get_chain_state()
         .map_err(|e| anyhow::anyhow!("Failed to get chain state: {}", e))?;
@@ -290,7 +311,10 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
         chain_state,
     );
 
-    info!("Consensus service initialized at slot {}", consensus.current_slot());
+    info!(
+        "Consensus service initialized at slot {}",
+        consensus.current_slot()
+    );
 
     // Track minting state - can change as peers connect/disconnect
     let mut minting_enabled = false;
@@ -318,7 +342,10 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
     // Load pending transactions from file and broadcast them
     match node.load_pending_transactions() {
         Ok(pending_txs) if !pending_txs.is_empty() => {
-            info!("Broadcasting {} pending transactions to network", pending_txs.len());
+            info!(
+                "Broadcasting {} pending transactions to network",
+                pending_txs.len()
+            );
             for tx in &pending_txs {
                 if let Err(e) = NetworkDiscovery::broadcast_transaction(&mut swarm, tx) {
                     debug!("Failed to broadcast pending tx: {}", e);
@@ -1046,7 +1073,11 @@ fn build_scp_quorum_set(quorum: &QuorumBuilder, local_peer_id: &libp2p::PeerId) 
     }
 
     // Threshold is 1 for solo mining, otherwise use configured threshold
-    let threshold = if members.len() == 1 { 1 } else { quorum.threshold() };
+    let threshold = if members.len() == 1 {
+        1
+    } else {
+        quorum.threshold()
+    };
 
     QuorumSet::new(threshold, members)
 }
@@ -1056,8 +1087,9 @@ fn peer_id_to_node_id(peer_id: &libp2p::PeerId) -> NodeID {
     // Use the PeerId's string representation as the responder ID
     // This provides a deterministic mapping from PeerId to NodeID
     let peer_str = peer_id.to_string();
-    let responder_id = ResponderId::from_str(&format!("{}:8443", &peer_str[..12.min(peer_str.len())]))
-        .unwrap_or_else(|_| ResponderId::from_str("peer:8443").unwrap());
+    let responder_id =
+        ResponderId::from_str(&format!("{}:8443", &peer_str[..12.min(peer_str.len())]))
+            .unwrap_or_else(|_| ResponderId::from_str("peer:8443").unwrap());
 
     // Derive a deterministic Ed25519 public key from the PeerId bytes
     // This is a placeholder - in production, peers should exchange actual keys
@@ -1082,15 +1114,15 @@ fn build_block_from_externalized(
         values,
         |hash| {
             // Get minting tx from consensus cache
-            consensus.get_tx_data(hash).and_then(|bytes| {
-                bincode::deserialize::<MintingTx>(&bytes).ok()
-            })
+            consensus
+                .get_tx_data(hash)
+                .and_then(|bytes| bincode::deserialize::<MintingTx>(&bytes).ok())
         },
         |hash| {
             // Get transfer tx from consensus cache
-            consensus.get_tx_data(hash).and_then(|bytes| {
-                bincode::deserialize::<Transaction>(&bytes).ok()
-            })
+            consensus
+                .get_tx_data(hash)
+                .and_then(|bytes| bincode::deserialize::<Transaction>(&bytes).ok())
         },
     )
     .map(|built| built.block)

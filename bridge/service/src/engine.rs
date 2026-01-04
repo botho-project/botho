@@ -7,8 +7,10 @@ use std::time::Duration;
 use tokio::sync::broadcast;
 use tracing::{error, info, warn};
 
-use crate::db::Database;
-use crate::watchers::{BthWatcher, EthereumWatcher};
+use crate::{
+    db::Database,
+    watchers::{BthWatcher, EthereumWatcher},
+};
 
 /// Shutdown signal type.
 pub type ShutdownSignal = broadcast::Receiver<()>;
@@ -137,24 +139,38 @@ impl OrderProcessor {
 
     /// Process a mint order (deposit confirmed, need to mint wBTH).
     async fn process_mint_order(&self, order: &BridgeOrder) -> Result<(), String> {
-        info!("Processing mint order {} for {} picocredits", order.id, order.amount);
+        info!(
+            "Processing mint order {} for {} picocredits",
+            order.id, order.amount
+        );
 
         match order.dest_chain {
             Chain::Ethereum => {
                 // TODO: Implement actual ETH minting via alloy
                 // For now, just log and update status
-                info!("Would mint {} wBTH on Ethereum to {}", order.net_amount(), order.dest_address);
+                info!(
+                    "Would mint {} wBTH on Ethereum to {}",
+                    order.net_amount(),
+                    order.dest_address
+                );
 
                 // Simulate mint pending
-                self.db.update_order_status(&order.id, &OrderStatus::MintPending, None)?;
+                self.db
+                    .update_order_status(&order.id, &OrderStatus::MintPending, None)?;
 
                 // In real implementation, we'd wait for confirmation then:
-                // self.db.update_order_status(&order.id, &OrderStatus::Completed, Some(&tx_hash))?;
+                // self.db.update_order_status(&order.id,
+                // &OrderStatus::Completed, Some(&tx_hash))?;
             }
             Chain::Solana => {
                 // TODO: Implement actual Solana minting
-                info!("Would mint {} wBTH on Solana to {}", order.net_amount(), order.dest_address);
-                self.db.update_order_status(&order.id, &OrderStatus::MintPending, None)?;
+                info!(
+                    "Would mint {} wBTH on Solana to {}",
+                    order.net_amount(),
+                    order.dest_address
+                );
+                self.db
+                    .update_order_status(&order.id, &OrderStatus::MintPending, None)?;
             }
             Chain::Bth => {
                 // Invalid - can't mint to BTH
@@ -173,12 +189,20 @@ impl OrderProcessor {
 
     /// Process a burn order (burn confirmed, need to release BTH).
     async fn process_burn_order(&self, order: &BridgeOrder) -> Result<(), String> {
-        info!("Processing burn order {} for {} picocredits", order.id, order.amount);
+        info!(
+            "Processing burn order {} for {} picocredits",
+            order.id, order.amount
+        );
 
         // TODO: Implement actual BTH sending
-        info!("Would send {} BTH to {}", order.net_amount(), order.dest_address);
+        info!(
+            "Would send {} BTH to {}",
+            order.net_amount(),
+            order.dest_address
+        );
 
-        self.db.update_order_status(&order.id, &OrderStatus::ReleasePending, None)?;
+        self.db
+            .update_order_status(&order.id, &OrderStatus::ReleasePending, None)?;
 
         // In real implementation:
         // 1. Build BTH transaction
@@ -197,7 +221,8 @@ impl OrderProcessor {
         for order in awaiting {
             if order.is_expired(self.config.bridge.order_expiry_minutes) {
                 info!("Expiring stale order {}", order.id);
-                self.db.update_order_status(&order.id, &OrderStatus::Expired, None)?;
+                self.db
+                    .update_order_status(&order.id, &OrderStatus::Expired, None)?;
             }
         }
 

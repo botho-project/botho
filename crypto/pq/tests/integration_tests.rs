@@ -6,9 +6,7 @@
 //! 3. Signature creation and verification
 //! 4. One-time key derivation for stealth addresses
 
-use bth_crypto_pq::{
-    derive_onetime_sig_keypair, derive_pq_keys, MlDsa65KeyPair, MlKem768KeyPair,
-};
+use bth_crypto_pq::{derive_onetime_sig_keypair, derive_pq_keys, MlDsa65KeyPair, MlKem768KeyPair};
 
 /// Test complete KEM roundtrip with derived keys.
 #[test]
@@ -191,8 +189,7 @@ fn test_complete_transaction_flow() {
     let recipient_keys = derive_pq_keys(b"recipient wallet mnemonic");
 
     // === Step 1: Sender creates output (encapsulates to recipient) ===
-    let (ciphertext, sender_shared_secret) =
-        recipient_keys.kem_keypair.public_key().encapsulate();
+    let (ciphertext, sender_shared_secret) = recipient_keys.kem_keypair.public_key().encapsulate();
 
     // Sender derives the one-time signing keypair and embeds PUBLIC KEY in TxOut
     let output_index = 0u32;
@@ -238,9 +235,10 @@ fn test_complete_transaction_flow() {
         .verify(b"tampered message", &pq_signature)
         .is_err());
 
-    // Note: In the actual protocol, sender would embed recipient_onetime_keypair.public_key()
-    // in the TxOut, not their own derived key. The current pqcrypto limitation means
-    // keys are not deterministically derived from seeds, but the KEM shared secret IS
+    // Note: In the actual protocol, sender would embed
+    // recipient_onetime_keypair.public_key() in the TxOut, not their own
+    // derived key. The current pqcrypto limitation means keys are not
+    // deterministically derived from seeds, but the KEM shared secret IS
     // deterministic, which is what matters for the key encapsulation protocol.
 }
 
@@ -406,7 +404,9 @@ fn test_signature_verification_rejects_wrong_key() {
     let honest_signature = honest_keypair.sign(message);
 
     // Attacker tries to verify with their own key - should fail
-    let verification_result = attacker_keypair.public_key().verify(message, &honest_signature);
+    let verification_result = attacker_keypair
+        .public_key()
+        .verify(message, &honest_signature);
     assert!(
         verification_result.is_err(),
         "Signature should not verify with wrong public key"
@@ -472,7 +472,8 @@ fn test_verification_rejects_malformed_signature() {
             "Corrupted signature should fail verification"
         );
     }
-    // If from_bytes fails, that's also acceptable as it means the signature is invalid
+    // If from_bytes fails, that's also acceptable as it means the signature is
+    // invalid
 }
 
 /// Test multiple message signatures with the same key.
@@ -569,10 +570,9 @@ fn test_output_index_isolation() {
 fn test_mlkem_deterministic_keygen_vector() {
     // Fixed seed for reproducible keygen
     let seed = [
-        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
-        0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
-        0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
-        0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e,
+        0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d,
+        0x1e, 0x1f,
     ];
 
     let keypair1 = MlKem768KeyPair::from_seed(&seed);
@@ -614,10 +614,9 @@ fn test_mlkem_deterministic_keygen_vector() {
 fn test_mldsa_deterministic_keygen_vector() {
     // Fixed seed for reproducible keygen
     let seed = [
-        0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00, 0x11,
-        0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99,
-        0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00, 0x11,
-        0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99,
+        0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88,
+        0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
+        0x88, 0x99,
     ];
 
     let keypair1 = MlDsa65KeyPair::from_seed(&seed);
@@ -689,7 +688,11 @@ fn test_derive_pq_keys_determinism() {
     // Verify the derived keys work correctly
     let (ct, ss1) = keys1.kem_keypair.public_key().encapsulate();
     let ss2 = keys2.kem_keypair.decapsulate(&ct).unwrap();
-    assert_eq!(ss1.as_bytes(), ss2.as_bytes(), "Cross-key decapsulation must work");
+    assert_eq!(
+        ss1.as_bytes(),
+        ss2.as_bytes(),
+        "Cross-key decapsulation must work"
+    );
 }
 
 /// Test one-time keypair derivation is deterministic.
@@ -725,20 +728,38 @@ fn test_onetime_keypair_determinism() {
 #[test]
 fn test_mlkem768_nist_sizes() {
     use bth_crypto_pq::{
-        ML_KEM_768_PUBLIC_KEY_BYTES, ML_KEM_768_SECRET_KEY_BYTES,
-        ML_KEM_768_CIPHERTEXT_BYTES, ML_KEM_768_SHARED_SECRET_BYTES,
+        ML_KEM_768_CIPHERTEXT_BYTES, ML_KEM_768_PUBLIC_KEY_BYTES, ML_KEM_768_SECRET_KEY_BYTES,
+        ML_KEM_768_SHARED_SECRET_BYTES,
     };
 
     // NIST FIPS 203 specifies these exact sizes for ML-KEM-768
-    assert_eq!(ML_KEM_768_PUBLIC_KEY_BYTES, 1184, "NIST FIPS 203 ML-KEM-768 ek size");
-    assert_eq!(ML_KEM_768_SECRET_KEY_BYTES, 2400, "NIST FIPS 203 ML-KEM-768 dk size");
-    assert_eq!(ML_KEM_768_CIPHERTEXT_BYTES, 1088, "NIST FIPS 203 ML-KEM-768 ct size");
-    assert_eq!(ML_KEM_768_SHARED_SECRET_BYTES, 32, "NIST FIPS 203 ML-KEM-768 ss size");
+    assert_eq!(
+        ML_KEM_768_PUBLIC_KEY_BYTES, 1184,
+        "NIST FIPS 203 ML-KEM-768 ek size"
+    );
+    assert_eq!(
+        ML_KEM_768_SECRET_KEY_BYTES, 2400,
+        "NIST FIPS 203 ML-KEM-768 dk size"
+    );
+    assert_eq!(
+        ML_KEM_768_CIPHERTEXT_BYTES, 1088,
+        "NIST FIPS 203 ML-KEM-768 ct size"
+    );
+    assert_eq!(
+        ML_KEM_768_SHARED_SECRET_BYTES, 32,
+        "NIST FIPS 203 ML-KEM-768 ss size"
+    );
 
     // Verify actual key generation produces correct sizes
     let keypair = MlKem768KeyPair::generate();
-    assert_eq!(keypair.public_key().as_bytes().len(), ML_KEM_768_PUBLIC_KEY_BYTES);
-    assert_eq!(keypair.secret_key().as_bytes().len(), ML_KEM_768_SECRET_KEY_BYTES);
+    assert_eq!(
+        keypair.public_key().as_bytes().len(),
+        ML_KEM_768_PUBLIC_KEY_BYTES
+    );
+    assert_eq!(
+        keypair.secret_key().as_bytes().len(),
+        ML_KEM_768_SECRET_KEY_BYTES
+    );
 
     let (ct, ss) = keypair.public_key().encapsulate();
     assert_eq!(ct.as_bytes().len(), ML_KEM_768_CIPHERTEXT_BYTES);
@@ -753,21 +774,37 @@ fn test_mldsa65_nist_sizes() {
     };
 
     // NIST FIPS 204 specifies these exact sizes for ML-DSA-65
-    assert_eq!(ML_DSA_65_PUBLIC_KEY_BYTES, 1952, "NIST FIPS 204 ML-DSA-65 pk size");
-    assert_eq!(ML_DSA_65_SECRET_KEY_BYTES, 4032, "NIST FIPS 204 ML-DSA-65 sk size");
-    assert_eq!(ML_DSA_65_SIGNATURE_BYTES, 3309, "NIST FIPS 204 ML-DSA-65 sig size");
+    assert_eq!(
+        ML_DSA_65_PUBLIC_KEY_BYTES, 1952,
+        "NIST FIPS 204 ML-DSA-65 pk size"
+    );
+    assert_eq!(
+        ML_DSA_65_SECRET_KEY_BYTES, 4032,
+        "NIST FIPS 204 ML-DSA-65 sk size"
+    );
+    assert_eq!(
+        ML_DSA_65_SIGNATURE_BYTES, 3309,
+        "NIST FIPS 204 ML-DSA-65 sig size"
+    );
 
     // Verify actual key generation produces correct sizes
     let keypair = MlDsa65KeyPair::generate();
-    assert_eq!(keypair.public_key().as_bytes().len(), ML_DSA_65_PUBLIC_KEY_BYTES);
-    assert_eq!(keypair.secret_key().as_bytes().len(), ML_DSA_65_SECRET_KEY_BYTES);
+    assert_eq!(
+        keypair.public_key().as_bytes().len(),
+        ML_DSA_65_PUBLIC_KEY_BYTES
+    );
+    assert_eq!(
+        keypair.secret_key().as_bytes().len(),
+        ML_DSA_65_SECRET_KEY_BYTES
+    );
 
     let sig = keypair.sign(b"test");
     assert_eq!(sig.as_bytes().len(), ML_DSA_65_SIGNATURE_BYTES);
 }
 
 /// Cross-platform determinism: verify hex-encoded fingerprints.
-/// These fingerprints should be identical regardless of platform (x86, ARM, etc.)
+/// These fingerprints should be identical regardless of platform (x86, ARM,
+/// etc.)
 #[test]
 fn test_cross_platform_determinism() {
     // Use a well-known seed
@@ -810,7 +847,9 @@ fn test_kem_shared_secret_correctness() {
     // Multiple encapsulations should all decapsulate correctly
     for _ in 0..5 {
         let (ct, ss_encap) = keypair.public_key().encapsulate();
-        let ss_decap = keypair.decapsulate(&ct).expect("decapsulation should succeed");
+        let ss_decap = keypair
+            .decapsulate(&ct)
+            .expect("decapsulation should succeed");
 
         assert_eq!(
             ss_encap.as_bytes(),

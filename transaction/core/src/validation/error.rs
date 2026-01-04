@@ -2,8 +2,8 @@
 
 use crate::{InputRuleError, TxOutConversionError};
 use alloc::string::String;
-use displaydoc::Display;
 use bth_crypto_keys::KeyError;
+use displaydoc::Display;
 use serde::{Deserialize, Serialize};
 
 /// Type alias for transaction validation results.
@@ -164,7 +164,8 @@ pub enum TransactionValidationError {
     /// Cluster tag vector is malformed (invalid weights, duplicates, etc.)
     InvalidClusterTags,
 
-    /// Cluster tag mass inflation: cluster {0} has output mass {1} > expected {2}
+    /// Cluster tag mass inflation: cluster {0} has output mass {1} > expected
+    /// {2}
     ClusterTagInflation(u64, u64, u64),
 
     /// Insufficient progressive fee: required {0}, actual {1}
@@ -184,11 +185,13 @@ pub enum TransactionValidationError {
     PseudoTagOutputCountMismatch,
 
     // =========== Quantum-Private Transaction Errors ===========
-    /// Classical (Schnorr) signature verification failed for quantum-private input
+    /// Classical (Schnorr) signature verification failed for quantum-private
+    /// input
     #[cfg(feature = "pq")]
     QuantumPrivateSchnorrVerificationFailed,
 
-    /// Post-quantum (Dilithium) signature verification failed for quantum-private input
+    /// Post-quantum (Dilithium) signature verification failed for
+    /// quantum-private input
     #[cfg(feature = "pq")]
     QuantumPrivateDilithiumVerificationFailed,
 
@@ -209,7 +212,9 @@ pub enum TransactionValidationError {
     InvalidPqOutputReference,
 
     // =========== Ring Tag Plausibility Errors ===========
-    /** Ring tag centroid mismatch: output tags don't match ring composition. similarity_permille={0}, threshold_permille={1} (values in permille: 700 = 70%) */
+    /** Ring tag centroid mismatch: output tags don't match ring composition.
+     * similarity_permille={0}, threshold_permille={1} (values in permille:
+     * 700 = 70%) */
     RingTagMismatch(u32, u32),
 }
 

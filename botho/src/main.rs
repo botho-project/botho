@@ -47,7 +47,8 @@ enum Commands {
         #[arg(long)]
         recover: bool,
 
-        /// Create a relay node config (no wallet, for seed/infrastructure nodes)
+        /// Create a relay node config (no wallet, for seed/infrastructure
+        /// nodes)
         #[arg(long)]
         relay: bool,
     },
@@ -58,7 +59,8 @@ enum Commands {
         #[arg(long)]
         mint: bool,
 
-        /// Port for Prometheus metrics endpoint (overrides config, 0 to disable)
+        /// Port for Prometheus metrics endpoint (overrides config, 0 to
+        /// disable)
         #[arg(long)]
         metrics_port: Option<u16>,
     },
@@ -143,7 +145,8 @@ fn main() -> Result<()> {
     config::validate_network(network)?;
 
     // Determine config path (network-specific by default)
-    let config_path = cli.config
+    let config_path = cli
+        .config
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| config::config_path(network));
 
@@ -188,29 +191,30 @@ fn main() -> Result<()> {
         Commands::Run { mint, metrics_port } => {
             commands::run::run(&config_path, mint, metrics_port)
         }
-        Commands::Status => {
-            commands::status::run(&config_path)
-        }
-        Commands::Balance => {
-            commands::balance::run(&config_path)
-        }
-        Commands::Address { save } => {
-            commands::address::run(&config_path, save.as_deref())
-        }
-        Commands::Send { address, amount, private, quantum, memo } => {
-            commands::send::run(&config_path, &address, &amount, private, quantum, memo.as_deref())
-        }
+        Commands::Status => commands::status::run(&config_path),
+        Commands::Balance => commands::balance::run(&config_path),
+        Commands::Address { save } => commands::address::run(&config_path, save.as_deref()),
+        Commands::Send {
+            address,
+            amount,
+            private,
+            quantum,
+            memo,
+        } => commands::send::run(
+            &config_path,
+            &address,
+            &amount,
+            private,
+            quantum,
+            memo.as_deref(),
+        ),
         Commands::Snapshot { action } => match action {
-            SnapshotAction::Create { output } => {
-                commands::snapshot::create(&config_path, &output)
-            }
+            SnapshotAction::Create { output } => commands::snapshot::create(&config_path, &output),
             SnapshotAction::Load { input, verify_hash } => {
                 commands::snapshot::load(&config_path, &input, verify_hash.as_deref())
             }
-            SnapshotAction::Info { file } => {
-                commands::snapshot::info(&file)
-            }
-        }
+            SnapshotAction::Info { file } => commands::snapshot::info(&file),
+        },
     }
 }
 

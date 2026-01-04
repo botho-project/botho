@@ -15,11 +15,13 @@
 //!
 //! ## Key Insight
 //!
-//! Rewards are predictable (fixed per phase), difficulty adapts to monetary goals.
-//! This gives minters stable income while absorbing fee burn volatility.
+//! Rewards are predictable (fixed per phase), difficulty adapts to monetary
+//! goals. This gives minters stable income while absorbing fee burn volatility.
 
-use std::sync::{Arc, RwLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    sync::{Arc, RwLock},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use bth_cluster_tax::{DifficultyController, MonetaryPolicy, MonetaryStats};
 
@@ -53,12 +55,8 @@ impl MonetarySystem {
         initial_difficulty: u64,
     ) -> Self {
         let start_time = current_unix_time();
-        let controller = DifficultyController::new(
-            policy,
-            initial_supply,
-            initial_difficulty,
-            start_time,
-        );
+        let controller =
+            DifficultyController::new(policy, initial_supply, initial_difficulty, start_time);
         Self {
             inner: Arc::new(RwLock::new(controller)),
         }
@@ -103,7 +101,10 @@ impl MonetarySystem {
 
     /// Blocks until next halving, or None if in tail emission.
     pub fn blocks_until_halving(&self) -> Option<u64> {
-        self.inner.read().ok().and_then(|c| c.blocks_until_next_halving())
+        self.inner
+            .read()
+            .ok()
+            .and_then(|c| c.blocks_until_next_halving())
     }
 
     /// Record a fee burn.
@@ -120,7 +121,8 @@ impl MonetarySystem {
     /// Returns the block reward. Call this after a block is successfully mined.
     /// The `block_time` should be the timestamp of the new block.
     pub fn process_block(&self, block_time: u64) -> u64 {
-        self.inner.write()
+        self.inner
+            .write()
             .map(|mut c| c.process_block(block_time))
             .unwrap_or(0)
     }
@@ -128,7 +130,8 @@ impl MonetarySystem {
     /// Get a statistics snapshot.
     pub fn stats(&self) -> MonetaryStats {
         let current_time = current_unix_time();
-        self.inner.read()
+        self.inner
+            .read()
             .map(|c| c.stats(current_time))
             .unwrap_or_else(|_| MonetaryStats {
                 height: 0,
@@ -148,9 +151,9 @@ impl MonetarySystem {
 
     /// Get a clone of the underlying controller (for persistence).
     pub fn controller(&self) -> DifficultyController {
-        self.inner.read()
-            .map(|c| c.clone())
-            .unwrap_or_else(|_| DifficultyController::new(MonetaryPolicy::default(), 0, 1, current_unix_time()))
+        self.inner.read().map(|c| c.clone()).unwrap_or_else(|_| {
+            DifficultyController::new(MonetaryPolicy::default(), 0, 1, current_unix_time())
+        })
     }
 
     /// Replace the controller (for loading from persistence).
@@ -162,14 +165,16 @@ impl MonetarySystem {
 
     /// Check if we're in the halving phase (Phase 1).
     pub fn is_halving_phase(&self) -> bool {
-        self.inner.read()
+        self.inner
+            .read()
             .map(|c| c.policy.is_halving_phase(c.state.height))
             .unwrap_or(false)
     }
 
     /// Get the policy configuration.
     pub fn policy(&self) -> MonetaryPolicy {
-        self.inner.read()
+        self.inner
+            .read()
             .map(|c| c.policy.clone())
             .unwrap_or_default()
     }
@@ -220,9 +225,9 @@ pub fn mainnet_policy() -> MonetaryPolicy {
 
     MonetaryPolicy {
         // Phase 1: ~10 years of halvings (at 5s blocks under full load)
-        initial_reward: 50_000_000_000_000,         // 50 BTH in picocredits
-        halving_interval: BLOCKS_PER_YEAR * 2,      // 12,614,400 blocks (~2 years at 5s)
-        halving_count: 5,                           // 5 halvings over ~10 years
+        initial_reward: 50_000_000_000_000, // 50 BTH in picocredits
+        halving_interval: BLOCKS_PER_YEAR * 2, // 12,614,400 blocks (~2 years at 5s)
+        halving_count: 5,                   // 5 halvings over ~10 years
 
         // Phase 2: 2% target net inflation (at 5s blocks)
         tail_inflation_bps: 200,
@@ -230,12 +235,12 @@ pub fn mainnet_policy() -> MonetaryPolicy {
         // Block time: 5 seconds assumed for monetary calculations
         // Actual block time varies 5-40s based on network load (see dynamic_timing)
         target_block_time_secs: ASSUMED_BLOCK_TIME,
-        min_block_time_secs: 3,   // Absolute floor (consensus needs time)
-        max_block_time_secs: 60,  // Absolute ceiling
+        min_block_time_secs: 3,  // Absolute floor (consensus needs time)
+        max_block_time_secs: 60, // Absolute ceiling
 
         // Difficulty: adjust every ~24 hours at 5s blocks
         difficulty_adjustment_interval: BLOCKS_PER_YEAR / 365, // 17,280 blocks
-        max_difficulty_adjustment_bps: 2500, // 25% max change per epoch
+        max_difficulty_adjustment_bps: 2500,                   // 25% max change per epoch
 
         // Assume ~0.5% of supply burned in fees annually
         expected_fee_burn_rate_bps: 50,
@@ -248,7 +253,7 @@ pub fn mainnet_policy() -> MonetaryPolicy {
 pub fn testnet_policy() -> MonetaryPolicy {
     MonetaryPolicy {
         initial_reward: 50_000_000_000_000, // 50 BTH
-        halving_interval: 120_000,           // ~1 week at 5s blocks
+        halving_interval: 120_000,          // ~1 week at 5s blocks
         halving_count: 5,
 
         tail_inflation_bps: 200,
@@ -257,8 +262,8 @@ pub fn testnet_policy() -> MonetaryPolicy {
         min_block_time_secs: 3,
         max_block_time_secs: 60,
 
-        difficulty_adjustment_interval: 1000,  // Every ~1.4 hours at 5s
-        max_difficulty_adjustment_bps: 5000,   // 50% max change (faster convergence)
+        difficulty_adjustment_interval: 1000, // Every ~1.4 hours at 5s
+        max_difficulty_adjustment_bps: 5000,  // 50% max change (faster convergence)
 
         expected_fee_burn_rate_bps: 100,
     }

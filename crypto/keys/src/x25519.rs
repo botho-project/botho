@@ -12,11 +12,13 @@ use crate::{
 use alloc::vec::Vec;
 
 use base64::Engine;
-use core::fmt::{Debug, Formatter, Result as FmtResult};
-use digest::generic_array::typenum::U32;
 use bth_crypto_digestible::Digestible;
 use bth_util_from_random::FromRandom;
-use bth_util_repr_bytes::{derive_core_cmp_from_as_ref, derive_repr_bytes_from_as_ref_and_try_from};
+use bth_util_repr_bytes::{
+    derive_core_cmp_from_as_ref, derive_repr_bytes_from_as_ref_and_try_from,
+};
+use core::fmt::{Debug, Formatter, Result as FmtResult};
+use digest::generic_array::typenum::U32;
 
 #[cfg(feature = "alloc")]
 use bth_util_repr_bytes::derive_into_vec_from_repr_bytes;

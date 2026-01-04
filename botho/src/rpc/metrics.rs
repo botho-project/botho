@@ -10,15 +10,18 @@
 //! - `botho_mempool_size` - Transactions in mempool (gauge)
 //! - `botho_block_height` - Current block height (gauge)
 //! - `botho_tps` - Transactions per second, 5-minute average (gauge)
-//! - `botho_validation_latency_seconds` - Transaction validation latency (histogram)
-//! - `botho_consensus_round_duration_seconds` - SCP consensus round duration (histogram)
+//! - `botho_validation_latency_seconds` - Transaction validation latency
+//!   (histogram)
+//! - `botho_consensus_round_duration_seconds` - SCP consensus round duration
+//!   (histogram)
 //! - `botho_consensus_nominations_total` - Total SCP nominations (counter)
 //!
 //! ### System Metrics
 //! - `botho_data_dir_usage_bytes` - Bytes used by the data directory (gauge)
 //!
 //! ### Process Metrics (Linux only)
-//! The following metrics are only available on Linux via the Prometheus process collector:
+//! The following metrics are only available on Linux via the Prometheus process
+//! collector:
 //! - `process_resident_memory_bytes` - Process resident set size
 //! - `process_virtual_memory_bytes` - Process virtual memory size
 //! - `process_cpu_seconds_total` - Total CPU time used
@@ -36,23 +39,17 @@
 //! ```
 
 use http_body_util::Full;
-use hyper::body::Bytes;
-use hyper::server::conn::http1;
-use hyper::service::service_fn;
-use hyper::{Request, Response, StatusCode};
+use hyper::{body::Bytes, server::conn::http1, service::service_fn, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use lazy_static::lazy_static;
-use prometheus::{
-    CounterVec, Encoder, Gauge, Histogram, HistogramOpts, IntCounter, IntGauge, Opts,
-    Registry, TextEncoder,
-};
 #[cfg(all(feature = "process", target_os = "linux"))]
 use prometheus::process_collector::ProcessCollector;
+use prometheus::{
+    CounterVec, Encoder, Gauge, Histogram, HistogramOpts, IntCounter, IntGauge, Opts, Registry,
+    TextEncoder,
+};
 use serde::Serialize;
-use std::convert::Infallible;
-use std::net::SocketAddr;
-use std::path::Path;
-use std::sync::Arc;
+use std::{convert::Infallible, net::SocketAddr, path::Path, sync::Arc};
 use tokio::net::TcpListener;
 use tracing::{error, info};
 
@@ -82,11 +79,9 @@ impl NodeMetrics {
     pub fn new() -> Self {
         let registry = Registry::new();
 
-        let block_height = Gauge::with_opts(Opts::new(
-            "botho_block_height",
-            "Current blockchain height",
-        ))
-        .expect("metric can be created");
+        let block_height =
+            Gauge::with_opts(Opts::new("botho_block_height", "Current blockchain height"))
+                .expect("metric can be created");
 
         let peer_count =
             Gauge::with_opts(Opts::new("botho_peer_count", "Number of connected peers"))

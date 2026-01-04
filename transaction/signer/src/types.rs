@@ -376,7 +376,10 @@ mod tests {
         let bytes = [0xAB; 32];
         let id = AccountId::from(bytes);
         let display = format!("{}", id);
-        assert_eq!(display, "ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB");
+        assert_eq!(
+            display,
+            "ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB"
+        );
     }
 
     #[test]
@@ -405,7 +408,8 @@ mod tests {
 
     #[test]
     fn account_id_try_from_string() {
-        let hex_str = "ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB".to_string();
+        let hex_str =
+            "ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB".to_string();
         let id = AccountId::try_from(hex_str).unwrap();
         assert_eq!(id.as_ref(), &[0xAB; 32]);
     }

@@ -15,8 +15,7 @@ use chacha20poly1305::{
 };
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use std::fs;
-use std::path::Path;
+use std::{fs, path::Path};
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::discovery::NodeDiscovery;
@@ -41,9 +40,11 @@ const MAX_DELAY_MS: u64 = 300_000;
 /// Rate limiter for decryption attempts.
 ///
 /// Implements exponential backoff to prevent brute-force password attacks.
-/// After MAX_FAILED_ATTEMPTS consecutive failures, a cooldown period is enforced.
+/// After MAX_FAILED_ATTEMPTS consecutive failures, a cooldown period is
+/// enforced.
 ///
-/// This struct can be persisted to disk to maintain rate limiting across CLI invocations.
+/// This struct can be persisted to disk to maintain rate limiting across CLI
+/// invocations.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DecryptionRateLimiter {
     /// Number of consecutive failed attempts
@@ -73,7 +74,8 @@ impl DecryptionRateLimiter {
     }
 
     /// Check if we're currently in a cooldown period.
-    /// Returns Ok(()) if allowed to attempt, Err with remaining wait time otherwise.
+    /// Returns Ok(()) if allowed to attempt, Err with remaining wait time
+    /// otherwise.
     pub fn check_rate_limit(&self) -> Result<()> {
         if self.consecutive_failures == 0 {
             return Ok(());
@@ -100,7 +102,8 @@ impl DecryptionRateLimiter {
     }
 
     /// Calculate the delay required based on consecutive failures.
-    /// Uses exponential backoff: delay = base * 2^(failures - 1), capped at MAX_DELAY_MS
+    /// Uses exponential backoff: delay = base * 2^(failures - 1), capped at
+    /// MAX_DELAY_MS
     fn calculate_delay(&self) -> u64 {
         if self.consecutive_failures == 0 {
             return 0;
@@ -287,10 +290,9 @@ impl EncryptedWallet {
         let key = derive_key(password, &self.salt)?;
 
         // Decode nonce and ciphertext
-        let nonce_bytes = hex::decode(&self.nonce)
-            .map_err(|_| anyhow!("Invalid nonce format"))?;
-        let ciphertext = hex::decode(&self.ciphertext)
-            .map_err(|_| anyhow!("Invalid ciphertext format"))?;
+        let nonce_bytes = hex::decode(&self.nonce).map_err(|_| anyhow!("Invalid nonce format"))?;
+        let ciphertext =
+            hex::decode(&self.ciphertext).map_err(|_| anyhow!("Invalid ciphertext format"))?;
 
         if nonce_bytes.len() != 12 {
             return Err(anyhow!("Invalid nonce length"));
@@ -306,8 +308,8 @@ impl EncryptedWallet {
             .map_err(|_| anyhow!("Decryption failed - wrong password?"))?;
 
         // Wrap in Zeroizing immediately for secure cleanup
-        let mnemonic = String::from_utf8(plaintext)
-            .map_err(|_| anyhow!("Invalid mnemonic encoding"))?;
+        let mnemonic =
+            String::from_utf8(plaintext).map_err(|_| anyhow!("Invalid mnemonic encoding"))?;
         Ok(Zeroizing::new(mnemonic))
     }
 
@@ -322,7 +324,8 @@ impl EncryptedWallet {
     /// * `rate_limiter` - A mutable reference to the rate limiter state
     ///
     /// # Returns
-    /// * `Ok(Zeroizing<String>)` - The decrypted mnemonic on success (auto-zeroized on drop)
+    /// * `Ok(Zeroizing<String>)` - The decrypted mnemonic on success
+    ///   (auto-zeroized on drop)
     /// * `Err` - Rate limit exceeded, or decryption failed
     pub fn decrypt_with_rate_limit(
         &self,
@@ -356,7 +359,9 @@ impl EncryptedWallet {
                 if failures >= MAX_FAILED_ATTEMPTS {
                     Err(anyhow!(
                         "Decryption failed. Account locked for {} due to {} failed attempts",
-                        rate_limiter.remaining_lockout_time().unwrap_or_else(|| "some time".to_string()),
+                        rate_limiter
+                            .remaining_lockout_time()
+                            .unwrap_or_else(|| "some time".to_string()),
                         failures
                     ))
                 } else {
@@ -423,11 +428,10 @@ impl EncryptedWallet {
 
     /// Load a wallet from a file
     pub fn load(path: &Path) -> Result<Self> {
-        let json = fs::read_to_string(path)
-            .map_err(|e| anyhow!("Failed to read wallet file: {}", e))?;
+        let json =
+            fs::read_to_string(path).map_err(|e| anyhow!("Failed to read wallet file: {}", e))?;
 
-        serde_json::from_str(&json)
-            .map_err(|e| anyhow!("Failed to parse wallet file: {}", e))
+        serde_json::from_str(&json).map_err(|e| anyhow!("Failed to parse wallet file: {}", e))
     }
 
     /// Check if a wallet file exists
@@ -524,8 +528,7 @@ impl EncryptedWallet {
 
 /// Derive a 32-byte encryption key from password using Argon2id
 fn derive_key(password: &str, salt: &str) -> Result<[u8; 32]> {
-    let salt = SaltString::from_b64(salt)
-        .map_err(|_| anyhow!("Invalid salt format"))?;
+    let salt = SaltString::from_b64(salt).map_err(|_| anyhow!("Invalid salt format"))?;
 
     let argon2 = Argon2::new(
         argon2::Algorithm::Argon2id,
@@ -563,26 +566,29 @@ pub fn secure_zero(data: &mut [u8]) {
 /// Set Windows ACL to owner-only access (equivalent to Unix 0600)
 #[cfg(windows)]
 fn set_windows_owner_only_acl(path: &Path) -> Result<()> {
-    use std::ffi::OsStr;
-    use std::os::windows::ffi::OsStrExt;
-    use windows::Win32::Foundation::{CloseHandle, HANDLE, PSID};
-    use windows::Win32::Security::Authorization::{
-        SetNamedSecurityInfoW, SE_FILE_OBJECT, EXPLICIT_ACCESS_W, SET_ACCESS,
-        NO_INHERITANCE, SetEntriesInAclW, TRUSTEE_IS_SID, TRUSTEE_W, TRUSTEE_TYPE,
+    use std::{ffi::OsStr, os::windows::ffi::OsStrExt};
+    use windows::{
+        core::PCWSTR,
+        Win32::{
+            Foundation::{CloseHandle, HANDLE, PSID},
+            Security::{
+                Authorization::{
+                    SetEntriesInAclW, SetNamedSecurityInfoW, EXPLICIT_ACCESS_W, NO_INHERITANCE,
+                    SET_ACCESS, SE_FILE_OBJECT, TRUSTEE_IS_SID, TRUSTEE_TYPE, TRUSTEE_W,
+                },
+                GetTokenInformation, TokenUser, ACL, DACL_SECURITY_INFORMATION, GENERIC_READ,
+                GENERIC_WRITE, PROTECTED_DACL_SECURITY_INFORMATION, TOKEN_QUERY, TOKEN_USER,
+            },
+            System::Memory::{LocalFree, HLOCAL},
+        },
     };
-    use windows::Win32::Security::{
-        GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER,
-        DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
-        ACL, GENERIC_READ, GENERIC_WRITE,
-    };
-    use windows::Win32::System::Memory::{LocalFree, HLOCAL};
-    use windows::core::PCWSTR;
 
     // Get current process token and user SID
-    // SAFETY: GetCurrentProcess returns a pseudo-handle that doesn't require closing.
-    // OpenProcessToken is called with valid parameters: the process handle, TOKEN_QUERY
-    // permission, and a valid mutable pointer to receive the token handle. The token
-    // handle is later closed with CloseHandle after use.
+    // SAFETY: GetCurrentProcess returns a pseudo-handle that doesn't require
+    // closing. OpenProcessToken is called with valid parameters: the process
+    // handle, TOKEN_QUERY permission, and a valid mutable pointer to receive
+    // the token handle. The token handle is later closed with CloseHandle after
+    // use.
     let token = unsafe {
         let mut token = HANDLE::default();
         let current_process = windows::Win32::System::Threading::GetCurrentProcess();
@@ -596,10 +602,10 @@ fn set_windows_owner_only_acl(path: &Path) -> Result<()> {
 
     // Get token user info
     let mut token_info_len = 0u32;
-    // SAFETY: First call to GetTokenInformation with null buffer to query required size.
-    // The function is called with a valid token handle and writes the required buffer
-    // size to token_info_len. The return value is ignored as this call is expected to
-    // fail with ERROR_INSUFFICIENT_BUFFER.
+    // SAFETY: First call to GetTokenInformation with null buffer to query required
+    // size. The function is called with a valid token handle and writes the
+    // required buffer size to token_info_len. The return value is ignored as
+    // this call is expected to fail with ERROR_INSUFFICIENT_BUFFER.
     unsafe {
         let _ = GetTokenInformation(token, TokenUser, None, 0, &mut token_info_len);
     }
@@ -607,10 +613,12 @@ fn set_windows_owner_only_acl(path: &Path) -> Result<()> {
     let mut token_info = vec![0u8; token_info_len as usize];
     // SAFETY: Second call to GetTokenInformation with properly sized buffer.
     // - token is a valid handle obtained from OpenProcessToken above
-    // - token_info buffer is allocated with the exact size returned by the first call
+    // - token_info buffer is allocated with the exact size returned by the first
+    //   call
     // - token_info_len correctly reflects the buffer size
     // - CloseHandle is called on the token handle which was successfully opened
-    // The token_info buffer will contain a valid TOKEN_USER structure after success.
+    // The token_info buffer will contain a valid TOKEN_USER structure after
+    // success.
     unsafe {
         GetTokenInformation(
             token,
@@ -622,10 +630,11 @@ fn set_windows_owner_only_acl(path: &Path) -> Result<()> {
         CloseHandle(token)?;
     }
 
-    // SAFETY: The token_info buffer was filled by GetTokenInformation with TokenUser class.
-    // The Windows API guarantees the buffer contains a valid TOKEN_USER structure when
-    // the call succeeds. The buffer is properly aligned (heap-allocated) and the
-    // reference is valid for the lifetime of token_info.
+    // SAFETY: The token_info buffer was filled by GetTokenInformation with
+    // TokenUser class. The Windows API guarantees the buffer contains a valid
+    // TOKEN_USER structure when the call succeeds. The buffer is properly
+    // aligned (heap-allocated) and the reference is valid for the lifetime of
+    // token_info.
     let token_user = unsafe { &*(token_info.as_ptr() as *const TOKEN_USER) };
     let user_sid = token_user.User.Sid;
 
@@ -680,9 +689,10 @@ fn set_windows_owner_only_acl(path: &Path) -> Result<()> {
     };
 
     // Free the ACL
-    // SAFETY: new_acl was allocated by SetEntriesInAclW and must be freed with LocalFree.
-    // We check for null before freeing. LocalFree takes ownership of the memory and
-    // invalidates the pointer - we don't use new_acl after this point.
+    // SAFETY: new_acl was allocated by SetEntriesInAclW and must be freed with
+    // LocalFree. We check for null before freeing. LocalFree takes ownership of
+    // the memory and invalidates the pointer - we don't use new_acl after this
+    // point.
     if !new_acl.is_null() {
         unsafe {
             let _ = LocalFree(HLOCAL(new_acl as *mut _));

@@ -12,12 +12,6 @@
 
 #![allow(non_snake_case)]
 
-use core::{
-    cmp::Ordering,
-    fmt,
-    hash::{Hash, Hasher},
-};
-use curve25519_dalek::{ristretto::RistrettoPoint, scalar::Scalar};
 use bth_core::{
     keys::{
         RootSpendPrivate, RootSpendPublic, RootViewPrivate, SubaddressSpendPublic,
@@ -29,6 +23,12 @@ use bth_core::{
 use bth_crypto_digestible::{Digestible, MerlinTranscript};
 use bth_crypto_keys::{RistrettoPrivate, RistrettoPublic};
 use bth_util_from_random::FromRandom;
+use core::{
+    cmp::Ordering,
+    fmt,
+    hash::{Hash, Hasher},
+};
+use curve25519_dalek::{ristretto::RistrettoPoint, scalar::Scalar};
 #[cfg(feature = "prost")]
 use prost::Message;
 use rand_core::{CryptoRng, RngCore};

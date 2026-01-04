@@ -28,8 +28,9 @@ static INIT: Once = Once::new();
 
 /// Initialize the tracing subscriber for the process.
 ///
-/// This should be called once at application startup. Subsequent calls are no-ops.
-/// If initialization fails (e.g., subscriber already set), the error is silently ignored.
+/// This should be called once at application startup. Subsequent calls are
+/// no-ops. If initialization fails (e.g., subscriber already set), the error is
+/// silently ignored.
 fn init_tracing_subscriber(use_json: bool, use_stderr: bool) {
     INIT.call_once(|| {
         // Support MC_LOG in addition to RUST_LOG for backward compatibility
@@ -86,14 +87,16 @@ fn init_tracing_subscriber(use_json: bool, use_stderr: bool) {
             }
         };
 
-        // Ignore errors - subscriber might already be set by another part of the codebase
+        // Ignore errors - subscriber might already be set by another part of the
+        // codebase
         let _ = result;
     });
 }
 
 /// Create the root logger.
 ///
-/// This initializes the global tracing subscriber based on environment variables:
+/// This initializes the global tracing subscriber based on environment
+/// variables:
 /// - `RUST_LOG` or `MC_LOG`: Log level filter (default: "info")
 /// - `MC_LOG_JSON`: If "1", output JSON format
 /// - `MC_LOG_STDERR`: If "1", output to stderr instead of stdout
@@ -109,7 +112,8 @@ pub fn create_root_logger() -> Logger {
 
 /// Create a logger suitable for test execution.
 ///
-/// This configures logging to stderr by default (to work with cargo test output capture).
+/// This configures logging to stderr by default (to work with cargo test output
+/// capture).
 ///
 /// # Arguments
 /// * `_test_name` - Name of the test (logged as a span field for context)
@@ -135,8 +139,9 @@ impl Drop for LoggerGuard {
 
 /// Create an application logger.
 ///
-/// This is the main entry point for configuring logging in application binaries.
-/// It initializes the tracing subscriber and integrates with Sentry if configured.
+/// This is the main entry point for configuring logging in application
+/// binaries. It initializes the tracing subscriber and integrates with Sentry
+/// if configured.
 ///
 /// Returns a tuple of (Logger, LoggerGuard) for API compatibility.
 /// The guard should be held for the lifetime of the application.
@@ -156,8 +161,8 @@ pub fn create_app_logger() -> (Logger, LoggerGuard) {
 
 /// Recreate the application logger.
 ///
-/// With tracing, this is a no-op since the subscriber is configured once at startup.
-/// Environment variable changes after init won't take effect.
+/// With tracing, this is a no-op since the subscriber is configured once at
+/// startup. Environment variable changes after init won't take effect.
 pub fn recreate_app_logger() {
     // No-op with tracing - subscriber is immutable after init
     tracing::debug!("recreate_app_logger called - no-op with tracing");

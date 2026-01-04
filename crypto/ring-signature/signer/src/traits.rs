@@ -1,10 +1,10 @@
 // Copyright (c) 2018-2022 The Botho Foundation
 
 use alloc::{string::String, vec::Vec};
-use displaydoc::Display;
 use bth_crypto_keys::{KeyError, RistrettoPrivate};
 use bth_crypto_ring_signature::{Error as RingSignatureError, ReducedTxOut, RingMLSAG, Scalar};
 use bth_transaction_types::Amount;
+use displaydoc::Display;
 use rand_core::CryptoRngCore;
 use zeroize::Zeroize;
 

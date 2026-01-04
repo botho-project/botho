@@ -12,15 +12,18 @@
 
 #![cfg(feature = "pq")]
 
-use bth_account_keys::QuantumSafeAccountKey;
-use botho::transaction::TxOutput;
-use botho::transaction_pq::{
-    calculate_pq_fee, QuantumPrivateTransaction, QuantumPrivateTxInput, QuantumPrivateTxOutput,
-    PQ_CIPHERTEXT_SIZE, PQ_SIGNATURE_SIZE, PQ_SIGNING_PUBKEY_SIZE,
-};
 use bincode;
+use botho::{
+    transaction::TxOutput,
+    transaction_pq::{
+        calculate_pq_fee, QuantumPrivateTransaction, QuantumPrivateTxInput, QuantumPrivateTxOutput,
+        PQ_CIPHERTEXT_SIZE, PQ_SIGNATURE_SIZE, PQ_SIGNING_PUBKEY_SIZE,
+    },
+};
+use bth_account_keys::QuantumSafeAccountKey;
 
-const TEST_MNEMONIC_ALICE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+const TEST_MNEMONIC_ALICE: &str =
+    "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 const TEST_MNEMONIC_BOB: &str = "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo wrong";
 
 // ============================================================================
@@ -32,7 +35,8 @@ fn test_different_mnemonics_produce_different_keys() {
     let alice = QuantumSafeAccountKey::from_mnemonic(TEST_MNEMONIC_ALICE);
     let bob = QuantumSafeAccountKey::from_mnemonic(TEST_MNEMONIC_BOB);
 
-    // Classical keys should differ (compare via subaddresses which expose public keys)
+    // Classical keys should differ (compare via subaddresses which expose public
+    // keys)
     let alice_addr = alice.default_subaddress();
     let bob_addr = bob.default_subaddress();
     assert_ne!(
@@ -281,8 +285,18 @@ fn test_pq_fee_scales_with_outputs() {
     let fee_10 = calculate_pq_fee(2, 10);
     let fee_15 = calculate_pq_fee(2, 15);
 
-    assert!(fee_10 > fee_5, "fee_10={} should exceed fee_5={}", fee_10, fee_5);
-    assert!(fee_15 > fee_10, "fee_15={} should exceed fee_10={}", fee_15, fee_10);
+    assert!(
+        fee_10 > fee_5,
+        "fee_10={} should exceed fee_5={}",
+        fee_10,
+        fee_5
+    );
+    assert!(
+        fee_15 > fee_10,
+        "fee_15={} should exceed fee_10={}",
+        fee_15,
+        fee_10
+    );
 }
 
 #[test]
@@ -307,8 +321,10 @@ fn test_pq_transaction_fee_check() {
 
 #[test]
 fn test_pq_validation_ciphertext_size() {
-    use botho::consensus::{TransactionValidator, ValidationError};
-    use botho::ledger::ChainState;
+    use botho::{
+        consensus::{TransactionValidator, ValidationError},
+        ledger::ChainState,
+    };
     use std::sync::{Arc, RwLock};
 
     let chain_state = Arc::new(RwLock::new(ChainState::default()));
@@ -329,8 +345,10 @@ fn test_pq_validation_ciphertext_size() {
 
 #[test]
 fn test_pq_validation_signature_size() {
-    use botho::consensus::{TransactionValidator, ValidationError};
-    use botho::ledger::ChainState;
+    use botho::{
+        consensus::{TransactionValidator, ValidationError},
+        ledger::ChainState,
+    };
     use std::sync::{Arc, RwLock};
 
     let chain_state = Arc::new(RwLock::new(ChainState::default()));
@@ -347,8 +365,10 @@ fn test_pq_validation_signature_size() {
 
 #[test]
 fn test_pq_validation_input_limit() {
-    use botho::consensus::{TransactionValidator, ValidationError};
-    use botho::ledger::ChainState;
+    use botho::{
+        consensus::{TransactionValidator, ValidationError},
+        ledger::ChainState,
+    };
     use std::sync::{Arc, RwLock};
 
     let chain_state = Arc::new(RwLock::new(ChainState::default()));
@@ -575,8 +595,14 @@ fn test_pq_output_serialization_roundtrip() {
 
     // Compare all fields
     assert_eq!(output.classical.amount, deserialized.classical.amount);
-    assert_eq!(output.classical.target_key, deserialized.classical.target_key);
-    assert_eq!(output.classical.public_key, deserialized.classical.public_key);
+    assert_eq!(
+        output.classical.target_key,
+        deserialized.classical.target_key
+    );
+    assert_eq!(
+        output.classical.public_key,
+        deserialized.classical.public_key
+    );
     assert_eq!(output.pq_ciphertext, deserialized.pq_ciphertext);
     assert_eq!(output.pq_signing_pubkey, deserialized.pq_signing_pubkey);
 }
@@ -626,7 +652,9 @@ fn test_pq_transaction_large_serialization() {
     // Create a larger transaction (max inputs/outputs)
     let tx = QuantumPrivateTransaction::new(
         (0..16).map(|_| create_mock_pq_input()).collect(),
-        (0..16).map(|i| create_mock_pq_output(1_000_000 * (i as u64 + 1))).collect(),
+        (0..16)
+            .map(|i| create_mock_pq_output(1_000_000 * (i as u64 + 1)))
+            .collect(),
         1_000_000_000,
         100,
     );
@@ -635,7 +663,11 @@ fn test_pq_transaction_large_serialization() {
     let serialized = bincode::serialize(&tx).expect("Serialize large tx should succeed");
 
     // Should be substantial in size (~70KB for max tx)
-    assert!(serialized.len() > 50_000, "Large tx should be substantial: {} bytes", serialized.len());
+    assert!(
+        serialized.len() > 50_000,
+        "Large tx should be substantial: {} bytes",
+        serialized.len()
+    );
 
     // Deserialize
     let deserialized: QuantumPrivateTransaction =

@@ -9,11 +9,6 @@
 extern crate alloc;
 
 use alloc::{collections::BTreeSet, vec, vec::Vec};
-use bulletproofs_og::RangeProof;
-use curve25519_dalek::{
-    ristretto::{CompressedRistretto, RistrettoPoint},
-    traits::Identity,
-};
 use bth_common::HashSet;
 use bth_crypto_digestible::Digestible;
 use bth_crypto_ring_signature::{
@@ -22,6 +17,11 @@ use bth_crypto_ring_signature::{
 use bth_crypto_ring_signature_signer::{RingSigner, SignableInputRing};
 use bth_util_serial::prost::Message;
 use bth_util_zip_exact::zip_exact;
+use bulletproofs_og::RangeProof;
+use curve25519_dalek::{
+    ristretto::{CompressedRistretto, RistrettoPoint},
+    traits::Identity,
+};
 use rand_core::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
@@ -1011,7 +1011,8 @@ impl SignatureRctBulletproofs {
     /// 2. Output tags conserve mass (with decay) from the inputs
     ///
     /// # Arguments
-    /// * `input_ring_tags` - Committed tag vectors for each ring member of each input
+    /// * `input_ring_tags` - Committed tag vectors for each ring member of each
+    ///   input
     /// * `output_tags` - Committed tag vectors for each transaction output
     /// * `decay_rate` - The tag decay rate (parts per TAG_WEIGHT_SCALE)
     ///
@@ -1026,9 +1027,10 @@ impl SignatureRctBulletproofs {
     /// since the standard verify() method works with ReducedTxOuts.
     pub fn verify_extended_tag_signature(
         &self,
-        input_ring_tags: &[Vec<Vec<u8>>], // ring_index -> member_index -> serialized CommittedTagVector
-        output_tags: &[Vec<u8>],          // output_index -> serialized CommittedTagVector
-        _decay_rate: u32,                 // Reserved for full verification via mc-cluster-tax
+        input_ring_tags: &[Vec<Vec<u8>>], /* ring_index -> member_index -> serialized
+                                           * CommittedTagVector */
+        output_tags: &[Vec<u8>], // output_index -> serialized CommittedTagVector
+        _decay_rate: u32,        // Reserved for full verification via mc-cluster-tax
     ) -> Result<(), Error> {
         // Get the extended tag signature bytes
         let sig_bytes = self

@@ -165,10 +165,14 @@ mod tests {
 
     #[test]
     fn test_eth_address_validation() {
-        let valid = ChainAddress::new(Chain::Ethereum, "0x1234567890abcdef1234567890abcdef12345678");
+        let valid = ChainAddress::new(
+            Chain::Ethereum,
+            "0x1234567890abcdef1234567890abcdef12345678",
+        );
         assert!(valid.validate().is_ok());
 
-        let no_prefix = ChainAddress::new(Chain::Ethereum, "1234567890abcdef1234567890abcdef12345678");
+        let no_prefix =
+            ChainAddress::new(Chain::Ethereum, "1234567890abcdef1234567890abcdef12345678");
         assert!(no_prefix.validate().is_err());
 
         let too_short = ChainAddress::new(Chain::Ethereum, "0x1234");

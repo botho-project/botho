@@ -13,9 +13,6 @@
 //! RootIdentity is used for account key derivation.
 
 use crate::AccountKey;
-use core::hash::Hash;
-use curve25519_dalek::scalar::Scalar;
-use hkdf::SimpleHkdf;
 use bth_crypto_hashes::Blake2b256;
 use bth_crypto_keys::RistrettoPrivate;
 use bth_util_from_random::FromRandom;
@@ -25,6 +22,9 @@ use bth_util_repr_bytes::{
     derive_debug_and_display_hex_from_as_ref, derive_repr_bytes_from_as_ref_and_try_from,
     typenum::U32, LengthMismatch,
 };
+use core::hash::Hash;
+use curve25519_dalek::scalar::Scalar;
+use hkdf::SimpleHkdf;
 
 #[cfg(feature = "prost")]
 use prost::Message;

@@ -7,8 +7,7 @@ use std::time::Duration;
 use tokio::sync::broadcast;
 use tracing::{debug, info};
 
-use crate::db::Database;
-use crate::engine::ShutdownSignal;
+use crate::{db::Database, engine::ShutdownSignal};
 
 /// Ethereum watcher monitors the wBTH contract for burn events.
 #[allow(dead_code)]
@@ -42,8 +41,8 @@ impl EthereumWatcher {
                     info!("Ethereum watcher shutting down");
                     return Ok(());
                 }
-                Err(broadcast::error::TryRecvError::Empty) |
-                Err(broadcast::error::TryRecvError::Lagged(_)) => {
+                Err(broadcast::error::TryRecvError::Empty)
+                | Err(broadcast::error::TryRecvError::Lagged(_)) => {
                     // No shutdown signal, continue
                 }
             }

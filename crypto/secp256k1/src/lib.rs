@@ -25,6 +25,7 @@
 //! assert_eq!(signature.len(), 65); // r (32) + s (32) + v (1)
 //! ```
 
+use bip39::{Language, Mnemonic, Seed};
 use hmac::{Hmac, Mac};
 use k256::{
     ecdsa::{RecoveryId, Signature as K256Signature, SigningKey},
@@ -33,7 +34,6 @@ use k256::{
 };
 use sha2::Sha512;
 use sha3::{Digest, Keccak256};
-use bip39::{Language, Mnemonic, Seed};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 type HmacSha512 = Hmac<Sha512>;
@@ -79,8 +79,8 @@ impl Secp256k1Keypair {
     ///
     /// Uses the standard Ethereum derivation path: m/44'/60'/0'/0/{index}
     pub fn from_mnemonic(mnemonic: &str, password: &str, index: u32) -> Result<Self, Error> {
-        let mnemonic =
-            Mnemonic::from_phrase(mnemonic, Language::English).map_err(|_| Error::InvalidMnemonic)?;
+        let mnemonic = Mnemonic::from_phrase(mnemonic, Language::English)
+            .map_err(|_| Error::InvalidMnemonic)?;
 
         let seed = Seed::new(&mnemonic, password);
         Self::from_seed(seed.as_bytes(), index)
@@ -102,11 +102,11 @@ impl Secp256k1Keypair {
         // Derive path: m/44'/60'/0'/0/{index}
         // Note: ' means hardened (add 0x80000000)
         let path = [
-            ETH_PURPOSE | HARDENED,    // 44'
-            ETH_COIN_TYPE | HARDENED,  // 60'
-            HARDENED,                  // 0'
-            0,                         // 0 (not hardened)
-            index,                     // index (not hardened)
+            ETH_PURPOSE | HARDENED,   // 44'
+            ETH_COIN_TYPE | HARDENED, // 60'
+            HARDENED,                 // 0'
+            0,                        // 0 (not hardened)
+            index,                    // index (not hardened)
         ];
 
         for &child_index in &path {
@@ -158,7 +158,8 @@ impl Secp256k1Keypair {
     /// Get the Ethereum address derived from this keypair.
     ///
     /// The address is computed as the last 20 bytes of keccak256(public_key),
-    /// where public_key is the 64-byte uncompressed public key (without the 0x04 prefix).
+    /// where public_key is the 64-byte uncompressed public key (without the
+    /// 0x04 prefix).
     ///
     /// Returns a checksummed address string prefixed with "0x".
     pub fn eth_address(&self) -> String {
@@ -259,8 +260,7 @@ fn derive_child(
     parent_chain: &[u8; 32],
     index: u32,
 ) -> Result<([u8; 32], [u8; 32]), String> {
-    let mut mac =
-        HmacSha512::new_from_slice(parent_chain).expect("HMAC can take any size key");
+    let mut mac = HmacSha512::new_from_slice(parent_chain).expect("HMAC can take any size key");
 
     if index >= HARDENED {
         // Hardened derivation: use 0x00 || parent_key || index

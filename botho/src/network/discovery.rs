@@ -6,42 +6,49 @@
 //!
 //! This module implements version negotiation for protocol upgrades:
 //!
-//! - **Protocol Version**: Embedded in the libp2p identify protocol's agent_version
-//!   field as `botho/<version>/<block_version>`. This allows peers to discover
-//!   compatibility during connection establishment.
+//! - **Protocol Version**: Embedded in the libp2p identify protocol's
+//!   agent_version field as `botho/<version>/<block_version>`. This allows
+//!   peers to discover compatibility during connection establishment.
 //!
-//! - **Minimum Supported Version**: Defines the oldest protocol version this node
-//!   will connect to. Peers below this threshold receive a warning but are not
-//!   disconnected (graceful degradation).
+//! - **Minimum Supported Version**: Defines the oldest protocol version this
+//!   node will connect to. Peers below this threshold receive a warning but are
+//!   not disconnected (graceful degradation).
 //!
 //! - **Upgrade Announcements**: A dedicated gossipsub topic allows validators
 //!   and seed nodes to broadcast upcoming network upgrades.
 
 use libp2p::{
     gossipsub::{self, IdentTopic, MessageAuthenticity},
-    identify,
-    identity, noise,
+    identify, identity, noise,
     request_response::{self, InboundRequestId, OutboundRequestId, ResponseChannel},
     swarm::{NetworkBehaviour, SwarmEvent},
     tcp, yamux, Multiaddr, PeerId, Swarm,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
-use std::time::Duration;
+use std::{
+    collections::{HashMap, HashSet},
+    time::Duration,
+};
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
 // Rate limiting
 use bth_gossip::{GossipMessageType, PeerRateLimitConfig, PeerRateLimiter, RateLimitResult};
 
-use bth_transaction_types::{BlockVersion, MAX_BLOCK_SIZE, MAX_SCP_MESSAGE_SIZE, MAX_TRANSACTION_SIZE};
+use bth_transaction_types::{
+    BlockVersion, MAX_BLOCK_SIZE, MAX_SCP_MESSAGE_SIZE, MAX_TRANSACTION_SIZE,
+};
 
-use crate::block::Block;
-use crate::consensus::ScpMessage;
-use crate::network::compact_block::{BlockTxn, CompactBlock, GetBlockTxn};
-use crate::network::pex::{PeerSource, PexManager, PexMessage, MAX_PEX_MESSAGE_SIZE};
-use crate::network::sync::{create_sync_behaviour, SyncCodec, SyncRequest, SyncResponse};
-use crate::transaction::Transaction;
+use crate::{
+    block::Block,
+    consensus::ScpMessage,
+    network::{
+        compact_block::{BlockTxn, CompactBlock, GetBlockTxn},
+        pex::{PeerSource, PexManager, PexMessage, MAX_PEX_MESSAGE_SIZE},
+        sync::{create_sync_behaviour, SyncCodec, SyncRequest, SyncResponse},
+    },
+    transaction::Transaction,
+};
 
 /// Current protocol version string.
 /// Format: major.minor.patch
@@ -211,10 +218,7 @@ pub enum NetworkEvent {
     /// A compact block was received (for bandwidth-efficient relay)
     NewCompactBlock(CompactBlock),
     /// A request for missing transactions was received
-    GetBlockTxn {
-        peer: PeerId,
-        request: GetBlockTxn,
-    },
+    GetBlockTxn { peer: PeerId, request: GetBlockTxn },
     /// Missing transactions were received
     BlockTxn(BlockTxn),
     /// A new peer was discovered
@@ -273,7 +277,8 @@ pub struct NetworkDiscovery {
     event_rx: Option<mpsc::Receiver<NetworkEvent>>,
     /// Known peers
     peers: HashMap<PeerId, PeerTableEntry>,
-    /// Peers subscribed to compact blocks topic (support bandwidth optimization)
+    /// Peers subscribed to compact blocks topic (support bandwidth
+    /// optimization)
     compact_block_peers: HashSet<PeerId>,
     /// PEX manager for decentralized peer discovery
     pex_manager: PexManager,
@@ -287,7 +292,8 @@ impl NetworkDiscovery {
         Self::with_rate_limit_config(port, bootstrap_peers, PeerRateLimitConfig::default())
     }
 
-    /// Create a new network discovery service with custom rate limit configuration
+    /// Create a new network discovery service with custom rate limit
+    /// configuration
     pub fn with_rate_limit_config(
         port: u16,
         bootstrap_peers: Vec<String>,
@@ -302,7 +308,11 @@ impl NetworkDiscovery {
         info!("Local peer ID: {}", local_peer_id);
         info!(
             "Rate limiting: {} (limits: tx={}/min, blocks={}/min, scp={}/min)",
-            if rate_limit_config.enabled { "enabled" } else { "disabled" },
+            if rate_limit_config.enabled {
+                "enabled"
+            } else {
+                "disabled"
+            },
             rate_limit_config.message_limits.transactions_per_minute,
             rate_limit_config.message_limits.blocks_per_minute,
             rate_limit_config.message_limits.consensus_per_minute,
@@ -442,19 +452,17 @@ impl NetworkDiscovery {
 
                 // Configure identify protocol with version information
                 // Agent version format: "botho/<protocol_version>/<block_version>"
-                let agent_version = format!(
-                    "botho/{}/{}",
-                    PROTOCOL_VERSION,
-                    *BlockVersion::MAX
-                );
-                let identify_config = identify::Config::new(
-                    "/botho/id/1.0.0".to_string(),
-                    key.public(),
-                )
-                .with_agent_version(agent_version);
+                let agent_version = format!("botho/{}/{}", PROTOCOL_VERSION, *BlockVersion::MAX);
+                let identify_config =
+                    identify::Config::new("/botho/id/1.0.0".to_string(), key.public())
+                        .with_agent_version(agent_version);
                 let identify = identify::Behaviour::new(identify_config);
 
-                Ok(BothoBehaviour { gossipsub, sync, identify })
+                Ok(BothoBehaviour {
+                    gossipsub,
+                    sync,
+                    identify,
+                })
             })?
             .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(60)))
             .build();
@@ -465,7 +473,10 @@ impl NetworkDiscovery {
 
         // Subscribe to transactions topic
         let transactions_topic = IdentTopic::new(TRANSACTIONS_TOPIC);
-        swarm.behaviour_mut().gossipsub.subscribe(&transactions_topic)?;
+        swarm
+            .behaviour_mut()
+            .gossipsub
+            .subscribe(&transactions_topic)?;
 
         // Subscribe to SCP consensus topic
         let scp_topic = IdentTopic::new(SCP_TOPIC);
@@ -473,7 +484,10 @@ impl NetworkDiscovery {
 
         // Subscribe to compact blocks topic
         let compact_blocks_topic = IdentTopic::new(COMPACT_BLOCKS_TOPIC);
-        swarm.behaviour_mut().gossipsub.subscribe(&compact_blocks_topic)?;
+        swarm
+            .behaviour_mut()
+            .gossipsub
+            .subscribe(&compact_blocks_topic)?;
 
         // Subscribe to upgrade announcements topic
         let upgrade_topic = IdentTopic::new(UPGRADE_ANNOUNCEMENTS_TOPIC);
@@ -524,7 +538,10 @@ impl NetworkDiscovery {
     }
 
     /// Broadcast a transaction to the network
-    pub fn broadcast_transaction(swarm: &mut Swarm<BothoBehaviour>, tx: &Transaction) -> anyhow::Result<()> {
+    pub fn broadcast_transaction(
+        swarm: &mut Swarm<BothoBehaviour>,
+        tx: &Transaction,
+    ) -> anyhow::Result<()> {
         let topic = IdentTopic::new(TRANSACTIONS_TOPIC);
         let tx_bytes = bincode::serialize(tx)?;
 
@@ -534,12 +551,18 @@ impl NetworkDiscovery {
             .publish(topic, tx_bytes)
             .map_err(|e| anyhow::anyhow!("Failed to publish transaction: {:?}", e))?;
 
-        debug!("Broadcast transaction {} to network", hex::encode(&tx.hash()[0..8]));
+        debug!(
+            "Broadcast transaction {} to network",
+            hex::encode(&tx.hash()[0..8])
+        );
         Ok(())
     }
 
     /// Broadcast an SCP consensus message to the network
-    pub fn broadcast_scp(swarm: &mut Swarm<BothoBehaviour>, msg: &ScpMessage) -> anyhow::Result<()> {
+    pub fn broadcast_scp(
+        swarm: &mut Swarm<BothoBehaviour>,
+        msg: &ScpMessage,
+    ) -> anyhow::Result<()> {
         let topic = IdentTopic::new(SCP_TOPIC);
         let msg_bytes = bincode::serialize(msg)?;
 
@@ -675,12 +698,8 @@ impl NetworkDiscovery {
             .values()
             .filter_map(|entry| {
                 entry.address.as_ref().map(|addr| {
-                    let last_seen = current_time
-                        - entry
-                            .last_seen
-                            .elapsed()
-                            .as_secs()
-                            .min(current_time);
+                    let last_seen =
+                        current_time - entry.last_seen.elapsed().as_secs().min(current_time);
                     (entry.peer_id, addr.clone(), last_seen)
                 })
             })
@@ -718,10 +737,7 @@ impl NetworkDiscovery {
         // Only send full block if there are legacy peers
         if legacy_peers_exist {
             Self::broadcast_block(swarm, block)?;
-            debug!(
-                height = block.height(),
-                "Sent full block for legacy peers"
-            );
+            debug!(height = block.height(), "Sent full block for legacy peers");
         } else {
             debug!(
                 height = block.height(),
@@ -764,9 +780,10 @@ impl NetworkDiscovery {
         event: SwarmEvent<BothoBehaviourEvent>,
     ) -> Option<NetworkEvent> {
         match event {
-            SwarmEvent::Behaviour(BothoBehaviourEvent::Gossipsub(
-                gossipsub::Event::Message { message, .. },
-            )) => {
+            SwarmEvent::Behaviour(BothoBehaviourEvent::Gossipsub(gossipsub::Event::Message {
+                message,
+                ..
+            })) => {
                 // Determine which topic this message is from
                 let topic = message.topic.as_str();
 
@@ -865,7 +882,10 @@ impl NetworkDiscovery {
                     // Try to deserialize as an SCP message
                     match bincode::deserialize::<ScpMessage>(&message.data) {
                         Ok(scp_msg) => {
-                            debug!(slot = scp_msg.slot_index, "Received SCP message from network");
+                            debug!(
+                                slot = scp_msg.slot_index,
+                                "Received SCP message from network"
+                            );
                             return Some(NetworkEvent::ScpMessage(scp_msg));
                         }
                         Err(e) => {
@@ -1066,9 +1086,11 @@ impl NetworkDiscovery {
             )) => None,
 
             // Handle identify protocol events for version tracking
-            SwarmEvent::Behaviour(BothoBehaviourEvent::Identify(
-                identify::Event::Received { peer_id, info, .. },
-            )) => {
+            SwarmEvent::Behaviour(BothoBehaviourEvent::Identify(identify::Event::Received {
+                peer_id,
+                info,
+                ..
+            })) => {
                 // Parse the agent_version to extract protocol version
                 let peer_version = ProtocolVersion::parse(&info.agent_version);
                 let min_version = ProtocolVersion::parse(MIN_SUPPORTED_PROTOCOL_VERSION);
@@ -1114,7 +1136,9 @@ impl NetworkDiscovery {
             }
 
             SwarmEvent::Behaviour(BothoBehaviourEvent::Identify(
-                identify::Event::Sent { .. } | identify::Event::Pushed { .. } | identify::Event::Error { .. },
+                identify::Event::Sent { .. }
+                | identify::Event::Pushed { .. }
+                | identify::Event::Error { .. },
             )) => None,
 
             SwarmEvent::NewListenAddr { address, .. } => {

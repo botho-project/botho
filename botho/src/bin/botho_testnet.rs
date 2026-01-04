@@ -227,11 +227,7 @@ fn cmd_start(
     // Check for existing testnet
     if let Some(state) = TestnetState::load()? {
         // Check if any nodes are still running
-        let running = state
-            .nodes
-            .iter()
-            .filter(|n| is_node_running(n))
-            .count();
+        let running = state.nodes.iter().filter(|n| is_node_running(n)).count();
         if running > 0 {
             return Err(anyhow!(
                 "Testnet already running with {} nodes. Use 'stop' first.",
@@ -246,7 +242,11 @@ fn cmd_start(
     }
 
     println!("Starting {} node testnet...", node_count);
-    println!("  Base port: {} (gossip), {} (RPC)", base_port, base_port + RPC_PORT_OFFSET);
+    println!(
+        "  Base port: {} (gossip), {} (RPC)",
+        base_port,
+        base_port + RPC_PORT_OFFSET
+    );
     println!("  Data dir: {}", TESTNET_DIR);
 
     // Create testnet directory
@@ -380,8 +380,10 @@ fn cmd_stop(verbose: bool) -> Result<()> {
             // Send SIGTERM
             #[cfg(unix)]
             {
-                use nix::sys::signal::{kill, Signal};
-                use nix::unistd::Pid;
+                use nix::{
+                    sys::signal::{kill, Signal},
+                    unistd::Pid,
+                };
                 let _ = kill(Pid::from_raw(pid as i32), Signal::SIGTERM);
             }
 
@@ -407,8 +409,10 @@ fn cmd_stop(verbose: bool) -> Result<()> {
                 }
                 #[cfg(unix)]
                 {
-                    use nix::sys::signal::{kill, Signal};
-                    use nix::unistd::Pid;
+                    use nix::{
+                        sys::signal::{kill, Signal},
+                        unistd::Pid,
+                    };
                     let _ = kill(Pid::from_raw(pid as i32), Signal::SIGKILL);
                 }
             }
@@ -576,8 +580,10 @@ fn cmd_kill_node(node_idx: usize, verbose: bool) -> Result<()> {
 
         #[cfg(unix)]
         {
-            use nix::sys::signal::{kill, Signal};
-            use nix::unistd::Pid;
+            use nix::{
+                sys::signal::{kill, Signal},
+                unistd::Pid,
+            };
             kill(Pid::from_raw(pid as i32), Signal::SIGKILL)?;
         }
 
@@ -693,11 +699,7 @@ fn sha256_hash(data: &[u8]) -> [u8; 32] {
 }
 
 /// Create node config TOML
-fn create_node_config(
-    node: &NodeState,
-    all_nodes: &[NodeState],
-    mnemonic: &str,
-) -> Result<String> {
+fn create_node_config(node: &NodeState, all_nodes: &[NodeState], mnemonic: &str) -> Result<String> {
     // Build bootstrap peers list (all other nodes)
     let bootstrap_peers: Vec<String> = all_nodes
         .iter()
@@ -732,12 +734,7 @@ min_peers = 1
 enabled = true
 threads = 1
 "#,
-        node.index,
-        mnemonic,
-        node.gossip_port,
-        node.rpc_port,
-        bootstrap_peers,
-        threshold
+        node.index, mnemonic, node.gossip_port, node.rpc_port, bootstrap_peers, threshold
     );
 
     Ok(config)
@@ -807,8 +804,7 @@ fn read_pid(pid_file: &Path) -> Option<u32> {
 fn is_process_running(pid: u32) -> bool {
     #[cfg(unix)]
     {
-        use nix::sys::signal::kill;
-        use nix::unistd::Pid;
+        use nix::{sys::signal::kill, unistd::Pid};
         // Sending signal 0 checks if process exists
         kill(Pid::from_raw(pid as i32), None).is_ok()
     }
@@ -898,10 +894,7 @@ fn wait_for_consensus(nodes: &[NodeState], timeout_secs: u64) -> Result<()> {
 
             // Allow small variance (1 block difference is OK)
             if max - min <= 1 {
-                println!(
-                    "Consensus achieved! Block height: {}-{}",
-                    min, max
-                );
+                println!("Consensus achieved! Block height: {}-{}", min, max);
                 return Ok(());
             }
         }

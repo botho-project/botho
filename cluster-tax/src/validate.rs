@@ -116,11 +116,13 @@ impl Default for CommittedTagConfig {
 // Phase 2/3: Complete Committed Transaction Validation
 // ============================================================================
 
-use crate::crypto::{
-    CommittedFeeProof, CommittedFeeProofVerifier, TagConservationProof, TagConservationVerifier,
+use crate::{
+    crypto::{
+        CommittedFeeProof, CommittedFeeProofVerifier, TagConservationProof, TagConservationVerifier,
+    },
+    fee_curve::ZkFeeCurve,
+    ClusterId,
 };
-use crate::fee_curve::ZkFeeCurve;
-use crate::ClusterId;
 use std::collections::HashMap;
 
 /// Complete validation result for Phase 2 committed transactions.

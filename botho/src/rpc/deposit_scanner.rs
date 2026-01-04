@@ -1,13 +1,13 @@
 //! Background deposit scanner for registered view keys.
 //!
 //! This module provides a background task that scans new blocks for outputs
-//! matching registered exchange view keys, pushing deposit events via WebSocket.
+//! matching registered exchange view keys, pushing deposit events via
+//! WebSocket.
 
 use std::sync::{Arc, RwLock};
 
+use super::{view_keys::ViewKeyRegistry, websocket::WsBroadcaster};
 use crate::ledger::Ledger;
-use super::view_keys::ViewKeyRegistry;
-use super::websocket::WsBroadcaster;
 
 /// Background deposit scanner.
 ///
@@ -70,7 +70,11 @@ impl DepositScanner {
         let block = match ledger.get_block(block_height) {
             Ok(b) => b,
             Err(e) => {
-                tracing::error!("Failed to get block {} for deposit scanning: {}", block_height, e);
+                tracing::error!(
+                    "Failed to get block {} for deposit scanning: {}",
+                    block_height,
+                    e
+                );
                 return ScanResult::default();
             }
         };
@@ -92,10 +96,9 @@ impl DepositScanner {
                 result.outputs_scanned += 1;
 
                 // Scan against all registered view keys
-                let matches = self.view_key_registry.scan_output(
-                    &output.target_key,
-                    &output.public_key,
-                );
+                let matches = self
+                    .view_key_registry
+                    .scan_output(&output.target_key, &output.public_key);
 
                 for (view_key_id, subaddress_index) in matches {
                     let confirmations = chain_height.saturating_sub(block_height) + 1;

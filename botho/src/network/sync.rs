@@ -13,13 +13,15 @@ use libp2p::{
     PeerId, StreamProtocol,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::io;
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashMap,
+    io,
+    time::{Duration, Instant},
+};
 use tracing::{debug, warn};
 
-use crate::block::Block;
 use super::reputation::ReputationManager;
+use crate::block::Block;
 
 // ============================================================================
 // DDoS Protection Constants
@@ -191,8 +193,7 @@ impl Codec for SyncCodec {
             }
 
             buf.truncate(total_read);
-            bincode::deserialize(&buf)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+            bincode::deserialize(&buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
         })
     }
 
@@ -232,8 +233,7 @@ impl Codec for SyncCodec {
             }
 
             buf.truncate(total_read);
-            bincode::deserialize(&buf)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+            bincode::deserialize(&buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
         })
     }
 
@@ -242,9 +242,7 @@ impl Codec for SyncCodec {
         _protocol: &'life1 Self::Protocol,
         io: &'life2 mut T,
         req: Self::Request,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = io::Result<()>> + Send + 'async_trait>,
-    >
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = io::Result<()>> + Send + 'async_trait>>
     where
         T: AsyncWrite + Unpin + Send + 'async_trait,
         'life0: 'async_trait,
@@ -265,9 +263,7 @@ impl Codec for SyncCodec {
         _protocol: &'life1 Self::Protocol,
         io: &'life2 mut T,
         resp: Self::Response,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = io::Result<()>> + Send + 'async_trait>,
-    >
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = io::Result<()>> + Send + 'async_trait>>
     where
         T: AsyncWrite + Unpin + Send + 'async_trait,
         'life0: 'async_trait,
@@ -423,7 +419,12 @@ impl ChainSyncManager {
     }
 
     /// Handle blocks response from a peer
-    pub fn on_blocks(&mut self, peer: &PeerId, blocks: Vec<Block>, has_more: bool) -> Option<SyncAction> {
+    pub fn on_blocks(
+        &mut self,
+        peer: &PeerId,
+        blocks: Vec<Block>,
+        has_more: bool,
+    ) -> Option<SyncAction> {
         // Record successful response in reputation
         self.reputation.response_received(peer);
 
@@ -497,7 +498,8 @@ impl ChainSyncManager {
     ///
     /// Selection criteria (in order of priority):
     /// 1. Exclude banned peers (< 25% success rate)
-    /// 2. Among peers at similar height (within 10 blocks), prefer better reputation
+    /// 2. Among peers at similar height (within 10 blocks), prefer better
+    ///    reputation
     /// 3. For peers at very different heights, prefer higher height
     fn best_peer(&self) -> Option<(PeerId, &PeerStatus)> {
         // Filter out banned peers
@@ -597,7 +599,10 @@ impl ChainSyncManager {
                 None
             }
 
-            SyncState::Downloading { peer, target_height } => {
+            SyncState::Downloading {
+                peer,
+                target_height,
+            } => {
                 if self.download_height >= *target_height {
                     self.state = SyncState::Synced;
                     return Some(SyncAction::Synced);
@@ -644,8 +649,7 @@ impl ChainSyncManager {
 pub fn create_sync_behaviour() -> request_response::Behaviour<SyncCodec> {
     let protocols = [(StreamProtocol::new(SYNC_PROTOCOL), ProtocolSupport::Full)];
 
-    let config = request_response::Config::default()
-        .with_request_timeout(REQUEST_TIMEOUT);
+    let config = request_response::Config::default().with_request_timeout(REQUEST_TIMEOUT);
 
     request_response::Behaviour::new(protocols, config)
 }
@@ -730,7 +734,10 @@ mod tests {
 
         assert!(matches!(
             manager.state(),
-            SyncState::Downloading { target_height: 100, .. }
+            SyncState::Downloading {
+                target_height: 100,
+                ..
+            }
         ));
     }
 
@@ -814,7 +821,10 @@ mod tests {
         let decoded: SyncRequest = bincode::deserialize(&bytes).unwrap();
 
         match decoded {
-            SyncRequest::GetBlocks { start_height, count } => {
+            SyncRequest::GetBlocks {
+                start_height,
+                count,
+            } => {
                 assert_eq!(start_height, 100);
                 assert_eq!(count, 50);
             }
@@ -1085,7 +1095,10 @@ mod tests {
 
         // Ban bad_peer
         for _ in 0..4 {
-            manager.reputation_mut().get_or_create(&bad_peer).record_failure();
+            manager
+                .reputation_mut()
+                .get_or_create(&bad_peer)
+                .record_failure();
         }
 
         // Reset and try again

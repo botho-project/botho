@@ -6,11 +6,13 @@
 //! - Minting transactions (PoW-based coinbase rewards)
 //! - Transfer transactions (UTXO-based value transfers)
 
-use crate::block::{calculate_block_reward, MintingTx};
-use crate::ledger::ChainState;
-use crate::transaction::Transaction;
 #[cfg(feature = "pq")]
 use crate::transaction_pq::QuantumPrivateTransaction;
+use crate::{
+    block::{calculate_block_reward, MintingTx},
+    ledger::ChainState,
+    transaction::Transaction,
+};
 use std::sync::{Arc, RwLock};
 use tracing::{debug, warn};
 
@@ -22,7 +24,10 @@ pub enum ValidationError {
     WrongPrevBlockHash,
     WrongBlockHeight,
     WrongDifficulty,
-    WrongReward { expected: u64, got: u64 },
+    WrongReward {
+        expected: u64,
+        got: u64,
+    },
     TimestampTooFarInFuture,
     TimestampBeforeParent,
 
@@ -34,7 +39,11 @@ pub enum ValidationError {
     InputNotFound,
     InputAlreadySpent,
     InvalidSignature,
-    InsufficientFunds { input: u64, output: u64, fee: u64 },
+    InsufficientFunds {
+        input: u64,
+        output: u64,
+        fee: u64,
+    },
     StaleTransaction,
 
     // Quantum-private transaction errors
@@ -117,10 +126,7 @@ impl TransactionValidator {
             .read()
             .map_err(|_| ValidationError::ChainStateUnavailable)?;
 
-        debug!(
-            height = tx.block_height,
-            "Validating minting transaction"
-        );
+        debug!(height = tx.block_height, "Validating minting transaction");
 
         // Check cheap validations first before expensive PoW verification
 
@@ -511,7 +517,7 @@ mod tests {
         let validator = TransactionValidator::new(mock_chain_state());
 
         let tx = MintingTx {
-            block_height: 11, // Correct - chain height is 10
+            block_height: 11,        // Correct - chain height is 10
             reward: 600_000_000_000, // Tail emission
             minter_view_key: [0u8; 32],
             minter_spend_key: [0u8; 32],
@@ -534,7 +540,8 @@ mod tests {
 
     #[test]
     fn test_timestamp_check_safety() {
-        // Test that current_timestamp() helper doesn't panic even with system time issues
+        // Test that current_timestamp() helper doesn't panic even with system time
+        // issues
         let ts = current_timestamp();
         // Should return a reasonable value (not panic)
         assert!(ts > 0 || ts == 0); // Valid even if system clock is weird
@@ -567,13 +574,20 @@ mod tests {
         let err = ValidationError::WrongBlockHeight;
         assert_eq!(format!("{}", err), "Wrong block height");
 
-        let err = ValidationError::WrongReward { expected: 100, got: 200 };
+        let err = ValidationError::WrongReward {
+            expected: 100,
+            got: 200,
+        };
         assert!(format!("{}", err).contains("Wrong reward"));
 
         let err = ValidationError::TimestampTooFarInFuture;
         assert!(format!("{}", err).contains("future"));
 
-        let err = ValidationError::InsufficientFunds { input: 100, output: 80, fee: 30 };
+        let err = ValidationError::InsufficientFunds {
+            input: 100,
+            output: 80,
+            fee: 30,
+        };
         assert!(format!("{}", err).contains("Insufficient funds"));
 
         let err = ValidationError::InvalidSignature;
@@ -602,11 +616,13 @@ mod tests {
     #[cfg(feature = "pq")]
     mod pq_tests {
         use super::*;
-        use crate::transaction_pq::{
-            QuantumPrivateTransaction, QuantumPrivateTxInput, QuantumPrivateTxOutput,
-            PQ_CIPHERTEXT_SIZE, PQ_SIGNATURE_SIZE, PQ_SIGNING_PUBKEY_SIZE,
+        use crate::{
+            transaction::TxOutput,
+            transaction_pq::{
+                QuantumPrivateTransaction, QuantumPrivateTxInput, QuantumPrivateTxOutput,
+                PQ_CIPHERTEXT_SIZE, PQ_SIGNATURE_SIZE, PQ_SIGNING_PUBKEY_SIZE,
+            },
         };
-        use crate::transaction::TxOutput;
         use bth_transaction_types::ClusterTagVector;
 
         fn mock_pq_output() -> QuantumPrivateTxOutput {

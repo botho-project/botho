@@ -429,7 +429,8 @@ fn check_unique<T: Eq + core::hash::Hash>(
 
 // =========== Cluster Tag Validation ===========
 
-/// Validate that cluster tags exist on a TxOut (required from block version 5+).
+/// Validate that cluster tags exist on a TxOut (required from block version
+/// 5+).
 pub fn validate_cluster_tags_exist(tx_out: &TxOut) -> TransactionValidationResult<()> {
     match &tx_out.cluster_tags {
         Some(tags) if tags.is_valid() => Ok(()),
@@ -438,7 +439,8 @@ pub fn validate_cluster_tags_exist(tx_out: &TxOut) -> TransactionValidationResul
     }
 }
 
-/// Validate that cluster tags do not exist on a TxOut (for older block versions).
+/// Validate that cluster tags do not exist on a TxOut (for older block
+/// versions).
 pub fn validate_that_no_cluster_tags_exist(tx_out: &TxOut) -> TransactionValidationResult<()> {
     if tx_out.cluster_tags.is_some() {
         return Err(TransactionValidationError::ClusterTagsNotAllowed);
@@ -502,9 +504,7 @@ pub fn validate_cluster_tag_inheritance(
 
         if actual > expected + tolerance {
             return Err(TransactionValidationError::ClusterTagInflation(
-                cluster.0,
-                actual,
-                expected,
+                cluster.0, actual, expected,
             ));
         }
     }
@@ -513,9 +513,9 @@ pub fn validate_cluster_tag_inheritance(
     for (cluster, &output_mass) in &output_masses {
         if !input_masses.contains_key(cluster) && output_mass > 0 {
             // New cluster appeared in outputs that wasn't in inputs
-            // This is only allowed if it came from background (no tags on inputs)
-            // For now, we allow this since background can become attributed
-            // through proportional distribution
+            // This is only allowed if it came from background (no tags on
+            // inputs) For now, we allow this since background can
+            // become attributed through proportional distribution
         }
     }
 
@@ -525,7 +525,8 @@ pub fn validate_cluster_tag_inheritance(
 /// Configuration for progressive fee computation.
 #[derive(Clone, Debug)]
 pub struct ProgressiveFeeConfig {
-    /// Base fee rate in basis points (applied to background/unattributed value).
+    /// Base fee rate in basis points (applied to background/unattributed
+    /// value).
     pub background_rate_bps: u32,
     /// Maximum fee rate in basis points.
     pub max_rate_bps: u32,
@@ -536,9 +537,9 @@ pub struct ProgressiveFeeConfig {
 impl Default for ProgressiveFeeConfig {
     fn default() -> Self {
         Self {
-            background_rate_bps: 10,  // 0.1%
-            max_rate_bps: 1000,       // 10%
-            steepness: 10_000_000,    // 10 million
+            background_rate_bps: 10, // 0.1%
+            max_rate_bps: 1000,      // 10%
+            steepness: 10_000_000,   // 10 million
         }
     }
 }

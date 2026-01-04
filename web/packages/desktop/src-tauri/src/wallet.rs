@@ -1,22 +1,25 @@
 //! Wallet Commands for Tauri
 //!
-//! Handles transaction building, signing, and submission for the desktop wallet.
-//! Private keys never leave this module - all signing happens locally.
+//! Handles transaction building, signing, and submission for the desktop
+//! wallet. Private keys never leave this module - all signing happens locally.
 //!
 //! SECURITY: For NEW wallets, mnemonics are generated in Rust and only briefly
-//! exposed to JavaScript for display. The mnemonic is NEVER accepted back from JS.
-//! For IMPORTED wallets, the mnemonic must cross the JS boundary (unavoidable for restore).
-//! All sensitive key material is automatically zeroized when the wallet is locked.
+//! exposed to JavaScript for display. The mnemonic is NEVER accepted back from
+//! JS. For IMPORTED wallets, the mnemonic must cross the JS boundary
+//! (unavoidable for restore). All sensitive key material is automatically
+//! zeroized when the wallet is locked.
 //!
 //! SECURITY: Wallet unlock attempts are rate-limited with exponential backoff
 //! to prevent brute-force password attacks. After 5 consecutive failures, the
 //! wallet is locked out for increasing durations.
 
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-use tokio::sync::Mutex;
 use rand::seq::SliceRandom;
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    time::{Duration, Instant},
+};
+use tokio::sync::Mutex;
 
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
@@ -24,15 +27,14 @@ use tauri::State;
 
 use std::path::PathBuf;
 
-use botho_wallet::keys::WalletKeys;
-use botho_wallet::rpc_pool::RpcPool;
-use botho_wallet::discovery::NodeDiscovery;
-use botho_wallet::storage::EncryptedWallet;
-use botho_wallet::transaction::{
-    sync_wallet as do_sync_wallet,
-    TransactionBuilder,
-    OwnedUtxo,
-    PICOCREDITS_PER_CAD,
+use botho_wallet::{
+    discovery::NodeDiscovery,
+    keys::WalletKeys,
+    rpc_pool::RpcPool,
+    storage::EncryptedWallet,
+    transaction::{
+        sync_wallet as do_sync_wallet, OwnedUtxo, TransactionBuilder, PICOCREDITS_PER_CAD,
+    },
 };
 
 /// Picocredits per BTH (same as CAD internally)
@@ -43,8 +45,8 @@ const SESSION_TIMEOUT_MINS: u64 = 15;
 
 /// An unlocked wallet session holding decrypted keys in Rust memory.
 ///
-/// SECURITY: WalletKeys uses Zeroizing<String> internally, ensuring the mnemonic
-/// is securely zeroed when the session is dropped (locked).
+/// SECURITY: WalletKeys uses Zeroizing<String> internally, ensuring the
+/// mnemonic is securely zeroed when the session is dropped (locked).
 struct WalletSession {
     /// Decrypted wallet keys - auto-zeroized on drop
     keys: WalletKeys,
@@ -76,9 +78,9 @@ impl WalletSession {
 
 /// Pending wallet creation - holds mnemonic generated in Rust for verification.
 ///
-/// SECURITY: This allows new wallet creation without accepting mnemonic from JS.
-/// The mnemonic is generated in Rust, displayed to user, and user verifies by
-/// providing specific words at random positions.
+/// SECURITY: This allows new wallet creation without accepting mnemonic from
+/// JS. The mnemonic is generated in Rust, displayed to user, and user verifies
+/// by providing specific words at random positions.
 struct PendingWallet {
     /// Generated wallet keys (contains Zeroizing mnemonic)
     keys: WalletKeys,
@@ -186,14 +188,16 @@ impl UnlockAttemptState {
         }
 
         // Exponential backoff: 2^(n-1) seconds, capped at MAX_LOCKOUT_SECS
-        let secs = (1u64 << (self.failed_attempts - 1).min(10))
-            .min(MAX_LOCKOUT_SECS);
+        let secs = (1u64 << (self.failed_attempts - 1).min(10)).min(MAX_LOCKOUT_SECS);
         Duration::from_secs(secs)
     }
 
     /// Record a failed unlock attempt
     fn record_failure(&mut self) {
-        self.failed_attempts = self.failed_attempts.saturating_add(1).min(MAX_FAILED_ATTEMPTS);
+        self.failed_attempts = self
+            .failed_attempts
+            .saturating_add(1)
+            .min(MAX_FAILED_ATTEMPTS);
         self.last_failed_at = Some(Instant::now());
 
         // Apply exponential backoff lockout
@@ -211,7 +215,10 @@ impl UnlockAttemptState {
     /// Record a successful unlock (resets all counters)
     fn record_success(&mut self) {
         if self.failed_attempts > 0 {
-            log::info!("Wallet unlocked successfully after {} failed attempts", self.failed_attempts);
+            log::info!(
+                "Wallet unlocked successfully after {} failed attempts",
+                self.failed_attempts
+            );
         }
         self.failed_attempts = 0;
         self.last_failed_at = None;
@@ -242,7 +249,8 @@ impl UnlockRateLimiter {
     }
 
     /// Check if unlock is allowed for the given wallet path.
-    /// Returns Ok(()) if allowed, Err with message and remaining lockout time if not.
+    /// Returns Ok(()) if allowed, Err with message and remaining lockout time
+    /// if not.
     fn check_allowed(&self, path: &PathBuf) -> Result<(), (String, u64)> {
         if let Some(state) = self.states.get(path) {
             if state.is_locked_out() {
@@ -322,7 +330,9 @@ impl WalletCommands {
                     Ok(session.keys.clone())
                 }
             }
-            None => Err(anyhow!("Wallet is locked. Please unlock your wallet first.")),
+            None => Err(anyhow!(
+                "Wallet is locked. Please unlock your wallet first."
+            )),
         }
     }
 }
@@ -452,7 +462,9 @@ async fn send_transaction_internal(
     let recipient = parse_recipient_address(&params.recipient)?;
 
     // 3. Parse amount
-    let amount: u64 = params.amount.parse()
+    let amount: u64 = params
+        .amount
+        .parse()
         .map_err(|_| anyhow!("Invalid amount format"))?;
 
     if amount == 0 {
@@ -464,12 +476,14 @@ async fn send_transaction_internal(
     discovery.add_bootstrap_node(format!("{}:{}", params.node_host, params.node_port).parse()?);
 
     let mut rpc = RpcPool::new(discovery);
-    rpc.connect().await
+    rpc.connect()
+        .await
         .map_err(|e| anyhow!("Failed to connect to node: {}", e))?;
 
     // 5. Sync wallet to get UTXOs
     let from_height = *state.sync_height.lock().await;
-    let (utxos, sync_height) = do_sync_wallet(&mut rpc, &keys, from_height).await
+    let (utxos, sync_height) = do_sync_wallet(&mut rpc, &keys, from_height)
+        .await
         .map_err(|e| anyhow!("Failed to sync wallet: {}", e))?;
 
     // Combine with cached UTXOs
@@ -479,15 +493,18 @@ async fn send_transaction_internal(
 
     // 6. Estimate or use custom fee
     let fee = if let Some(custom_fee_str) = params.custom_fee {
-        custom_fee_str.parse::<u64>()
+        custom_fee_str
+            .parse::<u64>()
             .map_err(|_| anyhow!("Invalid custom fee format"))?
     } else {
         // Estimate based on privacy level and transaction size
         let estimated_size = match params.privacy_level {
-            PrivacyLevel::Standard => 4000,  // ~4KB for ML-DSA signature
-            PrivacyLevel::Private => 22000,  // ~22KB for LION ring signature
+            PrivacyLevel::Standard => 2000, // ~2KB for ML-DSA minting signature
+            PrivacyLevel::Private => 4000,  // ~4KB for CLSAG ring signature (ring=20)
         };
-        rpc.estimate_fee("medium").await.unwrap_or(estimated_size as u64 * 100)
+        rpc.estimate_fee("medium")
+            .await
+            .unwrap_or(estimated_size as u64 * 100)
     };
 
     // 7. Build and sign transaction
@@ -495,7 +512,8 @@ async fn send_transaction_internal(
 
     // Check balance
     let balance = builder.balance();
-    let total_needed = amount.checked_add(fee)
+    let total_needed = amount
+        .checked_add(fee)
         .ok_or_else(|| anyhow!("Amount overflow"))?;
 
     if balance < total_needed {
@@ -508,21 +526,23 @@ async fn send_transaction_internal(
 
     // Build transaction based on privacy level
     let tx = match params.privacy_level {
-        PrivacyLevel::Standard => {
-            builder.build_transfer(&recipient, amount, fee)
-                .map_err(|e| anyhow!("Failed to build transaction: {}", e))?
-        }
+        PrivacyLevel::Standard => builder
+            .build_transfer(&recipient, amount, fee)
+            .map_err(|e| anyhow!("Failed to build transaction: {}", e))?,
         PrivacyLevel::Private => {
             // For private transactions, we would use ring signatures
             // For now, fall back to standard (private tx requires more infrastructure)
             log::warn!("Private transactions not yet fully implemented, using standard");
-            builder.build_transfer(&recipient, amount, fee)
+            builder
+                .build_transfer(&recipient, amount, fee)
                 .map_err(|e| anyhow!("Failed to build transaction: {}", e))?
         }
     };
 
     // 8. Submit transaction
-    let tx_hash = rpc.submit_transaction(&tx.to_hex()).await
+    let tx_hash = rpc
+        .submit_transaction(&tx.to_hex())
+        .await
         .map_err(|e| anyhow!("Failed to submit transaction: {}", e))?;
 
     log::info!("Transaction submitted: {}", tx_hash);
@@ -567,12 +587,14 @@ async fn sync_wallet_internal(
     discovery.add_bootstrap_node(format!("{}:{}", params.node_host, params.node_port).parse()?);
 
     let mut rpc = RpcPool::new(discovery);
-    rpc.connect().await
+    rpc.connect()
+        .await
         .map_err(|e| anyhow!("Failed to connect to node: {}", e))?;
 
     // Sync from specified height
     let from_height = params.from_height.unwrap_or(0);
-    let (utxos, sync_height) = do_sync_wallet(&mut rpc, &keys, from_height).await
+    let (utxos, sync_height) = do_sync_wallet(&mut rpc, &keys, from_height)
+        .await
         .map_err(|e| anyhow!("Failed to sync wallet: {}", e))?;
 
     // Calculate balance
@@ -622,12 +644,14 @@ async fn get_balance_internal(
     discovery.add_bootstrap_node(format!("{}:{}", params.node_host, params.node_port).parse()?);
 
     let mut rpc = RpcPool::new(discovery);
-    rpc.connect().await
+    rpc.connect()
+        .await
         .map_err(|e| anyhow!("Failed to connect to node: {}", e))?;
 
     // Sync from last known height
     let from_height = *state.sync_height.lock().await;
-    let (utxos, sync_height) = do_sync_wallet(&mut rpc, &keys, from_height).await
+    let (utxos, sync_height) = do_sync_wallet(&mut rpc, &keys, from_height)
+        .await
         .map_err(|e| anyhow!("Failed to sync wallet: {}", e))?;
 
     // Merge with cached UTXOs
@@ -674,11 +698,12 @@ fn parse_recipient_address(address: &str) -> Result<bth_account_keys::PublicAddr
         for line in address.lines() {
             let line = line.trim();
             if let Some(hex_str) = line.strip_prefix("view:") {
-                view_bytes = Some(hex::decode(hex_str.trim())
-                    .map_err(|_| anyhow!("Invalid view key hex"))?);
+                view_bytes =
+                    Some(hex::decode(hex_str.trim()).map_err(|_| anyhow!("Invalid view key hex"))?);
             } else if let Some(hex_str) = line.strip_prefix("spend:") {
-                spend_bytes = Some(hex::decode(hex_str.trim())
-                    .map_err(|_| anyhow!("Invalid spend key hex"))?);
+                spend_bytes = Some(
+                    hex::decode(hex_str.trim()).map_err(|_| anyhow!("Invalid spend key hex"))?,
+                );
             }
         }
 
@@ -755,8 +780,9 @@ pub struct SessionStatusResult {
 /// Decrypts the wallet file and caches the keys in Rust memory.
 /// The mnemonic NEVER leaves Rust - only the public address is returned.
 ///
-/// SECURITY: Rate-limited with exponential backoff to prevent brute-force attacks.
-/// After each failed attempt, the lockout duration doubles (1s, 2s, 4s, ... up to 5min).
+/// SECURITY: Rate-limited with exponential backoff to prevent brute-force
+/// attacks. After each failed attempt, the lockout duration doubles (1s, 2s,
+/// 4s, ... up to 5min).
 #[tauri::command]
 pub async fn unlock_wallet(
     state: State<'_, WalletCommands>,
@@ -823,11 +849,12 @@ async fn unlock_wallet_internal(
     }
 
     // Load and decrypt
-    let wallet = EncryptedWallet::load(path)
-        .map_err(|e| anyhow!("Failed to load wallet file: {}", e))?;
+    let wallet =
+        EncryptedWallet::load(path).map_err(|e| anyhow!("Failed to load wallet file: {}", e))?;
 
     // SECURITY: Use generic error message to avoid leaking password correctness
-    let mnemonic = wallet.decrypt(&params.password)
+    let mnemonic = wallet
+        .decrypt(&params.password)
         .map_err(|_| anyhow!("Wallet unlock failed"))?;
 
     // Derive keys from mnemonic (mnemonic is Zeroizing<String>)
@@ -862,9 +889,7 @@ async fn unlock_wallet_internal(
 /// Drops the cached keys, which triggers Zeroizing to overwrite
 /// the mnemonic memory with zeros.
 #[tauri::command]
-pub async fn lock_wallet(
-    state: State<'_, WalletCommands>,
-) -> Result<bool, String> {
+pub async fn lock_wallet(state: State<'_, WalletCommands>) -> Result<bool, String> {
     let mut session_guard = state.session.lock().await;
 
     if session_guard.is_some() {
@@ -959,11 +984,11 @@ async fn generate_mnemonic_internal(
     state: &State<'_, WalletCommands>,
 ) -> Result<GenerateMnemonicResult> {
     // Generate new wallet keys with random mnemonic
-    let keys = WalletKeys::generate()
-        .map_err(|e| anyhow!("Failed to generate mnemonic: {}", e))?;
+    let keys = WalletKeys::generate().map_err(|e| anyhow!("Failed to generate mnemonic: {}", e))?;
 
     // Get words before caching
-    let words: Vec<String> = keys.mnemonic_words()
+    let words: Vec<String> = keys
+        .mnemonic_words()
         .iter()
         .map(|s| s.to_string())
         .collect();
@@ -972,10 +997,7 @@ async fn generate_mnemonic_internal(
     let pending = PendingWallet::new(keys);
 
     // Convert 0-indexed to 1-indexed for user display
-    let verify_positions: Vec<usize> = pending.verify_indices
-        .iter()
-        .map(|i| i + 1)
-        .collect();
+    let verify_positions: Vec<usize> = pending.verify_indices.iter().map(|i| i + 1).collect();
 
     // Cache the pending wallet
     *state.pending_wallet.lock().await = Some(pending);
@@ -1047,11 +1069,14 @@ async fn confirm_new_wallet_internal(
     // Get and validate pending wallet
     let mut pending_guard = state.pending_wallet.lock().await;
 
-    let pending = pending_guard.take()
+    let pending = pending_guard
+        .take()
         .ok_or_else(|| anyhow!("No pending wallet. Please call generate_mnemonic first."))?;
 
     if pending.is_expired() {
-        return Err(anyhow!("Wallet creation timed out. Please generate a new mnemonic."));
+        return Err(anyhow!(
+            "Wallet creation timed out. Please generate a new mnemonic."
+        ));
     }
 
     // Verify the words at the specified positions
@@ -1113,7 +1138,8 @@ async fn confirm_new_wallet_internal(
         .map_err(|e| anyhow!("Failed to encrypt wallet: {}", e))?;
 
     // Save to file
-    wallet.save(&path)
+    wallet
+        .save(&path)
         .map_err(|e| anyhow!("Failed to save wallet file: {}", e))?;
 
     // Get address before moving keys into session
@@ -1123,7 +1149,10 @@ async fn confirm_new_wallet_internal(
     let session = WalletSession::new(keys, Some(path.clone()));
     *state.session.lock().await = Some(session);
 
-    log::info!("New wallet created at {} and unlocked (secure flow)", path.display());
+    log::info!(
+        "New wallet created at {} and unlocked (secure flow)",
+        path.display()
+    );
 
     Ok(CreateWalletResult {
         success: true,
@@ -1135,9 +1164,7 @@ async fn confirm_new_wallet_internal(
 
 /// Cancel pending wallet creation
 #[tauri::command]
-pub async fn cancel_pending_wallet(
-    state: State<'_, WalletCommands>,
-) -> Result<bool, String> {
+pub async fn cancel_pending_wallet(state: State<'_, WalletCommands>) -> Result<bool, String> {
     let mut pending_guard = state.pending_wallet.lock().await;
     if pending_guard.is_some() {
         *pending_guard = None;
@@ -1168,7 +1195,8 @@ pub struct ImportWalletParams {
 ///
 /// SECURITY NOTE: This command accepts mnemonic from JS because there's no
 /// alternative for wallet restoration - the user MUST provide their existing
-/// mnemonic. For NEW wallets, use generate_mnemonic + confirm_new_wallet instead.
+/// mnemonic. For NEW wallets, use generate_mnemonic + confirm_new_wallet
+/// instead.
 #[tauri::command]
 pub async fn import_wallet(
     state: State<'_, WalletCommands>,
@@ -1213,7 +1241,8 @@ async fn import_wallet_internal(
         .map_err(|e| anyhow!("Failed to encrypt wallet: {}", e))?;
 
     // Save to file
-    wallet.save(&path)
+    wallet
+        .save(&path)
         .map_err(|e| anyhow!("Failed to save wallet file: {}", e))?;
 
     // Get address before moving keys
@@ -1243,16 +1272,13 @@ pub struct WalletFileExistsResult {
 
 /// Get the default wallet file path
 fn get_default_wallet_path() -> Result<PathBuf> {
-    let data_dir = dirs::data_dir()
-        .ok_or_else(|| anyhow!("Could not determine data directory"))?;
+    let data_dir = dirs::data_dir().ok_or_else(|| anyhow!("Could not determine data directory"))?;
     Ok(data_dir.join("botho-wallet").join("wallet.dat"))
 }
 
 /// Check if a wallet file exists
 #[tauri::command]
-pub async fn wallet_file_exists(
-    path: Option<String>,
-) -> Result<WalletFileExistsResult, String> {
+pub async fn wallet_file_exists(path: Option<String>) -> Result<WalletFileExistsResult, String> {
     let wallet_path = match path {
         Some(p) => PathBuf::from(p),
         None => get_default_wallet_path().map_err(|e| e.to_string())?,
@@ -1278,7 +1304,7 @@ mod tests {
 
     #[test]
     fn test_parse_view_spend_address() {
-        let view_hex = "0".repeat(64);  // 32 zero bytes
+        let view_hex = "0".repeat(64); // 32 zero bytes
         let spend_hex = "1".repeat(64); // 32 bytes of 0x11...
 
         let address = format!("view:{}\nspend:{}", view_hex, spend_hex);
@@ -1293,14 +1319,20 @@ mod tests {
     fn test_reject_short_cad_address() {
         let result = parse_recipient_address("cad:abcd1234:efgh5678");
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("not yet supported"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("not yet supported"));
     }
 
     #[test]
     fn test_reject_bth1_address() {
         let result = parse_recipient_address("bth1abcdef1234567890");
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("not yet supported"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("not yet supported"));
     }
 
     // ========================================================================

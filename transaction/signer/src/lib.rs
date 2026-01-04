@@ -447,7 +447,8 @@ mod tests {
             &account,
             input_path.to_str().unwrap(),
             output_path.to_str().unwrap(),
-        ).unwrap();
+        )
+        .unwrap();
 
         let content = std::fs::read_to_string(&output_path).unwrap();
         let resp: TxoSyncResp = serde_json::from_str(&content).unwrap();

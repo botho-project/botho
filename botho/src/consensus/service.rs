@@ -2,23 +2,27 @@
 
 //! Consensus service managing SCP node and message handling.
 
-use super::validation::TransactionValidator;
-use super::value::ConsensusValue;
+use super::{validation::TransactionValidator, value::ConsensusValue};
 use crate::ledger::ChainState;
 use bth_common::NodeID;
-use bth_consensus_scp::{create_null_logger, msg::Msg as ScpMsg, node::Node, QuorumSet, ScpNode, SlotIndex};
+use bth_consensus_scp::{
+    create_null_logger, msg::Msg as ScpMsg, node::Node, QuorumSet, ScpNode, SlotIndex,
+};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeSet, HashMap, VecDeque};
-use std::fmt;
-use std::sync::{Arc, RwLock};
-use std::time::{Duration, Instant};
+use std::{
+    collections::{BTreeSet, HashMap, VecDeque},
+    fmt,
+    sync::{Arc, RwLock},
+    time::{Duration, Instant},
+};
 use tracing::{debug, info, instrument, trace, warn, Span};
 
 /// Configuration for the consensus service
 #[derive(Debug, Clone)]
 pub struct ConsensusConfig {
     /// Slot duration (how often to try to close a slot)
-    /// When dynamic_timing is enabled, this serves as the initial/fallback value
+    /// When dynamic_timing is enabled, this serves as the initial/fallback
+    /// value
     pub slot_duration: Duration,
 
     /// Maximum transactions per slot
@@ -57,7 +61,8 @@ impl ConsensusConfig {
         }
     }
 
-    /// Check if a given slot duration is at the minimum (triggers dynamic fee adjustment)
+    /// Check if a given slot duration is at the minimum (triggers dynamic fee
+    /// adjustment)
     pub fn is_at_min_block_time(&self, duration: Duration) -> bool {
         duration.as_secs() <= Self::MIN_BLOCK_TIME_SECS
     }
@@ -190,10 +195,9 @@ impl ConsensusService {
                     .map_err(|_| "Failed to acquire validation state lock".to_string())?;
 
                 // Look up transaction in cache
-                let entry = state
-                    .tx_cache
-                    .get(&value.tx_hash)
-                    .ok_or_else(|| format!("Transaction not in cache: {:?}", &value.tx_hash[0..8]))?;
+                let entry = state.tx_cache.get(&value.tx_hash).ok_or_else(|| {
+                    format!("Transaction not in cache: {:?}", &value.tx_hash[0..8])
+                })?;
 
                 // Create a temporary validator for this check
                 let temp_state = Arc::new(RwLock::new(state.chain_state.clone()));
@@ -206,23 +210,37 @@ impl ConsensusService {
             });
 
         // Combine callback - how to combine multiple values
-        // Minting transactions are prioritized by PoW difficulty (higher priority = harder PoW)
-        // This ensures the "best" minting tx wins if there are multiple
+        // Minting transactions are prioritized by PoW difficulty (higher priority =
+        // harder PoW) This ensures the "best" minting tx wins if there are
+        // multiple
         let combine_fn: Arc<
             dyn Fn(&[ConsensusValue]) -> Result<Vec<ConsensusValue>, String> + Send + Sync,
         > = Arc::new(|values: &[ConsensusValue]| {
             // Separate minting txs from regular txs
-            let mut minting_txs: Vec<_> = values.iter().filter(|v| v.is_minting_tx).cloned().collect();
-            let mut regular_txs: Vec<_> = values.iter().filter(|v| !v.is_minting_tx).cloned().collect();
+            let mut minting_txs: Vec<_> =
+                values.iter().filter(|v| v.is_minting_tx).cloned().collect();
+            let mut regular_txs: Vec<_> = values
+                .iter()
+                .filter(|v| !v.is_minting_tx)
+                .cloned()
+                .collect();
 
             // Sort minting txs by priority (highest first) - best PoW wins
-            minting_txs.sort_by(|a, b| b.priority.cmp(&a.priority).then_with(|| a.tx_hash.cmp(&b.tx_hash)));
+            minting_txs.sort_by(|a, b| {
+                b.priority
+                    .cmp(&a.priority)
+                    .then_with(|| a.tx_hash.cmp(&b.tx_hash))
+            });
 
             // Only keep the best minting tx (one coinbase per block)
             minting_txs.truncate(1);
 
             // Sort regular txs by priority (fee), then hash for determinism
-            regular_txs.sort_by(|a, b| b.priority.cmp(&a.priority).then_with(|| a.tx_hash.cmp(&b.tx_hash)));
+            regular_txs.sort_by(|a, b| {
+                b.priority
+                    .cmp(&a.priority)
+                    .then_with(|| a.tx_hash.cmp(&b.tx_hash))
+            });
 
             // Combine: best minting tx first, then regular txs
             let mut combined = minting_txs;
@@ -233,7 +251,10 @@ impl ConsensusService {
         // Create the SCP node, starting at the next block height
         // Slot index corresponds to the block height we're trying to build
         let initial_slot = initial_height + 1;
-        debug!(slot = initial_slot, "Starting consensus at slot (next block height)");
+        debug!(
+            slot = initial_slot,
+            "Starting consensus at slot (next block height)"
+        );
 
         let scp_node = Node::new(
             node_id.clone(),
@@ -273,7 +294,10 @@ impl ConsensusService {
         use crate::block::dynamic_timing::SMOOTHING_WINDOW;
 
         if let Ok(mut state) = self.shared_state.write() {
-            state.recent_blocks.push_back(RecentBlockInfo { timestamp, tx_count });
+            state.recent_blocks.push_back(RecentBlockInfo {
+                timestamp,
+                tx_count,
+            });
 
             // Keep only the last SMOOTHING_WINDOW blocks
             while state.recent_blocks.len() > SMOOTHING_WINDOW {
@@ -430,9 +454,7 @@ impl ConsensusService {
         let slot_duration = self.current_slot_duration();
 
         // Try to propose values if we have pending ones
-        if !self.pending_values.is_empty()
-            && self.last_slot_attempt.elapsed() >= slot_duration
-        {
+        if !self.pending_values.is_empty() && self.last_slot_attempt.elapsed() >= slot_duration {
             self.propose_pending_values();
             self.last_slot_attempt = Instant::now();
         }
@@ -487,7 +509,11 @@ impl ConsensusService {
         // This is safe because we're the only validator in a 1-of-1 quorum
         if self.is_solo_mode() {
             let values: Vec<ConsensusValue> = to_propose.iter().cloned().collect();
-            info!(slot, count = values.len(), "Solo mode: directly externalizing values");
+            info!(
+                slot,
+                count = values.len(),
+                "Solo mode: directly externalizing values"
+            );
 
             // Remove values from pending
             for v in &values {
@@ -567,7 +593,8 @@ impl ConsensusService {
             payload,
         };
 
-        self.events.push_back(ConsensusEvent::BroadcastMessage(scp_msg));
+        self.events
+            .push_back(ConsensusEvent::BroadcastMessage(scp_msg));
     }
 
     /// Get the next event (if any)
@@ -590,10 +617,12 @@ impl ConsensusService {
 
     /// Get cached transaction entry (data + type info)
     pub fn get_tx_entry(&self, tx_hash: &[u8; 32]) -> Option<(Vec<u8>, bool)> {
-        self.shared_state
-            .read()
-            .ok()
-            .and_then(|state| state.tx_cache.get(tx_hash).map(|e| (e.data.clone(), e.is_minting_tx)))
+        self.shared_state.read().ok().and_then(|state| {
+            state
+                .tx_cache
+                .get(tx_hash)
+                .map(|e| (e.data.clone(), e.is_minting_tx))
+        })
     }
 
     /// Advance to next slot (called after processing externalized values)
@@ -617,7 +646,8 @@ impl ConsensusService {
             self.scp_node.reset_slot_index(next_slot);
             info!(slot = next_slot, "Advanced to next slot (solo mode)");
         }
-        // In multi-node mode, SCP node automatically advances after externalization
+        // In multi-node mode, SCP node automatically advances after
+        // externalization
     }
 
     /// Get pending transaction count

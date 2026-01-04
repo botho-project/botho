@@ -1343,8 +1343,7 @@ pub fn format_monte_carlo_report(results: &MonteCarloResults) -> String {
 // Committed Tag Vector Decoy Selection
 // ============================================================================
 
-use crate::crypto::CommittedTagVector;
-use crate::ClusterId;
+use crate::{crypto::CommittedTagVector, ClusterId};
 use std::collections::HashSet;
 
 /// Extract the set of cluster IDs from a committed tag vector.
@@ -1427,8 +1426,8 @@ impl Default for CommittedDecoyConfig {
 
 /// Select decoys for a real output using committed tag vectors.
 ///
-/// This function selects decoys based on cluster ID set overlap (Jaccard similarity)
-/// since mass values are hidden in commitments.
+/// This function selects decoys based on cluster ID set overlap (Jaccard
+/// similarity) since mass values are hidden in commitments.
 ///
 /// # Arguments
 /// * `real_output` - The output being spent (real signer)
@@ -1437,7 +1436,8 @@ impl Default for CommittedDecoyConfig {
 /// * `rng` - Random number generator
 ///
 /// # Returns
-/// Indices of selected decoys in the pool, or None if insufficient decoys available.
+/// Indices of selected decoys in the pool, or None if insufficient decoys
+/// available.
 pub fn select_committed_decoys<R: rand::Rng>(
     real_output: &CommittedPoolOutput,
     pool: &[CommittedPoolOutput],
@@ -1489,7 +1489,9 @@ pub fn select_committed_decoys<R: rand::Rng>(
     candidates.sort_by(|a, b| {
         let score_a = a.2 * a.1 * a.1;
         let score_b = b.2 * b.1 * b.1;
-        score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
+        score_b
+            .partial_cmp(&score_a)
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
 
     // Weighted random selection
@@ -1760,8 +1762,7 @@ mod tests {
     // ========================================================================
 
     use crate::crypto::{CommittedTagMass, CommittedTagVectorSecret};
-    use curve25519_dalek::ristretto::RistrettoPoint;
-    use curve25519_dalek::traits::Identity;
+    use curve25519_dalek::{ristretto::RistrettoPoint, traits::Identity};
     use rand_core::OsRng;
 
     fn create_test_committed_vector(clusters: &[u64]) -> CommittedTagVector {
@@ -1786,7 +1787,10 @@ mod tests {
         let set_b: HashSet<ClusterId> = [1, 2, 3].iter().map(|&x| ClusterId(x)).collect();
 
         let sim = jaccard_similarity(&set_a, &set_b);
-        assert!((sim - 1.0).abs() < 0.001, "Identical sets should have similarity 1.0: {sim}");
+        assert!(
+            (sim - 1.0).abs() < 0.001,
+            "Identical sets should have similarity 1.0: {sim}"
+        );
     }
 
     #[test]
@@ -1795,7 +1799,10 @@ mod tests {
         let set_b: HashSet<ClusterId> = [4, 5, 6].iter().map(|&x| ClusterId(x)).collect();
 
         let sim = jaccard_similarity(&set_a, &set_b);
-        assert!(sim.abs() < 0.001, "Disjoint sets should have similarity 0.0: {sim}");
+        assert!(
+            sim.abs() < 0.001,
+            "Disjoint sets should have similarity 0.0: {sim}"
+        );
     }
 
     #[test]
@@ -1817,7 +1824,10 @@ mod tests {
         let set_b: HashSet<ClusterId> = HashSet::new();
 
         let sim = jaccard_similarity(&set_a, &set_b);
-        assert!((sim - 1.0).abs() < 0.001, "Empty sets should have similarity 1.0: {sim}");
+        assert!(
+            (sim - 1.0).abs() < 0.001,
+            "Empty sets should have similarity 1.0: {sim}"
+        );
     }
 
     #[test]
@@ -1826,7 +1836,10 @@ mod tests {
         let set_b: HashSet<ClusterId> = HashSet::new();
 
         let sim = jaccard_similarity(&set_a, &set_b);
-        assert!((sim - 0.5).abs() < 0.001, "One empty set should have similarity 0.5: {sim}");
+        assert!(
+            (sim - 0.5).abs() < 0.001,
+            "One empty set should have similarity 0.5: {sim}"
+        );
     }
 
     #[test]
@@ -1866,11 +1879,11 @@ mod tests {
         let pool: Vec<CommittedPoolOutput> = (0..100)
             .map(|i| {
                 let clusters: Vec<u64> = if i % 3 == 0 {
-                    vec![1, 2, 3]  // Same as real output
+                    vec![1, 2, 3] // Same as real output
                 } else if i % 3 == 1 {
-                    vec![2, 3, 4]  // Partial overlap
+                    vec![2, 3, 4] // Partial overlap
                 } else {
-                    vec![10, 11, 12]  // Different clusters
+                    vec![10, 11, 12] // Different clusters
                 };
 
                 CommittedPoolOutput {
@@ -1896,7 +1909,11 @@ mod tests {
         assert!(decoys.is_some(), "Should select decoys");
 
         let decoy_indices = decoys.unwrap();
-        assert_eq!(decoy_indices.len(), 10, "Should select 10 decoys for ring size 11");
+        assert_eq!(
+            decoy_indices.len(),
+            10,
+            "Should select 10 decoys for ring size 11"
+        );
 
         // Verify all decoys have good similarity
         for &idx in &decoy_indices {
@@ -1933,7 +1950,10 @@ mod tests {
         // Verify real output is at the correct position
         let real_clusters = extract_cluster_ids(&real_output.committed_tags);
         let ring_at_real = extract_cluster_ids(ring[real_idx]);
-        assert_eq!(real_clusters, ring_at_real, "Real output should be at real_idx");
+        assert_eq!(
+            real_clusters, ring_at_real,
+            "Real output should be at real_idx"
+        );
     }
 
     #[test]
@@ -1948,10 +1968,12 @@ mod tests {
         let input_tags: HashMap<ClusterId, crate::TagWeight> = [
             (ClusterId(1), TAG_WEIGHT_SCALE / 2),
             (ClusterId(2), TAG_WEIGHT_SCALE / 2),
-        ].into_iter().collect();
+        ]
+        .into_iter()
+        .collect();
 
         let input_secret = CommittedTagVectorSecret::from_plaintext(
-            1_000_000,  // value
+            1_000_000, // value
             &input_tags,
             &mut rng,
         );
@@ -1961,9 +1983,9 @@ mod tests {
         let pool: Vec<CommittedPoolOutput> = (0..50)
             .map(|i| {
                 let clusters = if i % 2 == 0 {
-                    vec![1, 2]  // Similar to real
+                    vec![1, 2] // Similar to real
                 } else {
-                    vec![10, 11]  // Different
+                    vec![10, 11] // Different
                 };
                 CommittedPoolOutput {
                     id: i,

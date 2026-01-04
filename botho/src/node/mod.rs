@@ -1,20 +1,22 @@
 pub mod minter;
 
 use anyhow::Result;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
-use std::sync::mpsc::Receiver;
-use std::sync::{Arc, RwLock};
+use std::{
+    path::{Path, PathBuf},
+    sync::{atomic::AtomicBool, mpsc::Receiver, Arc, RwLock},
+};
 use tracing::{info, warn};
 
-use crate::block::{calculate_block_reward, difficulty::EmissionController};
-use crate::commands::send::{load_pending_txs, clear_pending_txs};
-use crate::monetary::mainnet_policy;
-use crate::config::{ledger_db_path_from_config, Config};
-use crate::ledger::Ledger;
-use crate::mempool::{Mempool, MempoolError};
-use crate::transaction::Transaction;
-use crate::wallet::Wallet;
+use crate::{
+    block::{calculate_block_reward, difficulty::EmissionController},
+    commands::send::{clear_pending_txs, load_pending_txs},
+    config::{ledger_db_path_from_config, Config},
+    ledger::Ledger,
+    mempool::{Mempool, MempoolError},
+    monetary::mainnet_policy,
+    transaction::Transaction,
+    wallet::Wallet,
+};
 
 /// Shared ledger type for RPC access
 pub type SharedLedger = Arc<RwLock<Ledger>>;
@@ -80,10 +82,7 @@ impl Node {
         let mempool = Arc::new(RwLock::new(Mempool::new()));
 
         // Get config directory for finding pending transactions file
-        let config_dir = config_path
-            .parent()
-            .unwrap_or(Path::new("."))
-            .to_path_buf();
+        let config_dir = config_path.parent().unwrap_or(Path::new(".")).to_path_buf();
 
         Ok(Self {
             config,
@@ -104,7 +103,9 @@ impl Node {
     }
 
     fn print_status(&self) -> Result<()> {
-        let ledger = self.ledger.read()
+        let ledger = self
+            .ledger
+            .read()
             .map_err(|_| anyhow::anyhow!("Ledger lock poisoned"))?;
         let state = ledger
             .get_chain_state()
@@ -147,7 +148,10 @@ impl Node {
             state.total_mined as f64 / 1_000_000_000_000.0,
             state.total_fees_burned as f64 / 1_000_000_000_000.0
         );
-        info!(peer_count = self.config.network.bootstrap_peers.len(), "Bootstrap peers configured");
+        info!(
+            peer_count = self.config.network.bootstrap_peers.len(),
+            "Bootstrap peers configured"
+        );
         if self.config.network.bootstrap_peers.is_empty() {
             warn!("No bootstrap peers configured - add bootstrap_peers to config.toml");
         }
@@ -156,8 +160,9 @@ impl Node {
 
     fn start_minting(&mut self) -> Result<()> {
         // Minting requires a wallet to receive rewards
-        let wallet = self.wallet.as_ref()
-            .ok_or_else(|| anyhow::anyhow!("Cannot mine without a wallet. Run 'botho init' to create one."))?;
+        let wallet = self.wallet.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("Cannot mine without a wallet. Run 'botho init' to create one.")
+        })?;
 
         let threads = if self.config.minting.threads == 0 {
             num_cpus::get()
@@ -173,7 +178,9 @@ impl Node {
         self.minting_tx_receiver = minter.take_tx_receiver();
 
         // Set initial work from chain state
-        let ledger = self.ledger.read()
+        let ledger = self
+            .ledger
+            .read()
             .map_err(|_| anyhow::anyhow!("Ledger lock poisoned"))?;
         let state = ledger
             .get_chain_state()
@@ -230,7 +237,8 @@ impl Node {
             hex::encode(&block.hash()[0..8])
         );
 
-        self.ledger.write()
+        self.ledger
+            .write()
             .map_err(|_| anyhow::anyhow!("Ledger lock poisoned"))?
             .add_block(block)
             .map_err(|e| anyhow::anyhow!("Failed to add network block: {}", e))?;
@@ -253,11 +261,9 @@ impl Node {
         let fees_burned: u64 = block.transactions.iter().map(|tx| tx.fee).sum();
 
         let old_difficulty = self.emission_controller.difficulty;
-        let (new_difficulty, new_reward) = self.emission_controller.record_block(
-            tx_count,
-            reward_paid,
-            fees_burned,
-        );
+        let (new_difficulty, new_reward) =
+            self.emission_controller
+                .record_block(tx_count, reward_paid, fees_burned);
 
         if new_difficulty != old_difficulty {
             info!(
@@ -270,7 +276,8 @@ impl Node {
         }
 
         // Persist emission controller state
-        self.ledger.write()
+        self.ledger
+            .write()
             .map_err(|_| anyhow::anyhow!("Ledger lock poisoned"))?
             .update_emission_state(
                 new_difficulty,
@@ -306,7 +313,8 @@ impl Node {
     }
 
     /// Check if we've minted a minting transaction (non-blocking)
-    /// Returns the raw MintedMintingTx for consensus submission (doesn't build block)
+    /// Returns the raw MintedMintingTx for consensus submission (doesn't build
+    /// block)
     pub fn check_minted_minting_tx(&mut self) -> Result<Option<MintedMintingTx>> {
         if let Some(ref receiver) = self.minting_tx_receiver {
             if let Ok(mined) = receiver.try_recv() {
@@ -319,16 +327,23 @@ impl Node {
     /// Get the current work version from the minter
     /// Returns 0 if minting is not active
     pub fn current_minting_work_version(&self) -> u64 {
-        self.minter.as_ref().map(|m| m.current_work_version()).unwrap_or(0)
+        self.minter
+            .as_ref()
+            .map(|m| m.current_work_version())
+            .unwrap_or(0)
     }
 
     // --- Mempool methods ---
 
     /// Submit a transaction to the mempool
     pub fn submit_transaction(&self, tx: Transaction) -> Result<[u8; 32], MempoolError> {
-        let ledger = self.ledger.read()
+        let ledger = self
+            .ledger
+            .read()
             .map_err(|_| MempoolError::LedgerError("Ledger lock poisoned".to_string()))?;
-        let mut mempool = self.mempool.write()
+        let mut mempool = self
+            .mempool
+            .write()
             .map_err(|_| MempoolError::LedgerError("Mempool lock poisoned".to_string()))?;
         mempool.add_tx(tx, &*ledger)
     }
@@ -340,7 +355,8 @@ impl Node {
 
     /// Get transactions from mempool for block building
     pub fn get_pending_transactions(&self, max_count: usize) -> Vec<Transaction> {
-        self.mempool.read()
+        self.mempool
+            .read()
             .map(|m| m.get_transactions(max_count))
             .unwrap_or_default()
     }
@@ -357,12 +373,16 @@ impl Node {
 
     /// Get the wallet's view public key bytes (None if no wallet configured)
     pub fn wallet_view_key(&self) -> Option<[u8; 32]> {
-        self.wallet.as_ref().map(|w| w.default_address().view_public_key().to_bytes())
+        self.wallet
+            .as_ref()
+            .map(|w| w.default_address().view_public_key().to_bytes())
     }
 
     /// Get the wallet's spend public key bytes (None if no wallet configured)
     pub fn wallet_spend_key(&self) -> Option<[u8; 32]> {
-        self.wallet.as_ref().map(|w| w.default_address().spend_public_key().to_bytes())
+        self.wallet
+            .as_ref()
+            .map(|w| w.default_address().spend_public_key().to_bytes())
     }
 
     /// Clean up invalid transactions from mempool
@@ -377,12 +397,15 @@ impl Node {
 
     /// Update dynamic fee state after a block is finalized.
     ///
-    /// Call this after each block is added to update fee calculations based on congestion.
+    /// Call this after each block is added to update fee calculations based on
+    /// congestion.
     ///
     /// # Arguments
     /// * `tx_count` - Number of transactions in the finalized block
-    /// * `max_tx_count` - Maximum transactions per block (from consensus config)
-    /// * `at_min_block_time` - Whether block timing is at minimum (triggers fee adjustment)
+    /// * `max_tx_count` - Maximum transactions per block (from consensus
+    ///   config)
+    /// * `at_min_block_time` - Whether block timing is at minimum (triggers fee
+    ///   adjustment)
     ///
     /// # Returns
     /// The new fee base, or None if mempool lock failed
@@ -399,7 +422,10 @@ impl Node {
 
     /// Get the current dynamic fee state for diagnostics/RPC
     pub fn dynamic_fee_state(&self) -> Option<bth_cluster_tax::DynamicFeeState> {
-        self.mempool.read().ok().map(|mempool| mempool.dynamic_fee_state())
+        self.mempool
+            .read()
+            .ok()
+            .map(|mempool| mempool.dynamic_fee_state())
     }
 
     /// Load pending transactions from file (created by `botho send`)
@@ -439,7 +465,8 @@ impl Node {
 
                 info!(
                     "Loaded {} pending transactions ({} failed)",
-                    loaded_txs.len(), failed
+                    loaded_txs.len(),
+                    failed
                 );
 
                 // Clear the pending file since we've loaded them

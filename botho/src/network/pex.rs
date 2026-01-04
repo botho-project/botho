@@ -185,7 +185,8 @@ impl PexFilter {
 
     /// Check if a Multiaddr has a peer ID component
     fn has_peer_id(&self, addr: &Multiaddr) -> bool {
-        addr.iter().any(|p| matches!(p, libp2p::multiaddr::Protocol::P2p(_)))
+        addr.iter()
+            .any(|p| matches!(p, libp2p::multiaddr::Protocol::P2p(_)))
     }
 
     /// Extract IP address from a Multiaddr
@@ -216,7 +217,8 @@ impl PexFilter {
                     // Note: is_unicast_link_local and is_unique_local are unstable
                     // Check common private prefixes manually
                     || ipv6.segments()[0] == 0xfe80  // Link-local
-                    || ipv6.segments()[0] & 0xfe00 == 0xfc00 // Unique local (fc00::/7)
+                    || ipv6.segments()[0] & 0xfe00 == 0xfc00 // Unique local
+                                                             // (fc00::/7)
             }
         }
     }
@@ -468,11 +470,7 @@ impl PexManager {
     /// Process an incoming PEX message
     ///
     /// Returns list of valid addresses to potentially connect to
-    pub fn process_incoming(
-        &mut self,
-        peer_id: &PeerId,
-        message: &PexMessage,
-    ) -> Vec<Multiaddr> {
+    pub fn process_incoming(&mut self, peer_id: &PeerId, message: &PexMessage) -> Vec<Multiaddr> {
         // Check rate limit
         if !self.rate_limiter.check_rate(peer_id) {
             return vec![];

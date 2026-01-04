@@ -23,9 +23,7 @@ pub struct WebhookHandler {
 impl WebhookHandler {
     /// Create a new webhook handler.
     pub fn new(url: &str) -> anyhow::Result<Self> {
-        let client = Client::builder()
-            .timeout(Duration::from_secs(30))
-            .build()?;
+        let client = Client::builder().timeout(Duration::from_secs(30)).build()?;
 
         Ok(Self {
             client,
@@ -36,7 +34,11 @@ impl WebhookHandler {
     }
 
     /// Create a webhook handler with custom retry settings.
-    pub fn with_retries(url: &str, max_retries: u32, retry_delay: Duration) -> anyhow::Result<Self> {
+    pub fn with_retries(
+        url: &str,
+        max_retries: u32,
+        retry_delay: Duration,
+    ) -> anyhow::Result<Self> {
         let mut handler = Self::new(url)?;
         handler.max_retries = max_retries;
         handler.retry_delay = retry_delay;
@@ -86,10 +88,7 @@ impl WebhookHandler {
             );
         }
 
-        tracing::debug!(
-            "Posted deposit {} to webhook",
-            deposit.deposit_id()
-        );
+        tracing::debug!("Posted deposit {} to webhook", deposit.deposit_id());
 
         Ok(())
     }
@@ -121,10 +120,7 @@ impl OutputHandler for WebhookHandler {
             );
         }
 
-        tracing::debug!(
-            "Posted {} deposits to webhook",
-            deposits.len()
-        );
+        tracing::debug!("Posted {} deposits to webhook", deposits.len());
 
         Ok(())
     }

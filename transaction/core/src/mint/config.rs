@@ -4,11 +4,11 @@
 
 use crate::domain_separators::MINT_CONFIG_TX_PREFIX_DOMAIN_TAG;
 use alloc::vec::Vec;
-use core::fmt;
 use bth_crypto_digestible::{Digestible, MerlinTranscript};
 use bth_crypto_keys::{Ed25519Public, Ed25519Signature};
 use bth_crypto_multisig::{MultiSig, SignerSet};
 use bth_util_serial::Message;
+use core::fmt;
 use serde::{Deserialize, Serialize};
 
 /// A minting configuration for a single token ID.

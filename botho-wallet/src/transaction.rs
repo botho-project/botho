@@ -13,17 +13,19 @@ use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::keys::WalletKeys;
-use crate::rpc_pool::{BlockOutputs, RpcPool};
+use crate::{
+    keys::WalletKeys,
+    rpc_pool::{BlockOutputs, RpcPool},
+};
 
+#[cfg(feature = "pq")]
+use botho::transaction_pq::QuantumPrivateTransaction;
 #[cfg(feature = "pq")]
 use bth_account_keys::{QuantumSafeAccountKey, QuantumSafePublicAddress};
 #[cfg(feature = "pq")]
 use bth_crypto_pq::MlKem768Ciphertext;
 #[cfg(feature = "pq")]
 use bth_crypto_ring_signature::pq_onetime_keys::check_pq_output_ownership;
-#[cfg(feature = "pq")]
-use botho::transaction_pq::QuantumPrivateTransaction;
 
 /// Picocredits per CAD
 pub const PICOCREDITS_PER_CAD: u64 = 1_000_000_000_000;
@@ -34,7 +36,8 @@ pub const MIN_FEE: u64 = 1_000_000; // 0.000001 CAD
 /// Dust threshold - minimum output amount in picocredits.
 /// Outputs below this value are rejected to prevent unspendable UTXOs.
 /// Set to 1 microcredit (0.000001 CAD = 1_000_000 picocredits).
-/// Change outputs below this threshold are added to the transaction fee instead.
+/// Change outputs below this threshold are added to the transaction fee
+/// instead.
 pub const DUST_THRESHOLD: u64 = 1_000_000;
 
 /// A UTXO owned by this wallet
@@ -151,7 +154,9 @@ impl PqOwnedUtxo {
 
         let ciphertext = MlKem768Ciphertext::from_bytes(self.kem_ciphertext.as_slice()).ok()?;
         let kem_keypair = pq_account_key.pq_kem_keypair();
-        let subaddress_spend_private = pq_account_key.classical().subaddress_spend_private(self.subaddress_index);
+        let subaddress_spend_private = pq_account_key
+            .classical()
+            .subaddress_spend_private(self.subaddress_index);
 
         recover_pq_onetime_private_key(
             kem_keypair,
@@ -339,14 +344,16 @@ impl TransactionBuilder {
             ));
         }
 
-        let total_needed = amount.checked_add(fee)
+        let total_needed = amount
+            .checked_add(fee)
             .ok_or_else(|| anyhow!("Amount overflow"))?;
 
         // Select UTXOs
         let (selected, total_selected) = self.select_utxos(total_needed)?;
 
         // Calculate change
-        let change = total_selected.checked_sub(total_needed)
+        let change = total_selected
+            .checked_sub(total_needed)
             .ok_or_else(|| anyhow!("Insufficient funds"))?;
 
         // Create inputs (unsigned)
@@ -431,7 +438,8 @@ impl TransactionBuilder {
     /// # DEPRECATED
     ///
     /// The previous ML-DSA+Schnorr hybrid approach has been deprecated because
-    /// it sacrificed ring privacy (direct input references instead of ring signatures).
+    /// it sacrificed ring privacy (direct input references instead of ring
+    /// signatures).
     ///
     /// LION integration is in progress. See issue #119 for status.
     ///
@@ -443,7 +451,10 @@ impl TransactionBuilder {
     /// # Returns
     /// Always returns an error indicating LION integration is pending
     #[cfg(feature = "pq")]
-    #[deprecated(since = "0.1.0", note = "Use LION ring signatures instead - see issue #119")]
+    #[deprecated(
+        since = "0.1.0",
+        note = "Use LION ring signatures instead - see issue #119"
+    )]
     pub fn build_pq_transfer(
         &self,
         _recipient: &QuantumSafePublicAddress,
@@ -517,9 +528,11 @@ impl<'a> WalletScanner<'a> {
         owned
     }
 
-    /// Check if an output belongs to this wallet using stealth address derivation
+    /// Check if an output belongs to this wallet using stealth address
+    /// derivation
     ///
-    /// Returns `Some(subaddress_index)` if the output belongs to us, `None` otherwise.
+    /// Returns `Some(subaddress_index)` if the output belongs to us, `None`
+    /// otherwise.
     fn check_ownership(&self, target_key: &[u8; 32], public_key: &[u8; 32]) -> Option<u64> {
         let view_private = self.account_key.view_private_key();
 
@@ -579,7 +592,8 @@ impl<'a> WalletScanner<'a> {
     }
 }
 
-/// Quantum-private wallet scanner for finding PQ outputs using ML-KEM decapsulation
+/// Quantum-private wallet scanner for finding PQ outputs using ML-KEM
+/// decapsulation
 #[cfg(feature = "pq")]
 pub struct PqWalletScanner<'a> {
     pq_account_key: QuantumSafeAccountKey,
@@ -613,7 +627,11 @@ impl<'a> PqWalletScanner<'a> {
                 }
 
                 // Parse PQ ciphertext
-                let ciphertext_bytes = match output.pq_ciphertext.as_ref().and_then(|s| hex::decode(s).ok()) {
+                let ciphertext_bytes = match output
+                    .pq_ciphertext
+                    .as_ref()
+                    .and_then(|s| hex::decode(s).ok())
+                {
                     Some(bytes) => bytes,
                     None => continue,
                 };
@@ -643,11 +661,9 @@ impl<'a> PqWalletScanner<'a> {
                 let amount = WalletScanner::parse_amount(&output.amount_commitment);
 
                 // Check ownership against subaddresses
-                if let Some(subaddress_index) = self.check_pq_ownership(
-                    &ciphertext,
-                    &target_key_point,
-                    output.output_index,
-                ) {
+                if let Some(subaddress_index) =
+                    self.check_pq_ownership(&ciphertext, &target_key_point, output.output_index)
+                {
                     owned.push(PqOwnedUtxo {
                         tx_hash,
                         output_index: output.output_index,
@@ -677,14 +693,26 @@ impl<'a> PqWalletScanner<'a> {
         // Check against default subaddress (index 0)
         let default_subaddr = account_key.default_subaddress();
         let default_spend = default_subaddr.spend_public_key();
-        if check_pq_output_ownership(kem_keypair, default_spend, ciphertext, target_key, output_index) {
+        if check_pq_output_ownership(
+            kem_keypair,
+            default_spend,
+            ciphertext,
+            target_key,
+            output_index,
+        ) {
             return Some(0);
         }
 
         // Check against change subaddress (index 1)
         let change_subaddr = account_key.change_subaddress();
         let change_spend = change_subaddr.spend_public_key();
-        if check_pq_output_ownership(kem_keypair, change_spend, ciphertext, target_key, output_index) {
+        if check_pq_output_ownership(
+            kem_keypair,
+            change_spend,
+            ciphertext,
+            target_key,
+            output_index,
+        ) {
             return Some(1);
         }
 

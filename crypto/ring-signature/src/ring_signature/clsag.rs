@@ -6,8 +6,8 @@
 //! by aggregating the key and commitment components into a single response
 //! per ring member.
 //!
-//! Reference: "Concise Linkable Ring Signatures and Forgery Against Adversarial Keys"
-//! https://eprint.iacr.org/2019/654
+//! Reference: "Concise Linkable Ring Signatures and Forgery Against Adversarial
+//! Keys" https://eprint.iacr.org/2019/654
 
 use alloc::vec::Vec;
 use curve25519_dalek::ristretto::RistrettoPoint;
@@ -28,7 +28,9 @@ use crate::{
     domain_separators::{
         CLSAG_AGG_COEFF_C_DOMAIN_TAG, CLSAG_AGG_COEFF_P_DOMAIN_TAG, CLSAG_ROUND_HASH_DOMAIN_TAG,
     },
-    ring_signature::{hash_to_point, CurveScalar, Error, KeyImage, PedersenGens, Scalar, B_BLINDING},
+    ring_signature::{
+        hash_to_point, CurveScalar, Error, KeyImage, PedersenGens, Scalar, B_BLINDING,
+    },
     Commitment, CompressedCommitment, ReducedTxOut,
 };
 
@@ -131,7 +133,8 @@ impl Clsag {
         // Compute the output commitment
         let output_commitment = Commitment::new(value, *output_blinding, generator);
 
-        // Compute commitment to zero differences: Z[i] = output_commitment - input_commitment[i]
+        // Compute commitment to zero differences: Z[i] = output_commitment -
+        // input_commitment[i]
         let mut z_points: Vec<RistrettoPoint> = Vec::with_capacity(ring_size);
         for (_, input_commitment) in &decompressed_ring {
             z_points.push(output_commitment.point - input_commitment.point);
@@ -165,10 +168,12 @@ impl Clsag {
         };
 
         // Compute aggregation coefficients mu_P and mu_C
-        let (mu_P, mu_C) = compute_aggregation_coefficients(ring, &key_image, &commitment_key_image);
+        let (mu_P, mu_C) =
+            compute_aggregation_coefficients(ring, &key_image, &commitment_key_image);
 
         // Initialize responses
-        let mut responses: Vec<CurveScalar> = alloc::vec![CurveScalar::from(Scalar::ZERO); ring_size];
+        let mut responses: Vec<CurveScalar> =
+            alloc::vec![CurveScalar::from(Scalar::ZERO); ring_size];
         for i in 0..ring_size {
             if i != real_index {
                 responses[i] = CurveScalar::from(Scalar::random(rng));
@@ -186,13 +191,8 @@ impl Clsag {
 
         // Compute c[real_index + 1]
         let mut challenges: Vec<Scalar> = alloc::vec![Scalar::ZERO; ring_size];
-        challenges[(real_index + 1) % ring_size] = compute_round_hash(
-            message,
-            &key_image,
-            &commitment_key_image,
-            &L_init,
-            &R_init,
-        );
+        challenges[(real_index + 1) % ring_size] =
+            compute_round_hash(message, &key_image, &commitment_key_image, &L_init, &R_init);
 
         // Go around the ring from real_index + 1 back to real_index
         for n in 1..ring_size {
@@ -307,7 +307,13 @@ impl Clsag {
             let R_i = s_i * Hp_i + c * (mu_P * I + mu_C * D);
 
             // c[next] = H(...)
-            c = compute_round_hash(message, &self.key_image, &self.commitment_key_image, &L_i, &R_i);
+            c = compute_round_hash(
+                message,
+                &self.key_image,
+                &self.commitment_key_image,
+                &L_i,
+                &R_i,
+            );
         }
 
         // Check that we closed the loop

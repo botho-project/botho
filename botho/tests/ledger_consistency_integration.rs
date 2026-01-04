@@ -2,7 +2,8 @@
 //
 //! Ledger Consistency Integration Tests
 //!
-//! Tests the correctness and consistency of the LMDB-backed ledger under various scenarios:
+//! Tests the correctness and consistency of the LMDB-backed ledger under
+//! various scenarios:
 //! - Concurrent read/write operations
 //! - Large block application (many transactions)
 //! - Index integrity verification
@@ -18,13 +19,13 @@ use std::{
 use serial_test::serial;
 use tempfile::TempDir;
 
-use bth_account_keys::PublicAddress;
 use botho::{
     block::{Block, BlockHeader, MintingTx},
     ledger::{ChainState, Ledger},
     transaction::{Transaction, TxInput, TxInputs, TxOutput, Utxo, UtxoId, PICOCREDITS_PER_CREDIT},
 };
 use botho_wallet::WalletKeys;
+use bth_account_keys::PublicAddress;
 use sha2::{Digest, Sha256};
 
 // ============================================================================
@@ -73,7 +74,8 @@ fn create_mock_minting_tx(
         timestamp,
     );
 
-    // Find a valid nonce - with trivial difficulty this should always succeed quickly
+    // Find a valid nonce - with trivial difficulty this should always succeed
+    // quickly
     for nonce in 0..u64::MAX {
         minting_tx.nonce = nonce;
         if minting_tx.verify_pow() {
@@ -84,7 +86,11 @@ fn create_mock_minting_tx(
     minting_tx
 }
 
-fn mine_block(ledger: &Ledger, minter_address: &PublicAddress, transactions: Vec<Transaction>) -> Block {
+fn mine_block(
+    ledger: &Ledger,
+    minter_address: &PublicAddress,
+    transactions: Vec<Transaction>,
+) -> Block {
     let state = ledger.get_chain_state().expect("Failed to get chain state");
     let prev_block = ledger.get_tip().expect("Failed to get tip");
     let prev_hash = prev_block.hash();
@@ -137,7 +143,11 @@ fn test_ledger_genesis_consistency() {
 
     // Verify genesis block hash is consistent
     let genesis_by_height = ledger.get_block(0).unwrap();
-    assert_eq!(genesis_by_height.hash(), tip.hash(), "Genesis block should be consistent");
+    assert_eq!(
+        genesis_by_height.hash(),
+        tip.hash(),
+        "Genesis block should be consistent"
+    );
 }
 
 #[test]
@@ -158,7 +168,11 @@ fn test_ledger_sequential_block_addition() {
 
         // Verify block is retrievable
         let retrieved = ledger.get_block(expected_height).unwrap();
-        assert_eq!(retrieved.hash(), block.hash(), "Block should be retrievable by height");
+        assert_eq!(
+            retrieved.hash(),
+            block.hash(),
+            "Block should be retrievable by height"
+        );
     }
 }
 
@@ -181,7 +195,10 @@ fn test_ledger_utxo_creation_from_minting() {
     assert!(utxo.is_some(), "Minting UTXO should exist");
 
     let utxo = utxo.unwrap();
-    assert_eq!(utxo.output.amount, TEST_BLOCK_REWARD, "UTXO amount should match block reward");
+    assert_eq!(
+        utxo.output.amount, TEST_BLOCK_REWARD,
+        "UTXO amount should match block reward"
+    );
 }
 
 #[test]
@@ -203,7 +220,10 @@ fn test_ledger_total_mined_tracking() {
 
     let final_state = ledger.get_chain_state().unwrap();
     let expected_mined = initial_mined + (5 * TEST_BLOCK_REWARD);
-    assert_eq!(final_state.total_mined, expected_mined, "Total mined should track correctly");
+    assert_eq!(
+        final_state.total_mined, expected_mined,
+        "Total mined should track correctly"
+    );
 }
 
 // ============================================================================
@@ -234,7 +254,11 @@ fn test_concurrent_reads() {
             for _ in 0..100 {
                 let ledger = ledger_clone.read().unwrap();
                 let state = ledger.get_chain_state().unwrap();
-                assert!(state.height >= 5, "Height should be at least 5 from thread {}", i);
+                assert!(
+                    state.height >= 5,
+                    "Height should be at least 5 from thread {}",
+                    i
+                );
 
                 // Read random blocks
                 for h in 0..=state.height {
@@ -284,7 +308,10 @@ fn test_concurrent_read_write() {
                 let ledger = ledger_reader.read().unwrap();
                 let state = ledger.get_chain_state().unwrap();
                 // Height should never decrease
-                assert!(state.height >= last_height, "Height decreased during concurrent access");
+                assert!(
+                    state.height >= last_height,
+                    "Height decreased during concurrent access"
+                );
                 last_height = state.height;
                 thread::sleep(Duration::from_millis(1));
             }
@@ -300,7 +327,10 @@ fn test_concurrent_read_write() {
     // Final verification
     let ledger = ledger.read().unwrap();
     let state = ledger.get_chain_state().unwrap();
-    assert_eq!(state.height, 10, "Should have 10 blocks after concurrent operations");
+    assert_eq!(
+        state.height, 10,
+        "Should have 10 blocks after concurrent operations"
+    );
 }
 
 // ============================================================================
@@ -326,7 +356,9 @@ fn test_block_height_index_integrity() {
 
     // Verify all blocks are retrievable by height and have correct hashes
     for (height, expected_hash) in block_hashes.iter().enumerate() {
-        let block = ledger.get_block(height as u64).expect("Failed to get block by height");
+        let block = ledger
+            .get_block(height as u64)
+            .expect("Failed to get block by height");
         assert_eq!(
             &block.hash(),
             expected_hash,
@@ -334,8 +366,7 @@ fn test_block_height_index_integrity() {
             height
         );
         assert_eq!(
-            block.header.height,
-            height as u64,
+            block.header.height, height as u64,
             "Block height field doesn't match index"
         );
     }
@@ -386,8 +417,15 @@ fn test_chain_state_consistency_after_multiple_blocks() {
         let state = ledger.get_chain_state().unwrap();
 
         // Verify state progression
-        assert_eq!(state.height, prev_state.height + 1, "Height should increment by 1");
-        assert_eq!(state.tip_hash, block_hash, "Tip hash should match added block");
+        assert_eq!(
+            state.height,
+            prev_state.height + 1,
+            "Height should increment by 1"
+        );
+        assert_eq!(
+            state.tip_hash, block_hash,
+            "Tip hash should match added block"
+        );
         assert_eq!(
             state.total_mined,
             prev_state.total_mined + TEST_BLOCK_REWARD,
@@ -503,7 +541,10 @@ fn test_block_with_wrong_parent_hash() {
     };
 
     let result = ledger.add_block(&bad_block);
-    assert!(result.is_err(), "Should reject block with wrong parent hash");
+    assert!(
+        result.is_err(),
+        "Should reject block with wrong parent hash"
+    );
 }
 
 #[test]
@@ -580,13 +621,18 @@ fn test_rapid_block_addition() {
     }
 
     let elapsed = start.elapsed();
-    println!("Added {} blocks in {:?} ({:.2} blocks/sec)",
-             num_blocks,
-             elapsed,
-             num_blocks as f64 / elapsed.as_secs_f64());
+    println!(
+        "Added {} blocks in {:?} ({:.2} blocks/sec)",
+        num_blocks,
+        elapsed,
+        num_blocks as f64 / elapsed.as_secs_f64()
+    );
 
     let state = ledger.get_chain_state().unwrap();
-    assert_eq!(state.height, num_blocks, "Should have correct number of blocks");
+    assert_eq!(
+        state.height, num_blocks,
+        "Should have correct number of blocks"
+    );
 }
 
 #[test]
@@ -601,7 +647,11 @@ fn test_repeated_open_close() {
         {
             let mut ledger = Ledger::open(temp_dir.path()).unwrap();
             let state = ledger.get_chain_state().unwrap();
-            assert_eq!(state.height, (i - 1) as u64, "Height should persist across reopens");
+            assert_eq!(
+                state.height,
+                (i - 1) as u64,
+                "Height should persist across reopens"
+            );
 
             let block = mine_block(&ledger, &miner_address, vec![]);
             ledger.add_block(&block).expect("Failed to add block");
@@ -615,7 +665,10 @@ fn test_repeated_open_close() {
     // Final verification
     let ledger = Ledger::open(temp_dir.path()).unwrap();
     let state = ledger.get_chain_state().unwrap();
-    assert_eq!(state.height, 10, "All blocks should persist after multiple open/close cycles");
+    assert_eq!(
+        state.height, 10,
+        "All blocks should persist after multiple open/close cycles"
+    );
 }
 
 // ============================================================================
@@ -641,8 +694,14 @@ fn test_block_data_integrity() {
     // Retrieve and verify
     let retrieved = ledger.get_block(original_height).unwrap();
     assert_eq!(retrieved.hash(), original_hash, "Block hash should match");
-    assert_eq!(retrieved.header.height, original_height, "Block height should match");
-    assert_eq!(retrieved.minting_tx.reward, original_reward, "Block reward should match");
+    assert_eq!(
+        retrieved.header.height, original_height,
+        "Block height should match"
+    );
+    assert_eq!(
+        retrieved.minting_tx.reward, original_reward,
+        "Block reward should match"
+    );
 }
 
 #[test]
@@ -664,9 +723,20 @@ fn test_chain_tip_tracking() {
         let tip = ledger.get_tip().unwrap();
 
         // Tip hash in chain state should match actual tip block
-        assert_eq!(post_state.tip_hash, block_hash, "Chain state tip_hash should match added block");
-        assert_eq!(tip.hash(), block_hash, "get_tip() should return the latest block");
-        assert_eq!(post_state.height, pre_state.height + 1, "Height should increment");
+        assert_eq!(
+            post_state.tip_hash, block_hash,
+            "Chain state tip_hash should match added block"
+        );
+        assert_eq!(
+            tip.hash(),
+            block_hash,
+            "get_tip() should return the latest block"
+        );
+        assert_eq!(
+            post_state.height,
+            pre_state.height + 1,
+            "Height should increment"
+        );
     }
 }
 
@@ -677,9 +747,7 @@ fn test_multiple_miners_consistency() {
     let mut ledger = Ledger::open(temp_dir.path()).unwrap();
 
     // Create multiple miners
-    let miners: Vec<_> = (0..5)
-        .map(|i| create_test_wallet(i))
-        .collect();
+    let miners: Vec<_> = (0..5).map(|i| create_test_wallet(i)).collect();
 
     // Mine blocks alternating between miners
     let mut miner_block_counts = vec![0u32; 5];

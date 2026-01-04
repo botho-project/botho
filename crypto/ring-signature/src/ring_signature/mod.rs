@@ -263,7 +263,8 @@ pub struct BatchVerifyResult {
 /// * `items` - Iterator of (message, ring, output_commitment, signature) tuples
 ///
 /// # Returns
-/// A vector of `BatchVerifyResult` containing the index and result for each signature.
+/// A vector of `BatchVerifyResult` containing the index and result for each
+/// signature.
 ///
 /// # Example
 /// ```rust,ignore
@@ -282,32 +283,51 @@ pub struct BatchVerifyResult {
 /// ```
 #[cfg(all(feature = "alloc", feature = "parallel"))]
 pub fn mlsag_verify_batch<'a>(
-    items: impl IntoIterator<Item = (&'a [u8], &'a [ReducedTxOut], &'a CompressedCommitment, &'a RingMLSAG)>,
+    items: impl IntoIterator<
+        Item = (
+            &'a [u8],
+            &'a [ReducedTxOut],
+            &'a CompressedCommitment,
+            &'a RingMLSAG,
+        ),
+    >,
 ) -> alloc::vec::Vec<BatchVerifyResult> {
     let items: alloc::vec::Vec<_> = items.into_iter().collect();
 
     items
         .par_iter()
         .enumerate()
-        .map(|(index, (message, ring, output_commitment, signature))| BatchVerifyResult {
-            index,
-            result: signature.verify(message, *ring, output_commitment),
-        })
+        .map(
+            |(index, (message, ring, output_commitment, signature))| BatchVerifyResult {
+                index,
+                result: signature.verify(message, *ring, output_commitment),
+            },
+        )
         .collect()
 }
 
-/// Verify multiple MLSAG signatures (serial version when parallel feature is disabled).
+/// Verify multiple MLSAG signatures (serial version when parallel feature is
+/// disabled).
 #[cfg(all(feature = "alloc", not(feature = "parallel")))]
 pub fn mlsag_verify_batch<'a>(
-    items: impl IntoIterator<Item = (&'a [u8], &'a [ReducedTxOut], &'a CompressedCommitment, &'a RingMLSAG)>,
+    items: impl IntoIterator<
+        Item = (
+            &'a [u8],
+            &'a [ReducedTxOut],
+            &'a CompressedCommitment,
+            &'a RingMLSAG,
+        ),
+    >,
 ) -> alloc::vec::Vec<BatchVerifyResult> {
     items
         .into_iter()
         .enumerate()
-        .map(|(index, (message, ring, output_commitment, signature))| BatchVerifyResult {
-            index,
-            result: signature.verify(message, ring, output_commitment),
-        })
+        .map(
+            |(index, (message, ring, output_commitment, signature))| BatchVerifyResult {
+                index,
+                result: signature.verify(message, ring, output_commitment),
+            },
+        )
         .collect()
 }
 
@@ -323,7 +343,14 @@ pub fn mlsag_verify_batch<'a>(
 /// `Ok(())` if all signatures are valid, or the first verification error.
 #[cfg(all(feature = "alloc", feature = "parallel"))]
 pub fn mlsag_verify_batch_all<'a>(
-    items: impl IntoIterator<Item = (&'a [u8], &'a [ReducedTxOut], &'a CompressedCommitment, &'a RingMLSAG)>,
+    items: impl IntoIterator<
+        Item = (
+            &'a [u8],
+            &'a [ReducedTxOut],
+            &'a CompressedCommitment,
+            &'a RingMLSAG,
+        ),
+    >,
 ) -> Result<(), Error> {
     let items: alloc::vec::Vec<_> = items.into_iter().collect();
 
@@ -337,7 +364,14 @@ pub fn mlsag_verify_batch_all<'a>(
 /// Check if all MLSAG signatures in a batch are valid (serial version).
 #[cfg(all(feature = "alloc", not(feature = "parallel")))]
 pub fn mlsag_verify_batch_all<'a>(
-    items: impl IntoIterator<Item = (&'a [u8], &'a [ReducedTxOut], &'a CompressedCommitment, &'a RingMLSAG)>,
+    items: impl IntoIterator<
+        Item = (
+            &'a [u8],
+            &'a [ReducedTxOut],
+            &'a CompressedCommitment,
+            &'a RingMLSAG,
+        ),
+    >,
 ) -> Result<(), Error> {
     for (message, ring, output_commitment, signature) in items {
         signature.verify(message, ring, output_commitment)?;
@@ -355,17 +389,26 @@ pub fn mlsag_verify_batch_all<'a>(
 /// execution when the `parallel` feature is enabled.
 #[cfg(all(feature = "alloc", feature = "parallel"))]
 pub fn clsag_verify_batch<'a>(
-    items: impl IntoIterator<Item = (&'a [u8], &'a [ReducedTxOut], &'a CompressedCommitment, &'a Clsag)>,
+    items: impl IntoIterator<
+        Item = (
+            &'a [u8],
+            &'a [ReducedTxOut],
+            &'a CompressedCommitment,
+            &'a Clsag,
+        ),
+    >,
 ) -> alloc::vec::Vec<BatchVerifyResult> {
     let items: alloc::vec::Vec<_> = items.into_iter().collect();
 
     items
         .par_iter()
         .enumerate()
-        .map(|(index, (message, ring, output_commitment, signature))| BatchVerifyResult {
-            index,
-            result: signature.verify(message, *ring, output_commitment),
-        })
+        .map(
+            |(index, (message, ring, output_commitment, signature))| BatchVerifyResult {
+                index,
+                result: signature.verify(message, *ring, output_commitment),
+            },
+        )
         .collect()
 }
 
@@ -373,15 +416,24 @@ pub fn clsag_verify_batch<'a>(
 #[cfg(all(feature = "alloc", not(feature = "parallel")))]
 #[allow(dead_code)]
 pub fn clsag_verify_batch<'a>(
-    items: impl IntoIterator<Item = (&'a [u8], &'a [ReducedTxOut], &'a CompressedCommitment, &'a Clsag)>,
+    items: impl IntoIterator<
+        Item = (
+            &'a [u8],
+            &'a [ReducedTxOut],
+            &'a CompressedCommitment,
+            &'a Clsag,
+        ),
+    >,
 ) -> alloc::vec::Vec<BatchVerifyResult> {
     items
         .into_iter()
         .enumerate()
-        .map(|(index, (message, ring, output_commitment, signature))| BatchVerifyResult {
-            index,
-            result: signature.verify(message, ring, output_commitment),
-        })
+        .map(
+            |(index, (message, ring, output_commitment, signature))| BatchVerifyResult {
+                index,
+                result: signature.verify(message, ring, output_commitment),
+            },
+        )
         .collect()
 }
 
@@ -389,7 +441,14 @@ pub fn clsag_verify_batch<'a>(
 #[cfg(all(feature = "alloc", feature = "parallel"))]
 #[allow(dead_code)]
 pub fn clsag_verify_batch_all<'a>(
-    items: impl IntoIterator<Item = (&'a [u8], &'a [ReducedTxOut], &'a CompressedCommitment, &'a Clsag)>,
+    items: impl IntoIterator<
+        Item = (
+            &'a [u8],
+            &'a [ReducedTxOut],
+            &'a CompressedCommitment,
+            &'a Clsag,
+        ),
+    >,
 ) -> Result<(), Error> {
     let items: alloc::vec::Vec<_> = items.into_iter().collect();
 
@@ -404,7 +463,14 @@ pub fn clsag_verify_batch_all<'a>(
 #[cfg(all(feature = "alloc", not(feature = "parallel")))]
 #[allow(dead_code)]
 pub fn clsag_verify_batch_all<'a>(
-    items: impl IntoIterator<Item = (&'a [u8], &'a [ReducedTxOut], &'a CompressedCommitment, &'a Clsag)>,
+    items: impl IntoIterator<
+        Item = (
+            &'a [u8],
+            &'a [ReducedTxOut],
+            &'a CompressedCommitment,
+            &'a Clsag,
+        ),
+    >,
 ) -> Result<(), Error> {
     for (message, ring, output_commitment, signature) in items {
         signature.verify(message, ring, output_commitment)?;

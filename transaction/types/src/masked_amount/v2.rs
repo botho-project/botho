@@ -14,12 +14,12 @@ use crate::{
     TokenId,
 };
 use alloc::vec::Vec;
-use crc::Crc;
-use hkdf::Hkdf;
 use bth_crypto_digestible::Digestible;
 use bth_crypto_hashes::{Blake2b512, Digest};
 use bth_crypto_keys::RistrettoPublic;
 use bth_crypto_ring_signature::{generators, CompressedCommitment, Scalar};
+use crc::Crc;
+use hkdf::Hkdf;
 #[cfg(feature = "prost")]
 use prost::Message;
 #[cfg(feature = "serde")]

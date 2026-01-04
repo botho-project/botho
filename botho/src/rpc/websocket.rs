@@ -11,11 +11,9 @@ use futures::{SinkExt, StreamExt};
 use hyper::upgrade::Upgraded;
 use hyper_util::rt::TokioIo;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 use tokio::sync::broadcast;
-use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::WebSocketStream;
+use tokio_tungstenite::{tungstenite::Message, WebSocketStream};
 use tracing::{debug, error, info, warn};
 
 /// Events that can be pushed to WebSocket clients
@@ -38,15 +36,9 @@ pub enum WsEvent {
         in_block: Option<u64>,
     },
     #[serde(rename = "mempool")]
-    MempoolUpdate {
-        size: usize,
-        total_fees: u64,
-    },
+    MempoolUpdate { size: usize, total_fees: u64 },
     #[serde(rename = "peers")]
-    PeerStatus {
-        peer_count: usize,
-        event: PeerEvent,
-    },
+    PeerStatus { peer_count: usize, event: PeerEvent },
     #[serde(rename = "minting")]
     MintingStatus {
         active: bool,
@@ -215,7 +207,14 @@ impl WsBroadcaster {
     }
 
     /// Send a new block event
-    pub fn new_block(&self, height: u64, hash: &[u8], timestamp: u64, tx_count: usize, difficulty: u64) {
+    pub fn new_block(
+        &self,
+        height: u64,
+        hash: &[u8],
+        timestamp: u64,
+        tx_count: usize,
+        difficulty: u64,
+    ) {
         self.send(WsEvent::NewBlock {
             height,
             hash: hex::encode(hash),

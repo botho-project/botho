@@ -128,9 +128,7 @@ impl ReputationManager {
 
     /// Get or create reputation entry for a peer
     pub fn get_or_create(&mut self, peer_id: &PeerId) -> &mut PeerReputation {
-        self.peers
-            .entry(*peer_id)
-            .or_default()
+        self.peers.entry(*peer_id).or_default()
     }
 
     /// Get reputation for a peer (if exists)

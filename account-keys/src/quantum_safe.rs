@@ -70,7 +70,11 @@ impl fmt::Display for AddressParseError {
             Self::InvalidPrefix => write!(f, "invalid address prefix, expected 'botho-pq://1/'"),
             Self::InvalidBase58 => write!(f, "invalid base58 encoding"),
             Self::InvalidLength { expected, got } => {
-                write!(f, "invalid length: expected {} bytes, got {}", expected, got)
+                write!(
+                    f,
+                    "invalid length: expected {} bytes, got {}",
+                    expected, got
+                )
             }
             Self::InvalidClassicalKey => write!(f, "invalid classical Ristretto public key"),
             Self::InvalidPqKey => write!(f, "invalid post-quantum public key"),
@@ -110,12 +114,13 @@ pub struct QuantumSafeAccountKey {
 impl QuantumSafeAccountKey {
     /// Create a quantum-safe account key from a mnemonic phrase
     ///
-    /// This derives both classical (Ristretto) and post-quantum (ML-KEM, ML-DSA)
-    /// keypairs from the same mnemonic. The classical keys use the standard
-    /// SLIP-0010 derivation path, while PQ keys use HKDF with domain separation.
+    /// This derives both classical (Ristretto) and post-quantum (ML-KEM,
+    /// ML-DSA) keypairs from the same mnemonic. The classical keys use the
+    /// standard SLIP-0010 derivation path, while PQ keys use HKDF with
+    /// domain separation.
     ///
-    /// The PQ keys are derived from the full BIP39 seed (512 bits) which includes
-    /// PBKDF2-HMAC-SHA512 key stretching with 2048 iterations.
+    /// The PQ keys are derived from the full BIP39 seed (512 bits) which
+    /// includes PBKDF2-HMAC-SHA512 key stretching with 2048 iterations.
     ///
     /// # Arguments
     ///
@@ -131,19 +136,22 @@ impl QuantumSafeAccountKey {
         Self::from_mnemonic_with_passphrase(mnemonic_phrase, "")
     }
 
-    /// Create a quantum-safe account key from a mnemonic phrase with optional passphrase
+    /// Create a quantum-safe account key from a mnemonic phrase with optional
+    /// passphrase
     ///
-    /// This derives both classical (Ristretto) and post-quantum (ML-KEM, ML-DSA)
-    /// keypairs from the same mnemonic. The passphrase provides an additional
-    /// layer of security - different passphrases produce completely different keys.
+    /// This derives both classical (Ristretto) and post-quantum (ML-KEM,
+    /// ML-DSA) keypairs from the same mnemonic. The passphrase provides an
+    /// additional layer of security - different passphrases produce
+    /// completely different keys.
     ///
-    /// The PQ keys are derived from the full BIP39 seed (512 bits) which includes
-    /// PBKDF2-HMAC-SHA512 key stretching with 2048 iterations.
+    /// The PQ keys are derived from the full BIP39 seed (512 bits) which
+    /// includes PBKDF2-HMAC-SHA512 key stretching with 2048 iterations.
     ///
     /// # Arguments
     ///
     /// * `mnemonic_phrase` - A BIP39 mnemonic phrase (typically 24 words)
-    /// * `passphrase` - Optional passphrase (can be empty string for no passphrase)
+    /// * `passphrase` - Optional passphrase (can be empty string for no
+    ///   passphrase)
     ///
     /// # Example
     ///
@@ -158,7 +166,9 @@ impl QuantumSafeAccountKey {
 
         // Derive the BIP39 seed with full PBKDF2 key stretching (2048 iterations)
         let seed = Seed::new(&mnemonic, passphrase);
-        let seed_bytes: &[u8; BIP39_SEED_SIZE] = seed.as_bytes().try_into()
+        let seed_bytes: &[u8; BIP39_SEED_SIZE] = seed
+            .as_bytes()
+            .try_into()
             .expect("BIP39 seed is always 64 bytes");
 
         // Derive classical keys using existing infrastructure
@@ -337,9 +347,8 @@ impl QuantumSafePublicAddress {
     ///
     /// Format: classical_view || classical_spend || pq_kem || pq_sig
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(
-            32 + 32 + ML_KEM_768_PUBLIC_KEY_BYTES + ML_DSA_65_PUBLIC_KEY_BYTES,
-        );
+        let mut bytes =
+            Vec::with_capacity(32 + 32 + ML_KEM_768_PUBLIC_KEY_BYTES + ML_DSA_65_PUBLIC_KEY_BYTES);
 
         bytes.extend_from_slice(&self.classical.view_public_key().to_bytes());
         bytes.extend_from_slice(&self.classical.spend_public_key().to_bytes());
@@ -435,8 +444,8 @@ impl QuantumSafePublicAddress {
 
         // PQ Sig key (1952 bytes)
         let sig_bytes = &bytes[offset..offset + ML_DSA_65_PUBLIC_KEY_BYTES];
-        let pq_sig_public_key = MlDsa65PublicKey::from_bytes(sig_bytes)
-            .map_err(|_| AddressParseError::InvalidPqKey)?;
+        let pq_sig_public_key =
+            MlDsa65PublicKey::from_bytes(sig_bytes).map_err(|_| AddressParseError::InvalidPqKey)?;
 
         Ok(Self {
             classical,
@@ -667,8 +676,12 @@ mod tests {
     #[test]
     fn test_passphrase_produces_different_pq_keys() {
         // Same mnemonic with different passphrases should produce different PQ keys
-        let account_no_pass = QuantumSafeAccountKey::from_mnemonic_with_passphrase(TEST_MNEMONIC, "");
-        let account_with_pass = QuantumSafeAccountKey::from_mnemonic_with_passphrase(TEST_MNEMONIC, "my secret passphrase");
+        let account_no_pass =
+            QuantumSafeAccountKey::from_mnemonic_with_passphrase(TEST_MNEMONIC, "");
+        let account_with_pass = QuantumSafeAccountKey::from_mnemonic_with_passphrase(
+            TEST_MNEMONIC,
+            "my secret passphrase",
+        );
 
         // PQ keys should be completely different with a passphrase
         assert_ne!(
@@ -686,8 +699,10 @@ mod tests {
     #[test]
     fn test_passphrase_deterministic() {
         // Same mnemonic + passphrase should always produce identical keys
-        let account1 = QuantumSafeAccountKey::from_mnemonic_with_passphrase(TEST_MNEMONIC, "deterministic");
-        let account2 = QuantumSafeAccountKey::from_mnemonic_with_passphrase(TEST_MNEMONIC, "deterministic");
+        let account1 =
+            QuantumSafeAccountKey::from_mnemonic_with_passphrase(TEST_MNEMONIC, "deterministic");
+        let account2 =
+            QuantumSafeAccountKey::from_mnemonic_with_passphrase(TEST_MNEMONIC, "deterministic");
 
         assert_eq!(
             account1.pq_kem_keypair().public_key().as_bytes(),

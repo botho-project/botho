@@ -77,7 +77,10 @@ enum ChaosBehavior {
     /// Add clock skew to timestamps (positive = ahead, negative = behind)
     ClockSkew(i64),
     /// Combined: packet loss + clock skew
-    Combined { packet_loss: f64, clock_skew_ms: i64 },
+    Combined {
+        packet_loss: f64,
+        clock_skew_ms: i64,
+    },
 }
 
 // ============================================================================
@@ -735,11 +738,11 @@ fn test_clock_skew() {
 
     // Mix of clock skews: some ahead, some behind
     let behaviors = vec![
-        ChaosBehavior::ClockSkew(-500),  // 500ms behind
-        ChaosBehavior::ClockSkew(0),     // On time
-        ChaosBehavior::ClockSkew(300),   // 300ms ahead
-        ChaosBehavior::ClockSkew(-200),  // 200ms behind
-        ChaosBehavior::ClockSkew(100),   // 100ms ahead
+        ChaosBehavior::ClockSkew(-500), // 500ms behind
+        ChaosBehavior::ClockSkew(0),    // On time
+        ChaosBehavior::ClockSkew(300),  // 300ms ahead
+        ChaosBehavior::ClockSkew(-200), // 200ms behind
+        ChaosBehavior::ClockSkew(100),  // 100ms ahead
     ];
 
     let mut network = build_chaos_network(behaviors);
@@ -758,9 +761,15 @@ fn test_clock_skew() {
             println!("  All nodes reached consensus for round {}", round);
         } else {
             // With clock skew, some nodes may lag - verify quorum at least
-            let quorum_reached =
-                network.wait_for_slot_majority(round as SlotIndex, QUORUM_K, Duration::from_secs(5));
-            assert!(quorum_reached, "Quorum should reach consensus despite clock skew");
+            let quorum_reached = network.wait_for_slot_majority(
+                round as SlotIndex,
+                QUORUM_K,
+                Duration::from_secs(5),
+            );
+            assert!(
+                quorum_reached,
+                "Quorum should reach consensus despite clock skew"
+            );
             println!("  Quorum reached consensus for round {}", round);
         }
 

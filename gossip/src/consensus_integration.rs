@@ -7,10 +7,7 @@
 //! - Starting a gossip service alongside the consensus service
 //! - Syncing discovered peers with the consensus peer manager
 
-use crate::{
-    GossipConfigBuilder, GossipEvent, GossipService, NodeCapabilities,
-    SharedPeerStore,
-};
+use crate::{GossipConfigBuilder, GossipEvent, GossipService, NodeCapabilities, SharedPeerStore};
 use bth_common::{NodeID, ResponderId};
 use bth_consensus_scp_types::QuorumSet;
 use bth_crypto_keys::Ed25519Pair;

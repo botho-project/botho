@@ -1,8 +1,8 @@
 // Copyright (c) 2018-2022 The Botho Foundation
 
 use crate::traits::{ConnectionUri, UriScheme};
-use displaydoc::Display;
 use bth_common::ResponderId;
+use displaydoc::Display;
 use percent_encoding::percent_decode_str;
 use std::{
     fmt::{Display, Formatter, Result as FmtResult},

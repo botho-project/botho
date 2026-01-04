@@ -3,43 +3,33 @@
 //! Run with: cargo bench -p bth-crypto-pq
 //!
 //! These benchmarks measure the performance impact of quantum-safe signatures
-//! and key encapsulation compared to what would be expected from classical crypto.
+//! and key encapsulation compared to what would be expected from classical
+//! crypto.
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
-use bth_crypto_pq::{
-    derive_onetime_sig_keypair, derive_pq_keys,
-    MlDsa65KeyPair, MlKem768KeyPair,
-};
+use bth_crypto_pq::{derive_onetime_sig_keypair, derive_pq_keys, MlDsa65KeyPair, MlKem768KeyPair};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 
 /// Benchmark ML-KEM-768 key generation
 fn bench_mlkem_keygen(c: &mut Criterion) {
     c.bench_function("ML-KEM-768 keygen (random)", |b| {
-        b.iter(|| {
-            black_box(MlKem768KeyPair::generate())
-        })
+        b.iter(|| black_box(MlKem768KeyPair::generate()))
     });
 
     let seed = [0u8; 32];
     c.bench_function("ML-KEM-768 keygen (from seed)", |b| {
-        b.iter(|| {
-            black_box(MlKem768KeyPair::from_seed(&seed))
-        })
+        b.iter(|| black_box(MlKem768KeyPair::from_seed(&seed)))
     });
 }
 
 /// Benchmark ML-DSA-65 key generation
 fn bench_mldsa_keygen(c: &mut Criterion) {
     c.bench_function("ML-DSA-65 keygen (random)", |b| {
-        b.iter(|| {
-            black_box(MlDsa65KeyPair::generate())
-        })
+        b.iter(|| black_box(MlDsa65KeyPair::generate()))
     });
 
     let seed = [0u8; 32];
     c.bench_function("ML-DSA-65 keygen (from seed)", |b| {
-        b.iter(|| {
-            black_box(MlDsa65KeyPair::from_seed(&seed))
-        })
+        b.iter(|| black_box(MlDsa65KeyPair::from_seed(&seed)))
     });
 }
 
@@ -49,9 +39,7 @@ fn bench_mlkem_encapsulate(c: &mut Criterion) {
     let public_key = keypair.public_key();
 
     c.bench_function("ML-KEM-768 encapsulate", |b| {
-        b.iter(|| {
-            black_box(public_key.encapsulate())
-        })
+        b.iter(|| black_box(public_key.encapsulate()))
     });
 }
 
@@ -61,9 +49,7 @@ fn bench_mlkem_decapsulate(c: &mut Criterion) {
     let (ciphertext, _) = keypair.public_key().encapsulate();
 
     c.bench_function("ML-KEM-768 decapsulate", |b| {
-        b.iter(|| {
-            black_box(keypair.decapsulate(&ciphertext).unwrap())
-        })
+        b.iter(|| black_box(keypair.decapsulate(&ciphertext).unwrap()))
     });
 }
 
@@ -78,11 +64,7 @@ fn bench_mldsa_sign(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::new("message_bytes", msg_size),
             msg_size,
-            |b, _| {
-                b.iter(|| {
-                    black_box(keypair.sign(&message))
-                })
-            },
+            |b, _| b.iter(|| black_box(keypair.sign(&message))),
         );
     }
     group.finish();
@@ -102,11 +84,7 @@ fn bench_mldsa_verify(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::new("message_bytes", msg_size),
             msg_size,
-            |b, _| {
-                b.iter(|| {
-                    black_box(public_key.verify(&message, &signature).unwrap())
-                })
-            },
+            |b, _| b.iter(|| black_box(public_key.verify(&message, &signature).unwrap())),
         );
     }
     group.finish();
@@ -117,9 +95,7 @@ fn bench_derive_pq_keys(c: &mut Criterion) {
     let mnemonic = b"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 
     c.bench_function("derive_pq_keys (full wallet keygen)", |b| {
-        b.iter(|| {
-            black_box(derive_pq_keys(mnemonic))
-        })
+        b.iter(|| black_box(derive_pq_keys(mnemonic)))
     });
 }
 
@@ -128,9 +104,7 @@ fn bench_onetime_keypair(c: &mut Criterion) {
     let shared_secret = [42u8; 32];
 
     c.bench_function("derive_onetime_sig_keypair", |b| {
-        b.iter(|| {
-            black_box(derive_onetime_sig_keypair(&shared_secret, 0))
-        })
+        b.iter(|| black_box(derive_onetime_sig_keypair(&shared_secret, 0)))
     });
 }
 
@@ -180,9 +154,7 @@ fn bench_pq_input_verification(c: &mut Criterion) {
     let public_key = keypair.public_key();
 
     c.bench_function("PQ input verification", |b| {
-        b.iter(|| {
-            black_box(public_key.verify(&tx_message, &signature).unwrap())
-        })
+        b.iter(|| black_box(public_key.verify(&tx_message, &signature).unwrap()))
     });
 }
 
@@ -201,7 +173,8 @@ fn bench_multi_io_transaction(c: &mut Criterion) {
             |b, &n| {
                 b.iter(|| {
                     // Sign with n keypairs (simulating n inputs)
-                    let sigs: Vec<_> = keypairs.iter()
+                    let sigs: Vec<_> = keypairs
+                        .iter()
                         .take(n)
                         .map(|kp| kp.sign(&tx_message))
                         .collect();
@@ -230,7 +203,10 @@ fn bench_multi_input_verification(c: &mut Criterion) {
                 b.iter(|| {
                     // Verify n signatures
                     for i in 0..n {
-                        keypairs[i].public_key().verify(&tx_message, &signatures[i]).unwrap();
+                        keypairs[i]
+                            .public_key()
+                            .verify(&tx_message, &signatures[i])
+                            .unwrap();
                     }
                 })
             },

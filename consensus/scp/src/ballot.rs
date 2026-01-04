@@ -43,8 +43,9 @@ impl<V: Value> Ballot<V> {
 
     /// Check whether the ballot's values are in canonical (sorted) order.
     ///
-    /// For consensus safety, all nodes must process ballot values in the same order.
-    /// Values must be strictly sorted (no duplicates) in ascending order.
+    /// For consensus safety, all nodes must process ballot values in the same
+    /// order. Values must be strictly sorted (no duplicates) in ascending
+    /// order.
     pub fn is_values_sorted(&self) -> bool {
         self.X.windows(2).all(|w| w[0] < w[1])
     }

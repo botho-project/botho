@@ -735,7 +735,8 @@ impl CommittedFeeProver {
         // Check that fee is actually sufficient
         // fee = base_fee * factor(wealth) / FACTOR_SCALE
         let factor = self.curve.factor(self.wealth);
-        let required_fee = (self.base_fee as u128 * factor as u128 / ZkFeeCurve::FACTOR_SCALE as u128) as u64;
+        let required_fee =
+            (self.base_fee as u128 * factor as u128 / ZkFeeCurve::FACTOR_SCALE as u128) as u64;
         if self.fee_paid < required_fee {
             return None;
         }
@@ -807,10 +808,14 @@ impl CommittedFeeProver {
         };
 
         // Linear proof: fee >= intercept + slope * wealth
-        // Compute factor using HEAD's SegmentParams: factor = intercept/FACTOR_SCALE + slope * (w - w_lo) / SLOPE_SCALE
+        // Compute factor using HEAD's SegmentParams: factor = intercept/FACTOR_SCALE +
+        // slope * (w - w_lo) / SLOPE_SCALE
         let w_offset = self.wealth.saturating_sub(params.w_lo) as i128;
-        let slope_contribution = (params.slope_scaled as i128 * w_offset / ZkFeeCurve::SLOPE_SCALE) as i64;
-        let expected_factor = ((params.intercept_scaled + slope_contribution) / ZkFeeCurve::FACTOR_SCALE as i64).max(0) as u64;
+        let slope_contribution =
+            (params.slope_scaled as i128 * w_offset / ZkFeeCurve::SLOPE_SCALE) as i64;
+        let expected_factor = ((params.intercept_scaled + slope_contribution)
+            / ZkFeeCurve::FACTOR_SCALE as i64)
+            .max(0) as u64;
         let required = (self.base_fee as u128 * expected_factor as u128) as u64;
         let excess = self.fee_paid.saturating_sub(required);
 
@@ -921,13 +926,28 @@ impl CommittedFeeVerifier {
         // In a full OR-proof, we would verify the structure matches the challenges
         for segment_proof in &proof.segment_proofs {
             // Basic structural validation
-            if segment_proof.range_proof.lower_commitment.decompress().is_none() {
+            if segment_proof
+                .range_proof
+                .lower_commitment
+                .decompress()
+                .is_none()
+            {
                 return false;
             }
-            if segment_proof.range_proof.upper_commitment.decompress().is_none() {
+            if segment_proof
+                .range_proof
+                .upper_commitment
+                .decompress()
+                .is_none()
+            {
                 return false;
             }
-            if segment_proof.linear_proof.excess_commitment.decompress().is_none() {
+            if segment_proof
+                .linear_proof
+                .excess_commitment
+                .decompress()
+                .is_none()
+            {
                 return false;
             }
         }
@@ -992,7 +1012,11 @@ impl CommittedFeeProofBuilder {
 
         for secret in &self.input_secrets {
             for entry in &secret.entries {
-                let cw = self.cluster_wealth.get(&entry.cluster_id).copied().unwrap_or(0);
+                let cw = self
+                    .cluster_wealth
+                    .get(&entry.cluster_id)
+                    .copied()
+                    .unwrap_or(0);
                 total_wealth += entry.mass as u128 * cw as u128 / TAG_WEIGHT_SCALE as u128;
                 total_blinding += entry.blinding * Scalar::from(cw);
             }
@@ -1021,7 +1045,8 @@ impl CommittedFeeProofBuilder {
 
         // Create wealth linkage proof
         let g = blinding_generator();
-        let wealth_commitment = (Scalar::from(effective_wealth) * g + wealth_blinding * g).compress();
+        let wealth_commitment =
+            (Scalar::from(effective_wealth) * g + wealth_blinding * g).compress();
         let linkage_proof = SchnorrProof::prove(wealth_blinding, b"wealth_linkage", rng);
 
         let wealth_linkage = WealthLinkageProof {
@@ -1071,16 +1096,18 @@ impl CommittedFeeProofVerifier {
     /// Verify the complete fee proof.
     pub fn verify(&self, proof: &CommittedFeeProof) -> bool {
         // Verify wealth commitment is valid
-        if proof.wealth_linkage.wealth_commitment.decompress().is_none() {
+        if proof
+            .wealth_linkage
+            .wealth_commitment
+            .decompress()
+            .is_none()
+        {
             return false;
         }
 
         // Verify the fee OR-proof
-        let fee_verifier = CommittedFeeVerifier::new(
-            self.curve.clone(),
-            self.fee_paid,
-            self.base_fee,
-        );
+        let fee_verifier =
+            CommittedFeeVerifier::new(self.curve.clone(), self.fee_paid, self.base_fee);
 
         if !fee_verifier.verify(&proof.fee_proof) {
             return false;
@@ -1165,7 +1192,6 @@ const WEALTH_GENERATOR_DOMAIN_TAG: &[u8] = b"mc_zk_fee_wealth_generator";
 
 /// Domain separator for fee generator in fee proofs.
 const FEE_GENERATOR_DOMAIN_TAG: &[u8] = b"mc_zk_fee_fee_generator";
-
 
 /// Derive the generator for wealth commitments in fee proofs.
 pub fn wealth_generator() -> RistrettoPoint {
@@ -1370,11 +1396,8 @@ mod tests {
             CommittedTagVectorSecret::from_plaintext(output_value, &inflated_tags, &mut OsRng);
 
         let decay_rate = 50_000;
-        let prover = TagConservationProver::new(
-            vec![input_secret],
-            vec![inflated_output],
-            decay_rate,
-        );
+        let prover =
+            TagConservationProver::new(vec![input_secret], vec![inflated_output], decay_rate);
 
         // Should fail to generate proof
         let proof = prover.prove(&mut OsRng);
@@ -1436,11 +1459,8 @@ mod tests {
             let decay_rate = 50_000;
             let output_secret = input_secret.apply_decay(decay_rate, &mut OsRng);
 
-            let prover = TagConservationProver::new(
-                vec![input_secret],
-                vec![output_secret],
-                decay_rate,
-            );
+            let prover =
+                TagConservationProver::new(vec![input_secret], vec![output_secret], decay_rate);
 
             let proof = prover.prove(&mut OsRng).expect("Should generate proof");
             let bytes = proof.to_bytes();
@@ -1522,7 +1542,7 @@ mod tests {
 
             // Document the relationship
             let _expected_total = 4 + (72 * num_clusters) + 64  // conservation proof
-                + 2 * (4 + (40 * num_clusters) + 32);           // 2x tag vectors
+                + 2 * (4 + (40 * num_clusters) + 32); // 2x tag vectors
             assert_eq!(total, _expected_total);
         }
     }

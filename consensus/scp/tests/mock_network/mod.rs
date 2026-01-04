@@ -171,9 +171,7 @@ impl SCPNetwork {
             scp_network
                 .shared_data_map
                 .insert(node_config.id.clone(), node.shared_data.clone());
-            scp_network
-                .nodes_map
-                .insert(node_config.id.clone(), node);
+            scp_network.nodes_map.insert(node_config.id.clone(), node);
         }
 
         scp_network
@@ -452,7 +450,8 @@ impl SCPNode {
     }
 
     /// Push value to this node's consensus task.
-    /// Silently ignores Disconnected errors (receiver thread ended during shutdown).
+    /// Silently ignores Disconnected errors (receiver thread ended during
+    /// shutdown).
     pub fn send_value(&self, value: &str) {
         // Channel is unbounded, so only Disconnected errors are possible
         let _ = self
@@ -461,7 +460,8 @@ impl SCPNode {
     }
 
     /// Feed message from the network to this node's consensus task.
-    /// Silently ignores Disconnected errors (receiver thread ended during shutdown).
+    /// Silently ignores Disconnected errors (receiver thread ended during
+    /// shutdown).
     pub fn send_msg(&self, msg: Arc<Msg<String>>) {
         // Channel is unbounded, so only Disconnected errors are possible
         let _ = self.sender.try_send(SCPNodeTaskMessage::Msg(msg));

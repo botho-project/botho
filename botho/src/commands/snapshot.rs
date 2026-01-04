@@ -6,17 +6,18 @@ use anyhow::{Context, Result};
 use std::path::Path;
 use tracing::info;
 
-use crate::config::{ledger_db_path_from_config, Config};
-use crate::ledger::{Ledger, UtxoSnapshot};
+use crate::{
+    config::{ledger_db_path_from_config, Config},
+    ledger::{Ledger, UtxoSnapshot},
+};
 
 /// Create a snapshot of the current UTXO set.
 pub fn create(config_path: &Path, output: &str) -> Result<()> {
-    let _config = Config::load(config_path)
-        .context("Failed to load config. Run 'botho init' first.")?;
+    let _config =
+        Config::load(config_path).context("Failed to load config. Run 'botho init' first.")?;
 
     let ledger_path = ledger_db_path_from_config(config_path);
-    let ledger = Ledger::open(&ledger_path)
-        .context("Failed to open ledger")?;
+    let ledger = Ledger::open(&ledger_path).context("Failed to open ledger")?;
 
     let output_path = Path::new(output);
 
@@ -32,7 +33,11 @@ pub fn create(config_path: &Path, output: &str) -> Result<()> {
 
     println!("\nSnapshot created successfully!");
     println!("  File: {}", output_path.display());
-    println!("  Size: {} bytes ({:.2} MB)", size, size as f64 / 1_048_576.0);
+    println!(
+        "  Size: {} bytes ({:.2} MB)",
+        size,
+        size as f64 / 1_048_576.0
+    );
     println!("  Block hash: {}", hex::encode(state.tip_hash));
 
     info!(
@@ -47,19 +52,17 @@ pub fn create(config_path: &Path, output: &str) -> Result<()> {
 
 /// Load a snapshot from a file.
 pub fn load(config_path: &Path, input: &str, verify_hash: Option<&str>) -> Result<()> {
-    let _config = Config::load(config_path)
-        .context("Failed to load config. Run 'botho init' first.")?;
+    let _config =
+        Config::load(config_path).context("Failed to load config. Run 'botho init' first.")?;
 
     let ledger_path = ledger_db_path_from_config(config_path);
-    let ledger = Ledger::open(&ledger_path)
-        .context("Failed to open ledger")?;
+    let ledger = Ledger::open(&ledger_path).context("Failed to open ledger")?;
 
     let input_path = Path::new(input);
 
     // Parse optional block hash for verification
     let expected_hash = if let Some(hash_hex) = verify_hash {
-        let bytes = hex::decode(hash_hex)
-            .context("Invalid block hash hex")?;
+        let bytes = hex::decode(hash_hex).context("Invalid block hash hex")?;
         if bytes.len() != 32 {
             anyhow::bail!("Block hash must be 32 bytes (64 hex characters)");
         }
@@ -73,11 +76,9 @@ pub fn load(config_path: &Path, input: &str, verify_hash: Option<&str>) -> Resul
     println!("Loading UTXO snapshot from {}...", input_path.display());
 
     // First, show snapshot info
-    let file = std::fs::File::open(input_path)
-        .context("Failed to open snapshot file")?;
+    let file = std::fs::File::open(input_path).context("Failed to open snapshot file")?;
     let reader = std::io::BufReader::new(file);
-    let snapshot = UtxoSnapshot::read_from(reader)
-        .context("Failed to read snapshot")?;
+    let snapshot = UtxoSnapshot::read_from(reader).context("Failed to read snapshot")?;
 
     println!("Snapshot information:");
     println!("  Version: {}", snapshot.version);
@@ -119,21 +120,23 @@ pub fn load(config_path: &Path, input: &str, verify_hash: Option<&str>) -> Resul
 pub fn info(file: &str) -> Result<()> {
     let file_path = Path::new(file);
 
-    let file = std::fs::File::open(file_path)
-        .context("Failed to open snapshot file")?;
+    let file = std::fs::File::open(file_path).context("Failed to open snapshot file")?;
 
     let metadata = file.metadata()?;
     let file_size = metadata.len();
 
     let reader = std::io::BufReader::new(file);
-    let snapshot = UtxoSnapshot::read_from(reader)
-        .context("Failed to read snapshot")?;
+    let snapshot = UtxoSnapshot::read_from(reader).context("Failed to read snapshot")?;
 
     println!("Snapshot Information");
     println!("====================");
     println!();
     println!("File: {}", file_path.display());
-    println!("File size: {} bytes ({:.2} MB)", file_size, file_size as f64 / 1_048_576.0);
+    println!(
+        "File size: {} bytes ({:.2} MB)",
+        file_size,
+        file_size as f64 / 1_048_576.0
+    );
     println!();
     println!("Format version: {}", snapshot.version);
     println!("Block height: {}", snapshot.height);
@@ -146,19 +149,37 @@ pub fn info(file: &str) -> Result<()> {
     println!("Data sizes:");
     println!("  UTXO data: {} bytes", snapshot.utxo_data.len());
     println!("  Key image data: {} bytes", snapshot.key_image_data.len());
-    println!("  Cluster wealth data: {} bytes", snapshot.cluster_wealth_data.len());
+    println!(
+        "  Cluster wealth data: {} bytes",
+        snapshot.cluster_wealth_data.len()
+    );
     println!("  Compressed total: {} bytes", snapshot.compressed_size());
-    println!("  Estimated uncompressed: ~{} bytes", snapshot.estimated_uncompressed_size());
+    println!(
+        "  Estimated uncompressed: ~{} bytes",
+        snapshot.estimated_uncompressed_size()
+    );
     println!();
     println!("Merkle roots:");
     println!("  UTXO: {}", hex::encode(snapshot.utxo_merkle_root));
-    println!("  Key image: {}", hex::encode(snapshot.key_image_merkle_root));
+    println!(
+        "  Key image: {}",
+        hex::encode(snapshot.key_image_merkle_root)
+    );
     println!();
     println!("Chain state at snapshot:");
-    println!("  Total mined: {} picocredits", snapshot.chain_state.total_mined);
-    println!("  Fees burned: {} picocredits", snapshot.chain_state.total_fees_burned);
+    println!(
+        "  Total mined: {} picocredits",
+        snapshot.chain_state.total_mined
+    );
+    println!(
+        "  Fees burned: {} picocredits",
+        snapshot.chain_state.total_fees_burned
+    );
     println!("  Difficulty: {}", snapshot.chain_state.difficulty);
-    println!("  Current reward: {} picocredits", snapshot.chain_state.current_reward);
+    println!(
+        "  Current reward: {} picocredits",
+        snapshot.chain_state.current_reward
+    );
     println!();
 
     // Verify integrity

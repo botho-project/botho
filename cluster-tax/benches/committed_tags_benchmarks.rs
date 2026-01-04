@@ -8,9 +8,8 @@
 
 use bth_cluster_tax::{
     crypto::{
-        blinding_generator, cluster_generator, CommittedTagMass,
-        CommittedTagVectorSecret, SchnorrProof, TagConservationProver,
-        TagConservationVerifier,
+        blinding_generator, cluster_generator, CommittedTagMass, CommittedTagVectorSecret,
+        SchnorrProof, TagConservationProver, TagConservationVerifier,
     },
     ClusterId, TagWeight, TAG_WEIGHT_SCALE,
 };
@@ -169,14 +168,12 @@ fn bench_multi_input_conservation(c: &mut Criterion) {
                 let decay_rate = 50_000;
 
                 // Merge inputs and apply decay
-                let merged = CommittedTagVectorSecret::merge(&[input1.clone(), input2.clone()], &mut OsRng);
+                let merged =
+                    CommittedTagVectorSecret::merge(&[input1.clone(), input2.clone()], &mut OsRng);
                 let output = merged.apply_decay(decay_rate, &mut OsRng);
 
-                let prover = TagConservationProver::new(
-                    vec![input1, input2],
-                    vec![output],
-                    decay_rate,
-                );
+                let prover =
+                    TagConservationProver::new(vec![input1, input2], vec![output], decay_rate);
 
                 b.iter(|| black_box(prover.prove(&mut OsRng)))
             },

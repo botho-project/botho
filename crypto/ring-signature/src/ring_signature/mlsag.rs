@@ -208,10 +208,10 @@ impl RingMLSAG {
 mod mlsag_tests {
     use super::*;
     use crate::generators;
-    use curve25519_dalek::ristretto::CompressedRistretto;
     use bth_crypto_keys::CompressedRistrettoPublic;
     use bth_util_from_random::FromRandom;
     use bth_util_test_helper::{RngType, SeedableRng};
+    use curve25519_dalek::ristretto::CompressedRistretto;
     use proptest::prelude::*;
     use rand_core::RngCore;
 

@@ -7,9 +7,11 @@
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
-use std::net::SocketAddr;
-use std::time::{Duration, Instant};
+use std::{
+    collections::{HashMap, HashSet},
+    net::SocketAddr,
+    time::{Duration, Instant},
+};
 use tracing::{debug, info, warn};
 
 /// DNS seed hostnames that resolve to active Botho nodes
@@ -188,12 +190,10 @@ impl NodeDiscovery {
     async fn resolve_dns_seed(&self, seed: &str) -> Result<Vec<SocketAddr>> {
         let host = format!("{}:{}", seed, DEFAULT_PORT);
 
-        let addrs: Vec<SocketAddr> = tokio::time::timeout(
-            PROBE_TIMEOUT,
-            tokio::net::lookup_host(&host),
-        )
-        .await??
-        .collect();
+        let addrs: Vec<SocketAddr> =
+            tokio::time::timeout(PROBE_TIMEOUT, tokio::net::lookup_host(&host))
+                .await??
+                .collect();
 
         Ok(addrs)
     }

@@ -6,13 +6,13 @@
 //! represents an element of \\(\mathbb Z / \ell\\).
 
 use super::Error;
-use curve25519_dalek::scalar::Scalar;
 use bth_crypto_digestible::Digestible;
 use bth_util_from_random::FromRandom;
 use bth_util_repr_bytes::{
     derive_core_cmp_from_as_ref, derive_debug_and_display_hex_from_as_ref,
     derive_try_from_slice_from_repr_bytes, typenum::U32, GenericArray, ReprBytes,
 };
+use curve25519_dalek::scalar::Scalar;
 use rand_core::{CryptoRng, RngCore};
 use zeroize::Zeroize;
 

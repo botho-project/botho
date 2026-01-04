@@ -43,7 +43,8 @@ fn impl_with_logger(item: TokenStream, params: TokenStream2, args: TokenStream2)
     let new_ident = quote::format_ident!("__wrapped_{}", orig_ident);
     original_fn.sig.ident = new_ident.clone();
 
-    // With tracing, we don't need slog_scope - just create a Logger and call the function
+    // With tracing, we don't need slog_scope - just create a Logger and call the
+    // function
     let mut new_fn: syn::ItemFn = syn::parse_quote! {
         #[test]
         fn #orig_ident(#params) {
@@ -83,7 +84,8 @@ pub fn async_test_with_logger(attrs: TokenStream, item: TokenStream) -> TokenStr
 
     let attrs: TokenStream2 = attrs.into();
 
-    // With tracing, we don't need slog_scope - just create a Logger and call the function
+    // With tracing, we don't need slog_scope - just create a Logger and call the
+    // function
     let mut new_fn: syn::ItemFn = syn::parse_quote! {
         #[tokio::test(#attrs)]
         async fn #orig_ident() {

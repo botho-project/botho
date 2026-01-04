@@ -4,7 +4,6 @@
 
 use alloc::vec::Vec;
 
-use core::fmt;
 use bth_account_keys::PublicAddress;
 use bth_common::Hash;
 use bth_crypto_digestible::{Digestible, MerlinTranscript};
@@ -13,6 +12,7 @@ use bth_crypto_ring_signature::{KeyImage, ReducedTxOut};
 use bth_util_repr_bytes::{
     derive_prost_message_from_repr_bytes, typenum::U32, GenericArray, ReprBytes,
 };
+use core::fmt;
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
@@ -223,7 +223,6 @@ pub struct TxIn {
     pub ring: Vec<TxOut>,
 
     // Field 2 was `proofs: Vec<TxOutMembershipProof>` - removed as part of SGX removal
-
     /// Any rules associated to this input, per MCIP #31
     #[prost(message, tag = "3")]
     pub input_rules: Option<InputRules>,
@@ -276,14 +275,13 @@ pub struct TxOut {
     pub public_key: CompressedRistrettoPublic,
 
     // Field 4 was `e_fog_hint` - removed as part of fog removal
-
     /// The encrypted memo (except for old TxOut's, which don't have this.)
     #[prost(message, tag = "5")]
     pub e_memo: Option<EncryptedMemo>,
 
     /// Cluster tag vector for progressive transaction fees.
-    /// Tracks what fraction of this output's value traces back to each cluster origin.
-    /// Only present from block version 5 (cluster tags) onwards.
+    /// Tracks what fraction of this output's value traces back to each cluster
+    /// origin. Only present from block version 5 (cluster tags) onwards.
     #[prost(message, tag = "7")]
     pub cluster_tags: Option<ClusterTagVector>,
 
@@ -332,13 +330,9 @@ impl TxOut {
         recipient: &PublicAddress,
         tx_private_key: &RistrettoPrivate,
     ) -> Result<Self, NewTxError> {
-        TxOut::new_with_memo(
-            block_version,
-            amount,
-            recipient,
-            tx_private_key,
-            |_| Ok(MemoPayload::default()),
-        )
+        TxOut::new_with_memo(block_version, amount, recipient, tx_private_key, |_| {
+            Ok(MemoPayload::default())
+        })
     }
 
     /// Creates a TxOut that sends `value` to `recipient`, with a custom memo
@@ -390,11 +384,13 @@ impl TxOut {
     /// Creates a TxOut with cluster tags for progressive fee computation.
     ///
     /// # Arguments
-    /// * `block_version` - Structural rules to target (must be >= 5 for cluster tags)
+    /// * `block_version` - Structural rules to target (must be >= 5 for cluster
+    ///   tags)
     /// * `amount` - Amount contained within the TxOut
     /// * `recipient` - Recipient's address.
     /// * `tx_private_key` - The transaction's private key
-    /// * `memo_fn` - A callback taking MemoContext, which produces a MemoPayload
+    /// * `memo_fn` - A callback taking MemoContext, which produces a
+    ///   MemoPayload
     /// * `cluster_tags` - The cluster tag vector inherited from input(s)
     pub fn new_with_cluster_tags(
         block_version: BlockVersion,
@@ -415,15 +411,19 @@ impl TxOut {
         Ok(tx_out)
     }
 
-    /// Creates a TxOut with committed cluster tags for private transactions (Phase 2).
+    /// Creates a TxOut with committed cluster tags for private transactions
+    /// (Phase 2).
     ///
     /// # Arguments
-    /// * `block_version` - Structural rules to target (must support committed cluster tags)
+    /// * `block_version` - Structural rules to target (must support committed
+    ///   cluster tags)
     /// * `amount` - Amount contained within the TxOut
     /// * `recipient` - Recipient's address.
     /// * `tx_private_key` - The transaction's private key
-    /// * `memo_fn` - A callback taking MemoContext, which produces a MemoPayload
-    /// * `committed_cluster_tags` - Serialized CommittedTagVector from mc-cluster-tax
+    /// * `memo_fn` - A callback taking MemoContext, which produces a
+    ///   MemoPayload
+    /// * `committed_cluster_tags` - Serialized CommittedTagVector from
+    ///   mc-cluster-tax
     pub fn new_with_committed_cluster_tags(
         block_version: BlockVersion,
         amount: Amount,
@@ -700,13 +700,7 @@ mod tests {
             let recipient = PublicAddress::from_random(&mut rng);
             let amount = Amount::new(23, Bth::ID);
             let tx_private_key = RistrettoPrivate::from_random(&mut rng);
-            let tx_out = TxOut::new(
-                block_version,
-                amount,
-                &recipient,
-                &tx_private_key,
-            )
-            .unwrap();
+            let tx_out = TxOut::new(block_version, amount, &recipient, &tx_private_key).unwrap();
 
             // TxOut = decode(encode(TxOut))
             assert_eq!(tx_out, TxOut::decode(&tx_out.encode_to_vec()[..]).unwrap());

@@ -1,6 +1,7 @@
 // Copyright (c) 2024 Botho Foundation
 
-//! Network integration tests for peer discovery, chain sync, and message propagation.
+//! Network integration tests for peer discovery, chain sync, and message
+//! propagation.
 //!
 //! These tests spin up multiple libp2p nodes and verify they can:
 //! - Discover each other
@@ -20,11 +21,12 @@ use libp2p::{
 };
 use tokio::time::timeout;
 
-use botho::block::Block;
-use botho::network::{
-    create_sync_behaviour, ChainSyncManager, ReputationManager, SyncAction,
-    SyncCodec, SyncRateLimiter, SyncRequest, SyncResponse, BLOCKS_PER_REQUEST,
-    MAX_REQUESTS_PER_MINUTE,
+use botho::{
+    block::Block,
+    network::{
+        create_sync_behaviour, ChainSyncManager, ReputationManager, SyncAction, SyncCodec,
+        SyncRateLimiter, SyncRequest, SyncResponse, BLOCKS_PER_REQUEST, MAX_REQUESTS_PER_MINUTE,
+    },
 };
 
 /// Topic for block announcements (same as in discovery.rs)
@@ -69,10 +71,18 @@ async fn create_test_swarm() -> (Swarm<TestBehaviour>, PeerId, Multiaddr) {
 
     // Subscribe to topics
     let blocks_topic = IdentTopic::new(BLOCKS_TOPIC);
-    swarm.behaviour_mut().gossipsub.subscribe(&blocks_topic).unwrap();
+    swarm
+        .behaviour_mut()
+        .gossipsub
+        .subscribe(&blocks_topic)
+        .unwrap();
 
     let tx_topic = IdentTopic::new(TRANSACTIONS_TOPIC);
-    swarm.behaviour_mut().gossipsub.subscribe(&tx_topic).unwrap();
+    swarm
+        .behaviour_mut()
+        .gossipsub
+        .subscribe(&tx_topic)
+        .unwrap();
 
     // Listen on a random available port
     let listen_addr: Multiaddr = "/ip4/127.0.0.1/tcp/0".parse().unwrap();
@@ -147,7 +157,11 @@ async fn test_two_nodes_discover_each_other() {
     assert!(connected.is_ok(), "Should connect within timeout");
     let connected_peer = connected.unwrap();
     assert!(connected_peer.is_some(), "Should receive connection event");
-    assert_eq!(connected_peer.unwrap(), peer1, "Should connect to correct peer");
+    assert_eq!(
+        connected_peer.unwrap(),
+        peer1,
+        "Should connect to correct peer"
+    );
 }
 
 #[tokio::test]
@@ -194,7 +208,10 @@ async fn test_three_node_mesh_discovery() {
     .await;
 
     assert!(result.is_ok(), "Mesh should form within timeout");
-    assert!(connections.len() >= 4, "Should have at least 4 connection events");
+    assert!(
+        connections.len() >= 4,
+        "Should have at least 4 connection events"
+    );
 }
 
 // ============================================================================
@@ -254,7 +271,10 @@ async fn test_block_gossip_between_two_nodes() {
 
     // Publish from node 1
     let topic = IdentTopic::new(BLOCKS_TOPIC);
-    let publish_result = swarm1.behaviour_mut().gossipsub.publish(topic, block_bytes.clone());
+    let publish_result = swarm1
+        .behaviour_mut()
+        .gossipsub
+        .publish(topic, block_bytes.clone());
 
     // Note: Gossipsub may reject if there are no mesh peers yet
     // In production, we'd retry or wait for mesh formation
@@ -362,7 +382,11 @@ async fn test_sync_request_response() {
                         height: 100,
                         tip_hash: [1u8; 32],
                     };
-                    swarm1.behaviour_mut().sync.send_response(channel, response).ok();
+                    swarm1
+                        .behaviour_mut()
+                        .sync
+                        .send_response(channel, response)
+                        .ok();
                 }
             }
         }
@@ -393,7 +417,11 @@ async fn test_sync_request_response() {
     client_task.abort();
 
     assert!(result.is_ok(), "Should complete sync handshake");
-    assert_eq!(result.unwrap().unwrap(), 100, "Should receive correct height");
+    assert_eq!(
+        result.unwrap().unwrap(),
+        100,
+        "Should receive correct height"
+    );
 }
 
 #[tokio::test]
@@ -465,7 +493,11 @@ async fn test_sync_blocks_request() {
                         blocks: vec![Block::genesis()],
                         has_more: false,
                     };
-                    swarm1.behaviour_mut().sync.send_response(channel, response).ok();
+                    swarm1
+                        .behaviour_mut()
+                        .sync
+                        .send_response(channel, response)
+                        .ok();
                 }
             }
         }
@@ -800,7 +832,10 @@ fn test_sync_messages_size_limits() {
     // Verify GetStatus request fits in MAX_REQUEST_SIZE
     let status_request = SyncRequest::GetStatus;
     let bytes = bincode::serialize(&status_request).unwrap();
-    assert!(bytes.len() < 1024, "GetStatus should fit in request size limit");
+    assert!(
+        bytes.len() < 1024,
+        "GetStatus should fit in request size limit"
+    );
 
     // Verify GetBlocks request fits
     let blocks_request = SyncRequest::GetBlocks {
@@ -808,5 +843,8 @@ fn test_sync_messages_size_limits() {
         count: BLOCKS_PER_REQUEST,
     };
     let bytes = bincode::serialize(&blocks_request).unwrap();
-    assert!(bytes.len() < 1024, "GetBlocks should fit in request size limit");
+    assert!(
+        bytes.len() < 1024,
+        "GetBlocks should fit in request size limit"
+    );
 }

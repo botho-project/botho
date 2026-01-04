@@ -13,8 +13,10 @@ pub mod send;
 pub mod sync;
 
 use anyhow::Result;
-use std::io::{self, Write};
-use std::path::Path;
+use std::{
+    io::{self, Write},
+    path::Path,
+};
 use zeroize::Zeroizing;
 
 use crate::storage::{DecryptionRateLimiter, EncryptedWallet};
@@ -67,7 +69,8 @@ pub fn print_warning(message: &str) {
 /// * `wallet_path` - Path to the encrypted wallet file
 ///
 /// # Returns
-/// * `Ok((EncryptedWallet, Zeroizing<String>, String))` - The wallet, decrypted mnemonic, and password
+/// * `Ok((EncryptedWallet, Zeroizing<String>, String))` - The wallet, decrypted
+///   mnemonic, and password
 /// * `Err` - If rate limited, wallet not found, or decryption failed
 ///
 /// # Security

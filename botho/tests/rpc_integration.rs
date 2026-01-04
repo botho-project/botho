@@ -9,9 +9,7 @@
 //! - CORS behavior
 //! - Transaction submission and status queries
 
-use std::net::SocketAddr;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use reqwest::Client;
 use serde_json::{json, Value};
@@ -19,9 +17,11 @@ use serial_test::serial;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 
-use botho::ledger::Ledger;
-use botho::mempool::Mempool;
-use botho::rpc::{RpcState, WsBroadcaster};
+use botho::{
+    ledger::Ledger,
+    mempool::Mempool,
+    rpc::{RpcState, WsBroadcaster},
+};
 
 // ============================================================================
 // Test Helpers
@@ -47,14 +47,16 @@ async fn spawn_test_rpc_server() -> (TempDir, SocketAddr, tokio::task::JoinHandl
     let state = Arc::new(RpcState::new(
         ledger,
         mempool,
-        None, // No wallet view key
-        None, // No wallet spend key
+        None,                  // No wallet view key
+        None,                  // No wallet spend key
         vec!["*".to_string()], // Allow all CORS origins for testing
         ws_broadcaster,
     ));
 
     // Find a random available port
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("Failed to bind");
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("Failed to bind");
     let addr = listener.local_addr().expect("Failed to get local addr");
     drop(listener);
 
@@ -95,7 +97,10 @@ async fn rpc_call(client: &Client, addr: SocketAddr, method: &str, params: Value
         .await
         .expect("Failed to send request");
 
-    response.json::<Value>().await.expect("Failed to parse response")
+    response
+        .json::<Value>()
+        .await
+        .expect("Failed to parse response")
 }
 
 // ============================================================================
@@ -112,7 +117,11 @@ async fn test_node_get_status() {
 
     // Verify success response
     assert_eq!(response["jsonrpc"], "2.0");
-    assert!(response["error"].is_null(), "Unexpected error: {:?}", response["error"]);
+    assert!(
+        response["error"].is_null(),
+        "Unexpected error: {:?}",
+        response["error"]
+    );
     assert!(response["result"].is_object());
 
     let result = &response["result"];
@@ -168,7 +177,10 @@ async fn test_get_block_by_height() {
         assert!(result["timestamp"].is_number());
     } else {
         // Block not found is acceptable for empty ledger
-        assert!(response["error"]["message"].as_str().unwrap().contains("not found"));
+        assert!(response["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("not found"));
     }
 }
 
@@ -179,10 +191,19 @@ async fn test_get_block_invalid_height() {
     let client = Client::new();
 
     // Very high block height should return error
-    let response = rpc_call(&client, addr, "getBlockByHeight", json!({"height": 999999999})).await;
+    let response = rpc_call(
+        &client,
+        addr,
+        "getBlockByHeight",
+        json!({"height": 999999999}),
+    )
+    .await;
 
     assert!(response["error"].is_object());
-    assert!(response["error"]["message"].as_str().unwrap().contains("not found"));
+    assert!(response["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("not found"));
 }
 
 // ============================================================================
@@ -212,13 +233,23 @@ async fn test_estimate_fee() {
     let client = Client::new();
 
     // Estimate fee for a 10 BTH private transaction
-    let response = rpc_call(&client, addr, "estimateFee", json!({
-        "amount": 10_000_000_000_000u64,  // 10 BTH in picocredits
-        "txType": "hidden",
-        "memos": 1
-    })).await;
+    let response = rpc_call(
+        &client,
+        addr,
+        "estimateFee",
+        json!({
+            "amount": 10_000_000_000_000u64,  // 10 BTH in picocredits
+            "txType": "hidden",
+            "memos": 1
+        }),
+    )
+    .await;
 
-    assert!(response["error"].is_null(), "Unexpected error: {:?}", response["error"]);
+    assert!(
+        response["error"].is_null(),
+        "Unexpected error: {:?}",
+        response["error"]
+    );
     let result = &response["result"];
 
     assert!(result["minimumFee"].is_number());
@@ -243,12 +274,21 @@ async fn test_submit_tx_invalid_hex() {
     let client = Client::new();
 
     // Submit garbage hex
-    let response = rpc_call(&client, addr, "tx_submit", json!({
-        "tx_hex": "not_valid_hex!"
-    })).await;
+    let response = rpc_call(
+        &client,
+        addr,
+        "tx_submit",
+        json!({
+            "tx_hex": "not_valid_hex!"
+        }),
+    )
+    .await;
 
     assert!(response["error"].is_object());
-    assert!(response["error"]["message"].as_str().unwrap().contains("Invalid hex"));
+    assert!(response["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("Invalid hex"));
 }
 
 #[tokio::test]
@@ -258,12 +298,21 @@ async fn test_submit_tx_invalid_format() {
     let client = Client::new();
 
     // Submit valid hex but not a valid transaction
-    let response = rpc_call(&client, addr, "tx_submit", json!({
-        "tx_hex": "deadbeef"
-    })).await;
+    let response = rpc_call(
+        &client,
+        addr,
+        "tx_submit",
+        json!({
+            "tx_hex": "deadbeef"
+        }),
+    )
+    .await;
 
     assert!(response["error"].is_object());
-    assert!(response["error"]["message"].as_str().unwrap().contains("Invalid transaction"));
+    assert!(response["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("Invalid transaction"));
 }
 
 #[tokio::test]
@@ -276,7 +325,10 @@ async fn test_submit_tx_missing_param() {
     let response = rpc_call(&client, addr, "tx_submit", json!({})).await;
 
     assert!(response["error"].is_object());
-    assert!(response["error"]["message"].as_str().unwrap().contains("Missing tx_hex"));
+    assert!(response["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("Missing tx_hex"));
 }
 
 #[tokio::test]
@@ -287,12 +339,21 @@ async fn test_get_transaction_not_found() {
 
     // Query for a non-existent transaction
     let fake_hash = "0".repeat(64);
-    let response = rpc_call(&client, addr, "getTransaction", json!({
-        "tx_hash": fake_hash
-    })).await;
+    let response = rpc_call(
+        &client,
+        addr,
+        "getTransaction",
+        json!({
+            "tx_hash": fake_hash
+        }),
+    )
+    .await;
 
     assert!(response["error"].is_object());
-    assert!(response["error"]["message"].as_str().unwrap().contains("not found"));
+    assert!(response["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("not found"));
 }
 
 #[tokio::test]
@@ -302,12 +363,21 @@ async fn test_get_transaction_invalid_hash() {
     let client = Client::new();
 
     // Invalid hash format (too short)
-    let response = rpc_call(&client, addr, "getTransaction", json!({
-        "tx_hash": "abcd"
-    })).await;
+    let response = rpc_call(
+        &client,
+        addr,
+        "getTransaction",
+        json!({
+            "tx_hash": "abcd"
+        }),
+    )
+    .await;
 
     assert!(response["error"].is_object());
-    assert!(response["error"]["message"].as_str().unwrap().contains("Invalid tx_hash"));
+    assert!(response["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("Invalid tx_hash"));
 }
 
 #[tokio::test]
@@ -318,9 +388,15 @@ async fn test_get_transaction_status_unknown() {
 
     // Query status for non-existent transaction
     let fake_hash = "0".repeat(64);
-    let response = rpc_call(&client, addr, "getTransactionStatus", json!({
-        "tx_hash": fake_hash
-    })).await;
+    let response = rpc_call(
+        &client,
+        addr,
+        "getTransactionStatus",
+        json!({
+            "tx_hash": fake_hash
+        }),
+    )
+    .await;
 
     // Should return status "unknown" not an error
     assert!(response["error"].is_null());
@@ -343,7 +419,10 @@ async fn test_validate_address_missing_param() {
     let response = rpc_call(&client, addr, "validateAddress", json!({})).await;
 
     assert!(response["error"].is_object());
-    assert!(response["error"]["message"].as_str().unwrap().contains("Missing address"));
+    assert!(response["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("Missing address"));
 }
 
 #[tokio::test]
@@ -352,9 +431,15 @@ async fn test_validate_address_invalid() {
     let (_temp_dir, addr, _handle) = spawn_test_rpc_server().await;
     let client = Client::new();
 
-    let response = rpc_call(&client, addr, "validateAddress", json!({
-        "address": "not_a_valid_address"
-    })).await;
+    let response = rpc_call(
+        &client,
+        addr,
+        "validateAddress",
+        json!({
+            "address": "not_a_valid_address"
+        }),
+    )
+    .await;
 
     // Invalid address returns success with valid: false
     assert!(response["error"].is_null());
@@ -430,7 +515,10 @@ async fn test_method_not_found() {
 
     assert!(response["error"].is_object());
     assert_eq!(response["error"]["code"], -32601);
-    assert!(response["error"]["message"].as_str().unwrap().contains("Method not found"));
+    assert!(response["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("Method not found"));
 }
 
 #[tokio::test]
@@ -448,10 +536,16 @@ async fn test_parse_error_invalid_json() {
         .await
         .expect("Failed to send request");
 
-    let json: Value = response.json::<Value>().await.expect("Failed to parse response");
+    let json: Value = response
+        .json::<Value>()
+        .await
+        .expect("Failed to parse response");
     assert!(json["error"].is_object());
     assert_eq!(json["error"]["code"], -32700);
-    assert!(json["error"]["message"].as_str().unwrap().contains("Parse error"));
+    assert!(json["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("Parse error"));
 }
 
 #[tokio::test]
@@ -521,7 +615,10 @@ async fn test_exchange_register_view_key_missing_params() {
     let response = rpc_call(&client, addr, "exchange_registerViewKey", json!({})).await;
 
     assert!(response["error"].is_object());
-    assert!(response["error"]["message"].as_str().unwrap().contains("Missing"));
+    assert!(response["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("Missing"));
 }
 
 #[tokio::test]
@@ -531,14 +628,23 @@ async fn test_exchange_register_view_key_invalid_key() {
     let client = Client::new();
 
     // Invalid key format (wrong length)
-    let response = rpc_call(&client, addr, "exchange_registerViewKey", json!({
-        "id": "test-registration",
-        "view_private_key": "abcd",  // Too short
-        "spend_public_key": "0".repeat(64)
-    })).await;
+    let response = rpc_call(
+        &client,
+        addr,
+        "exchange_registerViewKey",
+        json!({
+            "id": "test-registration",
+            "view_private_key": "abcd",  // Too short
+            "spend_public_key": "0".repeat(64)
+        }),
+    )
+    .await;
 
     assert!(response["error"].is_object());
-    assert!(response["error"]["message"].as_str().unwrap().contains("64 hex"));
+    assert!(response["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("64 hex"));
 }
 
 #[tokio::test]
@@ -548,9 +654,15 @@ async fn test_exchange_list_view_keys() {
     let client = Client::new();
 
     // List view keys (should be empty initially)
-    let response = rpc_call(&client, addr, "exchange_listViewKeys", json!({
-        "api_key_id": "default"
-    })).await;
+    let response = rpc_call(
+        &client,
+        addr,
+        "exchange_listViewKeys",
+        json!({
+            "api_key_id": "default"
+        }),
+    )
+    .await;
 
     assert!(response["error"].is_null());
     let result = &response["result"];
@@ -579,17 +691,27 @@ async fn test_method_aliases() {
     ];
 
     for (alias1, alias2) in methods {
-        // Both aliases should work (though they may return errors due to missing params)
+        // Both aliases should work (though they may return errors due to missing
+        // params)
         let response1 = rpc_call(&client, addr, alias1, json!({})).await;
         let response2 = rpc_call(&client, addr, alias2, json!({})).await;
 
         // They should both respond (not "method not found")
-        // The error code should be -32602 (invalid params) or similar, not -32601 (method not found)
+        // The error code should be -32602 (invalid params) or similar, not -32601
+        // (method not found)
         if response1["error"].is_object() {
-            assert_ne!(response1["error"]["code"], -32601, "Alias {} not found", alias1);
+            assert_ne!(
+                response1["error"]["code"], -32601,
+                "Alias {} not found",
+                alias1
+            );
         }
         if response2["error"].is_object() {
-            assert_ne!(response2["error"]["code"], -32601, "Alias {} not found", alias2);
+            assert_ne!(
+                response2["error"]["code"], -32601,
+                "Alias {} not found",
+                alias2
+            );
         }
     }
 }
@@ -608,9 +730,7 @@ async fn test_concurrent_requests() {
     let futures: Vec<_> = (0..10)
         .map(|_| {
             let client = client.clone();
-            async move {
-                rpc_call(&client, addr, "node_getStatus", json!({})).await
-            }
+            async move { rpc_call(&client, addr, "node_getStatus", json!({})).await }
         })
         .collect();
 
@@ -618,7 +738,11 @@ async fn test_concurrent_requests() {
 
     // All requests should succeed
     for result in results {
-        assert!(result["error"].is_null(), "Concurrent request failed: {:?}", result);
+        assert!(
+            result["error"].is_null(),
+            "Concurrent request failed: {:?}",
+            result
+        );
         assert!(result["result"]["chainHeight"].is_number());
     }
 }
@@ -642,7 +766,10 @@ async fn test_response_format() {
     // Either result or error should be present, not both
     let has_result = !response["result"].is_null();
     let has_error = !response["error"].is_null();
-    assert!(has_result != has_error, "Response should have exactly one of result or error");
+    assert!(
+        has_result != has_error,
+        "Response should have exactly one of result or error"
+    );
 }
 
 // ============================================================================
@@ -702,7 +829,8 @@ async fn test_ready_endpoint() {
 
     let json: Value = response.json().await.expect("Failed to parse JSON");
 
-    // Verify ready response structure (ReadyResponse: status, synced, peers, block_height)
+    // Verify ready response structure (ReadyResponse: status, synced, peers,
+    // block_height)
     assert!(json["status"].is_string());
     assert!(json["synced"].is_boolean());
     assert!(json["peers"].is_number());

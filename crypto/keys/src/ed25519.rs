@@ -7,6 +7,12 @@ use crate::{
     DigestSigner, DigestVerifier, DistinguishedEncoding, KeyError, PrivateKey, PublicKey,
     SignatureEncoding, SignatureError, Signer, Verifier,
 };
+use bth_crypto_digestible::{DigestTranscript, Digestible};
+use bth_util_from_random::FromRandom;
+use bth_util_repr_bytes::{
+    derive_core_cmp_from_as_ref, derive_debug_and_display_hex_from_as_ref,
+    derive_repr_bytes_from_as_ref_and_try_from,
+};
 use digest::{
     generic_array::typenum::{U32, U64},
     Digest,
@@ -15,12 +21,6 @@ use ed25519::{Signature, SignatureBytes};
 use ed25519_dalek::{
     SecretKey, Signature as DalekSignature, SigningKey, VerifyingKey as DalekPublicKey,
     PUBLIC_KEY_LENGTH,
-};
-use bth_crypto_digestible::{DigestTranscript, Digestible};
-use bth_util_from_random::FromRandom;
-use bth_util_repr_bytes::{
-    derive_core_cmp_from_as_ref, derive_debug_and_display_hex_from_as_ref,
-    derive_repr_bytes_from_as_ref_and_try_from,
 };
 use rand_core::{CryptoRng, RngCore};
 use zeroize::Zeroize;

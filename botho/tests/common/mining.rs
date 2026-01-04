@@ -45,7 +45,8 @@ pub fn create_mock_minting_tx(
 /// Mine a single block with the specified miner receiving the reward.
 ///
 /// This broadcasts a minting transaction and waits for consensus to include it
-/// in a block. The miner_idx specifies which node's wallet receives the coinbase.
+/// in a block. The miner_idx specifies which node's wallet receives the
+/// coinbase.
 pub fn mine_block(network: &TestNetwork, miner_idx: usize) {
     let miner_wallet = &network.wallets[miner_idx];
     let miner_address = miner_wallet.default_address();
@@ -105,7 +106,8 @@ pub fn mine_block_with_reward(network: &TestNetwork, miner_idx: usize, reward: u
 /// # Arguments
 ///
 /// * `network` - The test network
-/// * `extra_inputs` - Number of additional inputs that will be spent (excluded from decoys)
+/// * `extra_inputs` - Number of additional inputs that will be spent (excluded
+///   from decoys)
 pub fn ensure_decoy_availability(network: &TestNetwork, extra_inputs: usize) {
     let needed_blocks = TEST_RING_SIZE + extra_inputs;
     let node = network.get_node(0);
