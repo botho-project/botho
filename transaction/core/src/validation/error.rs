@@ -12,6 +12,7 @@ pub type TransactionValidationResult<T> = Result<T, TransactionValidationError>;
 /// Reasons why a single transaction may fail to be valid with respect to the
 /// current ledger.
 #[derive(Clone, Debug, Display, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[ignore_extra_doc_attributes]
 pub enum TransactionValidationError {
     /// Each input should have one membership proof.
     InputsProofsLengthMismatch,
