@@ -466,6 +466,9 @@ pub fn init_metrics() {
             .expect("Failed to register process collector");
     }
 
+    // Register privacy layer metrics
+    crate::network::privacy::register_privacy_metrics(&REGISTRY);
+
     info!("Prometheus metrics initialized");
 }
 
