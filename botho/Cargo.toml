@@ -147,6 +147,7 @@ futures = "0.3"
 criterion = { workspace = true }
 rand_chacha = { workspace = true }
 serial_test = { workspace = true }
+statrs = "0.18"
 
 [[bench]]
 name = "block_benchmarks"
