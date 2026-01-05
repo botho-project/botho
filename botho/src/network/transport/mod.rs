@@ -46,7 +46,8 @@
 //!
 //! - [`capabilities`]: Transport capabilities advertising and parsing
 //! - [`negotiation`]: Transport negotiation protocol between peers
-//! - [`signaling`]: SDP exchange for WebRTC connection establishment (Phase 3.5)
+//! - [`signaling`]: SDP exchange for WebRTC connection establishment (Phase
+//!   3.5)
 //! - [`webrtc`]: WebRTC data channel transport (Phase 3.2)
 //! - [`tls_tunnel`]: TLS tunnel transport (Phase 3.7)
 //! - [`http2`]: Optional HTTP/2 framing for maximum obfuscation
@@ -98,6 +99,11 @@
 mod capabilities;
 mod negotiation;
 
+// Transport configuration and selection (Phase 3.8)
+pub mod config;
+pub mod manager;
+pub mod metrics;
+
 // Transport implementations
 mod error;
 pub mod http2;
@@ -110,8 +116,7 @@ pub mod webrtc;
 
 // Re-export capabilities types (Phase 3.6)
 pub use capabilities::{
-    NatType as NegotiationNatType, TransportCapabilities,
-    TransportType as CapabilityTransportType,
+    NatType as NegotiationNatType, TransportCapabilities, TransportType as CapabilityTransportType,
 };
 
 // Re-export negotiation types (Phase 3.6)
@@ -151,12 +156,14 @@ pub use webrtc::dtls::{
 };
 
 // Re-export WebRTC ICE/STUN types (Phase 3.4)
-pub use webrtc::ice::{
-    IceCandidate as IceFullCandidate, IceCandidateType, IceConfig, IceConnectionState, IceError,
-    IceGatherer,
+pub use webrtc::{
+    ice::{
+        IceCandidate as IceFullCandidate, IceCandidateType, IceConfig, IceConnectionState,
+        IceError, IceGatherer,
+    },
+    stun::{NatType, StunClient, StunConfig, StunError},
+    WebRtcConnection, WebRtcTransport,
 };
-pub use webrtc::stun::{NatType, StunClient, StunConfig, StunError};
-pub use webrtc::{WebRtcConnection, WebRtcTransport};
 
 // Re-export signaling types (Phase 3.5)
 pub use signaling::{
@@ -165,6 +172,20 @@ pub use signaling::{
     MAX_ICE_CANDIDATES_PER_SESSION, MAX_ICE_CANDIDATE_SIZE, MAX_SDP_SIZE, MAX_SESSIONS_PER_PEER,
     SESSION_ID_LEN,
 };
+
+// Re-export transport configuration types (Phase 3.8)
+pub use config::{
+    TlsTransportConfig, TransportConfig, TransportConfigBuilder, TransportPreference,
+    WebRtcTransportConfig,
+};
+
+// Re-export transport metrics types (Phase 3.8)
+pub use metrics::{
+    ConnectResult, MetricsSnapshot, TransportMetrics, TransportMetricsSummary, TransportStats,
+};
+
+// Re-export transport selector types (Phase 3.8)
+pub use manager::{ConnectionResult, PeerInfo, TransportSelector};
 
 use tokio::io::{AsyncRead, AsyncWrite};
 
@@ -218,7 +239,10 @@ impl TransportManager {
     }
 
     /// Create a new transport manager with custom configuration.
-    pub fn with_config(capabilities: TransportCapabilities, config: TransportManagerConfig) -> Self {
+    pub fn with_config(
+        capabilities: TransportCapabilities,
+        config: TransportManagerConfig,
+    ) -> Self {
         Self {
             capabilities,
             config,
