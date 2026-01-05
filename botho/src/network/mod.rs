@@ -17,6 +17,7 @@ pub mod privacy;
 mod quorum;
 mod reputation;
 mod sync;
+pub mod transport;
 
 pub use compact_block::{
     BlockTxn, CompactBlock, GetBlockTxn, PrefilledTx, ReconstructionResult, ShortId,
@@ -43,4 +44,9 @@ pub use sync::{
     create_sync_behaviour, ChainSyncManager, SyncAction, SyncCodec, SyncRateLimiter, SyncRequest,
     SyncResponse, SyncState, BLOCKS_PER_REQUEST, MAX_REQUESTS_PER_MINUTE, MAX_REQUEST_SIZE,
     MAX_RESPONSE_SIZE,
+};
+pub use transport::{
+    negotiate_transport_initiator, negotiate_transport_responder, select_transport, NatType,
+    NegotiationConfig, NegotiationError, NegotiationMessage, TransportCapabilities,
+    TransportError, TransportManager, TransportManagerConfig, TransportType, UpgradeResult,
 };
