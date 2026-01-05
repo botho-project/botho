@@ -41,6 +41,10 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+use crate::network::transport::config::{
+    TlsTransportConfig, TransportConfig, TransportPreference, WebRtcTransportConfig,
+};
+
 /// Default minimum jitter delay in milliseconds.
 pub const DEFAULT_JITTER_MIN_MS: u64 = 100;
 
@@ -141,6 +145,57 @@ impl PrivacyConfig {
         }
 
         Ok(())
+    }
+
+    /// Get recommended transport configuration for this privacy configuration.
+    ///
+    /// Returns a `TransportConfig` optimized for the privacy settings:
+    /// - Full privacy features: Enables all obfuscated transports (WebRTC, TLS)
+    /// - Traffic normalization enabled: Prefers privacy over performance
+    /// - Minimal features: Basic transport config
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use botho::network::privacy::config::PrivacyConfig;
+    ///
+    /// // Default config has all features enabled, recommends obfuscated transports
+    /// let privacy_config = PrivacyConfig::default();
+    /// let transport_config = privacy_config.transport_config();
+    ///
+    /// assert!(transport_config.enable_webrtc);
+    /// assert!(transport_config.enable_tls_tunnel);
+    /// ```
+    pub fn transport_config(&self) -> TransportConfig {
+        // Default privacy config has all features enabled (maximum privacy)
+        // This means we should use obfuscated transports
+        if self.has_traffic_normalization() {
+            // Full privacy - enable all obfuscated transports
+            TransportConfig {
+                preference: TransportPreference::Privacy,
+                enable_webrtc: true,
+                enable_tls_tunnel: true,
+                webrtc_config: Some(WebRtcTransportConfig::default()),
+                tls_config: Some(TlsTransportConfig::default()),
+                enable_metrics: true,
+                enable_fallback: true,
+                max_fallback_attempts: 3,
+                connect_timeout_secs: 30,
+            }
+        } else {
+            // Minimal privacy - just onion routing, plain transport is fine
+            TransportConfig {
+                preference: TransportPreference::Performance,
+                enable_webrtc: false,
+                enable_tls_tunnel: false,
+                webrtc_config: None,
+                tls_config: None,
+                enable_metrics: true,
+                enable_fallback: true,
+                max_fallback_attempts: 3,
+                connect_timeout_secs: 30,
+            }
+        }
     }
 }
 
@@ -394,5 +449,40 @@ mod tests {
         let config = PrivacyConfigBuilder::default().build();
         assert!(config.onion_routing);
         assert!(!config.padding);
+    }
+
+    #[test]
+    fn test_transport_config_full_privacy() {
+        // Default config has all features enabled (maximum privacy)
+        let privacy_config = PrivacyConfig::default();
+        let transport_config = privacy_config.transport_config();
+
+        assert!(transport_config.enable_webrtc);
+        assert!(transport_config.enable_tls_tunnel);
+        assert_eq!(transport_config.preference, TransportPreference::Privacy);
+    }
+
+    #[test]
+    fn test_transport_config_minimal_privacy() {
+        // Minimal config from builder has no normalization
+        let privacy_config = PrivacyConfigBuilder::new().build();
+        let transport_config = privacy_config.transport_config();
+
+        assert!(!transport_config.enable_webrtc);
+        assert!(!transport_config.enable_tls_tunnel);
+        assert_eq!(
+            transport_config.preference,
+            TransportPreference::Performance
+        );
+    }
+
+    #[test]
+    fn test_transport_config_with_normalization() {
+        // Adding any normalization feature enables obfuscated transports
+        let privacy_config = PrivacyConfig::builder().padding(true).build();
+        let transport_config = privacy_config.transport_config();
+
+        assert!(transport_config.enable_webrtc);
+        assert!(transport_config.enable_tls_tunnel);
     }
 }
