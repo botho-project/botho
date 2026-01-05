@@ -1,74 +1,155 @@
 // Copyright (c) 2024 Botho Foundation
 
-//! Transport layer for P2P connections.
+//! Pluggable transport layer for protocol obfuscation.
 //!
-//! This module provides:
-//! - Pluggable transport interface for different connection types
-//! - Transport capabilities advertising and parsing
-//! - Transport negotiation protocol between peers
-//! - Connection upgrade mechanism
+//! This module implements Phase 3 of the traffic privacy roadmap:
+//! a pluggable transport interface that allows different transport
+//! implementations to be used interchangeably.
 //!
 //! # Overview
 //!
-//! The transport layer supports multiple connection types:
-//! - **Plain**: Standard TCP + Noise (default)
-//! - **TLS Tunnel**: TLS 1.3 wrapped connections (looks like HTTPS)
-//! - **WebRTC**: Data channels (looks like video calls, good NAT traversal)
+//! The transport layer provides an abstraction over the raw network
+//! connection, allowing botho to use different protocols that are
+//! harder to detect and block:
 //!
-//! Peers advertise their supported transports in discovery, and negotiate
-//! the best common transport when establishing connections.
+//! - **Plain**: Standard TCP + Noise (default, best performance)
+//! - **WebRTC**: Looks like video call traffic (Phase 3.2)
+//! - **TLS Tunnel**: Looks like HTTPS traffic (Phase 3.7)
 //!
-//! # Example
+//! # Architecture
 //!
-//! ```ignore
+//! ```text
+//! ┌─────────────────────────────────────────────────────────────┐
+//! │                    APPLICATION LAYER                        │
+//! │                    (Gossipsub, SCP)                         │
+//! └──────────────────────────┬──────────────────────────────────┘
+//!                            │
+//! ┌──────────────────────────▼──────────────────────────────────┐
+//! │                  TRANSPORT LAYER                            │
+//! │  ┌─────────────────────────────────────────────────────┐    │
+//! │  │            PluggableTransport Trait                 │    │
+//! │  └─────────────────────────────────────────────────────┘    │
+//! │         │                    │                    │         │
+//! │  ┌──────▼──────┐     ┌───────▼───────┐    ┌───────▼──────┐  │
+//! │  │    Plain    │     │    WebRTC     │    │  TLS Tunnel  │  │
+//! │  │ TCP + Noise │     │ DTLS + SCTP   │    │   TLS 1.3    │  │
+//! │  └─────────────┘     └───────────────┘    └──────────────┘  │
+//! └──────────────────────────┬──────────────────────────────────┘
+//!                            │
+//! ┌──────────────────────────▼──────────────────────────────────┐
+//! │                    NETWORK LAYER                            │
+//! │                    (TCP, UDP)                               │
+//! └─────────────────────────────────────────────────────────────┘
+//! ```
+//!
+//! # Modules
+//!
+//! - [`capabilities`]: Transport capabilities advertising and parsing
+//! - [`negotiation`]: Transport negotiation protocol between peers
+//! - [`signaling`]: SDP exchange for WebRTC connection establishment (Phase 3.5)
+//! - [`webrtc`]: WebRTC data channel transport (Phase 3.2)
+//! - [`plain`]: Standard TCP + Noise transport
+//!
+//! # Usage
+//!
+//! ```
 //! use botho::network::transport::{
-//!     TransportCapabilities, TransportType, NatType,
-//!     select_transport, negotiate_transport_initiator,
+//!     PlainTransport, PluggableTransport, TransportType,
 //! };
 //!
-//! // Create capabilities
-//! let our_caps = TransportCapabilities::full(NatType::Open);
+//! // Create the default transport
+//! let transport = PlainTransport::new();
+//! assert_eq!(transport.transport_type(), TransportType::Plain);
+//! assert_eq!(transport.name(), "plain");
 //!
-//! // Select best transport for a peer
-//! let peer_caps = TransportCapabilities::from_agent_version(peer_agent_version)?;
-//! let transport = select_transport(&our_caps, &peer_caps);
-//!
-//! // Negotiate with peer
-//! let agreed = negotiate_transport_initiator(&mut stream, &our_caps).await?;
+//! // Check transport properties
+//! assert!(!transport.transport_type().is_obfuscated());
+//! assert!(transport.is_available());
 //! ```
+//!
+//! # Transport Selection
+//!
+//! Transport selection is based on:
+//! 1. User preference (configured privacy level)
+//! 2. Peer capabilities (what transports both sides support)
+//! 3. Network conditions (NAT type, firewall rules)
+//!
+//! See the `TransportManager` for automatic selection.
+//!
+//! # Security Considerations
+//!
+//! - All transports provide encryption (Noise, DTLS, or TLS)
+//! - Obfuscated transports (WebRTC, TLS) resist DPI detection
+//! - Transport negotiation is authenticated to prevent downgrade attacks
+//! - Session IDs are random to prevent prediction
+//! - Timeout cleanup prevents resource exhaustion
+//!
+//! # References
+//!
+//! - Design document: `docs/design/traffic-privacy-roadmap.md` (Phase 3)
+//! - Parent issue: #201 (Phase 3: Protocol Obfuscation)
+//! - Implementation issue: #202 (Pluggable transport interface)
+//! - Negotiation issue: #207 (Transport negotiation protocol)
+//! - Signaling issue: #206 (Signaling channel for SDP exchange)
 
+// Transport capabilities and negotiation (Phase 3.6)
 mod capabilities;
 mod negotiation;
 
-pub use capabilities::{NatType, TransportCapabilities, TransportType};
+// Transport implementations
+mod error;
+mod plain;
+pub mod signaling;
+mod traits;
+mod types;
+pub mod webrtc;
+
+// Re-export capabilities types (Phase 3.6)
+pub use capabilities::{
+    NatType as NegotiationNatType, TransportCapabilities,
+    TransportType as CapabilityTransportType,
+};
+
+// Re-export negotiation types (Phase 3.6)
 pub use negotiation::{
     negotiate_transport_initiator, negotiate_transport_responder, read_message, select_transport,
     write_message, NegotiationConfig, NegotiationError, NegotiationMessage, UpgradeResult,
 };
 
-use std::io;
-use thiserror::Error;
+// Re-export error types
+pub use error::TransportError;
+
+// Re-export transport types
+pub use types::{TransportType, TransportTypeParseError};
+
+// Re-export trait and connection types
+pub use traits::{BoxedConnection, ConnectionWrapper, PluggableTransport, TransportConnection};
+
+// Re-export transport implementations
+pub use plain::{PlainConnection, PlainTransport};
+
+// Re-export WebRTC DTLS types (Phase 3.3)
+pub use webrtc::dtls::{
+    CertificateFingerprint, DtlsConfig, DtlsError, DtlsRole, DtlsState, DtlsVerification,
+    EphemeralCertificate,
+};
+
+// Re-export WebRTC ICE/STUN types (Phase 3.4)
+pub use webrtc::ice::{
+    IceCandidate as IceFullCandidate, IceCandidateType, IceConfig, IceConnectionState, IceError,
+    IceGatherer,
+};
+pub use webrtc::stun::{NatType, StunClient, StunConfig, StunError};
+pub use webrtc::{WebRtcConnection, WebRtcTransport};
+
+// Re-export signaling types (Phase 3.5)
+pub use signaling::{
+    IceCandidate, SessionId, SignalingChannel, SignalingError, SignalingMessage, SignalingRole,
+    SignalingSession, SignalingState, DEFAULT_SIGNALING_TIMEOUT_SECS, MAX_ICE_CANDIDATES_PER_SESSION,
+    MAX_ICE_CANDIDATE_SIZE, MAX_SDP_SIZE, MAX_SESSIONS_PER_PEER, SESSION_ID_LEN,
+};
+
 use tokio::io::{AsyncRead, AsyncWrite};
-
-/// Errors that can occur during transport operations.
-#[derive(Debug, Error)]
-pub enum TransportError {
-    /// Negotiation failed.
-    #[error("negotiation failed: {0}")]
-    Negotiation(#[from] NegotiationError),
-
-    /// Connection error.
-    #[error("connection error: {0}")]
-    Connection(#[from] io::Error),
-
-    /// Transport not supported.
-    #[error("transport not supported: {0}")]
-    NotSupported(TransportType),
-
-    /// Upgrade failed.
-    #[error("upgrade failed: {0}")]
-    UpgradeFailed(String),
-}
 
 /// Trait for async read/write streams.
 ///
@@ -97,7 +178,7 @@ pub struct TransportManagerConfig {
     /// Negotiation configuration
     pub negotiation: NegotiationConfig,
     /// Preferred transport (used when multiple are available)
-    pub preferred: TransportType,
+    pub preferred: CapabilityTransportType,
 }
 
 impl Default for TransportManagerConfig {
@@ -105,7 +186,7 @@ impl Default for TransportManagerConfig {
         Self {
             enable_upgrades: true,
             negotiation: NegotiationConfig::default(),
-            preferred: TransportType::Plain,
+            preferred: CapabilityTransportType::Plain,
         }
     }
 }
@@ -140,7 +221,7 @@ impl TransportManager {
     }
 
     /// Select the best transport for connecting to a peer.
-    pub fn select_for_peer(&self, peer_caps: &TransportCapabilities) -> TransportType {
+    pub fn select_for_peer(&self, peer_caps: &TransportCapabilities) -> CapabilityTransportType {
         select_transport(&self.capabilities, peer_caps)
     }
 
@@ -152,7 +233,7 @@ impl TransportManager {
     /// 3. Peer supports better transports
     pub fn should_upgrade(
         &self,
-        current: TransportType,
+        current: CapabilityTransportType,
         peer_caps: &TransportCapabilities,
     ) -> bool {
         if !self.config.enable_upgrades {
@@ -176,7 +257,7 @@ impl TransportManager {
         &self,
         stream: &mut S,
         is_initiator: bool,
-    ) -> Result<TransportType, NegotiationError>
+    ) -> Result<CapabilityTransportType, NegotiationError>
     where
         S: AsyncRead + AsyncWrite + Unpin,
     {
@@ -193,8 +274,49 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_module_exports() {
+        // Verify all expected types are exported and usable
+        let _: TransportType = TransportType::Plain;
+        let _: PlainTransport = PlainTransport::new();
+
+        // Verify trait is usable
+        fn assert_transport<T: PluggableTransport>(_: &T) {}
+        let transport = PlainTransport::new();
+        assert_transport(&transport);
+    }
+
+    #[test]
+    fn test_plain_transport_is_default() {
+        let transport = PlainTransport::default();
+        assert_eq!(transport.transport_type(), TransportType::Plain);
+    }
+
+    #[test]
+    fn test_dtls_types_exported() {
+        // Verify DTLS types are accessible from transport module
+        let config = DtlsConfig::generate_ephemeral().unwrap();
+        assert_eq!(config.role(), DtlsRole::Auto);
+    }
+
+    #[test]
+    fn test_ice_stun_types_exported() {
+        // Verify ICE/STUN types are accessible from transport module
+        let ice_config = IceConfig::default();
+        assert!(!ice_config.stun_servers.is_empty());
+
+        let stun_config = StunConfig::default();
+        assert!(!stun_config.servers.is_empty());
+    }
+
+    #[test]
+    fn test_webrtc_transport_creation() {
+        let transport = WebRtcTransport::with_defaults();
+        assert!(!transport.ice_config().stun_servers.is_empty());
+    }
+
+    #[test]
     fn test_transport_manager_new() {
-        let caps = TransportCapabilities::full(NatType::Open);
+        let caps = TransportCapabilities::full(NegotiationNatType::Open);
         let manager = TransportManager::new(caps.clone());
 
         assert_eq!(manager.capabilities(), &caps);
@@ -202,7 +324,7 @@ mod tests {
 
     #[test]
     fn test_transport_manager_capabilities_suffix() {
-        let caps = TransportCapabilities::full(NatType::Open);
+        let caps = TransportCapabilities::full(NegotiationNatType::Open);
         let manager = TransportManager::new(caps);
 
         let suffix = manager.capabilities_suffix();
@@ -211,31 +333,31 @@ mod tests {
 
     #[test]
     fn test_transport_manager_select_for_peer() {
-        let our_caps = TransportCapabilities::full(NatType::Open);
-        let peer_caps = TransportCapabilities::full(NatType::FullCone);
+        let our_caps = TransportCapabilities::full(NegotiationNatType::Open);
+        let peer_caps = TransportCapabilities::full(NegotiationNatType::FullCone);
         let manager = TransportManager::new(our_caps);
 
         let selected = manager.select_for_peer(&peer_caps);
-        assert_eq!(selected, TransportType::WebRTC);
+        assert_eq!(selected, CapabilityTransportType::WebRTC);
     }
 
     #[test]
     fn test_transport_manager_should_upgrade() {
-        let our_caps = TransportCapabilities::full(NatType::Open);
-        let peer_caps = TransportCapabilities::full(NatType::Open);
+        let our_caps = TransportCapabilities::full(NegotiationNatType::Open);
+        let peer_caps = TransportCapabilities::full(NegotiationNatType::Open);
         let manager = TransportManager::new(our_caps);
 
         // Currently on plain, should upgrade to WebRTC
-        assert!(manager.should_upgrade(TransportType::Plain, &peer_caps));
+        assert!(manager.should_upgrade(CapabilityTransportType::Plain, &peer_caps));
 
         // Already on WebRTC, should not upgrade
-        assert!(!manager.should_upgrade(TransportType::WebRTC, &peer_caps));
+        assert!(!manager.should_upgrade(CapabilityTransportType::WebRTC, &peer_caps));
     }
 
     #[test]
     fn test_transport_manager_should_upgrade_disabled() {
-        let our_caps = TransportCapabilities::full(NatType::Open);
-        let peer_caps = TransportCapabilities::full(NatType::Open);
+        let our_caps = TransportCapabilities::full(NegotiationNatType::Open);
+        let peer_caps = TransportCapabilities::full(NegotiationNatType::Open);
 
         let config = TransportManagerConfig {
             enable_upgrades: false,
@@ -244,22 +366,13 @@ mod tests {
         let manager = TransportManager::with_config(our_caps, config);
 
         // Upgrades disabled, should not upgrade even if better available
-        assert!(!manager.should_upgrade(TransportType::Plain, &peer_caps));
-    }
-
-    #[test]
-    fn test_transport_error_display() {
-        let err = TransportError::NotSupported(TransportType::WebRTC);
-        assert!(format!("{}", err).contains("webrtc"));
-
-        let err = TransportError::UpgradeFailed("test".to_string());
-        assert!(format!("{}", err).contains("test"));
+        assert!(!manager.should_upgrade(CapabilityTransportType::Plain, &peer_caps));
     }
 
     #[test]
     fn test_transport_manager_config_default() {
         let config = TransportManagerConfig::default();
         assert!(config.enable_upgrades);
-        assert_eq!(config.preferred, TransportType::Plain);
+        assert_eq!(config.preferred, CapabilityTransportType::Plain);
     }
 }

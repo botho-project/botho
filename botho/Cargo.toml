@@ -106,6 +106,9 @@ chacha20poly1305 = { workspace = true }
 
 # Async (for future networking)
 tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+bytes = "1"
+async-trait = "0.1"
 
 # JSON-RPC server
 hyper = { version = "1", features = ["server", "http1"] }
@@ -129,6 +132,10 @@ parking_lot = "0.12"
 
 # DNS seed discovery
 hickory-resolver = { version = "0.25", features = ["tokio", "system-config"] }
+
+# WebRTC transport for NAT traversal
+webrtc = { workspace = true }
+getrandom = "0.2"
 
 # For botho-testnet harness
 chrono = "0.4"

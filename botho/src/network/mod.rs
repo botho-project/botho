@@ -46,7 +46,10 @@ pub use sync::{
     MAX_RESPONSE_SIZE,
 };
 pub use transport::{
-    negotiate_transport_initiator, negotiate_transport_responder, select_transport, NatType,
-    NegotiationConfig, NegotiationError, NegotiationMessage, TransportCapabilities,
-    TransportError, TransportManager, TransportManagerConfig, TransportType, UpgradeResult,
+    negotiate_transport_initiator, negotiate_transport_responder, select_transport,
+    CapabilityTransportType, NegotiationConfig, NegotiationError, NegotiationMessage,
+    NegotiationNatType, TransportCapabilities, TransportError, TransportManager,
+    TransportManagerConfig, TransportType, UpgradeResult,
+    // WebRTC types
+    NatType, StunClient, StunConfig, StunError,
 };

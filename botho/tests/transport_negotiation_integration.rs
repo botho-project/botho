@@ -14,9 +14,9 @@ use tokio::io::duplex;
 use tokio::time::timeout;
 
 use botho::network::{
-    negotiate_transport_initiator, negotiate_transport_responder, select_transport, NatType,
-    NegotiationError, NegotiationMessage, TransportCapabilities, TransportManager,
-    TransportManagerConfig, TransportType,
+    negotiate_transport_initiator, negotiate_transport_responder, select_transport,
+    CapabilityTransportType, NegotiationError, NegotiationMessage, NegotiationNatType,
+    TransportCapabilities, TransportManager, TransportManagerConfig,
 };
 
 /// Test helper to create a pair of connected duplex streams.
@@ -32,8 +32,8 @@ fn create_stream_pair() -> (tokio::io::DuplexStream, tokio::io::DuplexStream) {
 async fn test_e2e_negotiate_webrtc_both_full_caps() {
     let (mut client, mut server) = create_stream_pair();
 
-    let client_caps = TransportCapabilities::full(NatType::Open);
-    let server_caps = TransportCapabilities::full(NatType::FullCone);
+    let client_caps = TransportCapabilities::full(NegotiationNatType::Open);
+    let server_caps = TransportCapabilities::full(NegotiationNatType::FullCone);
 
     let client_task = tokio::spawn(async move {
         timeout(
@@ -58,7 +58,7 @@ async fn test_e2e_negotiate_webrtc_both_full_caps() {
 
     // Both should agree on WebRTC since both have open NAT
     assert_eq!(client_transport, server_transport);
-    assert_eq!(client_transport, TransportType::WebRTC);
+    assert_eq!(client_transport, CapabilityTransportType::WebRTC);
 }
 
 #[tokio::test]
@@ -67,9 +67,9 @@ async fn test_e2e_negotiate_falls_back_to_plain() {
 
     // Client only supports WebRTC
     let client_caps = TransportCapabilities::new(
-        vec![TransportType::WebRTC, TransportType::Plain],
-        TransportType::WebRTC,
-        NatType::Open,
+        vec![CapabilityTransportType::WebRTC, CapabilityTransportType::Plain],
+        CapabilityTransportType::WebRTC,
+        NegotiationNatType::Open,
     );
     // Server only supports Plain
     let server_caps = TransportCapabilities::plain_only();
@@ -97,7 +97,7 @@ async fn test_e2e_negotiate_falls_back_to_plain() {
 
     // Should fall back to Plain since that's the only common transport
     assert_eq!(client_transport, server_transport);
-    assert_eq!(client_transport, TransportType::Plain);
+    assert_eq!(client_transport, CapabilityTransportType::Plain);
 }
 
 #[tokio::test]
@@ -105,8 +105,8 @@ async fn test_e2e_negotiate_tls_when_nat_blocks_webrtc() {
     let (mut client, mut server) = create_stream_pair();
 
     // Both have symmetric NAT - WebRTC won't work
-    let client_caps = TransportCapabilities::full(NatType::Symmetric);
-    let server_caps = TransportCapabilities::full(NatType::Symmetric);
+    let client_caps = TransportCapabilities::full(NegotiationNatType::Symmetric);
+    let server_caps = TransportCapabilities::full(NegotiationNatType::Symmetric);
 
     let client_task = tokio::spawn(async move {
         timeout(
@@ -131,7 +131,7 @@ async fn test_e2e_negotiate_tls_when_nat_blocks_webrtc() {
 
     // Should pick TLS tunnel instead of WebRTC due to NAT issues
     assert_eq!(client_transport, server_transport);
-    assert_eq!(client_transport, TransportType::TlsTunnel);
+    assert_eq!(client_transport, CapabilityTransportType::TlsTunnel);
 }
 
 #[tokio::test]
@@ -140,15 +140,15 @@ async fn test_e2e_negotiate_no_common_transport() {
 
     // Client only supports WebRTC
     let client_caps = TransportCapabilities::new(
-        vec![TransportType::WebRTC],
-        TransportType::WebRTC,
-        NatType::Open,
+        vec![CapabilityTransportType::WebRTC],
+        CapabilityTransportType::WebRTC,
+        NegotiationNatType::Open,
     );
     // Server only supports TLS tunnel
     let server_caps = TransportCapabilities::new(
-        vec![TransportType::TlsTunnel],
-        TransportType::TlsTunnel,
-        NatType::Open,
+        vec![CapabilityTransportType::TlsTunnel],
+        CapabilityTransportType::TlsTunnel,
+        NegotiationNatType::Open,
     );
 
     let client_task = tokio::spawn(async move {
@@ -185,62 +185,62 @@ async fn test_e2e_negotiate_no_common_transport() {
 #[test]
 fn test_select_transport_prefers_higher_score() {
     // Both support all transports with open NAT
-    let our_caps = TransportCapabilities::full(NatType::Open);
-    let peer_caps = TransportCapabilities::full(NatType::Open);
+    let our_caps = TransportCapabilities::full(NegotiationNatType::Open);
+    let peer_caps = TransportCapabilities::full(NegotiationNatType::Open);
 
     let selected = select_transport(&our_caps, &peer_caps);
-    assert_eq!(selected, TransportType::WebRTC); // Highest preference score
+    assert_eq!(selected, CapabilityTransportType::WebRTC); // Highest preference score
 }
 
 #[test]
 fn test_select_transport_considers_preference_order() {
     // We prefer TLS, peer prefers WebRTC
     let our_caps = TransportCapabilities::new(
-        vec![TransportType::TlsTunnel, TransportType::WebRTC, TransportType::Plain],
-        TransportType::TlsTunnel,
-        NatType::Open,
+        vec![CapabilityTransportType::TlsTunnel, CapabilityTransportType::WebRTC, CapabilityTransportType::Plain],
+        CapabilityTransportType::TlsTunnel,
+        NegotiationNatType::Open,
     );
     let peer_caps = TransportCapabilities::new(
-        vec![TransportType::WebRTC, TransportType::TlsTunnel, TransportType::Plain],
-        TransportType::WebRTC,
-        NatType::Open,
+        vec![CapabilityTransportType::WebRTC, CapabilityTransportType::TlsTunnel, CapabilityTransportType::Plain],
+        CapabilityTransportType::WebRTC,
+        NegotiationNatType::Open,
     );
 
     let selected = select_transport(&our_caps, &peer_caps);
     // WebRTC has higher base score, so it should win
-    assert_eq!(selected, TransportType::WebRTC);
+    assert_eq!(selected, CapabilityTransportType::WebRTC);
 }
 
 #[test]
 fn test_select_transport_nat_penalty_applied() {
     // Both have symmetric NAT
-    let our_caps = TransportCapabilities::full(NatType::Symmetric);
-    let peer_caps = TransportCapabilities::full(NatType::Symmetric);
+    let our_caps = TransportCapabilities::full(NegotiationNatType::Symmetric);
+    let peer_caps = TransportCapabilities::full(NegotiationNatType::Symmetric);
 
     let selected = select_transport(&our_caps, &peer_caps);
     // WebRTC should be penalized, TLS tunnel should be selected
-    assert_eq!(selected, TransportType::TlsTunnel);
+    assert_eq!(selected, CapabilityTransportType::TlsTunnel);
 }
 
 #[test]
 fn test_select_transport_one_open_nat_allows_webrtc() {
     // One side has open NAT, other has symmetric
-    let our_caps = TransportCapabilities::full(NatType::Open);
-    let peer_caps = TransportCapabilities::full(NatType::Symmetric);
+    let our_caps = TransportCapabilities::full(NegotiationNatType::Open);
+    let peer_caps = TransportCapabilities::full(NegotiationNatType::Symmetric);
 
     let selected = select_transport(&our_caps, &peer_caps);
     // WebRTC should work since at least one side has open NAT
-    assert_eq!(selected, TransportType::WebRTC);
+    assert_eq!(selected, CapabilityTransportType::WebRTC);
 }
 
 #[test]
 fn test_select_transport_fallback_to_plain() {
     // No common transport except plain (implicitly always available)
     let our_caps = TransportCapabilities::plain_only();
-    let peer_caps = TransportCapabilities::full(NatType::Open);
+    let peer_caps = TransportCapabilities::full(NegotiationNatType::Open);
 
     let selected = select_transport(&our_caps, &peer_caps);
-    assert_eq!(selected, TransportType::Plain);
+    assert_eq!(selected, CapabilityTransportType::Plain);
 }
 
 // ============================================================================
@@ -249,47 +249,47 @@ fn test_select_transport_fallback_to_plain() {
 
 #[test]
 fn test_transport_manager_should_upgrade_from_plain() {
-    let caps = TransportCapabilities::full(NatType::Open);
+    let caps = TransportCapabilities::full(NegotiationNatType::Open);
     let manager = TransportManager::new(caps);
 
-    let peer_caps = TransportCapabilities::full(NatType::Open);
+    let peer_caps = TransportCapabilities::full(NegotiationNatType::Open);
 
     // Should upgrade from plain to WebRTC
-    assert!(manager.should_upgrade(TransportType::Plain, &peer_caps));
+    assert!(manager.should_upgrade(CapabilityTransportType::Plain, &peer_caps));
 }
 
 #[test]
 fn test_transport_manager_should_not_upgrade_if_already_best() {
-    let caps = TransportCapabilities::full(NatType::Open);
+    let caps = TransportCapabilities::full(NegotiationNatType::Open);
     let manager = TransportManager::new(caps);
 
-    let peer_caps = TransportCapabilities::full(NatType::Open);
+    let peer_caps = TransportCapabilities::full(NegotiationNatType::Open);
 
     // Already on WebRTC, no need to upgrade
-    assert!(!manager.should_upgrade(TransportType::WebRTC, &peer_caps));
+    assert!(!manager.should_upgrade(CapabilityTransportType::WebRTC, &peer_caps));
 }
 
 #[test]
 fn test_transport_manager_respects_disabled_upgrades() {
-    let caps = TransportCapabilities::full(NatType::Open);
+    let caps = TransportCapabilities::full(NegotiationNatType::Open);
     let config = TransportManagerConfig {
         enable_upgrades: false,
         ..Default::default()
     };
     let manager = TransportManager::with_config(caps, config);
 
-    let peer_caps = TransportCapabilities::full(NatType::Open);
+    let peer_caps = TransportCapabilities::full(NegotiationNatType::Open);
 
     // Upgrades disabled, should not suggest upgrade
-    assert!(!manager.should_upgrade(TransportType::Plain, &peer_caps));
+    assert!(!manager.should_upgrade(CapabilityTransportType::Plain, &peer_caps));
 }
 
 #[tokio::test]
 async fn test_transport_manager_negotiate_as_initiator() {
     let (mut client, mut server) = create_stream_pair();
 
-    let client_caps = TransportCapabilities::full(NatType::Open);
-    let server_caps = TransportCapabilities::full(NatType::FullCone);
+    let client_caps = TransportCapabilities::full(NegotiationNatType::Open);
+    let server_caps = TransportCapabilities::full(NegotiationNatType::FullCone);
 
     let client_manager = TransportManager::new(client_caps);
 
@@ -323,7 +323,7 @@ async fn test_transport_manager_negotiate_as_initiator() {
 
 #[test]
 fn test_capabilities_agent_version_roundtrip() {
-    let caps = TransportCapabilities::full(NatType::FullCone);
+    let caps = TransportCapabilities::full(NegotiationNatType::FullCone);
 
     // Simulate what would be in agent version
     let suffix = caps.to_multiaddr_suffix();
@@ -333,10 +333,10 @@ fn test_capabilities_agent_version_roundtrip() {
     let parsed = TransportCapabilities::from_agent_version(&agent_version).unwrap();
 
     assert_eq!(parsed.supported.len(), 3);
-    assert!(parsed.supports(TransportType::WebRTC));
-    assert!(parsed.supports(TransportType::TlsTunnel));
-    assert!(parsed.supports(TransportType::Plain));
-    assert_eq!(parsed.nat_type, NatType::FullCone);
+    assert!(parsed.supports(CapabilityTransportType::WebRTC));
+    assert!(parsed.supports(CapabilityTransportType::TlsTunnel));
+    assert!(parsed.supports(CapabilityTransportType::Plain));
+    assert_eq!(parsed.nat_type, NegotiationNatType::FullCone);
 }
 
 #[test]
@@ -356,28 +356,28 @@ fn test_nat_webrtc_compatibility_matrix() {
     // Test the NAT compatibility matrix for WebRTC
 
     // Open to anything works
-    assert!(NatType::Open.webrtc_compatible_with(&NatType::Open));
-    assert!(NatType::Open.webrtc_compatible_with(&NatType::FullCone));
-    assert!(NatType::Open.webrtc_compatible_with(&NatType::Restricted));
-    assert!(NatType::Open.webrtc_compatible_with(&NatType::PortRestricted));
-    assert!(NatType::Open.webrtc_compatible_with(&NatType::Symmetric));
+    assert!(NegotiationNatType::Open.webrtc_compatible_with(&NegotiationNatType::Open));
+    assert!(NegotiationNatType::Open.webrtc_compatible_with(&NegotiationNatType::FullCone));
+    assert!(NegotiationNatType::Open.webrtc_compatible_with(&NegotiationNatType::Restricted));
+    assert!(NegotiationNatType::Open.webrtc_compatible_with(&NegotiationNatType::PortRestricted));
+    assert!(NegotiationNatType::Open.webrtc_compatible_with(&NegotiationNatType::Symmetric));
 
     // Full cone to most things works
-    assert!(NatType::FullCone.webrtc_compatible_with(&NatType::Open));
-    assert!(NatType::FullCone.webrtc_compatible_with(&NatType::FullCone));
+    assert!(NegotiationNatType::FullCone.webrtc_compatible_with(&NegotiationNatType::Open));
+    assert!(NegotiationNatType::FullCone.webrtc_compatible_with(&NegotiationNatType::FullCone));
 
     // Symmetric to Symmetric doesn't work
-    assert!(!NatType::Symmetric.webrtc_compatible_with(&NatType::Symmetric));
+    assert!(!NegotiationNatType::Symmetric.webrtc_compatible_with(&NegotiationNatType::Symmetric));
 
     // Symmetric to Open should work (open side can help)
-    assert!(NatType::Symmetric.webrtc_compatible_with(&NatType::Open));
+    assert!(NegotiationNatType::Symmetric.webrtc_compatible_with(&NegotiationNatType::Open));
 }
 
 #[test]
 fn test_transport_type_preference_ordering() {
     // Verify preference scores are ordered correctly
-    assert!(TransportType::WebRTC.preference_score() > TransportType::TlsTunnel.preference_score());
-    assert!(TransportType::TlsTunnel.preference_score() > TransportType::Plain.preference_score());
+    assert!(CapabilityTransportType::WebRTC.preference_score() > CapabilityTransportType::TlsTunnel.preference_score());
+    assert!(CapabilityTransportType::TlsTunnel.preference_score() > CapabilityTransportType::Plain.preference_score());
 }
 
 // ============================================================================
@@ -387,8 +387,8 @@ fn test_transport_type_preference_ordering() {
 #[test]
 fn test_negotiation_message_bincode_size() {
     // Verify messages are reasonably sized
-    let propose = NegotiationMessage::propose(&TransportCapabilities::full(NatType::Open));
-    let accept = NegotiationMessage::accept(TransportType::WebRTC);
+    let propose = NegotiationMessage::propose(&TransportCapabilities::full(NegotiationNatType::Open));
+    let accept = NegotiationMessage::accept(CapabilityTransportType::WebRTC);
     let reject = NegotiationMessage::reject("No common transport available");
 
     let propose_bytes = propose.to_bytes().unwrap();
