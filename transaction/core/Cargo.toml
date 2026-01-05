@@ -10,6 +10,7 @@ rust-version = { workspace = true }
 [features]
 default = []
 pq = ["dep:bth-crypto-pq"]  # Post-quantum transaction types
+cluster-tax = ["dep:bth-cluster-tax"]  # Cluster-based progressive fee validation
 
 [dependencies]
 # External dependencies
@@ -40,6 +41,7 @@ bth-crypto-multisig = { workspace = true }
 bth-crypto-pq = { workspace = true, optional = true }
 bth-crypto-ring-signature = { workspace = true, features = ["alloc", "serde", "prost"] }
 bth-crypto-ring-signature-signer = { workspace = true, features = ["alloc", "serde"] }
+bth-cluster-tax = { workspace = true, optional = true }
 bth-transaction-types = { workspace = true, features = ["alloc", "serde", "prost"] }
 bth-util-from-random = { workspace = true }
 bth-util-repr-bytes = { workspace = true }

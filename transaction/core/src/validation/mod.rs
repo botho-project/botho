@@ -6,6 +6,9 @@
 mod error;
 mod validate;
 
+#[cfg(feature = "cluster-tax")]
+mod cluster_fee;
+
 pub use self::{
     error::{TransactionValidationError, TransactionValidationResult},
     validate::{
@@ -20,3 +23,14 @@ pub use self::{
         validate_transaction_fee, validate_tx_out, ClusterWealthLookup, ProgressiveFeeConfig,
     },
 };
+
+#[cfg(feature = "cluster-tax")]
+pub use self::cluster_fee::{
+    compute_cluster_factor, compute_effective_cluster_wealth,
+    compute_effective_cluster_wealth_from_tags, extract_dominant_cluster, validate_cluster_fee,
+    validate_cluster_fee_dynamic, ClusterWealthMap, ClusterWealthProvider,
+};
+
+// Re-export cluster-tax types for convenience
+#[cfg(feature = "cluster-tax")]
+pub use bth_cluster_tax::{FeeConfig, TransactionType};

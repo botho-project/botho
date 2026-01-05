@@ -1389,6 +1389,7 @@ dependencies = [
  "aes",
  "assert_matches",
  "bth-account-keys",
+ "bth-cluster-tax",
  "bth-common",
  "bth-crypto-digestible",
  "bth-crypto-hashes",
