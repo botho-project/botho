@@ -14,6 +14,8 @@ This section contains design proposals, roadmaps, and technical specifications f
 |----------|--------|-------------|
 | [Cluster Tag Decay](cluster-tag-decay.md) | Implemented | Mathematical model for fee decay |
 | [Progressive Fees](../concepts/progressive-fees.md) | Implemented | Fee curve and economic effects |
+| [Wealth-Conditional Privacy](wealth-conditional-privacy.md) | Proposal | Source-wealth threshold for amount visibility |
+| [Wealth Privacy Simulation](wealth-privacy-simulation.md) | Draft | Simulation plan for privacy validation |
 | [Lottery Redistribution](lottery-redistribution.md) | Proposal | Alternative redistribution mechanisms |
 | [Provenance-Based Selection](provenance-based-selection.md) | Proposal | Entropy-weighted output selection |
 
