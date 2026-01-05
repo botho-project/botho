@@ -8,6 +8,9 @@
 use std::fmt;
 use std::io;
 
+use super::webrtc::ice::IceError;
+use super::webrtc::stun::StunError;
+
 /// Errors that can occur during transport operations.
 #[derive(Debug)]
 pub enum TransportError {
@@ -40,6 +43,15 @@ pub enum TransportError {
 
     /// Transport-specific error.
     Transport(String),
+
+    /// ICE-related error.
+    Ice(IceError),
+
+    /// STUN-related error.
+    Stun(StunError),
+
+    /// WebRTC-specific error.
+    WebRtc(String),
 }
 
 impl fmt::Display for TransportError {
@@ -55,6 +67,9 @@ impl fmt::Display for TransportError {
             TransportError::Configuration(msg) => write!(f, "configuration error: {}", msg),
             TransportError::Io(err) => write!(f, "I/O error: {}", err),
             TransportError::Transport(msg) => write!(f, "transport error: {}", msg),
+            TransportError::Ice(err) => write!(f, "ICE error: {}", err),
+            TransportError::Stun(err) => write!(f, "STUN error: {}", err),
+            TransportError::WebRtc(msg) => write!(f, "WebRTC error: {}", msg),
         }
     }
 }
@@ -63,6 +78,8 @@ impl std::error::Error for TransportError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             TransportError::Io(err) => Some(err),
+            TransportError::Ice(err) => Some(err),
+            TransportError::Stun(err) => Some(err),
             _ => None,
         }
     }
@@ -71,6 +88,18 @@ impl std::error::Error for TransportError {
 impl From<io::Error> for TransportError {
     fn from(err: io::Error) -> Self {
         TransportError::Io(err)
+    }
+}
+
+impl From<IceError> for TransportError {
+    fn from(err: IceError) -> Self {
+        TransportError::Ice(err)
+    }
+}
+
+impl From<StunError> for TransportError {
+    fn from(err: StunError) -> Self {
+        TransportError::Stun(err)
     }
 }
 
