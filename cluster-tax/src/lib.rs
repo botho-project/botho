@@ -47,6 +47,7 @@ mod age_decay;
 mod block_decay;
 mod cluster;
 mod fee_curve;
+mod lottery;
 mod tag;
 mod transfer;
 
@@ -114,4 +115,20 @@ pub use validate::{
     CommittedTagValidationResult,
     CommittedTransactionError,
     CommittedTransactionResult,
+};
+
+// ============================================================================
+// Lottery Fee Redistribution
+// ============================================================================
+//
+// The lottery system redistributes 80% of fees to random UTXO holders.
+// Default selection mode: Hybrid { alpha: 0.3 }
+// - 3.84x Sybil resistance (acceptable gaming ratio)
+// - 69% Gini coefficient reduction (progressive redistribution)
+// - 0 bits privacy cost (no information leaked)
+//
+// See docs/design/lottery-redistribution.md for analysis.
+pub use lottery::{
+    draw_winners, verify_drawing, LotteryCandidate, LotteryDrawConfig, LotteryResult,
+    LotteryWinner, SelectionMode,
 };
