@@ -1,23 +1,44 @@
 //! Fee calculation for Botho's transaction types.
 //!
-//! Botho uses a size-based fee model with progressive wealth taxation:
+//! Botho uses a size-based fee model with progressive wealth taxation and
+//! superlinear output fees to prevent UTXO farming attacks:
 //!
 //! ```text
-//! fee = fee_per_byte × tx_size × cluster_factor
+//! fee = fee_per_byte × tx_size × cluster_factor × output_penalty + memo_fees
 //! ```
+//!
+//! where `output_penalty = min(output_count, cap)^exponent`
 //!
 //! ## Transaction Types
 //!
-//! | Type     | Signature Type | Typical Size | Fee Rate              |
-//! |----------|----------------|--------------|------------------------|
-//! | Transfer | CLSAG          | ~4 KB        | size × cluster_factor  |
-//! | Minting  | N/A            | ~1.5 KB      | No fee                 |
+//! | Type     | Signature Type | Typical Size | Fee Rate                              |
+//! |----------|----------------|--------------|---------------------------------------|
+//! | Transfer | CLSAG          | ~4 KB        | size × cluster_factor × output²       |
+//! | Minting  | N/A            | ~1.5 KB      | No fee                                |
 //!
 //! ## Fee Components
 //!
 //! 1. **Size-based fee**: Larger transactions pay more (proportional to bytes)
 //! 2. **Progressive multiplier**: Cluster factor ranges from 1x to 6x based on
 //!    the sender's cluster wealth, ensuring wealthy clusters pay more
+//! 3. **Superlinear output fee**: Quadratic penalty for multiple outputs prevents
+//!    UTXO farming (splitting coins to game lottery systems)
+//! 4. **Memo fees**: Flat fee per encrypted memo
+//!
+//! ## Superlinear Output Fees
+//!
+//! The quadratic output fee makes mass splitting economically unfeasible:
+//!
+//! | Outputs | Penalty (default) | Example Fee (base=1000) |
+//! |---------|-------------------|-------------------------|
+//! | 1       | 1x                | 1,000                   |
+//! | 2       | 4x                | 4,000 (normal tx)       |
+//! | 5       | 25x               | 25,000                  |
+//! | 10      | 100x (capped)     | 100,000                 |
+//! | 20      | 100x (capped)     | 100,000                 |
+//!
+//! The cap at 10 outputs protects legitimate batch transactions while
+//! making UTXO farming prohibitively expensive.
 //!
 //! ## Size Rationale
 //!
@@ -33,6 +54,12 @@
 //! - Small clusters: 1x multiplier (just size fee)
 //! - Large clusters: up to 6x multiplier
 //! - Sigmoid curve provides smooth transition
+//!
+//! ## Dust Prevention
+//!
+//! Outputs below `min_output_value` (default: 1M nanoBTH = 0.001 BTH) are
+//! considered dust and should be rejected. This prevents attacks that create
+//! many tiny UTXOs.
 
 /// Fee rate as a fixed-point value (basis points, 1/10000).
 ///
@@ -83,7 +110,15 @@ pub enum TransactionType {
 
 /// Fee configuration for transaction types.
 ///
-/// Fees are calculated as: `fee_per_byte × tx_size × cluster_factor`
+/// Fees are calculated as:
+/// ```text
+/// fee = fee_per_byte × tx_size × cluster_factor × output_penalty + memo_fees
+/// ```
+///
+/// where `output_penalty = min(output_count, output_count_cap)^output_fee_exponent`
+///
+/// This superlinear output fee prevents UTXO farming attacks where attackers
+/// split coins into many small UTXOs to game lottery systems.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FeeConfig {
@@ -99,22 +134,136 @@ pub struct FeeConfig {
     /// Each output with `e_memo.is_some()` adds this flat fee.
     /// Default: 100 nanoBTH per memo (66 bytes stored forever)
     pub fee_per_memo: u64,
+
+    /// Exponent for superlinear output fee calculation.
+    /// Fee multiplier = output_count^exponent
+    ///
+    /// - 1.0 = linear (no penalty for multiple outputs)
+    /// - 2.0 = quadratic (default, 10 outputs costs 100x)
+    ///
+    /// Stored as fixed-point: actual_exponent = output_fee_exponent_scaled / 1000
+    /// Default: 2000 (= 2.0 quadratic) to prevent UTXO farming attacks.
+    pub output_fee_exponent_scaled: u32,
+
+    /// Maximum output count to apply the exponent to.
+    /// Prevents excessive fees for legitimate batch transactions.
+    ///
+    /// For output counts above this cap, the penalty is capped:
+    /// `penalty = cap^exponent` (not `output_count^exponent`)
+    ///
+    /// Default: 10 (caps penalty at 100x for quadratic exponent)
+    pub output_count_cap: u32,
+
+    /// Minimum value per output in nanoBTH.
+    /// Outputs below this value are considered dust and rejected.
+    /// This prevents dust attacks that create many tiny UTXOs.
+    ///
+    /// Default: 1_000_000 nanoBTH (0.001 BTH)
+    pub min_output_value: u64,
 }
+
+/// Scale for output fee exponent fixed-point representation.
+/// EXPONENT_SCALE = 1000, so exponent_scaled=2000 means 2.0.
+pub const OUTPUT_FEE_EXPONENT_SCALE: u32 = 1000;
 
 impl Default for FeeConfig {
     fn default() -> Self {
         Self {
-            fee_per_byte: 1, // 1 nanoBTH per byte
+            fee_per_byte: 1,                            // 1 nanoBTH per byte
             cluster_curve: ClusterFactorCurve::default(),
-            fee_per_memo: 100, // 100 nanoBTH per memo
+            fee_per_memo: 100,                          // 100 nanoBTH per memo
+            output_fee_exponent_scaled: 2000,           // 2.0 (quadratic)
+            output_count_cap: 10,                       // Cap at 10 outputs
+            min_output_value: 1_000_000,                // 0.001 BTH minimum
         }
     }
 }
 
 impl FeeConfig {
-    /// Compute the fee for a transaction based on size and cluster wealth.
+    /// Compute the output penalty multiplier for superlinear fees.
     ///
-    /// Formula: `fee = (fee_per_byte × tx_size_bytes × cluster_factor) +
+    /// Formula: `penalty = min(output_count, cap)^exponent`
+    ///
+    /// Returns the multiplier in OUTPUT_PENALTY_SCALE (1000 = 1x).
+    ///
+    /// # Examples
+    /// With default config (exponent=2.0, cap=10):
+    /// - 1 output: 1^2 = 1x (1000)
+    /// - 2 outputs: 2^2 = 4x (4000)
+    /// - 5 outputs: 5^2 = 25x (25000)
+    /// - 10 outputs: 10^2 = 100x (100000)
+    /// - 20 outputs: 10^2 = 100x (capped at 100000)
+    pub fn output_penalty(&self, output_count: usize) -> u64 {
+        // Apply cap
+        let effective_count = std::cmp::min(output_count as u32, self.output_count_cap) as f64;
+
+        // Compute exponent: exponent_scaled / 1000
+        let exponent = self.output_fee_exponent_scaled as f64 / OUTPUT_FEE_EXPONENT_SCALE as f64;
+
+        // Compute penalty: count^exponent
+        let penalty = effective_count.powf(exponent);
+
+        // Return as fixed-point scaled by 1000
+        (penalty * OUTPUT_FEE_EXPONENT_SCALE as f64) as u64
+    }
+
+    /// Compute the fee for a transaction based on size, cluster wealth, and output count.
+    ///
+    /// Formula:
+    /// ```text
+    /// fee = (fee_per_byte × tx_size_bytes × cluster_factor × output_penalty) + memo_fees
+    /// ```
+    ///
+    /// where `output_penalty = min(output_count, cap)^exponent`
+    ///
+    /// # Arguments
+    /// * `tx_type` - The transaction type (Minting pays no fee)
+    /// * `tx_size_bytes` - Size of the transaction in bytes
+    /// * `cluster_wealth` - Total wealth of sender's cluster
+    /// * `num_outputs` - Number of transaction outputs (for superlinear penalty)
+    /// * `num_memos` - Number of outputs with encrypted memos
+    ///
+    /// # Returns
+    /// The fee amount in nanoBTH
+    pub fn compute_fee_with_outputs(
+        &self,
+        tx_type: TransactionType,
+        tx_size_bytes: usize,
+        cluster_wealth: u64,
+        num_outputs: usize,
+        num_memos: usize,
+    ) -> u64 {
+        if tx_type == TransactionType::Minting {
+            return 0;
+        }
+
+        // Get cluster factor (1x to 6x in 1000-scale fixed point)
+        let cluster_factor = self.cluster_curve.factor(cluster_wealth);
+
+        // Get output penalty (capped quadratic by default)
+        let output_penalty = self.output_penalty(num_outputs);
+
+        // Size-based fee: fee_per_byte × size × cluster_factor × output_penalty
+        // Both cluster_factor and output_penalty are scaled by 1000
+        let size_fee = self
+            .fee_per_byte
+            .saturating_mul(tx_size_bytes as u64)
+            .saturating_mul(cluster_factor)
+            .saturating_mul(output_penalty)
+            / (ClusterFactorCurve::FACTOR_SCALE * OUTPUT_FEE_EXPONENT_SCALE as u64);
+
+        // Memo fees: flat fee per memo (already accounts for 66 bytes storage)
+        let memo_fee = self.fee_per_memo.saturating_mul(num_memos as u64);
+
+        size_fee.saturating_add(memo_fee)
+    }
+
+    /// Compute the fee for a transaction (legacy API without output count).
+    ///
+    /// This method assumes 2 outputs (standard transfer with change).
+    /// For full control, use `compute_fee_with_outputs`.
+    ///
+    /// Formula: `fee = (fee_per_byte × tx_size_bytes × cluster_factor × output_penalty) +
     /// memo_fees`
     ///
     /// # Arguments
@@ -132,24 +281,8 @@ impl FeeConfig {
         cluster_wealth: u64,
         num_memos: usize,
     ) -> u64 {
-        if tx_type == TransactionType::Minting {
-            return 0;
-        }
-
-        // Get cluster factor (1x to 6x in 1000-scale fixed point)
-        let cluster_factor = self.cluster_curve.factor(cluster_wealth);
-
-        // Size-based fee: fee_per_byte × size × cluster_factor
-        let size_fee = self
-            .fee_per_byte
-            .saturating_mul(tx_size_bytes as u64)
-            .saturating_mul(cluster_factor)
-            / ClusterFactorCurve::FACTOR_SCALE;
-
-        // Memo fees: flat fee per memo (already accounts for 66 bytes storage)
-        let memo_fee = self.fee_per_memo.saturating_mul(num_memos as u64);
-
-        size_fee.saturating_add(memo_fee)
+        // Default to 2 outputs (standard transfer: payment + change)
+        self.compute_fee_with_outputs(tx_type, tx_size_bytes, cluster_wealth, 2, num_memos)
     }
 
     /// Compute the fee without memos (convenience method).
@@ -160,6 +293,18 @@ impl FeeConfig {
         cluster_wealth: u64,
     ) -> u64 {
         self.compute_fee(tx_type, tx_size_bytes, cluster_wealth, 0)
+    }
+
+    /// Check if an output value is above the minimum threshold.
+    ///
+    /// Returns `true` if the value is acceptable, `false` if it's dust.
+    pub fn is_output_above_dust(&self, value: u64) -> bool {
+        value >= self.min_output_value
+    }
+
+    /// Get the minimum output value threshold.
+    pub fn dust_threshold(&self) -> u64 {
+        self.min_output_value
     }
 
     /// Get the cluster factor for a given wealth level.
@@ -174,20 +319,43 @@ impl FeeConfig {
     /// Uses approximate sizes:
     /// - Hidden (CLSAG): ~4 KB typical
     /// - Minting: ~1.5 KB typical
+    ///
+    /// Assumes 2 outputs (standard payment + change).
+    /// For multi-output estimation, use `estimate_fee_with_outputs`.
     pub fn estimate_typical_fee(
         &self,
         tx_type: TransactionType,
         cluster_wealth: u64,
         num_memos: usize,
     ) -> u64 {
+        self.estimate_fee_with_outputs(tx_type, cluster_wealth, 2, num_memos)
+    }
+
+    /// Estimate fee for a transaction with specified output count.
+    ///
+    /// Uses approximate sizes:
+    /// - Hidden (CLSAG): ~4 KB + ~1.2 KB per additional output
+    /// - Minting: ~1.5 KB typical
+    pub fn estimate_fee_with_outputs(
+        &self,
+        tx_type: TransactionType,
+        cluster_wealth: u64,
+        num_outputs: usize,
+        num_memos: usize,
+    ) -> u64 {
         let typical_size = match tx_type {
-            TransactionType::Hidden => 4_000,  // ~4 KB for CLSAG
+            TransactionType::Hidden => {
+                // Base size ~2.5 KB + ~1.2 KB per output
+                2_500 + num_outputs * 1_200
+            }
             TransactionType::Minting => 1_500, // ~1.5 KB for minting
         };
-        self.compute_fee(tx_type, typical_size, cluster_wealth, num_memos)
+        self.compute_fee_with_outputs(tx_type, typical_size, cluster_wealth, num_outputs, num_memos)
     }
 
     /// Compute the minimum fee for a transaction (alias for validation).
+    ///
+    /// Assumes 2 outputs. For multi-output validation, use `minimum_fee_with_outputs`.
     pub fn minimum_fee(
         &self,
         tx_type: TransactionType,
@@ -198,12 +366,26 @@ impl FeeConfig {
         self.compute_fee(tx_type, tx_size_bytes, cluster_wealth, num_memos)
     }
 
+    /// Compute the minimum fee for a transaction with specified output count.
+    pub fn minimum_fee_with_outputs(
+        &self,
+        tx_type: TransactionType,
+        tx_size_bytes: usize,
+        cluster_wealth: u64,
+        num_outputs: usize,
+        num_memos: usize,
+    ) -> u64 {
+        self.compute_fee_with_outputs(tx_type, tx_size_bytes, cluster_wealth, num_outputs, num_memos)
+    }
+
     /// Compute fee with dynamic base adjustment for congestion control.
     ///
     /// This is the full fee formula:
     /// ```text
-    /// fee = dynamic_base × tx_size × cluster_factor + memo_fees
+    /// fee = dynamic_base × tx_size × cluster_factor × output_penalty + memo_fees
     /// ```
+    ///
+    /// Assumes 2 outputs. For multi-output, use `compute_fee_with_dynamic_base_and_outputs`.
     ///
     /// # Arguments
     /// * `tx_type` - Transaction type (Minting pays no fee)
@@ -222,6 +404,43 @@ impl FeeConfig {
         num_memos: usize,
         dynamic_base: u64,
     ) -> u64 {
+        // Default to 2 outputs
+        self.compute_fee_with_dynamic_base_and_outputs(
+            tx_type,
+            tx_size_bytes,
+            cluster_wealth,
+            2,
+            num_memos,
+            dynamic_base,
+        )
+    }
+
+    /// Compute fee with dynamic base and specified output count.
+    ///
+    /// Full fee formula:
+    /// ```text
+    /// fee = dynamic_base × tx_size × cluster_factor × output_penalty + memo_fees
+    /// ```
+    ///
+    /// # Arguments
+    /// * `tx_type` - Transaction type (Minting pays no fee)
+    /// * `tx_size_bytes` - Size of transaction in bytes
+    /// * `cluster_wealth` - Total wealth of sender's cluster
+    /// * `num_outputs` - Number of transaction outputs
+    /// * `num_memos` - Number of outputs with encrypted memos
+    /// * `dynamic_base` - Current dynamic fee base (1 to 100 nanoBTH/byte)
+    ///
+    /// # Returns
+    /// Fee in nanoBTH
+    pub fn compute_fee_with_dynamic_base_and_outputs(
+        &self,
+        tx_type: TransactionType,
+        tx_size_bytes: usize,
+        cluster_wealth: u64,
+        num_outputs: usize,
+        num_memos: usize,
+        dynamic_base: u64,
+    ) -> u64 {
         if tx_type == TransactionType::Minting {
             return 0;
         }
@@ -229,11 +448,15 @@ impl FeeConfig {
         // Get cluster factor (1x to 6x in 1000-scale fixed point)
         let cluster_factor = self.cluster_curve.factor(cluster_wealth);
 
-        // Size-based fee: dynamic_base × size × cluster_factor
+        // Get output penalty (capped quadratic by default)
+        let output_penalty = self.output_penalty(num_outputs);
+
+        // Size-based fee: dynamic_base × size × cluster_factor × output_penalty
         let size_fee = dynamic_base
             .saturating_mul(tx_size_bytes as u64)
             .saturating_mul(cluster_factor)
-            / ClusterFactorCurve::FACTOR_SCALE;
+            .saturating_mul(output_penalty)
+            / (ClusterFactorCurve::FACTOR_SCALE * OUTPUT_FEE_EXPONENT_SCALE as u64);
 
         // Memo fees scale with dynamic base too
         let memo_base = std::cmp::max(self.fee_per_memo, dynamic_base * 100);
@@ -243,6 +466,8 @@ impl FeeConfig {
     }
 
     /// Compute minimum fee with dynamic base (alias for validation).
+    ///
+    /// Assumes 2 outputs. For multi-output, use `minimum_fee_dynamic_with_outputs`.
     pub fn minimum_fee_dynamic(
         &self,
         tx_type: TransactionType,
@@ -258,6 +483,46 @@ impl FeeConfig {
             num_memos,
             dynamic_base,
         )
+    }
+
+    /// Compute minimum fee with dynamic base and specified output count.
+    pub fn minimum_fee_dynamic_with_outputs(
+        &self,
+        tx_type: TransactionType,
+        tx_size_bytes: usize,
+        cluster_wealth: u64,
+        num_outputs: usize,
+        num_memos: usize,
+        dynamic_base: u64,
+    ) -> u64 {
+        self.compute_fee_with_dynamic_base_and_outputs(
+            tx_type,
+            tx_size_bytes,
+            cluster_wealth,
+            num_outputs,
+            num_memos,
+            dynamic_base,
+        )
+    }
+
+    /// Create a fee config with no output penalty (linear fees).
+    ///
+    /// Useful for testing or when output penalties should be disabled.
+    pub fn with_linear_output_fees() -> Self {
+        Self {
+            output_fee_exponent_scaled: 1000, // 1.0 = linear
+            ..Self::default()
+        }
+    }
+
+    /// Create a fee config with custom output fee parameters.
+    pub fn with_output_fee_params(exponent: f64, cap: u32, min_output: u64) -> Self {
+        Self {
+            output_fee_exponent_scaled: (exponent * OUTPUT_FEE_EXPONENT_SCALE as f64) as u32,
+            output_count_cap: cap,
+            min_output_value: min_output,
+            ..Self::default()
+        }
     }
 }
 
@@ -700,16 +965,133 @@ impl Default for ZkFeeCurve {
 mod tests {
     use super::*;
 
+    // ========================================================================
+    // Output Penalty Tests
+    // ========================================================================
+
+    #[test]
+    fn test_output_penalty_quadratic() {
+        let config = FeeConfig::default();
+
+        // 1 output: 1^2 = 1x (1000)
+        assert_eq!(config.output_penalty(1), 1000);
+
+        // 2 outputs: 2^2 = 4x (4000)
+        assert_eq!(config.output_penalty(2), 4000);
+
+        // 5 outputs: 5^2 = 25x (25000)
+        assert_eq!(config.output_penalty(5), 25000);
+
+        // 10 outputs: 10^2 = 100x (100000)
+        assert_eq!(config.output_penalty(10), 100000);
+    }
+
+    #[test]
+    fn test_output_penalty_cap() {
+        let config = FeeConfig::default();
+
+        // Above cap (10), penalty should be capped at 100x
+        assert_eq!(config.output_penalty(11), 100000);
+        assert_eq!(config.output_penalty(20), 100000);
+        assert_eq!(config.output_penalty(100), 100000);
+    }
+
+    #[test]
+    fn test_output_penalty_linear() {
+        let config = FeeConfig::with_linear_output_fees();
+
+        // With exponent=1.0, penalty should be linear
+        assert_eq!(config.output_penalty(1), 1000);
+        assert_eq!(config.output_penalty(2), 2000);
+        assert_eq!(config.output_penalty(5), 5000);
+        assert_eq!(config.output_penalty(10), 10000);
+    }
+
+    #[test]
+    fn test_output_fee_scaling() {
+        let config = FeeConfig {
+            fee_per_byte: 1,
+            cluster_curve: ClusterFactorCurve::flat(1), // 1x cluster factor
+            fee_per_memo: 0,
+            output_fee_exponent_scaled: 2000, // quadratic
+            output_count_cap: 10,
+            min_output_value: 1_000_000,
+        };
+
+        // Fee should scale quadratically with outputs
+        let fee_1 = config.compute_fee_with_outputs(TransactionType::Hidden, 1_000, 0, 1, 0);
+        let fee_2 = config.compute_fee_with_outputs(TransactionType::Hidden, 1_000, 0, 2, 0);
+        let fee_5 = config.compute_fee_with_outputs(TransactionType::Hidden, 1_000, 0, 5, 0);
+
+        // 2 outputs should be 4x the fee of 1 output
+        assert_eq!(fee_2, fee_1 * 4, "2 outputs = 4x fee");
+
+        // 5 outputs should be 25x the fee of 1 output
+        assert_eq!(fee_5, fee_1 * 25, "5 outputs = 25x fee");
+    }
+
+    #[test]
+    fn test_superlinear_fee_prevents_splitting() {
+        let config = FeeConfig::default();
+
+        // Single 2-output transaction (normal)
+        let fee_normal = config.compute_fee_with_outputs(
+            TransactionType::Hidden,
+            4_000,
+            0,
+            2,
+            0,
+        );
+
+        // Splitting into 10 outputs costs 25x more
+        let fee_split = config.compute_fee_with_outputs(
+            TransactionType::Hidden,
+            4_000,
+            0,
+            10,
+            0,
+        );
+
+        // 10 outputs = 100x penalty, 2 outputs = 4x penalty
+        // So splitting should cost 100/4 = 25x more
+        assert_eq!(fee_split, fee_normal * 25, "10-output tx should cost 25x more");
+    }
+
+    // ========================================================================
+    // Dust Prevention Tests
+    // ========================================================================
+
+    #[test]
+    fn test_dust_threshold() {
+        let config = FeeConfig::default();
+
+        // Default threshold is 1M nanoBTH
+        assert_eq!(config.dust_threshold(), 1_000_000);
+
+        // Values at or above threshold are OK
+        assert!(config.is_output_above_dust(1_000_000));
+        assert!(config.is_output_above_dust(2_000_000));
+
+        // Values below threshold are dust
+        assert!(!config.is_output_above_dust(999_999));
+        assert!(!config.is_output_above_dust(0));
+    }
+
+    // ========================================================================
+    // Legacy API Compatibility Tests
+    // ========================================================================
+
     #[test]
     fn test_size_based_fee() {
         let config = FeeConfig::default();
 
         // 4 KB transaction (typical CLSAG) with small cluster
+        // Now includes 4x output penalty for 2 outputs (default)
         let fee_small = config.compute_fee(TransactionType::Hidden, 4_000, 0, 0);
-        // fee = 1 nanoBTH/byte × 4000 bytes × ~1.6x factor ≈ 6400 nanoBTH
+        // fee = 1 nanoBTH/byte × 4000 bytes × ~1.6x factor × 4x output = ~25,600
         assert!(
-            fee_small >= 4_000 && fee_small <= 10_000,
-            "4KB tx with small cluster: {fee_small}"
+            fee_small >= 16_000 && fee_small <= 40_000,
+            "4KB tx with small cluster (2 outputs): {fee_small}"
         );
 
         // Same transaction with large cluster (6x factor)
@@ -730,6 +1112,10 @@ mod tests {
 
         let fee_wealthy = config.compute_fee(TransactionType::Minting, 1_500, 100_000_000, 0);
         assert_eq!(fee_wealthy, 0);
+
+        // Even with many outputs
+        let fee_many = config.compute_fee_with_outputs(TransactionType::Minting, 1_500, 0, 10, 0);
+        assert_eq!(fee_many, 0);
     }
 
     #[test]
@@ -840,12 +1226,46 @@ mod tests {
             fee_per_byte: 1,
             cluster_curve: ClusterFactorCurve::flat(1), // 1x for predictable results
             fee_per_memo: 0,
+            output_fee_exponent_scaled: 2000,
+            output_count_cap: 10,
+            min_output_value: 1_000_000,
         };
 
-        // Double the size should double the fee
-        let fee_1k = config.compute_fee(TransactionType::Hidden, 1_000, 0, 0);
-        let fee_2k = config.compute_fee(TransactionType::Hidden, 2_000, 0, 0);
+        // Double the size should double the fee (same output count)
+        let fee_1k = config.compute_fee_with_outputs(TransactionType::Hidden, 1_000, 0, 2, 0);
+        let fee_2k = config.compute_fee_with_outputs(TransactionType::Hidden, 2_000, 0, 2, 0);
         assert_eq!(fee_2k, fee_1k * 2, "Fee should scale linearly with size");
+    }
+
+    // ========================================================================
+    // Fee Estimation with Outputs Tests
+    // ========================================================================
+
+    #[test]
+    fn test_estimate_fee_with_outputs() {
+        let config = FeeConfig::default();
+
+        // More outputs should cost more
+        let fee_2 = config.estimate_fee_with_outputs(TransactionType::Hidden, 0, 2, 0);
+        let fee_5 = config.estimate_fee_with_outputs(TransactionType::Hidden, 0, 5, 0);
+        let fee_10 = config.estimate_fee_with_outputs(TransactionType::Hidden, 0, 10, 0);
+
+        assert!(fee_5 > fee_2, "5 outputs should cost more than 2");
+        assert!(fee_10 > fee_5, "10 outputs should cost more than 5");
+    }
+
+    #[test]
+    fn test_custom_output_params() {
+        // Custom config with cubic exponent and higher cap
+        let config = FeeConfig::with_output_fee_params(3.0, 20, 500_000);
+
+        // Check params are set correctly
+        assert_eq!(config.output_fee_exponent_scaled, 3000);
+        assert_eq!(config.output_count_cap, 20);
+        assert_eq!(config.min_output_value, 500_000);
+
+        // 2 outputs with cubic: 2^3 = 8x (8000)
+        assert_eq!(config.output_penalty(2), 8000);
     }
 
     // ========================================================================
