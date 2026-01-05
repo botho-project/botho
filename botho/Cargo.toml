@@ -167,3 +167,7 @@ harness = false
 [[bench]]
 name = "traffic_normalization"
 harness = false
+
+[[bench]]
+name = "transport_benchmarks"
+harness = false

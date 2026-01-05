@@ -46,7 +46,8 @@
 //!
 //! - [`capabilities`]: Transport capabilities advertising and parsing
 //! - [`negotiation`]: Transport negotiation protocol between peers
-//! - [`signaling`]: SDP exchange for WebRTC connection establishment (Phase 3.5)
+//! - [`signaling`]: SDP exchange for WebRTC connection establishment (Phase
+//!   3.5)
 //! - [`webrtc`]: WebRTC data channel transport (Phase 3.2)
 //! - [`plain`]: Standard TCP + Noise transport
 //!
@@ -104,10 +105,12 @@ mod traits;
 mod types;
 pub mod webrtc;
 
+// Benchmark utilities (Phase 3.10)
+pub mod bench;
+
 // Re-export capabilities types (Phase 3.6)
 pub use capabilities::{
-    NatType as NegotiationNatType, TransportCapabilities,
-    TransportType as CapabilityTransportType,
+    NatType as NegotiationNatType, TransportCapabilities, TransportType as CapabilityTransportType,
 };
 
 // Re-export negotiation types (Phase 3.6)
@@ -135,18 +138,21 @@ pub use webrtc::dtls::{
 };
 
 // Re-export WebRTC ICE/STUN types (Phase 3.4)
-pub use webrtc::ice::{
-    IceCandidate as IceFullCandidate, IceCandidateType, IceConfig, IceConnectionState, IceError,
-    IceGatherer,
+pub use webrtc::{
+    ice::{
+        IceCandidate as IceFullCandidate, IceCandidateType, IceConfig, IceConnectionState,
+        IceError, IceGatherer,
+    },
+    stun::{NatType, StunClient, StunConfig, StunError},
+    WebRtcConnection, WebRtcTransport,
 };
-pub use webrtc::stun::{NatType, StunClient, StunConfig, StunError};
-pub use webrtc::{WebRtcConnection, WebRtcTransport};
 
 // Re-export signaling types (Phase 3.5)
 pub use signaling::{
     IceCandidate, SessionId, SignalingChannel, SignalingError, SignalingMessage, SignalingRole,
-    SignalingSession, SignalingState, DEFAULT_SIGNALING_TIMEOUT_SECS, MAX_ICE_CANDIDATES_PER_SESSION,
-    MAX_ICE_CANDIDATE_SIZE, MAX_SDP_SIZE, MAX_SESSIONS_PER_PEER, SESSION_ID_LEN,
+    SignalingSession, SignalingState, DEFAULT_SIGNALING_TIMEOUT_SECS,
+    MAX_ICE_CANDIDATES_PER_SESSION, MAX_ICE_CANDIDATE_SIZE, MAX_SDP_SIZE, MAX_SESSIONS_PER_PEER,
+    SESSION_ID_LEN,
 };
 
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -201,7 +207,10 @@ impl TransportManager {
     }
 
     /// Create a new transport manager with custom configuration.
-    pub fn with_config(capabilities: TransportCapabilities, config: TransportManagerConfig) -> Self {
+    pub fn with_config(
+        capabilities: TransportCapabilities,
+        config: TransportManagerConfig,
+    ) -> Self {
         Self {
             capabilities,
             config,
