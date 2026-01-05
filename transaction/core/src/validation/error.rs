@@ -172,6 +172,17 @@ pub enum TransactionValidationError {
     /// Insufficient progressive fee: required {0}, actual {1}
     InsufficientProgressiveFee(u64, u64),
 
+    /// Insufficient cluster-based fee: required {required}, actual {actual}, cluster_wealth {cluster_wealth}
+    #[cfg(feature = "cluster-tax")]
+    InsufficientClusterFee {
+        /// Required minimum fee in nanoBTH
+        required: u64,
+        /// Actual fee declared in transaction
+        actual: u64,
+        /// Effective cluster wealth used for calculation
+        cluster_wealth: u64,
+    },
+
     // =========== Phase 2 Committed Tag Errors ===========
     /// Committed tag inheritance proof is invalid
     InvalidTagInheritanceProof,
