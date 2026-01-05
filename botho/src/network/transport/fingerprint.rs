@@ -251,8 +251,12 @@ pub fn kolmogorov_smirnov(sample1: &[f64], sample2: &[f64]) -> KsTestResult {
         let d = (cdf1 - cdf2).abs();
         d_max = d_max.max(d);
 
-        // Advance the pointer with the smaller value
-        if i < n1 && (j >= n2 || sorted1[i] <= sorted2[j]) {
+        // Advance pointers - handle ties by advancing both when values are equal
+        if i < n1 && j < n2 && sorted1[i] == sorted2[j] {
+            // Values are equal, advance both to maintain correct CDF alignment
+            i += 1;
+            j += 1;
+        } else if i < n1 && (j >= n2 || sorted1[i] < sorted2[j]) {
             i += 1;
         } else {
             j += 1;

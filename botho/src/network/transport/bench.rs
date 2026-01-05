@@ -330,12 +330,12 @@ impl NetworkConditions {
     pub fn name(&self) -> &'static str {
         if self.latency < Duration::from_millis(1) {
             "lan"
-        } else if self.latency < Duration::from_millis(100) {
-            "wan"
         } else if self.latency >= Duration::from_millis(200) {
             "satellite"
         } else if self.packet_loss >= 0.05 {
             "lossy"
+        } else if self.latency < Duration::from_millis(100) {
+            "wan"
         } else {
             "mobile"
         }
@@ -483,7 +483,9 @@ impl LatencyCollector {
         let mut sorted = self.samples.clone();
         sorted.sort();
 
-        let idx = (sorted.len() * p / 100).min(sorted.len() - 1);
+        // Use the nearest-rank method: index = ceil(p/100 * n) - 1
+        // This gives the value at or below which p% of values fall
+        let idx = ((sorted.len() - 1) * p / 100).min(sorted.len() - 1);
         sorted[idx]
     }
 
