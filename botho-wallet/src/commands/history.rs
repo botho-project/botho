@@ -15,11 +15,9 @@ use super::{decrypt_wallet_with_rate_limiting, print_error, print_success, print
 /// Transaction type from RPC
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TxCryptoType {
-    /// Classical CLSAG ring signatures
+    /// CLSAG ring signatures (standard per ADR-0001)
     Clsag,
-    /// Quantum-safe LION lattice-based signatures
-    Lion,
-    /// Hybrid (both classical and PQ)
+    /// Hybrid (both classical and PQ signatures)
     Hybrid,
     /// Unknown type
     Unknown,
@@ -30,7 +28,6 @@ impl TxCryptoType {
     pub fn from_str(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "clsag" => Self::Clsag,
-            "lion" => Self::Lion,
             "hybrid" => Self::Hybrid,
             _ => Self::Unknown,
         }
@@ -40,7 +37,6 @@ impl TxCryptoType {
     pub fn code(&self) -> &'static str {
         match self {
             Self::Clsag => "CLSAG",
-            Self::Lion => "LION",
             Self::Hybrid => "HYBRID",
             Self::Unknown => "???",
         }
@@ -50,7 +46,6 @@ impl TxCryptoType {
     pub fn color(&self) -> &'static str {
         match self {
             Self::Clsag => "\x1b[34m",   // Blue
-            Self::Lion => "\x1b[35m",    // Purple/Magenta
             Self::Hybrid => "\x1b[36m",  // Cyan
             Self::Unknown => "\x1b[37m", // White
         }
@@ -197,15 +192,11 @@ pub async fn run(wallet_path: &Path, limit: usize) -> Result<()> {
     // Print legend
     println!("Transaction Types:");
     println!(
-        "  {}CLSAG\x1b[0m = Classical ring signatures",
+        "  {}CLSAG\x1b[0m  = Ring signatures (standard)",
         TxCryptoType::Clsag.color()
     );
     println!(
-        "  {}LION\x1b[0m  = Quantum-safe lattice-based signatures",
-        TxCryptoType::Lion.color()
-    );
-    println!(
-        "  {}HYBRID\x1b[0m = Both classical and quantum-safe",
+        "  {}HYBRID\x1b[0m = Hybrid classical+PQ signatures",
         TxCryptoType::Hybrid.color()
     );
     println!();

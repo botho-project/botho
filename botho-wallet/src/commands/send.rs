@@ -23,20 +23,18 @@ pub async fn run(
     skip_confirm: bool,
     quantum_private: bool,
 ) -> Result<()> {
-    // Handle quantum-private transaction request
-    #[cfg(not(feature = "pq"))]
+    // Handle deprecated quantum-private flag (per ADR-0001)
     if quantum_private {
-        print_error("Quantum-private transactions are not enabled in this build.");
-        println!("Rebuild with --features pq to enable post-quantum transactions.");
+        print_error("The --quantum-private flag has been removed per ADR-0001.");
+        println!();
+        println!("Post-quantum ring signatures were deprecated due to prohibitive size.");
+        println!("Standard transactions use CLSAG rings with quantum-safe recipient privacy.");
+        println!();
+        println!("Please run your command without --quantum-private.");
         return Ok(());
     }
 
-    #[cfg(feature = "pq")]
-    if quantum_private {
-        return run_quantum_private(wallet_path, address, amount, skip_confirm).await;
-    }
-
-    // Classical transaction flow
+    // Standard transaction flow with CLSAG ring signatures
     run_classical(wallet_path, address, amount, skip_confirm).await
 }
 
@@ -253,39 +251,3 @@ fn parse_address(address: &str) -> Result<bth_account_keys::PublicAddress> {
     ))
 }
 
-/// Run a quantum-private transaction using LION ring signatures
-///
-/// NOTE: LION integration is in progress. The previous ML-DSA+Schnorr hybrid
-/// approach has been deprecated because it sacrificed ring privacy (direct
-/// input references instead of ring signatures).
-///
-/// The new LION-based approach provides:
-/// - Full sender privacy via ring signatures (hidden among ring of 7)
-/// - Post-quantum security via lattice-based cryptography
-/// - Linkable key images for double-spend detection
-///
-/// See issue #119 for migration status.
-#[cfg(feature = "pq")]
-async fn run_quantum_private(
-    _wallet_path: &Path,
-    _address: &str,
-    _amount: f64,
-    _skip_confirm: bool,
-) -> Result<()> {
-    print_error("Quantum-private transactions are being upgraded to LION ring signatures.");
-    println!();
-    println!("The previous ML-DSA+Schnorr hybrid approach has been deprecated because");
-    println!("it used direct input references, sacrificing sender privacy.");
-    println!();
-    println!("The new LION-based approach will provide:");
-    println!("  • Full sender privacy (hidden among ring of 7 members)");
-    println!("  • Post-quantum security (~128-bit against quantum adversaries)");
-    println!("  • Linkable key images for double-spend detection");
-    println!();
-    println!("See: https://github.com/botho-project/botho/issues/119");
-    println!();
-    println!("For now, please use classical transactions (without --quantum-private).");
-    println!("Classical transactions still provide ring signature privacy.");
-
-    Ok(())
-}

@@ -31,8 +31,6 @@ jobs:
       matrix:
         target:
           - fuzz_clsag
-          - fuzz_lion_signature
-          - fuzz_polynomial
           - fuzz_subaddress
           - fuzz_ring_signature
 

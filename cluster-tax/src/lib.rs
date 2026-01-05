@@ -15,7 +15,6 @@
 //! | Type             | Ring Signature | Fee Formula                           |
 //! |------------------|----------------|---------------------------------------|
 //! | Standard-Private | CLSAG (~700B)  | fee_per_byte × size × cluster_factor  |
-//! | PQ-Private       | LION (~63 KB)  | fee_per_byte × size × cluster_factor  |
 //! | Minting          | N/A            | No fee (PoW reward claim)             |
 //!
 //! ## Key Concepts

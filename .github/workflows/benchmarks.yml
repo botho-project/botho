@@ -77,18 +77,9 @@ jobs:
         run: cargo bench -p bth-crypto-ring-signature -- --quick --noplot
         continue-on-error: true
 
-      - name: Run LION benchmarks (quick)
-        if: ${{ github.event_name == 'pull_request' || github.event.inputs.full_run != 'true' }}
-        run: cargo bench -p bth-crypto-lion -- --quick --noplot
-        continue-on-error: true
-
       - name: Run CLSAG benchmarks (full)
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.full_run == 'true' }}
         run: cargo bench -p bth-crypto-ring-signature -- --noplot
-
-      - name: Run LION benchmarks (full)
-        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.full_run == 'true' }}
-        run: cargo bench -p bth-crypto-lion -- --noplot
 
   run-node-benchmarks:
     name: Node Benchmarks
@@ -185,17 +176,15 @@ jobs:
           echo "| Benchmark Suite | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|-----------------|--------|" >> $GITHUB_STEP_SUMMARY
           echo "| Compile | ${{ needs.compile-benchmarks.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Crypto (CLSAG/LION) | ${{ needs.run-crypto-benchmarks.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Crypto (CLSAG) | ${{ needs.run-crypto-benchmarks.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Node (Block/Mempool/Traffic) | ${{ needs.run-node-benchmarks.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Transaction | ${{ needs.run-transaction-benchmarks.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Performance Targets" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "#### Cryptography" >> $GITHUB_STEP_SUMMARY
+          echo "#### Cryptography (CLSAG Ring Signatures)" >> $GITHUB_STEP_SUMMARY
           echo "- CLSAG sign: <10ms" >> $GITHUB_STEP_SUMMARY
           echo "- CLSAG verify: <5ms" >> $GITHUB_STEP_SUMMARY
-          echo "- LION sign: <100ms" >> $GITHUB_STEP_SUMMARY
-          echo "- LION verify: <50ms" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "#### Traffic Normalization (Phase 2)" >> $GITHUB_STEP_SUMMARY
           echo "- Standard: <200ms p99 latency, <50% bandwidth overhead" >> $GITHUB_STEP_SUMMARY
