@@ -187,8 +187,8 @@ pub use transmitter::{
 
 // Re-export config types
 pub use config::{
-    PrivacyConfig, PrivacyConfigBuilder, PrivacyConfigError, PrivacyLevel, PrivacyLevelParseError,
-    DEFAULT_JITTER_MAX_MS, DEFAULT_JITTER_MIN_MS,
+    PrivacyConfig, PrivacyConfigBuilder, PrivacyConfigError, DEFAULT_JITTER_MAX_MS,
+    DEFAULT_JITTER_MIN_MS,
 };
 
 // Re-export cover traffic types
@@ -205,6 +205,6 @@ pub use normalizer::{
 
 // Re-export padding types
 pub use padding::{
-    bucket_for_payload, is_valid_bucket, pad_to_bucket, padding_overhead, try_pad_to_bucket,
-    unpad, PaddingError, LENGTH_HEADER_SIZE, MAX_PAYLOAD_SIZE, SIZE_BUCKETS,
+    bucket_for_payload, is_valid_bucket, pad_to_bucket, padding_overhead, try_pad_to_bucket, unpad,
+    PaddingError, LENGTH_HEADER_SIZE, MAX_PAYLOAD_SIZE, SIZE_BUCKETS,
 };

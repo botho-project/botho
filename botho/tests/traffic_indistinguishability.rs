@@ -202,7 +202,7 @@ fn ks_p_value(d: f64, n1: usize, n2: usize) -> f64 {
 #[test]
 fn test_padding_size_indistinguishability() {
     let mut rng = ChaCha8Rng::seed_from_u64(42);
-    let normalizer = TrafficNormalizer::enhanced();
+    let normalizer = TrafficNormalizer::default();
 
     // Generate padded messages from small payloads (100-300 bytes)
     let mut small_sizes: Vec<f64> = Vec::new();
@@ -245,7 +245,7 @@ fn test_padding_size_indistinguishability() {
 /// Test that all padded messages of similar type fall into fixed buckets.
 #[test]
 fn test_padding_bucket_uniformity() {
-    let normalizer = TrafficNormalizer::enhanced();
+    let normalizer = TrafficNormalizer::default();
     let mut rng = ChaCha8Rng::seed_from_u64(123);
 
     // Track which buckets are used
@@ -484,7 +484,7 @@ fn test_padded_vs_unpadded_sizes() {
 /// Test that padding eliminates size variance within buckets.
 #[test]
 fn test_padding_eliminates_variance() {
-    let normalizer = TrafficNormalizer::enhanced();
+    let normalizer = TrafficNormalizer::default();
     let mut rng = ChaCha8Rng::seed_from_u64(222);
 
     // Generate messages that should all pad to 512 bytes
@@ -554,7 +554,7 @@ fn test_cover_message_size_bounds() {
 /// Integration test: Complete traffic pattern analysis.
 #[test]
 fn test_traffic_pattern_analysis() {
-    let normalizer = TrafficNormalizer::enhanced();
+    let normalizer = TrafficNormalizer::default();
     let jitter = TimingJitter::default();
     let cover_gen = CoverTrafficGenerator::default();
     let mut rng = ChaCha8Rng::seed_from_u64(555);

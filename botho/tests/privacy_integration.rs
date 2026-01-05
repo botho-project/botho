@@ -2,8 +2,8 @@
 
 //! Integration tests for onion gossip privacy features.
 //!
-//! This module provides comprehensive integration tests to validate onion gossip
-//! functionality in realistic network scenarios.
+//! This module provides comprehensive integration tests to validate onion
+//! gossip functionality in realistic network scenarios.
 //!
 //! # Test Categories
 //!
@@ -58,10 +58,10 @@ struct SimulatedPeer {
 /// Create a default relay capacity that meets the minimum selection threshold.
 fn default_test_relay_capacity() -> RelayCapacity {
     RelayCapacity {
-        bandwidth_bps: 5_000_000,  // 5 Mbps → 0.2 bandwidth score
-        uptime_ratio: 0.8,         // 0.24 uptime score
-        nat_type: NatType::Open,   // 0.2 NAT bonus
-        current_load: 0.1,         // Low load
+        bandwidth_bps: 5_000_000, // 5 Mbps → 0.2 bandwidth score
+        uptime_ratio: 0.8,        // 0.24 uptime score
+        nat_type: NatType::Open,  // 0.2 NAT bonus
+        current_load: 0.1,        // Low load
     }
     // Total: ~0.58 score (well above 0.2 threshold)
 }
@@ -305,7 +305,7 @@ fn high_capacity_relay() -> RelayCapacity {
 
 fn low_capacity_relay() -> RelayCapacity {
     RelayCapacity {
-        bandwidth_bps: 2_000_000,  // Just above minimum threshold
+        bandwidth_bps: 2_000_000, // Just above minimum threshold
         uptime_ratio: 0.6,
         nat_type: NatType::Restricted, // Gives 0.1 bonus
         current_load: 0.3,
@@ -354,11 +354,8 @@ fn test_circuit_construction() {
 
 #[test]
 fn test_circuit_subnet_diversity() {
-    let network = PrivacyTestNetwork::with_subnets(vec![
-        ((192, 168), 5),
-        ((10, 0), 5),
-        ((172, 16), 5),
-    ]);
+    let network =
+        PrivacyTestNetwork::with_subnets(vec![((192, 168), 5), ((10, 0), 5), ((172, 16), 5)]);
 
     let selector = CircuitSelector::new(SelectionConfig::default());
     let relay_peers = network.relay_peers();
@@ -381,7 +378,11 @@ fn test_circuit_subnet_diversity() {
             }
         }
 
-        assert_eq!(subnets.len(), 3, "All 3 hops should be in different subnets");
+        assert_eq!(
+            subnets.len(),
+            3,
+            "All 3 hops should be in different subnets"
+        );
     }
 }
 
@@ -528,12 +529,7 @@ fn test_relay_under_load() {
     let total_relays: u64 = network.peers.iter().map(|p| p.relay_count()).sum();
     assert_eq!(total_relays, 300, "Each tx should traverse 3 hops");
 
-    let max_relay = network
-        .peers
-        .iter()
-        .map(|p| p.relay_count())
-        .max()
-        .unwrap();
+    let max_relay = network.peers.iter().map(|p| p.relay_count()).max().unwrap();
     let avg_relay = total_relays as f64 / network.peers.len() as f64;
 
     assert!(
@@ -1123,11 +1119,8 @@ fn test_network_creation() {
 
 #[test]
 fn test_network_with_subnets() {
-    let network = PrivacyTestNetwork::with_subnets(vec![
-        ((192, 168), 5),
-        ((10, 0), 5),
-        ((172, 16), 5),
-    ]);
+    let network =
+        PrivacyTestNetwork::with_subnets(vec![((192, 168), 5), ((10, 0), 5), ((172, 16), 5)]);
     assert_eq!(network.peers.len(), 15);
 }
 

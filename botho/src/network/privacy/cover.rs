@@ -36,8 +36,10 @@
 //! let cover = generator.generate();
 //! ```
 
-use rand::distributions::{Distribution, WeightedIndex};
-use rand::Rng;
+use rand::{
+    distributions::{Distribution, WeightedIndex},
+    Rng,
+};
 use serde::{Deserialize, Serialize};
 
 /// Minimum cover message size in bytes.
@@ -293,8 +295,7 @@ impl CoverTrafficGenerator {
 
     /// Select a size category based on weights.
     fn select_category<R: Rng>(&self, rng: &mut R) -> SizeCategory {
-        let dist = WeightedIndex::new(&self.config.size_weights)
-            .expect("weights must be non-zero");
+        let dist = WeightedIndex::new(&self.config.size_weights).expect("weights must be non-zero");
 
         match dist.sample(rng) {
             0 => SizeCategory::Small,
@@ -314,8 +315,7 @@ impl CoverTrafficGenerator {
 
 /// Generate a cover message size using weighted random selection.
 fn generate_cover_size<R: Rng>(rng: &mut R) -> usize {
-    let dist = WeightedIndex::new(DEFAULT_SIZE_WEIGHTS)
-        .expect("default weights are valid");
+    let dist = WeightedIndex::new(DEFAULT_SIZE_WEIGHTS).expect("default weights are valid");
 
     let category = match dist.sample(rng) {
         0 => SizeCategory::Small,

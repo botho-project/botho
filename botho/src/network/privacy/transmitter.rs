@@ -2,10 +2,10 @@
 
 //! Constant-rate transmitter for traffic normalization (Phase 2).
 //!
-//! This module implements the constant-rate transmitter described in Section 2.2
-//! of the traffic privacy roadmap. It provides traffic normalization by sending
-//! messages at a fixed rate, optionally generating cover traffic when the queue
-//! is empty.
+//! This module implements the constant-rate transmitter described in Section
+//! 2.2 of the traffic privacy roadmap. It provides traffic normalization by
+//! sending messages at a fixed rate, optionally generating cover traffic when
+//! the queue is empty.
 //!
 //! # Overview
 //!
@@ -76,9 +76,11 @@
 //! - Queue depth limit prevents memory exhaustion attacks
 //! - FIFO ordering preserves transaction submission order
 
-use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+use std::{
+    collections::VecDeque,
+    sync::atomic::{AtomicU64, Ordering},
+    time::{Duration, Instant},
+};
 
 use rand::{Rng, RngCore};
 use serde::{Deserialize, Serialize};
@@ -441,8 +443,7 @@ fn generate_cover_message() -> OutgoingMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::thread;
-    use std::time::Duration;
+    use std::{thread, time::Duration};
 
     #[test]
     fn test_config_default() {

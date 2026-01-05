@@ -9,6 +9,8 @@
 //! - **Cover Traffic**: Generated and sent through circuits
 //! - **Privacy Config**: Controls which features are active
 //!
+//! All clients use maximum privacy by default with all features enabled.
+//!
 //! # Architecture
 //!
 //! ```text
@@ -19,13 +21,7 @@
 //! │         │                                                       │
 //! │         ▼                                                       │
 //! │  ┌─────────────┐                                               │
-//! │  │ Privacy     │ ─── Check privacy level                       │
-//! │  │ Config      │                                               │
-//! │  └─────────────┘                                               │
-//! │         │                                                       │
-//! │         ▼                                                       │
-//! │  ┌─────────────┐                                               │
-//! │  │ Padding     │ ─── Pad to fixed bucket size (if enabled)     │
+//! │  │ Padding     │ ─── Pad to fixed bucket size                  │
 //! │  └─────────────┘                                               │
 //! │         │                                                       │
 //! │         ▼                                                       │
@@ -35,7 +31,7 @@
 //! │         │                                                       │
 //! │         ▼                                                       │
 //! │  ┌─────────────┐                                               │
-//! │  │ Timing      │ ─── Add jitter delay (if enabled)             │
+//! │  │ Timing      │ ─── Add jitter delay                          │
 //! │  │ Jitter      │                                               │
 //! │  └─────────────┘                                               │
 //! │         │                                                       │
@@ -51,10 +47,9 @@
 //!
 //! ```ignore
 //! use botho::network::privacy::normalizer::{TrafficNormalizer, NormalizerConfig};
-//! use botho::network::privacy::PrivacyLevel;
 //!
-//! // Create normalizer with Enhanced privacy level
-//! let config = NormalizerConfig::from_privacy_level(PrivacyLevel::Enhanced);
+//! // Create normalizer with default config (all features enabled)
+//! let config = NormalizerConfig::default();
 //! let normalizer = TrafficNormalizer::new(config);
 //!
 //! // Prepare a message for sending
@@ -64,8 +59,10 @@
 //! normalizer.apply_jitter().await;
 //! ```
 
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
+use std::{
+    sync::atomic::{AtomicU64, Ordering},
+    time::Duration,
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -74,14 +71,15 @@ use serde::{Deserialize, Serialize};
 pub const PADDING_BUCKETS: [usize; 5] = [512, 2048, 8192, 32768, 131072];
 
 /// Default minimum jitter delay in milliseconds.
-pub const DEFAULT_JITTER_MIN_MS: u64 = 50;
+pub const DEFAULT_JITTER_MIN_MS: u64 = 100;
 
 /// Default maximum jitter delay in milliseconds.
-pub const DEFAULT_JITTER_MAX_MS: u64 = 200;
+pub const DEFAULT_JITTER_MAX_MS: u64 = 300;
 
 /// Configuration for the traffic normalizer.
 ///
 /// Controls which Phase 2 features are enabled and their parameters.
+/// By default, all features are enabled for maximum privacy.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NormalizerConfig {
     /// Enable message padding to fixed bucket sizes.
@@ -106,53 +104,28 @@ pub struct NormalizerConfig {
 impl Default for NormalizerConfig {
     fn default() -> Self {
         Self {
-            padding_enabled: false,
-            jitter_enabled: false,
+            padding_enabled: true,
+            jitter_enabled: true,
             jitter_min_ms: DEFAULT_JITTER_MIN_MS,
             jitter_max_ms: DEFAULT_JITTER_MAX_MS,
-            cover_traffic_enabled: false,
-            cover_rate_per_min: 2,
+            cover_traffic_enabled: true,
+            cover_rate_per_min: 4,
         }
     }
 }
 
 impl NormalizerConfig {
-    /// Create config for Standard privacy level (no normalization).
-    pub fn standard() -> Self {
-        Self::default()
-    }
-
-    /// Create config from a privacy level.
-    pub fn from_privacy_level(level: crate::network::privacy::PrivacyLevel) -> Self {
-        use crate::network::privacy::PrivacyLevel;
-        match level {
-            PrivacyLevel::Standard => Self::standard(),
-            PrivacyLevel::Enhanced => Self::enhanced(),
-            PrivacyLevel::Maximum => Self::maximum(),
-        }
-    }
-
-    /// Create config for Enhanced privacy level (padding + jitter).
-    pub fn enhanced() -> Self {
+    /// Create a minimal config with no normalization features.
+    ///
+    /// This is useful for testing. For production, use `Default::default()`.
+    pub fn minimal() -> Self {
         Self {
-            padding_enabled: true,
-            jitter_enabled: true,
-            jitter_min_ms: DEFAULT_JITTER_MIN_MS,
-            jitter_max_ms: DEFAULT_JITTER_MAX_MS,
+            padding_enabled: false,
+            jitter_enabled: false,
+            jitter_min_ms: 0,
+            jitter_max_ms: 0,
             cover_traffic_enabled: false,
             cover_rate_per_min: 0,
-        }
-    }
-
-    /// Create config for Maximum privacy level (all features).
-    pub fn maximum() -> Self {
-        Self {
-            padding_enabled: true,
-            jitter_enabled: true,
-            jitter_min_ms: 100,
-            jitter_max_ms: 300,
-            cover_traffic_enabled: true,
-            cover_rate_per_min: 4,
         }
     }
 
@@ -254,7 +227,8 @@ impl NormalizerMetrics {
 
     /// Record cover message generated.
     pub fn record_cover(&self) {
-        self.cover_messages_generated.fetch_add(1, Ordering::Relaxed);
+        self.cover_messages_generated
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     /// Get a snapshot of metrics.
@@ -342,19 +316,11 @@ impl TrafficNormalizer {
         }
     }
 
-    /// Create a normalizer with Standard privacy (no normalization).
-    pub fn standard() -> Self {
-        Self::new(NormalizerConfig::standard())
-    }
-
-    /// Create a normalizer with Enhanced privacy (padding + jitter).
-    pub fn enhanced() -> Self {
-        Self::new(NormalizerConfig::enhanced())
-    }
-
-    /// Create a normalizer with Maximum privacy (all features).
-    pub fn maximum() -> Self {
-        Self::new(NormalizerConfig::maximum())
+    /// Create a normalizer with minimal settings (no normalization).
+    ///
+    /// This is useful for testing. For production, use `Default::default()`.
+    pub fn minimal() -> Self {
+        Self::new(NormalizerConfig::minimal())
     }
 
     /// Get the configuration.
@@ -510,26 +476,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_config_standard() {
-        let config = NormalizerConfig::standard();
-        assert!(!config.padding_enabled);
-        assert!(!config.jitter_enabled);
-        assert!(!config.cover_traffic_enabled);
-        assert!(!config.has_normalization());
-    }
-
-    #[test]
-    fn test_config_enhanced() {
-        let config = NormalizerConfig::enhanced();
-        assert!(config.padding_enabled);
-        assert!(config.jitter_enabled);
-        assert!(!config.cover_traffic_enabled);
-        assert!(config.has_normalization());
-    }
-
-    #[test]
-    fn test_config_maximum() {
-        let config = NormalizerConfig::maximum();
+    fn test_config_default() {
+        let config = NormalizerConfig::default();
         assert!(config.padding_enabled);
         assert!(config.jitter_enabled);
         assert!(config.cover_traffic_enabled);
@@ -537,8 +485,17 @@ mod tests {
     }
 
     #[test]
+    fn test_config_minimal() {
+        let config = NormalizerConfig::minimal();
+        assert!(!config.padding_enabled);
+        assert!(!config.jitter_enabled);
+        assert!(!config.cover_traffic_enabled);
+        assert!(!config.has_normalization());
+    }
+
+    #[test]
     fn test_prepare_message_no_padding() {
-        let normalizer = TrafficNormalizer::standard();
+        let normalizer = TrafficNormalizer::minimal();
         let payload = b"test payload";
 
         let prepared = normalizer.prepare_message(payload);
@@ -552,7 +509,7 @@ mod tests {
 
     #[test]
     fn test_prepare_message_with_padding() {
-        let normalizer = TrafficNormalizer::enhanced();
+        let normalizer = TrafficNormalizer::default();
         let payload = b"test payload";
 
         let prepared = normalizer.prepare_message(payload);
@@ -566,7 +523,7 @@ mod tests {
 
     #[test]
     fn test_padding_bucket_selection() {
-        let normalizer = TrafficNormalizer::enhanced();
+        let normalizer = TrafficNormalizer::default();
 
         // Small payload -> smallest bucket
         let prepared = normalizer.prepare_message(&[0u8; 100]);
@@ -583,7 +540,7 @@ mod tests {
 
     #[test]
     fn test_unpad_message() {
-        let normalizer = TrafficNormalizer::enhanced();
+        let normalizer = TrafficNormalizer::default();
         let original = b"original payload data";
 
         let prepared = normalizer.prepare_message(original);
@@ -605,14 +562,14 @@ mod tests {
 
     #[test]
     fn test_jitter_disabled() {
-        let normalizer = TrafficNormalizer::standard();
+        let normalizer = TrafficNormalizer::minimal();
         let jitter = normalizer.generate_jitter();
         assert_eq!(jitter, Duration::ZERO);
     }
 
     #[test]
     fn test_jitter_enabled() {
-        let normalizer = TrafficNormalizer::enhanced();
+        let normalizer = TrafficNormalizer::default();
 
         // Generate multiple jitters and verify they're in range
         for _ in 0..10 {
@@ -624,14 +581,14 @@ mod tests {
 
     #[test]
     fn test_cover_traffic_disabled() {
-        let normalizer = TrafficNormalizer::enhanced();
+        let normalizer = TrafficNormalizer::minimal();
         assert!(!normalizer.should_generate_cover());
         assert!(normalizer.cover_interval().is_none());
     }
 
     #[test]
     fn test_cover_traffic_enabled() {
-        let normalizer = TrafficNormalizer::maximum();
+        let normalizer = TrafficNormalizer::default();
         assert!(normalizer.should_generate_cover());
 
         let interval = normalizer.cover_interval().unwrap();
@@ -642,7 +599,7 @@ mod tests {
 
     #[test]
     fn test_metrics_tracking() {
-        let normalizer = TrafficNormalizer::enhanced();
+        let normalizer = TrafficNormalizer::default();
 
         // Process some messages
         normalizer.prepare_message(b"message 1");
@@ -685,7 +642,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_apply_jitter_async() {
-        let normalizer = TrafficNormalizer::standard();
+        let normalizer = TrafficNormalizer::minimal();
 
         // Should return immediately when disabled
         let start = std::time::Instant::now();

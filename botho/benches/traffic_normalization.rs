@@ -24,11 +24,8 @@ use botho::network::privacy::{
     cover::{CoverMessage, CoverTrafficGenerator},
     normalizer::{NormalizerConfig, TrafficNormalizer, PADDING_BUCKETS},
     transmitter::{ConstantRateConfig, ConstantRateTransmitter, OutgoingMessage},
-    PrivacyLevel,
 };
-use criterion::{
-    black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput,
-};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use rand::RngCore;
 
 // =============================================================================
@@ -53,7 +50,7 @@ const PAYLOAD_SIZES: [usize; 5] = [100, 500, 1500, 5000, 30000];
 /// Benchmark padding overhead per payload size.
 fn bench_padding_overhead(c: &mut Criterion) {
     let mut group = c.benchmark_group("Padding overhead");
-    let normalizer = TrafficNormalizer::enhanced();
+    let normalizer = TrafficNormalizer::default();
 
     for size in PAYLOAD_SIZES.iter() {
         let payload = random_payload(*size);
@@ -73,7 +70,7 @@ fn bench_padding_overhead(c: &mut Criterion) {
 /// Benchmark bucket selection performance.
 fn bench_bucket_selection(c: &mut Criterion) {
     let mut group = c.benchmark_group("Bucket selection");
-    let normalizer = TrafficNormalizer::enhanced();
+    let normalizer = TrafficNormalizer::default();
 
     // Test boundary conditions around each bucket
     let boundary_sizes: [(usize, &str); 8] = [
@@ -101,22 +98,29 @@ fn bench_bucket_selection(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark padding with different privacy levels.
-fn bench_padding_by_privacy_level(c: &mut Criterion) {
-    let mut group = c.benchmark_group("Padding by privacy level");
+/// Benchmark padding with default (maximum privacy) config.
+fn bench_padding_default(c: &mut Criterion) {
+    let mut group = c.benchmark_group("Padding default");
     let payload = random_payload(500); // Typical transaction size
 
-    for level in PrivacyLevel::all() {
-        let config = NormalizerConfig::from_privacy_level(*level);
-        let normalizer = TrafficNormalizer::new(config);
+    let normalizer = TrafficNormalizer::default();
 
-        group.bench_function(level.to_string(), |b| {
-            b.iter(|| {
-                let prepared = normalizer.prepare_message(black_box(&payload));
-                black_box(prepared)
-            })
-        });
-    }
+    group.bench_function("prepare_message", |b| {
+        b.iter(|| {
+            let prepared = normalizer.prepare_message(black_box(&payload));
+            black_box(prepared)
+        })
+    });
+
+    // Also benchmark minimal config for comparison
+    let minimal_normalizer = TrafficNormalizer::minimal();
+
+    group.bench_function("prepare_message_minimal", |b| {
+        b.iter(|| {
+            let prepared = minimal_normalizer.prepare_message(black_box(&payload));
+            black_box(prepared)
+        })
+    });
 
     group.finish();
 }
@@ -124,7 +128,7 @@ fn bench_padding_by_privacy_level(c: &mut Criterion) {
 /// Measure actual bandwidth overhead from padding.
 fn bench_bandwidth_overhead(c: &mut Criterion) {
     let mut group = c.benchmark_group("Bandwidth overhead measurement");
-    let normalizer = TrafficNormalizer::enhanced();
+    let normalizer = TrafficNormalizer::default();
 
     // Measure overhead for each bucket
     for &bucket in PADDING_BUCKETS.iter() {
@@ -153,22 +157,16 @@ fn bench_bandwidth_overhead(c: &mut Criterion) {
 fn bench_jitter_generation(c: &mut Criterion) {
     let mut group = c.benchmark_group("Jitter generation");
 
-    // Standard - no jitter
-    let standard = TrafficNormalizer::standard();
-    group.bench_function("standard_disabled", |b| {
-        b.iter(|| black_box(standard.generate_jitter()))
+    // Minimal - no jitter
+    let minimal = TrafficNormalizer::minimal();
+    group.bench_function("minimal_disabled", |b| {
+        b.iter(|| black_box(minimal.generate_jitter()))
     });
 
-    // Enhanced - 50-200ms jitter
-    let enhanced = TrafficNormalizer::enhanced();
-    group.bench_function("enhanced_50_200ms", |b| {
-        b.iter(|| black_box(enhanced.generate_jitter()))
-    });
-
-    // Maximum - 100-300ms jitter
-    let maximum = TrafficNormalizer::maximum();
-    group.bench_function("maximum_100_300ms", |b| {
-        b.iter(|| black_box(maximum.generate_jitter()))
+    // Default - 100-300ms jitter
+    let default_norm = TrafficNormalizer::default();
+    group.bench_function("default_100_300ms", |b| {
+        b.iter(|| black_box(default_norm.generate_jitter()))
     });
 
     group.finish();
@@ -177,7 +175,7 @@ fn bench_jitter_generation(c: &mut Criterion) {
 /// Benchmark jitter distribution to verify uniform spread.
 fn bench_jitter_distribution(c: &mut Criterion) {
     let mut group = c.benchmark_group("Jitter distribution");
-    let normalizer = TrafficNormalizer::enhanced();
+    let normalizer = TrafficNormalizer::default();
 
     // Measure many samples to verify distribution
     group.bench_function("sample_1000", |b| {
@@ -373,15 +371,11 @@ fn bench_cover_generator_configs(c: &mut Criterion) {
 
     // Default
     let default_gen = CoverTrafficGenerator::default();
-    group.bench_function("default", |b| {
-        b.iter(|| black_box(default_gen.generate()))
-    });
+    group.bench_function("default", |b| b.iter(|| black_box(default_gen.generate())));
 
     // Uniform distribution
     let uniform_gen = CoverTrafficGenerator::uniform();
-    group.bench_function("uniform", |b| {
-        b.iter(|| black_box(uniform_gen.generate()))
-    });
+    group.bench_function("uniform", |b| b.iter(|| black_box(uniform_gen.generate())));
 
     // Heavy bias toward small
     let small_bias = CoverTrafficGenerator::with_weights([100, 10, 1]);
@@ -432,9 +426,7 @@ fn bench_cover_serialization(c: &mut Criterion) {
 
     let msg = CoverMessage::with_size(400);
 
-    group.bench_function("to_bytes", |b| {
-        b.iter(|| black_box(msg.to_bytes()))
-    });
+    group.bench_function("to_bytes", |b| b.iter(|| black_box(msg.to_bytes())));
 
     let bytes = msg.to_bytes();
     group.bench_function("from_bytes", |b| {
@@ -453,22 +445,31 @@ fn bench_full_pipeline(c: &mut Criterion) {
     let mut group = c.benchmark_group("Full pipeline");
     let payload = random_payload(400); // Typical transaction
 
-    for level in PrivacyLevel::all() {
-        let config = NormalizerConfig::from_privacy_level(*level);
-        let normalizer = TrafficNormalizer::new(config);
+    // Default config (all features enabled)
+    let normalizer = TrafficNormalizer::default();
 
-        group.bench_function(format!("prepare_{}", level), |b| {
-            b.iter(|| {
-                // Prepare message (padding)
-                let prepared = normalizer.prepare_message(black_box(&payload));
+    group.bench_function("prepare_default", |b| {
+        b.iter(|| {
+            // Prepare message (padding)
+            let prepared = normalizer.prepare_message(black_box(&payload));
 
-                // Generate jitter (no sleep, just duration calculation)
-                let jitter = normalizer.generate_jitter();
+            // Generate jitter (no sleep, just duration calculation)
+            let jitter = normalizer.generate_jitter();
 
-                black_box((prepared, jitter))
-            })
-        });
-    }
+            black_box((prepared, jitter))
+        })
+    });
+
+    // Minimal config for comparison
+    let minimal_normalizer = TrafficNormalizer::minimal();
+
+    group.bench_function("prepare_minimal", |b| {
+        b.iter(|| {
+            let prepared = minimal_normalizer.prepare_message(black_box(&payload));
+            let jitter = minimal_normalizer.generate_jitter();
+            black_box((prepared, jitter))
+        })
+    });
 
     group.finish();
 }
@@ -477,58 +478,9 @@ fn bench_full_pipeline(c: &mut Criterion) {
 fn bench_end_to_end(c: &mut Criterion) {
     let mut group = c.benchmark_group("End-to-end");
 
-    // Standard: just enqueue (no padding, no jitter)
-    group.bench_function("standard", |b| {
-        let normalizer = TrafficNormalizer::standard();
-        let payload = random_payload(400);
-
-        b.iter_batched(
-            ConstantRateTransmitter::default,
-            |mut tx| {
-                // Prepare (no padding for standard)
-                let prepared = normalizer.prepare_message(&payload);
-
-                // Enqueue
-                tx.enqueue(OutgoingMessage::transaction(prepared.payload));
-
-                // Tick
-                let msg = tx.tick();
-
-                black_box((tx, msg))
-            },
-            criterion::BatchSize::SmallInput,
-        )
-    });
-
-    // Enhanced: padding + jitter
-    group.bench_function("enhanced", |b| {
-        let normalizer = TrafficNormalizer::enhanced();
-        let payload = random_payload(400);
-
-        b.iter_batched(
-            ConstantRateTransmitter::default,
-            |mut tx| {
-                // Prepare with padding
-                let prepared = normalizer.prepare_message(&payload);
-
-                // Calculate jitter (no sleep)
-                let _jitter = normalizer.generate_jitter();
-
-                // Enqueue
-                tx.enqueue(OutgoingMessage::transaction(prepared.payload));
-
-                // Tick
-                let msg = tx.tick();
-
-                black_box((tx, msg))
-            },
-            criterion::BatchSize::SmallInput,
-        )
-    });
-
-    // Maximum: padding + jitter + cover traffic enabled
-    group.bench_function("maximum", |b| {
-        let normalizer = TrafficNormalizer::maximum();
+    // Default: all features enabled (padding + jitter + cover traffic)
+    group.bench_function("default", |b| {
+        let normalizer = TrafficNormalizer::default();
         let payload = random_payload(400);
 
         b.iter_batched(
@@ -539,6 +491,29 @@ fn bench_end_to_end(c: &mut Criterion) {
 
                 // Calculate jitter
                 let _jitter = normalizer.generate_jitter();
+
+                // Enqueue
+                tx.enqueue(OutgoingMessage::transaction(prepared.payload));
+
+                // Tick
+                let msg = tx.tick();
+
+                black_box((tx, msg))
+            },
+            criterion::BatchSize::SmallInput,
+        )
+    });
+
+    // Minimal: no normalization (for baseline comparison)
+    group.bench_function("minimal", |b| {
+        let normalizer = TrafficNormalizer::minimal();
+        let payload = random_payload(400);
+
+        b.iter_batched(
+            ConstantRateTransmitter::default,
+            |mut tx| {
+                // Prepare (no padding)
+                let prepared = normalizer.prepare_message(&payload);
 
                 // Enqueue
                 tx.enqueue(OutgoingMessage::transaction(prepared.payload));
@@ -569,33 +544,22 @@ fn bench_overhead_comparison(c: &mut Criterion) {
         })
     });
 
-    // Standard: onion routing only (no traffic normalization)
-    let standard = TrafficNormalizer::standard();
-    group.bench_function("standard_onion_only", |b| {
+    // Minimal: no traffic normalization features
+    let minimal = TrafficNormalizer::minimal();
+    group.bench_function("minimal_no_normalization", |b| {
         b.iter(|| {
-            let prepared = standard.prepare_message(&payload);
+            let prepared = minimal.prepare_message(&payload);
             let msg = OutgoingMessage::transaction(prepared.payload);
             black_box(msg)
         })
     });
 
-    // Enhanced: padding + jitter
-    let enhanced = TrafficNormalizer::enhanced();
-    group.bench_function("enhanced_padding_jitter", |b| {
+    // Default: all features enabled
+    let default_norm = TrafficNormalizer::default();
+    group.bench_function("default_all_features", |b| {
         b.iter(|| {
-            let prepared = enhanced.prepare_message(&payload);
-            let _jitter = enhanced.generate_jitter();
-            let msg = OutgoingMessage::transaction(prepared.payload);
-            black_box(msg)
-        })
-    });
-
-    // Maximum: all features
-    let maximum = TrafficNormalizer::maximum();
-    group.bench_function("maximum_all_features", |b| {
-        b.iter(|| {
-            let prepared = maximum.prepare_message(&payload);
-            let _jitter = maximum.generate_jitter();
+            let prepared = default_norm.prepare_message(&payload);
+            let _jitter = default_norm.generate_jitter();
             let msg = OutgoingMessage::transaction(prepared.payload);
             black_box(msg)
         })
@@ -640,7 +604,7 @@ fn bench_memory_usage(c: &mut Criterion) {
 /// Benchmark throughput: messages per second.
 fn bench_throughput(c: &mut Criterion) {
     let mut group = c.benchmark_group("Throughput");
-    let normalizer = TrafficNormalizer::enhanced();
+    let normalizer = TrafficNormalizer::default();
     let payload = random_payload(400);
 
     // Process many messages
@@ -669,37 +633,25 @@ fn bench_latency_overhead(c: &mut Criterion) {
     let mut group = c.benchmark_group("Latency overhead");
     let payload = random_payload(400);
 
-    // Standard should add minimal overhead
-    let standard = TrafficNormalizer::standard();
-    group.bench_function("standard_overhead", |b| {
+    // Minimal should add minimal overhead
+    let minimal = TrafficNormalizer::minimal();
+    group.bench_function("minimal_overhead", |b| {
         b.iter(|| {
             let start = std::time::Instant::now();
-            let prepared = standard.prepare_message(&payload);
-            let _jitter = standard.generate_jitter();
+            let prepared = minimal.prepare_message(&payload);
+            let _jitter = minimal.generate_jitter();
             let elapsed = start.elapsed();
             black_box((prepared, elapsed))
         })
     });
 
-    // Enhanced adds more overhead
-    let enhanced = TrafficNormalizer::enhanced();
-    group.bench_function("enhanced_overhead", |b| {
+    // Default adds overhead from all features
+    let default_norm = TrafficNormalizer::default();
+    group.bench_function("default_overhead", |b| {
         b.iter(|| {
             let start = std::time::Instant::now();
-            let prepared = enhanced.prepare_message(&payload);
-            let _jitter = enhanced.generate_jitter();
-            let elapsed = start.elapsed();
-            black_box((prepared, elapsed))
-        })
-    });
-
-    // Maximum adds most overhead
-    let maximum = TrafficNormalizer::maximum();
-    group.bench_function("maximum_overhead", |b| {
-        b.iter(|| {
-            let start = std::time::Instant::now();
-            let prepared = maximum.prepare_message(&payload);
-            let _jitter = maximum.generate_jitter();
+            let prepared = default_norm.prepare_message(&payload);
+            let _jitter = default_norm.generate_jitter();
             let elapsed = start.elapsed();
             black_box((prepared, elapsed))
         })
@@ -716,7 +668,7 @@ criterion_group!(
     padding_benches,
     bench_padding_overhead,
     bench_bucket_selection,
-    bench_padding_by_privacy_level,
+    bench_padding_default,
     bench_bandwidth_overhead,
 );
 

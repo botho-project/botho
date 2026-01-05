@@ -871,57 +871,45 @@ async fn send_with_jitter(msg: Message, jitter: &TimingJitter) {
 }
 ```
 
-### Privacy Levels
+### Privacy Configuration
 
-Users can choose their privacy/performance tradeoff:
+All clients use maximum privacy by default. This ensures consistent, strong privacy
+guarantees across the network and maximizes the effectiveness of cover traffic.
 
 ```rust
-/// Privacy level configuration
-pub enum PrivacyLevel {
-    /// Standard: Onion routing only
-    /// - Latency: ~100ms added
-    /// - Bandwidth: ~30% overhead
-    Standard,
-
-    /// Enhanced: Onion + padding + jitter
-    /// - Latency: ~200-400ms added
-    /// - Bandwidth: ~50% overhead
-    Enhanced,
-
-    /// Maximum: Onion + padding + constant-rate + cover traffic
-    /// - Latency: Variable (queue-based)
-    /// - Bandwidth: ~2x (cover traffic)
-    Maximum,
+/// Privacy configuration - all features enabled by default
+#[derive(Debug, Clone)]
+pub struct PrivacyConfig {
+    pub onion_routing: bool,     // Always true
+    pub padding: bool,           // Default: true
+    pub timing_jitter: bool,     // Default: true
+    pub constant_rate: bool,     // Default: true
+    pub cover_traffic: bool,     // Default: true
+    pub jitter_min_ms: u64,      // Default: 100
+    pub jitter_max_ms: u64,      // Default: 300
 }
 
-impl PrivacyLevel {
-    pub fn to_config(&self) -> PrivacyConfig {
-        match self {
-            Self::Standard => PrivacyConfig {
-                onion_routing: true,
-                padding: false,
-                timing_jitter: false,
-                constant_rate: false,
-                cover_traffic: false,
-            },
-            Self::Enhanced => PrivacyConfig {
-                onion_routing: true,
-                padding: true,
-                timing_jitter: true,
-                constant_rate: false,
-                cover_traffic: false,
-            },
-            Self::Maximum => PrivacyConfig {
-                onion_routing: true,
-                padding: true,
-                timing_jitter: true,
-                constant_rate: true,
-                cover_traffic: true,
-            },
+impl Default for PrivacyConfig {
+    fn default() -> Self {
+        Self {
+            onion_routing: true,
+            padding: true,
+            timing_jitter: true,
+            constant_rate: true,
+            cover_traffic: true,
+            jitter_min_ms: 100,
+            jitter_max_ms: 300,
         }
     }
 }
 ```
+
+**Why a single privacy mode?**
+
+- **Network effects**: Cover traffic is most effective when all nodes use it
+- **No fingerprinting**: Heterogeneous privacy levels create distinguishable traffic patterns
+- **Simpler UX**: Users don't need to understand privacy/performance tradeoffs
+- **Mobile**: Clients with bandwidth constraints will use a separate light client protocol
 
 ### Milestone Checklist
 
@@ -1284,12 +1272,9 @@ Phase 2 and Phase 3 can proceed in parallel after Phase 1 is complete.
 Default configuration for various use cases:
 
 ```rust
-/// Privacy configuration presets
-pub struct PrivacyPresets;
-
-impl PrivacyPresets {
-    /// Standard user: balance of privacy and performance
-    pub fn standard() -> PrivacyConfig {
+/// Default privacy configuration - all features enabled
+impl Default for PrivacyConfig {
+    fn default() -> Self {
         PrivacyConfig {
             // Phase 1: Onion Gossip
             onion_gossip: OnionGossipConfig {
@@ -1299,34 +1284,7 @@ impl PrivacyPresets {
                 min_relay_score: 0.2,
             },
 
-            // Phase 2: Traffic Normalization
-            traffic_normalization: TrafficNormConfig {
-                padding: true,
-                constant_rate: false,
-                cover_traffic: false,
-                timing_jitter: true,
-                jitter_range: (50, 150),
-            },
-
-            // Phase 3: Protocol Obfuscation
-            transport: TransportConfig {
-                preferred: TransportType::Plain,
-                enable_webrtc: false,
-                enable_tls_tunnel: false,
-            },
-        }
-    }
-
-    /// High-risk user: maximum privacy
-    pub fn maximum() -> PrivacyConfig {
-        PrivacyConfig {
-            onion_gossip: OnionGossipConfig {
-                enabled: true,
-                circuit_hops: 3,
-                circuit_lifetime: Duration::from_secs(300), // Faster rotation
-                min_relay_score: 0.3,
-            },
-
+            // Phase 2: Traffic Normalization (all enabled)
             traffic_normalization: TrafficNormConfig {
                 padding: true,
                 constant_rate: true,
@@ -1335,40 +1293,20 @@ impl PrivacyPresets {
                 jitter_range: (100, 300),
             },
 
+            // Phase 3: Protocol Obfuscation (when implemented)
             transport: TransportConfig {
-                preferred: TransportType::WebRTC,
-                enable_webrtc: true,
-                enable_tls_tunnel: true,
-            },
-        }
-    }
-
-    /// Censored region: focus on reachability
-    pub fn censorship_resistant() -> PrivacyConfig {
-        PrivacyConfig {
-            onion_gossip: OnionGossipConfig {
-                enabled: true,
-                circuit_hops: 2, // Fewer hops for reliability
-                circuit_lifetime: Duration::from_secs(600),
-                min_relay_score: 0.1, // Accept more relays
-            },
-
-            traffic_normalization: TrafficNormConfig {
-                padding: true,
-                constant_rate: false,
-                cover_traffic: false,
-                timing_jitter: false,
-            },
-
-            transport: TransportConfig {
-                preferred: TransportType::WebRTC, // Looks like video call
-                enable_webrtc: true,
-                enable_tls_tunnel: true,
+                preferred: TransportType::Plain,
+                enable_webrtc: false,
+                enable_tls_tunnel: false,
             },
         }
     }
 }
 ```
+
+Note: All clients use the same privacy configuration. There are no user-selectable
+privacy levels. This ensures network-wide uniformity which maximizes the effectiveness
+of traffic normalization features like cover traffic.
 
 ## Success Metrics
 
@@ -1377,32 +1315,29 @@ impl PrivacyPresets {
 | Transaction origin privacy | <5% attribution accuracy | Simulated adversary with 10% of nodes |
 | Peer graph obscurity | >90% false edges | Graph analysis resistance test |
 | Protocol detection rate | <5% by DPI | Test against commercial DPI tools |
-| Latency overhead (standard) | <200ms p99 | Production monitoring |
-| Latency overhead (maximum) | <1s p99 | Production monitoring |
-| Bandwidth overhead | <50% for standard | Traffic analysis |
+| Latency overhead | <1s p99 | Production monitoring |
+| Bandwidth overhead | <2x | Traffic analysis |
 | Relay participation | >95% of nodes | Network monitoring |
 
 ## Risk Assessment
 
 | Risk | Probability | Impact | Mitigation |
 |------|-------------|--------|------------|
-| Latency impacts UX | Medium | Medium | Privacy levels, async transactions |
+| Latency impacts UX | Medium | Medium | Async transactions, queue-based transmission |
 | Implementation bugs | Medium | High | Phased rollout, extensive testing, audit |
 | WebRTC complexity | Medium | Medium | Start with plain, add WebRTC later |
 | Adversary adapts | Low | Medium | Modular design, pluggable transports |
-| Bandwidth costs | Low | Low | Efficient implementation, cover traffic optional |
+| Bandwidth costs | Low | Low | Efficient implementation, ~2x overhead acceptable |
 
 ## Open Questions
 
-1. **Default privacy level**: Should new users start with "standard" or "enhanced"?
+1. **Mobile optimization**: How to reduce bandwidth for mobile nodes while maintaining privacy? (Likely requires a separate light client protocol.)
 
-2. **Mobile optimization**: How to reduce bandwidth for mobile nodes while maintaining privacy?
+2. **Circuit building latency**: Pre-build circuits on startup? Background vs on-demand?
 
-3. **Circuit building latency**: Pre-build circuits on startup? Background vs on-demand?
+3. **Relay incentives (future)**: If we ever need explicit incentives, how to add without breaking privacy?
 
-4. **Relay incentives (future)**: If we ever need explicit incentives, how to add without breaking privacy?
-
-5. **Light client support**: How do SPV-style clients participate in relay network?
+4. **Light client support**: How do SPV-style clients participate in relay network?
 
 ---
 
