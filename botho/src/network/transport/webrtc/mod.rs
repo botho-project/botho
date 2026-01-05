@@ -89,7 +89,7 @@ use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::peer_connection::RTCPeerConnection;
 
-use super::TransportError;
+use super::{TransportError, WebRtcError};
 
 /// WebRTC transport for protocol-obfuscated connections.
 ///
@@ -141,7 +141,7 @@ impl WebRtcTransport {
         // Create interceptor registry
         let mut registry = Registry::new();
         registry = register_default_interceptors(registry, &mut media_engine)
-            .map_err(|e| TransportError::WebRtc(e.to_string()))?;
+            .map_err(|e| WebRtcError::peer_connection_create(e.to_string()))?;
 
         // Build the API
         let api = APIBuilder::new()
@@ -177,7 +177,7 @@ impl WebRtcTransport {
         let peer_connection = api
             .new_peer_connection(config)
             .await
-            .map_err(|e| TransportError::WebRtc(e.to_string()))?;
+            .map_err(|e| WebRtcError::peer_connection_create(e.to_string()))?;
 
         Ok(Arc::new(peer_connection))
     }
@@ -190,7 +190,7 @@ impl WebRtcTransport {
         let data_channel = peer_connection
             .create_data_channel(label, None)
             .await
-            .map_err(|e| TransportError::WebRtc(e.to_string()))?;
+            .map_err(|e| WebRtcError::data_channel_create(e.to_string()))?;
 
         Ok(data_channel)
     }
@@ -202,12 +202,12 @@ impl WebRtcTransport {
         let offer = peer_connection
             .create_offer(None)
             .await
-            .map_err(|e| TransportError::WebRtc(e.to_string()))?;
+            .map_err(|e| WebRtcError::create_offer(e.to_string()))?;
 
         peer_connection
             .set_local_description(offer.clone())
             .await
-            .map_err(|e| TransportError::WebRtc(e.to_string()))?;
+            .map_err(|e| WebRtcError::set_local_description(e.to_string()))?;
 
         Ok(offer)
     }
@@ -220,17 +220,17 @@ impl WebRtcTransport {
         peer_connection
             .set_remote_description(offer)
             .await
-            .map_err(|e| TransportError::WebRtc(e.to_string()))?;
+            .map_err(|e| WebRtcError::set_remote_description(e.to_string()))?;
 
         let answer = peer_connection
             .create_answer(None)
             .await
-            .map_err(|e| TransportError::WebRtc(e.to_string()))?;
+            .map_err(|e| WebRtcError::create_answer(e.to_string()))?;
 
         peer_connection
             .set_local_description(answer.clone())
             .await
-            .map_err(|e| TransportError::WebRtc(e.to_string()))?;
+            .map_err(|e| WebRtcError::set_local_description(e.to_string()))?;
 
         Ok(answer)
     }
@@ -243,7 +243,7 @@ impl WebRtcTransport {
         peer_connection
             .set_remote_description(answer)
             .await
-            .map_err(|e| TransportError::WebRtc(e.to_string()))?;
+            .map_err(|e| WebRtcError::set_remote_description(e.to_string()))?;
 
         Ok(())
     }
@@ -310,7 +310,7 @@ impl WebRtcConnection {
         self.data_channel
             .send(&bytes::Bytes::copy_from_slice(data))
             .await
-            .map_err(|e| TransportError::WebRtc(e.to_string()))?;
+            .map_err(|e| WebRtcError::send_failed(e.to_string()))?;
         Ok(())
     }
 
@@ -341,11 +341,11 @@ impl WebRtcConnection {
         self.data_channel
             .close()
             .await
-            .map_err(|e| TransportError::WebRtc(e.to_string()))?;
+            .map_err(|e| TransportError::DataChannel(e.to_string()))?;
         self.peer_connection
             .close()
             .await
-            .map_err(|e| TransportError::WebRtc(e.to_string()))?;
+            .map_err(|e| TransportError::ConnectionClosed)?;
         Ok(())
     }
 }
