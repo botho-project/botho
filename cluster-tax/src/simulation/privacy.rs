@@ -40,13 +40,14 @@ pub const DECOY_COUNT: usize = RING_SIZE - 1;
 // Ring Size Cost Analysis
 // ============================================================================
 
-/// LION signature size constants (from crypto/lion/src/params.rs)
-pub const POLY_BYTES: usize = 768;
-pub const KEY_IMAGE_BYTES: usize = 1312;
-pub const RESPONSE_BYTES: usize = 3072;
-pub const SIGNATURE_BASE_BYTES: usize = POLY_BYTES + KEY_IMAGE_BYTES; // 2080
+/// CLSAG signature size constants
+/// CLSAG is the standard ring signature scheme per ADR-0001
+pub const KEY_IMAGE_BYTES: usize = 32;
+pub const RESPONSE_BYTES: usize = 32;
+pub const SIGNATURE_BASE_BYTES: usize = 64; // c0 + s_real
 
-/// Calculate signature size for a given ring size.
+/// Calculate signature size for a given ring size (CLSAG).
+/// CLSAG signatures are approximately 32 + 32*ring_size bytes per input.
 #[inline]
 pub const fn signature_size_bytes(ring_size: usize) -> usize {
     SIGNATURE_BASE_BYTES + ring_size * RESPONSE_BYTES

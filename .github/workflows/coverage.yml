@@ -56,7 +56,6 @@ jobs:
             --package bth-crypto-digestible-signature \
             --package bth-crypto-hashes \
             --package bth-crypto-keys \
-            --package bth-crypto-lion \
             --package bth-crypto-multisig \
             --package bth-crypto-pq \
             --package bth-crypto-ring-signature \
@@ -73,7 +72,6 @@ jobs:
             --package bth-crypto-digestible-signature \
             --package bth-crypto-hashes \
             --package bth-crypto-keys \
-            --package bth-crypto-lion \
             --package bth-crypto-multisig \
             --package bth-crypto-pq \
             --package bth-crypto-ring-signature \

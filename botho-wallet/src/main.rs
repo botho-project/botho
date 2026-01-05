@@ -99,25 +99,6 @@ enum Commands {
         #[arg(long)]
         discover: bool,
     },
-
-    /// Migrate funds to quantum-safe address
-    ///
-    /// Sweeps all classical UTXOs to your quantum-safe address, protecting
-    /// funds against future quantum computer attacks. Uses ML-KEM-768 and
-    /// ML-DSA-65 (NIST post-quantum standards).
-    MigrateToPq {
-        /// Preview migration without making changes
-        #[arg(long)]
-        dry_run: bool,
-
-        /// Show current migration status only
-        #[arg(long)]
-        status: bool,
-
-        /// Skip confirmation prompt
-        #[arg(long)]
-        yes: bool,
-    },
 }
 
 #[tokio::main]
@@ -155,10 +136,5 @@ async fn main() -> Result<()> {
         Commands::History { limit } => commands::history::run(&wallet_path, limit).await,
         Commands::Export { output } => commands::export::run(&wallet_path, output).await,
         Commands::Nodes { discover } => commands::nodes::run(&wallet_path, discover).await,
-        Commands::MigrateToPq {
-            dry_run,
-            status,
-            yes,
-        } => commands::migrate_to_pq::run(&wallet_path, dry_run, status, yes).await,
     }
 }

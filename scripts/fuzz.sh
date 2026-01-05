@@ -12,13 +12,14 @@ CORPUS_DIR="$FUZZ_DIR/corpus"
 TARGETS=(
     fuzz_address_parsing
     fuzz_block
-    fuzz_lion_signature
+    fuzz_clsag
     fuzz_mlkem_decapsulation
     fuzz_network_messages
     fuzz_pq_keys
     fuzz_pq_transaction
     fuzz_ring_signature
     fuzz_rpc_request
+    fuzz_subaddress
     fuzz_transaction
 )
 

@@ -24,8 +24,6 @@ rustup install nightly
 |--------|-------------|---------------|
 | `fuzz_clsag` | CLSAG ring signature sign/verify | CRITICAL - Core privacy |
 | `fuzz_ring_signature` | MLSAG ring signature verification | CRITICAL - Core privacy |
-| `fuzz_lion_signature` | Lion lattice ring signatures (PQ) | CRITICAL - PQ security |
-| `fuzz_polynomial` | Lion polynomial arithmetic (NTT) | HIGH - PQ correctness |
 | `fuzz_subaddress` | Account key/subaddress derivation | HIGH - Key security |
 | `fuzz_pq_keys` | ML-KEM/ML-DSA key parsing | MEDIUM - Address parsing |
 | `fuzz_mlkem_decapsulation` | ML-KEM decapsulation | HIGH - PQ key exchange |
@@ -65,7 +63,7 @@ cargo +nightly fuzz run fuzz_clsag -- -max_total_time=60
 
 ```bash
 cd fuzz
-for target in fuzz_clsag fuzz_ring_signature fuzz_lion_signature fuzz_polynomial fuzz_subaddress; do
+for target in fuzz_clsag fuzz_ring_signature fuzz_subaddress; do
     echo "Fuzzing $target..."
     cargo +nightly fuzz run $target -- -max_total_time=600
 done
@@ -75,7 +73,7 @@ done
 
 ```bash
 cd fuzz
-for target in fuzz_clsag fuzz_lion_signature fuzz_polynomial fuzz_subaddress; do
+for target in fuzz_clsag fuzz_subaddress; do
     echo "Smoke testing $target..."
     cargo +nightly fuzz run $target -- -max_total_time=60
 done
@@ -120,8 +118,6 @@ For CI, run fuzz tests with a time limit to catch regressions:
   run: |
     cd fuzz
     cargo +nightly fuzz run fuzz_clsag -- -max_total_time=300
-    cargo +nightly fuzz run fuzz_lion_signature -- -max_total_time=300
-    cargo +nightly fuzz run fuzz_polynomial -- -max_total_time=300
     cargo +nightly fuzz run fuzz_subaddress -- -max_total_time=300
 ```
 
@@ -134,22 +130,6 @@ Tests CLSAG (Concise Linkable Spontaneous Anonymous Group) signatures:
 - Malformed signature handling
 - Key image consistency across signatures
 - Modified ring handling
-
-### fuzz_lion_signature
-
-Tests Lion lattice-based ring signatures:
-- Valid ring generation and signing
-- Malformed signature rejection
-- Key image linkability
-- Ring modification attacks
-
-### fuzz_polynomial
-
-Tests lattice polynomial arithmetic for Lion:
-- NTT multiplication vs naive multiplication consistency
-- Arithmetic operations (add, sub, neg, scalar mul)
-- Serialization roundtrips
-- Edge cases (zero, max coefficients)
 
 ### fuzz_subaddress
 
@@ -166,7 +146,7 @@ Before release, complete a baseline fuzzing run:
 ```bash
 # 24-hour baseline run for each crypto target
 cd fuzz
-for target in fuzz_clsag fuzz_lion_signature fuzz_polynomial fuzz_subaddress; do
+for target in fuzz_clsag fuzz_subaddress; do
     echo "Starting 24-hour fuzz of $target..."
     cargo +nightly fuzz run $target -- -max_total_time=86400
 done

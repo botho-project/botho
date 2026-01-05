@@ -4,6 +4,8 @@
 //! All signing happens locally - private keys never leave the wallet.
 
 use anyhow::{anyhow, Result};
+#[cfg(feature = "pq")]
+use bth_account_keys::QuantumSafeAccountKey;
 use bth_account_keys::{AccountKey, PublicAddress};
 use bth_crypto_keys::{RistrettoPrivate, RistrettoPublic};
 use bth_crypto_ring_signature::onetime_keys::{
@@ -18,10 +20,6 @@ use crate::{
     rpc_pool::{BlockOutputs, RpcPool},
 };
 
-#[cfg(feature = "pq")]
-use botho::transaction_pq::QuantumPrivateTransaction;
-#[cfg(feature = "pq")]
-use bth_account_keys::{QuantumSafeAccountKey, QuantumSafePublicAddress};
 #[cfg(feature = "pq")]
 use bth_crypto_pq::MlKem768Ciphertext;
 #[cfg(feature = "pq")]
@@ -433,40 +431,6 @@ impl TransactionBuilder {
         Ok(())
     }
 
-    /// Build and sign a quantum-private transaction using LION ring signatures
-    ///
-    /// # DEPRECATED
-    ///
-    /// The previous ML-DSA+Schnorr hybrid approach has been deprecated because
-    /// it sacrificed ring privacy (direct input references instead of ring
-    /// signatures).
-    ///
-    /// LION integration is in progress. See issue #119 for status.
-    ///
-    /// # Arguments
-    /// * `_recipient` - Quantum-safe recipient address (unused - LION pending)
-    /// * `_amount` - Amount to send in picocredits (unused - LION pending)
-    /// * `_fee` - Transaction fee (unused - LION pending)
-    ///
-    /// # Returns
-    /// Always returns an error indicating LION integration is pending
-    #[cfg(feature = "pq")]
-    #[deprecated(
-        since = "0.1.0",
-        note = "Use LION ring signatures instead - see issue #119"
-    )]
-    pub fn build_pq_transfer(
-        &self,
-        _recipient: &QuantumSafePublicAddress,
-        _amount: u64,
-        _fee: u64,
-    ) -> Result<QuantumPrivateTransaction> {
-        Err(anyhow!(
-            "Quantum-private transactions are being migrated to LION ring signatures. \
-             The previous ML-DSA+Schnorr hybrid approach has been deprecated because \
-             it sacrificed ring privacy. See issue #119 for migration status."
-        ))
-    }
 }
 
 /// Wallet scanner for finding owned outputs using stealth address detection

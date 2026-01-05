@@ -27,7 +27,6 @@ bth-crypto-pq = { path = "../crypto/pq" }
 bth-crypto-keys = { path = "../crypto/keys" }
 bth-crypto-ring-signature = { path = "../crypto/ring-signature", features = ["alloc"] }
 bth-crypto-hashes = { path = "../crypto/hashes" }
-bth-crypto-lion = { path = "../crypto/lion", features = ["std"] }
 bth-transaction-core = { path = "../transaction/core", features = ["pq"] }
 bth-util-from-random = { path = "../util/from-random" }
 
@@ -106,22 +105,8 @@ doc = false
 bench = false
 
 [[bin]]
-name = "fuzz_lion_signature"
-path = "fuzz_targets/fuzz_lion_signature.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
 name = "fuzz_clsag"
 path = "fuzz_targets/fuzz_clsag.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
-name = "fuzz_polynomial"
-path = "fuzz_targets/fuzz_polynomial.rs"
 test = false
 doc = false
 bench = false

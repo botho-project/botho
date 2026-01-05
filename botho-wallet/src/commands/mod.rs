@@ -7,7 +7,6 @@ pub mod balance;
 pub mod export;
 pub mod history;
 pub mod init;
-pub mod migrate_to_pq;
 pub mod nodes;
 pub mod send;
 pub mod sync;
