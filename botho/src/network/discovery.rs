@@ -1276,13 +1276,15 @@ mod tests {
 
     #[test]
     fn test_peer_table_entry_with_transport_capabilities() {
-        use super::super::transport::{NatType, TransportCapabilities, TransportType};
+        use super::super::transport::{
+            CapabilityTransportType, NegotiationNatType, TransportCapabilities,
+        };
 
         let peer_id = PeerId::random();
         let caps = TransportCapabilities::new(
-            vec![TransportType::WebRTC, TransportType::Plain],
-            TransportType::WebRTC,
-            NatType::Open,
+            vec![CapabilityTransportType::WebRTC, CapabilityTransportType::Plain],
+            CapabilityTransportType::WebRTC,
+            NegotiationNatType::Open,
         );
         let entry = PeerTableEntry {
             peer_id,
@@ -1295,8 +1297,8 @@ mod tests {
 
         assert!(entry.transport_capabilities.is_some());
         let stored_caps = entry.transport_capabilities.unwrap();
-        assert!(stored_caps.supports(TransportType::WebRTC));
-        assert_eq!(stored_caps.nat_type, NatType::Open);
+        assert!(stored_caps.supports(CapabilityTransportType::WebRTC));
+        assert_eq!(stored_caps.nat_type, NegotiationNatType::Open);
     }
 
     // ========================================================================

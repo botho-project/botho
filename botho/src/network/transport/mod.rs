@@ -48,6 +48,8 @@
 //! - [`negotiation`]: Transport negotiation protocol between peers
 //! - [`signaling`]: SDP exchange for WebRTC connection establishment (Phase 3.5)
 //! - [`webrtc`]: WebRTC data channel transport (Phase 3.2)
+//! - [`tls_tunnel`]: TLS tunnel transport (Phase 3.7)
+//! - [`http2`]: Optional HTTP/2 framing for maximum obfuscation
 //! - [`plain`]: Standard TCP + Noise transport
 //!
 //! # Usage
@@ -98,8 +100,10 @@ mod negotiation;
 
 // Transport implementations
 mod error;
+pub mod http2;
 mod plain;
 pub mod signaling;
+pub mod tls_tunnel;
 mod traits;
 mod types;
 pub mod webrtc;
@@ -128,6 +132,18 @@ pub use traits::{BoxedConnection, ConnectionWrapper, PluggableTransport, Transpo
 // Re-export transport implementations
 pub use plain::{PlainConnection, PlainTransport};
 
+// Re-export TLS tunnel transport (Phase 3.7)
+pub use tls_tunnel::{
+    TlsClientConnection, TlsConfig, TlsConfigError, TlsServerConnection, TlsTunnelConnection,
+    TlsTunnelTransport,
+};
+
+// Re-export HTTP/2 framing (Phase 3.7)
+pub use http2::{
+    Http2FrameError, Http2Wrapper, Http2WrapperConfig, FRAME_HEADER_SIZE, FRAME_TYPE_DATA,
+    MAX_FRAME_SIZE,
+};
+
 // Re-export WebRTC DTLS types (Phase 3.3)
 pub use webrtc::dtls::{
     CertificateFingerprint, DtlsConfig, DtlsError, DtlsRole, DtlsState, DtlsVerification,
@@ -145,8 +161,9 @@ pub use webrtc::{WebRtcConnection, WebRtcTransport};
 // Re-export signaling types (Phase 3.5)
 pub use signaling::{
     IceCandidate, SessionId, SignalingChannel, SignalingError, SignalingMessage, SignalingRole,
-    SignalingSession, SignalingState, DEFAULT_SIGNALING_TIMEOUT_SECS, MAX_ICE_CANDIDATES_PER_SESSION,
-    MAX_ICE_CANDIDATE_SIZE, MAX_SDP_SIZE, MAX_SESSIONS_PER_PEER, SESSION_ID_LEN,
+    SignalingSession, SignalingState, DEFAULT_SIGNALING_TIMEOUT_SECS,
+    MAX_ICE_CANDIDATES_PER_SESSION, MAX_ICE_CANDIDATE_SIZE, MAX_SDP_SIZE, MAX_SESSIONS_PER_PEER,
+    SESSION_ID_LEN,
 };
 
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -374,5 +391,25 @@ mod tests {
         let config = TransportManagerConfig::default();
         assert!(config.enable_upgrades);
         assert_eq!(config.preferred, CapabilityTransportType::Plain);
+    }
+
+    #[test]
+    fn test_tls_tunnel_types_exported() {
+        // Install ring crypto provider for TLS tests
+        let _ = rustls::crypto::ring::default_provider().install_default();
+
+        // Verify TLS tunnel types are accessible from transport module
+        let config = TlsConfig::generate_self_signed().unwrap();
+        let transport = TlsTunnelTransport::new(config).unwrap();
+        assert_eq!(transport.transport_type(), TransportType::TlsTunnel);
+    }
+
+    #[test]
+    fn test_http2_types_exported() {
+        // Verify HTTP/2 types are accessible from transport module
+        let mut wrapper = Http2Wrapper::default();
+        let data = b"test";
+        let frame = wrapper.wrap(data);
+        assert!(frame.len() >= FRAME_HEADER_SIZE);
     }
 }
