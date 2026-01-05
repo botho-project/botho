@@ -182,6 +182,8 @@ pub struct PeerTableEntry {
     pub protocol_version: Option<ProtocolVersion>,
     /// Whether this peer's version is below minimum supported
     pub version_warning: bool,
+    /// Peer's transport capabilities (parsed from identify agent_version)
+    pub transport_capabilities: Option<super::transport::TransportCapabilities>,
 }
 
 /// Upgrade announcement broadcast via gossipsub.
@@ -1100,10 +1102,15 @@ impl NetworkDiscovery {
                     _ => false,
                 };
 
-                // Update peer entry with version information
+                // Parse transport capabilities from agent_version
+                let transport_caps =
+                    super::transport::TransportCapabilities::from_agent_version(&info.agent_version);
+
+                // Update peer entry with version and transport information
                 if let Some(entry) = self.peers.get_mut(&peer_id) {
                     entry.protocol_version = peer_version.clone();
                     entry.version_warning = version_warning;
+                    entry.transport_capabilities = transport_caps.clone();
                     entry.last_seen = std::time::Instant::now();
                 }
 
@@ -1128,6 +1135,7 @@ impl NetworkDiscovery {
                         %peer_id,
                         protocol_version = %pv,
                         agent_version = %info.agent_version,
+                        has_transport_caps = transport_caps.is_some(),
                         "Identified peer version"
                     );
                 }
@@ -1155,6 +1163,7 @@ impl NetworkDiscovery {
                         last_seen: std::time::Instant::now(),
                         protocol_version: None, // Will be set when identify completes
                         version_warning: false,
+                        transport_capabilities: None, // Will be set when identify completes
                     },
                 );
                 Some(NetworkEvent::PeerDiscovered(peer_id))
@@ -1207,12 +1216,14 @@ mod tests {
             last_seen: std::time::Instant::now(),
             protocol_version: None,
             version_warning: false,
+            transport_capabilities: None,
         };
 
         assert_eq!(entry.peer_id, peer_id);
         assert!(entry.address.is_none());
         assert!(entry.protocol_version.is_none());
         assert!(!entry.version_warning);
+        assert!(entry.transport_capabilities.is_none());
     }
 
     #[test]
@@ -1225,6 +1236,7 @@ mod tests {
             last_seen: std::time::Instant::now(),
             protocol_version: None,
             version_warning: false,
+            transport_capabilities: None,
         };
 
         assert_eq!(entry.address, Some(addr));
@@ -1240,6 +1252,7 @@ mod tests {
             last_seen: std::time::Instant::now(),
             protocol_version: Some(version.clone()),
             version_warning: false,
+            transport_capabilities: None,
         };
 
         assert_eq!(entry.protocol_version, Some(version));
@@ -1254,10 +1267,36 @@ mod tests {
             last_seen: std::time::Instant::now(),
             protocol_version: None,
             version_warning: false,
+            transport_capabilities: None,
         };
 
         let cloned = entry.clone();
         assert_eq!(cloned.peer_id, entry.peer_id);
+    }
+
+    #[test]
+    fn test_peer_table_entry_with_transport_capabilities() {
+        use super::super::transport::{NatType, TransportCapabilities, TransportType};
+
+        let peer_id = PeerId::random();
+        let caps = TransportCapabilities::new(
+            vec![TransportType::WebRTC, TransportType::Plain],
+            TransportType::WebRTC,
+            NatType::Open,
+        );
+        let entry = PeerTableEntry {
+            peer_id,
+            address: None,
+            last_seen: std::time::Instant::now(),
+            protocol_version: None,
+            version_warning: false,
+            transport_capabilities: Some(caps.clone()),
+        };
+
+        assert!(entry.transport_capabilities.is_some());
+        let stored_caps = entry.transport_capabilities.unwrap();
+        assert!(stored_caps.supports(TransportType::WebRTC));
+        assert_eq!(stored_caps.nat_type, NatType::Open);
     }
 
     // ========================================================================

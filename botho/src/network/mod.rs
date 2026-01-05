@@ -45,3 +45,11 @@ pub use sync::{
     SyncResponse, SyncState, BLOCKS_PER_REQUEST, MAX_REQUESTS_PER_MINUTE, MAX_REQUEST_SIZE,
     MAX_RESPONSE_SIZE,
 };
+pub use transport::{
+    negotiate_transport_initiator, negotiate_transport_responder, select_transport,
+    CapabilityTransportType, NegotiationConfig, NegotiationError, NegotiationMessage,
+    NegotiationNatType, TransportCapabilities, TransportError, TransportManager,
+    TransportManagerConfig, TransportType, UpgradeResult,
+    // WebRTC types
+    NatType, StunClient, StunConfig, StunError,
+};
