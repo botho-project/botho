@@ -114,6 +114,9 @@ mod traits;
 mod types;
 pub mod webrtc;
 
+// Benchmark utilities (Phase 3.10)
+pub mod bench;
+
 // Re-export capabilities types (Phase 3.6)
 pub use capabilities::{
     NatType as NegotiationNatType, TransportCapabilities, TransportType as CapabilityTransportType,
