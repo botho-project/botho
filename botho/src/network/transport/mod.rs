@@ -106,6 +106,7 @@ pub mod metrics;
 
 // Transport implementations
 mod error;
+pub mod fingerprint;
 pub mod http2;
 mod plain;
 pub mod signaling;
@@ -190,6 +191,10 @@ pub use metrics::{
 // Re-export transport selector types (Phase 3.8)
 pub use manager::{ConnectionResult, PeerInfo, TransportSelector};
 
+// Re-export fingerprinting resistance test types (Phase 3.9)
+pub use fingerprint::{
+    kolmogorov_smirnov, FingerprintTests, FullTestResult, KsTestResult, TestResult, TrafficPattern,
+};
 use tokio::io::{AsyncRead, AsyncWrite};
 
 /// Trait for async read/write streams.
