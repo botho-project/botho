@@ -1100,6 +1100,22 @@ pub struct Utxo {
 }
 
 #[cfg(test)]
+impl Transaction {
+    /// Create a stub transaction for testing with a given fee.
+    ///
+    /// This creates an empty transaction (no inputs/outputs) with the specified fee.
+    /// Used for testing fee-related logic like lottery validation.
+    pub fn new_stub_with_fee(fee: u64) -> Self {
+        Self {
+            inputs: TxInputs::new(vec![]),
+            outputs: vec![],
+            fee,
+            created_at_height: 0,
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

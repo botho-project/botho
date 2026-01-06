@@ -23,6 +23,27 @@ pub enum LedgerError {
 
     #[error("Block already exists at height {0}")]
     BlockExists(u64),
+
+    // Lottery validation errors
+    #[error("Invalid lottery fee split: expected pool={expected_pool}, burn={expected_burn}, got pool={actual_pool}, burn={actual_burn}")]
+    InvalidLotteryFeeSplit {
+        expected_pool: u64,
+        expected_burn: u64,
+        actual_pool: u64,
+        actual_burn: u64,
+    },
+
+    #[error("Invalid lottery drawing: verification failed")]
+    InvalidLotteryDrawing,
+
+    #[error("Lottery payout mismatch: expected {expected}, got {actual}")]
+    LotteryPayoutMismatch { expected: u64, actual: u64 },
+
+    #[error("Lottery output mismatch: expected {expected} outputs, got {actual}")]
+    LotteryOutputCountMismatch { expected: usize, actual: usize },
+
+    #[error("Lottery winner not found in candidates: {0}")]
+    LotteryWinnerNotEligible(String),
 }
 
 /// Information about the current chain state

@@ -1,4 +1,5 @@
 use bth_account_keys::PublicAddress;
+use bth_cluster_tax::{LotteryCandidate, LotteryDrawConfig, TagVector};
 use bth_transaction_types::{Network, TAG_WEIGHT_SCALE};
 use heed::{
     types::{Bytes, U64},
@@ -6,11 +7,12 @@ use heed::{
 };
 use rand::Rng;
 use std::{fs, path::Path};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use super::{ChainState, LedgerError};
 use crate::{
     block::Block,
+    consensus::{validate_block_lottery, LotteryFeeConfig},
     decoy_selection::{DecoySelectionError, GammaDecoySelector, OutputCandidate},
     transaction::{Transaction as BothoTransaction, TxOutput, Utxo, UtxoId},
 };
@@ -395,6 +397,28 @@ impl Ledger {
             return Err(LedgerError::InvalidBlock(
                 "Invalid proof of work".to_string(),
             ));
+        }
+
+        // Validate lottery results (if block has transactions with fees)
+        if block.total_fees() > 0 || !block.lottery_outputs.is_empty() {
+            let lottery_config = LotteryFeeConfig::default();
+            let candidates = self.get_lottery_validation_candidates(block.height(), &lottery_config.draw_config)?;
+
+            // prev_block_hash is used for verifiable randomness
+            let prev_block_hash = &block.header.prev_block_hash;
+
+            if let Err(e) = validate_block_lottery(block, &candidates, prev_block_hash, &lottery_config)
+            {
+                warn!(
+                    block_height = block.height(),
+                    error = %e,
+                    "Lottery validation failed"
+                );
+                return Err(LedgerError::InvalidBlock(format!(
+                    "Lottery validation failed: {}",
+                    e
+                )));
+            }
         }
 
         // Store block and update metadata
@@ -1695,7 +1719,7 @@ impl Ledger {
     // Lottery Candidate Selection (for Fee Redistribution)
     // ========================================================================
 
-    /// Get lottery candidates from the UTXO set.
+    /// Get lottery candidates from the UTXO set for block production.
     ///
     /// Iterates all UTXOs and returns those eligible for lottery participation
     /// based on age and value criteria.
@@ -1707,7 +1731,7 @@ impl Ledger {
     /// * `max_candidates` - Maximum number of candidates to return (DoS protection)
     ///
     /// # Returns
-    /// Vector of `(Utxo, UtxoId as [u8; 36])` pairs for eligible candidates
+    /// Vector of `Utxo` for eligible candidates
     pub fn get_lottery_candidates(
         &self,
         current_height: u64,
@@ -1756,6 +1780,95 @@ impl Ledger {
         );
 
         Ok(candidates)
+    }
+
+    // ========================================================================
+    // Lottery Candidate Selection (for Block Validation)
+    // ========================================================================
+
+    /// Get all UTXOs eligible for lottery participation for block validation.
+    ///
+    /// This method returns `LotteryCandidate` objects for all UTXOs that meet
+    /// the eligibility requirements at the specified block height.
+    ///
+    /// # Arguments
+    /// * `block_height` - The block height being validated (UTXOs must be older)
+    /// * `config` - Lottery draw configuration with age/value thresholds
+    ///
+    /// # Returns
+    /// A vector of `LotteryCandidate` for all eligible UTXOs.
+    pub fn get_lottery_validation_candidates(
+        &self,
+        block_height: u64,
+        config: &LotteryDrawConfig,
+    ) -> Result<Vec<LotteryCandidate>, LedgerError> {
+        let rtxn = self
+            .env
+            .read_txn()
+            .map_err(|e| LedgerError::Database(format!("Failed to start read txn: {}", e)))?;
+
+        let mut candidates = Vec::new();
+
+        let iter = self
+            .utxo_db
+            .iter(&rtxn)
+            .map_err(|e| LedgerError::Database(format!("Failed to create iterator: {}", e)))?;
+
+        for result in iter {
+            if let Ok((_, value)) = result {
+                if let Ok(utxo) = bincode::deserialize::<Utxo>(value) {
+                    // Check eligibility: age and value thresholds
+                    let age = block_height.saturating_sub(utxo.created_at);
+                    if age >= config.min_utxo_age && utxo.output.amount >= config.min_utxo_value {
+                        // Convert ClusterTagVector to TagVector for entropy calculation
+                        let tag_vector = Self::cluster_tags_to_tag_vector(&utxo.output.cluster_tags);
+
+                        // Create candidate with UTXO ID (36 bytes: tx_hash || output_index)
+                        let utxo_id = utxo.id.to_bytes();
+
+                        // Use default cluster factor since Hybrid mode doesn't use it
+                        let cluster_factor = 1.0;
+
+                        let candidate = LotteryCandidate::new(
+                            utxo_id,
+                            utxo.output.amount,
+                            cluster_factor,
+                            &tag_vector,
+                            utxo.created_at,
+                        );
+
+                        candidates.push(candidate);
+                    }
+                }
+            }
+        }
+
+        debug!(
+            block_height = block_height,
+            candidate_count = candidates.len(),
+            "Found lottery validation candidates"
+        );
+
+        Ok(candidates)
+    }
+
+    /// Convert ClusterTagVector (on-chain format) to TagVector (cluster-tax format).
+    ///
+    /// This conversion is needed for entropy calculation in lottery selection.
+    fn cluster_tags_to_tag_vector(
+        cluster_tags: &bth_transaction_types::ClusterTagVector,
+    ) -> TagVector {
+        let mut tag_vector = TagVector::new();
+
+        for entry in &cluster_tags.entries {
+            // ClusterTagVector uses u32 weights, TagVector also uses u32 weights
+            tag_vector.set(
+                bth_cluster_tax::ClusterId(entry.cluster_id.0),
+                entry.weight,
+            );
+        }
+
+        tag_vector
     }
 }
 

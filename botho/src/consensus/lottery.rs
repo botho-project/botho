@@ -336,6 +336,173 @@ impl LotteryStats {
     }
 }
 
+/// Errors that can occur during lottery validation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LotteryValidationError {
+    /// Fee split doesn't match expected 80/20 split
+    InvalidFeeSplit {
+        expected_pool: u64,
+        expected_burn: u64,
+        actual_pool: u64,
+        actual_burn: u64,
+    },
+    /// Lottery drawing verification failed
+    InvalidDrawing,
+    /// Total payout doesn't match expected amount
+    PayoutMismatch { expected: u64, actual: u64 },
+    /// Number of outputs doesn't match number of winners
+    OutputCountMismatch { expected: usize, actual: usize },
+    /// A winner UTXO is not in the eligible candidates
+    WinnerNotEligible { utxo_id: String },
+    /// Lottery output doesn't match winner
+    OutputMismatch { index: usize, reason: String },
+}
+
+impl std::fmt::Display for LotteryValidationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidFeeSplit {
+                expected_pool,
+                expected_burn,
+                actual_pool,
+                actual_burn,
+            } => write!(
+                f,
+                "Invalid fee split: expected pool={}, burn={}, got pool={}, burn={}",
+                expected_pool, expected_burn, actual_pool, actual_burn
+            ),
+            Self::InvalidDrawing => write!(f, "Lottery drawing verification failed"),
+            Self::PayoutMismatch { expected, actual } => {
+                write!(f, "Payout mismatch: expected {}, got {}", expected, actual)
+            }
+            Self::OutputCountMismatch { expected, actual } => {
+                write!(
+                    f,
+                    "Output count mismatch: expected {}, got {}",
+                    expected, actual
+                )
+            }
+            Self::WinnerNotEligible { utxo_id } => {
+                write!(f, "Winner UTXO not eligible: {}", utxo_id)
+            }
+            Self::OutputMismatch { index, reason } => {
+                write!(f, "Output {} mismatch: {}", index, reason)
+            }
+        }
+    }
+}
+
+impl std::error::Error for LotteryValidationError {}
+
+/// Validate the lottery results in a block.
+///
+/// This function verifies that:
+/// 1. Fee splitting is correct (80% pool, 20% burned)
+/// 2. Winner selection matches the deterministic algorithm
+/// 3. Payouts sum to the pool amount
+/// 4. All winners are from eligible UTXOs
+/// 5. Lottery outputs match the claimed winners
+///
+/// # Arguments
+/// * `block` - The block to validate
+/// * `candidates` - Eligible UTXOs from the UTXO set (must be at state before block)
+/// * `prev_block_hash` - Hash of the previous block (for verifiable randomness)
+/// * `config` - Lottery configuration
+///
+/// # Returns
+/// `Ok(())` if validation passes, `Err(LotteryValidationError)` otherwise.
+pub fn validate_block_lottery(
+    block: &crate::block::Block,
+    candidates: &[LotteryCandidate],
+    prev_block_hash: &[u8; 32],
+    config: &LotteryFeeConfig,
+) -> Result<(), LotteryValidationError> {
+    let total_fees = block.total_fees();
+
+    // 1. Verify fee split is correct
+    let (expected_pool, expected_burn) = config.split_fees(total_fees);
+
+    // Handle no-winners case
+    if block.lottery_outputs.is_empty() {
+        // When there are no winners, all fees should be burned
+        let expected_total_burn = total_fees;
+        if block.lottery_summary.amount_burned != expected_total_burn {
+            return Err(LotteryValidationError::InvalidFeeSplit {
+                expected_pool: 0,
+                expected_burn: expected_total_burn,
+                actual_pool: block.lottery_summary.pool_distributed,
+                actual_burn: block.lottery_summary.amount_burned,
+            });
+        }
+        // No further validation needed for no-winners case
+        return Ok(());
+    }
+
+    // Verify the fee split in the summary
+    if block.lottery_summary.pool_distributed != expected_pool
+        || block.lottery_summary.amount_burned != expected_burn
+    {
+        return Err(LotteryValidationError::InvalidFeeSplit {
+            expected_pool,
+            expected_burn,
+            actual_pool: block.lottery_summary.pool_distributed,
+            actual_burn: block.lottery_summary.amount_burned,
+        });
+    }
+
+    // 2. Reconstruct BlockLotteryResult from block data for verification
+    let block_result = BlockLotteryResult {
+        block_height: block.height(),
+        total_fees,
+        pool_amount: expected_pool,
+        burn_amount: expected_burn,
+        winners: block
+            .lottery_outputs
+            .iter()
+            .map(|output| LotteryWinner {
+                utxo_id: output.winner_utxo_id(),
+                payout: output.payout,
+            })
+            .collect(),
+        seed: block.lottery_summary.lottery_seed,
+    };
+
+    // 3. Verify the lottery drawing
+    if !verify_lottery_result(candidates, &block_result, prev_block_hash, config) {
+        return Err(LotteryValidationError::InvalidDrawing);
+    }
+
+    // 4. Verify total payouts match pool amount
+    let total_payouts: u64 = block.lottery_outputs.iter().map(|o| o.payout).sum();
+    if total_payouts != expected_pool {
+        return Err(LotteryValidationError::PayoutMismatch {
+            expected: expected_pool,
+            actual: total_payouts,
+        });
+    }
+
+    // 5. Verify all winners are in the eligible candidates
+    for output in &block.lottery_outputs {
+        let winner_id = output.winner_utxo_id();
+        let is_eligible = candidates.iter().any(|c| c.id == winner_id);
+        if !is_eligible {
+            return Err(LotteryValidationError::WinnerNotEligible {
+                utxo_id: hex::encode(&winner_id[..8]),
+            });
+        }
+    }
+
+    info!(
+        block_height = block.height(),
+        winners = block.lottery_outputs.len(),
+        pool_amount = expected_pool,
+        burn_amount = expected_burn,
+        "Lottery validation passed"
+    );
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -501,5 +668,232 @@ mod tests {
         assert_eq!(stats.total_winners, 2);
         assert_eq!(stats.burn_rate_permille(), 200); // 20%
         assert_eq!(stats.avg_payout(), 400);
+    }
+
+    // ========================================================================
+    // Tests for validate_block_lottery
+    // ========================================================================
+
+    use crate::block::{Block, BlockHeader, BlockLotterySummary, LotteryOutput, MintingTx};
+
+    fn create_test_block(
+        height: u64,
+        prev_hash: [u8; 32],
+        total_fees: u64,
+        lottery_summary: BlockLotterySummary,
+        lottery_outputs: Vec<LotteryOutput>,
+    ) -> Block {
+        let header = BlockHeader {
+            version: 1,
+            prev_block_hash: prev_hash,
+            tx_root: [0u8; 32],
+            timestamp: 0,
+            height,
+            difficulty: u64::MAX,
+            nonce: 0,
+            minter_view_key: [0u8; 32],
+            minter_spend_key: [0u8; 32],
+        };
+
+        let minting_tx = MintingTx {
+            block_height: height,
+            reward: 1000,
+            minter_view_key: [0u8; 32],
+            minter_spend_key: [0u8; 32],
+            target_key: [0u8; 32],
+            public_key: [0u8; 32],
+            prev_block_hash: prev_hash,
+            difficulty: u64::MAX,
+            nonce: 0,
+            timestamp: 0,
+        };
+
+        // Create transactions that sum to total_fees
+        let transactions = if total_fees > 0 {
+            vec![crate::transaction::Transaction::new_stub_with_fee(total_fees)]
+        } else {
+            vec![]
+        };
+
+        Block {
+            header,
+            minting_tx,
+            transactions,
+            lottery_outputs,
+            lottery_summary,
+        }
+    }
+
+    #[test]
+    fn test_validate_block_lottery_no_fees_no_winners() {
+        let config = LotteryFeeConfig::default();
+        let prev_hash = [0u8; 32];
+        let candidates: Vec<LotteryCandidate> = vec![];
+
+        let lottery_summary = BlockLotterySummary {
+            total_fees: 0,
+            pool_distributed: 0,
+            amount_burned: 0,
+            lottery_seed: [0u8; 32],
+        };
+
+        let block = create_test_block(100, prev_hash, 0, lottery_summary, vec![]);
+
+        let result = validate_block_lottery(&block, &candidates, &prev_hash, &config);
+        assert!(result.is_ok(), "No fees/winners should pass validation");
+    }
+
+    #[test]
+    fn test_validate_block_lottery_invalid_fee_split() {
+        let config = LotteryFeeConfig::default();
+        let prev_hash = [0u8; 32];
+
+        // Create candidates that are eligible (old enough)
+        let candidates = vec![
+            make_candidate(1, 10_000, 0),
+            make_candidate(2, 20_000, 0),
+        ];
+
+        // Create a lottery summary with incorrect split
+        // Total fees = 1000, so expected: pool=800, burn=200
+        // But we'll set wrong values
+        let lottery_summary = BlockLotterySummary {
+            total_fees: 1000,
+            pool_distributed: 900, // Wrong! Should be 800
+            amount_burned: 100,    // Wrong! Should be 200
+            lottery_seed: [0u8; 32],
+        };
+
+        // Need at least one lottery output for the fee split to be checked
+        let lottery_outputs = vec![LotteryOutput {
+            winner_tx_hash: [0u8; 32],
+            winner_output_index: 0,
+            payout: 900,
+            target_key: [0u8; 32],
+            public_key: [0u8; 32],
+        }];
+
+        let block = create_test_block(100, prev_hash, 1000, lottery_summary, lottery_outputs);
+
+        let result = validate_block_lottery(&block, &candidates, &prev_hash, &config);
+        assert!(
+            matches!(result, Err(LotteryValidationError::InvalidFeeSplit { .. })),
+            "Invalid fee split should fail: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_validate_block_lottery_payout_mismatch() {
+        let config = LotteryFeeConfig {
+            draw_config: LotteryDrawConfig {
+                min_utxo_age: 10,
+                min_utxo_value: 100,
+                winners_per_draw: 1,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let prev_hash = [42u8; 32];
+
+        let candidates = vec![
+            make_candidate(1, 10_000, 0),
+            make_candidate(2, 20_000, 0),
+        ];
+
+        // First draw to get a valid result
+        let valid_result = draw_lottery_winners(&candidates, 1000, 100, &prev_hash, &config);
+
+        // Create a lottery summary with correct split but wrong payout in output
+        let lottery_summary = BlockLotterySummary {
+            total_fees: 1000,
+            pool_distributed: 800,
+            amount_burned: 200,
+            lottery_seed: valid_result.seed,
+        };
+
+        // Create output with wrong payout (not equal to pool_distributed)
+        let winner_utxo_id = if !valid_result.winners.is_empty() {
+            valid_result.winners[0].utxo_id
+        } else {
+            [1u8; 36]
+        };
+
+        let lottery_outputs = vec![LotteryOutput {
+            winner_tx_hash: {
+                let mut h = [0u8; 32];
+                h.copy_from_slice(&winner_utxo_id[..32]);
+                h
+            },
+            winner_output_index: u32::from_le_bytes(winner_utxo_id[32..36].try_into().unwrap()),
+            payout: 700, // Wrong! Should be 800
+            target_key: [0u8; 32],
+            public_key: [0u8; 32],
+        }];
+
+        let block = create_test_block(100, prev_hash, 1000, lottery_summary, lottery_outputs);
+
+        let result = validate_block_lottery(&block, &candidates, &prev_hash, &config);
+        // Should fail either with PayoutMismatch or InvalidDrawing depending on validation order
+        assert!(
+            result.is_err(),
+            "Payout mismatch should fail validation"
+        );
+    }
+
+    #[test]
+    fn test_validate_block_lottery_winner_not_eligible() {
+        let config = LotteryFeeConfig::default();
+        let prev_hash = [0u8; 32];
+
+        // Empty candidates - no UTXOs are eligible
+        let candidates: Vec<LotteryCandidate> = vec![];
+
+        // But claim a winner that doesn't exist
+        let lottery_summary = BlockLotterySummary {
+            total_fees: 1000,
+            pool_distributed: 800,
+            amount_burned: 200,
+            lottery_seed: [0u8; 32],
+        };
+
+        let lottery_outputs = vec![LotteryOutput {
+            winner_tx_hash: [0xFFu8; 32], // Non-existent UTXO
+            winner_output_index: 0,
+            payout: 800,
+            target_key: [0u8; 32],
+            public_key: [0u8; 32],
+        }];
+
+        let block = create_test_block(100, prev_hash, 1000, lottery_summary, lottery_outputs);
+
+        let result = validate_block_lottery(&block, &candidates, &prev_hash, &config);
+        // Should fail because the winner is not in the (empty) candidate list
+        assert!(
+            result.is_err(),
+            "Winner not in candidates should fail validation"
+        );
+    }
+
+    #[test]
+    fn test_validate_block_lottery_no_winners_all_burned() {
+        let config = LotteryFeeConfig::default();
+        let prev_hash = [0u8; 32];
+
+        // No eligible candidates
+        let candidates: Vec<LotteryCandidate> = vec![];
+
+        // When no winners, all fees should be burned
+        let lottery_summary = BlockLotterySummary {
+            total_fees: 1000,
+            pool_distributed: 0,
+            amount_burned: 1000, // All burned when no winners
+            lottery_seed: [0u8; 32],
+        };
+
+        let block = create_test_block(100, prev_hash, 1000, lottery_summary, vec![]);
+
+        let result = validate_block_lottery(&block, &candidates, &prev_hash, &config);
+        assert!(result.is_ok(), "No winners, all burned should pass: {:?}", result);
     }
 }
