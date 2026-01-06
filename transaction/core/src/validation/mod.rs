@@ -27,8 +27,10 @@ pub use self::{
 #[cfg(feature = "cluster-tax")]
 pub use self::cluster_fee::{
     compute_cluster_factor, compute_effective_cluster_wealth,
-    compute_effective_cluster_wealth_from_tags, extract_dominant_cluster, validate_cluster_fee,
-    validate_cluster_fee_dynamic, ClusterWealthMap, ClusterWealthProvider,
+    compute_effective_cluster_wealth_from_tags, compute_ring_max_cluster_wealth,
+    compute_single_utxo_cluster_wealth, extract_dominant_cluster, validate_cluster_fee,
+    validate_cluster_fee_dynamic, validate_ring_cluster_fee, validate_ring_cluster_fee_dynamic,
+    ClusterWealthMap, ClusterWealthProvider,
 };
 
 // Re-export cluster-tax types for convenience
