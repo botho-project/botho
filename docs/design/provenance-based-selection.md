@@ -435,6 +435,12 @@ meaningful Sybil resistance reduction without requiring identity.
 - ~~No gaming is possible~~ Gaming is expensive but possible
 - ~~This is a breakthrough~~ It's an incremental improvement
 
+## Related Documents
+
+- [Entropy-Weighted Decay](entropy-weighted-decay.md) - Uses same entropy primitive for decay mechanism
+- [Cluster Tag Decay](cluster-tag-decay.md) - Age-based decay (Phase 1) and entropy-weighted decay (Phase 2)
+- [Lottery Redistribution](lottery-redistribution.md) - Fee redistribution overview
+
 ## References
 
 - Kwon et al. (2019). "Impossibility of Full Decentralization in Permissionless
