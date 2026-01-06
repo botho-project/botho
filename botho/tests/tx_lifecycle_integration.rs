@@ -25,7 +25,7 @@ use serial_test::serial;
 use tempfile::TempDir;
 
 use botho::{
-    block::{Block, BlockHeader, MintingTx},
+    block::{Block, BlockHeader, BlockLotterySummary, MintingTx},
     ledger::Ledger,
     mempool::{Mempool, MempoolError},
     transaction::{Transaction, TxOutput, Utxo, UtxoId, MIN_TX_FEE, PICOCREDITS_PER_CREDIT},
@@ -162,6 +162,8 @@ fn mine_block(
         },
         minting_tx,
         transactions,
+        lottery_outputs: Vec::new(),
+        lottery_summary: BlockLotterySummary::default(),
     }
 }
 

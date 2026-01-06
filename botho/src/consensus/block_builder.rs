@@ -103,6 +103,8 @@ impl BlockBuilder {
         let tx_root = Self::compute_tx_root(&transactions);
 
         // Build the block
+        // Note: Lottery outputs are added separately via set_lottery_result()
+        // after the block is built, typically by the consensus/minting process
         let block = Block {
             header: BlockHeader {
                 version: 1,
@@ -117,6 +119,8 @@ impl BlockBuilder {
             },
             minting_tx,
             transactions,
+            lottery_outputs: Vec::new(),
+            lottery_summary: crate::block::BlockLotterySummary::default(),
         };
 
         Ok(BuiltBlock {
@@ -158,6 +162,8 @@ impl BlockBuilder {
             },
             minting_tx,
             transactions,
+            lottery_outputs: Vec::new(),
+            lottery_summary: crate::block::BlockLotterySummary::default(),
         }
     }
 }

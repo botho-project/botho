@@ -14,7 +14,7 @@ use std::time::SystemTime;
 use sha2::{Digest, Sha256};
 
 use botho::{
-    block::{Block, BlockHeader, MintingTx},
+    block::{Block, BlockHeader, BlockLotterySummary, MintingTx},
     mempool::Mempool,
     network::{BlockTxn, CompactBlock, GetBlockTxn, ReconstructionResult},
     transaction::{ClsagRingInput, RingMember, Transaction, TxOutput, PICOCREDITS_PER_CREDIT},
@@ -177,6 +177,8 @@ fn create_block_with_transactions(
         },
         minting_tx,
         transactions,
+        lottery_outputs: Vec::new(),
+        lottery_summary: BlockLotterySummary::default(),
     }
 }
 
