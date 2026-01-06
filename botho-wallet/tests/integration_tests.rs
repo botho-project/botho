@@ -978,6 +978,153 @@ mod transaction_hash {
 }
 
 // ============================================================================
+// Cluster Tag Tests
+// ============================================================================
+
+mod cluster_tags {
+    use super::*;
+    use botho_wallet::fee_estimation::StoredTags;
+
+    #[test]
+    fn test_utxo_with_cluster_tags() {
+        // Create UTXO with cluster attribution
+        let tags = StoredTags {
+            tags: vec![(42, 800_000), (123, 200_000)], // 80% cluster 42, 20% cluster 123
+        };
+
+        let utxo = OwnedUtxo {
+            tx_hash: [1u8; 32],
+            output_index: 0,
+            amount: 10 * PICOCREDITS_PER_CAD,
+            created_at: 100,
+            target_key: [0u8; 32],
+            public_key: [0u8; 32],
+            subaddress_index: 0,
+            cluster_tags: Some(tags),
+        };
+
+        // Verify cluster tags are stored
+        assert!(utxo.cluster_tags.is_some());
+        let stored = utxo.cluster_tags.as_ref().unwrap();
+        assert_eq!(stored.tags.len(), 2);
+        assert_eq!(stored.tags[0], (42, 800_000));
+        assert_eq!(stored.tags[1], (123, 200_000));
+    }
+
+    #[test]
+    fn test_utxo_tags_helper_with_attribution() {
+        let tags = StoredTags {
+            tags: vec![(1, 500_000), (2, 500_000)], // 50% each
+        };
+
+        let utxo = OwnedUtxo {
+            tx_hash: [1u8; 32],
+            output_index: 0,
+            amount: PICOCREDITS_PER_CAD,
+            created_at: 100,
+            target_key: [0u8; 32],
+            public_key: [0u8; 32],
+            subaddress_index: 0,
+            cluster_tags: Some(tags),
+        };
+
+        // tags() helper should return the stored tags
+        let retrieved = utxo.tags();
+        assert!(retrieved.has_attribution());
+        assert_eq!(retrieved.total_attributed(), 1_000_000);
+    }
+
+    #[test]
+    fn test_utxo_tags_helper_without_attribution() {
+        let utxo = OwnedUtxo {
+            tx_hash: [1u8; 32],
+            output_index: 0,
+            amount: PICOCREDITS_PER_CAD,
+            created_at: 100,
+            target_key: [0u8; 32],
+            public_key: [0u8; 32],
+            subaddress_index: 0,
+            cluster_tags: None,
+        };
+
+        // tags() helper should return empty StoredTags when None
+        let retrieved = utxo.tags();
+        assert!(!retrieved.has_attribution());
+        assert_eq!(retrieved.total_attributed(), 0);
+    }
+
+    #[test]
+    fn test_stored_tags_serialization() {
+        let tags = StoredTags {
+            tags: vec![(42, 1_000_000)], // 100% single cluster
+        };
+
+        // Test serialization round-trip
+        let json = serde_json::to_string(&tags).unwrap();
+        let deserialized: StoredTags = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.tags.len(), 1);
+        assert_eq!(deserialized.tags[0], (42, 1_000_000));
+    }
+
+    #[test]
+    fn test_utxo_with_tags_serialization() {
+        let tags = StoredTags {
+            tags: vec![(1, 600_000), (2, 400_000)],
+        };
+
+        let utxo = OwnedUtxo {
+            tx_hash: [0xAB; 32],
+            output_index: 5,
+            amount: 5 * PICOCREDITS_PER_CAD,
+            created_at: 12345,
+            target_key: [0xCD; 32],
+            public_key: [0xEF; 32],
+            subaddress_index: 1,
+            cluster_tags: Some(tags),
+        };
+
+        // Serialize and deserialize
+        let json = serde_json::to_string(&utxo).unwrap();
+        let restored: OwnedUtxo = serde_json::from_str(&json).unwrap();
+
+        // Verify all fields preserved
+        assert_eq!(restored.tx_hash, utxo.tx_hash);
+        assert_eq!(restored.output_index, utxo.output_index);
+        assert_eq!(restored.amount, utxo.amount);
+        assert_eq!(restored.created_at, utxo.created_at);
+        assert!(restored.cluster_tags.is_some());
+
+        let restored_tags = restored.cluster_tags.unwrap();
+        assert_eq!(restored_tags.tags.len(), 2);
+        assert_eq!(restored_tags.tags[0], (1, 600_000));
+        assert_eq!(restored_tags.tags[1], (2, 400_000));
+    }
+
+    #[test]
+    fn test_utxo_without_tags_serialization_backwards_compat() {
+        // Simulate old wallet data without cluster_tags field
+        let old_json = r#"{
+            "tx_hash": [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+            "output_index": 0,
+            "amount": 1000000000000,
+            "created_at": 100,
+            "target_key": [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            "public_key": [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            "subaddress_index": 0
+        }"#;
+
+        // Should deserialize without cluster_tags (defaults to None)
+        let utxo: OwnedUtxo = serde_json::from_str(old_json).unwrap();
+        assert!(utxo.cluster_tags.is_none());
+
+        // tags() helper should return empty
+        let tags = utxo.tags();
+        assert!(!tags.has_attribution());
+    }
+}
+
+// ============================================================================
 // Decoy Selection Tests
 // ============================================================================
 

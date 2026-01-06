@@ -486,6 +486,9 @@ impl<'a> WalletScanner<'a> {
 
                 // Check if this output belongs to us using stealth address detection
                 if let Some(subaddress_index) = self.check_ownership(&target_key, &public_key) {
+                    // Convert cluster tags from RPC format to StoredTags
+                    let cluster_tags = Self::parse_cluster_tags(&output.cluster_tags);
+
                     owned.push(OwnedUtxo {
                         tx_hash,
                         output_index: output.output_index,
@@ -494,10 +497,7 @@ impl<'a> WalletScanner<'a> {
                         target_key,
                         public_key,
                         subaddress_index,
-                        // Tags are not available from blockchain scanning - they would
-                        // need to come from the sender or an external privacy service.
-                        // For now, assume anonymous (no cluster attribution).
-                        cluster_tags: None,
+                        cluster_tags,
                     });
                 }
             }
@@ -567,6 +567,24 @@ impl<'a> WalletScanner<'a> {
         } else {
             0
         }
+    }
+
+    /// Parse cluster tags from RPC format to StoredTags.
+    ///
+    /// RPC returns cluster tags as an array of [cluster_id, weight] pairs.
+    /// Returns Some(StoredTags) if any tags are present, None otherwise.
+    fn parse_cluster_tags(rpc_tags: &[[u64; 2]]) -> Option<StoredTags> {
+        if rpc_tags.is_empty() {
+            return None;
+        }
+
+        // Convert [cluster_id, weight] pairs to (u64, u32) tuples
+        let tags: Vec<(u64, u32)> = rpc_tags
+            .iter()
+            .map(|&[id, weight]| (id, weight as u32))
+            .collect();
+
+        Some(StoredTags { tags })
     }
 }
 
@@ -973,6 +991,7 @@ mod tests {
                     target_key: hex::encode([2u8; 32]),
                     public_key: hex::encode([3u8; 32]),
                     amount_commitment: hex::encode(1000u64.to_le_bytes()),
+                    cluster_tags: vec![],
                     pq_ciphertext: None,
                     is_pq_output: false, // Not a PQ output
                 }],
@@ -996,6 +1015,7 @@ mod tests {
                     target_key: hex::encode([2u8; 32]),
                     public_key: hex::encode([3u8; 32]),
                     amount_commitment: hex::encode(1000u64.to_le_bytes()),
+                    cluster_tags: vec![],
                     pq_ciphertext: Some(hex::encode([0u8; 100])), // Wrong size
                     is_pq_output: true,
                 }],

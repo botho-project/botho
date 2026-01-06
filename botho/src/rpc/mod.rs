@@ -735,12 +735,21 @@ async fn handle_get_outputs(id: Value, params: &Value, state: &RpcState) -> Json
             let mut outputs = Vec::new();
             for tx in &block.transactions {
                 for (idx, output) in tx.outputs.iter().enumerate() {
+                    // Serialize cluster tags as array of [cluster_id, weight] pairs
+                    let cluster_tags: Vec<[u64; 2]> = output
+                        .cluster_tags
+                        .entries
+                        .iter()
+                        .map(|e| [e.cluster_id.0, e.weight as u64])
+                        .collect();
+
                     outputs.push(json!({
                         "txHash": hex::encode(tx.hash()),
                         "outputIndex": idx,
                         "targetKey": hex::encode(output.target_key),
                         "publicKey": hex::encode(output.public_key),
                         "amountCommitment": hex::encode(output.amount.to_le_bytes()),
+                        "clusterTags": cluster_tags,
                     }));
                 }
             }

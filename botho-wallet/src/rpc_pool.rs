@@ -465,6 +465,10 @@ pub struct TxOutput {
     /// Amount commitment (or plaintext amount)
     #[serde(rename = "amountCommitment")]
     pub amount_commitment: String,
+    /// Cluster tags for progressive fee calculation.
+    /// Array of [cluster_id, weight] pairs where weight is parts per million.
+    #[serde(rename = "clusterTags", default)]
+    pub cluster_tags: Vec<[u64; 2]>,
     /// ML-KEM-768 ciphertext for PQ outputs (1088 bytes, hex-encoded)
     /// Only present for QuantumPrivateTxOut outputs
     #[serde(rename = "pqCiphertext")]
