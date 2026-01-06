@@ -114,8 +114,7 @@ pub fn compute_effective_cluster_wealth_from_tags(
         total_value += value as u128;
 
         for entry in &tags.entries {
-            let value_fraction =
-                (value as u128 * entry.weight as u128) / TAG_WEIGHT_SCALE as u128;
+            let value_fraction = (value as u128 * entry.weight as u128) / TAG_WEIGHT_SCALE as u128;
             let wealth = cluster_wealth.get_cluster_wealth(entry.cluster_id);
             total_weighted_wealth += value_fraction * wealth as u128;
         }
@@ -191,8 +190,12 @@ pub fn validate_cluster_fee(
     let effective_wealth =
         compute_effective_cluster_wealth(input_tx_outs, input_values, cluster_wealth);
 
-    let minimum_fee =
-        fee_config.compute_fee(TransactionType::Hidden, tx_size_bytes, effective_wealth, num_memos);
+    let minimum_fee = fee_config.compute_fee(
+        TransactionType::Hidden,
+        tx_size_bytes,
+        effective_wealth,
+        num_memos,
+    );
 
     if declared_fee < minimum_fee {
         return Err(TransactionValidationError::InsufficientClusterFee {
@@ -337,11 +340,224 @@ where
     }
 }
 
+// ============================================================================
+// Ring Signature Fee Validation (Phase 1)
+// ============================================================================
+//
+// For ring signatures, we don't know which ring member is the real input.
+// To prevent fee evasion, we use the CONSERVATIVE (maximum) cluster factor
+// among all ring members. This ensures attackers cannot lower their fees
+// by selecting poor decoys.
+
+/// Compute effective cluster wealth for a single tag vector.
+///
+/// This computes the weighted average of cluster wealth based on tag weights.
+///
+/// # Arguments
+/// * `tags` - The cluster tag vector
+/// * `value` - The value of the UTXO
+/// * `cluster_wealth` - Lookup for total wealth of each cluster
+///
+/// # Returns
+/// The effective cluster wealth for this UTXO
+pub fn compute_single_utxo_cluster_wealth(
+    tags: &ClusterTagVector,
+    value: u64,
+    cluster_wealth: &impl ClusterWealthProvider,
+) -> u64 {
+    if value == 0 {
+        return 0;
+    }
+
+    let mut weighted_wealth: u128 = 0;
+    let mut total_weight: u128 = 0;
+
+    for entry in &tags.entries {
+        let wealth = cluster_wealth.get_cluster_wealth(entry.cluster_id);
+        weighted_wealth += (entry.weight as u128) * (wealth as u128);
+        total_weight += entry.weight as u128;
+    }
+
+    // Background contributes nothing (diffused wealth)
+    let bg_weight = tags.background_weight() as u128;
+    total_weight += bg_weight;
+
+    if total_weight == 0 {
+        return 0;
+    }
+
+    (weighted_wealth / total_weight) as u64
+}
+
+/// Compute the conservative (maximum) cluster wealth from ring member tags.
+///
+/// For ring signatures in Phase 1 (public tags), we use the MAXIMUM effective
+/// cluster wealth among all ring members. This is the conservative approach
+/// because:
+///
+/// - Attackers want LOW fees, so they would prefer low cluster wealth
+/// - Using max means any high-wealth ring member penalizes the transaction
+/// - Gaming becomes counter-productive: must carefully select ALL-low decoys
+///
+/// This prevents fee evasion while preserving ring signature privacy.
+///
+/// # Arguments
+/// * `ring_tags` - Tag vectors for each ring member
+/// * `ring_values` - Values of each ring member
+/// * `cluster_wealth` - Lookup for total wealth of each cluster
+///
+/// # Returns
+/// The maximum effective cluster wealth among ring members
+pub fn compute_ring_max_cluster_wealth(
+    ring_tags: &[&ClusterTagVector],
+    ring_values: &[u64],
+    cluster_wealth: &impl ClusterWealthProvider,
+) -> u64 {
+    ring_tags
+        .iter()
+        .zip(ring_values.iter())
+        .map(|(tags, &value)| compute_single_utxo_cluster_wealth(tags, value, cluster_wealth))
+        .max()
+        .unwrap_or(0)
+}
+
+/// Validate that a transaction pays sufficient fees using ring member tags.
+///
+/// This is the Phase 1 conservative approach for ring signatures where we
+/// don't know which ring member is the real input. We use the MAXIMUM
+/// cluster wealth among all ring members to compute the required fee.
+///
+/// This prevents fee evasion attacks where a wealthy sender selects poor
+/// decoys to lower their apparent cluster wealth.
+///
+/// # Arguments
+/// * `declared_fee` - The fee declared in the transaction
+/// * `tx_size_bytes` - Size of the serialized transaction in bytes
+/// * `ring_tags` - Tag vectors for each ring member (all inputs combined)
+/// * `ring_values` - Values of each ring member (all inputs combined)
+/// * `num_outputs` - Number of transaction outputs
+/// * `num_memos` - Number of outputs with encrypted memos
+/// * `fee_config` - The fee configuration
+/// * `cluster_wealth` - Lookup for total wealth of each cluster
+///
+/// # Returns
+/// * `Ok(())` if fee is sufficient
+/// * `Err(InsufficientClusterFee)` if fee is too low
+///
+/// # Example
+///
+/// ```ignore
+/// // Collect all ring member tags and values
+/// let mut ring_tags = Vec::new();
+/// let mut ring_values = Vec::new();
+/// for input in &tx.inputs {
+///     for member in &input.ring {
+///         ring_tags.push(&member.cluster_tags);
+///         ring_values.push(member.value);
+///     }
+/// }
+///
+/// validate_ring_cluster_fee(
+///     tx.fee,
+///     tx.size(),
+///     &ring_tags,
+///     &ring_values,
+///     tx.outputs.len(),
+///     num_memos,
+///     &fee_config,
+///     &cluster_wealth_lookup,
+/// )?;
+/// ```
+pub fn validate_ring_cluster_fee(
+    declared_fee: u64,
+    tx_size_bytes: usize,
+    ring_tags: &[&ClusterTagVector],
+    ring_values: &[u64],
+    num_outputs: usize,
+    num_memos: usize,
+    fee_config: &FeeConfig,
+    cluster_wealth: &impl ClusterWealthProvider,
+) -> TransactionValidationResult<()> {
+    // Compute conservative (max) cluster wealth from ring members
+    let max_cluster_wealth =
+        compute_ring_max_cluster_wealth(ring_tags, ring_values, cluster_wealth);
+
+    // Compute minimum required fee using the conservative wealth estimate
+    let minimum_fee = fee_config.compute_fee_with_outputs(
+        TransactionType::Hidden,
+        tx_size_bytes,
+        max_cluster_wealth,
+        num_outputs,
+        num_memos,
+    );
+
+    if declared_fee < minimum_fee {
+        return Err(TransactionValidationError::InsufficientClusterFee {
+            required: minimum_fee,
+            actual: declared_fee,
+            cluster_wealth: max_cluster_wealth,
+        });
+    }
+
+    Ok(())
+}
+
+/// Validate ring cluster fee with dynamic base adjustment.
+///
+/// This version uses the dynamic fee base for congestion control,
+/// adjusting the fee requirement based on network load.
+///
+/// # Arguments
+/// * `declared_fee` - The fee declared in the transaction
+/// * `tx_size_bytes` - Size of the serialized transaction in bytes
+/// * `ring_tags` - Tag vectors for each ring member (all inputs combined)
+/// * `ring_values` - Values of each ring member (all inputs combined)
+/// * `num_outputs` - Number of transaction outputs
+/// * `num_memos` - Number of outputs with encrypted memos
+/// * `fee_config` - The fee configuration
+/// * `cluster_wealth` - Lookup for total wealth of each cluster
+/// * `dynamic_base` - Current dynamic fee base (nanoBTH per byte)
+pub fn validate_ring_cluster_fee_dynamic(
+    declared_fee: u64,
+    tx_size_bytes: usize,
+    ring_tags: &[&ClusterTagVector],
+    ring_values: &[u64],
+    num_outputs: usize,
+    num_memos: usize,
+    fee_config: &FeeConfig,
+    cluster_wealth: &impl ClusterWealthProvider,
+    dynamic_base: u64,
+) -> TransactionValidationResult<()> {
+    // Compute conservative (max) cluster wealth from ring members
+    let max_cluster_wealth =
+        compute_ring_max_cluster_wealth(ring_tags, ring_values, cluster_wealth);
+
+    // Compute minimum required fee using dynamic base
+    let minimum_fee = fee_config.compute_fee_with_dynamic_base_and_outputs(
+        TransactionType::Hidden,
+        tx_size_bytes,
+        max_cluster_wealth,
+        num_outputs,
+        num_memos,
+        dynamic_base,
+    );
+
+    if declared_fee < minimum_fee {
+        return Err(TransactionValidationError::InsufficientClusterFee {
+            required: minimum_fee,
+            actual: declared_fee,
+            cluster_wealth: max_cluster_wealth,
+        });
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloc::vec;
     use crate::ClusterTagEntry;
+    use alloc::{vec, vec::Vec};
 
     fn make_tag_vector(entries: &[(u64, u32)]) -> ClusterTagVector {
         ClusterTagVector {
@@ -365,11 +581,8 @@ mod tests {
         let mut wealth_map = ClusterWealthMap::new();
         wealth_map.set(ClusterId(1), 10_000_000);
 
-        let effective = compute_effective_cluster_wealth_from_tags(
-            &input_tags,
-            &input_values,
-            &wealth_map,
-        );
+        let effective =
+            compute_effective_cluster_wealth_from_tags(&input_tags, &input_values, &wealth_map);
 
         // 100% of value is in cluster 1 with wealth 10M
         assert_eq!(effective, 10_000_000);
@@ -379,8 +592,8 @@ mod tests {
     fn test_effective_wealth_mixed_clusters() {
         // 50% cluster 1, 30% cluster 2, 20% background
         let tags = make_tag_vector(&[
-            (1, 500_000),  // 50%
-            (2, 300_000),  // 30%
+            (1, 500_000), // 50%
+            (2, 300_000), // 30%
         ]);
         let input_tags = vec![&tags];
         let input_values = vec![1_000_000u64];
@@ -389,11 +602,8 @@ mod tests {
         wealth_map.set(ClusterId(1), 10_000_000);
         wealth_map.set(ClusterId(2), 5_000_000);
 
-        let effective = compute_effective_cluster_wealth_from_tags(
-            &input_tags,
-            &input_values,
-            &wealth_map,
-        );
+        let effective =
+            compute_effective_cluster_wealth_from_tags(&input_tags, &input_values, &wealth_map);
 
         // 50% × 10M + 30% × 5M = 5M + 1.5M = 6.5M
         assert_eq!(effective, 6_500_000);
@@ -407,11 +617,8 @@ mod tests {
 
         let wealth_map = ClusterWealthMap::new();
 
-        let effective = compute_effective_cluster_wealth_from_tags(
-            &input_tags,
-            &input_values,
-            &wealth_map,
-        );
+        let effective =
+            compute_effective_cluster_wealth_from_tags(&input_tags, &input_values, &wealth_map);
 
         // All background = 0 cluster wealth
         assert_eq!(effective, 0);
@@ -431,11 +638,8 @@ mod tests {
         wealth_map.set(ClusterId(1), 10_000_000);
         wealth_map.set(ClusterId(2), 5_000_000);
 
-        let effective = compute_effective_cluster_wealth_from_tags(
-            &input_tags,
-            &input_values,
-            &wealth_map,
-        );
+        let effective =
+            compute_effective_cluster_wealth_from_tags(&input_tags, &input_values, &wealth_map);
 
         // Weighted average: (600K × 10M + 400K × 5M) / 1M = (6T + 2T) / 1M = 8M
         assert_eq!(effective, 8_000_000);
@@ -456,10 +660,7 @@ mod tests {
     #[test]
     fn test_dominant_cluster_multiple() {
         // 60% cluster 1, 40% cluster 2
-        let tags = make_tag_vector(&[
-            (1, 600_000),
-            (2, 400_000),
-        ]);
+        let tags = make_tag_vector(&[(1, 600_000), (2, 400_000)]);
 
         let dominant = extract_dominant_cluster_from_tags(&[&tags], &[1_000_000]);
 
@@ -485,11 +686,8 @@ mod tests {
         let fee_config = FeeConfig::default();
 
         // Calculate minimum fee
-        let effective_wealth = compute_effective_cluster_wealth_from_tags(
-            &input_tags,
-            &input_values,
-            &wealth_map,
-        );
+        let effective_wealth =
+            compute_effective_cluster_wealth_from_tags(&input_tags, &input_values, &wealth_map);
         let min_fee = fee_config.compute_fee(TransactionType::Hidden, 4000, effective_wealth, 0);
 
         // Should pass with exact minimum
@@ -593,5 +791,349 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    // ========================================================================
+    // Ring Cluster Fee Validation Tests
+    // ========================================================================
+
+    #[test]
+    fn test_single_utxo_cluster_wealth() {
+        // 100% cluster 1
+        let tags = make_tag_vector(&[(1, TAG_WEIGHT_SCALE)]);
+
+        let mut wealth_map = ClusterWealthMap::new();
+        wealth_map.set(ClusterId(1), 10_000_000);
+
+        let wealth = compute_single_utxo_cluster_wealth(&tags, 1_000_000, &wealth_map);
+        assert_eq!(wealth, 10_000_000);
+    }
+
+    #[test]
+    fn test_single_utxo_mixed_clusters() {
+        // 50% cluster 1, 50% cluster 2
+        let tags = make_tag_vector(&[(1, 500_000), (2, 500_000)]);
+
+        let mut wealth_map = ClusterWealthMap::new();
+        wealth_map.set(ClusterId(1), 10_000_000);
+        wealth_map.set(ClusterId(2), 2_000_000);
+
+        let wealth = compute_single_utxo_cluster_wealth(&tags, 1_000_000, &wealth_map);
+        // (50% × 10M + 50% × 2M) = 6M
+        assert_eq!(wealth, 6_000_000);
+    }
+
+    #[test]
+    fn test_single_utxo_with_background() {
+        // 50% cluster 1, 50% background
+        let tags = make_tag_vector(&[(1, 500_000)]);
+
+        let mut wealth_map = ClusterWealthMap::new();
+        wealth_map.set(ClusterId(1), 10_000_000);
+
+        let wealth = compute_single_utxo_cluster_wealth(&tags, 1_000_000, &wealth_map);
+        // (50% × 10M + 50% × 0) = 5M
+        assert_eq!(wealth, 5_000_000);
+    }
+
+    #[test]
+    fn test_ring_max_cluster_wealth_homogeneous() {
+        // Ring with all members from same cluster
+        let tags1 = make_tag_vector(&[(1, TAG_WEIGHT_SCALE)]);
+        let tags2 = make_tag_vector(&[(1, TAG_WEIGHT_SCALE)]);
+        let tags3 = make_tag_vector(&[(1, TAG_WEIGHT_SCALE)]);
+
+        let ring_tags: Vec<&ClusterTagVector> = vec![&tags1, &tags2, &tags3];
+        let ring_values = vec![1_000_000u64, 1_000_000, 1_000_000];
+
+        let mut wealth_map = ClusterWealthMap::new();
+        wealth_map.set(ClusterId(1), 10_000_000);
+
+        let max_wealth = compute_ring_max_cluster_wealth(&ring_tags, &ring_values, &wealth_map);
+        assert_eq!(max_wealth, 10_000_000);
+    }
+
+    #[test]
+    fn test_ring_max_cluster_wealth_heterogeneous() {
+        // Ring with members from different clusters - max wins
+        let tags1 = make_tag_vector(&[(1, TAG_WEIGHT_SCALE)]); // Rich cluster
+        let tags2 = make_tag_vector(&[(2, TAG_WEIGHT_SCALE)]); // Poor cluster
+        let tags3 = make_tag_vector(&[(3, TAG_WEIGHT_SCALE)]); // Medium cluster
+
+        let ring_tags: Vec<&ClusterTagVector> = vec![&tags1, &tags2, &tags3];
+        let ring_values = vec![1_000_000u64, 1_000_000, 1_000_000];
+
+        let mut wealth_map = ClusterWealthMap::new();
+        wealth_map.set(ClusterId(1), 100_000_000); // Rich
+        wealth_map.set(ClusterId(2), 1_000_000); // Poor
+        wealth_map.set(ClusterId(3), 10_000_000); // Medium
+
+        let max_wealth = compute_ring_max_cluster_wealth(&ring_tags, &ring_values, &wealth_map);
+        // Max is cluster 1 with 100M
+        assert_eq!(max_wealth, 100_000_000);
+    }
+
+    #[test]
+    fn test_ring_max_cluster_wealth_poor_decoys() {
+        // Attacker with rich coins selects all poor decoys
+        // The real input (rich) should still determine the max
+        let tags_rich = make_tag_vector(&[(1, TAG_WEIGHT_SCALE)]); // Real input (rich)
+        let tags_poor1 = make_tag_vector(&[(2, TAG_WEIGHT_SCALE)]); // Decoy (poor)
+        let tags_poor2 = make_tag_vector(&[(2, TAG_WEIGHT_SCALE)]); // Decoy (poor)
+        let tags_poor3 = make_tag_vector(&[(2, TAG_WEIGHT_SCALE)]); // Decoy (poor)
+
+        let ring_tags: Vec<&ClusterTagVector> =
+            vec![&tags_rich, &tags_poor1, &tags_poor2, &tags_poor3];
+        let ring_values = vec![1_000_000u64; 4];
+
+        let mut wealth_map = ClusterWealthMap::new();
+        wealth_map.set(ClusterId(1), 50_000_000); // Rich cluster
+        wealth_map.set(ClusterId(2), 100_000); // Poor cluster
+
+        let max_wealth = compute_ring_max_cluster_wealth(&ring_tags, &ring_values, &wealth_map);
+        // Max is cluster 1 (the real input) - attacker can't hide!
+        assert_eq!(max_wealth, 50_000_000);
+    }
+
+    #[test]
+    fn test_ring_max_cluster_wealth_background_only() {
+        // Ring with all background coins
+        let tags1 = ClusterTagVector::empty();
+        let tags2 = ClusterTagVector::empty();
+
+        let ring_tags: Vec<&ClusterTagVector> = vec![&tags1, &tags2];
+        let ring_values = vec![1_000_000u64, 1_000_000];
+
+        let wealth_map = ClusterWealthMap::new();
+
+        let max_wealth = compute_ring_max_cluster_wealth(&ring_tags, &ring_values, &wealth_map);
+        assert_eq!(max_wealth, 0);
+    }
+
+    #[test]
+    fn test_validate_ring_cluster_fee_sufficient() {
+        // Ring with one rich member
+        let tags_rich = make_tag_vector(&[(1, TAG_WEIGHT_SCALE)]);
+        let tags_poor = make_tag_vector(&[(2, TAG_WEIGHT_SCALE)]);
+
+        let ring_tags: Vec<&ClusterTagVector> = vec![&tags_rich, &tags_poor];
+        let ring_values = vec![1_000_000u64, 1_000_000];
+
+        let mut wealth_map = ClusterWealthMap::new();
+        wealth_map.set(ClusterId(1), 50_000_000);
+        wealth_map.set(ClusterId(2), 100_000);
+
+        let fee_config = FeeConfig::default();
+
+        // Calculate the required fee
+        let max_wealth = compute_ring_max_cluster_wealth(&ring_tags, &ring_values, &wealth_map);
+        let min_fee =
+            fee_config.compute_fee_with_outputs(TransactionType::Hidden, 4000, max_wealth, 2, 0);
+
+        // Should pass with exact minimum
+        let result = validate_ring_cluster_fee(
+            min_fee,
+            4000,
+            &ring_tags,
+            &ring_values,
+            2,
+            0,
+            &fee_config,
+            &wealth_map,
+        );
+        assert!(result.is_ok());
+
+        // Should pass with more than minimum
+        let result = validate_ring_cluster_fee(
+            min_fee + 1000,
+            4000,
+            &ring_tags,
+            &ring_values,
+            2,
+            0,
+            &fee_config,
+            &wealth_map,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_ring_cluster_fee_insufficient() {
+        // Ring with one rich member
+        let tags_rich = make_tag_vector(&[(1, TAG_WEIGHT_SCALE)]);
+        let tags_poor = make_tag_vector(&[(2, TAG_WEIGHT_SCALE)]);
+
+        let ring_tags: Vec<&ClusterTagVector> = vec![&tags_rich, &tags_poor];
+        let ring_values = vec![1_000_000u64, 1_000_000];
+
+        let mut wealth_map = ClusterWealthMap::new();
+        wealth_map.set(ClusterId(1), 100_000_000); // Very rich
+        wealth_map.set(ClusterId(2), 100_000);
+
+        let fee_config = FeeConfig::default();
+
+        // Should fail with zero fee
+        let result = validate_ring_cluster_fee(
+            0,
+            4000,
+            &ring_tags,
+            &ring_values,
+            2,
+            0,
+            &fee_config,
+            &wealth_map,
+        );
+        assert!(matches!(
+            result,
+            Err(TransactionValidationError::InsufficientClusterFee { .. })
+        ));
+
+        // Should fail with fee calculated from poor cluster only
+        let poor_fee = fee_config.compute_fee_with_outputs(
+            TransactionType::Hidden,
+            4000,
+            100_000, // Poor cluster wealth
+            2,
+            0,
+        );
+        let result = validate_ring_cluster_fee(
+            poor_fee,
+            4000,
+            &ring_tags,
+            &ring_values,
+            2,
+            0,
+            &fee_config,
+            &wealth_map,
+        );
+        assert!(matches!(
+            result,
+            Err(TransactionValidationError::InsufficientClusterFee { .. })
+        ));
+    }
+
+    #[test]
+    fn test_ring_fee_gaming_prevention() {
+        // Test that attacker with rich coins cannot lower fees by selecting poor decoys
+        let tags_attacker = make_tag_vector(&[(1, TAG_WEIGHT_SCALE)]); // Rich attacker
+        let tags_decoy1 = make_tag_vector(&[(2, TAG_WEIGHT_SCALE)]); // Poor decoy
+        let tags_decoy2 = make_tag_vector(&[(2, TAG_WEIGHT_SCALE)]); // Poor decoy
+
+        // Ring with attacker's rich coin + 2 poor decoys
+        let ring_tags: Vec<&ClusterTagVector> = vec![&tags_attacker, &tags_decoy1, &tags_decoy2];
+        let ring_values = vec![1_000_000u64; 3];
+
+        let mut wealth_map = ClusterWealthMap::new();
+        wealth_map.set(ClusterId(1), 100_000_000); // Rich attacker cluster
+        wealth_map.set(ClusterId(2), 10_000); // Very poor decoy cluster
+
+        let fee_config = FeeConfig::default();
+
+        // Fee for the rich cluster (what attacker should pay)
+        let rich_fee =
+            fee_config.compute_fee_with_outputs(TransactionType::Hidden, 4000, 100_000_000, 2, 0);
+
+        // Fee for the poor cluster (what attacker wants to pay)
+        let poor_fee =
+            fee_config.compute_fee_with_outputs(TransactionType::Hidden, 4000, 10_000, 2, 0);
+
+        // Attacker tries to pay the poor fee - should fail!
+        let result = validate_ring_cluster_fee(
+            poor_fee,
+            4000,
+            &ring_tags,
+            &ring_values,
+            2,
+            0,
+            &fee_config,
+            &wealth_map,
+        );
+        assert!(
+            result.is_err(),
+            "Attacker should not be able to pay reduced fee using poor decoys"
+        );
+
+        // Attacker must pay the rich fee to pass
+        let result = validate_ring_cluster_fee(
+            rich_fee,
+            4000,
+            &ring_tags,
+            &ring_values,
+            2,
+            0,
+            &fee_config,
+            &wealth_map,
+        );
+        assert!(
+            result.is_ok(),
+            "Transaction should pass when paying fee based on max cluster wealth"
+        );
+    }
+
+    #[test]
+    fn test_ring_fee_with_dynamic_base() {
+        let tags = make_tag_vector(&[(1, TAG_WEIGHT_SCALE)]);
+        let ring_tags: Vec<&ClusterTagVector> = vec![&tags];
+        let ring_values = vec![1_000_000u64];
+
+        let mut wealth_map = ClusterWealthMap::new();
+        wealth_map.set(ClusterId(1), 10_000_000);
+
+        let fee_config = FeeConfig::default();
+
+        // Calculate fee with 10x dynamic base
+        let dynamic_base = 10;
+        let max_wealth = compute_ring_max_cluster_wealth(&ring_tags, &ring_values, &wealth_map);
+        let min_fee = fee_config.compute_fee_with_dynamic_base_and_outputs(
+            TransactionType::Hidden,
+            4000,
+            max_wealth,
+            2,
+            0,
+            dynamic_base,
+        );
+
+        // Should pass with sufficient fee
+        let result = validate_ring_cluster_fee_dynamic(
+            min_fee,
+            4000,
+            &ring_tags,
+            &ring_values,
+            2,
+            0,
+            &fee_config,
+            &wealth_map,
+            dynamic_base,
+        );
+        assert!(result.is_ok());
+
+        // Should fail with reduced fee
+        let result = validate_ring_cluster_fee_dynamic(
+            min_fee / 2,
+            4000,
+            &ring_tags,
+            &ring_values,
+            2,
+            0,
+            &fee_config,
+            &wealth_map,
+            dynamic_base,
+        );
+        assert!(matches!(
+            result,
+            Err(TransactionValidationError::InsufficientClusterFee { .. })
+        ));
+    }
+
+    #[test]
+    fn test_ring_fee_empty_ring() {
+        // Empty ring should return 0 wealth
+        let ring_tags: Vec<&ClusterTagVector> = vec![];
+        let ring_values: Vec<u64> = vec![];
+
+        let wealth_map = ClusterWealthMap::new();
+
+        let max_wealth = compute_ring_max_cluster_wealth(&ring_tags, &ring_values, &wealth_map);
+        assert_eq!(max_wealth, 0);
     }
 }
