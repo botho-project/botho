@@ -129,6 +129,84 @@ impl RingDecayInfo {
     pub fn eligible_count(&self) -> usize {
         self.member_eligibility.iter().filter(|&&e| e).count()
     }
+
+    /// Conservative decay decision for ring signatures.
+    ///
+    /// This returns `true` only if ALL ring members are eligible for decay.
+    /// This is the conservative choice because:
+    /// - If the real input is young (not eligible), decay shouldn't apply
+    /// - If ANY decoy is young, we conservatively assume it might be the real one
+    ///
+    /// This prevents attackers from using old decoys to force decay on young coins.
+    ///
+    /// For Phase 1 (public tags), this is the recommended approach as it
+    /// provides safety without requiring ZK proofs.
+    pub fn conservative_decay_eligible(&self) -> bool {
+        self.all_eligible()
+    }
+}
+
+/// Calculate conservative cluster factor from ring member tags (Phase 1).
+///
+/// For ring signatures with public tags, we use the MAXIMUM cluster factor
+/// among all ring members. This is conservative because:
+/// - Attackers want LOW fees, so would prefer low cluster factors
+/// - Using max means any high-factor decoy penalizes the transaction
+/// - Gaming becomes counter-productive: must carefully select ALL-low decoys
+///
+/// This prevents fee evasion while preserving privacy.
+///
+/// # Arguments
+/// * `ring_tags` - Tag vectors for each ring member
+/// * `cluster_wealth` - Total wealth of each cluster (for factor calculation)
+/// * `total_supply` - Total coin supply for factor normalization
+///
+/// # Returns
+/// The maximum cluster factor among ring members, used for fee calculation.
+pub fn ring_cluster_factor(
+    ring_tags: &[TagVector],
+    cluster_wealth: &std::collections::HashMap<crate::ClusterId, u64>,
+    total_supply: u64,
+) -> f64 {
+    ring_tags
+        .iter()
+        .map(|tags| calculate_cluster_factor(tags, cluster_wealth, total_supply))
+        .fold(0.0, f64::max)
+}
+
+/// Calculate cluster factor for a single tag vector.
+///
+/// The cluster factor represents how "wealthy" the coins are based on their
+/// cluster attribution. Higher factor = higher progressive fees.
+fn calculate_cluster_factor(
+    tags: &TagVector,
+    cluster_wealth: &std::collections::HashMap<crate::ClusterId, u64>,
+    total_supply: u64,
+) -> f64 {
+    if total_supply == 0 {
+        return 0.0;
+    }
+
+    let mut weighted_factor = 0.0;
+    let mut total_weight = 0u64;
+
+    // Weighted average of cluster wealth fractions
+    for (cluster, weight) in tags.iter() {
+        let cluster_w = cluster_wealth.get(&cluster).copied().unwrap_or(0);
+        let wealth_fraction = cluster_w as f64 / total_supply as f64;
+        weighted_factor += wealth_fraction * weight as f64;
+        total_weight += weight as u64;
+    }
+
+    // Background weight contributes nothing (fully diffused)
+    let bg = tags.background() as u64;
+    total_weight += bg;
+
+    if total_weight == 0 {
+        return 0.0;
+    }
+
+    weighted_factor / total_weight as f64 * TAG_WEIGHT_SCALE as f64
 }
 
 #[cfg(test)]
@@ -264,5 +342,199 @@ mod tests {
 
         assert!(info.all_eligible());
         assert!(!info.mixed_eligibility());
+    }
+
+    // ========================================================================
+    // Ring Signature Tag Propagation Tests (Phase 1)
+    // ========================================================================
+
+    #[test]
+    fn test_conservative_decay_eligible_all_old() {
+        let config = AgeDecayConfig::default();
+        let current_block = 10_000;
+
+        // All ring members are old enough (>720 blocks)
+        let creation_blocks = vec![1_000, 2_000, 3_000, 4_000];
+        let info = RingDecayInfo::new(&creation_blocks, current_block, &config);
+
+        // Conservative: should allow decay since ALL are eligible
+        assert!(
+            info.conservative_decay_eligible(),
+            "All old = conservative decay allowed"
+        );
+    }
+
+    #[test]
+    fn test_conservative_decay_eligible_one_young() {
+        let config = AgeDecayConfig::default();
+        let current_block = 10_000;
+
+        // Most are old, but one is young (500 blocks old < 720)
+        let creation_blocks = vec![
+            1_000, // 9000 blocks old - eligible
+            2_000, // 8000 blocks old - eligible
+            9_500, // 500 blocks old - NOT eligible
+            3_000, // 7000 blocks old - eligible
+        ];
+        let info = RingDecayInfo::new(&creation_blocks, current_block, &config);
+
+        // Conservative: should NOT allow decay since one could be the real input
+        assert!(
+            !info.conservative_decay_eligible(),
+            "One young = no conservative decay"
+        );
+    }
+
+    #[test]
+    fn test_conservative_decay_eligible_all_young() {
+        let config = AgeDecayConfig::default();
+        let current_block = 1_000;
+
+        // All ring members are young
+        let creation_blocks = vec![500, 600, 700, 800];
+        let info = RingDecayInfo::new(&creation_blocks, current_block, &config);
+
+        assert!(
+            !info.conservative_decay_eligible(),
+            "All young = no conservative decay"
+        );
+    }
+
+    #[test]
+    fn test_ring_cluster_factor_single_wealthy_cluster() {
+        let cluster = ClusterId::new(1);
+        let mut cluster_wealth = std::collections::HashMap::new();
+        cluster_wealth.insert(cluster, 1_000_000);
+
+        let total_supply = 10_000_000;
+
+        // Ring with all members from the wealthy cluster
+        let ring_tags = vec![
+            TagVector::single(cluster),
+            TagVector::single(cluster),
+            TagVector::single(cluster),
+        ];
+
+        let factor = ring_cluster_factor(&ring_tags, &cluster_wealth, total_supply);
+
+        // Factor should be 10% (1M / 10M) * TAG_WEIGHT_SCALE
+        let expected = 0.1 * TAG_WEIGHT_SCALE as f64;
+        assert!(
+            (factor - expected).abs() < 1000.0,
+            "Expected factor ~{}, got {}",
+            expected,
+            factor
+        );
+    }
+
+    #[test]
+    fn test_ring_cluster_factor_mixed_clusters() {
+        let rich_cluster = ClusterId::new(1);
+        let poor_cluster = ClusterId::new(2);
+
+        let mut cluster_wealth = std::collections::HashMap::new();
+        cluster_wealth.insert(rich_cluster, 5_000_000); // 50% of supply
+        cluster_wealth.insert(poor_cluster, 100_000); // 1% of supply
+
+        let total_supply = 10_000_000;
+
+        // Ring with one rich and one poor member
+        let ring_tags = vec![
+            TagVector::single(rich_cluster),
+            TagVector::single(poor_cluster),
+        ];
+
+        let factor = ring_cluster_factor(&ring_tags, &cluster_wealth, total_supply);
+
+        // Conservative = max factor, which is the rich cluster (50%)
+        let expected_max = 0.5 * TAG_WEIGHT_SCALE as f64;
+        assert!(
+            (factor - expected_max).abs() < 1000.0,
+            "Expected max factor ~{}, got {}",
+            expected_max,
+            factor
+        );
+    }
+
+    #[test]
+    fn test_ring_cluster_factor_background_only() {
+        let cluster_wealth = std::collections::HashMap::new();
+        let total_supply = 10_000_000;
+
+        // Ring with empty tags (all background)
+        let ring_tags = vec![TagVector::new(), TagVector::new()];
+
+        let factor = ring_cluster_factor(&ring_tags, &cluster_wealth, total_supply);
+
+        // Background-only = 0 cluster factor
+        assert!(factor < 0.001, "Background should have ~0 factor, got {}", factor);
+    }
+
+    #[test]
+    fn test_ring_cluster_factor_prevents_gaming() {
+        // Scenario: Attacker has rich coins, tries to pick poor decoys
+        let rich_cluster = ClusterId::new(1);
+        let poor_cluster = ClusterId::new(2);
+
+        let mut cluster_wealth = std::collections::HashMap::new();
+        cluster_wealth.insert(rich_cluster, 8_000_000); // 80% of supply (whale)
+        cluster_wealth.insert(poor_cluster, 50_000); // 0.5% of supply
+
+        let total_supply = 10_000_000;
+
+        // Attacker's real input is from rich cluster
+        let real_input_tags = TagVector::single(rich_cluster);
+
+        // Attacker picks 10 poor decoys to try to lower their fee
+        let mut ring_tags = vec![real_input_tags];
+        for _ in 0..10 {
+            ring_tags.push(TagVector::single(poor_cluster));
+        }
+
+        let factor = ring_cluster_factor(&ring_tags, &cluster_wealth, total_supply);
+
+        // Conservative = max factor, so attacker STILL pays rich cluster rate
+        let expected = 0.8 * TAG_WEIGHT_SCALE as f64;
+        assert!(
+            (factor - expected).abs() < 1000.0,
+            "Gaming attempt should fail: expected {}, got {}",
+            expected,
+            factor
+        );
+    }
+
+    #[test]
+    fn test_ring_cluster_factor_legitimate_mixing() {
+        // Scenario: Legitimate user has coins that went through commerce
+        let c1 = ClusterId::new(1);
+        let c2 = ClusterId::new(2);
+
+        let mut cluster_wealth = std::collections::HashMap::new();
+        cluster_wealth.insert(c1, 2_000_000); // 20%
+        cluster_wealth.insert(c2, 3_000_000); // 30%
+
+        let total_supply = 10_000_000;
+
+        // User's coin has mixed tags from commerce
+        let mut mixed_tags = TagVector::new();
+        mixed_tags.set(c1, 500_000); // 50% from cluster 1
+        mixed_tags.set(c2, 500_000); // 50% from cluster 2
+
+        // Decoys have similar profiles (good decoy selection)
+        let mut decoy_tags = TagVector::new();
+        decoy_tags.set(c1, 400_000); // 40%
+        decoy_tags.set(c2, 600_000); // 60%
+
+        let ring_tags = vec![mixed_tags, decoy_tags];
+
+        let factor = ring_cluster_factor(&ring_tags, &cluster_wealth, total_supply);
+
+        // Factor should be reasonable (max of the two mixed profiles)
+        // Both are similar due to commerce, so factor reflects legitimate activity
+        assert!(
+            factor > 100_000.0 && factor < 500_000.0,
+            "Legitimate commerce factor: {}",
+            factor
+        );
     }
 }

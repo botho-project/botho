@@ -66,7 +66,7 @@ pub use cluster::{ClusterId, ClusterWealth};
 // This gives minters predictable income while absorbing fee volatility.
 pub use monetary::{DifficultyController, MonetaryPolicy, MonetaryState, MonetaryStats};
 
-pub use age_decay::{apply_age_decay, AgeDecayConfig, RingDecayInfo};
+pub use age_decay::{apply_age_decay, ring_cluster_factor, AgeDecayConfig, RingDecayInfo};
 pub use block_decay::{
     AndDecayConfig, AndTagVector, BlockAwareTagVector, BlockDecayConfig, RateLimitedDecayConfig,
     RateLimitedTagVector,
