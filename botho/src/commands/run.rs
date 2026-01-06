@@ -23,8 +23,10 @@ use crate::{
     block::MintingTx,
     config::{Config, QuorumMode},
     consensus::{
-        BlockBuilder, ConsensusConfig, ConsensusEvent, ConsensusService, TransactionValidator,
+        BlockBuilder, ConsensusConfig, ConsensusEvent, ConsensusService, LotteryFeeConfig,
+        TransactionValidator,
     },
+    node::SharedLedger,
     network::{
         BlockTxn, CompactBlock, GetBlockTxn, NetworkDiscovery, NetworkEvent, QuorumBuilder,
         ReconstructionResult,
@@ -869,6 +871,8 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                             // Build block from externalized values
                             match build_block_from_externalized(&values, &consensus) {
                                 Ok(block) => {
+                                    // Apply lottery fee redistribution
+                                    let block = apply_lottery_to_block(block, &node.shared_ledger());
                                     info!("Built block {} from consensus", block.height());
 
                                     // Add to ledger
@@ -1105,6 +1109,14 @@ fn peer_id_to_node_id(peer_id: &libp2p::PeerId) -> NodeID {
     }
 }
 
+/// Lottery configuration constants
+/// Minimum UTXO age in blocks for lottery eligibility (roughly 1 hour)
+const LOTTERY_MIN_AGE_BLOCKS: u64 = 360;
+/// Minimum UTXO value for lottery eligibility (0.001 credits)
+const LOTTERY_MIN_VALUE: u64 = 1_000_000_000;
+/// Maximum lottery candidates to consider (DoS protection)
+const LOTTERY_MAX_CANDIDATES: usize = 10_000;
+
 /// Build a block from externalized consensus values
 fn build_block_from_externalized(
     values: &[crate::consensus::ConsensusValue],
@@ -1127,4 +1139,63 @@ fn build_block_from_externalized(
     )
     .map(|built| built.block)
     .map_err(|e| anyhow::anyhow!("Block build error: {}", e))
+}
+
+/// Apply lottery to a block using UTXOs from the ledger.
+///
+/// This draws lottery winners from the UTXO set and adds lottery outputs
+/// to the block for fee redistribution.
+fn apply_lottery_to_block(
+    block: crate::block::Block,
+    shared_ledger: &SharedLedger,
+) -> crate::block::Block {
+    // Skip lottery if no fees in the block
+    let total_fees: u64 = block.transactions.iter().map(|tx| tx.fee).sum();
+    if total_fees == 0 {
+        return block;
+    }
+
+    // Get lottery candidates from ledger
+    let candidates: Vec<crate::transaction::Utxo> = match shared_ledger.read() {
+        Ok(ledger) => {
+            match ledger.get_lottery_candidates(
+                block.height(),
+                LOTTERY_MIN_AGE_BLOCKS,
+                LOTTERY_MIN_VALUE,
+                LOTTERY_MAX_CANDIDATES,
+            ) {
+                Ok(c) => c,
+                Err(e) => {
+                    warn!("Failed to get lottery candidates: {}", e);
+                    return block;
+                }
+            }
+        }
+        Err(e) => {
+            warn!("Failed to acquire ledger lock for lottery: {}", e);
+            return block;
+        }
+    };
+
+    if candidates.is_empty() {
+        debug!("No lottery candidates available, skipping lottery");
+        return block;
+    }
+
+    info!(
+        candidates = candidates.len(),
+        fees = total_fees,
+        "Applying lottery to block"
+    );
+
+    // Create UTXO lookup function for winner key recovery
+    let ledger_clone = shared_ledger.clone();
+    let utxo_lookup = move |utxo_id: &[u8; 36]| {
+        let ledger = ledger_clone.read().ok()?;
+        ledger.get_utxo_by_id(utxo_id).ok().flatten()
+    };
+
+    // Apply lottery with default configuration
+    let lottery_config = LotteryFeeConfig::default();
+    BlockBuilder::apply_lottery(block, &candidates, utxo_lookup, &lottery_config)
 }

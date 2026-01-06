@@ -588,12 +588,17 @@ impl Ledger {
 
     /// Get a specific UTXO by ID
     pub fn get_utxo(&self, id: &UtxoId) -> Result<Option<Utxo>, LedgerError> {
+        self.get_utxo_by_id(&id.to_bytes())
+    }
+
+    /// Get a specific UTXO by raw 36-byte ID (tx_hash || output_index)
+    pub fn get_utxo_by_id(&self, id: &[u8; 36]) -> Result<Option<Utxo>, LedgerError> {
         let rtxn = self
             .env
             .read_txn()
             .map_err(|e| LedgerError::Database(format!("Failed to start read txn: {}", e)))?;
 
-        match self.utxo_db.get(&rtxn, &id.to_bytes()) {
+        match self.utxo_db.get(&rtxn, id) {
             Ok(Some(bytes)) => {
                 let utxo: Utxo = bincode::deserialize(bytes)
                     .map_err(|e| LedgerError::Serialization(e.to_string()))?;
@@ -1684,6 +1689,73 @@ impl Ledger {
             .map_err(|e| LedgerError::Serialization(e.to_string()))?;
 
         self.load_from_snapshot(&snapshot, expected_block_hash)
+    }
+
+    // ========================================================================
+    // Lottery Candidate Selection (for Fee Redistribution)
+    // ========================================================================
+
+    /// Get lottery candidates from the UTXO set.
+    ///
+    /// Iterates all UTXOs and returns those eligible for lottery participation
+    /// based on age and value criteria.
+    ///
+    /// # Arguments
+    /// * `current_height` - Current block height (for age calculation)
+    /// * `min_age` - Minimum age in blocks for eligibility
+    /// * `min_value` - Minimum UTXO value for eligibility
+    /// * `max_candidates` - Maximum number of candidates to return (DoS protection)
+    ///
+    /// # Returns
+    /// Vector of `(Utxo, UtxoId as [u8; 36])` pairs for eligible candidates
+    pub fn get_lottery_candidates(
+        &self,
+        current_height: u64,
+        min_age: u64,
+        min_value: u64,
+        max_candidates: usize,
+    ) -> Result<Vec<Utxo>, LedgerError> {
+        let rtxn = self
+            .env
+            .read_txn()
+            .map_err(|e| LedgerError::Database(format!("Failed to start read txn: {}", e)))?;
+
+        let max_creation_height = current_height.saturating_sub(min_age);
+        let mut candidates = Vec::new();
+
+        // Iterate over all UTXOs
+        let iter = self
+            .utxo_db
+            .iter(&rtxn)
+            .map_err(|e| LedgerError::Database(format!("Failed to create iterator: {}", e)))?;
+
+        for result in iter {
+            if candidates.len() >= max_candidates {
+                break;
+            }
+
+            if let Ok((_, value)) = result {
+                if let Ok(utxo) = bincode::deserialize::<Utxo>(value) {
+                    // Check age eligibility
+                    if utxo.created_at <= max_creation_height {
+                        // Check value eligibility
+                        if utxo.output.amount >= min_value {
+                            candidates.push(utxo);
+                        }
+                    }
+                }
+            }
+        }
+
+        debug!(
+            current_height = current_height,
+            min_age = min_age,
+            min_value = min_value,
+            candidates = candidates.len(),
+            "Collected lottery candidates"
+        );
+
+        Ok(candidates)
     }
 }
 
