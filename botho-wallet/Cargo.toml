@@ -21,6 +21,7 @@ bth-crypto-keys = { path = "../crypto/keys" }
 bth-crypto-pq = { path = "../crypto/pq", optional = true }
 bth-crypto-ring-signature = { path = "../crypto/ring-signature" }
 bth-core = { path = "../core" }
+bth-cluster-tax = { path = "../cluster-tax", features = ["serde"] }
 botho = { path = "../botho", optional = true }
 
 # BIP39 mnemonic support

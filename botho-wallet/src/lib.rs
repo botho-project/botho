@@ -11,6 +11,7 @@
 //! - Multiple node connections for verification
 
 pub mod discovery;
+pub mod fee_estimation;
 pub mod keys;
 pub mod rpc_pool;
 pub mod secmem;
@@ -20,6 +21,7 @@ pub mod transaction;
 pub mod commands;
 
 pub use discovery::NodeDiscovery;
+pub use fee_estimation::{FeeEstimator, StoredTags};
 pub use keys::WalletKeys;
 pub use rpc_pool::RpcPool;
 pub use storage::EncryptedWallet;
