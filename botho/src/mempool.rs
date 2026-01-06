@@ -316,6 +316,19 @@ impl PendingTx {
     }
 }
 
+/// Metrics for mempool fee enforcement.
+///
+/// Tracks rejection statistics for monitoring and debugging.
+#[derive(Debug, Clone, Default)]
+pub struct MempoolFeeMetrics {
+    /// Total transactions rejected due to insufficient fee
+    pub fee_rejections: u64,
+    /// Total fee shortfall across all rejections (sum of minimum - provided)
+    pub total_fee_shortfall: u64,
+    /// Highest fee shortfall seen in a single rejection
+    pub max_fee_shortfall: u64,
+}
+
 /// Transaction mempool
 pub struct Mempool {
     /// Pending transactions by hash
@@ -328,6 +341,10 @@ pub struct Mempool {
     dynamic_fee: DynamicFeeBase,
     /// Whether we're at minimum block time (triggers dynamic fee adjustment)
     at_min_block_time: bool,
+    /// Whether to enforce minimum fee requirements (can be disabled for testnet)
+    enforce_minimum_fee: bool,
+    /// Metrics tracking for fee enforcement
+    fee_metrics: MempoolFeeMetrics,
 }
 
 impl Mempool {
@@ -339,6 +356,8 @@ impl Mempool {
             fee_config: FeeConfig::default(),
             dynamic_fee: DynamicFeeBase::default(),
             at_min_block_time: false,
+            enforce_minimum_fee: true,
+            fee_metrics: MempoolFeeMetrics::default(),
         }
     }
 
@@ -350,6 +369,8 @@ impl Mempool {
             fee_config,
             dynamic_fee: DynamicFeeBase::default(),
             at_min_block_time: false,
+            enforce_minimum_fee: true,
+            fee_metrics: MempoolFeeMetrics::default(),
         }
     }
 
@@ -361,7 +382,49 @@ impl Mempool {
             fee_config,
             dynamic_fee,
             at_min_block_time: false,
+            enforce_minimum_fee: true,
+            fee_metrics: MempoolFeeMetrics::default(),
         }
+    }
+
+    /// Create a new mempool with fee enforcement disabled (for testnet)
+    ///
+    /// When fee enforcement is disabled, transactions with insufficient fees
+    /// will still be accepted but logged as warnings. This is useful for
+    /// testnet environments where fee requirements may be relaxed.
+    pub fn with_fee_enforcement_disabled(fee_config: FeeConfig) -> Self {
+        Self {
+            txs: HashMap::new(),
+            spent_key_images: HashSet::new(),
+            fee_config,
+            dynamic_fee: DynamicFeeBase::default(),
+            at_min_block_time: false,
+            enforce_minimum_fee: false,
+            fee_metrics: MempoolFeeMetrics::default(),
+        }
+    }
+
+    /// Set whether minimum fee enforcement is enabled
+    ///
+    /// When disabled, transactions with insufficient fees will be accepted
+    /// with a warning. Useful for testnet environments.
+    pub fn set_fee_enforcement(&mut self, enforce: bool) {
+        self.enforce_minimum_fee = enforce;
+    }
+
+    /// Check if minimum fee enforcement is enabled
+    pub fn is_fee_enforcement_enabled(&self) -> bool {
+        self.enforce_minimum_fee
+    }
+
+    /// Get fee enforcement metrics
+    pub fn fee_metrics(&self) -> &MempoolFeeMetrics {
+        &self.fee_metrics
+    }
+
+    /// Reset fee metrics (useful for testing or periodic resets)
+    pub fn reset_fee_metrics(&mut self) {
+        self.fee_metrics = MempoolFeeMetrics::default();
     }
 
     /// Get the fee configuration
@@ -582,20 +645,48 @@ impl Mempool {
         // Get the current dynamic fee base (adjusts based on congestion)
         let dynamic_base = self.dynamic_fee.compute_base(self.at_min_block_time);
 
-        // Use dynamic fee calculation for minimum
-        let minimum_fee = self.fee_config.minimum_fee_dynamic(
+        // Use dynamic fee calculation for minimum (with actual output count)
+        let num_outputs = tx.outputs.len();
+        let minimum_fee = self.fee_config.minimum_fee_dynamic_with_outputs(
             fee_tx_type,
             tx_size_bytes,
             cluster_wealth,
+            num_outputs,
             num_memos,
             dynamic_base,
         );
 
         if tx.fee < minimum_fee {
-            return Err(MempoolError::FeeTooLow {
-                minimum: minimum_fee,
-                provided: tx.fee,
-            });
+            let shortfall = minimum_fee.saturating_sub(tx.fee);
+
+            // Track metrics for all insufficient fees (even if not enforced)
+            self.fee_metrics.fee_rejections += 1;
+            self.fee_metrics.total_fee_shortfall =
+                self.fee_metrics.total_fee_shortfall.saturating_add(shortfall);
+            self.fee_metrics.max_fee_shortfall =
+                self.fee_metrics.max_fee_shortfall.max(shortfall);
+
+            if self.enforce_minimum_fee {
+                debug!(
+                    "Rejecting transaction {}: fee {} < minimum {} (cluster_wealth={}, outputs={})",
+                    hex::encode(&tx_hash[0..8]),
+                    tx.fee,
+                    minimum_fee,
+                    cluster_wealth,
+                    num_outputs
+                );
+                return Err(MempoolError::FeeTooLow {
+                    minimum: minimum_fee,
+                    provided: tx.fee,
+                });
+            } else {
+                warn!(
+                    "Accepting under-fee transaction {} (enforcement disabled): fee {} < minimum {}",
+                    hex::encode(&tx_hash[0..8]),
+                    tx.fee,
+                    minimum_fee
+                );
+            }
         }
 
         // Mark inputs as spent
@@ -1518,5 +1609,112 @@ mod tests {
             "3x fee should compensate for 3x cluster factor (ratio: {})",
             ratio
         );
+    }
+
+    // =========== Fee Enforcement Tests ===========
+
+    #[test]
+    fn test_mempool_fee_enforcement_enabled_by_default() {
+        let mempool = Mempool::new();
+        assert!(
+            mempool.is_fee_enforcement_enabled(),
+            "Fee enforcement should be enabled by default"
+        );
+    }
+
+    #[test]
+    fn test_mempool_fee_enforcement_can_be_disabled() {
+        let mempool = Mempool::with_fee_enforcement_disabled(FeeConfig::default());
+        assert!(
+            !mempool.is_fee_enforcement_enabled(),
+            "Fee enforcement should be disabled"
+        );
+    }
+
+    #[test]
+    fn test_mempool_fee_enforcement_toggle() {
+        let mut mempool = Mempool::new();
+        assert!(mempool.is_fee_enforcement_enabled());
+
+        mempool.set_fee_enforcement(false);
+        assert!(!mempool.is_fee_enforcement_enabled());
+
+        mempool.set_fee_enforcement(true);
+        assert!(mempool.is_fee_enforcement_enabled());
+    }
+
+    #[test]
+    fn test_mempool_fee_metrics_initial_state() {
+        let mempool = Mempool::new();
+        let metrics = mempool.fee_metrics();
+
+        assert_eq!(metrics.fee_rejections, 0);
+        assert_eq!(metrics.total_fee_shortfall, 0);
+        assert_eq!(metrics.max_fee_shortfall, 0);
+    }
+
+    #[test]
+    fn test_mempool_fee_metrics_reset() {
+        let mut mempool = Mempool::new();
+
+        // Manually modify metrics to test reset
+        mempool.fee_metrics.fee_rejections = 10;
+        mempool.fee_metrics.total_fee_shortfall = 1000;
+        mempool.fee_metrics.max_fee_shortfall = 500;
+
+        mempool.reset_fee_metrics();
+
+        let metrics = mempool.fee_metrics();
+        assert_eq!(metrics.fee_rejections, 0);
+        assert_eq!(metrics.total_fee_shortfall, 0);
+        assert_eq!(metrics.max_fee_shortfall, 0);
+    }
+
+    #[test]
+    fn test_mempool_error_fee_too_low_display() {
+        let err = MempoolError::FeeTooLow {
+            minimum: 10_000,
+            provided: 5_000,
+        };
+        let msg = format!("{}", err);
+        assert!(msg.contains("10000") || msg.contains("10_000") || msg.contains("10,000"));
+        assert!(msg.contains("5000") || msg.contains("5_000") || msg.contains("5,000"));
+        assert!(msg.contains("required") || msg.contains("minimum"));
+    }
+
+    #[test]
+    fn test_mempool_fee_metrics_default() {
+        let metrics = MempoolFeeMetrics::default();
+        assert_eq!(metrics.fee_rejections, 0);
+        assert_eq!(metrics.total_fee_shortfall, 0);
+        assert_eq!(metrics.max_fee_shortfall, 0);
+    }
+
+    #[test]
+    fn test_mempool_fee_metrics_clone() {
+        let metrics = MempoolFeeMetrics {
+            fee_rejections: 5,
+            total_fee_shortfall: 1000,
+            max_fee_shortfall: 300,
+        };
+        let cloned = metrics.clone();
+        assert_eq!(cloned.fee_rejections, 5);
+        assert_eq!(cloned.total_fee_shortfall, 1000);
+        assert_eq!(cloned.max_fee_shortfall, 300);
+    }
+
+    #[test]
+    fn test_mempool_with_fee_config_has_enforcement_enabled() {
+        let config = FeeConfig::default();
+        let mempool = Mempool::with_fee_config(config);
+        assert!(mempool.is_fee_enforcement_enabled());
+    }
+
+    #[test]
+    fn test_mempool_with_dynamic_fee_has_enforcement_enabled() {
+        let config = FeeConfig::default();
+        let dynamic_fee = DynamicFeeBase::default();
+        let mempool = Mempool::with_dynamic_fee(config, dynamic_fee);
+        assert!(mempool.is_fee_enforcement_enabled());
     }
 }
