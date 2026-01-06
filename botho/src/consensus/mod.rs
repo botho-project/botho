@@ -18,8 +18,9 @@ mod value;
 
 pub use block_builder::{BlockBuildError, BlockBuilder, BuiltBlock};
 pub use lottery::{
-    draw_lottery_winners, split_fees, verify_lottery_result, utxo_to_candidate,
-    BlockLotteryResult, LotteryFeeConfig, LotteryStats,
+    draw_lottery_winners, split_fees, validate_block_lottery, verify_lottery_result,
+    utxo_to_candidate, BlockLotteryResult, LotteryFeeConfig, LotteryStats,
+    LotteryValidationError,
 };
 pub use service::{ConsensusConfig, ConsensusEvent, ConsensusService, ScpMessage};
 pub use validation::{BatchValidationResult, TransactionValidator, ValidationError};
