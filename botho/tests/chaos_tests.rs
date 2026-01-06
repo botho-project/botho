@@ -33,7 +33,7 @@ use bth_consensus_scp::{
 };
 
 use botho::{
-    block::{Block, BlockHeader, MintingTx},
+    block::{Block, BlockHeader, BlockLotterySummary, MintingTx},
     ledger::{ChainState, Ledger},
     transaction::PICOCREDITS_PER_CREDIT,
 };
@@ -615,6 +615,8 @@ fn apply_block(
                 },
                 minting_tx: minting_tx.clone(),
                 transactions: vec![],
+                lottery_outputs: Vec::new(),
+                lottery_summary: BlockLotterySummary::default(),
             };
 
             ledger

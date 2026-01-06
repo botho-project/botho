@@ -30,7 +30,7 @@ use bth_consensus_scp::{
 };
 
 use botho::{
-    block::{Block, MintingTx},
+    block::{Block, BlockLotterySummary, MintingTx},
     ledger::{ChainState, Ledger},
     transaction::Transaction,
     wallet::Wallet,
@@ -533,6 +533,8 @@ fn apply_externalized_block(
         },
         minting_tx,
         transactions,
+        lottery_outputs: Vec::new(),
+        lottery_summary: BlockLotterySummary::default(),
     };
 
     // Add block to ledger

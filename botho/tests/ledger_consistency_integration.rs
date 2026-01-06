@@ -20,7 +20,7 @@ use serial_test::serial;
 use tempfile::TempDir;
 
 use botho::{
-    block::{Block, BlockHeader, MintingTx},
+    block::{Block, BlockHeader, BlockLotterySummary, MintingTx},
     ledger::{ChainState, Ledger},
     transaction::{Transaction, TxInput, TxInputs, TxOutput, Utxo, UtxoId, PICOCREDITS_PER_CREDIT},
 };
@@ -122,6 +122,8 @@ fn mine_block(
         },
         minting_tx,
         transactions,
+        lottery_outputs: Vec::new(),
+        lottery_summary: BlockLotterySummary::default(),
     }
 }
 
@@ -538,6 +540,8 @@ fn test_block_with_wrong_parent_hash() {
         },
         minting_tx,
         transactions: vec![],
+        lottery_outputs: Vec::new(),
+        lottery_summary: BlockLotterySummary::default(),
     };
 
     let result = ledger.add_block(&bad_block);
@@ -594,6 +598,8 @@ fn test_block_with_wrong_height() {
         },
         minting_tx,
         transactions: vec![],
+        lottery_outputs: Vec::new(),
+        lottery_summary: BlockLotterySummary::default(),
     };
 
     let result = ledger.add_block(&bad_block);

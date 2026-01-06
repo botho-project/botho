@@ -297,6 +297,83 @@ impl MintingTx {
     }
 }
 
+/// Lottery payout output for a winning UTXO.
+///
+/// These are created when fees are redistributed via the lottery system.
+/// Each winning UTXO receives a payout as a new stealth output.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LotteryOutput {
+    /// Transaction hash of the winning UTXO
+    pub winner_tx_hash: [u8; 32],
+
+    /// Output index within the transaction
+    pub winner_output_index: u32,
+
+    /// Payout amount in picocredits
+    pub payout: u64,
+
+    /// Stealth target key for the payout (same owner as winning UTXO)
+    pub target_key: [u8; 32],
+
+    /// Ephemeral public key for stealth derivation
+    pub public_key: [u8; 32],
+}
+
+impl LotteryOutput {
+    /// Get the winner UTXO ID as a 36-byte array (tx_hash || output_index).
+    pub fn winner_utxo_id(&self) -> [u8; 36] {
+        let mut id = [0u8; 36];
+        id[..32].copy_from_slice(&self.winner_tx_hash);
+        id[32..].copy_from_slice(&self.winner_output_index.to_le_bytes());
+        id
+    }
+
+    /// Create from a 36-byte UTXO ID.
+    pub fn from_utxo_id(utxo_id: [u8; 36], payout: u64, target_key: [u8; 32], public_key: [u8; 32]) -> Self {
+        let mut tx_hash = [0u8; 32];
+        tx_hash.copy_from_slice(&utxo_id[..32]);
+        let output_index = u32::from_le_bytes(utxo_id[32..36].try_into().unwrap());
+        Self {
+            winner_tx_hash: tx_hash,
+            winner_output_index: output_index,
+            payout,
+            target_key,
+            public_key,
+        }
+    }
+
+    /// Convert to a TxOutput for ledger storage.
+    ///
+    /// Lottery payouts inherit the cluster tags from the winning UTXO.
+    /// This is appropriate because the payout represents redistribution
+    /// to the same identity that owns the winning UTXO.
+    pub fn to_tx_output(&self, cluster_tags: ClusterTagVector) -> TxOutput {
+        TxOutput {
+            amount: self.payout,
+            target_key: self.target_key,
+            public_key: self.public_key,
+            e_memo: None, // Lottery payouts don't need memos
+            cluster_tags,
+        }
+    }
+}
+
+/// Summary of lottery drawing for a block.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct BlockLotterySummary {
+    /// Total fees collected from transactions
+    pub total_fees: u64,
+
+    /// Amount distributed to lottery winners (80%)
+    pub pool_distributed: u64,
+
+    /// Amount burned (20%)
+    pub amount_burned: u64,
+
+    /// Seed used for verifiable randomness
+    pub lottery_seed: [u8; 32],
+}
+
 /// A complete block
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Block {
@@ -304,6 +381,12 @@ pub struct Block {
     pub minting_tx: MintingTx,
     /// Regular transactions included in this block
     pub transactions: Vec<Transaction>,
+    /// Lottery payout outputs (fee redistribution to random UTXOs)
+    #[serde(default)]
+    pub lottery_outputs: Vec<LotteryOutput>,
+    /// Lottery summary for validation
+    #[serde(default)]
+    pub lottery_summary: BlockLotterySummary,
 }
 
 impl Block {
@@ -340,6 +423,8 @@ impl Block {
                 timestamp: 0,
             },
             transactions: Vec::new(),
+            lottery_outputs: Vec::new(),
+            lottery_summary: BlockLotterySummary::default(),
         }
     }
 
@@ -376,6 +461,7 @@ impl Block {
     /// Create a new block template for minting with transactions.
     ///
     /// The minting reward output uses stealth addressing for minter privacy.
+    /// Note: Lottery outputs should be added separately via `set_lottery_result`.
     pub fn new_template_with_txs(
         prev_block: &Block,
         minter_address: &PublicAddress,
@@ -419,7 +505,27 @@ impl Block {
             },
             minting_tx,
             transactions,
+            lottery_outputs: Vec::new(),
+            lottery_summary: BlockLotterySummary::default(),
         }
+    }
+
+    /// Set lottery results for this block.
+    ///
+    /// Should be called after block template creation to add lottery outputs
+    /// based on the winning UTXOs.
+    pub fn set_lottery_result(
+        &mut self,
+        lottery_outputs: Vec<LotteryOutput>,
+        summary: BlockLotterySummary,
+    ) {
+        self.lottery_outputs = lottery_outputs;
+        self.lottery_summary = summary;
+    }
+
+    /// Get total lottery payouts in this block.
+    pub fn total_lottery_payouts(&self) -> u64 {
+        self.lottery_outputs.iter().map(|o| o.payout).sum()
     }
 
     /// Compute merkle root of transactions

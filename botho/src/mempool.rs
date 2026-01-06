@@ -260,6 +260,13 @@ pub struct PendingTx {
     pub tx: Transaction,
     pub received_at: std::time::Instant,
     pub fee_per_byte: u64,
+    /// Fee density accounting for cluster factor: fee / (size × cluster_factor).
+    /// Higher values get priority. This ensures wealthy clusters (high factor)
+    /// must pay more to achieve the same priority as smaller clusters.
+    /// Stored as scaled integer (×1000) to avoid floating point.
+    pub fee_density: u64,
+    /// The cluster wealth used for fee calculation.
+    pub cluster_wealth: u64,
 }
 
 impl PendingTx {
@@ -277,6 +284,34 @@ impl PendingTx {
             tx,
             received_at: std::time::Instant::now(),
             fee_per_byte,
+            fee_density: fee_per_byte, // Default without cluster factor
+            cluster_wealth: 0,
+        }
+    }
+
+    /// Create a new pending transaction with cluster factor adjustment.
+    ///
+    /// Fee density = fee / (size × cluster_factor / 1000)
+    /// The cluster_factor is in 1000-scale (1000 = 1x, 6000 = 6x), so we
+    /// divide by cluster_factor and multiply by 1000 to normalize.
+    pub fn with_cluster_factor(tx: Transaction, cluster_wealth: u64, cluster_factor: u64) -> Self {
+        let tx_size = tx.estimate_size().max(1);
+        let fee_per_byte = tx.fee / tx_size as u64;
+
+        // fee_density = (fee × 1000) / (size × cluster_factor)
+        // This gives priority inversely proportional to cluster factor
+        let fee_density = if cluster_factor > 0 {
+            (tx.fee as u128 * 1000 / (tx_size as u128 * cluster_factor as u128)) as u64
+        } else {
+            fee_per_byte
+        };
+
+        Self {
+            tx,
+            received_at: std::time::Instant::now(),
+            fee_per_byte,
+            fee_density,
+            cluster_wealth,
         }
     }
 }
@@ -569,8 +604,11 @@ impl Mempool {
             self.spent_key_images.insert(input.key_image);
         }
 
-        // Add to mempool
-        let pending = PendingTx::new(tx);
+        // Compute cluster factor for fee density prioritization
+        let cluster_factor = self.fee_config.cluster_factor(cluster_wealth);
+
+        // Add to mempool with cluster-adjusted fee density
+        let pending = PendingTx::with_cluster_factor(tx, cluster_wealth, cluster_factor);
         self.txs.insert(tx_hash, pending);
 
         debug!(
@@ -689,16 +727,36 @@ impl Mempool {
         }
     }
 
-    /// Get transactions for inclusion in a block (sorted by fee)
+    /// Get transactions for inclusion in a block (sorted by fee density).
+    ///
+    /// Fee density accounts for cluster factor, so wealthy clusters must pay
+    /// higher fees to achieve the same priority as smaller clusters.
+    /// Formula: `density = fee / (size × cluster_factor)`
     pub fn get_transactions(&self, max_count: usize) -> Vec<Transaction> {
         let mut txs: Vec<_> = self.txs.values().collect();
 
-        // Sort by fee per byte (highest first)
-        txs.sort_by(|a, b| b.fee_per_byte.cmp(&a.fee_per_byte));
+        // Sort by fee density (highest first) - accounts for cluster factor
+        txs.sort_by(|a, b| b.fee_density.cmp(&a.fee_density));
 
         txs.into_iter()
             .take(max_count)
             .map(|p| p.tx.clone())
+            .collect()
+    }
+
+    /// Get transactions with their fee data for block building.
+    ///
+    /// Returns (transaction, fee, cluster_wealth) tuples sorted by fee density.
+    /// Used by block builder to calculate lottery pool.
+    pub fn get_transactions_with_fees(&self, max_count: usize) -> Vec<(Transaction, u64, u64)> {
+        let mut txs: Vec<_> = self.txs.values().collect();
+
+        // Sort by fee density (highest first)
+        txs.sort_by(|a, b| b.fee_density.cmp(&a.fee_density));
+
+        txs.into_iter()
+            .take(max_count)
+            .map(|p| (p.tx.clone(), p.tx.fee, p.cluster_wealth))
             .collect()
     }
 
@@ -757,17 +815,20 @@ impl Mempool {
         }
     }
 
-    /// Evict lowest fee transaction
+    /// Evict lowest fee density transaction.
+    ///
+    /// Fee density accounts for cluster factor, ensuring wealthy clusters
+    /// don't unfairly occupy mempool space with lower effective priority.
     fn evict_lowest_fee(&mut self) {
         if let Some((tx_hash, _)) = self
             .txs
             .iter()
-            .min_by_key(|(_, p)| p.fee_per_byte)
+            .min_by_key(|(_, p)| p.fee_density)
             .map(|(h, p)| (*h, p.clone()))
         {
             self.remove_tx(&tx_hash);
             debug!(
-                "Evicted low-fee transaction {} from mempool",
+                "Evicted low-fee-density transaction {} from mempool",
                 hex::encode(&tx_hash[0..8])
             );
         }
@@ -1376,5 +1437,86 @@ mod tests {
         let msg = format!("{}", err);
         assert!(msg.contains("350"));
         assert!(msg.contains("700"));
+    }
+
+    // =========== Fee Density Prioritization Tests ===========
+
+    #[test]
+    fn test_pending_tx_fee_density_without_cluster_factor() {
+        let tx = test_tx(10_000, 1);
+        let pending = PendingTx::new(tx);
+
+        // Without cluster factor, fee_density equals fee_per_byte
+        assert_eq!(pending.fee_density, pending.fee_per_byte);
+        assert_eq!(pending.cluster_wealth, 0);
+    }
+
+    #[test]
+    fn test_pending_tx_fee_density_with_cluster_factor() {
+        let tx = test_tx(10_000, 1);
+
+        // Compare two pending txs with different cluster factors
+        let pending_1x = PendingTx::with_cluster_factor(tx.clone(), 100_000, 1000); // 1x factor
+        let pending_2x = PendingTx::with_cluster_factor(tx.clone(), 1_000_000, 2000); // 2x factor
+
+        // With 2x cluster factor, fee density should be approximately half
+        // (Same fee, same size, but 2x divisor)
+        let ratio = pending_1x.fee_density as f64 / pending_2x.fee_density as f64;
+        assert!(
+            ratio > 1.9 && ratio < 2.1,
+            "2x cluster factor should halve fee density (ratio: {})",
+            ratio
+        );
+        assert_eq!(pending_2x.cluster_wealth, 1_000_000);
+    }
+
+    #[test]
+    fn test_fee_density_prioritization_wealthy_pays_more() {
+        // Same transaction, different cluster factors
+        let tx = test_tx(10_000, 1);
+
+        // tx1: small cluster (factor 1000 = 1x)
+        let pending1 = PendingTx::with_cluster_factor(tx.clone(), 100_000, 1000);
+
+        // tx2: wealthy cluster (factor 3000 = 3x)
+        let pending2 = PendingTx::with_cluster_factor(tx.clone(), 10_000_000, 3000);
+
+        // Small cluster should have higher priority (higher fee density)
+        assert!(
+            pending1.fee_density > pending2.fee_density,
+            "Small cluster (density {}) should have higher priority than wealthy cluster (density {})",
+            pending1.fee_density,
+            pending2.fee_density
+        );
+
+        // The ratio should be approximately 3x
+        let ratio = pending1.fee_density as f64 / pending2.fee_density as f64;
+        assert!(
+            ratio > 2.9 && ratio < 3.1,
+            "3x cluster factor should give 3x priority difference (ratio: {})",
+            ratio
+        );
+    }
+
+    #[test]
+    fn test_fee_density_wealthy_can_pay_for_priority() {
+        // Use high enough fees to avoid MIN_TX_FEE clamping
+        let base_fee = MIN_TX_FEE * 10;
+        let tx1 = test_tx(base_fee, 1);
+        let tx2 = test_tx(base_fee * 3, 1); // 3x fee, same structure
+
+        // tx1: small cluster (factor 1000 = 1x)
+        let pending1 = PendingTx::with_cluster_factor(tx1, 100_000, 1000);
+
+        // tx2: wealthy cluster (factor 3000 = 3x) but pays 3x fee
+        let pending2 = PendingTx::with_cluster_factor(tx2, 10_000_000, 3000);
+
+        // With 3x fee and 3x factor, densities should be approximately equal
+        let ratio = pending1.fee_density as f64 / pending2.fee_density as f64;
+        assert!(
+            ratio > 0.9 && ratio < 1.1,
+            "3x fee should compensate for 3x cluster factor (ratio: {})",
+            ratio
+        );
     }
 }

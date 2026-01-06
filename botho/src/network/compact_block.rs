@@ -27,7 +27,7 @@ use siphasher::sip::SipHasher24;
 use std::{collections::HashMap, hash::Hasher};
 
 use crate::{
-    block::{Block, BlockHeader, MintingTx},
+    block::{Block, BlockHeader, BlockLotterySummary, LotteryOutput, MintingTx},
     mempool::Mempool,
     transaction::Transaction,
 };
@@ -54,6 +54,12 @@ pub struct CompactBlock {
     pub short_ids: Vec<ShortId>,
     /// Pre-filled transactions (for txs unlikely to be in mempool)
     pub prefilled_txs: Vec<PrefilledTx>,
+    /// Lottery payout outputs (always included - deterministic from block state)
+    #[serde(default)]
+    pub lottery_outputs: Vec<LotteryOutput>,
+    /// Lottery summary for validation
+    #[serde(default)]
+    pub lottery_summary: BlockLotterySummary,
 }
 
 /// A pre-filled transaction included directly in the compact block.
@@ -141,6 +147,8 @@ impl CompactBlock {
             nonce,
             short_ids,
             prefilled_txs: Vec::new(),
+            lottery_outputs: block.lottery_outputs.clone(),
+            lottery_summary: block.lottery_summary.clone(),
         }
     }
 
@@ -174,6 +182,8 @@ impl CompactBlock {
             nonce,
             short_ids,
             prefilled_txs,
+            lottery_outputs: block.lottery_outputs.clone(),
+            lottery_summary: block.lottery_summary.clone(),
         }
     }
 
@@ -224,6 +234,8 @@ impl CompactBlock {
                 header: self.header.clone(),
                 minting_tx: self.minting_tx.clone(),
                 transactions,
+                lottery_outputs: self.lottery_outputs.clone(),
+                lottery_summary: self.lottery_summary.clone(),
             })
         } else {
             ReconstructionResult::Incomplete { missing_indices }
