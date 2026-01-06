@@ -584,7 +584,7 @@ impl Default for AgeAdversary {
 
 impl AgeAdversary {
     /// Weight for a given age based on gamma PDF.
-    fn weight_for_age(&self, age_blocks: u64) -> f64 {
+    pub fn weight_for_age(&self, age_blocks: u64) -> f64 {
         let age = (age_blocks as f64).clamp(1.0, MAX_AGE_BLOCKS as f64);
         let k = self.gamma_shape;
         let theta = self.gamma_scale_blocks;
