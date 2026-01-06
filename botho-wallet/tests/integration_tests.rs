@@ -171,6 +171,7 @@ mod transaction_building {
                 target_key: [0u8; 32],
                 public_key: [0u8; 32],
                 subaddress_index: 0,
+                cluster_tags: None,
             },
             OwnedUtxo {
                 tx_hash: [2u8; 32],
@@ -180,6 +181,7 @@ mod transaction_building {
                 target_key: [0u8; 32],
                 public_key: [0u8; 32],
                 subaddress_index: 0,
+                cluster_tags: None,
             },
             OwnedUtxo {
                 tx_hash: [3u8; 32],
@@ -189,6 +191,7 @@ mod transaction_building {
                 target_key: [0u8; 32],
                 public_key: [0u8; 32],
                 subaddress_index: 0,
+                cluster_tags: None,
             },
         ]
     }
@@ -231,6 +234,7 @@ mod transaction_building {
             target_key: [0u8; 32],
             public_key: [0u8; 32],
             subaddress_index: 0,
+            cluster_tags: None,
         }];
 
         let builder = TransactionBuilder::new(keys.clone(), utxos, 150);
@@ -262,6 +266,7 @@ mod transaction_building {
             target_key: [0u8; 32],
             public_key: [0u8; 32],
             subaddress_index: 0,
+            cluster_tags: None,
         }];
 
         let builder = TransactionBuilder::new(keys.clone(), utxos, 150);
@@ -341,6 +346,7 @@ mod utxo_selection {
             target_key: [0u8; 32],
             public_key: [0u8; 32],
             subaddress_index: 0,
+            cluster_tags: None,
         }];
 
         let builder = TransactionBuilder::new(keys.clone(), utxos, 150);
@@ -378,6 +384,7 @@ mod utxo_selection {
             target_key: [0u8; 32],
             public_key: [0u8; 32],
             subaddress_index: 0,
+            cluster_tags: None,
         }];
 
         let builder = TransactionBuilder::new(keys.clone(), utxos, 150);
@@ -402,6 +409,7 @@ mod utxo_selection {
                 target_key: [0u8; 32],
                 public_key: [0u8; 32],
                 subaddress_index: 0,
+                cluster_tags: None,
             },
             OwnedUtxo {
                 tx_hash: [2u8; 32],
@@ -411,6 +419,7 @@ mod utxo_selection {
                 target_key: [0u8; 32],
                 public_key: [0u8; 32],
                 subaddress_index: 0,
+                cluster_tags: None,
             },
             OwnedUtxo {
                 tx_hash: [3u8; 32],
@@ -420,6 +429,7 @@ mod utxo_selection {
                 target_key: [0u8; 32],
                 public_key: [0u8; 32],
                 subaddress_index: 0,
+                cluster_tags: None,
             },
         ];
 
@@ -448,6 +458,7 @@ mod utxo_selection {
                 target_key: [0u8; 32],
                 public_key: [0u8; 32],
                 subaddress_index: 0,
+                cluster_tags: None,
             },
             OwnedUtxo {
                 tx_hash: [2u8; 32],
@@ -457,6 +468,7 @@ mod utxo_selection {
                 target_key: [0u8; 32],
                 public_key: [0u8; 32],
                 subaddress_index: 0,
+                cluster_tags: None,
             },
         ];
 
@@ -484,6 +496,7 @@ mod utxo_selection {
                 target_key: [0u8; 32],
                 public_key: [0u8; 32],
                 subaddress_index: 0,
+                cluster_tags: None,
             },
             OwnedUtxo {
                 tx_hash: [2u8; 32],
@@ -493,6 +506,7 @@ mod utxo_selection {
                 target_key: [0u8; 32],
                 public_key: [0u8; 32],
                 subaddress_index: 0,
+                cluster_tags: None,
             },
             OwnedUtxo {
                 tx_hash: [3u8; 32],
@@ -502,6 +516,7 @@ mod utxo_selection {
                 target_key: [0u8; 32],
                 public_key: [0u8; 32],
                 subaddress_index: 0,
+                cluster_tags: None,
             },
         ];
 
@@ -780,6 +795,7 @@ mod signing {
                 target_key: [0u8; 32],
                 public_key: [0u8; 32],
                 subaddress_index: 0,
+                cluster_tags: None,
             },
             OwnedUtxo {
                 tx_hash: [2u8; 32],
@@ -789,6 +805,7 @@ mod signing {
                 target_key: [0u8; 32],
                 public_key: [0u8; 32],
                 subaddress_index: 0,
+                cluster_tags: None,
             },
             OwnedUtxo {
                 tx_hash: [3u8; 32],
@@ -798,6 +815,7 @@ mod signing {
                 target_key: [0u8; 32],
                 public_key: [0u8; 32],
                 subaddress_index: 0,
+                cluster_tags: None,
             },
         ];
 
