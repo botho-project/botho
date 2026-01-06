@@ -10,6 +10,12 @@
 //! expect from ring signatures under various adversary models and network
 //! conditions.
 //!
+//! ## Constrained Analysis
+//!
+//! The `constrained_analysis` submodule extends privacy simulation to analyze
+//! the impact of wallet-side tag-based constraints (age similarity, factor ceiling)
+//! on ring signature anonymity.
+//!
 //! ## Lottery Simulation
 //!
 //! The `lottery` submodule models the lottery-based fee redistribution system
@@ -17,6 +23,8 @@
 
 mod agent;
 pub mod agents;
+#[cfg(any(feature = "cli", test))]
+pub mod constrained_analysis;
 pub mod lottery;
 mod metrics;
 #[cfg(any(feature = "cli", test))]
