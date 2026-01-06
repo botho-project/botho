@@ -172,7 +172,8 @@ pub enum TransactionValidationError {
     /// Insufficient progressive fee: required {0}, actual {1}
     InsufficientProgressiveFee(u64, u64),
 
-    /// Insufficient cluster-based fee: required {required}, actual {actual}, cluster_wealth {cluster_wealth}
+    /// Insufficient cluster-based fee: required {required}, actual {actual},
+    /// cluster_wealth {cluster_wealth}
     #[cfg(feature = "cluster-tax")]
     InsufficientClusterFee {
         /// Required minimum fee in nanoBTH
