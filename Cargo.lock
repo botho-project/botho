@@ -884,6 +884,7 @@ dependencies = [
  "bincode",
  "botho",
  "bth-account-keys",
+ "bth-cluster-tax",
  "bth-core",
  "bth-crypto-keys",
  "bth-crypto-pq",

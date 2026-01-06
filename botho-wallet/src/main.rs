@@ -8,6 +8,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod commands;
 mod discovery;
+mod fee_estimation;
 mod keys;
 mod rpc_pool;
 mod secmem;

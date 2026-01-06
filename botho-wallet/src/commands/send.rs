@@ -5,10 +5,14 @@ use std::path::Path;
 
 use crate::{
     discovery::NodeDiscovery,
+    fee_estimation::{format_fee_estimate, FeeEstimator, StoredTags},
     keys::WalletKeys,
     rpc_pool::RpcPool,
     storage::EncryptedWallet,
-    transaction::{format_amount, parse_amount, sync_wallet, TransactionBuilder, DUST_THRESHOLD},
+    transaction::{
+        format_amount, parse_amount, sync_wallet, OwnedUtxo, TransactionBuilder, DUST_THRESHOLD,
+        PICOCREDITS_PER_CAD,
+    },
 };
 
 use super::{
@@ -105,8 +109,26 @@ async fn run_classical(
     println!("Syncing wallet...");
     let (utxos, height) = sync_wallet(&mut rpc, &keys, wallet.sync_height).await?;
 
-    // Get fee estimate
-    let fee = rpc.estimate_fee("medium").await.unwrap_or(1_000_000);
+    // Calculate progressive fee using cluster-tax model
+    // Use default base rate of 1 nanoBTH/byte (dynamic rate would come from
+    // network)
+    let fee_estimator = FeeEstimator::new();
+
+    // Select UTXOs that would be used for this transaction (preview selection)
+    let selected_utxos = select_utxos_for_preview(&utxos, amount_picocredits);
+
+    // Prepare inputs for fee estimation (amount, tags)
+    let default_tags = StoredTags::default();
+    let inputs_for_estimation: Vec<(u64, &StoredTags)> = selected_utxos
+        .iter()
+        .map(|u| (u.amount, u.cluster_tags.as_ref().unwrap_or(&default_tags)))
+        .collect();
+
+    // Determine output count (recipient + change if applicable)
+    let output_count = 2; // Assume we'll have change for estimation
+
+    let fee_estimate = fee_estimator.estimate_fee(&inputs_for_estimation, output_count);
+    let fee = fee_estimate.total_fee.max(1_000_000); // Enforce minimum fee
 
     // Build transaction
     let builder = TransactionBuilder::new(keys.clone(), utxos, height);
@@ -152,6 +174,15 @@ async fn run_classical(
         format_amount(amount_picocredits + actual_fee)
     );
     println!();
+
+    // Show progressive fee breakdown
+    println!("Fee breakdown (Cluster-Tax model):");
+    println!(
+        "{}",
+        format_fee_estimate(&fee_estimate, PICOCREDITS_PER_CAD)
+    );
+    println!();
+
     if !dust_absorbed && expected_change > 0 {
         println!("  Change:        {}", format_amount(expected_change));
     }
@@ -251,3 +282,33 @@ fn parse_address(address: &str) -> Result<bth_account_keys::PublicAddress> {
     ))
 }
 
+/// Select UTXOs for fee estimation preview (largest-first selection).
+///
+/// This is a preview of which UTXOs would be selected for the given amount,
+/// used for fee estimation before the actual transaction is built.
+fn select_utxos_for_preview(utxos: &[OwnedUtxo], target_amount: u64) -> Vec<OwnedUtxo> {
+    if utxos.is_empty() {
+        return vec![];
+    }
+
+    // Sort by amount descending (largest first)
+    let mut sorted: Vec<_> = utxos.to_vec();
+    sorted.sort_by(|a, b| b.amount.cmp(&a.amount));
+
+    let mut selected = Vec::new();
+    let mut total = 0u64;
+
+    // Select until we have enough to cover the target amount
+    // (we add a buffer for fees, using 2x the amount as a rough estimate)
+    let target_with_buffer = target_amount.saturating_mul(2);
+
+    for utxo in sorted {
+        if total >= target_with_buffer {
+            break;
+        }
+        total = total.saturating_add(utxo.amount);
+        selected.push(utxo);
+    }
+
+    selected
+}

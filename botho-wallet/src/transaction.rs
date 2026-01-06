@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
+    fee_estimation::StoredTags,
     keys::WalletKeys,
     rpc_pool::{BlockOutputs, RpcPool},
 };
@@ -55,6 +56,11 @@ pub struct OwnedUtxo {
     pub public_key: [u8; 32],
     /// Subaddress index that owns this output
     pub subaddress_index: u64,
+    /// Cluster tag attribution for progressive fee calculation.
+    /// Tracks wealth cluster attribution from the sender's history.
+    /// Optional for backwards compatibility with older wallet files.
+    #[serde(default)]
+    pub cluster_tags: Option<StoredTags>,
 }
 
 impl OwnedUtxo {
@@ -64,6 +70,11 @@ impl OwnedUtxo {
             tx_hash: self.tx_hash,
             output_index: self.output_index,
         }
+    }
+
+    /// Get cluster tags for fee estimation, returning empty tags if not set.
+    pub fn tags(&self) -> StoredTags {
+        self.cluster_tags.clone().unwrap_or_default()
     }
 
     /// Recover the one-time private key needed to spend this output
@@ -430,7 +441,6 @@ impl TransactionBuilder {
 
         Ok(())
     }
-
 }
 
 /// Wallet scanner for finding owned outputs using stealth address detection
@@ -484,6 +494,10 @@ impl<'a> WalletScanner<'a> {
                         target_key,
                         public_key,
                         subaddress_index,
+                        // Tags are not available from blockchain scanning - they would
+                        // need to come from the sender or an external privacy service.
+                        // For now, assume anonymous (no cluster attribution).
+                        cluster_tags: None,
                     });
                 }
             }
@@ -840,6 +854,7 @@ mod tests {
                 target_key: [0u8; 32],
                 public_key: [0u8; 32],
                 subaddress_index: 0,
+                cluster_tags: None,
             },
             OwnedUtxo {
                 tx_hash: [2u8; 32],
@@ -849,6 +864,7 @@ mod tests {
                 target_key: [0u8; 32],
                 public_key: [0u8; 32],
                 subaddress_index: 0,
+                cluster_tags: None,
             },
         ];
 
@@ -1000,6 +1016,7 @@ mod tests {
                     target_key: [0u8; 32],
                     public_key: [0u8; 32],
                     subaddress_index: 0,
+                    cluster_tags: None,
                 }],
                 pq_utxos: vec![PqOwnedUtxo {
                     tx_hash: [2u8; 32],
