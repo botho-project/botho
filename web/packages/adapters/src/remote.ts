@@ -530,8 +530,8 @@ export class RemoteNodeAdapter implements NodeAdapter {
     // Map RPC type field to CryptoType
     const rpcType = data.type as string | undefined
     let cryptoType: CryptoType = 'clsag' // default
-    if (rpcType === 'lion') {
-      cryptoType = 'lion'
+    if (rpcType === 'mldsa') {
+      cryptoType = 'mldsa'
     } else if (rpcType === 'hybrid') {
       cryptoType = 'hybrid'
     }
