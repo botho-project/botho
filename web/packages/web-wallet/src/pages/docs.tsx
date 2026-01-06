@@ -104,6 +104,7 @@ Financial privacy is essential for:
 - **Business confidentiality** - Competitors shouldn't see your supplier payments or revenue
 - **Fungibility** - Money should be interchangeable; tainted coins create a two-tier system
 - **Human dignity** - Your financial life is nobody's business but your own
+- **Censorship resistance** - When all transactions look identical, there's no basis for blocking particular payments. Bitcoin works hard to solve this problem with various techniques, but privacy-by-default solves it elegantly: validators cannot discriminate because they cannot distinguish
 
 ### Stealth Addresses
 
@@ -135,7 +136,7 @@ This breaks the transaction graph that would otherwise allow tracing funds throu
 
 ### Confidential Amounts
 
-In **Standard** and **Private** transactions, amounts are hidden using **Pedersen commitments** with **Bulletproofs** range proofs. These cryptographic constructs allow the network to verify that transactions balance (inputs equal outputs plus fees) without revealing the actual amounts.
+In all **Private transactions** (which includes all value transfers), amounts are hidden using **Pedersen commitments** with **Bulletproofs** range proofs. These cryptographic constructs allow the network to verify that transactions balance (inputs equal outputs plus fees) without revealing the actual amounts.
 
 Validators can confirm:
 - No new money is created from thin air
