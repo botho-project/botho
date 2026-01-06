@@ -114,7 +114,7 @@
 
 % longtable replacement
 \newenvironment{longtable}[1]{\begin{tabular}{#1}}{\end{tabular}}
-\providecommand{\endhead}{}
+\def\endhead{} % longtable header marker (no-op in basic replacement)
 
 % multirow replacement
 \newcommand{\multirow}[3]{#3}

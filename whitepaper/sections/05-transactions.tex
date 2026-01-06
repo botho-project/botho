@@ -108,40 +108,90 @@ Unlike private transactions:
 \subsection{Cluster Tags and Progressive Fees}
 \label{sec:cluster-tags}
 
-\subsubsection{Cluster Tag Derivation}
+Cluster tags enable Sybil-resistant progressive fees by tracking coin
+\textit{provenance} rather than current ownership. The key insight is that
+splitting coins does not change where they came from.
 
-Each output carries a \textit{cluster tag} derived from its ancestry:
+\subsubsection{Tag Vector Representation}
 
-\begin{equation}
-\text{tag}_{\text{out}} = \Hash(\text{tag}_{\text{in}_1} \| \cdots \| \text{tag}_{\text{in}_k} \| \text{salt})
-\end{equation}
-
-For minting outputs, tags are initialized from the block hash.
-
-\subsubsection{Wealth Tracking}
-
-The cluster tag system enables approximate wealth tracking without
-requiring identity:
-\begin{itemize}
-  \item Tags that appear frequently indicate concentrated holdings
-  \item Tags that rarely appear indicate distributed holdings
-  \item Splitting coins preserves the ancestry information
-\end{itemize}
-
-\subsubsection{Progressive Fee Calculation}
-
-The fee multiplier increases with estimated cluster wealth:
+Each UTXO carries a \textit{tag vector} representing the weighted distribution
+of its ancestry across all clusters:
 
 \begin{equation}
-\text{fee} = \text{base\_fee} \times \text{size\_bytes} \times \text{cluster\_factor}(\text{wealth})
+\vec{t} = \{(c_1, w_1), (c_2, w_2), \ldots, (c_k, w_k)\} \quad \text{where} \sum_i w_i = 1
 \end{equation}
 
-where:
+Here $c_i$ is a cluster identifier and $w_i$ is the fraction of the UTXO's
+value attributable to that cluster.
+
+\subsubsection{Cluster Creation at Minting}
+
+Each minting transaction creates a new cluster. The minter's public key
+hash serves as the cluster identifier:
+
 \begin{equation}
-\text{cluster\_factor}(\text{wealth}) = 1 + 5 \cdot \sigma\left(\frac{\text{wealth}}{\text{steepness}}\right)
+c_{\text{new}} = \Hash(\text{minter\_pubkey} \| \text{block\_height})
 \end{equation}
 
-and $\sigma(x) = x/(1+x)$ is a sigmoid function.
+Minting outputs carry a tag vector with 100\% attribution to the new cluster:
+$\vec{t}_{\text{mint}} = \{(c_{\text{new}}, 1.0)\}$.
+
+\subsubsection{Tag Inheritance and Blending}
+
+When spending multiple inputs, output tags are computed via value-weighted
+blending:
+
+\begin{equation}
+\vec{t}_{\text{out}} = \frac{\sum_i v_i \cdot \vec{t}_i}{\sum_i v_i}
+\end{equation}
+
+where $v_i$ is the value of input $i$ and $\vec{t}_i$ is its tag vector.
+
+\textbf{Example}: Combining a 70 BTH UTXO (100\% cluster A) with a 30 BTH
+UTXO (100\% cluster B) produces output tags: $\{(A, 0.7), (B, 0.3)\}$.
+
+\subsubsection{Age-Based Tag Decay}
+
+To encourage circulation and prevent wash trading, tags decay over time.
+However, decay only applies when UTXOs meet an age threshold:
+
+\begin{equation}
+\vec{t}'_i = \begin{cases}
+0.95 \cdot \vec{t}_i & \text{if age}(\text{UTXO}_i) \geq T_{\min} \\
+\vec{t}_i & \text{otherwise}
+\end{cases}
+\end{equation}
+
+where $T_{\min} = 720$ blocks ($\approx$ 2 hours at 10s blocks).
+
+\textbf{Wash Trading Resistance}: Since new outputs must wait before decay
+applies, rapid self-transfers achieve no decay:
+
+\begin{table}[h]
+\centering
+\caption{Tag decay limits}
+\label{tab:decay-limits}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\textbf{Attack} & \textbf{Transactions} & \textbf{Maximum Decay} \\
+\midrule
+Rapid wash (1 minute) & 100 & 0\% \\
+Patient wash (1 day) & 1000 & 46\% \\
+Patient wash (1 week) & 7000 & 97\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Cluster Factor Calculation}
+
+The cluster factor is derived from the dominant cluster's total minted wealth:
+
+\begin{equation}
+\text{cluster\_factor} = 1 + 5 \cdot \sigma\left(\frac{W_{\max}}{\text{steepness}}\right)
+\end{equation}
+
+where $W_{\max}$ is the total BTH ever minted by the dominant cluster and
+$\sigma(x) = x/(1+x)$ is a sigmoid function.
 
 \begin{table}[h]
 \centering
@@ -149,7 +199,7 @@ and $\sigma(x) = x/(1+x)$ is a sigmoid function.
 \label{tab:fee-multipliers}
 \begin{tabular}{@{}lc@{}}
 \toprule
-\textbf{Wealth Percentile} & \textbf{Fee Multiplier} \\
+\textbf{Cluster Wealth Percentile} & \textbf{Fee Multiplier} \\
 \midrule
 Bottom 50\% & 1.0$\times$ -- 1.5$\times$ \\
 50th -- 90th & 1.5$\times$ -- 3.0$\times$ \\
@@ -158,17 +208,48 @@ Top 10\% & 3.0$\times$ -- 6.0$\times$ \\
 \end{tabular}
 \end{table}
 
-\subsubsection{Sybil Resistance}
+\subsubsection{Ring Signature Tag Propagation}
 
-The cluster tag system resists Sybil attacks:
+Ring signatures hide which input is real among $n$ decoys. To prevent fee
+evasion via low-factor decoy selection, tags propagate \textit{conservatively}:
+
+\begin{enumerate}
+  \item All ring members' tag vectors are publicly known
+  \item Fee is calculated using the \textit{maximum} cluster factor among
+    ring members
+  \item Output tags propagate from the real input (verified via ZK proof
+    but not revealed)
+\end{enumerate}
+
+This ensures attackers cannot reduce fees by choosing low-factor decoys.
+
+\subsubsection{Sybil Resistance Analysis}
+
+The cluster tag system resists common attacks:
+
 \begin{itemize}
-  \item \textbf{Splitting coins} does not reduce fees---child outputs
-    inherit the parent's ancestry.
-  \item \textbf{Mixing through exchanges} reduces cluster concentration
-    over time, but requires actual economic activity.
-  \item \textbf{Long-term holding} continuously increases the cluster
-    factor as the same tags accumulate.
+  \item \textbf{Splitting coins}: Does not reduce fees---child outputs
+    inherit the parent's cluster attribution unchanged.
+  \item \textbf{Creating multiple addresses}: All outputs from the same
+    cluster share the same factor.
+  \item \textbf{Wash trading}: Age-based gating limits decay to $\sim$12
+    events per day maximum.
+  \item \textbf{Mixing through exchanges}: Reduces cluster concentration
+    over time, but requires actual economic activity (legitimate use case).
 \end{itemize}
+
+\begin{theorem}[Cluster Tag Sybil Resistance]
+For any splitting strategy that divides $n$ BTH into $k$ UTXOs, the total
+fees paid are at least as high as paying from a single UTXO.
+\end{theorem}
+
+\begin{proof}[Proof sketch]
+Let UTXO $U$ have cluster factor $f$. Splitting $U$ into $U_1, \ldots, U_k$
+produces outputs with identical tag vectors (value-weighted average of
+single input). Each $U_i$ inherits factor $f$. Total fees:
+$\sum_i \text{fee}(U_i) = \sum_i (b \cdot s_i \cdot f) = b \cdot f \cdot \sum_i s_i$,
+which equals the fee for transacting the full amount.
+\end{proof}
 
 \subsection{Validation Rules}
 

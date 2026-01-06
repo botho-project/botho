@@ -32,9 +32,11 @@ ephemeral privacy (sender anonymity).
 block proposal with Stellar Consensus Protocol (SCP) finalization,
 achieving deterministic finality in approximately 5 seconds while
 maintaining permissionless participation. The protocol includes
-\emph{progressive fees} based on wealth concentration, creating economic
-incentives against hoarding without requiring identity or enabling Sybil
-attacks.
+\emph{progressive fees} based on coin provenance (cluster tags), creating
+Sybil-resistant economic incentives against wealth concentration.
+Transaction fees are split: 80\% redistributed via lottery to random UTXOs,
+20\% burned---creating progressive redistribution that statistically
+favors small holders over large holders.
 
 Key parameters: ring size 20, transaction size $\sim$4~KB, 5-second finality,
 2\% target tail emission with dynamic inflation dampening. The reference

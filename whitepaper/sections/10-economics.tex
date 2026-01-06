@@ -85,14 +85,28 @@ The expected cluster factor depends on wealth distribution:
 
 \subsubsection{Redistribution Effect}
 
-Fee burning redistributes wealth from high-cluster (concentrated) holdings
-to all holders proportionally:
+The lottery mechanism creates direct wealth transfer from high-activity,
+high-cluster users to random UTXO holders:
 
 \begin{equation}
-\text{redistribution} = \sum_{\text{tx}} f_{\text{cluster}} - f_{\text{base}}
+\text{redistribution}_{\text{direct}} = 0.8 \times \sum_{\text{tx}} f_{\text{total}}
 \end{equation}
 
-This excess fee is burned, reducing total supply and benefiting all holders.
+Additionally, fee burning (20\%) redistributes indirectly to all holders
+by reducing supply:
+
+\begin{equation}
+\text{redistribution}_{\text{indirect}} = 0.2 \times \sum_{\text{tx}} f_{\text{total}}
+\end{equation}
+
+\textbf{Progressive properties of lottery selection}:
+\begin{itemize}
+  \item Random UTXO selection statistically favors many small holders over
+    few large holders
+  \item Self-custody users (many UTXOs) receive more than custodial users
+    (few UTXOs holding many users' funds)
+  \item Net effect: redistribution from exchanges to individuals
+\end{itemize}
 
 \subsubsection{Anti-Hoarding Dynamics}
 
@@ -100,17 +114,19 @@ The combination of:
 \begin{itemize}
   \item Tail emission ($\sim$2\% annual supply increase)
   \item Progressive fees (wealth-based costs)
-  \item Fee burning (deflationary pressure from activity)
+  \item Lottery redistribution (80\% of fees to random UTXOs)
+  \item Fee burning (20\% deflationary pressure)
 \end{itemize}
 
 Creates net pressure toward circulation:
 
 \begin{equation}
-\text{holding\_cost} = \text{dilution} + \text{opportunity\_cost}
+\text{holding\_cost} = \text{dilution} - \text{lottery\_income} + \text{opportunity\_cost}
 \end{equation}
 
-Active users who circulate currency maintain relative wealth; passive
-holders experience gradual dilution.
+Users with more UTXOs (typically from active participation) receive more
+lottery income, partially offsetting dilution. Large holders with few UTXOs
+experience full dilution with minimal lottery income.
 
 \subsection{Game-Theoretic Analysis}
 
