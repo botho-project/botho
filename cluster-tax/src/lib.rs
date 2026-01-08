@@ -69,9 +69,10 @@ pub use monetary::{DifficultyController, MonetaryPolicy, MonetaryState, Monetary
 
 pub use age_decay::{apply_age_decay, ring_cluster_factor, AgeDecayConfig, RingDecayInfo};
 pub use entropy_decay::{
-    apply_entropy_decay, calculate_entropy_decay, compare_decay_modes, AttackResult,
-    AttackStrategy, DecayBlockReason, DecayMode, EntropyDecayConfig, EntropyDecayResult,
-    EntropyScaling, SimUtxo,
+    apply_entropy_decay, calculate_entropy_decay, compare_decay_modes,
+    conservative_entropy_delta, ring_entropy_decay, AttackResult, AttackStrategy, DecayBlockReason,
+    DecayMode, EntropyDecayConfig, EntropyDecayResult, EntropyScaling, RingDecayBlockReason,
+    RingEntropyDecayInfo, SimUtxo,
 };
 pub use block_decay::{
     AndDecayConfig, AndTagVector, BlockAwareTagVector, BlockDecayConfig, RateLimitedDecayConfig,
