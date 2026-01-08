@@ -5,13 +5,13 @@ use std::path::Path;
 
 use crate::{
     discovery::NodeDiscovery,
-    fee_estimation::{format_fee_estimate, FeeEstimator, StoredTags},
+    fee_estimation::{format_fee_estimate, FeeEstimator, PendingChangeTags, StoredTags},
     keys::WalletKeys,
     rpc_pool::RpcPool,
     storage::EncryptedWallet,
     transaction::{
-        format_amount, parse_amount, sync_wallet, OwnedUtxo, TransactionBuilder, DUST_THRESHOLD,
-        PICOCREDITS_PER_CAD,
+        apply_pending_change_tags, format_amount, parse_amount, sync_wallet, OwnedUtxo,
+        TransactionBuilder, DUST_THRESHOLD, PICOCREDITS_PER_CAD,
     },
 };
 
@@ -107,7 +107,15 @@ async fn run_classical(
 
     // Sync wallet
     println!("Syncing wallet...");
-    let (utxos, height) = sync_wallet(&mut rpc, &keys, wallet.sync_height).await?;
+    let (mut utxos, height) = sync_wallet(&mut rpc, &keys, wallet.sync_height).await?;
+
+    // Apply pending change tags to discovered UTXOs (issue #249)
+    // This ensures accurate fee estimation for change outputs from previous txs.
+    let mut pending_tags = wallet
+        .get_pending_change_tags(&password)?
+        .unwrap_or_else(PendingChangeTags::new);
+    pending_tags.cleanup_stale(height, 1000);
+    apply_pending_change_tags(&mut utxos, &mut pending_tags);
 
     // Calculate progressive fee using cluster-tax model
     // Use default base rate of 1 nanoBTH/byte (dynamic rate would come from
@@ -204,17 +212,41 @@ async fn run_classical(
     println!();
     println!("Signing transaction...");
 
-    let tx = builder.build_transfer(&recipient, amount_picocredits, fee)?;
+    let transfer_result =
+        builder.build_transfer_with_metadata(&recipient, amount_picocredits, fee)?;
 
     // Submit transaction
     println!("Submitting transaction...");
 
-    let tx_hash = rpc.submit_transaction(&tx.to_hex()).await?;
+    let tx_hash = rpc
+        .submit_transaction(&transfer_result.transaction.to_hex())
+        .await?;
 
     println!();
     print_success("Transaction sent!");
     println!();
     println!("Transaction hash: {}", tx_hash);
+
+    // Store pending change tags for cluster tag propagation (issue #249)
+    // If there's a change output, compute blended tags from inputs and store them
+    // so they can be applied when the change UTXO is discovered during sync.
+    if let Some(change_key) = transfer_result.change_output_public_key {
+        // Compute blended tags from the selected inputs
+        let default_tags = StoredTags::default();
+        let inputs_for_blending: Vec<(u64, &StoredTags)> = transfer_result
+            .selected_inputs
+            .iter()
+            .map(|u| (u.amount, u.cluster_tags.as_ref().unwrap_or(&default_tags)))
+            .collect();
+
+        let blended_tags = fee_estimator.calculate_blended_tags(&inputs_for_blending);
+
+        // Add the new pending change tag entry (reusing pending_tags from earlier)
+        pending_tags.add(change_key, blended_tags, height);
+
+        // Save updated pending tags
+        wallet.set_pending_change_tags(&pending_tags, &password)?;
+    }
 
     // Update sync height
     wallet.set_sync_height(height);

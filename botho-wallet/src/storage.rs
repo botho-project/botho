@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use std::{fs, path::Path};
 use zeroize::{Zeroize, Zeroizing};
 
-use crate::discovery::NodeDiscovery;
+use crate::{discovery::NodeDiscovery, fee_estimation::PendingChangeTags};
 
 /// Current wallet file format version
 const WALLET_VERSION: u32 = 1;
@@ -231,6 +231,12 @@ pub struct EncryptedWallet {
     /// Optional encrypted discovery state
     discovery_state: Option<String>,
 
+    /// Optional encrypted pending change tags for cluster tag propagation.
+    /// When a transaction is built, blended input tags are stored here so
+    /// they can be applied to change outputs discovered during sync.
+    #[serde(default)]
+    pending_change_tags: Option<String>,
+
     /// Last sync height
     pub sync_height: u64,
 
@@ -266,6 +272,7 @@ impl EncryptedWallet {
             nonce: hex::encode(nonce_bytes),
             ciphertext: hex::encode(ciphertext),
             discovery_state: None,
+            pending_change_tags: None,
             sync_height: 0,
             network: "botho-mainnet".to_string(),
         })
@@ -522,7 +529,86 @@ impl EncryptedWallet {
             self.set_discovery_state(&discovery, new_password)?;
         }
 
+        // Re-encrypt pending change tags if present
+        if let Some(tags) = self.get_pending_change_tags(old_password)? {
+            self.set_pending_change_tags(&tags, new_password)?;
+        }
+
         Ok(())
+    }
+
+    /// Store pending change tags for cluster tag propagation.
+    ///
+    /// Call this after building a transaction to store the blended input tags
+    /// that should be applied to change outputs discovered during sync.
+    pub fn set_pending_change_tags(
+        &mut self,
+        tags: &PendingChangeTags,
+        password: &str,
+    ) -> Result<()> {
+        let state_bytes =
+            serde_json::to_vec(tags).map_err(|e| anyhow!("Failed to serialize tags: {}", e))?;
+
+        // Re-derive key
+        let key = derive_key(password, &self.salt)?;
+
+        // Generate new nonce
+        let mut nonce_bytes = [0u8; 12];
+        rand::thread_rng().fill(&mut nonce_bytes);
+
+        let cipher = ChaCha20Poly1305::new_from_slice(&key)
+            .map_err(|_| anyhow!("Failed to create cipher"))?;
+
+        let nonce = Nonce::from_slice(&nonce_bytes);
+        let ciphertext = cipher
+            .encrypt(nonce, state_bytes.as_slice())
+            .map_err(|_| anyhow!("Encryption failed"))?;
+
+        // Store as nonce:ciphertext
+        self.pending_change_tags = Some(format!(
+            "{}:{}",
+            hex::encode(nonce_bytes),
+            hex::encode(ciphertext)
+        ));
+
+        Ok(())
+    }
+
+    /// Load pending change tags.
+    ///
+    /// Call this during sync to retrieve any pending tags that should be
+    /// applied to discovered change outputs.
+    pub fn get_pending_change_tags(&self, password: &str) -> Result<Option<PendingChangeTags>> {
+        let state_str = match &self.pending_change_tags {
+            Some(s) => s,
+            None => return Ok(None),
+        };
+
+        // Parse nonce:ciphertext format
+        let parts: Vec<&str> = state_str.split(':').collect();
+        if parts.len() != 2 {
+            return Err(anyhow!("Invalid pending change tags format"));
+        }
+
+        let nonce_bytes = hex::decode(parts[0])?;
+        let ciphertext = hex::decode(parts[1])?;
+
+        // Derive key
+        let key = derive_key(password, &self.salt)?;
+
+        // Decrypt
+        let cipher = ChaCha20Poly1305::new_from_slice(&key)
+            .map_err(|_| anyhow!("Failed to create cipher"))?;
+
+        let nonce = Nonce::from_slice(&nonce_bytes);
+        let plaintext = cipher
+            .decrypt(nonce, ciphertext.as_slice())
+            .map_err(|_| anyhow!("Decryption failed"))?;
+
+        let tags: PendingChangeTags = serde_json::from_slice(&plaintext)
+            .map_err(|e| anyhow!("Failed to deserialize pending tags: {}", e))?;
+
+        Ok(Some(tags))
     }
 }
 

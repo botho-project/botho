@@ -242,6 +242,96 @@ impl StoredTags {
     }
 }
 
+/// A single pending change tag entry.
+///
+/// Associates an output public key with its blended cluster tags,
+/// enabling tag propagation when change UTXOs are discovered during sync.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingChangeEntry {
+    /// Output public key (32 bytes) - used to match discovered change UTXOs.
+    pub output_public_key: [u8; 32],
+    /// Blended cluster tags from the transaction inputs.
+    pub tags: StoredTags,
+    /// Block height when the transaction was created.
+    pub created_at_height: u64,
+}
+
+/// Tracks pending cluster tags for change outputs.
+///
+/// When a transaction is built, we compute blended tags from inputs and
+/// store them here, keyed by the change output's public key. When the
+/// change UTXO is later discovered during sync, we apply these tags.
+///
+/// This enables accurate cluster attribution tracking across spends,
+/// even though the wallet doesn't immediately know about its change outputs.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PendingChangeTags {
+    /// Pending change tag entries, keyed by output public key.
+    pub entries: Vec<PendingChangeEntry>,
+}
+
+impl PendingChangeTags {
+    /// Create an empty pending change tags collection.
+    pub fn new() -> Self {
+        Self { entries: vec![] }
+    }
+
+    /// Add a pending change tag entry.
+    ///
+    /// Call this after building a transaction to record the blended tags
+    /// that should be applied to the change output when discovered.
+    pub fn add(&mut self, output_public_key: [u8; 32], tags: StoredTags, created_at_height: u64) {
+        self.entries.push(PendingChangeEntry {
+            output_public_key,
+            tags,
+            created_at_height,
+        });
+    }
+
+    /// Find and remove a pending tag entry by output public key.
+    ///
+    /// Call this during sync when a change UTXO is discovered. If found,
+    /// the entry is removed and its tags are returned for application.
+    pub fn find_and_remove(&mut self, output_public_key: &[u8; 32]) -> Option<StoredTags> {
+        if let Some(pos) = self
+            .entries
+            .iter()
+            .position(|e| &e.output_public_key == output_public_key)
+        {
+            let entry = self.entries.remove(pos);
+            Some(entry.tags)
+        } else {
+            None
+        }
+    }
+
+    /// Check if a pending tag entry exists for the given output key.
+    pub fn contains(&self, output_public_key: &[u8; 32]) -> bool {
+        self.entries
+            .iter()
+            .any(|e| &e.output_public_key == output_public_key)
+    }
+
+    /// Remove stale entries older than the specified number of blocks.
+    ///
+    /// Call this periodically during sync to clean up entries that were
+    /// never matched (e.g., if a transaction was rejected or replaced).
+    pub fn cleanup_stale(&mut self, current_height: u64, max_age_blocks: u64) {
+        self.entries
+            .retain(|e| current_height.saturating_sub(e.created_at_height) <= max_age_blocks);
+    }
+
+    /// Get the number of pending entries.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Check if there are no pending entries.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
 /// Result of fee estimation.
 #[derive(Debug, Clone)]
 pub struct FeeEstimate {
@@ -317,6 +407,40 @@ impl FeeEstimator {
         }
 
         size.max(1000) // Minimum transaction size
+    }
+
+    /// Calculate blended cluster tags from input UTXOs.
+    ///
+    /// Uses value-weighted blending: larger inputs contribute more to the
+    /// blended tag vector. This is used to propagate cluster attribution
+    /// to change outputs.
+    ///
+    /// Returns the blended `StoredTags` representing the combined attribution
+    /// from all inputs.
+    pub fn calculate_blended_tags(&self, inputs: &[(u64, &StoredTags)]) -> StoredTags {
+        if inputs.is_empty() {
+            return StoredTags::new();
+        }
+
+        // Blend tag vectors weighted by value using iterative mixing
+        let mut blended = TagVector::new();
+        let mut accumulated_value: u64 = 0;
+
+        for (amount, tags) in inputs {
+            if *amount == 0 {
+                continue;
+            }
+            let tv = tags.to_tag_vector();
+            // Mix incoming tags with current blended, weighted by value
+            blended.mix(accumulated_value, &tv, *amount);
+            accumulated_value = accumulated_value.saturating_add(*amount);
+        }
+
+        if accumulated_value == 0 {
+            return StoredTags::new();
+        }
+
+        StoredTags::from_tag_vector(&blended)
     }
 
     /// Calculate blended cluster factor from input UTXOs with their tag
@@ -697,5 +821,125 @@ mod tests {
         }
 
         assert_eq!(estimator.base_rate(), 3);
+    }
+
+    #[test]
+    fn test_blended_tags_empty() {
+        let estimator = FeeEstimator::new();
+
+        // Empty inputs should return empty tags
+        let blended = estimator.calculate_blended_tags(&[]);
+        assert!(!blended.has_attribution());
+    }
+
+    #[test]
+    fn test_blended_tags_single_input() {
+        let estimator = FeeEstimator::new();
+
+        // Single input with tags should pass through unchanged
+        let mut tv = TagVector::new();
+        tv.set(ClusterId::new(1), 500_000);
+        tv.set(ClusterId::new(2), 300_000);
+        let input_tags = StoredTags::from_tag_vector(&tv);
+
+        let inputs = vec![(1_000_000_000_000u64, &input_tags)];
+        let blended = estimator.calculate_blended_tags(&inputs);
+
+        assert!(blended.has_attribution());
+        let blended_tv = blended.to_tag_vector();
+        assert_eq!(blended_tv.get(ClusterId::new(1)), 500_000);
+        assert_eq!(blended_tv.get(ClusterId::new(2)), 300_000);
+    }
+
+    #[test]
+    fn test_blended_tags_multiple_inputs() {
+        let estimator = FeeEstimator::new();
+
+        // Two equal-value inputs with different clusters
+        let mut tv1 = TagVector::new();
+        tv1.set(ClusterId::new(1), TAG_WEIGHT_SCALE);
+        let tags1 = StoredTags::from_tag_vector(&tv1);
+
+        let mut tv2 = TagVector::new();
+        tv2.set(ClusterId::new(2), TAG_WEIGHT_SCALE);
+        let tags2 = StoredTags::from_tag_vector(&tv2);
+
+        let inputs = vec![
+            (1_000_000_000_000u64, &tags1),
+            (1_000_000_000_000u64, &tags2),
+        ];
+        let blended = estimator.calculate_blended_tags(&inputs);
+
+        // Each should have ~50% attribution
+        let blended_tv = blended.to_tag_vector();
+        assert_eq!(blended_tv.get(ClusterId::new(1)), 500_000);
+        assert_eq!(blended_tv.get(ClusterId::new(2)), 500_000);
+    }
+
+    #[test]
+    fn test_blended_tags_value_weighted() {
+        let estimator = FeeEstimator::new();
+
+        // Input 1 is worth 3x as much as input 2
+        let mut tv1 = TagVector::new();
+        tv1.set(ClusterId::new(1), TAG_WEIGHT_SCALE);
+        let tags1 = StoredTags::from_tag_vector(&tv1);
+
+        let mut tv2 = TagVector::new();
+        tv2.set(ClusterId::new(2), TAG_WEIGHT_SCALE);
+        let tags2 = StoredTags::from_tag_vector(&tv2);
+
+        let inputs = vec![
+            (3_000_000_000_000u64, &tags1),
+            (1_000_000_000_000u64, &tags2),
+        ];
+        let blended = estimator.calculate_blended_tags(&inputs);
+
+        // Cluster 1 should have 75%, cluster 2 should have 25%
+        let blended_tv = blended.to_tag_vector();
+        assert_eq!(blended_tv.get(ClusterId::new(1)), 750_000);
+        assert_eq!(blended_tv.get(ClusterId::new(2)), 250_000);
+    }
+
+    #[test]
+    fn test_pending_change_tags_roundtrip() {
+        let mut pending = PendingChangeTags::new();
+
+        let mut tv = TagVector::new();
+        tv.set(ClusterId::new(42), 600_000);
+        let tags = StoredTags::from_tag_vector(&tv);
+
+        let output_key = [0xABu8; 32];
+        pending.add(output_key, tags.clone(), 100);
+
+        // Should find the pending tags
+        let found = pending.find_and_remove(&output_key);
+        assert!(found.is_some());
+        let found_tags = found.unwrap();
+        assert_eq!(found_tags.to_tag_vector().get(ClusterId::new(42)), 600_000);
+
+        // Should not find again after removal
+        assert!(pending.find_and_remove(&output_key).is_none());
+    }
+
+    #[test]
+    fn test_pending_change_tags_cleanup() {
+        let mut pending = PendingChangeTags::new();
+
+        let tags = StoredTags::new();
+        let output_key1 = [0x01u8; 32];
+        let output_key2 = [0x02u8; 32];
+
+        // Add at different heights
+        pending.add(output_key1, tags.clone(), 100);
+        pending.add(output_key2, tags.clone(), 500);
+
+        // Cleanup stale entries (older than 200 blocks from height 600)
+        pending.cleanup_stale(600, 200);
+
+        // Old entry should be removed
+        assert!(pending.find_and_remove(&output_key1).is_none());
+        // Recent entry should remain
+        assert!(pending.find_and_remove(&output_key2).is_some());
     }
 }

@@ -1129,11 +1129,13 @@ mod cluster_tags {
 // ============================================================================
 
 mod decoy_selection {
-    use botho_wallet::decoy_selection::{
-        select_decoys, select_decoys_with_fallback, validate_decoys, DecoySelectionConfig,
-        DecoySelectionError, UtxoCandidate,
+    use botho_wallet::{
+        decoy_selection::{
+            select_decoys, select_decoys_with_fallback, validate_decoys, DecoySelectionConfig,
+            DecoySelectionError, UtxoCandidate,
+        },
+        fee_estimation::StoredTags,
     };
-    use botho_wallet::fee_estimation::StoredTags;
     use bth_cluster_tax::{ClusterId, TAG_WEIGHT_SCALE};
     use std::collections::HashMap;
 
@@ -1341,7 +1343,10 @@ mod decoy_selection {
             &config,
         );
         assert!(
-            matches!(strict_result, Err(DecoySelectionError::InsufficientDecoys { .. })),
+            matches!(
+                strict_result,
+                Err(DecoySelectionError::InsufficientDecoys { .. })
+            ),
             "Strict selection should fail"
         );
 
@@ -1394,19 +1399,30 @@ mod decoy_selection {
         );
 
         // Should detect 3 violations (too young, too old, high factor)
-        assert_eq!(violations.len(), 3, "Should detect 3 violations: {:?}", violations);
+        assert_eq!(
+            violations.len(),
+            3,
+            "Should detect 3 violations: {:?}",
+            violations
+        );
 
         // Verify specific violations
         assert!(
-            violations.iter().any(|(idx, msg)| *idx == 0 && msg.contains("young")),
+            violations
+                .iter()
+                .any(|(idx, msg)| *idx == 0 && msg.contains("young")),
             "Should detect 'too young' violation"
         );
         assert!(
-            violations.iter().any(|(idx, msg)| *idx == 2 && msg.contains("old")),
+            violations
+                .iter()
+                .any(|(idx, msg)| *idx == 2 && msg.contains("old")),
             "Should detect 'too old' violation"
         );
         assert!(
-            violations.iter().any(|(idx, msg)| *idx == 3 && msg.contains("factor")),
+            violations
+                .iter()
+                .any(|(idx, msg)| *idx == 3 && msg.contains("factor")),
             "Should detect factor violation"
         );
     }
