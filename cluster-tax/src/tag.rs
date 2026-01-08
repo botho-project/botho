@@ -239,6 +239,88 @@ impl TagVector {
 
         entropy
     }
+
+    // ========================================================================
+    // Collision Entropy (H₂) - For Entropy-Weighted Decay
+    // ========================================================================
+    //
+    // Collision entropy is more resistant to gaming than Shannon entropy because
+    // it squares the weights, heavily penalizing concentrated distributions.
+    // This makes it ideal for patient attack resistance.
+    //
+    // H₂ = -log₂(Σ pᵢ²) where pᵢ are normalized cluster weights
+    //
+    // Key properties:
+    // - Fresh mint (single cluster): 0 bits (log₂(1) = 0)
+    // - Equal split (N clusters): log₂(N) bits
+    // - Wash trade: unchanged (same distribution in and out)
+    // - Commerce: increases (mixing with different clusters)
+
+    /// Compute the collision sum: Σ wᵢ² over all cluster weights.
+    ///
+    /// This is the unnormalized component of collision entropy (H₂).
+    /// Lower value = higher entropy = more mixing.
+    ///
+    /// Used for efficient entropy threshold checking without floating-point
+    /// math.
+    pub fn collision_sum(&self) -> u128 {
+        self.tags.values().map(|&w| (w as u128) * (w as u128)).sum()
+    }
+
+    /// Compute collision entropy (H₂) in bits, excluding background.
+    ///
+    /// Formula: H₂ = -log₂(Σ pᵢ²) where pᵢ = wᵢ / Σwⱼ
+    ///
+    /// This is **decay-invariant**: proportional decay doesn't change
+    /// the relative weights, so entropy stays constant.
+    ///
+    /// # Properties
+    ///
+    /// - Single cluster: 0 bits
+    /// - Two equal clusters: 1 bit
+    /// - N equal clusters: log₂(N) bits
+    /// - Wash trade (same in/out): 0 bits delta
+    /// - Commerce (different clusters): positive delta
+    pub fn collision_entropy(&self) -> f64 {
+        let total: u64 = self.tags.values().map(|&w| w as u64).sum();
+        if total == 0 {
+            return 0.0;
+        }
+
+        let total_sq = (total as u128) * (total as u128);
+        let collision = self.collision_sum();
+
+        if collision == 0 {
+            return 0.0;
+        }
+
+        // H₂ = -log₂(collision_sum / total²)
+        // = log₂(total²) - log₂(collision_sum)
+        let probability = collision as f64 / total_sq as f64;
+        -probability.log2()
+    }
+
+    /// Check if collision entropy meets a threshold (in bits).
+    ///
+    /// Equivalent to: H₂ ≥ threshold
+    ///
+    /// Uses integer arithmetic for efficiency:
+    /// H₂ ≥ threshold ⟺ collision_sum / total² ≤ 2^(-threshold)
+    pub fn meets_entropy_threshold(&self, threshold_bits: f64) -> bool {
+        let total: u64 = self.tags.values().map(|&w| w as u64).sum();
+        if total == 0 {
+            // No cluster attribution = 0 entropy, only meets threshold of 0
+            return threshold_bits <= 0.0;
+        }
+
+        let total_sq = (total as u128) * (total as u128);
+        let collision = self.collision_sum();
+
+        // threshold in probability space
+        let threshold_inv = 2.0_f64.powf(-threshold_bits);
+
+        (collision as f64 / total_sq as f64) <= threshold_inv
+    }
 }
 
 #[cfg(test)]
@@ -758,5 +840,199 @@ mod tests {
         assert!((commerce_decayed.cluster_entropy() - 1.0).abs() < 0.1); // Still ~1 bit
         assert!(commerce_decayed.shannon_entropy() > 1.4); // Higher due to
                                                            // background
+    }
+
+    // ========================================================================
+    // Collision Entropy (H₂) Tests - For Entropy-Weighted Decay
+    // ========================================================================
+
+    #[test]
+    fn test_collision_sum_single_cluster() {
+        let c1 = ClusterId::new(1);
+        let tags = TagVector::single(c1);
+
+        // Single cluster at 100% weight: 1_000_000² = 10¹²
+        let expected = (TAG_WEIGHT_SCALE as u128) * (TAG_WEIGHT_SCALE as u128);
+        assert_eq!(tags.collision_sum(), expected);
+    }
+
+    #[test]
+    fn test_collision_sum_two_equal() {
+        let c1 = ClusterId::new(1);
+        let c2 = ClusterId::new(2);
+
+        let mut tags = TagVector::new();
+        tags.set(c1, 500_000); // 50%
+        tags.set(c2, 500_000); // 50%
+
+        // Two equal weights: 500_000² + 500_000² = 5×10¹¹
+        let expected = 2 * (500_000u128 * 500_000u128);
+        assert_eq!(tags.collision_sum(), expected);
+    }
+
+    #[test]
+    fn test_collision_entropy_single_cluster() {
+        // Single cluster = 0 bits (log₂(1) = 0)
+        let c1 = ClusterId::new(1);
+        let tags = TagVector::single(c1);
+
+        let entropy = tags.collision_entropy();
+        assert!(
+            entropy.abs() < 0.001,
+            "Single cluster should have 0 collision entropy, got {entropy}"
+        );
+    }
+
+    #[test]
+    fn test_collision_entropy_two_equal() {
+        // Two equal clusters = 1 bit (log₂(2) = 1)
+        let c1 = ClusterId::new(1);
+        let c2 = ClusterId::new(2);
+
+        let mut tags = TagVector::new();
+        tags.set(c1, 500_000);
+        tags.set(c2, 500_000);
+
+        let entropy = tags.collision_entropy();
+        assert!(
+            (entropy - 1.0).abs() < 0.01,
+            "Two equal clusters should have 1 bit entropy, got {entropy}"
+        );
+    }
+
+    #[test]
+    fn test_collision_entropy_four_equal() {
+        // Four equal clusters = 2 bits (log₂(4) = 2)
+        let c1 = ClusterId::new(1);
+        let c2 = ClusterId::new(2);
+        let c3 = ClusterId::new(3);
+        let c4 = ClusterId::new(4);
+
+        let mut tags = TagVector::new();
+        tags.set(c1, 250_000);
+        tags.set(c2, 250_000);
+        tags.set(c3, 250_000);
+        tags.set(c4, 250_000);
+
+        let entropy = tags.collision_entropy();
+        assert!(
+            (entropy - 2.0).abs() < 0.01,
+            "Four equal clusters should have 2 bits entropy, got {entropy}"
+        );
+    }
+
+    #[test]
+    fn test_collision_entropy_decay_invariant() {
+        // KEY TEST: Collision entropy is decay-invariant
+        let c1 = ClusterId::new(1);
+        let c2 = ClusterId::new(2);
+
+        let mut tags = TagVector::new();
+        tags.set(c1, 600_000); // 60%
+        tags.set(c2, 400_000); // 40%
+
+        let entropy_before = tags.collision_entropy();
+
+        // Apply 30% decay
+        tags.apply_decay(300_000);
+
+        let entropy_after = tags.collision_entropy();
+
+        assert!(
+            (entropy_after - entropy_before).abs() < 0.01,
+            "Collision entropy should be decay-invariant: before={entropy_before}, after={entropy_after}"
+        );
+    }
+
+    #[test]
+    fn test_collision_entropy_commerce_increases() {
+        // Commerce (mixing) increases collision entropy
+        let c1 = ClusterId::new(1);
+        let c2 = ClusterId::new(2);
+
+        let before = TagVector::single(c1);
+        let entropy_before = before.collision_entropy();
+
+        let mut after = TagVector::new();
+        after.set(c1, 500_000);
+        after.set(c2, 500_000);
+        let entropy_after = after.collision_entropy();
+
+        assert!(
+            entropy_after > entropy_before + 0.9,
+            "Commerce should increase collision entropy: before={entropy_before}, after={entropy_after}"
+        );
+    }
+
+    #[test]
+    fn test_collision_entropy_wash_trade_no_change() {
+        // Wash trade: same distribution in and out = 0 delta
+        let c1 = ClusterId::new(1);
+
+        let input = TagVector::single(c1);
+        let output = TagVector::single(c1);
+
+        let delta = output.collision_entropy() - input.collision_entropy();
+        assert!(
+            delta.abs() < 0.001,
+            "Wash trade should have 0 entropy delta, got {delta}"
+        );
+    }
+
+    #[test]
+    fn test_meets_entropy_threshold() {
+        let c1 = ClusterId::new(1);
+        let c2 = ClusterId::new(2);
+
+        // Single cluster = 0 bits
+        let single = TagVector::single(c1);
+        assert!(single.meets_entropy_threshold(0.0));
+        assert!(!single.meets_entropy_threshold(0.1));
+        assert!(!single.meets_entropy_threshold(1.0));
+
+        // Two equal = 1 bit
+        let mut two_equal = TagVector::new();
+        two_equal.set(c1, 500_000);
+        two_equal.set(c2, 500_000);
+        assert!(two_equal.meets_entropy_threshold(0.0));
+        assert!(two_equal.meets_entropy_threshold(0.5));
+        assert!(two_equal.meets_entropy_threshold(1.0));
+        assert!(!two_equal.meets_entropy_threshold(1.5));
+    }
+
+    #[test]
+    fn test_collision_vs_shannon_entropy() {
+        // Collision entropy ≤ Shannon entropy (always)
+        // For equal distributions, they're equal (log₂(N))
+        // For unequal distributions, H₂ < H₁
+
+        let c1 = ClusterId::new(1);
+        let c2 = ClusterId::new(2);
+
+        // Equal distribution: H₂ = H₁ = 1 bit
+        let mut equal = TagVector::new();
+        equal.set(c1, 500_000);
+        equal.set(c2, 500_000);
+        assert!((equal.collision_entropy() - equal.cluster_entropy()).abs() < 0.01);
+
+        // Unequal distribution: H₂ < H₁
+        let mut unequal = TagVector::new();
+        unequal.set(c1, 900_000);
+        unequal.set(c2, 100_000);
+        assert!(
+            unequal.collision_entropy() <= unequal.cluster_entropy(),
+            "H₂ ({}) should be ≤ H₁ ({})",
+            unequal.collision_entropy(),
+            unequal.cluster_entropy()
+        );
+    }
+
+    #[test]
+    fn test_collision_entropy_empty() {
+        // Empty (all background) = 0 bits
+        let tags = TagVector::new();
+        assert!(tags.collision_entropy() < 0.001);
+        assert!(tags.meets_entropy_threshold(0.0));
+        assert!(!tags.meets_entropy_threshold(0.1));
     }
 }

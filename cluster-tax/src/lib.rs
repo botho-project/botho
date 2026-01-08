@@ -46,6 +46,7 @@ pub mod validate;
 mod age_decay;
 mod block_decay;
 mod cluster;
+mod entropy_decay;
 mod fee_curve;
 mod lottery;
 mod tag;
@@ -85,6 +86,10 @@ pub use crypto::{
     SegmentOrProof,
 };
 pub use dynamic_fee::{DynamicFeeBase, DynamicFeeState, FeeSuggestion};
+pub use entropy_decay::{
+    conservative_entropy_delta, ring_entropy_decay, DecayMode, EntropyDecayConfig, EntropyScaling,
+    RingEntropyDecayInfo,
+};
 pub use fee_curve::{
     count_outputs_with_memos,
     ClusterFactorCurve,
