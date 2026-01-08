@@ -28,6 +28,80 @@
 //! decay: - Age check: UTXO must be >= min_age_blocks old - Entropy check: Must
 //!   cause entropy delta >= min_entropy_delta - Decay rate: 5% × scaling_factor
 //!   (where scaling_factor depends on entropy delta)
+//!
+//! # Ring Signature Support
+//!
+//! For ring signatures where we don't know which ring member is the real input,
+//! this module provides conservative calculations that defend against manipulation:
+//!
+//! - **Conservative entropy delta**: Uses MAX input entropy among all ring members
+//! - **Age eligibility**: ALL ring members must be old enough for decay to apply
+//! - **Attack prevention**: Blocks high-entropy decoy and young decoy attacks
+//!
+//! ## Ring Signature Usage Example
+//!
+//! ```rust
+//! use bth_cluster_tax::{
+//!     conservative_entropy_delta, ring_entropy_decay, RingEntropyDecayInfo,
+//!     EntropyDecayConfig, TagVector, ClusterId,
+//! };
+//!
+//! // Create ring member tags (from decoys and real input)
+//! let c1 = ClusterId::new(1);
+//! let c2 = ClusterId::new(2);
+//!
+//! let ring_tags = vec![
+//!     TagVector::single(c1),  // Decoy 1
+//!     TagVector::single(c1),  // Decoy 2
+//!     TagVector::single(c1),  // Real input (unknown to verifier)
+//! ];
+//!
+//! // Output after commerce
+//! let mut output_tags = TagVector::new();
+//! output_tags.set(c1, 500_000);  // 50% from cluster 1
+//! output_tags.set(c2, 500_000);  // 50% from cluster 2
+//!
+//! // Ring member creation blocks (when UTXOs were created)
+//! let ring_creation_blocks = vec![0, 100, 200];  // All old UTXOs
+//! let current_block = 1000;
+//!
+//! // Calculate decay for ring signature transaction
+//! let config = EntropyDecayConfig::default();
+//! let decay_amount = ring_entropy_decay(
+//!     &ring_tags,
+//!     &output_tags,
+//!     &ring_creation_blocks,
+//!     current_block,
+//!     &config,
+//! );
+//!
+//! // For detailed analysis and debugging:
+//! let info = RingEntropyDecayInfo::analyze(
+//!     &ring_tags,
+//!     &output_tags,
+//!     &ring_creation_blocks,
+//!     current_block,
+//!     &config,
+//! );
+//!
+//! if info.decay_applied() {
+//!     println!("Decay applied: {} (factor: {})", info.decay_amount, info.decay_factor);
+//!     println!("Conservative delta: {} bits", info.conservative_delta);
+//! } else {
+//!     println!("Decay blocked: {:?}", info.block_reason);
+//! }
+//! ```
+//!
+//! ## Security Properties for Ring Signatures
+//!
+//! 1. **High-entropy decoy attack**: Blocked by using MAX input entropy
+//!    - Attacker can't pick high-entropy decoys to inflate their delta
+//!
+//! 2. **Young decoy attack**: Blocked by requiring ALL members to be age-eligible
+//!    - Attacker can't pick old decoys to force decay on young coins
+//!
+//! 3. **Self-transfer with decoys**: Blocked by entropy check
+//!    - Even with decoys, self-transfer doesn't increase entropy
 
 use crate::age_decay::AgeDecayConfig;
 use crate::tag::{TagVector, TagWeight, TAG_WEIGHT_SCALE};
@@ -703,6 +777,311 @@ fn simulate_attack_entropy_weighted(
     }
 }
 
+// ============================================================================
+// Ring Signature Support
+// ============================================================================
+
+/// Calculate the conservative entropy delta for ring signatures.
+///
+/// For ring signatures, we don't know which ring member is the real input.
+/// To defend against manipulation, we use the MAXIMUM input entropy among
+/// all ring members (conservative for the sender, who wants to maximize decay).
+///
+/// # Security Properties
+///
+/// - **High-entropy decoy attack**: Blocked by using MAX input entropy
+///   (attacker can't inflate their output entropy relative to low-entropy input)
+/// - **Young decoy attack**: Handled separately via age checking
+/// - **Conservative approach**: Assumes sender is trying to minimize decay
+///
+/// # Arguments
+///
+/// * `ring_member_tags` - Tag vectors for each ring member
+/// * `output_tags` - Tag vector for the output after mixing
+///
+/// # Returns
+///
+/// The conservative entropy delta (output entropy - max input entropy), clamped to >= 0.
+pub fn conservative_entropy_delta(ring_member_tags: &[TagVector], output_tags: &TagVector) -> f64 {
+    if ring_member_tags.is_empty() {
+        return 0.0;
+    }
+
+    // Find maximum input entropy among all ring members
+    let max_input_entropy = ring_member_tags
+        .iter()
+        .map(|tv| tv.collision_entropy())
+        .fold(0.0_f64, |a, b| a.max(b));
+
+    let output_entropy = output_tags.collision_entropy();
+
+    // Conservative delta: can only be positive (entropy increase)
+    (output_entropy - max_input_entropy).max(0.0)
+}
+
+/// Calculate entropy decay for ring signature transactions.
+///
+/// This function handles the special requirements of ring signatures where
+/// we don't know which ring member is the real input. It applies conservative
+/// checks on both age (all members must be eligible) and entropy (use max
+/// input entropy).
+///
+/// # Security Properties
+///
+/// - All ring members must be age-eligible for decay to apply
+/// - Conservative entropy delta used (MAX input entropy)
+/// - Prevents both young decoy and high-entropy decoy attacks
+///
+/// # Arguments
+///
+/// * `ring_member_tags` - Tag vectors for each ring member
+/// * `output_tags` - Tag vector for the mixed output
+/// * `ring_creation_blocks` - Block heights when each ring member was created
+/// * `current_block` - Current block height
+/// * `config` - Entropy decay configuration
+///
+/// # Returns
+///
+/// The decay amount as `TagWeight` (0 if decay conditions not met).
+pub fn ring_entropy_decay(
+    ring_member_tags: &[TagVector],
+    output_tags: &TagVector,
+    ring_creation_blocks: &[u64],
+    current_block: u64,
+    config: &EntropyDecayConfig,
+) -> TagWeight {
+    // Validate input consistency
+    if ring_member_tags.len() != ring_creation_blocks.len() || ring_member_tags.is_empty() {
+        return 0;
+    }
+
+    // Check age eligibility - ALL ring members must be age-eligible
+    if let Some(ref age_config) = config.age_config {
+        let all_eligible = ring_creation_blocks
+            .iter()
+            .all(|&creation_block| age_config.is_eligible(creation_block, current_block));
+
+        if !all_eligible {
+            return 0;
+        }
+    }
+
+    // Calculate conservative entropy delta
+    let entropy_delta = conservative_entropy_delta(ring_member_tags, output_tags);
+
+    // Check if entropy threshold is met
+    if entropy_delta < config.min_entropy_delta {
+        return 0;
+    }
+
+    // Calculate scaling factor based on entropy delta
+    let scaling_factor = config
+        .decay_scaling
+        .factor(entropy_delta, config.min_entropy_delta);
+
+    // Calculate effective decay rate
+    (config.base_decay_rate as f64 * scaling_factor).round() as TagWeight
+}
+
+/// Detailed information about ring entropy decay analysis.
+///
+/// This struct provides comprehensive debugging and auditing information
+/// for ring signature entropy decay decisions.
+#[derive(Clone, Debug)]
+pub struct RingEntropyDecayInfo {
+    /// Collision entropy for each ring member input.
+    pub member_entropies: Vec<f64>,
+
+    /// Maximum input entropy (used for conservative calculation).
+    pub max_input_entropy: f64,
+
+    /// Output entropy after mixing.
+    pub output_entropy: f64,
+
+    /// Conservative entropy delta (output - max input).
+    pub conservative_delta: f64,
+
+    /// Whether all ring members are age-eligible for decay.
+    pub all_age_eligible: bool,
+
+    /// Individual age eligibility for each ring member.
+    pub member_age_eligible: Vec<bool>,
+
+    /// Decay factor applied (0.0 to 1.0, or 0.0 if not eligible).
+    pub decay_factor: f64,
+
+    /// The resulting decay amount in TagWeight units.
+    pub decay_amount: TagWeight,
+
+    /// Reason decay was blocked, if applicable.
+    pub block_reason: Option<RingDecayBlockReason>,
+}
+
+/// Reasons why ring signature decay might be blocked.
+#[derive(Clone, Debug, PartialEq)]
+pub enum RingDecayBlockReason {
+    /// Empty ring (no members).
+    EmptyRing,
+
+    /// Mismatched array lengths.
+    LengthMismatch { tags: usize, blocks: usize },
+
+    /// Some ring members are too young.
+    SomeUtxosTooYoung {
+        ineligible_count: usize,
+        total_count: usize,
+    },
+
+    /// Conservative entropy delta below threshold.
+    InsufficientEntropy { delta: f64, required: f64 },
+}
+
+impl RingEntropyDecayInfo {
+    /// Analyze a ring signature transaction for entropy decay.
+    ///
+    /// This method computes all relevant metrics for debugging and auditing
+    /// ring signature decay decisions.
+    ///
+    /// # Arguments
+    ///
+    /// * `ring_member_tags` - Tag vectors for each ring member
+    /// * `output_tags` - Tag vector for the mixed output
+    /// * `ring_creation_blocks` - Block heights when each ring member was created
+    /// * `current_block` - Current block height
+    /// * `config` - Entropy decay configuration
+    ///
+    /// # Returns
+    ///
+    /// Complete analysis information including all entropies, eligibility,
+    /// and the final decay decision.
+    pub fn analyze(
+        ring_member_tags: &[TagVector],
+        output_tags: &TagVector,
+        ring_creation_blocks: &[u64],
+        current_block: u64,
+        config: &EntropyDecayConfig,
+    ) -> Self {
+        // Handle edge cases
+        if ring_member_tags.is_empty() {
+            return Self {
+                member_entropies: vec![],
+                max_input_entropy: 0.0,
+                output_entropy: output_tags.collision_entropy(),
+                conservative_delta: 0.0,
+                all_age_eligible: false,
+                member_age_eligible: vec![],
+                decay_factor: 0.0,
+                decay_amount: 0,
+                block_reason: Some(RingDecayBlockReason::EmptyRing),
+            };
+        }
+
+        if ring_member_tags.len() != ring_creation_blocks.len() {
+            return Self {
+                member_entropies: vec![],
+                max_input_entropy: 0.0,
+                output_entropy: output_tags.collision_entropy(),
+                conservative_delta: 0.0,
+                all_age_eligible: false,
+                member_age_eligible: vec![],
+                decay_factor: 0.0,
+                decay_amount: 0,
+                block_reason: Some(RingDecayBlockReason::LengthMismatch {
+                    tags: ring_member_tags.len(),
+                    blocks: ring_creation_blocks.len(),
+                }),
+            };
+        }
+
+        // Calculate entropies for each member
+        let member_entropies: Vec<f64> = ring_member_tags
+            .iter()
+            .map(|tv| tv.collision_entropy())
+            .collect();
+
+        let max_input_entropy = member_entropies
+            .iter()
+            .fold(0.0_f64, |a, &b| a.max(b));
+
+        let output_entropy = output_tags.collision_entropy();
+        let conservative_delta = (output_entropy - max_input_entropy).max(0.0);
+
+        // Check age eligibility
+        let member_age_eligible: Vec<bool> = if let Some(ref age_config) = config.age_config {
+            ring_creation_blocks
+                .iter()
+                .map(|&creation_block| age_config.is_eligible(creation_block, current_block))
+                .collect()
+        } else {
+            // No age config = all eligible
+            vec![true; ring_creation_blocks.len()]
+        };
+
+        let all_age_eligible = member_age_eligible.iter().all(|&e| e);
+
+        // Determine if decay applies
+        if !all_age_eligible {
+            let ineligible_count = member_age_eligible.iter().filter(|&&e| !e).count();
+            return Self {
+                member_entropies,
+                max_input_entropy,
+                output_entropy,
+                conservative_delta,
+                all_age_eligible,
+                member_age_eligible,
+                decay_factor: 0.0,
+                decay_amount: 0,
+                block_reason: Some(RingDecayBlockReason::SomeUtxosTooYoung {
+                    ineligible_count,
+                    total_count: ring_member_tags.len(),
+                }),
+            };
+        }
+
+        // Check entropy threshold
+        if conservative_delta < config.min_entropy_delta {
+            return Self {
+                member_entropies,
+                max_input_entropy,
+                output_entropy,
+                conservative_delta,
+                all_age_eligible,
+                member_age_eligible,
+                decay_factor: 0.0,
+                decay_amount: 0,
+                block_reason: Some(RingDecayBlockReason::InsufficientEntropy {
+                    delta: conservative_delta,
+                    required: config.min_entropy_delta,
+                }),
+            };
+        }
+
+        // Calculate decay
+        let decay_factor = config
+            .decay_scaling
+            .factor(conservative_delta, config.min_entropy_delta);
+
+        let decay_amount = (config.base_decay_rate as f64 * decay_factor).round() as TagWeight;
+
+        Self {
+            member_entropies,
+            max_input_entropy,
+            output_entropy,
+            conservative_delta,
+            all_age_eligible,
+            member_age_eligible,
+            decay_factor,
+            decay_amount,
+            block_reason: None,
+        }
+    }
+
+    /// Check if decay was applied.
+    pub fn decay_applied(&self) -> bool {
+        self.block_reason.is_none() && self.decay_amount > 0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -982,6 +1361,476 @@ mod tests {
         assert!(
             result3.decay_applied,
             "Old UTXO with commerce should decay"
+        );
+    }
+
+    // ========================================================================
+    // Ring Signature Entropy Decay Tests
+    // ========================================================================
+
+    #[test]
+    fn test_conservative_entropy_delta_single_member() {
+        let c1 = ClusterId::new(1);
+        let c2 = ClusterId::new(2);
+
+        // Single ring member with single cluster
+        let ring_tags = vec![TagVector::single(c1)];
+
+        // Output with different cluster (commerce)
+        let mut output_tags = TagVector::new();
+        output_tags.set(c1, 500_000);
+        output_tags.set(c2, 500_000);
+
+        let delta = conservative_entropy_delta(&ring_tags, &output_tags);
+
+        // Input entropy: 0 bits (single cluster)
+        // Output entropy: ~1 bit (two equal clusters)
+        // Delta should be ~1 bit
+        assert!(
+            delta > 0.9 && delta < 1.1,
+            "Delta should be ~1 bit, got {delta}"
+        );
+    }
+
+    #[test]
+    fn test_conservative_entropy_delta_uses_max_input() {
+        let c1 = ClusterId::new(1);
+        let c2 = ClusterId::new(2);
+        let c3 = ClusterId::new(3);
+
+        // Ring member 1: single cluster (0 entropy)
+        let low_entropy = TagVector::single(c1);
+
+        // Ring member 2: two clusters (~1 bit entropy)
+        let mut high_entropy = TagVector::new();
+        high_entropy.set(c1, 500_000);
+        high_entropy.set(c2, 500_000);
+
+        let ring_tags = vec![low_entropy, high_entropy];
+
+        // Output also ~1 bit entropy
+        let mut output_tags = TagVector::new();
+        output_tags.set(c2, 500_000);
+        output_tags.set(c3, 500_000);
+
+        let delta = conservative_entropy_delta(&ring_tags, &output_tags);
+
+        // Conservative: use max input entropy (~1 bit)
+        // Output entropy ~1 bit, so delta should be ~0
+        assert!(
+            delta < 0.2,
+            "Conservative delta should be ~0 (using max input), got {delta}"
+        );
+    }
+
+    #[test]
+    fn test_conservative_entropy_delta_empty_ring() {
+        let c1 = ClusterId::new(1);
+        let output_tags = TagVector::single(c1);
+
+        let delta = conservative_entropy_delta(&[], &output_tags);
+
+        assert_eq!(delta, 0.0, "Empty ring should have 0 delta");
+    }
+
+    #[test]
+    fn test_conservative_entropy_delta_clamped_positive() {
+        let c1 = ClusterId::new(1);
+        let c2 = ClusterId::new(2);
+
+        // Ring member with high entropy
+        let mut high_entropy = TagVector::new();
+        high_entropy.set(c1, 500_000);
+        high_entropy.set(c2, 500_000);
+
+        let ring_tags = vec![high_entropy];
+
+        // Output with lower entropy (single cluster)
+        let output_tags = TagVector::single(c1);
+
+        let delta = conservative_entropy_delta(&ring_tags, &output_tags);
+
+        // Delta would be negative (output entropy < input entropy)
+        // But should be clamped to 0
+        assert_eq!(delta, 0.0, "Negative delta should be clamped to 0");
+    }
+
+    #[test]
+    fn test_ring_entropy_decay_all_eligible_commerce() {
+        let c1 = ClusterId::new(1);
+        let c2 = ClusterId::new(2);
+
+        // Ring members (all old, all single cluster)
+        let ring_tags = vec![
+            TagVector::single(c1),
+            TagVector::single(c1),
+            TagVector::single(c1),
+        ];
+
+        // Output with commerce (different cluster mixed in)
+        let mut output_tags = TagVector::new();
+        output_tags.set(c1, 500_000);
+        output_tags.set(c2, 500_000);
+
+        // All created at block 0, current block 1000 (all >720 blocks old)
+        let ring_creation_blocks = vec![0, 0, 0];
+        let current_block = 1000;
+
+        let config = EntropyDecayConfig::default();
+
+        let decay = ring_entropy_decay(
+            &ring_tags,
+            &output_tags,
+            &ring_creation_blocks,
+            current_block,
+            &config,
+        );
+
+        assert!(decay > 0, "Should have decay for legitimate commerce");
+    }
+
+    #[test]
+    fn test_ring_entropy_decay_one_young_blocks() {
+        let c1 = ClusterId::new(1);
+        let c2 = ClusterId::new(2);
+
+        let ring_tags = vec![
+            TagVector::single(c1),
+            TagVector::single(c1),
+            TagVector::single(c1),
+        ];
+
+        let mut output_tags = TagVector::new();
+        output_tags.set(c1, 500_000);
+        output_tags.set(c2, 500_000);
+
+        // One young member (created at block 900, current 1000 = 100 blocks < 720)
+        let ring_creation_blocks = vec![0, 0, 900];
+        let current_block = 1000;
+
+        let config = EntropyDecayConfig::default();
+
+        let decay = ring_entropy_decay(
+            &ring_tags,
+            &output_tags,
+            &ring_creation_blocks,
+            current_block,
+            &config,
+        );
+
+        assert_eq!(decay, 0, "One young member should block all decay");
+    }
+
+    #[test]
+    fn test_ring_entropy_decay_self_transfer() {
+        let c1 = ClusterId::new(1);
+
+        // All ring members have same cluster
+        let ring_tags = vec![
+            TagVector::single(c1),
+            TagVector::single(c1),
+            TagVector::single(c1),
+        ];
+
+        // Output also same cluster (self-transfer)
+        let output_tags = TagVector::single(c1);
+
+        let ring_creation_blocks = vec![0, 0, 0];
+        let current_block = 1000;
+
+        let config = EntropyDecayConfig::default();
+
+        let decay = ring_entropy_decay(
+            &ring_tags,
+            &output_tags,
+            &ring_creation_blocks,
+            current_block,
+            &config,
+        );
+
+        assert_eq!(decay, 0, "Self-transfer should have no decay");
+    }
+
+    #[test]
+    fn test_ring_entropy_decay_high_entropy_decoy_attack_blocked() {
+        let c1 = ClusterId::new(1);
+        let c2 = ClusterId::new(2);
+        let c3 = ClusterId::new(3);
+
+        // Attacker's real input: low entropy (single cluster)
+        let attacker_input = TagVector::single(c1);
+
+        // Attacker picks high-entropy decoys to try to game the system
+        let mut high_entropy_decoy = TagVector::new();
+        high_entropy_decoy.set(c2, 500_000);
+        high_entropy_decoy.set(c3, 500_000);
+
+        let ring_tags = vec![
+            attacker_input,
+            high_entropy_decoy.clone(),
+            high_entropy_decoy,
+        ];
+
+        // Attacker's output: slightly increased entropy
+        let mut output_tags = TagVector::new();
+        output_tags.set(c1, 800_000);
+        output_tags.set(c2, 200_000);
+
+        let ring_creation_blocks = vec![0, 0, 0];
+        let current_block = 1000;
+
+        let config = EntropyDecayConfig::default();
+
+        let decay = ring_entropy_decay(
+            &ring_tags,
+            &output_tags,
+            &ring_creation_blocks,
+            current_block,
+            &config,
+        );
+
+        // Conservative approach uses MAX input entropy (from high-entropy decoys)
+        // Output entropy is likely lower than max input, so delta <= 0
+        // Decay should be 0 (attack blocked)
+        assert_eq!(
+            decay, 0,
+            "High-entropy decoy attack should be blocked"
+        );
+    }
+
+    #[test]
+    fn test_ring_entropy_decay_info_analyze_success() {
+        let c1 = ClusterId::new(1);
+        let c2 = ClusterId::new(2);
+
+        let ring_tags = vec![TagVector::single(c1), TagVector::single(c1)];
+
+        let mut output_tags = TagVector::new();
+        output_tags.set(c1, 500_000);
+        output_tags.set(c2, 500_000);
+
+        let ring_creation_blocks = vec![0, 0];
+        let current_block = 1000;
+
+        let config = EntropyDecayConfig::default();
+
+        let info = RingEntropyDecayInfo::analyze(
+            &ring_tags,
+            &output_tags,
+            &ring_creation_blocks,
+            current_block,
+            &config,
+        );
+
+        assert!(info.decay_applied(), "Should have decay for commerce");
+        assert_eq!(info.member_entropies.len(), 2);
+        assert!(info.max_input_entropy < 0.1, "Input entropy should be ~0");
+        assert!(info.output_entropy > 0.9, "Output entropy should be ~1 bit");
+        assert!(info.conservative_delta > 0.9, "Delta should be ~1 bit");
+        assert!(info.all_age_eligible);
+        assert!(info.block_reason.is_none());
+    }
+
+    #[test]
+    fn test_ring_entropy_decay_info_analyze_young_utxo() {
+        let c1 = ClusterId::new(1);
+        let c2 = ClusterId::new(2);
+
+        let ring_tags = vec![TagVector::single(c1), TagVector::single(c1)];
+
+        let mut output_tags = TagVector::new();
+        output_tags.set(c1, 500_000);
+        output_tags.set(c2, 500_000);
+
+        // One young UTXO
+        let ring_creation_blocks = vec![0, 900];
+        let current_block = 1000;
+
+        let config = EntropyDecayConfig::default();
+
+        let info = RingEntropyDecayInfo::analyze(
+            &ring_tags,
+            &output_tags,
+            &ring_creation_blocks,
+            current_block,
+            &config,
+        );
+
+        assert!(!info.decay_applied());
+        assert!(!info.all_age_eligible);
+        assert_eq!(info.member_age_eligible, vec![true, false]);
+        assert!(matches!(
+            info.block_reason,
+            Some(RingDecayBlockReason::SomeUtxosTooYoung { ineligible_count: 1, total_count: 2 })
+        ));
+    }
+
+    #[test]
+    fn test_ring_entropy_decay_info_analyze_empty_ring() {
+        let c1 = ClusterId::new(1);
+        let output_tags = TagVector::single(c1);
+
+        let config = EntropyDecayConfig::default();
+
+        let info = RingEntropyDecayInfo::analyze(&[], &output_tags, &[], 1000, &config);
+
+        assert!(!info.decay_applied());
+        assert!(matches!(info.block_reason, Some(RingDecayBlockReason::EmptyRing)));
+    }
+
+    #[test]
+    fn test_ring_entropy_decay_info_analyze_length_mismatch() {
+        let c1 = ClusterId::new(1);
+        let ring_tags = vec![TagVector::single(c1), TagVector::single(c1)];
+        let output_tags = TagVector::single(c1);
+
+        // Mismatched length
+        let ring_creation_blocks = vec![0, 0, 0];
+
+        let config = EntropyDecayConfig::default();
+
+        let info = RingEntropyDecayInfo::analyze(
+            &ring_tags,
+            &output_tags,
+            &ring_creation_blocks,
+            1000,
+            &config,
+        );
+
+        assert!(!info.decay_applied());
+        assert!(matches!(
+            info.block_reason,
+            Some(RingDecayBlockReason::LengthMismatch { tags: 2, blocks: 3 })
+        ));
+    }
+
+    #[test]
+    fn test_ring_entropy_decay_info_analyze_insufficient_entropy() {
+        let c1 = ClusterId::new(1);
+
+        // Self-transfer (no entropy change)
+        let ring_tags = vec![TagVector::single(c1), TagVector::single(c1)];
+        let output_tags = TagVector::single(c1);
+
+        let ring_creation_blocks = vec![0, 0];
+        let current_block = 1000;
+
+        let config = EntropyDecayConfig::default();
+
+        let info = RingEntropyDecayInfo::analyze(
+            &ring_tags,
+            &output_tags,
+            &ring_creation_blocks,
+            current_block,
+            &config,
+        );
+
+        assert!(!info.decay_applied());
+        assert!(info.all_age_eligible);
+        assert!(matches!(
+            info.block_reason,
+            Some(RingDecayBlockReason::InsufficientEntropy { .. })
+        ));
+    }
+
+    #[test]
+    fn test_ring_entropy_decay_no_age_config() {
+        let c1 = ClusterId::new(1);
+        let c2 = ClusterId::new(2);
+
+        let ring_tags = vec![TagVector::single(c1)];
+
+        let mut output_tags = TagVector::new();
+        output_tags.set(c1, 500_000);
+        output_tags.set(c2, 500_000);
+
+        // Young UTXO that would normally be blocked
+        let ring_creation_blocks = vec![999];
+        let current_block = 1000;
+
+        // Config without age gating
+        let config = EntropyDecayConfig::entropy_only();
+
+        let decay = ring_entropy_decay(
+            &ring_tags,
+            &output_tags,
+            &ring_creation_blocks,
+            current_block,
+            &config,
+        );
+
+        // Without age config, young UTXO doesn't block decay
+        assert!(decay > 0, "Without age config, decay should proceed");
+    }
+
+    #[test]
+    fn test_ring_entropy_decay_typical_ring_size() {
+        let c1 = ClusterId::new(1);
+        let c2 = ClusterId::new(2);
+
+        // Typical ring size of 11 members (like Monero)
+        let ring_tags: Vec<TagVector> = (0..11).map(|_| TagVector::single(c1)).collect();
+
+        let mut output_tags = TagVector::new();
+        output_tags.set(c1, 500_000);
+        output_tags.set(c2, 500_000);
+
+        let ring_creation_blocks: Vec<u64> = (0..11).map(|i| i * 100).collect();
+        let current_block = 2000;
+
+        let config = EntropyDecayConfig::default();
+
+        let decay = ring_entropy_decay(
+            &ring_tags,
+            &output_tags,
+            &ring_creation_blocks,
+            current_block,
+            &config,
+        );
+
+        // All members are old enough, commerce detected
+        assert!(decay > 0, "Standard ring with commerce should decay");
+    }
+
+    #[test]
+    fn test_conservative_entropy_delta_mixed_clusters() {
+        let c1 = ClusterId::new(1);
+        let c2 = ClusterId::new(2);
+        let c3 = ClusterId::new(3);
+        let c4 = ClusterId::new(4);
+
+        // Ring with varying entropy levels
+        // Member 1: 0 bits
+        let m1 = TagVector::single(c1);
+
+        // Member 2: ~1 bit
+        let mut m2 = TagVector::new();
+        m2.set(c1, 500_000);
+        m2.set(c2, 500_000);
+
+        // Member 3: ~1.58 bits (3 equal clusters)
+        let mut m3 = TagVector::new();
+        m3.set(c1, 333_333);
+        m3.set(c2, 333_333);
+        m3.set(c3, 333_334);
+
+        let ring_tags = vec![m1, m2, m3];
+
+        // Output: 4 equal clusters (~2 bits)
+        let mut output_tags = TagVector::new();
+        output_tags.set(c1, 250_000);
+        output_tags.set(c2, 250_000);
+        output_tags.set(c3, 250_000);
+        output_tags.set(c4, 250_000);
+
+        let delta = conservative_entropy_delta(&ring_tags, &output_tags);
+
+        // Max input entropy ~1.58 bits (from m3)
+        // Output entropy ~2 bits
+        // Conservative delta ~0.4 bits
+        assert!(
+            delta > 0.3 && delta < 0.6,
+            "Delta should be ~0.4 bits, got {delta}"
         );
     }
 }
