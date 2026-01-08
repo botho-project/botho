@@ -46,6 +46,7 @@ pub mod validate;
 mod age_decay;
 mod block_decay;
 mod cluster;
+mod entropy_decay;
 mod fee_curve;
 mod lottery;
 mod tag;
@@ -67,6 +68,11 @@ pub use cluster::{ClusterId, ClusterWealth};
 pub use monetary::{DifficultyController, MonetaryPolicy, MonetaryState, MonetaryStats};
 
 pub use age_decay::{apply_age_decay, ring_cluster_factor, AgeDecayConfig, RingDecayInfo};
+pub use entropy_decay::{
+    apply_entropy_decay, calculate_entropy_decay, compare_decay_modes, AttackResult,
+    AttackStrategy, DecayBlockReason, DecayMode, EntropyDecayConfig, EntropyDecayResult,
+    EntropyScaling, SimUtxo,
+};
 pub use block_decay::{
     AndDecayConfig, AndTagVector, BlockAwareTagVector, BlockDecayConfig, RateLimitedDecayConfig,
     RateLimitedTagVector,

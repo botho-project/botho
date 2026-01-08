@@ -356,6 +356,72 @@ mod cli {
             #[arg(long, default_value = "8640")]
             blocks: u64,
         },
+
+        /// Compare entropy-weighted decay vs age-based decay for wash trading
+        /// resistance
+        DecayEntropyCompare {
+            /// Initial cluster wealth
+            #[arg(long, default_value = "100000000")]
+            initial_wealth: u64,
+
+            /// Initial cluster factor (1.0 to 6.0)
+            #[arg(long, default_value = "6.0")]
+            initial_factor: f64,
+
+            /// Duration in blocks (60480 = 1 week)
+            #[arg(long, default_value = "60480")]
+            duration_blocks: u64,
+
+            /// Output results as JSON
+            #[arg(long)]
+            json: bool,
+        },
+
+        /// Test attack resistance against various strategies
+        AttackResistance {
+            /// Initial cluster wealth
+            #[arg(long, default_value = "100000000")]
+            initial_wealth: u64,
+
+            /// Attack strategy to test
+            #[arg(long, default_value = "patient-wash")]
+            strategy: String,
+
+            /// Duration in blocks
+            #[arg(long, default_value = "60480")]
+            duration_blocks: u64,
+
+            /// For patient-wash: blocks between transfers
+            #[arg(long, default_value = "720")]
+            interval_blocks: u64,
+
+            /// For sybil-wash: number of fake counterparties
+            #[arg(long, default_value = "100")]
+            fake_counterparties: u32,
+
+            /// For partial-commerce: ratio of legitimate transactions
+            #[arg(long, default_value = "0.5")]
+            legit_ratio: f64,
+
+            /// Output results as JSON
+            #[arg(long)]
+            json: bool,
+        },
+
+        /// Parameter sensitivity analysis for entropy-weighted decay
+        EntropyParameterSweep {
+            /// Initial cluster wealth
+            #[arg(long, default_value = "100000000")]
+            initial_wealth: u64,
+
+            /// Duration in blocks
+            #[arg(long, default_value = "60480")]
+            duration_blocks: u64,
+
+            /// Output results as JSON
+            #[arg(long)]
+            json: bool,
+        },
     }
 
     pub fn run(cli: Cli) {
@@ -485,6 +551,34 @@ mod cli {
                 wash_txs,
                 blocks,
             ),
+            Command::DecayEntropyCompare {
+                initial_wealth,
+                initial_factor,
+                duration_blocks,
+                json,
+            } => run_decay_entropy_compare(initial_wealth, initial_factor, duration_blocks, json),
+            Command::AttackResistance {
+                initial_wealth,
+                strategy,
+                duration_blocks,
+                interval_blocks,
+                fake_counterparties,
+                legit_ratio,
+                json,
+            } => run_attack_resistance(
+                initial_wealth,
+                &strategy,
+                duration_blocks,
+                interval_blocks,
+                fake_counterparties,
+                legit_ratio,
+                json,
+            ),
+            Command::EntropyParameterSweep {
+                initial_wealth,
+                duration_blocks,
+                json,
+            } => run_entropy_parameter_sweep(initial_wealth, duration_blocks, json),
         }
     }
 
@@ -2700,6 +2794,324 @@ mod cli {
             (1.0 - 0.95_f64.powi(84)) * 100.0,
             (1.0 - 0.95_f64.powi(360)) * 100.0
         );
+    }
+
+    // ========== Entropy-Weighted Decay Commands ==========
+
+    fn run_decay_entropy_compare(
+        initial_wealth: u64,
+        initial_factor: f64,
+        duration_blocks: u64,
+        _json_output: bool,
+    ) {
+        use bth_cluster_tax::{compare_decay_modes, AttackStrategy, DecayMode};
+
+        let strategies = vec![
+            (
+                "rapid-wash",
+                AttackStrategy::RapidWash { transfers: 100 },
+            ),
+            (
+                "patient-wash-720",
+                AttackStrategy::PatientWash {
+                    interval_blocks: 720,
+                    duration_blocks,
+                },
+            ),
+            (
+                "patient-wash-1440",
+                AttackStrategy::PatientWash {
+                    interval_blocks: 1440,
+                    duration_blocks,
+                },
+            ),
+            (
+                "sybil-wash-100",
+                AttackStrategy::SybilWash {
+                    fake_counterparties: 100,
+                    transfers_per_counterparty: 10,
+                },
+            ),
+            (
+                "partial-commerce-50",
+                AttackStrategy::PartialCommerce {
+                    legit_ratio: 0.5,
+                    total_transactions: 100,
+                },
+            ),
+            (
+                "legitimate-commerce",
+                AttackStrategy::PartialCommerce {
+                    legit_ratio: 1.0,
+                    total_transactions: 100,
+                },
+            ),
+        ];
+
+        println!("╔════════════════════════════════════════════════════════════════════════════════════════╗");
+        println!("║              ENTROPY-WEIGHTED vs AGE-BASED DECAY COMPARISON                            ║");
+        println!("╠════════════════════════════════════════════════════════════════════════════════════════╣");
+        println!("║  Initial Wealth:     {:>12}                                                         ║", initial_wealth);
+        println!("║  Initial Factor:     {:>5.1}x (cluster factor)                                           ║", initial_factor);
+        println!("║  Duration:           {:>6} blocks (~{:.1} days)                                          ║",
+            duration_blocks, duration_blocks as f64 / 8640.0);
+        println!("╚════════════════════════════════════════════════════════════════════════════════════════╝");
+        println!();
+
+        println!("┌───────────────────────┬─────────────────────────┬─────────────────────────┐");
+        println!("│      STRATEGY         │     AGE-BASED DECAY     │  ENTROPY-WEIGHTED DECAY │");
+        println!("├───────────────────────┼─────────────────────────┼─────────────────────────┤");
+        println!("│                       │  Tag %  │ Decays│ Resist│  Tag %  │ Decays│ Resist│");
+        println!("├───────────────────────┼─────────┼───────┼───────┼─────────┼───────┼───────┤");
+
+        for (name, strategy) in &strategies {
+            let comparison = compare_decay_modes(strategy, initial_wealth, initial_factor, duration_blocks);
+
+            let age_result = comparison.iter()
+                .find(|(m, _)| *m == DecayMode::AgeBased)
+                .map(|(_, r)| r);
+            let entropy_result = comparison.iter()
+                .find(|(m, _)| *m == DecayMode::EntropyWeighted)
+                .map(|(_, r)| r);
+
+            if let (Some(age), Some(entropy)) = (age_result, entropy_result) {
+                let age_resist = if age.tag_remaining_fraction > 0.5 { "✓" } else { "✗" };
+                let entropy_resist = if entropy.tag_remaining_fraction > 0.5 { "✓" } else { "✗" };
+
+                println!(
+                    "│ {:<21} │ {:>6.1}% │ {:>5} │   {}   │ {:>6.1}% │ {:>5} │   {}   │",
+                    name,
+                    age.tag_remaining_fraction * 100.0,
+                    age.decay_events,
+                    age_resist,
+                    entropy.tag_remaining_fraction * 100.0,
+                    entropy.decay_events,
+                    entropy_resist
+                );
+            }
+        }
+
+        println!("└───────────────────────┴─────────┴───────┴───────┴─────────┴───────┴───────┘");
+        println!();
+        println!("Legend: Resist = ✓ if >50% tag remains (attack resisted), ✗ if ≤50% (attack succeeded)");
+        println!();
+
+        // Analysis
+        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        println!("ANALYSIS");
+        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        println!();
+        println!("Key Insight: Entropy-weighted decay only applies when cluster_entropy() increases.");
+        println!();
+        println!("  • SELF-TRANSFERS: Same tags in, same tags out → entropy unchanged → NO decay");
+        println!("  • SYBIL ATTACK: Fake counterparties have attacker's tags → entropy unchanged → NO decay");
+        println!("  • REAL COMMERCE: Different cluster tags mix → entropy increases → decay applies");
+        println!();
+        println!("Advantages of entropy-weighted decay:");
+        println!("  1. ✓ Resistant to rapid wash trading (no entropy change)");
+        println!("  2. ✓ Resistant to patient wash trading (no entropy change regardless of timing)");
+        println!("  3. ✓ Resistant to sybil wash trading (fake identities don't add entropy)");
+        println!("  4. ✓ Allows natural decay through legitimate commerce");
+        println!("  5. ✓ Privacy preserved (uses existing cluster_entropy() calculation)");
+    }
+
+    fn run_attack_resistance(
+        initial_wealth: u64,
+        strategy_name: &str,
+        duration_blocks: u64,
+        interval_blocks: u64,
+        fake_counterparties: u32,
+        legit_ratio: f64,
+        _json_output: bool,
+    ) {
+        use bth_cluster_tax::{compare_decay_modes, AttackStrategy, DecayMode};
+
+        let strategy = match strategy_name {
+            "rapid-wash" | "rapid" => AttackStrategy::RapidWash { transfers: 100 },
+            "patient-wash" | "patient" => AttackStrategy::PatientWash {
+                interval_blocks,
+                duration_blocks,
+            },
+            "sybil-wash" | "sybil" => AttackStrategy::SybilWash {
+                fake_counterparties,
+                transfers_per_counterparty: 10,
+            },
+            "partial-commerce" | "partial" => AttackStrategy::PartialCommerce {
+                legit_ratio,
+                total_transactions: 100,
+            },
+            "legitimate" | "legit" | "commerce" => AttackStrategy::PartialCommerce {
+                legit_ratio: 1.0,
+                total_transactions: 100,
+            },
+            _ => {
+                eprintln!("Unknown strategy: {}", strategy_name);
+                eprintln!("Valid options: rapid-wash, patient-wash, sybil-wash, partial-commerce, legitimate");
+                return;
+            }
+        };
+
+        let initial_factor = 6.0; // Maximum cluster factor
+        let comparison = compare_decay_modes(&strategy, initial_wealth, initial_factor, duration_blocks);
+
+        println!("╔════════════════════════════════════════════════════════════════════════════════════════╗");
+        println!("║                     ATTACK RESISTANCE ANALYSIS                                         ║");
+        println!("╠════════════════════════════════════════════════════════════════════════════════════════╣");
+        println!("║  Strategy:           {:<30}                                    ║", strategy_name);
+        println!("║  Initial Wealth:     {:>12}                                                         ║", initial_wealth);
+        println!("║  Duration:           {:>6} blocks (~{:.1} days)                                          ║",
+            duration_blocks, duration_blocks as f64 / 8640.0);
+        println!("╚════════════════════════════════════════════════════════════════════════════════════════╝");
+        println!();
+
+        for (mode, result) in &comparison {
+            let mode_name = match mode {
+                DecayMode::AgeBased => "AGE-BASED",
+                DecayMode::EntropyWeighted => "ENTROPY-WEIGHTED",
+                DecayMode::None => "NO DECAY",
+            };
+
+            let attack_success = result.tag_remaining_fraction < 0.5;
+            let status = if attack_success { "VULNERABLE ✗" } else { "RESISTANT ✓" };
+
+            println!("┌─────────────────────────────────────────────────┐");
+            println!("│ {:^47} │", mode_name);
+            println!("├─────────────────────────────────────────────────┤");
+            println!("│ Initial tag weight:     {:>20}  │", result.initial_tag);
+            println!("│ Final tag weight:       {:>20}  │", result.final_tag);
+            println!("│ Tag remaining:          {:>19.2}%  │", result.tag_remaining_fraction * 100.0);
+            println!("│ Decay events:           {:>20}  │", result.decay_events);
+            println!("│ Total attempts:         {:>20}  │", result.total_attempts);
+            println!("│ Attack status:          {:>20}  │", status);
+            println!("└─────────────────────────────────────────────────┘");
+            println!();
+        }
+
+        // Summary
+        let age_result = comparison.iter().find(|(m, _)| *m == DecayMode::AgeBased).map(|(_, r)| r);
+        let entropy_result = comparison.iter().find(|(m, _)| *m == DecayMode::EntropyWeighted).map(|(_, r)| r);
+
+        if let (Some(age), Some(entropy)) = (age_result, entropy_result) {
+            println!("Summary:");
+            println!("  Age-based:        {:.1}% remaining ({} decay events)",
+                age.tag_remaining_fraction * 100.0, age.decay_events);
+            println!("  Entropy-weighted: {:.1}% remaining ({} decay events)",
+                entropy.tag_remaining_fraction * 100.0, entropy.decay_events);
+
+            if entropy.tag_remaining_fraction > age.tag_remaining_fraction {
+                let improvement = (entropy.tag_remaining_fraction - age.tag_remaining_fraction) * 100.0;
+                println!();
+                println!("  ✓ Entropy-weighted decay provides {:.1}% better attack resistance!", improvement);
+            }
+        }
+    }
+
+    fn run_entropy_parameter_sweep(initial_wealth: u64, duration_blocks: u64, _json_output: bool) {
+        use bth_cluster_tax::{compare_decay_modes, AttackStrategy, DecayMode};
+
+        // Sweep over different parameters
+        let patient_intervals = [360, 720, 1440, 2880]; // 1h, 2h, 4h, 8h
+
+        println!("╔════════════════════════════════════════════════════════════════════════════════════════╗");
+        println!("║                  ENTROPY DECAY PARAMETER SENSITIVITY                                   ║");
+        println!("╠════════════════════════════════════════════════════════════════════════════════════════╣");
+        println!("║  Initial Wealth:     {:>12}                                                         ║", initial_wealth);
+        println!("║  Duration:           {:>6} blocks (~{:.1} days)                                          ║",
+            duration_blocks, duration_blocks as f64 / 8640.0);
+        println!("╚════════════════════════════════════════════════════════════════════════════════════════╝");
+        println!();
+
+        // Test 1: Patient wash at different intervals
+        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        println!("TEST 1: Patient Wash Trading at Different Intervals");
+        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        println!();
+        println!("┌───────────┬─────────────────────────┬─────────────────────────┐");
+        println!("│  Interval │     AGE-BASED DECAY     │  ENTROPY-WEIGHTED DECAY │");
+        println!("├───────────┼───────────┬─────────────┼───────────┬─────────────┤");
+        println!("│  (hours)  │  Tag %    │   Status    │  Tag %    │   Status    │");
+        println!("├───────────┼───────────┼─────────────┼───────────┼─────────────┤");
+
+        for &interval in &patient_intervals {
+            let strategy = AttackStrategy::PatientWash {
+                interval_blocks: interval,
+                duration_blocks,
+            };
+            let comparison = compare_decay_modes(&strategy, initial_wealth, 6.0, duration_blocks);
+
+            let age_result = comparison.iter().find(|(m, _)| *m == DecayMode::AgeBased).map(|(_, r)| r);
+            let entropy_result = comparison.iter().find(|(m, _)| *m == DecayMode::EntropyWeighted).map(|(_, r)| r);
+
+            if let (Some(age), Some(entropy)) = (age_result, entropy_result) {
+                let age_status = if age.tag_remaining_fraction > 0.5 { "Resistant" } else { "Vulnerable" };
+                let entropy_status = if entropy.tag_remaining_fraction > 0.5 { "Resistant" } else { "Vulnerable" };
+
+                println!(
+                    "│   {:>5.1}   │  {:>6.1}%  │ {:^11} │  {:>6.1}%  │ {:^11} │",
+                    interval as f64 / 360.0,
+                    age.tag_remaining_fraction * 100.0,
+                    age_status,
+                    entropy.tag_remaining_fraction * 100.0,
+                    entropy_status
+                );
+            }
+        }
+        println!("└───────────┴───────────┴─────────────┴───────────┴─────────────┘");
+        println!();
+
+        // Test 2: Partial commerce at different ratios
+        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        println!("TEST 2: Partial Commerce (Mixed Legitimate + Wash Trading)");
+        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        println!();
+        println!("┌───────────────┬─────────────────────────┬─────────────────────────┐");
+        println!("│  Legit Ratio  │     AGE-BASED DECAY     │  ENTROPY-WEIGHTED DECAY │");
+        println!("├───────────────┼───────────┬─────────────┼───────────┬─────────────┤");
+        println!("│               │  Tag %    │   Decays    │  Tag %    │   Decays    │");
+        println!("├───────────────┼───────────┼─────────────┼───────────┼─────────────┤");
+
+        for ratio in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            let strategy = AttackStrategy::PartialCommerce {
+                legit_ratio: ratio,
+                total_transactions: 100,
+            };
+            let comparison = compare_decay_modes(&strategy, initial_wealth, 6.0, duration_blocks);
+
+            let age_result = comparison.iter().find(|(m, _)| *m == DecayMode::AgeBased).map(|(_, r)| r);
+            let entropy_result = comparison.iter().find(|(m, _)| *m == DecayMode::EntropyWeighted).map(|(_, r)| r);
+
+            if let (Some(age), Some(entropy)) = (age_result, entropy_result) {
+                println!(
+                    "│     {:>4.0}%     │  {:>6.1}%  │    {:>5}    │  {:>6.1}%  │    {:>5}    │",
+                    ratio * 100.0,
+                    age.tag_remaining_fraction * 100.0,
+                    age.decay_events,
+                    entropy.tag_remaining_fraction * 100.0,
+                    entropy.decay_events
+                );
+            }
+        }
+        println!("└───────────────┴───────────┴─────────────┴───────────┴─────────────┘");
+        println!();
+
+        // Analysis
+        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        println!("ANALYSIS");
+        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        println!();
+        println!("Observations:");
+        println!();
+        println!("  1. Patient Wash Trading:");
+        println!("     • Age-based decay becomes vulnerable as attacker increases patience");
+        println!("     • Entropy-weighted decay remains resistant regardless of timing");
+        println!();
+        println!("  2. Partial Commerce:");
+        println!("     • Age-based: All transactions (legit or not) cause decay after age requirement");
+        println!("     • Entropy-weighted: Only legitimate commerce causes decay (proportional to ratio)");
+        println!();
+        println!("  3. Key Insight:");
+        println!("     Entropy-weighted decay provides resistance proportional to the attacker's");
+        println!("     legitimate commerce ratio. Pure wash trading = 0% decay, regardless of patience.");
     }
 }
 
