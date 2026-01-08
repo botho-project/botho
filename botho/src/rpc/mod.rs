@@ -500,6 +500,7 @@ async fn handle_rpc_method(request: &JsonRpcRequest, state: &RpcState) -> JsonRp
         "getBlockByHeight" => handle_get_block(id, &request.params, state).await,
         "getMempoolInfo" => handle_mempool_info(id, state).await,
         "estimateFee" | "tx_estimateFee" => handle_estimate_fee(id, &request.params, state).await,
+        "fee_getRate" => handle_get_fee_rate(id, state).await,
 
         // Wallet methods (for thin wallet sync)
         "chain_getOutputs" => handle_get_outputs(id, &request.params, state).await,
@@ -713,6 +714,41 @@ async fn handle_estimate_fee(id: Value, params: &Value, state: &RpcState) -> Jso
                 "memos": num_memos,
                 "clusterWealth": cluster_wealth,
             }
+        }),
+    )
+}
+
+/// Get current network fee rate.
+///
+/// Returns the dynamic fee base rate used for fee calculation. Wallets should
+/// use this to update their local FeeEstimator for accurate fee estimation.
+///
+/// # Returns
+/// - `baseRate`: Current base fee rate in nanoBTH per byte
+/// - `baseMin`: Minimum possible base rate (floor)
+/// - `baseMax`: Maximum possible base rate (ceiling)
+/// - `multiplier`: Current multiplier (baseRate / baseMin)
+/// - `congestion`: Network congestion level (0.0 to 1.0)
+/// - `adjustmentActive`: Whether dynamic adjustment is active
+/// - `blocksToRecovery`: Estimated blocks until fees return to minimum
+async fn handle_get_fee_rate(id: Value, state: &RpcState) -> JsonRpcResponse {
+    let mempool = read_lock!(state.mempool, id.clone());
+
+    // Get the dynamic fee state from the mempool
+    let fee_state = mempool.dynamic_fee_state();
+    let dynamic_fee = mempool.dynamic_fee();
+
+    JsonRpcResponse::success(
+        id,
+        json!({
+            "baseRate": fee_state.current_base,
+            "baseMin": dynamic_fee.base_min,
+            "baseMax": dynamic_fee.base_max,
+            "multiplier": fee_state.multiplier,
+            "congestion": fee_state.ema_fullness,
+            "targetFullness": fee_state.target_fullness,
+            "adjustmentActive": fee_state.adjustment_active,
+            "blocksToRecovery": dynamic_fee.blocks_to_recovery(),
         }),
     )
 }

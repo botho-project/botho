@@ -5,10 +5,32 @@
 //! - Cluster factor from blended input UTXO tags
 //! - Estimated transaction size
 //! - Superlinear output penalty
-//! - Dynamic base fee
+//! - Dynamic base fee from network
+//!
+//! # Dynamic Fee Rate
+//!
+//! The base fee rate is fetched from the network via the `fee_getRate` RPC
+//! method. Wallets should periodically refresh this rate using
+//! [`CachedFeeRate`] to ensure accurate fee estimation based on current network
+//! conditions.
+//!
+//! ```no_run
+//! use botho_wallet::fee_estimation::{CachedFeeRate, FeeEstimator};
+//!
+//! // Refresh rate from network
+//! let cached_rate = CachedFeeRate::default();
+//! // ... fetch from rpc_pool.get_fee_rate() ...
+//!
+//! // Update estimator before calculating fees
+//! let mut estimator = FeeEstimator::new();
+//! if let Some(rate) = cached_rate.rate() {
+//!     estimator.set_base_rate(rate);
+//! }
+//! ```
 
 use bth_cluster_tax::{ClusterId, FeeConfig, TagVector, TagWeight, TAG_WEIGHT_SCALE};
 use serde::{Deserialize, Serialize};
+use std::time::{Duration, Instant};
 
 /// Estimated size of a 2-input, 2-output CLSAG transaction in bytes.
 ///
@@ -33,6 +55,145 @@ pub const SIZE_PER_ADDITIONAL_INPUT: usize = 416;
 
 /// Size overhead per additional output.
 pub const SIZE_PER_ADDITIONAL_OUTPUT: usize = 2500;
+
+/// Default TTL for cached fee rate (60 seconds).
+pub const DEFAULT_FEE_RATE_TTL: Duration = Duration::from_secs(60);
+
+/// Minimum base rate (fallback when network is unavailable).
+pub const MINIMUM_BASE_RATE: u64 = 1;
+
+/// Cached network fee rate with TTL-based expiration.
+///
+/// Provides a thread-safe cache for the network fee rate with automatic
+/// expiration. When the cache expires, the [`rate()`] method returns `None`,
+/// signaling that a refresh is needed.
+///
+/// # Example
+///
+/// ```no_run
+/// use botho_wallet::fee_estimation::CachedFeeRate;
+///
+/// let mut cache = CachedFeeRate::default();
+///
+/// // After fetching from network:
+/// cache.update(5); // 5 nanoBTH/byte
+///
+/// // Get rate (returns None if expired)
+/// if let Some(rate) = cache.rate() {
+///     println!("Using cached rate: {} nanoBTH/byte", rate);
+/// } else {
+///     println!("Cache expired, refresh needed");
+/// }
+///
+/// // Always get a rate with fallback
+/// let rate = cache.rate_or_default();
+/// ```
+#[derive(Debug, Clone)]
+pub struct CachedFeeRate {
+    /// Current base rate in nanoBTH per byte.
+    base_rate: u64,
+
+    /// Time when this rate was last updated.
+    last_updated: Option<Instant>,
+
+    /// Time-to-live for the cached rate.
+    ttl: Duration,
+
+    /// Additional network congestion info (for display purposes).
+    congestion: f64,
+
+    /// Whether dynamic adjustment is active on the network.
+    adjustment_active: bool,
+}
+
+impl Default for CachedFeeRate {
+    fn default() -> Self {
+        Self {
+            base_rate: MINIMUM_BASE_RATE,
+            last_updated: None,
+            ttl: DEFAULT_FEE_RATE_TTL,
+            congestion: 0.0,
+            adjustment_active: false,
+        }
+    }
+}
+
+impl CachedFeeRate {
+    /// Create a new cache with custom TTL.
+    pub fn with_ttl(ttl: Duration) -> Self {
+        Self {
+            ttl,
+            ..Self::default()
+        }
+    }
+
+    /// Update the cached rate with a new value from the network.
+    pub fn update(&mut self, base_rate: u64) {
+        self.base_rate = base_rate.max(MINIMUM_BASE_RATE);
+        self.last_updated = Some(Instant::now());
+    }
+
+    /// Update with full network fee rate information.
+    pub fn update_from_network(
+        &mut self,
+        base_rate: u64,
+        congestion: f64,
+        adjustment_active: bool,
+    ) {
+        self.base_rate = base_rate.max(MINIMUM_BASE_RATE);
+        self.last_updated = Some(Instant::now());
+        self.congestion = congestion;
+        self.adjustment_active = adjustment_active;
+    }
+
+    /// Get the cached rate if still valid, or None if expired.
+    pub fn rate(&self) -> Option<u64> {
+        self.last_updated
+            .filter(|t| t.elapsed() < self.ttl)
+            .map(|_| self.base_rate)
+    }
+
+    /// Get the cached rate or the default minimum rate.
+    ///
+    /// Use this when you always need a rate value. Falls back to
+    /// [`MINIMUM_BASE_RATE`] (1 nanoBTH/byte) if the cache is expired
+    /// or was never updated.
+    pub fn rate_or_default(&self) -> u64 {
+        self.rate().unwrap_or(MINIMUM_BASE_RATE)
+    }
+
+    /// Check if the cache needs to be refreshed.
+    pub fn needs_refresh(&self) -> bool {
+        self.rate().is_none()
+    }
+
+    /// Get the network congestion level (0.0 to 1.0).
+    pub fn congestion(&self) -> f64 {
+        self.congestion
+    }
+
+    /// Check if dynamic fee adjustment is active on the network.
+    pub fn is_adjustment_active(&self) -> bool {
+        self.adjustment_active
+    }
+
+    /// Get the TTL for this cache.
+    pub fn ttl(&self) -> Duration {
+        self.ttl
+    }
+
+    /// Get time until the cache expires, or None if already expired.
+    pub fn time_until_expiry(&self) -> Option<Duration> {
+        self.last_updated.and_then(|t| {
+            let elapsed = t.elapsed();
+            if elapsed < self.ttl {
+                Some(self.ttl - elapsed)
+            } else {
+                None
+            }
+        })
+    }
+}
 
 /// Stored cluster tag information for a UTXO.
 ///
@@ -437,5 +598,104 @@ mod tests {
         assert!(formatted.contains("Estimated Fee"));
         assert!(formatted.contains("6000 bytes"));
         assert!(formatted.contains("1.50x"));
+    }
+
+    #[test]
+    fn test_cached_fee_rate_default() {
+        let cache = CachedFeeRate::default();
+
+        // Should need refresh initially (never updated)
+        assert!(cache.needs_refresh());
+        assert_eq!(cache.rate(), None);
+        assert_eq!(cache.rate_or_default(), MINIMUM_BASE_RATE);
+    }
+
+    #[test]
+    fn test_cached_fee_rate_update() {
+        let mut cache = CachedFeeRate::default();
+
+        cache.update(5);
+
+        assert!(!cache.needs_refresh());
+        assert_eq!(cache.rate(), Some(5));
+        assert_eq!(cache.rate_or_default(), 5);
+    }
+
+    #[test]
+    fn test_cached_fee_rate_update_from_network() {
+        let mut cache = CachedFeeRate::default();
+
+        cache.update_from_network(10, 0.5, true);
+
+        assert_eq!(cache.rate(), Some(10));
+        assert!((cache.congestion() - 0.5).abs() < 0.001);
+        assert!(cache.is_adjustment_active());
+    }
+
+    #[test]
+    fn test_cached_fee_rate_minimum_enforced() {
+        let mut cache = CachedFeeRate::default();
+
+        // Update with 0 should result in minimum
+        cache.update(0);
+
+        assert_eq!(cache.rate(), Some(MINIMUM_BASE_RATE));
+    }
+
+    #[test]
+    fn test_cached_fee_rate_expiry() {
+        let mut cache = CachedFeeRate::with_ttl(Duration::from_millis(10));
+
+        cache.update(5);
+        assert!(!cache.needs_refresh());
+        assert!(cache.time_until_expiry().is_some());
+
+        // Wait for expiry
+        std::thread::sleep(Duration::from_millis(15));
+
+        assert!(cache.needs_refresh());
+        assert_eq!(cache.rate(), None);
+        assert_eq!(cache.rate_or_default(), MINIMUM_BASE_RATE);
+        assert!(cache.time_until_expiry().is_none());
+    }
+
+    #[test]
+    fn test_fee_estimator_with_dynamic_rate() {
+        let mut estimator = FeeEstimator::new();
+
+        // Default rate
+        assert_eq!(estimator.base_rate(), 1);
+
+        // Update with higher rate (simulating network congestion)
+        estimator.set_base_rate(5);
+        assert_eq!(estimator.base_rate(), 5);
+
+        // Estimate fee should reflect new rate
+        let empty_tags = StoredTags::new();
+        let inputs = vec![(1_000_000_000_000u64, &empty_tags)];
+
+        let estimate = estimator.estimate_fee(&inputs, 2);
+
+        // Fee should be 5x higher than with rate of 1
+        // (base_fee = tx_size * rate * cluster_factor / 1000)
+        // With anonymous inputs, cluster_factor = 1000, so:
+        // base_fee = 6000 * 5 * 1000 / 1000 = 30000
+        assert!(estimate.base_fee >= 25000); // Allow some tolerance
+    }
+
+    #[test]
+    fn test_cached_fee_rate_integration_with_estimator() {
+        let mut cache = CachedFeeRate::default();
+        let mut estimator = FeeEstimator::new();
+
+        // Simulate fetching from network
+        cache.update_from_network(3, 0.2, false);
+
+        // Apply cached rate to estimator
+        if let Some(rate) = cache.rate() {
+            estimator.set_base_rate(rate);
+        }
+
+        assert_eq!(estimator.base_rate(), 3);
     }
 }
