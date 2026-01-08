@@ -13,7 +13,7 @@ This document presents findings from the Phase A feasibility study on aggregatin
 1. **Shannon entropy is circuit-hostile** - requires logarithms that don't map well to arithmetic circuits
 2. **Collision entropy (H₂) is a viable alternative** - computable as sum of squared probabilities, circuit-friendly
 3. **Aggregation is feasible** - entropy constraints can share inner-product structure with range proofs
-4. **Estimated savings: ~40-45%** - combined proof ~850-950 bytes vs ~1400-1500 bytes separate
+4. **Estimated savings: ~33%** - combined proof ~900 bytes vs ~1344 bytes separate (Option 1)
 5. **Recommended approach**: Bulletproofs with auxiliary inner-product constraints
 
 ## Background
