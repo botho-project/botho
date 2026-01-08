@@ -304,6 +304,23 @@ impl Transaction {
     }
 }
 
+/// Result of building a transfer transaction.
+///
+/// Contains the transaction and metadata needed for cluster tag propagation.
+#[derive(Debug, Clone)]
+pub struct TransferResult {
+    /// The signed transaction ready for submission.
+    pub transaction: Transaction,
+    /// The actual fee (may be higher than requested if dust was absorbed).
+    pub actual_fee: u64,
+    /// The change output's public key, if a change output was created.
+    /// This is used to track pending cluster tags for the change output.
+    pub change_output_public_key: Option<[u8; 32]>,
+    /// UTXOs that were selected as inputs for this transaction.
+    /// Needed for computing blended cluster tags for the change output.
+    pub selected_inputs: Vec<OwnedUtxo>,
+}
+
 /// Transaction builder for creating and signing transactions
 pub struct TransactionBuilder {
     keys: WalletKeys,
@@ -331,14 +348,34 @@ impl TransactionBuilder {
     /// If the change amount is below `DUST_THRESHOLD`, it is added to the fee
     /// instead of creating an unspendable output.
     ///
-    /// Returns the transaction and the actual fee (which may be higher than
-    /// the requested fee if dust change was absorbed).
+    /// Returns just the transaction for simple use cases. For cluster tag
+    /// propagation, use `build_transfer_with_metadata` instead.
     pub fn build_transfer(
         &self,
         recipient: &PublicAddress,
         amount: u64,
         fee: u64,
     ) -> Result<Transaction> {
+        let result = self.build_transfer_with_metadata(recipient, amount, fee)?;
+        Ok(result.transaction)
+    }
+
+    /// Build and sign a transaction with full metadata.
+    ///
+    /// If the change amount is below `DUST_THRESHOLD`, it is added to the fee
+    /// instead of creating an unspendable output.
+    ///
+    /// Returns `TransferResult` containing:
+    /// - The signed transaction
+    /// - The actual fee (may be higher if dust was absorbed)
+    /// - The change output's public key (for cluster tag tracking)
+    /// - The selected input UTXOs (for computing blended tags)
+    pub fn build_transfer_with_metadata(
+        &self,
+        recipient: &PublicAddress,
+        amount: u64,
+        fee: u64,
+    ) -> Result<TransferResult> {
         // Validate amount
         if amount == 0 {
             return Err(anyhow!("Amount must be greater than 0"));
@@ -380,12 +417,14 @@ impl TransactionBuilder {
 
         // Handle change: if above dust threshold, create change output
         // Otherwise, add dust to fee (prevents unspendable UTXOs)
-        let actual_fee = if change >= DUST_THRESHOLD {
-            outputs.push(TxOutput::new(change, &self.keys.public_address()));
-            fee
+        let (actual_fee, change_output_public_key) = if change >= DUST_THRESHOLD {
+            let change_output = TxOutput::new(change, &self.keys.public_address());
+            let change_key = change_output.output_public_key;
+            outputs.push(change_output);
+            (fee, Some(change_key))
         } else {
             // Dust change is absorbed into fee
-            fee + change
+            (fee + change, None)
         };
 
         // Create transaction
@@ -394,7 +433,12 @@ impl TransactionBuilder {
         // Sign all inputs
         self.sign_transaction(&mut tx)?;
 
-        Ok(tx)
+        Ok(TransferResult {
+            transaction: tx,
+            actual_fee,
+            change_output_public_key,
+            selected_inputs: selected,
+        })
     }
 
     /// Select UTXOs using largest-first algorithm
@@ -814,6 +858,31 @@ pub async fn sync_wallet_all(
         pq_utxos: all_pq,
         height: current_height,
     })
+}
+
+/// Apply pending change tags to discovered UTXOs.
+///
+/// When a change output is discovered during sync, this function looks up
+/// its pending tags (stored during transaction creation) and applies them.
+/// This ensures cluster attribution properly propagates through change outputs.
+///
+/// Returns true if any pending tags were applied (indicating the pending tags
+/// structure should be saved).
+pub fn apply_pending_change_tags(
+    utxos: &mut [OwnedUtxo],
+    pending_tags: &mut crate::fee_estimation::PendingChangeTags,
+) -> bool {
+    let mut applied_any = false;
+
+    for utxo in utxos.iter_mut() {
+        // Look up pending tags by output public key
+        if let Some(tags) = pending_tags.find_and_remove(&utxo.public_key) {
+            utxo.cluster_tags = Some(tags);
+            applied_any = true;
+        }
+    }
+
+    applied_any
 }
 
 /// Format an amount in picocredits as CAD

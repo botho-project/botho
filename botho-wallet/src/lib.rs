@@ -26,7 +26,7 @@ pub use decoy_selection::{
     DecoySelectionError, DecoySelectionResult, UtxoCandidate,
 };
 pub use discovery::NodeDiscovery;
-pub use fee_estimation::{FeeEstimator, StoredTags};
+pub use fee_estimation::{CachedFeeRate, FeeEstimator, StoredTags};
 pub use keys::WalletKeys;
-pub use rpc_pool::RpcPool;
+pub use rpc_pool::{NetworkFeeRate, RpcPool};
 pub use storage::EncryptedWallet;

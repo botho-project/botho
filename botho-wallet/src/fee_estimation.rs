@@ -5,10 +5,32 @@
 //! - Cluster factor from blended input UTXO tags
 //! - Estimated transaction size
 //! - Superlinear output penalty
-//! - Dynamic base fee
+//! - Dynamic base fee from network
+//!
+//! # Dynamic Fee Rate
+//!
+//! The base fee rate is fetched from the network via the `fee_getRate` RPC
+//! method. Wallets should periodically refresh this rate using
+//! [`CachedFeeRate`] to ensure accurate fee estimation based on current network
+//! conditions.
+//!
+//! ```no_run
+//! use botho_wallet::fee_estimation::{CachedFeeRate, FeeEstimator};
+//!
+//! // Refresh rate from network
+//! let cached_rate = CachedFeeRate::default();
+//! // ... fetch from rpc_pool.get_fee_rate() ...
+//!
+//! // Update estimator before calculating fees
+//! let mut estimator = FeeEstimator::new();
+//! if let Some(rate) = cached_rate.rate() {
+//!     estimator.set_base_rate(rate);
+//! }
+//! ```
 
 use bth_cluster_tax::{ClusterId, FeeConfig, TagVector, TagWeight, TAG_WEIGHT_SCALE};
 use serde::{Deserialize, Serialize};
+use std::time::{Duration, Instant};
 
 /// Estimated size of a 2-input, 2-output CLSAG transaction in bytes.
 ///
@@ -33,6 +55,145 @@ pub const SIZE_PER_ADDITIONAL_INPUT: usize = 416;
 
 /// Size overhead per additional output.
 pub const SIZE_PER_ADDITIONAL_OUTPUT: usize = 2500;
+
+/// Default TTL for cached fee rate (60 seconds).
+pub const DEFAULT_FEE_RATE_TTL: Duration = Duration::from_secs(60);
+
+/// Minimum base rate (fallback when network is unavailable).
+pub const MINIMUM_BASE_RATE: u64 = 1;
+
+/// Cached network fee rate with TTL-based expiration.
+///
+/// Provides a thread-safe cache for the network fee rate with automatic
+/// expiration. When the cache expires, the [`rate()`] method returns `None`,
+/// signaling that a refresh is needed.
+///
+/// # Example
+///
+/// ```no_run
+/// use botho_wallet::fee_estimation::CachedFeeRate;
+///
+/// let mut cache = CachedFeeRate::default();
+///
+/// // After fetching from network:
+/// cache.update(5); // 5 nanoBTH/byte
+///
+/// // Get rate (returns None if expired)
+/// if let Some(rate) = cache.rate() {
+///     println!("Using cached rate: {} nanoBTH/byte", rate);
+/// } else {
+///     println!("Cache expired, refresh needed");
+/// }
+///
+/// // Always get a rate with fallback
+/// let rate = cache.rate_or_default();
+/// ```
+#[derive(Debug, Clone)]
+pub struct CachedFeeRate {
+    /// Current base rate in nanoBTH per byte.
+    base_rate: u64,
+
+    /// Time when this rate was last updated.
+    last_updated: Option<Instant>,
+
+    /// Time-to-live for the cached rate.
+    ttl: Duration,
+
+    /// Additional network congestion info (for display purposes).
+    congestion: f64,
+
+    /// Whether dynamic adjustment is active on the network.
+    adjustment_active: bool,
+}
+
+impl Default for CachedFeeRate {
+    fn default() -> Self {
+        Self {
+            base_rate: MINIMUM_BASE_RATE,
+            last_updated: None,
+            ttl: DEFAULT_FEE_RATE_TTL,
+            congestion: 0.0,
+            adjustment_active: false,
+        }
+    }
+}
+
+impl CachedFeeRate {
+    /// Create a new cache with custom TTL.
+    pub fn with_ttl(ttl: Duration) -> Self {
+        Self {
+            ttl,
+            ..Self::default()
+        }
+    }
+
+    /// Update the cached rate with a new value from the network.
+    pub fn update(&mut self, base_rate: u64) {
+        self.base_rate = base_rate.max(MINIMUM_BASE_RATE);
+        self.last_updated = Some(Instant::now());
+    }
+
+    /// Update with full network fee rate information.
+    pub fn update_from_network(
+        &mut self,
+        base_rate: u64,
+        congestion: f64,
+        adjustment_active: bool,
+    ) {
+        self.base_rate = base_rate.max(MINIMUM_BASE_RATE);
+        self.last_updated = Some(Instant::now());
+        self.congestion = congestion;
+        self.adjustment_active = adjustment_active;
+    }
+
+    /// Get the cached rate if still valid, or None if expired.
+    pub fn rate(&self) -> Option<u64> {
+        self.last_updated
+            .filter(|t| t.elapsed() < self.ttl)
+            .map(|_| self.base_rate)
+    }
+
+    /// Get the cached rate or the default minimum rate.
+    ///
+    /// Use this when you always need a rate value. Falls back to
+    /// [`MINIMUM_BASE_RATE`] (1 nanoBTH/byte) if the cache is expired
+    /// or was never updated.
+    pub fn rate_or_default(&self) -> u64 {
+        self.rate().unwrap_or(MINIMUM_BASE_RATE)
+    }
+
+    /// Check if the cache needs to be refreshed.
+    pub fn needs_refresh(&self) -> bool {
+        self.rate().is_none()
+    }
+
+    /// Get the network congestion level (0.0 to 1.0).
+    pub fn congestion(&self) -> f64 {
+        self.congestion
+    }
+
+    /// Check if dynamic fee adjustment is active on the network.
+    pub fn is_adjustment_active(&self) -> bool {
+        self.adjustment_active
+    }
+
+    /// Get the TTL for this cache.
+    pub fn ttl(&self) -> Duration {
+        self.ttl
+    }
+
+    /// Get time until the cache expires, or None if already expired.
+    pub fn time_until_expiry(&self) -> Option<Duration> {
+        self.last_updated.and_then(|t| {
+            let elapsed = t.elapsed();
+            if elapsed < self.ttl {
+                Some(self.ttl - elapsed)
+            } else {
+                None
+            }
+        })
+    }
+}
 
 /// Stored cluster tag information for a UTXO.
 ///
@@ -78,6 +239,96 @@ impl StoredTags {
             .map(|(_, w)| w)
             .sum::<TagWeight>()
             .min(TAG_WEIGHT_SCALE)
+    }
+}
+
+/// A single pending change tag entry.
+///
+/// Associates an output public key with its blended cluster tags,
+/// enabling tag propagation when change UTXOs are discovered during sync.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingChangeEntry {
+    /// Output public key (32 bytes) - used to match discovered change UTXOs.
+    pub output_public_key: [u8; 32],
+    /// Blended cluster tags from the transaction inputs.
+    pub tags: StoredTags,
+    /// Block height when the transaction was created.
+    pub created_at_height: u64,
+}
+
+/// Tracks pending cluster tags for change outputs.
+///
+/// When a transaction is built, we compute blended tags from inputs and
+/// store them here, keyed by the change output's public key. When the
+/// change UTXO is later discovered during sync, we apply these tags.
+///
+/// This enables accurate cluster attribution tracking across spends,
+/// even though the wallet doesn't immediately know about its change outputs.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PendingChangeTags {
+    /// Pending change tag entries, keyed by output public key.
+    pub entries: Vec<PendingChangeEntry>,
+}
+
+impl PendingChangeTags {
+    /// Create an empty pending change tags collection.
+    pub fn new() -> Self {
+        Self { entries: vec![] }
+    }
+
+    /// Add a pending change tag entry.
+    ///
+    /// Call this after building a transaction to record the blended tags
+    /// that should be applied to the change output when discovered.
+    pub fn add(&mut self, output_public_key: [u8; 32], tags: StoredTags, created_at_height: u64) {
+        self.entries.push(PendingChangeEntry {
+            output_public_key,
+            tags,
+            created_at_height,
+        });
+    }
+
+    /// Find and remove a pending tag entry by output public key.
+    ///
+    /// Call this during sync when a change UTXO is discovered. If found,
+    /// the entry is removed and its tags are returned for application.
+    pub fn find_and_remove(&mut self, output_public_key: &[u8; 32]) -> Option<StoredTags> {
+        if let Some(pos) = self
+            .entries
+            .iter()
+            .position(|e| &e.output_public_key == output_public_key)
+        {
+            let entry = self.entries.remove(pos);
+            Some(entry.tags)
+        } else {
+            None
+        }
+    }
+
+    /// Check if a pending tag entry exists for the given output key.
+    pub fn contains(&self, output_public_key: &[u8; 32]) -> bool {
+        self.entries
+            .iter()
+            .any(|e| &e.output_public_key == output_public_key)
+    }
+
+    /// Remove stale entries older than the specified number of blocks.
+    ///
+    /// Call this periodically during sync to clean up entries that were
+    /// never matched (e.g., if a transaction was rejected or replaced).
+    pub fn cleanup_stale(&mut self, current_height: u64, max_age_blocks: u64) {
+        self.entries
+            .retain(|e| current_height.saturating_sub(e.created_at_height) <= max_age_blocks);
+    }
+
+    /// Get the number of pending entries.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Check if there are no pending entries.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
     }
 }
 
@@ -156,6 +407,40 @@ impl FeeEstimator {
         }
 
         size.max(1000) // Minimum transaction size
+    }
+
+    /// Calculate blended cluster tags from input UTXOs.
+    ///
+    /// Uses value-weighted blending: larger inputs contribute more to the
+    /// blended tag vector. This is used to propagate cluster attribution
+    /// to change outputs.
+    ///
+    /// Returns the blended `StoredTags` representing the combined attribution
+    /// from all inputs.
+    pub fn calculate_blended_tags(&self, inputs: &[(u64, &StoredTags)]) -> StoredTags {
+        if inputs.is_empty() {
+            return StoredTags::new();
+        }
+
+        // Blend tag vectors weighted by value using iterative mixing
+        let mut blended = TagVector::new();
+        let mut accumulated_value: u64 = 0;
+
+        for (amount, tags) in inputs {
+            if *amount == 0 {
+                continue;
+            }
+            let tv = tags.to_tag_vector();
+            // Mix incoming tags with current blended, weighted by value
+            blended.mix(accumulated_value, &tv, *amount);
+            accumulated_value = accumulated_value.saturating_add(*amount);
+        }
+
+        if accumulated_value == 0 {
+            return StoredTags::new();
+        }
+
+        StoredTags::from_tag_vector(&blended)
     }
 
     /// Calculate blended cluster factor from input UTXOs with their tag
@@ -437,5 +722,224 @@ mod tests {
         assert!(formatted.contains("Estimated Fee"));
         assert!(formatted.contains("6000 bytes"));
         assert!(formatted.contains("1.50x"));
+    }
+
+    #[test]
+    fn test_cached_fee_rate_default() {
+        let cache = CachedFeeRate::default();
+
+        // Should need refresh initially (never updated)
+        assert!(cache.needs_refresh());
+        assert_eq!(cache.rate(), None);
+        assert_eq!(cache.rate_or_default(), MINIMUM_BASE_RATE);
+    }
+
+    #[test]
+    fn test_cached_fee_rate_update() {
+        let mut cache = CachedFeeRate::default();
+
+        cache.update(5);
+
+        assert!(!cache.needs_refresh());
+        assert_eq!(cache.rate(), Some(5));
+        assert_eq!(cache.rate_or_default(), 5);
+    }
+
+    #[test]
+    fn test_cached_fee_rate_update_from_network() {
+        let mut cache = CachedFeeRate::default();
+
+        cache.update_from_network(10, 0.5, true);
+
+        assert_eq!(cache.rate(), Some(10));
+        assert!((cache.congestion() - 0.5).abs() < 0.001);
+        assert!(cache.is_adjustment_active());
+    }
+
+    #[test]
+    fn test_cached_fee_rate_minimum_enforced() {
+        let mut cache = CachedFeeRate::default();
+
+        // Update with 0 should result in minimum
+        cache.update(0);
+
+        assert_eq!(cache.rate(), Some(MINIMUM_BASE_RATE));
+    }
+
+    #[test]
+    fn test_cached_fee_rate_expiry() {
+        let mut cache = CachedFeeRate::with_ttl(Duration::from_millis(10));
+
+        cache.update(5);
+        assert!(!cache.needs_refresh());
+        assert!(cache.time_until_expiry().is_some());
+
+        // Wait for expiry
+        std::thread::sleep(Duration::from_millis(15));
+
+        assert!(cache.needs_refresh());
+        assert_eq!(cache.rate(), None);
+        assert_eq!(cache.rate_or_default(), MINIMUM_BASE_RATE);
+        assert!(cache.time_until_expiry().is_none());
+    }
+
+    #[test]
+    fn test_fee_estimator_with_dynamic_rate() {
+        let mut estimator = FeeEstimator::new();
+
+        // Default rate
+        assert_eq!(estimator.base_rate(), 1);
+
+        // Update with higher rate (simulating network congestion)
+        estimator.set_base_rate(5);
+        assert_eq!(estimator.base_rate(), 5);
+
+        // Estimate fee should reflect new rate
+        let empty_tags = StoredTags::new();
+        let inputs = vec![(1_000_000_000_000u64, &empty_tags)];
+
+        let estimate = estimator.estimate_fee(&inputs, 2);
+
+        // Fee should be 5x higher than with rate of 1
+        // (base_fee = tx_size * rate * cluster_factor / 1000)
+        // With anonymous inputs, cluster_factor = 1000, so:
+        // base_fee = 6000 * 5 * 1000 / 1000 = 30000
+        assert!(estimate.base_fee >= 25000); // Allow some tolerance
+    }
+
+    #[test]
+    fn test_cached_fee_rate_integration_with_estimator() {
+        let mut cache = CachedFeeRate::default();
+        let mut estimator = FeeEstimator::new();
+
+        // Simulate fetching from network
+        cache.update_from_network(3, 0.2, false);
+
+        // Apply cached rate to estimator
+        if let Some(rate) = cache.rate() {
+            estimator.set_base_rate(rate);
+        }
+
+        assert_eq!(estimator.base_rate(), 3);
+    }
+
+    #[test]
+    fn test_blended_tags_empty() {
+        let estimator = FeeEstimator::new();
+
+        // Empty inputs should return empty tags
+        let blended = estimator.calculate_blended_tags(&[]);
+        assert!(!blended.has_attribution());
+    }
+
+    #[test]
+    fn test_blended_tags_single_input() {
+        let estimator = FeeEstimator::new();
+
+        // Single input with tags should pass through unchanged
+        let mut tv = TagVector::new();
+        tv.set(ClusterId::new(1), 500_000);
+        tv.set(ClusterId::new(2), 300_000);
+        let input_tags = StoredTags::from_tag_vector(&tv);
+
+        let inputs = vec![(1_000_000_000_000u64, &input_tags)];
+        let blended = estimator.calculate_blended_tags(&inputs);
+
+        assert!(blended.has_attribution());
+        let blended_tv = blended.to_tag_vector();
+        assert_eq!(blended_tv.get(ClusterId::new(1)), 500_000);
+        assert_eq!(blended_tv.get(ClusterId::new(2)), 300_000);
+    }
+
+    #[test]
+    fn test_blended_tags_multiple_inputs() {
+        let estimator = FeeEstimator::new();
+
+        // Two equal-value inputs with different clusters
+        let mut tv1 = TagVector::new();
+        tv1.set(ClusterId::new(1), TAG_WEIGHT_SCALE);
+        let tags1 = StoredTags::from_tag_vector(&tv1);
+
+        let mut tv2 = TagVector::new();
+        tv2.set(ClusterId::new(2), TAG_WEIGHT_SCALE);
+        let tags2 = StoredTags::from_tag_vector(&tv2);
+
+        let inputs = vec![
+            (1_000_000_000_000u64, &tags1),
+            (1_000_000_000_000u64, &tags2),
+        ];
+        let blended = estimator.calculate_blended_tags(&inputs);
+
+        // Each should have ~50% attribution
+        let blended_tv = blended.to_tag_vector();
+        assert_eq!(blended_tv.get(ClusterId::new(1)), 500_000);
+        assert_eq!(blended_tv.get(ClusterId::new(2)), 500_000);
+    }
+
+    #[test]
+    fn test_blended_tags_value_weighted() {
+        let estimator = FeeEstimator::new();
+
+        // Input 1 is worth 3x as much as input 2
+        let mut tv1 = TagVector::new();
+        tv1.set(ClusterId::new(1), TAG_WEIGHT_SCALE);
+        let tags1 = StoredTags::from_tag_vector(&tv1);
+
+        let mut tv2 = TagVector::new();
+        tv2.set(ClusterId::new(2), TAG_WEIGHT_SCALE);
+        let tags2 = StoredTags::from_tag_vector(&tv2);
+
+        let inputs = vec![
+            (3_000_000_000_000u64, &tags1),
+            (1_000_000_000_000u64, &tags2),
+        ];
+        let blended = estimator.calculate_blended_tags(&inputs);
+
+        // Cluster 1 should have 75%, cluster 2 should have 25%
+        let blended_tv = blended.to_tag_vector();
+        assert_eq!(blended_tv.get(ClusterId::new(1)), 750_000);
+        assert_eq!(blended_tv.get(ClusterId::new(2)), 250_000);
+    }
+
+    #[test]
+    fn test_pending_change_tags_roundtrip() {
+        let mut pending = PendingChangeTags::new();
+
+        let mut tv = TagVector::new();
+        tv.set(ClusterId::new(42), 600_000);
+        let tags = StoredTags::from_tag_vector(&tv);
+
+        let output_key = [0xABu8; 32];
+        pending.add(output_key, tags.clone(), 100);
+
+        // Should find the pending tags
+        let found = pending.find_and_remove(&output_key);
+        assert!(found.is_some());
+        let found_tags = found.unwrap();
+        assert_eq!(found_tags.to_tag_vector().get(ClusterId::new(42)), 600_000);
+
+        // Should not find again after removal
+        assert!(pending.find_and_remove(&output_key).is_none());
+    }
+
+    #[test]
+    fn test_pending_change_tags_cleanup() {
+        let mut pending = PendingChangeTags::new();
+
+        let tags = StoredTags::new();
+        let output_key1 = [0x01u8; 32];
+        let output_key2 = [0x02u8; 32];
+
+        // Add at different heights
+        pending.add(output_key1, tags.clone(), 100);
+        pending.add(output_key2, tags.clone(), 500);
+
+        // Cleanup stale entries (older than 200 blocks from height 600)
+        pending.cleanup_stale(600, 200);
+
+        // Old entry should be removed
+        assert!(pending.find_and_remove(&output_key1).is_none());
+        // Recent entry should remain
+        assert!(pending.find_and_remove(&output_key2).is_some());
     }
 }

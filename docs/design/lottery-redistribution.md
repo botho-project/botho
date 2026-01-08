@@ -470,7 +470,8 @@ with legitimate participation rather than gaming.
 
 ## References
 
-- [Provenance-Based Selection](provenance-based-selection.md) - Novel entropy-weighted approach
+- [Provenance-Based Selection](provenance-based-selection.md) - Novel entropy-weighted approach for lottery
+- [Entropy-Weighted Decay](entropy-weighted-decay.md) - Entropy-weighted decay mechanism (parallel to lottery entropy weighting)
 - [Cluster Tag Decay](cluster-tag-decay.md) - How cluster factors decay through trade
 - [Progressive Fees](../concepts/progressive-fees.md) - Fee curve design
 - [Tokenomics](../concepts/tokenomics.md) - Overall economic model

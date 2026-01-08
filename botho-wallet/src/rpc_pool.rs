@@ -321,6 +321,14 @@ impl RpcPool {
         Ok(result.recommended_fee)
     }
 
+    /// Get current network fee rate.
+    ///
+    /// Returns the dynamic base fee rate from the network, including congestion
+    /// information. Wallets should use this to update their local FeeEstimator.
+    pub async fn get_fee_rate(&mut self) -> Result<NetworkFeeRate> {
+        self.call("fee_getRate", json!({})).await
+    }
+
     /// Get connected peers from a node (for gossip discovery)
     pub async fn get_peers(&mut self) -> Result<Vec<SocketAddr>> {
         let result: PeersResult = self.call("network_getPeers", json!({})).await?;
@@ -495,6 +503,38 @@ struct FeeEstimate {
 #[derive(Debug, Deserialize)]
 struct PeersResult {
     peers: Vec<SocketAddr>,
+}
+
+/// Network fee rate information returned by fee_getRate.
+///
+/// Wallets should cache this information and refresh periodically
+/// to ensure accurate fee estimation.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkFeeRate {
+    /// Current base fee rate in nanoBTH per byte.
+    pub base_rate: u64,
+
+    /// Minimum possible base rate (floor).
+    pub base_min: u64,
+
+    /// Maximum possible base rate (ceiling).
+    pub base_max: u64,
+
+    /// Current multiplier (base_rate / base_min).
+    pub multiplier: f64,
+
+    /// Network congestion level (0.0 to 1.0).
+    pub congestion: f64,
+
+    /// Target block fullness threshold.
+    pub target_fullness: f64,
+
+    /// Whether dynamic fee adjustment is active.
+    pub adjustment_active: bool,
+
+    /// Estimated blocks until fees return to minimum.
+    pub blocks_to_recovery: usize,
 }
 
 // ============================================================================

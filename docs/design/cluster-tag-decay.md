@@ -114,6 +114,41 @@ See `cluster-tax/src/age_decay.rs` for the complete implementation.
 
 ---
 
+## ⚠️ Known Vulnerability: Patient Wash Trading
+
+### The Problem
+
+While age-based decay effectively blocks **rapid** wash trading (outputs too young), it remains vulnerable to **patient** wash trading attacks:
+
+| Attack Strategy | Time Required | Decay Events | Tag Remaining |
+|-----------------|---------------|--------------|---------------|
+| 100 rapid self-transfers | Minutes | 0 (blocked) | 100% |
+| Patient attack (1 day) | 24 hours | Max 12 | 54% |
+| **Patient attack (1 week)** | **7 days** | **84** | **1.35%** |
+| Holding without transacting | Indefinite | 0 | 100% |
+
+The 720-block (~2 hour) age gate only **slows** attacks—it doesn't prevent them. Time is free: any attacker can automate a slow drip of self-transfers over a week to achieve the same tag reduction that should require 10-20 hops of legitimate commerce.
+
+### Why This Matters
+
+**Decay is supposed to:**
+- Erode high cluster factors through legitimate commerce over 10-20 hops
+- Reward genuine economic activity with fee reduction
+- Create a natural path from high-factor minting to low-factor commerce
+
+**Patient attackers can:**
+- Force the same result in 1 week through automated self-transfers
+- Achieve 97%+ tag decay without any genuine commerce
+- Evade progressive fees entirely with sufficient patience
+
+### The Core Issue
+
+The current decay mechanism grants credit for **any** eligible spend (meeting age requirements), regardless of whether the spend represents genuine economic activity or wash trading.
+
+**See [Entropy-Weighted Decay](entropy-weighted-decay.md) for the Phase 2 mitigation strategy.**
+
+---
+
 ## AND-Based Decay with Epoch Cap (Reference)
 
 The following sections document the AND-based approach for reference. While functional, **age-based decay is preferred** due to its privacy advantages.
@@ -315,16 +350,18 @@ On reorg, UTXO metadata (including decay state) is reconstructed from the canoni
 
 ## Comparison with Alternatives
 
-| Property | Hop-Based | Block-Based | Rate-Limited | AND + Epoch | Age-Based |
-|----------|-----------|-------------|--------------|-------------|-----------|
-| Rapid wash trading | ❌ Vulnerable | ✅ Resistant | ✅ Resistant | ✅ Resistant | ✅ Resistant |
-| Patient wash trading | ❌ Vulnerable | ✅ Resistant | ⚠️ Unbounded | ✅ Bounded | ✅ Bounded |
-| Passive decay | ✅ None | ❌ Occurs | ✅ None | ✅ None | ✅ None |
-| Privacy preserved | ✅ Yes | ✅ Yes | ⚠️ Timing leak | ⚠️ Activity leak | ✅ Yes |
-| Complexity | Simple | Simple | Medium | Medium | Simple |
-| State required | Tags only | Tags + block | Tags + block | Tags + block + epoch | Tags only |
+| Property | Hop-Based | Block-Based | Rate-Limited | AND + Epoch | Age-Based | Entropy-Weighted |
+|----------|-----------|-------------|--------------|-------------|-----------|------------------|
+| Rapid wash trading | ❌ Vulnerable | ✅ Resistant | ✅ Resistant | ✅ Resistant | ✅ Resistant | ✅ Resistant |
+| Patient wash trading | ❌ Vulnerable | ✅ Resistant | ⚠️ Unbounded | ⚠️ Bounded* | ⚠️ Bounded* | ✅ Resistant |
+| Passive decay | ✅ None | ❌ Occurs | ✅ None | ✅ None | ✅ None | ✅ None |
+| Privacy preserved | ✅ Yes | ✅ Yes | ⚠️ Timing leak | ⚠️ Activity leak | ✅ Yes | ✅ Yes |
+| Complexity | Simple | Simple | Medium | Medium | Simple | Medium |
+| State required | Tags only | Tags + block | Tags + block | Tags + block + epoch | Tags only | Tags only |
 
-**Recommendation**: Use **Age-Based Decay** for production. It achieves the same attack resistance as AND + Epoch with zero additional metadata.
+*"Bounded" means slowed (12/day max) but still achievable through patient automation. See [Known Vulnerability](#️-known-vulnerability-patient-wash-trading).
+
+**Recommendation**: Use **Age-Based Decay** for Phase 1 (production today). Plan migration to **Entropy-Weighted Decay** for Phase 2 to close the patient wash trading vulnerability. See [Entropy-Weighted Decay](entropy-weighted-decay.md) for the full specification.
 
 ## Verification
 
@@ -359,15 +396,64 @@ On reorg, UTXO metadata (including decay state) is reconstructed from the canoni
 | 1000 txs over 1 week | 1.35% (84 eligible) |
 | 0 txs over 1 year | 100% (no passive decay) |
 
+## Phase 2: Entropy-Weighted Decay (Preview)
+
+The current age-based approach is Phase 1—it blocks rapid attacks but remains vulnerable to patient wash trading. Phase 2 introduces **entropy-weighted decay** to close this gap.
+
+### Key Insight
+
+The codebase already has the right primitive: `cluster_entropy()` from `tag.rs`.
+
+```rust
+// cluster_entropy() excludes background, is decay-invariant
+pub fn cluster_entropy(&self) -> f64 {
+    // Only increases through genuine mixing with diverse sources
+    // NOT affected by decay events
+}
+```
+
+Key properties:
+- **Wash trading**: Entropy unchanged (A→B→C→A preserves original entropy)
+- **Genuine commerce**: Entropy increases (receiving from diverse counterparties)
+- **Decay events**: Entropy unchanged (background excluded from calculation)
+
+### Proposed Solution
+
+Instead of granting decay credit for any eligible spend, tie it to entropy change:
+
+```
+Current:   decay_effect = 5% per eligible spend
+Proposed:  decay_effect = 5% × entropy_delta_factor
+
+Where:
+- Self-transfer: entropy_delta ≈ 0 → minimal/no decay credit
+- Real commerce: entropy_delta > 0 → full decay credit
+```
+
+### Attack Comparison
+
+| Attack | Current (Age-Based) | Phase 2 (Entropy-Weighted) |
+|--------|---------------------|----------------------------|
+| 100 rapid self-transfers | 0% decay (blocked) | 0% decay (blocked) |
+| Patient attack (1 week) | 97% decay | ~5% decay (minimal credit) |
+| Real commerce (20 hops) | 64% decay | 64% decay (full credit) |
+
+**See [Entropy-Weighted Decay](entropy-weighted-decay.md) for the complete specification.**
+
 ## References
 
-- `cluster-tax/src/age_decay.rs` - Age-based decay implementation (recommended)
+- `cluster-tax/src/age_decay.rs` - Age-based decay implementation (recommended for Phase 1)
 - `cluster-tax/src/block_decay.rs` - AND-based decay implementation (reference)
 - `experiments/ANALYSIS.md` - Experimental results
+- [Entropy-Weighted Decay](entropy-weighted-decay.md) - Phase 2 specification
+- [Provenance-Based Selection](provenance-based-selection.md) - Related entropy-based lottery mechanism
+- [Lottery Redistribution](lottery-redistribution.md) - Fee redistribution and entropy weighting
 - GitHub Issue #85 - Research tracking
 - GitHub Issue #91 - Privacy analysis and decision
+- GitHub Issue #257 - Patient wash trading vulnerability analysis
 
 ## Changelog
 
+- 2026-01-06: Added patient wash trading vulnerability acknowledgment and Phase 2 preview (resolves #257)
 - 2025-12-31: Added Age-Based Decay as recommended approach (resolves #91)
 - 2024-12-31: Initial design specification with AND-based decay

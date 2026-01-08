@@ -8,7 +8,8 @@
 //! 1. **Age similarity**: Decoys should be within 2x age of real input
 //!    - `age > real_age / 2 && age < real_age * 2`
 //!
-//! 2. **Cluster factor ceiling**: Decoys should not have significantly higher factor
+//! 2. **Cluster factor ceiling**: Decoys should not have significantly higher
+//!    factor
 //!    - `decoy_factor <= real_factor * 1.5`
 //!
 //! # Privacy Considerations
@@ -21,7 +22,8 @@
 //!
 //! # Reference
 //!
-//! See `docs/design/ring-signature-tag-propagation.md` for full design rationale.
+//! See `docs/design/ring-signature-tag-propagation.md` for full design
+//! rationale.
 
 use std::collections::HashMap;
 
@@ -79,10 +81,7 @@ impl DecoySelectionConfig {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DecoySelectionError {
     /// Not enough decoys available that meet the constraints.
-    InsufficientDecoys {
-        required: usize,
-        available: usize,
-    },
+    InsufficientDecoys { required: usize, available: usize },
 
     /// No UTXOs available in the pool.
     EmptyUtxoPool,
@@ -160,7 +159,8 @@ impl UtxoCandidate {
 
     /// Calculate the cluster factor using global cluster wealth data.
     ///
-    /// This provides a more accurate factor based on actual wealth distribution.
+    /// This provides a more accurate factor based on actual wealth
+    /// distribution.
     pub fn cluster_factor_global(
         &self,
         cluster_wealth: &HashMap<ClusterId, u64>,
@@ -209,11 +209,13 @@ impl UtxoCandidate {
 ///
 /// # Returns
 ///
-/// A vector of selected decoy UTXOs, or an error if constraints cannot be satisfied.
+/// A vector of selected decoy UTXOs, or an error if constraints cannot be
+/// satisfied.
 ///
 /// # Constraints Applied
 ///
-/// 1. **Age similarity**: `decoy_age > real_age / max_age_ratio && decoy_age < real_age * max_age_ratio`
+/// 1. **Age similarity**: `decoy_age > real_age / max_age_ratio && decoy_age <
+///    real_age * max_age_ratio`
 /// 2. **Factor ceiling**: `decoy_factor <= real_factor * max_factor_ratio`
 ///
 /// # Example
@@ -428,20 +430,14 @@ pub fn validate_decoys(
         if decoy_age < min_age {
             violations.push((
                 i,
-                format!(
-                    "Decoy too young: age {} < min {}",
-                    decoy_age, min_age
-                ),
+                format!("Decoy too young: age {} < min {}", decoy_age, min_age),
             ));
         }
 
         if decoy_age > max_age {
             violations.push((
                 i,
-                format!(
-                    "Decoy too old: age {} > max {}",
-                    decoy_age, max_age
-                ),
+                format!("Decoy too old: age {} > max {}", decoy_age, max_age),
             ));
         }
 
@@ -536,7 +532,11 @@ mod tests {
         let mut pool = Vec::new();
         for i in 1..=15 {
             // Similar age (within 2x), similar factor
-            pool.push(create_utxo(i, 4_000 + i as u64 * 100, &[(1, TAG_WEIGHT_SCALE / 2)]));
+            pool.push(create_utxo(
+                i,
+                4_000 + i as u64 * 100,
+                &[(1, TAG_WEIGHT_SCALE / 2)],
+            ));
         }
 
         let config = DecoySelectionConfig {
@@ -608,11 +608,12 @@ mod tests {
 
         // Pool with various factors
         let pool = vec![
-            create_utxo(1, 5_500, &[]),                           // 0% = 1.0 - good
-            create_utxo(2, 5_500, &[(1, TAG_WEIGHT_SCALE / 4)]),  // 25% = ~2.25 - good
-            create_utxo(3, 5_500, &[(1, TAG_WEIGHT_SCALE / 2)]),  // 50% = 3.5 - at limit (1.5 * 2.25 = 3.375)
-            create_utxo(4, 5_500, &[(1, TAG_WEIGHT_SCALE)]),      // 100% = 6.0 - too high
-            create_utxo(5, 5_500, &[(1, TAG_WEIGHT_SCALE / 5)]),  // 20% = ~2.0 - good
+            create_utxo(1, 5_500, &[]),                          // 0% = 1.0 - good
+            create_utxo(2, 5_500, &[(1, TAG_WEIGHT_SCALE / 4)]), // 25% = ~2.25 - good
+            create_utxo(3, 5_500, &[(1, TAG_WEIGHT_SCALE / 2)]), /* 50% = 3.5 - at limit (1.5 *
+                                                                  * 2.25 = 3.375) */
+            create_utxo(4, 5_500, &[(1, TAG_WEIGHT_SCALE)]), // 100% = 6.0 - too high
+            create_utxo(5, 5_500, &[(1, TAG_WEIGHT_SCALE / 5)]), // 20% = ~2.0 - good
         ];
 
         let config = DecoySelectionConfig {
@@ -646,10 +647,7 @@ mod tests {
         let cluster_wealth = create_cluster_wealth();
 
         // Pool too small
-        let pool = vec![
-            create_utxo(1, 5_500, &[]),
-            create_utxo(2, 5_500, &[]),
-        ];
+        let pool = vec![create_utxo(1, 5_500, &[]), create_utxo(2, 5_500, &[])];
 
         let config = DecoySelectionConfig::default(); // Needs 10 decoys
 
@@ -664,7 +662,10 @@ mod tests {
 
         assert!(matches!(
             result,
-            Err(DecoySelectionError::InsufficientDecoys { required: 10, available: 2 })
+            Err(DecoySelectionError::InsufficientDecoys {
+                required: 10,
+                available: 2
+            })
         ));
     }
 
@@ -737,7 +738,7 @@ mod tests {
 
         // Pool includes the real UTXO
         let pool = vec![
-            create_utxo(0, 5_000, &[]),  // Same as real
+            create_utxo(0, 5_000, &[]), // Same as real
             create_utxo(1, 5_500, &[]),
             create_utxo(2, 5_500, &[]),
             create_utxo(3, 5_500, &[]),
@@ -890,9 +891,7 @@ mod tests {
 
         // Decoy has 100% attribution to the wealthy cluster
         // This gives a high factor that exceeds the 1.5x limit
-        let decoys = vec![
-            create_utxo(1, 5_500, &[(1, TAG_WEIGHT_SCALE)]),
-        ];
+        let decoys = vec![create_utxo(1, 5_500, &[(1, TAG_WEIGHT_SCALE)])];
 
         let config = DecoySelectionConfig::default();
 
@@ -903,7 +902,10 @@ mod tests {
         assert!(
             decoy_factor > real_factor * config.max_factor_ratio,
             "Decoy factor {} should exceed max allowed {} (real {} * {})",
-            decoy_factor, real_factor * config.max_factor_ratio, real_factor, config.max_factor_ratio
+            decoy_factor,
+            real_factor * config.max_factor_ratio,
+            real_factor,
+            config.max_factor_ratio
         );
 
         let violations = validate_decoys(
@@ -915,7 +917,12 @@ mod tests {
             &config,
         );
 
-        assert_eq!(violations.len(), 1, "Should detect 1 violation, found: {:?}", violations);
+        assert_eq!(
+            violations.len(),
+            1,
+            "Should detect 1 violation, found: {:?}",
+            violations
+        );
         assert!(violations[0].1.contains("factor too high"));
     }
 
