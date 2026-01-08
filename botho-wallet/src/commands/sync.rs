@@ -5,10 +5,11 @@ use std::path::Path;
 
 use crate::{
     discovery::NodeDiscovery,
+    fee_estimation::PendingChangeTags,
     keys::WalletKeys,
     rpc_pool::RpcPool,
     storage::EncryptedWallet,
-    transaction::{format_amount, sync_wallet},
+    transaction::{apply_pending_change_tags, format_amount, sync_wallet},
 };
 
 use super::{decrypt_wallet_with_rate_limiting, print_error, print_success};
@@ -68,7 +69,24 @@ pub async fn run(wallet_path: &Path, full: bool) -> Result<()> {
     println!("Scanning {} blocks...", blocks_to_scan);
 
     // Sync wallet
-    let (utxos, height) = sync_wallet(&mut rpc, &keys, from_height).await?;
+    let (mut utxos, height) = sync_wallet(&mut rpc, &keys, from_height).await?;
+
+    // Apply pending change tags to discovered UTXOs (issue #249)
+    // This propagates cluster attribution from inputs to change outputs.
+    let mut pending_tags = wallet
+        .get_pending_change_tags(&password)?
+        .unwrap_or_else(PendingChangeTags::new);
+
+    // Clean up stale pending tags (older than 1000 blocks)
+    pending_tags.cleanup_stale(height, 1000);
+
+    // Apply pending tags to matching change outputs
+    let tags_applied = apply_pending_change_tags(&mut utxos, &mut pending_tags);
+
+    // Save pending tags if any were applied or cleaned up
+    if tags_applied || !pending_tags.is_empty() {
+        wallet.set_pending_change_tags(&pending_tags, &password)?;
+    }
 
     // Calculate balance
     let total: u64 = utxos.iter().map(|u| u.amount).sum();
