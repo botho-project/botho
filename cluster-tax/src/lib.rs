@@ -90,6 +90,15 @@ pub use crypto::{
     ExtendedTxSignature,
     RingTagData,
     SegmentOrProof,
+    // Phase 2B: Entropy proofs
+    EntropyLinkageProof,
+    EntropyProof,
+    EntropyProofBuilder,
+    EntropyProofVerifier,
+    EntropyRangeProof,
+    TransactionVersion,
+    ENTROPY_SCALE,
+    MIN_ENTROPY_THRESHOLD_SCALED,
 };
 pub use dynamic_fee::{DynamicFeeBase, DynamicFeeState, FeeSuggestion};
 pub use fee_curve::{
