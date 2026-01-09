@@ -541,11 +541,134 @@ async fn handle_rpc_method(request: &JsonRpcRequest, state: &RpcState) -> JsonRp
         }
         "cluster_getAllWealth" => handle_cluster_get_all_wealth(id, state).await,
 
+        // Entropy proof methods (Phase 2)
+        "entropy_estimateFee" => handle_entropy_estimate_fee(id, &request.params, state).await,
+        "entropy_getStatus" => handle_entropy_status(id, state).await,
+
         _ => JsonRpcResponse::error(id, -32601, &format!("Method not found: {}", request.method)),
     }
 }
 
 // Handler implementations
+
+// ============================================================================
+// Entropy Proof Helper Functions (Phase 2)
+// ============================================================================
+
+/// Block height after which entropy proofs are required for decay credit.
+/// Before this height: proofs optional, minimal decay credit if not provided.
+/// After this height: proofs required for decay credit, none if not provided.
+const ENTROPY_REQUIRED_HEIGHT: u64 = 500_000;
+
+/// Block height after which entropy proofs are mandatory.
+/// Transactions without entropy proof will be rejected after this height.
+const ENTROPY_MANDATORY_HEIGHT: u64 = 1_000_000;
+
+/// Base decay rate (5% per year, expressed as parts per million).
+const BASE_DECAY_RATE: u64 = 50_000; // 5%
+
+/// Minimal decay rate for transactions without entropy proof (0.5%).
+const MINIMAL_DECAY_RATE: u64 = 5_000; // 0.5%
+
+/// Check if entropy proof is required at the given block height.
+///
+/// Returns true if:
+/// - Block height >= ENTROPY_REQUIRED_HEIGHT (proofs needed for decay credit)
+/// - OR block height >= ENTROPY_MANDATORY_HEIGHT (proofs mandatory)
+fn is_entropy_proof_required(block_height: u64) -> bool {
+    block_height >= ENTROPY_REQUIRED_HEIGHT
+}
+
+/// Check if entropy proof is mandatory (consensus-level requirement).
+#[allow(dead_code)] // Used by handle_entropy_estimate_fee and tests
+fn is_entropy_proof_mandatory(block_height: u64) -> bool {
+    block_height >= ENTROPY_MANDATORY_HEIGHT
+}
+
+/// Extract entropy proof data from a transaction.
+///
+/// Returns JSON-serializable entropy proof info if present, null otherwise.
+/// Once #279 merges, this will read from tx.extended_signature.entropy_proof.
+fn get_entropy_proof_from_tx(tx: &crate::transaction::Transaction) -> Option<Value> {
+    // Phase 2 placeholder: entropy proof not yet in Transaction struct
+    // This will be updated when #279 adds entropy_proof to ExtendedTxSignature
+    //
+    // Future implementation:
+    // if let Some(ref extended_sig) = tx.extended_signature {
+    //     if let Some(ref proof) = extended_sig.entropy_proof {
+    //         return Some(json!({
+    //             "entropyBeforeCommitment": hex::encode(proof.entropy_before_commitment.as_bytes()),
+    //             "entropyAfterCommitment": hex::encode(proof.entropy_after_commitment.as_bytes()),
+    //             "proofSize": proof.serialized_size(),
+    //         }));
+    //     }
+    // }
+    let _ = tx; // Suppress unused variable warning
+    None
+}
+
+/// Compute the entropy validation result based on proof presence and block height.
+///
+/// Returns one of:
+/// - "valid": Proof provided and verified
+/// - "not_provided": No proof provided (transition period)
+/// - "no_decay_credit": No proof provided (after required height)
+/// - "invalid": Proof provided but failed verification
+fn compute_entropy_validation_result(
+    entropy_proof_data: &Option<Value>,
+    block_height: u64,
+) -> Option<String> {
+    match entropy_proof_data {
+        Some(_proof) => {
+            // Proof provided - would verify here
+            // For now, assume valid if present (verification in #280)
+            Some("valid".to_string())
+        }
+        None => {
+            if block_height < ENTROPY_REQUIRED_HEIGHT {
+                // Transition period: proof optional
+                Some("not_provided".to_string())
+            } else {
+                // After required height: no decay credit without proof
+                Some("no_decay_credit".to_string())
+            }
+        }
+    }
+}
+
+/// Compute the effective decay rate based on entropy validation result.
+///
+/// Returns decay rate in parts per million:
+/// - "valid": Full decay credit (BASE_DECAY_RATE)
+/// - "not_provided": Minimal decay credit (MINIMAL_DECAY_RATE)
+/// - "no_decay_credit": No decay credit (0)
+/// - "invalid": No decay credit (0)
+fn compute_effective_decay_rate(validation_result: Option<&str>, block_height: u64) -> u64 {
+    match validation_result {
+        Some("valid") => BASE_DECAY_RATE,
+        Some("not_provided") => {
+            if block_height < ENTROPY_REQUIRED_HEIGHT {
+                MINIMAL_DECAY_RATE
+            } else {
+                0
+            }
+        }
+        Some("no_decay_credit") | Some("invalid") => 0,
+        None => {
+            // No result yet - use minimal if in transition period
+            if block_height < ENTROPY_REQUIRED_HEIGHT {
+                MINIMAL_DECAY_RATE
+            } else {
+                0
+            }
+        }
+        Some(_) => 0, // Unknown result
+    }
+}
+
+// ============================================================================
+// Node and Chain Handlers
+// ============================================================================
 
 async fn handle_node_status(id: Value, state: &RpcState) -> JsonRpcResponse {
     let ledger = read_lock!(state.ledger, id.clone());
@@ -943,8 +1066,16 @@ async fn handle_submit_pq_tx(id: Value, _params: &Value, _state: &RpcState) -> J
 
 /// Get a transaction by hash (for exchange integration)
 ///
-/// Returns transaction details including block height, confirmations, and
-/// status.
+/// Returns transaction details including block height, confirmations,
+/// status, and entropy proof information (Phase 2).
+///
+/// # Entropy Proof Fields (Phase 2)
+///
+/// The response includes entropy proof information when available:
+/// - `entropyProof`: Entropy proof data (null if not provided)
+/// - `entropyValidationResult`: Validation status ("valid", "not_provided", "no_decay_credit", "invalid")
+/// - `effectiveDecayRate`: Computed decay rate based on entropy proof
+/// - `entropyProofRequired`: Whether entropy proof is required at this block height
 async fn handle_get_transaction(id: Value, params: &Value, state: &RpcState) -> JsonRpcResponse {
     // Parse tx_hash parameter
     let tx_hash_hex = match params
@@ -972,10 +1103,14 @@ async fn handle_get_transaction(id: Value, params: &Value, state: &RpcState) -> 
     };
 
     let ledger = read_lock!(state.ledger, id.clone());
+    let chain_state = ledger.get_chain_state().unwrap_or_default();
 
     // First check mempool
     let mempool = read_lock!(state.mempool, id.clone());
     if mempool.contains(&tx_hash) {
+        // Determine if entropy proof would be required for a tx at current height
+        let entropy_proof_required = is_entropy_proof_required(chain_state.height);
+
         return JsonRpcResponse::success(
             id,
             json!({
@@ -984,6 +1119,11 @@ async fn handle_get_transaction(id: Value, params: &Value, state: &RpcState) -> 
                 "blockHeight": null,
                 "confirmations": 0,
                 "inMempool": true,
+                // Entropy proof fields (Phase 2)
+                "entropyProof": null,
+                "entropyValidationResult": "not_provided",
+                "effectiveDecayRate": compute_effective_decay_rate(None, chain_state.height),
+                "entropyProofRequired": entropy_proof_required,
             }),
         );
     }
@@ -995,6 +1135,16 @@ async fn handle_get_transaction(id: Value, params: &Value, state: &RpcState) -> 
             let tx_type = "clsag";
             let output_count = tx.outputs.len();
             let total_output: u64 = tx.outputs.iter().map(|o| o.amount).sum();
+
+            // Get entropy proof information from transaction (Phase 2)
+            // For now, entropy proofs are not yet in the Transaction struct (#279)
+            // Once #279 is merged, this will read from tx.extended_signature.entropy_proof
+            let entropy_proof_data = get_entropy_proof_from_tx(&tx);
+            let entropy_validation_result =
+                compute_entropy_validation_result(&entropy_proof_data, block_height);
+            let effective_decay_rate =
+                compute_effective_decay_rate(entropy_validation_result.as_deref(), block_height);
+            let entropy_proof_required = is_entropy_proof_required(block_height);
 
             JsonRpcResponse::success(
                 id,
@@ -1009,6 +1159,11 @@ async fn handle_get_transaction(id: Value, params: &Value, state: &RpcState) -> 
                     "outputCount": output_count,
                     "totalOutput": total_output,
                     "createdAtHeight": tx.created_at_height,
+                    // Entropy proof fields (Phase 2)
+                    "entropyProof": entropy_proof_data,
+                    "entropyValidationResult": entropy_validation_result,
+                    "effectiveDecayRate": effective_decay_rate,
+                    "entropyProofRequired": entropy_proof_required,
                 }),
             )
         }
@@ -1020,6 +1175,12 @@ async fn handle_get_transaction(id: Value, params: &Value, state: &RpcState) -> 
 /// Get transaction status and confirmation count (for exchange integration)
 ///
 /// Lightweight version of getTransaction that only returns status info.
+/// Includes entropy validation status (Phase 2).
+///
+/// # Entropy Validation Fields (Phase 2)
+///
+/// - `entropyValidationResult`: Validation status ("valid", "not_provided", "no_decay_credit")
+/// - `entropyProofRequired`: Whether entropy proof is required at this block height
 async fn handle_get_transaction_status(
     id: Value,
     params: &Value,
@@ -1050,9 +1211,13 @@ async fn handle_get_transaction_status(
         }
     };
 
+    let ledger = read_lock!(state.ledger, id.clone());
+    let chain_state = ledger.get_chain_state().unwrap_or_default();
+
     // Check mempool first
     let mempool = read_lock!(state.mempool, id.clone());
     if mempool.contains(&tx_hash) {
+        let entropy_proof_required = is_entropy_proof_required(chain_state.height);
         return JsonRpcResponse::success(
             id,
             json!({
@@ -1060,23 +1225,40 @@ async fn handle_get_transaction_status(
                 "status": "pending",
                 "confirmations": 0,
                 "confirmed": false,
+                // Entropy validation fields (Phase 2)
+                "entropyValidationResult": "not_provided",
+                "entropyProofRequired": entropy_proof_required,
             }),
         );
     }
     drop(mempool);
 
     // Look up in blockchain
-    let ledger = read_lock!(state.ledger, id.clone());
     match ledger.get_transaction_confirmations(&tx_hash) {
-        Ok(Some(confirmations)) => JsonRpcResponse::success(
-            id,
-            json!({
-                "txHash": tx_hash_hex,
-                "status": "confirmed",
-                "confirmations": confirmations,
-                "confirmed": true,
-            }),
-        ),
+        Ok(Some(confirmations)) => {
+            // For confirmed transactions, we need the block height to determine entropy status
+            // Since this is the lightweight endpoint, we use chain height as approximation
+            // Full entropy info is available via getTransaction
+            let entropy_proof_required = is_entropy_proof_required(chain_state.height);
+            let entropy_validation_result = if entropy_proof_required {
+                "no_decay_credit" // Default without proof after required height
+            } else {
+                "not_provided" // Transition period
+            };
+
+            JsonRpcResponse::success(
+                id,
+                json!({
+                    "txHash": tx_hash_hex,
+                    "status": "confirmed",
+                    "confirmations": confirmations,
+                    "confirmed": true,
+                    // Entropy validation fields (Phase 2)
+                    "entropyValidationResult": entropy_validation_result,
+                    "entropyProofRequired": entropy_proof_required,
+                }),
+            )
+        }
         Ok(None) => JsonRpcResponse::success(
             id,
             json!({
@@ -1084,6 +1266,9 @@ async fn handle_get_transaction_status(
                 "status": "unknown",
                 "confirmations": 0,
                 "confirmed": false,
+                // Entropy validation fields (Phase 2)
+                "entropyValidationResult": null,
+                "entropyProofRequired": is_entropy_proof_required(chain_state.height),
             }),
         ),
         Err(e) => JsonRpcResponse::error(
@@ -1706,6 +1891,163 @@ async fn handle_cluster_get_all_wealth(id: Value, state: &RpcState) -> JsonRpcRe
     }
 }
 
+// ============================================================================
+// Entropy Proof Handlers (Phase 2)
+// ============================================================================
+
+/// Estimated entropy proof size in bytes.
+/// Based on design document: ~964-1164 bytes for typical transaction.
+const ESTIMATED_ENTROPY_PROOF_SIZE: usize = 1100;
+
+/// Estimate the additional fee for including an entropy proof.
+///
+/// Returns fee information for transactions that include entropy proofs:
+/// - `proofSizeEstimate`: Estimated proof size in bytes
+/// - `additionalFee`: Additional fee for the entropy proof
+/// - `decayCreditEligible`: Whether proof qualifies for decay credit
+/// - `effectiveDecayRate`: Expected decay rate with proof
+/// - `entropyProofRequired`: Whether proof is required at current height
+///
+/// # Parameters
+/// - `cluster_count`: Number of clusters involved (affects proof size)
+/// - `amount`: Transaction amount (for fee curve calculation)
+/// - `cluster_wealth`: Optional cluster wealth for progressive fee
+async fn handle_entropy_estimate_fee(
+    id: Value,
+    params: &Value,
+    state: &RpcState,
+) -> JsonRpcResponse {
+    let ledger = read_lock!(state.ledger, id.clone());
+    let chain_state = ledger.get_chain_state().unwrap_or_default();
+    let mempool = read_lock!(state.mempool, id.clone());
+
+    // Parse parameters
+    let cluster_count = params
+        .get("cluster_count")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(3) as usize;
+    let amount = params.get("amount").and_then(|v| v.as_u64()).unwrap_or(0);
+    let cluster_wealth = params
+        .get("cluster_wealth")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+
+    // Calculate proof size based on cluster count
+    // Formula from design doc:
+    // - 2 entropy commitments: 64 bytes
+    // - Range proof: 160 bytes (simplified) or ~700 bytes (Bulletproof)
+    // - Linkage proof: 4 + (32 * cluster_count) + (64 * cluster_count) + 64 bytes
+    let base_proof_size = 64 + 160; // commitments + range proof
+    let linkage_proof_size = 4 + (32 * cluster_count) + (64 * cluster_count) + 64;
+    let proof_size_estimate = base_proof_size + linkage_proof_size;
+
+    // Calculate additional fee for proof bytes
+    let fee_rate = mempool.dynamic_fee_state().current_base;
+    let additional_fee = (proof_size_estimate as u64) * fee_rate;
+
+    // Apply cluster factor to the additional fee
+    let cluster_factor = mempool.cluster_factor(cluster_wealth);
+    let adjusted_additional_fee = additional_fee * cluster_factor / 1000;
+
+    // Calculate total tx fee with entropy proof
+    let tx_type = bth_cluster_tax::TransactionType::Hidden;
+    let base_fee = mempool.estimate_fee_with_wealth(tx_type, amount, 0, cluster_wealth);
+    let total_fee_with_proof = base_fee + adjusted_additional_fee;
+
+    let entropy_proof_required = is_entropy_proof_required(chain_state.height);
+    let entropy_proof_mandatory = is_entropy_proof_mandatory(chain_state.height);
+
+    JsonRpcResponse::success(
+        id,
+        json!({
+            "proofSizeEstimate": proof_size_estimate,
+            "additionalFee": adjusted_additional_fee,
+            "baseFee": base_fee,
+            "totalFeeWithProof": total_fee_with_proof,
+            "feeRatePerByte": fee_rate,
+            "clusterFactor": cluster_factor,
+            "clusterFactorDisplay": format!("{:.2}x", cluster_factor as f64 / 1000.0),
+            "decayCreditEligible": true,
+            "effectiveDecayRate": BASE_DECAY_RATE,
+            "effectiveDecayRateDisplay": format!("{:.2}%", BASE_DECAY_RATE as f64 / 10000.0),
+            "entropyProofRequired": entropy_proof_required,
+            "entropyProofMandatory": entropy_proof_mandatory,
+            "currentBlockHeight": chain_state.height,
+            "requiredHeight": ENTROPY_REQUIRED_HEIGHT,
+            "mandatoryHeight": ENTROPY_MANDATORY_HEIGHT,
+            "params": {
+                "clusterCount": cluster_count,
+                "amount": amount,
+                "clusterWealth": cluster_wealth,
+            }
+        }),
+    )
+}
+
+/// Get current entropy proof status and configuration.
+///
+/// Returns the current state of entropy proof requirements:
+/// - `entropyProofRequired`: Whether proofs are required for decay credit
+/// - `entropyProofMandatory`: Whether proofs are mandatory (consensus)
+/// - `currentBlockHeight`: Current chain height
+/// - `requiredHeight`: Block height when proofs become required
+/// - `mandatoryHeight`: Block height when proofs become mandatory
+/// - `baseDecayRate`: Full decay rate with valid proof
+/// - `minimalDecayRate`: Decay rate without proof (transition period)
+async fn handle_entropy_status(id: Value, state: &RpcState) -> JsonRpcResponse {
+    let ledger = read_lock!(state.ledger, id.clone());
+    let chain_state = ledger.get_chain_state().unwrap_or_default();
+
+    let entropy_proof_required = is_entropy_proof_required(chain_state.height);
+    let entropy_proof_mandatory = is_entropy_proof_mandatory(chain_state.height);
+
+    // Calculate blocks until next phase
+    let blocks_until_required = if chain_state.height < ENTROPY_REQUIRED_HEIGHT {
+        Some(ENTROPY_REQUIRED_HEIGHT - chain_state.height)
+    } else {
+        None
+    };
+    let blocks_until_mandatory = if chain_state.height < ENTROPY_MANDATORY_HEIGHT {
+        Some(ENTROPY_MANDATORY_HEIGHT - chain_state.height)
+    } else {
+        None
+    };
+
+    // Determine current phase
+    let phase = if entropy_proof_mandatory {
+        "mandatory"
+    } else if entropy_proof_required {
+        "required"
+    } else {
+        "optional"
+    };
+
+    JsonRpcResponse::success(
+        id,
+        json!({
+            "phase": phase,
+            "entropyProofRequired": entropy_proof_required,
+            "entropyProofMandatory": entropy_proof_mandatory,
+            "currentBlockHeight": chain_state.height,
+            "requiredHeight": ENTROPY_REQUIRED_HEIGHT,
+            "mandatoryHeight": ENTROPY_MANDATORY_HEIGHT,
+            "blocksUntilRequired": blocks_until_required,
+            "blocksUntilMandatory": blocks_until_mandatory,
+            "decayRates": {
+                "withValidProof": BASE_DECAY_RATE,
+                "withValidProofDisplay": format!("{:.2}%", BASE_DECAY_RATE as f64 / 10000.0),
+                "withoutProof": if entropy_proof_required { 0 } else { MINIMAL_DECAY_RATE },
+                "withoutProofDisplay": if entropy_proof_required {
+                    "0%".to_string()
+                } else {
+                    format!("{:.2}%", MINIMAL_DECAY_RATE as f64 / 10000.0)
+                },
+            },
+            "estimatedProofSize": ESTIMATED_ENTROPY_PROOF_SIZE,
+        }),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1877,5 +2219,126 @@ mod tests {
         let tier = limiter.get_key_tier("anonymous");
         assert_eq!(tier, KeyTier::Free);
         assert_eq!(tier.rate_limit(), 100);
+    }
+
+    // ========================================================================
+    // Entropy Proof Tests (Phase 2)
+    // ========================================================================
+
+    #[test]
+    fn test_entropy_proof_required_before_threshold() {
+        // Before ENTROPY_REQUIRED_HEIGHT, proofs are optional
+        assert!(!is_entropy_proof_required(0));
+        assert!(!is_entropy_proof_required(100_000));
+        assert!(!is_entropy_proof_required(ENTROPY_REQUIRED_HEIGHT - 1));
+    }
+
+    #[test]
+    fn test_entropy_proof_required_at_threshold() {
+        // At and after ENTROPY_REQUIRED_HEIGHT, proofs are required
+        assert!(is_entropy_proof_required(ENTROPY_REQUIRED_HEIGHT));
+        assert!(is_entropy_proof_required(ENTROPY_REQUIRED_HEIGHT + 1));
+        assert!(is_entropy_proof_required(ENTROPY_REQUIRED_HEIGHT + 100_000));
+    }
+
+    #[test]
+    fn test_entropy_proof_mandatory_before_threshold() {
+        // Before ENTROPY_MANDATORY_HEIGHT, proofs are not mandatory
+        assert!(!is_entropy_proof_mandatory(0));
+        assert!(!is_entropy_proof_mandatory(ENTROPY_REQUIRED_HEIGHT));
+        assert!(!is_entropy_proof_mandatory(ENTROPY_MANDATORY_HEIGHT - 1));
+    }
+
+    #[test]
+    fn test_entropy_proof_mandatory_at_threshold() {
+        // At and after ENTROPY_MANDATORY_HEIGHT, proofs are mandatory
+        assert!(is_entropy_proof_mandatory(ENTROPY_MANDATORY_HEIGHT));
+        assert!(is_entropy_proof_mandatory(ENTROPY_MANDATORY_HEIGHT + 1));
+    }
+
+    #[test]
+    fn test_entropy_validation_result_with_proof() {
+        // With a proof present, should return "valid"
+        let proof_data = Some(json!({"test": "proof"}));
+        let result = compute_entropy_validation_result(&proof_data, 0);
+        assert_eq!(result, Some("valid".to_string()));
+    }
+
+    #[test]
+    fn test_entropy_validation_result_without_proof_transition() {
+        // Without proof in transition period, should return "not_provided"
+        let result = compute_entropy_validation_result(&None, 0);
+        assert_eq!(result, Some("not_provided".to_string()));
+
+        let result = compute_entropy_validation_result(&None, ENTROPY_REQUIRED_HEIGHT - 1);
+        assert_eq!(result, Some("not_provided".to_string()));
+    }
+
+    #[test]
+    fn test_entropy_validation_result_without_proof_required() {
+        // Without proof after required height, should return "no_decay_credit"
+        let result = compute_entropy_validation_result(&None, ENTROPY_REQUIRED_HEIGHT);
+        assert_eq!(result, Some("no_decay_credit".to_string()));
+
+        let result = compute_entropy_validation_result(&None, ENTROPY_REQUIRED_HEIGHT + 100);
+        assert_eq!(result, Some("no_decay_credit".to_string()));
+    }
+
+    #[test]
+    fn test_effective_decay_rate_with_valid_proof() {
+        // With valid proof, should get full decay rate
+        assert_eq!(
+            compute_effective_decay_rate(Some("valid"), 0),
+            BASE_DECAY_RATE
+        );
+        assert_eq!(
+            compute_effective_decay_rate(Some("valid"), ENTROPY_REQUIRED_HEIGHT),
+            BASE_DECAY_RATE
+        );
+    }
+
+    #[test]
+    fn test_effective_decay_rate_without_proof_transition() {
+        // Without proof in transition period, should get minimal rate
+        assert_eq!(
+            compute_effective_decay_rate(Some("not_provided"), 0),
+            MINIMAL_DECAY_RATE
+        );
+        assert_eq!(
+            compute_effective_decay_rate(Some("not_provided"), ENTROPY_REQUIRED_HEIGHT - 1),
+            MINIMAL_DECAY_RATE
+        );
+    }
+
+    #[test]
+    fn test_effective_decay_rate_without_proof_required() {
+        // Without proof after required height, should get zero
+        assert_eq!(
+            compute_effective_decay_rate(Some("not_provided"), ENTROPY_REQUIRED_HEIGHT),
+            0
+        );
+        assert_eq!(
+            compute_effective_decay_rate(Some("no_decay_credit"), ENTROPY_REQUIRED_HEIGHT),
+            0
+        );
+    }
+
+    #[test]
+    fn test_effective_decay_rate_invalid_proof() {
+        // Invalid proof should get zero
+        assert_eq!(compute_effective_decay_rate(Some("invalid"), 0), 0);
+        assert_eq!(
+            compute_effective_decay_rate(Some("invalid"), ENTROPY_REQUIRED_HEIGHT),
+            0
+        );
+    }
+
+    #[test]
+    fn test_decay_rate_constants() {
+        // Verify constants match design document
+        assert_eq!(BASE_DECAY_RATE, 50_000); // 5%
+        assert_eq!(MINIMAL_DECAY_RATE, 5_000); // 0.5%
+        assert_eq!(ENTROPY_REQUIRED_HEIGHT, 500_000);
+        assert_eq!(ENTROPY_MANDATORY_HEIGHT, 1_000_000);
     }
 }
