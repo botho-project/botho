@@ -14,6 +14,7 @@
 //! 3. Pseudo-tag-outputs that commit to the real input's tag masses
 //! 4. Schnorr proofs that each pseudo-tag-output equals the real input's tags
 //! 5. Tag conservation proof between pseudo-tag-outputs and actual outputs
+//! 6. (Phase 2B) Optional entropy proof for entropy-weighted decay
 //!
 //! ## Ring Signature Compatibility
 //!
@@ -21,11 +22,19 @@
 //! without modification. The MLSAG hides which input is real; the tag
 //! proofs prove properties about the aggregate without revealing which
 //! inputs contributed.
+//!
+//! ## Transaction Versions
+//!
+//! - V1: Original format (no tag proofs)
+//! - V2: Phase 1 committed tags (pseudo-tag-outputs + conservation proof)
+//! - V3: Phase 2 entropy proofs (adds optional entropy proof for decay credit)
 
 use super::committed_tags::{
     CommittedTagMass, CommittedTagVector, CommittedTagVectorSecret, SchnorrProof,
     TagConservationProof, TagConservationProver, TagConservationVerifier,
 };
+use super::entropy_proof::EntropyProof;
+use super::entropy_validation::TransactionVersion;
 use crate::{ClusterId, TagWeight};
 use curve25519_dalek::scalar::Scalar;
 
@@ -65,7 +74,7 @@ pub struct TagInheritanceProof {
 /// Extended transaction signature including tag proofs.
 ///
 /// This wraps the transaction's ring signatures with additional
-/// tag-related proofs for Phase 2 committed tags.
+/// tag-related proofs for Phase 2 committed tags and Phase 2B entropy proofs.
 #[derive(Clone, Debug)]
 pub struct ExtendedTxSignature {
     /// Pseudo-tag-outputs, one per transaction input.
@@ -74,6 +83,64 @@ pub struct ExtendedTxSignature {
 
     /// Proof that output tags correctly inherit from input pseudo-tags.
     pub conservation_proof: TagConservationProof,
+
+    /// Optional entropy proof for Phase 2B entropy-weighted decay.
+    ///
+    /// When present, this proves the entropy change meets the threshold
+    /// required for decay credit. Transactions without this proof receive
+    /// minimal decay credit (anti-wash-trading protection).
+    pub entropy_proof: Option<EntropyProof>,
+}
+
+impl ExtendedTxSignature {
+    /// Detect the transaction version based on structure.
+    ///
+    /// Examines the signature structure to determine which version
+    /// format it uses:
+    /// - V1: No extended signature (would be represented differently)
+    /// - V2: Has pseudo-tag-outputs and conservation proof, no entropy proof
+    /// - V3: Has all of the above plus entropy proof
+    pub fn detected_version(&self) -> TransactionVersion {
+        if self.entropy_proof.is_some() {
+            TransactionVersion::V3
+        } else if !self.pseudo_tag_outputs.is_empty() {
+            TransactionVersion::V2
+        } else {
+            // Empty pseudo_tag_outputs could indicate a V1 upgrade
+            // or an invalid state; default to V2 for safety
+            TransactionVersion::V2
+        }
+    }
+
+    /// Check if this signature has entropy proof.
+    pub fn has_entropy_proof(&self) -> bool {
+        self.entropy_proof.is_some()
+    }
+
+    /// Create a V2 signature (without entropy proof).
+    pub fn new_v2(
+        pseudo_tag_outputs: Vec<PseudoTagOutput>,
+        conservation_proof: TagConservationProof,
+    ) -> Self {
+        Self {
+            pseudo_tag_outputs,
+            conservation_proof,
+            entropy_proof: None,
+        }
+    }
+
+    /// Create a V3 signature (with entropy proof).
+    pub fn new_v3(
+        pseudo_tag_outputs: Vec<PseudoTagOutput>,
+        conservation_proof: TagConservationProof,
+        entropy_proof: EntropyProof,
+    ) -> Self {
+        Self {
+            pseudo_tag_outputs,
+            conservation_proof,
+            entropy_proof: Some(entropy_proof),
+        }
+    }
 }
 
 /// Builder for creating extended signatures with tag proofs.
@@ -170,6 +237,7 @@ impl ExtendedSignatureBuilder {
         Some(ExtendedTxSignature {
             pseudo_tag_outputs,
             conservation_proof,
+            entropy_proof: None, // V2 signatures don't include entropy proof
         })
     }
 

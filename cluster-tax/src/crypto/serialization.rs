@@ -383,6 +383,7 @@ impl ExtendedTxSignature {
         Ok(Self {
             pseudo_tag_outputs,
             conservation_proof,
+            entropy_proof: None,
         })
     }
 }
