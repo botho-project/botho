@@ -171,7 +171,7 @@ export function LandingPage() {
               </div>
               <div className="text-xs sm:text-sm text-ghost">{stat.label}</div>
               {stat.note && (
-                <div className="text-[10px] sm:text-xs text-muted mt-0.5">{stat.note}</div>
+                <div className="text-[10px] sm:text-xs text-ghost/80 mt-0.5">{stat.note}</div>
               )}
             </div>
           ))}
