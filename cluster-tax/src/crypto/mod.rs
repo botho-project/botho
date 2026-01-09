@@ -16,6 +16,7 @@
 //! - Full privacy for tag distribution
 
 mod committed_tags;
+mod entropy_proof;
 mod extended_signature;
 mod serialization;
 mod tagged_output;
@@ -51,6 +52,10 @@ pub use committed_tags::{
 pub use extended_signature::{
     ExtendedSignatureBuilder, ExtendedSignatureVerifier, ExtendedTxSignature, PseudoTagOutput,
     RingTagData, TagInheritanceProof,
+};
+pub use entropy_proof::{
+    entropy_generator, EntropyLinkageProof, EntropyProof, EntropyProofBuilder,
+    EntropyProofVerifier, EntropyRangeProof, ENTROPY_SCALE, MIN_ENTROPY_THRESHOLD_SCALED,
 };
 pub use serialization::DeserializeError;
 pub use tagged_output::{CompactTagVector, TaggedTxOut};
