@@ -623,6 +623,132 @@ Event types: `connected`, `disconnected`, `count_changed`
 
 ---
 
+## Entropy Proof Methods (Phase 2)
+
+These methods support Phase 2 entropy-weighted decay. Entropy proofs allow transactions to qualify for decay credit by demonstrating sufficient entropy increase.
+
+### `entropy_estimateFee`
+
+Estimate the additional fee for including an entropy proof in a transaction.
+
+**Parameters:**
+| Name | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `cluster_count` | integer | No | 3 | Number of clusters involved (affects proof size) |
+| `amount` | integer | No | 0 | Transaction amount in nanoBTH |
+| `cluster_wealth` | integer | No | 0 | Sender's cluster wealth for progressive fee |
+
+**Response:**
+| Field | Type | Description |
+|-------|------|-------------|
+| `proofSizeEstimate` | integer | Estimated proof size in bytes |
+| `additionalFee` | integer | Additional fee for entropy proof |
+| `baseFee` | integer | Base transaction fee without proof |
+| `totalFeeWithProof` | integer | Total fee including entropy proof |
+| `feeRatePerByte` | integer | Current fee rate per byte |
+| `clusterFactor` | integer | Cluster wealth multiplier (1000 = 1x) |
+| `clusterFactorDisplay` | string | Human-readable factor (e.g., "1.00x") |
+| `decayCreditEligible` | boolean | Whether proof qualifies for decay credit |
+| `effectiveDecayRate` | integer | Expected decay rate with proof (ppm) |
+| `entropyProofRequired` | boolean | Whether proof is required at current height |
+| `entropyProofMandatory` | boolean | Whether proof is consensus-mandatory |
+| `currentBlockHeight` | integer | Current chain height |
+| `requiredHeight` | integer | Height when proofs become required |
+| `mandatoryHeight` | integer | Height when proofs become mandatory |
+
+**Example:**
+```bash
+curl -X POST http://localhost:7101/ \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"entropy_estimateFee","params":{"cluster_count":3,"amount":1000000000},"id":1}'
+```
+
+---
+
+### `entropy_getStatus`
+
+Get current entropy proof requirements and configuration.
+
+**Parameters:** None
+
+**Response:**
+| Field | Type | Description |
+|-------|------|-------------|
+| `phase` | string | Current phase: "optional", "required", or "mandatory" |
+| `entropyProofRequired` | boolean | Whether proofs are required for decay credit |
+| `entropyProofMandatory` | boolean | Whether proofs are consensus-mandatory |
+| `currentBlockHeight` | integer | Current chain height |
+| `requiredHeight` | integer | Height when proofs become required |
+| `mandatoryHeight` | integer | Height when proofs become mandatory |
+| `blocksUntilRequired` | integer | Blocks until required phase (null if passed) |
+| `blocksUntilMandatory` | integer | Blocks until mandatory phase (null if passed) |
+| `decayRates.withValidProof` | integer | Decay rate with valid proof (ppm) |
+| `decayRates.withoutProof` | integer | Decay rate without proof (ppm) |
+| `estimatedProofSize` | integer | Typical proof size in bytes |
+
+**Example:**
+```bash
+curl -X POST http://localhost:7101/ \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"entropy_getStatus","params":{},"id":1}'
+```
+
+**Response:**
+```json
+{
+  "jsonrpc": "2.0",
+  "result": {
+    "phase": "optional",
+    "entropyProofRequired": false,
+    "entropyProofMandatory": false,
+    "currentBlockHeight": 12345,
+    "requiredHeight": 500000,
+    "mandatoryHeight": 1000000,
+    "blocksUntilRequired": 487655,
+    "blocksUntilMandatory": 987655,
+    "decayRates": {
+      "withValidProof": 50000,
+      "withValidProofDisplay": "5.00%",
+      "withoutProof": 5000,
+      "withoutProofDisplay": "0.50%"
+    },
+    "estimatedProofSize": 1100
+  },
+  "id": 1
+}
+```
+
+---
+
+### Entropy Proof Fields in Transaction Responses
+
+The `getTransaction` and `getTransactionStatus` methods include entropy proof information:
+
+**Additional fields in `getTransaction` response:**
+| Field | Type | Description |
+|-------|------|-------------|
+| `entropyProof` | object/null | Entropy proof data (null if not provided) |
+| `entropyValidationResult` | string | "valid", "not_provided", "no_decay_credit", or "invalid" |
+| `effectiveDecayRate` | integer | Computed decay rate based on proof (ppm) |
+| `entropyProofRequired` | boolean | Whether proof was required at tx block height |
+
+**Additional fields in `getTransactionStatus` response:**
+| Field | Type | Description |
+|-------|------|-------------|
+| `entropyValidationResult` | string | Entropy proof validation status |
+| `entropyProofRequired` | boolean | Whether proof is required at current height |
+
+### Entropy Validation Results
+
+| Result | Description | Decay Credit |
+|--------|-------------|--------------|
+| `valid` | Proof provided and verified | Full (5%) |
+| `not_provided` | No proof, transition period | Minimal (0.5%) |
+| `no_decay_credit` | No proof, after required height | None (0%) |
+| `invalid` | Proof provided but failed verification | None (0%) |
+
+---
+
 ## Error Codes
 
 | Code | Meaning |
