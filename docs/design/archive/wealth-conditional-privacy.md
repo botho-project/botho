@@ -2,7 +2,15 @@
 
 ## Status
 
-**Proposal** - Seeking community feedback
+**ARCHIVED** - Withdrawn
+
+> **Why archived**: This proposal was based on the premise that cluster tags track
+> "wealth concentration." Upon review, we clarified that cluster tags actually track
+> **minting proximity** (where coins originated), not wealth. Since we're not tracking
+> wealth, there's no justification for reducing privacy based on source_wealth.
+>
+> **See instead**: [Minting Proximity Fees](../minting-proximity-fees.md) for the
+> corrected conceptual framing.
 
 ## Overview
 

@@ -1,5 +1,16 @@
 # Lottery-Based Fee Redistribution
 
+## Status
+
+**Reference** - Background analysis for current mechanism
+
+> This document provides valuable analysis of the progressivity-Sybil trade-off
+> in lottery-based redistribution. The critical findings here informed the design
+> of the combined mechanism.
+>
+> **See also**: [Asymmetric UTXO Fees](asymmetric-utxo-fees.md) for the current
+> combined mechanism that addresses these trade-offs.
+
 ## Overview
 
 Botho uses a **lottery-based fee redistribution** system instead of burning transaction fees. This creates a progressive wealth redistribution effect where fees flow back to coin holders.

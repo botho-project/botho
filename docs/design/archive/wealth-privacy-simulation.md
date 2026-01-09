@@ -2,7 +2,14 @@
 
 ## Status
 
-**Draft** - Implementation specification for privacy simulation extensions
+**ARCHIVED** - Parent design withdrawn
+
+> **Why archived**: This simulation spec was for the wealth-conditional privacy
+> design, which has been withdrawn. See [wealth-conditional-privacy.md](wealth-conditional-privacy.md)
+> for why that design was archived.
+>
+> **See instead**: [Asymmetric Fees Simulation](../asymmetric-fees-simulation.md) for
+> the current simulation specification.
 
 ## Overview
 

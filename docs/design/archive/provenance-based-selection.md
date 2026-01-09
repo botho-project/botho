@@ -1,5 +1,20 @@
 # Provenance-Based Lottery Selection
 
+## Status
+
+**ARCHIVED** - Superseded by combined mechanism
+
+> **Why archived**: This document explored entropy-weighted lottery selection to reduce
+> Sybil advantage. The findings are valid but the approach has been superseded by a
+> combined mechanism that uses value-weighted lottery with floor + eligibility decay,
+> which provides better attack resistance with simpler implementation.
+>
+> **See instead**: [Asymmetric UTXO Fees](../asymmetric-utxo-fees.md) for the current
+> combined mechanism.
+>
+> **Note**: The background analysis on the progressivity-Sybil trade-off remains valuable
+> for understanding the problem space.
+
 ## Abstract
 
 This document analyzes lottery-based fee redistribution in privacy-preserving
