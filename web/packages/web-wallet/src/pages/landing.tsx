@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Button, Logo } from '@botho/ui'
-import { Shield, TrendingDown, Atom, Zap, ArrowRight, Github, Menu, X, FileText } from 'lucide-react'
+import { Shield, Scale, Atom, Zap, ArrowRight, Github, Menu, X, FileText } from 'lucide-react'
 
 const features = [
   {
@@ -10,9 +10,9 @@ const features = [
     description: 'Every transaction uses ring signatures. No transparent mode, no T-addr mistake. Privacy is the baseline, not a premium feature.',
   },
   {
-    icon: TrendingDown,
-    title: 'Anti-Hoarding Economics',
-    description: 'Progressive fees based on coin ancestry, not identity. Circulated coins pay 0.05%; hoarded coins pay up to 30%. Sybil-resistant—splitting wallets doesn\'t help.',
+    icon: Scale,
+    title: 'Progressive Economics',
+    description: 'Fees based on coin provenance, not identity. Fresh mints pay more; well-traded coins pay less. 80% of fees redistributed via lottery that favors small holders. Splitting doesn\'t help—tags track origin, not amount.',
   },
   {
     icon: Atom,
@@ -29,7 +29,7 @@ const features = [
 const stats = [
   { label: 'Finality', value: '<5s', note: 'SCP consensus' },
   { label: 'Ring Size', value: '20', note: 'CLSAG signatures' },
-  { label: 'Base Fee', value: '0.05%', note: 'Up to 30% for whales' },
+  { label: 'Fee Range', value: '1-6x', note: 'Based on provenance' },
   { label: 'Addresses', value: 'ML-KEM', note: 'Quantum-safe' },
 ]
 
@@ -181,9 +181,6 @@ export function LandingPage() {
       {/* Features */}
       <section className="py-16 sm:py-24 px-4 sm:px-6">
         <div className="max-w-6xl mx-auto">
-          <h2 className="font-display text-2xl sm:text-3xl md:text-4xl font-bold text-center mb-10 sm:mb-16">
-            Privacy, Fairness, Long-term
-          </h2>
           <div className="grid sm:grid-cols-2 gap-4 sm:gap-6 md:gap-8">
             {features.map((feature) => (
               <div
