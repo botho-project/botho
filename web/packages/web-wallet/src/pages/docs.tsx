@@ -418,10 +418,10 @@ This question has a surprising property: **it's answerable on-chain without link
 
 Every coin in Botho carries a "cluster tag" — a memory of which minting event created it. This is not tracking the *owner*, but the *origin*.
 
-\`\`\`
-Freshly minted coin:        {cluster_A: 100%}     → High fees
-Well-traded coin:           {cluster_A: 5%, cluster_B: 15%, ...}  → Low fees
-\`\`\`
+| Coin State | Tags | Fee Level |
+|------------|------|-----------|
+| Freshly minted | \`{cluster_A: 100%}\` | High |
+| Well-traded | \`{cluster_A: 5%, cluster_B: 15%, ...}\` | Low |
 
 The key properties:
 
