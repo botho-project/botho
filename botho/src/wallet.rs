@@ -1,11 +1,13 @@
 use anyhow::Result;
 use bip39::{Language, Mnemonic, Seed};
 use bth_account_keys::{AccountKey, PublicAddress};
+use bth_cluster_tax::crypto::{CommittedTagVectorSecret, EntropyProof, EntropyProofBuilder};
+use bth_cluster_tax::ClusterId as TaxClusterId;
 use bth_core::slip10::Slip10KeyGenerator;
 use bth_transaction_types::{ClusterTagVector, TAG_WEIGHT_SCALE};
 use rand::{rngs::OsRng, seq::SliceRandom};
 use std::collections::HashMap;
-use tracing::debug;
+use tracing::{debug, warn};
 use zeroize::Zeroizing;
 
 #[cfg(feature = "pq")]
@@ -22,6 +24,108 @@ use crate::{
 /// Default decay rate for cluster tags when transferring coins.
 /// 5% decay per transaction (50,000 / 1,000,000 = 5%).
 pub const DEFAULT_CLUSTER_DECAY_RATE: u32 = 50_000;
+
+/// Estimated size of an entropy proof in bytes.
+///
+/// Based on the design spec (docs/design/entropy-proof-integration.md):
+/// - 2 entropy commitments: 64 bytes
+/// - Range proof: ~160 bytes (simplified Schnorr)
+/// - Linkage proof: ~4 + 32*N + 64*N + 64 bytes (N = cluster count)
+///
+/// For typical transactions with 2-4 clusters: ~700-1000 bytes
+/// We use 1024 bytes as a conservative estimate.
+pub const ENTROPY_PROOF_SIZE_ESTIMATE: usize = 1024;
+
+/// Transaction version indicating supported features.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TransactionVersion {
+    /// V2: Phase 1 committed tags
+    /// - Committed cluster tags
+    /// - Tag conservation proofs
+    /// - No entropy proof
+    #[default]
+    V2,
+
+    /// V3: Phase 2 entropy proofs
+    /// - All V2 features
+    /// - Entropy proof in ExtendedTxSignature
+    /// - Entropy-weighted decay
+    V3,
+}
+
+impl TransactionVersion {
+    /// Check if this version supports entropy proofs.
+    pub fn supports_entropy_proof(&self) -> bool {
+        matches!(self, Self::V3)
+    }
+}
+
+/// Configuration for transaction creation.
+#[derive(Clone, Debug)]
+pub struct TransactionConfig {
+    /// Transaction version to create.
+    /// V3 includes entropy proofs for full decay credit.
+    pub version: TransactionVersion,
+
+    /// Decay rate applied to tags (parts per TAG_WEIGHT_SCALE).
+    /// Default: 50,000 (5%)
+    pub decay_rate: u32,
+
+    /// Whether to fall back to V2 if V3 entropy proof generation fails.
+    /// Default: true
+    pub fallback_on_proof_failure: bool,
+}
+
+impl Default for TransactionConfig {
+    fn default() -> Self {
+        Self {
+            version: TransactionVersion::V3, // Default to V3 for full decay credit
+            decay_rate: DEFAULT_CLUSTER_DECAY_RATE,
+            fallback_on_proof_failure: true,
+        }
+    }
+}
+
+impl TransactionConfig {
+    /// Create a V2 configuration (no entropy proof).
+    pub fn v2() -> Self {
+        Self {
+            version: TransactionVersion::V2,
+            ..Default::default()
+        }
+    }
+
+    /// Create a V3 configuration (with entropy proof).
+    pub fn v3() -> Self {
+        Self {
+            version: TransactionVersion::V3,
+            ..Default::default()
+        }
+    }
+
+    /// Set whether to fall back to V2 on proof failure.
+    pub fn with_fallback(mut self, fallback: bool) -> Self {
+        self.fallback_on_proof_failure = fallback;
+        self
+    }
+
+    /// Set custom decay rate.
+    pub fn with_decay_rate(mut self, decay_rate: u32) -> Self {
+        self.decay_rate = decay_rate;
+        self
+    }
+}
+
+/// Result of entropy proof generation.
+#[derive(Debug)]
+pub enum EntropyProofResult {
+    /// Proof generated successfully.
+    Generated(EntropyProof),
+    /// Proof generation skipped (V2 transaction or not enough entropy increase).
+    Skipped,
+    /// Proof generation failed, fell back to V2.
+    Fallback(String),
+}
 
 #[cfg(feature = "pq")]
 use crate::transaction_pq::{
@@ -143,6 +247,78 @@ impl Wallet {
             .collect();
 
         ClusterTagVector::merge_weighted(&inputs, decay_rate)
+    }
+
+    /// Estimate transaction size including entropy proof.
+    ///
+    /// This helps with fee calculation by accounting for the additional
+    /// ~1KB entropy proof in V3 transactions.
+    ///
+    /// # Arguments
+    /// * `num_inputs` - Number of transaction inputs
+    /// * `num_outputs` - Number of transaction outputs
+    /// * `version` - Transaction version (V2 or V3)
+    ///
+    /// # Returns
+    /// Estimated transaction size in bytes.
+    pub fn estimate_transaction_size(
+        num_inputs: usize,
+        num_outputs: usize,
+        version: TransactionVersion,
+    ) -> usize {
+        // Base transaction size estimates (from design spec):
+        // - Base overhead: ~100 bytes
+        // - Per input (CLSAG signature): ~700 bytes
+        // - Per output: ~100 bytes
+        // - Tag conservation proof: ~500 bytes
+        let base_size = 100 + (num_inputs * 700) + (num_outputs * 100) + 500;
+
+        // Add entropy proof size for V3
+        if version.supports_entropy_proof() {
+            base_size + ENTROPY_PROOF_SIZE_ESTIMATE
+        } else {
+            base_size
+        }
+    }
+
+    /// Estimate fee with entropy proof overhead.
+    ///
+    /// Calculates the recommended fee for a transaction, accounting for
+    /// the additional entropy proof size in V3 transactions.
+    ///
+    /// # Arguments
+    /// * `utxos` - UTXOs being spent (for cluster wealth calculation)
+    /// * `num_outputs` - Number of outputs
+    /// * `base_fee_per_byte` - Base fee per byte (before wealth multiplier)
+    /// * `version` - Transaction version
+    ///
+    /// # Returns
+    /// Recommended fee in atomic units.
+    pub fn estimate_fee_with_entropy_proof(
+        utxos: &[Utxo],
+        num_outputs: usize,
+        base_fee_per_byte: u64,
+        version: TransactionVersion,
+    ) -> u64 {
+        let tx_size = Self::estimate_transaction_size(utxos.len(), num_outputs, version);
+        let base_fee = (tx_size as u64) * base_fee_per_byte;
+
+        // Apply progressive fee multiplier based on cluster wealth
+        let max_wealth = Self::compute_cluster_wealth(utxos);
+
+        // Fee multiplier: 1x for wealth < 1M, up to 6x for wealth >= 100M
+        // Using simplified tier system
+        let multiplier = if max_wealth >= 100_000_000 {
+            6
+        } else if max_wealth >= 10_000_000 {
+            4
+        } else if max_wealth >= 1_000_000 {
+            2
+        } else {
+            1
+        };
+
+        base_fee * multiplier
     }
 
     /// Format the public address as a string for display
@@ -417,6 +593,148 @@ impl Wallet {
         Ok(tx)
     }
 
+    /// Create a V3 transaction with entropy proof for full decay credit.
+    ///
+    /// This method creates a transaction with an entropy proof that demonstrates
+    /// the transaction creates sufficient entropy increase to qualify for full
+    /// decay credit. If entropy proof generation fails and fallback is enabled,
+    /// returns a V2 transaction without the proof.
+    ///
+    /// # Arguments
+    /// * `utxos_to_spend` - The wallet's UTXOs to spend
+    /// * `outputs` - Transaction outputs to create
+    /// * `fee` - Transaction fee
+    /// * `current_height` - Current blockchain height
+    /// * `ledger` - Ledger for fetching decoy outputs
+    /// * `config` - Transaction configuration (version, fallback behavior)
+    ///
+    /// # Returns
+    /// A tuple of (Transaction, EntropyProofResult) where the proof result
+    /// indicates whether the entropy proof was generated, skipped, or fell back.
+    pub fn create_transaction_v3(
+        &self,
+        utxos_to_spend: &[Utxo],
+        outputs: Vec<TxOutput>,
+        fee: u64,
+        current_height: u64,
+        ledger: &Ledger,
+        config: &TransactionConfig,
+    ) -> Result<(Transaction, EntropyProofResult)> {
+        if utxos_to_spend.is_empty() {
+            return Err(anyhow::anyhow!("No UTXOs to spend"));
+        }
+
+        // Compute inherited cluster tags from inputs
+        let inherited_tags = Self::compute_inherited_tags(utxos_to_spend, config.decay_rate);
+
+        // Apply inherited tags to all outputs
+        let outputs: Vec<TxOutput> = outputs
+            .into_iter()
+            .map(|mut o| {
+                o.cluster_tags = inherited_tags.clone();
+                o
+            })
+            .collect();
+
+        // Try to generate entropy proof if V3 is requested
+        let entropy_result = if config.version.supports_entropy_proof() {
+            match self.generate_entropy_proof(utxos_to_spend, &outputs, config.decay_rate) {
+                Ok(proof) => {
+                    debug!("Entropy proof generated successfully");
+                    EntropyProofResult::Generated(proof)
+                }
+                Err(e) => {
+                    if config.fallback_on_proof_failure {
+                        warn!("Entropy proof generation failed, falling back to V2: {}", e);
+                        EntropyProofResult::Fallback(e.to_string())
+                    } else {
+                        return Err(anyhow::anyhow!(
+                            "Entropy proof generation failed and fallback disabled: {}",
+                            e
+                        ));
+                    }
+                }
+            }
+        } else {
+            debug!("V2 transaction requested, skipping entropy proof");
+            EntropyProofResult::Skipped
+        };
+
+        // Create the base transaction (same as V2)
+        let tx = self.create_private_transaction_impl(
+            utxos_to_spend,
+            outputs,
+            fee,
+            current_height,
+            ledger,
+        )?;
+
+        Ok((tx, entropy_result))
+    }
+
+    /// Generate an entropy proof for a transaction.
+    ///
+    /// This creates a zero-knowledge proof that the entropy increase from
+    /// inputs to outputs meets the minimum threshold for decay credit.
+    ///
+    /// # Arguments
+    /// * `utxos` - Input UTXOs
+    /// * `outputs` - Output TxOutputs (with tags already applied)
+    /// * `decay_rate` - Decay rate applied to tags
+    ///
+    /// # Returns
+    /// The entropy proof, or an error if generation fails.
+    fn generate_entropy_proof(
+        &self,
+        utxos: &[Utxo],
+        outputs: &[TxOutput],
+        _decay_rate: u32,
+    ) -> Result<EntropyProof> {
+        let mut rng = OsRng;
+
+        // Convert input UTXOs to CommittedTagVectorSecrets
+        let input_secrets: Vec<CommittedTagVectorSecret> = utxos
+            .iter()
+            .map(|utxo| {
+                Self::utxo_to_committed_tag_secret(utxo)
+            })
+            .collect();
+
+        // Convert outputs to CommittedTagVectorSecrets (with decay applied)
+        let output_secrets: Vec<CommittedTagVectorSecret> = outputs
+            .iter()
+            .map(|output| {
+                Self::output_to_committed_tag_secret(output)
+            })
+            .collect();
+
+        // Build the entropy proof
+        let builder = EntropyProofBuilder::new(input_secrets, output_secrets);
+        builder
+            .prove(&mut rng)
+            .ok_or_else(|| anyhow::anyhow!(
+                "Entropy delta below threshold - transaction does not qualify for decay credit"
+            ))
+    }
+
+    /// Convert a UTXO's tags to a CommittedTagVectorSecret.
+    fn utxo_to_committed_tag_secret(utxo: &Utxo) -> CommittedTagVectorSecret {
+        let mut tags = HashMap::new();
+        for entry in &utxo.output.cluster_tags.entries {
+            tags.insert(TaxClusterId(entry.cluster_id.0), entry.weight);
+        }
+        CommittedTagVectorSecret::from_plaintext(utxo.output.amount, &tags, &mut OsRng)
+    }
+
+    /// Convert a TxOutput's tags to a CommittedTagVectorSecret.
+    fn output_to_committed_tag_secret(output: &TxOutput) -> CommittedTagVectorSecret {
+        let mut tags = HashMap::new();
+        for entry in &output.cluster_tags.entries {
+            tags.insert(TaxClusterId(entry.cluster_id.0), entry.weight);
+        }
+        CommittedTagVectorSecret::from_plaintext(output.amount, &tags, &mut OsRng)
+    }
+
     /// Create a quantum-private transaction for post-quantum security.
     ///
     /// Quantum-private transactions use hybrid classical + post-quantum
@@ -652,5 +970,101 @@ mod tests {
         // Each cluster should have 50%
         assert_eq!(inherited.get_weight(ClusterId(1)), 500_000);
         assert_eq!(inherited.get_weight(ClusterId(2)), 500_000);
+    }
+
+    #[test]
+    fn test_transaction_version_supports_entropy() {
+        assert!(!TransactionVersion::V2.supports_entropy_proof());
+        assert!(TransactionVersion::V3.supports_entropy_proof());
+    }
+
+    #[test]
+    fn test_transaction_config_defaults() {
+        let config = TransactionConfig::default();
+        assert_eq!(config.version, TransactionVersion::V3);
+        assert_eq!(config.decay_rate, DEFAULT_CLUSTER_DECAY_RATE);
+        assert!(config.fallback_on_proof_failure);
+    }
+
+    #[test]
+    fn test_transaction_config_v2() {
+        let config = TransactionConfig::v2();
+        assert_eq!(config.version, TransactionVersion::V2);
+    }
+
+    #[test]
+    fn test_transaction_config_v3() {
+        let config = TransactionConfig::v3();
+        assert_eq!(config.version, TransactionVersion::V3);
+    }
+
+    #[test]
+    fn test_estimate_transaction_size_v2() {
+        // V2: 2 inputs, 2 outputs
+        // Base: 100 + (2 * 700) + (2 * 100) + 500 = 2200
+        let size_v2 = Wallet::estimate_transaction_size(2, 2, TransactionVersion::V2);
+        assert_eq!(size_v2, 2200);
+    }
+
+    #[test]
+    fn test_estimate_transaction_size_v3() {
+        // V3: 2 inputs, 2 outputs + entropy proof
+        // Base: 100 + (2 * 700) + (2 * 100) + 500 = 2200
+        // + ENTROPY_PROOF_SIZE_ESTIMATE (1024) = 3224
+        let size_v3 = Wallet::estimate_transaction_size(2, 2, TransactionVersion::V3);
+        assert_eq!(size_v3, 2200 + ENTROPY_PROOF_SIZE_ESTIMATE);
+    }
+
+    #[test]
+    fn test_estimate_fee_with_entropy_proof() {
+        let tags = ClusterTagVector::single(ClusterId(42));
+        let utxos = vec![make_utxo(500_000, tags)]; // Below 1M threshold
+
+        let base_fee_per_byte = 10u64;
+
+        // V2 fee (no entropy proof)
+        let fee_v2 =
+            Wallet::estimate_fee_with_entropy_proof(&utxos, 2, base_fee_per_byte, TransactionVersion::V2);
+        // Size: 100 + 700 + 200 + 500 = 1500
+        // Fee: 1500 * 10 * 1 (no multiplier for < 1M) = 15000
+        assert_eq!(fee_v2, 15000);
+
+        // V3 fee (with entropy proof)
+        let fee_v3 =
+            Wallet::estimate_fee_with_entropy_proof(&utxos, 2, base_fee_per_byte, TransactionVersion::V3);
+        // Size: 1500 + 1024 = 2524
+        // Fee: 2524 * 10 * 1 = 25240
+        assert_eq!(fee_v3, 25240);
+    }
+
+    #[test]
+    fn test_estimate_fee_with_high_wealth_multiplier() {
+        // 10M wealth triggers 4x multiplier
+        let tags = ClusterTagVector::single(ClusterId(42));
+        let utxos = vec![make_utxo(10_000_000, tags)];
+
+        let base_fee_per_byte = 10u64;
+
+        let fee = Wallet::estimate_fee_with_entropy_proof(
+            &utxos,
+            2,
+            base_fee_per_byte,
+            TransactionVersion::V2,
+        );
+
+        // Size: 100 + 700 + 200 + 500 = 1500
+        // Fee: 1500 * 10 * 4 (4x for >= 10M) = 60000
+        assert_eq!(fee, 60000);
+    }
+
+    #[test]
+    fn test_utxo_to_committed_tag_secret() {
+        let tags = ClusterTagVector::single(ClusterId(42));
+        let utxo = make_utxo(1_000_000, tags);
+
+        let secret = Wallet::utxo_to_committed_tag_secret(&utxo);
+
+        // Verify the secret has the correct total mass
+        assert_eq!(secret.total_mass, 1_000_000);
     }
 }
