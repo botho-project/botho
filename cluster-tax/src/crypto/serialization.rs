@@ -14,6 +14,7 @@ use super::{
         ClusterConservationProof, CommittedTagMass, CommittedTagVector, SchnorrProof,
         TagConservationProof,
     },
+    entropy_proof::EntropyProof,
     extended_signature::{ExtendedTxSignature, PseudoTagOutput, TagInheritanceProof},
 };
 
@@ -28,6 +29,10 @@ pub enum DeserializeError {
     InvalidPoint,
     /// Invalid length field.
     InvalidLength,
+    /// Invalid or unsupported version byte.
+    InvalidVersion,
+    /// Invalid entropy proof data.
+    InvalidEntropyProof,
 }
 
 /// Writer for binary encoding.
@@ -335,10 +340,32 @@ impl PseudoTagOutput {
     }
 }
 
+/// Serialization format version for ExtendedTxSignature.
+///
+/// - Version 2: V2 signatures without entropy proof
+/// - Version 3: V3 signatures with entropy proof
+const EXTENDED_SIG_VERSION_V2: u8 = 2;
+const EXTENDED_SIG_VERSION_V3: u8 = 3;
+
 impl ExtendedTxSignature {
     /// Serialize to bytes.
+    ///
+    /// Format:
+    /// - Version byte (1 byte): 2 = V2 (no entropy proof), 3 = V3 (with entropy proof)
+    /// - Pseudo-tag-output count (4 bytes)
+    /// - Pseudo-tag-outputs (variable)
+    /// - Conservation proof (variable)
+    /// - [V3 only] Entropy proof length (4 bytes) + entropy proof data
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut w = Writer::new();
+
+        // Version byte: 2 for V2 (no entropy proof), 3 for V3 (with entropy proof)
+        let version = if self.entropy_proof.is_some() {
+            EXTENDED_SIG_VERSION_V3
+        } else {
+            EXTENDED_SIG_VERSION_V2
+        };
+        w.write_bytes(&[version]);
 
         // Pseudo-tag-outputs count
         w.write_u32(self.pseudo_tag_outputs.len() as u32);
@@ -351,14 +378,32 @@ impl ExtendedTxSignature {
         }
 
         // Conservation proof
-        w.write_bytes(&self.conservation_proof.to_bytes());
+        let conservation_bytes = self.conservation_proof.to_bytes();
+        w.write_u32(conservation_bytes.len() as u32);
+        w.write_bytes(&conservation_bytes);
+
+        // Entropy proof (V3 only)
+        if let Some(ref entropy_proof) = self.entropy_proof {
+            let entropy_bytes = entropy_proof.to_bytes();
+            w.write_u32(entropy_bytes.len() as u32);
+            w.write_bytes(&entropy_bytes);
+        }
 
         w.into_vec()
     }
 
     /// Deserialize from bytes.
+    ///
+    /// Supports both V2 (no entropy proof) and V3 (with entropy proof) formats.
+    /// The version byte determines which format to expect.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, DeserializeError> {
         let mut r = Reader::new(bytes);
+
+        // Version byte
+        let version = r.read_bytes(1)?[0];
+        if version < EXTENDED_SIG_VERSION_V2 || version > EXTENDED_SIG_VERSION_V3 {
+            return Err(DeserializeError::InvalidVersion);
+        }
 
         // Pseudo-tag-outputs
         let pto_count = r.read_u32()? as usize;
@@ -376,14 +421,33 @@ impl ExtendedTxSignature {
             pseudo_tag_outputs.push(PseudoTagOutput::from_bytes(pto_bytes)?);
         }
 
-        // Conservation proof - remaining bytes
-        let remaining = &r.data[r.pos..];
-        let conservation_proof = TagConservationProof::from_bytes(remaining)?;
+        // Conservation proof (length-prefixed for V2+ format)
+        let conservation_len = r.read_u32()? as usize;
+        if conservation_len > 100000 {
+            return Err(DeserializeError::InvalidLength);
+        }
+        let conservation_bytes = r.read_bytes(conservation_len)?;
+        let conservation_proof = TagConservationProof::from_bytes(conservation_bytes)?;
+
+        // Entropy proof (V3 only)
+        let entropy_proof = if version >= EXTENDED_SIG_VERSION_V3 {
+            let entropy_len = r.read_u32()? as usize;
+            if entropy_len > 100000 {
+                return Err(DeserializeError::InvalidLength);
+            }
+            let entropy_bytes = r.read_bytes(entropy_len)?;
+            Some(
+                EntropyProof::from_bytes(entropy_bytes)
+                    .ok_or(DeserializeError::InvalidEntropyProof)?,
+            )
+        } else {
+            None
+        };
 
         Ok(Self {
             pseudo_tag_outputs,
             conservation_proof,
-            entropy_proof: None,
+            entropy_proof,
         })
     }
 }
@@ -467,6 +531,126 @@ mod tests {
         assert_eq!(
             original.conservation_proof.cluster_proofs.len(),
             restored.conservation_proof.cluster_proofs.len()
+        );
+
+        // Verify V2 signature has no entropy proof
+        assert!(
+            original.entropy_proof.is_none(),
+            "V2 signature should not have entropy proof"
+        );
+        assert!(
+            restored.entropy_proof.is_none(),
+            "Restored V2 signature should not have entropy proof"
+        );
+    }
+
+    #[test]
+    fn test_extended_signature_v3_with_entropy_proof_roundtrip() {
+        use crate::crypto::{EntropyProofBuilder, EntropyProofVerifier};
+
+        let decay_rate = 50_000;
+
+        // Create input with single cluster
+        let input_secret = create_test_secret(1_000_000, &[(1, TAG_WEIGHT_SCALE)]);
+        let input_commitment = input_secret.commit();
+        let ring_tags = vec![input_commitment.clone()];
+
+        // Create output using apply_decay (preserves cluster structure for conservation proof)
+        let output_secret = input_secret.apply_decay(decay_rate, &mut OsRng);
+
+        // Build V2 signature first
+        let mut builder = ExtendedSignatureBuilder::new(decay_rate);
+        builder.add_input(ring_tags, 0, input_secret.clone());
+        builder.add_output(output_secret.clone());
+        let mut signature = builder.build(&mut OsRng).expect("Should build signature");
+
+        // For entropy proof, we need entropy increase.
+        // Create secrets with different cluster distributions:
+        // - entropy_input: single cluster (low entropy)
+        // - entropy_output: two clusters (higher entropy)
+        let entropy_input = create_test_secret(1_000_000, &[(1, TAG_WEIGHT_SCALE)]);
+        let entropy_output = create_test_secret(
+            1_000_000,
+            &[(1, TAG_WEIGHT_SCALE / 2), (2, TAG_WEIGHT_SCALE / 2)],
+        );
+
+        // Generate entropy proof from the different distributions
+        let entropy_builder = EntropyProofBuilder::new(vec![entropy_input], vec![entropy_output]);
+        let entropy_proof = entropy_builder
+            .prove(&mut OsRng)
+            .expect("Should generate entropy proof");
+
+        // Add entropy proof to make it V3
+        signature.entropy_proof = Some(entropy_proof);
+
+        // Serialize and deserialize
+        let bytes = signature.to_bytes();
+        let restored = ExtendedTxSignature::from_bytes(&bytes).expect("Should deserialize V3");
+
+        // Verify structure matches
+        assert_eq!(
+            signature.pseudo_tag_outputs.len(),
+            restored.pseudo_tag_outputs.len()
+        );
+        assert_eq!(
+            signature.conservation_proof.cluster_proofs.len(),
+            restored.conservation_proof.cluster_proofs.len()
+        );
+
+        // Verify entropy proof is preserved
+        assert!(
+            restored.entropy_proof.is_some(),
+            "V3 signature should have entropy proof"
+        );
+
+        // Verify restored entropy proof is valid
+        let verifier = EntropyProofVerifier::new();
+        assert!(
+            verifier.verify(restored.entropy_proof.as_ref().unwrap()),
+            "Restored entropy proof should verify"
+        );
+    }
+
+    #[test]
+    fn test_version_byte_detection() {
+        let decay_rate = 50_000;
+
+        // Create V2 signature
+        let input_secret = create_test_secret(1_000_000, &[(1, TAG_WEIGHT_SCALE)]);
+        let input_commitment = input_secret.commit();
+        let ring_tags = vec![input_commitment.clone()];
+        let output_secret = input_secret.apply_decay(decay_rate, &mut OsRng);
+
+        let mut builder = ExtendedSignatureBuilder::new(decay_rate);
+        builder.add_input(ring_tags, 0, input_secret);
+        builder.add_output(output_secret);
+        let signature = builder.build(&mut OsRng).expect("Should build signature");
+
+        // Serialize
+        let bytes = signature.to_bytes();
+
+        // First byte should be version 2
+        assert_eq!(bytes[0], EXTENDED_SIG_VERSION_V2, "V2 signature version byte");
+    }
+
+    #[test]
+    fn test_invalid_version_rejected() {
+        // Create bytes with invalid version
+        let mut bytes = vec![0u8]; // Version 0 is invalid
+        bytes.extend_from_slice(&0u32.to_le_bytes()); // 0 pseudo-tag-outputs
+
+        let result = ExtendedTxSignature::from_bytes(&bytes);
+        assert!(
+            matches!(result, Err(DeserializeError::InvalidVersion)),
+            "Should reject invalid version"
+        );
+
+        // Version 1 is also invalid (we start at V2)
+        bytes[0] = 1;
+        let result = ExtendedTxSignature::from_bytes(&bytes);
+        assert!(
+            matches!(result, Err(DeserializeError::InvalidVersion)),
+            "Should reject version 1"
         );
     }
 }
