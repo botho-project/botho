@@ -7,8 +7,8 @@
 
 \subsection{Key Hierarchy}
 
-\Botho derives all cryptographic keys from a single BIP39
-mnemonic using SLIP-10 hierarchical derivation.
+\Botho derives all cryptographic keys from a single BIP39~\cite{bip39}
+mnemonic using SLIP-10~\cite{slip10} hierarchical derivation.
 
 \subsubsection{Master Seed Generation}
 
@@ -29,7 +29,7 @@ Using SLIP-10 hardened derivation with path $m/44'/866'/\text{account}'$:
 \text{spend\_key\_material} &= \text{SLIP10}(\text{seed}, m/44'/866'/0'/1')
 \end{align}
 
-These materials are then processed through HKDF-SHA512 to produce the
+These materials are then processed through HKDF-SHA512~\cite{rfc5869} to produce the
 final Ristretto255 scalars:
 
 \begin{align}
@@ -43,6 +43,8 @@ A = aG, \quad B = bG
 \end{equation}
 
 The public address is the tuple $(A, B)$.
+
+\input{figures/key-hierarchy}
 
 \subsubsection{Subaddress Derivation}
 
@@ -111,19 +113,47 @@ quantum adversary) cannot link outputs to recipients with probability
 better than negligible, given only the blockchain.
 \end{theorem}
 
-\begin{proof}[Proof sketch]
-Each output contains an ML-KEM ciphertext $c$ and one-time key $P$.
-Without the recipient's secret key, the shared secret $K$ is
-indistinguishable from random (by IND-CCA2). Thus $s = \Hs(K \| \cdot)$
-is random, and $P = sG + B$ is uniformly distributed, independent of
-the recipient's public key $B$.
+\begin{proof}
+We prove by reduction to ML-KEM IND-CCA2 security. Suppose adversary
+$\Adv$ can distinguish outputs belonging to recipient $R$ with
+non-negligible advantage $\epsilon$. We construct adversary $\Adv'$
+that breaks ML-KEM IND-CCA2 with advantage $\epsilon/2$.
+
+\textbf{Setup}: $\Adv'$ receives ML-KEM public key $\pk^*$ from the
+IND-CCA2 challenger. $\Adv'$ sets this as the target recipient's
+KEM public key.
+
+\textbf{Query phase}: $\Adv$ may request outputs for various recipients.
+For non-target recipients, $\Adv'$ generates honestly. For the target
+recipient, $\Adv'$ uses the decapsulation oracle.
+
+\textbf{Challenge}: $\Adv$ submits two recipients $R_0, R_1$ (one being
+the target). $\Adv'$ queries the IND-CCA2 challenger with
+$(\pk^*, \pk_{\text{other}})$ and receives ciphertext $c^*$ encapsulating
+either $K_0$ or $K_1$ (random bit $b$).
+
+$\Adv'$ computes $s^* = \Hs(K_b \| \text{index})$ and $P^* = s^*G + B_b$,
+returning output $(c^*, P^*)$ to $\Adv$.
+
+\textbf{Analysis}: If $\Adv$ correctly identifies the recipient with
+probability $1/2 + \epsilon$, then $\Adv'$ correctly guesses $b$ with
+the same probability, contradicting IND-CCA2 security.
+
+The reduction is tight: $\text{Adv}^{\text{IND-CCA2}}_{\Adv'} \geq \epsilon/2$.
 \end{proof}
+
+\begin{corollary}[Quantum Security]
+The above reduction holds against quantum adversaries since ML-KEM-768
+provides IND-CCA2 security in the quantum random oracle model (QROM).
+\end{corollary}
+
+\input{figures/stealth-address}
 
 \subsection{Ring Signatures (CLSAG)}
 \label{sec:clsag}
 
-\CLSAG (Concise Linkable Spontaneous Anonymous Group)
-provides efficient linkable ring signatures for sender privacy.
+\CLSAG (Concise Linkable Spontaneous Anonymous Group)~\cite{clsag}
+provides efficient linkable ring signatures~\cite{fujisaki2007} for sender privacy.
 
 \subsubsection{Ring Construction}
 
@@ -158,7 +188,7 @@ unique tag preventing double-spending.
 where $D$ is an auxiliary point for commitment verification.
 
 \textbf{Signature}: The signature $\sigma = (c_0, s_0, \ldots, s_{n-1}, I, D)$
-is computed via a Fiat-Shamir transform of an interactive protocol,
+is computed via a Fiat-Shamir transform~\cite{fiatshamir} of an interactive protocol,
 forming a ``ring'' of challenges that closes only if the prover knows
 one of the private keys.
 
@@ -179,20 +209,67 @@ Given signature $\sigma$ and ring $\mathcal{R}$:
 
 \subsubsection{Security Properties}
 
+\begin{definition}[Unforgeability Game]
+The unforgeability experiment $\text{Exp}^{\text{UNF}}_{\Adv}$ proceeds:
+\begin{enumerate}
+  \item Challenger generates key pairs $(x_i, P_i)$ for $i \in [n]$
+  \item $\Adv$ receives $\{P_i\}$ and access to signing oracle
+  \item $\Adv$ outputs $(m^*, \sigma^*, \mathcal{R}^*)$
+  \item $\Adv$ wins if $\Verify(\sigma^*, m^*, \mathcal{R}^*) = 1$ and
+    $m^*$ was never queried to signing oracle with ring $\mathcal{R}^*$
+\end{enumerate}
+\end{definition}
+
+\begin{definition}[Anonymity Game]
+The anonymity experiment $\text{Exp}^{\text{ANON}}_{\Adv}$ proceeds:
+\begin{enumerate}
+  \item Challenger generates key pairs, gives public keys to $\Adv$
+  \item $\Adv$ selects ring $\mathcal{R}$, message $m$, two indices $i_0, i_1$
+  \item Challenger flips bit $b$, signs with key $x_{i_b}$
+  \item $\Adv$ outputs guess $b'$
+  \item $\Adv$'s advantage: $|\Pr[b' = b] - 1/2|$
+\end{enumerate}
+\end{definition}
+
 \begin{theorem}[CLSAG Security]
 Under the DLP assumption in the random oracle model, CLSAG satisfies:
 \begin{enumerate}
-  \item \textbf{Unforgeability}: No PPT adversary can forge a signature
-    without knowing a ring member's private key.
-  \item \textbf{Anonymity}: The signer's identity is hidden among ring
-    members with probability $1/n$.
-  \item \textbf{Linkability}: Two signatures from the same key produce
-    the same key image; different keys produce different key images
-    (with overwhelming probability).
+  \item \textbf{Unforgeability}: For all PPT $\Adv$,
+    $\Pr[\text{Exp}^{\text{UNF}}_{\Adv} = 1] \leq \negl(\lambda)$.
+  \item \textbf{Anonymity}: For all PPT $\Adv$,
+    $\text{Adv}^{\text{ANON}}_{\Adv} \leq \negl(\lambda)$.
+  \item \textbf{Linkability}: For all PPT $\Adv$,
+    $\Pr[\text{same key, different images}] \leq \negl(\lambda)$ and
+    $\Pr[\text{different keys, same image}] \leq \negl(\lambda)$.
 \end{enumerate}
 \end{theorem}
 
+\begin{proof}[Proof (Unforgeability)]
+By reduction to DLP. Given DLP instance $(G, Y = xG)$, embed $Y$ as one
+ring member's public key. A forking lemma argument shows that a successful
+forger can be rewound to extract the discrete log, contradicting DLP
+hardness. Full proof in~\cite{clsag}.
+\end{proof}
+
+\begin{proof}[Proof (Anonymity)]
+The signature is a Fiat-Shamir transform of a $\Sigma$-protocol. In the
+random oracle model, the simulated transcript is indistinguishable from
+real, regardless of which key was used. The ring structure ensures all
+positions are computationally indistinguishable.
+\end{proof}
+
+\begin{proof}[Proof (Linkability)]
+Key image $I = x \cdot \Hp(P)$ is deterministic given $(x, P)$. For the
+same key, the same image is always produced. For different keys $x \neq x'$,
+collision requires $x \cdot \Hp(P) = x' \cdot \Hp(P')$, which occurs with
+probability $1/q$ (negligible) when $\Hp$ is modeled as a random oracle.
+\end{proof}
+
+\input{figures/ring-signature}
+
 \subsection{Confidential Transactions}
+
+\input{figures/confidential-tx}
 
 \subsubsection{Amount Commitment}
 

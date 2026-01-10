@@ -12,14 +12,14 @@
 Financial surveillance has become pervasive in the digital age. Traditional
 banking systems create detailed records of every transaction, enabling
 comprehensive monitoring of individuals' economic activities. The emergence
-of Bitcoin and subsequent cryptocurrencies
+of Bitcoin~\cite{nakamoto2008bitcoin} and subsequent cryptocurrencies
 initially promised an alternative---yet most blockchain systems create
 permanent, public records that enable even more thorough surveillance than
 traditional finance.
 
 The transparency of Bitcoin's blockchain allows any observer to trace the
 flow of funds, link addresses to identities, and reconstruct complete
-financial histories. Chain analysis companies have built entire industries
+financial histories~\cite{chainanalysis}. Chain analysis companies have built entire industries
 around deanonymizing cryptocurrency users. This surveillance capability
 extends not only to law enforcement but to any party with access to
 blockchain data---including authoritarian governments, stalkers, and
@@ -29,14 +29,14 @@ Privacy is not merely a preference; it is a prerequisite for human dignity.
 Financial privacy protects victims of domestic abuse, enables charitable
 giving without social pressure, preserves commercial confidentiality, and
 shields individuals from discrimination based on their economic activities.
-The Universal Declaration of Human Rights recognizes privacy as a
+The Universal Declaration of Human Rights~\cite{udhr} recognizes privacy as a
 fundamental right.
 
 Compounding this concern is the emerging quantum computing threat. Current
 cryptographic systems, including those protecting cryptocurrency addresses,
 rely on mathematical problems believed to be computationally hard for
 classical computers. Quantum computers, when sufficiently powerful, will
-render many of these protections obsolete. The ``harvest now, decrypt
+render many of these protections obsolete~\cite{shor,grover}. The ``harvest now, decrypt
 later'' threat model suggests that adversaries may already be collecting
 encrypted data for future decryption---including blockchain transactions
 that will remain on-chain indefinitely.
@@ -49,11 +49,11 @@ those who acquired Bitcoin in 2010 for pennies now hold assets worth
 tens of thousands of dollars per coin. This dynamic transfers wealth
 from late adopters to early adopters without corresponding value creation.
 
-Traditional fee markets create perverse incentives. When fees flow to
-miners, there is pressure toward miner centralization---larger operations
-can offer lower fees through economies of scale. Fee volatility during
-network congestion disproportionately harms small transactions and users
-in developing economies.
+Traditional fee markets create perverse incentives. When fees flow directly
+to block producers, pressure builds toward mining centralization---larger
+operations achieve lower marginal costs through economies of scale. Fee
+volatility during network congestion disproportionately harms small
+transactions and users in developing economies.
 
 Fixed supply caps, while appealing for scarcity, create deflationary
 spirals that discourage spending and economic activity. The security
@@ -93,7 +93,7 @@ This philosophy manifests in concrete design decisions:
     concentration. Perpetual tail emission ensures sustainable security.
     Fee burning aligns incentives with network health.
 
-  \item \textbf{Community consensus}: The Stellar Consensus Protocol
+  \item \textbf{Community consensus}: The Stellar Consensus Protocol~\cite{scp}
     enables decisions by community agreement rather than hashpower
     dominance.
 \end{itemize}
@@ -107,8 +107,8 @@ following novel contributions:
   \item \textbf{Hybrid post-quantum architecture}: We introduce a principled
     framework for applying post-quantum cryptography selectively based on
     data lifetime. Recipient identities, which persist on-chain
-    indefinitely, are protected by \MLKEM-768. Sender privacy, which has
-    ephemeral value, uses efficient \CLSAG ring signatures. This achieves
+    indefinitely, are protected by \MLKEM-768~\cite{fips203,kyber}. Sender privacy, which has
+    ephemeral value, uses efficient \CLSAG ring signatures~\cite{clsag}. This achieves
     meaningful quantum resistance while keeping transactions practical
     ($\sim$4~KB vs.\ $\sim$65~KB for full post-quantum).
 

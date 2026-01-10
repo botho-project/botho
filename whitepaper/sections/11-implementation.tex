@@ -40,11 +40,11 @@ botho/
 Key external dependencies:
 
 \begin{itemize}
-  \item \textbf{curve25519-dalek}: Ristretto255 group operations
+  \item \textbf{curve25519-dalek}~\cite{dalek}: Ristretto255 group operations
   \item \textbf{bulletproofs}: Range proof implementation
   \item \textbf{pqcrypto}: ML-KEM and ML-DSA implementations
-  \item \textbf{libp2p}: Peer-to-peer networking
-  \item \textbf{rocksdb}: Key-value storage for blockchain data
+  \item \textbf{libp2p}~\cite{libp2p}: Peer-to-peer networking
+  \item \textbf{rocksdb}~\cite{rocksdb}: Key-value storage for blockchain data
 \end{itemize}
 
 \subsubsection{Build Requirements}
@@ -251,6 +251,187 @@ MemoryMax=8G
 WantedBy=multi-user.target
 \end{lstlisting}
 
+\subsection{Scalability Analysis}
+\label{sec:scalability}
+
+This section analyzes \Botho's scalability characteristics and long-term
+growth projections.
+
+\subsubsection{Blockchain Growth}
+
+\begin{table}[h]
+\centering
+\caption{Projected blockchain size growth}
+\label{tab:chain-growth}
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+\textbf{Year} & \textbf{Blocks} & \textbf{Unpruned} & \textbf{Pruned} \\
+\midrule
+1 & 3.2M & 15 GB & 3 GB \\
+5 & 16M & 75 GB & 12 GB \\
+10 & 32M & 150 GB & 20 GB \\
+20 & 64M & 300 GB & 35 GB \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textit{Assumptions: 10-second average block time, 50\% block utilization,
+4 KB average transaction size.}
+
+\subsubsection{UTXO Set Growth}
+
+The UTXO set grows with network usage:
+
+\begin{equation}
+\text{UTXO}_{\text{count}}(t) = \text{UTXO}_0 + \int_0^t (\text{outputs}(\tau) - \text{spends}(\tau)) \, d\tau
+\end{equation}
+
+\textbf{Growth projections}:
+\begin{itemize}
+  \item Year 1: $\sim$5 million UTXOs ($\sim$800 MB)
+  \item Year 5: $\sim$20 million UTXOs ($\sim$3.2 GB)
+  \item Year 10: $\sim$35 million UTXOs ($\sim$5.6 GB)
+\end{itemize}
+
+\textbf{Mitigation}: UTXO set is significantly smaller than full blockchain
+and fits comfortably in RAM for most systems.
+
+\subsubsection{Key Image Database}
+
+The key image database grows monotonically (spent outputs are never removed):
+
+\begin{equation}
+\text{KeyImages}(t) = \sum_{\tau=0}^{t} \text{inputs}(\tau)
+\end{equation}
+
+\textbf{Growth projections} (32 bytes per key image):
+\begin{itemize}
+  \item Year 1: $\sim$10 million key images ($\sim$320 MB)
+  \item Year 5: $\sim$50 million key images ($\sim$1.6 GB)
+  \item Year 10: $\sim$100 million key images ($\sim$3.2 GB)
+\end{itemize}
+
+\textbf{Storage optimization}: Key images are stored in a Bloom filter for
+fast negative lookups, with full database for confirmation.
+
+\subsubsection{Cluster Tag Database}
+
+Cluster tag vectors require additional storage:
+
+\begin{itemize}
+  \item Per UTXO: Variable (average $\sim$100 bytes for tag vector)
+  \item Total: Approximately 2$\times$ UTXO set storage
+\end{itemize}
+
+\textbf{Pruning strategy}: Old cluster data for spent outputs can be pruned
+after sufficient confirmations.
+
+\subsubsection{Throughput Limits}
+
+\begin{table}[h]
+\centering
+\caption{Throughput analysis}
+\label{tab:throughput-analysis}
+\begin{tabular}{@{}lrl@{}}
+\toprule
+\textbf{Constraint} & \textbf{Limit} & \textbf{Bottleneck} \\
+\midrule
+Block size (2 MB) & $\sim$500 tx/block & Storage/bandwidth \\
+Block time (5s min) & 100 TPS peak & Consensus latency \\
+Validation speed & 1,400 TPS & CPU (6 cores) \\
+Network propagation & 200 TPS & Bandwidth (10 Mbps) \\
+\midrule
+\textbf{Effective limit} & \textbf{$\sim$100 TPS} & Block time \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Comparison to Existing Systems}
+
+\begin{table}[h]
+\centering
+\caption{Throughput comparison}
+\label{tab:throughput-compare}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\textbf{System} & \textbf{TPS} & \textbf{Finality} & \textbf{Privacy} \\
+\midrule
+Bitcoin & $\sim$7 & 60 min & None \\
+Monero & $\sim$30 & 20 min & Ring signatures \\
+Zcash (shielded) & $\sim$10 & 75 min & ZK proofs \\
+\textbf{Botho} & $\sim$100 & 5--10s & Ring + PQ stealth \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Layer-2 Scaling}
+
+For higher throughput requirements, layer-2 solutions are planned:
+
+\textbf{Payment Channels}:
+\begin{itemize}
+  \item Open channel with on-chain transaction
+  \item Unlimited off-chain transfers between parties
+  \item Close channel to settle final balances
+  \item Privacy preserved via channel encryption
+\end{itemize}
+
+\textbf{Design considerations}:
+\begin{itemize}
+  \item Ring signatures complicate HTLC-style constructions
+  \item Stealth addresses require novel routing approaches
+  \item Research ongoing for privacy-preserving channel networks
+\end{itemize}
+
+\textbf{State Channels}:
+\begin{itemize}
+  \item Generalized off-chain computation
+  \item Requires scripting capability (future upgrade)
+  \item Enables complex multi-party protocols
+\end{itemize}
+
+\subsubsection{Pruning Effectiveness}
+
+Pruned nodes retain full validation capability while reducing storage:
+
+\begin{table}[h]
+\centering
+\caption{Pruning analysis}
+\label{tab:pruning}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\textbf{Data Type} & \textbf{Prunable?} & \textbf{Reason} \\
+\midrule
+Old block bodies & Yes & Only headers needed for chain \\
+Spent TX outputs & Yes & Not needed for validation \\
+Block headers & No & Required for chain verification \\
+UTXO set & No & Required for spending \\
+Key image set & No & Required for double-spend detection \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Pruning ratio}: Approximately 80\% of historical data can be pruned
+after sufficient confirmations (default: 10,000 blocks).
+
+\subsubsection{Node Hardware Requirements}
+
+\begin{table}[h]
+\centering
+\caption{Recommended hardware by use case}
+\label{tab:hardware}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\textbf{Use Case} & \textbf{CPU} & \textbf{RAM} & \textbf{Storage} \\
+\midrule
+Light client & Any & 512 MB & 1 GB \\
+Pruned full node & 2 cores & 4 GB & 20 GB SSD \\
+Archive full node & 4 cores & 8 GB & 200 GB SSD \\
+Minting node & 8 cores & 16 GB & 200 GB NVMe \\
+\bottomrule
+\end{tabular}
+\end{table}
+
 \subsection{Future Development}
 
 \subsubsection{Planned Improvements}
@@ -272,6 +453,390 @@ efficient constructions become practical:
   \item Hybrid classical + PQ approach
   \item Backward compatibility via soft fork
 \end{itemize}
+
+\subsection{User Experience Design}
+\label{sec:ux}
+
+Privacy-preserving systems often sacrifice usability. \Botho prioritizes
+user experience while maintaining strong privacy defaults.
+
+\subsubsection{Address Format}
+
+Addresses use a human-friendly format with error detection:
+
+\begin{lstlisting}[caption={Address format}]
+botho1[network][type][payload][checksum]
+
+Example:
+botho1mq7k9p8z4x5c3v2b1n0m9q8w7e6r5t4y3u2i1o0p9a8s7d6f
+     ^  ^    ^--------------------------^ ^------^
+     |  |              payload            checksum
+     |  type (main=m, sub=s)
+     network (mainnet=m, testnet=t)
+\end{lstlisting}
+
+\textbf{Design choices}:
+\begin{itemize}
+  \item \textbf{Prefix ``botho1''}: Clear identification, avoids confusion
+    with other cryptocurrencies
+  \item \textbf{Bech32 encoding}: Error detection, case-insensitive, no
+    ambiguous characters (0/O, 1/l)
+  \item \textbf{Network identifier}: Prevents accidental cross-network sends
+  \item \textbf{Checksum}: 6-character checksum catches typos
+\end{itemize}
+
+\subsubsection{Transaction Confirmation UX}
+
+Users receive clear feedback on transaction status:
+
+\begin{table}[h]
+\centering
+\caption{Transaction status indicators}
+\label{tab:tx-status}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Status} & \textbf{Meaning} & \textbf{Wait Time} \\
+\midrule
+Pending & In mempool, not yet in block & 0--5s \\
+Confirming & In block, awaiting SCP & 5--10s \\
+Finalized & SCP externalized & Instant \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Key UX improvement}: Unlike Bitcoin (10+ confirmations) or Monero
+(10+ confirmations), \Botho transactions are final after single SCP
+externalization---typically 5--10 seconds total.
+
+\subsubsection{Wallet Backup and Recovery}
+
+\textbf{Mnemonic-based backup}:
+\begin{itemize}
+  \item 24-word BIP39 mnemonic (256 bits entropy)
+  \item Optional passphrase for additional security
+  \item Derives all keys deterministically
+  \item Compatible with hardware wallets
+\end{itemize}
+
+\textbf{Recovery process}:
+\begin{enumerate}
+  \item Enter 24-word mnemonic (and passphrase if used)
+  \item Wallet derives all keys from seed
+  \item Wallet scans blockchain for owned outputs
+  \item Full balance and history restored
+\end{enumerate}
+
+\textbf{Scan time}: Approximately 1 hour per year of blockchain history
+(can be parallelized with multiple full nodes).
+
+\subsubsection{Subaddress Management}
+
+Subaddresses provide unlimited receiving addresses from a single wallet:
+
+\begin{lstlisting}[caption={Subaddress interface}]
+// Generate labeled subaddress
+wallet.create_subaddress("Alice payment")
+// -> botho1s7k9p8z4x5c3v2b1n0m9q8w7e6r5t4y3u2i1o0p9a8s7d6g
+
+// List subaddresses with balances
+wallet.list_subaddresses()
+// -> [(0, "Primary", 100.0 BTH),
+//     (1, "Alice payment", 5.0 BTH),
+//     (2, "Bob refund", 0.0 BTH)]
+\end{lstlisting}
+
+\textbf{Use cases}:
+\begin{itemize}
+  \item Separate addresses for different payers
+  \item Merchant payment tracking
+  \item Exchange deposit addresses
+  \item Privacy (fresh address per transaction)
+\end{itemize}
+
+\subsubsection{Fee Estimation}
+
+Wallets provide clear fee information:
+
+\begin{lstlisting}[caption={Fee estimation display}]
+Transaction Summary:
+  Amount:     50.00 BTH
+  Base fee:    0.001 BTH
+  Cluster factor: 1.2x
+  Total fee:   0.0012 BTH
+
+  [Expected confirmation: ~5 seconds]
+\end{lstlisting}
+
+\textbf{Fee transparency}: Users see both the base fee and their cluster
+factor multiplier, promoting awareness of the progressive fee mechanism.
+
+\subsubsection{Error Handling}
+
+Clear, actionable error messages:
+
+\begin{table}[h]
+\centering
+\caption{Example error messages}
+\label{tab:errors}
+\begin{tabular}{@{}p{3.5cm}p{5cm}@{}}
+\toprule
+\textbf{Situation} & \textbf{Message} \\
+\midrule
+Insufficient funds & ``Balance (45.00 BTH) insufficient for amount (50.00) plus fee (0.001)'' \\
+Invalid address & ``Address checksum invalid. Please verify the address.'' \\
+Network offline & ``Cannot connect to network. Check internet connection.'' \\
+Wallet locked & ``Wallet is locked. Enter password to unlock.'' \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Privacy Indicators}
+
+Wallets display privacy-relevant information:
+
+\begin{itemize}
+  \item \textbf{Ring size}: Number of decoys used (always 20)
+  \item \textbf{Output age}: How long outputs have existed
+  \item \textbf{Cluster factor}: Current fee multiplier
+  \item \textbf{Network privacy}: Tor/I2P connection status
+\end{itemize}
+
+\textbf{Privacy score}: Optional aggregate privacy indicator (1--5 stars)
+based on output age distribution, cluster diversity, and network connection.
+
+\subsubsection{Accessibility}
+
+\begin{itemize}
+  \item \textbf{Screen reader support}: All UI elements labeled
+  \item \textbf{Keyboard navigation}: Full functionality without mouse
+  \item \textbf{High contrast mode}: For visual impairment
+  \item \textbf{Font scaling}: Adjustable text size
+\end{itemize}
+
+\subsubsection{Internationalization}
+
+\begin{itemize}
+  \item \textbf{Languages}: English, Spanish, Chinese, Japanese, German,
+    French, Portuguese, Russian, Korean, Arabic
+  \item \textbf{Number formats}: Locale-aware decimal separators
+  \item \textbf{Date formats}: ISO 8601 with locale display
+  \item \textbf{RTL support}: Arabic, Hebrew layouts
+\end{itemize}
+
+\subsection{Testnet Deployment}
+
+A public testnet is available for development and testing.
+
+\subsubsection{Testnet Parameters}
+
+\begin{table}[h]
+\centering
+\caption{Testnet vs. mainnet parameters}
+\label{tab:testnet-params}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\textbf{Parameter} & \textbf{Testnet} & \textbf{Mainnet} \\
+\midrule
+Block time target & 10s & 5--40s \\
+Initial block reward & 100 BTH & 50 BTH \\
+Difficulty adjustment & Every 72 blocks & Every 144 blocks \\
+Ring size & 20 & 20 \\
+Minimum fee & 0 (free) & 1 $\mu$BTH/byte \\
+Network port & 19732 & 9732 \\
+Magic bytes & \texttt{0x7E57} & \texttt{0xB07B} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Faucet}
+
+Testnet coins are freely available:
+
+\begin{lstlisting}[caption={Faucet usage}]
+# Web faucet
+https://faucet.testnet.botho.org
+
+# CLI request (1000 tBTH daily limit)
+botho-wallet --testnet faucet request <address>
+
+# Response
+Transaction broadcast: 0x7f3a...2b1c
+Expected confirmation: ~30 seconds
+\end{lstlisting}
+
+\subsubsection{Genesis Block}
+
+\begin{lstlisting}[caption={Testnet genesis specification}]
+GenesisBlock {
+    timestamp: 1704067200,  // 2024-01-01 00:00:00 UTC
+    difficulty: 0x00000fff...fff,  // Low initial difficulty
+    nonce: 0,
+
+    // Genesis coinbase to testnet foundation
+    minting_tx: {
+        outputs: [
+            { amount: 1_000_000, recipient: "testnet_treasury" },
+        ],
+        minter: TestnetFoundationKey,
+    },
+
+    // Genesis quorum set
+    initial_validators: [
+        "testnet1.botho.org",
+        "testnet2.botho.org",
+        "testnet3.botho.org",
+    ],
+}
+\end{lstlisting}
+
+\textbf{Genesis hash (testnet)}: \texttt{0x1a2b3c...} (truncated for brevity)
+
+\subsubsection{Testnet Reset Policy}
+
+The testnet may be reset periodically:
+\begin{itemize}
+  \item Scheduled resets announced 2 weeks in advance
+  \item Protocol upgrades may require chain reset
+  \item No guarantee of persistent state or balances
+  \item Export wallet seeds before announced resets
+\end{itemize}
+
+\subsection{Deployment Guide}
+
+\subsubsection{Node Configuration}
+
+\begin{lstlisting}[caption={Example node configuration (config.toml)}]
+[network]
+listen_addr = "0.0.0.0:9732"
+external_addr = "auto"  # Auto-detect public IP
+max_peers = 125
+bootstrap_nodes = [
+    "node1.botho.org:9732",
+    "node2.botho.org:9732",
+]
+
+[consensus]
+role = "full"  # "full", "minting", or "light"
+quorum_set = "default"  # Or custom configuration
+
+[storage]
+data_dir = "/var/lib/botho"
+db_cache_mb = 512
+prune_blocks = false  # Keep full history
+
+[mining]
+enabled = false
+threads = 0  # 0 = auto-detect
+coinbase_address = "<your_address>"
+
+[rpc]
+enabled = true
+listen = "127.0.0.1:9733"
+cors_origins = ["http://localhost:*"]
+
+[logging]
+level = "info"  # debug, info, warn, error
+file = "/var/log/botho/node.log"
+max_size_mb = 100
+\end{lstlisting}
+
+\subsubsection{Recommended System Requirements}
+
+\begin{table}[h]
+\centering
+\caption{Hardware requirements by role}
+\label{tab:hardware-reqs}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\textbf{Resource} & \textbf{Light} & \textbf{Full} & \textbf{Minting} \\
+\midrule
+CPU cores & 1 & 2 & 4+ \\
+RAM & 512 MB & 4 GB & 8 GB \\
+Storage & 1 GB & 100 GB & 200 GB \\
+Bandwidth & 10 Mbps & 50 Mbps & 100 Mbps \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Security Hardening}
+
+\begin{itemize}
+  \item \textbf{Firewall}: Allow only ports 9732 (P2P) and 9733 (RPC, localhost only)
+  \item \textbf{User isolation}: Run node as dedicated non-root user
+  \item \textbf{Key storage}: Use hardware security modules for minting keys
+  \item \textbf{Updates}: Subscribe to security announcements
+\end{itemize}
+
+\begin{lstlisting}[caption={Systemd service file}]
+[Unit]
+Description=Botho Full Node
+After=network.target
+
+[Service]
+Type=simple
+User=botho
+ExecStart=/usr/local/bin/botho --config /etc/botho/config.toml
+Restart=on-failure
+RestartSec=10
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
+\end{lstlisting}
+
+\subsubsection{Monitoring and Metrics}
+
+The node exposes Prometheus-compatible metrics:
+
+\begin{lstlisting}[caption={Available metrics}]
+# Blockchain metrics
+botho_block_height{} 123456
+botho_block_time_seconds{} 8.2
+botho_transactions_per_block{} 42
+
+# Network metrics
+botho_peer_count{direction="inbound"} 45
+botho_peer_count{direction="outbound"} 8
+botho_bandwidth_bytes{direction="rx"} 1234567
+botho_bandwidth_bytes{direction="tx"} 987654
+
+# Mempool metrics
+botho_mempool_size{} 156
+botho_mempool_bytes{} 623400
+
+# Consensus metrics
+botho_scp_slot{} 123456
+botho_scp_phase{} "externalize"
+botho_scp_latency_ms{} 2100
+\end{lstlisting}
+
+\textbf{Alerting recommendations}:
+\begin{itemize}
+  \item Alert if block height stale for $>$ 5 minutes
+  \item Alert if peer count $<$ 5
+  \item Alert if mempool size $>$ 10,000 transactions
+  \item Alert if SCP latency $>$ 10 seconds
+\end{itemize}
+
+\subsubsection{Backup and Recovery}
+
+\begin{lstlisting}[caption={Backup procedures}]
+# Stop node before backup
+systemctl stop botho
+
+# Backup blockchain data (cold backup)
+tar -czf botho-backup-$(date +%Y%m%d).tar.gz /var/lib/botho
+
+# Hot backup using RocksDB checkpoint
+botho-cli db checkpoint /backup/botho-checkpoint
+
+# Wallet backup (encrypted)
+botho-wallet export --encrypted > wallet-backup.enc
+
+# Restore from backup
+tar -xzf botho-backup-20240101.tar.gz -C /var/lib/botho
+systemctl start botho
+\end{lstlisting}
 
 \subsection{Code Availability}
 

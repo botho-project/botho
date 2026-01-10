@@ -1,0 +1,75 @@
+% Key Derivation Hierarchy Diagram
+% Shows the flow from mnemonic to all derived keys
+%
+% ACCESSIBILITY ALT TEXT:
+% A flowchart showing cryptographic key derivation in Botho. Starting from a
+% 24-word mnemonic phrase at the top, arrows flow downward through BIP39 to
+% a 512-bit seed, then SLIP-10 derivation produces classical keys (view key a,
+% spend key b) shown in blue boxes on the left, and post-quantum keys (ML-KEM,
+% ML-DSA) shown in green boxes on the right. The classical keys derive public
+% keys A and B, which combine to form subaddresses (C_i, D_i) at the bottom.
+
+\begin{figure}[ht]
+\centering
+\begin{tikzpicture}[
+    node distance=1.2cm and 2cm,
+    box/.style={rectangle, draw, rounded corners, minimum width=2.5cm, minimum height=0.8cm, align=center, font=\small},
+    keybox/.style={rectangle, draw, fill=blue!10, rounded corners, minimum width=2.2cm, minimum height=0.7cm, align=center, font=\small},
+    pqbox/.style={rectangle, draw, fill=green!10, rounded corners, minimum width=2.2cm, minimum height=0.7cm, align=center, font=\small},
+    arrow/.style={->, >=stealth, thick},
+    label/.style={font=\scriptsize, midway, above},
+]
+
+% Top level - Mnemonic
+\node[box, fill=yellow!20] (mnemonic) {24-word Mnemonic\\(256 bits entropy)};
+
+% Seed
+\node[box, fill=orange!15, below=of mnemonic] (seed) {Master Seed\\(PBKDF2)};
+
+% SLIP-10 derivation branches
+\node[keybox, below left=1.5cm and 1cm of seed] (viewmat) {View Key Material\\m/44'/866'/0'/0'};
+\node[keybox, below right=1.5cm and 1cm of seed] (spendmat) {Spend Key Material\\m/44'/866'/0'/1'};
+
+% HKDF derived keys
+\node[keybox, below=of viewmat] (viewkey) {View Private Key\\$a \in \mathbb{Z}_q$};
+\node[keybox, below=of spendmat] (spendkey) {Spend Private Key\\$b \in \mathbb{Z}_q$};
+
+% Public keys
+\node[keybox, below=of viewkey] (viewpub) {View Public Key\\$A = aG$};
+\node[keybox, below=of spendkey] (spendpub) {Spend Public Key\\$B = bG$};
+
+% PQ Keys (derived separately)
+\node[pqbox, right=2.5cm of spendmat] (pqkem) {ML-KEM Keypair\\(Post-Quantum)};
+\node[pqbox, below=of pqkem] (pqdsa) {ML-DSA Keypair\\(Post-Quantum)};
+
+% Subaddresses
+\node[box, fill=purple!10, below=1.5cm of $(viewpub)!0.5!(spendpub)$] (subaddr) {Subaddresses\\$(C_i, D_i)$ for index $i$};
+
+% Arrows
+\draw[arrow] (mnemonic) -- (seed) node[label] {PBKDF2};
+\draw[arrow] (seed) -- (viewmat) node[label, sloped] {SLIP-10};
+\draw[arrow] (seed) -- (spendmat) node[label, sloped] {SLIP-10};
+\draw[arrow] (viewmat) -- (viewkey) node[label] {HKDF};
+\draw[arrow] (spendmat) -- (spendkey) node[label] {HKDF};
+\draw[arrow] (viewkey) -- (viewpub) node[label] {$\times G$};
+\draw[arrow] (spendkey) -- (spendpub) node[label] {$\times G$};
+\draw[arrow] (viewpub) -- (subaddr);
+\draw[arrow] (spendpub) -- (subaddr);
+
+% PQ derivation
+\draw[arrow] (seed) -- ++(3.5,0) |- (pqkem) node[pos=0.25, above, font=\scriptsize] {DeriveKEM};
+\draw[arrow] (pqkem) -- (pqdsa) node[label] {DeriveDSA};
+
+% Grouping box for classical keys
+\begin{scope}[on background layer]
+\node[draw, dashed, rounded corners, fit=(viewkey)(spendkey)(viewpub)(spendpub),
+      label={[font=\scriptsize]above:Classical (Ristretto255)}] {};
+\end{scope}
+
+\end{tikzpicture}
+\caption{Key derivation hierarchy. A single BIP39 mnemonic derives all keys via
+SLIP-10 paths and HKDF domain separation. Classical Ristretto255 keys support
+ring signatures, while post-quantum ML-KEM/ML-DSA keys protect recipient privacy
+and minting operations.}
+\label{fig:key-hierarchy}
+\end{figure}

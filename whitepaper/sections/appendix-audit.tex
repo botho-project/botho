@@ -1,0 +1,182 @@
+% ============================================================================
+% Appendix E: Security Audit Guide
+% ============================================================================
+
+\section{Security Audit Guide}
+\label{app:audit}
+
+This appendix provides guidance for security auditors reviewing the \Botho
+protocol and implementation.
+
+\subsection{Security Claims}
+
+The following security properties are claimed by \Botho. Auditors should
+verify each claim against the implementation.
+
+\subsubsection{Cryptographic Security}
+
+\begin{table}[h]
+\centering
+\caption{Cryptographic security claims}
+\label{tab:crypto-claims}
+\begin{tabular}{@{}p{4cm}p{3cm}p{6cm}@{}}
+\toprule
+\textbf{Property} & \textbf{Primitive} & \textbf{Assumption} \\
+\midrule
+Recipient unlinkability & ML-KEM-768 & IND-CCA2 security of ML-KEM \\
+Sender anonymity & CLSAG & DLP hardness in Ristretto255 \\
+Amount confidentiality & Pedersen + BP & DLP hardness, random oracle model \\
+Double-spend prevention & Key images & Collision resistance of $H_p$ \\
+Minting authenticity & ML-DSA-65 & EUF-CMA security of ML-DSA \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Consensus Security}
+
+\begin{enumerate}
+  \item \textbf{Fork freedom}: No two honest nodes externalize different
+    blocks at the same height (Theorem~\ref{thm:fork-freedom})
+  \item \textbf{Liveness}: The network eventually makes progress under
+    partial synchrony
+  \item \textbf{Byzantine tolerance}: Safety holds with up to $f$ Byzantine
+    nodes per quorum slice
+\end{enumerate}
+
+\subsubsection{Economic Security}
+
+\begin{enumerate}
+  \item \textbf{Sybil resistance}: Splitting wealth does not reduce total fees
+    (Theorem~\ref{thm:sybil-resistance})
+  \item \textbf{Lottery fairness}: UTXO selection is uniformly random and
+    unpredictable
+  \item \textbf{Inflation bounds}: Supply growth follows the emission schedule
+    exactly
+\end{enumerate}
+
+\subsection{Threat Model}
+
+Auditors should consider the following adversary capabilities:
+
+\begin{table}[h]
+\centering
+\caption{Threat model assumptions}
+\label{tab:threat-model}
+\begin{tabular}{@{}lp{9cm}@{}}
+\toprule
+\textbf{Adversary Type} & \textbf{Capabilities} \\
+\midrule
+Network adversary & Can observe, delay, or reorder messages; cannot forge
+signatures or break encryption \\
+Computational adversary & Polynomial-time bounded; cannot solve DLP or
+break ML-KEM \\
+Byzantine nodes & Up to $f$ nodes per quorum slice may behave arbitrarily \\
+Quantum adversary & Future: can break DLP but not lattice problems \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Audit Scope}
+
+\subsubsection{Critical Components}
+
+The following components require thorough review:
+
+\begin{enumerate}
+  \item \textbf{Key derivation} (\texttt{crypto/keys.rs})
+    \begin{itemize}
+      \item BIP39 mnemonic handling
+      \item SLIP-10 derivation paths
+      \item ML-KEM key generation from seed
+    \end{itemize}
+
+  \item \textbf{Stealth addresses} (\texttt{crypto/stealth.rs})
+    \begin{itemize}
+      \item ML-KEM encapsulation/decapsulation
+      \item One-time key derivation
+      \item Output scanning correctness
+    \end{itemize}
+
+  \item \textbf{Ring signatures} (\texttt{crypto/clsag.rs})
+    \begin{itemize}
+      \item Signature generation and verification
+      \item Key image computation
+      \item Ring member selection
+    \end{itemize}
+
+  \item \textbf{Confidential transactions} (\texttt{crypto/bulletproofs.rs})
+    \begin{itemize}
+      \item Pedersen commitment arithmetic
+      \item Range proof generation and verification
+      \item Value conservation checks
+    \end{itemize}
+
+  \item \textbf{Consensus} (\texttt{consensus/scp.rs})
+    \begin{itemize}
+      \item Quorum slice validation
+      \item Ballot protocol state machine
+      \item Externalization logic
+    \end{itemize}
+
+  \item \textbf{Cluster tags} (\texttt{economics/cluster.rs})
+    \begin{itemize}
+      \item Tag inheritance calculation
+      \item Fee multiplier computation
+      \item Decay mechanism
+    \end{itemize}
+\end{enumerate}
+
+\subsubsection{Test Vectors}
+
+Auditors should verify the following test vectors:
+
+\begin{lstlisting}[caption={Key derivation test vector}]
+Mnemonic: "abandon abandon ... about" (standard 24-word)
+Expected view key (hex): 0x7b3a...
+Expected spend key (hex): 0x4c1f...
+Expected ML-KEM public key (first 32 bytes): 0x9d2e...
+\end{lstlisting}
+
+\begin{lstlisting}[caption={Ring signature test vector}]
+Message: 0x0000...0000 (32 zero bytes)
+Ring size: 20
+Real index: 7
+Expected key image (hex): 0x5f8c...
+Signature must verify: true
+\end{lstlisting}
+
+\begin{lstlisting}[caption={Cluster factor test vector}]
+Cluster wealth: 1,000,000 BTH
+Steepness parameter: 100,000
+Expected factor: 5.5x
+\end{lstlisting}
+
+\subsection{Known Limitations}
+
+The following are acknowledged limitations, not vulnerabilities:
+
+\begin{enumerate}
+  \item \textbf{Classical ring signatures}: CLSAG provides sender privacy
+    against classical adversaries only. A future quantum computer could
+    potentially identify signers retroactively.
+
+  \item \textbf{Metadata leakage}: Transaction size reveals approximate
+    input/output count. Timing analysis may leak information despite
+    Dandelion++.
+
+  \item \textbf{Ring selection bias}: The decoy selection algorithm uses
+    a gamma distribution that may not perfectly match real spend patterns.
+
+  \item \textbf{Trusted setup}: Bulletproofs require no trusted setup, but
+    the choice of generators $G$ and $H$ must be verifiably random.
+\end{enumerate}
+
+\subsection{Reporting}
+
+Security issues should be reported to:
+
+\begin{itemize}
+  \item \textbf{Email}: security@botho.org (PGP key on website)
+  \item \textbf{Severity levels}: Critical, High, Medium, Low, Informational
+  \item \textbf{Bug bounty}: Available for critical and high severity issues
+\end{itemize}

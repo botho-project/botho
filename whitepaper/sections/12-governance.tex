@@ -1,0 +1,302 @@
+% ============================================================================
+% Section 12: Governance and Protocol Upgrades
+% ============================================================================
+
+\section{Governance and Protocol Upgrades}
+\label{sec:governance}
+
+Protocol evolution is essential for long-term viability. \Botho employs
+a structured governance process that balances agility with stability,
+enabling necessary upgrades while protecting users from disruptive changes.
+
+\subsection{Design Principles}
+
+\subsubsection{Conservative by Default}
+
+The protocol favors stability over rapid iteration:
+
+\begin{itemize}
+  \item Changes require demonstrated necessity, not merely novelty
+  \item Backward compatibility is preserved wherever feasible
+  \item Breaking changes require extended notice and migration support
+  \item Security fixes take precedence over feature additions
+\end{itemize}
+
+\subsubsection{Transparency and Predictability}
+
+All governance processes are public and follow documented procedures:
+
+\begin{itemize}
+  \item Proposal discussions occur in public forums
+  \item Technical specifications are peer-reviewed before implementation
+  \item Activation timelines are announced well in advance
+  \item Post-activation monitoring reports are published
+\end{itemize}
+
+\subsection{Protocol Versioning}
+
+\subsubsection{Version Scheme}
+
+\Botho uses semantic versioning with blockchain-specific semantics:
+
+\begin{lstlisting}[caption={Version number interpretation}]
+MAJOR.MINOR.PATCH
+
+MAJOR: Consensus-breaking changes (hard fork required)
+MINOR: New features, backward compatible
+PATCH: Bug fixes, no new features
+\end{lstlisting}
+
+\textbf{Examples}:
+\begin{itemize}
+  \item $1.0.0 \to 1.0.1$: Security patch, no action required
+  \item $1.0.0 \to 1.1.0$: New transaction type added, old nodes still valid
+  \item $1.0.0 \to 2.0.0$: Consensus rule change, upgrade mandatory
+\end{itemize}
+
+\subsubsection{Version Negotiation}
+
+Nodes advertise their protocol version during handshake:
+
+\begin{lstlisting}[caption={Version handshake}]
+VersionMessage {
+    protocol_version: (u16, u16, u16),  // MAJOR.MINOR.PATCH
+    min_supported: (u16, u16, u16),      // Minimum peer version
+    features: BitFlags,                   // Optional feature support
+    user_agent: String,                   // Implementation identifier
+}
+\end{lstlisting}
+
+Nodes with incompatible versions (different MAJOR) disconnect gracefully
+with an informative error message.
+
+\subsection{Upgrade Mechanisms}
+
+\subsubsection{Soft Forks}
+
+Soft forks tighten consensus rules---old nodes accept new blocks, but new
+nodes may reject some blocks old nodes would accept.
+
+\textbf{Use cases}:
+\begin{itemize}
+  \item Adding new transaction validation rules
+  \item Restricting previously-allowed behaviors
+  \item Deprecating obsolete features
+\end{itemize}
+
+\textbf{Activation process}:
+\begin{enumerate}
+  \item \textbf{Proposal}: BIP-style document published with technical specification
+  \item \textbf{Implementation}: Reference client updated with activation logic
+  \item \textbf{Signaling}: Miners include version bits in block headers
+  \item \textbf{Lock-in}: When 95\% of blocks in a 2016-block window signal support
+  \item \textbf{Activation}: Rules enforced after additional 2016-block grace period
+\end{enumerate}
+
+\begin{lstlisting}[caption={Soft fork signaling in block header}]
+BlockHeader {
+    version: u32,  // Bits 0-28: version, bits 29-31: soft fork signals
+    // ...
+}
+
+// Check signaling for proposal #3
+fn signals_proposal(header: &BlockHeader, proposal: u8) -> bool {
+    (header.version >> (29 + proposal)) & 1 == 1
+}
+\end{lstlisting}
+
+\subsubsection{Hard Forks}
+
+Hard forks relax or modify consensus rules---old nodes reject new blocks.
+
+\textbf{Use cases}:
+\begin{itemize}
+  \item Fundamental protocol changes (new cryptographic primitives)
+  \item Emergency security responses
+  \item Removal of technical debt
+\end{itemize}
+
+\textbf{Activation process}:
+\begin{enumerate}
+  \item \textbf{Proposal}: Extended discussion period (minimum 6 months)
+  \item \textbf{Specification}: Formal specification with test vectors
+  \item \textbf{Implementation}: All major clients implement changes
+  \item \textbf{Testnet}: Minimum 3-month testnet validation
+  \item \textbf{Announcement}: Activation height announced 3+ months ahead
+  \item \textbf{Activation}: At specified block height
+\end{enumerate}
+
+\textbf{Mandatory upgrade policy}: Users have minimum 6 months warning
+before hard fork activation, except for emergency security fixes.
+
+\subsection{Proposal Process}
+
+\subsubsection{Botho Improvement Proposals (BIPs)}
+
+Formal proposals follow a structured format:
+
+\begin{lstlisting}[caption={BIP document structure}]
+BIP-XXXX: Title
+
+Status: Draft | Review | Accepted | Final | Rejected | Withdrawn
+Type: Standards Track | Informational | Process
+Layer: Consensus | Network | Application
+
+Abstract: [200 words max]
+
+Motivation: Why is this change needed?
+
+Specification: Technical details
+
+Rationale: Design decisions and alternatives considered
+
+Backward Compatibility: Impact analysis
+
+Test Cases: Validation criteria
+
+Reference Implementation: Link to code
+
+Security Considerations: Threat analysis
+\end{lstlisting}
+
+\subsubsection{Proposal Lifecycle}
+
+\begin{enumerate}
+  \item \textbf{Draft}: Author publishes initial proposal for feedback
+  \item \textbf{Review}: Community discussion, technical review
+  \item \textbf{Accepted}: Core maintainers approve for implementation
+  \item \textbf{Final}: Implemented and deployed (or rejected/withdrawn)
+\end{enumerate}
+
+\textbf{Review criteria}:
+\begin{itemize}
+  \item Technical soundness and security analysis
+  \item Backward compatibility assessment
+  \item Implementation complexity vs. benefit
+  \item Community consensus on necessity
+\end{itemize}
+
+\subsection{Emergency Procedures}
+
+\subsubsection{Security Vulnerabilities}
+
+Critical vulnerabilities follow expedited handling:
+
+\begin{enumerate}
+  \item \textbf{Discovery}: Reported via secure channel (security@botho.io)
+  \item \textbf{Assessment}: Core team evaluates severity within 24 hours
+  \item \textbf{Patch development}: Fix developed in private
+  \item \textbf{Coordinated disclosure}: Major node operators notified
+  \item \textbf{Public release}: Patch released with advisory
+  \item \textbf{Post-mortem}: Public analysis after fix deployed
+\end{enumerate}
+
+\textbf{Severity classification}:
+\begin{table}[h]
+\centering
+\caption{Vulnerability severity levels}
+\label{tab:severity}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Level} & \textbf{Definition} & \textbf{Response Time} \\
+\midrule
+Critical & Funds at immediate risk & 24--48 hours \\
+High & Exploitable with effort & 1--2 weeks \\
+Medium & Limited impact & 1--2 months \\
+Low & Minimal risk & Next release \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Network Emergencies}
+
+Catastrophic events (sustained 51\% attack, consensus failure) trigger
+emergency response:
+
+\begin{enumerate}
+  \item Core team assesses situation and coordinates response
+  \item Emergency communication via all channels
+  \item If necessary: checkpoint enforcement, emergency hard fork
+  \item Post-incident analysis and preventive measures
+\end{enumerate}
+
+\textbf{Checkpoint authority}: In extreme emergencies, core developers may
+publish signed checkpoints that compliant nodes will refuse to reorg past.
+This is a last-resort mechanism that trades decentralization for safety.
+
+\subsection{Deprecation Policy}
+
+\subsubsection{Feature Deprecation}
+
+Obsolete features are phased out gradually:
+
+\begin{enumerate}
+  \item \textbf{Deprecation notice}: Feature marked deprecated in release notes
+  \item \textbf{Warning period}: Nodes log warnings when deprecated features used
+  \item \textbf{Soft removal}: Feature disabled by default, available via flag
+  \item \textbf{Hard removal}: Feature removed entirely (requires hard fork)
+\end{enumerate}
+
+\textbf{Minimum timeline}: 12 months from deprecation notice to hard removal.
+
+\subsubsection{API Stability}
+
+External interfaces (RPC, wallet format) follow stability guarantees:
+
+\begin{itemize}
+  \item \textbf{Stable APIs}: 24+ months support after deprecation
+  \item \textbf{Experimental APIs}: May change without notice (clearly marked)
+  \item \textbf{Internal APIs}: No stability guarantee
+\end{itemize}
+
+\subsection{Decentralization Considerations}
+
+\subsubsection{Avoiding Governance Capture}
+
+Governance mechanisms are designed to resist capture:
+
+\begin{itemize}
+  \item \textbf{No formal voting}: Rough consensus, not vote counting
+  \item \textbf{Multiple implementations}: No single codebase controls protocol
+  \item \textbf{Economic alignment}: Core developers hold BTH, aligned with users
+  \item \textbf{Transparent process}: All decisions documented publicly
+\end{itemize}
+
+\subsubsection{Fork Rights}
+
+Users retain the ultimate governance power---the right to fork:
+
+\begin{itemize}
+  \item Protocol specification is open and unencumbered
+  \item Reference implementation is permissively licensed (MIT)
+  \item No trademark restrictions on protocol-compatible implementations
+  \item Community can reject controversial changes by running alternatives
+\end{itemize}
+
+\textbf{Philosophy}: Formal governance exists to coordinate, not to rule.
+The community's ability to fork ensures that governance serves users rather
+than capturing them.
+
+\subsection{Upgrade Roadmap}
+
+\subsubsection{Planned Future Upgrades}
+
+\begin{table}[h]
+\centering
+\caption{Tentative upgrade roadmap}
+\label{tab:roadmap}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Feature} & \textbf{Type} & \textbf{Status} \\
+\midrule
+View key audit mode & Soft fork & Under review \\
+Bulletproofs+ & Soft fork & Specification draft \\
+PQ ring signatures & Hard fork & Research phase \\
+Payment channels & Application & Design phase \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Note}: Roadmap items are aspirational and subject to community
+consensus. No timeline commitments are made for research-phase items.
+

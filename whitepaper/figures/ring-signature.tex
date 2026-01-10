@@ -1,0 +1,88 @@
+% Ring Signature Concept Diagram
+% Shows real input hidden among decoys
+%
+% ACCESSIBILITY ALT TEXT:
+% A diagram showing how ring signatures hide the true signer. On the left,
+% 20 circles represent possible signers (ring members), with one highlighted
+% in red as the real signer and others in gray as decoys. Arrows from the
+% real signer show key image derivation I = x * Hp(P). On the right, the
+% CLSAG signature output shows that verifiers cannot determine which ring
+% member actually signed, providing sender anonymity.
+
+\begin{figure}[ht]
+\centering
+\begin{tikzpicture}[
+    node distance=0.6cm,
+    utxo/.style={circle, draw, minimum size=1cm, font=\small},
+    realutxo/.style={utxo, fill=green!30, line width=2pt},
+    decoy/.style={utxo, fill=gray!20},
+    keyimg/.style={rectangle, draw, rounded corners, fill=red!20, minimum width=1.5cm, minimum height=0.6cm, font=\small},
+    arrow/.style={->, >=stealth, thick},
+]
+
+% Ring of outputs (20 members)
+\def\numring{12}  % Show 12 for visual clarity
+\def\radius{3cm}
+
+% Draw ring members
+\foreach \i in {1,...,\numring} {
+    \pgfmathsetmacro{\angle}{90 - (\i-1) * 360 / \numring}
+    \ifnum\i=4
+        % Real input (highlighted)
+        \node[realutxo] (utxo\i) at (\angle:\radius) {$P_{\i}$};
+    \else
+        % Decoy
+        \node[decoy] (utxo\i) at (\angle:\radius) {$P_{\i}$};
+    \fi
+}
+
+% Center elements
+\node[font=\bfseries] at (0, 0.5) {Ring};
+\node[font=\small] at (0, 0) {$n = 20$};
+\node[font=\scriptsize] at (0, -0.5) {(12 shown)};
+
+% Key image
+\node[keyimg, below=4cm of utxo1] (keyimg) {Key Image $I$};
+
+% Signature output
+\node[rectangle, draw, rounded corners, fill=blue!15, minimum width=3cm,
+      below=0.8cm of keyimg, font=\small] (sig) {CLSAG Signature $\sigma$};
+
+% Arrows from ring to key image
+\foreach \i in {1,...,\numring} {
+    \draw[arrow, gray!50] (utxo\i) -- (keyimg);
+}
+
+% Highlight real connection
+\draw[arrow, green!60!black, line width=2pt] (utxo4) -- (keyimg)
+    node[midway, right, font=\scriptsize] {Real};
+
+% Annotation for real vs decoy
+\node[anchor=west, align=left, font=\scriptsize] at (4, 2) {
+    \textcolor{green!60!black}{\rule{0.5cm}{2pt}} Real input (secret)\\
+    \textcolor{gray}{\rule{0.5cm}{1pt}} Decoys (public)
+};
+
+% Key image explanation
+\node[anchor=west, align=left, font=\scriptsize] at (2.5, -3.5) {
+    $I = x \cdot H_p(P)$\\
+    Unique per output\\
+    Prevents double-spend
+};
+
+% Properties
+\node[anchor=west, align=left, font=\footnotesize] at (-5.5, -2) {
+    \textbf{Properties:}\\
+    $\bullet$ Verifier cannot identify real input\\
+    $\bullet$ Key image links spends (no double-spend)\\
+    $\bullet$ Signature proves knowledge of one key
+};
+
+\end{tikzpicture}
+\caption{Ring signature structure. The real input (green) is hidden among 19
+decoy outputs selected from the blockchain. The signature proves the signer
+knows one of the private keys without revealing which. The key image $I$ is
+deterministically derived from the real input, enabling double-spend detection
+while preserving anonymity.}
+\label{fig:ring-signature}
+\end{figure}

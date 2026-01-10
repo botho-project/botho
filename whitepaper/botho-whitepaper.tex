@@ -21,14 +21,14 @@
 \noindent
 We present \Botho, a privacy-preserving cryptocurrency that combines
 efficient ring signatures with post-quantum stealth addresses, achieving
-both strong privacy guarantees and practical performance. Unlike existing
+strong privacy guarantees with practical performance. Unlike existing
 privacy coins that either lack quantum resistance or impose impractical
-overhead, \Botho employs a \emph{hybrid architecture} that applies
-post-quantum cryptography selectively---protecting permanent on-chain data
-(recipient identities) while using efficient classical cryptography for
-ephemeral privacy (sender anonymity).
+overhead, \Botho employs a \emph{hybrid architecture}: post-quantum
+cryptography (ML-KEM-768) protects permanent on-chain data (recipient
+identities), while efficient classical cryptography (CLSAG ring signatures)
+provides ephemeral sender anonymity.
 
-\Botho introduces a novel consensus mechanism combining proof-of-work
+\Botho introduces a hybrid consensus mechanism combining proof-of-work
 block proposal with Stellar Consensus Protocol (SCP) finalization,
 achieving deterministic finality in approximately 5 seconds while
 maintaining permissionless participation. The protocol includes
@@ -36,11 +36,13 @@ maintaining permissionless participation. The protocol includes
 Sybil-resistant economic incentives against wealth concentration.
 Transaction fees are split: 80\% redistributed via lottery to random UTXOs,
 20\% burned---creating progressive redistribution that statistically
-favors small holders over large holders.
+favors smaller holders.
 
-Key parameters: ring size 20, transaction size $\sim$4~KB, 5-second finality,
-2\% target tail emission with dynamic inflation dampening. The reference
-implementation comprises approximately 50,000 lines of Rust code.
+Key parameters: ring size 20, transaction size $\sim$4~KB, 5-second
+finality, perpetual 2\% tail emission with dynamic inflation dampening.
+We provide formal security proofs for transaction unlinkability,
+double-spend prevention, and fork freedom under standard cryptographic
+assumptions.
 \end{abstract}
 
 \vspace{1em}
@@ -65,15 +67,15 @@ post-quantum cryptography, consensus protocol, monetary policy
 \input{sections/09-security}
 \input{sections/10-economics}
 \input{sections/11-implementation}
-\input{sections/12-conclusion}
+\input{sections/12-governance}
+\input{sections/13-conclusion}
 
 % ============================================================================
 % Bibliography
 % ============================================================================
 
-% Bibliography - uncomment when natbib is available
-% \bibliographystyle{plainnat}
-% \bibliography{refs}
+% Bibliography
+\bibliography{refs}
 
 % ============================================================================
 % Appendices
@@ -81,5 +83,9 @@ post-quantum cryptography, consensus protocol, monetary policy
 
 \appendix
 \input{sections/appendix-notation}
+\input{sections/appendix-parameters}
+\input{sections/appendix-regulatory}
+\input{sections/appendix-formal}
+\input{sections/appendix-audit}
 
 \end{document}

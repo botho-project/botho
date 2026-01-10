@@ -1,0 +1,114 @@
+% Cluster Tag Inheritance Diagram
+% Shows tag blending when combining inputs from different clusters
+%
+% ACCESSIBILITY ALT TEXT:
+% A flow diagram showing how cluster tags blend when combining inputs.
+% Two input UTXOs are shown: one with 70% Cluster A tag (10 BTH) and one
+% with 30% Cluster B tag (5 BTH). Arrows flow into a transaction box.
+% The output shows a blended tag vector: the new UTXO has proportional
+% attribution (70% A, 30% B based on input values). This tracking enables
+% progressive fees based on coin ancestry without revealing ownership.
+
+\begin{figure}[ht]
+\centering
+\begin{tikzpicture}[
+    utxo/.style={draw, rectangle, rounded corners, minimum width=2.2cm, minimum height=1.2cm, font=\scriptsize},
+    tag/.style={font=\tiny, fill=white, inner sep=1pt},
+    arrow/.style={->, >=stealth, thick}
+]
+    % Title
+    \node[font=\small\bfseries] at (0,4) {Cluster Tag Inheritance via Value-Weighted Blending};
+
+    % Input UTXOs
+    \node[utxo, fill=blue!20] (utxo1) at (-3.5,2) {
+        \begin{tabular}{c}
+            \textbf{UTXO 1}\\
+            70 BTH
+        \end{tabular}
+    };
+    \node[tag, below=0.1cm of utxo1] {Tag: $\{(A, 1.0)\}$};
+
+    \node[utxo, fill=red!20] (utxo2) at (-3.5,0) {
+        \begin{tabular}{c}
+            \textbf{UTXO 2}\\
+            30 BTH
+        \end{tabular}
+    };
+    \node[tag, below=0.1cm of utxo2] {Tag: $\{(B, 1.0)\}$};
+
+    % Transaction box
+    \node[draw, rectangle, fill=gray!10, minimum width=1.5cm, minimum height=2.5cm, font=\scriptsize] (tx) at (0,1) {
+        \begin{tabular}{c}
+            \\
+            \textbf{TX}\\
+            \\
+        \end{tabular}
+    };
+
+    % Blending formula inside TX
+    \node[font=\tiny, align=center] at (0,1) {
+        blend\\
+        $\frac{\sum v_i \vec{t}_i}{\sum v_i}$
+    };
+
+    % Output UTXOs
+    \node[utxo, fill=purple!20] (out1) at (3.5,2) {
+        \begin{tabular}{c}
+            \textbf{Output 1}\\
+            60 BTH
+        \end{tabular}
+    };
+    \node[tag, below=0.1cm of out1] {Tag: $\{(A, 0.7), (B, 0.3)\}$};
+
+    \node[utxo, fill=purple!20] (out2) at (3.5,0) {
+        \begin{tabular}{c}
+            \textbf{Output 2}\\
+            40 BTH
+        \end{tabular}
+    };
+    \node[tag, below=0.1cm of out2] {Tag: $\{(A, 0.7), (B, 0.3)\}$};
+
+    % Arrows
+    \draw[arrow, blue!60] (utxo1.east) -- (tx.west |- utxo1.east);
+    \draw[arrow, red!60] (utxo2.east) -- (tx.west |- utxo2.east);
+    \draw[arrow, purple!60] (tx.east |- out1.west) -- (out1.west);
+    \draw[arrow, purple!60] (tx.east |- out2.west) -- (out2.west);
+
+    % Fee annotation
+    \node[font=\tiny, gray] at (0,-0.8) {(fee not shown)};
+
+    % Calculation box
+    \node[draw, rectangle, rounded corners, fill=yellow!10, minimum width=7cm, font=\tiny, align=left] at (0,-2) {
+        \textbf{Blending Calculation:}\\[2pt]
+        $\vec{t}_{out} = \frac{70 \cdot \{(A,1.0)\} + 30 \cdot \{(B,1.0)\}}{70 + 30} = \{(A, 0.7), (B, 0.3)\}$\\[2pt]
+        All outputs inherit the same blended tag regardless of their individual amounts.
+    };
+
+    % Key insight
+    \node[draw, rectangle, rounded corners, fill=green!10, minimum width=7cm, font=\tiny, align=center] at (0,-3.5) {
+        \textbf{Sybil Resistance:} Splitting coins does not reduce cluster attribution.\\
+        A 100 BTH UTXO split into 100 $\times$ 1 BTH UTXOs all carry the same tag.
+    };
+
+    % Visual tag representation
+    \node[font=\tiny\bfseries] at (-3.5,-4.5) {Input Tags};
+    \draw[fill=blue!40] (-4.5,-5) rectangle (-2.5,-5.3);
+    \node[font=\tiny, white] at (-3.5,-5.15) {100\% Cluster A};
+
+    \draw[fill=red!40] (-4.5,-5.5) rectangle (-2.5,-5.8);
+    \node[font=\tiny, white] at (-3.5,-5.65) {100\% Cluster B};
+
+    \node[font=\tiny\bfseries] at (3.5,-4.5) {Output Tag};
+    \draw[fill=blue!40] (2.1,-5) rectangle (3.5,-5.3);
+    \draw[fill=red!40] (3.5,-5) rectangle (4.9,-5.3);
+    \node[font=\tiny, white] at (2.8,-5.15) {70\% A};
+    \node[font=\tiny, white] at (4.2,-5.15) {30\% B};
+
+\end{tikzpicture}
+\caption{Cluster tag inheritance through value-weighted blending. When a
+transaction combines inputs from different clusters, the output tag vector
+is the value-weighted average of input tags. This preserves provenance
+information and ensures that splitting coins cannot reduce the cluster factor
+used for progressive fee calculation.}
+\label{fig:cluster-inheritance}
+\end{figure}

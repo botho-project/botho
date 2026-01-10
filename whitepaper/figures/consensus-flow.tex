@@ -1,0 +1,78 @@
+% Consensus Flow Diagram
+% Shows PoW block proposal flowing into SCP finalization
+%
+% ACCESSIBILITY ALT TEXT:
+% A timeline diagram showing Botho's hybrid consensus. On the left, three
+% orange boxes represent miners A, B, C proposing blocks via proof-of-work.
+% Arrows converge into the SCP finalization phase (blue boxes): Nomination,
+% Prepare, Commit. The final green box shows Externalize (Finalized). A time
+% arrow at bottom shows progression from t0 (proposals) through t1-t3 to
+% deterministic finality. Unlike Bitcoin, finalized blocks cannot be reverted.
+
+\begin{figure}[ht]
+\centering
+\begin{tikzpicture}[
+    node distance=0.8cm and 1.5cm,
+    phase/.style={rectangle, draw, rounded corners, minimum width=2cm, minimum height=1cm, align=center, font=\small},
+    miner/.style={phase, fill=orange!20},
+    scp/.style={phase, fill=blue!20},
+    final/.style={phase, fill=green!20},
+    arrow/.style={->, >=stealth, thick},
+    bigarrow/.style={->, >=stealth, very thick, draw=gray},
+]
+
+% PoW Phase
+\node[miner] (pow1) {Miner A\\proposes};
+\node[miner, below=0.5cm of pow1] (pow2) {Miner B\\proposes};
+\node[miner, below=0.5cm of pow2] (pow3) {Miner C\\proposes};
+
+% PoW label
+\node[above=0.3cm of pow1, font=\bfseries\small] {PoW Proposals};
+
+% SCP Nomination Phase
+\node[scp, right=2cm of pow1] (nom) {Nomination\\Phase};
+
+% SCP Ballot Phase
+\node[scp, right=1.5cm of nom] (prep) {Prepare};
+\node[scp, right=1cm of prep] (commit) {Commit};
+
+% Externalize
+\node[final, right=1.5cm of commit] (ext) {Externalize\\(Finalized)};
+
+% Arrows from miners to nomination
+\draw[arrow] (pow1) -- (nom);
+\draw[arrow] (pow2) -- (nom);
+\draw[arrow] (pow3) -- (nom);
+
+% SCP flow
+\draw[arrow] (nom) -- (prep) node[midway, above, font=\scriptsize] {vote};
+\draw[arrow] (prep) -- (commit) node[midway, above, font=\scriptsize] {accept};
+\draw[arrow] (commit) -- (ext) node[midway, above, font=\scriptsize] {confirm};
+
+% Time arrow at bottom
+\draw[bigarrow] (-1,-3) -- (12,-3) node[right, font=\small] {Time};
+
+% Time markers
+\node[below=3.2cm of pow2, font=\scriptsize] {$t_0$: Block proposals};
+\node[below=3.2cm of nom, font=\scriptsize] {$t_1$: Nomination};
+\node[below=3.2cm of $(prep)!0.5!(commit)$, font=\scriptsize] {$t_2$: Ballot};
+\node[below=3.2cm of ext, font=\scriptsize] {$t_3$: Final};
+
+% Timing annotation
+\node[right=0.5cm of ext, align=left, font=\scriptsize] {Deterministic\\finality\\(no forks)};
+
+% SCP label
+\node[above=0.5cm of $(nom)!0.5!(commit)$, font=\bfseries\small] {SCP Finalization};
+
+% Brace for SCP phases
+\draw[decorate, decoration={brace, amplitude=5pt, raise=2pt}]
+    (nom.north west) -- (commit.north east)
+    node[midway, above=8pt, font=\scriptsize] {Quorum agreement};
+
+\end{tikzpicture}
+\caption{Hybrid PoW + SCP consensus flow. Multiple miners propose blocks via
+proof-of-work (permissionless participation), then SCP achieves deterministic
+finality through quorum agreement. Unlike pure PoW, finalized blocks cannot
+be reverted---providing instant settlement guarantees.}
+\label{fig:consensus-flow}
+\end{figure}

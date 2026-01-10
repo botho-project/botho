@@ -1,0 +1,338 @@
+% ============================================================================
+% Appendix B: Parameter Justification
+% ============================================================================
+
+\section{Parameter Justification}
+\label{sec:parameters}
+
+This appendix provides detailed rationale for key protocol parameters.
+Parameters are grouped by subsystem and include analysis of alternatives
+considered.
+
+\subsection{Cryptographic Parameters}
+
+\subsubsection{Ring Size: 20}
+
+The ring size determines the anonymity set for sender privacy.
+
+\begin{table}[h]
+\centering
+\caption{Ring size trade-off analysis}
+\label{tab:ring-size}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\textbf{Ring Size} & \textbf{Signature Size} & \textbf{Nominal Anonymity} & \textbf{Effective Anonymity*} \\
+\midrule
+11 (Monero) & $\sim$400 B & 1/11 & 1/3--1/5 \\
+16 & $\sim$550 B & 1/16 & 1/4--1/6 \\
+\textbf{20 (Botho)} & \textbf{$\sim$700 B} & \textbf{1/20} & \textbf{1/5--1/8} \\
+32 & $\sim$1,100 B & 1/32 & 1/7--1/10 \\
+64 & $\sim$2,200 B & 1/64 & 1/10--1/15 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textit{*Effective anonymity accounts for chain analysis techniques (timing,
+amount correlation, decoy age distribution biases).}
+
+\textbf{Why 20?}
+\begin{itemize}
+  \item \textbf{Diminishing returns}: Doubling ring size from 20 to 40 adds
+    only $\sim$0.5 bits of anonymity while doubling signature size
+  \item \textbf{Practical anonymity}: Ring size 20 provides meaningful
+    protection against passive observers
+  \item \textbf{Size budget}: At 700 bytes per input, multi-input transactions
+    remain practical ($<$5 KB for 2-in-2-out)
+  \item \textbf{Decoy availability}: Sufficient recent outputs exist in
+    moderate-activity network
+\end{itemize}
+
+\textbf{Why not Monero's 11?}
+\begin{itemize}
+  \item Research shows Monero's effective anonymity is lower than nominal
+  \item Chain analysis companies report success rates suggesting $<$5
+    effective ring members
+  \item Botho's 20 provides meaningful improvement with acceptable overhead
+\end{itemize}
+
+\subsubsection{ML-KEM Security Level: 768}
+
+ML-KEM-768 provides NIST Security Level 3 (equivalent to AES-192).
+
+\textbf{Why not ML-KEM-512 (Level 1)?}
+\begin{itemize}
+  \item Recipient privacy is permanent---data persists indefinitely on-chain
+  \item Conservative security margin appropriate for long-term protection
+  \item Size difference minimal (800 vs 1088 bytes ciphertext)
+\end{itemize}
+
+\textbf{Why not ML-KEM-1024 (Level 5)?}
+\begin{itemize}
+  \item Level 5 adds 50\% size overhead (1568 byte ciphertext)
+  \item No known attacks approach Level 3 security
+  \item Can upgrade if Level 3 becomes threatened
+\end{itemize}
+
+\subsubsection{ML-DSA Security Level: 65}
+
+ML-DSA-65 (formerly Dilithium3) provides NIST Security Level 3.
+
+\textbf{Rationale}: Minting signatures must remain verifiable long-term.
+Matching ML-KEM security level provides consistent protection for all
+permanent on-chain data.
+
+\subsection{Consensus Parameters}
+
+\subsubsection{Block Time: 5--40 Seconds (Dynamic)}
+
+Block time varies based on network utilization.
+
+\begin{table}[h]
+\centering
+\caption{Block time parameter analysis}
+\label{tab:block-time}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Bound} & \textbf{Value} & \textbf{Constraint} \\
+\midrule
+Minimum & 5 seconds & SCP convergence time ($\sim$3--4s) \\
+Target (low util) & 40 seconds & User experience, emission rate \\
+Target (high util) & 5 seconds & Throughput during demand \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Why not fixed 10 seconds (like many chains)?}
+\begin{itemize}
+  \item Fixed time wastes capacity during high demand
+  \item Fixed time over-emits during low utilization periods
+  \item Dynamic adjustment aligns emission with network utility
+\end{itemize}
+
+\textbf{Lower bound justification (5s)}:
+\begin{itemize}
+  \item SCP nomination: $\sim$1 second
+  \item Ballot prepare: $\sim$1 second
+  \item Ballot commit: $\sim$1 second
+  \item Network propagation: $\sim$1 second
+  \item Safety margin: $\sim$1 second
+\end{itemize}
+
+\subsubsection{Quorum Thresholds: 3-of-4 Infrastructure, 2-of-3 Community}
+
+\textbf{Infrastructure tier (3-of-4)}:
+\begin{itemize}
+  \item Tolerates 1 Byzantine or offline node
+  \item Requires 75\% agreement (standard BFT threshold)
+  \item Balances availability with safety
+\end{itemize}
+
+\textbf{Community tier (2-of-3)}:
+\begin{itemize}
+  \item Tolerates 1 Byzantine or offline node
+  \item Lower threshold acknowledges higher variance in community uptime
+  \item Inner set structure prevents single community node from blocking
+\end{itemize}
+
+\textbf{Why tiered structure?}
+\begin{itemize}
+  \item Pure flat structure requires trusting all validators equally
+  \item Infrastructure tier provides stability baseline
+  \item Community tier ensures decentralization input
+  \item Combined structure requires both tiers for consensus
+\end{itemize}
+
+\subsubsection{Difficulty Adjustment Window: 144 Blocks}
+
+\textbf{Why 144?}
+\begin{itemize}
+  \item At 10-second average, represents $\sim$24 minutes
+  \item Long enough to smooth variance in block times
+  \item Short enough to respond to hashrate changes
+  \item Same philosophy as Bitcoin's 2016-block window scaled to block time
+\end{itemize}
+
+\textbf{Adjustment bounds (0.5$\times$ to 2$\times$)}:
+\begin{itemize}
+  \item Prevents oscillation from rapid hashrate changes
+  \item Allows recovery from 50\% hashrate drop in one window
+  \item Historical analysis shows changes $>$2$\times$ per window are rare
+\end{itemize}
+
+\subsection{Economic Parameters}
+
+\subsubsection{Initial Block Reward: 50 BTH}
+
+\textbf{Rationale}:
+\begin{itemize}
+  \item Round number for simplicity
+  \item Matches Bitcoin's initial reward (symbolic continuity)
+  \item At 10-second blocks: 432,000 BTH/day initially
+  \item Creates sufficient early liquidity for network bootstrap
+\end{itemize}
+
+\subsubsection{Halving Period: 1,051,200 Blocks ($\sim$2 Years)}
+
+\textbf{Why 2-year halvings (vs. Bitcoin's 4-year)?}
+\begin{itemize}
+  \item Faster initial distribution to early participants
+  \item Reaches tail emission sooner, stabilizing economics
+  \item At 10-second blocks: 1,051,200 blocks $\approx$ 121.7 days $\times$ 6
+    = 2.0 years
+\end{itemize}
+
+\textbf{Calculation}:
+\[
+\text{blocks\_per\_day} = \frac{86400\text{s}}{10\text{s/block}} = 8640
+\]
+\[
+\text{blocks\_per\_2\_years} = 8640 \times 365 \times 2 \approx 6,307,200
+\]
+
+Actual value (1,051,200) corresponds to 121.7 days per halving epoch,
+with 6 epochs totaling $\sim$2 years.
+
+\subsubsection{Tail Emission: 0.3 BTH per Block}
+
+\textbf{Security budget analysis}:
+\begin{itemize}
+  \item At 10-second blocks: 2,592,000 BTH/year from tail emission
+  \item Target: $\sim$2\% annual inflation at maturity
+  \item Projected mature supply: $\sim$130M BTH
+  \item $2,592,000 / 130,000,000 = 1.99\%$ $\checkmark$
+\end{itemize}
+
+\textbf{Why not 0?}
+\begin{itemize}
+  \item Zero tail emission requires fees to fund all security
+  \item Fee-only security creates volatility and potential death spirals
+  \item Perpetual emission ensures predictable security budget
+\end{itemize}
+
+\textbf{Why not higher (e.g., 1 BTH)?}
+\begin{itemize}
+  \item Higher emission increases long-term inflation
+  \item 0.3 BTH provides adequate security while limiting dilution
+  \item Can be adjusted via governance if security budget insufficient
+\end{itemize}
+
+\subsubsection{Fee Split: 80\% Lottery / 20\% Burn}
+
+\textbf{Why redistribute 80\%?}
+\begin{itemize}
+  \item Pure burn benefits all holders equally (regressive)
+  \item Lottery redistribution favors small holders statistically
+  \item 80\% ensures meaningful redistribution effect
+\end{itemize}
+
+\textbf{Why burn 20\%?}
+\begin{itemize}
+  \item Some deflation counters tail emission inflation
+  \item Creates tangible "cost" to network usage
+  \item Prevents infinite supply growth from fees alone
+\end{itemize}
+
+\textbf{Alternative considered: 90/10}
+\begin{itemize}
+  \item More redistribution but less deflationary pressure
+  \item 80/20 provides better balance based on economic modeling
+\end{itemize}
+
+\subsubsection{Progressive Fee Multiplier: 1$\times$ to 6$\times$}
+
+\textbf{Sigmoid steepness parameter}:
+\[
+\text{factor} = 1 + 5 \cdot \sigma\left(\frac{W}{\text{steepness}}\right)
+\]
+
+\textbf{Why maximum 6$\times$?}
+\begin{itemize}
+  \item High enough to create meaningful progressive effect
+  \item Low enough to not price out large legitimate transactions
+  \item Comparable to progressive tax brackets in traditional systems
+\end{itemize}
+
+\textbf{Why sigmoid shape?}
+\begin{itemize}
+  \item Smooth transition avoids cliff effects
+  \item Asymptotic bound prevents infinite fees
+  \item Most users (bottom 50\%) experience near-base fees
+\end{itemize}
+
+\subsubsection{Tag Decay: 0.95 Rate, 720-Block Minimum Age}
+
+\textbf{Decay rate 0.95}:
+\begin{itemize}
+  \item Half-life: $\ln(0.5) / \ln(0.95) \approx 13.5$ decay events
+  \item At maximum 1 decay per 720 blocks ($\sim$2 hours): 27 hours half-life
+  \item Encourages circulation without rapid tag elimination
+\end{itemize}
+
+\textbf{Minimum age 720 blocks}:
+\begin{itemize}
+  \item At 10-second blocks: $\sim$2 hours
+  \item Prevents rapid wash trading from bypassing progressive fees
+  \item Patient wash trading (1 week) achieves only 97\% decay
+  \item Creates meaningful time cost for fee evasion
+\end{itemize}
+
+\subsection{Network Parameters}
+
+\subsubsection{Maximum Transaction Size: 100 KB}
+
+\textbf{Rationale}:
+\begin{itemize}
+  \item Allows 16-in-16-out transactions ($\sim$80 KB)
+  \item Prevents single transactions from dominating blocks
+  \item Provides headroom for future feature expansion
+\end{itemize}
+
+\subsubsection{Maximum Block Size: 2 MB}
+
+\textbf{Why 2 MB?}
+\begin{itemize}
+  \item At 4 KB average transaction: $\sim$500 transactions per block
+  \item At 5-second blocks: $\sim$100 TPS theoretical maximum
+  \item Manageable for full node storage and bandwidth
+  \item Can increase via soft fork if network capacity grows
+\end{itemize}
+
+\subsubsection{Connection Limits: 8 Outbound, 117 Inbound}
+
+\textbf{Outbound (8)}:
+\begin{itemize}
+  \item Sufficient for network connectivity
+  \item Limits resource consumption for light nodes
+  \item Eclipse attack resistance (diverse peer selection)
+\end{itemize}
+
+\textbf{Inbound (117)}:
+\begin{itemize}
+  \item Allows serving many peers
+  \item Total 125 matches common socket limits
+  \item Per-IP limit (2) prevents single-source flooding
+\end{itemize}
+
+\subsection{Summary Table}
+
+\begin{table}[h]
+\centering
+\caption{Key parameter summary}
+\label{tab:params-summary}
+\begin{tabular}{@{}llll@{}}
+\toprule
+\textbf{Parameter} & \textbf{Value} & \textbf{Category} & \textbf{Governance} \\
+\midrule
+Ring size & 20 & Crypto & Soft fork \\
+ML-KEM level & 768 & Crypto & Hard fork \\
+Block time & 5--40s & Consensus & Soft fork \\
+Quorum threshold & 3/4, 2/3 & Consensus & Hard fork \\
+Initial reward & 50 BTH & Economic & Genesis \\
+Tail emission & 0.3 BTH & Economic & Hard fork \\
+Fee split & 80/20 & Economic & Soft fork \\
+Max fee multiplier & 6$\times$ & Economic & Soft fork \\
+Max block size & 2 MB & Network & Soft fork \\
+\bottomrule
+\end{tabular}
+\end{table}
+

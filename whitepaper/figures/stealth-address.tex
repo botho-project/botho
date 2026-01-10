@@ -1,0 +1,82 @@
+% Post-Quantum Stealth Address Flow Diagram
+% Shows sender encapsulation and recipient decapsulation
+%
+% ACCESSIBILITY ALT TEXT:
+% A sequence diagram showing private transaction flow between sender and
+% recipient. The sender (left) uses ML-KEM encapsulation to create a shared
+% secret K, then derives a one-time public key P. The middle shows on-chain
+% data: the KEM ciphertext c and stealth output P. The recipient (right)
+% uses ML-KEM decapsulation to recover K, then derives the private key x to
+% spend the funds. Green indicates post-quantum protected elements.
+
+\begin{figure}[ht]
+\centering
+\begin{tikzpicture}[
+    node distance=0.8cm and 1.5cm,
+    box/.style={rectangle, draw, rounded corners, minimum width=2.2cm, minimum height=0.7cm, align=center, font=\small},
+    pqbox/.style={box, fill=green!15},
+    classbox/.style={box, fill=blue!15},
+    databox/.style={box, fill=yellow!15},
+    arrow/.style={->, >=stealth, thick},
+    dasharrow/.style={->, >=stealth, dashed},
+]
+
+% === SENDER SIDE ===
+\node[font=\bfseries] (sendlabel) {Sender};
+
+\node[pqbox, below=0.5cm of sendlabel] (recvpk) {Recipient's\\ML-KEM PK};
+\node[pqbox, below=of recvpk] (encap) {ML-KEM\\Encapsulate};
+\node[databox, below=of encap] (shared) {Shared Secret $K$};
+\node[classbox, below=of shared] (derive) {Derive $s = H_s(K \| i)$};
+\node[classbox, below=of derive] (onetime) {One-time Key\\$P = sG + B$};
+
+% Ciphertext output
+\node[databox, right=2cm of encap] (cipher) {Ciphertext $c$\\(1,088 bytes)};
+
+% === ON-CHAIN DATA ===
+\node[font=\bfseries, right=3cm of sendlabel] (chainlabel) {On-Chain};
+\node[box, fill=orange!15, below=0.5cm of chainlabel] (output) {Transaction\\Output};
+
+% === RECIPIENT SIDE ===
+\node[font=\bfseries, right=3cm of chainlabel] (recvlabel) {Recipient};
+\node[pqbox, below=0.5cm of recvlabel] (recvsk) {ML-KEM SK\\(private)};
+\node[pqbox, below=of recvsk] (decap) {ML-KEM\\Decapsulate};
+\node[databox, below=of decap] (shared2) {Shared Secret $K$};
+\node[classbox, below=of shared2] (derive2) {Derive $s = H_s(K \| i)$};
+\node[classbox, below=of derive2] (privkey) {Spend Key\\$x = s + b$};
+
+% Arrows - Sender flow
+\draw[arrow] (recvpk) -- (encap);
+\draw[arrow] (encap) -- (shared);
+\draw[arrow] (shared) -- (derive);
+\draw[arrow] (derive) -- (onetime);
+\draw[arrow] (encap) -- (cipher);
+
+% To chain
+\draw[arrow] (cipher) -- (output);
+\draw[arrow] (onetime) -| (output);
+
+% From chain to recipient
+\draw[arrow] (output) -| (decap);
+\draw[arrow] (recvsk) -- (decap);
+\draw[arrow] (decap) -- (shared2);
+\draw[arrow] (shared2) -- (derive2);
+\draw[arrow] (derive2) -- (privkey);
+
+% Security annotations
+\node[right=0.3cm of cipher, align=left, font=\scriptsize\color{green!50!black}] {PQ-secure\\(ML-KEM)};
+\node[left=0.3cm of onetime, align=right, font=\scriptsize\color{blue!50!black}] {Classical\\(Ristretto)};
+
+% Bottom annotation
+\node[below=0.5cm of $(onetime)!0.5!(privkey)$, align=center, font=\footnotesize\itshape]
+{Recipient identity protected by post-quantum cryptography;\\
+only recipient can compute spend key $x$};
+
+\end{tikzpicture}
+\caption{Post-quantum stealth address protocol. The sender encapsulates to the
+recipient's ML-KEM public key, deriving a shared secret used to create a unique
+one-time public key $P$. The on-chain ciphertext $c$ is quantum-resistant---only
+the recipient with the ML-KEM secret key can decapsulate and derive the
+corresponding private key $x$ to spend the output.}
+\label{fig:stealth-address}
+\end{figure}

@@ -1,0 +1,147 @@
+% ============================================================================
+% Botho Executive Summary - 2-Page Overview
+% ============================================================================
+
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{hyperref}
+
+% Compact spacing
+\setlength{\parskip}{0.5em}
+\setlength{\parindent}{0pt}
+
+\title{\vspace{-2em}\textbf{Botho: Privacy-Preserving Cryptocurrency}\\[0.3em]
+\large Executive Summary}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+\vspace{-3em}
+
+\section*{Overview}
+
+\textbf{Botho} is a privacy-preserving cryptocurrency that combines post-quantum
+cryptography with efficient transaction privacy, achieving strong security
+guarantees with practical performance.
+
+\textbf{Key innovation}: Hybrid post-quantum architecture applies quantum-resistant
+cryptography selectively---protecting permanent data (recipient identities) while
+using efficient classical cryptography for ephemeral privacy (sender anonymity).
+
+\section*{Core Features}
+
+\begin{tabular}{@{}p{3.5cm}p{10cm}@{}}
+\toprule
+\textbf{Feature} & \textbf{Description} \\
+\midrule
+Privacy & All transactions private by default. Ring signatures (CLSAG) hide
+sender among 20 decoys. Stealth addresses hide recipients. Confidential
+transactions hide amounts. \\[0.5em]
+Post-Quantum & ML-KEM-768 protects recipient identity against future quantum
+attacks. On-chain data remains secure even if quantum computers break
+classical cryptography. \\[0.5em]
+Fast Finality & Hybrid PoW+SCP consensus achieves deterministic finality in
+$\sim$5 seconds. Unlike Bitcoin, finalized blocks cannot be reverted. \\[0.5em]
+Fair Economics & Progressive fees based on coin ancestry (not identity) create
+Sybil-resistant pressure against wealth concentration. Fees are 80\%
+redistributed via lottery, 20\% burned. \\
+\bottomrule
+\end{tabular}
+
+\section*{Technical Parameters}
+
+\begin{tabular}{@{}lcl@{}}
+\toprule
+\textbf{Parameter} & \textbf{Value} & \textbf{Notes} \\
+\midrule
+Ring size & 20 & Sender hidden among 20 possibilities \\
+Transaction size & $\sim$4 KB & Practical for mobile wallets \\
+Block time & 5--40s & Dynamic based on network load \\
+Finality & $\sim$5s & Deterministic (not probabilistic) \\
+Tail emission & 0.3 BTH/block & Perpetual $\sim$2\% inflation \\
+\bottomrule
+\end{tabular}
+
+\section*{Cryptographic Primitives}
+
+\begin{itemize}
+\item \textbf{Recipient privacy}: ML-KEM-768 (post-quantum KEM, NIST FIPS 203)
+\item \textbf{Sender privacy}: CLSAG ring signatures (classical, efficient)
+\item \textbf{Amount privacy}: Pedersen commitments + Bulletproofs range proofs
+\item \textbf{Minting signatures}: ML-DSA-65 (post-quantum signatures, NIST FIPS 204)
+\item \textbf{Key derivation}: BIP39 mnemonic $\rightarrow$ SLIP-10 $\rightarrow$ subaddresses
+\end{itemize}
+
+\section*{Consensus Mechanism}
+
+\textbf{Hybrid PoW + SCP}: Proof-of-work provides permissionless block proposal
+(anyone can mine). Stellar Consensus Protocol provides fast Byzantine-fault-tolerant
+finalization.
+
+\textbf{Why hybrid?}
+\begin{itemize}
+\item PoW alone: Slow probabilistic finality, reorg vulnerability
+\item BFT alone: Requires known validator set, not permissionless
+\item PoW+SCP: Permissionless \emph{and} fast deterministic finality
+\end{itemize}
+
+\section*{Economic Design}
+
+\textbf{Progressive fees}: Transaction fees scale with sender's cluster wealth
+percentile (1$\times$ for bottom 50\%, up to 6$\times$ for top 1\%). Based on
+coin \emph{ancestry}, not current ownership---preserves privacy.
+
+\textbf{Fee distribution}:
+\begin{itemize}
+\item 80\% redistributed via lottery to random UTXO (favors small holders statistically)
+\item 20\% burned (creates deflationary pressure proportional to usage)
+\end{itemize}
+
+\textbf{Tail emission}: Perpetual 0.3 BTH per block ensures long-term security
+funding. Asymptotic inflation: $\sim$2\%.
+
+\section*{Security Model}
+
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\textbf{Threat} & \textbf{Protection} & \textbf{Security Level} \\
+\midrule
+Sender identification & CLSAG ring signatures & 128-bit classical \\
+Recipient identification & ML-KEM-768 stealth addresses & 192-bit post-quantum \\
+Amount discovery & Pedersen + Bulletproofs & 128-bit classical \\
+Double-spending & Key images + SCP finality & Information-theoretic \\
+51\% attack & SCP quorum intersection & Byzantine fault tolerant \\
+\bottomrule
+\end{tabular}
+
+\section*{Comparison}
+
+\begin{tabular}{@{}lccccc@{}}
+\toprule
+& \textbf{Botho} & \textbf{Monero} & \textbf{Zcash} & \textbf{Bitcoin} \\
+\midrule
+Privacy & Full & Full & Optional & Pseudonymous \\
+Post-quantum & Partial & No & No & No \\
+Finality & 5s deterministic & 10+ min prob. & 10+ min prob. & 60+ min prob. \\
+Tx size & 4 KB & 2 KB & 2 KB (shielded) & 0.3 KB \\
+Fair distribution & Yes & No & No & No \\
+\bottomrule
+\end{tabular}
+
+\section*{Resources}
+
+\begin{itemize}
+\item \textbf{Full whitepaper}: \texttt{botho-whitepaper.pdf} (127 pages)
+\item \textbf{Website}: \url{https://botho.org}
+\item \textbf{Source code}: \url{https://github.com/botho/botho}
+\end{itemize}
+
+\vfill
+\begin{center}
+\small\textit{``Motho ke motho ka batho'' --- A person is a person through other people.}
+\end{center}
+
+\end{document}

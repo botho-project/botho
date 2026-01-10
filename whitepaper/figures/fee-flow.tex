@@ -1,0 +1,67 @@
+% Fee Flow Diagram
+% Shows progressive fees flowing to lottery and burn
+%
+% ACCESSIBILITY ALT TEXT:
+% A flow diagram showing fee distribution in Botho. Transaction fees enter
+% from the left, pass through cluster factor calculation (1x-6x multiplier
+% based on wealth percentile). The total fee then splits: 80% flows to a
+% lottery pool (green), which randomly selects a winning UTXO for
+% redistribution. 20% flows to burn (red), permanently removing coins from
+% circulation. This creates progressive redistribution favoring small holders.
+
+\begin{figure}[ht]
+\centering
+\begin{tikzpicture}[
+    node distance=1cm and 2cm,
+    box/.style={rectangle, draw, rounded corners, minimum width=2.5cm, minimum height=0.8cm, align=center, font=\small},
+    arrow/.style={->, >=stealth, thick},
+    widearrow/.style={->, >=stealth, line width=3pt},
+]
+
+% Transaction with progressive fee
+\node[box, fill=yellow!20] (tx) {Transaction\\(cluster factor: 3x)};
+
+% Fee calculation
+\node[box, fill=orange!15, right=2.5cm of tx] (fee) {Total Fee\\$f = base \times size \times factor$};
+
+% Split
+\node[box, fill=blue!15, above right=1.5cm and 2cm of fee] (lottery) {Lottery Pool\\80\% ($0.8f$)};
+\node[box, fill=red!15, below right=1.5cm and 2cm of fee] (burn) {Burned\\20\% ($0.2f$)};
+
+% Lottery recipients
+\node[box, fill=green!15, right=2cm of lottery] (utxo1) {Random UTXO 1\\($0.2f$)};
+\node[box, fill=green!15, above=0.3cm of utxo1] (utxo2) {Random UTXO 2\\($0.2f$)};
+\node[box, fill=green!15, below=0.3cm of utxo1] (utxo3) {Random UTXO 3\\($0.2f$)};
+\node[box, fill=green!15, below=0.3cm of utxo3] (utxo4) {Random UTXO 4\\($0.2f$)};
+
+% Burn destination
+\node[box, fill=gray!30, right=2cm of burn] (destroyed) {Permanently\\Destroyed};
+
+% Arrows
+\draw[arrow] (tx) -- (fee) node[midway, above, font=\scriptsize] {calculate};
+\draw[widearrow, blue!50] (fee) -- (lottery) node[midway, above, sloped, font=\scriptsize] {80\%};
+\draw[widearrow, red!50] (fee) -- (burn) node[midway, below, sloped, font=\scriptsize] {20\%};
+
+\draw[arrow] (lottery) -- (utxo1);
+\draw[arrow] (lottery) -- (utxo2);
+\draw[arrow] (lottery) -- (utxo3);
+\draw[arrow] (lottery) -- (utxo4);
+
+\draw[arrow] (burn) -- (destroyed);
+
+% Annotations
+\node[below=0.5cm of tx, align=center, font=\scriptsize] {Higher cluster factor\\= higher fees};
+\node[right=0.3cm of utxo1, align=left, font=\scriptsize] {Selected via\\verifiable\\randomness};
+\node[below=0.3cm of destroyed, align=center, font=\scriptsize] {Deflationary\\pressure};
+
+% Progressive aspect
+\node[above=1cm of tx, align=center, font=\footnotesize\itshape] {Wealthy clusters pay more $\rightarrow$ Redistribution to random holders};
+
+\end{tikzpicture}
+\caption{Fee flow mechanism. Transaction fees are calculated using a progressive
+cluster factor (1x--6x based on coin ancestry). 80\% of fees are redistributed
+via verifiable lottery to 4 randomly selected UTXOs, while 20\% is permanently
+burned. This creates redistribution from active wealthy users to passive holders,
+with deflationary pressure proportional to network usage.}
+\label{fig:fee-flow}
+\end{figure}

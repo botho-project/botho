@@ -9,20 +9,20 @@
 
 \subsubsection{CryptoNote and Monero}
 
-The CryptoNote protocol introduced two foundational
+The CryptoNote protocol~\cite{cryptonote} introduced two foundational
 privacy techniques: \textit{stealth addresses} for recipient privacy and
-\textit{ring signatures} for sender privacy. Monero, the
+\textit{ring signatures}~\cite{rivest2001} for sender privacy. Monero~\cite{monero}, the
 most widely adopted CryptoNote implementation, has evolved significantly
 since its 2014 launch.
 
 Monero's current protocol uses:
 \begin{itemize}
-  \item \textbf{CLSAG ring signatures}: Concise Linkable
+  \item \textbf{CLSAG ring signatures}~\cite{clsag}: Concise Linkable
     Spontaneous Anonymous Group signatures, providing approximately 45\%
-    size reduction over the earlier MLSAG scheme.
-  \item \textbf{Pedersen commitments}: Amount hiding with additive
+    size reduction over the earlier MLSAG scheme~\cite{mlsag,mrl0005}.
+  \item \textbf{Pedersen commitments}~\cite{pedersen}: Amount hiding with additive
     homomorphism for value conservation verification.
-  \item \textbf{Bulletproofs}: Logarithmic-size range
+  \item \textbf{Bulletproofs}~\cite{bulletproofs}: Logarithmic-size range
     proofs ensuring committed amounts are non-negative.
   \item \textbf{ECDH stealth addresses}: One-time keys derived via
     elliptic curve Diffie-Hellman.
@@ -41,8 +41,8 @@ addresses:
 
 \subsubsection{Zcash}
 
-Zcash pioneered the use of zero-knowledge proofs
-(zk-SNARKs) for cryptocurrency privacy. Unlike ring
+Zcash~\cite{zcash} pioneered the use of zero-knowledge proofs
+(zk-SNARKs)~\cite{zksnark} for cryptocurrency privacy. Unlike ring
 signatures, which hide the sender among a set of decoys, zk-SNARKs
 prove transaction validity without revealing any transaction details.
 
@@ -61,26 +61,134 @@ Zcash's privacy model differs fundamentally from \Botho:
 and requiring no trusted setup---accepting the tradeoff of probabilistic
 rather than cryptographic anonymity.
 
+\subsubsection{Zcash Orchard}
+
+Zcash's Orchard protocol~\cite{orchard} represents the latest evolution of
+zk-SNARK-based privacy, deployed in 2022. Key innovations include:
+
+\begin{itemize}
+  \item \textbf{Halo 2 proof system}: Eliminates trusted setup via recursive
+    proof composition. Proofs verify in constant time regardless of circuit
+    complexity.
+  \item \textbf{Unified addresses}: Single address format supporting
+    transparent, Sapling, and Orchard funds, simplifying user experience.
+  \item \textbf{Pallas/Vesta curves}: Purpose-built curves enabling efficient
+    recursive proofs without pairing-based cryptography.
+  \item \textbf{Action-based model}: Transactions consist of ``actions'' that
+    can spend and create notes simultaneously, improving privacy analysis.
+\end{itemize}
+
+Despite these advances, Orchard maintains characteristics \Botho avoids:
+\begin{itemize}
+  \item \textbf{Optional shielding}: Transparent transactions remain possible
+    and common, fragmenting the anonymity set.
+  \item \textbf{Heavy computation}: Proof generation requires 2--5 seconds on
+    modern hardware, challenging for mobile devices.
+  \item \textbf{Classical cryptography}: Pallas/Vesta curves remain
+    vulnerable to Shor's algorithm.
+\end{itemize}
+
+\subsubsection{Firo (Lelantus Spark)}
+
+Firo (formerly Zcoin) introduced Lelantus Spark~\cite{spark} in 2023,
+combining Spark addresses with Lelantus-style one-out-of-many proofs:
+
+\begin{itemize}
+  \item \textbf{Spark addresses}: Diversified addresses with incoming view
+    key separation, similar to Monero's subaddresses but with additional
+    flexibility.
+  \item \textbf{One-out-of-many proofs}: Alternative to ring signatures
+    providing similar sender anonymity with different tradeoffs.
+  \item \textbf{No trusted setup}: Like ring signatures, Lelantus requires
+    no parameter ceremony.
+\end{itemize}
+
+Lelantus Spark offers comparable privacy to ring signatures with different
+performance characteristics. \Botho's choice of CLSAG reflects:
+\begin{itemize}
+  \item Extensive security analysis and real-world deployment (Monero)
+  \item Smaller proof sizes for typical transactions
+  \item Better understood cryptographic assumptions
+\end{itemize}
+
+\subsubsection{Secret Network}
+
+Secret Network~\cite{secretnetwork} takes a fundamentally different
+approach: privacy through trusted execution environments (TEEs):
+
+\begin{itemize}
+  \item \textbf{Intel SGX enclaves}: Computation occurs in hardware-isolated
+    regions; even node operators cannot observe transaction details.
+  \item \textbf{Secret contracts}: Programmable privacy with Turing-complete
+    smart contracts---a capability pure cryptographic approaches cannot
+    efficiently achieve.
+  \item \textbf{Fast execution}: No proof generation overhead; privacy adds
+    minimal latency.
+\end{itemize}
+
+The TEE approach involves different security assumptions:
+\begin{itemize}
+  \item \textbf{Hardware trust}: Security depends on Intel's implementation
+    and absence of hardware vulnerabilities.
+  \item \textbf{Side-channel attacks}: SGX has faced multiple side-channel
+    attacks (Spectre, Meltdown variants, etc.)~\cite{sgx-attacks}.
+  \item \textbf{Centralized manufacturing}: Hardware availability depends
+    on Intel's production and cooperation.
+\end{itemize}
+
+\Botho's purely cryptographic approach provides:
+\begin{itemize}
+  \item No hardware trust assumptions
+  \item Mathematically verifiable security properties
+  \item Resilience against physical side-channel attacks
+\end{itemize}
+
+\subsubsection{Aztec}
+
+Aztec~\cite{aztec} brings privacy to Ethereum through a zk-rollup Layer 2:
+
+\begin{itemize}
+  \item \textbf{Private L2}: Transactions are private within Aztec; only
+    validity proofs are posted to Ethereum.
+  \item \textbf{Composability}: Private smart contracts can interact with
+    Ethereum DeFi through controlled interfaces.
+  \item \textbf{PLONK proofs}: Uses efficient universal zkSNARKs with
+    updateable trusted setup.
+\end{itemize}
+
+Aztec's L2 approach offers interesting tradeoffs:
+\begin{itemize}
+  \item \textbf{Inherits L1 security}: Settlement finality comes from
+    Ethereum's consensus.
+  \item \textbf{Limited decentralization}: Sequencer sets remain somewhat
+    centralized during early development.
+  \item \textbf{Bridging friction}: Moving funds between L1 and L2 introduces
+    latency and potential vulnerabilities.
+\end{itemize}
+
+\Botho operates as an independent L1, avoiding bridge security concerns while
+sacrificing Ethereum composability.
+
 \subsubsection{MimbleWimble}
 
-MimbleWimble achieves privacy through transaction
-cut-through and kernel aggregation. Implementations include Grin and Beam.
+MimbleWimble~\cite{mimblewimble} achieves privacy through transaction
+cut-through and kernel aggregation. Implementations include Grin~\cite{grin} and Beam~\cite{beam}.
 
 Key limitations addressed by \Botho:
 \begin{itemize}
   \item \textbf{Interactive transactions}: MimbleWimble requires sender and
     recipient to exchange data, complicating user experience.
   \item \textbf{Linkability attacks}: Research has demonstrated significant
-    transaction graph leakage.
+    transaction graph leakage~\cite{mw-attack}.
 \end{itemize}
 
 \subsection{Post-Quantum Approaches}
 
 \subsubsection{Quantum Threat Model}
 
-Shor's algorithm enables quantum computers to solve the discrete
+Shor's algorithm~\cite{shor} enables quantum computers to solve the discrete
 logarithm and integer factorization problems in polynomial time, breaking
-ECDSA, ECDH, and related schemes. Grover's algorithm provides
+ECDSA, ECDH, and related schemes. Grover's algorithm~\cite{grover} provides
 quadratic speedup for symmetric key search, effectively halving security
 levels.
 
@@ -92,22 +200,75 @@ transactions.
 
 \subsubsection{Existing Post-Quantum Cryptocurrencies}
 
-\textbf{QRL (Quantum Resistant Ledger)} uses XMSS hash-based
+\textbf{QRL (Quantum Resistant Ledger)}~\cite{qrl} uses XMSS hash-based
 signatures. While quantum-resistant, XMSS is stateful---requiring careful
 key management to avoid catastrophic signature reuse.
 
 \textbf{IOTA} has explored Winternitz one-time signatures, facing similar
 statefulness challenges.
 
-Research proposals for post-quantum ring signatures
+Research proposals for post-quantum ring signatures~\cite{pq-ring-sig,pqringsurvey}
 exist but impose significant size overhead
 ($\sim$50$\times$ classical signatures).
 
+\subsubsection{Post-Quantum Ring Signature Research}
+
+The search for practical post-quantum ring signatures remains an active
+research area. Current approaches include:
+
+\textbf{Lattice-based constructions}~\cite{lattice-ring-sig}:
+\begin{itemize}
+  \item Based on Ring-LWE or Module-LWE problems
+  \item Signature sizes: 15--50 KB for ring size 16
+  \item Verification: $\sim$10--50 ms
+  \item Primary challenge: Size scales poorly with ring size
+\end{itemize}
+
+\textbf{Hash-based ring signatures}:
+\begin{itemize}
+  \item Rely only on hash function security (conservative assumption)
+  \item Even larger signatures than lattice approaches
+  \item Better understood security reductions
+\end{itemize}
+
+\textbf{Isogeny-based constructions}:
+\begin{itemize}
+  \item Based on supersingular isogeny problems
+  \item More compact than lattice approaches
+  \item Slower computation; SIDH attacks~\cite{sidh-attack} have reduced
+    confidence in isogeny hardness assumptions
+\end{itemize}
+
+\textbf{Comparison to \Botho's CLSAG}:
+\begin{center}
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+\textbf{Scheme} & \textbf{Ring 16} & \textbf{Ring 32} & \textbf{Quantum Safe} \\
+\midrule
+CLSAG & 704 B & 1,376 B & No \\
+Lattice Ring (typical) & 35 KB & 70 KB & Yes \\
+Hash-based Ring & 100+ KB & 200+ KB & Yes \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Timeline assessment}: Practical post-quantum ring signatures achieving
+sub-10 KB sizes for ring size 16 remain 5--10 years away based on current
+research trajectories. \Botho's hybrid architecture is designed to accommodate
+migration when such constructions mature, while providing immediate quantum
+resistance for permanent on-chain data (recipient identities).
+
+\textbf{Migration path}: \Botho's modular cryptographic design allows future
+protocol upgrades to replace CLSAG with post-quantum alternatives. The
+signature abstraction layer (Section~\ref{sec:implementation}) isolates ring
+signature specifics from transaction processing, enabling migration via soft
+fork when practical PQ ring signatures emerge.
+
 \subsubsection{Hybrid Approaches}
 
-NIST's post-quantum cryptography standardization produced
-ML-KEM (formerly Kyber) for key encapsulation and ML-DSA (formerly
-Dilithium) for signatures. These lattice-based schemes provide strong
+NIST's post-quantum cryptography standardization~\cite{nist-pqc} produced
+ML-KEM (formerly Kyber)~\cite{fips203,kyber} for key encapsulation and ML-DSA (formerly
+Dilithium)~\cite{fips204,dilithium} for signatures. These lattice-based schemes provide strong
 post-quantum security with reasonable performance.
 
 \Botho's hybrid approach applies these standards strategically:
@@ -127,7 +288,7 @@ maintaining practical transaction sizes.
 
 \subsubsection{Nakamoto Consensus}
 
-Bitcoin's Nakamoto consensus achieves agreement
+Bitcoin's Nakamoto consensus~\cite{nakamoto2008bitcoin} achieves agreement
 through proof-of-work and longest-chain selection. Its key properties:
 \begin{itemize}
   \item \textbf{Permissionless}: Anyone can participate by providing
@@ -141,8 +302,8 @@ through proof-of-work and longest-chain selection. Its key properties:
 
 \subsubsection{Classical BFT}
 
-Byzantine Fault Tolerant protocols like PBFT achieve
-deterministic finality with $3f+1$ nodes tolerating $f$ Byzantine failures.
+Byzantine Fault Tolerant protocols like PBFT~\cite{pbft} achieve
+deterministic finality with $3f+1$ nodes tolerating $f$ Byzantine failures~\cite{byzantine}.
 However, classical BFT requires:
 \begin{itemize}
   \item Known, fixed participant set
@@ -154,7 +315,7 @@ These requirements conflict with permissionless cryptocurrency design.
 
 \subsubsection{Stellar Consensus Protocol}
 
-SCP introduces \textit{federated Byzantine agreement}, achieving
+SCP~\cite{scp} introduces \textit{federated Byzantine agreement}, achieving
 BFT-like properties with open membership:
 \begin{itemize}
   \item \textbf{Quorum slices}: Each node declares which nodes it trusts.
@@ -184,7 +345,7 @@ security sustainability---a tradeoff \Botho embraces.
 
 \subsubsection{Demurrage}
 
-Demurrage currencies (Freigeld, Chiemgauer) impose holding costs through
+Demurrage currencies~\cite{gesell} (Freigeld, Chiemgauer) impose holding costs through
 time-based value decay. While economically interesting, cryptographic
 implementation is challenging and user experience suffers.
 

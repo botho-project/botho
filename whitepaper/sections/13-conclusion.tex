@@ -87,6 +87,120 @@ serve community rather than concentrate power. This manifests in:
     improved privacy-efficiency tradeoffs.
 \end{enumerate}
 
+\subsubsection{Interoperability Architecture}
+
+Cross-chain functionality requires careful design to preserve privacy.
+We outline preliminary approaches for future development.
+
+\textbf{Atomic Swaps}.
+Hash Time-Locked Contracts (HTLCs) enable trustless cross-chain exchange:
+
+\begin{enumerate}
+  \item Alice (BTH) and Bob (BTC) agree on exchange rate
+  \item Alice generates secret $s$, publishes $h = \Hash(s)$
+  \item Alice locks BTH in contract: ``Redeemable by Bob with preimage of $h$
+    before block $T$, else refundable to Alice after $T + \Delta$''
+  \item Bob locks BTC in mirrored contract on Bitcoin
+  \item Alice reveals $s$ to claim BTC
+  \item Bob uses $s$ to claim BTH
+\end{enumerate}
+
+\textbf{Privacy considerations}:
+\begin{itemize}
+  \item Hash $h$ links both transactions---correlation attack possible
+  \item Mitigation: Use adaptor signatures~\cite{adaptor-signatures} instead
+    of hash locks, eliminating on-chain correlation
+  \item Timing correlation remains; recommend delays between claim operations
+\end{itemize}
+
+\textbf{Protocol sketch} (adaptor signature variant):
+\begin{lstlisting}[caption={Privacy-preserving atomic swap}]
+// Setup: Alice has BTH, wants BTC from Bob
+Alice: Generate adaptor secret t, T = tG
+       Create BTH tx with adaptor signature sig_A(T)
+Bob:   Verify adaptor, create BTC tx with sig_B(T)
+Alice: Complete sig_A by revealing t
+Bob:   Extract t from completed sig_A
+       Complete sig_B to claim BTC
+// No hash appears on either chain
+\end{lstlisting}
+
+\textbf{Bridge Design}.
+Bridges enabling wrapped BTH on other chains face inherent tradeoffs:
+
+\begin{table}[h]
+\centering
+\caption{Bridge architecture comparison}
+\label{tab:bridge-comparison}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\textbf{Type} & \textbf{Trust} & \textbf{Privacy} & \textbf{Capital Efficiency} \\
+\midrule
+Custodial & High & Low & High \\
+Federated & Medium & Medium & High \\
+Optimistic & Low & Medium & Medium \\
+ZK Light Client & Minimal & High & Medium \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Recommended architecture}: ZK light client bridge
+\begin{itemize}
+  \item Target chain verifies BTH header proofs (SCP finality)
+  \item Deposits create locked UTXOs with verifiable commitments
+  \item ZK proof attests to valid lock without revealing details
+  \item Withdrawals require ZK proof of burn on target chain
+\end{itemize}
+
+\textbf{DEX Integration}.
+Decentralized exchange on \Botho faces challenges:
+
+\begin{itemize}
+  \item \textbf{Order book privacy}: Orders reveal trading intent
+    \begin{itemize}
+      \item Solution: Encrypted order book with threshold decryption
+      \item Alternative: AMM-style pools (simpler but less efficient)
+    \end{itemize}
+  \item \textbf{Settlement privacy}: Matched trades reveal amounts
+    \begin{itemize}
+      \item Solution: Batch settlement with commitment aggregation
+      \item Users prove trade validity without revealing specific amounts
+    \end{itemize}
+  \item \textbf{Front-running resistance}: SCP finality helps but mempool
+    remains visible during PoW phase
+    \begin{itemize}
+      \item Solution: Encrypted mempool with threshold reveal
+      \item Requires additional infrastructure investment
+    \end{itemize}
+\end{itemize}
+
+\textbf{AMM Implementation Sketch}:
+\begin{lstlisting}[caption={Privacy-preserving AMM concept}]
+Pool {
+    reserve_commitment: Commitment,  // C = r_A*H + r_B*G
+    k_commitment: Commitment,        // x*y = k hidden
+}
+
+Swap {
+    input_commitment: Commitment,
+    output_commitment: Commitment,
+    // ZK proof: new reserves satisfy constant product
+    // ZK proof: amounts are non-negative
+    // ZK proof: fee correctly calculated
+}
+\end{lstlisting}
+
+\textbf{Research challenges}:
+\begin{enumerate}
+  \item Efficient ZK proofs for constant product verification
+  \item Privacy-preserving price oracle mechanisms
+  \item MEV resistance in decentralized setting
+  \item Liquidity provider privacy (shares reveal exposure)
+\end{enumerate}
+
+These interoperability mechanisms remain active research areas. We expect
+community contributions to refine and implement practical solutions.
+
 \subsection{Broader Impact}
 
 \subsubsection{Privacy as Human Right}

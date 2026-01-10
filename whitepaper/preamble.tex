@@ -26,9 +26,20 @@
 % Graphics
 \usepackage{graphicx}
 
+% TikZ for diagrams
+\usepackage{tikz}
+\usetikzlibrary{shapes,arrows,positioning,calc,fit,backgrounds,decorations.pathreplacing}
+
+% Colors (needed before hyperref)
+\usepackage{xcolor}
+
 % Hyperlinks
 \usepackage{hyperref}
-\hypersetup{colorlinks=true,linkcolor=blue,citecolor=purple,urlcolor=blue}
+\hypersetup{colorlinks=true,linkcolor=blue,citecolor=violet,urlcolor=blue}
+
+% Bibliography
+\usepackage[numbers,sort&compress]{natbib}
+\bibliographystyle{plainnat}
 
 % ============================================================================
 % Custom Commands - Notation

@@ -5,9 +5,15 @@ MAIN = botho-whitepaper
 SECTIONS = $(wildcard sections/*.tex)
 BIB = refs.bib
 
-.PHONY: all clean distclean view
+.PHONY: all clean distclean view summary
 
 all: $(MAIN).pdf
+
+# Build executive summary
+summary: botho-executive-summary.pdf
+
+botho-executive-summary.pdf: botho-executive-summary.tex
+	pdflatex botho-executive-summary
 
 $(MAIN).pdf: $(MAIN).tex preamble.tex $(SECTIONS) $(BIB)
 	pdflatex $(MAIN)

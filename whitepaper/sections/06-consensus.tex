@@ -52,10 +52,12 @@ Byzantine fault tolerance & --- & \checkmark \\
 \end{tabular}
 \end{center}
 
+\input{figures/consensus-flow}
+
 \subsection{Stellar Consensus Protocol}
 \label{sec:scp}
 
-SCP achieves Byzantine agreement with open membership through
+SCP~\cite{scp} achieves Byzantine agreement with open membership through
 \textit{federated Byzantine agreement} (FBA).
 
 \subsubsection{Quorum Slices}
@@ -119,6 +121,8 @@ QuorumSlice {
 
 This requires agreement from 3 of 4 infrastructure nodes AND 2 of 3
 community validators, ensuring both stability and decentralization.
+
+\input{figures/quorum-slices}
 
 \subsection{Consensus Phases}
 
@@ -254,17 +258,104 @@ Unlike pure PoW where the longest chain wins, \Botho's SCP finalization
 makes forks impossible for externalized blocks:
 
 \begin{theorem}[Fork Freedom]
+\label{thm:fork-freedom}
 If the network has quorum intersection and the Byzantine threshold is
 not exceeded, no two honest nodes can externalize different blocks at
 the same height.
 \end{theorem}
 
-\begin{proof}[Proof sketch]
-Suppose nodes $A$ and $B$ externalize different blocks $b_A \neq b_B$ at
-height $h$. Externalization requires a quorum $Q_A$ agreeing on $b_A$ and
-$Q_B$ agreeing on $b_B$. By quorum intersection, $Q_A \cap Q_B \neq \emptyset$.
-Any honest node in the intersection would have voted for both values,
-violating the ballot protocol's safety invariant.
+\begin{proof}
+We prove by contradiction, following the structure of Mazières'
+SCP safety proof~\cite{scp}.
+
+\textbf{Definitions}. Let:
+\begin{itemize}
+  \item $V$ denote the set of all nodes
+  \item $Q: V \to 2^{2^V}$ denote the quorum slice function
+  \item $\mathcal{Q} \subseteq 2^V$ denote the set of all quorums
+  \item $\text{ext}_v(s)$ denote node $v$'s externalized value for slot $s$
+  \item $\mathcal{B} \subset V$ denote Byzantine nodes, $|\mathcal{B}| \leq f$
+\end{itemize}
+
+\textbf{Quorum intersection property}. By assumption:
+\[
+\forall Q_1, Q_2 \in \mathcal{Q}: (Q_1 \setminus \mathcal{B}) \cap (Q_2 \setminus \mathcal{B}) \neq \emptyset
+\]
+That is, any two quorums share at least one honest node.
+
+\textbf{Ballot protocol invariant}. The SCP ballot protocol maintains
+the following invariant for each slot $s$:
+
+\begin{quote}
+\emph{Commit Exclusivity}: If honest node $v$ commits ballot $(n, x)$
+for slot $s$, then no honest node commits ballot $(n', x')$ for the
+same slot with $x' \neq x$ and $n' \leq n$.
+\end{quote}
+
+This invariant is established through the prepare phase: a node only
+commits $(n, x)$ after confirming that no lower ballot with a different
+value can be committed~\cite{scp}.
+
+\textbf{Contradiction argument}. Suppose, for contradiction, that honest
+nodes $A$ and $B$ externalize different values for slot $s$ (corresponding
+to block height $h$):
+\[
+\text{ext}_A(s) = b_A \neq b_B = \text{ext}_B(s)
+\]
+
+Externalization requires commitment. Let:
+\begin{itemize}
+  \item $A$ commit ballot $(n_A, b_A)$ with quorum $Q_A \in \mathcal{Q}$
+  \item $B$ commit ballot $(n_B, b_B)$ with quorum $Q_B \in \mathcal{Q}$
+\end{itemize}
+
+Without loss of generality, assume $n_A \leq n_B$.
+
+By quorum intersection, there exists honest node $C \in (Q_A \setminus \mathcal{B}) \cap (Q_B \setminus \mathcal{B})$.
+
+Node $C$ participated in both quorums. For $C$ to be in $Q_A$, $C$ must
+have voted to commit $(n_A, b_A)$. For $C$ to be in $Q_B$, $C$ must have
+voted to commit $(n_B, b_B)$.
+
+\textbf{Case 1}: $n_A = n_B$. Node $C$ voted to commit $(n_A, b_A)$ and
+$(n_A, b_B)$ with $b_A \neq b_B$. This violates the ballot protocol rule
+that honest nodes vote for at most one value per ballot number.
+$\Rightarrow$ Contradiction.
+
+\textbf{Case 2}: $n_A < n_B$. For $C$ to vote commit on $(n_B, b_B)$, $C$
+must first confirm that no ballot $\leq n_B$ with value $\neq b_B$ is
+committed. But $C$ voted to commit $(n_A, b_A)$ with $n_A < n_B$ and
+$b_A \neq b_B$. This violates the prepare-before-commit requirement.
+$\Rightarrow$ Contradiction.
+
+Both cases yield contradictions. Therefore, our assumption is false,
+and no two honest nodes can externalize different values for the same slot.
+
+\textbf{Mapping to block heights}. Each consensus slot corresponds to
+exactly one block height. Externalized value = finalized block hash.
+Fork freedom at the consensus layer implies fork freedom in the blockchain.
+
+\textbf{Relationship to PoW}. Multiple PoW blocks may be proposed for the
+same slot. SCP nomination deterministically selects one candidate before
+the ballot protocol begins. The proof above shows the selected candidate
+is agreed upon by all honest nodes.
+\end{proof}
+
+\begin{corollary}[Finality Irreversibility]
+Once a block is externalized at height $h$, no reorganization can replace
+it without violating quorum intersection or corrupting $> f$ nodes.
+\end{corollary}
+
+\begin{proof}
+Reversing externalization at height $h$ requires externalizing a different
+block $b'$ for the same slot. By Theorem~\ref{thm:fork-freedom}, this is
+impossible under the stated assumptions. An attacker must either:
+\begin{enumerate}
+  \item Corrupt enough nodes to break quorum intersection, or
+  \item Corrupt $> f$ nodes to violate the Byzantine threshold
+\end{enumerate}
+Both require compromising the network's trust assumptions, not merely
+accumulating hashpower (unlike pure PoW).
 \end{proof}
 
 \textbf{Handling pre-finalization forks}: Multiple PoW proposals may arrive
@@ -274,6 +365,8 @@ before SCP converges. The nomination phase selects a unique winner based on:
   \item Tie-breaking by lowest block hash
   \item Quorum agreement determines final selection
 \end{enumerate}
+
+\input{figures/fork-prevention}
 
 \subsection{Timing Analysis}
 
@@ -359,4 +452,125 @@ Energy efficiency & Medium & Low & High \\
 \bottomrule
 \end{tabular}
 \end{table}
+
+\subsection{Mining Pool Considerations}
+\label{sec:mining-pools}
+
+Mining pools aggregate hashpower from multiple miners, distributing rewards
+proportionally. \Botho's hybrid consensus requires adaptations to traditional
+pooling protocols.
+
+\subsubsection{Pool Protocol Compatibility}
+
+Standard Stratum-style protocols require modification for PoW+SCP:
+
+\begin{lstlisting}[caption={Modified pool work assignment}]
+PoolWorkAssignment {
+    // Standard PoW fields
+    job_id: u64,
+    prev_hash: Hash,
+    coinbase_template: Vec<u8>,
+    merkle_branches: Vec<Hash>,
+    target: Difficulty,
+
+    // Botho-specific: SCP context
+    slot_index: u64,
+    quorum_set_hash: Hash,
+    nomination_deadline: Timestamp,
+}
+\end{lstlisting}
+
+\textbf{Key difference}: Pools must track SCP slot progress and coordinate
+work assignments with nomination deadlines. Stale work (missed nomination)
+produces no reward even if PoW is valid.
+
+\subsubsection{Block Reward Attribution}
+
+Minting transactions in \Botho include the minter's public key, creating
+challenges for pool reward distribution:
+
+\begin{itemize}
+  \item \textbf{Pool-controlled keys}: Pool creates minting transaction,
+    distributes rewards via separate payment transactions
+  \item \textbf{Pay-per-share (PPS)}: Pool pays from reserve for valid shares,
+    assumes variance
+  \item \textbf{Proportional (PROP)}: Miners receive proportion of actual
+    block rewards found
+\end{itemize}
+
+\textbf{Cluster tag implications}: Pool-minted coins carry the pool's cluster
+tag. Miners receiving payouts inherit blended tags from the pool's operations.
+
+\subsubsection{SCP Participation}
+
+Pools face a choice in SCP participation:
+
+\begin{enumerate}
+  \item \textbf{Pool as SCP node}: Pool runs consensus, coordinates with
+    quorum. Requires high uptime and expertise.
+  \item \textbf{Delegate SCP}: Pool submits valid blocks to SCP-participating
+    nodes for finalization. Simpler but adds trust.
+\end{enumerate}
+
+Most pools will likely delegate SCP participation to infrastructure nodes
+while focusing on PoW coordination.
+
+\subsubsection{Pool Centralization Risks}
+
+Pooled mining creates centralization pressure:
+
+\begin{itemize}
+  \item \textbf{Hash rate concentration}: Large pools may approach majority
+    hashpower
+  \item \textbf{Censorship capability}: Pools could refuse to include certain
+    transactions
+  \item \textbf{Network attacks}: Colluding pools could attempt consensus
+    manipulation
+\end{itemize}
+
+\textbf{Mitigations}:
+\begin{itemize}
+  \item SCP finality requires quorum agreement beyond PoW majority
+  \item Transparent pool policies and open-source implementations encouraged
+  \item Economic incentives favor decentralization (smaller pools have
+    lower variance for participants)
+\end{itemize}
+
+\subsubsection{Solo Mining Viability}
+
+Solo mining remains viable under certain conditions:
+
+\begin{table}[h]
+\centering
+\caption{Solo vs. pool mining trade-offs}
+\label{tab:solo-pool}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\textbf{Factor} & \textbf{Solo} & \textbf{Pool} \\
+\midrule
+Variance & Very high & Low \\
+Cluster purity & 100\% own cluster & Blended with pool \\
+Privacy & Maximum & Pool sees hashrate \\
+Minimum hashrate & $\sim$1\% network & Any \\
+Technical complexity & Higher & Lower \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Recommendation}: Users prioritizing cluster tag purity (to minimize
+progressive fees) should consider solo mining despite higher variance.
+
+\subsubsection{Decentralized Pool Alternatives}
+
+P2Pool-style decentralized pools offer middle ground:
+
+\begin{itemize}
+  \item \textbf{Share chain}: Miners build separate share chain proving work
+  \item \textbf{Trustless payouts}: Block rewards distributed automatically
+    based on share chain
+  \item \textbf{No central operator}: Removes single point of failure/censorship
+\end{itemize}
+
+\textbf{Botho adaptation}: P2Pool would need SCP integration for share chain
+finalization. Research and development ongoing.
 

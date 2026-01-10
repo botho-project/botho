@@ -1,0 +1,97 @@
+% Confidential Transaction Structure Diagram
+% Shows Pedersen commitments, value conservation, and range proofs
+%
+% ACCESSIBILITY ALT TEXT:
+% A diagram showing how transaction amounts are hidden using Pedersen
+% commitments. Input commitments C_in (left boxes) contain hidden values
+% v with blinding factors r. Output commitments C_out (right boxes)
+% contain new hidden values. The equation shows that sum of inputs equals
+% sum of outputs plus fee, verified without revealing actual amounts.
+% Range proofs (Bulletproofs) attached below prove all values are positive.
+
+\begin{figure}[ht]
+\centering
+\begin{tikzpicture}[
+    box/.style={draw, rectangle, minimum width=2cm, minimum height=0.8cm, font=\scriptsize},
+    commit/.style={draw, rectangle, rounded corners, fill=blue!10, minimum width=1.5cm, minimum height=0.6cm, font=\scriptsize},
+    proof/.style={draw, rectangle, rounded corners, fill=green!10, minimum width=1.5cm, minimum height=0.6cm, font=\scriptsize},
+    arrow/.style={->, >=stealth, thick}
+]
+    % Title
+    \node[font=\small\bfseries] at (0,4.5) {Value Conservation with Hidden Amounts};
+
+    % Inputs section
+    \node[font=\scriptsize\bfseries] at (-4,3.5) {Inputs};
+
+    % Input 1
+    \node[commit] (cin1) at (-4,2.5) {$C_{in}^{(1)}$};
+    \node[font=\tiny, below=0.1cm of cin1] {$v_1 H + r_1 G$};
+
+    % Input 2
+    \node[commit] (cin2) at (-4,1.2) {$C_{in}^{(2)}$};
+    \node[font=\tiny, below=0.1cm of cin2] {$v_2 H + r_2 G$};
+
+    % Plus sign
+    \node at (-4,1.85) {$+$};
+
+    % Outputs section
+    \node[font=\scriptsize\bfseries] at (4,3.5) {Outputs};
+
+    % Output 1
+    \node[commit] (cout1) at (4,2.5) {$C_{out}^{(1)}$};
+    \node[font=\tiny, below=0.1cm of cout1] {$v'_1 H + r'_1 G$};
+
+    % Output 2
+    \node[commit] (cout2) at (4,1.2) {$C_{out}^{(2)}$};
+    \node[font=\tiny, below=0.1cm of cout2] {$v'_2 H + r'_2 G$};
+
+    % Plus sign
+    \node at (4,1.85) {$+$};
+
+    % Fee
+    \node[draw, rectangle, fill=orange!15, minimum width=1.5cm, minimum height=0.6cm, font=\scriptsize] (fee) at (4,-0.1) {Fee: $f \cdot H$};
+    \node at (4,0.55) {$+$};
+
+    % Conservation equation box
+    \node[draw, rectangle, rounded corners, fill=gray!10, minimum width=6cm, minimum height=1cm, font=\small] (eq) at (0,-1.5) {
+        $\displaystyle\sum_i C_{in}^{(i)} = \sum_j C_{out}^{(j)} + f \cdot H$
+    };
+
+    % Arrows showing flow
+    \draw[arrow, blue!60] (-2.5,2) -- (-1,2) -- (-1,-1) -- (-2.5,-1.5);
+    \draw[arrow, blue!60] (2.5,1.5) -- (1,1.5) -- (1,-1) -- (2.5,-1.5);
+
+    % Range proofs
+    \node[font=\scriptsize\bfseries] at (0,-3) {Range Proofs (Bulletproofs)};
+
+    \node[proof] (rp1) at (-2,-3.8) {$\pi_1$};
+    \node[font=\tiny, below=0.1cm of rp1] {$v'_1 \in [0, 2^{64})$};
+
+    \node[proof] (rp2) at (2,-3.8) {$\pi_2$};
+    \node[font=\tiny, below=0.1cm of rp2] {$v'_2 \in [0, 2^{64})$};
+
+    % Arrows from outputs to range proofs
+    \draw[arrow, green!60, dashed] (cout1) -- (4,-2.5) -- (2,-2.5) -- (rp2);
+    \draw[arrow, green!60, dashed] (cout2) -- (4,-3) -- (2,-3.2);
+
+    % Key insight box
+    \node[draw, rectangle, rounded corners, fill=yellow!10, minimum width=7cm, font=\tiny, align=center] at (0,-5.2) {
+        \textbf{Key Properties:}\\
+        Validators verify $\sum C_{in} = \sum C_{out} + fH$ without learning $v_i$\\
+        Range proofs prevent negative amounts (no coin creation)
+    };
+
+    % Legend
+    \node[commit, minimum width=0.8cm] at (-4.5,-5.2) {};
+    \node[font=\tiny, right] at (-3.8,-5.2) {Pedersen Commitment};
+    \node[proof, minimum width=0.8cm] at (1,-5.2) {};
+    \node[font=\tiny, right] at (1.7,-5.2) {Range Proof};
+
+\end{tikzpicture}
+\caption{Confidential transaction structure. Input and output values are hidden
+in Pedersen commitments ($C = vH + rG$). Value conservation is verified via
+commitment arithmetic: the sum of input commitments must equal output commitments
+plus the public fee. Bulletproof range proofs ensure all output amounts are
+non-negative, preventing coin creation through overflow attacks.}
+\label{fig:confidential-tx}
+\end{figure}

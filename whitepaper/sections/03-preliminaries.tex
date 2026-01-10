@@ -77,8 +77,8 @@ $\|\mathbf{x}\| \leq \beta$ for bound $\beta$.
 
 \subsubsection{Elliptic Curve Group}
 
-\Botho uses the Ristretto255 group, a prime-order group
-constructed from Curve25519. Ristretto eliminates cofactor-related
+\Botho uses the Ristretto255 group~\cite{ristretto}, a prime-order group
+constructed from Curve25519~\cite{curve25519}. Ristretto eliminates cofactor-related
 complexities, providing a clean abstraction with:
 \begin{itemize}
   \item Prime order $q = 2^{252} + 27742317777372353535851937790883648493$
@@ -88,7 +88,7 @@ complexities, providing a clean abstraction with:
 
 \subsubsection{Pedersen Commitments}
 
-A Pedersen commitment to value $v$ with blinding factor
+A Pedersen commitment~\cite{pedersen} to value $v$ with blinding factor
 $r$ is:
 \begin{equation}
 C = vH + rG
@@ -113,7 +113,7 @@ equal outputs plus fee, without revealing individual amounts.
 
 \subsubsection{Bulletproofs}
 
-Bulletproofs provide zero-knowledge range proofs with
+Bulletproofs~\cite{bulletproofs} provide zero-knowledge range proofs with
 logarithmic size. For a commitment $C = vH + rG$, a Bulletproof proves:
 \begin{equation}
 v \in [0, 2^{64})
@@ -128,7 +128,7 @@ outputs has proof size $O(\log m)$.
 
 \subsubsection{ML-KEM-768}
 
-ML-KEM (Module-Lattice-based Key-Encapsulation Mechanism),
+ML-KEM (Module-Lattice-based Key-Encapsulation Mechanism)~\cite{fips203,kyber},
 formerly known as Kyber, is a NIST-standardized post-quantum key
 encapsulation mechanism.
 
@@ -148,7 +148,7 @@ attacks, with:
 
 \subsubsection{ML-DSA-65}
 
-ML-DSA (Module-Lattice-based Digital Signature Algorithm),
+ML-DSA (Module-Lattice-based Digital Signature Algorithm)~\cite{fips204,dilithium},
 formerly known as Dilithium, is a NIST-standardized post-quantum signature
 scheme.
 

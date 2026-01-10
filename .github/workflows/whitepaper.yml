@@ -1,0 +1,59 @@
+name: Build Whitepaper PDF
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'whitepaper/**'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'whitepaper/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install TeX Live
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y texlive-latex-base texlive-latex-extra texlive-fonts-recommended texlive-science texlive-bibtex-extra biber
+
+      - name: Build PDF
+        working-directory: whitepaper
+        run: |
+          # Build with multiple passes for references
+          pdflatex -interaction=nonstopmode botho-whitepaper.tex || true
+          bibtex botho-whitepaper || true
+          pdflatex -interaction=nonstopmode botho-whitepaper.tex || true
+          pdflatex -interaction=nonstopmode botho-whitepaper.tex
+
+      - name: Check PDF was created
+        working-directory: whitepaper
+        run: |
+          if [ ! -f "botho-whitepaper.pdf" ]; then
+            echo "ERROR: PDF was not generated"
+            exit 1
+          fi
+          echo "PDF generated successfully"
+          ls -la botho-whitepaper.pdf
+
+      - name: Upload PDF artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: botho-whitepaper
+          path: whitepaper/botho-whitepaper.pdf
+          retention-days: 30
+
+      - name: Upload PDF to release (on main push)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: botho-whitepaper-latest
+          path: whitepaper/botho-whitepaper.pdf
+          retention-days: 90

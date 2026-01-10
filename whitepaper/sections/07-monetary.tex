@@ -42,6 +42,8 @@ where:
 
 This creates continuous, gradual reduction rather than discrete shocks.
 
+\input{figures/emission-curve}
+
 \subsubsection{Tail Emission}
 
 Once block rewards decay below a threshold, perpetual tail emission begins:
@@ -78,6 +80,8 @@ At 5-second blocks (12 blocks per minute), this produces:
 \textbf{Note}: Tail emission inflation is asymptotically declining---while
 nominal emission is constant, the percentage decreases as supply grows.
 After 50 years, annual inflation is approximately 2.1\%.
+
+\input{figures/supply-projection}
 
 \subsection{Dynamic Block Timing}
 \label{sec:dynamic-timing}
@@ -124,6 +128,8 @@ Maximum demand & 100\% & 5s \\
 \bottomrule
 \end{tabular}
 \end{table}
+
+\input{figures/dynamic-timing}
 
 \subsubsection{Economic Implications}
 
@@ -214,6 +220,8 @@ This creates:
   \item \textbf{Anti-MEV}: No miner incentive to reorder transactions
   \item \textbf{Alignment}: Miner income comes from block rewards only
 \end{itemize}
+
+\input{figures/fee-flow}
 
 \subsubsection{Lottery Mechanism}
 
@@ -312,8 +320,8 @@ This ranges from 236K BTH (idle) to 1.89M BTH (maximum utilization) annually.
 
 \begin{table}[h]
 \centering
-\caption{Security model comparison}
-\label{tab:security-comparison}
+\caption{Security model comparison: fixed supply vs. tail emission}
+\label{tab:supply-security-comparison}
 \begin{tabular}{@{}lcc@{}}
 \toprule
 \textbf{Aspect} & \textbf{Fixed Supply} & \textbf{Tail Emission} \\

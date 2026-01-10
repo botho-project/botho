@@ -205,3 +205,505 @@
   year={1948},
   note={Article 12}
 }
+
+% ============================================================================
+% ADDITIONAL REFERENCES - Extended Bibliography
+% ============================================================================
+
+% Ring Signatures - Foundational
+@article{rivest2001,
+  title={How to Leak a Secret},
+  author={Rivest, Ronald L. and Shamir, Adi and Tauman, Yael},
+  journal={Advances in Cryptology --- ASIACRYPT 2001},
+  pages={552--565},
+  year={2001},
+  doi={10.1007/3-540-45682-1_32},
+  note={Original ring signature construction}
+}
+
+@inproceedings{fujisaki2007,
+  title={Traceable Ring Signature},
+  author={Fujisaki, Eiichiro and Suzuki, Koutarou},
+  booktitle={Public Key Cryptography -- PKC 2007},
+  pages={181--200},
+  year={2007},
+  doi={10.1007/978-3-540-71677-8_13},
+  note={Introduces linkable/traceable ring signatures}
+}
+
+% Monero Research Lab Papers
+@misc{mrl0005,
+  title={Ring Confidential Transactions},
+  author={Noether, Shen and Mackenzie, Adam and {Monero Research Lab}},
+  year={2016},
+  howpublished={Monero Research Lab Report MRL-0005},
+  url={https://lab.getmonero.org/pubs/MRL-0005.pdf},
+  note={Introduces RingCT combining ring signatures with confidential transactions}
+}
+
+@misc{mlsag,
+  title={Ring Signature Confidential Transactions for Monero},
+  author={Noether, Shen},
+  year={2015},
+  howpublished={Cryptology ePrint Archive},
+  url={https://eprint.iacr.org/2015/1098},
+  note={MLSAG ring signatures for multiple inputs}
+}
+
+% Post-Quantum - Extended
+@inproceedings{kyber,
+  title={{CRYSTALS} -- {Kyber}: A {CCA}-Secure Module-Lattice-Based {KEM}},
+  author={Bos, Joppe and Ducas, L{\'e}o and Kiltz, Eike and Lepoint, Tancr{\`e}de and Lyubashevsky, Vadim and Schanck, John M. and Schwabe, Peter and Seiler, Gregor and Stehl{\'e}, Damien},
+  booktitle={2018 IEEE European Symposium on Security and Privacy (EuroS\&P)},
+  pages={353--367},
+  year={2018},
+  doi={10.1109/EuroSP.2018.00032}
+}
+
+@inproceedings{dilithium,
+  title={{CRYSTALS-Dilithium}: A Lattice-Based Digital Signature Scheme},
+  author={Ducas, L{\'e}o and Kiltz, Eike and Lepoint, Tancr{\`e}de and Lyubashevsky, Vadim and Schwabe, Peter and Seiler, Gregor and Stehl{\'e}, Damien},
+  booktitle={IACR Transactions on Cryptographic Hardware and Embedded Systems},
+  volume={2018},
+  number={1},
+  pages={238--268},
+  year={2018},
+  doi={10.13154/tches.v2018.i1.238-268}
+}
+
+@inproceedings{regev2009,
+  title={On Lattices, Learning with Errors, Random Linear Codes, and Cryptography},
+  author={Regev, Oded},
+  booktitle={Journal of the ACM},
+  volume={56},
+  number={6},
+  year={2009},
+  doi={10.1145/1568318.1568324},
+  note={Foundational LWE hardness results}
+}
+
+@misc{pqringsurvey,
+  title={Lattice-Based Ring Signatures: A Survey},
+  author={Esgin, Muhammed F. and Steinfeld, Ron and Liu, Joseph K. and Liu, Dongxi},
+  year={2019},
+  howpublished={Cryptology ePrint Archive},
+  url={https://eprint.iacr.org/2019/1167},
+  note={Survey of post-quantum ring signature constructions}
+}
+
+% Consensus - Extended
+@inproceedings{tendermint,
+  title={Tendermint: Consensus without Mining},
+  author={Kwon, Jae},
+  booktitle={Tendermint Whitepaper},
+  year={2014},
+  url={https://tendermint.com/static/docs/tendermint.pdf},
+  note={BFT consensus for proof-of-stake}
+}
+
+@inproceedings{casper,
+  title={Casper the Friendly Finality Gadget},
+  author={Buterin, Vitalik and Griffith, Virgil},
+  booktitle={arXiv preprint},
+  year={2017},
+  url={https://arxiv.org/abs/1710.09437},
+  note={Proof-of-stake finality for Ethereum}
+}
+
+@article{byzantine,
+  title={The {Byzantine} Generals Problem},
+  author={Lamport, Leslie and Shostak, Robert and Pease, Marshall},
+  journal={ACM Transactions on Programming Languages and Systems},
+  volume={4},
+  number={3},
+  pages={382--401},
+  year={1982},
+  doi={10.1145/357172.357176}
+}
+
+% Cryptographic Primitives - Extended
+@inproceedings{curve25519,
+  title={Curve25519: New {Diffie-Hellman} Speed Records},
+  author={Bernstein, Daniel J.},
+  booktitle={Public Key Cryptography -- PKC 2006},
+  pages={207--228},
+  year={2006},
+  doi={10.1007/11745853_14}
+}
+
+@misc{confidential-tx,
+  title={Confidential Transactions},
+  author={Maxwell, Gregory},
+  year={2016},
+  url={https://elementsproject.org/features/confidential-transactions},
+  note={Hidden amounts using Pedersen commitments}
+}
+
+@inproceedings{fiatshamir,
+  title={How To Prove Yourself: Practical Solutions to Identification and Signature Problems},
+  author={Fiat, Amos and Shamir, Adi},
+  booktitle={Advances in Cryptology --- CRYPTO' 86},
+  pages={186--194},
+  year={1986},
+  doi={10.1007/3-540-47721-7_12},
+  note={Interactive to non-interactive proof transformation}
+}
+
+@inproceedings{schnorr,
+  title={Efficient Identification and Signatures for Smart Cards},
+  author={Schnorr, Claus-Peter},
+  booktitle={Advances in Cryptology --- CRYPTO' 89},
+  pages={239--252},
+  year={1989},
+  doi={10.1007/0-387-34805-0_22}
+}
+
+% Key Derivation - Extended
+@misc{bip32,
+  title={{BIP-0032}: Hierarchical Deterministic Wallets},
+  author={Wuille, Pieter},
+  year={2012},
+  howpublished={Bitcoin Improvement Proposal},
+  url={https://github.com/bitcoin/bips/blob/master/bip-0032.mediawiki}
+}
+
+@misc{bip44,
+  title={{BIP-0044}: Multi-Account Hierarchy for Deterministic Wallets},
+  author={Palatinus, Marek and Rusnak, Pavol},
+  year={2014},
+  howpublished={Bitcoin Improvement Proposal},
+  url={https://github.com/bitcoin/bips/blob/master/bip-0044.mediawiki}
+}
+
+@techreport{rfc5869,
+  title={{HMAC}-based Extract-and-Expand Key Derivation Function ({HKDF})},
+  author={Krawczyk, Hugo and Eronen, Pasi},
+  institution={IETF},
+  year={2010},
+  number={RFC 5869},
+  url={https://www.rfc-editor.org/rfc/rfc5869}
+}
+
+% Hash Functions
+@techreport{sha3,
+  title={{SHA-3} Standard: Permutation-Based Hash and Extendable-Output Functions},
+  author={{National Institute of Standards and Technology}},
+  institution={NIST},
+  year={2015},
+  number={FIPS 202},
+  url={https://csrc.nist.gov/pubs/fips/202/final}
+}
+
+@misc{blake3,
+  title={{BLAKE3}: One function, fast everywhere},
+  author={O'Connor, Jack and Aumasson, Jean-Philippe and Neves, Samuel and Wilcox-O'Hearn, Zooko},
+  year={2020},
+  howpublished={Specification},
+  url={https://github.com/BLAKE3-team/BLAKE3-specs}
+}
+
+@inproceedings{siphash,
+  title={{SipHash}: A Fast Short-Input {PRF}},
+  author={Aumasson, Jean-Philippe and Bernstein, Daniel J.},
+  booktitle={Progress in Cryptology -- INDOCRYPT 2012},
+  pages={489--508},
+  year={2012},
+  doi={10.1007/978-3-642-34931-7_28}
+}
+
+% Network Protocols - Extended
+@misc{libp2p,
+  title={libp2p: A Modular Network Stack},
+  author={{Protocol Labs}},
+  year={2019},
+  howpublished={Open-source project},
+  url={https://libp2p.io},
+  note={Peer-to-peer networking library}
+}
+
+@misc{compactblocks,
+  title={{BIP-0152}: Compact Block Relay},
+  author={Corallo, Matt},
+  year={2016},
+  howpublished={Bitcoin Improvement Proposal},
+  url={https://github.com/bitcoin/bips/blob/master/bip-0152.mediawiki},
+  note={Bandwidth-efficient block propagation}
+}
+
+% Economics
+@article{budish2022,
+  title={The Economic Limits of Bitcoin and Anonymous, Decentralized Trust on the Blockchain},
+  author={Budish, Eric},
+  journal={Journal of Political Economy},
+  year={2022},
+  note={Economic analysis of PoW security}
+}
+
+@article{huberman2021,
+  title={Monopoly Without a Monopolist: An Economic Analysis of the Bitcoin Payment System},
+  author={Huberman, Gur and Leshno, Jacob D. and Moallemi, Ciamac},
+  journal={The Review of Economic Studies},
+  volume={88},
+  number={6},
+  pages={3011--3040},
+  year={2021},
+  doi={10.1093/restud/rdab014}
+}
+
+@misc{eip1559,
+  title={{EIP-1559}: Fee Market Change for {ETH} 1.0 Chain},
+  author={Buterin, Vitalik and others},
+  year={2019},
+  howpublished={Ethereum Improvement Proposal},
+  url={https://eips.ethereum.org/EIPS/eip-1559},
+  note={Fee burning mechanism for Ethereum}
+}
+
+@book{gesell,
+  title={The Natural Economic Order},
+  author={Gesell, Silvio},
+  year={1958},
+  publisher={Peter Owen Ltd},
+  note={Historical demurrage currency theory (originally 1916)}
+}
+
+% Comparison Systems - Extended
+@misc{orchard,
+  title={{ZIP} 224: Orchard Shielded Protocol},
+  author={Hopwood, Daira and Bowe, Sean and others},
+  year={2021},
+  howpublished={Zcash Improvement Proposal},
+  url={https://zips.z.cash/zip-0224},
+  note={Halo 2 based shielded transactions}
+}
+
+@misc{grin,
+  title={Grin: A Lightweight Implementation of {MimbleWimble}},
+  author={{Grin Developers}},
+  year={2019},
+  howpublished={Open-source project},
+  url={https://grin.mw}
+}
+
+@misc{beam,
+  title={Beam: Confidential Cryptocurrency and {DeFi} Platform},
+  author={{Beam Development}},
+  year={2019},
+  howpublished={Open-source project},
+  url={https://beam.mw}
+}
+
+@misc{firo,
+  title={Lelantus Spark: A Privacy Protocol},
+  author={{Firo (formerly Zcoin)}},
+  year={2021},
+  howpublished={Technical paper},
+  url={https://firo.org/about/research/papers/Lelantus_Spark.pdf}
+}
+
+% Security Definitions
+@inproceedings{eufcma,
+  title={A Digital Signature Scheme Secure Against Adaptive Chosen-Message Attacks},
+  author={Goldwasser, Shafi and Micali, Silvio and Rivest, Ronald L.},
+  booktitle={SIAM Journal on Computing},
+  volume={17},
+  number={2},
+  pages={281--308},
+  year={1988},
+  doi={10.1137/0217017},
+  note={EUF-CMA security definition}
+}
+
+@inproceedings{indcca2,
+  title={Relations Among Notions of Security for Public-Key Encryption Schemes},
+  author={Bellare, Mihir and Desai, Anand and Pointcheval, David and Rogaway, Phillip},
+  booktitle={Advances in Cryptology --- CRYPTO '98},
+  pages={26--45},
+  year={1998},
+  doi={10.1007/BFb0055718},
+  note={IND-CCA2 security definition}
+}
+
+@article{randomoracle,
+  title={Random Oracles are Practical: A Paradigm for Designing Efficient Protocols},
+  author={Bellare, Mihir and Rogaway, Phillip},
+  journal={Proceedings of the 1st ACM Conference on Computer and Communications Security},
+  pages={62--73},
+  year={1993},
+  doi={10.1145/168588.168596}
+}
+
+@inproceedings{dlp,
+  title={New Directions in Cryptography},
+  author={Diffie, Whitfield and Hellman, Martin E.},
+  booktitle={IEEE Transactions on Information Theory},
+  volume={22},
+  number={6},
+  pages={644--654},
+  year={1976},
+  doi={10.1109/TIT.1976.1055638},
+  note={Introduces DLP-based cryptography}
+}
+
+% Implementation
+@misc{randomx,
+  title={{RandomX}: A proof-of-work algorithm designed for general-purpose CPUs},
+  author={Tevador and others},
+  year={2019},
+  howpublished={Specification},
+  url={https://github.com/tevador/RandomX},
+  note={CPU-friendly, ASIC-resistant PoW}
+}
+
+@misc{dalek,
+  title={curve25519-dalek: A pure-{Rust} implementation of group operations on {Ristretto} and {Curve25519}},
+  author={{dalek cryptography}},
+  year={2019},
+  howpublished={Open-source library},
+  url={https://github.com/dalek-cryptography/curve25519-dalek}
+}
+
+@misc{rocksdb,
+  title={{RocksDB}: A Persistent Key-Value Store},
+  author={{Facebook}},
+  year={2012},
+  howpublished={Open-source project},
+  url={https://rocksdb.org}
+}
+
+% Privacy Analysis
+@article{chaum1983,
+  title={Blind Signatures for Untraceable Payments},
+  author={Chaum, David},
+  journal={Advances in Cryptology},
+  pages={199--203},
+  year={1983},
+  doi={10.1007/978-1-4757-0602-4_18},
+  note={Foundation of digital cash privacy}
+}
+
+@inproceedings{chainanalysis,
+  title={A Fistful of Bitcoins: Characterizing Payments Among Men with No Names},
+  author={Meiklejohn, Sarah and Pomarole, Marjori and Jordan, Grant and Levchenko, Kirill and McCoy, Damon and Voelker, Geoffrey M. and Savage, Stefan},
+  booktitle={Proceedings of the 2013 Internet Measurement Conference},
+  pages={127--140},
+  year={2013},
+  doi={10.1145/2504730.2504747},
+  note={Bitcoin transaction graph analysis}
+}
+
+@inproceedings{monerotracing,
+  title={An Empirical Analysis of Traceability in the {Monero} Blockchain},
+  author={M{\"o}ser, Malte and Soska, Kyle and Heilman, Ethan and Lee, Kevin and Heffan, Henry and Srivastava, Shashvat and Hogan, Kyle and Hennessey, Jason and Miller, Andrew and Narayanan, Arvind and Christin, Nicolas},
+  booktitle={Proceedings on Privacy Enhancing Technologies},
+  volume={2018},
+  number={3},
+  pages={143--163},
+  year={2018},
+  doi={10.1515/popets-2018-0025}
+}
+
+@inproceedings{floodloot,
+  title={Flood \& Loot: A Systemic Attack On The Lightning Network},
+  author={Harris, Jona and Zohar, Aviv},
+  booktitle={Advances in Financial Technologies (AFT)},
+  year={2020},
+  note={Attack on payment channels}
+}
+
+@inproceedings{eclipseattack,
+  title={Eclipse Attacks on {Bitcoin's} Peer-to-Peer Network},
+  author={Heilman, Ethan and Kendler, Alison and Zohar, Aviv and Goldberg, Sharon},
+  booktitle={USENIX Security Symposium},
+  pages={129--144},
+  year={2015}
+}
+
+@inproceedings{selfishmining,
+  title={Majority is not Enough: Bitcoin Mining is Vulnerable},
+  author={Eyal, Ittay and Sirer, Emin G{\"u}n},
+  booktitle={International Conference on Financial Cryptography and Data Security},
+  pages={436--454},
+  year={2014},
+  doi={10.1007/978-3-662-45472-5_28}
+}
+
+% ============================================================================
+% Additional Privacy Cryptocurrency Systems
+% ============================================================================
+
+@misc{spark,
+  title={Lelantus Spark: Secure and Flexible Private Transactions},
+  author={Jivanyan, Aram and Feickert, Aaron},
+  year={2021},
+  howpublished={Cryptology ePrint Archive},
+  url={https://eprint.iacr.org/2021/1173},
+  note={Privacy protocol combining Spark addresses with one-out-of-many proofs}
+}
+
+@misc{secretnetwork,
+  title={Secret Network: Decentralized Privacy-Preserving Computation},
+  author={{Secret Network}},
+  year={2020},
+  url={https://scrt.network/},
+  note={TEE-based privacy using Intel SGX enclaves}
+}
+
+@inproceedings{sgx-attacks,
+  title={A Survey of Microarchitectural Side-channel Vulnerabilities, Attacks, and Defenses in Cryptographic Software},
+  author={Ge, Qian and Yarom, Yuval and Cock, David and Heiser, Gernot},
+  booktitle={ACM Computing Surveys},
+  volume={51},
+  number={6},
+  pages={1--40},
+  year={2019},
+  doi={10.1145/3212479},
+  note={Comprehensive survey of side-channel attacks including SGX vulnerabilities}
+}
+
+@misc{aztec,
+  title={AZTEC Protocol: Zero-Knowledge Privacy for Ethereum},
+  author={{Aztec Labs}},
+  year={2023},
+  url={https://aztec.network/},
+  note={Private L2 zkRollup using PLONK proofs}
+}
+
+@inproceedings{lattice-ring-sig,
+  title={Efficient Lattice-Based Ring Signatures},
+  author={Esgin, Muhammed F. and Steinfeld, Ron and Liu, Joseph K. and Liu, Dongxi},
+  booktitle={International Conference on Post-Quantum Cryptography},
+  pages={176--194},
+  year={2019},
+  doi={10.1007/978-3-030-25510-7_10},
+  note={Module-LWE based linkable ring signatures}
+}
+
+@misc{sidh-attack,
+  title={An efficient key recovery attack on {SIDH}},
+  author={Castryck, Wouter and Decru, Thomas},
+  year={2022},
+  howpublished={Cryptology ePrint Archive},
+  url={https://eprint.iacr.org/2022/975},
+  note={Polynomial-time attack breaking SIKE/SIDH isogeny assumptions}
+}
+
+% Privacy Definitions
+@techreport{pfitzmann-hansen,
+  title={A Terminology for Talking About Privacy by Data Minimization: Anonymity, Unlinkability, Undetectability, Unobservability, Pseudonymity, and Identity Management},
+  author={Pfitzmann, Andreas and Hansen, Marit},
+  institution={TU Dresden},
+  year={2010},
+  url={http://dud.inf.tu-dresden.de/Anon_Terminology.shtml},
+  note={Standard terminology for privacy properties, v0.34}
+}
+
+% Atomic Swaps and Interoperability
+@misc{adaptor-signatures,
+  title={One-Time Verifiably Encrypted Signatures A.K.A. Adaptor Signatures},
+  author={Aumayr, Lukas and Ersoy, Oguzhan and Erwig, Andreas and Faust, Sebastian and Hostakova, Kristina and Maffei, Matteo and Moreno-Sanchez, Pedro and Riahi, Siavash},
+  year={2021},
+  howpublished={Cryptology ePrint Archive},
+  url={https://eprint.iacr.org/2020/476},
+  note={Scriptless atomic swaps without on-chain hash correlation}
+}

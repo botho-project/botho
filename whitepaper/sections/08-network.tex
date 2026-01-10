@@ -21,12 +21,14 @@ transaction propagation and consensus message delivery.
     transactions via inclusion proofs
 \end{itemize}
 
+\input{figures/node-hierarchy}
+
 \subsubsection{Transport Layer}
 
 All peer-to-peer communication uses:
 \begin{itemize}
   \item \textbf{TCP}: Reliable delivery for consensus messages
-  \item \textbf{Noise Protocol}: Authenticated encryption
+  \item \textbf{Noise Protocol}~\cite{noise}: Authenticated encryption
     with forward secrecy
   \item \textbf{Multiplexed streams}: Separate channels for different
     message types
@@ -54,7 +56,7 @@ BootstrapNodes {
 
 \subsubsection{Kademlia DHT}
 
-Peer discovery uses a modified Kademlia DHT:
+Peer discovery uses a modified Kademlia DHT~\cite{kademlia}:
 
 \begin{itemize}
   \item Node IDs derived from public keys (not chosen)
@@ -124,6 +126,189 @@ Messages are serialized using a canonical binary format:
   \item Deterministic ordering of map keys
 \end{itemize}
 
+\subsubsection{Wire Format Specification}
+
+Each message follows the structure:
+
+\begin{lstlisting}[caption={Message wire format}]
+Message {
+    magic: [u8; 4],        // Network identifier: 0x00 0x0B 0x07 0xB0
+    type_id: u8,           // Message type discriminant
+    length: varint,        // Payload length in bytes
+    checksum: [u8; 4],     // First 4 bytes of SHA256(payload)
+    payload: [u8; length], // Type-specific data
+}
+\end{lstlisting}
+
+\textbf{Message type identifiers}:
+
+\begin{table}[h]
+\centering
+\caption{Message type encoding}
+\label{tab:msg-types}
+\begin{tabular}{@{}clc@{}}
+\toprule
+\textbf{ID} & \textbf{Message} & \textbf{Max Size} \\
+\midrule
+0x00 & Hello & 256 B \\
+0x01 & HelloAck & 256 B \\
+0x10 & NewBlock & 2 MB \\
+0x11 & GetBlocks & 4 KB \\
+0x12 & Blocks & 10 MB \\
+0x20 & NewTransaction & 100 KB \\
+0x21 & GetTransactions & 4 KB \\
+0x22 & Transactions & 1 MB \\
+0x30 & SCPNomination & 64 KB \\
+0x31 & SCPPrepare & 64 KB \\
+0x32 & SCPCommit & 64 KB \\
+0x33 & SCPExternalize & 64 KB \\
+0x40 & CompactBlock & 64 KB \\
+0x41 & GetBlockTxs & 4 KB \\
+0x42 & BlockTxs & 1 MB \\
+0xFF & Ping/Pong & 8 B \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Field-level encoding}:
+
+\begin{lstlisting}[caption={Common field encodings}]
+// Varint: 7 bits per byte, MSB = continuation
+fn encode_varint(n: u64) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    let mut value = n;
+    while value >= 0x80 {
+        bytes.push((value & 0x7F) | 0x80);
+        value >>= 7;
+    }
+    bytes.push(value as u8);
+    bytes
+}
+
+// Hash: 32 bytes, raw
+Hash = [u8; 32]
+
+// CompressedPoint: 32 bytes (Ristretto255)
+Point = [u8; 32]
+
+// Signature: Variable (CLSAG ~700B, ML-DSA ~3.3KB)
+Signature = varint(len) ++ [u8; len]
+
+// Block header: Fixed 120 bytes
+BlockHeader {
+    version: u8,             // 1 byte
+    prev_hash: [u8; 32],     // 32 bytes
+    merkle_root: [u8; 32],   // 32 bytes
+    timestamp: u64,          // 8 bytes (little-endian)
+    height: u64,             // 8 bytes
+    difficulty: u64,         // 8 bytes
+    nonce: u64,              // 8 bytes
+    minter_key_hash: [u8; 32], // 32 bytes
+}
+\end{lstlisting}
+
+\subsection{Protocol State Machine}
+
+\subsubsection{Connection States}
+
+Each peer connection transitions through defined states:
+
+\begin{lstlisting}[caption={Connection state machine}]
+enum ConnectionState {
+    Connecting,      // TCP handshake in progress
+    Authenticating,  // Noise protocol handshake
+    Handshaking,     // Hello/HelloAck exchange
+    Active,          // Normal operation
+    Syncing,         // Initial block download
+    Stale,           // No activity timeout
+    Disconnecting,   // Graceful shutdown
+}
+
+// State transitions
+Connecting     -> Authenticating  [TCP established]
+Authenticating -> Handshaking     [Noise complete]
+Handshaking    -> Active          [HelloAck received, compatible]
+Handshaking    -> Disconnecting   [Incompatible version/genesis]
+Active         -> Syncing         [Peer ahead by >10 blocks]
+Syncing        -> Active          [Caught up]
+Active         -> Stale           [No messages for 5 minutes]
+Stale          -> Active          [Pong received]
+Stale          -> Disconnecting   [No Pong after 30 seconds]
+*              -> Disconnecting   [Error or ban]
+\end{lstlisting}
+
+\subsubsection{Message Sequences}
+
+\textbf{Connection establishment}:
+\begin{enumerate}
+  \item Initiator: TCP connect to peer:9732
+  \item Both: Noise XX handshake (mutual authentication)
+  \item Initiator: Send Hello \{version, genesis\_hash, best\_height\}
+  \item Responder: Send HelloAck (if compatible) or disconnect
+  \item Both: Transition to Active state
+\end{enumerate}
+
+\textbf{Block synchronization}:
+\begin{enumerate}
+  \item Node A: Send GetBlocks \{locator, stop\_hash\}
+  \item Node B: Find common ancestor from locator
+  \item Node B: Send Blocks \{blocks[ancestor+1..min(ancestor+500, stop)]\}
+  \item Node A: Validate and apply blocks
+  \item Node A: Repeat from step 1 if more blocks needed
+\end{enumerate}
+
+\textbf{Transaction relay}:
+\begin{enumerate}
+  \item Sender: Receive transaction (local or from peer)
+  \item Sender: Validate transaction fully
+  \item If in stem phase: Forward to single stem peer
+  \item If in fluff phase: Announce via NewTransaction to all peers
+  \item Receivers: Request full transaction if not in mempool
+  \item Receivers: Validate and continue relay
+\end{enumerate}
+
+\textbf{Consensus message flow}:
+\begin{enumerate}
+  \item Proposer: Broadcast NewBlock upon PoW solution
+  \item Validators: Validate block, enter nomination
+  \item Validators: Exchange SCPNomination messages
+  \item Validators: Upon nomination convergence, send SCPPrepare
+  \item Validators: Upon prepare quorum, send SCPCommit
+  \item Validators: Upon commit quorum, send SCPExternalize
+  \item All nodes: Apply externalized block as final
+\end{enumerate}
+
+\subsubsection{Error Handling}
+
+Protocol errors trigger specific responses:
+
+\begin{table}[h]
+\centering
+\caption{Protocol error handling}
+\label{tab:error-handling}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Error} & \textbf{Action} & \textbf{Score Penalty} \\
+\midrule
+Invalid checksum & Drop message & -1 \\
+Unknown message type & Drop message & 0 \\
+Message too large & Drop + warn & -10 \\
+Invalid block header & Drop block & -50 \\
+Invalid transaction & Drop tx & -10 \\
+Invalid signature & Drop + ban & -1000 \\
+Rate limit exceeded & Throttle & -5/excess \\
+Protocol violation & Disconnect & -1000 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Reconnection policy}:
+\begin{itemize}
+  \item Disconnected peers: Retry after exponential backoff (1s, 2s, 4s, ..., 1h max)
+  \item Banned peers: No reconnection for 24 hours
+  \item Repeated bans: Permanent blacklist after 3 bans
+\end{itemize}
+
 \subsection{Block Propagation}
 
 \subsubsection{Compact Block Relay}
@@ -160,7 +345,7 @@ Upon receiving a block:
 
 \subsubsection{Dandelion++}
 
-Transaction propagation uses Dandelion++ to protect
+Transaction propagation uses Dandelion++~\cite{dandelion} to protect
 sender network identity:
 
 \textbf{Stem phase}:
@@ -176,9 +361,7 @@ sender network identity:
   \item Cannot trace back to stem origin
 \end{itemize}
 
-% Dandelion++ propagation diagram:
-% O ---> S1 ---> S2 ---> F1, F2, F3
-% (stem phase: dashed, fluff phase: solid broadcast)
+\input{figures/dandelion-propagation}
 
 \subsubsection{Transaction Validation}
 
@@ -290,6 +473,154 @@ Optional routing through anonymity networks:
   \item Tor hidden service support
   \item I2P integration planned
   \item Mixed clearnet/onion peer connections
+\end{itemize}
+
+\subsection{Light Client Security}
+\label{sec:light-clients}
+
+Light clients enable mobile and resource-constrained devices to participate
+in the network with reduced trust assumptions compared to custodial solutions.
+
+\subsubsection{Verification Capabilities}
+
+Light clients can verify:
+\begin{itemize}
+  \item \textbf{Transaction inclusion}: Merkle proofs demonstrate transaction
+    is in a specific block
+  \item \textbf{Block header chain}: PoW verification confirms work was expended
+  \item \textbf{SCP finality}: Externalization proofs confirm consensus agreement
+  \item \textbf{Output ownership}: Local key derivation identifies owned outputs
+\end{itemize}
+
+Light clients \emph{cannot} verify:
+\begin{itemize}
+  \item \textbf{Transaction validity}: Ring signature verification requires
+    full UTXO context
+  \item \textbf{Double-spend prevention}: Requires complete key image database
+  \item \textbf{Value conservation}: Commitment arithmetic needs all inputs
+\end{itemize}
+
+\subsubsection{Trust Model}
+
+Light clients trust full nodes for:
+
+\begin{enumerate}
+  \item \textbf{Transaction validity}: Full nodes could relay invalid
+    transactions (mitigated by connecting to multiple independent nodes)
+  \item \textbf{Completeness}: Full nodes could withhold transactions
+    (mitigated by querying multiple nodes)
+  \item \textbf{Privacy}: Query patterns reveal interest (mitigated by
+    fetching broader data ranges)
+\end{enumerate}
+
+\textbf{Security level}: Comparable to SPV in Bitcoin---economically secure
+against profit-motivated attackers but vulnerable to targeted attacks by
+well-resourced adversaries.
+
+\subsubsection{Output Scanning}
+
+Light clients scan for received funds:
+
+\begin{lstlisting}[caption={Light client scanning protocol}]
+LightClientScan {
+    // Request outputs in block range
+    GetOutputs {
+        start_height: u64,
+        end_height: u64,
+    },
+
+    // Response: encrypted output data
+    Outputs {
+        outputs: Vec<(Height, TxIndex, EncryptedOutput)>,
+    },
+}
+\end{lstlisting}
+
+For each output, the client:
+\begin{enumerate}
+  \item Attempts ML-KEM decapsulation with view key
+  \item If successful, derives one-time key and checks match
+  \item Decrypts amount if output belongs to wallet
+\end{enumerate}
+
+\textbf{Privacy consideration}: Downloading all outputs in a range (rather
+than requesting specific ones) prevents servers from learning which outputs
+the client owns.
+
+\subsubsection{Transaction Submission}
+
+Light clients construct transactions locally:
+\begin{enumerate}
+  \item Select ring members from cached output set
+  \item Build transaction with local keys (never transmitted)
+  \item Submit to multiple full nodes via Dandelion++ stem
+\end{enumerate}
+
+\textbf{Ring member selection}: Light clients maintain a local cache of
+recent outputs sufficient for ring construction. This cache is populated
+during scanning and can be refreshed from any full node.
+
+\subsubsection{Privacy Implications}
+
+Light client operations leak information:
+
+\begin{table}[h]
+\centering
+\caption{Light client information leakage}
+\label{tab:light-privacy}
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{Operation} & \textbf{Information Leaked} \\
+\midrule
+Block header sync & Active time periods \\
+Output scanning & Block ranges of interest \\
+Ring member fetch & Potential transaction construction \\
+TX submission & Approximate location (IP-based) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Mitigation strategies}:
+\begin{itemize}
+  \item Connect via Tor/I2P for IP privacy
+  \item Scan broader ranges than necessary
+  \item Cache ring members proactively
+  \item Submit transactions to random nodes
+\end{itemize}
+
+\subsubsection{Comparison to Full Node Security}
+
+\begin{table}[h]
+\centering
+\caption{Full node vs. light client security}
+\label{tab:node-comparison}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\textbf{Property} & \textbf{Full Node} & \textbf{Light Client} \\
+\midrule
+Validate all transactions & Yes & No \\
+Detect double-spends & Yes & No \\
+Verify consensus & Yes & Partial \\
+Independent operation & Yes & No \\
+Receive funds securely & Yes & Yes* \\
+Send funds securely & Yes & Yes \\
+Privacy (network) & High & Medium \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textit{*Light clients can verify they received funds but must trust that
+the sending transaction was valid.}
+
+\subsubsection{Mobile Wallet Recommendations}
+
+For mobile deployments:
+\begin{itemize}
+  \item Use light client with multiple independent servers
+  \item Prefer Tor connections when available
+  \item Cache sufficient outputs for offline transaction construction
+  \item Verify transaction inclusion before considering funds confirmed
+  \item Consider running personal full node as trusted backend
 \end{itemize}
 
 \subsection{Network Constants}
