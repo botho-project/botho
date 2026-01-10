@@ -1,0 +1,39 @@
+[Unit]
+Description=Botho Testnet Faucet Node
+Documentation=https://github.com/botho-project/botho
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=botho
+Group=botho
+WorkingDirectory=/home/botho
+
+# Run with minting enabled for testnet faucet
+ExecStart=/usr/local/bin/botho --testnet run --mint
+Restart=always
+RestartSec=10
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/botho/.botho
+
+# Resource limits
+LimitNOFILE=65535
+MemoryMax=4G
+
+# Environment
+Environment=RUST_LOG=info
+Environment=RUST_BACKTRACE=1
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=botho-faucet
+
+[Install]
+WantedBy=multi-user.target
