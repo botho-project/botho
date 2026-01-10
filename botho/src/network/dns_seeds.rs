@@ -242,7 +242,7 @@ impl DnsSeedDiscovery {
                 "/dns4/seed.botho.io/tcp/7100/p2p/12D3KooWBrjTYjNrEwi9MM3AKFenmymyWVXtXbQiSx7eDnDwv9qQ".to_string(),
             ],
             Network::Testnet => vec![
-                "/dns4/testnet.botho.io/tcp/17100/p2p/12D3KooWBrjTYjNrEwi9MM3AKFenmymyWVXtXbQiSx7eDnDwv9qQ".to_string(),
+                "/dns4/seed.botho.io/tcp/17100".to_string(),
             ],
         }
     }
@@ -371,8 +371,8 @@ mod tests {
         let seeds = discovery.hardcoded_seeds();
 
         assert!(!seeds.is_empty());
-        assert!(seeds[0].contains("testnet.botho.io"));
-        assert!(seeds[0].contains("/tcp/17100/"));
+        assert!(seeds[0].contains("seed.botho.io"));
+        assert!(seeds[0].contains("/tcp/17100"));
     }
 
     #[test]

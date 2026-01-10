@@ -184,8 +184,8 @@ fn default_bootstrap_peers(network: Network) -> Vec<String> {
             "/dns4/seed.botho.io/tcp/7100/p2p/12D3KooWBrjTYjNrEwi9MM3AKFenmymyWVXtXbQiSx7eDnDwv9qQ".to_string(),
         ],
         Network::Testnet => vec![
-            // Testnet seed node
-            "/dns4/testnet.botho.io/tcp/17100/p2p/12D3KooWBrjTYjNrEwi9MM3AKFenmymyWVXtXbQiSx7eDnDwv9qQ".to_string(),
+            // Testnet seed node (no peer ID - resolved dynamically)
+            "/dns4/seed.botho.io/tcp/17100".to_string(),
         ],
     }
 }
