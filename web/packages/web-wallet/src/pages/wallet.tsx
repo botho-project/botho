@@ -4,6 +4,9 @@ import { Button, Card, Input, Logo, Toast } from '@botho/ui'
 import { createMnemonic12 } from '@botho/core'
 import { useCopyToClipboard, BalanceCard, TransactionList, SendModal, type SendFormData, type SendResult } from '@botho/features'
 import { useWallet } from '../contexts/wallet'
+import { useNetwork } from '../contexts/network'
+import { NetworkSelector } from '../components/NetworkSelector'
+import { FaucetButton } from '../components/FaucetButton'
 import { Send, Download, RefreshCw, ArrowLeft, Shield, Eye, KeyRound, AlertCircle, Lock, Check, Settings, Trash2 } from 'lucide-react'
 
 function CreateWalletView({ onCreate }: { onCreate: (mnemonic: string, password?: string) => void }) {
@@ -211,6 +214,7 @@ function ImportWalletView({ onImport }: { onImport: (mnemonic: string, password?
 
 function WalletDashboard() {
   const { address, balance, transactions, isConnecting, isConnected, refreshBalance, resetWallet } = useWallet()
+  const { hasFaucet } = useNetwork()
   const { copy } = useCopyToClipboard()
   const [sendOpen, setSendOpen] = useState(false)
   const [isSending, setIsSending] = useState(false)
@@ -277,6 +281,8 @@ function WalletDashboard() {
         isSyncing={isConnecting}
         actions={actionButtons}
       />
+
+      {hasFaucet && <FaucetButton />}
 
       <TransactionList
         transactions={transactions}
@@ -481,6 +487,7 @@ export function WalletPage() {
             <span className="font-display text-base sm:text-lg font-semibold hidden sm:inline">Botho Wallet</span>
             <span className="font-display text-base font-semibold sm:hidden">Wallet</span>
           </Link>
+          <NetworkSelector />
         </div>
       </header>
       <main className="py-6 sm:py-8 md:py-12">
