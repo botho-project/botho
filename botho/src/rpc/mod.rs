@@ -5,6 +5,7 @@
 
 pub mod auth;
 pub mod deposit_scanner;
+pub mod faucet;
 pub mod metrics;
 pub mod rate_limit;
 pub mod view_keys;
@@ -12,6 +13,7 @@ pub mod websocket;
 
 pub use auth::{ApiKeyConfig, ApiPermissions, AuthError, HmacAuthenticator};
 pub use deposit_scanner::{DepositScanner, ScanResult};
+pub use faucet::{FaucetError, FaucetRequest, FaucetResponse, FaucetState, FaucetStats};
 pub use metrics::{
     calculate_dir_size, check_health, check_ready, init_metrics, start_metrics_server,
     HealthResponse, HealthStatus, MetricsUpdater, NodeMetrics, ReadyResponse, DATA_DIR_USAGE_BYTES,
@@ -141,6 +143,8 @@ pub struct RpcState {
     pub metrics: Arc<NodeMetrics>,
     /// Per-API-key rate limiter
     pub rate_limiter: Arc<RateLimiter>,
+    /// Faucet state (None if faucet is disabled)
+    pub faucet: Option<Arc<FaucetState>>,
 }
 
 impl RpcState {
@@ -166,6 +170,7 @@ impl RpcState {
             view_key_registry: Arc::new(ViewKeyRegistry::new()),
             metrics: Arc::new(NodeMetrics::new()),
             rate_limiter: Arc::new(RateLimiter::new()),
+            faucet: None,
         }
     }
 
@@ -194,6 +199,7 @@ impl RpcState {
             view_key_registry: Arc::new(ViewKeyRegistry::new()),
             metrics: Arc::new(NodeMetrics::new()),
             rate_limiter: Arc::new(RateLimiter::new()),
+            faucet: None,
         }
     }
 
@@ -221,7 +227,14 @@ impl RpcState {
             view_key_registry: Arc::new(ViewKeyRegistry::new()),
             metrics: Arc::new(NodeMetrics::new()),
             rate_limiter: Arc::new(rate_limiter),
+            faucet: None,
         }
+    }
+
+    /// Set the faucet state
+    pub fn with_faucet(mut self, faucet: FaucetState) -> Self {
+        self.faucet = Some(Arc::new(faucet));
+        self
     }
 }
 
@@ -544,6 +557,10 @@ async fn handle_rpc_method(request: &JsonRpcRequest, state: &RpcState) -> JsonRp
         // Entropy proof methods (Phase 2)
         "entropy_estimateFee" => handle_entropy_estimate_fee(id, &request.params, state).await,
         "entropy_getStatus" => handle_entropy_status(id, state).await,
+
+        // Faucet methods (testnet only)
+        "faucet_request" => handle_faucet_request(id, &request.params, state, None).await,
+        "faucet_getStatus" => handle_faucet_status(id, state).await,
 
         _ => JsonRpcResponse::error(id, -32601, &format!("Method not found: {}", request.method)),
     }
@@ -2046,6 +2063,121 @@ async fn handle_entropy_status(id: Value, state: &RpcState) -> JsonRpcResponse {
             "estimatedProofSize": ESTIMATED_ENTROPY_PROOF_SIZE,
         }),
     )
+}
+
+// ============================================================================
+// Faucet Handler Functions (Testnet only)
+// ============================================================================
+
+/// Handle faucet request
+///
+/// This handler dispenses testnet coins to the specified address.
+/// Rate limiting is applied based on IP and address.
+async fn handle_faucet_request(
+    id: Value,
+    params: &Value,
+    state: &RpcState,
+    client_ip: Option<std::net::IpAddr>,
+) -> JsonRpcResponse {
+    use faucet::{FaucetError, FaucetRequest};
+
+    // Check if faucet is available
+    let faucet = match &state.faucet {
+        Some(f) => f,
+        None => {
+            return JsonRpcResponse::error(id, -32000, "Faucet is disabled on this node");
+        }
+    };
+
+    if !faucet.is_enabled() {
+        return JsonRpcResponse::error(id, -32000, "Faucet is disabled on this node");
+    }
+
+    // Parse request
+    let request: FaucetRequest = match serde_json::from_value(params.clone()) {
+        Ok(r) => r,
+        Err(e) => {
+            return JsonRpcResponse::error(id, -32602, &format!("Invalid params: {}", e));
+        }
+    };
+
+    // Get client IP (use localhost if not provided - for local testing)
+    let ip = client_ip.unwrap_or_else(|| "127.0.0.1".parse().unwrap());
+
+    // Check rate limits
+    if let Err(err) = faucet.check_rate_limit(ip, &request.address) {
+        let retry_after = err.retry_after_secs();
+        return JsonRpcResponse {
+            jsonrpc: "2.0",
+            result: None,
+            error: Some(JsonRpcError {
+                code: -32000,
+                message: err.message(),
+                data: Some(json!({
+                    "retryAfterSecs": retry_after,
+                    "error": err,
+                })),
+            }),
+            id,
+        };
+    }
+
+    // For now, we just record the request and return a placeholder
+    // Full implementation would:
+    // 1. Parse the address
+    // 2. Build a transaction from the node's wallet
+    // 3. Submit to mempool
+    // 4. Return tx hash
+    //
+    // This requires integrating with the wallet and transaction building,
+    // which is a larger change. For now, we validate the flow works.
+
+    // TODO: Implement actual transaction building and submission
+    // This requires:
+    // - Access to node's wallet keys (wallet_view_key, wallet_spend_key)
+    // - UTXO selection from ledger
+    // - Transaction building
+    // - Mempool submission
+
+    // For now, return an error indicating the feature is not fully implemented
+    // The rate limiting and config are working - just need transaction building
+    JsonRpcResponse::error(
+        id,
+        -32000,
+        "Faucet transaction building not yet implemented. Rate limiting validated successfully.",
+    )
+}
+
+/// Handle faucet status request
+///
+/// Returns information about the faucet configuration and current stats.
+async fn handle_faucet_status(id: Value, state: &RpcState) -> JsonRpcResponse {
+    match &state.faucet {
+        Some(faucet) => {
+            let stats = faucet.stats();
+            JsonRpcResponse::success(
+                id,
+                json!({
+                    "enabled": stats.enabled,
+                    "amountPerRequest": stats.amount_per_request,
+                    "amountPerRequestFormatted": format!("{:.6} BTH", stats.amount_per_request as f64 / 1_000_000_000_000.0),
+                    "dailyDispensed": stats.daily_dispensed,
+                    "dailyDispensedFormatted": format!("{:.6} BTH", stats.daily_dispensed as f64 / 1_000_000_000_000.0),
+                    "dailyLimit": stats.daily_limit,
+                    "dailyLimitFormatted": format!("{:.6} BTH", stats.daily_limit as f64 / 1_000_000_000_000.0),
+                    "trackedIps": stats.tracked_ips,
+                    "trackedAddresses": stats.tracked_addresses,
+                }),
+            )
+        }
+        None => JsonRpcResponse::success(
+            id,
+            json!({
+                "enabled": false,
+                "message": "Faucet is not configured on this node"
+            }),
+        ),
+    }
 }
 
 #[cfg(test)]
