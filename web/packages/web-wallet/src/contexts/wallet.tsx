@@ -10,6 +10,7 @@ import {
 import { RemoteNodeAdapter, type WsConnectionStatus } from '@botho/adapters'
 import { AddressBook, saveWallet, loadWallet, getWalletInfo, deriveAddress, isValidMnemonic, clearWallet } from '@botho/core'
 import type { Balance, Contact, NodeInfo, Transaction } from '@botho/core'
+import { type NetworkConfig, loadSelectedNetwork, NETWORKS, DEFAULT_NETWORK_ID, createCustomNetwork } from '../config/networks'
 
 interface WalletState {
   // Connection
@@ -59,15 +60,33 @@ interface WalletContextValue extends WalletState {
 
 const WalletContext = createContext<WalletContextValue | null>(null)
 
-const adapter = new RemoteNodeAdapter({
-  seedNodes: ['https://seed.botho.io', 'https://seed2.botho.io'],
-  networkId: 'botho-mainnet',
-})
-
 const addressBook = new AddressBook()
 
 /** Polling interval when WebSocket is disconnected (30 seconds) */
 const FALLBACK_POLL_INTERVAL = 30000
+
+/**
+ * Create adapter from network configuration
+ */
+function createAdapterFromNetwork(network: NetworkConfig): RemoteNodeAdapter {
+  return new RemoteNodeAdapter({
+    seedNodes: [network.rpcEndpoint],
+    networkId: network.networkId,
+  })
+}
+
+/**
+ * Get initial network configuration
+ */
+function getInitialNetwork(): NetworkConfig {
+  const { networkId, customEndpoint } = loadSelectedNetwork()
+
+  if (networkId === 'custom' && customEndpoint) {
+    return createCustomNetwork(customEndpoint)
+  }
+
+  return NETWORKS[networkId] || NETWORKS[DEFAULT_NETWORK_ID]
+}
 
 export function WalletProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<WalletState>({
@@ -85,6 +104,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     contacts: [],
   })
 
+  // Store adapter in ref so we can recreate it when network changes
+  const adapterRef = useRef<RemoteNodeAdapter>(createAdapterFromNetwork(getInitialNetwork()))
+
   // Store mnemonic in memory after unlock (cleared on page refresh)
   const mnemonicRef = useRef<string | null>(null)
 
@@ -101,8 +123,42 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // Listen for network changes from NetworkContext
+  useEffect(() => {
+    const handleNetworkChange = async (event: Event) => {
+      const customEvent = event as CustomEvent<{ network: NetworkConfig }>
+      const newNetwork = customEvent.detail.network
+
+      // Disconnect from current network
+      adapterRef.current.disconnect()
+
+      // Create new adapter for new network
+      adapterRef.current = createAdapterFromNetwork(newNetwork)
+
+      // Reset connection state
+      setState(s => ({
+        ...s,
+        isConnected: false,
+        isConnecting: false,
+        nodeInfo: null,
+        connectionError: null,
+        wsStatus: 'disconnected',
+        balance: null,
+        transactions: [],
+      }))
+
+      // Reconnect
+      await connect()
+    }
+
+    window.addEventListener('network-changed', handleNetworkChange)
+    return () => window.removeEventListener('network-changed', handleNetworkChange)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   // Subscribe to WebSocket status changes
   useEffect(() => {
+    const adapter = adapterRef.current
     const unsubscribe = adapter.onWsStatusChange((wsStatus) => {
       setState(s => ({ ...s, wsStatus }))
     })
@@ -115,6 +171,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!state.isConnected || !state.address || state.isLocked) return
 
+    const adapter = adapterRef.current
     const unsubscribe = adapter.onNewBlock(async () => {
       // Refresh balance and transactions when new block arrives
       try {
@@ -137,6 +194,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     if (!state.isConnected || !state.address || state.isLocked) return
     if (state.wsStatus === 'connected') return // Use WebSocket instead
 
+    const adapter = adapterRef.current
     const pollInterval = setInterval(async () => {
       try {
         const [balance, transactions] = await Promise.all([
@@ -153,6 +211,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   }, [state.isConnected, state.address, state.isLocked, state.wsStatus])
 
   const connect = useCallback(async () => {
+    const adapter = adapterRef.current
     setState(s => ({ ...s, isConnecting: true, connectionError: null }))
 
     try {
@@ -194,7 +253,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const disconnect = useCallback(() => {
-    adapter.disconnect()
+    adapterRef.current.disconnect()
     setState(s => ({
       ...s,
       isConnected: false,
@@ -255,6 +314,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     }))
 
     // Fetch balance
+    const adapter = adapterRef.current
     if (adapter.isConnected()) {
       const balance = await adapter.getBalance([address])
       const transactions = await adapter.getTransactionHistory([address], { limit: 50 })
@@ -274,6 +334,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     setState(s => ({ ...s, isLocked: false }))
 
     // Fetch balance now that we're unlocked
+    const adapter = adapterRef.current
     if (adapter.isConnected() && stored.address) {
       const [balance, transactions] = await Promise.all([
         adapter.getBalance([stored.address]),
@@ -318,12 +379,14 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const refreshBalance = useCallback(async () => {
+    const adapter = adapterRef.current
     if (!state.address || !adapter.isConnected()) return
     const balance = await adapter.getBalance([state.address])
     setState(s => ({ ...s, balance }))
   }, [state.address])
 
   const refreshTransactions = useCallback(async () => {
+    const adapter = adapterRef.current
     if (!state.address || !adapter.isConnected()) return
     const transactions = await adapter.getTransactionHistory([state.address], { limit: 50 })
     setState(s => ({ ...s, transactions }))
@@ -386,8 +449,10 @@ export function useWallet() {
 
 /**
  * Get the adapter for use with explorer/blockchain queries
- * Returns the RemoteNodeAdapter instance
+ * Returns a function that retrieves the current adapter instance
+ * Note: This returns a new adapter each time if network has changed
  */
 export function useAdapter() {
-  return adapter
+  const adapterRef = useRef<RemoteNodeAdapter>(createAdapterFromNetwork(getInitialNetwork()))
+  return adapterRef.current
 }
