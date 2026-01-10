@@ -17,6 +17,9 @@ pub struct Config {
     pub wallet: Option<WalletConfig>,
     pub network: NetworkConfig,
     pub minting: MintingConfig,
+    /// Faucet configuration for testnet coin distribution
+    #[serde(default)]
+    pub faucet: FaucetConfig,
     /// Telemetry configuration for distributed tracing
     #[serde(default)]
     pub telemetry: TelemetryConfig,
@@ -181,8 +184,8 @@ fn default_bootstrap_peers(network: Network) -> Vec<String> {
             "/dns4/seed.botho.io/tcp/7100/p2p/12D3KooWBrjTYjNrEwi9MM3AKFenmymyWVXtXbQiSx7eDnDwv9qQ".to_string(),
         ],
         Network::Testnet => vec![
-            // Testnet seed node
-            "/dns4/testnet.botho.io/tcp/17100/p2p/12D3KooWBrjTYjNrEwi9MM3AKFenmymyWVXtXbQiSx7eDnDwv9qQ".to_string(),
+            // Testnet seed node (no peer ID - resolved dynamically)
+            "/dns4/seed.botho.io/tcp/17100".to_string(),
         ],
     }
 }
@@ -397,6 +400,78 @@ fn default_threads() -> u32 {
     0
 }
 
+/// Faucet configuration for testnet coin distribution.
+///
+/// The faucet allows users to request testnet coins for testing purposes.
+/// It includes rate limiting to prevent abuse.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FaucetConfig {
+    /// Whether the faucet is enabled.
+    /// Default: false (must be explicitly enabled)
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Amount to dispense per request in picocredits.
+    /// Default: 10 BTH (10_000_000_000_000 picocredits)
+    #[serde(default = "default_faucet_amount")]
+    pub amount: u64,
+
+    /// Maximum requests per IP address per hour.
+    /// Default: 5
+    #[serde(default = "default_faucet_per_ip_hourly_limit")]
+    pub per_ip_hourly_limit: u32,
+
+    /// Maximum requests per destination address per 24 hours.
+    /// Default: 3
+    #[serde(default = "default_faucet_per_address_daily_limit")]
+    pub per_address_daily_limit: u32,
+
+    /// Maximum total BTH to dispense per day (in picocredits).
+    /// Default: 10,000 BTH (10_000_000_000_000_000 picocredits)
+    #[serde(default = "default_faucet_daily_limit")]
+    pub daily_limit: u64,
+
+    /// Minimum seconds between requests from the same IP.
+    /// Default: 60 seconds
+    #[serde(default = "default_faucet_cooldown")]
+    pub cooldown_secs: u64,
+}
+
+/// 10 BTH in picocredits
+fn default_faucet_amount() -> u64 {
+    10_000_000_000_000
+}
+
+fn default_faucet_per_ip_hourly_limit() -> u32 {
+    5
+}
+
+fn default_faucet_per_address_daily_limit() -> u32 {
+    3
+}
+
+/// 10,000 BTH in picocredits
+fn default_faucet_daily_limit() -> u64 {
+    10_000_000_000_000_000
+}
+
+fn default_faucet_cooldown() -> u64 {
+    60
+}
+
+impl Default for FaucetConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            amount: default_faucet_amount(),
+            per_ip_hourly_limit: default_faucet_per_ip_hourly_limit(),
+            per_address_daily_limit: default_faucet_per_address_daily_limit(),
+            daily_limit: default_faucet_daily_limit(),
+            cooldown_secs: default_faucet_cooldown(),
+        }
+    }
+}
+
 /// Telemetry configuration for distributed tracing
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TelemetryConfig {
@@ -475,6 +550,7 @@ impl Config {
             wallet: Some(WalletConfig { mnemonic }),
             network: NetworkConfig::default(),
             minting: MintingConfig::default(),
+            faucet: FaucetConfig::default(),
             telemetry: TelemetryConfig::default(),
         }
     }
@@ -486,6 +562,7 @@ impl Config {
             wallet: None,
             network: NetworkConfig::default(),
             minting: MintingConfig::default(),
+            faucet: FaucetConfig::default(),
             telemetry: TelemetryConfig::default(),
         }
     }
