@@ -1,0 +1,58 @@
+# Botho Faucet Node Configuration
+#
+# This is a template for faucet.botho.io configuration.
+# Copy this file to ~/.botho/testnet/config.toml and update the mnemonic.
+#
+# SECURITY: This file contains the wallet mnemonic!
+#   - Set permissions: chmod 600 config.toml
+#   - Back up the mnemonic securely
+#   - Never commit this file with a real mnemonic
+
+network_type = "testnet"
+
+[wallet]
+# Generate a new mnemonic with: botho --testnet init
+# Then copy it here, or let the init command create the config
+mnemonic = "YOUR_24_WORD_MNEMONIC_HERE"
+
+[network]
+# Testnet ports (default for testnet, explicit for clarity)
+gossip_port = 17100
+rpc_port = 17101
+metrics_port = 19090
+
+# Allow all origins for testnet faucet access
+cors_origins = ["*"]
+
+# Bootstrap peers - connect to seed node
+bootstrap_peers = [
+    "/dns4/seed.botho.io/tcp/17100"
+]
+
+# Disable DNS discovery (using explicit bootstrap peer)
+[network.dns_seeds]
+enabled = false
+
+# Quorum configuration
+[network.quorum]
+mode = "recommended"
+min_peers = 1
+
+# Higher connection limit for faucet (public service)
+max_connections_per_ip = 50
+
+[minting]
+enabled = true
+threads = 2
+
+[faucet]
+enabled = true
+# 10 BTH per request (in picocredits)
+amount = 10_000_000_000_000
+# Rate limiting
+per_ip_hourly_limit = 5
+per_address_daily_limit = 3
+# 10,000 BTH per day total (in picocredits)
+daily_limit = 10_000_000_000_000_000
+# Minimum 60 seconds between requests from same IP
+cooldown_secs = 60
