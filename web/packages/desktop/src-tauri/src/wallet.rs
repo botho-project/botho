@@ -1298,6 +1298,109 @@ pub async fn get_wallet_path() -> Result<String, String> {
         .map_err(|e| e.to_string())
 }
 
+// ============================================================================
+// Faucet Commands (Testnet only)
+// ============================================================================
+
+/// Parameters for requesting coins from the faucet
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FaucetRequestParams {
+    /// Faucet server host
+    pub faucet_host: String,
+    /// Faucet server port
+    pub faucet_port: u16,
+}
+
+/// Result of a faucet request
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FaucetRequestResult {
+    pub success: bool,
+    /// Transaction hash if successful
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tx_hash: Option<String>,
+    /// Amount received in picocredits (as string for JS bigint)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub amount: Option<String>,
+    /// Formatted amount (e.g., "10.000000 BTH")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub amount_formatted: Option<String>,
+    /// Error message if failed
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// Seconds until retry is allowed (for rate limiting)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retry_after_secs: Option<u64>,
+}
+
+/// Request testnet coins from the faucet
+///
+/// This command:
+/// 1. Gets the wallet address from the active session
+/// 2. Sends a faucet_request RPC to the faucet server
+/// 3. Returns the transaction hash and amount received
+#[tauri::command]
+pub async fn request_faucet(
+    state: State<'_, WalletCommands>,
+    params: FaucetRequestParams,
+) -> Result<FaucetRequestResult, String> {
+    match request_faucet_internal(&state, params).await {
+        Ok(result) => Ok(result),
+        Err(e) => Ok(FaucetRequestResult {
+            success: false,
+            tx_hash: None,
+            amount: None,
+            amount_formatted: None,
+            error: Some(e.to_string()),
+            retry_after_secs: None,
+        }),
+    }
+}
+
+async fn request_faucet_internal(
+    state: &State<'_, WalletCommands>,
+    params: FaucetRequestParams,
+) -> Result<FaucetRequestResult> {
+    // 1. Get wallet keys from session to get the address
+    let keys = state.get_session_keys().await?;
+    let address = keys.address_string();
+
+    // 2. Connect to faucet server
+    let mut discovery = NodeDiscovery::new();
+    discovery.add_bootstrap_node(
+        format!("{}:{}", params.faucet_host, params.faucet_port)
+            .parse()
+            .map_err(|e| anyhow!("Invalid faucet address: {}", e))?,
+    );
+
+    let mut rpc = RpcPool::new(discovery);
+    rpc.connect()
+        .await
+        .map_err(|e| anyhow!("Failed to connect to faucet: {}", e))?;
+
+    // 3. Request faucet coins
+    let result = rpc
+        .faucet_request(&address)
+        .await
+        .map_err(|e| anyhow!("Faucet request failed: {}", e))?;
+
+    log::info!(
+        "Faucet request successful: {} ({})",
+        result.tx_hash,
+        result.amount_formatted
+    );
+
+    Ok(FaucetRequestResult {
+        success: true,
+        tx_hash: Some(result.tx_hash),
+        amount: Some(result.amount.to_string()),
+        amount_formatted: Some(result.amount_formatted),
+        error: None,
+        retry_after_secs: None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -335,6 +335,15 @@ impl RpcPool {
         Ok(result.peers)
     }
 
+    /// Request testnet coins from the faucet
+    ///
+    /// Sends a faucet_request RPC with the wallet address and returns
+    /// the transaction hash and amount dispensed.
+    pub async fn faucet_request(&mut self, address: &str) -> Result<FaucetRequestResult> {
+        self.call("faucet_request", json!({ "address": address }))
+            .await
+    }
+
     // ========================================================================
     // Exchange Integration Methods
     // ========================================================================
@@ -503,6 +512,23 @@ struct FeeEstimate {
 #[derive(Debug, Deserialize)]
 struct PeersResult {
     peers: Vec<SocketAddr>,
+}
+
+/// Result of a faucet request
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FaucetRequestResult {
+    /// Whether the request was successful
+    pub success: bool,
+    /// Transaction hash (only if successful)
+    #[serde(default)]
+    pub tx_hash: String,
+    /// Amount dispensed in picocredits (as string)
+    #[serde(default)]
+    pub amount: String,
+    /// Formatted amount (e.g., "10.000000 BTH")
+    #[serde(default)]
+    pub amount_formatted: String,
 }
 
 /// Network fee rate information returned by fee_getRate.
