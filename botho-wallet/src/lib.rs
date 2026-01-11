@@ -28,5 +28,5 @@ pub use decoy_selection::{
 pub use discovery::NodeDiscovery;
 pub use fee_estimation::{CachedFeeRate, FeeEstimator, StoredTags};
 pub use keys::WalletKeys;
-pub use rpc_pool::{NetworkFeeRate, RpcPool};
+pub use rpc_pool::{FaucetRequestResult, NetworkFeeRate, RpcPool};
 pub use storage::EncryptedWallet;

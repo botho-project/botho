@@ -1,5 +1,5 @@
-import { useState, useCallback, useEffect } from 'react'
-import { Layout } from '../components/layout'
+import { useState, useCallback, useEffect, useMemo } from 'react'
+import { Layout, FaucetButton } from '../components'
 import { Card, CardContent, Button, Input } from '@botho/ui'
 import {
   BalanceCard,
@@ -13,6 +13,7 @@ import { Check, FileKey, Key, Lock, Plus, RefreshCw, Save, Send, Timer, Unlock, 
 import { useWallet } from '../contexts/wallet'
 import { useConnection } from '../contexts/connection'
 import { isValidMnemonic } from '@botho/core'
+import { NETWORKS, hasFaucetSupport, type NetworkConfig } from '../config/networks'
 
 // SECURITY NOTE: For NEW wallets, the mnemonic is generated in Rust and only displayed
 // to the user for backup. The mnemonic is NEVER sent from JS back to Rust.
@@ -689,6 +690,37 @@ function WalletUnlock({
 // Main wallet page
 export function WalletPage() {
   const { connectedNode } = useConnection()
+
+  // Determine current network configuration based on connected node
+  const networkConfig = useMemo<NetworkConfig | null>(() => {
+    if (!connectedNode) return null
+
+    // Check if connected to a known network
+    for (const network of Object.values(NETWORKS)) {
+      if (
+        connectedNode.host === network.rpcHost ||
+        connectedNode.host.includes(network.rpcHost)
+      ) {
+        return network
+      }
+    }
+
+    // Default to testnet config if connected to seed.botho.io
+    if (connectedNode.host.includes('botho.io')) {
+      return NETWORKS.testnet
+    }
+
+    // Default to local if localhost
+    if (connectedNode.host === '127.0.0.1' || connectedNode.host === 'localhost') {
+      return NETWORKS.local
+    }
+
+    return null
+  }, [connectedNode])
+
+  // Check if faucet is available for current network
+  const faucetAvailable = networkConfig && hasFaucetSupport(networkConfig)
+
   const {
     address,
     balance,
@@ -829,6 +861,18 @@ export function WalletPage() {
                 <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
                 Refresh
               </Button>
+              {faucetAvailable && networkConfig && (
+                <FaucetButton
+                  faucetHost={networkConfig.faucetHost!}
+                  faucetPort={networkConfig.faucetPort!}
+                  isUnlocked={isUnlocked}
+                  onUnlockRequired={() => setShowUnlockModal(true)}
+                  onSuccess={() => {
+                    refreshBalance()
+                    refreshTransactions()
+                  }}
+                />
+              )}
               <Button onClick={handleSendClick}>
                 <Send className="h-4 w-4" />
                 Send

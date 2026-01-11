@@ -41,6 +41,8 @@ pub fn run() {
             // Utility commands
             wallet::wallet_file_exists,
             wallet::get_wallet_path,
+            // Faucet commands (testnet only)
+            wallet::request_faucet,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
