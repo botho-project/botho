@@ -112,6 +112,133 @@ sudo nginx -t
 sudo systemctl reload nginx
 ```
 
+### RPC Response Caching
+
+The nginx configuration includes caching for RPC responses to reduce node load and improve response times for frequently-accessed stats endpoints.
+
+#### Cached Endpoints
+
+| RPC Method | Cache TTL | Rationale |
+|------------|-----------|-----------|
+| `node_getStatus` | 10s | Block time ~30s, 10s provides freshness |
+| `faucet_getStats` | 10s | Daily stats, less volatile |
+| `faucet_request` | Never | User-specific, must always execute |
+| `/api/metrics` | 60s | Historical metrics, updated every 5 min |
+
+**Note**: Standard nginx uses a uniform 10s TTL for RPC methods. For method-specific TTLs, see [OpenResty Configuration](#openresty-configuration-optional) below.
+
+#### Cache Directory Setup
+
+```bash
+# Create cache directory (required)
+sudo mkdir -p /var/cache/nginx/rpc
+sudo chown www-data:www-data /var/cache/nginx/rpc
+```
+
+#### Verifying Cache Status
+
+Check the `X-Cache-Status` header to verify caching is working:
+
+```bash
+# First request - should be MISS
+curl -s -X POST https://faucet.botho.io/rpc \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"node_getStatus","params":{},"id":1}' \
+  -D - -o /dev/null | grep X-Cache-Status
+
+# Second request within 10s - should be HIT
+curl -s -X POST https://faucet.botho.io/rpc \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"node_getStatus","params":{},"id":1}' \
+  -D - -o /dev/null | grep X-Cache-Status
+
+# faucet_request - should be BYPASS
+curl -s -X POST https://faucet.botho.io/rpc \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"faucet_request","params":{"address":"test"},"id":1}' \
+  -D - -o /dev/null | grep X-Cache-Status
+```
+
+Cache status values:
+- `HIT` - Served from cache
+- `MISS` - Not in cache, fetched from upstream
+- `BYPASS` - Cache bypassed (non-cacheable method)
+- `EXPIRED` - Cache entry expired, fetched fresh
+
+#### Monitoring Cache Hit Ratio
+
+```bash
+# Check nginx cache stats
+sudo tail -f /var/log/nginx/access.log | grep -E '"(HIT|MISS|BYPASS)"'
+
+# Or parse for hit ratio
+sudo awk '/"HIT"/{hit++}/"MISS"/{miss++}END{print "Hit ratio:", hit/(hit+miss)*100"%"}' \
+  /var/log/nginx/access.log
+```
+
+Target: > 80% hit ratio for stats endpoints.
+
+#### OpenResty Configuration (Optional)
+
+For method-specific cache TTLs (10s for `node_getStatus`, 30s for `faucet_getStats`), use OpenResty with Lua:
+
+```bash
+# Install OpenResty instead of nginx
+sudo apt-get install -y openresty
+
+# Replace nginx with openresty in service commands
+sudo systemctl stop nginx
+sudo systemctl disable nginx
+sudo systemctl enable openresty
+sudo systemctl start openresty
+```
+
+Create `/etc/openresty/conf.d/rpc-cache.lua`:
+
+```lua
+-- Parse JSON-RPC method and apply appropriate cache TTL
+local cjson = require "cjson.safe"
+
+local cache_ttl = {
+    ["node_getStatus"] = 10,
+    ["faucet_getStats"] = 30,
+}
+
+local function set_cache_header()
+    ngx.req.read_body()
+    local body = ngx.req.get_body_data()
+    if not body then return end
+
+    local req, err = cjson.decode(body)
+    if not req or not req.method then return end
+
+    local ttl = cache_ttl[req.method]
+    if ttl and ttl > 0 then
+        ngx.header["X-Accel-Expires"] = ttl
+    else
+        ngx.header["X-Accel-Expires"] = 0  -- Don't cache
+    end
+end
+
+return { set_cache_header = set_cache_header }
+```
+
+Update the `/rpc` location in nginx config:
+
+```nginx
+location /rpc {
+    # ... existing config ...
+
+    # Use X-Accel-Expires from Lua for dynamic TTL
+    proxy_cache_valid 200 0;  # Defer to X-Accel-Expires
+
+    header_filter_by_lua_block {
+        local cache = require "rpc-cache"
+        cache.set_cache_header()
+    }
+}
+```
+
 ### Security Group Update
 
 Add these ports for the web UI:
@@ -442,3 +569,13 @@ df -h /home/botho/.botho
 - [ ] Mobile-responsive design
 - [ ] Page loads quickly (< 2s)
 - [ ] SSL certificate valid and working
+
+### RPC Caching (#309)
+- [ ] nginx cache zone configured (`/var/cache/nginx/rpc`)
+- [ ] `node_getStatus` cached (X-Cache-Status shows HIT)
+- [ ] `faucet_getStats` cached (X-Cache-Status shows HIT)
+- [ ] `faucet_request` never cached (X-Cache-Status shows BYPASS)
+- [ ] X-Cache-Status header visible in responses
+- [ ] Cache size limited (100MB max)
+- [ ] Stale entries cleaned up (60m inactive timeout)
+- [ ] Cache hit ratio > 80% for stats endpoints
