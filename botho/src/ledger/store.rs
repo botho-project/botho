@@ -888,7 +888,14 @@ impl Ledger {
         height: u64,
     ) -> Result<(), LedgerError> {
         // Check if already exists
-        if let Ok(Some(_)) = self.key_images_db.get(wtxn, key_image.as_slice()) {
+        if let Ok(Some(existing_height_bytes)) = self.key_images_db.get(wtxn, key_image.as_slice()) {
+            let existing_height = u64::from_le_bytes(existing_height_bytes.try_into().unwrap_or([0u8; 8]));
+            warn!(
+                "Key image collision: {} already spent at height {}, trying to spend at height {}",
+                hex::encode(&key_image[0..8]),
+                existing_height,
+                height
+            );
             return Err(LedgerError::InvalidBlock(
                 "Key image already spent (double-spend)".to_string(),
             ));
