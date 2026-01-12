@@ -32,12 +32,12 @@ export function TransactionList({
   return (
     <Card className={className}>
       <CardHeader>
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-4">
           <div className="flex items-center gap-2">
-            <Clock className="h-4 w-4 text-[--color-pulse]" />
+            <Clock className="h-4 w-4 text-[--color-pulse] shrink-0" />
             <CardTitle>{title}</CardTitle>
           </div>
-          <span className="text-sm text-[--color-dim]">
+          <span className="text-sm text-[--color-dim] shrink-0">
             {transactions.length} transaction{transactions.length !== 1 ? 's' : ''}
           </span>
         </div>
