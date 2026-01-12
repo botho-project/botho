@@ -50,7 +50,7 @@ export function SendModal({
 }: SendModalProps) {
   const [recipient, setRecipient] = useState('')
   const [amount, setAmount] = useState('')
-  const [privacyLevel, setPrivacyLevel] = useState<SendPrivacyLevel>('standard')
+  const [privacyLevel] = useState<SendPrivacyLevel>('standard')
   const [memo, setMemo] = useState('')
   const [fee, setFee] = useState<bigint>(BigInt(0))
   const [error, setError] = useState<string | null>(null)
