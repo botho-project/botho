@@ -27,14 +27,15 @@ use crate::{
         TransactionValidator,
     },
     node::SharedLedger,
+    wallet::Wallet,
     network::{
         BlockTxn, CompactBlock, GetBlockTxn, NetworkDiscovery, NetworkEvent, QuorumBuilder,
         ReconstructionResult,
     },
     node::{MintedMintingTx, Node},
     rpc::{
-        calculate_dir_size, init_metrics, start_metrics_server, start_rpc_server, MetricsUpdater,
-        RpcState, WsBroadcaster, DATA_DIR_USAGE_BYTES,
+        calculate_dir_size, init_metrics, start_metrics_server, start_rpc_server, FaucetState,
+        MetricsUpdater, RpcState, WsBroadcaster, DATA_DIR_USAGE_BYTES,
     },
     transaction::Transaction,
 };
@@ -224,7 +225,7 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
     let scp_peer_count = Arc::new(RwLock::new(discovery.peer_count()));
     let ws_broadcaster = Arc::new(WsBroadcaster::new(1024));
 
-    let rpc_state = Arc::new(RpcState::from_shared(
+    let mut rpc_state = RpcState::from_shared(
         node.shared_ledger(),
         node.shared_mempool(),
         minting_active.clone(),
@@ -235,7 +236,31 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
         node.wallet_spend_key(),
         config.network.cors_origins.clone(),
         ws_broadcaster.clone(),
-    ));
+    );
+
+    // Initialize faucet if enabled in config (testnet only)
+    if config.faucet.enabled {
+        if !config.network_type.is_production() {
+            // Create wallet for faucet transactions (requires mnemonic in config)
+            if let Some(mnemonic) = config.mnemonic() {
+                match Wallet::from_mnemonic(mnemonic) {
+                    Ok(wallet) => {
+                        info!("Faucet enabled: {} BTH per request", config.faucet.amount as f64 / 1_000_000_000_000.0);
+                        rpc_state = rpc_state.with_faucet(FaucetState::new(config.faucet.clone()), wallet);
+                    }
+                    Err(e) => {
+                        warn!("Faucet disabled: failed to initialize wallet: {}", e);
+                    }
+                }
+            } else {
+                warn!("Faucet disabled: no wallet configured (running in relay mode)");
+            }
+        } else {
+            warn!("Faucet is configured but disabled on mainnet for safety");
+        }
+    }
+
+    let rpc_state = Arc::new(rpc_state);
 
     // Spawn RPC server task
     let rpc_state_clone = rpc_state.clone();

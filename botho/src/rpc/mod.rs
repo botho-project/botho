@@ -65,8 +65,9 @@ use std::{
 use tokio::net::TcpListener;
 use tracing::{debug, error, info};
 
+use bth_cluster_tax::{FeeConfig, TransactionType};
 use bth_transaction_types::constants::Network;
-use crate::{address::Address, ledger::Ledger, mempool::Mempool};
+use crate::{address::Address, ledger::Ledger, mempool::Mempool, transaction::TxOutput, wallet::Wallet};
 
 /// JSON-RPC request
 #[derive(Debug, Deserialize)]
@@ -150,6 +151,8 @@ pub struct RpcState {
     pub rate_limiter: Arc<RateLimiter>,
     /// Faucet state (None if faucet is disabled)
     pub faucet: Option<Arc<FaucetState>>,
+    /// Wallet for signing faucet transactions (None if no wallet or faucet disabled)
+    pub wallet: Option<Arc<Wallet>>,
 }
 
 impl RpcState {
@@ -179,6 +182,7 @@ impl RpcState {
             metrics: Arc::new(NodeMetrics::new()),
             rate_limiter: Arc::new(RateLimiter::new()),
             faucet: None,
+            wallet: None,
         }
     }
 
@@ -212,6 +216,7 @@ impl RpcState {
             metrics: Arc::new(NodeMetrics::new()),
             rate_limiter: Arc::new(RateLimiter::new()),
             faucet: None,
+            wallet: None,
         }
     }
 
@@ -243,12 +248,14 @@ impl RpcState {
             metrics: Arc::new(NodeMetrics::new()),
             rate_limiter: Arc::new(rate_limiter),
             faucet: None,
+            wallet: None,
         }
     }
 
-    /// Set the faucet state
-    pub fn with_faucet(mut self, faucet: FaucetState) -> Self {
+    /// Set the faucet state and wallet for signing faucet transactions
+    pub fn with_faucet(mut self, faucet: FaucetState, wallet: Wallet) -> Self {
         self.faucet = Some(Arc::new(faucet));
+        self.wallet = Some(Arc::new(wallet));
         self
     }
 }
@@ -2148,29 +2155,131 @@ async fn handle_faucet_request(
         };
     }
 
-    // For now, we just record the request and return a placeholder
-    // Full implementation would:
-    // 1. Parse the address
-    // 2. Build a transaction from the node's wallet
-    // 3. Submit to mempool
-    // 4. Return tx hash
-    //
-    // This requires integrating with the wallet and transaction building,
-    // which is a larger change. For now, we validate the flow works.
+    // Get wallet for signing
+    let wallet = match &state.wallet {
+        Some(w) => w,
+        None => {
+            return JsonRpcResponse::error(id, -32000, "Faucet wallet not configured");
+        }
+    };
 
-    // TODO: Implement actual transaction building and submission
-    // This requires:
-    // - Access to node's wallet keys (wallet_view_key, wallet_spend_key)
-    // - UTXO selection from ledger
-    // - Transaction building
-    // - Mempool submission
+    // Parse recipient address
+    let parsed_address = match Address::parse_for_network(&request.address, state.network_type) {
+        Ok(addr) => addr,
+        Err(e) => {
+            return JsonRpcResponse::error(id, -32602, &format!("Invalid address: {}", e));
+        }
+    };
+    let recipient = parsed_address.public_address();
 
-    // For now, return an error indicating the feature is not fully implemented
-    // The rate limiting and config are working - just need transaction building
-    JsonRpcResponse::error(
+    // Get faucet amount
+    let amount = faucet.amount();
+
+    // Get ledger for UTXO selection
+    let ledger = read_lock!(state.ledger, id);
+    let our_address = wallet.default_address();
+
+    // Get our UTXOs
+    let utxos = match ledger.get_utxos_for_address(&our_address) {
+        Ok(u) => u,
+        Err(e) => {
+            error!("Faucet: failed to get UTXOs: {}", e);
+            return JsonRpcResponse::error(id, -32000, "Failed to get faucet balance");
+        }
+    };
+
+    // Calculate fee (minimal for faucet)
+    let fee_config = FeeConfig::default();
+    let fee = fee_config.estimate_typical_fee(TransactionType::Hidden, 0, 0).max(1);
+
+    // Check balance
+    let total_balance: u64 = utxos.iter().map(|u| u.output.amount).sum();
+    let required = amount + fee;
+
+    if total_balance < required {
+        error!(
+            "Faucet: insufficient balance: have {} picocredits, need {}",
+            total_balance, required
+        );
+        return JsonRpcResponse::error(id, -32000, "Faucet has insufficient balance");
+    }
+
+    // Select UTXOs (simple: use enough to cover amount + fee)
+    let mut selected_utxos = Vec::new();
+    let mut selected_amount = 0u64;
+    for utxo in &utxos {
+        if selected_amount >= required {
+            break;
+        }
+        selected_utxos.push(utxo.clone());
+        selected_amount += utxo.output.amount;
+    }
+
+    // Get current height
+    let current_height = match ledger.get_chain_state() {
+        Ok(state) => state.height,
+        Err(e) => {
+            error!("Faucet: failed to get chain state: {}", e);
+            return JsonRpcResponse::error(id, -32000, "Failed to get chain state");
+        }
+    };
+
+    // Build outputs
+    let mut outputs = Vec::new();
+    outputs.push(TxOutput::new(amount, &recipient));
+
+    // Change output (if any)
+    let change = selected_amount - amount - fee;
+    if change > 0 {
+        outputs.push(TxOutput::new(change, &our_address));
+    }
+
+    // Create the transaction
+    let tx = match wallet.create_private_transaction(&selected_utxos, outputs, fee, current_height, &ledger) {
+        Ok(t) => t,
+        Err(e) => {
+            error!("Faucet: failed to create transaction: {}", e);
+            return JsonRpcResponse::error(id, -32000, &format!("Failed to create transaction: {}", e));
+        }
+    };
+
+    let tx_hash = tx.hash();
+    let tx_hash_hex = hex::encode(&tx_hash);
+
+    // Drop ledger lock before acquiring mempool lock
+    drop(ledger);
+
+    // Submit to mempool
+    {
+        let mut mempool = write_lock!(state.mempool, id);
+        let ledger = read_lock!(state.ledger, id);
+        if let Err(e) = mempool.add_tx(tx.clone(), &ledger) {
+            error!("Faucet: failed to add transaction to mempool: {}", e);
+            return JsonRpcResponse::error(id, -32000, &format!("Failed to submit transaction: {}", e));
+        }
+    }
+
+    // Record successful dispense
+    faucet.record_request(ip, &request.address, amount);
+
+    info!(
+        "Faucet: dispensed {} BTH to {} (tx: {})",
+        amount as f64 / 1_000_000_000_000.0,
+        request.address,
+        &tx_hash_hex[..16]
+    );
+
+    // Broadcast to WebSocket subscribers
+    state.ws_broadcaster.new_transaction(&tx_hash, fee, None);
+
+    JsonRpcResponse::success(
         id,
-        -32000,
-        "Faucet transaction building not yet implemented. Rate limiting validated successfully.",
+        json!({
+            "success": true,
+            "txHash": tx_hash_hex,
+            "amount": amount,
+            "amountFormatted": format!("{:.6} BTH", amount as f64 / 1_000_000_000_000.0),
+        }),
     )
 }
 

@@ -185,7 +185,7 @@ export function SendModal({
                 Recipient Address
               </label>
               <Input
-                placeholder="bth1..."
+                placeholder="tbotho://1/..."
                 value={recipient}
                 onChange={(e) => setRecipient(e.target.value)}
                 className="font-mono text-sm"

@@ -45,8 +45,8 @@ vi.mock('@botho/core', async (importOriginal) => {
     AddressBook: class MockAddressBook {
       load = vi.fn().mockResolvedValue(undefined)
       getAll = vi.fn().mockReturnValue([])
-      add = vi.fn().mockResolvedValue({ id: '1', name: 'Test', address: 'bth1test' })
-      update = vi.fn().mockResolvedValue({ id: '1', name: 'Updated', address: 'bth1test' })
+      add = vi.fn().mockResolvedValue({ id: '1', name: 'Test', address: 'tbotho://1/test' })
+      update = vi.fn().mockResolvedValue({ id: '1', name: 'Updated', address: 'tbotho://1/test' })
       delete = vi.fn().mockResolvedValue(undefined)
       getDisplayName = vi.fn().mockReturnValue('Unknown')
     },

@@ -121,7 +121,7 @@ The nginx configuration includes caching for RPC responses to reduce node load a
 | RPC Method | Cache TTL | Rationale |
 |------------|-----------|-----------|
 | `node_getStatus` | 10s | Block time ~30s, 10s provides freshness |
-| `faucet_getStats` | 10s | Daily stats, less volatile |
+| `faucet_getStatus` | 10s | Daily stats, less volatile |
 | `faucet_request` | Never | User-specific, must always execute |
 | `/api/metrics` | 60s | Historical metrics, updated every 5 min |
 
@@ -180,7 +180,7 @@ Target: > 80% hit ratio for stats endpoints.
 
 #### OpenResty Configuration (Optional)
 
-For method-specific cache TTLs (10s for `node_getStatus`, 30s for `faucet_getStats`), use OpenResty with Lua:
+For method-specific cache TTLs (10s for `node_getStatus`, 30s for `faucet_getStatus`), use OpenResty with Lua:
 
 ```bash
 # Install OpenResty instead of nginx
@@ -201,7 +201,7 @@ local cjson = require "cjson.safe"
 
 local cache_ttl = {
     ["node_getStatus"] = 10,
-    ["faucet_getStats"] = 30,
+    ["faucet_getStatus"] = 30,
 }
 
 local function set_cache_header()
@@ -573,7 +573,7 @@ df -h /home/botho/.botho
 ### RPC Caching (#309)
 - [ ] nginx cache zone configured (`/var/cache/nginx/rpc`)
 - [ ] `node_getStatus` cached (X-Cache-Status shows HIT)
-- [ ] `faucet_getStats` cached (X-Cache-Status shows HIT)
+- [ ] `faucet_getStatus` cached (X-Cache-Status shows HIT)
 - [ ] `faucet_request` never cached (X-Cache-Status shows BYPASS)
 - [ ] X-Cache-Status header visible in responses
 - [ ] Cache size limited (100MB max)

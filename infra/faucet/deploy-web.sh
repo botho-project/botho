@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Deploy Botho Seed Node Status Page
+# Deploy Botho Faucet Web Page
 #
 # This script deploys the web files and nginx configuration to the server.
 #
@@ -8,8 +8,8 @@
 #   ./deploy-web.sh [user@host]
 #
 # Example:
-#   ./deploy-web.sh ubuntu@seed.botho.io
-#   ./deploy-web.sh  # Uses default: ubuntu@seed.botho.io
+#   ./deploy-web.sh ubuntu@faucet.botho.io
+#   ./deploy-web.sh  # Uses default: ubuntu@faucet.botho.io
 
 set -euo pipefail
 
@@ -23,12 +23,12 @@ log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 log_step() { echo -e "${BLUE}[STEP]${NC} $1"; }
 
 # Configuration
-DEFAULT_HOST="ubuntu@seed.botho.io"
+DEFAULT_HOST="ubuntu@faucet.botho.io"
 HOST="${1:-$DEFAULT_HOST}"
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/botho-nodes.pem}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WEB_DIR="$SCRIPT_DIR/web"
-NGINX_CONF="$SCRIPT_DIR/seed-nginx.conf"
+NGINX_CONF="$SCRIPT_DIR/faucet-nginx.conf"
 
 # Validate SSH key exists
 if [[ ! -f "$SSH_KEY" ]]; then
@@ -39,26 +39,26 @@ fi
 
 SSH_OPTS="-i $SSH_KEY -o StrictHostKeyChecking=accept-new"
 
-log_info "Deploying Seed Node Status Page to $HOST"
+log_info "Deploying Faucet Web Page to $HOST"
 
 # Step 1: Copy web files
 log_step "Copying web files..."
-ssh $SSH_OPTS "$HOST" "sudo mkdir -p /var/www/seed"
-rsync -avz --delete -e "ssh $SSH_OPTS" "$WEB_DIR/" "$HOST:/tmp/seed-web/"
-ssh $SSH_OPTS "$HOST" "sudo cp -r /tmp/seed-web/* /var/www/seed/ && sudo chown -R www-data:www-data /var/www/seed"
+ssh $SSH_OPTS "$HOST" "sudo mkdir -p /var/www/faucet"
+rsync -avz --delete -e "ssh $SSH_OPTS" "$WEB_DIR/" "$HOST:/tmp/faucet-web/"
+ssh $SSH_OPTS "$HOST" "sudo cp -r /tmp/faucet-web/* /var/www/faucet/ && sudo chown -R www-data:www-data /var/www/faucet"
 
 # Step 2: Copy nginx config
 log_step "Copying nginx configuration..."
-scp $SSH_OPTS "$NGINX_CONF" "$HOST:/tmp/seed-nginx.conf"
-ssh $SSH_OPTS "$HOST" "sudo cp /tmp/seed-nginx.conf /etc/nginx/sites-available/seed.botho.io"
+scp $SSH_OPTS "$NGINX_CONF" "$HOST:/tmp/faucet-nginx.conf"
+ssh $SSH_OPTS "$HOST" "sudo cp /tmp/faucet-nginx.conf /etc/nginx/sites-available/faucet.botho.io"
 
 # Step 3: Enable site if not already enabled
 log_step "Enabling nginx site..."
-ssh $SSH_OPTS "$HOST" "sudo ln -sf /etc/nginx/sites-available/seed.botho.io /etc/nginx/sites-enabled/ 2>/dev/null || true"
+ssh $SSH_OPTS "$HOST" "sudo ln -sf /etc/nginx/sites-available/faucet.botho.io /etc/nginx/sites-enabled/ 2>/dev/null || true"
 
 # Step 4: Create cache directory
 log_step "Creating cache directory..."
-ssh $SSH_OPTS "$HOST" "sudo mkdir -p /var/cache/nginx/seed && sudo chown www-data:www-data /var/cache/nginx/seed"
+ssh $SSH_OPTS "$HOST" "sudo mkdir -p /var/cache/nginx/faucet && sudo chown www-data:www-data /var/cache/nginx/faucet"
 
 # Step 5: Test and reload nginx
 log_step "Testing and reloading nginx..."
@@ -66,8 +66,8 @@ ssh $SSH_OPTS "$HOST" "sudo nginx -t && sudo systemctl reload nginx"
 
 log_info "Deployment complete!"
 echo ""
-echo "Status page should now be live at https://seed.botho.io"
+echo "Faucet page should now be live at https://faucet.botho.io"
 echo ""
 echo "To verify:"
-echo "  curl -s https://seed.botho.io/health"
-echo "  curl -s https://seed.botho.io/"
+echo "  curl -s https://faucet.botho.io/health"
+echo "  curl -s https://faucet.botho.io/"

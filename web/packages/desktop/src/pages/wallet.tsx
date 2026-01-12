@@ -30,8 +30,9 @@ function AddressSetup({ onComplete }: { onComplete: (address: string) => void })
       setError('Please enter your wallet address')
       return
     }
-    if (!address.startsWith('bth1') || address.length < 40) {
-      setError('Invalid address format. Should start with bth1...')
+    // Accept tbotho://1/ (testnet) or botho://1/ (mainnet) formats
+    if (!address.startsWith('tbotho://1/') && !address.startsWith('botho://1/')) {
+      setError('Invalid address format. Should start with tbotho://1/...')
       return
     }
     onComplete(address)
@@ -57,7 +58,7 @@ function AddressSetup({ onComplete }: { onComplete: (address: string) => void })
 
         <div className="mt-6 w-full max-w-md space-y-4">
           <Input
-            placeholder="bth1qxy2kgdyg..."
+            placeholder="tbotho://1/..."
             value={address}
             onChange={(e) => setAddress(e.target.value)}
             error={error || undefined}

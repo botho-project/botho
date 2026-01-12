@@ -494,7 +494,7 @@ async fn test_faucet_stats_endpoint() {
     .await;
 
     // Check faucet stats
-    let response = rpc_call(&client, addr, "faucet_getStats", json!({})).await;
+    let response = rpc_call(&client, addr, "faucet_getStatus", json!({})).await;
 
     assert!(
         response["error"].is_null(),

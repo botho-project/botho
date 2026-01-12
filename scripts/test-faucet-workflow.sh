@@ -277,7 +277,7 @@ test_user_friendly_errors() {
 test_faucet_stats() {
     log_info "Test 6: Faucet stats endpoint works"
 
-    local response=$(rpc_call "faucet_getStats" "{}" "$FAUCET_HOST" "$FAUCET_PORT")
+    local response=$(rpc_call "faucet_getStatus" "{}" "$FAUCET_HOST" "$FAUCET_PORT")
 
     if echo "$response" | jq -e '.result.enabled' > /dev/null 2>&1; then
         local enabled=$(echo "$response" | jq -r '.result.enabled')

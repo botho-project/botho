@@ -3,7 +3,7 @@
  *
  * Handles:
  * - Drip amount decay calculation based on time since last request
- * - RPC calls to faucet_request, faucet_getStats, and node_getStatus
+ * - RPC calls to faucet_request, faucet_getStatus, and node_getStatus
  * - localStorage tracking for decay timer
  * - UI state management and error handling
  * - Configurable section visibility with URL parameter overrides
@@ -194,9 +194,9 @@
   /**
    * Validate address format
    * Accepts:
-   * - bth1 format: bth1<40 hex chars> (from web wallet)
-   * - tbotho:// format: tbotho://1/<base58> (native testnet format)
-   * - Legacy format: view:<hex>\nspend:<hex>
+   * - tbotho:// format: tbotho://1/<base58> (testnet format)
+   * - botho:// format: botho://1/<base58> (mainnet format)
+   * - Legacy format: view:<hex>,spend:<hex>
    */
   function validateAddress(address) {
     const trimmed = address.trim();
@@ -204,32 +204,24 @@
       return { valid: false, error: 'Please enter your wallet address' };
     }
 
-    // Check for bth1 format (web wallet): bth1 + 40 hex chars
-    if (/^bth1[a-f0-9]{40}$/i.test(trimmed)) {
-      return { valid: true, address: trimmed };
-    }
-
-    // Check for tbotho:// URI format (native testnet)
+    // Check for tbotho:// URI format (testnet)
     if (/^tbotho:\/\/1\/[A-Za-z0-9]+$/.test(trimmed)) {
       return { valid: true, address: trimmed };
     }
 
-    // Check for botho:// URI format (native mainnet)
+    // Check for botho:// URI format (mainnet)
     if (/^botho:\/\/1\/[A-Za-z0-9]+$/.test(trimmed)) {
       return { valid: true, address: trimmed };
     }
 
-    // Legacy: Check for view: and spend: prefixes
-    const hasView = /^view:[a-f0-9]+$/im.test(trimmed);
-    const hasSpend = /^spend:[a-f0-9]+$/im.test(trimmed);
-
-    if (hasView && hasSpend) {
+    // Legacy: Check for view:<hex>,spend:<hex> format (comma-separated)
+    if (/^view:[a-f0-9]+,spend:[a-f0-9]+$/i.test(trimmed.replace(/\s+/g, ''))) {
       return { valid: true, address: trimmed };
     }
 
     return {
       valid: false,
-      error: 'Invalid address format. Use bth1... or tbotho://1/... format',
+      error: 'Invalid address format. Use tbotho://1/... format from your wallet',
     };
   }
 
@@ -392,7 +384,7 @@
    */
   async function loadFaucetStats() {
     try {
-      const stats = await rpcCall('faucet_getStats', {});
+      const stats = await rpcCall('faucet_getStatus', {});
 
       elements.statusLoading.classList.add('hidden');
       elements.statusError.classList.add('hidden');
