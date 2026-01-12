@@ -53,7 +53,7 @@
   <!-- Main Content -->
   <main class="flex-1 max-w-2xl mx-auto w-full px-4 py-8">
     <!-- Faucet Card -->
-    <div class="bg-botho-card rounded-xl border border-botho-border p-6 mb-6">
+    <div id="faucet-card" class="bg-botho-card rounded-xl border border-botho-border p-6 mb-6">
       <h2 class="text-lg font-semibold mb-4">Request Testnet BTH</h2>
 
       <!-- Address Input -->
@@ -92,7 +92,7 @@
     </div>
 
     <!-- Faucet Status Card -->
-    <div class="bg-botho-card rounded-xl border border-botho-border p-6">
+    <div id="faucet-status-card" class="bg-botho-card rounded-xl border border-botho-border p-6 mb-6">
       <h2 class="text-lg font-semibold mb-4">Faucet Status</h2>
 
       <div id="status-loading" class="text-gray-400 text-sm">
@@ -128,6 +128,59 @@
 
       <div id="status-error" class="hidden text-red-400 text-sm">
         Failed to load faucet status
+      </div>
+    </div>
+
+    <!-- Node Status Card -->
+    <div id="node-status-card" class="bg-botho-card rounded-xl border border-botho-border p-6">
+      <h2 class="text-lg font-semibold mb-4">Node Status</h2>
+
+      <div id="node-stats-loading" class="text-gray-400 text-sm">
+        Loading node status...
+      </div>
+
+      <div id="node-stats-content" class="hidden">
+        <!-- Metrics Grid -->
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-4">
+          <div class="text-center p-3 bg-botho-bg rounded-lg border border-botho-border">
+            <p class="text-xs text-gray-500 uppercase tracking-wide mb-1">Uptime</p>
+            <p id="node-uptime" class="text-lg font-semibold text-botho-cyan">—</p>
+          </div>
+          <div class="text-center p-3 bg-botho-bg rounded-lg border border-botho-border">
+            <p class="text-xs text-gray-500 uppercase tracking-wide mb-1">Height</p>
+            <p id="node-height" class="text-lg font-semibold text-botho-cyan">—</p>
+          </div>
+          <div class="text-center p-3 bg-botho-bg rounded-lg border border-botho-border">
+            <p class="text-xs text-gray-500 uppercase tracking-wide mb-1">SCP Peers</p>
+            <p id="node-scp-peers" class="text-lg font-semibold text-botho-cyan">—</p>
+          </div>
+          <div class="text-center p-3 bg-botho-bg rounded-lg border border-botho-border">
+            <p class="text-xs text-gray-500 uppercase tracking-wide mb-1">Transactions</p>
+            <p id="node-transactions" class="text-lg font-semibold text-botho-cyan">—</p>
+          </div>
+        </div>
+
+        <!-- Status Row -->
+        <div class="flex flex-wrap gap-4 text-sm">
+          <div class="flex items-center gap-2">
+            <span class="text-gray-400">Sync:</span>
+            <span id="node-sync-status" class="flex items-center gap-2">
+              <span class="w-2 h-2 rounded-full bg-gray-500"></span>
+              <span class="text-gray-400">Unknown</span>
+            </span>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="text-gray-400">Minting:</span>
+            <span id="node-minting-status" class="flex items-center gap-2">
+              <span class="w-2 h-2 rounded-full bg-gray-500"></span>
+              <span class="text-gray-400">Unknown</span>
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div id="node-stats-error" class="hidden text-red-400 text-sm">
+        Node status unavailable
       </div>
     </div>
   </main>
