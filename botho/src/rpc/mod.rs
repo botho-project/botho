@@ -67,7 +67,7 @@ use tracing::{debug, error, info};
 
 use bth_cluster_tax::{FeeConfig, TransactionType};
 use bth_transaction_types::constants::Network;
-use crate::{address::Address, ledger::Ledger, mempool::Mempool, transaction::TxOutput, wallet::Wallet};
+use crate::{address::Address, ledger::Ledger, mempool::Mempool, transaction::{TxOutput, MIN_TX_FEE}, wallet::Wallet};
 
 /// JSON-RPC request
 #[derive(Debug, Deserialize)]
@@ -2189,9 +2189,8 @@ async fn handle_faucet_request(
         }
     };
 
-    // Calculate fee (minimal for faucet)
-    let fee_config = FeeConfig::default();
-    let fee = fee_config.estimate_typical_fee(TransactionType::Hidden, 0, 0).max(1);
+    // Calculate fee (use minimum required fee)
+    let fee = MIN_TX_FEE;
 
     // Check balance
     let total_balance: u64 = utxos.iter().map(|u| u.output.amount).sum();
