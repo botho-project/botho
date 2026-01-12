@@ -52,8 +52,11 @@ function CreateWalletView({ onCreate }: { onCreate: (mnemonic: string, password?
         </div>
 
         <label className="flex items-start gap-3 mb-4 cursor-pointer">
-          <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} className="mt-1 w-4 h-4" />
-          <span className="text-sm text-ghost">I have written down my recovery phrase and stored it in a safe place.</span>
+          <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} className="mt-1 w-4 h-4 accent-pulse" />
+          <span className="text-sm text-ghost">
+            I have written down my recovery phrase and stored it in a safe place.
+            <span className="text-danger ml-1">*</span>
+          </span>
         </label>
 
         <div className="border-t border-steel pt-4 mb-5 sm:mb-6">
