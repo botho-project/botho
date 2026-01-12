@@ -127,6 +127,8 @@ pub struct RpcState {
     pub minting_active: Arc<RwLock<bool>>,
     pub minting_threads: usize,
     pub peer_count: Arc<RwLock<usize>>,
+    /// SCP consensus peer count (peers participating in voting)
+    pub scp_peer_count: Arc<RwLock<usize>>,
     pub start_time: std::time::Instant,
     /// Wallet view key (None if running in relay mode)
     pub wallet_view_key: Option<[u8; 32]>,
@@ -162,6 +164,7 @@ impl RpcState {
             minting_active: Arc::new(RwLock::new(false)),
             minting_threads: num_cpus::get(),
             peer_count: Arc::new(RwLock::new(0)),
+            scp_peer_count: Arc::new(RwLock::new(0)),
             start_time: std::time::Instant::now(),
             wallet_view_key,
             wallet_spend_key,
@@ -180,6 +183,7 @@ impl RpcState {
         mempool: Arc<RwLock<Mempool>>,
         minting_active: Arc<RwLock<bool>>,
         peer_count: Arc<RwLock<usize>>,
+        scp_peer_count: Arc<RwLock<usize>>,
         wallet_view_key: Option<[u8; 32]>,
         wallet_spend_key: Option<[u8; 32]>,
         cors_origins: Vec<String>,
@@ -191,6 +195,7 @@ impl RpcState {
             minting_active,
             minting_threads: num_cpus::get(),
             peer_count,
+            scp_peer_count,
             start_time: std::time::Instant::now(),
             wallet_view_key,
             wallet_spend_key,
@@ -219,6 +224,7 @@ impl RpcState {
             minting_active: Arc::new(RwLock::new(false)),
             minting_threads: num_cpus::get(),
             peer_count: Arc::new(RwLock::new(0)),
+            scp_peer_count: Arc::new(RwLock::new(0)),
             start_time: std::time::Instant::now(),
             wallet_view_key,
             wallet_spend_key,
@@ -693,22 +699,33 @@ async fn handle_node_status(id: Value, state: &RpcState) -> JsonRpcResponse {
     let minting = *read_lock!(state.minting_active, id.clone());
     let mempool = read_lock!(state.mempool, id.clone());
     let peers = *read_lock!(state.peer_count, id.clone());
+    let scp_peers = *read_lock!(state.scp_peer_count, id.clone());
+
+    // Calculate sync progress: 100.0 if synced, otherwise based on chain state
+    // TODO: Wire up actual sync progress from ChainSyncManager
+    let sync_progress: f64 = 100.0;
 
     JsonRpcResponse::success(
         id,
         json!({
             "version": env!("CARGO_PKG_VERSION"),
+            "nodeVersion": env!("CARGO_PKG_VERSION"),
             "gitCommit": option_env!("GIT_HASH").unwrap_or("unknown"),
             "gitCommitShort": option_env!("GIT_HASH_SHORT").unwrap_or("unknown"),
             "buildTime": option_env!("BUILD_TIME").unwrap_or("unknown"),
             "network": "botho-mainnet",
             "uptimeSeconds": state.start_time.elapsed().as_secs(),
             "syncStatus": "synced",
+            "syncProgress": sync_progress,
+            "synced": true,
             "chainHeight": chain_state.height,
             "tipHash": hex::encode(chain_state.tip_hash),
             "peerCount": peers,
+            "scpPeerCount": scp_peers,
             "mempoolSize": mempool.len(),
             "mintingActive": minting,
+            "mintingThreads": if minting { state.minting_threads } else { 0 },
+            "totalTransactions": chain_state.total_tx,
         }),
     )
 }

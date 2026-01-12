@@ -125,7 +125,9 @@ async fn test_node_get_status() {
     assert!(response["result"].is_object());
 
     let result = &response["result"];
+    // Core fields
     assert!(result["version"].is_string());
+    assert!(result["nodeVersion"].is_string());
     assert!(result["network"].is_string());
     assert!(result["uptimeSeconds"].is_number());
     assert!(result["chainHeight"].is_number());
@@ -133,6 +135,20 @@ async fn test_node_get_status() {
     assert!(result["peerCount"].is_number());
     assert!(result["mempoolSize"].is_number());
     assert!(result["mintingActive"].is_boolean());
+
+    // Extended fields (issue #307)
+    assert!(result["scpPeerCount"].is_number());
+    assert!(result["mintingThreads"].is_number());
+    assert!(result["syncProgress"].is_number());
+    assert!(result["synced"].is_boolean());
+    assert!(result["totalTransactions"].is_number());
+
+    // Verify version and nodeVersion match
+    assert_eq!(result["version"], result["nodeVersion"]);
+
+    // Verify syncProgress is 100 when synced
+    assert_eq!(result["syncProgress"].as_f64().unwrap(), 100.0);
+    assert!(result["synced"].as_bool().unwrap());
 }
 
 // ============================================================================
