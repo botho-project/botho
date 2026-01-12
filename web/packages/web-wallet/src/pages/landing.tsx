@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Button, Logo } from '@botho/ui'
-import { Shield, Scale, Atom, Zap, ArrowRight, Github, Menu, X, FileText } from 'lucide-react'
+import { Shield, Scale, Atom, Zap, ArrowRight, Github, Menu, X, FileText, Blocks } from 'lucide-react'
 
 const features = [
   {
@@ -48,6 +48,10 @@ export function LandingPage() {
 
           {/* Desktop nav */}
           <nav className="hidden md:flex items-center gap-8">
+            <Link to="/explorer" className="text-ghost hover:text-light transition-colors flex items-center gap-2">
+              <Blocks size={18} />
+              Explorer
+            </Link>
             <Link to="/docs" className="text-ghost hover:text-light transition-colors">
               Docs
             </Link>
@@ -88,6 +92,14 @@ export function LandingPage() {
         {mobileMenuOpen && (
           <div className="md:hidden border-t border-steel bg-abyss/95 backdrop-blur-md">
             <nav className="px-4 py-4 space-y-1">
+              <Link
+                to="/explorer"
+                onClick={() => setMobileMenuOpen(false)}
+                className="flex items-center gap-2 px-4 py-3 rounded-lg text-ghost hover:text-light hover:bg-steel/50 transition-colors"
+              >
+                <Blocks size={18} />
+                Block Explorer
+              </Link>
               <Link
                 to="/docs"
                 onClick={() => setMobileMenuOpen(false)}
@@ -227,6 +239,9 @@ export function LandingPage() {
               <span className="text-ghost text-sm">Botho Project</span>
             </div>
             <div className="flex items-center gap-6 text-sm text-ghost">
+              <Link to="/explorer" className="hover:text-light transition-colors">
+                Explorer
+              </Link>
               <Link to="/docs" className="hover:text-light transition-colors">
                 Documentation
               </Link>

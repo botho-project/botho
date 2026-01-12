@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { Logo } from '@botho/ui'
 import { ExplorerProvider, Explorer, type ExplorerDataSource } from '@botho/features'
 import { useWallet, useAdapter } from '../contexts/wallet'
+import { NetworkSelector } from '../components/NetworkSelector'
 import { ArrowLeft } from 'lucide-react'
 
 export function ExplorerPage() {
@@ -20,40 +21,31 @@ export function ExplorerPage() {
   }, [adapter])
 
   return (
-    <div className="min-h-screen bg-[--color-void]">
+    <div className="min-h-screen">
       {/* Header */}
-      <header className="sticky top-0 z-40 border-b border-[--color-steel] bg-[--color-void]/80 backdrop-blur-xl">
-        <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-6">
-          <div className="flex items-center gap-4">
-            <Link
-              to="/"
-              className="flex items-center gap-2 text-sm text-[--color-ghost] transition-colors hover:text-[--color-light]"
-            >
-              <ArrowLeft className="h-4 w-4" />
-              Back
-            </Link>
-            <div className="h-6 w-px bg-[--color-steel]" />
-            <Logo />
-          </div>
-          <div>
-            <h1 className="font-display text-xl font-bold text-[--color-light]">
-              Block Explorer
-            </h1>
-          </div>
+      <header className="border-b border-steel bg-abyss/50 backdrop-blur-md sticky top-0 z-40">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-3 sm:py-4 flex items-center justify-between">
+          <Link to="/" className="flex items-center gap-2 sm:gap-3">
+            <ArrowLeft size={18} className="text-ghost" />
+            <Logo size="sm" showText={false} />
+            <span className="font-display text-base sm:text-lg font-semibold hidden sm:inline">Block Explorer</span>
+            <span className="font-display text-base font-semibold sm:hidden">Explorer</span>
+          </Link>
+          <NetworkSelector />
         </div>
       </header>
 
       {/* Main content */}
-      <main className="mx-auto max-w-6xl p-6">
+      <main className="py-6 sm:py-8 md:py-12 px-4 sm:px-6 max-w-6xl mx-auto">
         <ExplorerProvider dataSource={dataSource} isReady={isConnected}>
           <Explorer
             isConnected={isConnected}
             notConnectedMessage={
               <>
-                <p className="mt-4 text-lg text-[--color-ghost]">
+                <p className="mt-4 text-lg text-ghost">
                   Connecting to network...
                 </p>
-                <p className="mt-2 text-sm text-[--color-dim]">
+                <p className="mt-2 text-sm text-muted">
                   Please wait while we connect to Botho nodes
                 </p>
               </>
