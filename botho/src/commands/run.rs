@@ -219,6 +219,9 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
     // Create shared state for RPC
     let minting_active = Arc::new(RwLock::new(false));
     let peer_count = Arc::new(RwLock::new(discovery.peer_count()));
+    // SCP peer count tracks consensus participants (currently equals peer_count
+    // as all peers participate in SCP consensus)
+    let scp_peer_count = Arc::new(RwLock::new(discovery.peer_count()));
     let ws_broadcaster = Arc::new(WsBroadcaster::new(1024));
 
     let rpc_state = Arc::new(RpcState::from_shared(
@@ -226,6 +229,7 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
         node.shared_mempool(),
         minting_active.clone(),
         peer_count.clone(),
+        scp_peer_count.clone(),
         node.wallet_view_key(),
         node.wallet_spend_key(),
         config.network.cors_origins.clone(),
@@ -459,6 +463,10 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                             if let Ok(mut count) = peer_count.write() {
                                 *count = new_peer_count;
                             }
+                            // Update SCP peer count (all peers participate in consensus)
+                            if let Ok(mut count) = scp_peer_count.write() {
+                                *count = new_peer_count;
+                            }
                             metrics_updater.set_peer_count(new_peer_count);
 
                             // Broadcast peer event to WebSocket clients
@@ -491,6 +499,10 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
 
                             // Update RPC peer count and metrics
                             if let Ok(mut count) = peer_count.write() {
+                                *count = new_peer_count;
+                            }
+                            // Update SCP peer count (all peers participate in consensus)
+                            if let Ok(mut count) = scp_peer_count.write() {
                                 *count = new_peer_count;
                             }
                             metrics_updater.set_peer_count(new_peer_count);
