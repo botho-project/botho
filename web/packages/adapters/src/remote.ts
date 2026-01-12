@@ -200,11 +200,19 @@ export class RemoteNodeAdapter implements NodeAdapter {
   async getRecentBlocks(options?: BlockFetchOptions): Promise<Block[]> {
     const blocks: Block[] = []
     const limit = options?.limit || 10
-    const startHeight = options?.startHeight || 0
 
-    // Fetch blocks sequentially (could optimize with batch RPC)
-    for (let i = 0; i < limit; i++) {
-      const block = await this.getBlock(startHeight + i)
+    // If no startHeight specified, fetch from the chain tip (most recent)
+    let startHeight = options?.startHeight
+    if (startHeight === undefined) {
+      const chainHeight = await this.getBlockHeight()
+      startHeight = Math.max(0, chainHeight - limit + 1)
+    }
+
+    // Fetch blocks and return in descending order (newest first)
+    for (let i = limit - 1; i >= 0; i--) {
+      const height = startHeight + i
+      if (height < 0) continue
+      const block = await this.getBlock(height)
       if (block) {
         blocks.push(block)
       }
