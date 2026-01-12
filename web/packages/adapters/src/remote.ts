@@ -21,7 +21,7 @@ import type {
 } from './types'
 
 const DEFAULT_CONFIG: Required<RemoteNodeConfig> = {
-  seedNodes: ['https://seed.botho.io'],
+  seedNodes: ['https://faucet.botho.io'],
   networkId: 'botho-mainnet',
   timeout: 10000,
   useWebSocket: true,

@@ -34,7 +34,7 @@ export const NETWORKS: Record<string, NetworkConfig> = {
   testnet: {
     id: 'testnet',
     name: 'Testnet',
-    rpcEndpoint: getEnvRpcEndpoint() || 'https://seed.botho.io/rpc',
+    rpcEndpoint: getEnvRpcEndpoint() || 'https://faucet.botho.io/rpc',
     faucetEndpoint: getEnvFaucetEndpoint() || 'https://faucet.botho.io/rpc',
     explorerUrl: 'https://explorer.testnet.botho.io',
     networkId: 'botho-testnet',
