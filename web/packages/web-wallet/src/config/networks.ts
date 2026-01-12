@@ -34,19 +34,11 @@ export const NETWORKS: Record<string, NetworkConfig> = {
   testnet: {
     id: 'testnet',
     name: 'Testnet',
-    rpcEndpoint: getEnvRpcEndpoint() || 'https://seed.botho.io:17101',
-    faucetEndpoint: getEnvFaucetEndpoint() || 'https://faucet.botho.io:17101',
+    rpcEndpoint: getEnvRpcEndpoint() || 'https://seed.botho.io/rpc',
+    faucetEndpoint: getEnvFaucetEndpoint() || 'https://faucet.botho.io/rpc',
     explorerUrl: 'https://explorer.testnet.botho.io',
     networkId: 'botho-testnet',
     isTestnet: true,
-  },
-  mainnet: {
-    id: 'mainnet',
-    name: 'Mainnet',
-    rpcEndpoint: 'https://seed.botho.io:7101',
-    explorerUrl: 'https://explorer.botho.io',
-    networkId: 'botho-mainnet',
-    isTestnet: false,
   },
 }
 
