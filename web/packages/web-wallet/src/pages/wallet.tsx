@@ -1,13 +1,13 @@
 import { useState, useMemo } from 'react'
 import { Link } from 'react-router-dom'
-import { Button, Card, Input, Logo, Toast } from '@botho/ui'
+import { Button, Card, Input, Logo } from '@botho/ui'
 import { createMnemonic12 } from '@botho/core'
-import { useCopyToClipboard, BalanceCard, TransactionList, SendModal, type SendFormData, type SendResult } from '@botho/features'
+import { BalanceCard, TransactionList, SendModal, type SendFormData, type SendResult } from '@botho/features'
 import { useWallet } from '../contexts/wallet'
 import { useNetwork } from '../contexts/network'
 import { NetworkSelector } from '../components/NetworkSelector'
 import { FaucetButton } from '../components/FaucetButton'
-import { Send, Download, RefreshCw, ArrowLeft, Shield, Eye, KeyRound, AlertCircle, Lock, Check, Settings, Trash2 } from 'lucide-react'
+import { Send, RefreshCw, ArrowLeft, Shield, Eye, KeyRound, AlertCircle, Lock, Settings, Trash2 } from 'lucide-react'
 
 function CreateWalletView({ onCreate }: { onCreate: (mnemonic: string, password?: string) => void }) {
   const [showMnemonic, setShowMnemonic] = useState(false)
@@ -215,18 +215,9 @@ function ImportWalletView({ onImport }: { onImport: (mnemonic: string, password?
 function WalletDashboard() {
   const { address, balance, transactions, isConnecting, isConnected, refreshBalance, resetWallet } = useWallet()
   const { hasFaucet } = useNetwork()
-  const { copy } = useCopyToClipboard()
   const [sendOpen, setSendOpen] = useState(false)
   const [isSending, setIsSending] = useState(false)
-  const [showCopiedToast, setShowCopiedToast] = useState(false)
   const [showResetConfirm, setShowResetConfirm] = useState(false)
-
-  const handleReceive = () => {
-    if (address) {
-      copy(address)
-      setShowCopiedToast(true)
-    }
-  }
 
   const handleReset = () => {
     resetWallet()
@@ -258,9 +249,6 @@ function WalletDashboard() {
     <>
       <Button onClick={() => setSendOpen(true)}>
         <Send size={16} className="mr-2" />Send
-      </Button>
-      <Button variant="secondary" onClick={handleReceive}>
-        <Download size={16} className="mr-2" />Receive
       </Button>
       <Button variant="ghost" size="sm" onClick={refreshBalance} disabled={isConnecting}>
         <RefreshCw size={16} className={isConnecting ? 'animate-spin' : ''} />
@@ -298,13 +286,6 @@ function WalletDashboard() {
         estimateFee={estimateFee}
         onSend={handleSend}
         isSending={isSending}
-      />
-
-      <Toast
-        message="Address copied to clipboard"
-        visible={showCopiedToast}
-        onHide={() => setShowCopiedToast(false)}
-        icon={<Check size={16} className="text-success" />}
       />
 
       {showResetConfirm && (
