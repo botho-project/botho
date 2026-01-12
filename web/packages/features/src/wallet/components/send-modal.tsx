@@ -3,7 +3,7 @@ import type { Balance } from '@botho/core'
 import { formatBTH, parseBTH } from '@botho/core'
 import { Button, Input } from '@botho/ui'
 import { motion, AnimatePresence } from 'motion/react'
-import { ChevronDown, ChevronUp, Loader2, Send, Shield, X, Zap } from 'lucide-react'
+import { ChevronDown, ChevronUp, Loader2, Send, X, Zap } from 'lucide-react'
 
 export type SendPrivacyLevel = 'standard' | 'private'
 
@@ -194,9 +194,19 @@ export function SendModal({
 
             {/* Amount */}
             <div>
-              <label className="mb-1.5 block text-sm font-medium text-[--color-ghost]">
-                Amount
-              </label>
+              <div className="mb-1.5 flex items-center justify-between">
+                <label className="text-sm font-medium text-[--color-ghost]">
+                  Amount
+                </label>
+                {balance && (
+                  <button
+                    onClick={() => setAmount(formatBTH(balance.available, { separators: false }))}
+                    className="text-xs text-[--color-pulse] hover:underline"
+                  >
+                    Max: {formatBTH(balance.available)} BTH
+                  </button>
+                )}
+              </div>
               <div className="relative">
                 <Input
                   type="text"
@@ -209,50 +219,6 @@ export function SendModal({
                   BTH
                 </span>
               </div>
-              {balance && (
-                <button
-                  onClick={() => setAmount(formatBTH(balance.available, { separators: false }))}
-                  className="mt-1 text-xs text-[--color-pulse] hover:underline"
-                >
-                  Max: {formatBTH(balance.available)} BTH
-                </button>
-              )}
-            </div>
-
-            {/* Privacy Level */}
-            <div>
-              <label className="mb-1.5 block text-sm font-medium text-[--color-ghost]">
-                Privacy Level
-              </label>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  onClick={() => setPrivacyLevel('standard')}
-                  className={`flex items-center justify-center gap-2 rounded-lg border p-3 transition-all ${
-                    privacyLevel === 'standard'
-                      ? 'border-[--color-pulse] bg-[--color-pulse]/10 text-[--color-pulse]'
-                      : 'border-[--color-steel] bg-[--color-slate] text-[--color-ghost] hover:border-[--color-pulse]/50'
-                  }`}
-                >
-                  <Zap className="h-4 w-4" />
-                  <span className="text-sm font-medium">Standard</span>
-                </button>
-                <button
-                  onClick={() => setPrivacyLevel('private')}
-                  className={`flex items-center justify-center gap-2 rounded-lg border p-3 transition-all ${
-                    privacyLevel === 'private'
-                      ? 'border-[--color-purple] bg-[--color-purple]/10 text-[--color-purple]'
-                      : 'border-[--color-steel] bg-[--color-slate] text-[--color-ghost] hover:border-[--color-purple]/50'
-                  }`}
-                >
-                  <Shield className="h-4 w-4" />
-                  <span className="text-sm font-medium">Private</span>
-                </button>
-              </div>
-              <p className="mt-1.5 text-xs text-[--color-dim]">
-                {privacyLevel === 'standard'
-                  ? 'Minting transactions only. Uses ML-DSA signatures.'
-                  : 'Hidden amounts + sender (CLSAG ring signature, ring=20). ~4 KB.'}
-              </p>
             </div>
 
             {/* Memo */}
