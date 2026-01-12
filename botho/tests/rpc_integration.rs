@@ -17,6 +17,7 @@ use serial_test::serial;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 
+use bth_transaction_types::constants::Network;
 use botho::{
     ledger::Ledger,
     mempool::Mempool,
@@ -47,6 +48,7 @@ async fn spawn_test_rpc_server() -> (TempDir, SocketAddr, tokio::task::JoinHandl
     let state = Arc::new(RpcState::new(
         ledger,
         mempool,
+        Network::Testnet,      // Use testnet for tests
         None,                  // No wallet view key
         None,                  // No wallet spend key
         vec!["*".to_string()], // Allow all CORS origins for testing

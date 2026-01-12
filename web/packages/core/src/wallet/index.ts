@@ -1,7 +1,28 @@
-import { generateMnemonic, validateMnemonic, mnemonicToSeedSync } from '@scure/bip39'
+import { generateMnemonic, validateMnemonic } from '@scure/bip39'
 import { wordlist } from '@scure/bip39/wordlists/english.js'
-import { sha256 } from '@noble/hashes/sha2.js'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js'
+import {
+  deriveAddressFromMnemonic,
+  deriveKeypairs,
+  formatAddress,
+  parseAddress,
+  isValidAddress,
+  shortenAddress,
+  type BothoKeypairs,
+  type ParsedAddress,
+} from './address'
+
+// Re-export address utilities
+export {
+  deriveAddressFromMnemonic,
+  deriveKeypairs,
+  formatAddress,
+  parseAddress,
+  isValidAddress,
+  shortenAddress,
+  type BothoKeypairs,
+  type ParsedAddress,
+}
 
 export interface WalletConfig {
   /** Network to connect to */
@@ -11,7 +32,7 @@ export interface WalletConfig {
 }
 
 export const DEFAULT_WALLET_CONFIG: WalletConfig = {
-  network: 'mainnet',
+  network: 'testnet',
   storagePrefix: 'botho-wallet',
 }
 
@@ -119,17 +140,19 @@ export function isValidMnemonic(mnemonic: string): boolean {
 
 /**
  * Derive a wallet address from a mnemonic
- * Uses SHA256 of the seed to create a deterministic address
+ *
+ * Uses proper Botho address derivation:
+ * 1. Mnemonic → BIP39 seed (64 bytes, empty passphrase)
+ * 2. Seed → SLIP-10 Ed25519 derivation at m/44'/866'/0'
+ * 3. SLIP-10 key → HKDF-SHA512 → view and spend Ristretto255 keys
+ * 4. Public keys → base58 encoding → tbotho://1/<base58>
  */
-export function deriveAddress(mnemonic: string): string {
+export function deriveAddress(mnemonic: string, network: 'mainnet' | 'testnet' = 'testnet'): string {
   if (!isValidMnemonic(mnemonic)) {
     throw new Error('Invalid mnemonic')
   }
 
-  const seed = mnemonicToSeedSync(mnemonic)
-  const hash = sha256(seed)
-  // Take first 20 bytes for address (similar to Ethereum)
-  return 'bth1' + bytesToHex(hash.slice(0, 20))
+  return deriveAddressFromMnemonic(mnemonic, network)
 }
 
 const STORAGE_KEY_MNEMONIC = 'botho-wallet-mnemonic'

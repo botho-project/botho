@@ -192,7 +192,11 @@
   }
 
   /**
-   * Validate address format (view:xxx\nspend:xxx)
+   * Validate address format
+   * Accepts:
+   * - bth1 format: bth1<40 hex chars> (from web wallet)
+   * - tbotho:// format: tbotho://1/<base58> (native testnet format)
+   * - Legacy format: view:<hex>\nspend:<hex>
    */
   function validateAddress(address) {
     const trimmed = address.trim();
@@ -200,18 +204,33 @@
       return { valid: false, error: 'Please enter your wallet address' };
     }
 
-    // Check for view: and spend: prefixes
+    // Check for bth1 format (web wallet): bth1 + 40 hex chars
+    if (/^bth1[a-f0-9]{40}$/i.test(trimmed)) {
+      return { valid: true, address: trimmed };
+    }
+
+    // Check for tbotho:// URI format (native testnet)
+    if (/^tbotho:\/\/1\/[A-Za-z0-9]+$/.test(trimmed)) {
+      return { valid: true, address: trimmed };
+    }
+
+    // Check for botho:// URI format (native mainnet)
+    if (/^botho:\/\/1\/[A-Za-z0-9]+$/.test(trimmed)) {
+      return { valid: true, address: trimmed };
+    }
+
+    // Legacy: Check for view: and spend: prefixes
     const hasView = /^view:[a-f0-9]+$/im.test(trimmed);
     const hasSpend = /^spend:[a-f0-9]+$/im.test(trimmed);
 
-    if (!hasView || !hasSpend) {
-      return {
-        valid: false,
-        error: 'Address must include both view: and spend: lines with hex values',
-      };
+    if (hasView && hasSpend) {
+      return { valid: true, address: trimmed };
     }
 
-    return { valid: true, address: trimmed };
+    return {
+      valid: false,
+      error: 'Invalid address format. Use bth1... or tbotho://1/... format',
+    };
   }
 
   /**

@@ -230,6 +230,7 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
         minting_active.clone(),
         peer_count.clone(),
         scp_peer_count.clone(),
+        config.network_type,
         node.wallet_view_key(),
         node.wallet_spend_key(),
         config.network.cors_origins.clone(),

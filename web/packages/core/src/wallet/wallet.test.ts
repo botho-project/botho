@@ -12,6 +12,10 @@ import {
   hasStoredWallet,
   isWalletEncrypted,
   clearWallet,
+  parseAddress,
+  isValidAddress,
+  shortenAddress,
+  deriveKeypairs,
 } from './index'
 
 // Mock localStorage
@@ -120,14 +124,14 @@ describe('Wallet Core Functions', () => {
       expect(address1).toBe(address2)
     })
 
-    it('starts with bth1 prefix', () => {
+    it('starts with tbotho://1/ prefix (testnet default)', () => {
       const address = deriveAddress(TEST_MNEMONIC_12)
-      expect(address.startsWith('bth1')).toBe(true)
+      expect(address.startsWith('tbotho://1/')).toBe(true)
     })
 
-    it('has correct length (bth1 + 40 hex chars)', () => {
-      const address = deriveAddress(TEST_MNEMONIC_12)
-      expect(address).toHaveLength(4 + 40) // 'bth1' + 40 hex chars
+    it('uses botho://1/ prefix for mainnet', () => {
+      const address = deriveAddress(TEST_MNEMONIC_12, 'mainnet')
+      expect(address.startsWith('botho://1/')).toBe(true)
     })
 
     it('derives different addresses for different mnemonics', () => {
@@ -143,8 +147,16 @@ describe('Wallet Core Functions', () => {
     it('produces consistent addresses (test vector)', () => {
       // This is a known test vector - the address should always be the same
       const address = deriveAddress(TEST_MNEMONIC_12)
-      // Verify it's a valid hex address
-      expect(address).toMatch(/^bth1[0-9a-f]{40}$/)
+      // Verify it matches the tbotho://1/<base58> format
+      expect(address).toMatch(/^tbotho:\/\/1\/[A-Za-z1-9]+$/)
+    })
+
+    it('produces base58-encoded public keys', () => {
+      const address = deriveAddress(TEST_MNEMONIC_12)
+      // Extract the base58 part and verify it's valid
+      const base58Part = address.slice('tbotho://1/'.length)
+      // Base58 should only contain valid characters (no 0, O, I, l)
+      expect(base58Part).toMatch(/^[A-HJ-NP-Za-km-z1-9]+$/)
     })
   })
 
@@ -374,5 +386,113 @@ describe('Import Wallet Flow', () => {
     // Can load with password
     const wallet = await loadWallet(password)
     expect(wallet!.mnemonic).toBe(mnemonic)
+  })
+})
+
+describe('Address Utilities', () => {
+  describe('parseAddress', () => {
+    it('parses testnet address correctly', () => {
+      const address = deriveAddress(TEST_MNEMONIC_12)
+      const parsed = parseAddress(address)
+
+      expect(parsed.network).toBe('testnet')
+      expect(parsed.viewPublic).toHaveLength(32)
+      expect(parsed.spendPublic).toHaveLength(32)
+    })
+
+    it('parses mainnet address correctly', () => {
+      const address = deriveAddress(TEST_MNEMONIC_12, 'mainnet')
+      const parsed = parseAddress(address)
+
+      expect(parsed.network).toBe('mainnet')
+      expect(parsed.viewPublic).toHaveLength(32)
+      expect(parsed.spendPublic).toHaveLength(32)
+    })
+
+    it('throws error for invalid prefix', () => {
+      expect(() => parseAddress('invalid://1/abc123')).toThrow('Invalid address format')
+    })
+
+    it('handles whitespace in address', () => {
+      const address = deriveAddress(TEST_MNEMONIC_12)
+      const parsed = parseAddress('  ' + address + '  ')
+
+      expect(parsed.network).toBe('testnet')
+    })
+  })
+
+  describe('isValidAddress', () => {
+    it('returns true for valid testnet address', () => {
+      const address = deriveAddress(TEST_MNEMONIC_12)
+      expect(isValidAddress(address)).toBe(true)
+    })
+
+    it('returns true for valid mainnet address', () => {
+      const address = deriveAddress(TEST_MNEMONIC_12, 'mainnet')
+      expect(isValidAddress(address)).toBe(true)
+    })
+
+    it('returns false for invalid address', () => {
+      expect(isValidAddress('not-an-address')).toBe(false)
+      expect(isValidAddress('')).toBe(false)
+      expect(isValidAddress('tbotho://1/')).toBe(false)
+    })
+  })
+
+  describe('shortenAddress', () => {
+    it('shortens long addresses', () => {
+      const address = deriveAddress(TEST_MNEMONIC_12)
+      const shortened = shortenAddress(address)
+
+      expect(shortened).toContain('...')
+      expect(shortened.length).toBeLessThan(address.length)
+    })
+
+    it('preserves short addresses', () => {
+      const shortAddr = 'short'
+      expect(shortenAddress(shortAddr)).toBe(shortAddr)
+    })
+
+    it('uses custom prefix and suffix lengths', () => {
+      const address = deriveAddress(TEST_MNEMONIC_12)
+      const shortened = shortenAddress(address, 20, 10)
+
+      expect(shortened.startsWith(address.slice(0, 20))).toBe(true)
+      expect(shortened.endsWith(address.slice(-10))).toBe(true)
+    })
+  })
+
+  describe('deriveKeypairs', () => {
+    it('derives deterministic keypairs', () => {
+      const keypairs1 = deriveKeypairs(TEST_MNEMONIC_12)
+      const keypairs2 = deriveKeypairs(TEST_MNEMONIC_12)
+
+      expect(keypairs1.viewPublic).toEqual(keypairs2.viewPublic)
+      expect(keypairs1.spendPublic).toEqual(keypairs2.spendPublic)
+    })
+
+    it('produces 32-byte keys', () => {
+      const keypairs = deriveKeypairs(TEST_MNEMONIC_12)
+
+      expect(keypairs.viewPrivate).toHaveLength(32)
+      expect(keypairs.viewPublic).toHaveLength(32)
+      expect(keypairs.spendPrivate).toHaveLength(32)
+      expect(keypairs.spendPublic).toHaveLength(32)
+    })
+
+    it('produces different keypairs for different mnemonics', () => {
+      const keypairs1 = deriveKeypairs(TEST_MNEMONIC_12)
+      const keypairs2 = deriveKeypairs(TEST_MNEMONIC_24)
+
+      expect(keypairs1.viewPublic).not.toEqual(keypairs2.viewPublic)
+      expect(keypairs1.spendPublic).not.toEqual(keypairs2.spendPublic)
+    })
+
+    it('produces different view and spend keys', () => {
+      const keypairs = deriveKeypairs(TEST_MNEMONIC_12)
+
+      expect(keypairs.viewPublic).not.toEqual(keypairs.spendPublic)
+      expect(keypairs.viewPrivate).not.toEqual(keypairs.spendPrivate)
+    })
   })
 })

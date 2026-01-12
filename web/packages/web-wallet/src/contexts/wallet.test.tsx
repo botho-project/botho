@@ -136,7 +136,7 @@ describe('WalletContext', () => {
       await waitFor(() => {
         expect(screen.getByTestId('hasWallet').textContent).toBe('yes')
         expect(screen.getByTestId('address').textContent).not.toBe('none')
-        expect(screen.getByTestId('address').textContent).toMatch(/^bth1/)
+        expect(screen.getByTestId('address').textContent).toMatch(/^tbotho:\/\/1\//)
       })
     })
 
@@ -177,7 +177,7 @@ describe('WalletContext', () => {
 
       await waitFor(() => {
         expect(screen.getByTestId('hasWallet').textContent).toBe('yes')
-        expect(screen.getByTestId('address').textContent).toMatch(/^bth1/)
+        expect(screen.getByTestId('address').textContent).toMatch(/^tbotho:\/\/1\//)
       })
     })
 
@@ -339,7 +339,7 @@ describe('Import Wallet Integration', () => {
 
     // Wallet should now exist
     expect(screen.getByTestId('hasWallet').textContent).toBe('yes')
-    expect(screen.getByTestId('address').textContent).toMatch(/^bth1[0-9a-f]{40}$/)
+    expect(screen.getByTestId('address').textContent).toMatch(/^tbotho:\/\/1\/[A-Za-z1-9]+$/)
 
     // Should be able to export it
     const exported = await walletRef!.exportWallet()

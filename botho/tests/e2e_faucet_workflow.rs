@@ -20,6 +20,7 @@ use serial_test::serial;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 
+use bth_transaction_types::constants::Network;
 use botho::{
     config::FaucetConfig,
     ledger::Ledger,
@@ -55,6 +56,7 @@ async fn spawn_faucet_rpc_server() -> (TempDir, SocketAddr, tokio::task::JoinHan
     let mut state = RpcState::new(
         ledger,
         mempool,
+        Network::Testnet,
         None,
         None,
         vec!["*".to_string()],
@@ -533,6 +535,7 @@ async fn test_faucet_disabled_returns_clear_error() {
     let state = Arc::new(RpcState::new(
         ledger,
         mempool,
+        Network::Testnet,
         None,
         None,
         vec!["*".to_string()],

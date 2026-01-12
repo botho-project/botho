@@ -65,6 +65,7 @@ use std::{
 use tokio::net::TcpListener;
 use tracing::{debug, error, info};
 
+use bth_transaction_types::constants::Network;
 use crate::{address::Address, ledger::Ledger, mempool::Mempool};
 
 /// JSON-RPC request
@@ -130,6 +131,8 @@ pub struct RpcState {
     /// SCP consensus peer count (peers participating in voting)
     pub scp_peer_count: Arc<RwLock<usize>>,
     pub start_time: std::time::Instant,
+    /// Network type (mainnet or testnet)
+    pub network_type: Network,
     /// Wallet view key (None if running in relay mode)
     pub wallet_view_key: Option<[u8; 32]>,
     /// Wallet spend key (None if running in relay mode)
@@ -153,6 +156,7 @@ impl RpcState {
     pub fn new(
         ledger: Ledger,
         mempool: Mempool,
+        network_type: Network,
         wallet_view_key: Option<[u8; 32]>,
         wallet_spend_key: Option<[u8; 32]>,
         cors_origins: Vec<String>,
@@ -166,6 +170,7 @@ impl RpcState {
             peer_count: Arc::new(RwLock::new(0)),
             scp_peer_count: Arc::new(RwLock::new(0)),
             start_time: std::time::Instant::now(),
+            network_type,
             wallet_view_key,
             wallet_spend_key,
             cors_origins,
@@ -184,6 +189,7 @@ impl RpcState {
         minting_active: Arc<RwLock<bool>>,
         peer_count: Arc<RwLock<usize>>,
         scp_peer_count: Arc<RwLock<usize>>,
+        network_type: Network,
         wallet_view_key: Option<[u8; 32]>,
         wallet_spend_key: Option<[u8; 32]>,
         cors_origins: Vec<String>,
@@ -197,6 +203,7 @@ impl RpcState {
             peer_count,
             scp_peer_count,
             start_time: std::time::Instant::now(),
+            network_type,
             wallet_view_key,
             wallet_spend_key,
             cors_origins,
@@ -212,6 +219,7 @@ impl RpcState {
     pub fn with_rate_limiter(
         ledger: Ledger,
         mempool: Mempool,
+        network_type: Network,
         wallet_view_key: Option<[u8; 32]>,
         wallet_spend_key: Option<[u8; 32]>,
         cors_origins: Vec<String>,
@@ -226,6 +234,7 @@ impl RpcState {
             peer_count: Arc::new(RwLock::new(0)),
             scp_peer_count: Arc::new(RwLock::new(0)),
             start_time: std::time::Instant::now(),
+            network_type,
             wallet_view_key,
             wallet_spend_key,
             cors_origins,
@@ -713,7 +722,7 @@ async fn handle_node_status(id: Value, state: &RpcState) -> JsonRpcResponse {
             "gitCommit": option_env!("GIT_HASH").unwrap_or("unknown"),
             "gitCommitShort": option_env!("GIT_HASH_SHORT").unwrap_or("unknown"),
             "buildTime": option_env!("BUILD_TIME").unwrap_or("unknown"),
-            "network": "botho-mainnet",
+            "network": format!("botho-{}", state.network_type.name()),
             "uptimeSeconds": state.start_time.elapsed().as_secs(),
             "syncStatus": "synced",
             "syncProgress": sync_progress,
