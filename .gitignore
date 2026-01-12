@@ -73,6 +73,8 @@ __pycache__/
 *.css
 # except Tailwind source files
 !web/packages/ui/src/styles/theme.css
+# except static CSS for faucet web UI
+!infra/faucet/web/css/style.css
 
 # build automation tmp
 .tmp
