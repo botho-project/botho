@@ -14,7 +14,7 @@ import { HDKey } from '@scure/bip32'
 import { hkdf } from '@noble/hashes/hkdf.js'
 import { sha512 } from '@noble/hashes/sha2.js'
 import { base58 } from '@scure/base'
-import { ed25519 } from '@noble/curves/ed25519'
+import { ristretto255 } from '@noble/curves/ed25519'
 
 const encoder = new TextEncoder()
 
@@ -120,11 +120,16 @@ function scalarFromWide(wide: Uint8Array): Uint8Array {
  *
  * This is scalar multiplication: public = scalar * G
  * where G is the Ristretto255 base point
+ *
+ * Uses ristretto255 encoding (NOT Ed25519) to match Rust's RistrettoPublic
  */
 function derivePublicKey(privateScalar: Uint8Array): Uint8Array {
-  // Get the public point from the scalar
-  const publicPoint = ed25519.getPublicKey(privateScalar)
-  return publicPoint
+  // Scalar multiply with the base point using ristretto255
+  // ristretto255.Point.BASE is the ristretto255 generator
+  const scalar = bytesToBigInt(privateScalar)
+  const publicPoint = ristretto255.Point.BASE.multiply(scalar)
+  // Encode as ristretto255 compressed point (32 bytes)
+  return publicPoint.toBytes()
 }
 
 /**
