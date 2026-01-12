@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Botho Testnet Faucet</title>
+  <meta name="description" content="Get testnet BTH to experiment with the Botho network">
+  <meta name="theme-color" content="#0a0b0f">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='14' fill='none' stroke='%2306b6d4' stroke-width='2'/><path d='M8 16 Q12 10, 16 16 T24 16' fill='none' stroke='%2306b6d4' stroke-width='2' stroke-linecap='round'/></svg>">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            botho: {
+              bg: '#0a0b0f',
+              card: '#111318',
+              border: '#1f2937',
+              cyan: '#06b6d4',
+              purple: '#8b5cf6',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body class="bg-botho-bg text-gray-100 min-h-screen flex flex-col">
+  <!-- Header -->
+  <header class="border-b border-botho-border">
+    <div class="max-w-2xl mx-auto px-4 py-4 flex items-center gap-3">
+      <svg class="w-10 h-10" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="logo-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#06b6d4"/>
+            <stop offset="100%" stop-color="#8b5cf6"/>
+          </linearGradient>
+        </defs>
+        <circle cx="256" cy="256" r="200" fill="none" stroke="url(#logo-gradient)" stroke-width="32"/>
+        <path d="M100 256 Q178 160, 256 256 T412 256" fill="none" stroke="url(#logo-gradient)" stroke-width="32" stroke-linecap="round"/>
+      </svg>
+      <div>
+        <h1 class="text-xl font-bold bg-gradient-to-r from-botho-cyan to-botho-purple bg-clip-text text-transparent">
+          Botho Testnet Faucet
+        </h1>
+        <p class="text-sm text-gray-400">Get testnet BTH for development</p>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main class="flex-1 max-w-2xl mx-auto w-full px-4 py-8">
+    <!-- Faucet Card -->
+    <div class="bg-botho-card rounded-xl border border-botho-border p-6 mb-6">
+      <h2 class="text-lg font-semibold mb-4">Request Testnet BTH</h2>
+
+      <!-- Address Input -->
+      <div class="mb-4">
+        <label for="address" class="block text-sm text-gray-400 mb-2">Your Wallet Address</label>
+        <textarea
+          id="address"
+          rows="3"
+          placeholder="view:0123456789abcdef...&#10;spend:fedcba9876543210..."
+          class="w-full bg-botho-bg border border-botho-border rounded-lg px-4 py-3 text-sm font-mono placeholder-gray-600 focus:outline-none focus:border-botho-cyan transition-colors resize-none"
+        ></textarea>
+        <p id="address-error" class="hidden text-red-400 text-sm mt-1"></p>
+      </div>
+
+      <!-- Drip Info -->
+      <div id="drip-info" class="mb-4 p-3 bg-botho-bg rounded-lg border border-botho-border">
+        <div class="flex items-center justify-between">
+          <span class="text-sm text-gray-400">Current drip amount:</span>
+          <span id="drip-amount" class="font-semibold text-botho-cyan">1.0 BTH</span>
+        </div>
+        <p id="drip-hint" class="hidden text-sm text-gray-500 mt-1"></p>
+      </div>
+
+      <!-- Request Button -->
+      <button
+        id="request-btn"
+        class="w-full bg-gradient-to-r from-botho-cyan to-botho-purple text-white font-semibold py-3 px-6 rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        Request 1.0 BTH
+      </button>
+    </div>
+
+    <!-- Result Banner -->
+    <div id="result-banner" class="hidden mb-6 rounded-xl border p-4">
+      <div id="result-content"></div>
+    </div>
+
+    <!-- Faucet Status Card -->
+    <div class="bg-botho-card rounded-xl border border-botho-border p-6">
+      <h2 class="text-lg font-semibold mb-4">Faucet Status</h2>
+
+      <div id="status-loading" class="text-gray-400 text-sm">
+        Loading faucet status...
+      </div>
+
+      <div id="status-content" class="hidden space-y-3">
+        <div class="flex items-center justify-between">
+          <span class="text-gray-400">Status</span>
+          <span id="status-indicator" class="flex items-center gap-2">
+            <span class="w-2 h-2 rounded-full bg-green-500"></span>
+            <span class="text-green-400">Active</span>
+          </span>
+        </div>
+        <div class="flex items-center justify-between">
+          <span class="text-gray-400">Max per request</span>
+          <span id="max-amount">1 BTH</span>
+        </div>
+        <div class="flex items-center justify-between">
+          <span class="text-gray-400">Daily limit</span>
+          <span id="daily-limit">10,000 BTH</span>
+        </div>
+        <div>
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-gray-400">Today's dispensed</span>
+            <span id="daily-dispensed">0 BTH (0%)</span>
+          </div>
+          <div class="w-full bg-botho-bg rounded-full h-2 border border-botho-border">
+            <div id="daily-progress" class="bg-gradient-to-r from-botho-cyan to-botho-purple h-full rounded-full transition-all" style="width: 0%"></div>
+          </div>
+        </div>
+      </div>
+
+      <div id="status-error" class="hidden text-red-400 text-sm">
+        Failed to load faucet status
+      </div>
+    </div>
+  </main>
+
+  <!-- Footer -->
+  <footer class="border-t border-botho-border mt-auto">
+    <div class="max-w-2xl mx-auto px-4 py-4 flex flex-wrap items-center justify-center gap-4 text-sm text-gray-500">
+      <span>Botho Testnet</span>
+      <span class="hidden sm:inline">|</span>
+      <a href="https://docs.botho.io" target="_blank" rel="noopener" class="hover:text-botho-cyan transition-colors">Docs</a>
+      <a href="https://github.com/botho-project/botho" target="_blank" rel="noopener" class="hover:text-botho-cyan transition-colors">GitHub</a>
+    </div>
+  </footer>
+
+  <script src="js/faucet.js"></script>
+</body>
+</html>

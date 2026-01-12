@@ -5,16 +5,18 @@ Deploy and operate the testnet faucet node at `faucet.botho.io`.
 ## Architecture
 
 ```
-┌─────────────────────────────────┐      ┌─────────────────────────────────┐
-│        seed.botho.io            │      │       faucet.botho.io           │
-│         (existing)              │◄────►│          (new)                  │
-├─────────────────────────────────┤      ├─────────────────────────────────┤
-│  • Bootstrap/discovery          │      │  • Minting enabled              │
-│  • Relay blocks & txns          │      │  • Faucet endpoint enabled      │
-│  • No wallet (relay-only)       │      │  • Wallet accumulates BTH       │
-│  • Minting: OFF                 │      │  • Connects to seed as peer     │
-│  • Faucet: OFF                  │      │                                 │
-└─────────────────────────────────┘      └─────────────────────────────────┘
+┌─────────────────────────────────┐      ┌───────────────────────────────────────────┐
+│        seed.botho.io            │      │           faucet.botho.io                 │
+│         (existing)              │◄────►│                                           │
+├─────────────────────────────────┤      │  ┌─────────────────┐  ┌─────────────────┐│
+│  • Bootstrap/discovery          │      │  │   nginx         │  │   Botho Node    ││
+│  • Relay blocks & txns          │      │  │   (port 80/443) │  │   (port 17101)  ││
+│  • No wallet (relay-only)       │      │  │                 │  │                 ││
+│  • Minting: OFF                 │      │  │  /     → static │  │  • Minting: ON  ││
+│  • Faucet: OFF                  │      │  │  /rpc  → proxy ─┼──┼─►• Faucet: ON   ││
+│                                 │      │  │                 │  │  • Wallet       ││
+└─────────────────────────────────┘      │  └─────────────────┘  └─────────────────┘│
+                                         └───────────────────────────────────────────┘
 ```
 
 ## Prerequisites
@@ -61,6 +63,64 @@ sudo ./deploy-faucet.sh
 
 See [Manual Deployment Steps](#manual-deployment-steps) below.
 
+## Web UI
+
+The faucet includes a user-friendly web interface at `https://faucet.botho.io`.
+
+### Features
+
+- **Address input**: Paste wallet address in `view:...\nspend:...` format
+- **Drip decay**: Reduced amounts for frequent requests (see table below)
+- **Real-time status**: Shows faucet availability and daily usage
+- **Transaction feedback**: Displays TX hash with copy functionality
+
+### Drip Amount Decay
+
+To gently discourage rapid re-requests while still allowing access:
+
+| Time Since Last Request | Amount Dispensed |
+|------------------------|------------------|
+| First request ever | 1.0 BTH (full) |
+| < 1 hour | 0.1 BTH (10%) |
+| 1-6 hours | 0.25 BTH (25%) |
+| 6-12 hours | 0.5 BTH (50%) |
+| 12-24 hours | 0.75 BTH (75%) |
+| > 24 hours | 1.0 BTH (full) |
+
+**Note**: Decay tracking uses localStorage on the client side. Server-side rate limiting remains the authoritative protection.
+
+### Web UI Deployment
+
+```bash
+# Install nginx if not present
+sudo apt-get install -y nginx
+
+# Copy web files
+sudo mkdir -p /var/www/faucet
+sudo cp -r web/* /var/www/faucet/
+
+# Install nginx configuration
+sudo cp faucet-nginx.conf /etc/nginx/sites-available/faucet.botho.io
+sudo ln -sf /etc/nginx/sites-available/faucet.botho.io /etc/nginx/sites-enabled/
+
+# Set up SSL with Let's Encrypt
+sudo apt-get install -y certbot python3-certbot-nginx
+sudo certbot --nginx -d faucet.botho.io
+
+# Test and reload nginx
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+### Security Group Update
+
+Add these ports for the web UI:
+
+| Port | Protocol | Source | Purpose |
+|------|----------|--------|---------|
+| 80 | TCP | 0.0.0.0/0 | HTTP (redirects to HTTPS) |
+| 443 | TCP | 0.0.0.0/0 | HTTPS |
+
 ## Files
 
 | File | Description |
@@ -68,6 +128,8 @@ See [Manual Deployment Steps](#manual-deployment-steps) below.
 | `deploy-faucet.sh` | Automated deployment script |
 | `botho-faucet.service` | systemd service file |
 | `faucet-config.toml.template` | Configuration template |
+| `faucet-nginx.conf` | nginx configuration for web UI |
+| `web/` | Static web UI files |
 
 ## Configuration
 
@@ -358,12 +420,25 @@ df -h /home/botho/.botho
 
 ## Acceptance Criteria Checklist
 
+### Botho Node
 - [ ] EC2 instance running Ubuntu 22.04
 - [ ] Botho node running with minting enabled
-- [ ] Faucet endpoint responding at `http://faucet.botho.io:17101`
+- [ ] Faucet endpoint responding at `http://localhost:17101`
 - [ ] Node connected to seed.botho.io as peer
 - [ ] Blocks being minted (check block height increasing)
 - [ ] Faucet dispenses testnet BTH correctly
 - [ ] Systemd service configured for auto-restart
 - [ ] Metrics available on port 19090 (internal only)
-- [ ] DNS resolves faucet.botho.io correctly
+
+### Web UI
+- [ ] Web page accessible at https://faucet.botho.io
+- [ ] User can enter address and receive BTH
+- [ ] Drip amount decays based on time since last request
+- [ ] Current drip amount shown before clicking
+- [ ] Hint shows time to wait for full amount
+- [ ] Transaction hash displayed with copy functionality
+- [ ] Faucet stats shown on page (enabled, daily usage)
+- [ ] Clear, user-friendly error messages for all failure modes
+- [ ] Mobile-responsive design
+- [ ] Page loads quickly (< 2s)
+- [ ] SSL certificate valid and working
