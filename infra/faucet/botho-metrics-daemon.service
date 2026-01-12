@@ -1,0 +1,45 @@
+[Unit]
+Description=Botho Metrics Daemon
+Documentation=https://github.com/botho-project/botho
+After=network-online.target botho-faucet.service
+Wants=network-online.target
+Requires=botho-faucet.service
+
+[Service]
+Type=simple
+User=botho
+Group=botho
+WorkingDirectory=/home/botho
+
+# Collect metrics from local node and serve API
+ExecStart=/usr/local/bin/botho-metrics-daemon \
+    --node-url http://127.0.0.1:17101 \
+    --db /var/lib/botho-faucet/metrics.db \
+    --api-port 17102 \
+    --interval 300
+
+Restart=always
+RestartSec=10
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/botho-faucet
+
+# Resource limits
+LimitNOFILE=65535
+MemoryMax=256M
+
+# Environment
+Environment=RUST_LOG=info
+Environment=RUST_BACKTRACE=1
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=botho-metrics-daemon
+
+[Install]
+WantedBy=multi-user.target

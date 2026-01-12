@@ -41,6 +41,7 @@ members = [
     "util/zip-exact",
     "web/packages/desktop/src-tauri",
     "mobile/rust-bridge",
+    "infra/faucet/metrics-daemon",
 ]
 exclude = [
     "contracts",
