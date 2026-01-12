@@ -88,9 +88,9 @@ export function BalanceCard({
                 )}
               </div>
 
-              {/* Sub-balances and wallet ID */}
+              {/* Sub-balances (only shown when pending) and wallet ID */}
               <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
-                {balance && (
+                {balance && balance.pending > 0 && (
                   <>
                     <div>
                       <span className="text-[--color-dim]">Available: </span>
@@ -98,14 +98,12 @@ export function BalanceCard({
                         {formatBTH(balance.available)}
                       </span>
                     </div>
-                    {balance.pending > 0 && (
-                      <div>
-                        <span className="text-[--color-dim]">Pending: </span>
-                        <span className="font-mono text-[--color-warning]">
-                          {formatBTH(balance.pending)}
-                        </span>
-                      </div>
-                    )}
+                    <div>
+                      <span className="text-[--color-dim]">Pending: </span>
+                      <span className="font-mono text-[--color-warning]">
+                        {formatBTH(balance.pending)}
+                      </span>
+                    </div>
                   </>
                 )}
                 {address && (
