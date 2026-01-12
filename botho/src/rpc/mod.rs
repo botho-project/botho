@@ -2191,7 +2191,8 @@ async fn handle_faucet_request(
 
     // Filter out spent UTXOs by checking key images
     let mut utxos = Vec::new();
-    for utxo in all_utxos {
+    info!("Faucet: scanning {} UTXOs from ledger", all_utxos.len());
+    for (idx, utxo) in all_utxos.iter().enumerate() {
         // Check if this output belongs to us and get subaddress index
         if let Some(subaddress_index) = utxo.output.belongs_to(wallet.account_key()) {
             // Recover the one-time private key
@@ -2203,7 +2204,13 @@ async fn handle_faucet_request(
                 match ledger.is_key_image_spent(key_image.as_bytes()) {
                     Ok(None) => {
                         // Not spent, include this UTXO
-                        utxos.push(utxo);
+                        info!(
+                            "Faucet: UTXO {} owned, unspent - id={}, key_image={}",
+                            idx,
+                            hex::encode(&utxo.id.to_bytes()[0..8]),
+                            hex::encode(&key_image.as_bytes()[0..8])
+                        );
+                        utxos.push(utxo.clone());
                     }
                     Ok(Some(_)) => {
                         // Already spent, skip
@@ -2216,6 +2223,7 @@ async fn handle_faucet_request(
             }
         }
     }
+    info!("Faucet: found {} unspent UTXOs", utxos.len());
 
     // Calculate fee (use minimum required fee)
     let fee = MIN_TX_FEE;
@@ -2235,13 +2243,30 @@ async fn handle_faucet_request(
     // Select UTXOs (simple: use enough to cover amount + fee)
     let mut selected_utxos = Vec::new();
     let mut selected_amount = 0u64;
-    for utxo in &utxos {
+    info!(
+        "Faucet: selecting from {} UTXOs, need {} picocredits",
+        utxos.len(),
+        required
+    );
+    for (idx, utxo) in utxos.iter().enumerate() {
         if selected_amount >= required {
             break;
         }
+        info!(
+            "Faucet: selected UTXO {}: id={}, amount={}, target_key={}",
+            idx,
+            hex::encode(&utxo.id.to_bytes()[0..8]),
+            utxo.output.amount,
+            hex::encode(&utxo.output.target_key[0..8])
+        );
         selected_utxos.push(utxo.clone());
         selected_amount += utxo.output.amount;
     }
+    info!(
+        "Faucet: selected {} UTXOs totaling {} picocredits",
+        selected_utxos.len(),
+        selected_amount
+    );
 
     // Get current height
     let current_height = match ledger.get_chain_state() {
