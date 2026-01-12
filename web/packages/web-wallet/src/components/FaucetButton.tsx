@@ -174,7 +174,7 @@ export function FaucetButton() {
             ) : (
               <>
                 <Droplets size={14} className="mr-2" />
-                Request 10 BTH
+                Request BTH
               </>
             )}
           </Button>
