@@ -483,13 +483,35 @@ impl ConsensusService {
             return;
         }
 
-        // Take up to max_txs_per_slot values
-        let to_propose: BTreeSet<ConsensusValue> = self
+        // Select values ensuring a mix of minting and transfer transactions:
+        // - At most 1 minting tx (the highest priority one)
+        // - Remaining slots filled with transfer txs
+        // This prevents minting txs from crowding out user transactions.
+        let mut to_propose: BTreeSet<ConsensusValue> = BTreeSet::new();
+
+        // Find the best minting tx (highest priority)
+        let best_minting_tx = self
             .pending_values
             .iter()
-            .take(self.config.max_txs_per_slot)
+            .filter(|v| v.is_minting_tx)
+            .max_by_key(|v| v.priority)
+            .cloned();
+
+        if let Some(minting_tx) = best_minting_tx {
+            to_propose.insert(minting_tx);
+        }
+
+        // Fill remaining slots with transfer txs
+        let remaining_slots = self.config.max_txs_per_slot.saturating_sub(to_propose.len());
+        let transfer_txs: Vec<ConsensusValue> = self
+            .pending_values
+            .iter()
+            .filter(|v| !v.is_minting_tx)
+            .take(remaining_slots)
             .cloned()
             .collect();
+
+        to_propose.extend(transfer_txs);
 
         if to_propose.is_subset(&self.proposed_values) {
             // Already proposed all these
@@ -512,13 +534,19 @@ impl ConsensusService {
             info!(
                 slot,
                 count = values.len(),
+                minting_txs = values.iter().filter(|v| v.is_minting_tx).count(),
+                transfer_txs = values.iter().filter(|v| !v.is_minting_tx).count(),
                 "Solo mode: directly externalizing values"
             );
 
-            // Remove values from pending
+            // Remove externalized values from pending
             for v in &values {
                 self.pending_values.remove(v);
             }
+
+            // Also remove ALL remaining minting txs from pending
+            // (we only include the best one per block, others are discarded)
+            self.pending_values.retain(|v| !v.is_minting_tx);
 
             self.externalized = Some(values.clone());
             self.events.push_back(ConsensusEvent::SlotExternalized {
