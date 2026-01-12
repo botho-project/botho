@@ -2179,11 +2179,12 @@ async fn handle_faucet_request(
     let ledger = read_lock!(state.ledger, id);
     let our_address = wallet.default_address();
 
-    // Get our UTXOs
-    let utxos = match ledger.get_utxos_for_address(&our_address) {
+    // Get our UTXOs using stealth address scanning
+    // This scans all UTXOs and checks ownership via the account key
+    let utxos = match ledger.scan_utxos_for_account(wallet.account_key()) {
         Ok(u) => u,
         Err(e) => {
-            error!("Faucet: failed to get UTXOs: {}", e);
+            error!("Faucet: failed to scan UTXOs: {}", e);
             return JsonRpcResponse::error(id, -32000, "Failed to get faucet balance");
         }
     };

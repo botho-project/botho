@@ -1,4 +1,4 @@
-use bth_account_keys::PublicAddress;
+use bth_account_keys::{AccountKey, PublicAddress};
 use bth_cluster_tax::{LotteryCandidate, LotteryDrawConfig, TagVector};
 use bth_transaction_types::{Network, TAG_WEIGHT_SCALE};
 use heed::{
@@ -678,6 +678,40 @@ impl Ledger {
     pub fn get_balance(&self, address: &PublicAddress) -> Result<u64, LedgerError> {
         let utxos = self.get_utxos_for_address(address)?;
         Ok(utxos.iter().map(|u| u.output.amount).sum())
+    }
+
+    /// Scan all UTXOs and return those belonging to the given account key.
+    ///
+    /// This performs stealth address detection by checking each output's
+    /// target_key against the account's view key. This is necessary because
+    /// stealth outputs use one-time addresses that can only be identified
+    /// by the recipient.
+    pub fn scan_utxos_for_account(&self, account_key: &AccountKey) -> Result<Vec<Utxo>, LedgerError> {
+        let rtxn = self
+            .env
+            .read_txn()
+            .map_err(|e| LedgerError::Database(format!("Failed to start read txn: {}", e)))?;
+
+        let mut owned_utxos = Vec::new();
+
+        // Iterate over all UTXOs
+        let iter = self
+            .utxo_db
+            .iter(&rtxn)
+            .map_err(|e| LedgerError::Database(format!("Failed to create iterator: {}", e)))?;
+
+        for result in iter {
+            if let Ok((_, value)) = result {
+                if let Ok(utxo) = bincode::deserialize::<Utxo>(value) {
+                    // Check if this output belongs to us using stealth detection
+                    if utxo.output.belongs_to(account_key).is_some() {
+                        owned_utxos.push(utxo);
+                    }
+                }
+            }
+        }
+
+        Ok(owned_utxos)
     }
 
     /// Check if a UTXO exists (for transaction validation)
