@@ -26,7 +26,7 @@ use opentelemetry_sdk::{
     trace::{RandomIdGenerator, Sampler, Tracer},
     Resource,
 };
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
 
 /// Telemetry configuration
 #[derive(Debug, Clone)]
@@ -68,15 +68,14 @@ impl Default for TelemetryConfig {
 /// Returns a guard that must be held for the duration of the program.
 /// When dropped, it will flush any pending traces.
 pub fn init_tracing(config: &TelemetryConfig, verbose: bool) -> Result<Option<TelemetryGuard>> {
-    let level = if verbose {
-        tracing::Level::DEBUG
-    } else {
-        tracing::Level::INFO
-    };
+    // Use RUST_LOG if set, otherwise default based on verbose flag
+    let default_level = if verbose { "debug" } else { "warn" };
+    let env_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new(default_level));
 
     let fmt_layer = tracing_subscriber::fmt::layer()
         .with_target(false)
-        .with_filter(tracing_subscriber::filter::LevelFilter::from_level(level));
+        .with_filter(env_filter);
 
     if config.enabled {
         // Set up OpenTelemetry with OTLP exporter
