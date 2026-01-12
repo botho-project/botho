@@ -228,7 +228,14 @@ impl BlockBuilder {
             .collect();
 
         if candidates.is_empty() {
-            debug!("No lottery candidates available");
+            debug!("No lottery candidates available, burning all fees");
+            // When there are no lottery candidates, all fees are burned
+            block.lottery_summary = BlockLotterySummary {
+                total_fees,
+                pool_distributed: 0,
+                amount_burned: total_fees,
+                lottery_seed: [0u8; 32],
+            };
             return block;
         }
 
@@ -455,9 +462,11 @@ mod tests {
         let lottery_config = LotteryFeeConfig::default();
         let result = BlockBuilder::apply_lottery(block.clone(), &candidates, utxo_lookup, &lottery_config);
 
-        // No candidates means no lottery
+        // No candidates means all fees are burned
         assert!(result.lottery_outputs.is_empty());
-        assert_eq!(result.lottery_summary.total_fees, 0);
+        assert_eq!(result.lottery_summary.total_fees, 1_000_000);
+        assert_eq!(result.lottery_summary.pool_distributed, 0);
+        assert_eq!(result.lottery_summary.amount_burned, 1_000_000);
     }
 
     #[test]

@@ -1,7 +1,7 @@
-import { useMemo } from 'react'
-import { Link } from 'react-router-dom'
+import { useMemo, useCallback } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
 import { Logo } from '@botho/ui'
-import { ExplorerProvider, Explorer, type ExplorerDataSource } from '@botho/features'
+import { ExplorerProvider, Explorer, type ExplorerDataSource, type ExplorerView } from '@botho/features'
 import { useWallet, useAdapter } from '../contexts/wallet'
 import { NetworkSelector } from '../components/NetworkSelector'
 import { ArrowLeft } from 'lucide-react'
@@ -9,6 +9,22 @@ import { ArrowLeft } from 'lucide-react'
 export function ExplorerPage() {
   const { isConnected } = useWallet()
   const adapter = useAdapter()
+  const [searchParams, setSearchParams] = useSearchParams()
+
+  // Get initial query from URL parameter
+  const initialQuery = searchParams.get('h') ?? undefined
+
+  // Update URL when view changes
+  const handleViewChange = useCallback((view: ExplorerView) => {
+    if (view.mode === 'block') {
+      setSearchParams({ h: view.block.hash }, { replace: true })
+    } else if (view.mode === 'transaction') {
+      setSearchParams({ h: view.transaction.id }, { replace: true })
+    } else {
+      // Clear the parameter when going back to list
+      setSearchParams({}, { replace: true })
+    }
+  }, [setSearchParams])
 
   // Create data source from adapter
   const dataSource = useMemo<ExplorerDataSource>(() => {
@@ -37,7 +53,7 @@ export function ExplorerPage() {
 
       {/* Main content */}
       <main className="py-6 sm:py-8 md:py-12 px-4 sm:px-6 max-w-6xl mx-auto">
-        <ExplorerProvider dataSource={dataSource} isReady={isConnected}>
+        <ExplorerProvider dataSource={dataSource} isReady={isConnected} initialQuery={initialQuery} onViewChange={handleViewChange}>
           <Explorer
             isConnected={isConnected}
             notConnectedMessage={

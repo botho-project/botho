@@ -146,13 +146,13 @@ export function ExplorerProvider({ dataSource, isReady = true, initialQuery, onV
   const viewTransaction = useCallback((transaction: Transaction) => {
     setView({ mode: 'transaction', transaction })
     setError(null)
-  }, [])
+  }, [setView])
 
   // Go back to list
   const goBack = useCallback(() => {
     setView({ mode: 'list' })
     setError(null)
-  }, [])
+  }, [setView])
 
   // Initial load
   useEffect(() => {
