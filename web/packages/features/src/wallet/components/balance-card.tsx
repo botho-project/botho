@@ -47,32 +47,29 @@ export function BalanceCard({
         <div className="absolute inset-0 bg-gradient-to-br from-[--color-pulse]/5 via-transparent to-[--color-purple]/5" />
 
         <CardContent className="relative">
-          {/* Sync status indicator */}
-          <div className="absolute top-4 right-4">
-            {isSyncing ? (
-              <div className="flex items-center gap-1.5 text-xs text-[--color-warning]">
-                <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                <span>Syncing</span>
-              </div>
-            ) : isConnected ? (
-              <div className="flex items-center gap-1.5 text-xs text-[--color-success]">
-                <Wifi className="h-3.5 w-3.5" />
-                <span>Synced</span>
-              </div>
-            ) : (
-              <div className="flex items-center gap-1.5 text-xs text-[--color-danger]">
-                <WifiOff className="h-3.5 w-3.5" />
-                <span>Offline</span>
-              </div>
-            )}
-          </div>
-
           <div className="flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
             {/* Balance */}
             <div>
               <div className="flex items-center gap-2 text-sm text-[--color-ghost]">
                 <Wallet className="h-4 w-4" />
-                Total Balance
+                <span>Total Balance</span>
+                <span className="mx-1 text-[--color-steel]">·</span>
+                {isSyncing ? (
+                  <span className="flex items-center gap-1 text-[--color-warning]">
+                    <RefreshCw className="h-3 w-3 animate-spin" />
+                    Syncing
+                  </span>
+                ) : isConnected ? (
+                  <span className="flex items-center gap-1 text-[--color-success]">
+                    <Wifi className="h-3 w-3" />
+                    Synced
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-1 text-[--color-danger]">
+                    <WifiOff className="h-3 w-3" />
+                    Offline
+                  </span>
+                )}
               </div>
               <div className="mt-1 font-display text-4xl font-bold tracking-tight text-[--color-light]">
                 {balance ? (
@@ -91,25 +88,43 @@ export function BalanceCard({
                 )}
               </div>
 
-              {/* Sub-balances */}
-              {balance && (
-                <div className="mt-3 flex gap-6 text-sm">
-                  <div>
-                    <span className="text-[--color-dim]">Available: </span>
-                    <span className="font-mono text-[--color-success]">
-                      {formatBTH(balance.available)}
-                    </span>
-                  </div>
-                  {balance.pending > 0 && (
+              {/* Sub-balances and wallet ID */}
+              <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
+                {balance && (
+                  <>
                     <div>
-                      <span className="text-[--color-dim]">Pending: </span>
-                      <span className="font-mono text-[--color-warning]">
-                        {formatBTH(balance.pending)}
+                      <span className="text-[--color-dim]">Available: </span>
+                      <span className="font-mono text-[--color-success]">
+                        {formatBTH(balance.available)}
                       </span>
                     </div>
-                  )}
-                </div>
-              )}
+                    {balance.pending > 0 && (
+                      <div>
+                        <span className="text-[--color-dim]">Pending: </span>
+                        <span className="font-mono text-[--color-warning]">
+                          {formatBTH(balance.pending)}
+                        </span>
+                      </div>
+                    )}
+                  </>
+                )}
+                {address && (
+                  <button
+                    onClick={() => copy(address)}
+                    className="flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[--color-dim] transition-colors hover:bg-[--color-steel] hover:text-[--color-ghost]"
+                    title={address}
+                  >
+                    <code className="font-mono text-xs">
+                      {address.slice(0, 6)}...{address.slice(-4)}
+                    </code>
+                    {copied ? (
+                      <Check className="h-3 w-3 text-[--color-success]" />
+                    ) : (
+                      <Copy className="h-3 w-3" />
+                    )}
+                  </button>
+                )}
+              </div>
             </div>
 
             {/* Actions */}
