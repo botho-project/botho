@@ -1193,6 +1193,17 @@ fn apply_lottery_to_block(
         return block;
     }
 
+    // Helper to create a block with all fees burned (for error/no-candidate cases)
+    let burn_all_fees = |mut block: crate::block::Block| {
+        block.lottery_summary = crate::block::BlockLotterySummary {
+            total_fees,
+            pool_distributed: 0,
+            amount_burned: total_fees,
+            lottery_seed: [0u8; 32],
+        };
+        block
+    };
+
     // Get lottery candidates from ledger
     let candidates: Vec<crate::transaction::Utxo> = match shared_ledger.read() {
         Ok(ledger) => {
@@ -1204,20 +1215,20 @@ fn apply_lottery_to_block(
             ) {
                 Ok(c) => c,
                 Err(e) => {
-                    warn!("Failed to get lottery candidates: {}", e);
-                    return block;
+                    warn!("Failed to get lottery candidates: {}, burning all fees", e);
+                    return burn_all_fees(block);
                 }
             }
         }
         Err(e) => {
-            warn!("Failed to acquire ledger lock for lottery: {}", e);
-            return block;
+            warn!("Failed to acquire ledger lock for lottery: {}, burning all fees", e);
+            return burn_all_fees(block);
         }
     };
 
     if candidates.is_empty() {
-        debug!("No lottery candidates available, skipping lottery");
-        return block;
+        debug!("No lottery candidates available, burning all fees");
+        return burn_all_fees(block);
     }
 
     info!(
