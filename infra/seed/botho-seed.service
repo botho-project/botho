@@ -1,0 +1,36 @@
+[Unit]
+Description=Botho Seed Node (Testnet)
+Documentation=https://github.com/botho-project/botho
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu
+
+# Run as testnet relay node (no minting on seed node)
+ExecStart=/usr/local/bin/botho --testnet run --relay
+
+# Restart on failure
+Restart=on-failure
+RestartSec=10
+
+# Resource limits
+LimitNOFILE=65535
+LimitNPROC=65535
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/ubuntu/.botho
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=botho-seed
+
+[Install]
+WantedBy=multi-user.target
