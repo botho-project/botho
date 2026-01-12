@@ -63,7 +63,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 use tokio::net::TcpListener;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use bth_cluster_tax::{FeeConfig, TransactionType};
 use bth_transaction_types::constants::Network;
@@ -2181,13 +2181,41 @@ async fn handle_faucet_request(
 
     // Get our UTXOs using stealth address scanning
     // This scans all UTXOs and checks ownership via the account key
-    let utxos = match ledger.scan_utxos_for_account(wallet.account_key()) {
+    let all_utxos = match ledger.scan_utxos_for_account(wallet.account_key()) {
         Ok(u) => u,
         Err(e) => {
             error!("Faucet: failed to scan UTXOs: {}", e);
             return JsonRpcResponse::error(id, -32000, "Failed to get faucet balance");
         }
     };
+
+    // Filter out spent UTXOs by checking key images
+    let mut utxos = Vec::new();
+    for utxo in all_utxos {
+        // Check if this output belongs to us and get subaddress index
+        if let Some(subaddress_index) = utxo.output.belongs_to(wallet.account_key()) {
+            // Recover the one-time private key
+            if let Some(onetime_private) = utxo.output.recover_spend_key(wallet.account_key(), subaddress_index) {
+                // Compute the key image
+                let key_image = bth_crypto_ring_signature::KeyImage::from(&onetime_private);
+
+                // Check if this key image has been spent
+                match ledger.is_key_image_spent(key_image.as_bytes()) {
+                    Ok(None) => {
+                        // Not spent, include this UTXO
+                        utxos.push(utxo);
+                    }
+                    Ok(Some(_)) => {
+                        // Already spent, skip
+                        debug!("Faucet: skipping spent UTXO");
+                    }
+                    Err(e) => {
+                        warn!("Faucet: failed to check key image: {}", e);
+                    }
+                }
+            }
+        }
+    }
 
     // Calculate fee (use minimum required fee)
     let fee = MIN_TX_FEE;

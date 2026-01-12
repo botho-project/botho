@@ -9,17 +9,28 @@ export interface ExplorerProviderProps {
   dataSource: ExplorerDataSource
   /** Whether the data source is ready (e.g., connected) */
   isReady?: boolean
+  /** Initial search query (e.g., from URL parameter) */
+  initialQuery?: string
+  /** Callback when view changes (for URL sync) */
+  onViewChange?: (view: ExplorerView) => void
   /** Children */
   children: ReactNode
 }
 
-export function ExplorerProvider({ dataSource, isReady = true, children }: ExplorerProviderProps) {
-  const [view, setView] = useState<ExplorerView>({ mode: 'list' })
+export function ExplorerProvider({ dataSource, isReady = true, initialQuery, onViewChange, children }: ExplorerProviderProps) {
+  const [view, setViewInternal] = useState<ExplorerView>({ mode: 'list' })
   const [blocks, setBlocks] = useState<Block[]>([])
   const [loading, setLoading] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [searchQuery, setSearchQuery] = useState('')
+  const [searchQuery, setSearchQuery] = useState(initialQuery ?? '')
+  const [initialQueryProcessed, setInitialQueryProcessed] = useState(false)
+
+  // Wrapper to notify parent of view changes
+  const setView = useCallback((newView: ExplorerView) => {
+    setViewInternal(newView)
+    onViewChange?.(newView)
+  }, [onViewChange])
 
   // Load recent blocks
   const refresh = useCallback(async () => {
@@ -149,6 +160,15 @@ export function ExplorerProvider({ dataSource, isReady = true, children }: Explo
       refresh()
     }
   }, [isReady, refresh])
+
+  // Process initial query from URL parameter
+  useEffect(() => {
+    if (isReady && initialQuery && !initialQueryProcessed) {
+      setInitialQueryProcessed(true)
+      // Trigger search with the initial query
+      search()
+    }
+  }, [isReady, initialQuery, initialQueryProcessed, search])
 
   // Subscribe to new blocks
   useEffect(() => {
