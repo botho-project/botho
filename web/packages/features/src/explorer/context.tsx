@@ -49,18 +49,38 @@ export function ExplorerProvider({ dataSource, isReady = true, initialQuery, onV
     }
   }, [dataSource, isReady])
 
-  // Load more blocks
+  // Load more blocks (older blocks below the current list)
   const loadMore = useCallback(async () => {
     if (!isReady || blocks.length === 0 || loadingMore) return
 
     setLoadingMore(true)
     try {
       const lastBlock = blocks[blocks.length - 1]
+      const oldestHeight = lastBlock.height - 1
+
+      // No older blocks to load
+      if (oldestHeight < 0) {
+        setLoadingMore(false)
+        return
+      }
+
+      // Calculate the range of older blocks to fetch
+      // startHeight is the lowest height to include, fetch up to startHeight + limit - 1
+      const limit = 20
+      const startHeight = Math.max(0, oldestHeight - limit + 1)
+      const actualLimit = oldestHeight - startHeight + 1
+
       const moreBlocks = await dataSource.getRecentBlocks({
-        limit: 20,
-        startHeight: lastBlock.height - 1,
+        limit: actualLimit,
+        startHeight,
       })
-      setBlocks((prev) => [...prev, ...moreBlocks])
+
+      // Merge with deduplication by hash
+      setBlocks((prev) => {
+        const existingHashes = new Set(prev.map(b => b.hash))
+        const newBlocks = moreBlocks.filter(b => !existingHashes.has(b.hash))
+        return [...prev, ...newBlocks]
+      })
     } catch (err) {
       console.error('Failed to load more blocks:', err)
     } finally {

@@ -2155,6 +2155,11 @@ async fn handle_faucet_request(
         };
     }
 
+    // Acquire transaction build lock to prevent concurrent UTXO selection.
+    // This prevents race conditions where two requests select the same UTXO
+    // and one fails with a double-spend error.
+    let _tx_lock = faucet.acquire_tx_lock().await;
+
     // Get wallet for signing
     let wallet = match &state.wallet {
         Some(w) => w,

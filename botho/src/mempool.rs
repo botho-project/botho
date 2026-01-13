@@ -254,6 +254,12 @@ const MAX_MEMPOOL_SIZE: usize = 10_000;
 /// Maximum age of a transaction in seconds before eviction
 const MAX_TX_AGE_SECS: u64 = 3600; // 1 hour
 
+/// Maximum age of a key image in the spent_key_images set before cleanup.
+/// This should be longer than MAX_TX_AGE_SECS to ensure we don't clean up
+/// key images while their transactions are still in consensus pending_values.
+/// Set to 2x MAX_TX_AGE_SECS (2 hours).
+const MAX_KEY_IMAGE_AGE_SECS: u64 = MAX_TX_AGE_SECS * 2;
+
 /// A pending transaction with metadata
 #[derive(Debug, Clone)]
 pub struct PendingTx {
@@ -333,8 +339,11 @@ pub struct MempoolFeeMetrics {
 pub struct Mempool {
     /// Pending transactions by hash
     txs: HashMap<[u8; 32], PendingTx>,
-    /// Spent key images in mempool (for double-spend prevention)
-    spent_key_images: HashSet<[u8; 32]>,
+    /// Spent key images with timestamps (for double-spend prevention).
+    /// Maps key image -> time when first seen.
+    /// Key images are kept even after transaction eviction to prevent race
+    /// conditions with consensus pending_values. Cleaned up after MAX_KEY_IMAGE_AGE_SECS.
+    spent_key_images: HashMap<[u8; 32], std::time::Instant>,
     /// Fee configuration for computing minimum fees
     fee_config: FeeConfig,
     /// Dynamic fee base for congestion control
@@ -352,7 +361,7 @@ impl Mempool {
     pub fn new() -> Self {
         Self {
             txs: HashMap::new(),
-            spent_key_images: HashSet::new(),
+            spent_key_images: HashMap::new(),
             fee_config: FeeConfig::default(),
             dynamic_fee: DynamicFeeBase::default(),
             at_min_block_time: false,
@@ -365,7 +374,7 @@ impl Mempool {
     pub fn with_fee_config(fee_config: FeeConfig) -> Self {
         Self {
             txs: HashMap::new(),
-            spent_key_images: HashSet::new(),
+            spent_key_images: HashMap::new(),
             fee_config,
             dynamic_fee: DynamicFeeBase::default(),
             at_min_block_time: false,
@@ -378,7 +387,7 @@ impl Mempool {
     pub fn with_dynamic_fee(fee_config: FeeConfig, dynamic_fee: DynamicFeeBase) -> Self {
         Self {
             txs: HashMap::new(),
-            spent_key_images: HashSet::new(),
+            spent_key_images: HashMap::new(),
             fee_config,
             dynamic_fee,
             at_min_block_time: false,
@@ -395,7 +404,7 @@ impl Mempool {
     pub fn with_fee_enforcement_disabled(fee_config: FeeConfig) -> Self {
         Self {
             txs: HashMap::new(),
-            spent_key_images: HashSet::new(),
+            spent_key_images: HashMap::new(),
             fee_config,
             dynamic_fee: DynamicFeeBase::default(),
             at_min_block_time: false,
@@ -691,8 +700,10 @@ impl Mempool {
 
         // Mark inputs as spent
         // Track spent key images to prevent double-spends in mempool
+        // Use entry API to avoid overwriting timestamp if already tracked
+        let now = std::time::Instant::now();
         for input in tx.inputs.clsag() {
-            self.spent_key_images.insert(input.key_image);
+            self.spent_key_images.entry(input.key_image).or_insert(now);
         }
 
         // Compute cluster factor for fee density prioritization
@@ -718,7 +729,7 @@ impl Mempool {
     ) -> Result<u64, MempoolError> {
         // Check for double-spends via key images (mempool)
         for input in clsag_inputs {
-            if self.spent_key_images.contains(&input.key_image) {
+            if self.spent_key_images.contains_key(&input.key_image) {
                 return Err(MempoolError::DoubleSpend);
             }
         }
@@ -805,10 +816,13 @@ impl Mempool {
         Ok(potential_input_sum)
     }
 
-    /// Remove a transaction from the mempool
+    /// Remove a transaction from the mempool and clear its key images.
+    ///
+    /// Use this when a transaction is confirmed in a block or explicitly invalidated.
+    /// For eviction (space/age), use `evict_tx` instead to preserve key image tracking.
     pub fn remove_tx(&mut self, tx_hash: &[u8; 32]) -> Option<Transaction> {
         if let Some(pending) = self.txs.remove(tx_hash) {
-            // Remove spent key images
+            // Remove spent key images - safe because tx is confirmed/invalid
             for input in pending.tx.inputs.clsag() {
                 self.spent_key_images.remove(&input.key_image);
             }
@@ -816,6 +830,20 @@ impl Mempool {
         } else {
             None
         }
+    }
+
+    /// Evict a transaction from the mempool but KEEP its key images tracked.
+    ///
+    /// This is used for space/age eviction where we want to prevent the same
+    /// key images from being re-submitted (which could cause double-spend issues
+    /// if the evicted tx is still in consensus pending_values).
+    ///
+    /// Key images are only cleared when a transaction is:
+    /// - Confirmed in a block (via `remove_tx`)
+    /// - Invalidated because key image was spent on-chain (via `remove_tx`)
+    fn evict_tx(&mut self, tx_hash: &[u8; 32]) -> Option<Transaction> {
+        // Remove from txs map but DO NOT remove from spent_key_images
+        self.txs.remove(tx_hash).map(|pending| pending.tx)
     }
 
     /// Get transactions for inclusion in a block (sorted by fee density).
@@ -886,7 +914,10 @@ impl Mempool {
         }
     }
 
-    /// Evict old transactions
+    /// Evict old transactions.
+    ///
+    /// Note: Key images are preserved to prevent double-spend attacks where
+    /// an evicted transaction is still in consensus pending_values.
     pub fn evict_old(&mut self) {
         let now = std::time::Instant::now();
         let mut to_remove = Vec::new();
@@ -898,18 +929,25 @@ impl Mempool {
         }
 
         for tx_hash in to_remove {
-            self.remove_tx(&tx_hash);
+            // Use evict_tx to preserve key image tracking
+            self.evict_tx(&tx_hash);
             debug!(
-                "Evicted old transaction {} from mempool",
+                "Evicted old transaction {} from mempool (key images preserved)",
                 hex::encode(&tx_hash[0..8])
             );
         }
+
+        // Also clean up stale key images to prevent unbounded memory growth
+        self.cleanup_stale_key_images();
     }
 
     /// Evict lowest fee density transaction.
     ///
     /// Fee density accounts for cluster factor, ensuring wealthy clusters
     /// don't unfairly occupy mempool space with lower effective priority.
+    ///
+    /// Note: Key images are preserved to prevent double-spend attacks where
+    /// an evicted transaction is still in consensus pending_values.
     fn evict_lowest_fee(&mut self) {
         if let Some((tx_hash, _)) = self
             .txs
@@ -917,11 +955,50 @@ impl Mempool {
             .min_by_key(|(_, p)| p.fee_density)
             .map(|(h, p)| (*h, p.clone()))
         {
-            self.remove_tx(&tx_hash);
+            // Use evict_tx to preserve key image tracking
+            self.evict_tx(&tx_hash);
             debug!(
-                "Evicted low-fee-density transaction {} from mempool",
+                "Evicted low-fee-density transaction {} from mempool (key images preserved)",
                 hex::encode(&tx_hash[0..8])
             );
+        }
+    }
+
+    /// Clean up stale key images that are no longer needed.
+    ///
+    /// Key images are preserved after transaction eviction to prevent race
+    /// conditions with consensus pending_values. However, after enough time
+    /// has passed (MAX_KEY_IMAGE_AGE_SECS), we can safely remove them to
+    /// prevent unbounded memory growth.
+    ///
+    /// This should be called periodically (e.g., during evict_old).
+    pub fn cleanup_stale_key_images(&mut self) {
+        let now = std::time::Instant::now();
+        let mut to_remove = Vec::new();
+
+        for (key_image, added_at) in &self.spent_key_images {
+            // Only remove if old AND not associated with a current transaction
+            if now.duration_since(*added_at).as_secs() > MAX_KEY_IMAGE_AGE_SECS {
+                // Check if any transaction in the mempool uses this key image
+                let still_in_use = self.txs.values().any(|pending| {
+                    pending.tx.inputs.clsag().iter().any(|input| &input.key_image == key_image)
+                });
+
+                if !still_in_use {
+                    to_remove.push(*key_image);
+                }
+            }
+        }
+
+        if !to_remove.is_empty() {
+            debug!(
+                "Cleaning up {} stale key images (older than {} seconds)",
+                to_remove.len(),
+                MAX_KEY_IMAGE_AGE_SECS
+            );
+            for key_image in to_remove {
+                self.spent_key_images.remove(&key_image);
+            }
         }
     }
 
@@ -945,13 +1022,15 @@ impl Mempool {
         self.txs.contains_key(tx_hash)
     }
 
-    /// Check if a key image is pending (used by a transaction in the mempool)
+    /// Check if a key image is pending (used by a transaction in the mempool
+    /// or recently evicted).
     ///
     /// This is useful for UTXO selection to avoid creating transactions that
     /// would be rejected as double-spends because the key image is already
-    /// in a pending transaction.
+    /// tracked. Note: key images are preserved after eviction to prevent race
+    /// conditions with consensus.
     pub fn is_key_image_pending(&self, key_image: &[u8; 32]) -> bool {
-        self.spent_key_images.contains(key_image)
+        self.spent_key_images.contains_key(key_image)
     }
 
     /// Get a transaction by hash
@@ -1233,9 +1312,9 @@ mod tests {
 
         let key_image: [u8; 32] = [0xDE; 32];
 
-        mempool.spent_key_images.insert(key_image);
+        mempool.spent_key_images.insert(key_image, std::time::Instant::now());
 
-        assert!(mempool.spent_key_images.contains(&key_image));
+        assert!(mempool.spent_key_images.contains_key(&key_image));
         assert_eq!(mempool.spent_key_images.len(), 1);
     }
 

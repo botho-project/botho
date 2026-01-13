@@ -18,6 +18,7 @@ use crate::{
 };
 use bth_cluster_tax::{LotteryCandidate, TagVector};
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use tracing::{debug, info, warn};
 
 /// Result of building a block from externalized values
@@ -77,13 +78,39 @@ impl BlockBuilder {
             "Building block from externalized minting tx"
         );
 
-        // Collect transfer transactions
+        // Collect transfer transactions with key image deduplication
+        // This is a defense-in-depth measure to prevent double-spend attacks where
+        // two transactions with the same key image somehow both made it to consensus
         let mut transactions = Vec::new();
         let mut transfer_tx_hashes = Vec::new();
+        let mut seen_key_images: HashSet<[u8; 32]> = HashSet::new();
 
         for value in &transfer_values {
             match get_transfer_tx(&value.tx_hash) {
                 Some(tx) => {
+                    // Check for duplicate key images (defense in depth)
+                    let mut has_duplicate = false;
+                    for input in tx.inputs.clsag() {
+                        if seen_key_images.contains(&input.key_image) {
+                            warn!(
+                                tx_hash = hex::encode(&value.tx_hash[0..8]),
+                                key_image = hex::encode(&input.key_image[0..8]),
+                                "Skipping transaction with duplicate key image in block"
+                            );
+                            has_duplicate = true;
+                            break;
+                        }
+                    }
+
+                    if has_duplicate {
+                        continue;
+                    }
+
+                    // Track all key images from this transaction
+                    for input in tx.inputs.clsag() {
+                        seen_key_images.insert(input.key_image);
+                    }
+
                     transfer_tx_hashes.push(value.tx_hash);
                     transactions.push(tx);
                 }

@@ -10,6 +10,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+use tokio::sync::Mutex;
 
 use crate::config::FaucetConfig;
 
@@ -165,6 +166,10 @@ pub struct FaucetState {
     daily_dispensed: AtomicU64,
     /// Unix timestamp of the start of the current day (UTC)
     day_start: AtomicU64,
+    /// Mutex to prevent concurrent UTXO selection.
+    /// This prevents race conditions where two faucet requests select
+    /// the same UTXO and one fails with a double-spend error.
+    tx_build_mutex: Mutex<()>,
 }
 
 impl FaucetState {
@@ -182,7 +187,16 @@ impl FaucetState {
             address_requests: DashMap::new(),
             daily_dispensed: AtomicU64::new(0),
             day_start: AtomicU64::new(day_start),
+            tx_build_mutex: Mutex::new(()),
         }
+    }
+
+    /// Acquire the transaction build lock.
+    ///
+    /// This must be held during UTXO selection and transaction submission
+    /// to prevent race conditions where concurrent requests select the same UTXO.
+    pub async fn acquire_tx_lock(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.tx_build_mutex.lock().await
     }
 
     /// Check if the faucet is enabled
