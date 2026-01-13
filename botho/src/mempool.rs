@@ -945,6 +945,15 @@ impl Mempool {
         self.txs.contains_key(tx_hash)
     }
 
+    /// Check if a key image is pending (used by a transaction in the mempool)
+    ///
+    /// This is useful for UTXO selection to avoid creating transactions that
+    /// would be rejected as double-spends because the key image is already
+    /// in a pending transaction.
+    pub fn is_key_image_pending(&self, key_image: &[u8; 32]) -> bool {
+        self.spent_key_images.contains(key_image)
+    }
+
     /// Get a transaction by hash
     pub fn get(&self, tx_hash: &[u8; 32]) -> Option<&Transaction> {
         self.txs.get(tx_hash).map(|p| &p.tx)

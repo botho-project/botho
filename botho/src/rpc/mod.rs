@@ -2189,7 +2189,10 @@ async fn handle_faucet_request(
         }
     };
 
-    // Filter out spent UTXOs by checking key images
+    // Filter out spent UTXOs by checking key images in both ledger and mempool
+    // We need to check the mempool to avoid double-spend errors when a previous
+    // faucet transaction is still pending (not yet confirmed in a block)
+    let mempool = read_lock!(state.mempool, id);
     let mut utxos = Vec::new();
     info!("Faucet: scanning {} UTXOs from ledger", all_utxos.len());
     for (idx, utxo) in all_utxos.iter().enumerate() {
@@ -2199,16 +2202,23 @@ async fn handle_faucet_request(
             if let Some(onetime_private) = utxo.output.recover_spend_key(wallet.account_key(), subaddress_index) {
                 // Compute the key image
                 let key_image = bth_crypto_ring_signature::KeyImage::from(&onetime_private);
+                let key_image_bytes = key_image.as_bytes();
 
-                // Check if this key image has been spent
-                match ledger.is_key_image_spent(key_image.as_bytes()) {
+                // Check if this key image is pending in mempool
+                if mempool.is_key_image_pending(&key_image_bytes) {
+                    debug!("Faucet: skipping UTXO with pending key image in mempool");
+                    continue;
+                }
+
+                // Check if this key image has been spent on-chain
+                match ledger.is_key_image_spent(&key_image_bytes) {
                     Ok(None) => {
                         // Not spent, include this UTXO
                         info!(
                             "Faucet: UTXO {} owned, unspent - id={}, key_image={}",
                             idx,
                             hex::encode(&utxo.id.to_bytes()[0..8]),
-                            hex::encode(&key_image.as_bytes()[0..8])
+                            hex::encode(&key_image_bytes[0..8])
                         );
                         utxos.push(utxo.clone());
                     }
@@ -2223,6 +2233,8 @@ async fn handle_faucet_request(
             }
         }
     }
+    // Drop mempool read lock before continuing
+    drop(mempool);
     info!("Faucet: found {} unspent UTXOs", utxos.len());
 
     // Calculate fee (use minimum required fee)
