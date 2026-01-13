@@ -258,6 +258,12 @@ impl RpcState {
         self.wallet = Some(Arc::new(wallet));
         self
     }
+
+    /// Set the wallet for balance checking (without faucet)
+    pub fn with_wallet(mut self, wallet: Wallet) -> Self {
+        self.wallet = Some(Arc::new(wallet));
+        self
+    }
 }
 
 /// Start the RPC server
@@ -972,19 +978,72 @@ async fn handle_get_outputs(id: Value, params: &Value, state: &RpcState) -> Json
     JsonRpcResponse::success(id, json!(blocks))
 }
 
-async fn handle_wallet_balance(id: Value, _state: &RpcState) -> JsonRpcResponse {
-    // For now, return placeholder values
-    // A full implementation would scan UTXOs for the wallet address
-    // This requires iterating through all blocks which is expensive
-    // The thin wallet should sync locally instead
+async fn handle_wallet_balance(id: Value, state: &RpcState) -> JsonRpcResponse {
+    // Check if we have a wallet configured
+    let wallet = match &state.wallet {
+        Some(w) => w,
+        None => {
+            return JsonRpcResponse::success(
+                id,
+                json!({
+                    "confirmed": 0,
+                    "pending": 0,
+                    "total": 0,
+                    "utxoCount": 0,
+                    "error": "No wallet configured"
+                }),
+            )
+        }
+    };
+
+    // Scan UTXOs for this wallet
+    let ledger = read_lock!(state.ledger, id);
+    let all_utxos = match ledger.scan_utxos_for_account(wallet.account_key()) {
+        Ok(u) => u,
+        Err(e) => {
+            error!("Wallet balance scan failed: {}", e);
+            return JsonRpcResponse::error(id, -32000, "Failed to scan wallet UTXOs");
+        }
+    };
+
+    // Check mempool for pending key images (UTXOs being spent)
+    let mempool = read_lock!(state.mempool, id);
+    let mut confirmed_balance: u64 = 0;
+    let mut utxo_count = 0;
+
+    for utxo in &all_utxos {
+        // Check if this output belongs to us and get subaddress index
+        if let Some(subaddress_index) = utxo.output.belongs_to(wallet.account_key()) {
+            // Recover the one-time private key to compute key image
+            if let Some(onetime_private) =
+                utxo.output.recover_spend_key(wallet.account_key(), subaddress_index)
+            {
+                let key_image = bth_crypto_ring_signature::KeyImage::from(&onetime_private);
+                let key_image_bytes = key_image.as_bytes();
+
+                // Skip if pending in mempool
+                if mempool.is_key_image_pending(&key_image_bytes) {
+                    continue;
+                }
+
+                // Skip if already spent on-chain
+                if ledger.is_key_image_spent(&key_image_bytes).unwrap_or(None).is_some() {
+                    continue;
+                }
+
+                confirmed_balance += utxo.output.amount;
+                utxo_count += 1;
+            }
+        }
+    }
 
     JsonRpcResponse::success(
         id,
         json!({
-            "confirmed": 0,
+            "confirmed": confirmed_balance,
             "pending": 0,
-            "total": 0,
-            "utxoCount": 0,
+            "total": confirmed_balance,
+            "utxoCount": utxo_count,
         }),
     )
 }

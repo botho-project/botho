@@ -238,26 +238,30 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
         ws_broadcaster.clone(),
     );
 
-    // Initialize faucet if enabled in config (testnet only)
-    if config.faucet.enabled {
-        if !config.network_type.is_production() {
-            // Create wallet for faucet transactions (requires mnemonic in config)
-            if let Some(mnemonic) = config.mnemonic() {
-                match Wallet::from_mnemonic(mnemonic) {
-                    Ok(wallet) => {
+    // Initialize wallet for RPC (balance checking, faucet, etc.)
+    if let Some(mnemonic) = config.mnemonic() {
+        match Wallet::from_mnemonic(mnemonic) {
+            Ok(wallet) => {
+                // Initialize faucet if enabled in config (testnet only)
+                if config.faucet.enabled {
+                    if !config.network_type.is_production() {
                         info!("Faucet enabled: {} BTH per request", config.faucet.amount as f64 / 1_000_000_000_000.0);
                         rpc_state = rpc_state.with_faucet(FaucetState::new(config.faucet.clone()), wallet);
+                    } else {
+                        warn!("Faucet is configured but disabled on mainnet for safety");
+                        rpc_state = rpc_state.with_wallet(wallet);
                     }
-                    Err(e) => {
-                        warn!("Faucet disabled: failed to initialize wallet: {}", e);
-                    }
+                } else {
+                    // Add wallet for balance checking even without faucet
+                    rpc_state = rpc_state.with_wallet(wallet);
                 }
-            } else {
-                warn!("Faucet disabled: no wallet configured (running in relay mode)");
             }
-        } else {
-            warn!("Faucet is configured but disabled on mainnet for safety");
+            Err(e) => {
+                warn!("Wallet not initialized: {}", e);
+            }
         }
+    } else {
+        debug!("No wallet configured (running in relay mode)");
     }
 
     let rpc_state = Arc::new(rpc_state);
