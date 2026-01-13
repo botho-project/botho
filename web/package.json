@@ -14,10 +14,15 @@
     "test": "vitest",
     "test:run": "vitest run",
     "test:coverage": "vitest run --coverage",
+    "test:e2e": "playwright test --config=e2e/playwright.config.ts",
+    "test:e2e:smoke": "playwright test --config=e2e/playwright.config.ts --project=smoke",
+    "test:e2e:ui": "playwright test --config=e2e/playwright.config.ts --ui",
+    "test:e2e:report": "playwright show-report test-results/report",
     "deploy": "pnpm build:web && wrangler pages deploy packages/web-wallet/dist --project-name=botho",
     "deploy:preview": "pnpm build:web && wrangler pages deploy packages/web-wallet/dist --project-name=botho --branch=preview"
   },
   "devDependencies": {
+    "@playwright/test": "^1.57.0",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/react": "^16.3.1",
     "@testing-library/user-event": "^14.6.1",
