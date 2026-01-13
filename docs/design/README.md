@@ -36,6 +36,12 @@ This section contains design proposals, roadmaps, and technical specifications f
 | [Ring Signature Privacy Analysis](ring-signature-privacy-analysis.md) | Complete | Privacy guarantees analysis |
 | [Ring Signature Tag Propagation](ring-signature-tag-propagation.md) | Complete | Tag behavior through rings |
 
+## Wallet & Addresses
+
+| Document | Status | Description |
+|----------|--------|-------------|
+| [Address Format](address-format.md) | Implemented | URI scheme, key derivation, encoding |
+
 ## Network & Security
 
 | Document | Status | Description |

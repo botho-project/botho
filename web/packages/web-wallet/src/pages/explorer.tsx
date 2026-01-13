@@ -1,5 +1,5 @@
 import { useMemo, useCallback } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams, useParams, useNavigate } from 'react-router-dom'
 import { Logo } from '@botho/ui'
 import { ExplorerProvider, Explorer, type ExplorerDataSource, type ExplorerView } from '@botho/features'
 import { useWallet, useAdapter } from '../contexts/wallet'
@@ -9,22 +9,24 @@ import { ArrowLeft } from 'lucide-react'
 export function ExplorerPage() {
   const { isConnected } = useWallet()
   const adapter = useAdapter()
-  const [searchParams, setSearchParams] = useSearchParams()
+  const [searchParams] = useSearchParams()
+  const { hash } = useParams<{ hash?: string }>()
+  const navigate = useNavigate()
 
-  // Get initial query from URL parameter
-  const initialQuery = searchParams.get('h') ?? undefined
+  // Get initial query from route param (/explorer/tx/:hash) or query param (?h=)
+  const initialQuery = hash ?? searchParams.get('h') ?? undefined
 
-  // Update URL when view changes
+  // Update URL when view changes (use path-based URLs)
   const handleViewChange = useCallback((view: ExplorerView) => {
     if (view.mode === 'block') {
-      setSearchParams({ h: view.block.hash }, { replace: true })
+      navigate(`/explorer/block/${view.block.hash}`, { replace: true })
     } else if (view.mode === 'transaction') {
-      setSearchParams({ h: view.transaction.id }, { replace: true })
+      navigate(`/explorer/tx/${view.transaction.id}`, { replace: true })
     } else {
-      // Clear the parameter when going back to list
-      setSearchParams({}, { replace: true })
+      // Go back to list view
+      navigate('/explorer', { replace: true })
     }
-  }, [setSearchParams])
+  }, [navigate])
 
   // Create data source from adapter
   const dataSource = useMemo<ExplorerDataSource>(() => {

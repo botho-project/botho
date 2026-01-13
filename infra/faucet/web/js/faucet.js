@@ -320,6 +320,7 @@
 
       // Show success
       const txHash = result.txHash || result.tx_hash || 'unknown';
+      const explorerUrl = `https://botho.io/explorer/tx/${txHash}`;
       showResult(
         'success',
         `
@@ -338,6 +339,15 @@
                 >
                   Copy
                 </button>
+                <a
+                  href="${explorerUrl}"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="shrink-0 px-2 py-1 text-xs bg-botho-cyan/20 hover:bg-botho-cyan/30 text-botho-cyan rounded transition-colors"
+                  title="View in explorer"
+                >
+                  Explorer
+                </a>
               </div>
             </div>
             <p class="text-sm text-gray-500">Your BTH should arrive after the next block (~30s)</p>

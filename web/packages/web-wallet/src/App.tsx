@@ -15,6 +15,8 @@ function App() {
             <Route path="/" element={<LandingPage />} />
             <Route path="/wallet" element={<WalletPage />} />
             <Route path="/explorer" element={<ExplorerPage />} />
+            <Route path="/explorer/tx/:hash" element={<ExplorerPage />} />
+            <Route path="/explorer/block/:hash" element={<ExplorerPage />} />
             <Route path="/docs" element={<DocsPage />} />
             <Route path="/docs/*" element={<DocsPage />} />
           </Routes>
