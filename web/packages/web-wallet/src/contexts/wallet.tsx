@@ -39,6 +39,9 @@ interface WalletContextValue extends WalletState {
   connect: () => Promise<void>
   disconnect: () => void
 
+  // Adapter (for explorer/blockchain queries)
+  adapter: RemoteNodeAdapter
+
   // Wallet
   createWallet: (mnemonic: string, password?: string) => Promise<void>
   importWallet: (seedPhrase: string, password?: string) => Promise<void>
@@ -420,6 +423,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         ...state,
         connect,
         disconnect,
+        adapter: adapterRef.current,
         createWallet,
         importWallet,
         unlockWallet,
@@ -449,10 +453,12 @@ export function useWallet() {
 
 /**
  * Get the adapter for use with explorer/blockchain queries
- * Returns a function that retrieves the current adapter instance
- * Note: This returns a new adapter each time if network has changed
+ * Returns the same adapter instance used by the WalletProvider
  */
 export function useAdapter() {
-  const adapterRef = useRef<RemoteNodeAdapter>(createAdapterFromNetwork(getInitialNetwork()))
-  return adapterRef.current
+  const context = useContext(WalletContext)
+  if (!context) {
+    throw new Error('useAdapter must be used within a WalletProvider')
+  }
+  return context.adapter
 }
