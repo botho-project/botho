@@ -59,6 +59,10 @@ enum Commands {
         #[arg(long)]
         mint: bool,
 
+        /// Number of minting threads (default: all CPUs)
+        #[arg(long)]
+        mint_threads: Option<u32>,
+
         /// Port for Prometheus metrics endpoint (overrides config, 0 to
         /// disable)
         #[arg(long)]
@@ -188,9 +192,11 @@ fn main() -> Result<()> {
         Commands::Init { recover, relay } => {
             commands::init::run(&config_path, recover, relay, network)
         }
-        Commands::Run { mint, metrics_port } => {
-            commands::run::run(&config_path, mint, metrics_port)
-        }
+        Commands::Run {
+            mint,
+            mint_threads,
+            metrics_port,
+        } => commands::run::run(&config_path, mint, mint_threads, metrics_port),
         Commands::Status => commands::status::run(&config_path),
         Commands::Balance => commands::balance::run(&config_path),
         Commands::Address { save } => commands::address::run(&config_path, save.as_deref()),

@@ -87,13 +87,21 @@ fn check_minting_eligibility(
 }
 
 /// Run the node
-pub fn run(config_path: &Path, mint: bool, metrics_port_override: Option<u16>) -> Result<()> {
+pub fn run(
+    config_path: &Path,
+    mint: bool,
+    mint_threads: Option<u32>,
+    metrics_port_override: Option<u16>,
+) -> Result<()> {
     let mut config =
         Config::load(config_path).context("Config not found. Run 'botho init' first.")?;
 
-    // Apply metrics port override from CLI
+    // Apply CLI overrides
     if let Some(port) = metrics_port_override {
         config.network.metrics_port = Some(port);
+    }
+    if let Some(threads) = mint_threads {
+        config.minting.threads = threads;
     }
 
     // Check if minting is requested without a wallet
