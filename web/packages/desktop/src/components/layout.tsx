@@ -4,6 +4,7 @@ import { Logo } from '@botho/ui'
 import { cn } from '@botho/ui'
 import { useConnection } from '../contexts/connection'
 import {
+  AlertTriangle,
   Cpu,
   Database,
   Home,
@@ -29,11 +30,15 @@ interface LayoutProps {
 }
 
 export function Layout({ children, title, subtitle }: LayoutProps) {
+  const { connectedNode } = useConnection()
+  const isTestnet = !connectedNode?.networkId || connectedNode.networkId.includes('testnet')
+
   return (
     <div className="min-h-screen">
-      <Sidebar />
-      <div className="pl-64">
-        <Header title={title} subtitle={subtitle} />
+      {isTestnet && <TestnetBanner />}
+      <Sidebar className={isTestnet ? 'top-7' : ''} />
+      <div className={cn('pl-64', isTestnet && 'pt-7')}>
+        <Header title={title} subtitle={subtitle} isTestnet={isTestnet} />
         <main className="grid-pattern min-h-[calc(100vh-4rem)] p-6">
           {children}
         </main>
@@ -42,9 +47,20 @@ export function Layout({ children, title, subtitle }: LayoutProps) {
   )
 }
 
-function Header({ title, subtitle }: { title: string; subtitle?: string }) {
+function TestnetBanner() {
   return (
-    <header className="sticky top-0 z-40 border-b border-[--color-steel] bg-[--color-void]/80 backdrop-blur-xl">
+    <div className="fixed top-0 left-0 right-0 z-[60] flex h-7 items-center justify-center gap-2 bg-[--color-warning] text-[--color-void]">
+      <AlertTriangle className="h-3.5 w-3.5" />
+      <span className="text-xs font-bold uppercase tracking-wider">
+        Testnet — Coins have no real value
+      </span>
+    </div>
+  )
+}
+
+function Header({ title, subtitle, isTestnet }: { title: string; subtitle?: string; isTestnet?: boolean }) {
+  return (
+    <header className={cn('sticky z-40 border-b border-[--color-steel] bg-[--color-void]/80 backdrop-blur-xl', isTestnet ? 'top-7' : 'top-0')}>
       <div className="flex h-16 items-center justify-between px-6">
         <div>
           <h1 className="font-display text-xl font-bold text-[--color-light]">{title}</h1>
@@ -55,12 +71,12 @@ function Header({ title, subtitle }: { title: string; subtitle?: string }) {
   )
 }
 
-function Sidebar() {
+function Sidebar({ className }: { className?: string }) {
   const location = useLocation()
   const { connectedNode, disconnect } = useConnection()
 
   return (
-    <aside className="fixed inset-y-0 left-0 z-50 w-64 border-r border-[--color-steel] bg-[--color-abyss]/90 backdrop-blur-xl">
+    <aside className={cn('fixed inset-y-0 left-0 z-50 w-64 border-r border-[--color-steel] bg-[--color-abyss]/90 backdrop-blur-xl', className)}>
       {/* Logo */}
       <div className="flex h-16 items-center border-b border-[--color-steel] px-6">
         <Logo />

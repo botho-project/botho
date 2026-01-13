@@ -3,6 +3,7 @@ import { Logo, Card, CardHeader, CardTitle, CardContent, Button, Input } from '@
 import { motion } from 'motion/react'
 import { useConnection } from '../contexts/connection'
 import {
+  AlertTriangle,
   Loader2,
   Radio,
   Server,
@@ -33,6 +34,14 @@ export function SplashScreen() {
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-[--color-void]">
+      {/* Testnet banner */}
+      <div className="fixed top-0 left-0 right-0 z-[60] flex h-7 items-center justify-center gap-2 bg-[--color-warning] text-[--color-void]">
+        <AlertTriangle className="h-3.5 w-3.5" />
+        <span className="text-xs font-bold uppercase tracking-wider">
+          Testnet — Coins have no real value
+        </span>
+      </div>
+
       {/* Background effects */}
       <div className="fixed inset-0 grid-pattern opacity-30" />
       <div className="fixed top-1/4 left-1/2 -translate-x-1/2 h-[400px] w-[600px] bg-[--color-pulse]/10 blur-[120px] rounded-full" />

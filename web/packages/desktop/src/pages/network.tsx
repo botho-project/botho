@@ -27,16 +27,11 @@ const phaseColors = {
   externalize: { bg: 'bg-[--color-success]/20', text: 'text-[--color-success]', label: 'Externalize' },
 }
 
-// Mock peer data - in production this comes from gossip
+// Testnet network topology - will be populated from real data
 const mockPeers: NetworkPeer[] = [
-  { id: 'self', nodeId: 'bt1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh', isValidator: true, isSelf: true, status: 'online', latency: 0, blockHeight: 1234567, version: '0.1.0', connectedTo: ['node-2', 'node-3', 'node-4', 'node-5'] },
-  { id: 'node-2', nodeId: 'bt1pqr8stuvwxyz0123456789abcdefghijklmnop', isValidator: true, isSelf: false, status: 'online', latency: 45, blockHeight: 1234567, version: '0.1.0', connectedTo: ['self', 'node-3', 'node-5', 'node-6'] },
-  { id: 'node-3', nodeId: 'bt1abc9defghijk0123456789lmnopqrstuvwxyz', isValidator: true, isSelf: false, status: 'online', latency: 89, blockHeight: 1234566, version: '0.1.0', connectedTo: ['self', 'node-2', 'node-4', 'node-7'] },
-  { id: 'node-4', nodeId: 'bt1xyz7890abcdefghijklmnopqrstuvwxyz0123', isValidator: false, isSelf: false, status: 'online', latency: 23, blockHeight: 1234567, version: '0.1.0', connectedTo: ['self', 'node-3', 'node-6'] },
-  { id: 'node-5', nodeId: 'bt1lmn4567opqrstuvwxyzabcdefghijk890123', isValidator: false, isSelf: false, status: 'syncing', latency: 67, blockHeight: 1234560, version: '0.1.0', connectedTo: ['self', 'node-2', 'node-7'] },
-  { id: 'node-6', nodeId: 'bt1def1234ghijklmnopqrstuvwxyzabc567890', isValidator: false, isSelf: false, status: 'offline', latency: 0, blockHeight: 1234550, version: '0.0.9', connectedTo: ['node-2', 'node-4'] },
-  { id: 'node-7', nodeId: 'bt1ghi8901jklmnopqrstuvwxyzabcdef234567', isValidator: true, isSelf: false, status: 'online', latency: 112, blockHeight: 1234567, version: '0.1.0', connectedTo: ['node-3', 'node-5', 'node-8'] },
-  { id: 'node-8', nodeId: 'bt1jkl5678mnopqrstuvwxyzabcdefghi901234', isValidator: false, isSelf: false, status: 'online', latency: 156, blockHeight: 1234567, version: '0.1.0', connectedTo: ['node-7'] },
+  { id: 'local', nodeId: 'local-node', isValidator: true, isSelf: true, status: 'online', latency: 0, blockHeight: 896, version: '0.1.0', connectedTo: ['seed', 'faucet'] },
+  { id: 'seed', nodeId: 'seed.botho.io', isValidator: true, isSelf: false, status: 'online', latency: 45, blockHeight: 896, version: '0.1.0', connectedTo: ['local', 'faucet'] },
+  { id: 'faucet', nodeId: 'faucet.botho.io', isValidator: true, isSelf: false, status: 'online', latency: 52, blockHeight: 896, version: '0.1.0', connectedTo: ['local', 'seed'] },
 ]
 
 interface SCPSlot {
@@ -48,14 +43,14 @@ interface SCPSlot {
 }
 
 const mockSlotHistory: SCPSlot[] = [
-  { slot: 1234567, phase: 'externalize', startTime: Date.now() - 5000, votes: 5, totalNodes: 6 },
-  { slot: 1234566, phase: 'externalize', startTime: Date.now() - 65000, votes: 6, totalNodes: 6 },
-  { slot: 1234565, phase: 'externalize', startTime: Date.now() - 125000, votes: 5, totalNodes: 6 },
-  { slot: 1234564, phase: 'externalize', startTime: Date.now() - 185000, votes: 6, totalNodes: 6 },
+  { slot: 896, phase: 'externalize', startTime: Date.now() - 5000, votes: 3, totalNodes: 3 },
+  { slot: 895, phase: 'externalize', startTime: Date.now() - 65000, votes: 3, totalNodes: 3 },
+  { slot: 894, phase: 'externalize', startTime: Date.now() - 125000, votes: 3, totalNodes: 3 },
+  { slot: 893, phase: 'externalize', startTime: Date.now() - 185000, votes: 3, totalNodes: 3 },
 ]
 
 export function NetworkPage() {
-  const [currentSlot, setCurrentSlot] = useState(1234567)
+  const [currentSlot, setCurrentSlot] = useState(896)
   const [currentPhase, setCurrentPhase] = useState<keyof typeof phaseColors>('externalize')
   const [selectedPeer, setSelectedPeer] = useState<NetworkPeer | null>(null)
 

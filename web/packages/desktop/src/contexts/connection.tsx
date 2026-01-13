@@ -32,7 +32,7 @@ const ConnectionContext = createContext<ConnectionContextValue | null>(null)
 const localScanAdapter = new LocalNodeAdapter()
 
 // Remote seed nodes to try when no local nodes are found
-const SEED_NODES = ['https://seed.botho.io']
+const SEED_NODES = ['https://seed.botho.io/rpc']
 
 export function ConnectionProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<ConnectionState>({

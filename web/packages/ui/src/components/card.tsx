@@ -26,7 +26,7 @@ export function Card({ children, className, glow, hover, ...props }: CardProps) 
 export function CardHeader({ children, className, ...props }: HTMLAttributes<HTMLDivElement>) {
   return (
     <div
-      className={cn('flex items-center justify-between border-b border-[--color-steel] px-5 py-4', className)}
+      className={cn('flex items-center justify-between border-b border-[--color-steel] p-5', className)}
       {...props}
     >
       {children}

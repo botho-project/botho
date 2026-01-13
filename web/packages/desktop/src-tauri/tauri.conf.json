@@ -1,8 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "Botho Wallet",
+  "productName": "Botho Desktop",
   "version": "0.1.0",
-  "identifier": "com.botho.wallet",
+  "identifier": "com.botho.desktop",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Botho Wallet",
+        "title": "Botho Desktop",
         "width": 1200,
         "height": 800,
         "minWidth": 900,
