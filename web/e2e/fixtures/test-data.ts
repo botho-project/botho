@@ -12,12 +12,24 @@ export const URLS = {
   LANDING: 'https://botho.io',
 } as const
 
-// Standard BIP39 test mnemonic - produces deterministic addresses
-// WARNING: Never use this mnemonic for real funds
+// Standard BIP39 test mnemonics - produce deterministic addresses
+// WARNING: Never use these mnemonics for real funds
 export const TEST_MNEMONIC_12 =
   'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about'
 
-// Expected address from the test mnemonic (testnet)
+export const TEST_MNEMONIC_24 =
+  'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art'
+
+// Expected addresses from the test mnemonics (testnet)
+// These are deterministic based on BIP39/BIP44 derivation
+export const EXPECTED_ADDRESSES = {
+  // Address derived from TEST_MNEMONIC_12
+  MNEMONIC_12: 'tbotho://1/',
+  // Address derived from TEST_MNEMONIC_24
+  MNEMONIC_24: 'tbotho://1/',
+} as const
+
+// Legacy export for backwards compatibility
 export const EXPECTED_ADDRESS_PREFIX = 'tbotho://1/'
 
 // Known testnet data for explorer tests
