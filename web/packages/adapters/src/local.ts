@@ -23,7 +23,7 @@ import type {
 const DEFAULT_CONFIG: Required<LocalNodeConfig> = {
   host: 'localhost',
   port: 0, // 0 means scan
-  scanPorts: [8080, 8081, 8082, 8083, 8084, 3000, 3001, 9090, 9091],
+  scanPorts: [17101, 27200, 8080, 8081, 8082, 8083, 8084, 3000, 3001, 9090, 9091],
   timeout: 2000,
 }
 
@@ -318,23 +318,37 @@ export class LocalNodeAdapter implements NodeAdapter {
 
     try {
       const startTime = performance.now()
-      const response = await fetch(`http://${host}:${port}/api/status`, {
+      // Use JSON-RPC endpoint with node_getStatus method
+      const response = await fetch(`http://${host}:${port}/rpc`, {
+        method: 'POST',
         signal: controller.signal,
-        headers: { Accept: 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          method: 'node_getStatus',
+          params: [],
+          id: 1,
+        }),
       })
 
       if (!response.ok) return null
 
-      const data = await response.json()
+      const json = await response.json()
+      if (json.error || !json.result) return null
+
+      const data = json.result
       const latency = Math.round(performance.now() - startTime)
 
       return {
         id: `${host}:${port}`,
         host,
         port,
-        version: data.version || 'unknown',
-        blockHeight: data.blockHeight || data.block_height,
-        networkId: data.networkId || data.network_id || 'botho-mainnet',
+        version: data.nodeVersion || data.version || 'unknown',
+        blockHeight: data.chainHeight || data.blockHeight,
+        networkId: data.network || 'botho-mainnet',
         latency,
         status: 'online',
       }

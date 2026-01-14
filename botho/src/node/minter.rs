@@ -13,7 +13,7 @@ use std::{
     thread::{self, JoinHandle},
     time::Instant,
 };
-use tracing::info;
+use tracing::{info, trace};
 
 use crate::block::{calculate_block_reward, MintingTx};
 
@@ -270,7 +270,7 @@ fn mint_loop(
             // Invert hash value so lower hash = higher priority
             let pow_priority = u64::MAX - hash_value;
 
-            info!(
+            trace!(
                 "Thread {} found minting tx for height {}! Nonce: {}, Hash: {}, Priority: {}, Reward: {} picocredits",
                 thread_id,
                 work.height,
