@@ -1137,13 +1137,21 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                                     }
                                     total
                                 }
-                                Err(_) => continue,
+                                Err(e) => {
+                                    warn!("Failed to scan UTXOs for balance check: {}", e);
+                                    continue;
+                                }
                             }
                         }
-                        Err(_) => continue,
+                        Err(e) => {
+                            warn!("Failed to read ledger for balance check: {}", e);
+                            continue;
+                        }
                     };
 
                     let balance_bth = balance as f64 / 1_000_000_000_000.0;
+                    debug!("Faucet balance check: {:.2} BTH, minting_enabled: {}, minting_paused_for_balance: {}",
+                           balance_bth, minting_enabled, minting_paused_for_balance);
 
                     // Check if we should pause minting due to high balance
                     if minting_enabled && !minting_paused_for_balance && balance > FAUCET_BALANCE_HIGH {
@@ -1186,6 +1194,8 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                             }
                         }
                     }
+                } else {
+                    debug!("Balance check skipped: no wallet configured in rpc_state");
                 }
             }
         }
