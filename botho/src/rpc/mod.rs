@@ -2412,21 +2412,167 @@ async fn handle_faucet_request(
     )
 }
 
+/// Calculate daily dispensed amount from blockchain.
+///
+/// This scans the blockchain to find transactions where the faucet wallet
+/// spent outputs today. Each such transaction represents one faucet dispense.
+///
+/// Uses caching to avoid rescanning the entire blockchain on every request.
+/// The cache stores all key images belonging to the faucet wallet and is
+/// incrementally updated as new blocks are added.
+///
+/// The algorithm:
+/// 1. Update the key image cache with any new blocks since last scan
+/// 2. Scan today's blocks to find transactions using cached key images as inputs
+/// 3. Count unique transactions (not key images, since one tx may have multiple inputs)
+fn calculate_daily_dispensed_from_blockchain(
+    wallet: &Wallet,
+    ledger: &Ledger,
+    faucet: &FaucetState,
+    faucet_amount: u64,
+) -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    // Get UTC day start (midnight)
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let day_start = now - (now % 86400);
+
+    // Get chain state
+    let chain_state = match ledger.get_chain_state() {
+        Ok(s) => s,
+        Err(e) => {
+            warn!("Failed to get chain state for faucet stats: {}", e);
+            return 0;
+        }
+    };
+
+    // Step 1: Update the key image cache with any new blocks.
+    // We only scan blocks that haven't been processed yet.
+    let cached_height = faucet.key_image_cache().cached_height;
+    let start_height = if cached_height == 0 { 0 } else { cached_height + 1 };
+
+    if chain_state.height >= start_height {
+        let mut cache = faucet.key_image_cache_mut();
+
+        for height in start_height..=chain_state.height {
+            let block = match ledger.get_block(height) {
+                Ok(b) => b,
+                Err(_) => continue,
+            };
+
+            // Check minting tx output (mining rewards to faucet)
+            let minting_output = block.minting_tx.to_tx_output();
+            if let Some(subaddr_idx) = minting_output.belongs_to(wallet.account_key()) {
+                if let Some(onetime_key) =
+                    minting_output.recover_spend_key(wallet.account_key(), subaddr_idx)
+                {
+                    let key_image = bth_crypto_ring_signature::KeyImage::from(&onetime_key);
+                    cache.key_images.insert(*key_image.as_bytes());
+                }
+            }
+
+            // Check regular tx outputs (change back to faucet, or incoming transfers)
+            for tx in &block.transactions {
+                for output in tx.outputs.iter() {
+                    if let Some(subaddr_idx) = output.belongs_to(wallet.account_key()) {
+                        if let Some(onetime_key) =
+                            output.recover_spend_key(wallet.account_key(), subaddr_idx)
+                        {
+                            let key_image = bth_crypto_ring_signature::KeyImage::from(&onetime_key);
+                            cache.key_images.insert(*key_image.as_bytes());
+                        }
+                    }
+                }
+            }
+        }
+
+        cache.cached_height = chain_state.height;
+
+        debug!(
+            "Faucet stats: updated cache to height {}, {} key images",
+            cache.cached_height,
+            cache.key_images.len()
+        );
+    }
+
+    // Step 2: Scan today's blocks and count transactions that spend faucet key images.
+    // We iterate backwards from current height until we hit a block before today.
+    let cache = faucet.key_image_cache();
+    let mut dispensed_count = 0u64;
+
+    for height in (0..=chain_state.height).rev() {
+        let block = match ledger.get_block(height) {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+
+        // Stop if we've gone before today
+        if block.header.timestamp < day_start {
+            break;
+        }
+
+        // Check each transaction in today's blocks
+        for tx in &block.transactions {
+            // Check if any input key image belongs to faucet
+            let is_faucet_tx = tx
+                .inputs
+                .clsag()
+                .iter()
+                .any(|input| cache.key_images.contains(&input.key_image));
+
+            if is_faucet_tx {
+                // This transaction spent faucet funds = one dispense
+                dispensed_count += 1;
+            }
+        }
+    }
+
+    debug!(
+        "Faucet stats: {} transactions from faucet today",
+        dispensed_count
+    );
+
+    dispensed_count * faucet_amount
+}
+
 /// Handle faucet status request
 ///
 /// Returns information about the faucet configuration and current stats.
+/// Daily dispensed is calculated from the blockchain for accuracy.
 async fn handle_faucet_status(id: Value, state: &RpcState) -> JsonRpcResponse {
     match &state.faucet {
         Some(faucet) => {
             let stats = faucet.stats();
+
+            // Calculate daily dispensed from blockchain if wallet is available
+            let daily_dispensed = if let Some(wallet) = &state.wallet {
+                let ledger = match state.ledger.read() {
+                    Ok(l) => l,
+                    Err(_) => {
+                        return JsonRpcResponse::error(
+                            id,
+                            INTERNAL_ERROR,
+                            "Failed to acquire ledger lock",
+                        );
+                    }
+                };
+                calculate_daily_dispensed_from_blockchain(&wallet, &ledger, faucet, stats.amount_per_request)
+            } else {
+                // Fall back to in-memory counter if no wallet
+                stats.daily_dispensed
+            };
+
             JsonRpcResponse::success(
                 id,
                 json!({
                     "enabled": stats.enabled,
                     "amountPerRequest": stats.amount_per_request,
                     "amountPerRequestFormatted": format!("{:.6} BTH", stats.amount_per_request as f64 / 1_000_000_000_000.0),
-                    "dailyDispensed": stats.daily_dispensed,
-                    "dailyDispensedFormatted": format!("{:.6} BTH", stats.daily_dispensed as f64 / 1_000_000_000_000.0),
+                    "dailyDispensed": daily_dispensed,
+                    "dailyDispensedFormatted": format!("{:.6} BTH", daily_dispensed as f64 / 1_000_000_000_000.0),
                     "dailyLimit": stats.daily_limit,
                     "dailyLimitFormatted": format!("{:.6} BTH", stats.daily_limit as f64 / 1_000_000_000_000.0),
                     "trackedIps": stats.tracked_ips,

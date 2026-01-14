@@ -6,11 +6,13 @@
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashSet,
     net::IpAddr,
     sync::atomic::{AtomicU64, Ordering},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::Mutex;
+use parking_lot::RwLock;
 
 use crate::config::FaucetConfig;
 
@@ -154,6 +156,15 @@ impl RequestTracker {
     }
 }
 
+/// Cache for faucet key images to avoid rescanning the entire blockchain.
+#[derive(Debug, Default)]
+pub struct KeyImageCache {
+    /// Set of key images belonging to the faucet wallet
+    pub key_images: HashSet<[u8; 32]>,
+    /// Block height at which this cache was last updated
+    pub cached_height: u64,
+}
+
 /// Faucet state with rate limiting
 pub struct FaucetState {
     /// Configuration
@@ -170,6 +181,10 @@ pub struct FaucetState {
     /// This prevents race conditions where two faucet requests select
     /// the same UTXO and one fails with a double-spend error.
     tx_build_mutex: Mutex<()>,
+    /// Cache of key images belonging to the faucet wallet.
+    /// Used to efficiently identify faucet transactions when calculating
+    /// daily dispensed amount from blockchain.
+    key_image_cache: RwLock<KeyImageCache>,
 }
 
 impl FaucetState {
@@ -188,7 +203,18 @@ impl FaucetState {
             daily_dispensed: AtomicU64::new(0),
             day_start: AtomicU64::new(day_start),
             tx_build_mutex: Mutex::new(()),
+            key_image_cache: RwLock::new(KeyImageCache::default()),
         }
+    }
+
+    /// Get the key image cache for reading.
+    pub fn key_image_cache(&self) -> parking_lot::RwLockReadGuard<'_, KeyImageCache> {
+        self.key_image_cache.read()
+    }
+
+    /// Get the key image cache for writing.
+    pub fn key_image_cache_mut(&self) -> parking_lot::RwLockWriteGuard<'_, KeyImageCache> {
+        self.key_image_cache.write()
     }
 
     /// Acquire the transaction build lock.
