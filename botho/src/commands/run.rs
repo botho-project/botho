@@ -1105,6 +1105,7 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
 
             // Check faucet balance and control minting accordingly
             _ = faucet_balance_interval.tick() => {
+                info!("Faucet balance interval tick");
                 // Only check balance if faucet is configured with a wallet
                 if let Some(wallet) = &rpc_state.wallet {
                     // Get wallet balance by scanning UTXOs
