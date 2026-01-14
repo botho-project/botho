@@ -1105,7 +1105,6 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
 
             // Check faucet balance and control minting accordingly
             _ = faucet_balance_interval.tick() => {
-                info!("Faucet balance interval tick");
                 // Only check balance if faucet is configured with a wallet
                 if let Some(wallet) = &rpc_state.wallet {
                     // Get wallet balance by scanning UTXOs
@@ -1151,8 +1150,6 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                     };
 
                     let balance_bth = balance as f64 / 1_000_000_000_000.0;
-                    info!("Faucet balance check: {:.2} BTH, minting_enabled: {}, paused_for_balance: {}",
-                          balance_bth, minting_enabled, minting_paused_for_balance);
 
                     // Check if we should pause minting due to high balance
                     if minting_enabled && !minting_paused_for_balance && balance > FAUCET_BALANCE_HIGH {
@@ -1195,8 +1192,6 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                             }
                         }
                     }
-                } else {
-                    info!("Balance check skipped: no wallet configured in rpc_state");
                 }
             }
         }
