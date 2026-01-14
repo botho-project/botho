@@ -151,7 +151,9 @@ impl Minter {
     }
 
     pub fn stop(self) {
-        // Shutdown signal should already be set
+        // Signal shutdown to all minting threads
+        self.shutdown.store(true, Ordering::SeqCst);
+        // Wait for all threads to finish
         for handle in self.handles {
             let _ = handle.join();
         }
