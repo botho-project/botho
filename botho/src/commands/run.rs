@@ -362,6 +362,14 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
 
     // Track minting state - can change as peers connect/disconnect
     let mut minting_enabled = false;
+    // Track if minting was paused due to high faucet balance
+    let mut minting_paused_for_balance = false;
+
+    // Faucet balance thresholds (in picocredits)
+    // Stop minting if balance > 10,000 BTH
+    const FAUCET_BALANCE_HIGH: u64 = 10_000_000_000_000_000;
+    // Resume minting if balance < 5,000 BTH
+    const FAUCET_BALANCE_LOW: u64 = 5_000_000_000_000_000;
 
     println!();
     node.print_status_public()?;
@@ -406,6 +414,7 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
     let mut status_interval = tokio::time::interval(Duration::from_secs(10));
     let mut consensus_tick = tokio::time::interval(Duration::from_millis(500));
     let mut minting_check_interval = tokio::time::interval(Duration::from_millis(100));
+    let mut faucet_balance_interval = tokio::time::interval(Duration::from_secs(10));
 
     // Track pending compact blocks awaiting missing transactions
     // Key: block hash, Value: (compact block, missing indices)
@@ -1091,6 +1100,92 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
 
                     // Submit to consensus for ordering
                     consensus.submit_transaction(tx_hash, tx_bytes);
+                }
+            }
+
+            // Check faucet balance and control minting accordingly
+            _ = faucet_balance_interval.tick() => {
+                // Only check balance if faucet is configured with a wallet
+                if let Some(wallet) = &rpc_state.wallet {
+                    // Get wallet balance by scanning UTXOs
+                    let balance = match rpc_state.ledger.read() {
+                        Ok(ledger) => {
+                            match ledger.scan_utxos_for_account(wallet.account_key()) {
+                                Ok(utxos) => {
+                                    // Filter to unspent UTXOs and sum amounts
+                                    let mempool = rpc_state.mempool.read().ok();
+                                    let mut total = 0u64;
+                                    for utxo in &utxos {
+                                        if let Some(subaddr_idx) = utxo.output.belongs_to(wallet.account_key()) {
+                                            if let Some(onetime_key) = utxo.output.recover_spend_key(wallet.account_key(), subaddr_idx) {
+                                                let key_image = bth_crypto_ring_signature::KeyImage::from(&onetime_key);
+                                                let key_image_bytes = key_image.as_bytes();
+
+                                                // Check if pending in mempool
+                                                if let Some(ref mp) = mempool {
+                                                    if mp.is_key_image_pending(key_image_bytes) {
+                                                        continue;
+                                                    }
+                                                }
+
+                                                // Check if spent on-chain
+                                                if let Ok(None) = ledger.is_key_image_spent(key_image_bytes) {
+                                                    total += utxo.output.amount;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    total
+                                }
+                                Err(_) => continue,
+                            }
+                        }
+                        Err(_) => continue,
+                    };
+
+                    let balance_bth = balance as f64 / 1_000_000_000_000.0;
+
+                    // Check if we should pause minting due to high balance
+                    if minting_enabled && !minting_paused_for_balance && balance > FAUCET_BALANCE_HIGH {
+                        info!(
+                            "Faucet balance ({:.2} BTH) exceeds threshold ({:.2} BTH) - pausing minting",
+                            balance_bth,
+                            FAUCET_BALANCE_HIGH as f64 / 1_000_000_000_000.0
+                        );
+                        node.stop_minting_public();
+                        minting_enabled = false;
+                        minting_paused_for_balance = true;
+                        if let Ok(mut active) = minting_active.write() {
+                            *active = false;
+                        }
+                        metrics_updater.set_minting_active(false);
+                        ws_broadcaster.minting_status(false, 0.0, 0);
+                    }
+
+                    // Check if we should resume minting due to low balance
+                    if minting_paused_for_balance && balance < FAUCET_BALANCE_LOW {
+                        // Check quorum before resuming
+                        let connected = get_connected_peer_ids(&discovery);
+                        let (can_mint, _) = check_minting_eligibility(&config, &connected, mint);
+                        if can_mint {
+                            info!(
+                                "Faucet balance ({:.2} BTH) below threshold ({:.2} BTH) - resuming minting",
+                                balance_bth,
+                                FAUCET_BALANCE_LOW as f64 / 1_000_000_000_000.0
+                            );
+                            if let Err(e) = node.start_minting_public() {
+                                warn!("Failed to resume minting: {}", e);
+                            } else {
+                                minting_enabled = true;
+                                minting_paused_for_balance = false;
+                                if let Ok(mut active) = minting_active.write() {
+                                    *active = true;
+                                }
+                                metrics_updater.set_minting_active(true);
+                                ws_broadcaster.minting_status(true, 0.0, 0);
+                            }
+                        }
+                    }
                 }
             }
         }

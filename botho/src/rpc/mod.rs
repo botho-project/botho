@@ -2412,10 +2412,18 @@ async fn handle_faucet_request(
     )
 }
 
-/// Calculate daily dispensed amount from blockchain.
+/// Faucet dispense statistics calculated from blockchain.
+struct FaucetDispenseStats {
+    /// Amount dispensed today (current UTC day)
+    daily_dispensed: u64,
+    /// Total amount dispensed over all time
+    lifetime_dispensed: u64,
+}
+
+/// Calculate daily and lifetime dispensed amounts from blockchain.
 ///
 /// This scans the blockchain to find transactions where the faucet wallet
-/// spent outputs today. Each such transaction represents one faucet dispense.
+/// spent outputs. Each such transaction represents one faucet dispense.
 ///
 /// Uses caching to avoid rescanning the entire blockchain on every request.
 /// The cache stores all key images belonging to the faucet wallet and is
@@ -2423,14 +2431,14 @@ async fn handle_faucet_request(
 ///
 /// The algorithm:
 /// 1. Update the key image cache with any new blocks since last scan
-/// 2. Scan today's blocks to find transactions using cached key images as inputs
-/// 3. Count unique transactions (not key images, since one tx may have multiple inputs)
-fn calculate_daily_dispensed_from_blockchain(
+/// 2. Scan all blocks to find transactions using cached key images as inputs
+/// 3. Count transactions for today (daily) and all time (lifetime)
+fn calculate_dispensed_from_blockchain(
     wallet: &Wallet,
     ledger: &Ledger,
     faucet: &FaucetState,
     faucet_amount: u64,
-) -> u64 {
+) -> FaucetDispenseStats {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     // Get UTC day start (midnight)
@@ -2445,7 +2453,10 @@ fn calculate_daily_dispensed_from_blockchain(
         Ok(s) => s,
         Err(e) => {
             warn!("Failed to get chain state for faucet stats: {}", e);
-            return 0;
+            return FaucetDispenseStats {
+                daily_dispensed: 0,
+                lifetime_dispensed: 0,
+            };
         }
     };
 
@@ -2498,10 +2509,10 @@ fn calculate_daily_dispensed_from_blockchain(
         );
     }
 
-    // Step 2: Scan today's blocks and count transactions that spend faucet key images.
-    // We iterate backwards from current height until we hit a block before today.
+    // Step 2: Scan all blocks and count transactions that spend faucet key images.
     let cache = faucet.key_image_cache();
-    let mut dispensed_count = 0u64;
+    let mut daily_count = 0u64;
+    let mut lifetime_count = 0u64;
 
     for height in (0..=chain_state.height).rev() {
         let block = match ledger.get_block(height) {
@@ -2509,12 +2520,9 @@ fn calculate_daily_dispensed_from_blockchain(
             Err(_) => continue,
         };
 
-        // Stop if we've gone before today
-        if block.header.timestamp < day_start {
-            break;
-        }
+        let is_today = block.header.timestamp >= day_start;
 
-        // Check each transaction in today's blocks
+        // Check each transaction
         for tx in &block.transactions {
             // Check if any input key image belongs to faucet
             let is_faucet_tx = tx
@@ -2524,31 +2532,36 @@ fn calculate_daily_dispensed_from_blockchain(
                 .any(|input| cache.key_images.contains(&input.key_image));
 
             if is_faucet_tx {
-                // This transaction spent faucet funds = one dispense
-                dispensed_count += 1;
+                lifetime_count += 1;
+                if is_today {
+                    daily_count += 1;
+                }
             }
         }
     }
 
     debug!(
-        "Faucet stats: {} transactions from faucet today",
-        dispensed_count
+        "Faucet stats: {} transactions today, {} lifetime",
+        daily_count, lifetime_count
     );
 
-    dispensed_count * faucet_amount
+    FaucetDispenseStats {
+        daily_dispensed: daily_count * faucet_amount,
+        lifetime_dispensed: lifetime_count * faucet_amount,
+    }
 }
 
 /// Handle faucet status request
 ///
 /// Returns information about the faucet configuration and current stats.
-/// Daily dispensed is calculated from the blockchain for accuracy.
+/// Daily and lifetime dispensed are calculated from the blockchain for accuracy.
 async fn handle_faucet_status(id: Value, state: &RpcState) -> JsonRpcResponse {
     match &state.faucet {
         Some(faucet) => {
             let stats = faucet.stats();
 
-            // Calculate daily dispensed from blockchain if wallet is available
-            let daily_dispensed = if let Some(wallet) = &state.wallet {
+            // Calculate dispensed amounts from blockchain if wallet is available
+            let (daily_dispensed, lifetime_dispensed) = if let Some(wallet) = &state.wallet {
                 let ledger = match state.ledger.read() {
                     Ok(l) => l,
                     Err(_) => {
@@ -2559,10 +2572,11 @@ async fn handle_faucet_status(id: Value, state: &RpcState) -> JsonRpcResponse {
                         );
                     }
                 };
-                calculate_daily_dispensed_from_blockchain(&wallet, &ledger, faucet, stats.amount_per_request)
+                let dispense_stats = calculate_dispensed_from_blockchain(&wallet, &ledger, faucet, stats.amount_per_request);
+                (dispense_stats.daily_dispensed, dispense_stats.lifetime_dispensed)
             } else {
                 // Fall back to in-memory counter if no wallet
-                stats.daily_dispensed
+                (stats.daily_dispensed, 0)
             };
 
             JsonRpcResponse::success(
@@ -2575,6 +2589,8 @@ async fn handle_faucet_status(id: Value, state: &RpcState) -> JsonRpcResponse {
                     "dailyDispensedFormatted": format!("{:.6} BTH", daily_dispensed as f64 / 1_000_000_000_000.0),
                     "dailyLimit": stats.daily_limit,
                     "dailyLimitFormatted": format!("{:.6} BTH", stats.daily_limit as f64 / 1_000_000_000_000.0),
+                    "lifetimeDispensed": lifetime_dispensed,
+                    "lifetimeDispensedFormatted": format!("{:.6} BTH", lifetime_dispensed as f64 / 1_000_000_000_000.0),
                     "trackedIps": stats.tracked_ips,
                     "trackedAddresses": stats.tracked_addresses,
                 }),
