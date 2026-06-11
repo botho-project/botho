@@ -1260,14 +1260,6 @@ fn peer_id_to_node_id(peer_id: &libp2p::PeerId) -> NodeID {
     }
 }
 
-/// Lottery configuration constants
-/// Minimum UTXO age in blocks for lottery eligibility (roughly 1 hour)
-const LOTTERY_MIN_AGE_BLOCKS: u64 = 360;
-/// Minimum UTXO value for lottery eligibility (0.001 credits)
-const LOTTERY_MIN_VALUE: u64 = 1_000_000_000;
-/// Maximum lottery candidates to consider (DoS protection)
-const LOTTERY_MAX_CANDIDATES: usize = 10_000;
-
 /// Build a block from externalized consensus values
 fn build_block_from_externalized(
     values: &[crate::consensus::ConsensusValue],
@@ -1317,15 +1309,17 @@ fn apply_lottery_to_block(
         block
     };
 
-    // Get lottery candidates from ledger
-    let candidates: Vec<crate::transaction::Utxo> = match shared_ledger.read() {
+    // Apply lottery with default configuration
+    let lottery_config = LotteryFeeConfig::default();
+
+    // Get lottery candidates from the ledger using the SAME function and
+    // config that block validation uses — lottery verification re-runs the
+    // draw, so proposer and validator candidate sets must be identical.
+    let candidates = match shared_ledger.read() {
         Ok(ledger) => {
-            match ledger.get_lottery_candidates(
-                block.height(),
-                LOTTERY_MIN_AGE_BLOCKS,
-                LOTTERY_MIN_VALUE,
-                LOTTERY_MAX_CANDIDATES,
-            ) {
+            match ledger
+                .get_lottery_validation_candidates(block.height(), &lottery_config.draw_config)
+            {
                 Ok(c) => c,
                 Err(e) => {
                     warn!("Failed to get lottery candidates: {}, burning all fees", e);
@@ -1357,7 +1351,5 @@ fn apply_lottery_to_block(
         ledger.get_utxo_by_id(utxo_id).ok().flatten()
     };
 
-    // Apply lottery with default configuration
-    let lottery_config = LotteryFeeConfig::default();
     BlockBuilder::apply_lottery(block, &candidates, utxo_lookup, &lottery_config)
 }

@@ -1772,80 +1772,18 @@ impl Ledger {
     }
 
     // ========================================================================
-    // Lottery Candidate Selection (for Fee Redistribution)
+    // Lottery Candidate Selection (Block Production AND Validation)
     // ========================================================================
 
-    /// Get lottery candidates from the UTXO set for block production.
+    /// Get all UTXOs eligible for lottery participation.
     ///
-    /// Iterates all UTXOs and returns those eligible for lottery participation
-    /// based on age and value criteria.
-    ///
-    /// # Arguments
-    /// * `current_height` - Current block height (for age calculation)
-    /// * `min_age` - Minimum age in blocks for eligibility
-    /// * `min_value` - Minimum UTXO value for eligibility
-    /// * `max_candidates` - Maximum number of candidates to return (DoS protection)
-    ///
-    /// # Returns
-    /// Vector of `Utxo` for eligible candidates
-    pub fn get_lottery_candidates(
-        &self,
-        current_height: u64,
-        min_age: u64,
-        min_value: u64,
-        max_candidates: usize,
-    ) -> Result<Vec<Utxo>, LedgerError> {
-        let rtxn = self
-            .env
-            .read_txn()
-            .map_err(|e| LedgerError::Database(format!("Failed to start read txn: {}", e)))?;
-
-        let max_creation_height = current_height.saturating_sub(min_age);
-        let mut candidates = Vec::new();
-
-        // Iterate over all UTXOs
-        let iter = self
-            .utxo_db
-            .iter(&rtxn)
-            .map_err(|e| LedgerError::Database(format!("Failed to create iterator: {}", e)))?;
-
-        for result in iter {
-            if candidates.len() >= max_candidates {
-                break;
-            }
-
-            if let Ok((_, value)) = result {
-                if let Ok(utxo) = bincode::deserialize::<Utxo>(value) {
-                    // Check age eligibility
-                    if utxo.created_at <= max_creation_height {
-                        // Check value eligibility
-                        if utxo.output.amount >= min_value {
-                            candidates.push(utxo);
-                        }
-                    }
-                }
-            }
-        }
-
-        debug!(
-            current_height = current_height,
-            min_age = min_age,
-            min_value = min_value,
-            candidates = candidates.len(),
-            "Collected lottery candidates"
-        );
-
-        Ok(candidates)
-    }
-
-    // ========================================================================
-    // Lottery Candidate Selection (for Block Validation)
-    // ========================================================================
-
-    /// Get all UTXOs eligible for lottery participation for block validation.
-    ///
-    /// This method returns `LotteryCandidate` objects for all UTXOs that meet
-    /// the eligibility requirements at the specified block height.
+    /// This method returns `LotteryCandidate` objects (with real cluster
+    /// factors) for all UTXOs that meet the eligibility requirements at the
+    /// specified block height. It is the SINGLE source of lottery candidates
+    /// for both block production and block validation: verification re-runs
+    /// the draw, so any divergence in the candidate set forks consensus.
+    /// (Previously the proposer used a separate `get_lottery_candidates`
+    /// with different age/value thresholds — a latent consensus bug.)
     ///
     /// # Arguments
     /// * `block_height` - The block height being validated (UTXOs must be older)
@@ -1858,12 +1796,22 @@ impl Ledger {
         block_height: u64,
         config: &LotteryDrawConfig,
     ) -> Result<Vec<LotteryCandidate>, LedgerError> {
+        use bth_cluster_tax::ClusterFactorCurve;
+        use std::collections::HashMap;
+
+        /// Deterministic cap on the lottery candidate set. Must be the same
+        /// for proposers and validators (consensus-critical).
+        const MAX_LOTTERY_CANDIDATES: usize = 10_000;
+
         let rtxn = self
             .env
             .read_txn()
             .map_err(|e| LedgerError::Database(format!("Failed to start read txn: {}", e)))?;
 
         let mut candidates = Vec::new();
+        // Per-cluster global wealth cache for this scan
+        let mut wealth_cache: HashMap<u64, u64> = HashMap::new();
+        let factor_curve = ClusterFactorCurve::default_params();
 
         let iter = self
             .utxo_db
@@ -1871,6 +1819,15 @@ impl Ledger {
             .map_err(|e| LedgerError::Database(format!("Failed to create iterator: {}", e)))?;
 
         for result in iter {
+            // CONSENSUS-CRITICAL: the candidate set (including the cap and
+            // its iteration order) must be identical for the block proposer
+            // and every validator, because lottery verification re-runs the
+            // draw. LMDB iteration order is key order, which is a
+            // deterministic function of the UTXO set.
+            if candidates.len() >= MAX_LOTTERY_CANDIDATES {
+                break;
+            }
+
             if let Ok((_, value)) = result {
                 if let Ok(utxo) = bincode::deserialize::<Utxo>(value) {
                     // Check eligibility: age and value thresholds
@@ -1882,8 +1839,34 @@ impl Ledger {
                         // Create candidate with UTXO ID (36 bytes: tx_hash || output_index)
                         let utxo_id = utxo.id.to_bytes();
 
-                        // Use default cluster factor since Hybrid mode doesn't use it
-                        let cluster_factor = 1.0;
+                        // Effective cluster wealth for this UTXO: tag weights
+                        // against global per-cluster wealth (background
+                        // contributes zero), then mapped through the
+                        // fixed-point factor curve. Used by ClusterWeighted
+                        // winner selection; deterministic across nodes.
+                        let mut weighted: u128 = 0;
+                        for entry in &utxo.output.cluster_tags.entries {
+                            let global = match wealth_cache.entry(entry.cluster_id.0) {
+                                std::collections::hash_map::Entry::Occupied(e) => *e.get(),
+                                std::collections::hash_map::Entry::Vacant(e) => {
+                                    let w = match self
+                                        .cluster_wealth_db
+                                        .get(&rtxn, entry.cluster_id.0.to_le_bytes().as_slice())
+                                    {
+                                        Ok(Some(bytes)) if bytes.len() == 8 => {
+                                            u64::from_le_bytes(bytes.try_into().unwrap())
+                                        }
+                                        _ => 0,
+                                    };
+                                    *e.insert(w)
+                                }
+                            };
+                            weighted += (entry.weight as u128) * (global as u128);
+                        }
+                        let effective_wealth = (weighted / TAG_WEIGHT_SCALE as u128) as u64;
+                        // factor() returns FACTOR_SCALE units (1000..6000)
+                        let cluster_factor =
+                            factor_curve.factor(effective_wealth) as f64 / 1000.0;
 
                         let candidate = LotteryCandidate::new(
                             utxo_id,

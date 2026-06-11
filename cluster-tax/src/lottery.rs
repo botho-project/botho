@@ -6,12 +6,19 @@
 //!
 //! ## Selection Mode
 //!
-//! The default selection mode is `Hybrid { alpha: 0.3 }`, which provides:
-//! - 3.84x Sybil resistance (acceptable gaming ratio)
-//! - 69% Gini coefficient reduction (progressive redistribution)
-//! - 0 bits privacy cost (no information leaked)
+//! The default selection mode is `ClusterWeighted`: winner weight is UTXO
+//! value scaled by the inverse cluster factor. This is the only mode whose
+//! progressive term is split-invariant — weights are value-based (splitting
+//! a position never increases total weight) and the tilt depends on cluster
+//! provenance, which inherits through splits.
 //!
-//! See `docs/design/lottery-redistribution.md` for analysis.
+//! Per-UTXO weight terms (Uniform, the alpha component of Hybrid) are
+//! subsidies to whoever splits hardest: adversarial simulation shows a
+//! strategic whale splitting into 1,000 UTXOs captures the payout stream
+//! (~300x weight gain under Hybrid alpha=0.3) and inequality rises.
+//!
+//! See `docs/design/cluster-tilted-redistribution.md` for the validated
+//! design and `experiments/ANALYSIS.md` for the gamed-equilibrium results.
 
 use sha2::{Digest, Sha256};
 
@@ -47,8 +54,9 @@ impl Default for LotteryDrawConfig {
             winners_per_draw: 4,
             min_utxo_age: 720,
             min_utxo_value: 1_000_000,
-            // Hybrid α=0.3: Best trade-off per docs/design/lottery-redistribution.md
-            selection_mode: SelectionMode::Hybrid { alpha: 0.3 },
+            // Cluster-tilted: the only split-invariant progressive mode.
+            // See docs/design/cluster-tilted-redistribution.md
+            selection_mode: SelectionMode::ClusterWeighted,
         }
     }
 }
@@ -88,7 +96,7 @@ pub enum SelectionMode {
 
 impl Default for SelectionMode {
     fn default() -> Self {
-        Self::Hybrid { alpha: 0.3 }
+        Self::ClusterWeighted
     }
 }
 
@@ -354,9 +362,15 @@ mod tests {
     }
 
     #[test]
-    fn test_default_is_hybrid() {
+    fn test_default_is_cluster_weighted() {
+        // The default MUST stay split-invariant: per-UTXO weight terms
+        // (Uniform, Hybrid's alpha component) are subsidies to splitters.
+        // See docs/design/cluster-tilted-redistribution.md
         let config = LotteryDrawConfig::default();
-        assert!(matches!(config.selection_mode, SelectionMode::Hybrid { alpha } if (alpha - 0.3).abs() < 0.001));
+        assert!(matches!(
+            config.selection_mode,
+            SelectionMode::ClusterWeighted
+        ));
     }
 
     #[test]

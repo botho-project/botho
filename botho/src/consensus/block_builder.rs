@@ -11,7 +11,7 @@
 use crate::{
     block::{Block, BlockHeader, BlockLotterySummary, LotteryOutput, MintingTx},
     consensus::{
-        lottery::{draw_lottery_winners, utxo_to_candidate, BlockLotteryResult, LotteryFeeConfig},
+        lottery::{draw_lottery_winners, BlockLotteryResult, LotteryFeeConfig},
         ConsensusValue,
     },
     transaction::{Transaction, Utxo},
@@ -210,7 +210,10 @@ impl BlockBuilder {
     ///
     /// # Arguments
     /// * `block` - The block to add lottery results to
-    /// * `lottery_candidates` - UTXOs eligible for lottery participation
+    /// * `candidates` - Lottery candidates with real cluster factors, from
+    ///   `Ledger::get_lottery_validation_candidates` — the SAME function
+    ///   block validation uses. Verification re-runs the draw, so proposer
+    ///   and validator candidate sets (values, factors, order) must match.
     /// * `utxo_lookup` - Function to look up UTXO details by ID for key recovery
     /// * `lottery_config` - Configuration for fee splitting and lottery drawing
     ///
@@ -218,7 +221,7 @@ impl BlockBuilder {
     /// Updated block with lottery outputs and summary
     pub fn apply_lottery<F>(
         mut block: Block,
-        lottery_candidates: &[Utxo],
+        candidates: &[LotteryCandidate],
         utxo_lookup: F,
         lottery_config: &LotteryFeeConfig,
     ) -> Block
@@ -232,27 +235,6 @@ impl BlockBuilder {
             debug!("No fees to distribute, skipping lottery");
             return block;
         }
-
-        // Convert UTXOs to lottery candidates
-        let candidates: Vec<LotteryCandidate> = lottery_candidates
-            .iter()
-            .map(|utxo| {
-                // Convert ClusterTagVector to TagVector for lottery entropy calculation
-                let tag_vector = Self::cluster_tags_to_tag_vector(&utxo.output.cluster_tags);
-
-                // Default cluster factor of 1.0 (1000 on the 1000-6000 scale)
-                // In a full implementation, this would be calculated from cluster wealth
-                let cluster_factor = 1000u64;
-
-                utxo_to_candidate(
-                    utxo.id.to_bytes(),
-                    utxo.output.amount,
-                    cluster_factor,
-                    &tag_vector,
-                    utxo.created_at,
-                )
-            })
-            .collect();
 
         if candidates.is_empty() {
             debug!("No lottery candidates available, burning all fees");
@@ -441,6 +423,22 @@ mod tests {
         }
     }
 
+    fn mock_candidate(
+        utxo_id: [u8; 36],
+        amount: u64,
+        created_at: u64,
+    ) -> bth_cluster_tax::LotteryCandidate {
+        let utxo = mock_utxo(utxo_id, amount, created_at);
+        let tag_vector = BlockBuilder::cluster_tags_to_tag_vector(&utxo.output.cluster_tags);
+        crate::consensus::lottery::utxo_to_candidate(
+            utxo_id,
+            amount,
+            1000, // factor 1.0
+            &tag_vector,
+            created_at,
+        )
+    }
+
     fn mock_transaction_with_fee(fee: u64) -> Transaction {
         use crate::transaction::TxInputs;
 
@@ -459,7 +457,7 @@ mod tests {
         let block = BlockBuilder::build_direct(minting_tx, vec![]);
 
         // Block with no transactions (0 fees)
-        let candidates = vec![mock_utxo([1u8; 36], 1_000_000, 50)];
+        let candidates = vec![mock_candidate([1u8; 36], 1_000_000, 50)];
         let utxo_lookup = |id: &[u8; 36]| {
             if id == &[1u8; 36] {
                 Some(mock_utxo([1u8; 36], 1_000_000, 50))
@@ -483,7 +481,7 @@ mod tests {
         let block = BlockBuilder::build_direct(minting_tx, vec![tx]);
 
         // Empty candidates
-        let candidates: Vec<Utxo> = vec![];
+        let candidates: Vec<bth_cluster_tax::LotteryCandidate> = vec![];
         let utxo_lookup = |_: &[u8; 36]| None;
 
         let lottery_config = LotteryFeeConfig::default();
@@ -504,9 +502,9 @@ mod tests {
 
         // Create some candidate UTXOs
         let candidates = vec![
-            mock_utxo([1u8; 36], 100_000_000, 50),  // 100M value, 50 blocks old
-            mock_utxo([2u8; 36], 200_000_000, 40),  // 200M value, 60 blocks old
-            mock_utxo([3u8; 36], 50_000_000, 30),   // 50M value, 70 blocks old
+            mock_candidate([1u8; 36], 100_000_000, 50), // 100M value, 50 blocks old
+            mock_candidate([2u8; 36], 200_000_000, 40), // 200M value, 60 blocks old
+            mock_candidate([3u8; 36], 50_000_000, 30),  // 50M value, 70 blocks old
         ];
 
         let utxo_lookup = |id: &[u8; 36]| {
