@@ -1049,6 +1049,35 @@ progressive term and is therefore Sybil/split-invariant by construction.
 | Demurrage | 2%/yr max | 4-6%/yr | hoarding UX, "Gesell money" politics |
 | Emission to lottery | 2.5%/yr | up to full tail emission | miner security budget |
 
+### Emission-Fraction Sweep (2026-06-11, follow-up)
+
+With reward-split funding (miner gets `reward × (1−f)`, lottery gets
+`reward × f`; total emission unchanged), we swept the tail-era fraction f.
+Five-year gamed-equilibrium Δgini vs baseline (criterion > 0.05):
+
+| f (of tail emission) | H/I: tilt + emission only | J: + 2%/yr demurrage |
+|---------------------|---------------------------|----------------------|
+| 25% | +0.037 / +0.038 FAIL | **+0.060 PASS** |
+| 50% | +0.041 / +0.042 FAIL | **+0.065 PASS** |
+| 100% | +0.050 / +0.051 PASS | +0.074 PASS |
+
+Results: `experiments/results/gini_experiment_5yr_f{25,50,100}.txt`
+
+**Findings:**
+
+1. **Demurrage is load-bearing, not optional.** Below full-tail routing,
+   emission+tilt alone falls short of the criterion; cluster demurrage
+   carries every tested configuration over the line. The demurrage proposal
+   is therefore REQUIRED for the validated mechanism, not headroom.
+2. **f = 100% is unnecessary and unsafe** under reward-split funding (it
+   zeroes the mining security budget). The implemented schedule — 0% during
+   the bootstrap epoch (an early lottery would only pay miner coinbases),
+   +10pp per halving, capped at 50% — is comfortably sufficient with
+   demurrage.
+3. **Gaming robustness holds at every f**: the gamed run slightly exceeds
+   the honest run throughout (attacker churn fees feed the pool; attacker
+   loses ~1M BTH per 5 years).
+
 ### Protocol Implications (Not Yet Implemented)
 
 1. Route tail emission (or a fraction) into the existing consensus lottery

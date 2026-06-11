@@ -1,0 +1,26 @@
+Structural Gini Reduction Experiment
+=====================================
+Economy: 100M BTH; 80 poor (5%, factor 1x) / 30 middle (25%, 2x) / 9 whales (65%, 6x) / 1 strategic whale (5%, 6x)
+Duration: 7884000 blocks (~1825 days) | 1 tx/block, base fee 250 | emission 640/block (~1.0%/yr of supply) | demurrage 200bps/yr at factor 6 | whale split 1000 (churn every 7d)
+
+| Scenario | Gini0 | GiniF | dGini | vs A | Whale 5%-> | Whale net (BTH) | Poor 5%-> |
+|----------|-------|-------|-------|------|------------|-----------------|-----------|
+| A: status quo (VW payout, fees only) | 0.7725 | 0.7531 | +0.0194 | +0.0000 | 5.00% -> 4.74% | -434184 | 5.00% -> 5.79% |
+| B: uniform payout, fees only | 0.7725 | 0.6456 | +0.1269 | +0.1076 | 5.00% -> 4.18% | -969913 | 5.00% -> 14.50% |
+| C: VW payout + emission | 0.7725 | 0.7537 | +0.0188 | -0.0005 | 5.00% -> 4.75% | -187878 | 5.00% -> 5.77% |
+| D: uniform payout + emission | 0.7725 | 0.6160 | +0.1565 | +0.1371 | 5.00% -> 4.03% | -907345 | 5.00% -> 16.90% |
+| E: D + whale split+churn (gamed) | 0.7725 | 0.7723 | +0.0002 | -0.0192 | 5.00% -> 19.58% | +14814842 | 5.00% -> 6.16% |
+| F: VW payout + emission + demurrage | 0.7725 | 0.7440 | +0.0285 | +0.0092 | 5.00% -> 4.60% | -331066 | 5.00% -> 6.19% |
+| G: F + whale split+churn (gaming attempt) | 0.7725 | 0.7435 | +0.0290 | +0.0097 | 5.00% -> 4.12% | -826579 | 5.00% -> 6.23% |
+| H: cluster-tilted payout + emission | 0.7725 | 0.7122 | +0.0603 | +0.0410 | 5.00% -> 4.21% | -727351 | 5.00% -> 7.53% |
+| I: H + whale split+churn (gaming attempt) | 0.7725 | 0.7112 | +0.0613 | +0.0419 | 5.00% -> 3.86% | -1082917 | 5.00% -> 7.59% |
+| J: H + demurrage (combined intake+payout) | 0.7725 | 0.6880 | +0.0845 | +0.0651 | 5.00% -> 3.89% | -1052603 | 5.00% -> 8.66% |
+
+Reading the table:
+- dGini > 0 means inequality fell; the design criterion is dGini vs A > 0.05.
+- 'Whale net' is lottery winnings minus all fees/demurrage paid (BTH).
+- E vs D quantifies the gaming premium of uniform payouts.
+- G vs F tests whether demurrage-based redistribution is split-proof.
+- I vs H tests whether cluster-tilted payouts are split-proof.
+- J is the combined candidate: progressive intake (fees+demurrage) and
+  progressive payout (cluster-tilted), both anchored to split-proof cluster tags.

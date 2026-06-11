@@ -67,12 +67,15 @@ velocities; idle wealth must be touched.
   pool. Inflation is a perfectly Sybil-resistant, privacy-preserving,
   unavoidable flat wealth levy; paid out cluster-tilted, it becomes a
   progressive one.
-- **Cluster demurrage (optional, larger effect)**: accrue
+- **Cluster demurrage (REQUIRED)**: accrue
   `(factor − 1)/(max_factor − 1) × rate × elapsed_blocks` per UTXO, charged
   when the UTXO is spent. Tags and age are already on-chain — no balance
   surveillance. Factor-1 coins pay zero. The hold/spend pincer: hold → tail
   emission dilutes you; spend → pay accrued demurrage + progressive fee. The
   only escape is genuine commerce, which decays tags — intended behavior.
+  The emission-fraction sweep (below) shows demurrage is load-bearing: at
+  any miner-viable emission fraction, the mechanism passes the Δgini
+  criterion only with demurrage active.
 
 ## Evidence
 
@@ -117,28 +120,48 @@ share of a cluster's coins raises that cluster's wealth and hence its factor.
 | Lever | Validated value | Headroom | Cost of turning up |
 |-------|----------------|----------|--------------------|
 | Payout tilt | 6:1 linear | quadratic (36:1) | payout selection leaks ~1–2 bits of coin origin |
-| Emission to lottery | 2.5%/yr of supply | up to full tail emission | miner security budget |
-| Demurrage | 2%/yr at factor 6 | 4–6%/yr | hoarding UX; Gesell-money politics |
+| Emission to lottery | 25–50% of reward (see schedule) | up to full tail emission | miner security budget |
+| Demurrage | 2%/yr at factor 6 (REQUIRED) | 4–6%/yr | hoarding UX; Gesell-money politics |
 
-## Protocol Changes Required
+### Emission Schedule (implemented 2026-06-11)
 
-1. **Consensus lottery selection mode**: `LotteryDrawConfig::default()`
-   `Hybrid { alpha: 0.3 }` → `ClusterWeighted`
-   (`cluster-tax/src/lottery.rs:51`). Consensus-critical: all validators
-   must switch at a coordinated height. The Hybrid α-term is a known
-   ~3.84x–300x splitting subsidy and must not ship to mainnet.
-2. **Emission routing**: `draw_lottery_winners()` currently pools fees only;
-   add a protocol-defined fraction of the block reward to `pool_amount`.
-   Changes miner revenue → coordinate with security-budget analysis.
-3. **Demurrage** (separate proposal recommended): per-UTXO accrual checked at
-   spend, `charge = value × rate × (factor−1)/(max−1) × elapsed/blocks_per_year`,
-   added to the minimum-fee check in mempool/consensus validation. Use
-   fixed-point arithmetic (see the f64 consensus-fee finding in
-   `audits/2026-01-03-cycle5.md`).
-4. **Whitepaper §10**: the current text describes uniform random-UTXO
-   selection and claims "users with more UTXOs receive more lottery income"
-   as an anti-hoarding feature — that is precisely the gameable design.
-   Must be corrected (see whitepaper update of 2026-06-11).
+Reward-split funding: miner receives `reward × (1−f)`, lottery receives
+`reward × f`; total emission and tail inflation unchanged. The fraction f is
+a deterministic function of height (`MonetaryPolicy::lottery_emission_bps`):
+
+```
+epoch 0 (bootstrap):  f = 0      — mining seeds the network; an early
+                                   lottery would only pay miner coinbases
+per halving epoch:    f += 10pp
+cap:                  f = 50%    — tail emission funds at least half the
+                                   mining security budget
+```
+
+The emission-fraction sweep validates this: with 2%/yr demurrage, the
+mechanism passes the Δgini > 0.05 criterion at every tested f (25/50/100%);
+without demurrage only f = 100% passes, which is not miner-viable.
+Per-block payouts are capped at one block reward with carryover (consensus
+state), which bounds seed-grinding gain below the PoW cost of a regrind.
+
+## Protocol Changes (Status)
+
+1. **Consensus lottery selection mode** — DONE (2026-06-11):
+   `ClusterWeighted` is the default; real cluster factors (tag weights ×
+   global cluster wealth, fixed-point) wired into candidate construction;
+   proposer/validator candidate sets unified (fixed a latent fork bug);
+   draw arithmetic converted to integer fixed-point.
+2. **Emission routing** — DONE (2026-06-11): height-scheduled reward split
+   (see Emission Schedule above) with persistent carryover pool and
+   per-block payout cap.
+3. **Demurrage** — REQUIRED, NOT YET IMPLEMENTED: per-UTXO accrual checked
+   at spend, `charge = value × rate × (factor−1)/(max−1) ×
+   elapsed/blocks_per_year`, added to the minimum-fee check in
+   mempool/consensus validation. Use fixed-point arithmetic (see the f64
+   consensus-fee finding in `audits/2026-01-03-cycle5.md`). The
+   emission-fraction sweep shows the mechanism does not pass the Δgini
+   criterion without it at miner-viable emission fractions.
+4. **Whitepaper §10** — DONE (2026-06-11): uniform-selection claims
+   corrected to cluster-tilted formula and empirical results.
 
 ## Open Questions
 
