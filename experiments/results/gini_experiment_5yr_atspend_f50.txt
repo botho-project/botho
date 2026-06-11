@@ -1,0 +1,33 @@
+Structural Gini Reduction Experiment
+=====================================
+Economy: 100M BTH; 80 poor (5%, factor 1x) / 30 middle (25%, 2x) / 9 whales (65%, 6x) / 1 strategic whale (5%, 6x)
+Duration: 7884000 blocks (~1825 days) | 1 tx/block, base fee 250 | emission 640/block (~1.0%/yr of supply) | demurrage 200bps/yr at factor 6 | whale split 1000 (churn every 7d)
+
+| Scenario | Gini0 | GiniF | dGini | vs A | Whale 5%-> | Whale net (BTH) | Poor 5%-> |
+|----------|-------|-------|-------|------|------------|-----------------|-----------|
+| A: status quo (VW payout, fees only) | 0.7725 | 0.7531 | +0.0194 | +0.0000 | 5.00% -> 4.74% | -435300 | 5.00% -> 5.79% |
+| B: uniform payout, fees only | 0.7725 | 0.6456 | +0.1269 | +0.1076 | 5.00% -> 4.18% | -966455 | 5.00% -> 14.50% |
+| C: VW payout + emission | 0.7725 | 0.7537 | +0.0188 | -0.0006 | 5.00% -> 4.75% | -183106 | 5.00% -> 5.77% |
+| D: uniform payout + emission | 0.7725 | 0.6161 | +0.1564 | +0.1371 | 5.00% -> 4.03% | -903680 | 5.00% -> 16.90% |
+| E: D + whale split+churn (gamed) | 0.7725 | 0.7724 | +0.0001 | -0.0193 | 5.00% -> 19.58% | +14817164 | 5.00% -> 6.16% |
+| F: VW payout + emission + demurrage | 0.7725 | 0.7441 | +0.0284 | +0.0090 | 5.00% -> 4.63% | -308916 | 5.00% -> 6.18% |
+| G: F + whale split+churn (gaming attempt) | 0.7725 | 0.7436 | +0.0289 | +0.0096 | 5.00% -> 4.13% | -819263 | 5.00% -> 6.21% |
+| H: cluster-tilted payout + emission | 0.7725 | 0.7121 | +0.0604 | +0.0410 | 5.00% -> 4.21% | -727661 | 5.00% -> 7.54% |
+| I: H + whale split+churn (gaming attempt) | 0.7725 | 0.7111 | +0.0614 | +0.0420 | 5.00% -> 3.86% | -1084332 | 5.00% -> 7.59% |
+| J: H + demurrage daily (original model) | 0.7725 | 0.6880 | +0.0845 | +0.0651 | 5.00% -> 3.89% | -1048008 | 5.00% -> 8.66% |
+| K: H + demurrage AT SPEND (as implemented) | 0.7725 | 0.6908 | +0.0817 | +0.0623 | 5.00% -> 3.93% | -1058960 | 5.00% -> 8.49% |
+| L: K + whale split+churn (gaming attempt) | 0.7725 | 0.6898 | +0.0827 | +0.0634 | 5.00% -> 3.58% | -1413411 | 5.00% -> 8.54% |
+| M: K + whale PARKS FOREVER (escape attempt) | 0.7725 | 0.6932 | +0.0793 | +0.0600 | 5.00% -> 5.47% | +488198 | 5.00% -> 8.35% |
+
+Reading the table:
+- dGini > 0 means inequality fell; the design criterion is dGini vs A > 0.05.
+- 'Whale net' is lottery winnings minus all fees/demurrage paid (BTH).
+- E vs D quantifies the gaming premium of uniform payouts.
+- G vs F tests whether demurrage-based redistribution is split-proof.
+- I vs H tests whether cluster-tilted payouts are split-proof.
+- J is the combined candidate: progressive intake (fees+demurrage) and
+  progressive payout (cluster-tilted), both anchored to split-proof cluster tags.
+- K vs J compares spend-time demurrage (as implemented in the node) to the
+  daily balance charge the original validation assumed (issue #314).
+- M measures the permanent-parker escape: never spending avoids spend-time
+  demurrage entirely; only emission dilution touches parked wealth.

@@ -1078,6 +1078,61 @@ Results: `experiments/results/gini_experiment_5yr_f{25,50,100}.txt`
    the honest run throughout (attacker churn fees feed the pool; attacker
    loses ~1M BTH per 5 years).
 
+### Spend-Time Demurrage Re-Validation (2026-06-11, issue #314)
+
+The node implements demurrage as accrual charged when coins move (mempool
+minimum fee), not as the daily balance charge the original validation
+modeled. Re-ran the experiment with the harness modeling the implementation
+exactly: accrual paid at spend AND at churn (anchor resets after payment),
+folded into the fee before the pool/burn split; plus a `PermanentParker`
+whale that never transacts (the theoretical escape: spend-time demurrage
+never touches coins that never move).
+
+Five-year Δgini vs baseline (criterion > 0.05), results in
+`experiments/results/gini_experiment_5yr_atspend_f{25,50}.txt`:
+
+| Scenario | f=25% | f=50% |
+|----------|-------|-------|
+| J: daily charge (original model) | +0.061 | +0.065 |
+| K: at-spend charge (as implemented) | **+0.058 PASS** | **+0.062 PASS** |
+| L: K, gamed (split+churn) | +0.059 | +0.063 |
+| M: K, whale parks forever | **+0.056 PASS** | **+0.060 PASS** |
+
+**Findings:**
+
+1. **Spend-time accrual costs ~0.003 Δgini vs the daily model** — the
+   validated claim survives the implementation variant with margin at both
+   emission fractions.
+2. **Gaming remains self-defeating and is now worse for the attacker**:
+   churning pays the accrued demurrage at every churn (anchor invariance),
+   so the split+churn whale loses 1.41M BTH vs 1.06M honest at f=50.
+3. **The permanent-parker escape is real but bounded.** The parker's
+   nominal share grows 5.00% → 5.47% (net +488K BTH at f=50): it pays
+   nothing ever while collecting (tilted-down) lottery income. Two reasons
+   this does not break the mechanism:
+   - System-wide Δgini still passes the criterion (+0.060), because the
+     redistribution engine runs on the other wealthy clusters' fees,
+     demurrage, and emission.
+   - The parker's position is overstated by nominal-balance Gini: it
+     carries an **unbooked accrued-demurrage liability** (~2%/yr × factor
+     share ≈ 500K BTH over 5 years — approximately its entire lottery
+     gain) that is charged in full the moment the coins ever move. Parking
+     defers the charge; it does not escape it. Marked to market, parking
+     is roughly break-even vs honest holding — which is the churn-invariance
+     property working as designed.
+4. **Residual concern — the "everyone parks" equilibrium**: M models one
+   parker among honest whales. If ALL wealthy clusters parked permanently,
+   intake reverts to tilt+emission alone (+0.041 at f=50 — marginally below
+   criterion). This corner is implausible (parked wealth has zero liquidity
+   forever and accrues unbounded liability) but has a cheap, already-designed
+   countermeasure if ever needed: add eligibility decay (from
+   `ValueWeightedWithFloor`) to the `ClusterWeighted` payout weight, which
+   zeroes the parker's lottery income without touching anyone who
+   transacts even occasionally.
+
+**Conclusion**: design doc Open Question 0 is resolved; the implemented
+mechanism's Δgini > 0.05 claim stands in the gamed equilibrium.
+
 ### Protocol Implications (Not Yet Implemented)
 
 1. Route tail emission (or a fraction) into the existing consensus lottery

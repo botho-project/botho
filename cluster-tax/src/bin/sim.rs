@@ -3486,6 +3486,17 @@ mod cli {
         enum Whale {
             Honest,
             SplitChurn,
+            /// Never transacts: escapes spend-time demurrage entirely,
+            /// touched only by emission dilution (issue #314)
+            Parker,
+        }
+        #[derive(Clone, Copy, PartialEq)]
+        enum Demurrage {
+            None,
+            /// Daily balance charge (original validation model)
+            Daily,
+            /// Accrual charged when coins move (matches node implementation)
+            AtSpend,
         }
         #[derive(Clone, Copy, PartialEq)]
         enum Payout {
@@ -3503,19 +3514,22 @@ mod cli {
             payout: Payout,
             emission: bool,
             whale: Whale,
-            demurrage: bool,
+            demurrage: Demurrage,
         }
         let scenarios = [
-            Scenario { name: "A: status quo (VW payout, fees only)", payout: Payout::Vw, emission: false, whale: Whale::Honest, demurrage: false },
-            Scenario { name: "B: uniform payout, fees only", payout: Payout::Uniform, emission: false, whale: Whale::Honest, demurrage: false },
-            Scenario { name: "C: VW payout + emission", payout: Payout::Vw, emission: true, whale: Whale::Honest, demurrage: false },
-            Scenario { name: "D: uniform payout + emission", payout: Payout::Uniform, emission: true, whale: Whale::Honest, demurrage: false },
-            Scenario { name: "E: D + whale split+churn (gamed)", payout: Payout::Uniform, emission: true, whale: Whale::SplitChurn, demurrage: false },
-            Scenario { name: "F: VW payout + emission + demurrage", payout: Payout::Vw, emission: true, whale: Whale::Honest, demurrage: true },
-            Scenario { name: "G: F + whale split+churn (gaming attempt)", payout: Payout::Vw, emission: true, whale: Whale::SplitChurn, demurrage: true },
-            Scenario { name: "H: cluster-tilted payout + emission", payout: Payout::ClusterTilted, emission: true, whale: Whale::Honest, demurrage: false },
-            Scenario { name: "I: H + whale split+churn (gaming attempt)", payout: Payout::ClusterTilted, emission: true, whale: Whale::SplitChurn, demurrage: false },
-            Scenario { name: "J: H + demurrage (combined intake+payout)", payout: Payout::ClusterTilted, emission: true, whale: Whale::Honest, demurrage: true },
+            Scenario { name: "A: status quo (VW payout, fees only)", payout: Payout::Vw, emission: false, whale: Whale::Honest, demurrage: Demurrage::None },
+            Scenario { name: "B: uniform payout, fees only", payout: Payout::Uniform, emission: false, whale: Whale::Honest, demurrage: Demurrage::None },
+            Scenario { name: "C: VW payout + emission", payout: Payout::Vw, emission: true, whale: Whale::Honest, demurrage: Demurrage::None },
+            Scenario { name: "D: uniform payout + emission", payout: Payout::Uniform, emission: true, whale: Whale::Honest, demurrage: Demurrage::None },
+            Scenario { name: "E: D + whale split+churn (gamed)", payout: Payout::Uniform, emission: true, whale: Whale::SplitChurn, demurrage: Demurrage::None },
+            Scenario { name: "F: VW payout + emission + demurrage", payout: Payout::Vw, emission: true, whale: Whale::Honest, demurrage: Demurrage::Daily },
+            Scenario { name: "G: F + whale split+churn (gaming attempt)", payout: Payout::Vw, emission: true, whale: Whale::SplitChurn, demurrage: Demurrage::Daily },
+            Scenario { name: "H: cluster-tilted payout + emission", payout: Payout::ClusterTilted, emission: true, whale: Whale::Honest, demurrage: Demurrage::None },
+            Scenario { name: "I: H + whale split+churn (gaming attempt)", payout: Payout::ClusterTilted, emission: true, whale: Whale::SplitChurn, demurrage: Demurrage::None },
+            Scenario { name: "J: H + demurrage daily (original model)", payout: Payout::ClusterTilted, emission: true, whale: Whale::Honest, demurrage: Demurrage::Daily },
+            Scenario { name: "K: H + demurrage AT SPEND (as implemented)", payout: Payout::ClusterTilted, emission: true, whale: Whale::Honest, demurrage: Demurrage::AtSpend },
+            Scenario { name: "L: K + whale split+churn (gaming attempt)", payout: Payout::ClusterTilted, emission: true, whale: Whale::SplitChurn, demurrage: Demurrage::AtSpend },
+            Scenario { name: "M: K + whale PARKS FOREVER (escape attempt)", payout: Payout::ClusterTilted, emission: true, whale: Whale::Parker, demurrage: Demurrage::AtSpend },
         ];
 
         println!("Structural Gini Reduction Experiment");
@@ -3546,6 +3560,10 @@ mod cli {
         for sc in &scenarios {
             let mut config = LotteryConfig::combined_mechanism();
             config.base_fee = base_fee;
+            if sc.demurrage == Demurrage::AtSpend {
+                config.demurrage_at_spend_bps = demurrage_bps;
+                config.blocks_per_year = BLOCKS_PER_DAY * 365;
+            }
             config.selection_mode = match sc.payout {
                 Payout::Vw => SelectionMode::ValueWeightedWithFloor {
                     ticket_threshold: 1_000 * BTH,
@@ -3588,6 +3606,7 @@ mod cli {
             let whale_strategy = match sc.whale {
                 Whale::Honest => SybilStrategy::Normal,
                 Whale::SplitChurn => SybilStrategy::MultiAccount { num_accounts: split },
+                Whale::Parker => SybilStrategy::PermanentParker,
             };
             let whale_id =
                 sim.add_owner_with_factor(total_wealth * 5 / 100, whale_strategy, 6.0);
@@ -3620,7 +3639,7 @@ mod cli {
                     sim.distribute_to_winners(emission_per_block, 4);
                 }
 
-                if sc.demurrage && b % BLOCKS_PER_DAY == 0 {
+                if sc.demurrage == Demurrage::Daily && b % BLOCKS_PER_DAY == 0 {
                     // Charge (factor-1)/5 x daily max rate on every UTXO,
                     // redistribute proceeds through the lottery
                     let mut total_charged = 0u64;
@@ -3692,6 +3711,10 @@ mod cli {
         println!("- I vs H tests whether cluster-tilted payouts are split-proof.");
         println!("- J is the combined candidate: progressive intake (fees+demurrage) and");
         println!("  progressive payout (cluster-tilted), both anchored to split-proof cluster tags.");
+        println!("- K vs J compares spend-time demurrage (as implemented in the node) to the");
+        println!("  daily balance charge the original validation assumed (issue #314).");
+        println!("- M measures the permanent-parker escape: never spending avoids spend-time");
+        println!("  demurrage entirely; only emission dilution touches parked wealth.");
     }
 }
 

@@ -186,13 +186,16 @@ state), which bounds seed-grinding gain below the PoW cost of a regrind.
 
 ## Open Questions
 
-0. **Spend-time demurrage re-validation (REQUIRED before mainnet,
-   tracked in #314)**: re-run the experiment with demurrage
-   accrued-at-spend instead of charged daily, including a "permanent
-   parker" strategy that never spends. Hypothesis: results hold for
-   circulating wealth (churn invariance) and parked wealth is handled by
-   emission dilution + deferred-but-inescapable accrual, but this must be
-   measured, not assumed.
+0. **Spend-time demurrage re-validation — RESOLVED (#314, 2026-06-11)**:
+   re-ran the experiment with accrual-at-spend as implemented, plus a
+   permanent-parker adversary. Δgini criterion passes at both f=25% and
+   f=50% in the gamed equilibrium (K/L/M scenarios: +0.056 to +0.063 vs
+   baseline; ~0.003 below the daily-charge model). The parker escape is
+   bounded: nominal share drifts +0.5pp/5yr but carries an unbooked
+   accrued liability ≈ its lottery gains. If an "everyone parks"
+   equilibrium ever emerged, the designed countermeasure is adding
+   eligibility decay to the ClusterWeighted payout weight. See
+   `experiments/ANALYSIS.md` § "Spend-Time Demurrage Re-Validation".
 
 1. **Tilt curve shape**: linear (max−f+1)/max vs quadratic — quantify
    privacy-bits-leaked vs Gini-per-year on the same harness.

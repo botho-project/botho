@@ -176,6 +176,17 @@ pub struct LotteryConfig {
 
     // === Asymmetric Structure Fees (from asymmetric-utxo-fees.md) ===
 
+    // === Spend-Time Demurrage (issue #314, matches node implementation) ===
+
+    /// Annual demurrage rate at max cluster factor, in basis points.
+    /// 0 disables spend-time demurrage. When enabled, each spend charges
+    /// accrual on the spender's full UTXO value since its demurrage anchor,
+    /// then resets the anchor (mirrors cluster-tax/src/demurrage.rs).
+    pub demurrage_at_spend_bps: u32,
+
+    /// Blocks per year for demurrage accrual (sim convention: 20s blocks).
+    pub blocks_per_year: u64,
+
     /// Fee multiplier per extra output beyond allowed_extra_outputs.
     /// structure_factor = 1.0 + (extra_outputs × split_penalty_multiplier)
     /// Recommended: 0.5 - 2.0
@@ -210,6 +221,9 @@ impl Default for LotteryConfig {
             // - 0 bits privacy cost
             // See docs/design/lottery-redistribution.md
             selection_mode: SelectionMode::Hybrid { alpha: 0.3 },
+            // Spend-time demurrage (default: disabled)
+            demurrage_at_spend_bps: 0,
+            blocks_per_year: 4_320 * 365,
             // Asymmetric structure fees (default: disabled)
             split_penalty_multiplier: 0.0,
             consolidation_discount: 1.0, // No discount
@@ -240,6 +254,9 @@ impl LotteryConfig {
                 min_eligibility: 0.10,       // 10% floor
                 blocks_per_day: 4320,        // ~20 sec blocks
             },
+            // Spend-time demurrage (default: disabled)
+            demurrage_at_spend_bps: 0,
+            blocks_per_year: 4_320 * 365,
             // Asymmetric structure fees
             split_penalty_multiplier: 1.0, // 1x fee per extra output
             consolidation_discount: 0.3,   // 70% discount
@@ -282,6 +299,10 @@ pub struct LotteryUtxo {
     /// Used for eligibility decay in ValueWeightedWithFloor mode.
     /// Initialized to creation_block, updated on spend/receive.
     pub last_activity_block: u64,
+    /// Demurrage accrual anchor: reset only when the UTXO SPENDS (not on
+    /// lottery wins — in the real chain a payout is a new output and the
+    /// original keeps aging). Initialized to creation_block.
+    pub demurrage_anchor: u64,
     /// Accumulated activity contribution (value × selections / ring_size).
     pub activity_contribution: f64,
     /// Number of times selected as ring member.
@@ -303,6 +324,7 @@ impl LotteryUtxo {
             cluster_factor,
             creation_block: block,
             last_activity_block: block, // Initialize to creation time
+            demurrage_anchor: block,
             activity_contribution: 0.0,
             selection_count: 0,
             tickets_from_fees: 0.0,
@@ -326,11 +348,25 @@ impl LotteryUtxo {
             cluster_factor,
             creation_block: block,
             last_activity_block: block, // Initialize to creation time
+            demurrage_anchor: block,
             activity_contribution: 0.0,
             selection_count: 0,
             tickets_from_fees: 0.0,
             tag_entropy,
         }
+    }
+
+    /// Spend-time demurrage accrued since the anchor (0 if disabled).
+    /// Mirrors `crate::demurrage::demurrage_charge` on the full UTXO value.
+    pub fn accrued_demurrage(&self, current_block: u64, config: &LotteryConfig) -> u64 {
+        let elapsed = current_block.saturating_sub(self.demurrage_anchor);
+        crate::demurrage::demurrage_charge(
+            self.value,
+            (self.cluster_factor * 1000.0) as u64,
+            elapsed,
+            config.demurrage_at_spend_bps,
+            config.blocks_per_year,
+        )
     }
 
     /// Calculate eligibility based on time since last activity.
@@ -475,6 +511,13 @@ pub enum SybilStrategy {
         /// Target number of UTXOs to hold.
         split_target: u32,
     },
+    /// Permanent parker: never transacts at all.
+    ///
+    /// Under spend-time demurrage (the implemented variant), accrual is
+    /// only ever charged when coins move — a permanent parker escapes
+    /// demurrage entirely and is touched only by emission dilution. This
+    /// strategy measures that escape (issue #314).
+    PermanentParker,
 }
 
 /// Lottery simulation state.
@@ -566,7 +609,7 @@ impl LotterySimulation {
 
         // Create UTXOs based on strategy
         let utxo_count = match strategy {
-            SybilStrategy::Normal => 1,
+            SybilStrategy::Normal | SybilStrategy::PermanentParker => 1,
             SybilStrategy::MultiAccount { num_accounts } => num_accounts,
             SybilStrategy::MaximizeSplit => {
                 // Split into minimum-value UTXOs
@@ -613,7 +656,7 @@ impl LotterySimulation {
         let mut owner = LotteryOwner::new(owner_id, strategy);
 
         let utxo_count = match strategy {
-            SybilStrategy::Normal => 1,
+            SybilStrategy::Normal | SybilStrategy::PermanentParker => 1,
             SybilStrategy::MultiAccount { num_accounts } => num_accounts,
             SybilStrategy::MaximizeSplit => (wealth / self.config.min_utxo_value.max(1)) as u32,
             SybilStrategy::ParkingAttack { split_target } => split_target,
@@ -889,6 +932,14 @@ impl LotterySimulation {
     ///
     /// This is simpler than pooled distribution - no accumulation, no periodic
     /// draws.
+    /// Whether an owner never spends (PermanentParker strategy).
+    fn is_parker(&self, owner_id: u64) -> bool {
+        matches!(
+            self.owners.get(&owner_id).map(|o| o.strategy),
+            Some(SybilStrategy::PermanentParker)
+        )
+    }
+
     pub fn simulate_transaction_immediate(
         &mut self,
         base_fee: u64,
@@ -903,13 +954,13 @@ impl LotterySimulation {
             return;
         }
 
-        // Select spender based on transaction model
+        // Select spender based on transaction model (parkers never spend)
         let spender_utxo_id = match tx_model {
             TransactionModel::ValueWeighted => {
                 let eligible: Vec<(u64, u64)> = self
                     .utxos
                     .iter()
-                    .filter(|(_, u)| u.value > 0)
+                    .filter(|(_, u)| u.value > 0 && !self.is_parker(u.owner_id))
                     .map(|(id, u)| (*id, u.value))
                     .collect();
                 if eligible.is_empty() {
@@ -935,7 +986,7 @@ impl LotterySimulation {
                 let eligible: Vec<u64> = self
                     .utxos
                     .iter()
-                    .filter(|(_, u)| u.value > 0)
+                    .filter(|(_, u)| u.value > 0 && !self.is_parker(u.owner_id))
                     .map(|(id, _)| *id)
                     .collect();
                 if eligible.is_empty() {
@@ -945,7 +996,10 @@ impl LotterySimulation {
             }
         };
 
-        // Calculate fee: base × cluster_factor × outputs^exponent
+        // Calculate fee: base × cluster_factor × outputs^exponent, plus
+        // spend-time demurrage accrual (issue #314: matches the node, which
+        // adds accrual to the minimum fee when coins move)
+        let current_block = self.current_block;
         let (actual_fee, cluster_factor) = {
             let spender = match self.utxos.get(&spender_utxo_id) {
                 Some(s) => s,
@@ -953,7 +1007,9 @@ impl LotterySimulation {
             };
             let output_multiplier = (num_outputs as f64).powf(self.config.output_fee_exponent);
             let fee = (base_fee as f64 * spender.cluster_factor * output_multiplier) as u64;
-            let capped_fee = fee.min(spender.value / 2); // Don't take more than half
+            let demurrage = spender.accrued_demurrage(current_block, &self.config);
+            // Don't take more than half the UTXO
+            let capped_fee = fee.saturating_add(demurrage).min(spender.value / 2);
             (capped_fee, spender.cluster_factor)
         };
 
@@ -962,11 +1018,12 @@ impl LotterySimulation {
         }
 
         // Deduct fee from spender; spending refreshes activity (the change
-        // output is a fresh UTXO in the real system)
-        let current_block = self.current_block;
+        // output is a fresh UTXO in the real system) and resets the
+        // demurrage anchor (accrual was just paid)
         if let Some(spender) = self.utxos.get_mut(&spender_utxo_id) {
             spender.value -= actual_fee;
             spender.refresh_activity(current_block);
+            spender.demurrage_anchor = current_block;
             let owner_id = spender.owner_id;
             if let Some(owner) = self.owners.get_mut(&owner_id) {
                 owner.total_fees_paid += actual_fee;
@@ -1148,8 +1205,16 @@ impl LotterySimulation {
         let mut to_distribute = 0u64;
 
         for utxo_id in utxo_ids {
+            // Churn is a spend: pays the accrued demurrage and resets the
+            // anchor (escaping eligibility decay cannot escape accrual)
+            let demurrage = self
+                .utxos
+                .get(&utxo_id)
+                .map(|u| u.accrued_demurrage(current_block, &self.config))
+                .unwrap_or(0);
             if let Some(utxo) = self.utxos.get_mut(&utxo_id) {
                 let fee = ((self.config.base_fee as f64 * utxo.cluster_factor) as u64)
+                    .saturating_add(demurrage)
                     .min(utxo.value / 2);
                 if fee > 0 {
                     utxo.value -= fee;
@@ -1159,6 +1224,7 @@ impl LotterySimulation {
                     self.total_burned += fee - pool_share;
                 }
                 utxo.refresh_activity(current_block);
+                utxo.demurrage_anchor = current_block;
             }
         }
 
