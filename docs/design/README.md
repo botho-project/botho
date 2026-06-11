@@ -17,8 +17,8 @@ This section contains design proposals, roadmaps, and technical specifications f
 
 | Document | Status | Description |
 |----------|--------|-------------|
-| [Asymmetric UTXO Fees](asymmetric-utxo-fees.md) | Research | Combined mechanism: asymmetric fees + value-weighted lottery + eligibility decay |
-| [Asymmetric Fees Simulation](asymmetric-fees-simulation.md) | Draft | Simulation specification for combined mechanism |
+| [Asymmetric UTXO Fees](asymmetric-utxo-fees.md) | Research | Combined mechanism: asymmetric fees + value-weighted lottery + eligibility decay. Sweep result: attack-resistant but zero Gini reduction |
+| [Asymmetric Fees Simulation](asymmetric-fees-simulation.md) | Executed | Sweep run 2026-06-11: attack resistance PASS, Gini reduction FAIL |
 | [Lottery Redistribution](lottery-redistribution.md) | Reference | Background analysis of lottery trade-offs |
 
 ### Entropy Proofs

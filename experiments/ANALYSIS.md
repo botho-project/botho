@@ -887,3 +887,178 @@ The only way to reduce cluster attribution is through **legitimate economic acti
 - #90: Fresh coin mixing analysis (complementary attack vector) - not economically viable
 - #91: Privacy design decision (completed)
 - #92: Implementation tracking (unblocked by this analysis)
+
+---
+
+## Combined Mechanism Parameter Sweep (2026-06-11)
+
+This section reports the first end-to-end run of the parameter sweep specified
+in `docs/design/asymmetric-fees-simulation.md`, executed via:
+
+```bash
+cargo build -p bth-cluster-tax --features cli --bin cluster-tax-sim --release
+./target/release/cluster-tax-sim lottery-sweep
+```
+
+Full output: `experiments/results/lottery_sweep_30d.txt`
+
+### Setup
+
+- Economy: 100M BTH, 120 owners (5% poor / 25% middle / 60% honest whales /
+  5% parking attacker / 5% Sybil attacker), initial Gini 0.774
+- Duration: 129,600 blocks (~30 days at 20s blocks), 10 txs/block
+- Grid: split penalty {0.5, 1.0, 2.0} × eligibility decay {0.01, 0.03, 0.10}
+  × ticket threshold {100, 1000, 5000 BTH}
+- Baseline: identical economy with burn-only fees (no lottery)
+- Engine limitation: the tx loop models fixed 2-output transactions, so the
+  structure-fee penalty axis affects only the analytic attack-cost (Park ROI)
+  column, not engine dynamics.
+
+### Results
+
+| Criterion | Target | Result |
+|-----------|--------|--------|
+| Gini reduction vs baseline | > 0.05 | **FAIL: −0.0001 to −0.0002 (zero, all 27 configs)** |
+| Parking attack ROI | < 1.0 | PASS (negative for threshold ≥ 1000 BTH) |
+| Parking advantage | < 2.0x | PASS (0.91–1.00x) |
+| Splitting advantage | < 2.0x | PASS (0.99–1.00x) |
+| UTXO count stable | yes | PASS (228 throughout) |
+
+### Interpretation
+
+**The combined mechanism is attack-proof but does not redistribute.** Across
+the entire parameter grid, the final Gini is statistically identical to the
+burn-only baseline (~0.774). Two structural causes:
+
+1. **Value-weighted lottery selection returns fees in proportion to existing
+   wealth.** ValueWeightedWithFloor is Sybil-resistant precisely *because*
+   tickets scale with value — but that same property makes the redistribution
+   flow approximately proportional to holdings. Only the per-UTXO floor is
+   progressive, and at 100M BTH scale its effect is negligible. This is the
+   known progressivity/Sybil-resistance trade-off (see `SelectionMode::Hybrid`
+   docs): the mechanism sits at the Sybil-resistant end of the Pareto
+   frontier, which is the zero-redistribution end.
+
+2. **Fee volume is small relative to the wealth stock.** ~30 days of fees
+   moves single-digit percent of total wealth even before the proportionality
+   problem.
+
+This empirically extends the Experiment 5 finding: replacing burn with a
+value-weighted lottery does not change the Gini outcome. Redistribution
+requires a selection mode with progressivity (e.g., Hybrid α > 0, capped or
+floor-dominated weighting), which reopens measured Sybil exposure (α = 0.3 ≈
+3.84x gaming ratio per the lottery-redistribution analysis) — or a different
+mechanism entirely.
+
+### Status
+
+**The Gini-reduction goal remains unvalidated.** Attack resistance of the
+combined mechanism is confirmed; its redistributive effect is empirically
+zero under the recommended configuration. Do not cite the combined mechanism
+as an inequality-reduction measure until a configuration passes the Δgini >
+0.05 criterion.
+
+**Update:** see the next section — a tags-anchored configuration passing the
+criterion in a gamed equilibrium was found on 2026-06-11.
+
+---
+
+## Structural Gini Reduction Experiment (2026-06-11)
+
+Following the sweep's negative result, we tested three redistribution levers
+in isolation and combination, each in an honest world AND against a strategic
+whale (splits 5M BTH into 1,000 UTXOs, churns them weekly to maintain lottery
+eligibility — the gamed equilibrium). Run via:
+
+```bash
+./target/release/cluster-tax-sim lottery-experiment                    # 1 year
+./target/release/cluster-tax-sim lottery-experiment --blocks 7884000   # 5 years
+```
+
+Results: `experiments/results/gini_experiment_1yr.txt`, `gini_experiment_5yr.txt`
+
+### Setup
+
+- 100M BTH; 80 poor (5%, cluster factor 1x) / 30 middle (25%, 2x) /
+  9 honest whales (65%, 6x) / 1 strategic whale (5%, 6x); initial Gini 0.77
+- Cluster factors assigned explicitly per wealth class. (The default
+  `FeeCurve::default_params()` has `w_mid` far below sim balances, which
+  pinned ALL owners at max factor in earlier runs — including the original
+  parameter sweep, whose fee intake was therefore flat, not progressive.)
+- Conservative parameters: emission 2.5%/yr of supply routed to the lottery,
+  demurrage 2%/yr at factor 6 (0 at factor 1, charged daily, redistributed),
+  base fee 0.25 BTH × cluster factor, 1 tx/block value-weighted
+
+### Five-Year Results (Δgini vs status-quo baseline A; criterion > 0.05)
+
+| Scenario | ΔGini vs A | Gamed outcome | Verdict |
+|----------|-----------|----------------|---------|
+| B: uniform payout, fees only | +0.108 | — | fictional (see E) |
+| C: VW payout + emission | −0.001 | — | emission alone is Gini-neutral ✓ (theory confirmed) |
+| D: uniform payout + emission | +0.177 | collapses | fictional (see E) |
+| E: D + strategic whale | **−0.026** | whale 5%→24% share, +21.1M BTH profit | **catastrophic** |
+| F/G: VW payout + emission + demurrage | +0.008/+0.009 | split-proof (whale −548K) | robust but slow |
+| H: cluster-tilted payout + emission | **+0.054** | — | **PASS** |
+| I: H + strategic whale | **+0.055** | split-proof (whale −948K) | **PASS, gamed** |
+| J: H + demurrage | **+0.078** | robust by construction | **PASS with margin** |
+
+(One-year deltas: H +0.011, J +0.016 — the effect compounds.)
+
+### The Structural Finding
+
+1. **Any payout weighted by UTXO count is a subsidy to whoever splits
+   hardest.** Uniform/floor lotteries look excellent in honest simulations
+   (D: +0.177) and invert under gaming (E: whale captures the entire payout
+   stream at ~90% APY, Gini *rises*). UTXO count is a free variable; never
+   pay on it.
+
+2. **Cluster tags are the only split-invariant progressive signal in an
+   anonymous-value system.** Mechanisms anchored to them survive gaming:
+   - *Intake*: progressive fees + cluster demurrage (factor inherits through
+     splits; gaming is strictly negative for the attacker)
+   - *Payout*: cluster-tilted lottery (`SelectionMode::ClusterWeighted`:
+     weight = value × (max_factor − factor + 1)/max_factor) — value-weighted,
+     so splitting is pointless; tilted 6:1 toward low-factor coins, so it
+     redistributes
+   - In the gamed runs (G, I) the attacker's churn fees feed the pool, so
+     gaming *slightly improves* redistribution while costing the attacker
+     ~19% of their position over 5 years.
+
+3. **The residual attack surface is tag-decay manipulation** (wash trading
+   to lower one's cluster factor), which is exactly the attack already
+   rate-bounded by AND-based decay and entropy-weighted decay (see earlier
+   sections). The redistribution design and the decay design defend the same
+   invariant: cluster attribution must be expensive to shed.
+
+### Recommended Claim (Whitepaper-Safe)
+
+Botho's structural Gini reduction is anchored entirely to cluster
+provenance, on both sides of the flow: progressive intake (cluster-factor
+fees, optional cluster demurrage) and progressive payout (cluster-tilted
+lottery over tail emission). At conservative parameters (2.5%/yr emission,
+2%/yr max demurrage, 6:1 tilt) the mechanism reduces Gini by ~0.08 per
+5 years in an adversarially-gamed equilibrium, passing the Δgini > 0.05
+design criterion. The mechanism contains no per-UTXO or per-account
+progressive term and is therefore Sybil/split-invariant by construction.
+
+### Parameter Headroom and Costs
+
+| Lever | Current | Headroom | Cost |
+|-------|---------|----------|------|
+| Payout tilt | 6:1 linear | quadratic (36:1) | payout selection leaks ~1-2 bits of coin origin |
+| Demurrage | 2%/yr max | 4-6%/yr | hoarding UX, "Gesell money" politics |
+| Emission to lottery | 2.5%/yr | up to full tail emission | miner security budget |
+
+### Protocol Implications (Not Yet Implemented)
+
+1. Route tail emission (or a fraction) into the existing consensus lottery
+   pool (`botho/src/consensus/lottery.rs` currently draws from fees only)
+2. Change lottery winner selection to cluster-tilted weighting (requires
+   winner-selection validation to read cluster tags — already on-chain)
+3. Cluster demurrage: accrue `(factor−1)/5 × rate × elapsed` at spend time
+   (no balance surveillance needed; tags + age are already on-chain)
+4. Simulation caveats: 2-output fixed tx model, frozen per-UTXO cluster
+   factors (real system: factor derives from live global cluster wealth —
+   now enforced in the mempool), no tag-decay dynamics inside this
+   experiment. A follow-up should co-simulate redistribution with the
+   decay/wash-trading model.

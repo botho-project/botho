@@ -2,7 +2,10 @@
 
 ## Status
 
-**Draft** - Simulation framework to be implemented
+**Executed (2026-06-11)** - Sweep implemented as `cluster-tax-sim lottery-sweep`.
+Result: attack resistance PASSED, Gini reduction FAILED (Δgini ≈ 0 vs burn-only
+baseline across all 27 configurations). See `experiments/ANALYSIS.md` §
+"Combined Mechanism Parameter Sweep" and `experiments/results/lottery_sweep_30d.txt`.
 
 ## Purpose
 
