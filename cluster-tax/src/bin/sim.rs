@@ -422,6 +422,64 @@ mod cli {
             #[arg(long)]
             json: bool,
         },
+
+        /// Parameter sweep for the combined progressive mechanism
+        /// (asymmetric-fees-simulation.md): value-weighted lottery with floor,
+        /// eligibility decay, and asymmetric structure fees. Measures Gini
+        /// reduction vs a burn-only baseline plus attack profitability.
+        LotterySweep {
+            /// Simulation duration in blocks (default ~30 days at 20s blocks)
+            #[arg(long, default_value = "129600")]
+            blocks: u64,
+
+            /// Transactions per block
+            #[arg(long, default_value = "10")]
+            txs_per_block: u32,
+
+            /// Quick mode: single recommended config instead of full grid
+            #[arg(long)]
+            quick: bool,
+        },
+
+        /// Structural Gini-reduction experiment: tail emission routed to the
+        /// lottery, uniform-per-UTXO payouts, cluster demurrage, and a
+        /// strategic splitting whale (gamed equilibrium). Seven scenarios
+        /// isolate each lever.
+        LotteryExperiment {
+            /// Simulation duration in blocks (default ~1 year at 20s blocks)
+            #[arg(long, default_value = "1576800")]
+            blocks: u64,
+
+            /// Transactions per block
+            #[arg(long, default_value = "1")]
+            txs_per_block: u32,
+
+            /// Base fee in base units (250 = 0.25 BTH)
+            #[arg(long, default_value = "250")]
+            base_fee: u64,
+
+            /// Block emission routed to the lottery (base units;
+            /// 1600/block ~= 2.5% of 100M BTH supply per year)
+            #[arg(long, default_value = "1600")]
+            emission_per_block: u64,
+
+            /// Strategic whale split count
+            #[arg(long, default_value = "1000")]
+            split: u32,
+
+            /// Churn interval in days for the strategic whale
+            #[arg(long, default_value = "7")]
+            churn_days: u64,
+
+            /// Annual demurrage in basis points at max cluster factor
+            /// (200 = 2%/year on factor-6 clusters, 0 on factor-1)
+            #[arg(long, default_value = "200")]
+            demurrage_bps: u32,
+
+            /// Quick mode: ~20-day horizon for sanity checking
+            #[arg(long)]
+            quick: bool,
+        },
     }
 
     pub fn run(cli: Cli) {
@@ -579,6 +637,29 @@ mod cli {
                 duration_blocks,
                 json,
             } => run_entropy_parameter_sweep(initial_wealth, duration_blocks, json),
+            Command::LotterySweep {
+                blocks,
+                txs_per_block,
+                quick,
+            } => run_lottery_sweep(blocks, txs_per_block, quick),
+            Command::LotteryExperiment {
+                blocks,
+                txs_per_block,
+                base_fee,
+                emission_per_block,
+                split,
+                churn_days,
+                demurrage_bps,
+                quick,
+            } => run_lottery_experiment(
+                if quick { 86_400 } else { blocks },
+                txs_per_block,
+                base_fee,
+                emission_per_block,
+                split,
+                churn_days,
+                demurrage_bps,
+            ),
         }
     }
 
@@ -956,9 +1037,8 @@ mod cli {
         show_progress: bool,
     ) {
         use bth_cluster_tax::simulation::{
-            agents::whale::WhaleStrategy, run_simulation, run_simulation_with_progress, Agent,
-            AgentId, MerchantAgent, MinterAgent, MixerServiceAgent, RetailUserAgent,
-            SimulationConfig, WhaleAgent,
+            agents::whale::WhaleStrategy, run_simulation, Agent, AgentId, MerchantAgent,
+            MinterAgent, MixerServiceAgent, RetailUserAgent, SimulationConfig, WhaleAgent,
         };
 
         println!("Scenario A: Baseline Economy");
@@ -1050,11 +1130,10 @@ mod cli {
             ..Default::default()
         };
 
-        let result = if show_progress {
-            run_simulation_with_progress(&mut agents, &config)
-        } else {
-            run_simulation(&mut agents, &config)
-        };
+        if show_progress {
+            eprintln!("(progress display not available; running {} rounds...)", rounds);
+        }
+        let result = run_simulation(&mut agents, &config);
         let summary = result.metrics.summary();
 
         // Print results
@@ -1715,8 +1794,8 @@ mod cli {
         show_progress: bool,
     ) {
         use bth_cluster_tax::simulation::privacy::{
-            format_monte_carlo_report, run_monte_carlo, run_monte_carlo_parallel, MonteCarloConfig,
-            PoolConfig, RingSimConfig, RING_SIZE,
+            format_monte_carlo_report, run_monte_carlo, MonteCarloConfig, PoolConfig,
+            RingSimConfig, RING_SIZE,
         };
 
         // Normalize fractions
@@ -1763,9 +1842,10 @@ mod cli {
         }
         println!();
 
-        let results = if use_parallel {
-            run_monte_carlo_parallel(&config, show_progress)
-        } else {
+        if use_parallel || show_progress {
+            eprintln!("(parallel execution not available; running single-threaded...)");
+        }
+        let results = {
             let mut rng = rand::thread_rng();
             run_monte_carlo(&config, &mut rng)
         };
@@ -1835,8 +1915,8 @@ mod cli {
 
     fn run_ring_size_analysis(sizes_str: &str, simulate: bool, num_sims: usize, pool_size: usize) {
         use bth_cluster_tax::simulation::privacy::{
-            analyze_ring_sizes, format_ring_size_analysis, run_monte_carlo_parallel,
-            MonteCarloConfig, PoolConfig, RingSimConfig,
+            analyze_ring_sizes, format_ring_size_analysis, run_monte_carlo, MonteCarloConfig,
+            PoolConfig, RingSimConfig,
         };
 
         // Parse ring sizes
@@ -1889,8 +1969,10 @@ mod cli {
                     ring_config,
                 };
 
-                // Use parallel version with progress bar
-                let results = run_monte_carlo_parallel(&config, true);
+                let results = {
+                    let mut rng = rand::thread_rng();
+                    run_monte_carlo(&config, &mut rng)
+                };
 
                 if let Some(combined_stats) = results.bits_of_privacy_stats.get("Combined") {
                     let measured = combined_stats.mean;
@@ -3112,6 +3194,504 @@ mod cli {
         println!("  3. Key Insight:");
         println!("     Entropy-weighted decay provides resistance proportional to the attacker's");
         println!("     legitimate commerce ratio. Pure wash trading = 0% decay, regardless of patience.");
+    }
+
+    /// Parameter sweep for the combined progressive mechanism.
+    ///
+    /// Implements the sweep from docs/design/asymmetric-fees-simulation.md.
+    /// Engine dynamics depend on (decay, threshold); the structure-fee penalty
+    /// is applied analytically to attack cost since the tx loop models fixed
+    /// 2-output transactions.
+    fn run_lottery_sweep(blocks: u64, txs_per_block: u32, quick: bool) {
+        use bth_cluster_tax::simulation::lottery::{
+            LotteryConfig, LotterySimulation, SelectionMode, SybilStrategy, TransactionModel,
+        };
+
+        // 1 BTH = 1_000 base units at this sim's scale
+        // (combined_mechanism uses min_utxo_value = 100_000 for 100 BTH).
+        const BTH: u64 = 1_000;
+        const PARKER_SPLIT: u32 = 100;
+        const SYBIL_ACCOUNTS: u32 = 10;
+        let total_wealth: u64 = 100_000_000 * BTH;
+
+        let decays: Vec<f64> = if quick { vec![0.03] } else { vec![0.01, 0.03, 0.10] };
+        let thresholds_bth: Vec<u64> = if quick { vec![1_000] } else { vec![100, 1_000, 5_000] };
+        let penalties: Vec<f64> = if quick { vec![1.0] } else { vec![0.5, 1.0, 2.0] };
+
+        let make_config = |decay: f64, threshold_bth: u64| -> LotteryConfig {
+            let mut config = LotteryConfig::combined_mechanism();
+            config.selection_mode = SelectionMode::ValueWeightedWithFloor {
+                ticket_threshold: threshold_bth * BTH,
+                decay_rate_per_day: decay,
+                min_eligibility: 0.10,
+                blocks_per_day: 4_320,
+            };
+            config
+        };
+
+        // Population: 5% poor (80 owners), 25% middle (30), 60% honest whales
+        // (8), 5% parking attacker, 5% Sybil. Initial Gini ~0.72.
+        let build = |config: LotteryConfig| -> (LotterySimulation, u64, u64, Vec<u64>) {
+            let mut sim = LotterySimulation::new(config, FeeCurve::default_params());
+            for _ in 0..80 {
+                sim.add_owner(total_wealth / 20 / 80, SybilStrategy::Normal);
+            }
+            for _ in 0..30 {
+                sim.add_owner(total_wealth / 4 / 30, SybilStrategy::Normal);
+            }
+            let whales: Vec<u64> = (0..8)
+                .map(|_| sim.add_owner(total_wealth * 60 / 100 / 8, SybilStrategy::Normal))
+                .collect();
+            let parker = sim.add_owner(
+                total_wealth * 5 / 100,
+                SybilStrategy::ParkingAttack { split_target: PARKER_SPLIT },
+            );
+            let sybil = sim.add_owner(
+                total_wealth * 5 / 100,
+                SybilStrategy::MultiAccount { num_accounts: SYBIL_ACCOUNTS },
+            );
+            (sim, parker, sybil, whales)
+        };
+
+        println!("Combined Progressive Mechanism: Parameter Sweep");
+        println!("================================================");
+        println!(
+            "Economy: 100M BTH, 120 owners (5% poor / 25% middle / 60% whales / 10% attackers)"
+        );
+        println!(
+            "Duration: {} blocks (~{} days), {} txs/block",
+            blocks,
+            blocks / 4_320,
+            txs_per_block
+        );
+        println!();
+
+        // Baseline: identical population and fees, but everything burned
+        // (pool_fraction = 0) -> no redistribution. This reproduces the
+        // Experiment 5 setup where progressive burn fees showed no Gini
+        // improvement.
+        let mut baseline_config = make_config(0.03, 1_000);
+        baseline_config.pool_fraction = 0.0;
+        let (mut baseline_sim, _, _, _) = build(baseline_config);
+        let baseline_initial = baseline_sim.calculate_gini();
+        baseline_sim.advance_blocks_immediate(blocks, txs_per_block, TransactionModel::ValueWeighted);
+        let baseline_final = baseline_sim.calculate_gini();
+        println!(
+            "Baseline (burn-only, no lottery): Gini {:.4} -> {:.4} (delta {:+.4})",
+            baseline_initial,
+            baseline_final,
+            baseline_final - baseline_initial
+        );
+        println!();
+
+        struct RunResult {
+            decay: f64,
+            threshold_bth: u64,
+            initial_gini: f64,
+            final_gini: f64,
+            parking_adv: f64,
+            sybil_adv: f64,
+            parker_winnings: u64,
+            honest_rate: f64,
+            parker_cluster_factor: f64,
+            final_utxos: usize,
+        }
+
+        let mut runs: Vec<RunResult> = Vec::new();
+        for &decay in &decays {
+            for &threshold_bth in &thresholds_bth {
+                let config = make_config(decay, threshold_bth);
+                let (mut sim, parker, sybil, whales) = build(config);
+                let initial_gini = sim.calculate_gini();
+                let parker_wealth = sim.owner_value(parker) as f64;
+                let sybil_wealth = sim.owner_value(sybil) as f64;
+                let whale_wealth: f64 =
+                    whales.iter().map(|id| sim.owner_value(*id) as f64).sum();
+
+                sim.advance_blocks_immediate(blocks, txs_per_block, TransactionModel::ValueWeighted);
+
+                let final_gini = sim.calculate_gini();
+                let whale_winnings: u64 = whales
+                    .iter()
+                    .map(|id| sim.owners.get(id).map(|o| o.total_winnings).unwrap_or(0))
+                    .sum();
+                // Winnings per unit of initial wealth, honest whales = reference.
+                let honest_rate = whale_winnings as f64 / whale_wealth;
+                let parker_winnings =
+                    sim.owners.get(&parker).map(|o| o.total_winnings).unwrap_or(0);
+                let sybil_winnings =
+                    sim.owners.get(&sybil).map(|o| o.total_winnings).unwrap_or(0);
+                let parking_adv = if honest_rate > 0.0 {
+                    (parker_winnings as f64 / parker_wealth) / honest_rate
+                } else {
+                    0.0
+                };
+                let sybil_adv = if honest_rate > 0.0 {
+                    (sybil_winnings as f64 / sybil_wealth) / honest_rate
+                } else {
+                    0.0
+                };
+                let parker_cluster_factor = sim
+                    .owners
+                    .get(&parker)
+                    .and_then(|o| o.utxo_ids.first())
+                    .and_then(|id| sim.utxos.get(id))
+                    .map(|u| u.cluster_factor)
+                    .unwrap_or(1.0);
+
+                runs.push(RunResult {
+                    decay,
+                    threshold_bth,
+                    initial_gini,
+                    final_gini,
+                    parking_adv,
+                    sybil_adv,
+                    parker_winnings,
+                    honest_rate,
+                    parker_cluster_factor,
+                    final_utxos: sim.utxos.len(),
+                });
+            }
+        }
+
+        println!("## Parameter Sweep Results");
+        println!();
+        println!("| Penalty | Decay | Threshold (BTH) | Gini0 | GiniF | dGini | vs Baseline | Park Adv | Park ROI | Sybil Adv | UTXOs |");
+        println!("|---------|-------|-----------------|-------|-------|-------|-------------|----------|----------|-----------|-------|");
+
+        let mut sweet_spot: Option<(f64, f64, u64, f64)> = None;
+        for run in &runs {
+            for &penalty in &penalties {
+                // Analytic parking ROI: extra winnings over honest strategy
+                // vs the one-time split cost under this structure-fee penalty.
+                let mut cfg = make_config(run.decay, run.threshold_bth);
+                cfg.split_penalty_multiplier = penalty;
+                let split_factor = cfg.structure_factor(1, PARKER_SPLIT);
+                let split_cost =
+                    cfg.base_fee as f64 * run.parker_cluster_factor * split_factor;
+                let parker_wealth = (total_wealth * 5 / 100) as f64;
+                let extra_winnings =
+                    run.parker_winnings as f64 - run.honest_rate * parker_wealth;
+                let parking_roi = if split_cost > 0.0 {
+                    extra_winnings / split_cost
+                } else {
+                    0.0
+                };
+
+                let gini_delta = run.initial_gini - run.final_gini;
+                let vs_baseline = baseline_final - run.final_gini;
+                println!(
+                    "| {:.1} | {:.2} | {} | {:.4} | {:.4} | {:+.4} | {:+.4} | {:.2}x | {:.2} | {:.2}x | {} |",
+                    penalty,
+                    run.decay,
+                    run.threshold_bth,
+                    run.initial_gini,
+                    run.final_gini,
+                    gini_delta,
+                    vs_baseline,
+                    run.parking_adv,
+                    parking_roi,
+                    run.sybil_adv,
+                    run.final_utxos
+                );
+
+                if penalty == 1.0 && run.decay == 0.03 && run.threshold_bth == 1_000 {
+                    sweet_spot = Some((gini_delta, vs_baseline, run.final_utxos as u64, parking_roi));
+                }
+            }
+        }
+
+        println!();
+        println!("Note: engine dynamics are identical across penalty values (tx loop models");
+        println!("fixed 2-output transactions); the penalty column affects only the analytic");
+        println!("split-cost in Park ROI.");
+        println!();
+
+        if let Some((gini_delta, vs_baseline, _, parking_roi)) = sweet_spot {
+            let park_ok = runs
+                .iter()
+                .find(|r| r.decay == 0.03 && r.threshold_bth == 1_000)
+                .map(|r| r.parking_adv < 2.0)
+                .unwrap_or(false);
+            let sybil_ok = runs
+                .iter()
+                .find(|r| r.decay == 0.03 && r.threshold_bth == 1_000)
+                .map(|r| r.sybil_adv < 2.0)
+                .unwrap_or(false);
+            println!("## Success Criteria (recommended config: penalty=1.0, decay=0.03, threshold=1000 BTH)");
+            println!();
+            println!(
+                "- Gini reduction vs baseline > 0.05: {} ({:+.4})",
+                if vs_baseline > 0.05 { "PASS" } else { "FAIL" },
+                vs_baseline
+            );
+            println!(
+                "- Absolute Gini reduction: {:+.4}",
+                gini_delta
+            );
+            println!(
+                "- Parking attack defeated (ROI < 1.0): {} ({:.2})",
+                if parking_roi < 1.0 { "PASS" } else { "FAIL" },
+                parking_roi
+            );
+            println!(
+                "- Parking advantage < 2.0x: {}",
+                if park_ok { "PASS" } else { "FAIL" }
+            );
+            println!(
+                "- Splitting advantage < 2.0x: {}",
+                if sybil_ok { "PASS" } else { "FAIL" }
+            );
+        }
+    }
+
+    /// Structural Gini-reduction experiment.
+    ///
+    /// Seven scenarios isolating each redistribution lever:
+    ///   A. Status quo: value-weighted payout, fees only (known: zero Gini effect)
+    ///   B. Uniform-per-UTXO payout, fees only (payout progressivity alone)
+    ///   C. Value-weighted payout + emission (control: proportional payout of
+    ///      emission should be Gini-neutral)
+    ///   D. Uniform payout + emission (the naive full proposal, honest whale)
+    ///   E. D with a strategic whale: splits into N UTXOs and churns them to
+    ///      stay lottery-eligible (gamed equilibrium for uniform payouts)
+    ///   F. Value-weighted payout + emission + cluster demurrage (intake-side
+    ///      progressivity; payout deliberately game-proof-proportional)
+    ///   G. F with the strategic whale (demurrage robustness: splitting does
+    ///      not change cluster factor, so gaming should be pure waste)
+    ///
+    /// Cluster factors are assigned explicitly per wealth class (poor 1x,
+    /// middle 2x, whales 6x) so intake progressivity is controlled — the
+    /// default FeeCurve's w_mid is far below sim balances and would pin
+    /// everyone at max factor (this flaw also affected the original sweep).
+    #[allow(clippy::too_many_arguments)]
+    fn run_lottery_experiment(
+        blocks: u64,
+        txs_per_block: u32,
+        base_fee: u64,
+        emission_per_block: u64,
+        split: u32,
+        churn_days: u64,
+        demurrage_bps: u32,
+    ) {
+        use bth_cluster_tax::simulation::lottery::{
+            LotteryConfig, LotterySimulation, SelectionMode, SybilStrategy, TransactionModel,
+        };
+
+        const BTH: u64 = 1_000;
+        const BLOCKS_PER_DAY: u64 = 4_320;
+        let total_wealth: u64 = 100_000_000 * BTH;
+
+        #[derive(Clone, Copy, PartialEq)]
+        enum Whale {
+            Honest,
+            SplitChurn,
+        }
+        #[derive(Clone, Copy, PartialEq)]
+        enum Payout {
+            /// Value-weighted with floor: split-proof, proportional
+            Vw,
+            /// Uniform per UTXO: progressive, catastrophically gameable
+            Uniform,
+            /// Value x inverse cluster factor: progressive AND split-proof
+            /// (factor inherits through splits); gaming requires tag decay,
+            /// which is bounded by the AND/entropy decay mechanisms
+            ClusterTilted,
+        }
+        struct Scenario {
+            name: &'static str,
+            payout: Payout,
+            emission: bool,
+            whale: Whale,
+            demurrage: bool,
+        }
+        let scenarios = [
+            Scenario { name: "A: status quo (VW payout, fees only)", payout: Payout::Vw, emission: false, whale: Whale::Honest, demurrage: false },
+            Scenario { name: "B: uniform payout, fees only", payout: Payout::Uniform, emission: false, whale: Whale::Honest, demurrage: false },
+            Scenario { name: "C: VW payout + emission", payout: Payout::Vw, emission: true, whale: Whale::Honest, demurrage: false },
+            Scenario { name: "D: uniform payout + emission", payout: Payout::Uniform, emission: true, whale: Whale::Honest, demurrage: false },
+            Scenario { name: "E: D + whale split+churn (gamed)", payout: Payout::Uniform, emission: true, whale: Whale::SplitChurn, demurrage: false },
+            Scenario { name: "F: VW payout + emission + demurrage", payout: Payout::Vw, emission: true, whale: Whale::Honest, demurrage: true },
+            Scenario { name: "G: F + whale split+churn (gaming attempt)", payout: Payout::Vw, emission: true, whale: Whale::SplitChurn, demurrage: true },
+            Scenario { name: "H: cluster-tilted payout + emission", payout: Payout::ClusterTilted, emission: true, whale: Whale::Honest, demurrage: false },
+            Scenario { name: "I: H + whale split+churn (gaming attempt)", payout: Payout::ClusterTilted, emission: true, whale: Whale::SplitChurn, demurrage: false },
+            Scenario { name: "J: H + demurrage (combined intake+payout)", payout: Payout::ClusterTilted, emission: true, whale: Whale::Honest, demurrage: true },
+        ];
+
+        println!("Structural Gini Reduction Experiment");
+        println!("=====================================");
+        println!(
+            "Economy: 100M BTH; 80 poor (5%, factor 1x) / 30 middle (25%, 2x) / 9 whales (65%, 6x) / 1 strategic whale (5%, 6x)"
+        );
+        println!(
+            "Duration: {} blocks (~{} days) | {} tx/block, base fee {} | emission {}/block (~{:.1}%/yr of supply) | demurrage {}bps/yr at factor 6 | whale split {} (churn every {}d)",
+            blocks,
+            blocks / BLOCKS_PER_DAY,
+            txs_per_block,
+            base_fee,
+            emission_per_block,
+            (emission_per_block as f64 * 365.0 * BLOCKS_PER_DAY as f64) / total_wealth as f64 * 100.0,
+            demurrage_bps,
+            split,
+            churn_days,
+        );
+        println!();
+        println!("| Scenario | Gini0 | GiniF | dGini | vs A | Whale 5%-> | Whale net (BTH) | Poor 5%-> |");
+        println!("|----------|-------|-------|-------|------|------------|-----------------|-----------|");
+
+        let churn_interval = churn_days.max(1) * BLOCKS_PER_DAY;
+        let daily_demurrage = demurrage_bps as f64 / 10_000.0 / 365.0;
+        let mut gini_delta_a: Option<f64> = None;
+
+        for sc in &scenarios {
+            let mut config = LotteryConfig::combined_mechanism();
+            config.base_fee = base_fee;
+            config.selection_mode = match sc.payout {
+                Payout::Vw => SelectionMode::ValueWeightedWithFloor {
+                    ticket_threshold: 1_000 * BTH,
+                    decay_rate_per_day: 0.03,
+                    min_eligibility: 0.10,
+                    blocks_per_day: BLOCKS_PER_DAY,
+                },
+                // u64::MAX threshold => every UTXO gets exactly 1 ticket:
+                // uniform-per-UTXO with eligibility decay
+                Payout::Uniform => SelectionMode::ValueWeightedWithFloor {
+                    ticket_threshold: u64::MAX,
+                    decay_rate_per_day: 0.03,
+                    min_eligibility: 0.10,
+                    blocks_per_day: BLOCKS_PER_DAY,
+                },
+                // weight = value x (max_factor - factor + 1) / max_factor
+                Payout::ClusterTilted => SelectionMode::ClusterWeighted,
+            };
+
+            let mut sim = LotterySimulation::new(config, FeeCurve::default_params());
+
+            let mut poor_ids = Vec::new();
+            for _ in 0..80 {
+                poor_ids.push(sim.add_owner_with_factor(
+                    total_wealth / 20 / 80,
+                    SybilStrategy::Normal,
+                    1.0,
+                ));
+            }
+            for _ in 0..30 {
+                sim.add_owner_with_factor(total_wealth / 4 / 30, SybilStrategy::Normal, 2.0);
+            }
+            for _ in 0..9 {
+                sim.add_owner_with_factor(
+                    total_wealth * 65 / 100 / 9,
+                    SybilStrategy::Normal,
+                    6.0,
+                );
+            }
+            let whale_strategy = match sc.whale {
+                Whale::Honest => SybilStrategy::Normal,
+                Whale::SplitChurn => SybilStrategy::MultiAccount { num_accounts: split },
+            };
+            let whale_id =
+                sim.add_owner_with_factor(total_wealth * 5 / 100, whale_strategy, 6.0);
+
+            let owner_ids: Vec<u64> = sim.owners.keys().copied().collect();
+            let total_value = |sim: &LotterySimulation| -> u64 {
+                owner_ids.iter().map(|id| sim.owner_value(*id)).sum()
+            };
+
+            let gini0 = sim.calculate_gini();
+            let whale_share0 = sim.owner_value(whale_id) as f64 / total_value(&sim) as f64;
+            let poor_share0 = poor_ids
+                .iter()
+                .map(|id| sim.owner_value(*id))
+                .sum::<u64>() as f64
+                / total_value(&sim) as f64;
+
+            for b in 1..=blocks {
+                sim.current_block += 1;
+
+                for _ in 0..txs_per_block {
+                    sim.simulate_transaction_immediate(
+                        base_fee,
+                        2,
+                        TransactionModel::ValueWeighted,
+                    );
+                }
+
+                if sc.emission {
+                    sim.distribute_to_winners(emission_per_block, 4);
+                }
+
+                if sc.demurrage && b % BLOCKS_PER_DAY == 0 {
+                    // Charge (factor-1)/5 x daily max rate on every UTXO,
+                    // redistribute proceeds through the lottery
+                    let mut total_charged = 0u64;
+                    let charges: Vec<(u64, u64)> = sim
+                        .utxos
+                        .iter()
+                        .filter_map(|(id, u)| {
+                            let progressivity = ((u.cluster_factor - 1.0) / 5.0).clamp(0.0, 1.0);
+                            let charge =
+                                (u.value as f64 * daily_demurrage * progressivity) as u64;
+                            (charge > 0).then_some((*id, charge))
+                        })
+                        .collect();
+                    for (id, charge) in charges {
+                        if let Some(u) = sim.utxos.get_mut(&id) {
+                            let charge = charge.min(u.value);
+                            u.value -= charge;
+                            total_charged += charge;
+                            let owner_id = u.owner_id;
+                            if let Some(o) = sim.owners.get_mut(&owner_id) {
+                                o.total_fees_paid += charge;
+                            }
+                        }
+                    }
+                    sim.distribute_to_winners(total_charged, 16);
+                }
+
+                if sc.whale == Whale::SplitChurn && b % churn_interval == 0 {
+                    sim.churn_owner(whale_id);
+                }
+            }
+
+            let gini_f = sim.calculate_gini();
+            let gini_delta = gini0 - gini_f; // positive = inequality reduced
+            if gini_delta_a.is_none() {
+                gini_delta_a = Some(gini_delta);
+            }
+            let vs_a = gini_delta - gini_delta_a.unwrap();
+
+            let total_f = total_value(&sim) as f64;
+            let whale_share_f = sim.owner_value(whale_id) as f64 / total_f;
+            let poor_share_f =
+                poor_ids.iter().map(|id| sim.owner_value(*id)).sum::<u64>() as f64 / total_f;
+            let whale = sim.owners.get(&whale_id).unwrap();
+            let whale_net =
+                whale.total_winnings as i64 - whale.total_fees_paid as i64;
+
+            println!(
+                "| {} | {:.4} | {:.4} | {:+.4} | {:+.4} | {:.2}% -> {:.2}% | {:+} | {:.2}% -> {:.2}% |",
+                sc.name,
+                gini0,
+                gini_f,
+                gini_delta,
+                vs_a,
+                whale_share0 * 100.0,
+                whale_share_f * 100.0,
+                whale_net / BTH as i64,
+                poor_share0 * 100.0,
+                poor_share_f * 100.0,
+            );
+        }
+
+        println!();
+        println!("Reading the table:");
+        println!("- dGini > 0 means inequality fell; the design criterion is dGini vs A > 0.05.");
+        println!("- 'Whale net' is lottery winnings minus all fees/demurrage paid (BTH).");
+        println!("- E vs D quantifies the gaming premium of uniform payouts.");
+        println!("- G vs F tests whether demurrage-based redistribution is split-proof.");
+        println!("- I vs H tests whether cluster-tilted payouts are split-proof.");
+        println!("- J is the combined candidate: progressive intake (fees+demurrage) and");
+        println!("  progressive payout (cluster-tilted), both anchored to split-proof cluster tags.");
     }
 }
 

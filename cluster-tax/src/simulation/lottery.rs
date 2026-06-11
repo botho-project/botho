@@ -961,9 +961,12 @@ impl LotterySimulation {
             return;
         }
 
-        // Deduct fee from spender
+        // Deduct fee from spender; spending refreshes activity (the change
+        // output is a fresh UTXO in the real system)
+        let current_block = self.current_block;
         if let Some(spender) = self.utxos.get_mut(&spender_utxo_id) {
             spender.value -= actual_fee;
+            spender.refresh_activity(current_block);
             let owner_id = spender.owner_id;
             if let Some(owner) = self.owners.get_mut(&owner_id) {
                 owner.total_fees_paid += actual_fee;
@@ -987,12 +990,14 @@ impl LotterySimulation {
         if to_distribute > 0 && !all_utxos.is_empty() {
             let per_winner = to_distribute / winners_per_tx as u64;
             if per_winner > 0 {
-                // Select winners based on selection mode
-                for _ in 0..winners_per_tx.min(all_utxos.len() as u32) {
-                    let winner_id = self.select_winner_by_mode(&all_utxos, &mut rng);
-
+                // Select winners based on selection mode (batched: weights
+                // computed once per transaction)
+                let n = winners_per_tx.min(all_utxos.len() as u32);
+                let winners = self.select_winners_by_mode(&all_utxos, n, &mut rng);
+                for winner_id in winners {
                     if let Some(winner) = self.utxos.get_mut(&winner_id) {
                         winner.value += per_winner;
+                        winner.refresh_activity(current_block);
                         let owner_id = winner.owner_id;
                         if let Some(owner) = self.owners.get_mut(&owner_id) {
                             owner.total_winnings += per_winner;
@@ -1002,6 +1007,175 @@ impl LotterySimulation {
                 }
             }
         }
+    }
+
+    /// Select `n` winners based on the configured selection mode.
+    ///
+    /// For `ValueWeightedWithFloor` this computes the weight vector once and
+    /// samples from it `n` times (with a precomputed eligibility-decay table),
+    /// which is dramatically faster than repeated `select_winner_by_mode`
+    /// calls for multi-year simulations. Other modes fall back to per-winner
+    /// selection.
+    pub fn select_winners_by_mode(
+        &self,
+        utxo_ids: &[u64],
+        n: u32,
+        rng: &mut impl Rng,
+    ) -> Vec<u64> {
+        if utxo_ids.is_empty() || n == 0 {
+            return Vec::new();
+        }
+
+        if let SelectionMode::ValueWeightedWithFloor {
+            ticket_threshold,
+            decay_rate_per_day,
+            min_eligibility,
+            blocks_per_day,
+        } = self.config.selection_mode
+        {
+            // Precompute eligibility per whole day of inactivity. Beyond
+            // `cap` days the eligibility has hit the floor.
+            let cap = if decay_rate_per_day > 0.0 && min_eligibility > 0.0 {
+                (min_eligibility.ln() / (1.0 - decay_rate_per_day).ln()).ceil() as usize + 1
+            } else {
+                1
+            };
+            let decay_table: Vec<f64> = (0..=cap)
+                .map(|d| {
+                    (1.0 - decay_rate_per_day)
+                        .powf(d as f64)
+                        .max(min_eligibility)
+                })
+                .collect();
+
+            let current_block = self.current_block;
+            let weights: Vec<(u64, f64)> = utxo_ids
+                .iter()
+                .filter_map(|id| {
+                    self.utxos.get(id).map(|u| {
+                        let base = if u.value >= ticket_threshold {
+                            (u.value / ticket_threshold) as f64
+                        } else {
+                            1.0
+                        };
+                        let age_days = (current_block.saturating_sub(u.last_activity_block)
+                            / blocks_per_day.max(1))
+                            as usize;
+                        let elig = decay_table[age_days.min(cap)];
+                        (*id, base * elig)
+                    })
+                })
+                .collect();
+
+            let total: f64 = weights.iter().map(|(_, w)| w).sum();
+            if total <= 0.0 {
+                return (0..n)
+                    .map(|_| utxo_ids[rng.gen_range(0..utxo_ids.len())])
+                    .collect();
+            }
+
+            return (0..n)
+                .map(|_| {
+                    let roll = rng.gen::<f64>() * total;
+                    let mut cumulative = 0.0;
+                    for (id, weight) in &weights {
+                        cumulative += weight;
+                        if cumulative > roll {
+                            return *id;
+                        }
+                    }
+                    weights[weights.len() - 1].0
+                })
+                .collect();
+        }
+
+        (0..n)
+            .map(|_| self.select_winner_by_mode(utxo_ids, rng))
+            .collect()
+    }
+
+    /// Distribute an amount (e.g. block emission or demurrage proceeds) to
+    /// `num_winners` UTXOs chosen by the configured selection mode.
+    ///
+    /// Unlike fee distribution there is no spender and no burn split: the
+    /// full amount is credited to winners. Winners' activity is refreshed
+    /// (a payout creates a fresh output in the real system).
+    pub fn distribute_to_winners(&mut self, amount: u64, num_winners: u32) {
+        if amount == 0 || self.utxos.is_empty() {
+            return;
+        }
+        let per_winner = amount / num_winners.max(1) as u64;
+        if per_winner == 0 {
+            return;
+        }
+
+        let all_utxos: Vec<u64> = self.utxos.keys().copied().collect();
+        let mut rng = rand::thread_rng();
+        let current_block = self.current_block;
+        let winners = self.select_winners_by_mode(&all_utxos, num_winners, &mut rng);
+
+        for winner_id in winners {
+            if let Some(winner) = self.utxos.get_mut(&winner_id) {
+                winner.value += per_winner;
+                winner.refresh_activity(current_block);
+                let owner_id = winner.owner_id;
+                if let Some(owner) = self.owners.get_mut(&owner_id) {
+                    owner.total_winnings += per_winner;
+                }
+            }
+            self.metrics.total_distributed += per_winner;
+        }
+    }
+
+    /// Self-spend (churn) every UTXO of an owner to refresh its lottery
+    /// eligibility.
+    ///
+    /// This models the maintenance cost of a splitting strategy: keeping N
+    /// UTXOs lottery-eligible requires N periodic self-transfers, so the
+    /// cost scales with UTXO count rather than value. Each churn pays
+    /// base_fee × cluster_factor (1-in/1-out, no structure penalty); fees
+    /// flow through the normal pool/burn split.
+    ///
+    /// Returns the total fees paid.
+    pub fn churn_owner(&mut self, owner_id: u64) -> u64 {
+        let utxo_ids = match self.owners.get(&owner_id) {
+            Some(owner) => owner.utxo_ids.clone(),
+            None => return 0,
+        };
+
+        let current_block = self.current_block;
+        let mut total_fees = 0u64;
+        let mut to_distribute = 0u64;
+
+        for utxo_id in utxo_ids {
+            if let Some(utxo) = self.utxos.get_mut(&utxo_id) {
+                let fee = ((self.config.base_fee as f64 * utxo.cluster_factor) as u64)
+                    .min(utxo.value / 2);
+                if fee > 0 {
+                    utxo.value -= fee;
+                    total_fees += fee;
+                    let pool_share = (fee as f64 * self.config.pool_fraction) as u64;
+                    to_distribute += pool_share;
+                    self.total_burned += fee - pool_share;
+                }
+                utxo.refresh_activity(current_block);
+            }
+        }
+
+        if let Some(owner) = self.owners.get_mut(&owner_id) {
+            owner.total_fees_paid += total_fees;
+            owner.tx_count += 1;
+        }
+        self.metrics.total_fees_collected += total_fees;
+
+        // Distribute the pool share of churn fees like normal fee income
+        let winners = match self.config.distribution_mode {
+            DistributionMode::Immediate { winners_per_tx } => winners_per_tx.max(1) * 4,
+            DistributionMode::Pooled => 16,
+        };
+        self.distribute_to_winners(to_distribute, winners);
+
+        total_fees
     }
 
     /// Select a winner based on the configured selection mode.
