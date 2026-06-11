@@ -1,10 +1,18 @@
 # Botho - Work In Progress & Roadmap
 
-## Current Status: v0.1.0-beta (Security Hardening In Progress)
+## Current Status: v0.1.0-beta (Pre-Mainnet Validation)
 
-Core functionality complete. Internal security audit completed 3 cycles. See `audits/` for full reports.
+Core functionality complete. Internal security audits completed 5 cycles. See `audits/` for full reports.
 
-**Current (2025-12-30 Cycle 3):** All CRITICAL issues resolved. **1 HIGH issue** remains (wallet decryption rate limiting). Ready for final hardening push before external audit.
+**Current (2026-06-11):** Cycle 5 audit (2026-01-03) shows **0 Critical, 0 High** (6 Medium, 5 Low). The economic redistribution mechanism (cluster-tilted lottery + emission routing + spend-time demurrage) is implemented and empirically validated against adversarial simulation — passes the Δgini > 0.05 criterion in the gamed equilibrium (see `docs/design/cluster-tilted-redistribution.md`, `experiments/ANALYSIS.md`). These changes are consensus-breaking: **a coordinated testnet reset is required before next deploy.**
+
+**Remaining mainnet blockers:**
+1. **Seed node SPOF** — single hardcoded seed (one EC2 box); needs ≥3 regional seeds + DNS failover
+2. **External security audit** — internal cycles clean; external audit gates v1.0
+3. **Protocol-version mismatch only warns** — peers with incompatible versions are not disconnected, undermining coordinated-upgrade enforcement (fork-risk hygiene)
+4. **Internal audit cycle 6** — today's consensus changes (lottery, emission, demurrage, fixed-point math) are unaudited
+
+**Testnet watch items:** "everyone parks" demurrage drift (countermeasure designed: eligibility decay on tilted payout); lottery payout privacy (winners visible on-chain).
 
 ---
 
@@ -58,12 +66,12 @@ Performance benchmarks ─────────→ v0.2.0 Release
    - [x] Add `#![deny(unsafe_code)]` to crypto crates (10/10 crates complete)
    - Note: LRU unsafe is sound with documented invariants; consider `lru` crate in future
 
-5. **Rate Limiting & DoS Protection** — 1 REMAINING HIGH
-   - [ ] **Add wallet decryption rate limiting (exponential backoff)** ← ONLY REMAINING HIGH
-   - [ ] Add per-peer rate limiting on gossipsub messages (MEDIUM)
-   - [ ] Add per-IP connection rate limiting (max 10 connections/IP) (MEDIUM)
-   - [ ] Add RPC rate limiting per API key (100 req/min default) (MEDIUM)
-   - [ ] Consider PoW challenge for new peer connections (Sybil resistance) (LOW)
+5. **Rate Limiting & DoS Protection** ✓ COMPLETE
+   - [x] Wallet decryption rate limiting with exponential backoff (`botho-wallet/src/storage.rs` DecryptionRateLimiter)
+   - [x] Per-peer rate limiting on gossipsub messages (`network/discovery.rs`)
+   - [x] Per-IP connection rate limiting, max 10/IP (`network/connection_limiter.rs`)
+   - [x] RPC rate limiting per API key (`rpc/auth.rs`)
+   - [x] PoW challenge for new peer connections (`docs/design/pow-connection-challenge.md` — Implemented)
 
 6. **Code Hygiene** — MEDIUM PRIORITY (moved from HIGH)
    - [ ] Migrate ~905 `println!` statements to `tracing` spans
@@ -74,7 +82,7 @@ Performance benchmarks ─────────→ v0.2.0 Release
 
 7. **Transaction Validation**
    - [ ] Add within-tx key image collision check
-   - [ ] Implement cluster wealth tracking (currently hardcoded to 0)
+   - [x] Cluster wealth tracking: fee enforcement now uses the ledger's global `cluster_wealth_db` (2026-06-11; was per-tx output value, defeating Sybil/split resistance)
    - [ ] Add dust threshold for minimum output amounts
 
 8. **Dependency Hygiene**
@@ -384,7 +392,7 @@ v0.1.0-beta  ← Current (Final Hardening)
 ├── ✅ All 3 CRITICAL issues resolved (Cycle 3)
 └── ⚠️ 1 HIGH issue remaining (wallet rate limiting)
 
-v0.1.x (security patches) — NEARLY COMPLETE
+v0.1.x (security patches) — ✅ COMPLETE
 ├── ✅ Fix wallet mnemonic zeroization (CRITICAL) — DONE
 ├── ✅ Fix Tauri wallet architecture (CRITICAL) — DONE
 ├── ✅ Update ring dependency (CRITICAL) — DONE (0.17.14)
@@ -392,9 +400,18 @@ v0.1.x (security patches) — NEARLY COMPLETE
 ├── ✅ SCP panics reviewed (HIGH) — NO ISSUE (test code only)
 ├── ✅ LRU unsafe documented (HIGH) — DONE
 ├── ✅ Crypto deny(unsafe_code) (MEDIUM) — DONE (10/10)
-├── ⚠️ Add wallet decryption rate limiting (HIGH) — REMAINING
-├── Add /health endpoint (MEDIUM)
-└── Add basic Prometheus metrics (MEDIUM)
+├── ✅ Wallet decryption rate limiting (HIGH) — DONE (exponential backoff)
+├── ✅ /health and /ready endpoints — DONE (rpc/mod.rs)
+└── ✅ Prometheus metrics endpoint — DONE (rpc/metrics.rs)
+
+v0.1.y (economic mechanism, 2026-06-11) — ✅ IMPLEMENTED, CONSENSUS-BREAKING
+├── ✅ Cluster-tilted lottery selection (split-invariant payout)
+├── ✅ Proposer/validator candidate-set unification (latent fork bug fixed)
+├── ✅ Integer fixed-point lottery draw, fee curve, difficulty adjustment
+├── ✅ Emission routing: 0% bootstrap → +10pp/halving → 50% cap, carryover pool
+├── ✅ Spend-time cluster demurrage (2%/yr at factor 6 from epoch 1)
+├── ✅ Adversarial validation: Δgini > 0.05 in gamed equilibrium (issue #314)
+└── ⚠️ Requires coordinated testnet reset before next deploy
 
 v0.2.0 (hardened beta)
 ├── All Critical/High issues resolved
@@ -519,8 +536,19 @@ Add regional seed nodes when network grows:
 
 | Date | Cycle | Critical | High | Status |
 |------|-------|----------|------|--------|
-| 2025-12-30 | 3 | 0 | 5 | In Progress |
+| 2026-01-03 | 5 | 0 | 0 | Clean (6 Medium, 5 Low) |
+| 2026-01-03 | 4 | 0 | 0 | Clean (6 Medium, 5 Low) |
+| 2026-01-03 | 3 | 0 | 5 | Issues Found |
 | 2025-12-30 | 2 | 3 | 7 | Issues Found |
 | 2025-12-30 | 1 | 1 (fixed) | 1 | Issues Found |
 
-**Cycle 3 Notes:** All 3 critical issues resolved (dependency vulns, mnemonic zeroization, Tauri architecture). Remaining high-priority: SCP panics, LRU unsafe, rate limiting, code hygiene, Windows FFI.
+**Cycle 5 Notes (authoritative):** 0 Critical, 0 High. Validates Onion Gossip
+Phase 1. Notable Medium since resolved: f64 in consensus fee validation
+(fixed 2026-06-11 with integer sigmoid; difficulty adjustment also converted),
+cluster wealth hardcoded to 0 in mempool (fixed 2026-06-11 with global
+cluster_wealth_db enforcement).
+
+**Cycle 6 (REQUIRED before external audit):** the 2026-06-11 consensus
+changes — cluster-tilted lottery + candidate-set unification, integer draw,
+emission routing with carryover pool, spend-time demurrage, fixed-point
+fee/difficulty math — have not yet been through an audit cycle.
