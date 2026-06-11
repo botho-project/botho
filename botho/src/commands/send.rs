@@ -84,10 +84,27 @@ pub fn run(
     let tx_type = TransactionType::Hidden;
     let _ = private; // Deprecated: all transactions are now private
 
-    // Estimate fee based on typical transaction size
-    // TODO: Compute cluster wealth from input UTXO cluster_tags
-    // See botho/src/mempool.rs module docs for implementation requirements
-    let cluster_wealth = 0u64;
+    // Estimate fee using effective cluster wealth: the wallet's UTXO tags
+    // weighted against the ledger's global per-cluster wealth. Use the max
+    // across UTXOs since any of them may fund this transaction (conservative,
+    // matches mempool enforcement which uses decayed output tags).
+    let cluster_wealth = utxos
+        .iter()
+        .map(|utxo| {
+            let weighted: u128 = utxo
+                .output
+                .cluster_tags
+                .entries
+                .iter()
+                .map(|entry| {
+                    let global = ledger.get_cluster_wealth(entry.cluster_id.0).unwrap_or(0);
+                    entry.weight as u128 * global as u128
+                })
+                .sum();
+            (weighted / bth_transaction_types::TAG_WEIGHT_SCALE as u128) as u64
+        })
+        .max()
+        .unwrap_or(0);
     let num_memos = if memo.is_some() { 1 } else { 0 };
     let fee = fee_config.estimate_typical_fee(tx_type, cluster_wealth, num_memos);
 

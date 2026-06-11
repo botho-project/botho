@@ -41,31 +41,40 @@ use bth_cluster_tax::{
 };
 use bth_transaction_types::TAG_WEIGHT_SCALE;
 
-/// Compute the maximum cluster wealth from transaction outputs.
+/// Compute the effective cluster wealth for a transaction using the ledger's
+/// global per-cluster wealth tracker.
 ///
-/// This computes cluster wealth from outputs (which inherit from inputs via
-/// merge_weighted). For each cluster, wealth contribution = sum(output_amount ×
-/// tag_weight / TAG_WEIGHT_SCALE). Returns the maximum wealth across all
-/// clusters, which is used for progressive fee calculation.
+/// Outputs inherit merged+decayed tags from inputs, so the output tag weights
+/// describe which clusters the sender's coins are attributed to. The fee rate
+/// must be based on the GLOBAL wealth of those clusters (tracked by the
+/// ledger across the whole UTXO set), not on this transaction's own value —
+/// otherwise a wealthy cluster could split funds into small transactions and
+/// pay the minimum rate (Sybil/split evasion).
 ///
-/// This is appropriate for fee validation because:
-/// 1. Outputs inherit merged+decayed tags from inputs
-/// 2. The sender's cluster profile is preserved through inheritance
-/// 3. Higher cluster concentration → higher output tag weights → higher
-///    computed wealth
-fn compute_cluster_wealth_from_outputs(outputs: &[TxOutput]) -> u64 {
-    let mut cluster_wealths: HashMap<u64, u64> = HashMap::new();
+/// effective_wealth = Σ_outputs Σ_tags (value × weight / SCALE × W_global) /
+/// Σ_outputs value
+///
+/// Background (untagged) value contributes zero, matching
+/// `bth_transaction_core::validation::compute_effective_cluster_wealth`.
+fn effective_cluster_wealth_from_outputs(outputs: &[TxOutput], ledger: &Ledger) -> u64 {
+    let mut total_weighted_wealth: u128 = 0;
+    let mut total_value: u128 = 0;
 
     for output in outputs {
-        let value = output.amount;
+        total_value += output.amount as u128;
         for entry in &output.cluster_tags.entries {
-            let contribution =
-                ((value as u128) * (entry.weight as u128) / (TAG_WEIGHT_SCALE as u128)) as u64;
-            *cluster_wealths.entry(entry.cluster_id.0).or_insert(0) += contribution;
+            let value_fraction =
+                (output.amount as u128 * entry.weight as u128) / (TAG_WEIGHT_SCALE as u128);
+            let global_wealth = ledger.get_cluster_wealth(entry.cluster_id.0).unwrap_or(0);
+            total_weighted_wealth += value_fraction * global_wealth as u128;
         }
     }
 
-    cluster_wealths.values().copied().max().unwrap_or(0)
+    if total_value == 0 {
+        return 0;
+    }
+
+    (total_weighted_wealth / total_value) as u64
 }
 
 // ============================================================================
@@ -646,8 +655,9 @@ impl Mempool {
         // Estimate transaction size based on inputs and outputs
         let tx_size_bytes = tx.estimate_size();
 
-        // Compute cluster wealth from transaction outputs (which inherit from inputs)
-        let cluster_wealth = compute_cluster_wealth_from_outputs(&tx.outputs);
+        // Compute effective cluster wealth: output tags (inherited from
+        // inputs) weighted against the ledger's global per-cluster wealth
+        let cluster_wealth = effective_cluster_wealth_from_outputs(&tx.outputs, ledger);
         // Count outputs with encrypted memos for fee calculation
         let num_memos = tx.outputs.iter().filter(|o| o.has_memo()).count();
 
@@ -1181,6 +1191,73 @@ mod tests {
             fee.max(MIN_TX_FEE), // Ensure minimum fee
             height,
         )
+    }
+
+    #[test]
+    fn test_effective_cluster_wealth_uses_global_ledger_wealth() {
+        use crate::{
+            ledger::{Ledger, UtxoSnapshot},
+            transaction::{Utxo, UtxoId},
+        };
+        use bth_transaction_types::ClusterId;
+
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+
+        // Seed the ledger with a whale cluster: global wealth 100M
+        let whale_amount = 100_000_000u64;
+        let whale_utxo = Utxo {
+            id: UtxoId::new([0x11; 32], 0),
+            output: TxOutput {
+                amount: whale_amount,
+                target_key: [0x42; 32],
+                public_key: [0x33; 32],
+                e_memo: None,
+                cluster_tags: ClusterTagVector::single(ClusterId(1)),
+            },
+            created_at: 1,
+        };
+        let snapshot = UtxoSnapshot::new(
+            1,
+            [0u8; 32],
+            crate::ledger::ChainState::default(),
+            vec![whale_utxo],
+            vec![],
+            vec![(1, whale_amount)],
+        )
+        .unwrap();
+        ledger.load_from_snapshot(&snapshot, None).unwrap();
+
+        // A tiny transaction whose outputs are 100% tagged to the whale
+        // cluster: the fee wealth must be the GLOBAL cluster wealth, not the
+        // transaction's own value — splitting cannot reduce the fee rate.
+        let small_output = TxOutput {
+            amount: 1_000,
+            target_key: [0x55; 32],
+            public_key: [0x56; 32],
+            e_memo: None,
+            cluster_tags: ClusterTagVector::single(ClusterId(1)),
+        };
+        let wealth = effective_cluster_wealth_from_outputs(&[small_output], &ledger);
+        assert_eq!(wealth, whale_amount);
+
+        // Half-tagged output: 50% of the global wealth
+        let mut half_tags = ClusterTagVector::single(ClusterId(1));
+        half_tags.entries[0].weight = TAG_WEIGHT_SCALE / 2;
+        let half_output = TxOutput {
+            amount: 1_000,
+            target_key: [0x57; 32],
+            public_key: [0x58; 32],
+            e_memo: None,
+            cluster_tags: half_tags,
+        };
+        let wealth = effective_cluster_wealth_from_outputs(&[half_output], &ledger);
+        assert_eq!(wealth, whale_amount / 2);
+
+        // Untagged (background) outputs contribute zero cluster wealth
+        let bg_output = test_output(1_000, 9);
+        let wealth = effective_cluster_wealth_from_outputs(&[bg_output], &ledger);
+        assert_eq!(wealth, 0);
     }
 
     #[test]

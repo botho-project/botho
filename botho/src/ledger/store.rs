@@ -1309,25 +1309,33 @@ impl Ledger {
         }
     }
 
-    /// Compute cluster wealth for a set of UTXOs identified by target keys.
+    /// Compute effective cluster wealth for a set of UTXOs identified by
+    /// target keys.
     ///
     /// This is the primary method for wallets to estimate their cluster wealth
-    /// for fee calculation. Wallets provide the target keys of their UTXOs,
-    /// and this method returns the maximum cluster wealth across those UTXOs.
+    /// for fee calculation. For each UTXO, the effective wealth is the UTXO's
+    /// tag weights averaged against the GLOBAL per-cluster wealth tracked by
+    /// the ledger (background weight contributes zero). The maximum across the
+    /// provided UTXOs is returned, since any of them may fund a transaction.
+    ///
+    /// This matches mempool fee enforcement, which uses global cluster wealth
+    /// rather than per-transaction value — splitting funds does not reduce the
+    /// fee rate.
     ///
     /// # Arguments
     /// * `target_keys` - Target keys (stealth addresses) identifying the UTXOs
     ///
     /// # Returns
-    /// A `ClusterWealthInfo` containing the maximum cluster wealth and
-    /// breakdown
+    /// A `ClusterWealthInfo` containing the maximum effective cluster wealth
+    /// and a breakdown of global wealth per referenced cluster
     pub fn compute_cluster_wealth_for_utxos(
         &self,
         target_keys: &[[u8; 32]],
     ) -> Result<ClusterWealthInfo, LedgerError> {
         use std::collections::HashMap;
 
-        let mut cluster_wealths: HashMap<u64, u64> = HashMap::new();
+        let mut global_wealths: HashMap<u64, u64> = HashMap::new();
+        let mut max_effective_wealth = 0u64;
         let mut total_value = 0u64;
         let mut utxo_count = 0usize;
 
@@ -1336,26 +1344,33 @@ impl Ledger {
                 total_value = total_value.saturating_add(utxo.output.amount);
                 utxo_count += 1;
 
+                let mut weighted: u128 = 0;
                 for entry in &utxo.output.cluster_tags.entries {
-                    let contribution = ((utxo.output.amount as u128) * (entry.weight as u128)
-                        / (TAG_WEIGHT_SCALE as u128)) as u64;
-                    *cluster_wealths.entry(entry.cluster_id.0).or_insert(0) += contribution;
+                    let global = match global_wealths.entry(entry.cluster_id.0) {
+                        std::collections::hash_map::Entry::Occupied(e) => *e.get(),
+                        std::collections::hash_map::Entry::Vacant(e) => {
+                            *e.insert(self.get_cluster_wealth(entry.cluster_id.0)?)
+                        }
+                    };
+                    weighted += (entry.weight as u128) * (global as u128);
                 }
+                // Divide by full scale: background weight dilutes toward zero
+                let effective = (weighted / TAG_WEIGHT_SCALE as u128) as u64;
+                max_effective_wealth = max_effective_wealth.max(effective);
             }
         }
 
-        let max_cluster_wealth = cluster_wealths.values().copied().max().unwrap_or(0);
-        let dominant_cluster = cluster_wealths
+        let dominant_cluster = global_wealths
             .iter()
             .max_by_key(|(_, &wealth)| wealth)
             .map(|(&id, _)| id);
 
         Ok(ClusterWealthInfo {
-            max_cluster_wealth,
+            max_cluster_wealth: max_effective_wealth,
             total_value,
             utxo_count,
             dominant_cluster_id: dominant_cluster,
-            cluster_breakdown: cluster_wealths.into_iter().collect(),
+            cluster_breakdown: global_wealths.into_iter().collect(),
         })
     }
 
@@ -2045,6 +2060,67 @@ mod tests {
         let found_utxo = found.unwrap();
         assert_eq!(found_utxo.output.amount, 1_000_000);
         assert_eq!(found_utxo.output.target_key, target_key);
+    }
+
+    #[test]
+    fn test_cluster_wealth_for_utxos_uses_global_wealth() {
+        use bth_transaction_types::ClusterId;
+
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+
+        // A whale UTXO and a small UTXO, both 100% tagged to cluster 1
+        let whale_amount = 100_000_000u64;
+        let small_amount = 1_000u64;
+        let small_target_key: [u8; 32] = [0x77; 32];
+
+        let whale_utxo = Utxo {
+            id: UtxoId::new([0x11; 32], 0),
+            output: TxOutput {
+                amount: whale_amount,
+                target_key: [0x42; 32],
+                public_key: [0x33; 32],
+                e_memo: None,
+                cluster_tags: ClusterTagVector::single(ClusterId(1)),
+            },
+            created_at: 1,
+        };
+        let small_utxo = Utxo {
+            id: UtxoId::new([0x22; 32], 0),
+            output: TxOutput {
+                amount: small_amount,
+                target_key: small_target_key,
+                public_key: [0x44; 32],
+                e_memo: None,
+                cluster_tags: ClusterTagVector::single(ClusterId(1)),
+            },
+            created_at: 1,
+        };
+
+        {
+            let mut wtxn = ledger.env.write_txn().unwrap();
+            for utxo in [&whale_utxo, &small_utxo] {
+                let bytes = bincode::serialize(utxo).unwrap();
+                ledger
+                    .utxo_db
+                    .put(&mut wtxn, &utxo.id.to_bytes(), &bytes)
+                    .unwrap();
+                ledger.add_to_address_index(&mut wtxn, utxo).unwrap();
+            }
+            wtxn.commit().unwrap();
+        }
+        ledger.rebuild_cluster_wealth_index().unwrap();
+
+        // Estimating with only the SMALL UTXO must report the cluster's
+        // GLOBAL wealth, not the UTXO's own value — otherwise wallets would
+        // under-estimate fees relative to mempool enforcement.
+        let info = ledger
+            .compute_cluster_wealth_for_utxos(&[small_target_key])
+            .unwrap();
+        assert_eq!(info.utxo_count, 1);
+        assert_eq!(info.total_value, small_amount);
+        assert_eq!(info.max_cluster_wealth, whale_amount + small_amount);
+        assert_eq!(info.dominant_cluster_id, Some(1));
     }
 
     #[test]
