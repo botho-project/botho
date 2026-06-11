@@ -598,16 +598,26 @@ pub fn compute_progressive_fee(
 }
 
 /// Compute the fee rate for a cluster based on its wealth.
-/// Uses a sigmoid curve: rate = min + (max - min) * sigmoid(wealth / steepness)
+///
+/// Uses the rational sigmoid `x / (1 + x)` with `x = wealth / steepness`,
+/// which has an exact integer form:
+///
+/// ```text
+/// rate = background + (max - background) × wealth / (steepness + wealth)
+/// ```
+///
+/// CONSENSUS-CRITICAL: pure integer arithmetic. Transaction validity must be
+/// bit-identical on every platform; floating-point here was a fork risk
+/// (audits/2026-01-03-cycle5.md).
 fn compute_cluster_fee_rate(wealth: u64, config: &ProgressiveFeeConfig) -> u32 {
-    // Sigmoid approximation using rational function
-    let x = wealth as f64 / config.steepness as f64;
-    let sigmoid = x / (1.0 + x);
-
-    let rate_range = config.max_rate_bps - config.background_rate_bps;
-    let rate = config.background_rate_bps as f64 + (rate_range as f64 * sigmoid);
-
-    rate.round() as u32
+    let rate_range = config.max_rate_bps.saturating_sub(config.background_rate_bps);
+    let denominator = (config.steepness as u128).saturating_add(wealth as u128);
+    if denominator == 0 {
+        // steepness == 0 and wealth == 0: degenerate config, charge max
+        return config.max_rate_bps;
+    }
+    let adjustment = (rate_range as u128 * wealth as u128) / denominator;
+    config.background_rate_bps.saturating_add(adjustment as u32)
 }
 
 /// Validate that the declared fee meets the progressive fee requirement.
@@ -647,3 +657,71 @@ pub fn validate_progressive_fee(
 // here.
 //
 // Please add tests for any new validation functions there. Thank you!
+
+#[cfg(test)]
+mod fee_rate_tests {
+    use super::*;
+
+    // These tests have no ledger/test-utils dependency, so they can live
+    // inline despite the note above.
+
+    #[test]
+    fn test_cluster_fee_rate_integer_sigmoid() {
+        let config = ProgressiveFeeConfig {
+            background_rate_bps: 10,
+            max_rate_bps: 1000,
+            steepness: 10_000_000,
+        };
+
+        // Zero wealth: background rate
+        assert_eq!(compute_cluster_fee_rate(0, &config), 10);
+
+        // wealth == steepness: sigmoid = 1/2 exactly
+        // rate = 10 + 990/2 = 505
+        assert_eq!(compute_cluster_fee_rate(10_000_000, &config), 505);
+
+        // wealth = 3 x steepness: sigmoid = 3/4
+        // rate = 10 + 990*3/4 = 10 + 742 (floor) = 752
+        assert_eq!(compute_cluster_fee_rate(30_000_000, &config), 752);
+
+        // Huge wealth approaches but never exceeds max
+        let rate = compute_cluster_fee_rate(u64::MAX, &config);
+        assert!(rate > 990 && rate <= config.max_rate_bps, "rate = {rate}");
+    }
+
+    #[test]
+    fn test_cluster_fee_rate_monotonic_and_bounded() {
+        // CONSENSUS-CRITICAL invariants: more wealth never lowers the rate,
+        // and the rate stays within [background, max] for all inputs.
+        let config = ProgressiveFeeConfig::default();
+        let mut prev = 0u32;
+        for i in 0..64 {
+            let wealth = 1u64 << i;
+            let rate = compute_cluster_fee_rate(wealth, &config);
+            assert!(rate >= prev, "rate must be monotonic in wealth");
+            assert!(rate >= config.background_rate_bps);
+            assert!(rate <= config.max_rate_bps);
+            prev = rate;
+        }
+    }
+
+    #[test]
+    fn test_cluster_fee_rate_degenerate_configs() {
+        // steepness = 0: any nonzero wealth saturates immediately
+        let config = ProgressiveFeeConfig {
+            background_rate_bps: 10,
+            max_rate_bps: 1000,
+            steepness: 0,
+        };
+        assert_eq!(compute_cluster_fee_rate(0, &config), 1000);
+        assert_eq!(compute_cluster_fee_rate(1, &config), 1000);
+
+        // max < background must not underflow (saturating range)
+        let inverted = ProgressiveFeeConfig {
+            background_rate_bps: 1000,
+            max_rate_bps: 10,
+            steepness: 1_000_000,
+        };
+        assert_eq!(compute_cluster_fee_rate(u64::MAX, &inverted), 1000);
+    }
+}

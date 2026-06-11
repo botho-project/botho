@@ -485,10 +485,14 @@ impl DifficultyController {
         // Expected time for this many blocks
         let expected = self.policy.target_block_time_secs * blocks;
 
-        // Adjustment ratio: if blocks came too fast, increase difficulty
-        let ratio = expected as f64 / elapsed as f64;
+        // If blocks came too fast (elapsed < expected), difficulty rises.
+        // CONSENSUS-CRITICAL: pure integer arithmetic — difficulty is
+        // validated state (minting txs are rejected on mismatch), so every
+        // node must compute the identical value.
+        let proposed =
+            (self.state.difficulty as u128 * expected as u128) / elapsed as u128;
 
-        self.apply_bounded_adjustment(ratio)
+        self.apply_bounded_adjustment(proposed)
     }
 
     /// Monetary-aware difficulty adjustment (Phase 2): target net inflation.
@@ -500,9 +504,14 @@ impl DifficultyController {
             return self.state.difficulty;
         }
 
+        // CONSENSUS-CRITICAL: all ratios in integer basis points
+        // (10_000 = 1.0x) — difficulty is validated state, so every node
+        // must compute the identical value.
+        const RATIO_SCALE: u128 = 10_000;
+
         // === Timing Component ===
         let expected_time = self.policy.target_block_time_secs * blocks;
-        let timing_ratio = expected_time as f64 / elapsed as f64;
+        let timing_ratio_bps = expected_time as u128 * RATIO_SCALE / elapsed as u128;
 
         // === Monetary Component ===
         // Calculate actual net emission this epoch
@@ -516,40 +525,41 @@ impl DifficultyController {
         let epoch_target = (annual_target / epochs_per_year as u128) as i64;
 
         // If net emission is too high, we need slower blocks (higher difficulty)
-        //   → ratio > 1.0 → multiply difficulty up
+        //   → ratio > 1.0x → multiply difficulty up
         // If net emission is too low, we need faster blocks (lower difficulty)
-        //   → ratio < 1.0 → multiply difficulty down
-        //
-        // The ratio is: what fraction of target did we achieve?
-        // If we achieved less than target, ratio < 1, so we reduce difficulty.
-        let monetary_ratio = if net_emission > 0 && epoch_target > 0 {
-            // Normal case: positive net emission
-            // If net_emission < target, ratio < 1, difficulty decreases
-            net_emission as f64 / epoch_target as f64
+        //   → ratio < 1.0x → multiply difficulty down
+        let monetary_ratio_bps: u128 = if net_emission > 0 && epoch_target > 0 {
+            // Normal case: what fraction of target did we achieve?
+            net_emission as u128 * RATIO_SCALE / epoch_target as u128
         } else if net_emission <= 0 {
-            // We're in deflation! Speed up significantly (lower difficulty).
-            0.5_f64.max(
-                self.policy.min_block_time_secs as f64 / self.policy.max_block_time_secs as f64,
-            )
+            // We're in deflation! Speed up significantly (lower difficulty),
+            // but no lower than min/max block time ratio, floored at 0.5x.
+            let bt_ratio_bps = self.policy.min_block_time_secs as u128 * RATIO_SCALE
+                / self.policy.max_block_time_secs.max(1) as u128;
+            bt_ratio_bps.max(RATIO_SCALE / 2)
         } else {
             // Edge case: target is 0 or negative (shouldn't happen)
-            1.0
+            RATIO_SCALE
         };
 
         // === Blend ===
-        // In Phase 2, prioritize monetary target but don't ignore timing stability
-        // 70% monetary, 30% timing
-        let combined_ratio = timing_ratio * 0.3 + monetary_ratio * 0.7;
+        // In Phase 2, prioritize monetary target but don't ignore timing
+        // stability: 70% monetary, 30% timing
+        let combined_ratio_bps = (timing_ratio_bps * 3 + monetary_ratio_bps * 7) / 10;
 
-        self.apply_bounded_adjustment(combined_ratio)
+        let proposed = self.state.difficulty as u128 * combined_ratio_bps / RATIO_SCALE;
+        self.apply_bounded_adjustment(proposed)
     }
 
     /// Apply adjustment with bounds.
-    fn apply_bounded_adjustment(&self, ratio: f64) -> u64 {
+    ///
+    /// `proposed` is the unbounded new difficulty (u128 to tolerate
+    /// intermediate overflow); the result is rate-limited around the
+    /// current difficulty.
+    fn apply_bounded_adjustment(&self, proposed: u128) -> u64 {
         let current = self.state.difficulty;
 
-        // Calculate new difficulty
-        let new = ((current as f64 * ratio) as u64).max(1);
+        let new = u64::try_from(proposed).unwrap_or(u64::MAX).max(1);
 
         // Bound by max adjustment rate
         let max_change =
