@@ -205,6 +205,46 @@ impl MonetaryPolicy {
         self.halving_interval * self.halving_count as u64
     }
 
+    /// Fraction of the block reward routed to the redistribution lottery,
+    /// in basis points, as a deterministic function of block height.
+    ///
+    /// Schedule: 0 during the bootstrap epoch (epoch 0), then +1000 bps per
+    /// halving epoch, capped at 5000 (50%).
+    ///
+    /// Rationale (see docs/design/cluster-tilted-redistribution.md):
+    /// - Epoch 0: mining seeds the network; the only lottery-eligible UTXOs
+    ///   would be miner coinbases, so routing emission would be circular at
+    ///   best. Miners keep the full (large) reward while security depends
+    ///   entirely on emission.
+    /// - The ramp counteracts the absolute decay of f x reward across
+    ///   halvings, maintaining redistribution intensity as wealth
+    ///   concentration accumulates.
+    /// - The cap preserves at least half of tail emission as the permanent
+    ///   mining security budget.
+    ///
+    /// CONSENSUS-CRITICAL: pure integer math; every validator must compute
+    /// the same share.
+    pub fn lottery_emission_bps(&self, height: u64) -> u32 {
+        /// Per-halving-epoch increase in lottery emission share (10%).
+        const LOTTERY_EMISSION_STEP_BPS: u32 = 1_000;
+        /// Maximum lottery emission share (50% of the block reward).
+        const LOTTERY_EMISSION_MAX_BPS: u32 = 5_000;
+
+        if self.halving_interval == 0 {
+            return 0;
+        }
+        let epoch = (height / self.halving_interval).min(u32::MAX as u64) as u32;
+        epoch
+            .saturating_mul(LOTTERY_EMISSION_STEP_BPS)
+            .min(LOTTERY_EMISSION_MAX_BPS)
+    }
+
+    /// The portion of a block reward routed to the redistribution lottery
+    /// at the given height. The miner receives `reward - share`.
+    pub fn lottery_emission_share(&self, height: u64, reward: u64) -> u64 {
+        (reward as u128 * self.lottery_emission_bps(height) as u128 / 10_000) as u64
+    }
+
     /// Check if a given height is in Phase 1 (halving period).
     pub fn is_halving_phase(&self, height: u64) -> bool {
         height < self.tail_emission_start_height()
@@ -643,6 +683,39 @@ mod tests {
         // After all halvings (tail emission)
         assert_eq!(policy.halving_reward(300), None);
         assert_eq!(policy.halving_reward(1000), None);
+    }
+
+    #[test]
+    fn test_lottery_emission_schedule() {
+        let policy = MonetaryPolicy {
+            initial_reward: 1000,
+            halving_interval: 100,
+            halving_count: 3,
+            ..Default::default()
+        };
+
+        // Epoch 0 (bootstrap): no lottery emission — mining seeds the network
+        assert_eq!(policy.lottery_emission_bps(0), 0);
+        assert_eq!(policy.lottery_emission_bps(99), 0);
+        assert_eq!(policy.lottery_emission_share(50, 1000), 0);
+
+        // Ramp: +10% per halving epoch
+        assert_eq!(policy.lottery_emission_bps(100), 1000); // 10%
+        assert_eq!(policy.lottery_emission_bps(250), 2000); // 20%
+        assert_eq!(policy.lottery_emission_share(100, 500), 50);
+
+        // Capped at 50%: the tail emission stays at least half mining
+        // security budget
+        assert_eq!(policy.lottery_emission_bps(100 * 5), 5000);
+        assert_eq!(policy.lottery_emission_bps(1_000_000), 5000);
+        assert_eq!(policy.lottery_emission_share(1_000_000, 1000), 500);
+
+        // Degenerate config must not panic or divide by zero
+        let zero_policy = MonetaryPolicy {
+            halving_interval: 0,
+            ..Default::default()
+        };
+        assert_eq!(zero_policy.lottery_emission_bps(12345), 0);
     }
 
     #[test]

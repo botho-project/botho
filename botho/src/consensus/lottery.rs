@@ -109,18 +109,17 @@ pub struct BlockLotteryResult {
 }
 
 impl BlockLotteryResult {
-    /// Create a result when there are no eligible candidates.
+    /// Create a result when there are no winners (no eligible candidates, or
+    /// nothing to pay out).
     ///
-    /// In this case, all fees go to the burn (deflationary).
-    pub fn no_winners(block_height: u64, total_fees: u64, config: &LotteryFeeConfig) -> Self {
-        let (pool_amount, burn_amount) = config.split_fees(total_fees);
-
+    /// Only the fee burn share is burned; the pool share (fees + emission)
+    /// carries over to future blocks via the persistent lottery pool.
+    pub fn no_winners(block_height: u64, total_fees: u64, accounting: &LotteryPoolAccounting) -> Self {
         Self {
             block_height,
             total_fees,
-            pool_amount,
-            // If no winners, pool amount is also burned
-            burn_amount: burn_amount + pool_amount,
+            pool_amount: 0,
+            burn_amount: accounting.fee_burn,
             winners: Vec::new(),
             seed: [0u8; 32],
         }
@@ -137,11 +136,74 @@ impl BlockLotteryResult {
     }
 }
 
+/// Pool accounting for one block's lottery.
+///
+/// CONSENSUS-CRITICAL: every field is a deterministic integer function of
+/// (block fees, block reward, height schedule, stored pool balance), all of
+/// which are consensus state — proposer and validators must agree exactly.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LotteryPoolAccounting {
+    /// Pool share of this block's transaction fees (80% by default).
+    pub fee_pool: u64,
+    /// Burn share of this block's transaction fees (20% by default).
+    pub fee_burn: u64,
+    /// Lottery share of this block's emission (height-scheduled fraction of
+    /// the block reward; the miner receives the remainder).
+    pub emission_share: u64,
+    /// Total available to distribute: carryover + emission share + fee pool.
+    pub available: u64,
+    /// Amount actually paid out this block: min(available, payout cap).
+    ///
+    /// The cap (one block reward) makes seed-grinding unprofitable by
+    /// construction: regrinding the previous block costs a full PoW solution
+    /// but can shift at most a fraction of one reward's worth of payout.
+    pub payout: u64,
+}
+
+impl LotteryPoolAccounting {
+    /// Pool balance carried to the next block if `distributed` was paid out.
+    pub fn carryover_after(&self, distributed: u64) -> u64 {
+        self.available.saturating_sub(distributed)
+    }
+}
+
+/// Compute the lottery pool accounting for a block.
+///
+/// # Arguments
+/// * `total_fees` - Total transaction fees in the block
+/// * `emission_share` - Lottery share of the block reward
+///   (`MintingTx::lottery_emission_share`)
+/// * `stored_pool` - Carryover pool balance before this block
+/// * `payout_cap` - Maximum payout per block (the block reward;
+///   anti-grinding bound)
+pub fn compute_pool_accounting(
+    total_fees: u64,
+    emission_share: u64,
+    stored_pool: u64,
+    payout_cap: u64,
+    config: &LotteryFeeConfig,
+) -> LotteryPoolAccounting {
+    let (fee_pool, fee_burn) = config.split_fees(total_fees);
+    let available = stored_pool
+        .saturating_add(emission_share)
+        .saturating_add(fee_pool);
+    let payout = available.min(payout_cap);
+
+    LotteryPoolAccounting {
+        fee_pool,
+        fee_burn,
+        emission_share,
+        available,
+        payout,
+    }
+}
+
 /// Draw lottery winners for a block.
 ///
 /// # Arguments
 /// * `candidates` - Eligible UTXOs from the UTXO set
 /// * `total_fees` - Total fees collected from block transactions
+/// * `accounting` - Pool accounting (carryover + emission + fees, capped)
 /// * `block_height` - Current block height
 /// * `prev_block_hash` - Hash of previous block (for verifiable randomness)
 /// * `config` - Lottery configuration
@@ -151,24 +213,23 @@ impl BlockLotteryResult {
 pub fn draw_lottery_winners(
     candidates: &[LotteryCandidate],
     total_fees: u64,
+    accounting: &LotteryPoolAccounting,
     block_height: u64,
     prev_block_hash: &[u8; 32],
     config: &LotteryFeeConfig,
 ) -> BlockLotteryResult {
-    let (pool_amount, burn_amount) = config.split_fees(total_fees);
-
-    if pool_amount == 0 {
+    if accounting.payout == 0 {
         debug!(
             block_height = block_height,
-            "No fees to distribute, skipping lottery"
+            "Nothing to distribute, skipping lottery"
         );
-        return BlockLotteryResult::no_winners(block_height, total_fees, config);
+        return BlockLotteryResult::no_winners(block_height, total_fees, accounting);
     }
 
     // Draw winners using cluster-tax lottery implementation
     match draw_winners(
         candidates,
-        pool_amount,
+        accounting.payout,
         block_height,
         prev_block_hash,
         &config.draw_config,
@@ -177,16 +238,17 @@ pub fn draw_lottery_winners(
             info!(
                 block_height = block_height,
                 winners = result.winners.len(),
-                pool_amount = pool_amount,
-                burn_amount = burn_amount,
+                payout = accounting.payout,
+                fee_burn = accounting.fee_burn,
+                emission_share = accounting.emission_share,
                 "Lottery draw complete"
             );
 
             BlockLotteryResult {
                 block_height,
                 total_fees,
-                pool_amount,
-                burn_amount,
+                pool_amount: accounting.payout,
+                burn_amount: accounting.fee_burn,
                 winners: result.winners,
                 seed: result.seed,
             }
@@ -194,9 +256,9 @@ pub fn draw_lottery_winners(
         None => {
             debug!(
                 block_height = block_height,
-                "No eligible lottery candidates"
+                "No eligible lottery candidates; pool carries over"
             );
-            BlockLotteryResult::no_winners(block_height, total_fees, config)
+            BlockLotteryResult::no_winners(block_height, total_fees, accounting)
         }
     }
 }
@@ -216,28 +278,17 @@ pub fn draw_lottery_winners(
 pub fn verify_lottery_result(
     candidates: &[LotteryCandidate],
     result: &BlockLotteryResult,
+    accounting: &LotteryPoolAccounting,
     prev_block_hash: &[u8; 32],
     config: &LotteryFeeConfig,
 ) -> bool {
-    // Verify fee splitting is correct
-    let (expected_pool, expected_burn) = config.split_fees(result.total_fees);
-
-    // If no winners, all pool goes to burn
-    let actual_burn = if result.winners.is_empty() {
-        result.burn_amount
-    } else {
-        result.burn_amount
-    };
-
     if result.winners.is_empty() {
-        // No winners: pool should be added to burn
-        if result.burn_amount != expected_pool + expected_burn {
-            return false;
-        }
-        return true;
+        // No winners: only the fee burn share is burned; the pool share
+        // (fees + emission) carries over.
+        return result.pool_amount == 0 && result.burn_amount == accounting.fee_burn;
     }
 
-    if result.pool_amount != expected_pool || actual_burn != expected_burn {
+    if result.pool_amount != accounting.payout || result.burn_amount != accounting.fee_burn {
         return false;
     }
 
@@ -408,37 +459,47 @@ impl std::error::Error for LotteryValidationError {}
 pub fn validate_block_lottery(
     block: &crate::block::Block,
     candidates: &[LotteryCandidate],
+    stored_pool: u64,
     prev_block_hash: &[u8; 32],
     config: &LotteryFeeConfig,
-) -> Result<(), LotteryValidationError> {
+) -> Result<u64, LotteryValidationError> {
     let total_fees = block.total_fees();
 
-    // 1. Verify fee split is correct
-    let (expected_pool, expected_burn) = config.split_fees(total_fees);
+    // 1. Compute the expected pool accounting from consensus state: fees,
+    // the height-scheduled emission share, the stored carryover pool, and
+    // the per-block payout cap (one block reward; anti-grinding bound).
+    let emission_share = block.minting_tx.lottery_emission_share();
+    let accounting = compute_pool_accounting(
+        total_fees,
+        emission_share,
+        stored_pool,
+        block.minting_tx.reward,
+        config,
+    );
 
-    // Handle no-winners case
+    // Handle no-winners case: only the fee burn share is burned; the pool
+    // share (fees + emission) carries over to future blocks.
     if block.lottery_outputs.is_empty() {
-        // When there are no winners, all fees should be burned
-        let expected_total_burn = total_fees;
-        if block.lottery_summary.amount_burned != expected_total_burn {
+        if block.lottery_summary.pool_distributed != 0
+            || block.lottery_summary.amount_burned != accounting.fee_burn
+        {
             return Err(LotteryValidationError::InvalidFeeSplit {
                 expected_pool: 0,
-                expected_burn: expected_total_burn,
+                expected_burn: accounting.fee_burn,
                 actual_pool: block.lottery_summary.pool_distributed,
                 actual_burn: block.lottery_summary.amount_burned,
             });
         }
-        // No further validation needed for no-winners case
-        return Ok(());
+        return Ok(accounting.carryover_after(0));
     }
 
-    // Verify the fee split in the summary
-    if block.lottery_summary.pool_distributed != expected_pool
-        || block.lottery_summary.amount_burned != expected_burn
+    // Verify the split in the summary
+    if block.lottery_summary.pool_distributed != accounting.payout
+        || block.lottery_summary.amount_burned != accounting.fee_burn
     {
         return Err(LotteryValidationError::InvalidFeeSplit {
-            expected_pool,
-            expected_burn,
+            expected_pool: accounting.payout,
+            expected_burn: accounting.fee_burn,
             actual_pool: block.lottery_summary.pool_distributed,
             actual_burn: block.lottery_summary.amount_burned,
         });
@@ -448,8 +509,8 @@ pub fn validate_block_lottery(
     let block_result = BlockLotteryResult {
         block_height: block.height(),
         total_fees,
-        pool_amount: expected_pool,
-        burn_amount: expected_burn,
+        pool_amount: accounting.payout,
+        burn_amount: accounting.fee_burn,
         winners: block
             .lottery_outputs
             .iter()
@@ -462,15 +523,15 @@ pub fn validate_block_lottery(
     };
 
     // 3. Verify the lottery drawing
-    if !verify_lottery_result(candidates, &block_result, prev_block_hash, config) {
+    if !verify_lottery_result(candidates, &block_result, &accounting, prev_block_hash, config) {
         return Err(LotteryValidationError::InvalidDrawing);
     }
 
-    // 4. Verify total payouts match pool amount
+    // 4. Verify total payouts match the capped payout amount
     let total_payouts: u64 = block.lottery_outputs.iter().map(|o| o.payout).sum();
-    if total_payouts != expected_pool {
+    if total_payouts != accounting.payout {
         return Err(LotteryValidationError::PayoutMismatch {
-            expected: expected_pool,
+            expected: accounting.payout,
             actual: total_payouts,
         });
     }
@@ -489,12 +550,14 @@ pub fn validate_block_lottery(
     info!(
         block_height = block.height(),
         winners = block.lottery_outputs.len(),
-        pool_amount = expected_pool,
-        burn_amount = expected_burn,
+        payout = accounting.payout,
+        fee_burn = accounting.fee_burn,
+        emission_share = emission_share,
+        pool_after = accounting.carryover_after(accounting.payout),
         "Lottery validation passed"
     );
 
-    Ok(())
+    Ok(accounting.carryover_after(accounting.payout))
 }
 
 #[cfg(test)]
@@ -542,14 +605,37 @@ mod tests {
     #[test]
     fn test_no_winners_result() {
         let config = LotteryFeeConfig::default();
-        let result = BlockLotteryResult::no_winners(100, 1000, &config);
+        // 1000 fees, no emission, no carryover, cap = one block reward
+        let accounting = compute_pool_accounting(1000, 0, 0, 1000, &config);
+        let result = BlockLotteryResult::no_winners(100, 1000, &accounting);
 
         assert_eq!(result.block_height, 100);
         assert_eq!(result.total_fees, 1000);
         assert_eq!(result.winners.len(), 0);
-        // All fees should be burned when no winners
-        assert_eq!(result.burn_amount, 1000);
+        // Only the fee burn share is burned; the pool share carries over
+        assert_eq!(result.burn_amount, 200);
+        assert_eq!(result.pool_amount, 0);
         assert_eq!(result.total_distributed(), 0);
+        assert_eq!(accounting.carryover_after(0), 800);
+    }
+
+    #[test]
+    fn test_pool_accounting_carryover_and_cap() {
+        let config = LotteryFeeConfig::default();
+
+        // Inflow: 800 (fees) + 500 (emission) + 1000 (carryover) = 2300
+        // Cap: 1500 (block reward) -> payout 1500, carryover 800
+        let accounting = compute_pool_accounting(1000, 500, 1000, 1500, &config);
+        assert_eq!(accounting.fee_pool, 800);
+        assert_eq!(accounting.fee_burn, 200);
+        assert_eq!(accounting.available, 2300);
+        assert_eq!(accounting.payout, 1500);
+        assert_eq!(accounting.carryover_after(accounting.payout), 800);
+
+        // Uncapped case: everything available pays out
+        let accounting = compute_pool_accounting(1000, 0, 0, 10_000, &config);
+        assert_eq!(accounting.payout, 800);
+        assert_eq!(accounting.carryover_after(accounting.payout), 0);
     }
 
     #[test]
@@ -557,10 +643,13 @@ mod tests {
         let config = LotteryFeeConfig::default();
         let prev_hash = [0u8; 32];
 
-        let result = draw_lottery_winners(&[], 1000, 100, &prev_hash, &config);
+        let accounting = compute_pool_accounting(1000, 0, 0, 1000, &config);
+        let result = draw_lottery_winners(&[], 1000, &accounting, 100, &prev_hash, &config);
 
         assert!(!result.has_winners());
-        assert_eq!(result.burn_amount, 1000);
+        // Fee burn share only; the pool share carries over
+        assert_eq!(result.burn_amount, 200);
+        assert_eq!(result.pool_amount, 0);
     }
 
     #[test]
@@ -583,7 +672,9 @@ mod tests {
             make_candidate(3, 30_000, 0),
         ];
 
-        let result = draw_lottery_winners(&candidates, 1000, 100, &prev_hash, &config);
+        let accounting = compute_pool_accounting(1000, 0, 0, 1000, &config);
+        let result =
+            draw_lottery_winners(&candidates, 1000, &accounting, 100, &prev_hash, &config);
 
         assert!(result.has_winners());
         assert_eq!(result.winners.len(), 2);
@@ -611,12 +702,15 @@ mod tests {
             make_candidate(3, 30_000, 0),
         ];
 
-        let result = draw_lottery_winners(&candidates, 1000, 100, &prev_hash, &config);
+        let accounting = compute_pool_accounting(1000, 0, 0, 1000, &config);
+        let result =
+            draw_lottery_winners(&candidates, 1000, &accounting, 100, &prev_hash, &config);
 
         // Verification should pass with same parameters
         assert!(verify_lottery_result(
             &candidates,
             &result,
+            &accounting,
             &prev_hash,
             &config
         ));
@@ -626,6 +720,7 @@ mod tests {
         assert!(!verify_lottery_result(
             &candidates,
             &result,
+            &accounting,
             &wrong_hash,
             &config
         ));
@@ -733,8 +828,9 @@ mod tests {
 
         let block = create_test_block(100, prev_hash, 0, lottery_summary, vec![]);
 
-        let result = validate_block_lottery(&block, &candidates, &prev_hash, &config);
+        let result = validate_block_lottery(&block, &candidates, 0, &prev_hash, &config);
         assert!(result.is_ok(), "No fees/winners should pass validation");
+        assert_eq!(result.unwrap(), 0, "Pool should stay empty");
     }
 
     #[test]
@@ -769,7 +865,7 @@ mod tests {
 
         let block = create_test_block(100, prev_hash, 1000, lottery_summary, lottery_outputs);
 
-        let result = validate_block_lottery(&block, &candidates, &prev_hash, &config);
+        let result = validate_block_lottery(&block, &candidates, 0, &prev_hash, &config);
         assert!(
             matches!(result, Err(LotteryValidationError::InvalidFeeSplit { .. })),
             "Invalid fee split should fail: {:?}",
@@ -796,7 +892,9 @@ mod tests {
         ];
 
         // First draw to get a valid result
-        let valid_result = draw_lottery_winners(&candidates, 1000, 100, &prev_hash, &config);
+        let accounting = compute_pool_accounting(1000, 0, 0, 1000, &config);
+        let valid_result =
+            draw_lottery_winners(&candidates, 1000, &accounting, 100, &prev_hash, &config);
 
         // Create a lottery summary with correct split but wrong payout in output
         let lottery_summary = BlockLotterySummary {
@@ -827,7 +925,7 @@ mod tests {
 
         let block = create_test_block(100, prev_hash, 1000, lottery_summary, lottery_outputs);
 
-        let result = validate_block_lottery(&block, &candidates, &prev_hash, &config);
+        let result = validate_block_lottery(&block, &candidates, 0, &prev_hash, &config);
         // Should fail either with PayoutMismatch or InvalidDrawing depending on validation order
         assert!(
             result.is_err(),
@@ -861,7 +959,7 @@ mod tests {
 
         let block = create_test_block(100, prev_hash, 1000, lottery_summary, lottery_outputs);
 
-        let result = validate_block_lottery(&block, &candidates, &prev_hash, &config);
+        let result = validate_block_lottery(&block, &candidates, 0, &prev_hash, &config);
         // Should fail because the winner is not in the (empty) candidate list
         assert!(
             result.is_err(),
@@ -870,24 +968,51 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_block_lottery_no_winners_all_burned() {
+    fn test_validate_block_lottery_no_winners_pool_carries() {
         let config = LotteryFeeConfig::default();
         let prev_hash = [0u8; 32];
 
         // No eligible candidates
         let candidates: Vec<LotteryCandidate> = vec![];
 
-        // When no winners, all fees should be burned
+        // When no winners, only the fee burn share is burned; the pool
+        // share (800) carries over to the next block.
         let lottery_summary = BlockLotterySummary {
             total_fees: 1000,
             pool_distributed: 0,
-            amount_burned: 1000, // All burned when no winners
+            amount_burned: 200,
             lottery_seed: [0u8; 32],
         };
 
         let block = create_test_block(100, prev_hash, 1000, lottery_summary, vec![]);
 
-        let result = validate_block_lottery(&block, &candidates, &prev_hash, &config);
-        assert!(result.is_ok(), "No winners, all burned should pass: {:?}", result);
+        let result = validate_block_lottery(&block, &candidates, 0, &prev_hash, &config);
+        assert!(result.is_ok(), "No winners should pass: {:?}", result);
+        assert_eq!(result.unwrap(), 800, "Fee pool share should carry over");
+    }
+
+    #[test]
+    fn test_validate_block_lottery_rejects_burn_all_when_no_winners() {
+        // The pre-carryover behavior (burning the pool share when there are
+        // no winners) must now be rejected.
+        let config = LotteryFeeConfig::default();
+        let prev_hash = [0u8; 32];
+        let candidates: Vec<LotteryCandidate> = vec![];
+
+        let lottery_summary = BlockLotterySummary {
+            total_fees: 1000,
+            pool_distributed: 0,
+            amount_burned: 1000, // Old semantics: burn everything
+            lottery_seed: [0u8; 32],
+        };
+
+        let block = create_test_block(100, prev_hash, 1000, lottery_summary, vec![]);
+
+        let result = validate_block_lottery(&block, &candidates, 0, &prev_hash, &config);
+        assert!(
+            matches!(result, Err(LotteryValidationError::InvalidFeeSplit { .. })),
+            "Burning the pool share must be rejected: {:?}",
+            result
+        );
     }
 }

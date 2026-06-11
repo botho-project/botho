@@ -273,11 +273,28 @@ impl MintingTx {
         hasher.finalize().into()
     }
 
+    /// The lottery emission share of this block's reward.
+    ///
+    /// A height-scheduled fraction of the block reward is routed into the
+    /// redistribution lottery pool instead of the miner's coinbase
+    /// (0 in the bootstrap epoch, ramping per halving — see
+    /// `MonetaryPolicy::lottery_emission_bps`). Total emission is unchanged.
+    pub fn lottery_emission_share(&self) -> u64 {
+        crate::monetary::mainnet_policy().lottery_emission_share(self.block_height, self.reward)
+    }
+
+    /// The miner's coinbase payout: the block reward minus the lottery
+    /// emission share.
+    pub fn miner_payout(&self) -> u64 {
+        self.reward.saturating_sub(self.lottery_emission_share())
+    }
+
     /// Convert this minting transaction's output into a TxOutput for ledger
     /// storage.
     ///
     /// This allows the ledger to store minting rewards using the same UTXO
-    /// format as regular transaction outputs.
+    /// format as regular transaction outputs. The amount is the miner's
+    /// payout (reward minus the lottery emission share).
     ///
     /// Minting creates a **new cluster origin** - the output is tagged with
     /// 100% attribution to a new cluster derived from the minting tx hash.
@@ -288,7 +305,7 @@ impl MintingTx {
         let cluster_id = ClusterId(u64::from_le_bytes(tx_hash[0..8].try_into().unwrap()));
 
         TxOutput {
-            amount: self.reward,
+            amount: self.miner_payout(),
             target_key: self.target_key,
             public_key: self.public_key,
             e_memo: None, // Minting rewards don't have memos

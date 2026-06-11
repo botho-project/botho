@@ -70,6 +70,8 @@ const META_EPOCH_TX: &[u8] = b"epoch_tx";
 const META_EPOCH_EMISSION: &[u8] = b"epoch_emission";
 const META_EPOCH_BURNS: &[u8] = b"epoch_burns";
 const META_CURRENT_REWARD: &[u8] = b"current_reward";
+// Redistribution lottery carryover pool (consensus state)
+const META_LOTTERY_POOL: &[u8] = b"lottery_pool";
 
 impl Ledger {
     /// Open or create a ledger at the given path (defaults to Testnet for
@@ -399,27 +401,45 @@ impl Ledger {
             ));
         }
 
-        // Validate lottery results (if block has transactions with fees)
-        if block.total_fees() > 0 || !block.lottery_outputs.is_empty() {
+        // Validate lottery results and compute the new carryover pool.
+        // The pool is consensus state: fees' pool share and the
+        // height-scheduled emission share flow in; capped payouts flow out.
+        let stored_lottery_pool = self.get_lottery_pool()?;
+        let emission_share = block.minting_tx.lottery_emission_share();
+        let new_lottery_pool = if block.total_fees() > 0
+            || !block.lottery_outputs.is_empty()
+            || emission_share > 0
+            || stored_lottery_pool > 0
+        {
             let lottery_config = LotteryFeeConfig::default();
             let candidates = self.get_lottery_validation_candidates(block.height(), &lottery_config.draw_config)?;
 
             // prev_block_hash is used for verifiable randomness
             let prev_block_hash = &block.header.prev_block_hash;
 
-            if let Err(e) = validate_block_lottery(block, &candidates, prev_block_hash, &lottery_config)
-            {
-                warn!(
-                    block_height = block.height(),
-                    error = %e,
-                    "Lottery validation failed"
-                );
-                return Err(LedgerError::InvalidBlock(format!(
-                    "Lottery validation failed: {}",
-                    e
-                )));
+            match validate_block_lottery(
+                block,
+                &candidates,
+                stored_lottery_pool,
+                prev_block_hash,
+                &lottery_config,
+            ) {
+                Ok(new_pool) => new_pool,
+                Err(e) => {
+                    warn!(
+                        block_height = block.height(),
+                        error = %e,
+                        "Lottery validation failed"
+                    );
+                    return Err(LedgerError::InvalidBlock(format!(
+                        "Lottery validation failed: {}",
+                        e
+                    )));
+                }
             }
-        }
+        } else {
+            stored_lottery_pool
+        };
 
         // Store block and update metadata
         let mut wtxn = self
@@ -511,6 +531,13 @@ impl Ledger {
                 &new_total_fees_burned.to_le_bytes(),
             )
             .map_err(|e| LedgerError::Database(format!("Failed to put fees_burned: {}", e)))?;
+        self.meta_db
+            .put(
+                &mut wtxn,
+                META_LOTTERY_POOL,
+                &new_lottery_pool.to_le_bytes(),
+            )
+            .map_err(|e| LedgerError::Database(format!("Failed to put lottery_pool: {}", e)))?;
 
         wtxn.commit()
             .map_err(|e| LedgerError::Database(format!("Failed to commit: {}", e)))?;
@@ -524,6 +551,28 @@ impl Ledger {
         );
 
         Ok(())
+    }
+
+    /// Get the redistribution lottery carryover pool balance.
+    ///
+    /// Consensus state: the pool accumulates the fee pool share plus the
+    /// height-scheduled emission share, and drains via capped per-block
+    /// payouts. Missing key (fresh/pre-upgrade ledger) means zero.
+    pub fn get_lottery_pool(&self) -> Result<u64, LedgerError> {
+        let rtxn = self
+            .env
+            .read_txn()
+            .map_err(|e| LedgerError::Database(format!("Failed to start read txn: {}", e)))?;
+        match self.meta_db.get(&rtxn, META_LOTTERY_POOL) {
+            Ok(Some(bytes)) if bytes.len() == 8 => {
+                Ok(u64::from_le_bytes(bytes.try_into().unwrap()))
+            }
+            Ok(_) => Ok(0),
+            Err(e) => Err(LedgerError::Database(format!(
+                "Failed to get lottery_pool: {}",
+                e
+            ))),
+        }
     }
 
     /// Update the difficulty in chain state

@@ -214,6 +214,7 @@ impl BlockBuilder {
     ///   `Ledger::get_lottery_validation_candidates` — the SAME function
     ///   block validation uses. Verification re-runs the draw, so proposer
     ///   and validator candidate sets (values, factors, order) must match.
+    /// * `stored_pool` - Carryover lottery pool balance from the ledger
     /// * `utxo_lookup` - Function to look up UTXO details by ID for key recovery
     /// * `lottery_config` - Configuration for fee splitting and lottery drawing
     ///
@@ -222,6 +223,7 @@ impl BlockBuilder {
     pub fn apply_lottery<F>(
         mut block: Block,
         candidates: &[LotteryCandidate],
+        stored_pool: u64,
         utxo_lookup: F,
         lottery_config: &LotteryFeeConfig,
     ) -> Block
@@ -231,18 +233,30 @@ impl BlockBuilder {
         // Calculate total fees from transactions
         let total_fees: u64 = block.transactions.iter().map(|tx| tx.fee).sum();
 
-        if total_fees == 0 {
-            debug!("No fees to distribute, skipping lottery");
+        // Pool accounting: carryover + emission share + fee pool share,
+        // payouts capped at one block reward (anti-grinding bound). Must
+        // match validation exactly.
+        let emission_share = block.minting_tx.lottery_emission_share();
+        let accounting = crate::consensus::lottery::compute_pool_accounting(
+            total_fees,
+            emission_share,
+            stored_pool,
+            block.minting_tx.reward,
+            lottery_config,
+        );
+
+        if accounting.payout == 0 && accounting.fee_burn == 0 {
+            debug!("Nothing to distribute or burn, skipping lottery");
             return block;
         }
 
         if candidates.is_empty() {
-            debug!("No lottery candidates available, burning all fees");
-            // When there are no lottery candidates, all fees are burned
+            debug!("No lottery candidates available; pool carries over");
+            // Fee burn share is burned; the pool share carries over.
             block.lottery_summary = BlockLotterySummary {
                 total_fees,
                 pool_distributed: 0,
-                amount_burned: total_fees,
+                amount_burned: accounting.fee_burn,
                 lottery_seed: [0u8; 32],
             };
             return block;
@@ -251,6 +265,8 @@ impl BlockBuilder {
         info!(
             candidates = candidates.len(),
             total_fees = total_fees,
+            payout = accounting.payout,
+            emission_share = emission_share,
             "Drawing lottery winners"
         );
 
@@ -258,6 +274,7 @@ impl BlockBuilder {
         let lottery_result = draw_lottery_winners(
             &candidates,
             total_fees,
+            &accounting,
             block.height(),
             &block.header.prev_block_hash,
             lottery_config,
@@ -467,7 +484,7 @@ mod tests {
         };
 
         let lottery_config = LotteryFeeConfig::default();
-        let result = BlockBuilder::apply_lottery(block.clone(), &candidates, utxo_lookup, &lottery_config);
+        let result = BlockBuilder::apply_lottery(block.clone(), &candidates, 0, utxo_lookup, &lottery_config);
 
         // No fees means no lottery
         assert!(result.lottery_outputs.is_empty());
@@ -485,13 +502,14 @@ mod tests {
         let utxo_lookup = |_: &[u8; 36]| None;
 
         let lottery_config = LotteryFeeConfig::default();
-        let result = BlockBuilder::apply_lottery(block.clone(), &candidates, utxo_lookup, &lottery_config);
+        let result = BlockBuilder::apply_lottery(block.clone(), &candidates, 0, utxo_lookup, &lottery_config);
 
-        // No candidates means all fees are burned
+        // No candidates: the fee burn share (20%) is burned; the pool share
+        // carries over via the persistent lottery pool
         assert!(result.lottery_outputs.is_empty());
         assert_eq!(result.lottery_summary.total_fees, 1_000_000);
         assert_eq!(result.lottery_summary.pool_distributed, 0);
-        assert_eq!(result.lottery_summary.amount_burned, 1_000_000);
+        assert_eq!(result.lottery_summary.amount_burned, 200_000);
     }
 
     #[test]
@@ -517,35 +535,26 @@ mod tests {
         };
 
         let lottery_config = LotteryFeeConfig::default();
-        let result = BlockBuilder::apply_lottery(block.clone(), &candidates, utxo_lookup, &lottery_config);
+        let result = BlockBuilder::apply_lottery(block.clone(), &candidates, 0, utxo_lookup, &lottery_config);
 
         // Should have applied lottery - total_fees should be recorded
         assert_eq!(result.lottery_summary.total_fees, 10_000_000);
 
-        // Pool distributed is 80% of fees (default config)
-        assert_eq!(result.lottery_summary.pool_distributed, 8_000_000);
+        // The fee burn share (20%) is always burned; the pool share either
+        // pays out (capped at one block reward) or carries over
+        assert_eq!(result.lottery_summary.amount_burned, 2_000_000);
 
-        // Note: lottery_seed is only non-zero when winners are drawn
-        // When no winners, seed is [0u8; 32]
-
-        // The burn amount depends on whether winners were drawn:
-        // - If winners: burn = 20% of fees (2M)
-        // - If no winners: burn = 100% of fees (10M, pool is also burned)
-        // Both cases are valid lottery outcomes
-        assert!(
-            result.lottery_summary.amount_burned == 2_000_000
-                || result.lottery_summary.amount_burned == 10_000_000,
-            "Expected burn of 2M (winners) or 10M (no winners), got {}",
-            result.lottery_summary.amount_burned
-        );
-
-        // Lottery outputs should exist only if there were winners
-        if result.lottery_summary.amount_burned == 2_000_000 {
-            // Winners were drawn - should have lottery outputs
-            assert!(!result.lottery_outputs.is_empty());
+        if result.lottery_outputs.is_empty() {
+            // No winners drawn (candidates too young for default min age):
+            // nothing distributed, pool share carries over
+            assert_eq!(result.lottery_summary.pool_distributed, 0);
         } else {
-            // No winners - no lottery outputs
-            assert!(result.lottery_outputs.is_empty());
+            // Winners drawn: payout = min(fee pool share, block reward cap)
+            let cap = result.minting_tx.reward;
+            assert_eq!(
+                result.lottery_summary.pool_distributed,
+                8_000_000.min(cap)
+            );
         }
     }
 

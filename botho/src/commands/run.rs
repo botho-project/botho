@@ -1292,55 +1292,61 @@ fn apply_lottery_to_block(
     block: crate::block::Block,
     shared_ledger: &SharedLedger,
 ) -> crate::block::Block {
-    // Skip lottery if no fees in the block
     let total_fees: u64 = block.transactions.iter().map(|tx| tx.fee).sum();
-    if total_fees == 0 {
-        return block;
-    }
+    let emission_share = block.minting_tx.lottery_emission_share();
 
-    // Helper to create a block with all fees burned (for error/no-candidate cases)
-    let burn_all_fees = |mut block: crate::block::Block| {
+    // Helper for error cases: burn only the fee burn share (the pool share
+    // carries over via the persistent lottery pool), matching validation.
+    let lottery_config = LotteryFeeConfig::default();
+    let (_, fee_burn) = lottery_config.split_fees(total_fees);
+    let burn_fee_share = |mut block: crate::block::Block| {
         block.lottery_summary = crate::block::BlockLotterySummary {
             total_fees,
             pool_distributed: 0,
-            amount_burned: total_fees,
+            amount_burned: fee_burn,
             lottery_seed: [0u8; 32],
         };
         block
     };
 
-    // Apply lottery with default configuration
-    let lottery_config = LotteryFeeConfig::default();
-
-    // Get lottery candidates from the ledger using the SAME function and
-    // config that block validation uses — lottery verification re-runs the
-    // draw, so proposer and validator candidate sets must be identical.
-    let candidates = match shared_ledger.read() {
+    // Get the carryover pool and candidates from the ledger using the SAME
+    // function and config that block validation uses — lottery verification
+    // re-runs the draw, so proposer and validator state must be identical.
+    let (stored_pool, candidates) = match shared_ledger.read() {
         Ok(ledger) => {
+            let pool = match ledger.get_lottery_pool() {
+                Ok(p) => p,
+                Err(e) => {
+                    warn!("Failed to get lottery pool: {}", e);
+                    return burn_fee_share(block);
+                }
+            };
             match ledger
                 .get_lottery_validation_candidates(block.height(), &lottery_config.draw_config)
             {
-                Ok(c) => c,
+                Ok(c) => (pool, c),
                 Err(e) => {
-                    warn!("Failed to get lottery candidates: {}, burning all fees", e);
-                    return burn_all_fees(block);
+                    warn!("Failed to get lottery candidates: {}", e);
+                    return burn_fee_share(block);
                 }
             }
         }
         Err(e) => {
-            warn!("Failed to acquire ledger lock for lottery: {}, burning all fees", e);
-            return burn_all_fees(block);
+            warn!("Failed to acquire ledger lock for lottery: {}", e);
+            return burn_fee_share(block);
         }
     };
 
-    if candidates.is_empty() {
-        debug!("No lottery candidates available, burning all fees");
-        return burn_all_fees(block);
+    // Skip entirely only when there is nothing flowing in or out
+    if total_fees == 0 && emission_share == 0 && stored_pool == 0 {
+        return block;
     }
 
     info!(
         candidates = candidates.len(),
         fees = total_fees,
+        emission_share = emission_share,
+        stored_pool = stored_pool,
         "Applying lottery to block"
     );
 
@@ -1351,5 +1357,5 @@ fn apply_lottery_to_block(
         ledger.get_utxo_by_id(utxo_id).ok().flatten()
     };
 
-    BlockBuilder::apply_lottery(block, &candidates, utxo_lookup, &lottery_config)
+    BlockBuilder::apply_lottery(block, &candidates, stored_pool, utxo_lookup, &lottery_config)
 }
