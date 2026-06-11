@@ -627,7 +627,7 @@ impl Mempool {
             .map_err(|e| MempoolError::InvalidTransaction(e.to_string()))?;
 
         // Validate inputs (all transactions use CLSAG ring signatures)
-        let input_sum = self.validate_clsag_inputs(tx.inputs.clsag(), &tx, ledger)?;
+        let (input_sum, ring_members) = self.validate_clsag_inputs(tx.inputs.clsag(), &tx, ledger)?;
 
         // Validate outputs + fee <= inputs
         // Use checked arithmetic to detect overflow from malicious transactions
@@ -666,7 +666,7 @@ impl Mempool {
 
         // Use dynamic fee calculation for minimum (with actual output count)
         let num_outputs = tx.outputs.len();
-        let minimum_fee = self.fee_config.minimum_fee_dynamic_with_outputs(
+        let base_minimum_fee = self.fee_config.minimum_fee_dynamic_with_outputs(
             fee_tx_type,
             tx_size_bytes,
             cluster_wealth,
@@ -674,6 +674,32 @@ impl Mempool {
             num_memos,
             dynamic_base,
         );
+
+        // Cluster demurrage: a holding charge on wealthy-cluster coins,
+        // added to the minimum fee at spend time. Elapsed time is the
+        // value-weighted centroid of the PUBLIC ring-member creation
+        // heights (the real input dominates its own ring's centroid); the
+        // factor term means factor-1 (background/commerce) spends pay zero.
+        // See docs/design/cluster-tilted-redistribution.md.
+        let demurrage = {
+            let policy = crate::monetary::mainnet_policy();
+            let chain_height = ledger
+                .get_chain_state()
+                .map(|s| s.height)
+                .unwrap_or(0);
+            let elapsed =
+                bth_cluster_tax::ring_elapsed_centroid(&ring_members, chain_height);
+            let blocks_per_year =
+                (365 * 24 * 60 * 60) / policy.target_block_time_secs.max(1);
+            bth_cluster_tax::demurrage_charge(
+                output_sum,
+                self.fee_config.cluster_factor(cluster_wealth),
+                elapsed,
+                policy.demurrage_rate_bps(chain_height),
+                blocks_per_year,
+            )
+        };
+        let minimum_fee = base_minimum_fee.saturating_add(demurrage);
 
         if tx.fee < minimum_fee {
             let shortfall = minimum_fee.saturating_sub(tx.fee);
@@ -730,13 +756,17 @@ impl Mempool {
         Ok(tx_hash)
     }
 
-    /// Validate CLSAG (standard-private) transaction inputs
+    /// Validate CLSAG (standard-private) transaction inputs.
+    ///
+    /// Returns the potential input sum and the public (value, creation
+    /// height) of every resolved ring member — the latter feeds the
+    /// demurrage elapsed-time centroid.
     fn validate_clsag_inputs(
         &self,
         clsag_inputs: &[crate::transaction::ClsagRingInput],
         tx: &Transaction,
         ledger: &Ledger,
-    ) -> Result<u64, MempoolError> {
+    ) -> Result<(u64, Vec<(u64, u64)>), MempoolError> {
         // Check for double-spends via key images (mempool)
         for input in clsag_inputs {
             if self.spent_key_images.contains_key(&input.key_image) {
@@ -756,9 +786,11 @@ impl Mempool {
             .map_err(|_| MempoolError::InvalidSignature)?;
 
         // Validate potential input amounts from ring members
-        // Also collect ring tags for plausibility validation
+        // Also collect ring tags for plausibility validation and public
+        // (value, creation height) pairs for the demurrage centroid
         let mut potential_input_sum: u64 = 0;
         let mut all_ring_tags: Vec<(bth_transaction_types::ClusterTagVector, u64)> = Vec::new();
+        let mut ring_members: Vec<(u64, u64)> = Vec::new();
 
         for input in clsag_inputs {
             let mut max_ring_amount: u64 = 0;
@@ -770,6 +802,7 @@ impl Mempool {
                     found_any = true;
                     // Collect ring member tags and amounts for plausibility check
                     all_ring_tags.push((utxo.output.cluster_tags.clone(), utxo.output.amount));
+                    ring_members.push((utxo.output.amount, utxo.created_at));
                 }
             }
 
@@ -823,7 +856,7 @@ impl Mempool {
             });
         }
 
-        Ok(potential_input_sum)
+        Ok((potential_input_sum, ring_members))
     }
 
     /// Remove a transaction from the mempool and clear its key images.

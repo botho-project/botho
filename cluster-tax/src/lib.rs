@@ -36,6 +36,7 @@
 
 pub mod analysis;
 pub mod crypto;
+pub mod demurrage;
 pub mod dynamic_fee;
 pub mod monetary;
 pub mod signing;
@@ -68,6 +69,7 @@ pub use cluster::{ClusterId, ClusterWealth};
 pub use monetary::{DifficultyController, MonetaryPolicy, MonetaryState, MonetaryStats};
 
 pub use age_decay::{apply_age_decay, ring_cluster_factor, AgeDecayConfig, RingDecayInfo};
+pub use demurrage::{demurrage_charge, ring_elapsed_centroid};
 pub use entropy_decay::{
     apply_entropy_decay, calculate_entropy_decay, compare_decay_modes,
     conservative_entropy_delta, ring_entropy_decay, AttackResult, AttackStrategy, DecayBlockReason,

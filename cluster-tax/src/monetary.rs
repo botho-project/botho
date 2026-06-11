@@ -245,6 +245,30 @@ impl MonetaryPolicy {
         (reward as u128 * self.lottery_emission_bps(height) as u128 / 10_000) as u64
     }
 
+    /// Annual cluster demurrage rate at maximum cluster factor, in basis
+    /// points, as a deterministic function of block height.
+    ///
+    /// Zero during the bootstrap epoch (epoch 0): early UTXOs are almost
+    /// entirely miner coinbases, and demurrage proceeds would circulate
+    /// among miners while discouraging the mining that seeds the network.
+    /// From epoch 1 onward the full rate applies — the same activation
+    /// boundary as lottery emission routing.
+    ///
+    /// 200 bps (2%/year at factor 6, scaling down to 0 at factor 1) is the
+    /// rate validated by the emission-fraction sweep
+    /// (experiments/ANALYSIS.md): demurrage is load-bearing for the
+    /// Δgini > 0.05 criterion at miner-viable emission fractions.
+    ///
+    /// CONSENSUS-CRITICAL: pure integer math.
+    pub fn demurrage_rate_bps(&self, height: u64) -> u32 {
+        const DEMURRAGE_RATE_BPS: u32 = 200;
+
+        if self.halving_interval == 0 || height < self.halving_interval {
+            return 0;
+        }
+        DEMURRAGE_RATE_BPS
+    }
+
     /// Check if a given height is in Phase 1 (halving period).
     pub fn is_halving_phase(&self, height: u64) -> bool {
         height < self.tail_emission_start_height()
@@ -726,6 +750,32 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(zero_policy.lottery_emission_bps(12345), 0);
+    }
+
+    #[test]
+    fn test_demurrage_schedule() {
+        let policy = MonetaryPolicy {
+            initial_reward: 1000,
+            halving_interval: 100,
+            halving_count: 3,
+            ..Default::default()
+        };
+
+        // Epoch 0 (bootstrap): no demurrage — early UTXOs are miner
+        // coinbases and demurrage would discourage network seeding
+        assert_eq!(policy.demurrage_rate_bps(0), 0);
+        assert_eq!(policy.demurrage_rate_bps(99), 0);
+
+        // From epoch 1: full validated rate (2%/yr at factor 6)
+        assert_eq!(policy.demurrage_rate_bps(100), 200);
+        assert_eq!(policy.demurrage_rate_bps(1_000_000), 200);
+
+        // Degenerate config must not panic
+        let zero_policy = MonetaryPolicy {
+            halving_interval: 0,
+            ..Default::default()
+        };
+        assert_eq!(zero_policy.demurrage_rate_bps(12345), 0);
     }
 
     #[test]

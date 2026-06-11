@@ -153,17 +153,46 @@ state), which bounds seed-grinding gain below the PoW cost of a regrind.
 2. **Emission routing** — DONE (2026-06-11): height-scheduled reward split
    (see Emission Schedule above) with persistent carryover pool and
    per-block payout cap.
-3. **Demurrage** — REQUIRED, NOT YET IMPLEMENTED: per-UTXO accrual checked
-   at spend, `charge = value × rate × (factor−1)/(max−1) ×
-   elapsed/blocks_per_year`, added to the minimum-fee check in
-   mempool/consensus validation. Use fixed-point arithmetic (see the f64
-   consensus-fee finding in `audits/2026-01-03-cycle5.md`). The
-   emission-fraction sweep shows the mechanism does not pass the Δgini
-   criterion without it at miner-viable emission fractions.
+3. **Demurrage** — IMPLEMENTED (2026-06-11), spend-time accrual variant:
+   `charge = value × rate × (factor−1)/(max−1) × elapsed/blocks_per_year`,
+   added to the mempool minimum-fee check; proceeds flow through the
+   standard fee split into the lottery pool. Pure integer arithmetic
+   (`cluster-tax/src/demurrage.rs`).
+
+   *Ring-signature anchor*: the real input is hidden, so `elapsed` is the
+   value-weighted centroid of the PUBLIC creation heights of all ring
+   members. Properties: a large real input dominates its own ring's
+   centroid (fresh small decoys barely move it); factor-1 spenders pay
+   exactly zero, so old decoys can never overcharge small users; churning
+   resets the clock but pays the accrual first, so total paid is invariant
+   to churn frequency. Residual gaming: a whale with access to *large,
+   fresh* decoy UTXOs can partially dilute its centroid — bounded by the
+   availability of such UTXOs and by the tag-plausibility check
+   constraining the same ring.
+
+   *Schedule*: 0 bps during the bootstrap epoch (same rationale as emission
+   routing), 200 bps (2%/yr at factor 6) from epoch 1
+   (`MonetaryPolicy::demurrage_rate_bps`).
+
+   **Known divergence from the validating simulation**: the sweep modeled
+   demurrage as a continuous daily charge on balances; the implementation
+   charges accrual at spend. Total paid over any holding period is
+   identical *for coins that eventually move*, but a permanently parked
+   coin pays nothing until spent (it suffers only emission dilution).
+   The validated Δgini figures therefore need re-confirmation with
+   spend-time accrual modeled — see Open Questions.
 4. **Whitepaper §10** — DONE (2026-06-11): uniform-selection claims
    corrected to cluster-tilted formula and empirical results.
 
 ## Open Questions
+
+0. **Spend-time demurrage re-validation (REQUIRED before mainnet,
+   tracked in #314)**: re-run the experiment with demurrage
+   accrued-at-spend instead of charged daily, including a "permanent
+   parker" strategy that never spends. Hypothesis: results hold for
+   circulating wealth (churn invariance) and parked wealth is handled by
+   emission dilution + deferred-but-inescapable accrual, but this must be
+   measured, not assumed.
 
 1. **Tilt curve shape**: linear (max−f+1)/max vs quadratic — quantify
    privacy-bits-leaked vs Gini-per-year on the same harness.

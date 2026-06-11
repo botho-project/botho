@@ -108,8 +108,28 @@ pub fn run(
     let num_memos = if memo.is_some() { 1 } else { 0 };
     let fee = fee_config.estimate_typical_fee(tx_type, cluster_wealth, num_memos);
 
+    // Estimate cluster demurrage (holding charge on wealthy-cluster coins,
+    // enforced by the mempool). Conservative: use the oldest wallet UTXO's
+    // age, since UTXO selection happens below. Factor-1 wallets pay zero.
+    let demurrage = {
+        let policy = crate::monetary::mainnet_policy();
+        let max_elapsed = utxos
+            .iter()
+            .map(|u| state.height.saturating_sub(u.created_at))
+            .max()
+            .unwrap_or(0);
+        let blocks_per_year = (365 * 24 * 60 * 60) / policy.target_block_time_secs.max(1);
+        bth_cluster_tax::demurrage_charge(
+            amount,
+            fee_config.cluster_factor(cluster_wealth),
+            max_elapsed,
+            policy.demurrage_rate_bps(state.height),
+            blocks_per_year,
+        )
+    };
+
     // Ensure minimum fee of at least 1 picocredit
-    let fee = fee.max(1);
+    let fee = fee.saturating_add(demurrage).max(1);
 
     let total_balance: u64 = utxos.iter().map(|u| u.output.amount).sum();
     let required = amount + fee;
