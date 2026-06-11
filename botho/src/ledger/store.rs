@@ -1864,9 +1864,10 @@ impl Ledger {
                             weighted += (entry.weight as u128) * (global as u128);
                         }
                         let effective_wealth = (weighted / TAG_WEIGHT_SCALE as u128) as u64;
-                        // factor() returns FACTOR_SCALE units (1000..6000)
-                        let cluster_factor =
-                            factor_curve.factor(effective_wealth) as f64 / 1000.0;
+                        // factor() returns FACTOR_SCALE units (1000..6000),
+                        // which LotteryCandidate uses directly (integer
+                        // fixed-point, consensus-deterministic)
+                        let cluster_factor = factor_curve.factor(effective_wealth);
 
                         let candidate = LotteryCandidate::new(
                             utxo_id,

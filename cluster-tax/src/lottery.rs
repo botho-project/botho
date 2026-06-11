@@ -100,6 +100,12 @@ impl Default for SelectionMode {
     }
 }
 
+/// Fixed-point scale for cluster factors (1000 = 1.0x, 6000 = 6.0x).
+pub const FACTOR_SCALE: u64 = 1000;
+
+/// Maximum cluster factor in FACTOR_SCALE units (6.0x).
+pub const MAX_FACTOR_SCALED: u64 = 6 * FACTOR_SCALE;
+
 /// A UTXO eligible for lottery participation.
 #[derive(Clone, Debug)]
 pub struct LotteryCandidate {
@@ -107,9 +113,11 @@ pub struct LotteryCandidate {
     pub id: [u8; 36],
     /// UTXO value in base units
     pub value: u64,
-    /// Cluster factor (1.0 to 6.0)
-    pub cluster_factor: f64,
-    /// Tag entropy in bits (from TagVector::cluster_entropy())
+    /// Cluster factor in FACTOR_SCALE units (1000 = 1.0x to 6000 = 6.0x)
+    pub cluster_factor: u64,
+    /// Tag entropy in bits (from TagVector::cluster_entropy()).
+    /// NOT consensus-safe (computed via floating-point log2); only used by
+    /// the research-only EntropyWeighted mode.
     pub tag_entropy: f64,
     /// Block height when UTXO was created
     pub creation_block: u64,
@@ -117,17 +125,20 @@ pub struct LotteryCandidate {
 
 impl LotteryCandidate {
     /// Create a new lottery candidate.
+    ///
+    /// `cluster_factor` is in FACTOR_SCALE units (1000..=6000), as produced
+    /// by `ClusterFactorCurve::factor()`. Out-of-range values are clamped.
     pub fn new(
         id: [u8; 36],
         value: u64,
-        cluster_factor: f64,
+        cluster_factor: u64,
         tags: &TagVector,
         creation_block: u64,
     ) -> Self {
         Self {
             id,
             value,
-            cluster_factor,
+            cluster_factor: cluster_factor.clamp(FACTOR_SCALE, MAX_FACTOR_SCALED),
             tag_entropy: tags.cluster_entropy(),
             creation_block,
         }
@@ -139,33 +150,46 @@ impl LotteryCandidate {
         age >= config.min_utxo_age && self.value >= config.min_utxo_value
     }
 
-    /// Calculate lottery weight based on selection mode.
-    pub fn weight(&self, mode: SelectionMode, max_value: u64) -> f64 {
+    /// Calculate the lottery weight based on selection mode.
+    ///
+    /// CONSENSUS-CRITICAL: weights are pure integer arithmetic so that every
+    /// validator computes bit-identical draws on any platform. Weights are
+    /// only meaningful relative to other candidates under the same mode, so
+    /// common scale constants are not divided out.
+    ///
+    /// `EntropyWeighted` is research-only: its entropy input comes from
+    /// floating-point log2 and must not be used in consensus.
+    pub fn weight(&self, mode: SelectionMode, max_value: u64) -> u128 {
         match mode {
-            SelectionMode::Uniform => 1.0,
+            SelectionMode::Uniform => 1,
 
-            SelectionMode::ValueWeighted => self.value as f64,
+            SelectionMode::ValueWeighted => self.value as u128,
 
             SelectionMode::Hybrid { alpha } => {
-                let norm_value = if max_value > 0 {
-                    self.value as f64 / max_value as f64
-                } else {
-                    0.0
-                };
-                alpha + (1.0 - alpha) * norm_value
+                // weight = alpha + (1 - alpha) × value/max_value, scaled by
+                // max_value × 10_000: alpha quantized to basis points (the
+                // config constant must be identical across nodes, so the
+                // f64→bps conversion is deterministic).
+                let alpha_bps = (alpha.clamp(0.0, 1.0) * 10_000.0).round() as u128;
+                alpha_bps * max_value.max(1) as u128
+                    + (10_000 - alpha_bps) * self.value as u128
             }
 
             SelectionMode::ClusterWeighted => {
-                // weight = value × (max_factor - factor + 1) / max_factor
-                const MAX_FACTOR: f64 = 6.0;
-                let factor_bonus = (MAX_FACTOR - self.cluster_factor + 1.0) / MAX_FACTOR;
-                self.value as f64 * factor_bonus
+                // weight = value × (max_factor − factor + 1), in FACTOR_SCALE
+                // units: value × (6000 − factor + 1000). A factor-1.0 coin
+                // has 6x the per-value weight of a factor-6.0 coin.
+                let factor = self.cluster_factor.clamp(FACTOR_SCALE, MAX_FACTOR_SCALED);
+                self.value as u128 * (MAX_FACTOR_SCALED - factor + FACTOR_SCALE) as u128
             }
 
             SelectionMode::EntropyWeighted { entropy_bonus } => {
-                // weight = value × (1 + entropy_bonus × tag_entropy)
-                let entropy_factor = 1.0 + entropy_bonus * self.tag_entropy;
-                self.value as f64 * entropy_factor
+                // RESEARCH ONLY (not consensus-safe): entropy comes from
+                // floating-point log2. weight = value × (1 + bonus × entropy)
+                // in micro-units.
+                let entropy_millibits = (self.tag_entropy.max(0.0) * 1000.0).round() as u128;
+                let bonus_bps = (entropy_bonus.max(0.0) * 10_000.0).round() as u128;
+                self.value as u128 * (1_000_000 + bonus_bps * entropy_millibits / 10)
             }
         }
     }
@@ -227,15 +251,17 @@ pub fn draw_winners(
     // Calculate max value for normalization (used by Hybrid mode)
     let max_value = eligible.iter().map(|c| c.value).max().unwrap_or(1);
 
-    // Calculate weights for all candidates
-    let weights: Vec<(&LotteryCandidate, f64)> = eligible
+    // Calculate weights for all candidates.
+    // CONSENSUS-CRITICAL: pure integer arithmetic — every validator must
+    // compute bit-identical draws on any platform.
+    let weights: Vec<(&LotteryCandidate, u128)> = eligible
         .iter()
         .map(|c| (*c, c.weight(config.selection_mode, max_value)))
         .collect();
 
-    let total_weight: f64 = weights.iter().map(|(_, w)| *w).sum();
+    let total_weight: u128 = weights.iter().map(|(_, w)| *w).sum();
 
-    if total_weight <= 0.0 {
+    if total_weight == 0 {
         return None;
     }
 
@@ -247,11 +273,13 @@ pub fn draw_winners(
     let mut used_indices = std::collections::HashSet::new();
 
     for i in 0..num_winners {
-        // Generate deterministic random value for this selection
-        let roll = verifiable_random(&seed, i as u64, total_weight);
+        // Deterministic 128-bit roll in [0, total_weight). The modulo bias
+        // is at most total_weight / 2^128 — negligible and, crucially,
+        // identical on every platform.
+        let roll = verifiable_random_u128(&seed, i as u64) % total_weight;
 
         // Select winner based on cumulative weights
-        let mut cumulative = 0.0;
+        let mut cumulative: u128 = 0;
         for (idx, (candidate, weight)) in weights.iter().enumerate() {
             if used_indices.contains(&idx) {
                 continue; // Skip already-selected winners
@@ -331,25 +359,22 @@ fn generate_seed(block_hash: &[u8; 32], block_height: u64) -> [u8; 32] {
     hasher.finalize().into()
 }
 
-/// Generate a verifiable random f64 in range [0, max).
-fn verifiable_random(seed: &[u8; 32], index: u64, max: f64) -> f64 {
+/// Generate a verifiable random u128 from the seed and selection index.
+fn verifiable_random_u128(seed: &[u8; 32], index: u64) -> u128 {
     let mut hasher = Sha256::new();
     hasher.update(seed);
     hasher.update(index.to_le_bytes());
     let hash: [u8; 32] = hasher.finalize().into();
 
-    // Convert first 8 bytes to u64, then to f64 in [0, 1)
-    let rand_u64 = u64::from_le_bytes(hash[0..8].try_into().unwrap());
-    let rand_f64 = (rand_u64 as f64) / (u64::MAX as f64);
-
-    rand_f64 * max
+    u128::from_le_bytes(hash[0..16].try_into().unwrap())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn make_candidate(id: u8, value: u64, factor: f64, entropy: f64, block: u64) -> LotteryCandidate {
+    /// `factor` is in FACTOR_SCALE units (1000 = 1.0x .. 6000 = 6.0x).
+    fn make_candidate(id: u8, value: u64, factor: u64, entropy: f64, block: u64) -> LotteryCandidate {
         let mut utxo_id = [0u8; 36];
         utxo_id[0] = id;
         LotteryCandidate {
@@ -379,15 +404,15 @@ mod tests {
         let current_block = 1000;
 
         // Too young
-        let young = make_candidate(1, 1_000_000, 1.0, 0.0, 500);
+        let young = make_candidate(1, 1_000_000, 1000, 0.0, 500);
         assert!(!young.is_eligible(current_block, &config));
 
         // Old enough
-        let old = make_candidate(2, 1_000_000, 1.0, 0.0, 100);
+        let old = make_candidate(2, 1_000_000, 1000, 0.0, 100);
         assert!(old.is_eligible(current_block, &config));
 
         // Too small
-        let small = make_candidate(3, 100, 1.0, 0.0, 100);
+        let small = make_candidate(3, 100, 1000, 0.0, 100);
         assert!(!small.is_eligible(current_block, &config));
     }
 
@@ -397,16 +422,16 @@ mod tests {
         let max_value = 100_000;
 
         // Small UTXO: gets proportionally more weight per value
-        let small = make_candidate(1, 10_000, 1.0, 0.0, 0);
+        let small = make_candidate(1, 10_000, 1000, 0.0, 0);
         let small_weight = small.weight(mode, max_value);
 
         // Large UTXO: gets less weight per value
-        let large = make_candidate(2, 100_000, 1.0, 0.0, 0);
+        let large = make_candidate(2, 100_000, 1000, 0.0, 0);
         let large_weight = large.weight(mode, max_value);
 
         // Weight per value ratio should favor small holder
-        let small_per_value = small_weight / small.value as f64;
-        let large_per_value = large_weight / large.value as f64;
+        let small_per_value = small_weight as f64 / small.value as f64;
+        let large_per_value = large_weight as f64 / large.value as f64;
 
         assert!(
             small_per_value > large_per_value,
@@ -419,15 +444,13 @@ mod tests {
         let mode = SelectionMode::ValueWeighted;
         let max_value = 100_000;
 
-        let small = make_candidate(1, 10_000, 1.0, 0.0, 0);
-        let large = make_candidate(2, 100_000, 1.0, 0.0, 0);
+        let small = make_candidate(1, 10_000, 1000, 0.0, 0);
+        let large = make_candidate(2, 100_000, 1000, 0.0, 0);
 
-        // Weight per value should be equal (1:1)
-        let small_per_value = small.weight(mode, max_value) / small.value as f64;
-        let large_per_value = large.weight(mode, max_value) / large.value as f64;
-
-        assert!(
-            (small_per_value - large_per_value).abs() < 0.001,
+        // Weight per value should be equal (1:1) — exact in integer math
+        assert_eq!(
+            small.weight(mode, max_value) * large.value as u128,
+            large.weight(mode, max_value) * small.value as u128,
             "ValueWeighted should have equal weight per value"
         );
     }
@@ -438,8 +461,8 @@ mod tests {
         let max_value = 100_000;
 
         // Same value, different cluster factors
-        let low_factor = make_candidate(1, 50_000, 1.0, 0.0, 0);
-        let high_factor = make_candidate(2, 50_000, 5.0, 0.0, 0);
+        let low_factor = make_candidate(1, 50_000, 1000, 0.0, 0);
+        let high_factor = make_candidate(2, 50_000, 5000, 0.0, 0);
 
         assert!(
             low_factor.weight(mode, max_value) > high_factor.weight(mode, max_value),
@@ -453,8 +476,8 @@ mod tests {
         let max_value = 100_000;
 
         // Same value, different entropy
-        let low_entropy = make_candidate(1, 50_000, 1.0, 0.0, 0);
-        let high_entropy = make_candidate(2, 50_000, 1.0, 2.0, 0);
+        let low_entropy = make_candidate(1, 50_000, 1000, 0.0, 0);
+        let high_entropy = make_candidate(2, 50_000, 1000, 2.0, 0);
 
         assert!(
             high_entropy.weight(mode, max_value) > low_entropy.weight(mode, max_value),
@@ -472,8 +495,8 @@ mod tests {
 
         assert_eq!(seed1, seed2, "Same inputs should produce same seed");
 
-        let roll1 = verifiable_random(&seed1, 0, 100.0);
-        let roll2 = verifiable_random(&seed2, 0, 100.0);
+        let roll1 = verifiable_random_u128(&seed1, 0);
+        let roll2 = verifiable_random_u128(&seed2, 0);
 
         assert_eq!(roll1, roll2, "Same seed should produce same roll");
     }
@@ -482,8 +505,8 @@ mod tests {
     fn test_verifiable_randomness_different_index() {
         let seed = [1u8; 32];
 
-        let roll0 = verifiable_random(&seed, 0, 100.0);
-        let roll1 = verifiable_random(&seed, 1, 100.0);
+        let roll0 = verifiable_random_u128(&seed, 0);
+        let roll1 = verifiable_random_u128(&seed, 1);
 
         assert_ne!(roll0, roll1, "Different indices should produce different rolls");
     }
@@ -498,9 +521,9 @@ mod tests {
         };
 
         let candidates = vec![
-            make_candidate(1, 10_000, 1.0, 0.0, 0),
-            make_candidate(2, 20_000, 1.0, 0.0, 0),
-            make_candidate(3, 30_000, 1.0, 0.0, 0),
+            make_candidate(1, 10_000, 1000, 0.0, 0),
+            make_candidate(2, 20_000, 1000, 0.0, 0),
+            make_candidate(3, 30_000, 1000, 0.0, 0),
         ];
 
         let block_hash = [0u8; 32];
@@ -521,7 +544,7 @@ mod tests {
     fn test_draw_no_eligible() {
         let config = LotteryDrawConfig::default();
         let candidates = vec![
-            make_candidate(1, 10_000, 1.0, 0.0, 999), // Too young
+            make_candidate(1, 10_000, 1000, 0.0, 999), // Too young
         ];
 
         let block_hash = [0u8; 32];
@@ -540,9 +563,9 @@ mod tests {
         };
 
         let candidates = vec![
-            make_candidate(1, 10_000, 1.0, 0.0, 0),
-            make_candidate(2, 20_000, 1.0, 0.0, 0),
-            make_candidate(3, 30_000, 1.0, 0.0, 0),
+            make_candidate(1, 10_000, 1000, 0.0, 0),
+            make_candidate(2, 20_000, 1000, 0.0, 0),
+            make_candidate(3, 30_000, 1000, 0.0, 0),
         ];
 
         let block_hash = [42u8; 32];
@@ -565,19 +588,20 @@ mod tests {
         };
 
         // One large UTXO
-        let large = make_candidate(1, 100_000, 1.0, 0.0, 0);
+        let large = make_candidate(1, 100_000, 1000, 0.0, 0);
         let large_weight = large.weight(config.selection_mode, 100_000);
 
         // Same value split into 10 UTXOs
-        let small_weight: f64 = (0..10)
+        let small_weight: u128 = (0..10)
             .map(|i| {
-                let c = make_candidate(i, 10_000, 1.0, 0.0, 0);
+                let c = make_candidate(i, 10_000, 1000, 0.0, 0);
                 c.weight(config.selection_mode, 100_000)
             })
             .sum();
 
-        // Splitting should give some advantage (α=0.3 → 3.84x expected)
-        let gaming_ratio = small_weight / large_weight;
+        // Splitting should give some advantage (α=0.3 → 3.84x expected).
+        // This is exactly why Hybrid is NOT the consensus default.
+        let gaming_ratio = small_weight as f64 / large_weight as f64;
 
         assert!(
             gaming_ratio > 1.0 && gaming_ratio < 5.0,

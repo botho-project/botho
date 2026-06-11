@@ -272,13 +272,7 @@ pub fn utxo_to_candidate(
     tags: &TagVector,
     creation_block: u64,
 ) -> LotteryCandidate {
-    LotteryCandidate::new(
-        utxo_id,
-        value,
-        cluster_factor as f64 / 1000.0,
-        tags,
-        creation_block,
-    )
+    LotteryCandidate::new(utxo_id, value, cluster_factor, tags, creation_block)
 }
 
 /// Lottery state tracking across blocks.
@@ -512,7 +506,7 @@ mod tests {
         let mut utxo_id = [0u8; 36];
         utxo_id[0] = id;
         let empty_tags = TagVector::new();
-        LotteryCandidate::new(utxo_id, value, 1.0, &empty_tags, creation_block)
+        LotteryCandidate::new(utxo_id, value, 1000, &empty_tags, creation_block)
     }
 
     #[test]
