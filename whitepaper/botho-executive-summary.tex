@@ -96,7 +96,9 @@ coin \emph{ancestry}, not current ownership---preserves privacy.
 
 \textbf{Fee distribution}:
 \begin{itemize}
-\item 80\% redistributed via lottery to random UTXO (favors small holders statistically)
+\item 80\% redistributed via cluster-tilted lottery: winner weight is UTXO
+  value scaled by inverse cluster factor, so payouts favor coins from
+  low-wealth clusters while remaining immune to splitting strategies
 \item 20\% burned (creates deflationary pressure proportional to usage)
 \end{itemize}
 

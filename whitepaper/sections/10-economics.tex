@@ -101,11 +101,15 @@ by reducing supply:
 
 \textbf{Progressive properties of lottery selection}:
 \begin{itemize}
-  \item Random UTXO selection statistically favors many small holders over
-    few large holders
-  \item Self-custody users (many UTXOs) receive more than custodial users
-    (few UTXOs holding many users' funds)
-  \item Net effect: redistribution from exchanges to individuals
+  \item Winner weight is $w_i = v_i \times (\phi_{\max} - \phi_i + 1) /
+    \phi_{\max}$: value-weighted (splitting a position never increases total
+    weight) and tilted $\phi_{\max}$:1 toward coins from low-wealth clusters
+  \item No payout term depends on UTXO count, account count, or any other
+    structure a holder controls for free --- the tilt depends only on
+    cluster provenance, which is inherited through splits
+  \item Net effect: redistribution from wealthy clusters toward commerce and
+    background coins, robust to splitting strategies
+    (Section~\ref{sec:economic-modeling})
 \end{itemize}
 
 \subsubsection{Anti-Hoarding Dynamics}
@@ -124,9 +128,12 @@ Creates net pressure toward circulation:
 \text{holding\_cost} = \text{dilution} - \text{lottery\_income} + \text{opportunity\_cost}
 \end{equation}
 
-Users with more UTXOs (typically from active participation) receive more
-lottery income, partially offsetting dilution. Large holders with few UTXOs
-experience full dilution with minimal lottery income.
+Holders of low-factor coins (typically acquired through genuine commerce)
+receive proportionally more lottery income, partially offsetting dilution.
+Wealthy clusters experience full dilution with tilted-down lottery income.
+Holding-side pressure cannot be escaped structurally: splitting does not
+change cluster attribution, and shedding attribution through artificial
+transfers is rate-bounded by tag decay (Section~\ref{sec:security}).
 
 \subsection{Game-Theoretic Analysis}
 
@@ -255,100 +262,85 @@ Dynamic timing & No & Yes \\
 This section presents formal modeling and simulation results for \Botho's
 economic mechanisms.
 
-\subsubsection{Progressive Fee Impact on Wealth Distribution}
+\subsubsection{Adversarial Redistribution Simulation}
+\label{sec:gini-experiment}
 
-We model wealth distribution evolution under progressive fees using a
-Markov chain on the Gini coefficient. Let $G_t$ denote the Gini coefficient
-at time $t$:
+We validate the redistribution design with an agent-based simulation in
+which every candidate mechanism is tested twice: once with honest
+participants, and once against a \emph{strategic whale} that splits its
+position into 1{,}000 UTXOs and churns them periodically to maintain
+lottery eligibility --- the optimal known gaming strategy. A mechanism's
+redistributive effect is only credited in the \emph{gamed} equilibrium.
 
-\begin{equation}
-G_{t+1} = G_t - \alpha \cdot f(G_t) + \beta \cdot g(V_t) + \epsilon_t
-\end{equation}
-
-where:
-\begin{itemize}
-  \item $f(G_t) = G_t^2 \cdot k_{\text{prog}}$ captures progressive fee redistribution effect
-  \item $g(V_t) = V_t / V_{\max}$ models transaction volume $V_t$
-  \item $k_{\text{prog}} \approx 0.02$ is the progressive fee strength coefficient
-  \item $\epsilon_t$ represents exogenous wealth shocks
-\end{itemize}
-
-\textbf{Simulation parameters}:
-\begin{itemize}
-  \item Initial Gini: $G_0 = 0.85$ (comparable to Bitcoin/Monero)
-  \item Simulation horizon: 10 years (3.15M blocks)
-  \item Transaction rate: 10 tx/s average
-  \item Monte Carlo iterations: 10,000
-\end{itemize}
-
-\textbf{Results}: Under baseline assumptions, the equilibrium Gini coefficient
-converges to $G^* \approx 0.65$ (95\% CI: [0.58, 0.72]), representing a 23\%
-reduction from initial conditions. This occurs through:
+\textbf{Setup}: 100M BTH economy; 80 small holders (5\% of wealth, cluster
+factor 1$\times$), 30 mid holders (25\%, 2$\times$), 9 honest whales (65\%,
+6$\times$), 1 strategic whale (5\%, 6$\times$); initial Gini $G_0 = 0.77$.
+Conservative parameters: 2.5\%/yr of supply routed from tail emission to
+the lottery, 2\%/yr demurrage at factor 6, linear 6:1 payout tilt. Design
+criterion: $\Delta G > 0.05$ versus the no-redistribution baseline.
+Reproducible via \texttt{cluster-tax-sim lottery-experiment}.
 
 \begin{table}[h]
 \centering
-\caption{Gini coefficient evolution simulation}
-\label{tab:gini-sim}
-\begin{tabular}{@{}lcccc@{}}
+\caption{Five-year Gini change vs.\ baseline, honest and gamed}
+\label{tab:gini-experiment}
+\begin{tabular}{@{}lcc@{}}
 \toprule
-\textbf{Year} & \textbf{Mean $G$} & \textbf{Std Dev} & \textbf{Min} & \textbf{Max} \\
+\textbf{Payout mechanism} & \textbf{Honest} & \textbf{Gamed} \\
 \midrule
-0 & 0.850 & 0.000 & 0.850 & 0.850 \\
-1 & 0.812 & 0.021 & 0.758 & 0.869 \\
-3 & 0.745 & 0.035 & 0.654 & 0.831 \\
-5 & 0.695 & 0.042 & 0.592 & 0.798 \\
-10 & 0.651 & 0.047 & 0.545 & 0.762 \\
+Uniform per UTXO + emission & $+0.177$ & $\mathbf{-0.026}$ \\
+Value-weighted + emission & $-0.001$ & $-0.001$ \\
+Cluster demurrage only & $+0.008$ & $+0.009$ \\
+Cluster-tilted + emission & $+0.054$ & $+0.055$ \\
+\textbf{Cluster-tilted + emission + demurrage} & $\mathbf{+0.078}$ & robust \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\textbf{Sensitivity analysis}: The redistribution effect is most sensitive to
-transaction volume. At 1 tx/s (low adoption), Gini reduction is only 8\%. At
-100 tx/s (high adoption), reduction reaches 35\%.
+Three structural results:
 
-\subsubsection{Monte Carlo Lottery Analysis}
+\begin{enumerate}
+  \item \textbf{Per-UTXO payouts invert under gaming.} The uniform lottery
+    is the strongest redistributor in the honest world and the worst
+    mechanism overall in the gamed one: the strategic whale captures the
+    payout stream, growing from 5\% to 24\% of supply in five years while
+    the Gini coefficient \emph{rises}. UTXO count is a free variable;
+    nothing may be paid on it.
+  \item \textbf{Emission with proportional payout is exactly Gini-neutral},
+    confirming that dilution redistributed in proportion to wealth changes
+    nothing --- the payout must be tilted.
+  \item \textbf{Cluster-anchored mechanisms are split-invariant.} Under the
+    cluster-tilted lottery the gamed run shows marginally \emph{more}
+    redistribution than the honest run: the attacker's splitting and churn
+    fees feed the lottery pool, while costing the attacker $\sim$19\% of its
+    position over five years. Attacking the mechanism funds it.
+\end{enumerate}
 
-The lottery mechanism distributes 80\% of transaction fees to random UTXOs.
-We analyze the statistical properties of this redistribution.
-
-\textbf{Model}. Let a user hold $n$ UTXOs out of $N$ total. Each lottery
-payment (with fee $F$) selects $k$ winning UTXOs uniformly at random. The
-expected lottery income per payment is:
+\textbf{Expected lottery income under cluster tilt}. For a holder with
+value $v$ in coins of cluster factor $\phi$, expected income per
+distribution of pool $P$ is:
 
 \begin{equation}
-E[\text{income}] = \frac{0.8 F \cdot k \cdot n}{N}
+E[\text{income}] = P \cdot
+\frac{v \, (\phi_{\max} - \phi + 1)}
+     {\sum_j v_j \, (\phi_{\max} - \phi_j + 1)}
 \end{equation}
 
-\textbf{Variance analysis}. The variance of lottery income is:
+This is independent of how $v$ is divided across UTXOs. A factor-1 holder
+earns $\phi_{\max} = 6$ times the per-value income of a factor-6 holder;
+the only way to improve one's tilt is to reduce $\phi$, which requires
+genuine commerce (tag decay is rate-bounded; see
+Section~\ref{sec:security}).
 
-\begin{equation}
-\text{Var}[\text{income}] = \frac{(0.8 F)^2 \cdot k \cdot n \cdot (N - n)}{N^2 \cdot (N - 1)}
-\end{equation}
-
-For small holdings ($n \ll N$), variance scales linearly with $n$, making
-returns predictable over time via the law of large numbers.
-
-\textbf{Simulation results} (1M blocks, $N = 10^6$ UTXOs, $k = 5$):
-
-\begin{table}[h]
-\centering
-\caption{Lottery income by UTXO count}
-\label{tab:lottery-sim}
-\begin{tabular}{@{}lcccc@{}}
-\toprule
-\textbf{UTXOs Held} & \textbf{Mean Income} & \textbf{Std Dev} & \textbf{CV} & \textbf{Win Prob/Block} \\
-\midrule
-10 & 4.0 $\mu$BTH/block & 2.8 & 70\% & $5 \times 10^{-5}$ \\
-100 & 40 $\mu$BTH/block & 8.9 & 22\% & $5 \times 10^{-4}$ \\
-1,000 & 400 $\mu$BTH/block & 28 & 7\% & $5 \times 10^{-3}$ \\
-10,000 & 4.0 mBTH/block & 89 & 2.2\% & $5 \times 10^{-2}$ \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\textbf{Key finding}: Small holders receive lottery income with high variance
-but positive expected value. Over 10,000 blocks, 99\% of users with $\geq 10$
-UTXOs receive \textit{some} lottery income.
+\textbf{Magnitude and headroom}. At the conservative parameters above, the
+combined mechanism reduces Gini by $\approx 0.08$ per five years in the
+adversarial equilibrium ($0.77 \to 0.68$), passing the design criterion.
+All three levers have headroom --- steeper (quadratic) tilt, higher
+demurrage, larger emission fraction --- with quantified costs in payout
+privacy, holding ergonomics, and miner security budget respectively. The
+fee-only configuration (no emission routing, no demurrage) yields
+$+0.02$/5yr: transaction fees are a consumption tax and cannot by
+themselves touch idle wealth at realistic velocities.
 
 \subsubsection{Formal Nash Equilibrium Analysis}
 

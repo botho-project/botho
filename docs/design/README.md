@@ -17,7 +17,8 @@ This section contains design proposals, roadmaps, and technical specifications f
 
 | Document | Status | Description |
 |----------|--------|-------------|
-| [Asymmetric UTXO Fees](asymmetric-utxo-fees.md) | Research | Combined mechanism: asymmetric fees + value-weighted lottery + eligibility decay. Sweep result: attack-resistant but zero Gini reduction |
+| [Cluster-Tilted Redistribution](cluster-tilted-redistribution.md) | Proposed | Validated design: cluster-tilted lottery + emission routing + demurrage. Passes Δgini > 0.05 in gamed equilibrium |
+| [Asymmetric UTXO Fees](asymmetric-utxo-fees.md) | Superseded | Combined mechanism: attack-resistant but zero Gini reduction (see sweep). Redistribution goals superseded by cluster-tilted design |
 | [Asymmetric Fees Simulation](asymmetric-fees-simulation.md) | Executed | Sweep run 2026-06-11: attack resistance PASS, Gini reduction FAIL |
 | [Lottery Redistribution](lottery-redistribution.md) | Reference | Background analysis of lottery trade-offs |
 

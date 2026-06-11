@@ -212,14 +212,25 @@ Transaction fees are split between redistribution and burning:
 This creates:
 
 \begin{itemize}
-  \item \textbf{Progressive redistribution}: Random UTXO selection statistically
-    favors the many (small holders) over the few (large holders)
-  \item \textbf{Anti-custodial incentive}: Exchanges holding user funds in few
-    UTXOs receive less redistribution than self-custody users with many UTXOs
+  \item \textbf{Progressive redistribution}: Winner selection is
+    \emph{cluster-tilted} --- weighted by UTXO value scaled by the inverse
+    cluster factor --- so payouts flow preferentially toward coins from
+    low-wealth clusters
+  \item \textbf{Split-invariance}: Because weights are value-based, splitting
+    a position into many UTXOs never increases total lottery weight; payouts
+    are never a function of UTXO count, which the holder controls for free
   \item \textbf{Deflationary pressure}: 20\% burn creates supply reduction
   \item \textbf{Anti-MEV}: No miner incentive to reorder transactions
   \item \textbf{Alignment}: Miner income comes from block rewards only
 \end{itemize}
+
+Earlier designs weighted winner selection uniformly per UTXO. Adversarial
+simulation (Section~\ref{sec:economic-modeling}) shows any per-UTXO payout
+term is a subsidy to whoever splits hardest: a strategic holder that splits
+and churns UTXOs captures the payout stream and inequality \emph{rises}.
+Cluster tags are the only split-invariant progressive signal available in an
+anonymous-value system, so both the fee multiplier (intake) and the lottery
+tilt (payout) are anchored to them.
 
 \input{figures/fee-flow}
 
@@ -230,7 +241,13 @@ For each transaction:
 \begin{enumerate}
   \item Calculate fee $f$ based on cluster factor and transaction size
   \item Burn $0.2f$ (20\%)
-  \item Select 4 random UTXOs weighted by eligibility criteria
+  \item Select 4 winning UTXOs with probability proportional to
+    \begin{equation}
+    w_i = v_i \times \frac{\phi_{\max} - \phi_i + 1}{\phi_{\max}}
+    \end{equation}
+    where $v_i$ is the UTXO value and $\phi_i \in [1, \phi_{\max}]$ its
+    cluster factor (cluster-tilted selection: a factor-1 coin has
+    $\phi_{\max} = 6$ times the per-value weight of a factor-6 coin)
   \item Distribute $0.2f$ to each selected UTXO (80\% total)
 \end{enumerate}
 
