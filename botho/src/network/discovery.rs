@@ -153,6 +153,17 @@ impl ProtocolVersion {
         false
     }
 
+    /// Check consensus compatibility: major versions must match.
+    ///
+    /// Major version bumps mark consensus-breaking changes; peers on a
+    /// different major are DISCONNECTED (this is what makes a coordinated
+    /// upgrade enforceable — old nodes are excluded from the new network
+    /// rather than silently diverging). Minor/patch differences within the
+    /// same major only warn, allowing graceful soft-fork upgrades.
+    pub fn is_consensus_compatible(&self, other: &Self) -> bool {
+        self.major == other.major
+    }
+
     /// Create agent version string for libp2p identify protocol.
     pub fn to_agent_string(&self, block_version: u32) -> String {
         format!(
@@ -249,6 +260,16 @@ pub enum NetworkEvent {
         peer: PeerId,
         peer_version: ProtocolVersion,
         min_version: ProtocolVersion,
+    },
+    /// A peer with a consensus-incompatible protocol version (different
+    /// major) was detected. The caller MUST disconnect this peer: major
+    /// version bumps mark consensus-breaking changes, and keeping such
+    /// peers connected risks silent divergence instead of a clean
+    /// coordinated upgrade.
+    PeerVersionIncompatible {
+        peer: PeerId,
+        peer_version: ProtocolVersion,
+        local_version: ProtocolVersion,
     },
     /// New peer addresses received via PEX (connect to these)
     PexAddresses(Vec<Multiaddr>),
@@ -1096,6 +1117,7 @@ impl NetworkDiscovery {
                 // Parse the agent_version to extract protocol version
                 let peer_version = ProtocolVersion::parse(&info.agent_version);
                 let min_version = ProtocolVersion::parse(MIN_SUPPORTED_PROTOCOL_VERSION);
+                let local_version = ProtocolVersion::parse(PROTOCOL_VERSION);
 
                 let version_warning = match (&peer_version, &min_version) {
                     (Some(pv), Some(mv)) => !pv.is_compatible_with(mv),
@@ -1112,6 +1134,27 @@ impl NetworkDiscovery {
                     entry.version_warning = version_warning;
                     entry.transport_capabilities = transport_caps.clone();
                     entry.last_seen = std::time::Instant::now();
+                }
+
+                // Consensus incompatibility (different major): the caller
+                // must disconnect. Major bumps mark consensus-breaking
+                // changes; this check is what makes coordinated upgrades
+                // enforceable instead of silently divergent.
+                if let (Some(pv), Some(lv)) = (&peer_version, &local_version) {
+                    if !pv.is_consensus_compatible(lv) {
+                        warn!(
+                            %peer_id,
+                            peer_version = %pv,
+                            local_version = %lv,
+                            "Peer protocol major version is consensus-incompatible; disconnecting"
+                        );
+                        self.peers.remove(&peer_id);
+                        return Some(NetworkEvent::PeerVersionIncompatible {
+                            peer: peer_id,
+                            peer_version: pv.clone(),
+                            local_version: lv.clone(),
+                        });
+                    }
                 }
 
                 if version_warning {
@@ -1360,6 +1403,24 @@ mod tests {
         // Different major is not compatible
         assert!(!v2_0_0.is_compatible_with(&v1_0_0));
         assert!(!v1_0_0.is_compatible_with(&v2_0_0));
+    }
+
+    #[test]
+    fn test_protocol_version_consensus_compatibility() {
+        let v1_0_0 = ProtocolVersion::parse("1.0.0").unwrap();
+        let v1_9_9 = ProtocolVersion::parse("1.9.9").unwrap();
+        let v2_0_0 = ProtocolVersion::parse("2.0.0").unwrap();
+
+        // Same major: consensus-compatible in BOTH directions (an old node
+        // warns about a newer minor but is not disconnected — soft forks
+        // upgrade gracefully)
+        assert!(v1_0_0.is_consensus_compatible(&v1_9_9));
+        assert!(v1_9_9.is_consensus_compatible(&v1_0_0));
+
+        // Different major: incompatible both ways (peer must be
+        // disconnected — this enforces coordinated upgrades)
+        assert!(!v1_0_0.is_consensus_compatible(&v2_0_0));
+        assert!(!v2_0_0.is_consensus_compatible(&v1_0_0));
     }
 
     #[test]

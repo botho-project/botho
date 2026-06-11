@@ -170,8 +170,14 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
         tokio::select! {
             event = swarm.select_next_some() => {
                 if let Some(net_event) = discovery.process_event(event) {
-                    if let NetworkEvent::PeerDiscovered(peer_id) = net_event {
-                        info!("Connected to peer: {}", peer_id);
+                    match net_event {
+                        NetworkEvent::PeerDiscovered(peer_id) => {
+                            info!("Connected to peer: {}", peer_id);
+                        }
+                        NetworkEvent::PeerVersionIncompatible { peer, .. } => {
+                            let _ = swarm.disconnect_peer_id(peer);
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -902,6 +908,16 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                                 min_version = %min_version,
                                 "Connected to peer with outdated protocol version"
                             );
+                        }
+
+                        NetworkEvent::PeerVersionIncompatible { peer, peer_version, local_version } => {
+                            warn!(
+                                %peer,
+                                peer_version = %peer_version,
+                                local_version = %local_version,
+                                "Disconnecting consensus-incompatible peer (protocol major mismatch)"
+                            );
+                            let _ = swarm.disconnect_peer_id(peer);
                         }
 
                         NetworkEvent::PexAddresses(addrs) => {
