@@ -128,14 +128,27 @@ The Botho philosophy manifests in every design decision:
 
 ## Getting Started
 
-### Run a Node
+### Install
+
+The fastest path is a tagged release binary. The release workflow produces
+**reproducible** builds for Linux, macOS (Intel + Apple Silicon), and
+Windows — every binary is hash-pinned, and any third party can rebuild
+from source and verify the checksums match.
+
+- **Download**: [GitHub Releases](https://github.com/botho-project/botho/releases) — pick the archive for your platform
+- **Verify**: see [docs/operations/reproducible-builds.md](./docs/operations/reproducible-builds.md) for the rebuild-and-compare flow
+
+### Build from source
 
 ```bash
-# Clone and build
 git clone https://github.com/botho-project/botho.git
 cd botho
 cargo build --release
+```
 
+### Run a Node
+
+```bash
 # Initialize wallet (generates 24-word mnemonic)
 ./target/release/botho init
 
@@ -184,13 +197,26 @@ Visit [botho.io](https://botho.io) to use the web wallet without running a node.
 
 ## Project Status
 
-Botho is in active development. Current focus areas:
+Botho is **pre-mainnet** and under active development. The protocol design is
+stable, the node runs end-to-end, and ongoing work is on hardening and
+testnet validation before any mainnet launch.
+
+Current focus areas:
 
 - Core node implementation with SCP consensus
 - Stealth address transaction privacy
 - Network-level privacy (Onion Gossip)
 - Progressive fee mechanism
 - Web and desktop wallet applications
+
+### Security Audits
+
+Botho is audited internally on a rolling cycle. The most recent cycle (cycle
+6, 2026-06) hardened the gossip/sync block-acceptance path against forged
+difficulty, inflated rewards, counterfeit ring members, and tx-list
+substitution under valid PoW, and migrated to ML-DSA 0.1.1
+(RUSTSEC-2025-0144 timing side-channel in the PQ transaction-authorization
+signature). All audit reports live in [`audits/`](./audits/).
 
 ### Origins
 
