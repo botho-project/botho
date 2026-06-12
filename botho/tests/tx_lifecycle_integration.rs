@@ -55,8 +55,11 @@ fn calculate_fee_for_outputs(mempool: &Mempool, output_sum: u64) -> u64 {
 /// Block reward for testing (50 BTH)
 const TEST_BLOCK_REWARD: u64 = 50 * PICOCREDITS_PER_CREDIT;
 
-/// Trivial PoW difficulty for instant mining
-const TRIVIAL_DIFFICULTY: u64 = u64::MAX - 1;
+/// Trivial PoW difficulty for instant mining.
+///
+/// Must equal the chain's initial difficulty — block acceptance now enforces
+/// `header.difficulty == chain.difficulty` (audit cycle 6, C1).
+const TRIVIAL_DIFFICULTY: u64 = 0x00FF_FFFF_FFFF_FFFF;
 
 // ============================================================================
 // Test Helpers
@@ -110,8 +113,9 @@ fn create_mock_minting_tx(
         timestamp,
     );
 
-    // Find a valid nonce (instant with trivial difficulty)
-    for nonce in 0..1000 {
+    // Find a valid nonce. At difficulty 0x00FF_FFFF_FFFF_FFFF, ~1/256 nonces
+    // solve, so 100k attempts have effectively zero false-failure risk.
+    for nonce in 0..100_000 {
         minting_tx.nonce = nonce;
         if minting_tx.verify_pow() {
             break;

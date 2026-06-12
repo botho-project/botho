@@ -11,11 +11,17 @@ use tracing::{debug, info, warn};
 
 use super::{ChainState, LedgerError};
 use crate::{
-    block::Block,
+    block::{calculate_block_reward, Block},
     consensus::{validate_block_lottery, LotteryFeeConfig},
     decoy_selection::{DecoySelectionError, GammaDecoySelector, OutputCandidate},
-    transaction::{Transaction as BothoTransaction, TxOutput, Utxo, UtxoId},
+    transaction::{RingMember, Transaction as BothoTransaction, TxOutput, Utxo, UtxoId},
 };
+
+/// Maximum allowed clock skew for a block timestamp relative to local time.
+///
+/// Matches the bound enforced on minting transactions in the SCP proposal
+/// path (`consensus::validation::MAX_FUTURE_TIMESTAMP_SECS`).
+const MAX_FUTURE_TIMESTAMP_SECS: u64 = 2 * 60 * 60;
 
 /// LMDB-backed ledger storage using heed
 pub struct Ledger {
@@ -394,11 +400,127 @@ impl Ledger {
             ));
         }
 
-        // Validate PoW
+        // Header / minting-tx consistency: the minting tx must agree with the
+        // header on the fields that feed PoW and emission. Otherwise a
+        // producer can declare one difficulty/height/prev-hash in the header
+        // (used by is_valid_pow and our checks here) and a different one in
+        // the minting tx (which the SCP proposer path would have rejected).
+        if block.minting_tx.block_height != block.height() {
+            return Err(LedgerError::InvalidBlock(format!(
+                "Minting tx height {} does not match header height {}",
+                block.minting_tx.block_height,
+                block.height()
+            )));
+        }
+        if block.minting_tx.prev_block_hash != block.header.prev_block_hash {
+            return Err(LedgerError::InvalidBlock(
+                "Minting tx prev_block_hash does not match header".to_string(),
+            ));
+        }
+        if block.minting_tx.difficulty != block.header.difficulty {
+            return Err(LedgerError::InvalidBlock(
+                "Minting tx difficulty does not match header".to_string(),
+            ));
+        }
+        if block.minting_tx.minter_view_key != block.header.minter_view_key
+            || block.minting_tx.minter_spend_key != block.header.minter_spend_key
+        {
+            return Err(LedgerError::InvalidBlock(
+                "Minting tx minter keys do not match header".to_string(),
+            ));
+        }
+
+        // C1: Enforce chain-expected difficulty.
+        //
+        // is_valid_pow() only proves the PoW hash is below the header's *own*
+        // difficulty field — without this check a producer can declare a
+        // trivial difficulty and have us accept the block at near-zero PoW.
+        if block.header.difficulty != state.difficulty {
+            return Err(LedgerError::InvalidBlock(format!(
+                "Block difficulty {:#x} does not match expected {:#x}",
+                block.header.difficulty, state.difficulty
+            )));
+        }
+
+        // Validate PoW (against the now-verified expected difficulty).
         if !block.header.is_valid_pow() {
             return Err(LedgerError::InvalidBlock(
                 "Invalid proof of work".to_string(),
             ));
+        }
+
+        // C2a: Recompute the block reward from the emission schedule and
+        // chain state. Without this a producer can claim any reward, inflating
+        // supply arbitrarily.
+        let expected_reward = calculate_block_reward(block.height(), state.total_mined);
+        if block.minting_tx.reward != expected_reward {
+            return Err(LedgerError::InvalidBlock(format!(
+                "Block reward {} does not match expected {} at height {}",
+                block.minting_tx.reward,
+                expected_reward,
+                block.height()
+            )));
+        }
+
+        // C2b: Timestamp sanity.
+        //
+        // Monotonicity vs parent prevents difficulty/emission games via
+        // backdating; the future bound prevents a producer from biasing
+        // timestamp-derived state forward. The header timestamp and the
+        // minting-tx timestamp must agree (the SCP proposer path validates
+        // the minting tx's timestamp; we hold the gossip path to the same
+        // rule).
+        if block.minting_tx.timestamp != block.header.timestamp {
+            return Err(LedgerError::InvalidBlock(
+                "Minting tx timestamp does not match header".to_string(),
+            ));
+        }
+        if block.header.timestamp < state.tip_timestamp {
+            return Err(LedgerError::InvalidBlock(format!(
+                "Block timestamp {} is before parent {}",
+                block.header.timestamp, state.tip_timestamp
+            )));
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .map_err(|_| {
+                LedgerError::InvalidBlock("System time before UNIX epoch".to_string())
+            })?;
+        if block.header.timestamp > now.saturating_add(MAX_FUTURE_TIMESTAMP_SECS) {
+            return Err(LedgerError::InvalidBlock(format!(
+                "Block timestamp {} is too far in the future (now={})",
+                block.header.timestamp, now
+            )));
+        }
+
+        // C4: Verify the transaction root commits to the actual tx list.
+        //
+        // header.tx_root feeds the header hash and therefore PoW, but is
+        // never recomputed at acceptance — a relay can swap the tx list
+        // under a valid PoW unless we re-derive and compare here.
+        let expected_tx_root = Block::compute_tx_root(&block.transactions);
+        if block.header.tx_root != expected_tx_root {
+            return Err(LedgerError::InvalidBlock(
+                "Block tx_root does not match transactions".to_string(),
+            ));
+        }
+
+        // C3: Resolve every ring member against the UTXO set.
+        //
+        // CLSAG verifies signatures over the *claimed* ring; without this
+        // check a producer can fabricate ring members (target_key they
+        // control + arbitrary commitment) and the signature verifies while
+        // the balance check passes against the fabricated amount, minting
+        // value out of thin air. Mempool already does this for tx
+        // admission, but blocks bypass the mempool.
+        for (tx_idx, tx) in block.transactions.iter().enumerate() {
+            self.verify_ring_members(tx).map_err(|e| {
+                LedgerError::InvalidBlock(format!(
+                    "Transaction {} ring member validation failed: {}",
+                    tx_idx, e
+                ))
+            })?;
         }
 
         // Validate lottery results and compute the new carryover pool.
@@ -902,6 +1024,38 @@ impl Ledger {
         tx.verify_ring_signatures()
             .map_err(|e| LedgerError::InvalidBlock(format!("Invalid ring signature: {}", e)))?;
 
+        Ok(())
+    }
+
+    /// Verify every CLSAG ring member of `tx` resolves to a UTXO and matches
+    /// the stored output's (target_key, public_key, commitment).
+    ///
+    /// CLSAG signs over the *claimed* ring data, so without this check a
+    /// producer can include ring members with a target_key they control and
+    /// an arbitrary amount-commitment: the signature still verifies and the
+    /// balance check passes against the fabricated amount, minting value.
+    /// The mempool does the equivalent check at admission, but blocks bypass
+    /// the mempool — so this check is the block-level analogue.
+    fn verify_ring_members(&self, tx: &BothoTransaction) -> Result<(), LedgerError> {
+        for (input_idx, input) in tx.inputs.clsag().iter().enumerate() {
+            for (member_idx, member) in input.ring.iter().enumerate() {
+                let utxo = self
+                    .get_utxo_by_target_key(&member.target_key)?
+                    .ok_or_else(|| {
+                        LedgerError::InvalidBlock(format!(
+                            "Input {} ring member {} target_key not in UTXO set",
+                            input_idx, member_idx
+                        ))
+                    })?;
+                let expected = RingMember::from_output(&utxo.output);
+                if expected != *member {
+                    return Err(LedgerError::InvalidBlock(format!(
+                        "Input {} ring member {} does not match UTXO (target_key/public_key/commitment mismatch — possible counterfeit amount)",
+                        input_idx, member_idx
+                    )));
+                }
+            }
+        }
         Ok(())
     }
 

@@ -545,8 +545,13 @@ impl Block {
         self.lottery_outputs.iter().map(|o| o.payout).sum()
     }
 
-    /// Compute merkle root of transactions
-    fn compute_tx_root(transactions: &[Transaction]) -> [u8; 32] {
+    /// Compute the transaction root committed by the block header.
+    ///
+    /// Currently a flat SHA-256 over the sequence of transaction hashes
+    /// (not a Merkle tree). Sufficient to bind the transaction list to
+    /// the header — and therefore to PoW — but does not support
+    /// inclusion proofs.
+    pub fn compute_tx_root(transactions: &[Transaction]) -> [u8; 32] {
         if transactions.is_empty() {
             return [0u8; 32];
         }

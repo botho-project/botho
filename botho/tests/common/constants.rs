@@ -22,5 +22,12 @@ pub const DEFAULT_MAX_SLOT_VALUES: usize = 50;
 /// Minimum ring size for CLSAG signatures (matches production)
 pub const TEST_RING_SIZE: usize = 20;
 
-/// Trivial PoW difficulty for fast testing
-pub const TRIVIAL_DIFFICULTY: u64 = u64::MAX - 1;
+/// Trivial PoW difficulty for fast testing.
+///
+/// Must match the chain's initial difficulty (`block::difficulty::INITIAL_DIFFICULTY`
+/// / `node::minter::INITIAL_DIFFICULTY` = `0x00FF_FFFF_FFFF_FFFF`) — block
+/// acceptance now enforces `header.difficulty == chain.difficulty` (audit
+/// cycle 6, C1). A trivially-easy difficulty here is fine for tests because
+/// 1/256 of nonces solve, but it has to be the *same* trivial value the
+/// ledger initializes with.
+pub const TRIVIAL_DIFFICULTY: u64 = 0x00FF_FFFF_FFFF_FFFF;

@@ -22,7 +22,10 @@ use tempfile::TempDir;
 use botho::{
     block::{Block, BlockHeader, BlockLotterySummary, MintingTx},
     ledger::{ChainState, Ledger},
-    transaction::{Transaction, TxInput, TxInputs, TxOutput, Utxo, UtxoId, PICOCREDITS_PER_CREDIT},
+    transaction::{
+        ClsagRingInput, RingMember, Transaction, TxInput, TxInputs, TxOutput, Utxo, UtxoId,
+        PICOCREDITS_PER_CREDIT,
+    },
 };
 use botho_wallet::WalletKeys;
 use bth_account_keys::PublicAddress;
@@ -775,4 +778,377 @@ fn test_multiple_miners_consistency() {
     for (idx, count) in miner_block_counts.iter().enumerate() {
         assert_eq!(*count, 4, "Miner {} should have mined 4 blocks", idx);
     }
+}
+
+// ============================================================================
+// Block-Acceptance Hardening (audit cycle 6: C1–C4)
+//
+// These tests cover the consensus rules that gossip/sync blocks must satisfy
+// at `Ledger::add_block`. The SCP proposal path validates the minting tx
+// separately; these tests pin down the rules for any block arriving from the
+// network.
+// ============================================================================
+
+/// C1: A block declaring a different difficulty than the chain's expected
+/// difficulty must be rejected — even if its PoW satisfies that declared
+/// difficulty. Otherwise an attacker fabricates a chain with trivial
+/// difficulty and we accept it at near-zero PoW cost.
+#[test]
+#[serial]
+fn test_c1_block_rejected_when_difficulty_differs_from_chain_state() {
+    let temp_dir = TempDir::new().unwrap();
+    let mut ledger = Ledger::open(temp_dir.path()).unwrap();
+    let miner = create_test_wallet(1);
+    let miner_address = miner.account_key().default_subaddress();
+
+    // Build a block that solves PoW against a *lower* declared difficulty
+    // than the chain expects. Both the header and the minting tx use the
+    // tampered value so that they stay consistent — the gap the test
+    // exercises is "chain state vs declared", not "header vs minting tx".
+    let state = ledger.get_chain_state().unwrap();
+    let prev_block = ledger.get_tip().unwrap();
+    let prev_hash = prev_block.hash();
+    let tampered_difficulty = state.difficulty / 4;
+    assert_ne!(tampered_difficulty, state.difficulty);
+
+    let timestamp = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let mut minting_tx = MintingTx::new(
+        1,
+        TEST_BLOCK_REWARD,
+        &miner_address,
+        prev_hash,
+        tampered_difficulty,
+        timestamp,
+    );
+    for nonce in 0..u64::MAX {
+        minting_tx.nonce = nonce;
+        if minting_tx.verify_pow() {
+            break;
+        }
+    }
+
+    let bad_block = Block {
+        header: BlockHeader {
+            version: 1,
+            prev_block_hash: prev_hash,
+            tx_root: [0u8; 32],
+            timestamp,
+            height: 1,
+            difficulty: tampered_difficulty,
+            nonce: minting_tx.nonce,
+            minter_view_key: minting_tx.minter_view_key,
+            minter_spend_key: minting_tx.minter_spend_key,
+        },
+        minting_tx,
+        transactions: vec![],
+        lottery_outputs: Vec::new(),
+        lottery_summary: BlockLotterySummary::default(),
+    };
+
+    let err = ledger
+        .add_block(&bad_block)
+        .expect_err("Block with tampered difficulty must be rejected");
+    let msg = format!("{}", err);
+    assert!(
+        msg.contains("difficulty"),
+        "Error should mention difficulty mismatch, got: {}",
+        msg
+    );
+}
+
+/// C2a: A block claiming a reward not equal to `calculate_block_reward(height,
+/// total_mined)` must be rejected. Otherwise a producer mints unlimited
+/// inflation by overstating the coinbase amount.
+#[test]
+#[serial]
+fn test_c2_block_rejected_when_reward_inflated() {
+    let temp_dir = TempDir::new().unwrap();
+    let mut ledger = Ledger::open(temp_dir.path()).unwrap();
+    let miner = create_test_wallet(1);
+    let miner_address = miner.account_key().default_subaddress();
+
+    let mut block = mine_block(&ledger, &miner_address, vec![]);
+    // Inflate the reward by 2x while keeping all other fields consistent.
+    // PoW is over the header (nonce/prev_hash/minter keys) and is unaffected
+    // by the reward value, so this block still passes the PoW check.
+    block.minting_tx.reward = block.minting_tx.reward.saturating_mul(2);
+
+    let err = ledger
+        .add_block(&block)
+        .expect_err("Block with inflated reward must be rejected");
+    let msg = format!("{}", err);
+    assert!(
+        msg.contains("reward"),
+        "Error should mention reward mismatch, got: {}",
+        msg
+    );
+}
+
+/// C2b: A block whose timestamp is earlier than its parent's must be
+/// rejected. Without monotonicity an adversary can backdate blocks to bias
+/// any timestamp-derived state.
+#[test]
+#[serial]
+fn test_c2_block_rejected_when_timestamp_before_parent() {
+    let temp_dir = TempDir::new().unwrap();
+    let mut ledger = Ledger::open(temp_dir.path()).unwrap();
+    let miner = create_test_wallet(1);
+    let miner_address = miner.account_key().default_subaddress();
+
+    // Add a valid block 1 with a real wall-clock timestamp.
+    let block1 = mine_block(&ledger, &miner_address, vec![]);
+    let block1_timestamp = block1.header.timestamp;
+    assert!(block1_timestamp > 0);
+    ledger.add_block(&block1).expect("Failed to add block 1");
+
+    // Construct block 2 that backdates one second before block 1.
+    let state = ledger.get_chain_state().unwrap();
+    let prev_hash = state.tip_hash;
+    let bad_timestamp = block1_timestamp - 1;
+    let mut minting_tx = MintingTx::new(
+        2,
+        TEST_BLOCK_REWARD,
+        &miner_address,
+        prev_hash,
+        TRIVIAL_DIFFICULTY,
+        bad_timestamp,
+    );
+    for nonce in 0..u64::MAX {
+        minting_tx.nonce = nonce;
+        if minting_tx.verify_pow() {
+            break;
+        }
+    }
+    let bad_block = Block {
+        header: BlockHeader {
+            version: 1,
+            prev_block_hash: prev_hash,
+            tx_root: [0u8; 32],
+            timestamp: bad_timestamp,
+            height: 2,
+            difficulty: TRIVIAL_DIFFICULTY,
+            nonce: minting_tx.nonce,
+            minter_view_key: minting_tx.minter_view_key,
+            minter_spend_key: minting_tx.minter_spend_key,
+        },
+        minting_tx,
+        transactions: vec![],
+        lottery_outputs: Vec::new(),
+        lottery_summary: BlockLotterySummary::default(),
+    };
+
+    let err = ledger
+        .add_block(&bad_block)
+        .expect_err("Backdated block must be rejected");
+    let msg = format!("{}", err);
+    assert!(
+        msg.contains("timestamp") && msg.contains("before parent"),
+        "Error should mention timestamp monotonicity, got: {}",
+        msg
+    );
+}
+
+/// C2b: A block timestamped far in the future (beyond the 2h skew tolerance)
+/// must be rejected.
+#[test]
+#[serial]
+fn test_c2_block_rejected_when_timestamp_far_in_future() {
+    let temp_dir = TempDir::new().unwrap();
+    let mut ledger = Ledger::open(temp_dir.path()).unwrap();
+    let miner = create_test_wallet(1);
+    let miner_address = miner.account_key().default_subaddress();
+
+    let state = ledger.get_chain_state().unwrap();
+    let prev_block = ledger.get_tip().unwrap();
+    let prev_hash = prev_block.hash();
+
+    // 3 hours ahead — beyond the 2h tolerance.
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let future_timestamp = now + 3 * 60 * 60;
+
+    let mut minting_tx = MintingTx::new(
+        1,
+        TEST_BLOCK_REWARD,
+        &miner_address,
+        prev_hash,
+        state.difficulty,
+        future_timestamp,
+    );
+    for nonce in 0..u64::MAX {
+        minting_tx.nonce = nonce;
+        if minting_tx.verify_pow() {
+            break;
+        }
+    }
+    let bad_block = Block {
+        header: BlockHeader {
+            version: 1,
+            prev_block_hash: prev_hash,
+            tx_root: [0u8; 32],
+            timestamp: future_timestamp,
+            height: 1,
+            difficulty: state.difficulty,
+            nonce: minting_tx.nonce,
+            minter_view_key: minting_tx.minter_view_key,
+            minter_spend_key: minting_tx.minter_spend_key,
+        },
+        minting_tx,
+        transactions: vec![],
+        lottery_outputs: Vec::new(),
+        lottery_summary: BlockLotterySummary::default(),
+    };
+
+    let err = ledger
+        .add_block(&bad_block)
+        .expect_err("Block timestamped 3h ahead must be rejected");
+    let msg = format!("{}", err);
+    assert!(
+        msg.contains("future"),
+        "Error should mention future timestamp, got: {}",
+        msg
+    );
+}
+
+/// C4: A block whose `header.tx_root` does not commit to the actual
+/// transactions must be rejected. The tx_root feeds the header hash and
+/// therefore PoW; without re-derivation at acceptance, a relay can swap
+/// the tx list under a valid PoW.
+#[test]
+#[serial]
+fn test_c4_block_rejected_when_tx_root_does_not_match_transactions() {
+    let temp_dir = TempDir::new().unwrap();
+    let mut ledger = Ledger::open(temp_dir.path()).unwrap();
+    let miner = create_test_wallet(1);
+    let miner_address = miner.account_key().default_subaddress();
+
+    // Build a block with an empty tx list, then claim a non-zero tx_root.
+    // (`compute_tx_root(&[]) == [0; 32]`, so anything else is a mismatch.)
+    let mut block = mine_block(&ledger, &miner_address, vec![]);
+    block.header.tx_root = [0xAB; 32];
+
+    let err = ledger
+        .add_block(&block)
+        .expect_err("Block with mismatched tx_root must be rejected");
+    let msg = format!("{}", err);
+    assert!(
+        msg.contains("tx_root"),
+        "Error should mention tx_root mismatch, got: {}",
+        msg
+    );
+}
+
+/// C3: A block containing a transaction whose CLSAG ring references a
+/// `target_key` that is not in the UTXO set must be rejected — otherwise
+/// a producer fabricates a ring member with a key they control and an
+/// arbitrary commitment to mint value via the CLSAG balance proof.
+#[test]
+#[serial]
+fn test_c3_block_rejected_when_ring_member_target_key_not_in_utxo_set() {
+    let temp_dir = TempDir::new().unwrap();
+    let ledger = Ledger::open(temp_dir.path()).unwrap();
+    let miner = create_test_wallet(1);
+    let miner_address = miner.account_key().default_subaddress();
+
+    // A transaction with one CLSAG input whose ring member has a target_key
+    // (0xAA..) that no UTXO carries. The signature/key-image content does
+    // not need to be valid — the ring-member resolution runs before CLSAG
+    // verification, so this test pins down exactly the C3 rejection path.
+    let fake_member = RingMember {
+        target_key: [0xAA; 32],
+        public_key: [0xBB; 32],
+        commitment: [0xCC; 32],
+    };
+    let fake_input = ClsagRingInput {
+        ring: vec![fake_member],
+        key_image: [0xDD; 32],
+        commitment_key_image: [0xEE; 32],
+        clsag_signature: vec![0u8; 64],
+    };
+    let fake_output = TxOutput {
+        amount: 1,
+        target_key: [0x11; 32],
+        public_key: [0x22; 32],
+        e_memo: None,
+        cluster_tags: bth_transaction_types::ClusterTagVector::empty(),
+    };
+    let bad_tx = Transaction::new(vec![fake_input], vec![fake_output], 0, 0);
+
+    let mut block = mine_block(&ledger, &miner_address, vec![bad_tx]);
+    // mine_block sets tx_root from the (now non-empty) transaction list.
+    block.header.tx_root = Block::compute_tx_root(&block.transactions);
+
+    let err = ledger
+        .add_block(&block)
+        .expect_err("Block with counterfeit ring member must be rejected");
+    let msg = format!("{}", err);
+    assert!(
+        msg.contains("target_key not in UTXO set")
+            || msg.contains("ring member"),
+        "Error should identify the counterfeit ring member, got: {}",
+        msg
+    );
+}
+
+/// C3 (counterfeit amount): a ring member that *does* point at a real
+/// target_key, but with a commitment that doesn't match the stored UTXO's
+/// amount, must be rejected. The CLSAG signature can verify against any
+/// claimed amount, so re-deriving the commitment from the UTXO set is the
+/// only block-level defense.
+#[test]
+#[serial]
+fn test_c3_block_rejected_when_ring_member_commitment_mismatched() {
+    let temp_dir = TempDir::new().unwrap();
+    let mut ledger = Ledger::open(temp_dir.path()).unwrap();
+    let miner = create_test_wallet(1);
+    let miner_address = miner.account_key().default_subaddress();
+
+    // Mine a block so the coinbase UTXO populates the UTXO set with a real
+    // target_key we can reference.
+    let block1 = mine_block(&ledger, &miner_address, vec![]);
+    ledger.add_block(&block1).expect("Failed to add block 1");
+    let coinbase_target = block1.minting_tx.target_key;
+    let coinbase_public = block1.minting_tx.public_key;
+
+    // Build a ring member that points at the real target_key/public_key but
+    // claims an amount-commitment derived from a different (fabricated)
+    // amount. `RingMember::from_output` derives the commitment as
+    // `amount * H + 0 * G`, so changing the amount changes the commitment.
+    let counterfeit_member = RingMember {
+        target_key: coinbase_target,
+        public_key: coinbase_public,
+        commitment: [0xCC; 32], // not the commitment to the coinbase amount
+    };
+    let fake_input = ClsagRingInput {
+        ring: vec![counterfeit_member],
+        key_image: [0xDD; 32],
+        commitment_key_image: [0xEE; 32],
+        clsag_signature: vec![0u8; 64],
+    };
+    let fake_output = TxOutput {
+        amount: 1,
+        target_key: [0x11; 32],
+        public_key: [0x22; 32],
+        e_memo: None,
+        cluster_tags: bth_transaction_types::ClusterTagVector::empty(),
+    };
+    let bad_tx = Transaction::new(vec![fake_input], vec![fake_output], 0, 1);
+
+    let mut block2 = mine_block(&ledger, &miner_address, vec![bad_tx]);
+    block2.header.tx_root = Block::compute_tx_root(&block2.transactions);
+
+    let err = ledger
+        .add_block(&block2)
+        .expect_err("Block with counterfeit ring-member amount must be rejected");
+    let msg = format!("{}", err);
+    assert!(
+        msg.contains("counterfeit amount") || msg.contains("mismatch"),
+        "Error should identify the counterfeit amount, got: {}",
+        msg
+    );
 }
