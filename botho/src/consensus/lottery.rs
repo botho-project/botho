@@ -490,6 +490,22 @@ pub fn validate_block_lottery(
                 actual_burn: block.lottery_summary.amount_burned,
             });
         }
+        // A no-winner block is only valid if the deterministic draw actually
+        // produces no winners. Without this check a producer could omit the
+        // (predictable) draw whenever it doesn't favor them, carry the pool
+        // over, and include it only when they win.
+        if accounting.payout > 0
+            && draw_winners(
+                candidates,
+                accounting.payout,
+                block.height(),
+                prev_block_hash,
+                &config.draw_config,
+            )
+            .is_some()
+        {
+            return Err(LotteryValidationError::InvalidDrawing);
+        }
         return Ok(accounting.carryover_after(0));
     }
 
@@ -989,6 +1005,40 @@ mod tests {
         let result = validate_block_lottery(&block, &candidates, 0, &prev_hash, &config);
         assert!(result.is_ok(), "No winners should pass: {:?}", result);
         assert_eq!(result.unwrap(), 800, "Fee pool share should carry over");
+    }
+
+    #[test]
+    fn test_validate_block_lottery_rejects_suppressed_draw() {
+        // A producer must not be able to claim "no winners" when the
+        // deterministic draw would have produced winners (payout
+        // suppression: carry the pool over and harvest it later when the
+        // predictable draw favors the producer).
+        let config = LotteryFeeConfig::default();
+        let prev_hash = [42u8; 32];
+
+        // Eligible candidates exist (default min age 720, min value 1 microBTH)
+        let candidates = vec![
+            make_candidate(1, 10_000_000, 0),
+            make_candidate(2, 20_000_000, 0),
+        ];
+
+        // Correct summary numbers for a no-winner block...
+        let lottery_summary = BlockLotterySummary {
+            total_fees: 1000,
+            pool_distributed: 0,
+            amount_burned: 200,
+            lottery_seed: [0u8; 32],
+        };
+
+        // ...but the draw would have produced winners, so this block is invalid.
+        let block = create_test_block(10_000, prev_hash, 1000, lottery_summary, vec![]);
+
+        let result = validate_block_lottery(&block, &candidates, 0, &prev_hash, &config);
+        assert!(
+            matches!(result, Err(LotteryValidationError::InvalidDrawing)),
+            "Suppressed draw must be rejected: {:?}",
+            result
+        );
     }
 
     #[test]

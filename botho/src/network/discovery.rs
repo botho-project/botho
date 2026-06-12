@@ -164,6 +164,29 @@ impl ProtocolVersion {
         self.major == other.major
     }
 
+    /// Decide whether a peer must be disconnected as consensus-incompatible.
+    ///
+    /// Returns the peer version to report in the disconnect event, or `None`
+    /// if the peer is compatible. An unparseable agent string fails closed
+    /// (reported as the sentinel version 0.0.0): a peer that cannot state a
+    /// valid protocol version cannot be assumed to share our consensus
+    /// rules, and honest-but-misconfigured peers are exactly what this
+    /// check exists to exclude.
+    pub fn consensus_incompatibility(
+        peer_version: &Option<Self>,
+        local: &Self,
+    ) -> Option<Self> {
+        match peer_version {
+            Some(pv) => (!pv.is_consensus_compatible(local)).then(|| pv.clone()),
+            None => Some(Self {
+                major: 0,
+                minor: 0,
+                patch: 0,
+                block_version: None,
+            }),
+        }
+    }
+
     /// Create agent version string for libp2p identify protocol.
     pub fn to_agent_string(&self, block_version: u32) -> String {
         format!(
@@ -1136,22 +1159,26 @@ impl NetworkDiscovery {
                     entry.last_seen = std::time::Instant::now();
                 }
 
-                // Consensus incompatibility (different major): the caller
-                // must disconnect. Major bumps mark consensus-breaking
-                // changes; this check is what makes coordinated upgrades
-                // enforceable instead of silently divergent.
-                if let (Some(pv), Some(lv)) = (&peer_version, &local_version) {
-                    if !pv.is_consensus_compatible(lv) {
+                // Consensus incompatibility (different major, or an
+                // unparseable agent string): the caller must disconnect.
+                // Major bumps mark consensus-breaking changes; this check is
+                // what makes coordinated upgrades enforceable instead of
+                // silently divergent.
+                if let Some(lv) = &local_version {
+                    if let Some(pv) =
+                        ProtocolVersion::consensus_incompatibility(&peer_version, lv)
+                    {
                         warn!(
                             %peer_id,
                             peer_version = %pv,
                             local_version = %lv,
-                            "Peer protocol major version is consensus-incompatible; disconnecting"
+                            agent_version = %info.agent_version,
+                            "Peer protocol version is consensus-incompatible; disconnecting"
                         );
                         self.peers.remove(&peer_id);
                         return Some(NetworkEvent::PeerVersionIncompatible {
                             peer: peer_id,
-                            peer_version: pv.clone(),
+                            peer_version: pv,
                             local_version: lv.clone(),
                         });
                     }
@@ -1421,6 +1448,38 @@ mod tests {
         // disconnected — this enforces coordinated upgrades)
         assert!(!v1_0_0.is_consensus_compatible(&v2_0_0));
         assert!(!v2_0_0.is_consensus_compatible(&v1_0_0));
+    }
+
+    #[test]
+    fn test_consensus_incompatibility_decision() {
+        let local = ProtocolVersion::parse("1.2.3").unwrap();
+
+        // Same major: compatible, no disconnect
+        let same_major = ProtocolVersion::parse("1.0.0").unwrap();
+        assert_eq!(
+            ProtocolVersion::consensus_incompatibility(&Some(same_major), &local),
+            None
+        );
+
+        // Different major: disconnect, reporting the peer's version
+        let other_major = ProtocolVersion::parse("2.0.0").unwrap();
+        let reported =
+            ProtocolVersion::consensus_incompatibility(&Some(other_major.clone()), &local);
+        assert_eq!(reported, Some(other_major));
+
+        // Unparseable agent string fails closed: disconnect with 0.0.0 sentinel
+        let garbage = ProtocolVersion::parse("not-a-version");
+        assert_eq!(garbage, None);
+        let reported = ProtocolVersion::consensus_incompatibility(&garbage, &local);
+        assert_eq!(
+            reported,
+            Some(ProtocolVersion {
+                major: 0,
+                minor: 0,
+                patch: 0,
+                block_version: None
+            })
+        );
     }
 
     #[test]

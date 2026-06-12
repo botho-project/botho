@@ -14,7 +14,7 @@ std = []
 [dependencies]
 # Post-quantum cryptography (RustCrypto implementations of NIST standards)
 ml-kem = "0.2"
-ml-dsa = "0.1.0-rc.2"
+ml-dsa = "0.1.1"
 
 # For deterministic keygen - rand 0.9 for ml-dsa, rand_core 0.6 for ml-kem
 rand = "0.9.0"

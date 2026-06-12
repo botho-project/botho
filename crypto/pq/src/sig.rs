@@ -18,7 +18,7 @@
 //!    attacks
 
 use crate::error::PqError;
-use ml_dsa::{KeyGen, MlDsa65, SigningKey, VerifyingKey};
+use ml_dsa::{ExpandedSigningKey, MlDsa65, SigningKey, VerifyingKey};
 use rand_core::RngCore;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use zeroize::{Zeroize, ZeroizeOnDrop};
@@ -203,13 +203,14 @@ impl MlDsa65KeyPair {
         // Convert to ml-dsa's B32 type (Array<u8, U32>)
         let seed_arr = hybrid_array::Array::try_from(&seed[..]).expect("seed has correct size");
 
-        // Use KeyGen trait's from_seed method for deterministic generation
-        // This completely avoids any RNG version conflicts!
-        let keypair = <MlDsa65 as KeyGen>::from_seed(&seed_arr);
+        let signing_key = SigningKey::<MlDsa65>::from_seed(&seed_arr);
 
-        // Encode keys to bytes
-        let pk_encoded = keypair.verifying_key().encode();
-        let sk_encoded = keypair.signing_key().encode();
+        // Encode keys to bytes. The expanded (FIPS 204 skEncode) form is
+        // deprecated upstream in favor of seed storage, but we keep it to
+        // preserve the existing 4032-byte secret key format.
+        let pk_encoded = signing_key.expanded_key().verifying_key().encode();
+        #[allow(deprecated)]
+        let sk_encoded = signing_key.expanded_key().to_expanded();
 
         let mut pk_bytes = [0u8; ML_DSA_65_PUBLIC_KEY_BYTES];
         pk_bytes.copy_from_slice(pk_encoded.as_slice());
@@ -237,10 +238,14 @@ impl MlDsa65KeyPair {
     pub fn sign(&self, message: &[u8]) -> MlDsa65Signature {
         use ml_dsa::signature::Signer;
 
-        // Parse the signing key from encoded bytes using decode()
+        // Parse the signing key from the expanded (FIPS 204 skEncode) bytes.
+        // from_expanded is deprecated upstream and can panic on malformed
+        // keys, but our secret keys are always self-generated via from_seed,
+        // never imported from untrusted sources.
         let sk_encoded = hybrid_array::Array::try_from(&self.secret_key.bytes[..])
             .expect("secret key has correct size");
-        let sk = SigningKey::<MlDsa65>::decode(&sk_encoded);
+        #[allow(deprecated)]
+        let sk = ExpandedSigningKey::<MlDsa65>::from_expanded(&sk_encoded);
 
         // Sign the message (deterministic signing)
         let sig = sk.sign(message);
