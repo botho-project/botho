@@ -12,7 +12,7 @@
 
 mod common;
 
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{net::SocketAddr, sync::Arc, time::Duration, time::SystemTime};
 
 use reqwest::Client;
 use serde_json::{json, Value};
@@ -20,17 +20,47 @@ use serial_test::serial;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 
+use bth_account_keys::PublicAddress;
 use bth_transaction_types::constants::Network;
 use botho::{
+    address::Address,
+    block::{Block, BlockHeader, BlockLotterySummary, MintingTx},
     config::FaucetConfig,
+    consensus::{BlockBuilder, LotteryFeeConfig},
     ledger::Ledger,
     mempool::Mempool,
     rpc::{FaucetState, RpcState, WsBroadcaster},
+    transaction::PICOCREDITS_PER_CREDIT,
+    wallet::Wallet,
 };
 
 // ============================================================================
 // Test Helpers
 // ============================================================================
+
+/// Block reward minted per block during ledger funding (50 BTH).
+const TEST_BLOCK_REWARD: u64 = 50 * PICOCREDITS_PER_CREDIT;
+
+/// Trivial PoW difficulty for instant mining.
+///
+/// Must equal the chain's initial difficulty — block acceptance enforces
+/// `header.difficulty == chain.difficulty` (audit cycle 6, C1).
+const TRIVIAL_DIFFICULTY: u64 = 0x00FF_FFFF_FFFF_FFFF;
+
+/// Number of independent coinbase UTXOs minted to the faucet wallet.
+///
+/// The faucet skips UTXOs whose key image is pending in the mempool, so a
+/// previously dispensed (still-unconfirmed) change output cannot be respent.
+/// Funding the faucet with several distinct coinbase UTXOs therefore lets a
+/// test make multiple sequential requests without mining between them — each
+/// request simply consumes a different UTXO. The per-address daily limit (3)
+/// is the largest sequential-success count any test needs, so 6 leaves slack.
+const FAUCET_COINBASE_UTXOS: usize = 6;
+
+/// Number of decoy outputs mined to a dedicated decoy wallet so CLSAG ring
+/// signatures have a large enough confirmed pool (ring size 20, decoys need
+/// 10 confirmations).
+const DECOY_BLOCKS: usize = 30;
 
 /// Default faucet configuration for tests
 fn test_faucet_config() -> FaucetConfig {
@@ -44,16 +74,154 @@ fn test_faucet_config() -> FaucetConfig {
     }
 }
 
-/// Spawn an RPC server with faucet enabled on a random available port.
+/// Create a deterministic wallet from a seed using valid 24-word BIP39
+/// mnemonics, so tests are reproducible.
+fn create_wallet(seed: u32) -> Wallet {
+    let mnemonics = [
+        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art",
+        "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo vote",
+        "legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth title",
+        "letter advice cage absurd amount doctor acoustic avoid letter advice cage absurd amount doctor acoustic avoid letter advice cage absurd amount doctor acoustic bless",
+    ];
+    let idx = (seed as usize) % mnemonics.len();
+    Wallet::from_mnemonic(mnemonics[idx]).expect("Failed to create wallet from mnemonic")
+}
+
+/// Create a minting transaction for testing with trivial PoW.
+fn create_mock_minting_tx(
+    height: u64,
+    reward: u64,
+    minter_address: &PublicAddress,
+    prev_block_hash: [u8; 32],
+) -> MintingTx {
+    let timestamp = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    let mut minting_tx = MintingTx::new(
+        height,
+        reward,
+        minter_address,
+        prev_block_hash,
+        TRIVIAL_DIFFICULTY,
+        timestamp,
+    );
+
+    for nonce in 0..100_000 {
+        minting_tx.nonce = nonce;
+        if minting_tx.verify_pow() {
+            break;
+        }
+    }
+
+    minting_tx
+}
+
+/// Apply the lottery fee-split / draw to a block so it satisfies
+/// `validate_block_lottery` in `add_block` (mirrors the production proposer
+/// path). For our funding blocks there are no fees, but the lottery emission
+/// share still has to be accounted for.
+fn apply_lottery_to_block(block: Block, ledger: &Ledger) -> Block {
+    let total_fees: u64 = block.transactions.iter().map(|tx| tx.fee).sum();
+    let emission_share = block.minting_tx.lottery_emission_share();
+    let lottery_config = LotteryFeeConfig::default();
+
+    let stored_pool = ledger.get_lottery_pool().unwrap_or(0);
+    let candidates = ledger
+        .get_lottery_validation_candidates(block.height(), &lottery_config.draw_config)
+        .unwrap_or_default();
+
+    if total_fees == 0 && emission_share == 0 && stored_pool == 0 {
+        return block;
+    }
+
+    let utxo_lookup = |utxo_id: &[u8; 36]| ledger.get_utxo_by_id(utxo_id).ok().flatten();
+    BlockBuilder::apply_lottery(block, &candidates, stored_pool, utxo_lookup, &lottery_config)
+}
+
+/// Mine a single block crediting `minter_address` and append it to the ledger.
+fn mine_block(ledger: &Ledger, minter_address: &PublicAddress) {
+    let state = ledger.get_chain_state().expect("Failed to get chain state");
+    let prev_block = ledger.get_tip().expect("Failed to get tip");
+    let prev_hash = prev_block.hash();
+    let height = state.height + 1;
+
+    let minting_tx = create_mock_minting_tx(height, TEST_BLOCK_REWARD, minter_address, prev_hash);
+
+    let block = Block {
+        header: BlockHeader {
+            version: 1,
+            prev_block_hash: prev_hash,
+            tx_root: [0u8; 32],
+            timestamp: minting_tx.timestamp,
+            height: minting_tx.block_height,
+            difficulty: minting_tx.difficulty,
+            nonce: minting_tx.nonce,
+            minter_view_key: minting_tx.minter_view_key,
+            minter_spend_key: minting_tx.minter_spend_key,
+        },
+        minting_tx,
+        transactions: Vec::new(),
+        lottery_outputs: Vec::new(),
+        lottery_summary: BlockLotterySummary::default(),
+    };
+
+    let block = apply_lottery_to_block(block, ledger);
+    ledger
+        .add_block(&block)
+        .expect("Failed to add funding block");
+}
+
+/// Fund a faucet wallet in a fresh ledger.
+///
+/// Mines several coinbase blocks to the faucet wallet (independent spendable
+/// UTXOs) and a larger batch of decoy blocks to a separate wallet so CLSAG
+/// ring signatures have enough confirmed decoy outputs. The decoy blocks are
+/// mined first so they comfortably exceed the 10-confirmation decoy minimum
+/// by the time a faucet request builds a transaction.
+fn fund_faucet_ledger(ledger: &Ledger) -> Wallet {
+    let faucet_wallet = create_wallet(1);
+    let faucet_address = faucet_wallet.default_address();
+
+    // Decoy pool first (seed 0 is dedicated to decoys to avoid collisions).
+    let decoy_address = create_wallet(0).default_address();
+    for _ in 0..DECOY_BLOCKS {
+        mine_block(ledger, &decoy_address);
+    }
+
+    // Independent coinbase UTXOs for the faucet wallet.
+    for _ in 0..FAUCET_COINBASE_UTXOS {
+        mine_block(ledger, &faucet_address);
+    }
+
+    faucet_wallet
+}
+
+/// Spawn an RPC server with a funded faucet using the default test config.
 async fn spawn_faucet_rpc_server() -> (TempDir, SocketAddr, tokio::task::JoinHandle<()>) {
+    spawn_faucet_rpc_server_with_config(test_faucet_config()).await
+}
+
+/// Spawn an RPC server with a funded faucet using a caller-supplied config.
+///
+/// All requests over the local HTTP loopback originate from `127.0.0.1`, and
+/// the JSON-RPC handler treats every faucet request as coming from that single
+/// IP. Tests that need to exercise concurrency or per-address limits in
+/// isolation therefore tune `cooldown_secs` / `per_ip_hourly_limit` here so
+/// the per-IP cooldown is not the (shared-IP) bottleneck.
+async fn spawn_faucet_rpc_server_with_config(
+    config: FaucetConfig,
+) -> (TempDir, SocketAddr, tokio::task::JoinHandle<()>) {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let ledger_path = temp_dir.path().join("ledger");
 
     let ledger = Ledger::open(&ledger_path).expect("Failed to create ledger");
+    let faucet_wallet = fund_faucet_ledger(&ledger);
     let mempool = Mempool::new();
     let ws_broadcaster = Arc::new(WsBroadcaster::new(100));
 
-    let mut state = RpcState::new(
+    let state = RpcState::new(
         ledger,
         mempool,
         Network::Testnet,
@@ -61,10 +229,8 @@ async fn spawn_faucet_rpc_server() -> (TempDir, SocketAddr, tokio::task::JoinHan
         None,
         vec!["*".to_string()],
         ws_broadcaster,
-    );
-
-    // Enable faucet
-    state.faucet = Some(Arc::new(FaucetState::new(test_faucet_config())));
+    )
+    .with_faucet(FaucetState::new(config), faucet_wallet);
 
     let state = Arc::new(state);
 
@@ -114,11 +280,20 @@ async fn rpc_call(client: &Client, addr: SocketAddr, method: &str, params: Value
         .expect("Failed to parse response")
 }
 
-/// Generate a test address (view:hex\nspend:hex format)
+/// Generate a valid testnet recipient address string for the faucet.
+///
+/// Builds a deterministic, *distinct* wallet for each `seed` (so per-address
+/// rate-limit tests see independent addresses) and formats its default
+/// subaddress as a `tbotho://1/...` testnet address. The faucet parses this on
+/// the Testnet network.
 fn test_address(seed: u8) -> String {
-    let view_key = format!("{:064x}", seed as u64 * 12345);
-    let spend_key = format!("{:064x}", seed as u64 * 67890);
-    format!("view:{}\nspend:{}", view_key, spend_key)
+    // Deterministic 32 bytes of entropy keyed by `seed`, distinct per seed.
+    let entropy: [u8; 32] = std::array::from_fn(|i| seed.wrapping_add(i as u8).wrapping_mul(31));
+    let mnemonic = bip39::Mnemonic::from_entropy(&entropy, bip39::Language::English)
+        .expect("Failed to build mnemonic from entropy");
+    let wallet =
+        Wallet::from_mnemonic(mnemonic.phrase()).expect("Failed to create wallet from mnemonic");
+    Address::classical(wallet.default_address(), Network::Testnet).to_address_string()
 }
 
 // ============================================================================
@@ -665,10 +840,19 @@ async fn test_faucet_transaction_status_pending() {
 #[tokio::test]
 #[serial]
 async fn test_faucet_handles_concurrent_requests() {
-    let (_temp_dir, addr, _handle) = spawn_faucet_rpc_server().await;
+    // All loopback requests share IP 127.0.0.1, so the per-IP cooldown would
+    // otherwise reject concurrent requests. Disable the cooldown and raise the
+    // per-IP hourly limit so the test genuinely exercises concurrent dispense
+    // handling to distinct addresses rather than the cooldown path.
+    let config = FaucetConfig {
+        cooldown_secs: 0,
+        per_ip_hourly_limit: 100,
+        ..test_faucet_config()
+    };
+    let (_temp_dir, addr, _handle) = spawn_faucet_rpc_server_with_config(config).await;
     let client = Client::new();
 
-    // Send multiple concurrent requests from "different IPs" (different addresses)
+    // Send multiple concurrent requests to distinct addresses.
     let futures: Vec<_> = (0..5)
         .map(|i| {
             let client = client.clone();

@@ -2171,7 +2171,7 @@ async fn handle_faucet_request(
     state: &RpcState,
     client_ip: Option<std::net::IpAddr>,
 ) -> JsonRpcResponse {
-    use faucet::{FaucetError, FaucetRequest};
+    use faucet::FaucetRequest;
 
     // Check if faucet is available
     let faucet = match &state.faucet {
@@ -2401,15 +2401,15 @@ async fn handle_faucet_request(
     // Broadcast to WebSocket subscribers
     state.ws_broadcaster.new_transaction(&tx_hash, fee, None);
 
-    JsonRpcResponse::success(
-        id,
-        json!({
-            "success": true,
-            "txHash": tx_hash_hex,
-            "amount": amount,
-            "amountFormatted": format!("{:.6} BTH", amount as f64 / 1_000_000_000_000.0),
-        }),
-    )
+    // Build the response via FaucetResponse so the serialized shape stays in
+    // sync with the documented faucet contract. In particular `amount` is
+    // serialized as a decimal string (picocredits can exceed JSON's safe
+    // integer range), which is what API consumers and the e2e tests expect.
+    let response = faucet::FaucetResponse::success(tx_hash_hex, amount);
+    match serde_json::to_value(&response) {
+        Ok(value) => JsonRpcResponse::success(id, value),
+        Err(e) => JsonRpcResponse::error(id, -32000, &format!("Failed to serialize response: {}", e)),
+    }
 }
 
 /// Faucet dispense statistics calculated from blockchain.
@@ -2573,7 +2573,16 @@ async fn handle_faucet_status(id: Value, state: &RpcState) -> JsonRpcResponse {
                     }
                 };
                 let dispense_stats = calculate_dispensed_from_blockchain(&wallet, &ledger, faucet, stats.amount_per_request);
-                (dispense_stats.daily_dispensed, dispense_stats.lifetime_dispensed)
+                // The blockchain reflects only *confirmed* dispenses. Faucet
+                // transactions sit in the mempool until mined, so a freshly
+                // dispensed request would otherwise report zero. The in-memory
+                // counter (incremented on every successful dispense) captures
+                // these still-pending amounts, so report the larger of the two
+                // to avoid under-counting today's committed dispenses.
+                (
+                    dispense_stats.daily_dispensed.max(stats.daily_dispensed),
+                    dispense_stats.lifetime_dispensed,
+                )
             } else {
                 // Fall back to in-memory counter if no wallet
                 (stats.daily_dispensed, 0)
