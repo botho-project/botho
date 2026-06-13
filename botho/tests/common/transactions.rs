@@ -98,14 +98,13 @@ pub fn create_signed_transaction(
         .position(|m| m.target_key == real_target_key)
         .ok_or("Real input not found in shuffled ring")?;
 
-    // Create CLSAG ring input
-    let total_output = outputs.iter().map(|o| o.amount).sum::<u64>() + fee;
+    // Create CLSAG ring input. The per-input pseudo-output amount is the real
+    // UTXO's amount; the transaction-level balance check enforces the sum.
     let ring_input = ClsagRingInput::new(
         shuffled_ring,
         real_index,
         &onetime_private,
         sender_utxo.output.amount,
-        total_output,
         &signing_hash,
         &mut rng,
     )
@@ -161,7 +160,6 @@ pub fn create_multi_input_transaction(
     // Create preliminary tx to get signing hash
     let preliminary_tx = Transaction::new_clsag(Vec::new(), outputs.clone(), fee, current_height);
     let signing_hash = preliminary_tx.signing_hash();
-    let total_output = outputs.iter().map(|o| o.amount).sum::<u64>() + fee;
 
     // Collect all real input keys for exclusion from decoys
     let exclude_keys: Vec<[u8; 32]> = utxos_to_spend
@@ -210,7 +208,6 @@ pub fn create_multi_input_transaction(
             real_index,
             &onetime_private,
             utxo.output.amount,
-            total_output,
             &signing_hash,
             &mut rng,
         )
@@ -306,13 +303,11 @@ pub fn create_split_payment_transaction(
         .position(|m| m.target_key == real_target_key)
         .ok_or("Real input not found")?;
 
-    let total_output = outputs.iter().map(|o| o.amount).sum::<u64>() + fee;
     let ring_input = ClsagRingInput::new(
         shuffled_ring,
         real_index,
         &onetime_private,
         sender_utxo.output.amount,
-        total_output,
         &signing_hash,
         &mut rng,
     )

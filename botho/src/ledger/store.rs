@@ -1098,6 +1098,18 @@ impl Ledger {
     /// the mempool — so this check is the block-level analogue.
     fn verify_ring_members(&self, tx: &BothoTransaction) -> Result<(), LedgerError> {
         for (input_idx, input) in tx.inputs.clsag().iter().enumerate() {
+            // Track whether the claimed per-input pseudo-output amount matches
+            // any resolved ring member's real UTXO amount. The real input is
+            // hidden among decoys, so we cannot identify it directly — but the
+            // CLSAG balance proof asserts the real member's committed amount
+            // equals `pseudo_output_amount`, and every ring member is verified
+            // below to match a real UTXO. Requiring the pseudo-output amount to
+            // equal some ring member's UTXO amount therefore binds it to a real
+            // UTXO and prevents a producer claiming an inflated input amount to
+            // unbalance the transaction-level sum (audit finding I4; composes
+            // with the C3 commitment check below).
+            let mut pseudo_amount_bound = false;
+
             for (member_idx, member) in input.ring.iter().enumerate() {
                 let utxo = self
                     .get_utxo_by_target_key(&member.target_key)?
@@ -1114,6 +1126,16 @@ impl Ledger {
                         input_idx, member_idx
                     )));
                 }
+                if utxo.output.amount == input.pseudo_output_amount {
+                    pseudo_amount_bound = true;
+                }
+            }
+
+            if !pseudo_amount_bound {
+                return Err(LedgerError::InvalidBlock(format!(
+                    "Input {} pseudo-output amount {} does not match any resolved ring member's UTXO amount (possible counterfeit input amount)",
+                    input_idx, input.pseudo_output_amount
+                )));
             }
         }
         Ok(())

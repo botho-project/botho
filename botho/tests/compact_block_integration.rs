@@ -120,6 +120,7 @@ fn create_mock_transaction(seed: u64) -> Transaction {
         key_image,
         commitment_key_image,
         clsag_signature: vec![0u8; 64], // Mock signature
+        pseudo_output_amount: 0,
     };
 
     // Create deterministic output
