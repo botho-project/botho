@@ -22,12 +22,14 @@ use std::{thread, time::Duration};
 use bth_account_keys::PublicAddress;
 use serial_test::serial;
 
+use botho::consensus::split_fees;
 use botho::transaction::{Utxo, MIN_TX_FEE, PICOCREDITS_PER_CREDIT};
 
 use crate::common::{
-    create_multi_input_transaction, create_signed_transaction, create_split_payment_transaction,
-    ensure_decoy_availability, get_wallet_balance, mine_block, scan_wallet_utxos, TestNetwork,
-    TestNetworkConfig, DEFAULT_NUM_NODES, INITIAL_BLOCK_REWARD, TEST_RING_SIZE,
+    confirm_transaction, create_multi_input_transaction, create_signed_transaction,
+    create_split_payment_transaction, ensure_decoy_availability, get_wallet_balance, mine_block,
+    scan_wallet_utxos, TestNetwork, TestNetworkConfig, DEFAULT_NUM_NODES, INITIAL_BLOCK_REWARD,
+    TEST_RING_SIZE,
 };
 
 // ============================================================================
@@ -101,8 +103,11 @@ fn test_concurrent_transfers() {
         transactions.push((i, tx));
     }
 
-    // Broadcast all transactions simultaneously
-    println!("Broadcasting all transactions...");
+    // Confirm every transfer on-chain. The transfers are independent (each
+    // wallet spends its own original coinbase), so they can be confirmed in
+    // any order; confirm_transaction mines until each tx's key image is
+    // recorded as spent, making inclusion deterministic.
+    println!("Confirming all transfers...");
     for (i, tx) in &transactions {
         println!(
             "  Wallet {} -> Wallet {}: {} BTH",
@@ -110,27 +115,29 @@ fn test_concurrent_transfers() {
             (i + 1) % DEFAULT_NUM_NODES,
             send_amount / PICOCREDITS_PER_CREDIT
         );
-        network.broadcast_transaction(tx.clone());
+        assert!(
+            confirm_transaction(&network, tx, 0),
+            "Transfer from wallet {} was not confirmed on-chain",
+            i
+        );
     }
 
-    // Mine a single block containing all transactions
-    println!("\nMining block with all concurrent transactions...");
-    mine_block(&network, 0);
-
-    // Verify all transactions were included
     network.verify_consistency();
 
+    // Only the burn share of fees is destroyed; the rest flows to the lottery
+    // pool (audit cycle 6, M4). The burn of N fees is exact for MIN_TX_FEE
+    // regardless of how the txs are grouped into blocks.
+    let total_fees = DEFAULT_NUM_NODES as u64 * MIN_TX_FEE;
+    let (_, expected_burn) = split_fees(total_fees, &Default::default());
     let node = network.get_node(0);
     let state = node.chain_state();
-    let expected_fees = DEFAULT_NUM_NODES as u64 * MIN_TX_FEE;
     println!(
-        "\nFees burned: {} (expected: {})",
-        state.total_fees_burned, expected_fees
+        "\nFees burned (20% share): {} (expected: {})",
+        state.total_fees_burned, expected_burn
     );
-    assert!(
-        state.total_fees_burned >= expected_fees,
-        "Expected at least {} fees from {} concurrent transactions",
-        expected_fees,
+    assert_eq!(
+        state.total_fees_burned, expected_burn,
+        "Burn share of {} concurrent-transfer fees should be destroyed",
         DEFAULT_NUM_NODES
     );
     drop(node);

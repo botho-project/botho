@@ -26,6 +26,7 @@ use tempfile::TempDir;
 
 use botho::{
     block::{Block, BlockHeader, BlockLotterySummary, MintingTx},
+    consensus::{BlockBuilder, LotteryFeeConfig},
     ledger::Ledger,
     mempool::{Mempool, MempoolError},
     transaction::{Transaction, TxOutput, Utxo, UtxoId, MIN_TX_FEE, PICOCREDITS_PER_CREDIT},
@@ -152,7 +153,7 @@ fn mine_block(
         }
     };
 
-    Block {
+    let block = Block {
         header: BlockHeader {
             version: 1,
             prev_block_hash: prev_hash,
@@ -168,7 +169,33 @@ fn mine_block(
         transactions,
         lottery_outputs: Vec::new(),
         lottery_summary: BlockLotterySummary::default(),
+    };
+
+    // Run the lottery fee-split so fee-bearing blocks satisfy
+    // validate_block_lottery in add_block (otherwise rejected as
+    // "Invalid fee split"). Mirrors the production proposer path.
+    apply_lottery_to_block(block, ledger)
+}
+
+/// Apply the lottery fee-split / draw to a block using the ledger's pool and
+/// candidate set (single-ledger analogue of commands/run.rs::apply_lottery_to_block).
+fn apply_lottery_to_block(block: Block, ledger: &Ledger) -> Block {
+    let total_fees: u64 = block.transactions.iter().map(|tx| tx.fee).sum();
+    let emission_share = block.minting_tx.lottery_emission_share();
+    let lottery_config = LotteryFeeConfig::default();
+
+    let stored_pool = ledger.get_lottery_pool().unwrap_or(0);
+    let candidates = ledger
+        .get_lottery_validation_candidates(block.height(), &lottery_config.draw_config)
+        .unwrap_or_default();
+
+    // Nothing flowing in or out: leave the default (all-zero) summary.
+    if total_fees == 0 && emission_share == 0 && stored_pool == 0 {
+        return block;
     }
+
+    let utxo_lookup = |utxo_id: &[u8; 36]| ledger.get_utxo_by_id(utxo_id).ok().flatten();
+    BlockBuilder::apply_lottery(block, &candidates, stored_pool, utxo_lookup, &lottery_config)
 }
 
 /// Scan wallet for unspent UTXOs
@@ -480,11 +507,13 @@ fn test_tx_lifecycle_fee_burning() {
         .add_block(&block)
         .expect("Failed to add block with tx");
 
-    // Verify fee was burned
+    // Verify the burn share was destroyed. Only the burn fraction of a fee
+    // is destroyed; the rest flows to the lottery pool (audit cycle 6, M4).
+    let per_fee_burn = LotteryFeeConfig::default().split_fees(fee).1;
     let state = ledger.get_chain_state().unwrap();
     assert_eq!(
-        state.total_fees_burned, fee,
-        "Transaction fee should be burned"
+        state.total_fees_burned, per_fee_burn,
+        "Transaction fee burn share should be destroyed"
     );
 
     // Create another transaction
@@ -508,12 +537,13 @@ fn test_tx_lifecycle_fee_burning() {
         .add_block(&block)
         .expect("Failed to add block with tx2");
 
-    // Verify cumulative fees burned
+    // Verify cumulative burn: two separate blocks, each burning the per-fee
+    // burn share (audit cycle 6, M4).
     let state = ledger.get_chain_state().unwrap();
     assert_eq!(
         state.total_fees_burned,
-        fee * 2,
-        "Both transaction fees should be burned"
+        per_fee_burn * 2,
+        "Both transaction fee burn shares should be destroyed"
     );
 }
 
@@ -942,12 +972,13 @@ fn test_multiple_transactions_in_single_block() {
         "Recipient 2 should have 15 BTH"
     );
 
-    // Verify fees burned (2 transactions)
+    // Verify the burn share for both fees. Both txs share one block, so the
+    // burn is computed on the combined block fee (audit cycle 6, M4).
+    let expected_burn = LotteryFeeConfig::default().split_fees(MIN_TX_FEE * 2).1;
     let state = ledger.get_chain_state().unwrap();
     assert_eq!(
-        state.total_fees_burned,
-        MIN_TX_FEE * 2,
-        "Both fees should be burned"
+        state.total_fees_burned, expected_burn,
+        "Burn share of both fees should be destroyed"
     );
 }
 
