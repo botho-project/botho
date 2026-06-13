@@ -49,7 +49,9 @@ Most cryptocurrencies reward early accumulators and punish late adopters. Botho 
 | Moderately concentrated | 1-5% |
 | Heavily hoarded | up to 30% |
 
-The system tracks coin *ancestry*, not identities. Coins that circulate through the economy pay less; coins that sit in whale wallets pay more. This is Sybil-resistant—splitting your wallet doesn't help because fees are based on where coins came from, not where they are now.
+The system tracks coin *ancestry*, not identities. Coins that circulate through the economy pay less; coins that sit in whale wallets pay more. This is Sybil-resistant—splitting your wallet doesn't help because fees are based on where coins came from, not where they are now. **Cluster demurrage** adds a small spend-time holding charge on concentrated clusters, reaching idle wealth that a consumption tax cannot (well-circulated coins pay zero).
+
+Fees are not simply burned. Each block, collected fees are split **80% into a cluster-tilted redistribution lottery** (paid back out to randomly selected, mostly small/well-circulated holders) and **20% burned** (deflationary). A height-scheduled fraction of the block reward is also routed into that pool. This turns wealth-concentration charges into a redistribution flow rather than pure destruction. See [Cluster-Tilted Redistribution](docs/design/cluster-tilted-redistribution.md) and [Tokenomics](docs/concepts/tokenomics.md).
 
 ### Sustainable Security
 

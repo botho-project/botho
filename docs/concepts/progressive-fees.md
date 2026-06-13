@@ -149,6 +149,21 @@ The 3-segment model achieves:
 - **0.1% lower** burn rate than sigmoid
 - **ZK-compatible** (provable with ~4.5 KB OR-proofs)
 
+> **Note on "Burn Rate"**: the column above measures *fee intake* (fees collected as a fraction of value moved) in the original simulation, not the share of fees destroyed. In the shipped protocol, fees are **not** all burned — see **Where Fees Go** below.
+
+## Where Fees Go: Redistribution Lottery + Burn (80/20)
+
+Progressive fees are the *intake* side of Botho's anti-concentration design. The *outflow* side is a cluster-tilted redistribution lottery. Each block, collected fees (including the cluster-demurrage charges described below) are split deterministically by `LotteryFeeConfig` (`botho/src/consensus/lottery.rs`):
+
+- **80% → redistribution lottery pool**, paid back out to randomly selected UTXO holders, with the draw tilted toward smaller, well-circulated holders.
+- **20% → burned** (deflationary).
+
+Only the 20% burn share is destroyed; the redistributed 80% stays in circulating supply as new payout UTXOs (audit cycle 6, M4). A height-scheduled fraction of the block reward is also routed into the same pool (`lottery_emission_share`), and the pool carries over between blocks under a per-block payout cap.
+
+**Cluster demurrage** complements progressive fees by reaching *idle* wealth that a consumption tax cannot: concentrated-cluster coins accrue a small spend-time holding charge (factor-1 coins pay zero), which is added to the minimum fee and flows through the same 80/20 split into the lottery pool.
+
+> **See also**: [Cluster-Tilted Redistribution](../design/cluster-tilted-redistribution.md), [Lottery-Based Fee Redistribution](../design/lottery-redistribution.md), [Entropy-Weighted Decay](../design/entropy-weighted-decay.md), and the [Tokenomics](tokenomics.md#fee-destination-redistribution-lottery--burn-8020) fee-destination summary.
+
 ## Privacy Considerations
 
 ### Phase 1: Public Tags
