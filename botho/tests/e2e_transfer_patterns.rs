@@ -166,14 +166,6 @@ fn test_concurrent_transfers() {
 /// larger output. Tests dust collection and multi-input transaction handling.
 #[test]
 #[serial]
-#[ignore = "Blocked on audit finding I4: multi-input CLSAG balance verification is \
-            structurally broken — verify_ring_signatures checks each input against the \
-            full output+fee total, so an honest multi-input tx fails CLSAG verification. \
-            This test previously gave a false pass: the consolidation block was rejected \
-            for an unrelated reason (missing lottery fee-split in the harness) and the \
-            assertion was satisfied by the recipient's mining rewards, not the transfer. \
-            With the harness now producing valid fee-split blocks, the I4 defect is \
-            exposed. Re-enable once multi-input balance verification is fixed."]
 fn test_multi_input_consolidation() {
     println!("\n=== Multi-Input Consolidation Test ===\n");
 
@@ -641,10 +633,6 @@ fn test_rapid_sequential_transfers() {
 /// split payments, and sequential transfers.
 #[test]
 #[serial]
-#[ignore = "Blocked on audit finding I4: this test's Pattern A consolidates two UTXOs \
-            via create_multi_input_transaction, and multi-input CLSAG balance \
-            verification is structurally broken (see test_multi_input_consolidation). \
-            Re-enable once multi-input balance verification is fixed."]
 fn test_mixed_transaction_patterns() {
     println!("\n=== Mixed Transaction Patterns Test ===\n");
 
@@ -658,6 +646,9 @@ fn test_mixed_transaction_patterns() {
             mine_block(&network, i);
         }
     }
+    // Pattern A consolidates 2 UTXOs (excluded from the decoy pool), so ensure
+    // the confirmed UTXO set is large enough to build full-size rings.
+    ensure_decoy_availability(&network, 2);
     network.verify_consistency();
 
     println!("Initial state:");
@@ -757,6 +748,7 @@ fn test_mixed_transaction_patterns() {
 
     let node = network.get_node(0);
     let final_state = node.chain_state();
+    let lottery_pool = node.ledger.read().unwrap().get_lottery_pool().unwrap();
     drop(node);
 
     println!("Final state:");
@@ -771,19 +763,28 @@ fn test_mixed_transaction_patterns() {
         );
     }
 
-    // Verify conservation
+    // Verify supply conservation: mined = wallets + burned + lottery pool.
+    // The fee paid by each transaction is split between the burn and the
+    // lottery pool (audit cycle 6, M4), so the pool term must be included.
     let total_balance: u64 = network
         .wallets
         .iter()
         .map(|w| get_wallet_balance(&network, w))
         .sum();
-    let expected = final_state.total_mined - final_state.total_fees_burned;
 
     println!(
-        "\nConservation: total_balance={}, expected={}",
-        total_balance, expected
+        "\nConservation: wallets={} + burned={} + pool={} =?= mined={}",
+        total_balance, final_state.total_fees_burned, lottery_pool, final_state.total_mined
     );
-    assert_eq!(total_balance, expected, "Conservation violated");
+    assert_eq!(
+        total_balance + final_state.total_fees_burned + lottery_pool,
+        final_state.total_mined,
+        "Supply conservation: wallets({}) + burned({}) + pool({}) != mined({})",
+        total_balance,
+        final_state.total_fees_burned,
+        lottery_pool,
+        final_state.total_mined
+    );
 
     println!("\n=== Mixed Transaction Patterns Test Complete ===");
     println!("  - Consolidation, split payment, and simple transfer in one block");

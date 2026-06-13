@@ -647,6 +647,23 @@ pub struct ClsagRingInput {
     /// Serialized as: c_zero (32) || responses (32 * ring_size) || key_image
     /// (32) || commitment_key_image (32)
     pub clsag_signature: Vec<u8>,
+
+    /// Per-input "pseudo-output amount": the value of the real UTXO spent by
+    /// this input.
+    ///
+    /// In the current transparent-amount model (trivial zero-blinding Pedersen
+    /// commitments), each input's CLSAG balance proof asserts that the real
+    /// ring member's committed amount equals this value. The transaction-level
+    /// balance check then requires `sum(pseudo_output_amount) == outputs + fee`.
+    ///
+    /// This replaces the previous (broken) model where every input was checked
+    /// against the *full* output total, which made any honest multi-input
+    /// transaction fail. See audit finding I4 (cycle 6).
+    ///
+    /// Consensus-critical and consensus-breaking: this field is part of the
+    /// transaction wire format and is bound to the resolved UTXO at block
+    /// acceptance.
+    pub pseudo_output_amount: u64,
 }
 
 impl ClsagRingInput {
@@ -656,16 +673,21 @@ impl ClsagRingInput {
     /// * `ring` - Ring of outputs (real + decoys), with real at `real_index`
     /// * `real_index` - Position of the real input in the ring
     /// * `onetime_private_key` - Private key for the real input
-    /// * `amount` - Amount of the real input
-    /// * `output_amount` - Total output amount (for balance proof)
+    /// * `amount` - Amount of the real input being spent. This becomes the
+    ///   input's `pseudo_output_amount`: the CLSAG balance proof binds the real
+    ///   ring member's committed amount to this value, and the
+    ///   transaction-level balance check sums these across all inputs.
     /// * `message` - Message to sign (typically transaction signing hash)
     /// * `rng` - Random number generator
+    ///
+    /// Note: the per-input balance proof asserts `real_input_amount == amount`.
+    /// The transaction balance equation `sum(amount) == outputs + fee` is
+    /// enforced separately in [`Transaction::verify_ring_signatures`].
     pub fn new<R: RngCore + CryptoRng>(
         ring: Vec<RingMember>,
         real_index: usize,
         onetime_private_key: &RistrettoPrivate,
         amount: u64,
-        _output_amount: u64, // Reserved for future RingCT balance proofs
         message: &[u8; 32],
         rng: &mut R,
     ) -> Result<Self, String> {
@@ -717,18 +739,27 @@ impl ClsagRingInput {
             key_image,
             commitment_key_image,
             clsag_signature,
+            pseudo_output_amount: amount,
         })
     }
 
-    /// Verify this CLSAG ring signature input.
+    /// Verify this CLSAG ring signature input against its own pseudo-output
+    /// amount.
+    ///
+    /// The balance proof asserts that the real ring member's committed amount
+    /// equals `self.pseudo_output_amount`. This does NOT check the
+    /// transaction-level balance equation (`sum == outputs + fee`); that is
+    /// enforced in [`Transaction::verify_ring_signatures`]. Nor does it bind
+    /// the amount to a real UTXO; that binding is enforced at block acceptance
+    /// (see `LedgerStore::verify_ring_members`).
     ///
     /// # Arguments
     /// * `message` - The message that was signed (transaction signing hash)
-    /// * `total_output_amount` - Total output amount for balance verification
     ///
     /// # Returns
     /// `true` if the signature is valid, `false` otherwise.
-    pub fn verify(&self, message: &[u8; 32], total_output_amount: u64) -> bool {
+    pub fn verify(&self, message: &[u8; 32]) -> bool {
+        let pseudo_output_amount = self.pseudo_output_amount;
         // Parse key images
         let key_image = match KeyImage::try_from(&self.key_image[..]) {
             Ok(ki) => ki,
@@ -758,9 +789,11 @@ impl ClsagRingInput {
             Err(_) => return false,
         };
 
-        // Create output commitment (trivial - zero blinding)
+        // Create output commitment (trivial - zero blinding) for THIS input's
+        // own pseudo-output amount. The CLSAG proves the real ring member's
+        // committed amount equals this value.
         let generator = generators(0);
-        let output_commitment = generator.commit(Scalar::from(total_output_amount), Scalar::ZERO);
+        let output_commitment = generator.commit(Scalar::from(pseudo_output_amount), Scalar::ZERO);
 
         // Verify the CLSAG
         clsag
@@ -1039,16 +1072,57 @@ impl Transaction {
         Ok(())
     }
 
-    /// Verify all ring signatures in this transaction.
+    /// Verify all ring signatures in this transaction and the transaction-level
+    /// balance equation.
+    ///
+    /// Two distinct checks are performed:
+    ///
+    /// 1. **Per-input CLSAG verification**: each input's ring signature is
+    ///    verified against its own `pseudo_output_amount` (the value of the
+    ///    real UTXO it spends). This proves ownership of one ring member and
+    ///    binds that member's committed amount to the claimed pseudo-output
+    ///    amount.
+    /// 2. **Balance equation**: the sum of all per-input pseudo-output amounts
+    ///    must equal `outputs + fee`. All arithmetic is exact integer
+    ///    (checked) — there are no floating-point operations in this path, and
+    ///    any overflow is treated as invalid.
+    ///
+    /// This replaces the previous (broken) model where every input was checked
+    /// against the full `outputs + fee` total, which made any honest
+    /// multi-input transaction fail (audit finding I4). Single-input
+    /// transactions remain valid: the lone input's pseudo-output amount equals
+    /// `outputs + fee`.
+    ///
+    /// Note: this does NOT bind a claimed pseudo-output amount to a real UTXO
+    /// in the ledger — a producer could claim an inflated amount that still
+    /// balances against fabricated outputs. That binding is enforced at block
+    /// acceptance (`LedgerStore::verify_ring_members`), which requires each
+    /// input's pseudo-output amount to match a resolved ring member's UTXO.
     pub fn verify_ring_signatures(&self) -> Result<(), &'static str> {
         let signing_hash = self.signing_hash();
-        let total_output = self.total_output() + self.fee;
 
+        // 1. Per-input CLSAG verification against each input's own amount, and
+        //    accumulate the input total with checked (exact integer) arithmetic.
+        let mut input_total: u64 = 0;
         for input in self.inputs.clsag() {
-            if !input.verify(&signing_hash, total_output) {
+            if !input.verify(&signing_hash) {
                 return Err("Invalid CLSAG signature");
             }
+            input_total = input_total
+                .checked_add(input.pseudo_output_amount)
+                .ok_or("Input amount sum overflow")?;
         }
+
+        // 2. Balance equation: sum(inputs) == sum(outputs) + fee (exact).
+        let output_total = self
+            .total_output()
+            .checked_add(self.fee)
+            .ok_or("Output amount sum overflow")?;
+
+        if input_total != output_total {
+            return Err("Transaction inputs do not balance outputs plus fee");
+        }
+
         Ok(())
     }
 }
@@ -1152,6 +1226,7 @@ mod tests {
             key_image: [ring_id; 32],
             commitment_key_image: [ring_id.wrapping_add(100); 32],
             clsag_signature: vec![0u8; 32 + 32 * MIN_RING_SIZE], // Fake signature
+            pseudo_output_amount: 0,
         }
     }
 
@@ -1311,6 +1386,170 @@ mod tests {
         );
     }
 
-    // Ring signature verification tests require actual crypto keys - see wallet
-    // tests
+    // ========================================================================
+    // Multi-input balance verification tests (audit finding I4)
+    //
+    // These exercise the real CLSAG signing/verification path with actual
+    // crypto keys, covering the per-input pseudo-output amount model and the
+    // transaction-level balance equation `sum(inputs) == outputs + fee`.
+    // ========================================================================
+
+    /// Build a fully signed `ClsagRingInput` for a real input worth `amount`.
+    ///
+    /// The real input sits at a random index; the remaining ring members are
+    /// independently-keyed decoys with valid curve points. This mirrors how a
+    /// wallet constructs an input and lets us drive `verify` end-to-end.
+    fn signed_clsag_input(amount: u64, message: &[u8; 32]) -> ClsagRingInput {
+        use bth_crypto_keys::ReprBytes;
+        use rand::Rng;
+
+        let mut rng = OsRng;
+
+        // Real input: target_key = onetime_private * G.
+        let onetime_private = RistrettoPrivate::from_random(&mut rng);
+        let onetime_public = RistrettoPublic::from(&onetime_private);
+
+        let real_member = RingMember {
+            target_key: CompressedRistrettoPublic::from(&onetime_public).to_bytes().into(),
+            public_key: CompressedRistrettoPublic::from(&RistrettoPublic::from(
+                &RistrettoPrivate::from_random(&mut rng),
+            ))
+            .to_bytes()
+            .into(),
+            commitment: {
+                let g = generators(0);
+                g.commit(Scalar::from(amount), Scalar::ZERO)
+                    .compress()
+                    .to_bytes()
+            },
+        };
+
+        // Decoys: valid but unrelated curve points.
+        let mut ring: Vec<RingMember> = Vec::with_capacity(MIN_RING_SIZE);
+        for _ in 0..(MIN_RING_SIZE - 1) {
+            let decoy_target = RistrettoPublic::from(&RistrettoPrivate::from_random(&mut rng));
+            let decoy_public = RistrettoPublic::from(&RistrettoPrivate::from_random(&mut rng));
+            let decoy_amount: u64 = rng.gen_range(1..1_000_000);
+            let g = generators(0);
+            ring.push(RingMember {
+                target_key: CompressedRistrettoPublic::from(&decoy_target).to_bytes().into(),
+                public_key: CompressedRistrettoPublic::from(&decoy_public).to_bytes().into(),
+                commitment: g
+                    .commit(Scalar::from(decoy_amount), Scalar::ZERO)
+                    .compress()
+                    .to_bytes(),
+            });
+        }
+
+        // Insert the real member at a random position.
+        let real_index = rng.gen_range(0..MIN_RING_SIZE);
+        ring.insert(real_index, real_member);
+
+        ClsagRingInput::new(
+            ring,
+            real_index,
+            &onetime_private,
+            amount,
+            message,
+            &mut rng,
+        )
+        .expect("failed to sign CLSAG input")
+    }
+
+    /// Assemble a transaction whose inputs sum to `outputs + fee`.
+    ///
+    /// `input_amounts` are the per-input spent amounts; the outputs are a single
+    /// recipient output plus an implicit balance — here we simply emit a single
+    /// output equal to `sum(inputs) - fee` so the balance equation holds.
+    fn balanced_tx(input_amounts: &[u64], fee: u64) -> Transaction {
+        let total_input: u64 = input_amounts.iter().sum();
+        let output_amount = total_input - fee;
+        let outputs = vec![test_output(output_amount, [7u8; 32], [8u8; 32])];
+
+        let preliminary = Transaction::new_clsag(Vec::new(), outputs.clone(), fee, 1);
+        let signing_hash = preliminary.signing_hash();
+
+        let inputs: Vec<ClsagRingInput> = input_amounts
+            .iter()
+            .map(|&amt| signed_clsag_input(amt, &signing_hash))
+            .collect();
+
+        Transaction::new_clsag(inputs, outputs, fee, 1)
+    }
+
+    #[test]
+    fn test_single_input_balance_valid() {
+        // Regression guard: single-input transactions must still validate.
+        let tx = balanced_tx(&[TEST_AMOUNT + MIN_TX_FEE], MIN_TX_FEE);
+        assert_eq!(tx.inputs.len(), 1);
+        assert!(
+            tx.verify_ring_signatures().is_ok(),
+            "single-input balanced tx must verify"
+        );
+    }
+
+    #[test]
+    fn test_two_input_balance_valid() {
+        let tx = balanced_tx(&[TEST_AMOUNT, TEST_AMOUNT + MIN_TX_FEE], MIN_TX_FEE);
+        assert_eq!(tx.inputs.len(), 2);
+        assert!(
+            tx.verify_ring_signatures().is_ok(),
+            "honest 2-input balanced tx must verify"
+        );
+    }
+
+    #[test]
+    fn test_three_input_balance_valid() {
+        let tx = balanced_tx(
+            &[TEST_AMOUNT, TEST_AMOUNT * 2, TEST_AMOUNT * 3 + MIN_TX_FEE],
+            MIN_TX_FEE,
+        );
+        assert_eq!(tx.inputs.len(), 3);
+        assert!(
+            tx.verify_ring_signatures().is_ok(),
+            "honest 3-input balanced tx must verify"
+        );
+    }
+
+    #[test]
+    fn test_unbalanced_multi_input_rejected() {
+        // Construct a transaction whose inputs are each correctly signed over
+        // the real signing hash, but whose per-input amounts sum to MORE than
+        // outputs + fee. Every CLSAG signature verifies; the balance equation
+        // must reject the transaction (would otherwise destroy value / be
+        // unbalanced).
+        let outputs = vec![test_output(TEST_AMOUNT, [7u8; 32], [8u8; 32])];
+        let fee = MIN_TX_FEE;
+
+        let preliminary = Transaction::new_clsag(Vec::new(), outputs.clone(), fee, 1);
+        let signing_hash = preliminary.signing_hash();
+
+        // outputs + fee == TEST_AMOUNT + MIN_TX_FEE, but inputs sum to
+        // 2 * TEST_AMOUNT + MIN_TX_FEE — an extra TEST_AMOUNT conjured up.
+        let inputs = vec![
+            signed_clsag_input(TEST_AMOUNT, &signing_hash),
+            signed_clsag_input(TEST_AMOUNT + MIN_TX_FEE, &signing_hash),
+        ];
+        let tx = Transaction::new_clsag(inputs, outputs, fee, 1);
+
+        assert_eq!(
+            tx.verify_ring_signatures(),
+            Err("Transaction inputs do not balance outputs plus fee"),
+            "unbalanced multi-input tx must be rejected"
+        );
+    }
+
+    #[test]
+    fn test_tampered_pseudo_output_amount_rejected() {
+        // If a producer claims a per-input amount different from what was
+        // signed, the CLSAG balance proof for that input must fail.
+        let mut tx = balanced_tx(&[TEST_AMOUNT, TEST_AMOUNT + MIN_TX_FEE], MIN_TX_FEE);
+        tx.inputs.0[0].pseudo_output_amount += 1;
+
+        assert_eq!(
+            tx.verify_ring_signatures(),
+            Err("Invalid CLSAG signature"),
+            "claimed per-input amount not matching the signed amount must be rejected"
+        );
+    }
 }

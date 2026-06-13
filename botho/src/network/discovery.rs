@@ -55,12 +55,19 @@ use crate::{
 /// - Major: Breaking changes requiring hard fork
 /// - Minor: Soft fork compatible changes
 /// - Patch: Bug fixes, no consensus impact
-pub const PROTOCOL_VERSION: &str = "1.0.0";
+///
+/// Bumped to 2.0.0 for the multi-input CLSAG balance fix (audit finding I4):
+/// `ClsagRingInput` now carries a per-input `pseudo_output_amount`, a
+/// consensus-breaking change to the transaction wire format. Nodes running the
+/// old (1.x) format are consensus-incompatible and are disconnected by the
+/// major-version check. Coordinate with the planned testnet reset.
+pub const PROTOCOL_VERSION: &str = "2.0.0";
 
 /// Minimum supported protocol version.
-/// Peers below this version receive a warning but are not disconnected
-/// to allow graceful network upgrades.
-pub const MIN_SUPPORTED_PROTOCOL_VERSION: &str = "1.0.0";
+/// Peers below this major version are consensus-incompatible (their
+/// transaction wire format predates the I4 multi-input balance fix) and are
+/// disconnected.
+pub const MIN_SUPPORTED_PROTOCOL_VERSION: &str = "2.0.0";
 
 /// Topic for block announcements
 const BLOCKS_TOPIC: &str = "botho/blocks/1.0.0";
@@ -1667,18 +1674,20 @@ mod tests {
 
     #[test]
     fn test_protocol_version_constant() {
-        assert_eq!(PROTOCOL_VERSION, "1.0.0");
+        // Bumped to 2.0.0 for the consensus-breaking I4 multi-input CLSAG
+        // balance fix (new `pseudo_output_amount` tx wire field).
+        assert_eq!(PROTOCOL_VERSION, "2.0.0");
         let parsed = ProtocolVersion::parse(PROTOCOL_VERSION).unwrap();
-        assert_eq!(parsed.major, 1);
+        assert_eq!(parsed.major, 2);
         assert_eq!(parsed.minor, 0);
         assert_eq!(parsed.patch, 0);
     }
 
     #[test]
     fn test_min_supported_protocol_version_constant() {
-        assert_eq!(MIN_SUPPORTED_PROTOCOL_VERSION, "1.0.0");
+        assert_eq!(MIN_SUPPORTED_PROTOCOL_VERSION, "2.0.0");
         let parsed = ProtocolVersion::parse(MIN_SUPPORTED_PROTOCOL_VERSION).unwrap();
-        assert_eq!(parsed.major, 1);
+        assert_eq!(parsed.major, 2);
     }
 
     #[test]

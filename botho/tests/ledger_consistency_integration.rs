@@ -1069,6 +1069,7 @@ fn test_c3_block_rejected_when_ring_member_target_key_not_in_utxo_set() {
         key_image: [0xDD; 32],
         commitment_key_image: [0xEE; 32],
         clsag_signature: vec![0u8; 64],
+        pseudo_output_amount: 0,
     };
     let fake_output = TxOutput {
         amount: 1,
@@ -1129,6 +1130,7 @@ fn test_c3_block_rejected_when_ring_member_commitment_mismatched() {
         key_image: [0xDD; 32],
         commitment_key_image: [0xEE; 32],
         clsag_signature: vec![0u8; 64],
+        pseudo_output_amount: 0,
     };
     let fake_output = TxOutput {
         amount: 1,

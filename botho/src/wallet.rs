@@ -458,9 +458,6 @@ impl Wallet {
             })
             .collect();
 
-        // Calculate total output amount for the signing message
-        let total_output: u64 = outputs.iter().map(|o| o.amount).sum::<u64>() + fee;
-
         // Build a preliminary transaction to get the signing hash
         // We'll replace the inputs with real ring inputs after signing
         let preliminary_tx =
@@ -578,7 +575,6 @@ impl Wallet {
                 real_index,
                 &onetime_private,
                 utxo.output.amount,
-                total_output,
                 &signing_hash,
                 &mut rng,
             )

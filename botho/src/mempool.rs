@@ -1213,6 +1213,7 @@ mod tests {
             key_image: [ring_id; 32],
             commitment_key_image: [ring_id.wrapping_add(100); 32],
             clsag_signature: vec![0u8; 32 + 32 * MIN_RING_SIZE], // Fake signature
+            pseudo_output_amount: 0,
         }
     }
 

@@ -373,13 +373,11 @@ fn create_signed_transaction(
         .expect("Real input not found in ring after shuffle");
 
     // Create CLSAG ring input
-    let total_output = outputs.iter().map(|o| o.amount).sum::<u64>() + fee;
     let ring_input = ClsagRingInput::new(
         shuffled_ring,
         real_index,
         &onetime_private,
         sender_utxo.output.amount,
-        total_output,
         &signing_hash,
         &mut rng,
     )
