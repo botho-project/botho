@@ -22,9 +22,9 @@ use botho::transaction::{TxOutput, MIN_TX_FEE, PICOCREDITS_PER_CREDIT};
 use botho::consensus::split_fees;
 
 use crate::common::{
-    confirm_transaction, create_mock_minting_tx, create_signed_transaction, get_wallet_balance,
-    mine_block, scan_wallet_utxos, TestNetwork, TestNetworkConfig, DEFAULT_NUM_NODES,
-    INITIAL_BLOCK_REWARD, TEST_RING_SIZE,
+    confirm_transaction, create_mock_minting_tx, create_signed_transaction,
+    ensure_decoy_availability, get_wallet_balance, mine_block, scan_wallet_utxos, TestNetwork,
+    TestNetworkConfig, DEFAULT_NUM_NODES, INITIAL_BLOCK_REWARD, TEST_RING_SIZE,
 };
 
 // ============================================================================
@@ -391,10 +391,7 @@ fn test_e2e_5_node_consensus_with_mining_and_transactions() {
 /// Test private transactions using ring signatures for sender anonymity.
 /// Ring signatures hide which UTXO is being spent among a ring of decoys.
 #[test]
-#[ignore = "Needs update: WalletKeys->Wallet, TxInputs::Ring->TxInputs::Clsag"]
 fn test_private_ring_signature_transaction() {
-    use crate::common::ensure_decoy_availability;
-
     println!("\n=== Private Ring Signature Transaction Test ===\n");
 
     // Build the network
@@ -402,9 +399,12 @@ fn test_private_ring_signature_transaction() {
     let mut network = TestNetwork::build(TestNetworkConfig::default());
     thread::sleep(Duration::from_millis(500));
 
-    // Mine enough blocks for decoys
+    // Mine enough blocks for decoys. The wallet's gamma decoy selector
+    // (botho-wallet) applies a confirmation-depth filter, so it needs a
+    // deeper pool than the harness's simple selector — pre-mine extra blocks
+    // so at least TEST_RING_SIZE-1 confirmed candidates are available.
     println!("Mining blocks to build decoy set...");
-    ensure_decoy_availability(&network, 0);
+    ensure_decoy_availability(&network, 30);
 
     // Verify mining succeeded
     network.verify_consistency();
@@ -485,20 +485,24 @@ fn test_private_ring_signature_transaction() {
         hex::encode(&clsag_inputs[0].key_image[0..8])
     );
 
-    // Broadcast and mine
-    network.broadcast_transaction(private_tx.clone());
-    mine_block(&network, 0);
+    // Confirm the transaction on-chain (deterministic inclusion).
+    assert!(
+        confirm_transaction(&network, &private_tx, 0),
+        "Private transaction was not confirmed on-chain"
+    );
 
-    // Verify the transaction was included
     network.verify_consistency();
 
     let node = network.get_node(0);
     let final_state = node.chain_state();
     drop(node);
 
-    assert!(
-        final_state.total_fees_burned >= tx_fee,
-        "Fee should have been burned"
+    // Only the burn share of the fee is destroyed; the rest flows to the
+    // lottery pool (audit cycle 6, M4).
+    let expected_burn = split_fees(tx_fee, &Default::default()).1;
+    assert_eq!(
+        final_state.total_fees_burned, expected_burn,
+        "Fee burn share should have been destroyed"
     );
 
     // Verify balances

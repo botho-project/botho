@@ -381,19 +381,17 @@ fn test_payment_splitting() {
 /// High-volume transaction bursts to test throughput and stability.
 /// Generates many transactions across multiple blocks.
 #[test]
-#[ignore = "Needs update for ring signature transactions (Simple tx removed)"]
+#[serial]
 fn test_stress_load_patterns() {
     println!("\n=== Stress/Load Test ===\n");
 
     let mut network = TestNetwork::build(TestNetworkConfig::for_stress_testing());
     thread::sleep(Duration::from_millis(500));
 
-    // Mine initial blocks to fund all wallets
-    println!("Phase 1: Mining initial blocks to fund all wallets...");
-    let initial_blocks = 10;
-    for i in 0..initial_blocks {
-        mine_block(&network, i % DEFAULT_NUM_NODES);
-    }
+    // Pre-mine enough blocks for ring-decoy availability (CLSAG needs
+    // TEST_RING_SIZE-1 decoys) and to fund all wallets via rotating coinbases.
+    println!("Phase 1: Pre-mining blocks for decoys and funding all wallets...");
+    ensure_decoy_availability(&network, 0);
     network.verify_consistency();
 
     // Show initial balances
@@ -403,148 +401,114 @@ fn test_stress_load_patterns() {
         println!("  Wallet {}: {} BTH", i, balance / PICOCREDITS_PER_CREDIT);
     }
 
-    // Phase 2: Generate burst of transactions
+    // Phase 2: Generate a burst of transfers. Each transfer is confirmed
+    // before the next so UTXO selection sees fresh, unspent inputs (a wallet
+    // chosen twice would otherwise re-select the same input and double-spend).
     println!("\nPhase 2: Generating transaction burst...");
 
-    let node = network.get_node(0);
-    let mut current_height = node.chain_state().height;
-    drop(node);
-
-    let transactions_per_block = 3; // Keep manageable for test speed
+    let transactions_per_block = 3;
     let num_stress_blocks = 5;
-    let mut total_transactions = 0;
-    let mut total_fees_expected: u64 = 0;
+    let total_rounds = num_stress_blocks * transactions_per_block;
+    let send_amount = 1 * PICOCREDITS_PER_CREDIT; // Small transfers
+    let mut total_transactions: u64 = 0;
+    let mut confirmed_tx_count: u64 = 0;
 
-    for block_num in 0..num_stress_blocks {
-        println!("\n  Block {} transactions:", block_num + 1);
+    for n in 0..total_rounds {
+        let sender_idx = n % DEFAULT_NUM_NODES;
+        let recipient_idx = (sender_idx + 1) % DEFAULT_NUM_NODES;
 
-        // Create multiple transactions for this block
-        for tx_num in 0..transactions_per_block {
-            let sender_idx = (block_num * transactions_per_block + tx_num) % DEFAULT_NUM_NODES;
-            let recipient_idx = (sender_idx + 1) % DEFAULT_NUM_NODES;
+        let sender_wallet = &network.wallets[sender_idx];
+        let recipient_wallet = &network.wallets[recipient_idx];
 
-            let sender_wallet = &network.wallets[sender_idx];
-            let recipient_wallet = &network.wallets[recipient_idx];
-
-            let sender_utxos = scan_wallet_utxos(&network, sender_wallet);
-            if sender_utxos.is_empty() {
-                println!("    Wallet {} has no UTXOs, skipping", sender_idx);
-                continue;
-            }
-
-            let (utxo, subaddr_idx) = &sender_utxos[0];
-            let available = utxo.output.amount;
-            let send_amount = 1 * PICOCREDITS_PER_CREDIT; // Small transfers
-
-            if available < send_amount + MIN_TX_FEE {
-                println!("    Wallet {} insufficient funds, skipping", sender_idx);
-                continue;
-            }
-
-            let tx = create_signed_transaction(
-                sender_wallet,
-                utxo,
-                *subaddr_idx,
-                &recipient_wallet.default_address(),
-                send_amount,
-                MIN_TX_FEE,
-                current_height,
-                &network,
-            );
-
-            match tx {
-                Ok(transaction) => {
-                    network.broadcast_transaction(transaction);
-                    total_transactions += 1;
-                    total_fees_expected += MIN_TX_FEE;
-                    println!("    {} -> {}: 1 BTH", sender_idx, recipient_idx);
-                }
-                Err(e) => {
-                    println!("    {} -> {}: FAILED ({})", sender_idx, recipient_idx, e);
-                }
-            }
+        let sender_utxos = scan_wallet_utxos(&network, sender_wallet);
+        if sender_utxos.is_empty() {
+            continue;
+        }
+        let (utxo, subaddr_idx) = &sender_utxos[0];
+        if utxo.output.amount < send_amount + MIN_TX_FEE {
+            continue;
         }
 
-        // Mine block with these transactions
-        mine_block(&network, block_num % DEFAULT_NUM_NODES);
-
         let node = network.get_node(0);
-        current_height = node.chain_state().height;
+        let current_height = node.chain_state().height;
         drop(node);
+
+        match create_signed_transaction(
+            sender_wallet,
+            utxo,
+            *subaddr_idx,
+            &recipient_wallet.default_address(),
+            send_amount,
+            MIN_TX_FEE,
+            current_height,
+            &network,
+        ) {
+            Ok(tx) => {
+                total_transactions += 1;
+                if confirm_transaction(&network, &tx, sender_idx) {
+                    confirmed_tx_count += 1;
+                    println!("    {} -> {}: 1 BTH (confirmed)", sender_idx, recipient_idx);
+                }
+            }
+            Err(e) => {
+                println!("    {} -> {}: create FAILED ({})", sender_idx, recipient_idx, e);
+            }
+        }
     }
 
-    // Verify consistency after all stress blocks
+    // Phase 3: Verify consistency and accounting
     println!("\nPhase 3: Verifying consistency...");
     network.verify_consistency();
 
     let node = network.get_node(0);
     let final_state = node.chain_state();
+    let lottery_pool = node.ledger.read().unwrap().get_lottery_pool().unwrap();
     drop(node);
 
     println!("\nStress test results:");
     println!("  Total blocks: {}", final_state.height);
-    println!("  Total transactions created: {}", total_transactions);
-    println!(
-        "  Total fees burned: {} picocredits",
-        final_state.total_fees_burned
-    );
-    println!("  Max expected fees: {} picocredits", total_fees_expected);
+    println!("  Transactions created: {}", total_transactions);
+    println!("  Transactions confirmed: {}", confirmed_tx_count);
+    println!("  Fees burned (20% share): {} picocredits", final_state.total_fees_burned);
 
-    // Calculate how many transactions were actually confirmed
-    let confirmed_tx_count = final_state.total_fees_burned / MIN_TX_FEE;
-    println!("  Confirmed transactions: {}", confirmed_tx_count);
+    // confirm_transaction is reliable, so every created tx should confirm.
+    assert_eq!(
+        confirmed_tx_count, total_transactions,
+        "All created transactions should confirm ({} of {})",
+        confirmed_tx_count, total_transactions
+    );
+    assert!(total_transactions > 0, "Stress test created no transactions");
 
-    // At least some transactions should have been processed (at least 30%
-    // throughput)
-    let min_expected_confirms = total_transactions as u64 / 3;
-    assert!(
-        confirmed_tx_count >= min_expected_confirms,
-        "Expected at least {} transactions confirmed, got {}",
-        min_expected_confirms,
-        confirmed_tx_count
+    // Each confirmed transfer lands in its own block, so the destroyed amount
+    // is confirmed * burn(MIN_TX_FEE) (audit cycle 6, M4).
+    let per_fee_burn = split_fees(MIN_TX_FEE, &Default::default()).1;
+    assert_eq!(
+        final_state.total_fees_burned,
+        confirmed_tx_count * per_fee_burn,
+        "Destroyed fees should be confirmed_count * per-fee burn share"
     );
 
-    // Final balance verification
-    println!("\nFinal balances:");
-    let mut total_balance: u64 = 0;
-    for (i, wallet) in network.wallets.iter().enumerate() {
-        let balance = get_wallet_balance(&network, wallet);
-        total_balance += balance;
-        println!("  Wallet {}: {} BTH", i, balance / PICOCREDITS_PER_CREDIT);
-    }
-
-    // Verify conservation: total balance = total mined - fees
-    let expected_circulating = final_state.total_mined - final_state.total_fees_burned;
-    println!("\nConservation check:");
-    println!(
-        "  Total mined: {} BTH",
-        final_state.total_mined / PICOCREDITS_PER_CREDIT
-    );
-    println!(
-        "  Fees burned: {} picocredits",
-        final_state.total_fees_burned
-    );
-    println!(
-        "  Expected circulating: {} BTH",
-        expected_circulating / PICOCREDITS_PER_CREDIT
-    );
-    println!(
-        "  Actual total balance: {} BTH",
-        total_balance / PICOCREDITS_PER_CREDIT
-    );
+    // Supply conservation: mined = wallets + burned + lottery pool.
+    let total_balance: u64 = network
+        .wallets
+        .iter()
+        .map(|w| get_wallet_balance(&network, w))
+        .sum();
 
     assert_eq!(
-        total_balance, expected_circulating,
-        "Total balance should equal circulating supply"
+        total_balance + final_state.total_fees_burned + lottery_pool,
+        final_state.total_mined,
+        "Supply conservation: wallets({}) + burned({}) + pool({}) != mined({})",
+        total_balance,
+        final_state.total_fees_burned,
+        lottery_pool,
+        final_state.total_mined
     );
 
     println!("\n=== Stress/Load Test Complete ===");
-    println!(
-        "  - {} transactions across {} blocks",
-        total_transactions, num_stress_blocks
-    );
+    println!("  - {} transactions confirmed", confirmed_tx_count);
     println!("  - All nodes maintained consistency");
-    println!("  - Conservation verified: no coins created or destroyed");
+    println!("  - Supply conservation verified: mined = wallets + burned + pool");
 
     network.stop();
 }
@@ -554,16 +518,18 @@ fn test_stress_load_patterns() {
 /// A chain of rapid transfers between wallets, testing UTXO availability
 /// and quick succession transaction handling.
 #[test]
-#[ignore = "Needs update for ring signature transactions (Simple tx removed)"]
+#[serial]
 fn test_rapid_sequential_transfers() {
     println!("\n=== Rapid Sequential Transfers Test ===\n");
 
     let mut network = TestNetwork::build(TestNetworkConfig::for_stress_testing());
     thread::sleep(Duration::from_millis(500));
 
-    // Mine initial block to wallet 0
-    println!("Mining initial block to wallet 0...");
-    mine_block(&network, 0);
+    // Pre-mine enough blocks for ring-decoy availability (CLSAG needs
+    // TEST_RING_SIZE-1 decoys). This rotates coinbases across all wallets,
+    // funding each so the transfer chain can forward value past the fee.
+    println!("Pre-mining blocks for decoys and funding...");
+    ensure_decoy_availability(&network, 0);
     network.verify_consistency();
 
     let initial_balance = get_wallet_balance(&network, &network.wallets[0]);
@@ -620,10 +586,14 @@ fn test_rapid_sequential_transfers() {
             send_amount / PICOCREDITS_PER_CREDIT
         );
 
-        network.broadcast_transaction(tx);
-
-        // Mine immediately to confirm this transaction before the next
-        mine_block(&network, recipient_idx);
+        // Confirm this transfer before starting the next (the chain is
+        // dependent: each wallet spends what the previous round gave it).
+        assert!(
+            confirm_transaction(&network, &tx, recipient_idx),
+            "Transfer {} -> {} was not confirmed on-chain",
+            sender_idx,
+            recipient_idx
+        );
     }
 
     // Final verification
@@ -646,11 +616,14 @@ fn test_rapid_sequential_transfers() {
     let final_state = node.chain_state();
     drop(node);
 
-    let expected_fees = DEFAULT_NUM_NODES as u64 * MIN_TX_FEE;
-    assert!(
-        final_state.total_fees_burned >= expected_fees,
-        "Expected at least {} fees from {} transfers",
-        expected_fees,
+    // Each transfer lands in its own block (sequential), so the destroyed
+    // amount is N * burn(MIN_TX_FEE) — only the burn share, not the gross
+    // fee (audit cycle 6, M4).
+    let per_fee_burn = split_fees(MIN_TX_FEE, &Default::default()).1;
+    assert_eq!(
+        final_state.total_fees_burned,
+        DEFAULT_NUM_NODES as u64 * per_fee_burn,
+        "Burn share of {} sequential-transfer fees should be destroyed",
         DEFAULT_NUM_NODES
     );
 
@@ -667,7 +640,11 @@ fn test_rapid_sequential_transfers() {
 /// Combines all patterns in a single test: concurrent, multi-input,
 /// split payments, and sequential transfers.
 #[test]
-#[ignore = "Needs update for ring signature transactions (Simple tx removed)"]
+#[serial]
+#[ignore = "Blocked on audit finding I4: this test's Pattern A consolidates two UTXOs \
+            via create_multi_input_transaction, and multi-input CLSAG balance \
+            verification is structurally broken (see test_multi_input_consolidation). \
+            Re-enable once multi-input balance verification is fixed."]
 fn test_mixed_transaction_patterns() {
     println!("\n=== Mixed Transaction Patterns Test ===\n");
 
