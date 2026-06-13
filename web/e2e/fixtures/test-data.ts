@@ -5,11 +5,22 @@
  */
 
 // Service URLs
+//
+// By default the e2e suite runs against locally-served builds (started by the
+// Playwright `webServer` config) so it is deterministic and CI-friendly:
+//   - Web wallet / explorer: http://localhost:4173  (vite preview of web-wallet)
+//   - Faucet static site:    http://localhost:4174  (infra/faucet/web)
+//
+// To run against the live deployment instead, set the env vars:
+//   E2E_WEB_BASE_URL=https://botho.io E2E_FAUCET_BASE_URL=https://faucet.botho.io
+const WEB_BASE = process.env.E2E_WEB_BASE_URL ?? 'http://localhost:4173'
+const FAUCET_BASE = process.env.E2E_FAUCET_BASE_URL ?? 'http://localhost:4174'
+
 export const URLS = {
-  WALLET: 'https://botho.io/wallet',
-  EXPLORER: 'https://botho.io/explorer',
-  FAUCET: 'https://faucet.botho.io',
-  LANDING: 'https://botho.io',
+  WALLET: `${WEB_BASE}/wallet`,
+  EXPLORER: `${WEB_BASE}/explorer`,
+  FAUCET: FAUCET_BASE,
+  LANDING: WEB_BASE,
 } as const
 
 // Standard BIP39 test mnemonics - produce deterministic addresses

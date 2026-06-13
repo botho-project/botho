@@ -21,10 +21,32 @@ import type {
 } from './types'
 
 const DEFAULT_CONFIG: Required<RemoteNodeConfig> = {
-  seedNodes: ['https://faucet.botho.io/rpc'],
-  networkId: 'botho-mainnet',
+  // Seed node read RPC (CORS-enabled, see infra/seed/seed-nginx.conf).
+  seedNodes: ['https://seed.botho.io/rpc'],
+  networkId: 'botho-testnet',
   timeout: 10000,
   useWebSocket: true,
+}
+
+/**
+ * Resolve an RPC endpoint (which may be absolute, e.g.
+ * "https://seed.botho.io/rpc", or relative, e.g. "/rpc" when served behind a
+ * same-origin proxy) into a URL object. Returns null if it cannot be parsed.
+ */
+function resolveUrl(endpoint: string): URL | null {
+  try {
+    return new URL(endpoint)
+  } catch {
+    // Relative endpoint - resolve against the page origin if available.
+    if (typeof window !== 'undefined' && window.location?.origin) {
+      try {
+        return new URL(endpoint, window.location.origin)
+      } catch {
+        return null
+      }
+    }
+    return null
+  }
 }
 
 /** JSON-RPC 2.0 request */
@@ -80,10 +102,11 @@ export class RemoteNodeAdapter implements NodeAdapter {
 
         if (result) {
           this.currentSeedUrl = seedUrl
+          const resolvedUrl = resolveUrl(seedUrl)
           this.currentNode = {
             id: seedUrl,
-            host: new URL(seedUrl).hostname,
-            port: 443,
+            host: resolvedUrl?.hostname ?? seedUrl,
+            port: resolvedUrl ? Number(resolvedUrl.port) || (resolvedUrl.protocol === 'http:' ? 80 : 443) : 443,
             version: result.version,
             blockHeight: result.chainHeight,
             networkId: result.network || this.config.networkId,
@@ -428,8 +451,16 @@ export class RemoteNodeAdapter implements NodeAdapter {
   }
 
   private setupWebSocket(seedUrl: string): void {
-    // Connect to node WebSocket endpoint for real-time events
-    const wsUrl = seedUrl.replace(/^http/, 'ws') + '/ws'
+    // Connect to node WebSocket endpoint for real-time events.
+    // Handle both absolute (https://host/rpc) and relative (/rpc) endpoints.
+    const resolved = resolveUrl(seedUrl)
+    if (!resolved) {
+      // Cannot derive a WebSocket URL; fall back to polling.
+      this.setWsStatus('disconnected')
+      return
+    }
+    const wsProtocol = resolved.protocol === 'https:' ? 'wss:' : 'ws:'
+    const wsUrl = `${wsProtocol}//${resolved.host}${resolved.pathname}/ws`
 
     this.setWsStatus(this.wsReconnectAttempt > 0 ? 'reconnecting' : 'connecting')
 

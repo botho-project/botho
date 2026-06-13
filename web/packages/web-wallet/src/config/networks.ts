@@ -34,7 +34,10 @@ export const NETWORKS: Record<string, NetworkConfig> = {
   testnet: {
     id: 'testnet',
     name: 'Testnet',
-    rpcEndpoint: getEnvRpcEndpoint() || 'https://faucet.botho.io/rpc',
+    // Read RPC is served by the seed node at https://seed.botho.io/rpc
+    // (CORS-enabled via infra/seed/seed-nginx.conf). The faucet endpoint is a
+    // separate deployment used only for faucet_request / faucet_getStatus.
+    rpcEndpoint: getEnvRpcEndpoint() || 'https://seed.botho.io/rpc',
     faucetEndpoint: getEnvFaucetEndpoint() || 'https://faucet.botho.io/rpc',
     explorerUrl: 'https://botho.io/explorer',
     networkId: 'botho-testnet',

@@ -25,12 +25,18 @@ export function SearchBar({
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && search()}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  // Pass the current input value to avoid racing the async
+                  // searchQuery state update.
+                  search((e.target as HTMLInputElement).value)
+                }
+              }}
               placeholder={placeholder}
               className="w-full rounded-lg border border-[--color-slate]/50 bg-[--color-void]/50 py-2.5 pl-10 pr-4 font-mono text-sm text-[--color-light] placeholder:text-[--color-dim] focus:border-[--color-pulse] focus:outline-none focus:ring-1 focus:ring-[--color-pulse]"
             />
           </div>
-          <Button onClick={search} disabled={loading}>
+          <Button onClick={() => search()} disabled={loading}>
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Search'}
           </Button>
         </div>

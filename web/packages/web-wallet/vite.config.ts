@@ -74,6 +74,23 @@ export default defineConfig({
         target: 'https://seed.botho.io',
         changeOrigin: true,
       },
+      // Same-origin proxy to the seed node read RPC. Used during local dev and
+      // e2e (build with VITE_RPC_ENDPOINT=/rpc) so the app reaches a real node
+      // without depending on cross-origin CORS.
+      '/rpc': {
+        target: 'https://seed.botho.io',
+        changeOrigin: true,
+      },
+    },
+  },
+  // `vite preview` (used by the e2e webServer) needs the same /rpc proxy as the
+  // dev server so the served production build can reach the seed node RPC.
+  preview: {
+    proxy: {
+      '/rpc': {
+        target: 'https://seed.botho.io',
+        changeOrigin: true,
+      },
     },
   },
   build: {
