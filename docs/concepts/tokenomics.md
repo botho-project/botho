@@ -11,7 +11,7 @@ Botho (BTH) uses a two-phase emission model designed for long-term sustainabilit
 | Display unit | nanoBTH (10⁻⁹ BTH) |
 | Pre-mine | None (100% mined) |
 | Phase 1 supply | ~100 million BTH |
-| Block time | 3-40 seconds (dynamic based on load) |
+| Block time | 5-40 seconds (dynamic based on load); 5s baseline for monetary calculations |
 | Consensus | SCP (Stellar Consensus Protocol) |
 
 ## Unit System
@@ -62,7 +62,7 @@ Block rewards halve every ~2 years, distributing approximately 100 million BTH o
 | Halving 3 | 6-8 | 6.25 BTH | ~98.6M BTH |
 | Halving 4 | 8-10 | 3.125 BTH | ~100M BTH |
 
-**Halving interval**: 3,153,600 blocks (~2 years at 20-second blocks)
+**Halving interval**: 12,614,400 blocks (~2 years at the 5-second monetary baseline; proportionally longer at slower actual block times)
 
 ### Phase 2: Tail Emission (Year 10+)
 
@@ -82,12 +82,26 @@ net_inflation = gross_emission - fees_burned
 tail_reward = (target_net_inflation + expected_fee_burns) / blocks_per_year
 ```
 
+Here `fees_burned` is only the **20% burn share** of fees that is actually destroyed (audit cycle 6, M4). The 80% lottery-redistributed share and the emission share routed into the lottery pool both remain in circulating supply, so they do **not** count toward `fees_burned`.
+
 At 100M BTH supply:
 - Target net emission: 2% × 100M = 2M BTH/year
-- Expected fee burns: 0.5% × 100M = 0.5M BTH/year
+- Expected fee burns (20% share only): ~0.5% × 100M = 0.5M BTH/year
 - Gross emission needed: 2.5M BTH/year
 - Blocks per year: 1,576,800
 - **Tail reward: ~1.59 BTH/block**
+
+(The exact tail-reward figure depends on the assumed block time; cross-source numeric reconciliation is tracked separately in issue #321.)
+
+### Emission Routing into the Lottery Pool
+
+Not all of the block reward goes to the miner's coinbase. A height-scheduled fraction of each block reward is routed into the redistribution lottery pool (`MonetaryPolicy::lottery_emission_bps` / `lottery_emission_share` in `botho/src/monetary.rs` and `cluster-tax/src/monetary.rs`):
+
+- **Bootstrap epoch (epoch 0)**: 0% routed — miners keep the full reward while mining seeds the network and the only lottery-eligible UTXOs would be miner coinbases.
+- **Each subsequent halving epoch**: +1,000 bps (+10%) routed to the pool.
+- **Cap**: 5,000 bps (50%) — at least half of emission is always preserved as the mining security budget.
+
+The miner receives `reward − emission_share`; the routed share joins the fee pool share and any carryover as the amount available for that block's lottery draw (capped at one block reward). Cluster demurrage activates on the same boundary: zero during epoch 0, then 2%/year at maximum cluster factor (`demurrage_rate_bps`).
 
 ## Fee Structure
 
@@ -106,7 +120,18 @@ fee = dynamic_base × tx_size × cluster_factor + memo_fees
 | `cluster_factor` | 1x-6x | Progressive multiplier based on sender's cluster wealth |
 | `memo_fees` | 100 nanoBTH/memo | Additional fee for encrypted memos |
 
-All transaction fees are **burned**, creating deflationary pressure that offsets tail emission.
+#### Fee Destination: Redistribution Lottery + Burn (80/20)
+
+Transaction fees are **not** all burned. Each block, collected fees are split deterministically (`LotteryFeeConfig` in `botho/src/consensus/lottery.rs`, 800 permille):
+
+- **80% → redistribution lottery pool**, paid back out to randomly selected UTXO holders. The draw is cluster-tilted, favoring smaller, well-circulated holders over concentrated clusters.
+- **20% → burned**, providing deflationary pressure that partially offsets tail emission.
+
+The lottery pool is consensus state. A per-block payout cap (one block reward) plus carryover make seed-grinding unprofitable: undistributed pool funds carry over to future blocks rather than being destroyed. The burn share (the 20%) is the **only** portion of fees subtracted from supply; the redistributed 80% stays in circulation as new lottery-payout UTXOs.
+
+In addition, **cluster demurrage** levies a small spend-time holding charge on coins in concentrated clusters (factor-1 / well-circulated coins pay zero). The charge is added to a transaction's minimum fee and flows through the same 80/20 split into the lottery pool — so idle-wealth charges are redistributed, not burned.
+
+> **See also**: [Cluster-Tilted Redistribution](../design/cluster-tilted-redistribution.md) (the validated mechanism), [Lottery-Based Fee Redistribution](../design/lottery-redistribution.md) (background analysis), and [Entropy-Weighted Decay](../design/entropy-weighted-decay.md) (tag-decay hardening).
 
 ### Size-Based Fees
 
@@ -121,7 +146,7 @@ Fees are proportional to transaction size, ensuring larger transactions pay more
 
 The fee base adjusts based on network load using a **cascaded control system**:
 
-1. **Supply-side adaptation** (primary): Block timing adjusts from 40s to 3s based on transaction rate
+1. **Supply-side adaptation** (primary): Block timing adjusts from 40s (idle) down to the 5s baseline (high load) based on transaction rate
 2. **Demand-side adaptation** (secondary): When at minimum block time and blocks are >75% full, fee base increases exponentially
 
 | Block Fullness | Fee Multiplier | Effect |
@@ -216,13 +241,12 @@ Botho uses **dynamic block timing** that adapts to network load, providing faste
 
 | Transaction Rate | Block Time | Capacity |
 |------------------|------------|----------|
-| 20+ tx/s | 3 seconds | ~600 tx/min |
 | 5+ tx/s | 5 seconds | ~300 tx/min |
 | 1+ tx/s | 10 seconds | ~100 tx/min |
 | 0.2+ tx/s | 20 seconds | ~50 tx/min |
 | <0.2 tx/s | 40 seconds | ~25 tx/min |
 
-This provides **13x capacity scaling** between idle and high-load conditions without protocol changes.
+The 5-second floor is also the baseline assumed by all monetary calculations (see `mainnet_policy` in `botho/src/monetary.rs`). This provides **8x capacity scaling** between the 40s idle interval and the 5s high-load floor without protocol changes.
 
 ### Why Dynamic Timing?
 
@@ -306,11 +330,12 @@ This ensures:
 - **Credibility**: No insider advantage or founder enrichment
 - **Decentralization**: No concentrated holdings from day one
 
-### Why Burn Fees?
+### Why Redistribute Most Fees (and Burn the Rest)?
 
-- **Deflationary pressure**: Offsets tail emission
-- **Simple economics**: No complex fee distribution mechanisms
-- **Predictable**: Net inflation = gross emission - burns
+- **Structural Gini reduction**: Returning 80% of fees (plus demurrage charges and a height-scheduled emission share) to small, well-circulated holders via the cluster-tilted lottery actively reduces wealth concentration — burning alone cannot redistribute. See [Cluster-Tilted Redistribution](../design/cluster-tilted-redistribution.md).
+- **Deflationary pressure**: The 20% burn share still offsets part of tail emission.
+- **Predictable**: Net inflation = gross emission − (20% fee burn share).
+- **Grinding-resistant**: A per-block payout cap and pool carryover make manipulating the verifiable lottery draw unprofitable.
 
 ### Why Progressive Cluster Fees?
 
@@ -325,9 +350,9 @@ This ensures:
 |--------|-------|---------|--------|----------|
 | Max supply | Unlimited (2% tail) | 21M | Unlimited (0.8% tail) | Unlimited |
 | Pre-mine | None | None | None | ~72M ETH |
-| Fee destination | Burned | To minters | To minters | Partially burned |
+| Fee destination | 80% redistributed (lottery), 20% burned | To minters | To minters | Partially burned |
 | Progressive fees | Yes (cluster-based) | No | No | No |
-| Block time | 20s | 600s | 120s | 12s |
+| Block time | 5-40s (dynamic; 5s baseline) | 600s | 120s | 12s |
 
 ## Technical References
 
