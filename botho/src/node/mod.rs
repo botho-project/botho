@@ -255,10 +255,14 @@ impl Node {
         // Note: Dynamic fee update is handled by the caller who has access to
         // consensus timing information. See update_dynamic_fee_after_block().
 
-        // Update emission controller with block data
+        // Update emission controller with block data. Only the burn share of
+        // fees is destroyed; the rest is redistributed via the lottery pool
+        // (audit cycle 6, M4). Mirror the ledger's accounting by using the
+        // validated burn amount, not the gross fee total, so the emission
+        // controller's supply/burn figures stay consistent with chain state.
         let tx_count = block.transactions.len() as u64;
         let reward_paid = block.minting_tx.reward;
-        let fees_burned: u64 = block.transactions.iter().map(|tx| tx.fee).sum();
+        let fees_burned: u64 = block.lottery_summary.amount_burned;
 
         let old_difficulty = self.emission_controller.difficulty;
         let (new_difficulty, new_reward) =

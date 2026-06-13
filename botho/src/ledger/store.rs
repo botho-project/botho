@@ -580,9 +580,16 @@ impl Ledger {
         let new_height = block.height();
         let new_total_mined = state.total_mined + block.minting_tx.reward;
 
-        // Sum transaction fees (these are burned, reducing circulating supply)
+        // Fee accounting. Only the burn share of fees is actually destroyed;
+        // the remainder flows to the redistribution lottery pool (and is paid
+        // back out as lottery UTXOs). `total_fees_burned` therefore tracks the
+        // validated burn amount, NOT the gross fee total — counting the full
+        // fee would overstate destroyed supply 5x and break conservation
+        // (audit cycle 6, M4). The lottery summary's burn amount was verified
+        // against the pool accounting by `validate_block_lottery` above.
         let block_fees: u64 = block.transactions.iter().map(|tx| tx.fee).sum();
-        let new_total_fees_burned = state.total_fees_burned + block_fees;
+        let actually_burned = block.lottery_summary.amount_burned;
+        let new_total_fees_burned = state.total_fees_burned + actually_burned;
 
         // Create UTXO from minting reward (coinbase)
         let coinbase_utxo_id = UtxoId::new(new_hash, 0);
@@ -635,6 +642,59 @@ impl Ledger {
                 // Update cluster wealth tracking
                 self.update_cluster_wealth_for_output(&mut wtxn, output)?;
             }
+        }
+
+        // Mint lottery payout UTXOs.
+        //
+        // Each payout creates a new spendable UTXO for the winner. The keys
+        // and cluster tags are taken from the WINNING UTXO (looked up by its
+        // id), not from the proposer-supplied fields on the LotteryOutput —
+        // `validate_block_lottery` confirms each winner_utxo_id is an eligible
+        // candidate and that payout totals match the pool accounting, but it
+        // does not bind the output's target_key/public_key, so trusting those
+        // fields would let a proposer redirect payouts to themselves.
+        //
+        // Deterministic id scheme: (block_hash, 1 + lottery_index). The
+        // coinbase occupies (block_hash, 0); transaction outputs use the tx
+        // hash (never the block hash), so payout ids cannot collide.
+        for (lottery_idx, lottery_output) in block.lottery_outputs.iter().enumerate() {
+            let winner_id = lottery_output.winner_utxo_id();
+            let winner_bytes = self
+                .utxo_db
+                .get(&wtxn, &winner_id)
+                .map_err(|e| LedgerError::Database(format!("Failed to read winning utxo: {}", e)))?
+                .ok_or_else(|| {
+                    LedgerError::InvalidBlock(format!(
+                        "Lottery winner UTXO {} not found in set",
+                        hex::encode(&winner_id[..8])
+                    ))
+                })?;
+            let winner_utxo: Utxo = bincode::deserialize(winner_bytes)
+                .map_err(|e| LedgerError::Serialization(e.to_string()))?;
+
+            let payout_output = TxOutput {
+                amount: lottery_output.payout,
+                target_key: winner_utxo.output.target_key,
+                public_key: winner_utxo.output.public_key,
+                e_memo: None,
+                cluster_tags: winner_utxo.output.cluster_tags.clone(),
+            };
+
+            let payout_utxo_id = UtxoId::new(new_hash, (lottery_idx as u32) + 1);
+            let payout_utxo = Utxo {
+                id: payout_utxo_id,
+                output: payout_output,
+                created_at: new_height,
+            };
+            let payout_bytes = bincode::serialize(&payout_utxo)
+                .map_err(|e| LedgerError::Serialization(e.to_string()))?;
+            self.utxo_db
+                .put(&mut wtxn, &payout_utxo_id.to_bytes(), &payout_bytes)
+                .map_err(|e| {
+                    LedgerError::Database(format!("Failed to put lottery payout utxo: {}", e))
+                })?;
+            self.add_to_address_index(&mut wtxn, &payout_utxo)?;
+            self.update_cluster_wealth_for_output(&mut wtxn, &payout_utxo.output)?;
         }
 
         self.meta_db
