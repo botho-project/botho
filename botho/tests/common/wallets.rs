@@ -2,6 +2,8 @@
 //
 //! Wallet utilities for test networks.
 
+use bth_crypto_ring_signature::KeyImage;
+
 use botho::{
     transaction::{Utxo, UtxoId},
     wallet::Wallet,
@@ -52,13 +54,48 @@ pub fn scan_wallet_utxos(network: &TestNetwork, wallet: &Wallet) -> Vec<(Utxo, u
                     }
                 }
             }
+
+            // Check lottery payout outputs. These are minted in add_block at
+            // deterministic ids (block_hash, 1 + lottery_index) — the coinbase
+            // occupies index 0. The payout inherits the winner's stealth keys,
+            // so belongs_to() detects ownership the same way.
+            for lottery_idx in 0..block.lottery_outputs.len() {
+                let utxo_id = UtxoId::new(block.hash(), (lottery_idx as u32) + 1);
+                if let Ok(Some(utxo)) = ledger.get_utxo(&utxo_id) {
+                    if let Some(subaddr_idx) = utxo.output.belongs_to(wallet.account_key()) {
+                        owned_utxos.push((utxo, subaddr_idx));
+                    }
+                }
+            }
         }
     }
+
+    // Exclude already-spent UTXOs. Ring-signature privacy means spending a
+    // UTXO does not remove it from the ledger's UTXO set (which input was
+    // spent is hidden) — only its key image is recorded. A naive sum would
+    // therefore double-count a spent coinbase and the change it produced.
+    // The owner, however, can derive each UTXO's key image from its one-time
+    // private key and drop the ones the ledger has seen spent.
+    owned_utxos.retain(|(utxo, subaddr_idx)| {
+        match utxo
+            .output
+            .recover_spend_key(wallet.account_key(), *subaddr_idx)
+        {
+            Some(onetime_private) => {
+                let key_image = *KeyImage::from(&onetime_private).as_bytes();
+                // Keep the UTXO only if its key image is NOT spent.
+                !matches!(ledger.is_key_image_spent(&key_image), Ok(Some(_)))
+            }
+            // If we cannot recover the key (shouldn't happen for owned
+            // outputs), keep it rather than silently dropping value.
+            None => true,
+        }
+    });
 
     owned_utxos
 }
 
-/// Get the total balance of a wallet by summing all its UTXOs.
+/// Get the total balance of a wallet by summing all its unspent UTXOs.
 pub fn get_wallet_balance(network: &TestNetwork, wallet: &Wallet) -> u64 {
     scan_wallet_utxos(network, wallet)
         .iter()

@@ -31,6 +31,7 @@ use bth_consensus_scp::{
 
 use botho::{
     block::{Block, BlockLotterySummary, MintingTx},
+    consensus::{BlockBuilder, LotteryFeeConfig},
     ledger::{ChainState, Ledger},
     transaction::Transaction,
     wallet::Wallet,
@@ -444,14 +445,27 @@ fn run_test_node(
         // Check for externalization
         if let Some(externalized) = scp_node.get_externalized_values(current_slot) {
             // Build and apply block
-            if let Err(e) =
-                apply_externalized_block(&ledger, &pending_minting_txs, &pending_txs, &externalized)
-            {
-                eprintln!("[Node {}] Failed to apply block: {}", node_id, e);
+            match apply_externalized_block(
+                &ledger,
+                &pending_minting_txs,
+                &pending_txs,
+                &externalized,
+            ) {
+                Ok(()) => {
+                    // Applied: every externalized value is now on-chain.
+                    pending_values.retain(|v| !externalized.contains(v));
+                }
+                Err(e) => {
+                    eprintln!("[Node {}] Failed to apply block: {}", node_id, e);
+                    // The block was not applied (most commonly because this
+                    // slot externalized without a minting tx). Drop only the
+                    // consumed minting values; keep regular-tx values pending
+                    // so a later slot that also carries a minting tx can
+                    // include them. Without this, a regular tx that races
+                    // ahead of the minting tx is silently lost.
+                    pending_values.retain(|v| !(externalized.contains(v) && v.is_minting));
+                }
             }
-
-            // Remove externalized values from pending
-            pending_values.retain(|v| !externalized.contains(v));
             current_slot += 1;
         }
     }
@@ -537,9 +551,70 @@ fn apply_externalized_block(
         lottery_summary: BlockLotterySummary::default(),
     };
 
+    // Run the lottery / fee-split exactly as the real proposer does, so the
+    // block's lottery_summary (and any lottery_outputs) satisfy
+    // `validate_block_lottery` inside add_block. Without this, any block
+    // carrying fee-paying transactions is rejected with an "Invalid fee
+    // split" error.
+    let block = apply_lottery_to_block(block, ledger);
+
     // Add block to ledger
     let ledger_write = ledger.read().map_err(|e| e.to_string())?;
     ledger_write.add_block(&block).map_err(|e| e.to_string())?;
 
     Ok(())
+}
+
+/// Apply the lottery fee-split and (if eligible) draw winners for a block,
+/// mirroring `apply_lottery_to_block` in `commands/run.rs`. The proposer and
+/// validator must compute identical lottery state, so the harness reuses the
+/// production `BlockBuilder::apply_lottery` against the ledger's pool and
+/// candidate set.
+fn apply_lottery_to_block(block: Block, ledger: &Arc<RwLock<Ledger>>) -> Block {
+    let total_fees: u64 = block.transactions.iter().map(|tx| tx.fee).sum();
+    let emission_share = block.minting_tx.lottery_emission_share();
+    let lottery_config = LotteryFeeConfig::default();
+
+    // Fallback for lock/lookup failures: burn only the fee burn share; the
+    // pool share carries over via the persistent lottery pool (matches
+    // validation).
+    let (_, fee_burn) = lottery_config.split_fees(total_fees);
+    let burn_fee_share = |mut block: Block| {
+        block.lottery_summary = BlockLotterySummary {
+            total_fees,
+            pool_distributed: 0,
+            amount_burned: fee_burn,
+            lottery_seed: [0u8; 32],
+        };
+        block
+    };
+
+    let (stored_pool, candidates) = match ledger.read() {
+        Ok(led) => {
+            let pool = match led.get_lottery_pool() {
+                Ok(p) => p,
+                Err(_) => return burn_fee_share(block),
+            };
+            match led
+                .get_lottery_validation_candidates(block.height(), &lottery_config.draw_config)
+            {
+                Ok(c) => (pool, c),
+                Err(_) => return burn_fee_share(block),
+            }
+        }
+        Err(_) => return burn_fee_share(block),
+    };
+
+    // Nothing flowing in or out: leave the (default, all-zero) summary.
+    if total_fees == 0 && emission_share == 0 && stored_pool == 0 {
+        return block;
+    }
+
+    let ledger_clone = ledger.clone();
+    let utxo_lookup = move |utxo_id: &[u8; 36]| {
+        let led = ledger_clone.read().ok()?;
+        led.get_utxo_by_id(utxo_id).ok().flatten()
+    };
+
+    BlockBuilder::apply_lottery(block, &candidates, stored_pool, utxo_lookup, &lottery_config)
 }

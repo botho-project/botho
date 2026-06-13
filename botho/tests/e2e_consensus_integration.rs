@@ -19,10 +19,12 @@ use std::{thread, time::Duration};
 
 use botho::transaction::{TxOutput, MIN_TX_FEE, PICOCREDITS_PER_CREDIT};
 
+use botho::consensus::split_fees;
+
 use crate::common::{
-    create_mock_minting_tx, create_signed_transaction, get_wallet_balance, mine_block,
-    scan_wallet_utxos, TestNetwork, TestNetworkConfig, DEFAULT_NUM_NODES, INITIAL_BLOCK_REWARD,
-    TEST_RING_SIZE,
+    confirm_transaction, create_mock_minting_tx, create_signed_transaction, get_wallet_balance,
+    mine_block, scan_wallet_utxos, TestNetwork, TestNetworkConfig, DEFAULT_NUM_NODES,
+    INITIAL_BLOCK_REWARD, TEST_RING_SIZE,
 };
 
 // ============================================================================
@@ -30,7 +32,6 @@ use crate::common::{
 // ============================================================================
 
 #[test]
-#[ignore = "Balance verification assertion needs investigation (wallet balance > circulating supply)"]
 fn test_e2e_5_node_consensus_with_mining_and_transactions() {
     println!("\n=== E2E Consensus Integration Test ===\n");
 
@@ -93,9 +94,6 @@ fn test_e2e_5_node_consensus_with_mining_and_transactions() {
     // Phase 2: Create and execute multiple transactions
     println!("\nPhase 2: Creating and executing transactions...");
 
-    // Track total fees for verification
-    let mut total_fees_expected: u64 = 0;
-
     // First, check wallet balances from mining
     println!("  Scanning wallet balances after mining...");
     for (i, wallet) in network.wallets.iter().enumerate() {
@@ -123,7 +121,6 @@ fn test_e2e_5_node_consensus_with_mining_and_transactions() {
     let (utxo_to_spend, subaddr_idx) = &sender_utxos[0];
     let send_amount = 10 * PICOCREDITS_PER_CREDIT; // Send 10 BTH
     let tx_fee = MIN_TX_FEE;
-    total_fees_expected += tx_fee;
 
     let node = network.get_node(0);
     let current_height = node.chain_state().height;
@@ -147,8 +144,10 @@ fn test_e2e_5_node_consensus_with_mining_and_transactions() {
     )
     .expect("Failed to create transaction 1");
 
-    network.broadcast_transaction(tx1.clone());
-    mine_block(&network, blocks_to_mine % DEFAULT_NUM_NODES);
+    assert!(
+        confirm_transaction(&network, &tx1, blocks_to_mine % DEFAULT_NUM_NODES),
+        "Transaction 1 was not confirmed on-chain"
+    );
 
     // Verify balances after tx1
     let wallet0_balance = get_wallet_balance(&network, &network.wallets[0]);
@@ -177,7 +176,6 @@ fn test_e2e_5_node_consensus_with_mining_and_transactions() {
         .unwrap_or(&sender_utxos[0]);
 
     let send_amount2 = 5 * PICOCREDITS_PER_CREDIT; // Send 5 BTH
-    total_fees_expected += tx_fee;
 
     let node = network.get_node(0);
     let current_height = node.chain_state().height;
@@ -200,8 +198,10 @@ fn test_e2e_5_node_consensus_with_mining_and_transactions() {
     )
     .expect("Failed to create transaction 2");
 
-    network.broadcast_transaction(tx2.clone());
-    mine_block(&network, (blocks_to_mine + 1) % DEFAULT_NUM_NODES);
+    assert!(
+        confirm_transaction(&network, &tx2, (blocks_to_mine + 1) % DEFAULT_NUM_NODES),
+        "Transaction 2 was not confirmed on-chain"
+    );
 
     // ========================================================================
     // Transaction 3: Wallet 2 -> Wallet 3 (continuing the chain)
@@ -217,7 +217,6 @@ fn test_e2e_5_node_consensus_with_mining_and_transactions() {
 
     let (utxo_to_spend, subaddr_idx) = &sender_utxos[0];
     let send_amount3 = 2 * PICOCREDITS_PER_CREDIT; // Send 2 BTH
-    total_fees_expected += tx_fee;
 
     let node = network.get_node(0);
     let current_height = node.chain_state().height;
@@ -237,8 +236,10 @@ fn test_e2e_5_node_consensus_with_mining_and_transactions() {
     )
     .expect("Failed to create transaction 3");
 
-    network.broadcast_transaction(tx3.clone());
-    mine_block(&network, (blocks_to_mine + 2) % DEFAULT_NUM_NODES);
+    assert!(
+        confirm_transaction(&network, &tx3, (blocks_to_mine + 2) % DEFAULT_NUM_NODES),
+        "Transaction 3 was not confirmed on-chain"
+    );
 
     // ========================================================================
     // Transaction 4: Wallet 3 -> Wallet 4 (complete the ring)
@@ -254,7 +255,6 @@ fn test_e2e_5_node_consensus_with_mining_and_transactions() {
 
     let (utxo_to_spend, subaddr_idx) = &sender_utxos[0];
     let send_amount4 = 1 * PICOCREDITS_PER_CREDIT; // Send 1 BTH
-    total_fees_expected += tx_fee;
 
     let node = network.get_node(0);
     let current_height = node.chain_state().height;
@@ -274,8 +274,10 @@ fn test_e2e_5_node_consensus_with_mining_and_transactions() {
     )
     .expect("Failed to create transaction 4");
 
-    network.broadcast_transaction(tx4.clone());
-    mine_block(&network, (blocks_to_mine + 3) % DEFAULT_NUM_NODES);
+    assert!(
+        confirm_transaction(&network, &tx4, (blocks_to_mine + 3) % DEFAULT_NUM_NODES),
+        "Transaction 4 was not confirmed on-chain"
+    );
 
     // ========================================================================
     // Verify final state after all transactions
@@ -291,27 +293,11 @@ fn test_e2e_5_node_consensus_with_mining_and_transactions() {
     println!("\n  Verifying ledger consistency after transactions...");
     network.verify_consistency();
 
-    // Verify fees were burned
-    let node = network.get_node(0);
-    let post_tx_state = node.chain_state();
-    drop(node);
-
-    println!(
-        "  Total fees burned: {} picocredits (expected: {})",
-        post_tx_state.total_fees_burned, total_fees_expected
-    );
-
-    assert!(
-        post_tx_state.total_fees_burned >= total_fees_expected,
-        "Expected at least {} fees burned, got {}",
-        total_fees_expected,
-        post_tx_state.total_fees_burned
-    );
-
-    // Phase 3: Final verification
+    // Phase 3: Final state verification
     println!("\nPhase 3: Final state verification...");
     let node = network.get_node(0);
     let final_state = node.chain_state();
+    let lottery_pool = node.ledger.read().unwrap().get_lottery_pool().unwrap();
     drop(node);
 
     println!("  Final height: {}", final_state.height);
@@ -319,47 +305,50 @@ fn test_e2e_5_node_consensus_with_mining_and_transactions() {
         "  Final total mined: {} BTH",
         final_state.total_mined / PICOCREDITS_PER_CREDIT
     );
-    println!(
-        "  Final fees burned: {} picocredits",
-        final_state.total_fees_burned
-    );
+    println!("  Fees burned (20% share): {} picocredits", final_state.total_fees_burned);
+    println!("  Lottery pool (carryover): {} picocredits", lottery_pool);
 
-    // Verify final state
-    let num_tx_blocks = 4; // We mined 4 blocks with transactions
-    let expected_height = (blocks_to_mine + num_tx_blocks) as u64;
-    assert_eq!(
-        final_state.height, expected_height,
-        "Final height should be {}",
-        expected_height
-    );
-
-    let expected_mined = expected_height * INITIAL_BLOCK_REWARD;
-    assert_eq!(
-        final_state.total_mined, expected_mined,
-        "Total mined should be {} picocredits",
-        expected_mined
-    );
-
-    // Verify fees were burned (4 transactions * MIN_TX_FEE each)
-    let expected_total_fees = 4 * MIN_TX_FEE;
+    // All four transfers were confirmed (asserted by confirm_transaction
+    // above), so the chain advanced by at least the initial mining run plus
+    // the four fee-bearing blocks. Retries may add empty blocks, so this is a
+    // lower bound, not an equality.
+    let num_tx_blocks = 4u64;
     assert!(
-        final_state.total_fees_burned >= expected_total_fees,
-        "Expected at least {} fees burned from 4 transactions, got {}",
-        expected_total_fees,
-        final_state.total_fees_burned
+        final_state.height >= blocks_to_mine as u64 + num_tx_blocks,
+        "Expected at least {} blocks, got {}",
+        blocks_to_mine as u64 + num_tx_blocks,
+        final_state.height
     );
 
-    // Verify circulating supply
-    let circulating_supply = final_state.total_mined - final_state.total_fees_burned;
-    println!(
-        "  Circulating supply: {} BTH (mined: {}, burned: {})",
-        circulating_supply / PICOCREDITS_PER_CREDIT,
-        final_state.total_mined / PICOCREDITS_PER_CREDIT,
-        final_state.total_fees_burned
+    // Every block (mining or transfer) pays the full coinbase reward, so
+    // gross emission is exactly height * reward.
+    assert_eq!(
+        final_state.total_mined,
+        final_state.height * INITIAL_BLOCK_REWARD,
+        "Total mined should equal height * reward"
     );
 
-    // Verify UTXO conservation: total balance across all wallets should equal
-    // circulating supply
+    // Fee accounting (audit cycle 6, M4): only the burn share of fees is
+    // destroyed; the rest flows to the lottery pool. With four single-fee
+    // transfers, each in its own block (the transfers chain, so they cannot
+    // share a block), the destroyed amount is 4 * burn(MIN_TX_FEE).
+    let (_, per_tx_burn) = split_fees(MIN_TX_FEE, &Default::default());
+    let expected_burned = num_tx_blocks * per_tx_burn;
+    assert_eq!(
+        final_state.total_fees_burned, expected_burned,
+        "Destroyed fees should be 4 * 20%-of-MIN_TX_FEE = {}, got {}",
+        expected_burned, final_state.total_fees_burned
+    );
+    assert!(per_tx_burn > 0, "Burn share must be non-zero");
+
+    // Supply conservation. Gross emission must be fully accounted for as:
+    //   coins in wallets (UTXOs)
+    //   + coins destroyed (burned fee share)
+    //   + coins parked in the redistribution pool awaiting payout.
+    // At these heights no UTXO is old enough (min_utxo_age = 720) to win the
+    // lottery, so the pool only accumulates; once payouts occur the pool
+    // drains into payout UTXOs, which scan_wallet_utxos now counts — so this
+    // identity holds in both regimes.
     let total_wallet_balance: u64 = network
         .wallets
         .iter()
@@ -367,33 +356,29 @@ fn test_e2e_5_node_consensus_with_mining_and_transactions() {
         .sum();
 
     println!(
-        "  Total wallet balances: {} BTH",
-        total_wallet_balance / PICOCREDITS_PER_CREDIT
+        "  Total wallet balances: {} picocredits",
+        total_wallet_balance
     );
 
-    // The total wallet balance should equal total_mined - fees_burned
-    // (all coins are accounted for in wallets)
     assert_eq!(
-        total_wallet_balance, circulating_supply,
-        "Total wallet balance ({}) should equal circulating supply ({})",
-        total_wallet_balance, circulating_supply
+        total_wallet_balance + final_state.total_fees_burned + lottery_pool,
+        final_state.total_mined,
+        "Supply conservation failed: wallets({}) + burned({}) + pool({}) != mined({})",
+        total_wallet_balance,
+        final_state.total_fees_burned,
+        lottery_pool,
+        final_state.total_mined
     );
 
     println!("\n=== E2E Test Complete ===\n");
     println!("Summary:");
     println!("  - {} nodes reached consensus", DEFAULT_NUM_NODES);
     println!("  - {} blocks mined", final_state.height);
-    println!("  - {} transactions executed", num_tx_blocks);
-    println!(
-        "  - {} picocredits fees burned",
-        final_state.total_fees_burned
-    );
-    println!(
-        "  - {} BTH circulating supply",
-        circulating_supply / PICOCREDITS_PER_CREDIT
-    );
+    println!("  - {} transactions confirmed", num_tx_blocks);
+    println!("  - {} picocredits destroyed (burn share)", final_state.total_fees_burned);
+    println!("  - {} picocredits in redistribution pool", lottery_pool);
     println!("  - All nodes have consistent ledger state");
-    println!("  - UTXO conservation verified: all coins accounted for");
+    println!("  - Supply conservation verified: mined = wallets + burned + pool");
 
     // Cleanup
     network.stop();

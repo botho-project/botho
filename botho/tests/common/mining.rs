@@ -6,7 +6,7 @@ use std::{thread, time::Duration};
 
 use bth_account_keys::PublicAddress;
 
-use botho::block::MintingTx;
+use botho::{block::MintingTx, transaction::Transaction};
 
 use crate::common::{TestNetwork, INITIAL_BLOCK_REWARD, TEST_RING_SIZE, TRIVIAL_DIFFICULTY};
 
@@ -99,6 +99,51 @@ pub fn mine_block_with_reward(network: &TestNetwork, miner_idx: usize, reward: u
     }
 
     thread::sleep(Duration::from_millis(150));
+}
+
+/// Broadcast a transaction and mine until it is confirmed on-chain.
+///
+/// Confirmation is detected by the transaction's first key image becoming
+/// spent on node 0 (recorded only when the tx is included in an applied
+/// block). Block production is retried a few times to absorb consensus and
+/// propagation races — without this, a freshly broadcast tx can miss the
+/// block that `mine_block` produces, leaving the test non-deterministic.
+///
+/// Returns true if the transaction was confirmed within the retry budget.
+pub fn confirm_transaction(network: &TestNetwork, tx: &Transaction, miner_idx: usize) -> bool {
+    let key_image = tx.inputs.clsag()[0].key_image;
+
+    let is_confirmed = |network: &TestNetwork| -> bool {
+        let node = network.get_node(0);
+        let spent = node
+            .ledger
+            .read()
+            .unwrap()
+            .is_key_image_spent(&key_image)
+            .ok()
+            .flatten()
+            .is_some();
+        drop(node);
+        spent
+    };
+
+    if is_confirmed(network) {
+        return true;
+    }
+
+    // Re-broadcast the tx each round, immediately before mining. The
+    // simulated SCP loop can externalize a slot containing only the regular
+    // tx (no minting tx); such a slot does not apply, and the node keeps the
+    // tx pending — but re-broadcasting guarantees it is present alongside the
+    // fresh minting tx that `mine_block` injects, so they share a block.
+    for _ in 0..8 {
+        network.broadcast_transaction(tx.clone());
+        mine_block(network, miner_idx);
+        if is_confirmed(network) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Pre-mine blocks to ensure enough UTXOs exist for decoy selection.
