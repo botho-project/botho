@@ -11,9 +11,13 @@
 use std::time::Duration;
 
 use botho::network::transport::{
-    IceCandidate, IceCandidateType, IceConfig, IceConnectionState, NatType, StunConfig,
-    TransportConfig, TransportType, WebRtcTransport,
+    IceCandidateType, IceConfig, IceConnectionState, NatType, StunConfig, TransportConfig,
+    TransportPreference, TransportType, WebRtcTransport,
 };
+// The transport module re-exports the signaling-layer `IceCandidate` under the
+// bare name. The RFC 8445 candidate struct used by these tests (with priority
+// calculation and SDP parsing) is re-exported as `IceFullCandidate`.
+use botho::network::transport::IceFullCandidate as IceCandidate;
 
 /// Test that ICE configuration defaults are sensible.
 #[test]
@@ -200,48 +204,46 @@ fn test_stun_config_defaults() {
 fn test_transport_config_defaults() {
     let config = TransportConfig::default();
 
-    // Plain transport should be the default
-    assert_eq!(config.preferred, TransportType::Plain);
-
-    // WebRTC should be disabled by default
+    // WebRTC and TLS tunnel should be disabled by default
     assert!(!config.enable_webrtc);
+    assert!(!config.enable_tls_tunnel);
 
-    // Should only have Plain enabled by default
+    // With no obfuscated transports enabled, only Plain should be available.
     let enabled = config.enabled_transports();
     assert!(enabled.contains(&TransportType::Plain));
-    assert!(!enabled.contains(&TransportType::WebRtc));
+    assert!(!enabled.contains(&TransportType::WebRTC));
 }
 
 /// Test transport configuration with WebRTC enabled.
 #[test]
 fn test_transport_config_with_webrtc() {
-    let config = TransportConfig::with_webrtc();
+    // `with_webrtc()` was removed; build an equivalent WebRTC-preferring config.
+    let config = TransportConfig::builder()
+        .preferred(TransportType::WebRTC)
+        .enable_webrtc(true)
+        .build();
 
-    assert_eq!(config.preferred, TransportType::WebRtc);
+    assert_eq!(
+        config.preference,
+        TransportPreference::Specific(TransportType::WebRTC)
+    );
     assert!(config.enable_webrtc);
 
     let enabled = config.enabled_transports();
-    assert!(enabled.contains(&TransportType::Plain));
-    assert!(enabled.contains(&TransportType::WebRtc));
+    assert!(enabled.contains(&TransportType::WebRTC));
 }
 
-/// Test transport type protocol IDs.
+/// Test transport type names.
+///
+/// `TransportType::protocol_id()` (and the `/botho/transport/.../1.0.0`
+/// versioned protocol identifiers) were removed during the transport refactor;
+/// transport identification is now exposed via `name()`. The versioning
+/// assertions are dropped because no equivalent API remains.
 #[test]
-fn test_transport_type_protocol_ids() {
-    assert!(TransportType::Plain.protocol_id().contains("plain"));
-    assert!(TransportType::WebRtc.protocol_id().contains("webrtc"));
-    assert!(TransportType::TlsTunnel.protocol_id().contains("tls"));
-
-    // Protocol IDs should follow versioning pattern
-    for transport in [
-        TransportType::Plain,
-        TransportType::WebRtc,
-        TransportType::TlsTunnel,
-    ] {
-        let id = transport.protocol_id();
-        assert!(id.starts_with("/botho/transport/"));
-        assert!(id.contains("/1.0.0"));
-    }
+fn test_transport_type_names() {
+    assert!(TransportType::Plain.name().contains("plain"));
+    assert!(TransportType::WebRTC.name().contains("webrtc"));
+    assert!(TransportType::TlsTunnel.name().contains("tls"));
 }
 
 /// Test ICE connection state display.
@@ -335,18 +337,24 @@ fn test_ice_candidate_foundation_deterministic() {
 /// Integration test for transport configuration in privacy context.
 #[test]
 fn test_transport_config_privacy_integration() {
-    // Standard privacy: Plain transport only
+    // Standard config: no obfuscated transports enabled, so Plain only.
     let standard = TransportConfig::default();
-    assert_eq!(standard.preferred, TransportType::Plain);
     assert!(!standard.enable_webrtc);
+    assert_eq!(standard.enabled_transports(), vec![TransportType::Plain]);
 
-    // High privacy/censorship resistant: WebRTC enabled
-    let high_privacy = TransportConfig::with_webrtc();
-    assert_eq!(high_privacy.preferred, TransportType::WebRtc);
+    // High privacy/censorship resistant: WebRTC enabled and preferred.
+    let high_privacy = TransportConfig::builder()
+        .preferred(TransportType::WebRTC)
+        .enable_webrtc(true)
+        .build();
+    assert_eq!(high_privacy.enabled_transports()[0], TransportType::WebRTC);
     assert!(high_privacy.enable_webrtc);
 
-    // Verify ICE config is included with WebRTC
-    assert!(!high_privacy.ice_config.stun_servers.is_empty());
+    // Verify the WebRTC config (with STUN servers) is included with WebRTC.
+    let webrtc_config = high_privacy
+        .webrtc_config
+        .expect("WebRTC config should be populated when WebRTC is enabled");
+    assert!(!webrtc_config.stun_servers.is_empty());
 }
 
 /// Test that all ICE candidate types can be parsed from strings.
