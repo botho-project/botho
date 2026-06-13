@@ -88,27 +88,23 @@ export function ExplorerProvider({ dataSource, isReady = true, initialQuery, onV
     }
   }, [dataSource, isReady, blocks, loadingMore])
 
-  // Search by height or hash
-  const search = useCallback(async () => {
-    if (!isReady || !searchQuery.trim()) return
+  // Search by height or hash. Accepts an optional query override so callers
+  // (e.g. pressing Enter immediately after typing) can pass the current input
+  // value without racing the async searchQuery state update.
+  const search = useCallback(async (queryOverride?: string) => {
+    const raw = queryOverride ?? searchQuery
+    if (!isReady || !raw.trim()) return
 
     setLoading(true)
     setError(null)
 
-    const query = searchQuery.trim()
+    const query = raw.trim()
 
     try {
-      // Check if it's a block height (number)
-      if (/^\d+$/.test(query)) {
-        const block = await dataSource.getBlock(parseInt(query, 10))
-        if (block) {
-          setView({ mode: 'block', block })
-        } else {
-          setError(`Block at height ${query} not found`)
-        }
-      }
-      // Check if it's a hash (64 hex chars)
-      else if (/^[0-9a-fA-F]{64}$/.test(query)) {
+      // Check if it's a hash (64 hex chars) FIRST. An all-numeric 64-char
+      // value (e.g. an all-zeros hash) is a hash, not a block height, so the
+      // hash check must take precedence over the numeric-height check below.
+      if (/^[0-9a-fA-F]{64}$/.test(query)) {
         // Try as block hash first
         const block = await dataSource.getBlock(query)
         if (block) {
@@ -121,6 +117,15 @@ export function ExplorerProvider({ dataSource, isReady = true, initialQuery, onV
           } else {
             setError('Block or transaction not found')
           }
+        }
+      }
+      // Otherwise check if it's a block height (number)
+      else if (/^\d+$/.test(query)) {
+        const block = await dataSource.getBlock(parseInt(query, 10))
+        if (block) {
+          setView({ mode: 'block', block })
+        } else {
+          setError(`Block at height ${query} not found`)
         }
       } else {
         setError('Invalid search query. Enter a block height or hash.')

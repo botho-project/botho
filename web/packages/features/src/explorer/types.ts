@@ -53,8 +53,9 @@ export interface ExplorerContextValue {
   /** Set search query */
   setSearchQuery: (query: string) => void
 
-  /** Execute search */
-  search: () => Promise<void>
+  /** Execute search. Optionally pass the query to search directly (avoids a
+   *  race with the async searchQuery state update on rapid input + Enter). */
+  search: (queryOverride?: string) => Promise<void>
 
   /** View a specific block */
   viewBlock: (blockOrHeightOrHash: Block | number | string) => Promise<void>

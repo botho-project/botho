@@ -14,6 +14,38 @@ http://localhost:7101/
 ws://localhost:7101/ws
 ```
 
+### Public testnet endpoint
+
+The seed node exposes a CORS-enabled, read-only JSON-RPC endpoint for the
+public testnet. This is the endpoint the web wallet and ledger browser use:
+
+```bash
+# HTTPS JSON-RPC (read-only, CORS-enabled for browser fetch())
+https://seed.botho.io/rpc
+
+# WebSocket (real-time block/tx events)
+wss://seed.botho.io/rpc/ws
+```
+
+Example:
+
+```bash
+curl -s -X POST https://seed.botho.io/rpc \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","method":"node_getStatus","params":{},"id":1}'
+```
+
+CORS for this endpoint is terminated at nginx (see
+`infra/seed/seed-nginx.conf`). nginx is the single CORS authority: it hides the
+upstream node's `Access-Control-Allow-Origin` header and emits a single `*`
+value. Both the wildcard `add_header` and the `proxy_hide_header` directives
+must be present in the deployed config — otherwise browsers reject responses
+that carry two `Access-Control-Allow-Origin` values.
+
+> Note: `faucet_request` / `faucet_getStatus` are only served by a node with the
+> faucet enabled (the separate `faucet.botho.io` deployment), not by the seed
+> node.
+
 ## Request Format
 
 All requests use JSON-RPC 2.0:

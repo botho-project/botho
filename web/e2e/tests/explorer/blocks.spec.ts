@@ -1,15 +1,15 @@
 import { test, expect } from '@playwright/test'
 import { URLS, TIMEOUTS } from '../../fixtures/test-data'
 
-// Helper to wait for explorer to be ready (either block list or connecting message)
+// Helper to wait for the explorer to finish connecting. The search bar renders
+// once connected to the node; wait for it so subsequent block-list assertions
+// are not racing the connection handshake.
 async function waitForExplorerReady(page: import('@playwright/test').Page) {
-  // Wait for either blocks to load or connecting message
-  await Promise.race([
-    expect(page.getByText('Recent Blocks')).toBeVisible({ timeout: TIMEOUTS.NETWORK_REQUEST }),
-    expect(page.getByText('Connecting to network')).toBeVisible({ timeout: 5000 }),
-  ]).catch(() => {
-    // Ignore - we'll check in the test
-  })
+  await expect(page.getByPlaceholder(/Search by block height or hash/i))
+    .toBeVisible({ timeout: TIMEOUTS.WALLET_SYNC })
+    .catch(() => {
+      // If it never connects the individual tests handle the unconnected state.
+    })
 }
 
 test.describe('Explorer - Block List', () => {

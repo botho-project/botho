@@ -1,12 +1,13 @@
 import { test, expect } from '@playwright/test'
 import { URLS, TIMEOUTS, INVALID } from '../../fixtures/test-data'
 
-// Helper to wait for explorer to be ready
+// Helper to wait for the explorer to finish connecting. The search bar is only
+// rendered once connected to the node, so waiting for it is a reliable signal
+// that the explorer is ready for search interactions.
 async function waitForExplorerReady(page: import('@playwright/test').Page) {
-  await Promise.race([
-    expect(page.getByText('Recent Blocks')).toBeVisible({ timeout: TIMEOUTS.NETWORK_REQUEST }),
-    expect(page.getByText('Connecting to network')).toBeVisible({ timeout: 5000 }),
-  ]).catch(() => {})
+  await expect(page.getByPlaceholder(/Search by block height or hash/i)).toBeVisible({
+    timeout: TIMEOUTS.WALLET_SYNC,
+  })
 }
 
 test.describe('Explorer - Search', () => {
