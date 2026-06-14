@@ -174,10 +174,11 @@ fn validate_transaction(tx: &Transaction) {
     let _ = tx.outputs.len();
 
     // Test iteration doesn't panic
-    // TxInputs is an enum - access via methods
+    // TxInputs wraps Vec<ClsagRingInput> - access via methods
     let _ = tx.inputs.len();
-    let _ = tx.inputs.is_ring();
+    let _ = tx.inputs.is_empty();
     let _ = tx.inputs.key_images();
+    let _ = tx.inputs.clsag();
     for output in &tx.outputs {
         let _ = output.amount;
         let _ = output.target_key;

@@ -4,17 +4,37 @@ This directory contains fuzz testing targets for security-critical crypto primit
 
 ## Prerequisites
 
-Install cargo-fuzz:
+Install cargo-fuzz (pin the version used in CI for reproducibility):
 
 ```bash
-cargo install cargo-fuzz
+cargo install cargo-fuzz --version 0.13.1 --locked
 ```
 
-Note: Requires nightly Rust for libfuzzer:
+Note: This crate is **excluded from the root workspace**, so it never builds
+during a normal `cargo build`/`cargo test`. That is why it can silently
+bit-rot. A PR-triggered build-only job in `.github/workflows/fuzz.yml` now
+compiles every target on changes to `fuzz/` or the crates it fuzzes.
+
+### Toolchain
+
+Build and run with the repo's **pinned** nightly (see `rust-toolchain` at the
+repo root), not a rolling `+nightly`. The rolling nightly pulls a compiler that
+fails to compile a transitive `hashbrown 0.14.5` dependency. Because
+`rust-toolchain` pins the channel, invoke cargo-fuzz **without** `+nightly`:
 
 ```bash
-rustup install nightly
+cd fuzz
+cargo fuzz build            # uses the pinned channel via rust-toolchain
 ```
+
+### macOS execution caveat
+
+On macOS 15+ (Darwin 25), the AddressSanitizer runtime shipped with the pinned
+nightly deadlocks during process initialization (in
+`__asan::InitializeShadowMemory` while iterating the dyld shared cache), before
+`main` and before any fuzz input runs. The targets therefore **build** on macOS
+but cannot be **executed** there. Run the fuzzers on Linux (the scheduled CI
+jobs run on `ubuntu-latest`), or build-only locally on macOS.
 
 ## Available Fuzz Targets
 
@@ -50,13 +70,13 @@ rustup install nightly
 
 ```bash
 cd fuzz
-cargo +nightly fuzz run fuzz_clsag
+cargo fuzz run fuzz_clsag
 ```
 
 ### Run with timeout (recommended for CI)
 
 ```bash
-cargo +nightly fuzz run fuzz_clsag -- -max_total_time=60
+cargo fuzz run fuzz_clsag -- -max_total_time=60
 ```
 
 ### Run all crypto targets (10 minutes each)
@@ -65,7 +85,7 @@ cargo +nightly fuzz run fuzz_clsag -- -max_total_time=60
 cd fuzz
 for target in fuzz_clsag fuzz_ring_signature fuzz_subaddress; do
     echo "Fuzzing $target..."
-    cargo +nightly fuzz run $target -- -max_total_time=600
+    cargo fuzz run $target -- -max_total_time=600
 done
 ```
 
@@ -75,7 +95,7 @@ done
 cd fuzz
 for target in fuzz_clsag fuzz_subaddress; do
     echo "Smoke testing $target..."
-    cargo +nightly fuzz run $target -- -max_total_time=60
+    cargo fuzz run $target -- -max_total_time=60
 done
 ```
 
@@ -86,19 +106,21 @@ When a crash is found, a minimized test case is saved to `fuzz/artifacts/<target
 To reproduce:
 
 ```bash
-cargo +nightly fuzz run fuzz_clsag fuzz/artifacts/fuzz_clsag/crash-xxxxx
+cargo fuzz run fuzz_clsag fuzz/artifacts/fuzz_clsag/crash-xxxxx
 ```
 
 ## Corpus Management
 
 The fuzzer builds a corpus of interesting inputs in `fuzz/corpus/<target>/`.
 
-Initial corpus seeds are provided for each target.
+Initial corpus seeds are provided for each target. Corpus directories must
+correspond to an existing target; orphaned ones (e.g. for the long-removed
+`fuzz_lion_signature` and `fuzz_polynomial` targets) have been deleted.
 
 To minimize the corpus:
 
 ```bash
-cargo +nightly fuzz cmin fuzz_clsag
+cargo fuzz cmin fuzz_clsag
 ```
 
 ## Coverage
@@ -106,7 +128,7 @@ cargo +nightly fuzz cmin fuzz_clsag
 Generate coverage report:
 
 ```bash
-cargo +nightly fuzz coverage fuzz_clsag
+cargo fuzz coverage fuzz_clsag
 ```
 
 ## CI Integration
@@ -117,8 +139,8 @@ For CI, run fuzz tests with a time limit to catch regressions:
 - name: Fuzz Testing
   run: |
     cd fuzz
-    cargo +nightly fuzz run fuzz_clsag -- -max_total_time=300
-    cargo +nightly fuzz run fuzz_subaddress -- -max_total_time=300
+    cargo fuzz run fuzz_clsag -- -max_total_time=300
+    cargo fuzz run fuzz_subaddress -- -max_total_time=300
 ```
 
 ## Target Details
@@ -148,7 +170,7 @@ Before release, complete a baseline fuzzing run:
 cd fuzz
 for target in fuzz_clsag fuzz_subaddress; do
     echo "Starting 24-hour fuzz of $target..."
-    cargo +nightly fuzz run $target -- -max_total_time=86400
+    cargo fuzz run $target -- -max_total_time=86400
 done
 ```
 

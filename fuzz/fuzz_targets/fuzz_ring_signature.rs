@@ -12,10 +12,10 @@
 use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
 
-use bth_crypto_ring_signature::{
-    KeyImage, RingMLSAG, Blinding, Commitment,
-};
-use bth_crypto_keys::{RistrettoPublic, RistrettoPrivate};
+use bth_crypto_hashes::Digest;
+use bth_crypto_ring_signature::{KeyImage, RingMLSAG, Commitment};
+use bth_crypto_keys::RistrettoPublic;
+use bth_util_repr_bytes::ReprBytes;
 
 // ============================================================================
 // Structured Fuzzing Types
@@ -129,8 +129,9 @@ fn fuzz_commitment(bytes: &[u8; 32]) {
     let result = Commitment::try_from(&bytes[..]);
 
     if let Ok(commitment) = result {
-        // Operations on valid commitments should not panic
-        let _ = commitment.as_bytes();
+        // Operations on valid commitments should not panic.
+        // Commitment exposes its 32-byte canonical form via the ReprBytes trait.
+        let _ = commitment.to_bytes();
     }
 }
 
