@@ -259,24 +259,28 @@ fn fuzz_index_range(range: &IndexRangeFuzz) {
 
     let count = (range.count as usize).min(50);
 
-    // All subaddresses in range should be unique
-    let mut subaddresses: Vec<PublicAddress> = Vec::with_capacity(count);
+    // Distinct indices must produce distinct subaddresses. Track (index,
+    // address) and only assert uniqueness across DIFFERENT indices —
+    // `saturating_add` collapses consecutive offsets to u64::MAX when
+    // `range.start` is near the top, so the same index can legitimately recur
+    // (same index → same subaddress, which is correct, not a collision).
+    let mut seen: Vec<(u64, PublicAddress)> = Vec::with_capacity(count);
 
     for i in 0..count {
         let index = range.start.saturating_add(i as u64);
         let subaddress = account_key.subaddress(index);
 
-        // Check uniqueness
-        for (j, prev) in subaddresses.iter().enumerate() {
-            assert_ne!(
-                &subaddress, prev,
-                "Subaddresses at indices {} and {} must be unique",
-                range.start.saturating_add(j as u64),
-                index
-            );
+        for (prev_index, prev) in seen.iter() {
+            if *prev_index != index {
+                assert_ne!(
+                    &subaddress, prev,
+                    "Subaddresses at distinct indices {} and {} must be unique",
+                    prev_index, index
+                );
+            }
         }
 
-        subaddresses.push(subaddress);
+        seen.push((index, subaddress));
     }
 }
 
