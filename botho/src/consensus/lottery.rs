@@ -1065,4 +1065,116 @@ mod tests {
             result
         );
     }
+
+    // ------------------------------------------------------------------
+    // Fuzz-harness wiring sanity checks (issue #337).
+    //
+    // These are NOT a substitute for the libfuzzer runs (CI-deferred:
+    // cargo-fuzz cannot run on the macOS dev host). They only confirm that
+    // the core logic the fuzz targets drive — `validate_block_lottery` and
+    // the cluster-tax monetary primitives — behaves as the harnesses assert
+    // on a valid input and a malformed input, so an obvious harness/API
+    // wiring bug is caught at `cargo test` time.
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn fuzz_wiring_lottery_validation_deterministic_and_split_checked() {
+        // Mirrors fuzz_lottery_validation: same input → same result, and an
+        // Ok result implies the 80/20 split matches compute_pool_accounting.
+        let config = LotteryFeeConfig::default();
+        let prev_hash = [9u8; 32];
+
+        // --- Valid (no-winners) block: burn share only, pool carries over.
+        let total_fees = 1000u64;
+        let (_pool, expected_burn) = config.split_fees(total_fees);
+        let valid_summary = BlockLotterySummary {
+            total_fees,
+            pool_distributed: 0,
+            amount_burned: expected_burn,
+            lottery_seed: [0u8; 32],
+        };
+        let valid_block =
+            create_test_block(100, prev_hash, total_fees, valid_summary, vec![]);
+        let candidates: Vec<LotteryCandidate> = vec![];
+
+        let r1 = validate_block_lottery(&valid_block, &candidates, 0, &prev_hash, &config);
+        let r2 = validate_block_lottery(&valid_block, &candidates, 0, &prev_hash, &config);
+        assert_eq!(r1, r2, "validation must be deterministic");
+
+        if r1.is_ok() {
+            let emission_share = valid_block.minting_tx.lottery_emission_share();
+            let accounting = compute_pool_accounting(
+                valid_block.total_fees(),
+                emission_share,
+                0,
+                valid_block.minting_tx.reward,
+                &config,
+            );
+            assert_eq!(valid_block.lottery_summary.amount_burned, accounting.fee_burn);
+            // No-winner block: the pool share carries over (returned new pool),
+            // so the summary's pool_distributed is 0 even though payout > 0.
+            if valid_block.lottery_outputs.is_empty() {
+                assert_eq!(valid_block.lottery_summary.pool_distributed, 0);
+            } else {
+                assert_eq!(valid_block.lottery_summary.pool_distributed, accounting.payout);
+            }
+        }
+
+        // --- Malformed block: claims a wrong burn share → must be rejected,
+        // and rejection must also be deterministic.
+        let bad_summary = BlockLotterySummary {
+            total_fees,
+            pool_distributed: 0,
+            amount_burned: expected_burn + 1, // off by one: wrong split
+            lottery_seed: [0u8; 32],
+        };
+        let bad_block = create_test_block(100, prev_hash, total_fees, bad_summary, vec![]);
+        let b1 = validate_block_lottery(&bad_block, &candidates, 0, &prev_hash, &config);
+        let b2 = validate_block_lottery(&bad_block, &candidates, 0, &prev_hash, &config);
+        assert!(b1.is_err(), "wrong split must be rejected");
+        assert_eq!(b1, b2, "rejection must be deterministic");
+    }
+
+    #[test]
+    fn fuzz_wiring_cluster_tax_math_bounds() {
+        // Mirrors fuzz_cluster_tax_math: cluster factor in documented bounds,
+        // demurrage exempt for factor-1, emission share <= reward, and the
+        // monetary primitives never panic on extreme inputs.
+        use bth_cluster_tax::demurrage::{FACTOR_SCALE, MAX_FACTOR_SCALED};
+        use bth_cluster_tax::{demurrage_charge, ClusterFactorCurve, MonetaryPolicy};
+
+        let curve = ClusterFactorCurve::default_params();
+        // Valid mid-range wealth and the u64 extremes all stay in [1000, 6000].
+        for w in [0u64, 10_000_000, u64::MAX] {
+            let f = curve.factor(w);
+            assert!(
+                (FACTOR_SCALE..=MAX_FACTOR_SCALED).contains(&f),
+                "factor {} out of [{}, {}] for wealth {}",
+                f,
+                FACTOR_SCALE,
+                MAX_FACTOR_SCALED,
+                w
+            );
+        }
+
+        // Factor-1 coins are exempt (valid "no charge" case).
+        assert_eq!(
+            demurrage_charge(u64::MAX, FACTOR_SCALE, 1_000_000, 200, 6_307_200),
+            0
+        );
+        // Max factor over one year ≈ rate_bps of value (malformed-extreme value
+        // must not panic / overflow): bounded by the transfer value.
+        let bpy = 6_307_200u64;
+        let charge = demurrage_charge(1_000_000, MAX_FACTOR_SCALED, bpy, 200, bpy);
+        assert!(charge <= 1_000_000, "in-horizon charge exceeds value");
+
+        // Emission share can never exceed the reward, even at extreme height.
+        let policy = MonetaryPolicy::default();
+        for (h, r) in [(0u64, 0u64), (1, u64::MAX), (u64::MAX, 50_000_000_000)] {
+            assert!(policy.lottery_emission_share(h, r) <= r);
+            // Tail reward + block reward must not panic for extreme supply.
+            let _ = policy.calculate_tail_reward(r);
+            let _ = crate::block::calculate_block_reward(h, r);
+        }
+    }
 }
