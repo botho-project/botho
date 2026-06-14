@@ -514,9 +514,17 @@ impl QuantumPrivateTransaction {
         hasher.finalize().into()
     }
 
-    /// Get total output amount
+    /// Get total output amount.
+    ///
+    /// Saturates to `u64::MAX` on overflow rather than wrapping (release sets
+    /// `overflow-checks = false`). See `Transaction::total_output` and audit
+    /// #340. Any future consensus balance check on quantum-private txs must
+    /// accumulate with checked arithmetic and reject overflow, not rely on
+    /// this saturating accessor.
     pub fn total_output(&self) -> u64 {
-        self.outputs.iter().map(|o| o.amount()).sum()
+        self.outputs
+            .iter()
+            .fold(0u64, |acc, o| acc.saturating_add(o.amount()))
     }
 
     /// Check basic structure validity

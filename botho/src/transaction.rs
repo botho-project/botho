@@ -1031,9 +1031,18 @@ impl Transaction {
         hasher.finalize().into()
     }
 
-    /// Get total output amount (excluding fee)
+    /// Get total output amount (excluding fee).
+    ///
+    /// Saturates to `u64::MAX` on overflow rather than wrapping — release
+    /// builds set `overflow-checks = false`, so a plain `.sum()` would wrap
+    /// silently. Consensus balance verification does NOT rely on this; it
+    /// accumulates outputs with checked arithmetic in `verify_ring_signatures`
+    /// and rejects overflowing transactions (audit #340). This accessor is for
+    /// display/estimation callers, where saturation is the safe failure mode.
     pub fn total_output(&self) -> u64 {
-        self.outputs.iter().map(|o| o.amount).sum()
+        self.outputs
+            .iter()
+            .fold(0u64, |acc, o| acc.saturating_add(o.amount))
     }
 
     /// Check basic transaction validity (structure only, not signatures or UTXO
@@ -1114,8 +1123,19 @@ impl Transaction {
         }
 
         // 2. Balance equation: sum(inputs) == sum(outputs) + fee (exact).
-        let output_total = self
-            .total_output()
+        //    Accumulate the output sum with checked arithmetic — do NOT route
+        //    through `total_output()`, whose internal sum would wrap silently
+        //    in release (overflow-checks = false). An overflowing output sum
+        //    must REJECT the transaction, never wrap: a wrapped output total
+        //    could equal a small honest input total and let a tx mint outputs
+        //    far exceeding its inputs (inflation). See audit finding #340.
+        let mut output_total: u64 = 0;
+        for output in &self.outputs {
+            output_total = output_total
+                .checked_add(output.amount)
+                .ok_or("Output amount sum overflow")?;
+        }
+        output_total = output_total
             .checked_add(self.fee)
             .ok_or("Output amount sum overflow")?;
 
@@ -1550,6 +1570,52 @@ mod tests {
             tx.verify_ring_signatures(),
             Err("Invalid CLSAG signature"),
             "claimed per-input amount not matching the signed amount must be rejected"
+        );
+    }
+
+    #[test]
+    fn test_output_sum_overflow_rejected() {
+        // Audit #340 (found by fuzz_multi_input_balance): outputs whose amounts
+        // sum past u64::MAX must be REJECTED, never wrapped. With
+        // overflow-checks=false in release, an unchecked output sum would wrap
+        // to a small value, equal a small honest input total, and let the tx
+        // mint outputs vastly exceeding its inputs (inflation).
+        let big = u64::MAX / 2 + 1; // two of these overflow u64
+        let outputs = vec![
+            test_output(big, [7u8; 32], [8u8; 32]),
+            test_output(big, [9u8; 32], [10u8; 32]),
+        ];
+        // One validly-signed input so CLSAG verification passes and execution
+        // reaches the output-sum/balance step.
+        let preliminary = Transaction::new_clsag(Vec::new(), outputs.clone(), 0, 1);
+        let signing_hash = preliminary.signing_hash();
+        let input = signed_clsag_input(1_000, &signing_hash);
+        let tx = Transaction::new_clsag(vec![input], outputs, 0, 1);
+
+        assert_eq!(
+            tx.verify_ring_signatures(),
+            Err("Output amount sum overflow"),
+            "outputs summing past u64::MAX must be rejected, not wrapped"
+        );
+    }
+
+    #[test]
+    fn test_total_output_saturates_not_wraps() {
+        // total_output() must saturate, never wrap (audit #340).
+        let big = u64::MAX / 2 + 1;
+        let tx = Transaction::new_clsag(
+            Vec::new(),
+            vec![
+                test_output(big, [1u8; 32], [2u8; 32]),
+                test_output(big, [3u8; 32], [4u8; 32]),
+            ],
+            0,
+            1,
+        );
+        assert_eq!(
+            tx.total_output(),
+            u64::MAX,
+            "total_output must saturate to u64::MAX, not wrap to a small value"
         );
     }
 
