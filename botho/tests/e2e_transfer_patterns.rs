@@ -129,6 +129,7 @@ fn test_concurrent_transfers() {
     // regardless of how the txs are grouped into blocks.
     let total_fees = DEFAULT_NUM_NODES as u64 * MIN_TX_FEE;
     let (_, expected_burn) = split_fees(total_fees, &Default::default());
+    let expected_burn = expected_burn as u128;
     let node = network.get_node(0);
     let state = node.chain_state();
     println!(
@@ -476,7 +477,7 @@ fn test_stress_load_patterns() {
     let per_fee_burn = split_fees(MIN_TX_FEE, &Default::default()).1;
     assert_eq!(
         final_state.total_fees_burned,
-        confirmed_tx_count * per_fee_burn,
+        (confirmed_tx_count * per_fee_burn) as u128,
         "Destroyed fees should be confirmed_count * per-fee burn share"
     );
 
@@ -488,7 +489,7 @@ fn test_stress_load_patterns() {
         .sum();
 
     assert_eq!(
-        total_balance + final_state.total_fees_burned + lottery_pool,
+        total_balance as u128 + final_state.total_fees_burned + lottery_pool as u128,
         final_state.total_mined,
         "Supply conservation: wallets({}) + burned({}) + pool({}) != mined({})",
         total_balance,
@@ -614,7 +615,7 @@ fn test_rapid_sequential_transfers() {
     let per_fee_burn = split_fees(MIN_TX_FEE, &Default::default()).1;
     assert_eq!(
         final_state.total_fees_burned,
-        DEFAULT_NUM_NODES as u64 * per_fee_burn,
+        DEFAULT_NUM_NODES as u128 * per_fee_burn as u128,
         "Burn share of {} sequential-transfer fees should be destroyed",
         DEFAULT_NUM_NODES
     );
@@ -777,7 +778,7 @@ fn test_mixed_transaction_patterns() {
         total_balance, final_state.total_fees_burned, lottery_pool, final_state.total_mined
     );
     assert_eq!(
-        total_balance + final_state.total_fees_burned + lottery_pool,
+        total_balance as u128 + final_state.total_fees_burned + lottery_pool as u128,
         final_state.total_mined,
         "Supply conservation: wallets({}) + burned({}) + pool({}) != mined({})",
         total_balance,

@@ -530,4 +530,31 @@ mod tests {
         let result = UtxoSnapshot::read_from(data.as_slice());
         assert!(matches!(result, Err(SnapshotError::Invalid(_))));
     }
+
+    /// #333: ChainState carries u128 supply accumulators. A snapshot whose
+    /// `total_mined`/`total_fees_burned` exceed u64::MAX must round-trip
+    /// through the serde/bincode snapshot file path without truncation.
+    #[test]
+    fn test_snapshot_roundtrip_total_mined_past_u64_max() {
+        // ~1.22e21 picocredits (realistic Phase-2 gross emission), well above
+        // u64::MAX (~1.84e19).
+        let big_mined: u128 = 1_220_000_000_000_000_000_000;
+        let big_burned: u128 = u64::MAX as u128 + 42;
+        assert!(big_mined > u64::MAX as u128);
+        assert!(big_burned > u64::MAX as u128);
+
+        let mut cs = test_chain_state();
+        cs.total_mined = big_mined;
+        cs.total_fees_burned = big_burned;
+
+        let snapshot =
+            UtxoSnapshot::new(1000, [1u8; 32], cs, vec![test_utxo(1)], vec![], vec![]).unwrap();
+
+        let mut buffer = Vec::new();
+        snapshot.write_to(&mut buffer).unwrap();
+        let recovered = UtxoSnapshot::read_from(buffer.as_slice()).unwrap();
+
+        assert_eq!(recovered.chain_state.total_mined, big_mined);
+        assert_eq!(recovered.chain_state.total_fees_burned, big_burned);
+    }
 }

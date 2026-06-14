@@ -161,7 +161,7 @@ fuzz_target!(|m: FuzzMath| {
 
     // --- 4. Emission / reward schedule -----------------------------------
     // calculate_block_reward must never panic for any height/supply.
-    let _reward = calculate_block_reward(m.height, m.total_supply);
+    let _reward = calculate_block_reward(m.height, m.total_supply as u128);
 
     let policy = MonetaryPolicy::default();
     // Tail reward: pure u128-staged math, must not panic.

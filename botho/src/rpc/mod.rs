@@ -768,9 +768,12 @@ async fn handle_chain_info(id: Value, state: &RpcState) -> JsonRpcResponse {
             "height": chain_state.height,
             "tipHash": hex::encode(chain_state.tip_hash),
             "difficulty": chain_state.difficulty,
-            "totalMined": chain_state.total_mined,
-            "totalFeesBurned": chain_state.total_fees_burned,
-            "circulatingSupply": circulating_supply,
+            // Monetary totals are u128 picocredits and always exceed JS's
+            // 2^53 safe-integer limit; emit as decimal strings so JSON clients
+            // can parse them into BigInt without precision loss (#333).
+            "totalMined": chain_state.total_mined.to_string(),
+            "totalFeesBurned": chain_state.total_fees_burned.to_string(),
+            "circulatingSupply": circulating_supply.to_string(),
             "mempoolSize": mempool.len(),
             "mempoolFees": mempool.total_fees(),
         }),
@@ -797,9 +800,10 @@ async fn handle_supply_info(id: Value, state: &RpcState) -> JsonRpcResponse {
         id,
         json!({
             "height": chain_state.height,
-            "totalMined": chain_state.total_mined,
-            "totalFeesBurned": chain_state.total_fees_burned,
-            "circulatingSupply": circulating_supply,
+            // u128 picocredits emitted as decimal strings — see handle_chain_info (#333).
+            "totalMined": chain_state.total_mined.to_string(),
+            "totalFeesBurned": chain_state.total_fees_burned.to_string(),
+            "circulatingSupply": circulating_supply.to_string(),
         }),
     )
 }

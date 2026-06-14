@@ -77,7 +77,7 @@ fn test_e2e_5_node_consensus_with_mining_and_transactions() {
     );
     assert_eq!(
         state.total_mined,
-        blocks_to_mine as u64 * INITIAL_BLOCK_REWARD,
+        blocks_to_mine as u128 * INITIAL_BLOCK_REWARD as u128,
         "Total mined should be {} * reward",
         blocks_to_mine
     );
@@ -303,7 +303,7 @@ fn test_e2e_5_node_consensus_with_mining_and_transactions() {
     println!("  Final height: {}", final_state.height);
     println!(
         "  Final total mined: {} BTH",
-        final_state.total_mined / PICOCREDITS_PER_CREDIT
+        final_state.total_mined / PICOCREDITS_PER_CREDIT as u128
     );
     println!("  Fees burned (20% share): {} picocredits", final_state.total_fees_burned);
     println!("  Lottery pool (carryover): {} picocredits", lottery_pool);
@@ -324,7 +324,7 @@ fn test_e2e_5_node_consensus_with_mining_and_transactions() {
     // gross emission is exactly height * reward.
     assert_eq!(
         final_state.total_mined,
-        final_state.height * INITIAL_BLOCK_REWARD,
+        final_state.height as u128 * INITIAL_BLOCK_REWARD as u128,
         "Total mined should equal height * reward"
     );
 
@@ -333,7 +333,7 @@ fn test_e2e_5_node_consensus_with_mining_and_transactions() {
     // transfers, each in its own block (the transfers chain, so they cannot
     // share a block), the destroyed amount is 4 * burn(MIN_TX_FEE).
     let (_, per_tx_burn) = split_fees(MIN_TX_FEE, &Default::default());
-    let expected_burned = num_tx_blocks * per_tx_burn;
+    let expected_burned = (num_tx_blocks * per_tx_burn) as u128;
     assert_eq!(
         final_state.total_fees_burned, expected_burned,
         "Destroyed fees should be 4 * 20%-of-MIN_TX_FEE = {}, got {}",
@@ -361,7 +361,7 @@ fn test_e2e_5_node_consensus_with_mining_and_transactions() {
     );
 
     assert_eq!(
-        total_wallet_balance + final_state.total_fees_burned + lottery_pool,
+        total_wallet_balance as u128 + final_state.total_fees_burned + lottery_pool as u128,
         final_state.total_mined,
         "Supply conservation failed: wallets({}) + burned({}) + pool({}) != mined({})",
         total_wallet_balance,
@@ -413,7 +413,7 @@ fn test_private_ring_signature_transaction() {
     println!(
         "  Mined {} blocks, total supply: {} BTH\n",
         state.height,
-        state.total_mined / PICOCREDITS_PER_CREDIT
+        state.total_mined / PICOCREDITS_PER_CREDIT as u128
     );
     drop(node);
 
@@ -499,7 +499,7 @@ fn test_private_ring_signature_transaction() {
 
     // Only the burn share of the fee is destroyed; the rest flows to the
     // lottery pool (audit cycle 6, M4).
-    let expected_burn = split_fees(tx_fee, &Default::default()).1;
+    let expected_burn = split_fees(tx_fee, &Default::default()).1 as u128;
     assert_eq!(
         final_state.total_fees_burned, expected_burn,
         "Fee burn share should have been destroyed"

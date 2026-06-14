@@ -240,14 +240,14 @@ impl Ledger {
             .meta_db
             .get(&rtxn, META_TOTAL_MINED)
             .map_err(|e| LedgerError::Database(format!("Failed to get total_mined: {}", e)))?
-            .map(|b| u64::from_le_bytes(b.try_into().unwrap_or([0; 8])))
+            .map(|b| u128::from_le_bytes(b.try_into().unwrap_or([0; 16])))
             .unwrap_or(0);
 
         let total_fees_burned = self
             .meta_db
             .get(&rtxn, META_FEES_BURNED)
             .map_err(|e| LedgerError::Database(format!("Failed to get fees_burned: {}", e)))?
-            .map(|b| u64::from_le_bytes(b.try_into().unwrap_or([0; 8])))
+            .map(|b| u128::from_le_bytes(b.try_into().unwrap_or([0; 16])))
             .unwrap_or(0);
 
         let difficulty = self
@@ -578,7 +578,7 @@ impl Ledger {
 
         let new_hash = block.hash();
         let new_height = block.height();
-        let new_total_mined = state.total_mined + block.minting_tx.reward;
+        let new_total_mined = state.total_mined + block.minting_tx.reward as u128;
 
         // Fee accounting. Only the burn share of fees is actually destroyed;
         // the remainder flows to the redistribution lottery pool (and is paid
@@ -589,7 +589,7 @@ impl Ledger {
         // against the pool accounting by `validate_block_lottery` above.
         let block_fees: u64 = block.transactions.iter().map(|tx| tx.fee).sum();
         let actually_burned = block.lottery_summary.amount_burned;
-        let new_total_fees_burned = state.total_fees_burned + actually_burned;
+        let new_total_fees_burned = state.total_fees_burned + actually_burned as u128;
 
         // Create UTXO from minting reward (coinbase)
         let coinbase_utxo_id = UtxoId::new(new_hash, 0);
@@ -2246,6 +2246,72 @@ mod tests {
         assert_eq!(tip.height(), 0);
     }
 
+    /// #333: `META_TOTAL_MINED` / `META_FEES_BURNED` persist as 16-byte LE
+    /// (u128). Values above u64::MAX must survive a write + ledger reopen
+    /// without truncation. With the old 8-byte u64 encoding this would have
+    /// been impossible to even store.
+    #[test]
+    fn test_supply_metadata_u128_persist_reload() {
+        let dir = tempdir().unwrap();
+
+        // ~1.22e21 picocredits gross emission, above u64::MAX (~1.84e19).
+        let big_mined: u128 = 1_220_000_000_000_000_000_000;
+        let big_burned: u128 = u64::MAX as u128 + 7;
+        assert!(big_mined > u64::MAX as u128);
+        assert!(big_burned > u64::MAX as u128);
+
+        {
+            let ledger = Ledger::open(dir.path()).unwrap();
+            let mut wtxn = ledger.env.write_txn().unwrap();
+            ledger
+                .meta_db
+                .put(&mut wtxn, META_TOTAL_MINED, &big_mined.to_le_bytes())
+                .unwrap();
+            ledger
+                .meta_db
+                .put(&mut wtxn, META_FEES_BURNED, &big_burned.to_le_bytes())
+                .unwrap();
+            wtxn.commit().unwrap();
+
+            // 16-byte LE on disk (consensus-state format change, 8 -> 16).
+            let rtxn = ledger.env.read_txn().unwrap();
+            assert_eq!(
+                ledger.meta_db.get(&rtxn, META_TOTAL_MINED).unwrap().unwrap().len(),
+                16
+            );
+        }
+
+        // Reopen and confirm exact reload through get_chain_state().
+        let ledger = Ledger::open(dir.path()).unwrap();
+        let state = ledger.get_chain_state().unwrap();
+        assert_eq!(state.total_mined, big_mined);
+        assert_eq!(state.total_fees_burned, big_burned);
+    }
+
+    /// #333: amounts stayed u64, so block wire format is byte-for-byte
+    /// unchanged. Assert the genesis block (a fixed fixture) serializes to a
+    /// stable byte length and that the monetary fields are u64-sized (8 bytes
+    /// each), guarding against an accidental amount-widening that would break
+    /// gossip/block compatibility.
+    #[test]
+    fn test_block_wire_format_amounts_stay_u64() {
+        let genesis = crate::block::Block::genesis();
+        let bytes = bincode::serialize(&genesis).unwrap();
+
+        // Deterministic fixture: re-serializing yields identical bytes.
+        assert_eq!(bytes, bincode::serialize(&genesis).unwrap());
+
+        // Monetary fields are u64 (8 bytes), not u128 (16 bytes).
+        assert_eq!(genesis.minting_tx.reward.to_le_bytes().len(), 8);
+        assert_eq!(genesis.minting_tx.to_tx_output().amount.to_le_bytes().len(), 8);
+        for tx in &genesis.transactions {
+            assert_eq!(tx.fee.to_le_bytes().len(), 8);
+            for output in &tx.outputs {
+                assert_eq!(output.amount.to_le_bytes().len(), 8);
+            }
+        }
+    }
+
     #[test]
     fn test_key_image_tracking() {
         let dir = tempdir().unwrap();
@@ -2517,8 +2583,8 @@ mod tests {
                 .map(|u| u.output.amount as u128)
                 .sum();
             assert_eq!(
-                state.total_mined as u128,
-                utxo_sum + state.total_fees_burned as u128 + pool as u128,
+                state.total_mined,
+                utxo_sum + state.total_fees_burned + pool as u128,
                 "supply conservation violated"
             );
             state.height

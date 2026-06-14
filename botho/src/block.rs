@@ -582,17 +582,51 @@ impl Block {
 ///
 /// # Returns
 /// The block reward for the given height.
-pub fn calculate_block_reward(height: u64, total_supply: u64) -> u64 {
+pub fn calculate_block_reward(height: u64, total_supply: u128) -> u64 {
     let policy = crate::monetary::mainnet_policy();
 
     // Check which phase we're in
     if policy.is_halving_phase(height) {
-        // Phase 1: Halving schedule based on block height
+        // Phase 1: Halving schedule based on block height (independent of
+        // supply — the halving branch ignores `total_supply` entirely).
         policy.halving_reward(height).unwrap_or(1)
     } else {
-        // Phase 2: Calculate tail reward based on supply
-        policy.calculate_tail_reward(total_supply)
+        // Phase 2: Calculate tail reward based on supply.
+        //
+        // `MonetaryPolicy::calculate_tail_reward` (cluster-tax crate) takes a
+        // `u64` supply, but by the time the chain reaches Phase 2 the real
+        // picocredit supply (~1.2e21) far exceeds `u64::MAX`. Truncating to
+        // `u64` would compute a wildly wrong tail reward, so we recompute the
+        // identical integer formula in `u128` here rather than widen the
+        // cluster-tax simulation crate (out of scope per #333). This MUST stay
+        // bit-for-bit equivalent to `MonetaryPolicy::calculate_tail_reward`.
+        calculate_tail_reward_u128(&policy, total_supply)
     }
+}
+
+/// `u128` reimplementation of `MonetaryPolicy::calculate_tail_reward`.
+///
+/// Kept byte-for-byte identical to the cluster-tax crate's `u64` version
+/// (which already does its internal arithmetic in `u128`); the only
+/// difference is that the `supply` input is accepted as `u128` so realistic
+/// picocredit supplies above `u64::MAX` do not truncate. See #333.
+fn calculate_tail_reward_u128(
+    policy: &bth_cluster_tax::MonetaryPolicy,
+    supply_at_transition: u128,
+) -> u64 {
+    // Target annual NET emission.
+    let target_net = supply_at_transition * policy.tail_inflation_bps as u128 / 10_000;
+    // Expected annual fee burns.
+    let expected_burns =
+        supply_at_transition * policy.expected_fee_burn_rate_bps as u128 / 10_000;
+    // Gross emission needed.
+    let gross_needed = target_net + expected_burns;
+    // Blocks per year at target rate.
+    let secs_per_year: u128 = 365 * 24 * 3600;
+    let blocks_per_year = secs_per_year / policy.target_block_time_secs as u128;
+    // Reward per block (a single block reward never approaches u64::MAX).
+    let reward = gross_needed / blocks_per_year;
+    reward.max(1) as u64
 }
 
 /// Dynamic block timing based on network load.
@@ -824,10 +858,14 @@ pub mod difficulty {
         pub difficulty: u64,
         /// Cumulative transactions (for difficulty adjustment timing)
         pub total_tx: u64,
-        /// Cumulative gross emission (picocredits minted)
-        pub total_emitted: u64,
-        /// Cumulative fees burned
-        pub total_burned: u64,
+        /// Cumulative gross emission (picocredits minted). `u128`: mirrors
+        /// `ChainState.total_mined` (restored via `from_chain_state`) and
+        /// crosses `u64::MAX` over Phase 1 — keeping it `u64` would
+        /// re-introduce the silent wrap #333 fixes.
+        pub total_emitted: u128,
+        /// Cumulative fees burned (picocredits). `u128` for the same reason as
+        /// `total_emitted`.
+        pub total_burned: u128,
 
         // --- Current epoch accumulators ---
         /// Tx in current adjustment epoch
@@ -866,8 +904,8 @@ pub mod difficulty {
         /// Restore from persisted chain state
         pub fn from_chain_state(
             difficulty: u64,
-            total_mined: u64,
-            total_fees_burned: u64,
+            total_mined: u128,
+            total_fees_burned: u128,
             total_tx: u64,
             epoch_tx: u64,
             epoch_emission: u64,
@@ -898,7 +936,7 @@ pub mod difficulty {
             let initial_reward = INITIAL_REWARD as u128;
             let halving_interval = policy.halving_interval as u128;
             let halving_count = policy.halving_count as u128;
-            let total_emitted = self.total_emitted as u128;
+            let total_emitted = self.total_emitted;
 
             let total_halving_emission = initial_reward * halving_interval * halving_count;
             if total_emitted < total_halving_emission {
@@ -919,8 +957,8 @@ pub mod difficulty {
             self.current_reward
         }
 
-        /// Net circulating supply
-        pub fn net_supply(&self) -> u64 {
+        /// Net circulating supply (picocredits).
+        pub fn net_supply(&self) -> u128 {
             self.total_emitted.saturating_sub(self.total_burned)
         }
 
@@ -952,8 +990,8 @@ pub mod difficulty {
         ) -> (u64, u64) {
             // Update totals
             self.total_tx += tx_count;
-            self.total_emitted += reward_paid;
-            self.total_burned += fees_burned;
+            self.total_emitted += reward_paid as u128;
+            self.total_burned += fees_burned as u128;
 
             // Update epoch accumulators
             self.epoch_tx += tx_count;
@@ -1022,9 +1060,10 @@ pub mod difficulty {
                 return 0;
             }
             // Net emission per tx, annualized assuming 10M tx/year
-            let net_per_tx = self.total_emitted.saturating_sub(self.total_burned) / self.total_tx;
+            let net_per_tx =
+                self.total_emitted.saturating_sub(self.total_burned) / self.total_tx as u128;
             let annual = net_per_tx * 10_000_000;
-            annual * 10_000 / supply
+            (annual * 10_000 / supply) as u64
         }
     }
 
@@ -1068,7 +1107,7 @@ pub mod difficulty {
             // and that very high emission values are still in halving phase (since the
             // threshold is larger than u64::MAX).
             let mut ctrl = EmissionController::new(1000);
-            ctrl.total_emitted = u64::MAX;
+            ctrl.total_emitted = u64::MAX as u128;
 
             // With the current constants, even u64::MAX is still in halving phase
             // because total_halving_emission > u64::MAX
@@ -1206,4 +1245,101 @@ mod tests {
     // based on block height via MonetaryPolicy (5s block assumption). Tests
     // for the halving schedule are in the monetary.rs and validation.rs
     // test modules.
+
+    // --- #333: supply accumulators are u128 ---
+
+    /// The `u128` tail-reward reimplementation in `calculate_block_reward`
+    /// MUST stay bit-for-bit identical to the cluster-tax crate's `u64`
+    /// version for any supply that fits in `u64`. This guards against the two
+    /// formulas silently drifting apart.
+    #[test]
+    fn test_tail_reward_u128_matches_u64_in_range() {
+        let policy = crate::monetary::mainnet_policy();
+        for supply in [
+            0u64,
+            1,
+            1_000_000_000_000,
+            1_000_000_000_000_000_000,
+            u64::MAX,
+        ] {
+            assert_eq!(
+                calculate_tail_reward_u128(&policy, supply as u128),
+                policy.calculate_tail_reward(supply),
+                "tail reward mismatch at supply={supply}",
+            );
+        }
+    }
+
+    /// `calculate_block_reward` must compute the correct tail reward when the
+    /// real picocredit supply exceeds `u64::MAX` (the regime the chain
+    /// actually reaches). Truncating to `u64` here would be a consensus bug.
+    #[test]
+    fn test_block_reward_correct_past_u64_max() {
+        let policy = crate::monetary::mainnet_policy();
+        // First height in Phase 2 (tail emission).
+        let tail_height = policy.tail_emission_start_height();
+        assert!(!policy.is_halving_phase(tail_height));
+
+        // Realistic Phase-2 supply: ~1.22e21 picocredits, far above u64::MAX
+        // (~1.84e19). Computing the tail reward from a u64-truncated supply
+        // would produce a wildly different (wrong) value.
+        let real_supply: u128 = 1_220_000_000_000_000_000_000;
+        assert!(real_supply > u64::MAX as u128);
+
+        let reward = calculate_block_reward(tail_height, real_supply);
+
+        // Recompute the expected reward independently in u128.
+        let target_net = real_supply * policy.tail_inflation_bps as u128 / 10_000;
+        let expected_burns =
+            real_supply * policy.expected_fee_burn_rate_bps as u128 / 10_000;
+        let secs_per_year: u128 = 365 * 24 * 3600;
+        let blocks_per_year = secs_per_year / policy.target_block_time_secs as u128;
+        let expected = ((target_net + expected_burns) / blocks_per_year).max(1) as u64;
+
+        assert_eq!(reward, expected);
+
+        // Sanity: a u64-truncating implementation would have used
+        // (real_supply as u64), a completely different supply, yielding a
+        // different reward — confirm the two differ so this test has teeth.
+        let truncated_reward = policy.calculate_tail_reward(real_supply as u64);
+        assert_ne!(
+            reward, truncated_reward,
+            "u128 path must differ from u64-truncated path at this supply",
+        );
+    }
+
+    /// Phase-1 halving reward is height-driven and independent of supply, so
+    /// passing a u128 supply above u64::MAX must not change it.
+    #[test]
+    fn test_halving_reward_ignores_large_supply() {
+        let huge_supply: u128 = u64::MAX as u128 + 1_000_000;
+        let at_zero = calculate_block_reward(0, 0);
+        let at_zero_huge = calculate_block_reward(0, huge_supply);
+        assert_eq!(at_zero, at_zero_huge);
+        assert_eq!(at_zero, difficulty::INITIAL_REWARD); // 50 BTH at genesis
+    }
+
+    /// The cumulative emission accumulator must track exact picocredit totals
+    /// past u64::MAX without wrapping. This is the core regression guard for
+    /// #333: with `overflow-checks=false` in release, a u64 accumulator would
+    /// silently wrap here.
+    #[test]
+    fn test_emission_controller_accumulates_past_u64_max() {
+        use difficulty::EmissionController;
+        let mut ctrl = EmissionController::new(1000);
+
+        // Seed just below u64::MAX so the next reward crosses the boundary.
+        let near_max = u64::MAX - 10;
+        ctrl.total_emitted = near_max as u128;
+
+        let reward = difficulty::INITIAL_REWARD; // 50 BTH = 5e13 pico
+        ctrl.record_block(1, reward, 0);
+
+        let expected = near_max as u128 + reward as u128;
+        assert_eq!(ctrl.total_emitted, expected);
+        assert!(ctrl.total_emitted > u64::MAX as u128, "must have crossed u64::MAX");
+
+        // net_supply also computed in u128 without wrapping.
+        assert_eq!(ctrl.net_supply(), expected);
+    }
 }
