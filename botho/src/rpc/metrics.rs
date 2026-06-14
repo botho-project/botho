@@ -589,13 +589,18 @@ impl MetricsUpdater {
     }
 
     /// Update the total minted metric.
-    pub fn set_total_minted(&self, total: u64) {
-        TOTAL_MINTED.set(total as i64);
+    ///
+    /// `total` is a u128 picocredit accumulator (#333); the Prometheus gauge
+    /// is `i64`, so the stored sample saturates at `i64::MAX`. This is a
+    /// display-only metric — exact accounting lives in chain state.
+    pub fn set_total_minted(&self, total: u128) {
+        TOTAL_MINTED.set(total.min(i64::MAX as u128) as i64);
     }
 
-    /// Update the total fees burned metric.
-    pub fn set_total_fees_burned(&self, total: u64) {
-        TOTAL_FEES_BURNED.set(total as i64);
+    /// Update the total fees burned metric. Saturates to `i64::MAX` like
+    /// `set_total_minted` (display-only metric).
+    pub fn set_total_fees_burned(&self, total: u128) {
+        TOTAL_FEES_BURNED.set(total.min(i64::MAX as u128) as i64);
     }
 
     /// Update the minting active metric.

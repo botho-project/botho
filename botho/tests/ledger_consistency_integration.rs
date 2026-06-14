@@ -224,7 +224,7 @@ fn test_ledger_total_mined_tracking() {
     }
 
     let final_state = ledger.get_chain_state().unwrap();
-    let expected_mined = initial_mined + (5 * TEST_BLOCK_REWARD);
+    let expected_mined = initial_mined + (5 * TEST_BLOCK_REWARD as u128);
     assert_eq!(
         final_state.total_mined, expected_mined,
         "Total mined should track correctly"
@@ -433,7 +433,7 @@ fn test_chain_state_consistency_after_multiple_blocks() {
         );
         assert_eq!(
             state.total_mined,
-            prev_state.total_mined + TEST_BLOCK_REWARD,
+            prev_state.total_mined + TEST_BLOCK_REWARD as u128,
             "Total mined should increase by block reward"
         );
 

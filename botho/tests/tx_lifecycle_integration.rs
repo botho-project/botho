@@ -507,7 +507,7 @@ fn test_tx_lifecycle_fee_burning() {
 
     // Verify the burn share was destroyed. Only the burn fraction of a fee
     // is destroyed; the rest flows to the lottery pool (audit cycle 6, M4).
-    let per_fee_burn = LotteryFeeConfig::default().split_fees(fee).1;
+    let per_fee_burn = LotteryFeeConfig::default().split_fees(fee).1 as u128;
     let state = ledger.get_chain_state().unwrap();
     assert_eq!(
         state.total_fees_burned, per_fee_burn,
@@ -972,7 +972,7 @@ fn test_multiple_transactions_in_single_block() {
 
     // Verify the burn share for both fees. Both txs share one block, so the
     // burn is computed on the combined block fee (audit cycle 6, M4).
-    let expected_burn = LotteryFeeConfig::default().split_fees(MIN_TX_FEE * 2).1;
+    let expected_burn = LotteryFeeConfig::default().split_fees(MIN_TX_FEE * 2).1 as u128;
     let state = ledger.get_chain_state().unwrap();
     assert_eq!(
         state.total_fees_burned, expected_burn,

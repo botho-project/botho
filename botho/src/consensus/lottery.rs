@@ -1174,7 +1174,7 @@ mod tests {
             assert!(policy.lottery_emission_share(h, r) <= r);
             // Tail reward + block reward must not panic for extreme supply.
             let _ = policy.calculate_tail_reward(r);
-            let _ = crate::block::calculate_block_reward(h, r);
+            let _ = crate::block::calculate_block_reward(h, r as u128);
         }
     }
 }

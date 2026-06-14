@@ -58,12 +58,21 @@ pub struct ChainState {
     /// Timestamp of the tip block
     pub tip_timestamp: u64,
 
-    /// Total credits mined so far (gross emission)
-    pub total_mined: u64,
+    /// Total credits mined so far (gross emission), in picocredits.
+    ///
+    /// `u128` (not `u64`): Phase-1 emission (~1.22e21 pico ≈ 1.22B BTH)
+    /// exceeds `u64::MAX` (~1.84e19 pico ≈ 18.4M BTH). With
+    /// `overflow-checks=false` in release this accumulator would wrap
+    /// silently and corrupt the emission schedule (it feeds
+    /// `calculate_block_reward`). See issue #333.
+    pub total_mined: u128,
 
-    /// Total transaction fees burned (removed from supply)
-    /// Net supply = total_mined - total_fees_burned
-    pub total_fees_burned: u64,
+    /// Total transaction fees burned (removed from supply), in picocredits.
+    /// Net supply = total_mined - total_fees_burned.
+    ///
+    /// `u128` for the same reason as `total_mined`: cumulative burns track
+    /// cumulative emission and can cross `u64::MAX`.
+    pub total_fees_burned: u128,
 
     /// Current minting difficulty
     pub difficulty: u64,

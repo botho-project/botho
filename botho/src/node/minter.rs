@@ -58,8 +58,9 @@ pub struct MintingWork {
     pub prev_block_hash: [u8; 32],
     pub height: u64,
     pub difficulty: u64,
-    /// Total minted (gross emission). Used for reward calculation.
-    pub total_minted: u64,
+    /// Total minted (gross emission), in picocredits. Used for reward
+    /// calculation. `u128` to match `ChainState.total_mined` (see #333).
+    pub total_minted: u128,
 }
 
 /// The minter manages minting threads
