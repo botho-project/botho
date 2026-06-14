@@ -216,20 +216,20 @@ fn fuzz_special_indices(special: &SpecialIndexFuzz) {
         "Default should be index 0"
     );
 
-    // Test change (index 1)
+    // Test change (reserved high index, u64::MAX - 1 — NOT index 1)
     let change = account_key.change_subaddress();
     assert_eq!(
         change,
-        account_key.subaddress(1),
-        "Change should be index 1"
+        account_key.subaddress(CHANGE_SUBADDRESS_INDEX),
+        "Change should be CHANGE_SUBADDRESS_INDEX"
     );
 
-    // Test gift code (index 2)
+    // Test gift code (reserved high index — NOT index 2)
     let gift = account_key.gift_code_subaddress();
     assert_eq!(
         gift,
-        account_key.subaddress(2),
-        "Gift code should be index 2"
+        account_key.subaddress(GIFT_CODE_SUBADDRESS_INDEX),
+        "Gift code should be GIFT_CODE_SUBADDRESS_INDEX"
     );
 
     // All special subaddresses should be distinct
