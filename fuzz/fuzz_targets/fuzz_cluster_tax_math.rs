@@ -19,9 +19,12 @@
 //!    factor_max * FACTOR_SCALE]` — for the default curve `[1000, 6000]` — and
 //!    `sigmoid_approx` returns `<= SIGMOID_SCALE`.
 //! 2. `demurrage_charge` never panics/overflows; it is a non-negative u64 fee
-//!    floor, returns 0 for factor-1 coins / zero rate / zero elapsed, and is
-//!    bounded above by the transfer value (the charge can never exceed the
-//!    value being moved — it is a fraction of it).
+//!    floor and returns 0 for factor-1 coins / zero rate / zero elapsed. In the
+//!    realistic parameter domain (rate_bps <= 10_000, factor <=
+//!    MAX_FACTOR_SCALED, elapsed <= one year) it is bounded above by the
+//!    transfer value — it is a fraction of the value being moved. Absurd rates
+//!    (>100%/yr) legitimately exceed the value, so the value bound is gated on
+//!    that domain while the no-panic invariant is universal.
 //! 3. `calculate_block_reward`, `calculate_tail_reward`,
 //!    `lottery_emission_share`, and the integer `FeeCurve` never panic, and
 //!    `lottery_emission_share(h, reward) <= reward` (the miner keeps the
@@ -124,18 +127,35 @@ fuzz_target!(|m: FuzzMath| {
             m.cluster_factor, m.rate_bps, m.elapsed_blocks, m.blocks_per_year
         );
     }
-    // The charge is a fraction of the value moved within one year horizon; it
-    // can never exceed the transfer value for elapsed <= blocks_per_year. We
-    // only assert the universal floor (>=0 holds for u64) plus the value
-    // bound for the in-horizon case to avoid false positives on absurd
-    // (multi-millennium) elapsed values the code intentionally saturates.
-    if m.blocks_per_year > 0 && m.elapsed_blocks <= m.blocks_per_year {
+    // The no-panic/no-overflow guarantee above (the call returned, and
+    // `u64::try_from(...).unwrap_or(u64::MAX)` saturates) always holds for any
+    // input and is the universal safety invariant.
+    //
+    // The tighter "charge <= transfer_value" property only holds in the
+    // REALISTIC parameter domain. The in-horizon charge is
+    //   value × rate_bps/10_000 × progressivity/5000 × elapsed/blocks_per_year
+    // (demurrage.rs:78,88-93). With elapsed <= blocks_per_year the time
+    // fraction is <= 1 and progressivity/5000 is <= 1 (factor clamps to
+    // [FACTOR_SCALE, MAX_FACTOR_SCALED]), so the charge is bounded by
+    //   value × rate_bps/10_000,
+    // which is <= value iff rate_bps <= 10_000 (<=100%/yr). Real callers feed
+    // MonetaryPolicy::demurrage_rate_bps (200 bps), never the absurd rates the
+    // full-`u32` Arbitrary range produces, so we gate the value bound on that
+    // documented domain. Outside it the charge legitimately exceeds the value
+    // (e.g. a 200%/yr rate), and only the no-panic invariant applies.
+    if m.blocks_per_year > 0
+        && m.elapsed_blocks <= m.blocks_per_year
+        && m.rate_bps <= 10_000
+        && m.cluster_factor <= MAX_FACTOR_SCALED
+    {
         assert!(
             charge <= m.transfer_value,
-            "demurrage_charge {} exceeds transfer_value {} within one-year horizon \
-             (#333-class overflow?)",
+            "demurrage_charge {} exceeds transfer_value {} within one-year \
+             horizon at realistic rate_bps={} factor={} (#333-class overflow?)",
             charge,
-            m.transfer_value
+            m.transfer_value,
+            m.rate_bps,
+            m.cluster_factor
         );
     }
 
