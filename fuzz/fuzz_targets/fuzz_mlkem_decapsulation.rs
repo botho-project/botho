@@ -12,9 +12,13 @@ use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
 
 use bth_crypto_pq::{
-    MlKem768KeyPair, MlKem768PublicKey, MlKem768Ciphertext,
-    PQ_CIPHERTEXT_SIZE, PQ_PUBLIC_KEY_SIZE,
+    MlKem768Ciphertext, MlKem768KeyPair, MlKem768PublicKey, ML_KEM_768_CIPHERTEXT_BYTES,
+    ML_KEM_768_PUBLIC_KEY_BYTES, ML_KEM_768_SHARED_SECRET_BYTES,
 };
+
+// Local aliases preserving the original fuzz target's vocabulary.
+const PQ_CIPHERTEXT_SIZE: usize = ML_KEM_768_CIPHERTEXT_BYTES;
+const PQ_PUBLIC_KEY_SIZE: usize = ML_KEM_768_PUBLIC_KEY_BYTES;
 
 // ============================================================================
 // Structured Fuzzing Types
@@ -80,26 +84,19 @@ fn fuzz_raw_ciphertext(data: &[u8]) {
     let seed = [0u8; 32];
     let keypair = MlKem768KeyPair::from_seed(&seed);
 
-    // Try to decapsulate with various data sizes
-    if data.len() == PQ_CIPHERTEXT_SIZE {
-        // Correct size - try decapsulation
-        let mut ct_bytes = [0u8; PQ_CIPHERTEXT_SIZE];
-        ct_bytes.copy_from_slice(data);
-
-        // This should not panic, even with invalid ciphertext
-        // It may return a different shared secret (IND-CCA2 security)
-        let _ = keypair.decapsulate(&ct_bytes);
+    // Try to decapsulate with various data sizes. `MlKem768Ciphertext::from_bytes`
+    // performs the size check; `decapsulate` then must not panic even on garbage
+    // (IND-CCA2 implicit rejection returns a pseudo-random secret, never a crash).
+    if let Ok(ct) = MlKem768Ciphertext::from_bytes(data) {
+        let _ = keypair.decapsulate(&ct);
     }
 
-    // Also try with wrong sizes (should be rejected gracefully)
+    // Also try with wrong sizes (should be rejected gracefully by from_bytes).
     for size in [0, 1, 32, 64, 128, 256, 512, 1024, 2048].iter() {
         if *size < data.len() {
             let slice = &data[..*size];
-            // These should fail gracefully due to size mismatch
-            if slice.len() == PQ_CIPHERTEXT_SIZE {
-                let mut ct_bytes = [0u8; PQ_CIPHERTEXT_SIZE];
-                ct_bytes.copy_from_slice(slice);
-                let _ = keypair.decapsulate(&ct_bytes);
+            if let Ok(ct) = MlKem768Ciphertext::from_bytes(slice) {
+                let _ = keypair.decapsulate(&ct);
             }
         }
     }
@@ -115,31 +112,23 @@ fn fuzz_decapsulate(decap: &FuzzDecapsulation) {
 
     // Attempt decapsulation
     if decap.exact_size && decap.ciphertext.len() == PQ_CIPHERTEXT_SIZE {
-        let mut ct_bytes = [0u8; PQ_CIPHERTEXT_SIZE];
-        ct_bytes.copy_from_slice(&decap.ciphertext);
-
-        // Decapsulation should never panic
-        let shared_secret = keypair.decapsulate(&ct_bytes);
-
-        // Shared secret should always be 32 bytes
-        assert_eq!(shared_secret.len(), 32);
-
-        // Shared secret should not be all zeros (would indicate a bug)
-        // Note: There's a negligible probability this could fail legitimately
-        // but in practice this catches implementation errors
-        let all_zeros = shared_secret.iter().all(|&b| b == 0);
-        if all_zeros {
-            // Log for debugging but don't fail - might be valid edge case
-            // In a real fuzzing run, this would be investigated
+        // Decapsulation should never panic. With a well-formed-size but otherwise
+        // arbitrary ciphertext, the implementation returns Ok(pseudo-random secret)
+        // via implicit rejection; either way it must not crash.
+        if let Ok(ct) = MlKem768Ciphertext::from_bytes(&decap.ciphertext) {
+            if let Ok(shared_secret) = keypair.decapsulate(&ct) {
+                // Shared secret should always be 32 bytes.
+                assert_eq!(shared_secret.as_bytes().len(), ML_KEM_768_SHARED_SECRET_BYTES);
+            }
         }
     }
 
-    // Test with wrong size (should handle gracefully)
+    // Test with wrong size (should handle gracefully via from_bytes rejection).
     for truncate in [1, 10, 100, PQ_CIPHERTEXT_SIZE / 2].iter() {
         if *truncate < decap.ciphertext.len() {
-            let _truncated = &decap.ciphertext[..*truncate];
-            // Can't call decapsulate with wrong size array
-            // This tests that the type system prevents misuse
+            let truncated = &decap.ciphertext[..*truncate];
+            // Wrong-size ciphertext must be rejected at parse time, never panic.
+            let _ = MlKem768Ciphertext::from_bytes(truncated);
         }
     }
 }
@@ -172,12 +161,17 @@ fn fuzz_keygen(keygen: &FuzzKeyGen) {
         }
     }
 
-    // Test encapsulation/decapsulation roundtrip
-    let (ciphertext, shared_secret_enc) = keypair1.encapsulate();
-    let shared_secret_dec = keypair1.decapsulate(&ciphertext);
+    // Test encapsulation/decapsulation roundtrip. Encapsulation lives on the
+    // public key; decapsulation on the keypair. A genuine roundtrip must recover
+    // the same shared secret.
+    let (ciphertext, shared_secret_enc) = keypair1.public_key().encapsulate();
+    let shared_secret_dec = keypair1
+        .decapsulate(&ciphertext)
+        .expect("decapsulation of a freshly encapsulated ciphertext must succeed");
 
-    // Shared secrets should match
-    assert_eq!(shared_secret_enc, shared_secret_dec);
+    // Shared secrets should match (MlKem768SharedSecret has no PartialEq;
+    // compare the underlying bytes).
+    assert_eq!(shared_secret_enc.as_bytes(), shared_secret_dec.as_bytes());
 }
 
 /// Fuzz public key parsing
@@ -188,14 +182,14 @@ fn fuzz_public_key_parse(data: &[u8]) {
         pk_bytes.copy_from_slice(data);
 
         // Try to create public key from bytes
-        let result = MlKem768PublicKey::try_from_bytes(&pk_bytes);
+        let result = MlKem768PublicKey::from_bytes(&pk_bytes);
 
         if let Ok(pubkey) = result {
             // If parsing succeeds, encapsulation should work
             let (ciphertext, _shared_secret) = pubkey.encapsulate();
 
             // Ciphertext should be correct size
-            assert_eq!(ciphertext.len(), PQ_CIPHERTEXT_SIZE);
+            assert_eq!(ciphertext.as_bytes().len(), PQ_CIPHERTEXT_SIZE);
         }
     }
 

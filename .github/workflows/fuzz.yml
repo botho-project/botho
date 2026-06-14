@@ -1,6 +1,20 @@
 name: Fuzz Testing
 
 on:
+  # Build-only guard on PRs that touch the (workspace-excluded) fuzz crate or the
+  # crates it fuzzes. This is what prevents the fuzz suite from silently bit-rotting:
+  # it never builds in a normal `cargo` run because `fuzz/` is excluded from the
+  # workspace, so without this guard API drift goes unnoticed until someone runs it.
+  pull_request:
+    paths:
+      - 'fuzz/**'
+      - 'botho/**'
+      - 'crypto/**'
+      - 'account-keys/**'
+      - 'transaction/**'
+      - 'util/**'
+      - 'rust-toolchain'
+      - '.github/workflows/fuzz.yml'
   schedule:
     # Run nightly at 2am UTC
     - cron: '0 2 * * *'
@@ -21,8 +35,42 @@ env:
   FUZZ_TIME: ${{ github.event.inputs.fuzz_time || '600' }}
 
 jobs:
+  # Fast, PR-triggered build-only guard. Compiles every fuzz target against the
+  # current API using the repo's PINNED toolchain (read from rust-toolchain) so it
+  # matches the compiler the rest of the workspace uses. We intentionally do NOT
+  # use a rolling `@nightly`: hashbrown 0.14.5 (pulled in transitively) fails to
+  # compile on newer nightlies, and the pinned channel is the contract the repo
+  # already builds against. This job does not run the fuzzer; it only `fuzz build`s.
+  fuzz-build:
+    name: Fuzz Build Guard (PR)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # rust-toolchain.toml at the repo root pins the channel; rustup honors it
+      # automatically for cargo invocations run from the repo. Install matching
+      # components for libfuzzer/sanitizer coverage builds.
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-12-03
+          components: rust-src,llvm-tools-preview
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --version 0.13.1 --locked
+
+      - name: Build all fuzz targets (no run)
+        working-directory: fuzz
+        # No `+nightly`: the rust-toolchain file selects the pinned channel.
+        run: cargo fuzz build
+
   fuzz-crypto:
     name: Fuzz Crypto Primitives
+    # Long-running fuzz jobs only run on schedule/manual dispatch, never on PRs
+    # (PRs get the fast fuzz-build guard above instead).
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 180  # 3 hours max
 
@@ -37,13 +85,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust nightly
-        uses: dtolnay/rust-toolchain@nightly
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@master
         with:
-          components: llvm-tools-preview
+          toolchain: nightly-2025-12-03
+          components: rust-src,llvm-tools-preview
 
       - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz
+        run: cargo install cargo-fuzz --version 0.13.1 --locked
 
       - name: Cache fuzz corpus
         uses: actions/cache@v4
@@ -57,7 +106,8 @@ jobs:
         working-directory: fuzz
         run: |
           echo "Fuzzing ${{ matrix.target }} for $FUZZ_TIME seconds..."
-          cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=$FUZZ_TIME
+          # No `+nightly`: rust-toolchain pins the channel used for the whole repo.
+          cargo fuzz run ${{ matrix.target }} -- -max_total_time=$FUZZ_TIME
 
       - name: Upload crash artifacts
         if: failure()
@@ -69,6 +119,7 @@ jobs:
 
   fuzz-network:
     name: Fuzz Network/Transaction
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 120  # 2 hours max
 
@@ -84,13 +135,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust nightly
-        uses: dtolnay/rust-toolchain@nightly
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@master
         with:
-          components: llvm-tools-preview
+          toolchain: nightly-2025-12-03
+          components: rust-src,llvm-tools-preview
 
       - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz
+        run: cargo install cargo-fuzz --version 0.13.1 --locked
 
       - name: Cache fuzz corpus
         uses: actions/cache@v4
@@ -104,7 +156,8 @@ jobs:
         working-directory: fuzz
         run: |
           echo "Fuzzing ${{ matrix.target }} for $FUZZ_TIME seconds..."
-          cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=$FUZZ_TIME
+          # No `+nightly`: rust-toolchain pins the channel used for the whole repo.
+          cargo fuzz run ${{ matrix.target }} -- -max_total_time=$FUZZ_TIME
 
       - name: Upload crash artifacts
         if: failure()
@@ -116,6 +169,7 @@ jobs:
 
   fuzz-parsing:
     name: Fuzz Parsing
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 60  # 1 hour max
 
@@ -131,13 +185,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust nightly
-        uses: dtolnay/rust-toolchain@nightly
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@master
         with:
-          components: llvm-tools-preview
+          toolchain: nightly-2025-12-03
+          components: rust-src,llvm-tools-preview
 
       - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz
+        run: cargo install cargo-fuzz --version 0.13.1 --locked
 
       - name: Cache fuzz corpus
         uses: actions/cache@v4
@@ -151,7 +206,8 @@ jobs:
         working-directory: fuzz
         run: |
           echo "Fuzzing ${{ matrix.target }} for $FUZZ_TIME seconds..."
-          cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=$FUZZ_TIME
+          # No `+nightly`: rust-toolchain pins the channel used for the whole repo.
+          cargo fuzz run ${{ matrix.target }} -- -max_total_time=$FUZZ_TIME
 
       - name: Upload crash artifacts
         if: failure()

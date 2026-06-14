@@ -29,6 +29,7 @@ bth-crypto-ring-signature = { path = "../crypto/ring-signature", features = ["al
 bth-crypto-hashes = { path = "../crypto/hashes" }
 bth-transaction-core = { path = "../transaction/core", features = ["pq"] }
 bth-util-from-random = { path = "../util/from-random" }
+bth-util-repr-bytes = { path = "../util/repr-bytes" }
 
 # Serialization
 bincode = "1"
