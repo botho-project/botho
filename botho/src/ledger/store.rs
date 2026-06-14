@@ -2487,4 +2487,57 @@ mod tests {
         let state = ledger.get_chain_state().unwrap();
         assert_eq!(state.difficulty, new_difficulty);
     }
+
+    // ------------------------------------------------------------------
+    // Fuzz-harness wiring sanity check (issue #337, fuzz_add_block).
+    //
+    // NOT a substitute for the libfuzzer run (CI-deferred: cargo-fuzz cannot
+    // run on the macOS dev host). Confirms the harness wiring: a fresh
+    // genesis ledger satisfies supply conservation, and feeding a malformed
+    // block to `add_block` is rejected (typed LedgerError) without panicking,
+    // leaving the conserved state unchanged — the exact pre/post check the
+    // fuzz target performs.
+    // ------------------------------------------------------------------
+    #[test]
+    fn fuzz_wiring_add_block_rejects_malformed_and_conserves_supply() {
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+
+        // Supply conservation must hold at genesis:
+        // total_mined == Σ(UTXO values) + total_fees_burned + lottery_pool.
+        let conserved = |ledger: &Ledger| -> u64 {
+            let state = ledger.get_chain_state().unwrap();
+            let pool = ledger.get_lottery_pool().unwrap();
+            let utxo_sum: u128 = ledger
+                .create_snapshot()
+                .unwrap()
+                .get_utxos()
+                .unwrap()
+                .iter()
+                .map(|u| u.output.amount as u128)
+                .sum();
+            assert_eq!(
+                state.total_mined as u128,
+                utxo_sum + state.total_fees_burned as u128 + pool as u128,
+                "supply conservation violated"
+            );
+            state.height
+        };
+        let prev_height = conserved(&ledger);
+
+        // A malformed block (wrong height) must be rejected with a typed error
+        // and must NOT advance the chain or break conservation.
+        let mut bad = Block::genesis_for_network(Network::Testnet);
+        bad.header.height = 999; // not prev_height + 1
+        let result = ledger.add_block(&bad);
+        assert!(
+            matches!(result, Err(LedgerError::InvalidBlock(_))),
+            "malformed block must be rejected with a typed LedgerError, got {:?}",
+            result
+        );
+
+        // Post-state unchanged and still conserved.
+        let post_height = conserved(&ledger);
+        assert_eq!(prev_height, post_height, "rejected block must not advance height");
+    }
 }
