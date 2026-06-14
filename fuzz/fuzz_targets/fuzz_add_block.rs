@@ -104,7 +104,7 @@ fuzz_target!(|data: &[u8]| {
             // Invariant 3b: total_mined grew by exactly the block reward.
             assert_eq!(
                 post.total_mined,
-                prev.total_mined + expected_reward,
+                prev.total_mined + expected_reward as u128,
                 "accepted block did not increase total_mined by reward \
                  (prev={}, post={}, reward={})",
                 prev.total_mined,
@@ -121,9 +121,9 @@ fuzz_target!(|data: &[u8]| {
                 .get_lottery_pool()
                 .expect("lottery pool readable after successful add_block");
             let utxo_sum = sum_utxo_values(&ledger);
-            let accounted = utxo_sum + post.total_fees_burned as u128 + lottery_pool as u128;
+            let accounted = utxo_sum + post.total_fees_burned + lottery_pool as u128;
             assert_eq!(
-                post.total_mined as u128, accounted,
+                post.total_mined, accounted,
                 "supply conservation violated after accepted block: \
                  total_mined={} != utxo_sum={} + burned={} + pool={}",
                 post.total_mined, utxo_sum, post.total_fees_burned, lottery_pool
