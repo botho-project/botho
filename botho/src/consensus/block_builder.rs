@@ -223,7 +223,7 @@ impl BlockBuilder {
     pub fn apply_lottery<F>(
         mut block: Block,
         candidates: &[LotteryCandidate],
-        stored_pool: u64,
+        stored_pool: u128,
         utxo_lookup: F,
         lottery_config: &LotteryFeeConfig,
     ) -> Block

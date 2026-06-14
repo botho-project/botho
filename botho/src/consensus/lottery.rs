@@ -141,6 +141,14 @@ impl BlockLotteryResult {
 /// CONSENSUS-CRITICAL: every field is a deterministic integer function of
 /// (block fees, block reward, height schedule, stored pool balance), all of
 /// which are consensus state — proposer and validators must agree exactly.
+///
+/// Width note: the per-block amounts (`fee_pool`, `fee_burn`, `emission_share`,
+/// `payout`) stay `u64`. Each is bounded by a single block: fee shares are a
+/// split of one block's `total_fees` (itself `u64`), `emission_share` is a
+/// fraction of one block reward, and `payout` is capped at one block reward.
+/// None can approach `u64::MAX` within a single block. Only the cumulative
+/// `available` carryover can grow unbounded across blocks, so it alone is
+/// widened to `u128`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LotteryPoolAccounting {
     /// Pool share of this block's transaction fees (80% by default).
@@ -151,7 +159,15 @@ pub struct LotteryPoolAccounting {
     /// the block reward; the miner receives the remainder).
     pub emission_share: u64,
     /// Total available to distribute: carryover + emission share + fee pool.
-    pub available: u64,
+    ///
+    /// This is the cumulative carryover balance and is the one field here that
+    /// can grow without bound: the pool drains at most one block reward per
+    /// block (the anti-grinding `payout` cap) but inflow per block is
+    /// `emission_share + fee_pool`, so sustained high-fee blocks accumulate.
+    /// It is therefore `u128` (the per-block amounts below stay `u64`): a `u64`
+    /// would saturate at `u64::MAX` (~18.4M BTH in picocredits) under sustained
+    /// inflow, silently losing value from supply conservation.
+    pub available: u128,
     /// Amount actually paid out this block: min(available, payout cap).
     ///
     /// The cap (one block reward) makes seed-grinding unprofitable by
@@ -162,8 +178,11 @@ pub struct LotteryPoolAccounting {
 
 impl LotteryPoolAccounting {
     /// Pool balance carried to the next block if `distributed` was paid out.
-    pub fn carryover_after(&self, distributed: u64) -> u64 {
-        self.available.saturating_sub(distributed)
+    ///
+    /// Returns the cumulative carryover as `u128`; `distributed` (a single
+    /// block's payout) is `u64` and widened for the subtraction.
+    pub fn carryover_after(&self, distributed: u64) -> u128 {
+        self.available.saturating_sub(distributed as u128)
     }
 }
 
@@ -179,15 +198,19 @@ impl LotteryPoolAccounting {
 pub fn compute_pool_accounting(
     total_fees: u64,
     emission_share: u64,
-    stored_pool: u64,
+    stored_pool: u128,
     payout_cap: u64,
     config: &LotteryFeeConfig,
 ) -> LotteryPoolAccounting {
     let (fee_pool, fee_burn) = config.split_fees(total_fees);
+    // Cumulative carryover: widened to u128 so sustained high-fee inflow can
+    // never saturate (see LotteryPoolAccounting::available).
     let available = stored_pool
-        .saturating_add(emission_share)
-        .saturating_add(fee_pool);
-    let payout = available.min(payout_cap);
+        .saturating_add(emission_share as u128)
+        .saturating_add(fee_pool as u128);
+    // payout is capped at one block reward (u64), so the min result always
+    // fits in u64; the cast is lossless by construction.
+    let payout = available.min(payout_cap as u128) as u64;
 
     LotteryPoolAccounting {
         fee_pool,
@@ -459,10 +482,10 @@ impl std::error::Error for LotteryValidationError {}
 pub fn validate_block_lottery(
     block: &crate::block::Block,
     candidates: &[LotteryCandidate],
-    stored_pool: u64,
+    stored_pool: u128,
     prev_block_hash: &[u8; 32],
     config: &LotteryFeeConfig,
-) -> Result<u64, LotteryValidationError> {
+) -> Result<u128, LotteryValidationError> {
     let total_fees = block.total_fees();
 
     // 1. Compute the expected pool accounting from consensus state: fees,
@@ -652,6 +675,79 @@ mod tests {
         let accounting = compute_pool_accounting(1000, 0, 0, 10_000, &config);
         assert_eq!(accounting.payout, 800);
         assert_eq!(accounting.carryover_after(accounting.payout), 0);
+    }
+
+    // Drive the cumulative carryover past u64::MAX by feeding sustained
+    // per-block fee inflow that exceeds the anti-grinding payout cap. The
+    // carryover must accumulate EXACTLY in u128 with no saturation or wrap,
+    // and the payout cap must still hold at that scale.
+    //
+    // Per block the maximum fee inflow is one block's `total_fees` (a u64);
+    // its 80% pool share is `0.8 * u64::MAX`, so a single block cannot push
+    // the carryover past u64::MAX, but a handful of sustained max-fee blocks
+    // do — exactly the regime where a u64 carryover would have saturated.
+    #[test]
+    fn test_pool_carryover_accumulates_past_u64_max_without_saturation() {
+        let config = LotteryFeeConfig::default();
+
+        // Largest possible single-block fee inflow.
+        let total_fees: u64 = u64::MAX;
+        let (fee_pool, _) = config.split_fees(total_fees);
+        let emission_share: u64 = 0;
+        let reward: u64 = 5_000_000; // payout cap = one block reward
+
+        // Net per-block growth of the carryover: inflow - payout cap. With a
+        // max-fee block this is ~0.8 * u64::MAX, so just a few blocks cross
+        // u64::MAX (and overflow a u64, which u128 must absorb exactly).
+        let inflow_per_block = fee_pool as u128 + emission_share as u128;
+        assert!(
+            inflow_per_block > reward as u128,
+            "test requires inflow above the payout cap so the pool grows"
+        );
+
+        // Reference carryover computed independently in u128.
+        let mut expected: u128 = 0;
+        let mut pool: u128 = 0;
+        let blocks = 4; // 4 * (0.8 * u64::MAX) far exceeds u64::MAX
+        for _ in 0..blocks {
+            let accounting =
+                compute_pool_accounting(total_fees, emission_share, pool, reward, &config);
+
+            // Anti-grinding cap preserved: payout == min(available, reward).
+            assert_eq!(
+                accounting.payout as u128,
+                accounting.available.min(reward as u128),
+                "payout must equal min(available, reward) at all scales"
+            );
+            // The pool always dwarfs the reward here, so the cap binds exactly.
+            assert_eq!(
+                accounting.payout, reward,
+                "payout must be capped at one block reward"
+            );
+
+            // Independent u128 reference: available = pool + emission + fee_pool,
+            // carryover = available - capped payout. No saturation expected.
+            let available_ref = pool + emission_share as u128 + fee_pool as u128;
+            assert_eq!(
+                accounting.available, available_ref,
+                "available must accumulate exactly in u128 (no saturation)"
+            );
+            expected = available_ref - reward as u128;
+
+            pool = accounting.carryover_after(accounting.payout);
+            assert_eq!(
+                pool, expected,
+                "carryover must accumulate exactly with no saturation/wrap"
+            );
+        }
+
+        // The pool has grown past what u64 could represent — proving the
+        // widening prevents the u64::MAX saturation this fix targets.
+        assert!(
+            pool > u64::MAX as u128,
+            "carryover ({pool}) should exceed u64::MAX ({})",
+            u64::MAX
+        );
     }
 
     #[test]
