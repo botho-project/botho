@@ -392,6 +392,12 @@ impl FaucetState {
 
     /// Get current stats for monitoring
     pub fn stats(&self) -> FaucetStats {
+        // Normalize the in-memory daily counter to the current UTC day before
+        // reading it. Without this, after crossing a UTC-midnight boundary with
+        // no new dispense, `daily_dispensed` still holds yesterday's total and
+        // the status endpoint over-reports until the first dispense self-corrects.
+        self.maybe_reset_daily_counter();
+
         FaucetStats {
             enabled: self.config.enabled,
             amount_per_request: self.config.amount,
@@ -607,5 +613,42 @@ mod tests {
         assert_eq!(stats.daily_dispensed, 10_000_000_000_000);
         assert_eq!(stats.tracked_ips, 1);
         assert_eq!(stats.tracked_addresses, 1);
+    }
+
+    #[test]
+    fn test_stats_resets_daily_dispensed_across_utc_midnight() {
+        let state = FaucetState::new(test_config());
+
+        // Simulate state left over from a prior UTC day: a nonzero in-memory
+        // counter whose `day_start` is anchored to yesterday.
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let yesterday_day_start = (now - (now % 86400)) - 86400;
+        state
+            .day_start
+            .store(yesterday_day_start, Ordering::Relaxed);
+        state
+            .daily_dispensed
+            .store(10_000_000_000_000, Ordering::Relaxed);
+
+        // stats() must normalize to the current UTC day and report 0, rather
+        // than over-reporting yesterday's total.
+        let stats = state.stats();
+        assert_eq!(stats.daily_dispensed, 0);
+    }
+
+    #[test]
+    fn test_stats_reflects_same_day_dispense() {
+        let state = FaucetState::new(test_config());
+        let ip: IpAddr = "192.168.1.1".parse().unwrap();
+
+        // A dispense earlier today should still be reflected by stats() (the
+        // reset only fires when the stored day_start is in a prior UTC day).
+        state.record_request(ip, "view:abc\nspend:def", 10_000_000_000_000);
+
+        let stats = state.stats();
+        assert_eq!(stats.daily_dispensed, 10_000_000_000_000);
     }
 }
