@@ -32,23 +32,6 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      # The workspace includes the Tauri desktop crate
-      # (web/packages/desktop/src-tauri), which pulls in glib-sys/gtk-sys via
-      # pkg-config. Without these system dev packages, `cargo bench --workspace`
-      # fails compiling glib-sys ("system library `glib-2.0` ... was not found").
-      # Package set matches the Tauri v2 Linux prerequisites for Ubuntu 24.04
-      # (ubuntu-latest), which uses webkit2gtk 4.1.
-      - name: Install GTK/glib system deps (Tauri desktop crate)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libglib2.0-dev \
-            libgtk-3-dev \
-            libwebkit2gtk-4.1-dev \
-            libsoup-3.0-dev \
-            librsvg2-dev \
-            libayatana-appindicator3-dev
-
       - name: Cache cargo
         uses: actions/cache@v4
         with:
@@ -63,8 +46,23 @@ jobs:
             ${{ runner.os }}-cargo-bench-
             ${{ runner.os }}-cargo-
 
-      - name: Compile benchmarks (all packages)
-        run: cargo bench --no-run --workspace
+      # Compile only the crates that actually have benchmark targets, instead
+      # of `--workspace`. The full-workspace compile dragged in the Tauri
+      # desktop crate (needs GTK/glib system libs) and a no_std-leaning member
+      # that triggered a `k256` feature-unification break
+      # ("`precomputed-tables` feature requires either `critical-section` or
+      # `std`"). Neither crate has benchmarks, so scoping to the benched crates
+      # keeps full benchmark coverage while sidestepping both failures and
+      # removing the need for the GTK/glib apt install.
+      - name: Compile benchmarks (bench-bearing crates)
+        run: >
+          cargo bench --no-run
+          -p botho
+          -p bth-transaction-core
+          -p bth-crypto-pq
+          -p bth-crypto-ring-signature
+          -p bth-account-keys
+          -p bth-cluster-tax
 
   run-crypto-benchmarks:
     name: Crypto Benchmarks
