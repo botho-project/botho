@@ -681,8 +681,20 @@ impl AlertingThresholds {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
+
+    // NOTE: Several tests below mutate process-global Prometheus metrics
+    // (CIRCUITS_ACTIVE, CIRCUITS_BUILT, RELAY_*, TX_*, HANDSHAKE_*, ...).
+    // Those globals are shared across the whole test process, so running these
+    // tests concurrently races (e.g. an absolute `set`/`get` on a shared gauge,
+    // or a counter incremented by a sibling test between `before` and `after`).
+    // They are annotated `#[serial(privacy_metrics)]` so they never interleave
+    // with each other while still running in parallel with unrelated tests.
+    // Tests that only operate on local PrivacyMetricsSnapshot values (no global
+    // access) intentionally remain unserialized.
 
     #[test]
+    #[serial(privacy_metrics)]
     fn test_metrics_updater_circuits() {
         let updater = PrivacyMetricsUpdater::new();
 
@@ -699,6 +711,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(privacy_metrics)]
     fn test_metrics_updater_relay() {
         let updater = PrivacyMetricsUpdater::new();
 
@@ -715,6 +728,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(privacy_metrics)]
     fn test_metrics_updater_path() {
         let updater = PrivacyMetricsUpdater::new();
 
@@ -728,6 +742,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(privacy_metrics)]
     fn test_metrics_updater_handshake() {
         let updater = PrivacyMetricsUpdater::new();
 
@@ -741,6 +756,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(privacy_metrics)]
     fn test_snapshot_capture() {
         // Reset some metrics to known state for testing
         CIRCUITS_ACTIVE.set(3);
