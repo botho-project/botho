@@ -77,34 +77,43 @@ For dedicated minting machines, leave at 0. For machines doing other work, set t
 
 Minting rewards follow a two-phase model: halvings followed by perpetual tail emission.
 
-### Phase 1: Halving Period (~10 years at 5s blocks)
+### Phase 1: Halving Period (~5 years at 5s blocks)
 
 | Parameter | Value |
 |-----------|-------|
 | Initial reward | 50 BTH |
-| Halving interval | 12,614,400 blocks (~2 years at 5s blocks) |
+| Halving interval | 6,307,200 blocks (~1 year at 5s blocks) |
 | Number of halvings | 5 |
-| Phase 1 supply | ~100 million BTH |
+| Phase 1 supply | ~611 million BTH |
+
+Each halving epoch is 6,307,200 blocks; the cumulative supply is the running sum
+of `reward × 6,307,200` per epoch (e.g. 50 × 6,307,200 = 315.36M BTH in epoch 0):
 
 | Period | Years (at 5s) | Block Reward | Cumulative Supply |
 |--------|---------------|--------------|-------------------|
-| Halving 0 | 0-2 | 50 BTH | ~52.6M BTH |
-| Halving 1 | 2-4 | 25 BTH | ~78.9M BTH |
-| Halving 2 | 4-6 | 12.5 BTH | ~92.0M BTH |
-| Halving 3 | 6-8 | 6.25 BTH | ~98.6M BTH |
-| Halving 4 | 8-10 | 3.125 BTH | ~100M BTH |
+| Halving 0 | 0-1 | 50 BTH | ~315.4M BTH |
+| Halving 1 | 1-2 | 25 BTH | ~473.0M BTH |
+| Halving 2 | 2-3 | 12.5 BTH | ~551.9M BTH |
+| Halving 3 | 3-4 | 6.25 BTH | ~591.3M BTH |
+| Halving 4 | 4-5 | 3.125 BTH | ~611.0M BTH |
 
-**Note**: Actual halving periods depend on dynamic block timing. If average block time is 20s (typical for moderate load), halvings will occur ~4x slower (every ~8 years instead of ~2 years).
+**Note**: Actual halving periods depend on dynamic block timing. If average block time is 20s (typical for moderate load), halvings will occur ~4x slower (every ~4 years instead of ~1 year).
 
-### Phase 2: Tail Emission (Year 10+)
+### Phase 2: Tail Emission (Year 5+)
 
 After Phase 1, Botho transitions to perpetual tail emission targeting **2% annual net inflation**.
 
 | Parameter | Value |
 |-----------|-------|
 | Target net inflation | 2% annually |
-| Tail reward | ~0.40 BTH per block (at 5s blocks) |
+| Tail reward | Supply-dependent: ~1.9 BTH per block at the ~611M tail-onset supply, growing with supply (at 5s blocks) |
 | Fee burn offset | ~0.5% expected |
+
+The tail reward is **not a fixed constant** — it is recomputed from circulating
+supply each block to target 2% net annual inflation. The gross per-block reward
+is `supply × (2% + 0.5% expected burns) / 6,307,200`; at the ~611M tail-onset
+supply this is ~2.4 BTH/block gross (~1.9 BTH/block net), and it scales upward as
+supply grows.
 
 **Why tail emission?**
 - Ensures minters always have incentive to secure the network
@@ -174,17 +183,23 @@ This ensures the network can adapt block rate to hit inflation targets even when
 
 ## Transaction Fees
 
-Transaction fees in Botho are **burned** (removed from circulation), creating deflationary pressure that offsets tail emission.
+Transaction fees in Botho are **split 80% / 20%**: each block, 80% of collected
+fees fund the cluster-tilted redistribution lottery (paid back out to randomly
+selected, mostly small/well-circulated holders) and 20% are **burned** (removed
+from circulation). Only the burned 20% is deflationary; it partially offsets tail
+emission. See [Cluster-Tilted Redistribution](design/cluster-tilted-redistribution.md).
 
 | Parameter | Value |
 |-----------|-------|
 | Minimum fee | 400 µBTH (0.0004 BTH) |
-| Fee destination | Burned |
+| Fee destination | 80% redistribution lottery, 20% burned |
 | Priority | Higher fees = faster confirmation |
 
-Minters earn block rewards only—fees are not collected by minters but instead removed from the total supply.
+Minters earn block rewards only—fees are not collected by minters but instead routed to the redistribution lottery (80%) and burned (20%).
 
 ### Net Supply Formula
+
+Only the burned portion (20% of fees) reduces total supply:
 
 ```
 net_supply = total_mined - total_fees_burned
@@ -276,9 +291,10 @@ A peer required for your quorum went offline.
 | Block time (monetary baseline) | 5 seconds |
 | Block time (actual range) | 3-40 seconds (dynamic) |
 | Initial reward | 50 BTH |
-| Halving interval | ~2 years (at 5s blocks) |
+| Halving interval | 6,307,200 blocks (~1 year at 5s blocks) |
 | Number of halvings | 5 |
-| Tail emission | ~0.40 BTH/block |
+| Phase 1 supply | ~611 million BTH (~5 years) |
+| Tail emission | Supply-dependent (~1.9 BTH/block at ~611M tail-onset supply) |
 | Tail inflation target | 2% net |
 | Difficulty adjustment | Every 17,280 blocks (~24h at 5s) |
 | Gossip port | 7100 |

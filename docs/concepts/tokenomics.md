@@ -10,7 +10,7 @@ Botho (BTH) uses a two-phase emission model designed for long-term sustainabilit
 | Internal precision | picocredits (10⁻¹² BTH) |
 | Display unit | nanoBTH (10⁻⁹ BTH) |
 | Pre-mine | None (100% mined) |
-| Phase 1 supply | ~100 million BTH |
+| Phase 1 supply | ~611 million BTH (~5 years of halvings) |
 | Block time | 5-40 seconds (dynamic based on load); 5s baseline for monetary calculations |
 | Consensus | SCP (Stellar Consensus Protocol) |
 
@@ -50,21 +50,21 @@ User interfaces and fee calculations use nanoBTH for manageable numbers:
 
 ## Emission Schedule
 
-### Phase 1: Halving Period (Years 0-10)
+### Phase 1: Halving Period (Years 0-5)
 
-Block rewards halve every ~2 years, distributing approximately 100 million BTH over 10 years.
+Block rewards halve every ~1 year, distributing approximately 611 million BTH over ~5 years.
 
 | Period | Years | Block Reward | Cumulative Supply |
 |--------|-------|--------------|-------------------|
-| Halving 0 | 0-2 | 50 BTH | ~52.6M BTH |
-| Halving 1 | 2-4 | 25 BTH | ~78.9M BTH |
-| Halving 2 | 4-6 | 12.5 BTH | ~92.0M BTH |
-| Halving 3 | 6-8 | 6.25 BTH | ~98.6M BTH |
-| Halving 4 | 8-10 | 3.125 BTH | ~100M BTH |
+| Halving 0 | 0-1 | 50 BTH | ~315.4M BTH |
+| Halving 1 | 1-2 | 25 BTH | ~473.0M BTH |
+| Halving 2 | 2-3 | 12.5 BTH | ~551.9M BTH |
+| Halving 3 | 3-4 | 6.25 BTH | ~591.3M BTH |
+| Halving 4 | 4-5 | 3.125 BTH | ~611.0M BTH |
 
-**Halving interval**: 12,614,400 blocks (~2 years at the 5-second monetary baseline; proportionally longer at slower actual block times)
+**Halving interval**: 6,307,200 blocks (~1 year at the 5-second monetary baseline; proportionally longer at slower actual block times)
 
-### Phase 2: Tail Emission (Year 10+)
+### Phase 2: Tail Emission (Year 5+)
 
 After Phase 1, Botho transitions to perpetual tail emission targeting **2% annual net inflation**.
 
@@ -84,14 +84,14 @@ tail_reward = (target_net_inflation + expected_fee_burns) / blocks_per_year
 
 Here `fees_burned` is only the **20% burn share** of fees that is actually destroyed (audit cycle 6, M4). The 80% lottery-redistributed share and the emission share routed into the lottery pool both remain in circulating supply, so they do **not** count toward `fees_burned`.
 
-At 100M BTH supply:
-- Target net emission: 2% × 100M = 2M BTH/year
-- Expected fee burns (20% share only): ~0.5% × 100M = 0.5M BTH/year
-- Gross emission needed: 2.5M BTH/year
-- Blocks per year: 1,576,800
-- **Tail reward: ~1.59 BTH/block**
+At the ~611M BTH tail-onset supply:
+- Target net emission: 2% × 611M = ~12.2M BTH/year
+- Expected fee burns (20% share only): ~0.5% × 611M = ~3.1M BTH/year
+- Gross emission needed: ~15.3M BTH/year
+- Blocks per year (5s baseline): 6,307,200
+- **Tail reward: supply-dependent, ~2.4 BTH/block gross (~1.9 BTH/block net) at this supply**
 
-(The exact tail-reward figure depends on the assumed block time; cross-source numeric reconciliation is tracked separately in issue #321.)
+The tail reward is **not a fixed constant**: it is recomputed from circulating supply each block to target 2% net annual inflation, so it grows as supply grows. (The exact tail-reward figure also depends on the assumed block time; cross-source numeric reconciliation is tracked separately in issue #321.)
 
 ### Emission Routing into the Lottery Pool
 
@@ -308,19 +308,20 @@ This ensures:
 | Year | Approximate Supply | Annual Inflation |
 |------|-------------------|------------------|
 | 0 | 0 | N/A |
-| 2 | ~52.6M BTH | High (initial distribution) |
-| 5 | ~85M BTH | ~15% |
-| 10 | ~100M BTH | ~3% |
-| 20 | ~122M BTH | 2% |
-| 50 | ~180M BTH | 2% |
-| 100 | ~295M BTH | 2% |
+| 1 | ~315.4M BTH | High (initial distribution) |
+| 2 | ~473.0M BTH | High (initial distribution) |
+| 5 | ~611M BTH (tail onset) | ~2% from here |
+| 10 | ~674M BTH | 2% |
+| 20 | ~822M BTH | 2% |
+| 50 | ~1.49B BTH | 2% |
+| 100 | ~4.0B BTH | 2% |
 
 ### Overflow Safety
 
-- Phase 1 completion: 100M BTH = 10¹⁷ nanoBTH
+- Phase 1 completion (~year 5): ~611M BTH = ~6.11 × 10¹⁷ nanoBTH
 - Maximum representable (u64): ~1.84 × 10¹⁹ nanoBTH
-- Growth capacity: ~184× current supply
-- At 2% annual inflation: **~260 years before overflow**
+- Growth capacity: ~30× tail-onset supply
+- At 2% annual inflation: **~170 years before overflow** (internal accounting uses picocredits in u128, so this u64 nanoBTH headroom is a display-tier bound, not a hard limit)
 
 ## Economic Design Philosophy
 

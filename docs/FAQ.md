@@ -175,18 +175,18 @@ Botho uses SHA-256, which is ASIC-friendly. However, while the network is small,
 
 Botho has no hard cap. Instead:
 
-- **Phase 1 (years 0-10)**: ~100 million BTH via halvings
-- **Phase 2 (year 10+)**: ~2% annual tail emission
+- **Phase 1 (years 0-5)**: ~611 million BTH via 5 halvings (~1 year each)
+- **Phase 2 (year 5+)**: ~2% annual net tail emission (supply-dependent per-block reward, ~1.9 BTH/block at the ~611M tail-onset supply)
 
 This ensures permanent mining incentives while maintaining predictable monetary policy.
 
-### Why are fees burned instead of paid to miners?
+### What happens to transaction fees?
 
-Burning fees creates deflationary pressure that offsets tail emission, keeping net inflation around 2%. It also:
+Fees are not paid to miners. Each block, collected fees are split **80% into a cluster-tilted redistribution lottery** (paid back out to randomly selected, mostly small/well-circulated holders) and **20% burned**. Only the burned 20% is deflationary and partially offsets tail emission, keeping net inflation around 2%. This split also:
 
-- Simplifies economics (no complex fee distribution)
+- Recycles wealth-concentration charges back into the economy rather than destroying them
 - Prevents fee-based miner centralization
-- Creates predictable monetary policy: `net_supply = minted - burned`
+- Keeps monetary policy predictable: only the burned portion reduces supply (`net_supply = minted - burned`)
 
 ### What are "cluster fees" and why do they exist?
 

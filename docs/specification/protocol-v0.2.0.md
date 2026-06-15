@@ -739,9 +739,9 @@ The **picocredit** is the atomic unit used in all protocol calculations.
 
 #### 8.2.1 Phase 1 Distribution
 
-Total Phase 1 supply: **100,000,000 BTH**
+Total Phase 1 supply: **~611,010,000 BTH**
 
-Emission follows a halving schedule over approximately 10 years.
+Emission follows a halving schedule (50 BTH initial reward, halving every 6,307,200 blocks, 5 halvings) over approximately 5 years at the 5-second monetary baseline.
 
 #### 8.2.2 Block Reward
 

@@ -58,8 +58,8 @@ Fees are not simply burned. Each block, collected fees are split **80% into a cl
 Bitcoin's security budget will eventually depend entirely on transaction fees. Botho ensures permanent security through **perpetual tail emission**:
 
 - Initial reward: 50 BTH per block
-- ~2-year halving schedule (5 halvings over 10 years)
-- Perpetual tail emission: ~1.59 BTH per block targeting 2% annual inflation
+- ~1-year halving schedule (5 halvings over ~5 years)
+- Perpetual tail emission targeting 2% net annual inflation; the per-block tail reward is supply-dependent (~1.9 BTH/block at the ~611M Phase-1 supply, growing as supply grows)
 
 This guarantees minters are always incentivized to secure the network, without relying on ever-increasing transaction volume.
 
@@ -113,8 +113,8 @@ Unlike Bitcoin's probabilistic finality (wait 6 blocks = 60 minutes to be "sure"
 | Dynamic block time | 5-40 seconds (adapts to network load) |
 | Monetary baseline | 5 seconds (for emission calculations) |
 | Difficulty adjustment | Every 1,440 blocks (~8 hours) |
-| Phase 1 supply | ~100 million BTH (10 years of halvings) |
-| Tail emission | ~1.59 BTH/block (2% net annual inflation) |
+| Phase 1 supply | ~611 million BTH (~5 years of halvings) |
+| Tail emission | Supply-dependent, ~1.9 BTH/block at the ~611M tail-onset supply (2% net annual inflation) |
 | Native unit | BTH (9 decimal places) |
 
 Block timing adapts to network activity: busy networks produce faster blocks (5s), idle networks produce slower blocks (40s). This creates natural inflation dampening—less activity means less emission.

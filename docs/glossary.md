@@ -20,7 +20,7 @@ A public identifier for receiving funds. In Botho, addresses are derived from yo
 A collection of transactions bundled together and added to the blockchain. Each block references the previous block, forming a chain.
 
 ### Block Reward
-The amount of BTH created when a new block is mined. Botho starts at 50 BTH per block, halving every ~2 years until reaching tail emission.
+The amount of BTH created when a new block is mined. Botho starts at 50 BTH per block, halving every ~1 year until reaching tail emission.
 
 ### BTH
 The native currency unit of Botho. BTH uses a two-tier precision system:
@@ -82,7 +82,7 @@ The creation of new coins through mining. See [Tokenomics](tokenomics.md#emissio
 ## F
 
 ### Fee Burn
-When transaction fees are destroyed rather than paid to miners. Botho burns all fees, creating deflationary pressure.
+When transaction fees are destroyed rather than paid to miners. Botho burns 20% of collected fees (the other 80% funds the cluster-tilted redistribution lottery); only this 20% burn share creates deflationary pressure.
 
 ### Finality
 The point at which a transaction cannot be reversed. Botho provides immediate finality via SCP consensus.
@@ -105,7 +105,7 @@ A pub/sub protocol used by libp2p for peer-to-peer message propagation. Botho us
 ## H
 
 ### Halving
-A scheduled reduction in block rewards, typically by 50%. Botho halves every ~2 years for 10 years, then transitions to tail emission.
+A scheduled reduction in block rewards, typically by 50%. Botho halves every ~1 year for ~5 years (5 halvings), then transitions to tail emission.
 
 ### Hash
 A fixed-size output produced by a hash function. Used for block identification, proof-of-work, and data integrity.

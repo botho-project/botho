@@ -22,8 +22,8 @@ This separation allows precise monetary targeting without affecting transaction 
 > **Block-Based Monetary Schedule**: The halving schedule is tied to **block height**,
 > using a 5-second block assumption for monetary calculations.
 >
-> - Halving occurs every 12,614,400 blocks (~2 years at 5s blocks)
-> - 5 halvings total before tail emission (~10 years at 5s blocks)
+> - Halving occurs every 6,307,200 blocks (~1 year at 5s blocks)
+> - 5 halvings total before tail emission (~5 years at 5s blocks)
 > - See `monetary.rs::mainnet_policy()` for the authoritative implementation
 >
 > **Adaptive Inflation**: Since actual block times vary (5-40s based on network load),
@@ -31,9 +31,9 @@ This separation allows precise monetary targeting without affecting transaction 
 >
 > | Block Time | Effective Inflation | Halving Period |
 > |------------|--------------------:|---------------:|
-> | 5s (high load) | 2.0%/year | 2 years |
-> | 20s (normal) | 0.5%/year | 8 years |
-> | 40s (idle) | 0.25%/year | 16 years |
+> | 5s (high load) | 2.0%/year | 1 year |
+> | 20s (normal) | 0.5%/year | 4 years |
+> | 40s (idle) | 0.25%/year | 8 years |
 >
 > This creates a natural inflation dampener: busy network = full inflation,
 > idle network = reduced inflation.
@@ -554,12 +554,12 @@ pub struct MonetaryEpoch {
 | Epoch | Height | ~Year | Min Fee | Block Reward | Notes |
 |-------|--------|-------|---------|--------------|-------|
 | 0 | 0 | 0 | 400 µBTH | 50 BTH | Genesis |
-| 1 | 3,153,600 | 2 | 200 µBTH | 25 BTH | First halving |
-| 2 | 6,307,200 | 4 | 100 µBTH | 12.5 BTH | Second halving |
-| 3 | 9,460,800 | 6 | 50 µBTH | 6.25 BTH | Third halving |
-| 4 | 12,614,400 | 8 | 25 µBTH | 3.125 BTH | Fourth halving |
-| 5 | 15,768,000 | 10 | 12.5 µBTH | ~1.59 BTH | Tail emission begins |
-| 6 | 31,536,000 | 20 | 10 µBTH | ~1.59 BTH | Maturity (possible inflation reduction) |
+| 1 | 6,307,200 | 1 | 200 µBTH | 25 BTH | First halving |
+| 2 | 12,614,400 | 2 | 100 µBTH | 12.5 BTH | Second halving |
+| 3 | 18,921,600 | 3 | 50 µBTH | 6.25 BTH | Third halving |
+| 4 | 25,228,800 | 4 | 25 µBTH | 3.125 BTH | Fourth halving |
+| 5 | 31,536,000 | 5 | 12.5 µBTH | ~1.9 BTH (supply-dependent) | Tail emission begins |
+| 6 | 63,072,000 | 10 | 10 µBTH | supply-dependent | Maturity (possible inflation reduction) |
 
 ### Epoch 0: Genesis
 
@@ -592,7 +592,7 @@ MonetaryEpoch {
 
 ```rust
 MonetaryEpoch {
-    activation_height: 15_768_000,                 // ~10 years
+    activation_height: 31_536_000,                 // ~5 years (5 × 6,307,200)
 
     // Fees (halved 5 times from genesis)
     min_fee: 12_500,                               // 12.5 µBTH
@@ -603,7 +603,7 @@ MonetaryEpoch {
 
     // Emission (tail begins)
     target_net_inflation_bps: 200,                 // 2% - now actively targeted
-    tail_emission_override: 1_590_000_000,         // ~1.59 BTH per block
+    tail_emission_override: 0,                     // 0 = supply-dependent tail (recomputed each block to target 2% net)
 
     // Difficulty (monetary-focused for Phase 2)
     timing_weight_bps: 3000,                       // 30%
@@ -1042,8 +1042,8 @@ As the network matures, the community may decide to reduce the inflation target:
 
 | Year | Possible Target | Rationale |
 |------|-----------------|-----------|
-| 0-10 | N/A (halvings) | Distribution phase |
-| 10-20 | 2.0% | Initial tail emission |
+| 0-5 | N/A (halvings) | Distribution phase |
+| 5-20 | 2.0% | Initial tail emission |
 | 20-30 | 1.5% | Reduced as network stabilizes |
 | 30+ | 1.0% | Long-term maintenance |
 

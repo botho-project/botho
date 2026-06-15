@@ -262,7 +262,7 @@ This 5s assumption represents the **minimum block time under high load**. All em
 target_block_time_secs: 5,    // Assumed for monetary calculations
 min_block_time_secs: 3,       // Absolute floor (consensus needs time)
 max_block_time_secs: 60,      // Absolute ceiling
-halving_interval: 12_614_400, // ~2 years at 5s blocks
+halving_interval: 6_307_200,  // ~1 year at 5s blocks
 ```
 
 ### 2. Dynamic Block Timing (5-40s actual)
@@ -310,9 +310,9 @@ This design creates a **self-regulating inflation dampener**:
 
 | Actual Block Time | Effective Inflation | Halving Period |
 |-------------------|---------------------|----------------|
-| 5s (high load) | 2.0%/year (full) | ~2 years |
-| 20s (normal) | 0.5%/year | ~8 years |
-| 40s (idle) | 0.25%/year | ~16 years |
+| 5s (high load) | 2.0%/year (full) | ~1 year |
+| 20s (normal) | 0.5%/year | ~4 years |
+| 40s (idle) | 0.25%/year | ~8 years |
 
 **Benefits**:
 - Busy network (high utility) → Full emission rewards participants

@@ -271,7 +271,7 @@ Get circulating supply information. Useful for exchanges and block explorers to 
 | `totalFeesBurned` | integer | Cumulative transaction fees burned, in nanoBTH |
 | `circulatingSupply` | integer | Net supply (totalMined - totalFeesBurned), in nanoBTH |
 
-**Note:** All values are in nanoBTH (1 BTH = 1,000,000,000 nanoBTH). Transaction fees are burned (removed from circulation), which is why circulating supply = totalMined - totalFeesBurned.
+**Note:** All values are in nanoBTH (1 BTH = 1,000,000,000 nanoBTH). Collected transaction fees are split 80% into the cluster-tilted redistribution lottery and 20% burned; only the burned 20% (`totalFeesBurned`) is removed from circulation, which is why circulating supply = totalMined - totalFeesBurned.
 
 **Example:**
 ```bash

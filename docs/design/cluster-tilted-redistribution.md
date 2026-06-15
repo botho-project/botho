@@ -79,7 +79,9 @@ velocities; idle wealth must be touched.
 
 ## Evidence
 
-Agent-based simulation, 100M BTH economy, initial Gini 0.77, each scenario
+Agent-based simulation, 100M BTH economy (this is the **simulation calibration
+scale**, not a supply claim — mainnet Phase-1 supply is ~611M BTH; see
+[minting.md](../minting.md)), initial Gini 0.77, each scenario
 run honest AND gamed (strategic whale splits 5M BTH into 1,000 UTXOs and
 churns weekly to defeat eligibility decay). Five-year horizon, conservative
 parameters (2.5%/yr emission, 2%/yr max demurrage, 6:1 tilt). Full matrix in

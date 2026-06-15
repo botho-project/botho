@@ -72,7 +72,7 @@ Botho's SCP hybrid provides final consensus in seconds. There are no reorgs and 
 
 Monero fees go to miners, creating a typical fee market.
 
-Botho fees are burned, creating deflationary pressure that offsets tail emission. This simplifies monetary policy and prevents fee-based miner centralization.
+Botho fees go neither entirely to miners nor are entirely burned: each block, 80% of collected fees fund the cluster-tilted redistribution lottery and 20% are burned. The burned 20% creates deflationary pressure that partially offsets tail emission, while the 80% recycles wealth-concentration charges back to small/well-circulated holders. This prevents fee-based miner centralization.
 
 **Wealth Distribution**
 
