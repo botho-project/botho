@@ -38,22 +38,18 @@ test.describe('Explorer - Block List', () => {
   test('displays recent blocks when connected', async ({ page }) => {
     await waitForExplorerReady(page)
 
-    // Check if blocks loaded
-    const hasBlocks = await page.getByText('Recent Blocks').isVisible()
-    if (hasBlocks) {
-      // Should show at least one block with height indicator
-      await expect(page.locator('text=/#\\d+/').first()).toBeVisible()
-    }
-    // If not connected yet, that's acceptable - skip the assertion
+    // The e2e RPC mock always serves a recent-block list, so this is deterministic.
+    await expect(page.getByText('Recent Blocks')).toBeVisible()
+    // Should show at least one block with height indicator
+    await expect(page.locator('text=/#\\d+/').first()).toBeVisible()
   })
 
   test('has load more button when blocks loaded', async ({ page }) => {
     await waitForExplorerReady(page)
 
-    const hasBlocks = await page.getByText('Recent Blocks').isVisible()
-    if (hasBlocks) {
-      await expect(page.getByRole('button', { name: 'Load More' })).toBeVisible()
-    }
+    // The e2e RPC mock always serves a recent-block list, so this is deterministic.
+    await expect(page.getByText('Recent Blocks')).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Load More' })).toBeVisible()
   })
 })
 
@@ -63,11 +59,8 @@ test.describe('Explorer - Block Detail', () => {
     await page.waitForLoadState('networkidle')
     await waitForExplorerReady(page)
 
-    const hasBlocks = await page.getByText('Recent Blocks').isVisible()
-    if (!hasBlocks) {
-      test.skip()
-      return
-    }
+    // The e2e RPC mock always serves a recent-block list, so this is deterministic.
+    await expect(page.getByText('Recent Blocks')).toBeVisible()
 
     // Click on the first block
     await page.locator('[class*="cursor-pointer"]').first().click()
@@ -86,11 +79,8 @@ test.describe('Explorer - Block Detail', () => {
     await page.waitForLoadState('networkidle')
     await waitForExplorerReady(page)
 
-    const hasBlocks = await page.getByText('Recent Blocks').isVisible()
-    if (!hasBlocks) {
-      test.skip()
-      return
-    }
+    // The e2e RPC mock always serves a recent-block list, so this is deterministic.
+    await expect(page.getByText('Recent Blocks')).toBeVisible()
 
     // Click first block
     await page.locator('[class*="cursor-pointer"]').first().click()
@@ -111,11 +101,8 @@ test.describe('Explorer - Block Detail', () => {
     await page.waitForLoadState('networkidle')
     await waitForExplorerReady(page)
 
-    const hasBlocks = await page.getByText('Recent Blocks').isVisible()
-    if (!hasBlocks) {
-      test.skip()
-      return
-    }
+    // The e2e RPC mock always serves a recent-block list, so this is deterministic.
+    await expect(page.getByText('Recent Blocks')).toBeVisible()
 
     // Click a block
     await page.locator('[class*="cursor-pointer"]').first().click()

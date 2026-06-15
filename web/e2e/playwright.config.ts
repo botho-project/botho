@@ -16,6 +16,13 @@ const WEB_BASE_URL = process.env.E2E_WEB_BASE_URL ?? 'http://localhost:4173'
 const FAUCET_BASE_URL = process.env.E2E_FAUCET_BASE_URL ?? 'http://localhost:4174'
 const useLocalServers = !process.env.E2E_WEB_BASE_URL && !process.env.E2E_FAUCET_BASE_URL
 
+// Local JSON-RPC mock for the explorer/wallet. Pointing the vite-preview `/rpc`
+// proxy here (instead of the live seed node) makes the explorer specs hermetic:
+// the connect handshake (node_getStatus) and block reads resolve deterministically
+// from fixed fixtures, eliminating the "Connecting to network..." flake (#334).
+const RPC_MOCK_PORT = 4175
+const RPC_MOCK_URL = `http://localhost:${RPC_MOCK_PORT}`
+
 /**
  * Playwright E2E test configuration for Botho web services.
  *
@@ -64,14 +71,28 @@ export default defineConfig({
   webServer: useLocalServers
     ? [
         {
+          // Local JSON-RPC mock the wallet/explorer talk to via the same-origin
+          // /rpc proxy. Started before the preview server so the proxy target is
+          // up by the time the explorer connects. Returns fixed node_getStatus /
+          // getChainInfo / getBlockByHeight payloads so connect + block reads are
+          // deterministic (no live-node dependency).
+          command: 'node e2e/serve-rpc-mock.mjs',
+          cwd: path.resolve(__dirname, '..'),
+          url: RPC_MOCK_URL,
+          reuseExistingServer: !process.env.CI,
+          timeout: 30_000,
+        },
+        {
           // Build the web wallet with the RPC endpoint pointed at the
-          // same-origin /rpc proxy (configured in the wallet's vite preview
-          // config to forward to https://seed.botho.io), then serve
-          // landing/wallet/explorer as a SPA via vite preview on port 4173.
-          // This lets the explorer perform a real RPC read in e2e without
-          // depending on cross-origin CORS.
+          // same-origin /rpc proxy, then serve landing/wallet/explorer as a SPA
+          // via vite preview on port 4173. E2E_RPC_PROXY_TARGET points the
+          // preview's /rpc proxy at the local mock above (instead of the live
+          // seed node), so the explorer performs a real RPC read in e2e against
+          // deterministic fixtures without cross-origin CORS or live-node flake.
           command:
-            'VITE_RPC_ENDPOINT=/rpc pnpm --filter @botho/web-wallet build && pnpm --filter @botho/web-wallet preview --port 4173 --strictPort',
+            'VITE_RPC_ENDPOINT=/rpc pnpm --filter @botho/web-wallet build && E2E_RPC_PROXY_TARGET=' +
+            RPC_MOCK_URL +
+            ' pnpm --filter @botho/web-wallet preview --port 4173 --strictPort',
           cwd: path.resolve(__dirname, '..'),
           url: 'http://localhost:4173/',
           reuseExistingServer: !process.env.CI,

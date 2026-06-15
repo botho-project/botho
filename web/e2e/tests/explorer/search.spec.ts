@@ -19,11 +19,8 @@ test.describe('Explorer - Search', () => {
   test('can search by block height', async ({ page }) => {
     await waitForExplorerReady(page)
 
-    const hasBlocks = await page.getByText('Recent Blocks').isVisible()
-    if (!hasBlocks) {
-      test.skip()
-      return
-    }
+    // The e2e RPC mock always serves a recent-block list, so this is deterministic.
+    await expect(page.getByText('Recent Blocks')).toBeVisible()
 
     // Get first block's height
     const firstBlockHeight = await page.locator('text=/#\\d+/').first().textContent()
@@ -43,11 +40,8 @@ test.describe('Explorer - Search', () => {
   test('can search by pressing Enter', async ({ page }) => {
     await waitForExplorerReady(page)
 
-    const hasBlocks = await page.getByText('Recent Blocks').isVisible()
-    if (!hasBlocks) {
-      test.skip()
-      return
-    }
+    // The e2e RPC mock always serves a recent-block list, so this is deterministic.
+    await expect(page.getByText('Recent Blocks')).toBeVisible()
 
     // Get first block's height
     const firstBlockHeight = await page.locator('text=/#\\d+/').first().textContent()
@@ -95,11 +89,8 @@ test.describe('Explorer - Search', () => {
   test('URL updates when viewing block', async ({ page }) => {
     await waitForExplorerReady(page)
 
-    const hasBlocks = await page.getByText('Recent Blocks').isVisible()
-    if (!hasBlocks) {
-      test.skip()
-      return
-    }
+    // The e2e RPC mock always serves a recent-block list, so this is deterministic.
+    await expect(page.getByText('Recent Blocks')).toBeVisible()
 
     // Get first block's height
     const firstBlockHeight = await page.locator('text=/#\\d+/').first().textContent()
