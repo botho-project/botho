@@ -7,8 +7,8 @@
 //!
 //! ## Two-Phase Model
 //!
-//! - **Phase 1 (Halving)**: Bitcoin-like halving schedule for ~10 years.
-//!   Difficulty adjusts to maintain target block time.
+//! - **Phase 1 (Halving)**: Bitcoin-like halving schedule for ~5 years (~1-year
+//!   halvings x 5). Difficulty adjusts to maintain target block time.
 //!
 //! - **Phase 2 (Tail Emission)**: Fixed tail reward with inflation-targeting.
 //!   Difficulty adjusts to hit 2% net inflation (gross emission - fee burns).
@@ -214,9 +214,22 @@ fn current_unix_time() -> u64 {
 ///
 /// | Actual Block Time | Effective Inflation | Halving Period |
 /// |-------------------|--------------------:|---------------:|
-/// | 5s (high load)    | 2.0%/year           | 2 years        |
-/// | 20s (normal)      | 0.5%/year           | 8 years        |
-/// | 40s (idle)        | 0.25%/year          | 16 years       |
+/// | 5s (high load)    | 2.0%/year           | 1 year         |
+/// | 20s (normal)      | 0.5%/year           | 4 years        |
+/// | 40s (idle)        | 0.25%/year          | 8 years        |
+///
+/// # Canonical Emission Schedule (decided 2026-06-15, issue #351)
+///
+/// Chosen from the #350 emission sweep on monetary-policy grounds:
+///
+/// - `initial_reward` = 50 BTH
+/// - `halving_interval` = `BLOCKS_PER_YEAR` (~1 year at 5s blocks)
+/// - `halving_count` = 5  →  time-to-tail = `H * K / BLOCKS_PER_YEAR` = 5.00
+///   years
+/// - `tail_inflation_bps` = 200 (2% perpetual net inflation)
+///
+/// Derived Phase-1 supply = `R0 * H * (2 - 2^-(K-1))`
+/// = 50 * 6,307,200 * 1.9375 = **611,010,000 BTH** (~611M).
 pub fn mainnet_policy() -> MonetaryPolicy {
     // Constants based on 5-second blocks (minimum block time)
     const SECS_PER_YEAR: u64 = 365 * 24 * 60 * 60;
@@ -224,10 +237,10 @@ pub fn mainnet_policy() -> MonetaryPolicy {
     const BLOCKS_PER_YEAR: u64 = SECS_PER_YEAR / ASSUMED_BLOCK_TIME; // 6,307,200
 
     MonetaryPolicy {
-        // Phase 1: ~10 years of halvings (at 5s blocks under full load)
+        // Phase 1: ~5 years of halvings (at 5s blocks under full load)
         initial_reward: 50_000_000_000_000, // 50 BTH in picocredits
-        halving_interval: BLOCKS_PER_YEAR * 2, // 12,614,400 blocks (~2 years at 5s)
-        halving_count: 5,                   // 5 halvings over ~10 years
+        halving_interval: BLOCKS_PER_YEAR,  // 6,307,200 blocks (~1 year at 5s)
+        halving_count: 5,                   // 5 halvings over ~5 years
 
         // Phase 2: 2% target net inflation (at 5s blocks)
         tail_inflation_bps: 200,
@@ -328,9 +341,56 @@ mod tests {
 
         assert_eq!(policy.halving_count, 5);
         assert_eq!(policy.tail_inflation_bps, 200);
-        // Block time is now 5s (assumed minimum under high load)
+        assert_eq!(policy.initial_reward, 50_000_000_000_000); // 50 BTH
+                                                               // Block time is now 5s (assumed minimum under high load)
         assert_eq!(policy.target_block_time_secs, 5);
-        // 2 years worth of 5s blocks
-        assert_eq!(policy.halving_interval, 12_614_400);
+        // Canonical schedule (#351): 1 year worth of 5s blocks (BLOCKS_PER_YEAR).
+        assert_eq!(policy.halving_interval, 6_307_200);
+    }
+
+    /// Locks the canonical emission schedule chosen in #351 so the decision is
+    /// regression-proof: derived Phase-1 supply ~611M BTH and time-to-tail = 5
+    /// years, computed directly from the policy parameters.
+    #[test]
+    fn test_mainnet_emission_schedule_locked() {
+        const BLOCKS_PER_YEAR: u64 = 6_307_200;
+        const PICO_PER_BTH: u128 = 1_000_000_000_000;
+
+        let policy = mainnet_policy();
+
+        // Time-to-tail = H * K / BLOCKS_PER_YEAR.
+        let h = policy.halving_interval;
+        let k = policy.halving_count as u64;
+        let years_to_tail = (h * k) as f64 / BLOCKS_PER_YEAR as f64;
+        assert!(
+            (years_to_tail - 5.0).abs() < 1e-9,
+            "time-to-tail expected 5.00 years, got {years_to_tail}",
+        );
+
+        // Derived Phase-1 supply by summing the halving schedule:
+        //   sum_{i=0}^{K-1} (R0 >> i) * H  (in picocredits).
+        let r0 = policy.initial_reward as u128;
+        let h128 = h as u128;
+        let mut supply_pico: u128 = 0;
+        for i in 0..policy.halving_count {
+            supply_pico += (r0 >> i) * h128;
+        }
+
+        // Closed form: R0 * H * (2 - 2^-(K-1)).
+        // = 50 * 6,307,200 * 1.9375 BTH = 611,010,000 BTH.
+        let supply_bth = supply_pico / PICO_PER_BTH;
+        assert_eq!(
+            supply_bth, 611_010_000,
+            "Phase-1 supply expected 611,010,000 BTH, got {supply_bth}",
+        );
+
+        // u128 supply accounting (#333): ~611M BTH = 6.11e20 picocredits, which
+        // exceeds u64::MAX (~1.84e19). Confirm the chosen scale still requires
+        // u128 and is represented without truncation.
+        assert!(
+            supply_pico > u64::MAX as u128,
+            "611M BTH in picocredits ({supply_pico}) must exceed u64::MAX",
+        );
+        assert_eq!(supply_pico, 611_010_000 * PICO_PER_BTH);
     }
 }

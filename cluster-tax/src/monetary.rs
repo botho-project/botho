@@ -125,11 +125,20 @@ impl Default for MonetaryPolicy {
     /// Library defaults for monetary policy.
     ///
     /// **NOTE**: This is a generic library default assuming 60-second blocks.
-    /// Botho mainnet uses different parameters via
-    /// `botho/src/monetary.rs::mainnet_policy()`:
+    /// It is intentionally NOT the canonical mainnet schedule and is not used
+    /// for any mainnet/consensus decision. Botho mainnet uses different
+    /// parameters via `botho/src/monetary.rs::mainnet_policy()`:
     /// - 5-second assumed block time (not 60s)
     /// - Dynamic timing adjusts actual blocks 3-40s based on network load
+    /// - Canonical schedule (#351): ~1-year halvings (`BLOCKS_PER_YEAR` at 5s),
+    ///   5 halvings → ~5 years to tail, 2% tail, derived ~611M BTH supply
     /// - See `docs/architecture.md#block-timing-architecture` for details
+    ///
+    /// The emission sweep (#350, `simulation::emission_sweep`) sets each
+    /// candidate `MonetaryPolicy` explicitly per-schedule, so it does not rely
+    /// on this default. Calibrated Gini/lottery/demurrage tests likewise build
+    /// their own policies. This default therefore stays at the generic 60s/1min
+    /// units and is left unchanged by the #351 schedule decision.
     fn default() -> Self {
         Self {
             // Phase 1: ~10 years of halvings
