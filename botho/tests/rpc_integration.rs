@@ -171,7 +171,10 @@ async fn test_get_chain_info() {
     assert!(result["height"].is_number());
     assert!(result["tipHash"].is_string());
     assert!(result["difficulty"].is_number());
-    assert!(result["totalMined"].is_number());
+    // totalMined is a u128 picocredit value emitted as a decimal string (PR #342)
+    // to avoid JS 2^53 precision loss; verify it is a well-formed unsigned integer.
+    assert!(result["totalMined"].is_string());
+    assert!(result["totalMined"].as_str().unwrap().parse::<u128>().is_ok());
     assert!(result["mempoolSize"].is_number());
     assert!(result["mempoolFees"].is_number());
 }
