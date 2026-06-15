@@ -167,39 +167,50 @@ Target (high util) & 5 seconds & Throughput during demand \\
 \begin{itemize}
   \item Round number for simplicity
   \item Matches Bitcoin's initial reward (symbolic continuity)
-  \item At 10-second blocks: 432,000 BTH/day initially
+  \item At 5-second blocks: $\approx$864,000 BTH/day initially
   \item Creates sufficient early liquidity for network bootstrap
 \end{itemize}
 
-\subsubsection{Halving Period: 1,051,200 Blocks ($\sim$2 Years)}
+\subsubsection{Halving Period: 6,307,200 Blocks ($\sim$1 Year)}
 
-\textbf{Why 2-year halvings (vs. Bitcoin's 4-year)?}
+\textbf{Why $\sim$1-year halvings (vs. Bitcoin's 4-year)?}
 \begin{itemize}
   \item Faster initial distribution to early participants
-  \item Reaches tail emission sooner, stabilizing economics
-  \item At 10-second blocks: 1,051,200 blocks $\approx$ 121.7 days $\times$ 6
-    = 2.0 years
+  \item Reaches tail emission sooner ($\sim$5 years), stabilizing economics
+  \item At 5-second blocks: 6,307,200 blocks $\approx$ 365 days $=$ 1.0 year
+    per halving epoch, with 5 halvings totaling $\sim$5 years
 \end{itemize}
 
 \textbf{Calculation}:
 \[
-\text{blocks\_per\_day} = \frac{86400\text{s}}{10\text{s/block}} = 8640
+\text{blocks\_per\_day} = \frac{86400\text{s}}{5\text{s/block}} = 17{,}280
 \]
 \[
-\text{blocks\_per\_2\_years} = 8640 \times 365 \times 2 \approx 6,307,200
+\text{blocks\_per\_year} = 17{,}280 \times 365 = 6{,}307{,}200
 \]
 
-Actual value (1,051,200) corresponds to 121.7 days per halving epoch,
-with 6 epochs totaling $\sim$2 years.
+The five halving epochs ($R_0 = 50$ BTH, halving each year to 25, 12.5, 6.25,
+3.125 BTH/block) emit a geometric sum that fixes the Phase-1 supply at
+$50 \times 6{,}307{,}200 \times \tfrac{31}{16} = 611{,}010{,}000$ BTH
+($\approx$611M).
 
-\subsubsection{Tail Emission: 0.3 BTH per Block}
+\subsubsection{Tail Emission: 2\% Net Annual Inflation (Supply-Dependent)}
 
-\textbf{Security budget analysis}:
+The tail is not a fixed per-block constant but a constant net annual inflation
+rate on the circulating supply. Gross per-block emission is
+$R_{\text{tail}} = S \cdot (\beta_{\text{net}} + \beta_{\text{burn}}) /
+N_{\text{year}}$ with $\beta_{\text{net}} = 2\%$, $\beta_{\text{burn}} = 0.5\%$
+(expected fee burn), and $N_{\text{year}} = 6{,}307{,}200$.
+
+\textbf{Security budget analysis} (at the $\approx$611M Phase-1 supply):
 \begin{itemize}
-  \item At 10-second blocks: 2,592,000 BTH/year from tail emission
-  \item Target: $\sim$2\% annual inflation at maturity
-  \item Projected mature supply: $\sim$130M BTH
-  \item $2,592,000 / 130,000,000 = 1.99\%$ $\checkmark$
+  \item Gross emission $= 611{,}010{,}000 \times 0.025 = 15{,}275{,}250$ BTH/year
+    $\Rightarrow \approx 2.42$ BTH/block
+  \item Net emission $= 611{,}010{,}000 \times 0.020 = 12{,}220{,}200$ BTH/year
+    $\Rightarrow \approx 1.94$ BTH/block net of the expected fee burn
+  \item Target: 2\% net annual inflation at maturity $\checkmark$
+  \item Because $R_{\text{tail}} \propto S$, the per-block reward grows with
+    supply while net inflation stays pinned at 2\%
 \end{itemize}
 
 \textbf{Why not 0?}
@@ -209,11 +220,15 @@ with 6 epochs totaling $\sim$2 years.
   \item Perpetual emission ensures predictable security budget
 \end{itemize}
 
-\textbf{Why not higher (e.g., 1 BTH)?}
+\textbf{Why a supply-proportional rate (rather than a fixed BTH constant)?}
 \begin{itemize}
-  \item Higher emission increases long-term inflation
-  \item 0.3 BTH provides adequate security while limiting dilution
-  \item Can be adjusted via governance if security budget insufficient
+  \item A fixed per-block constant would yield ever-shrinking percentage
+    inflation, eventually starving the security budget relative to supply
+  \item Pinning net inflation at 2\% keeps the security budget a stable
+    fraction of the economy and acts as a mild, predictable wealth tax that
+    rewards circulation over idle holding
+  \item The rate can be adjusted via governance if the security budget proves
+    insufficient
 \end{itemize}
 
 \subsubsection{Fee Split: 80\% Lottery / 20\% Burn}
@@ -328,7 +343,8 @@ ML-KEM level & 768 & Crypto & Hard fork \\
 Block time & 5--40s & Consensus & Soft fork \\
 Quorum threshold & 3/4, 2/3 & Consensus & Hard fork \\
 Initial reward & 50 BTH & Economic & Genesis \\
-Tail emission & 0.3 BTH & Economic & Hard fork \\
+Halving period & 6,307,200 blocks & Economic & Hard fork \\
+Tail emission & 2\% net/yr & Economic & Hard fork \\
 Fee split & 80/20 & Economic & Soft fork \\
 Max fee multiplier & 6$\times$ & Economic & Soft fork \\
 Max block size & 2 MB & Network & Soft fork \\

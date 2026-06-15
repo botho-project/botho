@@ -2,19 +2,20 @@
 % Shows block reward decay with tail emission comparison to Bitcoin halvings
 %
 % ACCESSIBILITY ALT TEXT:
-% A graph comparing emission schedules. X-axis shows years (0-20), Y-axis
-% shows block reward. Botho's curve (blue, smooth) starts at 50 BTH and
-% decays exponentially, reaching tail emission of 0.3 BTH which continues
-% indefinitely. Bitcoin's curve (orange, stepped) shows discrete halvings
-% every 4 years, eventually reaching zero. The smooth Botho curve avoids
-% sudden supply shocks while ensuring perpetual security funding.
+% A graph comparing emission schedules. X-axis shows years (0-12), Y-axis
+% shows block reward. Botho's curve (blue, stepped) starts at 50 BTH and
+% halves each year (50, 25, 12.5, 6.25, 3.125) for 5 years, then transitions
+% to perpetual supply-dependent tail emission (~1.94 BTH/block net at the
+% ~611M tail-onset supply, growing as supply grows). Bitcoin's curve (orange,
+% stepped) shows discrete halvings every 4 years, eventually reaching zero.
+% Botho reaches its tail in ~5 years while ensuring perpetual security funding.
 
 \begin{figure}[ht]
 \centering
 \begin{tikzpicture}[xscale=0.9, yscale=0.08]
     % Axes
     \draw[->] (0,0) -- (13,0) node[right] {\small Years};
-    \draw[->] (0,0) -- (0,55) node[above] {\small Block Reward};
+    \draw[->] (0,0) -- (0,55) node[above] {\small Block Reward (BTH)};
 
     % Y-axis labels
     \foreach \y in {0,10,20,30,40,50} {
@@ -33,13 +34,19 @@
     \draw[gray!30, dashed] (0,40) -- (12,40);
     \draw[gray!30, dashed] (0,50) -- (12,50);
 
-    % Botho smooth decay curve (approximated with line segments)
+    % Botho annual halvings: 50, 25, 12.5, 6.25, 3.125, then tail ~1.94
     \draw[blue, thick]
-        (0,50) .. controls (1,35) and (2,25) .. (2,25)
-        .. controls (3,18) and (4,12.5) .. (4,12.5)
-        .. controls (5,9) and (6,6.25) .. (6,6.25)
-        .. controls (7,4.5) and (8,3.1) .. (8,3.1)
-        -- (12,0.3);
+        (0,50) -- (1,50)
+        (1,50) -- (1,25)
+        (1,25) -- (2,25)
+        (2,25) -- (2,12.5)
+        (2,12.5) -- (3,12.5)
+        (3,12.5) -- (3,6.25)
+        (3,6.25) -- (4,6.25)
+        (4,6.25) -- (4,3.125)
+        (4,3.125) -- (5,3.125)
+        (5,3.125) -- (5,1.94)
+        (5,1.94) -- (12,1.94);
 
     % Bitcoin step function
     \draw[red, thick]
@@ -49,20 +56,22 @@
         (8,25) -- (8,12.5)
         (8,12.5) -- (12,12.5);
 
-    % Tail emission line
-    \draw[blue, dashed] (0,0.3) -- (12,0.3);
+    % Tail emission line (rises gently with supply)
+    \draw[blue, dashed] (5,1.94) -- (12,3.0);
 
     % Legend
-    \draw[blue, thick] (8.5,48) -- (9.5,48) node[right, font=\scriptsize] {Botho (smooth)};
-    \draw[red, thick] (8.5,43) -- (9.5,43) node[right, font=\scriptsize] {Bitcoin (halvings)};
-    \draw[blue, dashed] (8.5,38) -- (9.5,38) node[right, font=\scriptsize] {Tail (0.3 BTH)};
+    \draw[blue, thick] (8.5,48) -- (9.5,48) node[right, font=\scriptsize] {Botho (annual halvings)};
+    \draw[red, thick] (8.5,43) -- (9.5,43) node[right, font=\scriptsize] {Bitcoin (4-yr halvings)};
+    \draw[blue, dashed] (8.5,38) -- (9.5,38) node[right, font=\scriptsize] {Tail (2\% net, supply-dependent)};
 
     % Annotation
-    \node[font=\scriptsize] at (10,5) {Perpetual security};
+    \node[font=\scriptsize] at (9,8) {Perpetual security};
 \end{tikzpicture}
-\caption{Block reward emission schedule. Botho uses smooth exponential decay
-(halving every 2 years) transitioning to perpetual tail emission at 0.3 BTH,
-compared to Bitcoin's discrete halving events. Tail emission ensures
-long-term security funding.}
+\caption{Block reward emission schedule. Botho halves the reward each year
+(50, 25, 12.5, 6.25, 3.125 BTH) for 5 years, then transitions to perpetual
+supply-dependent tail emission targeting 2\% net annual inflation
+($\approx$1.94 BTH/block net at the $\approx$611M tail-onset supply, rising as
+supply grows), compared to Bitcoin's 4-year halvings toward zero. Tail
+emission ensures long-term security funding.}
 \label{fig:emission-curve}
 \end{figure}
