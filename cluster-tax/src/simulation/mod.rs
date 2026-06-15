@@ -25,6 +25,8 @@ mod agent;
 pub mod agents;
 #[cfg(any(feature = "cli", test))]
 pub mod constrained_analysis;
+#[cfg(any(feature = "cli", test))]
+pub mod emission_sweep;
 pub mod lottery;
 mod metrics;
 #[cfg(any(feature = "cli", test))]
