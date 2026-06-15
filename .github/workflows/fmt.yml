@@ -1,0 +1,68 @@
+name: Format Check
+
+# Enforces the repo-wide rustfmt baseline so the tree never drifts out of
+# compliance again. rustfmt.toml uses nightly-only options (wrap_comments,
+# imports_granularity = "Crate"), so this MUST run on the pinned nightly the
+# repo builds against -- stable rustfmt silently ignores those options and
+# would let drift through.
+
+on:
+  pull_request:
+    paths:
+      - '**.rs'
+      - 'rustfmt.toml'
+      - 'rust-toolchain'
+      - '.github/workflows/fmt.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - '**.rs'
+      - 'rustfmt.toml'
+      - 'rust-toolchain'
+      - '.github/workflows/fmt.yml'
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fmt-check:
+    name: rustfmt --check (pinned nightly)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pin to the same nightly as rust-toolchain (channel = nightly-2025-12-03).
+      # We pin explicitly here -- NOT @stable -- because the unstable rustfmt
+      # options only take effect on nightly. Keep this in sync with
+      # rust-toolchain when bumping the channel.
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-12-03
+          components: rustfmt
+
+      # Workspace members (root Cargo.toml). `--all` honors the rustfmt.toml
+      # `ignore` list (sgx/types, sgx/urts, sgx/sync) automatically.
+      - name: Check workspace formatting
+        run: cargo +nightly-2025-12-03 fmt --all -- --check
+
+      # Members listed under `exclude` in the root Cargo.toml are not reached by
+      # `--all`, so check them individually. fuzz especially: the strict fuzz
+      # build guard compiles every target, and drift there is otherwise invisible.
+      - name: Check fuzz crate formatting
+        working-directory: fuzz
+        run: cargo +nightly-2025-12-03 fmt -- --check
+
+      - name: Check util/serial crate formatting
+        working-directory: util/serial
+        run: cargo +nightly-2025-12-03 fmt -- --check
+
+      - name: Check contracts/solana crate formatting
+        working-directory: contracts/solana
+        run: cargo +nightly-2025-12-03 fmt -- --check
