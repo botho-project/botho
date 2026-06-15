@@ -52,7 +52,10 @@ struct FuzzData {
     /// Raw bytes decoded into a Block (arbitrary lottery_summary / outputs).
     block_bytes: Vec<u8>,
     candidates: Vec<FuzzCandidate>,
-    stored_pool: u64,
+    // Cumulative carryover pool is u128 (widened from u64 to prevent
+    // saturation under sustained inflow); fuzz the full range, including
+    // values above u64::MAX.
+    stored_pool: u128,
     prev_block_hash: [u8; 32],
 }
 
