@@ -358,7 +358,7 @@ pub fn run_simulation(
             // Record fee burns to monetary controller
             state.record_fee_burn(round_fees);
         } else {
-            state.total_fees_collected += round_fees;
+            state.total_fees_collected += round_fees as u128;
         }
         state.transaction_count += round_transactions;
 
@@ -608,7 +608,8 @@ mod tests {
 
         // Minter should have received all rewards (no selling)
         let minter_balance = *result.final_state.agent_balances.get(&AgentId(1)).unwrap();
-        let expected_balance = 10_000 + stats.total_emitted;
+        // total_emitted is u128 (#341); at this test's scale it fits in u64.
+        let expected_balance = 10_000 + stats.total_emitted as u64;
         assert_eq!(
             minter_balance, expected_balance,
             "Minter should have initial 10_000 + {} rewards = {}, got: {}",

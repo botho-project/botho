@@ -21,10 +21,13 @@ pub struct MinterAgent {
     minting_interval: u64,
     /// Fraction of balance to sell each round.
     sell_fraction: f64,
-    /// Total coins mined.
-    total_mined: u64,
-    /// Total coins sold.
-    total_sold: u64,
+    /// Total coins mined (cumulative over the whole sim; widened to u128
+    /// because full-supply emission ~1.22e21 picocredits exceeds u64::MAX
+    /// ~1.84e19). See issue #341 / sibling node fix #333.
+    total_mined: u128,
+    /// Total coins sold (cumulative over the whole sim; can also reach
+    /// supply scale, so widened to u128 alongside total_mined).
+    total_sold: u128,
     /// RNG state.
     rng_state: u64,
 }
@@ -70,7 +73,7 @@ impl MinterAgent {
 
     /// Record minting reward (called externally).
     pub fn record_minting(&mut self, amount: u64) {
-        self.total_mined += amount;
+        self.total_mined += amount as u128;
     }
 
     /// Simple pseudo-RNG.
@@ -86,8 +89,8 @@ impl MinterAgent {
         &mut self.account
     }
 
-    /// Get stats.
-    pub fn stats(&self) -> (u64, u64) {
+    /// Get stats: cumulative (total_mined, total_sold) in picocredits.
+    pub fn stats(&self) -> (u128, u128) {
         (self.total_mined, self.total_sold)
     }
 
@@ -131,7 +134,7 @@ impl Agent for MinterAgent {
         }
 
         let buyer_idx = (self.next_random() as usize) % self.buyers.len();
-        self.total_sold += sell_amount;
+        self.total_sold += sell_amount as u128;
 
         Some(Action::Transfer {
             to: self.buyers[buyer_idx],
@@ -181,5 +184,36 @@ mod tests {
         assert!(!minter.is_minting_round(5));
         assert!(minter.is_minting_round(10));
         assert!(minter.is_minting_round(20));
+    }
+
+    /// Regression for #341: cumulative `total_mined` must accumulate exactly
+    /// once emission crosses u64::MAX picocredits (~1.84e19). At Phase-1 scale
+    /// (~1.22e21 pico) a u64 accumulator wrapped silently in release and
+    /// panicked in debug. With the u128 widening it accumulates exactly.
+    #[test]
+    fn total_mined_accumulates_past_u64_max() {
+        let mut minter = MinterAgent::new(AgentId(1));
+
+        // Each block emits a large per-block reward that itself fits in u64
+        // (per-step amounts stay u64 by design); only the cumulative total
+        // crosses the u64 boundary.
+        let per_block: u64 = u64::MAX / 2; // ~9.2e18 pico per block
+        let blocks: u128 = 5; // 5 * 9.2e18 = ~4.6e19 > u64::MAX (~1.84e19)
+
+        for _ in 0..blocks {
+            minter.record_minting(per_block);
+        }
+
+        let expected: u128 = per_block as u128 * blocks;
+        let (total_mined, _total_sold) = minter.stats();
+
+        assert!(
+            expected > u64::MAX as u128,
+            "test must drive past u64::MAX to be meaningful (expected {expected})"
+        );
+        assert_eq!(
+            total_mined, expected,
+            "cumulative total_mined must accumulate exactly with no wrap"
+        );
     }
 }

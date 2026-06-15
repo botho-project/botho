@@ -35,8 +35,10 @@ pub struct Metrics {
     /// Index 0 = poorest 20%, Index 4 = richest 20%.
     pub fee_rate_by_quintile: [f64; 5],
 
-    /// Total fees collected (cumulative).
-    pub total_fees_collected: u64,
+    /// Total fees collected (cumulative). u128 to mirror the widened
+    /// `SimulationState::total_fees_collected` without narrowing at
+    /// full-supply scale (#341).
+    pub total_fees_collected: u128,
 
     /// Total number of transactions.
     pub transaction_count: u64,
@@ -206,7 +208,7 @@ impl SimulationMetrics {
 pub struct MetricsSummary {
     pub initial_gini: f64,
     pub final_gini: f64,
-    pub total_fees: u64,
+    pub total_fees: u128,
     pub total_transactions: u64,
     pub avg_fee_by_quintile: [f64; 5],
     pub wash_trade_attempts: u64,
@@ -357,7 +359,7 @@ pub fn snapshot_metrics(
     round: u64,
     agent_data: &[(AgentId, u64, u32, TagVector)], // (id, balance, fee_rate, tags)
     cluster_wealth: &ClusterWealth,
-    total_fees: u64,
+    total_fees: u128,
     transaction_count: u64,
     mixer_volume: u64,
     _fee_curve: &FeeCurve,
