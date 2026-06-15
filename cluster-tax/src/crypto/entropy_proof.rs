@@ -1,7 +1,8 @@
 //! Entropy proof generation for Phase 2 entropy-weighted decay.
 //!
 //! This module implements zero-knowledge proofs that demonstrate entropy delta
-//! meets the threshold for decay credit, without revealing actual entropy values.
+//! meets the threshold for decay credit, without revealing actual entropy
+//! values.
 //!
 //! # Overview
 //!
@@ -16,10 +17,12 @@
 //! # Security Properties
 //!
 //! - **Soundness**: Cannot prove false entropy claims (DLOG assumption)
-//! - **Zero-Knowledge**: Reveals only threshold satisfaction, not actual entropy
+//! - **Zero-Knowledge**: Reveals only threshold satisfaction, not actual
+//!   entropy
 //! - **Binding**: Entropy commitments cannot be opened to multiple values
 //!
-//! See `docs/design/entropy-proof-security-analysis.md` for full security analysis.
+//! See `docs/design/entropy-proof-security-analysis.md` for full security
+//! analysis.
 
 use super::{blinding_generator, CommittedTagVectorSecret, SchnorrProof};
 use crate::ClusterId;
@@ -71,7 +74,8 @@ pub struct EntropyProof {
     pub entropy_after_commitment: CompressedRistretto,
 
     /// Range proof: entropy_delta = entropy_after - entropy_before >= threshold
-    /// Uses simplified Schnorr-based range proof (Bulletproof integration planned).
+    /// Uses simplified Schnorr-based range proof (Bulletproof integration
+    /// planned).
     pub threshold_range_proof: EntropyRangeProof,
 
     /// Linkage proof: ties entropy commitments to tag commitments.
@@ -165,7 +169,8 @@ impl EntropyProofBuilder {
     ///
     /// H2 = -log2(sum(p_k^2)) where p_k = m_k / total_mass
     ///
-    /// Returns the entropy value scaled by ENTROPY_SCALE for integer arithmetic.
+    /// Returns the entropy value scaled by ENTROPY_SCALE for integer
+    /// arithmetic.
     fn compute_collision_entropy(secrets: &[CommittedTagVectorSecret]) -> u64 {
         // Aggregate all tag masses by cluster
         let mut cluster_masses: std::collections::HashMap<ClusterId, u64> =
@@ -630,9 +635,7 @@ impl EntropyLinkageProof {
 
     /// Serialized size in bytes.
     pub fn serialized_size(&self) -> usize {
-        4 + (32 * self.intermediate_commitments.len())
-            + (64 * self.step_proofs.len())
-            + 64
+        4 + (32 * self.intermediate_commitments.len()) + (64 * self.step_proofs.len()) + 64
     }
 }
 
@@ -643,8 +646,7 @@ impl EntropyLinkageProof {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crypto::CommittedTagVectorSecret;
-    use crate::{TagWeight, TAG_WEIGHT_SCALE};
+    use crate::{crypto::CommittedTagVectorSecret, TagWeight, TAG_WEIGHT_SCALE};
     use rand_core::OsRng;
     use std::collections::HashMap;
 
@@ -671,7 +673,10 @@ mod tests {
     fn test_entropy_generator_unique() {
         let h_e = entropy_generator();
         let g = blinding_generator();
-        assert_ne!(h_e, g, "Entropy generator should differ from blinding generator");
+        assert_ne!(
+            h_e, g,
+            "Entropy generator should differ from blinding generator"
+        );
     }
 
     #[test]
@@ -726,7 +731,10 @@ mod tests {
         let builder = EntropyProofBuilder::new(vec![input_secret], vec![output_secret]);
         let proof = builder.prove(&mut OsRng);
 
-        assert!(proof.is_some(), "Should generate proof when entropy increases");
+        assert!(
+            proof.is_some(),
+            "Should generate proof when entropy increases"
+        );
     }
 
     #[test]
@@ -871,10 +879,7 @@ mod tests {
         let input_secret = create_test_secret(1_000_000, &[(ClusterId(1), TAG_WEIGHT_SCALE)]);
         let output_secret = create_test_secret(
             1_000_000,
-            &[
-                (ClusterId(1), 900_000),
-                (ClusterId(2), 100_000),
-            ],
+            &[(ClusterId(1), 900_000), (ClusterId(2), 100_000)],
         );
 
         // Very high threshold - should fail

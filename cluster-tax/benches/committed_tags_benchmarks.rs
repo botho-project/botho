@@ -2,7 +2,8 @@
 //!
 //! These benchmarks measure proof sizes and performance characteristics
 //! for the integrated Bulletproof + entropy approach, validating estimates
-//! from the Phase A feasibility study (docs/design/entropy-proof-aggregation-research.md).
+//! from the Phase A feasibility study
+//! (docs/design/entropy-proof-aggregation-research.md).
 //!
 //! ## Phase A Target Metrics
 //!
@@ -55,7 +56,8 @@ fn create_test_secret(num_clusters: usize, value: u64) -> CommittedTagVectorSecr
     CommittedTagVectorSecret::from_plaintext(value, &tags, &mut OsRng)
 }
 
-/// Create a TagVector with N equal-weight clusters (for collision entropy benchmarks).
+/// Create a TagVector with N equal-weight clusters (for collision entropy
+/// benchmarks).
 fn create_tag_vector(num_clusters: usize) -> TagVector {
     let mut tags = TagVector::new();
     if num_clusters == 0 {
@@ -188,7 +190,12 @@ fn bench_proof_sizes(c: &mut Criterion) {
                     let output_vector_size = output_secret.commit().to_bytes().len();
                     let total = conservation_size + input_vector_size + output_vector_size;
 
-                    black_box((conservation_size, input_vector_size, output_vector_size, total))
+                    black_box((
+                        conservation_size,
+                        input_vector_size,
+                        output_vector_size,
+                        total,
+                    ))
                 });
             },
         );

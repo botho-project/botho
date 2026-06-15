@@ -595,8 +595,7 @@ fn apply_lottery_to_block(block: Block, ledger: &Arc<RwLock<Ledger>>) -> Block {
                 Ok(p) => p,
                 Err(_) => return burn_fee_share(block),
             };
-            match led
-                .get_lottery_validation_candidates(block.height(), &lottery_config.draw_config)
+            match led.get_lottery_validation_candidates(block.height(), &lottery_config.draw_config)
             {
                 Ok(c) => (pool, c),
                 Err(_) => return burn_fee_share(block),
@@ -616,5 +615,11 @@ fn apply_lottery_to_block(block: Block, ledger: &Arc<RwLock<Ledger>>) -> Block {
         led.get_utxo_by_id(utxo_id).ok().flatten()
     };
 
-    BlockBuilder::apply_lottery(block, &candidates, stored_pool, utxo_lookup, &lottery_config)
+    BlockBuilder::apply_lottery(
+        block,
+        &candidates,
+        stored_pool,
+        utxo_lookup,
+        &lottery_config,
+    )
 }

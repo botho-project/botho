@@ -610,7 +610,9 @@ pub fn compute_progressive_fee(
 /// bit-identical on every platform; floating-point here was a fork risk
 /// (audits/2026-01-03-cycle5.md).
 fn compute_cluster_fee_rate(wealth: u64, config: &ProgressiveFeeConfig) -> u32 {
-    let rate_range = config.max_rate_bps.saturating_sub(config.background_rate_bps);
+    let rate_range = config
+        .max_rate_bps
+        .saturating_sub(config.background_rate_bps);
     let denominator = (config.steepness as u128).saturating_add(wealth as u128);
     if denominator == 0 {
         // steepness == 0 and wealth == 0: degenerate config, charge max

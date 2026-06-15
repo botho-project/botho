@@ -1089,8 +1089,7 @@ fn test_c3_block_rejected_when_ring_member_target_key_not_in_utxo_set() {
         .expect_err("Block with counterfeit ring member must be rejected");
     let msg = format!("{}", err);
     assert!(
-        msg.contains("target_key not in UTXO set")
-            || msg.contains("ring member"),
+        msg.contains("target_key not in UTXO set") || msg.contains("ring member"),
         "Error should identify the counterfeit ring member, got: {}",
         msg
     );

@@ -14,15 +14,15 @@
 //! ```
 //!
 //! - `factor` is the cluster factor already used for progressive fees
-//!   (1.0x..6.0x in FACTOR_SCALE units). Factor-1 (background/commerce)
-//!   coins pay exactly zero — demurrage only binds wealthy clusters.
-//! - `elapsed` is how long the spent coins sat idle. Under ring signatures
-//!   the real input is hidden, so the elapsed value is the value-weighted
-//!   centroid of the PUBLIC creation heights of all ring members: a large
-//!   real input dominates its own ring's centroid, while the factor term
-//!   protects small spenders from old decoys entirely.
-//! - The charge is added to the transaction's minimum fee and flows through
-//!   the standard fee split into the redistribution lottery pool.
+//!   (1.0x..6.0x in FACTOR_SCALE units). Factor-1 (background/commerce) coins
+//!   pay exactly zero — demurrage only binds wealthy clusters.
+//! - `elapsed` is how long the spent coins sat idle. Under ring signatures the
+//!   real input is hidden, so the elapsed value is the value-weighted centroid
+//!   of the PUBLIC creation heights of all ring members: a large real input
+//!   dominates its own ring's centroid, while the factor term protects small
+//!   spenders from old decoys entirely.
+//! - The charge is added to the transaction's minimum fee and flows through the
+//!   standard fee split into the redistribution lottery pool.
 //!
 //! ## Why churning doesn't escape
 //!
@@ -50,8 +50,8 @@ pub const MAX_FACTOR_SCALED: u64 = 6 * FACTOR_SCALE;
 ///   from the same computation the progressive fee uses
 /// * `elapsed_blocks` - Holding duration in blocks (value-weighted ring
 ///   centroid of public UTXO creation heights)
-/// * `rate_bps` - Annual demurrage rate at maximum factor, in basis points
-///   (200 = 2%/year); use `MonetaryPolicy::demurrage_rate_bps(height)`
+/// * `rate_bps` - Annual demurrage rate at maximum factor, in basis points (200
+///   = 2%/year); use `MonetaryPolicy::demurrage_rate_bps(height)`
 /// * `blocks_per_year` - Blocks per year at the policy's assumed block time
 ///
 /// # Returns
@@ -75,15 +75,15 @@ pub fn demurrage_charge(
         return 0;
     }
 
-    // charge = value × rate_bps/10_000 × progressivity/5000 × elapsed/blocks_per_year
+    // charge = value × rate_bps/10_000 × progressivity/5000 ×
+    // elapsed/blocks_per_year
     //
     // Multiply before dividing to preserve precision; u128 bounds:
     // value (2^64) × rate_bps (2^14) × progressivity (2^13) ≈ 2^91, then
     // × elapsed (2^64) would overflow — so fold elapsed/blocks_per_year in
     // a separate u128 stage with a precision scale.
     const TIME_SCALE: u128 = 1_000_000;
-    let time_fraction =
-        (elapsed_blocks as u128 * TIME_SCALE) / blocks_per_year as u128;
+    let time_fraction = (elapsed_blocks as u128 * TIME_SCALE) / blocks_per_year as u128;
 
     let charge = transfer_value as u128 * rate_bps as u128 * progressivity as u128
         / 10_000
@@ -132,7 +132,13 @@ mod tests {
     fn test_factor_one_pays_zero() {
         // Background/commerce coins are exempt regardless of age or value
         assert_eq!(
-            demurrage_charge(u64::MAX, FACTOR_SCALE, BLOCKS_PER_YEAR * 10, 200, BLOCKS_PER_YEAR),
+            demurrage_charge(
+                u64::MAX,
+                FACTOR_SCALE,
+                BLOCKS_PER_YEAR * 10,
+                200,
+                BLOCKS_PER_YEAR
+            ),
             0
         );
     }
@@ -142,34 +148,62 @@ mod tests {
         // Factor 6.0, one year: exactly rate_bps of value
         // 1M × 2% = 20_000
         assert_eq!(
-            demurrage_charge(1_000_000, MAX_FACTOR_SCALED, BLOCKS_PER_YEAR, 200, BLOCKS_PER_YEAR),
+            demurrage_charge(
+                1_000_000,
+                MAX_FACTOR_SCALED,
+                BLOCKS_PER_YEAR,
+                200,
+                BLOCKS_PER_YEAR
+            ),
             20_000
         );
     }
 
     #[test]
     fn test_linear_in_factor_time_and_value() {
-        let full = demurrage_charge(1_000_000, MAX_FACTOR_SCALED, BLOCKS_PER_YEAR, 200, BLOCKS_PER_YEAR);
+        let full = demurrage_charge(
+            1_000_000,
+            MAX_FACTOR_SCALED,
+            BLOCKS_PER_YEAR,
+            200,
+            BLOCKS_PER_YEAR,
+        );
 
         // Half the progressivity range: factor 3.5 → (3500-1000)/5000 = 1/2
         let half_factor = demurrage_charge(1_000_000, 3_500, BLOCKS_PER_YEAR, 200, BLOCKS_PER_YEAR);
         assert_eq!(half_factor, full / 2);
 
         // Half the time
-        let half_time =
-            demurrage_charge(1_000_000, MAX_FACTOR_SCALED, BLOCKS_PER_YEAR / 2, 200, BLOCKS_PER_YEAR);
+        let half_time = demurrage_charge(
+            1_000_000,
+            MAX_FACTOR_SCALED,
+            BLOCKS_PER_YEAR / 2,
+            200,
+            BLOCKS_PER_YEAR,
+        );
         assert_eq!(half_time, full / 2);
 
         // Double the value
-        let double_value =
-            demurrage_charge(2_000_000, MAX_FACTOR_SCALED, BLOCKS_PER_YEAR, 200, BLOCKS_PER_YEAR);
+        let double_value = demurrage_charge(
+            2_000_000,
+            MAX_FACTOR_SCALED,
+            BLOCKS_PER_YEAR,
+            200,
+            BLOCKS_PER_YEAR,
+        );
         assert_eq!(double_value, full * 2);
     }
 
     #[test]
     fn test_zero_inputs() {
-        assert_eq!(demurrage_charge(1_000_000, 6_000, 0, 200, BLOCKS_PER_YEAR), 0);
-        assert_eq!(demurrage_charge(1_000_000, 6_000, 1000, 0, BLOCKS_PER_YEAR), 0);
+        assert_eq!(
+            demurrage_charge(1_000_000, 6_000, 0, 200, BLOCKS_PER_YEAR),
+            0
+        );
+        assert_eq!(
+            demurrage_charge(1_000_000, 6_000, 1000, 0, BLOCKS_PER_YEAR),
+            0
+        );
         assert_eq!(demurrage_charge(1_000_000, 6_000, 1000, 200, 0), 0);
         assert_eq!(demurrage_charge(0, 6_000, 1000, 200, BLOCKS_PER_YEAR), 0);
     }
@@ -187,9 +221,9 @@ mod tests {
         // decoys barely reduce the elapsed value.
         let current = 1_000_000u64;
         let members = [
-            (100_000_000, 0),       // real input: 100M, 1M blocks old
-            (1_000, current),        // fresh small decoy
-            (1_000, current),        // fresh small decoy
+            (100_000_000, 0), // real input: 100M, 1M blocks old
+            (1_000, current), // fresh small decoy
+            (1_000, current), // fresh small decoy
         ];
         let elapsed = ring_elapsed_centroid(&members, current);
         // 100M×1M / 100.002M ≈ 999_980
@@ -210,8 +244,7 @@ mod tests {
     fn test_churn_invariance() {
         // Paying demurrage at every churn sums to the same total as paying
         // once at the end: charge(T) = charge(T/2) + charge(T/2).
-        let one_year =
-            demurrage_charge(1_000_000, 6_000, BLOCKS_PER_YEAR, 200, BLOCKS_PER_YEAR);
+        let one_year = demurrage_charge(1_000_000, 6_000, BLOCKS_PER_YEAR, 200, BLOCKS_PER_YEAR);
         let half = demurrage_charge(1_000_000, 6_000, BLOCKS_PER_YEAR / 2, 200, BLOCKS_PER_YEAR);
         assert_eq!(one_year, half * 2);
     }

@@ -3,7 +3,8 @@
 //! Fingerprinting resistance testing utilities.
 //!
 //! This module provides tools for verifying that botho WebRTC traffic is
-//! statistically indistinguishable from legitimate WebRTC traffic (video calls).
+//! statistically indistinguishable from legitimate WebRTC traffic (video
+//! calls).
 //!
 //! # Overview
 //!
@@ -121,11 +122,7 @@ impl TrafficPattern {
         if self.inter_arrival_times.is_empty() {
             return 0.0;
         }
-        let total_us: u128 = self
-            .inter_arrival_times
-            .iter()
-            .map(|d| d.as_micros())
-            .sum();
+        let total_us: u128 = self.inter_arrival_times.iter().map(|d| d.as_micros()).sum();
         total_us as f64 / self.inter_arrival_times.len() as f64
     }
 
@@ -174,7 +171,8 @@ pub struct KsTestResult {
 }
 
 impl KsTestResult {
-    /// Check if the samples are indistinguishable at the given significance level.
+    /// Check if the samples are indistinguishable at the given significance
+    /// level.
     ///
     /// Returns true if p_value > significance_level, meaning we cannot reject
     /// the null hypothesis that the samples come from the same distribution.
@@ -609,7 +607,9 @@ pub fn generate_synthetic_webrtc_pattern(packet_count: usize) -> TrafficPattern 
 
         let iat = if i > 0 {
             let iat_us: f64 = iat_dist.sample(&mut rng);
-            Some(Duration::from_micros(iat_us.max(1000.0).min(100_000.0) as u64))
+            Some(Duration::from_micros(
+                iat_us.max(1000.0).min(100_000.0) as u64
+            ))
         } else {
             None
         };

@@ -26,18 +26,17 @@ use crate::{
         BlockBuilder, ConsensusConfig, ConsensusEvent, ConsensusService, LotteryFeeConfig,
         TransactionValidator,
     },
-    node::SharedLedger,
-    wallet::Wallet,
     network::{
         BlockTxn, CompactBlock, GetBlockTxn, NetworkDiscovery, NetworkEvent, QuorumBuilder,
         ReconstructionResult,
     },
-    node::{MintedMintingTx, Node},
+    node::{MintedMintingTx, Node, SharedLedger},
     rpc::{
         calculate_dir_size, init_metrics, start_metrics_server, start_rpc_server, FaucetState,
         MetricsUpdater, RpcState, WsBroadcaster, DATA_DIR_USAGE_BYTES,
     },
     transaction::Transaction,
+    wallet::Wallet,
 };
 
 /// Timeout for initial peer discovery (seconds)
@@ -259,8 +258,12 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                 // Initialize faucet if enabled in config (testnet only)
                 if config.faucet.enabled {
                     if !config.network_type.is_production() {
-                        info!("Faucet enabled: {} BTH per request", config.faucet.amount as f64 / 1_000_000_000_000.0);
-                        rpc_state = rpc_state.with_faucet(FaucetState::new(config.faucet.clone()), wallet);
+                        info!(
+                            "Faucet enabled: {} BTH per request",
+                            config.faucet.amount as f64 / 1_000_000_000_000.0
+                        );
+                        rpc_state =
+                            rpc_state.with_faucet(FaucetState::new(config.faucet.clone()), wallet);
                     } else {
                         warn!("Faucet is configured but disabled on mainnet for safety");
                         rpc_state = rpc_state.with_wallet(wallet);
@@ -1373,5 +1376,11 @@ fn apply_lottery_to_block(
         ledger.get_utxo_by_id(utxo_id).ok().flatten()
     };
 
-    BlockBuilder::apply_lottery(block, &candidates, stored_pool, utxo_lookup, &lottery_config)
+    BlockBuilder::apply_lottery(
+        block,
+        &candidates,
+        stored_pool,
+        utxo_lookup,
+        &lottery_config,
+    )
 }

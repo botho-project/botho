@@ -10,18 +10,20 @@
 //! Usage:
 //!   botho-metrics-daemon --node-url http://127.0.0.1:17101 --db /var/lib/botho-faucet/metrics.db
 
-mod db;
-mod collector;
 mod api;
+mod collector;
+mod db;
 mod rollup;
 
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::{
+    path::PathBuf,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use anyhow::Result;
 use clap::Parser;
-use tracing::{info, error, Level};
+use tracing::{error, info, Level};
 use tracing_subscriber::FmtSubscriber;
 
 use db::MetricsDb;
@@ -54,9 +56,7 @@ struct Args {
 #[tokio::main]
 async fn main() -> Result<()> {
     // Initialize logging
-    FmtSubscriber::builder()
-        .with_max_level(Level::INFO)
-        .init();
+    FmtSubscriber::builder().with_max_level(Level::INFO).init();
 
     let args = Args::parse();
 
@@ -104,7 +104,10 @@ async fn main() -> Result<()> {
 
     // Start collection loop
     let collection_interval = Duration::from_secs(args.interval);
-    info!("Starting collection loop (interval: {:?})", collection_interval);
+    info!(
+        "Starting collection loop (interval: {:?})",
+        collection_interval
+    );
 
     let mut interval_timer = tokio::time::interval(collection_interval);
 

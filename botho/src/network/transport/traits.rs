@@ -48,20 +48,21 @@
 
 use async_trait::async_trait;
 use libp2p::PeerId;
-use std::fmt::Debug;
-use std::io;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use std::{
+    fmt::Debug,
+    io,
+    pin::Pin,
+    task::{Context, Poll},
+};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
-use super::error::TransportError;
-use super::types::TransportType;
+use super::{error::TransportError, types::TransportType};
 
 /// A connection that can be read from and written to asynchronously.
 ///
-/// This trait combines [`AsyncRead`] and [`AsyncWrite`] with [`Send`] and [`Sync`]
-/// bounds required for use across async tasks. All transport connections must
-/// implement this trait.
+/// This trait combines [`AsyncRead`] and [`AsyncWrite`] with [`Send`] and
+/// [`Sync`] bounds required for use across async tasks. All transport
+/// connections must implement this trait.
 pub trait TransportConnection: AsyncRead + AsyncWrite + Send + Sync + Unpin + Debug {}
 
 /// Blanket implementation for any type that satisfies the bounds.

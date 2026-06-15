@@ -178,7 +178,8 @@ fn mine_block(
 }
 
 /// Apply the lottery fee-split / draw to a block using the ledger's pool and
-/// candidate set (single-ledger analogue of commands/run.rs::apply_lottery_to_block).
+/// candidate set (single-ledger analogue of
+/// commands/run.rs::apply_lottery_to_block).
 fn apply_lottery_to_block(block: Block, ledger: &Ledger) -> Block {
     let total_fees: u64 = block.transactions.iter().map(|tx| tx.fee).sum();
     let emission_share = block.minting_tx.lottery_emission_share();
@@ -195,7 +196,13 @@ fn apply_lottery_to_block(block: Block, ledger: &Ledger) -> Block {
     }
 
     let utxo_lookup = |utxo_id: &[u8; 36]| ledger.get_utxo_by_id(utxo_id).ok().flatten();
-    BlockBuilder::apply_lottery(block, &candidates, stored_pool, utxo_lookup, &lottery_config)
+    BlockBuilder::apply_lottery(
+        block,
+        &candidates,
+        stored_pool,
+        utxo_lookup,
+        &lottery_config,
+    )
 }
 
 /// Scan wallet for unspent UTXOs

@@ -179,10 +179,7 @@ impl ProtocolVersion {
     /// valid protocol version cannot be assumed to share our consensus
     /// rules, and honest-but-misconfigured peers are exactly what this
     /// check exists to exclude.
-    pub fn consensus_incompatibility(
-        peer_version: &Option<Self>,
-        local: &Self,
-    ) -> Option<Self> {
+    pub fn consensus_incompatibility(peer_version: &Option<Self>, local: &Self) -> Option<Self> {
         match peer_version {
             Some(pv) => (!pv.is_consensus_compatible(local)).then(|| pv.clone()),
             None => Some(Self {
@@ -1155,8 +1152,9 @@ impl NetworkDiscovery {
                 };
 
                 // Parse transport capabilities from agent_version
-                let transport_caps =
-                    super::transport::TransportCapabilities::from_agent_version(&info.agent_version);
+                let transport_caps = super::transport::TransportCapabilities::from_agent_version(
+                    &info.agent_version,
+                );
 
                 // Update peer entry with version and transport information
                 if let Some(entry) = self.peers.get_mut(&peer_id) {
@@ -1172,8 +1170,7 @@ impl NetworkDiscovery {
                 // what makes coordinated upgrades enforceable instead of
                 // silently divergent.
                 if let Some(lv) = &local_version {
-                    if let Some(pv) =
-                        ProtocolVersion::consensus_incompatibility(&peer_version, lv)
+                    if let Some(pv) = ProtocolVersion::consensus_incompatibility(&peer_version, lv)
                     {
                         warn!(
                             %peer_id,
@@ -1359,7 +1356,10 @@ mod tests {
 
         let peer_id = PeerId::random();
         let caps = TransportCapabilities::new(
-            vec![CapabilityTransportType::WebRTC, CapabilityTransportType::Plain],
+            vec![
+                CapabilityTransportType::WebRTC,
+                CapabilityTransportType::Plain,
+            ],
             CapabilityTransportType::WebRTC,
             NegotiationNatType::Open,
         );

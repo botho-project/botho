@@ -216,9 +216,9 @@ impl MonetaryPolicy {
     ///   would be miner coinbases, so routing emission would be circular at
     ///   best. Miners keep the full (large) reward while security depends
     ///   entirely on emission.
-    /// - The ramp counteracts the absolute decay of f x reward across
-    ///   halvings, maintaining redistribution intensity as wealth
-    ///   concentration accumulates.
+    /// - The ramp counteracts the absolute decay of f x reward across halvings,
+    ///   maintaining redistribution intensity as wealth concentration
+    ///   accumulates.
     /// - The cap preserves at least half of tail emission as the permanent
     ///   mining security budget.
     ///
@@ -513,8 +513,7 @@ impl DifficultyController {
         // CONSENSUS-CRITICAL: pure integer arithmetic — difficulty is
         // validated state (minting txs are rejected on mismatch), so every
         // node must compute the identical value.
-        let proposed =
-            (self.state.difficulty as u128 * expected as u128) / elapsed as u128;
+        let proposed = (self.state.difficulty as u128 * expected as u128) / elapsed as u128;
 
         self.apply_bounded_adjustment(proposed)
     }

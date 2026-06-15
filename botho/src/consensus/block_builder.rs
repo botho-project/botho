@@ -211,11 +211,12 @@ impl BlockBuilder {
     /// # Arguments
     /// * `block` - The block to add lottery results to
     /// * `candidates` - Lottery candidates with real cluster factors, from
-    ///   `Ledger::get_lottery_validation_candidates` — the SAME function
-    ///   block validation uses. Verification re-runs the draw, so proposer
-    ///   and validator candidate sets (values, factors, order) must match.
+    ///   `Ledger::get_lottery_validation_candidates` — the SAME function block
+    ///   validation uses. Verification re-runs the draw, so proposer and
+    ///   validator candidate sets (values, factors, order) must match.
     /// * `stored_pool` - Carryover lottery pool balance from the ledger
-    /// * `utxo_lookup` - Function to look up UTXO details by ID for key recovery
+    /// * `utxo_lookup` - Function to look up UTXO details by ID for key
+    ///   recovery
     /// * `lottery_config` - Configuration for fee splitting and lottery drawing
     ///
     /// # Returns
@@ -338,7 +339,8 @@ impl BlockBuilder {
         outputs
     }
 
-    /// Convert ClusterTagVector (on-chain format) to TagVector (cluster-tax format).
+    /// Convert ClusterTagVector (on-chain format) to TagVector (cluster-tax
+    /// format).
     ///
     /// Both represent the same concept but in different crate contexts.
     fn cluster_tags_to_tag_vector(
@@ -484,7 +486,13 @@ mod tests {
         };
 
         let lottery_config = LotteryFeeConfig::default();
-        let result = BlockBuilder::apply_lottery(block.clone(), &candidates, 0, utxo_lookup, &lottery_config);
+        let result = BlockBuilder::apply_lottery(
+            block.clone(),
+            &candidates,
+            0,
+            utxo_lookup,
+            &lottery_config,
+        );
 
         // No fees means no lottery
         assert!(result.lottery_outputs.is_empty());
@@ -502,7 +510,13 @@ mod tests {
         let utxo_lookup = |_: &[u8; 36]| None;
 
         let lottery_config = LotteryFeeConfig::default();
-        let result = BlockBuilder::apply_lottery(block.clone(), &candidates, 0, utxo_lookup, &lottery_config);
+        let result = BlockBuilder::apply_lottery(
+            block.clone(),
+            &candidates,
+            0,
+            utxo_lookup,
+            &lottery_config,
+        );
 
         // No candidates: the fee burn share (20%) is burned; the pool share
         // carries over via the persistent lottery pool
@@ -525,17 +539,21 @@ mod tests {
             mock_candidate([3u8; 36], 50_000_000, 30),  // 50M value, 70 blocks old
         ];
 
-        let utxo_lookup = |id: &[u8; 36]| {
-            match id[0] {
-                1 => Some(mock_utxo([1u8; 36], 100_000_000, 50)),
-                2 => Some(mock_utxo([2u8; 36], 200_000_000, 40)),
-                3 => Some(mock_utxo([3u8; 36], 50_000_000, 30)),
-                _ => None,
-            }
+        let utxo_lookup = |id: &[u8; 36]| match id[0] {
+            1 => Some(mock_utxo([1u8; 36], 100_000_000, 50)),
+            2 => Some(mock_utxo([2u8; 36], 200_000_000, 40)),
+            3 => Some(mock_utxo([3u8; 36], 50_000_000, 30)),
+            _ => None,
         };
 
         let lottery_config = LotteryFeeConfig::default();
-        let result = BlockBuilder::apply_lottery(block.clone(), &candidates, 0, utxo_lookup, &lottery_config);
+        let result = BlockBuilder::apply_lottery(
+            block.clone(),
+            &candidates,
+            0,
+            utxo_lookup,
+            &lottery_config,
+        );
 
         // Should have applied lottery - total_fees should be recorded
         assert_eq!(result.lottery_summary.total_fees, 10_000_000);
@@ -551,17 +569,16 @@ mod tests {
         } else {
             // Winners drawn: payout = min(fee pool share, block reward cap)
             let cap = result.minting_tx.reward;
-            assert_eq!(
-                result.lottery_summary.pool_distributed,
-                8_000_000.min(cap)
-            );
+            assert_eq!(result.lottery_summary.pool_distributed, 8_000_000.min(cap));
         }
     }
 
     #[test]
     fn test_cluster_tags_to_tag_vector_conversion() {
-        use bth_transaction_types::{ClusterId as TypesClusterId, ClusterTagEntry, ClusterTagVector};
         use bth_cluster_tax::ClusterId as TaxClusterId;
+        use bth_transaction_types::{
+            ClusterId as TypesClusterId, ClusterTagEntry, ClusterTagVector,
+        };
 
         // Create a ClusterTagVector with multiple entries
         let mut tags = ClusterTagVector::empty();

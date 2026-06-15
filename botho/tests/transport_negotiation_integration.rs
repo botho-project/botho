@@ -10,8 +10,7 @@
 //! - Fallback behavior when no common transport exists
 
 use std::time::Duration;
-use tokio::io::duplex;
-use tokio::time::timeout;
+use tokio::{io::duplex, time::timeout};
 
 use botho::network::{
     negotiate_transport_initiator, negotiate_transport_responder, select_transport,
@@ -67,7 +66,10 @@ async fn test_e2e_negotiate_falls_back_to_plain() {
 
     // Client only supports WebRTC
     let client_caps = TransportCapabilities::new(
-        vec![CapabilityTransportType::WebRTC, CapabilityTransportType::Plain],
+        vec![
+            CapabilityTransportType::WebRTC,
+            CapabilityTransportType::Plain,
+        ],
         CapabilityTransportType::WebRTC,
         NegotiationNatType::Open,
     );
@@ -189,19 +191,28 @@ fn test_select_transport_prefers_higher_score() {
     let peer_caps = TransportCapabilities::full(NegotiationNatType::Open);
 
     let selected = select_transport(&our_caps, &peer_caps);
-    assert_eq!(selected, CapabilityTransportType::WebRTC); // Highest preference score
+    assert_eq!(selected, CapabilityTransportType::WebRTC); // Highest preference
+                                                           // score
 }
 
 #[test]
 fn test_select_transport_considers_preference_order() {
     // We prefer TLS, peer prefers WebRTC
     let our_caps = TransportCapabilities::new(
-        vec![CapabilityTransportType::TlsTunnel, CapabilityTransportType::WebRTC, CapabilityTransportType::Plain],
+        vec![
+            CapabilityTransportType::TlsTunnel,
+            CapabilityTransportType::WebRTC,
+            CapabilityTransportType::Plain,
+        ],
         CapabilityTransportType::TlsTunnel,
         NegotiationNatType::Open,
     );
     let peer_caps = TransportCapabilities::new(
-        vec![CapabilityTransportType::WebRTC, CapabilityTransportType::TlsTunnel, CapabilityTransportType::Plain],
+        vec![
+            CapabilityTransportType::WebRTC,
+            CapabilityTransportType::TlsTunnel,
+            CapabilityTransportType::Plain,
+        ],
         CapabilityTransportType::WebRTC,
         NegotiationNatType::Open,
     );
@@ -376,8 +387,14 @@ fn test_nat_webrtc_compatibility_matrix() {
 #[test]
 fn test_transport_type_preference_ordering() {
     // Verify preference scores are ordered correctly
-    assert!(CapabilityTransportType::WebRTC.preference_score() > CapabilityTransportType::TlsTunnel.preference_score());
-    assert!(CapabilityTransportType::TlsTunnel.preference_score() > CapabilityTransportType::Plain.preference_score());
+    assert!(
+        CapabilityTransportType::WebRTC.preference_score()
+            > CapabilityTransportType::TlsTunnel.preference_score()
+    );
+    assert!(
+        CapabilityTransportType::TlsTunnel.preference_score()
+            > CapabilityTransportType::Plain.preference_score()
+    );
 }
 
 // ============================================================================
@@ -387,7 +404,8 @@ fn test_transport_type_preference_ordering() {
 #[test]
 fn test_negotiation_message_bincode_size() {
     // Verify messages are reasonably sized
-    let propose = NegotiationMessage::propose(&TransportCapabilities::full(NegotiationNatType::Open));
+    let propose =
+        NegotiationMessage::propose(&TransportCapabilities::full(NegotiationNatType::Open));
     let accept = NegotiationMessage::accept(CapabilityTransportType::WebRTC);
     let reject = NegotiationMessage::reject("No common transport available");
 

@@ -29,12 +29,14 @@
 //! - V2: Phase 1 committed tags (pseudo-tag-outputs + conservation proof)
 //! - V3: Phase 2 entropy proofs (adds optional entropy proof for decay credit)
 
-use super::committed_tags::{
-    CommittedTagMass, CommittedTagVector, CommittedTagVectorSecret, SchnorrProof,
-    TagConservationProof, TagConservationProver, TagConservationVerifier,
+use super::{
+    committed_tags::{
+        CommittedTagMass, CommittedTagVector, CommittedTagVectorSecret, SchnorrProof,
+        TagConservationProof, TagConservationProver, TagConservationVerifier,
+    },
+    entropy_proof::EntropyProof,
+    entropy_validation::TransactionVersion,
 };
-use super::entropy_proof::EntropyProof;
-use super::entropy_validation::TransactionVersion;
 use crate::{ClusterId, TagWeight};
 use curve25519_dalek::scalar::Scalar;
 

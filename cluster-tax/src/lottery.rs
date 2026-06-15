@@ -1,8 +1,8 @@
 //! Production lottery draw implementation.
 //!
-//! This module provides the core lottery selection logic for fee redistribution.
-//! Unlike the simulation module, this is designed for actual use in block production
-//! and validation with verifiable randomness.
+//! This module provides the core lottery selection logic for fee
+//! redistribution. Unlike the simulation module, this is designed for actual
+//! use in block production and validation with verifiable randomness.
 //!
 //! ## Selection Mode
 //!
@@ -171,8 +171,7 @@ impl LotteryCandidate {
                 // config constant must be identical across nodes, so the
                 // f64→bps conversion is deterministic).
                 let alpha_bps = (alpha.clamp(0.0, 1.0) * 10_000.0).round() as u128;
-                alpha_bps * max_value.max(1) as u128
-                    + (10_000 - alpha_bps) * self.value as u128
+                alpha_bps * max_value.max(1) as u128 + (10_000 - alpha_bps) * self.value as u128
             }
 
             SelectionMode::ClusterWeighted => {
@@ -227,7 +226,8 @@ pub struct LotteryWinner {
 /// * `config` - Lottery configuration
 ///
 /// # Returns
-/// `LotteryResult` with winners and payouts, or `None` if no eligible candidates.
+/// `LotteryResult` with winners and payouts, or `None` if no eligible
+/// candidates.
 pub fn draw_winners(
     candidates: &[LotteryCandidate],
     pool_amount: u64,
@@ -374,7 +374,13 @@ mod tests {
     use super::*;
 
     /// `factor` is in FACTOR_SCALE units (1000 = 1.0x .. 6000 = 6.0x).
-    fn make_candidate(id: u8, value: u64, factor: u64, entropy: f64, block: u64) -> LotteryCandidate {
+    fn make_candidate(
+        id: u8,
+        value: u64,
+        factor: u64,
+        entropy: f64,
+        block: u64,
+    ) -> LotteryCandidate {
         let mut utxo_id = [0u8; 36];
         utxo_id[0] = id;
         LotteryCandidate {
@@ -508,7 +514,10 @@ mod tests {
         let roll0 = verifiable_random_u128(&seed, 0);
         let roll1 = verifiable_random_u128(&seed, 1);
 
-        assert_ne!(roll0, roll1, "Different indices should produce different rolls");
+        assert_ne!(
+            roll0, roll1,
+            "Different indices should produce different rolls"
+        );
     }
 
     #[test]

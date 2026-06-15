@@ -1,21 +1,25 @@
-//! Consensus-level entropy proof validation for Phase 2B entropy-weighted decay.
+//! Consensus-level entropy proof validation for Phase 2B entropy-weighted
+//! decay.
 //!
 //! This module provides the consensus validation layer for entropy proofs,
 //! implementing version-aware validation and phase-based requirements.
 //!
 //! ## Relationship with `entropy_proof` module
 //!
-//! - `entropy_proof`: Provides proof structures (`EntropyProof`) and cryptographic
-//!   verification (`EntropyProofBuilder`, `EntropyProofVerifier`)
-//! - `entropy_validation` (this module): Provides consensus-level validation with
-//!   version awareness, phase transitions, and decay rate computation
+//! - `entropy_proof`: Provides proof structures (`EntropyProof`) and
+//!   cryptographic verification (`EntropyProofBuilder`, `EntropyProofVerifier`)
+//! - `entropy_validation` (this module): Provides consensus-level validation
+//!   with version awareness, phase transitions, and decay rate computation
 //!
 //! ## Version-Aware Validation
 //!
 //! The validation behavior depends on the current phase:
-//! - **Phase 1 (Optional)**: Entropy proofs optional, minimal decay credit if not provided
-//! - **Phase 2 (Recommended)**: Same as Phase 1, but signals upcoming requirement
-//! - **Phase 3 (RequiredForCredit)**: Required for decay credit, but tx still valid without
+//! - **Phase 1 (Optional)**: Entropy proofs optional, minimal decay credit if
+//!   not provided
+//! - **Phase 2 (Recommended)**: Same as Phase 1, but signals upcoming
+//!   requirement
+//! - **Phase 3 (RequiredForCredit)**: Required for decay credit, but tx still
+//!   valid without
 //! - **Phase 4 (Mandatory)**: Consensus rejection without proof
 
 use super::entropy_proof::{EntropyProof, EntropyProofVerifier, MIN_ENTROPY_THRESHOLD_SCALED};
@@ -172,8 +176,8 @@ impl Default for EntropyConsensusConfig {
             entropy_recommended_height: 1_000_000,
             entropy_required_height: 2_000_000,
             entropy_mandatory_height: 3_000_000,
-            base_decay_rate: 50_000,      // 5%
-            minimal_decay_rate: 5_000,    // 0.5%
+            base_decay_rate: 50_000,   // 5%
+            minimal_decay_rate: 5_000, // 0.5%
             min_entropy_threshold: MIN_ENTROPY_THRESHOLD_SCALED,
         }
     }
@@ -236,7 +240,8 @@ pub enum EntropyPhase {
 ///
 /// # Returns
 /// * `Ok(EntropyValidationResult)` - Validation result indicating decay credit
-/// * `Err(EntropyValidationError)` - If proof is invalid or missing when required
+/// * `Err(EntropyValidationError)` - If proof is invalid or missing when
+///   required
 pub fn validate_entropy_proof(
     entropy_proof: Option<&EntropyProof>,
     config: &EntropyConsensusConfig,
@@ -270,9 +275,7 @@ pub fn validate_entropy_proof(
         }
 
         // Phase 3: No proof - no decay credit (but tx valid)
-        (EntropyPhase::RequiredForCredit, None) => {
-            Ok(EntropyValidationResult::NoDecayCredit)
-        }
+        (EntropyPhase::RequiredForCredit, None) => Ok(EntropyValidationResult::NoDecayCredit),
 
         // Phase 4 (Mandatory): Proof provided - validate it
         (EntropyPhase::Mandatory, Some(proof)) => {
@@ -284,9 +287,7 @@ pub fn validate_entropy_proof(
         }
 
         // Phase 4 (Mandatory): No proof - consensus rejection
-        (EntropyPhase::Mandatory, None) => {
-            Err(EntropyValidationError::MissingEntropyProof)
-        }
+        (EntropyPhase::Mandatory, None) => Err(EntropyValidationError::MissingEntropyProof),
     }
 }
 
@@ -329,8 +330,10 @@ pub fn compute_decay_rate(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crypto::{CommittedTagVectorSecret, EntropyProofBuilder};
-    use crate::{ClusterId, TAG_WEIGHT_SCALE};
+    use crate::{
+        crypto::{CommittedTagVectorSecret, EntropyProofBuilder},
+        ClusterId, TAG_WEIGHT_SCALE,
+    };
     use rand_core::OsRng;
     use std::collections::HashMap;
 
@@ -349,10 +352,7 @@ mod tests {
         // Output: two clusters (>0 entropy)
         let output_secret = create_test_secret(
             1_000_000,
-            &[
-                (1, TAG_WEIGHT_SCALE / 2),
-                (2, TAG_WEIGHT_SCALE / 2),
-            ],
+            &[(1, TAG_WEIGHT_SCALE / 2), (2, TAG_WEIGHT_SCALE / 2)],
         );
 
         EntropyProofBuilder::new(vec![input_secret], vec![output_secret])
@@ -380,7 +380,11 @@ mod tests {
 
     #[test]
     fn test_transaction_version_byte_roundtrip() {
-        for version in [TransactionVersion::V1, TransactionVersion::V2, TransactionVersion::V3] {
+        for version in [
+            TransactionVersion::V1,
+            TransactionVersion::V2,
+            TransactionVersion::V3,
+        ] {
             let byte = version.to_byte();
             let restored = TransactionVersion::from_byte(byte);
             assert_eq!(restored, Some(version));

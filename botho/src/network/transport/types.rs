@@ -50,7 +50,11 @@ pub enum TransportType {
 impl TransportType {
     /// Get all available transport types.
     pub fn all() -> &'static [TransportType] {
-        &[TransportType::Plain, TransportType::WebRTC, TransportType::TlsTunnel]
+        &[
+            TransportType::Plain,
+            TransportType::WebRTC,
+            TransportType::TlsTunnel,
+        ]
     }
 
     /// Get the human-readable name of this transport.
@@ -85,7 +89,7 @@ impl TransportType {
     pub fn setup_overhead(&self) -> f64 {
         match self {
             TransportType::Plain => 1.0,
-            TransportType::WebRTC => 3.0, // ICE + DTLS handshake
+            TransportType::WebRTC => 3.0,    // ICE + DTLS handshake
             TransportType::TlsTunnel => 1.5, // TLS handshake
         }
     }
@@ -151,21 +155,48 @@ mod tests {
 
     #[test]
     fn test_transport_type_from_str() {
-        assert_eq!("plain".parse::<TransportType>().unwrap(), TransportType::Plain);
-        assert_eq!("webrtc".parse::<TransportType>().unwrap(), TransportType::WebRTC);
-        assert_eq!("tls-tunnel".parse::<TransportType>().unwrap(), TransportType::TlsTunnel);
+        assert_eq!(
+            "plain".parse::<TransportType>().unwrap(),
+            TransportType::Plain
+        );
+        assert_eq!(
+            "webrtc".parse::<TransportType>().unwrap(),
+            TransportType::WebRTC
+        );
+        assert_eq!(
+            "tls-tunnel".parse::<TransportType>().unwrap(),
+            TransportType::TlsTunnel
+        );
 
         // Aliases
-        assert_eq!("tcp".parse::<TransportType>().unwrap(), TransportType::Plain);
-        assert_eq!("rtc".parse::<TransportType>().unwrap(), TransportType::WebRTC);
-        assert_eq!("tls".parse::<TransportType>().unwrap(), TransportType::TlsTunnel);
-        assert_eq!("https".parse::<TransportType>().unwrap(), TransportType::TlsTunnel);
+        assert_eq!(
+            "tcp".parse::<TransportType>().unwrap(),
+            TransportType::Plain
+        );
+        assert_eq!(
+            "rtc".parse::<TransportType>().unwrap(),
+            TransportType::WebRTC
+        );
+        assert_eq!(
+            "tls".parse::<TransportType>().unwrap(),
+            TransportType::TlsTunnel
+        );
+        assert_eq!(
+            "https".parse::<TransportType>().unwrap(),
+            TransportType::TlsTunnel
+        );
     }
 
     #[test]
     fn test_transport_type_from_str_case_insensitive() {
-        assert_eq!("PLAIN".parse::<TransportType>().unwrap(), TransportType::Plain);
-        assert_eq!("WebRTC".parse::<TransportType>().unwrap(), TransportType::WebRTC);
+        assert_eq!(
+            "PLAIN".parse::<TransportType>().unwrap(),
+            TransportType::Plain
+        );
+        assert_eq!(
+            "WebRTC".parse::<TransportType>().unwrap(),
+            TransportType::WebRTC
+        );
     }
 
     #[test]

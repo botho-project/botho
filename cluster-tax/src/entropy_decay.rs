@@ -9,9 +9,9 @@
 //! self-transfer. While each individual transfer is rate-limited, the attacker
 //! eventually achieves full decay without any real commerce.
 //!
-//! Entropy-weighted decay solves this by only allowing decay when the receiver's
-//! cluster entropy increases. Self-transfers don't change entropy, so no decay
-//! applies regardless of timing.
+//! Entropy-weighted decay solves this by only allowing decay when the
+//! receiver's cluster entropy increases. Self-transfers don't change entropy,
+//! so no decay applies regardless of timing.
 //!
 //! # Properties
 //!
@@ -32,10 +32,13 @@
 //! # Ring Signature Support
 //!
 //! For ring signatures where we don't know which ring member is the real input,
-//! this module provides conservative calculations that defend against manipulation:
+//! this module provides conservative calculations that defend against
+//! manipulation:
 //!
-//! - **Conservative entropy delta**: Uses MAX input entropy among all ring members
-//! - **Age eligibility**: ALL ring members must be old enough for decay to apply
+//! - **Conservative entropy delta**: Uses MAX input entropy among all ring
+//!   members
+//! - **Age eligibility**: ALL ring members must be old enough for decay to
+//!   apply
 //! - **Attack prevention**: Blocks high-entropy decoy and young decoy attacks
 //!
 //! ## Ring Signature Usage Example
@@ -97,14 +100,17 @@
 //! 1. **High-entropy decoy attack**: Blocked by using MAX input entropy
 //!    - Attacker can't pick high-entropy decoys to inflate their delta
 //!
-//! 2. **Young decoy attack**: Blocked by requiring ALL members to be age-eligible
+//! 2. **Young decoy attack**: Blocked by requiring ALL members to be
+//!    age-eligible
 //!    - Attacker can't pick old decoys to force decay on young coins
 //!
 //! 3. **Self-transfer with decoys**: Blocked by entropy check
 //!    - Even with decoys, self-transfer doesn't increase entropy
 
-use crate::age_decay::AgeDecayConfig;
-use crate::tag::{TagVector, TagWeight, TAG_WEIGHT_SCALE};
+use crate::{
+    age_decay::AgeDecayConfig,
+    tag::{TagVector, TagWeight, TAG_WEIGHT_SCALE},
+};
 
 /// Configuration for entropy-weighted decay.
 #[derive(Clone, Debug)]
@@ -127,7 +133,7 @@ pub struct EntropyDecayConfig {
 impl Default for EntropyDecayConfig {
     fn default() -> Self {
         Self {
-            min_entropy_delta: 0.1, // Require at least 0.1 bits of entropy increase
+            min_entropy_delta: 0.1,  // Require at least 0.1 bits of entropy increase
             base_decay_rate: 50_000, // 5% base decay
             decay_scaling: EntropyScaling::Linear,
             age_config: Some(AgeDecayConfig::default()),
@@ -790,7 +796,8 @@ fn simulate_attack_entropy_weighted(
 /// # Security Properties
 ///
 /// - **High-entropy decoy attack**: Blocked by using MAX input entropy
-///   (attacker can't inflate their output entropy relative to low-entropy input)
+///   (attacker can't inflate their output entropy relative to low-entropy
+///   input)
 /// - **Young decoy attack**: Handled separately via age checking
 /// - **Conservative approach**: Assumes sender is trying to minimize decay
 ///
@@ -801,7 +808,8 @@ fn simulate_attack_entropy_weighted(
 ///
 /// # Returns
 ///
-/// The conservative entropy delta (output entropy - max input entropy), clamped to >= 0.
+/// The conservative entropy delta (output entropy - max input entropy), clamped
+/// to >= 0.
 pub fn conservative_entropy_delta(ring_member_tags: &[TagVector], output_tags: &TagVector) -> f64 {
     if ring_member_tags.is_empty() {
         return 0.0;
@@ -946,7 +954,8 @@ impl RingEntropyDecayInfo {
     ///
     /// * `ring_member_tags` - Tag vectors for each ring member
     /// * `output_tags` - Tag vector for the mixed output
-    /// * `ring_creation_blocks` - Block heights when each ring member was created
+    /// * `ring_creation_blocks` - Block heights when each ring member was
+    ///   created
     /// * `current_block` - Current block height
     /// * `config` - Entropy decay configuration
     ///
@@ -999,9 +1008,7 @@ impl RingEntropyDecayInfo {
             .map(|tv| tv.collision_entropy())
             .collect();
 
-        let max_input_entropy = member_entropies
-            .iter()
-            .fold(0.0_f64, |a, &b| a.max(b));
+        let max_input_entropy = member_entropies.iter().fold(0.0_f64, |a, &b| a.max(b));
 
         let output_entropy = output_tags.collision_entropy();
         let conservative_delta = (output_entropy - max_input_entropy).max(0.0);
@@ -1094,16 +1101,20 @@ mod tests {
         let config = EntropyDecayConfig::default();
 
         // Self-transfer: incoming tags same as receiver
-        let result =
-            calculate_entropy_decay(&tags, 1000, &tags, 1000, // Same tags
-                                    &config);
+        let result = calculate_entropy_decay(
+            &tags, 1000, &tags, 1000, // Same tags
+            &config,
+        );
 
         // No entropy change = no decay
         assert!(
             !result.decay_applied,
             "Self-transfer should not trigger decay"
         );
-        assert_eq!(result.entropy_delta, 0.0, "Self-transfer has zero entropy delta");
+        assert_eq!(
+            result.entropy_delta, 0.0,
+            "Self-transfer has zero entropy delta"
+        );
     }
 
     #[test]
@@ -1143,7 +1154,7 @@ mod tests {
     fn test_patient_wash_blocked() {
         let c1 = ClusterId::new(1);
         let strategy = AttackStrategy::PatientWash {
-            interval_blocks: 720, // Maximum patience
+            interval_blocks: 720,   // Maximum patience
             duration_blocks: 60480, // 1 week
         };
 
@@ -1157,13 +1168,8 @@ mod tests {
         );
 
         // With entropy-weighted decay: patient attacker blocked
-        let entropy_result = simulate_attack_entropy_weighted(
-            &strategy,
-            c1,
-            100_000_000,
-            TAG_WEIGHT_SCALE,
-            60480,
-        );
+        let entropy_result =
+            simulate_attack_entropy_weighted(&strategy, c1, 100_000_000, TAG_WEIGHT_SCALE, 60480);
 
         // Age-based allows significant decay
         assert!(
@@ -1195,16 +1201,14 @@ mod tests {
             transfers_per_counterparty: 10,
         };
 
-        let entropy_result = simulate_attack_entropy_weighted(
-            &strategy,
-            c1,
-            100_000_000,
-            TAG_WEIGHT_SCALE,
-            60480,
-        );
+        let entropy_result =
+            simulate_attack_entropy_weighted(&strategy, c1, 100_000_000, TAG_WEIGHT_SCALE, 60480);
 
         // Sybil attack blocked: fake counterparties don't add entropy
-        assert_eq!(entropy_result.decay_events, 0, "Sybil attack should be blocked");
+        assert_eq!(
+            entropy_result.decay_events, 0,
+            "Sybil attack should be blocked"
+        );
         assert_eq!(
             entropy_result.tag_remaining_fraction, 1.0,
             "No decay for sybil attack"
@@ -1219,13 +1223,8 @@ mod tests {
             total_transactions: 100,
         };
 
-        let entropy_result = simulate_attack_entropy_weighted(
-            &strategy,
-            c1,
-            100_000_000,
-            TAG_WEIGHT_SCALE,
-            60480,
-        );
+        let entropy_result =
+            simulate_attack_entropy_weighted(&strategy, c1, 100_000_000, TAG_WEIGHT_SCALE, 60480);
 
         // Legitimate commerce allows decay
         assert!(
@@ -1301,7 +1300,8 @@ mod tests {
                 ..Default::default()
             };
 
-            let result = calculate_entropy_decay(&receiver_tags, 1000, &incoming_tags, 1000, &config);
+            let result =
+                calculate_entropy_decay(&receiver_tags, 1000, &incoming_tags, 1000, &config);
 
             assert!(
                 result.decay_applied,
@@ -1332,8 +1332,8 @@ mod tests {
             &receiver_tags,
             0,
             1000,
-            Some(100),  // Created at block 100
-            Some(500),  // Current block 500 (only 400 blocks old)
+            Some(100), // Created at block 100
+            Some(500), // Current block 500 (only 400 blocks old)
             &config,
         );
 
@@ -1342,7 +1342,10 @@ mod tests {
             "Young UTXO should block decay even with entropy"
         );
         assert!(
-            matches!(result.block_reason, Some(DecayBlockReason::UtxoTooYoung { .. })),
+            matches!(
+                result.block_reason,
+                Some(DecayBlockReason::UtxoTooYoung { .. })
+            ),
             "Should report UTXO too young"
         );
 
@@ -1358,10 +1361,7 @@ mod tests {
             &config,
         );
 
-        assert!(
-            result3.decay_applied,
-            "Old UTXO with commerce should decay"
-        );
+        assert!(result3.decay_applied, "Old UTXO with commerce should decay");
     }
 
     // ========================================================================
@@ -1592,10 +1592,7 @@ mod tests {
         // Conservative approach uses MAX input entropy (from high-entropy decoys)
         // Output entropy is likely lower than max input, so delta <= 0
         // Decay should be 0 (attack blocked)
-        assert_eq!(
-            decay, 0,
-            "High-entropy decoy attack should be blocked"
-        );
+        assert_eq!(decay, 0, "High-entropy decoy attack should be blocked");
     }
 
     #[test]
@@ -1661,7 +1658,10 @@ mod tests {
         assert_eq!(info.member_age_eligible, vec![true, false]);
         assert!(matches!(
             info.block_reason,
-            Some(RingDecayBlockReason::SomeUtxosTooYoung { ineligible_count: 1, total_count: 2 })
+            Some(RingDecayBlockReason::SomeUtxosTooYoung {
+                ineligible_count: 1,
+                total_count: 2
+            })
         ));
     }
 
@@ -1675,7 +1675,10 @@ mod tests {
         let info = RingEntropyDecayInfo::analyze(&[], &output_tags, &[], 1000, &config);
 
         assert!(!info.decay_applied());
-        assert!(matches!(info.block_reason, Some(RingDecayBlockReason::EmptyRing)));
+        assert!(matches!(
+            info.block_reason,
+            Some(RingDecayBlockReason::EmptyRing)
+        ));
     }
 
     #[test]

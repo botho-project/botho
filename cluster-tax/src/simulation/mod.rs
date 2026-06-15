@@ -13,8 +13,8 @@
 //! ## Constrained Analysis
 //!
 //! The `constrained_analysis` submodule extends privacy simulation to analyze
-//! the impact of wallet-side tag-based constraints (age similarity, factor ceiling)
-//! on ring signature anonymity.
+//! the impact of wallet-side tag-based constraints (age similarity, factor
+//! ceiling) on ring signature anonymity.
 //!
 //! ## Lottery Simulation
 //!

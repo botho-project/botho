@@ -24,7 +24,8 @@ pub const TEST_RING_SIZE: usize = 20;
 
 /// Trivial PoW difficulty for fast testing.
 ///
-/// Must match the chain's initial difficulty (`block::difficulty::INITIAL_DIFFICULTY`
+/// Must match the chain's initial difficulty
+/// (`block::difficulty::INITIAL_DIFFICULTY`
 /// / `node::minter::INITIAL_DIFFICULTY` = `0x00FF_FFFF_FFFF_FFFF`) — block
 /// acceptance now enforces `header.difficulty == chain.difficulty` (audit
 /// cycle 6, C1). A trivially-easy difficulty here is fine for tests because

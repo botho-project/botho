@@ -1,8 +1,8 @@
 //! Metrics collection from Botho node
 
-use std::sync::{Arc, Mutex};
-use anyhow::{Result, Context};
+use anyhow::{Context, Result};
 use serde::Deserialize;
+use std::sync::{Arc, Mutex};
 use tracing::debug;
 
 use crate::db::{MetricsDb, MetricsSample};
@@ -72,14 +72,18 @@ pub async fn collect_metrics(node_url: &str, db: &Arc<Mutex<MetricsDb>>) -> Resu
         anyhow::bail!("RPC error {}: {}", error.code, error.message);
     }
 
-    let status = rpc_response.result
-        .context("No result in RPC response")?;
+    let status = rpc_response.result.context("No result in RPC response")?;
 
-    debug!("Received node status: height={}, peers={}", status.chain_height, status.peer_count);
+    debug!(
+        "Received node status: height={}, peers={}",
+        status.chain_height, status.peer_count
+    );
 
     // Calculate tx_delta
     let mut db_lock = db.lock().unwrap();
-    let last_tx = db_lock.get_last_tx_count()?.unwrap_or(status.total_transactions);
+    let last_tx = db_lock
+        .get_last_tx_count()?
+        .unwrap_or(status.total_transactions);
     let tx_delta = status.total_transactions.saturating_sub(last_tx) as i64;
 
     // Update last tx count

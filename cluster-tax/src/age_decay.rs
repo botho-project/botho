@@ -135,9 +135,11 @@ impl RingDecayInfo {
     /// This returns `true` only if ALL ring members are eligible for decay.
     /// This is the conservative choice because:
     /// - If the real input is young (not eligible), decay shouldn't apply
-    /// - If ANY decoy is young, we conservatively assume it might be the real one
+    /// - If ANY decoy is young, we conservatively assume it might be the real
+    ///   one
     ///
-    /// This prevents attackers from using old decoys to force decay on young coins.
+    /// This prevents attackers from using old decoys to force decay on young
+    /// coins.
     ///
     /// For Phase 1 (public tags), this is the recommended approach as it
     /// provides safety without requiring ZK proofs.
@@ -467,7 +469,11 @@ mod tests {
         let factor = ring_cluster_factor(&ring_tags, &cluster_wealth, total_supply);
 
         // Background-only = 0 cluster factor
-        assert!(factor < 0.001, "Background should have ~0 factor, got {}", factor);
+        assert!(
+            factor < 0.001,
+            "Background should have ~0 factor, got {}",
+            factor
+        );
     }
 
     #[test]

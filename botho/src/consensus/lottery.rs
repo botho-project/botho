@@ -69,8 +69,7 @@ impl LotteryFeeConfig {
     ///
     /// Returns (pool_amount, burn_amount).
     pub fn split_fees(&self, total_fees: u64) -> (u64, u64) {
-        let pool_amount =
-            (total_fees as u128 * self.pool_fraction_permille as u128 / 1000) as u64;
+        let pool_amount = (total_fees as u128 * self.pool_fraction_permille as u128 / 1000) as u64;
         let burn_amount = total_fees.saturating_sub(pool_amount);
         (pool_amount, burn_amount)
     }
@@ -114,7 +113,11 @@ impl BlockLotteryResult {
     ///
     /// Only the fee burn share is burned; the pool share (fees + emission)
     /// carries over to future blocks via the persistent lottery pool.
-    pub fn no_winners(block_height: u64, total_fees: u64, accounting: &LotteryPoolAccounting) -> Self {
+    pub fn no_winners(
+        block_height: u64,
+        total_fees: u64,
+        accounting: &LotteryPoolAccounting,
+    ) -> Self {
         Self {
             block_height,
             total_fees,
@@ -193,8 +196,8 @@ impl LotteryPoolAccounting {
 /// * `emission_share` - Lottery share of the block reward
 ///   (`MintingTx::lottery_emission_share`)
 /// * `stored_pool` - Carryover pool balance before this block
-/// * `payout_cap` - Maximum payout per block (the block reward;
-///   anti-grinding bound)
+/// * `payout_cap` - Maximum payout per block (the block reward; anti-grinding
+///   bound)
 pub fn compute_pool_accounting(
     total_fees: u64,
     emission_share: u64,
@@ -288,7 +291,8 @@ pub fn draw_lottery_winners(
 
 /// Verify a lottery drawing result.
 ///
-/// Re-runs the drawing with the same parameters and verifies the result matches.
+/// Re-runs the drawing with the same parameters and verifies the result
+/// matches.
 ///
 /// # Arguments
 /// * `candidates` - Eligible UTXOs (must match what was used in draw)
@@ -473,7 +477,8 @@ impl std::error::Error for LotteryValidationError {}
 ///
 /// # Arguments
 /// * `block` - The block to validate
-/// * `candidates` - Eligible UTXOs from the UTXO set (must be at state before block)
+/// * `candidates` - Eligible UTXOs from the UTXO set (must be at state before
+///   block)
 /// * `prev_block_hash` - Hash of the previous block (for verifiable randomness)
 /// * `config` - Lottery configuration
 ///
@@ -562,7 +567,13 @@ pub fn validate_block_lottery(
     };
 
     // 3. Verify the lottery drawing
-    if !verify_lottery_result(candidates, &block_result, &accounting, prev_block_hash, config) {
+    if !verify_lottery_result(
+        candidates,
+        &block_result,
+        &accounting,
+        prev_block_hash,
+        config,
+    ) {
         return Err(LotteryValidationError::InvalidDrawing);
     }
 
@@ -785,8 +796,7 @@ mod tests {
         ];
 
         let accounting = compute_pool_accounting(1000, 0, 0, 1000, &config);
-        let result =
-            draw_lottery_winners(&candidates, 1000, &accounting, 100, &prev_hash, &config);
+        let result = draw_lottery_winners(&candidates, 1000, &accounting, 100, &prev_hash, &config);
 
         assert!(result.has_winners());
         assert_eq!(result.winners.len(), 2);
@@ -815,8 +825,7 @@ mod tests {
         ];
 
         let accounting = compute_pool_accounting(1000, 0, 0, 1000, &config);
-        let result =
-            draw_lottery_winners(&candidates, 1000, &accounting, 100, &prev_hash, &config);
+        let result = draw_lottery_winners(&candidates, 1000, &accounting, 100, &prev_hash, &config);
 
         // Verification should pass with same parameters
         assert!(verify_lottery_result(
@@ -911,7 +920,9 @@ mod tests {
 
         // Create transactions that sum to total_fees
         let transactions = if total_fees > 0 {
-            vec![crate::transaction::Transaction::new_stub_with_fee(total_fees)]
+            vec![crate::transaction::Transaction::new_stub_with_fee(
+                total_fees,
+            )]
         } else {
             vec![]
         };
@@ -951,10 +962,7 @@ mod tests {
         let prev_hash = [0u8; 32];
 
         // Create candidates that are eligible (old enough)
-        let candidates = vec![
-            make_candidate(1, 10_000, 0),
-            make_candidate(2, 20_000, 0),
-        ];
+        let candidates = vec![make_candidate(1, 10_000, 0), make_candidate(2, 20_000, 0)];
 
         // Create a lottery summary with incorrect split
         // Total fees = 1000, so expected: pool=800, burn=200
@@ -998,10 +1006,7 @@ mod tests {
         };
         let prev_hash = [42u8; 32];
 
-        let candidates = vec![
-            make_candidate(1, 10_000, 0),
-            make_candidate(2, 20_000, 0),
-        ];
+        let candidates = vec![make_candidate(1, 10_000, 0), make_candidate(2, 20_000, 0)];
 
         // First draw to get a valid result
         let accounting = compute_pool_accounting(1000, 0, 0, 1000, &config);
@@ -1038,11 +1043,9 @@ mod tests {
         let block = create_test_block(100, prev_hash, 1000, lottery_summary, lottery_outputs);
 
         let result = validate_block_lottery(&block, &candidates, 0, &prev_hash, &config);
-        // Should fail either with PayoutMismatch or InvalidDrawing depending on validation order
-        assert!(
-            result.is_err(),
-            "Payout mismatch should fail validation"
-        );
+        // Should fail either with PayoutMismatch or InvalidDrawing depending on
+        // validation order
+        assert!(result.is_err(), "Payout mismatch should fail validation");
     }
 
     #[test]
@@ -1189,8 +1192,7 @@ mod tests {
             amount_burned: expected_burn,
             lottery_seed: [0u8; 32],
         };
-        let valid_block =
-            create_test_block(100, prev_hash, total_fees, valid_summary, vec![]);
+        let valid_block = create_test_block(100, prev_hash, total_fees, valid_summary, vec![]);
         let candidates: Vec<LotteryCandidate> = vec![];
 
         let r1 = validate_block_lottery(&valid_block, &candidates, 0, &prev_hash, &config);
@@ -1206,13 +1208,19 @@ mod tests {
                 valid_block.minting_tx.reward,
                 &config,
             );
-            assert_eq!(valid_block.lottery_summary.amount_burned, accounting.fee_burn);
+            assert_eq!(
+                valid_block.lottery_summary.amount_burned,
+                accounting.fee_burn
+            );
             // No-winner block: the pool share carries over (returned new pool),
             // so the summary's pool_distributed is 0 even though payout > 0.
             if valid_block.lottery_outputs.is_empty() {
                 assert_eq!(valid_block.lottery_summary.pool_distributed, 0);
             } else {
-                assert_eq!(valid_block.lottery_summary.pool_distributed, accounting.payout);
+                assert_eq!(
+                    valid_block.lottery_summary.pool_distributed,
+                    accounting.payout
+                );
             }
         }
 
@@ -1236,8 +1244,10 @@ mod tests {
         // Mirrors fuzz_cluster_tax_math: cluster factor in documented bounds,
         // demurrage exempt for factor-1, emission share <= reward, and the
         // monetary primitives never panic on extreme inputs.
-        use bth_cluster_tax::demurrage::{FACTOR_SCALE, MAX_FACTOR_SCALED};
-        use bth_cluster_tax::{demurrage_charge, ClusterFactorCurve, MonetaryPolicy};
+        use bth_cluster_tax::{
+            demurrage::{FACTOR_SCALE, MAX_FACTOR_SCALED},
+            demurrage_charge, ClusterFactorCurve, MonetaryPolicy,
+        };
 
         let curve = ClusterFactorCurve::default_params();
         // Valid mid-range wealth and the u64 extremes all stay in [1000, 6000].

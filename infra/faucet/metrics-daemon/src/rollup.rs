@@ -9,15 +9,15 @@
 //! - Daily aggregates: 1 year
 
 use anyhow::Result;
-use chrono::{Utc, Duration, Timelike};
-use tracing::{info, debug};
+use chrono::{Duration, Timelike, Utc};
+use tracing::{debug, info};
 
 use crate::db::MetricsDb;
 
 /// Retention periods in seconds
-const RETENTION_5MIN: i64 = 24 * 3600;           // 24 hours
-const RETENTION_HOURLY: i64 = 30 * 24 * 3600;    // 30 days
-const RETENTION_DAILY: i64 = 365 * 24 * 3600;    // 1 year
+const RETENTION_5MIN: i64 = 24 * 3600; // 24 hours
+const RETENTION_HOURLY: i64 = 30 * 24 * 3600; // 30 days
+const RETENTION_DAILY: i64 = 365 * 24 * 3600; // 1 year
 
 /// Run the complete rollup process
 pub fn run_rollup(db: &mut MetricsDb) -> Result<()> {
@@ -104,8 +104,8 @@ fn cleanup_old_data(db: &mut MetricsDb, now: chrono::DateTime<Utc>) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
     use crate::db::MetricsSample;
+    use tempfile::TempDir;
 
     #[test]
     fn test_rollup_aggregation() {

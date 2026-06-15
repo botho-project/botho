@@ -65,9 +65,15 @@ use std::{
 use tokio::net::TcpListener;
 use tracing::{debug, error, info, warn};
 
+use crate::{
+    address::Address,
+    ledger::Ledger,
+    mempool::Mempool,
+    transaction::{TxOutput, MIN_TX_FEE},
+    wallet::Wallet,
+};
 use bth_cluster_tax::{FeeConfig, TransactionType};
 use bth_transaction_types::constants::Network;
-use crate::{address::Address, ledger::Ledger, mempool::Mempool, transaction::{TxOutput, MIN_TX_FEE}, wallet::Wallet};
 
 /// JSON-RPC request
 #[derive(Debug, Deserialize)]
@@ -151,7 +157,8 @@ pub struct RpcState {
     pub rate_limiter: Arc<RateLimiter>,
     /// Faucet state (None if faucet is disabled)
     pub faucet: Option<Arc<FaucetState>>,
-    /// Wallet for signing faucet transactions (None if no wallet or faucet disabled)
+    /// Wallet for signing faucet transactions (None if no wallet or faucet
+    /// disabled)
     pub wallet: Option<Arc<Wallet>>,
 }
 
@@ -642,17 +649,19 @@ fn get_entropy_proof_from_tx(tx: &crate::transaction::Transaction) -> Option<Val
     // if let Some(ref extended_sig) = tx.extended_signature {
     //     if let Some(ref proof) = extended_sig.entropy_proof {
     //         return Some(json!({
-    //             "entropyBeforeCommitment": hex::encode(proof.entropy_before_commitment.as_bytes()),
-    //             "entropyAfterCommitment": hex::encode(proof.entropy_after_commitment.as_bytes()),
-    //             "proofSize": proof.serialized_size(),
-    //         }));
+    //             "entropyBeforeCommitment":
+    // hex::encode(proof.entropy_before_commitment.as_bytes()),
+    // "entropyAfterCommitment":
+    // hex::encode(proof.entropy_after_commitment.as_bytes()),
+    // "proofSize": proof.serialized_size(),         }));
     //     }
     // }
     let _ = tx; // Suppress unused variable warning
     None
 }
 
-/// Compute the entropy validation result based on proof presence and block height.
+/// Compute the entropy validation result based on proof presence and block
+/// height.
 ///
 /// Returns one of:
 /// - "valid": Proof provided and verified
@@ -1019,8 +1028,9 @@ async fn handle_wallet_balance(id: Value, state: &RpcState) -> JsonRpcResponse {
         // Check if this output belongs to us and get subaddress index
         if let Some(subaddress_index) = utxo.output.belongs_to(wallet.account_key()) {
             // Recover the one-time private key to compute key image
-            if let Some(onetime_private) =
-                utxo.output.recover_spend_key(wallet.account_key(), subaddress_index)
+            if let Some(onetime_private) = utxo
+                .output
+                .recover_spend_key(wallet.account_key(), subaddress_index)
             {
                 let key_image = bth_crypto_ring_signature::KeyImage::from(&onetime_private);
                 let key_image_bytes = key_image.as_bytes();
@@ -1031,7 +1041,11 @@ async fn handle_wallet_balance(id: Value, state: &RpcState) -> JsonRpcResponse {
                 }
 
                 // Skip if already spent on-chain
-                if ledger.is_key_image_spent(&key_image_bytes).unwrap_or(None).is_some() {
+                if ledger
+                    .is_key_image_spent(&key_image_bytes)
+                    .unwrap_or(None)
+                    .is_some()
+                {
                     continue;
                 }
 
@@ -1186,9 +1200,11 @@ async fn handle_submit_pq_tx(id: Value, _params: &Value, _state: &RpcState) -> J
 ///
 /// The response includes entropy proof information when available:
 /// - `entropyProof`: Entropy proof data (null if not provided)
-/// - `entropyValidationResult`: Validation status ("valid", "not_provided", "no_decay_credit", "invalid")
+/// - `entropyValidationResult`: Validation status ("valid", "not_provided",
+///   "no_decay_credit", "invalid")
 /// - `effectiveDecayRate`: Computed decay rate based on entropy proof
-/// - `entropyProofRequired`: Whether entropy proof is required at this block height
+/// - `entropyProofRequired`: Whether entropy proof is required at this block
+///   height
 async fn handle_get_transaction(id: Value, params: &Value, state: &RpcState) -> JsonRpcResponse {
     // Parse tx_hash parameter
     let tx_hash_hex = match params
@@ -1292,8 +1308,10 @@ async fn handle_get_transaction(id: Value, params: &Value, state: &RpcState) -> 
 ///
 /// # Entropy Validation Fields (Phase 2)
 ///
-/// - `entropyValidationResult`: Validation status ("valid", "not_provided", "no_decay_credit")
-/// - `entropyProofRequired`: Whether entropy proof is required at this block height
+/// - `entropyValidationResult`: Validation status ("valid", "not_provided",
+///   "no_decay_credit")
+/// - `entropyProofRequired`: Whether entropy proof is required at this block
+///   height
 async fn handle_get_transaction_status(
     id: Value,
     params: &Value,
@@ -1349,9 +1367,10 @@ async fn handle_get_transaction_status(
     // Look up in blockchain
     match ledger.get_transaction_confirmations(&tx_hash) {
         Ok(Some(confirmations)) => {
-            // For confirmed transactions, we need the block height to determine entropy status
-            // Since this is the lightweight endpoint, we use chain height as approximation
-            // Full entropy info is available via getTransaction
+            // For confirmed transactions, we need the block height to determine entropy
+            // status Since this is the lightweight endpoint, we use chain
+            // height as approximation Full entropy info is available via
+            // getTransaction
             let entropy_proof_required = is_entropy_proof_required(chain_state.height);
             let entropy_validation_result = if entropy_proof_required {
                 "no_decay_credit" // Default without proof after required height
@@ -2267,7 +2286,10 @@ async fn handle_faucet_request(
         // Check if this output belongs to us and get subaddress index
         if let Some(subaddress_index) = utxo.output.belongs_to(wallet.account_key()) {
             // Recover the one-time private key
-            if let Some(onetime_private) = utxo.output.recover_spend_key(wallet.account_key(), subaddress_index) {
+            if let Some(onetime_private) = utxo
+                .output
+                .recover_spend_key(wallet.account_key(), subaddress_index)
+            {
                 // Compute the key image
                 let key_image = bth_crypto_ring_signature::KeyImage::from(&onetime_private);
                 let key_image_bytes = key_image.as_bytes();
@@ -2368,11 +2390,21 @@ async fn handle_faucet_request(
     }
 
     // Create the transaction
-    let tx = match wallet.create_private_transaction(&selected_utxos, outputs, fee, current_height, &ledger) {
+    let tx = match wallet.create_private_transaction(
+        &selected_utxos,
+        outputs,
+        fee,
+        current_height,
+        &ledger,
+    ) {
         Ok(t) => t,
         Err(e) => {
             error!("Faucet: failed to create transaction: {}", e);
-            return JsonRpcResponse::error(id, -32000, &format!("Failed to create transaction: {}", e));
+            return JsonRpcResponse::error(
+                id,
+                -32000,
+                &format!("Failed to create transaction: {}", e),
+            );
         }
     };
 
@@ -2388,7 +2420,11 @@ async fn handle_faucet_request(
         let ledger = read_lock!(state.ledger, id);
         if let Err(e) = mempool.add_tx(tx.clone(), &ledger) {
             error!("Faucet: failed to add transaction to mempool: {}", e);
-            return JsonRpcResponse::error(id, -32000, &format!("Failed to submit transaction: {}", e));
+            return JsonRpcResponse::error(
+                id,
+                -32000,
+                &format!("Failed to submit transaction: {}", e),
+            );
         }
     }
 
@@ -2412,7 +2448,9 @@ async fn handle_faucet_request(
     let response = faucet::FaucetResponse::success(tx_hash_hex, amount);
     match serde_json::to_value(&response) {
         Ok(value) => JsonRpcResponse::success(id, value),
-        Err(e) => JsonRpcResponse::error(id, -32000, &format!("Failed to serialize response: {}", e)),
+        Err(e) => {
+            JsonRpcResponse::error(id, -32000, &format!("Failed to serialize response: {}", e))
+        }
     }
 }
 
@@ -2467,7 +2505,11 @@ fn calculate_dispensed_from_blockchain(
     // Step 1: Update the key image cache with any new blocks.
     // We only scan blocks that haven't been processed yet.
     let cached_height = faucet.key_image_cache().cached_height;
-    let start_height = if cached_height == 0 { 0 } else { cached_height + 1 };
+    let start_height = if cached_height == 0 {
+        0
+    } else {
+        cached_height + 1
+    };
 
     if chain_state.height >= start_height {
         let mut cache = faucet.key_image_cache_mut();
@@ -2558,7 +2600,8 @@ fn calculate_dispensed_from_blockchain(
 /// Handle faucet status request
 ///
 /// Returns information about the faucet configuration and current stats.
-/// Daily and lifetime dispensed are calculated from the blockchain for accuracy.
+/// Daily and lifetime dispensed are calculated from the blockchain for
+/// accuracy.
 async fn handle_faucet_status(id: Value, state: &RpcState) -> JsonRpcResponse {
     match &state.faucet {
         Some(faucet) => {
@@ -2576,7 +2619,12 @@ async fn handle_faucet_status(id: Value, state: &RpcState) -> JsonRpcResponse {
                         );
                     }
                 };
-                let dispense_stats = calculate_dispensed_from_blockchain(&wallet, &ledger, faucet, stats.amount_per_request);
+                let dispense_stats = calculate_dispensed_from_blockchain(
+                    &wallet,
+                    &ledger,
+                    faucet,
+                    stats.amount_per_request,
+                );
                 // The blockchain reflects only *confirmed* dispenses. Faucet
                 // transactions sit in the mempool until mined, so a freshly
                 // dispensed request would otherwise report zero. The in-memory

@@ -482,9 +482,10 @@ mod cli {
         },
 
         /// Emission-schedule sweep (issue #350): run a fixed grid of candidate
-        /// MonetaryPolicy schedules (S1..S5) through the agent-based sim plus an
-        /// analytic monetary model, and emit a neutral comparison report
-        /// (markdown + CSV). Presents data only; recommends nothing.
+        /// MonetaryPolicy schedules (S1..S5) through the agent-based sim plus
+        /// an analytic monetary model, and emit a neutral comparison
+        /// report (markdown + CSV). Presents data only; recommends
+        /// nothing.
         EmissionSweep {
             /// Number of simulated rounds for the distribution track
             #[arg(long, default_value = "4000")]
@@ -1188,7 +1189,10 @@ mod cli {
         };
 
         if show_progress {
-            eprintln!("(progress display not available; running {} rounds...)", rounds);
+            eprintln!(
+                "(progress display not available; running {} rounds...)",
+                rounds
+            );
         }
         let result = run_simulation(&mut agents, &config);
         let summary = result.metrics.summary();
@@ -2946,10 +2950,7 @@ mod cli {
         use bth_cluster_tax::{compare_decay_modes, AttackStrategy, DecayMode};
 
         let strategies = vec![
-            (
-                "rapid-wash",
-                AttackStrategy::RapidWash { transfers: 100 },
-            ),
+            ("rapid-wash", AttackStrategy::RapidWash { transfers: 100 }),
             (
                 "patient-wash-720",
                 AttackStrategy::PatientWash {
@@ -3004,18 +3005,29 @@ mod cli {
         println!("├───────────────────────┼─────────┼───────┼───────┼─────────┼───────┼───────┤");
 
         for (name, strategy) in &strategies {
-            let comparison = compare_decay_modes(strategy, initial_wealth, initial_factor, duration_blocks);
+            let comparison =
+                compare_decay_modes(strategy, initial_wealth, initial_factor, duration_blocks);
 
-            let age_result = comparison.iter()
+            let age_result = comparison
+                .iter()
                 .find(|(m, _)| *m == DecayMode::AgeBased)
                 .map(|(_, r)| r);
-            let entropy_result = comparison.iter()
+            let entropy_result = comparison
+                .iter()
                 .find(|(m, _)| *m == DecayMode::EntropyWeighted)
                 .map(|(_, r)| r);
 
             if let (Some(age), Some(entropy)) = (age_result, entropy_result) {
-                let age_resist = if age.tag_remaining_fraction > 0.5 { "✓" } else { "✗" };
-                let entropy_resist = if entropy.tag_remaining_fraction > 0.5 { "✓" } else { "✗" };
+                let age_resist = if age.tag_remaining_fraction > 0.5 {
+                    "✓"
+                } else {
+                    "✗"
+                };
+                let entropy_resist = if entropy.tag_remaining_fraction > 0.5 {
+                    "✓"
+                } else {
+                    "✗"
+                };
 
                 println!(
                     "│ {:<21} │ {:>6.1}% │ {:>5} │   {}   │ {:>6.1}% │ {:>5} │   {}   │",
@@ -3040,15 +3052,21 @@ mod cli {
         println!("ANALYSIS");
         println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         println!();
-        println!("Key Insight: Entropy-weighted decay only applies when cluster_entropy() increases.");
+        println!(
+            "Key Insight: Entropy-weighted decay only applies when cluster_entropy() increases."
+        );
         println!();
         println!("  • SELF-TRANSFERS: Same tags in, same tags out → entropy unchanged → NO decay");
         println!("  • SYBIL ATTACK: Fake counterparties have attacker's tags → entropy unchanged → NO decay");
-        println!("  • REAL COMMERCE: Different cluster tags mix → entropy increases → decay applies");
+        println!(
+            "  • REAL COMMERCE: Different cluster tags mix → entropy increases → decay applies"
+        );
         println!();
         println!("Advantages of entropy-weighted decay:");
         println!("  1. ✓ Resistant to rapid wash trading (no entropy change)");
-        println!("  2. ✓ Resistant to patient wash trading (no entropy change regardless of timing)");
+        println!(
+            "  2. ✓ Resistant to patient wash trading (no entropy change regardless of timing)"
+        );
         println!("  3. ✓ Resistant to sybil wash trading (fake identities don't add entropy)");
         println!("  4. ✓ Allows natural decay through legitimate commerce");
         println!("  5. ✓ Privacy preserved (uses existing cluster_entropy() calculation)");
@@ -3091,12 +3109,16 @@ mod cli {
         };
 
         let initial_factor = 6.0; // Maximum cluster factor
-        let comparison = compare_decay_modes(&strategy, initial_wealth, initial_factor, duration_blocks);
+        let comparison =
+            compare_decay_modes(&strategy, initial_wealth, initial_factor, duration_blocks);
 
         println!("╔════════════════════════════════════════════════════════════════════════════════════════╗");
         println!("║                     ATTACK RESISTANCE ANALYSIS                                         ║");
         println!("╠════════════════════════════════════════════════════════════════════════════════════════╣");
-        println!("║  Strategy:           {:<30}                                    ║", strategy_name);
+        println!(
+            "║  Strategy:           {:<30}                                    ║",
+            strategy_name
+        );
         println!("║  Initial Wealth:     {:>12}                                                         ║", initial_wealth);
         println!("║  Duration:           {:>6} blocks (~{:.1} days)                                          ║",
             duration_blocks, duration_blocks as f64 / 8640.0);
@@ -3111,14 +3133,21 @@ mod cli {
             };
 
             let attack_success = result.tag_remaining_fraction < 0.5;
-            let status = if attack_success { "VULNERABLE ✗" } else { "RESISTANT ✓" };
+            let status = if attack_success {
+                "VULNERABLE ✗"
+            } else {
+                "RESISTANT ✓"
+            };
 
             println!("┌─────────────────────────────────────────────────┐");
             println!("│ {:^47} │", mode_name);
             println!("├─────────────────────────────────────────────────┤");
             println!("│ Initial tag weight:     {:>20}  │", result.initial_tag);
             println!("│ Final tag weight:       {:>20}  │", result.final_tag);
-            println!("│ Tag remaining:          {:>19.2}%  │", result.tag_remaining_fraction * 100.0);
+            println!(
+                "│ Tag remaining:          {:>19.2}%  │",
+                result.tag_remaining_fraction * 100.0
+            );
             println!("│ Decay events:           {:>20}  │", result.decay_events);
             println!("│ Total attempts:         {:>20}  │", result.total_attempts);
             println!("│ Attack status:          {:>20}  │", status);
@@ -3127,20 +3156,36 @@ mod cli {
         }
 
         // Summary
-        let age_result = comparison.iter().find(|(m, _)| *m == DecayMode::AgeBased).map(|(_, r)| r);
-        let entropy_result = comparison.iter().find(|(m, _)| *m == DecayMode::EntropyWeighted).map(|(_, r)| r);
+        let age_result = comparison
+            .iter()
+            .find(|(m, _)| *m == DecayMode::AgeBased)
+            .map(|(_, r)| r);
+        let entropy_result = comparison
+            .iter()
+            .find(|(m, _)| *m == DecayMode::EntropyWeighted)
+            .map(|(_, r)| r);
 
         if let (Some(age), Some(entropy)) = (age_result, entropy_result) {
             println!("Summary:");
-            println!("  Age-based:        {:.1}% remaining ({} decay events)",
-                age.tag_remaining_fraction * 100.0, age.decay_events);
-            println!("  Entropy-weighted: {:.1}% remaining ({} decay events)",
-                entropy.tag_remaining_fraction * 100.0, entropy.decay_events);
+            println!(
+                "  Age-based:        {:.1}% remaining ({} decay events)",
+                age.tag_remaining_fraction * 100.0,
+                age.decay_events
+            );
+            println!(
+                "  Entropy-weighted: {:.1}% remaining ({} decay events)",
+                entropy.tag_remaining_fraction * 100.0,
+                entropy.decay_events
+            );
 
             if entropy.tag_remaining_fraction > age.tag_remaining_fraction {
-                let improvement = (entropy.tag_remaining_fraction - age.tag_remaining_fraction) * 100.0;
+                let improvement =
+                    (entropy.tag_remaining_fraction - age.tag_remaining_fraction) * 100.0;
                 println!();
-                println!("  ✓ Entropy-weighted decay provides {:.1}% better attack resistance!", improvement);
+                println!(
+                    "  ✓ Entropy-weighted decay provides {:.1}% better attack resistance!",
+                    improvement
+                );
             }
         }
     }
@@ -3178,12 +3223,26 @@ mod cli {
             };
             let comparison = compare_decay_modes(&strategy, initial_wealth, 6.0, duration_blocks);
 
-            let age_result = comparison.iter().find(|(m, _)| *m == DecayMode::AgeBased).map(|(_, r)| r);
-            let entropy_result = comparison.iter().find(|(m, _)| *m == DecayMode::EntropyWeighted).map(|(_, r)| r);
+            let age_result = comparison
+                .iter()
+                .find(|(m, _)| *m == DecayMode::AgeBased)
+                .map(|(_, r)| r);
+            let entropy_result = comparison
+                .iter()
+                .find(|(m, _)| *m == DecayMode::EntropyWeighted)
+                .map(|(_, r)| r);
 
             if let (Some(age), Some(entropy)) = (age_result, entropy_result) {
-                let age_status = if age.tag_remaining_fraction > 0.5 { "Resistant" } else { "Vulnerable" };
-                let entropy_status = if entropy.tag_remaining_fraction > 0.5 { "Resistant" } else { "Vulnerable" };
+                let age_status = if age.tag_remaining_fraction > 0.5 {
+                    "Resistant"
+                } else {
+                    "Vulnerable"
+                };
+                let entropy_status = if entropy.tag_remaining_fraction > 0.5 {
+                    "Resistant"
+                } else {
+                    "Vulnerable"
+                };
 
                 println!(
                     "│   {:>5.1}   │  {:>6.1}%  │ {:^11} │  {:>6.1}%  │ {:^11} │",
@@ -3216,8 +3275,14 @@ mod cli {
             };
             let comparison = compare_decay_modes(&strategy, initial_wealth, 6.0, duration_blocks);
 
-            let age_result = comparison.iter().find(|(m, _)| *m == DecayMode::AgeBased).map(|(_, r)| r);
-            let entropy_result = comparison.iter().find(|(m, _)| *m == DecayMode::EntropyWeighted).map(|(_, r)| r);
+            let age_result = comparison
+                .iter()
+                .find(|(m, _)| *m == DecayMode::AgeBased)
+                .map(|(_, r)| r);
+            let entropy_result = comparison
+                .iter()
+                .find(|(m, _)| *m == DecayMode::EntropyWeighted)
+                .map(|(_, r)| r);
 
             if let (Some(age), Some(entropy)) = (age_result, entropy_result) {
                 println!(
@@ -3245,12 +3310,16 @@ mod cli {
         println!("     • Entropy-weighted decay remains resistant regardless of timing");
         println!();
         println!("  2. Partial Commerce:");
-        println!("     • Age-based: All transactions (legit or not) cause decay after age requirement");
+        println!(
+            "     • Age-based: All transactions (legit or not) cause decay after age requirement"
+        );
         println!("     • Entropy-weighted: Only legitimate commerce causes decay (proportional to ratio)");
         println!();
         println!("  3. Key Insight:");
         println!("     Entropy-weighted decay provides resistance proportional to the attacker's");
-        println!("     legitimate commerce ratio. Pure wash trading = 0% decay, regardless of patience.");
+        println!(
+            "     legitimate commerce ratio. Pure wash trading = 0% decay, regardless of patience."
+        );
     }
 
     /// Parameter sweep for the combined progressive mechanism.
@@ -3271,9 +3340,21 @@ mod cli {
         const SYBIL_ACCOUNTS: u32 = 10;
         let total_wealth: u64 = 100_000_000 * BTH;
 
-        let decays: Vec<f64> = if quick { vec![0.03] } else { vec![0.01, 0.03, 0.10] };
-        let thresholds_bth: Vec<u64> = if quick { vec![1_000] } else { vec![100, 1_000, 5_000] };
-        let penalties: Vec<f64> = if quick { vec![1.0] } else { vec![0.5, 1.0, 2.0] };
+        let decays: Vec<f64> = if quick {
+            vec![0.03]
+        } else {
+            vec![0.01, 0.03, 0.10]
+        };
+        let thresholds_bth: Vec<u64> = if quick {
+            vec![1_000]
+        } else {
+            vec![100, 1_000, 5_000]
+        };
+        let penalties: Vec<f64> = if quick {
+            vec![1.0]
+        } else {
+            vec![0.5, 1.0, 2.0]
+        };
 
         let make_config = |decay: f64, threshold_bth: u64| -> LotteryConfig {
             let mut config = LotteryConfig::combined_mechanism();
@@ -3301,11 +3382,15 @@ mod cli {
                 .collect();
             let parker = sim.add_owner(
                 total_wealth * 5 / 100,
-                SybilStrategy::ParkingAttack { split_target: PARKER_SPLIT },
+                SybilStrategy::ParkingAttack {
+                    split_target: PARKER_SPLIT,
+                },
             );
             let sybil = sim.add_owner(
                 total_wealth * 5 / 100,
-                SybilStrategy::MultiAccount { num_accounts: SYBIL_ACCOUNTS },
+                SybilStrategy::MultiAccount {
+                    num_accounts: SYBIL_ACCOUNTS,
+                },
             );
             (sim, parker, sybil, whales)
         };
@@ -3331,7 +3416,11 @@ mod cli {
         baseline_config.pool_fraction = 0.0;
         let (mut baseline_sim, _, _, _) = build(baseline_config);
         let baseline_initial = baseline_sim.calculate_gini();
-        baseline_sim.advance_blocks_immediate(blocks, txs_per_block, TransactionModel::ValueWeighted);
+        baseline_sim.advance_blocks_immediate(
+            blocks,
+            txs_per_block,
+            TransactionModel::ValueWeighted,
+        );
         let baseline_final = baseline_sim.calculate_gini();
         println!(
             "Baseline (burn-only, no lottery): Gini {:.4} -> {:.4} (delta {:+.4})",
@@ -3362,10 +3451,13 @@ mod cli {
                 let initial_gini = sim.calculate_gini();
                 let parker_wealth = sim.owner_value(parker) as f64;
                 let sybil_wealth = sim.owner_value(sybil) as f64;
-                let whale_wealth: f64 =
-                    whales.iter().map(|id| sim.owner_value(*id) as f64).sum();
+                let whale_wealth: f64 = whales.iter().map(|id| sim.owner_value(*id) as f64).sum();
 
-                sim.advance_blocks_immediate(blocks, txs_per_block, TransactionModel::ValueWeighted);
+                sim.advance_blocks_immediate(
+                    blocks,
+                    txs_per_block,
+                    TransactionModel::ValueWeighted,
+                );
 
                 let final_gini = sim.calculate_gini();
                 let whale_winnings: u64 = whales
@@ -3374,10 +3466,16 @@ mod cli {
                     .sum();
                 // Winnings per unit of initial wealth, honest whales = reference.
                 let honest_rate = whale_winnings as f64 / whale_wealth;
-                let parker_winnings =
-                    sim.owners.get(&parker).map(|o| o.total_winnings).unwrap_or(0);
-                let sybil_winnings =
-                    sim.owners.get(&sybil).map(|o| o.total_winnings).unwrap_or(0);
+                let parker_winnings = sim
+                    .owners
+                    .get(&parker)
+                    .map(|o| o.total_winnings)
+                    .unwrap_or(0);
+                let sybil_winnings = sim
+                    .owners
+                    .get(&sybil)
+                    .map(|o| o.total_winnings)
+                    .unwrap_or(0);
                 let parking_adv = if honest_rate > 0.0 {
                     (parker_winnings as f64 / parker_wealth) / honest_rate
                 } else {
@@ -3424,11 +3522,9 @@ mod cli {
                 let mut cfg = make_config(run.decay, run.threshold_bth);
                 cfg.split_penalty_multiplier = penalty;
                 let split_factor = cfg.structure_factor(1, PARKER_SPLIT);
-                let split_cost =
-                    cfg.base_fee as f64 * run.parker_cluster_factor * split_factor;
+                let split_cost = cfg.base_fee as f64 * run.parker_cluster_factor * split_factor;
                 let parker_wealth = (total_wealth * 5 / 100) as f64;
-                let extra_winnings =
-                    run.parker_winnings as f64 - run.honest_rate * parker_wealth;
+                let extra_winnings = run.parker_winnings as f64 - run.honest_rate * parker_wealth;
                 let parking_roi = if split_cost > 0.0 {
                     extra_winnings / split_cost
                 } else {
@@ -3453,7 +3549,8 @@ mod cli {
                 );
 
                 if penalty == 1.0 && run.decay == 0.03 && run.threshold_bth == 1_000 {
-                    sweet_spot = Some((gini_delta, vs_baseline, run.final_utxos as u64, parking_roi));
+                    sweet_spot =
+                        Some((gini_delta, vs_baseline, run.final_utxos as u64, parking_roi));
                 }
             }
         }
@@ -3482,10 +3579,7 @@ mod cli {
                 if vs_baseline > 0.05 { "PASS" } else { "FAIL" },
                 vs_baseline
             );
-            println!(
-                "- Absolute Gini reduction: {:+.4}",
-                gini_delta
-            );
+            println!("- Absolute Gini reduction: {:+.4}", gini_delta);
             println!(
                 "- Parking attack defeated (ROI < 1.0): {} ({:.2})",
                 if parking_roi < 1.0 { "PASS" } else { "FAIL" },
@@ -3505,10 +3599,10 @@ mod cli {
     /// Structural Gini-reduction experiment.
     ///
     /// Seven scenarios isolating each redistribution lever:
-    ///   A. Status quo: value-weighted payout, fees only (known: zero Gini effect)
-    ///   B. Uniform-per-UTXO payout, fees only (payout progressivity alone)
-    ///   C. Value-weighted payout + emission (control: proportional payout of
-    ///      emission should be Gini-neutral)
+    ///   A. Status quo: value-weighted payout, fees only (known: zero Gini
+    /// effect)   B. Uniform-per-UTXO payout, fees only (payout
+    /// progressivity alone)   C. Value-weighted payout + emission (control:
+    /// proportional payout of      emission should be Gini-neutral)
     ///   D. Uniform payout + emission (the naive full proposal, honest whale)
     ///   E. D with a strategic whale: splits into N UTXOs and churns them to
     ///      stay lottery-eligible (gamed equilibrium for uniform payouts)
@@ -3574,19 +3668,97 @@ mod cli {
             demurrage: Demurrage,
         }
         let scenarios = [
-            Scenario { name: "A: status quo (VW payout, fees only)", payout: Payout::Vw, emission: false, whale: Whale::Honest, demurrage: Demurrage::None },
-            Scenario { name: "B: uniform payout, fees only", payout: Payout::Uniform, emission: false, whale: Whale::Honest, demurrage: Demurrage::None },
-            Scenario { name: "C: VW payout + emission", payout: Payout::Vw, emission: true, whale: Whale::Honest, demurrage: Demurrage::None },
-            Scenario { name: "D: uniform payout + emission", payout: Payout::Uniform, emission: true, whale: Whale::Honest, demurrage: Demurrage::None },
-            Scenario { name: "E: D + whale split+churn (gamed)", payout: Payout::Uniform, emission: true, whale: Whale::SplitChurn, demurrage: Demurrage::None },
-            Scenario { name: "F: VW payout + emission + demurrage", payout: Payout::Vw, emission: true, whale: Whale::Honest, demurrage: Demurrage::Daily },
-            Scenario { name: "G: F + whale split+churn (gaming attempt)", payout: Payout::Vw, emission: true, whale: Whale::SplitChurn, demurrage: Demurrage::Daily },
-            Scenario { name: "H: cluster-tilted payout + emission", payout: Payout::ClusterTilted, emission: true, whale: Whale::Honest, demurrage: Demurrage::None },
-            Scenario { name: "I: H + whale split+churn (gaming attempt)", payout: Payout::ClusterTilted, emission: true, whale: Whale::SplitChurn, demurrage: Demurrage::None },
-            Scenario { name: "J: H + demurrage daily (original model)", payout: Payout::ClusterTilted, emission: true, whale: Whale::Honest, demurrage: Demurrage::Daily },
-            Scenario { name: "K: H + demurrage AT SPEND (as implemented)", payout: Payout::ClusterTilted, emission: true, whale: Whale::Honest, demurrage: Demurrage::AtSpend },
-            Scenario { name: "L: K + whale split+churn (gaming attempt)", payout: Payout::ClusterTilted, emission: true, whale: Whale::SplitChurn, demurrage: Demurrage::AtSpend },
-            Scenario { name: "M: K + whale PARKS FOREVER (escape attempt)", payout: Payout::ClusterTilted, emission: true, whale: Whale::Parker, demurrage: Demurrage::AtSpend },
+            Scenario {
+                name: "A: status quo (VW payout, fees only)",
+                payout: Payout::Vw,
+                emission: false,
+                whale: Whale::Honest,
+                demurrage: Demurrage::None,
+            },
+            Scenario {
+                name: "B: uniform payout, fees only",
+                payout: Payout::Uniform,
+                emission: false,
+                whale: Whale::Honest,
+                demurrage: Demurrage::None,
+            },
+            Scenario {
+                name: "C: VW payout + emission",
+                payout: Payout::Vw,
+                emission: true,
+                whale: Whale::Honest,
+                demurrage: Demurrage::None,
+            },
+            Scenario {
+                name: "D: uniform payout + emission",
+                payout: Payout::Uniform,
+                emission: true,
+                whale: Whale::Honest,
+                demurrage: Demurrage::None,
+            },
+            Scenario {
+                name: "E: D + whale split+churn (gamed)",
+                payout: Payout::Uniform,
+                emission: true,
+                whale: Whale::SplitChurn,
+                demurrage: Demurrage::None,
+            },
+            Scenario {
+                name: "F: VW payout + emission + demurrage",
+                payout: Payout::Vw,
+                emission: true,
+                whale: Whale::Honest,
+                demurrage: Demurrage::Daily,
+            },
+            Scenario {
+                name: "G: F + whale split+churn (gaming attempt)",
+                payout: Payout::Vw,
+                emission: true,
+                whale: Whale::SplitChurn,
+                demurrage: Demurrage::Daily,
+            },
+            Scenario {
+                name: "H: cluster-tilted payout + emission",
+                payout: Payout::ClusterTilted,
+                emission: true,
+                whale: Whale::Honest,
+                demurrage: Demurrage::None,
+            },
+            Scenario {
+                name: "I: H + whale split+churn (gaming attempt)",
+                payout: Payout::ClusterTilted,
+                emission: true,
+                whale: Whale::SplitChurn,
+                demurrage: Demurrage::None,
+            },
+            Scenario {
+                name: "J: H + demurrage daily (original model)",
+                payout: Payout::ClusterTilted,
+                emission: true,
+                whale: Whale::Honest,
+                demurrage: Demurrage::Daily,
+            },
+            Scenario {
+                name: "K: H + demurrage AT SPEND (as implemented)",
+                payout: Payout::ClusterTilted,
+                emission: true,
+                whale: Whale::Honest,
+                demurrage: Demurrage::AtSpend,
+            },
+            Scenario {
+                name: "L: K + whale split+churn (gaming attempt)",
+                payout: Payout::ClusterTilted,
+                emission: true,
+                whale: Whale::SplitChurn,
+                demurrage: Demurrage::AtSpend,
+            },
+            Scenario {
+                name: "M: K + whale PARKS FOREVER (escape attempt)",
+                payout: Payout::ClusterTilted,
+                emission: true,
+                whale: Whale::Parker,
+                demurrage: Demurrage::AtSpend,
+            },
         ];
 
         println!("Structural Gini Reduction Experiment");
@@ -3654,19 +3826,16 @@ mod cli {
                 sim.add_owner_with_factor(total_wealth / 4 / 30, SybilStrategy::Normal, 2.0);
             }
             for _ in 0..9 {
-                sim.add_owner_with_factor(
-                    total_wealth * 65 / 100 / 9,
-                    SybilStrategy::Normal,
-                    6.0,
-                );
+                sim.add_owner_with_factor(total_wealth * 65 / 100 / 9, SybilStrategy::Normal, 6.0);
             }
             let whale_strategy = match sc.whale {
                 Whale::Honest => SybilStrategy::Normal,
-                Whale::SplitChurn => SybilStrategy::MultiAccount { num_accounts: split },
+                Whale::SplitChurn => SybilStrategy::MultiAccount {
+                    num_accounts: split,
+                },
                 Whale::Parker => SybilStrategy::PermanentParker,
             };
-            let whale_id =
-                sim.add_owner_with_factor(total_wealth * 5 / 100, whale_strategy, 6.0);
+            let whale_id = sim.add_owner_with_factor(total_wealth * 5 / 100, whale_strategy, 6.0);
 
             let owner_ids: Vec<u64> = sim.owners.keys().copied().collect();
             let total_value = |sim: &LotterySimulation| -> u64 {
@@ -3675,10 +3844,7 @@ mod cli {
 
             let gini0 = sim.calculate_gini();
             let whale_share0 = sim.owner_value(whale_id) as f64 / total_value(&sim) as f64;
-            let poor_share0 = poor_ids
-                .iter()
-                .map(|id| sim.owner_value(*id))
-                .sum::<u64>() as f64
+            let poor_share0 = poor_ids.iter().map(|id| sim.owner_value(*id)).sum::<u64>() as f64
                 / total_value(&sim) as f64;
 
             for b in 1..=blocks {
@@ -3705,8 +3871,7 @@ mod cli {
                         .iter()
                         .filter_map(|(id, u)| {
                             let progressivity = ((u.cluster_factor - 1.0) / 5.0).clamp(0.0, 1.0);
-                            let charge =
-                                (u.value as f64 * daily_demurrage * progressivity) as u64;
+                            let charge = (u.value as f64 * daily_demurrage * progressivity) as u64;
                             (charge > 0).then_some((*id, charge))
                         })
                         .collect();
@@ -3741,8 +3906,7 @@ mod cli {
             let poor_share_f =
                 poor_ids.iter().map(|id| sim.owner_value(*id)).sum::<u64>() as f64 / total_f;
             let whale = sim.owners.get(&whale_id).unwrap();
-            let whale_net =
-                whale.total_winnings as i64 - whale.total_fees_paid as i64;
+            let whale_net = whale.total_winnings as i64 - whale.total_fees_paid as i64;
 
             println!(
                 "| {} | {:.4} | {:.4} | {:+.4} | {:+.4} | {:.2}% -> {:.2}% | {:+} | {:.2}% -> {:.2}% |",
@@ -3767,7 +3931,9 @@ mod cli {
         println!("- G vs F tests whether demurrage-based redistribution is split-proof.");
         println!("- I vs H tests whether cluster-tilted payouts are split-proof.");
         println!("- J is the combined candidate: progressive intake (fees+demurrage) and");
-        println!("  progressive payout (cluster-tilted), both anchored to split-proof cluster tags.");
+        println!(
+            "  progressive payout (cluster-tilted), both anchored to split-proof cluster tags."
+        );
         println!("- K vs J compares spend-time demurrage (as implemented in the node) to the");
         println!("  daily balance charge the original validation assumed (issue #314).");
         println!("- M measures the permanent-parker escape: never spending avoids spend-time");

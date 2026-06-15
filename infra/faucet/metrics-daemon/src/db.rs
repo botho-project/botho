@@ -5,10 +5,10 @@
 //! - metrics_hourly: Hourly aggregates (30d retention)
 //! - metrics_daily: Daily aggregates (1y retention)
 
-use std::path::Path;
 use anyhow::Result;
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 /// A single metrics sample
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,7 +49,8 @@ impl MetricsDb {
         let conn = Connection::open(path)?;
 
         // Create tables
-        conn.execute_batch(r#"
+        conn.execute_batch(
+            r#"
             -- 5-minute samples (raw data, 24h retention)
             CREATE TABLE IF NOT EXISTS metrics_5min (
                 timestamp INTEGER PRIMARY KEY,
@@ -94,7 +95,8 @@ impl MetricsDb {
                 key TEXT PRIMARY KEY,
                 value INTEGER NOT NULL
             );
-        "#)?;
+        "#,
+        )?;
 
         Ok(Self { conn })
     }
@@ -121,11 +123,14 @@ impl MetricsDb {
 
     /// Get the last recorded total_tx for delta calculation
     pub fn get_last_tx_count(&self) -> Result<Option<u64>> {
-        let result: Option<i64> = self.conn.query_row(
-            "SELECT value FROM state WHERE key = 'last_tx_count'",
-            [],
-            |row| row.get(0),
-        ).ok();
+        let result: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT value FROM state WHERE key = 'last_tx_count'",
+                [],
+                |row| row.get(0),
+            )
+            .ok();
         Ok(result.map(|v| v as u64))
     }
 

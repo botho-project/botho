@@ -68,17 +68,17 @@ pub use entropy_proof::{
 
 // Phase 2B: Consensus-level entropy validation
 pub use entropy_validation::{
-    // Core validation function
-    validate_entropy_proof,
     // Decay rate computation
     compute_decay_rate,
-    // Result and error types
-    EntropyValidationResult,
-    EntropyValidationError,
-    // Version and configuration
-    TransactionVersion,
+    // Core validation function
+    validate_entropy_proof,
     EntropyConsensusConfig,
     EntropyPhase,
+    EntropyValidationError,
+    // Result and error types
+    EntropyValidationResult,
+    // Version and configuration
+    TransactionVersion,
 };
 
 pub use serialization::DeserializeError;

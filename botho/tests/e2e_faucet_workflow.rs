@@ -12,7 +12,11 @@
 
 mod common;
 
-use std::{net::SocketAddr, sync::Arc, time::Duration, time::SystemTime};
+use std::{
+    net::SocketAddr,
+    sync::Arc,
+    time::{Duration, SystemTime},
+};
 
 use reqwest::Client;
 use serde_json::{json, Value};
@@ -20,8 +24,6 @@ use serial_test::serial;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 
-use bth_account_keys::PublicAddress;
-use bth_transaction_types::constants::Network;
 use botho::{
     address::Address,
     block::{Block, BlockHeader, BlockLotterySummary, MintingTx},
@@ -33,6 +35,8 @@ use botho::{
     transaction::PICOCREDITS_PER_CREDIT,
     wallet::Wallet,
 };
+use bth_account_keys::PublicAddress;
+use bth_transaction_types::constants::Network;
 
 // ============================================================================
 // Test Helpers
@@ -137,7 +141,13 @@ fn apply_lottery_to_block(block: Block, ledger: &Ledger) -> Block {
     }
 
     let utxo_lookup = |utxo_id: &[u8; 36]| ledger.get_utxo_by_id(utxo_id).ok().flatten();
-    BlockBuilder::apply_lottery(block, &candidates, stored_pool, utxo_lookup, &lottery_config)
+    BlockBuilder::apply_lottery(
+        block,
+        &candidates,
+        stored_pool,
+        utxo_lookup,
+        &lottery_config,
+    )
 }
 
 /// Mine a single block crediting `minter_address` and append it to the ledger.

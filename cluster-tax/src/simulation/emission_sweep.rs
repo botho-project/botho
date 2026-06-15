@@ -13,12 +13,13 @@
 //!
 //! 1. **Analytic monetary track** (real-world scale). The emission curve is a
 //!    pure deterministic function of the policy parameters
-//!    ([`MonetaryPolicy::halving_reward`] / [`MonetaryPolicy::calculate_tail_reward`]),
-//!    so quantities like derived total supply, time-to-tail, %-issued-by-year,
-//!    steady-state inflation and the early-vs-late issuance share are computed
-//!    *exactly* over the real Phase-1 block counts
-//!    (`BLOCKS_PER_YEAR = 6_307_200` at 5s blocks). No simulation is needed or
-//!    desirable here — simulating ~60M blocks would add noise, not signal.
+//!    ([`MonetaryPolicy::halving_reward`] /
+//!    [`MonetaryPolicy::calculate_tail_reward`]), so quantities like derived
+//!    total supply, time-to-tail, %-issued-by-year, steady-state inflation and
+//!    the early-vs-late issuance share are computed *exactly* over the real
+//!    Phase-1 block counts (`BLOCKS_PER_YEAR = 6_307_200` at 5s blocks). No
+//!    simulation is needed or desirable here — simulating ~60M blocks would add
+//!    noise, not signal.
 //!
 //! 2. **Agent-based distribution track** (sim scale). Wealth-distribution
 //!    outcomes (Gini trajectory, top-1%/10% share), the recycled-value
@@ -35,11 +36,13 @@
 //! RNG seeded from agent IDs (no global/thread RNG), and an identical agent
 //! population is used for every schedule.
 
-use crate::simulation::{
-    run_simulation, Agent, AgentId, MerchantAgent, Metrics, MinterAgent, RetailUserAgent,
-    SimulationConfig, WhaleAgent, WhaleStrategy,
+use crate::{
+    simulation::{
+        run_simulation, Agent, AgentId, MerchantAgent, Metrics, MinterAgent, RetailUserAgent,
+        SimulationConfig, WhaleAgent, WhaleStrategy,
+    },
+    MonetaryPolicy,
 };
-use crate::MonetaryPolicy;
 
 /// 1 BTH expressed in nanoBTH (the smallest unit used by the policy).
 const NANOBTH_PER_BTH: u128 = 1_000_000_000;
@@ -227,7 +230,8 @@ pub fn pct_issued_by_year(policy: &MonetaryPolicy, year: u64) -> f64 {
     }
     // Cap Phase-1 portion at 100%; tail emission beyond that is reported
     // separately as steady-state inflation.
-    let p1_at = cumulative_supply_at(policy, height.min(policy.tail_emission_start_height())) as f64;
+    let p1_at =
+        cumulative_supply_at(policy, height.min(policy.tail_emission_start_height())) as f64;
     (p1_at / total) * 100.0
 }
 
@@ -783,7 +787,11 @@ fn neutral_observations(results: &[ScheduleResult]) -> String {
 driven entirely by the halving interval H.\n",
         min_supply,
         max_supply,
-        if min_supply > 0.0 { max_supply / min_supply } else { 0.0 },
+        if min_supply > 0.0 {
+            max_supply / min_supply
+        } else {
+            0.0
+        },
     ));
 
     // Time-to-tail spread.
@@ -803,14 +811,12 @@ front-load issuance into fewer years.\n",
 
     // Early-issuance comparison (concentration proxy): contrast the schedules
     // with the highest and lowest early-10% share.
-    let high_early = results
-        .iter()
-        .max_by(|a, b| {
-            a.monetary
-                .early_share_10pct
-                .partial_cmp(&b.monetary.early_share_10pct)
-                .unwrap()
-        });
+    let high_early = results.iter().max_by(|a, b| {
+        a.monetary
+            .early_share_10pct
+            .partial_cmp(&b.monetary.early_share_10pct)
+            .unwrap()
+    });
     let low_early = results.iter().min_by(|a, b| {
         a.monetary
             .early_share_10pct

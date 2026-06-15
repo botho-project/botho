@@ -8,11 +8,11 @@
 //! 1. **Effective Anonymity Set Size**: How do age and factor constraints
 //!    reduce the anonymity set compared to unconstrained selection?
 //!
-//! 2. **Tag Distribution Impact**: Do certain tag profiles suffer more
-//!    privacy loss than others under constraints?
+//! 2. **Tag Distribution Impact**: Do certain tag profiles suffer more privacy
+//!    loss than others under constraints?
 //!
-//! 3. **Optimal Parameters**: What constraint thresholds balance privacy
-//!    with fee accuracy?
+//! 3. **Optimal Parameters**: What constraint thresholds balance privacy with
+//!    fee accuracy?
 //!
 //! # Reference
 //!
@@ -24,8 +24,8 @@ use rand::Rng;
 use std::collections::HashMap;
 
 use super::privacy::{
-    calculate_privacy_metrics, AgeAdversary, Adversary, ClusterAdversary, CombinedAdversary,
-    DistributionStats, NaiveAdversary, OutputType, OutputPoolGenerator, PoolConfig,
+    calculate_privacy_metrics, Adversary, AgeAdversary, ClusterAdversary, CombinedAdversary,
+    DistributionStats, NaiveAdversary, OutputPoolGenerator, OutputType, PoolConfig,
     RingPrivacyMetrics, SimulatedOutput, MIN_AGE_BLOCKS,
 };
 use crate::tag::TAG_WEIGHT_SCALE;
@@ -72,7 +72,8 @@ impl ConstraintConfig {
 
 /// Calculate the cluster factor for a simulated output.
 ///
-/// This replicates the logic from wallet decoy_selection for simulation purposes.
+/// This replicates the logic from wallet decoy_selection for simulation
+/// purposes.
 pub fn calculate_cluster_factor(output: &SimulatedOutput) -> f64 {
     let total_attributed: u64 = output.cluster_tags.values().map(|&w| w as u64).sum();
     let attribution_pct = total_attributed as f64 / TAG_WEIGHT_SCALE as f64;
@@ -423,7 +424,7 @@ pub fn run_comparative_analysis<R: Rng>(
     // Collect unconstrained results (using very relaxed constraints)
     let unconstrained_config = ConstraintConfig {
         ring_size: config.ring_size,
-        max_age_ratio: 1000.0, // Effectively no age constraint
+        max_age_ratio: 1000.0,    // Effectively no age constraint
         max_factor_ratio: 1000.0, // Effectively no factor constraint
     };
 
@@ -449,7 +450,10 @@ pub fn run_comparative_analysis<R: Rng>(
     }
 }
 
-fn compute_selection_stats(results: &[ConstrainedRingResult], fallback_count: usize) -> SelectionStats {
+fn compute_selection_stats(
+    results: &[ConstrainedRingResult],
+    fallback_count: usize,
+) -> SelectionStats {
     let success_count = results.iter().filter(|r| r.selection_succeeded).count();
     let success_rate = success_count as f64 / results.len() as f64;
     let fallback_rate = fallback_count as f64 / results.len() as f64;
@@ -461,8 +465,14 @@ fn compute_selection_stats(results: &[ConstrainedRingResult], fallback_count: us
     for result in results {
         if let Some(metrics) = &result.metrics_by_adversary {
             for (name, m) in metrics {
-                bits_samples.entry(name.clone()).or_default().push(m.bits_of_privacy);
-                anonymity_samples.entry(name.clone()).or_default().push(m.effective_anonymity);
+                bits_samples
+                    .entry(name.clone())
+                    .or_default()
+                    .push(m.bits_of_privacy);
+                anonymity_samples
+                    .entry(name.clone())
+                    .or_default()
+                    .push(m.effective_anonymity);
                 if m.real_signer_rank == 1 {
                     *identified_counts.entry(name.clone()).or_default() += 1;
                 }
@@ -621,9 +631,15 @@ pub fn parameter_sweep<R: Rng>(
 pub fn format_comparative_report(analysis: &ComparativeAnalysis) -> String {
     let mut report = String::new();
 
-    report.push_str("╔══════════════════════════════════════════════════════════════════════════════╗\n");
-    report.push_str("║           CONSTRAINED VS UNCONSTRAINED DECOY SELECTION ANALYSIS              ║\n");
-    report.push_str("╠══════════════════════════════════════════════════════════════════════════════╣\n");
+    report.push_str(
+        "╔══════════════════════════════════════════════════════════════════════════════╗\n",
+    );
+    report.push_str(
+        "║           CONSTRAINED VS UNCONSTRAINED DECOY SELECTION ANALYSIS              ║\n",
+    );
+    report.push_str(
+        "╠══════════════════════════════════════════════════════════════════════════════╣\n",
+    );
     report.push_str(&format!(
         "║  Simulations: {:>6}  Ring Size: {:>2}  Age Ratio: {:.1}x  Factor Ratio: {:.1}x    ║\n",
         analysis.num_simulations,
@@ -631,10 +647,14 @@ pub fn format_comparative_report(analysis: &ComparativeAnalysis) -> String {
         analysis.config.max_age_ratio,
         analysis.config.max_factor_ratio
     ));
-    report.push_str("╚══════════════════════════════════════════════════════════════════════════════╝\n\n");
+    report.push_str(
+        "╚══════════════════════════════════════════════════════════════════════════════╝\n\n",
+    );
 
     report.push_str("SUCCESS RATES\n");
-    report.push_str("─────────────────────────────────────────────────────────────────────────────────\n");
+    report.push_str(
+        "─────────────────────────────────────────────────────────────────────────────────\n",
+    );
     report.push_str(&format!(
         "Constrained:   Success: {:>5.1}%   Fallback: {:>5.1}%\n",
         analysis.constrained.success_rate * 100.0,
@@ -646,15 +666,34 @@ pub fn format_comparative_report(analysis: &ComparativeAnalysis) -> String {
     ));
 
     report.push_str("\nBITS OF PRIVACY BY ADVERSARY\n");
-    report.push_str("─────────────────────────────────────────────────────────────────────────────────\n");
+    report.push_str(
+        "─────────────────────────────────────────────────────────────────────────────────\n",
+    );
     report.push_str("Adversary            Constrained    Unconstrained    Reduction\n");
-    report.push_str("─────────────────────────────────────────────────────────────────────────────────\n");
+    report.push_str(
+        "─────────────────────────────────────────────────────────────────────────────────\n",
+    );
 
     let adversaries = ["Naive", "Age-Heuristic", "Cluster-Fingerprint", "Combined"];
     for adv in adversaries {
-        let c_bits = analysis.constrained.bits_by_adversary.get(adv).map(|s| s.mean).unwrap_or(0.0);
-        let u_bits = analysis.unconstrained.bits_by_adversary.get(adv).map(|s| s.mean).unwrap_or(0.0);
-        let reduction = analysis.privacy_reduction.bits_reduction.get(adv).copied().unwrap_or(0.0);
+        let c_bits = analysis
+            .constrained
+            .bits_by_adversary
+            .get(adv)
+            .map(|s| s.mean)
+            .unwrap_or(0.0);
+        let u_bits = analysis
+            .unconstrained
+            .bits_by_adversary
+            .get(adv)
+            .map(|s| s.mean)
+            .unwrap_or(0.0);
+        let reduction = analysis
+            .privacy_reduction
+            .bits_reduction
+            .get(adv)
+            .copied()
+            .unwrap_or(0.0);
 
         report.push_str(&format!(
             "{:<20} {:>6.2}          {:>6.2}          {:>+6.2}\n",
@@ -663,27 +702,53 @@ pub fn format_comparative_report(analysis: &ComparativeAnalysis) -> String {
     }
 
     report.push_str("\nIDENTIFICATION RATES (lower is better)\n");
-    report.push_str("─────────────────────────────────────────────────────────────────────────────────\n");
+    report.push_str(
+        "─────────────────────────────────────────────────────────────────────────────────\n",
+    );
     report.push_str("Adversary            Constrained    Unconstrained    Change\n");
-    report.push_str("─────────────────────────────────────────────────────────────────────────────────\n");
+    report.push_str(
+        "─────────────────────────────────────────────────────────────────────────────────\n",
+    );
 
     for adv in adversaries {
-        let c_rate = analysis.constrained.identification_rate.get(adv).copied().unwrap_or(0.0);
-        let u_rate = analysis.unconstrained.identification_rate.get(adv).copied().unwrap_or(0.0);
-        let increase = analysis.privacy_reduction.identification_increase.get(adv).copied().unwrap_or(0.0);
+        let c_rate = analysis
+            .constrained
+            .identification_rate
+            .get(adv)
+            .copied()
+            .unwrap_or(0.0);
+        let u_rate = analysis
+            .unconstrained
+            .identification_rate
+            .get(adv)
+            .copied()
+            .unwrap_or(0.0);
+        let increase = analysis
+            .privacy_reduction
+            .identification_increase
+            .get(adv)
+            .copied()
+            .unwrap_or(0.0);
 
         report.push_str(&format!(
             "{:<20} {:>5.1}%          {:>5.1}%           {:>+5.1}%\n",
-            adv, c_rate * 100.0, u_rate * 100.0, increase * 100.0
+            adv,
+            c_rate * 100.0,
+            u_rate * 100.0,
+            increase * 100.0
         ));
     }
 
-    report.push_str("\n─────────────────────────────────────────────────────────────────────────────────\n");
+    report.push_str(
+        "\n─────────────────────────────────────────────────────────────────────────────────\n",
+    );
     report.push_str("INTERPRETATION:\n");
     report.push_str("  • Negative reduction = constraints IMPROVE privacy (unlikely)\n");
     report.push_str("  • Positive reduction = constraints REDUCE privacy\n");
     report.push_str("  • Ideal: small reduction with high success rate and no fallbacks\n");
-    report.push_str("─────────────────────────────────────────────────────────────────────────────────\n");
+    report.push_str(
+        "─────────────────────────────────────────────────────────────────────────────────\n",
+    );
 
     report
 }
@@ -692,13 +757,21 @@ pub fn format_comparative_report(analysis: &ComparativeAnalysis) -> String {
 pub fn format_parameter_sweep(results: &[ParameterSweepResult]) -> String {
     let mut report = String::new();
 
-    report.push_str("╔══════════════════════════════════════════════════════════════════════════════╗\n");
-    report.push_str("║                    CONSTRAINT PARAMETER SWEEP RESULTS                        ║\n");
-    report.push_str("╚══════════════════════════════════════════════════════════════════════════════╝\n\n");
+    report.push_str(
+        "╔══════════════════════════════════════════════════════════════════════════════╗\n",
+    );
+    report.push_str(
+        "║                    CONSTRAINT PARAMETER SWEEP RESULTS                        ║\n",
+    );
+    report.push_str(
+        "╚══════════════════════════════════════════════════════════════════════════════╝\n\n",
+    );
 
     report.push_str("Age    Factor   Eligible    Insufficient   Success    Bits of\n");
     report.push_str("Ratio  Ratio    Pool Size   Fraction       Rate       Privacy\n");
-    report.push_str("─────────────────────────────────────────────────────────────────────────────────\n");
+    report.push_str(
+        "─────────────────────────────────────────────────────────────────────────────────\n",
+    );
 
     for r in results {
         report.push_str(&format!(
@@ -712,13 +785,17 @@ pub fn format_parameter_sweep(results: &[ParameterSweepResult]) -> String {
         ));
     }
 
-    report.push_str("\n─────────────────────────────────────────────────────────────────────────────────\n");
+    report.push_str(
+        "\n─────────────────────────────────────────────────────────────────────────────────\n",
+    );
     report.push_str("INTERPRETATION:\n");
     report.push_str("  • Higher eligible pool = more decoy choices\n");
     report.push_str("  • Lower insufficient fraction = fewer fallbacks needed\n");
     report.push_str("  • Higher bits of privacy = better anonymity\n");
     report.push_str("  • Optimal: balance between eligible pool size and privacy bits\n");
-    report.push_str("─────────────────────────────────────────────────────────────────────────────────\n");
+    report.push_str(
+        "─────────────────────────────────────────────────────────────────────────────────\n",
+    );
 
     report
 }
@@ -839,18 +916,34 @@ pub fn analyze_ring_sizes<R: Rng>(
 pub fn format_ring_size_report(rec: &RingSizeRecommendation) -> String {
     let mut report = String::new();
 
-    report.push_str("╔══════════════════════════════════════════════════════════════════════════════╗\n");
-    report.push_str("║                        RING SIZE ANALYSIS REPORT                             ║\n");
-    report.push_str("╚══════════════════════════════════════════════════════════════════════════════╝\n\n");
+    report.push_str(
+        "╔══════════════════════════════════════════════════════════════════════════════╗\n",
+    );
+    report.push_str(
+        "║                        RING SIZE ANALYSIS REPORT                             ║\n",
+    );
+    report.push_str(
+        "╚══════════════════════════════════════════════════════════════════════════════╝\n\n",
+    );
 
-    report.push_str(&format!("MINIMUM RING SIZE:     {}\n", rec.minimum_ring_size));
-    report.push_str(&format!("RECOMMENDED RING SIZE: {}\n\n", rec.recommended_ring_size));
+    report.push_str(&format!(
+        "MINIMUM RING SIZE:     {}\n",
+        rec.minimum_ring_size
+    ));
+    report.push_str(&format!(
+        "RECOMMENDED RING SIZE: {}\n\n",
+        rec.recommended_ring_size
+    ));
 
     report.push_str("ANALYSIS BY RING SIZE\n");
-    report.push_str("─────────────────────────────────────────────────────────────────────────────────\n");
+    report.push_str(
+        "─────────────────────────────────────────────────────────────────────────────────\n",
+    );
     report.push_str("Ring    Mean     5th%     Success    Eligible\n");
     report.push_str("Size    Bits     Bits     Rate       Pool Size\n");
-    report.push_str("─────────────────────────────────────────────────────────────────────────────────\n");
+    report.push_str(
+        "─────────────────────────────────────────────────────────────────────────────────\n",
+    );
 
     for a in &rec.by_ring_size {
         let marker = if a.ring_size == rec.recommended_ring_size {
@@ -872,10 +965,14 @@ pub fn format_ring_size_report(rec: &RingSizeRecommendation) -> String {
         ));
     }
 
-    report.push_str("\n─────────────────────────────────────────────────────────────────────────────────\n");
+    report.push_str(
+        "\n─────────────────────────────────────────────────────────────────────────────────\n",
+    );
     report.push_str("RATIONALE:\n");
     report.push_str(&format!("{}\n", rec.rationale));
-    report.push_str("─────────────────────────────────────────────────────────────────────────────────\n");
+    report.push_str(
+        "─────────────────────────────────────────────────────────────────────────────────\n",
+    );
 
     report
 }
@@ -983,20 +1080,17 @@ mod tests {
         let pool = create_test_pool();
         let mut rng = rand::thread_rng();
 
-        let results = parameter_sweep(
-            &pool,
-            11,
-            &[1.5, 2.0, 3.0],
-            &[1.25, 1.5, 2.0],
-            50,
-            &mut rng,
-        );
+        let results = parameter_sweep(&pool, 11, &[1.5, 2.0, 3.0], &[1.25, 1.5, 2.0], 50, &mut rng);
 
         assert_eq!(results.len(), 9); // 3 x 3
 
         // Looser constraints should have higher eligible pool sizes
-        let tight = results.iter().find(|r| r.age_ratio == 1.5 && r.factor_ratio == 1.25);
-        let loose = results.iter().find(|r| r.age_ratio == 3.0 && r.factor_ratio == 2.0);
+        let tight = results
+            .iter()
+            .find(|r| r.age_ratio == 1.5 && r.factor_ratio == 1.25);
+        let loose = results
+            .iter()
+            .find(|r| r.age_ratio == 3.0 && r.factor_ratio == 2.0);
 
         if let (Some(t), Some(l)) = (tight, loose) {
             assert!(

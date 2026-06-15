@@ -10,7 +10,8 @@
 //! # Overview
 //!
 //! WebRTC requires out-of-band signaling to exchange:
-//! - **SDP Offer**: Initiator's session description (codecs, ICE candidates, fingerprint)
+//! - **SDP Offer**: Initiator's session description (codecs, ICE candidates,
+//!   fingerprint)
 //! - **SDP Answer**: Responder's session description
 //! - **ICE Candidates**: Trickle ICE updates for NAT traversal
 //!
@@ -50,12 +51,16 @@ use futures::{SinkExt, StreamExt};
 use libp2p::PeerId;
 use rand::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::fmt;
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashMap,
+    fmt,
+    time::{Duration, Instant},
+};
 use thiserror::Error;
-use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::time::timeout;
+use tokio::{
+    io::{AsyncRead, AsyncWrite},
+    time::timeout,
+};
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
 /// Length of session identifiers in bytes.
@@ -231,8 +236,8 @@ impl SignalingMessage {
 
     /// Deserialize a message from bytes.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, SignalingError> {
-        let msg: Self =
-            bincode::deserialize(bytes).map_err(|e| SignalingError::Io(std::io::Error::other(e)))?;
+        let msg: Self = bincode::deserialize(bytes)
+            .map_err(|e| SignalingError::Io(std::io::Error::other(e)))?;
         msg.validate()?;
         Ok(msg)
     }
@@ -525,8 +530,9 @@ where
 
     /// Complete an SDP offer/answer exchange.
     ///
-    /// If `is_offerer` is true, sends the local SDP as an offer and waits for an answer.
-    /// If `is_offerer` is false, waits for an offer and sends the local SDP as an answer.
+    /// If `is_offerer` is true, sends the local SDP as an offer and waits for
+    /// an answer. If `is_offerer` is false, waits for an offer and sends
+    /// the local SDP as an answer.
     ///
     /// Returns the remote SDP on success.
     pub async fn exchange_sdp(
@@ -546,7 +552,10 @@ where
             // Wait for answer
             let response = self.recv().await?;
             match response {
-                SignalingMessage::Answer { sdp, session_id: resp_id } => {
+                SignalingMessage::Answer {
+                    sdp,
+                    session_id: resp_id,
+                } => {
                     if resp_id != session_id {
                         return Err(SignalingError::Protocol(format!(
                             "Session ID mismatch: expected {}, got {}",
@@ -564,7 +573,10 @@ where
             // Wait for offer
             let offer = self.recv().await?;
             let (remote_sdp, offer_session_id) = match offer {
-                SignalingMessage::Offer { sdp, session_id: offer_id } => (sdp, offer_id),
+                SignalingMessage::Offer {
+                    sdp,
+                    session_id: offer_id,
+                } => (sdp, offer_id),
                 _ => {
                     return Err(SignalingError::Protocol(
                         "Expected Offer message".to_string(),
@@ -912,7 +924,9 @@ mod tests {
 
         // Spawn offerer
         let offerer_task = tokio::spawn(async move {
-            offerer.exchange_sdp(offer_sdp_clone, session_id, true).await
+            offerer
+                .exchange_sdp(offer_sdp_clone, session_id, true)
+                .await
         });
 
         // Run answerer

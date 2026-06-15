@@ -351,7 +351,8 @@ impl ExtendedTxSignature {
     /// Serialize to bytes.
     ///
     /// Format:
-    /// - Version byte (1 byte): 2 = V2 (no entropy proof), 3 = V3 (with entropy proof)
+    /// - Version byte (1 byte): 2 = V2 (no entropy proof), 3 = V3 (with entropy
+    ///   proof)
     /// - Pseudo-tag-output count (4 bytes)
     /// - Pseudo-tag-outputs (variable)
     /// - Conservation proof (variable)
@@ -555,7 +556,8 @@ mod tests {
         let input_commitment = input_secret.commit();
         let ring_tags = vec![input_commitment.clone()];
 
-        // Create output using apply_decay (preserves cluster structure for conservation proof)
+        // Create output using apply_decay (preserves cluster structure for conservation
+        // proof)
         let output_secret = input_secret.apply_decay(decay_rate, &mut OsRng);
 
         // Build V2 signature first
@@ -630,7 +632,10 @@ mod tests {
         let bytes = signature.to_bytes();
 
         // First byte should be version 2
-        assert_eq!(bytes[0], EXTENDED_SIG_VERSION_V2, "V2 signature version byte");
+        assert_eq!(
+            bytes[0], EXTENDED_SIG_VERSION_V2,
+            "V2 signature version byte"
+        );
     }
 
     #[test]

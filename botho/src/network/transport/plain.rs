@@ -28,16 +28,21 @@
 
 use async_trait::async_trait;
 use libp2p::{Multiaddr, PeerId};
-use std::fmt;
-use std::io;
-use std::pin::Pin;
-use std::task::{Context, Poll};
-use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-use tokio::net::TcpStream;
+use std::{
+    fmt, io,
+    pin::Pin,
+    task::{Context, Poll},
+};
+use tokio::{
+    io::{AsyncRead, AsyncWrite, ReadBuf},
+    net::TcpStream,
+};
 
-use super::error::TransportError;
-use super::traits::{BoxedConnection, PluggableTransport};
-use super::types::TransportType;
+use super::{
+    error::TransportError,
+    traits::{BoxedConnection, PluggableTransport},
+    types::TransportType,
+};
 
 /// Plain transport using TCP + Noise.
 ///

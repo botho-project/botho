@@ -178,7 +178,6 @@ pub struct LotteryConfig {
     // === Asymmetric Structure Fees (from asymmetric-utxo-fees.md) ===
 
     // === Spend-Time Demurrage (issue #314, matches node implementation) ===
-
     /// Annual demurrage rate at max cluster factor, in basis points.
     /// 0 disables spend-time demurrage. When enabled, each spend charges
     /// accrual on the spender's full UTXO value since its demurrage anchor,
@@ -404,11 +403,17 @@ impl LotteryUtxo {
         } else {
             1.0 // Floor: everyone gets at least 1 ticket
         };
-        let elig = self.eligibility(current_block, decay_rate_per_day, min_eligibility, blocks_per_day);
+        let elig = self.eligibility(
+            current_block,
+            decay_rate_per_day,
+            min_eligibility,
+            blocks_per_day,
+        );
         base_tickets * elig
     }
 
-    /// Update last activity block (called when UTXO participates in transaction).
+    /// Update last activity block (called when UTXO participates in
+    /// transaction).
     pub fn refresh_activity(&mut self, current_block: u64) {
         self.last_activity_block = current_block;
     }
@@ -1118,12 +1123,7 @@ impl LotterySimulation {
     /// which is dramatically faster than repeated `select_winner_by_mode`
     /// calls for multi-year simulations. Other modes fall back to per-winner
     /// selection.
-    pub fn select_winners_by_mode(
-        &self,
-        utxo_ids: &[u64],
-        n: u32,
-        rng: &mut impl Rng,
-    ) -> Vec<u64> {
+    pub fn select_winners_by_mode(&self, utxo_ids: &[u64], n: u32, rng: &mut impl Rng) -> Vec<u64> {
         if utxo_ids.is_empty() || n == 0 {
             return Vec::new();
         }
@@ -2077,10 +2077,11 @@ mod tests {
 
     #[test]
     fn test_sybil_not_profitable() {
-        // This test validates value-weighted selection's Sybil resistance via simulation.
-        // ValueWeighted has theoretical ~1x gaming ratio (splitting doesn't help).
-        // Threshold is 20% to account for simulation variance over 10k blocks.
-        // Key comparison: Uniform would show ~10x advantage, ValueWeighted should be ~1x.
+        // This test validates value-weighted selection's Sybil resistance via
+        // simulation. ValueWeighted has theoretical ~1x gaming ratio (splitting
+        // doesn't help). Threshold is 20% to account for simulation variance
+        // over 10k blocks. Key comparison: Uniform would show ~10x advantage,
+        // ValueWeighted should be ~1x.
         //
         // The measurement is a Monte Carlo estimate over 10k blocks, so it carries
         // simulation noise. Previously the simulation drew from `thread_rng` (system
@@ -6603,7 +6604,10 @@ mod tests {
 
         eprintln!("  Small holder (100 BTH): {:.4} tickets/BTH", small_tpb);
         eprintln!("  Large holder (1M BTH):  {:.4} tickets/BTH", large_tpb);
-        eprintln!("  Ratio: {:.1}x more tickets/BTH for small", small_tpb / large_tpb);
+        eprintln!(
+            "  Ratio: {:.1}x more tickets/BTH for small",
+            small_tpb / large_tpb
+        );
 
         assert!(
             small_tpb > large_tpb * 5.0,
@@ -6702,7 +6706,10 @@ mod tests {
         let total_tickets_day0 = tickets_per_utxo * split_count;
 
         eprintln!("  Attacker: 100K BTH split into 100 UTXOs");
-        eprintln!("  Day 0 tickets: {} (100 UTXOs × 1 floor ticket)", total_tickets_day0);
+        eprintln!(
+            "  Day 0 tickets: {} (100 UTXOs × 1 floor ticket)",
+            total_tickets_day0
+        );
 
         // After 30 days of parking
         let elig_30 = (1.0 - decay_rate).powf(30.0).max(min_eligibility);
@@ -6738,7 +6745,10 @@ mod tests {
             "After refresh, eligibility should be 100%: got {:.4}",
             elig_after_refresh
         );
-        eprintln!("  After refresh at day 50: {:.0}% eligibility", elig_after_refresh * 100.0);
+        eprintln!(
+            "  After refresh at day 50: {:.0}% eligibility",
+            elig_after_refresh * 100.0
+        );
 
         eprintln!("");
         eprintln!("✓ VERIFIED: Eligibility decays over time");
@@ -6760,8 +6770,14 @@ mod tests {
 
         let config = LotteryConfig::combined_mechanism();
         eprintln!("Parameters:");
-        eprintln!("  Split penalty multiplier: {}", config.split_penalty_multiplier);
-        eprintln!("  Consolidation discount: {}", config.consolidation_discount);
+        eprintln!(
+            "  Split penalty multiplier: {}",
+            config.split_penalty_multiplier
+        );
+        eprintln!(
+            "  Consolidation discount: {}",
+            config.consolidation_discount
+        );
         eprintln!("  Allowed extra outputs: {}", config.allowed_extra_outputs);
         eprintln!("");
 
@@ -6843,7 +6859,10 @@ mod tests {
         }
 
         // Add parking attacker
-        let attacker_id = sim.add_owner(attacker_wealth, SybilStrategy::ParkingAttack { split_target: 100 });
+        let attacker_id = sim.add_owner(
+            attacker_wealth,
+            SybilStrategy::ParkingAttack { split_target: 100 },
+        );
 
         sim.current_block = 1000;
 
@@ -6854,7 +6873,11 @@ mod tests {
         eprintln!("Initial state:");
         eprintln!("  Total wealth: {} BTH", total_wealth / 1000);
         eprintln!("  Normal users: 100 × {} BTH", user_wealth / 1000);
-        eprintln!("  Attacker: {} BTH ({} UTXOs)", attacker_wealth / 1000, initial_attacker_utxos);
+        eprintln!(
+            "  Attacker: {} BTH ({} UTXOs)",
+            attacker_wealth / 1000,
+            initial_attacker_utxos
+        );
         eprintln!("");
 
         // Simulate attacker splitting (manually for this test)
@@ -6901,7 +6924,10 @@ mod tests {
         };
         let avg_effective_tickets = initial_tickets as f64 * avg_eligibility;
 
-        eprintln!("  Average eligibility over 30 days: {:.1}%", avg_eligibility * 100.0);
+        eprintln!(
+            "  Average eligibility over 30 days: {:.1}%",
+            avg_eligibility * 100.0
+        );
         eprintln!("  Average effective tickets: {:.0}", avg_effective_tickets);
 
         // Compare to unsplit scenario
@@ -6910,27 +6936,45 @@ mod tests {
         eprintln!("Comparison to unsplit (honest) strategy:");
         eprintln!("  Unsplit tickets: {}", unsplit_tickets);
         eprintln!("  Split tickets (day 0): {}", initial_tickets);
-        eprintln!("  Split advantage ratio: {:.2}x", initial_tickets as f64 / unsplit_tickets as f64);
-        eprintln!("  After decay (avg): {:.2}x", avg_effective_tickets / unsplit_tickets as f64);
+        eprintln!(
+            "  Split advantage ratio: {:.2}x",
+            initial_tickets as f64 / unsplit_tickets as f64
+        );
+        eprintln!(
+            "  After decay (avg): {:.2}x",
+            avg_effective_tickets / unsplit_tickets as f64
+        );
 
         // The split advantage should be bounded by min_utxo constraint
         let max_split_advantage = (attacker_wealth / config.min_utxo_value) as f64
             / (attacker_wealth / ticket_threshold) as f64;
         eprintln!("");
-        eprintln!("Max theoretical split advantage (from min UTXO): {:.1}x", max_split_advantage);
+        eprintln!(
+            "Max theoretical split advantage (from min UTXO): {:.1}x",
+            max_split_advantage
+        );
 
         eprintln!("");
         eprintln!("Attack profitability analysis:");
         eprintln!("  Split cost: {} BTH", split_cost / 1000);
-        eprintln!("  Ticket advantage: {:.1}x (before decay)", initial_tickets as f64 / unsplit_tickets as f64);
-        eprintln!("  Ticket advantage: {:.1}x (after 30d decay avg)", avg_effective_tickets / unsplit_tickets as f64);
+        eprintln!(
+            "  Ticket advantage: {:.1}x (before decay)",
+            initial_tickets as f64 / unsplit_tickets as f64
+        );
+        eprintln!(
+            "  Ticket advantage: {:.1}x (after 30d decay avg)",
+            avg_effective_tickets / unsplit_tickets as f64
+        );
 
         // Key insight: with eligibility decay, the advantage diminishes over time
         // Combined with split cost, the attack becomes unprofitable
         eprintln!("");
         eprintln!("Key insights:");
         eprintln!("  1. Value-weighted floor limits max splitting advantage");
-        eprintln!("  2. Min UTXO size caps splitting to ~{}x", max_split_advantage as u64);
+        eprintln!(
+            "  2. Min UTXO size caps splitting to ~{}x",
+            max_split_advantage as u64
+        );
         eprintln!("  3. Eligibility decay reduces effective tickets over time");
         eprintln!("  4. Split penalty adds upfront cost");
         eprintln!("  5. Combined: Parking attack ROI < 1.0 (unprofitable)");
@@ -6940,5 +6984,3 @@ mod tests {
         eprintln!("{}", "=".repeat(80));
     }
 }
-
-
