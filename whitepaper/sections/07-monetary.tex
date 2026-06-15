@@ -25,37 +25,66 @@ conditions.
 
 \subsubsection{Initial Emission}
 
-Block rewards follow a smooth decay curve rather than Bitcoin's abrupt
-halvings:
+Block rewards follow a halving schedule:
 
 \begin{equation}
-R(h) = R_0 \cdot \left(\frac{1}{2}\right)^{h/H}
+R(h) = R_0 \cdot \left(\frac{1}{2}\right)^{\lfloor h/H \rfloor}
 \end{equation}
 
 where:
 \begin{itemize}
   \item $R(h)$ is the block reward at height $h$
   \item $R_0 = 50$ BTH is the initial block reward
-  \item $H = 1{,}051{,}200$ blocks ($\approx$ 2 years at 60s blocks)
+  \item $H = 6{,}307{,}200$ blocks ($\approx$ 1 year at 5s blocks)
     is the halving period
 \end{itemize}
 
-This creates continuous, gradual reduction rather than discrete shocks.
+After $K = 5$ halvings ($\approx$ 5 years), the per-block reward has fallen
+from 50 BTH to 3.125 BTH and the chain transitions to perpetual tail
+emission. The geometric sum of the five halving epochs fixes the
+\emph{Phase-1 supply} at
+\begin{equation}
+S_1 = R_0 H \sum_{i=0}^{K-1} 2^{-i}
+    = 50 \times 6{,}307{,}200 \times \tfrac{31}{16}
+    = 611{,}010{,}000 \text{ BTH} \;(\approx 611\text{M}).
+\end{equation}
 
 \input{figures/emission-curve}
 
 \subsubsection{Tail Emission}
 
-Once block rewards decay below a threshold, perpetual tail emission begins:
+After the five halvings complete, perpetual tail emission begins. Rather than
+a fixed per-block constant, the tail targets a constant \emph{net annual
+inflation rate} on the circulating supply, so emission scales with supply
+rather than being pinned to an absolute number:
 
 \begin{equation}
-R_{\text{tail}} = \max\left(R(h), 0.3 \text{ BTH}\right)
+R_{\text{tail}} = \frac{S \cdot (\beta_{\text{net}} + \beta_{\text{burn}})}
+                       {N_{\text{year}}}
 \end{equation}
 
-At 5-second blocks (12 blocks per minute), this produces:
-\begin{equation}
-\text{Annual tail emission} = 0.3 \times 12 \times 60 \times 24 \times 365 = 1{,}892{,}160 \text{ BTH}
-\end{equation}
+where:
+\begin{itemize}
+  \item $S$ is the circulating supply at the start of the tail phase
+  \item $\beta_{\text{net}} = 0.02$ (200 bps) is the target net annual
+    inflation
+  \item $\beta_{\text{burn}} = 0.005$ (50 bps) is the expected annual
+    fee-burn rate (the 20\% burn, see Section~\ref{sec:economic-modeling}),
+    added so that \emph{gross} emission nets to the 2\% target after burns
+  \item $N_{\text{year}} = 6{,}307{,}200$ is the number of blocks per year at
+    5s blocks
+\end{itemize}
+
+Anchoring this to the Phase-1 supply $S_1 = 611{,}010{,}000$ BTH gives, at
+tail onset:
+\begin{align}
+\text{Gross annual emission} &= 611{,}010{,}000 \times 0.025 = 15{,}275{,}250 \text{ BTH} \\
+\text{Net annual emission}   &= 611{,}010{,}000 \times 0.020 = 12{,}220{,}200 \text{ BTH} \\
+R_{\text{tail}} &= \frac{15{,}275{,}250}{6{,}307{,}200} \approx 2.42 \text{ BTH/block (gross)}
+\end{align}
+or $\approx 1.94$ BTH/block net of the expected fee burn. Because $R_{\text{tail}}$
+is proportional to supply, the per-block reward \emph{grows} as the supply
+grows, holding net inflation fixed at 2\%.
 
 \subsubsection{Supply Projection}
 
@@ -65,21 +94,24 @@ At 5-second blocks (12 blocks per minute), this produces:
 \label{tab:supply}
 \begin{tabular}{@{}rrrr@{}}
 \toprule
-\textbf{Year} & \textbf{Circulating} & \textbf{New Emission} & \textbf{Inflation} \\
+\textbf{Year} & \textbf{Circulating} & \textbf{New Emission} & \textbf{Gross Inflation} \\
 \midrule
-1 & 15.8M BTH & 15.8M & --- \\
-2 & 23.7M BTH & 7.9M & 50\% \\
-3 & 27.6M BTH & 3.9M & 17\% \\
-5 & 30.2M BTH & 1.0M & 3.4\% \\
-10 & 33.1M BTH & 1.9M & 6.1\% \\
-20 & 52.0M BTH & 1.9M & 3.8\% \\
+1 & 315.4M BTH & 315.4M & --- \\
+2 & 473.0M BTH & 157.7M & 50\% \\
+3 & 551.9M BTH & 78.8M & 17\% \\
+5 & 611.0M BTH & 19.7M & 3.3\% \\
+6 & 626.3M BTH & 15.3M & 2.5\% \\
+10 & 691.3M BTH & 16.9M & 2.5\% \\
+20 & 884.9M BTH & 21.6M & 2.5\% \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\textbf{Note}: Tail emission inflation is asymptotically declining---while
-nominal emission is constant, the percentage decreases as supply grows.
-After 50 years, annual inflation is approximately 2.1\%.
+\textbf{Note}: Years 1--5 are the halving phase (rewards 50, 25, 12.5, 6.25,
+3.125 BTH/block), which fix the Phase-1 supply at $\approx$611M BTH. From year 6
+onward the tail holds \emph{gross} emission at 2.5\% of supply (2\% net of the
+expected 0.5\% fee burn). Because the tail tracks supply, nominal emission
+grows over time while the net inflation rate stays pinned at 2\%.
 
 \input{figures/supply-projection}
 
@@ -155,22 +187,29 @@ This aligns miner incentives with network utility.
 
 \subsubsection{Emission Bounds}
 
-The effective annual emission varies with utilization:
+Because the tail reward is fixed per block (at $\approx$2.42 BTH/block gross
+for the $\approx$611M tail-onset supply), slower blocks produce fewer blocks
+per year and therefore proportionally lower annual emission. The effective
+annual tail emission thus varies with utilization:
 
 \begin{table}[h]
 \centering
-\caption{Tail emission by utilization}
+\caption{Tail emission by utilization (at $\approx$611M tail-onset supply)}
 \label{tab:emission-util}
 \begin{tabular}{@{}lcc@{}}
 \toprule
-\textbf{Utilization} & \textbf{Blocks/Year} & \textbf{Emission/Year} \\
+\textbf{Utilization} & \textbf{Blocks/Year} & \textbf{Gross Emission/Year} \\
 \midrule
-0\% (idle) & 788,400 & 236,520 BTH \\
-50\% (moderate) & 1,370,087 & 411,026 BTH \\
-100\% (maximum) & 6,307,200 & 1,892,160 BTH \\
+0\% (idle, 40s) & 788,400 & 1.91M BTH \\
+50\% (moderate, 23s) & 1,371,130 & 3.32M BTH \\
+100\% (maximum, 5s) & 6,307,200 & 15.28M BTH \\
 \bottomrule
 \end{tabular}
 \end{table}
+
+At full utilization this is the 2.5\% gross (2\% net) tail target; sustained
+idle operation acts as a natural inflation dampener, holding emission well
+below the 2\% net rate.
 
 \subsection{Fee Economics}
 
@@ -179,12 +218,13 @@ The effective annual emission varies with utilization:
 The minimum fee per byte is:
 
 \begin{equation}
-f_{\text{base}} = 1 \text{ nano-BTH per byte}
+f_{\text{base}} = 1 \text{ pico-BTH per byte}
 \end{equation}
 
+(\Botho's smallest unit is the picocredit, $1\text{ BTH} = 10^{12}$ pico-BTH.)
 For a typical 4 KB transaction:
 \begin{equation}
-f_{\text{min}} = 4{,}000 \times 1 = 4{,}000 \text{ nano-BTH} = 0.000004 \text{ BTH}
+f_{\text{min}} = 4{,}000 \times 1 = 4{,}000 \text{ pico-BTH} = 4 \times 10^{-9} \text{ BTH}
 \end{equation}
 
 \subsubsection{Progressive Fee Multiplier}
@@ -331,7 +371,9 @@ The perpetual security budget (in BTH terms) is:
 \text{security\_budget} = R_{\text{tail}} \times \text{blocks\_per\_year}
 \end{equation}
 
-This ranges from 236K BTH (idle) to 1.89M BTH (maximum utilization) annually.
+At the $\approx$611M tail-onset supply this ranges from $\approx$1.9M BTH (idle)
+to $\approx$15.3M BTH (maximum utilization) annually, and grows with supply
+thereafter.
 
 \subsubsection{Comparison with Fixed Supply}
 
@@ -373,13 +415,16 @@ while active participation maintains relative wealth.
 \textbf{Parameter} & \textbf{Value} & \textbf{Description} \\
 \midrule
 Initial reward & 50 BTH & Block reward at genesis \\
-Halving period & 1,051,200 blocks & $\approx$ 2 years \\
-Tail emission & 0.3 BTH & Minimum block reward \\
+Halving period & 6,307,200 blocks & $\approx$ 1 year (at 5s blocks) \\
+Halving count & 5 & Time-to-tail $\approx$ 5 years \\
+Phase-1 supply & $\approx$611M BTH & Geometric sum of 5 halvings \\
+Tail inflation & 2\% net/yr & Supply-dependent, perpetual \\
+Tail reward & $\approx$1.94 BTH/block & Net, at 611M supply (grows with supply) \\
 Min block time & 5 seconds & At maximum utilization \\
 Max block time & 40 seconds & At zero utilization \\
-Base fee rate & 1 nano-BTH/byte & Minimum transaction fee \\
+Base fee rate & 1 pico-BTH/byte & Minimum transaction fee \\
 Max cluster factor & 6.0$\times$ & Top 1\% wealth multiplier \\
-Decimals & 9 & Smallest unit: 1 nano-BTH \\
+Decimals & 12 & Smallest unit: 1 picocredit \\
 \bottomrule
 \end{tabular}
 \end{table}

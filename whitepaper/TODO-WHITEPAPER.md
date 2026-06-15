@@ -143,12 +143,16 @@ The paper is entirely text-based. Visual aids are essential for comprehension.
 
 - [x] **Emission curve graph** (Section 7.2)
   - X-axis: Time/blocks, Y-axis: Block reward
-  - Show: Smooth decay to tail emission
+  - Show: 5 annual halvings to supply-dependent tail emission
   - Compare to Bitcoin's step function
+  - Reconciled to canonical schedule (#321): 50→3.125 BTH over 5 years, then
+    ~1.94 BTH/block net tail (growing with supply)
 
 - [x] **Supply projection graph** (Section 7.2)
   - Show: Circulating supply over 20+ years
-  - Include: Asymptotic inflation rate
+  - Include: 2% net inflation tail
+  - Reconciled to canonical schedule (#321): ~611M Phase-1 supply at year 5,
+    ~885M by year 20
 
 - [x] **Dynamic block timing visualization** (Section 7.3)
   - Show: Utilization → Block time mapping
@@ -330,13 +334,18 @@ Add rationale for all magic numbers:
   - Redistribution vs. deflation balance
   - Economic modeling results
 
-- [x] **Halving period 1,051,200 blocks** (Section 7.2)
-  - Relationship to expected block time
+- [x] **Halving period 6,307,200 blocks (~1 year at 5s)** (Section 7.2)
+  - Relationship to expected block time (5s baseline)
   - Comparison to Bitcoin's 4-year cycle
+  - Reconciled with shipped `mainnet_policy()` (#321/#351): 5 annual halvings,
+    Phase-1 supply ~611M BTH
 
-- [x] **Tail emission 0.3 BTH** (Section 7.2)
+- [x] **Tail emission: 2% net annual inflation, supply-dependent** (Section 7.2)
   - Security budget requirements
   - Long-term inflation target derivation
+  - Reconciled with shipped `calculate_tail_reward` (#321/#351): not a fixed
+    0.3 BTH constant but `S * (β_net + β_burn) / N_year`; ~1.94 BTH/block net
+    at the ~611M tail-onset supply, growing with supply
 
 - [x] **Cluster factor max 6x** (Section 5.4)
   - Progressive but not punitive
@@ -785,5 +794,19 @@ Some items depend on others:
 
 ---
 
-*Last updated: 2026-01-09*
-*Document version: 1.1*
+### Monetary Parameter Reconciliation (#321 — complete)
+
+The whitepaper's monetary numbers were reconciled (2026-06) against the shipped
+canonical policy in `botho/src/monetary.rs` (`mainnet_policy()`, set by #351):
+block time 5s baseline (5–40s dynamic), 6,307,200 blocks/year, 50 BTH initial
+reward, 5 annual halvings reaching tail in ~5 years, ~611M Phase-1 supply, 2%
+net perpetual supply-dependent tail emission (~1.94 BTH/block net at tail
+onset), 80/20 lottery/burn fee split, picocredit unit (1 BTH = 1e12). All stale
+60s/10s block-time, 1,051,200-block / ~2-year halving, fixed-0.3-BTH tail, and
+100M-supply references were removed from `whitepaper/*.tex` and the emission /
+supply figures, and the PDF + deployed copy were rebuilt.
+
+---
+
+*Last updated: 2026-06-15*
+*Document version: 1.2*

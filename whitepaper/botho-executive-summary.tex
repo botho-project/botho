@@ -61,7 +61,7 @@ Ring size & 20 & Sender hidden among 20 possibilities \\
 Transaction size & $\sim$4 KB & Practical for mobile wallets \\
 Block time & 5--40s & Dynamic based on network load \\
 Finality & $\sim$5s & Deterministic (not probabilistic) \\
-Tail emission & 0.3 BTH/block & Perpetual $\sim$2\% inflation \\
+Tail emission & 2\% net/yr & Supply-dependent ($\sim$1.94 BTH/block at 611M) \\
 \bottomrule
 \end{tabular}
 
@@ -102,8 +102,11 @@ coin \emph{ancestry}, not current ownership---preserves privacy.
 \item 20\% burned (creates deflationary pressure proportional to usage)
 \end{itemize}
 
-\textbf{Tail emission}: Perpetual 0.3 BTH per block ensures long-term security
-funding. Asymptotic inflation: $\sim$2\%.
+\textbf{Tail emission}: After 5 annual halvings ($\sim$5 years, fixing the
+Phase-1 supply at $\approx$611M BTH), perpetual tail emission funds long-term
+security at a constant 2\% net annual inflation. This is supply-dependent
+($\approx$1.94 BTH/block net at the 611M tail-onset supply, growing with
+supply), not a fixed per-block constant.
 
 \section*{Security Model}
 
