@@ -767,6 +767,12 @@ Total Phase 1 supply: **100,000,000 BTH**
 
 Emission follows a halving schedule over approximately 10 years.
 
+> **Superseded**: The canonical mainnet emission schedule (issue #351, shipped in
+> `botho/src/monetary.rs`) sets the halving interval to 6,307,200 blocks (~1 year),
+> 5 halvings, for a ~611M BTH Phase-1 supply over ~5 years. See
+> [protocol-v0.2.0.md](protocol-v0.2.0.md) §8.2 and [minting.md](../minting.md).
+> The figures in this v0.1.0 document are retained for historical reference only.
+
 #### 8.2.2 Block Reward
 
 Block rewards decrease according to:

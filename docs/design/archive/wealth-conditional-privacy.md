@@ -84,7 +84,7 @@ pub struct PrivacyPolicy {
 }
 ```
 
-**Coverage Analysis** (at 100M BTH supply):
+**Coverage Analysis** (at a 100M BTH simulation-calibration scale — not the ~611M BTH mainnet Phase-1 supply):
 
 | Source Wealth | % of Supply | Privacy Level | Affected Users |
 |---------------|-------------|---------------|----------------|

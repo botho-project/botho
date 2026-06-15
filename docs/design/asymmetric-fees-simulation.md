@@ -570,7 +570,7 @@ PARAMETER_SPACE = {
 ```python
 FIXED_PARAMS = {
     "num_agents": 1000,
-    "initial_supply": 100_000_000_000_000,               # 100M BTH in picocredits
+    "initial_supply": 100_000_000_000_000,               # simulation calibration scale, not the ~611M BTH mainnet Phase-1 supply
     "initial_gini": 0.85,
     "simulation_rounds": 1000,
     "rounds_per_day": 4320,                              # ~20 sec blocks
