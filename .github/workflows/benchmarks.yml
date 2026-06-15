@@ -46,8 +46,23 @@ jobs:
             ${{ runner.os }}-cargo-bench-
             ${{ runner.os }}-cargo-
 
-      - name: Compile benchmarks (all packages)
-        run: cargo bench --no-run --workspace
+      # Compile only the crates that actually have benchmark targets, instead
+      # of `--workspace`. The full-workspace compile dragged in the Tauri
+      # desktop crate (needs GTK/glib system libs) and a no_std-leaning member
+      # that triggered a `k256` feature-unification break
+      # ("`precomputed-tables` feature requires either `critical-section` or
+      # `std`"). Neither crate has benchmarks, so scoping to the benched crates
+      # keeps full benchmark coverage while sidestepping both failures and
+      # removing the need for the GTK/glib apt install.
+      - name: Compile benchmarks (bench-bearing crates)
+        run: >
+          cargo bench --no-run
+          -p botho
+          -p bth-transaction-core
+          -p bth-crypto-pq
+          -p bth-crypto-ring-signature
+          -p bth-account-keys
+          -p bth-cluster-tax
 
   run-crypto-benchmarks:
     name: Crypto Benchmarks
