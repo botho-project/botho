@@ -3,7 +3,7 @@
 use crate::tag::TagVector;
 
 /// Unique identifier for an agent in the simulation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct AgentId(pub u64);
 
 impl AgentId {

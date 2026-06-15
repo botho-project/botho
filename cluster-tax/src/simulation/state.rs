@@ -262,9 +262,16 @@ impl SimulationState {
     }
 
     /// Get agents sorted by balance (descending).
+    ///
+    /// The ordering is a *total* order: ties on balance are broken by
+    /// ascending `AgentId`. Without the tie-break, the input order for equal
+    /// balances came from `HashMap` iteration (randomly seeded per process),
+    /// so a downstream consumer that sums fee burns in iteration order could
+    /// produce process-dependent results (see #353). The tie-break makes the
+    /// output byte-reproducible across processes regardless of insertion order.
     pub fn agents_by_wealth(&self) -> Vec<(AgentId, u64)> {
         let mut agents: Vec<_> = self.agent_balances.iter().map(|(&k, &v)| (k, v)).collect();
-        agents.sort_by(|a, b| b.1.cmp(&a.1));
+        agents.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
         agents
     }
 }
@@ -332,6 +339,77 @@ mod tests {
         assert_eq!(
             state.total_fees_collected, expected,
             "cumulative fees must accumulate exactly past u64::MAX"
+        );
+    }
+
+    /// Regression for #353: `agents_by_wealth()` must be a *total* order so its
+    /// output is identical regardless of `HashMap` insertion/iteration order.
+    ///
+    /// Previously the sort was stable on balance only, so tied balances kept
+    /// their `HashMap` iteration order — randomly seeded per process — which let
+    /// a downstream fee/cluster consumer sum in a process-dependent order and
+    /// drift the result (S3 `fees_recycled` differed by ~3 nanoBTH across runs).
+    ///
+    /// This test inserts the *same* agents in two opposite orders and asserts the
+    /// output is byte-identical, then checks the explicit tie-break (ascending
+    /// `AgentId` within an equal balance). It does not need a subprocess: any
+    /// dependence on insertion order is exposed directly.
+    #[test]
+    fn agents_by_wealth_is_total_ordered_under_tied_balances() {
+        // Several agents share balances to force the tie-break path:
+        //   balance 100: agents 5, 1, 3
+        //   balance  50: agents 4, 2
+        //   balance 200: agent 6 (unique, must sort first)
+        let pairs = [
+            (AgentId(6), 200u64),
+            (AgentId(5), 100u64),
+            (AgentId(1), 100u64),
+            (AgentId(3), 100u64),
+            (AgentId(4), 50u64),
+            (AgentId(2), 50u64),
+        ];
+
+        // Insert ascending by id.
+        let mut ascending = SimulationState::default();
+        let mut ids: Vec<_> = pairs.iter().map(|p| p.0).collect();
+        ids.sort();
+        for id in &ids {
+            let balance = pairs.iter().find(|p| p.0 == *id).unwrap().1;
+            ascending.update_agent_balance(*id, balance);
+        }
+
+        // Insert descending by id (deliberately the reverse order).
+        let mut descending = SimulationState::default();
+        for id in ids.iter().rev() {
+            let balance = pairs.iter().find(|p| p.0 == *id).unwrap().1;
+            descending.update_agent_balance(*id, balance);
+        }
+
+        let from_ascending = ascending.agents_by_wealth();
+        let from_descending = descending.agents_by_wealth();
+
+        // Independence from insertion order is what guards against cross-process
+        // HashMap-seed drift: the same agents inserted in opposite orders must
+        // yield byte-identical output.
+        assert_eq!(
+            from_ascending, from_descending,
+            "agents_by_wealth() must be independent of insertion order"
+        );
+
+        // The default constructor starts with an empty agent set, so the output
+        // is exactly these six agents in the expected total order: descending
+        // balance, then ascending AgentId on ties.
+        let expected_order = vec![
+            (AgentId(6), 200u64),
+            (AgentId(1), 100u64),
+            (AgentId(3), 100u64),
+            (AgentId(5), 100u64),
+            (AgentId(2), 50u64),
+            (AgentId(4), 50u64),
+        ];
+        assert_eq!(
+            from_ascending, expected_order,
+            "ties must break by ascending AgentId under descending balance"
         );
     }
 }
