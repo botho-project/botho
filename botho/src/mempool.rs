@@ -275,10 +275,11 @@ pub struct PendingTx {
     pub tx: Transaction,
     pub received_at: std::time::Instant,
     pub fee_per_byte: u64,
-    /// Fee density accounting for cluster factor: fee / (size × cluster_factor).
-    /// Higher values get priority. This ensures wealthy clusters (high factor)
-    /// must pay more to achieve the same priority as smaller clusters.
-    /// Stored as scaled integer (×1000) to avoid floating point.
+    /// Fee density accounting for cluster factor: fee / (size ×
+    /// cluster_factor). Higher values get priority. This ensures wealthy
+    /// clusters (high factor) must pay more to achieve the same priority as
+    /// smaller clusters. Stored as scaled integer (×1000) to avoid floating
+    /// point.
     pub fee_density: u64,
     /// The cluster wealth used for fee calculation.
     pub cluster_wealth: u64,
@@ -351,7 +352,8 @@ pub struct Mempool {
     /// Spent key images with timestamps (for double-spend prevention).
     /// Maps key image -> time when first seen.
     /// Key images are kept even after transaction eviction to prevent race
-    /// conditions with consensus pending_values. Cleaned up after MAX_KEY_IMAGE_AGE_SECS.
+    /// conditions with consensus pending_values. Cleaned up after
+    /// MAX_KEY_IMAGE_AGE_SECS.
     spent_key_images: HashMap<[u8; 32], std::time::Instant>,
     /// Fee configuration for computing minimum fees
     fee_config: FeeConfig,
@@ -359,7 +361,8 @@ pub struct Mempool {
     dynamic_fee: DynamicFeeBase,
     /// Whether we're at minimum block time (triggers dynamic fee adjustment)
     at_min_block_time: bool,
-    /// Whether to enforce minimum fee requirements (can be disabled for testnet)
+    /// Whether to enforce minimum fee requirements (can be disabled for
+    /// testnet)
     enforce_minimum_fee: bool,
     /// Metrics tracking for fee enforcement
     fee_metrics: MempoolFeeMetrics,
@@ -627,7 +630,8 @@ impl Mempool {
             .map_err(|e| MempoolError::InvalidTransaction(e.to_string()))?;
 
         // Validate inputs (all transactions use CLSAG ring signatures)
-        let (input_sum, ring_members) = self.validate_clsag_inputs(tx.inputs.clsag(), &tx, ledger)?;
+        let (input_sum, ring_members) =
+            self.validate_clsag_inputs(tx.inputs.clsag(), &tx, ledger)?;
 
         // Validate outputs + fee <= inputs
         // Use checked arithmetic to detect overflow from malicious transactions
@@ -683,14 +687,9 @@ impl Mempool {
         // See docs/design/cluster-tilted-redistribution.md.
         let demurrage = {
             let policy = crate::monetary::mainnet_policy();
-            let chain_height = ledger
-                .get_chain_state()
-                .map(|s| s.height)
-                .unwrap_or(0);
-            let elapsed =
-                bth_cluster_tax::ring_elapsed_centroid(&ring_members, chain_height);
-            let blocks_per_year =
-                (365 * 24 * 60 * 60) / policy.target_block_time_secs.max(1);
+            let chain_height = ledger.get_chain_state().map(|s| s.height).unwrap_or(0);
+            let elapsed = bth_cluster_tax::ring_elapsed_centroid(&ring_members, chain_height);
+            let blocks_per_year = (365 * 24 * 60 * 60) / policy.target_block_time_secs.max(1);
             bth_cluster_tax::demurrage_charge(
                 output_sum,
                 self.fee_config.cluster_factor(cluster_wealth),
@@ -706,10 +705,11 @@ impl Mempool {
 
             // Track metrics for all insufficient fees (even if not enforced)
             self.fee_metrics.fee_rejections += 1;
-            self.fee_metrics.total_fee_shortfall =
-                self.fee_metrics.total_fee_shortfall.saturating_add(shortfall);
-            self.fee_metrics.max_fee_shortfall =
-                self.fee_metrics.max_fee_shortfall.max(shortfall);
+            self.fee_metrics.total_fee_shortfall = self
+                .fee_metrics
+                .total_fee_shortfall
+                .saturating_add(shortfall);
+            self.fee_metrics.max_fee_shortfall = self.fee_metrics.max_fee_shortfall.max(shortfall);
 
             if self.enforce_minimum_fee {
                 debug!(
@@ -861,8 +861,9 @@ impl Mempool {
 
     /// Remove a transaction from the mempool and clear its key images.
     ///
-    /// Use this when a transaction is confirmed in a block or explicitly invalidated.
-    /// For eviction (space/age), use `evict_tx` instead to preserve key image tracking.
+    /// Use this when a transaction is confirmed in a block or explicitly
+    /// invalidated. For eviction (space/age), use `evict_tx` instead to
+    /// preserve key image tracking.
     pub fn remove_tx(&mut self, tx_hash: &[u8; 32]) -> Option<Transaction> {
         if let Some(pending) = self.txs.remove(tx_hash) {
             // Remove spent key images - safe because tx is confirmed/invalid
@@ -878,8 +879,8 @@ impl Mempool {
     /// Evict a transaction from the mempool but KEEP its key images tracked.
     ///
     /// This is used for space/age eviction where we want to prevent the same
-    /// key images from being re-submitted (which could cause double-spend issues
-    /// if the evicted tx is still in consensus pending_values).
+    /// key images from being re-submitted (which could cause double-spend
+    /// issues if the evicted tx is still in consensus pending_values).
     ///
     /// Key images are only cleared when a transaction is:
     /// - Confirmed in a block (via `remove_tx`)
@@ -1024,7 +1025,12 @@ impl Mempool {
             if now.duration_since(*added_at).as_secs() > MAX_KEY_IMAGE_AGE_SECS {
                 // Check if any transaction in the mempool uses this key image
                 let still_in_use = self.txs.values().any(|pending| {
-                    pending.tx.inputs.clsag().iter().any(|input| &input.key_image == key_image)
+                    pending
+                        .tx
+                        .inputs
+                        .clsag()
+                        .iter()
+                        .any(|input| &input.key_image == key_image)
                 });
 
                 if !still_in_use {
@@ -1423,7 +1429,9 @@ mod tests {
 
         let key_image: [u8; 32] = [0xDE; 32];
 
-        mempool.spent_key_images.insert(key_image, std::time::Instant::now());
+        mempool
+            .spent_key_images
+            .insert(key_image, std::time::Instant::now());
 
         assert!(mempool.spent_key_images.contains_key(&key_image));
         assert_eq!(mempool.spent_key_images.len(), 1);

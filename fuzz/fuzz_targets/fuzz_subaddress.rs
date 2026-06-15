@@ -2,9 +2,10 @@
 
 //! Fuzzing target for subaddress derivation and view key scanning.
 //!
-//! Security rationale: Subaddress derivation must be deterministic and consistent.
-//! The same account key must always produce the same subaddresses. View key scanning
-//! must correctly identify owned outputs without false positives or negatives.
+//! Security rationale: Subaddress derivation must be deterministic and
+//! consistent. The same account key must always produce the same subaddresses.
+//! View key scanning must correctly identify owned outputs without false
+//! positives or negatives.
 //!
 //! This target tests:
 //! - Subaddress derivation consistency
@@ -18,8 +19,8 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
 
 use bth_account_keys::{
-    AccountKey, ViewAccountKey, PublicAddress,
-    DEFAULT_SUBADDRESS_INDEX, CHANGE_SUBADDRESS_INDEX, GIFT_CODE_SUBADDRESS_INDEX,
+    AccountKey, PublicAddress, ViewAccountKey, CHANGE_SUBADDRESS_INDEX, DEFAULT_SUBADDRESS_INDEX,
+    GIFT_CODE_SUBADDRESS_INDEX,
 };
 use bth_crypto_keys::{RistrettoPrivate, RistrettoPublic};
 use bth_util_from_random::FromRandom;

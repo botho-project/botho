@@ -2,9 +2,9 @@
 
 //! WebRTC transport for protocol obfuscation.
 //!
-//! This module implements Phase 3 of the traffic privacy roadmap: Protocol Obfuscation
-//! using WebRTC data channels to make botho traffic indistinguishable from legitimate
-//! video calling applications.
+//! This module implements Phase 3 of the traffic privacy roadmap: Protocol
+//! Obfuscation using WebRTC data channels to make botho traffic
+//! indistinguishable from legitimate video calling applications.
 //!
 //! # Overview
 //!
@@ -47,9 +47,11 @@
 //!
 //! # Features
 //!
-//! - **NAT Traversal**: ICE with STUN/TURN support for connectivity through NATs
+//! - **NAT Traversal**: ICE with STUN/TURN support for connectivity through
+//!   NATs
 //! - **Protocol Obfuscation**: Traffic looks like WebRTC video calls
-//! - **Trickle ICE**: Candidates sent as gathered for faster connection establishment
+//! - **Trickle ICE**: Candidates sent as gathered for faster connection
+//!   establishment
 //! - **DTLS Security**: Ephemeral certificates for authenticated encryption
 //!
 //! # References
@@ -76,18 +78,18 @@ pub use stun::{NatType, StunClient, StunConfig, StunError};
 
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use webrtc::api::interceptor_registry::register_default_interceptors;
-use webrtc::api::media_engine::MediaEngine;
-use webrtc::api::APIBuilder;
-use webrtc::data_channel::data_channel_message::DataChannelMessage;
-use webrtc::data_channel::RTCDataChannel;
-use webrtc::ice_transport::ice_connection_state::RTCIceConnectionState;
-use webrtc::ice_transport::ice_server::RTCIceServer;
-use webrtc::interceptor::registry::Registry;
-use webrtc::peer_connection::configuration::RTCConfiguration;
-use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
-use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
-use webrtc::peer_connection::RTCPeerConnection;
+use webrtc::{
+    api::{
+        interceptor_registry::register_default_interceptors, media_engine::MediaEngine, APIBuilder,
+    },
+    data_channel::{data_channel_message::DataChannelMessage, RTCDataChannel},
+    ice_transport::{ice_connection_state::RTCIceConnectionState, ice_server::RTCIceServer},
+    interceptor::registry::Registry,
+    peer_connection::{
+        configuration::RTCConfiguration, peer_connection_state::RTCPeerConnectionState,
+        sdp::session_description::RTCSessionDescription, RTCPeerConnection,
+    },
+};
 
 use super::{TransportError, WebRtcError};
 
@@ -158,14 +160,17 @@ impl WebRtcTransport {
                 urls: vec![url.clone()],
                 ..Default::default()
             })
-            .chain(self.ice_config.turn_servers.iter().map(|turn| {
-                RTCIceServer {
-                    urls: vec![turn.url.clone()],
-                    username: turn.username.clone(),
-                    credential: turn.credential.clone(),
-                    ..Default::default()
-                }
-            }))
+            .chain(
+                self.ice_config
+                    .turn_servers
+                    .iter()
+                    .map(|turn| RTCIceServer {
+                        urls: vec![turn.url.clone()],
+                        username: turn.username.clone(),
+                        credential: turn.credential.clone(),
+                        ..Default::default()
+                    }),
+            )
             .collect();
 
         let config = RTCConfiguration {
@@ -282,10 +287,7 @@ pub struct WebRtcConnection {
 
 impl WebRtcConnection {
     /// Create a new WebRTC connection.
-    pub fn new(
-        peer_connection: Arc<RTCPeerConnection>,
-        data_channel: Arc<RTCDataChannel>,
-    ) -> Self {
+    pub fn new(peer_connection: Arc<RTCPeerConnection>, data_channel: Arc<RTCDataChannel>) -> Self {
         let recv_buffer = Arc::new(Mutex::new(Vec::new()));
         let buffer_clone = recv_buffer.clone();
 

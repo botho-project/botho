@@ -502,7 +502,10 @@ impl ConsensusService {
         }
 
         // Fill remaining slots with transfer txs
-        let remaining_slots = self.config.max_txs_per_slot.saturating_sub(to_propose.len());
+        let remaining_slots = self
+            .config
+            .max_txs_per_slot
+            .saturating_sub(to_propose.len());
         let transfer_txs: Vec<ConsensusValue> = self
             .pending_values
             .iter()

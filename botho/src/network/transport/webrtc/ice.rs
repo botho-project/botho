@@ -27,16 +27,17 @@
 //!   │═══════════════[4. Selected Pair]═══════════════════│
 //! ```
 
-use std::net::SocketAddr;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 use thiserror::Error;
-use tokio::sync::{mpsc, Mutex};
-use tokio::time::timeout;
+use tokio::{
+    sync::{mpsc, Mutex},
+    time::timeout,
+};
 use tracing::{debug, info, warn};
-use webrtc::ice_transport::ice_candidate::RTCIceCandidate;
-use webrtc::ice_transport::ice_gathering_state::RTCIceGatheringState;
-use webrtc::peer_connection::RTCPeerConnection;
+use webrtc::{
+    ice_transport::{ice_candidate::RTCIceCandidate, ice_gathering_state::RTCIceGatheringState},
+    peer_connection::RTCPeerConnection,
+};
 
 /// Errors that can occur during ICE operations.
 #[derive(Debug, Error)]
@@ -202,9 +203,14 @@ impl IceCandidate {
     }
 
     /// Calculate priority for this candidate.
-    pub fn calculate_priority(candidate_type: IceCandidateType, component: u16, local_pref: u32) -> u32 {
+    pub fn calculate_priority(
+        candidate_type: IceCandidateType,
+        component: u16,
+        local_pref: u32,
+    ) -> u32 {
         // RFC 8445 priority formula:
-        // priority = (2^24) * type_preference + (2^8) * local_preference + (256 - component_id)
+        // priority = (2^24) * type_preference + (2^8) * local_preference + (256 -
+        // component_id)
         let type_pref = candidate_type.priority_modifier() as u32;
         (1 << 24) * type_pref + (1 << 8) * local_pref + (256 - component as u32)
     }
@@ -232,7 +238,8 @@ impl IceCandidate {
     /// Parse from SDP candidate attribute.
     pub fn from_sdp_attribute(sdp: &str) -> Result<Self, IceError> {
         // Parse SDP candidate line
-        // Format: candidate:foundation component protocol priority address port typ type [raddr addr rport port]
+        // Format: candidate:foundation component protocol priority address port typ
+        // type [raddr addr rport port]
         let parts: Vec<&str> = sdp.split_whitespace().collect();
         if parts.len() < 8 {
             return Err(IceError::InvalidCandidate(format!(

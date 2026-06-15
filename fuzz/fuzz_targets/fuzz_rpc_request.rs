@@ -2,9 +2,9 @@
 
 //! Fuzzing target for JSON-RPC request parsing.
 //!
-//! Security rationale: The RPC endpoint is exposed to external clients (exchanges,
-//! wallets, web interfaces). Malformed requests must not crash the server, leak
-//! information, or cause resource exhaustion.
+//! Security rationale: The RPC endpoint is exposed to external clients
+//! (exchanges, wallets, web interfaces). Malformed requests must not crash the
+//! server, leak information, or cause resource exhaustion.
 
 use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;

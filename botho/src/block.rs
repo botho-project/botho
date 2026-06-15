@@ -346,7 +346,12 @@ impl LotteryOutput {
     }
 
     /// Create from a 36-byte UTXO ID.
-    pub fn from_utxo_id(utxo_id: [u8; 36], payout: u64, target_key: [u8; 32], public_key: [u8; 32]) -> Self {
+    pub fn from_utxo_id(
+        utxo_id: [u8; 36],
+        payout: u64,
+        target_key: [u8; 32],
+        public_key: [u8; 32],
+    ) -> Self {
         let mut tx_hash = [0u8; 32];
         tx_hash.copy_from_slice(&utxo_id[..32]);
         let output_index = u32::from_le_bytes(utxo_id[32..36].try_into().unwrap());
@@ -478,7 +483,8 @@ impl Block {
     /// Create a new block template for minting with transactions.
     ///
     /// The minting reward output uses stealth addressing for minter privacy.
-    /// Note: Lottery outputs should be added separately via `set_lottery_result`.
+    /// Note: Lottery outputs should be added separately via
+    /// `set_lottery_result`.
     pub fn new_template_with_txs(
         prev_block: &Block,
         minter_address: &PublicAddress,
@@ -617,8 +623,7 @@ fn calculate_tail_reward_u128(
     // Target annual NET emission.
     let target_net = supply_at_transition * policy.tail_inflation_bps as u128 / 10_000;
     // Expected annual fee burns.
-    let expected_burns =
-        supply_at_transition * policy.expected_fee_burn_rate_bps as u128 / 10_000;
+    let expected_burns = supply_at_transition * policy.expected_fee_burn_rate_bps as u128 / 10_000;
     // Gross emission needed.
     let gross_needed = target_net + expected_burns;
     // Blocks per year at target rate.
@@ -1290,8 +1295,7 @@ mod tests {
 
         // Recompute the expected reward independently in u128.
         let target_net = real_supply * policy.tail_inflation_bps as u128 / 10_000;
-        let expected_burns =
-            real_supply * policy.expected_fee_burn_rate_bps as u128 / 10_000;
+        let expected_burns = real_supply * policy.expected_fee_burn_rate_bps as u128 / 10_000;
         let secs_per_year: u128 = 365 * 24 * 3600;
         let blocks_per_year = secs_per_year / policy.target_block_time_secs as u128;
         let expected = ((target_net + expected_burns) / blocks_per_year).max(1) as u64;
@@ -1337,7 +1341,10 @@ mod tests {
 
         let expected = near_max as u128 + reward as u128;
         assert_eq!(ctrl.total_emitted, expected);
-        assert!(ctrl.total_emitted > u64::MAX as u128, "must have crossed u64::MAX");
+        assert!(
+            ctrl.total_emitted > u64::MAX as u128,
+            "must have crossed u64::MAX"
+        );
 
         // net_supply also computed in u128 without wrapping.
         assert_eq!(ctrl.net_supply(), expected);

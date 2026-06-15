@@ -21,8 +21,8 @@
 //! 1. **Size-based fee**: Larger transactions pay more (proportional to bytes)
 //! 2. **Progressive multiplier**: Cluster factor ranges from 1x to 6x based on
 //!    the sender's cluster wealth, ensuring wealthy clusters pay more
-//! 3. **Superlinear output fee**: Quadratic penalty for multiple outputs prevents
-//!    UTXO farming (splitting coins to game lottery systems)
+//! 3. **Superlinear output fee**: Quadratic penalty for multiple outputs
+//!    prevents UTXO farming (splitting coins to game lottery systems)
 //! 4. **Memo fees**: Flat fee per encrypted memo
 //!
 //! ## Superlinear Output Fees
@@ -115,7 +115,8 @@ pub enum TransactionType {
 /// fee = fee_per_byte × tx_size × cluster_factor × output_penalty + memo_fees
 /// ```
 ///
-/// where `output_penalty = min(output_count, output_count_cap)^output_fee_exponent`
+/// where `output_penalty = min(output_count,
+/// output_count_cap)^output_fee_exponent`
 ///
 /// This superlinear output fee prevents UTXO farming attacks where attackers
 /// split coins into many small UTXOs to game lottery systems.
@@ -141,8 +142,9 @@ pub struct FeeConfig {
     /// - 1.0 = linear (no penalty for multiple outputs)
     /// - 2.0 = quadratic (default, 10 outputs costs 100x)
     ///
-    /// Stored as fixed-point: actual_exponent = output_fee_exponent_scaled / 1000
-    /// Default: 2000 (= 2.0 quadratic) to prevent UTXO farming attacks.
+    /// Stored as fixed-point: actual_exponent = output_fee_exponent_scaled /
+    /// 1000 Default: 2000 (= 2.0 quadratic) to prevent UTXO farming
+    /// attacks.
     pub output_fee_exponent_scaled: u32,
 
     /// Maximum output count to apply the exponent to.
@@ -169,12 +171,12 @@ pub const OUTPUT_FEE_EXPONENT_SCALE: u32 = 1000;
 impl Default for FeeConfig {
     fn default() -> Self {
         Self {
-            fee_per_byte: 1,                            // 1 nanoBTH per byte
+            fee_per_byte: 1, // 1 nanoBTH per byte
             cluster_curve: ClusterFactorCurve::default(),
-            fee_per_memo: 100,                          // 100 nanoBTH per memo
-            output_fee_exponent_scaled: 2000,           // 2.0 (quadratic)
-            output_count_cap: 10,                       // Cap at 10 outputs
-            min_output_value: 1_000_000,                // 0.001 BTH minimum
+            fee_per_memo: 100,                // 100 nanoBTH per memo
+            output_fee_exponent_scaled: 2000, // 2.0 (quadratic)
+            output_count_cap: 10,             // Cap at 10 outputs
+            min_output_value: 1_000_000,      // 0.001 BTH minimum
         }
     }
 }
@@ -207,7 +209,8 @@ impl FeeConfig {
         (penalty * OUTPUT_FEE_EXPONENT_SCALE as f64) as u64
     }
 
-    /// Compute the fee for a transaction based on size, cluster wealth, and output count.
+    /// Compute the fee for a transaction based on size, cluster wealth, and
+    /// output count.
     ///
     /// Formula:
     /// ```text
@@ -220,7 +223,8 @@ impl FeeConfig {
     /// * `tx_type` - The transaction type (Minting pays no fee)
     /// * `tx_size_bytes` - Size of the transaction in bytes
     /// * `cluster_wealth` - Total wealth of sender's cluster
-    /// * `num_outputs` - Number of transaction outputs (for superlinear penalty)
+    /// * `num_outputs` - Number of transaction outputs (for superlinear
+    ///   penalty)
     /// * `num_memos` - Number of outputs with encrypted memos
     ///
     /// # Returns
@@ -263,8 +267,8 @@ impl FeeConfig {
     /// This method assumes 2 outputs (standard transfer with change).
     /// For full control, use `compute_fee_with_outputs`.
     ///
-    /// Formula: `fee = (fee_per_byte × tx_size_bytes × cluster_factor × output_penalty) +
-    /// memo_fees`
+    /// Formula: `fee = (fee_per_byte × tx_size_bytes × cluster_factor ×
+    /// output_penalty) + memo_fees`
     ///
     /// # Arguments
     /// * `tx_type` - The transaction type (Minting pays no fee)
@@ -350,12 +354,19 @@ impl FeeConfig {
             }
             TransactionType::Minting => 1_500, // ~1.5 KB for minting
         };
-        self.compute_fee_with_outputs(tx_type, typical_size, cluster_wealth, num_outputs, num_memos)
+        self.compute_fee_with_outputs(
+            tx_type,
+            typical_size,
+            cluster_wealth,
+            num_outputs,
+            num_memos,
+        )
     }
 
     /// Compute the minimum fee for a transaction (alias for validation).
     ///
-    /// Assumes 2 outputs. For multi-output validation, use `minimum_fee_with_outputs`.
+    /// Assumes 2 outputs. For multi-output validation, use
+    /// `minimum_fee_with_outputs`.
     pub fn minimum_fee(
         &self,
         tx_type: TransactionType,
@@ -375,7 +386,13 @@ impl FeeConfig {
         num_outputs: usize,
         num_memos: usize,
     ) -> u64 {
-        self.compute_fee_with_outputs(tx_type, tx_size_bytes, cluster_wealth, num_outputs, num_memos)
+        self.compute_fee_with_outputs(
+            tx_type,
+            tx_size_bytes,
+            cluster_wealth,
+            num_outputs,
+            num_memos,
+        )
     }
 
     /// Compute fee with dynamic base adjustment for congestion control.
@@ -385,7 +402,8 @@ impl FeeConfig {
     /// fee = dynamic_base × tx_size × cluster_factor × output_penalty + memo_fees
     /// ```
     ///
-    /// Assumes 2 outputs. For multi-output, use `compute_fee_with_dynamic_base_and_outputs`.
+    /// Assumes 2 outputs. For multi-output, use
+    /// `compute_fee_with_dynamic_base_and_outputs`.
     ///
     /// # Arguments
     /// * `tx_type` - Transaction type (Minting pays no fee)
@@ -467,7 +485,8 @@ impl FeeConfig {
 
     /// Compute minimum fee with dynamic base (alias for validation).
     ///
-    /// Assumes 2 outputs. For multi-output, use `minimum_fee_dynamic_with_outputs`.
+    /// Assumes 2 outputs. For multi-output, use
+    /// `minimum_fee_dynamic_with_outputs`.
     pub fn minimum_fee_dynamic(
         &self,
         tx_type: TransactionType,
@@ -1035,26 +1054,18 @@ mod tests {
         let config = FeeConfig::default();
 
         // Single 2-output transaction (normal)
-        let fee_normal = config.compute_fee_with_outputs(
-            TransactionType::Hidden,
-            4_000,
-            0,
-            2,
-            0,
-        );
+        let fee_normal = config.compute_fee_with_outputs(TransactionType::Hidden, 4_000, 0, 2, 0);
 
         // Splitting into 10 outputs costs 25x more
-        let fee_split = config.compute_fee_with_outputs(
-            TransactionType::Hidden,
-            4_000,
-            0,
-            10,
-            0,
-        );
+        let fee_split = config.compute_fee_with_outputs(TransactionType::Hidden, 4_000, 0, 10, 0);
 
         // 10 outputs = 100x penalty, 2 outputs = 4x penalty
         // So splitting should cost 100/4 = 25x more
-        assert_eq!(fee_split, fee_normal * 25, "10-output tx should cost 25x more");
+        assert_eq!(
+            fee_split,
+            fee_normal * 25,
+            "10-output tx should cost 25x more"
+        );
     }
 
     // ========================================================================

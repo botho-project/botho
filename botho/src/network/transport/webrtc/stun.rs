@@ -12,7 +12,8 @@
 //! - **Open/Full Cone**: Any external host can send to the mapped port
 //! - **Restricted Cone**: Only hosts the internal host has contacted can send
 //! - **Port Restricted Cone**: Must match both host and port
-//! - **Symmetric**: Different mapping for each destination (hardest to traverse)
+//! - **Symmetric**: Different mapping for each destination (hardest to
+//!   traverse)
 //!
 //! # Protocol (RFC 5389)
 //!
@@ -30,11 +31,12 @@
 //! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 //! ```
 
-use std::net::{IpAddr, SocketAddr};
-use std::time::Duration;
+use std::{
+    net::{IpAddr, SocketAddr},
+    time::Duration,
+};
 use thiserror::Error;
-use tokio::net::UdpSocket;
-use tokio::time::timeout;
+use tokio::{net::UdpSocket, time::timeout};
 use tracing::{debug, info, trace, warn};
 
 /// STUN magic cookie (RFC 5389)
@@ -305,10 +307,7 @@ impl StunClient {
 
         if mapped1.ip() != mapped2.ip() || mapped1.port() != mapped2.port() {
             // Different mappings for different destinations = Symmetric NAT
-            info!(
-                "Symmetric NAT detected: {} vs {}",
-                mapped1, mapped2
-            );
+            info!("Symmetric NAT detected: {} vs {}", mapped1, mapped2);
             return Ok(NatType::Symmetric);
         }
 
@@ -331,9 +330,7 @@ impl StunClient {
 /// Parse STUN server URL or address.
 fn parse_stun_server(server: &str) -> Result<SocketAddr, StunError> {
     // Handle stun: URL prefix
-    let addr_str = server
-        .strip_prefix("stun:")
-        .unwrap_or(server);
+    let addr_str = server.strip_prefix("stun:").unwrap_or(server);
 
     // Parse as socket address
     if let Ok(addr) = addr_str.parse() {
@@ -403,12 +400,16 @@ fn parse_binding_response(
     // Check magic cookie
     let cookie = u32::from_be_bytes([data[4], data[5], data[6], data[7]]);
     if cookie != STUN_MAGIC_COOKIE {
-        return Err(StunError::InvalidResponse("invalid magic cookie".to_string()));
+        return Err(StunError::InvalidResponse(
+            "invalid magic cookie".to_string(),
+        ));
     }
 
     // Check transaction ID
     if &data[8..20] != expected_transaction_id {
-        return Err(StunError::InvalidResponse("transaction ID mismatch".to_string()));
+        return Err(StunError::InvalidResponse(
+            "transaction ID mismatch".to_string(),
+        ));
     }
 
     // Get message length
@@ -539,7 +540,10 @@ mod tests {
     #[test]
     fn test_nat_type_relay_score() {
         assert!(NatType::Open.relay_score_modifier() > NatType::Symmetric.relay_score_modifier());
-        assert!(NatType::FullCone.relay_score_modifier() > NatType::PortRestricted.relay_score_modifier());
+        assert!(
+            NatType::FullCone.relay_score_modifier()
+                > NatType::PortRestricted.relay_score_modifier()
+        );
     }
 
     #[test]
@@ -574,7 +578,10 @@ mod tests {
         let request = build_binding_request(&tx_id);
 
         assert_eq!(request.len(), 20);
-        assert_eq!(u16::from_be_bytes([request[0], request[1]]), STUN_BINDING_REQUEST);
+        assert_eq!(
+            u16::from_be_bytes([request[0], request[1]]),
+            STUN_BINDING_REQUEST
+        );
         assert_eq!(u16::from_be_bytes([request[2], request[3]]), 0); // No attributes
         assert_eq!(
             u32::from_be_bytes([request[4], request[5], request[6], request[7]]),

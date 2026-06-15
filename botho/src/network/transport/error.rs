@@ -3,13 +3,12 @@
 //! Transport error types for pluggable transports.
 //!
 //! This module defines the error types used by the transport layer,
-//! covering connection failures, handshake errors, and transport-specific issues.
+//! covering connection failures, handshake errors, and transport-specific
+//! issues.
 
-use std::fmt;
-use std::io;
+use std::{fmt, io};
 
-use super::webrtc::ice::IceError;
-use super::webrtc::stun::StunError;
+use super::webrtc::{ice::IceError, stun::StunError};
 
 /// Result type for transport operations.
 pub type TransportResult<T> = Result<T, TransportError>;
@@ -235,7 +234,11 @@ impl fmt::Display for WebRtcError {
             WebRtcError::SendFailed(msg) => write!(f, "failed to send data: {}", msg),
             WebRtcError::ReceiveFailed(msg) => write!(f, "failed to receive data: {}", msg),
             WebRtcError::InvalidState { expected, actual } => {
-                write!(f, "connection state error: expected {}, got {}", expected, actual)
+                write!(
+                    f,
+                    "connection state error: expected {}, got {}",
+                    expected, actual
+                )
             }
         }
     }

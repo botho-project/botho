@@ -654,7 +654,8 @@ pub struct ClsagRingInput {
     /// In the current transparent-amount model (trivial zero-blinding Pedersen
     /// commitments), each input's CLSAG balance proof asserts that the real
     /// ring member's committed amount equals this value. The transaction-level
-    /// balance check then requires `sum(pseudo_output_amount) == outputs + fee`.
+    /// balance check then requires `sum(pseudo_output_amount) == outputs +
+    /// fee`.
     ///
     /// This replaces the previous (broken) model where every input was checked
     /// against the *full* output total, which made any honest multi-input
@@ -1092,9 +1093,9 @@ impl Transaction {
     ///    binds that member's committed amount to the claimed pseudo-output
     ///    amount.
     /// 2. **Balance equation**: the sum of all per-input pseudo-output amounts
-    ///    must equal `outputs + fee`. All arithmetic is exact integer
-    ///    (checked) — there are no floating-point operations in this path, and
-    ///    any overflow is treated as invalid.
+    ///    must equal `outputs + fee`. All arithmetic is exact integer (checked)
+    ///    — there are no floating-point operations in this path, and any
+    ///    overflow is treated as invalid.
     ///
     /// This replaces the previous (broken) model where every input was checked
     /// against the full `outputs + fee` total, which made any honest
@@ -1122,13 +1123,13 @@ impl Transaction {
                 .ok_or("Input amount sum overflow")?;
         }
 
-        // 2. Balance equation: sum(inputs) == sum(outputs) + fee (exact).
-        //    Accumulate the output sum with checked arithmetic — do NOT route
-        //    through `total_output()`, whose internal sum would wrap silently
-        //    in release (overflow-checks = false). An overflowing output sum
-        //    must REJECT the transaction, never wrap: a wrapped output total
-        //    could equal a small honest input total and let a tx mint outputs
-        //    far exceeding its inputs (inflation). See audit finding #340.
+        // 2. Balance equation: sum(inputs) == sum(outputs) + fee (exact). Accumulate
+        //    the output sum with checked arithmetic — do NOT route through
+        //    `total_output()`, whose internal sum would wrap silently in release
+        //    (overflow-checks = false). An overflowing output sum must REJECT the
+        //    transaction, never wrap: a wrapped output total could equal a small honest
+        //    input total and let a tx mint outputs far exceeding its inputs
+        //    (inflation). See audit finding #340.
         let mut output_total: u64 = 0;
         for output in &self.outputs {
             output_total = output_total
@@ -1197,8 +1198,8 @@ pub struct Utxo {
 impl Transaction {
     /// Create a stub transaction for testing with a given fee.
     ///
-    /// This creates an empty transaction (no inputs/outputs) with the specified fee.
-    /// Used for testing fee-related logic like lottery validation.
+    /// This creates an empty transaction (no inputs/outputs) with the specified
+    /// fee. Used for testing fee-related logic like lottery validation.
     pub fn new_stub_with_fee(fee: u64) -> Self {
         Self {
             inputs: TxInputs::new(vec![]),
@@ -1430,7 +1431,9 @@ mod tests {
         let onetime_public = RistrettoPublic::from(&onetime_private);
 
         let real_member = RingMember {
-            target_key: CompressedRistrettoPublic::from(&onetime_public).to_bytes().into(),
+            target_key: CompressedRistrettoPublic::from(&onetime_public)
+                .to_bytes()
+                .into(),
             public_key: CompressedRistrettoPublic::from(&RistrettoPublic::from(
                 &RistrettoPrivate::from_random(&mut rng),
             ))
@@ -1452,8 +1455,12 @@ mod tests {
             let decoy_amount: u64 = rng.gen_range(1..1_000_000);
             let g = generators(0);
             ring.push(RingMember {
-                target_key: CompressedRistrettoPublic::from(&decoy_target).to_bytes().into(),
-                public_key: CompressedRistrettoPublic::from(&decoy_public).to_bytes().into(),
+                target_key: CompressedRistrettoPublic::from(&decoy_target)
+                    .to_bytes()
+                    .into(),
+                public_key: CompressedRistrettoPublic::from(&decoy_public)
+                    .to_bytes()
+                    .into(),
                 commitment: g
                     .commit(Scalar::from(decoy_amount), Scalar::ZERO)
                     .compress()
@@ -1478,9 +1485,10 @@ mod tests {
 
     /// Assemble a transaction whose inputs sum to `outputs + fee`.
     ///
-    /// `input_amounts` are the per-input spent amounts; the outputs are a single
-    /// recipient output plus an implicit balance — here we simply emit a single
-    /// output equal to `sum(inputs) - fee` so the balance equation holds.
+    /// `input_amounts` are the per-input spent amounts; the outputs are a
+    /// single recipient output plus an implicit balance — here we simply
+    /// emit a single output equal to `sum(inputs) - fee` so the balance
+    /// equation holds.
     fn balanced_tx(input_amounts: &[u64], fee: u64) -> Transaction {
         let total_input: u64 = input_amounts.iter().sum();
         let output_amount = total_input - fee;

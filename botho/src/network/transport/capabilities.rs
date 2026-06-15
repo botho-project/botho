@@ -338,10 +338,22 @@ mod tests {
 
     #[test]
     fn test_transport_type_from_str() {
-        assert_eq!(TransportType::from_str("webrtc"), Some(TransportType::WebRTC));
-        assert_eq!(TransportType::from_str("WEBRTC"), Some(TransportType::WebRTC));
-        assert_eq!(TransportType::from_str("tls"), Some(TransportType::TlsTunnel));
-        assert_eq!(TransportType::from_str("tlstunnel"), Some(TransportType::TlsTunnel));
+        assert_eq!(
+            TransportType::from_str("webrtc"),
+            Some(TransportType::WebRTC)
+        );
+        assert_eq!(
+            TransportType::from_str("WEBRTC"),
+            Some(TransportType::WebRTC)
+        );
+        assert_eq!(
+            TransportType::from_str("tls"),
+            Some(TransportType::TlsTunnel)
+        );
+        assert_eq!(
+            TransportType::from_str("tlstunnel"),
+            Some(TransportType::TlsTunnel)
+        );
         assert_eq!(TransportType::from_str("plain"), Some(TransportType::Plain));
         assert_eq!(TransportType::from_str("tcp"), Some(TransportType::Plain));
         assert_eq!(TransportType::from_str("invalid"), None);
@@ -349,8 +361,12 @@ mod tests {
 
     #[test]
     fn test_transport_type_preference_score() {
-        assert!(TransportType::WebRTC.preference_score() > TransportType::TlsTunnel.preference_score());
-        assert!(TransportType::TlsTunnel.preference_score() > TransportType::Plain.preference_score());
+        assert!(
+            TransportType::WebRTC.preference_score() > TransportType::TlsTunnel.preference_score()
+        );
+        assert!(
+            TransportType::TlsTunnel.preference_score() > TransportType::Plain.preference_score()
+        );
     }
 
     #[test]
@@ -458,7 +474,10 @@ mod tests {
     #[test]
     fn test_capabilities_from_multiaddr_suffix_invalid() {
         assert!(TransportCapabilities::from_multiaddr_suffix("invalid").is_none());
-        assert!(TransportCapabilities::from_multiaddr_suffix("/transport-caps/999/webrtc/open").is_none());
+        assert!(
+            TransportCapabilities::from_multiaddr_suffix("/transport-caps/999/webrtc/open")
+                .is_none()
+        );
         assert!(TransportCapabilities::from_multiaddr_suffix("/transport-caps/1//open").is_none());
     }
 

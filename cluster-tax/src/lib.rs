@@ -69,13 +69,6 @@ pub use cluster::{ClusterId, ClusterWealth};
 pub use monetary::{DifficultyController, MonetaryPolicy, MonetaryState, MonetaryStats};
 
 pub use age_decay::{apply_age_decay, ring_cluster_factor, AgeDecayConfig, RingDecayInfo};
-pub use demurrage::{demurrage_charge, ring_elapsed_centroid};
-pub use entropy_decay::{
-    apply_entropy_decay, calculate_entropy_decay, compare_decay_modes,
-    conservative_entropy_delta, ring_entropy_decay, AttackResult, AttackStrategy, DecayBlockReason,
-    DecayMode, EntropyDecayConfig, EntropyDecayResult, EntropyScaling, RingDecayBlockReason,
-    RingEntropyDecayInfo, SimUtxo,
-};
 pub use block_decay::{
     AndDecayConfig, AndTagVector, BlockAwareTagVector, BlockDecayConfig, RateLimitedDecayConfig,
     RateLimitedTagVector,
@@ -89,20 +82,27 @@ pub use crypto::{
     CommittedFeeVerifier,
     CommittedTagVector,
     CommittedTagVectorSecret,
-    ExtendedTxSignature,
-    RingTagData,
-    SegmentOrProof,
     // Phase 2B: Entropy proofs
     EntropyLinkageProof,
     EntropyProof,
     EntropyProofBuilder,
     EntropyProofVerifier,
     EntropyRangeProof,
+    ExtendedTxSignature,
+    RingTagData,
+    SegmentOrProof,
     TransactionVersion,
     ENTROPY_SCALE,
     MIN_ENTROPY_THRESHOLD_SCALED,
 };
+pub use demurrage::{demurrage_charge, ring_elapsed_centroid};
 pub use dynamic_fee::{DynamicFeeBase, DynamicFeeState, FeeSuggestion};
+pub use entropy_decay::{
+    apply_entropy_decay, calculate_entropy_decay, compare_decay_modes, conservative_entropy_delta,
+    ring_entropy_decay, AttackResult, AttackStrategy, DecayBlockReason, DecayMode,
+    EntropyDecayConfig, EntropyDecayResult, EntropyScaling, RingDecayBlockReason,
+    RingEntropyDecayInfo, SimUtxo,
+};
 pub use fee_curve::{
     count_outputs_with_memos,
     ClusterFactorCurve,

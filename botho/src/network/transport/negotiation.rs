@@ -498,13 +498,15 @@ mod tests {
         let peer_caps = TransportCapabilities::full(NatType::FullCone);
 
         // Run initiator and responder concurrently
-        let initiator = tokio::spawn(async move {
-            negotiate_transport_initiator(&mut client, &our_caps).await
-        });
+        let initiator =
+            tokio::spawn(
+                async move { negotiate_transport_initiator(&mut client, &our_caps).await },
+            );
 
-        let responder = tokio::spawn(async move {
-            negotiate_transport_responder(&mut server, &peer_caps).await
-        });
+        let responder =
+            tokio::spawn(
+                async move { negotiate_transport_responder(&mut server, &peer_caps).await },
+            );
 
         let (init_result, resp_result) = tokio::join!(initiator, responder);
 
@@ -523,13 +525,15 @@ mod tests {
         let our_caps = TransportCapabilities::plain_only();
         let peer_caps = TransportCapabilities::full(NatType::Open);
 
-        let initiator = tokio::spawn(async move {
-            negotiate_transport_initiator(&mut client, &our_caps).await
-        });
+        let initiator =
+            tokio::spawn(
+                async move { negotiate_transport_initiator(&mut client, &our_caps).await },
+            );
 
-        let responder = tokio::spawn(async move {
-            negotiate_transport_responder(&mut server, &peer_caps).await
-        });
+        let responder =
+            tokio::spawn(
+                async move { negotiate_transport_responder(&mut server, &peer_caps).await },
+            );
 
         let (init_result, resp_result) = tokio::join!(initiator, responder);
 
@@ -557,13 +561,15 @@ mod tests {
             NatType::Open,
         );
 
-        let initiator = tokio::spawn(async move {
-            negotiate_transport_initiator(&mut client, &our_caps).await
-        });
+        let initiator =
+            tokio::spawn(
+                async move { negotiate_transport_initiator(&mut client, &our_caps).await },
+            );
 
-        let responder = tokio::spawn(async move {
-            negotiate_transport_responder(&mut server, &peer_caps).await
-        });
+        let responder =
+            tokio::spawn(
+                async move { negotiate_transport_responder(&mut server, &peer_caps).await },
+            );
 
         let (init_result, resp_result) = tokio::join!(initiator, responder);
 

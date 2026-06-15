@@ -294,11 +294,7 @@ impl TagVector {
             return (0, 0);
         }
 
-        let sum_sq: u128 = self
-            .tags
-            .values()
-            .map(|&w| (w as u128) * (w as u128))
-            .sum();
+        let sum_sq: u128 = self.tags.values().map(|&w| (w as u128) * (w as u128)).sum();
 
         let total_sq = (total as u128) * (total as u128);
 
@@ -415,10 +411,12 @@ impl TagVector {
         (sum_sq as f64 / total_sq as f64) <= threshold_inv
     }
 
-    /// Compute collision sum for the cluster-only distribution (excluding background).
+    /// Compute collision sum for the cluster-only distribution (excluding
+    /// background).
     ///
     /// This is the collision entropy equivalent of `cluster_entropy()` - it
-    /// only considers the attributed cluster weights, making it decay-invariant.
+    /// only considers the attributed cluster weights, making it
+    /// decay-invariant.
     ///
     /// # Returns
     ///
@@ -991,7 +989,10 @@ mod tests {
         // total_sq = 1_000_000² = 1_000_000_000_000
         // collision_prob = 1.0, H₂ = 0 bits
         assert_eq!(sum_sq, total_sq);
-        assert_eq!(sum_sq, (TAG_WEIGHT_SCALE as u128) * (TAG_WEIGHT_SCALE as u128));
+        assert_eq!(
+            sum_sq,
+            (TAG_WEIGHT_SCALE as u128) * (TAG_WEIGHT_SCALE as u128)
+        );
     }
 
     #[test]
@@ -1331,10 +1332,7 @@ mod tests {
 
         let h2_equal = equal.collision_entropy();
         let h1_equal = equal.cluster_entropy();
-        assert!(
-            (h2_equal - h1_equal).abs() < 0.01,
-            "Equal split: H₂ = H₁"
-        );
+        assert!((h2_equal - h1_equal).abs() < 0.01, "Equal split: H₂ = H₁");
 
         // Unequal split: H₂ < H₁
         let mut unequal = TagVector::new();

@@ -1,8 +1,10 @@
 use anyhow::Result;
 use bip39::{Language, Mnemonic, Seed};
 use bth_account_keys::{AccountKey, PublicAddress};
-use bth_cluster_tax::crypto::{CommittedTagVectorSecret, EntropyProof, EntropyProofBuilder};
-use bth_cluster_tax::ClusterId as TaxClusterId;
+use bth_cluster_tax::{
+    crypto::{CommittedTagVectorSecret, EntropyProof, EntropyProofBuilder},
+    ClusterId as TaxClusterId,
+};
 use bth_core::slip10::Slip10KeyGenerator;
 use bth_transaction_types::{ClusterTagVector, TAG_WEIGHT_SCALE};
 use rand::{rngs::OsRng, seq::SliceRandom};
@@ -121,7 +123,8 @@ impl TransactionConfig {
 pub enum EntropyProofResult {
     /// Proof generated successfully.
     Generated(EntropyProof),
-    /// Proof generation skipped (V2 transaction or not enough entropy increase).
+    /// Proof generation skipped (V2 transaction or not enough entropy
+    /// increase).
     Skipped,
     /// Proof generation failed, fell back to V2.
     Fallback(String),
@@ -591,10 +594,10 @@ impl Wallet {
 
     /// Create a V3 transaction with entropy proof for full decay credit.
     ///
-    /// This method creates a transaction with an entropy proof that demonstrates
-    /// the transaction creates sufficient entropy increase to qualify for full
-    /// decay credit. If entropy proof generation fails and fallback is enabled,
-    /// returns a V2 transaction without the proof.
+    /// This method creates a transaction with an entropy proof that
+    /// demonstrates the transaction creates sufficient entropy increase to
+    /// qualify for full decay credit. If entropy proof generation fails and
+    /// fallback is enabled, returns a V2 transaction without the proof.
     ///
     /// # Arguments
     /// * `utxos_to_spend` - The wallet's UTXOs to spend
@@ -606,7 +609,8 @@ impl Wallet {
     ///
     /// # Returns
     /// A tuple of (Transaction, EntropyProofResult) where the proof result
-    /// indicates whether the entropy proof was generated, skipped, or fell back.
+    /// indicates whether the entropy proof was generated, skipped, or fell
+    /// back.
     pub fn create_transaction_v3(
         &self,
         utxos_to_spend: &[Utxo],
@@ -691,26 +695,22 @@ impl Wallet {
         // Convert input UTXOs to CommittedTagVectorSecrets
         let input_secrets: Vec<CommittedTagVectorSecret> = utxos
             .iter()
-            .map(|utxo| {
-                Self::utxo_to_committed_tag_secret(utxo)
-            })
+            .map(|utxo| Self::utxo_to_committed_tag_secret(utxo))
             .collect();
 
         // Convert outputs to CommittedTagVectorSecrets (with decay applied)
         let output_secrets: Vec<CommittedTagVectorSecret> = outputs
             .iter()
-            .map(|output| {
-                Self::output_to_committed_tag_secret(output)
-            })
+            .map(|output| Self::output_to_committed_tag_secret(output))
             .collect();
 
         // Build the entropy proof
         let builder = EntropyProofBuilder::new(input_secrets, output_secrets);
-        builder
-            .prove(&mut rng)
-            .ok_or_else(|| anyhow::anyhow!(
+        builder.prove(&mut rng).ok_or_else(|| {
+            anyhow::anyhow!(
                 "Entropy delta below threshold - transaction does not qualify for decay credit"
-            ))
+            )
+        })
     }
 
     /// Convert a UTXO's tags to a CommittedTagVectorSecret.
@@ -1019,15 +1019,23 @@ mod tests {
         let base_fee_per_byte = 10u64;
 
         // V2 fee (no entropy proof)
-        let fee_v2 =
-            Wallet::estimate_fee_with_entropy_proof(&utxos, 2, base_fee_per_byte, TransactionVersion::V2);
+        let fee_v2 = Wallet::estimate_fee_with_entropy_proof(
+            &utxos,
+            2,
+            base_fee_per_byte,
+            TransactionVersion::V2,
+        );
         // Size: 100 + 700 + 200 + 500 = 1500
         // Fee: 1500 * 10 * 1 (no multiplier for < 1M) = 15000
         assert_eq!(fee_v2, 15000);
 
         // V3 fee (with entropy proof)
-        let fee_v3 =
-            Wallet::estimate_fee_with_entropy_proof(&utxos, 2, base_fee_per_byte, TransactionVersion::V3);
+        let fee_v3 = Wallet::estimate_fee_with_entropy_proof(
+            &utxos,
+            2,
+            base_fee_per_byte,
+            TransactionVersion::V3,
+        );
         // Size: 1500 + 1024 = 2524
         // Fee: 2524 * 10 * 1 = 25240
         assert_eq!(fee_v3, 25240);

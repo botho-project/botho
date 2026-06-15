@@ -4,6 +4,7 @@
 //! The faucet is only available on testnet and must be explicitly enabled.
 
 use dashmap::DashMap;
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
@@ -12,7 +13,6 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::Mutex;
-use parking_lot::RwLock;
 
 use crate::config::FaucetConfig;
 
@@ -94,10 +94,7 @@ impl FaucetError {
                 requests_today, limit, retry_after_secs
             ),
             Self::CooldownActive { retry_after_secs } => {
-                format!(
-                    "Please wait {} seconds between requests.",
-                    retry_after_secs
-                )
+                format!("Please wait {} seconds between requests.", retry_after_secs)
             }
             Self::DailyLimitReached {
                 retry_after_secs, ..
@@ -220,7 +217,8 @@ impl FaucetState {
     /// Acquire the transaction build lock.
     ///
     /// This must be held during UTXO selection and transaction submission
-    /// to prevent race conditions where concurrent requests select the same UTXO.
+    /// to prevent race conditions where concurrent requests select the same
+    /// UTXO.
     pub async fn acquire_tx_lock(&self) -> tokio::sync::MutexGuard<'_, ()> {
         self.tx_build_mutex.lock().await
     }
@@ -237,7 +235,8 @@ impl FaucetState {
 
     /// Check rate limits for a request
     ///
-    /// Returns Ok(()) if the request is allowed, Err with the specific limit hit.
+    /// Returns Ok(()) if the request is allowed, Err with the specific limit
+    /// hit.
     pub fn check_rate_limit(&self, ip: IpAddr, address: &str) -> Result<(), FaucetError> {
         // Reset daily counter if we've crossed into a new day
         self.maybe_reset_daily_counter();
@@ -539,7 +538,10 @@ mod tests {
 
         // Third request to same address should be rate limited
         let result = state.check_rate_limit(ip3, address);
-        assert!(matches!(result, Err(FaucetError::AddressRateLimited { .. })));
+        assert!(matches!(
+            result,
+            Err(FaucetError::AddressRateLimited { .. })
+        ));
     }
 
     #[test]
@@ -587,7 +589,10 @@ mod tests {
         // Third request should be limited (same normalized address)
         let ip3: IpAddr = "192.168.1.3".parse().unwrap();
         let result = state.check_rate_limit(ip3, addr1);
-        assert!(matches!(result, Err(FaucetError::AddressRateLimited { .. })));
+        assert!(matches!(
+            result,
+            Err(FaucetError::AddressRateLimited { .. })
+        ));
     }
 
     #[test]

@@ -1,16 +1,19 @@
 // Copyright (c) 2024 Botho Foundation
 
-//! DTLS (Datagram Transport Layer Security) configuration and helpers for WebRTC transport.
+//! DTLS (Datagram Transport Layer Security) configuration and helpers for
+//! WebRTC transport.
 //!
-//! This module implements Phase 3.3 of the traffic privacy roadmap: DTLS integration
-//! for secure, encrypted communication that matches legitimate WebRTC traffic patterns.
+//! This module implements Phase 3.3 of the traffic privacy roadmap: DTLS
+//! integration for secure, encrypted communication that matches legitimate
+//! WebRTC traffic patterns.
 //!
 //! # Overview
 //!
 //! DTLS is the UDP equivalent of TLS and is mandatory for WebRTC data channels.
 //! Proper DTLS integration ensures:
 //! - All traffic is encrypted end-to-end
-//! - Traffic patterns are indistinguishable from legitimate WebRTC (video calls)
+//! - Traffic patterns are indistinguishable from legitimate WebRTC (video
+//!   calls)
 //! - Certificate handling matches browser behavior
 //!
 //! # Example
@@ -33,8 +36,10 @@
 //! - Design: `docs/design/traffic-privacy-roadmap.md` (Section 3.3)
 
 use sha2::{Digest, Sha256};
-use std::fmt;
-use std::time::{Duration, Instant};
+use std::{
+    fmt,
+    time::{Duration, Instant},
+};
 use thiserror::Error;
 
 /// Default certificate lifetime for ephemeral certificates.
@@ -199,9 +204,8 @@ impl CertificateFingerprint {
             .map(|hex| u8::from_str_radix(hex, 16))
             .collect();
 
-        let bytes = bytes.map_err(|_| {
-            DtlsError::InvalidFingerprint("invalid hex in fingerprint".to_string())
-        })?;
+        let bytes = bytes
+            .map_err(|_| DtlsError::InvalidFingerprint("invalid hex in fingerprint".to_string()))?;
 
         Ok(Self { algorithm, bytes })
     }
@@ -352,7 +356,8 @@ impl DtlsConfig {
     /// Generate ephemeral certificate configuration for a session.
     ///
     /// Creates a new self-signed certificate suitable for WebRTC DTLS.
-    /// This matches browser behavior where each session uses a fresh certificate.
+    /// This matches browser behavior where each session uses a fresh
+    /// certificate.
     pub fn generate_ephemeral() -> Result<Self, DtlsError> {
         let certificate = EphemeralCertificate::generate()?;
 
@@ -416,7 +421,8 @@ impl DtlsConfig {
 
     /// Rotate to a new certificate.
     ///
-    /// Returns a new config with a fresh certificate while preserving other settings.
+    /// Returns a new config with a fresh certificate while preserving other
+    /// settings.
     pub fn rotate(&self) -> Result<Self, DtlsError> {
         let certificate = EphemeralCertificate::generate()?;
 
@@ -565,10 +571,8 @@ mod tests {
 
     #[test]
     fn test_fingerprint_sdp_format() {
-        let fingerprint = CertificateFingerprint::new(
-            "sha-256",
-            vec![0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF],
-        );
+        let fingerprint =
+            CertificateFingerprint::new("sha-256", vec![0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]);
 
         let sdp = fingerprint.to_sdp_value();
         assert_eq!(sdp, "sha-256 AA:BB:CC:DD:EE:FF");
@@ -599,8 +603,7 @@ mod tests {
 
     #[test]
     fn test_certificate_with_short_lifetime() {
-        let cert =
-            EphemeralCertificate::generate_with_lifetime(Duration::from_secs(30)).unwrap();
+        let cert = EphemeralCertificate::generate_with_lifetime(Duration::from_secs(30)).unwrap();
 
         // With only 30 seconds, should recommend rotation
         assert!(cert.should_rotate());
@@ -635,10 +638,7 @@ mod tests {
         let config2 = config1.rotate().unwrap();
 
         // New config should have different fingerprint
-        assert_ne!(
-            config1.fingerprint().bytes,
-            config2.fingerprint().bytes
-        );
+        assert_ne!(config1.fingerprint().bytes, config2.fingerprint().bytes);
 
         // But same role setting
         assert_eq!(config1.role(), config2.role());

@@ -2,9 +2,9 @@
 
 //! Fuzzing target for CLSAG ring signature sign/verify.
 //!
-//! Security rationale: CLSAG signatures are cryptographically complex and provide
-//! unlinkability for transaction inputs. Invalid signatures must NEVER verify,
-//! and the implementation must handle malformed data gracefully.
+//! Security rationale: CLSAG signatures are cryptographically complex and
+//! provide unlinkability for transaction inputs. Invalid signatures must NEVER
+//! verify, and the implementation must handle malformed data gracefully.
 //!
 //! CLSAG is an improvement over MLSAG that reduces signature size by ~50%.
 
@@ -179,7 +179,6 @@ fn create_test_ring(
     )
 }
 
-
 // ============================================================================
 // Fuzz Target
 // ============================================================================
@@ -235,7 +234,9 @@ fn fuzz_valid_sign(valid: &ValidSignFuzz) {
 
     // Valid signature must verify
     assert!(
-        signature.verify(&message, &ring, &output_commitment).is_ok(),
+        signature
+            .verify(&message, &ring, &output_commitment)
+            .is_ok(),
         "Valid CLSAG signature must verify"
     );
 
@@ -303,10 +304,14 @@ fn fuzz_malformed_sig(malformed: &MalformedSigFuzz) {
             }
         }
         SigCorruption::CorruptKeyImage(bytes) => {
-            signature.key_image = KeyImage { point: curve25519_dalek::ristretto::CompressedRistretto(*bytes) };
+            signature.key_image = KeyImage {
+                point: curve25519_dalek::ristretto::CompressedRistretto(*bytes),
+            };
         }
         SigCorruption::CorruptCommitmentKeyImage(bytes) => {
-            signature.commitment_key_image = KeyImage { point: curve25519_dalek::ristretto::CompressedRistretto(*bytes) };
+            signature.commitment_key_image = KeyImage {
+                point: curve25519_dalek::ristretto::CompressedRistretto(*bytes),
+            };
         }
         SigCorruption::WrongResponseCount(count) => {
             let new_len = (*count as usize).min(100);

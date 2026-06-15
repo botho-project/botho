@@ -22,8 +22,10 @@ use std::{thread, time::Duration};
 use bth_account_keys::PublicAddress;
 use serial_test::serial;
 
-use botho::consensus::split_fees;
-use botho::transaction::{Utxo, MIN_TX_FEE, PICOCREDITS_PER_CREDIT};
+use botho::{
+    consensus::split_fees,
+    transaction::{Utxo, MIN_TX_FEE, PICOCREDITS_PER_CREDIT},
+};
 
 use crate::common::{
     confirm_transaction, create_multi_input_transaction, create_signed_transaction,
@@ -444,7 +446,10 @@ fn test_stress_load_patterns() {
                 }
             }
             Err(e) => {
-                println!("    {} -> {}: create FAILED ({})", sender_idx, recipient_idx, e);
+                println!(
+                    "    {} -> {}: create FAILED ({})",
+                    sender_idx, recipient_idx, e
+                );
             }
         }
     }
@@ -462,7 +467,10 @@ fn test_stress_load_patterns() {
     println!("  Total blocks: {}", final_state.height);
     println!("  Transactions created: {}", total_transactions);
     println!("  Transactions confirmed: {}", confirmed_tx_count);
-    println!("  Fees burned (20% share): {} picocredits", final_state.total_fees_burned);
+    println!(
+        "  Fees burned (20% share): {} picocredits",
+        final_state.total_fees_burned
+    );
 
     // confirm_transaction is reliable, so every created tx should confirm.
     assert_eq!(
@@ -470,7 +478,10 @@ fn test_stress_load_patterns() {
         "All created transactions should confirm ({} of {})",
         confirmed_tx_count, total_transactions
     );
-    assert!(total_transactions > 0, "Stress test created no transactions");
+    assert!(
+        total_transactions > 0,
+        "Stress test created no transactions"
+    );
 
     // Each confirmed transfer lands in its own block, so the destroyed amount
     // is confirmed * burn(MIN_TX_FEE) (audit cycle 6, M4).

@@ -2,9 +2,9 @@
 
 //! Fuzzing target for address parsing.
 //!
-//! Security rationale: Address parsing accepts user input (from wallets, exchanges,
-//! command line). Invalid addresses must be rejected gracefully without panics or
-//! undefined behavior.
+//! Security rationale: Address parsing accepts user input (from wallets,
+//! exchanges, command line). Invalid addresses must be rejected gracefully
+//! without panics or undefined behavior.
 //!
 //! Botho supports both classical (Ristretto-based) and quantum-safe addresses.
 

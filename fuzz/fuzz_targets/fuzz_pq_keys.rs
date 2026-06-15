@@ -3,15 +3,16 @@
 use libfuzzer_sys::fuzz_target;
 
 use bth_crypto_pq::{
-    MlKem768Ciphertext, MlKem768PublicKey, MlDsa65PublicKey, MlDsa65Signature,
-    ML_KEM_768_CIPHERTEXT_BYTES, ML_KEM_768_PUBLIC_KEY_BYTES,
-    ML_DSA_65_PUBLIC_KEY_BYTES, ML_DSA_65_SIGNATURE_BYTES,
+    MlDsa65PublicKey, MlDsa65Signature, MlKem768Ciphertext, MlKem768PublicKey,
+    ML_DSA_65_PUBLIC_KEY_BYTES, ML_DSA_65_SIGNATURE_BYTES, ML_KEM_768_CIPHERTEXT_BYTES,
+    ML_KEM_768_PUBLIC_KEY_BYTES,
 };
 
 // Fuzz target for PQ cryptographic type parsing.
 //
-// Tests that malformed PQ key material cannot cause panics or undefined behavior.
-// These types are parsed from untrusted network data in transaction outputs and inputs.
+// Tests that malformed PQ key material cannot cause panics or undefined
+// behavior. These types are parsed from untrusted network data in transaction
+// outputs and inputs.
 //
 // Security rationale:
 // - ML-KEM public keys (1184 bytes) are in every PQ address
@@ -55,7 +56,8 @@ fuzz_target!(|data: &[u8]| {
     // (verification with random data should fail gracefully, not panic)
     if data.len() >= ML_DSA_65_PUBLIC_KEY_BYTES + ML_DSA_65_SIGNATURE_BYTES {
         let pk_bytes = &data[..ML_DSA_65_PUBLIC_KEY_BYTES];
-        let sig_bytes = &data[ML_DSA_65_PUBLIC_KEY_BYTES..ML_DSA_65_PUBLIC_KEY_BYTES + ML_DSA_65_SIGNATURE_BYTES];
+        let sig_bytes = &data
+            [ML_DSA_65_PUBLIC_KEY_BYTES..ML_DSA_65_PUBLIC_KEY_BYTES + ML_DSA_65_SIGNATURE_BYTES];
 
         if let (Ok(pk), Ok(sig)) = (
             MlDsa65PublicKey::from_bytes(pk_bytes),

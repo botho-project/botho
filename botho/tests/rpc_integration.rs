@@ -17,12 +17,12 @@ use serial_test::serial;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 
-use bth_transaction_types::constants::Network;
 use botho::{
     ledger::Ledger,
     mempool::Mempool,
     rpc::{RpcState, WsBroadcaster},
 };
+use bth_transaction_types::constants::Network;
 
 // ============================================================================
 // Test Helpers
@@ -174,7 +174,11 @@ async fn test_get_chain_info() {
     // totalMined is a u128 picocredit value emitted as a decimal string (PR #342)
     // to avoid JS 2^53 precision loss; verify it is a well-formed unsigned integer.
     assert!(result["totalMined"].is_string());
-    assert!(result["totalMined"].as_str().unwrap().parse::<u128>().is_ok());
+    assert!(result["totalMined"]
+        .as_str()
+        .unwrap()
+        .parse::<u128>()
+        .is_ok());
     assert!(result["mempoolSize"].is_number());
     assert!(result["mempoolFees"].is_number());
 }

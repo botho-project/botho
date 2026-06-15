@@ -64,25 +64,21 @@ fn test_ice_config_builder() {
 #[test]
 fn test_ice_candidate_priority() {
     // Host candidates should have highest priority
-    let host_priority =
-        IceCandidate::calculate_priority(IceCandidateType::Host, 1, 65535);
+    let host_priority = IceCandidate::calculate_priority(IceCandidateType::Host, 1, 65535);
 
     // Server reflexive candidates have lower priority
     let srflx_priority =
         IceCandidate::calculate_priority(IceCandidateType::ServerReflexive, 1, 65535);
 
     // Relay candidates have lowest priority
-    let relay_priority =
-        IceCandidate::calculate_priority(IceCandidateType::Relay, 1, 65535);
+    let relay_priority = IceCandidate::calculate_priority(IceCandidateType::Relay, 1, 65535);
 
     assert!(host_priority > srflx_priority);
     assert!(srflx_priority > relay_priority);
 
     // Component 1 should have higher priority than component 2
-    let comp1_priority =
-        IceCandidate::calculate_priority(IceCandidateType::Host, 1, 65535);
-    let comp2_priority =
-        IceCandidate::calculate_priority(IceCandidateType::Host, 2, 65535);
+    let comp1_priority = IceCandidate::calculate_priority(IceCandidateType::Host, 1, 65535);
+    let comp2_priority = IceCandidate::calculate_priority(IceCandidateType::Host, 2, 65535);
     assert!(comp1_priority > comp2_priority);
 }
 

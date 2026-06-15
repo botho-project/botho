@@ -31,11 +31,7 @@ pub mod wbth_bridge {
     /// Mint wBTH to a user when BTH is deposited to the bridge.
     ///
     /// Only callable by the bridge authority.
-    pub fn bridge_mint(
-        ctx: Context<BridgeMint>,
-        amount: u64,
-        bth_tx_hash: [u8; 32],
-    ) -> Result<()> {
+    pub fn bridge_mint(ctx: Context<BridgeMint>, amount: u64, bth_tx_hash: [u8; 32]) -> Result<()> {
         let bridge = &mut ctx.accounts.bridge;
 
         require!(!bridge.paused, BridgeError::Paused);
@@ -93,11 +89,7 @@ pub mod wbth_bridge {
     /// Burn wBTH to redeem BTH on the native chain.
     ///
     /// The bridge service monitors these events and releases BTH.
-    pub fn bridge_burn(
-        ctx: Context<BridgeBurn>,
-        amount: u64,
-        bth_address: String,
-    ) -> Result<()> {
+    pub fn bridge_burn(ctx: Context<BridgeBurn>, amount: u64, bth_address: String) -> Result<()> {
         let bridge = &ctx.accounts.bridge;
 
         require!(!bridge.paused, BridgeError::Paused);

@@ -148,7 +148,12 @@ async fn test_full_signaling_flow_with_ice() {
     // Offerer sends ICE candidates
     for (candidate, sdp_mid, sdp_mline_index) in &candidates {
         offerer
-            .send_ice_candidate(session_id, candidate.clone(), sdp_mid.clone(), *sdp_mline_index)
+            .send_ice_candidate(
+                session_id,
+                candidate.clone(),
+                sdp_mid.clone(),
+                *sdp_mline_index,
+            )
             .await
             .expect("Should send ICE candidate");
     }
@@ -309,21 +314,16 @@ async fn test_concurrent_signaling_sessions() {
             let mut offerer = SignalingChannel::new(client);
             let mut answerer = SignalingChannel::new(server);
 
-            let offer_sdp = format!(
-                "v=0\r\no=session{} 0 0 IN IP4 127.0.0.1\r\ns=-\r\n",
-                i
-            );
-            let answer_sdp = format!(
-                "v=0\r\no=answer{} 0 0 IN IP4 127.0.0.1\r\ns=-\r\n",
-                i
-            );
+            let offer_sdp = format!("v=0\r\no=session{} 0 0 IN IP4 127.0.0.1\r\ns=-\r\n", i);
+            let answer_sdp = format!("v=0\r\no=answer{} 0 0 IN IP4 127.0.0.1\r\ns=-\r\n", i);
 
             let offer_clone = offer_sdp.clone();
             let answer_clone = answer_sdp.clone();
 
-            let offerer_task = tokio::spawn(async move {
-                offerer.exchange_sdp(offer_clone, session_id, true).await
-            });
+            let offerer_task =
+                tokio::spawn(
+                    async move { offerer.exchange_sdp(offer_clone, session_id, true).await },
+                );
 
             let answerer_task = tokio::spawn(async move {
                 answerer.exchange_sdp(answer_clone, session_id, false).await

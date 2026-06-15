@@ -305,7 +305,10 @@ fn test_e2e_5_node_consensus_with_mining_and_transactions() {
         "  Final total mined: {} BTH",
         final_state.total_mined / PICOCREDITS_PER_CREDIT as u128
     );
-    println!("  Fees burned (20% share): {} picocredits", final_state.total_fees_burned);
+    println!(
+        "  Fees burned (20% share): {} picocredits",
+        final_state.total_fees_burned
+    );
     println!("  Lottery pool (carryover): {} picocredits", lottery_pool);
 
     // All four transfers were confirmed (asserted by confirm_transaction
@@ -375,7 +378,10 @@ fn test_e2e_5_node_consensus_with_mining_and_transactions() {
     println!("  - {} nodes reached consensus", DEFAULT_NUM_NODES);
     println!("  - {} blocks mined", final_state.height);
     println!("  - {} transactions confirmed", num_tx_blocks);
-    println!("  - {} picocredits destroyed (burn share)", final_state.total_fees_burned);
+    println!(
+        "  - {} picocredits destroyed (burn share)",
+        final_state.total_fees_burned
+    );
     println!("  - {} picocredits in redistribution pool", lottery_pool);
     println!("  - All nodes have consistent ledger state");
     println!("  - Supply conservation verified: mined = wallets + burned + pool");

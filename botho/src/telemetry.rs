@@ -70,8 +70,8 @@ impl Default for TelemetryConfig {
 pub fn init_tracing(config: &TelemetryConfig, verbose: bool) -> Result<Option<TelemetryGuard>> {
     // Use RUST_LOG if set, otherwise default based on verbose flag
     let default_level = if verbose { "debug" } else { "warn" };
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(default_level));
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_level));
 
     let fmt_layer = tracing_subscriber::fmt::layer()
         .with_target(false)

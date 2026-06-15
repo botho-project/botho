@@ -5,20 +5,19 @@
 //! - GET /api/metrics/latest
 //! - GET /health
 
-use std::sync::{Arc, Mutex};
 use anyhow::Result;
 use axum::{
-    Router,
-    Json,
     extract::{Query, State},
     http::StatusCode,
     response::IntoResponse,
     routing::get,
+    Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use tower_http::cors::{CorsLayer, Any};
+use std::sync::{Arc, Mutex};
+use tower_http::cors::{Any, CorsLayer};
 
-use crate::db::{MetricsDb, HistoryQuery, DataPoint};
+use crate::db::{DataPoint, HistoryQuery, MetricsDb};
 
 /// Shared application state
 type AppState = Arc<Mutex<MetricsDb>>;

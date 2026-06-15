@@ -484,9 +484,7 @@ impl Ledger {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
-            .map_err(|_| {
-                LedgerError::InvalidBlock("System time before UNIX epoch".to_string())
-            })?;
+            .map_err(|_| LedgerError::InvalidBlock("System time before UNIX epoch".to_string()))?;
         if block.header.timestamp > now.saturating_add(MAX_FUTURE_TIMESTAMP_SECS) {
             return Err(LedgerError::InvalidBlock(format!(
                 "Block timestamp {} is too far in the future (now={})",
@@ -534,7 +532,8 @@ impl Ledger {
             || stored_lottery_pool > 0
         {
             let lottery_config = LotteryFeeConfig::default();
-            let candidates = self.get_lottery_validation_candidates(block.height(), &lottery_config.draw_config)?;
+            let candidates = self
+                .get_lottery_validation_candidates(block.height(), &lottery_config.draw_config)?;
 
             // prev_block_hash is used for verifiable randomness
             let prev_block_hash = &block.header.prev_block_hash;
@@ -922,7 +921,10 @@ impl Ledger {
     /// target_key against the account's view key. This is necessary because
     /// stealth outputs use one-time addresses that can only be identified
     /// by the recipient.
-    pub fn scan_utxos_for_account(&self, account_key: &AccountKey) -> Result<Vec<Utxo>, LedgerError> {
+    pub fn scan_utxos_for_account(
+        &self,
+        account_key: &AccountKey,
+    ) -> Result<Vec<Utxo>, LedgerError> {
         let rtxn = self
             .env
             .read_txn()
@@ -1178,8 +1180,10 @@ impl Ledger {
         height: u64,
     ) -> Result<(), LedgerError> {
         // Check if already exists
-        if let Ok(Some(existing_height_bytes)) = self.key_images_db.get(wtxn, key_image.as_slice()) {
-            let existing_height = u64::from_le_bytes(existing_height_bytes.try_into().unwrap_or([0u8; 8]));
+        if let Ok(Some(existing_height_bytes)) = self.key_images_db.get(wtxn, key_image.as_slice())
+        {
+            let existing_height =
+                u64::from_le_bytes(existing_height_bytes.try_into().unwrap_or([0u8; 8]));
             warn!(
                 "Key image collision: {} already spent at height {}, trying to spend at height {}",
                 hex::encode(&key_image[0..8]),
@@ -2076,7 +2080,8 @@ impl Ledger {
     /// with different age/value thresholds — a latent consensus bug.)
     ///
     /// # Arguments
-    /// * `block_height` - The block height being validated (UTXOs must be older)
+    /// * `block_height` - The block height being validated (UTXOs must be
+    ///   older)
     /// * `config` - Lottery draw configuration with age/value thresholds
     ///
     /// # Returns
@@ -2124,7 +2129,8 @@ impl Ledger {
                     let age = block_height.saturating_sub(utxo.created_at);
                     if age >= config.min_utxo_age && utxo.output.amount >= config.min_utxo_value {
                         // Convert ClusterTagVector to TagVector for entropy calculation
-                        let tag_vector = Self::cluster_tags_to_tag_vector(&utxo.output.cluster_tags);
+                        let tag_vector =
+                            Self::cluster_tags_to_tag_vector(&utxo.output.cluster_tags);
 
                         // Create candidate with UTXO ID (36 bytes: tx_hash || output_index)
                         let utxo_id = utxo.id.to_bytes();
@@ -2182,7 +2188,8 @@ impl Ledger {
         Ok(candidates)
     }
 
-    /// Convert ClusterTagVector (on-chain format) to TagVector (cluster-tax format).
+    /// Convert ClusterTagVector (on-chain format) to TagVector (cluster-tax
+    /// format).
     ///
     /// This conversion is needed for entropy calculation in lottery selection.
     fn cluster_tags_to_tag_vector(
@@ -2192,10 +2199,7 @@ impl Ledger {
 
         for entry in &cluster_tags.entries {
             // ClusterTagVector uses u32 weights, TagVector also uses u32 weights
-            tag_vector.set(
-                bth_cluster_tax::ClusterId(entry.cluster_id.0),
-                entry.weight,
-            );
+            tag_vector.set(bth_cluster_tax::ClusterId(entry.cluster_id.0), entry.weight);
         }
 
         tag_vector
@@ -2281,7 +2285,12 @@ mod tests {
             // 16-byte LE on disk (consensus-state format change, 8 -> 16).
             let rtxn = ledger.env.read_txn().unwrap();
             assert_eq!(
-                ledger.meta_db.get(&rtxn, META_TOTAL_MINED).unwrap().unwrap().len(),
+                ledger
+                    .meta_db
+                    .get(&rtxn, META_TOTAL_MINED)
+                    .unwrap()
+                    .unwrap()
+                    .len(),
                 16
             );
         }
@@ -2308,7 +2317,10 @@ mod tests {
 
         // Monetary fields are u64 (8 bytes), not u128 (16 bytes).
         assert_eq!(genesis.minting_tx.reward.to_le_bytes().len(), 8);
-        assert_eq!(genesis.minting_tx.to_tx_output().amount.to_le_bytes().len(), 8);
+        assert_eq!(
+            genesis.minting_tx.to_tx_output().amount.to_le_bytes().len(),
+            8
+        );
         for tx in &genesis.transactions {
             assert_eq!(tx.fee.to_le_bytes().len(), 8);
             for output in &tx.outputs {
@@ -2609,7 +2621,10 @@ mod tests {
 
         // Post-state unchanged and still conserved.
         let post_height = conserved(&ledger);
-        assert_eq!(prev_height, post_height, "rejected block must not advance height");
+        assert_eq!(
+            prev_height, post_height,
+            "rejected block must not advance height"
+        );
     }
 
     // The cumulative lottery carryover persists as 16-byte LE u128. A value

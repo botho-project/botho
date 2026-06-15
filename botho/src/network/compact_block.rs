@@ -54,7 +54,8 @@ pub struct CompactBlock {
     pub short_ids: Vec<ShortId>,
     /// Pre-filled transactions (for txs unlikely to be in mempool)
     pub prefilled_txs: Vec<PrefilledTx>,
-    /// Lottery payout outputs (always included - deterministic from block state)
+    /// Lottery payout outputs (always included - deterministic from block
+    /// state)
     #[serde(default)]
     pub lottery_outputs: Vec<LotteryOutput>,
     /// Lottery summary for validation
