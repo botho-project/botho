@@ -121,7 +121,7 @@ fuzz_target!(|data: &[u8]| {
                 .get_lottery_pool()
                 .expect("lottery pool readable after successful add_block");
             let utxo_sum = sum_utxo_values(&ledger);
-            let accounted = utxo_sum + post.total_fees_burned + lottery_pool as u128;
+            let accounted = utxo_sum + post.total_fees_burned + lottery_pool;
             assert_eq!(
                 post.total_mined, accounted,
                 "supply conservation violated after accepted block: \

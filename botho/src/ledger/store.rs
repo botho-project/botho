@@ -740,14 +740,19 @@ impl Ledger {
     /// Consensus state: the pool accumulates the fee pool share plus the
     /// height-scheduled emission share, and drains via capped per-block
     /// payouts. Missing key (fresh/pre-upgrade ledger) means zero.
-    pub fn get_lottery_pool(&self) -> Result<u64, LedgerError> {
+    ///
+    /// The balance is the cumulative carryover and can grow without bound under
+    /// sustained high-fee inflow, so it is `u128` (persisted as 16-byte LE).
+    pub fn get_lottery_pool(&self) -> Result<u128, LedgerError> {
         let rtxn = self
             .env
             .read_txn()
             .map_err(|e| LedgerError::Database(format!("Failed to start read txn: {}", e)))?;
         match self.meta_db.get(&rtxn, META_LOTTERY_POOL) {
-            Ok(Some(bytes)) if bytes.len() == 8 => {
-                Ok(u64::from_le_bytes(bytes.try_into().unwrap()))
+            // Cumulative carryover persists as 16-byte LE u128 (widened from
+            // 8-byte u64 to prevent saturation; rides the testnet reset #323).
+            Ok(Some(bytes)) if bytes.len() == 16 => {
+                Ok(u128::from_le_bytes(bytes.try_into().unwrap_or([0u8; 16])))
             }
             Ok(_) => Ok(0),
             Err(e) => Err(LedgerError::Database(format!(
@@ -2584,7 +2589,7 @@ mod tests {
                 .sum();
             assert_eq!(
                 state.total_mined,
-                utxo_sum + state.total_fees_burned + pool as u128,
+                utxo_sum + state.total_fees_burned + pool,
                 "supply conservation violated"
             );
             state.height
@@ -2605,5 +2610,38 @@ mod tests {
         // Post-state unchanged and still conserved.
         let post_height = conserved(&ledger);
         assert_eq!(prev_height, post_height, "rejected block must not advance height");
+    }
+
+    // The cumulative lottery carryover persists as 16-byte LE u128. A value
+    // above u64::MAX must round-trip exactly through META_LOTTERY_POOL — this
+    // is the on-disk half of the u64->u128 widening (the saturation fix).
+    #[test]
+    fn test_lottery_pool_u128_persist_reload_roundtrip() {
+        let dir = tempdir().unwrap();
+
+        // A balance that no longer fits in u64 (would have saturated before).
+        let big_pool: u128 = (u64::MAX as u128) + 1_234_567;
+
+        {
+            let ledger = Ledger::open(dir.path()).unwrap();
+            let mut wtxn = ledger.env.write_txn().unwrap();
+            ledger
+                .meta_db
+                .put(&mut wtxn, META_LOTTERY_POOL, &big_pool.to_le_bytes())
+                .unwrap();
+            wtxn.commit().unwrap();
+
+            // Same handle reads it back exactly (16-byte LE decode).
+            assert_eq!(ledger.get_lottery_pool().unwrap(), big_pool);
+        }
+
+        // Reopen from disk: value survives a reload with no truncation.
+        let reopened = Ledger::open(dir.path()).unwrap();
+        assert_eq!(reopened.get_lottery_pool().unwrap(), big_pool);
+
+        // A fresh ledger (missing key) reads as zero.
+        let fresh_dir = tempdir().unwrap();
+        let fresh = Ledger::open(fresh_dir.path()).unwrap();
+        assert_eq!(fresh.get_lottery_pool().unwrap(), 0u128);
     }
 }
