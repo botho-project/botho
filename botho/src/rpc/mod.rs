@@ -546,6 +546,7 @@ async fn handle_rpc_method(request: &JsonRpcRequest, state: &RpcState) -> JsonRp
         "getChainInfo" => handle_chain_info(id, state).await,
         "getSupplyInfo" => handle_supply_info(id, state).await,
         "getBlockByHeight" => handle_get_block(id, &request.params, state).await,
+        "getBlockByHash" => handle_get_block_by_hash(id, &request.params, state).await,
         "getMempoolInfo" => handle_mempool_info(id, state).await,
         "estimateFee" | "tx_estimateFee" => handle_estimate_fee(id, &request.params, state).await,
         "fee_getRate" => handle_get_fee_rate(id, state).await,
@@ -835,6 +836,62 @@ async fn handle_get_block(id: Value, params: &Value, state: &RpcState) -> JsonRp
                 "mintingReward": block.minting_tx.reward,
             }),
         ),
+        Err(e) => JsonRpcResponse::error(id, -32000, &format!("Block not found: {}", e)),
+    }
+}
+
+/// Get a block by its hash.
+///
+/// Mirrors [`handle_get_block`] but resolves the block from its 32-byte hash
+/// instead of its height. This backs the explorer's block-by-hash search and
+/// `/explorer/block/:hash` deep links (issue #330).
+///
+/// The lookup is delegated to [`Ledger::get_block_by_hash`], scanning the full
+/// chain (from tip to genesis) so any historical block can be resolved, not
+/// just recent ones. An unknown hash returns a "Block not found" error so the
+/// adapter can map it to a not-found state.
+async fn handle_get_block_by_hash(id: Value, params: &Value, state: &RpcState) -> JsonRpcResponse {
+    // Parse hash parameter (accept either `hash` or `block_hash`).
+    let hash_hex = match params
+        .get("hash")
+        .or_else(|| params.get("block_hash"))
+        .and_then(|v| v.as_str())
+    {
+        Some(hex) => hex,
+        None => return JsonRpcResponse::error(id, -32602, "Missing hash parameter"),
+    };
+
+    let block_hash: [u8; 32] = match hex::decode(hash_hex) {
+        Ok(bytes) if bytes.len() == 32 => {
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(&bytes);
+            arr
+        }
+        _ => {
+            return JsonRpcResponse::error(id, -32602, "Invalid hash: expected 32-byte hex string")
+        }
+    };
+
+    let ledger = read_lock!(state.ledger, id.clone());
+
+    // Scan the entire chain (tip down to genesis) for a matching hash.
+    let chain_height = ledger.get_chain_state().map(|s| s.height).unwrap_or(0);
+
+    match ledger.get_block_by_hash(&block_hash, chain_height) {
+        Ok(Some(block)) => JsonRpcResponse::success(
+            id,
+            json!({
+                "height": block.height(),
+                "hash": hex::encode(block.hash()),
+                "prevHash": hex::encode(block.header.prev_block_hash),
+                "timestamp": block.header.timestamp,
+                "difficulty": block.header.difficulty,
+                "nonce": block.header.nonce,
+                "txCount": block.transactions.len(),
+                "mintingReward": block.minting_tx.reward,
+            }),
+        ),
+        Ok(None) => JsonRpcResponse::error(id, -32000, "Block not found"),
         Err(e) => JsonRpcResponse::error(id, -32000, &format!("Block not found: {}", e)),
     }
 }

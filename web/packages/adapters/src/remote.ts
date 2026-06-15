@@ -212,8 +212,27 @@ export class RemoteNodeAdapter implements NodeAdapter {
           difficulty: BigInt(result.difficulty || 0),
         }
       } else {
-        // Hash lookup not directly supported, would need additional RPC method
-        return null
+        // Resolve by hash via the node's getBlockByHash RPC (issue #330).
+        const result = await this.call<{
+          height: number
+          hash: string
+          prevHash: string
+          timestamp: number
+          difficulty: number
+          txCount: number
+          mintingReward: number
+        }>('getBlockByHash', { hash: heightOrHash })
+
+        return {
+          hash: result.hash,
+          height: result.height,
+          timestamp: result.timestamp,
+          previousHash: result.prevHash,
+          transactionCount: result.txCount,
+          size: 0, // Not provided
+          reward: BigInt(result.mintingReward || 0),
+          difficulty: BigInt(result.difficulty || 0),
+        }
       }
     } catch {
       return null
@@ -298,10 +317,45 @@ export class RemoteNodeAdapter implements NodeAdapter {
     )
   }
 
-  async getTransaction(_txHash: TxHash): Promise<Transaction | null> {
-    // Not directly supported by current RPC
-    // Would need to scan blocks or add a dedicated method
-    return null
+  async getTransaction(txHash: TxHash): Promise<Transaction | null> {
+    try {
+      // The node's getTransaction RPC returns a "Transaction not found" error
+      // for unknown hashes, which rpcCall surfaces as a throw -> null here.
+      const result = await this.call<{
+        txHash: string
+        status: 'confirmed' | 'pending' | 'unknown'
+        blockHeight: number | null
+        confirmations: number
+        inMempool: boolean
+        type?: string
+        fee?: number
+      }>('getTransaction', { tx_hash: txHash })
+
+      // Map RPC signature type to the explorer CryptoType.
+      let cryptoType: CryptoType = 'clsag'
+      if (result.type === 'mldsa') {
+        cryptoType = 'mldsa'
+      } else if (result.type === 'hybrid') {
+        cryptoType = 'hybrid'
+      }
+
+      const status: Transaction['status'] = result.status === 'confirmed' ? 'confirmed' : 'pending'
+
+      return {
+        id: result.txHash,
+        type: 'receive' as const,
+        amount: BigInt(0), // Private (ring signatures) - amount not visible
+        fee: BigInt(result.fee || 0),
+        privacyLevel: 'private' as const,
+        cryptoType,
+        status,
+        timestamp: Date.now(), // RPC does not expose tx timestamp; block timestamp would require an extra lookup
+        blockHeight: result.blockHeight ?? undefined,
+        confirmations: result.confirmations || 0,
+      }
+    } catch {
+      return null
+    }
   }
 
   // =========================================================================

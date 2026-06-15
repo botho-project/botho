@@ -231,6 +231,92 @@ async fn test_get_block_invalid_height() {
         .contains("not found"));
 }
 
+#[tokio::test]
+#[serial]
+async fn test_get_block_by_hash_known() {
+    let (_temp_dir, addr, _handle) = spawn_test_rpc_server().await;
+    let client = Client::new();
+
+    // The genesis block always exists in a freshly opened ledger. Its hash is
+    // reported as the tip hash via getChainInfo. Use that to exercise the
+    // known-hash path of getBlockByHash.
+    let chain_info = rpc_call(&client, addr, "getChainInfo", json!({})).await;
+    assert!(chain_info["error"].is_null());
+    let tip_hash = chain_info["result"]["tipHash"]
+        .as_str()
+        .expect("tipHash should be a hex string")
+        .to_string();
+
+    let response = rpc_call(&client, addr, "getBlockByHash", json!({ "hash": tip_hash })).await;
+
+    assert!(
+        response["error"].is_null(),
+        "Unexpected error: {:?}",
+        response["error"]
+    );
+    let result = &response["result"];
+    assert!(result["height"].is_number());
+    assert!(result["hash"].is_string());
+    assert!(result["prevHash"].is_string());
+    assert!(result["timestamp"].is_number());
+    // The returned block's hash must match the requested hash.
+    assert_eq!(result["hash"].as_str().unwrap(), tip_hash);
+}
+
+#[tokio::test]
+#[serial]
+async fn test_get_block_by_hash_unknown() {
+    let (_temp_dir, addr, _handle) = spawn_test_rpc_server().await;
+    let client = Client::new();
+
+    // A 32-byte all-zeros hash will not match any real block.
+    let unknown_hash = "0".repeat(64);
+    let response = rpc_call(
+        &client,
+        addr,
+        "getBlockByHash",
+        json!({ "hash": unknown_hash }),
+    )
+    .await;
+
+    assert!(response["error"].is_object());
+    assert!(response["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("not found"));
+}
+
+#[tokio::test]
+#[serial]
+async fn test_get_block_by_hash_invalid_hash() {
+    let (_temp_dir, addr, _handle) = spawn_test_rpc_server().await;
+    let client = Client::new();
+
+    // Too-short hash should be rejected as invalid params.
+    let response = rpc_call(&client, addr, "getBlockByHash", json!({ "hash": "abcd" })).await;
+
+    assert!(response["error"].is_object());
+    assert!(response["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("Invalid hash"));
+}
+
+#[tokio::test]
+#[serial]
+async fn test_get_block_by_hash_missing_param() {
+    let (_temp_dir, addr, _handle) = spawn_test_rpc_server().await;
+    let client = Client::new();
+
+    let response = rpc_call(&client, addr, "getBlockByHash", json!({})).await;
+
+    assert!(response["error"].is_object());
+    assert!(response["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("Missing hash"));
+}
+
 // ============================================================================
 // Mempool Tests
 // ============================================================================
