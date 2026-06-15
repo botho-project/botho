@@ -480,6 +480,44 @@ mod cli {
             #[arg(long)]
             quick: bool,
         },
+
+        /// Emission-schedule sweep (issue #350): run a fixed grid of candidate
+        /// MonetaryPolicy schedules (S1..S5) through the agent-based sim plus an
+        /// analytic monetary model, and emit a neutral comparison report
+        /// (markdown + CSV). Presents data only; recommends nothing.
+        EmissionSweep {
+            /// Number of simulated rounds for the distribution track
+            #[arg(long, default_value = "4000")]
+            rounds: u64,
+
+            /// Blocks processed per round
+            #[arg(long, default_value = "4")]
+            blocks_per_round: u64,
+
+            /// Number of retail users in the fixed agent population
+            #[arg(long, default_value = "120")]
+            retail: usize,
+
+            /// Number of merchants
+            #[arg(long, default_value = "12")]
+            merchants: usize,
+
+            /// Number of minters
+            #[arg(long, default_value = "4")]
+            minters: usize,
+
+            /// Number of whales
+            #[arg(long, default_value = "4")]
+            whales: usize,
+
+            /// Directory to write the report (markdown) and CSV artifacts
+            #[arg(long, default_value = "experiments/results")]
+            output: String,
+
+            /// Quick mode: smaller/faster run for sanity checking
+            #[arg(long)]
+            quick: bool,
+        },
     }
 
     pub fn run(cli: Cli) {
@@ -659,6 +697,25 @@ mod cli {
                 split,
                 churn_days,
                 demurrage_bps,
+            ),
+            Command::EmissionSweep {
+                rounds,
+                blocks_per_round,
+                retail,
+                merchants,
+                minters,
+                whales,
+                output,
+                quick,
+            } => run_emission_sweep(
+                rounds,
+                blocks_per_round,
+                retail,
+                merchants,
+                minters,
+                whales,
+                &output,
+                quick,
             ),
         }
     }
@@ -3715,6 +3772,89 @@ mod cli {
         println!("  daily balance charge the original validation assumed (issue #314).");
         println!("- M measures the permanent-parker escape: never spending avoids spend-time");
         println!("  demurrage entirely; only emission dilution touches parked wealth.");
+    }
+
+    /// Emission-schedule sweep (issue #350).
+    ///
+    /// Runs the candidate schedule grid through both the analytic monetary
+    /// model and the agent-based simulator, prints a comparison table, and
+    /// writes a markdown report + CSV under `output`. Presents data and
+    /// neutral observations only — recommends nothing.
+    #[allow(clippy::too_many_arguments)]
+    fn run_emission_sweep(
+        rounds: u64,
+        blocks_per_round: u64,
+        retail: usize,
+        merchants: usize,
+        minters: usize,
+        whales: usize,
+        output: &str,
+        quick: bool,
+    ) {
+        use bth_cluster_tax::simulation::emission_sweep::{
+            run_sweep, to_csv, to_markdown, SweepParams,
+        };
+        use std::path::Path;
+
+        let params = if quick {
+            SweepParams {
+                rounds: 400,
+                blocks_per_round: 4,
+                retail: 40,
+                merchants: 6,
+                minters: 2,
+                whales: 2,
+                snapshot_frequency: 50,
+            }
+        } else {
+            SweepParams {
+                rounds,
+                blocks_per_round,
+                retail,
+                merchants,
+                minters,
+                whales,
+                snapshot_frequency: (rounds / 20).max(1),
+            }
+        };
+
+        println!("Emission-Schedule Sweep (issue #350)");
+        println!("====================================");
+        println!(
+            "Distribution track: {} rounds x {} blocks = {} simulated blocks",
+            params.rounds,
+            params.blocks_per_round,
+            params.total_blocks()
+        );
+        println!(
+            "Population (fixed, deterministic): {} retail, {} merchants, {} whales, {} minters",
+            params.retail, params.merchants, params.whales, params.minters
+        );
+        println!();
+
+        let results = run_sweep(&params);
+
+        // Print the markdown report to stdout for immediate inspection.
+        let markdown = to_markdown(&results, &params);
+        println!("{markdown}");
+
+        // Write artifacts.
+        let dir = Path::new(output);
+        if let Err(e) = std::fs::create_dir_all(dir) {
+            eprintln!("Failed to create output dir {output}: {e}");
+            return;
+        }
+        let md_path = dir.join("emission_sweep.md");
+        let csv_path = dir.join("emission_sweep.csv");
+
+        match std::fs::write(&md_path, &markdown) {
+            Ok(()) => println!("Wrote report:  {}", md_path.display()),
+            Err(e) => eprintln!("Failed to write {}: {e}", md_path.display()),
+        }
+        match std::fs::write(&csv_path, to_csv(&results)) {
+            Ok(()) => println!("Wrote CSV:     {}", csv_path.display()),
+            Err(e) => eprintln!("Failed to write {}: {e}", csv_path.display()),
+        }
     }
 }
 
