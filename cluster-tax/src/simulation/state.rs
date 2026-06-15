@@ -346,14 +346,15 @@ mod tests {
     /// output is identical regardless of `HashMap` insertion/iteration order.
     ///
     /// Previously the sort was stable on balance only, so tied balances kept
-    /// their `HashMap` iteration order — randomly seeded per process — which let
-    /// a downstream fee/cluster consumer sum in a process-dependent order and
-    /// drift the result (S3 `fees_recycled` differed by ~3 nanoBTH across runs).
+    /// their `HashMap` iteration order — randomly seeded per process — which
+    /// let a downstream fee/cluster consumer sum in a process-dependent
+    /// order and drift the result (S3 `fees_recycled` differed by ~3
+    /// nanoBTH across runs).
     ///
-    /// This test inserts the *same* agents in two opposite orders and asserts the
-    /// output is byte-identical, then checks the explicit tie-break (ascending
-    /// `AgentId` within an equal balance). It does not need a subprocess: any
-    /// dependence on insertion order is exposed directly.
+    /// This test inserts the *same* agents in two opposite orders and asserts
+    /// the output is byte-identical, then checks the explicit tie-break
+    /// (ascending `AgentId` within an equal balance). It does not need a
+    /// subprocess: any dependence on insertion order is exposed directly.
     #[test]
     fn agents_by_wealth_is_total_ordered_under_tied_balances() {
         // Several agents share balances to force the tie-break path:
