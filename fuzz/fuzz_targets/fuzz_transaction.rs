@@ -2,8 +2,9 @@
 
 //! Fuzzing target for Transaction parsing and validation.
 //!
-//! Security rationale: Transactions are received from untrusted peers over the network.
-//! A malformed transaction must never cause a crash, memory corruption, or infinite loop.
+//! Security rationale: Transactions are received from untrusted peers over the
+//! network. A malformed transaction must never cause a crash, memory
+//! corruption, or infinite loop.
 //!
 //! This target uses both:
 //! 1. Raw byte fuzzing for deserialization edge cases
@@ -19,7 +20,8 @@ use botho::transaction::{Transaction, TxInput, TxOutput, Utxo};
 // ============================================================================
 
 /// Structured representation of a transaction for fuzzing.
-/// This generates semantically meaningful transactions rather than random bytes.
+/// This generates semantically meaningful transactions rather than random
+/// bytes.
 #[derive(Debug, Arbitrary)]
 struct FuzzTransaction {
     /// Number of inputs (0-16)
@@ -108,7 +110,8 @@ fn fuzz_raw_bytes(data: &[u8]) {
     let _ = bincode::deserialize::<TxOutput>(data);
     let _ = bincode::deserialize::<Utxo>(data);
 
-    // If deserialization succeeds, verify the transaction doesn't panic on validation
+    // If deserialization succeeds, verify the transaction doesn't panic on
+    // validation
     if let Ok(tx) = bincode::deserialize::<Transaction>(data) {
         validate_transaction(&tx);
     }
@@ -124,7 +127,9 @@ fn fuzz_structured(fuzz_tx: &FuzzTransaction) {
     // but we can test that the types handle edge cases properly.
 
     // Test output amount overflow
-    let total: u128 = fuzz_tx.output_seeds.iter()
+    let total: u128 = fuzz_tx
+        .output_seeds
+        .iter()
         .take(num_outputs)
         .map(|o| o.amount as u128)
         .sum();

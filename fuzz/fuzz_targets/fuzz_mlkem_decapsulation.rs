@@ -118,7 +118,10 @@ fn fuzz_decapsulate(decap: &FuzzDecapsulation) {
         if let Ok(ct) = MlKem768Ciphertext::from_bytes(&decap.ciphertext) {
             if let Ok(shared_secret) = keypair.decapsulate(&ct) {
                 // Shared secret should always be 32 bytes.
-                assert_eq!(shared_secret.as_bytes().len(), ML_KEM_768_SHARED_SECRET_BYTES);
+                assert_eq!(
+                    shared_secret.as_bytes().len(),
+                    ML_KEM_768_SHARED_SECRET_BYTES
+                );
             }
         }
     }

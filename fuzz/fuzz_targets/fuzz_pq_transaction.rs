@@ -2,7 +2,9 @@
 
 use libfuzzer_sys::fuzz_target;
 
-use botho::transaction_pq::{QuantumPrivateTxInput, QuantumPrivateTxOutput, QuantumPrivateTransaction};
+use botho::transaction_pq::{
+    QuantumPrivateTransaction, QuantumPrivateTxInput, QuantumPrivateTxOutput,
+};
 
 // Fuzz target for Quantum-Private Transaction deserialization.
 //

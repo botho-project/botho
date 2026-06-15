@@ -2,19 +2,20 @@
 
 //! Fuzzing target for MLSAG ring signature verification.
 //!
-//! Security rationale: Ring signatures are cryptographically complex and provide
-//! unlinkability for transaction inputs. Invalid signatures must NEVER verify,
-//! and malformed signature data must never cause panics or undefined behavior.
+//! Security rationale: Ring signatures are cryptographically complex and
+//! provide unlinkability for transaction inputs. Invalid signatures must NEVER
+//! verify, and malformed signature data must never cause panics or undefined
+//! behavior.
 //!
-//! The ring signature implementation uses MLSAG (Multilayer Linkable Spontaneous
-//! Anonymous Group signatures) with Ristretto points.
+//! The ring signature implementation uses MLSAG (Multilayer Linkable
+//! Spontaneous Anonymous Group signatures) with Ristretto points.
 
 use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
 
 use bth_crypto_hashes::Digest;
-use bth_crypto_ring_signature::{KeyImage, RingMLSAG, Commitment};
 use bth_crypto_keys::RistrettoPublic;
+use bth_crypto_ring_signature::{Commitment, KeyImage, RingMLSAG};
 use bth_util_repr_bytes::ReprBytes;
 
 // ============================================================================
