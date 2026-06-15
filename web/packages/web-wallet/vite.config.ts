@@ -4,6 +4,12 @@ import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
 import path from 'path'
 
+// Target for the same-origin `/rpc` proxy. Defaults to the live seed node for
+// local dev / preview, but the e2e suite overrides it (E2E_RPC_PROXY_TARGET) to
+// point at a local JSON-RPC mock so the explorer specs are hermetic and do not
+// depend on the shared public node being responsive. See web/e2e/serve-rpc-mock.mjs.
+const RPC_PROXY_TARGET = process.env.E2E_RPC_PROXY_TARGET || 'https://seed.botho.io'
+
 export default defineConfig({
   plugins: [
     react(),
@@ -78,7 +84,7 @@ export default defineConfig({
       // e2e (build with VITE_RPC_ENDPOINT=/rpc) so the app reaches a real node
       // without depending on cross-origin CORS.
       '/rpc': {
-        target: 'https://seed.botho.io',
+        target: RPC_PROXY_TARGET,
         changeOrigin: true,
       },
     },
@@ -88,7 +94,7 @@ export default defineConfig({
   preview: {
     proxy: {
       '/rpc': {
-        target: 'https://seed.botho.io',
+        target: RPC_PROXY_TARGET,
         changeOrigin: true,
       },
     },
