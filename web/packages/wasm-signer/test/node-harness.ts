@@ -38,6 +38,21 @@ export interface HarnessOptions {
   rpcPort?: number
   /** Gossip port to bind (default 17598). */
   gossipPort?: number
+  /**
+   * Test-only lottery eligibility overrides, forwarded to the node as
+   * `BOTHO_LOTTERY_MIN_UTXO_AGE` / `BOTHO_LOTTERY_MIN_UTXO_VALUE`. Lowering
+   * these lets freshly created UTXOs enter the per-block lottery draw without
+   * pre-mining ~720 blocks, so a payout to a test wallet lands within a bounded
+   * number of rounds (issue #394). Both the block proposer and the validator in
+   * the solo node read the same env, so the draw stays consensus-deterministic.
+   * Omit for production-default eligibility (age 720, value 1 microBTH).
+   */
+  lottery?: {
+    /** Minimum UTXO age (blocks) to be lottery-eligible. */
+    minUtxoAge?: number
+    /** Minimum UTXO value (picocredits) to be lottery-eligible. */
+    minUtxoValue?: bigint | number
+  }
 }
 
 // A fixed valid 24-word BIP39 phrase for the minting (sender) wallet. This is
@@ -134,6 +149,14 @@ export async function startNodeBackedHarness(opts: HarnessOptions): Promise<Node
     ].join('\n'),
   )
 
+  const lotteryEnv: Record<string, string> = {}
+  if (opts.lottery?.minUtxoAge !== undefined) {
+    lotteryEnv.BOTHO_LOTTERY_MIN_UTXO_AGE = String(opts.lottery.minUtxoAge)
+  }
+  if (opts.lottery?.minUtxoValue !== undefined) {
+    lotteryEnv.BOTHO_LOTTERY_MIN_UTXO_VALUE = String(opts.lottery.minUtxoValue)
+  }
+
   const child: ChildProcess = spawn(
     binPath,
     ['--testnet', '--config', configPath, 'run', '--mint', '--mint-threads', '1'],
@@ -143,6 +166,7 @@ export async function startNodeBackedHarness(opts: HarnessOptions): Promise<Node
         BOTHO_HOME: dataDir,
         BOTHO_SLOT_DURATION_SECS: '1',
         RUST_LOG: env().RUST_LOG ?? 'warn',
+        ...lotteryEnv,
       } as NodeJS.ProcessEnv,
       stdio: 'ignore',
     },

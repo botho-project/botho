@@ -834,6 +834,13 @@ async fn handle_supply_info(id: Value, state: &RpcState) -> JsonRpcResponse {
         .total_mined
         .saturating_sub(chain_state.total_fees_burned);
 
+    // Redistribution-lottery carryover pool (consensus state): the cumulative
+    // balance awaiting payout, which the per-block lottery draws from (capped at
+    // one block reward per block). Exposed so monetary clients and the
+    // fee->pool->payout accounting tests can observe that payouts are drawn from
+    // the pool and the pool never underflows. Missing/error -> 0.
+    let lottery_pool = ledger.get_lottery_pool().unwrap_or(0);
+
     JsonRpcResponse::success(
         id,
         json!({
@@ -842,6 +849,7 @@ async fn handle_supply_info(id: Value, state: &RpcState) -> JsonRpcResponse {
             "totalMined": chain_state.total_mined.to_string(),
             "totalFeesBurned": chain_state.total_fees_burned.to_string(),
             "circulatingSupply": circulating_supply.to_string(),
+            "lotteryPool": lottery_pool.to_string(),
         }),
     )
 }
@@ -1092,6 +1100,31 @@ async fn handle_get_outputs(id: Value, params: &Value, state: &RpcState) -> Json
                     }));
                 }
             }
+
+            // Lottery payout outputs. Like the coinbase, these are real stealth
+            // UTXOs minted into the set by `LedgerStore::add_block` (id =
+            // (block_hash, 1 + lottery_index)) but they are NOT part of
+            // `block.transactions`, so they must be emitted explicitly here or a
+            // thin wallet scanning the chain would never see a lottery payout it
+            // won. The payout reuses the winning UTXO's stealth keys (target /
+            // public), so the winner's `scanOwnedOutputs`/`belongs_to` detects
+            // it. `txHash` is the block hash and `outputIndex` is `1 + index` to
+            // mirror the ledger's deterministic id scheme (coinbase holds index
+            // 0 under the block hash; tx outputs use the tx hash, never the
+            // block hash, so these ids cannot collide).
+            let block_hash = block.hash();
+            for (lottery_idx, lottery_output) in block.lottery_outputs.iter().enumerate() {
+                outputs.push(json!({
+                    "txHash": hex::encode(block_hash),
+                    "outputIndex": (lottery_idx as u32) + 1,
+                    "targetKey": hex::encode(lottery_output.target_key),
+                    "publicKey": hex::encode(lottery_output.public_key),
+                    "amountCommitment": hex::encode(lottery_output.payout.to_le_bytes()),
+                    "clusterTags": Vec::<[u64; 2]>::new(),
+                    "lottery": true,
+                }));
+            }
+
             blocks.push(json!({
                 "height": height,
                 "outputs": outputs,
