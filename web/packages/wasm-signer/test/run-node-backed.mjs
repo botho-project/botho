@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 /**
- * Convenience runner for the node-backed #372 test.
+ * Convenience runner for the node-backed #372 + #390 tests.
  *
  * Ensures the prerequisites exist (release botho binary + wasm artifact), then
- * runs the gated `send-live-node.test.ts` with BOTHO_E2E_NODE=1 so the test
- * spins up its own throwaway solo-minting node, asserts the ledger invariants,
- * and tears the node down.
+ * runs the gated `send-live-node.test.ts` (single send, #372) and
+ * `exchange-live-node.test.ts` (two-user bidirectional exchange, #390) with
+ * BOTHO_E2E_NODE=1 so each test spins up its own throwaway solo-minting node,
+ * asserts the ledger invariants, and tears the node down.
  *
  *   node packages/wasm-signer/test/run-node-backed.mjs
  *
@@ -51,7 +52,13 @@ console.log('[run-node-backed] running gated node-backed test...\n')
 
 const result = spawnSync(
   'pnpm',
-  ['exec', 'vitest', 'run', 'packages/wasm-signer/test/send-live-node.test.ts'],
+  [
+    'exec',
+    'vitest',
+    'run',
+    'packages/wasm-signer/test/send-live-node.test.ts',
+    'packages/wasm-signer/test/exchange-live-node.test.ts',
+  ],
   {
     cwd: webDir,
     stdio: 'inherit',
