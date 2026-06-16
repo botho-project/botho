@@ -575,6 +575,71 @@ mod tests {
         assert!(!by_amount.contains_key(&3_000)); // stranger's output excluded
     }
 
+    /// Regression test for #383: an output built TO a recipient's wallet
+    /// address (the keys the TS `deriveAddress`/`formatAddress` now packs) MUST
+    /// be detected by the recipient's own scan (`belongs_to`), and an output
+    /// built to the recipient's ACCOUNT-ROOT keys (what the buggy address
+    /// previously packed) must NOT be detected.
+    ///
+    /// The wallet address packs the recipient's DEFAULT-SUBADDRESS public keys
+    /// (proven byte-identical to the node's `Account::subaddress(0)` by
+    /// `derivation-parity.test.ts`). This test confirms the receiving end:
+    /// building a stealth output to the default-subaddress address and scanning
+    /// as the recipient detects it at subaddress index 0. The account-root case
+    /// returning `None` is the exact gap that left funds unspendable before the
+    /// fix.
+    #[test]
+    fn output_to_wallet_address_is_detected_by_recipient() {
+        use bth_account_keys::PublicAddress;
+        use bth_crypto_keys::RistrettoPublic;
+
+        let mut rng = StdRng::from_seed([31u8; 32]);
+        let recipient = AccountKey::random(&mut rng);
+
+        // The address the wallet displays now packs the DEFAULT-SUBADDRESS keys.
+        // (TS `deriveAddress` -> these exact bytes, see derivation-parity test.)
+        let wallet_address = recipient.default_subaddress();
+        let to_subaddress = TxOutput::new(7_000, &wallet_address);
+
+        // The buggy pre-#383 address packed the ACCOUNT-ROOT keys instead.
+        let root_spend_public = RistrettoPublic::from(recipient.spend_private_key());
+        let root_view_public = RistrettoPublic::from(recipient.view_private_key());
+        let account_root_address = PublicAddress::new(&root_spend_public, &root_view_public);
+        let to_account_root = TxOutput::new(7_000, &account_root_address);
+
+        let to_chain = |o: &TxOutput| ChainOutput {
+            target_key: hex::encode(o.target_key),
+            public_key: hex::encode(o.public_key),
+            amount: o.amount,
+        };
+
+        let req = ScanRequest {
+            spend_private_key: hex::encode(recipient.spend_private_key().to_bytes()),
+            view_private_key: hex::encode(recipient.view_private_key().to_bytes()),
+            outputs: vec![to_chain(&to_subaddress), to_chain(&to_account_root)],
+        };
+
+        let owned = scan_owned_outputs_inner(&req).expect("scan should succeed");
+
+        // The output to the wallet (default-subaddress) address is detected at
+        // index 0; the account-root output is invisible to the scan.
+        assert_eq!(
+            owned.len(),
+            1,
+            "exactly the default-subaddress output must be detected"
+        );
+        assert_eq!(owned[0].amount, 7_000);
+        assert_eq!(owned[0].subaddress_index, 0);
+
+        // Sanity: building to the account-root keys really is undetectable,
+        // which is precisely the bug #383 fixes by changing the address
+        // encoding to the default subaddress.
+        assert!(
+            to_account_root.belongs_to(&recipient).is_none(),
+            "account-root output must NOT be detectable (the original bug)"
+        );
+    }
+
     #[test]
     fn shuffle_preserves_membership() {
         let mut rng = StdRng::from_seed([23u8; 32]);

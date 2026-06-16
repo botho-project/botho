@@ -13,6 +13,7 @@ import { mnemonicToSeedSync } from '@scure/bip39'
 import { hkdf } from '@noble/hashes/hkdf.js'
 import { hmac } from '@noble/hashes/hmac.js'
 import { sha512 } from '@noble/hashes/sha2.js'
+import { blake2b } from '@noble/hashes/blake2.js'
 import { base58 } from '@scure/base'
 import { ristretto255 } from '@noble/curves/ed25519'
 
@@ -25,6 +26,16 @@ const BOTHO_COIN_TYPE = 866
 // Domain separators for key derivation (must match Rust implementation)
 const VIEW_DOMAIN = 'botho-ristretto255-view'
 const SPEND_DOMAIN = 'botho-ristretto255-spend'
+
+// Subaddress derivation domain tag (must match the node's
+// `SUBADDRESS_DOMAIN_TAG` in `core/src/consts.rs`).
+const SUBADDRESS_DOMAIN_TAG = 'bth_subaddress'
+
+// The default subaddress index. Outputs paid to a recipient are addressed to
+// their default subaddress (index 0); the node's `TxOutput::belongs_to`
+// (`transaction/clsag/src/lib.rs`) only recognizes outputs paid to the default
+// (0) or change subaddress, NOT the account-root keys.
+const DEFAULT_SUBADDRESS_INDEX = 0
 
 // Address prefixes
 const TESTNET_PREFIX = 'tbotho://1/'
@@ -179,6 +190,71 @@ function derivePublicKey(privateScalar: Uint8Array): Uint8Array {
 }
 
 /**
+ * Reduce a scalar (given as a BigInt) modulo the curve order L.
+ *
+ * Matches Rust scalar arithmetic, where every `Scalar` operation is implicitly
+ * reduced mod L.
+ */
+function modL(n: bigint): bigint {
+  const r = n % CURVE_ORDER
+  return r < 0n ? r + CURVE_ORDER : r
+}
+
+/**
+ * Derive the DEFAULT-SUBADDRESS (index 0) private keys from the account-root
+ * view/spend private scalars.
+ *
+ * This MUST byte-match the node's subaddress derivation in
+ * `core/src/subaddress.rs` (the `(&RootViewPrivate, &RootSpendPrivate)`
+ * implementation), which for index `n` computes:
+ *
+ *   a  = view_private (scalar)
+ *   b  = spend_private (scalar)
+ *   Hs = Scalar::from_hash(Blake2b512("bth_subaddress" || a.as_bytes() || n.as_bytes()))
+ *   subaddress_spend_private = Hs + b
+ *   subaddress_view_private  = a * (Hs + b)
+ *
+ * `Scalar::from_hash` reduces the 64-byte Blake2b512 output via
+ * `from_bytes_mod_order_wide` (little-endian), and `a.as_bytes()` /
+ * `n.as_bytes()` are the canonical 32-byte little-endian scalar encodings.
+ *
+ * The node addresses outputs to a recipient's default subaddress and scans for
+ * ownership against the default/change subaddress (`TxOutput::belongs_to`), so
+ * the address the wallet displays must pack THESE keys — not the account-root
+ * keys — or funds sent to the displayed address are undetectable by the
+ * recipient's scan.
+ */
+function deriveSubaddressPrivateScalars(
+  viewPrivate: Uint8Array,
+  spendPrivate: Uint8Array,
+  index: number = DEFAULT_SUBADDRESS_INDEX,
+): { viewSubPrivate: Uint8Array; spendSubPrivate: Uint8Array } {
+  const a = bytesToBigInt(viewPrivate)
+  const b = bytesToBigInt(spendPrivate)
+
+  // `n = Scalar::from(index)` -> canonical 32-byte little-endian encoding.
+  const nBytes = bigIntToBytes(BigInt(index))
+
+  // Hs = from_bytes_mod_order_wide(Blake2b512(tag || a.as_bytes() || n.as_bytes()))
+  const tag = encoder.encode(SUBADDRESS_DOMAIN_TAG)
+  const digestInput = new Uint8Array(tag.length + 32 + 32)
+  digestInput.set(tag, 0)
+  digestInput.set(viewPrivate, tag.length) // a.as_bytes() (32-byte LE)
+  digestInput.set(nBytes, tag.length + 32) // n.as_bytes() (32-byte LE)
+  const wide = blake2b(digestInput, { dkLen: 64 })
+  const Hs = bytesToBigInt(scalarFromWide(wide))
+
+  // subaddress spend private = Hs + b; view private = a * (Hs + b)
+  const spendSub = modL(Hs + b)
+  const viewSub = modL(a * spendSub)
+
+  return {
+    viewSubPrivate: bigIntToBytes(viewSub),
+    spendSubPrivate: bigIntToBytes(spendSub),
+  }
+}
+
+/**
  * Derive view and spend keypairs from a mnemonic
  */
 export interface BothoKeypairs {
@@ -216,6 +292,30 @@ export function deriveKeypairs(mnemonic: string, accountIndex: number = 0): Both
 }
 
 /**
+ * Derive the account's DEFAULT-SUBADDRESS (index 0) public keys from a mnemonic.
+ *
+ * These are the keys a recipient's address must advertise: the node addresses
+ * outputs to the default subaddress and scans for ownership against it
+ * (`TxOutput::belongs_to`). The account-root public keys (`deriveKeypairs`'
+ * `viewPublic`/`spendPublic`) are used for signing, NOT for receiving.
+ */
+export function deriveDefaultSubaddressPublicKeys(
+  mnemonic: string,
+  accountIndex: number = 0,
+): { viewPublic: Uint8Array; spendPublic: Uint8Array } {
+  const kp = deriveKeypairs(mnemonic, accountIndex)
+  const { viewSubPrivate, spendSubPrivate } = deriveSubaddressPrivateScalars(
+    kp.viewPrivate,
+    kp.spendPrivate,
+    DEFAULT_SUBADDRESS_INDEX,
+  )
+  return {
+    viewPublic: derivePublicKey(viewSubPrivate),
+    spendPublic: derivePublicKey(spendSubPrivate),
+  }
+}
+
+/**
  * Format a Botho address from view and spend public keys
  *
  * Classical address format: tbotho://1/<base58(view || spend)>
@@ -240,14 +340,20 @@ export function formatAddress(
 
 /**
  * Derive a complete Botho address from a mnemonic
+ *
+ * Packs the DEFAULT-SUBADDRESS (index 0) public keys, matching the node's
+ * `wallet_getAddress` (which returns default-subaddress keys) and the
+ * recipient scan `TxOutput::belongs_to` (default/change subaddress). Packing
+ * the account-root keys here instead would produce an address whose outputs
+ * the recipient's scan cannot detect.
  */
 export function deriveAddressFromMnemonic(
   mnemonic: string,
   network: 'mainnet' | 'testnet' = 'testnet',
   accountIndex: number = 0
 ): string {
-  const keypairs = deriveKeypairs(mnemonic, accountIndex)
-  return formatAddress(keypairs.viewPublic, keypairs.spendPublic, network)
+  const { viewPublic, spendPublic } = deriveDefaultSubaddressPublicKeys(mnemonic, accountIndex)
+  return formatAddress(viewPublic, spendPublic, network)
 }
 
 /**
