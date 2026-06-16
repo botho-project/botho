@@ -78,6 +78,38 @@ export interface SignRequest {
   createdAtHeight: bigint | number
 }
 
+/** A chain output (as returned by `chain_getOutputs`) to test for ownership. */
+export interface ChainOutput {
+  /** Hex-encoded 32-byte one-time target key of the output. */
+  targetKey: string
+  /** Hex-encoded 32-byte ephemeral public key of the output. */
+  publicKey: string
+  /** Amount in picocredits (recovered from the transparent commitment). */
+  amount: bigint | number
+}
+
+/** A request to scan candidate outputs for ones owned by the account. */
+export interface ScanRequest {
+  /** Hex-encoded 32-byte account spend private key. Stays client-side. */
+  spendPrivateKey: string
+  /** Hex-encoded 32-byte account view private key. Stays client-side. */
+  viewPrivateKey: string
+  /** Candidate outputs to test for ownership. */
+  outputs: ChainOutput[]
+}
+
+/** An output the scan determined belongs to the account. */
+export interface OwnedOutput {
+  /** Hex-encoded 32-byte one-time target key of the owned output. */
+  targetKey: string
+  /** Hex-encoded 32-byte ephemeral public key of the owned output. */
+  publicKey: string
+  /** Amount in picocredits of the owned output. */
+  amount: bigint
+  /** Subaddress index that received this output (0 = default, 1 = change). */
+  subaddressIndex: bigint
+}
+
 /** The wasm module's exported surface. */
 export interface WasmSigner {
   /**
@@ -86,6 +118,12 @@ export interface WasmSigner {
    * Throws on any failure (bad keys, insufficient decoys, balance mismatch).
    */
   buildAndSign(request: SignRequest): string
+  /**
+   * Identify which of `request.outputs` belong to the account, using the
+   * node-identical stealth-address ownership check. Returns the owned outputs
+   * with their recovered subaddress index. The keys never leave the client.
+   */
+  scanOwnedOutputs(request: ScanRequest): OwnedOutput[]
   /** The CLSAG ring size the network requires (decoys + 1 real input). */
   ringSize(): number
   /** The minimum transaction fee in picocredits. */
@@ -106,6 +144,7 @@ export async function loadSigner(): Promise<WasmSigner> {
     let mod: {
       default: (init?: unknown) => Promise<unknown>
       buildAndSign: (request: unknown) => string
+      scanOwnedOutputs: (request: unknown) => unknown
       ringSize: () => number
       minFee: () => bigint
     }
@@ -126,6 +165,8 @@ export async function loadSigner(): Promise<WasmSigner> {
     await mod.default()
     return {
       buildAndSign: (request: SignRequest) => mod.buildAndSign(request),
+      scanOwnedOutputs: (request: ScanRequest) =>
+        mod.scanOwnedOutputs(request) as OwnedOutput[],
       ringSize: () => mod.ringSize(),
       minFee: () => mod.minFee(),
     }
@@ -137,3 +178,11 @@ export async function loadSigner(): Promise<WasmSigner> {
 export function resetSigner(): void {
   cached = null
 }
+
+export {
+  buildSendTransaction,
+  type BuildSendParams,
+  type BuildSendResult,
+  type SendRpc,
+  type SignerKeys,
+} from './send'

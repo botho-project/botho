@@ -23,6 +23,7 @@ async function loadSignerNode(): Promise<WasmSigner> {
   const mod = (await import(/* @vite-ignore */ wasmGlue)) as {
     default: (init: { module_or_path: BufferSource }) => Promise<unknown>
     buildAndSign: (request: unknown) => string
+    scanOwnedOutputs: (request: unknown) => unknown
     ringSize: () => number
     minFee: () => bigint
   }
@@ -30,6 +31,7 @@ async function loadSignerNode(): Promise<WasmSigner> {
   await mod.default({ module_or_path: bytes })
   return {
     buildAndSign: (request: SignRequest) => mod.buildAndSign(request),
+    scanOwnedOutputs: (request) => mod.scanOwnedOutputs(request) as ReturnType<WasmSigner['scanOwnedOutputs']>,
     ringSize: () => mod.ringSize(),
     minFee: () => mod.minFee(),
   }
@@ -102,5 +104,20 @@ maybe('wasm signer (requires build:wasm)', () => {
       createdAtHeight: 1000,
     }
     expect(() => signer.buildAndSign(request)).toThrow(/below minimum/)
+  })
+
+  it('scanOwnedOutputs returns empty for outputs not owned by the account', async () => {
+    const signer = await loadSignerNode()
+    // The Ristretto basepoint compressed encoding is a valid public key; reuse
+    // it as both target/public so parsing succeeds. The account keys below do
+    // not own this output, so the node-identical ownership check returns none.
+    const basepoint =
+      'e2f2ae0a6abc4e71a884a961c500515f58e30b6aa582dd8db6a65945e08d2d76'
+    const owned = signer.scanOwnedOutputs({
+      spendPrivateKey: '01'.repeat(32),
+      viewPrivateKey: '02'.repeat(32),
+      outputs: [{ targetKey: basepoint, publicKey: basepoint, amount: 1000 }],
+    })
+    expect(owned).toEqual([])
   })
 })

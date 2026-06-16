@@ -8,8 +8,9 @@ import {
   type ReactNode,
 } from 'react'
 import { RemoteNodeAdapter, type WsConnectionStatus } from '@botho/adapters'
-import { AddressBook, saveWallet, loadWallet, getWalletInfo, deriveAddress, isValidMnemonic, clearWallet } from '@botho/core'
+import { AddressBook, saveWallet, loadWallet, getWalletInfo, deriveAddress, deriveKeypairs, parseAddress, isValidMnemonic, clearWallet } from '@botho/core'
 import type { Balance, Contact, NodeInfo, Transaction } from '@botho/core'
+import { buildSendTransaction } from '@botho/wasm-signer'
 import { type NetworkConfig, loadSelectedNetwork, NETWORKS, DEFAULT_NETWORK_ID, createCustomNetwork } from '../config/networks'
 
 interface WalletState {
@@ -59,6 +60,22 @@ interface WalletContextValue extends WalletState {
   updateContact: (id: string, updates: Partial<Pick<Contact, 'name' | 'address' | 'notes'>>) => Promise<Contact>
   deleteContact: (id: string) => Promise<void>
   getContactName: (address: string) => string
+}
+
+/** Encode bytes as a lowercase hex string. */
+function toHex(bytes: Uint8Array): string {
+  let out = ''
+  for (const b of bytes) out += b.toString(16).padStart(2, '0')
+  return out
+}
+
+/** Decode a hex string into bytes. */
+function hexToBytes(hex: string): Uint8Array {
+  const out = new Uint8Array(hex.length / 2)
+  for (let i = 0; i < out.length; i++) {
+    out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16)
+  }
+  return out
 }
 
 const WalletContext = createContext<WalletContextValue | null>(null)
@@ -375,11 +392,74 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     }))
   }, [])
 
-  const send = useCallback(async (to: string, amount: bigint, memo?: string): Promise<string> => {
-    // TODO: Implement actual transaction signing and submission
-    console.log('Sending', { to, amount, memo })
-    throw new Error('Transaction signing not yet implemented')
-  }, [])
+  const send = useCallback(async (to: string, amount: bigint, _memo?: string): Promise<string> => {
+    const adapter = adapterRef.current
+    if (!adapter.isConnected()) {
+      throw new Error('Not connected to a node')
+    }
+
+    const mnemonic = mnemonicRef.current
+    if (!mnemonic) {
+      throw new Error('Wallet is locked. Unlock it before sending.')
+    }
+
+    // 1. Derive the account spend/view private keys from the mnemonic. These
+    //    are byte-identical to the keys the node derives (verified by
+    //    derivation-parity.test.ts), so a tx signed with them is accepted.
+    const kp = deriveKeypairs(mnemonic, 0)
+
+    // 2. Decode the recipient address into its raw spend/view public keys.
+    const recipientKeys = parseAddress(to)
+
+    // 3. Determine a fee. estimateFee returns the node's recommended/minimum
+    //    fee in picocredits; fall back to a sane minimum if unavailable.
+    let fee: bigint
+    try {
+      fee = await adapter.estimateFee(0)
+    } catch {
+      fee = 0n
+    }
+    if (fee <= 0n) {
+      // Mirror the signer's MIN_TX_FEE (100_000_000 picocredits) so the build
+      // doesn't fail the minimum-fee check.
+      fee = 100_000_000n
+    }
+
+    // 4. Build + CLSAG-sign entirely client-side (wasm). The keys never leave
+    //    the browser; only the signed bytes are submitted.
+    const { txHex } = await buildSendTransaction({
+      keys: {
+        spendPrivateKey: toHex(kp.spendPrivate),
+        viewPrivateKey: toHex(kp.viewPrivate),
+      },
+      recipient: {
+        spend_public_key: toHex(recipientKeys.spendPublic),
+        view_public_key: toHex(recipientKeys.viewPublic),
+      },
+      amount,
+      fee,
+      rpc: {
+        getChainHeight: () => adapter.getBlockHeight(),
+        getOutputs: (start, end) => adapter.getRawOutputs(start, end),
+      },
+    })
+
+    // 5. Submit the signed tx to the node.
+    const result = await adapter.submitTransaction(hexToBytes(txHex))
+    if (!result.success || !result.txHash) {
+      throw new Error(result.error || 'Transaction submission failed')
+    }
+
+    // Refresh balance/history opportunistically; ignore failures.
+    if (state.address) {
+      adapter
+        .getBalance([state.address])
+        .then((balance) => setState((s) => ({ ...s, balance })))
+        .catch(() => {})
+    }
+
+    return result.txHash
+  }, [state.address])
 
   const refreshBalance = useCallback(async () => {
     const adapter = adapterRef.current
