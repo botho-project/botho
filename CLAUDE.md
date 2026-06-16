@@ -28,6 +28,8 @@ This is a Rust-based blockchain project with the following key components:
 - `blockchain/types/` - Core blockchain types
 - `consensus/` - Consensus protocol (SCP-based)
 - `transaction/` - Transaction handling
-- `ledger/` - Ledger database<!-- BEGIN LOOM ORCHESTRATION -->
+- `ledger/` - Ledger database
+
+<!-- BEGIN LOOM ORCHESTRATION -->
 This repository uses [Loom](https://github.com/rjwalters/loom) for AI-powered development orchestration. See `.loom/CLAUDE.md` for the full guide (roles, labels, worktrees, configuration).
 <!-- END LOOM ORCHESTRATION -->
