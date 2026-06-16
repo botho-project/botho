@@ -27,8 +27,8 @@ use crate::{
         TransactionValidator,
     },
     network::{
-        BlockTxn, CompactBlock, GetBlockTxn, NetworkDiscovery, NetworkEvent, QuorumBuilder,
-        ReconstructionResult,
+        BlockTxn, ChainSyncManager, CompactBlock, GetBlockTxn, NetworkDiscovery, NetworkEvent,
+        QuorumBuilder, ReconstructionResult, SyncAction, SyncRequest, SyncResponse,
     },
     node::{MintedMintingTx, Node, SharedLedger},
     rpc::{
@@ -49,6 +49,15 @@ fn get_connected_peer_ids(discovery: &NetworkDiscovery) -> Vec<String> {
         .iter()
         .map(|p| p.peer_id.to_string())
         .collect()
+}
+
+/// Helper to get connected peers as libp2p `PeerId`s.
+///
+/// Used to drive the chain-sync state machine, which needs the typed peer
+/// identifiers (not their string form) to address sync request/response
+/// messages.
+fn get_connected_peers(discovery: &NetworkDiscovery) -> Vec<libp2p::PeerId> {
+    discovery.peer_table().iter().map(|p| p.peer_id).collect()
 }
 
 /// Check if minting should be enabled based on quorum config and connected
@@ -347,6 +356,11 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
     // Build SCP quorum set from connected peers (or just ourselves for solo mining)
     let scp_quorum_set = build_scp_quorum_set(&quorum, &local_peer_id);
 
+    // Capture the starting height before chain_state is moved into the
+    // consensus service; the sync state machine needs it to know how far
+    // behind the network we are at startup.
+    let local_height = chain_state.height;
+
     // Update initial metrics before chain_state is moved
     metrics_updater.set_block_height(chain_state.height);
     metrics_updater.set_difficulty(chain_state.difficulty);
@@ -368,6 +382,15 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
         "Consensus service initialized at slot {}",
         consensus.current_slot()
     );
+
+    // Chain-sync state machine: drives initial block download (IBD) / catch-up.
+    //
+    // A node joining an existing chain only learns about the current tip via
+    // gossip; that tip is rejected by the ledger because the intermediate
+    // blocks are missing ("Expected height 1, got N"). The sync manager closes
+    // this gap by polling peers for their chain status and, when we are behind,
+    // requesting the missing block range and applying it sequentially.
+    let mut sync_manager = ChainSyncManager::new(local_height);
 
     // Track minting state - can change as peers connect/disconnect
     let mut minting_enabled = false;
@@ -422,6 +445,11 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
     // Run the combined event loop
     let mut status_interval = tokio::time::interval(Duration::from_secs(10));
     let mut consensus_tick = tokio::time::interval(Duration::from_millis(500));
+    // Drive the chain-sync (IBD / catch-up) state machine. A short interval
+    // keeps a freshly joined node requesting peer status and missing block
+    // ranges promptly so it can reach the network tip without waiting on
+    // gossip alone.
+    let mut sync_tick = tokio::time::interval(Duration::from_secs(2));
     let mut minting_check_interval = tokio::time::interval(Duration::from_millis(100));
     let mut faucet_balance_interval = tokio::time::interval(Duration::from_secs(10));
 
@@ -551,6 +579,9 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                         }
                         NetworkEvent::PeerDisconnected(peer_id) => {
                             warn!("Peer disconnected: {}", peer_id);
+                            // Drop any sync state tied to this peer so we
+                            // re-discover and re-select a sync source.
+                            sync_manager.on_peer_disconnected(&peer_id);
                             let new_peer_count = discovery.peer_count();
 
                             // Update RPC peer count and metrics
@@ -585,7 +616,6 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                             }
                         }
                         NetworkEvent::SyncRequest { peer, request_id: _, request, channel } => {
-                            use crate::network::{SyncRequest, SyncResponse};
                             debug!("Sync request from {:?}: {:?}", peer, request);
                             // Handle the sync request
                             let shared_ledger = node.shared_ledger();
@@ -619,45 +649,65 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                                 warn!("Failed to send sync response: {:?}", e);
                             }
                         }
-                        NetworkEvent::SyncResponse { peer: _, request_id: _, response } => {
-                            use crate::network::SyncResponse;
+                        NetworkEvent::SyncResponse { peer, request_id: _, response } => {
                             match response {
-                                SyncResponse::Blocks { blocks, has_more: _ } => {
-                                    debug!("Received {} blocks from sync", blocks.len());
-                                    for block in &blocks {
-                                        if let Err(e) = node.add_block_from_network(block) {
-                                            warn!("Failed to add synced block: {}", e);
-                                            break;
+                                SyncResponse::Blocks { blocks, has_more } => {
+                                    debug!("Received {} blocks from sync (has_more={})", blocks.len(), has_more);
+                                    // Hand the batch to the sync state machine so it can
+                                    // advance its download cursor and decide what to fetch
+                                    // next. Blocks are applied sequentially via the ledger,
+                                    // which is what lets a fresh node catch up to a chain
+                                    // that is already at height N.
+                                    if let Some(SyncAction::AddBlocks(blocks)) =
+                                        sync_manager.on_blocks(&peer, blocks, has_more)
+                                    {
+                                        let mut applied_any = false;
+                                        for block in &blocks {
+                                            if let Err(e) = node.add_block_from_network(block) {
+                                                warn!("Failed to add synced block {}: {}", block.height(), e);
+                                                sync_manager.on_failure(Some(&peer), e.to_string());
+                                                break;
+                                            }
+                                            applied_any = true;
+                                            // Record for dynamic timing
+                                            consensus.record_block(block.header.timestamp, block.transactions.len());
                                         }
-                                        // Record for dynamic timing
-                                        consensus.record_block(block.header.timestamp, block.transactions.len());
-                                    }
-                                    // Update dynamic fee after syncing all blocks (use last block's tx count)
-                                    if let Some(last_block) = blocks.last() {
-                                        let slot_duration = consensus.current_slot_duration();
-                                        let at_min_time = ConsensusConfig::is_at_min_block_time(
-                                            &ConsensusConfig::default(),
-                                            slot_duration,
-                                        );
-                                        let max_txs = ConsensusConfig::default().max_txs_per_slot;
-                                        node.update_dynamic_fee_after_block(
-                                            last_block.transactions.len(),
-                                            max_txs,
-                                            at_min_time,
-                                        );
-                                    }
-                                    // Update consensus chain state
-                                    if let Ok(ledger) = node.shared_ledger().read() {
-                                        if let Ok(state) = ledger.get_chain_state() {
-                                            consensus.update_chain_state(state);
+
+                                        if applied_any {
+                                            // Update dynamic fee after syncing (use last block's tx count)
+                                            if let Some(last_block) = blocks.last() {
+                                                let slot_duration = consensus.current_slot_duration();
+                                                let at_min_time = ConsensusConfig::is_at_min_block_time(
+                                                    &ConsensusConfig::default(),
+                                                    slot_duration,
+                                                );
+                                                let max_txs = ConsensusConfig::default().max_txs_per_slot;
+                                                node.update_dynamic_fee_after_block(
+                                                    last_block.transactions.len(),
+                                                    max_txs,
+                                                    at_min_time,
+                                                );
+                                            }
+                                            // Update consensus chain state and inform the
+                                            // sync manager of our new height so it can tell
+                                            // whether we have caught up to the target.
+                                            if let Ok(ledger) = node.shared_ledger().read() {
+                                                if let Ok(state) = ledger.get_chain_state() {
+                                                    metrics_updater.set_block_height(state.height);
+                                                    sync_manager.on_blocks_added(state.height);
+                                                    consensus.update_chain_state(state);
+                                                }
+                                            }
                                         }
                                     }
                                 }
                                 SyncResponse::Status { height, tip_hash } => {
-                                    debug!("Peer at height {} with tip {}", height, hex::encode(&tip_hash[0..8]));
+                                    debug!("Peer {:?} at height {} with tip {}", peer, height, hex::encode(&tip_hash[0..8]));
+                                    sync_manager.on_status(peer, height, tip_hash);
                                 }
                                 SyncResponse::Error(e) => {
-                                    warn!("Sync error from peer: {}", e);
+                                    warn!("Sync error from peer {:?}: {}", peer, e);
+                                    sync_manager.on_failure(Some(&peer), e);
                                 }
                             }
                         }
@@ -1027,6 +1077,52 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                     if minting_enabled { "active" } else { "inactive" },
                     quorum_status
                 );
+            }
+
+            // Chain sync (IBD / catch-up) tick. Drives the sync state machine,
+            // emitting status/block requests as needed so a node behind the
+            // network tip backfills the missing blocks from a peer.
+            _ = sync_tick.tick() => {
+                // Keep the sync manager's view of our local height current so
+                // it can detect when we have fallen behind (e.g. after gossip
+                // delivered blocks, or a peer advanced past us).
+                if let Ok(ledger) = node.shared_ledger().read() {
+                    if let Ok(state) = ledger.get_chain_state() {
+                        sync_manager.set_local_height(state.height);
+                    }
+                }
+
+                let connected = get_connected_peers(&discovery);
+                if let Some(action) = sync_manager.tick(&connected) {
+                    match action {
+                        SyncAction::RequestStatus(peer) => {
+                            debug!("Sync: requesting status from {:?}", peer);
+                            sync_manager.on_request_sent(peer);
+                            NetworkDiscovery::send_sync_request(&mut swarm, peer, SyncRequest::GetStatus);
+                        }
+                        SyncAction::RequestBlocks { peer, start_height, count } => {
+                            debug!(
+                                "Sync: requesting blocks [{}..{}] from {:?}",
+                                start_height,
+                                start_height + count as u64 - 1,
+                                peer
+                            );
+                            sync_manager.on_request_sent(peer);
+                            NetworkDiscovery::send_sync_request(
+                                &mut swarm,
+                                peer,
+                                SyncRequest::GetBlocks { start_height, count },
+                            );
+                        }
+                        SyncAction::Synced => {
+                            debug!("Sync: caught up with network tip");
+                        }
+                        SyncAction::AddBlocks(_) | SyncAction::Wait(_) => {
+                            // AddBlocks is produced only by on_blocks() (handled
+                            // in the SyncResponse arm); Wait is advisory.
+                        }
+                    }
+                }
             }
 
             // Check for minted minting transactions
