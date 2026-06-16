@@ -10,7 +10,7 @@ import {
 import { RemoteNodeAdapter, type WsConnectionStatus } from '@botho/adapters'
 import { AddressBook, saveWallet, loadWallet, getWalletInfo, deriveAddress, deriveKeypairs, parseAddress, isValidMnemonic, clearWallet } from '@botho/core'
 import type { Balance, Contact, NodeInfo, Transaction } from '@botho/core'
-import { buildSendTransaction } from '@botho/wasm-signer'
+import { buildSendTransaction, spendableBalance } from '@botho/wasm-signer'
 import { type NetworkConfig, loadSelectedNetwork, NETWORKS, DEFAULT_NETWORK_ID, createCustomNetwork } from '../config/networks'
 
 interface WalletState {
@@ -76,6 +76,48 @@ function hexToBytes(hex: string): Uint8Array {
     out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16)
   }
   return out
+}
+
+/**
+ * Compute the wallet's balance, spent-filtered for the thin-wallet path (#392).
+ *
+ * The node's `wallet_getBalance` (used by `adapter.getBalance`) only
+ * spent-filters the node's OWN configured wallet — for an arbitrary thin-wallet
+ * key it would either error or report ownership-only sums that count
+ * already-spent outputs, overstating the balance after a send. When the wallet
+ * is unlocked (mnemonic available), we instead compute the true SPENDABLE
+ * balance entirely client-side: derive owned-output key images in wasm and ask
+ * the node's `chain_areKeyImagesSpent` RPC which are spent. If the wallet is
+ * locked (no mnemonic), fall back to the node RPC balance.
+ */
+async function fetchBalance(
+  adapter: RemoteNodeAdapter,
+  address: string,
+  mnemonic: string | null,
+): Promise<Balance> {
+  if (!mnemonic) {
+    return adapter.getBalance([address])
+  }
+  try {
+    const kp = deriveKeypairs(mnemonic, 0)
+    const available = await spendableBalance(
+      {
+        spendPrivateKey: toHex(kp.spendPrivate),
+        viewPrivateKey: toHex(kp.viewPrivate),
+      },
+      {
+        getChainHeight: () => adapter.getBlockHeight(),
+        getOutputs: (start, end) => adapter.getRawOutputs(start, end),
+        areKeyImagesSpent: (keyImages) => adapter.areKeyImagesSpent(keyImages),
+      },
+    )
+    return { available, pending: 0n, total: available }
+  } catch {
+    // If the client-side spendable computation is unavailable (e.g. the wasm
+    // artifact failed to load), fall back to the node RPC balance rather than
+    // surfacing no balance at all.
+    return adapter.getBalance([address])
+  }
 }
 
 const WalletContext = createContext<WalletContextValue | null>(null)
@@ -196,7 +238,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       // Refresh balance and transactions when new block arrives
       try {
         const [balance, transactions] = await Promise.all([
-          adapter.getBalance([state.address!]),
+          fetchBalance(adapter, state.address!, mnemonicRef.current),
           adapter.getTransactionHistory([state.address!], { limit: 50 }),
         ])
         setState(s => ({ ...s, balance, transactions }))
@@ -218,7 +260,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     const pollInterval = setInterval(async () => {
       try {
         const [balance, transactions] = await Promise.all([
-          adapter.getBalance([state.address!]),
+          fetchBalance(adapter, state.address!, mnemonicRef.current),
           adapter.getTransactionHistory([state.address!], { limit: 50 }),
         ])
         setState(s => ({ ...s, balance, transactions }))
@@ -254,10 +296,15 @@ export function WalletProvider({ children }: { children: ReactNode }) {
           address: walletInfo.address,
         }))
 
-        // If not encrypted, load balance immediately
+        // If not encrypted, load balance immediately. Load the (unencrypted)
+        // mnemonic into memory first so the balance is spent-filtered (#392).
         if (!walletInfo.isEncrypted && walletInfo.address) {
+          if (!mnemonicRef.current) {
+            const stored = await loadWallet()
+            if (stored) mnemonicRef.current = stored.mnemonic
+          }
           const [balance, transactions] = await Promise.all([
-            adapter.getBalance([walletInfo.address]),
+            fetchBalance(adapter, walletInfo.address, mnemonicRef.current),
             adapter.getTransactionHistory([walletInfo.address], { limit: 50 }),
           ])
           setState(s => ({ ...s, balance, transactions }))
@@ -336,7 +383,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     // Fetch balance
     const adapter = adapterRef.current
     if (adapter.isConnected()) {
-      const balance = await adapter.getBalance([address])
+      const balance = await fetchBalance(adapter, address, mnemonicRef.current)
       const transactions = await adapter.getTransactionHistory([address], { limit: 50 })
       setState(s => ({ ...s, balance, transactions }))
     }
@@ -357,7 +404,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     const adapter = adapterRef.current
     if (adapter.isConnected() && stored.address) {
       const [balance, transactions] = await Promise.all([
-        adapter.getBalance([stored.address]),
+        fetchBalance(adapter, stored.address, mnemonicRef.current),
         adapter.getTransactionHistory([stored.address], { limit: 50 }),
       ])
       setState(s => ({ ...s, balance, transactions }))
@@ -443,6 +490,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       rpc: {
         getChainHeight: () => adapter.getBlockHeight(),
         getOutputs: (start, end) => adapter.getRawOutputs(start, end),
+        areKeyImagesSpent: (keyImages) => adapter.areKeyImagesSpent(keyImages),
       },
     })
 
@@ -454,8 +502,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
     // Refresh balance/history opportunistically; ignore failures.
     if (state.address) {
-      adapter
-        .getBalance([state.address])
+      fetchBalance(adapter, state.address, mnemonicRef.current)
         .then((balance) => setState((s) => ({ ...s, balance })))
         .catch(() => {})
     }
@@ -466,7 +513,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const refreshBalance = useCallback(async () => {
     const adapter = adapterRef.current
     if (!state.address || !adapter.isConnected()) return
-    const balance = await adapter.getBalance([state.address])
+    const balance = await fetchBalance(adapter, state.address, mnemonicRef.current)
     setState(s => ({ ...s, balance }))
   }, [state.address])
 

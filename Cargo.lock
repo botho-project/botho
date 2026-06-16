@@ -1648,6 +1648,7 @@ dependencies = [
  "bincode",
  "bth-account-keys",
  "bth-crypto-keys",
+ "bth-crypto-ring-signature",
  "bth-transaction-clsag",
  "getrandom 0.2.16",
  "hex",

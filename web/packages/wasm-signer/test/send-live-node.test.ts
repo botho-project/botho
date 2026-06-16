@@ -44,6 +44,7 @@ import {
   setSigner,
   resetSigner,
   type ChainOutput,
+  type KeyImageSpentStatus,
   type SendRpc,
   type WasmSigner,
 } from '../src/index'
@@ -97,6 +98,7 @@ async function loadWasmNode(): Promise<WasmSigner> {
   return {
     buildAndSign: (request) => mod.buildAndSign(request),
     scanOwnedOutputs: (request) => mod.scanOwnedOutputs(request),
+    computeOwnedOutputKeyImages: (request) => mod.computeOwnedOutputKeyImages(request),
     ringSize: () => mod.ringSize(),
     minFee: () => mod.minFee(),
   }
@@ -233,6 +235,8 @@ maybe('node-backed: web-wallet -> tx -> ledger', () => {
             })),
           ),
         ),
+      areKeyImagesSpent: (keyImages) =>
+        rpc<KeyImageSpentStatus[]>('chain_areKeyImagesSpent', { keyImages }),
     }
 
     const { txHex, inputTotal } = await buildSendTransaction({

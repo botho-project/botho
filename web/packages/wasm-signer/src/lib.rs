@@ -35,7 +35,10 @@ pub mod core;
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
-    use crate::core::{build_and_sign_inner, scan_owned_outputs_inner, ScanRequest, SignRequest};
+    use crate::core::{
+        build_and_sign_inner, compute_owned_output_key_images_inner, scan_owned_outputs_inner,
+        KeyImageRequest, ScanRequest, SignRequest,
+    };
     use wasm_bindgen::prelude::*;
 
     /// Build and CLSAG-sign a Botho transaction entirely client-side.
@@ -69,6 +72,24 @@ mod wasm {
         let owned = scan_owned_outputs_inner(&req).map_err(|e| JsError::new(&e))?;
         serde_wasm_bindgen::to_value(&owned)
             .map_err(|e| JsError::new(&format!("failed to serialize owned outputs: {e}")))
+    }
+
+    /// Compute the key image for each of the wallet's owned outputs.
+    ///
+    /// `request` is a JS object matching [`KeyImageRequest`]: the spend/view
+    /// private keys (hex) and the owned outputs (as returned by
+    /// `scanOwnedOutputs`). Returns each output annotated with its hex-encoded
+    /// key image. The wallet passes these key images to the node's
+    /// `chain_areKeyImagesSpent` RPC to learn which owned outputs are already
+    /// spent, so it can exclude them from its balance and spendable selection.
+    /// Uses the node-identical derivation, so spent-status cannot drift.
+    #[wasm_bindgen(js_name = computeOwnedOutputKeyImages)]
+    pub fn compute_owned_output_key_images(request: JsValue) -> Result<JsValue, JsError> {
+        let req: KeyImageRequest = serde_wasm_bindgen::from_value(request)
+            .map_err(|e| JsError::new(&format!("invalid key image request: {e}")))?;
+        let result = compute_owned_output_key_images_inner(&req).map_err(|e| JsError::new(&e))?;
+        serde_wasm_bindgen::to_value(&result)
+            .map_err(|e| JsError::new(&format!("failed to serialize key images: {e}")))
     }
 
     /// The CLSAG ring size the network requires (decoys + 1 real input).

@@ -110,6 +110,37 @@ export interface OwnedOutput {
   subaddressIndex: bigint
 }
 
+/**
+ * A request to compute key images for owned outputs. The wallet supplies the
+ * outputs returned by `scanOwnedOutputs`.
+ */
+export interface KeyImageRequest {
+  /** Hex-encoded 32-byte account spend private key. Stays client-side. */
+  spendPrivateKey: string
+  /** Hex-encoded 32-byte account view private key. Stays client-side. */
+  viewPrivateKey: string
+  /** The wallet's owned outputs to derive key images for. */
+  outputs: OwnedOutput[]
+}
+
+/** An owned output annotated with its derived key image. */
+export interface OwnedOutputKeyImage {
+  /** Hex-encoded 32-byte one-time target key of the owned output. */
+  targetKey: string
+  /** Hex-encoded 32-byte ephemeral public key of the owned output. */
+  publicKey: string
+  /** Amount in picocredits of the owned output. */
+  amount: bigint
+  /** Subaddress index that received this output (0 = default, 1 = change). */
+  subaddressIndex: bigint
+  /**
+   * Hex-encoded 32-byte key image. Querying the node's
+   * `chain_areKeyImagesSpent` RPC with this value reveals whether the output
+   * has already been spent.
+   */
+  keyImage: string
+}
+
 /** The wasm module's exported surface. */
 export interface WasmSigner {
   /**
@@ -124,6 +155,13 @@ export interface WasmSigner {
    * with their recovered subaddress index. The keys never leave the client.
    */
   scanOwnedOutputs(request: ScanRequest): OwnedOutput[]
+  /**
+   * Compute the key image for each owned output, using the node-identical
+   * derivation. Pass the resulting key images to `chain_areKeyImagesSpent` to
+   * learn which owned outputs are already spent so they can be excluded from
+   * balance and spendable selection. The keys never leave the client.
+   */
+  computeOwnedOutputKeyImages(request: KeyImageRequest): OwnedOutputKeyImage[]
   /** The CLSAG ring size the network requires (decoys + 1 real input). */
   ringSize(): number
   /** The minimum transaction fee in picocredits. */
@@ -145,6 +183,7 @@ export async function loadSigner(): Promise<WasmSigner> {
       default: (init?: unknown) => Promise<unknown>
       buildAndSign: (request: unknown) => string
       scanOwnedOutputs: (request: unknown) => unknown
+      computeOwnedOutputKeyImages: (request: unknown) => unknown
       ringSize: () => number
       minFee: () => bigint
     }
@@ -167,6 +206,8 @@ export async function loadSigner(): Promise<WasmSigner> {
       buildAndSign: (request: SignRequest) => mod.buildAndSign(request),
       scanOwnedOutputs: (request: ScanRequest) =>
         mod.scanOwnedOutputs(request) as OwnedOutput[],
+      computeOwnedOutputKeyImages: (request: KeyImageRequest) =>
+        mod.computeOwnedOutputKeyImages(request) as OwnedOutputKeyImage[],
       ringSize: () => mod.ringSize(),
       minFee: () => mod.minFee(),
     }
@@ -196,8 +237,11 @@ export function setSigner(signer: WasmSigner): void {
 
 export {
   buildSendTransaction,
+  spendableBalance,
+  spendableOwnedOutputs,
   type BuildSendParams,
   type BuildSendResult,
+  type KeyImageSpentStatus,
   type SendRpc,
   type SignerKeys,
 } from './send'

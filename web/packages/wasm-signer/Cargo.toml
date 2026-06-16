@@ -21,6 +21,10 @@ path = "src/lib.rs"
 bth-transaction-clsag = { path = "../../../transaction/clsag" }
 bth-account-keys = { path = "../../../account-keys" }
 bth-crypto-keys = { path = "../../../crypto/keys" }
+# Key-image derivation, identical to the node's double-spend check. Used to
+# compute owned-output key images so the wallet can query spent status via the
+# node's `chain_areKeyImagesSpent` RPC and exclude spent outputs.
+bth-crypto-ring-signature = { path = "../../../crypto/ring-signature" }
 
 serde = { version = "1", features = ["derive"] }
 bincode = "1"

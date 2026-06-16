@@ -24,6 +24,7 @@ async function loadSignerNode(): Promise<WasmSigner> {
     default: (init: { module_or_path: BufferSource }) => Promise<unknown>
     buildAndSign: (request: unknown) => string
     scanOwnedOutputs: (request: unknown) => unknown
+    computeOwnedOutputKeyImages: (request: unknown) => unknown
     ringSize: () => number
     minFee: () => bigint
   }
@@ -32,6 +33,10 @@ async function loadSignerNode(): Promise<WasmSigner> {
   return {
     buildAndSign: (request: SignRequest) => mod.buildAndSign(request),
     scanOwnedOutputs: (request) => mod.scanOwnedOutputs(request) as ReturnType<WasmSigner['scanOwnedOutputs']>,
+    computeOwnedOutputKeyImages: (request) =>
+      mod.computeOwnedOutputKeyImages(request) as ReturnType<
+        WasmSigner['computeOwnedOutputKeyImages']
+      >,
     ringSize: () => mod.ringSize(),
     minFee: () => mod.minFee(),
   }

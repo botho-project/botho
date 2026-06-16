@@ -340,6 +340,83 @@ pub fn scan_owned_outputs_inner(req: &ScanRequest) -> Result<Vec<OwnedOutput>, S
     Ok(owned)
 }
 
+/// Request to compute key images for a set of owned outputs.
+///
+/// The wallet supplies its private keys plus the outputs it owns (as returned
+/// by [`scan_owned_outputs_inner`]). The signer recovers each output's one-time
+/// private key and derives its key image — exactly the value the node records
+/// in its double-spend set when the output is spent.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyImageRequest {
+    /// Hex-encoded 32-byte account spend private key. **Stays client-side.**
+    pub spend_private_key: String,
+    /// Hex-encoded 32-byte account view private key. **Stays client-side.**
+    pub view_private_key: String,
+    /// The wallet's owned outputs to derive key images for.
+    pub outputs: Vec<OwnedOutput>,
+}
+
+/// An owned output paired with its derived key image.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OwnedOutputKeyImage {
+    /// Hex-encoded 32-byte one-time target key of the owned output.
+    pub target_key: String,
+    /// Hex-encoded 32-byte ephemeral public key of the owned output.
+    pub public_key: String,
+    /// Amount in picocredits of the owned output.
+    pub amount: u64,
+    /// Subaddress index that received this output (0 = default, 1 = change).
+    pub subaddress_index: u64,
+    /// Hex-encoded 32-byte key image. Querying the node's
+    /// `chain_areKeyImagesSpent` RPC with this value reveals whether the output
+    /// has already been spent on-chain (or is pending in the mempool).
+    pub key_image: String,
+}
+
+/// Derive the key image for each owned output.
+///
+/// Uses the **node-identical** derivation: recover the one-time private key via
+/// [`TxOutput::recover_spend_key`] (same as the node's
+/// `recover_spend_key`), then `KeyImage::from(&onetime_private)` —
+/// byte-for-byte what the node records in its double-spend set and checks in
+/// `wallet_getBalance` / `handle_are_key_images_spent`. This lets a thin wallet
+/// learn which of its owned outputs are spent without re-implementing the
+/// derivation in JS.
+pub fn compute_owned_output_key_images_inner(
+    req: &KeyImageRequest,
+) -> Result<Vec<OwnedOutputKeyImage>, String> {
+    use bth_crypto_ring_signature::KeyImage;
+
+    let spend_private = parse_private("spendPrivateKey", &req.spend_private_key)?;
+    let view_private = parse_private("viewPrivateKey", &req.view_private_key)?;
+    let account = AccountKey::new(&spend_private, &view_private);
+
+    let mut result = Vec::with_capacity(req.outputs.len());
+    for out in &req.outputs {
+        let tx_out = TxOutput {
+            amount: out.amount,
+            target_key: parse_hex_32("output.target_key", &out.target_key)?,
+            public_key: parse_hex_32("output.public_key", &out.public_key)?,
+            e_memo: None,
+            cluster_tags: Default::default(),
+        };
+        let onetime_private = tx_out
+            .recover_spend_key(&account, out.subaddress_index)
+            .ok_or("failed to recover one-time private key for owned output")?;
+        let key_image = KeyImage::from(&onetime_private);
+        result.push(OwnedOutputKeyImage {
+            target_key: out.target_key.clone(),
+            public_key: out.public_key.clone(),
+            amount: out.amount,
+            subaddress_index: out.subaddress_index,
+            key_image: hex::encode(key_image.as_bytes()),
+        });
+    }
+    Ok(result)
+}
+
 /// Build, CLSAG-sign, and bincode-serialize a transaction, returning hex.
 ///
 /// The returned hex is the exact `tx_hex` payload accepted by the node's
@@ -480,6 +557,102 @@ mod tests {
             .expect("deserialized tx must still verify");
         assert_eq!(decoded.fee, tx.fee);
         assert_eq!(decoded.outputs.len(), tx.outputs.len());
+    }
+
+    /// #392: the key image the wallet computes for an owned output must equal
+    /// the key image embedded in a CLSAG signature spending that same output.
+    /// If they match, the wallet can reliably query the node's
+    /// `chain_areKeyImagesSpent` and exclude spent outputs from its balance.
+    #[test]
+    fn computed_key_image_matches_signed_input() {
+        let mut rng = StdRng::from_seed([13u8; 32]);
+        let sender = AccountKey::random(&mut rng);
+
+        // The wallet's own output (default subaddress, index 0).
+        let owned_amount = 10_000_000_000u64;
+        let owned = TxOutput::new(owned_amount, &sender.default_subaddress());
+
+        // Compute the key image via the wallet path.
+        let ki_req = KeyImageRequest {
+            spend_private_key: hex::encode(sender.spend_private_key().to_bytes()),
+            view_private_key: hex::encode(sender.view_private_key().to_bytes()),
+            outputs: vec![OwnedOutput {
+                target_key: hex::encode(owned.target_key),
+                public_key: hex::encode(owned.public_key),
+                amount: owned_amount,
+                subaddress_index: 0,
+            }],
+        };
+        let computed = compute_owned_output_key_images_inner(&ki_req).unwrap();
+        assert_eq!(computed.len(), 1);
+
+        // Build + sign a tx spending the same output, then read the key image
+        // the CLSAG signature actually used.
+        let decoys = make_decoys(DEFAULT_RING_SIZE - 1, owned_amount, &mut rng);
+        let recipient_account = AccountKey::random(&mut rng);
+        let req = SignRequest {
+            spend_private_key: hex::encode(sender.spend_private_key().to_bytes()),
+            view_private_key: hex::encode(sender.view_private_key().to_bytes()),
+            inputs: vec![SpendInput {
+                target_key: hex::encode(owned.target_key),
+                public_key: hex::encode(owned.public_key),
+                amount: owned_amount,
+                subaddress_index: 0,
+                decoys,
+            }],
+            recipient: recipient_of(&recipient_account),
+            amount: 5_000_000_000,
+            fee: MIN_TX_FEE,
+            created_at_height: 1000,
+        };
+        let tx = build_and_sign_with_rng(&req, &mut rng).unwrap();
+        let signed_ki = hex::encode(tx.inputs.clsag()[0].key_image());
+
+        assert_eq!(
+            computed[0].key_image, signed_ki,
+            "wallet-computed key image must match the CLSAG signature's key image"
+        );
+    }
+
+    /// #392: ownership scan + key-image derivation must agree on which outputs
+    /// are the wallet's. An output paid to a different account yields no owned
+    /// outputs, hence no key images.
+    #[test]
+    fn key_images_only_for_owned_outputs() {
+        let mut rng = StdRng::from_seed([17u8; 32]);
+        let me = AccountKey::random(&mut rng);
+        let other = AccountKey::random(&mut rng);
+
+        let mine = TxOutput::new(1_000_000_000, &me.default_subaddress());
+        let theirs = TxOutput::new(2_000_000_000, &other.default_subaddress());
+
+        let scan = ScanRequest {
+            spend_private_key: hex::encode(me.spend_private_key().to_bytes()),
+            view_private_key: hex::encode(me.view_private_key().to_bytes()),
+            outputs: vec![
+                ChainOutput {
+                    target_key: hex::encode(mine.target_key),
+                    public_key: hex::encode(mine.public_key),
+                    amount: 1_000_000_000,
+                },
+                ChainOutput {
+                    target_key: hex::encode(theirs.target_key),
+                    public_key: hex::encode(theirs.public_key),
+                    amount: 2_000_000_000,
+                },
+            ],
+        };
+        let owned = scan_owned_outputs_inner(&scan).unwrap();
+        assert_eq!(owned.len(), 1, "only my output should be owned");
+
+        let ki_req = KeyImageRequest {
+            spend_private_key: scan.spend_private_key.clone(),
+            view_private_key: scan.view_private_key.clone(),
+            outputs: owned,
+        };
+        let kis = compute_owned_output_key_images_inner(&ki_req).unwrap();
+        assert_eq!(kis.len(), 1);
+        assert_eq!(kis[0].amount, 1_000_000_000);
     }
 
     #[test]

@@ -1200,6 +1200,26 @@ impl Ledger {
             .map_err(|e| LedgerError::Database(format!("Failed to put key image: {}", e)))
     }
 
+    /// Test-only helper: record a key image as spent at the given height in a
+    /// self-contained write transaction. Lets tests in sibling modules (e.g.
+    /// the RPC layer's `chain_areKeyImagesSpent` test) seed the double-spend
+    /// set without reaching into the private LMDB environment.
+    #[cfg(test)]
+    pub fn record_key_image_for_test(
+        &self,
+        key_image: &[u8; 32],
+        height: u64,
+    ) -> Result<(), LedgerError> {
+        let mut wtxn = self
+            .env
+            .write_txn()
+            .map_err(|e| LedgerError::Database(format!("Failed to start write txn: {}", e)))?;
+        self.record_key_image(&mut wtxn, key_image, height)?;
+        wtxn.commit()
+            .map_err(|e| LedgerError::Database(format!("Failed to commit: {}", e)))?;
+        Ok(())
+    }
+
     /// Get a random sample of UTXOs for use as decoys in ring signatures.
     pub fn get_decoy_outputs(
         &self,

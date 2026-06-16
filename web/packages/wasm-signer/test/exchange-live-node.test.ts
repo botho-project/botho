@@ -53,9 +53,11 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { deriveKeypairs, deriveAddress, parseAddress } from '@botho/core'
 import {
   buildSendTransaction,
+  spendableBalance,
   setSigner,
   resetSigner,
   type ChainOutput,
+  type KeyImageSpentStatus,
   type SendRpc,
   type WasmSigner,
 } from '../src/index'
@@ -103,6 +105,7 @@ async function loadWasmNode(): Promise<WasmSigner> {
   return {
     buildAndSign: (request) => mod.buildAndSign(request),
     scanOwnedOutputs: (request) => mod.scanOwnedOutputs(request),
+    computeOwnedOutputKeyImages: (request) => mod.computeOwnedOutputKeyImages(request),
     ringSize: () => mod.ringSize(),
     minFee: () => mod.minFee(),
   }
@@ -195,6 +198,8 @@ maybe('node-backed: two-user bidirectional payment exchange (#390)', () => {
           })),
         ),
       ),
+    areKeyImagesSpent: (keyImages) =>
+      rpc<KeyImageSpentStatus[]>('chain_areKeyImagesSpent', { keyImages }),
   })
 
   /**
@@ -397,23 +402,26 @@ maybe('node-backed: two-user bidirectional payment exchange (#390)', () => {
 
     // Assert: B's SPENDABLE balance after the round-trip == sendAmount -
     // returnAmount - fee (B received `sendAmount`, then spent `returnAmount` +
-    // `fee`, the remainder returns to B as change). B consumed the output it
-    // received from A (`bReceived`) as the B->A input, so we exclude that
-    // now-spent output from B's spendable set (scanOwnedOutputs still reports
-    // it as owned — see `ownedBalance`). What remains is exactly B's change.
-    const bSpent = new Set(ba.inputs.map((i) => i.targetKey))
-    expect(bSpent.has(bReceived!.targetKey)).toBe(true)
-    const bBalAfterBA = await ownedBalance(keysB, bSpent)
+    // `fee`, the remainder returns to B as change).
+    //
+    // #392: this is now computed by the WALLET's real spent-filtered balance
+    // (`spendableBalance`), which derives B's owned-output key images in wasm
+    // and queries the node's `chain_areKeyImagesSpent` RPC to exclude the
+    // already-spent output. There is NO manual exclusion of `bReceived` here —
+    // the wallet/RPC must do the filtering itself. (Previously the test had to
+    // pass the known-spent target key to `ownedBalance` because the thin-wallet
+    // path had no spent awareness; that workaround is gone, proving the fix.)
+    const bBalAfterBA = await spendableBalance(keysB, sendRpc())
     expect(bBalAfterBA).toBe(sendAmount - returnAmount - fee)
     // eslint-disable-next-line no-console
     console.log(
-      '[#390] B balance: received',
+      '[#390] B wallet-computed spendable balance: received',
       sendAmount,
       '-> after re-spend',
       bBalAfterBA,
       '(== sendAmount - returnAmount - fee =',
       sendAmount - returnAmount - fee,
-      ')',
+      ', no manual exclusion)',
     )
   }, 300_000)
 })

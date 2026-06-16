@@ -580,6 +580,7 @@ async fn handle_rpc_method(request: &JsonRpcRequest, state: &RpcState) -> JsonRp
 
         // Wallet methods (for thin wallet sync)
         "chain_getOutputs" => handle_get_outputs(id, &request.params, state).await,
+        "chain_areKeyImagesSpent" => handle_are_key_images_spent(id, &request.params, state).await,
         "wallet_getBalance" => handle_wallet_balance(id, state).await,
         "wallet_getAddress" => handle_wallet_address(id, state).await,
 
@@ -1099,6 +1100,113 @@ async fn handle_get_outputs(id: Value, params: &Value, state: &RpcState) -> Json
     }
 
     JsonRpcResponse::success(id, json!(blocks))
+}
+
+/// Report which of the supplied key images have been spent.
+///
+/// This is a read-only query that lets thin (web) wallets learn whether their
+/// owned outputs have already been spent, so they can exclude spent outputs
+/// from both their displayed balance and their spendable-output selection.
+/// The thin wallet computes each owned output's key image client-side (it holds
+/// the spend key) and asks the node which are spent — mirroring the
+/// double-spend check the node already performs for its own configured wallet
+/// in `handle_wallet_balance`.
+///
+/// Params: `{ "keyImages": ["<hex>", ...] }` (hex-encoded 32-byte key images).
+/// Also accepts the snake_case alias `key_images` for convenience.
+///
+/// Result: a list with one entry per input key image, preserving order:
+/// `[{ "keyImage": "<hex>", "spent": bool, "spentHeight": <u64|null>,
+/// "pending": bool }]`.
+/// - `spent` is true if the key image is recorded on-chain (double-spend set).
+/// - `spentHeight` is the block height at which it was spent (null if unspent).
+/// - `pending` is true if the key image is currently pending in the mempool (an
+///   in-flight spend not yet mined). Wallets should treat either `spent ||
+///   pending` as "not spendable".
+///
+/// Invalid hex or wrong-length entries are reported with `spent: false`,
+/// `pending: false`, and an `error` field rather than failing the whole call.
+async fn handle_are_key_images_spent(
+    id: Value,
+    params: &Value,
+    state: &RpcState,
+) -> JsonRpcResponse {
+    let key_images = params
+        .get("keyImages")
+        .or_else(|| params.get("key_images"))
+        .and_then(|v| v.as_array());
+
+    let key_images = match key_images {
+        Some(arr) => arr,
+        None => {
+            return JsonRpcResponse::error(
+                id,
+                -32602,
+                "Missing keyImages parameter (expected an array of hex strings)",
+            )
+        }
+    };
+
+    let ledger = read_lock!(state.ledger, id.clone());
+    let mempool = read_lock!(state.mempool, id);
+
+    let mut results = Vec::with_capacity(key_images.len());
+
+    for entry in key_images {
+        let ki_hex = match entry.as_str() {
+            Some(s) => s,
+            None => {
+                results.push(json!({
+                    "keyImage": entry,
+                    "spent": false,
+                    "spentHeight": Value::Null,
+                    "pending": false,
+                    "error": "key image must be a hex string",
+                }));
+                continue;
+            }
+        };
+
+        let bytes = match hex::decode(ki_hex) {
+            Ok(b) => b,
+            Err(_) => {
+                results.push(json!({
+                    "keyImage": ki_hex,
+                    "spent": false,
+                    "spentHeight": Value::Null,
+                    "pending": false,
+                    "error": "invalid hex encoding",
+                }));
+                continue;
+            }
+        };
+
+        let key_image_bytes: [u8; 32] = match bytes.try_into() {
+            Ok(arr) => arr,
+            Err(_) => {
+                results.push(json!({
+                    "keyImage": ki_hex,
+                    "spent": false,
+                    "spentHeight": Value::Null,
+                    "pending": false,
+                    "error": "key image must be 32 bytes",
+                }));
+                continue;
+            }
+        };
+
+        let spent_height = ledger.is_key_image_spent(&key_image_bytes).unwrap_or(None);
+        let pending = mempool.is_key_image_pending(&key_image_bytes);
+
+        results.push(json!({
+            "keyImage": ki_hex,
+            "spent": spent_height.is_some(),
+            "spentHeight": spent_height,
+            "pending": pending,
+        }));
+    }
+
+    JsonRpcResponse::success(id, json!(results))
 }
 
 async fn handle_wallet_balance(id: Value, state: &RpcState) -> JsonRpcResponse {
@@ -2780,6 +2888,92 @@ async fn handle_faucet_status(id: Value, state: &RpcState) -> JsonRpcResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #392: thin wallets cannot learn which of their owned outputs are spent
+    /// because `chain_getOutputs` reports ownership only.
+    /// `chain_areKeyImagesSpent` exposes the node's on-chain double-spend
+    /// set so the wallet can exclude spent outputs from its balance and
+    /// spendable selection. This verifies a spent key image is reported
+    /// `spent: true` (with height) and an unspent one `spent: false`.
+    #[tokio::test]
+    async fn test_are_key_images_spent_reports_spent_and_unspent() {
+        use crate::{ledger::Ledger, mempool::Mempool};
+
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+
+        // Record one key image as spent on-chain at height 7.
+        let spent_ki: [u8; 32] = [0x11; 32];
+        let unspent_ki: [u8; 32] = [0x22; 32];
+        ledger.record_key_image_for_test(&spent_ki, 7).unwrap();
+
+        let state = RpcState::new(
+            ledger,
+            Mempool::new(),
+            Network::Testnet,
+            None,
+            None,
+            vec![],
+            Arc::new(WsBroadcaster::new(16)),
+        );
+
+        let params = json!({
+            "keyImages": [hex::encode(spent_ki), hex::encode(unspent_ki)],
+        });
+
+        let resp = handle_are_key_images_spent(json!(1), &params, &state).await;
+        assert!(resp.error.is_none(), "unexpected error: {:?}", resp.error);
+        let result = resp.result.unwrap();
+        let arr = result.as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+
+        // First key image: spent on-chain at height 7.
+        assert_eq!(arr[0]["spent"], json!(true));
+        assert_eq!(arr[0]["spentHeight"], json!(7));
+        assert_eq!(arr[0]["pending"], json!(false));
+        assert_eq!(arr[0]["keyImage"], json!(hex::encode(spent_ki)));
+
+        // Second key image: never spent.
+        assert_eq!(arr[1]["spent"], json!(false));
+        assert_eq!(arr[1]["spentHeight"], Value::Null);
+        assert_eq!(arr[1]["pending"], json!(false));
+        assert_eq!(arr[1]["keyImage"], json!(hex::encode(unspent_ki)));
+    }
+
+    /// #392: malformed key-image entries must be reported per-entry rather than
+    /// failing the whole batch, and a missing `keyImages` param is a -32602.
+    #[tokio::test]
+    async fn test_are_key_images_spent_handles_bad_input() {
+        use crate::{ledger::Ledger, mempool::Mempool};
+
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+        let state = RpcState::new(
+            ledger,
+            Mempool::new(),
+            Network::Testnet,
+            None,
+            None,
+            vec![],
+            Arc::new(WsBroadcaster::new(16)),
+        );
+
+        // Missing param -> invalid params error.
+        let resp = handle_are_key_images_spent(json!(1), &json!({}), &state).await;
+        assert!(resp.error.is_some());
+        assert_eq!(resp.error.unwrap().code, -32602);
+
+        // Bad hex and wrong length are reported per-entry, not fatal.
+        let params = json!({ "keyImages": ["zz", "abcd"] });
+        let resp = handle_are_key_images_spent(json!(1), &params, &state).await;
+        let arr = resp.result.unwrap();
+        let arr = arr.as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0]["spent"], json!(false));
+        assert!(arr[0]["error"].is_string());
+        assert_eq!(arr[1]["spent"], json!(false));
+        assert!(arr[1]["error"].is_string());
+    }
 
     #[test]
     fn test_cors_wildcard_allows_any_origin() {
