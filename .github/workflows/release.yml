@@ -42,6 +42,13 @@ jobs:
             target: x86_64-unknown-linux-gnu
             artifact_name: linux-x86_64
 
+          # Linux aarch64 (native ARM runner; our actual deploy target - the
+          # seed/faucet hosts are ARM64 Ubuntu). Built natively on an ARM
+          # runner so no cross-linker is required.
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            artifact_name: linux-aarch64
+
           # macOS Intel
           - os: macos-13
             target: x86_64-apple-darwin
