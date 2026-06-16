@@ -790,6 +790,7 @@ dependencies = [
  "bth-crypto-pq",
  "bth-crypto-ring-signature",
  "bth-gossip",
+ "bth-transaction-clsag",
  "bth-transaction-core",
  "bth-transaction-types",
  "bth-util-from-random",
@@ -1451,6 +1452,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "bth-transaction-clsag"
+version = "0.2.0"
+dependencies = [
+ "aes",
+ "bth-account-keys",
+ "bth-crypto-keys",
+ "bth-crypto-ring-signature",
+ "bth-transaction-types",
+ "bth-util-from-random",
+ "ctr",
+ "getrandom 0.2.16",
+ "hkdf",
+ "rand 0.8.5",
+ "rand_core 0.6.4",
+ "serde",
+ "sha2",
+]
+
+[[package]]
 name = "bth-transaction-core"
 version = "7.1.0"
 dependencies = [
@@ -1619,6 +1639,23 @@ name = "bth-util-zip-exact"
 version = "7.1.0"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "bth-wasm-signer"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "bth-account-keys",
+ "bth-crypto-keys",
+ "bth-transaction-clsag",
+ "getrandom 0.2.16",
+ "hex",
+ "rand 0.8.5",
+ "rand_core 0.6.4",
+ "serde",
+ "serde-wasm-bindgen",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -2497,7 +2534,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8d162beedaa69905488a8da94f5ac3edb4dd4788b732fadb7bd120b2625c1976"
 dependencies = [
  "data-encoding",
- "syn 1.0.109",
+ "syn 2.0.112",
 ]
 
 [[package]]
@@ -8059,6 +8096,17 @@ dependencies = [
  "serde",
  "serde_core",
  "typeid",
+]
+
+[[package]]
+name = "serde-wasm-bindgen"
+version = "0.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8302e169f0eddcc139c70f139d19d6467353af16f9fce27e8c30158036a1e16b"
+dependencies = [
+ "js-sys",
+ "serde",
+ "wasm-bindgen",
 ]
 
 [[package]]

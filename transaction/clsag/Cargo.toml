@@ -1,0 +1,47 @@
+[package]
+name = "bth-transaction-clsag"
+version = "0.2.0"
+authors = ["Botho"]
+edition = "2021"
+description = "Self-contained CLSAG ring-signature transaction types for Botho (stealth addresses + ring signatures)"
+license = "GPL-3.0"
+rust-version = { workspace = true }
+
+[lib]
+name = "bth_transaction_clsag"
+path = "src/lib.rs"
+
+[features]
+default = []
+pq = ["bth-account-keys/pq"]
+# Exposes test-only constructors (e.g. `Transaction::new_stub_with_fee`) to
+# downstream crates' test/dev builds. Enabled by `botho` as a dev-dependency
+# feature so its tests can build stub transactions across the crate boundary.
+test-utils = []
+
+[dependencies]
+# Crypto & encoding
+aes = { workspace = true }
+ctr = { workspace = true }
+hkdf = { workspace = true }
+sha2 = { version = "0.10" }
+rand_core = { version = "0.6", features = ["getrandom"] }
+serde = { version = "1", features = ["derive"] }
+
+# Botho crypto / key primitives (all wasm-compatible)
+bth-account-keys = { path = "../../account-keys" }
+bth-crypto-keys = { path = "../../crypto/keys" }
+bth-crypto-ring-signature = { path = "../../crypto/ring-signature" }
+bth-transaction-types = { path = "../types", default-features = true }
+bth-util-from-random = { path = "../../util/from-random" }
+
+# On wasm32, the `getrandom` crate (pulled in transitively via rand_core's
+# `getrandom` feature for `OsRng`) requires the `js` feature to bind to the
+# browser's crypto.getRandomValues(). Enable it for wasm builds so the CLSAG
+# signing path (which uses OsRng for ephemeral keys and signature nonces) works
+# in the browser.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }
+
+[dev-dependencies]
+rand = "0.8"
