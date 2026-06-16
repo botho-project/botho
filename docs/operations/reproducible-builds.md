@@ -120,6 +120,17 @@ gpg --verify SHA256SUMS.txt.asc SHA256SUMS.txt
 ./scripts/build-release.sh --target x86_64-unknown-linux-gnu
 ```
 
+### Linux (aarch64)
+
+This is the deploy target for the ARM64 seed/faucet hosts. The release
+workflow builds it natively on an `ubuntu-24.04-arm` runner. To build it
+locally on a non-ARM host, use a cross-linker (e.g. `cross` or
+`cargo-zigbuild`):
+
+```bash
+./scripts/build-release.sh --target aarch64-unknown-linux-gnu
+```
+
 ### macOS (Intel)
 
 ```bash

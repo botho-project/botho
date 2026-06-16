@@ -100,9 +100,17 @@ echo ""
 
 echo "=== Building Release Binaries ==="
 
+# Build only the crates that produce shipped binaries. Building the entire
+# workspace (--workspace) pulls in GUI/platform crates such as the Tauri
+# desktop app (web/packages/desktop/src-tauri), which require system
+# libraries like gdk-3.0/GTK that are not installed on the release runners
+# (this caused the v0.1.0 release run to fail). Those crates are not part of
+# a release, so we build the binary crates explicitly instead.
 BUILD_ARGS=(
     --release
-    --workspace
+    -p botho
+    -p botho-wallet
+    -p botho-exchange-scanner
 )
 
 # Add target if specified
