@@ -211,6 +211,9 @@ importers:
 
   packages/wasm-signer:
     devDependencies:
+      '@botho/core':
+        specifier: workspace:*
+        version: link:../core
       '@types/node':
         specifier: ^22.10.0
         version: 22.19.21
@@ -235,6 +238,9 @@ importers:
       '@botho/ui':
         specifier: workspace:*
         version: link:../ui
+      '@botho/wasm-signer':
+        specifier: workspace:*
+        version: link:../wasm-signer
       lucide-react:
         specifier: ^0.562.0
         version: 0.562.0(react@19.2.3)

@@ -35,7 +35,7 @@ pub mod core;
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
-    use crate::core::{build_and_sign_inner, SignRequest};
+    use crate::core::{build_and_sign_inner, scan_owned_outputs_inner, ScanRequest, SignRequest};
     use wasm_bindgen::prelude::*;
 
     /// Build and CLSAG-sign a Botho transaction entirely client-side.
@@ -52,6 +52,23 @@ mod wasm {
         let req: SignRequest = serde_wasm_bindgen::from_value(request)
             .map_err(|e| JsError::new(&format!("invalid request: {e}")))?;
         build_and_sign_inner(&req).map_err(|e| JsError::new(&e))
+    }
+
+    /// Identify which of the supplied chain outputs belong to the account.
+    ///
+    /// `request` is a JS object matching [`ScanRequest`]: the spend/view
+    /// private keys (hex) and the candidate outputs (as returned by
+    /// `chain_getOutputs`, with the transparent amount). Returns the owned
+    /// outputs (with recovered subaddress index), serialized as a JS value.
+    /// Uses the node-identical `belongs_to` check so ownership detection
+    /// cannot drift from the node.
+    #[wasm_bindgen(js_name = scanOwnedOutputs)]
+    pub fn scan_owned_outputs(request: JsValue) -> Result<JsValue, JsError> {
+        let req: ScanRequest = serde_wasm_bindgen::from_value(request)
+            .map_err(|e| JsError::new(&format!("invalid scan request: {e}")))?;
+        let owned = scan_owned_outputs_inner(&req).map_err(|e| JsError::new(&e))?;
+        serde_wasm_bindgen::to_value(&owned)
+            .map_err(|e| JsError::new(&format!("failed to serialize owned outputs: {e}")))
     }
 
     /// The CLSAG ring size the network requires (decoys + 1 real input).

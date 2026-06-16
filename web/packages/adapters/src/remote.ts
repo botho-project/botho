@@ -49,6 +49,20 @@ function resolveUrl(endpoint: string): URL | null {
   }
 }
 
+/**
+ * Decode a little-endian hex string (the node's `amountCommitment`, which is
+ * `u64::to_le_bytes` hex-encoded) into a bigint amount.
+ */
+function leHexToBigInt(hex: string): bigint {
+  let result = 0n
+  // Each byte is two hex chars; iterate from the most-significant byte (end of
+  // the string for little-endian) down to the least.
+  for (let i = hex.length - 2; i >= 0; i -= 2) {
+    result = (result << 8n) | BigInt(parseInt(hex.slice(i, i + 2), 16))
+  }
+  return result
+}
+
 /** JSON-RPC 2.0 request */
 interface JsonRpcRequest {
   jsonrpc: '2.0'
@@ -314,6 +328,43 @@ export class RemoteNodeAdapter implements NodeAdapter {
         blockHeight: block.height,
         confirmations: 0,
       }))
+    )
+  }
+
+  /**
+   * Fetch raw chain outputs for a height range as
+   * `{ targetKey, publicKey, amount }`.
+   *
+   * Unlike {@link getTransactionHistory} (which maps to the explorer's
+   * `Transaction` shape and drops amounts), this returns the data the
+   * client-side transaction builder needs: the stealth keys plus the
+   * transparent amount recovered from the output's commitment (the node sends
+   * the amount as little-endian bytes in `amountCommitment`).
+   */
+  async getRawOutputs(
+    startHeight: number,
+    endHeight: number,
+  ): Promise<Array<{ targetKey: string; publicKey: string; amount: bigint }>> {
+    const result = await this.call<Array<{
+      height: number
+      outputs: Array<{
+        txHash: string
+        outputIndex: number
+        targetKey: string
+        publicKey: string
+        amountCommitment: string
+      }>
+    }>>('chain_getOutputs', {
+      start_height: startHeight,
+      end_height: endHeight,
+    })
+
+    return result.flatMap((block) =>
+      block.outputs.map((output) => ({
+        targetKey: output.targetKey,
+        publicKey: output.publicKey,
+        amount: leHexToBigInt(output.amountCommitment),
+      })),
     )
   }
 

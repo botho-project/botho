@@ -263,6 +263,83 @@ pub fn build_and_sign_with_rng<R: RngCore + CryptoRng>(
     Ok(tx)
 }
 
+/// A chain output the wallet wants to test for ownership / use as a decoy.
+///
+/// These are exactly the fields the node returns from `chain_getOutputs`
+/// (`targetKey`, `publicKey`, and the transparent `amount` recovered from
+/// `amountCommitment`).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChainOutput {
+    /// Hex-encoded 32-byte one-time target key of the output.
+    pub target_key: String,
+    /// Hex-encoded 32-byte ephemeral public key of the output.
+    pub public_key: String,
+    /// Amount in picocredits (recovered from the transparent commitment).
+    pub amount: u64,
+}
+
+/// A scan request: the account's private keys plus candidate chain outputs.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanRequest {
+    /// Hex-encoded 32-byte account spend private key. **Stays client-side.**
+    pub spend_private_key: String,
+    /// Hex-encoded 32-byte account view private key. **Stays client-side.**
+    pub view_private_key: String,
+    /// Candidate outputs (e.g. every output the node returned for a height
+    /// range) to test for ownership.
+    pub outputs: Vec<ChainOutput>,
+}
+
+/// An owned output the scan identified, ready to be turned into a spend input.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OwnedOutput {
+    /// Hex-encoded 32-byte one-time target key of the owned output.
+    pub target_key: String,
+    /// Hex-encoded 32-byte ephemeral public key of the owned output.
+    pub public_key: String,
+    /// Amount in picocredits of the owned output.
+    pub amount: u64,
+    /// Subaddress index that received this output (0 = default, 1 = change).
+    pub subaddress_index: u64,
+}
+
+/// Identify which of `outputs` belong to the account, using the
+/// **node-identical** stealth-address ownership check
+/// ([`TxOutput::belongs_to`]).
+///
+/// This runs the same Rust the node runs in `scan_utxos_for_account`, so a
+/// thin client never has to re-implement the subaddress math in JavaScript (a
+/// notorious source of cross-implementation drift). The view/spend keys are
+/// used only to recover the stealth relationship and never leave the client.
+pub fn scan_owned_outputs_inner(req: &ScanRequest) -> Result<Vec<OwnedOutput>, String> {
+    let spend_private = parse_private("spendPrivateKey", &req.spend_private_key)?;
+    let view_private = parse_private("viewPrivateKey", &req.view_private_key)?;
+    let account = AccountKey::new(&spend_private, &view_private);
+
+    let mut owned = Vec::new();
+    for out in &req.outputs {
+        let tx_out = TxOutput {
+            amount: out.amount,
+            target_key: parse_hex_32("output.target_key", &out.target_key)?,
+            public_key: parse_hex_32("output.public_key", &out.public_key)?,
+            e_memo: None,
+            cluster_tags: Default::default(),
+        };
+        if let Some(subaddress_index) = tx_out.belongs_to(&account) {
+            owned.push(OwnedOutput {
+                target_key: out.target_key.clone(),
+                public_key: out.public_key.clone(),
+                amount: out.amount,
+                subaddress_index,
+            });
+        }
+    }
+    Ok(owned)
+}
+
 /// Build, CLSAG-sign, and bincode-serialize a transaction, returning hex.
 ///
 /// The returned hex is the exact `tx_hex` payload accepted by the node's
@@ -461,6 +538,41 @@ mod tests {
         );
         let err = build_and_sign_with_rng(&req, &mut rng).unwrap_err();
         assert!(err.contains("below minimum"), "got: {err}");
+    }
+
+    #[test]
+    fn scan_identifies_owned_outputs_only() {
+        let mut rng = StdRng::from_seed([29u8; 32]);
+        let me = AccountKey::random(&mut rng);
+        let stranger = AccountKey::random(&mut rng);
+
+        // Two outputs to me (default subaddress) and one to a stranger.
+        let mine_a = TxOutput::new(1_000, &me.default_subaddress());
+        let mine_b = TxOutput::new(2_000, &me.change_subaddress());
+        let theirs = TxOutput::new(3_000, &stranger.default_subaddress());
+
+        let to_chain = |o: &TxOutput| ChainOutput {
+            target_key: hex::encode(o.target_key),
+            public_key: hex::encode(o.public_key),
+            amount: o.amount,
+        };
+
+        let req = ScanRequest {
+            spend_private_key: hex::encode(me.spend_private_key().to_bytes()),
+            view_private_key: hex::encode(me.view_private_key().to_bytes()),
+            outputs: vec![to_chain(&mine_a), to_chain(&theirs), to_chain(&mine_b)],
+        };
+
+        let owned = scan_owned_outputs_inner(&req).expect("scan should succeed");
+        // Exactly the two outputs paid to me, with correct subaddress indices.
+        assert_eq!(owned.len(), 2);
+        let by_amount: std::collections::BTreeMap<u64, u64> = owned
+            .iter()
+            .map(|o| (o.amount, o.subaddress_index))
+            .collect();
+        assert_eq!(by_amount.get(&1_000), Some(&0)); // default subaddress
+        assert_eq!(by_amount.get(&2_000), Some(&1)); // change subaddress
+        assert!(!by_amount.contains_key(&3_000)); // stranger's output excluded
     }
 
     #[test]

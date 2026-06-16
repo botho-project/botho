@@ -1018,6 +1018,32 @@ async fn handle_get_outputs(id: Value, params: &Value, state: &RpcState) -> Json
     for height in start_height..=end_height {
         if let Ok(block) = ledger.get_block(height) {
             let mut outputs = Vec::new();
+
+            // Coinbase (minting reward) output. This is a real stealth TxOutput
+            // stored in the UTXO set (see LedgerStore: `block.minting_tx
+            // .to_tx_output()`), but it is NOT part of `block.transactions`, so
+            // it must be emitted explicitly. Without it, thin wallets scanning a
+            // freshly-mined chain see no outputs at all — they cannot find their
+            // own (coinbase) UTXOs to spend, nor build a decoy ring. The
+            // `outputIndex` is encoded as u32::MAX to distinguish coinbase from
+            // regular transaction outputs.
+            let coinbase = block.minting_tx.to_tx_output();
+            let coinbase_tags: Vec<[u64; 2]> = coinbase
+                .cluster_tags
+                .entries
+                .iter()
+                .map(|e| [e.cluster_id.0, e.weight as u64])
+                .collect();
+            outputs.push(json!({
+                "txHash": hex::encode(block.minting_tx.hash()),
+                "outputIndex": u32::MAX,
+                "targetKey": hex::encode(coinbase.target_key),
+                "publicKey": hex::encode(coinbase.public_key),
+                "amountCommitment": hex::encode(coinbase.amount.to_le_bytes()),
+                "clusterTags": coinbase_tags,
+                "coinbase": true,
+            }));
+
             for tx in &block.transactions {
                 for (idx, output) in tx.outputs.iter().enumerate() {
                     // Serialize cluster tags as array of [cluster_id, weight] pairs

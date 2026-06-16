@@ -10,8 +10,8 @@
  */
 
 import { mnemonicToSeedSync } from '@scure/bip39'
-import { HDKey } from '@scure/bip32'
 import { hkdf } from '@noble/hashes/hkdf.js'
+import { hmac } from '@noble/hashes/hmac.js'
 import { sha512 } from '@noble/hashes/sha2.js'
 import { base58 } from '@scure/base'
 import { ristretto255 } from '@noble/curves/ed25519'
@@ -31,24 +31,70 @@ const TESTNET_PREFIX = 'tbotho://1/'
 const MAINNET_PREFIX = 'botho://1/'
 
 /**
- * Derive SLIP-10 Ed25519 key from BIP39 seed
+ * SLIP-0010 master key for the Ed25519 curve.
  *
- * Uses path m/44'/866'/account' for Botho
+ * `I = HMAC-SHA512("ed25519 seed", seed)`; left 32 bytes are the key, right 32
+ * bytes the chain code. (See SLIP-0010 §"Master key generation".)
+ */
+function slip10Ed25519Master(seed: Uint8Array): { key: Uint8Array; chainCode: Uint8Array } {
+  const I = hmac(sha512, encoder.encode('ed25519 seed'), seed)
+  return { key: I.slice(0, 32), chainCode: I.slice(32, 64) }
+}
+
+/** Serialize a 32-bit unsigned integer as 4 big-endian bytes. */
+function ser32(index: number): Uint8Array {
+  const out = new Uint8Array(4)
+  out[0] = (index >>> 24) & 0xff
+  out[1] = (index >>> 16) & 0xff
+  out[2] = (index >>> 8) & 0xff
+  out[3] = index & 0xff
+  return out
+}
+
+/**
+ * SLIP-0010 Ed25519 hardened child derivation.
+ *
+ * Ed25519 only supports hardened derivation: the high bit of the index is
+ * always set, and the data hashed is `0x00 || key || ser32(index')`.
+ * (See SLIP-0010 §"Private parent key -> private child key".)
+ */
+function slip10Ed25519Child(
+  parent: { key: Uint8Array; chainCode: Uint8Array },
+  index: number,
+): { key: Uint8Array; chainCode: Uint8Array } {
+  // Force hardened (>>> 0 keeps it an unsigned 32-bit value).
+  const hardened = (index | 0x80000000) >>> 0
+  const data = new Uint8Array(1 + 32 + 4)
+  data[0] = 0x00
+  data.set(parent.key, 1)
+  data.set(ser32(hardened), 33)
+  const I = hmac(sha512, parent.chainCode, data)
+  return { key: I.slice(0, 32), chainCode: I.slice(32, 64) }
+}
+
+/**
+ * Derive the SLIP-0010 Ed25519 private key from a BIP39 seed at the Botho
+ * wallet path `m/44'/866'/account'`.
+ *
+ * This MUST byte-match the Rust node's derivation
+ * (`slip10_ed25519::derive_ed25519_private_key` in `core/src/slip10/mod.rs`),
+ * otherwise the keys this wallet signs with will differ from the node's view of
+ * the account and any transaction it builds will be rejected. The parity is
+ * pinned by `derivation-parity.test.ts` against the same vectors the Rust unit
+ * tests assert.
+ *
+ * NOTE: an earlier implementation used `@scure/bip32`'s `HDKey`, which performs
+ * BIP-32 *secp256k1* derivation, not SLIP-0010 *Ed25519* derivation, and so
+ * produced keys incompatible with the node. This hand-rolled SLIP-0010 Ed25519
+ * path (HMAC-SHA512 with the "ed25519 seed" key, hardened-only children)
+ * matches the spec and the node.
  */
 function deriveSlip10Key(seed: Uint8Array, accountIndex: number = 0): Uint8Array {
-  // SLIP-10 uses Ed25519 derivation from BIP32
-  // We use @scure/bip32 which supports Ed25519 via HDKey
-  const masterKey = HDKey.fromMasterSeed(seed)
-
-  // Derive using hardened path: m/44'/866'/account'
-  const path = `m/${BIP44_PURPOSE}'/${BOTHO_COIN_TYPE}'/${accountIndex}'`
-  const derived = masterKey.derive(path)
-
-  if (!derived.privateKey) {
-    throw new Error('Failed to derive private key')
+  let node = slip10Ed25519Master(seed)
+  for (const component of [BIP44_PURPOSE, BOTHO_COIN_TYPE, accountIndex]) {
+    node = slip10Ed25519Child(node, component)
   }
-
-  return derived.privateKey
+  return node.key
 }
 
 /**
