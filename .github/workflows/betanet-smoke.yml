@@ -1,0 +1,67 @@
+name: Betanet Join Smoke
+
+# SMOKE / OPS test -- NOT a hermetic CI gate.
+#
+# This workflow launches a fresh local botho node and tries to join the LIVE
+# beta testnet (seed.botho.io) over the public internet, then checks that it
+# peers and syncs. It depends on external live infrastructure being up and is
+# non-deterministic, so it is intentionally MANUAL ONLY (workflow_dispatch).
+#
+# It is deliberately NOT wired to `push` or `pull_request` -- it must never gate
+# a PR. The optional `mine` input mints on the live betanet (mutates the live
+# chain; beta only) and defaults to false.
+on:
+  workflow_dispatch:
+    inputs:
+      mine:
+        description: 'DANGER: mint on the live betanet (mutates the live chain; beta only)'
+        required: false
+        default: false
+        type: boolean
+      timeout_secs:
+        description: 'Overall timeout (seconds) for reaching PASS'
+        required: false
+        default: '180'
+        type: string
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  betanet-smoke:
+    name: Join live betanet and check peer + sync
+    runs-on: ubuntu-latest
+    # Hard ceiling so the job can never hang on the live network.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-betanet-smoke-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-betanet-smoke-
+            ${{ runner.os }}-cargo-
+
+      - name: Build botho (release)
+        run: cargo build -p botho --release
+
+      - name: Run betanet join smoke test
+        run: |
+          ARGS=(--binary "target/release/botho" --timeout "${{ inputs.timeout_secs }}")
+          if [[ "${{ inputs.mine }}" == "true" ]]; then
+            echo "::warning::--mine requested: this will MINT on the LIVE betanet and mutate the live chain."
+            ARGS+=(--mine)
+          fi
+          ./scripts/join-betanet.sh "${ARGS[@]}"
