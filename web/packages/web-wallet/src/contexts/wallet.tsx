@@ -412,17 +412,19 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     const recipientKeys = parseAddress(to)
 
     // 3. Determine a fee. estimateFee returns the node's recommended/minimum
-    //    fee in picocredits; fall back to a sane minimum if unavailable.
+    //    fee in picocredits, but it can come back below the consensus minimum
+    //    (e.g. a per-byte estimate of a few thousand picocredits). The signer
+    //    rejects any tx whose fee is under MIN_TX_FEE, so clamp the fee to that
+    //    floor regardless of what the estimator returns.
+    const MIN_TX_FEE = 100_000_000n // signer's MIN_TX_FEE (picocredits)
     let fee: bigint
     try {
       fee = await adapter.estimateFee(0)
     } catch {
       fee = 0n
     }
-    if (fee <= 0n) {
-      // Mirror the signer's MIN_TX_FEE (100_000_000 picocredits) so the build
-      // doesn't fail the minimum-fee check.
-      fee = 100_000_000n
+    if (fee < MIN_TX_FEE) {
+      fee = MIN_TX_FEE
     }
 
     // 4. Build + CLSAG-sign entirely client-side (wasm). The keys never leave

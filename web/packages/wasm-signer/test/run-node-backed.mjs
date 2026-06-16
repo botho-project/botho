@@ -1,0 +1,66 @@
+#!/usr/bin/env node
+/**
+ * Convenience runner for the node-backed #372 test.
+ *
+ * Ensures the prerequisites exist (release botho binary + wasm artifact), then
+ * runs the gated `send-live-node.test.ts` with BOTHO_E2E_NODE=1 so the test
+ * spins up its own throwaway solo-minting node, asserts the ledger invariants,
+ * and tears the node down.
+ *
+ *   node packages/wasm-signer/test/run-node-backed.mjs
+ *
+ * Run from the `web/` directory. Override the binary with BOTHO_BIN=/path.
+ */
+
+import { existsSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+import { dirname, join, resolve } from 'node:path'
+
+const here = dirname(fileURLToPath(import.meta.url))
+// packages/wasm-signer/test -> web -> repo root
+const webDir = resolve(here, '..', '..', '..')
+const repoRoot = resolve(webDir, '..')
+
+const pkgDir = resolve(here, '..', 'pkg')
+const wasmGlue = join(pkgDir, 'bth_wasm_signer.js')
+const binPath = process.env.BOTHO_BIN || join(repoRoot, 'target', 'release', 'botho')
+
+function fail(msg) {
+  console.error(`\n[run-node-backed] ${msg}\n`)
+  process.exit(1)
+}
+
+if (!existsSync(wasmGlue)) {
+  fail(
+    'wasm artifact missing. Build it first:\n' +
+      '  pnpm --filter @botho/wasm-signer build:wasm',
+  )
+}
+if (!existsSync(binPath)) {
+  fail(
+    `botho binary missing at ${binPath}. Build it first:\n` +
+      '  cargo build --release --bin botho\n' +
+      'or set BOTHO_BIN=/path/to/botho',
+  )
+}
+
+console.log('[run-node-backed] binary :', binPath)
+console.log('[run-node-backed] wasm   :', wasmGlue)
+console.log('[run-node-backed] running gated node-backed test...\n')
+
+const result = spawnSync(
+  'pnpm',
+  ['exec', 'vitest', 'run', 'packages/wasm-signer/test/send-live-node.test.ts'],
+  {
+    cwd: webDir,
+    stdio: 'inherit',
+    env: {
+      ...process.env,
+      BOTHO_E2E_NODE: '1',
+      BOTHO_BIN: binPath,
+    },
+  },
+)
+
+process.exit(result.status ?? 1)
