@@ -3,7 +3,7 @@ pub mod minter;
 use anyhow::Result;
 use std::{
     path::{Path, PathBuf},
-    sync::{atomic::AtomicBool, mpsc::Receiver, Arc, RwLock},
+    sync::{mpsc::Receiver, Arc, RwLock},
 };
 use tracing::{info, warn};
 
@@ -36,7 +36,6 @@ pub struct Node {
     wallet: Option<Wallet>,
     ledger: SharedLedger,
     mempool: SharedMempool,
-    shutdown: Arc<AtomicBool>,
     minter: Option<Minter>,
     /// Receiver for minted minting transactions (to be submitted to consensus)
     minting_tx_receiver: Option<Receiver<MintedMintingTx>>,
@@ -89,7 +88,6 @@ impl Node {
             wallet,
             ledger,
             mempool,
-            shutdown: Arc::new(AtomicBool::new(false)),
             minter: None,
             minting_tx_receiver: None,
             config_dir,
@@ -172,7 +170,11 @@ impl Node {
 
         info!("Starting minting with {} threads", threads);
 
-        let mut minter = Minter::new(threads, wallet.default_address(), self.shutdown.clone());
+        // Each minter owns its own shutdown flag (see `Minter::new`). We must
+        // NOT pass the node-wide `self.shutdown` here: `Minter::stop` sets the
+        // shutdown flag permanently, so reusing a shared flag would make every
+        // minter after the first stop a no-op (issue #388).
+        let mut minter = Minter::new(threads, wallet.default_address());
 
         // Take the minting tx receiver
         self.minting_tx_receiver = minter.take_tx_receiver();
