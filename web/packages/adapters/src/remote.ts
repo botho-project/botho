@@ -368,6 +368,34 @@ export class RemoteNodeAdapter implements NodeAdapter {
     )
   }
 
+  /**
+   * Query the node's `chain_areKeyImagesSpent` RPC: for each supplied
+   * hex-encoded key image, report whether it is spent on-chain or pending in
+   * the mempool. The thin wallet uses this (with key images derived client-side
+   * by the wasm signer) to exclude already-spent owned outputs from its balance
+   * and from spendable-input selection — the node's `wallet_getBalance` only
+   * spent-filters the node's OWN wallet, not arbitrary thin-wallet keys (#392).
+   */
+  async areKeyImagesSpent(
+    keyImages: string[],
+  ): Promise<
+    Array<{
+      keyImage: string
+      spent: boolean
+      spentHeight: number | null
+      pending: boolean
+    }>
+  > {
+    return this.call<
+      Array<{
+        keyImage: string
+        spent: boolean
+        spentHeight: number | null
+        pending: boolean
+      }>
+    >('chain_areKeyImagesSpent', { keyImages })
+  }
+
   async getTransaction(txHash: TxHash): Promise<Transaction | null> {
     try {
       // The node's getTransaction RPC returns a "Transaction not found" error

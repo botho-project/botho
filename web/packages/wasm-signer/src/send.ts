@@ -21,6 +21,7 @@ import {
   type RecipientAddress,
   type SignRequest,
   type SpendInput,
+  type WasmSigner,
 } from './index'
 
 /** The account private keys the caller derived from the mnemonic. */
@@ -45,6 +46,93 @@ export interface SendRpc {
    * recovered from the output's commitment.
    */
   getOutputs(startHeight: number, endHeight: number): Promise<ChainOutput[]>
+  /**
+   * Query the node's `chain_areKeyImagesSpent` RPC: given a list of hex-encoded
+   * key images, return for each whether it is spent on-chain or pending in the
+   * mempool. The wallet uses this to exclude already-spent owned outputs from
+   * its balance and from spendable-input selection (so it never tries to
+   * double-spend its own output). Order is preserved to match the input list.
+   */
+  areKeyImagesSpent(keyImages: string[]): Promise<KeyImageSpentStatus[]>
+}
+
+/** The spent/pending status of a single key image, as returned by the node. */
+export interface KeyImageSpentStatus {
+  /** The queried key image (hex). */
+  keyImage: string
+  /** True if the key image is recorded in the on-chain double-spend set. */
+  spent: boolean
+  /** Block height the key image was spent at, or null if unspent. */
+  spentHeight: number | null
+  /** True if the key image is currently pending in the mempool. */
+  pending: boolean
+}
+
+/**
+ * Filter a wallet's owned outputs down to the ones that are actually spendable:
+ * those whose key image is neither spent on-chain nor pending in the mempool.
+ *
+ * This is the core of the thin-wallet spent-awareness fix (#392): without it,
+ * the wallet counts already-spent outputs in its balance (overstating it) and
+ * could select a spent output as a transaction input (a guaranteed
+ * double-spend rejection). It mirrors the node's own `wallet_getBalance`
+ * filtering, but works for arbitrary thin-wallet keys.
+ */
+export async function spendableOwnedOutputs(
+  signer: WasmSigner,
+  keys: SignerKeys,
+  owned: OwnedOutput[],
+  rpc: SendRpc,
+): Promise<OwnedOutput[]> {
+  if (owned.length === 0) return []
+
+  // Derive each owned output's key image (node-identical derivation inside
+  // wasm), then ask the node which are spent/pending.
+  const withImages = signer.computeOwnedOutputKeyImages({
+    spendPrivateKey: keys.spendPrivateKey,
+    viewPrivateKey: keys.viewPrivateKey,
+    outputs: owned,
+  })
+  const statuses = await rpc.areKeyImagesSpent(withImages.map((o) => o.keyImage))
+
+  // Map key image -> spendable. Treat anything we couldn't get a clear answer
+  // for as spent (conservative: never overstate balance / never select it).
+  const spendableByKeyImage = new Map<string, boolean>()
+  for (const s of statuses) {
+    spendableByKeyImage.set(s.keyImage, !s.spent && !s.pending)
+  }
+
+  return withImages
+    .filter((o) => spendableByKeyImage.get(o.keyImage) === true)
+    .map((o) => ({
+      targetKey: o.targetKey,
+      publicKey: o.publicKey,
+      amount: o.amount,
+      subaddressIndex: o.subaddressIndex,
+    }))
+}
+
+/**
+ * Compute the wallet's spendable balance: the sum of owned outputs that are
+ * neither spent on-chain nor pending. This is the figure the UI should display
+ * — it excludes outputs the wallet has already spent (#392).
+ */
+export async function spendableBalance(
+  keys: SignerKeys,
+  rpc: SendRpc,
+): Promise<bigint> {
+  const signer = await loadSigner()
+  const height = await rpc.getChainHeight()
+  const candidates = await rpc.getOutputs(0, height)
+  if (candidates.length === 0) return 0n
+
+  const owned = signer.scanOwnedOutputs({
+    spendPrivateKey: keys.spendPrivateKey,
+    viewPrivateKey: keys.viewPrivateKey,
+    outputs: candidates,
+  })
+  const spendable = await spendableOwnedOutputs(signer, keys, owned, rpc)
+  return spendable.reduce((s, o) => s + toBigInt(o.amount), 0n)
 }
 
 /** Inputs to {@link buildSendTransaction}. */
@@ -128,11 +216,19 @@ export async function buildSendTransaction(
     throw new Error('No spendable outputs found for this wallet')
   }
 
+  // 1b. Exclude outputs the wallet has already spent (on-chain or pending).
+  // Selecting a spent output as an input is a guaranteed double-spend
+  // rejection, so we filter to spendable outputs before input selection (#392).
+  const spendable = await spendableOwnedOutputs(signer, keys, owned, rpc)
+  if (spendable.length === 0) {
+    throw new Error('No spendable outputs found for this wallet (all spent)')
+  }
+
   // 2. Select inputs covering amount + fee.
   const target = amount + fee
-  const inputs = selectInputs(owned, target)
+  const inputs = selectInputs(spendable, target)
   if (!inputs) {
-    const have = owned.reduce((s, o) => s + toBigInt(o.amount), 0n)
+    const have = spendable.reduce((s, o) => s + toBigInt(o.amount), 0n)
     throw new Error(
       `Insufficient funds: need ${target} picocredits (amount + fee), have ${have}`,
     )
