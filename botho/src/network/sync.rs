@@ -48,6 +48,14 @@ pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// Blocks behind threshold before re-syncing
 pub const SYNC_BEHIND_THRESHOLD: u64 = 10;
 
+/// How often a synced node re-polls peers for their chain status.
+///
+/// While `Synced`, the manager has no other way to learn that a peer has
+/// advanced (status is request/response, not gossiped). Periodically
+/// re-requesting status lets a long-running node detect that the chain grew
+/// and re-enter catch-up, instead of relying solely on gossiped tip blocks.
+pub const STATUS_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
+
 // ============================================================================
 // Protocol Messages
 // ============================================================================
@@ -341,6 +349,8 @@ pub struct ChainSyncManager {
     retry_backoff: Duration,
     /// Peer reputation tracking for sync selection
     reputation: ReputationManager,
+    /// Last time we re-polled peers for status while synced
+    last_status_refresh: Instant,
 }
 
 impl ChainSyncManager {
@@ -354,6 +364,7 @@ impl ChainSyncManager {
             rate_limiter: SyncRateLimiter::default(),
             retry_backoff: Duration::from_secs(5),
             reputation: ReputationManager::new(),
+            last_status_refresh: Instant::now(),
         }
     }
 
@@ -401,8 +412,11 @@ impl ChainSyncManager {
             },
         );
 
-        // If in discovery and we have at least one peer ahead, start downloading
-        if matches!(self.state, SyncState::Discovery) {
+        // If we're not already downloading and a peer is far enough ahead,
+        // (re)enter catch-up. This covers both the initial join (Discovery) and
+        // a synced node that just learned, via a status refresh, that a peer
+        // advanced past us.
+        if !matches!(self.state, SyncState::Downloading { .. }) {
             if let Some((best_peer, status)) = self.best_peer() {
                 if status.height > self.local_height + SYNC_BEHIND_THRESHOLD {
                     self.state = SyncState::Downloading {
@@ -410,8 +424,8 @@ impl ChainSyncManager {
                         target_height: status.height,
                     };
                     self.download_height = self.local_height;
-                } else {
-                    // We're close enough, consider synced
+                } else if matches!(self.state, SyncState::Discovery) {
+                    // We're close enough during initial discovery: synced.
                     self.state = SyncState::Synced;
                 }
             }
@@ -617,7 +631,7 @@ impl ChainSyncManager {
             }
 
             SyncState::Synced => {
-                // Check if we've fallen behind
+                // Check if we've fallen behind based on the statuses we have.
                 if let Some((best_peer, status)) = self.best_peer() {
                     if status.height > self.local_height + SYNC_BEHIND_THRESHOLD {
                         self.state = SyncState::Downloading {
@@ -625,6 +639,18 @@ impl ChainSyncManager {
                             target_height: status.height,
                         };
                         self.download_height = self.local_height;
+                        return None;
+                    }
+                }
+
+                // Periodically re-poll a peer for its status. Status is
+                // request/response (not gossiped), so without this a synced
+                // node would never learn that a peer advanced and would rely
+                // solely on gossiped tip blocks to stay current.
+                if self.last_status_refresh.elapsed() >= STATUS_REFRESH_INTERVAL {
+                    if let Some(peer) = connected_peers.first() {
+                        self.last_status_refresh = Instant::now();
+                        return Some(SyncAction::RequestStatus(*peer));
                     }
                 }
                 None
@@ -1284,5 +1310,110 @@ mod tests {
     #[test]
     fn test_request_timeout_constant() {
         assert_eq!(REQUEST_TIMEOUT, Duration::from_secs(30));
+    }
+
+    // ========================================================================
+    // Catch-up / IBD re-entry tests (#376)
+    // ========================================================================
+
+    #[test]
+    fn test_synced_node_reenters_download_on_fresh_status() {
+        // A node that already caught up should re-enter Downloading when a
+        // fresh status shows the peer has advanced well beyond us.
+        let mut manager = ChainSyncManager::new(100);
+        let peer = make_peer_id();
+
+        // Initial status: peer at our height -> Synced.
+        manager.on_status(peer, 100, [1u8; 32]);
+        assert!(manager.is_synced());
+
+        // Our height stays 100, peer jumps to 250 (a fresh status arrives).
+        manager.on_status(peer, 250, [2u8; 32]);
+
+        assert!(matches!(
+            manager.state(),
+            SyncState::Downloading {
+                target_height: 250,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn test_synced_node_refreshes_status_after_interval() {
+        let mut manager = ChainSyncManager::new(100);
+        let peer = make_peer_id();
+
+        // Reach Synced.
+        manager.on_status(peer, 100, [1u8; 32]);
+        assert!(manager.is_synced());
+
+        // Force the refresh timer into the past so the next tick re-polls.
+        manager.last_status_refresh =
+            Instant::now() - STATUS_REFRESH_INTERVAL - Duration::from_secs(1);
+
+        let action = manager.tick(&[peer]);
+        assert!(
+            matches!(action, Some(SyncAction::RequestStatus(p)) if p == peer),
+            "synced node should re-request status after the refresh interval"
+        );
+    }
+
+    #[test]
+    fn test_synced_node_no_refresh_without_peers() {
+        let mut manager = ChainSyncManager::new(100);
+        let peer = make_peer_id();
+        manager.on_status(peer, 100, [1u8; 32]);
+        assert!(manager.is_synced());
+
+        manager.last_status_refresh =
+            Instant::now() - STATUS_REFRESH_INTERVAL - Duration::from_secs(1);
+
+        // No connected peers: nothing to request.
+        let action = manager.tick(&[]);
+        assert!(action.is_none());
+    }
+
+    #[test]
+    fn test_full_catchup_cycle_from_genesis() {
+        // End-to-end of the state machine: genesis node discovers a peer at a
+        // high height, downloads the full range in batches, and ends Synced.
+        let mut manager = ChainSyncManager::new(0);
+        let peer = make_peer_id();
+        let target = 250u64;
+
+        // Discovery -> request status.
+        assert!(matches!(
+            manager.tick(&[peer]),
+            Some(SyncAction::RequestStatus(_))
+        ));
+        manager.on_status(peer, target, [9u8; 32]);
+        assert!(matches!(manager.state(), SyncState::Downloading { .. }));
+
+        // Drive batched downloads until synced.
+        let mut height = 0u64;
+        for _ in 0..100 {
+            if manager.is_synced() {
+                break;
+            }
+            match manager.tick(&[peer]) {
+                Some(SyncAction::RequestBlocks {
+                    start_height,
+                    count,
+                    ..
+                }) => {
+                    assert_eq!(start_height, height + 1);
+                    let end = (start_height + count as u64 - 1).min(target);
+                    let blocks_added = end - start_height + 1;
+                    height += blocks_added;
+                    manager.on_blocks_added(height);
+                }
+                Some(SyncAction::Synced) => break,
+                other => panic!("unexpected action while downloading: {:?}", other),
+            }
+        }
+
+        assert!(manager.is_synced());
+        assert_eq!(height, target);
     }
 }
