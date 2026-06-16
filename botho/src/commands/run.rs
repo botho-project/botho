@@ -60,6 +60,38 @@ fn get_connected_peers(discovery: &NetworkDiscovery) -> Vec<libp2p::PeerId> {
     discovery.peer_table().iter().map(|p| p.peer_id).collect()
 }
 
+/// Decide whether the faucet should pause minting due to high confirmed
+/// balance.
+///
+/// The faucet pauses minting when its confirmed balance climbs above
+/// `high_threshold` to avoid accumulating coins indefinitely. **Crucially, this
+/// pause must only apply when there are no pending transactions to mine.** When
+/// the faucet is the sole minter and the mempool is non-empty, pausing would
+/// deadlock the chain: the pending transaction (e.g. a dispense) can never be
+/// mined, so it never confirms, so the confirmed balance never drops, so
+/// minting never resumes. See issue #386.
+fn should_pause_for_balance(balance: u64, high_threshold: u64, mempool_len: usize) -> bool {
+    balance > high_threshold && mempool_len == 0
+}
+
+/// Decide whether a faucet that is currently paused-for-balance should resume
+/// minting.
+///
+/// Two independent conditions trigger a resume:
+/// 1. The confirmed balance has dropped below `low_threshold` (the original
+///    anti-accumulation hysteresis), or
+/// 2. There are pending transactions in the mempool that need to be mined. When
+///    the faucet is the sole minter, leaving them unmined deadlocks the chain
+///    (issue #386), so a non-empty mempool always forces a resume regardless of
+///    balance. Once the mempool drains and the balance is still high, the pause
+///    re-engages via [`should_pause_for_balance`].
+///
+/// The caller is responsible for the additional quorum eligibility check before
+/// actually resuming.
+fn should_resume_from_balance_pause(balance: u64, low_threshold: u64, mempool_len: usize) -> bool {
+    balance < low_threshold || mempool_len > 0
+}
+
 /// Check if minting should be enabled based on quorum config and connected
 /// peers
 fn check_minting_eligibility(
@@ -1300,10 +1332,26 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
 
                     let balance_bth = balance as f64 / 1_000_000_000_000.0;
 
-                    // Check if we should pause minting due to high balance
-                    if minting_enabled && !minting_paused_for_balance && balance > FAUCET_BALANCE_HIGH {
+                    // Number of pending transactions awaiting inclusion in a
+                    // block. The balance-gated pause must never apply while
+                    // there is work to mine, otherwise a sole-minter faucet
+                    // deadlocks the chain (issue #386): a pending dispense can
+                    // never confirm, so the confirmed balance never drops, so
+                    // minting never resumes.
+                    let mempool_len = rpc_state
+                        .mempool
+                        .read()
+                        .map(|mp| mp.len())
+                        .unwrap_or(0);
+
+                    // Check if we should pause minting due to high balance.
+                    // Only pause when the mempool is empty (nothing to mine).
+                    if minting_enabled
+                        && !minting_paused_for_balance
+                        && should_pause_for_balance(balance, FAUCET_BALANCE_HIGH, mempool_len)
+                    {
                         info!(
-                            "Faucet balance ({:.2} BTH) exceeds threshold ({:.2} BTH) - pausing minting",
+                            "Faucet balance ({:.2} BTH) exceeds threshold ({:.2} BTH) and mempool is empty - pausing minting",
                             balance_bth,
                             FAUCET_BALANCE_HIGH as f64 / 1_000_000_000_000.0
                         );
@@ -1317,17 +1365,28 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                         ws_broadcaster.minting_status(false, 0.0, 0);
                     }
 
-                    // Check if we should resume minting due to low balance
-                    if minting_paused_for_balance && balance < FAUCET_BALANCE_LOW {
+                    // Check if we should resume minting. We resume when the
+                    // balance has dropped below the low threshold (original
+                    // hysteresis) OR when there are pending transactions to
+                    // mine (which forces a block even at high balance, breaking
+                    // the sole-minter deadlock).
+                    if minting_paused_for_balance
+                        && should_resume_from_balance_pause(balance, FAUCET_BALANCE_LOW, mempool_len)
+                    {
                         // Check quorum before resuming
                         let connected = get_connected_peer_ids(&discovery);
                         let (can_mint, _) = check_minting_eligibility(&config, &connected, mint);
                         if can_mint {
-                            info!(
-                                "Faucet balance ({:.2} BTH) below threshold ({:.2} BTH) - resuming minting",
-                                balance_bth,
-                                FAUCET_BALANCE_LOW as f64 / 1_000_000_000_000.0
-                            );
+                            let reason = if mempool_len > 0 {
+                                format!("{} pending transaction(s) to mine", mempool_len)
+                            } else {
+                                format!(
+                                    "balance ({:.2} BTH) below threshold ({:.2} BTH)",
+                                    balance_bth,
+                                    FAUCET_BALANCE_LOW as f64 / 1_000_000_000_000.0
+                                )
+                            };
+                            info!("Resuming minting: {}", reason);
                             if let Err(e) = node.start_minting_public() {
                                 warn!("Failed to resume minting: {}", e);
                             } else {
@@ -1513,4 +1572,71 @@ fn apply_lottery_to_block(
         utxo_lookup,
         &lottery_config,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Mirror the production faucet thresholds used in `run`.
+    const HIGH: u64 = 10_000_000_000_000_000; // 10,000 BTH
+    const LOW: u64 = 5_000_000_000_000_000; // 5,000 BTH
+
+    #[test]
+    fn pauses_when_balance_high_and_mempool_empty() {
+        // Original anti-accumulation behavior: balance above HIGH and nothing
+        // to mine -> pause.
+        assert!(should_pause_for_balance(HIGH + 1, HIGH, 0));
+    }
+
+    #[test]
+    fn does_not_pause_when_balance_high_but_mempool_nonempty() {
+        // Regression test for issue #386: a sole-minter faucet must keep minting
+        // when there are pending transactions, even with a high balance.
+        // Otherwise the pending tx never confirms and the chain deadlocks.
+        assert!(!should_pause_for_balance(HIGH + 1, HIGH, 1));
+        assert!(!should_pause_for_balance(HIGH + 1, HIGH, 42));
+    }
+
+    #[test]
+    fn does_not_pause_when_balance_below_high() {
+        // Below the high threshold there is no reason to pause regardless of
+        // mempool state.
+        assert!(!should_pause_for_balance(HIGH, HIGH, 0));
+        assert!(!should_pause_for_balance(HIGH - 1, HIGH, 0));
+        assert!(!should_pause_for_balance(0, HIGH, 5));
+    }
+
+    #[test]
+    fn resumes_when_balance_drops_below_low() {
+        // Original hysteresis: balance falls below LOW -> resume.
+        assert!(should_resume_from_balance_pause(LOW - 1, LOW, 0));
+    }
+
+    #[test]
+    fn resumes_when_mempool_nonempty_even_at_high_balance() {
+        // Regression test for issue #386: pending transactions force a resume
+        // even when the balance is still well above the high threshold, so the
+        // pending tx gets mined and the deadlock is broken.
+        assert!(should_resume_from_balance_pause(HIGH + 1, LOW, 1));
+        assert!(should_resume_from_balance_pause(LOW + 1, LOW, 3));
+    }
+
+    #[test]
+    fn stays_paused_when_balance_high_and_mempool_empty() {
+        // With nothing to mine and a balance still above LOW, the pause holds.
+        assert!(!should_resume_from_balance_pause(HIGH + 1, LOW, 0));
+        assert!(!should_resume_from_balance_pause(LOW + 1, LOW, 0));
+        assert!(!should_resume_from_balance_pause(LOW, LOW, 0));
+    }
+
+    #[test]
+    fn pause_and_resume_are_consistent_at_steady_state() {
+        // When the mempool is empty and balance is between LOW and HIGH, the
+        // faucet neither pauses (balance not above HIGH) nor, if already paused,
+        // resumes (balance not below LOW): stable hysteresis band.
+        let mid = LOW + (HIGH - LOW) / 2;
+        assert!(!should_pause_for_balance(mid, HIGH, 0));
+        assert!(!should_resume_from_balance_pause(mid, LOW, 0));
+    }
 }
