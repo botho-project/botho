@@ -83,7 +83,17 @@ pub struct Minter {
 }
 
 impl Minter {
-    pub fn new(threads: usize, address: PublicAddress, shutdown: Arc<AtomicBool>) -> Self {
+    /// Create a new minter.
+    ///
+    /// Each minter owns its own `shutdown` flag (created here, initialized to
+    /// `false`). This is deliberate: a minter must NOT share the node-wide
+    /// shutdown flag, because [`Minter::stop`] sets the flag to `true`
+    /// permanently. If the flag were shared, a subsequent `start_minting`
+    /// would spawn threads that immediately observe `shutdown == true` and exit
+    /// before ever picking up work — producing a "zombie minter" that reports
+    /// active but never mines (see issue #388, the pause→resume cycle from
+    /// #386/#387).
+    pub fn new(threads: usize, address: PublicAddress) -> Self {
         let (tx_sender, tx_receiver) = channel();
 
         // Initialize with default work (will be updated before minting starts)
@@ -97,7 +107,7 @@ impl Minter {
         Self {
             threads,
             address,
-            shutdown,
+            shutdown: Arc::new(AtomicBool::new(false)),
             total_hashes: Arc::new(AtomicU64::new(0)),
             txs_found: Arc::new(AtomicU64::new(0)),
             start_time: Instant::now(),
@@ -346,5 +356,56 @@ mod tests {
         // Different nonce should produce different hash
         let hash3 = compute_pow_hash(nonce + 1, &prev_hash, &address);
         assert_ne!(hash, hash3);
+    }
+
+    /// Spin up a minter the way `Node::start_minting` does, run it until it
+    /// picks up work and produces at least one minting tx, then stop it.
+    /// Returns whether a minting tx was received within the timeout.
+    fn run_minter_once(address: &PublicAddress) -> bool {
+        let mut minter = Minter::new(1, address.clone());
+        let rx = minter.take_tx_receiver().expect("receiver available");
+
+        // Easy difficulty so PoW is found almost immediately.
+        minter.update_work(MintingWork {
+            prev_block_hash: [7u8; 32],
+            height: 1,
+            difficulty: INITIAL_DIFFICULTY,
+            total_minted: 0,
+        });
+        minter.start();
+
+        // A minting tx must arrive — this proves the thread picked up work and
+        // mined a block, not merely that the thread is alive.
+        let produced = rx.recv_timeout(std::time::Duration::from_secs(10)).is_ok();
+
+        minter.stop();
+        produced
+    }
+
+    /// Regression test for issue #388 (zombie minter).
+    ///
+    /// Previously, `Minter` shared the node-wide shutdown flag. `Minter::stop`
+    /// set that flag to `true` permanently, so the SECOND minter created after
+    /// a stop saw `shutdown == true` immediately and exited before picking up
+    /// any work — the node reported "minting active" but produced no blocks.
+    ///
+    /// This test reproduces the start → stop → start cycle and asserts that the
+    /// resumed minter ALSO produces a minting tx, exactly like a fresh startup.
+    #[test]
+    fn test_minter_resumes_work_after_stop_start_cycle() {
+        let address = PublicAddress::from_random(&mut OsRng);
+
+        // Fresh startup: produces work.
+        assert!(
+            run_minter_once(&address),
+            "initial minter should pick up work and produce a minting tx"
+        );
+
+        // Resume after a stop: must ALSO produce work (the regression).
+        assert!(
+            run_minter_once(&address),
+            "resumed minter (start after stop) should pick up work and \
+             produce a minting tx — a no-op here is the #388 zombie-minter bug"
+        );
     }
 }
