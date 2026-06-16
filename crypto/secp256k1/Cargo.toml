@@ -8,7 +8,14 @@ license = "Apache-2.0"
 rust-version = { workspace = true }
 
 [features]
-default = []
+default = ["std"]
+# `std` activates k256/std, which is required to satisfy k256's
+# `precomputed-tables` feature when it is unified into the workspace build via
+# a transitive consumer (e.g. libp2p-identity/secp256k1, which Linux-target
+# resolution pulls through libp2p-tls). Without it, `cargo build --workspace`
+# fails on Linux with "`precomputed-tables` feature requires either
+# `critical-section` or `std`". Kept opt-out so no_std consumers can disable.
+std = ["k256/std"]
 
 [dependencies]
 k256 = { version = "0.13", default-features = false, features = ["ecdsa", "schnorr", "alloc"] }
