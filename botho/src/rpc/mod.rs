@@ -467,36 +467,63 @@ async fn handle_request(
     ))
 }
 
+/// Validate an incoming WebSocket upgrade request and compute its accept key.
+///
+/// Implements the RFC 6455 server-side opening-handshake checks:
+/// - `Upgrade: websocket` (case-insensitive)
+/// - `Connection` contains the `upgrade` token (case-insensitive; browsers and
+///   proxies frequently send `keep-alive, Upgrade`)
+/// - a present `Sec-WebSocket-Key`
+///
+/// On success returns the value to send back in `Sec-WebSocket-Accept`. On
+/// failure returns a short, stable reason string suitable for a `400` body —
+/// this is exactly the path that produced the live `wss://.../rpc/ws` 400 when
+/// a stale node binary mishandled the handshake (#329), so it is covered by
+/// unit tests to lock the contract.
+fn validate_websocket_upgrade(headers: &hyper::HeaderMap) -> Result<String, &'static str> {
+    let has_upgrade = headers
+        .get("Upgrade")
+        .map(|v| v.to_str().unwrap_or("").eq_ignore_ascii_case("websocket"))
+        .unwrap_or(false);
+    if !has_upgrade {
+        return Err("Missing or invalid Upgrade header (expected 'websocket')");
+    }
+
+    let has_connection = headers
+        .get("Connection")
+        .map(|v| v.to_str().unwrap_or("").to_lowercase().contains("upgrade"))
+        .unwrap_or(false);
+    if !has_connection {
+        return Err("Missing 'upgrade' token in Connection header");
+    }
+
+    let key = match headers
+        .get("Sec-WebSocket-Key")
+        .and_then(|v| v.to_str().ok())
+    {
+        Some(k) if !k.is_empty() => k,
+        _ => return Err("Missing Sec-WebSocket-Key header"),
+    };
+
+    Ok(compute_websocket_accept_key(key))
+}
+
 /// Handle WebSocket upgrade request
 async fn handle_websocket_upgrade(
     req: Request<hyper::body::Incoming>,
     state: Arc<RpcState>,
 ) -> Result<Response<Full<Bytes>>, Infallible> {
-    // Check for required WebSocket headers
-    let has_upgrade = req
-        .headers()
-        .get("Upgrade")
-        .map(|v| v.to_str().unwrap_or("").eq_ignore_ascii_case("websocket"))
-        .unwrap_or(false);
-
-    let has_connection = req
-        .headers()
-        .get("Connection")
-        .map(|v| v.to_str().unwrap_or("").to_lowercase().contains("upgrade"))
-        .unwrap_or(false);
-
-    let sec_websocket_key = req.headers().get("Sec-WebSocket-Key").cloned();
-
-    if !has_upgrade || !has_connection || sec_websocket_key.is_none() {
-        return Ok(Response::builder()
-            .status(StatusCode::BAD_REQUEST)
-            .body(Full::new(Bytes::from("Missing WebSocket headers")))
-            .unwrap());
-    }
-
-    // Calculate the accept key
-    let key = sec_websocket_key.unwrap();
-    let accept_key = compute_websocket_accept_key(key.to_str().unwrap_or(""));
+    // Validate the handshake headers and compute the accept key.
+    let accept_key = match validate_websocket_upgrade(req.headers()) {
+        Ok(key) => key,
+        Err(reason) => {
+            warn!("Rejected WebSocket upgrade: {}", reason);
+            return Ok(Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(Full::new(Bytes::from(reason)))
+                .unwrap());
+        }
+    };
 
     // Spawn task to handle the WebSocket connection after upgrade
     let broadcaster = state.ws_broadcaster.clone();
@@ -3042,5 +3069,79 @@ mod tests {
         assert_eq!(MINIMAL_DECAY_RATE, 5_000); // 0.5%
         assert_eq!(ENTROPY_REQUIRED_HEIGHT, 500_000);
         assert_eq!(ENTROPY_MANDATORY_HEIGHT, 1_000_000);
+    }
+
+    // ========================================================================
+    // WebSocket upgrade handshake (#329)
+    // ========================================================================
+
+    /// RFC 6455 §1.3 worked example: the canonical client key
+    /// "dGhlIHNhbXBsZSBub25jZQ==" must produce accept
+    /// "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=".
+    #[test]
+    fn test_compute_websocket_accept_key_rfc6455_vector() {
+        assert_eq!(
+            compute_websocket_accept_key("dGhlIHNhbXBsZSBub25jZQ=="),
+            "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
+        );
+    }
+
+    /// A well-formed browser/proxy handshake must be accepted and yield the
+    /// matching accept key. `Connection: keep-alive, Upgrade` mirrors what
+    /// real browsers and the seed nginx proxy forward.
+    #[test]
+    fn test_validate_websocket_upgrade_accepts_valid_handshake() {
+        let mut headers = hyper::HeaderMap::new();
+        headers.insert("Upgrade", "websocket".parse().unwrap());
+        headers.insert("Connection", "keep-alive, Upgrade".parse().unwrap());
+        headers.insert(
+            "Sec-WebSocket-Key",
+            "dGhlIHNhbXBsZSBub25jZQ==".parse().unwrap(),
+        );
+
+        let accept = validate_websocket_upgrade(&headers).expect("handshake should be accepted");
+        assert_eq!(accept, "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
+    }
+
+    /// Case-insensitive Upgrade token (browsers may send "WebSocket").
+    #[test]
+    fn test_validate_websocket_upgrade_case_insensitive() {
+        let mut headers = hyper::HeaderMap::new();
+        headers.insert("Upgrade", "WebSocket".parse().unwrap());
+        headers.insert("Connection", "Upgrade".parse().unwrap());
+        headers.insert("Sec-WebSocket-Key", "abcdefghijklmnop".parse().unwrap());
+        assert!(validate_websocket_upgrade(&headers).is_ok());
+    }
+
+    #[test]
+    fn test_validate_websocket_upgrade_rejects_missing_upgrade() {
+        let mut headers = hyper::HeaderMap::new();
+        headers.insert("Connection", "Upgrade".parse().unwrap());
+        headers.insert("Sec-WebSocket-Key", "abcdefghijklmnop".parse().unwrap());
+        assert!(validate_websocket_upgrade(&headers).is_err());
+    }
+
+    #[test]
+    fn test_validate_websocket_upgrade_rejects_missing_connection() {
+        let mut headers = hyper::HeaderMap::new();
+        headers.insert("Upgrade", "websocket".parse().unwrap());
+        headers.insert("Sec-WebSocket-Key", "abcdefghijklmnop".parse().unwrap());
+        assert!(validate_websocket_upgrade(&headers).is_err());
+    }
+
+    #[test]
+    fn test_validate_websocket_upgrade_rejects_missing_key() {
+        let mut headers = hyper::HeaderMap::new();
+        headers.insert("Upgrade", "websocket".parse().unwrap());
+        headers.insert("Connection", "Upgrade".parse().unwrap());
+        assert!(validate_websocket_upgrade(&headers).is_err());
+    }
+
+    #[test]
+    fn test_validate_websocket_upgrade_rejects_plain_get() {
+        // A plain GET (no upgrade headers) is what an accidental HTTP request to
+        // /ws looks like; it must be rejected rather than treated as a socket.
+        let headers = hyper::HeaderMap::new();
+        assert!(validate_websocket_upgrade(&headers).is_err());
     }
 }

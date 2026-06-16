@@ -15,7 +15,10 @@ use reqwest::Client;
 use serde_json::{json, Value};
 use serial_test::serial;
 use tempfile::TempDir;
-use tokio::net::TcpListener;
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::{TcpListener, TcpStream},
+};
 
 use botho::{
     ledger::Ledger,
@@ -1025,5 +1028,166 @@ async fn test_metrics_after_rpc_calls() {
     assert!(
         body.contains("node_getStatus"),
         "Missing node_getStatus in metrics"
+    );
+}
+
+// ============================================================================
+// WebSocket Upgrade Tests (#329)
+// ============================================================================
+//
+// These tests exercise the `/ws` endpoint end-to-end through `start_rpc_server`
+// using a raw TCP socket so the full RFC 6455 opening handshake is verified.
+// They guard against the regression where `wss://seed.botho.io/rpc/ws` returned
+// HTTP 400 instead of `101 Switching Protocols` (issue #329).
+
+/// Compute the expected `Sec-WebSocket-Accept` value for a client key.
+fn expected_accept_key(client_key: &str) -> String {
+    use base64::Engine;
+    use sha1::{Digest, Sha1};
+    const WEBSOCKET_GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+    let mut hasher = Sha1::new();
+    hasher.update(client_key.as_bytes());
+    hasher.update(WEBSOCKET_GUID.as_bytes());
+    base64::engine::general_purpose::STANDARD.encode(hasher.finalize())
+}
+
+/// Encode a client->server masked text frame (payload < 126 bytes).
+fn client_text_frame(payload: &[u8]) -> Vec<u8> {
+    assert!(
+        payload.len() < 126,
+        "test helper only supports short frames"
+    );
+    let mask: [u8; 4] = [0x12, 0x34, 0x56, 0x78];
+    let mut frame = vec![0x81, 0x80 | (payload.len() as u8)];
+    frame.extend_from_slice(&mask);
+    frame.extend(payload.iter().enumerate().map(|(i, b)| b ^ mask[i % 4]));
+    frame
+}
+
+/// Read the HTTP response head (up to and including the blank line).
+async fn read_http_head(stream: &mut TcpStream) -> String {
+    let mut buf = Vec::new();
+    let mut byte = [0u8; 1];
+    loop {
+        let n = tokio::time::timeout(Duration::from_secs(5), stream.read(&mut byte))
+            .await
+            .expect("timed out reading handshake response")
+            .expect("read error");
+        if n == 0 {
+            break;
+        }
+        buf.push(byte[0]);
+        if buf.ends_with(b"\r\n\r\n") {
+            break;
+        }
+    }
+    String::from_utf8_lossy(&buf).into_owned()
+}
+
+#[tokio::test]
+#[serial]
+async fn test_websocket_upgrade_returns_101() {
+    let (_temp_dir, addr, _handle) = spawn_test_rpc_server().await;
+
+    let client_key = "dGhlIHNhbXBsZSBub25jZQ==";
+    let mut stream = TcpStream::connect(addr).await.expect("connect");
+    let req = format!(
+        "GET /ws HTTP/1.1\r\nHost: {addr}\r\nUpgrade: websocket\r\n\
+         Connection: Upgrade\r\nSec-WebSocket-Key: {client_key}\r\n\
+         Sec-WebSocket-Version: 13\r\n\r\n"
+    );
+    stream.write_all(req.as_bytes()).await.expect("write req");
+
+    let head = read_http_head(&mut stream).await;
+    assert!(
+        head.starts_with("HTTP/1.1 101"),
+        "expected 101 Switching Protocols, got:\n{head}"
+    );
+    assert!(
+        head.to_lowercase().contains("upgrade: websocket"),
+        "missing Upgrade header:\n{head}"
+    );
+    // Header names are case-insensitive (hyper emits them lowercased) but the
+    // accept-key VALUE is case-sensitive base64, so match it verbatim.
+    let accept = expected_accept_key(client_key);
+    assert!(
+        head.lines().any(|line| {
+            let line = line.trim();
+            line.to_lowercase().starts_with("sec-websocket-accept:") && line.ends_with(&accept)
+        }),
+        "missing/incorrect Sec-WebSocket-Accept (expected {accept}):\n{head}"
+    );
+}
+
+#[tokio::test]
+#[serial]
+async fn test_websocket_subscribe_roundtrip() {
+    let (_temp_dir, addr, _handle) = spawn_test_rpc_server().await;
+
+    let client_key = "x3JJHMbDL1EzLkh9GBhXDw==";
+    let mut stream = TcpStream::connect(addr).await.expect("connect");
+    let req = format!(
+        "GET /ws HTTP/1.1\r\nHost: {addr}\r\nUpgrade: websocket\r\n\
+         Connection: keep-alive, Upgrade\r\nSec-WebSocket-Key: {client_key}\r\n\
+         Sec-WebSocket-Version: 13\r\n\r\n"
+    );
+    stream.write_all(req.as_bytes()).await.expect("write req");
+
+    let head = read_http_head(&mut stream).await;
+    assert!(
+        head.starts_with("HTTP/1.1 101"),
+        "expected 101 Switching Protocols, got:\n{head}"
+    );
+
+    // Send a subscribe frame and expect a `subscribed` confirmation back.
+    let sub = br#"{"type":"subscribe","events":["blocks","peers"]}"#;
+    stream
+        .write_all(&client_text_frame(sub))
+        .await
+        .expect("write subscribe frame");
+
+    // Read a server text frame (unmasked). header[0]=0x81 (fin+text),
+    // header[1]=payload length (<126 here).
+    let mut header = [0u8; 2];
+    tokio::time::timeout(Duration::from_secs(5), stream.read_exact(&mut header))
+        .await
+        .expect("timed out reading server frame")
+        .expect("read frame header");
+    assert_eq!(header[0] & 0x0F, 0x1, "expected a text frame");
+    let len = (header[1] & 0x7F) as usize;
+    assert!(len < 126, "subscribe reply unexpectedly large");
+    let mut payload = vec![0u8; len];
+    stream
+        .read_exact(&mut payload)
+        .await
+        .expect("read frame payload");
+
+    let msg: Value = serde_json::from_slice(&payload).expect("server frame is JSON");
+    assert_eq!(msg["type"], "subscribed");
+    let events: Vec<String> = msg["events"]
+        .as_array()
+        .expect("events array")
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    assert!(events.contains(&"blocks".to_string()));
+    assert!(events.contains(&"peers".to_string()));
+}
+
+#[tokio::test]
+#[serial]
+async fn test_websocket_plain_get_returns_400() {
+    let (_temp_dir, addr, _handle) = spawn_test_rpc_server().await;
+
+    // A GET to /ws without the upgrade headers must be rejected with 400,
+    // not silently treated as a socket.
+    let mut stream = TcpStream::connect(addr).await.expect("connect");
+    let req = format!("GET /ws HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
+    stream.write_all(req.as_bytes()).await.expect("write req");
+
+    let head = read_http_head(&mut stream).await;
+    assert!(
+        head.starts_with("HTTP/1.1 400"),
+        "expected 400 Bad Request for non-upgrade GET, got:\n{head}"
     );
 }
