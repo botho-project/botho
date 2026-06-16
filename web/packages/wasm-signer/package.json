@@ -1,0 +1,25 @@
+{
+  "name": "@botho/wasm-signer",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Client-side Botho transaction builder + CLSAG signer (WebAssembly). Keys never leave the browser.",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src",
+    "pkg"
+  ],
+  "scripts": {
+    "build:wasm": "wasm-pack build --target web --out-dir pkg --out-name bth_wasm_signer",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "~5.9.3",
+    "vitest": "^4.0.16"
+  }
+}

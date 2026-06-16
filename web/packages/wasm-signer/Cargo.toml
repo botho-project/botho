@@ -1,0 +1,40 @@
+[package]
+name = "bth-wasm-signer"
+version = "0.1.0"
+authors = ["Botho"]
+edition = "2021"
+description = "Client-side (WebAssembly) Botho transaction builder + CLSAG signer for the browser wallet. Keys never leave the client."
+license = "GPL-3.0"
+rust-version = { workspace = true }
+
+[lib]
+name = "bth_wasm_signer"
+# cdylib for the wasm artifact, rlib so native `cargo test` can exercise the
+# pure-Rust core without a wasm runtime.
+crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"
+
+[dependencies]
+# The shared, node-identical CLSAG transaction implementation. Producing a
+# transaction via this crate guarantees byte-for-byte the same bincode wire
+# format the node deserializes in `tx_submit`.
+bth-transaction-clsag = { path = "../../../transaction/clsag" }
+bth-account-keys = { path = "../../../account-keys" }
+bth-crypto-keys = { path = "../../../crypto/keys" }
+
+serde = { version = "1", features = ["derive"] }
+bincode = "1"
+hex = "0.4"
+rand_core = { version = "0.6", features = ["getrandom"] }
+
+# wasm-bindgen surface. These only compile/link for the wasm target; native
+# `cargo test` exercises the inner `core` module directly.
+wasm-bindgen = "0.2"
+serde-wasm-bindgen = "0.6"
+
+# getrandom with the browser backend so OsRng works inside wasm.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }
+
+[dev-dependencies]
+rand = "0.8"

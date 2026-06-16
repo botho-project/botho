@@ -27,6 +27,7 @@ members = [
     "crypto/ring-signature/signer",
     "crypto/secp256k1",
     "crypto/sig",
+    "transaction/clsag",
     "transaction/core",
     "transaction/signer",
     "transaction/types",
@@ -40,6 +41,7 @@ members = [
     "util/uri",
     "util/zip-exact",
     "web/packages/desktop/src-tauri",
+    "web/packages/wasm-signer",
     "mobile/rust-bridge",
     "infra/faucet/metrics-daemon",
 ]

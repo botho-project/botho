@@ -7,7 +7,7 @@ license = "GPL-3.0"
 
 [features]
 default = ["pq"]
-pq = ["bth-account-keys/pq", "bth-crypto-pq"]
+pq = ["bth-account-keys/pq", "bth-crypto-pq", "bth-transaction-clsag/pq"]
 
 [lib]
 name = "botho"
@@ -51,6 +51,7 @@ hmac = { workspace = true }
 # Monetary Policy
 bth-cluster-tax = { path = "../cluster-tax" }
 bth-transaction-types = { path = "../transaction/types", default-features = true }
+bth-transaction-clsag = { path = "../transaction/clsag" }
 
 # Networking & Consensus
 bth-common = { path = "../common", features = ["std"] }
@@ -159,6 +160,9 @@ chrono = "0.4"
 [dev-dependencies]
 tempfile = "3"
 botho-wallet = { path = "../botho-wallet" }
+# Enable the CLSAG transaction crate's test-only constructors (e.g.
+# `Transaction::new_stub_with_fee`) for botho's own test/dev builds.
+bth-transaction-clsag = { path = "../transaction/clsag", features = ["test-utils"] }
 bth-transaction-core = { path = "../transaction/core", features = ["pq"] }
 futures = "0.3"
 criterion = { workspace = true }
