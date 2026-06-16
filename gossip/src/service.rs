@@ -220,6 +220,39 @@ impl GossipService {
     }
 }
 
+/// Build the libp2p swarm for the gossip service.
+///
+/// The base TCP transport is wrapped with a DNS resolver (`with_dns`) so that
+/// `/dns4/` and `/dns6/` multiaddrs resolve and dial. The default testnet
+/// bootstrap peer is `/dns4/seed.botho.io/tcp/17100`; without DNS support the
+/// transport rejects such hostname multiaddrs with `MultiaddrNotSupported`,
+/// leaving a default-configured node unable to bootstrap.
+fn build_swarm(config: &GossipConfig) -> GossipResult<Swarm<GossipBehaviour>> {
+    let swarm = SwarmBuilder::with_new_identity()
+        .with_tokio()
+        .with_tcp(
+            tcp::Config::default(),
+            noise::Config::new,
+            yamux::Config::default,
+        )
+        .map_err(|e| GossipError::Libp2pError(e.to_string()))?
+        // Wrap the base TCP transport with a DNS resolver so that `/dns4/` and
+        // `/dns6/` multiaddrs (e.g. the default testnet bootstrap peer
+        // `/dns4/seed.botho.io/tcp/17100`) resolve and dial. Without this the
+        // transport rejects hostname multiaddrs with `MultiaddrNotSupported`.
+        .with_dns()
+        .map_err(|e| GossipError::Libp2pError(e.to_string()))?
+        .with_behaviour(|key| {
+            let local_peer_id = PeerId::from(key.public());
+            GossipBehaviour::new(local_peer_id, config).expect("Failed to create behaviour")
+        })
+        .map_err(|e| GossipError::Libp2pError(e.to_string()))?
+        .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(60)))
+        .build();
+
+    Ok(swarm)
+}
+
 /// Run the libp2p swarm.
 async fn run_swarm(
     config: GossipConfig,
@@ -229,21 +262,7 @@ async fn run_swarm(
     initial_announcement: NodeAnnouncement,
 ) -> GossipResult<()> {
     // Create the swarm
-    let mut swarm = SwarmBuilder::with_new_identity()
-        .with_tokio()
-        .with_tcp(
-            tcp::Config::default(),
-            noise::Config::new,
-            yamux::Config::default,
-        )
-        .map_err(|e| GossipError::Libp2pError(e.to_string()))?
-        .with_behaviour(|key| {
-            let local_peer_id = PeerId::from(key.public());
-            GossipBehaviour::new(local_peer_id, &config).expect("Failed to create behaviour")
-        })
-        .map_err(|e| GossipError::Libp2pError(e.to_string()))?
-        .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(60)))
-        .build();
+    let mut swarm = build_swarm(&config)?;
 
     // Subscribe to gossip topics
     swarm.behaviour_mut().subscribe_announcements()?;
@@ -691,6 +710,49 @@ mod tests {
             "1.0.0".to_string(),
             GossipConfig::default(),
         )
+    }
+
+    #[tokio::test]
+    async fn test_swarm_dials_dns4_multiaddr() {
+        // Regression test for the default testnet bootstrap peer being
+        // undialable: the transport must accept `/dns4/` multiaddrs rather than
+        // rejecting them with `MultiaddrNotSupported`.
+        let mut swarm = build_swarm(&GossipConfig::default()).expect("swarm should build with DNS");
+
+        // The shipped default testnet bootstrap address.
+        let addr = libp2p::Multiaddr::from_str("/dns4/seed.botho.io/tcp/17100")
+            .expect("valid dns4 multiaddr");
+
+        match swarm.dial(addr) {
+            Ok(()) => {}
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(
+                    !msg.contains("MultiaddrNotSupported") && !msg.contains("not supported"),
+                    "transport rejected /dns4/ multiaddr: {msg}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_swarm_dials_dns6_multiaddr() {
+        // DNS resolution should cover both /dns4/ and /dns6/.
+        let mut swarm = build_swarm(&GossipConfig::default()).expect("swarm should build with DNS");
+
+        let addr = libp2p::Multiaddr::from_str("/dns6/seed.botho.io/tcp/17100")
+            .expect("valid dns6 multiaddr");
+
+        match swarm.dial(addr) {
+            Ok(()) => {}
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(
+                    !msg.contains("MultiaddrNotSupported") && !msg.contains("not supported"),
+                    "transport rejected /dns6/ multiaddr: {msg}"
+                );
+            }
+        }
     }
 
     #[test]
