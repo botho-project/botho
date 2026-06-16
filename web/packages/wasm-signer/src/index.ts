@@ -179,6 +179,21 @@ export function resetSigner(): void {
   cached = null
 }
 
+/**
+ * Inject a pre-initialized {@link WasmSigner}, bypassing {@link loadSigner}'s
+ * browser `fetch`-based wasm instantiation.
+ *
+ * The browser code path ({@link loadSigner}) instantiates the wasm by fetching
+ * its URL, which does not work under Node/vitest. Node-backed end-to-end tests
+ * load the wasm via `readFileSync` + `default({ module_or_path })` instead, then
+ * call this to make the wallet's real high-level orchestration
+ * ({@link buildSendTransaction}) use that already-initialized module. This is a
+ * test seam only; production always goes through {@link loadSigner}.
+ */
+export function setSigner(signer: WasmSigner): void {
+  cached = Promise.resolve(signer)
+}
+
 export {
   buildSendTransaction,
   type BuildSendParams,

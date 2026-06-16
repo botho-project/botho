@@ -8,6 +8,12 @@ importers:
 
   .:
     devDependencies:
+      '@botho/core':
+        specifier: workspace:*
+        version: link:packages/core
+      '@botho/wasm-signer':
+        specifier: workspace:*
+        version: link:packages/wasm-signer
       '@playwright/test':
         specifier: ^1.57.0
         version: 1.57.0

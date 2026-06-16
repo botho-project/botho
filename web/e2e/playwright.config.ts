@@ -23,6 +23,17 @@ const useLocalServers = !process.env.E2E_WEB_BASE_URL && !process.env.E2E_FAUCET
 const RPC_MOCK_PORT = 4175
 const RPC_MOCK_URL = `http://localhost:${RPC_MOCK_PORT}`
 
+// Full-stack mode (#372 layer b): run the wallet against a REAL local botho node
+// instead of the static mock, so the send-modal flow builds+signs+submits a tx
+// the node actually accepts and mines. Enabled with E2E_FULLSTACK=1; the node is
+// launched by `serve-node.mjs` and the preview `/rpc` proxy is pointed at it.
+// The mock does not implement `tx_submit`, so a real node is mandatory here.
+const FULLSTACK = process.env.E2E_FULLSTACK === '1'
+const NODE_RPC_PORT = Number(process.env.E2E_NODE_RPC_PORT ?? 17599)
+const NODE_RPC_URL = process.env.E2E_RPC_PROXY_TARGET ?? `http://127.0.0.1:${NODE_RPC_PORT}`
+// In full-stack mode the preview proxy targets the real node; otherwise the mock.
+const PROXY_TARGET = FULLSTACK ? NODE_RPC_URL : RPC_MOCK_URL
+
 /**
  * Playwright E2E test configuration for Botho web services.
  *
@@ -70,28 +81,44 @@ export default defineConfig({
   // the suite is pointed at a remote deployment via env vars.
   webServer: useLocalServers
     ? [
-        {
-          // Local JSON-RPC mock the wallet/explorer talk to via the same-origin
-          // /rpc proxy. Started before the preview server so the proxy target is
-          // up by the time the explorer connects. Returns fixed node_getStatus /
-          // getChainInfo / getBlockByHeight payloads so connect + block reads are
-          // deterministic (no live-node dependency).
-          command: 'node e2e/serve-rpc-mock.mjs',
-          cwd: path.resolve(__dirname, '..'),
-          url: RPC_MOCK_URL,
-          reuseExistingServer: !process.env.CI,
-          timeout: 30_000,
-        },
+        FULLSTACK
+          ? {
+              // Real local botho node (solo minting) for the full-stack send
+              // flow. Replaces the mock; the mock has no `tx_submit`. Pre-mines
+              // enough blocks for a CLSAG decoy ring before reporting ready, so
+              // the wallet can actually build + submit a transaction.
+              command: 'node e2e/serve-node.mjs',
+              cwd: path.resolve(__dirname, '..'),
+              // serve-node exposes a GET health endpoint that returns 200 only
+              // once the node has mined enough blocks; the RPC itself only
+              // answers POST /rpc and would never satisfy Playwright's GET probe.
+              url: `http://127.0.0.1:${process.env.E2E_NODE_HEALTH_PORT ?? 17600}`,
+              reuseExistingServer: !process.env.CI,
+              timeout: 300_000,
+            }
+          : {
+              // Local JSON-RPC mock the wallet/explorer talk to via the
+              // same-origin /rpc proxy. Started before the preview server so the
+              // proxy target is up by the time the explorer connects. Returns
+              // fixed node_getStatus / getChainInfo / getBlockByHeight payloads
+              // so connect + block reads are deterministic (no live-node dep).
+              command: 'node e2e/serve-rpc-mock.mjs',
+              cwd: path.resolve(__dirname, '..'),
+              url: RPC_MOCK_URL,
+              reuseExistingServer: !process.env.CI,
+              timeout: 30_000,
+            },
         {
           // Build the web wallet with the RPC endpoint pointed at the
           // same-origin /rpc proxy, then serve landing/wallet/explorer as a SPA
           // via vite preview on port 4173. E2E_RPC_PROXY_TARGET points the
-          // preview's /rpc proxy at the local mock above (instead of the live
-          // seed node), so the explorer performs a real RPC read in e2e against
-          // deterministic fixtures without cross-origin CORS or live-node flake.
+          // preview's /rpc proxy at PROXY_TARGET — the local mock by default, or
+          // the real local node in full-stack mode (E2E_FULLSTACK=1) — so the
+          // wallet performs real RPC against the chosen backend without
+          // cross-origin CORS or live-node flake.
           command:
             'VITE_RPC_ENDPOINT=/rpc pnpm --filter @botho/web-wallet build && E2E_RPC_PROXY_TARGET=' +
-            RPC_MOCK_URL +
+            PROXY_TARGET +
             ' pnpm --filter @botho/web-wallet preview --port 4173 --strictPort',
           cwd: path.resolve(__dirname, '..'),
           url: 'http://localhost:4173/',
@@ -157,6 +184,19 @@ export default defineConfig({
       },
       testMatch: /integration\/.*\.spec\.ts/,
       dependencies: ['smoke'],
+    },
+
+    // Full-stack send flow (#372 layer b) - drives the browser wallet against a
+    // REAL local node (E2E_FULLSTACK=1). Gated to its own project so the default
+    // suite (mock-backed) is unaffected; run with:
+    //   E2E_FULLSTACK=1 pnpm test:e2e --project=fullstack
+    {
+      name: 'fullstack',
+      use: {
+        ...devices['Desktop Chrome'],
+        baseURL: WEB_BASE_URL,
+      },
+      testMatch: /fullstack\/.*\.spec\.ts/,
     },
   ],
 })

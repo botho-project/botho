@@ -94,6 +94,40 @@ fn check_minting_eligibility(
     )
 }
 
+/// Build the consensus config, honoring an optional test-only fixed-timing
+/// override.
+///
+/// Production runs use [`ConsensusConfig::default`] (dynamic block timing).
+/// When `BOTHO_SLOT_DURATION_SECS` is set to a positive integer, consensus
+/// instead uses a *fixed* slot duration of that many seconds with dynamic
+/// timing disabled. This exists purely so automated end-to-end tests (e.g. the
+/// web-wallet → tx → ledger node-backed test) can drive a solo node fast enough
+/// to pre-mine the ~20 blocks needed for a CLSAG decoy ring without waiting on
+/// the default 40s dynamic block time. It is a no-op when the variable is
+/// unset, so it never changes mainnet/testnet behavior.
+fn consensus_config_from_env() -> ConsensusConfig {
+    match std::env::var("BOTHO_SLOT_DURATION_SECS") {
+        Ok(raw) => match raw.trim().parse::<u64>() {
+            Ok(secs) if secs > 0 => {
+                warn!(
+                    "BOTHO_SLOT_DURATION_SECS={} set: using fixed {}s consensus slot timing \
+                     (test/dev only, dynamic timing disabled)",
+                    secs, secs
+                );
+                ConsensusConfig::fixed_timing(secs)
+            }
+            _ => {
+                warn!(
+                    "Ignoring invalid BOTHO_SLOT_DURATION_SECS={:?}: must be a positive integer",
+                    raw
+                );
+                ConsensusConfig::default()
+            }
+        },
+        Err(_) => ConsensusConfig::default(),
+    }
+}
+
 /// Run the node
 pub fn run(
     config_path: &Path,
@@ -374,7 +408,7 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
     let mut consensus = ConsensusService::new(
         node_id,
         scp_quorum_set,
-        ConsensusConfig::default(),
+        consensus_config_from_env(),
         chain_state,
     );
 

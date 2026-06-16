@@ -216,7 +216,7 @@ function ImportWalletView({ onImport }: { onImport: (mnemonic: string, password?
 }
 
 function WalletDashboard() {
-  const { address, balance, transactions, isConnecting, isConnected, refreshBalance, resetWallet } = useWallet()
+  const { address, balance, transactions, isConnecting, isConnected, refreshBalance, refreshTransactions, resetWallet, send } = useWallet()
   const { hasFaucet } = useNetwork()
   const [sendOpen, setSendOpen] = useState(false)
   const [isSending, setIsSending] = useState(false)
@@ -227,13 +227,16 @@ function WalletDashboard() {
     setShowResetConfirm(false)
   }
 
-  const handleSend = async (_data: SendFormData): Promise<SendResult> => {
+  const handleSend = async (data: SendFormData): Promise<SendResult> => {
     setIsSending(true)
     try {
-      // TODO: Implement actual transaction signing
-      await new Promise(resolve => setTimeout(resolve, 1500))
-      const mockTxHash = `tx_${Date.now().toString(16)}_${Math.random().toString(16).slice(2, 10)}`
-      return { success: true, txHash: mockTxHash }
+      // Drive the real client-side send path: derive keys -> scan owned
+      // outputs -> build + CLSAG-sign in wasm -> submit to the node. Keys never
+      // leave the browser. Returns the node-assigned tx hash.
+      const txHash = await send(data.recipient, data.amount, data.memo)
+      // Reflect the spend in the UI: refresh balance + history (best effort).
+      await Promise.allSettled([refreshBalance(), refreshTransactions()])
+      return { success: true, txHash }
     } catch (err) {
       return { success: false, error: err instanceof Error ? err.message : 'Transaction failed' }
     } finally {
