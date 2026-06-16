@@ -59,9 +59,53 @@ impl Default for LotteryFeeConfig {
     fn default() -> Self {
         Self {
             pool_fraction_permille: 800, // 80%
-            draw_config: LotteryDrawConfig::default(),
+            draw_config: draw_config_from_env(),
         }
     }
+}
+
+/// Build the lottery draw config, honoring optional test-only eligibility
+/// overrides.
+///
+/// Production runs use [`LotteryDrawConfig::default`] (UTXOs must be 720 blocks
+/// old and worth at least 1 microBTH to enter the draw). When
+/// `BOTHO_LOTTERY_MIN_UTXO_AGE` and/or `BOTHO_LOTTERY_MIN_UTXO_VALUE` are set
+/// to non-negative integers, the corresponding threshold is lowered to that
+/// value.
+///
+/// This exists purely so automated end-to-end tests (e.g. the three-user
+/// exchange-until-lottery-payout node-backed test, issue #394) can make freshly
+/// created UTXOs eligible without pre-mining ~720 blocks per round.
+///
+/// CONSENSUS NOTE: both the block proposer (`run::apply_lottery_to_block`) and
+/// the validator (`LedgerStore::add_block`) build their lottery config via
+/// `LotteryFeeConfig::default()`, so both read the SAME environment in the same
+/// process and agree on the candidate set exactly — the lottery draw stays
+/// consensus-deterministic. The override is a no-op when the variables are
+/// unset, so it never changes mainnet/testnet behavior.
+fn draw_config_from_env() -> LotteryDrawConfig {
+    let mut cfg = LotteryDrawConfig::default();
+    if let Ok(raw) = std::env::var("BOTHO_LOTTERY_MIN_UTXO_AGE") {
+        if let Ok(age) = raw.trim().parse::<u64>() {
+            cfg.min_utxo_age = age;
+        } else {
+            tracing::warn!(
+                "Ignoring invalid BOTHO_LOTTERY_MIN_UTXO_AGE={:?}: must be a non-negative integer",
+                raw
+            );
+        }
+    }
+    if let Ok(raw) = std::env::var("BOTHO_LOTTERY_MIN_UTXO_VALUE") {
+        if let Ok(value) = raw.trim().parse::<u64>() {
+            cfg.min_utxo_value = value;
+        } else {
+            tracing::warn!(
+                "Ignoring invalid BOTHO_LOTTERY_MIN_UTXO_VALUE={:?}: must be a non-negative integer",
+                raw
+            );
+        }
+    }
+    cfg
 }
 
 impl LotteryFeeConfig {
