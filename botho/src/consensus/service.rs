@@ -1128,8 +1128,18 @@ mod tests {
         // The peer-driven slot state must survive the deferral untouched.
         let after = svc.scp_node.get_current_slot_metrics();
         assert_eq!(
-            (after.num_voted_nominated, after.num_accepted_nominated, after.bN, after.phase),
-            (metrics.num_voted_nominated, metrics.num_accepted_nominated, metrics.bN, metrics.phase),
+            (
+                after.num_voted_nominated,
+                after.num_accepted_nominated,
+                after.bN,
+                after.phase
+            ),
+            (
+                metrics.num_voted_nominated,
+                metrics.num_accepted_nominated,
+                metrics.bN,
+                metrics.phase
+            ),
             "deferral must not disturb the in-flight SCP slot state"
         );
 
