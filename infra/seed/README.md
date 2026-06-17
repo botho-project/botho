@@ -15,8 +15,11 @@ Primary bootstrap node for the Botho network, with web-based status page.
 ```
 infra/seed/
 ├── README.md                 # This file
+├── TESTNET_RESET.md          # Reset + multi-seed bootstrap runbook (operator)
 ├── botho-seed.service        # Systemd service file
-├── reset-to-testnet.sh       # Reset script for testnet
+├── reset-chain.sh            # Wipe chain data over SSH (--dry-run / --help)
+├── reset-to-testnet.sh       # Local on-host reset to testnet (--dry-run / --help)
+├── deploy-botho.sh           # Build + deploy node binary to host
 ├── deploy-web.sh             # Deploy web files to server
 ├── seed-nginx.conf           # Nginx configuration
 └── web/
@@ -26,6 +29,21 @@ infra/seed/
     └── js/
         └── status.js         # Status fetching logic
 ```
+
+## Testnet Reset & Multi-Seed Bootstrap
+
+For the coordinated reset onto current `main` (protocol 2.0.0), the
+genesis/network-parameter reconciliation table, single-seed vs multi-seed
+quorum config, the regional-seed scaffolding, and the operator deploy steps,
+see **[`TESTNET_RESET.md`](./TESTNET_RESET.md)**.
+
+### Single-seed vs multi-seed
+
+A lone seed cannot form the default `recommended` quorum (needs >= 2 nodes), so
+minting stalls. For single-seed bring-up, run with `--mint --mint-threads 1`
+and set `[network.quorum]` to `mode = "explicit"`, `threshold = 1`,
+`members = []`. Switch back to `--relay` + `recommended` once a second node
+joins. The exact `ExecStart` variants are documented in `botho-seed.service`.
 
 ## Node Setup
 

@@ -16,6 +16,7 @@ mod pex;
 pub mod privacy;
 mod quorum;
 mod reputation;
+mod seeds;
 mod sync;
 pub mod transport;
 
@@ -40,6 +41,7 @@ pub use pex::{
 };
 pub use quorum::{QuorumBuilder, QuorumValidation};
 pub use reputation::{PeerReputation, ReputationManager};
+pub use seeds::{fallback_seeds, include_regional_seeds};
 pub use sync::{
     create_sync_behaviour, ChainSyncManager, SyncAction, SyncCodec, SyncRateLimiter, SyncRequest,
     SyncResponse, SyncState, BLOCKS_PER_REQUEST, MAX_REQUESTS_PER_MINUTE, MAX_REQUEST_SIZE,

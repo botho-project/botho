@@ -177,18 +177,12 @@ impl Default for DnsSeedConfig {
 }
 
 /// Default bootstrap peers for network discovery, by network.
+///
+/// Delegates to [`crate::network::seeds::fallback_seeds`] (the single source of
+/// truth) so the config defaults and the DNS-discovery fallback list never
+/// drift apart. The regional (multi-seed) scaffolding is opt-in there.
 fn default_bootstrap_peers(network: Network) -> Vec<String> {
-    match network {
-        Network::Mainnet => vec![
-            // Mainnet seed node
-            "/dns4/seed.botho.io/tcp/7100/p2p/12D3KooWBrjTYjNrEwi9MM3AKFenmymyWVXtXbQiSx7eDnDwv9qQ"
-                .to_string(),
-        ],
-        Network::Testnet => vec![
-            // Testnet seed node (no peer ID - resolved dynamically)
-            "/dns4/seed.botho.io/tcp/17100".to_string(),
-        ],
-    }
+    crate::network::fallback_seeds(network)
 }
 
 impl NetworkConfig {

@@ -9,9 +9,14 @@
 # 4. Starts the node on testnet
 #
 # Usage:
-#   ./reset-to-testnet.sh
+#   ./reset-to-testnet.sh [--dry-run]
 #
-# Run this on seed.botho.io as ubuntu user with sudo access.
+# Options:
+#   --dry-run    Print the steps without stopping/removing/restarting anything
+#   --help, -h   Show this help and exit
+#
+# Run this ON seed.botho.io as the ubuntu user with sudo access. (Unlike
+# reset-chain.sh, this script runs locally on the host, not over SSH.)
 
 set -euo pipefail
 
@@ -24,6 +29,26 @@ NC='\033[0m'
 log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+
+usage() { sed -n '2,18p' "$0" | sed 's/^#\s\{0,1\}//'; }
+
+DRY_RUN=false
+for arg in "$@"; do
+    case "$arg" in
+        --dry-run) DRY_RUN=true ;;
+        -h|--help) usage; exit 0 ;;
+        *) log_error "Unknown option: $arg"; usage; exit 1 ;;
+    esac
+done
+
+# run: execute a command, or just print it in dry-run mode.
+run() {
+    if [[ "$DRY_RUN" == "true" ]]; then
+        echo "    $*"
+    else
+        "$@"
+    fi
+}
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DATA_DIR="$HOME/.botho"
@@ -38,23 +63,27 @@ echo ""
 log_warn "This will DELETE all mainnet data and restart as testnet."
 log_warn "Data directory: $DATA_DIR"
 echo ""
-read -p "Are you sure you want to proceed? (yes/no): " confirm
-if [[ "$confirm" != "yes" ]]; then
-    log_info "Aborted."
-    exit 0
+if [[ "$DRY_RUN" == "true" ]]; then
+    log_warn "DRY RUN: no services stopped, no data removed, nothing restarted."
+else
+    read -r -p "Are you sure you want to proceed? (yes/no): " confirm
+    if [[ "$confirm" != "yes" ]]; then
+        log_info "Aborted."
+        exit 0
+    fi
 fi
 
 # Step 1: Stop services
 log_info "Stopping botho services..."
-sudo systemctl stop botho-seed 2>/dev/null || true
-sudo systemctl stop botho 2>/dev/null || true
-sudo systemctl stop botho-faucet 2>/dev/null || true
+run sudo systemctl stop botho-seed
+run sudo systemctl stop botho
+run sudo systemctl stop botho-faucet
 
 # Wait for processes to stop
-sleep 2
+[[ "$DRY_RUN" == "true" ]] || sleep 2
 
 # Check if any botho process is still running
-if pgrep -x botho > /dev/null; then
+if [[ "$DRY_RUN" != "true" ]] && pgrep -x botho > /dev/null; then
     log_warn "Botho process still running, killing..."
     sudo pkill -9 botho || true
     sleep 1
@@ -62,7 +91,9 @@ fi
 
 # Step 2: Remove mainnet data
 log_info "Removing mainnet data..."
-if [[ -d "$DATA_DIR/mainnet" ]]; then
+if [[ "$DRY_RUN" == "true" ]]; then
+    echo "    rm -rf $DATA_DIR/mainnet  # (if present)"
+elif [[ -d "$DATA_DIR/mainnet" ]]; then
     rm -rf "$DATA_DIR/mainnet"
     log_info "Removed $DATA_DIR/mainnet"
 else
@@ -71,13 +102,19 @@ fi
 
 # Step 3: Install systemd service
 log_info "Installing botho-seed systemd service..."
-sudo cp "$SCRIPT_DIR/botho-seed.service" /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable botho-seed
+run sudo cp "$SCRIPT_DIR/botho-seed.service" /etc/systemd/system/
+run sudo systemctl daemon-reload
+run sudo systemctl enable botho-seed
 
 # Step 4: Start the service
 log_info "Starting botho-seed service..."
-sudo systemctl start botho-seed
+run sudo systemctl start botho-seed
+
+if [[ "$DRY_RUN" == "true" ]]; then
+    echo ""
+    log_info "Dry run complete. No changes were made."
+    exit 0
+fi
 
 # Step 5: Verify
 sleep 3

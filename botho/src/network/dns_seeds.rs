@@ -235,16 +235,12 @@ impl DnsSeedDiscovery {
         Ok(multiaddr)
     }
 
-    /// Get hardcoded fallback seeds
+    /// Get hardcoded fallback seeds.
+    ///
+    /// Delegates to [`crate::network::seeds`] (the single source of truth) so
+    /// the DNS-fallback list and the config-default list never drift apart.
     fn hardcoded_seeds(&self) -> Vec<String> {
-        match self.network {
-            Network::Mainnet => vec![
-                "/dns4/seed.botho.io/tcp/7100/p2p/12D3KooWBrjTYjNrEwi9MM3AKFenmymyWVXtXbQiSx7eDnDwv9qQ".to_string(),
-            ],
-            Network::Testnet => vec![
-                "/dns4/seed.botho.io/tcp/17100".to_string(),
-            ],
-        }
+        crate::network::seeds::fallback_seeds(self.network)
     }
 
     /// Invalidate the cache to force a fresh DNS lookup

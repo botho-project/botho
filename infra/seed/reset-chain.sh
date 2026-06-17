@@ -2,18 +2,34 @@
 #
 # Reset Blockchain Data on Seed Node
 #
-# This script stops the Botho service, clears all blockchain data,
-# and restarts the service. Use with caution - this is destructive!
+# This script stops the Botho service, clears all blockchain data (ledger +
+# wallet), preserves config.toml, and restarts the service. Use with caution -
+# this is destructive!
 #
 # Usage:
 #   ./reset-chain.sh [user@host]
 #
 # Options:
-#   --force    Skip confirmation prompt
+#   --force            Skip confirmation prompt
+#   --dry-run          Print the remote commands that would run, do NOT execute
+#   --network NAME     Network data dir to reset (default: testnet)
+#   --service NAME     systemd service to control (default: botho-seed)
+#   --help, -h         Show this help and exit
 #
 # Example:
 #   ./reset-chain.sh ubuntu@seed.botho.io
-#   ./reset-chain.sh --force  # Skip confirmation
+#   ./reset-chain.sh --force                 # Skip confirmation
+#   ./reset-chain.sh --dry-run               # Show what would happen (no SSH)
+#
+# Data layout (must match botho/src/config.rs::data_dir / Network::dir_name):
+#   ~/.botho/<network>/            base data dir (network = "testnet"|"mainnet")
+#   ~/.botho/<network>/ledger/     chain database (deleted on reset)
+#   ~/.botho/<network>/wallet/     minting/relay wallet (deleted on reset)
+#   ~/.botho/<network>/config.toml node config (preserved on reset)
+#
+# NOTE: This is an OPERATOR script that connects to a live host over SSH.
+# It is intentionally never invoked by CI. --dry-run requires no credentials
+# and is safe to run anywhere for validation.
 
 set -euo pipefail
 
@@ -29,72 +45,135 @@ log_step() { echo -e "${BLUE}[STEP]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
+usage() {
+    # Print the leading comment block (lines 2..N up to the first blank-after-header)
+    sed -n '2,33p' "$0" | sed 's/^#\s\{0,1\}//'
+}
+
 # Configuration
 DEFAULT_HOST="ubuntu@seed.botho.io"
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/botho-nodes.pem}"
-SERVICE_NAME="botho"
-DATA_DIR=".botho/testnet"
+SERVICE_NAME="botho-seed"
+NETWORK="testnet"
 FORCE=false
+DRY_RUN=false
 
 # Parse arguments
 HOST="$DEFAULT_HOST"
-for arg in "$@"; do
-    case $arg in
+host_set=false
+while [[ $# -gt 0 ]]; do
+    case "$1" in
         --force)
             FORCE=true
             ;;
+        --dry-run)
+            DRY_RUN=true
+            ;;
+        --network)
+            NETWORK="$2"
+            shift
+            ;;
+        --service)
+            SERVICE_NAME="$2"
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        -*)
+            log_error "Unknown option: $1"
+            usage
+            exit 1
+            ;;
         *)
-            HOST="$arg"
+            HOST="$1"
+            host_set=true
             ;;
     esac
+    shift
 done
 
-# Validate SSH key exists
-if [[ ! -f "$SSH_KEY" ]]; then
-    log_error "SSH key not found: $SSH_KEY"
-    log_info "Set SSH_KEY environment variable or ensure key exists at default location"
-    exit 1
+DATA_DIR=".botho/$NETWORK"
+
+# run_remote: execute (or, in dry-run mode, just print) a command on $HOST.
+run_remote() {
+    local cmd="$1"
+    if [[ "$DRY_RUN" == "true" ]]; then
+        echo "    ssh $SSH_OPTS_DISPLAY $HOST \"$cmd\""
+    else
+        # SC2086: word-split SSH_OPTS intentionally. SC2029: $cmd is a fixed,
+        # script-controlled string (no untrusted input), so client-side
+        # expansion is fine.
+        # shellcheck disable=SC2086,SC2029
+        ssh $SSH_OPTS "$HOST" "$cmd"
+    fi
+}
+
+SSH_OPTS_DISPLAY="-i $SSH_KEY -o StrictHostKeyChecking=accept-new"
+SSH_OPTS="$SSH_OPTS_DISPLAY"
+
+# Validate SSH key exists (skip in dry-run so it works without credentials)
+if [[ "$DRY_RUN" != "true" ]]; then
+    if [[ ! -f "$SSH_KEY" ]]; then
+        log_error "SSH key not found: $SSH_KEY"
+        log_info "Set SSH_KEY environment variable or ensure key exists at default location"
+        exit 1
+    fi
 fi
 
-SSH_OPTS="-i $SSH_KEY -o StrictHostKeyChecking=accept-new"
+if [[ "$DRY_RUN" == "true" ]]; then
+    log_warn "DRY RUN: no SSH connection will be made; commands are printed only."
+fi
 
 # Confirmation
-if [[ "$FORCE" != "true" ]]; then
+if [[ "$FORCE" != "true" && "$DRY_RUN" != "true" ]]; then
     log_warn "This will DELETE ALL blockchain data on $HOST"
-    log_warn "Data directory: ~/$DATA_DIR"
+    log_warn "Data directory: ~/$DATA_DIR (ledger + wallet)"
     echo ""
-    read -p "Are you sure? Type 'yes' to confirm: " confirm
+    read -r -p "Are you sure? Type 'yes' to confirm: " confirm
     if [[ "$confirm" != "yes" ]]; then
         log_info "Aborted."
         exit 0
     fi
 fi
 
-log_info "Resetting blockchain data on $HOST"
+log_info "Resetting $NETWORK chain data on $HOST (service: $SERVICE_NAME)"
 
 # Step 1: Stop service
-log_step "Stopping Botho service..."
-ssh $SSH_OPTS "$HOST" "sudo systemctl stop $SERVICE_NAME || true"
+log_step "Stopping Botho service ($SERVICE_NAME)..."
+run_remote "sudo systemctl stop $SERVICE_NAME || true"
 
 # Step 2: Backup config (just in case)
 log_step "Backing up configuration..."
-ssh $SSH_OPTS "$HOST" "cp ~/$DATA_DIR/config.toml /tmp/botho-config-backup.toml 2>/dev/null || true"
+run_remote "cp ~/$DATA_DIR/config.toml /tmp/botho-config-backup.toml 2>/dev/null || true"
 
 # Step 3: Clear blockchain data
-log_step "Clearing blockchain data..."
-ssh $SSH_OPTS "$HOST" "rm -rf ~/$DATA_DIR/ledger ~/$DATA_DIR/blocks ~/$DATA_DIR/state ~/$DATA_DIR/peers.json"
+# The node writes its chain DB to ~/.botho/<network>/ledger and its wallet to
+# ~/.botho/<network>/wallet (see botho/src/config.rs). config.toml is preserved.
+log_step "Clearing blockchain data (ledger + wallet)..."
+run_remote "rm -rf ~/$DATA_DIR/ledger ~/$DATA_DIR/wallet"
 
 # Step 4: Restore config if needed
 log_step "Ensuring configuration exists..."
-ssh $SSH_OPTS "$HOST" "mkdir -p ~/$DATA_DIR && cp /tmp/botho-config-backup.toml ~/$DATA_DIR/config.toml 2>/dev/null || true"
+run_remote "mkdir -p ~/$DATA_DIR && cp /tmp/botho-config-backup.toml ~/$DATA_DIR/config.toml 2>/dev/null || true"
 
 # Step 5: Restart service
-log_step "Starting Botho service..."
-ssh $SSH_OPTS "$HOST" "sudo systemctl daemon-reload && sudo systemctl start $SERVICE_NAME"
+log_step "Starting Botho service ($SERVICE_NAME)..."
+run_remote "sudo systemctl daemon-reload && sudo systemctl start $SERVICE_NAME"
 
 # Step 6: Verify
-sleep 3
+if [[ "$DRY_RUN" != "true" ]]; then
+    sleep 3
+fi
 log_step "Verifying service..."
-ssh $SSH_OPTS "$HOST" "sudo systemctl status $SERVICE_NAME --no-pager"
+run_remote "sudo systemctl status $SERVICE_NAME --no-pager"
 
-log_info "Reset complete! The node will sync from genesis."
+if [[ "$DRY_RUN" == "true" ]]; then
+    log_info "Dry run complete. No changes were made."
+else
+    log_info "Reset complete! The node will mint/sync from a fresh genesis."
+fi
+
+# Avoid 'unused variable' lint when host not explicitly provided
+: "${host_set}"
