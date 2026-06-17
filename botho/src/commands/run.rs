@@ -1606,26 +1606,65 @@ fn rebuild_scp_quorum_set(
     QuorumSet::new(threshold, members)
 }
 
-/// Convert a libp2p PeerId to an SCP NodeID
+/// Convert a libp2p PeerId to an SCP NodeID.
+///
+/// SCP identifies, hashes and orders nodes solely by their Ed25519 *public
+/// key* (see `bth_common::NodeID`'s `Eq`/`Hash`/`Ord` impls, which ignore the
+/// `responder_id`). The quorum set is therefore considered invalid — and every
+/// outgoing SCP message is rejected by `Msg::validate` — if two distinct peers
+/// map to the same public key. So the mapping from `PeerId` to public key MUST
+/// be both *deterministic* (every node derives the same key for a given peer)
+/// and *injective* (distinct peers get distinct, valid keys).
+///
+/// The previous implementation copied the first 32 bytes of
+/// `peer_id.to_bytes()` straight into the key. For libp2p Ed25519 peers,
+/// `to_bytes()` is an identity multihash whose first six bytes (`00 24 08 01 12
+/// 20`) are a fixed prefix shared by *every* Ed25519 peer, and the trailing key
+/// bytes are truncated. In practice this collapsed multiple peers onto the same
+/// (often invalid) public key, producing an "Invalid quorum set" rejection that
+/// silently prevented any block from being externalized in multi-node consensus
+/// (issue #414).
+///
+/// We now hash the *full* PeerId bytes with a domain separator to obtain a
+/// well-distributed 32-byte seed, then derive a real Ed25519 keypair from it.
+/// Any 32-byte seed is a valid Ed25519 private key (the scalar is clamped
+/// internally), so the resulting public key is always a valid curve point, and
+/// distinct PeerIds yield distinct keys with overwhelming probability.
+///
+/// NOTE: this remains a deterministic *stand-in* for the peer's real signing
+/// key — it is not the key the peer actually signs SCP messages with. It exists
+/// only so every node builds an identical, valid quorum set from the same set
+/// of connected PeerIds. Exchanging and verifying real per-peer signing keys is
+/// tracked separately; this fix is limited to making the quorum-set membership
+/// well-formed so SCP can externalize.
 fn peer_id_to_node_id(peer_id: &libp2p::PeerId) -> NodeID {
-    // Use the PeerId's string representation as the responder ID
-    // This provides a deterministic mapping from PeerId to NodeID
+    use sha2::{Digest, Sha256};
+
+    // Use the PeerId's string representation as the responder ID. This is purely
+    // informational for SCP (NodeID equality ignores it) but keeps logs
+    // readable.
     let peer_str = peer_id.to_string();
     let responder_id =
         ResponderId::from_str(&format!("{}:8443", &peer_str[..12.min(peer_str.len())]))
             .unwrap_or_else(|_| ResponderId::from_str("peer:8443").unwrap());
 
-    // Derive a deterministic Ed25519 public key from the PeerId bytes
-    // This is a placeholder - in production, peers should exchange actual keys
-    let peer_bytes = peer_id.to_bytes();
-    let mut key_bytes = [0u8; 32];
-    let copy_len = peer_bytes.len().min(32);
-    key_bytes[..copy_len].copy_from_slice(&peer_bytes[..copy_len]);
+    // Derive a deterministic, unique, valid Ed25519 public key from the *full*
+    // PeerId bytes. Hashing avoids the fixed-multihash-prefix collision and the
+    // truncation of the old implementation.
+    let mut hasher = Sha256::new();
+    hasher.update(b"botho-scp-node-id-v1");
+    hasher.update(peer_id.to_bytes());
+    let seed = hasher.finalize();
+
+    // Any 32-byte value is a valid Ed25519 private key; deriving the public key
+    // cannot fail for a 32-byte input, but fall back defensively just in case.
+    let public_key = bth_crypto_keys::Ed25519Private::try_from(&seed[..])
+        .map(|private| Ed25519Public::from(&private))
+        .unwrap_or_default();
 
     NodeID {
         responder_id,
-        public_key: Ed25519Public::try_from(&key_bytes[..])
-            .unwrap_or_else(|_| Ed25519Public::default()),
+        public_key,
     }
 }
 
@@ -1799,5 +1838,90 @@ mod tests {
         let mid = LOW + (HIGH - LOW) / 2;
         assert!(!should_pause_for_balance(mid, HIGH, 0));
         assert!(!should_resume_from_balance_pause(mid, LOW, 0));
+    }
+
+    // ---- Issue #414: PeerId -> NodeID mapping must be deterministic + injective
+    // ----
+
+    /// Build a real libp2p Ed25519 PeerId from a 32-byte secret seed.
+    fn ed25519_peer_id(seed: [u8; 32]) -> libp2p::PeerId {
+        let secret = libp2p::identity::ed25519::SecretKey::try_from_bytes(seed.to_vec())
+            .expect("valid ed25519 secret");
+        let keypair =
+            libp2p::identity::Keypair::from(libp2p::identity::ed25519::Keypair::from(secret));
+        keypair.public().to_peer_id()
+    }
+
+    #[test]
+    fn peer_id_to_node_id_is_deterministic() {
+        // Regression test for issue #414: the mapping must be deterministic so
+        // every node derives the SAME quorum-set membership for a given peer.
+        let pid = ed25519_peer_id([7u8; 32]);
+        let a = peer_id_to_node_id(&pid);
+        let b = peer_id_to_node_id(&pid);
+        assert_eq!(a, b, "same PeerId must map to the same NodeID");
+        assert_eq!(a.public_key, b.public_key);
+    }
+
+    #[test]
+    fn peer_id_to_node_id_is_injective_for_distinct_peers() {
+        // Regression test for issue #414: distinct peers MUST map to distinct
+        // public keys. NodeID equality is by public key only, so a collision
+        // here makes the quorum set invalid (`Msg::validate` rejects every
+        // outgoing SCP message) and multi-node consensus can never externalize.
+        //
+        // The previous implementation copied the first 32 bytes of
+        // `peer_id.to_bytes()`, whose leading bytes are a fixed multihash prefix
+        // shared by all Ed25519 peers, so distinct peers collided.
+        let n = 16;
+        let mut keys = std::collections::HashSet::new();
+        let mut node_ids = std::collections::HashSet::new();
+        for i in 0..n {
+            let mut seed = [0u8; 32];
+            seed[0] = i as u8 + 1;
+            seed[31] = 0xAB;
+            let pid = ed25519_peer_id(seed);
+            let node_id = peer_id_to_node_id(&pid);
+            // Distinct public keys.
+            assert!(
+                keys.insert(node_id.public_key.clone()),
+                "duplicate public key derived for distinct PeerId {pid}"
+            );
+            // Distinct NodeIDs (which compare by public key).
+            assert!(node_ids.insert(node_id));
+        }
+        assert_eq!(keys.len(), n);
+    }
+
+    #[test]
+    fn two_peers_yield_a_valid_quorum_set() {
+        // Regression test for issue #414: a 2-of-2 quorum built from two distinct
+        // peers must be VALID. The bug produced two members with identical
+        // public keys, so `QuorumSet::is_valid()` returned false (duplicate
+        // member) and the externalize message was never broadcast, leaving both
+        // minters stuck at height 0.
+        use bth_consensus_scp_types::QuorumSetMember;
+
+        let local = peer_id_to_node_id(&ed25519_peer_id([1u8; 32]));
+        let peer = peer_id_to_node_id(&ed25519_peer_id([2u8; 32]));
+
+        assert_ne!(
+            local.public_key, peer.public_key,
+            "two distinct peers must not share a public key"
+        );
+
+        let qs = QuorumSet::new(
+            2,
+            vec![QuorumSetMember::Node(local), QuorumSetMember::Node(peer)],
+        );
+        assert!(
+            qs.is_valid(),
+            "2-of-2 quorum from distinct peers must be valid: {qs:?}"
+        );
+        assert_eq!(
+            qs.nodes().len(),
+            2,
+            "quorum must contain two distinct nodes"
+        );
     }
 }
