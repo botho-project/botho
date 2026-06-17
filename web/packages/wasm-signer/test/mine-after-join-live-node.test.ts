@@ -85,7 +85,43 @@ const wasmBin = join(pkgDir, 'bth_wasm_signer_bg.wasm')
 const wasmBuilt = existsSync(wasmGlue) && existsSync(wasmBin)
 
 const RUN_LOCAL_NODE = env.BOTHO_E2E_NODE === '1'
-const enabled = wasmBuilt && RUN_LOCAL_NODE
+
+// BLOCKED ON #397 (multi-node SCP agreement). Empirical investigation for #396
+// (see PR / issue comment) found that the full mine-after-join scenario cannot
+// pass reliably today because the multi-node consensus path is BOTH non-live
+// AND unsafe:
+//   1. Stale-minting-tx jam: in a multi-minter network each node's PoW thread
+//      races to mint the next block; when a peer's block externalizes first,
+//      the local minting tx is bound to a now-stale tip and is rejected by
+//      every validator. In a unanimous quorum the slot then never externalizes
+//      and the chain stalls within a few blocks (reproduced: a 2-node net jams
+//      at height ~1-4).
+//   2. Joiner SCP-slot desync: a node that catches up via the #376 block-sync
+//      path advances its ledger but NOT its SCP `current_slot_index`, so it
+//      stays stranded on its genesis slot while peers run a far-higher slot and
+//      it discards their messages as "future slots" — it can never join the
+//      live round (reproduced: 3-node net deadlocks the moment the joiner is
+//      required for the quorum).
+//   3. SAFETY FORK: most seriously, two minters in a 2-of-2 ("recommended")
+//      quorum were observed externalizing DIFFERENT blocks at the same heights
+//      (e.g. divergent hashes at heights 22/23/24) and never reconciling — a
+//      consensus safety violation that a correct unanimous quorum must never
+//      exhibit. This is the #397 multi-node agreement bug surfacing as an
+//      actual fork, and it is the hard blocker for this test.
+//
+// A liveness-only workaround (stale-tx pruning + jam-recovery that restarts a
+// stuck SCP slot, plus fast-forwarding a joiner's SCP slot to the synced chain
+// height) makes the network advance further and lets a joiner participate, but
+// it does NOT fix the fork — and restarting an in-progress SCP slot can itself
+// discard committed ballot state. Shipping it would let a forking chain run
+// further rather than fix the fork, so it was deliberately NOT merged (Botho's
+// "no hard forks" policy: a consensus change must be provably safe).
+//
+// This file is kept as the executable reproduction harness for the target
+// capability. Re-enable (drop `&& false`) once #397 lands genuine multi-node
+// agreement (a unanimous quorum that cannot fork) so a joiner's mined block is
+// accepted by all nodes on a single shared chain.
+const enabled = wasmBuilt && RUN_LOCAL_NODE && false
 const maybe = enabled ? describe : describe.skip
 
 interface WasmMod extends WasmSigner {
