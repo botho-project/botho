@@ -848,3 +848,172 @@ fn test_sync_messages_size_limits() {
         "GetBlocks should fit in request size limit"
     );
 }
+
+// ============================================================================
+// Transport-stability regression (#411)
+//
+// Two local libp2p nodes must establish AND MAINTAIN a stable connection while
+// the sync request-response protocol is exercised. The original bug was that
+// `SyncCodec::write_{request,response}` called `io.close()` as a framing
+// terminator; under libp2p's request-response handler (which itself closes the
+// substream after the codec returns) this double-closed the substream and
+// raced with optimistic multistream-select negotiation, surfacing as
+// "Stream closed. Confirmation from remote for optimistic protocol negotiation
+// still pending." and cascading into the whole connection being dropped and
+// redialed.
+//
+// This test drives MANY sequential sync round-trips over a SINGLE connection
+// (each round-trip opens, writes, and closes a fresh `/botho/sync/1.0.0`
+// substream — the exact path that misbehaved) and asserts that:
+//   1. every round-trip completes (the codec frames correctly without closing
+//      the stream itself), and
+//   2. the underlying connection is NEVER torn down throughout (no
+//      `ConnectionClosed`), i.e. the peer link stays stable.
+// ============================================================================
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_sync_connection_stays_stable_across_many_requests() {
+    use tokio::sync::{mpsc, oneshot};
+
+    let (mut swarm1, peer1, addr1) = create_test_swarm().await;
+    let (mut swarm2, _peer2, _addr2) = create_test_swarm().await;
+
+    // Connect node 2 -> node 1.
+    swarm2.dial(addr1.clone()).unwrap();
+
+    // Wait for both ends to report the connection established.
+    let (tx1, rx1) = oneshot::channel();
+    let (tx2, rx2) = oneshot::channel();
+    let c1 = tokio::spawn(async move {
+        while let Some(event) = swarm1.next().await {
+            if let SwarmEvent::ConnectionEstablished { .. } = event {
+                tx1.send(swarm1).ok();
+                return;
+            }
+        }
+    });
+    let c2 = tokio::spawn(async move {
+        while let Some(event) = swarm2.next().await {
+            if let SwarmEvent::ConnectionEstablished { .. } = event {
+                tx2.send(swarm2).ok();
+                return;
+            }
+        }
+    });
+    let (mut swarm1, mut swarm2) = timeout(Duration::from_secs(10), async {
+        let s1 = rx1.await.unwrap();
+        let s2 = rx2.await.unwrap();
+        (s1, s2)
+    })
+    .await
+    .expect("two local nodes should establish a connection");
+    c1.abort();
+    c2.abort();
+
+    // Number of sequential sync round-trips to drive over the one connection.
+    const ROUNDS: usize = 25;
+
+    // Server side (node 1): answer every status request, and fail the test
+    // immediately if the connection is ever closed.
+    let server_task = tokio::spawn(async move {
+        loop {
+            match swarm1.next().await {
+                Some(SwarmEvent::Behaviour(TestBehaviourEvent::Sync(
+                    request_response::Event::Message {
+                        message: request_response::Message::Request { channel, .. },
+                        ..
+                    },
+                ))) => {
+                    let response = SyncResponse::Status {
+                        height: 7,
+                        tip_hash: [9u8; 32],
+                    };
+                    swarm1
+                        .behaviour_mut()
+                        .sync
+                        .send_response(channel, response)
+                        .ok();
+                }
+                Some(SwarmEvent::ConnectionClosed { cause, .. }) => {
+                    panic!("server connection closed mid-test (cause={cause:?})");
+                }
+                Some(_) => {}
+                None => return,
+            }
+        }
+    });
+
+    // Client side (node 2): issue ROUNDS sequential requests, awaiting each
+    // response before sending the next. Report each completed round and bail
+    // out if the connection closes.
+    let (round_tx, mut round_rx) = mpsc::unbounded_channel::<()>();
+    let client_task = tokio::spawn(async move {
+        let mut sent = 0usize;
+        let mut completed = 0usize;
+        // Kick off the first request.
+        swarm2
+            .behaviour_mut()
+            .sync
+            .send_request(&peer1, SyncRequest::GetStatus);
+        sent += 1;
+
+        loop {
+            match swarm2.next().await {
+                Some(SwarmEvent::Behaviour(TestBehaviourEvent::Sync(
+                    request_response::Event::Message {
+                        message: request_response::Message::Response { .. },
+                        ..
+                    },
+                ))) => {
+                    completed += 1;
+                    round_tx.send(()).ok();
+                    if completed >= ROUNDS {
+                        return;
+                    }
+                    if sent < ROUNDS {
+                        swarm2
+                            .behaviour_mut()
+                            .sync
+                            .send_request(&peer1, SyncRequest::GetStatus);
+                        sent += 1;
+                    }
+                }
+                Some(SwarmEvent::ConnectionClosed { cause, .. }) => {
+                    panic!("client connection closed mid-test (cause={cause:?})");
+                }
+                Some(SwarmEvent::Behaviour(TestBehaviourEvent::Sync(
+                    request_response::Event::OutboundFailure { error, .. },
+                ))) => {
+                    panic!("sync outbound failure mid-test: {error:?}");
+                }
+                Some(_) => {}
+                None => return,
+            }
+        }
+    });
+
+    // Drive the round counter: all ROUNDS round-trips must complete within a
+    // bounded time without the connection dropping.
+    let mut completed = 0usize;
+    let outcome = timeout(Duration::from_secs(30), async {
+        while completed < ROUNDS {
+            if round_rx.recv().await.is_none() {
+                break;
+            }
+            completed += 1;
+        }
+    })
+    .await;
+
+    server_task.abort();
+    client_task.abort();
+
+    assert!(
+        outcome.is_ok(),
+        "expected {ROUNDS} sync round-trips to complete on a stable connection, \
+         only completed {completed} before timeout"
+    );
+    assert_eq!(
+        completed, ROUNDS,
+        "all sync round-trips should complete over a single stable connection"
+    );
+}

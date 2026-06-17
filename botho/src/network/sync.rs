@@ -262,7 +262,20 @@ impl Codec for SyncCodec {
             let bytes = bincode::serialize(&req)
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
             io.write_all(&bytes).await?;
-            io.close().await
+            // NOTE: do NOT call `io.close()` here. Under libp2p 0.56's
+            // request-response handler, the *handler* (not the codec) is
+            // responsible for half-closing the substream after the codec
+            // returns (it calls `stream.close()` right after
+            // `write_request`/`write_response`). Closing inside the codec
+            // races with libp2p's optimistic multistream-select negotiation:
+            // tearing the substream down before the remote confirms the
+            // protocol surfaces as "Stream closed. Confirmation from remote
+            // for optimistic protocol negotiation still pending." On loopback
+            // this cascades into the whole connection being dropped and
+            // redialed (issue #411). The peer's read side still observes EOF
+            // because the handler half-closes the write direction once we
+            // return.
+            Ok(())
         })
     }
 
@@ -283,7 +296,12 @@ impl Codec for SyncCodec {
             let bytes = bincode::serialize(&resp)
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
             io.write_all(&bytes).await?;
-            io.close().await
+            // See the note in `write_request`: the libp2p request-response
+            // handler half-closes the substream after this returns, so the
+            // codec must not call `io.close()` itself (it races with
+            // optimistic protocol negotiation and destabilizes the
+            // connection — issue #411).
+            Ok(())
         })
     }
 }
@@ -1372,6 +1390,126 @@ mod tests {
         // No connected peers: nothing to request.
         let action = manager.tick(&[]);
         assert!(action.is_none());
+    }
+
+    // ========================================================================
+    // SyncCodec framing tests (#411)
+    //
+    // Regression coverage for the transport-stability bug: the codec must not
+    // call `io.close()` itself. The libp2p request-response handler owns
+    // closing the substream (it half-closes the write direction *after* the
+    // codec returns). Calling `close()` inside the codec raced with libp2p
+    // 0.56 optimistic protocol negotiation and tore down whole connections on
+    // loopback. These tests verify the round-trip still works under the
+    // handler's "write, then handler closes, peer reads to EOF" contract.
+    // ========================================================================
+
+    /// Drives the codec exactly as the libp2p request-response handler does:
+    /// the writer serializes via the codec, the handler then half-closes the
+    /// write side, and the reader consumes until EOF. We model the closed
+    /// write side with a `Cursor` over the produced bytes (which yields EOF
+    /// once exhausted), proving the codec frames correctly without ever
+    /// calling `io.close()` itself.
+    async fn roundtrip_request(req: SyncRequest) -> SyncRequest {
+        use futures::io::Cursor;
+
+        let protocol = StreamProtocol::new(SYNC_PROTOCOL);
+        let mut codec = SyncCodec;
+
+        // Writer side: codec writes bytes into the buffer. The handler — not
+        // the codec — is responsible for closing afterwards, so we explicitly
+        // do NOT close here; we just take the written bytes.
+        let mut write_buf = Cursor::new(Vec::new());
+        codec
+            .write_request(&protocol, &mut write_buf, req)
+            .await
+            .expect("write_request should succeed without closing the stream");
+        let bytes = write_buf.into_inner();
+
+        // Reader side: a Cursor yields EOF once the bytes are exhausted,
+        // exactly like a peer's half-closed substream.
+        let mut read_buf = Cursor::new(bytes);
+        codec
+            .read_request(&protocol, &mut read_buf)
+            .await
+            .expect("read_request should decode the framed message")
+    }
+
+    async fn roundtrip_response(resp: SyncResponse) -> SyncResponse {
+        use futures::io::Cursor;
+
+        let protocol = StreamProtocol::new(SYNC_PROTOCOL);
+        let mut codec = SyncCodec;
+
+        let mut write_buf = Cursor::new(Vec::new());
+        codec
+            .write_response(&protocol, &mut write_buf, resp)
+            .await
+            .expect("write_response should succeed without closing the stream");
+        let bytes = write_buf.into_inner();
+
+        let mut read_buf = Cursor::new(bytes);
+        codec
+            .read_response(&protocol, &mut read_buf)
+            .await
+            .expect("read_response should decode the framed message")
+    }
+
+    #[tokio::test]
+    async fn test_codec_request_roundtrip_get_status() {
+        let decoded = roundtrip_request(SyncRequest::GetStatus).await;
+        assert!(matches!(decoded, SyncRequest::GetStatus));
+    }
+
+    #[tokio::test]
+    async fn test_codec_request_roundtrip_get_blocks() {
+        let decoded = roundtrip_request(SyncRequest::GetBlocks {
+            start_height: 42,
+            count: 100,
+        })
+        .await;
+        match decoded {
+            SyncRequest::GetBlocks {
+                start_height,
+                count,
+            } => {
+                assert_eq!(start_height, 42);
+                assert_eq!(count, 100);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_codec_response_roundtrip_status() {
+        let decoded = roundtrip_response(SyncResponse::Status {
+            height: 1234,
+            tip_hash: [7u8; 32],
+        })
+        .await;
+        match decoded {
+            SyncResponse::Status { height, tip_hash } => {
+                assert_eq!(height, 1234);
+                assert_eq!(tip_hash, [7u8; 32]);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_codec_response_roundtrip_blocks_empty() {
+        let decoded = roundtrip_response(SyncResponse::Blocks {
+            blocks: vec![],
+            has_more: true,
+        })
+        .await;
+        match decoded {
+            SyncResponse::Blocks { blocks, has_more } => {
+                assert!(blocks.is_empty());
+                assert!(has_more);
+            }
+            _ => panic!("wrong variant"),
+        }
     }
 
     #[test]
