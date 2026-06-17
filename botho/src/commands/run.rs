@@ -415,8 +415,11 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
         .get_chain_state()
         .map_err(|e| anyhow::anyhow!("Failed to get chain state: {}", e))?;
 
-    // Create consensus service using local peer ID for node identity
-    let local_peer_id = discovery.local_peer_id();
+    // Create consensus service using local peer ID for node identity.
+    // Own the PeerId (rather than borrowing from `discovery`) so we can still
+    // call `&mut discovery` methods later while rebuilding the quorum set on
+    // peer connect/disconnect.
+    let local_peer_id = *discovery.local_peer_id();
     let node_id = peer_id_to_node_id(&local_peer_id);
 
     // Build SCP quorum set from connected peers (or just ourselves for solo mining)
@@ -622,6 +625,18 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                             // Broadcast peer event to WebSocket clients
                             ws_broadcaster.peer_connected(new_peer_count, &peer_id.to_string());
 
+                            // Reconfigure the consensus quorum to include the
+                            // newly connected peer. This is what lifts a node
+                            // out of latched solo mode without a restart.
+                            let new_qs = rebuild_scp_quorum_set(&config, &discovery, &local_peer_id);
+                            if consensus.reconfigure_quorum(new_qs) {
+                                info!(
+                                    threshold = consensus.quorum_set().threshold,
+                                    members = consensus.quorum_set().members.len(),
+                                    "Consensus quorum reconfigured after peer connect"
+                                );
+                            }
+
                             // Re-evaluate minting eligibility
                             if mint && !minting_enabled {
                                 let connected = get_connected_peer_ids(&discovery);
@@ -662,6 +677,21 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
 
                             // Broadcast peer event to WebSocket clients
                             ws_broadcaster.peer_disconnected(new_peer_count, &peer_id.to_string());
+
+                            // Shrink the consensus quorum to drop the departed
+                            // peer so we don't deadlock waiting on a member that
+                            // is gone. rebuild_scp_quorum_set always yields a
+                            // non-empty set (local node is always a member) and
+                            // recomputes a satisfiable threshold, so churn can
+                            // never produce an empty or unreachable quorum.
+                            let new_qs = rebuild_scp_quorum_set(&config, &discovery, &local_peer_id);
+                            if consensus.reconfigure_quorum(new_qs) {
+                                info!(
+                                    threshold = consensus.quorum_set().threshold,
+                                    members = consensus.quorum_set().members.len(),
+                                    "Consensus quorum reconfigured after peer disconnect"
+                                );
+                            }
 
                             // Re-evaluate minting eligibility
                             if minting_enabled {
@@ -1440,6 +1470,47 @@ fn build_scp_quorum_set(quorum: &QuorumBuilder, local_peer_id: &libp2p::PeerId) 
         1
     } else {
         quorum.threshold()
+    };
+
+    QuorumSet::new(threshold, members)
+}
+
+/// Rebuild the SCP quorum set from the *current* set of connected peers.
+///
+/// Called whenever peers connect or disconnect so the consensus quorum tracks
+/// live membership instead of being frozen at startup. Members are the local
+/// node plus every connected peer; the threshold follows the configured quorum
+/// policy:
+///
+/// - `Recommended`: BFT threshold `n - floor((n-1)/3)` over `n = peers + 1`
+///   (matches [`QuorumConfig::effective_threshold`]).
+/// - `Explicit`: the configured threshold, clamped to the member count so we
+///   never demand more confirmations than there are members.
+///
+/// A lone node (no peers) yields a 1-of-1 solo quorum.
+fn rebuild_scp_quorum_set(
+    config: &Config,
+    discovery: &NetworkDiscovery,
+    local_peer_id: &libp2p::PeerId,
+) -> QuorumSet {
+    use bth_consensus_scp_types::QuorumSetMember;
+
+    // Local node is always a member.
+    let mut members: Vec<QuorumSetMember<NodeID>> =
+        vec![QuorumSetMember::Node(peer_id_to_node_id(local_peer_id))];
+
+    for peer in discovery.peer_table() {
+        members.push(QuorumSetMember::Node(peer_id_to_node_id(&peer.peer_id)));
+    }
+
+    let n = members.len();
+    let threshold = match config.network.quorum.mode {
+        QuorumMode::Recommended => config.network.quorum.effective_threshold(n - 1) as u32,
+        QuorumMode::Explicit => {
+            // Clamp to member count; a threshold larger than n can never be met
+            // and would deadlock consensus.
+            (config.network.quorum.threshold).min(n as u32).max(1)
+        }
     };
 
     QuorumSet::new(threshold, members)

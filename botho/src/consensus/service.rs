@@ -162,6 +162,10 @@ pub struct ConsensusService {
 
     /// Current slot's externalized values (if any)
     externalized: Option<Vec<ConsensusValue>>,
+
+    /// A quorum set reconfiguration that arrived mid-round and was deferred to
+    /// the next slot boundary to avoid stranding an in-flight slot.
+    pending_quorum_set: Option<QuorumSet>,
 }
 
 impl ConsensusService {
@@ -277,6 +281,7 @@ impl ConsensusService {
             events: VecDeque::new(),
             last_slot_attempt: Instant::now(),
             externalized: None,
+            pending_quorum_set: None,
         }
     }
 
@@ -284,6 +289,87 @@ impl ConsensusService {
     pub fn update_chain_state(&mut self, chain_state: ChainState) {
         if let Ok(mut state) = self.shared_state.write() {
             state.chain_state = chain_state;
+        }
+    }
+
+    /// Get the current quorum set (for status/RPC/test assertions).
+    pub fn quorum_set(&self) -> &QuorumSet {
+        &self.quorum_set
+    }
+
+    /// Reconfigure the consensus quorum set as peers connect or disconnect.
+    ///
+    /// This recomputes membership/threshold and toggles solo mode off (or back
+    /// on) without requiring a restart. To avoid corrupting an active consensus
+    /// round, the change is only applied to the SCP node at a slot boundary:
+    ///
+    /// - If the current slot has not yet proposed/externalized anything, the
+    ///   new quorum set takes effect immediately (the current slot is rebuilt
+    ///   at the same index).
+    /// - Otherwise the change is stashed and applied on the next
+    ///   [`advance_slot`](Self::advance_slot), so an in-flight slot is never
+    ///   stranded mid-round.
+    ///
+    /// Churn that does not change the effective membership/threshold (e.g. a
+    /// transient disconnect that immediately reconnects the same peer set) is a
+    /// no-op: the new set is compared against both the active set and any
+    /// already-pending set before anything is touched.
+    ///
+    /// Returns `true` if the quorum set changed (applied or deferred).
+    pub fn reconfigure_quorum(&mut self, new_quorum_set: QuorumSet) -> bool {
+        // Never allow an empty quorum set; that would be unsafe and is almost
+        // certainly a wiring bug. Keep the current configuration instead.
+        if new_quorum_set.members.is_empty() {
+            warn!("Ignoring quorum reconfiguration with empty member set");
+            return false;
+        }
+
+        // Compare against whatever the node will eventually run with: a pending
+        // set (not yet applied) takes precedence over the currently active one.
+        let effective = self.pending_quorum_set.as_ref().unwrap_or(&self.quorum_set);
+        if effective == &new_quorum_set {
+            // No effective change — debounce churn / flapping.
+            return false;
+        }
+
+        // Determine whether the current slot is at a safe boundary to swap the
+        // quorum set without stranding an in-flight round. A slot is safe if we
+        // have not proposed anything into it and it has not externalized.
+        let at_slot_boundary = self.proposed_values.is_empty() && self.externalized.is_none();
+
+        if at_slot_boundary {
+            self.apply_quorum_set(new_quorum_set);
+        } else {
+            info!(
+                slot = self.scp_node.current_slot_index(),
+                threshold = new_quorum_set.threshold,
+                members = new_quorum_set.members.len(),
+                "Quorum reconfiguration deferred to next slot boundary (round in flight)"
+            );
+            self.pending_quorum_set = Some(new_quorum_set);
+        }
+
+        true
+    }
+
+    /// Apply a new quorum set to both the service and the SCP node, rebuilding
+    /// the current slot at its existing index.
+    fn apply_quorum_set(&mut self, new_quorum_set: QuorumSet) {
+        let was_solo = self.is_solo_mode();
+        info!(
+            slot = self.scp_node.current_slot_index(),
+            threshold = new_quorum_set.threshold,
+            members = new_quorum_set.members.len(),
+            was_solo,
+            "Applying quorum set reconfiguration"
+        );
+        self.quorum_set = new_quorum_set.clone();
+        self.scp_node.set_quorum_set(new_quorum_set);
+
+        if was_solo && !self.is_solo_mode() {
+            info!("Exited solo mode: peers present, switching to SCP consensus path");
+        } else if !was_solo && self.is_solo_mode() {
+            info!("Entered solo mode: no peers, using direct-externalize path");
         }
     }
 
@@ -671,14 +757,27 @@ impl ConsensusService {
         self.proposed_values.clear();
 
         // For solo mode, we need to explicitly advance the SCP slot
-        // since we bypassed the normal SCP externalization path
+        // since we bypassed the normal SCP externalization path. Capture
+        // solo-ness BEFORE applying any pending quorum reconfiguration, since
+        // gaining a peer flips us out of solo mode.
         if self.is_solo_mode() {
             let next_slot = self.scp_node.current_slot_index() + 1;
             self.scp_node.reset_slot_index(next_slot);
             info!(slot = next_slot, "Advanced to next slot (solo mode)");
         }
         // In multi-node mode, SCP node automatically advances after
-        // externalization
+        // externalization.
+
+        // Now that the slot has advanced and no values are proposed for the new
+        // slot, it is safe to apply any quorum reconfiguration that arrived
+        // mid-round.
+        if let Some(pending) = self.pending_quorum_set.take() {
+            // Re-check it still differs from the active set (a later churn
+            // event may have already converged it).
+            if self.quorum_set != pending {
+                self.apply_quorum_set(pending);
+            }
+        }
     }
 
     /// Get pending transaction count
@@ -694,5 +793,154 @@ impl fmt::Debug for ConsensusService {
             .field("slot", &self.scp_node.current_slot_index())
             .field("pending", &self.pending_values.len())
             .finish()
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use bth_consensus_scp::{QuorumSetMember, ScpNode};
+    use bth_consensus_scp_types::test_utils::test_node_id;
+
+    /// A NodeID for each numeric id; node 1 is "us".
+    fn node(n: u32) -> NodeID {
+        test_node_id(n)
+    }
+
+    /// Build a quorum set whose members are the given node ids, using the
+    /// recommended BFT threshold n - floor((n-1)/3).
+    fn recommended_quorum(ids: &[u32]) -> QuorumSet {
+        let n = ids.len();
+        let f = n.saturating_sub(1) / 3;
+        let threshold = (n - f) as u32;
+        let members: Vec<QuorumSetMember<NodeID>> = ids
+            .iter()
+            .map(|i| QuorumSetMember::Node(node(*i)))
+            .collect();
+        QuorumSet::new(threshold, members)
+    }
+
+    /// A solo (1-of-1) service whose only member is node 1.
+    fn solo_service() -> ConsensusService {
+        ConsensusService::new(
+            node(1),
+            QuorumSet::new(1, vec![QuorumSetMember::Node(node(1))]),
+            ConsensusConfig::fixed_timing(1),
+            ChainState::default(),
+        )
+    }
+
+    #[test]
+    fn boots_in_solo_mode() {
+        let svc = solo_service();
+        assert!(svc.is_solo_mode(), "1-of-1 quorum must be solo mode");
+        assert_eq!(svc.quorum_set().members.len(), 1);
+        assert_eq!(svc.quorum_set().threshold, 1);
+    }
+
+    /// Acceptance criterion 1: a node that boots solo and later gains a peer
+    /// transitions out of solo mode and includes the peer in its quorum set,
+    /// without a restart.
+    #[test]
+    fn solo_to_peered_transition_lifts_solo_mode() {
+        let mut svc = solo_service();
+        assert!(svc.is_solo_mode());
+
+        // A peer (node 2) connects: 2-of-2 recommended quorum.
+        let new_qs = recommended_quorum(&[1, 2]);
+        let changed = svc.reconfigure_quorum(new_qs.clone());
+
+        assert!(changed, "gaining a peer must change the quorum set");
+        assert!(
+            !svc.is_solo_mode(),
+            "node must leave solo mode once a peer is present"
+        );
+        assert_eq!(svc.quorum_set().members.len(), 2);
+        assert_eq!(svc.quorum_set(), &new_qs);
+        // The SCP node itself must also have the new quorum set.
+        assert_eq!(svc.scp_node.quorum_set(), new_qs);
+    }
+
+    #[test]
+    fn reconfigure_with_same_membership_is_a_noop() {
+        let mut svc = solo_service();
+        // Reconfiguring to the identical 1-of-1 set is a no-op (churn debounce).
+        let same = QuorumSet::new(1, vec![QuorumSetMember::Node(node(1))]);
+        assert!(!svc.reconfigure_quorum(same));
+
+        // Add a peer, then re-send the same 2-node set: still a no-op.
+        let two = recommended_quorum(&[1, 2]);
+        assert!(svc.reconfigure_quorum(two.clone()));
+        assert!(!svc.reconfigure_quorum(two));
+    }
+
+    #[test]
+    fn empty_quorum_set_is_rejected() {
+        let mut svc = solo_service();
+        let empty = QuorumSet::new(1, vec![]);
+        assert!(!svc.reconfigure_quorum(empty));
+        // Quorum is unchanged and still solo.
+        assert!(svc.is_solo_mode());
+    }
+
+    /// Acceptance criterion 2: PeerDisconnected shrinks the quorum sensibly and
+    /// does not panic on churn back to solo.
+    #[test]
+    fn peer_disconnect_shrinks_quorum_without_panic() {
+        let mut svc = solo_service();
+
+        // Grow to three nodes, then churn members down repeatedly.
+        assert!(svc.reconfigure_quorum(recommended_quorum(&[1, 2, 3])));
+        assert!(!svc.is_solo_mode());
+        assert_eq!(svc.quorum_set().members.len(), 3);
+
+        // Node 3 leaves -> 2-of-2.
+        assert!(svc.reconfigure_quorum(recommended_quorum(&[1, 2])));
+        assert!(!svc.is_solo_mode());
+        assert_eq!(svc.quorum_set().members.len(), 2);
+
+        // Node 2 leaves -> back to solo. Must not deadlock or panic.
+        assert!(svc.reconfigure_quorum(QuorumSet::new(1, vec![QuorumSetMember::Node(node(1))])));
+        assert!(svc.is_solo_mode());
+        assert_eq!(svc.quorum_set().members.len(), 1);
+
+        // Rapid flapping: connect, disconnect, connect again — no panic.
+        for _ in 0..5 {
+            svc.reconfigure_quorum(recommended_quorum(&[1, 2]));
+            svc.reconfigure_quorum(QuorumSet::new(1, vec![QuorumSetMember::Node(node(1))]));
+        }
+    }
+
+    /// A reconfiguration that arrives while a slot is in flight must be
+    /// deferred to the next slot boundary so the active round is not
+    /// stranded.
+    #[test]
+    fn reconfigure_mid_round_is_deferred_until_advance_slot() {
+        let mut svc = solo_service();
+
+        // Drive a solo round: submit a tx and externalize it directly.
+        svc.submit_transaction([7u8; 32], vec![1, 2, 3]);
+        svc.propose_pending_values();
+        assert!(
+            svc.externalized.is_some(),
+            "solo mode should have externalized the value"
+        );
+
+        // A peer connects mid-round. The change is recorded but deferred.
+        let two = recommended_quorum(&[1, 2]);
+        assert!(svc.reconfigure_quorum(two.clone()));
+        assert!(
+            svc.is_solo_mode(),
+            "active round must keep the old (solo) quorum until the slot boundary"
+        );
+        assert!(svc.pending_quorum_set.is_some());
+
+        // Advancing the slot applies the deferred quorum set.
+        svc.advance_slot();
+        assert!(svc.pending_quorum_set.is_none());
+        assert!(!svc.is_solo_mode());
+        assert_eq!(svc.quorum_set(), &two);
+        assert_eq!(svc.scp_node.quorum_set(), two);
     }
 }

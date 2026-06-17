@@ -233,6 +233,10 @@ impl<V: Value, N: ScpNode<V>> ScpNode<V> for LoggingScpNode<V, N> {
         self.node.quorum_set()
     }
 
+    fn set_quorum_set(&mut self, quorum_set: QuorumSet) {
+        self.node.set_quorum_set(quorum_set)
+    }
+
     fn propose_values(&mut self, values: BTreeSet<V>) -> Result<Option<Msg<V>>, String> {
         let slot_index = self.node.current_slot_index();
         self.write(LoggedMsg::Nominate(slot_index, values.clone()))?;
