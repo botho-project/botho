@@ -32,6 +32,7 @@ bth-consensus-scp-types = { workspace = true, features = ["test_utils"] }
 bth-util-logger-macros = { workspace = true }
 bth-util-test-helper = { workspace = true }
 
+bincode = { workspace = true }
 crossbeam-channel = { workspace = true }
 dashmap = { workspace = true }
 maplit = { workspace = true }
