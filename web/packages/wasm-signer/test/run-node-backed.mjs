@@ -6,10 +6,14 @@
  * runs the gated `send-live-node.test.ts` (single send, #372),
  * `exchange-live-node.test.ts` (two-user bidirectional exchange, #390),
  * `lottery-live-node.test.ts` (three-user exchange until a lottery payout, #394)
- * and `join-consensus-live-node.test.ts` (a fresh node joins a running local
- * chain over real libp2p and catches up 0 -> N onto the same chain, #396) with
- * BOTHO_E2E_NODE=1 so each test spins up its own throwaway node(s), asserts the
- * ledger/sync invariants, and tears the node(s) down.
+ * `join-consensus-live-node.test.ts` (a fresh node joins a running local
+ * chain over real libp2p and catches up 0 -> N onto the same chain, #396) and
+ * `mine-after-join-live-node.test.ts` (the full #396 flavor-A demonstration:
+ * a fresh node joins a running multi-minter chain, catches up 0 -> N, then
+ * PARTICIPATES in consensus and MINES a block the whole network accepts,
+ * earning an on-chain coinbase) with BOTHO_E2E_NODE=1 so each test spins up
+ * its own throwaway node(s), asserts the ledger/sync invariants, and tears the
+ * node(s) down.
  *
  *   node packages/wasm-signer/test/run-node-backed.mjs
  *
@@ -63,6 +67,10 @@ const result = spawnSync(
     'packages/wasm-signer/test/exchange-live-node.test.ts',
     'packages/wasm-signer/test/lottery-live-node.test.ts',
     'packages/wasm-signer/test/join-consensus-live-node.test.ts',
+    // mine-after-join is BLOCKED ON #417 (multi-node SCP agreement / fork) and
+    // is `describe.skip` for now; kept listed so it re-activates automatically
+    // once #417 lands genuine, fork-free multi-node agreement.
+    'packages/wasm-signer/test/mine-after-join-live-node.test.ts',
   ],
   {
     cwd: webDir,
