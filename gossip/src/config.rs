@@ -143,28 +143,139 @@ pub struct MessageTypeLimits {
 
 impl Default for MessageTypeLimits {
     fn default() -> Self {
+        // These caps must comfortably exceed the message rate that honest
+        // multi-node SCP consensus produces, while remaining far below a
+        // genuine flood. A single SCP slot is not one message: nomination
+        // rounds plus the ballot protocol (PREPARE / CONFIRM / EXTERNALIZE),
+        // each potentially rebroadcast on timeout, plus a per-slot minting tx.
+        // A conservative bound is ~10-30 consensus messages per slot per peer
+        // during active rounds. At the *default* slot duration (20s) that is
+        // tiny, but the same binary is run with `BOTHO_SLOT_DURATION_SECS=1`
+        // in tests, where it is ~600-1800 consensus msgs/min/peer. The old
+        // fixed caps (50/min consensus, 100/min tx) silently dropped honest
+        // SCP/minting traffic, kept nodes in solo mode, and caused forks
+        // (issue #413). We size the defaults for the fast-slot, multi-peer
+        // case and rely on `for_slot_duration` to scale further when the
+        // effective slot duration / quorum size is known.
+        Self::for_slot_duration(DEFAULT_SLOT_DURATION_SECS, DEFAULT_QUORUM_PEERS)
+    }
+}
+
+/// Default slot duration (seconds) assumed when sizing rate limits without an
+/// explicit value. Matches `ConsensusConfig::default().slot_duration`.
+const DEFAULT_SLOT_DURATION_SECS: u64 = 20;
+
+/// Default quorum size assumed when sizing rate limits without an explicit
+/// value. Small testnets run 2-of-2; we leave generous headroom.
+const DEFAULT_QUORUM_PEERS: u32 = 8;
+
+/// Estimated number of consensus (SCP) messages a single peer broadcasts per
+/// slot during active nomination + ballot rounds (with rebroadcast headroom).
+const CONSENSUS_MSGS_PER_SLOT: u32 = 30;
+
+/// Estimated number of transaction (incl. minting tx) messages a single peer
+/// broadcasts per slot.
+const TX_MSGS_PER_SLOT: u32 = 8;
+
+/// Multiplicative safety headroom applied to derived rate limits so transient
+/// bursts (e.g. several rebroadcasts colliding) never trip honest traffic.
+const RATE_LIMIT_HEADROOM: u32 = 4;
+
+impl MessageTypeLimits {
+    /// Derive per-type per-minute caps from the effective slot duration and the
+    /// quorum size. The consensus/transaction caps scale with `peers` and with
+    /// `60 / slot_secs`, so a faster slot or a larger quorum raises the ceiling
+    /// instead of silently dropping honest consensus traffic.
+    ///
+    /// The result is still a *flood ceiling*: a genuinely abusive peer sending
+    /// orders of magnitude more than the honest cadence is still caught.
+    pub fn for_slot_duration(slot_secs: u64, peers: u32) -> Self {
+        let slot_secs = slot_secs.max(1);
+        // Slots per minute at this cadence: a 1s slot yields 60, a 20s slot
+        // yields 3. Floored at 1 so very long slots still get a sane cap.
+        let slots_per_min = (60 / slot_secs).max(1) as u32;
+        let peers = peers.max(1);
+
+        // consensus_per_minute = msgs_per_slot * slots_per_min * peers * headroom
+        let consensus_per_minute = CONSENSUS_MSGS_PER_SLOT
+            .saturating_mul(slots_per_min)
+            .saturating_mul(peers)
+            .saturating_mul(RATE_LIMIT_HEADROOM);
+        let transactions_per_minute = TX_MSGS_PER_SLOT
+            .saturating_mul(slots_per_min)
+            .saturating_mul(peers)
+            .saturating_mul(RATE_LIMIT_HEADROOM);
+
         Self {
-            // From audit requirements:
-            // - Transaction announcements: 100/min
-            // - Block announcements: 10/min
-            // - Consensus messages: 50/min
-            transactions_per_minute: 100,
-            blocks_per_minute: 10,
-            consensus_per_minute: 50,
-            announcements_per_minute: 20,
+            transactions_per_minute,
+            blocks_per_minute: 60,
+            consensus_per_minute,
+            announcements_per_minute: 60,
         }
     }
 }
 
 impl Default for PeerRateLimitConfig {
     fn default() -> Self {
+        Self::for_slot_duration(DEFAULT_SLOT_DURATION_SECS, DEFAULT_QUORUM_PEERS)
+    }
+}
+
+impl PeerRateLimitConfig {
+    /// Build a rate-limit config sized for the given effective slot duration
+    /// and quorum size.
+    ///
+    /// Both the per-type caps *and* the global gates
+    /// (`max_messages_per_second`, `burst_limit`) are derived together. The
+    /// original bug (issue #413) was that the global gates (10 msg/s, 50
+    /// msg/5s) trip *before* the per-type caps, so raising only the
+    /// per-type caps still dropped honest SCP/minting traffic. Here the
+    /// global gates are scaled from the same slot-rate model with extra
+    /// headroom so they sit above the honest aggregate rate while
+    /// still tripping for a true flood.
+    pub fn for_slot_duration(slot_secs: u64, peers: u32) -> Self {
+        let limits = MessageTypeLimits::for_slot_duration(slot_secs, peers);
+
+        let peers = peers.max(1);
+
+        // Aggregate honest rate across all types, per minute, then convert to a
+        // per-second global ceiling with generous headroom.
+        let aggregate_per_min = limits
+            .consensus_per_minute
+            .saturating_add(limits.transactions_per_minute)
+            .saturating_add(limits.blocks_per_minute)
+            .saturating_add(limits.announcements_per_minute);
+
+        // A full slot's worth of consensus+tx messages from all peers can
+        // legitimately cluster inside a single second (e.g. an active ballot
+        // round with rebroadcasts), even at long slot durations. The global
+        // per-second gate must sit above that instantaneous cluster, not just
+        // above the time-averaged aggregate, otherwise it trips before the
+        // per-type caps (the core #413 failure). Take the larger of:
+        //   - the per-slot instantaneous cluster across peers, with headroom
+        //   - the time-averaged aggregate per second, with headroom
+        let per_slot_cluster = CONSENSUS_MSGS_PER_SLOT
+            .saturating_add(TX_MSGS_PER_SLOT)
+            .saturating_mul(peers)
+            .saturating_mul(RATE_LIMIT_HEADROOM);
+        let averaged_per_second = ((aggregate_per_min / 60) + 1).saturating_mul(2);
+        let max_messages_per_second = per_slot_cluster.max(averaged_per_second).max(50);
+        // Burst limit over a 5s window: 5s of the per-second ceiling, with
+        // headroom for rebroadcast collisions.
+        let burst_limit = max_messages_per_second.saturating_mul(5).max(250);
+
         Self {
-            max_messages_per_second: 10,
-            burst_limit: 50,
+            max_messages_per_second,
+            burst_limit,
             burst_window_ms: 5000, // 5 second window
-            disconnect_threshold: 3,
+            // Raised from 3: a busy honest peer can momentarily exceed a cap
+            // during a rebroadcast storm. Combined with violation decay (see
+            // `PeerRateState::decay_violations`) this avoids permanently
+            // blacklisting an honest peer after a transient burst, while a
+            // sustained abuser still accrues violations faster than they decay.
+            disconnect_threshold: 10,
             enabled: true,
-            message_limits: MessageTypeLimits::default(),
+            message_limits: limits,
         }
     }
 }

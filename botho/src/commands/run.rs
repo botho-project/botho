@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use bth_common::{NodeID, ResponderId};
 use bth_consensus_scp::QuorumSet;
 use bth_crypto_keys::Ed25519Public;
+use bth_gossip::{GossipConfig, PeerRateLimitConfig};
 use futures::StreamExt;
 use std::{
     net::SocketAddr,
@@ -222,9 +223,31 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
     // for a node whose only peers are bootstrap nodes (issue #409).
     let reconnect_bootstrap_peers = bootstrap_peers.clone();
 
-    // Start network discovery
-    let mut discovery =
-        NetworkDiscovery::new(config.network.gossip_port(network_type), bootstrap_peers);
+    // Start network discovery.
+    //
+    // Size the gossipsub per-peer rate limiter from the *effective* slot
+    // cadence and the peer ceiling so honest multi-node SCP/minting traffic is
+    // never silently dropped (issue #413). The fastest cadence the node may run
+    // at determines the highest honest message rate: under dynamic timing the
+    // slot duration can drop to `MIN_BLOCK_TIME_SECS`, and under the
+    // `BOTHO_SLOT_DURATION_SECS` test override it is whatever was configured.
+    // We use the smaller of the two as the rate-limit basis (a smaller slot ->
+    // higher rate -> higher cap), and the gossip layer's connection ceiling as
+    // the peer bound (each connected peer may broadcast SCP/minting traffic).
+    let consensus_cfg = consensus_config_from_env();
+    let effective_slot_secs = if consensus_cfg.dynamic_timing {
+        ConsensusConfig::MIN_BLOCK_TIME_SECS
+    } else {
+        consensus_cfg.slot_duration.as_secs().max(1)
+    };
+    let rate_limit_peers = GossipConfig::default().max_connections.max(1) as u32;
+    let rate_limit_config =
+        PeerRateLimitConfig::for_slot_duration(effective_slot_secs, rate_limit_peers);
+    let mut discovery = NetworkDiscovery::with_rate_limit_config(
+        config.network.gossip_port(network_type),
+        bootstrap_peers,
+        rate_limit_config,
+    );
 
     let mut swarm = discovery.start().await?;
 
