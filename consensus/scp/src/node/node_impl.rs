@@ -154,6 +154,35 @@ impl<V: Value, ValidationError: Clone + Display + 'static> ScpNode<V> for Node<V
         self.Q.clone()
     }
 
+    /// Replace this node's quorum set, rebuilding the current slot at its
+    /// existing index with the new membership/threshold. Any in-progress slot
+    /// state and stored externalized slots are abandoned, so callers must only
+    /// invoke this at a slot boundary.
+    fn set_quorum_set(&mut self, quorum_set: QuorumSet) {
+        let slot_index = self.current_slot.get_index();
+
+        log::info!(
+            self.logger,
+            "Reconfiguring quorum set at slot {}: threshold={}, members={}",
+            slot_index,
+            quorum_set.threshold,
+            quorum_set.members.len()
+        );
+
+        self.Q = quorum_set.clone();
+
+        self.current_slot = Box::new(Slot::new(
+            self.ID.clone(),
+            quorum_set,
+            slot_index,
+            self.validity_fn.clone(),
+            self.combine_fn.clone(),
+            self.logger.clone(),
+        ));
+
+        self.externalized_slots.clear();
+    }
+
     /// Propose values for this node to nominate.
     fn propose_values(&mut self, values: BTreeSet<V>) -> Result<Option<Msg<V>>, String> {
         if values.is_empty() {

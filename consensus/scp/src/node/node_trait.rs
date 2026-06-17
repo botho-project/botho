@@ -14,6 +14,15 @@ pub trait ScpNode<V: Value>: Send {
     /// Get local node quorum set.
     fn quorum_set(&self) -> QuorumSet;
 
+    /// Replace this node's quorum set, rebuilding the current slot so the new
+    /// membership/threshold takes effect immediately.
+    ///
+    /// This abandons any in-progress state for the current slot and any stored
+    /// externalized slots, so callers must only invoke it at a slot boundary
+    /// (e.g. before the current slot has nominated/proposed any values). The
+    /// current slot index is preserved.
+    fn set_quorum_set(&mut self, quorum_set: QuorumSet);
+
     /// Propose values for this node to nominate.
     fn propose_values(&mut self, values: BTreeSet<V>) -> Result<Option<Msg<V>>, String>;
 
