@@ -9,16 +9,26 @@ rust-version = { workspace = true }
 
 [features]
 default = ["std"]
-# `std` activates k256/std, which is required to satisfy k256's
-# `precomputed-tables` feature when it is unified into the workspace build via
-# a transitive consumer (e.g. libp2p-identity/secp256k1, which Linux-target
-# resolution pulls through libp2p-tls). Without it, `cargo build --workspace`
-# fails on Linux with "`precomputed-tables` feature requires either
-# `critical-section` or `std`". Kept opt-out so no_std consumers can disable.
+# `std` activates k256/std for this crate's own consumers; kept as an opt-out so
+# no_std-leaning consumers can `default-features = false`.
 std = ["k256/std"]
 
 [dependencies]
-k256 = { version = "0.13", default-features = false, features = ["ecdsa", "schnorr", "alloc"] }
+# `critical-section` is activated UNCONDITIONALLY (not behind our `std` feature)
+# on purpose. k256 0.13's `precomputed-tables` feature has a `compile_error!`
+# unless either `std` or `critical-section` is also active. On Linux,
+# `cargo build --workspace` (the #402 gate) pulls a k256 build unit with
+# `precomputed-tables` enabled through the full workspace graph (the Tauri
+# desktop crate's Linux-gated GUI subtree, via libp2p), and that build unit is
+# NOT reached through `bth-crypto-secp256k1`'s feature graph — so a feature we
+# gate behind `std`/`default` never lands on it (the workspace dep edge for this
+# crate is declared `default-features = false`, and resolver v2 does not unify
+# our `std` onto the libp2p-path k256 unit). Because resolver v2 still resolves a
+# single shared k256 build unit per (package, target, build-kind) group, putting
+# `critical-section` directly on this crate's k256 dependency edge co-activates
+# it on that shared unit, satisfying the `precomputed-tables` gate without
+# requiring `std` (so it is robust for no_std targets too). See #361.
+k256 = { version = "0.13", default-features = false, features = ["ecdsa", "schnorr", "alloc", "critical-section"] }
 sha3 = { workspace = true }
 sha2 = { workspace = true }
 hmac = { workspace = true }
