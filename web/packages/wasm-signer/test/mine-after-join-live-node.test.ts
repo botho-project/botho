@@ -86,7 +86,7 @@ const wasmBuilt = existsSync(wasmGlue) && existsSync(wasmBin)
 
 const RUN_LOCAL_NODE = env.BOTHO_E2E_NODE === '1'
 
-// BLOCKED ON #397 (multi-node SCP agreement). Empirical investigation for #396
+// BLOCKED ON #417 (multi-node SCP agreement). Empirical investigation for #396
 // (see PR / issue comment) found that the full mine-after-join scenario cannot
 // pass reliably today because the multi-node consensus path is BOTH non-live
 // AND unsafe:
@@ -106,7 +106,7 @@ const RUN_LOCAL_NODE = env.BOTHO_E2E_NODE === '1'
 //      quorum were observed externalizing DIFFERENT blocks at the same heights
 //      (e.g. divergent hashes at heights 22/23/24) and never reconciling — a
 //      consensus safety violation that a correct unanimous quorum must never
-//      exhibit. This is the #397 multi-node agreement bug surfacing as an
+//      exhibit. This is the #417 multi-node agreement bug surfacing as an
 //      actual fork, and it is the hard blocker for this test.
 //
 // A liveness-only workaround (stale-tx pruning + jam-recovery that restarts a
@@ -118,7 +118,7 @@ const RUN_LOCAL_NODE = env.BOTHO_E2E_NODE === '1'
 // "no hard forks" policy: a consensus change must be provably safe).
 //
 // This file is kept as the executable reproduction harness for the target
-// capability. Re-enable (drop `&& false`) once #397 lands genuine multi-node
+// capability. Re-enable (drop `&& false`) once #417 lands genuine multi-node
 // agreement (a unanimous quorum that cannot fork) so a joiner's mined block is
 // accepted by all nodes on a single shared chain.
 const enabled = wasmBuilt && RUN_LOCAL_NODE && false

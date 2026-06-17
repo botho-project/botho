@@ -67,9 +67,9 @@ const result = spawnSync(
     'packages/wasm-signer/test/exchange-live-node.test.ts',
     'packages/wasm-signer/test/lottery-live-node.test.ts',
     'packages/wasm-signer/test/join-consensus-live-node.test.ts',
-    // mine-after-join is BLOCKED ON #397 (multi-node SCP agreement / fork) and
+    // mine-after-join is BLOCKED ON #417 (multi-node SCP agreement / fork) and
     // is `describe.skip` for now; kept listed so it re-activates automatically
-    // once #397 lands genuine, fork-free multi-node agreement.
+    // once #417 lands genuine, fork-free multi-node agreement.
     'packages/wasm-signer/test/mine-after-join-live-node.test.ts',
   ],
   {
