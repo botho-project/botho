@@ -164,6 +164,12 @@ pub struct ConsensusService {
     /// Current slot's externalized values (if any)
     externalized: Option<Vec<ConsensusValue>>,
 
+    /// Highest SCP slot index already surfaced as a `SlotExternalized` event.
+    /// Used in the multi-node path so an externalized slot is only emitted once
+    /// (the SCP node auto-advances on externalize, so the just-externalized
+    /// slot stays readable for several ticks).
+    last_externalized_slot: Option<SlotIndex>,
+
     /// A quorum set reconfiguration that arrived mid-round and was deferred to
     /// the next slot boundary to avoid stranding an in-flight slot.
     pending_quorum_set: Option<QuorumSet>,
@@ -282,6 +288,7 @@ impl ConsensusService {
             events: VecDeque::new(),
             last_slot_attempt: Instant::now(),
             externalized: None,
+            last_externalized_slot: None,
             pending_quorum_set: None,
         }
     }
@@ -713,27 +720,81 @@ impl ConsensusService {
         )
     )]
     fn check_externalized(&mut self) {
-        let slot = self.scp_node.current_slot_index();
+        // In solo mode the slot is externalized directly in
+        // `propose_pending_values` (which sets `self.externalized`), so there is
+        // nothing for the SCP-driven path to detect here.
+        if self.is_solo_mode() {
+            Span::current().record("externalized", false);
+            return;
+        }
 
-        if let Some(values) = self.scp_node.get_externalized_values(slot) {
-            if self.externalized.is_none() {
-                Span::current().record("externalized", true);
-                Span::current().record("value_count", values.len());
-                info!(slot, count = values.len(), "Slot externalized!");
+        // Once an externalize is pending application (block build + advance_slot),
+        // don't look for another.
+        if self.externalized.is_some() {
+            Span::current().record("externalized", false);
+            return;
+        }
 
-                // Remove externalized values from pending
-                for v in &values {
-                    self.pending_values.remove(v);
-                    self.proposed_values.remove(v);
-                }
+        // When the SCP node externalizes a slot it AUTOMATICALLY advances its
+        // current slot to `N + 1` and files the just-externalized slot `N` in
+        // its `externalized_slots` store (see node_impl::handle_messages ->
+        // externalize). So the slot we must read the externalized values from is
+        // the one immediately BELOW the current slot index, not the current one.
+        //
+        // Issue #414: the previous code queried `current_slot_index()` (i.e. the
+        // freshly-started slot `N + 1`), which never has externalized values, so
+        // `Slot externalized!` never fired and the chain stayed at height 0 even
+        // though SCP was reaching the Externalize phase and advancing slots.
+        let current = self.scp_node.current_slot_index();
+        let Some(highest_externalized) = current.checked_sub(1) else {
+            Span::current().record("externalized", false);
+            return;
+        };
 
-                self.externalized = Some(values.clone());
+        // Surface externalized slots strictly in order, one per call, so we never
+        // skip a slot if the SCP node advanced several slots between ticks. The
+        // next slot to surface is the one immediately after the last we emitted.
+        let externalized_slot = match self.last_externalized_slot {
+            Some(last) => last + 1,
+            None => highest_externalized,
+        };
+        if externalized_slot > highest_externalized {
+            Span::current().record("externalized", false);
+            return;
+        }
 
-                self.events.push_back(ConsensusEvent::SlotExternalized {
-                    slot_index: slot,
-                    values,
-                });
+        if let Some(values) = self.scp_node.get_externalized_values(externalized_slot) {
+            Span::current().record("externalized", true);
+            Span::current().record("value_count", values.len());
+            info!(
+                slot = externalized_slot,
+                count = values.len(),
+                "Slot externalized!"
+            );
+            self.last_externalized_slot = Some(externalized_slot);
+
+            // Remove externalized values from pending
+            for v in &values {
+                self.pending_values.remove(v);
+                self.proposed_values.remove(v);
             }
+
+            // Drop ALL pending minting txs: a minting tx is bound to a specific
+            // block height / prev-block-hash, so every minting tx proposed for
+            // the slot we just externalized is now stale (it builds on the old
+            // tip). Leaving them queued makes the node keep re-proposing minting
+            // txs with the wrong prev_block_hash, which never validate against
+            // the advanced chain and pile up in `pending_values` forever,
+            // stalling the next slot. This mirrors the solo-mode path, which
+            // already prunes stale minting txs after externalizing.
+            self.pending_values.retain(|v| !v.is_minting_tx);
+
+            self.externalized = Some(values.clone());
+
+            self.events.push_back(ConsensusEvent::SlotExternalized {
+                slot_index: externalized_slot,
+                values,
+            });
         } else {
             Span::current().record("externalized", false);
         }
