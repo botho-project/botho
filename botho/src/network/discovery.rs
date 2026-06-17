@@ -40,7 +40,7 @@ use bth_transaction_types::{
 };
 
 use crate::{
-    block::Block,
+    block::{Block, MintingTx},
     consensus::ScpMessage,
     network::{
         compact_block::{BlockTxn, CompactBlock, GetBlockTxn},
@@ -77,6 +77,18 @@ const TRANSACTIONS_TOPIC: &str = "botho/transactions/1.0.0";
 
 /// Topic for SCP consensus messages
 const SCP_TOPIC: &str = "botho/scp/1.0.0";
+
+/// Topic for minting-transaction announcements.
+///
+/// Minting transactions referenced by an SCP `ConsensusValue` are not part of
+/// the mempool transaction flow (`TRANSACTIONS_TOPIC` carries user
+/// `Transaction`s), so a node that only learns a peer's minting `tx_hash` from
+/// an SCP nominate/ballot message has no way to validate it. Without the raw
+/// bytes the SCP slot rejects the peer's message (validity_fn: "Transaction not
+/// in cache") and nomination can never reach quorum. This topic propagates the
+/// minting-tx bytes so every consensus participant can validate a proposed
+/// minting value. See issue #409.
+const MINTING_TXS_TOPIC: &str = "botho/minting-txs/1.0.0";
 
 /// Topic for compact block announcements
 const COMPACT_BLOCKS_TOPIC: &str = "botho/compact-blocks/1.0.0";
@@ -253,6 +265,10 @@ pub enum NetworkEvent {
     NewBlock(Block),
     /// A new transaction was received from a peer
     NewTransaction(Transaction),
+    /// A minting transaction proposed for consensus was received from a peer.
+    /// Registered into the consensus tx cache so the local SCP node can
+    /// validate the corresponding `ConsensusValue` (see issue #409).
+    NewMintingTx(MintingTx),
     /// An SCP consensus message was received
     ScpMessage(ScpMessage),
     /// A compact block was received (for bandwidth-efficient relay)
@@ -532,6 +548,13 @@ impl NetworkDiscovery {
         let scp_topic = IdentTopic::new(SCP_TOPIC);
         swarm.behaviour_mut().gossipsub.subscribe(&scp_topic)?;
 
+        // Subscribe to minting-transactions topic (issue #409)
+        let minting_txs_topic = IdentTopic::new(MINTING_TXS_TOPIC);
+        swarm
+            .behaviour_mut()
+            .gossipsub
+            .subscribe(&minting_txs_topic)?;
+
         // Subscribe to compact blocks topic
         let compact_blocks_topic = IdentTopic::new(COMPACT_BLOCKS_TOPIC);
         swarm
@@ -604,6 +627,31 @@ impl NetworkDiscovery {
         debug!(
             "Broadcast transaction {} to network",
             hex::encode(&tx.hash()[0..8])
+        );
+        Ok(())
+    }
+
+    /// Broadcast a minting transaction to the network.
+    ///
+    /// Proposing minters call this so peers can validate the minting
+    /// `ConsensusValue` that references this tx when it appears in an SCP
+    /// message (issue #409).
+    pub fn broadcast_minting_tx(
+        swarm: &mut Swarm<BothoBehaviour>,
+        minting_tx: &MintingTx,
+    ) -> anyhow::Result<()> {
+        let topic = IdentTopic::new(MINTING_TXS_TOPIC);
+        let tx_bytes = bincode::serialize(minting_tx)?;
+
+        swarm
+            .behaviour_mut()
+            .gossipsub
+            .publish(topic, tx_bytes)
+            .map_err(|e| anyhow::anyhow!("Failed to publish minting tx: {:?}", e))?;
+
+        debug!(
+            "Broadcast minting tx {} to network",
+            hex::encode(&minting_tx.hash()[0..8])
         );
         Ok(())
     }
@@ -916,6 +964,30 @@ impl NetworkDiscovery {
                         }
                         Err(e) => {
                             warn!("Failed to deserialize transaction from gossip: {}", e);
+                        }
+                    }
+                } else if topic == MINTING_TXS_TOPIC {
+                    // Check size before deserialization (DoS protection).
+                    // A minting tx is small; reuse the transaction size cap.
+                    if message.data.len() > MAX_TRANSACTION_SIZE {
+                        warn!(
+                            "Rejected oversized minting tx message: {} bytes (max: {})",
+                            message.data.len(),
+                            MAX_TRANSACTION_SIZE
+                        );
+                        return None;
+                    }
+
+                    match bincode::deserialize::<MintingTx>(&message.data) {
+                        Ok(minting_tx) => {
+                            debug!(
+                                "Received minting tx {} from network",
+                                hex::encode(&minting_tx.hash()[0..8])
+                            );
+                            return Some(NetworkEvent::NewMintingTx(minting_tx));
+                        }
+                        Err(e) => {
+                            warn!("Failed to deserialize minting tx from gossip: {}", e);
                         }
                     }
                 } else if topic == SCP_TOPIC {
@@ -1242,7 +1314,26 @@ impl NetworkDiscovery {
                 );
                 Some(NetworkEvent::PeerDiscovered(peer_id))
             }
-            SwarmEvent::ConnectionClosed { peer_id, .. } => {
+            SwarmEvent::ConnectionClosed {
+                peer_id,
+                num_established,
+                ..
+            } => {
+                // libp2p emits ConnectionClosed per-connection. When two nodes
+                // dial each other concurrently they briefly hold redundant
+                // connections; closing one must NOT be treated as a full
+                // disconnect, or the peer is dropped from `self.peers` while
+                // still connected — which collapses the SCP quorum back below
+                // threshold and stalls consensus (issue #409). Only report the
+                // peer as gone once no connections remain.
+                if num_established > 0 {
+                    debug!(
+                        "Redundant connection to {} closed ({} still established)",
+                        peer_id, num_established
+                    );
+                    return None;
+                }
+
                 info!("Disconnected from peer: {}", peer_id);
                 self.peers.remove(&peer_id);
                 self.compact_block_peers.remove(&peer_id);

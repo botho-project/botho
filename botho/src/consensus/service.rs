@@ -507,6 +507,24 @@ impl ConsensusService {
         info!(?value, "Minting transaction submitted for consensus");
     }
 
+    /// Register a minting transaction received from a peer into the validation
+    /// cache, without adding it to our own pending/proposed set.
+    ///
+    /// SCP messages only carry a value's `tx_hash`. When a peer nominates its
+    /// minting tx, every node in the quorum must be able to validate that value
+    /// or the SCP slot rejects the peer's message (validity_fn: "Transaction
+    /// not in cache") and nomination never reaches quorum. Feeding the raw tx
+    /// bytes into the cache lets the local SCP node accept the peer's nominate
+    /// votes so balloting can begin. See issue #409.
+    pub fn register_minting_tx(&mut self, tx_hash: [u8; 32], tx_data: Vec<u8>) {
+        if let Ok(mut state) = self.shared_state.write() {
+            state.tx_cache.entry(tx_hash).or_insert(TxCacheEntry {
+                data: tx_data,
+                is_minting_tx: true,
+            });
+        }
+    }
+
     /// Handle an incoming SCP message from gossip
     #[instrument(
         name = "consensus.handle_message",
