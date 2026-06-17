@@ -6,7 +6,8 @@ use super::{validation::TransactionValidator, value::ConsensusValue};
 use crate::ledger::ChainState;
 use bth_common::NodeID;
 use bth_consensus_scp::{
-    create_null_logger, msg::Msg as ScpMsg, node::Node, QuorumSet, ScpNode, SlotIndex,
+    create_null_logger, msg::Msg as ScpMsg, node::Node, slot::Phase as ScpPhase, QuorumSet,
+    ScpNode, SlotIndex,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -333,9 +334,29 @@ impl ConsensusService {
         }
 
         // Determine whether the current slot is at a safe boundary to swap the
-        // quorum set without stranding an in-flight round. A slot is safe if we
-        // have not proposed anything into it and it has not externalized.
-        let at_slot_boundary = self.proposed_values.is_empty() && self.externalized.is_none();
+        // quorum set without stranding an in-flight round.
+        //
+        // The local service fields (`proposed_values`, `externalized`) only
+        // reflect *this* node's activity for the slot. In multi-node operation,
+        // inbound peer nominate/ballot messages accumulate directly inside the
+        // SCP node's `current_slot` and are NOT mirrored into those fields. So
+        // we must also consult the SCP node's own slot phase: if peers have
+        // populated the slot (non-empty nomination sets, a ballot counter past
+        // zero, or a phase past the initial NominatePrepare), an "immediate"
+        // `set_quorum_set` would silently discard that agreed-upon protocol
+        // state. Treat any such slot as in-flight and defer instead.
+        //
+        // A brand-new slot is in `NominatePrepare` with empty X/Y/Z and
+        // `bN == 0`; the empty-nomination-sets + `bN == 0` signal is the robust
+        // boundary indicator, with the phase check as a secondary guard.
+        let metrics = self.scp_node.get_current_slot_metrics();
+        let scp_slot_active = metrics.num_voted_nominated > 0
+            || metrics.num_accepted_nominated > 0
+            || metrics.num_confirmed_nominated > 0
+            || metrics.bN > 0
+            || metrics.phase != ScpPhase::NominatePrepare;
+        let at_slot_boundary =
+            self.proposed_values.is_empty() && self.externalized.is_none() && !scp_slot_active;
 
         if at_slot_boundary {
             self.apply_quorum_set(new_quorum_set);
@@ -800,8 +821,16 @@ impl fmt::Debug for ConsensusService {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use bth_consensus_scp::{QuorumSetMember, ScpNode};
+    use crate::transaction::{
+        ClsagRingInput, RingMember, Transaction, TxOutput, MIN_RING_SIZE, MIN_TX_FEE,
+    };
+    use bth_consensus_scp::{
+        ballot::Ballot,
+        msg::{Msg, NominatePayload, PreparePayload, Topic},
+        QuorumSetMember, ScpNode,
+    };
     use bth_consensus_scp_types::test_utils::test_node_id;
+    use bth_transaction_types::ClusterTagVector;
 
     /// A NodeID for each numeric id; node 1 is "us".
     fn node(n: u32) -> NodeID {
@@ -942,5 +971,207 @@ mod tests {
         assert!(!svc.is_solo_mode());
         assert_eq!(svc.quorum_set(), &two);
         assert_eq!(svc.scp_node.quorum_set(), two);
+    }
+
+    /// A multi-node service whose quorum is the given node ids (node 1 is us).
+    fn peered_service(ids: &[u32]) -> ConsensusService {
+        ConsensusService::new(
+            node(1),
+            recommended_quorum(ids),
+            ConsensusConfig::fixed_timing(1),
+            ChainState::default(),
+        )
+    }
+
+    /// A structurally valid transfer transaction that passes
+    /// `validate_transfer_tx` (one input, one nonzero output, fresh height) so
+    /// the SCP validity callback accepts the value it references.
+    fn valid_transfer_tx() -> Transaction {
+        let ring: Vec<RingMember> = (0..MIN_RING_SIZE)
+            .map(|i| RingMember {
+                target_key: [i as u8; 32],
+                public_key: [(i as u8).wrapping_add(1); 32],
+                commitment: [(i as u8).wrapping_add(2); 32],
+            })
+            .collect();
+        let input = ClsagRingInput {
+            ring,
+            key_image: [9u8; 32],
+            commitment_key_image: [109u8; 32],
+            clsag_signature: vec![0u8; 32 + 32 * MIN_RING_SIZE],
+            pseudo_output_amount: 0,
+        };
+        let output = TxOutput {
+            amount: 1000,
+            target_key: [1u8; 32],
+            public_key: [2u8; 32],
+            e_memo: None,
+            cluster_tags: ClusterTagVector::empty(),
+        };
+        Transaction::new_clsag(vec![input], vec![output], MIN_TX_FEE, 0)
+    }
+
+    /// Construct a peer `NominatePrepare` message for `slot_index` in which the
+    /// peer has voted and accepted `value`, signed by `peer`.
+    fn peer_nominate_prepare(
+        peer: NodeID,
+        peer_quorum: QuorumSet,
+        slot_index: SlotIndex,
+        value: ConsensusValue,
+    ) -> Msg<ConsensusValue> {
+        let mut y = BTreeSet::new();
+        y.insert(value.clone());
+        let ballot = Ballot::new(1, &[value]);
+        Msg::new(
+            peer,
+            peer_quorum,
+            slot_index,
+            Topic::NominatePrepare(
+                NominatePayload {
+                    X: BTreeSet::new(),
+                    Y: y,
+                },
+                PreparePayload {
+                    B: ballot.clone(),
+                    P: Some(ballot.clone()),
+                    PP: None,
+                    HN: ballot.N,
+                    CN: 0,
+                },
+            ),
+        )
+    }
+
+    /// Acceptance criterion: a reconfiguration that arrives while the SCP slot
+    /// has accumulated PEER nominate/ballot state (not just local solo state)
+    /// must be deferred, so that `set_quorum_set` does not discard the
+    /// in-flight round mid-stream.
+    ///
+    /// This exercises the peer-populated path that the local-only guard
+    /// (`proposed_values.is_empty() && externalized.is_none()`) cannot see: the
+    /// SCP node's `current_slot` holds peer-driven state even though this node
+    /// has proposed nothing and seen no externalization locally.
+    #[test]
+    fn reconfigure_during_peer_populated_slot_is_deferred() {
+        let mut svc = peered_service(&[1, 2]);
+        let slot = svc.scp_node.current_slot_index();
+
+        // The peer is nominating a transfer tx. Put a structurally valid,
+        // serialized tx in the cache so the SCP validity callback accepts the
+        // peer's value, mirroring real operation where the tx is gossiped
+        // before the SCP message references it.
+        let tx = valid_transfer_tx();
+        let tx_bytes = bincode::serialize(&tx).expect("tx serializes");
+        let tx_hash = [7u8; 32];
+        if let Ok(mut state) = svc.shared_state.write() {
+            state.tx_cache.insert(
+                tx_hash,
+                TxCacheEntry {
+                    data: tx_bytes,
+                    is_minting_tx: false,
+                },
+            );
+        }
+        let value = ConsensusValue::from_transaction(tx_hash);
+
+        // Feed an inbound peer message directly into the SCP node so its
+        // `current_slot` accumulates peer-driven nominate/ballot state.
+        let peer_msg = peer_nominate_prepare(node(2), recommended_quorum(&[1, 2]), slot, value);
+        let _ = svc
+            .scp_node
+            .handle_message(&peer_msg)
+            .expect("peer message should be accepted");
+
+        // Sanity: the local-only guard would think the slot is idle, but the
+        // SCP node's own metrics show peer-driven state.
+        assert!(
+            svc.proposed_values.is_empty() && svc.externalized.is_none(),
+            "local guard fields must still look idle for this to be a real test"
+        );
+        let metrics = svc.scp_node.get_current_slot_metrics();
+        let scp_active = metrics.num_voted_nominated > 0
+            || metrics.num_accepted_nominated > 0
+            || metrics.num_confirmed_nominated > 0
+            || metrics.bN > 0
+            || metrics.phase != ScpPhase::NominatePrepare;
+        assert!(
+            scp_active,
+            "peer message must leave the SCP slot in an in-flight state: \
+             X={} Y={} Z={} bN={} phase={:?}",
+            metrics.num_voted_nominated,
+            metrics.num_accepted_nominated,
+            metrics.num_confirmed_nominated,
+            metrics.bN,
+            metrics.phase
+        );
+
+        // A membership change now must be DEFERRED, not applied, so the
+        // peer-populated round is not discarded by `set_quorum_set`.
+        let active_before = svc.scp_node.quorum_set();
+        let new_qs = recommended_quorum(&[1, 2, 3]);
+        assert!(svc.reconfigure_quorum(new_qs.clone()));
+        assert!(
+            svc.pending_quorum_set.is_some(),
+            "reconfiguration during a peer-populated slot must be deferred"
+        );
+        assert_eq!(
+            svc.quorum_set(),
+            &recommended_quorum(&[1, 2]),
+            "active service quorum set must be unchanged while deferred"
+        );
+        assert_eq!(
+            svc.scp_node.quorum_set(),
+            active_before,
+            "SCP node quorum set must be unchanged (set_quorum_set not invoked)"
+        );
+
+        // The peer-driven slot state must survive the deferral untouched.
+        let after = svc.scp_node.get_current_slot_metrics();
+        assert_eq!(
+            (
+                after.num_voted_nominated,
+                after.num_accepted_nominated,
+                after.bN,
+                after.phase
+            ),
+            (
+                metrics.num_voted_nominated,
+                metrics.num_accepted_nominated,
+                metrics.bN,
+                metrics.phase
+            ),
+            "deferral must not disturb the in-flight SCP slot state"
+        );
+
+        // Advancing the slot finally applies the deferred reconfiguration.
+        svc.advance_slot();
+        assert!(svc.pending_quorum_set.is_none());
+        assert_eq!(svc.quorum_set(), &new_qs);
+        assert_eq!(svc.scp_node.quorum_set(), new_qs);
+    }
+
+    /// Regression: a genuinely idle/fresh slot (no peer state, nothing locally
+    /// proposed) must still take the immediate-apply fast path.
+    #[test]
+    fn reconfigure_on_idle_slot_applies_immediately() {
+        let mut svc = peered_service(&[1, 2]);
+
+        // Fresh slot: no local proposal, no externalization, no peer messages.
+        assert!(svc.proposed_values.is_empty() && svc.externalized.is_none());
+        let metrics = svc.scp_node.get_current_slot_metrics();
+        assert_eq!(metrics.num_voted_nominated, 0);
+        assert_eq!(metrics.num_accepted_nominated, 0);
+        assert_eq!(metrics.bN, 0);
+        assert_eq!(metrics.phase, ScpPhase::NominatePrepare);
+
+        // Membership change on an idle slot applies immediately (no deferral).
+        let new_qs = recommended_quorum(&[1, 2, 3]);
+        assert!(svc.reconfigure_quorum(new_qs.clone()));
+        assert!(
+            svc.pending_quorum_set.is_none(),
+            "idle slot must apply the reconfiguration immediately, not defer"
+        );
+        assert_eq!(svc.quorum_set(), &new_qs);
+        assert_eq!(svc.scp_node.quorum_set(), new_qs);
     }
 }
