@@ -30,8 +30,8 @@ pub struct Config {
     /// Quorum set.
     ///
     /// The quorum set is represented in JSON. For example:
-    /// {"threshold":1,"members":[{"type":"Node","args":"node2.test.botho.
-    /// com:8443"},{"type":"Node","args":"node3.test.botho.com:4843"}]}
+    /// {"threshold":1,"members":[{"Node":"node2.test.botho.
+    /// com:8443"},{"Node":"node3.test.botho.com:4843"}]}
     #[clap(long, value_parser = parse_quorum_set_from_json, env = "MC_QUORUM_SET")]
     pub quorum_set: Option<QuorumSet>,
 

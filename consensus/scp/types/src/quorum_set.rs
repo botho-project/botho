@@ -16,10 +16,18 @@ use prost::{Message, Oneof};
 use serde::{Deserialize, Serialize};
 
 /// A member in a QuorumSet. Can be either a Node or another QuorumSet.
+///
+/// NOTE: This enum uses serde's default externally-tagged representation
+/// (e.g. `{"Node": <id>}`), NOT an adjacently-tagged one. An adjacently- or
+/// internally-tagged representation (`#[serde(tag = ..., content = ...)]`)
+/// forces deserialization through `Deserializer::deserialize_identifier`,
+/// which non-self-describing binary codecs (bincode, postcard) refuse to
+/// support. Because `QuorumSet` is embedded in every SCP `Msg` sent over the
+/// wire, a tagged representation here makes every received SCP message fail to
+/// deserialize. Keep this externally tagged so the SCP wire codec round-trips.
 #[derive(
     Clone, Deserialize, Digestible, Eq, Hash, Oneof, Ord, PartialEq, PartialOrd, Serialize,
 )]
-#[serde(tag = "type", content = "args")]
 pub enum QuorumSetMember<ID: GenericNodeId> {
     /// A single trusted entity with an identity.
     #[prost(message, tag = 1)]

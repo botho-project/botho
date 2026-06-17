@@ -1124,6 +1124,7 @@ dependencies = [
 name = "bth-consensus-scp"
 version = "7.1.0"
 dependencies = [
+ "bincode",
  "bth-common",
  "bth-consensus-scp-types",
  "bth-crypto-digestible",

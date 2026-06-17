@@ -680,8 +680,155 @@ impl<V: Value, ID: GenericNodeId> fmt::Display for Msg<V, ID> {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod msg_tests {
     use super::*;
-    use crate::test_utils::test_node_id;
+    use crate::{test_utils::test_node_id, QuorumSetMember};
     use rand::seq::SliceRandom;
+    use serde::{Deserialize, Serialize};
+
+    /// A realistic consensus value that mirrors the shape of the node's
+    /// `ConsensusValue` (a 32-byte tx hash, a minting flag, and a priority).
+    /// Defined locally so the codec regression test exercises the same
+    /// serialized layout the node sends over the wire without depending on the
+    /// `botho` crate (which depends on this one).
+    #[derive(
+        Clone, Copy, Debug, Deserialize, Digestible, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize,
+    )]
+    struct TestConsensusValue {
+        tx_hash: [u8; 32],
+        is_minting_tx: bool,
+        priority: u64,
+    }
+
+    impl TestConsensusValue {
+        fn new(seed: u8, minting: bool, priority: u64) -> Self {
+            Self {
+                tx_hash: [seed; 32],
+                is_minting_tx: minting,
+                priority,
+            }
+        }
+    }
+
+    /// Build a non-trivial quorum set that includes a nested `InnerSet` member.
+    ///
+    /// The nested `InnerSet` exercises the `QuorumSetMember` enum, which is the
+    /// type whose serde representation previously broke binary deserialization.
+    fn realistic_quorum_set() -> QuorumSet {
+        let inner = QuorumSet::new_with_node_ids(1, vec![test_node_id(3), test_node_id(4)]);
+        QuorumSet::new(
+            2,
+            vec![
+                QuorumSetMember::Node(test_node_id(1)),
+                QuorumSetMember::Node(test_node_id(2)),
+                QuorumSetMember::InnerSet(inner),
+            ],
+        )
+    }
+
+    /// One representative `Msg` for every SCP `Topic` variant, each carrying a
+    /// realistic consensus-value payload and a quorum set with a nested
+    /// `InnerSet`.
+    fn all_topic_messages() -> Vec<Msg<TestConsensusValue>> {
+        let v1 = TestConsensusValue::new(1, false, 100);
+        let v2 = TestConsensusValue::new(2, true, 200);
+        let qs = realistic_quorum_set();
+
+        let nominate = NominatePayload {
+            X: BTreeSet::from_iter([v1]),
+            Y: BTreeSet::from_iter([v2]),
+        };
+        let prepare = PreparePayload {
+            B: Ballot::new(10, &[v1, v2]),
+            P: Some(Ballot::new(7, &[v1, v2])),
+            PP: Some(Ballot::new(6, &[v2])),
+            CN: 1,
+            HN: 7,
+        };
+        let commit = CommitPayload {
+            B: Ballot::new(10, &[v1, v2]),
+            PN: 9,
+            CN: 7,
+            HN: 8,
+        };
+        let externalize = ExternalizePayload {
+            C: Ballot::new(10, &[v1, v2]),
+            HN: 12,
+        };
+
+        vec![
+            Msg::new(test_node_id(1), qs.clone(), 7, Nominate(nominate.clone())),
+            Msg::new(
+                test_node_id(1),
+                qs.clone(),
+                7,
+                NominatePrepare(nominate, prepare.clone()),
+            ),
+            Msg::new(test_node_id(1), qs.clone(), 7, Prepare(prepare)),
+            Msg::new(test_node_id(1), qs.clone(), 7, Commit(commit)),
+            Msg::new(test_node_id(1), qs, 7, Externalize(externalize)),
+        ]
+    }
+
+    /// Regression guard for the SCP wire codec (see issue #400).
+    ///
+    /// Every `Msg<V>` embeds a `QuorumSet`, whose `QuorumSetMember` enum must
+    /// use serde's default externally-tagged representation. An adjacently- or
+    /// internally-tagged representation forces deserialization through
+    /// `Deserializer::deserialize_identifier`, which non-self-describing binary
+    /// codecs (bincode, postcard) refuse to support — so every received SCP
+    /// message would fail to decode and peered minters stall at height 0.
+    ///
+    /// This test serializes and deserializes every `Topic` variant through
+    /// bincode (the wire codec used at `botho/src/consensus/service.rs`). It
+    /// FAILS on the pre-fix `#[serde(tag = "type", content = "args")]`
+    /// representation and PASSES once the tag attribute is removed.
+    #[test]
+    fn scp_msg_round_trips_through_wire_codec_all_variants() {
+        for msg in all_topic_messages() {
+            let bytes = bincode::serialize(&msg).expect("SCP Msg must serialize under bincode");
+            let decoded: Msg<TestConsensusValue> = bincode::deserialize(&bytes)
+                .unwrap_or_else(|e| panic!("SCP Msg failed to deserialize ({}): {}", msg, e));
+            assert_eq!(msg, decoded, "round-trip mismatch for {msg}");
+        }
+    }
+
+    /// The wire encoding must be byte-identical across nodes regardless of the
+    /// insertion order of values into the nominate sets — serialization must
+    /// not leak nondeterministic iteration order onto the wire.
+    #[test]
+    fn scp_msg_wire_encoding_is_deterministic() {
+        let qs = realistic_quorum_set();
+        let values: Vec<TestConsensusValue> = (0..8)
+            .map(|i| TestConsensusValue::new(i, i % 2 == 0, i as u64))
+            .collect();
+
+        let reference = bincode::serialize(&Msg::new(
+            test_node_id(1),
+            qs.clone(),
+            7,
+            Nominate(NominatePayload {
+                X: BTreeSet::from_iter(values.clone()),
+                Y: BTreeSet::from_iter(values.clone()),
+            }),
+        ))
+        .unwrap();
+
+        let mut rng = bth_util_test_helper::get_seeded_rng();
+        for _ in 0..50 {
+            let mut shuffled = values.clone();
+            shuffled.shuffle(&mut rng);
+            let bytes = bincode::serialize(&Msg::new(
+                test_node_id(1),
+                qs.clone(),
+                7,
+                Nominate(NominatePayload {
+                    X: BTreeSet::from_iter(shuffled.clone()),
+                    Y: BTreeSet::from_iter(shuffled.clone()),
+                }),
+            ))
+            .unwrap();
+            assert_eq!(reference, bytes, "SCP wire encoding must be deterministic");
+        }
+    }
 
     #[test]
     /// Prepare implies "vote_or_accept prepare" for B, P, and PP.
