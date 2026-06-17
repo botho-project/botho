@@ -10,7 +10,28 @@ User=ubuntu
 Group=ubuntu
 WorkingDirectory=/home/ubuntu
 
-# Run as testnet relay node (no minting on seed node)
+# Run as testnet relay node (no minting on seed node).
+#
+# This is the correct unit for a MULTI-SEED network (>= 2 seeds): seeds relay
+# and gossip, while minting happens on a separate validator/faucet node, and
+# the [network.quorum] mode stays "recommended" (auto BFT threshold).
+#
+# SINGLE-SEED bootstrap exception: a lone seed cannot form a "recommended"
+# quorum (it needs >= 2 nodes -> minting stalls at "have 1, need 2"). To mint
+# from a single self-quorum seed during initial bring-up, instead use:
+#
+#   ExecStart=/usr/local/bin/botho --testnet run --mint --mint-threads 1
+#
+# and set the following in ~/.botho/testnet/config.toml so the lone node forms
+# its own quorum:
+#
+#   [network.quorum]
+#   mode = "explicit"
+#   threshold = 1
+#   members = []
+#
+# Switch BACK to --relay (and quorum mode "recommended") once a second seed /
+# validator joins. See infra/seed/README.md "Single-seed vs multi-seed".
 ExecStart=/usr/local/bin/botho --testnet run --relay
 
 # Restart on failure
