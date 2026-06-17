@@ -32,6 +32,9 @@ bth-consensus-scp-types = { workspace = true, features = ["test_utils"] }
 bth-util-logger-macros = { workspace = true }
 bth-util-test-helper = { workspace = true }
 
+# Used by the SCP message wire-encoding unit tests in `src/msg.rs` (bincode is
+# the codec Botho uses on the network). Declared explicitly so the dependency
+# resolves regardless of workspace feature unification.
 bincode = { workspace = true }
 crossbeam-channel = { workspace = true }
 dashmap = { workspace = true }
@@ -49,4 +52,8 @@ required-features = ["test_utils"]
 
 [[test]]
 name = "test_metamesh_networks"
+required-features = ["test_utils"]
+
+[[test]]
+name = "test_value_cache_validity"
 required-features = ["test_utils"]

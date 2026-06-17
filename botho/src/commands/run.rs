@@ -215,6 +215,13 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
         config.network.dns_seeds.enabled
     );
 
+    // Keep a copy of the bootstrap multiaddrs so the main loop can re-dial them
+    // if the node ends up with no peers. The initial dial happens during the
+    // pre-loop discovery window; if that connection is lost (e.g. a transient
+    // drop right after startup) there is otherwise no path back to the network
+    // for a node whose only peers are bootstrap nodes (issue #409).
+    let reconnect_bootstrap_peers = bootstrap_peers.clone();
+
     // Start network discovery
     let mut discovery =
         NetworkDiscovery::new(config.network.gossip_port(network_type), bootstrap_peers);
@@ -521,6 +528,10 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
     let mut sync_tick = tokio::time::interval(Duration::from_secs(2));
     let mut minting_check_interval = tokio::time::interval(Duration::from_millis(100));
     let mut faucet_balance_interval = tokio::time::interval(Duration::from_secs(10));
+    // Periodically re-dial bootstrap peers when we have no connections, so a
+    // node that lost its only connection right after startup can rejoin
+    // (issue #409). Cheap and a no-op once peers are connected.
+    let mut reconnect_interval = tokio::time::interval(Duration::from_secs(5));
 
     // Track pending compact blocks awaiting missing transactions
     // Key: block hash, Value: (compact block, missing indices)
@@ -598,6 +609,36 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                                 if let Ok(mempool) = node.shared_mempool().read() {
                                     ws_broadcaster.mempool_update(mempool.len(), mempool.total_fees());
                                     metrics_updater.set_mempool_size(mempool.len());
+                                }
+                            }
+                        }
+                        NetworkEvent::NewMintingTx(minting_tx) => {
+                            // A peer proposed this minting tx for consensus.
+                            // Validate it against our chain state, then register
+                            // it in the consensus tx cache so the local SCP node
+                            // can validate (and therefore accept) the peer's
+                            // nominate/ballot messages referencing it (issue #409).
+                            let tx_hash = minting_tx.hash();
+                            debug!("Received minting tx {} from network", hex::encode(&tx_hash[0..8]));
+
+                            let chain_state = node
+                                .shared_ledger()
+                                .read()
+                                .ok()
+                                .and_then(|ledger| ledger.get_chain_state().ok());
+
+                            if let Some(chain_state) = chain_state {
+                                let temp_state = Arc::new(RwLock::new(chain_state));
+                                let validator = TransactionValidator::new(temp_state);
+                                match validator.validate_minting_tx(&minting_tx) {
+                                    Ok(()) => {
+                                        let tx_bytes = bincode::serialize(&minting_tx)
+                                            .expect("Failed to serialize minting tx");
+                                        consensus.register_minting_tx(tx_hash, tx_bytes);
+                                    }
+                                    Err(e) => {
+                                        debug!(error = %e, "Rejecting invalid peer minting tx");
+                                    }
                                 }
                             }
                         }
@@ -1175,6 +1216,23 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                 );
             }
 
+            // Reconnect tick: if we have no peers, re-dial configured bootstrap
+            // peers. The initial dial happens before the main loop; a node that
+            // lost that connection during startup would otherwise be stranded
+            // with no way back to the network (issue #409).
+            _ = reconnect_interval.tick() => {
+                if discovery.peer_count() == 0 && !reconnect_bootstrap_peers.is_empty() {
+                    for peer_addr in &reconnect_bootstrap_peers {
+                        if let Ok(addr) = peer_addr.parse::<libp2p::Multiaddr>() {
+                            debug!("Reconnect: re-dialing bootstrap peer {}", addr);
+                            if let Err(e) = swarm.dial(addr) {
+                                debug!("Reconnect dial failed: {}", e);
+                            }
+                        }
+                    }
+                }
+            }
+
             // Chain sync (IBD / catch-up) tick. Drives the sync state machine,
             // emitting status/block requests as needed so a node behind the
             // network tip backfills the missing blocks from a peer.
@@ -1296,6 +1354,15 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                 let tx_hash = minting_tx.hash();
 
                 consensus.submit_minting_tx(tx_hash, minted_tx.pow_priority, tx_bytes);
+
+                // Broadcast the minting tx so peers can validate the
+                // corresponding SCP consensus value when its hash appears in a
+                // nominate/ballot message. Without this, peers reject our SCP
+                // messages ("Transaction not in cache") and multi-node
+                // nomination never reaches quorum (issue #409).
+                if let Err(e) = NetworkDiscovery::broadcast_minting_tx(&mut swarm, minting_tx) {
+                    debug!("Failed to broadcast minting tx: {}", e);
+                }
 
                 // Also check for pending transfer transactions in mempool
                 // and submit them to consensus
