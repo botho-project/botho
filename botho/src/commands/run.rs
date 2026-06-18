@@ -637,31 +637,37 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                         }
                         NetworkEvent::NewMintingTx(minting_tx) => {
                             // A peer proposed this minting tx for consensus.
-                            // Validate it against our chain state, then register
-                            // it in the consensus tx cache so the local SCP node
-                            // can validate (and therefore accept) the peer's
-                            // nominate/ballot messages referencing it (issue #409).
+                            // Register it in the consensus tx cache so the local
+                            // SCP node can validate (and therefore accept) the
+                            // peer's nominate/ballot messages referencing it
+                            // (issue #409).
+                            //
+                            // SAFETY (issue #419 / #417 Finding 1): we gate
+                            // registration on INTRINSIC (tip-agnostic) validity
+                            // ONLY — well-formedness + PoW vs the tx's stated
+                            // difficulty. We must NOT require the peer tx to
+                            // match our local tip here: under the fast-slot PoW
+                            // race the peer's coinbase legitimately builds on the
+                            // same height-N tip but may not equal whatever our
+                            // local tip momentarily is, and dropping it would
+                            // mean the SCP validity_fn later reports "not in
+                            // cache" and SCP silently drops the peer's ballots —
+                            // the exact mechanism that partitions the quorum and
+                            // forks. The tip-relative checks are enforced at
+                            // block-apply, so a stale block can never be
+                            // appended. The intrinsic PoW check still rejects
+                            // junk/DoS values.
                             let tx_hash = minting_tx.hash();
                             debug!("Received minting tx {} from network", hex::encode(&tx_hash[0..8]));
 
-                            let chain_state = node
-                                .shared_ledger()
-                                .read()
-                                .ok()
-                                .and_then(|ledger| ledger.get_chain_state().ok());
-
-                            if let Some(chain_state) = chain_state {
-                                let temp_state = Arc::new(RwLock::new(chain_state));
-                                let validator = TransactionValidator::new(temp_state);
-                                match validator.validate_minting_tx(&minting_tx) {
-                                    Ok(()) => {
-                                        let tx_bytes = bincode::serialize(&minting_tx)
-                                            .expect("Failed to serialize minting tx");
-                                        consensus.register_minting_tx(tx_hash, tx_bytes);
-                                    }
-                                    Err(e) => {
-                                        debug!(error = %e, "Rejecting invalid peer minting tx");
-                                    }
+                            match TransactionValidator::validate_minting_tx_intrinsic(&minting_tx) {
+                                Ok(()) => {
+                                    let tx_bytes = bincode::serialize(&minting_tx)
+                                        .expect("Failed to serialize minting tx");
+                                    consensus.register_minting_tx(tx_hash, tx_bytes);
+                                }
+                                Err(e) => {
+                                    debug!(error = %e, "Rejecting intrinsically-invalid peer minting tx");
                                 }
                             }
                         }
@@ -855,7 +861,20 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                                                 if let Ok(state) = ledger.get_chain_state() {
                                                     metrics_updater.set_block_height(state.height);
                                                     sync_manager.on_blocks_added(state.height);
+                                                    let synced_height = state.height;
                                                     consensus.update_chain_state(state);
+                                                    // Issue #419 / #417 Finding 3: after catching
+                                                    // up via block-sync, advance the SCP slot to
+                                                    // `height + 1` so this node stops discarding
+                                                    // the live network's slot messages as "future
+                                                    // slots" and can actually participate.
+                                                    if consensus.sync_scp_slot_to_chain(synced_height) {
+                                                        info!(
+                                                            slot = consensus.current_slot(),
+                                                            height = synced_height,
+                                                            "Advanced SCP slot to synced chain height"
+                                                        );
+                                                    }
                                                 }
                                             }
                                         }

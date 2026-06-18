@@ -86,41 +86,38 @@ const wasmBuilt = existsSync(wasmGlue) && existsSync(wasmBin)
 
 const RUN_LOCAL_NODE = env.BOTHO_E2E_NODE === '1'
 
-// BLOCKED ON #417 (multi-node SCP agreement). Empirical investigation for #396
-// (see PR / issue comment) found that the full mine-after-join scenario cannot
-// pass reliably today because the multi-node consensus path is BOTH non-live
-// AND unsafe:
-//   1. Stale-minting-tx jam: in a multi-minter network each node's PoW thread
-//      races to mint the next block; when a peer's block externalizes first,
-//      the local minting tx is bound to a now-stale tip and is rejected by
-//      every validator. In a unanimous quorum the slot then never externalizes
-//      and the chain stalls within a few blocks (reproduced: a 2-node net jams
-//      at height ~1-4).
-//   2. Joiner SCP-slot desync: a node that catches up via the #376 block-sync
-//      path advances its ledger but NOT its SCP `current_slot_index`, so it
-//      stays stranded on its genesis slot while peers run a far-higher slot and
-//      it discards their messages as "future slots" — it can never join the
-//      live round (reproduced: 3-node net deadlocks the moment the joiner is
-//      required for the quorum).
-//   3. SAFETY FORK: most seriously, two minters in a 2-of-2 ("recommended")
-//      quorum were observed externalizing DIFFERENT blocks at the same heights
-//      (e.g. divergent hashes at heights 22/23/24) and never reconciling — a
-//      consensus safety violation that a correct unanimous quorum must never
-//      exhibit. This is the #417 multi-node agreement bug surfacing as an
-//      actual fork, and it is the hard blocker for this test.
+// STATUS after #419: the #417 SAFETY FORK (Finding 1) is FIXED and the JOIN +
+// CATCH-UP + SCP-slot fast-forward (Finding 3) work; the full
+// "joiner mines and all three converge several blocks past N" END STATE is
+// still blocked by a SEPARATE, pre-existing liveness defect (SCP-slot /
+// block-height DRIFT) that is out of scope for #419.
 //
-// A liveness-only workaround (stale-tx pruning + jam-recovery that restarts a
-// stuck SCP slot, plus fast-forwarding a joiner's SCP slot to the synced chain
-// height) makes the network advance further and lets a joiner participate, but
-// it does NOT fix the fork — and restarting an in-progress SCP slot can itself
-// discard committed ballot state. Shipping it would let a forking chain run
-// further rather than fix the fork, so it was deliberately NOT merged (Botho's
-// "no hard forks" policy: a consensus change must be provably safe).
+// What #419 fixed and PROVED (real 2-node `botho run` over loopback):
+//   - Finding 1 (the fork): the SCP `validity_fn` is now TIP-AGNOSTIC, so two
+//     minters' competing-but-valid coinbases are no longer dropped, the quorum
+//     never partitions, and federated voting + the deterministic combiner
+//     converge on ONE value. Verified: a 2-of-2 net mined to height 35 with
+//     IDENTICAL block hashes at EVERY height including the old fork zone
+//     (22/23/24) — no divergence — via real SCP (`Slot externalized!` in
+//     non-solo mode). The fork that previously appeared by ~height 22 is gone.
+//   - Finding 3: a joiner that block-syncs to height H fast-forwards its SCP
+//     slot (verified in the 3-node run: "Fast-forwarding SCP slot ... Finding 3"
+//     advanced C from slot 1 to height+1), so it stops discarding live messages
+//     as "future slots". After C joined, the 3-of-3 net DID advance and all
+//     three converged on identical tips.
 //
-// This file is kept as the executable reproduction harness for the target
-// capability. Re-enable (drop `&& false`) once #417 lands genuine multi-node
-// agreement (a unanimous quorum that cannot fork) so a joiner's mined block is
-// accepted by all nodes on a single shared chain.
+// Why the full end-state is still gated (pre-existing, NOT a #419 regression):
+//   The SCP `current_slot_index` DRIFTS ahead of the block height on the
+//   established minters (e.g. SCP slot ~36 while the ledger is at height 26),
+//   because a stale/duplicate-height minting value can still be externalized
+//   and its block rejected at apply-time without rewinding the SCP slot. The
+//   joiner fast-forwards to `height + 1` (the documented `slot == height + 1`
+//   invariant) but the established nodes are on a higher, drifted slot, so the
+//   joiner's and the network's SCP slots no longer line up and they discard
+//   each other's messages. Closing that requires re-aligning SCP slot index
+//   with block height (a deeper protocol change tracked separately), so this
+//   end-to-end soak stays gated until then. Re-enable (drop `&& false`) once the
+//   SCP-slot/height drift is fixed.
 const enabled = wasmBuilt && RUN_LOCAL_NODE && false
 const maybe = enabled ? describe : describe.skip
 
