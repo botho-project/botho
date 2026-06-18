@@ -106,38 +106,44 @@ const RUN_LOCAL_NODE = env.BOTHO_E2E_NODE === '1'
 //     as "future slots". After C joined, the 3-of-3 net DID advance and all
 //     three converged on identical tips.
 //
-// The SCP-slot/height DRIFT is fixed in #421:
-//   - PRIMARY: a proposal-side height filter (`propose_pending_values`) so an
-//     honest node never NOMINATES a coinbase at an already-taken/future height
-//     — the doomed value whose externalize-then-reject drifted the SCP slot
-//     ahead of the ledger. (Proposal-side only; the tip-agnostic `validity_fn`
-//     from #420 is untouched, so the no-fork guarantee is preserved.)
-//   - BACKSTOP: `ConsensusService::realign_scp_slot_to_chain`, a gated backward
-//     slot re-alignment invoked on block-apply reject in `run.rs`, which
-//     refuses to re-open any finalized index. With the primary fix `slot ≡
-//     height` holds by construction, so this should essentially never fire.
-//
 // The 3rd-node CATCH-UP SYNC blocker (#423) is FIXED: a fresh joiner at height
 // 0 against a small tip now triggers the historical 0 -> N download instead of
 // jumping straight to Synced. This is proven end-to-end over real loopback
 // processes by `join-consensus-live-node.test.ts` (B catches up 0 -> N onto A's
 // exact chain, including small N), which is enabled and green.
 //
-// Why this 3-of-3 soak is STILL gated (a SEPARATE, distinct blocker uncovered
-// once #423 was fixed and this test could run past Step 1):
-//   The TWO-MINTER A+B pair deterministically STALLS at height 9 — it never
-//   externalizes height 10. Both A and B repeatedly "Submitting minting tx to
-//   consensus height=10" but the 2-of-2 quorum never converges on a single
-//   height-10 coinbase, so the shared chain is stuck at 9 (the test fails at
-//   Step 1 with "A+B only mined a shared height of 9/24", before C even joins).
-//   This is a multi-minter SCP LIVENESS gap (competing same-height coinbase
-//   nominations), independent of the catch-up trigger this file's #396 flow
-//   exercises in Steps 2-4 — those steps are never reached. It reproduces
-//   deterministically across runs.
+// Why the full end-state is still gated after reverting #422:
+//   #422 ("keep SCP slot aligned with block height": a proposal-side height
+//   filter + a gated backward slot-realign backstop) was REVERTED because it
+//   regressed two-minter liveness — it deterministically WEDGED the A+B pair
+//   (the height filter dropped both minters' competing-but-valid coinbases in a
+//   race, and the realign-on-reject backstop thrashed the slot), so the shared
+//   chain stalled (#424). A bisect confirmed: clean at #420, stalls at #422.
+//   Reverting #422 restores #420's clean two-minter liveness (verified: a 2-of-2
+//   net mines past the old stall with identical tips), which is what unblocks
+//   the A+B half of this soak.
 //
-//   Tracked in the #423 follow-up (multi-minter A+B stall at height 9->10).
-//   Re-enable this soak (drop the `&& false`) once two minters can externalize
-//   past height 9 in this local-loopback config.
+//   The trade-off: reverting #422 RE-OPENS the SCP-slot/height DRIFT it was
+//   solving (#421) — the `current_slot_index` can drift ahead of the ledger
+//   height on the established minters when a stale/duplicate-height value is
+//   externalized then rejected at apply, so a freshly-synced joiner and the
+//   drifted established nodes discard each other's messages. That drift only
+//   bites the 3-of-3 joiner step here, and must be re-approached WITHOUT the
+//   wedging realign loop. Re-enable this soak (drop the `&& false`) once the
+//   drift (#421) is re-fixed in a way that does not regress two-minter liveness.
+//
+//   [pre-#422 rationale, restored by the revert:]
+//   The SCP `current_slot_index` DRIFTS ahead of the block height on the
+//   established minters (e.g. SCP slot ~36 while the ledger is at height 26),
+//   because a stale/duplicate-height minting value can still be externalized
+//   and its block rejected at apply-time without rewinding the SCP slot. The
+//   joiner fast-forwards to `height + 1` (the documented `slot == height + 1`
+//   invariant) but the established nodes are on a higher, drifted slot, so the
+//   joiner's and the network's SCP slots no longer line up and they discard
+//   each other's messages. Closing that requires re-aligning SCP slot index
+//   with block height (a deeper protocol change tracked separately), so this
+//   end-to-end soak stays gated until then. Re-enable (drop `&& false`) once the
+//   SCP-slot/height drift is fixed.
 const enabled = wasmBuilt && RUN_LOCAL_NODE && false
 const maybe = enabled ? describe : describe.skip
 

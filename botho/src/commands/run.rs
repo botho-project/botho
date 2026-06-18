@@ -1219,36 +1219,6 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                                     // Add to ledger
                                     if let Err(e) = node.add_block_from_network(&block) {
                                         warn!("Failed to add consensus block: {}", e);
-
-                                        // BACKSTOP (issue #421): a doomed/superseded-height
-                                        // coinbase can be externalized by SCP (the validity_fn
-                                        // is tip-agnostic for #420's no-fork safety) and then
-                                        // REJECTED here at block-apply. SCP already auto-advanced
-                                        // its slot on externalize, but the ledger height did not
-                                        // move, so the SCP slot now drifts ahead of the block
-                                        // height and the net can no longer converge with a
-                                        // freshly-synced joiner. Re-align the SCP slot back down
-                                        // to ledger_height + 1. This is gated to never re-open an
-                                        // already-finalized index (see
-                                        // ConsensusService::realign_scp_slot_to_chain), so #420's
-                                        // no-fork guarantee is preserved. With the proposal-side
-                                        // height filter in place this should essentially never
-                                        // fire; it self-heals a slipped race rather than wedging.
-                                        let ledger_height = node
-                                            .shared_ledger()
-                                            .read()
-                                            .ok()
-                                            .and_then(|ledger| ledger.get_chain_state().ok())
-                                            .map(|state| state.height);
-                                        if let Some(h) = ledger_height {
-                                            if consensus.realign_scp_slot_to_chain(h) {
-                                                warn!(
-                                                    ledger_height = h,
-                                                    "Re-aligned drifted SCP slot to ledger height \
-                                                     after rejected block-apply (issue #421)"
-                                                );
-                                            }
-                                        }
                                     } else {
                                         // Record for dynamic timing
                                         consensus.record_block(block.header.timestamp, block.transactions.len());
