@@ -477,9 +477,24 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
         chain_state,
     );
 
+    // Participation gate (issue #428): tell the consensus service how many
+    // connected peers this node expects before it may produce a block, and the
+    // current live count. `min_peers_to_wait` is the configured expectation
+    // (Explicit mode: at least one trusted peer; Recommended mode: the
+    // configured `min_peers`). When it is 0 the node is a genuine single-node
+    // network and mints solo (no gate). When it is >= 1 the consensus service
+    // withholds minting/propose until at least that many peers are connected,
+    // so the node never externalizes a divergent solo block during the
+    // pre-quorum startup window. The live count is refreshed on every
+    // PeerDiscovered / PeerDisconnected event below.
+    consensus.set_min_peers(min_peers_to_wait);
+    consensus.set_connected_peers(discovery.peer_count());
+
     info!(
-        "Consensus service initialized at slot {}",
-        consensus.current_slot()
+        "Consensus service initialized at slot {} (participation gate min_peers={}, connected={})",
+        consensus.current_slot(),
+        min_peers_to_wait,
+        discovery.peer_count()
     );
 
     // Chain-sync state machine: drives initial block download (IBD) / catch-up.
@@ -695,6 +710,11 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                             // Broadcast peer event to WebSocket clients
                             ws_broadcaster.peer_connected(new_peer_count, &peer_id.to_string());
 
+                            // Refresh the participation gate's live peer count
+                            // (issue #428) so the consensus service can resume
+                            // proposing once enough peers are connected.
+                            consensus.set_connected_peers(new_peer_count);
+
                             // Reconfigure the consensus quorum to include the
                             // newly connected peer. This is what lifts a node
                             // out of latched solo mode without a restart.
@@ -747,6 +767,13 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
 
                             // Broadcast peer event to WebSocket clients
                             ws_broadcaster.peer_disconnected(new_peer_count, &peer_id.to_string());
+
+                            // Refresh the participation gate's live peer count
+                            // (issue #428). If this drops below the configured
+                            // expectation the consensus service pauses proposing
+                            // rather than falling back to solo minting — a
+                            // quorum that loses a member halts, it does not fork.
+                            consensus.set_connected_peers(new_peer_count);
 
                             // Shrink the consensus quorum to drop the departed
                             // peer so we don't deadlock waiting on a member that

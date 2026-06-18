@@ -144,6 +144,27 @@ const RUN_LOCAL_NODE = env.BOTHO_E2E_NODE === '1'
 //   with block height (a deeper protocol change tracked separately), so this
 //   end-to-end soak stays gated until then. Re-enable (drop `&& false`) once the
 //   SCP-slot/height drift is fixed.
+// #428 status (participation/proposer gate — block minting while connected
+// peers < min_peers): the gate removes the pre-quorum solo-latch fork, and
+// this soak now gets MUCH further than before. Verified end-to-end over real
+// loopback `botho run` processes (BOTHO_E2E_NODE=1, release binary):
+//   - A+B (2-of-2) reliably reach the shared target height N=ringSize+4 with
+//     IDENTICAL tip hashes (real SCP agreement, no divergent solo chain), and
+//   - C joins, connects (peerCount=2), and catches up 0 -> >=N onto A's exact
+//     chain (the #423 sync), so all three sit on ONE tip at height N.
+// i.e. acceptance #5's "A+B phase reaches target reliably" + the catch-up are
+// MET. What remains: the FINAL step — the 3-node network advancing PAST N with
+// C's freshly-mined block accepted by all three — stalls. That is the
+// pre-existing SCP-slot/height DRIFT (#421), re-opened by the #422 revert and
+// independent of the proposer gate: once the established A+B minters' SCP slot
+// drifts ahead of the ledger height, the freshly-synced joiner C and the
+// drifted minters discard each other's messages, so the 3-of-3 step jams.
+//
+// Per #428's STOP guardrail we do NOT force this green: the soak stays gated on
+// the full 3-node end state until #421 (SCP-slot/height drift) is re-fixed in a
+// way that does not regress two-minter liveness. Re-enable (drop `&& false`)
+// then. The proposer gate's own acceptance (no pre-quorum solo block; staggered
+// 2-node no fork; A+B target + C catch-up) is proven separately (#428).
 const enabled = wasmBuilt && RUN_LOCAL_NODE && false
 const maybe = enabled ? describe : describe.skip
 

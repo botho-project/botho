@@ -173,6 +173,22 @@ pub struct ConsensusService {
     /// A quorum set reconfiguration that arrived mid-round and was deferred to
     /// the next slot boundary to avoid stranding an in-flight slot.
     pending_quorum_set: Option<QuorumSet>,
+
+    /// Participation gate (issue #428): the number of connected peers the
+    /// operator declared they expect before this node may produce blocks
+    /// (the configured `min_peers`). `0` means the node is a genuine
+    /// single-node dev/genesis network and mints solo forever — no gate.
+    /// `>= 1` means the node expects peers and MUST NOT mint/propose a block
+    /// while it has fewer than this many connected peers, so it never produces
+    /// a divergent solo block during the pre-quorum startup window (or after a
+    /// quorum member disconnects). See [`Self::should_propose_this_round`].
+    min_peers: usize,
+
+    /// Live count of currently connected peers, kept up to date by the node
+    /// run loop on PeerDiscovered/PeerDisconnected (see
+    /// [`Self::set_connected_peers`]). Compared against `min_peers` by the
+    /// participation gate.
+    connected_peers: usize,
 }
 
 impl ConsensusService {
@@ -307,7 +323,61 @@ impl ConsensusService {
             externalized: None,
             last_externalized_slot: None,
             pending_quorum_set: None,
+            // Default to 0 = no participation gate (genuine solo / dev / tests).
+            // The node run loop calls `set_min_peers` to enable the gate when
+            // the operator declared an expectation of peers.
+            min_peers: 0,
+            connected_peers: 0,
         }
+    }
+
+    /// Declare how many connected peers this node expects before it may produce
+    /// blocks (issue #428). Wired from the node's quorum config `min_peers`.
+    ///
+    /// `0` (the default) disables the participation gate: the node is a genuine
+    /// single-node dev/genesis network and mints solo. `>= 1` enables the gate:
+    /// the node will withhold minting/proposing while it has fewer than this
+    /// many connected peers (see [`Self::should_propose_this_round`]).
+    pub fn set_min_peers(&mut self, min_peers: usize) {
+        self.min_peers = min_peers;
+    }
+
+    /// Update the live connected-peer count used by the participation gate
+    /// (issue #428). Called by the node run loop on PeerDiscovered /
+    /// PeerDisconnected and once at startup.
+    pub fn set_connected_peers(&mut self, connected_peers: usize) {
+        self.connected_peers = connected_peers;
+    }
+
+    /// Participation gate (issue #428): may this node propose/externalize a
+    /// block in the current round?
+    ///
+    /// A node that declared it expects peers (`min_peers >= 1`) must NOT mint
+    /// or externalize a block while it has fewer than `min_peers` connected
+    /// peers. During the pre-quorum startup window such a node transiently
+    /// holds a solo (1-of-1) quorum set; if it externalized a block there it
+    /// would produce a divergent solo chain and fork once peers connect (the
+    /// solo-latch race from #424/#427). Gating the proposer here makes that
+    /// window produce *no* block at all.
+    ///
+    /// A node with `min_peers == 0` is a genuine single-node network and always
+    /// returns `true` — no regression for dev/genesis solo minting.
+    ///
+    /// This is purely a node-layer liveness/proposer gate: it does not touch
+    /// SCP protocol semantics, validity, or the no-fork guarantee (#420).
+    /// Peering/discovery is independent of minting, so the node still discovers
+    /// peers and forms the quorum while gated (it waits for *connections*, not
+    /// for *blocks*) — no deadlock.
+    fn should_propose_this_round(&self) -> bool {
+        if self.min_peers == 0 {
+            // Genuine single-node network: always mint solo.
+            return true;
+        }
+        // Expects peers: only propose once enough are connected to form the
+        // configured quorum. If peers later drop below the expectation the
+        // node pauses (block) rather than falling back to solo minting — a
+        // quorum that loses a member halts (SCP safety-over-liveness).
+        self.connected_peers >= self.min_peers
     }
 
     /// Update the chain state (call when chain tip changes)
@@ -629,6 +699,23 @@ impl ConsensusService {
     )]
     fn propose_pending_values(&mut self) {
         if self.pending_values.is_empty() {
+            return;
+        }
+
+        // Participation gate (issue #428): a node that expects peers
+        // (`min_peers >= 1`) must not propose/externalize a block while it has
+        // fewer than `min_peers` connected peers. This withholds any block
+        // during the pre-quorum startup window (when the node transiently holds
+        // a solo 1-of-1 quorum) so it never produces a divergent solo chain and
+        // forks once peers connect. Values stay queued in `pending_values` and
+        // are proposed normally once the quorum forms. `min_peers == 0` keeps
+        // genuine single-node minting unaffected.
+        if !self.should_propose_this_round() {
+            debug!(
+                min_peers = self.min_peers,
+                connected_peers = self.connected_peers,
+                "Withholding propose: not enough connected peers for quorum (issue #428)"
+            );
             return;
         }
 
@@ -1169,6 +1256,62 @@ mod tests {
         assert!(!svc.is_solo_mode());
         assert_eq!(svc.quorum_set(), &two);
         assert_eq!(svc.scp_node.quorum_set(), two);
+    }
+
+    /// Issue #428 regression: the participation gate must withhold any
+    /// propose/externalize while a node that expects peers (`min_peers >= 1`)
+    /// has fewer than `min_peers` connected peers, and resume once enough are
+    /// connected. A node with `min_peers == 0` must always propose (genuine
+    /// solo, no regression).
+    #[test]
+    fn participation_gate_blocks_solo_block_until_peers_connected() {
+        // Default (min_peers == 0): genuine solo node always proposes.
+        let mut solo = solo_service();
+        assert!(
+            solo.should_propose_this_round(),
+            "min_peers==0 node must always be eligible to mint solo"
+        );
+        solo.submit_transaction([7u8; 32], vec![1, 2, 3]);
+        solo.propose_pending_values();
+        assert!(
+            solo.externalized.is_some(),
+            "min_peers==0 node must externalize solo (no regression)"
+        );
+
+        // A node that expects 1 peer but has 0 connected must NOT propose.
+        let mut gated = solo_service();
+        gated.set_min_peers(1);
+        gated.set_connected_peers(0);
+        assert!(
+            !gated.should_propose_this_round(),
+            "node expecting peers must not mint while solo (pre-quorum)"
+        );
+        gated.submit_transaction([8u8; 32], vec![4, 5, 6]);
+        gated.propose_pending_values();
+        assert!(
+            gated.externalized.is_none(),
+            "gated node must NOT produce a pre-quorum solo block (issue #428)"
+        );
+        // The value stays queued so it is proposed once the quorum forms.
+        assert!(
+            !gated.pending_values.is_empty(),
+            "withheld values must remain pending, not be dropped"
+        );
+
+        // Once a peer connects (connected >= min_peers) the gate opens.
+        gated.set_connected_peers(1);
+        assert!(
+            gated.should_propose_this_round(),
+            "node must become eligible once connected peers >= min_peers"
+        );
+
+        // If peers later drop below the expectation, minting pauses again
+        // (halt, don't fork to solo).
+        gated.set_connected_peers(0);
+        assert!(
+            !gated.should_propose_this_round(),
+            "losing a quorum member must pause minting, not fall back to solo"
+        );
     }
 
     /// A multi-node service whose quorum is the given node ids (node 1 is us).
