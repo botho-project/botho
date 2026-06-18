@@ -602,13 +602,15 @@ fn test_sync_manager_peer_disconnect_during_download() {
 
 #[test]
 fn test_sync_manager_already_synced() {
+    // Issue #423: during initial discovery the gap-1 rule applies — a node only
+    // ONE block behind is left to gossip and stays Synced (gossip delivers the
+    // next contiguous block). A larger gap during discovery would (correctly)
+    // trigger a download, since gossip cannot bridge gaps >= 2.
     let mut manager = ChainSyncManager::new(100);
     let peer = PeerId::random();
 
-    // Peer reports same height
-    manager.on_status(peer, 105, [1u8; 32]); // Only 5 ahead (< threshold of 10)
+    manager.on_status(peer, 101, [1u8; 32]); // 1 ahead -> gossip closes it
 
-    // Should be synced
     assert!(manager.is_synced());
 }
 

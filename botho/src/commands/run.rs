@@ -901,13 +901,41 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                                 "Received compact block"
                             );
 
-                            // Check if we already have this block
+                            // Check if we already have this block, and detect
+                            // whether this gossiped tip is ahead of us by a gap
+                            // gossip cannot bridge.
+                            let mut local_height_for_gossip: Option<u64> = None;
                             if let Ok(ledger) = node.shared_ledger().read() {
                                 if let Ok(state) = ledger.get_chain_state() {
                                     if state.height >= height {
                                         debug!("Already have block {}, ignoring compact block", height);
                                         continue;
                                     }
+                                    local_height_for_gossip = Some(state.height);
+                                }
+                            }
+
+                            // RC2 fallback (issue #423): a gossiped block more
+                            // than one block ahead of us (height > local + 1)
+                            // can never be applied contiguously — it must be
+                            // backfilled via catch-up. Keep the sync manager's
+                            // local height current and poke it with the observed
+                            // tip so it (re)enters Downloading immediately rather
+                            // than waiting up to 30s for the next status refresh.
+                            // The reconstruction/apply below will fail with
+                            // "Expected height L+1, got H"; this is the path that
+                            // turns that failure into a real catch-up trigger.
+                            if let Some(local_h) = local_height_for_gossip {
+                                if height > local_h + 1 {
+                                    sync_manager.set_local_height(local_h);
+                                    let connected = get_connected_peers(&discovery);
+                                    info!(
+                                        height = height,
+                                        local_height = local_h,
+                                        peers = connected.len(),
+                                        "Gossiped tip is ahead by a gap gossip can't bridge; triggering catch-up"
+                                    );
+                                    sync_manager.note_gossiped_tip(&connected, height, block_hash);
                                 }
                             }
 
@@ -929,7 +957,13 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
 
                                     // Add to ledger
                                     if let Err(e) = node.add_block_from_network(&block) {
-                                        warn!("Failed to add reconstructed block: {}", e);
+                                        // A non-contiguous gossiped block (height
+                                        // > local + 1) lands here ("Expected
+                                        // height L+1, got H"). The catch-up
+                                        // trigger was already poked above
+                                        // (issue #423 RC2), so the sync state
+                                        // machine will backfill the gap.
+                                        warn!("Failed to add reconstructed block: {} (catch-up handles non-contiguous gaps)", e);
                                     } else {
                                         // Record for dynamic timing
                                         consensus.record_block(block.header.timestamp, block.transactions.len());

@@ -117,21 +117,27 @@ const RUN_LOCAL_NODE = env.BOTHO_E2E_NODE === '1'
 //     refuses to re-open any finalized index. With the primary fix `slot ≡
 //     height` holds by construction, so this should essentially never fire.
 //
-// Why this soak is STILL gated (a SEPARATE, pre-existing blocker found while
-// validating #421 on real `botho run` processes over loopback):
-//   The 3rd-node CATCH-UP SYNC does not fire in this hermetic local setup. A
-//   fresh joiner C connects to the running A+B pair (peerCount >= 1) but never
-//   block-syncs 0 -> N: it only receives the live compact block at the current
-//   tip (e.g. height 9) which it cannot apply across the 0..9 gap ("Failed to
-//   add reconstructed block: Expected height 1, got 9"), so it stays at height
-//   0 and the 3-of-3 net cannot advance. This reproduces IDENTICALLY on a clean
-//   #420 build (binary at e0226ff), so it is NOT a #421 regression — the
-//   `slot == height + 1` fast-forward (Finding 3) only helps a joiner that has
-//   ALREADY block-synced, and here the block-sync itself never runs. The 2-node
-//   A+B convergence (no fork, identical tips at every height) and the joiner SCP
-//   fast-forward are verified; the missing piece is the catch-up download.
-//   Tracked separately; re-enable (drop `&& false`) once the joiner catch-up
-//   sync pulls historical blocks in this local-loopback configuration.
+// The 3rd-node CATCH-UP SYNC blocker (#423) is FIXED: a fresh joiner at height
+// 0 against a small tip now triggers the historical 0 -> N download instead of
+// jumping straight to Synced. This is proven end-to-end over real loopback
+// processes by `join-consensus-live-node.test.ts` (B catches up 0 -> N onto A's
+// exact chain, including small N), which is enabled and green.
+//
+// Why this 3-of-3 soak is STILL gated (a SEPARATE, distinct blocker uncovered
+// once #423 was fixed and this test could run past Step 1):
+//   The TWO-MINTER A+B pair deterministically STALLS at height 9 — it never
+//   externalizes height 10. Both A and B repeatedly "Submitting minting tx to
+//   consensus height=10" but the 2-of-2 quorum never converges on a single
+//   height-10 coinbase, so the shared chain is stuck at 9 (the test fails at
+//   Step 1 with "A+B only mined a shared height of 9/24", before C even joins).
+//   This is a multi-minter SCP LIVENESS gap (competing same-height coinbase
+//   nominations), independent of the catch-up trigger this file's #396 flow
+//   exercises in Steps 2-4 — those steps are never reached. It reproduces
+//   deterministically across runs.
+//
+//   Tracked in the #423 follow-up (multi-minter A+B stall at height 9->10).
+//   Re-enable this soak (drop the `&& false`) once two minters can externalize
+//   past height 9 in this local-loopback config.
 const enabled = wasmBuilt && RUN_LOCAL_NODE && false
 const maybe = enabled ? describe : describe.skip
 
