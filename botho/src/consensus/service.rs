@@ -197,7 +197,22 @@ impl ConsensusService {
         let chain_state_ref = Arc::new(RwLock::new(initial_chain_state));
         let validator = TransactionValidator::new(chain_state_ref.clone());
 
-        // Validation callback - validates transactions using shared state
+        // Validation callback — the SCP consensus validity function.
+        //
+        // SAFETY (issue #419 / #417 Finding 1): this MUST be a pure function of
+        // the value, i.e. TIP-AGNOSTIC. SCP's no-fork agreement theorem assumes
+        // "valid for one honest node ⇒ valid for all honest nodes". If validity
+        // depended on the local chain tip, SCP's "silently drop messages
+        // carrying an un-validatable value" rule would partition two competing
+        // minters into two single-node voting instances that each externalize
+        // their own block — the multi-minter fork. So we validate only the
+        // INTRINSIC properties of the minting tx (well-formedness, PoW vs the
+        // tx's stated difficulty, non-future timestamp). The tip-relative
+        // checks (prev_block_hash == tip, height == tip+1, chain difficulty,
+        // emission reward, parent-timestamp monotonicity) are enforced
+        // unconditionally at block-apply (`LedgerStore::add_block`), so a stale
+        // or fraudulent block can never be appended even though its minting tx
+        // is an acceptable consensus *value*.
         let validation_state = shared_state.clone();
         let validity_fn: Arc<dyn Fn(&ConsensusValue) -> Result<(), String> + Send + Sync> =
             Arc::new(move |value: &ConsensusValue| {
@@ -210,13 +225,15 @@ impl ConsensusService {
                     format!("Transaction not in cache: {:?}", &value.tx_hash[0..8])
                 })?;
 
-                // Create a temporary validator for this check
+                // Create a temporary validator for the (tip-agnostic) check.
+                // The chain_state is only used by the transfer-tx structural
+                // path; the minting-tx path is fully tip-agnostic.
                 let temp_state = Arc::new(RwLock::new(state.chain_state.clone()));
                 let temp_validator = TransactionValidator::new(temp_state);
 
-                // Validate based on transaction type
+                // Validate INTRINSIC (tip-agnostic) properties only.
                 temp_validator
-                    .validate_from_bytes(&entry.data, entry.is_minting_tx)
+                    .validate_from_bytes_intrinsic(&entry.data, entry.is_minting_tx)
                     .map_err(|e| e.to_string())
             });
 
@@ -621,15 +638,38 @@ impl ConsensusService {
         // This prevents minting txs from crowding out user transactions.
         let mut to_propose: BTreeSet<ConsensusValue> = BTreeSet::new();
 
-        // Find the best minting tx (highest priority)
-        let best_minting_tx = self
-            .pending_values
-            .iter()
-            .filter(|v| v.is_minting_tx)
-            .max_by_key(|v| v.priority)
-            .cloned();
+        // LIVENESS (issue #419 / #417 Finding 2): in multi-node mode, once we
+        // have already proposed a minting tx for the CURRENT slot, keep
+        // proposing that SAME value rather than swapping to a newly-mined,
+        // higher-priority one. The local PoW miner produces a fresh minting tx
+        // (distinct hash) several times a second; if every node kept replacing
+        // its proposed coinbase mid-slot, each node's SCP nomination set would
+        // churn with different values and the quorum could never reach a shared
+        // confirmed-nominate, jamming the slot in a unanimous quorum. Pinning
+        // the first-proposed coinbase per slot stabilizes the candidate set so
+        // federated voting + the deterministic combiner converge. The losing
+        // coinbases are simply not proposed; this does not affect safety
+        // (validity is tip-agnostic and block-apply still enforces every
+        // tip-relative rule). After externalize, all pending minting txs are
+        // pruned (see `check_externalized`), so the next slot starts fresh.
+        let already_proposed_minting = self.proposed_values.iter().any(|v| v.is_minting_tx);
+        let minting_tx = if already_proposed_minting {
+            // Re-propose the exact minting value we already committed to this
+            // slot, if it is still known.
+            self.proposed_values
+                .iter()
+                .find(|v| v.is_minting_tx)
+                .cloned()
+        } else {
+            // Find the best (highest priority) minting tx to propose.
+            self.pending_values
+                .iter()
+                .filter(|v| v.is_minting_tx)
+                .max_by_key(|v| v.priority)
+                .cloned()
+        };
 
-        if let Some(minting_tx) = best_minting_tx {
+        if let Some(minting_tx) = minting_tx {
             to_propose.insert(minting_tx);
         }
 
@@ -878,6 +918,85 @@ impl ConsensusService {
                 self.apply_quorum_set(pending);
             }
         }
+    }
+
+    /// Fast-forward the SCP current slot to match a chain that advanced via
+    /// block-sync (issue #419 / #417 Finding 3).
+    ///
+    /// A node that catches up via #376 block-sync applies blocks straight to
+    /// the ledger (height `H`) but never advances its SCP `current_slot_index`,
+    /// which stays at the genesis slot (`initial_height + 1`). The live network
+    /// is balloting slot `H + 1`, so the joiner discards every peer message as
+    /// a "future slot" (`node_impl::handle_messages`) and can never
+    /// participate.
+    ///
+    /// This advances the SCP slot to `chain_height + 1`, matching
+    /// [`ConsensusService::new`]'s `initial_slot = initial_height + 1`.
+    ///
+    /// # SAFETY
+    ///
+    /// This is only safe to call when the joiner holds NO in-flight ballot or
+    /// nominate state for the current SCP slot: its messages were all being
+    /// discarded as future slots, so there is nothing to lose. We therefore:
+    /// - only advance when the SCP slot is STRICTLY behind `chain_height + 1`
+    ///   (`reset_slot_index` requires a strictly-increasing index, and we must
+    ///   never move the slot backwards), and
+    /// - refuse to advance if the current slot has accumulated any
+    ///   nominate/ballot state (mirroring the #408 deferral guard), so we never
+    ///   discard a slot that may hold accepted-commit state. In normal joiner
+    ///   operation the slot is idle (all peer messages were future-slot
+    ///   discards), so the guard passes.
+    ///
+    /// Returns `true` if the SCP slot was advanced.
+    pub fn sync_scp_slot_to_chain(&mut self, chain_height: u64) -> bool {
+        // Solo mode advances its own slot via `advance_slot`; never interfere.
+        if self.is_solo_mode() {
+            return false;
+        }
+
+        let target_slot = chain_height + 1;
+        let current = self.scp_node.current_slot_index();
+
+        // Only ever move forward, and only if strictly behind the target.
+        if current >= target_slot {
+            return false;
+        }
+
+        // Do not discard a slot that holds in-flight protocol state. A genuine
+        // joiner's current slot is idle because its peer messages were
+        // discarded as future slots; if instead we hold accepted/voted state,
+        // resetting would risk dropping committed state — never do that.
+        let metrics = self.scp_node.get_current_slot_metrics();
+        let scp_slot_active = metrics.num_voted_nominated > 0
+            || metrics.num_accepted_nominated > 0
+            || metrics.num_confirmed_nominated > 0
+            || metrics.bN > 0
+            || metrics.phase != ScpPhase::NominatePrepare;
+        if scp_slot_active {
+            warn!(
+                current,
+                target_slot,
+                "Not fast-forwarding SCP slot to synced chain height: current slot \
+                 holds in-flight protocol state (deferring to avoid dropping it)"
+            );
+            return false;
+        }
+
+        info!(
+            from_slot = current,
+            to_slot = target_slot,
+            chain_height,
+            "Fast-forwarding SCP slot to match block-synced chain height (issue #419 Finding 3)"
+        );
+        self.scp_node.reset_slot_index(target_slot);
+
+        // A fresh slot has nothing proposed/externalized locally yet.
+        self.proposed_values.clear();
+        self.externalized = None;
+        // The just-advanced slot is brand new; we have not surfaced it.
+        self.last_externalized_slot = None;
+
+        true
     }
 
     /// Get pending transaction count
@@ -1252,5 +1371,241 @@ mod tests {
         );
         assert_eq!(svc.quorum_set(), &new_qs);
         assert_eq!(svc.scp_node.quorum_set(), new_qs);
+    }
+
+    // ----------------------------------------------------------------------
+    // Issue #419 / #417 Finding 1 + Finding 3 regression tests
+    // ----------------------------------------------------------------------
+
+    use crate::block::MintingTx;
+
+    /// A genesis-state chain (height 0, zero tip) so that a minting tx for
+    /// height 1 on the zero tip is the natural next block.
+    fn genesis_chain_state() -> ChainState {
+        ChainState::default()
+    }
+
+    /// Build a minting tx that passes INTRINSIC validation: PoW is satisfied by
+    /// setting `difficulty = u64::MAX` (any hash is below it), and the
+    /// timestamp is "now". `tag` makes the tx (and thus its hash + priority)
+    /// distinct per minter, modelling two minters racing distinct coinbases for
+    /// the same slot. `prev_block_hash`/`block_height` are recorded but are NOT
+    /// checked by the SCP validity path (that is the whole point of the fix).
+    fn intrinsic_valid_minting_tx(tag: u8, prev_block_hash: [u8; 32], height: u64) -> MintingTx {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        MintingTx {
+            block_height: height,
+            reward: 600_000_000_000,
+            minter_view_key: [tag; 32],
+            minter_spend_key: [tag.wrapping_add(1); 32],
+            target_key: [tag.wrapping_add(2); 32],
+            public_key: [tag.wrapping_add(3); 32],
+            prev_block_hash,
+            difficulty: u64::MAX,
+            nonce: tag as u64,
+            timestamp: now,
+        }
+    }
+
+    /// Submit a minting tx to a service exactly as the local-miner path does,
+    /// and register it on the peer service exactly as the gossip path does
+    /// (intrinsic gate already applied by the caller). Returns the value's
+    /// hash.
+    fn submit_and_register(
+        owner: &mut ConsensusService,
+        peer: &mut ConsensusService,
+        tx: &MintingTx,
+    ) -> [u8; 32] {
+        let tx_hash = tx.hash();
+        let bytes = bincode::serialize(tx).expect("serialize minting tx");
+        // PoW priority (lower hash = higher priority), as run.rs computes.
+        let priority = tx.pow_priority();
+        owner.submit_minting_tx(tx_hash, priority, bytes.clone());
+        // The peer learns the value (intrinsic-valid) via the gossip cache.
+        peer.register_minting_tx(tx_hash, bytes);
+        tx_hash
+    }
+
+    /// Pump SCP `BroadcastMessage` events between two services until both
+    /// externalize, or `max_rounds` elapse. Returns the externalized value sets
+    /// for (svc_a, svc_b) once both have a `SlotExternalized` event.
+    fn run_two_services(
+        a: &mut ConsensusService,
+        b: &mut ConsensusService,
+        max_rounds: usize,
+    ) -> (Option<Vec<ConsensusValue>>, Option<Vec<ConsensusValue>>) {
+        let a_id = a.node_id().clone();
+        let b_id = b.node_id().clone();
+        let mut a_ext: Option<Vec<ConsensusValue>> = None;
+        let mut b_ext: Option<Vec<ConsensusValue>> = None;
+
+        // Inbox of serialized messages addressed to a given node.
+        let mut to_a: Vec<ScpMessage> = Vec::new();
+        let mut to_b: Vec<ScpMessage> = Vec::new();
+
+        for _ in 0..max_rounds {
+            // Deliver pending messages.
+            for m in to_a.drain(..) {
+                let _ = a.handle_message(m);
+            }
+            for m in to_b.drain(..) {
+                let _ = b.handle_message(m);
+            }
+
+            // Drive timers / proposing.
+            a.tick();
+            b.tick();
+
+            // Collect outgoing events from A.
+            while let Some(ev) = a.next_event() {
+                match ev {
+                    ConsensusEvent::BroadcastMessage(msg) => to_b.push(msg),
+                    ConsensusEvent::SlotExternalized { values, .. } => {
+                        a_ext.get_or_insert(values);
+                    }
+                    ConsensusEvent::Progress { .. } => {}
+                }
+            }
+            // Collect outgoing events from B.
+            while let Some(ev) = b.next_event() {
+                match ev {
+                    ConsensusEvent::BroadcastMessage(msg) => to_a.push(msg),
+                    ConsensusEvent::SlotExternalized { values, .. } => {
+                        b_ext.get_or_insert(values);
+                    }
+                    ConsensusEvent::Progress { .. } => {}
+                }
+            }
+
+            if a_ext.is_some() && b_ext.is_some() {
+                break;
+            }
+            // Keep node ids referenced (they double as identity for routing in a
+            // real network; here routing is by inbox).
+            let _ = (&a_id, &b_id);
+        }
+
+        (a_ext, b_ext)
+    }
+
+    /// SAFETY: two `ConsensusService` instances (real validity/combine fns) in
+    /// a 2-of-2 quorum, each proposing its OWN distinct minting value for
+    /// the same slot, must converge on a SINGLE shared externalized value —
+    /// never a fork.
+    ///
+    /// Before the #419 fix the SCP validity_fn was tip-dependent, so each node
+    /// dropped the peer's competing minting value and externalized its own — a
+    /// fork at the same height. With the tip-agnostic validity_fn both values
+    /// survive into federated voting and the deterministic combiner picks one.
+    #[test]
+    fn two_minters_converge_on_single_value_no_fork() {
+        // Build a tiny config so ticks propose immediately.
+        let cfg = ConsensusConfig::fixed_timing(0);
+        let qs = recommended_quorum(&[1, 2]);
+
+        let mut a = ConsensusService::new(node(1), qs.clone(), cfg.clone(), genesis_chain_state());
+        let mut b = ConsensusService::new(node(2), qs, cfg, genesis_chain_state());
+
+        assert!(
+            !a.is_solo_mode() && !b.is_solo_mode(),
+            "must be a 2-node quorum"
+        );
+
+        let prev = [0u8; 32]; // shared genesis tip
+        let a_tx = intrinsic_valid_minting_tx(1, prev, 1);
+        let b_tx = intrinsic_valid_minting_tx(50, prev, 1);
+        assert_ne!(
+            a_tx.hash(),
+            b_tx.hash(),
+            "minters must propose distinct values"
+        );
+
+        // Each node submits its own coinbase and learns the peer's via gossip.
+        submit_and_register(&mut a, &mut b, &a_tx);
+        submit_and_register(&mut b, &mut a, &b_tx);
+
+        let (a_ext, b_ext) = run_two_services(&mut a, &mut b, 2000);
+
+        let a_vals = a_ext.expect("node A never externalized (consensus stalled)");
+        let b_vals = b_ext.expect("node B never externalized (consensus stalled)");
+
+        assert_eq!(
+            a_vals, b_vals,
+            "SAFETY VIOLATION: the two minters externalized DIFFERENT value sets \
+             at the same slot (a fork)"
+        );
+        // One coinbase per block: exactly one minting value survives the combiner.
+        let minting: Vec<_> = a_vals.iter().filter(|v| v.is_minting_tx).collect();
+        assert_eq!(
+            minting.len(),
+            1,
+            "exactly one minting tx must be externalized"
+        );
+        let chosen = minting[0].tx_hash;
+        assert!(
+            chosen == a_tx.hash() || chosen == b_tx.hash(),
+            "externalized minting tx must be one of the two proposed coinbases"
+        );
+    }
+
+    /// Finding 3: a node that catches up via block-sync must fast-forward its
+    /// SCP slot to `chain_height + 1` so it stops discarding live peer messages
+    /// as "future slots".
+    #[test]
+    fn sync_scp_slot_fast_forwards_after_block_sync() {
+        let cfg = ConsensusConfig::fixed_timing(1);
+        let qs = recommended_quorum(&[1, 2]);
+        // Joiner boots from genesis: initial SCP slot is initial_height + 1 = 1.
+        let mut joiner = ConsensusService::new(node(1), qs, cfg, ChainState::default());
+        assert!(!joiner.is_solo_mode());
+        assert_eq!(
+            joiner.current_slot(),
+            1,
+            "fresh node starts at genesis slot 1"
+        );
+
+        // It block-syncs up to height 20 (the live net is balloting slot 21).
+        let advanced = joiner.sync_scp_slot_to_chain(20);
+        assert!(
+            advanced,
+            "must advance when SCP slot is behind chain height + 1"
+        );
+        assert_eq!(
+            joiner.current_slot(),
+            21,
+            "SCP slot must fast-forward to chain_height + 1 so future-slot messages \
+             from the live network are no longer discarded"
+        );
+
+        // Idempotent / never moves backward or re-resets at the same height.
+        assert!(!joiner.sync_scp_slot_to_chain(20));
+        assert_eq!(joiner.current_slot(), 21);
+        assert!(
+            !joiner.sync_scp_slot_to_chain(19),
+            "must never move slot backward"
+        );
+        assert_eq!(joiner.current_slot(), 21);
+
+        // A further sync advances again.
+        assert!(joiner.sync_scp_slot_to_chain(25));
+        assert_eq!(joiner.current_slot(), 26);
+    }
+
+    /// Finding 3 safety guard: solo nodes manage their own slot via
+    /// `advance_slot`; `sync_scp_slot_to_chain` must be a no-op for them.
+    #[test]
+    fn sync_scp_slot_is_noop_in_solo_mode() {
+        let mut svc = solo_service();
+        assert!(svc.is_solo_mode());
+        let before = svc.current_slot();
+        assert!(!svc.sync_scp_slot_to_chain(100));
+        assert_eq!(
+            svc.current_slot(),
+            before,
+            "solo mode must not fast-forward"
+        );
     }
 }

@@ -119,7 +119,94 @@ impl TransactionValidator {
         Self { chain_state }
     }
 
-    /// Validate a minting transaction
+    /// Validate the *intrinsic* properties of a minting transaction — those
+    /// that are a pure function of the transaction itself and do NOT depend on
+    /// the local chain tip.
+    ///
+    /// This is the validity check that SCP consensus uses (see
+    /// [`validate_from_bytes_intrinsic`](Self::validate_from_bytes_intrinsic)).
+    ///
+    /// # SAFETY — why this MUST be tip-agnostic (issue #419 / #417 Finding 1)
+    ///
+    /// SCP's agreement (no-fork) theorem requires validity to be a *pure
+    /// function of the value*: a value that is valid for one honest node must
+    /// be valid for all honest nodes. SCP silently DROPS any peer message that
+    /// carries a value the local node cannot validate (`slot.rs`
+    /// `handle_messages`), never entering it into `self.M`. If validity
+    /// depended on the local tip, then under the fast-slot PoW race two
+    /// minters would each drop the peer's value as "invalid against my
+    /// tip", partition the quorum into two single-node voting instances,
+    /// and each externalize its OWN block — a fork at the same height.
+    ///
+    /// Therefore the only checks here are ones that every honest node agrees on
+    /// regardless of which tip it currently holds:
+    /// - structural well-formedness (implicit: deserialized `MintingTx`),
+    /// - PoW solution meets the difficulty *stated in the tx itself*
+    ///   (`verify_pow` hashes the tx's own fields against `tx.difficulty`),
+    /// - timestamp is not absurdly far in the future (a wall-clock bound, not a
+    ///   tip-relative bound; honest nodes share approximately the same clock).
+    ///
+    /// The tip-relative checks (`prev_block_hash == tip`, `height == tip + 1`,
+    /// `difficulty == chain difficulty`, `reward == emission(height,
+    /// total_mined)`, `timestamp >= parent timestamp`) are NOT performed here.
+    /// They are enforced unconditionally at block-apply time in
+    /// `LedgerStore::add_block`, so a genuinely stale or fraudulent block can
+    /// never be appended to the ledger even though its minting tx is a valid
+    /// consensus *value*.
+    pub fn validate_minting_tx_intrinsic(tx: &MintingTx) -> Result<(), ValidationError> {
+        debug!(
+            height = tx.block_height,
+            "Validating minting transaction (intrinsic / tip-agnostic)"
+        );
+
+        // Timestamp must not be absurdly far in the future. This is a bound on
+        // a property of the value relative to wall-clock time, NOT relative to
+        // the local chain tip, so all honest nodes agree on it (within clock
+        // skew). The tip-relative monotonicity check (timestamp >= parent) is
+        // deferred to block-apply.
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .map_err(|_| {
+                warn!("System time before UNIX epoch - cannot validate timestamps");
+                ValidationError::ChainStateUnavailable
+            })?;
+
+        if tx.timestamp > now + MAX_FUTURE_TIMESTAMP_SECS {
+            warn!(
+                timestamp = tx.timestamp,
+                now = now,
+                "Minting tx timestamp too far in future"
+            );
+            return Err(ValidationError::TimestampTooFarInFuture);
+        }
+
+        // Verify PoW against the difficulty STATED IN THE TX (not the local
+        // chain difficulty). `verify_pow` hashes only the tx's own fields, so
+        // this is a pure function of the value. The check that the stated
+        // difficulty equals the chain-expected difficulty is tip-relative and
+        // is enforced at block-apply.
+        if !tx.verify_pow() {
+            warn!("Minting tx failed intrinsic PoW verification");
+            return Err(ValidationError::InvalidPoW);
+        }
+
+        debug!(
+            height = tx.block_height,
+            "Minting transaction passed intrinsic validation"
+        );
+        Ok(())
+    }
+
+    /// Validate a minting transaction against the local chain tip.
+    ///
+    /// This performs BOTH the intrinsic checks
+    /// ([`validate_minting_tx_intrinsic`](Self::validate_minting_tx_intrinsic))
+    /// and the tip-relative checks. It is used by the gossip-ingest path
+    /// (which only registers a peer minting tx that already builds on our tip)
+    /// and is retained for completeness/testing. It MUST NOT be used as the
+    /// SCP consensus validity function — see
+    /// [`validate_minting_tx_intrinsic`](Self::validate_minting_tx_intrinsic).
     pub fn validate_minting_tx(&self, tx: &MintingTx) -> Result<(), ValidationError> {
         let state = self
             .chain_state
@@ -366,7 +453,12 @@ impl TransactionValidator {
         Ok(())
     }
 
-    /// Validate a transaction from its serialized form
+    /// Validate a transaction from its serialized form against the local tip.
+    ///
+    /// NOTE: for minting txs this includes tip-relative checks and so MUST NOT
+    /// be used as the SCP consensus validity function. Use
+    /// [`validate_from_bytes_intrinsic`](Self::validate_from_bytes_intrinsic)
+    /// for the SCP path.
     pub fn validate_from_bytes(
         &self,
         tx_bytes: &[u8],
@@ -376,6 +468,32 @@ impl TransactionValidator {
             let tx: MintingTx = bincode::deserialize(tx_bytes)
                 .map_err(|e| ValidationError::DeserializationFailed(e.to_string()))?;
             self.validate_minting_tx(&tx)
+        } else {
+            let tx: Transaction = bincode::deserialize(tx_bytes)
+                .map_err(|e| ValidationError::DeserializationFailed(e.to_string()))?;
+            self.validate_transfer_tx(&tx)
+        }
+    }
+
+    /// Validate a transaction from its serialized form using only INTRINSIC
+    /// (tip-agnostic) checks. This is the validity function SCP consensus uses.
+    ///
+    /// For minting txs this delegates to
+    /// [`validate_minting_tx_intrinsic`](Self::validate_minting_tx_intrinsic),
+    /// dropping the tip-equality checks so that a peer's competing-but-valid
+    /// minting value is never silently dropped by SCP (issue #419 / #417
+    /// Finding 1). For transfer txs the existing structural validation is
+    /// already effectively intrinsic enough for the consensus-value gate
+    /// (full UTXO/signature validation happens at mempool/apply time).
+    pub fn validate_from_bytes_intrinsic(
+        &self,
+        tx_bytes: &[u8],
+        is_minting_tx: bool,
+    ) -> Result<(), ValidationError> {
+        if is_minting_tx {
+            let tx: MintingTx = bincode::deserialize(tx_bytes)
+                .map_err(|e| ValidationError::DeserializationFailed(e.to_string()))?;
+            Self::validate_minting_tx_intrinsic(&tx)
         } else {
             let tx: Transaction = bincode::deserialize(tx_bytes)
                 .map_err(|e| ValidationError::DeserializationFailed(e.to_string()))?;

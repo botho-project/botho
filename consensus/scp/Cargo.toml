@@ -57,3 +57,7 @@ required-features = ["test_utils"]
 [[test]]
 name = "test_value_cache_validity"
 required-features = ["test_utils"]
+
+[[test]]
+name = "test_tip_dependent_validity_fork"
+required-features = ["test_utils"]
