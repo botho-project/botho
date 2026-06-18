@@ -27,7 +27,7 @@ use tempfile::TempDir;
 use botho::{
     block::{Block, BlockHeader, BlockLotterySummary, MintingTx},
     ledger::Ledger,
-    network::{ChainSyncManager, SyncAction, SyncRequest, SyncResponse},
+    network::{ChainSyncManager, SyncAction, SyncRequest, SyncResponse, SyncState},
     transaction::{Transaction, PICOCREDITS_PER_CREDIT},
 };
 use botho_wallet::WalletKeys;
@@ -191,11 +191,14 @@ fn run_catchup(
                 break;
             }
             // We are still behind but the manager produced no action (e.g. it
-            // is Synced against a stale status because the peer advanced after
-            // our last poll). Feed it a fresh status, as the node does when a
-            // periodic status refresh or gossiped tip arrives, so it re-enters
-            // catch-up.
-            sync_manager.on_status(peer, source_state.height, source_state.tip_hash);
+            // is `Synced` against a stale status because the peer advanced after
+            // our last poll). In production this is resolved either by the 30s
+            // `STATUS_REFRESH_INTERVAL` re-poll or, promptly, by a gossiped tip
+            // block that the node cannot apply across the gap. We model the
+            // latter — the real production trigger (issue #423 RC2) — rather
+            // than injecting `on_status` out of band, so this test exercises
+            // only triggers the production loop actually has.
+            sync_manager.note_gossiped_tip(&connected, source_state.height, source_state.tip_hash);
             continue;
         };
 
@@ -326,20 +329,213 @@ fn test_fresh_node_syncs_existing_chain_to_tip() {
     }
 }
 
-/// A node that is only slightly behind (within the sync-behind threshold) does
-/// not trigger an initial block download; it is considered synced. This guards
-/// the boundary so we don't thrash on every small gossip lag.
+/// Drive catch-up using ONLY the production Discovery round-trip: the node
+/// requests status from its peer, gets a single status response, and must enter
+/// `Downloading` and page the block range to completion. There is NO
+/// out-of-band `on_status` injection on the idle path and NO gossiped-tip hint
+/// — this is the minimal trigger a fresh joiner actually has on first connect.
+///
+/// Pre-#423 this would stall for any small gap (peer tip <= 10): the Discovery
+/// arm sent one `RequestStatus`, received the status, evaluated
+/// `tip > local + SYNC_BEHIND_THRESHOLD` = FALSE, jumped straight to `Synced`,
+/// and never downloaded a single block.
+fn run_catchup_discovery_only(
+    sync_manager: &mut ChainSyncManager,
+    node: &Ledger,
+    source: &Ledger,
+    peer: PeerId,
+) {
+    let source_state = source.get_chain_state().unwrap();
+    let connected = [peer];
+
+    for _ in 0..10_000 {
+        sync_manager.set_local_height(node.get_chain_state().unwrap().height);
+
+        let Some(action) = sync_manager.tick(&connected) else {
+            // Strictly no fallback injection: if the production triggers we
+            // model here are insufficient, the test must fail (stall) rather
+            // than be papered over.
+            if node.get_chain_state().unwrap().height >= source_state.height {
+                return;
+            }
+            continue;
+        };
+
+        match action {
+            SyncAction::RequestStatus(p) => {
+                sync_manager.on_request_sent(p);
+                sync_manager.on_status(p, source_state.height, source_state.tip_hash);
+            }
+            SyncAction::RequestBlocks {
+                peer: p,
+                start_height,
+                count,
+            } => {
+                sync_manager.on_request_sent(p);
+                let SyncResponse::Blocks { blocks, has_more } =
+                    serve_get_blocks(source, start_height, count)
+                else {
+                    panic!("expected Blocks response");
+                };
+                if let Some(SyncAction::AddBlocks(blocks)) =
+                    sync_manager.on_blocks(&p, blocks, has_more)
+                {
+                    for block in &blocks {
+                        node.add_block(block).unwrap();
+                    }
+                    sync_manager.on_blocks_added(node.get_chain_state().unwrap().height);
+                }
+            }
+            SyncAction::Synced => {
+                if node.get_chain_state().unwrap().height >= source_state.height {
+                    return;
+                }
+            }
+            SyncAction::Wait(_) | SyncAction::AddBlocks(_) => {}
+        }
+    }
+    panic!("discovery-only catch-up did not converge");
+}
+
+/// REGRESSION (#423): a fresh joiner at height 0 against a SMALL tip (height 9
+/// — well under the old `SYNC_BEHIND_THRESHOLD = 10`) must trigger the
+/// historical catch-up download and sync 0->9 using only the Discovery status
+/// round-trip.
+///
+/// This is the regime the original
+/// `test_fresh_node_syncs_existing_chain_to_tip` missed: it used tip = 95 (so
+/// `95 > 0 + 10` was TRUE) and `run_catchup` injected `on_status` out of band
+/// on the idle path. This test uses a small tip and no injection, so it FAILS
+/// pre-fix (the Discovery arm jumps to `Synced` at height 0) and PASSES
+/// post-fix (the gap-1 trigger enters `Downloading`).
+#[test]
+#[serial]
+fn test_fresh_node_syncs_small_gap_chain_discovery_only() {
+    let target_height = 9; // < old SYNC_BEHIND_THRESHOLD (10): the exact repro regime
+
+    let source_dir = TempDir::new().unwrap();
+    let source = Ledger::open(source_dir.path()).unwrap();
+    let minter = create_test_wallet().public_address();
+    build_chain_to_height(&source, &minter, target_height);
+    let source_state = source.get_chain_state().unwrap();
+    assert_eq!(source_state.height, target_height);
+
+    let node_dir = TempDir::new().unwrap();
+    let node = Ledger::open(node_dir.path()).unwrap();
+    assert_eq!(node.get_chain_state().unwrap().height, 0);
+
+    let mut sync_manager = ChainSyncManager::new(0);
+    let peer = PeerId::random();
+    run_catchup_discovery_only(&mut sync_manager, &node, &source, peer);
+
+    let node_state = node.get_chain_state().unwrap();
+    assert_eq!(
+        node_state.height, target_height,
+        "fresh node must catch up to a small tip (9) via the Discovery trigger"
+    );
+    assert_eq!(node_state.tip_hash, source_state.tip_hash);
+    assert!(sync_manager.is_synced());
+
+    for h in 1..=target_height {
+        let block = node.get_block(h).unwrap();
+        assert_eq!(block.height(), h);
+    }
+}
+
+/// REGRESSION (#423) unit-level: the `on_status` gate must enter `Downloading`
+/// for a small gap (>= 2) and stay `Synced` for a 1-block lag (gossip closes
+/// that). Pre-fix, `on_status(peer, 9, ..)` from height 0 went to `Synced`.
+#[test]
+#[serial]
+fn test_on_status_gap_triggers_download_boundary() {
+    // gap = 9 (>= 2): must enter Downloading even though 9 < old threshold 10.
+    let mut sm = ChainSyncManager::new(0);
+    sm.on_status(PeerId::random(), 9, [1u8; 32]);
+    assert!(
+        !sm.is_synced(),
+        "gap of 9 (>= 2) must trigger Downloading, not Synced (the #423 bug)"
+    );
+
+    // gap = 2: must enter Downloading.
+    let mut sm = ChainSyncManager::new(5);
+    sm.on_status(PeerId::random(), 7, [1u8; 32]);
+    assert!(!sm.is_synced(), "gap of 2 must trigger Downloading");
+
+    // gap = 1: must NOT trigger a download (gossip delivers the next block).
+    let mut sm = ChainSyncManager::new(5);
+    sm.on_status(PeerId::random(), 6, [1u8; 32]);
+    assert!(
+        sm.is_synced(),
+        "a 1-block lag must not thrash into Downloading; gossip closes it"
+    );
+
+    // gap = 0 (equal heights): synced.
+    let mut sm = ChainSyncManager::new(5);
+    sm.on_status(PeerId::random(), 5, [1u8; 32]);
+    assert!(sm.is_synced(), "equal heights are synced");
+}
+
+/// REGRESSION (#423): the gossiped-tip fallback must (re)enter catch-up when a
+/// node receives a far-ahead tip it cannot apply, instead of waiting for a
+/// status refresh. A 1-block-ahead gossip must not trigger a download.
+#[test]
+#[serial]
+fn test_gossiped_tip_fallback_triggers_catchup() {
+    let peer = PeerId::random();
+
+    // Far-ahead gossiped tip (gap 9): must enter Downloading even from a
+    // node that would otherwise be Synced.
+    let mut sm = ChainSyncManager::new(0);
+    sm.on_status(peer, 0, [0u8; 32]); // reach Synced (equal height)
+    assert!(sm.is_synced());
+    sm.note_gossiped_tip(&[peer], 9, [2u8; 32]);
+    assert!(
+        matches!(
+            sm.state(),
+            SyncState::Downloading {
+                target_height: 9,
+                ..
+            }
+        ),
+        "a gossiped far-ahead tip (gap 9) must trigger catch-up from Synced, got {:?}",
+        sm.state()
+    );
+
+    // 1-block-ahead gossip (gap 1): gossip itself delivers it; no download.
+    let mut sm = ChainSyncManager::new(5);
+    sm.on_status(peer, 5, [0u8; 32]); // reach Synced
+    assert!(sm.is_synced());
+    sm.note_gossiped_tip(&[peer], 6, [2u8; 32]);
+    assert!(
+        !matches!(sm.state(), SyncState::Downloading { .. }),
+        "a 1-block-ahead gossiped tip must not trigger a redundant download, got {:?}",
+        sm.state()
+    );
+}
+
+/// A node that is only slightly behind (within the sync-behind threshold) while
+/// already `Synced` does not thrash into a redundant initial block download via
+/// the Synced-arm hysteresis path. This guards the legitimate purpose of
+/// `SYNC_BEHIND_THRESHOLD`.
 #[test]
 #[serial]
 fn test_node_close_to_tip_does_not_trigger_ibd() {
-    // Local height 100, peer at 105 — within SYNC_BEHIND_THRESHOLD (10).
+    // Already Synced at height 100, peer drifts to 105 — within
+    // SYNC_BEHIND_THRESHOLD (10). The Synced-arm hysteresis must not re-enter
+    // Downloading for this small near-tip lag (gossip closes it).
     let mut sync_manager = ChainSyncManager::new(100);
     let peer = PeerId::random();
-    sync_manager.on_status(peer, 105, [7u8; 32]);
+    // Reach Synced first (equal-height status), then observe a small drift.
+    sync_manager.on_status(peer, 100, [7u8; 32]);
+    assert!(sync_manager.is_synced(), "equal-height start is synced");
 
+    // A synced node re-polling and seeing a 5-block drift uses the hysteresis
+    // threshold, not the gap-1 rule: it must stay Synced. Drive the Synced arm.
+    sync_manager.on_status(peer, 105, [7u8; 32]);
+    let _ = sync_manager.tick(&[peer]);
     assert!(
         sync_manager.is_synced(),
-        "a node within the sync-behind threshold should not start IBD"
+        "an already-synced node within SYNC_BEHIND_THRESHOLD should not start IBD"
     );
 }
 
