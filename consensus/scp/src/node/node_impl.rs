@@ -340,47 +340,6 @@ impl<V: Value, ValidationError: Clone + Display + 'static> ScpNode<V> for Node<V
 
         self.externalized_slots.clear();
     }
-
-    /// Re-seat the current slot at `slot_index`, allowed to move backward.
-    ///
-    /// SAFETY: this rebuilds the current slot at a *lower-or-equal* index and
-    /// clears `externalized_slots`. It must only be invoked by a caller that
-    /// has verified (a) the target index was never externalized into a
-    /// finalized block by this node, and (b) the current slot is idle. See the
-    /// trait doc on [`ScpNode::realign_slot_to`]. Forward moves are rejected
-    /// here so the forward-only `reset_slot_index` path stays the single,
-    /// auditable way to advance.
-    fn realign_slot_to(&mut self, slot_index: SlotIndex) -> bool {
-        if slot_index > self.current_slot_index() {
-            log::error!(
-                self.logger,
-                "realign_slot_to({}) refused: not a backward move from current slot {} \
-                 (use reset_slot_index for forward moves)",
-                slot_index,
-                self.current_slot_index()
-            );
-            return false;
-        }
-
-        log::warn!(
-            self.logger,
-            "Re-aligning SCP slot from {} back to {} (gated backstop)",
-            self.current_slot_index(),
-            slot_index
-        );
-
-        self.current_slot = Box::new(Slot::new(
-            self.ID.clone(),
-            self.Q.clone(),
-            slot_index,
-            self.validity_fn.clone(),
-            self.combine_fn.clone(),
-            self.logger.clone(),
-        ));
-
-        self.externalized_slots.clear();
-        true
-    }
 }
 
 #[cfg(test)]

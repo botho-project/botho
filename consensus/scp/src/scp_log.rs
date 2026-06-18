@@ -312,10 +312,6 @@ impl<V: Value, N: ScpNode<V>> ScpNode<V> for LoggingScpNode<V, N> {
     fn reset_slot_index(&mut self, slot_index: SlotIndex) {
         self.node.reset_slot_index(slot_index)
     }
-
-    fn realign_slot_to(&mut self, slot_index: SlotIndex) -> bool {
-        self.node.realign_slot_to(slot_index)
-    }
 }
 
 /// An SCP log reader, to read a series of SCP messages.
