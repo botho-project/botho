@@ -55,5 +55,38 @@ pub trait ScpNode<V: Value>: Send {
 
     /// Set the node's current slot index, abandoning any current and
     /// externalized slots.
+    ///
+    /// This is FORWARD-ONLY: callers must pass an index strictly greater than
+    /// the current one (a `debug_assert` enforces this). To move the slot
+    /// *backward* under tightly-controlled conditions, use
+    /// [`realign_slot_to`](Self::realign_slot_to) instead.
     fn reset_slot_index(&mut self, slot_index: SlotIndex);
+
+    /// Re-seat the current slot at `slot_index`, allowed to move the slot
+    /// **backward** (`slot_index <= current_slot_index()`), abandoning any
+    /// current and externalized slots.
+    ///
+    /// # SAFETY — never re-open an externalized index
+    ///
+    /// SCP's agreement theorem assumes a slot index externalizes at most once.
+    /// Re-balloting an index this node has already externalized could
+    /// externalize a *second, different* value at the same index — a fork. This
+    /// primitive therefore exists ONLY to clean up slot indices that were
+    /// created by the auto-advance of a *doomed* externalize (a value that was
+    /// externalized by SCP but then rejected at block-apply, so no real block
+    /// ever landed and this node never produced a usable value at the higher
+    /// index).
+    ///
+    /// This method does NOT itself know which indices were "real"; the caller
+    /// MUST enforce, before invoking it, that:
+    /// - the target `slot_index` is strictly greater than the highest index
+    ///   this node has externalized into a *finalized* block (so we never
+    ///   re-open a committed index), and
+    /// - the current slot is idle (no in-flight nominate/ballot state).
+    ///
+    /// Returns `false` and does nothing if `slot_index` is greater than the
+    /// current index (use `reset_slot_index` for forward moves so the
+    /// forward-only invariant stays auditable). Otherwise re-seats at
+    /// `slot_index` and returns `true`.
+    fn realign_slot_to(&mut self, slot_index: SlotIndex) -> bool;
 }

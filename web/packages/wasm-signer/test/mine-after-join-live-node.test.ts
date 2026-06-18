@@ -106,18 +106,32 @@ const RUN_LOCAL_NODE = env.BOTHO_E2E_NODE === '1'
 //     as "future slots". After C joined, the 3-of-3 net DID advance and all
 //     three converged on identical tips.
 //
-// Why the full end-state is still gated (pre-existing, NOT a #419 regression):
-//   The SCP `current_slot_index` DRIFTS ahead of the block height on the
-//   established minters (e.g. SCP slot ~36 while the ledger is at height 26),
-//   because a stale/duplicate-height minting value can still be externalized
-//   and its block rejected at apply-time without rewinding the SCP slot. The
-//   joiner fast-forwards to `height + 1` (the documented `slot == height + 1`
-//   invariant) but the established nodes are on a higher, drifted slot, so the
-//   joiner's and the network's SCP slots no longer line up and they discard
-//   each other's messages. Closing that requires re-aligning SCP slot index
-//   with block height (a deeper protocol change tracked separately), so this
-//   end-to-end soak stays gated until then. Re-enable (drop `&& false`) once the
-//   SCP-slot/height drift is fixed.
+// The SCP-slot/height DRIFT is fixed in #421:
+//   - PRIMARY: a proposal-side height filter (`propose_pending_values`) so an
+//     honest node never NOMINATES a coinbase at an already-taken/future height
+//     — the doomed value whose externalize-then-reject drifted the SCP slot
+//     ahead of the ledger. (Proposal-side only; the tip-agnostic `validity_fn`
+//     from #420 is untouched, so the no-fork guarantee is preserved.)
+//   - BACKSTOP: `ConsensusService::realign_scp_slot_to_chain`, a gated backward
+//     slot re-alignment invoked on block-apply reject in `run.rs`, which
+//     refuses to re-open any finalized index. With the primary fix `slot ≡
+//     height` holds by construction, so this should essentially never fire.
+//
+// Why this soak is STILL gated (a SEPARATE, pre-existing blocker found while
+// validating #421 on real `botho run` processes over loopback):
+//   The 3rd-node CATCH-UP SYNC does not fire in this hermetic local setup. A
+//   fresh joiner C connects to the running A+B pair (peerCount >= 1) but never
+//   block-syncs 0 -> N: it only receives the live compact block at the current
+//   tip (e.g. height 9) which it cannot apply across the 0..9 gap ("Failed to
+//   add reconstructed block: Expected height 1, got 9"), so it stays at height
+//   0 and the 3-of-3 net cannot advance. This reproduces IDENTICALLY on a clean
+//   #420 build (binary at e0226ff), so it is NOT a #421 regression — the
+//   `slot == height + 1` fast-forward (Finding 3) only helps a joiner that has
+//   ALREADY block-synced, and here the block-sync itself never runs. The 2-node
+//   A+B convergence (no fork, identical tips at every height) and the joiner SCP
+//   fast-forward are verified; the missing piece is the catch-up download.
+//   Tracked separately; re-enable (drop `&& false`) once the joiner catch-up
+//   sync pulls historical blocks in this local-loopback configuration.
 const enabled = wasmBuilt && RUN_LOCAL_NODE && false
 const maybe = enabled ? describe : describe.skip
 
