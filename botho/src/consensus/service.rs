@@ -6,8 +6,11 @@ use super::{validation::TransactionValidator, value::ConsensusValue};
 use crate::ledger::ChainState;
 use bth_common::NodeID;
 use bth_consensus_scp::{
-    create_null_logger, msg::Msg as ScpMsg, node::Node, slot::Phase as ScpPhase, QuorumSet,
-    ScpNode, SlotIndex,
+    create_null_logger,
+    msg::Msg as ScpMsg,
+    node::Node,
+    slot::{Phase as ScpPhase, SlotMetrics},
+    QuorumSet, ScpNode, SlotIndex,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -1099,22 +1102,22 @@ impl ConsensusService {
             return false;
         }
 
-        // Do not discard a slot that holds in-flight protocol state. A genuine
-        // joiner's current slot is idle because its peer messages were
-        // discarded as future slots; if instead we hold accepted/voted state,
-        // resetting would risk dropping committed state — never do that.
+        // Do not discard a slot that holds genuine BALLOT/COMMIT state —
+        // re-opening a committed value could fork (issue #436, refining #430).
+        // A genuine joiner's current slot is idle because its peer messages were
+        // discarded as future slots. Bare un-confirmed NOMINATION state on a
+        // slot the network has already filled (the synced chain height is
+        // strictly past `current - 1`) is safe to abandon; only ballot/commit
+        // state must be preserved.
         let metrics = self.scp_node.get_current_slot_metrics();
-        let scp_slot_active = metrics.num_voted_nominated > 0
-            || metrics.num_accepted_nominated > 0
-            || metrics.num_confirmed_nominated > 0
-            || metrics.bN > 0
-            || metrics.phase != ScpPhase::NominatePrepare;
-        if scp_slot_active {
+        if Self::slot_holds_ballot_or_commit_state(&metrics) {
             warn!(
                 current,
                 target_slot,
+                bN = metrics.bN,
+                phase = ?metrics.phase,
                 "Not fast-forwarding SCP slot to synced chain height: current slot \
-                 holds in-flight protocol state (deferring to avoid dropping it)"
+                 holds ballot/commit state (deferring to avoid dropping committed state)"
             );
             return false;
         }
@@ -1136,9 +1139,37 @@ impl ConsensusService {
         true
     }
 
-    /// Forward-only, idle-gated anchoring of the SCP slot to the network's
+    /// The SAFETY BOUNDARY for forward-anchoring (issue #436).
+    ///
+    /// Returns `true` iff the current SCP slot holds genuine BALLOT/COMMIT
+    /// state — i.e. a ballot has started (`bN > 0`) or the slot has progressed
+    /// past the initial concurrent nominate/prepare phase (`phase !=
+    /// NominatePrepare`, meaning Prepare/Commit/Externalize). Such state must
+    /// NEVER be abandoned: re-opening a value that reached the ballot protocol
+    /// (let alone an accepted/confirmed commit) could fork the chain.
+    ///
+    /// It returns `false` for a slot holding only NOMINATION state (voted /
+    /// accepted / confirmed nominated values) while `bN == 0` and the phase is
+    /// still `NominatePrepare`. That state is safe to skip when the network has
+    /// PROVABLY moved past the slot (the caller checks the peer / chain is
+    /// strictly ahead): nothing is committed, so anchoring forward cannot
+    /// re-open a decided value. This is the precise relaxation that stops a
+    /// joiner from latching forever on un-completable bare-nomination state.
+    ///
+    /// Note on `bN` vs confirmed-nominated (`Z`): when nomination confirms a
+    /// value the ballot protocol immediately seeds `B = Ballot::new(1, ..)` in
+    /// the same handling pass (see `consensus/scp/src/slot.rs`), so a slot that
+    /// has truly committed to balloting always shows `bN >= 1` and is caught
+    /// here. Confirmed-nominated with `bN == 0` is only a transient/degenerate
+    /// state and is intentionally treated as nomination-only — exactly the
+    /// state #436 authorizes abandoning when the network has passed the slot.
+    fn slot_holds_ballot_or_commit_state(metrics: &SlotMetrics) -> bool {
+        metrics.bN > 0 || metrics.phase != ScpPhase::NominatePrepare
+    }
+
+    /// Forward-only, safety-gated anchoring of the SCP slot to the network's
     /// LIVE slot learned from an inbound peer SCP message (issue #421, Option
-    /// C).
+    /// C; refined for the join-handoff race in issue #436).
     ///
     /// # The convergence problem this fixes
     ///
@@ -1196,23 +1227,27 @@ impl ConsensusService {
             return false;
         }
 
-        // IDLE-GATED: never discard a slot that holds in-flight protocol state.
-        // A behind node's current slot is idle precisely because the network's
-        // messages were being discarded as future slots; if instead we hold
-        // voted/accepted/ballot state, anchoring would risk dropping it — never
-        // do that. (Mirrors `sync_scp_slot_to_chain`'s guard exactly.)
+        // SAFETY-GATED (issue #436, refining #430 Option C): never discard a
+        // slot that holds genuine BALLOT/COMMIT state — re-opening a value that
+        // reached the ballot protocol could fork. But bare, un-confirmed
+        // NOMINATION state on a slot the network has PROVABLY moved past
+        // (`peer_slot > current`, checked above) is safe to abandon: nothing is
+        // committed, and the network already decided that slot. The old guard
+        // blocked on ANY nomination vote, so a joiner that proposed its own
+        // coinbase right after the join handoff (gaining bare nomination state)
+        // would LATCH forever — the network never re-sends messages for its
+        // stranded slot, its quorum never forms, and it discards every live
+        // peer message as a future slot, becoming a permanent passive follower
+        // (0 coinbases). We therefore block ONLY on ballot/commit indicators.
         let metrics = self.scp_node.get_current_slot_metrics();
-        let scp_slot_active = metrics.num_voted_nominated > 0
-            || metrics.num_accepted_nominated > 0
-            || metrics.num_confirmed_nominated > 0
-            || metrics.bN > 0
-            || metrics.phase != ScpPhase::NominatePrepare;
-        if scp_slot_active {
+        if Self::slot_holds_ballot_or_commit_state(&metrics) {
             debug!(
                 current,
                 peer_slot,
+                bN = metrics.bN,
+                phase = ?metrics.phase,
                 "Not anchoring SCP slot to peer's live slot: current slot holds \
-                 in-flight protocol state (deferring to avoid dropping it)"
+                 ballot/commit state (deferring to avoid dropping committed state)"
             );
             return false;
         }
@@ -1595,6 +1630,29 @@ mod tests {
                     CN: 0,
                 },
             ),
+        )
+    }
+
+    /// A peer NOMINATE-only message (no Prepare ballot payload): it carries an
+    /// accepted-nominated value but cannot start a ballot on the receiver. Used
+    /// by the #436 boundary test to induce bare nomination-only state
+    /// (`bN == 0`, phase `NominatePrepare`).
+    fn peer_nominate_only(
+        peer: NodeID,
+        peer_quorum: QuorumSet,
+        slot_index: SlotIndex,
+        value: ConsensusValue,
+    ) -> Msg<ConsensusValue> {
+        let mut y = BTreeSet::new();
+        y.insert(value);
+        Msg::new(
+            peer,
+            peer_quorum,
+            slot_index,
+            Topic::Nominate(NominatePayload {
+                X: BTreeSet::new(),
+                Y: y,
+            }),
         )
     }
 
@@ -2267,6 +2325,296 @@ mod tests {
             "2-minter pair must advance PAST height 9 without wedging (A slot {}, B slot {})",
             a.current_slot(),
             b.current_slot()
+        );
+    }
+
+    // ----------------------------------------------------------------------
+    // Issue #436: the Option-C anchor must NOT latch on un-completable
+    // bare-NOMINATION state. The safety boundary is ballot/commit state.
+    // ----------------------------------------------------------------------
+
+    /// Construct `SlotMetrics` for the boundary tests below.
+    fn metrics(
+        phase: ScpPhase,
+        voted: usize,
+        accepted: usize,
+        confirmed: usize,
+        b_n: u32,
+    ) -> SlotMetrics {
+        SlotMetrics {
+            phase,
+            num_voted_nominated: voted,
+            num_accepted_nominated: accepted,
+            num_confirmed_nominated: confirmed,
+            cur_nomination_round: 1,
+            bN: b_n,
+        }
+    }
+
+    /// THE SAFETY BOUNDARY (issue #436), tested directly on the predicate that
+    /// gates both `anchor_scp_slot_to_peer` and `sync_scp_slot_to_chain`.
+    ///
+    /// Pre-fix this guard blocked the anchor on ANY nomination vote, which made
+    /// a joiner latch forever on its own bare-nomination state. Post-fix it
+    /// blocks ONLY on genuine ballot/commit indicators (`bN > 0` or a phase
+    /// past `NominatePrepare`) and lets bare nomination through.
+    ///
+    /// Fail-pre/pass-post: under the OLD condition (the `||` of all five
+    /// fields) the `voted`/`accepted`/`confirmed` cases below assert
+    /// `false` to equal the OLD `true`; under the new predicate they are
+    /// `false` (anchor allowed). The ballot/commit cases stay `true`
+    /// (anchor blocked) under both — proving the relaxation never abandons
+    /// committed state.
+    #[test]
+    fn issue436_safety_boundary_nomination_only_vs_ballot_commit() {
+        // --- NOMINATION-ONLY (safe to abandon when the network has passed it):
+        //     phase NominatePrepare, bN == 0, regardless of vote counts. ---
+
+        // A brand-new / idle slot.
+        assert!(
+            !ConsensusService::slot_holds_ballot_or_commit_state(&metrics(
+                ScpPhase::NominatePrepare,
+                0,
+                0,
+                0,
+                0
+            )),
+            "an idle slot must not be treated as ballot/commit state"
+        );
+        // The exact #436 bug state: the joiner proposed its own coinbase, so it
+        // holds VOTED-nominated state but no ballot has started. This MUST now
+        // be anchorable forward (pre-fix this latched forever).
+        assert!(
+            !ConsensusService::slot_holds_ballot_or_commit_state(&metrics(
+                ScpPhase::NominatePrepare,
+                1,
+                0,
+                0,
+                0
+            )),
+            "bare VOTED-nominated state (bN == 0, phase NominatePrepare) must NOT \
+             block the forward anchor — this is the #436 wedge"
+        );
+        // Accepted-nominated, still no ballot.
+        assert!(
+            !ConsensusService::slot_holds_ballot_or_commit_state(&metrics(
+                ScpPhase::NominatePrepare,
+                1,
+                1,
+                0,
+                0
+            )),
+            "ACCEPTED-nominated with bN == 0 is still nomination-only — anchor allowed"
+        );
+        // Confirmed-nominated but ballot not yet seeded (transient/degenerate):
+        // bN == 0 still means nothing committed to the ballot protocol.
+        assert!(
+            !ConsensusService::slot_holds_ballot_or_commit_state(&metrics(
+                ScpPhase::NominatePrepare,
+                1,
+                1,
+                1,
+                0
+            )),
+            "CONFIRMED-nominated with bN == 0 (ballot not seeded) is still safe to skip"
+        );
+
+        // --- BALLOT/COMMIT (must NEVER be abandoned — fork risk): a ballot has
+        //     started (bN > 0) OR the phase has progressed past NominatePrepare. ---
+
+        // A ballot has started while still in the concurrent nominate/prepare
+        // phase: bN > 0 is the load-bearing protection.
+        assert!(
+            ConsensusService::slot_holds_ballot_or_commit_state(&metrics(
+                ScpPhase::NominatePrepare,
+                1,
+                1,
+                1,
+                1
+            )),
+            "a started ballot (bN > 0) MUST block the anchor even in NominatePrepare"
+        );
+        // Phase has advanced to Prepare (a ballot was confirmed prepared).
+        assert!(
+            ConsensusService::slot_holds_ballot_or_commit_state(&metrics(
+                ScpPhase::Prepare,
+                0,
+                0,
+                0,
+                1
+            )),
+            "Prepare phase MUST block the anchor"
+        );
+        // Commit phase: a value is accepted committed — abandoning it could fork.
+        assert!(
+            ConsensusService::slot_holds_ballot_or_commit_state(&metrics(
+                ScpPhase::Commit,
+                0,
+                0,
+                0,
+                2
+            )),
+            "Commit phase MUST block the anchor (accepted-committed value)"
+        );
+        // Externalize phase.
+        assert!(
+            ConsensusService::slot_holds_ballot_or_commit_state(&metrics(
+                ScpPhase::Externalize,
+                0,
+                0,
+                0,
+                3
+            )),
+            "Externalize phase MUST block the anchor"
+        );
+    }
+
+    /// End-to-end via the public `handle_message` path (which calls
+    /// `anchor_scp_slot_to_peer`): a node that holds bare NOMINATION state on a
+    /// slot the network has provably passed DOES anchor forward and stops
+    /// stranding; a node that holds BALLOT/COMMIT state does NOT (the slot is
+    /// preserved).
+    ///
+    /// This reproduces the #436 join-handoff wedge: the joiner proposes its own
+    /// coinbase right after catch-up (bare nomination), the network moves on,
+    /// and the joiner must fast-forward instead of latching.
+    #[test]
+    fn issue436_anchor_forward_past_bare_nomination_but_not_ballot_commit() {
+        let cfg = ConsensusConfig::fixed_timing(0);
+        let qs = recommended_quorum(&[1, 2]);
+
+        // --- Case 1: bare NOMINATION state anchors forward. ---
+        // Use a 3-of-3 quorum so a single peer's nominate does NOT form a
+        // quorum on C — C accumulates voted/accepted-nominated state but never
+        // CONFIRMS, so the ballot is never seeded (bN stays 0). This is exactly
+        // the #436 wedge: C holds bare nomination-only state on a slot the
+        // network (A+B) has already externalized and moved past, so it never
+        // re-sends messages for C's stranded slot and C's quorum can't form.
+        let qs3 = recommended_quorum(&[1, 2, 3]);
+        let mut c = ConsensusService::new(node(1), qs3.clone(), cfg.clone(), genesis_chain_state());
+        assert_eq!(c.current_slot(), 1);
+        let prev = [0u8; 32];
+
+        // Drive C into bare NOMINATION-only state (phase NominatePrepare,
+        // bN == 0) on slot 1 via a single peer NOMINATE-only message — one of
+        // three peers is below quorum, so nothing confirms and no ballot starts.
+        let nom_tx = intrinsic_valid_minting_tx(40, prev, 1);
+        c.register_minting_tx(nom_tx.hash(), bincode::serialize(&nom_tx).unwrap());
+        let nom_val = ConsensusValue::from_minting_tx(nom_tx.hash(), nom_tx.pow_priority());
+        let nom_msg = peer_nominate_only(node(2), qs3.clone(), 1, nom_val);
+        c.handle_message(wire(&node(2), &nom_msg))
+            .expect("handle_message");
+        let m = c.scp_node.get_current_slot_metrics();
+        assert!(
+            m.num_voted_nominated > 0 || m.num_accepted_nominated > 0,
+            "C must hold some nomination state (voted {}, accepted {})",
+            m.num_voted_nominated,
+            m.num_accepted_nominated
+        );
+        assert_eq!(
+            m.bN, 0,
+            "no ballot may have started (sub-quorum, bare nomination)"
+        );
+        assert_eq!(m.phase, ScpPhase::NominatePrepare);
+        assert!(
+            !ConsensusService::slot_holds_ballot_or_commit_state(&m),
+            "this is exactly the bare-nomination state #436 must let through \
+             (voted {}, accepted {}, confirmed {}, bN {})",
+            m.num_voted_nominated,
+            m.num_accepted_nominated,
+            m.num_confirmed_nominated,
+            m.bN
+        );
+
+        // The network has moved on: a peer message arrives for a strictly higher
+        // slot. C MUST anchor forward (pre-#436 it latched forever).
+        let peer_slot: SlotIndex = 6;
+        let peer_tx = intrinsic_valid_minting_tx(50, prev, peer_slot);
+        c.register_minting_tx(peer_tx.hash(), bincode::serialize(&peer_tx).unwrap());
+        let peer_val = ConsensusValue::from_minting_tx(peer_tx.hash(), peer_tx.pow_priority());
+        let peer_msg = peer_nominate_prepare(node(2), qs3.clone(), peer_slot, peer_val);
+        c.handle_message(wire(&node(2), &peer_msg))
+            .expect("handle_message");
+        assert_eq!(
+            c.current_slot(),
+            peer_slot,
+            "C must anchor FORWARD past its stranded bare-nomination slot to the \
+             network's live slot (issue #436) — not latch forever"
+        );
+
+        // --- Case 2: BALLOT/COMMIT state is NOT abandoned. ---
+        // Drive two genuine services until one holds ballot/commit state on a
+        // slot, then deliver a far-ahead peer message and assert it does NOT
+        // anchor away from that slot.
+        let mut x = ConsensusService::new(node(1), qs.clone(), cfg.clone(), genesis_chain_state());
+        let mut y = ConsensusService::new(node(2), qs.clone(), cfg.clone(), genesis_chain_state());
+        let x_tx = intrinsic_valid_minting_tx(1, prev, 1);
+        let y_tx = intrinsic_valid_minting_tx(50, prev, 1);
+        submit_and_register(&mut x, &mut y, &x_tx);
+        submit_and_register(&mut y, &mut x, &y_tx);
+
+        // Step the pair a few rounds so X enters the ballot protocol on slot 1
+        // (bN > 0 or phase past NominatePrepare) but has not yet externalized.
+        let ballot_slot = x.current_slot();
+        let mut reached_ballot = false;
+        let a_id = x.node_id().clone();
+        let b_id = y.node_id().clone();
+        let mut to_x: Vec<ScpMessage> = Vec::new();
+        let mut to_y: Vec<ScpMessage> = Vec::new();
+        for _ in 0..200 {
+            for msg in to_x.drain(..) {
+                let _ = x.handle_message(msg);
+            }
+            for msg in to_y.drain(..) {
+                let _ = y.handle_message(msg);
+            }
+            let m = x.scp_node.get_current_slot_metrics();
+            if ConsensusService::slot_holds_ballot_or_commit_state(&m)
+                && x.current_slot() == ballot_slot
+            {
+                reached_ballot = true;
+                break;
+            }
+            x.tick();
+            y.tick();
+            while let Some(ev) = x.next_event() {
+                if let ConsensusEvent::BroadcastMessage(msg) = ev {
+                    to_y.push(msg);
+                }
+            }
+            while let Some(ev) = y.next_event() {
+                if let ConsensusEvent::BroadcastMessage(msg) = ev {
+                    to_x.push(msg);
+                }
+            }
+            let _ = (&a_id, &b_id);
+        }
+        assert!(
+            reached_ballot,
+            "X must enter ballot/commit state on its current slot for the boundary test"
+        );
+        let before = x.current_slot();
+        let m = x.scp_node.get_current_slot_metrics();
+        assert!(
+            ConsensusService::slot_holds_ballot_or_commit_state(&m),
+            "precondition: X holds ballot/commit state (bN {} phase {:?})",
+            m.bN,
+            m.phase
+        );
+
+        // A far-ahead peer message MUST NOT anchor X away from its ballot slot.
+        let far_slot = before + 20;
+        let far_tx = intrinsic_valid_minting_tx(77, prev, far_slot);
+        x.register_minting_tx(far_tx.hash(), bincode::serialize(&far_tx).unwrap());
+        let far_val = ConsensusValue::from_minting_tx(far_tx.hash(), far_tx.pow_priority());
+        let far_msg = peer_nominate_prepare(node(2), qs.clone(), far_slot, far_val);
+        x.handle_message(wire(&node(2), &far_msg))
+            .expect("handle_message");
+        assert_eq!(
+            x.current_slot(),
+            before,
+            "SAFETY: a slot holding ballot/commit state must NEVER be abandoned by \
+             the forward anchor — that could re-open a committed value and fork"
         );
     }
 }
