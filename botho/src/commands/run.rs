@@ -1245,7 +1245,56 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
 
                                     // Add to ledger
                                     if let Err(e) = node.add_block_from_network(&block) {
-                                        warn!("Failed to add consensus block: {}", e);
+                                        // Issue #421 (Option A1): tolerant /
+                                        // idempotent duplicate-height apply.
+                                        //
+                                        // SCP auto-advances its slot on
+                                        // externalize, but a duplicate /
+                                        // lost-the-race coinbase for a height the
+                                        // ledger has ALREADY filled is rejected
+                                        // here by `add_block`'s unconditional
+                                        // height/prev-hash checks (the #420
+                                        // no-fork property — KEEP IT). That
+                                        // rejection is EXPECTED and benign: the
+                                        // winning coinbase already landed at that
+                                        // height, so the externalized duplicate is
+                                        // provably redundant. Treat it as a benign
+                                        // SKIP (not a hard error) so we don't spam
+                                        // misleading error logs for the common
+                                        // 2-minter race where the loser's
+                                        // externalize is redundant.
+                                        //
+                                        // SAFETY: we ONLY classify it as benign
+                                        // after VERIFYING the height is genuinely
+                                        // already in the ledger (block height <=
+                                        // current tip height). A block for a NEW
+                                        // height that fails for any other reason
+                                        // (genuinely invalid: bad PoW, wrong
+                                        // difficulty/reward, etc.) is still a hard
+                                        // failure — we must NOT mask real
+                                        // validation failures, and we must NOT drop
+                                        // a real winning block.
+                                        let ledger_height = node
+                                            .shared_ledger()
+                                            .read()
+                                            .ok()
+                                            .and_then(|l| l.get_chain_state().ok())
+                                            .map(|s| s.height);
+                                        let height_already_filled = matches!(
+                                            ledger_height,
+                                            Some(h) if block.height() <= h
+                                        );
+                                        if height_already_filled {
+                                            debug!(
+                                                height = block.height(),
+                                                ledger_height = ledger_height.unwrap_or_default(),
+                                                "Skipping duplicate-height consensus block \
+                                                 (height already filled — benign, issue #421 A1): {}",
+                                                e
+                                            );
+                                        } else {
+                                            warn!("Failed to add consensus block: {}", e);
+                                        }
                                     } else {
                                         // Record for dynamic timing
                                         consensus.record_block(block.header.timestamp, block.transactions.len());

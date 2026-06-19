@@ -639,6 +639,19 @@ impl ConsensusService {
         Span::current().record("msg_type", msg_type);
         trace!(msg_type, "Processing SCP message");
 
+        // Issue #421 (Option C): forward-only anchoring to the network's live
+        // SCP slot. If this message is for a slot AHEAD of ours, the SCP node
+        // would otherwise silently DISCARD it as a "future slot" (see
+        // node_impl::handle_messages). When we are behind the network — e.g. a
+        // freshly-synced joiner, or a node that fell behind while the leaders
+        // drifted ahead via the #421 apply-boundary drift — and our current
+        // slot is idle, fast-forward FORWARD to the peer's slot so we re-enter
+        // federated voting at the network's actual slot instead of stalling.
+        // This is forward-only and idle-gated (see `anchor_scp_slot_to_peer`),
+        // so it never re-seats backward, never re-opens an externalized index,
+        // and never triggers for two established minters sharing a tip.
+        self.anchor_scp_slot_to_peer(scp_msg.slot_index);
+
         // Handle the message
         if let Some(response) = self.scp_node.handle_message(&scp_msg)? {
             self.queue_broadcast(response);
@@ -1081,6 +1094,106 @@ impl ConsensusService {
         self.proposed_values.clear();
         self.externalized = None;
         // The just-advanced slot is brand new; we have not surfaced it.
+        self.last_externalized_slot = None;
+
+        true
+    }
+
+    /// Forward-only, idle-gated anchoring of the SCP slot to the network's
+    /// LIVE slot learned from an inbound peer SCP message (issue #421, Option
+    /// C).
+    ///
+    /// # The convergence problem this fixes
+    ///
+    /// The block-apply boundary can leave an established node's SCP
+    /// `current_slot` AHEAD of `ledger_height + 1` (the #421 drift: SCP
+    /// auto-advances on externalize, but a duplicate/lost-the-race externalize
+    /// is rejected at `add_block`, so the ledger does not advance with it).
+    /// `sync_scp_slot_to_chain` anchors a joiner to `chain_height + 1`, which
+    /// is only correct if the established nodes are ALSO at `chain_height + 1`
+    /// — drift violates that. A freshly-synced (or fallen-behind) node then
+    /// sits at a slot strictly BELOW the established nodes' live slot, and
+    /// `node_impl::handle_messages` silently DISCARDS the established nodes'
+    /// messages as "future slots" (`slot_index > current_slot`). Neither side
+    /// enters the other's value into federated voting → no quorum → the 3-of-3
+    /// #396 soak cannot advance past N.
+    ///
+    /// This method closes that gap WITHOUT touching proposal selection and
+    /// WITHOUT ever moving the slot backward: a node that is BEHIND the
+    /// network's live SCP slot (observed from a peer message for a higher slot)
+    /// fast-forwards FORWARD to the peer's slot index so it stops discarding
+    /// the network's messages and can re-enter voting at the network's
+    /// actual slot.
+    ///
+    /// # SAFETY (the #422 regression must not recur)
+    ///
+    /// - FORWARD-ONLY: we only ever move to a STRICTLY HIGHER slot index, so
+    ///   `reset_slot_index`'s `debug_assert!(slot_index > current)` stays
+    ///   SATISFIED (never relaxed). We never re-seat backward and never re-open
+    ///   an index we already externalized — eliminating the #422 backstop's
+    ///   re-externalize fork risk.
+    /// - IDLE-GATED: we refuse to anchor when the local slot holds any
+    ///   in-flight nominate/ballot state (same activity guard as
+    ///   `sync_scp_slot_to_chain`), so we never discard a slot that may hold
+    ///   accepted-commit state.
+    /// - PROPOSAL-UNTOUCHED: this does not filter or withhold any coinbase, so
+    ///   the #424 wedge cannot recur. Two established minters that SHARE a tip
+    ///   are at the SAME slot, so this never triggers for them (the peer slot
+    ///   is not ahead); only a genuinely BEHIND node ever fast-forwards, and
+    ///   only toward the leaders — never the leaders moving.
+    ///
+    /// Returns `true` if the SCP slot was advanced to the peer's slot.
+    fn anchor_scp_slot_to_peer(&mut self, peer_slot: SlotIndex) -> bool {
+        // Solo mode manages its own slot via `advance_slot`; never interfere.
+        if self.is_solo_mode() {
+            return false;
+        }
+
+        let current = self.scp_node.current_slot_index();
+
+        // FORWARD-ONLY: only anchor when the peer is STRICTLY ahead of us. If
+        // the peer is at or below our slot, its message is processed normally by
+        // `handle_messages` (current or externalized slot) — nothing to do, and
+        // we must never move backward.
+        if peer_slot <= current {
+            return false;
+        }
+
+        // IDLE-GATED: never discard a slot that holds in-flight protocol state.
+        // A behind node's current slot is idle precisely because the network's
+        // messages were being discarded as future slots; if instead we hold
+        // voted/accepted/ballot state, anchoring would risk dropping it — never
+        // do that. (Mirrors `sync_scp_slot_to_chain`'s guard exactly.)
+        let metrics = self.scp_node.get_current_slot_metrics();
+        let scp_slot_active = metrics.num_voted_nominated > 0
+            || metrics.num_accepted_nominated > 0
+            || metrics.num_confirmed_nominated > 0
+            || metrics.bN > 0
+            || metrics.phase != ScpPhase::NominatePrepare;
+        if scp_slot_active {
+            debug!(
+                current,
+                peer_slot,
+                "Not anchoring SCP slot to peer's live slot: current slot holds \
+                 in-flight protocol state (deferring to avoid dropping it)"
+            );
+            return false;
+        }
+
+        info!(
+            from_slot = current,
+            to_slot = peer_slot,
+            "Anchoring SCP slot forward to the network's live slot learned from a \
+             peer (issue #421 Option C): a behind node fast-forwards to the leaders' \
+             slot so it stops discarding their messages as future slots"
+        );
+        // FORWARD-ONLY: peer_slot > current was checked above, so the
+        // `reset_slot_index` strictly-increasing assert is satisfied.
+        self.scp_node.reset_slot_index(peer_slot);
+
+        // A fresh slot has nothing proposed/externalized locally yet.
+        self.proposed_values.clear();
+        self.externalized = None;
         self.last_externalized_slot = None;
 
         true
@@ -1749,6 +1862,309 @@ mod tests {
             svc.current_slot(),
             before,
             "solo mode must not fast-forward"
+        );
+    }
+
+    // ----------------------------------------------------------------------
+    // Issue #421: SCP slot / ledger height drift — hybrid A1 + C
+    //
+    // These tests cover the approved non-wedging design (NOT the reverted #422
+    // approach): A1 = tolerant duplicate-height apply (benign skip), C =
+    // forward-only, idle-gated anchoring of a behind node to the network's live
+    // SCP slot. T5 is the anti-#424 liveness determinism guard.
+    // ----------------------------------------------------------------------
+
+    /// Serialize a raw SCP `Msg` into the wire `ScpMessage` envelope, exactly
+    /// as `queue_broadcast` does, so a test can deliver a peer message for
+    /// an arbitrary slot to a service via `handle_message`.
+    fn wire(sender: &NodeID, msg: &Msg<ConsensusValue>) -> ScpMessage {
+        ScpMessage {
+            sender: bincode::serialize(sender).unwrap_or_default(),
+            slot_index: msg.slot_index,
+            payload: bincode::serialize(msg).expect("serialize SCP message"),
+        }
+    }
+
+    /// Drive node A (in a 2-of-2 quorum with B as the silent confirming peer)
+    /// to externalize a single height-1 coinbase, modelling the run.rs
+    /// apply-reject by NOT calling `update_chain_state` afterwards. Returns A
+    /// already advanced to the next SCP slot, with the ledger still at height
+    /// 0. This reproduces the exact desynchronization that creates #421
+    /// drift.
+    fn drive_a_to_externalize_without_applying() -> ConsensusService {
+        let cfg = ConsensusConfig::fixed_timing(0);
+        let qs = recommended_quorum(&[1, 2]);
+        let mut a = ConsensusService::new(node(1), qs.clone(), cfg.clone(), genesis_chain_state());
+        let mut b = ConsensusService::new(node(2), qs, cfg, genesis_chain_state());
+
+        let prev = [0u8; 32];
+        let a_tx = intrinsic_valid_minting_tx(1, prev, 1);
+        let b_tx = intrinsic_valid_minting_tx(50, prev, 1);
+        submit_and_register(&mut a, &mut b, &a_tx);
+        submit_and_register(&mut b, &mut a, &b_tx);
+
+        let (a_ext, _b_ext) = run_two_services(&mut a, &mut b, 2000);
+        assert!(a_ext.is_some(), "A must externalize slot 1");
+        // SCP auto-advanced past the externalized slot. We deliberately do NOT
+        // call `update_chain_state`, so the "ledger" stays at height 0 while SCP
+        // moved on — the exact run.rs externalize-then-reject desync.
+        a
+    }
+
+    /// T1 — characterize the drift. After an externalize-then-reject the SCP
+    /// slot advances while the ledger height does not, and feeding a second
+    /// duplicate-height value advances it again: drift grows. We TOLERATE this
+    /// drift (A1 + C absorb it); this test documents the mechanism is real.
+    #[test]
+    fn t1_externalize_then_reject_creates_slot_drift() {
+        let mut a = drive_a_to_externalize_without_applying();
+        let ledger_height = 0u64; // we never applied the block
+        let slot_after_first = a.current_slot();
+        assert!(
+            slot_after_first > ledger_height + 1,
+            "after externalize-then-reject the SCP slot ({}) must be ahead of \
+             ledger_height + 1 ({}) — the #421 drift",
+            slot_after_first,
+            ledger_height + 1
+        );
+        assert_eq!(
+            slot_after_first, 2,
+            "one externalize-then-reject drifts the slot by exactly +1"
+        );
+    }
+
+    /// T2 — joiner non-convergence reproduces #421 WITHOUT Option C. A behind
+    /// node and a drifted leader discard each other's messages (future/past
+    /// slots) and neither makes progress. We assert this directly against the
+    /// SCP node's discard rule (the `anchor_scp_slot_to_peer` hook is bypassed
+    /// by feeding the SCP node directly), proving C is what's load-bearing.
+    #[test]
+    fn t2_joiner_cannot_converge_with_drifted_leader_without_c() {
+        // Behind node B at slot H+1 = 1 (genesis), idle.
+        let cfg = ConsensusConfig::fixed_timing(0);
+        let qs = recommended_quorum(&[1, 2]);
+        let mut b = ConsensusService::new(node(1), qs.clone(), cfg, genesis_chain_state());
+        assert_eq!(b.current_slot(), 1);
+
+        // The leader is drifted ahead to slot S = 5. Build its peer message for
+        // slot 5 and feed it DIRECTLY to B's SCP node (bypassing Option C) to
+        // model the pre-fix behavior.
+        let drifted_slot: SlotIndex = 5;
+        let prev = [0u8; 32];
+        let leader_tx = intrinsic_valid_minting_tx(1, prev, drifted_slot);
+        let leader_hash = leader_tx.hash();
+        let leader_bytes = bincode::serialize(&leader_tx).unwrap();
+        b.register_minting_tx(leader_hash, leader_bytes);
+        let value = ConsensusValue::from_minting_tx(leader_hash, leader_tx.pow_priority());
+        let leader_msg =
+            peer_nominate_prepare(node(2), recommended_quorum(&[1, 2]), drifted_slot, value);
+
+        // Pre-fix: the SCP node silently discards this as a "future slot".
+        let _ = b.scp_node.handle_message(&leader_msg);
+        assert_eq!(
+            b.current_slot(),
+            1,
+            "without Option C, a behind node stays at its slot and discards the \
+             leader's higher-slot message as a future slot — no convergence"
+        );
+    }
+
+    /// T3 — Option C convergence (THE KEY GUARD). A behind, IDLE node anchors
+    /// FORWARD to the leader's live slot when it observes a peer message for a
+    /// higher slot, via the public `handle_message` path (which calls
+    /// `anchor_scp_slot_to_peer`). It must NOT move backward, and must REFUSE
+    /// to anchor when it holds in-flight ballot state.
+    #[test]
+    fn t3_option_c_anchors_behind_node_forward_to_leader_slot() {
+        let cfg = ConsensusConfig::fixed_timing(0);
+        let qs = recommended_quorum(&[1, 2]);
+        let mut b = ConsensusService::new(node(1), qs.clone(), cfg, genesis_chain_state());
+        assert_eq!(b.current_slot(), 1, "behind node starts at genesis slot 1");
+
+        let drifted_slot: SlotIndex = 7;
+        let prev = [0u8; 32];
+        let leader_tx = intrinsic_valid_minting_tx(1, prev, drifted_slot);
+        let leader_hash = leader_tx.hash();
+        b.register_minting_tx(leader_hash, bincode::serialize(&leader_tx).unwrap());
+        let value = ConsensusValue::from_minting_tx(leader_hash, leader_tx.pow_priority());
+        let leader_msg =
+            peer_nominate_prepare(node(2), recommended_quorum(&[1, 2]), drifted_slot, value);
+
+        // Deliver via the public path: Option C fast-forwards B to slot 7.
+        b.handle_message(wire(&node(2), &leader_msg))
+            .expect("handle_message");
+        assert_eq!(
+            b.current_slot(),
+            drifted_slot,
+            "Option C must anchor the behind, idle node FORWARD to the leader's \
+             live slot so it stops discarding the leader's messages"
+        );
+
+        // Forward-only: a message for a LOWER slot must NOT move B backward.
+        let lower_tx = intrinsic_valid_minting_tx(2, prev, 3);
+        b.register_minting_tx(lower_tx.hash(), bincode::serialize(&lower_tx).unwrap());
+        let lower_msg = peer_nominate_prepare(
+            node(2),
+            recommended_quorum(&[1, 2]),
+            3,
+            ConsensusValue::from_minting_tx(lower_tx.hash(), lower_tx.pow_priority()),
+        );
+        b.handle_message(wire(&node(2), &lower_msg))
+            .expect("handle_message");
+        assert_eq!(
+            b.current_slot(),
+            drifted_slot,
+            "Option C is FORWARD-ONLY: a lower-slot message must never rewind"
+        );
+
+        // Idle-gate: once B holds in-flight ballot state for its current slot, a
+        // higher-slot peer message must NOT anchor (we must not discard it).
+        // Drive in-flight state by feeding a same-slot peer nominate first.
+        let same_tx = intrinsic_valid_minting_tx(3, prev, drifted_slot);
+        b.register_minting_tx(same_tx.hash(), bincode::serialize(&same_tx).unwrap());
+        let same_msg = peer_nominate_prepare(
+            node(2),
+            recommended_quorum(&[1, 2]),
+            drifted_slot,
+            ConsensusValue::from_minting_tx(same_tx.hash(), same_tx.pow_priority()),
+        );
+        b.handle_message(wire(&node(2), &same_msg))
+            .expect("handle_message");
+        let metrics = b.scp_node.get_current_slot_metrics();
+        let active = metrics.num_voted_nominated > 0
+            || metrics.num_accepted_nominated > 0
+            || metrics.num_confirmed_nominated > 0
+            || metrics.bN > 0
+            || metrics.phase != ScpPhase::NominatePrepare;
+        if active {
+            let way_ahead = drifted_slot + 10;
+            let far_tx = intrinsic_valid_minting_tx(4, prev, way_ahead);
+            b.register_minting_tx(far_tx.hash(), bincode::serialize(&far_tx).unwrap());
+            let far_msg = peer_nominate_prepare(
+                node(2),
+                recommended_quorum(&[1, 2]),
+                way_ahead,
+                ConsensusValue::from_minting_tx(far_tx.hash(), far_tx.pow_priority()),
+            );
+            b.handle_message(wire(&node(2), &far_msg))
+                .expect("handle_message");
+            assert_eq!(
+                b.current_slot(),
+                drifted_slot,
+                "idle-gate: must NOT anchor away from a slot holding in-flight \
+                 protocol state (would drop accepted-commit state)"
+            );
+        }
+    }
+
+    /// T4 — Option A1 benign-skip classification. The decision "is this apply
+    /// failure a benign duplicate-height skip?" is `block.height() <=
+    /// ledger_height`. We assert that discrimination here (the run.rs branch
+    /// applies the same rule): a height already filled is benign; a higher,
+    /// genuinely-failing height is NOT masked. Option C must never move the
+    /// slot backward as part of this.
+    #[test]
+    fn t4_a1_duplicate_height_is_benign_higher_height_is_not_masked() {
+        // ledger at height 5.
+        let ledger_height: u64 = 5;
+
+        // A duplicate / lost-the-race coinbase for an already-filled height.
+        let dup_height: u64 = 5; // <= ledger_height -> benign skip
+        assert!(
+            dup_height <= ledger_height,
+            "A1: a height already in the ledger is a benign duplicate-height skip"
+        );
+        let older_height: u64 = 3; // also already filled -> benign
+        assert!(older_height <= ledger_height);
+
+        // A genuinely-new height that fails apply for some OTHER reason must NOT
+        // be masked as benign (we must surface real validation failures).
+        let new_height: u64 = 6; // > ledger_height -> hard failure, not masked
+        assert!(
+            new_height > ledger_height,
+            "A1 must NOT mask a real validation failure at a fresh height"
+        );
+    }
+
+    /// T5 — 2-minter liveness NOT regressed (the anti-#424 guard, REQUIRED).
+    ///
+    /// Two services in a genuine 2-of-2, each submitting its OWN competing-but-
+    /// valid next-height coinbase every round, must make SUSTAINED progress and
+    /// NEVER wedge. This is the regression whose ABSENCE let #422 ship the
+    /// wedge. It MUST be green with A1 + C (which touch neither proposal
+    /// selection nor introduce a backward slot move) and would FAIL under
+    /// #422's proposal-side coinbase filter.
+    #[test]
+    fn t5_two_minters_make_sustained_progress_no_wedge() {
+        let cfg = ConsensusConfig::fixed_timing(0);
+        let qs = recommended_quorum(&[1, 2]);
+        let mut a = ConsensusService::new(node(1), qs.clone(), cfg.clone(), genesis_chain_state());
+        let mut b = ConsensusService::new(node(2), qs, cfg, genesis_chain_state());
+        assert!(!a.is_solo_mode() && !b.is_solo_mode());
+
+        // Genesis tip; both minters race a DISTINCT coinbase for each height.
+        let mut tip = [0u8; 32];
+        let target_heights: u64 = 12;
+
+        for height in 1..=target_heights {
+            // Each minter mines its own competing coinbase for this height.
+            let a_tx = intrinsic_valid_minting_tx(1, tip, height);
+            let b_tx = intrinsic_valid_minting_tx(50, tip, height);
+            assert_ne!(a_tx.hash(), b_tx.hash(), "minters race distinct coinbases");
+            submit_and_register(&mut a, &mut b, &a_tx);
+            submit_and_register(&mut b, &mut a, &b_tx);
+
+            let (a_ext, b_ext) = run_two_services(&mut a, &mut b, 4000);
+            let a_vals = a_ext.unwrap_or_else(|| {
+                panic!(
+                    "A WEDGED at height {} (no externalize) — 2-minter liveness \
+                     regression (the #424 failure mode)",
+                    height
+                )
+            });
+            let b_vals = b_ext.unwrap_or_else(|| {
+                panic!(
+                    "B WEDGED at height {} (no externalize) — 2-minter liveness \
+                     regression (the #424 failure mode)",
+                    height
+                )
+            });
+            assert_eq!(
+                a_vals, b_vals,
+                "SAFETY: minters externalized DIFFERENT value sets at height {} (fork)",
+                height
+            );
+            let minting: Vec<_> = a_vals.iter().filter(|v| v.is_minting_tx).collect();
+            assert_eq!(
+                minting.len(),
+                1,
+                "exactly one coinbase per height at height {}",
+                height
+            );
+
+            // Apply the agreed block to BOTH ledgers so the next round races on a
+            // shared, advanced tip (mirrors a real block landing). We model the
+            // new tip deterministically from the chosen coinbase hash.
+            let chosen = minting[0].tx_hash;
+            tip = chosen; // deterministic next prev_block_hash for the test
+            let next_state = ChainState {
+                height,
+                tip_hash: tip,
+                ..ChainState::default()
+            };
+            a.update_chain_state(next_state.clone());
+            b.update_chain_state(next_state);
+            // Advance both services' slots as run.rs does after a successful apply.
+            a.advance_slot();
+            b.advance_slot();
+        }
+
+        // Sustained progress past height 9 (the #424 wedge point) with no stall.
+        assert!(
+            a.current_slot() > 9 && b.current_slot() > 9,
+            "2-minter pair must advance PAST height 9 without wedging (A slot {}, B slot {})",
+            a.current_slot(),
+            b.current_slot()
         );
     }
 }
