@@ -286,14 +286,56 @@ impl Default for QuorumMode {
     }
 }
 
+/// Fault model posture for `Recommended` quorum mode.
+///
+/// Selects how the auto-calculated quorum threshold is derived from the live
+/// member count `n`:
+///
+/// - [`FaultModel::Crash`] (DEFAULT): crash-fault tolerance via a 2f+1 simple
+///   majority — `threshold = floor(n/2) + 1`. This gives genuine fault
+///   tolerance for small homogeneous clusters (e.g. 2-of-3 at n=3) so a single
+///   crashed or lagging node cannot stall liveness. This is the
+///   trusted-operator testnet posture and matches Stellar Core's
+///   homogeneous-cluster default.
+/// - [`FaultModel::Bft`]: Byzantine-fault tolerance via a 3f+1 quorum —
+///   `threshold = n - floor((n-1)/3)`. Tolerates up to f Byzantine (arbitrarily
+///   malicious) members but requires n >= 4 for any genuine BFT (n<=3 collapses
+///   to unanimity).
+///
+/// Note: under either model botho currently auto-trusts every connected peer in
+/// `Recommended` mode, so n<=3 has no real Byzantine robustness regardless;
+/// `Crash` therefore loses nothing real at small n and gains liveness +
+/// crash-fault tolerance. #420 no-fork safety is preserved because any two
+/// 2f+1 majority subsets always intersect.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum FaultModel {
+    /// Crash-fault tolerance: 2f+1 simple majority (`floor(n/2) + 1`).
+    Crash,
+    /// Byzantine-fault tolerance: 3f+1 quorum (`n - floor((n-1)/3)`).
+    Bft,
+}
+
+impl Default for FaultModel {
+    fn default() -> Self {
+        Self::Crash
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QuorumConfig {
     /// Quorum mode: explicit (user lists peers) or recommended (auto-discover)
     #[serde(default)]
     pub mode: QuorumMode,
 
+    /// Fault model posture for `Recommended` mode: `crash` (2f+1 simple
+    /// majority, the default) or `bft` (3f+1 Byzantine quorum). Ignored in
+    /// `Explicit` mode, where the operator sets an exact threshold.
+    #[serde(default)]
+    pub fault_model: FaultModel,
+
     /// For explicit mode: number of peers required to agree (e.g., 2 in a
-    /// 2-of-3) For recommended mode: this is auto-calculated as ceil(2n/3)
+    /// 2-of-3) For recommended mode: this is auto-calculated from `fault_model`
     #[serde(default = "default_threshold")]
     pub threshold: u32,
 
@@ -310,6 +352,7 @@ impl Default for QuorumConfig {
     fn default() -> Self {
         Self {
             mode: QuorumMode::Recommended,
+            fault_model: FaultModel::default(),
             threshold: 2,
             members: Vec::new(),
             min_peers: 1,
@@ -318,17 +361,34 @@ impl Default for QuorumConfig {
 }
 
 impl QuorumConfig {
-    /// Calculate the effective threshold for a given number of connected peers
-    /// Uses BFT formula: threshold = n - floor((n-1)/3) ≈ ceil(2n/3)
+    /// Calculate the effective threshold for a given number of connected peers.
+    ///
+    /// In `Recommended` mode the threshold is derived from the configured
+    /// [`FaultModel`] over `n = connected_count + 1` (peers plus self):
+    ///
+    /// - `Crash` (default): `floor(n/2) + 1` (2f+1 simple majority). n=1->1,
+    ///   n=2->2, n=3->2, n=4->3, n=5->3, n=6->4.
+    /// - `Bft`: `n - floor((n-1)/3)` (3f+1 quorum). n=1->1, n=2->2, n=3->3,
+    ///   n=4->3, n=5->4, n=6->5.
+    ///
+    /// In `Explicit` mode the operator-configured `threshold` is returned
+    /// as-is.
     pub fn effective_threshold(&self, connected_count: usize) -> usize {
         match self.mode {
             QuorumMode::Explicit => self.threshold as usize,
             QuorumMode::Recommended => {
                 // n = total nodes including self
                 let n = connected_count + 1;
-                // BFT threshold: n - f where f = floor((n-1)/3)
-                let f = n.saturating_sub(1) / 3;
-                n - f
+                match self.fault_model {
+                    // Crash-fault: 2f+1 simple majority.
+                    FaultModel::Crash => n / 2 + 1,
+                    // Byzantine-fault: 3f+1 quorum, threshold = n - f
+                    // where f = floor((n-1)/3).
+                    FaultModel::Bft => {
+                        let f = n.saturating_sub(1) / 3;
+                        n - f
+                    }
+                }
             }
         }
     }
@@ -750,6 +810,7 @@ mod tests {
     fn test_quorum_explicit_mode() {
         let quorum = QuorumConfig {
             mode: QuorumMode::Explicit,
+            fault_model: FaultModel::default(),
             threshold: 2,
             members: vec!["peer1".to_string(), "peer2".to_string()],
             min_peers: 1,
@@ -774,8 +835,10 @@ mod tests {
 
     #[test]
     fn test_quorum_recommended_mode() {
+        // Default fault model is crash (2f+1 simple majority).
         let quorum = QuorumConfig {
             mode: QuorumMode::Recommended,
+            fault_model: FaultModel::Crash,
             threshold: 2,    // ignored in recommended mode
             members: vec![], // ignored in recommended mode
             min_peers: 1,
@@ -789,41 +852,56 @@ mod tests {
         let (can_mine, size, thresh) = quorum.can_reach_quorum(&["peer1".to_string()]);
         assert!(can_mine);
         assert_eq!(size, 2);
-        assert_eq!(thresh, 2); // 2-of-2
+        assert_eq!(thresh, 2); // 2-of-2 (can't tolerate a fault at n=2)
 
-        // Two peers - can mine (3 nodes, threshold=3)
-        // BFT with n=3: f=(3-1)/3=0, threshold=3-0=3
+        // Two peers - can mine (3 nodes, threshold=2 under crash 2f+1).
+        // Crash with n=3: floor(3/2)+1 = 2 -> 2-of-3 (tolerates 1 crash/lag).
         let (can_mine, size, thresh) =
             quorum.can_reach_quorum(&["peer1".to_string(), "peer2".to_string()]);
         assert!(can_mine);
         assert_eq!(size, 3);
-        assert_eq!(thresh, 3); // 3-of-3 (can't tolerate any faults with 3
-                               // nodes)
+        assert_eq!(thresh, 2); // 2-of-3 under crash fault model
     }
 
     #[test]
-    fn test_quorum_effective_threshold() {
+    fn test_quorum_effective_threshold_crash() {
+        // Crash fault model (DEFAULT): 2f+1 simple majority = floor(n/2) + 1.
         let quorum = QuorumConfig::default();
+        assert_eq!(quorum.fault_model, FaultModel::Crash);
 
-        // BFT thresholds: threshold = n - floor((n-1)/3)
-        // n=2: f=0, threshold=2
-        // n=3: f=0, threshold=3
-        // n=4: f=1, threshold=3
-        // n=5: f=1, threshold=4
-        // n=6: f=1, threshold=5
-        // n=7: f=2, threshold=5
-        assert_eq!(quorum.effective_threshold(1), 2); // 2 nodes: 2-of-2
-        assert_eq!(quorum.effective_threshold(2), 3); // 3 nodes: 3-of-3
-        assert_eq!(quorum.effective_threshold(3), 3); // 4 nodes: 3-of-4
-        assert_eq!(quorum.effective_threshold(4), 4); // 5 nodes: 4-of-5
-        assert_eq!(quorum.effective_threshold(5), 5); // 6 nodes: 5-of-6
-        assert_eq!(quorum.effective_threshold(6), 5); // 7 nodes: 5-of-7
+        // connected_count = n - 1 (peers; n includes self).
+        assert_eq!(quorum.effective_threshold(0), 1); // n=1: 1-of-1
+        assert_eq!(quorum.effective_threshold(1), 2); // n=2: 2-of-2
+        assert_eq!(quorum.effective_threshold(2), 2); // n=3: 2-of-3
+        assert_eq!(quorum.effective_threshold(3), 3); // n=4: 3-of-4
+        assert_eq!(quorum.effective_threshold(4), 3); // n=5: 3-of-5
+        assert_eq!(quorum.effective_threshold(5), 4); // n=6: 4-of-6
+    }
+
+    #[test]
+    fn test_quorum_effective_threshold_bft() {
+        // BFT fault model: 3f+1 quorum = n - floor((n-1)/3).
+        let quorum = QuorumConfig {
+            mode: QuorumMode::Recommended,
+            fault_model: FaultModel::Bft,
+            threshold: 2,
+            members: vec![],
+            min_peers: 1,
+        };
+
+        assert_eq!(quorum.effective_threshold(0), 1); // n=1: 1-of-1
+        assert_eq!(quorum.effective_threshold(1), 2); // n=2: 2-of-2
+        assert_eq!(quorum.effective_threshold(2), 3); // n=3: 3-of-3
+        assert_eq!(quorum.effective_threshold(3), 3); // n=4: 3-of-4
+        assert_eq!(quorum.effective_threshold(4), 4); // n=5: 4-of-5
+        assert_eq!(quorum.effective_threshold(5), 5); // n=6: 5-of-6
     }
 
     #[test]
     fn test_quorum_min_peers() {
         let quorum = QuorumConfig {
             mode: QuorumMode::Recommended,
+            fault_model: FaultModel::Crash,
             threshold: 2,
             members: vec![],
             min_peers: 2, // Require at least 2 peers
@@ -833,12 +911,47 @@ mod tests {
         let (can_mine, _, _) = quorum.can_reach_quorum(&["peer1".to_string()]);
         assert!(!can_mine);
 
-        // Two peers - enough (3 nodes, threshold=3 with BFT)
+        // Two peers - enough (3 nodes, threshold=2 under crash 2f+1).
         let (can_mine, size, thresh) =
             quorum.can_reach_quorum(&["peer1".to_string(), "peer2".to_string()]);
         assert!(can_mine);
         assert_eq!(size, 3);
-        assert_eq!(thresh, 3); // BFT: 3-of-3 for n=3
+        assert_eq!(thresh, 2); // crash: 2-of-3 for n=3
+    }
+
+    #[test]
+    fn test_fault_model_parses_crash_and_bft() {
+        // crash
+        let q: QuorumConfig =
+            toml::from_str("mode = \"recommended\"\nfault_model = \"crash\"\n").unwrap();
+        assert_eq!(q.fault_model, FaultModel::Crash);
+        assert_eq!(q.effective_threshold(2), 2); // n=3 -> 2-of-3
+
+        // bft
+        let q: QuorumConfig =
+            toml::from_str("mode = \"recommended\"\nfault_model = \"bft\"\n").unwrap();
+        assert_eq!(q.fault_model, FaultModel::Bft);
+        assert_eq!(q.effective_threshold(2), 3); // n=3 -> 3-of-3
+    }
+
+    #[test]
+    fn test_fault_model_defaults_to_crash_when_absent() {
+        // Omitting fault_model defaults to crash.
+        let q: QuorumConfig = toml::from_str("mode = \"recommended\"\n").unwrap();
+        assert_eq!(q.fault_model, FaultModel::Crash);
+    }
+
+    #[test]
+    fn test_fault_model_invalid_value_errors_clearly() {
+        let err =
+            toml::from_str::<QuorumConfig>("mode = \"recommended\"\nfault_model = \"paxos\"\n")
+                .unwrap_err();
+        let msg = err.to_string();
+        // serde reports the unknown variant and the allowed set.
+        assert!(
+            msg.contains("crash") && msg.contains("bft"),
+            "error should name valid fault models, got: {msg}"
+        );
     }
 
     #[test]

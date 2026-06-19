@@ -1701,8 +1701,10 @@ fn build_scp_quorum_set(quorum: &QuorumBuilder, local_peer_id: &libp2p::PeerId) 
 /// node plus every connected peer; the threshold follows the configured quorum
 /// policy:
 ///
-/// - `Recommended`: BFT threshold `n - floor((n-1)/3)` over `n = peers + 1`
-///   (matches [`QuorumConfig::effective_threshold`]).
+/// - `Recommended`: the fault-model-aware threshold over `n = peers + 1`
+///   (matches [`QuorumConfig::effective_threshold`]) — crash 2f+1 simple
+///   majority `floor(n/2)+1` by default, or BFT 3f+1 `n - floor((n-1)/3)` when
+///   `quorum.fault_model = bft`.
 /// - `Explicit`: the configured threshold, clamped to the member count so we
 ///   never demand more confirmations than there are members.
 ///
