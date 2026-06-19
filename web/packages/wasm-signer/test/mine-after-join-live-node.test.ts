@@ -236,20 +236,22 @@ const RUN_LOCAL_NODE = env.BOTHO_E2E_NODE === '1'
 // (no n=2 fork), C catches up onto A's exact chain, and ALL THREE converge past
 // N onto one identical tip — with ZERO solo-mode externalizes.
 //
-// WHY THIS SOAK STAYS GATED (per the STOP guardrail — a SEPARATE n=3 issue, NOT
-// #433): the FINAL step — node C winning its OWN coinbase (non-zero balance)
-// within the window — is still INTERMITTENT (~2 of 3 runs pass). The
-// convergence always succeeds, but C frequently loses the PoW/SCP race for a
-// block of its own: the established A+B drift their SCP slot ahead of C, so C's
-// proposals land on an earlier slot and get discarded as "future slots"
-// (node_impl), and C's block is rarely the one externalized. That is the
-// pre-existing n=3 SCP-slot/height DRIFT join-boundary liveness concern
-// (#421/#427-family) — independent of the #433 n=2 solo fork that this PR fixes.
-// Per the guardrail we do NOT force this green by masking that flake. Re-enable
-// (drop `&& false`) once the n=3 join-boundary drift is closed so a freshly
-// joined minter reliably gets a block accepted. The #433 n=2 fix itself is
-// complete, unit-tested, and empirically proven above.
-const enabled = wasmBuilt && RUN_LOCAL_NODE && false
+// RE-ENABLED (issue #436): the FINAL step — node C winning its OWN coinbase
+// within the window — was previously INTERMITTENT (~2 of 6 misses). The
+// characterized cause was the #430 Option-C anchor's idle-gate LATCHING on
+// un-completable bare-NOMINATION state: after the join handoff C proposed its
+// own coinbase (gaining voted-nominated state, bN == 0, phase NominatePrepare)
+// on a slot A+B had already externalized and moved past; A+B never re-sent
+// messages for that stranded slot, so C's quorum never formed, the idle-gate
+// refused to anchor C forward forever, and C discarded every live A/B message
+// as a "future slot" — a permanent passive follower with 0 coinbases. #436
+// refines the gate to block ONLY on genuine ballot/commit state (bN > 0 or a
+// phase past NominatePrepare), allowing the forward anchor past bare nomination
+// when the network has provably moved past the slot. C now anchors forward,
+// resumes externalizing, and reliably earns a coinbase. The relaxation never
+// abandons committed state (a started ballot / accepted-committed value still
+// blocks the anchor — see `slot_holds_ballot_or_commit_state`).
+const enabled = wasmBuilt && RUN_LOCAL_NODE
 const maybe = enabled ? describe : describe.skip
 
 interface WasmMod extends WasmSigner {
