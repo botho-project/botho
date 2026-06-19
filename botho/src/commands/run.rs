@@ -452,8 +452,31 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
     let local_peer_id = *discovery.local_peer_id();
     let node_id = peer_id_to_node_id(&local_peer_id);
 
-    // Build SCP quorum set from connected peers (or just ourselves for solo mining)
-    let scp_quorum_set = build_scp_quorum_set(&quorum, &local_peer_id);
+    // Build the initial SCP quorum set.
+    //
+    // Issue #433: peers that connect during the pre-consensus "wait for peers"
+    // loop above have their `PeerDiscovered` events CONSUMED by that loop — the
+    // main event loop never sees them and therefore never calls
+    // `reconfigure_quorum` for them. If we seed the consensus service from the
+    // *static config* (`build_scp_quorum_set`, which yields a 1-of-1 solo set
+    // for a `recommended`/`min_peers=1` node), the node starts in solo mode even
+    // though a peer is already connected. The participation gate
+    // (`set_connected_peers` below) then opens (connected >= min_peers) while the
+    // quorum is still 1-of-1, so the very next consensus tick takes the solo
+    // direct-externalize path and the node mines a divergent solo chain forever
+    // (no further `PeerDiscovered` ever arrives, so the quorum is never
+    // reconfigured out of 1-of-1). Two such nodes fork.
+    //
+    // Fix: seed the initial quorum from the peers ALREADY CONNECTED at startup
+    // (the same `rebuild_scp_quorum_set` used on every later peer event), so a
+    // node that has already peered starts in federated SCP (e.g. 2-of-2), never
+    // solo. A genuine lone node (no peers connected) still yields a 1-of-1 solo
+    // quorum and mints solo — no regression for `min_peers == 0`.
+    let scp_quorum_set = if discovery.peer_count() > 0 {
+        rebuild_scp_quorum_set(&config, &discovery, &local_peer_id)
+    } else {
+        build_scp_quorum_set(&quorum, &local_peer_id)
+    };
 
     // Capture the starting height before chain_state is moved into the
     // consensus service; the sync state machine needs it to know how far

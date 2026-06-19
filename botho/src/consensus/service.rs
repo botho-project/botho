@@ -700,6 +700,26 @@ impl ConsensusService {
         self.quorum_set.threshold == 1 && self.quorum_set.members.len() == 1
     }
 
+    /// Issue #433: are we in a *transitional* solo state — a peer is connected
+    /// but the SCP quorum has not yet been reconfigured out of 1-of-1?
+    ///
+    /// A node that expects peers (`min_peers >= 1`) and currently has at least
+    /// one connected (`connected_peers >= 1`) but is still holding a solo
+    /// (1-of-1) quorum set is mid-transition: it must run federated SCP with
+    /// the connected peer, not directly solo-externalize. Taking the solo
+    /// path here produces a divergent solo chain and forks once both peered
+    /// nodes do it. This is the exact race from #433 (a peer that connected
+    /// during the pre-consensus startup window leaves the gate open while
+    /// the quorum is still 1-of-1). We block the solo direct-externalize
+    /// until the quorum reconfigures (the run loop calls
+    /// `reconfigure_quorum` on peer events; the startup path now seeds the
+    /// quorum from connected peers — see `commands::run`). A genuine lone
+    /// node (`min_peers == 0`) is never transitional: it has no peers to
+    /// wait for and mints solo.
+    fn is_transitional_solo(&self) -> bool {
+        self.min_peers >= 1 && self.connected_peers >= 1 && self.is_solo_mode()
+    }
+
     /// Propose pending values to SCP
     #[instrument(
         name = "consensus.propose_values",
@@ -728,6 +748,23 @@ impl ConsensusService {
                 min_peers = self.min_peers,
                 connected_peers = self.connected_peers,
                 "Withholding propose: not enough connected peers for quorum (issue #428)"
+            );
+            return;
+        }
+
+        // Transitional-solo guard (issue #433): a node that expects peers and
+        // has one connected, but whose SCP quorum is still 1-of-1, must NOT take
+        // the solo direct-externalize path below — that produces a divergent
+        // solo chain and forks once both peered nodes do it. Withhold the block
+        // until the quorum reconfigures out of solo (the run loop reconfigures
+        // on peer events; startup seeds the quorum from connected peers). Values
+        // stay queued in `pending_values`, so nothing is lost.
+        if self.is_transitional_solo() {
+            debug!(
+                min_peers = self.min_peers,
+                connected_peers = self.connected_peers,
+                "Withholding propose: peer connected but quorum still solo \
+                 (awaiting 1-of-1 -> N-of-N reconfig, issue #433)"
             );
             return;
         }
@@ -1424,6 +1461,71 @@ mod tests {
         assert!(
             !gated.should_propose_this_round(),
             "losing a quorum member must pause minting, not fall back to solo"
+        );
+    }
+
+    /// Issue #433 regression: the 1-of-1 -> 2-of-2 transition must not fork.
+    ///
+    /// A node that expects peers (`min_peers == 1`) and already has a peer
+    /// connected (`connected_peers == 1`), but whose SCP quorum is still the
+    /// transient startup solo (1-of-1) set, must NOT take the solo
+    /// direct-externalize path. If it did, two such peered nodes would each
+    /// mine a divergent solo chain and fork (the observed #433 bug). It
+    /// must withhold the block until the quorum reconfigures out of solo,
+    /// and once it does it runs federated SCP (no direct solo externalize).
+    #[test]
+    fn transitional_solo_does_not_directly_externalize() {
+        // Node boots solo (1-of-1) but expects a peer and already has one
+        // connected — the exact post-wait-loop startup state from #433.
+        let mut svc = solo_service();
+        svc.set_min_peers(1);
+        svc.set_connected_peers(1);
+
+        // The participation gate alone WOULD open here (connected >= min_peers),
+        // but we are still in solo mode, so this is transitional.
+        assert!(svc.should_propose_this_round());
+        assert!(svc.is_solo_mode());
+        assert!(
+            svc.is_transitional_solo(),
+            "peer connected + still 1-of-1 must be detected as transitional solo"
+        );
+
+        // Proposing must be WITHHELD — no divergent solo block.
+        svc.submit_minting_tx([9u8; 32], 100, vec![1, 2, 3]);
+        svc.propose_pending_values();
+        assert!(
+            svc.externalized.is_none(),
+            "transitional-solo node must NOT directly externalize (issue #433 fork)"
+        );
+        // The minting value stays queued so it is proposed once the quorum forms.
+        assert!(
+            !svc.pending_values.is_empty(),
+            "withheld values must remain pending, not be dropped"
+        );
+
+        // Now the quorum reconfigures out of solo (run loop calls this on the
+        // peer event; startup seeds it from connected peers). The node leaves
+        // solo mode and is no longer transitional.
+        let two = recommended_quorum(&[1, 2]);
+        assert!(svc.reconfigure_quorum(two.clone()));
+        assert!(
+            !svc.is_solo_mode(),
+            "node must leave solo once peer is in quorum"
+        );
+        assert!(!svc.is_transitional_solo());
+        assert_eq!(svc.scp_node.quorum_set(), two);
+
+        // After reconfig the node proposes via federated SCP — it does NOT take
+        // the solo direct-externalize path (which would set `externalized`
+        // synchronously). The value is handed to the SCP node for balloting.
+        svc.propose_pending_values();
+        assert!(
+            svc.externalized.is_none(),
+            "federated node must not directly externalize; it ballots via SCP"
+        );
+        assert!(
+            !svc.proposed_values.is_empty(),
+            "federated node must have proposed its value into SCP balloting"
         );
     }
 
