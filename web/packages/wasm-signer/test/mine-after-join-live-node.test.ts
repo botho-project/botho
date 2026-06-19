@@ -201,20 +201,54 @@ const RUN_LOCAL_NODE = env.BOTHO_E2E_NODE === '1'
 // tip checks unchanged); the n=2 threshold is unchanged (crash n=2 is still
 // 2-of-2).
 //
-// WHY THIS SOAK STAYS GATED (per #432's STOP guardrail — NOT a fault_model bug):
-// the run is INTERMITTENT due to a SEPARATE, PRE-EXISTING two-minter (n=2)
-// liveness/safety defect that is independent of fault_model and of node C. In a
-// fraction of runs the two established minters A and B BOTH fall into SCP
+// #433 status (intermittent n=2 solo-mode fork): FIXED. The n=2 blocker that
+// kept this soak gated is gone. It was a two-minter (n=2) safety defect: in a
+// fraction of runs the two established minters A and B BOTH fell into SCP
 // solo-mode ("Advanced to next slot (solo mode)" / "Solo mode: directly
 // externalizing values") despite each reporting "Quorum satisfied: 2-of-2", and
-// mine DIVERGENT solo chains that never reconcile (verified: an A/B-only run with
-// no C at all forks — they disagree as low as height 20 and run to different tips
-// at 111/115). Because n=2 crash == n=2 bft (both 2-of-2), #432 neither causes
-// nor fixes this; it is an `is_solo_mode` vs dynamic quorum-rebuild coordination
-// bug at the 1-of-1 -> 2-of-2 transition. Per the STOP guardrail we do NOT force
-// this green by masking that fork. Re-enable (drop `&& false`) once the n=2
-// solo-mode fork is fixed (tracked in the #432 follow-up). The fault_model change
-// itself is complete and unit-tested, and the 2-of-3 capstone is proven above.
+// mined DIVERGENT solo chains that never reconciled (an A/B-only run with no C
+// forked, disagreeing as low as height 20 and running to different tips at
+// 111/115).
+//
+// ROOT CAUSE (#433): peers that connect during the pre-consensus "wait for
+// peers" startup loop in `commands::run` had their `PeerDiscovered` events
+// CONSUMED by that loop, so the main event loop never called
+// `reconfigure_quorum` for them. The consensus service was therefore seeded
+// from the STATIC config (a 1-of-1 solo quorum for a recommended/min_peers=1
+// node). The participation gate (#429) then opened (connected >= min_peers)
+// while the quorum was still 1-of-1, so the next tick took the SOLO
+// direct-externalize path and the node mined a divergent solo chain forever (no
+// further PeerDiscovered ever arrived, so the quorum was never reconfigured out
+// of solo). Two such nodes forked.
+//
+// FIX (#433): (1) seed the INITIAL SCP quorum from the peers already connected
+// at startup (`rebuild_scp_quorum_set`) so a node that already peered boots in
+// federated SCP (e.g. 2-of-2), never solo; and (2) a defense-in-depth
+// transitional-solo guard in the consensus service that withholds the solo
+// direct-externalize whenever a peer is connected but the quorum is still 1-of-1
+// (`min_peers >= 1 && connected_peers >= 1 && is_solo_mode()`). A genuine lone
+// node (min_peers == 0) is unaffected and still mints solo. Verified empirically
+// over real loopback `botho run` processes (release binary): the A+B 2-minter
+// scenario now runs FEDERATED SCP and converges on identical tips + identical
+// historical hashes across 10/10 runs with ZERO solo-mode externalizes (the
+// pre-fix binary forked in ~2 of 8 runs with the identical harness). In the
+// full 3-node capstone below, steps 1-4(a) now pass on EVERY run: A+B converge
+// (no n=2 fork), C catches up onto A's exact chain, and ALL THREE converge past
+// N onto one identical tip — with ZERO solo-mode externalizes.
+//
+// WHY THIS SOAK STAYS GATED (per the STOP guardrail — a SEPARATE n=3 issue, NOT
+// #433): the FINAL step — node C winning its OWN coinbase (non-zero balance)
+// within the window — is still INTERMITTENT (~2 of 3 runs pass). The
+// convergence always succeeds, but C frequently loses the PoW/SCP race for a
+// block of its own: the established A+B drift their SCP slot ahead of C, so C's
+// proposals land on an earlier slot and get discarded as "future slots"
+// (node_impl), and C's block is rarely the one externalized. That is the
+// pre-existing n=3 SCP-slot/height DRIFT join-boundary liveness concern
+// (#421/#427-family) — independent of the #433 n=2 solo fork that this PR fixes.
+// Per the guardrail we do NOT force this green by masking that flake. Re-enable
+// (drop `&& false`) once the n=3 join-boundary drift is closed so a freshly
+// joined minter reliably gets a block accepted. The #433 n=2 fix itself is
+// complete, unit-tested, and empirically proven above.
 const enabled = wasmBuilt && RUN_LOCAL_NODE && false
 const maybe = enabled ? describe : describe.skip
 
