@@ -29,6 +29,19 @@ Unlike Bitcoin where the first valid block to propagate "wins," Botho separates 
 
 **Solo minting is impossible by design.** Minting requires a satisfiable quorum with at least one other peer.
 
+In recommended mode the quorum threshold follows the configured **fault model**:
+
+- `crash` (default): a 2f+1 simple majority (`floor(n/2)+1`) — high-availability
+  / liveness for trusted homogeneous clusters. A single crashed or lagging node
+  (including a peer that is still catching up) cannot stall consensus. At n=3
+  the quorum is 2-of-3.
+- `bft`: a 3f+1 Byzantine quorum (`n - floor((n-1)/3)`) for an adversarial
+  posture. Genuine Byzantine tolerance needs **at least 4 nodes**; at n<=3 it
+  degenerates to unanimity.
+
+See [Configuration → network.quorum](operations/configuration.md#networkquorum)
+for the full threshold tables.
+
 ### Minting State Machine
 
 ```

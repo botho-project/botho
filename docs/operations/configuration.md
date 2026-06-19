@@ -26,10 +26,11 @@ cors_origins = ["http://localhost", "http://127.0.0.1", "https://botho.io"]
 
 # Quorum configuration for consensus
 [network.quorum]
-mode = "recommended"  # or "explicit"
-min_peers = 1         # For recommended mode: minimum peers before minting
-threshold = 2         # For explicit mode: required agreement count
-members = []          # For explicit mode: list of trusted peer IDs
+mode = "recommended"   # or "explicit"
+fault_model = "crash"  # (recommended mode) "crash" (default) or "bft"
+min_peers = 1          # For recommended mode: minimum peers before minting
+threshold = 2          # For explicit mode: required agreement count
+members = []           # For explicit mode: list of trusted peer IDs
 
 [minting]
 enabled = false
@@ -66,30 +67,65 @@ Controls how the node participates in SCP consensus.
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `mode` | string | "recommended" | Either "recommended" or "explicit" |
+| `fault_model` | string | "crash" | (Recommended mode) "crash" (2f+1) or "bft" (3f+1) |
 | `min_peers` | integer | 1 | (Recommended mode) Minimum peers before minting |
 | `threshold` | integer | 2 | (Explicit mode) Required agreement count |
 | `members` | array | [] | (Explicit mode) List of trusted peer IDs |
 
 #### Recommended Mode
 
-Automatically trusts discovered peers and calculates a BFT-safe threshold:
+Automatically trusts discovered peers and calculates a quorum threshold from
+the configured **fault model** over `n` (peers + self).
 
 ```toml
 [network.quorum]
 mode = "recommended"
+fault_model = "crash"   # default; use "bft" for a Byzantine posture
 min_peers = 1
 ```
 
-The threshold is calculated as `n - f` where `f = (n - 1) / 3` (failures tolerated).
+##### Fault model: `crash` (default)
 
-| Nodes | Threshold | Fault Tolerance |
-|-------|-----------|-----------------|
-| 2     | 2-of-2    | 0               |
-| 3     | 2-of-3    | 1               |
-| 4     | 3-of-4    | 1               |
-| 5     | 4-of-5    | 1               |
-| 6     | 4-of-6    | 2               |
-| 7     | 5-of-7    | 2               |
+Crash-fault tolerance via a **2f+1 simple majority**: `threshold = floor(n/2) + 1`.
+This is the recommended posture for trusted homogeneous clusters (the testnet
+default). It gives genuine high-availability / liveness — a single crashed or
+lagging node cannot stall consensus — and matches Stellar Core's homogeneous
+default. Crash-fault safety (no fork) is preserved because any two majority
+subsets always intersect, and block-apply tip checks are unchanged.
+
+| Nodes | Threshold | Crash faults tolerated |
+|-------|-----------|------------------------|
+| 1     | 1-of-1    | 0                      |
+| 2     | 2-of-2    | 0                      |
+| 3     | 2-of-3    | 1                      |
+| 4     | 3-of-4    | 1                      |
+| 5     | 3-of-5    | 2                      |
+| 6     | 4-of-6    | 2                      |
+
+##### Fault model: `bft`
+
+Byzantine-fault tolerance via a **3f+1 quorum**: `threshold = n - floor((n-1)/3)`.
+Tolerates up to `f` arbitrarily malicious (Byzantine) members. Note that
+**genuine BFT requires at least 4 nodes**; at `n <= 3` this collapses to
+unanimity (n-of-n) and tolerates zero faults.
+
+```toml
+[network.quorum]
+mode = "recommended"
+fault_model = "bft"
+```
+
+| Nodes | Threshold | Byzantine faults tolerated |
+|-------|-----------|----------------------------|
+| 1     | 1-of-1    | 0                          |
+| 2     | 2-of-2    | 0                          |
+| 3     | 3-of-3    | 0                          |
+| 4     | 3-of-4    | 1                          |
+| 5     | 4-of-5    | 1                          |
+| 6     | 5-of-6    | 1                          |
+
+An invalid `fault_model` value (anything other than `crash` or `bft`) is
+rejected at config load with a clear error.
 
 #### Explicit Mode
 
