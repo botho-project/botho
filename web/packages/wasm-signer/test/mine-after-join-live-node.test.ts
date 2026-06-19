@@ -165,6 +165,38 @@ const RUN_LOCAL_NODE = env.BOTHO_E2E_NODE === '1'
 // way that does not regress two-minter liveness. Re-enable (drop `&& false`)
 // then. The proposer gate's own acceptance (no pre-quorum solo block; staggered
 // 2-node no fork; A+B target + C catch-up) is proven separately (#428).
+// #421 status (SCP-slot/height drift — hybrid A1 + C): the DRIFT itself is now
+// FIXED. Verified end-to-end over real loopback `botho run` processes
+// (BOTHO_E2E_NODE=1, release binary):
+//   - Steps 1-3 PASS: A+B (2-of-2) reach the shared target N=ringSize+4 with
+//     IDENTICAL tips (no fork, no wedge), C joins, connects, and catches up
+//     0 -> N onto A's EXACT chain (all three sit on one tip at height N).
+//   - Option C (this PR) PROVABLY works: a fresh joiner C that booted at slot 1
+//     while the established minters had DRIFTED their SCP slot far ahead
+//     (e.g. slot 29 at ledger height 24) ANCHORS FORWARD to the leaders' live
+//     slot ("Anchoring SCP slot forward ... to_slot=29") instead of discarding
+//     their messages as future slots. On baseline (pre-fix) C stays stuck at
+//     slot 1 forever; with this PR all three nodes align on the same slot index.
+//     i.e. the #421 drift convergence symptom is closed.
+//
+// What STILL blocks the FINAL "C mines a block accepted past N" end-state, and
+// is OUT OF SCOPE for #421's drift fix: the 3-node quorum at n=3 is a 3-of-3
+// UNANIMOUS (n-of-n) set, and the 2->3 quorum reconfiguration at C's join is
+// DEFERRED on the busy established minters (round in flight) — so at the join-
+// boundary slot the nodes operate under MISMATCHED memberships (C on 3-of-3, the
+// established minters still on 2-of-2 until the deferred reconfig applies, which
+// itself needs that slot to externalize first → deadlock). This n-of-n /
+// join-boundary reconfiguration coordination problem is the SCP cluster-health
+// concern tracked by #427, NOT the SCP-slot/height drift of #421. Baseline
+// (3fb656a, pre-#421-fix) stalls at the SAME height N with C never even
+// participating, so this PR strictly improves convergence (C now aligns) without
+// regressing two-minter liveness (verified: 2-minter simultaneous + staggered
+// loopback both reach height ~25-28 with no wedge; T5 guards it in-process).
+//
+// Per #421's STOP guardrail we do NOT force this green and do NOT reintroduce any
+// #422-style proposal filter / backward slot rewind to brute-force it. The soak
+// stays gated on the full 3-node end-state until #427 (n-of-n threshold + join-
+// boundary reconfig coordination) lands. Re-enable (drop `&& false`) then.
 const enabled = wasmBuilt && RUN_LOCAL_NODE && false
 const maybe = enabled ? describe : describe.skip
 
