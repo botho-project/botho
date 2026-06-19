@@ -192,6 +192,15 @@ pub struct ConsensusService {
     /// [`Self::set_connected_peers`]). Compared against `min_peers` by the
     /// participation gate.
     connected_peers: usize,
+
+    /// Highest SCP `slot_index` each QUORUM-MEMBER peer has advertised in a
+    /// gossiped SCP message (issue #431). Used to corroborate a forward anchor
+    /// against a v-blocking set of distinct quorum members before
+    /// fast-forwarding the local SCP slot, so a single bogus/non-member
+    /// high-slot claim (e.g. `u64::MAX`) cannot strand an idle node. Only
+    /// senders that are current members of `quorum_set` are recorded; entries
+    /// are pruned when the quorum set changes (see [`Self::apply_quorum_set`]).
+    peer_advertised_slots: HashMap<NodeID, SlotIndex>,
 }
 
 impl ConsensusService {
@@ -331,6 +340,7 @@ impl ConsensusService {
             // the operator declared an expectation of peers.
             min_peers: 0,
             connected_peers: 0,
+            peer_advertised_slots: HashMap::new(),
         }
     }
 
@@ -483,6 +493,13 @@ impl ConsensusService {
         );
         self.quorum_set = new_quorum_set.clone();
         self.scp_node.set_quorum_set(new_quorum_set);
+
+        // Issue #431: drop advertised-slot records for nodes that are no longer
+        // members, so a former member cannot keep contributing to anchor
+        // corroboration after leaving the quorum set.
+        let members = self.quorum_set.nodes();
+        self.peer_advertised_slots
+            .retain(|node_id, _| members.contains(node_id));
 
         if was_solo && !self.is_solo_mode() {
             info!("Exited solo mode: peers present, switching to SCP consensus path");
@@ -653,7 +670,14 @@ impl ConsensusService {
         // This is forward-only and idle-gated (see `anchor_scp_slot_to_peer`),
         // so it never re-seats backward, never re-opens an externalized index,
         // and never triggers for two established minters sharing a tip.
-        self.anchor_scp_slot_to_peer(scp_msg.slot_index);
+        //
+        // Issue #431: this runs BEFORE `scp_node.handle_message` authenticates
+        // the message, so a bogus high `slot_index` from a single or non-member
+        // peer must NOT drive an anchor. The anchor is therefore gated on the
+        // SENDER being a current quorum member AND on the target slot being
+        // corroborated by a v-blocking set of distinct quorum members — a lone
+        // `u64::MAX` claim cannot move an idle node's slot.
+        self.anchor_scp_slot_to_peer(&scp_msg.sender_id, scp_msg.slot_index);
 
         // Handle the message
         if let Some(response) = self.scp_node.handle_message(&scp_msg)? {
@@ -1167,6 +1191,75 @@ impl ConsensusService {
         metrics.bN > 0 || metrics.phase != ScpPhase::NominatePrepare
     }
 
+    /// Size of a v-blocking set for the local (flat) quorum set — the minimum
+    /// number of DISTINCT quorum members that, by being ahead, prove the
+    /// network has advanced (issue #431).
+    ///
+    /// For a `T`-of-`N` quorum set, every quorum has at least `T` members, so a
+    /// set of `N - T + 1` members intersects every quorum (v-blocking): the
+    /// local node cannot form a quorum without at least one of them. If that
+    /// many distinct members have each advertised a slot `>= target`, the local
+    /// node cannot assemble a quorum at any slot below `target`, so the network
+    /// has provably moved to `target`. Clamped to at least 1 so a single bogus
+    /// claim is never self-corroborating. Botho uses flat auto-trust quorum
+    /// sets (all peers as top-level members), so `members.len()` and
+    /// `threshold` describe the real deployment exactly.
+    fn anchor_corroboration_threshold(&self) -> usize {
+        let n = self.quorum_set.members.len();
+        let t = self.quorum_set.threshold as usize;
+        n.saturating_sub(t).saturating_add(1).max(1)
+    }
+
+    /// Number of DISTINCT quorum members (excluding ourselves) currently known
+    /// to have advertised a slot `>= target` (issue #431). Only members of the
+    /// live quorum set are counted; stale records are ignored defensively.
+    fn anchor_corroborating_member_count(&self, target: SlotIndex) -> usize {
+        let members = self.quorum_set.nodes();
+        self.peer_advertised_slots
+            .iter()
+            .filter(|(node_id, &slot)| {
+                slot >= target && *node_id != &self.node_id && members.contains(*node_id)
+            })
+            .count()
+    }
+
+    /// The HIGHEST slot index that is corroborated by a v-blocking set of
+    /// distinct quorum members (issue #431).
+    ///
+    /// Established leaders can sit at slightly different slots (the #421
+    /// apply-boundary drift), so insisting on corroboration at the exact slot
+    /// of the latest message could leave a genuine joiner anchoring slowly
+    /// or not at all. Instead we anchor to the highest slot a v-blocking
+    /// set actually agrees on: the `k`-th largest advertised slot among
+    /// distinct quorum members, where `k =
+    /// anchor_corroboration_threshold()`. That value is, by construction,
+    /// corroborated by at least `k` members (a v-blocking set) and
+    /// is the most advanced provably-network slot we may safely jump to.
+    ///
+    /// This is what BOUNDS a bogus claim: a single member advertising
+    /// `u64::MAX` is the 1st-largest entry, not the `k`-th (for `k >= 2`), so
+    /// it can never become the corroborated target on its own — the result
+    /// is pulled down to the `k`-th largest, which only a genuine
+    /// v-blocking set of members can raise. Returns `None` if fewer than
+    /// `k` members have advertised any slot.
+    fn highest_corroborated_slot(&self) -> Option<SlotIndex> {
+        let k = self.anchor_corroboration_threshold();
+        let members = self.quorum_set.nodes();
+        let mut slots: Vec<SlotIndex> = self
+            .peer_advertised_slots
+            .iter()
+            .filter(|(node_id, _)| *node_id != &self.node_id && members.contains(*node_id))
+            .map(|(_, &slot)| slot)
+            .collect();
+        if slots.len() < k {
+            return None;
+        }
+        // Descending sort; the k-th largest (index k-1) is corroborated by the
+        // k largest-advertising members (a v-blocking set).
+        slots.sort_unstable_by(|a, b| b.cmp(a));
+        slots.get(k - 1).copied()
+    }
+
     /// Forward-only, safety-gated anchoring of the SCP slot to the network's
     /// LIVE slot learned from an inbound peer SCP message (issue #421, Option
     /// C; refined for the join-handoff race in issue #436).
@@ -1210,14 +1303,62 @@ impl ConsensusService {
     ///   is not ahead); only a genuinely BEHIND node ever fast-forwards, and
     ///   only toward the leaders — never the leaders moving.
     ///
+    /// # ANTI-GRIEFING (issue #431)
+    ///
+    /// This hook runs in `handle_message` BEFORE `scp_node.handle_message`
+    /// authenticates the message, so the advertised `peer_slot` is an UNTRUSTED
+    /// claim. A malicious/buggy peer gossiping a huge `slot_index` (e.g.
+    /// `u64::MAX`) must NOT be able to fast-forward an idle node to a bogus
+    /// slot and strand it (it would then discard every legitimate,
+    /// lower-slot peer message). We therefore impose two gates before
+    /// anchoring:
+    ///
+    /// - SENDER-MEMBERSHIP: the message sender must be a current member of the
+    ///   local quorum set (`quorum_set.nodes()`). A non-member's slot claim is
+    ///   recorded by no one and drives no anchor. (Botho auto-trusts connected
+    ///   peers as flat members, so this bounds anchoring to actual quorum
+    ///   peers, not arbitrary gossip relays.)
+    /// - CORROBORATION (v-blocking set): we only anchor to `target` once a
+    ///   v-blocking set of DISTINCT quorum members have each advertised a slot
+    ///   `>= target`. In a flat `T`-of-`N` quorum set a v-blocking set has size
+    ///   `N - T + 1`: the local node cannot assemble a quorum at any slot below
+    ///   `target` without acknowledging at least one of those members, so the
+    ///   network has PROVABLY advanced to `target`. A single peer's claim
+    ///   (member or not) is never sufficient, which closes the bogus-high-slot
+    ///   vector while a genuine joiner still anchors once enough real members
+    ///   are observably ahead (the #396 capability is preserved).
+    ///
     /// Returns `true` if the SCP slot was advanced to the peer's slot.
-    fn anchor_scp_slot_to_peer(&mut self, peer_slot: SlotIndex) -> bool {
+    fn anchor_scp_slot_to_peer(&mut self, sender_id: &NodeID, peer_slot: SlotIndex) -> bool {
         // Solo mode manages its own slot via `advance_slot`; never interfere.
         if self.is_solo_mode() {
             return false;
         }
 
+        // SENDER-MEMBERSHIP GATE (issue #431): only a current quorum member's
+        // advertised slot may influence anchoring. A non-member (arbitrary
+        // gossip relay) is ignored entirely — neither recorded nor acted on.
+        let members = self.quorum_set.nodes();
+        if !members.contains(sender_id) {
+            trace!(
+                peer_slot,
+                "Ignoring advertised slot from non-quorum-member sender for anchoring (issue #431)"
+            );
+            return false;
+        }
+
         let current = self.scp_node.current_slot_index();
+
+        // Record the highest slot this member has advertised (monotonic per
+        // member), so corroboration can count DISTINCT members at/above the
+        // target. This is updated even when we do not anchor this round.
+        let entry = self
+            .peer_advertised_slots
+            .entry(sender_id.clone())
+            .or_insert(0);
+        if peer_slot > *entry {
+            *entry = peer_slot;
+        }
 
         // FORWARD-ONLY: only anchor when the peer is STRICTLY ahead of us. If
         // the peer is at or below our slot, its message is processed normally by
@@ -1226,6 +1367,28 @@ impl ConsensusService {
         if peer_slot <= current {
             return false;
         }
+
+        // CORROBORATION GATE (issue #431): require a v-blocking set of distinct
+        // quorum members to corroborate the jump before anchoring forward. A
+        // lone (even member) claim — including a bogus u64::MAX — is
+        // insufficient, so it cannot strand an idle node. We anchor to the
+        // HIGHEST slot a v-blocking set actually agrees on, never the raw
+        // claimed value, so a single inflated `peer_slot` only ever pulls us as
+        // far as the corroborated network slot.
+        let target_slot = match self.highest_corroborated_slot() {
+            Some(target) if target > current => target,
+            _ => {
+                debug!(
+                    current,
+                    peer_slot,
+                    corroborating = self.anchor_corroborating_member_count(peer_slot),
+                    required = self.anchor_corroboration_threshold(),
+                    "Not anchoring SCP slot to peer's claimed slot: not yet corroborated by a \
+                     v-blocking set of quorum members (issue #431 anti-griefing gate)"
+                );
+                return false;
+            }
+        };
 
         // SAFETY-GATED (issue #436, refining #430 Option C): never discard a
         // slot that holds genuine BALLOT/COMMIT state — re-opening a value that
@@ -1243,6 +1406,7 @@ impl ConsensusService {
         if Self::slot_holds_ballot_or_commit_state(&metrics) {
             debug!(
                 current,
+                target_slot,
                 peer_slot,
                 bN = metrics.bN,
                 phase = ?metrics.phase,
@@ -1254,14 +1418,16 @@ impl ConsensusService {
 
         info!(
             from_slot = current,
-            to_slot = peer_slot,
+            to_slot = target_slot,
+            peer_slot,
             "Anchoring SCP slot forward to the network's live slot learned from a \
              peer (issue #421 Option C): a behind node fast-forwards to the leaders' \
-             slot so it stops discarding their messages as future slots"
+             slot (corroborated by a v-blocking set of quorum members, issue #431) \
+             so it stops discarding their messages as future slots"
         );
-        // FORWARD-ONLY: peer_slot > current was checked above, so the
+        // FORWARD-ONLY: target_slot > current was checked above, so the
         // `reset_slot_index` strictly-increasing assert is satisfied.
-        self.scp_node.reset_slot_index(peer_slot);
+        self.scp_node.reset_slot_index(target_slot);
 
         // A fresh slot has nothing proposed/externalized locally yet.
         self.proposed_values.clear();
@@ -2215,6 +2381,166 @@ mod tests {
                  protocol state (would drop accepted-commit state)"
             );
         }
+    }
+
+    /// Build a quorum set using the CRASH-model threshold `floor(n/2) + 1`
+    /// (botho's default `FaultModel::Crash`). For `n >= 3` this gives a
+    /// threshold STRICTLY below `n`, so a v-blocking set (`n - t + 1`) is
+    /// larger than one node — exactly the regime the issue #431
+    /// corroboration gate must protect (a single member's claim must NOT be
+    /// self-corroborating).
+    fn crash_quorum(ids: &[u32]) -> QuorumSet {
+        let n = ids.len();
+        let threshold = (n / 2 + 1) as u32;
+        let members: Vec<QuorumSetMember<NodeID>> = ids
+            .iter()
+            .map(|i| QuorumSetMember::Node(node(*i)))
+            .collect();
+        QuorumSet::new(threshold, members)
+    }
+
+    /// Issue #431 (anti-griefing): a BOGUS high `slot_index` from a SINGLE
+    /// quorum member must NOT move an idle node's slot, and neither must any
+    /// claim from a NON-member. A corroborated, in-window slot from a
+    /// v-blocking set of quorum members DOES anchor it forward.
+    ///
+    /// Fails PRE-fix (a lone `u64::MAX` claim fast-forwarded the node);
+    /// passes POST-fix (membership + v-blocking corroboration gates).
+    #[test]
+    fn t_issue431_bogus_high_slot_does_not_strand_idle_node() {
+        let cfg = ConsensusConfig::fixed_timing(0);
+        // 3-of-... CRASH quorum: n=3, threshold=2, so a v-blocking set is
+        // n - t + 1 = 2 members. A single member is NOT v-blocking.
+        let qs = crash_quorum(&[1, 2, 3]);
+        assert_eq!(qs.threshold, 2, "crash 3-node threshold is floor(3/2)+1=2");
+        let mut b = ConsensusService::new(node(1), qs, cfg, genesis_chain_state());
+        assert_eq!(b.current_slot(), 1, "behind node starts at genesis slot 1");
+
+        let prev = [0u8; 32];
+
+        // (a) A single quorum member (node 2) gossips a bogus u64::MAX slot.
+        // Membership passes, but corroboration (needs 2 distinct members) does
+        // not: the idle node must NOT anchor.
+        let bogus_slot = u64::MAX;
+        let bogus_tx = intrinsic_valid_minting_tx(1, prev, bogus_slot);
+        b.register_minting_tx(bogus_tx.hash(), bincode::serialize(&bogus_tx).unwrap());
+        let bogus_msg = peer_nominate_prepare(
+            node(2),
+            crash_quorum(&[1, 2, 3]),
+            bogus_slot,
+            ConsensusValue::from_minting_tx(bogus_tx.hash(), bogus_tx.pow_priority()),
+        );
+        b.handle_message(wire(&node(2), &bogus_msg))
+            .expect("handle_message");
+        assert_eq!(
+            b.current_slot(),
+            1,
+            "issue #431: a lone quorum member's bogus u64::MAX slot must NOT \
+             strand the idle node (no v-blocking corroboration)"
+        );
+
+        // (a') A NON-member (node 9) gossips a huge slot, even corroborated by
+        // itself many times — it must be ignored entirely (membership gate).
+        let nonmember_slot: SlotIndex = 50;
+        let nm_tx = intrinsic_valid_minting_tx(2, prev, nonmember_slot);
+        b.register_minting_tx(nm_tx.hash(), bincode::serialize(&nm_tx).unwrap());
+        let nm_msg = peer_nominate_prepare(
+            node(9),
+            crash_quorum(&[1, 2, 3]),
+            nonmember_slot,
+            ConsensusValue::from_minting_tx(nm_tx.hash(), nm_tx.pow_priority()),
+        );
+        b.handle_message(wire(&node(9), &nm_msg))
+            .expect("handle_message");
+        assert_eq!(
+            b.current_slot(),
+            1,
+            "issue #431: a non-quorum-member's slot claim must NOT drive an anchor"
+        );
+
+        // (b) A v-blocking set of DISTINCT quorum members (nodes 2 and 3) both
+        // advertise a real, in-window slot S. Now corroboration is met and the
+        // idle node anchors FORWARD to S.
+        let real_slot: SlotIndex = 7;
+        let tx2 = intrinsic_valid_minting_tx(3, prev, real_slot);
+        b.register_minting_tx(tx2.hash(), bincode::serialize(&tx2).unwrap());
+        let msg2 = peer_nominate_prepare(
+            node(2),
+            crash_quorum(&[1, 2, 3]),
+            real_slot,
+            ConsensusValue::from_minting_tx(tx2.hash(), tx2.pow_priority()),
+        );
+        b.handle_message(wire(&node(2), &msg2))
+            .expect("handle_message");
+        // Only ONE member (node 2) so far at slot 7 -> still not corroborated.
+        assert_eq!(
+            b.current_slot(),
+            1,
+            "issue #431: one member at the target slot is below the v-blocking \
+             threshold (2); must not anchor yet"
+        );
+
+        let tx3 = intrinsic_valid_minting_tx(4, prev, real_slot);
+        b.register_minting_tx(tx3.hash(), bincode::serialize(&tx3).unwrap());
+        let msg3 = peer_nominate_prepare(
+            node(3),
+            crash_quorum(&[1, 2, 3]),
+            real_slot,
+            ConsensusValue::from_minting_tx(tx3.hash(), tx3.pow_priority()),
+        );
+        b.handle_message(wire(&node(3), &msg3))
+            .expect("handle_message");
+        assert_eq!(
+            b.current_slot(),
+            real_slot,
+            "issue #431: once a v-blocking set (nodes 2 and 3) corroborates slot \
+             7, the idle joiner anchors FORWARD — legitimate convergence (#396) \
+             is preserved"
+        );
+    }
+
+    /// Issue #431: even AFTER a v-blocking set corroborates a real slot, a
+    /// subsequent lone bogus u64::MAX claim must NOT over-advance the node past
+    /// the corroborated network slot. We anchor only to the highest
+    /// v-blocking-corroborated slot, never the raw claimed value.
+    #[test]
+    fn t_issue431_anchor_is_bounded_to_corroborated_slot() {
+        let cfg = ConsensusConfig::fixed_timing(0);
+        let qs = crash_quorum(&[1, 2, 3]);
+        let mut b = ConsensusService::new(node(1), qs, cfg, genesis_chain_state());
+        let prev = [0u8; 32];
+
+        // Both members corroborate slot 5.
+        for (tag, peer) in [(1u8, 2u32), (2u8, 3u32)] {
+            let tx = intrinsic_valid_minting_tx(tag, prev, 5);
+            b.register_minting_tx(tx.hash(), bincode::serialize(&tx).unwrap());
+            let m = peer_nominate_prepare(
+                node(peer),
+                crash_quorum(&[1, 2, 3]),
+                5,
+                ConsensusValue::from_minting_tx(tx.hash(), tx.pow_priority()),
+            );
+            b.handle_message(wire(&node(peer), &m)).expect("handle");
+        }
+        assert_eq!(b.current_slot(), 5, "anchors to the corroborated slot 5");
+
+        // Now a lone member claims u64::MAX. Only one member is at that slot, so
+        // the highest corroborated slot is still 5 (already reached): no jump.
+        let bogus_tx = intrinsic_valid_minting_tx(3, prev, u64::MAX);
+        b.register_minting_tx(bogus_tx.hash(), bincode::serialize(&bogus_tx).unwrap());
+        let bogus = peer_nominate_prepare(
+            node(2),
+            crash_quorum(&[1, 2, 3]),
+            u64::MAX,
+            ConsensusValue::from_minting_tx(bogus_tx.hash(), bogus_tx.pow_priority()),
+        );
+        b.handle_message(wire(&node(2), &bogus)).expect("handle");
+        assert_eq!(
+            b.current_slot(),
+            5,
+            "issue #431: a lone u64::MAX claim must not push the node past the \
+             v-blocking-corroborated slot"
+        );
     }
 
     /// T4 — Option A1 benign-skip classification. The decision "is this apply
