@@ -12,6 +12,17 @@ import {
   type ParsedAddress,
 } from './address'
 
+// Claim-link (bearer payment link) helpers
+export {
+  CLAIM_LINK_VERSION,
+  CLAIM_LINK_ENTROPY_BYTES,
+  createClaimLinkMnemonic,
+  encodeClaimLinkFragment,
+  buildClaimLink,
+  parseClaimLinkFragment,
+  type ClaimLinkSecret,
+} from './claim-link'
+
 // Re-export address utilities
 export {
   deriveAddressFromMnemonic,

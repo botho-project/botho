@@ -8,9 +8,10 @@ import {
   type ReactNode,
 } from 'react'
 import { RemoteNodeAdapter, type WsConnectionStatus } from '@botho/adapters'
-import { AddressBook, saveWallet, loadWallet, getWalletInfo, deriveAddress, deriveKeypairs, parseAddress, isValidMnemonic, clearWallet } from '@botho/core'
-import type { Balance, Contact, NodeInfo, Transaction } from '@botho/core'
+import { AddressBook, ClaimLinkStore, saveWallet, loadWallet, getWalletInfo, deriveAddress, deriveKeypairs, parseAddress, isValidMnemonic, clearWallet, createClaimLinkMnemonic, buildClaimLink } from '@botho/core'
+import type { Balance, Contact, NodeInfo, Transaction, ClaimLinkRecord } from '@botho/core'
 import { buildSendTransaction, spendableBalance, buildOwnedHistory } from '@botho/wasm-signer'
+import { buildAndSubmitSend, scanEphemeral, sweepEphemeral, SWEEP_FEE_RESERVE } from '../lib/claim-link-ops'
 import { type NetworkConfig, loadSelectedNetwork, loadSelectedIngress, NETWORKS, DEFAULT_NETWORK_ID, DEFAULT_INGRESS_ID, createCustomNetwork, networkForIngress, getIngressNode } from '../config/networks'
 
 interface WalletState {
@@ -33,6 +34,23 @@ interface WalletState {
 
   // Address book
   contacts: Contact[]
+
+  // Outstanding claim links (sender side, #460)
+  claimLinks: ClaimLinkRecord[]
+}
+
+/** Result of creating a claimable payment link. */
+export interface CreatedClaimLink {
+  /** The shareable URL with the secret in the fragment. */
+  url: string
+  /** The ephemeral receiving address the funds were sent to. */
+  ephAddress: string
+  /** Net amount the recipient will receive, in picocredits. */
+  amount: bigint
+  /** Funding transaction hash. */
+  fundingTxHash: string
+  /** Local record id. */
+  id: string
 }
 
 interface WalletContextValue extends WalletState {
@@ -60,6 +78,20 @@ interface WalletContextValue extends WalletState {
   updateContact: (id: string, updates: Partial<Pick<Contact, 'name' | 'address' | 'notes'>>) => Promise<Contact>
   deleteContact: (id: string) => Promise<void>
   getContactName: (address: string) => string
+
+  // Claimable payment links (#460)
+  /**
+   * Create a claim link: fund a fresh ephemeral wallet from this wallet with
+   * `amount` + a sweep-fee reserve, persist the outstanding record, and return
+   * the shareable URL. `amount` is the NET the recipient receives.
+   */
+  sendViaLink: (amount: bigint) => Promise<CreatedClaimLink>
+  /** Refresh outstanding-link statuses by re-scanning each ephemeral wallet. */
+  refreshClaimLinks: () => Promise<void>
+  /** Reclaim an unclaimed link's funds back to this wallet. */
+  refundClaimLink: (id: string) => Promise<string>
+  /** Forget a claim-link record locally (does not touch on-chain funds). */
+  forgetClaimLink: (id: string) => Promise<void>
 }
 
 /** Encode bytes as a lowercase hex string. */
@@ -172,6 +204,7 @@ async function fetchHistory(
 const WalletContext = createContext<WalletContextValue | null>(null)
 
 const addressBook = new AddressBook()
+const claimLinkStore = new ClaimLinkStore()
 
 /** Polling interval when WebSocket is disconnected (30 seconds) */
 const FALLBACK_POLL_INTERVAL = 30000
@@ -219,6 +252,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     balance: null,
     transactions: [],
     contacts: [],
+    claimLinks: [],
   })
 
   // Store adapter in ref so we can recreate it when network changes
@@ -231,6 +265,13 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     addressBook.load().then(() => {
       setState(s => ({ ...s, contacts: addressBook.getAll() }))
+    })
+  }, [])
+
+  // Load outstanding claim links on mount
+  useEffect(() => {
+    claimLinkStore.load().then(() => {
+      setState(s => ({ ...s, claimLinks: claimLinkStore.getAll() }))
     })
   }, [])
 
@@ -579,6 +620,97 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     setState(s => ({ ...s, transactions }))
   }, [state.address])
 
+  // Claimable payment link methods (#460) ---------------------------------
+
+  const sendViaLink = useCallback(async (amount: bigint): Promise<CreatedClaimLink> => {
+    const adapter = adapterRef.current
+    if (!adapter.isConnected()) throw new Error('Not connected to a node')
+    const mnemonic = mnemonicRef.current
+    if (!mnemonic) throw new Error('Wallet is locked. Unlock it before sending.')
+    if (amount <= 0n) throw new Error('Amount must be greater than 0')
+
+    // 1. Generate the ephemeral wallet (the link's bearer secret) and its addr.
+    const ephMnemonic = createClaimLinkMnemonic()
+    const ephAddress = deriveAddress(ephMnemonic)
+
+    // 2. Fund the ephemeral address with amount + a sweep-fee reserve, so the
+    //    recipient nets `amount` after paying the sweep fee from the output.
+    const fundingAmount = amount + SWEEP_FEE_RESERVE
+    const fundingTxHash = await buildAndSubmitSend(adapter, mnemonic, ephAddress, fundingAmount)
+
+    // 3. Persist the outstanding link locally so the sender can track/refund.
+    const record = await claimLinkStore.add({
+      ephMnemonic,
+      ephAddress,
+      amount,
+      fundingTxHash,
+    })
+    setState(s => ({ ...s, claimLinks: claimLinkStore.getAll() }))
+
+    // 4. Build the shareable URL with the secret in the fragment (+ amount hint).
+    const origin =
+      typeof window !== 'undefined' && window.location?.origin
+        ? window.location.origin
+        : 'https://wallet.botho.io'
+    const url = buildClaimLink(origin, ephMnemonic, amount)
+
+    // Refresh the sender's balance opportunistically.
+    if (state.address) {
+      fetchBalance(adapter, state.address, mnemonicRef.current)
+        .then((balance) => setState((s) => ({ ...s, balance })))
+        .catch(() => {})
+    }
+
+    return { url, ephAddress, amount, fundingTxHash, id: record.id }
+  }, [state.address])
+
+  const refreshClaimLinks = useCallback(async () => {
+    const adapter = adapterRef.current
+    if (!adapter.isConnected()) return
+    const records = claimLinkStore.getAll()
+    for (const r of records) {
+      if (r.status !== 'outstanding') continue
+      try {
+        const { gross } = await scanEphemeral(adapter, r.ephMnemonic)
+        // An outstanding link whose ephemeral output is no longer spendable
+        // (gross === 0) AND whose funding has had time to confirm means it was
+        // swept by someone — mark it claimed. We only flip on a zero result to
+        // avoid racing the funding confirmation.
+        if (gross === 0n) {
+          await claimLinkStore.setStatus(r.id, 'claimed')
+        }
+      } catch {
+        // Ignore scan errors; leave status unchanged.
+      }
+    }
+    setState(s => ({ ...s, claimLinks: claimLinkStore.getAll() }))
+  }, [])
+
+  const refundClaimLink = useCallback(async (id: string): Promise<string> => {
+    const adapter = adapterRef.current
+    if (!adapter.isConnected()) throw new Error('Not connected to a node')
+    if (!state.address) throw new Error('No wallet address to refund to')
+    const record = claimLinkStore.getAll().find((r) => r.id === id)
+    if (!record) throw new Error('Claim link not found')
+
+    // Sweep the ephemeral output back to the sender's own address.
+    const { txHash } = await sweepEphemeral(adapter, record.ephMnemonic, state.address)
+    await claimLinkStore.setStatus(id, 'refunded')
+    setState(s => ({ ...s, claimLinks: claimLinkStore.getAll() }))
+
+    if (state.address) {
+      fetchBalance(adapter, state.address, mnemonicRef.current)
+        .then((balance) => setState((s) => ({ ...s, balance })))
+        .catch(() => {})
+    }
+    return txHash
+  }, [state.address])
+
+  const forgetClaimLink = useCallback(async (id: string) => {
+    await claimLinkStore.delete(id)
+    setState(s => ({ ...s, claimLinks: claimLinkStore.getAll() }))
+  }, [])
+
   // Address book methods
   const addContact = useCallback(async (name: string, address: string, notes?: string) => {
     const contact = await addressBook.add(name, address, notes)
@@ -620,6 +752,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         updateContact,
         deleteContact,
         getContactName,
+        sendViaLink,
+        refreshClaimLinks,
+        refundClaimLink,
+        forgetClaimLink,
       }}
     >
       {children}

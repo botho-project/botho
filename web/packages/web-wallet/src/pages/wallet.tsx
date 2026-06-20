@@ -7,7 +7,9 @@ import { useWallet } from '../contexts/wallet'
 import { useNetwork } from '../contexts/network'
 import { NetworkSelector } from '../components/NetworkSelector'
 import { FaucetButton } from '../components/FaucetButton'
-import { Send, RefreshCw, ArrowLeft, Shield, Eye, KeyRound, AlertCircle, Lock, Settings, Trash2 } from 'lucide-react'
+import { SendLinkModal } from '../components/SendLinkModal'
+import { OutstandingLinks } from '../components/OutstandingLinks'
+import { Send, Link2, RefreshCw, ArrowLeft, Shield, Eye, KeyRound, AlertCircle, Lock, Settings, Trash2 } from 'lucide-react'
 
 function CreateWalletView({ onCreate }: { onCreate: (mnemonic: string, password?: string) => void }) {
   const [showMnemonic, setShowMnemonic] = useState(false)
@@ -219,6 +221,7 @@ function WalletDashboard() {
   const { address, balance, transactions, isConnecting, isConnected, refreshBalance, refreshTransactions, resetWallet, send } = useWallet()
   const { hasFaucet } = useNetwork()
   const [sendOpen, setSendOpen] = useState(false)
+  const [sendLinkOpen, setSendLinkOpen] = useState(false)
   const [isSending, setIsSending] = useState(false)
   const [showResetConfirm, setShowResetConfirm] = useState(false)
 
@@ -256,6 +259,9 @@ function WalletDashboard() {
       <Button onClick={() => setSendOpen(true)}>
         <Send size={16} className="mr-2" />Send
       </Button>
+      <Button variant="secondary" onClick={() => setSendLinkOpen(true)}>
+        <Link2 size={16} className="mr-2" />Send via Link
+      </Button>
       <Button variant="ghost" size="sm" onClick={refreshBalance} disabled={isConnecting}>
         <RefreshCw size={16} className={isConnecting ? 'animate-spin' : ''} />
       </Button>
@@ -278,6 +284,8 @@ function WalletDashboard() {
 
       {hasFaucet && <FaucetButton />}
 
+      <OutstandingLinks />
+
       <TransactionList
         transactions={transactions}
         title="Recent Transactions"
@@ -293,6 +301,8 @@ function WalletDashboard() {
         onSend={handleSend}
         isSending={isSending}
       />
+
+      <SendLinkModal isOpen={sendLinkOpen} onClose={() => setSendLinkOpen(false)} />
 
       {showResetConfirm && (
         <div className="fixed inset-0 bg-void/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 z-50">
