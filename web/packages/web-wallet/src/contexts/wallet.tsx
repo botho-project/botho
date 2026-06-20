@@ -11,7 +11,7 @@ import { RemoteNodeAdapter, type WsConnectionStatus } from '@botho/adapters'
 import { AddressBook, saveWallet, loadWallet, getWalletInfo, deriveAddress, deriveKeypairs, parseAddress, isValidMnemonic, clearWallet } from '@botho/core'
 import type { Balance, Contact, NodeInfo, Transaction } from '@botho/core'
 import { buildSendTransaction, spendableBalance } from '@botho/wasm-signer'
-import { type NetworkConfig, loadSelectedNetwork, NETWORKS, DEFAULT_NETWORK_ID, createCustomNetwork } from '../config/networks'
+import { type NetworkConfig, loadSelectedNetwork, loadSelectedIngress, NETWORKS, DEFAULT_NETWORK_ID, DEFAULT_INGRESS_ID, createCustomNetwork, networkForIngress, getIngressNode } from '../config/networks'
 
 interface WalletState {
   // Connection
@@ -147,7 +147,13 @@ function getInitialNetwork(): NetworkConfig {
     return createCustomNetwork(customEndpoint)
   }
 
-  return NETWORKS[networkId] || NETWORKS[DEFAULT_NETWORK_ID]
+  // Route the adapter to the user's selected SCP ingress node on first load.
+  const ingress = getIngressNode(loadSelectedIngress())
+  if (ingress) {
+    return networkForIngress(ingress)
+  }
+
+  return NETWORKS[networkId] || NETWORKS[DEFAULT_NETWORK_ID] || NETWORKS[DEFAULT_INGRESS_ID]
 }
 
 export function WalletProvider({ children }: { children: ReactNode }) {
