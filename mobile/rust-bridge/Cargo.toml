@@ -7,7 +7,9 @@ license = "Apache-2.0"
 rust-version = "1.75"
 
 [lib]
-crate-type = ["staticlib", "cdylib"]
+# `rlib` is needed so native integration tests (and the gated live-testnet e2e)
+# can link against the crate; `staticlib`/`cdylib` are the mobile FFI artifacts.
+crate-type = ["staticlib", "cdylib", "rlib"]
 name = "botho_mobile"
 
 [dependencies]
@@ -16,11 +18,27 @@ botho-wallet = { path = "../../botho-wallet", default-features = false }
 bth-account-keys = { path = "../../account-keys" }
 bth-crypto-keys = { path = "../../crypto/keys" }
 
+# Node-identical CLSAG transaction build + sign + scan core. Reused so the
+# bridge never reimplements ownership detection, key-image derivation, or ring
+# signing -- the produced tx round-trips through the node's verifier. The crate
+# exposes an `rlib` for native (non-wasm) consumers like this one.
+bth-wasm-signer = { path = "../../web/packages/wasm-signer" }
+bth-transaction-clsag = { path = "../../transaction/clsag" }
+
+# Base58 address encoding (tbotho://1/<base58(view||spend)>)
+bs58 = "0.4"
+
 # UniFFI for generating Swift/Kotlin bindings
 uniffi = { version = "0.28", features = ["cli"] }
 
 # Async runtime (minimal for mobile)
 tokio = { version = "1", features = ["rt", "sync"] }
+
+# HTTP client for JSON-RPC against the configured node URL
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# RNG for ring decoy shuffling / CLSAG signing
+rand = "0.8"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -36,6 +54,10 @@ zeroize = { version = "1", features = ["derive"] }
 
 # BIP39 mnemonic generation
 bip39 = { version = "2", features = ["rand"] }
+
+[dev-dependencies]
+# Full tokio for the gated live-testnet end-to-end test (multi-thread + macros).
+tokio = { version = "1", features = ["full"] }
 
 [build-dependencies]
 uniffi = { version = "0.28", features = ["build"] }
