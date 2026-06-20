@@ -414,7 +414,7 @@ mod tests {
 
     #[test]
     fn test_build_from_externalized_no_minting_tx() {
-        let values = vec![ConsensusValue::from_transaction([1u8; 32])];
+        let values = vec![ConsensusValue::from_transaction([1u8; 32], 0)];
 
         let result = BlockBuilder::build_from_externalized(&values, |_| None, |_| None);
 
