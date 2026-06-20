@@ -1158,6 +1158,59 @@ pub mod difficulty {
             // emission
         }
 
+        /// Documents the EmissionController's adjustment *direction* and its
+        /// limits as a block-time controller (#444).
+        ///
+        /// IMPORTANT: this controller is an *emission-rate* loop, not a
+        /// block-time loop. It compares actual emission-per-tx to a target
+        /// (`current_reward / EXPECTED_TX_PER_BLOCK`) and moves difficulty so
+        /// that emission converges, NOT so that block time converges to 5 s.
+        /// Block time is therefore governed primarily by `INITIAL_DIFFICULTY`.
+        ///
+        /// This test pins the direction of the emission loop: when actual
+        /// emission-per-tx is ABOVE target (emitting too fast), difficulty is
+        /// made HARDER, i.e. the numeric value DECREASES (recall higher
+        /// numeric difficulty = easier/faster here). When emission is BELOW
+        /// target, difficulty increases (easier).
+        #[test]
+        fn test_emission_controller_adjustment_direction() {
+            // Use a mid-range start so movement in either direction is visible
+            // without hitting the MIN/MAX_DIFFICULTY clamps.
+            let start_difficulty = INITIAL_DIFFICULTY / 2;
+
+            // target_emission_per_tx = current_reward / EXPECTED_TX_PER_BLOCK
+            // (EXPECTED_TX_PER_BLOCK = 20). actual = epoch_emission / epoch_tx.
+
+            // Over-emitting: 1 tx absorbing the full block reward gives
+            // actual = reward, target = reward / 20, so actual >> target.
+            // A full epoch is reached by recording ADJUSTMENT_TX_COUNT blocks
+            // of 1 tx each.
+            let mut fast = EmissionController::new(start_difficulty);
+            for _ in 0..ADJUSTMENT_TX_COUNT {
+                fast.record_block(1, INITIAL_REWARD, 0);
+            }
+            assert!(
+                fast.difficulty < start_difficulty,
+                "over-emitting must lower the numeric difficulty (harder/slower \
+                 emission), got {} from {}",
+                fast.difficulty,
+                start_difficulty
+            );
+
+            // Under-emitting: a single block carrying a whole epoch's worth of
+            // tx but a tiny total emission. current_reward = 100 keeps target
+            // nonzero (100 / 20 = 5), while actual = 100 / 1000 = 0 < target.
+            let mut slow = EmissionController::new(start_difficulty);
+            slow.record_block(ADJUSTMENT_TX_COUNT, 100, 0);
+            assert!(
+                slow.difficulty > start_difficulty,
+                "under-emitting must raise the numeric difficulty (easier), got \
+                 {} from {}",
+                slow.difficulty,
+                start_difficulty
+            );
+        }
+
         #[test]
         fn test_fee_burn_tracking() {
             let mut ctrl = EmissionController::new(1000);

@@ -21,29 +21,52 @@ use crate::{
 
 /// Genesis / initial minting difficulty target for **RandomX**.
 ///
-/// The PoW check is `pow_value(hash) < difficulty`, so a single hash succeeds
-/// with probability `difficulty / 2^64` and the expected number of hashes per
-/// block is `2^64 / difficulty`. To hold the 5 s target block time at network
-/// hashrate `H` (hashes/sec): `difficulty = 2^64 / (H * 5)`.
-///
-/// RandomX runs at ~415 H/s on a 2-vCPU t4g.medium (the minimum *mining* tier,
-/// see #441), orders of magnitude below SHA-256. Sizing genesis for a single
-/// such node (the conservative floor — a fresh chain must not stall) gives:
+/// The PoW check is `pow_value(hash) < difficulty` (see [`pow::pow_value`] and
+/// [`mine`]), so a single hash succeeds with probability `difficulty / 2^64`
+/// and the expected number of hashes per block is `2^64 / difficulty`. Higher
+/// numeric `difficulty` = EASIER (more hashes pass) = FEWER hashes/block =
+/// FASTER blocks. To hold a target block time `T` (s) at network hashrate `H`
+/// (hashes/sec):
 ///
 /// ```text
-/// difficulty = 2^64 / (415 * 5) ≈ 8.89e15
+/// difficulty = 2^64 / (H * T)
 /// ```
 ///
-/// We use a clean `9_000_000_000_000_000` (≈ 0x1F_F973_CAFA_8000), i.e. ~2049
-/// expected hashes/block → ≈ 4.9 s at 415 H/s for one node, ≈ 2.5 s for two
-/// nodes. The `EmissionController` then adapts difficulty downward (toward
-/// `MIN_DIFFICULTY`) as hashrate grows. Higher numeric `difficulty` = EASIER
-/// here (more hashes pass), so this is also the controller's ceiling
-/// (`MAX_DIFFICULTY`).
+/// ## Calibration (see #444)
 ///
-/// NOTE: this is consensus-breaking vs the old SHA-256 value
-/// (`0x00FF_FFFF_FFFF_FFFF`, ~256 hashes/block) and requires a fresh genesis.
-pub const INITIAL_DIFFICULTY: u64 = 9_000_000_000_000_000;
+/// The earlier value `9_000_000_000_000_000` (9e15) was sized for an *idle*
+/// 2-thread benchmark of ~415 H/s (`2^64 / 9e15 ≈ 2049` hashes/block → ~4.9 s
+/// at 415 H/s). On the live testnet that proved far too optimistic: a single
+/// mining thread *in-process on the full node* (contending with consensus, RPC
+/// and networking on a burstable 2-vCPU t4g.medium, see #441) sustains only
+/// **~68 H/s**, so 9e15 yielded `2049 / 68 ≈ 30 s` blocks during the
+/// genesis/bootstrap window — far above the 5 s target.
+///
+/// Recalibrating for the realistic in-process single-thread hashrate
+/// (`H ≈ 68 H/s`, `T = 5 s`):
+///
+/// ```text
+/// target hashes/block = H * T      = 68 * 5     = 340
+/// difficulty          = 2^64 / 340             ≈ 5.42e16
+/// ```
+///
+/// We use a clean `54_000_000_000_000_000` (5.4e16, ≈ `0x00BF_D8B6_C1DF_0000`),
+/// i.e. `2^64 / 5.4e16 ≈ 341.6` expected hashes/block → `341.6 / 68 ≈ 5.0 s`.
+/// This is ~6x the old value, which is correct: 9e15 gave ~30 s and we want
+/// ~5 s (6x faster ⇒ 6x fewer hashes/block ⇒ 6x larger difficulty, since
+/// higher difficulty = easier here).
+///
+/// Note this only sets the *genesis* starting point. The live
+/// [`crate::block::EmissionController`] adjusts difficulty from an
+/// emission-rate (not block-time) error signal, so it does not pull block time
+/// back toward the 5 s target on its own; getting the genesis constant right is
+/// therefore the primary lever for early block time. See #444 for the
+/// convergence analysis.
+///
+/// NOTE: this is a consensus-relevant constant and requires a fresh genesis to
+/// take effect (the old SHA-256 value was `0x00FF_FFFF_FFFF_FFFF`, ~256
+/// hashes/block; #443 moved to RandomX).
+pub const INITIAL_DIFFICULTY: u64 = 54_000_000_000_000_000;
 
 /// Minting statistics
 #[derive(Debug, Clone)]
@@ -396,6 +419,61 @@ fn mint_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Documents and locks the genesis difficulty calibration (#444).
+    ///
+    /// The PoW check is `pow_value(hash) < difficulty`, so expected hashes per
+    /// block = `2^64 / difficulty`. We can't time real 5 s blocks in a unit
+    /// test (RandomX is slow), but we can assert the arithmetic that the
+    /// constant is derived from:
+    ///
+    ///   block_time ≈ (2^64 / INITIAL_DIFFICULTY) / hashrate
+    ///
+    /// at the measured in-process single-thread hashrate of ~68 H/s lands at
+    /// ~5 s, not the ~30 s seen with the previous 9e15 value.
+    #[test]
+    fn test_initial_difficulty_calibration() {
+        // Measured in-process single-thread hashrate on the live minter (#444).
+        const MEASURED_HASHRATE: f64 = 68.0;
+        const TARGET_BLOCK_TIME_SECS: f64 = 5.0;
+
+        // Pin the calibrated value so a future edit can't silently regress it.
+        assert_eq!(INITIAL_DIFFICULTY, 54_000_000_000_000_000);
+
+        // Expected hashes per block = 2^64 / difficulty.
+        let two_pow_64 = 2.0_f64.powi(64);
+        let hashes_per_block = two_pow_64 / INITIAL_DIFFICULTY as f64;
+
+        // ~341.6 hashes/block at the new constant.
+        assert!(
+            (hashes_per_block - 341.6).abs() < 1.0,
+            "expected ~341.6 hashes/block, got {hashes_per_block}"
+        );
+
+        // At ~68 H/s that is ~5 s/block (the target), within 0.5 s.
+        let block_time = hashes_per_block / MEASURED_HASHRATE;
+        assert!(
+            (block_time - TARGET_BLOCK_TIME_SECS).abs() < 0.5,
+            "expected ~5 s/block at {MEASURED_HASHRATE} H/s, got {block_time} s"
+        );
+
+        // Direction sanity check against the comparison operator: a LARGER
+        // difficulty constant means MORE hashes pass (`hash < difficulty`),
+        // hence FEWER hashes/block, hence FASTER blocks. The previous 9e15
+        // value therefore produced MORE hashes/block and SLOWER blocks.
+        let old_difficulty = 9_000_000_000_000_000_u64;
+        let old_hashes_per_block = two_pow_64 / old_difficulty as f64;
+        assert!(
+            old_hashes_per_block > hashes_per_block,
+            "larger difficulty must mean fewer hashes/block (faster blocks)"
+        );
+        // And it reproduces the observed ~30 s data point at 68 H/s.
+        let old_block_time = old_hashes_per_block / MEASURED_HASHRATE;
+        assert!(
+            (old_block_time - 30.0).abs() < 2.0,
+            "old 9e15 should reproduce the observed ~30 s/block, got {old_block_time} s"
+        );
+    }
 
     /// The minter's fast-mode RandomX hash MUST equal the light-mode verify
     /// hash for the same preimage + seed — otherwise mined blocks would fail
