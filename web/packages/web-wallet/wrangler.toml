@@ -1,0 +1,12 @@
+# Cloudflare Pages configuration for the Botho web wallet (mobile PWA).
+#
+# Deploy with:
+#   pnpm --filter @botho/web-wallet deploy
+# which runs `wrangler pages deploy dist --project-name=botho-wallet`.
+#
+# Requires CLOUDFLARE_API_TOKEN with the "Cloudflare Pages: Edit" permission.
+name = "botho-wallet"
+compatibility_date = "2024-01-01"
+
+# Pages serves the built SPA from dist/ (Vite build output).
+pages_build_output_dir = "dist"
