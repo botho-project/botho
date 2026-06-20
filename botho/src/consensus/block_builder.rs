@@ -21,6 +21,29 @@ use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use tracing::{debug, info, warn};
 
+/// Maximum age (in blocks) of a transfer transaction relative to the height of
+/// the block that includes it.
+///
+/// A transfer tx whose `created_at_height + MAX_TX_AGE < block_height` is
+/// considered stale and is excluded at block-build (and rejected at block-apply
+/// as a deterministic backstop).
+///
+/// This staleness rule used to live in the SCP transfer-validity function
+/// (`validate_transfer_tx`) and was evaluated against each node's *local
+/// current tip*. Because two honest nodes can be at different tips while
+/// nominating the same value, that made transfer-tx validity tip-dependent — a
+/// value valid for one honest node could be silently dropped as
+/// `StaleTransaction` by another, the #417-class asymmetric-validity fork
+/// condition (issue #451).
+///
+/// The fix keeps block-height as the staleness metric (NOT wall-clock — no
+/// timezone/leap-second/clock-skew dependence) but evaluates it against the
+/// height of the block being built/applied. Every honest node assembles and
+/// applies block N at the same height N, so the check is deterministic and
+/// cannot fork. Defining it once here (used by both build and apply) guarantees
+/// the two paths agree exactly.
+pub const MAX_TX_AGE: u64 = 100;
+
 /// Result of building a block from externalized values
 #[derive(Debug)]
 pub struct BuiltBlock {
@@ -78,6 +101,12 @@ impl BlockBuilder {
             "Building block from externalized minting tx"
         );
 
+        // The block's own height. Staleness is evaluated against THIS height
+        // (deterministic across all honest nodes), never against any node's
+        // local current tip — that tip-dependence was the #417-class fork risk
+        // removed from the SCP validity gate in issue #451.
+        let block_height = minting_tx.block_height;
+
         // Collect transfer transactions with key image deduplication
         // This is a defense-in-depth measure to prevent double-spend attacks where
         // two transactions with the same key image somehow both made it to consensus
@@ -88,6 +117,25 @@ impl BlockBuilder {
         for value in &transfer_values {
             match get_transfer_tx(&value.tx_hash) {
                 Some(tx) => {
+                    // Height-based staleness filter (issue #451). Exclude any
+                    // transfer tx that is too old relative to THIS block's
+                    // height. Filtering here (rather than rejecting after
+                    // externalize) guarantees the built block always applies
+                    // cleanly: a block we build never contains a stale tx, so
+                    // the apply-time backstop never fires for our own blocks
+                    // (no externalize-then-reject halt — the #449/#421 failure
+                    // mode).
+                    if tx.created_at_height + MAX_TX_AGE < block_height {
+                        warn!(
+                            tx_hash = hex::encode(&value.tx_hash[0..8]),
+                            created_at_height = tx.created_at_height,
+                            block_height,
+                            "Skipping stale transfer tx in block (created_at_height + \
+                             MAX_TX_AGE < block_height)"
+                        );
+                        continue;
+                    }
+
                     // Check for duplicate key images (defense in depth)
                     let mut has_duplicate = false;
                     for input in tx.inputs.clsag() {
@@ -419,6 +467,72 @@ mod tests {
         let result = BlockBuilder::build_from_externalized(&values, |_| None, |_| None);
 
         assert!(matches!(result, Err(BlockBuildError::NoMintingTx)));
+    }
+
+    /// Issue #451 (Test B, build side): a block built at height H must EXCLUDE
+    /// any transfer tx whose `created_at_height + MAX_TX_AGE < H`. Filtering at
+    /// build time (against the block's own height, deterministic across nodes)
+    /// keeps staleness enforced without the tip-dependence that caused the
+    /// #417-class fork, and guarantees the built block always applies cleanly
+    /// (no externalize-then-reject halt).
+    #[test]
+    fn test_build_excludes_stale_transfer_tx() {
+        use crate::transaction::TxInputs;
+
+        let block_height = 200u64;
+
+        // Fresh tx: created_at_height + MAX_TX_AGE >= block_height (kept).
+        let fresh = Transaction {
+            inputs: TxInputs::new(vec![]),
+            outputs: vec![],
+            fee: 0,
+            created_at_height: block_height - MAX_TX_AGE, // exactly on the boundary, kept
+        };
+        // Stale tx: created_at_height + MAX_TX_AGE < block_height (filtered).
+        let stale = Transaction {
+            inputs: TxInputs::new(vec![]),
+            outputs: vec![],
+            fee: 0,
+            created_at_height: block_height - MAX_TX_AGE - 1,
+        };
+        let fresh_hash = fresh.hash();
+        let stale_hash = stale.hash();
+
+        let values = vec![
+            ConsensusValue::from_minting_tx([9u8; 32], 0),
+            ConsensusValue::from_transaction(fresh_hash, 0),
+            ConsensusValue::from_transaction(stale_hash, 0),
+        ];
+
+        let minting_tx = mock_minting_tx(block_height);
+        let get_minting = |_: &[u8; 32]| Some(minting_tx.clone());
+        let get_transfer = move |h: &[u8; 32]| {
+            if *h == fresh_hash {
+                Some(fresh.clone())
+            } else if *h == stale_hash {
+                Some(stale.clone())
+            } else {
+                None
+            }
+        };
+
+        let built = BlockBuilder::build_from_externalized(&values, get_minting, get_transfer)
+            .expect("build should succeed");
+
+        assert_eq!(
+            built.block.transactions.len(),
+            1,
+            "stale transfer tx must be filtered out at build"
+        );
+        assert_eq!(
+            built.block.transactions[0].created_at_height,
+            block_height - MAX_TX_AGE,
+            "only the fresh tx (on the boundary) should remain"
+        );
+        assert!(
+            !built.transfer_tx_hashes.contains(&stale_hash),
+            "stale tx hash must not be recorded in the built block"
+        );
     }
 
     // ========================================================================

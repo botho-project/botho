@@ -12,7 +12,7 @@ use tracing::{debug, info, warn};
 use super::{ChainState, LedgerError};
 use crate::{
     block::{calculate_block_reward, Block},
-    consensus::{validate_block_lottery, LotteryFeeConfig},
+    consensus::{validate_block_lottery, LotteryFeeConfig, MAX_TX_AGE},
     decoy_selection::{DecoySelectionError, GammaDecoySelector, OutputCandidate},
     transaction::{RingMember, Transaction as BothoTransaction, TxOutput, Utxo, UtxoId},
 };
@@ -22,6 +22,27 @@ use crate::{
 /// Matches the bound enforced on minting transactions in the SCP proposal
 /// path (`consensus::validation::MAX_FUTURE_TIMESTAMP_SECS`).
 const MAX_FUTURE_TIMESTAMP_SECS: u64 = 2 * 60 * 60;
+
+/// Deterministic height-based staleness backstop (issue #451).
+///
+/// Returns the index of the first transfer tx in `block` that is too old
+/// relative to the block's OWN height (`created_at_height + MAX_TX_AGE <
+/// block.height()`), or `None` if all transfer txs are fresh enough.
+///
+/// This mirrors the staleness rule that the SCP transfer-validity gate used to
+/// enforce against the local *current tip* (removed in #451 because tip-
+/// dependence is the #417-class fork condition). Evaluated against the block's
+/// own height — identical on every honest node applying block N — it is
+/// deterministic and cannot diverge across nodes. Honest block-builders filter
+/// these out at build time, so this is a defense-in-depth check that never
+/// fires for blocks we build (no externalize-then-reject halt).
+fn first_stale_transfer_tx(block: &Block) -> Option<usize> {
+    let block_height = block.height();
+    block
+        .transactions
+        .iter()
+        .position(|tx| tx.created_at_height + MAX_TX_AGE < block_height)
+}
 
 /// LMDB-backed ledger storage using heed
 pub struct Ledger {
@@ -502,6 +523,31 @@ impl Ledger {
             return Err(LedgerError::InvalidBlock(
                 "Block tx_root does not match transactions".to_string(),
             ));
+        }
+
+        // C5 (issue #451): Deterministic height-based staleness backstop.
+        //
+        // Reject any block that contains a transfer tx that is too old relative
+        // to the block's OWN height. This mirrors the staleness rule that the
+        // SCP transfer-validity gate used to enforce against the local *current
+        // tip* (`validate_transfer_tx`, removed in #451 because tip-dependence
+        // is the #417-class fork condition). Evaluated against `block.height()`
+        // — which is identical on every honest node applying block N — this
+        // check is deterministic and cannot diverge across nodes.
+        //
+        // Honest block-builders already filter these out at build time
+        // (`BlockBuilder::build_from_externalized`), so this is defense-in-depth
+        // against a malformed/adversarial block, not the primary gate (it never
+        // fires for blocks we build → no externalize-then-reject halt).
+        if let Some(tx_idx) = first_stale_transfer_tx(block) {
+            let tx = &block.transactions[tx_idx];
+            return Err(LedgerError::InvalidBlock(format!(
+                "Transaction {} is stale: created_at_height {} + MAX_TX_AGE {} < block height {}",
+                tx_idx,
+                tx.created_at_height,
+                MAX_TX_AGE,
+                block.height()
+            )));
         }
 
         // C3: Resolve every ring member against the UTXO set.
@@ -2253,6 +2299,71 @@ mod tests {
     use super::*;
     use bth_transaction_types::ClusterTagVector;
     use tempfile::tempdir;
+
+    /// Issue #451 (Test B, apply side): the deterministic backstop must flag a
+    /// block containing a transfer tx that is too old relative to the block's
+    /// OWN height, and must accept one that is exactly on the boundary. The
+    /// check is purely a function of (created_at_height, block.height()), so it
+    /// is identical on every node applying block N — no tip-dependence, no
+    /// fork.
+    #[test]
+    fn test_first_stale_transfer_tx_backstop() {
+        use crate::{
+            consensus::{BlockBuilder, MAX_TX_AGE},
+            transaction::{Transaction, TxInputs},
+        };
+
+        let block_height = 500u64;
+
+        let mk_tx = |created_at_height: u64| Transaction {
+            inputs: TxInputs::new(vec![]),
+            outputs: vec![],
+            fee: 0,
+            created_at_height,
+        };
+
+        // mock_minting_tx-equivalent: build_direct sets header.height from the
+        // minting tx's block_height.
+        let minting = crate::block::MintingTx {
+            block_height,
+            reward: 0,
+            minter_view_key: [1u8; 32],
+            minter_spend_key: [2u8; 32],
+            target_key: [3u8; 32],
+            public_key: [4u8; 32],
+            prev_block_hash: [0u8; 32],
+            difficulty: 1000,
+            nonce: 0,
+            timestamp: 1000,
+        };
+
+        // All fresh: boundary tx (created_at_height + MAX_TX_AGE == height) is
+        // NOT stale.
+        let fresh_block = BlockBuilder::build_direct(
+            minting.clone(),
+            vec![mk_tx(block_height - MAX_TX_AGE), mk_tx(block_height)],
+        );
+        assert_eq!(fresh_block.height(), block_height);
+        assert_eq!(
+            first_stale_transfer_tx(&fresh_block),
+            None,
+            "boundary/fresh transfer txs must not be flagged stale"
+        );
+
+        // Contains a stale tx (created_at_height + MAX_TX_AGE < height) at idx 1.
+        let stale_block = BlockBuilder::build_direct(
+            minting,
+            vec![
+                mk_tx(block_height - MAX_TX_AGE),
+                mk_tx(block_height - MAX_TX_AGE - 1),
+            ],
+        );
+        assert_eq!(
+            first_stale_transfer_tx(&stale_block),
+            Some(1),
+            "a transfer tx older than MAX_TX_AGE relative to block height must be flagged"
+        );
+    }
 
     #[test]
     fn test_ledger_open_and_genesis() {

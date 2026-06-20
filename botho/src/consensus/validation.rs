@@ -306,19 +306,41 @@ impl TransactionValidator {
         Ok(())
     }
 
-    /// Validate a transfer transaction (structure only for now)
+    /// Validate a transfer transaction's INTRINSIC (tip-agnostic) structure.
     ///
-    /// Full UTXO validation requires access to the UTXO set, which
-    /// will be integrated when we add the mempool.
+    /// SAFETY / no-fork invariant: this function is the SCP consensus validity
+    /// gate for transfer values (via
+    /// [`validate_from_bytes_intrinsic`](Self::validate_from_bytes_intrinsic)).
+    /// SCP's agreement (no-fork) theorem requires validity to be a *pure
+    /// function of the value*: a value valid for one honest node must be valid
+    /// for all honest nodes. SCP silently DROPS any peer message carrying a
+    /// value the local node cannot validate, so a tip-dependent check here can
+    /// partition the quorum (issue #451; the same #417/#419 condition the
+    /// minting `*_intrinsic` split fixed).
+    ///
+    /// Therefore the only checks here are ones every honest node agrees on
+    /// regardless of which tip it currently holds:
+    /// - inputs are non-empty,
+    /// - outputs are non-empty,
+    /// - no output has a zero amount.
+    ///
+    /// The former tip-relative staleness check (`created_at_height + MAX_TX_AGE
+    /// < state.height`, removed in #451) is NOT performed here, because
+    /// `state.height` is the local tip and two honest nodes straddling the
+    /// boundary would disagree on validity. Stale-tx handling now lives where
+    /// it cannot fork or halt the chain:
+    /// - the mempool evicts old txs by wall-clock (`mempool.rs`
+    ///   `MAX_TX_AGE_SECS`, ~1h), so stale txs are never proposed as values;
+    /// - full UTXO existence / double-spend / signature checks happen at
+    ///   mempool-admission and block-apply time, which have ledger access.
+    ///
+    /// This is a pure function of the transaction; it does NOT read
+    /// `chain_state`.
     pub fn validate_transfer_tx(&self, tx: &Transaction) -> Result<(), ValidationError> {
-        let state = self
-            .chain_state
-            .read()
-            .map_err(|_| ValidationError::ChainStateUnavailable)?;
+        debug!("Validating transfer transaction (intrinsic / tip-agnostic)");
 
-        debug!("Validating transfer transaction");
-
-        // 1. Check structure
+        // Structural well-formedness only. These are properties of the value
+        // itself, so all honest nodes agree on them regardless of tip.
         if tx.inputs.is_empty() {
             return Err(ValidationError::NoInputs);
         }
@@ -329,21 +351,15 @@ impl TransactionValidator {
             return Err(ValidationError::ZeroAmountOutput);
         }
 
-        // 2. Check transaction is not stale
-        // Allow transactions from recent blocks (within 100 blocks)
-        const MAX_TX_AGE: u64 = 100;
-        if tx.created_at_height + MAX_TX_AGE < state.height {
-            return Err(ValidationError::StaleTransaction);
-        }
-
-        // 3. UTXO existence and signature verification
-        // Note: Full UTXO and signature validation happens in mempool.add_tx()
-        // which has ledger access. The mempool verifies:
+        // UTXO existence, double-spend, and signature verification are NOT done
+        // here. They happen in mempool.add_tx() and at block-apply, which have
+        // ledger access and verify:
         // - UTXO existence in ledger
         // - Signature validity against UTXO target_key
         // - Input sum >= output sum + fee
+        // - No double-spend (key-image uniqueness)
 
-        debug!("Transfer transaction validated successfully");
+        debug!("Transfer transaction passed intrinsic validation");
         Ok(())
     }
 
@@ -482,9 +498,13 @@ impl TransactionValidator {
     /// [`validate_minting_tx_intrinsic`](Self::validate_minting_tx_intrinsic),
     /// dropping the tip-equality checks so that a peer's competing-but-valid
     /// minting value is never silently dropped by SCP (issue #419 / #417
-    /// Finding 1). For transfer txs the existing structural validation is
-    /// already effectively intrinsic enough for the consensus-value gate
-    /// (full UTXO/signature validation happens at mempool/apply time).
+    /// Finding 1). For transfer txs this delegates to
+    /// [`validate_transfer_tx`](Self::validate_transfer_tx), which is now also
+    /// fully tip-agnostic — its former `state.height` staleness check was
+    /// removed in issue #451 so a transfer value valid for one honest node is
+    /// valid for all (full UTXO/double-spend/signature validation happens at
+    /// mempool/apply time; stale txs are evicted by the mempool's wall-clock
+    /// age limit so they are never proposed as values).
     pub fn validate_from_bytes_intrinsic(
         &self,
         tx_bytes: &[u8],
@@ -543,8 +563,12 @@ mod tests {
     use bth_transaction_types::ClusterTagVector;
 
     fn mock_chain_state() -> Arc<RwLock<ChainState>> {
+        mock_chain_state_at(10)
+    }
+
+    fn mock_chain_state_at(height: u64) -> Arc<RwLock<ChainState>> {
         Arc::new(RwLock::new(ChainState {
-            height: 10,
+            height,
             tip_hash: [0u8; 32],
             tip_timestamp: 1000000,
             difficulty: 1000,
@@ -629,6 +653,75 @@ mod tests {
         let tx = Transaction::new_clsag(vec![], vec![test_output(1000, 1)], MIN_TX_FEE, 10);
         let result = validator.validate_transfer_tx(&tx);
         assert!(matches!(result, Err(ValidationError::NoInputs)));
+    }
+
+    /// Issue #451 regression: the SCP transfer-tx validity gate
+    /// (`validate_transfer_tx`) MUST be tip-agnostic.
+    ///
+    /// Two honest nodes at DIFFERENT heights straddling the old
+    /// `created_at_height + MAX_TX_AGE` (100-block) boundary must AGREE on
+    /// transfer-tx validity. With the old tip-dependent staleness check a tx
+    /// created at height 10 validated at local height 10 but was dropped as
+    /// `StaleTransaction` at local height 111 (10 + 100 + 1) — the #417-class
+    /// asymmetric-validity fork condition. After the fix, validity is a pure
+    /// function of the value and the result is identical regardless of tip.
+    #[test]
+    fn test_transfer_tx_validity_is_tip_agnostic() {
+        // A well-formed transfer tx created at height 10.
+        let tx = Transaction::new_clsag(
+            vec![test_clsag_input(1)],
+            vec![test_output(1000, 1)],
+            MIN_TX_FEE,
+            10, // created_at_height
+        );
+
+        // Node A: local tip at the creation height (well within the old window).
+        let validator_low = TransactionValidator::new(mock_chain_state_at(10));
+        let result_low = validator_low.validate_transfer_tx(&tx);
+
+        // Node B: local tip far past the old 100-block staleness boundary
+        // (10 + 100 + 1 = 111). Under the OLD check this returned
+        // StaleTransaction; both nodes must now agree.
+        let validator_high = TransactionValidator::new(mock_chain_state_at(111));
+        let result_high = validator_high.validate_transfer_tx(&tx);
+
+        assert!(
+            result_low.is_ok(),
+            "tx must be valid at the creation-height tip: {result_low:?}"
+        );
+        assert!(
+            result_high.is_ok(),
+            "tx must remain valid past the old staleness boundary (no asymmetric \
+             drop / no #417-class fork): {result_high:?}"
+        );
+        assert_eq!(
+            result_low.is_ok(),
+            result_high.is_ok(),
+            "transfer-tx validity must be identical regardless of local tip height"
+        );
+    }
+
+    /// The intrinsic SCP path must yield the same result regardless of tip,
+    /// even when invoked through `validate_from_bytes_intrinsic` (the exact
+    /// entry point SCP's validity_fn uses).
+    #[test]
+    fn test_transfer_tx_intrinsic_path_tip_agnostic() {
+        let tx = Transaction::new_clsag(
+            vec![test_clsag_input(2)],
+            vec![test_output(500, 2)],
+            MIN_TX_FEE,
+            5, // created_at_height
+        );
+        let bytes = bincode::serialize(&tx).expect("serialize tx");
+
+        let low = TransactionValidator::new(mock_chain_state_at(5));
+        let high = TransactionValidator::new(mock_chain_state_at(5 + 100 + 50));
+
+        let r_low = low.validate_from_bytes_intrinsic(&bytes, false);
+        let r_high = high.validate_from_bytes_intrinsic(&bytes, false);
+
+        assert!(r_low.is_ok(), "intrinsic validity at low tip: {r_low:?}");
+        assert!(r_high.is_ok(), "intrinsic validity at high tip: {r_high:?}");
     }
 
     #[test]
