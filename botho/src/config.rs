@@ -79,6 +79,13 @@ pub struct NetworkConfig {
     #[serde(default)]
     pub dns_seeds: DnsSeedConfig,
 
+    /// Optional override for the persistent libp2p node identity key path
+    /// (issue #439). If unset, the key lives at `<data_dir>/node_key` alongside
+    /// the ledger and config. The key is generated on first run and loaded
+    /// thereafter so the node's peer ID is stable across restarts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_key_path: Option<PathBuf>,
+
     /// Quorum configuration
     #[serde(default)]
     pub quorum: QuorumConfig,
@@ -580,6 +587,8 @@ impl Default for NetworkConfig {
             cors_origins: default_cors_origins(),
             bootstrap_peers: Vec::new(), // Uses DNS discovery or network-specific defaults
             dns_seeds: DnsSeedConfig::default(),
+            node_key_path: None, // Defaults to <data_dir>/node_key
+
             quorum: QuorumConfig::default(),
             api_keys: Vec::new(),
             max_connections_per_ip: default_max_connections_per_ip(),
@@ -693,6 +702,16 @@ pub fn ledger_db_path(network: Network) -> PathBuf {
 /// Get the ledger database path from config file path
 pub fn ledger_db_path_from_config(config_path: &Path) -> PathBuf {
     config_path.parent().unwrap_or(config_path).join("ledger")
+}
+
+/// Get the persistent libp2p node-key path from the config file path (issue
+/// #439).
+///
+/// Defaults to `<data_dir>/node_key` (the data dir is the directory containing
+/// `config.toml`, the same dir that holds `ledger/`). This is the file that
+/// stores the node's identity keypair so its peer ID is stable across restarts.
+pub fn node_key_path_from_config(config_path: &Path) -> PathBuf {
+    config_path.parent().unwrap_or(config_path).join("node_key")
 }
 
 /// Get the wallet database path for a network

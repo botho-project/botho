@@ -243,7 +243,21 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
     let rate_limit_peers = GossipConfig::default().max_connections.max(1) as u32;
     let rate_limit_config =
         PeerRateLimitConfig::for_slot_duration(effective_slot_secs, rate_limit_peers);
-    let mut discovery = NetworkDiscovery::with_rate_limit_config(
+
+    // Load (or, on first run, generate + persist) the node's identity keypair so
+    // its peer ID is STABLE across restarts (issue #439). An unstable peer ID
+    // breaks DNS-seed discovery (TXT records pin peer IDs) and resets peer
+    // reputation/ban state on every boot. The key lives at <data_dir>/node_key
+    // by default, or at the configured `network.node_key_path` override.
+    let node_key_path = config
+        .network
+        .node_key_path
+        .clone()
+        .unwrap_or_else(|| crate::config::node_key_path_from_config(config_path));
+    let node_keypair = crate::network::load_or_create_keypair(&node_key_path)?;
+
+    let mut discovery = NetworkDiscovery::with_keypair(
+        node_keypair,
         config.network.gossip_port(network_type),
         bootstrap_peers,
         rate_limit_config,
