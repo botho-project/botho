@@ -297,38 +297,18 @@ export class RemoteNodeAdapter implements NodeAdapter {
     }
   }
 
-  async getTransactionHistory(_addresses: Address[], options?: TxHistoryOptions): Promise<Transaction[]> {
-    // Fetch outputs for the height range and filter client-side
-    const result = await this.call<Array<{
-      height: number
-      outputs: Array<{
-        txHash: string
-        outputIndex: number
-        targetKey: string
-        publicKey: string
-        amountCommitment: string
-      }>
-    }>>('chain_getOutputs', {
-      start_height: options?.startHeight || 0,
-      end_height: options?.endHeight || (options?.startHeight || 0) + 100,
-    })
-
-    // For now, return empty - client should process outputs locally
-    // Full implementation would scan outputs for matching addresses
-    return result.flatMap((block) =>
-      block.outputs.map((output) => ({
-        id: output.txHash,
-        type: 'receive' as const,
-        amount: BigInt(0), // Would need to decrypt
-        fee: BigInt(0),
-        privacyLevel: 'private' as const, // Ring signatures for privacy
-        cryptoType: 'clsag' as CryptoType, // Default to classical, actual type from RPC
-        status: 'confirmed' as const,
-        timestamp: Date.now(),
-        blockHeight: block.height,
-        confirmations: 0,
-      }))
-    )
+  /**
+   * @deprecated The adapter has no wallet keys, so it cannot tell which on-chain
+   * outputs the user owns or decode their amounts — its previous implementation
+   * mapped EVERY chain output to a `{ type: 'receive', amount: 0n }` entry,
+   * producing dozens of bogus "received 0 BTH" rows (#459). Transaction history
+   * is now built CLIENT-SIDE from the wallet's OWNED outputs in the wallet
+   * context (see `buildOwnedHistory`, which scans via the wasm signer exactly
+   * like balance does). This method is retained only so the `NodeAdapter`
+   * interface stays satisfied; it now returns an empty list rather than spam.
+   */
+  async getTransactionHistory(_addresses: Address[], _options?: TxHistoryOptions): Promise<Transaction[]> {
+    return []
   }
 
   /**
@@ -361,6 +341,51 @@ export class RemoteNodeAdapter implements NodeAdapter {
 
     return result.flatMap((block) =>
       block.outputs.map((output) => ({
+        targetKey: output.targetKey,
+        publicKey: output.publicKey,
+        amount: leHexToBigInt(output.amountCommitment),
+      })),
+    )
+  }
+
+  /**
+   * Like {@link getRawOutputs}, but preserves each output's block height (and
+   * its source transaction hash). The thin wallet uses this to build its
+   * transaction history CLIENT-SIDE: scan these for owned outputs (wasm), then
+   * stamp each owned receive with the block height it landed in (#459). Kept
+   * separate from {@link getRawOutputs} so the hot send/balance path stays a
+   * flat `{ targetKey, publicKey, amount }[]`.
+   */
+  async getRawOutputsWithMeta(
+    startHeight: number,
+    endHeight: number,
+  ): Promise<
+    Array<{
+      txHash: string
+      height: number
+      targetKey: string
+      publicKey: string
+      amount: bigint
+    }>
+  > {
+    const result = await this.call<Array<{
+      height: number
+      outputs: Array<{
+        txHash: string
+        outputIndex: number
+        targetKey: string
+        publicKey: string
+        amountCommitment: string
+      }>
+    }>>('chain_getOutputs', {
+      start_height: startHeight,
+      end_height: endHeight,
+    })
+
+    return result.flatMap((block) =>
+      block.outputs.map((output) => ({
+        txHash: output.txHash,
+        height: block.height,
         targetKey: output.targetKey,
         publicKey: output.publicKey,
         amount: leHexToBigInt(output.amountCommitment),

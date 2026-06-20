@@ -10,7 +10,7 @@ import {
 import { RemoteNodeAdapter, type WsConnectionStatus } from '@botho/adapters'
 import { AddressBook, saveWallet, loadWallet, getWalletInfo, deriveAddress, deriveKeypairs, parseAddress, isValidMnemonic, clearWallet } from '@botho/core'
 import type { Balance, Contact, NodeInfo, Transaction } from '@botho/core'
-import { buildSendTransaction, spendableBalance } from '@botho/wasm-signer'
+import { buildSendTransaction, spendableBalance, buildOwnedHistory } from '@botho/wasm-signer'
 import { type NetworkConfig, loadSelectedNetwork, loadSelectedIngress, NETWORKS, DEFAULT_NETWORK_ID, DEFAULT_INGRESS_ID, createCustomNetwork, networkForIngress, getIngressNode } from '../config/networks'
 
 interface WalletState {
@@ -117,6 +117,55 @@ async function fetchBalance(
     // artifact failed to load), fall back to the node RPC balance rather than
     // surfacing no balance at all.
     return adapter.getBalance([address])
+  }
+}
+
+/**
+ * Build the wallet's transaction history CLIENT-SIDE from its OWNED outputs
+ * (#459), mirroring how {@link fetchBalance} computes balance.
+ *
+ * The node has no way to tell which on-chain outputs belong to a thin wallet, so
+ * the old adapter `getTransactionHistory` mapped EVERY chain output to a bogus
+ * "received 0 BTH" entry (~100+ rows of spam). Instead we reuse the wasm scan
+ * path: fetch outputs (with block height) and let the wasm signer keep only the
+ * ones this wallet owns, with their REAL decoded amounts, then map each owned
+ * output to a `receive` (and a `spend` if its key image is spent). Requires the
+ * mnemonic (unlocked wallet); when locked we return an empty history rather than
+ * the old spam.
+ */
+async function fetchHistory(
+  adapter: RemoteNodeAdapter,
+  mnemonic: string | null,
+): Promise<Transaction[]> {
+  if (!mnemonic) return []
+  try {
+    const kp = deriveKeypairs(mnemonic, 0)
+    const entries = await buildOwnedHistory(
+      {
+        spendPrivateKey: toHex(kp.spendPrivate),
+        viewPrivateKey: toHex(kp.viewPrivate),
+      },
+      {
+        getChainHeight: () => adapter.getBlockHeight(),
+        getOutputsWithMeta: (start, end) => adapter.getRawOutputsWithMeta(start, end),
+        areKeyImagesSpent: (keyImages) => adapter.areKeyImagesSpent(keyImages),
+      },
+    )
+    return entries.map((e) => ({
+      id: e.txHash,
+      type: e.type === 'spend' ? ('send' as const) : ('receive' as const),
+      amount: e.amount,
+      fee: 0n,
+      privacyLevel: 'private' as const,
+      cryptoType: 'clsag' as const,
+      status: 'confirmed' as const,
+      timestamp: Date.now(),
+      blockHeight: e.blockHeight,
+      confirmations: 0,
+    }))
+  } catch {
+    // wasm artifact missing or scan failed: show no history rather than spam.
+    return []
   }
 }
 
@@ -245,7 +294,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       try {
         const [balance, transactions] = await Promise.all([
           fetchBalance(adapter, state.address!, mnemonicRef.current),
-          adapter.getTransactionHistory([state.address!], { limit: 50 }),
+          fetchHistory(adapter, mnemonicRef.current),
         ])
         setState(s => ({ ...s, balance, transactions }))
       } catch {
@@ -267,7 +316,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       try {
         const [balance, transactions] = await Promise.all([
           fetchBalance(adapter, state.address!, mnemonicRef.current),
-          adapter.getTransactionHistory([state.address!], { limit: 50 }),
+          fetchHistory(adapter, mnemonicRef.current),
         ])
         setState(s => ({ ...s, balance, transactions }))
       } catch {
@@ -311,7 +360,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
           }
           const [balance, transactions] = await Promise.all([
             fetchBalance(adapter, walletInfo.address, mnemonicRef.current),
-            adapter.getTransactionHistory([walletInfo.address], { limit: 50 }),
+            fetchHistory(adapter, mnemonicRef.current),
           ])
           setState(s => ({ ...s, balance, transactions }))
         }
@@ -390,7 +439,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     const adapter = adapterRef.current
     if (adapter.isConnected()) {
       const balance = await fetchBalance(adapter, address, mnemonicRef.current)
-      const transactions = await adapter.getTransactionHistory([address], { limit: 50 })
+      const transactions = await fetchHistory(adapter, mnemonicRef.current)
       setState(s => ({ ...s, balance, transactions }))
     }
   }, [])
@@ -411,7 +460,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     if (adapter.isConnected() && stored.address) {
       const [balance, transactions] = await Promise.all([
         fetchBalance(adapter, stored.address, mnemonicRef.current),
-        adapter.getTransactionHistory([stored.address], { limit: 50 }),
+        fetchHistory(adapter, mnemonicRef.current),
       ])
       setState(s => ({ ...s, balance, transactions }))
     }
@@ -526,7 +575,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const refreshTransactions = useCallback(async () => {
     const adapter = adapterRef.current
     if (!state.address || !adapter.isConnected()) return
-    const transactions = await adapter.getTransactionHistory([state.address], { limit: 50 })
+    const transactions = await fetchHistory(adapter, mnemonicRef.current)
     setState(s => ({ ...s, transactions }))
   }, [state.address])
 

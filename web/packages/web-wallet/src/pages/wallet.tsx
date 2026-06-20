@@ -464,11 +464,20 @@ export function WalletPage() {
     return <WalletDashboard />
   }
 
+  // The marketing landing page lives at `/`, but on the wallet subdomain
+  // (wallet.botho.io) `/` redirects back to the wallet (#459). Point the header
+  // "back" link at `/home` there so the landing stays reachable from the wallet;
+  // on every other host keep `/` so existing nav/e2e behavior is unchanged.
+  const homeHref =
+    typeof window !== 'undefined' && window.location.hostname.startsWith('wallet.')
+      ? '/home'
+      : '/'
+
   return (
     <div className="min-h-screen">
       <header className="border-b border-steel bg-abyss/50 backdrop-blur-md sticky top-0 z-40">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 py-3 sm:py-4 flex items-center justify-between">
-          <Link to="/" className="flex items-center gap-2 sm:gap-3">
+          <Link to={homeHref} className="flex items-center gap-2 sm:gap-3">
             <ArrowLeft size={18} className="text-ghost" />
             <Logo size="sm" showText={false} />
             <span className="font-display text-base sm:text-lg font-semibold hidden sm:inline">Botho Wallet</span>

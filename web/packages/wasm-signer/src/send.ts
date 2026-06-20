@@ -135,6 +135,141 @@ export async function spendableBalance(
   return spendable.reduce((s, o) => s + toBigInt(o.amount), 0n)
 }
 
+/**
+ * A chain output annotated with the block it landed in and its source tx hash.
+ * This is what the node returns via `chain_getOutputs` (height per block, txHash
+ * per output) and is the raw material for client-side transaction history.
+ */
+export interface ChainOutputWithMeta extends ChainOutput {
+  /** Hex-encoded hash of the transaction that created this output. */
+  txHash: string
+  /** Block height the output was confirmed at. */
+  height: number
+}
+
+/** A single client-side transaction-history entry. */
+export interface HistoryEntry {
+  /** Source transaction hash (the output's creating tx). */
+  txHash: string
+  /** `receive` for an owned output; `spend` for an owned output later spent. */
+  type: 'receive' | 'spend'
+  /** Decoded amount of the owned output, in picocredits. */
+  amount: bigint
+  /** Block height the output landed in (its receive height). */
+  blockHeight: number
+  /** True if the output's key image is spent on-chain or pending. */
+  spent: boolean
+  /** Height the output was spent at, if known (on-chain spends only). */
+  spentHeight: number | null
+}
+
+/**
+ * The slice of node RPC the history path needs: every chain output in a height
+ * range WITH its block height + tx hash, plus the key-image spent check.
+ * Implemented by the wallet's `RemoteNodeAdapter`.
+ */
+export interface HistoryRpc {
+  getChainHeight(): Promise<number>
+  getOutputsWithMeta(
+    startHeight: number,
+    endHeight: number,
+  ): Promise<ChainOutputWithMeta[]>
+  areKeyImagesSpent(keyImages: string[]): Promise<KeyImageSpentStatus[]>
+}
+
+/**
+ * Build the wallet's transaction history CLIENT-SIDE from its OWNED outputs.
+ *
+ * This is the keys-aware counterpart to the node adapter's old
+ * `getTransactionHistory` stub, which mapped EVERY chain output to a bogus
+ * "received 0 BTH" entry because the adapter has no wallet keys (#459). Here we
+ * reuse the exact balance scan path:
+ *
+ *   fetch outputs (with block height) -> `scanOwnedOutputs` (wasm) keeps only
+ *   the user's outputs with their real decoded amounts -> derive key images and
+ *   ask `chain_areKeyImagesSpent` which are spent.
+ *
+ * Each owned output becomes ONE `receive` entry with its true amount and block
+ * height. Owned outputs whose key image is spent are additionally surfaced as a
+ * `spend` entry (we can prove the user spent the output even though the ring
+ * hides which tx consumed it), and the receive entry is flagged `spent`. No
+ * non-owned outputs are ever returned, so there is no 0-BTH spam.
+ *
+ * Returned newest-first (highest block height first).
+ */
+export async function buildOwnedHistory(
+  keys: SignerKeys,
+  rpc: HistoryRpc,
+): Promise<HistoryEntry[]> {
+  const signer = await loadSigner()
+  const height = await rpc.getChainHeight()
+  const candidates = await rpc.getOutputsWithMeta(0, height)
+  if (candidates.length === 0) return []
+
+  // Identify owned outputs (node-identical ownership check in wasm). The scan
+  // input drops the meta, so map owned outputs back to their height/txHash by
+  // their unique one-time target key.
+  const metaByTargetKey = new Map<string, ChainOutputWithMeta>()
+  for (const c of candidates) metaByTargetKey.set(c.targetKey, c)
+
+  const owned = signer.scanOwnedOutputs({
+    spendPrivateKey: keys.spendPrivateKey,
+    viewPrivateKey: keys.viewPrivateKey,
+    outputs: candidates.map((c) => ({
+      targetKey: c.targetKey,
+      publicKey: c.publicKey,
+      amount: c.amount,
+    })),
+  })
+  if (owned.length === 0) return []
+
+  // Derive key images for the owned outputs and ask the node which are spent.
+  const withImages = signer.computeOwnedOutputKeyImages({
+    spendPrivateKey: keys.spendPrivateKey,
+    viewPrivateKey: keys.viewPrivateKey,
+    outputs: owned,
+  })
+  const statuses = await rpc.areKeyImagesSpent(withImages.map((o) => o.keyImage))
+  const statusByKeyImage = new Map<string, KeyImageSpentStatus>()
+  for (const s of statuses) statusByKeyImage.set(s.keyImage, s)
+
+  const entries: HistoryEntry[] = []
+  for (const o of withImages) {
+    const meta = metaByTargetKey.get(o.targetKey)
+    const blockHeight = meta?.height ?? 0
+    const txHash = meta?.txHash ?? o.targetKey
+    const status = statusByKeyImage.get(o.keyImage)
+    const spent = !!status && (status.spent || status.pending)
+    const spentHeight = status?.spentHeight ?? null
+
+    // The receive of this owned output (always shown, with its real amount).
+    entries.push({
+      txHash,
+      type: 'receive',
+      amount: toBigInt(o.amount),
+      blockHeight,
+      spent,
+      spentHeight,
+    })
+
+    // If we've spent it, also record a spend entry so history shows the outflow.
+    if (spent) {
+      entries.push({
+        txHash,
+        type: 'spend',
+        amount: toBigInt(o.amount),
+        blockHeight: spentHeight ?? blockHeight,
+        spent: true,
+        spentHeight,
+      })
+    }
+  }
+
+  // Newest first.
+  entries.sort((a, b) => b.blockHeight - a.blockHeight)
+  return entries
+}
+
 /** Inputs to {@link buildSendTransaction}. */
 export interface BuildSendParams {
   /** Account keys derived from the wallet mnemonic. */
