@@ -26,9 +26,11 @@ function formatAmount(amount: bigint): string {
   return `${sign}${bth.toFixed(6)} BTH`;
 }
 
-/** Format timestamp for display */
+/** Format timestamp for display (bridge timestamps are Unix seconds). */
 function formatTimestamp(timestamp: number): string {
-  const date = new Date(timestamp);
+  // Chain-recovered outputs may have no timestamp (0).
+  if (!timestamp) return "—";
+  const date = new Date(timestamp * 1000);
   const now = new Date();
   const diff = now.getTime() - date.getTime();
 

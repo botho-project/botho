@@ -28,6 +28,8 @@ import {
 export default function UnlockScreen() {
   const router = useRouter();
   const { unlock, isLoading, error, clearError } = useWalletStore();
+  // Local working copy of the recovery phrase; cleared as soon as unlock is
+  // attempted so it does not linger in JS state.
 
   const [biometricType, setBiometricType] = useState<"face" | "fingerprint" | null>(null);
   const [showMnemonicInput, setShowMnemonicInput] = useState(false);
@@ -77,16 +79,22 @@ export default function UnlockScreen() {
         return;
       }
 
-      // Load encrypted wallet from Keychain
+      // Load the keychain-protected wallet. The `encryptedData` field holds the
+      // recovery phrase, released only after a successful biometric/passcode
+      // check (kSecAttrAccessibleWhenUnlockedThisDeviceOnly).
       const storedWallet = await loadEncryptedWallet();
-      if (!storedWallet) {
-        Alert.alert("Error", "Failed to load wallet data. Please restore with your recovery phrase.");
+      if (!storedWallet || !storedWallet.encryptedData) {
+        Alert.alert(
+          "Error",
+          "Failed to load wallet data. Please restore with your recovery phrase."
+        );
         setShowMnemonicInput(true);
         return;
       }
 
-      // TODO: Decrypt wallet using native module and unlock
-      // For now, redirect to home (simulated unlock)
+      // Hand the phrase to the bridge to unlock the in-session keys. It is not
+      // retained in JS beyond this call.
+      await unlock(storedWallet.encryptedData);
       router.replace("/");
     } catch (err) {
       console.error("Biometric auth error:", err);

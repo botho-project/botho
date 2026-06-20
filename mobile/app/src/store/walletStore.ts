@@ -2,7 +2,12 @@
  * Wallet Store
  *
  * Global state management for the mobile wallet using Zustand.
- * Integrates with the native Rust module for actual wallet operations.
+ *
+ * Every operation calls the real UniFFI rust-bridge via `NativeWallet`
+ * (src/native/walletModule.ts). There is no mock data here: balance, history,
+ * send, faucet, node status and session all flow through the merged bridge
+ * (#447). The bridge holds the wallet keys in native session memory; the
+ * mnemonic is passed once on unlock and never persisted in JS.
  */
 
 import { create } from "zustand";
@@ -10,8 +15,19 @@ import type {
   WalletAddress,
   WalletBalance,
   TransactionEntry,
-  SessionStatus,
+  FaucetResult,
+  NodeStatusInfo,
 } from "../types/wallet";
+import { NativeWallet } from "../native/walletModule";
+import { DEFAULT_NODE } from "../config/nodes";
+import { saveNodeUrl, loadNodeUrl } from "../native/keychain";
+
+/** Extract a user-facing message from a thrown bridge error. */
+function errorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message) return error.message;
+  if (typeof error === "string") return error;
+  return fallback;
+}
 
 /** Wallet state */
 interface WalletState {
@@ -31,12 +47,15 @@ interface WalletState {
   // Network
   nodeUrl: string;
   isConnected: boolean;
+  nodeStatus: NodeStatusInfo | null;
 }
 
 /** Wallet actions */
 interface WalletActions {
-  // Initialization
-  setNodeUrl: (url: string) => void;
+  // Network / node selection
+  setNodeUrl: (url: string) => Promise<void>;
+  refreshNodeStatus: () => Promise<void>;
+  hydrateNodeUrl: () => Promise<void>;
 
   // Session management
   unlock: (mnemonic: string) => Promise<void>;
@@ -46,6 +65,8 @@ interface WalletActions {
   // Wallet operations
   refreshBalance: () => Promise<void>;
   refreshTransactions: (limit?: number) => Promise<void>;
+  send: (toAddress: string, amountPicocredits: bigint) => Promise<string>;
+  requestFaucet: () => Promise<FaucetResult>;
 
   // Error handling
   clearError: () => void;
@@ -53,8 +74,8 @@ interface WalletActions {
 
 type WalletStore = WalletState & WalletActions;
 
-/** Default node URL (testnet) */
-const DEFAULT_NODE_URL = "https://testnet.botho.network:8443";
+/** Default node URL (first live testnet node). */
+const DEFAULT_NODE_URL = DEFAULT_NODE.url;
 
 /**
  * Wallet store instance
@@ -75,11 +96,46 @@ export const useWalletStore = create<WalletStore>((set, get) => ({
   expiresAt: null,
   nodeUrl: DEFAULT_NODE_URL,
   isConnected: false,
+  nodeStatus: null,
 
-  // Set node URL
-  setNodeUrl: (url: string) => {
-    set({ nodeUrl: url });
-    // TODO: Call native module to update URL
+  // Set node URL: persist it, push it to the native bridge, and refresh health.
+  setNodeUrl: async (url: string) => {
+    set({ nodeUrl: url, error: null });
+    try {
+      await NativeWallet.setNodeUrl(url);
+      await saveNodeUrl(url);
+      // Best-effort health probe; failure here is non-fatal.
+      await get().refreshNodeStatus();
+    } catch (error) {
+      set({ error: errorMessage(error, "Failed to set node") });
+    }
+  },
+
+  // Load the persisted node URL (or default) and apply it to the bridge.
+  hydrateNodeUrl: async () => {
+    try {
+      const stored = await loadNodeUrl();
+      const url = stored ?? get().nodeUrl ?? DEFAULT_NODE_URL;
+      set({ nodeUrl: url });
+      await NativeWallet.setNodeUrl(url);
+    } catch (error) {
+      // Fall back to the default; surface but do not block startup.
+      set({ error: errorMessage(error, "Failed to load node selection") });
+    }
+  },
+
+  // Fetch node health (height / sync / peers) for the picker.
+  refreshNodeStatus: async () => {
+    try {
+      const status = await NativeWallet.getNodeStatus();
+      set({ nodeStatus: status, isConnected: true });
+    } catch (error) {
+      set({
+        nodeStatus: null,
+        isConnected: false,
+        error: errorMessage(error, "Node unreachable"),
+      });
+    }
   },
 
   // Unlock wallet with mnemonic
@@ -87,32 +143,28 @@ export const useWalletStore = create<WalletStore>((set, get) => ({
     set({ isLoading: true, error: null });
 
     try {
-      // TODO: Call native module
-      // const address = await NativeWallet.unlockWithMnemonic(mnemonic);
+      // Make sure the bridge points at the selected node before any RPC ops.
+      await NativeWallet.setNodeUrl(get().nodeUrl);
 
-      // Simulate for now
-      await new Promise((resolve) => setTimeout(resolve, 500));
-
-      const mockAddress: WalletAddress = {
-        viewPublicKey: "0".repeat(64),
-        spendPublicKey: "1".repeat(64),
-        display: "cad:0000...1111",
-      };
+      const address = await NativeWallet.unlockWithMnemonic(mnemonic);
 
       set({
         isUnlocked: true,
-        address: mockAddress,
-        expiresAt: new Date(Date.now() + 15 * 60 * 1000), // 15 min
+        address,
+        // Bridge enforces a 15-minute session timeout; mirror it locally.
+        expiresAt: new Date(Date.now() + 15 * 60 * 1000),
         isLoading: false,
       });
 
-      // Auto-refresh balance after unlock
+      // Auto-refresh balance + history after unlock.
       get().refreshBalance();
+      get().refreshTransactions();
     } catch (error) {
       set({
         isLoading: false,
-        error: error instanceof Error ? error.message : "Failed to unlock",
+        error: errorMessage(error, "Failed to unlock"),
       });
+      throw error;
     }
   },
 
@@ -121,9 +173,11 @@ export const useWalletStore = create<WalletStore>((set, get) => ({
     set({ isLoading: true });
 
     try {
-      // TODO: Call native module
-      // await NativeWallet.lock();
-
+      await NativeWallet.lock();
+    } catch (error) {
+      // Even if the native lock errors, clear local state.
+      console.error("Failed to lock:", error);
+    } finally {
       set({
         isUnlocked: false,
         address: null,
@@ -132,32 +186,36 @@ export const useWalletStore = create<WalletStore>((set, get) => ({
         expiresAt: null,
         isLoading: false,
       });
-    } catch (error) {
-      set({
-        isLoading: false,
-        error: error instanceof Error ? error.message : "Failed to lock",
-      });
     }
   },
 
-  // Check session status
+  // Check session status against the native bridge (authoritative).
   checkSession: async () => {
     try {
-      // TODO: Call native module
-      // const status = await NativeWallet.getSessionStatus();
+      const status = await NativeWallet.getSessionStatus();
 
-      const { expiresAt } = get();
-
-      if (expiresAt && new Date() > expiresAt) {
-        // Session expired
-        set({
-          isUnlocked: false,
-          address: null,
-          balance: null,
-          transactions: [],
-          expiresAt: null,
-        });
+      if (!status.isUnlocked) {
+        // Only mutate if we currently think we're unlocked, to avoid churn.
+        if (get().isUnlocked) {
+          set({
+            isUnlocked: false,
+            address: null,
+            balance: null,
+            transactions: [],
+            expiresAt: null,
+          });
+        }
+        return;
       }
+
+      set({
+        isUnlocked: true,
+        address: status.address ?? get().address,
+        expiresAt:
+          status.expiresInSeconds != null
+            ? new Date(Date.now() + status.expiresInSeconds * 1000)
+            : get().expiresAt,
+      });
     } catch (error) {
       console.error("Failed to check session:", error);
     }
@@ -165,55 +223,83 @@ export const useWalletStore = create<WalletStore>((set, get) => ({
 
   // Refresh balance
   refreshBalance: async () => {
-    const { isUnlocked } = get();
-    if (!isUnlocked) return;
+    if (!get().isUnlocked) return;
 
     set({ isLoading: true });
 
     try {
-      // TODO: Call native module
-      // const balance = await NativeWallet.getBalance();
-
-      // Simulate for now
-      await new Promise((resolve) => setTimeout(resolve, 300));
-
-      const mockBalance: WalletBalance = {
-        picocredits: BigInt(0),
-        formatted: "0.000000 BTH",
-        utxoCount: 0,
-        syncHeight: 0,
-      };
-
-      set({ balance: mockBalance, isLoading: false });
+      const balance = await NativeWallet.getBalance();
+      set({ balance, isLoading: false, isConnected: true });
     } catch (error) {
       set({
         isLoading: false,
-        error: error instanceof Error ? error.message : "Failed to get balance",
+        error: errorMessage(error, "Failed to get balance"),
       });
     }
   },
 
   // Refresh transactions
   refreshTransactions: async (limit = 20) => {
-    const { isUnlocked } = get();
-    if (!isUnlocked) return;
+    if (!get().isUnlocked) return;
 
     set({ isLoading: true });
 
     try {
-      // TODO: Call native module
-      // const txs = await NativeWallet.getTransactionHistory(limit, 0);
-
-      // Simulate for now
-      await new Promise((resolve) => setTimeout(resolve, 300));
-
-      set({ transactions: [], isLoading: false });
+      const transactions = await NativeWallet.getTransactionHistory(limit, 0);
+      set({ transactions, isLoading: false });
     } catch (error) {
       set({
         isLoading: false,
-        error:
-          error instanceof Error ? error.message : "Failed to get transactions",
+        error: errorMessage(error, "Failed to get transactions"),
       });
+    }
+  },
+
+  // Send a transfer. Returns the tx hash on success; throws on failure so the
+  // caller (send screen) can show inline status.
+  send: async (toAddress: string, amountPicocredits: bigint) => {
+    if (!get().isUnlocked) {
+      throw new Error("Wallet is locked");
+    }
+
+    set({ isLoading: true, error: null });
+
+    try {
+      const txHash = await NativeWallet.sendTransaction(
+        toAddress,
+        amountPicocredits
+      );
+      set({ isLoading: false });
+      // Refresh balance + history after a successful submit.
+      get().refreshBalance();
+      get().refreshTransactions();
+      return txHash;
+    } catch (error) {
+      const message = errorMessage(error, "Failed to send transaction");
+      set({ isLoading: false, error: message });
+      throw error instanceof Error ? error : new Error(message);
+    }
+  },
+
+  // Request testnet coins from the faucet for the current address.
+  requestFaucet: async () => {
+    if (!get().isUnlocked) {
+      throw new Error("Wallet is locked");
+    }
+
+    set({ isLoading: true, error: null });
+
+    try {
+      const result = await NativeWallet.requestFaucet();
+      set({ isLoading: false });
+      if (!result.success && result.message) {
+        set({ error: result.message });
+      }
+      return result;
+    } catch (error) {
+      const message = errorMessage(error, "Faucet request failed");
+      set({ isLoading: false, error: message });
+      throw error instanceof Error ? error : new Error(message);
     }
   },
 

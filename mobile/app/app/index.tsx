@@ -27,7 +27,12 @@ export default function HomeScreen() {
     error,
     address,
     balance,
+    transactions,
+    nodeStatus,
+    nodeUrl,
     refreshBalance,
+    refreshTransactions,
+    refreshNodeStatus,
     clearError,
   } = useWalletStore();
 
@@ -48,10 +53,31 @@ export default function HomeScreen() {
     checkWallet();
   }, [isUnlocked, router]);
 
+  // Refresh balance + history + node health whenever the wallet is unlocked.
+  useEffect(() => {
+    if (isUnlocked) {
+      refreshBalance();
+      refreshTransactions();
+      refreshNodeStatus();
+    }
+  }, [isUnlocked, refreshBalance, refreshTransactions, refreshNodeStatus]);
+
   const handleRefresh = () => {
     clearError();
     refreshBalance();
+    refreshTransactions();
+    refreshNodeStatus();
   };
+
+  /** Format a picocredit bigint amount as a signed BTH string. */
+  const formatAmount = (amount: bigint): string => {
+    const isNegative = amount < 0n;
+    const abs = isNegative ? -amount : amount;
+    const bth = Number(abs) / 1_000_000_000_000;
+    return `${isNegative ? "-" : "+"}${bth.toFixed(6)} BTH`;
+  };
+
+  const recentTransactions = transactions.slice(0, 3);
 
   if (!isUnlocked) {
     return (
@@ -80,10 +106,28 @@ export default function HomeScreen() {
         <Text style={styles.balanceAmount}>
           {balance?.formatted ?? "0.000000 BTH"}
         </Text>
-        <Text style={styles.addressText}>
+        <Text style={styles.addressText} numberOfLines={1}>
           {address?.display ?? "Loading..."}
         </Text>
       </View>
+
+      {/* Node selector */}
+      <TouchableOpacity
+        style={styles.nodeRow}
+        onPress={() => router.push("/node-picker")}
+      >
+        <View
+          style={[
+            styles.nodeDot,
+            nodeStatus ? styles.nodeDotOk : styles.nodeDotDown,
+          ]}
+        />
+        <Text style={styles.nodeRowText} numberOfLines={1}>
+          {nodeUrl}
+          {nodeStatus ? ` • height ${nodeStatus.chainHeight}` : " • offline"}
+        </Text>
+        <Text style={styles.nodeRowChevron}>Change ›</Text>
+      </TouchableOpacity>
 
       {/* Error Banner */}
       {error && (
@@ -114,6 +158,15 @@ export default function HomeScreen() {
         </TouchableOpacity>
       </View>
 
+      {/* Faucet */}
+      <TouchableOpacity
+        style={styles.faucetButton}
+        onPress={() => router.push("/faucet")}
+      >
+        <Text style={styles.faucetIcon}>🚰</Text>
+        <Text style={styles.faucetLabel}>Get Testnet Coins</Text>
+      </TouchableOpacity>
+
       {/* Recent Transactions */}
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
@@ -123,19 +176,54 @@ export default function HomeScreen() {
           </TouchableOpacity>
         </View>
 
-        <View style={styles.emptyState}>
-          <Text style={styles.emptyText}>No transactions yet</Text>
-          <Text style={styles.emptySubtext}>
-            Your transaction history will appear here
-          </Text>
-        </View>
+        {recentTransactions.length === 0 ? (
+          <View style={styles.emptyState}>
+            <Text style={styles.emptyText}>No transactions yet</Text>
+            <Text style={styles.emptySubtext}>
+              Use the faucet to get testnet coins, then send and receive
+            </Text>
+          </View>
+        ) : (
+          recentTransactions.map((tx) => {
+            const isReceive = tx.direction === "receive";
+            return (
+              <View key={tx.txHash} style={styles.txItem}>
+                <Text
+                  style={[
+                    styles.txArrow,
+                    isReceive ? styles.txArrowReceive : styles.txArrowSend,
+                  ]}
+                >
+                  {isReceive ? "↓" : "↑"}
+                </Text>
+                <View style={styles.txInfo}>
+                  <Text style={styles.txType}>
+                    {isReceive ? "Received" : "Sent"}
+                  </Text>
+                  <Text style={styles.txMeta}>Block {tx.blockHeight}</Text>
+                </View>
+                <Text
+                  style={[
+                    styles.txAmount,
+                    isReceive
+                      ? styles.txAmountReceive
+                      : styles.txAmountSend,
+                  ]}
+                >
+                  {formatAmount(tx.amount)}
+                </Text>
+              </View>
+            );
+          })
+        )}
       </View>
 
       {/* Sync Status */}
       <View style={styles.syncStatus}>
         <View style={styles.syncDot} />
         <Text style={styles.syncText}>
-          Synced to block {balance?.syncHeight ?? 0}
+          Wallet synced to block {balance?.syncHeight ?? 0}
+          {nodeStatus ? ` • node at ${nodeStatus.chainHeight}` : ""}
         </Text>
       </View>
     </ScrollView>
@@ -181,6 +269,108 @@ const styles = StyleSheet.create({
     color: "#00d9ff",
     fontSize: 12,
     fontFamily: "Courier",
+  },
+
+  // Node row
+  nodeRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#16213e",
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: "#0f3460",
+  },
+  nodeDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginRight: 10,
+  },
+  nodeDotOk: {
+    backgroundColor: "#00ff88",
+  },
+  nodeDotDown: {
+    backgroundColor: "#ff4444",
+  },
+  nodeRowText: {
+    color: "#aaa",
+    fontSize: 12,
+    flex: 1,
+  },
+  nodeRowChevron: {
+    color: "#00d9ff",
+    fontSize: 12,
+    marginLeft: 8,
+  },
+
+  // Faucet button
+  faucetButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#16213e",
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 32,
+    borderWidth: 1,
+    borderColor: "#00ff88",
+  },
+  faucetIcon: {
+    fontSize: 20,
+    marginRight: 10,
+  },
+  faucetLabel: {
+    color: "#00ff88",
+    fontSize: 16,
+    fontWeight: "600",
+  },
+
+  // Recent transaction rows
+  txItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#16213e",
+    borderRadius: 10,
+    padding: 14,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: "#0f3460",
+  },
+  txArrow: {
+    fontSize: 18,
+    marginRight: 12,
+  },
+  txArrowReceive: {
+    color: "#00ff88",
+  },
+  txArrowSend: {
+    color: "#ff4444",
+  },
+  txInfo: {
+    flex: 1,
+  },
+  txType: {
+    color: "#fff",
+    fontSize: 15,
+    fontWeight: "500",
+  },
+  txMeta: {
+    color: "#888",
+    fontSize: 12,
+    marginTop: 2,
+  },
+  txAmount: {
+    fontSize: 14,
+    fontWeight: "600",
+    fontFamily: "Courier",
+  },
+  txAmountReceive: {
+    color: "#00ff88",
+  },
+  txAmountSend: {
+    color: "#ff4444",
   },
 
   // Error Banner

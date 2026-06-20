@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+
+# Expo
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+
+# Native build outputs from `expo prebuild` (NOT the committed UniFFI bindings
+# under ios/Generated and android/generated, which are kept intentionally).
+/ios/build/
+/ios/Pods/
+/ios/*.xcworkspace
+/ios/*.xcodeproj
+/android/build/
+/android/.gradle/
+/android/app/build/
+/android/local.properties
+
+# Metro
+.metro-health-check*
+
+# Debug
+npm-debug.*
+*.log
+
+# macOS
+.DS_Store

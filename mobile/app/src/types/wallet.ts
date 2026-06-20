@@ -1,8 +1,11 @@
 /**
  * Mobile Wallet Types
  *
- * These types mirror the Rust FFI interface defined in botho-mobile.
- * Keep in sync with mobile/rust-bridge/src/botho_mobile.udl
+ * These types mirror the Rust FFI interface exported by the `botho-mobile`
+ * crate (mobile/rust-bridge/src/lib.rs, proc-macro UniFFI). Field names use
+ * the camelCase form UniFFI emits in the generated Swift/Kotlin bindings, so
+ * the TS wrapper in src/native/walletModule.ts can pass values straight
+ * through the native module.
  */
 
 /** Public wallet address (safe to display) */
@@ -11,7 +14,7 @@ export interface WalletAddress {
   viewPublicKey: string;
   /** Spend public key (hex encoded) */
   spendPublicKey: string;
-  /** Display format (cad:...) */
+  /** Display format (tbotho://1/<base58(view||spend)>) */
   display: string;
 }
 
@@ -35,7 +38,7 @@ export interface TransactionEntry {
   amount: bigint;
   /** Block height */
   blockHeight: number;
-  /** Timestamp (Unix milliseconds) */
+  /** Timestamp (Unix seconds; 0 when unknown for chain-recovered outputs) */
   timestamp: number;
   /** Direction: "send" or "receive" */
   direction: "send" | "receive";
@@ -51,6 +54,34 @@ export interface SessionStatus {
   address?: WalletAddress;
   /** Seconds until session expires */
   expiresInSeconds?: number;
+}
+
+/** Result of a faucet request (mirrors Rust `FaucetResult`) */
+export interface FaucetResult {
+  /** Whether the faucet dispensed coins */
+  success: boolean;
+  /** Transaction hash of the payout (empty if unsuccessful) */
+  txHash: string;
+  /** Amount dispensed in picocredits */
+  amount: bigint;
+  /** Human-readable amount (e.g. "10.000000 BTH") */
+  amountFormatted: string;
+  /** Optional message from the faucet (error / rate-limit info) */
+  message: string;
+}
+
+/** Health/status of a node, for the node picker (mirrors `NodeStatusInfo`) */
+export interface NodeStatusInfo {
+  /** Node software version */
+  version: string;
+  /** Network name (e.g. "botho-testnet") */
+  network: string;
+  /** Current chain height */
+  chainHeight: number;
+  /** Sync status string (e.g. "synced") */
+  syncStatus: string;
+  /** Number of connected peers */
+  peerCount: number;
 }
 
 /** Wallet error types (matching Rust MobileWalletError) */
@@ -70,12 +101,17 @@ export interface WalletError {
   message: string;
 }
 
-/** Native wallet module interface */
+/**
+ * Native wallet module interface.
+ *
+ * This is the full surface exported by the merged rust-bridge (#447). Method
+ * names + argument names match the UniFFI-generated Swift/Kotlin bindings.
+ */
 export interface NativeWalletModule {
   /** Set the node URL for RPC connections */
   setNodeUrl(url: string): Promise<void>;
 
-  /** Generate a new wallet, returns mnemonic phrase */
+  /** Generate a new wallet, returns mnemonic phrase (auto-unlocks) */
   generateWallet(): Promise<string>;
 
   /** Unlock wallet with mnemonic phrase */
@@ -98,4 +134,16 @@ export interface NativeWalletModule {
 
   /** Get wallet public address (requires unlock) */
   getAddress(): Promise<WalletAddress>;
+
+  /** Send a transfer (requires unlock); returns the tx hash */
+  sendTransaction(
+    toAddress: string,
+    amountPicocredits: bigint
+  ): Promise<string>;
+
+  /** Request testnet coins from the configured faucet node (requires unlock) */
+  requestFaucet(): Promise<FaucetResult>;
+
+  /** Get the configured node's status (height/sync/peers) */
+  getNodeStatus(): Promise<NodeStatusInfo>;
 }
