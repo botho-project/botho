@@ -291,16 +291,33 @@ impl ConsensusService {
             // Only keep the best minting tx (one coinbase per block)
             minting_txs.truncate(1);
 
-            // Sort regular txs by priority (fee), then hash for determinism
+            // Sort regular txs by priority (fee), then hash for determinism.
+            // This is the SELECTION ordering (higher-fee txs are preferred); the
+            // resulting block tx order is decided later by the block builder.
             regular_txs.sort_by(|a, b| {
                 b.priority
                     .cmp(&a.priority)
                     .then_with(|| a.tx_hash.cmp(&b.tx_hash))
             });
 
-            // Combine: best minting tx first, then regular txs
+            // Combine the selected coinbase with the regular txs.
             let mut combined = minting_txs;
             combined.extend(regular_txs);
+
+            // BALLOT INVARIANT (issue #449): SCP wraps this output directly into
+            // a `Ballot` and `Msg::validate()` REQUIRES the ballot's values to be
+            // STRICTLY ascending per `ConsensusValue::Ord` (see
+            // `Ballot::is_values_sorted`). The fee/priority selection ordering
+            // above is NOT the `Ord` ordering (a coinbase's random PoW-derived
+            // tx_hash can sort before or after a transfer), so a block containing
+            // BOTH a coinbase and a transfer would violate the invariant and
+            // panic SCP's outgoing-message validation — exactly what halted any
+            // multi-value block. Re-sort by the canonical `Ord` and dedup so the
+            // ballot is always valid. (Minting-only blocks have a single value
+            // and were never affected, which is why this latent bug only
+            // surfaced once transfer txs reached the slot.)
+            combined.sort();
+            combined.dedup();
             Ok(combined)
         });
 
@@ -583,9 +600,13 @@ impl ConsensusService {
         self.scp_node.current_slot_index()
     }
 
-    /// Submit a transaction for consensus
-    pub fn submit_transaction(&mut self, tx_hash: [u8; 32], tx_data: Vec<u8>) {
-        let value = ConsensusValue::from_transaction(tx_hash);
+    /// Submit a transaction for consensus.
+    ///
+    /// `fee` is threaded through as the deterministic consensus-value priority
+    /// (issue #449): it must be identical on every node for the same tx so the
+    /// value identity converges in SCP nomination.
+    pub fn submit_transaction(&mut self, tx_hash: [u8; 32], fee: u64, tx_data: Vec<u8>) {
+        let value = ConsensusValue::from_transaction(tx_hash, fee);
 
         // Add to shared cache for validation callback
         if let Ok(mut state) = self.shared_state.write() {
@@ -635,6 +656,29 @@ impl ConsensusService {
             state.tx_cache.entry(tx_hash).or_insert(TxCacheEntry {
                 data: tx_data,
                 is_minting_tx: true,
+            });
+        }
+    }
+
+    /// Register a transfer (regular) transaction received from a peer into the
+    /// validation cache, without adding it to our own pending/proposed set.
+    ///
+    /// This is the transfer-tx parallel of [`Self::register_minting_tx`] (issue
+    /// #449). SCP messages only carry a value's `tx_hash`; the validity_fn does
+    /// a HARD `tx_cache` lookup before any structural check. When a peer
+    /// nominates a value for a transfer tx, every node in the quorum must have
+    /// the raw tx bytes cached or the SCP slot rejects the peer's message
+    /// ("Transaction not in cache") and nomination never reaches quorum — which
+    /// halted the chain the instant a transfer entered the mempool. Seeding the
+    /// cache on receipt lets the local SCP node accept the peer's
+    /// nominate/ballot votes so balloting can begin. The caller gates this
+    /// on intrinsic (tip-agnostic) structural validity, mirroring the
+    /// minting path.
+    pub fn register_transfer_tx(&mut self, tx_hash: [u8; 32], tx_data: Vec<u8>) {
+        if let Ok(mut state) = self.shared_state.write() {
+            state.tx_cache.entry(tx_hash).or_insert(TxCacheEntry {
+                data: tx_data,
+                is_minting_tx: false,
             });
         }
     }
@@ -1585,7 +1629,7 @@ mod tests {
         let mut svc = solo_service();
 
         // Drive a solo round: submit a tx and externalize it directly.
-        svc.submit_transaction([7u8; 32], vec![1, 2, 3]);
+        svc.submit_transaction([7u8; 32], 0, vec![1, 2, 3]);
         svc.propose_pending_values();
         assert!(
             svc.externalized.is_some(),
@@ -1622,7 +1666,7 @@ mod tests {
             solo.should_propose_this_round(),
             "min_peers==0 node must always be eligible to mint solo"
         );
-        solo.submit_transaction([7u8; 32], vec![1, 2, 3]);
+        solo.submit_transaction([7u8; 32], 0, vec![1, 2, 3]);
         solo.propose_pending_values();
         assert!(
             solo.externalized.is_some(),
@@ -1637,7 +1681,7 @@ mod tests {
             !gated.should_propose_this_round(),
             "node expecting peers must not mint while solo (pre-quorum)"
         );
-        gated.submit_transaction([8u8; 32], vec![4, 5, 6]);
+        gated.submit_transaction([8u8; 32], 0, vec![4, 5, 6]);
         gated.propose_pending_values();
         assert!(
             gated.externalized.is_none(),
@@ -1852,7 +1896,7 @@ mod tests {
                 },
             );
         }
-        let value = ConsensusValue::from_transaction(tx_hash);
+        let value = ConsensusValue::from_transaction(tx_hash, tx.fee);
 
         // Feed an inbound peer message directly into the SCP node so its
         // `current_slot` accumulates peer-driven nominate/ballot state.
@@ -2131,6 +2175,172 @@ mod tests {
             chosen == a_tx.hash() || chosen == b_tx.hash(),
             "externalized minting tx must be one of the two proposed coinbases"
         );
+    }
+
+    /// Issue #449 regression (THE load-bearing test): two real
+    /// `ConsensusService` instances in a 2-of-2 quorum must converge on and
+    /// externalize a block CONTAINING a regular TRANSFER tx, with both
+    /// nodes agreeing.
+    ///
+    /// This exercises the production transfer path end-to-end:
+    ///   - node A `submit_transaction(hash, fee, bytes)` (local-submit path)
+    ///   - node B `register_transfer_tx(hash, bytes)` (peer-gossip path)
+    /// plus each node proposing the SAME coinbase (a block needs a minting tx).
+    ///
+    /// PRE-FIX this FAILS for two compounding reasons:
+    ///   (A) `from_transaction` used `SystemTime::now()` → A and B built
+    ///       NON-EQUAL `ConsensusValue`s for the same tx, so nomination could
+    ///       never converge on a shared set; and
+    ///   (B) there was no `register_transfer_tx`, so B's validity_fn lookup
+    ///       ("Transaction not in cache") rejected A's nominate carrying the
+    ///       transfer value and SCP silently dropped it.
+    /// POST-FIX the value identity is deterministic (priority = fee) and the
+    /// peer cache is seeded, so the transfer value survives federated voting
+    /// and both nodes externalize an identical set containing it.
+    #[test]
+    fn two_nodes_externalize_block_containing_transfer_tx() {
+        let cfg = ConsensusConfig::fixed_timing(0);
+        let qs = recommended_quorum(&[1, 2]);
+
+        let mut a = ConsensusService::new(node(1), qs.clone(), cfg.clone(), genesis_chain_state());
+        let mut b = ConsensusService::new(node(2), qs, cfg, genesis_chain_state());
+
+        assert!(
+            !a.is_solo_mode() && !b.is_solo_mode(),
+            "must be a 2-node quorum"
+        );
+
+        // A block needs a coinbase; both nodes propose the SAME minting tx so the
+        // combiner has an unambiguous coinbase and the test isolates the transfer
+        // path.
+        let prev = [0u8; 32];
+        let coinbase = intrinsic_valid_minting_tx(1, prev, 1);
+        submit_and_register(&mut a, &mut b, &coinbase);
+        submit_and_register(&mut b, &mut a, &coinbase);
+
+        // A real, structurally valid transfer tx enters consensus via the
+        // production path:
+        //   - it originates at node A (a wallet send / faucet payout) and A submits it
+        //     locally (`submit_transaction`);
+        //   - node B receives it via gossip and seeds its consensus cache
+        //     (`register_transfer_tx`, the #449 fix) so B's SCP validity_fn can
+        //     validate A's nominate referencing the transfer value;
+        //   - B then pulls it from its own mempool and submits it too (every mining
+        //     node includes mempool txs), so a 2-of-2 quorum nominates it.
+        // The value identity must be IDENTICAL across nodes for nomination to
+        // converge — that is the deterministic-priority half of the fix.
+        let transfer = valid_transfer_tx();
+        let transfer_hash = [0xABu8; 32]; // stable hash placeholder for the value
+        let transfer_bytes = bincode::serialize(&transfer).expect("serialize transfer");
+        a.submit_transaction(transfer_hash, transfer.fee, transfer_bytes.clone());
+        b.register_transfer_tx(transfer_hash, transfer_bytes.clone());
+        b.submit_transaction(transfer_hash, transfer.fee, transfer_bytes);
+
+        // Sanity: both nodes built the SAME consensus value for the transfer
+        // (deterministic identity). Pre-fix (SystemTime::now()) this could differ.
+        let a_val = ConsensusValue::from_transaction(transfer_hash, transfer.fee);
+        let b_val = ConsensusValue::from_transaction(transfer_hash, transfer.fee);
+        assert_eq!(
+            a_val, b_val,
+            "transfer value identity must be deterministic"
+        );
+
+        let (a_ext, b_ext) = run_two_services(&mut a, &mut b, 4000);
+
+        let a_vals = a_ext.expect("node A never externalized (consensus stalled on transfer)");
+        let b_vals = b_ext.expect("node B never externalized (consensus stalled on transfer)");
+
+        assert_eq!(
+            a_vals, b_vals,
+            "the two nodes externalized DIFFERENT value sets (no agreement)"
+        );
+
+        // The externalized block must CONTAIN the transfer tx, as EXACTLY ONE
+        // transfer value. Pre-fix (non-deterministic priority) A and B build
+        // DIFFERENT ConsensusValues for the same tx_hash, so either nomination
+        // never converges (no externalize at all) or two distinct values for the
+        // same tx leak into the set — both caught here.
+        let transfers: Vec<_> = a_vals.iter().filter(|v| !v.is_minting_tx).collect();
+        assert_eq!(
+            transfers.len(),
+            1,
+            "externalized set must contain EXACTLY ONE transfer value; got {:?}",
+            a_vals
+        );
+        assert_eq!(
+            transfers[0].tx_hash, transfer_hash,
+            "the externalized transfer value must reference the submitted tx"
+        );
+        assert_eq!(
+            transfers[0].priority, transfer.fee,
+            "transfer value priority must be the deterministic fee (issue #449)"
+        );
+
+        // And exactly one coinbase.
+        let minting: Vec<_> = a_vals.iter().filter(|v| v.is_minting_tx).collect();
+        assert_eq!(minting.len(), 1, "exactly one coinbase per block");
+        assert_eq!(minting[0].tx_hash, coinbase.hash());
+    }
+
+    /// Issue #449 Defect B: a peer's SCP nominate carrying a TRANSFER value is
+    /// only accepted into the local SCP slot if the transfer tx is in our
+    /// consensus cache. The SCP validity_fn does a HARD cache lookup first
+    /// ("Transaction not in cache"); if it fails, `scp_node.handle_message`
+    /// rejects the peer's message and the slot never picks up the peer's
+    /// nominate/ballot state — quorum can't form. `register_transfer_tx` (the
+    /// peer-gossip seed) is what makes that lookup succeed.
+    ///
+    /// This isolates the cache-registration half of the fix: WITHOUT register,
+    /// the peer message is rejected and the slot stays idle; WITH register, the
+    /// peer message is accepted and the slot becomes peer-populated.
+    #[test]
+    fn register_transfer_tx_enables_peer_nominate_acceptance() {
+        let slot_qs = recommended_quorum(&[1, 2]);
+        let tx = valid_transfer_tx();
+        let tx_bytes = bincode::serialize(&tx).expect("tx serializes");
+        let tx_hash = [0x5Au8; 32];
+        let value = ConsensusValue::from_transaction(tx_hash, tx.fee);
+
+        // (a) WITHOUT registering the transfer tx, the peer's nominate carrying
+        // the transfer value is rejected by the validity_fn ("not in cache"),
+        // so the SCP slot stays idle.
+        {
+            let mut svc = peered_service(&[1, 2]);
+            let slot = svc.scp_node.current_slot_index();
+            let peer_msg = peer_nominate_prepare(node(2), slot_qs.clone(), slot, value);
+            // The message is dropped at the validity gate; the slot must not pick
+            // up any peer nominate state.
+            let _ = svc.scp_node.handle_message(&peer_msg);
+            let m = svc.scp_node.get_current_slot_metrics();
+            assert_eq!(
+                (m.num_voted_nominated, m.num_accepted_nominated),
+                (0, 0),
+                "without register_transfer_tx the peer's transfer nominate must be \
+                 rejected (validity: not in cache) and leave the slot idle"
+            );
+        }
+
+        // (b) WITH register_transfer_tx seeding the cache, the same peer nominate
+        // is accepted and the slot becomes peer-populated.
+        {
+            let mut svc = peered_service(&[1, 2]);
+            let slot = svc.scp_node.current_slot_index();
+            svc.register_transfer_tx(tx_hash, tx_bytes);
+            let peer_msg = peer_nominate_prepare(node(2), slot_qs, slot, value);
+            svc.scp_node
+                .handle_message(&peer_msg)
+                .expect("peer message must be accepted once the tx is in the cache");
+            let m = svc.scp_node.get_current_slot_metrics();
+            let active = m.num_voted_nominated > 0
+                || m.num_accepted_nominated > 0
+                || m.bN > 0
+                || m.phase != ScpPhase::NominatePrepare;
+            assert!(
+                active,
+                "with register_transfer_tx the peer's transfer nominate must be \
+                 accepted and make the slot peer-populated"
+            );
+        }
     }
 
     /// Finding 3: a node that catches up via block-sync must fast-forward its

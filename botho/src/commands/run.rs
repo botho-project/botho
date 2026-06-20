@@ -675,10 +675,28 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                             debug!("Received transaction {} from network", hex::encode(&tx.hash()[0..8]));
                             let tx_hash = tx.hash();
                             let tx_fee = tx.fee;
+                            // Serialize before move so we can seed the consensus
+                            // cache once the mempool accepts the tx (issue #449).
+                            let tx_bytes = bincode::serialize(&tx)
+                                .expect("Failed to serialize transaction");
                             // Add to mempool for inclusion in next block
                             if let Err(e) = node.submit_transaction(tx) {
                                 debug!("Failed to add network transaction to mempool: {}", e);
                             } else {
+                                // Seed the consensus tx cache so the SCP
+                                // validity_fn lookup succeeds when a peer
+                                // nominates the value for this transfer tx.
+                                // Without this, peers fail validity ("Transaction
+                                // not in cache") and SCP silently drops the
+                                // nominate/ballot messages, so quorum can never
+                                // form on a set containing the transfer and the
+                                // chain halts (issue #449). This mirrors the
+                                // minting path's register_minting_tx (#409). The
+                                // mempool acceptance above is the validity gate:
+                                // it performs full structural + UTXO + signature
+                                // checks, so we only cache validated bytes.
+                                consensus.register_transfer_tx(tx_hash, tx_bytes);
+
                                 // Broadcast transaction and mempool update to WebSocket clients
                                 ws_broadcaster.new_transaction(&tx_hash, tx_fee, None);
                                 if let Ok(mempool) = node.shared_mempool().read() {
@@ -1557,6 +1575,7 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                 // and submit them to consensus
                 for tx in node.get_pending_transactions(10) {
                     let tx_hash = tx.hash();
+                    let tx_fee = tx.fee;
                     let tx_bytes = bincode::serialize(&tx)
                         .expect("Failed to serialize transaction");
 
@@ -1565,8 +1584,11 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                         debug!("Failed to broadcast transaction: {}", e);
                     }
 
-                    // Submit to consensus for ordering
-                    consensus.submit_transaction(tx_hash, tx_bytes);
+                    // Submit to consensus for ordering. The fee is threaded
+                    // through as the deterministic consensus-value priority
+                    // (issue #449) so the same tx maps to the same value on
+                    // every node and SCP nomination converges.
+                    consensus.submit_transaction(tx_hash, tx_fee, tx_bytes);
                 }
             }
 
