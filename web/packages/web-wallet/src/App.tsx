@@ -3,6 +3,7 @@ import { NetworkProvider } from './contexts/network'
 import { WalletProvider } from './contexts/wallet'
 import { LandingPage } from './pages/landing'
 import { WalletPage } from './pages/wallet'
+import { ClaimPage } from './pages/claim'
 import { DocsPage } from './pages/docs'
 import { ExplorerPage } from './pages/explorer'
 
@@ -42,6 +43,7 @@ function App() {
             <Route path="/home" element={<LandingPage />} />
             <Route path="/about" element={<LandingPage />} />
             <Route path="/wallet" element={<WalletPage />} />
+            <Route path="/claim" element={<ClaimPage />} />
             <Route path="/explorer" element={<ExplorerPage />} />
             <Route path="/explorer/tx/:hash" element={<ExplorerPage />} />
             <Route path="/explorer/block/:hash" element={<ExplorerPage />} />
