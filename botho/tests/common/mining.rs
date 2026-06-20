@@ -31,11 +31,9 @@ pub fn create_mock_minting_tx(
             .as_secs(),
     );
 
-    // Find a valid nonce (should be fast with trivial difficulty).
-    //
-    // At `TRIVIAL_DIFFICULTY = 0x00FF_FFFF_FFFF_FFFF`, 1/256 nonces solve,
-    // so 100k attempts have effectively zero false-failure risk while
-    // still completing in milliseconds.
+    // Find a valid nonce. With `TRIVIAL_DIFFICULTY = u64::MAX` essentially
+    // every nonce solves on the first RandomX hash, keeping test mining cheap
+    // (RandomX hashing is ~ms-scale, so we must not iterate many nonces).
     for nonce in 0..100_000 {
         minting_tx.nonce = nonce;
         if minting_tx.verify_pow() {

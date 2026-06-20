@@ -39,7 +39,7 @@ use sha2::{Digest, Sha256};
 // ============================================================================
 
 const TEST_BLOCK_REWARD: u64 = 50 * PICOCREDITS_PER_CREDIT;
-const TRIVIAL_DIFFICULTY: u64 = 0x00FF_FFFF_FFFF_FFFF;
+const TRIVIAL_DIFFICULTY: u64 = u64::MAX;
 
 /// Ring size floor: the existing all-at-genesis tests never push a node past a
 /// few blocks; #376 specifically requires syncing a chain "of height N > ring
@@ -267,6 +267,10 @@ fn test_fresh_node_syncs_existing_chain_to_tip() {
     // --- Source node A: build a chain to height N ---
     let source_dir = TempDir::new().unwrap();
     let source = Ledger::open(source_dir.path()).unwrap();
+    // RandomX genesis difficulty is real-hashrate sized; pin the chain to
+    // the trivial target so test PoW solves in one hash and the C1
+    // block-apply difficulty check accepts it.
+    source.set_difficulty(TRIVIAL_DIFFICULTY).unwrap();
     let minter = create_test_wallet().public_address();
     build_chain_to_height(&source, &minter, target_height);
 
@@ -276,6 +280,10 @@ fn test_fresh_node_syncs_existing_chain_to_tip() {
     // --- Fresh node B: empty ledger at genesis ---
     let node_dir = TempDir::new().unwrap();
     let node = Ledger::open(node_dir.path()).unwrap();
+    // RandomX genesis difficulty is real-hashrate sized; pin the chain to
+    // the trivial target so test PoW solves in one hash and the C1
+    // block-apply difficulty check accepts it.
+    node.set_difficulty(TRIVIAL_DIFFICULTY).unwrap();
     assert_eq!(
         node.get_chain_state().unwrap().height,
         0,
@@ -415,6 +423,10 @@ fn test_fresh_node_syncs_small_gap_chain_discovery_only() {
 
     let source_dir = TempDir::new().unwrap();
     let source = Ledger::open(source_dir.path()).unwrap();
+    // RandomX genesis difficulty is real-hashrate sized; pin the chain to
+    // the trivial target so test PoW solves in one hash and the C1
+    // block-apply difficulty check accepts it.
+    source.set_difficulty(TRIVIAL_DIFFICULTY).unwrap();
     let minter = create_test_wallet().public_address();
     build_chain_to_height(&source, &minter, target_height);
     let source_state = source.get_chain_state().unwrap();
@@ -422,6 +434,10 @@ fn test_fresh_node_syncs_small_gap_chain_discovery_only() {
 
     let node_dir = TempDir::new().unwrap();
     let node = Ledger::open(node_dir.path()).unwrap();
+    // RandomX genesis difficulty is real-hashrate sized; pin the chain to
+    // the trivial target so test PoW solves in one hash and the C1
+    // block-apply difficulty check accepts it.
+    node.set_difficulty(TRIVIAL_DIFFICULTY).unwrap();
     assert_eq!(node.get_chain_state().unwrap().height, 0);
 
     let mut sync_manager = ChainSyncManager::new(0);
@@ -550,11 +566,19 @@ fn test_node_resyncs_when_peer_advances() {
 
     let source_dir = TempDir::new().unwrap();
     let source = Ledger::open(source_dir.path()).unwrap();
+    // RandomX genesis difficulty is real-hashrate sized; pin the chain to
+    // the trivial target so test PoW solves in one hash and the C1
+    // block-apply difficulty check accepts it.
+    source.set_difficulty(TRIVIAL_DIFFICULTY).unwrap();
     let minter = create_test_wallet().public_address();
     build_chain_to_height(&source, &minter, first_target);
 
     let node_dir = TempDir::new().unwrap();
     let node = Ledger::open(node_dir.path()).unwrap();
+    // RandomX genesis difficulty is real-hashrate sized; pin the chain to
+    // the trivial target so test PoW solves in one hash and the C1
+    // block-apply difficulty check accepts it.
+    node.set_difficulty(TRIVIAL_DIFFICULTY).unwrap();
 
     let mut sync_manager = ChainSyncManager::new(0);
     let peer = PeerId::random();
@@ -581,6 +605,10 @@ fn test_node_resyncs_when_peer_advances() {
 fn test_get_blocks_serves_requested_range() {
     let source_dir = TempDir::new().unwrap();
     let source = Ledger::open(source_dir.path()).unwrap();
+    // RandomX genesis difficulty is real-hashrate sized; pin the chain to
+    // the trivial target so test PoW solves in one hash and the C1
+    // block-apply difficulty check accepts it.
+    source.set_difficulty(TRIVIAL_DIFFICULTY).unwrap();
     let minter = create_test_wallet().public_address();
     build_chain_to_height(&source, &minter, 30);
 

@@ -269,7 +269,16 @@ fn build_test_network_with_config(config: TestNetworkConfig) -> TestNetwork {
 
         // Create temp directory for ledger
         let temp_dir = TempDir::new().unwrap();
-        let ledger = Arc::new(RwLock::new(Ledger::open(temp_dir.path()).unwrap()));
+        let ledger_store = Ledger::open(temp_dir.path()).unwrap();
+        // With RandomX PoW the real genesis difficulty is sized for ~hundreds
+        // of H/s and would make each test block take many seconds. Tests don't
+        // exercise difficulty itself, so pin the chain difficulty to the
+        // trivial target (every nonce solves in a single RandomX hash). The
+        // block-apply difficulty check then accepts `TRIVIAL_DIFFICULTY` blocks.
+        ledger_store
+            .set_difficulty(crate::common::TRIVIAL_DIFFICULTY)
+            .unwrap();
+        let ledger = Arc::new(RwLock::new(ledger_store));
 
         // Create channel for message passing
         let (sender, receiver) = unbounded();

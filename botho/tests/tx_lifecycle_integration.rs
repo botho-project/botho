@@ -60,7 +60,7 @@ const TEST_BLOCK_REWARD: u64 = 50 * PICOCREDITS_PER_CREDIT;
 ///
 /// Must equal the chain's initial difficulty — block acceptance now enforces
 /// `header.difficulty == chain.difficulty` (audit cycle 6, C1).
-const TRIVIAL_DIFFICULTY: u64 = 0x00FF_FFFF_FFFF_FFFF;
+const TRIVIAL_DIFFICULTY: u64 = u64::MAX;
 
 // ============================================================================
 // Test Helpers
@@ -71,6 +71,10 @@ fn create_test_ledger() -> (TempDir, Ledger) {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let ledger_path = temp_dir.path().join("ledger");
     let ledger = Ledger::open(&ledger_path).expect("Failed to open ledger");
+    // RandomX genesis difficulty is real-hashrate sized; pin the chain to
+    // the trivial target so test PoW solves in one hash and the C1
+    // block-apply difficulty check accepts it.
+    ledger.set_difficulty(TRIVIAL_DIFFICULTY).unwrap();
     (temp_dir, ledger)
 }
 
