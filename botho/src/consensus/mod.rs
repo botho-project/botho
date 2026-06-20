@@ -16,7 +16,7 @@ mod service;
 mod validation;
 mod value;
 
-pub use block_builder::{BlockBuildError, BlockBuilder, BuiltBlock};
+pub use block_builder::{BlockBuildError, BlockBuilder, BuiltBlock, MAX_TX_AGE};
 pub use lottery::{
     draw_lottery_winners, split_fees, utxo_to_candidate, validate_block_lottery,
     verify_lottery_result, BlockLotteryResult, LotteryFeeConfig, LotteryStats,

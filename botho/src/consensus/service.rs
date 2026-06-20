@@ -254,8 +254,12 @@ impl ConsensusService {
                 })?;
 
                 // Create a temporary validator for the (tip-agnostic) check.
-                // The chain_state is only used by the transfer-tx structural
-                // path; the minting-tx path is fully tip-agnostic.
+                // BOTH the minting-tx and transfer-tx intrinsic paths are now
+                // fully tip-agnostic (issue #451 removed the transfer staleness
+                // check that read the local tip), so `validate_from_bytes_intrinsic`
+                // never reads `chain_state`. The clone below is retained only
+                // because `TransactionValidator::new` requires a chain-state
+                // handle for its non-intrinsic (gossip/apply) methods.
                 let temp_state = Arc::new(RwLock::new(state.chain_state.clone()));
                 let temp_validator = TransactionValidator::new(temp_state);
 
