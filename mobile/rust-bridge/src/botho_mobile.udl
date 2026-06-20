@@ -1,7 +1,16 @@
-// Botho Mobile - UniFFI Interface Definition
+// Botho Mobile - UniFFI Interface Reference
 //
-// This file defines the FFI boundary between Rust and Swift/Kotlin.
-// UniFFI generates bindings from this definition.
+// NOTE: The bridge uses the proc-macro UniFFI approach (`uniffi::setup_scaffolding!`
+// in src/lib.rs), NOT this .udl file. Bindings are generated from the compiled
+// library:
+//
+//   cargo run -p botho-mobile --bin uniffi-bindgen -- \
+//     generate --library target/debug/libbotho_mobile.dylib \
+//     --language swift --out-dir mobile/app/ios/Generated
+//
+// This file is kept only as a human-readable reference of the FFI surface and
+// is NOT consumed by the build (build.rs does not call generate_scaffolding).
+// Keep it in sync with the #[uniffi::export] impl in src/lib.rs.
 
 namespace botho_mobile {};
 
@@ -39,6 +48,22 @@ dictionary TransactionEntry {
     string? counterparty;
 };
 
+dictionary FaucetResult {
+    boolean success;
+    string tx_hash;
+    u64 amount;
+    string amount_formatted;
+    string message;
+};
+
+dictionary NodeStatusInfo {
+    string version;
+    string network;
+    u64 chain_height;
+    string sync_status;
+    u32 peer_count;
+};
+
 dictionary SessionStatus {
     boolean is_unlocked;
     WalletAddress? address;
@@ -71,4 +96,13 @@ interface MobileWallet {
 
     [Async, Throws=MobileWalletError]
     WalletAddress get_address();
+
+    [Async, Throws=MobileWalletError]
+    string send_transaction(string to_address, u64 amount_picocredits);
+
+    [Async, Throws=MobileWalletError]
+    FaucetResult request_faucet();
+
+    [Async, Throws=MobileWalletError]
+    NodeStatusInfo get_node_status();
 };

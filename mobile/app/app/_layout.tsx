@@ -14,6 +14,12 @@ const queryClient = new QueryClient();
 
 export default function RootLayout() {
   const checkSession = useWalletStore((state) => state.checkSession);
+  const hydrateNodeUrl = useWalletStore((state) => state.hydrateNodeUrl);
+
+  // Apply the persisted node selection to the bridge before anything else.
+  useEffect(() => {
+    hydrateNodeUrl();
+  }, [hydrateNodeUrl]);
 
   // Check session on app mount and periodically
   useEffect(() => {
@@ -80,6 +86,20 @@ export default function RootLayout() {
           name="send"
           options={{
             title: "Send",
+            presentation: "modal",
+          }}
+        />
+        <Stack.Screen
+          name="faucet"
+          options={{
+            title: "Testnet Faucet",
+            presentation: "modal",
+          }}
+        />
+        <Stack.Screen
+          name="node-picker"
+          options={{
+            title: "Choose Node",
             presentation: "modal",
           }}
         />
