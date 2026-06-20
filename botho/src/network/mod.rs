@@ -12,6 +12,7 @@ mod compact_block;
 mod connection_limiter;
 mod discovery;
 mod dns_seeds;
+mod node_key;
 mod pex;
 pub mod privacy;
 mod quorum;
@@ -34,6 +35,7 @@ pub use discovery::{
 // Re-export rate limit configuration from bth-gossip for network setup
 pub use bth_gossip::{GossipMessageType, MessageTypeLimits, PeerRateLimitConfig};
 pub use dns_seeds::{DnsSeedDiscovery, DnsSeedError};
+pub use node_key::load_or_create_keypair;
 pub use pex::{
     PeerSource, PexEntry, PexFilter, PexManager, PexMessage, PexRateLimiter, PexSourceTracker,
     MAX_PEERS_PER_SUBNET, MAX_PEER_AGE_SECS, MAX_PEX_MESSAGE_SIZE, MAX_PEX_PEERS, MAX_PEX_PER_HOUR,

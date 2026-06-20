@@ -331,6 +331,13 @@ pub struct BothoBehaviour {
 
 /// Network discovery and gossip service
 pub struct NetworkDiscovery {
+    /// Persistent libp2p identity keypair (issue #439).
+    ///
+    /// This is the single, canonical identity for the node: it is used both to
+    /// derive `local_peer_id` and to build the swarm in [`start`], so the
+    /// logged peer ID always matches the swarm's actual peer ID. Persisting it
+    /// to disk keeps the peer ID stable across restarts.
+    keypair: identity::Keypair,
     /// Local peer ID
     local_peer_id: PeerId,
     /// Gossip port
@@ -353,23 +360,51 @@ pub struct NetworkDiscovery {
 }
 
 impl NetworkDiscovery {
-    /// Create a new network discovery service
+    /// Create a new network discovery service.
+    ///
+    /// Generates an ephemeral identity keypair. Production startup should
+    /// prefer [`with_keypair`](Self::with_keypair) with a persisted key so
+    /// the peer ID is stable across restarts (issue #439).
     pub fn new(port: u16, bootstrap_peers: Vec<String>) -> Self {
         Self::with_rate_limit_config(port, bootstrap_peers, PeerRateLimitConfig::default())
     }
 
     /// Create a new network discovery service with custom rate limit
-    /// configuration
+    /// configuration.
+    ///
+    /// Generates an ephemeral identity keypair. Production startup should
+    /// prefer [`with_keypair`](Self::with_keypair) with a persisted key so
+    /// the peer ID is stable across restarts (issue #439).
     pub fn with_rate_limit_config(
+        port: u16,
+        bootstrap_peers: Vec<String>,
+        rate_limit_config: PeerRateLimitConfig,
+    ) -> Self {
+        Self::with_keypair(
+            identity::Keypair::generate_ed25519(),
+            port,
+            bootstrap_peers,
+            rate_limit_config,
+        )
+    }
+
+    /// Create a new network discovery service from an explicit identity
+    /// keypair (issue #439).
+    ///
+    /// The supplied keypair is the node's single canonical identity: it is used
+    /// both for the logged/queried `local_peer_id` and to build the swarm in
+    /// [`start`](Self::start). Passing a keypair loaded from disk keeps the
+    /// peer ID stable across restarts (the prerequisite for durable DNS-seed
+    /// discovery), and ensures a startup logs exactly ONE peer ID.
+    pub fn with_keypair(
+        keypair: identity::Keypair,
         port: u16,
         bootstrap_peers: Vec<String>,
         rate_limit_config: PeerRateLimitConfig,
     ) -> Self {
         let (event_tx, event_rx) = mpsc::channel(100);
 
-        // Generate a random keypair for this node
-        let local_key = identity::Keypair::generate_ed25519();
-        let local_peer_id = PeerId::from(local_key.public());
+        let local_peer_id = PeerId::from(keypair.public());
 
         info!("Local peer ID: {}", local_peer_id);
         info!(
@@ -385,6 +420,7 @@ impl NetworkDiscovery {
         );
 
         Self {
+            keypair,
             local_peer_id,
             port,
             bootstrap_peers,
@@ -489,8 +525,12 @@ impl NetworkDiscovery {
 
     /// Start the network service (runs in background)
     pub async fn start(&mut self) -> anyhow::Result<Swarm<BothoBehaviour>> {
-        // Create swarm
-        let mut swarm = libp2p::SwarmBuilder::with_new_identity()
+        // Build the swarm from the node's canonical identity keypair (issue
+        // #439). Using `with_existing_identity` (rather than the previous
+        // `with_new_identity`, which minted a SECOND, throwaway keypair) means
+        // the swarm's peer ID matches `self.local_peer_id` and is stable across
+        // restarts when the keypair was loaded from disk.
+        let mut swarm = libp2p::SwarmBuilder::with_existing_identity(self.keypair.clone())
             .with_tokio()
             .with_tcp(
                 tcp::Config::default(),
@@ -589,6 +629,10 @@ impl NetworkDiscovery {
             }
         }
 
+        // The swarm now derives from the same canonical keypair, so its peer ID
+        // already equals `self.local_peer_id`; this assignment is a no-op kept
+        // for clarity. Guard against any future drift in debug builds.
+        debug_assert_eq!(self.local_peer_id, *swarm.local_peer_id());
         self.local_peer_id = *swarm.local_peer_id();
         info!("Network started on port {}", self.port);
 
