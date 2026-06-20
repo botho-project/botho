@@ -54,6 +54,12 @@ interface NetworkContextValue extends NetworkState {
   ingressNodes: IngressNode[]
   /** Re-run the health checks for every ingress node. */
   refreshHealth: () => void
+  /**
+   * Begin polling node health. Returns an unsubscribe fn; polling stops once
+   * the last subscriber unsubscribes. Call from components that show health
+   * (the NetworkSelector) so the landing page makes no node calls.
+   */
+  startHealthPolling: () => () => void
 }
 
 const NetworkContext = createContext<NetworkContextValue | null>(null)
@@ -104,7 +110,15 @@ export function NetworkProvider({ children }: { children: ReactNode }) {
   }, [state.network])
 
   // Poll each ingress node's health via node_getStatus.
+  //
+  // Polling is started on demand (see `startHealthPolling`) rather than on
+  // mount: the landing page does not render the node picker and must not reach
+  // out to the SCP nodes (an unreachable node would otherwise emit a console
+  // network error on every page). The NetworkSelector starts polling while it
+  // is mounted (wallet/explorer pages) and stops on unmount.
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const pollSubscribers = useRef(0)
+
   const runHealthChecks = useCallback(() => {
     for (const node of INGRESS_NODES) {
       fetchNodeHealth(node.rpcEndpoint).then((health) => {
@@ -116,11 +130,18 @@ export function NetworkProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  useEffect(() => {
-    runHealthChecks()
-    pollTimerRef.current = setInterval(runHealthChecks, HEALTH_POLL_INTERVAL)
+  const startHealthPolling = useCallback((): (() => void) => {
+    pollSubscribers.current += 1
+    if (pollSubscribers.current === 1) {
+      runHealthChecks()
+      pollTimerRef.current = setInterval(runHealthChecks, HEALTH_POLL_INTERVAL)
+    }
     return () => {
-      if (pollTimerRef.current) clearInterval(pollTimerRef.current)
+      pollSubscribers.current = Math.max(0, pollSubscribers.current - 1)
+      if (pollSubscribers.current === 0 && pollTimerRef.current) {
+        clearInterval(pollTimerRef.current)
+        pollTimerRef.current = null
+      }
     }
   }, [runHealthChecks])
 
@@ -201,6 +222,7 @@ export function NetworkProvider({ children }: { children: ReactNode }) {
         availableNetworks: Object.values(NETWORKS),
         ingressNodes: INGRESS_NODES,
         refreshHealth: runHealthChecks,
+        startHealthPolling,
       }}
     >
       {children}

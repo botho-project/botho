@@ -36,11 +36,16 @@ export function NetworkSelector({ className = '' }: NetworkSelectorProps) {
     setCustomEndpoint,
     isValidating,
     validationError,
+    startHealthPolling,
   } = useNetwork()
   const [isOpen, setIsOpen] = useState(false)
   const [showCustomInput, setShowCustomInput] = useState(false)
   const [customEndpoint, setCustomEndpointInput] = useState('')
   const dropdownRef = useRef<HTMLDivElement>(null)
+
+  // Poll node health while the selector is mounted (wallet/explorer pages).
+  // The landing page does not render the selector, so it makes no node calls.
+  useEffect(() => startHealthPolling(), [startHealthPolling])
 
   // Close dropdown when clicking outside
   useEffect(() => {
