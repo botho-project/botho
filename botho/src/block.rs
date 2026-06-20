@@ -74,21 +74,36 @@ impl BlockHeader {
         hasher.finalize().into()
     }
 
-    /// Compute the PoW hash (what minters are trying to get below target)
+    /// Compute the PoW hash (what minters are trying to get below target).
+    ///
+    /// This is **RandomX** (ASIC/GPU-resistant CPU PoW) over the preimage
+    /// `nonce ‖ prev_block_hash ‖ minter_view_key ‖ minter_spend_key`, keyed by
+    /// the chain-deterministic seed for this block's height (see
+    /// [`crate::pow`]). Verification uses RandomX **light mode**; it produces
+    /// the identical hash a miner's fast mode produces.
+    ///
+    /// The seed key is a pure function of `self.height`, so this remains a pure
+    /// function of the header — no chain lookup is required and every node
+    /// agrees on the result.
     pub fn pow_hash(&self) -> [u8; 32] {
-        let mut hasher = Sha256::new();
-        hasher.update(self.nonce.to_le_bytes());
-        hasher.update(self.prev_block_hash);
-        hasher.update(self.minter_view_key);
-        hasher.update(self.minter_spend_key);
-        hasher.finalize().into()
+        let seed = crate::pow::seed_key_for_height(self.height);
+        let preimage = crate::pow::pow_preimage(
+            self.nonce,
+            &self.prev_block_hash,
+            &self.minter_view_key,
+            &self.minter_spend_key,
+        );
+        crate::pow::verify_pow_hash(&seed, &preimage)
     }
 
-    /// Check if PoW is valid (hash < difficulty target)
+    /// Check if PoW is valid (hash < difficulty target).
+    ///
+    /// Big-endian read of the first 8 bytes of the RandomX output, compared to
+    /// the difficulty target (lower = better PoW) — same convention as the
+    /// legacy SHA-256 PoW.
     pub fn is_valid_pow(&self) -> bool {
         let hash = self.pow_hash();
-        let hash_value = u64::from_be_bytes(hash[0..8].try_into().unwrap());
-        hash_value < self.difficulty
+        crate::pow::pow_value(&hash) < self.difficulty
     }
 
     /// Create header for genesis block (defaults to testnet for backward
@@ -232,21 +247,29 @@ impl MintingTx {
     }
 
     /// Compute the PoW hash.
-    /// Uses minter keys to match BlockHeader::pow_hash for block validation.
+    ///
+    /// RandomX over `nonce ‖ prev_block_hash ‖ minter_view_key ‖
+    /// minter_spend_key`, keyed by the chain-deterministic seed for
+    /// `self.block_height`. This MUST stay byte-for-byte consistent with
+    /// [`BlockHeader::pow_hash`] — they use the same preimage and the same
+    /// per-height seed (header `height` == minting tx `block_height`, enforced
+    /// at block-apply time), so a header and its minting tx always agree on the
+    /// PoW.
     pub fn pow_hash(&self) -> [u8; 32] {
-        let mut hasher = Sha256::new();
-        hasher.update(self.nonce.to_le_bytes());
-        hasher.update(self.prev_block_hash);
-        hasher.update(self.minter_view_key);
-        hasher.update(self.minter_spend_key);
-        hasher.finalize().into()
+        let seed = crate::pow::seed_key_for_height(self.block_height);
+        let preimage = crate::pow::pow_preimage(
+            self.nonce,
+            &self.prev_block_hash,
+            &self.minter_view_key,
+            &self.minter_spend_key,
+        );
+        crate::pow::verify_pow_hash(&seed, &preimage)
     }
 
     /// Verify the PoW is valid
     pub fn verify_pow(&self) -> bool {
         let hash = self.pow_hash();
-        let hash_value = u64::from_be_bytes(hash[0..8].try_into().unwrap());
-        hash_value < self.difficulty
+        crate::pow::pow_value(&hash) < self.difficulty
     }
 
     /// Get the PoW hash value as u64 (lower = better, used for priority in
@@ -254,7 +277,7 @@ impl MintingTx {
     pub fn pow_priority(&self) -> u64 {
         let hash = self.pow_hash();
         // Invert so that lower hash = higher priority
-        u64::MAX - u64::from_be_bytes(hash[0..8].try_into().unwrap())
+        u64::MAX - crate::pow::pow_value(&hash)
     }
 
     /// Compute the hash of this minting transaction (for consensus)

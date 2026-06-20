@@ -67,7 +67,7 @@ const MAX_SLOT_VALUES: usize = 50;
 const CONSENSUS_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Trivial difficulty for test mining (easy PoW)
-const TRIVIAL_DIFFICULTY: u64 = 0x00FF_FFFF_FFFF_FFFF;
+const TRIVIAL_DIFFICULTY: u64 = u64::MAX;
 
 // ============================================================================
 // Consensus Value Type
@@ -325,6 +325,14 @@ fn build_byzantine_network(behaviors: Vec<ByzantineBehavior>) -> ByzantineTestNe
 
         let temp_dir = TempDir::new().unwrap();
         let ledger = Arc::new(RwLock::new(Ledger::open(temp_dir.path()).unwrap()));
+        // pin chain difficulty (RandomX): genesis difficulty is real-hashrate
+        // sized; use the trivial target so test PoW solves in one hash and the
+        // C1 block-apply difficulty check accepts it.
+        ledger
+            .read()
+            .unwrap()
+            .set_difficulty(TRIVIAL_DIFFICULTY)
+            .unwrap();
 
         let (sender, receiver) = unbounded();
 

@@ -39,7 +39,7 @@ use sha2::{Digest, Sha256};
 const TEST_BLOCK_REWARD: u64 = 50 * PICOCREDITS_PER_CREDIT;
 
 /// Trivial difficulty for fast PoW
-const TRIVIAL_DIFFICULTY: u64 = 0x00FF_FFFF_FFFF_FFFF;
+const TRIVIAL_DIFFICULTY: u64 = u64::MAX;
 
 // ============================================================================
 // Helper Functions
@@ -139,6 +139,10 @@ fn mine_block(
 fn test_ledger_genesis_consistency() {
     let temp_dir = TempDir::new().unwrap();
     let ledger = Ledger::open(temp_dir.path()).unwrap();
+    // RandomX genesis difficulty is real-hashrate sized; pin the chain to
+    // the trivial target so test PoW solves in one hash and the C1
+    // block-apply difficulty check accepts it.
+    ledger.set_difficulty(TRIVIAL_DIFFICULTY).unwrap();
 
     let state = ledger.get_chain_state().unwrap();
     assert_eq!(state.height, 0, "Genesis should be at height 0");
@@ -160,6 +164,10 @@ fn test_ledger_genesis_consistency() {
 fn test_ledger_sequential_block_addition() {
     let temp_dir = TempDir::new().unwrap();
     let mut ledger = Ledger::open(temp_dir.path()).unwrap();
+    // RandomX genesis difficulty is real-hashrate sized; pin the chain to
+    // the trivial target so test PoW solves in one hash and the C1
+    // block-apply difficulty check accepts it.
+    ledger.set_difficulty(TRIVIAL_DIFFICULTY).unwrap();
     let miner = create_test_wallet(1);
     let miner_address = miner.account_key().default_subaddress();
 
@@ -186,6 +194,10 @@ fn test_ledger_sequential_block_addition() {
 fn test_ledger_utxo_creation_from_minting() {
     let temp_dir = TempDir::new().unwrap();
     let mut ledger = Ledger::open(temp_dir.path()).unwrap();
+    // RandomX genesis difficulty is real-hashrate sized; pin the chain to
+    // the trivial target so test PoW solves in one hash and the C1
+    // block-apply difficulty check accepts it.
+    ledger.set_difficulty(TRIVIAL_DIFFICULTY).unwrap();
     let miner = create_test_wallet(1);
     let miner_address = miner.account_key().default_subaddress();
 
@@ -211,6 +223,10 @@ fn test_ledger_utxo_creation_from_minting() {
 fn test_ledger_total_mined_tracking() {
     let temp_dir = TempDir::new().unwrap();
     let mut ledger = Ledger::open(temp_dir.path()).unwrap();
+    // RandomX genesis difficulty is real-hashrate sized; pin the chain to
+    // the trivial target so test PoW solves in one hash and the C1
+    // block-apply difficulty check accepts it.
+    ledger.set_difficulty(TRIVIAL_DIFFICULTY).unwrap();
     let miner = create_test_wallet(1);
     let miner_address = miner.account_key().default_subaddress();
 
@@ -240,6 +256,10 @@ fn test_ledger_total_mined_tracking() {
 fn test_concurrent_reads() {
     let temp_dir = TempDir::new().unwrap();
     let mut ledger = Ledger::open(temp_dir.path()).unwrap();
+    // RandomX genesis difficulty is real-hashrate sized; pin the chain to
+    // the trivial target so test PoW solves in one hash and the C1
+    // block-apply difficulty check accepts it.
+    ledger.set_difficulty(TRIVIAL_DIFFICULTY).unwrap();
     let miner = create_test_wallet(1);
     let miner_address = miner.account_key().default_subaddress();
 
@@ -285,6 +305,10 @@ fn test_concurrent_reads() {
 fn test_concurrent_read_write() {
     let temp_dir = TempDir::new().unwrap();
     let ledger = Ledger::open(temp_dir.path()).unwrap();
+    // RandomX genesis difficulty is real-hashrate sized; pin the chain to
+    // the trivial target so test PoW solves in one hash and the C1
+    // block-apply difficulty check accepts it.
+    ledger.set_difficulty(TRIVIAL_DIFFICULTY).unwrap();
     let ledger = Arc::new(RwLock::new(ledger));
 
     let miner = create_test_wallet(1);
@@ -347,6 +371,10 @@ fn test_concurrent_read_write() {
 fn test_block_height_index_integrity() {
     let temp_dir = TempDir::new().unwrap();
     let mut ledger = Ledger::open(temp_dir.path()).unwrap();
+    // RandomX genesis difficulty is real-hashrate sized; pin the chain to
+    // the trivial target so test PoW solves in one hash and the C1
+    // block-apply difficulty check accepts it.
+    ledger.set_difficulty(TRIVIAL_DIFFICULTY).unwrap();
     let miner = create_test_wallet(1);
     let miner_address = miner.account_key().default_subaddress();
 
@@ -382,6 +410,10 @@ fn test_block_height_index_integrity() {
 fn test_utxo_index_integrity() {
     let temp_dir = TempDir::new().unwrap();
     let mut ledger = Ledger::open(temp_dir.path()).unwrap();
+    // RandomX genesis difficulty is real-hashrate sized; pin the chain to
+    // the trivial target so test PoW solves in one hash and the C1
+    // block-apply difficulty check accepts it.
+    ledger.set_difficulty(TRIVIAL_DIFFICULTY).unwrap();
     let miner = create_test_wallet(1);
     let miner_address = miner.account_key().default_subaddress();
 
@@ -408,6 +440,10 @@ fn test_utxo_index_integrity() {
 fn test_chain_state_consistency_after_multiple_blocks() {
     let temp_dir = TempDir::new().unwrap();
     let mut ledger = Ledger::open(temp_dir.path()).unwrap();
+    // RandomX genesis difficulty is real-hashrate sized; pin the chain to
+    // the trivial target so test PoW solves in one hash and the C1
+    // block-apply difficulty check accepts it.
+    ledger.set_difficulty(TRIVIAL_DIFFICULTY).unwrap();
     let miner = create_test_wallet(1);
     let miner_address = miner.account_key().default_subaddress();
 
@@ -450,6 +486,10 @@ fn test_chain_state_consistency_after_multiple_blocks() {
 fn test_block_with_many_transactions() {
     let temp_dir = TempDir::new().unwrap();
     let mut ledger = Ledger::open(temp_dir.path()).unwrap();
+    // RandomX genesis difficulty is real-hashrate sized; pin the chain to
+    // the trivial target so test PoW solves in one hash and the C1
+    // block-apply difficulty check accepts it.
+    ledger.set_difficulty(TRIVIAL_DIFFICULTY).unwrap();
     let miner = create_test_wallet(1);
     let miner_address = miner.account_key().default_subaddress();
 
@@ -480,6 +520,10 @@ fn test_block_with_many_transactions() {
 fn test_get_nonexistent_block() {
     let temp_dir = TempDir::new().unwrap();
     let ledger = Ledger::open(temp_dir.path()).unwrap();
+    // RandomX genesis difficulty is real-hashrate sized; pin the chain to
+    // the trivial target so test PoW solves in one hash and the C1
+    // block-apply difficulty check accepts it.
+    ledger.set_difficulty(TRIVIAL_DIFFICULTY).unwrap();
 
     // Try to get a block that doesn't exist
     let result = ledger.get_block(9999);
@@ -491,6 +535,10 @@ fn test_get_nonexistent_block() {
 fn test_get_nonexistent_utxo() {
     let temp_dir = TempDir::new().unwrap();
     let ledger = Ledger::open(temp_dir.path()).unwrap();
+    // RandomX genesis difficulty is real-hashrate sized; pin the chain to
+    // the trivial target so test PoW solves in one hash and the C1
+    // block-apply difficulty check accepts it.
+    ledger.set_difficulty(TRIVIAL_DIFFICULTY).unwrap();
 
     // Create a fake UTXO ID
     let fake_utxo_id = UtxoId::new([0xAB; 32], 42);
@@ -503,6 +551,10 @@ fn test_get_nonexistent_utxo() {
 fn test_block_with_wrong_parent_hash() {
     let temp_dir = TempDir::new().unwrap();
     let mut ledger = Ledger::open(temp_dir.path()).unwrap();
+    // RandomX genesis difficulty is real-hashrate sized; pin the chain to
+    // the trivial target so test PoW solves in one hash and the C1
+    // block-apply difficulty check accepts it.
+    ledger.set_difficulty(TRIVIAL_DIFFICULTY).unwrap();
     let miner = create_test_wallet(1);
     let miner_address = miner.account_key().default_subaddress();
 
@@ -559,6 +611,10 @@ fn test_block_with_wrong_parent_hash() {
 fn test_block_with_wrong_height() {
     let temp_dir = TempDir::new().unwrap();
     let mut ledger = Ledger::open(temp_dir.path()).unwrap();
+    // RandomX genesis difficulty is real-hashrate sized; pin the chain to
+    // the trivial target so test PoW solves in one hash and the C1
+    // block-apply difficulty check accepts it.
+    ledger.set_difficulty(TRIVIAL_DIFFICULTY).unwrap();
     let miner = create_test_wallet(1);
     let miner_address = miner.account_key().default_subaddress();
 
@@ -618,6 +674,10 @@ fn test_block_with_wrong_height() {
 fn test_rapid_block_addition() {
     let temp_dir = TempDir::new().unwrap();
     let mut ledger = Ledger::open(temp_dir.path()).unwrap();
+    // RandomX genesis difficulty is real-hashrate sized; pin the chain to
+    // the trivial target so test PoW solves in one hash and the C1
+    // block-apply difficulty check accepts it.
+    ledger.set_difficulty(TRIVIAL_DIFFICULTY).unwrap();
     let miner = create_test_wallet(1);
     let miner_address = miner.account_key().default_subaddress();
 
@@ -655,6 +715,10 @@ fn test_repeated_open_close() {
     for i in 1..=10 {
         {
             let mut ledger = Ledger::open(temp_dir.path()).unwrap();
+            // RandomX genesis difficulty is real-hashrate sized; pin the chain to
+            // the trivial target so test PoW solves in one hash and the C1
+            // block-apply difficulty check accepts it.
+            ledger.set_difficulty(TRIVIAL_DIFFICULTY).unwrap();
             let state = ledger.get_chain_state().unwrap();
             assert_eq!(
                 state.height,
@@ -673,6 +737,10 @@ fn test_repeated_open_close() {
 
     // Final verification
     let ledger = Ledger::open(temp_dir.path()).unwrap();
+    // RandomX genesis difficulty is real-hashrate sized; pin the chain to
+    // the trivial target so test PoW solves in one hash and the C1
+    // block-apply difficulty check accepts it.
+    ledger.set_difficulty(TRIVIAL_DIFFICULTY).unwrap();
     let state = ledger.get_chain_state().unwrap();
     assert_eq!(
         state.height, 10,
@@ -689,6 +757,10 @@ fn test_repeated_open_close() {
 fn test_block_data_integrity() {
     let temp_dir = TempDir::new().unwrap();
     let mut ledger = Ledger::open(temp_dir.path()).unwrap();
+    // RandomX genesis difficulty is real-hashrate sized; pin the chain to
+    // the trivial target so test PoW solves in one hash and the C1
+    // block-apply difficulty check accepts it.
+    ledger.set_difficulty(TRIVIAL_DIFFICULTY).unwrap();
     let miner = create_test_wallet(1);
     let miner_address = miner.account_key().default_subaddress();
 
@@ -718,6 +790,10 @@ fn test_block_data_integrity() {
 fn test_chain_tip_tracking() {
     let temp_dir = TempDir::new().unwrap();
     let mut ledger = Ledger::open(temp_dir.path()).unwrap();
+    // RandomX genesis difficulty is real-hashrate sized; pin the chain to
+    // the trivial target so test PoW solves in one hash and the C1
+    // block-apply difficulty check accepts it.
+    ledger.set_difficulty(TRIVIAL_DIFFICULTY).unwrap();
     let miner = create_test_wallet(1);
     let miner_address = miner.account_key().default_subaddress();
 
@@ -754,6 +830,10 @@ fn test_chain_tip_tracking() {
 fn test_multiple_miners_consistency() {
     let temp_dir = TempDir::new().unwrap();
     let mut ledger = Ledger::open(temp_dir.path()).unwrap();
+    // RandomX genesis difficulty is real-hashrate sized; pin the chain to
+    // the trivial target so test PoW solves in one hash and the C1
+    // block-apply difficulty check accepts it.
+    ledger.set_difficulty(TRIVIAL_DIFFICULTY).unwrap();
 
     // Create multiple miners
     let miners: Vec<_> = (0..5).map(|i| create_test_wallet(i)).collect();
@@ -798,6 +878,10 @@ fn test_multiple_miners_consistency() {
 fn test_c1_block_rejected_when_difficulty_differs_from_chain_state() {
     let temp_dir = TempDir::new().unwrap();
     let mut ledger = Ledger::open(temp_dir.path()).unwrap();
+    // RandomX genesis difficulty is real-hashrate sized; pin the chain to
+    // the trivial target so test PoW solves in one hash and the C1
+    // block-apply difficulty check accepts it.
+    ledger.set_difficulty(TRIVIAL_DIFFICULTY).unwrap();
     let miner = create_test_wallet(1);
     let miner_address = miner.account_key().default_subaddress();
 
@@ -867,6 +951,10 @@ fn test_c1_block_rejected_when_difficulty_differs_from_chain_state() {
 fn test_c2_block_rejected_when_reward_inflated() {
     let temp_dir = TempDir::new().unwrap();
     let mut ledger = Ledger::open(temp_dir.path()).unwrap();
+    // RandomX genesis difficulty is real-hashrate sized; pin the chain to
+    // the trivial target so test PoW solves in one hash and the C1
+    // block-apply difficulty check accepts it.
+    ledger.set_difficulty(TRIVIAL_DIFFICULTY).unwrap();
     let miner = create_test_wallet(1);
     let miner_address = miner.account_key().default_subaddress();
 
@@ -895,6 +983,10 @@ fn test_c2_block_rejected_when_reward_inflated() {
 fn test_c2_block_rejected_when_timestamp_before_parent() {
     let temp_dir = TempDir::new().unwrap();
     let mut ledger = Ledger::open(temp_dir.path()).unwrap();
+    // RandomX genesis difficulty is real-hashrate sized; pin the chain to
+    // the trivial target so test PoW solves in one hash and the C1
+    // block-apply difficulty check accepts it.
+    ledger.set_difficulty(TRIVIAL_DIFFICULTY).unwrap();
     let miner = create_test_wallet(1);
     let miner_address = miner.account_key().default_subaddress();
 
@@ -958,6 +1050,10 @@ fn test_c2_block_rejected_when_timestamp_before_parent() {
 fn test_c2_block_rejected_when_timestamp_far_in_future() {
     let temp_dir = TempDir::new().unwrap();
     let mut ledger = Ledger::open(temp_dir.path()).unwrap();
+    // RandomX genesis difficulty is real-hashrate sized; pin the chain to
+    // the trivial target so test PoW solves in one hash and the C1
+    // block-apply difficulty check accepts it.
+    ledger.set_difficulty(TRIVIAL_DIFFICULTY).unwrap();
     let miner = create_test_wallet(1);
     let miner_address = miner.account_key().default_subaddress();
 
@@ -1024,6 +1120,10 @@ fn test_c2_block_rejected_when_timestamp_far_in_future() {
 fn test_c4_block_rejected_when_tx_root_does_not_match_transactions() {
     let temp_dir = TempDir::new().unwrap();
     let mut ledger = Ledger::open(temp_dir.path()).unwrap();
+    // RandomX genesis difficulty is real-hashrate sized; pin the chain to
+    // the trivial target so test PoW solves in one hash and the C1
+    // block-apply difficulty check accepts it.
+    ledger.set_difficulty(TRIVIAL_DIFFICULTY).unwrap();
     let miner = create_test_wallet(1);
     let miner_address = miner.account_key().default_subaddress();
 
@@ -1052,6 +1152,10 @@ fn test_c4_block_rejected_when_tx_root_does_not_match_transactions() {
 fn test_c3_block_rejected_when_ring_member_target_key_not_in_utxo_set() {
     let temp_dir = TempDir::new().unwrap();
     let ledger = Ledger::open(temp_dir.path()).unwrap();
+    // RandomX genesis difficulty is real-hashrate sized; pin the chain to
+    // the trivial target so test PoW solves in one hash and the C1
+    // block-apply difficulty check accepts it.
+    ledger.set_difficulty(TRIVIAL_DIFFICULTY).unwrap();
     let miner = create_test_wallet(1);
     let miner_address = miner.account_key().default_subaddress();
 
@@ -1105,6 +1209,10 @@ fn test_c3_block_rejected_when_ring_member_target_key_not_in_utxo_set() {
 fn test_c3_block_rejected_when_ring_member_commitment_mismatched() {
     let temp_dir = TempDir::new().unwrap();
     let mut ledger = Ledger::open(temp_dir.path()).unwrap();
+    // RandomX genesis difficulty is real-hashrate sized; pin the chain to
+    // the trivial target so test PoW solves in one hash and the C1
+    // block-apply difficulty check accepts it.
+    ledger.set_difficulty(TRIVIAL_DIFFICULTY).unwrap();
     let miner = create_test_wallet(1);
     let miner_address = miner.account_key().default_subaddress();
 

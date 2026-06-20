@@ -31,7 +31,7 @@ use bth_transaction_types::ClusterTagVector;
 const TEST_BLOCK_REWARD: u64 = 50 * PICOCREDITS_PER_CREDIT;
 
 /// Trivial difficulty for fast PoW
-const TRIVIAL_DIFFICULTY: u64 = 0x00FF_FFFF_FFFF_FFFF;
+const TRIVIAL_DIFFICULTY: u64 = u64::MAX;
 
 /// Minimum ring size for CLSAG signatures
 const MIN_RING_SIZE: usize = 11;

@@ -24,11 +24,13 @@ pub const TEST_RING_SIZE: usize = 20;
 
 /// Trivial PoW difficulty for fast testing.
 ///
-/// Must match the chain's initial difficulty
-/// (`block::difficulty::INITIAL_DIFFICULTY`
-/// / `node::minter::INITIAL_DIFFICULTY` = `0x00FF_FFFF_FFFF_FFFF`) — block
-/// acceptance now enforces `header.difficulty == chain.difficulty` (audit
-/// cycle 6, C1). A trivially-easy difficulty here is fine for tests because
-/// 1/256 of nonces solve, but it has to be the *same* trivial value the
-/// ledger initializes with.
-pub const TRIVIAL_DIFFICULTY: u64 = 0x00FF_FFFF_FFFF_FFFF;
+/// With RandomX, every `verify_pow()` runs a real (~ms-scale) RandomX hash, so
+/// tests must solve PoW in as few hashes as possible. `u64::MAX` makes the
+/// target check `pow_value(hash) < u64::MAX` pass for essentially every nonce
+/// (only an all-`0xFF` leading 8 bytes fails), so a block is found in a single
+/// RandomX hash.
+///
+/// Block acceptance enforces `header.difficulty == chain.difficulty` (audit
+/// cycle 6, C1), so the test harness pins the ledger's difficulty to this same
+/// value right after opening it (see `tests/common/network.rs`).
+pub const TRIVIAL_DIFFICULTY: u64 = u64::MAX;

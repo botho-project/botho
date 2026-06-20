@@ -49,7 +49,7 @@ const TEST_BLOCK_REWARD: u64 = 50 * PICOCREDITS_PER_CREDIT;
 ///
 /// Must equal the chain's initial difficulty — block acceptance enforces
 /// `header.difficulty == chain.difficulty` (audit cycle 6, C1).
-const TRIVIAL_DIFFICULTY: u64 = 0x00FF_FFFF_FFFF_FFFF;
+const TRIVIAL_DIFFICULTY: u64 = u64::MAX;
 
 /// Number of independent coinbase UTXOs minted to the faucet wallet.
 ///
@@ -227,6 +227,10 @@ async fn spawn_faucet_rpc_server_with_config(
     let ledger_path = temp_dir.path().join("ledger");
 
     let ledger = Ledger::open(&ledger_path).expect("Failed to create ledger");
+    // RandomX genesis difficulty is real-hashrate sized; pin the chain to
+    // the trivial target so test PoW solves in one hash and the C1
+    // block-apply difficulty check accepts it.
+    ledger.set_difficulty(TRIVIAL_DIFFICULTY).unwrap();
     let faucet_wallet = fund_faucet_ledger(&ledger);
     let mempool = Mempool::new();
     let ws_broadcaster = Arc::new(WsBroadcaster::new(100));
@@ -713,6 +717,10 @@ async fn test_faucet_disabled_returns_clear_error() {
     let ledger_path = temp_dir.path().join("ledger");
 
     let ledger = Ledger::open(&ledger_path).expect("Failed to create ledger");
+    // RandomX genesis difficulty is real-hashrate sized; pin the chain to
+    // the trivial target so test PoW solves in one hash and the C1
+    // block-apply difficulty check accepts it.
+    ledger.set_difficulty(TRIVIAL_DIFFICULTY).unwrap();
     let mempool = Mempool::new();
     let ws_broadcaster = Arc::new(WsBroadcaster::new(100));
 

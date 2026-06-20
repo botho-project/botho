@@ -17,6 +17,7 @@ pub mod mempool;
 pub mod monetary;
 pub mod network;
 pub mod node;
+pub mod pow;
 pub mod rpc;
 pub mod telemetry;
 pub mod transaction;

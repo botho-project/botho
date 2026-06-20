@@ -3,7 +3,6 @@ use bth_crypto_keys::RistrettoPrivate;
 use bth_crypto_ring_signature::onetime_keys::{create_tx_out_public_key, create_tx_out_target_key};
 use bth_util_from_random::FromRandom;
 use rand_core::OsRng;
-use sha2::{Digest, Sha256};
 use std::{
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -15,11 +14,36 @@ use std::{
 };
 use tracing::{info, trace};
 
-use crate::block::{calculate_block_reward, MintingTx};
+use crate::{
+    block::{calculate_block_reward, MintingTx},
+    pow::{self, FastHasher},
+};
 
-/// Minting difficulty target (lower = harder)
-/// Start with a very easy target for testing
-pub const INITIAL_DIFFICULTY: u64 = 0x00FF_FFFF_FFFF_FFFF;
+/// Genesis / initial minting difficulty target for **RandomX**.
+///
+/// The PoW check is `pow_value(hash) < difficulty`, so a single hash succeeds
+/// with probability `difficulty / 2^64` and the expected number of hashes per
+/// block is `2^64 / difficulty`. To hold the 5 s target block time at network
+/// hashrate `H` (hashes/sec): `difficulty = 2^64 / (H * 5)`.
+///
+/// RandomX runs at ~415 H/s on a 2-vCPU t4g.medium (the minimum *mining* tier,
+/// see #441), orders of magnitude below SHA-256. Sizing genesis for a single
+/// such node (the conservative floor — a fresh chain must not stall) gives:
+///
+/// ```text
+/// difficulty = 2^64 / (415 * 5) ≈ 8.89e15
+/// ```
+///
+/// We use a clean `9_000_000_000_000_000` (≈ 0x1F_F973_CAFA_8000), i.e. ~2049
+/// expected hashes/block → ≈ 4.9 s at 415 H/s for one node, ≈ 2.5 s for two
+/// nodes. The `EmissionController` then adapts difficulty downward (toward
+/// `MIN_DIFFICULTY`) as hashrate grows. Higher numeric `difficulty` = EASIER
+/// here (more hashes pass), so this is also the controller's ceiling
+/// (`MAX_DIFFICULTY`).
+///
+/// NOTE: this is consensus-breaking vs the old SHA-256 value
+/// (`0x00FF_FFFF_FFFF_FFFF`, ~256 hashes/block) and requires a fresh genesis.
+pub const INITIAL_DIFFICULTY: u64 = 9_000_000_000_000_000;
 
 /// Minting statistics
 #[derive(Debug, Clone)]
@@ -204,14 +228,19 @@ fn mint_loop(
 
     const BATCH_SIZE: u64 = 10000;
 
-    // Minter keys (constant for this session) - used in PoW hash
+    // Minter keys (constant for this session) - bound into the PoW preimage.
     let minter_view_key = address.view_public_key().to_bytes();
     let minter_spend_key = address.spend_public_key().to_bytes();
-    let minter_keys = [minter_view_key, minter_spend_key].concat();
 
     // Stealth keys for the current minting work (regenerated when work changes)
     let mut cached_target_key = [0u8; 32];
     let mut cached_public_key = [0u8; 32];
+
+    // RandomX fast-mode hasher (~2 GB dataset). Built lazily and reused across
+    // all nonces/blocks within a seed epoch; rebuilt only when the seed key
+    // rotates (every `pow::SEED_ROTATION_INTERVAL` blocks). Building it is
+    // seconds-expensive, so we must NOT recreate it per hash or per block.
+    let mut fast_hasher: Option<FastHasher> = None;
 
     while !shutdown.load(Ordering::Relaxed) {
         // Check if work has been updated
@@ -238,17 +267,54 @@ fn mint_loop(
             let public_key = create_tx_out_public_key(&tx_private_key, address.spend_public_key());
             cached_target_key = target_key.to_bytes();
             cached_public_key = public_key.to_bytes();
+
+            // (Re)build the RandomX fast-mode hasher if the seed epoch changed.
+            // Most work updates (new tip every block) stay within the same
+            // epoch, so this only does the expensive ~2 GB dataset build at
+            // epoch boundaries.
+            let seed_key = pow::seed_key_for_height(work_guard.height);
+            let need_rebuild = fast_hasher
+                .as_ref()
+                .map(|h| h.seed_key() != seed_key)
+                .unwrap_or(true);
+            if need_rebuild {
+                info!(
+                    thread = thread_id,
+                    height = work_guard.height,
+                    "Building RandomX fast-mode dataset for new seed epoch (this takes a few seconds)"
+                );
+                match FastHasher::new(seed_key) {
+                    Ok(h) => fast_hasher = Some(h),
+                    Err(e) => {
+                        tracing::error!(
+                            thread = thread_id,
+                            error = %e,
+                            "Failed to build RandomX fast hasher; stopping minter thread"
+                        );
+                        break;
+                    }
+                }
+            }
         }
 
         let work = cached_work.as_ref().unwrap();
+        let hasher = fast_hasher.as_ref().expect("fast hasher built with work");
 
-        // Compute PoW hash: SHA256(nonce || prev_block_hash || minter_view_key ||
-        // minter_spend_key) Using minter keys to match MintingTx::pow_hash()
-        // for verification
-        let hash = compute_pow_hash(nonce, &work.prev_block_hash, &minter_keys);
+        // Compute PoW hash: RandomX(seed) over
+        // nonce || prev_block_hash || minter_view_key || minter_spend_key.
+        // Matches MintingTx::pow_hash / BlockHeader::pow_hash exactly (same
+        // preimage, same per-height seed), so what we mine verifies in light
+        // mode on every node.
+        let preimage = pow::pow_preimage(
+            nonce,
+            &work.prev_block_hash,
+            &minter_view_key,
+            &minter_spend_key,
+        );
+        let hash = hasher.hash(&preimage);
 
         // Check if hash meets difficulty target
-        let hash_value = u64::from_be_bytes(hash[0..8].try_into().unwrap());
+        let hash_value = pow::pow_value(&hash);
 
         if hash_value < work.difficulty {
             // Found a valid minting transaction!
@@ -327,35 +393,36 @@ fn mint_loop(
     }
 }
 
-/// Compute the PoW hash: SHA256(nonce || prev_block_hash || address)
-fn compute_pow_hash(nonce: u64, prev_block_hash: &[u8; 32], address_bytes: &[u8]) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    hasher.update(nonce.to_le_bytes());
-    hasher.update(prev_block_hash);
-    hasher.update(address_bytes);
-    hasher.finalize().into()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// The minter's fast-mode RandomX hash MUST equal the light-mode verify
+    /// hash for the same preimage + seed — otherwise mined blocks would fail
+    /// verification. Builds the ~2 GB dataset, so it is `#[ignore]`d by
+    /// default.
     #[test]
-    fn test_compute_pow_hash() {
+    #[ignore = "builds the ~2 GB RandomX fast dataset; slow + RAM-heavy, run manually"]
+    fn test_fast_hash_matches_light() {
         let nonce = 12345u64;
         let prev_hash = [0u8; 32];
-        let address = vec![1u8; 64];
+        let view = [1u8; 32];
+        let spend = [2u8; 32];
 
-        let hash = compute_pow_hash(nonce, &prev_hash, &address);
-        assert_eq!(hash.len(), 32);
+        let seed = pow::seed_key_for_height(1);
+        let preimage = pow::pow_preimage(nonce, &prev_hash, &view, &spend);
 
-        // Same inputs should produce same hash
-        let hash2 = compute_pow_hash(nonce, &prev_hash, &address);
-        assert_eq!(hash, hash2);
+        let hasher = FastHasher::new(seed).expect("fast hasher");
+        let fast = hasher.hash(&preimage);
+        let light = pow::verify_pow_hash(&seed, &preimage);
+        assert_eq!(fast, light, "fast != light");
 
-        // Different nonce should produce different hash
-        let hash3 = compute_pow_hash(nonce + 1, &prev_hash, &address);
-        assert_ne!(hash, hash3);
+        // Determinism within the same hasher.
+        assert_eq!(fast, hasher.hash(&preimage));
+
+        // Different nonce changes the hash.
+        let preimage2 = pow::pow_preimage(nonce + 1, &prev_hash, &view, &spend);
+        assert_ne!(fast, hasher.hash(&preimage2));
     }
 
     /// Spin up a minter the way `Node::start_minting` does, run it until it
@@ -375,8 +442,10 @@ mod tests {
         minter.start();
 
         // A minting tx must arrive — this proves the thread picked up work and
-        // mined a block, not merely that the thread is alive.
-        let produced = rx.recv_timeout(std::time::Duration::from_secs(10)).is_ok();
+        // mined a block, not merely that the thread is alive. With RandomX the
+        // thread first builds the ~2 GB fast dataset (seconds) before mining, so
+        // allow a generous timeout.
+        let produced = rx.recv_timeout(std::time::Duration::from_secs(120)).is_ok();
 
         minter.stop();
         produced
@@ -392,6 +461,8 @@ mod tests {
     /// This test reproduces the start → stop → start cycle and asserts that the
     /// resumed minter ALSO produces a minting tx, exactly like a fresh startup.
     #[test]
+    #[ignore = "RandomX minter builds the ~2 GB fast dataset and mines a real \
+                PoW block; slow + RAM-heavy, run manually"]
     fn test_minter_resumes_work_after_stop_start_cycle() {
         let address = PublicAddress::from_random(&mut OsRng);
 
