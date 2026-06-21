@@ -449,6 +449,7 @@ function WalletDashboard() {
         isSending={isSending}
         contacts={contacts}
         onSearchContacts={searchContacts}
+        ownAddress={address}
       />
 
       <SendLinkModal isOpen={sendLinkOpen} onClose={() => setSendLinkOpen(false)} />

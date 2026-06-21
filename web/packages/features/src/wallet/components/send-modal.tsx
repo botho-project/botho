@@ -1,9 +1,9 @@
 import { useMemo, useState, useEffect } from 'react'
 import type { Balance, Contact } from '@botho/core'
-import { formatBTH, parseBTH } from '@botho/core'
+import { formatBTH, parseBTH, isValidAddress } from '@botho/core'
 import { Button, Input } from '@botho/ui'
 import { motion, AnimatePresence } from 'motion/react'
-import { ChevronDown, ChevronUp, Loader2, Send, User, X, Zap } from 'lucide-react'
+import { AlertCircle, ChevronDown, ChevronUp, Loader2, Send, ShieldAlert, User, X, Zap } from 'lucide-react'
 
 export type SendPrivacyLevel = 'standard' | 'private'
 
@@ -46,6 +46,17 @@ export interface SendModalProps {
    * filtering `contacts` locally (e.g. to delegate to the address-book search).
    */
   onSearchContacts?: (query: string) => Contact[]
+  /**
+   * The user's own wallet address. When provided, the modal warns (and blocks)
+   * if the recipient is the user's own address. Optional for back-compat.
+   */
+  ownAddress?: string | null
+  /**
+   * Optional recipient address validator. Defaults to `@botho/core`'s
+   * `isValidAddress`. Exposed as a prop mainly for testing / customisation;
+   * existing callers don't need to provide it.
+   */
+  validateAddress?: (address: string) => boolean
 }
 
 /** Truncate an address for compact display in the picker. */
@@ -66,6 +77,8 @@ export function SendModal({
   isSending = false,
   contacts,
   onSearchContacts,
+  ownAddress,
+  validateAddress = isValidAddress,
 }: SendModalProps) {
   const [recipient, setRecipient] = useState('')
   const [amount, setAmount] = useState('')
@@ -118,6 +131,18 @@ export function SendModal({
   const hasContacts = (contacts?.length ?? 0) > 0 || !!onSearchContacts
   const showPickerList = showPicker && hasContacts && matches.length > 0
 
+  // Recipient address validation. We only surface an inline error once the user
+  // has typed something — an empty field just keeps the submit button disabled.
+  const trimmedRecipient = recipient.trim()
+  const recipientValid = trimmedRecipient.length > 0 && validateAddress(trimmedRecipient)
+  const recipientInvalid = trimmedRecipient.length > 0 && !recipientValid
+  // Self-send guard: block sending to one's own address (sends are irreversible
+  // and a self-send is almost always a mistake/confusion).
+  const isSelfSend =
+    recipientValid &&
+    ownAddress != null &&
+    trimmedRecipient.toLowerCase() === ownAddress.trim().toLowerCase()
+
   // Estimate fee when amount or privacy changes
   useEffect(() => {
     if (amount) {
@@ -145,8 +170,18 @@ export function SendModal({
     setError(null)
     setSuccess(null)
 
-    if (!recipient) {
+    if (!trimmedRecipient) {
       setError('Please enter a recipient address')
+      return
+    }
+
+    if (!recipientValid) {
+      setError('Invalid Botho address')
+      return
+    }
+
+    if (isSelfSend) {
+      setError('This is your own address — you can’t send to yourself')
       return
     }
 
@@ -244,6 +279,20 @@ export function SendModal({
                 <p className="mt-1 flex items-center gap-1 text-xs text-[--color-pulse]">
                   <User className="h-3 w-3" />
                   {matchedContact.name}
+                </p>
+              )}
+              {/* Inline validation error for a malformed address */}
+              {recipientInvalid && (
+                <p className="mt-1 flex items-center gap-1 text-xs text-[--color-danger]">
+                  <AlertCircle className="h-3 w-3 shrink-0" />
+                  Invalid Botho address
+                </p>
+              )}
+              {/* Self-send warning */}
+              {isSelfSend && (
+                <p className="mt-1 flex items-center gap-1 text-xs text-[--color-danger]">
+                  <ShieldAlert className="h-3 w-3 shrink-0" />
+                  This is your own address — you can’t send to yourself.
                 </p>
               )}
               {/* Searchable contact picker */}
@@ -406,7 +455,7 @@ export function SendModal({
             {/* Submit */}
             <Button
               onClick={handleSend}
-              disabled={isSending || !recipient || !amount}
+              disabled={isSending || !recipientValid || isSelfSend || !amount}
               className="w-full"
             >
               {isSending ? (
