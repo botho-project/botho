@@ -1,5 +1,14 @@
 import { test, expect } from '@playwright/test'
 import { URLS, TIMEOUTS, TEST_MNEMONIC_12, TEST_MNEMONIC_24 } from '../../fixtures/test-data'
+import { completeImportWallet, E2E_PASSWORD, readDashboardAddress } from '../../fixtures/wallet-setup'
+
+// Post-#475 importing is ENCRYPTED BY DEFAULT: there is no "Protect with
+// password" opt-out checkbox and importing REQUIRES a valid password (>= 8
+// chars, matching). The "Import Wallet" button stays disabled until the
+// mnemonic is a valid 12/24-word phrase AND the password is valid. These specs
+// drive that required-password flow (reusing completeImportWallet) and keep the
+// still-valid coverage: word-count validation, button gating, deterministic
+// address, persistence, and tab switching.
 
 test.describe('Wallet Import', () => {
   test.beforeEach(async ({ page, context }) => {
@@ -23,36 +32,24 @@ test.describe('Wallet Import', () => {
   })
 
   test('can import wallet with 12-word mnemonic', async ({ page }) => {
-    // Enter the test mnemonic
-    const mnemonicInput = page.getByPlaceholder(/Enter your recovery phrase/i)
-    await mnemonicInput.fill(TEST_MNEMONIC_12)
+    // Import through the required-password flow.
+    await completeImportWallet(page, TEST_MNEMONIC_12)
 
-    // Click import button
-    await page.getByRole('button', { name: 'Import Wallet' }).click()
-
-    // Should navigate to dashboard
-    await expect(page.getByRole('button', { name: /Send/i })).toBeVisible({
+    // Should land on the dashboard.
+    await expect(page.getByRole('button', { name: /^Send$/i })).toBeVisible({
       timeout: TIMEOUTS.WALLET_SYNC,
     })
-
-    // Should show Total Balance (dashboard indicator)
     await expect(page.getByText('Total Balance')).toBeVisible()
   })
 
   test('can import wallet with 24-word mnemonic', async ({ page }) => {
-    // Enter the 24-word test mnemonic
-    const mnemonicInput = page.getByPlaceholder(/Enter your recovery phrase/i)
-    await mnemonicInput.fill(TEST_MNEMONIC_24)
+    // Import through the required-password flow.
+    await completeImportWallet(page, TEST_MNEMONIC_24)
 
-    // Click import button
-    await page.getByRole('button', { name: 'Import Wallet' }).click()
-
-    // Should navigate to dashboard
-    await expect(page.getByRole('button', { name: /Send/i })).toBeVisible({
+    // Should land on the dashboard.
+    await expect(page.getByRole('button', { name: /^Send$/i })).toBeVisible({
       timeout: TIMEOUTS.WALLET_SYNC,
     })
-
-    // Should show Total Balance (dashboard indicator)
     await expect(page.getByText('Total Balance')).toBeVisible()
   })
 
@@ -71,93 +68,88 @@ test.describe('Wallet Import', () => {
     await expect(page.getByRole('button', { name: 'Import Wallet' })).toBeDisabled()
   })
 
-  test('import button disabled for invalid word count', async ({ page }) => {
-    // Enter mnemonic with wrong word count
+  test('import button is gated on word count AND a valid password', async ({ page }) => {
+    const importButton = page.getByRole('button', { name: 'Import Wallet' })
     const mnemonicInput = page.getByPlaceholder(/Enter your recovery phrase/i)
+
+    // Wrong word count -> disabled.
     await mnemonicInput.fill('abandon abandon abandon')
+    await expect(importButton).toBeDisabled()
 
-    // Import button should be disabled
-    await expect(page.getByRole('button', { name: 'Import Wallet' })).toBeDisabled()
-
-    // Now enter valid 12 words
+    // Valid 12 words but NO password (#475) -> still disabled.
     await mnemonicInput.fill(TEST_MNEMONIC_12)
+    await expect(importButton).toBeDisabled()
 
-    // Import button should be enabled
-    await expect(page.getByRole('button', { name: 'Import Wallet' })).toBeEnabled()
+    // A too-short password keeps it disabled.
+    await page.getByPlaceholder(/^Password \(min/).fill('short')
+    await page.getByPlaceholder('Confirm password').fill('short')
+    await expect(importButton).toBeDisabled()
+
+    // Valid, matching password -> enabled.
+    await page.getByPlaceholder(/^Password \(min/).fill(E2E_PASSWORD)
+    await page.getByPlaceholder('Confirm password').fill(E2E_PASSWORD)
+    await expect(importButton).toBeEnabled()
   })
 
-  test('can import wallet with password protection', async ({ page }) => {
-    // Enter the test mnemonic
+  test('import button disabled while passwords mismatch', async ({ page }) => {
     const mnemonicInput = page.getByPlaceholder(/Enter your recovery phrase/i)
     await mnemonicInput.fill(TEST_MNEMONIC_12)
 
-    // Enable password protection
-    const passwordSection = page.locator('label').filter({ hasText: 'Protect with password' })
-    const passwordCheckbox = passwordSection.locator('input[type="checkbox"]')
-    await passwordCheckbox.check()
+    // Mismatched (individually long-enough) passwords.
+    await page.getByPlaceholder(/^Password \(min/).fill('e2e-password-123')
+    await page.getByPlaceholder('Confirm password').fill('different-password')
 
-    // Enter password
-    const passwordInput = page.getByPlaceholder('Password (min 4 characters)')
-    await passwordInput.fill('testpass123')
-
-    // Confirm password
-    const confirmPasswordInput = page.getByPlaceholder('Confirm password')
-    await confirmPasswordInput.fill('testpass123')
-
-    // Click import
-    await page.getByRole('button', { name: 'Import Wallet' }).click()
-
-    // Should navigate to dashboard
-    await expect(page.getByRole('button', { name: /Send/i })).toBeVisible({
-      timeout: TIMEOUTS.WALLET_SYNC,
-    })
+    await expect(page.getByText(/don't match/i)).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Import Wallet' })).toBeDisabled()
   })
 
   test('imported wallet address is deterministic', async ({ page }) => {
-    // Import wallet with test mnemonic
-    const mnemonicInput = page.getByPlaceholder(/Enter your recovery phrase/i)
-    await mnemonicInput.fill(TEST_MNEMONIC_12)
-    await page.getByRole('button', { name: 'Import Wallet' }).click()
+    // Import wallet with the test mnemonic through the required-password flow.
+    await completeImportWallet(page, TEST_MNEMONIC_12)
 
     // Wait for dashboard
-    await expect(page.getByRole('button', { name: /Send/i })).toBeVisible({
+    await expect(page.getByRole('button', { name: /^Send$/i })).toBeVisible({
       timeout: TIMEOUTS.WALLET_SYNC,
     })
 
     // Get the displayed address (truncated format in button with code element)
-    const addressButton = page.locator('button').filter({ has: page.locator('code.font-mono') }).first()
-    const addressText = await addressButton.textContent()
+    const addressText = await readDashboardAddress(page)
 
     // Address should start with tbotho (testnet prefix, shown truncated)
     expect(addressText).toContain('tbotho')
   })
 
   test('imported wallet persists after page reload', async ({ page }) => {
-    // Import wallet
-    const mnemonicInput = page.getByPlaceholder(/Enter your recovery phrase/i)
-    await mnemonicInput.fill(TEST_MNEMONIC_12)
-    await page.getByRole('button', { name: 'Import Wallet' }).click()
+    // Import wallet through the required-password flow.
+    await completeImportWallet(page, TEST_MNEMONIC_12)
 
     // Wait for dashboard
-    await expect(page.getByRole('button', { name: /Send/i })).toBeVisible({
+    await expect(page.getByRole('button', { name: /^Send$/i })).toBeVisible({
       timeout: TIMEOUTS.WALLET_SYNC,
     })
 
     // Get the address
-    const addressButton = page.locator('button').filter({ has: page.locator('code.font-mono') }).first()
-    const addressBefore = await addressButton.textContent()
+    const addressBefore = await readDashboardAddress(page)
+    expect(addressBefore).toBeTruthy()
 
     // Reload page
     await page.reload()
     await page.waitForLoadState('networkidle')
 
-    // Should still show dashboard (not setup)
-    await expect(page.getByRole('button', { name: /Send/i })).toBeVisible({
+    // After a full reload the in-memory vault key is dropped, so the encrypted
+    // wallet is locked: the unlock screen (not setup) proves persistence.
+    await expect(page.getByRole('heading', { name: /Unlock Wallet/i })).toBeVisible({
       timeout: TIMEOUTS.WALLET_SYNC,
     })
 
-    // Address should be the same
-    const addressAfter = await addressButton.textContent()
+    // Unlock and confirm the same address is restored.
+    await page.getByPlaceholder('Enter password').fill(E2E_PASSWORD)
+    await page.getByRole('button', { name: /^Unlock$/i }).click()
+
+    await expect(page.getByRole('button', { name: /^Send$/i })).toBeVisible({
+      timeout: TIMEOUTS.WALLET_SYNC,
+    })
+    const addressAfter = await readDashboardAddress(page)
     expect(addressAfter).toBe(addressBefore)
   })
 

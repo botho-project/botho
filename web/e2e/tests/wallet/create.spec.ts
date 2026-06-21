@@ -1,5 +1,15 @@
 import { test, expect } from '@playwright/test'
 import { URLS, TIMEOUTS } from '../../fixtures/test-data'
+import { completeCreateWallet, E2E_PASSWORD, readDashboardAddress } from '../../fixtures/wallet-setup'
+
+// Post-#475 the wallet is ENCRYPTED BY DEFAULT: there is no "Protect with
+// password" opt-out checkbox and no plaintext create path. Creating a wallet
+// REQUIRES a valid password (>= 8 chars, matching confirmation), and the
+// "Create Wallet" button stays disabled until the mnemonic is revealed, the
+// "I wrote it down" box is ticked, AND the password is valid. These specs drive
+// that required-password flow (reusing completeCreateWallet) and keep the still-
+// valid coverage: mnemonic reveal, 12-word BIP39 validity, button-gating, the
+// password-mismatch error, and persistence across reload.
 
 test.describe('Wallet Creation', () => {
   test.beforeEach(async ({ page, context }) => {
@@ -39,7 +49,7 @@ test.describe('Wallet Creation', () => {
     expect(words.length).toBe(12)
   })
 
-  test('create button is disabled until mnemonic revealed and confirmed', async ({ page }) => {
+  test('create button is disabled until mnemonic confirmed and password valid', async ({ page }) => {
     const createButton = page.getByRole('button', { name: 'Create Wallet' })
 
     // Initially disabled
@@ -48,92 +58,64 @@ test.describe('Wallet Creation', () => {
     // Reveal mnemonic
     await page.getByText('Click to reveal').click()
 
-    // Still disabled (need to confirm)
+    // Still disabled (need to confirm + set a password)
     await expect(createButton).toBeDisabled()
 
     // Check the confirmation checkbox
     const confirmCheckbox = page.locator('input[type="checkbox"]').first()
     await confirmCheckbox.check()
 
+    // #475: still disabled because no password has been set
+    await expect(createButton).toBeDisabled()
+
+    // Fill matching, valid (>= 8 char) password + confirmation
+    await page.getByPlaceholder(/^Password \(min/).fill(E2E_PASSWORD)
+    await page.getByPlaceholder('Confirm password').fill(E2E_PASSWORD)
+
     // Now should be enabled
     await expect(createButton).toBeEnabled()
   })
 
-  test('can create wallet without password', async ({ page }) => {
-    // Reveal mnemonic
+  test('create button stays disabled for a too-short password', async ({ page }) => {
+    // Reveal + confirm mnemonic
     await page.getByText('Click to reveal').click()
+    await page.locator('input[type="checkbox"]').first().check()
 
-    // Check confirmation
-    const confirmCheckbox = page.locator('input[type="checkbox"]').first()
-    await confirmCheckbox.check()
+    // A password shorter than the minimum should NOT enable create
+    await page.getByPlaceholder(/^Password \(min/).fill('short')
+    await page.getByPlaceholder('Confirm password').fill('short')
 
-    // Click create
-    await page.getByRole('button', { name: 'Create Wallet' }).click()
+    // Strength hint surfaces the minimum-length requirement
+    await expect(page.getByText(/At least \d+ characters/i)).toBeVisible()
 
-    // Should navigate to dashboard - look for Send button
-    await expect(page.getByRole('button', { name: /Send/i })).toBeVisible({
-      timeout: TIMEOUTS.WALLET_SYNC,
-    })
-
-    // Should show Total Balance text (dashboard indicator)
-    await expect(page.getByText('Total Balance')).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Create Wallet' })).toBeDisabled()
   })
 
-  test('can create wallet with password protection', async ({ page }) => {
-    // Reveal mnemonic
+  test('password mismatch shows error and disables create', async ({ page }) => {
+    // Reveal + confirm mnemonic
     await page.getByText('Click to reveal').click()
+    await page.locator('input[type="checkbox"]').first().check()
 
-    // Check confirmation
-    const confirmCheckbox = page.locator('input[type="checkbox"]').first()
-    await confirmCheckbox.check()
-
-    // Enable password protection - find checkbox near "Protect with password" text
-    const passwordSection = page.locator('label').filter({ hasText: 'Protect with password' })
-    const passwordCheckbox = passwordSection.locator('input[type="checkbox"]')
-    await passwordCheckbox.check()
-
-    // Enter password
-    const passwordInput = page.getByPlaceholder('Password (min 4 characters)')
-    await passwordInput.fill('testpass123')
-
-    // Confirm password
-    const confirmPasswordInput = page.getByPlaceholder('Confirm password')
-    await confirmPasswordInput.fill('testpass123')
-
-    // Click create
-    await page.getByRole('button', { name: 'Create Wallet' }).click()
-
-    // Should navigate to dashboard
-    await expect(page.getByRole('button', { name: /Send/i })).toBeVisible({
-      timeout: TIMEOUTS.WALLET_SYNC,
-    })
-  })
-
-  test('password mismatch shows error', async ({ page }) => {
-    // Reveal mnemonic
-    await page.getByText('Click to reveal').click()
-
-    // Check confirmation
-    const confirmCheckbox = page.locator('input[type="checkbox"]').first()
-    await confirmCheckbox.check()
-
-    // Enable password protection
-    const passwordSection = page.locator('label').filter({ hasText: 'Protect with password' })
-    const passwordCheckbox = passwordSection.locator('input[type="checkbox"]')
-    await passwordCheckbox.check()
-
-    // Enter mismatched passwords
-    const passwordInput = page.getByPlaceholder('Password (min 4 characters)')
-    await passwordInput.fill('testpass123')
-
-    const confirmPasswordInput = page.getByPlaceholder('Confirm password')
-    await confirmPasswordInput.fill('differentpass')
+    // Enter mismatched (but individually long-enough) passwords
+    await page.getByPlaceholder(/^Password \(min/).fill('e2e-password-123')
+    await page.getByPlaceholder('Confirm password').fill('different-password')
 
     // Should show mismatch error
     await expect(page.getByText(/don't match/i)).toBeVisible()
 
-    // Create button should be disabled
+    // Create button should be disabled while passwords mismatch
     await expect(page.getByRole('button', { name: 'Create Wallet' })).toBeDisabled()
+  })
+
+  test('can create wallet with required password', async ({ page }) => {
+    // Drive the full required-password create flow.
+    await completeCreateWallet(page)
+
+    // Should land on the dashboard - look for Send button + Total Balance.
+    await expect(page.getByRole('button', { name: /^Send$/i })).toBeVisible({
+      timeout: TIMEOUTS.WALLET_SYNC,
+    })
+    await expect(page.getByText('Total Balance')).toBeVisible()
   })
 
   test('mnemonic is 12 valid BIP39 words', async ({ page }) => {
@@ -156,33 +138,36 @@ test.describe('Wallet Creation', () => {
   })
 
   test('wallet persists after page reload', async ({ page }) => {
-    // Create wallet
-    await page.getByText('Click to reveal').click()
-    const confirmCheckbox = page.locator('input[type="checkbox"]').first()
-    await confirmCheckbox.check()
-    await page.getByRole('button', { name: 'Create Wallet' }).click()
+    // Create a password-protected wallet through the required-password flow.
+    await completeCreateWallet(page)
 
     // Wait for dashboard
-    await expect(page.getByRole('button', { name: /Send/i })).toBeVisible({
+    await expect(page.getByRole('button', { name: /^Send$/i })).toBeVisible({
       timeout: TIMEOUTS.WALLET_SYNC,
     })
 
     // Find the address display (truncated format: tboth...xxxx)
-    // The address is in a button with the copy functionality
-    const addressButton = page.locator('button').filter({ has: page.locator('code.font-mono') }).first()
-    const addressBefore = await addressButton.textContent()
+    const addressBefore = await readDashboardAddress(page)
+    expect(addressBefore).toBeTruthy()
 
     // Reload page
     await page.reload()
     await page.waitForLoadState('networkidle')
 
-    // Should still show dashboard (not setup)
-    await expect(page.getByRole('button', { name: /Send/i })).toBeVisible({
+    // After a full reload the in-memory vault key is dropped, so the wallet is
+    // locked: the unlock screen (not the setup screen) proves persistence.
+    await expect(page.getByRole('heading', { name: /Unlock Wallet/i })).toBeVisible({
       timeout: TIMEOUTS.WALLET_SYNC,
     })
 
-    // Address should be the same
-    const addressAfter = await addressButton.textContent()
+    // Unlock and confirm the same address is restored.
+    await page.getByPlaceholder('Enter password').fill(E2E_PASSWORD)
+    await page.getByRole('button', { name: /^Unlock$/i }).click()
+
+    await expect(page.getByRole('button', { name: /^Send$/i })).toBeVisible({
+      timeout: TIMEOUTS.WALLET_SYNC,
+    })
+    const addressAfter = await readDashboardAddress(page)
     expect(addressAfter).toBe(addressBefore)
   })
 })
