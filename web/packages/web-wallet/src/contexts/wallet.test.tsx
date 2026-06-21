@@ -49,6 +49,9 @@ vi.mock('@botho/core', async (importOriginal) => {
       update = vi.fn().mockResolvedValue({ id: '1', name: 'Updated', address: 'tbotho://1/test' })
       delete = vi.fn().mockResolvedValue(undefined)
       getDisplayName = vi.fn().mockReturnValue('Unknown')
+      findByAddress = vi.fn().mockReturnValue(undefined)
+      recordTransaction = vi.fn().mockResolvedValue(undefined)
+      search = vi.fn().mockReturnValue([])
     },
   }
 })
@@ -284,6 +287,31 @@ describe('WalletContext', () => {
       })
 
       expect(screen.getByTestId('isEncrypted').textContent).toBe('yes')
+    })
+  })
+
+  describe('address book wiring', () => {
+    it('exposes recordPayment and searchContacts on the context', async () => {
+      let walletRef: ReturnType<typeof useWallet> | null = null
+
+      render(
+        <WalletProvider>
+          <TestConsumer onMount={(w) => { walletRef = w }} />
+        </WalletProvider>
+      )
+
+      await waitFor(() => {
+        expect(walletRef).not.toBeNull()
+      })
+
+      expect(typeof walletRef!.recordPayment).toBe('function')
+      expect(typeof walletRef!.searchContacts).toBe('function')
+
+      // recordPayment is a non-throwing upsert; searchContacts returns an array.
+      await act(async () => {
+        await walletRef!.recordPayment('tbotho://1/test')
+      })
+      expect(Array.isArray(walletRef!.searchContacts('test'))).toBe(true)
     })
   })
 
