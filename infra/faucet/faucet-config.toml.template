@@ -47,8 +47,8 @@ threads = 2
 
 [faucet]
 enabled = true
-# 10 BTH per request (in picocredits)
-amount = 10_000_000_000_000
+# 1 BTH per request (in picocredits)
+amount = 1_000_000_000_000
 # Rate limiting
 per_ip_hourly_limit = 5
 per_address_daily_limit = 3

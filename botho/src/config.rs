@@ -474,7 +474,7 @@ pub struct FaucetConfig {
     pub enabled: bool,
 
     /// Amount to dispense per request in picocredits.
-    /// Default: 10 BTH (10_000_000_000_000 picocredits)
+    /// Default: 1 BTH (1_000_000_000_000 picocredits)
     #[serde(default = "default_faucet_amount")]
     pub amount: u64,
 
@@ -499,9 +499,9 @@ pub struct FaucetConfig {
     pub cooldown_secs: u64,
 }
 
-/// 10 BTH in picocredits
+/// 1 BTH in picocredits
 fn default_faucet_amount() -> u64 {
-    10_000_000_000_000
+    1_000_000_000_000
 }
 
 fn default_faucet_per_ip_hourly_limit() -> u32 {
