@@ -17,7 +17,11 @@ export interface TransactionRowProps {
   transaction: Transaction
   /** Animation index for staggered entrance */
   index?: number
-  /** Whether to show privacy badge */
+  /**
+   * Whether to show a per-row privacy badge. Defaults to `false`: every Botho
+   * transfer is private, so a per-transaction "Private" chip is redundant noise
+   * in the wallet's transaction history.
+   */
   showPrivacy?: boolean
   /** Whether to show chevron for clickable rows */
   showChevron?: boolean
@@ -33,7 +37,7 @@ export interface TransactionRowProps {
 export function TransactionRow({
   transaction: tx,
   index = 0,
-  showPrivacy = true,
+  showPrivacy = false,
   showChevron = true,
   onClick,
   className = '',

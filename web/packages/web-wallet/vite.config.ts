@@ -82,6 +82,13 @@ export default defineConfig({
     wasmSignerPkgPlugin(),
     VitePWA({
       registerType: 'autoUpdate',
+      // We register the service worker ourselves via the `virtual:pwa-register`
+      // module in `src/main.tsx` so we can auto-reload the page once a new SW
+      // takes control after a deploy. The default injected registration does
+      // NOT reload, leaving users on the stale cached app until a manual hard
+      // refresh. Setting this to `null` disables the auto-injected registration
+      // so we don't register the SW twice.
+      injectRegister: null,
       includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'mask-icon.svg'],
       manifest: {
         name: 'Botho Wallet',
