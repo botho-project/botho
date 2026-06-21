@@ -145,6 +145,21 @@ export class AddressBook {
     this.contacts = new Map(contacts.map(c => [c.id, c]))
   }
 
+  /**
+   * Re-persist the CURRENT in-memory contacts through the storage layer without
+   * re-reading from disk.
+   *
+   * This is the re-wrap primitive used when the wallet's password changes
+   * (#489): the encrypted storage reads the session {@link VaultKey} lazily, so
+   * once the context has swapped the session key to the NEW key, calling this
+   * re-encrypts the existing contact graph under the new key (overwriting the
+   * blob that was encrypted under the old key). The in-memory contacts must
+   * already be loaded (the wallet is unlocked) before this is called.
+   */
+  async rewrap(): Promise<void> {
+    await this.persist()
+  }
+
   private async persist(): Promise<void> {
     await this.storage.save(Array.from(this.contacts.values()))
   }

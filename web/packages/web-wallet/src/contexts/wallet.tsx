@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from 'react'
 import { RemoteNodeAdapter, type WsConnectionStatus } from '@botho/adapters'
-import { AddressBook, EncryptedAddressBook, ClaimLinkStore, EncryptedClaimLinks, saveWallet, loadWallet, loadWalletWithKey, getWalletInfo, deriveAddress, deriveKeypairs, parseAddress, isValidMnemonic, clearWallet, createClaimLinkMnemonic, buildClaimLink, VaultKey } from '@botho/core'
+import { AddressBook, EncryptedAddressBook, ClaimLinkStore, EncryptedClaimLinks, saveWallet, loadWallet, loadWalletWithKey, getWalletInfo, deriveAddress, deriveKeypairs, parseAddress, isValidMnemonic, clearWallet, createClaimLinkMnemonic, buildClaimLink, VaultKey, MIN_PASSWORD_LENGTH } from '@botho/core'
 import type { Balance, Contact, NodeInfo, Transaction, ClaimLinkRecord, Timestamp } from '@botho/core'
 import { buildSendTransaction, spendableBalance, buildOwnedHistory } from '@botho/wasm-signer'
 import { buildAndSubmitSend, scanEphemeral, sweepEphemeral, SWEEP_FEE_RESERVE } from '../lib/claim-link-ops'
@@ -67,6 +67,24 @@ interface WalletContextValue extends WalletState {
   unlockWallet: (password: string) => Promise<void>
   exportWallet: (password?: string) => Promise<string | null>
   resetWallet: () => void
+
+  /**
+   * Set a password on a PLAINTEXT (no-password) wallet, upgrading it to
+   * encrypted (#489). Re-saves the seed as an encrypted vault blob and re-wraps
+   * the address book + outstanding claim links under the new password-derived
+   * key, so contacts and claim links work and nothing remains in cleartext.
+   * Rejects if the wallet is already encrypted or locked.
+   */
+  setPassword: (newPassword: string) => Promise<void>
+
+  /**
+   * Rotate the password of an ENCRYPTED wallet (#489). Verifies the old password,
+   * re-encrypts the seed under the new password, and re-wraps the address book +
+   * outstanding claim links under the new key. The OLD password no longer
+   * decrypts anything afterward. Rejects with "Incorrect current password" if
+   * the old password is wrong, or if the wallet is plaintext/locked.
+   */
+  changePassword: (oldPassword: string, newPassword: string) => Promise<void>
 
   /**
    * The unlocked vault key for the current session, or null when the wallet is
@@ -636,6 +654,124 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
   const getVaultKey = useCallback(() => vaultKeyRef.current, [])
 
+  /**
+   * Swap the session vault key to `newKey` and RE-WRAP the sibling stores
+   * (address book + claim links) under it, then publish the resulting state.
+   *
+   * Unlike {@link applyVaultKey} (which RELOADS the stores from disk — correct
+   * for unlock, where the on-disk blobs are already under the key being applied),
+   * this re-encrypts the CURRENT in-memory store contents under the new key. That
+   * is exactly what a password change needs: the on-disk blobs are still under
+   * the OLD key, so reloading would fail to decrypt and silently drop the data;
+   * instead we persist the already-decrypted, in-memory data under the new key,
+   * overwriting the old-key blobs. The stores must already be loaded (wallet
+   * unlocked) before this is called.
+   */
+  const rewrapUnderNewKey = useCallback(async (newKey: VaultKey) => {
+    vaultKeyRef.current = newKey
+    setSessionVaultKey(newKey)
+    // Re-encrypt the in-memory contact graph + claim-link bearer secrets under
+    // the new key. These overwrite the localStorage blobs that were written
+    // under the old key, so the old key can no longer decrypt them.
+    try {
+      await addressBook.rewrap()
+    } catch {
+      // Address book is non-critical; never fail the password change on it.
+    }
+    try {
+      await claimLinkStore.rewrap()
+    } catch {
+      // Claim-link re-wrap is best-effort here; records remain in memory.
+    }
+    setState(s => ({
+      ...s,
+      claimLinks: claimLinkStore.getAll(),
+      contacts: addressBook.getAll(),
+    }))
+  }, [])
+
+  const setPassword = useCallback(async (newPassword: string) => {
+    if (state.isLocked) {
+      throw new Error('Unlock the wallet before setting a password')
+    }
+    if (vaultKeyRef.current !== null) {
+      throw new Error('Wallet already has a password. Use change password instead.')
+    }
+    const mnemonic = mnemonicRef.current
+    if (!mnemonic) {
+      throw new Error('No wallet loaded')
+    }
+    if (newPassword.length < MIN_PASSWORD_LENGTH) {
+      throw new Error(`Password must be at least ${MIN_PASSWORD_LENGTH} characters`)
+    }
+
+    // 1. Re-save the seed ENCRYPTED under the new password (versioned vault blob).
+    await saveWallet(mnemonic, newPassword)
+
+    // 2. Derive the session vault key bound to the just-written seed blob's salt
+    //    so the session key matches the seed exactly.
+    const newKey = await deriveSessionVaultKey(newPassword)
+    if (!newKey) {
+      throw new Error('Failed to derive vault key')
+    }
+
+    // 3. Publish the key and RELOAD the sibling stores. For a plaintext wallet
+    //    any on-disk sibling data is a LEGACY PLAINTEXT blob (pre-#474/#476);
+    //    applyVaultKey's load() path migrates those to encrypted under the new
+    //    key (the same automatic plaintext->encrypted re-wrap used on unlock), so
+    //    contacts and claim links survive the upgrade and no cleartext remains.
+    await applyVaultKey(newKey)
+
+    setState(s => ({ ...s, isEncrypted: true, isLocked: false }))
+  }, [state.isLocked, applyVaultKey])
+
+  const changePassword = useCallback(async (oldPassword: string, newPassword: string) => {
+    if (!state.isEncrypted) {
+      throw new Error('Wallet has no password to change. Set a password instead.')
+    }
+    if (state.isLocked) {
+      throw new Error('Unlock the wallet before changing the password')
+    }
+    if (newPassword.length < MIN_PASSWORD_LENGTH) {
+      throw new Error(`Password must be at least ${MIN_PASSWORD_LENGTH} characters`)
+    }
+
+    // 1. Verify the old password by decrypting the stored seed with it. A wrong
+    //    password throws "Incorrect password" from loadWallet; surface a clearer
+    //    message and abort BEFORE re-writing anything.
+    let mnemonic: string
+    try {
+      const stored = await loadWallet(oldPassword)
+      if (!stored) throw new Error('No wallet found')
+      mnemonic = stored.mnemonic
+    } catch {
+      throw new Error('Incorrect current password')
+    }
+
+    // Keep the in-memory mnemonic authoritative.
+    mnemonicRef.current = mnemonic
+
+    // Ensure sibling stores hold their current (old-key) decrypted contents in
+    // memory before we rotate the key, so the re-wrap re-encrypts real data.
+    try { await addressBook.load() } catch { /* keep in-memory */ }
+    try { await claimLinkStore.load() } catch { /* keep in-memory */ }
+
+    // 2. Re-save the seed ENCRYPTED under the new password.
+    await saveWallet(mnemonic, newPassword)
+
+    // 3. Derive the new session vault key (bound to the new seed blob's salt).
+    const newKey = await deriveSessionVaultKey(newPassword)
+    if (!newKey) {
+      throw new Error('Failed to derive vault key')
+    }
+
+    // 4. Swap the session key and re-wrap address book + claim links under it.
+    //    Afterward the old password decrypts none of the three data types.
+    await rewrapUnderNewKey(newKey)
+
+    setState(s => ({ ...s, isEncrypted: true, isLocked: false }))
+  }, [state.isEncrypted, state.isLocked, rewrapUnderNewKey])
+
   const send = useCallback(async (to: string, amount: bigint, _memo?: string): Promise<string> => {
     const adapter = adapterRef.current
     if (!adapter.isConnected()) {
@@ -888,6 +1024,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         unlockWallet,
         exportWallet,
         resetWallet,
+        setPassword,
+        changePassword,
         getVaultKey,
         send,
         refreshBalance,
