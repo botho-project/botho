@@ -13,10 +13,21 @@
  * for the funds. It lives only in this browser's localStorage and is never sent
  * to a server — same trust model as the wallet's own stored mnemonic.
  *
+ * AT-REST ENCRYPTION (#474): the bearer secret must NOT sit in plaintext on the
+ * device. {@link EncryptedClaimLinks} wraps localStorage with the session
+ * {@link VaultKey} (the same password-derived AES-256-GCM key that protects the
+ * seed, landed by #475) so outstanding-link secrets are only readable while the
+ * wallet is unlocked. The whole record array is stored as a single versioned
+ * vault blob; no ephemeral mnemonic is ever written in cleartext for a
+ * password-protected wallet. Legacy plaintext records (written before #474) are
+ * transparently re-wrapped under the vault key on the first unlocked load.
+ *
  * This module only persists/tracks records. Scanning the ephemeral wallet,
  * detecting "claimed" (output spent), and sweeping a refund all reuse the
  * existing wasm-signer send/scan path in the web-wallet — no node change.
  */
+
+import { VaultKey, isVaultBlob } from '../wallet/vault'
 
 /** Lifecycle status of an outstanding claim link. */
 export type ClaimLinkStatus = 'outstanding' | 'claimed' | 'refunded'
@@ -85,6 +96,106 @@ export class LocalStorageClaimLinks implements ClaimLinkStorage {
 
   async save(records: ClaimLinkRecord[]): Promise<void> {
     localStorage.setItem(this.key, JSON.stringify(records.map(serialize)))
+  }
+}
+
+/**
+ * Thrown by {@link EncryptedClaimLinks} when an operation needs the session
+ * vault key but the wallet is locked (or is a legacy plaintext wallet with no
+ * key). Callers should surface "unlock to continue" rather than persisting a
+ * bearer secret in cleartext.
+ */
+export class ClaimLinksLockedError extends Error {
+  constructor(message = 'Claim-link store is locked: unlock the wallet to access bearer secrets') {
+    super(message)
+    this.name = 'ClaimLinksLockedError'
+  }
+}
+
+/**
+ * localStorage-based claim-link storage encrypted under the session
+ * {@link VaultKey} (#474).
+ *
+ * The entire record array is encrypted as a single versioned vault blob, so the
+ * ephemeral bearer mnemonics are NEVER written to localStorage in plaintext for
+ * a password-protected wallet.
+ *
+ * The vault key is read lazily via a getter (the wallet context holds the
+ * session key in a ref) so this storage can be constructed once at module scope
+ * and pick up the key as soon as the wallet unlocks.
+ *
+ * Behavior when locked (`getKey()` returns null):
+ *   - {@link load} returns `[]` (records are unavailable until unlock) and does
+ *     NOT touch any legacy plaintext blob, so nothing is lost.
+ *   - {@link save} throws {@link ClaimLinksLockedError} rather than persisting a
+ *     bearer secret in cleartext.
+ *
+ * MIGRATION: if {@link load} finds a legacy PLAINTEXT JSON blob (written before
+ * #474) AND a key is available, it parses, then re-encrypts (re-wraps) it under
+ * the vault key, overwriting the plaintext so the secret no longer sits in
+ * cleartext. Refund ability is preserved across the migration.
+ */
+export class EncryptedClaimLinks implements ClaimLinkStorage {
+  private readonly key: string
+  private readonly getKey: () => VaultKey | null
+
+  constructor(getKey: () => VaultKey | null, key = 'botho-claim-links') {
+    this.getKey = getKey
+    this.key = key
+  }
+
+  async load(): Promise<ClaimLinkRecord[]> {
+    const data = localStorage.getItem(this.key)
+    if (!data) return []
+
+    const vaultKey = this.getKey()
+
+    // Encrypted (vault) blob: only readable while unlocked. If locked, degrade
+    // to "unavailable" rather than crashing.
+    if (isVaultBlob(data)) {
+      if (!vaultKey) return []
+      try {
+        const parsed = await vaultKey.decryptJSON<SerializedClaimLinkRecord[]>(data)
+        return parsed.map(deserialize)
+      } catch {
+        // Wrong key / tampered blob — degrade to empty rather than throw.
+        return []
+      }
+    }
+
+    // Legacy PLAINTEXT JSON blob (pre-#474). When locked, degrade to empty and
+    // leave the blob untouched so a later unlock can migrate it — consistent
+    // with the locked behavior for vault blobs.
+    if (!vaultKey) return []
+
+    let parsed: SerializedClaimLinkRecord[]
+    try {
+      parsed = JSON.parse(data) as SerializedClaimLinkRecord[]
+    } catch {
+      return []
+    }
+    const records = parsed.map(deserialize)
+
+    // Re-wrap under the vault key so the bearer secret stops living in
+    // cleartext, preserving refund ability across the migration.
+    if (records.length > 0) {
+      try {
+        await this.save(records)
+      } catch {
+        // Best-effort migration: keep the (working) plaintext blob and retry on
+        // the next unlocked load.
+      }
+    }
+    return records
+  }
+
+  async save(records: ClaimLinkRecord[]): Promise<void> {
+    const vaultKey = this.getKey()
+    if (!vaultKey) {
+      throw new ClaimLinksLockedError()
+    }
+    const blob = await vaultKey.encryptJSON(records.map(serialize))
+    localStorage.setItem(this.key, blob)
   }
 }
 

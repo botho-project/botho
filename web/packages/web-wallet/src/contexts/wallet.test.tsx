@@ -56,6 +56,18 @@ vi.mock('@botho/core', async (importOriginal) => {
   }
 })
 
+// Mock the on-chain claim-link operations so we can assert whether a funding
+// transaction was ever submitted. buildAndSubmitSend is the on-chain spend that
+// must NOT run for a plaintext (no-password) wallet (fund-loss guard, #474).
+const buildAndSubmitSendMock = vi.fn().mockResolvedValue('0xfundinghash')
+vi.mock('../lib/claim-link-ops', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/claim-link-ops')>()
+  return {
+    ...actual,
+    buildAndSubmitSend: (...args: unknown[]) => buildAndSubmitSendMock(...args),
+  }
+})
+
 const TEST_MNEMONIC_12 = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about'
 
 // Test component to access wallet context
@@ -335,6 +347,74 @@ describe('WalletContext', () => {
 
       const exported = await walletRef!.exportWallet()
       expect(exported).toBe(TEST_MNEMONIC_12)
+    })
+  })
+
+  describe('sendViaLink fund-loss guard (#474)', () => {
+    it('on a plaintext (no-password) wallet, throws BEFORE funding — no on-chain spend', async () => {
+      let walletRef: ReturnType<typeof useWallet> | null = null
+
+      render(
+        <WalletProvider>
+          <TestConsumer onMount={(w) => { walletRef = w }} />
+        </WalletProvider>
+      )
+
+      await waitFor(() => {
+        expect(walletRef).not.toBeNull()
+      })
+
+      // Create a plaintext wallet (no password => no session vault key).
+      await act(async () => {
+        await walletRef!.createWallet(TEST_MNEMONIC_12)
+      })
+      expect(screen.getByTestId('isEncrypted').textContent).toBe('no')
+
+      buildAndSubmitSendMock.mockClear()
+
+      // Attempting to create a claim link must fail fast with an actionable
+      // message that routes the user to add a password — and must NOT spend.
+      await expect(walletRef!.sendViaLink(1_000_000n)).rejects.toThrow(
+        /password-protected wallet/i,
+      )
+
+      // The on-chain funding spend must never have been invoked.
+      expect(buildAndSubmitSendMock).not.toHaveBeenCalled()
+
+      // No outstanding link should have been recorded either.
+      expect(walletRef!.claimLinks.length).toBe(0)
+    })
+
+    it('on an encrypted wallet, funds and returns a claim link (happy path)', async () => {
+      let walletRef: ReturnType<typeof useWallet> | null = null
+
+      render(
+        <WalletProvider>
+          <TestConsumer onMount={(w) => { walletRef = w }} />
+        </WalletProvider>
+      )
+
+      await waitFor(() => {
+        expect(walletRef).not.toBeNull()
+      })
+
+      await act(async () => {
+        await walletRef!.createWallet(TEST_MNEMONIC_12, 'mypassword')
+      })
+      expect(screen.getByTestId('isEncrypted').textContent).toBe('yes')
+
+      buildAndSubmitSendMock.mockClear()
+
+      let created: Awaited<ReturnType<ReturnType<typeof useWallet>['sendViaLink']>> | null = null
+      await act(async () => {
+        created = await walletRef!.sendViaLink(1_000_000n)
+      })
+
+      expect(buildAndSubmitSendMock).toHaveBeenCalledTimes(1)
+      expect(created).not.toBeNull()
+      expect(created!.url).toContain('/claim')
+      expect(created!.amount).toBe(1_000_000n)
+      expect(created!.fundingTxHash).toBe('0xfundinghash')
     })
   })
 })
