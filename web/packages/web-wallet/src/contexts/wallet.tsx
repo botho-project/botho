@@ -656,7 +656,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
   /**
    * Swap the session vault key to `newKey` and RE-WRAP the sibling stores
-   * (address book + claim links) under it, then publish the resulting state.
+   * (claim links + address book) under it ATOMICALLY, then publish state.
    *
    * Unlike {@link applyVaultKey} (which RELOADS the stores from disk — correct
    * for unlock, where the on-disk blobs are already under the key being applied),
@@ -664,30 +664,64 @@ export function WalletProvider({ children }: { children: ReactNode }) {
    * is exactly what a password change needs: the on-disk blobs are still under
    * the OLD key, so reloading would fail to decrypt and silently drop the data;
    * instead we persist the already-decrypted, in-memory data under the new key,
-   * overwriting the old-key blobs. The stores must already be loaded (wallet
-   * unlocked) before this is called.
+   * overwriting the old-key blobs. The stores must already be STRICT-loaded
+   * (wallet unlocked, decrypt succeeded) before this is called.
+   *
+   * ATOMICITY / FUND SAFETY (#489 Judge feedback): the claim-link blob holds
+   * bearer secrets (= funds), so a re-wrap failure must NEVER be swallowed.
+   *   - The claim-link store is re-wrapped FIRST and its failure is FATAL (throws).
+   *   - We snapshot both on-disk blobs before writing; if EITHER re-wrap throws,
+   *     we restore the original blobs and the OLD session key, then re-throw so
+   *     the caller ABORTS the whole rotation before the seed is re-saved. This
+   *     guarantees we never leave a half-rotated state (seed-under-new-key while a
+   *     bearer-secret blob is still under-old-key).
+   * The session key is only left swapped to `newKey` on full success.
+   *
+   * On success it returns a `rollback()` the caller can invoke if a LATER step
+   * (the seed re-save) fails, restoring the old blobs + old session key so the
+   * inverse half-rotated state (stores-new while seed-old) is also avoided.
    */
-  const rewrapUnderNewKey = useCallback(async (newKey: VaultKey) => {
+  const rewrapUnderNewKey = useCallback(async (newKey: VaultKey): Promise<() => void> => {
+    // Snapshot the on-disk blobs so we can roll back if a re-wrap fails.
+    const prevClaimBlob = localStorage.getItem('botho-claim-links')
+    const prevAddrBlob = localStorage.getItem('botho-address-book')
+    const prevKey = vaultKeyRef.current
+
+    const restore = () => {
+      if (prevClaimBlob === null) localStorage.removeItem('botho-claim-links')
+      else localStorage.setItem('botho-claim-links', prevClaimBlob)
+      if (prevAddrBlob === null) localStorage.removeItem('botho-address-book')
+      else localStorage.setItem('botho-address-book', prevAddrBlob)
+      vaultKeyRef.current = prevKey
+      setSessionVaultKey(prevKey)
+    }
+
+    // Swap to the new key so the lazy-getter stores encrypt under it.
     vaultKeyRef.current = newKey
     setSessionVaultKey(newKey)
-    // Re-encrypt the in-memory contact graph + claim-link bearer secrets under
-    // the new key. These overwrite the localStorage blobs that were written
-    // under the old key, so the old key can no longer decrypt them.
+
     try {
-      await addressBook.rewrap()
-    } catch {
-      // Address book is non-critical; never fail the password change on it.
-    }
-    try {
+      // Re-wrap the BEARER-SECRET store first; its failure is fatal (never
+      // swallowed — losing this blob loses funds).
       await claimLinkStore.rewrap()
-    } catch {
-      // Claim-link re-wrap is best-effort here; records remain in memory.
+      // Then the (non-bearer, privacy-only) address book.
+      await addressBook.rewrap()
+    } catch (err) {
+      // Roll back blobs + session key so the wallet stays consistently on the
+      // OLD password, then propagate to abort the rotation before the seed is
+      // re-saved under the new password.
+      restore()
+      throw err
     }
+
     setState(s => ({
       ...s,
       claimLinks: claimLinkStore.getAll(),
       contacts: addressBook.getAll(),
     }))
+
+    // Return a rollback for a later (seed re-save) failure.
+    return restore
   }, [])
 
   const setPassword = useCallback(async (newPassword: string) => {
@@ -751,23 +785,45 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     // Keep the in-memory mnemonic authoritative.
     mnemonicRef.current = mnemonic
 
-    // Ensure sibling stores hold their current (old-key) decrypted contents in
-    // memory before we rotate the key, so the re-wrap re-encrypts real data.
-    try { await addressBook.load() } catch { /* keep in-memory */ }
-    try { await claimLinkStore.load() } catch { /* keep in-memory */ }
-
-    // 2. Re-save the seed ENCRYPTED under the new password.
-    await saveWallet(mnemonic, newPassword)
-
-    // 3. Derive the new session vault key (bound to the new seed blob's salt).
-    const newKey = await deriveSessionVaultKey(newPassword)
-    if (!newKey) {
-      throw new Error('Failed to derive vault key')
+    // 2. STRICT-load the sibling stores under the still-active OLD key, so the
+    //    re-wrap re-encrypts the REAL decrypted data. loadStrict() THROWS if a
+    //    present blob fails to decrypt (vs. the lenient load() that returns []),
+    //    so a decrypt failure aborts the rotation here instead of silently
+    //    re-wrapping an empty store over real bearer secrets (= fund loss).
+    //    A genuinely empty/absent store loads as empty without throwing.
+    try {
+      await claimLinkStore.loadStrict()
+      await addressBook.loadStrict()
+    } catch {
+      throw new Error(
+        'Cannot change password: your saved data could not be decrypted with the current session. Unlock the wallet and try again.',
+      )
     }
 
-    // 4. Swap the session key and re-wrap address book + claim links under it.
-    //    Afterward the old password decrypts none of the three data types.
-    await rewrapUnderNewKey(newKey)
+    // 3. Derive the NEW session vault key independently (fresh salt) — NOT from
+    //    the seed blob, which is still under the OLD password. Each blob is
+    //    self-describing (salt+iterations in its header), so this key decrypts
+    //    the new sibling blobs directly and the new seed blob via salt-fallback.
+    const newKey = await VaultKey.fromPassword(newPassword)
+
+    // 4. ATOMICALLY re-wrap the bearer-secret claim links + the address book
+    //    under the new key. This is the irreversible-but-recoverable step done
+    //    BEFORE the seed re-save: if it throws, rewrapUnderNewKey has already
+    //    restored the old blobs + old session key, so we abort WITHOUT re-saving
+    //    the seed — the wallet stays consistently on the OLD password.
+    const rollbackRewrap = await rewrapUnderNewKey(newKey)
+
+    // 5. Only now — after the sibling re-wraps SUCCEEDED — perform the LAST
+    //    irreversible step: re-save the seed ENCRYPTED under the new password.
+    //    After this, the old password decrypts none of the three data types.
+    //    If this final write fails, roll the sibling stores back to the OLD key
+    //    so we don't leave the inverse half-rotated state (stores-new/seed-old).
+    try {
+      await saveWallet(mnemonic, newPassword)
+    } catch (err) {
+      rollbackRewrap()
+      throw err
+    }
 
     setState(s => ({ ...s, isEncrypted: true, isLocked: false }))
   }, [state.isEncrypted, state.isLocked, rewrapUnderNewKey])

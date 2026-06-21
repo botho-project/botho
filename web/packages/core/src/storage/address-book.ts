@@ -2,6 +2,29 @@ import type { Address, Contact, Timestamp } from '../types'
 import { VaultKey, isVaultBlob } from '../wallet/vault'
 
 /**
+ * Thrown by {@link EncryptedAddressBook.loadStrict} when a PRESENT encrypted
+ * address-book blob fails to decrypt under the current key (wrong key /
+ * tampered / locked).
+ *
+ * The lenient {@link EncryptedAddressBook.load} returns `[]` on decrypt failure
+ * for graceful degradation; the strict path used by the password-rotation
+ * re-wrap (#489) surfaces the failure so the rotation never re-wraps an empty
+ * book over real (but un-decryptable) contacts.
+ */
+export class AddressBookDecryptError extends Error {
+  constructor(
+    message = 'Address book failed to decrypt under the current key',
+    options?: { cause?: unknown },
+  ) {
+    super(message)
+    this.name = 'AddressBookDecryptError'
+    if (options && 'cause' in options) {
+      ;(this as { cause?: unknown }).cause = options.cause
+    }
+  }
+}
+
+/**
  * Storage interface for address book persistence
  * Implementations can use localStorage, IndexedDB, or other storage
  */
@@ -76,6 +99,22 @@ export class EncryptedAddressBook implements AddressBookStorage {
   }
 
   async load(): Promise<Contact[]> {
+    return this.loadInternal(false)
+  }
+
+  /**
+   * Strict load for the password-rotation re-wrap path (#489).
+   *
+   * Unlike {@link load}, if a PRESENT encrypted (vault) blob fails to decrypt
+   * under the current session key, this THROWS instead of returning `[]`, so the
+   * rotation can distinguish a genuinely empty book from a decrypt FAILURE and
+   * never re-wrap an empty book over real (but un-decryptable) contacts.
+   */
+  async loadStrict(): Promise<Contact[]> {
+    return this.loadInternal(true)
+  }
+
+  private async loadInternal(strict: boolean): Promise<Contact[]> {
     const data = localStorage.getItem(this.key)
     if (!data) return []
 
@@ -84,11 +123,20 @@ export class EncryptedAddressBook implements AddressBookStorage {
     // Encrypted (vault) blob: only readable while unlocked. If locked, degrade
     // to "unavailable" rather than crashing.
     if (isVaultBlob(data)) {
-      if (!vaultKey) return []
+      if (!vaultKey) {
+        if (strict) {
+          throw new AddressBookDecryptError()
+        }
+        return []
+      }
       try {
         return await vaultKey.decryptJSON<Contact[]>(data)
-      } catch {
-        // Wrong key / tampered blob — degrade to empty rather than throw.
+      } catch (err) {
+        // Wrong key / tampered blob. In strict mode (rotation) surface this;
+        // otherwise degrade to empty rather than throw.
+        if (strict) {
+          throw new AddressBookDecryptError(undefined, { cause: err })
+        }
         return []
       }
     }
@@ -142,6 +190,25 @@ export class AddressBook {
 
   async load(): Promise<void> {
     const contacts = await this.storage.load()
+    this.contacts = new Map(contacts.map(c => [c.id, c]))
+  }
+
+  /**
+   * Like {@link load}, but if the underlying storage supports a strict load
+   * (e.g. {@link EncryptedAddressBook.loadStrict}) it THROWS when a present blob
+   * fails to decrypt instead of silently loading empty. Used by the
+   * password-rotation re-wrap (#489) so a decrypt failure aborts the rotation
+   * rather than clobbering the on-disk contacts with an empty book. Falls back
+   * to {@link load} for storages without strict support.
+   */
+  async loadStrict(): Promise<void> {
+    const strictCapable = this.storage as AddressBookStorage & {
+      loadStrict?: () => Promise<Contact[]>
+    }
+    const contacts =
+      typeof strictCapable.loadStrict === 'function'
+        ? await strictCapable.loadStrict()
+        : await this.storage.load()
     this.contacts = new Map(contacts.map(c => [c.id, c]))
   }
 

@@ -57,10 +57,30 @@ vi.mock('@botho/adapters', () => ({
 const TEST_MNEMONIC_12 =
   'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about'
 const A_CONTACT = 'tbotho://1/contactaddrabc'
+// A stand-in ephemeral bearer mnemonic for a claim link (its loss = fund loss).
+const EPH_MNEMONIC =
+  'legal winner thank year wave sausage worth useful legal winner thank yellow'
+const EPH_ADDRESS = 'tbotho://1/ephaddrxyz'
 
 const STORAGE_SEED = 'botho-wallet-mnemonic'
 const STORAGE_ENCRYPTED = 'botho-wallet-encrypted'
 const STORAGE_ADDRESS_BOOK = 'botho-address-book'
+const STORAGE_CLAIM_LINKS = 'botho-claim-links'
+
+/** A serialized ClaimLinkRecord array as stored on disk (amount as string). */
+function serializedClaimLink() {
+  return [
+    {
+      id: 'cl1',
+      ephMnemonic: EPH_MNEMONIC,
+      ephAddress: EPH_ADDRESS,
+      amount: '123456789',
+      createdAt: 100,
+      fundingTxHash: '0xfund',
+      status: 'outstanding',
+    },
+  ]
+}
 
 function Harness({ onMount }: { onMount: (w: ReturnType<typeof useWallet>) => void }) {
   const wallet = useWallet()
@@ -137,7 +157,7 @@ describe('wallet password set/change (#489)', () => {
     expect(contacts.map((c) => c.name)).toContain('Alice')
   })
 
-  it('changePassword rotates the password; the old password no longer decrypts and a claim link survives re-wrap', async () => {
+  it('changePassword rotates the password; the old password no longer decrypts and a CLAIM LINK (bearer secret) and contact survive re-wrap', async () => {
     const { get } = await mountWallet()
 
     // Create an ENCRYPTED wallet with an initial password.
@@ -153,6 +173,17 @@ describe('wallet password set/change (#489)', () => {
     const before = await oldKey.decryptJSON<Array<{ name: string }>>(oldAbBlob)
     expect(before.map((c) => c.name)).toContain('Bob')
 
+    // Persist a REAL claim-link record (with its ephemeral bearer mnemonic)
+    // ENCRYPTED under the OLD key, exactly as sendViaLink would have. We write
+    // the on-disk blob directly so changePassword's strict pre-rewrap load reads
+    // it into memory and re-wraps it (no node/funding needed in a unit test).
+    const oldClBlob = await oldKey.encryptJSON(serializedClaimLink())
+    localStorage.setItem(STORAGE_CLAIM_LINKS, oldClBlob)
+    expect(isVaultBlob(oldClBlob)).toBe(true)
+    // Sanity: the OLD key decrypts the bearer secret pre-rotation.
+    const clBefore = await oldKey.decryptJSON<Array<{ ephMnemonic: string }>>(oldClBlob)
+    expect(clBefore[0].ephMnemonic).toBe(EPH_MNEMONIC)
+
     // CHANGE the password.
     await act(async () => { await get().changePassword('oldpassword', 'newpassword') })
     expect(get().isEncrypted).toBe(true)
@@ -164,17 +195,96 @@ describe('wallet password set/change (#489)', () => {
     const reloaded = await loadWallet('newpassword')
     expect(reloaded?.mnemonic).toBe(TEST_MNEMONIC_12)
 
+    const newKey = get().getVaultKey()!
+
     // Address book is re-wrapped under the NEW key: a freshly derived OLD key can
     // no longer decrypt it, but the NEW session key can.
     const newAbBlob = localStorage.getItem(STORAGE_ADDRESS_BOOK)!
     expect(isVaultBlob(newAbBlob)).toBe(true)
-    const newKey = get().getVaultKey()!
     const after = await newKey.decryptJSON<Array<{ name: string }>>(newAbBlob)
     expect(after.map((c) => c.name)).toContain('Bob')
 
-    // A key derived from the OLD password against the NEW blob must NOT decrypt it.
-    const staleOldKey = await VaultKey.fromPasswordAndBlob('oldpassword', newAbBlob)
-    await expect(staleOldKey.decryptJSON(newAbBlob)).rejects.toThrow()
+    // CLAIM LINK (= funds) re-wrap: the blob changed and the NEW key decrypts the
+    // FULL record, including its ephemeral bearer mnemonic, intact.
+    const newClBlob = localStorage.getItem(STORAGE_CLAIM_LINKS)!
+    expect(isVaultBlob(newClBlob)).toBe(true)
+    expect(newClBlob).not.toBe(oldClBlob)
+    expect(newClBlob).not.toContain(EPH_MNEMONIC) // no plaintext bearer secret
+    const clAfter = await newKey.decryptJSON<
+      Array<{ id: string; ephMnemonic: string; ephAddress: string; amount: string; status: string }>
+    >(newClBlob)
+    expect(clAfter).toHaveLength(1)
+    expect(clAfter[0].id).toBe('cl1')
+    expect(clAfter[0].ephMnemonic).toBe(EPH_MNEMONIC)
+    expect(clAfter[0].ephAddress).toBe(EPH_ADDRESS)
+    expect(clAfter[0].amount).toBe('123456789')
+    expect(clAfter[0].status).toBe('outstanding')
+
+    // The OLD key (re-derived against the NEW blobs) can NO LONGER read either
+    // the address book or the bearer secret.
+    const staleAb = await VaultKey.fromPasswordAndBlob('oldpassword', newAbBlob)
+    await expect(staleAb.decryptJSON(newAbBlob)).rejects.toThrow()
+    const staleCl = await VaultKey.fromPasswordAndBlob('oldpassword', newClBlob)
+    await expect(staleCl.decryptJSON(newClBlob)).rejects.toThrow()
+
+    // The claim link is also visible in context state under the new key.
+    expect(get().claimLinks.map((r) => r.ephMnemonic)).toContain(EPH_MNEMONIC)
+  })
+
+  it('changePassword ABORTS if a store re-wrap fails: the wallet stays on the OLD password with bearer secrets intact', async () => {
+    const { get } = await mountWallet()
+
+    await act(async () => { await get().createWallet(TEST_MNEMONIC_12, 'oldpassword') })
+    const oldKey = get().getVaultKey()!
+    await act(async () => { await get().addContact('Bob', A_CONTACT) })
+
+    // Persist a real claim link under the OLD key.
+    const oldClBlob = await oldKey.encryptJSON(serializedClaimLink())
+    localStorage.setItem(STORAGE_CLAIM_LINKS, oldClBlob)
+    const oldAbBlob = localStorage.getItem(STORAGE_ADDRESS_BOOK)!
+    const oldSeedBlob = localStorage.getItem(STORAGE_SEED)!
+
+    // Force the FINAL irreversible step (seed re-save) to fail AFTER the store
+    // re-wraps succeed, exercising the rollback path. setItem on the seed key
+    // throws; all other keys behave normally.
+    const realSet = localStorage.setItem.bind(localStorage)
+    const setSpy = vi
+      .spyOn(localStorage, 'setItem')
+      .mockImplementation((k: string, v: string) => {
+        if (k === STORAGE_SEED) throw new Error('disk full')
+        realSet(k, v)
+      })
+
+    await act(async () => {
+      await expect(get().changePassword('oldpassword', 'newpassword')).rejects.toThrow()
+    })
+
+    setSpy.mockRestore()
+
+    // ROLLBACK: the wallet remains on the OLD password.
+    //  - seed blob is unchanged and the OLD password still decrypts it.
+    expect(localStorage.getItem(STORAGE_SEED)).toBe(oldSeedBlob)
+    const { loadWallet } = await import('@botho/core')
+    const stored = await loadWallet('oldpassword')
+    expect(stored?.mnemonic).toBe(TEST_MNEMONIC_12)
+    await expect(loadWallet('newpassword')).rejects.toThrow(/incorrect password/i)
+
+    //  - sibling blobs were restored to the OLD-key versions, so the OLD key
+    //    still reads the contact graph AND the bearer secret (no fund loss).
+    expect(localStorage.getItem(STORAGE_ADDRESS_BOOK)).toBe(oldAbBlob)
+    expect(localStorage.getItem(STORAGE_CLAIM_LINKS)).toBe(oldClBlob)
+    const ab = await oldKey.decryptJSON<Array<{ name: string }>>(oldAbBlob)
+    expect(ab.map((c) => c.name)).toContain('Bob')
+    const cl = await oldKey.decryptJSON<Array<{ ephMnemonic: string }>>(oldClBlob)
+    expect(cl[0].ephMnemonic).toBe(EPH_MNEMONIC)
+
+    //  - the live session key is the OLD key (rolled back), so the wallet stays
+    //    usable: it can still decrypt the on-disk bearer secret.
+    const liveKey = get().getVaultKey()!
+    const liveCl = await liveKey.decryptJSON<Array<{ ephMnemonic: string }>>(
+      localStorage.getItem(STORAGE_CLAIM_LINKS)!,
+    )
+    expect(liveCl[0].ephMnemonic).toBe(EPH_MNEMONIC)
   })
 
   it('changePassword with the wrong current password is rejected and does not rotate', async () => {

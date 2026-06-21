@@ -113,6 +113,28 @@ export class ClaimLinksLockedError extends Error {
 }
 
 /**
+ * Thrown by {@link EncryptedClaimLinks.loadStrict} when a PRESENT encrypted
+ * claim-link blob fails to decrypt under the current key (wrong key / tampered).
+ *
+ * The lenient {@link EncryptedClaimLinks.load} returns `[]` on decrypt failure
+ * (so a locked app degrades gracefully); the strict path used by the
+ * password-rotation re-wrap (#489) must instead surface the failure so it never
+ * mistakes a decrypt FAILURE for an empty store and clobbers bearer secrets.
+ */
+export class ClaimLinksDecryptError extends Error {
+  constructor(
+    message = 'Claim-link store failed to decrypt under the current key',
+    options?: { cause?: unknown },
+  ) {
+    super(message)
+    this.name = 'ClaimLinksDecryptError'
+    if (options && 'cause' in options) {
+      ;(this as { cause?: unknown }).cause = options.cause
+    }
+  }
+}
+
+/**
  * localStorage-based claim-link storage encrypted under the session
  * {@link VaultKey} (#474).
  *
@@ -145,6 +167,23 @@ export class EncryptedClaimLinks implements ClaimLinkStorage {
   }
 
   async load(): Promise<ClaimLinkRecord[]> {
+    return this.loadInternal(false)
+  }
+
+  /**
+   * Strict load for the password-rotation re-wrap path (#489).
+   *
+   * Unlike {@link load}, if a PRESENT encrypted (vault) blob fails to decrypt
+   * under the current session key, this THROWS instead of returning `[]`. This
+   * lets the rotation distinguish a genuinely empty store from a decrypt FAILURE
+   * — so it never re-wraps an empty store over real bearer secrets that merely
+   * failed to decrypt. (A truly empty store / absent blob still returns `[]`.)
+   */
+  async loadStrict(): Promise<ClaimLinkRecord[]> {
+    return this.loadInternal(true)
+  }
+
+  private async loadInternal(strict: boolean): Promise<ClaimLinkRecord[]> {
     const data = localStorage.getItem(this.key)
     if (!data) return []
 
@@ -153,12 +192,22 @@ export class EncryptedClaimLinks implements ClaimLinkStorage {
     // Encrypted (vault) blob: only readable while unlocked. If locked, degrade
     // to "unavailable" rather than crashing.
     if (isVaultBlob(data)) {
-      if (!vaultKey) return []
+      if (!vaultKey) {
+        if (strict) {
+          throw new ClaimLinksLockedError()
+        }
+        return []
+      }
       try {
         const parsed = await vaultKey.decryptJSON<SerializedClaimLinkRecord[]>(data)
         return parsed.map(deserialize)
-      } catch {
-        // Wrong key / tampered blob — degrade to empty rather than throw.
+      } catch (err) {
+        // Wrong key / tampered blob. In strict mode (rotation) surface this so
+        // the caller never re-wraps an empty store over real bearer secrets;
+        // otherwise degrade to empty rather than throw.
+        if (strict) {
+          throw new ClaimLinksDecryptError(undefined, { cause: err })
+        }
         return []
       }
     }
@@ -213,6 +262,25 @@ export class ClaimLinkStore {
 
   async load(): Promise<void> {
     const records = await this.storage.load()
+    this.records = new Map(records.map((r) => [r.id, r]))
+  }
+
+  /**
+   * Like {@link load}, but if the underlying storage supports a strict load
+   * (e.g. {@link EncryptedClaimLinks.loadStrict}) it THROWS when a present blob
+   * fails to decrypt instead of silently loading empty. Used by the
+   * password-rotation re-wrap (#489) so a decrypt failure aborts the rotation
+   * rather than clobbering the on-disk bearer secrets with an empty store.
+   * Falls back to {@link load} for storages without strict support.
+   */
+  async loadStrict(): Promise<void> {
+    const strictCapable = this.storage as ClaimLinkStorage & {
+      loadStrict?: () => Promise<ClaimLinkRecord[]>
+    }
+    const records =
+      typeof strictCapable.loadStrict === 'function'
+        ? await strictCapable.loadStrict()
+        : await this.storage.load()
     this.records = new Map(records.map((r) => [r.id, r]))
   }
 
