@@ -11,7 +11,7 @@ import { SendLinkModal } from '../components/SendLinkModal'
 import { RequestModal } from '../components/RequestModal'
 import { ReceiveModal } from '../components/ReceiveModal'
 import { OutstandingLinks } from '../components/OutstandingLinks'
-import { Send, Link2, Download, RefreshCw, ArrowLeft, Shield, Eye, KeyRound, AlertCircle, Lock, Settings, Trash2, Users, QrCode } from 'lucide-react'
+import { Send, Link2, Download, RefreshCw, ArrowLeft, Shield, Eye, KeyRound, AlertCircle, Lock, Settings, Trash2, Users, QrCode, Clock } from 'lucide-react'
 
 const STRENGTH_META: Record<PasswordStrength, { label: string; bars: number; color: string }> = {
   'too-short': { label: `At least ${MIN_PASSWORD_LENGTH} characters`, bars: 0, color: 'bg-danger' },
@@ -365,8 +365,118 @@ function ImportWalletView({ onImport }: { onImport: (mnemonic: string, password?
   )
 }
 
+/** Auto-lock timeout options for the settings control (#490). 0 = Off/Never. */
+const AUTO_LOCK_OPTIONS: Array<{ minutes: number; label: string }> = [
+  { minutes: 1, label: '1 minute' },
+  { minutes: 5, label: '5 minutes' },
+  { minutes: 15, label: '15 minutes' },
+  { minutes: 30, label: '30 minutes' },
+  { minutes: 60, label: '1 hour' },
+  { minutes: 0, label: 'Off (never)' },
+]
+
+/**
+ * Settings sheet (#490): wallet security controls — auto-lock timeout, Lock now,
+ * and reset. Lock + auto-lock are only meaningful for an ENCRYPTED wallet (a
+ * plaintext wallet has no password to unlock with), so for a plaintext wallet
+ * the Lock control is disabled and routes the user to set a password first.
+ */
+function SettingsModal({
+  isEncrypted,
+  autoLockMinutes,
+  onAutoLockChange,
+  onLock,
+  onSetPassword,
+  onReset,
+  onClose,
+}: {
+  isEncrypted: boolean
+  autoLockMinutes: number
+  onAutoLockChange: (minutes: number) => void
+  onLock: () => void
+  onSetPassword: () => void
+  onReset: () => void
+  onClose: () => void
+}) {
+  return (
+    <div className="fixed inset-0 bg-void/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 z-50">
+      <Card className="w-full sm:max-w-md p-5 sm:p-6 rounded-t-2xl sm:rounded-2xl">
+        <div className="text-center mb-5 sm:mb-6">
+          <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-pulse/10 flex items-center justify-center mx-auto mb-3 sm:mb-4">
+            <Settings className="text-pulse" size={28} />
+          </div>
+          <h3 className="font-display text-lg sm:text-xl font-semibold mb-2">Settings</h3>
+          <p className="text-ghost text-sm">Security and wallet controls.</p>
+        </div>
+
+        <div className="space-y-5">
+          {/* Auto-lock timeout */}
+          <div>
+            <div className="flex items-center gap-2 mb-2">
+              <Clock size={16} className="text-pulse shrink-0" />
+              <span className="text-sm font-medium text-light">Auto-lock after inactivity</span>
+            </div>
+            <select
+              value={autoLockMinutes}
+              onChange={(e) => onAutoLockChange(Number(e.target.value))}
+              disabled={!isEncrypted}
+              className="w-full p-2.5 rounded-lg bg-abyss border border-steel text-sm text-light focus:outline-none focus:ring-2 focus:ring-pulse/50 focus:border-pulse disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {AUTO_LOCK_OPTIONS.map((opt) => (
+                <option key={opt.minutes} value={opt.minutes}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-ghost mt-1">
+              {isEncrypted
+                ? 'Lock the wallet automatically when idle. Activity resets the timer.'
+                : 'Set a password to enable auto-lock.'}
+            </p>
+          </div>
+
+          {/* Lock now */}
+          <div>
+            <Button
+              variant="secondary"
+              onClick={onLock}
+              disabled={!isEncrypted}
+              className="w-full justify-center"
+              title={isEncrypted ? 'Lock wallet' : 'Set a password to enable locking'}
+            >
+              <Lock size={16} className="mr-2" />
+              Lock wallet
+            </Button>
+            {!isEncrypted && (
+              <button
+                type="button"
+                onClick={onSetPassword}
+                className="text-xs text-pulse hover:underline mt-2"
+              >
+                Set a password to enable locking
+              </button>
+            )}
+          </div>
+
+          {/* Reset */}
+          <div className="border-t border-steel pt-4">
+            <Button variant="danger" onClick={onReset} className="w-full justify-center">
+              <Trash2 size={16} className="mr-2" />
+              Reset wallet
+            </Button>
+          </div>
+
+          <Button variant="ghost" onClick={onClose} className="w-full justify-center">
+            Close
+          </Button>
+        </div>
+      </Card>
+    </div>
+  )
+}
+
 function WalletDashboard() {
-  const { address, balance, transactions, isConnecting, isConnected, refreshBalance, refreshTransactions, resetWallet, send, contacts, searchContacts, isEncrypted, setPassword, changePassword } = useWallet()
+  const { address, balance, transactions, isConnecting, isConnected, refreshBalance, refreshTransactions, resetWallet, send, contacts, searchContacts, isEncrypted, setPassword, changePassword, lockWallet, autoLockMinutes, setAutoLockMinutes } = useWallet()
 
   // Resolve a counterparty address to a saved contact name for the transaction
   // history. We auto-create blank-name "previously paid" entries when sending,
@@ -389,6 +499,7 @@ function WalletDashboard() {
   const [isSending, setIsSending] = useState(false)
   const [showResetConfirm, setShowResetConfirm] = useState(false)
   const [showPasswordModal, setShowPasswordModal] = useState(false)
+  const [showSettings, setShowSettings] = useState(false)
 
   const handleReset = () => {
     resetWallet()
@@ -441,7 +552,16 @@ function WalletDashboard() {
       <Button variant="ghost" size="sm" onClick={refreshBalance} disabled={isConnecting}>
         <RefreshCw size={16} className={isConnecting ? 'animate-spin' : ''} />
       </Button>
-      <Button variant="ghost" size="sm" onClick={() => setShowResetConfirm(true)} title="Reset wallet">
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={lockWallet}
+        disabled={!isEncrypted}
+        title={isEncrypted ? 'Lock wallet' : 'Set a password to enable locking'}
+      >
+        <Lock size={16} />
+      </Button>
+      <Button variant="ghost" size="sm" onClick={() => setShowSettings(true)} title="Settings">
         <Settings size={16} />
       </Button>
     </>
@@ -515,6 +635,27 @@ function WalletDashboard() {
         onClose={() => setReceiveOpen(false)}
         onRequestLink={() => setRequestOpen(true)}
       />
+
+      {showSettings && (
+        <SettingsModal
+          isEncrypted={isEncrypted}
+          autoLockMinutes={autoLockMinutes}
+          onAutoLockChange={setAutoLockMinutes}
+          onLock={() => {
+            setShowSettings(false)
+            lockWallet()
+          }}
+          onSetPassword={() => {
+            setShowSettings(false)
+            setShowPasswordModal(true)
+          }}
+          onReset={() => {
+            setShowSettings(false)
+            setShowResetConfirm(true)
+          }}
+          onClose={() => setShowSettings(false)}
+        />
+      )}
 
       {showPasswordModal && (
         <PasswordSettingsModal
