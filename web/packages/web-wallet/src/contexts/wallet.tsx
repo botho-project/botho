@@ -65,8 +65,31 @@ interface WalletContextValue extends WalletState {
   createWallet: (mnemonic: string, password?: string) => Promise<void>
   importWallet: (seedPhrase: string, password?: string) => Promise<void>
   unlockWallet: (password: string) => Promise<void>
+  /**
+   * Lock the wallet (#490): wipe the decrypted seed (`mnemonicRef`) and the
+   * session vault key (`vaultKeyRef` + the module-scope `sessionVaultKey`) from
+   * memory and set `isLocked: true`. Does NOT touch localStorage — the encrypted
+   * wallet still exists on disk; unlocking re-derives via
+   * {@link unlockWallet}. Balance/history polling is gated on `!isLocked`, so it
+   * stops once locked.
+   *
+   * SAFETY: a PLAINTEXT (no-password) wallet has no key to unlock with, so
+   * locking it would strand it in a state it could never leave. For a plaintext
+   * wallet this is a NO-OP — the caller (and the auto-lock timer) must gate on
+   * `isEncrypted` so a plaintext wallet is never locked.
+   */
+  lockWallet: () => void
   exportWallet: (password?: string) => Promise<string | null>
   resetWallet: () => void
+
+  /**
+   * Idle auto-lock timeout in MINUTES, persisted in localStorage (#490). `0`
+   * means "Off/Never" (no auto-lock). Auto-lock only applies to encrypted
+   * wallets — a plaintext wallet is never auto-locked.
+   */
+  autoLockMinutes: number
+  /** Update + persist the idle auto-lock timeout (minutes; `0` = off). */
+  setAutoLockMinutes: (minutes: number) => void
 
   /**
    * Set a password on a PLAINTEXT (no-password) wallet, upgrading it to
@@ -276,6 +299,29 @@ const addressBook = new AddressBook(new EncryptedAddressBook(() => sessionVaultK
 /** Polling interval when WebSocket is disconnected (30 seconds) */
 const FALLBACK_POLL_INTERVAL = 30000
 
+/** localStorage key for the idle auto-lock timeout preference (#490). */
+const STORAGE_AUTO_LOCK = 'botho-auto-lock-minutes'
+
+/** Default idle auto-lock timeout in minutes (#490). `0` would mean off. */
+const DEFAULT_AUTO_LOCK_MINUTES = 15
+
+/**
+ * Read the persisted idle auto-lock timeout (minutes) from localStorage (#490).
+ * Returns {@link DEFAULT_AUTO_LOCK_MINUTES} when unset; `0` means off/never.
+ * Guards against non-numeric / negative junk.
+ */
+function loadAutoLockMinutes(): number {
+  try {
+    const raw = localStorage.getItem(STORAGE_AUTO_LOCK)
+    if (raw === null) return DEFAULT_AUTO_LOCK_MINUTES
+    const n = Number(raw)
+    if (!Number.isFinite(n) || n < 0) return DEFAULT_AUTO_LOCK_MINUTES
+    return Math.floor(n)
+  } catch {
+    return DEFAULT_AUTO_LOCK_MINUTES
+  }
+}
+
 /**
  * Create adapter from network configuration
  */
@@ -333,6 +379,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   // password-derived key. Null while locked or for plaintext wallets. Cleared
   // on reset and on page refresh (in-memory only).
   const vaultKeyRef = useRef<VaultKey | null>(null)
+
+  // Idle auto-lock timeout preference in minutes (#490); 0 = off/never.
+  // Persisted to localStorage so it survives refresh.
+  const [autoLockMinutes, setAutoLockMinutesState] = useState<number>(() => loadAutoLockMinutes())
 
   /**
    * Set the session vault key in memory AND publish it to the module-scope
@@ -620,6 +670,92 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       setState(s => ({ ...s, balance, transactions }))
     }
   }, [])
+
+  const lockWallet = useCallback(() => {
+    // SAFETY (#490): never lock a wallet that cannot be unlocked. A plaintext
+    // (no-password) wallet has no vault key, so there is nothing to unlock with —
+    // locking it would strand it. Gate on the in-memory key: it is non-null only
+    // for an unlocked, encrypted wallet.
+    if (vaultKeyRef.current === null) {
+      return
+    }
+    // Wipe the decrypted seed from memory.
+    mnemonicRef.current = null
+    // Wipe the session vault key (vaultKeyRef + module-scope sessionVaultKey).
+    // Passing null also makes the encrypted claim-link store + address book read
+    // as empty until the next unlock re-derives the key.
+    void applyVaultKey(null)
+    // Show the unlock screen and stop balance/history polling (gated on
+    // !isLocked). Clear the in-memory balance/history so nothing sensitive
+    // lingers on screen behind the unlock view.
+    setState(s => ({
+      ...s,
+      isLocked: true,
+      balance: null,
+      transactions: [],
+    }))
+  }, [applyVaultKey])
+
+  const setAutoLockMinutes = useCallback((minutes: number) => {
+    const m = Number.isFinite(minutes) && minutes > 0 ? Math.floor(minutes) : 0
+    setAutoLockMinutesState(m)
+    try {
+      localStorage.setItem(STORAGE_AUTO_LOCK, String(m))
+    } catch {
+      // Best-effort persistence; the in-memory preference still applies.
+    }
+  }, [])
+
+  // Idle auto-lock (#490): when the wallet is UNLOCKED + ENCRYPTED and the user
+  // chose a timeout (> 0), lock it after `autoLockMinutes` of inactivity. Any
+  // user activity (pointer/keyboard/click/scroll) or the tab regaining focus
+  // resets the countdown; `visibilitychange` is wired so returning to the tab
+  // restarts a fresh timer. All listeners + the timer are torn down on unmount,
+  // when locked, when the wallet has no password, or when the preference is off.
+  useEffect(() => {
+    if (autoLockMinutes <= 0) return
+    if (state.isLocked || !state.isEncrypted || !state.hasWallet) return
+
+    const timeoutMs = autoLockMinutes * 60_000
+    let timer: ReturnType<typeof setTimeout> | undefined
+
+    const reset = () => {
+      if (timer !== undefined) clearTimeout(timer)
+      timer = setTimeout(() => {
+        lockWallet()
+      }, timeoutMs)
+    }
+
+    const onActivity = () => reset()
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') reset()
+    }
+
+    const activityEvents: Array<keyof WindowEventMap> = [
+      'pointermove',
+      'pointerdown',
+      'keydown',
+      'click',
+      'scroll',
+      'wheel',
+      'touchstart',
+    ]
+    for (const ev of activityEvents) {
+      window.addEventListener(ev, onActivity, { passive: true })
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+
+    // Start the initial countdown.
+    reset()
+
+    return () => {
+      if (timer !== undefined) clearTimeout(timer)
+      for (const ev of activityEvents) {
+        window.removeEventListener(ev, onActivity)
+      }
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [autoLockMinutes, state.isLocked, state.isEncrypted, state.hasWallet, lockWallet])
 
   const exportWallet = useCallback(async (password?: string) => {
     // If we have mnemonic in memory, use it
@@ -1078,8 +1214,11 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         createWallet,
         importWallet,
         unlockWallet,
+        lockWallet,
         exportWallet,
         resetWallet,
+        autoLockMinutes,
+        setAutoLockMinutes,
         setPassword,
         changePassword,
         getVaultKey,
