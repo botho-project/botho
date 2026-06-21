@@ -11,6 +11,7 @@ members = [
     "gossip",
     "account-keys/types",
     "common",
+    "consensus/quorum-sim",
     "consensus/scp",
     "consensus/scp/play",
     "consensus/scp/types",
