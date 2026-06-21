@@ -289,7 +289,6 @@ function WalletDashboard() {
       <TransactionList
         transactions={transactions}
         title="Recent Transactions"
-        showPrivacy={true}
         showChevron={false}
       />
 

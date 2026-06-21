@@ -8,7 +8,10 @@ export interface TransactionListProps {
   transactions: Transaction[]
   /** Title for the card (default: "Transaction History") */
   title?: string
-  /** Whether to show privacy badges */
+  /**
+   * Whether to show per-row privacy badges. Defaults to `false`: every Botho
+   * transfer is private, so a per-transaction "Private" chip is redundant noise.
+   */
   showPrivacy?: boolean
   /** Whether to show chevrons for clickable rows */
   showChevron?: boolean
@@ -24,7 +27,7 @@ export interface TransactionListProps {
 export function TransactionList({
   transactions,
   title = 'Transaction History',
-  showPrivacy = true,
+  showPrivacy = false,
   showChevron = true,
   onTransactionClick,
   className = '',
