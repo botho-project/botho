@@ -14,8 +14,10 @@ import {
   Check,
   AlertCircle,
   Tag,
+  Lock,
 } from 'lucide-react'
 import { useWallet } from '../contexts/wallet'
+import { PasswordSettingsModal } from '../components/PasswordSettingsModal'
 
 type SortBy = 'name' | 'lastTx' | 'txCount'
 
@@ -72,12 +74,37 @@ function arrange(contacts: Contact[], sortBy: SortBy, query: string): Contact[] 
  * entries (auto-created on send) show as "Unnamed — tap to label".
  */
 export function ContactsPage() {
-  const { contacts, addContact, updateContact, deleteContact } = useWallet()
+  const {
+    contacts,
+    addContact,
+    updateContact,
+    deleteContact,
+    hasWallet,
+    isEncrypted,
+    isLocked,
+    setPassword,
+    changePassword,
+  } = useWallet()
 
   const [sortBy, setSortBy] = useState<SortBy>('name')
   const [query, setQuery] = useState('')
   const [editing, setEditing] = useState<Contact | null>(null)
   const [adding, setAdding] = useState(false)
+  const [showPasswordModal, setShowPasswordModal] = useState(false)
+
+  // Contacts are encrypted at rest under the wallet's vault key (#476). When
+  // there is no vault key, the encrypted address book's save() is a deliberate
+  // silent NO-OP — it must never write the contact graph in cleartext. There is
+  // no key in two cases:
+  //   - PLAINTEXT wallet (a legacy no-password wallet): isEncrypted === false.
+  //   - LOCKED wallet (encrypted but not unlocked this session): isLocked.
+  // In either case adding/editing a contact would silently fail to persist
+  // ("silent broken button"), so we surface a hint and gate the controls
+  // instead of letting the user type into a field that discards their input
+  // (#488). Encrypted + unlocked wallets are unaffected.
+  const plaintextWallet = hasWallet && !isEncrypted
+  const lockedWallet = isLocked
+  const canPersistContacts = !plaintextWallet && !lockedWallet
 
   const arranged = useMemo(
     () => arrange(contacts, sortBy, query),
@@ -105,10 +132,62 @@ export function ContactsPage() {
               <Users className="text-pulse" size={22} />
               <h1 className="font-display text-xl sm:text-2xl font-bold">Contacts</h1>
             </div>
-            <Button onClick={() => setAdding(true)}>
+            <Button
+              onClick={() => setAdding(true)}
+              disabled={!canPersistContacts}
+              title={
+                canPersistContacts
+                  ? undefined
+                  : plaintextWallet
+                    ? 'Add a password to your wallet to save contacts'
+                    : 'Unlock your wallet to save contacts'
+              }
+            >
               <Plus size={16} className="mr-2" />Add
             </Button>
           </div>
+
+          {/* Persistence hint (#488): contacts are encrypted at rest and cannot
+              be saved without a vault key — surface why instead of silently
+              discarding the user's input. */}
+          {plaintextWallet && (
+            <Card className="p-4 border border-pulse/30 bg-pulse/5">
+              <div className="flex items-start gap-3">
+                <Lock size={18} className="text-pulse shrink-0 mt-0.5" />
+                <div className="space-y-2">
+                  <p className="text-sm text-light">
+                    Contacts require a password-protected wallet
+                  </p>
+                  <p className="text-xs text-ghost">
+                    Your wallet has no password, so contacts can&apos;t be saved —
+                    they&apos;re encrypted on this device and never stored in
+                    cleartext. Add a password to start saving contacts.
+                  </p>
+                  <Button size="sm" onClick={() => setShowPasswordModal(true)}>
+                    Set a password
+                  </Button>
+                </div>
+              </div>
+            </Card>
+          )}
+
+          {lockedWallet && (
+            <Card className="p-4 border border-pulse/30 bg-pulse/5">
+              <div className="flex items-start gap-3">
+                <Lock size={18} className="text-pulse shrink-0 mt-0.5" />
+                <div className="space-y-2">
+                  <p className="text-sm text-light">Wallet is locked</p>
+                  <p className="text-xs text-ghost">
+                    Unlock your wallet to view and save contacts. They&apos;re
+                    encrypted on this device and unavailable while locked.
+                  </p>
+                  <Link to="/wallet">
+                    <Button size="sm">Go to wallet to unlock</Button>
+                  </Link>
+                </div>
+              </div>
+            </Card>
+          )}
 
           {/* Search */}
           <div className="relative">
@@ -157,7 +236,8 @@ export function ContactsPage() {
                 <ContactRow
                   key={c.id}
                   contact={c}
-                  onEdit={() => setEditing(c)}
+                  editable={canPersistContacts}
+                  onEdit={() => canPersistContacts && setEditing(c)}
                 />
               ))}
             </div>
@@ -165,7 +245,7 @@ export function ContactsPage() {
         </div>
       </main>
 
-      {adding && (
+      {adding && canPersistContacts && (
         <ContactEditor
           mode="add"
           onClose={() => setAdding(false)}
@@ -175,7 +255,7 @@ export function ContactsPage() {
         />
       )}
 
-      {editing && (
+      {editing && canPersistContacts && (
         <ContactEditor
           mode="edit"
           contact={editing}
@@ -188,15 +268,28 @@ export function ContactsPage() {
           }}
         />
       )}
+
+      {/* Reuse the shared #489 set-password flow so a plaintext-wallet user can
+          upgrade to an encrypted wallet and start saving contacts (#488). */}
+      {showPasswordModal && (
+        <PasswordSettingsModal
+          mode="set"
+          onClose={() => setShowPasswordModal(false)}
+          onSetPassword={setPassword}
+          onChangePassword={changePassword}
+        />
+      )}
     </div>
   )
 }
 
 function ContactRow({
   contact,
+  editable = true,
   onEdit,
 }: {
   contact: Contact
+  editable?: boolean
   onEdit: () => void
 }) {
   const named = contact.name.trim().length > 0
@@ -204,8 +297,15 @@ function ContactRow({
     <Card className="p-3 sm:p-4 flex items-center justify-between gap-3">
       <button
         onClick={onEdit}
-        className="flex-1 min-w-0 text-left"
-        title={named ? 'Edit contact' : 'Tap to label this address'}
+        disabled={!editable}
+        className="flex-1 min-w-0 text-left disabled:cursor-default"
+        title={
+          editable
+            ? named
+              ? 'Edit contact'
+              : 'Tap to label this address'
+            : undefined
+        }
       >
         <div className="flex items-center gap-2">
           <span
@@ -228,7 +328,7 @@ function ContactRow({
           <p className="text-xs text-ghost/80 mt-1 truncate">{contact.notes}</p>
         )}
       </button>
-      <Button variant="ghost" size="sm" onClick={onEdit} title="Edit">
+      <Button variant="ghost" size="sm" onClick={onEdit} disabled={!editable} title="Edit">
         {named ? <Pencil size={16} /> : <Tag size={16} />}
       </Button>
     </Card>
