@@ -46,6 +46,12 @@ const PROXY_TARGET = FULLSTACK ? NODE_RPC_URL : RPC_MOCK_URL
  */
 export default defineConfig({
   testDir: './tests',
+  // The live-smoke suite (tests/live/**) targets the DEPLOYED wallet + live
+  // testnet and is run via a SEPARATE config (playwright.live.config.ts), gated
+  // behind BOTHO_LIVE=1. Exclude it here so the default `pnpm test` (hermetic,
+  // local-mock) never picks it up — including via the `smoke` project's
+  // `/smoke\.spec\.ts/` testMatch, which would otherwise match it.
+  testIgnore: ['**/tests/live/**'],
   // Run serially by default: the wallet/explorer specs share a single
   // vite-preview /rpc proxy to a live seed node, and running many browser
   // contexts in parallel against it caused intermittent "connecting" flakes.
