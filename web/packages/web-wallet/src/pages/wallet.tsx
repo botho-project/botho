@@ -10,7 +10,7 @@ import { FaucetButton } from '../components/FaucetButton'
 import { SendLinkModal } from '../components/SendLinkModal'
 import { RequestModal } from '../components/RequestModal'
 import { OutstandingLinks } from '../components/OutstandingLinks'
-import { Send, Link2, Download, RefreshCw, ArrowLeft, Shield, Eye, KeyRound, AlertCircle, Lock, Settings, Trash2 } from 'lucide-react'
+import { Send, Link2, Download, RefreshCw, ArrowLeft, Shield, Eye, KeyRound, AlertCircle, Lock, Settings, Trash2, Users } from 'lucide-react'
 
 function CreateWalletView({ onCreate }: { onCreate: (mnemonic: string, password?: string) => void }) {
   const [showMnemonic, setShowMnemonic] = useState(false)
@@ -219,7 +219,7 @@ function ImportWalletView({ onImport }: { onImport: (mnemonic: string, password?
 }
 
 function WalletDashboard() {
-  const { address, balance, transactions, isConnecting, isConnected, refreshBalance, refreshTransactions, resetWallet, send } = useWallet()
+  const { address, balance, transactions, isConnecting, isConnected, refreshBalance, refreshTransactions, resetWallet, send, contacts, searchContacts } = useWallet()
   const { hasFaucet } = useNetwork()
   const [sendOpen, setSendOpen] = useState(false)
   const [sendLinkOpen, setSendLinkOpen] = useState(false)
@@ -267,6 +267,11 @@ function WalletDashboard() {
       <Button variant="secondary" onClick={() => setRequestOpen(true)}>
         <Download size={16} className="mr-2" />Request
       </Button>
+      <Link to="/contacts">
+        <Button variant="secondary">
+          <Users size={16} className="mr-2" />Contacts
+        </Button>
+      </Link>
       <Button variant="ghost" size="sm" onClick={refreshBalance} disabled={isConnecting}>
         <RefreshCw size={16} className={isConnecting ? 'animate-spin' : ''} />
       </Button>
@@ -304,6 +309,8 @@ function WalletDashboard() {
         estimateFee={estimateFee}
         onSend={handleSend}
         isSending={isSending}
+        contacts={contacts}
+        onSearchContacts={searchContacts}
       />
 
       <SendLinkModal isOpen={sendLinkOpen} onClose={() => setSendLinkOpen(false)} />

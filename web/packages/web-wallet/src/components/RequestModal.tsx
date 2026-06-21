@@ -16,20 +16,27 @@ import { buildPaymentRequestLink } from '../lib/payment-request'
  * wallet pre-fills a send, and they pay via the normal send path. No secret is
  * involved — unlike a claim link, this link cannot move anyone's money.
  */
+/** Which kind of receive link the requester wants to share. */
+type RequestMode = 'amount' | 'address'
+
 export function RequestModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
   const { address } = useWallet()
+  const [mode, setMode] = useState<RequestMode>('amount')
   const [amountStr, setAmountStr] = useState('')
   const [memo, setMemo] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
+  const [copiedAddr, setCopiedAddr] = useState(false)
 
   if (!isOpen) return null
 
   const reset = () => {
+    setMode('amount')
     setAmountStr('')
     setMemo('')
     setError(null)
     setCopied(false)
+    setCopiedAddr(false)
   }
 
   const handleClose = () => {
@@ -37,12 +44,16 @@ export function RequestModal({ isOpen, onClose }: { isOpen: boolean; onClose: ()
     onClose()
   }
 
+  const shareAddressOnly = mode === 'address'
+
   // Build the link live as the requester types. A blank/zero amount means
   // "payer chooses"; an unparseable amount surfaces a friendly error and
-  // suppresses the link rather than producing a broken one.
+  // suppresses the link rather than producing a broken one. In "Share my
+  // address" mode the amount/memo are ignored entirely — the link carries only
+  // the address (a pure receive link).
   let amount: bigint | undefined
   let amountError: string | null = null
-  if (amountStr.trim()) {
+  if (!shareAddressOnly && amountStr.trim()) {
     try {
       const parsed = parseBTH(amountStr)
       if (parsed < 0n) {
@@ -62,11 +73,12 @@ export function RequestModal({ isOpen, onClose }: { isOpen: boolean; onClose: ()
         ? window.location.origin
         : 'https://wallet.botho.io'
     try {
-      url = buildPaymentRequestLink(origin, {
-        to: address,
-        amount,
-        memo: memo.trim() || undefined,
-      })
+      url = buildPaymentRequestLink(
+        origin,
+        shareAddressOnly
+          ? { to: address }
+          : { to: address, amount, memo: memo.trim() || undefined },
+      )
     } catch (err) {
       url = null
       // Should not happen (address is present), but stay friendly.
@@ -82,6 +94,17 @@ export function RequestModal({ isOpen, onClose }: { isOpen: boolean; onClose: ()
       setTimeout(() => setCopied(false), 2000)
     } catch {
       // Clipboard may be unavailable; the URL is still selectable in the field.
+    }
+  }
+
+  const handleCopyAddress = async () => {
+    if (!address) return
+    try {
+      await navigator.clipboard.writeText(address)
+      setCopiedAddr(true)
+      setTimeout(() => setCopiedAddr(false), 2000)
+    } catch {
+      // Clipboard may be unavailable; the address is still selectable.
     }
   }
 
@@ -105,44 +128,91 @@ export function RequestModal({ isOpen, onClose }: { isOpen: boolean; onClose: ()
           </div>
         ) : (
           <div className="space-y-4">
+            {/* Mode toggle: request a specific amount vs. just share my address */}
+            <div className="flex rounded-lg bg-abyss border border-steel p-1">
+              <button
+                onClick={() => {
+                  setMode('amount')
+                  setError(null)
+                }}
+                className={`flex-1 py-2 px-3 rounded-md text-xs sm:text-sm font-medium transition-colors ${
+                  mode === 'amount' ? 'bg-steel text-light' : 'text-ghost hover:text-light'
+                }`}
+              >
+                Request an amount
+              </button>
+              <button
+                onClick={() => {
+                  setMode('address')
+                  setError(null)
+                }}
+                className={`flex-1 py-2 px-3 rounded-md text-xs sm:text-sm font-medium transition-colors ${
+                  mode === 'address' ? 'bg-steel text-light' : 'text-ghost hover:text-light'
+                }`}
+              >
+                Just share my address
+              </button>
+            </div>
+
             <p className="text-sm text-ghost">
-              Create a link (or QR code) someone can open to pay you. Leave the amount
-              blank to let the payer choose. The link carries only your public address —
-              no secret, so it can never move your funds.
+              {shareAddressOnly
+                ? 'Share your public address so anyone can pay you any amount. The link carries only your address — no amount, no memo, no secret.'
+                : 'Create a link (or QR code) someone can open to pay you. Leave the amount blank to let the payer choose. The link carries only your public address — no secret, so it can never move your funds.'}
             </p>
 
-            <div>
-              <label className="block text-sm text-ghost mb-1.5">Amount (BTH)</label>
-              <Input
-                type="text"
-                inputMode="decimal"
-                placeholder="Any amount"
-                value={amountStr}
-                onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
-                  setAmountStr(e.target.value)
-                  setError(null)
-                }}
-                autoFocus
-              />
-              <p className="text-xs text-ghost mt-1">
-                Leave blank to let the payer enter the amount.
-              </p>
-            </div>
+            {shareAddressOnly && (
+              <div>
+                <label className="block text-sm text-ghost mb-1.5">Your address</label>
+                <div className="flex gap-2">
+                  <input
+                    readOnly
+                    value={address}
+                    onFocus={(e) => e.currentTarget.select()}
+                    className="flex-1 min-w-0 px-3 py-2 rounded-lg bg-abyss border border-steel font-mono text-xs text-light"
+                  />
+                  <Button onClick={handleCopyAddress} size="sm" variant="secondary">
+                    {copiedAddr ? <Check size={16} /> : <Copy size={16} />}
+                  </Button>
+                </div>
+              </div>
+            )}
 
-            <div>
-              <label className="block text-sm text-ghost mb-1.5">
-                Memo / label <span className="text-ghost/70">(optional)</span>
-              </label>
-              <Input
-                type="text"
-                placeholder="What's this for?"
-                value={memo}
-                onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
-                  setMemo(e.target.value)
-                  setError(null)
-                }}
-              />
-            </div>
+            {!shareAddressOnly && (
+              <div>
+                <label className="block text-sm text-ghost mb-1.5">Amount (BTH)</label>
+                <Input
+                  type="text"
+                  inputMode="decimal"
+                  placeholder="Any amount"
+                  value={amountStr}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                    setAmountStr(e.target.value)
+                    setError(null)
+                  }}
+                  autoFocus
+                />
+                <p className="text-xs text-ghost mt-1">
+                  Leave blank to let the payer enter the amount.
+                </p>
+              </div>
+            )}
+
+            {!shareAddressOnly && (
+              <div>
+                <label className="block text-sm text-ghost mb-1.5">
+                  Memo / label <span className="text-ghost/70">(optional)</span>
+                </label>
+                <Input
+                  type="text"
+                  placeholder="What's this for?"
+                  value={memo}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                    setMemo(e.target.value)
+                    setError(null)
+                  }}
+                />
+              </div>
+            )}
 
             {amountError && (
               <div className="flex items-center gap-2 p-3 rounded-lg bg-danger/10 border border-danger/20 text-danger text-sm">
@@ -166,7 +236,9 @@ export function RequestModal({ isOpen, onClose }: { isOpen: boolean; onClose: ()
                   </div>
                   <p className="text-xs text-ghost flex items-center gap-1.5">
                     <QrCode size={13} />
-                    {amount ? (
+                    {shareAddressOnly ? (
+                      <>Scan to pay me</>
+                    ) : amount ? (
                       <>Scan to pay {formatBTH(amount)} BTH</>
                     ) : (
                       <>Scan to pay</>
@@ -175,7 +247,9 @@ export function RequestModal({ isOpen, onClose }: { isOpen: boolean; onClose: ()
                 </div>
 
                 <div>
-                  <label className="block text-sm text-ghost mb-1.5">Payment link</label>
+                  <label className="block text-sm text-ghost mb-1.5">
+                    {shareAddressOnly ? 'Receive link' : 'Payment link'}
+                  </label>
                   <div className="flex gap-2">
                     <input
                       readOnly

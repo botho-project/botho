@@ -1,9 +1,9 @@
-import { useState, useEffect } from 'react'
-import type { Balance } from '@botho/core'
+import { useMemo, useState, useEffect } from 'react'
+import type { Balance, Contact } from '@botho/core'
 import { formatBTH, parseBTH } from '@botho/core'
 import { Button, Input } from '@botho/ui'
 import { motion, AnimatePresence } from 'motion/react'
-import { ChevronDown, ChevronUp, Loader2, Send, X, Zap } from 'lucide-react'
+import { ChevronDown, ChevronUp, Loader2, Send, User, X, Zap } from 'lucide-react'
 
 export type SendPrivacyLevel = 'standard' | 'private'
 
@@ -35,6 +35,23 @@ export interface SendModalProps {
   onSend: (data: SendFormData) => Promise<SendResult>
   /** Whether a send is in progress */
   isSending?: boolean
+  /**
+   * Saved address-book contacts, used to power the recipient picker and to show
+   * a known contact's name inline. Optional for back-compat — when omitted, the
+   * recipient field behaves as a plain text input.
+   */
+  contacts?: Contact[]
+  /**
+   * Optional search callback for contacts. When provided it's used instead of
+   * filtering `contacts` locally (e.g. to delegate to the address-book search).
+   */
+  onSearchContacts?: (query: string) => Contact[]
+}
+
+/** Truncate an address for compact display in the picker. */
+function shortAddress(address: string, len = 8): string {
+  if (address.length <= len * 2 + 3) return address
+  return `${address.slice(0, len)}…${address.slice(-len)}`
 }
 
 /**
@@ -47,6 +64,8 @@ export function SendModal({
   estimateFee,
   onSend,
   isSending = false,
+  contacts,
+  onSearchContacts,
 }: SendModalProps) {
   const [recipient, setRecipient] = useState('')
   const [amount, setAmount] = useState('')
@@ -58,6 +77,7 @@ export function SendModal({
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [useCustomFee, setUseCustomFee] = useState(false)
   const [customFeeInput, setCustomFeeInput] = useState('')
+  const [showPicker, setShowPicker] = useState(false)
 
   // Reset form when modal closes
   useEffect(() => {
@@ -70,8 +90,33 @@ export function SendModal({
       setShowAdvanced(false)
       setUseCustomFee(false)
       setCustomFeeInput('')
+      setShowPicker(false)
     }
   }, [isOpen])
+
+  // Contact picker: matches for the current recipient query. Prefer the
+  // injected search callback; otherwise filter the provided contacts locally.
+  const matches = useMemo<Contact[]>(() => {
+    const all = contacts ?? []
+    if (all.length === 0 && !onSearchContacts) return []
+    const q = recipient.trim().toLowerCase()
+    if (!q) return all
+    if (onSearchContacts) return onSearchContacts(q)
+    return all.filter(
+      (c) =>
+        c.name.toLowerCase().includes(q) || c.address.toLowerCase().includes(q),
+    )
+  }, [contacts, onSearchContacts, recipient])
+
+  // If the entered recipient exactly matches a known contact, surface its name.
+  const matchedContact = useMemo<Contact | null>(() => {
+    const r = recipient.trim().toLowerCase()
+    if (!r) return null
+    return (contacts ?? []).find((c) => c.address.toLowerCase() === r) ?? null
+  }, [contacts, recipient])
+
+  const hasContacts = (contacts?.length ?? 0) > 0 || !!onSearchContacts
+  const showPickerList = showPicker && hasContacts && matches.length > 0
 
   // Estimate fee when amount or privacy changes
   useEffect(() => {
@@ -180,16 +225,50 @@ export function SendModal({
           {/* Form */}
           <div className="space-y-4">
             {/* Recipient */}
-            <div>
+            <div className="relative">
               <label className="mb-1.5 block text-sm font-medium text-[--color-ghost]">
                 Recipient Address
               </label>
               <Input
-                placeholder="tbotho://1/..."
+                placeholder="tbotho://1/... or search contacts"
                 value={recipient}
-                onChange={(e) => setRecipient(e.target.value)}
+                onChange={(e) => {
+                  setRecipient(e.target.value)
+                  setShowPicker(true)
+                }}
+                onFocus={() => setShowPicker(true)}
                 className="font-mono text-sm"
               />
+              {/* Inline contact name when the recipient matches a saved contact */}
+              {matchedContact && matchedContact.name.trim() && (
+                <p className="mt-1 flex items-center gap-1 text-xs text-[--color-pulse]">
+                  <User className="h-3 w-3" />
+                  {matchedContact.name}
+                </p>
+              )}
+              {/* Searchable contact picker */}
+              {showPickerList && (
+                <div className="absolute left-0 right-0 top-full z-10 mt-1 max-h-56 overflow-y-auto rounded-lg border border-[--color-steel] bg-[--color-abyss] shadow-xl">
+                  {matches.map((c) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      onClick={() => {
+                        setRecipient(c.address)
+                        setShowPicker(false)
+                      }}
+                      className="flex w-full flex-col items-start gap-0.5 border-b border-[--color-steel]/50 px-3 py-2 text-left transition-colors last:border-b-0 hover:bg-[--color-steel]/40"
+                    >
+                      <span className="text-sm text-[--color-light]">
+                        {c.name.trim() || 'Unnamed contact'}
+                      </span>
+                      <span className="font-mono text-xs text-[--color-dim]">
+                        {shortAddress(c.address)}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* Amount */}

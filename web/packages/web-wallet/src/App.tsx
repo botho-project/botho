@@ -5,6 +5,7 @@ import { LandingPage } from './pages/landing'
 import { WalletPage } from './pages/wallet'
 import { ClaimPage } from './pages/claim'
 import { PayPage } from './pages/pay'
+import { ContactsPage } from './pages/contacts'
 import { DocsPage } from './pages/docs'
 import { ExplorerPage } from './pages/explorer'
 
@@ -46,6 +47,7 @@ function App() {
             <Route path="/wallet" element={<WalletPage />} />
             <Route path="/claim" element={<ClaimPage />} />
             <Route path="/pay" element={<PayPage />} />
+            <Route path="/contacts" element={<ContactsPage />} />
             <Route path="/explorer" element={<ExplorerPage />} />
             <Route path="/explorer/tx/:hash" element={<ExplorerPage />} />
             <Route path="/explorer/block/:hash" element={<ExplorerPage />} />

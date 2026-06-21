@@ -9,7 +9,7 @@ import {
 } from 'react'
 import { RemoteNodeAdapter, type WsConnectionStatus } from '@botho/adapters'
 import { AddressBook, ClaimLinkStore, saveWallet, loadWallet, getWalletInfo, deriveAddress, deriveKeypairs, parseAddress, isValidMnemonic, clearWallet, createClaimLinkMnemonic, buildClaimLink } from '@botho/core'
-import type { Balance, Contact, NodeInfo, Transaction, ClaimLinkRecord } from '@botho/core'
+import type { Balance, Contact, NodeInfo, Transaction, ClaimLinkRecord, Timestamp } from '@botho/core'
 import { buildSendTransaction, spendableBalance, buildOwnedHistory } from '@botho/wasm-signer'
 import { buildAndSubmitSend, scanEphemeral, sweepEphemeral, SWEEP_FEE_RESERVE } from '../lib/claim-link-ops'
 import { type NetworkConfig, loadSelectedNetwork, loadSelectedIngress, NETWORKS, DEFAULT_NETWORK_ID, DEFAULT_INGRESS_ID, createCustomNetwork, networkForIngress, getIngressNode } from '../config/networks'
@@ -78,6 +78,15 @@ interface WalletContextValue extends WalletState {
   updateContact: (id: string, updates: Partial<Pick<Contact, 'name' | 'address' | 'notes'>>) => Promise<Contact>
   deleteContact: (id: string) => Promise<void>
   getContactName: (address: string) => string
+  /**
+   * Upsert + bump a "previously-paid" address book entry. If the address is not
+   * yet a contact, create a minimal (blank-name) entry so it can be labelled
+   * later, then record the payment; if it already exists, just bump its
+   * txCount/lastTxAt. Idempotent per call (no double-count).
+   */
+  recordPayment: (address: string) => Promise<void>
+  /** Search saved contacts by name or address (case-insensitive substring). */
+  searchContacts: (query: string) => Contact[]
 
   // Claimable payment links (#460)
   /**
@@ -596,6 +605,20 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       throw new Error(result.error || 'Transaction submission failed')
     }
 
+    // Persist the recipient in the address book so it appears as "previously
+    // paid" and can be labelled/annotated later. Upsert: create a blank-name
+    // entry if new, then bump txCount/lastTxAt. Best-effort; never fail a send.
+    try {
+      const now = Math.floor(Date.now() / 1000) as Timestamp
+      if (!addressBook.findByAddress(to)) {
+        await addressBook.add('', to)
+      }
+      await addressBook.recordTransaction(to, now)
+      setState((s) => ({ ...s, contacts: addressBook.getAll() }))
+    } catch {
+      // Address-book persistence is non-critical; ignore failures.
+    }
+
     // Refresh balance/history opportunistically; ignore failures.
     if (state.address) {
       fetchBalance(adapter, state.address, mnemonicRef.current)
@@ -733,6 +756,23 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     return addressBook.getDisplayName(address)
   }, [])
 
+  const recordPayment = useCallback(async (address: string) => {
+    const now = Math.floor(Date.now() / 1000) as Timestamp
+    const existing = addressBook.findByAddress(address)
+    if (!existing) {
+      // Create a minimal, blank-name "previously paid" entry so the user can
+      // label/annotate it later. `add` initializes txCount to 0.
+      await addressBook.add('', address)
+    }
+    // Bump txCount/lastTxAt exactly once for this payment.
+    await addressBook.recordTransaction(address, now)
+    setState(s => ({ ...s, contacts: addressBook.getAll() }))
+  }, [])
+
+  const searchContacts = useCallback((query: string) => {
+    return addressBook.search(query)
+  }, [])
+
   return (
     <WalletContext.Provider
       value={{
@@ -752,6 +792,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         updateContact,
         deleteContact,
         getContactName,
+        recordPayment,
+        searchContacts,
         sendViaLink,
         refreshClaimLinks,
         refundClaimLink,
