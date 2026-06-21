@@ -98,3 +98,64 @@ export function formatSignedBTH(picocredits: bigint, isPositive: boolean): strin
   const prefix = isPositive ? '+' : '-'
   return `${prefix}${formatBTH(picocredits)}`
 }
+
+// ============================================================================
+// Time Formatting Utilities
+// ============================================================================
+
+const MINUTE = 60
+const HOUR = 60 * MINUTE
+const DAY = 24 * HOUR
+
+/**
+ * Format a Unix timestamp (in seconds) as a short relative time string, e.g.
+ * "just now", "2m ago", "3h ago", "yesterday", "4d ago". Falls back to an
+ * absolute date for anything older than a week.
+ *
+ * @param timestampSeconds - Unix timestamp in seconds
+ * @param nowMs - Current time in ms (override for testing; defaults to Date.now())
+ */
+export function formatRelativeTime(timestampSeconds: number, nowMs: number = Date.now()): string {
+  const deltaSeconds = Math.round(nowMs / 1000 - timestampSeconds)
+
+  // Future timestamps (clock skew) read as "just now".
+  if (deltaSeconds < 45) {
+    return 'just now'
+  }
+  if (deltaSeconds < 90) {
+    return '1m ago'
+  }
+  if (deltaSeconds < HOUR) {
+    return `${Math.round(deltaSeconds / MINUTE)}m ago`
+  }
+  if (deltaSeconds < 2 * HOUR) {
+    return '1h ago'
+  }
+  if (deltaSeconds < DAY) {
+    return `${Math.round(deltaSeconds / HOUR)}h ago`
+  }
+  if (deltaSeconds < 2 * DAY) {
+    return 'yesterday'
+  }
+  if (deltaSeconds < 7 * DAY) {
+    return `${Math.round(deltaSeconds / DAY)}d ago`
+  }
+
+  // Older than a week: fall back to an absolute date.
+  return formatAbsoluteTime(timestampSeconds, { dateOnly: true })
+}
+
+/**
+ * Format a Unix timestamp (in seconds) as an absolute local date/time string,
+ * suitable for a tooltip / `title` attribute.
+ *
+ * @param timestampSeconds - Unix timestamp in seconds
+ * @param options.dateOnly - When true, omit the time component
+ */
+export function formatAbsoluteTime(
+  timestampSeconds: number,
+  options: { dateOnly?: boolean } = {}
+): string {
+  const date = new Date(timestampSeconds * 1000)
+  return options.dateOnly ? date.toLocaleDateString() : date.toLocaleString()
+}

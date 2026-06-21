@@ -1,16 +1,22 @@
 import type { Transaction } from '@botho/core'
-import { formatBTH } from '@botho/core'
+import { formatBTH, formatRelativeTime, formatAbsoluteTime } from '@botho/core'
 import { motion } from 'motion/react'
 import {
   ArrowDownLeft,
   ArrowUpRight,
   Check,
   ChevronRight,
-  Clock,
+  Loader2,
   Sparkles,
   X,
 } from 'lucide-react'
 import { PrivacyBadge } from './privacy-badge'
+
+/**
+ * Number of confirmations a transaction needs before it is treated as fully
+ * settled. Below this (but already in a block) we surface a "Confirming" state.
+ */
+const CONFIRMED_THRESHOLD = 6
 
 export interface TransactionRowProps {
   /** Transaction data */
@@ -25,6 +31,13 @@ export interface TransactionRowProps {
   showPrivacy?: boolean
   /** Whether to show chevron for clickable rows */
   showChevron?: boolean
+  /**
+   * Optional lookup that maps a counterparty address to a friendly display name
+   * (e.g. an address-book contact). Return `undefined` when the address is not
+   * known so the row falls back to the truncated address. Kept optional so
+   * existing callers without an address book stay unchanged.
+   */
+  resolveName?: (address: string) => string | undefined
   /** Click handler */
   onClick?: (tx: Transaction) => void
   /** Custom class name */
@@ -39,17 +52,29 @@ export function TransactionRow({
   index = 0,
   showPrivacy = false,
   showChevron = true,
+  resolveName,
   onClick,
   className = '',
 }: TransactionRowProps) {
   const isReceive = tx.type === 'receive' || tx.type === 'minting'
   const Icon = tx.type === 'minting' ? Sparkles : isReceive ? ArrowDownLeft : ArrowUpRight
 
+  // Treat an in-block-but-not-yet-deep transaction as "confirming". A pending
+  // transaction is still propagating / unmined.
+  const isConfirming =
+    tx.status === 'confirmed' && tx.confirmations < CONFIRMED_THRESHOLD
+
   const statusConfig = {
-    pending: { color: 'text-[--color-warning]', icon: Clock },
-    confirmed: { color: 'text-[--color-success]', icon: Check },
-    failed: { color: 'text-[--color-danger]', icon: X },
-  }[tx.status]
+    pending: { color: 'text-[--color-warning]', icon: Loader2, label: 'Pending', spin: true },
+    confirming: { color: 'text-[--color-warning]', icon: Loader2, label: 'Confirming', spin: true },
+    confirmed: {
+      color: 'text-[--color-success]',
+      icon: Check,
+      label: `${tx.confirmations} conf`,
+      spin: false,
+    },
+    failed: { color: 'text-[--color-danger]', icon: X, label: 'Failed', spin: false },
+  }[tx.status === 'confirmed' && isConfirming ? 'confirming' : tx.status]
 
   const StatusIcon = statusConfig.icon
 
@@ -62,6 +87,11 @@ export function TransactionRow({
 
   const label =
     tx.type === 'minting' ? 'Minting Reward' : isReceive ? 'Received' : 'Sent'
+
+  // Prefer a friendly contact name for the counterparty, falling back to the
+  // raw address (truncated via CSS) and finally the tx id.
+  const counterpartyName = tx.counterparty ? resolveName?.(tx.counterparty) : undefined
+  const counterparty = counterpartyName || tx.counterparty || tx.id
 
   return (
     <motion.div
@@ -85,12 +115,18 @@ export function TransactionRow({
           {showPrivacy && <PrivacyBadge cryptoType={tx.cryptoType} />}
         </div>
         <div className="mt-0.5 flex items-center gap-2">
-          <span className="max-w-[180px] truncate font-mono text-xs text-[--color-dim]">
-            {tx.counterparty || tx.id}
+          <span
+            className={`max-w-[180px] truncate text-xs text-[--color-dim] ${counterpartyName ? '' : 'font-mono'}`}
+            title={tx.counterparty}
+          >
+            {counterparty}
           </span>
           <span className="text-[--color-muted]">•</span>
-          <span className="text-xs text-[--color-dim]">
-            {new Date(tx.timestamp * 1000).toLocaleDateString()}
+          <span
+            className="text-xs text-[--color-dim]"
+            title={formatAbsoluteTime(tx.timestamp)}
+          >
+            {formatRelativeTime(tx.timestamp)}
           </span>
         </div>
       </div>
@@ -103,9 +139,11 @@ export function TransactionRow({
           {isReceive ? '+' : '-'}
           {formatBTH(tx.amount)} BTH
         </div>
-        <div className={`flex items-center justify-end gap-1 text-xs ${statusConfig.color}`}>
-          <StatusIcon className="h-3 w-3" />
-          {tx.status === 'confirmed' ? `${tx.confirmations} conf` : tx.status}
+        <div
+          className={`flex items-center justify-end gap-1 text-xs ${statusConfig.color}`}
+        >
+          <StatusIcon className={`h-3 w-3 ${statusConfig.spin ? 'animate-spin' : ''}`} />
+          {statusConfig.label}
         </div>
       </div>
 

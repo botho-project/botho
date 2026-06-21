@@ -260,6 +260,20 @@ function ImportWalletView({ onImport }: { onImport: (mnemonic: string, password?
 
 function WalletDashboard() {
   const { address, balance, transactions, isConnecting, isConnected, refreshBalance, refreshTransactions, resetWallet, send, contacts, searchContacts } = useWallet()
+
+  // Resolve a counterparty address to a saved contact name for the transaction
+  // history. We auto-create blank-name "previously paid" entries when sending,
+  // so only surface contacts that actually have a non-empty name. Returns
+  // `undefined` for unknown/unnamed addresses so the row falls back to the
+  // truncated address.
+  const resolveName = useMemo(() => {
+    const byAddress = new Map(
+      contacts
+        .filter((c) => c.name.trim().length > 0)
+        .map((c) => [c.address.toLowerCase(), c.name] as const)
+    )
+    return (addr: string): string | undefined => byAddress.get(addr.toLowerCase())
+  }, [contacts])
   const { hasFaucet } = useNetwork()
   const [sendOpen, setSendOpen] = useState(false)
   const [sendLinkOpen, setSendLinkOpen] = useState(false)
@@ -344,6 +358,7 @@ function WalletDashboard() {
         transactions={transactions}
         title="Recent Transactions"
         showChevron={false}
+        resolveName={resolveName}
       />
 
       <SendModal
