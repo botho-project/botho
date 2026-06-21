@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from 'react'
 import { RemoteNodeAdapter, type WsConnectionStatus } from '@botho/adapters'
-import { AddressBook, ClaimLinkStore, EncryptedClaimLinks, saveWallet, loadWallet, loadWalletWithKey, getWalletInfo, deriveAddress, deriveKeypairs, parseAddress, isValidMnemonic, clearWallet, createClaimLinkMnemonic, buildClaimLink, VaultKey } from '@botho/core'
+import { AddressBook, EncryptedAddressBook, ClaimLinkStore, EncryptedClaimLinks, saveWallet, loadWallet, loadWalletWithKey, getWalletInfo, deriveAddress, deriveKeypairs, parseAddress, isValidMnemonic, clearWallet, createClaimLinkMnemonic, buildClaimLink, VaultKey } from '@botho/core'
 import type { Balance, Contact, NodeInfo, Transaction, ClaimLinkRecord, Timestamp } from '@botho/core'
 import { buildSendTransaction, spendableBalance, buildOwnedHistory } from '@botho/wasm-signer'
 import { buildAndSubmitSend, scanEphemeral, sweepEphemeral, SWEEP_FEE_RESERVE } from '../lib/claim-link-ops'
@@ -234,12 +234,10 @@ async function deriveSessionVaultKey(password: string): Promise<VaultKey | null>
 
 const WalletContext = createContext<WalletContextValue | null>(null)
 
-const addressBook = new AddressBook()
-
-// Session vault key holder for at-rest encryption of sibling data (#474).
+// Session vault key holder for at-rest encryption of sibling data (#474, #476).
 // The wallet context keeps this in sync with `vaultKeyRef.current` on every
-// unlock/create/import/reset so the module-scope claim-link store can read the
-// key lazily. Null while locked or for a legacy plaintext wallet.
+// unlock/create/import/reset so the module-scope stores can read the key lazily.
+// Null while locked or for a legacy plaintext wallet.
 let sessionVaultKey: VaultKey | null = null
 function setSessionVaultKey(key: VaultKey | null): void {
   sessionVaultKey = key
@@ -249,6 +247,13 @@ function setSessionVaultKey(key: VaultKey | null): void {
 // (#474). When locked (no key), the store reads as empty and refuses to write
 // plaintext secrets — records become available again on unlock.
 const claimLinkStore = new ClaimLinkStore(new EncryptedClaimLinks(() => sessionVaultKey))
+
+// The address book (counterparty graph + annotations) is encrypted at rest
+// under the same session vault key (#476). When there is no key (locked /
+// plaintext wallet) it reads as empty and silently does NOT persist (no
+// plaintext contact graph, no throw) — contacts become available and persist
+// again once the wallet has a password and is unlocked.
+const addressBook = new AddressBook(new EncryptedAddressBook(() => sessionVaultKey))
 
 /** Polling interval when WebSocket is disconnected (30 seconds) */
 const FALLBACK_POLL_INTERVAL = 30000
@@ -327,7 +332,19 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     } catch {
       // Locked / no key: store degrades to empty rather than throwing.
     }
-    setState(s => ({ ...s, claimLinks: claimLinkStore.getAll() }))
+    // The address book is encrypted under the same key (#476): reload so a
+    // newly-available key surfaces (and migrates legacy plaintext) contacts,
+    // and a null key clears them from view.
+    try {
+      await addressBook.load()
+    } catch {
+      // Locked / no key: store degrades to empty rather than throwing.
+    }
+    setState(s => ({
+      ...s,
+      claimLinks: claimLinkStore.getAll(),
+      contacts: addressBook.getAll(),
+    }))
   }, [])
 
   // Load address book on mount

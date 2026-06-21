@@ -1,4 +1,5 @@
 import type { Address, Contact, Timestamp } from '../types'
+import { VaultKey, isVaultBlob } from '../wallet/vault'
 
 /**
  * Storage interface for address book persistence
@@ -31,6 +32,100 @@ export class LocalStorageAddressBook implements AddressBookStorage {
 
   async save(contacts: Contact[]): Promise<void> {
     localStorage.setItem(this.key, JSON.stringify(contacts))
+  }
+}
+
+/**
+ * localStorage-based address book encrypted at rest under the session
+ * {@link VaultKey} (#476).
+ *
+ * The address book leaks the user's counterparty graph and personal annotations
+ * (names, addresses, notes, tx counts) — privacy-sensitive even though the
+ * entries are not bearer secrets. This storage encrypts the WHOLE contact array
+ * as a single versioned vault blob (the same password-derived AES-256-GCM key
+ * that protects the seed (#475) and claim-link secrets (#474)) so the contact
+ * graph is only readable while the wallet is unlocked, and is NEVER written to
+ * localStorage in plaintext for a password-protected wallet.
+ *
+ * The vault key is read lazily via a getter (the wallet context holds the
+ * session key in a ref) so this storage can be constructed once at module scope
+ * and pick up the key as soon as the wallet unlocks.
+ *
+ * GRACEFUL DEGRADATION (the address book is less critical than bearer secrets):
+ *   - {@link load} with no key (locked, or a legacy plaintext / no-password
+ *     wallet) returns `[]` (contacts are unavailable until unlock) and does NOT
+ *     touch any legacy plaintext blob, so nothing is lost.
+ *   - {@link save} with no key is a NO-OP: it does NOT throw and does NOT write
+ *     the contact graph in plaintext under the encrypt-by-default posture.
+ *     Contacts are simply not persisted until the wallet has a password / is
+ *     unlocked. This keeps the spend path (recordPayment after a send) from
+ *     throwing or losing money when there is no vault key.
+ *
+ * MIGRATION: if {@link load} finds a legacy PLAINTEXT JSON blob (written before
+ * #476) AND a key is available, it parses, then re-encrypts (re-wraps) it under
+ * the vault key, overwriting the plaintext so the contact graph no longer sits
+ * in cleartext.
+ */
+export class EncryptedAddressBook implements AddressBookStorage {
+  private readonly key: string
+  private readonly getKey: () => VaultKey | null
+
+  constructor(getKey: () => VaultKey | null, key = 'botho-address-book') {
+    this.getKey = getKey
+    this.key = key
+  }
+
+  async load(): Promise<Contact[]> {
+    const data = localStorage.getItem(this.key)
+    if (!data) return []
+
+    const vaultKey = this.getKey()
+
+    // Encrypted (vault) blob: only readable while unlocked. If locked, degrade
+    // to "unavailable" rather than crashing.
+    if (isVaultBlob(data)) {
+      if (!vaultKey) return []
+      try {
+        return await vaultKey.decryptJSON<Contact[]>(data)
+      } catch {
+        // Wrong key / tampered blob — degrade to empty rather than throw.
+        return []
+      }
+    }
+
+    // Legacy PLAINTEXT JSON blob (pre-#476). When there is no key, degrade to
+    // empty and leave the blob untouched so a later unlock can migrate it.
+    if (!vaultKey) return []
+
+    let contacts: Contact[]
+    try {
+      contacts = JSON.parse(data) as Contact[]
+    } catch {
+      return []
+    }
+
+    // Re-wrap under the vault key so the contact graph stops living in cleartext.
+    if (contacts.length > 0) {
+      try {
+        await this.save(contacts)
+      } catch {
+        // Best-effort migration: keep the (working) plaintext blob and retry on
+        // the next unlocked load.
+      }
+    }
+    return contacts
+  }
+
+  async save(contacts: Contact[]): Promise<void> {
+    const vaultKey = this.getKey()
+    if (!vaultKey) {
+      // No session key (locked / plaintext wallet): do NOT persist the contact
+      // graph in cleartext, and do NOT throw — contacts are simply not saved
+      // until the wallet has a password. This keeps the spend path safe.
+      return
+    }
+    const blob = await vaultKey.encryptJSON(contacts)
+    localStorage.setItem(this.key, blob)
   }
 }
 

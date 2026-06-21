@@ -1,4 +1,9 @@
-export { AddressBook, LocalStorageAddressBook, type AddressBookStorage } from './address-book'
+export {
+  AddressBook,
+  LocalStorageAddressBook,
+  EncryptedAddressBook,
+  type AddressBookStorage,
+} from './address-book'
 export {
   ClaimLinkStore,
   LocalStorageClaimLinks,
