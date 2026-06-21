@@ -15,6 +15,12 @@ export interface TransactionListProps {
   showPrivacy?: boolean
   /** Whether to show chevrons for clickable rows */
   showChevron?: boolean
+  /**
+   * Optional lookup that maps a counterparty address to a friendly display name
+   * (e.g. an address-book contact). Forwarded to each {@link TransactionRow}.
+   * Kept optional for back-compat with callers that have no address book.
+   */
+  resolveName?: (address: string) => string | undefined
   /** Click handler for transaction rows */
   onTransactionClick?: (tx: Transaction) => void
   /** Custom class name */
@@ -29,6 +35,7 @@ export function TransactionList({
   title = 'Transaction History',
   showPrivacy = false,
   showChevron = true,
+  resolveName,
   onTransactionClick,
   className = '',
 }: TransactionListProps) {
@@ -65,6 +72,7 @@ export function TransactionList({
                 index={i}
                 showPrivacy={showPrivacy}
                 showChevron={showChevron}
+                resolveName={resolveName}
                 onClick={onTransactionClick}
               />
             ))}
