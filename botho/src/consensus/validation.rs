@@ -363,16 +363,47 @@ impl TransactionValidator {
         Ok(())
     }
 
-    /// Validate a quantum-private transaction (structure and size limits)
+    /// Validate a quantum-private transaction's INTRINSIC (tip-agnostic)
+    /// structure and size limits.
     ///
     /// This validates:
-    /// - Classical transaction structure (delegates to validate_transfer_tx)
+    /// - basic structure (non-empty inputs/outputs, no zero-amount output)
     /// - PQ ciphertext sizes are valid
     /// - PQ signature sizes are valid
     /// - Overall transaction size is within limits
     ///
-    /// Note: Full signature validation (both Schnorr and ML-DSA) happens
-    /// in the mempool which has access to the UTXO set for key lookup.
+    /// SAFETY / no-fork invariant: this function is the intended SCP consensus
+    /// validity gate for PQ-transfer values (mirroring how
+    /// [`validate_transfer_tx`](Self::validate_transfer_tx) gates classical
+    /// transfer values). SCP's agreement (no-fork) theorem requires validity to
+    /// be a *pure function of the value*: a value valid for one honest node must
+    /// be valid for all honest nodes. SCP silently DROPS any peer message
+    /// carrying a value the local node cannot validate, so a tip-dependent check
+    /// here can partition the quorum (issue #455; the same #417/#419/#451
+    /// condition the minting `*_intrinsic` split and the classical-transfer fix
+    /// addressed).
+    ///
+    /// PQ txs are not yet routed through SCP voting (only their own tests call
+    /// this), so this is a *pre-emptive* fix: it removes the tip-dependent
+    /// staleness read before PQ txs can reintroduce the #417-class landmine.
+    ///
+    /// The former tip-relative staleness check (`created_at_height + MAX_TX_AGE
+    /// < state.height`, removed in #455) is NOT performed here, because
+    /// `state.height` is the local tip and two honest nodes straddling the
+    /// boundary would disagree on validity. Height-based staleness is instead
+    /// enforced DETERMINISTICALLY against the BLOCK's own height at block-build
+    /// (filter) and block-apply (backstop) using the shared
+    /// [`consensus::MAX_TX_AGE`](crate::consensus::MAX_TX_AGE) constant — the
+    /// same mechanism #454 introduced for classical transfers. Note that PQ txs
+    /// are carried in a block as their classical [`Transaction`] projection, so
+    /// they pass through the *same* `first_stale_transfer_tx` build/apply
+    /// backstop as classical transfers; no separate PQ staleness path is needed.
+    ///
+    /// Full signature validation (both Schnorr and ML-DSA) and UTXO/double-spend
+    /// checks happen in the mempool / at block-apply, which have ledger access.
+    ///
+    /// This is a pure function of the transaction; it does NOT read
+    /// `chain_state`.
     #[cfg(feature = "pq")]
     pub fn validate_quantum_private_tx(
         &self,
@@ -380,14 +411,10 @@ impl TransactionValidator {
     ) -> Result<(), ValidationError> {
         use crate::transaction_pq::{PQ_CIPHERTEXT_SIZE, PQ_SIGNATURE_SIZE};
 
-        let state = self
-            .chain_state
-            .read()
-            .map_err(|_| ValidationError::ChainStateUnavailable)?;
+        debug!("Validating quantum-private transaction (intrinsic / tip-agnostic)");
 
-        debug!("Validating quantum-private transaction");
-
-        // 1. Check basic structure
+        // 1. Check basic structure. These are properties of the value itself,
+        //    so all honest nodes agree on them regardless of local tip.
         if tx.inputs.is_empty() {
             return Err(ValidationError::NoInputs);
         }
@@ -395,13 +422,15 @@ impl TransactionValidator {
             return Err(ValidationError::NoOutputs);
         }
 
-        // 2. Check transaction is not stale
-        const MAX_TX_AGE: u64 = 100;
-        if tx.created_at_height + MAX_TX_AGE < state.height {
-            return Err(ValidationError::StaleTransaction);
-        }
+        // NOTE (issue #455): the former tip-relative staleness check
+        // (`created_at_height + MAX_TX_AGE < state.height`) has been REMOVED
+        // from this SCP-validity path. It read the local current tip and so was
+        // the #417-class asymmetric-validity fork condition. Height-based
+        // staleness is now enforced deterministically against the block's own
+        // height at block-build/apply via the shared MAX_TX_AGE const (same as
+        // the classical-transfer fix in #454).
 
-        // 3. Validate PQ output sizes
+        // 2. Validate PQ output sizes
         for output in &tx.outputs {
             // Check classical output
             if output.classical.amount == 0 {
@@ -419,7 +448,7 @@ impl TransactionValidator {
             }
         }
 
-        // 4. Validate PQ input sizes
+        // 3. Validate PQ input sizes
         for input in &tx.inputs {
             // Check PQ signature size
             if input.pq_signature.len() != PQ_SIGNATURE_SIZE {
@@ -442,7 +471,7 @@ impl TransactionValidator {
             }
         }
 
-        // 5. Check total transaction size (rough estimate for DoS protection)
+        // 4. Check total transaction size (rough estimate for DoS protection)
         // Max: 16 inputs, 16 outputs
         const MAX_PQ_INPUTS: usize = 16;
         const MAX_PQ_OUTPUTS: usize = 16;
@@ -995,20 +1024,83 @@ mod tests {
             assert!(matches!(result, Err(ValidationError::PqOutputTooLarge)));
         }
 
+        /// Issue #455 regression: the PQ-tx SCP-validity gate
+        /// (`validate_quantum_private_tx`) MUST be tip-agnostic.
+        ///
+        /// This mirrors the classical-transfer fix verified by
+        /// `test_transfer_tx_validity_is_tip_agnostic` (#454). The former
+        /// staleness check read each node's LOCAL current tip
+        /// (`created_at_height + MAX_TX_AGE < state.height`), so two honest
+        /// nodes at DIFFERENT heights straddling the old 100-block boundary
+        /// would disagree on validity — the #417-class asymmetric-validity fork
+        /// condition. After the fix, validity is a pure function of the value
+        /// and is identical regardless of the local tip. (Height-based
+        /// staleness is now enforced deterministically against the BLOCK's own
+        /// height at block-build/apply via `consensus::MAX_TX_AGE`; PQ txs ride
+        /// the same `first_stale_transfer_tx` backstop as classical transfers
+        /// through their classical projection, exercised by
+        /// `test_build_excludes_stale_transfer_tx` /
+        /// `test_first_stale_transfer_tx_backstop`.)
         #[test]
-        fn test_pq_tx_stale() {
-            let validator = TransactionValidator::new(mock_chain_state());
+        fn test_pq_tx_validity_is_tip_agnostic() {
+            // A well-formed PQ tx created at height 10.
+            let tx = QuantumPrivateTransaction {
+                inputs: vec![mock_pq_input()],
+                outputs: vec![mock_pq_output()],
+                fee: 1000,
+                created_at_height: 10,
+            };
+
+            // Node A: local tip at the creation height (well within the old
+            // 100-block window).
+            let validator_low = TransactionValidator::new(mock_chain_state_at(10));
+            let result_low = validator_low.validate_quantum_private_tx(&tx);
+
+            // Node B: local tip far past the old staleness boundary
+            // (10 + 100 + 1 = 111). Under the OLD tip-dependent check this
+            // returned StaleTransaction; both nodes must now agree.
+            let validator_high = TransactionValidator::new(mock_chain_state_at(111));
+            let result_high = validator_high.validate_quantum_private_tx(&tx);
+
+            assert!(
+                result_low.is_ok(),
+                "PQ tx must be valid at the creation-height tip: {result_low:?}"
+            );
+            assert!(
+                result_high.is_ok(),
+                "PQ tx must remain valid past the old staleness boundary (no \
+                 asymmetric drop / no #417-class fork): {result_high:?}"
+            );
+            assert_eq!(
+                result_low.is_ok(),
+                result_high.is_ok(),
+                "PQ-tx validity must be identical regardless of local tip height"
+            );
+        }
+
+        /// Issue #455: a PQ tx that would have been "stale" under the old
+        /// tip-relative check (created far below the local tip) must now PASS
+        /// the intrinsic validity gate — staleness is no longer this function's
+        /// concern; it moved to deterministic block-build/apply enforcement
+        /// against the block's own height (shared `MAX_TX_AGE`).
+        #[test]
+        fn test_pq_tx_old_height_still_valid_intrinsically() {
+            // Local tip 500; tx created at height 0 (0 + 100 < 500 would have
+            // been StaleTransaction under the removed tip-dependent check).
+            let validator = TransactionValidator::new(mock_chain_state_at(500));
 
             let tx = QuantumPrivateTransaction {
                 inputs: vec![mock_pq_input()],
                 outputs: vec![mock_pq_output()],
                 fee: 1000,
-                created_at_height: 0, // Very old (chain height is 10, max age is 100)
+                created_at_height: 0,
             };
 
-            // Not stale yet since 0 + 100 >= 10
             let result = validator.validate_quantum_private_tx(&tx);
-            assert!(result.is_ok());
+            assert!(
+                result.is_ok(),
+                "intrinsic PQ-tx validity must not depend on local tip / age: {result:?}"
+            );
         }
     }
 }
