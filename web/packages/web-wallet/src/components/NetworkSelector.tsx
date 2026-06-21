@@ -47,6 +47,14 @@ export function NetworkSelector({ className = '' }: NetworkSelectorProps) {
   // The landing page does not render the selector, so it makes no node calls.
   useEffect(() => startHealthPolling(), [startHealthPolling])
 
+  // Open the dropdown when another component (e.g. the offline banner, #492)
+  // asks to switch nodes via the `open-network-selector` event.
+  useEffect(() => {
+    const open = () => setIsOpen(true)
+    window.addEventListener('open-network-selector', open)
+    return () => window.removeEventListener('open-network-selector', open)
+  }, [])
+
   // Close dropdown when clicking outside
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {

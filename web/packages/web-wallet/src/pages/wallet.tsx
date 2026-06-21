@@ -11,6 +11,7 @@ import { SendLinkModal } from '../components/SendLinkModal'
 import { RequestModal } from '../components/RequestModal'
 import { ReceiveModal } from '../components/ReceiveModal'
 import { OutstandingLinks } from '../components/OutstandingLinks'
+import { OfflineBanner } from '../components/OfflineBanner'
 import { PasswordFields, PasswordSettingsModal, isPasswordValid } from '../components/PasswordSettingsModal'
 import { Send, Link2, Download, RefreshCw, ArrowLeft, Shield, Eye, KeyRound, AlertCircle, Lock, Settings, Trash2, Users, QrCode, Clock } from 'lucide-react'
 
@@ -394,6 +395,10 @@ function WalletDashboard() {
 
   return (
     <div className="max-w-4xl mx-auto space-y-4 sm:space-y-6 px-4 sm:px-0">
+      {/* Active-node-offline prompt (#492): surfaces when the selected ingress
+          node goes unreachable mid-use, with a one-click switch action. */}
+      <OfflineBanner />
+
       <BalanceCard
         balance={balance}
         address={address}

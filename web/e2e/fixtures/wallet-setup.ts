@@ -137,3 +137,63 @@ export async function readDashboardAddress(page: Page): Promise<string> {
   const addressButton = page.locator('button').filter({ has: page.locator('code.font-mono') }).first()
   return (await addressButton.textContent())?.trim() ?? ''
 }
+
+/**
+ * Open the Send modal from the dashboard. Assumes an unlocked wallet (the
+ * dashboard's "Send" button is visible).
+ */
+export async function openSendModal(page: Page): Promise<void> {
+  await page.getByRole('button', { name: /^Send$/i }).click()
+  await page.getByRole('heading', { name: /Send BTH/i }).waitFor({
+    state: 'visible',
+    timeout: TIMEOUTS.WALLET_SYNC,
+  })
+}
+
+/**
+ * Lock the wallet from the dashboard header (#490). Clicks the header Lock
+ * button (the icon-only button, disabled for plaintext wallets — but every
+ * wallet created via the helpers is encrypted) and waits for the Unlock screen.
+ */
+export async function lockWallet(page: Page): Promise<void> {
+  // The header has an icon-only Lock button (title "Lock wallet"). Click it and
+  // wait for the unlock view to replace the dashboard.
+  await page.getByRole('button', { name: 'Lock wallet' }).first().click()
+  await page.getByRole('heading', { name: /Unlock Wallet/i }).waitFor({
+    state: 'visible',
+    timeout: TIMEOUTS.WALLET_SYNC,
+  })
+}
+
+/** Unlock the wallet from the Unlock screen with `password` (#490). */
+export async function unlockWallet(page: Page, password = E2E_PASSWORD): Promise<void> {
+  await page.getByPlaceholder('Enter password').fill(password)
+  await page.getByRole('button', { name: /^Unlock$/i }).click()
+  await page.getByRole('button', { name: /^Send$/i }).waitFor({
+    state: 'visible',
+    timeout: TIMEOUTS.WALLET_SYNC,
+  })
+}
+
+/**
+ * Change the wallet's password via the dashboard "Change password" flow (#489).
+ * Opens the password settings modal in change mode, fills current + new + confirm
+ * and submits. Resolves once the modal closes (success).
+ */
+export async function changeWalletPassword(
+  page: Page,
+  oldPassword: string,
+  newPassword: string,
+): Promise<void> {
+  // The dashboard "Change password" trigger and the modal's submit button share
+  // the same label, so scope the modal interactions to the modal overlay.
+  await page.getByRole('button', { name: /Change password/i }).first().click()
+  const modal = page.locator('div.fixed.inset-0').filter({
+    has: page.getByRole('heading', { name: /Change password/i }),
+  })
+  await modal.getByRole('heading', { name: /Change password/i }).waitFor({ state: 'visible' })
+  await modal.getByPlaceholder('Current password').fill(oldPassword)
+  await modal.getByPlaceholder(/^Password \(min/).fill(newPassword)
+  await modal.getByPlaceholder('Confirm password').fill(newPassword)
+  await modal.getByRole('button', { name: /^Change password$/i }).click()
+}
