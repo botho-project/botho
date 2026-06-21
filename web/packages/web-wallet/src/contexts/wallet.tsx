@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from 'react'
 import { RemoteNodeAdapter, type WsConnectionStatus } from '@botho/adapters'
-import { AddressBook, ClaimLinkStore, saveWallet, loadWallet, getWalletInfo, deriveAddress, deriveKeypairs, parseAddress, isValidMnemonic, clearWallet, createClaimLinkMnemonic, buildClaimLink } from '@botho/core'
+import { AddressBook, ClaimLinkStore, saveWallet, loadWallet, loadWalletWithKey, getWalletInfo, deriveAddress, deriveKeypairs, parseAddress, isValidMnemonic, clearWallet, createClaimLinkMnemonic, buildClaimLink, VaultKey } from '@botho/core'
 import type { Balance, Contact, NodeInfo, Transaction, ClaimLinkRecord, Timestamp } from '@botho/core'
 import { buildSendTransaction, spendableBalance, buildOwnedHistory } from '@botho/wasm-signer'
 import { buildAndSubmitSend, scanEphemeral, sweepEphemeral, SWEEP_FEE_RESERVE } from '../lib/claim-link-ops'
@@ -67,6 +67,15 @@ interface WalletContextValue extends WalletState {
   unlockWallet: (password: string) => Promise<void>
   exportWallet: (password?: string) => Promise<string | null>
   resetWallet: () => void
+
+  /**
+   * The unlocked vault key for the current session, or null when the wallet is
+   * locked or stored in plaintext. Sibling features — claim-link secrets (#474)
+   * and the encrypted address book (#476) — use this to encrypt/decrypt their
+   * data under the SAME password-derived key while the wallet is unlocked. The
+   * key lives in memory only and is cleared on reset/refresh.
+   */
+  getVaultKey: () => VaultKey | null
 
   // Transactions
   send: (to: string, amount: bigint, memo?: string) => Promise<string>
@@ -210,6 +219,19 @@ async function fetchHistory(
   }
 }
 
+/**
+ * Derive the session vault key bound to the stored seed blob's salt, so the
+ * session key matches the seed blob exactly. Reads the just-written encrypted
+ * seed from localStorage and re-derives from (password + blob). Returns null if
+ * no encrypted seed is present.
+ */
+async function deriveSessionVaultKey(password: string): Promise<VaultKey | null> {
+  const blob = localStorage.getItem('botho-wallet-mnemonic')
+  const encrypted = localStorage.getItem('botho-wallet-encrypted') === 'true'
+  if (!blob || !encrypted) return null
+  return VaultKey.fromPasswordAndBlob(password, blob)
+}
+
 const WalletContext = createContext<WalletContextValue | null>(null)
 
 const addressBook = new AddressBook()
@@ -269,6 +291,12 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
   // Store mnemonic in memory after unlock (cleared on page refresh)
   const mnemonicRef = useRef<string | null>(null)
+
+  // Store the unlocked vault key in memory for the session so sibling features
+  // (#474 claim-link secrets, #476 address book) can encrypt under the same
+  // password-derived key. Null while locked or for plaintext wallets. Cleared
+  // on reset and on page refresh (in-memory only).
+  const vaultKeyRef = useRef<VaultKey | null>(null)
 
   // Load address book on mount
   useEffect(() => {
@@ -444,6 +472,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
     // Store mnemonic in memory
     mnemonicRef.current = mnemonic
+    // Derive + hold the session vault key (bound to the seed blob's salt) so
+    // sibling data can be encrypted under the same key (#474/#476). Null for
+    // plaintext wallets.
+    vaultKeyRef.current = password ? await deriveSessionVaultKey(password) : null
 
     setState(s => ({
       ...s,
@@ -476,6 +508,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
     // Store mnemonic in memory
     mnemonicRef.current = normalized
+    vaultKeyRef.current = password ? await deriveSessionVaultKey(password) : null
 
     setState(s => ({
       ...s,
@@ -495,13 +528,17 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const unlockWallet = useCallback(async (password: string) => {
-    const stored = await loadWallet(password)
+    // loadWalletWithKey decrypts the seed AND returns the session vault key,
+    // transparently migrating legacy (plaintext-header/100k) blobs to the
+    // current versioned format on success (#475).
+    const stored = await loadWalletWithKey(password)
     if (!stored) {
       throw new Error('No wallet found')
     }
 
-    // Store mnemonic in memory
+    // Store mnemonic + session vault key in memory
     mnemonicRef.current = stored.mnemonic
+    vaultKeyRef.current = stored.vaultKey
 
     setState(s => ({ ...s, isLocked: false }))
 
@@ -530,8 +567,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const resetWallet = useCallback(() => {
     // Clear stored wallet from localStorage
     clearWallet()
-    // Clear mnemonic from memory
+    // Clear mnemonic + vault key from memory
     mnemonicRef.current = null
+    vaultKeyRef.current = null
     // Reset state to initial
     setState(s => ({
       ...s,
@@ -543,6 +581,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       transactions: [],
     }))
   }, [])
+
+  const getVaultKey = useCallback(() => vaultKeyRef.current, [])
 
   const send = useCallback(async (to: string, amount: bigint, _memo?: string): Promise<string> => {
     const adapter = adapterRef.current
@@ -785,6 +825,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         unlockWallet,
         exportWallet,
         resetWallet,
+        getVaultKey,
         send,
         refreshBalance,
         refreshTransactions,
