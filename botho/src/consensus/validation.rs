@@ -376,12 +376,12 @@ impl TransactionValidator {
     /// validity gate for PQ-transfer values (mirroring how
     /// [`validate_transfer_tx`](Self::validate_transfer_tx) gates classical
     /// transfer values). SCP's agreement (no-fork) theorem requires validity to
-    /// be a *pure function of the value*: a value valid for one honest node must
-    /// be valid for all honest nodes. SCP silently DROPS any peer message
-    /// carrying a value the local node cannot validate, so a tip-dependent check
-    /// here can partition the quorum (issue #455; the same #417/#419/#451
-    /// condition the minting `*_intrinsic` split and the classical-transfer fix
-    /// addressed).
+    /// be a *pure function of the value*: a value valid for one honest node
+    /// must be valid for all honest nodes. SCP silently DROPS any peer
+    /// message carrying a value the local node cannot validate, so a
+    /// tip-dependent check here can partition the quorum (issue #455; the
+    /// same #417/#419/#451 condition the minting `*_intrinsic` split and
+    /// the classical-transfer fix addressed).
     ///
     /// PQ txs are not yet routed through SCP voting (only their own tests call
     /// this), so this is a *pre-emptive* fix: it removes the tip-dependent
@@ -397,10 +397,12 @@ impl TransactionValidator {
     /// same mechanism #454 introduced for classical transfers. Note that PQ txs
     /// are carried in a block as their classical [`Transaction`] projection, so
     /// they pass through the *same* `first_stale_transfer_tx` build/apply
-    /// backstop as classical transfers; no separate PQ staleness path is needed.
+    /// backstop as classical transfers; no separate PQ staleness path is
+    /// needed.
     ///
-    /// Full signature validation (both Schnorr and ML-DSA) and UTXO/double-spend
-    /// checks happen in the mempool / at block-apply, which have ledger access.
+    /// Full signature validation (both Schnorr and ML-DSA) and
+    /// UTXO/double-spend checks happen in the mempool / at block-apply,
+    /// which have ledger access.
     ///
     /// This is a pure function of the transaction; it does NOT read
     /// `chain_state`.
@@ -413,8 +415,8 @@ impl TransactionValidator {
 
         debug!("Validating quantum-private transaction (intrinsic / tip-agnostic)");
 
-        // 1. Check basic structure. These are properties of the value itself,
-        //    so all honest nodes agree on them regardless of local tip.
+        // 1. Check basic structure. These are properties of the value itself, so all
+        //    honest nodes agree on them regardless of local tip.
         if tx.inputs.is_empty() {
             return Err(ValidationError::NoInputs);
         }
