@@ -96,6 +96,43 @@ E2E_BROWSER_CHANNEL=chrome \
   pnpm test:e2e
 ```
 
+### Live-smoke suite (deployed wallet + live testnet)
+
+The hermetic suite above can never catch a **deploy** regression (it builds the
+app fresh and mocks `/rpc`). The live-smoke suite (`e2e/tests/live/smoke.spec.ts`)
+drives the **deployed** wallet at `https://wallet.botho.io` against the **live**
+testnet SCP nodes, catching exactly the class of bug a hermetic run misses — e.g.
+the wasm-404 when a build lands on a Pages preview instead of production and
+`/pkg/bth_wasm_signer_bg.wasm` stops being served.
+
+It is **opt-in** and uses a **separate** config
+(`e2e/playwright.live.config.ts`) that starts **no** local servers. It is NOT in
+default CI (it hits live infra + the faucet's rate limits), and the default
+`pnpm test` / `pnpm test:e2e` never run it (the default config ignores
+`tests/live/**`).
+
+```bash
+# From web/
+npx playwright install chromium   # once
+
+BOTHO_LIVE=1 npx playwright test --config e2e/playwright.live.config.ts
+```
+
+It asserts: page + title load (HTTP 200), the WASM crypto module loads with no
+wasm console error / no failed `/pkg/*` fetch, the PWA manifest + service worker
+are served, the 3-node ingress picker lists seed/seed2/faucet and switching the
+selected node updates (and persists) state, wallet create + import work entirely
+client-side (address renders), and `/claim` loads its empty/invalid state.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `BOTHO_LIVE` | _(unset)_ | Must be `1` or the whole live suite is skipped. |
+| `BOTHO_LIVE_URL` | `https://wallet.botho.io` | Override the deployed wallet URL under test. |
+
+No default on-chain steps run (testnet mints on demand + faucet rate limits +
+~30–80s block time make a full faucet→send→claim cycle flaky); any such step
+should be gated separately and kept tolerant/skippable.
+
 ## Deploy
 
 ```bash
