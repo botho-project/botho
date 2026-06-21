@@ -60,6 +60,30 @@ latter is resolved against the page origin.
 
 E2E specs live under `e2e/` (smoke, wallet, explorer, faucet).
 
+The `web-wallet` Playwright project (`e2e/tests/wallet/**`) covers the recently
+shipped wallet flows: wallet create/import, **request → pay**, **share my
+address → pay**, the **contacts** manager (add/edit/delete/search + labeling),
+the Send-form contact picker, and a Receive-QR smoke check. These run against the
+**hermetic mock RPC** (`e2e/serve-rpc-mock.mjs`) — **no live node or faucet
+required**. Because the mock has no `tx_submit`, the pay/contacts specs assert the
+**pre-fill + confirm UI** (recipient/amount populated, the Pay button primed)
+rather than on-chain settlement; real submission against a live node is covered by
+the full-stack send spec (see below). Wallets are encrypted by default (#475), so
+the specs always set a password when creating/importing
+(`e2e/fixtures/wallet-setup.ts`).
+
+```bash
+# From web/ — install browsers once, then run only the wallet flows:
+npx playwright install chromium chromium-headless-shell
+pnpm test:e2e --project=web-wallet
+```
+
+These are runnable in CI without external infra (they build + preview the wallet
+and mock `/rpc`), so the `web-wallet` project can join the existing
+`pnpm test:e2e` gate. The **full-stack** send spec (`e2e/tests/fullstack/**`) is
+the only wallet e2e that needs a real local node + wasm build and stays gated
+behind `E2E_FULLSTACK=1` — it is **local-run**, not in default CI.
+
 By default the suite is **self-contained**: it builds the web wallet (with
 `VITE_RPC_ENDPOINT=/rpc`), serves it via `vite preview` on
 `http://localhost:4173`, serves the faucet static site
