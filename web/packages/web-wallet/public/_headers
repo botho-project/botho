@@ -1,9 +1,12 @@
 # Cloudflare Pages headers for wallet.botho.io (#476)
 #
 # A strict Content-Security-Policy so that an XSS or malicious-dependency bug
-# cannot trivially exfiltrate wallet data: scripts and network egress are pinned
-# to our own origin plus the explicit Botho node RPC / faucet endpoints the
-# wallet talks to (see web/packages/web-wallet/src/config/networks.ts).
+# cannot execute injected script: scripts are pinned to our own origin (no
+# inline/eval), framing is denied, and plugins/embeds are forbidden. Network
+# egress (connect-src) intentionally allows any HTTPS origin so the wallet can
+# reach user-chosen / self-hosted / managed-trusted nodes added at runtime
+# (Custom RPC); see web/packages/web-wallet/src/config/networks.ts and
+# SECURITY.md for the tradeoff.
 #
 # Notes on the directives:
 #   - script-src 'self' 'wasm-unsafe-eval' : the in-browser signer is a
@@ -12,8 +15,14 @@
 #     Vite build emits external scripts only and the PWA service-worker
 #     registration is done from a bundled module (vite-plugin-pwa
 #     injectRegister: null), not an inline script, so the build is CSP-clean.
-#   - connect-src : our origin (same-origin /rpc proxy used by e2e/preview) plus
-#     the three live SCP ingress / faucet node origins. https only.
+#   - connect-src 'self' https: : the wallet must reach arbitrary node RPC
+#     origins chosen at runtime — the built-in defaults (seed/seed2/faucet) AND
+#     any user-entered "Custom RPC" / self-hosted / managed-trusted node
+#     (see NetworkSelector.tsx -> createCustomNetwork). Those origins cannot be
+#     known at build time, so connect-src permits any HTTPS endpoint (no http:).
+#     Tradeoff: an XSS could exfiltrate to an arbitrary HTTPS host; the primary
+#     anti-XSS defenses are therefore script-src 'self' + no unsafe-inline/eval +
+#     framing locks, NOT connect-src. See SECURITY.md.
 #   - style-src 'self' 'unsafe-inline' : the bundled Tailwind stylesheet is
 #     external, but allow inline style so framework/runtime style injection does
 #     not break rendering. Inline style cannot exfiltrate script-style and is a
@@ -21,7 +30,7 @@
 #   - object-src 'none'; base-uri 'self'; frame-ancestors 'none' : disable
 #     plugins/embeds, lock <base>, and forbid being framed (clickjacking).
 /*
-  Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' https://seed.botho.io https://seed2.botho.io https://faucet.botho.io; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; upgrade-insecure-requests
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' https:; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; upgrade-insecure-requests
   X-Content-Type-Options: nosniff
   Referrer-Policy: no-referrer
   X-Frame-Options: DENY

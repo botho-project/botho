@@ -81,7 +81,7 @@ script-src 'self' 'wasm-unsafe-eval';
 style-src 'self' 'unsafe-inline';
 img-src 'self' data:;
 font-src 'self' data:;
-connect-src 'self' https://seed.botho.io https://seed2.botho.io https://faucet.botho.io;
+connect-src 'self' https:;
 worker-src 'self' blob:;
 manifest-src 'self';
 object-src 'none';
@@ -97,13 +97,20 @@ Key points:
   only external scripts, and the PWA service-worker registration runs from a
   bundled module (not an inline script). `'wasm-unsafe-eval'` is required solely
   to instantiate the WebAssembly signer; it does **not** permit `eval`/inline JS.
-- **`connect-src` is an allowlist** of our own origin plus exactly the Botho
-  node RPC / faucet origins the wallet talks to. Exfiltrating data to an
-  attacker-controlled host is blocked by the browser even if script runs.
+- **`connect-src 'self' https:` permits any HTTPS origin.** This is deliberate:
+  the wallet is a thin client that must reach whatever node you point it at,
+  including a user-entered **Custom RPC** endpoint or your own / a managed,
+  trusted node (`NetworkSelector.tsx` → `createCustomNetwork`). Those origins are
+  added at **runtime** and cannot be enumerated in a static header, so a fixed
+  allowlist would silently break the Custom RPC feature. `http:` is **not**
+  allowed — node RPC is HTTPS-only, and `upgrade-insecure-requests` stays.
+  - **Tradeoff:** because connect-src is open to all HTTPS hosts, it is **not**
+    an exfiltration backstop — an XSS could POST stolen data to any HTTPS server.
+    The primary anti-XSS defenses are therefore `script-src 'self'` + **no**
+    `'unsafe-inline'` / `'unsafe-eval'` (an injected attacker cannot execute
+    script in the first place), framing locks, and dependency hygiene — not
+    `connect-src`.
 - **`frame-ancestors 'none'` / `X-Frame-Options: DENY`** prevent clickjacking.
-
-If you add a new node origin, update both `connect-src` here and
-`src/config/networks.ts`.
 
 ### Subresource integrity / supply chain
 
