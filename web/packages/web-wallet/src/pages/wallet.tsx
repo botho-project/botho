@@ -82,6 +82,113 @@ function isPasswordValid(password: string, confirmPassword: string): boolean {
   return password.length >= MIN_PASSWORD_LENGTH && password === confirmPassword
 }
 
+/**
+ * Modal to SET a password on a plaintext wallet, or CHANGE an existing one
+ * (#489). Reuses the #475 password policy (min length, strength hint, confirm
+ * field) via {@link PasswordFields}; the change flow adds a current-password
+ * field. On submit it calls the wallet context, which re-wraps the seed +
+ * address book + claim links under the new key.
+ */
+function PasswordSettingsModal({
+  mode,
+  onClose,
+  onSetPassword,
+  onChangePassword,
+}: {
+  mode: 'set' | 'change'
+  onClose: () => void
+  onSetPassword: (newPassword: string) => Promise<void>
+  onChangePassword: (oldPassword: string, newPassword: string) => Promise<void>
+}) {
+  const [oldPassword, setOldPassword] = useState('')
+  const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [isSaving, setIsSaving] = useState(false)
+
+  const isChange = mode === 'change'
+  const canSubmit =
+    isPasswordValid(password, confirmPassword) && (!isChange || oldPassword.length > 0)
+
+  const handleSubmit = async () => {
+    setError(null)
+    setIsSaving(true)
+    try {
+      if (isChange) {
+        await onChangePassword(oldPassword, password)
+      } else {
+        await onSetPassword(password)
+      }
+      onClose()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not update password')
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-void/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 z-50">
+      <Card className="w-full sm:max-w-md p-5 sm:p-6 rounded-t-2xl sm:rounded-2xl">
+        <div className="text-center mb-5 sm:mb-6">
+          <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-pulse/10 flex items-center justify-center mx-auto mb-3 sm:mb-4">
+            <Lock className="text-pulse" size={28} />
+          </div>
+          <h3 className="font-display text-lg sm:text-xl font-semibold mb-2">
+            {isChange ? 'Change password' : 'Set a password'}
+          </h3>
+          <p className="text-ghost text-sm">
+            {isChange
+              ? 'Enter your current password, then choose a new one. Your old password will stop working.'
+              : 'Encrypt your wallet on this device. Keep your recovery phrase safe — a forgotten password cannot be recovered.'}
+          </p>
+        </div>
+
+        <div className="space-y-3">
+          {isChange && (
+            <Input
+              type="password"
+              placeholder="Current password"
+              value={oldPassword}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                setOldPassword(e.target.value)
+                setError(null)
+              }}
+              autoFocus
+            />
+          )}
+          <PasswordFields
+            password={password}
+            confirmPassword={confirmPassword}
+            onPassword={(v) => { setPassword(v); setError(null) }}
+            onConfirmPassword={(v) => { setConfirmPassword(v); setError(null) }}
+          />
+
+          {error && (
+            <div className="flex items-center gap-2 p-3 rounded-lg bg-danger/10 border border-danger/20 text-danger text-sm">
+              <AlertCircle size={16} className="shrink-0" />
+              <span>{error}</span>
+            </div>
+          )}
+
+          <div className="space-y-3 pt-1">
+            <Button onClick={handleSubmit} disabled={!canSubmit || isSaving} className="w-full justify-center">
+              {isSaving ? (
+                <><RefreshCw size={16} className="mr-2 animate-spin" />Saving...</>
+              ) : (
+                isChange ? 'Change password' : 'Set password'
+              )}
+            </Button>
+            <Button variant="secondary" onClick={onClose} disabled={isSaving} className="w-full justify-center">
+              Cancel
+            </Button>
+          </div>
+        </div>
+      </Card>
+    </div>
+  )
+}
+
 function CreateWalletView({ onCreate }: { onCreate: (mnemonic: string, password?: string) => void }) {
   const [showMnemonic, setShowMnemonic] = useState(false)
   const [confirmed, setConfirmed] = useState(false)
@@ -259,7 +366,7 @@ function ImportWalletView({ onImport }: { onImport: (mnemonic: string, password?
 }
 
 function WalletDashboard() {
-  const { address, balance, transactions, isConnecting, isConnected, refreshBalance, refreshTransactions, resetWallet, send, contacts, searchContacts } = useWallet()
+  const { address, balance, transactions, isConnecting, isConnected, refreshBalance, refreshTransactions, resetWallet, send, contacts, searchContacts, isEncrypted, setPassword, changePassword } = useWallet()
 
   // Resolve a counterparty address to a saved contact name for the transaction
   // history. We auto-create blank-name "previously paid" entries when sending,
@@ -281,6 +388,7 @@ function WalletDashboard() {
   const [receiveOpen, setReceiveOpen] = useState(false)
   const [isSending, setIsSending] = useState(false)
   const [showResetConfirm, setShowResetConfirm] = useState(false)
+  const [showPasswordModal, setShowPasswordModal] = useState(false)
 
   const handleReset = () => {
     resetWallet()
@@ -352,6 +460,32 @@ function WalletDashboard() {
 
       {hasFaucet && <FaucetButton />}
 
+      <Card className="p-4 sm:p-5">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div className="flex items-start gap-3">
+            <Shield size={18} className={isEncrypted ? 'text-success mt-0.5 shrink-0' : 'text-warning mt-0.5 shrink-0'} />
+            <div>
+              <p className="text-sm font-medium text-light">
+                {isEncrypted ? 'Wallet is password-protected' : 'Wallet has no password'}
+              </p>
+              <p className="text-xs text-ghost mt-1">
+                {isEncrypted
+                  ? 'Your seed, contacts, and claim links are encrypted on this device.'
+                  : 'Set a password to encrypt your wallet and enable claim links.'}
+              </p>
+            </div>
+          </div>
+          <Button
+            variant={isEncrypted ? 'secondary' : 'primary'}
+            size="sm"
+            onClick={() => setShowPasswordModal(true)}
+          >
+            <KeyRound size={16} className="mr-2" />
+            {isEncrypted ? 'Change password' : 'Set a password'}
+          </Button>
+        </div>
+      </Card>
+
       <OutstandingLinks />
 
       <TransactionList
@@ -381,6 +515,15 @@ function WalletDashboard() {
         onClose={() => setReceiveOpen(false)}
         onRequestLink={() => setRequestOpen(true)}
       />
+
+      {showPasswordModal && (
+        <PasswordSettingsModal
+          mode={isEncrypted ? 'change' : 'set'}
+          onClose={() => setShowPasswordModal(false)}
+          onSetPassword={setPassword}
+          onChangePassword={changePassword}
+        />
+      )}
 
       {showResetConfirm && (
         <div className="fixed inset-0 bg-void/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 z-50">
