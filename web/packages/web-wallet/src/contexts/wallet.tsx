@@ -727,6 +727,17 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     if (!mnemonic) throw new Error('Wallet is locked. Unlock it before sending.')
     if (amount <= 0n) throw new Error('Amount must be greater than 0')
 
+    // CRITICAL: the claim-link bearer secret can only be persisted under a vault
+    // key (encrypted at rest). A plaintext / no-password wallet has no session
+    // vault key, so persisting the secret would throw AFTER funding the ephemeral
+    // address — losing the funds (the bearer secret is the only key to them).
+    // Fail fast here, BEFORE any on-chain spend, so no money can move.
+    if (vaultKeyRef.current === null) {
+      throw new Error(
+        'Claim links require a password-protected wallet. Add a password to your wallet to send via link.',
+      )
+    }
+
     // 1. Generate the ephemeral wallet (the link's bearer secret) and its addr.
     const ephMnemonic = createClaimLinkMnemonic()
     const ephAddress = deriveAddress(ephMnemonic)
