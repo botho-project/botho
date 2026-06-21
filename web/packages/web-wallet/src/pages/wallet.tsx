@@ -8,8 +8,9 @@ import { useNetwork } from '../contexts/network'
 import { NetworkSelector } from '../components/NetworkSelector'
 import { FaucetButton } from '../components/FaucetButton'
 import { SendLinkModal } from '../components/SendLinkModal'
+import { RequestModal } from '../components/RequestModal'
 import { OutstandingLinks } from '../components/OutstandingLinks'
-import { Send, Link2, RefreshCw, ArrowLeft, Shield, Eye, KeyRound, AlertCircle, Lock, Settings, Trash2 } from 'lucide-react'
+import { Send, Link2, Download, RefreshCw, ArrowLeft, Shield, Eye, KeyRound, AlertCircle, Lock, Settings, Trash2 } from 'lucide-react'
 
 function CreateWalletView({ onCreate }: { onCreate: (mnemonic: string, password?: string) => void }) {
   const [showMnemonic, setShowMnemonic] = useState(false)
@@ -222,6 +223,7 @@ function WalletDashboard() {
   const { hasFaucet } = useNetwork()
   const [sendOpen, setSendOpen] = useState(false)
   const [sendLinkOpen, setSendLinkOpen] = useState(false)
+  const [requestOpen, setRequestOpen] = useState(false)
   const [isSending, setIsSending] = useState(false)
   const [showResetConfirm, setShowResetConfirm] = useState(false)
 
@@ -261,6 +263,9 @@ function WalletDashboard() {
       </Button>
       <Button variant="secondary" onClick={() => setSendLinkOpen(true)}>
         <Link2 size={16} className="mr-2" />Send via Link
+      </Button>
+      <Button variant="secondary" onClick={() => setRequestOpen(true)}>
+        <Download size={16} className="mr-2" />Request
       </Button>
       <Button variant="ghost" size="sm" onClick={refreshBalance} disabled={isConnecting}>
         <RefreshCw size={16} className={isConnecting ? 'animate-spin' : ''} />
@@ -302,6 +307,8 @@ function WalletDashboard() {
       />
 
       <SendLinkModal isOpen={sendLinkOpen} onClose={() => setSendLinkOpen(false)} />
+
+      <RequestModal isOpen={requestOpen} onClose={() => setRequestOpen(false)} />
 
       {showResetConfirm && (
         <div className="fixed inset-0 bg-void/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 z-50">
