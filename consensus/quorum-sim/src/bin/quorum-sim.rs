@@ -10,9 +10,11 @@
 //! Every subcommand supports `--json` for machine-readable output (CI /
 //! monitoring); otherwise a human-readable table is printed.
 
-use bth_quorum_sim::model::Fbas;
-use bth_quorum_sim::report::{
-    compare_thresholds, render_churn_table, render_threshold_table, simulate_churn, ChurnAction,
+use bth_quorum_sim::{
+    model::Fbas,
+    report::{
+        compare_thresholds, render_churn_table, render_threshold_table, simulate_churn, ChurnAction,
+    },
 };
 use clap::{Parser, Subcommand};
 
@@ -80,11 +82,7 @@ fn main() {
                 print!("{}", render_threshold_table(&rows));
             }
         }
-        Command::Analyze {
-            n,
-            threshold,
-            json,
-        } => {
+        Command::Analyze { n, threshold, json } => {
             let fbas = match threshold {
                 Some(t) => Fbas::symmetric(n, t),
                 None => Fbas::symmetric_botho(n),
@@ -95,7 +93,10 @@ fn main() {
             } else {
                 println!("symmetric federation n={n}");
                 println!("  quorum_intersection:   {}", report.quorum_intersection);
-                println!("  min quorum card:       {:?}", report.min_quorum_cardinality);
+                println!(
+                    "  min quorum card:       {:?}",
+                    report.min_quorum_cardinality
+                );
                 println!(
                     "  min blocking card:     {:?}  (liveness buffer)",
                     report.min_blocking_set_cardinality

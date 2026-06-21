@@ -1,7 +1,6 @@
 //! The FBAS model: nodes with threshold-based quorum sets.
 
-use crate::nodeset::NodeSet;
-use crate::thresholds::botho_bft_threshold;
+use crate::{nodeset::NodeSet, thresholds::botho_bft_threshold};
 use serde::{Deserialize, Serialize};
 
 /// A quorum set: a threshold over a list of validator member indices.
@@ -145,8 +144,8 @@ impl Fbas {
         idx
     }
 
-    /// Admit a validator into a symmetric top-tier federation, re-deriving every
-    /// node's quorum set with Botho's BFT threshold for the new `n`.
+    /// Admit a validator into a symmetric top-tier federation, re-deriving
+    /// every node's quorum set with Botho's BFT threshold for the new `n`.
     ///
     /// Returns the new node's index.
     pub fn admit_symmetric(&mut self) -> usize {
@@ -168,10 +167,10 @@ impl Fbas {
     /// nodes and rewriting every quorum set to drop the removed member and
     /// renumber the survivors.
     ///
-    /// In a symmetric federation this also reduces each node's threshold via the
-    /// shared rule, because [`shun`](Fbas::shun) does not itself recompute
-    /// thresholds — use [`shun_symmetric`](Fbas::shun_symmetric) for symmetric
-    /// federations.
+    /// In a symmetric federation this also reduces each node's threshold via
+    /// the shared rule, because [`shun`](Fbas::shun) does not itself
+    /// recompute thresholds — use [`shun_symmetric`](Fbas::shun_symmetric)
+    /// for symmetric federations.
     pub fn shun(&mut self, idx: usize) {
         if idx >= self.nodes.len() {
             return;

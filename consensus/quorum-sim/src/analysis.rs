@@ -5,9 +5,7 @@
 //! and, at the curated-federation sizes Path A targets (`N ≤ ~20`), fast. The
 //! coNP-complete quorum-intersection check is decided exactly the same way.
 
-use crate::model::Fbas;
-use crate::nodeset::NodeSet;
-use crate::thresholds;
+use crate::{model::Fbas, nodeset::NodeSet, thresholds};
 use serde::{Deserialize, Serialize};
 
 /// Which threshold rule a [`ThresholdComparisonRow`] describes.

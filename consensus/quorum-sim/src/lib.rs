@@ -26,8 +26,8 @@
 //! # Key metrics
 //!
 //! - [`Fbas::is_quorum`] — quorum predicate.
-//! - [`Fbas::has_quorum_intersection`] — do all quorums pairwise intersect?
-//!   (A `false` here means a fork is possible.)
+//! - [`Fbas::has_quorum_intersection`] — do all quorums pairwise intersect? (A
+//!   `false` here means a fork is possible.)
 //! - [`Fbas::minimal_quorums`] — the smallest quorums (by set inclusion).
 //! - [`Fbas::minimal_blocking_sets`] — smallest sets whose failure halts the
 //!   network (the **liveness** buffer).

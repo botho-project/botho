@@ -1,8 +1,7 @@
 //! Higher-level reports: threshold-rule comparison and growth/churn timelines,
 //! with human-readable table and JSON (serde) rendering.
 
-use crate::analysis::ThresholdRule;
-use crate::model::Fbas;
+use crate::{analysis::ThresholdRule, model::Fbas};
 use serde::{Deserialize, Serialize};
 use std::fmt::Write as _;
 
@@ -188,7 +187,11 @@ pub fn render_churn_table(steps: &[ChurnStep]) -> String {
             s.n,
             opt(s.min_blocking_set_cardinality),
             opt(s.min_splitting_set_cardinality),
-            if s.quorum_intersection { "ok" } else { "BROKEN" },
+            if s.quorum_intersection {
+                "ok"
+            } else {
+                "BROKEN"
+            },
             if s.broke_quorum_intersection {
                 "FORK!"
             } else {

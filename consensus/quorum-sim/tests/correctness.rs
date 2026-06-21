@@ -3,10 +3,10 @@
 //! These are the acceptance bar for issue #511. Each asserts a known FBAS /
 //! threshold result that the analyzer must reproduce.
 
-use bth_quorum_sim::model::Fbas;
-use bth_quorum_sim::nodeset::NodeSet;
-use bth_quorum_sim::thresholds::{
-    botho_bft_threshold, supermajority_fault_tolerance, two_thirds_threshold,
+use bth_quorum_sim::{
+    model::Fbas,
+    nodeset::NodeSet,
+    thresholds::{botho_bft_threshold, supermajority_fault_tolerance, two_thirds_threshold},
 };
 
 /// #510: Botho's current formula degenerates to unanimity at n ≤ 3, so the
@@ -39,8 +39,14 @@ fn current_formula_unanimous_below_4_blocking_one() {
 #[test]
 fn two_of_four_disjoint_quorums_no_intersection() {
     let fbas = Fbas::symmetric(4, 2);
-    assert!(fbas.is_quorum(&NodeSet::from_indices([0, 1])), "{{A,B}} quorum");
-    assert!(fbas.is_quorum(&NodeSet::from_indices([2, 3])), "{{C,D}} quorum");
+    assert!(
+        fbas.is_quorum(&NodeSet::from_indices([0, 1])),
+        "{{A,B}} quorum"
+    );
+    assert!(
+        fbas.is_quorum(&NodeSet::from_indices([2, 3])),
+        "{{C,D}} quorum"
+    );
     assert!(
         !fbas.has_quorum_intersection(),
         "2-of-4 must NOT have quorum intersection (disjoint {{A,B}}/{{C,D}})"
