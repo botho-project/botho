@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from 'react'
 import { RemoteNodeAdapter, type WsConnectionStatus } from '@botho/adapters'
-import { AddressBook, ClaimLinkStore, saveWallet, loadWallet, loadWalletWithKey, getWalletInfo, deriveAddress, deriveKeypairs, parseAddress, isValidMnemonic, clearWallet, createClaimLinkMnemonic, buildClaimLink, VaultKey } from '@botho/core'
+import { AddressBook, ClaimLinkStore, EncryptedClaimLinks, saveWallet, loadWallet, loadWalletWithKey, getWalletInfo, deriveAddress, deriveKeypairs, parseAddress, isValidMnemonic, clearWallet, createClaimLinkMnemonic, buildClaimLink, VaultKey } from '@botho/core'
 import type { Balance, Contact, NodeInfo, Transaction, ClaimLinkRecord, Timestamp } from '@botho/core'
 import { buildSendTransaction, spendableBalance, buildOwnedHistory } from '@botho/wasm-signer'
 import { buildAndSubmitSend, scanEphemeral, sweepEphemeral, SWEEP_FEE_RESERVE } from '../lib/claim-link-ops'
@@ -235,7 +235,20 @@ async function deriveSessionVaultKey(password: string): Promise<VaultKey | null>
 const WalletContext = createContext<WalletContextValue | null>(null)
 
 const addressBook = new AddressBook()
-const claimLinkStore = new ClaimLinkStore()
+
+// Session vault key holder for at-rest encryption of sibling data (#474).
+// The wallet context keeps this in sync with `vaultKeyRef.current` on every
+// unlock/create/import/reset so the module-scope claim-link store can read the
+// key lazily. Null while locked or for a legacy plaintext wallet.
+let sessionVaultKey: VaultKey | null = null
+function setSessionVaultKey(key: VaultKey | null): void {
+  sessionVaultKey = key
+}
+
+// Claim-link bearer secrets are encrypted at rest under the session vault key
+// (#474). When locked (no key), the store reads as empty and refuses to write
+// plaintext secrets — records become available again on unlock.
+const claimLinkStore = new ClaimLinkStore(new EncryptedClaimLinks(() => sessionVaultKey))
 
 /** Polling interval when WebSocket is disconnected (30 seconds) */
 const FALLBACK_POLL_INTERVAL = 30000
@@ -297,6 +310,25 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   // password-derived key. Null while locked or for plaintext wallets. Cleared
   // on reset and on page refresh (in-memory only).
   const vaultKeyRef = useRef<VaultKey | null>(null)
+
+  /**
+   * Set the session vault key in memory AND publish it to the module-scope
+   * holder that the encrypted claim-link store reads (#474). When a key becomes
+   * available (unlock/create/import), reload the claim links so records that were
+   * unavailable while locked — and any legacy plaintext records needing
+   * re-wrapping — are loaded/migrated. Passing `null` clears the key, after which
+   * the encrypted store reads as empty.
+   */
+  const applyVaultKey = useCallback(async (key: VaultKey | null) => {
+    vaultKeyRef.current = key
+    setSessionVaultKey(key)
+    try {
+      await claimLinkStore.load()
+    } catch {
+      // Locked / no key: store degrades to empty rather than throwing.
+    }
+    setState(s => ({ ...s, claimLinks: claimLinkStore.getAll() }))
+  }, [])
 
   // Load address book on mount
   useEffect(() => {
@@ -474,8 +506,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     mnemonicRef.current = mnemonic
     // Derive + hold the session vault key (bound to the seed blob's salt) so
     // sibling data can be encrypted under the same key (#474/#476). Null for
-    // plaintext wallets.
-    vaultKeyRef.current = password ? await deriveSessionVaultKey(password) : null
+    // plaintext wallets. Publishing the key migrates+loads claim links.
+    await applyVaultKey(password ? await deriveSessionVaultKey(password) : null)
 
     setState(s => ({
       ...s,
@@ -508,7 +540,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
     // Store mnemonic in memory
     mnemonicRef.current = normalized
-    vaultKeyRef.current = password ? await deriveSessionVaultKey(password) : null
+    await applyVaultKey(password ? await deriveSessionVaultKey(password) : null)
 
     setState(s => ({
       ...s,
@@ -536,9 +568,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       throw new Error('No wallet found')
     }
 
-    // Store mnemonic + session vault key in memory
+    // Store mnemonic + session vault key in memory. Publishing the key loads +
+    // migrates outstanding claim links now that we can decrypt them (#474).
     mnemonicRef.current = stored.mnemonic
-    vaultKeyRef.current = stored.vaultKey
+    await applyVaultKey(stored.vaultKey)
 
     setState(s => ({ ...s, isLocked: false }))
 
@@ -567,9 +600,11 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const resetWallet = useCallback(() => {
     // Clear stored wallet from localStorage
     clearWallet()
-    // Clear mnemonic + vault key from memory
+    // Clear mnemonic + vault key from memory (also clears the module-scope key
+    // the encrypted claim-link store reads).
     mnemonicRef.current = null
     vaultKeyRef.current = null
+    setSessionVaultKey(null)
     // Reset state to initial
     setState(s => ({
       ...s,
