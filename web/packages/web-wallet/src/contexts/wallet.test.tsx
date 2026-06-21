@@ -2,9 +2,29 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
-import { render, screen, waitFor, act } from '@testing-library/react'
+import { render, screen, waitFor, act, cleanup } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { WalletProvider, useWallet } from './wallet'
+
+// Mock @botho/wasm-signer so these context tests never depend on the generated
+// wasm artifact (`packages/wasm-signer/pkg/`, produced by `build:wasm` and
+// git-ignored). The wallet context imports buildSendTransaction /
+// spendableBalance / buildOwnedHistory at module load; on a fresh checkout the
+// wasm pkg is absent, so anything that reaches those functions would otherwise
+// blow up with "wasm artifact not found" and poison the suite. None of the
+// assertions here exercise real signing/scanning (the adapter is mocked), so we
+// substitute inert stubs that keep the import hermetic and the suite fast.
+// buildSendTransaction is only ever reached via the encrypted-wallet claim-link
+// happy path, which is itself mocked at ../lib/claim-link-ops, so it is never
+// actually invoked — it is stubbed purely to satisfy the import.
+vi.mock('@botho/wasm-signer', () => ({
+  // No owned outputs => zero spendable balance; the context falls back to the
+  // mocked adapter balance, which is what the tests assert against.
+  spendableBalance: vi.fn().mockResolvedValue(0n),
+  // No owned outputs => empty client-side history.
+  buildOwnedHistory: vi.fn().mockResolvedValue([]),
+  buildSendTransaction: vi.fn().mockResolvedValue({ txHex: '0xstub' }),
+}))
 
 // Mock localStorage
 const localStorageMock = (() => {
@@ -102,6 +122,12 @@ describe('WalletContext', () => {
   })
 
   afterEach(() => {
+    // Explicitly unmount rendered trees between tests. Several tests in this
+    // file render the WalletProvider multiple times (and one unmounts +
+    // re-renders within a single test). Without a deterministic cleanup the
+    // mounted <div data-testid="address"> nodes accumulate in the jsdom body
+    // and screen.getByTestId('address') throws a "multiple elements" error.
+    cleanup()
     vi.clearAllMocks()
   })
 
@@ -421,6 +447,9 @@ describe('WalletContext', () => {
 
 describe('Import Wallet Integration', () => {
   beforeEach(() => {
+    // Unmount any tree left over from the previous test/suite so the
+    // data-testid="address" query stays unambiguous (see note above).
+    cleanup()
     localStorageMock.clear()
   })
 
