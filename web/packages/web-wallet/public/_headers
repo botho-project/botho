@@ -1,0 +1,28 @@
+# Cloudflare Pages headers for wallet.botho.io (#476)
+#
+# A strict Content-Security-Policy so that an XSS or malicious-dependency bug
+# cannot trivially exfiltrate wallet data: scripts and network egress are pinned
+# to our own origin plus the explicit Botho node RPC / faucet endpoints the
+# wallet talks to (see web/packages/web-wallet/src/config/networks.ts).
+#
+# Notes on the directives:
+#   - script-src 'self' 'wasm-unsafe-eval' : the in-browser signer is a
+#     WebAssembly module (@botho/wasm-signer); instantiating wasm requires
+#     'wasm-unsafe-eval'. There is NO 'unsafe-inline' and NO 'unsafe-eval' — the
+#     Vite build emits external scripts only and the PWA service-worker
+#     registration is done from a bundled module (vite-plugin-pwa
+#     injectRegister: null), not an inline script, so the build is CSP-clean.
+#   - connect-src : our origin (same-origin /rpc proxy used by e2e/preview) plus
+#     the three live SCP ingress / faucet node origins. https only.
+#   - style-src 'self' 'unsafe-inline' : the bundled Tailwind stylesheet is
+#     external, but allow inline style so framework/runtime style injection does
+#     not break rendering. Inline style cannot exfiltrate script-style and is a
+#     low-risk relaxation relative to script-src.
+#   - object-src 'none'; base-uri 'self'; frame-ancestors 'none' : disable
+#     plugins/embeds, lock <base>, and forbid being framed (clickjacking).
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' https://seed.botho.io https://seed2.botho.io https://faucet.botho.io; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; upgrade-insecure-requests
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: no-referrer
+  X-Frame-Options: DENY
+  Permissions-Policy: geolocation=(), microphone=(), camera=(), payment=()
