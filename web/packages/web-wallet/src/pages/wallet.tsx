@@ -9,8 +9,9 @@ import { NetworkSelector } from '../components/NetworkSelector'
 import { FaucetButton } from '../components/FaucetButton'
 import { SendLinkModal } from '../components/SendLinkModal'
 import { RequestModal } from '../components/RequestModal'
+import { ReceiveModal } from '../components/ReceiveModal'
 import { OutstandingLinks } from '../components/OutstandingLinks'
-import { Send, Link2, Download, RefreshCw, ArrowLeft, Shield, Eye, KeyRound, AlertCircle, Lock, Settings, Trash2, Users } from 'lucide-react'
+import { Send, Link2, Download, RefreshCw, ArrowLeft, Shield, Eye, KeyRound, AlertCircle, Lock, Settings, Trash2, Users, QrCode } from 'lucide-react'
 
 const STRENGTH_META: Record<PasswordStrength, { label: string; bars: number; color: string }> = {
   'too-short': { label: `At least ${MIN_PASSWORD_LENGTH} characters`, bars: 0, color: 'bg-danger' },
@@ -263,6 +264,7 @@ function WalletDashboard() {
   const [sendOpen, setSendOpen] = useState(false)
   const [sendLinkOpen, setSendLinkOpen] = useState(false)
   const [requestOpen, setRequestOpen] = useState(false)
+  const [receiveOpen, setReceiveOpen] = useState(false)
   const [isSending, setIsSending] = useState(false)
   const [showResetConfirm, setShowResetConfirm] = useState(false)
 
@@ -299,6 +301,9 @@ function WalletDashboard() {
     <>
       <Button onClick={() => setSendOpen(true)}>
         <Send size={16} className="mr-2" />Send
+      </Button>
+      <Button variant="secondary" onClick={() => setReceiveOpen(true)}>
+        <QrCode size={16} className="mr-2" />Receive
       </Button>
       <Button variant="secondary" onClick={() => setSendLinkOpen(true)}>
         <Link2 size={16} className="mr-2" />Send via Link
@@ -355,6 +360,12 @@ function WalletDashboard() {
       <SendLinkModal isOpen={sendLinkOpen} onClose={() => setSendLinkOpen(false)} />
 
       <RequestModal isOpen={requestOpen} onClose={() => setRequestOpen(false)} />
+
+      <ReceiveModal
+        isOpen={receiveOpen}
+        onClose={() => setReceiveOpen(false)}
+        onRequestLink={() => setRequestOpen(true)}
+      />
 
       {showResetConfirm && (
         <div className="fixed inset-0 bg-void/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 z-50">
