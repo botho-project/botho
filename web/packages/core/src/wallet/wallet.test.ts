@@ -16,6 +16,12 @@ import {
   isValidAddress,
   shortenAddress,
   deriveKeypairs,
+  loadWalletWithKey,
+  isVaultBlob,
+  needsRewrap,
+  MIN_PASSWORD_LENGTH,
+  passwordStrength,
+  LEGACY_PBKDF2_ITERATIONS,
 } from './index'
 
 // Mock localStorage
@@ -494,5 +500,145 @@ describe('Address Utilities', () => {
       expect(keypairs.viewPublic).not.toEqual(keypairs.spendPublic)
       expect(keypairs.viewPrivate).not.toEqual(keypairs.spendPrivate)
     })
+  })
+})
+
+// ============================================================================
+// SECURITY (#475): encrypt-by-default policy, versioned KDF, migration
+// ============================================================================
+
+const STORAGE_KEY_MNEMONIC = 'botho-wallet-mnemonic'
+const STORAGE_KEY_ADDRESS = 'botho-wallet-address'
+const STORAGE_KEY_ENCRYPTED = 'botho-wallet-encrypted'
+
+/** Re-create a LEGACY (pre-#475) 100k-iter, headerless encrypted blob. */
+async function legacyEncrypt(plaintext: string, password: string): Promise<string> {
+  const salt = crypto.getRandomValues(new Uint8Array(16))
+  const iv = crypto.getRandomValues(new Uint8Array(12))
+  const km = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveKey'])
+  const key = await crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt, iterations: LEGACY_PBKDF2_ITERATIONS, hash: 'SHA-256' },
+    km,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt'],
+  )
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(plaintext)))
+  const out = new Uint8Array(28 + ct.length)
+  out.set(salt, 0)
+  out.set(iv, 16)
+  out.set(ct, 28)
+  return Array.from(out).map((b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+describe('Password policy (#475)', () => {
+  beforeEach(() => localStorage.clear())
+
+  it('requires at least MIN_PASSWORD_LENGTH characters when saving with a password', async () => {
+    expect(MIN_PASSWORD_LENGTH).toBeGreaterThanOrEqual(8)
+    const short = 'a'.repeat(MIN_PASSWORD_LENGTH - 1)
+    await expect(saveWallet(TEST_MNEMONIC_12, short)).rejects.toThrow(/at least/i)
+  })
+
+  it('accepts a password at the minimum length', async () => {
+    const ok = 'a'.repeat(MIN_PASSWORD_LENGTH)
+    await expect(saveWallet(TEST_MNEMONIC_12, ok)).resolves.toBeUndefined()
+    expect(isWalletEncrypted()).toBe(true)
+  })
+
+  it('rates password strength', () => {
+    expect(passwordStrength('short')).toBe('too-short')
+    expect(passwordStrength('aaaaaaaa')).toBe('weak')
+    expect(passwordStrength('Abcdefg1!xyz')).toBe('strong')
+  })
+})
+
+describe('Encrypt-by-default + versioned KDF header (#475)', () => {
+  beforeEach(() => localStorage.clear())
+
+  it('writes a VERSIONED vault blob (not legacy) when a password is given', async () => {
+    await saveWallet(TEST_MNEMONIC_12, 'a-good-password')
+    const blob = localStorage.getItem(STORAGE_KEY_MNEMONIC)!
+    expect(blob).not.toContain(TEST_MNEMONIC_12) // encrypted
+    expect(isVaultBlob(blob)).toBe(true) // versioned header present
+    expect(needsRewrap(blob)).toBe(false) // already current
+  })
+
+  it('round-trips an encrypted wallet via the new format', async () => {
+    const pw = 'a-good-password'
+    await saveWallet(TEST_MNEMONIC_12, pw)
+    const stored = await loadWallet(pw)
+    expect(stored!.mnemonic).toBe(TEST_MNEMONIC_12)
+  })
+
+  it('rejects the wrong password on unlock', async () => {
+    await saveWallet(TEST_MNEMONIC_12, 'the-right-password')
+    await expect(loadWallet('the-wrong-password')).rejects.toThrow('Incorrect password')
+  })
+})
+
+describe('Legacy wallet migration on unlock (#475)', () => {
+  beforeEach(() => localStorage.clear())
+
+  it('migrates a legacy 100k-iter wallet to the versioned format on unlock', async () => {
+    const pw = 'legacy-but-long-enough'
+    // Seed storage in the OLD format by hand.
+    const legacyBlob = await legacyEncrypt(TEST_MNEMONIC_12, pw)
+    localStorage.setItem(STORAGE_KEY_MNEMONIC, legacyBlob)
+    localStorage.setItem(STORAGE_KEY_ENCRYPTED, 'true')
+    localStorage.setItem(STORAGE_KEY_ADDRESS, deriveAddress(TEST_MNEMONIC_12))
+
+    expect(isVaultBlob(legacyBlob)).toBe(false)
+    expect(needsRewrap(legacyBlob)).toBe(true)
+
+    // Unlock: must succeed AND re-wrap to the current format.
+    const stored = await loadWallet(pw)
+    expect(stored!.mnemonic).toBe(TEST_MNEMONIC_12)
+
+    const upgraded = localStorage.getItem(STORAGE_KEY_MNEMONIC)!
+    expect(upgraded).not.toBe(legacyBlob)
+    expect(isVaultBlob(upgraded)).toBe(true)
+    expect(needsRewrap(upgraded)).toBe(false)
+
+    // The migrated wallet still unlocks with the same password.
+    const reread = await loadWallet(pw)
+    expect(reread!.mnemonic).toBe(TEST_MNEMONIC_12)
+  })
+
+  it('migrates a legacy PLAINTEXT wallet to encrypted on next save', async () => {
+    // Old plaintext storage: mnemonic stored verbatim, encrypted flag false.
+    localStorage.setItem(STORAGE_KEY_MNEMONIC, TEST_MNEMONIC_12)
+    localStorage.setItem(STORAGE_KEY_ENCRYPTED, 'false')
+    localStorage.setItem(STORAGE_KEY_ADDRESS, deriveAddress(TEST_MNEMONIC_12))
+
+    // A plaintext wallet loads without a password (so the user is never locked out).
+    const loaded = await loadWallet()
+    expect(loaded!.mnemonic).toBe(TEST_MNEMONIC_12)
+    expect(getWalletInfo().isEncrypted).toBe(false)
+
+    // Re-save WITH a password (the encrypt-by-default UI path) upgrades it.
+    await saveWallet(loaded!.mnemonic, 'now-encrypted-pass')
+    const blob = localStorage.getItem(STORAGE_KEY_MNEMONIC)!
+    expect(blob).not.toBe(TEST_MNEMONIC_12)
+    expect(isVaultBlob(blob)).toBe(true)
+    expect(getWalletInfo().isEncrypted).toBe(true)
+    const reread = await loadWallet('now-encrypted-pass')
+    expect(reread!.mnemonic).toBe(TEST_MNEMONIC_12)
+  })
+
+  it('loadWalletWithKey returns a usable session vault key after migration', async () => {
+    const pw = 'session-key-password'
+    const legacyBlob = await legacyEncrypt(TEST_MNEMONIC_12, pw)
+    localStorage.setItem(STORAGE_KEY_MNEMONIC, legacyBlob)
+    localStorage.setItem(STORAGE_KEY_ENCRYPTED, 'true')
+    localStorage.setItem(STORAGE_KEY_ADDRESS, deriveAddress(TEST_MNEMONIC_12))
+
+    const unlocked = await loadWalletWithKey(pw)
+    expect(unlocked!.mnemonic).toBe(TEST_MNEMONIC_12)
+    expect(unlocked!.vaultKey).not.toBeNull()
+
+    // The session key can encrypt sibling data (#474/#476) and read it back.
+    const sibling = await unlocked!.vaultKey!.encryptString('claim-link-secret')
+    expect(await unlocked!.vaultKey!.decryptString(sibling)).toBe('claim-link-secret')
   })
 })
