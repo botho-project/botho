@@ -400,6 +400,64 @@ impl QuorumConfig {
         }
     }
 
+    /// Minimum participating node count required for genuine Byzantine-fault
+    /// tolerance (f >= 1) under the SCP 3f+1 bound.
+    ///
+    /// `3f + 1 <= n` with `f >= 1` requires `n >= 4`. Below this the quorum is
+    /// degenerate (n-of-n or a bare crash-majority) and tolerates *zero*
+    /// Byzantine faults regardless of the configured [`FaultModel`].
+    pub const MIN_BFT_NODES: usize = 4;
+
+    /// Whether a `Recommended`-mode cluster of `node_count` participating nodes
+    /// (including self) is genuinely Byzantine-fault-tolerant.
+    ///
+    /// Returns `true` only when `node_count >= 4` (the hard 3f+1 >= 4 bound for
+    /// f=1) and the node is running in `Recommended` mode. In `Explicit` mode
+    /// the operator owns the threshold/membership decision, so this always
+    /// returns `true` (no auto-derived warning).
+    ///
+    /// Below 4 nodes the auto-derived quorum is degenerate — n=2 -> 2-of-2,
+    /// n=3 -> 3-of-3 under `Bft`, or a bare crash-majority under `Crash` — and
+    /// tolerates no Byzantine (arbitrarily malicious) member. See
+    /// [`Self::is_degenerate_quorum`].
+    pub fn is_bft_fault_tolerant(&self, node_count: usize) -> bool {
+        match self.mode {
+            QuorumMode::Explicit => true,
+            QuorumMode::Recommended => node_count >= Self::MIN_BFT_NODES,
+        }
+    }
+
+    /// Whether a `Recommended`-mode cluster of `node_count` participating nodes
+    /// (including self) has a *degenerate* quorum that tolerates zero Byzantine
+    /// faults (`node_count < 4`).
+    ///
+    /// This is the inverse of [`Self::is_bft_fault_tolerant`]: it is `true`
+    /// only in `Recommended` mode with fewer than [`Self::MIN_BFT_NODES`]
+    /// nodes.
+    pub fn is_degenerate_quorum(&self, node_count: usize) -> bool {
+        matches!(self.mode, QuorumMode::Recommended) && node_count < Self::MIN_BFT_NODES
+    }
+
+    /// Build the loud operator warning for a degenerate `Recommended`-mode
+    /// quorum, or `None` when the cluster is BFT (>= 4 nodes) or in `Explicit`
+    /// mode.
+    ///
+    /// The wording is deliberately honest (#509 research, #510 Thread A): below
+    /// 4 nodes the cluster is **not Byzantine-fault-tolerant at all** — it
+    /// tolerates *zero* node failures (a degenerate n-of-n quorum), not merely
+    /// "degraded". `3f + 1 >= 4` is a hard bound for f=1.
+    pub fn degenerate_quorum_warning(&self, node_count: usize) -> Option<String> {
+        if !self.is_degenerate_quorum(node_count) {
+            return None;
+        }
+        Some(format!(
+            "WARNING: {node_count}-node cluster in recommended mode is NOT \
+             Byzantine-fault-tolerant — it tolerates ZERO node failures \
+             (degenerate {node_count}-of-{node_count} quorum, crash-stop only, \
+             not BFT). Add a 4th independent operator for f=1 BFT (3f+1>=4)."
+        ))
+    }
+
     /// Check if we can reach quorum with the given connected peers
     /// Returns (can_mine, quorum_size, threshold)
     pub fn can_reach_quorum(&self, connected_peer_ids: &[String]) -> (bool, usize, usize) {
@@ -914,6 +972,87 @@ mod tests {
         assert_eq!(quorum.effective_threshold(3), 3); // n=4: 3-of-4
         assert_eq!(quorum.effective_threshold(4), 4); // n=5: 4-of-5
         assert_eq!(quorum.effective_threshold(5), 5); // n=6: 5-of-6
+    }
+
+    #[test]
+    fn test_quorum_degenerate_below_four_recommended() {
+        // Recommended mode (default): below 4 participating nodes the quorum is
+        // degenerate (zero Byzantine-fault tolerance); >= 4 is genuinely BFT.
+        let quorum = QuorumConfig::default();
+        assert_eq!(quorum.mode, QuorumMode::Recommended);
+
+        for n in 1..=3 {
+            assert!(
+                quorum.is_degenerate_quorum(n),
+                "n={n} must be flagged degenerate in recommended mode"
+            );
+            assert!(
+                !quorum.is_bft_fault_tolerant(n),
+                "n={n} must NOT be BFT in recommended mode"
+            );
+        }
+        for n in 4..=8 {
+            assert!(
+                !quorum.is_degenerate_quorum(n),
+                "n={n} must NOT be flagged degenerate (>= 4 is BFT)"
+            );
+            assert!(
+                quorum.is_bft_fault_tolerant(n),
+                "n={n} must be BFT in recommended mode (3f+1 >= 4)"
+            );
+        }
+    }
+
+    #[test]
+    fn test_quorum_degenerate_warning_fires_below_four() {
+        let quorum = QuorumConfig::default();
+
+        // n < 4 -> loud, honest warning naming the n-of-n quorum and BFT bound.
+        for n in 2..=3 {
+            let warning = quorum
+                .degenerate_quorum_warning(n)
+                .unwrap_or_else(|| panic!("expected warning at n={n}"));
+            assert!(warning.contains("NOT"), "warning must be loud: {warning}");
+            assert!(
+                warning.contains("Byzantine-fault-tolerant"),
+                "warning must be honest about BFT: {warning}"
+            );
+            assert!(
+                warning.contains("ZERO"),
+                "warning must state zero fault tolerance: {warning}"
+            );
+            assert!(
+                warning.contains(&format!("{n}-of-{n}")),
+                "warning must name the degenerate n-of-n quorum: {warning}"
+            );
+        }
+
+        // n >= 4 -> no warning (genuine BFT).
+        for n in 4..=6 {
+            assert!(
+                quorum.degenerate_quorum_warning(n).is_none(),
+                "no warning expected at n={n}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_quorum_degenerate_explicit_mode_never_warns() {
+        // Explicit mode: operator owns the threshold/membership, so no
+        // auto-derived degenerate-quorum warning regardless of node count.
+        let quorum = QuorumConfig {
+            mode: QuorumMode::Explicit,
+            fault_model: FaultModel::default(),
+            threshold: 2,
+            members: vec!["peer1".to_string(), "peer2".to_string()],
+            min_peers: 1,
+        };
+
+        for n in 1..=6 {
+            assert!(!quorum.is_degenerate_quorum(n));
+            assert!(quorum.is_bft_fault_tolerant(n));
+            assert!(quorum.degenerate_quorum_warning(n).is_none());
+        }
     }
 
     #[test]

@@ -335,6 +335,19 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
     println!("Quorum mode: {}", mode_str);
     println!("Quorum status: {}", quorum_message);
 
+    // Loudly warn when a `recommended`-mode cluster is below the BFT bound
+    // (< 4 participating nodes => degenerate n-of-n quorum, zero fault
+    // tolerance). The node count includes self (#509). We do NOT block startup;
+    // small clusters remain supported, just flagged.
+    let participating_nodes = connected_peers.len() + 1;
+    if let Some(warning) = config
+        .network
+        .quorum
+        .degenerate_quorum_warning(participating_nodes)
+    {
+        warn!("{}", warning);
+    }
+
     // Build QuorumBuilder for SCP (still needed for consensus service)
     let mut quorum = QuorumBuilder::new(config.network.quorum.threshold);
     for peer in discovery.peer_table() {
@@ -368,7 +381,8 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
         node.wallet_spend_key(),
         config.network.cors_origins.clone(),
         ws_broadcaster.clone(),
-    );
+    )
+    .with_quorum(config.network.quorum.clone());
 
     // Initialize wallet for RPC (balance checking, faucet, etc.)
     if let Some(mnemonic) = config.mnemonic() {
