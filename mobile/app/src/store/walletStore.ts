@@ -19,8 +19,22 @@ import type {
   NodeStatusInfo,
 } from "../types/wallet";
 import { NativeWallet } from "../native/walletModule";
-import { DEFAULT_NODE } from "../config/nodes";
-import { saveNodeUrl, loadNodeUrl } from "../native/keychain";
+import {
+  DEFAULT_NODE,
+  seedNodes,
+  nodeIdForUrl,
+  labelFromUrl,
+  type ManagedNode,
+} from "../config/nodes";
+import {
+  saveNodeUrl,
+  loadNodeUrl,
+  saveNodeList,
+  loadNodeList,
+} from "../native/keychain";
+import { fetchNodeIdentity, normalizeNodeUrl } from "../native/nodeIdentity";
+import type { NodeIdentity } from "../types/wallet";
+import { compareNetwork, isProtocolCompatible } from "../config/network";
 
 /** Extract a user-facing message from a thrown bridge error. */
 function errorMessage(error: unknown, fallback: string): string {
@@ -48,6 +62,21 @@ interface WalletState {
   nodeUrl: string;
   isConnected: boolean;
   nodeStatus: NodeStatusInfo | null;
+
+  // User-managed list of trusted nodes (seeded with the testnet defaults).
+  nodes: ManagedNode[];
+}
+
+/** Result of verifying a candidate node before adding it. */
+export interface VerifyNodeResult {
+  /** Normalized URL that was probed. */
+  url: string;
+  /** The identity the node reported. */
+  identity: NodeIdentity;
+  /** Whether the node's network matches the wallet's expected network. */
+  networkMatches: boolean;
+  /** Whether the node's protocol is compatible with this client. */
+  protocolCompatible: boolean;
 }
 
 /** Wallet actions */
@@ -56,6 +85,15 @@ interface WalletActions {
   setNodeUrl: (url: string) => Promise<void>;
   refreshNodeStatus: () => Promise<void>;
   hydrateNodeUrl: () => Promise<void>;
+
+  // User-managed trusted node list
+  hydrateNodes: () => Promise<void>;
+  verifyNode: (url: string) => Promise<VerifyNodeResult>;
+  addVerifiedNode: (
+    result: VerifyNodeResult,
+    label?: string
+  ) => Promise<ManagedNode>;
+  removeNode: (id: string) => Promise<void>;
 
   // Session management
   unlock: (mnemonic: string) => Promise<void>;
@@ -97,6 +135,8 @@ export const useWalletStore = create<WalletStore>((set, get) => ({
   nodeUrl: DEFAULT_NODE_URL,
   isConnected: false,
   nodeStatus: null,
+  // Seeded with the testnet defaults; replaced by the persisted list on hydrate.
+  nodes: seedNodes(),
 
   // Set node URL: persist it, push it to the native bridge, and refresh health.
   setNodeUrl: async (url: string) => {
@@ -121,6 +161,104 @@ export const useWalletStore = create<WalletStore>((set, get) => ({
     } catch (error) {
       // Fall back to the default; surface but do not block startup.
       set({ error: errorMessage(error, "Failed to load node selection") });
+    }
+  },
+
+  // Load the persisted user-managed node list (or seed defaults on first run).
+  hydrateNodes: async () => {
+    try {
+      const stored = await loadNodeList();
+      if (stored && stored.length > 0) {
+        set({ nodes: stored });
+      } else {
+        // First run: seed with the testnet defaults and persist them so the
+        // user can edit the list from a stable starting point.
+        const seeds = seedNodes();
+        set({ nodes: seeds });
+        await saveNodeList(seeds);
+      }
+    } catch (error) {
+      // Non-fatal: keep the in-memory seed list.
+      set({ error: errorMessage(error, "Failed to load node list") });
+    }
+  },
+
+  // Verify a candidate node's identity (node_getIdentity) before trusting it.
+  // Throws NodeIdentityError on unreachable / non-Botho / older nodes so the UI
+  // can show an inline error; on success returns the identity plus the
+  // network/protocol compatibility flags for the confirmation step.
+  verifyNode: async (url: string): Promise<VerifyNodeResult> => {
+    const normalized = normalizeNodeUrl(url);
+    const identity = await fetchNodeIdentity(normalized);
+    return {
+      url: normalized,
+      identity,
+      networkMatches: compareNetwork(identity.network) === "match",
+      protocolCompatible: isProtocolCompatible(
+        identity.protocolVersion,
+        identity.minProtocolVersion
+      ),
+    };
+  },
+
+  // Add a node the user has verified and chosen to trust. Persists the updated
+  // list. If a node with the same URL already exists it is updated in place
+  // (re-verification refreshes the stored identity) rather than duplicated.
+  addVerifiedNode: async (
+    result: VerifyNodeResult,
+    label?: string
+  ): Promise<ManagedNode> => {
+    const entry: ManagedNode = {
+      id: nodeIdForUrl(result.url),
+      label: label?.trim() || labelFromUrl(result.url),
+      url: result.url,
+      description: "User-added trusted node",
+      isFaucet: false,
+      source: "user",
+      verifiedIdentity: result.identity,
+    };
+
+    const existing = get().nodes;
+    const idx = existing.findIndex((n) => n.url === result.url);
+    const next =
+      idx >= 0
+        ? existing.map((n, i) =>
+            i === idx ? { ...n, ...entry, source: n.source } : n
+          )
+        : [...existing, entry];
+
+    set({ nodes: next });
+    try {
+      await saveNodeList(next);
+    } catch (error) {
+      set({ error: errorMessage(error, "Failed to save node") });
+    }
+    return entry;
+  },
+
+  // Remove a user-added node. Seed nodes cannot be removed (they are the
+  // app's known-good defaults). If the removed node is the active one, fall
+  // back to the first remaining node.
+  removeNode: async (id: string): Promise<void> => {
+    const existing = get().nodes;
+    const target = existing.find((n) => n.id === id);
+    if (!target || target.source === "seed") return;
+
+    const next = existing.filter((n) => n.id !== id);
+    set({ nodes: next });
+
+    // If we removed the active node, switch to a remaining one.
+    if (target.url === get().nodeUrl) {
+      const fallback = next[0];
+      if (fallback) {
+        await get().setNodeUrl(fallback.url);
+      }
+    }
+
+    try {
+      await saveNodeList(next);
+    } catch (error) {
+      set({ error: errorMessage(error, "Failed to remove node") });
     }
   },
 

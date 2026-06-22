@@ -8,6 +8,7 @@
 
 import * as SecureStore from "expo-secure-store";
 import * as LocalAuthentication from "expo-local-authentication";
+import type { ManagedNode } from "../config/nodes";
 
 /** Keychain key for encrypted wallet data */
 const WALLET_KEY = "botho_encrypted_wallet";
@@ -15,8 +16,11 @@ const WALLET_KEY = "botho_encrypted_wallet";
 /** Keychain key for sync height */
 const SYNC_HEIGHT_KEY = "botho_sync_height";
 
-/** Keychain key for node URL preference */
+/** Keychain key for node URL preference (the active/selected node). */
 const NODE_URL_KEY = "botho_node_url";
+
+/** Keychain key for the user-managed list of trusted nodes. */
+const NODE_LIST_KEY = "botho_node_list";
 
 /** Stored wallet data structure */
 export interface StoredWallet {
@@ -182,4 +186,34 @@ export async function saveNodeUrl(url: string): Promise<void> {
  */
 export async function loadNodeUrl(): Promise<string | null> {
   return SecureStore.getItemAsync(NODE_URL_KEY);
+}
+
+/**
+ * Save the user-managed list of trusted nodes.
+ *
+ * Stored as JSON in the secure store (no biometric prompt: node URLs/identity
+ * are not secrets, but they belong in secure store alongside the rest of the
+ * wallet preferences and out of any cloud backup).
+ */
+export async function saveNodeList(nodes: ManagedNode[]): Promise<void> {
+  await SecureStore.setItemAsync(NODE_LIST_KEY, JSON.stringify(nodes));
+}
+
+/**
+ * Load the user-managed list of trusted nodes.
+ *
+ * Returns `null` when no list has been persisted yet (first run), so callers
+ * can fall back to the seed node list.
+ */
+export async function loadNodeList(): Promise<ManagedNode[] | null> {
+  try {
+    const data = await SecureStore.getItemAsync(NODE_LIST_KEY);
+    if (!data) return null;
+    const parsed: unknown = JSON.parse(data);
+    if (!Array.isArray(parsed)) return null;
+    return parsed as ManagedNode[];
+  } catch (error) {
+    console.error("Failed to load node list:", error);
+    return null;
+  }
 }

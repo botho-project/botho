@@ -15,11 +15,14 @@ const queryClient = new QueryClient();
 export default function RootLayout() {
   const checkSession = useWalletStore((state) => state.checkSession);
   const hydrateNodeUrl = useWalletStore((state) => state.hydrateNodeUrl);
+  const hydrateNodes = useWalletStore((state) => state.hydrateNodes);
 
-  // Apply the persisted node selection to the bridge before anything else.
+  // Load the user-managed node list and apply the persisted node selection to
+  // the bridge before anything else.
   useEffect(() => {
+    hydrateNodes();
     hydrateNodeUrl();
-  }, [hydrateNodeUrl]);
+  }, [hydrateNodes, hydrateNodeUrl]);
 
   // Check session on app mount and periodically
   useEffect(() => {

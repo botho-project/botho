@@ -84,6 +84,38 @@ export interface NodeStatusInfo {
   peerCount: number;
 }
 
+/**
+ * Verifiable node identity returned by the `node_getIdentity` RPC (#500, epic
+ * #441 Phase P1). A thin client fetches this for a candidate node *before*
+ * trusting it for RPC ingress, so the user can confirm which node they are
+ * talking to and the app can reject network / protocol mismatches.
+ *
+ * Field names mirror the JSON keys emitted by the node's RPC handler
+ * (`botho/src/rpc/mod.rs::handle_node_identity`).
+ */
+export interface NodeIdentity {
+  /** libp2p peer ID derived from the node's persistent keypair (stable). */
+  peerId: string;
+  /** SCP node-id signing public key (hex), derived from the peer ID. */
+  nodeId: string;
+  /** Network the node belongs to (e.g. "botho-testnet" / "botho-mainnet"). */
+  network: string;
+  /** Wire-protocol version the node speaks (e.g. "2.0.0"). */
+  protocolVersion: string;
+  /** Minimum protocol version the node will accept from peers. */
+  minProtocolVersion: string;
+  /** Node software version (e.g. "0.2.0"). */
+  nodeVersion: string;
+  /** Build provenance (git commit short hash, or "unknown"). */
+  gitCommit: string;
+  /** DNS-seed discovery namespace for the node's network. */
+  dnsSeedDomain: string;
+  /** Current chain tip height the node reports. */
+  chainHeight: number;
+  /** Current chain tip hash (hex). */
+  tipHash: string;
+}
+
 /** Wallet error types (matching Rust MobileWalletError) */
 export type WalletErrorType =
   | "WalletLocked"
