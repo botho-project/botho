@@ -99,6 +99,43 @@ pub fn mine_block_with_reward(network: &TestNetwork, miner_idx: usize, reward: u
     thread::sleep(Duration::from_millis(150));
 }
 
+/// Drive one block where *every* node simultaneously proposes its own
+/// competing coinbase (the all-minter regime from #427 Finding 3).
+///
+/// Each of the `num_nodes` wallets mints a candidate coinbase for the next
+/// height and all of them are broadcast together, so SCP must converge on a
+/// single winner among the competing proposals. This is the small-cluster
+/// "simultaneous start" stress that the convergence harness asserts must not
+/// fork or stall — in contrast to [`mine_block`], which injects a single
+/// uncontested coinbase.
+///
+/// Returns `true` if all nodes reach the new height within `timeout`.
+pub fn mine_block_all_minters(network: &TestNetwork, timeout: Duration) -> bool {
+    let node = network.get_node(0);
+    let state = node.chain_state();
+    let prev_hash = node.get_tip().hash();
+    let height = state.height + 1;
+    drop(node);
+
+    // Fresh round: drop any stale candidates so the pending pool holds only the
+    // competing coinbases for this height.
+    network.pending_minting_txs.lock().unwrap().clear();
+
+    // Every node mints and broadcasts a competing coinbase for the same height.
+    for miner_idx in 0..network.config.num_nodes {
+        let miner_address = network.wallets[miner_idx].default_address();
+        let minting_tx =
+            create_mock_minting_tx(height, INITIAL_BLOCK_REWARD, &miner_address, prev_hash);
+        network.broadcast_minting_tx(minting_tx);
+    }
+
+    let reached = network.wait_for_height(height, timeout);
+    // Brief settle so every node has applied the externalized block before the
+    // caller inspects per-height state.
+    thread::sleep(Duration::from_millis(150));
+    reached
+}
+
 /// Broadcast a transaction and mine until it is confirmed on-chain.
 ///
 /// Confirmation is detected by the transaction's first key image becoming
