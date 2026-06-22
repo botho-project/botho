@@ -85,6 +85,20 @@ export class FakeStore implements RigStore {
     return this.rows.get(subscriptionId)
   }
 
+  async getByCustomer(stripeCustomer: string): Promise<RigRecord | undefined> {
+    // Mirror D1RigStore: live rigs before terminated, then newest createdAt.
+    const matches = [...this.rows.values()].filter(
+      (r) => r.stripeCustomer === stripeCustomer,
+    )
+    matches.sort((a, b) => {
+      const aTerm = a.state === 'terminated' ? 1 : 0
+      const bTerm = b.state === 'terminated' ? 1 : 0
+      if (aTerm !== bTerm) return aTerm - bTerm
+      return b.createdAt - a.createdAt
+    })
+    return matches[0]
+  }
+
   async insertProvisioning(rec: NewRigRecord): Promise<RigRecord> {
     if (this.rows.has(rec.subscriptionId)) {
       throw new DuplicateSubscriptionError(rec.subscriptionId)

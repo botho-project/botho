@@ -20,9 +20,16 @@ This package implements:
   `teardownRig` (`customer.subscription.deleted` / `invoice.payment_failed`).
   Idempotent against Stripe's retries (the provisioner dedups by
   `subscription_id`); unknown event types are a 2xx no-op.
+- **P6.3 — user→node mapping + status lookup** (#458 §3 step 5 + §4 + §6, issue
+  #507): a `/status` endpoint that, for an authenticated user (a **magic-link
+  status token** that binds to one Stripe customer), returns their rig's RPC URL,
+  lifecycle state, and a **live health summary from `node_getStatus`**. A
+  `/portal` endpoint opens a **Stripe Customer Portal** session so the user can
+  manage/cancel the subscription. Both are **authz-scoped**: the customer id only
+  ever comes from the verified token, and the D1 lookup is keyed on it, so a user
+  can only see their own rig. `/status` is read-only — it can never provision.
 
 > Out of scope here (later phases of #458 §8):
-> - `/status` (user looks up their rig) — **P6.3**
 > - tighter provisioner IAM policy + the orphan-reconciliation cron — **SEC (#508)**
 >
 > The frontend "Get a rig" surface that calls `/checkout` lives in
@@ -88,6 +95,8 @@ wrangler secret put BOTHO_BINARY_SHA256
 |--------|-------------|--------------------------------------------------------------|
 | POST   | `/checkout` | Create a `mode=subscription` Stripe Checkout Session.        |
 | POST   | `/webhook`  | Stripe-signed webhook → provision / deprovision (#506).      |
+| GET    | `/status`   | Authenticated rig lookup: RPC URL + state + health (#507).   |
+| POST   | `/portal`   | Open a Stripe Customer Portal session (manage/cancel, #507). |
 | GET    | `/healthz`  | Liveness probe.                                              |
 
 There is **no `/provision` route** — a managed rig can only be launched via the
@@ -175,6 +184,60 @@ stripe listen --forward-to localhost:8787/webhook   # prints a whsec_ for .dev.v
 stripe trigger checkout.session.completed
 ```
 
+### `GET /status` (#507 — the authenticated rig lookup)
+
+A returning user looks up their rig with a **magic-link status token** — the
+MVP identity model (#458 §4): no password, the signed link IS the credential.
+
+```
+GET /status?token=<cus_…>.<exp>.<hmac>
+```
+
+The token is `<stripeCustomerId>.<expUnixSeconds>.<HMAC-SHA256(STATUS_LINK_SECRET,
+"<customerId>.<exp>")>` (minted by `mintStatusToken`). The handler:
+
+1. Verifies the HMAC (constant-time) and the expiry. A tampered customer id or
+   forged/expired token → **401** with no data leak (`verifyStatusToken`).
+2. Takes the customer id **only from the verified token**, never from the
+   request, and looks the rig up keyed on that customer (`getByCustomer`). So a
+   valid token for customer A can never surface customer B's rig.
+3. Probes the rig's health via `node_getStatus` (only for `running` rigs; a
+   `provisioning`/`suspended`/`terminated` rig reports `health.status:"unknown"`
+   without a node call). A down node never fails the response — it reports
+   `"offline"`.
+
+**Success response** (`200`):
+
+```json
+{
+  "rigId": "abc123",
+  "rpcUrl": "https://rig-abc123.testnet.botho.io/rpc",
+  "state": "running",
+  "region": "us-west-2",
+  "health": { "status": "online", "chainHeight": 42, "synced": true },
+  "walletDeepLink": "https://wallet.botho.io/wallet?rpc=https%3A%2F%2Frig-abc123.testnet.botho.io%2Frpc"
+}
+```
+
+`walletDeepLink` opens the PWA with the rig's RPC pre-selected as the "custom
+RPC" ingress (#458 §3 step 5).
+
+**Errors:** `400` missing token, `401` invalid/expired/forged token (no leak),
+`404` token valid but the customer has no rig, `405` non-GET, `500` not
+configured (`STATUS_LINK_SECRET` / `WALLET_BASE_URL` unset).
+
+### `POST /portal` (#507 — Stripe Customer Portal)
+
+```json
+{ "token": "<cus_…>.<exp>.<hmac>" }
+```
+
+Verifies the same status token, then creates a Stripe **Billing Portal** session
+for the verified customer and returns `{ "url": "https://billing.stripe.com/…" }`
+to redirect the browser to. The customer id comes from the token, so a user can
+only open their own portal. **Errors:** `400` missing token, `401` invalid
+token, `405` non-POST, `500` not configured, `502` Stripe rejected the request.
+
 ## Configuration (secrets & vars)
 
 All secrets come from Worker secrets / vars — **never the repo** (#458 §2, §5).
@@ -184,9 +247,12 @@ All secrets come from Worker secrets / vars — **never the repo** (#458 §2, §
 | `STRIPE_SECRET_KEY`    | secret | TEST key (`sk_test_...`) while on testnet (#458 §7).        |
 | `STRIPE_PRICE_ID`      | secret | The recurring $50/mo Price id (`price_...`). See below.     |
 | `STRIPE_WEBHOOK_SECRET`| secret | Webhook signing secret (`whsec_...`). Required for `/webhook`.|
+| `STATUS_LINK_SECRET`   | secret | HMAC secret for magic-link status tokens. Required for `/status` + `/portal`.|
 | `CHECKOUT_SUCCESS_URL` | var    | Stripe success redirect (in `wrangler.toml`).               |
 | `CHECKOUT_CANCEL_URL`  | var    | Stripe cancel redirect (in `wrangler.toml`).                |
-| `ALLOWED_ORIGINS`      | var    | Comma-separated browser origins allowed to call `/checkout`.|
+| `WALLET_BASE_URL`      | var    | Wallet origin for the "open in wallet" deep link.           |
+| `PORTAL_RETURN_URL`    | var    | Where Stripe returns after the Customer Portal closes.      |
+| `ALLOWED_ORIGINS`      | var    | Comma-separated browser origins allowed to call the API.    |
 
 ### Stripe setup (one-time, TEST mode)
 
@@ -240,6 +306,14 @@ signature crypto (valid / tampered / wrong-secret / stale / missing), the
 event→action mapping, raw-body verification, idempotent replay (no double
 launch), teardown, and the unknown-event no-op — all with in-memory provisioner
 fakes (no network, no live Stripe/AWS/DNS/D1).
+
+`src/status-link.test.ts`, `src/status.test.ts`, and
+`src/status-handler.test.ts` cover the `/status` + `/portal` surface: token
+mint/verify (round-trip, tampered customer id, wrong secret, expired), the
+`node_getStatus` health summary (online/offline/never-throws), the wallet deep
+link, the **authz boundary** (a user gets their own rig, never another's → 404),
+and the HTTP handlers (200 / 400 missing token / 401 forged token / 404 no rig /
+500 unconfigured) — all with an in-memory store + mocked node/Stripe fetch.
 
 ## Deploy
 

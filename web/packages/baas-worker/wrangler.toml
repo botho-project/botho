@@ -14,6 +14,11 @@
 #   STRIPE_WEBHOOK_SECRET  Webhook signing secret ("whsec_..."). The /webhook
 #                       endpoint HMAC-verifies every Stripe-Signature against this
 #                       over the RAW body before provisioning (#458 §5). Required.
+#   STATUS_LINK_SECRET  HMAC secret for magic-link status tokens (P6.3, #458 §4).
+#                       The /status + /portal endpoints verify the token against
+#                       this; it binds to ONE Stripe customer so a user only ever
+#                       sees their own rig. Any long random string. Required for
+#                       /status and /portal.
 #   --- provisioner (#502, #458 §3/§5) — a DEDICATED, tightly-scoped IAM user ---
 #   AWS_ACCESS_KEY_ID       provisioner IAM user access key.
 #   AWS_SECRET_ACCESS_KEY   provisioner IAM user secret key.
@@ -45,8 +50,14 @@ database_id = "REPLACE_WITH_D1_DATABASE_ID"
 # the Pages site that hosts the "Get a rig" surface.
 CHECKOUT_SUCCESS_URL = "https://botho.io/rig/success"
 CHECKOUT_CANCEL_URL = "https://botho.io/rig"
-# Browser origins permitted to call /checkout (comma-separated).
+# Browser origins permitted to call /checkout, /status, /portal (comma-separated).
 ALLOWED_ORIGINS = "https://botho.io,https://wallet.botho.io"
+
+# --- status page / magic-link lookup (P6.3, #458 §4/§6) -------------------
+# Wallet origin used to build the "open in wallet" deep link (#458 §3 step 5).
+WALLET_BASE_URL = "https://wallet.botho.io"
+# Where Stripe returns the user after they close the Customer Portal.
+PORTAL_RETURN_URL = "https://botho.io/rig/status"
 
 # --- provisioner non-secret config (#502) ---------------------------------
 # Compute shape (proven seed/faucet rig). Non-secret identifiers.

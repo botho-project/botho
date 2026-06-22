@@ -21,7 +21,18 @@ STRIPE_WEBHOOK_SECRET=whsec_REPLACE_ME
 CHECKOUT_SUCCESS_URL=http://localhost:5173/rig/success
 CHECKOUT_CANCEL_URL=http://localhost:5173/rig
 
-# Browser origins allowed to call /checkout during local dev.
+# --- status page / magic-link lookup (P6.3, #458 §4/§6) -------------------
+# HMAC secret for magic-link status tokens. REQUIRED for /status and /portal.
+# Generate any long random string (e.g. `openssl rand -hex 32`). The token a
+# returning user presents is signed with this and binds to ONE Stripe customer,
+# so they can only ever see their own rig. NEVER commit a real value.
+STATUS_LINK_SECRET=REPLACE_ME_WITH_RANDOM_HEX
+# Wallet origin used to build the "open in wallet" deep link (#458 §3 step 5).
+WALLET_BASE_URL=http://localhost:5173
+# Where Stripe returns the user after they close the Customer Portal.
+PORTAL_RETURN_URL=http://localhost:5173/rig/status
+
+# Browser origins allowed to call /checkout, /status, /portal during local dev.
 ALLOWED_ORIGINS=http://localhost:5173
 
 # --- provisioner secrets (#502, #458 §3/§5) -------------------------------

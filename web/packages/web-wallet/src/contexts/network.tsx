@@ -25,6 +25,7 @@ import {
   validateRpcEndpoint,
   fetchNodeHealth,
 } from '../config/networks'
+import { parseRpcDeepLink } from '../lib/custom-rpc-link'
 
 interface NetworkState {
   /** Currently selected network (derived from the selected ingress node). */
@@ -211,6 +212,28 @@ export function NetworkProvider({ children }: { children: ReactNode }) {
       return false
     }
   }, [])
+
+  // Custom-RPC deep link (P6.3, #458 §3 step 5): when the wallet is opened with
+  // a `?rpc=<https endpoint>` param (e.g. from the rig status page's "Open in
+  // wallet" link), pre-select it as the custom ingress. `setCustomEndpoint`
+  // validates reachability via node_getStatus before committing, and strips the
+  // param from the URL so a refresh/back doesn't reapply a stale link.
+  const deepLinkApplied = useRef(false)
+  useEffect(() => {
+    if (deepLinkApplied.current) return
+    if (typeof window === 'undefined') return
+    const parsed = parseRpcDeepLink(window.location.search)
+    if (parsed.ok !== true) return
+    deepLinkApplied.current = true
+    void setCustomEndpoint(parsed.rpcUrl)
+    try {
+      const url = new URL(window.location.href)
+      url.searchParams.delete('rpc')
+      window.history.replaceState(null, '', url.toString())
+    } catch {
+      // history API unavailable (non-browser test env) — ignore.
+    }
+  }, [setCustomEndpoint])
 
   return (
     <NetworkContext.Provider
