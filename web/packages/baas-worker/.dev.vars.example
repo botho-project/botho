@@ -16,3 +16,20 @@ CHECKOUT_CANCEL_URL=http://localhost:5173/rig
 
 # Browser origins allowed to call /checkout during local dev.
 ALLOWED_ORIGINS=http://localhost:5173
+
+# --- provisioner secrets (#502, #458 §3/§5) -------------------------------
+# A DEDICATED, tightly-scoped provisioner IAM user (NOT botho-deploy). The IAM
+# policy hardening (tag/type/region conditions) is SEC (#508); the code here
+# already enforces the region/type allowlists + idempotency. NEVER commit real
+# keys — these placeholders are for local `wrangler dev` only.
+AWS_ACCESS_KEY_ID=AKIA_REPLACE_ME
+AWS_SECRET_ACCESS_KEY=REPLACE_ME
+# AWS_SESSION_TOKEN=                # only if using temporary STS credentials
+
+# Cloudflare Zone:DNS:Edit token + the testnet.botho.io zone id.
+CF_DNS_API_TOKEN=cf_dns_REPLACE_ME
+CF_DNS_ZONE_ID=REPLACE_ME
+
+# Bootstrap binary the rig downloads at boot (optional locally).
+BOTHO_BINARY_URL=https://example.com/botho-aarch64
+BOTHO_BINARY_SHA256=REPLACE_ME

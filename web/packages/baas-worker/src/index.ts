@@ -5,12 +5,19 @@
  *   - POST /checkout  create a Stripe Checkout Session (subscription, $50/mo)
  *   - GET  /healthz   liveness probe
  *
+ * The provisioner core (#502) lives in `provisioner.ts` and is exposed as a
+ * function — `provisionRig` / `teardownRig` — that the Stripe webhook (P7.2 /
+ * #506) will call from a Queue consumer / Durable Object. There is deliberately
+ * NO public `/provision` route: only the (future) signature-verified webhook may
+ * trigger a launch (#458 §5).
+ *
  * Out of scope here (later phases of #458 §8):
  *   - /webhook  Stripe signature verify -> provision/deprovision  (P7.2 / #506)
  *   - /status   user looks up their rig                            (P6.3)
  *
- * All secrets (Stripe key, price id) come from Worker secrets / vars — never the
- * repo. See `wrangler.toml` and `.dev.vars.example` for the binding contract.
+ * All secrets (Stripe key, AWS creds, CF DNS token) come from Worker secrets /
+ * vars — never the repo. See `wrangler.toml` and `.dev.vars.example` for the
+ * binding contract.
  */
 
 import {
@@ -20,8 +27,21 @@ import {
   validateCheckoutRequest,
   type CheckoutEnv,
 } from './checkout'
+import type { ProvisionerEnv } from './provisioner-env'
 
-export interface Env extends CheckoutEnv {
+// Re-export the provisioner surface so #506 (webhook) can import everything from
+// the package entry without reaching into individual modules.
+export {
+  provisionRig,
+  teardownRig,
+  deriveRigId,
+  type ProvisionRequest,
+  type ProvisionOutcome,
+  type ProvisionerDeps,
+} from './provisioner'
+export { depsFromEnv, missingProvisionerEnv, type ProvisionerEnv } from './provisioner-env'
+
+export interface Env extends CheckoutEnv, ProvisionerEnv {
   /**
    * Comma-separated list of origins allowed to call /checkout from the browser
    * (e.g. "https://botho.io,https://wallet.botho.io"). When unset, CORS is not
