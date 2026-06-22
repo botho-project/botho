@@ -67,6 +67,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     address::Address,
+    config::QuorumConfig,
     ledger::Ledger,
     mempool::Mempool,
     transaction::{TxOutput, MIN_TX_FEE},
@@ -160,6 +161,9 @@ pub struct RpcState {
     /// Wallet for signing faucet transactions (None if no wallet or faucet
     /// disabled)
     pub wallet: Option<Arc<Wallet>>,
+    /// Quorum configuration, used to surface Byzantine-fault-tolerance posture
+    /// in `node_getStatus` (#509). Defaults to [`QuorumConfig::default`].
+    pub quorum: QuorumConfig,
 }
 
 impl RpcState {
@@ -190,6 +194,7 @@ impl RpcState {
             rate_limiter: Arc::new(RateLimiter::new()),
             faucet: None,
             wallet: None,
+            quorum: QuorumConfig::default(),
         }
     }
 
@@ -224,6 +229,7 @@ impl RpcState {
             rate_limiter: Arc::new(RateLimiter::new()),
             faucet: None,
             wallet: None,
+            quorum: QuorumConfig::default(),
         }
     }
 
@@ -256,6 +262,7 @@ impl RpcState {
             rate_limiter: Arc::new(rate_limiter),
             faucet: None,
             wallet: None,
+            quorum: QuorumConfig::default(),
         }
     }
 
@@ -269,6 +276,13 @@ impl RpcState {
     /// Set the wallet for balance checking (without faucet)
     pub fn with_wallet(mut self, wallet: Wallet) -> Self {
         self.wallet = Some(Arc::new(wallet));
+        self
+    }
+
+    /// Set the quorum configuration so `node_getStatus` can report the
+    /// cluster's Byzantine-fault-tolerance posture (#509).
+    pub fn with_quorum(mut self, quorum: QuorumConfig) -> Self {
+        self.quorum = quorum;
         self
     }
 }
@@ -765,6 +779,13 @@ async fn handle_node_status(id: Value, state: &RpcState) -> JsonRpcResponse {
     // TODO: Wire up actual sync progress from ChainSyncManager
     let sync_progress: f64 = 100.0;
 
+    // Byzantine-fault-tolerance posture (#509). Participating node count
+    // includes self, so n = scp_peers + 1. In `recommended` mode, n < 4 yields
+    // a degenerate quorum that tolerates ZERO faults; >= 4 is genuinely BFT.
+    let participating_nodes = scp_peers + 1;
+    let quorum_fault_tolerant = state.quorum.is_bft_fault_tolerant(participating_nodes);
+    let quorum_degenerate = state.quorum.is_degenerate_quorum(participating_nodes);
+
     JsonRpcResponse::success(
         id,
         json!({
@@ -786,6 +807,11 @@ async fn handle_node_status(id: Value, state: &RpcState) -> JsonRpcResponse {
             "mintingActive": minting,
             "mintingThreads": if minting { state.minting_threads } else { 0 },
             "totalTransactions": chain_state.total_tx,
+            // BFT posture: `quorumFaultTolerant` is true only with >= 4
+            // participating nodes in recommended mode (3f+1 >= 4 for f=1);
+            // `quorumDegenerate` flags the n-of-n / zero-fault-tolerance regime.
+            "quorumFaultTolerant": quorum_fault_tolerant,
+            "quorumDegenerate": quorum_degenerate,
         }),
     )
 }
@@ -3006,6 +3032,78 @@ mod tests {
         assert!(arr[0]["error"].is_string());
         assert_eq!(arr[1]["spent"], json!(false));
         assert!(arr[1]["error"].is_string());
+    }
+
+    /// #509: `node_getStatus` must expose the cluster's Byzantine-fault
+    /// tolerance posture. In `recommended` mode a cluster with < 4
+    /// participating nodes (self + scpPeerCount) is degenerate (zero fault
+    /// tolerance); >= 4 nodes is genuinely BFT.
+    #[tokio::test]
+    async fn test_node_status_reports_quorum_fault_tolerance() {
+        use crate::{ledger::Ledger, mempool::Mempool};
+
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+        let state = RpcState::new(
+            ledger,
+            Mempool::new(),
+            Network::Testnet,
+            None,
+            None,
+            vec![],
+            Arc::new(WsBroadcaster::new(16)),
+        );
+        // Default quorum config is recommended mode.
+
+        // 2 SCP peers -> n = 3 -> degenerate, not fault tolerant.
+        *state.scp_peer_count.write().unwrap() = 2;
+        let resp = handle_node_status(json!(1), &state).await;
+        let result = resp.result.unwrap();
+        assert_eq!(result["scpPeerCount"], json!(2));
+        assert_eq!(result["quorumDegenerate"], json!(true));
+        assert_eq!(result["quorumFaultTolerant"], json!(false));
+
+        // 3 SCP peers -> n = 4 -> BFT, not degenerate.
+        *state.scp_peer_count.write().unwrap() = 3;
+        let resp = handle_node_status(json!(1), &state).await;
+        let result = resp.result.unwrap();
+        assert_eq!(result["scpPeerCount"], json!(3));
+        assert_eq!(result["quorumDegenerate"], json!(false));
+        assert_eq!(result["quorumFaultTolerant"], json!(true));
+    }
+
+    /// #509: in `explicit` mode the operator owns the threshold/membership, so
+    /// the status payload never flags a degenerate quorum regardless of peers.
+    #[tokio::test]
+    async fn test_node_status_explicit_mode_not_flagged() {
+        use crate::{
+            config::{QuorumConfig, QuorumMode},
+            ledger::Ledger,
+            mempool::Mempool,
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+        let state = RpcState::new(
+            ledger,
+            Mempool::new(),
+            Network::Testnet,
+            None,
+            None,
+            vec![],
+            Arc::new(WsBroadcaster::new(16)),
+        )
+        .with_quorum(QuorumConfig {
+            mode: QuorumMode::Explicit,
+            ..QuorumConfig::default()
+        });
+
+        // Even a lone node in explicit mode is not flagged degenerate.
+        *state.scp_peer_count.write().unwrap() = 0;
+        let resp = handle_node_status(json!(1), &state).await;
+        let result = resp.result.unwrap();
+        assert_eq!(result["quorumDegenerate"], json!(false));
+        assert_eq!(result["quorumFaultTolerant"], json!(true));
     }
 
     #[test]
