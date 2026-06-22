@@ -20,9 +20,12 @@
 # exports below) into the instance launch's "User data" field. cloud-init runs
 # it as root on first boot. It is also safe to run by hand:
 #
-#     sudo RIG_HOSTNAME=rig-demo.testnet.botho.io \
+#     sudo RIG_ID=demo REGION=us-west-2 TIER=t4g.medium \
 #          BOTHO_BINARY_URL=https://example.com/botho-aarch64 \
+#          BOTHO_BINARY_SHA256=<sha256 from release-checksums> \
 #          ./rig-bootstrap.sh
+#
+# (RIG_ID=demo derives RIG_HOSTNAME=rig-demo.testnet.botho.io.)
 #
 # Re-running is safe (idempotent): each step checks current state first.
 #
@@ -30,18 +33,43 @@
 # PARAMETERS (environment variables / user-data exports)
 # ---------------------------------------------------------------------------
 #   BOTHO_BINARY_URL   (REQUIRED unless a binary is already installed)
-#                      URL to a linux-aarch64 `botho` binary. The provisioner
-#                      (#458) must publish the current release artifact (e.g.
-#                      upload to S3/R2) and pass its URL here. There is no
-#                      public GitHub release asset yet — see BINARY SOURCE note
-#                      at the bottom of this file and infra/baas/README.md.
-#   BOTHO_BINARY_SHA256 (optional) expected sha256 of the downloaded binary;
-#                      verified if set.
+#                      URL to the prebuilt linux-aarch64 `botho` binary. This is
+#                      the `binaries-linux-aarch64` artifact produced by
+#                      .github/workflows/release.yml (target
+#                      aarch64-unknown-linux-gnu) — the rig is arm64, so it
+#                      DOWNLOADS this prebuilt binary rather than building from
+#                      source on the box. The provisioner (#458 P6.2) resolves a
+#                      GET-able URL (GitHub release asset, or a mirror in S3/R2)
+#                      and passes it here. See BINARY SOURCE note at the bottom
+#                      of this file and infra/baas/README.md.
+#   BOTHO_BINARY_SHA256 (optional) expected sha256 of the downloaded binary.
+#                      Verified if set. The provisioner should pass the
+#                      linux-aarch64 checksum from the release's
+#                      `release-checksums` artifact (all-checksums.txt) so each
+#                      rig pins the exact published build.
+#   RIG_ID             (optional) short opaque rig identifier (e.g. abc123),
+#                      assigned by the provisioner / Stripe subscription mapping.
+#                      When set and RIG_HOSTNAME is unset, the public hostname is
+#                      derived as rig-<RIG_ID>.<RIG_DOMAIN>. Recorded in
+#                      rig-info.txt for control-plane traceability.
+#   RIG_DOMAIN         (optional, default "testnet.botho.io") the zone under
+#                      which rig-<RIG_ID> hostnames live; combined with RIG_ID to
+#                      derive RIG_HOSTNAME when the latter is not given directly.
 #   RIG_HOSTNAME       (optional) public hostname for this rig, e.g.
-#                      rig-abc123.testnet.botho.io. The provisioner pre-creates
-#                      the DNS A record -> this instance's public IP BEFORE
-#                      boot. If unset, TLS/nginx public setup is skipped and the
-#                      node still serves RPC on localhost:17101.
+#                      rig-abc123.testnet.botho.io. Takes precedence over
+#                      RIG_ID/RIG_DOMAIN. The provisioner pre-creates the DNS A
+#                      record -> this instance's public IP BEFORE boot. If
+#                      neither RIG_HOSTNAME nor RIG_ID is set, TLS/nginx public
+#                      setup is skipped and the node still serves RPC on
+#                      localhost:17101.
+#   REGION             (optional) AWS region the rig was launched in (e.g.
+#                      us-west-2). Informational here — the instance is already
+#                      in its region by the time user-data runs; the provisioner
+#                      (#458 P6.2) picks the region at run-instances time.
+#                      Recorded in rig-info.txt.
+#   TIER               (optional, default "t4g.medium") instance type / tier the
+#                      provisioner launched. Informational; recorded in
+#                      rig-info.txt. The MVP is t4g.medium-only (#458 §5).
 #   NETWORK            (optional, default "testnet"). Only "testnet" is
 #                      supported by this slice.
 #   BOOTSTRAP_PEERS    (optional) comma-separated libp2p multiaddrs to use as
@@ -90,7 +118,11 @@ log "=== Botho rig bootstrap starting ==="
 # Parameters & defaults
 # ---------------------------------------------------------------------------
 NETWORK="${NETWORK:-testnet}"
+RIG_ID="${RIG_ID:-}"
+RIG_DOMAIN="${RIG_DOMAIN:-testnet.botho.io}"
 RIG_HOSTNAME="${RIG_HOSTNAME:-}"
+REGION="${REGION:-}"
+TIER="${TIER:-t4g.medium}"
 BOTHO_BINARY_URL="${BOTHO_BINARY_URL:-}"
 BOTHO_BINARY_SHA256="${BOTHO_BINARY_SHA256:-}"
 BOOTSTRAP_PEERS="${BOOTSTRAP_PEERS:-}"
@@ -113,7 +145,19 @@ GOSSIP_PORT=17100
 [[ "$NETWORK" == "testnet" ]] || fail "Only NETWORK=testnet is supported in this slice (got '$NETWORK')."
 id "$RUN_USER" >/dev/null 2>&1 || fail "Expected user '$RUN_USER' to exist (Ubuntu arm64 AMI)."
 
-log "Params: NETWORK=$NETWORK RIG_HOSTNAME='${RIG_HOSTNAME:-<none>}' TLS_MODE=$TLS_MODE MINT_THREADS=$MINT_THREADS"
+# Derive the public hostname from RIG_ID when RIG_HOSTNAME was not given
+# directly. The provisioner (#458 P6.2) assigns RIG_ID per subscription and
+# creates the DNS A record for rig-<RIG_ID>.<RIG_DOMAIN> before boot.
+if [[ -z "$RIG_HOSTNAME" && -n "$RIG_ID" ]]; then
+    # Allow RIG_ID to be either the bare id (abc123) or a full "rig-abc123".
+    case "$RIG_ID" in
+        rig-*) RIG_HOSTNAME="${RIG_ID}.${RIG_DOMAIN}" ;;
+        *)     RIG_HOSTNAME="rig-${RIG_ID}.${RIG_DOMAIN}" ;;
+    esac
+    log "Derived RIG_HOSTNAME='$RIG_HOSTNAME' from RIG_ID='$RIG_ID' RIG_DOMAIN='$RIG_DOMAIN'"
+fi
+
+log "Params: NETWORK=$NETWORK RIG_ID='${RIG_ID:-<none>}' RIG_HOSTNAME='${RIG_HOSTNAME:-<none>}' REGION='${REGION:-<unset>}' TIER=$TIER TLS_MODE=$TLS_MODE MINT_THREADS=$MINT_THREADS"
 log "Binary source: ${BOTHO_BINARY_URL:-<none, will require existing $BIN_PATH>}"
 
 # ===========================================================================
@@ -566,7 +610,10 @@ fi
 cat > "${RUN_HOME}/rig-info.txt" <<EOF
 # Botho rig provisioned by rig-bootstrap.sh on $(ts)
 network        = ${NETWORK}
+rig_id         = ${RIG_ID:-<none>}
 rig_hostname   = ${RIG_HOSTNAME:-<none>}
+region         = ${REGION:-<unset>}
+tier           = ${TIER}
 public_ip      = ${PUBLIC_IP}
 binary_version = ${BIN_VERSION}
 rpc_url        = ${RPC_URL}
@@ -589,10 +636,21 @@ log "Read back any time: sudo rig-status   |   cat ${RUN_HOME}/rig-info.txt"
 # ---------------------------------------------------------------------------
 # BINARY SOURCE NOTE (for #458)
 # ---------------------------------------------------------------------------
-# As of this writing the latest GitHub release (v0.2.0) has NO published
-# binary asset, so this bootstrap cannot fetch one from a public URL on its
-# own. The provisioner (#458) MUST publish the current linux-aarch64 `botho`
-# release artifact (e.g. upload to S3/R2 or attach it to the GitHub release)
-# and pass its URL as BOTHO_BINARY_URL. See infra/baas/README.md for the
-# recommended distribution flow and the interim "copy from a live seed"
-# stand-in used during verification.
+# This bootstrap DOWNLOADS the prebuilt arm64 binary (it never builds from
+# source on the box — t4g release builds are slow and RandomX-linked crates can
+# OOM). The canonical source is the `binaries-linux-aarch64` artifact built by
+# .github/workflows/release.yml (target aarch64-unknown-linux-gnu), with its
+# checksum in the `release-checksums` artifact (all-checksums.txt, the
+# `linux-aarch64/...` line). Pass:
+#     BOTHO_BINARY_URL=<GET-able URL to the aarch64 botho binary>
+#     BOTHO_BINARY_SHA256=<that binary's sha256 from release-checksums>
+#
+# As of this writing the latest GitHub release (v0.2.0) has NO published binary
+# ASSET (the workflow produces the artifact, but the operator hasn't attached a
+# downloadable release asset / mirror yet), so the bootstrap cannot resolve a
+# public URL on its own. The provisioner (#458 P6.2) MUST publish the current
+# linux-aarch64 `botho` artifact (attach it to the GitHub release, or mirror to
+# S3/R2) and pass its URL as BOTHO_BINARY_URL (and the checksum as
+# BOTHO_BINARY_SHA256). See infra/baas/README.md for the recommended
+# distribution flow and the interim "copy from a live seed" stand-in used
+# during verification.
