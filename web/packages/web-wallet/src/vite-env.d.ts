@@ -6,6 +6,8 @@ interface ImportMetaEnv {
   readonly VITE_RPC_ENDPOINT?: string
   /** Custom faucet endpoint URL (overrides default testnet faucet) */
   readonly VITE_FAUCET_ENDPOINT?: string
+  /** Base URL of the BaaS control-plane Worker (defaults to https://baas.botho.io) */
+  readonly VITE_BAAS_ENDPOINT?: string
 }
 
 interface ImportMeta {

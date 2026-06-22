@@ -1,0 +1,17 @@
+{
+  "name": "@botho/baas-worker",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Botho-as-a-Service control-plane Cloudflare Worker (billing front door). P7.1: /checkout creates a $50/mo subscription Stripe Checkout Session.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "typecheck": "tsc --noEmit",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260617.1",
+    "typescript": "~5.9.3",
+    "wrangler": "^4.59.1"
+  }
+}
