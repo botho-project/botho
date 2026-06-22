@@ -48,22 +48,74 @@ rounds-to-decide, and leadership fairness.
   values to different peers — the fork-inducing adversary).
 - **Network**: synchronous (default) or partially-synchronous via `--max-delay`
   / `--drop-prob` (both seeded ⇒ reproducible).
+- **View-change / leader-timeout** (#519): `--view-change` enables SCP-style
+  leader rotation; `--view-budget N` sets the per-view round budget (default 4).
+  Omit `--view-change` to run the v1 behavior (no rotation) for comparison.
 - **Quorum oracle**: commit decisions delegate to the static `Fbas::is_quorum`,
   so dynamic outcomes cross-check the static splitting/blocking-set predictions.
 
 Key empirical guarantees (encoded as tests in `tests/dynamic.rs`): with
 equivocators **below** the static minimal splitting set, no run ever forks; at
-the splitting set, a leader-equivocation fork **is** observed; unanimity below 4
-nodes stalls on a single crash; and a given `(config, seed)` is bit-for-bit
-reproducible.
+the splitting set, a leader-equivocation fork **is** observed (even with
+view-change on — it is not masked); unanimity below 4 nodes stalls on a single
+crash; and a given `(config, seed)` is bit-for-bit reproducible (with and
+without view-change).
+
+### View-change / leader-timeout (#519)
+
+The ratified production proposer design (#427) is **round-robin leader election
+WITH mandatory leader-timeout / view-change**. The v1 engine had no view-change,
+so a *Byzantine (equivocating) leader* could stall its own slot — leader models
+stalled ~15% (29/200) under an equivocating leader. View-change closes exactly
+this gap:
+
+> If the current view's leader has not driven the slot to a decision within
+> `--view-budget` rounds, the **view** advances and the leader is **rotated
+> round-robin** to `(base_leader + view) % n`; the slot is retried under the new
+> leader. Undecided, not-yet-locked nodes follow the new leader's value, so a
+> stalled (Byzantine or crashed) leader is rotated out and liveness is restored.
+
+**Safety is preserved exactly.** View-change only changes which leader an
+as-yet-undecided node follows; it never unwinds an `accept`-lock or a commit. A
+correct node's vote is pinned to its accepted value forever, so once a node
+accepts (let alone commits) it keeps that value across every view. Two correct
+nodes therefore still cannot commit different values unless the Byzantine set
+reaches the splitting threshold — the same quorum-intersection argument as
+without view-change. The fork at/above the splitting set is **still observed**
+with view-change on (it is not papered over). View-change is bounded by
+`--max-rounds` (each view consumes ≥1 round), so the simulation still terminates.
+
+**Empirical result** (n ∈ {4,7,10}, equivocating leader, 200 seeds):
+
+| config                          | forks | stalls         |
+|---------------------------------|-------|----------------|
+| round-robin, **no** view-change | 0     | ~29/200 (~15%) |
+| round-robin, **with** view-change | 0   | **0/200 (0%)** |
+
+Run the comparison yourself:
+
+```
+# WITHOUT view-change — Byzantine leader stalls ~15% of slots
+cargo run -p bth-quorum-sim --bin quorum-sim -- simulate \
+    --n 7 --proposer round-robin-leader --faulty 0 --fault equivocate --seeds 200
+
+# WITH view-change — stalls collapse to ~0, still 0 forks
+cargo run -p bth-quorum-sim --bin quorum-sim -- simulate \
+    --n 7 --proposer round-robin-leader --faulty 0 --fault equivocate --seeds 200 \
+    --view-change --view-budget 4
+```
+
+The `vc` column in the table shows `off` or `v<budget>`.
 
 ### SCP simplifications
 
 This is simulation/test tooling, not production consensus. It collapses SCP's
-accept→confirm into a single **accept-lock**, models **one slot + one leader per
-run** (fairness measured across seeds), and has **no leader-timeout recovery**
-(a crashed leader is survived via a deterministic fallback, but a *Byzantine
-leader stalls* the slot). See the module docs in `src/sim.rs` for the full list.
+accept→confirm into a two-phase **accept-lock + confirming-quorum commit**,
+models **one slot per run** (fairness measured across seeds), and models
+**leader-timeout / view-change** as an optional round-robin leader rotation
+(`--view-change`); with view-change off, a crashed leader is still survived via a
+deterministic fallback but a *Byzantine leader stalls* the slot. See the module
+docs in `src/sim.rs` for the full list.
 
 ## CLI
 
@@ -85,6 +137,12 @@ cargo run -p bth-quorum-sim --bin quorum-sim -- simulate \
 # Two equivocators (= splitting set) → leader-equivocation forks appear
 cargo run -p bth-quorum-sim --bin quorum-sim -- simulate \
     --n 4 --faulty 0 --faulty 2 --fault equivocate --seeds 300
+
+# Round-robin + view-change vs the equivocating leader (the #427 validation):
+# stalls collapse to ~0 while forks stay 0
+cargo run -p bth-quorum-sim --bin quorum-sim -- simulate \
+    --n 7 --proposer round-robin-leader --faulty 0 --fault equivocate \
+    --seeds 200 --view-change --view-budget 4
 ```
 
 All subcommands accept `--json` for machine-readable output.

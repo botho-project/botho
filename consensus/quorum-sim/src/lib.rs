@@ -21,7 +21,12 @@
 //!   (synchronous / partially-synchronous), and empirically detects **forks**
 //!   (safety violations) and **stalls** (liveness violations). It reuses
 //!   [`Fbas::is_quorum`] as the single quorum oracle, so its dynamic results
-//!   cross-check the static splitting-set / blocking-set predictions.
+//!   cross-check the static splitting-set / blocking-set predictions. It also
+//!   models optional **leader-timeout / view-change**
+//!   ([`sim::SimConfig::view_change`], #519): round-robin leader rotation that
+//!   recovers liveness from a Byzantine or crashed leader without weakening
+//!   safety — the empirical validation of the ratified round-robin+view-change
+//!   proposer design (#427).
 //!
 //! # Model
 //!
