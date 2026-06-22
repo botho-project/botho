@@ -43,6 +43,12 @@ import {
   StripePortalError,
 } from './status'
 import { D1RigStore, type D1Like } from './rig-store'
+import { reconcileOnce } from './reconcile'
+import {
+  missingReconcileEnv,
+  reconcileDepsFromEnv,
+  type ReconcileEnv,
+} from './reconcile-env'
 
 // Re-export the provisioner surface so the webhook (and any future consumer) can
 // import everything from the package entry without reaching into modules.
@@ -62,6 +68,24 @@ export {
   type WebhookEnv,
 } from './webhook'
 export { mintStatusToken, verifyStatusToken } from './status-link'
+export {
+  reconcileOnce,
+  type ReconcileDeps,
+  type ReconcileReport,
+  type ReconcileItem,
+  type ReconcileDisposition,
+} from './reconcile'
+export {
+  missingReconcileEnv,
+  reconcileDepsFromEnv,
+  reconcileRegions,
+  type ReconcileEnv,
+} from './reconcile-env'
+export {
+  isActiveSubscriptionStatus,
+  HttpSubscriptionChecker,
+  type SubscriptionChecker,
+} from './stripe-subscriptions'
 export {
   lookupStatusForCustomer,
   createPortalSession,
@@ -89,7 +113,12 @@ export interface StatusEnv {
   PORTAL_RETURN_URL?: string
 }
 
-export interface Env extends CheckoutEnv, ProvisionerEnv, WebhookEnv, StatusEnv {
+export interface Env
+  extends CheckoutEnv,
+    ProvisionerEnv,
+    WebhookEnv,
+    StatusEnv,
+    ReconcileEnv {
   /**
    * Comma-separated list of origins allowed to call the browser-facing
    * endpoints (/checkout, /status, /portal). When unset, CORS is not granted
@@ -411,6 +440,45 @@ export async function handlePortal(
   }
 }
 
+/**
+ * Handle the scheduled (cron) trigger — the SEC reconciliation sweep (#508,
+ * #458 §5). Lists every `botho:managed-rig=true` EC2 instance, cross-checks each
+ * `botho:subscription` against Stripe, and reaps orphans (cancelled / unpaid /
+ * absent / stuck-provisioning). The cost-bleed safety net behind the webhook.
+ *
+ * Fails closed: if the reconciler env is unconfigured it logs and no-ops (never
+ * touches infra with partial creds). `depsFor` is injectable so tests supply
+ * in-memory fakes; in production it builds real EC2/DNS/D1/Stripe clients. NO
+ * real call happens in a test code path.
+ */
+export async function handleScheduled(
+  env: Env,
+  depsFor: (env: Env) => ReturnType<typeof reconcileDepsFromEnv> = (e) =>
+    reconcileDepsFromEnv(e),
+): Promise<void> {
+  const missing = missingReconcileEnv(env)
+  if (missing.length > 0) {
+    console.error('reconcile: not configured, skipping sweep', missing)
+    return
+  }
+  let deps: ReturnType<typeof reconcileDepsFromEnv>
+  try {
+    deps = depsFor(env)
+  } catch (err) {
+    console.error('reconcile: failed to build deps', err)
+    return
+  }
+  try {
+    const report = await reconcileOnce(deps)
+    console.log(
+      `reconcile: scanned=${report.scanned} reaped=${report.reaped} skipped=${report.skipped}`,
+    )
+  } catch (err) {
+    // A sweep error is logged; the next scheduled run retries (idempotent).
+    console.error('reconcile: sweep error', err)
+  }
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url)
@@ -442,5 +510,14 @@ export default {
     }
 
     return jsonResponse({ error: 'not found' }, 404)
+  },
+
+  // Cron trigger (wrangler.toml [triggers].crons) — the reconciliation sweep.
+  async scheduled(
+    _event: ScheduledController,
+    env: Env,
+    ctx: ExecutionContext,
+  ): Promise<void> {
+    ctx.waitUntil(handleScheduled(env))
   },
 } satisfies ExportedHandler<Env>

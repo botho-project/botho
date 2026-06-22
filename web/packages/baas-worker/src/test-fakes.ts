@@ -13,6 +13,10 @@ import {
   type RigState,
   type RigStore,
 } from './rig-store'
+import {
+  StripeSubscriptionError,
+  type SubscriptionChecker,
+} from './stripe-subscriptions'
 
 /** Records each call so tests can assert on the request that was built. */
 export class FakeEc2 implements Ec2Client {
@@ -20,6 +24,15 @@ export class FakeEc2 implements Ec2Client {
   terminateCalls: { region: string; instanceId: string }[] = []
   /** Instances keyed by subscription tag, seeded by tests for reconcile paths. */
   bySubscription = new Map<string, Ec2Instance[]>()
+  /**
+   * All managed rigs per region, seeded by tests for the reconciliation sweep
+   * (#508). `describeManagedRigs(region)` returns this list. When a test does
+   * not seed it, falls back to every instance tracked via runInstance so the
+   * existing provisioner tests need no change.
+   */
+  managedByRegion = new Map<string, Ec2Instance[]>()
+  /** If set, describeManagedRigs throws for this region (transient-error tests). */
+  describeManagedRigsError: string | undefined
   private seq = 0
   /** Public IP returned by runInstance (undefined => not yet assigned). */
   runPublicIp: string | undefined
@@ -32,6 +45,7 @@ export class FakeEc2 implements Ec2Client {
       state: 'pending',
       publicIp: this.runPublicIp,
       subscriptionTag: params.tags['botho:subscription'],
+      rigIdTag: params.tags['botho:rig-id'],
     }
     const sub = params.tags['botho:subscription']
     const list = this.bySubscription.get(sub) ?? []
@@ -47,8 +61,44 @@ export class FakeEc2 implements Ec2Client {
     return this.bySubscription.get(subscriptionId) ?? []
   }
 
+  async describeManagedRigs(region: string): Promise<Ec2Instance[]> {
+    if (this.describeManagedRigsError) {
+      throw new Error(this.describeManagedRigsError)
+    }
+    if (this.managedByRegion.has(region)) {
+      return this.managedByRegion.get(region) ?? []
+    }
+    // Fallback: every instance ever launched (used when a test only seeds via
+    // runInstance and doesn't care about the per-region managed list).
+    const all: Ec2Instance[] = []
+    for (const list of this.bySubscription.values()) all.push(...list)
+    return all
+  }
+
   async terminateInstance(region: string, instanceId: string): Promise<void> {
     this.terminateCalls.push({ region, instanceId })
+  }
+}
+
+/**
+ * In-memory Stripe subscription checker for reconciliation tests. Seed
+ * `active` with the subscription ids that should be treated as active; any id
+ * not present is inactive (orphan). Set `throwFor` to simulate a transient
+ * Stripe error for specific subscription ids.
+ */
+export class FakeSubscriptionChecker implements SubscriptionChecker {
+  active = new Set<string>()
+  throwFor = new Set<string>()
+  calls: string[] = []
+
+  async isActive(subscriptionId: string): Promise<boolean> {
+    this.calls.push(subscriptionId)
+    if (this.throwFor.has(subscriptionId)) {
+      // Mirror HttpSubscriptionChecker: a transient error throws so the sweep
+      // skips the rig rather than reaping it.
+      throw new StripeSubscriptionError('simulated transient error', 503)
+    }
+    return this.active.has(subscriptionId)
   }
 }
 

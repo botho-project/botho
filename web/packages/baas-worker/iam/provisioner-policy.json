@@ -1,0 +1,68 @@
+{
+  "Version": "2012-10-17",
+  "Id": "BothoBaasProvisionerLeastPrivilege",
+  "Statement": [
+    {
+      "Sid": "DescribeManagedRigs",
+      "Effect": "Allow",
+      "Action": ["ec2:DescribeInstances"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "RunManagedRigConstrained",
+      "Effect": "Allow",
+      "Action": ["ec2:RunInstances"],
+      "Resource": ["arn:aws:ec2:us-west-2:ACCOUNT_ID:instance/*"],
+      "Condition": {
+        "StringEquals": {
+          "ec2:InstanceType": "t4g.medium",
+          "ec2:Region": "us-west-2",
+          "aws:RequestTag/botho:managed-rig": "true"
+        },
+        "ForAnyValue:StringEquals": {
+          "aws:TagKeys": [
+            "botho:managed-rig",
+            "botho:subscription",
+            "botho:user",
+            "botho:rig-id"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "RunManagedRigSupportingResources",
+      "Effect": "Allow",
+      "Action": ["ec2:RunInstances"],
+      "Resource": [
+        "arn:aws:ec2:us-west-2:ACCOUNT_ID:image/ami-012798e88aebdba5c",
+        "arn:aws:ec2:us-west-2:ACCOUNT_ID:security-group/sg-0dd3fc95ec3916a4a",
+        "arn:aws:ec2:us-west-2:ACCOUNT_ID:subnet/SUBNET_ID",
+        "arn:aws:ec2:us-west-2:ACCOUNT_ID:network-interface/*",
+        "arn:aws:ec2:us-west-2:ACCOUNT_ID:volume/*",
+        "arn:aws:ec2:us-west-2:ACCOUNT_ID:key-pair/botho-nodes"
+      ]
+    },
+    {
+      "Sid": "TagOnlyAtLaunch",
+      "Effect": "Allow",
+      "Action": ["ec2:CreateTags"],
+      "Resource": "arn:aws:ec2:us-west-2:ACCOUNT_ID:*/*",
+      "Condition": {
+        "StringEquals": {
+          "ec2:CreateAction": "RunInstances"
+        }
+      }
+    },
+    {
+      "Sid": "TerminateOnlyManagedRigs",
+      "Effect": "Allow",
+      "Action": ["ec2:TerminateInstances"],
+      "Resource": "arn:aws:ec2:us-west-2:ACCOUNT_ID:instance/*",
+      "Condition": {
+        "StringEquals": {
+          "ec2:ResourceTag/botho:managed-rig": "true"
+        }
+      }
+    }
+  ]
+}

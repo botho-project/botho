@@ -3,7 +3,8 @@
   "compilerOptions": {
     "baseUrl": ".",
     "types": ["@cloudflare/workers-types"],
-    "lib": ["ES2022", "WebWorker"]
+    "lib": ["ES2022", "WebWorker"],
+    "resolveJsonModule": true
   },
   "include": ["src"]
 }
