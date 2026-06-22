@@ -34,7 +34,7 @@ pub use discovery::{
 };
 // Re-export rate limit configuration from bth-gossip for network setup
 pub use bth_gossip::{GossipMessageType, MessageTypeLimits, PeerRateLimitConfig};
-pub use dns_seeds::{DnsSeedDiscovery, DnsSeedError};
+pub use dns_seeds::{default_seed_domain, DnsSeedDiscovery, DnsSeedError};
 pub use node_key::load_or_create_keypair;
 pub use pex::{
     PeerSource, PexEntry, PexFilter, PexManager, PexMessage, PexRateLimiter, PexSourceTracker,

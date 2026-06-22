@@ -37,6 +37,20 @@ const MAINNET_DNS_SEED: &str = "seeds.botho.io";
 /// Default DNS seed domain for testnet
 const TESTNET_DNS_SEED: &str = "seeds.testnet.botho.io";
 
+/// Return the default DNS-seed discovery domain for `network`.
+///
+/// This is the namespace queried for bootstrap peers (`seeds.botho.io` on
+/// mainnet, `seeds.testnet.botho.io` on testnet). It is exposed so the node's
+/// identity surface (`node_getIdentity`, #500) can advertise which DNS-seed
+/// namespace it belongs to, letting a thin client cross-check the node against
+/// the expected discovery domain for its network.
+pub fn default_seed_domain(network: Network) -> &'static str {
+    match network {
+        Network::Mainnet => MAINNET_DNS_SEED,
+        Network::Testnet => TESTNET_DNS_SEED,
+    }
+}
+
 /// Minimum cache TTL (prevents hammering DNS)
 const MIN_CACHE_TTL: Duration = Duration::from_secs(60);
 
@@ -84,10 +98,9 @@ impl DnsSeedDiscovery {
 
     /// Get the DNS seed domain for the current network
     fn seed_domain(&self) -> &str {
-        self.custom_domain.as_deref().unwrap_or(match self.network {
-            Network::Mainnet => MAINNET_DNS_SEED,
-            Network::Testnet => TESTNET_DNS_SEED,
-        })
+        self.custom_domain
+            .as_deref()
+            .unwrap_or_else(|| default_seed_domain(self.network))
     }
 
     /// Discover seeds via DNS, with caching and fallback
@@ -378,6 +391,25 @@ mod tests {
 
         let testnet = DnsSeedDiscovery::new(Network::Testnet);
         assert_eq!(testnet.seed_domain(), TESTNET_DNS_SEED);
+    }
+
+    #[test]
+    fn test_default_seed_domain_matches_per_network_constants() {
+        // #500: the public `default_seed_domain` helper (used by the node
+        // identity surface) must agree with the per-network constants and with
+        // the instance method's default-domain behaviour, so the advertised
+        // DNS-seed namespace matches what discovery actually queries.
+        assert_eq!(default_seed_domain(Network::Mainnet), MAINNET_DNS_SEED);
+        assert_eq!(default_seed_domain(Network::Testnet), TESTNET_DNS_SEED);
+
+        assert_eq!(
+            DnsSeedDiscovery::new(Network::Mainnet).seed_domain(),
+            default_seed_domain(Network::Mainnet)
+        );
+        assert_eq!(
+            DnsSeedDiscovery::new(Network::Testnet).seed_domain(),
+            default_seed_domain(Network::Testnet)
+        );
     }
 
     #[test]
