@@ -1,11 +1,18 @@
-//! `quorum-sim` — CLI for Botho's static quorum-health analyzer (v1).
+//! `quorum-sim` — CLI for Botho's quorum-health analyzer + dynamic SCP
+//! simulator.
 //!
-//! Subcommands:
+//! Static subcommands (#511/#512):
 //! - `compare` — threshold-rule comparison table (Botho BFT vs ceil(0.67n) vs
 //!   unanimity) over a range of federation sizes.
 //! - `analyze` — full static-health report for a single symmetric federation.
 //! - `churn` — growth/churn timeline (admit / shun) starting from a symmetric
 //!   federation, flagging any quorum-intersection break.
+//!
+//! Dynamic subcommand (#514):
+//! - `simulate` — run the message-level SCP-ish round simulator over many seeds
+//!   and report empirical fork (safety) / stall (liveness) counts,
+//!   rounds-to-decide, and leadership fairness. Sweeps all four proposer models
+//!   by default, or a single one via `--proposer`.
 //!
 //! Every subcommand supports `--json` for machine-readable output (CI /
 //! monitoring); otherwise a human-readable table is printed.
@@ -15,8 +22,9 @@ use bth_quorum_sim::{
     report::{
         compare_thresholds, render_churn_table, render_threshold_table, simulate_churn, ChurnAction,
     },
+    sim::{render_sim_table, run_many, FaultKind, NetworkModel, ProposerModel, SimConfig},
 };
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Parser)]
 #[command(
@@ -69,6 +77,75 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Dynamic message-level SCP simulation: empirical fork / stall detection.
+    Simulate {
+        /// Federation size.
+        #[arg(long, default_value_t = 4)]
+        n: usize,
+        /// Threshold; defaults to Botho's BFT rule for `n`.
+        #[arg(long)]
+        threshold: Option<usize>,
+        /// Proposer model. Omit to sweep all four.
+        #[arg(long, value_enum)]
+        proposer: Option<ProposerArg>,
+        /// Number of seeds to run per config (`0..seeds`).
+        #[arg(long, default_value_t = 200)]
+        seeds: u64,
+        /// Faulty node indices (repeatable).
+        #[arg(long)]
+        faulty: Vec<usize>,
+        /// Fault kind for the faulty nodes.
+        #[arg(long, value_enum, default_value_t = FaultArg::Crash)]
+        fault: FaultArg,
+        /// Max message delay in rounds (>0 ⇒ partially-synchronous network).
+        #[arg(long, default_value_t = 0)]
+        max_delay: u32,
+        /// Per-message drop probability in [0,1] (>0 ⇒ partially-synchronous).
+        #[arg(long, default_value_t = 0.0)]
+        drop_prob: f64,
+        /// Liveness budget: max rounds before declaring a stall.
+        #[arg(long, default_value_t = 64)]
+        max_rounds: u32,
+        /// Emit JSON instead of a table.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// CLI adapter for [`ProposerModel`].
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum ProposerArg {
+    CompetingCoinbase,
+    HashPriorityLeader,
+    RoundRobinLeader,
+    VrfLeader,
+}
+
+impl From<ProposerArg> for ProposerModel {
+    fn from(p: ProposerArg) -> Self {
+        match p {
+            ProposerArg::CompetingCoinbase => ProposerModel::CompetingCoinbase,
+            ProposerArg::HashPriorityLeader => ProposerModel::HashPriorityLeader,
+            ProposerArg::RoundRobinLeader => ProposerModel::RoundRobinLeader,
+            ProposerArg::VrfLeader => ProposerModel::VrfLeader,
+        }
+    }
+}
+
+/// CLI adapter for [`FaultKind`].
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum FaultArg {
+    Crash,
+    Equivocate,
+}
+
+impl From<FaultArg> for FaultKind {
+    fn from(f: FaultArg) -> Self {
+        match f {
+            FaultArg::Crash => FaultKind::Crash,
+            FaultArg::Equivocate => FaultKind::Equivocate,
+        }
+    }
 }
 
 fn main() {
@@ -134,6 +211,52 @@ fn main() {
                 println!("{}", serde_json::to_string_pretty(&steps).unwrap());
             } else {
                 print!("{}", render_churn_table(&steps));
+            }
+        }
+        Command::Simulate {
+            n,
+            threshold,
+            proposer,
+            seeds,
+            faulty,
+            fault,
+            max_delay,
+            drop_prob,
+            max_rounds,
+            json,
+        } => {
+            let network = if max_delay == 0 && drop_prob == 0.0 {
+                NetworkModel::Synchronous
+            } else {
+                NetworkModel::PartiallySynchronous {
+                    max_delay,
+                    drop_prob,
+                }
+            };
+            // Sweep all proposer models unless one is pinned.
+            let models: Vec<ProposerModel> = match proposer {
+                Some(p) => vec![p.into()],
+                None => ProposerModel::all().to_vec(),
+            };
+            let reports: Vec<_> = models
+                .into_iter()
+                .map(|proposer| {
+                    let config = SimConfig {
+                        n,
+                        threshold,
+                        proposer,
+                        network,
+                        faulty: faulty.clone(),
+                        fault: fault.into(),
+                        max_rounds,
+                    };
+                    run_many(&config, seeds)
+                })
+                .collect();
+            if json {
+                println!("{}", serde_json::to_string_pretty(&reports).unwrap());
+            } else {
+                print!("{}", render_sim_table(&reports));
             }
         }
     }

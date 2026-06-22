@@ -10,10 +10,18 @@
 //!
 //! # Scope (v1)
 //!
-//! This is a **static** analyzer plus threshold/growth comparison. It does
-//! **not** simulate SCP message rounds, Byzantine equivocation, or partial
-//! synchrony — that dynamic message-level simulator is an explicit follow-up
-//! (see the issue's "Deferred" section).
+//! This crate has two layers:
+//!
+//! - A **static** analyzer plus threshold/growth comparison (the original
+//!   #511/#512 deliverable): quorum/blocking/splitting-set metrics over an
+//!   [`Fbas`].
+//! - A **dynamic, message-level SCP-ish round simulator** ([`sim`], #514) that
+//!   *runs* a nomination + ballot/commit protocol over the same FBAS model
+//!   under faults (crash / Byzantine equivocation) and a configurable network
+//!   (synchronous / partially-synchronous), and empirically detects **forks**
+//!   (safety violations) and **stalls** (liveness violations). It reuses
+//!   [`Fbas::is_quorum`] as the single quorum oracle, so its dynamic results
+//!   cross-check the static splitting-set / blocking-set predictions.
 //!
 //! # Model
 //!
@@ -38,8 +46,13 @@ pub mod analysis;
 pub mod model;
 pub mod nodeset;
 pub mod report;
+pub mod sim;
 pub mod thresholds;
 
 pub use analysis::{HealthReport, ThresholdRule};
 pub use model::{Fbas, Node, QuorumSet};
 pub use nodeset::NodeSet;
+pub use sim::{
+    run, run_many, run_tracked, Decision, FaultKind, NetworkModel, ProposerModel, RunOutcome,
+    SimConfig, SimReport,
+};
