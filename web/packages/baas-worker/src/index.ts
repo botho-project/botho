@@ -4,6 +4,9 @@
  * MVP surface:
  *   - POST /checkout  create a Stripe Checkout Session (subscription, $50/mo)  (P7.1)
  *   - POST /webhook   Stripe signature verify -> provision/deprovision         (P7.2 / #506)
+ *   - GET  /status    authenticated user looks up their rig (URL + state +
+ *                     live health) via a magic-link token                      (P6.3)
+ *   - POST /portal    open a Stripe Customer Portal session (manage/cancel)    (P6.3)
  *   - GET  /healthz   liveness probe
  *
  * The provisioner core (#502) lives in `provisioner.ts` and is exposed as a
@@ -11,12 +14,13 @@
  * calls. There is deliberately NO public `/provision` route: only the
  * signature-verified webhook may trigger a launch (#458 §5).
  *
- * Out of scope here (later phases of #458 §8):
- *   - /status   user looks up their rig                            (P6.3)
+ * `/status` is read-only and authz-scoped: the customer id always comes from a
+ * *verified* magic-link token (`status-link.ts`), and the D1 lookup is keyed on
+ * that id, so a user can only ever see their own rig (#458 §4, §5).
  *
- * All secrets (Stripe key, AWS creds, CF DNS token) come from Worker secrets /
- * vars — never the repo. See `wrangler.toml` and `.dev.vars.example` for the
- * binding contract.
+ * All secrets (Stripe key, AWS creds, CF DNS token, status-link secret) come
+ * from Worker secrets / vars — never the repo. See `wrangler.toml` and
+ * `.dev.vars.example` for the binding contract.
  */
 
 import {
@@ -32,6 +36,13 @@ import {
   verifyStripeSignature,
   type WebhookEnv,
 } from './webhook'
+import { verifyStatusToken } from './status-link'
+import {
+  createPortalSession,
+  lookupStatusForCustomer,
+  StripePortalError,
+} from './status'
+import { D1RigStore, type D1Like } from './rig-store'
 
 // Re-export the provisioner surface so the webhook (and any future consumer) can
 // import everything from the package entry without reaching into modules.
@@ -50,12 +61,39 @@ export {
   actionForEventType,
   type WebhookEnv,
 } from './webhook'
+export { mintStatusToken, verifyStatusToken } from './status-link'
+export {
+  lookupStatusForCustomer,
+  createPortalSession,
+  buildWalletDeepLink,
+  type StatusResponse,
+  type RigHealth,
+} from './status'
 
-export interface Env extends CheckoutEnv, ProvisionerEnv, WebhookEnv {
+/** Env keys used only by the `/status` + `/portal` surface (P6.3). */
+export interface StatusEnv {
   /**
-   * Comma-separated list of origins allowed to call /checkout from the browser
-   * (e.g. "https://botho.io,https://wallet.botho.io"). When unset, CORS is not
-   * granted (same-origin only).
+   * HMAC secret for magic-link status tokens (`status-link.ts`). Worker secret,
+   * never the repo. Required for /status and /portal.
+   */
+  STATUS_LINK_SECRET?: string
+  /**
+   * Wallet origin used to build the "open in wallet" deep link
+   * (e.g. "https://wallet.botho.io"). Worker var.
+   */
+  WALLET_BASE_URL?: string
+  /**
+   * Where Stripe returns the user after they close the Customer Portal
+   * (e.g. "https://botho.io/rig/status"). Worker var.
+   */
+  PORTAL_RETURN_URL?: string
+}
+
+export interface Env extends CheckoutEnv, ProvisionerEnv, WebhookEnv, StatusEnv {
+  /**
+   * Comma-separated list of origins allowed to call the browser-facing
+   * endpoints (/checkout, /status, /portal). When unset, CORS is not granted
+   * (same-origin only).
    */
   ALLOWED_ORIGINS?: string
 }
@@ -68,7 +106,7 @@ function corsHeaders(env: Env, requestOrigin: string | null): Record<string, str
   if (!allowed.includes(requestOrigin)) return {}
   return {
     'Access-Control-Allow-Origin': requestOrigin,
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type',
     Vary: 'Origin',
   }
@@ -224,12 +262,161 @@ export async function handleWebhook(
   }
 }
 
+/**
+ * Build a `RigStore` from the D1 binding for the read-only `/status` + `/portal`
+ * surface. Kept separate from the provisioner's `depsFromEnv` because status
+ * needs only the store (no EC2/DNS/AWS creds), so a misconfigured provisioner
+ * never blocks a user from reading their own rig.
+ */
+function storeFromEnv(env: Env): D1RigStore {
+  if (env.DB == null) {
+    throw new Error('status: DB binding not configured')
+  }
+  return new D1RigStore(env.DB as D1Like)
+}
+
+/**
+ * Handle GET /status — the authenticated rig lookup (P6.3, #458 §4/§6).
+ *
+ * Authz model: the customer id is taken ONLY from the verified magic-link token
+ * (`?token=`), never from the request. The D1 lookup is keyed on that id, so a
+ * user can only ever see their own rig. Exported for direct unit testing.
+ *
+ *   200 -> { rigId, rpcUrl, state, region, health, walletDeepLink }
+ *   400 -> missing token
+ *   401 -> invalid / expired / forged token (no data leak)
+ *   404 -> token valid but this customer has no rig
+ *   500 -> service not configured
+ */
+export async function handleStatus(
+  request: Request,
+  env: Env,
+  fetchImpl: typeof fetch = fetch,
+): Promise<Response> {
+  const origin = request.headers.get('Origin')
+  const cors = corsHeaders(env, origin)
+
+  if (request.method !== 'GET') {
+    return jsonResponse({ error: 'method not allowed' }, 405, cors)
+  }
+
+  // Fail closed if the signing secret / wallet base url are unset.
+  if (!env.STATUS_LINK_SECRET || !env.WALLET_BASE_URL) {
+    console.error('status: not configured (STATUS_LINK_SECRET / WALLET_BASE_URL)')
+    return jsonResponse({ error: 'service not configured' }, 500, cors)
+  }
+
+  const url = new URL(request.url)
+  const token = url.searchParams.get('token')
+  if (!token) {
+    return jsonResponse({ error: 'token is required' }, 400, cors)
+  }
+
+  const verified = await verifyStatusToken(token, env.STATUS_LINK_SECRET)
+  if (!verified.ok) {
+    // Generic 401 — never reveal which check failed or whether a rig exists.
+    console.warn('status: token rejected:', verified.reason)
+    return jsonResponse({ error: 'unauthorized' }, 401, cors)
+  }
+
+  let store: D1RigStore
+  try {
+    store = storeFromEnv(env)
+  } catch (err) {
+    console.error('status: store unavailable', err)
+    return jsonResponse({ error: 'service not configured' }, 500, cors)
+  }
+
+  try {
+    const result = await lookupStatusForCustomer(
+      verified.customerId,
+      store,
+      env.WALLET_BASE_URL,
+      fetchImpl,
+    )
+    if (!result.ok) {
+      return jsonResponse({ error: 'no rig found' }, 404, cors)
+    }
+    return jsonResponse(result.status, 200, cors)
+  } catch (err) {
+    console.error('status: lookup error', err)
+    return jsonResponse({ error: 'internal error' }, 500, cors)
+  }
+}
+
+/**
+ * Handle POST /portal — open a Stripe Customer Portal session so the user can
+ * manage/cancel their subscription (P6.3, #458 §4). The customer id is taken
+ * from the verified status token in the JSON body (`{ token }`), never from the
+ * client directly. Exported for direct unit testing.
+ *
+ *   200 -> { url }     hosted Stripe portal URL to redirect to
+ *   400 -> missing token
+ *   401 -> invalid/expired token
+ *   500 -> service not configured
+ *   502 -> Stripe rejected the request
+ */
+export async function handlePortal(
+  request: Request,
+  env: Env,
+  fetchImpl: typeof fetch = fetch,
+): Promise<Response> {
+  const origin = request.headers.get('Origin')
+  const cors = corsHeaders(env, origin)
+
+  if (request.method !== 'POST') {
+    return jsonResponse({ error: 'method not allowed' }, 405, cors)
+  }
+
+  if (!env.STATUS_LINK_SECRET || !env.STRIPE_SECRET_KEY || !env.PORTAL_RETURN_URL) {
+    console.error('portal: not configured')
+    return jsonResponse({ error: 'service not configured' }, 500, cors)
+  }
+
+  let parsed: unknown
+  try {
+    parsed = await request.json()
+  } catch {
+    return jsonResponse({ error: 'invalid JSON body' }, 400, cors)
+  }
+  const token =
+    typeof parsed === 'object' && parsed !== null
+      ? (parsed as Record<string, unknown>).token
+      : undefined
+  if (typeof token !== 'string' || token.length === 0) {
+    return jsonResponse({ error: 'token is required' }, 400, cors)
+  }
+
+  const verified = await verifyStatusToken(token, env.STATUS_LINK_SECRET)
+  if (!verified.ok) {
+    console.warn('portal: token rejected:', verified.reason)
+    return jsonResponse({ error: 'unauthorized' }, 401, cors)
+  }
+
+  try {
+    const session = await createPortalSession(
+      verified.customerId,
+      env.PORTAL_RETURN_URL,
+      env.STRIPE_SECRET_KEY,
+      fetchImpl,
+    )
+    return jsonResponse({ url: session.url }, 200, cors)
+  } catch (err) {
+    if (err instanceof StripePortalError) {
+      console.error('portal: stripe error', err.status, err.message)
+      return jsonResponse({ error: 'could not open portal' }, 502, cors)
+    }
+    console.error('portal: unexpected error', err)
+    return jsonResponse({ error: 'internal error' }, 500, cors)
+  }
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url)
     const origin = request.headers.get('Origin')
 
-    // CORS preflight for the browser "Get a rig" surface.
+    // CORS preflight for the browser "Get a rig" / status surfaces.
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: corsHeaders(env, origin) })
     }
@@ -244,6 +431,14 @@ export default {
 
     if (url.pathname === '/webhook') {
       return handleWebhook(request, env)
+    }
+
+    if (url.pathname === '/status') {
+      return handleStatus(request, env)
+    }
+
+    if (url.pathname === '/portal') {
+      return handlePortal(request, env)
     }
 
     return jsonResponse({ error: 'not found' }, 404)

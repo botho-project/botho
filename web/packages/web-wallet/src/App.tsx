@@ -8,7 +8,7 @@ import { PayPage } from './pages/pay'
 import { ContactsPage } from './pages/contacts'
 import { DocsPage } from './pages/docs'
 import { ExplorerPage } from './pages/explorer'
-import { RigPage, RigSuccessPage } from './pages/rig'
+import { RigPage, RigSuccessPage, RigStatusPage } from './pages/rig'
 
 /**
  * Decide what `/` should render.
@@ -57,6 +57,8 @@ function App() {
             {/* Botho-as-a-Service "Get a rig" surface (#458 §4 / #504). */}
             <Route path="/rig" element={<RigPage />} />
             <Route path="/rig/success" element={<RigSuccessPage />} />
+            {/* Rig status page reached via magic link (#458 §4 / #507). */}
+            <Route path="/rig/status" element={<RigStatusPage />} />
           </Routes>
         </BrowserRouter>
       </WalletProvider>

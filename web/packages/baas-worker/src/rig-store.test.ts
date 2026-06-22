@@ -33,6 +33,19 @@ function fakeD1(): { db: D1Like; rows: Map<string, Row> } {
           if (query.startsWith('SELECT * FROM rigs WHERE subscription_id')) {
             return (rows.get(bound[0] as string) ?? null) as T | null
           }
+          if (query.includes('WHERE stripe_customer = ?')) {
+            // Mirror the ORDER BY: live rigs before terminated, newest first.
+            const matches = [...rows.values()].filter(
+              (r) => r.stripe_customer === (bound[0] as string),
+            )
+            matches.sort((a, b) => {
+              const aTerm = a.state === 'terminated' ? 1 : 0
+              const bTerm = b.state === 'terminated' ? 1 : 0
+              if (aTerm !== bTerm) return aTerm - bTerm
+              return b.created_at - a.created_at
+            })
+            return (matches[0] ?? null) as T | null
+          }
           if (query.startsWith('SELECT COUNT(*)')) {
             const states = bound as string[]
             let n = 0
@@ -130,6 +143,31 @@ describe('D1RigStore', () => {
     const got = await store.getBySubscription('sub_1')
     expect(got?.instanceId).toBe('i-123')
     expect(got?.state).toBe('running')
+  })
+
+  it('getByCustomer returns the customer’s rig, preferring a live one', async () => {
+    const { db } = fakeD1()
+    let t = 1000
+    const store = new D1RigStore(db, () => t)
+    // Older terminated rig for the customer.
+    await store.insertProvisioning(NEW)
+    await store.setState('sub_1', 'terminated')
+    // Newer running rig for the same customer.
+    t = 2000
+    await store.insertProvisioning({
+      ...NEW,
+      subscriptionId: 'sub_2',
+      rigId: 'r2',
+      rpcUrl: 'https://rig-r2.testnet.botho.io/rpc',
+    })
+    await store.setState('sub_2', 'running')
+
+    const got = await store.getByCustomer('cus_X')
+    expect(got?.rigId).toBe('r2')
+    expect(got?.state).toBe('running')
+
+    // A different customer gets nothing (authz boundary).
+    expect(await store.getByCustomer('cus_OTHER')).toBeUndefined()
   })
 
   it('counts only active (non-terminated) rows', async () => {

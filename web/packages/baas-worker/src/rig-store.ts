@@ -50,6 +50,15 @@ export interface RigStore {
   /** Idempotency lookup by Stripe subscription id. */
   getBySubscription(subscriptionId: string): Promise<RigRecord | undefined>
   /**
+   * Authz-scoped lookup for the `/status` page (#458 §4, P6.3): return the rig
+   * owned by a given Stripe customer, or undefined. The status endpoint keys the
+   * lookup on the *verified* customer id from the magic-link token so a user can
+   * only ever see their own rig — it never accepts a customer id straight from
+   * the client. When (rarely) more than one row shares a customer, the most
+   * recently created non-terminated row wins, falling back to the newest row.
+   */
+  getByCustomer(stripeCustomer: string): Promise<RigRecord | undefined>
+  /**
    * Insert a fresh `provisioning` row. MUST reject (throw) if a row with the
    * same `subscriptionId` already exists, so a race can't create two rows.
    */
@@ -126,6 +135,21 @@ export class D1RigStore implements RigStore {
     const row = await this.db
       .prepare('SELECT * FROM rigs WHERE subscription_id = ?')
       .bind(subscriptionId)
+      .first<RigRow>()
+    return row ? rowToRecord(row) : undefined
+  }
+
+  async getByCustomer(stripeCustomer: string): Promise<RigRecord | undefined> {
+    // Prefer a live rig over a terminated one, then newest. The idx_rigs_customer
+    // index (schema.sql) keeps this lookup cheap.
+    const row = await this.db
+      .prepare(
+        `SELECT * FROM rigs
+           WHERE stripe_customer = ?
+           ORDER BY (state = 'terminated') ASC, created_at DESC
+           LIMIT 1`,
+      )
+      .bind(stripeCustomer)
       .first<RigRow>()
     return row ? rowToRecord(row) : undefined
   }
