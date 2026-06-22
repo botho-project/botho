@@ -76,6 +76,38 @@ use crate::{
 use bth_cluster_tax::{FeeConfig, TransactionType};
 use bth_transaction_types::constants::Network;
 
+/// Stable node identity material exposed by `node_getIdentity` (#500, epic
+/// #441 Phase P1).
+///
+/// A thin client (e.g. the mobile app) must be able to verify *which* node it
+/// is talking to before trusting it for the Mode-2 node-selection UX. All
+/// fields here are derived from durable node state — the persistent libp2p
+/// keypair (#439/#440) and the configured [`Network`] — rather than per-restart
+/// ephemeral values, so the identity is stable across restarts.
+///
+/// The fields are pre-computed once at startup (in `commands::run`) and stored
+/// as plain strings so the RPC layer needs no libp2p / SCP types and the
+/// handler stays trivially testable.
+#[derive(Debug, Clone, Default)]
+pub struct NodeIdentity {
+    /// libp2p peer ID derived from the persistent node keypair (#439/#440).
+    /// Stable across restarts; empty only in tests / before the network layer
+    /// has supplied it.
+    pub peer_id: String,
+    /// SCP node-id signing public key (hex), derived deterministically from the
+    /// peer ID via `peer_id_to_node_id`. This is the key the quorum machinery
+    /// identifies the node by.
+    pub node_id_public_key: String,
+    /// Wire protocol version this node speaks (e.g. `"2.0.0"`).
+    pub protocol_version: String,
+    /// Minimum protocol version this node will accept from peers.
+    pub min_protocol_version: String,
+    /// DNS-seed namespace for this node's network (e.g.
+    /// `"seeds.testnet.botho.io"`), so a thin client can cross-check that the
+    /// node belongs to the expected discovery domain.
+    pub dns_seed_domain: String,
+}
+
 /// JSON-RPC request
 #[derive(Debug, Deserialize)]
 pub struct JsonRpcRequest {
@@ -164,6 +196,10 @@ pub struct RpcState {
     /// Quorum configuration, used to surface Byzantine-fault-tolerance posture
     /// in `node_getStatus` (#509). Defaults to [`QuorumConfig::default`].
     pub quorum: QuorumConfig,
+    /// Stable node identity surfaced by `node_getIdentity` (#500). Defaults to
+    /// an empty identity; `commands::run` populates it from the persistent
+    /// node keypair once the network layer is up.
+    pub identity: NodeIdentity,
 }
 
 impl RpcState {
@@ -195,6 +231,7 @@ impl RpcState {
             faucet: None,
             wallet: None,
             quorum: QuorumConfig::default(),
+            identity: NodeIdentity::default(),
         }
     }
 
@@ -230,6 +267,7 @@ impl RpcState {
             faucet: None,
             wallet: None,
             quorum: QuorumConfig::default(),
+            identity: NodeIdentity::default(),
         }
     }
 
@@ -263,6 +301,7 @@ impl RpcState {
             faucet: None,
             wallet: None,
             quorum: QuorumConfig::default(),
+            identity: NodeIdentity::default(),
         }
     }
 
@@ -283,6 +322,12 @@ impl RpcState {
     /// cluster's Byzantine-fault-tolerance posture (#509).
     pub fn with_quorum(mut self, quorum: QuorumConfig) -> Self {
         self.quorum = quorum;
+        self
+    }
+
+    /// Set the stable node identity surfaced by `node_getIdentity` (#500).
+    pub fn with_identity(mut self, identity: NodeIdentity) -> Self {
+        self.identity = identity;
         self
     }
 }
@@ -582,6 +627,7 @@ async fn handle_rpc_method(request: &JsonRpcRequest, state: &RpcState) -> JsonRp
     match request.method.as_str() {
         // Node methods
         "node_getStatus" => handle_node_status(id, state).await,
+        "node_getIdentity" => handle_node_identity(id, state).await,
 
         // Chain methods
         "getChainInfo" => handle_chain_info(id, state).await,
@@ -812,6 +858,59 @@ async fn handle_node_status(id: Value, state: &RpcState) -> JsonRpcResponse {
             // `quorumDegenerate` flags the n-of-n / zero-fault-tolerance regime.
             "quorumFaultTolerant": quorum_fault_tolerant,
             "quorumDegenerate": quorum_degenerate,
+        }),
+    )
+}
+
+/// Return the node's stable, verifiable identity (#500, epic #441 Phase P1).
+///
+/// This is the read-only surface a thin client (mobile app) calls to decide
+/// *which* node it is talking to before trusting it for the Mode-2
+/// node-selection UX. Every field is grounded in durable node state:
+///
+/// - `peerId` / `nodeId` come from the persistent libp2p keypair (#439/#440),
+///   so they are stable across restarts (an ephemeral, per-restart peer ID
+///   would let an attacker impersonate a previously-trusted node).
+/// - `network` distinguishes mainnet from testnet so a phone cannot be tricked
+///   into trusting a wrong-network node. It mirrors the `botho-<name>` form
+///   already used by `node_getStatus`.
+/// - `protocolVersion` / `minProtocolVersion` let the client check wire
+///   compatibility before depending on the node.
+/// - `dnsSeedDomain` lets the client cross-check the node against the expected
+///   DNS-seed discovery namespace (`dns_seeds.rs`).
+/// - `chainHeight` / `tipHash` are the current tip so the client can sanity-
+///   check that the node is on the chain it expects.
+///
+/// The response shape is intended to be stable enough for the mobile client to
+/// depend on; new fields may be added but existing ones will not change
+/// meaning.
+async fn handle_node_identity(id: Value, state: &RpcState) -> JsonRpcResponse {
+    let ledger = read_lock!(state.ledger, id.clone());
+    let chain_state = ledger.get_chain_state().unwrap_or_default();
+    drop(ledger);
+
+    let identity = &state.identity;
+
+    JsonRpcResponse::success(
+        id,
+        json!({
+            // Stable identity material (persistent keypair, #439/#440).
+            "peerId": identity.peer_id,
+            "nodeId": identity.node_id_public_key,
+            // Network the node belongs to: "botho-mainnet" / "botho-testnet".
+            "network": format!("botho-{}", state.network_type.name()),
+            // Wire-protocol compatibility window.
+            "protocolVersion": identity.protocol_version,
+            "minProtocolVersion": identity.min_protocol_version,
+            // Node software version + build provenance (mirrors node_getStatus).
+            "nodeVersion": env!("CARGO_PKG_VERSION"),
+            "version": env!("CARGO_PKG_VERSION"),
+            "gitCommit": option_env!("GIT_HASH").unwrap_or("unknown"),
+            // DNS-seed discovery namespace for this network.
+            "dnsSeedDomain": identity.dns_seed_domain,
+            // Current chain tip so the client can confirm the node's chain.
+            "chainHeight": chain_state.height,
+            "tipHash": hex::encode(chain_state.tip_hash),
         }),
     )
 }
@@ -3070,6 +3169,103 @@ mod tests {
         assert_eq!(result["scpPeerCount"], json!(3));
         assert_eq!(result["quorumDegenerate"], json!(false));
         assert_eq!(result["quorumFaultTolerant"], json!(true));
+    }
+
+    /// #500: `node_getIdentity` exposes the node's stable, verifiable identity
+    /// so a thin client can confirm *which* node it is talking to before
+    /// trusting it. Asserts the payload shape and that the configured identity
+    /// material is surfaced verbatim, the network is namespaced as
+    /// `botho-<name>`, and the chain tip is included.
+    #[tokio::test]
+    async fn test_node_identity_returns_expected_fields() {
+        use crate::{ledger::Ledger, mempool::Mempool};
+
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+
+        let identity = NodeIdentity {
+            peer_id: "12D3KooWTestPeerId".to_string(),
+            node_id_public_key: "aa".repeat(32),
+            protocol_version: "2.0.0".to_string(),
+            min_protocol_version: "2.0.0".to_string(),
+            dns_seed_domain: "seeds.testnet.botho.io".to_string(),
+        };
+
+        let state = RpcState::new(
+            ledger,
+            Mempool::new(),
+            Network::Testnet,
+            None,
+            None,
+            vec![],
+            Arc::new(WsBroadcaster::new(16)),
+        )
+        .with_identity(identity);
+
+        let resp = handle_node_identity(json!(1), &state).await;
+        assert!(resp.error.is_none(), "unexpected error: {:?}", resp.error);
+        let result = resp.result.unwrap();
+
+        // Stable identity material is surfaced verbatim.
+        assert_eq!(result["peerId"], json!("12D3KooWTestPeerId"));
+        assert_eq!(result["nodeId"], json!("aa".repeat(32)));
+        assert_eq!(result["protocolVersion"], json!("2.0.0"));
+        assert_eq!(result["minProtocolVersion"], json!("2.0.0"));
+        assert_eq!(result["dnsSeedDomain"], json!("seeds.testnet.botho.io"));
+
+        // Network must be namespaced so a phone cannot trust a wrong-network
+        // node.
+        assert_eq!(result["network"], json!("botho-testnet"));
+
+        // Version + chain tip are present and well-formed.
+        assert_eq!(result["nodeVersion"], json!(env!("CARGO_PKG_VERSION")));
+        assert_eq!(result["version"], json!(env!("CARGO_PKG_VERSION")));
+        // Genesis ledger is at height 0; the tip must match the ledger's actual
+        // chain-state tip (64-char hex), confirming it is grounded in real
+        // node state rather than a fabricated value.
+        let expected = {
+            let ledger = state.ledger.read().unwrap();
+            ledger.get_chain_state().unwrap_or_default()
+        };
+        assert_eq!(result["chainHeight"], json!(expected.height));
+        let tip_hash = result["tipHash"].as_str().unwrap();
+        assert_eq!(tip_hash.len(), 64);
+        assert_eq!(tip_hash, hex::encode(expected.tip_hash));
+
+        // gitCommit is always present (defaults to "unknown" in dev builds).
+        assert!(result["gitCommit"].is_string());
+    }
+
+    /// #500: the default identity (no `with_identity`) yields empty identity
+    /// strings but still produces a well-formed, network-correct payload, so
+    /// the method never panics or omits required keys.
+    #[tokio::test]
+    async fn test_node_identity_defaults_are_well_formed() {
+        use crate::{ledger::Ledger, mempool::Mempool};
+
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+        let state = RpcState::new(
+            ledger,
+            Mempool::new(),
+            Network::Mainnet,
+            None,
+            None,
+            vec![],
+            Arc::new(WsBroadcaster::new(16)),
+        );
+
+        let resp = handle_node_identity(json!(1), &state).await;
+        assert!(resp.error.is_none());
+        let result = resp.result.unwrap();
+
+        assert_eq!(result["peerId"], json!(""));
+        assert_eq!(result["nodeId"], json!(""));
+        assert_eq!(result["network"], json!("botho-mainnet"));
+        // Required keys are always present.
+        for key in ["protocolVersion", "minProtocolVersion", "dnsSeedDomain"] {
+            assert!(result.get(key).is_some(), "missing key: {key}");
+        }
     }
 
     /// #509: in `explicit` mode the operator owns the threshold/membership, so

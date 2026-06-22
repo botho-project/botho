@@ -28,13 +28,14 @@ use crate::{
         TransactionValidator,
     },
     network::{
-        BlockTxn, ChainSyncManager, CompactBlock, GetBlockTxn, NetworkDiscovery, NetworkEvent,
-        QuorumBuilder, ReconstructionResult, SyncAction, SyncRequest, SyncResponse,
+        default_seed_domain, BlockTxn, ChainSyncManager, CompactBlock, GetBlockTxn,
+        NetworkDiscovery, NetworkEvent, QuorumBuilder, ReconstructionResult, SyncAction,
+        SyncRequest, SyncResponse, MIN_SUPPORTED_PROTOCOL_VERSION, PROTOCOL_VERSION,
     },
     node::{MintedMintingTx, Node, SharedLedger},
     rpc::{
         calculate_dir_size, init_metrics, start_metrics_server, start_rpc_server, FaucetState,
-        MetricsUpdater, RpcState, WsBroadcaster, DATA_DIR_USAGE_BYTES,
+        MetricsUpdater, NodeIdentity, RpcState, WsBroadcaster, DATA_DIR_USAGE_BYTES,
     },
     transaction::Transaction,
     wallet::Wallet,
@@ -370,6 +371,19 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
     let scp_peer_count = Arc::new(RwLock::new(discovery.peer_count()));
     let ws_broadcaster = Arc::new(WsBroadcaster::new(1024));
 
+    // Build the node's stable identity (#500) from the persistent libp2p key
+    // (#439/#440) so `node_getIdentity` exposes a peer ID that survives
+    // restarts, plus the deterministic SCP node-id signing key derived from it.
+    let identity_peer_id = *discovery.local_peer_id();
+    let identity_node_id = peer_id_to_node_id(&identity_peer_id);
+    let node_identity = NodeIdentity {
+        peer_id: identity_peer_id.to_string(),
+        node_id_public_key: hex::encode(AsRef::<[u8]>::as_ref(&identity_node_id.public_key)),
+        protocol_version: PROTOCOL_VERSION.to_string(),
+        min_protocol_version: MIN_SUPPORTED_PROTOCOL_VERSION.to_string(),
+        dns_seed_domain: default_seed_domain(config.network_type).to_string(),
+    };
+
     let mut rpc_state = RpcState::from_shared(
         node.shared_ledger(),
         node.shared_mempool(),
@@ -382,7 +396,8 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
         config.network.cors_origins.clone(),
         ws_broadcaster.clone(),
     )
-    .with_quorum(config.network.quorum.clone());
+    .with_quorum(config.network.quorum.clone())
+    .with_identity(node_identity);
 
     // Initialize wallet for RPC (balance checking, faucet, etc.)
     if let Some(mnemonic) = config.mnemonic() {
