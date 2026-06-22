@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { handleCheckout, type Env } from './index'
+import worker, { handleCheckout, type Env } from './index'
 
 const ENV: Env = {
   STRIPE_SECRET_KEY: 'sk_test_dummy',
@@ -114,5 +114,45 @@ describe('handleCheckout', () => {
       stripeOk() as unknown as typeof fetch,
     )
     expect(res.headers.get('Access-Control-Allow-Origin')).toBeNull()
+  })
+})
+
+describe('fetch routing', () => {
+  it('responds 200 on /healthz', async () => {
+    const res = await worker.fetch(
+      new Request('https://control.botho.io/healthz'),
+      ENV,
+    )
+    expect(res.status).toBe(200)
+  })
+
+  it('routes /webhook (POST without a valid signature) to the webhook handler -> 400, not 404', async () => {
+    // No Stripe-Signature header => the webhook handler rejects with 400. The key
+    // assertion is that the route EXISTS (not a 404), proving /webhook is wired.
+    const webhookEnv: Env = {
+      ...ENV,
+      STRIPE_WEBHOOK_SECRET: 'whsec_test',
+      // provisioner env so the handler reaches the signature check (not the
+      // fail-closed config 500) — the depsFromEnv default is never reached
+      // because verification fails first.
+      AWS_ACCESS_KEY_ID: 'AKIA_TEST',
+      AWS_SECRET_ACCESS_KEY: 'secret',
+      CF_DNS_API_TOKEN: 'cf',
+      CF_DNS_ZONE_ID: 'zone',
+      DB: {} as never,
+    }
+    const res = await worker.fetch(
+      new Request('https://control.botho.io/webhook', { method: 'POST', body: '{}' }),
+      webhookEnv,
+    )
+    expect(res.status).toBe(400)
+  })
+
+  it('has NO public /provision route (security: launches only via /webhook)', async () => {
+    const res = await worker.fetch(
+      new Request('https://control.botho.io/provision', { method: 'POST', body: '{}' }),
+      ENV,
+    )
+    expect(res.status).toBe(404)
   })
 })

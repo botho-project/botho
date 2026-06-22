@@ -11,11 +11,17 @@ This package implements:
   per-subscription Botho rig (EC2 `RunInstances` + Cloudflare DNS + a D1
   mapping), **idempotent by `subscription_id`** and **safe by construction**
   (region/instance-type allowlists, per-sub cap, global fleet cap enforced in
-  code). Exposed as functions for the webhook to call — there is **no public
+  code). Exposed as functions the webhook calls — there is **no public
   `/provision` route**.
+- **P7.2 — the billing↔provisioning join** (#458 §2 + §5, issue #506): a
+  `/webhook` endpoint that **HMAC-verifies the Stripe signature over the raw
+  body** (with a timestamp tolerance to defeat replay) and only then maps the
+  event to `provisionRig` (`checkout.session.completed` / `invoice.paid`) or
+  `teardownRig` (`customer.subscription.deleted` / `invoice.payment_failed`).
+  Idempotent against Stripe's retries (the provisioner dedups by
+  `subscription_id`); unknown event types are a 2xx no-op.
 
 > Out of scope here (later phases of #458 §8):
-> - `/webhook` (Stripe signature verify → calls `provisionRig`/`teardownRig`) — **P7.2 (#506)**
 > - `/status` (user looks up their rig) — **P6.3**
 > - tighter provisioner IAM policy + the orphan-reconciliation cron — **SEC (#508)**
 >
@@ -81,7 +87,11 @@ wrangler secret put BOTHO_BINARY_SHA256
 | Method | Path        | Purpose                                                       |
 |--------|-------------|--------------------------------------------------------------|
 | POST   | `/checkout` | Create a `mode=subscription` Stripe Checkout Session.        |
+| POST   | `/webhook`  | Stripe-signed webhook → provision / deprovision (#506).      |
 | GET    | `/healthz`  | Liveness probe.                                              |
+
+There is **no `/provision` route** — a managed rig can only be launched via the
+signature-verified `/webhook` (#458 §5).
 
 ### `POST /checkout`
 
@@ -117,6 +127,54 @@ The created session carries:
 - `success_url` with Stripe's `{CHECKOUT_SESSION_ID}` template appended for the
   future status lookup (P6.3).
 
+### `POST /webhook` (#506 — the billing↔provisioning join)
+
+The **only** path that can launch or tear down a rig. Stripe POSTs the event
+JSON with a `Stripe-Signature` header; the handler:
+
+1. **Reads the RAW body** (never JSON-parses before verifying — the HMAC is over
+   the exact bytes Stripe signed, and parsing unverified input is avoided).
+2. **Verifies the signature**: `Stripe-Signature` is `t=<ts>,v1=<hmac>`; the
+   handler recomputes `HMAC-SHA256(STRIPE_WEBHOOK_SECRET, "<ts>.<rawBody>")` and
+   constant-time compares it. A **5-minute timestamp tolerance** rejects stale
+   deliveries (replay defense — #458 §5). Unsigned / mismatched / stale → **400**
+   with **no side effect** (no parse, no provisioner call).
+3. **Maps the verified event** to an action and ACKs Stripe quickly with `2xx`:
+
+   | Stripe event                     | Action       | Provisioner call             |
+   |----------------------------------|--------------|------------------------------|
+   | `checkout.session.completed`     | provision    | `provisionRig(req, deps)`    |
+   | `invoice.paid`                   | provision    | `provisionRig(req, deps)`    |
+   | `customer.subscription.deleted`  | teardown     | `teardownRig(subId, deps)`   |
+   | `invoice.payment_failed`         | teardown     | `teardownRig(subId, deps)`   |
+   | anything else                    | no-op (2xx)  | —                            |
+
+   The provision request is read from the event: `subscription` + `customer` +
+   `metadata.region` (the region captured at checkout, P7.1 — also read from
+   `subscription_details.metadata` / line-item metadata for invoice events). For
+   `customer.subscription.deleted` the event object *is* the subscription, so its
+   `id` is the subscription id.
+
+4. **Idempotency:** Stripe retries deliveries; a replay flows back through
+   `provisionRig`/`teardownRig`, which dedup by `subscription_id` (D1 + the EC2
+   tag), so a duplicate delivery **never launches a second instance**.
+
+**Responses:** `200 {received, action}` on success (including no-op events),
+`400` bad/missing/stale signature or unparseable body, `405` non-POST, `500`
+when `STRIPE_WEBHOOK_SECRET` or the provisioner env is unconfigured (fail closed
+so Stripe retries once configured rather than acting unverified).
+
+A failed provision/teardown is logged but still `2xx`-acked (the provisioner is
+idempotent; the SEC reconciliation cron, #508, is the safety net) so Stripe does
+not hammer the endpoint.
+
+#### Local webhook testing
+
+```bash
+stripe listen --forward-to localhost:8787/webhook   # prints a whsec_ for .dev.vars
+stripe trigger checkout.session.completed
+```
+
 ## Configuration (secrets & vars)
 
 All secrets come from Worker secrets / vars — **never the repo** (#458 §2, §5).
@@ -125,6 +183,7 @@ All secrets come from Worker secrets / vars — **never the repo** (#458 §2, §
 |------------------------|--------|-------------------------------------------------------------|
 | `STRIPE_SECRET_KEY`    | secret | TEST key (`sk_test_...`) while on testnet (#458 §7).        |
 | `STRIPE_PRICE_ID`      | secret | The recurring $50/mo Price id (`price_...`). See below.     |
+| `STRIPE_WEBHOOK_SECRET`| secret | Webhook signing secret (`whsec_...`). Required for `/webhook`.|
 | `CHECKOUT_SUCCESS_URL` | var    | Stripe success redirect (in `wrangler.toml`).               |
 | `CHECKOUT_CANCEL_URL`  | var    | Stripe cancel redirect (in `wrangler.toml`).                |
 | `ALLOWED_ORIGINS`      | var    | Comma-separated browser origins allowed to call `/checkout`.|
@@ -140,8 +199,17 @@ testnet):
 3. Store the secret key and price id in the Worker:
 
    ```bash
-   wrangler secret put STRIPE_SECRET_KEY   # paste sk_test_...
-   wrangler secret put STRIPE_PRICE_ID     # paste price_...
+   wrangler secret put STRIPE_SECRET_KEY     # paste sk_test_...
+   wrangler secret put STRIPE_PRICE_ID       # paste price_...
+   ```
+
+4. **Webhook:** create a webhook endpoint pointing at the deployed Worker's
+   `/webhook` URL, subscribed to `checkout.session.completed`, `invoice.paid`,
+   `customer.subscription.deleted`, `invoice.payment_failed`. Copy its signing
+   secret (`whsec_...`):
+
+   ```bash
+   wrangler secret put STRIPE_WEBHOOK_SECRET # paste whsec_...
    ```
 
 Flip to LIVE only when the maintainer decides (re-run the steps with live-mode
@@ -166,6 +234,12 @@ pnpm test:run
 `src/checkout.test.ts` and `src/index.test.ts` cover the session-param builder,
 input validation, the region allowlist, fail-closed config handling, and the
 `/checkout` handler — all with a mocked `fetch` (no network, no live Stripe).
+
+`src/webhook.test.ts` and `src/webhook-handler.test.ts` cover the `/webhook`
+signature crypto (valid / tampered / wrong-secret / stale / missing), the
+event→action mapping, raw-body verification, idempotent replay (no double
+launch), teardown, and the unknown-event no-op — all with in-memory provisioner
+fakes (no network, no live Stripe/AWS/DNS/D1).
 
 ## Deploy
 
