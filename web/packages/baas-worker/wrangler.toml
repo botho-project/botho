@@ -11,6 +11,9 @@
 #   STRIPE_PRICE_ID     The recurring $50/mo Price id ("price_..."). Created once
 #                       in the Stripe dashboard (see README). Kept as a secret so
 #                       no live id is committed.
+#   STRIPE_WEBHOOK_SECRET  Webhook signing secret ("whsec_..."). The /webhook
+#                       endpoint HMAC-verifies every Stripe-Signature against this
+#                       over the RAW body before provisioning (#458 §5). Required.
 #   --- provisioner (#502, #458 §3/§5) — a DEDICATED, tightly-scoped IAM user ---
 #   AWS_ACCESS_KEY_ID       provisioner IAM user access key.
 #   AWS_SECRET_ACCESS_KEY   provisioner IAM user secret key.

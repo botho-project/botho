@@ -10,6 +10,13 @@ STRIPE_SECRET_KEY=sk_test_REPLACE_ME
 # The recurring $50/mo Price id, created once (see README "Stripe setup").
 STRIPE_PRICE_ID=price_REPLACE_ME
 
+# Stripe webhook signing secret (whsec_...). REQUIRED for /webhook — every
+# delivery's Stripe-Signature is HMAC-verified against this over the RAW body,
+# with a 5-minute timestamp tolerance, before any provision/teardown (#458 §5).
+# `stripe listen --forward-to localhost:8787/webhook` prints a local whsec_ for
+# testing; the dashboard issues the production one. NEVER commit a real value.
+STRIPE_WEBHOOK_SECRET=whsec_REPLACE_ME
+
 # Redirect URLs for local dev (the Pages dev server / preview).
 CHECKOUT_SUCCESS_URL=http://localhost:5173/rig/success
 CHECKOUT_CANCEL_URL=http://localhost:5173/rig
