@@ -88,6 +88,35 @@ describe('parseDescribeInstancesResponse', () => {
     expect(list[0].subscriptionTag).toBe('sub_ABC')
   })
 
+  it('extracts the botho:rig-id tag and parses launchTime to epoch ms', () => {
+    const xml = `<DescribeInstancesResponse><reservationSet><item>
+      <instancesSet>
+        <item>
+          <instanceId>i-222</instanceId>
+          <instanceState><name>pending</name></instanceState>
+          <launchTime>2026-06-21T12:00:00.000Z</launchTime>
+          <tagSet>
+            <item><key>botho:managed-rig</key><value>true</value></item>
+            <item><key>botho:subscription</key><value>sub_DEF</value></item>
+            <item><key>botho:rig-id</key><value>def456</value></item>
+          </tagSet>
+        </item>
+      </instancesSet>
+    </item></reservationSet></DescribeInstancesResponse>`
+    const list = parseDescribeInstancesResponse(xml)
+    expect(list).toHaveLength(1)
+    expect(list[0].subscriptionTag).toBe('sub_DEF')
+    expect(list[0].rigIdTag).toBe('def456')
+    expect(list[0].launchTimeMs).toBe(Date.parse('2026-06-21T12:00:00.000Z'))
+  })
+
+  it('leaves launchTimeMs undefined when the field is absent', () => {
+    const xml = `<instancesSet><item><instanceId>i-333</instanceId>
+      <instanceState><name>running</name></instanceState></item></instancesSet>`
+    const list = parseDescribeInstancesResponse(xml)
+    expect(list[0].launchTimeMs).toBeUndefined()
+  })
+
   it('returns an empty array when nothing matches', () => {
     expect(parseDescribeInstancesResponse('<Response/>')).toEqual([])
   })
@@ -124,6 +153,20 @@ describe('HttpEc2Client (mocked fetch — no real AWS)', () => {
     expect(url).toBe('https://ec2.us-west-2.amazonaws.com/')
     const headers = init.headers as Record<string, string>
     expect(headers.Authorization).toContain('AWS4-HMAC-SHA256')
+  })
+
+  it('describeManagedRigs filters on the botho:managed-rig=true tag', async () => {
+    let sentBody = ''
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      sentBody = String(init.body)
+      return new Response('<DescribeInstancesResponse/>', { status: 200 })
+    })
+    const client = new HttpEc2Client(creds, fetchMock as unknown as typeof fetch)
+    await client.describeManagedRigs('us-west-2')
+    const params = new URLSearchParams(sentBody)
+    expect(params.get('Action')).toBe('DescribeInstances')
+    expect(params.get('Filter.1.Name')).toBe('tag:botho:managed-rig')
+    expect(params.get('Filter.1.Value.1')).toBe('true')
   })
 
   it('throws Ec2Error on an AWS error response', async () => {

@@ -6,11 +6,12 @@
  * makes a real AWS call in a test code path (#502 test requirement).
  *
  * The real implementation (`HttpEc2Client`) signs requests with SigV4
- * (`aws-sigv4.ts`) and talks to the EC2 query API. Only the three verbs the
- * provisioner/teardown need are implemented:
+ * (`aws-sigv4.ts`) and talks to the EC2 query API. Only the verbs the
+ * provisioner/teardown/reconciler need are implemented:
  *   - RunInstances        (launch a managed rig)
- *   - DescribeInstances   (idempotency reconcile by the botho:subscription tag)
- *   - TerminateInstances  (teardown)
+ *   - DescribeInstances   (idempotency reconcile by the botho:subscription tag,
+ *                          AND the SEC sweep listing ALL botho:managed-rig=true)
+ *   - TerminateInstances  (teardown / orphan reaping)
  *
  * Tags applied to every launch (#458 §3 step 1, §5):
  *   botho:managed-rig=true, botho:subscription=<sub>, botho:user=<user>,
@@ -28,6 +29,14 @@ export interface Ec2Instance {
   publicIp?: string
   /** Value of the `botho:subscription` tag, if present. */
   subscriptionTag?: string
+  /** Value of the `botho:rig-id` tag, if present (for DNS cleanup on reap). */
+  rigIdTag?: string
+  /**
+   * EC2 `<launchTime>` parsed to epoch ms. Used by the reconciliation sweep
+   * (#508) to detect "stuck-provisioning" rigs that never reached `running`
+   * within a threshold. Undefined if the field was absent in the response.
+   */
+  launchTimeMs?: number
 }
 
 /** Parameters for launching one managed rig. */
@@ -56,7 +65,15 @@ export interface Ec2Client {
    * in `region`. Used to reconcile idempotency against AWS itself, not just D1.
    */
   describeBySubscription(region: string, subscriptionId: string): Promise<Ec2Instance[]>
-  /** Terminate an instance (teardown). Safe to call if already terminated. */
+  /**
+   * List ALL instances tagged `botho:managed-rig=true` in `region`. This is the
+   * input to the SEC reconciliation sweep (#508 / #458 §5): it enumerates every
+   * managed rig EC2 knows about so the sweep can cross-check each against Stripe
+   * and reap orphans. The `botho:managed-rig=true` filter means the sweep can
+   * only ever SEE managed rigs — never the seed/seed2/faucet nodes.
+   */
+  describeManagedRigs(region: string): Promise<Ec2Instance[]>
+  /** Terminate an instance (teardown / orphan reaping). Safe if already gone. */
   terminateInstance(region: string, instanceId: string): Promise<void>
 }
 
@@ -149,7 +166,18 @@ export function parseDescribeInstancesResponse(xml: string): Ec2Instance[] {
       block,
       /<key>botho:subscription<\/key>\s*<value>([^<]+)<\/value>/,
     )
-    out.push({ instanceId: starts[i].id, state, publicIp, subscriptionTag })
+    const rigIdTag = pick(block, /<key>botho:rig-id<\/key>\s*<value>([^<]+)<\/value>/)
+    const launchTimeRaw = pick(block, /<launchTime>([^<]+)<\/launchTime>/)
+    const parsed = launchTimeRaw ? Date.parse(launchTimeRaw) : NaN
+    const launchTimeMs = Number.isNaN(parsed) ? undefined : parsed
+    out.push({
+      instanceId: starts[i].id,
+      state,
+      publicIp,
+      subscriptionTag,
+      rigIdTag,
+      launchTimeMs,
+    })
   }
   return out
 }
@@ -213,6 +241,19 @@ export class HttpEc2Client implements Ec2Client {
     body.set('Version', EC2_API_VERSION)
     body.set('Filter.1.Name', 'tag:botho:subscription')
     body.set('Filter.1.Value.1', subscriptionId)
+    const xml = await this.send(region, body)
+    return parseDescribeInstancesResponse(xml)
+  }
+
+  async describeManagedRigs(region: string): Promise<Ec2Instance[]> {
+    const body = new URLSearchParams()
+    body.set('Action', 'DescribeInstances')
+    body.set('Version', EC2_API_VERSION)
+    // Scope the listing to managed rigs ONLY. This is the same tag IAM uses to
+    // gate TerminateInstances, so the sweep can never even enumerate (let alone
+    // terminate) the seed/seed2/faucet nodes (#458 §5).
+    body.set('Filter.1.Name', 'tag:botho:managed-rig')
+    body.set('Filter.1.Value.1', 'true')
     const xml = await this.send(region, body)
     return parseDescribeInstancesResponse(xml)
   }

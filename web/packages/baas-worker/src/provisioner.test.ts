@@ -156,10 +156,15 @@ describe('idempotency (#458 §3, §5)', () => {
     const { deps, ec2, store } = makeDeps()
     ec2.runPublicIp = '203.0.113.10'
     await provisionRig(REQ, deps)
+    // A real teardown terminates the EC2 instance AND marks D1 terminated. The
+    // explicit per-sub cap (#508 step 5b) cross-checks EC2, so a terminated D1
+    // row alone must not be enough to re-launch while a live box still exists —
+    // teardown must have actually removed it. Simulate that here.
+    ec2.bySubscription.delete('sub_ABC123')
     await store.setState('sub_ABC123', 'terminated')
 
-    // A brand-new subscription id would be the real-world case, but a terminated
-    // row must not block a fresh launch for the same id either.
+    // With both D1 terminated AND the EC2 instance gone, a fresh launch for the
+    // same id is allowed (state machine).
     const again = await provisionRig(REQ, deps)
     expect(again.ok).toBe(true)
     expect(ec2.runCalls).toHaveLength(2)
@@ -215,6 +220,39 @@ describe('safety caps (#458 §5)', () => {
     await provisionRig(REQ, deps)
     await provisionRig(REQ, deps)
     expect(ec2.runCalls).toHaveLength(1)
+  })
+
+  it('explicit per-sub cap (#508 step 5b): adopts a live tagged instance instead of launching a second, even when the D1 row has no instance id', async () => {
+    const { deps, ec2, store } = makeDeps({ fleetCap: 100 })
+    // A provisioning row exists with NO instance id...
+    await store.insertProvisioning({
+      user: 'cus_XYZ',
+      stripeCustomer: 'cus_XYZ',
+      subscriptionId: 'sub_ABC123',
+      rigId: 'abc123',
+      region: 'us-west-2',
+      rpcUrl: 'https://rig-abc123.testnet.botho.io/rpc',
+    })
+    // ...and EC2 already has a LIVE instance carrying this subscription tag.
+    ec2.bySubscription.set('sub_ABC123', [
+      {
+        instanceId: 'i-existing',
+        state: 'running',
+        publicIp: '203.0.113.77',
+        subscriptionTag: 'sub_ABC123',
+        rigIdTag: 'abc123',
+      },
+    ])
+
+    const out = await provisionRig(REQ, deps)
+    expect(out.ok).toBe(true)
+    // The explicit MAX_INSTANCES_PER_SUBSCRIPTION cap means NO second launch.
+    expect(ec2.runCalls).toHaveLength(0)
+    if (out.ok) {
+      expect(out.record.instanceId).toBe('i-existing')
+      expect(out.created).toBe(false)
+    }
+    expect(store.rows.get('sub_ABC123')?.state).toBe('running')
   })
 
   it('rejects a missing subscriptionId / customerId', async () => {

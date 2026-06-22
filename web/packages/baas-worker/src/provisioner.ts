@@ -33,6 +33,7 @@ import {
   DEFAULT_RIG_DOMAIN,
   isAllowedInstanceType,
   isAllowedRegion,
+  MAX_INSTANCES_PER_SUBSCRIPTION,
   rigHostname,
   rigRpcUrl,
   TAG_MANAGED_RIG,
@@ -91,6 +92,11 @@ export type ProvisionErrorCode =
   | 'region_not_allowed'
   | 'instance_type_not_allowed'
   | 'fleet_cap_reached'
+  // `per_subscription_cap` is retained for callers that prefer to treat a
+  // would-be-second launch as an error rather than an adopt. The provisioner's
+  // own policy is to ADOPT the existing instance (step 5b) — idempotent and
+  // safer than failing — so it does not currently return this code, but the
+  // explicit `MAX_INSTANCES_PER_SUBSCRIPTION` cap that backs it is now enforced.
   | 'per_subscription_cap'
   | 'invalid_request'
   | 'launch_failed'
@@ -215,6 +221,35 @@ export async function provisionRig(
       region: req.region,
       rpcUrl,
     })
+  }
+
+  // --- 5b. EXPLICIT per-subscription cap (#508, #458 §5) --------------------
+  // The 1-per-subscription guarantee is *structural* (subscription_id is UNIQUE
+  // in D1, and steps 2-3 adopt any pre-existing/orphaned instance rather than
+  // launching a second). SEC adds the cap as an EXPLICIT, counted defense in
+  // depth: immediately before RunInstances we re-count live instances carrying
+  // this `botho:subscription` tag in EC2 and refuse to launch if the cap is
+  // already met. This wires in `MAX_INSTANCES_PER_SUBSCRIPTION` (previously a
+  // dead symbol the #526 Judge flagged) and closes the narrow window where a
+  // concurrent in-flight launch could otherwise double-provision.
+  const liveForSub = (
+    await deps.ec2.describeBySubscription(req.region, req.subscriptionId)
+  ).filter((i) => isLiveInstanceState(i.state))
+  if (liveForSub.length >= MAX_INSTANCES_PER_SUBSCRIPTION) {
+    // Adopt the existing instance instead of launching another.
+    const adopt = liveForSub[0]
+    await deps.store.setInstanceId(req.subscriptionId, adopt.instanceId)
+    let state = record.state
+    if (adopt.publicIp) {
+      await deps.dns.upsertARecord(hostname, adopt.publicIp)
+      await deps.store.setState(req.subscriptionId, 'running')
+      state = 'running'
+    }
+    return {
+      ok: true,
+      record: { ...record, instanceId: adopt.instanceId, state },
+      created: false,
+    }
   }
 
   // --- 6. Launch the instance (tagged) with rig-bootstrap user-data ---------

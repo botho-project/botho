@@ -29,9 +29,14 @@ This package implements:
   ever comes from the verified token, and the D1 lookup is keyed on it, so a user
   can only see their own rig. `/status` is read-only — it can never provision.
 
-> Out of scope here (later phases of #458 §8):
-> - tighter provisioner IAM policy + the orphan-reconciliation cron — **SEC (#508)**
->
+- **SEC — security hardening** (#458 §5, issue #508): a **dedicated,
+  least-privilege provisioner IAM policy** (committed at `iam/provisioner-policy.json`
+  + `iam/README.md`), an **orphan-terminating reconciliation cron** (a scheduled
+  Worker that lists every `botho:managed-rig=true` EC2 instance, cross-checks each
+  `botho:subscription` against Stripe, and **terminates orphans** — the cost-bleed
+  safety net behind the webhook teardown), and an **explicit per-subscription cap**
+  cross-checked against EC2 tags before launch. See "Security hardening" below.
+
 > The frontend "Get a rig" surface that calls `/checkout` lives in
 > `@botho/web-wallet` at `/rig` (route `RigPage`).
 
@@ -238,13 +243,92 @@ to redirect the browser to. The customer id comes from the token, so a user can
 only open their own portal. **Errors:** `400` missing token, `401` invalid
 token, `405` non-POST, `500` not configured, `502` Stripe rejected the request.
 
+## Security hardening (SEC / #508, #458 §5)
+
+This package's threat model: the control plane holds **AWS creds that launch
+instances** and **Stripe secrets that move money**. The risks are
+provisioning-without-paying, cost-runaway/abuse, AWS-cred blast radius, and
+**cost-bleed from un-torn-down rigs**. The hardening:
+
+### 1. Scoped provisioner IAM policy (`iam/provisioner-policy.json`)
+
+A **dedicated, least-privilege** IAM policy (tighter than `botho-deploy`) granting
+**only** `ec2:RunInstances` / `ec2:TerminateInstances` / `ec2:DescribeInstances` /
+`ec2:CreateTags` — **no IAM, no S3, no broad EC2**. Constrained by: instance-type
+`t4g.medium`, region `us-west-2`, the required tag `botho:managed-rig=true`, the
+specific AMI/SG/subnet/key-pair, and — critically — **`ec2:TerminateInstances`
+restricted to resources tagged `botho:managed-rig=true`**, so the credential can
+**never** terminate the seed/seed2/faucet nodes. `CreateTags` is allowed only as
+tag-on-create, so the tag can't be forged onto a non-managed instance. Full
+rationale + apply steps in `iam/README.md`. Validated by `src/iam-policy.test.ts`.
+
+### 2. Reconciliation cron (the cost-bleed safety net)
+
+A scheduled Worker (`[triggers].crons` in `wrangler.toml`, every 15 min →
+`scheduled()` → `handleScheduled` → `reconcileOnce`) that:
+
+1. lists every `botho:managed-rig=true` EC2 instance (`describeManagedRigs`, the
+   same tag IAM gates terminate on — so it can only ever see/act on managed rigs),
+2. reads each instance's `botho:subscription` tag and asks Stripe "is this
+   subscription still **active**?" (`SubscriptionChecker`),
+3. **terminates orphans** — terminate the instance, delete its DNS record, mark
+   the D1 row `terminated` — for: cancelled / unpaid / absent subscriptions, a
+   managed rig with no subscription tag, and **stuck-provisioning** rigs (never
+   reached `running` past `STUCK_PROVISIONING_MS`),
+4. leaves rigs with an **active** subscription strictly alone, and
+5. **skips** (never reaps) a rig when the Stripe lookup errors transiently — a
+   Stripe hiccup can never reap a paying customer's box.
+
+Same injectable pattern as the provisioner (EC2 / DNS / D1 / Stripe are
+interfaces), so the whole sweep is unit-tested with in-memory fakes in
+`src/reconcile.test.ts` + `src/scheduled-handler.test.ts` — **no real call in a
+test path**.
+
+### 3. Caps (region / instance-type / per-subscription / global fleet)
+
+- **Region allowlist** (`us-west-2`) + **instance-type allowlist** (`t4g.medium`),
+  fail-closed, in `rig-config.ts` (#502, re-verified here).
+- **Global fleet cap** (`FLEET_CAP`, default 25) circuit breaker.
+- **Explicit per-subscription cap**: `MAX_INSTANCES_PER_SUBSCRIPTION` (=1) is now
+  enforced as a counted check (provisioner step 5b) that re-counts live instances
+  carrying this `botho:subscription` tag in EC2 immediately before `RunInstances`
+  and **adopts** the existing instance instead of launching a second — closing the
+  narrow concurrent-launch window on top of the structural `subscription_id`-UNIQUE
+  guarantee. (This wires in the previously-dead `MAX_INSTANCES_PER_SUBSCRIPTION` /
+  `per_subscription_cap` symbols the prior review flagged; the latter remains in
+  the error-code union as a documented alternative to the adopt policy.)
+- **SigV4 known-good reference-vector test** (`src/aws-sigv4.test.ts`): the signer
+  core is pinned against AWS's published Signature Version 4 worked example (the
+  IAM `ListUsers` GET) — empty-payload hash, canonical-request hash, and final
+  signature all byte-exact AWS's documented values.
+
+### LIVE-mode go/no-go checklist (#458 §7)
+
+Complete ALL before flipping Stripe from TEST to LIVE / charging real money:
+
+- [ ] The dedicated provisioner IAM user has **only** `iam/provisioner-policy.json`
+      attached (verify no extra inline/managed policies; not `botho-deploy`).
+- [ ] `ec2:TerminateInstances` is confirmed tag-conditioned (the policy test passes
+      AND a manual `aws iam simulate-principal-policy` denies terminate on a
+      seed/faucet instance).
+- [ ] The reconciliation cron is deployed and a TEST sweep correctly reaped a
+      cancelled-subscription rig in staging (and left active ones alone).
+- [ ] All secrets (`STRIPE_*`, `AWS_*`, `CF_DNS_*`, `STATUS_LINK_SECRET`) are
+      Worker secrets, rotatable, and **absent from the repo / `.dev.vars` is
+      gitignored**.
+- [ ] The webhook is the **only** launch trigger (no public `/provision`) and
+      signature verification is enforced (#506).
+- [ ] The `$50`-vs-cost economics (#441 open item a) are settled.
+
 ## Configuration (secrets & vars)
 
 All secrets come from Worker secrets / vars — **never the repo** (#458 §2, §5).
 
 | Key                    | Kind   | Notes                                                        |
 |------------------------|--------|-------------------------------------------------------------|
-| `STRIPE_SECRET_KEY`    | secret | TEST key (`sk_test_...`) while on testnet (#458 §7).        |
+| `STRIPE_SECRET_KEY`    | secret | TEST key (`sk_test_...`) while on testnet (#458 §7). Also used by the reconciliation cron to check subscription status (#508). |
+| `RECONCILE_REGIONS`    | var    | Comma-separated regions the SEC cron sweeps (default = launch allowlist). |
+| `STUCK_PROVISIONING_MS`| var    | Age (ms) after which a not-yet-running rig is reaped as stuck (default 30 min). |
 | `STRIPE_PRICE_ID`      | secret | The recurring $50/mo Price id (`price_...`). See below.     |
 | `STRIPE_WEBHOOK_SECRET`| secret | Webhook signing secret (`whsec_...`). Required for `/webhook`.|
 | `STATUS_LINK_SECRET`   | secret | HMAC secret for magic-link status tokens. Required for `/status` + `/portal`.|
@@ -314,6 +398,19 @@ mint/verify (round-trip, tampered customer id, wrong secret, expired), the
 link, the **authz boundary** (a user gets their own rig, never another's → 404),
 and the HTTP handlers (200 / 400 missing token / 401 forged token / 404 no rig /
 500 unconfigured) — all with an in-memory store + mocked node/Stripe fetch.
+
+**SEC (#508):** `src/reconcile.test.ts` + `src/scheduled-handler.test.ts` cover
+the reconciliation sweep — an instance whose subscription is cancelled/absent →
+terminated, an active subscription → left alone, stuck-provisioning past the
+threshold → terminated, a tag-less managed rig → terminated, a transient Stripe
+error → **skipped** (never reaps a paying rig), already-terminating instances
+ignored, and the guarantee it **never touches non-managed-rig instances** — all
+with in-memory EC2/DNS/D1/Stripe fakes. `src/stripe-subscriptions.test.ts` covers
+the subscription-status client (active/cancelled/404/transient-throw) with a
+mocked fetch. `src/aws-sigv4.test.ts` adds the **known-good SigV4 reference-vector
+test** (pinned against AWS's published worked example). `src/iam-policy.test.ts`
+asserts `iam/provisioner-policy.json` is valid and its `TerminateInstances`
+statement is tag-conditioned to `botho:managed-rig=true`.
 
 ## Deploy
 

@@ -36,6 +36,14 @@ name = "botho-baas"
 main = "src/index.ts"
 compatibility_date = "2024-09-23"
 
+# --- SEC reconciliation cron (#508, #458 §5) -------------------------------
+# Scheduled sweep that lists every botho:managed-rig=true EC2 instance,
+# cross-checks each botho:subscription against Stripe, and TERMINATES orphans
+# (cancelled / unpaid / absent / stuck-provisioning). The cost-bleed safety net
+# behind the webhook teardown. Runs every 15 minutes.
+[triggers]
+crons = ["*/15 * * * *"]
+
 # D1 — the user<->rig mapping (#458 §3 step 4). Apply schema.sql before first
 # use. The `database_id` below is a PLACEHOLDER: replace it with the real id from
 # `wrangler d1 create botho-baas` (the id is an account-scoped uuid, not a
@@ -70,3 +78,13 @@ RIG_DOMAIN = "testnet.botho.io"
 FLEET_CAP = "25"
 # Where the instance fetches the bootstrap script at first boot (#499/#521).
 BOOTSTRAP_SCRIPT_URL = "https://raw.githubusercontent.com/botho-project/botho/main/infra/baas/rig-bootstrap.sh"
+
+# --- SEC reconciliation cron config (#508) --------------------------------
+# Regions the sweep scans. Defaults to the launch allowlist (us-west-2) when
+# unset; expand in lockstep with REGION_ALLOWLIST in rig-config.ts.
+RECONCILE_REGIONS = "us-west-2"
+# Age (ms) after which a not-yet-running rig with a non-active subscription is
+# reaped as "stuck provisioning". Default 1_800_000 (30 min).
+STUCK_PROVISIONING_MS = "1800000"
+# NOTE: the cron also needs STRIPE_SECRET_KEY (already a required secret for
+# /checkout) to query subscription status. No new secret is introduced.
