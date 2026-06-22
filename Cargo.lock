@@ -1459,6 +1459,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "bth-quorum-sim"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "bth-transaction-clsag"
 version = "0.2.0"
 dependencies = [

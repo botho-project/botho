@@ -1,0 +1,19 @@
+[package]
+name = "bth-quorum-sim"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+rust-version = { workspace = true }
+description = "Static quorum-health analyzer for Botho's curated FBAS federation (Path A)"
+
+[[bin]]
+name = "quorum-sim"
+path = "src/bin/quorum-sim.rs"
+
+[dependencies]
+serde = { workspace = true, features = ["derive", "alloc"] }
+serde_json = { workspace = true, features = ["std"] }
+clap = { workspace = true, features = ["derive"] }
+
+[features]
+default = []
