@@ -7,8 +7,11 @@
 //! 2. An equivocating Byzantine node: below the splitting threshold → no fork;
 //!    at/above it → a fork CAN occur (asserted detected). This cross-checks the
 //!    static analyzer's splitting-set prediction against dynamic behavior.
-//! 3. Unanimity below 4 nodes stalls when one node crashes (liveness).
-//! 4. Reproducibility: same seed → identical outcome.
+//! 3. **Regression for #517**: with ZERO faulty nodes, NEVER fork under any
+//!    network model (sync / delay / drop / delay+drop), every proposer, many
+//!    seeds, several `n`. Federated voting is safe under full asynchrony.
+//! 4. Unanimity below 4 nodes stalls when one node crashes (liveness).
+//! 5. Reproducibility: same seed → identical outcome.
 
 use bth_quorum_sim::{
     model::Fbas,
@@ -96,6 +99,49 @@ fn equivocation_crosses_static_splitting_threshold() {
         run_many(&at, 200).forks > 0,
         "2 equivocators (= splitting set {split}) must be able to fork dynamically"
     );
+}
+
+/// (2b) **Regression for #517**: with ZERO faulty nodes, federated voting is
+/// provably safe under full asynchrony (quorum intersection guarantees
+/// agreement regardless of message timing), so the simulator must NEVER fork —
+/// for ALL four proposer models, across {sync, delay-only, drop-only,
+/// delay+drop}, many seeds, and several `n`.
+///
+/// This previously FAILED under delay: the v1 single-phase accept-lock
+/// committed on a transient *vote* quorum, letting two correct nodes commit
+/// different values purely from message reordering. The two-phase confirm
+/// (commit only on a confirming quorum of *accepters*) restores the
+/// asynchronous-safety invariant.
+#[test]
+fn zero_faults_never_fork_under_any_network() {
+    let networks = [
+        ("sync", NetworkModel::Synchronous),
+        ("delay-only", psync(3, 0.0)),
+        ("drop-only", psync(0, 0.1)),
+        ("delay+drop", psync(3, 0.1)),
+    ];
+    for n in [4usize, 7, 10] {
+        for (net_label, network) in networks {
+            for proposer in ProposerModel::all() {
+                let config = SimConfig {
+                    n,
+                    threshold: None,
+                    proposer,
+                    network,
+                    faulty: vec![],
+                    fault: FaultKind::Crash, // irrelevant: no faulty nodes
+                    max_rounds: 128,
+                };
+                let report = run_many(&config, 200);
+                assert_eq!(
+                    report.forks, 0,
+                    "n={n} {proposer:?} net={net_label}: zero faulty nodes must NEVER fork \
+                     (first fork seed: {:?})",
+                    report.first_fork_seed
+                );
+            }
+        }
+    }
 }
 
 /// (3) Unanimity below 4 nodes stalls when one node crashes (liveness): 3-of-3
