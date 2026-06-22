@@ -20,20 +20,20 @@
  */
 
 /**
- * AWS regions a managed rig may be provisioned in. Kept deliberately small and
- * server-authoritative (#458 §5: "Region allowlist — start: us-west-2 only,
- * expand deliberately"). The frontend dropdown is constrained to this list, and
- * the Worker re-validates so a crafted request can never request an off-list
- * region.
+ * AWS regions a managed rig may be provisioned in. Re-exported from the single
+ * source of truth in `rig-config.ts` (#458 §5: "Region allowlist — start:
+ * us-west-2 only") so checkout and the provisioner can never diverge. The
+ * frontend dropdown is constrained to this list, and the Worker re-validates so
+ * a crafted request can never request an off-list region.
  */
-export const REGION_ALLOWLIST = ['us-west-2'] as const
+export {
+  REGION_ALLOWLIST,
+  isAllowedRegion,
+  type AllowedRegion,
+} from './rig-config'
 
-export type AllowedRegion = (typeof REGION_ALLOWLIST)[number]
-
-/** Returns true if `region` is in the server-side allowlist. */
-export function isAllowedRegion(region: string): region is AllowedRegion {
-  return (REGION_ALLOWLIST as readonly string[]).includes(region)
-}
+import type { AllowedRegion } from './rig-config'
+import { isAllowedRegion } from './rig-config'
 
 /**
  * The subset of Worker env this module needs. Bound from Worker secrets / vars
