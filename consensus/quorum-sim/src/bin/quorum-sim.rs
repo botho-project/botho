@@ -106,6 +106,18 @@ enum Command {
         /// Liveness budget: max rounds before declaring a stall.
         #[arg(long, default_value_t = 64)]
         max_rounds: u32,
+        /// Enable leader-timeout / view-change recovery (#519): if the current
+        /// leader fails to drive a decision within `--view-budget` rounds,
+        /// rotate round-robin to the next leader and retry the slot.
+        /// Omit to run WITHOUT view-change (the v1 behavior, for
+        /// comparison). No effect on the leaderless
+        /// `competing-coinbase` model.
+        #[arg(long)]
+        view_change: bool,
+        /// Per-view round budget for view-change (only used with
+        /// `--view-change`). Rounds a leader gets before the view rotates.
+        #[arg(long, default_value_t = 4)]
+        view_budget: u32,
         /// Emit JSON instead of a table.
         #[arg(long)]
         json: bool,
@@ -223,6 +235,8 @@ fn main() {
             max_delay,
             drop_prob,
             max_rounds,
+            view_change,
+            view_budget,
             json,
         } => {
             let network = if max_delay == 0 && drop_prob == 0.0 {
@@ -233,6 +247,8 @@ fn main() {
                     drop_prob,
                 }
             };
+            // View-change is opt-in (#519); `--view-budget` only matters when on.
+            let view_change = if view_change { Some(view_budget) } else { None };
             // Sweep all proposer models unless one is pinned.
             let models: Vec<ProposerModel> = match proposer {
                 Some(p) => vec![p.into()],
@@ -249,6 +265,7 @@ fn main() {
                         faulty: faulty.clone(),
                         fault: fault.into(),
                         max_rounds,
+                        view_change,
                     };
                     run_many(&config, seeds)
                 })

@@ -53,11 +53,32 @@
 //!   leader rotation. Leadership *fairness* is therefore measured across seeds
 //!   (each seed = a distinct slot). Chain-level concerns (catch-up, height
 //!   realign) are out of scope.
-//! - **No leader-timeout recovery.** A *crashed* leader is survived via a
-//!   deterministic lowest-value-heard fallback (so the slot still decides), but
-//!   there is no priority-ordered leader-timeout FSM, so a *Byzantine
-//!   (equivocating) leader can stall* the slot. SCP's real leader replacement
-//!   is out of scope; the simulator reports this as a liveness (stall) outcome.
+//! - **Leader-timeout / view-change (optional, #519).** A *crashed* leader is
+//!   always survived via a deterministic lowest-value-heard fallback (so the
+//!   slot still decides). On top of that, the simulator can optionally model
+//!   SCP's **leader-timeout / view-change** recovery
+//!   ([`SimConfig::view_change`]): if the current leader fails to drive the
+//!   slot to a decision within a per-view round budget, the **view** is
+//!   advanced and the leader is **rotated round-robin** to `(base_leader +
+//!   view) % n`, and the slot is retried under the new leader. This closes the
+//!   only liveness gap of the v1 engine — a *Byzantine (equivocating) leader*
+//!   that stalls its own slot is rotated out, so liveness is restored — exactly
+//!   the validation the ratified round-robin+view-change proposer design (#427)
+//!   needs. With view-change **disabled** (`view_change: None`), a Byzantine
+//!   leader still stalls the slot, the documented v1 behavior, retained for
+//!   comparison.
+//!
+//!   **Safety is preserved exactly across views.** View-change only changes
+//!   *which leader an as-yet-undecided node follows*; it never unwinds an
+//!   `accept` lock or a commit. A correct node's vote is pinned to its accepted
+//!   value forever (see the accept step), so once a node accepts (let alone
+//!   commits) a value it keeps that value through every subsequent view. Two
+//!   correct nodes therefore still cannot commit different values unless the
+//!   Byzantine set reaches the splitting threshold — the same quorum-
+//!   intersection argument as without view-change. View-change is bounded by
+//!   `max_rounds` (each view consumes at least one round), so the simulation
+//!   still terminates; if no decision is reached within the budget it is
+//!   reported as a stall.
 //! - **Round structure with a message bus.** Messages are queued by an integer
 //!   delivery round (delay); drops remove them. There is no real wall clock and
 //!   no threads, so runs are fully deterministic given a seed.
@@ -182,6 +203,16 @@ pub struct SimConfig {
     pub fault: FaultKind,
     /// Maximum rounds before declaring a stall (liveness budget).
     pub max_rounds: u32,
+    /// **Leader-timeout / view-change** budget (#519). `None` disables view-
+    /// change (the documented v1 behavior: a Byzantine leader stalls its slot).
+    /// `Some(view_budget)` enables it: if the current leader has not driven the
+    /// slot to a decision within `view_budget` rounds, the **view** advances
+    /// and the leader rotates round-robin to `(base_leader + view) % n`,
+    /// retrying the slot under the new leader. Ignored by the leaderless
+    /// [`ProposerModel::CompetingCoinbase`] (no leader to rotate). A
+    /// `view_budget` of 0 is treated as 1 (each view must consume ≥1 round so
+    /// the simulation terminates within `max_rounds`).
+    pub view_change: Option<u32>,
 }
 
 impl SimConfig {
@@ -195,6 +226,7 @@ impl SimConfig {
             faulty: Vec::new(),
             fault: FaultKind::Crash,
             max_rounds: 32,
+            view_change: None,
         }
     }
 
@@ -412,9 +444,32 @@ pub fn run_tracked(config: &SimConfig, seed: u64) -> RunOutcome {
     let mut accepted: Vec<Option<ValueId>> = vec![None; n];
     let mut bus: BTreeMap<u32, Vec<Message>> = BTreeMap::new();
 
-    // One slot leader for the whole simulation (see `leader_for`).
-    let leader = leader_for(config.proposer, seed, n, vrf_seed);
-    let leaders: Vec<usize> = leader.into_iter().collect();
+    // The slot's **view-0 (base) leader** (see `leader_for`). Without view-
+    // change this is the leader for the whole simulation. With view-change
+    // (#519), it is the leader of the first view; later views rotate round-robin
+    // from this base via `leader_at_view`.
+    let base_leader = leader_for(config.proposer, seed, n, vrf_seed);
+    // Leadership distribution reported to `run_many` is measured ACROSS seeds
+    // (each seed = a distinct slot, one base leader per slot), so we record only
+    // the base leader here even when view-change rotates additional leaders
+    // mid-slot. The rotated leaders are an internal liveness-recovery detail and
+    // recording them would distort the cross-seed fairness metric.
+    let leaders: Vec<usize> = base_leader.into_iter().collect();
+
+    // The current view's leader: the base leader rotated round-robin by `view`.
+    // For the leaderless competing-coinbase model `base_leader` is `None` and
+    // this stays `None` (view-change is a no-op there).
+    let leader_at_view =
+        |view: u32| -> Option<usize> { base_leader.map(|b| (b + view as usize) % n) };
+
+    // View-change state (#519). `view` is the current view index; `leader` is
+    // its leader. `view_deadline` is the round by which the current leader must
+    // have produced a decision before the view rotates. With view-change
+    // disabled, `view_deadline` is never reached so the view never advances.
+    let view_budget = config.view_change.map(|b| b.max(1));
+    let mut view: u32 = 0;
+    let mut leader = leader_at_view(view);
+    let mut view_deadline: Option<u32> = view_budget;
 
     // Derive `value -> set of supporting senders` for `node` from a per-sender
     // map (used for both votes and accepts).
@@ -476,6 +531,28 @@ pub fn run_tracked(config: &SimConfig, seed: u64) -> RunOutcome {
     };
 
     for round in 0..config.max_rounds {
+        // --- View-change / leader-timeout step (#519). If the current view's
+        // leader has not driven the slot to a decision by its deadline, rotate
+        // to the next leader (round-robin) and open a fresh view. This is what
+        // recovers liveness from a *Byzantine (equivocating)* or crashed leader:
+        // undecided, not-yet-locked nodes follow the new leader's value next.
+        //
+        // SAFETY: rotating the leader does NOT touch `accepted`/`committed`. A
+        // node that has already locked keeps its lock (its vote is pinned, see
+        // below), so view-change can never make two correct nodes commit
+        // different values — only quorum intersection (the splitting set) bounds
+        // that, exactly as without view-change. Each view consumes ≥1 round
+        // (`view_budget.max(1)`), so view-change always terminates within
+        // `max_rounds`; if no decision is reached it is reported as a stall.
+        if let (Some(budget), Some(deadline)) = (view_budget, view_deadline) {
+            let all_done = (0..n).all(|i| crashed(i) || committed[i].is_some());
+            if round >= deadline && !all_done {
+                view += 1;
+                leader = leader_at_view(view);
+                view_deadline = Some(round.saturating_add(budget));
+            }
+        }
+
         for node in 0..n {
             if crashed(node) || committed[node].is_some() {
                 continue;
@@ -499,26 +576,32 @@ pub fn run_tracked(config: &SimConfig, seed: u64) -> RunOutcome {
                         best
                     }
                     _ => {
-                        // Leader models: a single slot leader proposes a value;
-                        // followers echo the value they HEARD from that leader.
-                        // A correct leader proposes its canonical value (its
-                        // index) to everyone; a Byzantine leader equivocates
+                        // Leader models: the CURRENT VIEW's leader proposes a
+                        // value; followers echo the value they HEARD from that
+                        // leader. A correct leader proposes its canonical value
+                        // (its index) to everyone; a Byzantine leader equivocates
                         // (per-recipient values, applied in the broadcast phase),
                         // so different followers echo different values — the
                         // fork attack.
                         //
-                        // Liveness fallback (models SCP's prioritized multi-
-                        // leader nomination + leader timeout): if a follower has
-                        // not yet heard the primary leader — e.g. the leader has
-                        // *crashed* — it deterministically falls back to the
-                        // LOWEST value it has heard so far (incl. its own
+                        // `leader` is the current view's leader, which the
+                        // view-change step above rotates round-robin when a
+                        // leader fails to drive a decision in time (#519). When
+                        // view-change rotates to a CORRECT leader, undecided,
+                        // not-yet-locked followers re-derive their vote from the
+                        // new leader here (the `l != node` branch), converging on
+                        // the new leader's value — this is the liveness recovery
+                        // from a Byzantine or crashed leader.
+                        //
+                        // Liveness fallback: if a follower has not yet heard the
+                        // current leader — e.g. the leader crashed, or the new
+                        // view's leader has not broadcast yet — it falls back to
+                        // the LOWEST value it has heard so far (incl. its own
                         // coinbase). All correct followers share this combiner,
-                        // so they still converge and decide without the leader.
-                        // SIMPLIFICATION: this is a one-shot deterministic
-                        // backup, not the full priority-ordered leader-timeout
-                        // FSM; it recovers liveness from a crashed leader but
-                        // cannot recover from a *Byzantine* (equivocating)
-                        // leader, which therefore stalls (a documented limit).
+                        // so even with view-change DISABLED a *crashed* leader is
+                        // survived; only a *Byzantine* leader stalls when
+                        // view-change is off (the documented v1 limit, retained
+                        // for the comparison).
                         let l = leader.unwrap_or(node);
                         match heard[node].get(&l) {
                             Some(&v) if l != node => v,
@@ -749,10 +832,10 @@ pub fn render_sim_table(reports: &[SimReport]) -> String {
     let mut out = String::new();
     let _ = writeln!(
         out,
-        "{:<20} {:>3} {:>5} {:>22} {:>6} {:>6} {:>6} {:>9} {:>8}",
-        "proposer", "n", "thr", "network", "forks", "stall", "agree", "mean_rds", "fairness"
+        "{:<20} {:>3} {:>5} {:>22} {:>5} {:>6} {:>6} {:>6} {:>9} {:>8}",
+        "proposer", "n", "thr", "network", "vc", "forks", "stall", "agree", "mean_rds", "fairness"
     );
-    let _ = writeln!(out, "{}", "-".repeat(96));
+    let _ = writeln!(out, "{}", "-".repeat(102));
     for r in reports {
         let t = r
             .config
@@ -773,13 +856,18 @@ pub fn render_sim_table(reports: &[SimReport]) -> String {
             .leadership_fairness()
             .map(|f| format!("{f:.2}"))
             .unwrap_or_else(|| "n/a".to_string());
+        let vc = match r.config.view_change {
+            Some(b) => format!("v{b}"),
+            None => "off".to_string(),
+        };
         let _ = writeln!(
             out,
-            "{:<20} {:>3} {:>5} {:>22} {:>6} {:>6} {:>6} {:>9} {:>8}",
+            "{:<20} {:>3} {:>5} {:>22} {:>5} {:>6} {:>6} {:>6} {:>9} {:>8}",
             r.config.proposer.label(),
             r.config.n,
             t,
             net,
+            vc,
             r.forks,
             r.stalls,
             r.agreements,
@@ -817,6 +905,7 @@ mod tests {
                 faulty: vec![0],
                 fault: FaultKind::Equivocate,
                 max_rounds: 64,
+                view_change: None,
             };
             let report = run_many(&config, 300);
             assert_eq!(
@@ -849,6 +938,7 @@ mod tests {
                         faulty: vec![],
                         fault: FaultKind::Crash,
                         max_rounds: 128,
+                        view_change: None,
                     };
                     let report = run_many(&config, 200);
                     assert_eq!(
@@ -882,6 +972,7 @@ mod tests {
                 faulty: vec![0],
                 fault: FaultKind::Equivocate,
                 max_rounds: 64,
+                view_change: None,
             };
             assert_eq!(
                 run_many(&below, 200).forks,
@@ -906,6 +997,7 @@ mod tests {
             faulty: vec![0, 2],
             fault: FaultKind::Equivocate,
             max_rounds: 64,
+            view_change: None,
         };
         assert!(
             run_many(&at, 200).forks > 0,
@@ -925,6 +1017,7 @@ mod tests {
             faulty: vec![2],
             fault: FaultKind::Crash,
             max_rounds: 32,
+            view_change: None,
         };
         let report = run_many(&config, 50);
         assert_eq!(
@@ -947,6 +1040,7 @@ mod tests {
             faulty: vec![3],
             fault: FaultKind::Crash,
             max_rounds: 32,
+            view_change: None,
         };
         let report = run_many(&config, 50);
         assert_eq!(report.stalls, 0, "1 crash < blocking set 2 → stays live");
@@ -966,6 +1060,7 @@ mod tests {
             faulty: vec![1, 5],
             fault: FaultKind::Equivocate,
             max_rounds: 64,
+            view_change: None,
         };
         for seed in [0u64, 1, 42, 999] {
             let a = run_tracked(&config, seed);
@@ -991,6 +1086,7 @@ mod tests {
             faulty: vec![],
             fault: FaultKind::Crash,
             max_rounds: 32,
+            view_change: None,
         };
         // Force every run to use its full round budget by making it stall-free
         // but capture leadership; on synchronous agreement runs end early, so
@@ -1035,6 +1131,7 @@ mod tests {
             faulty: vec![0],
             fault: FaultKind::Crash,
             max_rounds: 64,
+            view_change: None,
         };
         for seed in 0..50 {
             let a = run(&config, seed);
@@ -1045,5 +1142,64 @@ mod tests {
             );
             assert_eq!(a.committed, b.committed, "seed {seed}: same commits");
         }
+    }
+
+    /// View-change (#519) closes the Byzantine-leader stall: on a seed where
+    /// the equivocating node IS the round-robin leader, the slot stalls
+    /// WITHOUT view-change but reaches agreement WITH it. n=4, faulty node
+    /// 0, seed 0 ⇒ `seed % n == 0` ⇒ node 0 is the leader.
+    #[test]
+    fn view_change_unsticks_byzantine_leader_seed() {
+        let base = SimConfig {
+            n: 4,
+            threshold: None,
+            proposer: ProposerModel::RoundRobinLeader,
+            network: NetworkModel::Synchronous,
+            faulty: vec![0],
+            fault: FaultKind::Equivocate,
+            max_rounds: 96,
+            view_change: None,
+        };
+        // Seed 0: node 0 is the leader (0 % 4 == 0) and equivocates → stall.
+        assert_eq!(
+            run_tracked(&base, 0).decision,
+            Decision::Stall,
+            "without view-change, a Byzantine leader must stall its own slot"
+        );
+        // Same seed WITH view-change: rotate to a correct leader → agreement.
+        let with = SimConfig {
+            view_change: Some(2),
+            ..base
+        };
+        assert_eq!(
+            run_tracked(&with, 0).decision,
+            Decision::Agreement,
+            "with view-change, the slot must rotate off the Byzantine leader and \
+             reach agreement"
+        );
+    }
+
+    /// A `view_budget` of 0 is clamped to 1 (each view consumes ≥1 round) so
+    /// the simulation still terminates and behaves like a 1-round view
+    /// budget rather than spinning forever or never rotating.
+    #[test]
+    fn view_budget_zero_is_clamped_and_terminates() {
+        let config = SimConfig {
+            n: 4,
+            threshold: None,
+            proposer: ProposerModel::RoundRobinLeader,
+            network: NetworkModel::Synchronous,
+            faulty: vec![0],
+            fault: FaultKind::Equivocate,
+            max_rounds: 96,
+            view_change: Some(0),
+        };
+        // Must terminate (no panic / hang) and recover the Byzantine-leader seed.
+        let report = run_many(&config, 64);
+        assert_eq!(report.forks, 0);
+        assert_eq!(
+            report.stalls, 0,
+            "view_budget 0 (clamped to 1) must still recover via rotation"
+        );
     }
 }
