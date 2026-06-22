@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Button, Logo } from '@botho/ui'
-import { Shield, Scale, Atom, Zap, ArrowRight, Github, Menu, X, FileText, Blocks } from 'lucide-react'
+import { Shield, Scale, Atom, Zap, ArrowRight, Github, Menu, X, FileText, Blocks, Server } from 'lucide-react'
 
 const features = [
   {
@@ -55,6 +55,10 @@ export function LandingPage() {
             <Link to="/docs" className="text-ghost hover:text-light transition-colors">
               Docs
             </Link>
+            <Link to="/rig" className="text-ghost hover:text-light transition-colors flex items-center gap-2">
+              <Server size={18} />
+              Get a Rig
+            </Link>
             <a
               href="/botho-whitepaper.pdf"
               target="_blank"
@@ -106,6 +110,14 @@ export function LandingPage() {
                 className="block px-4 py-3 rounded-lg text-ghost hover:text-light hover:bg-steel/50 transition-colors"
               >
                 Documentation
+              </Link>
+              <Link
+                to="/rig"
+                onClick={() => setMobileMenuOpen(false)}
+                className="flex items-center gap-2 px-4 py-3 rounded-lg text-ghost hover:text-light hover:bg-steel/50 transition-colors"
+              >
+                <Server size={18} />
+                Get a Rig
               </Link>
               <a
                 href="/botho-whitepaper.pdf"
@@ -219,14 +231,23 @@ export function LandingPage() {
             Ready to Get Started?
           </h2>
           <p className="text-sm sm:text-base text-ghost mb-6 sm:mb-8 px-2">
-            Create a wallet in seconds. No email, no KYC, no tracking.
+            Create a wallet in seconds. No email, no KYC, no tracking. Or run your
+            own always-on node with a managed rig.
           </p>
-          <Link to="/wallet">
-            <Button size="lg" className="w-full sm:w-auto justify-center">
-              Create Wallet
-              <ArrowRight className="ml-2" size={18} />
-            </Button>
-          </Link>
+          <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 justify-center px-4 sm:px-0">
+            <Link to="/wallet" className="w-full sm:w-auto">
+              <Button size="lg" className="w-full sm:w-auto justify-center">
+                Create Wallet
+                <ArrowRight className="ml-2" size={18} />
+              </Button>
+            </Link>
+            <Link to="/rig" className="w-full sm:w-auto">
+              <Button variant="secondary" size="lg" className="w-full sm:w-auto justify-center">
+                <Server className="mr-2" size={18} />
+                Get a Rig
+              </Button>
+            </Link>
+          </div>
         </div>
       </section>
 

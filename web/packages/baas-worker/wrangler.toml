@@ -1,0 +1,28 @@
+# Cloudflare Worker — Botho-as-a-Service control plane (#458 §1).
+#
+# Deploy with:
+#   pnpm --filter @botho/baas-worker deploy
+# Requires CLOUDFLARE_API_TOKEN with "Workers Scripts: Edit".
+#
+# SECRETS (never in the repo — set with `wrangler secret put`):
+#   STRIPE_SECRET_KEY   Stripe secret key. Use a TEST key (sk_test_...) while on
+#                       testnet (#458 §7). LIVE key only when the maintainer
+#                       flips to live billing.
+#   STRIPE_PRICE_ID     The recurring $50/mo Price id ("price_..."). Created once
+#                       in the Stripe dashboard (see README). Kept as a secret so
+#                       no live id is committed.
+#
+# VARS below are non-secret and safe to commit (public URLs + an origin
+# allowlist). Override per-environment as needed.
+
+name = "botho-baas"
+main = "src/index.ts"
+compatibility_date = "2024-09-23"
+
+[vars]
+# Where Stripe redirects after a successful / cancelled checkout. These point at
+# the Pages site that hosts the "Get a rig" surface.
+CHECKOUT_SUCCESS_URL = "https://botho.io/rig/success"
+CHECKOUT_CANCEL_URL = "https://botho.io/rig"
+# Browser origins permitted to call /checkout (comma-separated).
+ALLOWED_ORIGINS = "https://botho.io,https://wallet.botho.io"

@@ -1,0 +1,18 @@
+# Local development secrets for `wrangler dev` (#458 §2, §7).
+#
+# Copy to `.dev.vars` (gitignored) and fill in your Stripe TEST values.
+# NEVER commit real keys. In production these are set via `wrangler secret put`,
+# not from this file.
+
+# Stripe TEST secret key. Get it from the Stripe dashboard (test mode).
+STRIPE_SECRET_KEY=sk_test_REPLACE_ME
+
+# The recurring $50/mo Price id, created once (see README "Stripe setup").
+STRIPE_PRICE_ID=price_REPLACE_ME
+
+# Redirect URLs for local dev (the Pages dev server / preview).
+CHECKOUT_SUCCESS_URL=http://localhost:5173/rig/success
+CHECKOUT_CANCEL_URL=http://localhost:5173/rig
+
+# Browser origins allowed to call /checkout during local dev.
+ALLOWED_ORIGINS=http://localhost:5173

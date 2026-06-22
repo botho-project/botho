@@ -8,6 +8,7 @@ import { PayPage } from './pages/pay'
 import { ContactsPage } from './pages/contacts'
 import { DocsPage } from './pages/docs'
 import { ExplorerPage } from './pages/explorer'
+import { RigPage, RigSuccessPage } from './pages/rig'
 
 /**
  * Decide what `/` should render.
@@ -53,6 +54,9 @@ function App() {
             <Route path="/explorer/block/:hash" element={<ExplorerPage />} />
             <Route path="/docs" element={<DocsPage />} />
             <Route path="/docs/*" element={<DocsPage />} />
+            {/* Botho-as-a-Service "Get a rig" surface (#458 §4 / #504). */}
+            <Route path="/rig" element={<RigPage />} />
+            <Route path="/rig/success" element={<RigSuccessPage />} />
           </Routes>
         </BrowserRouter>
       </WalletProvider>
