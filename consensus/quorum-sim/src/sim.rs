@@ -23,16 +23,30 @@
 //! consensus **dynamics** at the abstraction needed to observe agreement vs.
 //! divergence, and intentionally simplifies real SCP:
 //!
-//! - **Vote + accept-lock + commit, not the full SCP state machine.** Real SCP
-//!   nomination has `voted`/`accepted`/`confirmed` nominate stages and the
-//!   ballot protocol has `PREPARE`/`CONFIRM`/`EXTERNALIZE` with ballot counters
-//!   `b`, `p`, `c`, `h`. Here each correct node casts ONE current vote, then
-//!   **accepts (locks)** a value the first time it observes a quorum (per its
-//!   own quorum set) supporting it, and **commits** the locked value once a
-//!   quorum still supports it. The accept-lock collapses SCP's accept→confirm
-//!   into a single irrevocable lock; it is what produces the splitting-set
-//!   safety guarantee (two correct nodes can only lock different values if
-//!   their quorums share no *honest* node). It is NOT a faithful ballot FSM.
+//! - **Two-phase federated voting (vote → accept → confirm/commit), not the
+//!   full SCP state machine.** Real SCP nomination has `voted`/`accepted`/
+//!   `confirmed` nominate stages and the ballot protocol has `PREPARE`/
+//!   `CONFIRM`/`EXTERNALIZE` with ballot counters `b`, `p`, `c`, `h`. Here each
+//!   correct node casts ONE current vote, then runs the two federated-voting
+//!   steps that actually carry the safety proof. First, **accept (lock)**: a
+//!   node *accepts* and irrevocably locks a value the first time it sees the
+//!   federated-voting accept condition for it — either a **quorum** (incl.
+//!   self) currently *votes* for the value, or a **v-blocking set** of nodes
+//!   have already *accepted* it; the lock is pinned, so a correct node accepts
+//!   at most one value, ever. Second, **confirm (commit)**: a node *irrevocably
+//!   commits* a value only once it observes a **confirming quorum** (incl.
+//!   self) whose members have each *accepted* that value — not merely voted for
+//!   it. This second phase is the fix for the asynchronous-safety defect
+//!   (#517). The earlier v1 simplification collapsed accept→confirm into a
+//!   single lock and committed on a transient *vote* quorum, which under
+//!   message reordering let two correct nodes commit different values with ZERO
+//!   faulty nodes. Requiring a confirming quorum of *accepters* restores the
+//!   quorum-intersection guarantee: two quorums of accepters of different
+//!   values would have to share an honest node, but an honest node accepts only
+//!   one value — so under ARBITRARY delay/reordering, once any correct node
+//!   commits `v`, no correct node can commit `v' ≠ v` unless the Byzantine set
+//!   reaches the splitting threshold. It is still NOT a faithful ballot FSM,
+//!   but the safety invariant is exact.
 //! - **One slot, one leader per simulation.** We simulate agreement on a single
 //!   slot's value, repeated across many seeds — not a growing chain, and (for
 //!   leader models) with ONE leader for the whole slot rather than per-round
@@ -239,14 +253,24 @@ impl RunOutcome {
 /// A message on the bus. Equivocation is captured by sending per-recipient
 /// copies that carry different `value`s. The delivery round is the bus
 /// `BTreeMap` key, so it is not stored on the message itself.
+///
+/// Carries BOTH federated-voting signals so the receiver can run the two-phase
+/// protocol against delayed/reordered state:
+/// - `value`: the sender's current *vote* (used for the accept step), and
+/// - `accept`: the sender's irrevocably *accepted* value if it has locked one
+///   (`None` until the sender accepts). A confirming quorum of `accept`ers is
+///   what authorizes an irrevocable commit, restoring asynchronous safety.
 #[derive(Clone, Copy, Debug)]
 struct Message {
     /// Sender node index.
     from: usize,
     /// Recipient node index.
     to: usize,
-    /// The value the sender is voting/committing for, as seen by `to`.
+    /// The value the sender is voting for, as seen by `to`.
     value: ValueId,
+    /// The value the sender has *accepted* (locked), as seen by `to`. `None`
+    /// until the sender accepts.
+    accept: Option<ValueId>,
 }
 
 /// A seeded keyed hash for leader priority / VRF approximation and message
@@ -366,18 +390,25 @@ pub fn run_tracked(config: &SimConfig, seed: u64) -> RunOutcome {
     // values if the two supporting quorums overlap solely in Byzantine
     // (equivocating) nodes — exactly the static splitting-set condition.
     let mut heard: Vec<BTreeMap<usize, ValueId>> = vec![BTreeMap::new(); n];
+    // `heard_accept[to][from]` = the latest value `to` has heard `from` has
+    // *accepted* (locked). This is the second federated-voting signal: a node
+    // only irrevocably commits once a CONFIRMING QUORUM of these accepters
+    // exists for one value (see the commit step). Because an honest node
+    // accepts at most one value, two confirming quorums for different values
+    // must share an honest accepter — impossible — so no fork can occur without
+    // the Byzantine set reaching the splitting threshold, regardless of delay.
+    let mut heard_accept: Vec<BTreeMap<usize, ValueId>> = vec![BTreeMap::new(); n];
     let mut committed: Vec<Option<ValueId>> = vec![None; n];
     let mut commit_round: Vec<Option<u32>> = vec![None; n];
     let mut own_vote: Vec<Option<ValueId>> = vec![None; n];
-    // The SCP federated-voting **accept lock**: once a correct node sees a
-    // quorum support a value, it *accepts* and locks that value, pinning its
-    // own vote to it forever after (it never retracts to a different value).
-    // This collapses SCP's accept→confirm steps into one lock, and is what
-    // makes the dynamic model honor the static splitting-set guarantee: two
-    // correct nodes can only commit different values if the two supporting
-    // quorums share no *honest* node — i.e. the Byzantine (splitting) set is at
-    // least the honest overlap, which for a 3f+1 threshold means f+1
-    // equivocators. With ≤ splitting−1 equivocators, no fork is possible.
+    // The federated-voting **accept lock**: a correct node *accepts* and locks a
+    // value the first time it sees the accept condition (a quorum votes for it,
+    // OR a v-blocking set has accepted it), pinning its own vote to it forever
+    // after (it never retracts to a different value). A correct node thus
+    // accepts at most ONE value. This lock is necessary but, on its own, NOT
+    // sufficient for an irrevocable commit — commit additionally requires a
+    // confirming quorum of accepters (the fix for #517). With ≤ splitting−1
+    // equivocators, no fork is possible under arbitrary message reordering.
     let mut accepted: Vec<Option<ValueId>> = vec![None; n];
     let mut bus: BTreeMap<u32, Vec<Message>> = BTreeMap::new();
 
@@ -385,7 +416,8 @@ pub fn run_tracked(config: &SimConfig, seed: u64) -> RunOutcome {
     let leader = leader_for(config.proposer, seed, n, vrf_seed);
     let leaders: Vec<usize> = leader.into_iter().collect();
 
-    // Derive `value -> set of supporting senders` for `node` from `heard`.
+    // Derive `value -> set of supporting senders` for `node` from a per-sender
+    // map (used for both votes and accepts).
     let supporters = |heard_node: &BTreeMap<usize, ValueId>| -> BTreeMap<ValueId, NodeSet> {
         let mut by_value: BTreeMap<ValueId, NodeSet> = BTreeMap::new();
         for (&from, &value) in heard_node {
@@ -394,12 +426,30 @@ pub fn run_tracked(config: &SimConfig, seed: u64) -> RunOutcome {
         by_value
     };
 
+    // Whether `set` is **v-blocking** for `node`: it intersects every quorum of
+    // `node`. For a symmetric `t`-of-`n` slice the complement of any quorum has
+    // size `n − t`, so `set` is v-blocking iff it cannot be avoided by some
+    // quorum — equivalently, the nodes NOT in `set` do not themselves contain a
+    // slice for `node`. We compute it directly from the quorum-set definition so
+    // it stays correct for arbitrary slices, not just the symmetric case.
+    let is_v_blocking = |node: usize, set: &NodeSet| -> bool {
+        if node >= fbas.len() {
+            return false;
+        }
+        // `set` blocks `node` iff the remaining nodes (all − set) do NOT satisfy
+        // `node`'s quorum set: i.e. every slice of `node` includes some member
+        // of `set`.
+        let complement = fbas.all_nodes().difference(set);
+        !fbas.nodes[node].quorum_set.is_satisfied_by(&complement)
+    };
+
     let send = |rng: &mut ChaCha8Rng,
                 bus: &mut BTreeMap<u32, Vec<Message>>,
                 cur: u32,
                 from: usize,
                 to: usize,
-                value: ValueId| {
+                value: ValueId,
+                accept: Option<ValueId>| {
         let (delay, drop_prob) = match config.network {
             NetworkModel::Synchronous => (1u32, 0.0f64),
             NetworkModel::PartiallySynchronous {
@@ -417,9 +467,12 @@ pub fn run_tracked(config: &SimConfig, seed: u64) -> RunOutcome {
         if drop_prob > 0.0 && rng.gen::<f64>() < drop_prob {
             return;
         }
-        bus.entry(cur + delay)
-            .or_default()
-            .push(Message { from, to, value });
+        bus.entry(cur + delay).or_default().push(Message {
+            from,
+            to,
+            value,
+            accept,
+        });
     };
 
     for round in 0..config.max_rounds {
@@ -493,21 +546,30 @@ pub fn run_tracked(config: &SimConfig, seed: u64) -> RunOutcome {
                 continue;
             }
             let Some(v) = *vote else { continue };
+            let equivocates = is_faulty(from) && config.fault == FaultKind::Equivocate;
             for to in 0..n {
                 if to == from {
                     continue;
                 }
-                let sent_value = if is_faulty(from) && config.fault == FaultKind::Equivocate {
+                let (sent_value, sent_accept) = if equivocates {
                     // Equivocation: send each recipient a value keyed to that
                     // recipient, so distinct honest nodes are pushed toward
                     // distinct values (the fork-inducing partition attack). The
                     // base `n` offset keeps these ids disjoint from honest
-                    // coinbase ids `0..n`.
-                    n as ValueId + to as ValueId
+                    // coinbase ids `0..n`. The Byzantine node ALSO equivocates on
+                    // its *accept* signal (claiming to have accepted the same
+                    // per-recipient value) — otherwise it could never help two
+                    // honest nodes assemble distinct confirming quorums, and the
+                    // at/above-splitting-set fork attack would be defeated for
+                    // the wrong reason.
+                    let ev = n as ValueId + to as ValueId;
+                    (ev, Some(ev))
                 } else {
-                    v
+                    // Honest node: broadcasts its current vote and, if it has
+                    // locked a value, its accepted value (the confirm signal).
+                    (v, accepted[from])
                 };
-                send(&mut rng, &mut bus, round, from, to, sent_value);
+                send(&mut rng, &mut bus, round, from, to, sent_value, sent_accept);
             }
         }
 
@@ -519,34 +581,64 @@ pub fn run_tracked(config: &SimConfig, seed: u64) -> RunOutcome {
             // Latest value heard from this sender overwrites the prior one
             // (retraction): a sender has one current vote per recipient.
             heard[m.to].insert(m.from, m.value);
+            if let Some(a) = m.accept {
+                // An accept is irrevocable for a correct sender, so we only ever
+                // learn MORE accepts; record the latest seen.
+                heard_accept[m.to].insert(m.from, a);
+            }
         }
 
         for node in 0..n {
             if crashed(node) || committed[node].is_some() {
                 continue;
             }
-            let by_value = supporters(&heard[node]);
-            // --- Accept step: lock onto the lowest value that this node
-            // currently supports AND that has reached a quorum. Once locked the
-            // node never moves off it (pinned vote above). A correct node thus
-            // accepts at most one value; this is the federated-voting invariant
-            // that produces the splitting-set safety guarantee.
+            let by_vote = supporters(&heard[node]);
+            // --- Accept (lock) step. Lock onto a value the first time this node
+            // sees the federated-voting *accept* condition for it, and never
+            // move off it (the vote is pinned to the lock above). A correct node
+            // therefore accepts at most ONE value — the invariant the confirm
+            // step relies on for safety. Accept fires if EITHER:
+            //   (a) a quorum (incl. self) currently *votes* for the value, OR
+            //   (b) a *v-blocking* set of nodes have already *accepted* it
+            //       (so the node cannot safely refuse to accept).
+            // We pick the lowest qualifying value for determinism.
             if accepted[node].is_none() {
+                let by_accept = supporters(&heard_accept[node]);
                 let mut lock: Option<ValueId> = None;
-                for (&value, senders) in &by_value {
+                // (a) quorum-of-voters (must include self's own vote).
+                for (&value, senders) in &by_vote {
                     if senders.contains(node) && fbas.is_quorum(senders) {
+                        lock = Some(lock.map_or(value, |l| l.min(value)));
+                    }
+                }
+                // (b) v-blocking-of-accepters: a v-blocking set already accepted
+                //     it. This is the federated-voting accept escape hatch that
+                //     keeps the protocol live under reordering.
+                for (&value, accepters) in &by_accept {
+                    if is_v_blocking(node, accepters) {
                         lock = Some(lock.map_or(value, |l| l.min(value)));
                     }
                 }
                 if let Some(v) = lock {
                     accepted[node] = Some(v);
+                    // Record our own accept so a confirming quorum can include
+                    // self, and so peers learn it on the next broadcast.
+                    heard_accept[node].insert(node, v);
                 }
             }
-            // --- Commit step (collapses accept→confirm): commit the accepted
-            // value once a quorum (including self) currently supports it.
+            // --- Confirm (commit) step. This is the safety-critical phase and
+            // the fix for #517: irrevocably commit the accepted value ONLY once
+            // a *confirming quorum* (incl. self) of nodes have each *accepted*
+            // that same value — not merely voted for it. Because a correct node
+            // accepts at most one value, two confirming quorums for different
+            // values must share an honest accepter (quorum intersection), which
+            // is impossible; so no two correct nodes can commit different values
+            // under ANY message reordering unless the Byzantine set reaches the
+            // splitting threshold.
             if let Some(v) = accepted[node] {
-                if let Some(senders) = by_value.get(&v) {
-                    if senders.contains(node) && fbas.is_quorum(senders) {
+                let by_accept = supporters(&heard_accept[node]);
+                if let Some(accepters) = by_accept.get(&v) {
+                    if accepters.contains(node) && fbas.is_quorum(accepters) {
                         committed[node] = Some(v);
                         commit_round[node] = Some(round + 1);
                     }
@@ -732,6 +824,41 @@ mod tests {
                 "proposer {:?}: 1 equivocator below splitting set (2) must never fork",
                 proposer
             );
+        }
+    }
+
+    /// Regression for #517: with ZERO faulty nodes, no fork can occur under any
+    /// network model — including delay-only, which previously forked because
+    /// the single-phase accept-lock committed on a transient vote quorum.
+    #[test]
+    fn zero_faults_never_fork_under_delay() {
+        let networks = [
+            NetworkModel::Synchronous,
+            psync(3, 0.0),
+            psync(0, 0.1),
+            psync(3, 0.1),
+        ];
+        for n in [4usize, 7, 10] {
+            for network in networks {
+                for proposer in ProposerModel::all() {
+                    let config = SimConfig {
+                        n,
+                        threshold: None,
+                        proposer,
+                        network,
+                        faulty: vec![],
+                        fault: FaultKind::Crash,
+                        max_rounds: 128,
+                    };
+                    let report = run_many(&config, 200);
+                    assert_eq!(
+                        report.forks, 0,
+                        "n={n} {proposer:?} net={network:?}: zero faults must never fork \
+                         (first fork seed {:?})",
+                        report.first_fork_seed
+                    );
+                }
+            }
         }
     }
 
