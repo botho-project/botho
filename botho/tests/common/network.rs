@@ -209,6 +209,73 @@ impl TestNetwork {
         }
     }
 
+    /// Verify that every node agrees on the block hash at each height in
+    /// `1..=height` (no fork at any settled height).
+    ///
+    /// Unlike [`Self::verify_consistency`], which only compares the current
+    /// tip, this walks the whole chain prefix and asserts byte-for-byte
+    /// block-hash agreement at every height. Returns the per-height agreed
+    /// hashes (node 0's view, which is asserted identical on every other
+    /// node) so callers can run additional per-block invariants without
+    /// re-reading the ledgers.
+    pub fn verify_no_fork_through(&self, height: u64) -> Vec<[u8; 32]> {
+        let mut hashes = Vec::with_capacity(height as usize);
+
+        for h in 1..=height {
+            let reference = self
+                .get_node(0)
+                .ledger
+                .read()
+                .unwrap()
+                .get_block(h)
+                .unwrap_or_else(|e| panic!("Node 0 missing block at height {h}: {e}"));
+            let reference_hash = reference.hash();
+
+            for i in 1..self.config.num_nodes {
+                let block = self
+                    .get_node(i)
+                    .ledger
+                    .read()
+                    .unwrap()
+                    .get_block(h)
+                    .unwrap_or_else(|e| panic!("Node {i} missing block at height {h}: {e}"));
+                assert_eq!(
+                    reference_hash,
+                    block.hash(),
+                    "FORK at height {h}: node {i} disagrees with node 0 on block hash"
+                );
+            }
+
+            hashes.push(reference_hash);
+        }
+
+        hashes
+    }
+
+    /// Assert that the block at each height in `1..=height` carries exactly one
+    /// coinbase (minting) transaction — the single-proposer / single-coinbase
+    /// invariant from #427 Finding 3.
+    ///
+    /// The [`Block`] type carries its coinbase in a single non-optional
+    /// `minting_tx` field, so "exactly one coinbase per height" is structurally
+    /// guaranteed for any block that was accepted onto the chain. This helper
+    /// makes that invariant explicit and also verifies the coinbase's height
+    /// matches the block height, catching any height/coinbase desync.
+    pub fn verify_single_coinbase_per_height(&self, height: u64) {
+        let node = self.get_node(0);
+        let ledger = node.ledger.read().unwrap();
+        for h in 1..=height {
+            let block = ledger
+                .get_block(h)
+                .unwrap_or_else(|e| panic!("Node 0 missing block at height {h}: {e}"));
+            assert_eq!(
+                block.minting_tx.block_height, h,
+                "Block at height {h} carries a coinbase minting tx for height {}",
+                block.minting_tx.block_height
+            );
+        }
+    }
+
     /// Wait for all nodes to reach the target height
     pub fn wait_for_height(&self, target_height: u64, timeout: Duration) -> bool {
         let deadline = std::time::Instant::now() + timeout;
