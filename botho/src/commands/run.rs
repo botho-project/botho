@@ -36,7 +36,8 @@ use crate::{
     node::{MintedMintingTx, Node, SharedLedger},
     rpc::{
         calculate_dir_size, init_metrics, start_metrics_server, start_rpc_server, FaucetState,
-        MetricsUpdater, NodeIdentity, RpcState, WsBroadcaster, DATA_DIR_USAGE_BYTES,
+        MetricsUpdater, NodeIdentity, PeerInfoSnapshot, RpcState, WsBroadcaster,
+        DATA_DIR_USAGE_BYTES,
     },
     transaction::Transaction,
     wallet::Wallet,
@@ -51,6 +52,27 @@ fn get_connected_peer_ids(discovery: &NetworkDiscovery) -> Vec<String> {
         .peer_table()
         .iter()
         .map(|p| p.peer_id.to_string())
+        .collect()
+}
+
+/// Build the RPC-facing connected-peer snapshot from the live discovery peer
+/// table (#544).
+///
+/// Pre-renders the libp2p / discovery types into the plain
+/// strings/primitives [`PeerInfoSnapshot`] carries, so the RPC layer stays free
+/// of network types. `last_seen` (an `Instant`) is collapsed to whole seconds
+/// elapsed, a coarse liveness hint rather than a precise timestamp.
+fn build_peer_snapshot(discovery: &NetworkDiscovery) -> Vec<PeerInfoSnapshot> {
+    discovery
+        .peer_table()
+        .iter()
+        .map(|p| PeerInfoSnapshot {
+            peer_id: p.peer_id.to_string(),
+            address: p.address.as_ref().map(|a| a.to_string()),
+            protocol_version: p.protocol_version.as_ref().map(|v| v.to_string()),
+            version_warning: p.version_warning,
+            last_seen_secs: p.last_seen.elapsed().as_secs(),
+        })
         .collect()
 }
 
@@ -370,6 +392,11 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
     // SCP peer count tracks consensus participants (currently equals peer_count
     // as all peers participate in SCP consensus)
     let scp_peer_count = Arc::new(RwLock::new(discovery.peer_count()));
+    // Live connected-peer snapshot for `network_getPeers` (#544). Seeded with
+    // any peers already connected at startup; refreshed on each peer
+    // connect/disconnect in the network event loop below.
+    let peers_snapshot: Arc<RwLock<Vec<PeerInfoSnapshot>>> =
+        Arc::new(RwLock::new(build_peer_snapshot(&discovery)));
     let ws_broadcaster = Arc::new(WsBroadcaster::new(1024));
 
     // Build the node's stable identity (#500) from the persistent libp2p key
@@ -411,7 +438,8 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
     .with_quorum(config.network.quorum.clone())
     .with_identity(node_identity)
     .with_minter_health(minter_health.clone())
-    .with_sync_status(sync_status.clone());
+    .with_sync_status(sync_status.clone())
+    .with_peers(peers_snapshot.clone());
 
     // Initialize wallet for RPC (balance checking, faucet, etc.)
     if let Some(mnemonic) = config.mnemonic() {
@@ -810,6 +838,12 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                             }
                             metrics_updater.set_peer_count(new_peer_count);
 
+                            // Refresh the connected-peer snapshot surfaced by
+                            // `network_getPeers` (#544).
+                            if let Ok(mut snap) = peers_snapshot.write() {
+                                *snap = build_peer_snapshot(&discovery);
+                            }
+
                             // Broadcast peer event to WebSocket clients
                             ws_broadcaster.peer_connected(new_peer_count, &peer_id.to_string());
 
@@ -867,6 +901,12 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                                 *count = new_peer_count;
                             }
                             metrics_updater.set_peer_count(new_peer_count);
+
+                            // Refresh the connected-peer snapshot surfaced by
+                            // `network_getPeers` (#544).
+                            if let Ok(mut snap) = peers_snapshot.write() {
+                                *snap = build_peer_snapshot(&discovery);
+                            }
 
                             // Broadcast peer event to WebSocket clients
                             ws_broadcaster.peer_disconnected(new_peer_count, &peer_id.to_string());

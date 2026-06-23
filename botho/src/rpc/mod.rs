@@ -110,6 +110,34 @@ pub struct NodeIdentity {
     pub dns_seed_domain: String,
 }
 
+/// A single connected-peer snapshot surfaced by `network_getPeers` (#544).
+///
+/// Previously `network_getPeers` returned a hardcoded empty list, leaving thin
+/// clients unable to enumerate peers over RPC. This type carries the live peer
+/// set published from the network event loop in `commands::run`.
+///
+/// Like [`NodeIdentity`], the fields are pre-rendered into plain
+/// strings/primitives by the producer (which owns the libp2p types) so the RPC
+/// layer needs no libp2p / discovery types and the handler stays trivially
+/// testable. The snapshot is a cheap clone of the discovery peer table taken on
+/// peer connect/disconnect — no hot-path locking beyond the existing
+/// `Arc<RwLock<..>>` pattern used for `peer_count`.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct PeerInfoSnapshot {
+    /// libp2p peer ID string.
+    pub peer_id: String,
+    /// Last known multiaddr for the peer, if one has been observed. `None`
+    /// renders as a JSON `null`.
+    pub address: Option<String>,
+    /// Peer's advertised protocol version (e.g. `"2.0.0"`), if identified.
+    pub protocol_version: Option<String>,
+    /// Whether the peer's protocol version is below the minimum supported.
+    pub version_warning: bool,
+    /// Seconds since this peer was last seen, measured when the snapshot was
+    /// taken. A coarse liveness hint, not a precise timestamp.
+    pub last_seen_secs: u64,
+}
+
 /// JSON-RPC request
 #[derive(Debug, Deserialize)]
 pub struct JsonRpcRequest {
@@ -214,6 +242,12 @@ pub struct RpcState {
     /// caught-up node. Surfaced as `synced`, `syncStatus`, and
     /// `syncProgress` in `node_getStatus`.
     pub sync_status: Option<Arc<RwLock<Option<SyncStatusSnapshot>>>>,
+    /// Shared snapshot of the live connected-peer set surfaced by
+    /// `network_getPeers` (#544). `commands::run` publishes a cheap clone of
+    /// the discovery peer table here on each peer connect/disconnect; the
+    /// RPC layer reads it. Empty by default (tests / relay / no peers
+    /// connected), in which case `network_getPeers` returns an empty list.
+    pub peers: Arc<RwLock<Vec<PeerInfoSnapshot>>>,
 }
 
 impl RpcState {
@@ -248,6 +282,7 @@ impl RpcState {
             identity: NodeIdentity::default(),
             minter_health: None,
             sync_status: None,
+            peers: Arc::new(RwLock::new(Vec::new())),
         }
     }
 
@@ -286,6 +321,7 @@ impl RpcState {
             identity: NodeIdentity::default(),
             minter_health: None,
             sync_status: None,
+            peers: Arc::new(RwLock::new(Vec::new())),
         }
     }
 
@@ -322,6 +358,7 @@ impl RpcState {
             identity: NodeIdentity::default(),
             minter_health: None,
             sync_status: None,
+            peers: Arc::new(RwLock::new(Vec::new())),
         }
     }
 
@@ -386,6 +423,14 @@ impl RpcState {
         let handle = self.sync_status.as_ref()?;
         let guard = handle.read().ok()?;
         guard.clone()
+    }
+
+    /// Wire in a pre-populated connected-peer snapshot handle so
+    /// `network_getPeers` returns the live peer set (#544). `commands::run`
+    /// shares the same handle it publishes the discovery peer table into.
+    pub fn with_peers(mut self, peers: Arc<RwLock<Vec<PeerInfoSnapshot>>>) -> Self {
+        self.peers = peers;
+        self
     }
 }
 
@@ -1963,12 +2008,30 @@ async fn handle_network_info(id: Value, state: &RpcState) -> JsonRpcResponse {
     )
 }
 
-async fn handle_get_peers(id: Value, _state: &RpcState) -> JsonRpcResponse {
-    // Return empty for now - would need to get actual peer addresses
+async fn handle_get_peers(id: Value, state: &RpcState) -> JsonRpcResponse {
+    // Surface the live connected-peer set published by the network event loop
+    // (#544). The snapshot is a cheap clone of the discovery peer table taken on
+    // peer connect/disconnect; empty when no peers are connected (or in
+    // tests / relay nodes that never wire the handle in).
+    let peers = read_lock!(state.peers, id.clone());
+    let peers_json: Vec<Value> = peers
+        .iter()
+        .map(|p| {
+            json!({
+                "peerId": p.peer_id,
+                "address": p.address,
+                "protocolVersion": p.protocol_version,
+                "versionWarning": p.version_warning,
+                "lastSeenSecs": p.last_seen_secs,
+            })
+        })
+        .collect();
+
     JsonRpcResponse::success(
         id,
         json!({
-            "peers": []
+            "peers": peers_json,
+            "peerCount": peers_json.len(),
         }),
     )
 }
@@ -3988,5 +4051,78 @@ mod tests {
         // /ws looks like; it must be rejected rather than treated as a socket.
         let headers = hyper::HeaderMap::new();
         assert!(validate_websocket_upgrade(&headers).is_err());
+    }
+
+    /// #544: `network_getPeers` surfaces the live connected-peer snapshot
+    /// instead of the previous hardcoded empty list.
+    ///
+    /// - No handle / no peers: returns an empty `peers` array and `peerCount:
+    ///   0`.
+    /// - With peers published into the shared snapshot: returns one entry per
+    ///   peer with the expected field shape (`peerId`, `address`,
+    ///   `protocolVersion`, `versionWarning`, `lastSeenSecs`).
+    #[tokio::test]
+    async fn test_get_peers_surfaces_connected_peers() {
+        use crate::{ledger::Ledger, mempool::Mempool};
+
+        fn fresh_state() -> RpcState {
+            let dir = tempfile::tempdir().unwrap();
+            let ledger = Ledger::open(dir.path()).unwrap();
+            std::mem::forget(dir);
+            RpcState::new(
+                ledger,
+                Mempool::new(),
+                Network::Testnet,
+                None,
+                None,
+                vec![],
+                Arc::new(WsBroadcaster::new(16)),
+            )
+        }
+
+        // (1) No peers connected: empty list, zero count.
+        let state = fresh_state();
+        let result = handle_get_peers(json!(1), &state).await.result.unwrap();
+        assert_eq!(result["peers"], json!([]), "empty when no peers connected");
+        assert_eq!(result["peerCount"], json!(0));
+
+        // (2) Two peers published into the shared snapshot: both surfaced with
+        // the documented field shape.
+        let peers_handle = Arc::new(RwLock::new(vec![
+            PeerInfoSnapshot {
+                peer_id: "12D3KooWPeerOne".to_string(),
+                address: Some("/ip4/10.0.0.1/tcp/4001".to_string()),
+                protocol_version: Some("2.0.0".to_string()),
+                version_warning: false,
+                last_seen_secs: 3,
+            },
+            PeerInfoSnapshot {
+                peer_id: "12D3KooWPeerTwo".to_string(),
+                address: None,
+                protocol_version: None,
+                version_warning: true,
+                last_seen_secs: 42,
+            },
+        ]));
+        let state = fresh_state().with_peers(peers_handle);
+
+        let result = handle_get_peers(json!(1), &state).await.result.unwrap();
+        let peers = result["peers"].as_array().expect("peers is an array");
+        assert_eq!(peers.len(), 2, "both connected peers surfaced");
+        assert_eq!(result["peerCount"], json!(2));
+
+        // First peer: fully populated.
+        assert_eq!(peers[0]["peerId"], json!("12D3KooWPeerOne"));
+        assert_eq!(peers[0]["address"], json!("/ip4/10.0.0.1/tcp/4001"));
+        assert_eq!(peers[0]["protocolVersion"], json!("2.0.0"));
+        assert_eq!(peers[0]["versionWarning"], json!(false));
+        assert_eq!(peers[0]["lastSeenSecs"], json!(3));
+
+        // Second peer: optional fields render as JSON null, warning flag set.
+        assert_eq!(peers[1]["peerId"], json!("12D3KooWPeerTwo"));
+        assert_eq!(peers[1]["address"], Value::Null);
+        assert_eq!(peers[1]["protocolVersion"], Value::Null);
+        assert_eq!(peers[1]["versionWarning"], json!(true));
+        assert_eq!(peers[1]["lastSeenSecs"], json!(42));
     }
 }
