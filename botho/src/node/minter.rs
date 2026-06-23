@@ -12,7 +12,7 @@ use std::{
     thread::{self, JoinHandle},
     time::Instant,
 };
-use tracing::{info, trace};
+use tracing::{info, trace, warn};
 
 use crate::{
     block::{calculate_block_reward, MintingTx},
@@ -68,6 +68,25 @@ use crate::{
 /// hashes/block; #443 moved to RandomX).
 pub const INITIAL_DIFFICULTY: u64 = 54_000_000_000_000_000;
 
+/// How long a miner may report `active == true` while producing **zero new
+/// hashes** before it is flagged as stalled (see [`MinterHealth`]).
+///
+/// Motivation (#538, part of #537): the live testnet sat **halted for ~50h**
+/// because the faucet miner reported `active:true` at `hashrate 0.0` — a wedged
+/// RandomX worker that was alive but not hashing — and nothing surfaced it. A
+/// healthy in-process single-thread miner sustains ~68 H/s (see
+/// [`INITIAL_DIFFICULTY`]), so a full window of *no* new hashes is a strong,
+/// unambiguous wedged-worker signal. 90 s is long enough to ride out a normal
+/// difficulty/block-time stall (5 s target) yet far below the ~50h blind spot.
+pub const STUCK_MINER_SECS: u64 = 90;
+
+/// Startup grace period: a freshly-started miner builds the ~2 GB RandomX
+/// fast-mode dataset (seconds, sometimes longer under load — see [`mint_loop`])
+/// before it can hash at all. We must not flag that legitimate warm-up as a
+/// stall, so detection is suppressed until the miner has been active for at
+/// least this long. Chosen comfortably above observed dataset-build times.
+pub const STARTUP_GRACE_SECS: u64 = 60;
+
 /// Minting statistics
 #[derive(Debug, Clone)]
 pub struct MintingStats {
@@ -84,6 +103,190 @@ impl MintingStats {
         } else {
             0.0
         }
+    }
+}
+
+/// A point-in-time health snapshot of the miner, suitable for RPC payloads and
+/// the periodic stall check. Produced by [`MinterHealth::snapshot`].
+#[derive(Debug, Clone, Copy)]
+pub struct MinterHealthSnapshot {
+    /// Whether minting is currently enabled.
+    pub active: bool,
+    /// Cumulative hashes computed since the miner started.
+    pub total_hashes: u64,
+    /// Average hashrate (hashes/sec) since start.
+    pub hashrate: f64,
+    /// Seconds the miner has been active.
+    pub uptime_secs: u64,
+    /// Stall verdict: `true` iff the miner is active but has produced no new
+    /// hashes for longer than [`STUCK_MINER_SECS`], past the startup grace.
+    pub stalled: bool,
+}
+
+/// Pure stall verdict used by both the live [`MinterHealth`] handle and unit
+/// tests. Returns `true` iff the miner is **active**, past the startup grace
+/// window, and has produced **no new hashes** for at least `stuck_secs`.
+///
+/// Splitting this out keeps the detection logic deterministic and testable
+/// without spinning up a real RandomX worker (#538).
+///
+/// - `active`: whether minting is enabled.
+/// - `uptime_secs`: seconds since the miner started.
+/// - `secs_since_progress`: seconds since `total_hashes` last advanced.
+/// - `grace_secs` / `stuck_secs`: the startup grace and stall thresholds.
+pub fn evaluate_stall(
+    active: bool,
+    uptime_secs: u64,
+    secs_since_progress: u64,
+    grace_secs: u64,
+    stuck_secs: u64,
+) -> bool {
+    // Inactive miners are never "stalled" — not minting is a deliberate state,
+    // not a fault.
+    if !active {
+        return false;
+    }
+    // During warm-up (RandomX VM/dataset build) zero hashes is expected.
+    if uptime_secs < grace_secs {
+        return false;
+    }
+    secs_since_progress >= stuck_secs
+}
+
+/// Shared, cloneable health handle for a [`Minter`].
+///
+/// Holds the same `Arc`-backed counters the worker threads update, so callers
+/// (the RPC layer and the periodic status loop) observe live progress without
+/// owning the [`Minter`]. Detecting a stall requires tracking the *last* point
+/// at which `total_hashes` advanced; that bookkeeping lives here in atomics so
+/// the handle stays `Send + Sync` and cheaply `Clone`able across threads.
+#[derive(Clone)]
+pub struct MinterHealth {
+    /// Whether minting is currently enabled. Kept in sync by the node when it
+    /// starts/stops minting.
+    active: Arc<AtomicBool>,
+    /// The worker threads' cumulative hash counter (shared with [`Minter`]).
+    total_hashes: Arc<AtomicU64>,
+    /// When the miner started, for uptime/hashrate.
+    start_time: Instant,
+    /// `total_hashes` value observed at the last progress check.
+    last_observed_hashes: Arc<AtomicU64>,
+    /// Seconds-since-start at the last time progress was observed advancing.
+    last_progress_secs: Arc<AtomicU64>,
+}
+
+impl MinterHealth {
+    fn new(total_hashes: Arc<AtomicU64>, start_time: Instant) -> Self {
+        Self {
+            active: Arc::new(AtomicBool::new(false)),
+            total_hashes,
+            start_time,
+            last_observed_hashes: Arc::new(AtomicU64::new(0)),
+            last_progress_secs: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    /// Fabricate a handle in a fully-controlled state for tests in *other*
+    /// modules (the RPC layer asserts the `stalled`/`minerStalled` flags flow
+    /// through `node_getStatus` / `minting_getStatus`). The `start_time` is
+    /// backdated by `uptime_secs` so `snapshot()` reports a deterministic
+    /// uptime and stall verdict without spinning up a real RandomX worker.
+    #[doc(hidden)]
+    pub fn for_test(active: bool, total_hashes: u64, uptime_secs: u64) -> Self {
+        let start_time = Instant::now()
+            .checked_sub(std::time::Duration::from_secs(uptime_secs))
+            .unwrap_or_else(Instant::now);
+        let h = Self::new(Arc::new(AtomicU64::new(total_hashes)), start_time);
+        h.active.store(active, Ordering::SeqCst);
+        // Pin "last progress" to start so secs_since_progress == uptime_secs:
+        // i.e. no new hashes since the (backdated) start.
+        h.last_observed_hashes.store(total_hashes, Ordering::SeqCst);
+        h.last_progress_secs.store(0, Ordering::SeqCst);
+        h
+    }
+
+    /// Mark whether minting is enabled. Resets the progress tracker on each
+    /// active→edge so a restart gets a fresh grace window rather than
+    /// inheriting a stale "no progress" timer.
+    pub fn set_active(&self, active: bool) {
+        let was_active = self.active.swap(active, Ordering::SeqCst);
+        if active && !was_active {
+            let now = self.start_time.elapsed().as_secs();
+            self.last_observed_hashes
+                .store(self.total_hashes.load(Ordering::Relaxed), Ordering::SeqCst);
+            self.last_progress_secs.store(now, Ordering::SeqCst);
+        }
+    }
+
+    /// Whether minting is currently enabled.
+    pub fn is_active(&self) -> bool {
+        self.active.load(Ordering::SeqCst)
+    }
+
+    /// Advance the progress tracker and return the current health snapshot.
+    ///
+    /// This both *reads* the live counters and *updates* the "last progress"
+    /// bookkeeping, so it is the single place the stall timer advances. The
+    /// periodic status loop calls this on its tick; RPC handlers may call it
+    /// too (the update is idempotent w.r.t. the verdict for a given
+    /// instant).
+    pub fn snapshot(&self) -> MinterHealthSnapshot {
+        let active = self.active.load(Ordering::SeqCst);
+        let total_hashes = self.total_hashes.load(Ordering::Relaxed);
+        let uptime_secs = self.start_time.elapsed().as_secs();
+
+        let hashrate = {
+            let elapsed = self.start_time.elapsed().as_secs_f64();
+            if elapsed > 0.0 {
+                total_hashes as f64 / elapsed
+            } else {
+                0.0
+            }
+        };
+
+        // Update the last-progress timestamp if the counter advanced.
+        let prev = self.last_observed_hashes.load(Ordering::SeqCst);
+        if total_hashes > prev {
+            self.last_observed_hashes
+                .store(total_hashes, Ordering::SeqCst);
+            self.last_progress_secs.store(uptime_secs, Ordering::SeqCst);
+        }
+        let last_progress = self.last_progress_secs.load(Ordering::SeqCst);
+        let secs_since_progress = uptime_secs.saturating_sub(last_progress);
+
+        let stalled = evaluate_stall(
+            active,
+            uptime_secs,
+            secs_since_progress,
+            STARTUP_GRACE_SECS,
+            STUCK_MINER_SECS,
+        );
+
+        MinterHealthSnapshot {
+            active,
+            total_hashes,
+            hashrate,
+            uptime_secs,
+            stalled,
+        }
+    }
+
+    /// Take a snapshot and, if stalled, emit a prominent warning. Returns the
+    /// snapshot so callers can act on / report the verdict. Used by the
+    /// periodic status loop as the chain's early-warning alarm (#538).
+    pub fn check_and_warn(&self) -> MinterHealthSnapshot {
+        let snap = self.snapshot();
+        if snap.stalled {
+            warn!(
+                uptime_secs = snap.uptime_secs,
+                total_hashes = snap.total_hashes,
+                stuck_secs = STUCK_MINER_SECS,
+                "RandomX miner stalled: active but 0 H/s for {}s — chain will halt; \
+                 worker appears wedged (see #538). NOT auto-restarting (operator policy).",
+                STUCK_MINER_SECS,
+            );
+        }
+        snap
     }
 }
 
@@ -127,6 +330,8 @@ pub struct Minter {
     current_work: Arc<std::sync::RwLock<MintingWork>>,
     /// Signal to update work
     work_version: Arc<AtomicU64>,
+    /// Shared health handle for stall detection / RPC reporting (#538).
+    health: MinterHealth,
 }
 
 impl Minter {
@@ -151,18 +356,25 @@ impl Minter {
             total_minted: 0,
         };
 
+        let total_hashes = Arc::new(AtomicU64::new(0));
+        let start_time = Instant::now();
+        // Health handle shares the worker threads' hash counter so callers can
+        // observe live progress (and detect a stall) without owning the Minter.
+        let health = MinterHealth::new(total_hashes.clone(), start_time);
+
         Self {
             threads,
             address,
             shutdown: Arc::new(AtomicBool::new(false)),
-            total_hashes: Arc::new(AtomicU64::new(0)),
+            total_hashes,
             txs_found: Arc::new(AtomicU64::new(0)),
-            start_time: Instant::now(),
+            start_time,
             handles: Vec::new(),
             tx_sender,
             tx_receiver: Some(tx_receiver),
             current_work: Arc::new(std::sync::RwLock::new(initial_work)),
             work_version: Arc::new(AtomicU64::new(0)),
+            health,
         }
     }
 
@@ -206,15 +418,29 @@ impl Minter {
 
             self.handles.push(handle);
         }
+        // Mark the miner active for health/stall tracking (starts the grace
+        // window). Done after spawning so uptime aligns with real work.
+        self.health.set_active(true);
     }
 
     pub fn stop(self) {
+        // Mark inactive first so the stall detector immediately stops flagging.
+        self.health.set_active(false);
         // Signal shutdown to all minting threads
         self.shutdown.store(true, Ordering::SeqCst);
         // Wait for all threads to finish
         for handle in self.handles {
             let _ = handle.join();
         }
+    }
+
+    /// Clone the shared health handle for stall detection / RPC reporting.
+    ///
+    /// The handle observes live worker progress and outlives a single
+    /// start/stop cycle; the node hands a clone to the RPC layer and the
+    /// periodic status loop (#538).
+    pub fn health(&self) -> MinterHealth {
+        self.health.clone()
     }
 
     pub fn stats(&self) -> MintingStats {
@@ -419,6 +645,96 @@ fn mint_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ----- Stuck-miner detector (#538) -----
+
+    /// Active + no new hashes past the stall window (and past grace) → stalled.
+    #[test]
+    fn test_stall_active_zero_hashrate_past_window() {
+        // uptime past grace, no progress for >= STUCK_MINER_SECS.
+        assert!(evaluate_stall(
+            true,
+            STARTUP_GRACE_SECS + STUCK_MINER_SECS + 5,
+            STUCK_MINER_SECS + 5,
+            STARTUP_GRACE_SECS,
+            STUCK_MINER_SECS,
+        ));
+        // Exactly at the threshold also counts as stalled.
+        assert!(evaluate_stall(
+            true,
+            STARTUP_GRACE_SECS + STUCK_MINER_SECS,
+            STUCK_MINER_SECS,
+            STARTUP_GRACE_SECS,
+            STUCK_MINER_SECS,
+        ));
+    }
+
+    /// Active + healthy progress (recent hashes) → not stalled.
+    #[test]
+    fn test_stall_active_healthy_hashrate_not_flagged() {
+        // Plenty of uptime, but progress observed just 1s ago.
+        assert!(!evaluate_stall(
+            true,
+            STARTUP_GRACE_SECS + STUCK_MINER_SECS + 100,
+            1,
+            STARTUP_GRACE_SECS,
+            STUCK_MINER_SECS,
+        ));
+    }
+
+    /// Inactive (minting disabled) → never flagged, regardless of timers.
+    #[test]
+    fn test_stall_inactive_never_flagged() {
+        assert!(!evaluate_stall(
+            false,
+            STARTUP_GRACE_SECS + STUCK_MINER_SECS + 1000,
+            STUCK_MINER_SECS + 1000,
+            STARTUP_GRACE_SECS,
+            STUCK_MINER_SECS,
+        ));
+    }
+
+    /// Within startup grace + 0 hashes → not yet flagged (RandomX warm-up).
+    #[test]
+    fn test_stall_within_startup_grace_not_flagged() {
+        // Just under the grace window with zero progress: must NOT flag.
+        assert!(!evaluate_stall(
+            true,
+            STARTUP_GRACE_SECS - 1,
+            STARTUP_GRACE_SECS - 1,
+            STARTUP_GRACE_SECS,
+            STUCK_MINER_SECS,
+        ));
+    }
+
+    /// The live `MinterHealth` handle: an inactive handle reports inactive and
+    /// unstalled; activating it starts the grace window so a brand-new miner is
+    /// not immediately flagged.
+    #[test]
+    fn test_minter_health_handle_inactive_then_active() {
+        let total_hashes = Arc::new(AtomicU64::new(0));
+        let health = MinterHealth::new(total_hashes.clone(), Instant::now());
+
+        // Fresh handle: not active, not stalled.
+        let snap = health.snapshot();
+        assert!(!snap.active);
+        assert!(!snap.stalled);
+
+        // Activate: still within grace (uptime ~0), so not stalled even at 0 H/s.
+        health.set_active(true);
+        let snap = health.snapshot();
+        assert!(snap.active);
+        assert!(!snap.stalled, "fresh active miner must not be flagged");
+
+        // Progress advances the hashrate readout.
+        total_hashes.store(1_000, Ordering::SeqCst);
+        let snap = health.snapshot();
+        assert_eq!(snap.total_hashes, 1_000);
+
+        // Deactivate: never stalled.
+        health.set_active(false);
+        assert!(!health.snapshot().stalled);
+    }
 
     /// Documents and locks the genesis difficulty calibration (#444).
     ///

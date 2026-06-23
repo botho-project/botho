@@ -27,7 +27,7 @@ pub type SharedMempool = Arc<RwLock<Mempool>>;
 /// Pending transactions file name
 const PENDING_TXS_FILE: &str = "pending_txs.bin";
 
-pub use minter::{MintedMintingTx, Minter, MintingWork};
+pub use minter::{MintedMintingTx, Minter, MinterHealth, MintingWork};
 
 /// The main Botho node
 pub struct Node {
@@ -37,6 +37,12 @@ pub struct Node {
     ledger: SharedLedger,
     mempool: SharedMempool,
     minter: Option<Minter>,
+    /// Stable, shared health handle for the *current* minter, used by the RPC
+    /// layer and the periodic status loop for stuck-miner detection (#538).
+    /// `None` until minting first starts; the inner handle is replaced on each
+    /// `start_minting` and marked inactive on `stop_minting` so the flag is
+    /// always queryable, even across start/stop cycles.
+    minter_health: Arc<RwLock<Option<MinterHealth>>>,
     /// Receiver for minted minting transactions (to be submitted to consensus)
     minting_tx_receiver: Option<Receiver<MintedMintingTx>>,
     /// Directory containing config file (for finding pending_txs.bin)
@@ -89,6 +95,7 @@ impl Node {
             ledger,
             mempool,
             minter: None,
+            minter_health: Arc::new(RwLock::new(None)),
             minting_tx_receiver: None,
             config_dir,
             emission_controller,
@@ -198,6 +205,13 @@ impl Node {
         minter.update_work(work);
 
         minter.start();
+
+        // Publish this minter's health handle for RPC / stall detection (#538).
+        // `start()` has already marked it active (begins the startup grace).
+        if let Ok(mut h) = self.minter_health.write() {
+            *h = Some(minter.health());
+        }
+
         self.minter = Some(minter);
 
         Ok(())
@@ -205,8 +219,19 @@ impl Node {
 
     fn stop_minting(&mut self) {
         if let Some(minter) = self.minter.take() {
+            // `Minter::stop` marks its health inactive; the handle published in
+            // `minter_health` shares the same state, so the flag flips to
+            // inactive (and unstalled) for RPC readers too.
             minter.stop();
         }
+    }
+
+    /// Clone the shared minter-health handle for stall detection / RPC
+    /// reporting (#538). Returns the `Option`-wrapped handle: `None` inner
+    /// means minting has never started; otherwise it reflects the
+    /// current/last minter.
+    pub fn minter_health(&self) -> Arc<RwLock<Option<MinterHealth>>> {
+        self.minter_health.clone()
     }
 
     // --- Network integration methods ---

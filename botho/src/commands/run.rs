@@ -384,6 +384,11 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
         dns_seed_domain: default_seed_domain(config.network_type).to_string(),
     };
 
+    // Stable minter-health handle (#538). Shared between the RPC layer (for the
+    // `stalled` / `minerStalled` flags) and the periodic status loop (for the
+    // warn alarm). The handle survives minter start/stop cycles.
+    let minter_health = node.minter_health();
+
     let mut rpc_state = RpcState::from_shared(
         node.shared_ledger(),
         node.shared_mempool(),
@@ -397,7 +402,8 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
         ws_broadcaster.clone(),
     )
     .with_quorum(config.network.quorum.clone())
-    .with_identity(node_identity);
+    .with_identity(node_identity)
+    .with_minter_health(minter_health.clone());
 
     // Initialize wallet for RPC (balance checking, faucet, etc.)
     if let Some(mnemonic) = config.mnemonic() {
@@ -1450,6 +1456,18 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                     if minting_enabled { "active" } else { "inactive" },
                     quorum_status
                 );
+
+                // Stuck-miner early-warning (#538). If the miner is active but
+                // has produced 0 H/s past the grace + stall window, this emits a
+                // prominent warning so the operator catches a wedged worker
+                // immediately instead of after the chain silently halts (the
+                // ~50h live-testnet halt diagnosed in #537/#539). Detection +
+                // alarm only — we do NOT auto-restart (operator policy).
+                if let Ok(guard) = minter_health.read() {
+                    if let Some(health) = guard.as_ref() {
+                        health.check_and_warn();
+                    }
+                }
             }
 
             // Reconnect tick: if we have no peers, re-dial configured bootstrap
