@@ -61,6 +61,8 @@ fn known_safe_below_splitting_never_forks() {
                 fault: FaultKind::Equivocate,
                 max_rounds: 96,
                 view_change: None,
+                churn_rate: 0.0,
+                pin_coinbase: true,
             };
             let report = run_many(&config, 200);
             assert_eq!(
@@ -92,6 +94,8 @@ fn equivocation_crosses_static_splitting_threshold() {
             fault: FaultKind::Equivocate,
             max_rounds: 96,
             view_change: None,
+            churn_rate: 0.0,
+            pin_coinbase: true,
         };
         assert_eq!(
             run_many(&below, 200).forks,
@@ -110,6 +114,8 @@ fn equivocation_crosses_static_splitting_threshold() {
         fault: FaultKind::Equivocate,
         max_rounds: 96,
         view_change: None,
+        churn_rate: 0.0,
+        pin_coinbase: true,
     };
     assert!(
         run_many(&at, 200).forks > 0,
@@ -148,6 +154,8 @@ fn zero_faults_never_fork_under_any_network() {
                     fault: FaultKind::Crash, // irrelevant: no faulty nodes
                     max_rounds: 128,
                     view_change: None,
+                    churn_rate: 0.0,
+                    pin_coinbase: true,
                 };
                 let report = run_many(&config, 200);
                 assert_eq!(
@@ -174,6 +182,8 @@ fn unanimity_below_four_stalls_on_crash() {
         fault: FaultKind::Crash,
         max_rounds: 48,
         view_change: None,
+        churn_rate: 0.0,
+        pin_coinbase: true,
     };
     let report = run_many(&config, 100);
     assert_eq!(report.stalls, 100, "every seed must stall (liveness)");
@@ -198,6 +208,8 @@ fn crash_below_blocking_set_stays_live() {
             fault: FaultKind::Crash,
             max_rounds: 48,
             view_change: None,
+            churn_rate: 0.0,
+            pin_coinbase: true,
         };
         let report = run_many(&config, 100);
         assert_eq!(
@@ -221,6 +233,8 @@ fn reproducibility_same_seed_same_outcome() {
         fault: FaultKind::Equivocate,
         max_rounds: 96,
         view_change: None,
+        churn_rate: 0.0,
+        pin_coinbase: true,
     };
     for seed in [0u64, 1, 7, 42, 1000] {
         assert_eq!(
@@ -270,6 +284,8 @@ fn view_change_eliminates_equivocating_leader_stalls() {
             fault: FaultKind::Equivocate,
             max_rounds: 96,
             view_change: None,
+            churn_rate: 0.0,
+            pin_coinbase: true,
         };
 
         // WITHOUT view-change: a Byzantine leader stalls its slot, so a
@@ -287,6 +303,8 @@ fn view_change_eliminates_equivocating_leader_stalls() {
         // WITH view-change: the stall rate collapses to ~0.
         let with = SimConfig {
             view_change: Some(VIEW_BUDGET),
+            churn_rate: 0.0,
+            pin_coinbase: true,
             ..base.clone()
         };
         let report = run_many(&with, 200);
@@ -321,6 +339,8 @@ fn view_change_recovers_equivocating_leader_under_delay() {
             fault: FaultKind::Equivocate,
             max_rounds: 128,
             view_change: Some(VIEW_BUDGET),
+            churn_rate: 0.0,
+            pin_coinbase: true,
         };
         let report = run_many(&with, 200);
         assert_eq!(
@@ -360,6 +380,8 @@ fn view_change_preserves_zero_fault_zero_fork() {
                     fault: FaultKind::Crash,
                     max_rounds: 160,
                     view_change: Some(VIEW_BUDGET),
+                    churn_rate: 0.0,
+                    pin_coinbase: true,
                 };
                 let report = run_many(&config, 200);
                 assert_eq!(
@@ -393,6 +415,8 @@ fn view_change_does_not_mask_splitting_set_fork() {
         fault: FaultKind::Equivocate,
         max_rounds: 96,
         view_change: Some(VIEW_BUDGET),
+        churn_rate: 0.0,
+        pin_coinbase: true,
     };
     assert!(
         run_many(&at, 200).forks > 0,
@@ -415,6 +439,8 @@ fn view_change_is_reproducible() {
         fault: FaultKind::Equivocate,
         max_rounds: 128,
         view_change: Some(VIEW_BUDGET),
+        churn_rate: 0.0,
+        pin_coinbase: true,
     };
     for seed in [0u64, 1, 7, 42, 1000] {
         assert_eq!(
@@ -446,6 +472,8 @@ fn view_change_recovers_crashed_leader() {
             fault: FaultKind::Crash,
             max_rounds: 96,
             view_change: Some(VIEW_BUDGET),
+            churn_rate: 0.0,
+            pin_coinbase: true,
         };
         let report = run_many(&config, 200);
         assert_eq!(

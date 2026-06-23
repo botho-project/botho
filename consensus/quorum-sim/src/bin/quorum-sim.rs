@@ -118,6 +118,19 @@ enum Command {
         /// `--view-change`). Rounds a leader gets before the view rotates.
         #[arg(long, default_value_t = 4)]
         view_budget: u32,
+        /// **Coinbase-churn rate** in [0,1] for the competing-coinbase proposer
+        /// (#535): per-round probability that a node's miner produces a fresh,
+        /// strictly higher-priority coinbase mid-slot. 0 (default) = the
+        /// original churn-free behavior. No effect on the leader models.
+        #[arg(long, default_value_t = 0.0)]
+        churn_rate: f64,
+        /// **Coinbase pinning** for the competing-coinbase proposer (#535).
+        /// `--pin-coinbase` (default true) is the production #419 fix: keep the
+        /// FIRST coinbase per slot. Pass `--pin-coinbase=false` for the
+        /// pre-#419 bug (re-nominate each newly-mined higher coinbase → the
+        /// slot can jam). Only meaningful with `--churn-rate > 0`.
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        pin_coinbase: bool,
         /// Emit JSON instead of a table.
         #[arg(long)]
         json: bool,
@@ -237,6 +250,8 @@ fn main() {
             max_rounds,
             view_change,
             view_budget,
+            churn_rate,
+            pin_coinbase,
             json,
         } => {
             let network = if max_delay == 0 && drop_prob == 0.0 {
@@ -266,6 +281,8 @@ fn main() {
                         fault: fault.into(),
                         max_rounds,
                         view_change,
+                        churn_rate,
+                        pin_coinbase,
                     };
                     run_many(&config, seeds)
                 })
