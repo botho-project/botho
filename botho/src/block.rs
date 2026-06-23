@@ -849,8 +849,21 @@ pub mod difficulty {
     /// Maximum difficulty (ceiling)
     pub const MAX_DIFFICULTY: u64 = INITIAL_DIFFICULTY;
 
-    /// Maximum adjustment factor per epoch (damping)
-    pub const MAX_ADJUSTMENT_FACTOR: f64 = 2.0;
+    /// Fixed-point scale for difficulty-adjustment ratios.
+    ///
+    /// `RATIO_SCALE` basis-point units == 1.0x. All difficulty math is integer
+    /// (u128) basis-point arithmetic — CONSENSUS-CRITICAL: difficulty is
+    /// hard-validated chain state (rejected on mismatch in
+    /// `ledger::store::add_block` and minting-tx validation), so every node on
+    /// every platform must compute the identical value. f64 must never enter
+    /// this path (see audit cycle-6 C5, issue #552).
+    pub const RATIO_SCALE: u128 = 10_000;
+
+    /// Maximum adjustment factor per epoch (damping), expressed in basis points
+    /// (`RATIO_SCALE` == 1.0x). `2 * RATIO_SCALE` == 2.0x. The per-epoch
+    /// difficulty multiplier is clamped to
+    /// `[RATIO_SCALE / 2, MAX_ADJUSTMENT_FACTOR_BPS]` == `[0.5x, 2.0x]`.
+    pub const MAX_ADJUSTMENT_FACTOR_BPS: u128 = 2 * RATIO_SCALE;
 
     /// Transactions per difficulty adjustment epoch.
     /// Adjustment frequency scales with network usage.
@@ -1037,34 +1050,76 @@ pub mod difficulty {
             (self.difficulty, self.current_reward)
         }
 
-        /// Adjust difficulty based on emission rate error
+        /// Adjust difficulty based on emission rate error.
+        ///
+        /// CONSENSUS-CRITICAL: pure integer (u128 basis-point) arithmetic — no
+        /// f64. Difficulty is hard-validated chain state, so the computation
+        /// must be bit-for-bit identical on every platform (audit cycle-6 C5,
+        /// issue #552). The behaviour mirrors the prior f64 controller's
+        /// intent in the block.rs convention (LOWER numeric difficulty =
+        /// HARDER PoW): emitting too fast lowers difficulty, emitting too slow
+        /// raises it, with the per-epoch change clamped to [0.5x, 2.0x].
         fn adjust_difficulty(&mut self) {
-            if self.epoch_tx == 0 {
-                return;
-            }
-
-            let target = self.target_emission_per_tx();
-            if target == 0 {
-                self.reset_epoch();
-                return;
-            }
-
-            // Actual emission per tx this epoch
-            let actual = self.epoch_emission / self.epoch_tx;
-
-            // Error ratio: actual / target
-            // > 1: emitting too fast → harder difficulty (lower value)
-            // < 1: emitting too slow → easier difficulty (higher value)
-            let ratio = actual as f64 / target as f64;
-
-            // Invert for control direction and clamp
-            let adjustment =
-                (1.0 / ratio).clamp(1.0 / MAX_ADJUSTMENT_FACTOR, MAX_ADJUSTMENT_FACTOR);
-
-            let new_diff = (self.difficulty as f64 * adjustment) as u64;
-            self.difficulty = new_diff.clamp(MIN_DIFFICULTY, MAX_DIFFICULTY);
-
+            self.difficulty = Self::compute_adjusted_difficulty(
+                self.difficulty,
+                self.epoch_emission,
+                self.epoch_tx,
+                self.target_emission_per_tx(),
+            );
             self.reset_epoch();
+        }
+
+        /// Pure, deterministic difficulty-adjustment kernel.
+        ///
+        /// Separated out (and `pub(crate)`) so it can be exercised directly in
+        /// tests with exact integer inputs/outputs, independent of controller
+        /// state. Contains ZERO floating point.
+        ///
+        /// - `current` is the current difficulty.
+        /// - `epoch_emission` / `epoch_tx` give the actual emission-per-tx.
+        /// - `target` is `target_emission_per_tx()`.
+        ///
+        /// Returns the new difficulty, clamped to `[MIN_DIFFICULTY,
+        /// MAX_DIFFICULTY]`.
+        pub(crate) fn compute_adjusted_difficulty(
+            current: u64,
+            epoch_emission: u64,
+            epoch_tx: u64,
+            target: u64,
+        ) -> u64 {
+            // No epoch data or undefined target → leave difficulty unchanged.
+            if epoch_tx == 0 || target == 0 {
+                return current.clamp(MIN_DIFFICULTY, MAX_DIFFICULTY);
+            }
+
+            // Actual emission per tx this epoch (integer floor, same as before).
+            let actual = epoch_emission / epoch_tx;
+
+            // Adjustment multiplier in basis points (RATIO_SCALE == 1.0x):
+            //   adjustment = target / actual
+            // This is the integer form of the old `1.0 / (actual/target)`.
+            //   actual > target → adjustment < 1.0x → LOWER difficulty (harder)
+            //   actual < target → adjustment > 1.0x → HIGHER difficulty (easier)
+            // When actual == 0 the multiplier saturates upward and is then
+            // clamped to the max factor below (matches the f64 path, where a
+            // near-zero ratio drove `1/ratio` to the MAX_ADJUSTMENT_FACTOR cap).
+            let adjustment_bps: u128 = if actual == 0 {
+                MAX_ADJUSTMENT_FACTOR_BPS
+            } else {
+                target as u128 * RATIO_SCALE / actual as u128
+            };
+
+            // Clamp the multiplier to [0.5x, 2.0x] (damping). The lower bound
+            // is RATIO_SCALE / 2 (== 0.5x == 1 / MAX_ADJUSTMENT_FACTOR) and the
+            // upper bound is MAX_ADJUSTMENT_FACTOR_BPS (== 2.0x), mirroring the
+            // old `clamp(1.0 / MAX_ADJUSTMENT_FACTOR, MAX_ADJUSTMENT_FACTOR)`.
+            let adjustment_bps = adjustment_bps.clamp(RATIO_SCALE / 2, MAX_ADJUSTMENT_FACTOR_BPS);
+
+            // Apply: new = current * adjustment_bps / RATIO_SCALE (u128 to avoid
+            // intermediate overflow), then clamp to absolute difficulty bounds.
+            let new_diff = current as u128 * adjustment_bps / RATIO_SCALE;
+            let new_diff = u64::try_from(new_diff).unwrap_or(u64::MAX);
+            new_diff.clamp(MIN_DIFFICULTY, MAX_DIFFICULTY)
         }
 
         fn reset_epoch(&mut self) {
@@ -1211,6 +1266,168 @@ pub mod difficulty {
             );
         }
 
+        // === C5 (#552): integer, f64-free difficulty controller ===
+
+        /// Determinism: the same (difficulty, epoch_emission, epoch_tx, target)
+        /// inputs must produce the identical output, every time, on any
+        /// platform. Integer-only math makes this exact (the whole point of
+        /// eliminating f64 from hard-validated consensus state).
+        #[test]
+        fn test_compute_adjusted_difficulty_deterministic() {
+            // A spread of representative inputs (current, emission, tx, target).
+            let cases = [
+                (10_000u64, 1_000_000u64, 1_000u64, 50u64),
+                (5_000, 0, 1_000, 50),
+                (1_234, 999_999, 777, 13),
+                (INITIAL_DIFFICULTY, INITIAL_REWARD, 1, 1),
+                (42, 100, 1_000, 5),
+            ];
+            for &(cur, emit, tx, target) in &cases {
+                let first = EmissionController::compute_adjusted_difficulty(cur, emit, tx, target);
+                // Recompute many times; must be byte-identical every time.
+                for _ in 0..32 {
+                    let again =
+                        EmissionController::compute_adjusted_difficulty(cur, emit, tx, target);
+                    assert_eq!(
+                        first, again,
+                        "non-deterministic output for ({cur},{emit},{tx},{target})"
+                    );
+                }
+            }
+        }
+
+        /// Exact integer outputs at representative inputs. Pinning the precise
+        /// values guards against silent algorithm drift and proves the math is
+        /// integer (no rounding ambiguity). Hand-derived:
+        ///   adjustment_bps = clamp(target * 10000 / actual, 5000, 20000)
+        ///   new = clamp(current * adjustment_bps / 10000, MIN, MAX)
+        #[test]
+        fn test_compute_adjusted_difficulty_exact_values() {
+            // actual = 1_000_000 / 1000 = 1000; target = 50.
+            // adj = clamp(50*10000/1000, 5000, 20000) = clamp(500, ..) = 5000.
+            // new = 10000 * 5000 / 10000 = 5000.
+            assert_eq!(
+                EmissionController::compute_adjusted_difficulty(10_000, 1_000_000, 1_000, 50),
+                5_000
+            );
+
+            // Balanced: actual == target == 50 → adj = 10000 (1.0x) → unchanged.
+            // emission/tx = 50_000/1000 = 50.
+            assert_eq!(
+                EmissionController::compute_adjusted_difficulty(8_000, 50_000, 1_000, 50),
+                8_000
+            );
+
+            // Under-emit: actual = 20_000/1000 = 20 < target 50.
+            // adj = clamp(50*10000/20, 5000, 20000) = clamp(25000,..) = 20000.
+            // new = 8000 * 20000 / 10000 = 16000, but MAX_DIFFICULTY clamps it.
+            let mid = INITIAL_DIFFICULTY / 2;
+            let raised = EmissionController::compute_adjusted_difficulty(mid, 20_000, 1_000, 50);
+            assert!(raised > mid && raised <= MAX_DIFFICULTY);
+
+            // actual == 0 → max upward multiplier (2.0x), then clamps.
+            let from = MIN_DIFFICULTY.max(3);
+            let up = EmissionController::compute_adjusted_difficulty(from, 0, 1_000, 50);
+            assert_eq!(up, (from as u128 * 2).min(MAX_DIFFICULTY as u128) as u64);
+        }
+
+        /// Direction parity with the prior f64 intent in the block.rs
+        /// convention (LOWER numeric difficulty = HARDER):
+        ///   emitting too fast (actual > target) → harder → lower difficulty
+        ///   emitting too slow (actual < target) → easier → higher difficulty
+        #[test]
+        fn test_compute_adjusted_difficulty_direction() {
+            let mid = INITIAL_DIFFICULTY / 2;
+
+            // Too fast: actual = 100_000/1000 = 100 >> target 5 → harder.
+            let faster = EmissionController::compute_adjusted_difficulty(mid, 100_000, 1_000, 5);
+            assert!(faster < mid, "over-emit must lower difficulty (harder)");
+
+            // Too slow: actual = 1000/1000 = 1 < target 50 → easier.
+            let slower = EmissionController::compute_adjusted_difficulty(mid, 1_000, 1_000, 50);
+            assert!(slower > mid, "under-emit must raise difficulty (easier)");
+        }
+
+        /// Clamp bounds: the per-epoch multiplier is limited to [0.5x, 2.0x]
+        /// and the result is limited to [MIN_DIFFICULTY, MAX_DIFFICULTY].
+        #[test]
+        fn test_compute_adjusted_difficulty_clamps() {
+            // Extreme over-emission would push toward 0; multiplier floored at
+            // 0.5x. current = 10_000, actual huge → adj = 5000 → new = 5000.
+            assert_eq!(
+                EmissionController::compute_adjusted_difficulty(10_000, u64::MAX / 2, 1, 1),
+                5_000
+            );
+
+            // Extreme under-emission floored at 2.0x: actual = 0.
+            // current small so 2.0x stays under MAX.
+            let small = MAX_DIFFICULTY / 4;
+            assert_eq!(
+                EmissionController::compute_adjusted_difficulty(small, 0, 1_000, 1_000_000),
+                (small * 2).min(MAX_DIFFICULTY)
+            );
+
+            // Absolute floor: starting at 1, 0.5x → 0, clamped up to
+            // MIN_DIFFICULTY.
+            assert_eq!(
+                EmissionController::compute_adjusted_difficulty(1, u64::MAX / 2, 1, 1),
+                MIN_DIFFICULTY
+            );
+
+            // Absolute ceiling: huge 2.0x push clamps to MAX_DIFFICULTY.
+            assert_eq!(
+                EmissionController::compute_adjusted_difficulty(MAX_DIFFICULTY, 0, 1, u64::MAX),
+                MAX_DIFFICULTY
+            );
+        }
+
+        /// No-op guards: zero epoch_tx or zero target leave difficulty
+        /// unchanged (only re-clamped to absolute bounds).
+        #[test]
+        fn test_compute_adjusted_difficulty_noop_guards() {
+            assert_eq!(
+                EmissionController::compute_adjusted_difficulty(1234, 5_000, 0, 50),
+                1234
+            );
+            assert_eq!(
+                EmissionController::compute_adjusted_difficulty(1234, 5_000, 1_000, 0),
+                1234
+            );
+        }
+
+        /// Epoch trigger: difficulty only changes once epoch_tx crosses
+        /// ADJUSTMENT_TX_COUNT, and the controller's stateful path agrees with
+        /// the pure kernel.
+        #[test]
+        fn test_record_block_epoch_trigger_matches_kernel() {
+            let start = INITIAL_DIFFICULTY / 2;
+
+            // Just under the epoch threshold → no adjustment yet.
+            let mut ctrl = EmissionController::new(start);
+            ctrl.record_block(ADJUSTMENT_TX_COUNT - 1, INITIAL_REWARD, 0);
+            assert_eq!(
+                ctrl.difficulty, start,
+                "difficulty must not change before the epoch boundary"
+            );
+
+            // One full epoch in a single record_block call. The stateful result
+            // must equal the pure kernel on the same inputs.
+            let mut ctrl2 = EmissionController::new(start);
+            let target = ctrl2.target_emission_per_tx();
+            let emission = INITIAL_REWARD; // 1 block's reward over the whole epoch
+            ctrl2.record_block(ADJUSTMENT_TX_COUNT, emission, 0);
+            let expected = EmissionController::compute_adjusted_difficulty(
+                start,
+                emission,
+                ADJUSTMENT_TX_COUNT,
+                target,
+            );
+            assert_eq!(ctrl2.difficulty, expected);
+            // Epoch accumulators reset after adjustment.
+            assert_eq!(ctrl2.epoch_tx, 0);
+            assert_eq!(ctrl2.epoch_emission, 0);
+        }
+
         #[test]
         fn test_fee_burn_tracking() {
             let mut ctrl = EmissionController::new(1000);
@@ -1251,10 +1468,15 @@ pub mod difficulty {
         let actual_time = window_end_time - window_start_time;
         let expected_time = blocks_in_window * TARGET_BLOCK_TIME;
 
-        let ratio = actual_time as f64 / expected_time as f64;
-        let clamped = ratio.clamp(1.0 / MAX_ADJUSTMENT_FACTOR, MAX_ADJUSTMENT_FACTOR);
+        // Integer (u128 basis-point) math — no f64. Although this legacy helper
+        // has no live callers, keeping it float-free prevents it from ever
+        // re-introducing the C5 platform-divergence hazard if wired up later.
+        // ratio = actual_time / expected_time, clamped to [0.5x, 2.0x].
+        let ratio_bps = (actual_time as u128 * RATIO_SCALE / expected_time as u128)
+            .clamp(RATIO_SCALE / 2, MAX_ADJUSTMENT_FACTOR_BPS);
 
-        let new_difficulty = (current_difficulty as f64 * clamped) as u64;
+        let new_difficulty = current_difficulty as u128 * ratio_bps / RATIO_SCALE;
+        let new_difficulty = u64::try_from(new_difficulty).unwrap_or(u64::MAX);
         new_difficulty.clamp(MIN_DIFFICULTY, MAX_DIFFICULTY)
     }
 }
