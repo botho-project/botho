@@ -70,6 +70,7 @@ use crate::{
     config::QuorumConfig,
     ledger::Ledger,
     mempool::Mempool,
+    node::MinterHealth,
     transaction::{TxOutput, MIN_TX_FEE},
     wallet::Wallet,
 };
@@ -200,6 +201,11 @@ pub struct RpcState {
     /// an empty identity; `commands::run` populates it from the persistent
     /// node keypair once the network layer is up.
     pub identity: NodeIdentity,
+    /// Shared minter-health handle for stuck-miner detection (#538). `None`
+    /// until `commands::run` wires it in (or in tests / relay nodes); the inner
+    /// `Option` is `None` until minting first starts. Surfaced as `stalled` in
+    /// `minting_getStatus` and `minerStalled` in `node_getStatus`.
+    pub minter_health: Option<Arc<RwLock<Option<MinterHealth>>>>,
 }
 
 impl RpcState {
@@ -232,6 +238,7 @@ impl RpcState {
             wallet: None,
             quorum: QuorumConfig::default(),
             identity: NodeIdentity::default(),
+            minter_health: None,
         }
     }
 
@@ -268,6 +275,7 @@ impl RpcState {
             wallet: None,
             quorum: QuorumConfig::default(),
             identity: NodeIdentity::default(),
+            minter_health: None,
         }
     }
 
@@ -302,6 +310,7 @@ impl RpcState {
             wallet: None,
             quorum: QuorumConfig::default(),
             identity: NodeIdentity::default(),
+            minter_health: None,
         }
     }
 
@@ -329,6 +338,22 @@ impl RpcState {
     pub fn with_identity(mut self, identity: NodeIdentity) -> Self {
         self.identity = identity;
         self
+    }
+
+    /// Wire in the shared minter-health handle so `minting_getStatus` and
+    /// `node_getStatus` can surface live hashrate and the stuck-miner flag
+    /// (#538). `commands::run` calls this with `Node::minter_health`.
+    pub fn with_minter_health(mut self, minter_health: Arc<RwLock<Option<MinterHealth>>>) -> Self {
+        self.minter_health = Some(minter_health);
+        self
+    }
+
+    /// Read the current minter-health snapshot, if a handle is wired in and
+    /// minting has started. Returns `None` for relay nodes / pre-mint state.
+    fn minter_health_snapshot(&self) -> Option<crate::node::minter::MinterHealthSnapshot> {
+        let handle = self.minter_health.as_ref()?;
+        let guard = handle.read().ok()?;
+        guard.as_ref().map(|h| h.snapshot())
     }
 }
 
@@ -832,6 +857,14 @@ async fn handle_node_status(id: Value, state: &RpcState) -> JsonRpcResponse {
     let quorum_fault_tolerant = state.quorum.is_bft_fault_tolerant(participating_nodes);
     let quorum_degenerate = state.quorum.is_degenerate_quorum(participating_nodes);
 
+    // Stuck-miner health (#538): surface the same verdict as `minting_getStatus`
+    // so dashboards/monitoring watching node health catch a wedged miner (active
+    // but 0 H/s) immediately instead of after the chain silently halts.
+    let miner_stalled = state
+        .minter_health_snapshot()
+        .map(|s| s.stalled)
+        .unwrap_or(false);
+
     JsonRpcResponse::success(
         id,
         json!({
@@ -858,6 +891,9 @@ async fn handle_node_status(id: Value, state: &RpcState) -> JsonRpcResponse {
             // `quorumDegenerate` flags the n-of-n / zero-fault-tolerance regime.
             "quorumFaultTolerant": quorum_fault_tolerant,
             "quorumDegenerate": quorum_degenerate,
+            // Stuck-miner early-warning (#538): true iff this node's miner is
+            // active but producing 0 H/s past the grace + stall window.
+            "minerStalled": miner_stalled,
         }),
     )
 }
@@ -1833,17 +1869,30 @@ async fn handle_minting_status(id: Value, state: &RpcState) -> JsonRpcResponse {
     let active = *read_lock!(state.minting_active, id.clone());
     let ledger = read_lock!(state.ledger, id.clone());
     let chain_state = ledger.get_chain_state().unwrap_or_default();
+    drop(ledger);
+
+    // Live hashrate / total-hashes and the stuck-miner verdict come from the
+    // shared minter-health handle (#538). When no handle is wired in (relay
+    // nodes / tests / before minting starts) we report zeros and `stalled:
+    // false`, matching the previous placeholder behavior.
+    let snap = state.minter_health_snapshot();
+    let hashrate = snap.map(|s| s.hashrate).unwrap_or(0.0);
+    let total_hashes = snap.map(|s| s.total_hashes).unwrap_or(0);
+    let stalled = snap.map(|s| s.stalled).unwrap_or(false);
 
     JsonRpcResponse::success(
         id,
         json!({
             "active": active,
             "threads": state.minting_threads,
-            "hashrate": 0.0, // TODO: track actual hashrate
-            "totalHashes": 0,
+            "hashrate": hashrate,
+            "totalHashes": total_hashes,
             "blocksFound": 0, // TODO: track blocks found
             "currentDifficulty": chain_state.difficulty,
             "uptimeSeconds": state.start_time.elapsed().as_secs(),
+            // Stuck-miner detector (#538): true iff active but 0 H/s past the
+            // grace + stall window. Operator/monitoring early-warning.
+            "stalled": stalled,
         }),
     )
 }
@@ -3169,6 +3218,94 @@ mod tests {
         assert_eq!(result["scpPeerCount"], json!(3));
         assert_eq!(result["quorumDegenerate"], json!(false));
         assert_eq!(result["quorumFaultTolerant"], json!(true));
+    }
+
+    /// #538: the stuck-miner flag must surface in BOTH `minting_getStatus`
+    /// (`stalled`) and `node_getStatus` (`minerStalled`). A miner that is
+    /// active but producing 0 H/s past the grace + stall window is flagged;
+    /// a healthy or inactive miner is not; and with no health handle wired
+    /// in the flag defaults to `false` (present, never missing).
+    #[tokio::test]
+    async fn test_miner_stalled_flag_in_both_status_payloads() {
+        use crate::{
+            ledger::Ledger,
+            mempool::Mempool,
+            node::{
+                minter::{STARTUP_GRACE_SECS, STUCK_MINER_SECS},
+                MinterHealth,
+            },
+        };
+
+        fn fresh_state() -> RpcState {
+            let dir = tempfile::tempdir().unwrap();
+            let ledger = Ledger::open(dir.path()).unwrap();
+            // Keep the tempdir alive for the lifetime of the ledger by leaking
+            // it — fine for a unit test.
+            std::mem::forget(dir);
+            RpcState::new(
+                ledger,
+                Mempool::new(),
+                Network::Testnet,
+                None,
+                None,
+                vec![],
+                Arc::new(WsBroadcaster::new(16)),
+            )
+        }
+
+        // (1) No health handle wired in: flag present and false in both.
+        let state = fresh_state();
+        let minting = handle_minting_status(json!(1), &state)
+            .await
+            .result
+            .unwrap();
+        assert_eq!(minting["stalled"], json!(false));
+        let node = handle_node_status(json!(1), &state).await.result.unwrap();
+        assert_eq!(node["minerStalled"], json!(false));
+
+        // (2) Active + 0 H/s past the grace + stall window: stalled in both.
+        let stalled = MinterHealth::for_test(true, 0, STARTUP_GRACE_SECS + STUCK_MINER_SECS + 5);
+        let handle = Arc::new(RwLock::new(Some(stalled)));
+        let state = fresh_state().with_minter_health(handle);
+        let minting = handle_minting_status(json!(1), &state)
+            .await
+            .result
+            .unwrap();
+        assert_eq!(minting["stalled"], json!(true), "minting_getStatus.stalled");
+        let node = handle_node_status(json!(1), &state).await.result.unwrap();
+        assert_eq!(
+            node["minerStalled"],
+            json!(true),
+            "node_getStatus.minerStalled"
+        );
+
+        // (3) Active + healthy (hashes well past 0, recent progress): not stalled.
+        // `for_test` pins last-progress to start, so to model a *healthy* miner
+        // we keep uptime within the stall window after the grace.
+        let healthy = MinterHealth::for_test(true, 100_000, STARTUP_GRACE_SECS + 1);
+        let handle = Arc::new(RwLock::new(Some(healthy)));
+        let state = fresh_state().with_minter_health(handle);
+        let minting = handle_minting_status(json!(1), &state)
+            .await
+            .result
+            .unwrap();
+        assert_eq!(minting["stalled"], json!(false));
+        assert_eq!(minting["totalHashes"], json!(100_000));
+        let node = handle_node_status(json!(1), &state).await.result.unwrap();
+        assert_eq!(node["minerStalled"], json!(false));
+
+        // (4) Inactive miner: never stalled, even with a long zero-hash uptime.
+        let inactive =
+            MinterHealth::for_test(false, 0, STARTUP_GRACE_SECS + STUCK_MINER_SECS + 1000);
+        let handle = Arc::new(RwLock::new(Some(inactive)));
+        let state = fresh_state().with_minter_health(handle);
+        let minting = handle_minting_status(json!(1), &state)
+            .await
+            .result
+            .unwrap();
+        assert_eq!(minting["stalled"], json!(false));
+        let node = handle_node_status(json!(1), &state).await.result.unwrap();
+        assert_eq!(node["minerStalled"], json!(false));
     }
 
     /// #500: `node_getIdentity` exposes the node's stable, verifiable identity
