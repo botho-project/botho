@@ -27,6 +27,10 @@ use libp2p::{
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
     time::Duration,
 };
 use tokio::sync::mpsc;
@@ -329,6 +333,113 @@ pub struct BothoBehaviour {
     pub identify: identify::Behaviour,
 }
 
+/// Live, node-wide network traffic and connection-direction counters (#542).
+///
+/// These are the real values surfaced by `network_getInfo` as `bytesSent`,
+/// `bytesReceived`, `inboundCount`, and `outboundCount` (previously hardcoded
+/// to `0`). Counters are lock-free [`AtomicU64`]s so the hot send/receive paths
+/// never take a lock, and the RPC layer reads a cheap snapshot via a shared
+/// [`Arc`].
+///
+/// ## What is counted
+///
+/// - **Byte counters** track *application-layer gossipsub payload* bytes: the
+///   serialized length of every message published (`bytes_sent`) and the length
+///   of every gossipsub message received (`bytes_received`). This covers the
+///   bulk of node traffic — blocks, transactions, SCP consensus, compact
+///   blocks, minting txs, PEX, and upgrade announcements.
+/// - **Connection counters** track the libp2p connection direction: a
+///   connection we dialed is *outbound*, a connection a remote peer dialed is
+///   *inbound*. Counted on first establishment to a peer and decremented when
+///   the last connection to that peer closes.
+///
+/// ## Known gaps (intentional — see #542)
+///
+/// - Sync request/response (`request_response`) payload bytes are NOT counted:
+///   the codec exchanges typed values rather than exposing a serialized byte
+///   length at the event boundary, and re-serializing solely to measure would
+///   add cost on the hot path. Block/tx/SCP/compact-block traffic — the large
+///   majority of bytes — flows over gossipsub and IS counted.
+/// - Transport framing overhead (Noise handshake, yamux framing, TCP headers)
+///   is NOT counted; these are payload counters, not raw wire counters.
+#[derive(Debug, Default)]
+pub struct NetworkStats {
+    bytes_sent: AtomicU64,
+    bytes_received: AtomicU64,
+    inbound_count: AtomicU64,
+    outbound_count: AtomicU64,
+}
+
+impl NetworkStats {
+    /// Create a fresh set of zeroed counters.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record `n` bytes sent on the wire (serialized gossipsub payload).
+    pub fn record_sent(&self, n: u64) {
+        self.bytes_sent.fetch_add(n, Ordering::Relaxed);
+    }
+
+    /// Record `n` bytes received on the wire (gossipsub message payload).
+    pub fn record_received(&self, n: u64) {
+        self.bytes_received.fetch_add(n, Ordering::Relaxed);
+    }
+
+    /// Record a newly established connection in the given direction
+    /// (`inbound == true` for a remote-dialed connection).
+    pub fn record_connection_opened(&self, inbound: bool) {
+        if inbound {
+            self.inbound_count.fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.outbound_count.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Record a fully-closed connection in the given direction. Saturates at 0
+    /// so a spurious close can never underflow the counter.
+    pub fn record_connection_closed(&self, inbound: bool) {
+        let counter = if inbound {
+            &self.inbound_count
+        } else {
+            &self.outbound_count
+        };
+        // Compare-and-swap loop to saturate at zero (avoids u64 underflow).
+        let mut current = counter.load(Ordering::Relaxed);
+        while current > 0 {
+            match counter.compare_exchange_weak(
+                current,
+                current - 1,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(actual) => current = actual,
+            }
+        }
+    }
+
+    /// Total application-layer bytes sent since startup.
+    pub fn bytes_sent(&self) -> u64 {
+        self.bytes_sent.load(Ordering::Relaxed)
+    }
+
+    /// Total application-layer bytes received since startup.
+    pub fn bytes_received(&self) -> u64 {
+        self.bytes_received.load(Ordering::Relaxed)
+    }
+
+    /// Current number of inbound (remote-dialed) connections.
+    pub fn inbound_count(&self) -> u64 {
+        self.inbound_count.load(Ordering::Relaxed)
+    }
+
+    /// Current number of outbound (locally-dialed) connections.
+    pub fn outbound_count(&self) -> u64 {
+        self.outbound_count.load(Ordering::Relaxed)
+    }
+}
+
 /// Network discovery and gossip service
 pub struct NetworkDiscovery {
     /// Persistent libp2p identity keypair (issue #439).
@@ -357,6 +468,11 @@ pub struct NetworkDiscovery {
     pex_manager: PexManager,
     /// Per-peer rate limiter for gossipsub messages (DoS protection)
     rate_limiter: PeerRateLimiter,
+    /// Live traffic / connection-direction counters surfaced by
+    /// `network_getInfo` (#542). Shared (cheap [`Arc`] clone) with the RPC
+    /// layer via [`stats`](Self::stats); incremented on the send/receive
+    /// and connect/disconnect paths.
+    stats: Arc<NetworkStats>,
 }
 
 impl NetworkDiscovery {
@@ -430,7 +546,26 @@ impl NetworkDiscovery {
             compact_block_peers: HashSet::new(),
             pex_manager: PexManager::new(),
             rate_limiter: PeerRateLimiter::new(rate_limit_config),
+            stats: Arc::new(NetworkStats::new()),
         }
+    }
+
+    /// Get a shared handle to the live network-traffic counters (#542).
+    ///
+    /// `commands::run` clones this once at startup and hands it to the RPC
+    /// layer, which reads `bytesSent` / `bytesReceived` / `inboundCount` /
+    /// `outboundCount` from it for `network_getInfo`. The clone is a cheap
+    /// [`Arc`] bump; both sides observe the same atomics.
+    pub fn stats(&self) -> Arc<NetworkStats> {
+        Arc::clone(&self.stats)
+    }
+
+    /// Borrow the live network-traffic counters (#542). Used by `commands::run`
+    /// to record sent bytes at the static `broadcast_*` call sites, which take
+    /// the swarm by `&mut` but have no `self`. `discovery` and the `swarm` are
+    /// independent values, so this immutable borrow coexists with `&mut swarm`.
+    pub fn stats_ref(&self) -> &NetworkStats {
+        &self.stats
     }
 
     /// Get the local peer ID
@@ -640,15 +775,21 @@ impl NetworkDiscovery {
     }
 
     /// Broadcast a new block to the network
-    pub fn broadcast_block(swarm: &mut Swarm<BothoBehaviour>, block: &Block) -> anyhow::Result<()> {
+    pub fn broadcast_block(
+        swarm: &mut Swarm<BothoBehaviour>,
+        stats: &NetworkStats,
+        block: &Block,
+    ) -> anyhow::Result<()> {
         let topic = IdentTopic::new(BLOCKS_TOPIC);
         let block_bytes = bincode::serialize(block)?;
+        let len = block_bytes.len() as u64;
 
         swarm
             .behaviour_mut()
             .gossipsub
             .publish(topic, block_bytes)
             .map_err(|e| anyhow::anyhow!("Failed to publish block: {:?}", e))?;
+        stats.record_sent(len);
 
         debug!("Broadcast block {} to network", block.height());
         Ok(())
@@ -657,16 +798,19 @@ impl NetworkDiscovery {
     /// Broadcast a transaction to the network
     pub fn broadcast_transaction(
         swarm: &mut Swarm<BothoBehaviour>,
+        stats: &NetworkStats,
         tx: &Transaction,
     ) -> anyhow::Result<()> {
         let topic = IdentTopic::new(TRANSACTIONS_TOPIC);
         let tx_bytes = bincode::serialize(tx)?;
+        let len = tx_bytes.len() as u64;
 
         swarm
             .behaviour_mut()
             .gossipsub
             .publish(topic, tx_bytes)
             .map_err(|e| anyhow::anyhow!("Failed to publish transaction: {:?}", e))?;
+        stats.record_sent(len);
 
         debug!(
             "Broadcast transaction {} to network",
@@ -682,16 +826,19 @@ impl NetworkDiscovery {
     /// message (issue #409).
     pub fn broadcast_minting_tx(
         swarm: &mut Swarm<BothoBehaviour>,
+        stats: &NetworkStats,
         minting_tx: &MintingTx,
     ) -> anyhow::Result<()> {
         let topic = IdentTopic::new(MINTING_TXS_TOPIC);
         let tx_bytes = bincode::serialize(minting_tx)?;
+        let len = tx_bytes.len() as u64;
 
         swarm
             .behaviour_mut()
             .gossipsub
             .publish(topic, tx_bytes)
             .map_err(|e| anyhow::anyhow!("Failed to publish minting tx: {:?}", e))?;
+        stats.record_sent(len);
 
         debug!(
             "Broadcast minting tx {} to network",
@@ -703,16 +850,19 @@ impl NetworkDiscovery {
     /// Broadcast an SCP consensus message to the network
     pub fn broadcast_scp(
         swarm: &mut Swarm<BothoBehaviour>,
+        stats: &NetworkStats,
         msg: &ScpMessage,
     ) -> anyhow::Result<()> {
         let topic = IdentTopic::new(SCP_TOPIC);
         let msg_bytes = bincode::serialize(msg)?;
+        let len = msg_bytes.len() as u64;
 
         swarm
             .behaviour_mut()
             .gossipsub
             .publish(topic, msg_bytes)
             .map_err(|e| anyhow::anyhow!("Failed to publish SCP message: {:?}", e))?;
+        stats.record_sent(len);
 
         debug!(slot = msg.slot_index, "Broadcast SCP message");
         Ok(())
@@ -721,16 +871,19 @@ impl NetworkDiscovery {
     /// Broadcast a compact block to the network (bandwidth-efficient relay)
     pub fn broadcast_compact_block(
         swarm: &mut Swarm<BothoBehaviour>,
+        stats: &NetworkStats,
         compact_block: &CompactBlock,
     ) -> anyhow::Result<()> {
         let topic = IdentTopic::new(COMPACT_BLOCKS_TOPIC);
         let bytes = bincode::serialize(compact_block)?;
+        let len = bytes.len() as u64;
 
         swarm
             .behaviour_mut()
             .gossipsub
             .publish(topic, bytes)
             .map_err(|e| anyhow::anyhow!("Failed to publish compact block: {:?}", e))?;
+        stats.record_sent(len);
 
         debug!(
             height = compact_block.height(),
@@ -743,16 +896,19 @@ impl NetworkDiscovery {
     /// Request missing transactions for compact block reconstruction
     pub fn request_block_txns(
         swarm: &mut Swarm<BothoBehaviour>,
+        stats: &NetworkStats,
         request: &GetBlockTxn,
     ) -> anyhow::Result<()> {
         let topic = IdentTopic::new(COMPACT_BLOCKS_TOPIC);
         let bytes = bincode::serialize(request)?;
+        let len = bytes.len() as u64;
 
         swarm
             .behaviour_mut()
             .gossipsub
             .publish(topic, bytes)
             .map_err(|e| anyhow::anyhow!("Failed to publish GetBlockTxn: {:?}", e))?;
+        stats.record_sent(len);
 
         debug!(
             block = hex::encode(&request.block_hash[0..8]),
@@ -765,16 +921,19 @@ impl NetworkDiscovery {
     /// Respond with missing transactions for compact block reconstruction
     pub fn respond_block_txns(
         swarm: &mut Swarm<BothoBehaviour>,
+        stats: &NetworkStats,
         response: &BlockTxn,
     ) -> anyhow::Result<()> {
         let topic = IdentTopic::new(COMPACT_BLOCKS_TOPIC);
         let bytes = bincode::serialize(response)?;
+        let len = bytes.len() as u64;
 
         swarm
             .behaviour_mut()
             .gossipsub
             .publish(topic, bytes)
             .map_err(|e| anyhow::anyhow!("Failed to publish BlockTxn: {:?}", e))?;
+        stats.record_sent(len);
 
         debug!(
             block = hex::encode(&response.block_hash[0..8]),
@@ -787,10 +946,12 @@ impl NetworkDiscovery {
     /// Broadcast a PEX message with known peers
     pub fn broadcast_pex(
         swarm: &mut Swarm<BothoBehaviour>,
+        stats: &NetworkStats,
         message: &PexMessage,
     ) -> anyhow::Result<()> {
         let topic = IdentTopic::new(PEX_TOPIC);
         let bytes = bincode::serialize(message)?;
+        let len = bytes.len() as u64;
 
         // Size check
         if bytes.len() > MAX_PEX_MESSAGE_SIZE {
@@ -806,6 +967,7 @@ impl NetworkDiscovery {
             .gossipsub
             .publish(topic, bytes)
             .map_err(|e| anyhow::anyhow!("Failed to publish PEX message: {:?}", e))?;
+        stats.record_sent(len);
 
         debug!(peers = message.entries.len(), "Broadcast PEX message");
         Ok(())
@@ -848,7 +1010,7 @@ impl NetworkDiscovery {
             .collect();
 
         if let Some(message) = self.pex_manager.prepare_broadcast(peers) {
-            if let Err(e) = Self::broadcast_pex(swarm, &message) {
+            if let Err(e) = Self::broadcast_pex(swarm, &self.stats, &message) {
                 warn!("Failed to broadcast PEX: {}", e);
             } else {
                 self.pex_manager.record_broadcast();
@@ -869,16 +1031,17 @@ impl NetworkDiscovery {
     /// legacy peers that don't support compact block relay.
     pub fn broadcast_block_smart(
         swarm: &mut Swarm<BothoBehaviour>,
+        stats: &NetworkStats,
         block: &Block,
         legacy_peers_exist: bool,
     ) -> anyhow::Result<()> {
         // Always send compact block (bandwidth-efficient for upgraded peers)
         let compact_block = CompactBlock::from_block(block);
-        Self::broadcast_compact_block(swarm, &compact_block)?;
+        Self::broadcast_compact_block(swarm, stats, &compact_block)?;
 
         // Only send full block if there are legacy peers
         if legacy_peers_exist {
-            Self::broadcast_block(swarm, block)?;
+            Self::broadcast_block(swarm, stats, block)?;
             debug!(height = block.height(), "Sent full block for legacy peers");
         } else {
             debug!(
@@ -896,16 +1059,19 @@ impl NetworkDiscovery {
     /// the network of upcoming protocol upgrades.
     pub fn broadcast_upgrade_announcement(
         swarm: &mut Swarm<BothoBehaviour>,
+        stats: &NetworkStats,
         announcement: &UpgradeAnnouncement,
     ) -> anyhow::Result<()> {
         let topic = IdentTopic::new(UPGRADE_ANNOUNCEMENTS_TOPIC);
         let bytes = bincode::serialize(announcement)?;
+        let len = bytes.len() as u64;
 
         swarm
             .behaviour_mut()
             .gossipsub
             .publish(topic, bytes)
             .map_err(|e| anyhow::anyhow!("Failed to publish upgrade announcement: {:?}", e))?;
+        stats.record_sent(len);
 
         info!(
             target_version = %announcement.target_version,
@@ -926,6 +1092,11 @@ impl NetworkDiscovery {
                 message,
                 ..
             })) => {
+                // Account for received bytes (#542) before any rate-limit drop:
+                // the payload already crossed the wire regardless of whether we
+                // act on it, so it counts toward `bytesReceived`.
+                self.stats.record_received(message.data.len() as u64);
+
                 // Determine which topic this message is from
                 let topic = message.topic.as_str();
 
@@ -1343,8 +1514,23 @@ impl NetworkDiscovery {
                 info!("Listening on {}", address);
                 None
             }
-            SwarmEvent::ConnectionEstablished { peer_id, .. } => {
+            SwarmEvent::ConnectionEstablished {
+                peer_id,
+                endpoint,
+                num_established,
+                ..
+            } => {
                 info!("Connected to peer: {}", peer_id);
+                // Count the connection direction exactly once per peer (#542):
+                // libp2p can briefly hold multiple connections to the same peer
+                // (concurrent dials), so only the FIRST established connection
+                // (num_established == 1) bumps the inbound/outbound counter, to
+                // mirror the per-peer accounting used for `peer_count`. A
+                // connection we dialed is outbound; one a remote dialed is
+                // inbound.
+                if num_established.get() == 1 {
+                    self.stats.record_connection_opened(!endpoint.is_dialer());
+                }
                 self.peers.insert(
                     peer_id,
                     PeerTableEntry {
@@ -1360,9 +1546,17 @@ impl NetworkDiscovery {
             }
             SwarmEvent::ConnectionClosed {
                 peer_id,
+                endpoint,
                 num_established,
                 ..
             } => {
+                // Mirror the per-peer connection-direction accounting from
+                // ConnectionEstablished (#542): only decrement once the LAST
+                // connection to this peer is gone (num_established == 0), using
+                // the same dialer/listener split.
+                if num_established == 0 {
+                    self.stats.record_connection_closed(!endpoint.is_dialer());
+                }
                 // libp2p emits ConnectionClosed per-connection. When two nodes
                 // dial each other concurrently they briefly hold redundant
                 // connections; closing one must NOT be treated as a full
@@ -1411,6 +1605,127 @@ impl NetworkDiscovery {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ========================================================================
+    // NetworkStats tests (#542)
+    // ========================================================================
+
+    #[test]
+    fn test_network_stats_default_is_zero() {
+        let stats = NetworkStats::new();
+        assert_eq!(stats.bytes_sent(), 0);
+        assert_eq!(stats.bytes_received(), 0);
+        assert_eq!(stats.inbound_count(), 0);
+        assert_eq!(stats.outbound_count(), 0);
+    }
+
+    #[test]
+    fn test_network_stats_byte_counters_accumulate() {
+        // Simulates the send/receive sites incrementing the counters: each call
+        // mirrors a serialized publish or a received gossipsub payload.
+        let stats = NetworkStats::new();
+
+        stats.record_sent(100);
+        stats.record_sent(250);
+        assert_eq!(stats.bytes_sent(), 350);
+
+        stats.record_received(40);
+        stats.record_received(60);
+        stats.record_received(1);
+        assert_eq!(stats.bytes_received(), 101);
+
+        // Sent and received are independent.
+        assert_eq!(stats.bytes_sent(), 350);
+    }
+
+    #[test]
+    fn test_network_stats_inbound_outbound_independent() {
+        let stats = NetworkStats::new();
+
+        // Two inbound (remote-dialed) and one outbound (locally-dialed).
+        stats.record_connection_opened(true);
+        stats.record_connection_opened(true);
+        stats.record_connection_opened(false);
+        assert_eq!(stats.inbound_count(), 2);
+        assert_eq!(stats.outbound_count(), 1);
+
+        // Closing decrements the matching direction only.
+        stats.record_connection_closed(true);
+        assert_eq!(stats.inbound_count(), 1);
+        assert_eq!(stats.outbound_count(), 1);
+
+        stats.record_connection_closed(false);
+        assert_eq!(stats.inbound_count(), 1);
+        assert_eq!(stats.outbound_count(), 0);
+    }
+
+    #[test]
+    fn test_network_stats_close_saturates_at_zero() {
+        // A spurious close (more closes than opens) must never underflow the
+        // u64 counter into a huge value.
+        let stats = NetworkStats::new();
+        stats.record_connection_closed(true);
+        stats.record_connection_closed(false);
+        assert_eq!(stats.inbound_count(), 0);
+        assert_eq!(stats.outbound_count(), 0);
+    }
+
+    #[test]
+    fn test_network_stats_shared_handle_observes_same_atomics() {
+        // The RPC layer reads from a cloned Arc; both handles must observe the
+        // same underlying counters (this is the live snapshot contract).
+        let stats = Arc::new(NetworkStats::new());
+        let rpc_view = Arc::clone(&stats);
+
+        stats.record_sent(512);
+        stats.record_received(128);
+        stats.record_connection_opened(true);
+
+        assert_eq!(rpc_view.bytes_sent(), 512);
+        assert_eq!(rpc_view.bytes_received(), 128);
+        assert_eq!(rpc_view.inbound_count(), 1);
+        assert_eq!(rpc_view.outbound_count(), 0);
+    }
+
+    #[test]
+    fn test_connected_point_direction_maps_to_counter() {
+        // Verifies the exact direction predicate used in `process_event`:
+        // a Dialer endpoint (we dialed) is outbound; a Listener endpoint
+        // (remote dialed us) is inbound. This guards against the inbound/
+        // outbound mapping silently inverting.
+        use libp2p::core::{transport::PortUse, ConnectedPoint, Endpoint};
+
+        let addr: Multiaddr = "/ip4/127.0.0.1/tcp/9000".parse().unwrap();
+
+        let dialer = ConnectedPoint::Dialer {
+            address: addr.clone(),
+            role_override: Endpoint::Dialer,
+            port_use: PortUse::Reuse,
+        };
+        let listener = ConnectedPoint::Listener {
+            local_addr: addr.clone(),
+            send_back_addr: addr.clone(),
+        };
+
+        // `process_event` records `!endpoint.is_dialer()` as the `inbound` flag.
+        let stats = NetworkStats::new();
+        stats.record_connection_opened(!dialer.is_dialer()); // outbound
+        stats.record_connection_opened(!listener.is_dialer()); // inbound
+
+        assert_eq!(stats.outbound_count(), 1, "dialer must count as outbound");
+        assert_eq!(stats.inbound_count(), 1, "listener must count as inbound");
+    }
+
+    #[test]
+    fn test_discovery_exposes_shared_stats_handle() {
+        // `discovery.stats()` and `discovery.stats_ref()` must reference the
+        // same counters the event loop mutates, so the RPC handle stays live.
+        let discovery = NetworkDiscovery::new(0, vec![]);
+        let handle = discovery.stats();
+
+        discovery.stats_ref().record_sent(64);
+        assert_eq!(handle.bytes_sent(), 64);
+    }
 
     // ========================================================================
     // PeerTableEntry tests

@@ -70,7 +70,7 @@ use crate::{
     config::QuorumConfig,
     ledger::Ledger,
     mempool::Mempool,
-    network::SyncStatusSnapshot,
+    network::{NetworkStats, SyncStatusSnapshot},
     node::MinterHealth,
     transaction::{TxOutput, MIN_TX_FEE},
     wallet::Wallet,
@@ -248,6 +248,14 @@ pub struct RpcState {
     /// RPC layer reads it. Empty by default (tests / relay / no peers
     /// connected), in which case `network_getPeers` returns an empty list.
     pub peers: Arc<RwLock<Vec<PeerInfoSnapshot>>>,
+    /// Shared live network-traffic counters surfaced by `network_getInfo`
+    /// (#542). `commands::run` wires in the same [`NetworkStats`] handle the
+    /// network event loop increments on send/receive and connect/disconnect, so
+    /// `bytesSent`, `bytesReceived`, and `inboundCount` report real values
+    /// instead of the previous hardcoded `0`. `None` in tests / relay nodes
+    /// that never start the network loop, in which case those fields fall back
+    /// to `0`.
+    pub network_stats: Option<Arc<NetworkStats>>,
 }
 
 impl RpcState {
@@ -283,6 +291,7 @@ impl RpcState {
             minter_health: None,
             sync_status: None,
             peers: Arc::new(RwLock::new(Vec::new())),
+            network_stats: None,
         }
     }
 
@@ -322,6 +331,7 @@ impl RpcState {
             minter_health: None,
             sync_status: None,
             peers: Arc::new(RwLock::new(Vec::new())),
+            network_stats: None,
         }
     }
 
@@ -359,6 +369,7 @@ impl RpcState {
             minter_health: None,
             sync_status: None,
             peers: Arc::new(RwLock::new(Vec::new())),
+            network_stats: None,
         }
     }
 
@@ -430,6 +441,15 @@ impl RpcState {
     /// shares the same handle it publishes the discovery peer table into.
     pub fn with_peers(mut self, peers: Arc<RwLock<Vec<PeerInfoSnapshot>>>) -> Self {
         self.peers = peers;
+        self
+    }
+
+    /// Wire in the shared live network-traffic counters so `network_getInfo`
+    /// reports real `bytesSent` / `bytesReceived` / `inboundCount` /
+    /// `outboundCount` (#542). `commands::run` passes the same
+    /// [`NetworkStats`] handle the network event loop increments.
+    pub fn with_network_stats(mut self, network_stats: Arc<NetworkStats>) -> Self {
+        self.network_stats = Some(network_stats);
         self
     }
 }
@@ -1995,14 +2015,34 @@ async fn handle_minting_status(id: Value, state: &RpcState) -> JsonRpcResponse {
 async fn handle_network_info(id: Value, state: &RpcState) -> JsonRpcResponse {
     let peers = *read_lock!(state.peer_count, id.clone());
 
+    // Surface real traffic / connection-direction counters from the live
+    // network event loop (#542). When the handle is wired in (normal node
+    // operation) we report the actual atomics; `inboundCount` + `outboundCount`
+    // are the dialer/listener split tracked on connect/disconnect, and the byte
+    // counters are cumulative gossipsub payload bytes since startup.
+    //
+    // When no handle is present (tests / relay nodes that never start the
+    // network loop) we fall back to the previous placeholder behavior:
+    // `inboundCount: 0` and `outboundCount: peerCount`, so the endpoint shape is
+    // unchanged for those callers.
+    let (inbound, outbound, bytes_sent, bytes_received) = match state.network_stats.as_ref() {
+        Some(stats) => (
+            stats.inbound_count(),
+            stats.outbound_count(),
+            stats.bytes_sent(),
+            stats.bytes_received(),
+        ),
+        None => (0, peers as u64, 0, 0),
+    };
+
     JsonRpcResponse::success(
         id,
         json!({
             "peerCount": peers,
-            "inboundCount": 0,
-            "outboundCount": peers,
-            "bytesSent": 0,
-            "bytesReceived": 0,
+            "inboundCount": inbound,
+            "outboundCount": outbound,
+            "bytesSent": bytes_sent,
+            "bytesReceived": bytes_received,
             "uptimeSeconds": state.start_time.elapsed().as_secs(),
         }),
     )
@@ -4124,5 +4164,74 @@ mod tests {
         assert_eq!(peers[1]["protocolVersion"], Value::Null);
         assert_eq!(peers[1]["versionWarning"], json!(true));
         assert_eq!(peers[1]["lastSeenSecs"], json!(42));
+    }
+
+    /// #542: `network_getInfo` surfaces real `bytesSent` / `bytesReceived` /
+    /// `inboundCount` / `outboundCount` from the live network counters instead
+    /// of the previous hardcoded `0`.
+    ///
+    /// - No handle wired in (relay/test): falls back to the prior placeholder
+    ///   shape — `inboundCount: 0`, `outboundCount: peerCount`, zero bytes.
+    /// - With a `NetworkStats` handle: reports the actual atomic values.
+    #[tokio::test]
+    async fn test_network_info_surfaces_real_counters() {
+        use crate::{ledger::Ledger, mempool::Mempool, network::NetworkStats};
+
+        fn fresh_state() -> RpcState {
+            let dir = tempfile::tempdir().unwrap();
+            let ledger = Ledger::open(dir.path()).unwrap();
+            std::mem::forget(dir);
+            RpcState::new(
+                ledger,
+                Mempool::new(),
+                Network::Testnet,
+                None,
+                None,
+                vec![],
+                Arc::new(WsBroadcaster::new(16)),
+            )
+        }
+
+        // (1) No stats handle: legacy fallback shape, all traffic counters zero.
+        let state = fresh_state();
+        *state.peer_count.write().unwrap() = 3;
+        let result = handle_network_info(json!(1), &state).await.result.unwrap();
+        assert_eq!(result["peerCount"], json!(3));
+        assert_eq!(result["inboundCount"], json!(0), "no handle -> 0 inbound");
+        assert_eq!(
+            result["outboundCount"],
+            json!(3),
+            "no handle -> outbound falls back to peerCount"
+        );
+        assert_eq!(result["bytesSent"], json!(0));
+        assert_eq!(result["bytesReceived"], json!(0));
+
+        // (2) Stats handle wired in: real values surfaced. Simulate the network
+        // event loop having recorded traffic + connections.
+        let stats = Arc::new(NetworkStats::new());
+        stats.record_sent(4096);
+        stats.record_received(8192);
+        // Two inbound, one outbound (record_connection_opened: inbound flag).
+        stats.record_connection_opened(true);
+        stats.record_connection_opened(true);
+        stats.record_connection_opened(false);
+
+        let state = fresh_state().with_network_stats(Arc::clone(&stats));
+        *state.peer_count.write().unwrap() = 3;
+        let result = handle_network_info(json!(1), &state).await.result.unwrap();
+        assert_eq!(result["peerCount"], json!(3));
+        assert_eq!(result["inboundCount"], json!(2), "real inbound count");
+        assert_eq!(result["outboundCount"], json!(1), "real outbound count");
+        assert_eq!(result["bytesSent"], json!(4096));
+        assert_eq!(result["bytesReceived"], json!(8192));
+
+        // (3) Genuine zero: handle present but nothing sent / no inbound.
+        let empty_stats = Arc::new(NetworkStats::new());
+        let state = fresh_state().with_network_stats(empty_stats);
+        let result = handle_network_info(json!(1), &state).await.result.unwrap();
+        assert_eq!(result["bytesSent"], json!(0));
+        assert_eq!(result["bytesReceived"], json!(0));
+        assert_eq!(result["inboundCount"], json!(0));
+        assert_eq!(result["outboundCount"], json!(0));
     }
 }

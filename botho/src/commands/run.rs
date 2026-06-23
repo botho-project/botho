@@ -439,7 +439,10 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
     .with_identity(node_identity)
     .with_minter_health(minter_health.clone())
     .with_sync_status(sync_status.clone())
-    .with_peers(peers_snapshot.clone());
+    .with_peers(peers_snapshot.clone())
+    // Live traffic / connection-direction counters for `network_getInfo`
+    // (#542). Shares the same handle the network event loop increments.
+    .with_network_stats(discovery.stats());
 
     // Initialize wallet for RPC (balance checking, faucet, etc.)
     if let Some(mnemonic) = config.mnemonic() {
@@ -653,7 +656,9 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                 pending_txs.len()
             );
             for tx in &pending_txs {
-                if let Err(e) = NetworkDiscovery::broadcast_transaction(&mut swarm, tx) {
+                if let Err(e) =
+                    NetworkDiscovery::broadcast_transaction(&mut swarm, discovery.stats_ref(), tx)
+                {
                     debug!("Failed to broadcast pending tx: {}", e);
                 }
             }
@@ -1196,7 +1201,7 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                                         indices: missing_indices,
                                     };
 
-                                    if let Err(e) = NetworkDiscovery::request_block_txns(&mut swarm, &request) {
+                                    if let Err(e) = NetworkDiscovery::request_block_txns(&mut swarm, discovery.stats_ref(), &request) {
                                         warn!("Failed to request missing transactions: {}", e);
                                     }
                                 }
@@ -1240,7 +1245,7 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                             };
 
                             if let Some(response) = response {
-                                if let Err(e) = NetworkDiscovery::respond_block_txns(&mut swarm, &response) {
+                                if let Err(e) = NetworkDiscovery::respond_block_txns(&mut swarm, discovery.stats_ref(), &response) {
                                     warn!("Failed to send BlockTxn response: {}", e);
                                 }
                             }
@@ -1480,6 +1485,7 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                                         let legacy_peers = discovery.legacy_peer_count() > 0;
                                         if let Err(e) = NetworkDiscovery::broadcast_block_smart(
                                             &mut swarm,
+                                            discovery.stats_ref(),
                                             &block,
                                             legacy_peers,
                                         ) {
@@ -1497,7 +1503,9 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                         }
                         ConsensusEvent::BroadcastMessage(msg) => {
                             // Broadcast SCP message to network
-                            if let Err(e) = NetworkDiscovery::broadcast_scp(&mut swarm, &msg) {
+                            if let Err(e) =
+                                NetworkDiscovery::broadcast_scp(&mut swarm, discovery.stats_ref(), &msg)
+                            {
                                 warn!("Failed to broadcast SCP message: {}", e);
                             }
 
@@ -1691,7 +1699,9 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                 // nominate/ballot message. Without this, peers reject our SCP
                 // messages ("Transaction not in cache") and multi-node
                 // nomination never reaches quorum (issue #409).
-                if let Err(e) = NetworkDiscovery::broadcast_minting_tx(&mut swarm, minting_tx) {
+                if let Err(e) =
+                    NetworkDiscovery::broadcast_minting_tx(&mut swarm, discovery.stats_ref(), minting_tx)
+                {
                     debug!("Failed to broadcast minting tx: {}", e);
                 }
 
@@ -1704,7 +1714,9 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                         .expect("Failed to serialize transaction");
 
                     // Broadcast to network so other nodes see it
-                    if let Err(e) = NetworkDiscovery::broadcast_transaction(&mut swarm, &tx) {
+                    if let Err(e) =
+                        NetworkDiscovery::broadcast_transaction(&mut swarm, discovery.stats_ref(), &tx)
+                    {
                         debug!("Failed to broadcast transaction: {}", e);
                     }
 

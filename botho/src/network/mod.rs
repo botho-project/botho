@@ -29,7 +29,7 @@ pub use connection_limiter::{
     DEFAULT_MAX_CONNECTIONS_PER_IP,
 };
 pub use discovery::{
-    BothoBehaviour, NetworkDiscovery, NetworkEvent, PeerTableEntry, ProtocolVersion,
+    BothoBehaviour, NetworkDiscovery, NetworkEvent, NetworkStats, PeerTableEntry, ProtocolVersion,
     UpgradeAnnouncement, MIN_SUPPORTED_PROTOCOL_VERSION, PROTOCOL_VERSION,
 };
 // Re-export rate limit configuration from bth-gossip for network setup
