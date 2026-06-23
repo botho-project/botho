@@ -1924,6 +1924,11 @@ async fn handle_minting_status(id: Value, state: &RpcState) -> JsonRpcResponse {
     let hashrate = snap.map(|s| s.hashrate).unwrap_or(0.0);
     let total_hashes = snap.map(|s| s.total_hashes).unwrap_or(0);
     let stalled = snap.map(|s| s.stalled).unwrap_or(false);
+    // Blocks won by this node (#543): read from the same shared minter-health
+    // handle. The externalize hook increments it once per block whose winning
+    // coinbase belongs to this node's address. No handle (relay/tests/before
+    // minting) => 0, matching the previous placeholder.
+    let blocks_found = snap.map(|s| s.blocks_found).unwrap_or(0);
 
     JsonRpcResponse::success(
         id,
@@ -1932,7 +1937,7 @@ async fn handle_minting_status(id: Value, state: &RpcState) -> JsonRpcResponse {
             "threads": state.minting_threads,
             "hashrate": hashrate,
             "totalHashes": total_hashes,
-            "blocksFound": 0, // TODO: track blocks found
+            "blocksFound": blocks_found,
             "currentDifficulty": chain_state.difficulty,
             "uptimeSeconds": state.start_time.elapsed().as_secs(),
             // Stuck-miner detector (#538): true iff active but 0 H/s past the
@@ -3432,6 +3437,62 @@ mod tests {
         assert_eq!(minting["stalled"], json!(false));
         let node = handle_node_status(json!(1), &state).await.result.unwrap();
         assert_eq!(node["minerStalled"], json!(false));
+    }
+
+    /// #543: `minting_getStatus.blocksFound` reflects the live count from the
+    /// shared minter-health handle. With no handle wired in it is 0; after the
+    /// externalize hook records won blocks (`increment_blocks_found`) the count
+    /// is surfaced verbatim.
+    #[tokio::test]
+    async fn test_blocks_found_in_minting_status() {
+        use crate::{
+            ledger::Ledger,
+            mempool::Mempool,
+            node::{minter::STARTUP_GRACE_SECS, MinterHealth},
+        };
+
+        fn fresh_state() -> RpcState {
+            let dir = tempfile::tempdir().unwrap();
+            let ledger = Ledger::open(dir.path()).unwrap();
+            std::mem::forget(dir);
+            RpcState::new(
+                ledger,
+                Mempool::new(),
+                Network::Testnet,
+                None,
+                None,
+                vec![],
+                Arc::new(WsBroadcaster::new(16)),
+            )
+        }
+
+        // (1) No health handle wired in: blocksFound present and 0.
+        let state = fresh_state();
+        let minting = handle_minting_status(json!(1), &state)
+            .await
+            .result
+            .unwrap();
+        assert_eq!(minting["blocksFound"], json!(0), "no handle => 0");
+
+        // (2) Nothing won yet (fresh handle): still 0.
+        let health = MinterHealth::for_test(true, 100_000, STARTUP_GRACE_SECS + 1);
+        let handle = Arc::new(RwLock::new(Some(health.clone())));
+        let state = fresh_state().with_minter_health(handle);
+        let minting = handle_minting_status(json!(1), &state)
+            .await
+            .result
+            .unwrap();
+        assert_eq!(minting["blocksFound"], json!(0), "no blocks won yet => 0");
+
+        // (3) After the externalize hook records two won blocks, the RPC reads
+        // the live count from the shared handle (same Arc-backed counter).
+        health.increment_blocks_found();
+        health.increment_blocks_found();
+        let minting = handle_minting_status(json!(1), &state)
+            .await
+            .result
+            .unwrap();
+        assert_eq!(minting["blocksFound"], json!(2), "two blocks won => 2");
     }
 
     /// #500: `node_getIdentity` exposes the node's stable, verifiable identity

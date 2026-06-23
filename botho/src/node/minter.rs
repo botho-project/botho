@@ -121,6 +121,13 @@ pub struct MinterHealthSnapshot {
     /// Stall verdict: `true` iff the miner is active but has produced no new
     /// hashes for longer than [`STUCK_MINER_SECS`], past the startup grace.
     pub stalled: bool,
+    /// Number of blocks this node has *won* — i.e. externalized blocks whose
+    /// winning coinbase was minted by this node's address (#543). Distinct from
+    /// `total_hashes`: a node can hash continuously yet win zero blocks if it
+    /// is always out-PoW'd, so this is the positive "am I actually
+    /// producing blocks?" signal that complements the stuck-miner detector
+    /// (#538).
+    pub blocks_found: u64,
 }
 
 /// Pure stall verdict used by both the live [`MinterHealth`] handle and unit
@@ -173,16 +180,42 @@ pub struct MinterHealth {
     last_observed_hashes: Arc<AtomicU64>,
     /// Seconds-since-start at the last time progress was observed advancing.
     last_progress_secs: Arc<AtomicU64>,
+    /// Count of blocks won by this node — incremented exactly once per
+    /// externalized block whose winning coinbase belongs to this node's
+    /// address (#543). The increment site is the externalize hook in
+    /// `commands::run`, gated by [`MinterHealth::owns_coinbase`].
+    blocks_found: Arc<AtomicU64>,
+    /// This minter's view public key, captured at construction from the
+    /// reward address. Used to decide whether an externalized block's coinbase
+    /// was minted by *this* node (vs another node winning the slot).
+    minter_view_key: [u8; 32],
+    /// This minter's spend public key (see `minter_view_key`).
+    minter_spend_key: [u8; 32],
 }
 
 impl MinterHealth {
     fn new(total_hashes: Arc<AtomicU64>, start_time: Instant) -> Self {
+        Self::with_address(total_hashes, start_time, [0u8; 32], [0u8; 32])
+    }
+
+    /// Construct a health handle bound to a specific minter address. The
+    /// view/spend keys let the externalize hook attribute a won block to this
+    /// node (#543).
+    fn with_address(
+        total_hashes: Arc<AtomicU64>,
+        start_time: Instant,
+        minter_view_key: [u8; 32],
+        minter_spend_key: [u8; 32],
+    ) -> Self {
         Self {
             active: Arc::new(AtomicBool::new(false)),
             total_hashes,
             start_time,
             last_observed_hashes: Arc::new(AtomicU64::new(0)),
             last_progress_secs: Arc::new(AtomicU64::new(0)),
+            blocks_found: Arc::new(AtomicU64::new(0)),
+            minter_view_key,
+            minter_spend_key,
         }
     }
 
@@ -221,6 +254,36 @@ impl MinterHealth {
     /// Whether minting is currently enabled.
     pub fn is_active(&self) -> bool {
         self.active.load(Ordering::SeqCst)
+    }
+
+    /// Whether the given coinbase keys belong to this node's minter address.
+    ///
+    /// The winning coinbase of an externalized block carries the minter's
+    /// view/spend public keys ([`MintingTx::minter_view_key`] /
+    /// [`MintingTx::minter_spend_key`]). Comparing both against this handle's
+    /// captured keys tells us whether *this* node won the slot — the
+    /// precondition for counting a block as "found" (#543).
+    ///
+    /// Returns `false` for an uninitialized (all-zero) key pair, so a handle
+    /// not bound to a real address (e.g. the legacy [`MinterHealth::new`] path)
+    /// never spuriously claims another node's coinbase.
+    pub fn owns_coinbase(&self, view_key: &[u8; 32], spend_key: &[u8; 32]) -> bool {
+        if self.minter_view_key == [0u8; 32] && self.minter_spend_key == [0u8; 32] {
+            return false;
+        }
+        self.minter_view_key == *view_key && self.minter_spend_key == *spend_key
+    }
+
+    /// Record that this node won a block. Increments the `blocks_found` counter
+    /// surfaced in `minting_getStatus` (#543). Call exactly once per
+    /// externalized block whose coinbase satisfies [`Self::owns_coinbase`].
+    pub fn increment_blocks_found(&self) {
+        self.blocks_found.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// Current count of blocks won by this node (#543).
+    pub fn blocks_found(&self) -> u64 {
+        self.blocks_found.load(Ordering::SeqCst)
     }
 
     /// Advance the progress tracker and return the current health snapshot.
@@ -268,6 +331,7 @@ impl MinterHealth {
             hashrate,
             uptime_secs,
             stalled,
+            blocks_found: self.blocks_found.load(Ordering::SeqCst),
         }
     }
 
@@ -360,7 +424,14 @@ impl Minter {
         let start_time = Instant::now();
         // Health handle shares the worker threads' hash counter so callers can
         // observe live progress (and detect a stall) without owning the Minter.
-        let health = MinterHealth::new(total_hashes.clone(), start_time);
+        // It also captures this minter's view/spend keys so the externalize
+        // hook can attribute won blocks to this node (#543).
+        let health = MinterHealth::with_address(
+            total_hashes.clone(),
+            start_time,
+            address.view_public_key().to_bytes(),
+            address.spend_public_key().to_bytes(),
+        );
 
         Self {
             threads,
@@ -734,6 +805,46 @@ mod tests {
         // Deactivate: never stalled.
         health.set_active(false);
         assert!(!health.snapshot().stalled);
+    }
+
+    /// `blocks_found` starts at 0 and is advanced only by
+    /// `increment_blocks_found`, and the count is reflected in the snapshot
+    /// (#543).
+    #[test]
+    fn test_minter_health_blocks_found_counter() {
+        let health = MinterHealth::new(Arc::new(AtomicU64::new(0)), Instant::now());
+        assert_eq!(health.snapshot().blocks_found, 0, "fresh handle => 0");
+
+        health.increment_blocks_found();
+        health.increment_blocks_found();
+        assert_eq!(health.blocks_found(), 2);
+        assert_eq!(health.snapshot().blocks_found, 2);
+    }
+
+    /// `owns_coinbase` matches this node's address keys and rejects others; an
+    /// unbound (all-zero key) handle never claims ownership (#543).
+    #[test]
+    fn test_minter_health_owns_coinbase() {
+        let mine_view = [7u8; 32];
+        let mine_spend = [9u8; 32];
+        let health = MinterHealth::with_address(
+            Arc::new(AtomicU64::new(0)),
+            Instant::now(),
+            mine_view,
+            mine_spend,
+        );
+
+        // Exact match on both keys => owned.
+        assert!(health.owns_coinbase(&mine_view, &mine_spend));
+        // Another node's coinbase => not owned.
+        assert!(!health.owns_coinbase(&[1u8; 32], &[2u8; 32]));
+        // Right view key but wrong spend key => not owned (both must match).
+        assert!(!health.owns_coinbase(&mine_view, &[2u8; 32]));
+
+        // Unbound handle (legacy `new` path => zero keys) never claims a
+        // coinbase, even one with all-zero keys.
+        let unbound = MinterHealth::new(Arc::new(AtomicU64::new(0)), Instant::now());
+        assert!(!unbound.owns_coinbase(&[0u8; 32], &[0u8; 32]));
     }
 
     /// Documents and locks the genesis difficulty calibration (#444).

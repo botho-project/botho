@@ -672,6 +672,11 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                             if let Err(e) = node.add_block_from_network(&block) {
                                 warn!("Failed to add network block: {}", e);
                             } else {
+                                // Count toward blocksFound if this node won the
+                                // slot but the block came back via gossip before
+                                // our own externalize landed it (#543).
+                                count_won_block(&minter_health, &block);
+
                                 // Record block processing time
                                 metrics_updater.observe_block_processing(block_start.elapsed().as_secs_f64());
                                 metrics_updater.inc_blocks_processed();
@@ -960,6 +965,11 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                                                 break;
                                             }
                                             applied_any = true;
+                                            // Count toward blocksFound if a synced
+                                            // block carries this node's coinbase
+                                            // (e.g. re-syncing our own past blocks
+                                            // after a restart) (#543).
+                                            count_won_block(&minter_health, block);
                                             // Record for dynamic timing
                                             consensus.record_block(block.header.timestamp, block.transactions.len());
                                         }
@@ -1090,6 +1100,10 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                                         // machine will backfill the gap.
                                         warn!("Failed to add reconstructed block: {} (catch-up handles non-contiguous gaps)", e);
                                     } else {
+                                        // Count toward blocksFound if this node's
+                                        // coinbase won (#543).
+                                        count_won_block(&minter_health, &block);
+
                                         // Record for dynamic timing
                                         consensus.record_block(block.header.timestamp, block.transactions.len());
 
@@ -1225,6 +1239,10 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                                         if let Err(e) = node.add_block_from_network(&block) {
                                             warn!("Failed to add completed block: {}", e);
                                         } else {
+                                            // Count toward blocksFound if this
+                                            // node's coinbase won (#543).
+                                            count_won_block(&minter_health, &block);
+
                                             // Record for dynamic timing
                                             consensus.record_block(block.header.timestamp, block.transactions.len());
 
@@ -1394,6 +1412,10 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                                             warn!("Failed to add consensus block: {}", e);
                                         }
                                     } else {
+                                        // Count toward blocksFound if this node
+                                        // won the slot (its coinbase) (#543).
+                                        count_won_block(&minter_health, &block);
+
                                         // Record for dynamic timing
                                         consensus.record_block(block.header.timestamp, block.transactions.len());
 
@@ -1921,6 +1943,39 @@ fn peer_id_to_node_id(peer_id: &libp2p::PeerId) -> NodeID {
 }
 
 /// Build a block from externalized consensus values
+/// Count a block toward this node's `blocksFound` tally if its winning
+/// coinbase belongs to this node's minter (#543).
+///
+/// Called at every site that *successfully* appends a block to the ledger —
+/// the local externalize path and the gossip/sync apply paths — so a block we
+/// won is counted exactly once regardless of whether our own externalize landed
+/// it or a peer gossiped it back first. Each append site fires only after a
+/// genuinely-new block is added (duplicate-height applies are skipped before we
+/// get here), so there is no double counting.
+///
+/// The coinbase carries the minter's view/spend public keys; we compare them
+/// against the keys captured in the shared `MinterHealth` handle. A relay node
+/// (no minter) or a block won by a peer simply does not match, so nothing is
+/// counted.
+fn count_won_block(
+    minter_health: &Arc<RwLock<Option<crate::node::MinterHealth>>>,
+    block: &crate::block::Block,
+) {
+    if let Ok(guard) = minter_health.read() {
+        if let Some(health) = guard.as_ref() {
+            let mt = &block.minting_tx;
+            if health.owns_coinbase(&mt.minter_view_key, &mt.minter_spend_key) {
+                health.increment_blocks_found();
+                info!(
+                    height = block.height(),
+                    "Won block (this node's coinbase externalized) — blocksFound={}",
+                    health.blocks_found()
+                );
+            }
+        }
+    }
+}
+
 fn build_block_from_externalized(
     values: &[crate::consensus::ConsensusValue],
     consensus: &ConsensusService,
