@@ -11,6 +11,7 @@
     "build:desktop": "pnpm --filter @botho/desktop build",
     "preview": "pnpm --filter @botho/web-wallet preview",
     "typecheck": "pnpm -r typecheck",
+    "check:ci": "pnpm -r typecheck && pnpm test:run && pnpm --filter @botho/baas-worker exec wrangler deploy --dry-run",
     "test": "vitest",
     "test:run": "vitest run",
     "test:coverage": "vitest run --coverage",

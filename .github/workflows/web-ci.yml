@@ -1,0 +1,78 @@
+name: Web CI
+
+# Runs the pnpm web workspace checks (typecheck + vitest + worker dry-run) on
+# PRs that touch web/**. The repo's root `check:ci` is a stub and no other
+# workflow exercises the ~460 web/baas-worker tests, so without this job a
+# change to the BaaS provisioner/webhook/checkout/status code (or the wallet)
+# could ship a broken test suite with no red signal (#530).
+#
+# Path-filtered so Rust-only PRs don't pay the pnpm install/test cost.
+# Everything here is offline/mocked and `--dry-run` only: NO secrets required.
+
+on:
+  pull_request:
+    paths:
+      - 'web/**'
+      - '.github/workflows/web-ci.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'web/**'
+      - '.github/workflows/web-ci.yml'
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref to keep the queue fast.
+concurrency:
+  group: web-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  web-ci:
+    name: typecheck + vitest + worker dry-run
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # The pnpm workspace is rooted at web/, not the repo root.
+    defaults:
+      run:
+        working-directory: web
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # pnpm must be installed before setup-node so its cache resolver can find
+      # the pnpm store. Pin to the major used locally (lockfileVersion 9.0).
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Typecheck every workspace package (tsc --noEmit), including the worker
+      # and the wallet.
+      - name: Typecheck
+        run: pnpm -r typecheck
+
+      # The root vitest config (web/vitest.config.ts) collects every
+      # packages/**/*.test.ts(x) — this is the web-wallet suite AND the
+      # ~195 @botho/baas-worker tests in a single run.
+      - name: Run web + baas-worker tests
+        run: pnpm test:run
+
+      # Validate the worker still bundles/deploys without actually shipping it.
+      # --dry-run needs no Cloudflare token and contacts no network.
+      - name: Worker deploy dry-run
+        run: pnpm --filter @botho/baas-worker exec wrangler deploy --dry-run
