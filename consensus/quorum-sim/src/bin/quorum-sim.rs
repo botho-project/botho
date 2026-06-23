@@ -2,7 +2,7 @@
 //! simulator.
 //!
 //! Static subcommands (#511/#512):
-//! - `compare` — threshold-rule comparison table (Botho BFT vs ceil(0.67n) vs
+//! - `compare` — threshold-rule comparison table (Botho BFT vs ceil(2n/3) vs
 //!   unanimity) over a range of federation sizes.
 //! - `analyze` — full static-health report for a single symmetric federation.
 //! - `churn` — growth/churn timeline (admit / shun) starting from a symmetric

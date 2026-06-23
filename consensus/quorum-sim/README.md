@@ -31,7 +31,7 @@ trivially fast at the targeted sizes.
   (the **liveness** buffer).
 - `minimal_splitting_sets` — smallest Byzantine sets that can fork the network
   (the **safety** buffer).
-- Threshold-rule comparison: Botho's `n − floor((n−1)/3)` vs `ceil(0.67·n)` vs
+- Threshold-rule comparison: Botho's `n − floor((n−1)/3)` vs `ceil(2n/3)` vs
   unanimity.
 - Growth/churn: curated admission and reactive-shun, flagging any action that
   breaks quorum intersection.

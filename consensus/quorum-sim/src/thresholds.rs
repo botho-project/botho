@@ -20,11 +20,13 @@ pub fn botho_bft_threshold(n: usize) -> usize {
     n - f
 }
 
-/// The classic `ceil(0.67·n)` two-thirds supermajority threshold.
+/// The classic two-thirds supermajority threshold, `ceil(2n/3)`.
 ///
-/// Computed in integer arithmetic as `ceil(2n/3) = (2n + 2) / 3` to avoid
-/// floating point. Notable values: n=1→1, n=2→2, n=3→2, n=4→3, n=5→4, n=6→4,
-/// n=7→5.
+/// Computed in integer arithmetic via [`usize::div_ceil`] to avoid floating
+/// point. This is the *exact* two-thirds ceiling, not the looser `ceil(0.67·n)`
+/// (which over-counts at `n` divisible by 3, e.g. `ceil(0.67·6) = 5` vs
+/// `ceil(2·6/3) = 4`); the display label says `ceil(2n/3)` to match what is
+/// computed. Notable values: n=1→1, n=2→2, n=3→2, n=4→3, n=5→4, n=6→4, n=7→5.
 pub fn two_thirds_threshold(n: usize) -> usize {
     // ceil(2n/3), in integer arithmetic.
     (2 * n).div_ceil(3)
@@ -97,7 +99,7 @@ mod tests {
 
     #[test]
     fn fault_tolerance_needs_four_nodes() {
-        // ceil(0.67n): f=1 tolerance requires n>=4.
+        // ceil(2n/3): f=1 tolerance requires n>=4.
         assert_eq!(supermajority_fault_tolerance(3, two_thirds_threshold(3)), 0);
         assert_eq!(supermajority_fault_tolerance(4, two_thirds_threshold(4)), 1);
         assert_eq!(supermajority_fault_tolerance(7, two_thirds_threshold(7)), 2);
