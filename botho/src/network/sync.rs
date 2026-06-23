@@ -16,11 +16,12 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     io,
+    sync::Arc,
     time::{Duration, Instant},
 };
 use tracing::{debug, warn};
 
-use super::reputation::ReputationManager;
+use super::{discovery::NetworkStats, reputation::ReputationManager};
 use crate::block::Block;
 
 // ============================================================================
@@ -176,9 +177,48 @@ impl SyncRateLimiter {
 // Sync Codec (with bounded reads)
 // ============================================================================
 
-/// Codec for serializing/deserializing sync messages with size limits
+/// Codec for serializing/deserializing sync messages with size limits.
+///
+/// Optionally carries a shared [`NetworkStats`] handle so that the
+/// request/response payload bytes that cross this codec are counted toward the
+/// node-wide `bytesSent` / `bytesReceived` totals surfaced by `network_getInfo`
+/// (#549). The codec is the natural accounting point: it is exactly where each
+/// message is (de)serialized, so the serialized length is already in hand and
+/// no extra serialization pass is added on the hot path.
+///
+/// The handle is an `Option<Arc<_>>` so the codec stays `Default` (used by the
+/// libp2p `Behaviour::new` path and by unit tests that don't care about stats);
+/// when present, the `Arc` clone made on every per-substream codec clone is
+/// cheap and all clones share the same atomics.
 #[derive(Debug, Clone, Default)]
-pub struct SyncCodec;
+pub struct SyncCodec {
+    /// Shared live traffic counters (#542/#549). `None` disables accounting.
+    stats: Option<Arc<NetworkStats>>,
+}
+
+impl SyncCodec {
+    /// Create a codec that records request/response payload bytes into the
+    /// given shared [`NetworkStats`] (#549).
+    pub fn with_stats(stats: Arc<NetworkStats>) -> Self {
+        Self { stats: Some(stats) }
+    }
+
+    /// Record `n` payload bytes sent over the sync protocol, if a stats handle
+    /// is attached.
+    fn record_sent(&self, n: u64) {
+        if let Some(stats) = &self.stats {
+            stats.record_sent(n);
+        }
+    }
+
+    /// Record `n` payload bytes received over the sync protocol, if a stats
+    /// handle is attached.
+    fn record_received(&self, n: u64) {
+        if let Some(stats) = &self.stats {
+            stats.record_received(n);
+        }
+    }
+}
 
 impl Codec for SyncCodec {
     type Protocol = StreamProtocol;
@@ -221,6 +261,10 @@ impl Codec for SyncCodec {
             }
 
             buf.truncate(total_read);
+            // Account for the received request payload (#549). The bytes have
+            // already crossed the wire, so they count regardless of whether
+            // deserialization below succeeds.
+            self.record_received(total_read as u64);
             bincode::deserialize(&buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
         })
     }
@@ -261,6 +305,9 @@ impl Codec for SyncCodec {
             }
 
             buf.truncate(total_read);
+            // Account for the received response payload (#549); see the note in
+            // `read_request`.
+            self.record_received(total_read as u64);
             bincode::deserialize(&buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
         })
     }
@@ -281,6 +328,9 @@ impl Codec for SyncCodec {
         Box::pin(async move {
             let bytes = bincode::serialize(&req)
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+            // Account for the sent request payload (#549); the serialized length
+            // is already in hand here, so no extra serialization pass is added.
+            self.record_sent(bytes.len() as u64);
             io.write_all(&bytes).await?;
             // NOTE: do NOT call `io.close()` here. Under libp2p 0.56's
             // request-response handler, the *handler* (not the codec) is
@@ -315,6 +365,8 @@ impl Codec for SyncCodec {
         Box::pin(async move {
             let bytes = bincode::serialize(&resp)
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+            // Account for the sent response payload (#549); see `write_request`.
+            self.record_sent(bytes.len() as u64);
             io.write_all(&bytes).await?;
             // See the note in `write_request`: the libp2p request-response
             // handler half-closes the substream after this returns, so the
@@ -874,13 +926,20 @@ impl ChainSyncManager {
     }
 }
 
-/// Create request-response behaviour for sync protocol
-pub fn create_sync_behaviour() -> request_response::Behaviour<SyncCodec> {
+/// Create request-response behaviour for the sync protocol.
+///
+/// The behaviour is built with a [`SyncCodec`] that records request/response
+/// payload bytes into the shared [`NetworkStats`] (#549), so initial-sync and
+/// catch-up traffic counts toward `network_getInfo`'s `bytesSent` /
+/// `bytesReceived` (previously gossipsub-only). The codec is cloned per
+/// substream by libp2p; each clone shares the same atomics via the inner
+/// `Arc`.
+pub fn create_sync_behaviour(stats: Arc<NetworkStats>) -> request_response::Behaviour<SyncCodec> {
     let protocols = [(StreamProtocol::new(SYNC_PROTOCOL), ProtocolSupport::Full)];
 
     let config = request_response::Config::default().with_request_timeout(REQUEST_TIMEOUT);
 
-    request_response::Behaviour::new(protocols, config)
+    request_response::Behaviour::with_codec(SyncCodec::with_stats(stats), protocols, config)
 }
 
 // ============================================================================
@@ -1645,7 +1704,7 @@ mod tests {
         use futures::io::Cursor;
 
         let protocol = StreamProtocol::new(SYNC_PROTOCOL);
-        let mut codec = SyncCodec;
+        let mut codec = SyncCodec::default();
 
         // Writer side: codec writes bytes into the buffer. The handler — not
         // the codec — is responsible for closing afterwards, so we explicitly
@@ -1670,7 +1729,7 @@ mod tests {
         use futures::io::Cursor;
 
         let protocol = StreamProtocol::new(SYNC_PROTOCOL);
-        let mut codec = SyncCodec;
+        let mut codec = SyncCodec::default();
 
         let mut write_buf = Cursor::new(Vec::new());
         codec
@@ -1851,5 +1910,174 @@ mod tests {
             target_height: Some(100),
         };
         assert_eq!(s.progress_percent(), Some(100.0));
+    }
+
+    // ========================================================================
+    // SyncCodec byte-accounting tests (#549)
+    //
+    // Verify the codec records request/response payload bytes into the shared
+    // NetworkStats. Sent payloads advance `bytes_sent` by the serialized size;
+    // received payloads advance `bytes_received` by the bytes read off the
+    // wire. A codec built without stats (Default) records nothing.
+    // ========================================================================
+
+    /// Drive a write through a stats-bearing codec, returning the bytes written
+    /// and the `bytes_sent` delta the codec recorded.
+    async fn write_request_with_stats(req: SyncRequest) -> (Vec<u8>, u64) {
+        use futures::io::Cursor;
+
+        let stats = Arc::new(NetworkStats::new());
+        let mut codec = SyncCodec::with_stats(Arc::clone(&stats));
+        let protocol = StreamProtocol::new(SYNC_PROTOCOL);
+
+        let mut write_buf = Cursor::new(Vec::new());
+        codec
+            .write_request(&protocol, &mut write_buf, req)
+            .await
+            .expect("write_request should succeed");
+        (write_buf.into_inner(), stats.bytes_sent())
+    }
+
+    #[tokio::test]
+    async fn test_codec_write_request_records_sent_bytes() {
+        let req = SyncRequest::GetBlocks {
+            start_height: 42,
+            count: 100,
+        };
+        let expected = bincode::serialize(&req).unwrap().len() as u64;
+        let (bytes, recorded) = write_request_with_stats(req).await;
+
+        // Sent counter advanced by exactly the serialized payload size.
+        assert_eq!(recorded, expected);
+        assert_eq!(recorded, bytes.len() as u64);
+    }
+
+    #[tokio::test]
+    async fn test_codec_write_response_records_sent_bytes() {
+        use futures::io::Cursor;
+
+        let resp = SyncResponse::Status {
+            height: 1234,
+            tip_hash: [7u8; 32],
+        };
+        let expected = bincode::serialize(&resp).unwrap().len() as u64;
+
+        let stats = Arc::new(NetworkStats::new());
+        let mut codec = SyncCodec::with_stats(Arc::clone(&stats));
+        let protocol = StreamProtocol::new(SYNC_PROTOCOL);
+
+        let mut write_buf = Cursor::new(Vec::new());
+        codec
+            .write_response(&protocol, &mut write_buf, resp)
+            .await
+            .expect("write_response should succeed");
+
+        assert_eq!(stats.bytes_sent(), expected);
+        assert_eq!(stats.bytes_received(), 0, "write must not touch received");
+    }
+
+    #[tokio::test]
+    async fn test_codec_read_request_records_received_bytes() {
+        use futures::io::Cursor;
+
+        // Produce the wire bytes via a no-stats codec, then read them back
+        // through a stats-bearing codec and assert the received counter.
+        let req = SyncRequest::GetBlocks {
+            start_height: 7,
+            count: 50,
+        };
+        let wire = bincode::serialize(&req).unwrap();
+        let expected = wire.len() as u64;
+
+        let stats = Arc::new(NetworkStats::new());
+        let mut codec = SyncCodec::with_stats(Arc::clone(&stats));
+        let protocol = StreamProtocol::new(SYNC_PROTOCOL);
+
+        let mut read_buf = Cursor::new(wire);
+        let decoded = codec
+            .read_request(&protocol, &mut read_buf)
+            .await
+            .expect("read_request should decode");
+
+        assert!(matches!(decoded, SyncRequest::GetBlocks { .. }));
+        assert_eq!(stats.bytes_received(), expected);
+        assert_eq!(stats.bytes_sent(), 0, "read must not touch sent");
+    }
+
+    #[tokio::test]
+    async fn test_codec_read_response_records_received_bytes() {
+        use futures::io::Cursor;
+
+        let resp = SyncResponse::Status {
+            height: 99,
+            tip_hash: [1u8; 32],
+        };
+        let wire = bincode::serialize(&resp).unwrap();
+        let expected = wire.len() as u64;
+
+        let stats = Arc::new(NetworkStats::new());
+        let mut codec = SyncCodec::with_stats(Arc::clone(&stats));
+        let protocol = StreamProtocol::new(SYNC_PROTOCOL);
+
+        let mut read_buf = Cursor::new(wire);
+        codec
+            .read_response(&protocol, &mut read_buf)
+            .await
+            .expect("read_response should decode");
+
+        assert_eq!(stats.bytes_received(), expected);
+    }
+
+    #[tokio::test]
+    async fn test_default_codec_records_nothing() {
+        use futures::io::Cursor;
+
+        // A Default codec (no stats handle) must be a no-op for accounting and
+        // must still round-trip correctly.
+        let protocol = StreamProtocol::new(SYNC_PROTOCOL);
+        let mut codec = SyncCodec::default();
+
+        let mut write_buf = Cursor::new(Vec::new());
+        codec
+            .write_request(&protocol, &mut write_buf, SyncRequest::GetStatus)
+            .await
+            .expect("write_request should succeed");
+        let bytes = write_buf.into_inner();
+        assert!(!bytes.is_empty());
+
+        let mut read_buf = Cursor::new(bytes);
+        let decoded = codec
+            .read_request(&protocol, &mut read_buf)
+            .await
+            .expect("read_request should decode");
+        assert!(matches!(decoded, SyncRequest::GetStatus));
+    }
+
+    #[tokio::test]
+    async fn test_codec_clones_share_stats() {
+        use futures::io::Cursor;
+
+        // libp2p clones the codec per substream; all clones must share the same
+        // atomics (via the inner Arc) so accounting is cumulative across them.
+        let stats = Arc::new(NetworkStats::new());
+        let codec = SyncCodec::with_stats(Arc::clone(&stats));
+        let protocol = StreamProtocol::new(SYNC_PROTOCOL);
+
+        let req = SyncRequest::GetStatus;
+        let one = bincode::serialize(&req).unwrap().len() as u64;
+
+        let mut a = codec.clone();
+        let mut b = codec.clone();
+
+        let mut buf_a = Cursor::new(Vec::new());
+        a.write_request(&protocol, &mut buf_a, SyncRequest::GetStatus)
+            .await
+            .unwrap();
+        let mut buf_b = Cursor::new(Vec::new());
+        b.write_request(&protocol, &mut buf_b, SyncRequest::GetStatus)
+            .await
+            .unwrap();
+
+        assert_eq!(stats.bytes_sent(), one * 2);
     }
 }
