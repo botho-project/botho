@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 pub enum ThresholdRule {
     /// Botho's current `n − floor((n−1)/3)`.
     BothoBft,
-    /// `ceil(0.67·n)` two-thirds supermajority.
+    /// `ceil(2n/3)` two-thirds supermajority.
     TwoThirds,
     /// Unanimity (`n`).
     Unanimity,
@@ -34,7 +34,7 @@ impl ThresholdRule {
     pub fn label(&self) -> &'static str {
         match self {
             ThresholdRule::BothoBft => "botho_bft (n-floor((n-1)/3))",
-            ThresholdRule::TwoThirds => "two_thirds (ceil(0.67n))",
+            ThresholdRule::TwoThirds => "two_thirds (ceil(2n/3))",
             ThresholdRule::Unanimity => "unanimity (n)",
         }
     }
@@ -302,6 +302,53 @@ mod tests {
         // Cross-check fbas_analyzer semantics: splitting sets are top-tier nodes.
         for s in &report.minimal_splitting_sets {
             assert!(s.iter().all(|&i| i < 4));
+        }
+    }
+
+    /// Guard against the displayed label silently diverging from the actual
+    /// computed threshold (the bug fixed in #531: the TwoThirds rule was
+    /// labeled `ceil(0.67n)` but computed `ceil(2n/3)`, which differ at `n`
+    /// divisible by 3). For each rule we evaluate the formula embedded in its
+    /// label and assert it matches `rule.threshold(n)` over a range of `n`.
+    #[test]
+    fn label_formula_matches_computation() {
+        // Evaluate the integer formula advertised in each rule's label.
+        fn from_label(rule: ThresholdRule, n: usize) -> usize {
+            let label = rule.label();
+            match rule {
+                ThresholdRule::BothoBft => {
+                    assert!(label.contains("n-floor((n-1)/3)"), "label: {label}");
+                    if n == 0 {
+                        0
+                    } else {
+                        n - (n - 1) / 3
+                    }
+                }
+                ThresholdRule::TwoThirds => {
+                    // Must advertise ceil(2n/3), NOT the looser ceil(0.67n).
+                    assert!(label.contains("ceil(2n/3)"), "label: {label}");
+                    assert!(!label.contains("0.67"), "label still says 0.67: {label}");
+                    (2 * n).div_ceil(3)
+                }
+                ThresholdRule::Unanimity => {
+                    assert!(label.contains("(n)"), "label: {label}");
+                    n
+                }
+            }
+        }
+
+        for rule in [
+            ThresholdRule::BothoBft,
+            ThresholdRule::TwoThirds,
+            ThresholdRule::Unanimity,
+        ] {
+            for n in 0..=12 {
+                assert_eq!(
+                    from_label(rule, n),
+                    rule.threshold(n),
+                    "label formula for {rule:?} disagrees with threshold() at n={n}",
+                );
+            }
         }
     }
 
