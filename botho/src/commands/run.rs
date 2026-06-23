@@ -30,7 +30,8 @@ use crate::{
     network::{
         default_seed_domain, BlockTxn, ChainSyncManager, CompactBlock, GetBlockTxn,
         NetworkDiscovery, NetworkEvent, QuorumBuilder, ReconstructionResult, SyncAction,
-        SyncRequest, SyncResponse, MIN_SUPPORTED_PROTOCOL_VERSION, PROTOCOL_VERSION,
+        SyncRequest, SyncResponse, SyncStatusSnapshot, MIN_SUPPORTED_PROTOCOL_VERSION,
+        PROTOCOL_VERSION,
     },
     node::{MintedMintingTx, Node, SharedLedger},
     rpc::{
@@ -389,6 +390,12 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
     // warn alarm). The handle survives minter start/stop cycles.
     let minter_health = node.minter_health();
 
+    // Shared sync-status handle (#541). The sync loop publishes a cheap snapshot
+    // of the live `ChainSyncManager` here on each tick; the RPC layer reads it
+    // so `node_getStatus` reports honest `synced`/`syncStatus`/`syncProgress`
+    // instead of always claiming to be synced.
+    let sync_status: Arc<RwLock<Option<SyncStatusSnapshot>>> = Arc::new(RwLock::new(None));
+
     let mut rpc_state = RpcState::from_shared(
         node.shared_ledger(),
         node.shared_mempool(),
@@ -403,7 +410,8 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
     )
     .with_quorum(config.network.quorum.clone())
     .with_identity(node_identity)
-    .with_minter_health(minter_health.clone());
+    .with_minter_health(minter_health.clone())
+    .with_sync_status(sync_status.clone());
 
     // Initialize wallet for RPC (balance checking, faucet, etc.)
     if let Some(mnemonic) = config.mnemonic() {
@@ -1530,6 +1538,13 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                             // in the SyncResponse arm); Wait is advisory.
                         }
                     }
+                }
+
+                // Publish the post-tick sync state so `node_getStatus` reports
+                // honest sync info (#541). Done after `tick` so any state
+                // transition the tick performed is reflected immediately.
+                if let Ok(mut guard) = sync_status.write() {
+                    *guard = Some(sync_manager.status_snapshot());
                 }
             }
 
