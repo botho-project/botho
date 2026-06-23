@@ -46,8 +46,8 @@ pub use reputation::{PeerReputation, ReputationManager};
 pub use seeds::{fallback_seeds, include_regional_seeds};
 pub use sync::{
     create_sync_behaviour, ChainSyncManager, SyncAction, SyncCodec, SyncRateLimiter, SyncRequest,
-    SyncResponse, SyncState, BLOCKS_PER_REQUEST, MAX_REQUESTS_PER_MINUTE, MAX_REQUEST_SIZE,
-    MAX_RESPONSE_SIZE,
+    SyncResponse, SyncState, SyncStatusSnapshot, BLOCKS_PER_REQUEST, MAX_REQUESTS_PER_MINUTE,
+    MAX_REQUEST_SIZE, MAX_RESPONSE_SIZE,
 };
 pub use transport::{
     negotiate_transport_initiator,

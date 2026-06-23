@@ -351,6 +351,47 @@ pub struct PeerStatus {
     pub last_updated: Instant,
 }
 
+/// Cheap, owned snapshot of sync progress for surfacing over the RPC layer
+/// (#541). The event loop owns the live [`ChainSyncManager`] without a lock; it
+/// publishes one of these into a shared `Arc<RwLock<_>>` on each sync tick so
+/// `node_getStatus` can report honest sync state instead of a hardcoded
+/// "always synced". All fields are plain values so reading is allocation-free
+/// apart from the status string.
+#[derive(Debug, Clone)]
+pub struct SyncStatusSnapshot {
+    /// True iff the sync state machine is in [`SyncState::Synced`].
+    pub synced: bool,
+    /// Coarse status string derived from [`SyncState`]: one of
+    /// "discovering", "syncing", "synced", "stalled".
+    pub status: &'static str,
+    /// Our current local chain height.
+    pub local_height: u64,
+    /// Best-known network tip height, if any peer status / download target is
+    /// known. `None` when we have no peer information yet (Discovery with no
+    /// responses), in which case a true progress percentage cannot be computed.
+    pub target_height: Option<u64>,
+}
+
+impl SyncStatusSnapshot {
+    /// Progress toward the best-known tip as a percentage clamped to `0..=100`.
+    ///
+    /// Returns `Some(100.0)` when synced. Returns `None` when no target tip is
+    /// known (so callers can avoid fabricating a number). Otherwise computes
+    /// `local_height / target_height * 100`.
+    pub fn progress_percent(&self) -> Option<f64> {
+        if self.synced {
+            return Some(100.0);
+        }
+        let target = self.target_height?;
+        if target == 0 {
+            // Nothing to sync to; treat as fully caught up.
+            return Some(100.0);
+        }
+        let pct = (self.local_height as f64 / target as f64) * 100.0;
+        Some(pct.clamp(0.0, 100.0))
+    }
+}
+
 /// Action to take based on sync state
 #[derive(Debug)]
 pub enum SyncAction {
@@ -424,6 +465,36 @@ impl ChainSyncManager {
     /// Check if we're synced
     pub fn is_synced(&self) -> bool {
         matches!(self.state, SyncState::Synced)
+    }
+
+    /// Produce a cheap, owned [`SyncStatusSnapshot`] for the RPC layer (#541).
+    ///
+    /// `target_height` is the best honest estimate of the network tip:
+    /// - while `Downloading`, the download `target_height`;
+    /// - otherwise, the max height across known (non-banned) peers. `None` when
+    ///   no peer status is known yet, so callers can avoid reporting a
+    ///   fabricated progress percentage.
+    pub fn status_snapshot(&self) -> SyncStatusSnapshot {
+        let status = match &self.state {
+            SyncState::Discovery => "discovering",
+            SyncState::Downloading { .. } => "syncing",
+            SyncState::Synced => "synced",
+            SyncState::Failed { .. } => "stalled",
+        };
+
+        // Best-known network tip. Prefer the active download target; otherwise
+        // fall back to the highest known peer height.
+        let target_height = match &self.state {
+            SyncState::Downloading { target_height, .. } => Some(*target_height),
+            _ => self.best_peer().map(|(_, status)| status.height),
+        };
+
+        SyncStatusSnapshot {
+            synced: matches!(self.state, SyncState::Synced),
+            status,
+            local_height: self.local_height,
+            target_height,
+        }
     }
 
     /// Update local chain height
@@ -1713,5 +1784,72 @@ mod tests {
 
         assert!(manager.is_synced());
         assert_eq!(height, target);
+    }
+
+    /// #541: `status_snapshot` must track the live state machine so the RPC
+    /// layer can report honest sync info. Covers Discovery (no target),
+    /// Downloading (target + sub-100% progress), and Synced (100%).
+    #[test]
+    fn test_status_snapshot_tracks_state_machine() {
+        let mut manager = ChainSyncManager::new(50);
+        let peer = make_peer_id();
+
+        // Discovery with no peer status: not synced, no target tip known, so a
+        // true progress percentage cannot be computed.
+        let snap = manager.status_snapshot();
+        assert!(!snap.synced);
+        assert_eq!(snap.status, "discovering");
+        assert_eq!(snap.target_height, None);
+        assert_eq!(snap.progress_percent(), None);
+
+        // Learn a peer is far ahead -> Downloading; target tip is its height.
+        manager.on_status(peer, 100, [7u8; 32]);
+        assert!(matches!(manager.state(), SyncState::Downloading { .. }));
+        let snap = manager.status_snapshot();
+        assert!(!snap.synced);
+        assert_eq!(snap.status, "syncing");
+        assert_eq!(snap.local_height, 50);
+        assert_eq!(snap.target_height, Some(100));
+        assert_eq!(snap.progress_percent(), Some(50.0));
+
+        // Apply blocks up to the target -> Synced; progress pins to 100.
+        manager.on_blocks_added(100);
+        assert!(manager.is_synced());
+        let snap = manager.status_snapshot();
+        assert!(snap.synced);
+        assert_eq!(snap.status, "synced");
+        assert_eq!(snap.progress_percent(), Some(100.0));
+    }
+
+    /// #541: `progress_percent` must clamp to 0..=100 and never fabricate a
+    /// number when no target tip is known.
+    #[test]
+    fn test_progress_percent_clamps_and_honest() {
+        // Synced always 100 regardless of heights.
+        let s = SyncStatusSnapshot {
+            synced: true,
+            status: "synced",
+            local_height: 0,
+            target_height: None,
+        };
+        assert_eq!(s.progress_percent(), Some(100.0));
+
+        // No target tip and not synced -> None (do not fabricate).
+        let s = SyncStatusSnapshot {
+            synced: false,
+            status: "discovering",
+            local_height: 10,
+            target_height: None,
+        };
+        assert_eq!(s.progress_percent(), None);
+
+        // Local ahead of (stale) target clamps to 100, never overshoots.
+        let s = SyncStatusSnapshot {
+            synced: false,
+            status: "syncing",
+            local_height: 120,
+            target_height: Some(100),
+        };
+        assert_eq!(s.progress_percent(), Some(100.0));
     }
 }

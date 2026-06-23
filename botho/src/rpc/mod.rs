@@ -70,6 +70,7 @@ use crate::{
     config::QuorumConfig,
     ledger::Ledger,
     mempool::Mempool,
+    network::SyncStatusSnapshot,
     node::MinterHealth,
     transaction::{TxOutput, MIN_TX_FEE},
     wallet::Wallet,
@@ -206,6 +207,13 @@ pub struct RpcState {
     /// `Option` is `None` until minting first starts. Surfaced as `stalled` in
     /// `minting_getStatus` and `minerStalled` in `node_getStatus`.
     pub minter_health: Option<Arc<RwLock<Option<MinterHealth>>>>,
+    /// Shared sync-status handle for honest sync reporting (#541). `None` until
+    /// `commands::run` wires it in (or in tests / single-node setups); the
+    /// inner `Option` is `None` until the sync loop publishes its first
+    /// snapshot. When absent, `node_getStatus` falls back to assuming a
+    /// caught-up node. Surfaced as `synced`, `syncStatus`, and
+    /// `syncProgress` in `node_getStatus`.
+    pub sync_status: Option<Arc<RwLock<Option<SyncStatusSnapshot>>>>,
 }
 
 impl RpcState {
@@ -239,6 +247,7 @@ impl RpcState {
             quorum: QuorumConfig::default(),
             identity: NodeIdentity::default(),
             minter_health: None,
+            sync_status: None,
         }
     }
 
@@ -276,6 +285,7 @@ impl RpcState {
             quorum: QuorumConfig::default(),
             identity: NodeIdentity::default(),
             minter_health: None,
+            sync_status: None,
         }
     }
 
@@ -311,6 +321,7 @@ impl RpcState {
             quorum: QuorumConfig::default(),
             identity: NodeIdentity::default(),
             minter_health: None,
+            sync_status: None,
         }
     }
 
@@ -354,6 +365,27 @@ impl RpcState {
         let handle = self.minter_health.as_ref()?;
         let guard = handle.read().ok()?;
         guard.as_ref().map(|h| h.snapshot())
+    }
+
+    /// Wire in the shared sync-status handle so `node_getStatus` can report
+    /// honest `synced`/`syncStatus`/`syncProgress` from the live
+    /// `ChainSyncManager` (#541). `commands::run` calls this with the handle
+    /// the sync loop publishes into.
+    pub fn with_sync_status(
+        mut self,
+        sync_status: Arc<RwLock<Option<SyncStatusSnapshot>>>,
+    ) -> Self {
+        self.sync_status = Some(sync_status);
+        self
+    }
+
+    /// Read the current sync-status snapshot, if a handle is wired in and the
+    /// sync loop has published at least once. Returns `None` for single-node /
+    /// pre-sync state, in which case `node_getStatus` assumes a caught-up node.
+    fn sync_status_snapshot(&self) -> Option<SyncStatusSnapshot> {
+        let handle = self.sync_status.as_ref()?;
+        let guard = handle.read().ok()?;
+        guard.clone()
     }
 }
 
@@ -846,9 +878,22 @@ async fn handle_node_status(id: Value, state: &RpcState) -> JsonRpcResponse {
     let peers = *read_lock!(state.peer_count, id.clone());
     let scp_peers = *read_lock!(state.scp_peer_count, id.clone());
 
-    // Calculate sync progress: 100.0 if synced, otherwise based on chain state
-    // TODO: Wire up actual sync progress from ChainSyncManager
-    let sync_progress: f64 = 100.0;
+    // Honest sync reporting wired to the live ChainSyncManager (#541). A node
+    // must not claim to be fully synced mid-download: the thin-client trust UX
+    // (#503) and readiness probes rely on these fields.
+    //
+    // When no sync handle is wired in (single-node setups, tests) or the sync
+    // loop has not yet published a snapshot, fall back to the caught-up
+    // assumption — a lone node with no peers has nothing to sync against.
+    let sync_snapshot = state.sync_status_snapshot();
+    let synced = sync_snapshot.as_ref().map(|s| s.synced).unwrap_or(true);
+    let sync_status: &str = sync_snapshot.as_ref().map(|s| s.status).unwrap_or("synced");
+    // Real percentage when a best-known tip is available; 100.0 when synced or
+    // when we have no peer to compare against (nothing to catch up to).
+    let sync_progress: f64 = match sync_snapshot.as_ref() {
+        Some(s) => s.progress_percent().unwrap_or(100.0),
+        None => 100.0,
+    };
 
     // Byzantine-fault-tolerance posture (#509). Participating node count
     // includes self, so n = scp_peers + 1. In `recommended` mode, n < 4 yields
@@ -875,9 +920,9 @@ async fn handle_node_status(id: Value, state: &RpcState) -> JsonRpcResponse {
             "buildTime": option_env!("BUILD_TIME").unwrap_or("unknown"),
             "network": format!("botho-{}", state.network_type.name()),
             "uptimeSeconds": state.start_time.elapsed().as_secs(),
-            "syncStatus": "synced",
+            "syncStatus": sync_status,
             "syncProgress": sync_progress,
-            "synced": true,
+            "synced": synced,
             "chainHeight": chain_state.height,
             "tipHash": hex::encode(chain_state.tip_hash),
             "peerCount": peers,
@@ -3218,6 +3263,87 @@ mod tests {
         assert_eq!(result["scpPeerCount"], json!(3));
         assert_eq!(result["quorumDegenerate"], json!(false));
         assert_eq!(result["quorumFaultTolerant"], json!(true));
+    }
+
+    /// #541: `node_getStatus` must report honest sync state wired to the live
+    /// `ChainSyncManager`, not a hardcoded "always synced". This covers BOTH
+    /// states: a node mid-download must report `synced=false`,
+    /// `syncStatus="syncing"`, and a sub-100 progress percentage; a caught-up
+    /// node must report `synced=true`, `syncStatus="synced"`, progress 100.0.
+    #[tokio::test]
+    async fn test_node_status_reports_real_sync_state() {
+        use crate::{ledger::Ledger, mempool::Mempool, network::SyncStatusSnapshot};
+
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+
+        let sync_handle = Arc::new(RwLock::new(None));
+        let state = RpcState::new(
+            ledger,
+            Mempool::new(),
+            Network::Testnet,
+            None,
+            None,
+            vec![],
+            Arc::new(WsBroadcaster::new(16)),
+        )
+        .with_sync_status(sync_handle.clone());
+
+        // --- Behind: downloading, local 50 of best-known 100. ---
+        *sync_handle.write().unwrap() = Some(SyncStatusSnapshot {
+            synced: false,
+            status: "syncing",
+            local_height: 50,
+            target_height: Some(100),
+        });
+        let resp = handle_node_status(json!(1), &state).await;
+        let result = resp.result.unwrap();
+        assert_eq!(result["synced"], json!(false));
+        assert_eq!(result["syncStatus"], json!("syncing"));
+        assert_eq!(
+            result["syncProgress"].as_f64().unwrap(),
+            50.0,
+            "50/100 should be 50%"
+        );
+
+        // --- Caught up: synced, progress pinned to 100. ---
+        *sync_handle.write().unwrap() = Some(SyncStatusSnapshot {
+            synced: true,
+            status: "synced",
+            local_height: 100,
+            target_height: Some(100),
+        });
+        let resp = handle_node_status(json!(1), &state).await;
+        let result = resp.result.unwrap();
+        assert_eq!(result["synced"], json!(true));
+        assert_eq!(result["syncStatus"], json!("synced"));
+        assert_eq!(result["syncProgress"].as_f64().unwrap(), 100.0);
+    }
+
+    /// #541: when no sync handle is wired in (single-node setups / tests), the
+    /// node falls back to the caught-up assumption rather than erroring — a
+    /// lone node with no peers has nothing to sync against.
+    #[tokio::test]
+    async fn test_node_status_sync_fallback_when_no_handle() {
+        use crate::{ledger::Ledger, mempool::Mempool};
+
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+        let state = RpcState::new(
+            ledger,
+            Mempool::new(),
+            Network::Testnet,
+            None,
+            None,
+            vec![],
+            Arc::new(WsBroadcaster::new(16)),
+        );
+
+        let resp = handle_node_status(json!(1), &state).await;
+        let result = resp.result.unwrap();
+        assert_eq!(result["synced"], json!(true));
+        assert_eq!(result["syncStatus"], json!("synced"));
+        assert_eq!(result["syncProgress"].as_f64().unwrap(), 100.0);
     }
 
     /// #538: the stuck-miner flag must surface in BOTH `minting_getStatus`
