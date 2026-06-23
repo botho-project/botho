@@ -107,15 +107,82 @@ cargo run -p bth-quorum-sim --bin quorum-sim -- simulate \
 
 The `vc` column in the table shows `off` or `v<budget>`.
 
+### Coinbase churn: pinned vs unpinned (#535, simulation arm of #532)
+
+Botho's `competing-coinbase` proposer is also its **reward mechanism**: each
+validator's RandomX miner produces a fresh, higher-PoW-priority coinbase several
+times a second, and SCP's `combine_fn` keeps the single highest-priority coinbase
+per slot (`botho/src/consensus/service.rs`). If every node kept swapping its
+nominated coinbase mid-slot, the candidate set would never stabilize into a
+shared confirmed-nominate and the slot would **jam** (#419/#417). Production
+fixed this by **pinning** the first-proposed coinbase per slot
+(`propose_pending_values`).
+
+The simulator models this directly:
+
+- `--churn-rate R` — per-round probability `R ∈ [0,1]` that a node's miner
+  produces a fresh, strictly higher-priority coinbase mid-slot. `0` (default) is
+  the original churn-free behavior. Only affects `competing-coinbase`.
+- `--pin-coinbase` (default `true`, the #419 production fix) — keep the FIRST
+  coinbase per slot. `--pin-coinbase=false` is the pre-#419 bug: re-nominate each
+  newly-mined higher coinbase, so the candidate set never settles.
+
+With churn active, the competing-coinbase combiner is faithful to service.rs:
+priority == value id, so the champion picks the **highest** value heard. Churn is
+value-selection only — it never touches the accept/commit machinery — so it
+cannot affect safety (zero forks in both modes with no faults).
+
+**Empirical result** (n=4, 3-of-4, 300 seeds; the headline #535 deliverable):
+
+| network        | churn | **unpinned** stall % | **pinned** stall % | forks (both) |
+|----------------|-------|----------------------|--------------------|--------------|
+| sync           | 0.60  | 0.0%                 | 0.0%               | 0            |
+| psync(delay 3) | 0.10  | 3.3%                 | 0.0%               | 0            |
+| psync(delay 3) | 0.30  | 23.3%                | 0.0%               | 0            |
+| psync(delay 3) | 0.60  | 82.0%                | 0.0%               | 0            |
+| psync(delay 3) | 0.90  | 99.7%                | 0.0%               | 0            |
+
+Stalls also grow with message **delay** (unpinned, churn 0.5): delay 1 → 22.0%,
+delay 3 → 62.3%, delay 6 → 85.0%. With **one crash** below the blocking set
+(n=4, churn 0.3, delay 3): unpinned 55.0% vs pinned **0.0%**. The jam needs
+**asynchrony** — under pure synchrony even unpinned churn converges (every node
+hears the global max within one round), which is why the real #419 stall shows up
+on the live, delayed testnet rather than in lock-step tests.
+
+**Conclusion for #532**: pinned competing-coinbase shows **~0 stalls across the
+entire churn × delay × 1-crash stress range** while unpinned reproduces the
+#419 jam (up to 99.7%). The production pinning fix is sufficient for
+competing-coinbase liveness here, so a view-change escape-hatch is not required
+for this failure mode (it remains a rare backstop at most).
+
+Run the comparison yourself:
+
+```
+# UNPINNED (pre-#419 bug) — slot jams under churn + delay
+cargo run -p bth-quorum-sim --bin quorum-sim -- simulate \
+    --n 4 --proposer competing-coinbase \
+    --churn-rate 0.6 --pin-coinbase=false --max-delay 3 --seeds 300
+
+# PINNED (production #419 fix) — stalls collapse to 0, still 0 forks
+cargo run -p bth-quorum-sim --bin quorum-sim -- simulate \
+    --n 4 --proposer competing-coinbase \
+    --churn-rate 0.6 --pin-coinbase=true --max-delay 3 --seeds 300
+```
+
+The table's `churn` / `pin` columns show the active settings (`-` for the leader
+models, which are unaffected).
+
 ### SCP simplifications
 
 This is simulation/test tooling, not production consensus. It collapses SCP's
 accept→confirm into a two-phase **accept-lock + confirming-quorum commit**,
-models **one slot per run** (fairness measured across seeds), and models
+models **one slot per run** (fairness measured across seeds), models
 **leader-timeout / view-change** as an optional round-robin leader rotation
 (`--view-change`); with view-change off, a crashed leader is still survived via a
-deterministic fallback but a *Byzantine leader stalls* the slot. See the module
-docs in `src/sim.rs` for the full list.
+deterministic fallback but a *Byzantine leader stalls* the slot; and models
+**coinbase churn** (`--churn-rate` / `--pin-coinbase`) on the competing-coinbase
+proposer (priority == value id, highest wins, mirroring service.rs). See the
+module docs in `src/sim.rs` for the full list.
 
 ## CLI
 
@@ -143,6 +210,14 @@ cargo run -p bth-quorum-sim --bin quorum-sim -- simulate \
 cargo run -p bth-quorum-sim --bin quorum-sim -- simulate \
     --n 7 --proposer round-robin-leader --faulty 0 --fault equivocate \
     --seeds 200 --view-change --view-budget 4
+
+# Coinbase churn (#535): unpinned reproduces the #419 jam, pinned (production) fixes it
+cargo run -p bth-quorum-sim --bin quorum-sim -- simulate \
+    --n 4 --proposer competing-coinbase --churn-rate 0.6 \
+    --pin-coinbase=false --max-delay 3 --seeds 300   # unpinned → ~82% stalls
+cargo run -p bth-quorum-sim --bin quorum-sim -- simulate \
+    --n 4 --proposer competing-coinbase --churn-rate 0.6 \
+    --pin-coinbase=true --max-delay 3 --seeds 300    # pinned   → 0% stalls
 ```
 
 All subcommands accept `--json` for machine-readable output.

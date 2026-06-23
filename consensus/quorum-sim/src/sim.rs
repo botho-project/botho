@@ -86,6 +86,22 @@
 //!   The production deterministic combiner (highest-PoW-priority minting tx,
 //!   ties by tx_hash, one coinbase/slot — `botho/src/consensus/service.rs`) is
 //!   abstracted to "lowest value id wins" among the values a node has heard.
+//! - **Coinbase churn (optional, #535).** The competing-coinbase proposer can
+//!   model **coinbase churn** ([`SimConfig::churn_rate`]): each round a node's
+//!   local miner produces a fresh, strictly higher-priority coinbase with the
+//!   configured probability (mirroring a RandomX miner emitting new minting txs
+//!   several times a second). Here the combiner is faithful to service.rs —
+//!   priority == value id, so the competing-coinbase champion picks the
+//!   **highest** value (highest PoW priority) it has heard, not the lowest. The
+//!   [`SimConfig::pin_coinbase`] toggle selects production vs. the pre-#419
+//!   bug: **pinned** (default) keeps the first coinbase per slot so the
+//!   candidate set stabilizes and federated voting converges; **unpinned**
+//!   re-nominates each newly-mined higher value so the candidate set never
+//!   settles and the slot jams (a stall). Churn is *value-selection only* — it
+//!   never touches the accept/commit machinery — so it cannot affect safety
+//!   (zero forks in either mode with no faults). With `churn_rate == 0` (the
+//!   default) the competing-coinbase model is byte-for-byte the original
+//!   churn-free behavior.
 //!
 //! Where a simplification could change the safety/liveness conclusion it is
 //! called out at the relevant function.
@@ -213,6 +229,28 @@ pub struct SimConfig {
     /// `view_budget` of 0 is treated as 1 (each view must consume ≥1 round so
     /// the simulation terminates within `max_rounds`).
     pub view_change: Option<u32>,
+    /// **Coinbase-churn rate** for the [`ProposerModel::CompetingCoinbase`]
+    /// proposer (#535, the simulation arm of #532). Per-round probability in
+    /// `[0.0, 1.0]` that a node's local RandomX miner produces a fresh,
+    /// strictly **higher-priority** coinbase value mid-slot (mirroring
+    /// production, where each validator mines a new minting tx several
+    /// times a second). `0.0` (the default) reproduces the original,
+    /// churn-free behavior where each node nominates a single fixed value.
+    ///
+    /// Whether a node *acts on* a freshly-mined higher-priority value is
+    /// governed by [`SimConfig::pin_coinbase`]. Ignored by the leader models
+    /// (their value is the leader's, not a self-mined coinbase).
+    pub churn_rate: f64,
+    /// **Coinbase pinning** toggle for the competing-coinbase proposer (#535).
+    /// `true` (the default) is the **production behavior** (#419 fix): a node
+    /// keeps nominating the FIRST coinbase it proposed for the slot even when
+    /// its miner produces a higher-priority one — pinning the candidate set so
+    /// federated voting can converge. `false` is the **pre-#419 bug**: a node
+    /// re-nominates each newly-mined higher-priority value, so the candidate
+    /// set never stabilizes and the slot can jam (a stall). Only meaningful
+    /// when `churn_rate > 0` and the proposer is
+    /// [`ProposerModel::CompetingCoinbase`].
+    pub pin_coinbase: bool,
 }
 
 impl SimConfig {
@@ -227,6 +265,8 @@ impl SimConfig {
             fault: FaultKind::Crash,
             max_rounds: 32,
             view_change: None,
+            churn_rate: 0.0,
+            pin_coinbase: true,
         }
     }
 
@@ -444,6 +484,29 @@ pub fn run_tracked(config: &SimConfig, seed: u64) -> RunOutcome {
     let mut accepted: Vec<Option<ValueId>> = vec![None; n];
     let mut bus: BTreeMap<u32, Vec<Message>> = BTreeMap::new();
 
+    // --- Coinbase-churn state (#535). Only active for the competing-coinbase
+    // proposer with `churn_rate > 0`. Each node has a *currently-proposed
+    // coinbase value* it nominates for the slot; production keeps the SINGLE
+    // highest-PoW-priority coinbase per slot (service.rs `combine_fn`), so here
+    // the competing-coinbase champion picks the **highest-priority** value it
+    // has heard. We encode priority as the value id itself: a larger id = a
+    // higher-PoW-priority coinbase, so "best heard" == max id. (This mirrors
+    // service.rs, which `max_by_key(|v| v.priority)`.)
+    //
+    // Initial coinbases occupy the disjoint low range `0..n` (one per node).
+    // Churn mints fresh, strictly-higher-priority ids from a per-run ascending
+    // counter seeded ABOVE both the initial coinbases AND the equivocation id
+    // range (`n + to`), so churn ids never collide with either. The counter is
+    // shared across nodes and advanced deterministically from the seeded RNG, so
+    // the whole run stays reproducible.
+    let churn_active =
+        config.proposer == ProposerModel::CompetingCoinbase && config.churn_rate > 0.0;
+    // Each node's currently-proposed (nominated) coinbase. Starts at its index.
+    let mut coinbase: Vec<ValueId> = (0..n as ValueId).collect();
+    // Next churn-minted priority id. Reserve a high base disjoint from `0..n`
+    // (initial coinbases) and `n..2n` (equivocation ids).
+    let mut next_churn_id: ValueId = 2 * n as ValueId + 1;
+
     // The slot's **view-0 (base) leader** (see `leader_for`). Without view-
     // change this is the leader for the whole simulation. With view-change
     // (#519), it is the leader of the first view; later views rotate round-robin
@@ -553,6 +616,50 @@ pub fn run_tracked(config: &SimConfig, seed: u64) -> RunOutcome {
             }
         }
 
+        // --- Coinbase-mining / churn step (#535). Each round, every still-live,
+        // still-undecided node's local miner produces a fresh, strictly
+        // higher-priority coinbase with probability `churn_rate`. This mirrors
+        // production, where each validator's RandomX miner emits a new minting tx
+        // several times a second.
+        //
+        // The PINNING toggle decides whether the node ACTS on the new coinbase
+        // for its OWN nomination:
+        // - PINNED (`pin_coinbase = true`, the #419 production fix): a node that has
+        //   already proposed a coinbase this slot KEEPS that first value; the
+        //   newly-mined higher-priority coinbase is discarded for nomination purposes.
+        //   The per-node candidate set is therefore stable, so federated voting can
+        //   converge.
+        // - UNPINNED (`pin_coinbase = false`, the pre-#419 bug): the node ADOPTS the
+        //   new higher-priority coinbase as its nominated value, retracting the
+        //   previous one. Every node doing this keeps the candidate set churning, so
+        //   the confirmed-nominate target never stabilizes and the slot jams (a stall)
+        //   — exactly the #419 failure we reproduce here.
+        //
+        // A node that has already ACCEPTED (locked) a value never churns: its
+        // vote is pinned to the lock for safety regardless of mining (see the
+        // accept step). Churn is value-selection only — it never touches the
+        // accept/commit machinery — so it cannot affect safety.
+        if churn_active {
+            for node in 0..n {
+                if crashed(node) || committed[node].is_some() || accepted[node].is_some() {
+                    continue;
+                }
+                // Draw per node per round so the matrix is reproducible.
+                if rng.gen::<f64>() < config.churn_rate {
+                    let mined = next_churn_id;
+                    next_churn_id += 1;
+                    // `mined` is strictly higher priority (larger id) than any
+                    // value minted so far this slot.
+                    if !config.pin_coinbase {
+                        // Unpinned: re-nominate the newly-mined higher value.
+                        coinbase[node] = mined;
+                    }
+                    // Pinned: keep `coinbase[node]` at the first proposed
+                    // value.
+                }
+            }
+        }
+
         for node in 0..n {
             if crashed(node) || committed[node].is_some() {
                 continue;
@@ -563,10 +670,28 @@ pub fn run_tracked(config: &SimConfig, seed: u64) -> RunOutcome {
                 locked
             } else {
                 match config.proposer {
+                    ProposerModel::CompetingCoinbase if churn_active => {
+                        // Churn-active competing-coinbase: model the production
+                        // combiner faithfully (service.rs keeps the SINGLE
+                        // highest-PoW-priority coinbase). Priority == value id, so
+                        // the champion is the MAX of this node's currently-
+                        // nominated coinbase and every coinbase it has heard.
+                        // Under PINNING `coinbase[node]` stays at the first
+                        // proposed value; UNPINNED it tracks the latest mined
+                        // higher value (see the churn step above), which is what
+                        // keeps the candidate set moving and jams the slot.
+                        let mut best = coinbase[node];
+                        for (&_from, &v) in &heard[node] {
+                            if v > best {
+                                best = v;
+                            }
+                        }
+                        best
+                    }
                     ProposerModel::CompetingCoinbase => {
-                        // Champion the lowest-id value heard so far
-                        // (deterministic combiner stand-in), else own coinbase
-                        // (= own index).
+                        // Churn-free (the original v1 behavior): champion the
+                        // lowest-id value heard so far (deterministic combiner
+                        // stand-in), else own coinbase (= own index).
                         let mut best = node as ValueId;
                         for (&_from, &v) in &heard[node] {
                             if v < best {
@@ -795,6 +920,17 @@ pub struct SimReport {
 }
 
 impl SimReport {
+    /// Stall rate as a fraction in `[0,1]` (stalls / seeds). The headline #535
+    /// metric for the pinned-vs-unpinned coinbase-churn comparison. `0.0` if no
+    /// seeds were run.
+    pub fn stall_rate(&self) -> f64 {
+        if self.seeds == 0 {
+            0.0
+        } else {
+            self.stalls as f64 / self.seeds as f64
+        }
+    }
+
     /// Mean rounds-to-decide over non-stalled runs (`None` if all stalled).
     pub fn mean_rounds_to_decide(&self) -> Option<f64> {
         let (sum, count) = self
@@ -832,10 +968,22 @@ pub fn render_sim_table(reports: &[SimReport]) -> String {
     let mut out = String::new();
     let _ = writeln!(
         out,
-        "{:<20} {:>3} {:>5} {:>22} {:>5} {:>6} {:>6} {:>6} {:>9} {:>8}",
-        "proposer", "n", "thr", "network", "vc", "forks", "stall", "agree", "mean_rds", "fairness"
+        "{:<20} {:>3} {:>5} {:>22} {:>5} {:>6} {:>5} {:>6} {:>6} {:>6} {:>8} {:>9} {:>8}",
+        "proposer",
+        "n",
+        "thr",
+        "network",
+        "vc",
+        "churn",
+        "pin",
+        "forks",
+        "stall",
+        "agree",
+        "stall%",
+        "mean_rds",
+        "fairness"
     );
-    let _ = writeln!(out, "{}", "-".repeat(102));
+    let _ = writeln!(out, "{}", "-".repeat(120));
     for r in reports {
         let t = r
             .config
@@ -860,17 +1008,30 @@ pub fn render_sim_table(reports: &[SimReport]) -> String {
             Some(b) => format!("v{b}"),
             None => "off".to_string(),
         };
+        // Churn / pin only apply to the competing-coinbase proposer; show "-"
+        // for the leader models so the table is not misleading.
+        let (churn, pin) = if r.config.proposer == ProposerModel::CompetingCoinbase {
+            (
+                format!("{:.2}", r.config.churn_rate),
+                if r.config.pin_coinbase { "yes" } else { "no" }.to_string(),
+            )
+        } else {
+            ("-".to_string(), "-".to_string())
+        };
         let _ = writeln!(
             out,
-            "{:<20} {:>3} {:>5} {:>22} {:>5} {:>6} {:>6} {:>6} {:>9} {:>8}",
+            "{:<20} {:>3} {:>5} {:>22} {:>5} {:>6} {:>5} {:>6} {:>6} {:>6} {:>7.1}% {:>9} {:>8}",
             r.config.proposer.label(),
             r.config.n,
             t,
             net,
             vc,
+            churn,
+            pin,
             r.forks,
             r.stalls,
             r.agreements,
+            r.stall_rate() * 100.0,
             mean,
             fair,
         );
@@ -906,6 +1067,8 @@ mod tests {
                 fault: FaultKind::Equivocate,
                 max_rounds: 64,
                 view_change: None,
+                churn_rate: 0.0,
+                pin_coinbase: true,
             };
             let report = run_many(&config, 300);
             assert_eq!(
@@ -939,6 +1102,8 @@ mod tests {
                         fault: FaultKind::Crash,
                         max_rounds: 128,
                         view_change: None,
+                        churn_rate: 0.0,
+                        pin_coinbase: true,
                     };
                     let report = run_many(&config, 200);
                     assert_eq!(
@@ -973,6 +1138,8 @@ mod tests {
                 fault: FaultKind::Equivocate,
                 max_rounds: 64,
                 view_change: None,
+                churn_rate: 0.0,
+                pin_coinbase: true,
             };
             assert_eq!(
                 run_many(&below, 200).forks,
@@ -998,6 +1165,8 @@ mod tests {
             fault: FaultKind::Equivocate,
             max_rounds: 64,
             view_change: None,
+            churn_rate: 0.0,
+            pin_coinbase: true,
         };
         assert!(
             run_many(&at, 200).forks > 0,
@@ -1018,6 +1187,8 @@ mod tests {
             fault: FaultKind::Crash,
             max_rounds: 32,
             view_change: None,
+            churn_rate: 0.0,
+            pin_coinbase: true,
         };
         let report = run_many(&config, 50);
         assert_eq!(
@@ -1041,6 +1212,8 @@ mod tests {
             fault: FaultKind::Crash,
             max_rounds: 32,
             view_change: None,
+            churn_rate: 0.0,
+            pin_coinbase: true,
         };
         let report = run_many(&config, 50);
         assert_eq!(report.stalls, 0, "1 crash < blocking set 2 → stays live");
@@ -1061,6 +1234,8 @@ mod tests {
             fault: FaultKind::Equivocate,
             max_rounds: 64,
             view_change: None,
+            churn_rate: 0.0,
+            pin_coinbase: true,
         };
         for seed in [0u64, 1, 42, 999] {
             let a = run_tracked(&config, seed);
@@ -1087,6 +1262,8 @@ mod tests {
             fault: FaultKind::Crash,
             max_rounds: 32,
             view_change: None,
+            churn_rate: 0.0,
+            pin_coinbase: true,
         };
         // Force every run to use its full round budget by making it stall-free
         // but capture leadership; on synchronous agreement runs end early, so
@@ -1132,6 +1309,8 @@ mod tests {
             fault: FaultKind::Crash,
             max_rounds: 64,
             view_change: None,
+            churn_rate: 0.0,
+            pin_coinbase: true,
         };
         for seed in 0..50 {
             let a = run(&config, seed);
@@ -1159,6 +1338,8 @@ mod tests {
             fault: FaultKind::Equivocate,
             max_rounds: 96,
             view_change: None,
+            churn_rate: 0.0,
+            pin_coinbase: true,
         };
         // Seed 0: node 0 is the leader (0 % 4 == 0) and equivocates → stall.
         assert_eq!(
@@ -1169,6 +1350,8 @@ mod tests {
         // Same seed WITH view-change: rotate to a correct leader → agreement.
         let with = SimConfig {
             view_change: Some(2),
+            churn_rate: 0.0,
+            pin_coinbase: true,
             ..base
         };
         assert_eq!(
@@ -1193,6 +1376,8 @@ mod tests {
             fault: FaultKind::Equivocate,
             max_rounds: 96,
             view_change: Some(0),
+            churn_rate: 0.0,
+            pin_coinbase: true,
         };
         // Must terminate (no panic / hang) and recover the Byzantine-leader seed.
         let report = run_many(&config, 64);
