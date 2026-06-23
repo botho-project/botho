@@ -343,11 +343,16 @@ pub struct BothoBehaviour {
 ///
 /// ## What is counted
 ///
-/// - **Byte counters** track *application-layer gossipsub payload* bytes: the
-///   serialized length of every message published (`bytes_sent`) and the length
-///   of every gossipsub message received (`bytes_received`). This covers the
-///   bulk of node traffic — blocks, transactions, SCP consensus, compact
-///   blocks, minting txs, PEX, and upgrade announcements.
+/// - **Byte counters** track *application-layer payload* bytes from both
+///   message paths:
+///   - *Gossipsub*: the serialized length of every message published
+///     (`bytes_sent`) and the length of every gossipsub message received
+///     (`bytes_received`) — blocks, transactions, SCP consensus, compact
+///     blocks, minting txs, PEX, and upgrade announcements.
+///   - *Sync request/response*: the serialized length of every sync request and
+///     response written/read at the [`SyncCodec`] boundary (#549), so
+///     initial-sync and catch-up block downloads — which flow over libp2p
+///     `request_response`, not gossipsub — are counted too.
 /// - **Connection counters** track the libp2p connection direction: a
 ///   connection we dialed is *outbound*, a connection a remote peer dialed is
 ///   *inbound*. Counted on first establishment to a peer and decremented when
@@ -355,13 +360,11 @@ pub struct BothoBehaviour {
 ///
 /// ## Known gaps (intentional — see #542)
 ///
-/// - Sync request/response (`request_response`) payload bytes are NOT counted:
-///   the codec exchanges typed values rather than exposing a serialized byte
-///   length at the event boundary, and re-serializing solely to measure would
-///   add cost on the hot path. Block/tx/SCP/compact-block traffic — the large
-///   majority of bytes — flows over gossipsub and IS counted.
 /// - Transport framing overhead (Noise handshake, yamux framing, TCP headers)
-///   is NOT counted; these are payload counters, not raw wire counters.
+///   is NOT counted; these are payload counters, not raw wire counters (#550,
+///   still open).
+///
+/// [`SyncCodec`]: crate::network::sync::SyncCodec
 #[derive(Debug, Default)]
 pub struct NetworkStats {
     bytes_sent: AtomicU64,
@@ -665,6 +668,11 @@ impl NetworkDiscovery {
         // `with_new_identity`, which minted a SECOND, throwaway keypair) means
         // the swarm's peer ID matches `self.local_peer_id` and is stable across
         // restarts when the keypair was loaded from disk.
+        //
+        // Clone the shared traffic counters up front so the `with_behaviour`
+        // closure can hand them to the sync codec without borrowing `self`
+        // (#549).
+        let stats = Arc::clone(&self.stats);
         let mut swarm = libp2p::SwarmBuilder::with_existing_identity(self.keypair.clone())
             .with_tokio()
             .with_tcp(
@@ -688,8 +696,10 @@ impl NetworkDiscovery {
                 )
                 .map_err(std::io::Error::other)?;
 
-                // Create sync request-response behaviour
-                let sync = create_sync_behaviour();
+                // Create sync request-response behaviour, wiring in the shared
+                // traffic counters so request/response payload bytes are
+                // counted by `network_getInfo` (#549).
+                let sync = create_sync_behaviour(Arc::clone(&stats));
 
                 // Configure identify protocol with version information
                 // Agent version format: "botho/<protocol_version>/<block_version>"
