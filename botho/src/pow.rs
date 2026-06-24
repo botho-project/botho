@@ -158,24 +158,101 @@ pub fn fast_flags() -> RandomXFlag {
     RandomXFlag::get_recommended_flags() | RandomXFlag::FLAG_FULL_MEM
 }
 
+/// A **shared** fast-mode RandomX dataset (~2 GB) bound to a single seed epoch.
+///
+/// `randomx-rs`'s [`RandomXDataset`] is internally `Arc`-backed and is only ever
+/// *read* during hashing, so a SINGLE dataset can back many per-thread VMs at
+/// once — exactly the way Monero's miner shares one dataset across all of its
+/// mining threads. Build the dataset **once per seed epoch** and hand each
+/// mining thread a cheap VM over it via [`FastDataset::hasher`]; the total cost
+/// is then ~2 GB (the one dataset) + a small (~2 MB) scratchpad per VM, **not**
+/// `N × 2 GB`.
+///
+/// That `N × 2 GB` blow-up is precisely what wedged the live testnet: every
+/// mining thread built its *own* full dataset, so an `N`-core box demanded
+/// `N × 2 GB` of RAM. The faucet box (2 cores, 3.8 GB RAM) needed ~4 GB and
+/// OOM-halted at height 213 (see #539/#568). Sharing one dataset removes that
+/// per-thread multiplier.
+///
+/// Cloning a `FastDataset` is a cheap atomic `Arc` refcount bump that shares the
+/// same underlying ~2 GB buffer; the clone is consumed by [`RandomXVM`] and kept
+/// alive for the VM's lifetime.
+#[derive(Clone)]
+pub struct FastDataset {
+    seed_key: [u8; 32],
+    dataset: RandomXDataset,
+}
+
+// SAFETY: `randomx-rs` conservatively does not implement `Send`/`Sync` for
+// `RandomXDataset` because it holds a raw C pointer. Asserting `Send` here is
+// sound: the dataset is READ-ONLY after construction (RandomX fast mode never
+// mutates it during hashing), and `RandomXDataset` is `Arc`-backed so cloning
+// and dropping it across threads only touches an atomic refcount. Moving the
+// handle to another thread (or accessing it under a mutex from several threads
+// to mint per-thread VMs) is therefore data-race free. This is RandomX's
+// intended fast-mode sharing model — one dataset, many concurrently-reading VMs
+// (#568). Each VM owns its own `RandomXDataset` clone and never crosses threads
+// (`FastHasher`/`RandomXVM` remain `!Send`), so the concurrent reads go through
+// independent owned handles, not a shared `&`.
+unsafe impl Send for FastDataset {}
+
+impl FastDataset {
+    /// Build the shared ~2 GB fast-mode dataset for `seed_key`.
+    ///
+    /// Seconds-expensive (allocates and fills the full dataset). Do this **once**
+    /// per seed epoch, then derive every mining thread's VM from it with
+    /// [`FastDataset::hasher`] — never once per thread (that is the `N × 2 GB`
+    /// halt this type exists to prevent, #568).
+    pub fn new(seed_key: [u8; 32]) -> Result<Self, randomx_rs::RandomXError> {
+        let flags = fast_flags();
+        let cache = RandomXCache::new(flags, &seed_key)?;
+        let dataset = RandomXDataset::new(flags, cache, 0)?;
+        Ok(Self { seed_key, dataset })
+    }
+
+    /// The seed key this dataset is bound to.
+    pub fn seed_key(&self) -> [u8; 32] {
+        self.seed_key
+    }
+
+    /// Build a fast-mode [`FastHasher`] (VM) that reads **this** shared dataset.
+    ///
+    /// Cheap: it allocates only the VM's small scratchpad, not another ~2 GB
+    /// dataset. The returned hasher holds a cheap `Arc` clone of the dataset, so
+    /// the dataset stays alive for as long as any VM derived from it. Output is
+    /// byte-identical to a standalone [`FastHasher::new`] for the same
+    /// `(seed_key, preimage)` — sharing changes *memory*, never the hash.
+    pub fn hasher(&self) -> Result<FastHasher, randomx_rs::RandomXError> {
+        let flags = fast_flags();
+        let vm = RandomXVM::new(flags, None, Some(self.dataset.clone()))?;
+        Ok(FastHasher {
+            seed_key: self.seed_key,
+            vm,
+        })
+    }
+}
+
 /// A miner-side fast-mode RandomX hasher bound to a single seed epoch.
 ///
-/// Building one is seconds-expensive (allocates and fills the ~2 GB dataset),
-/// so the minter constructs it once per seed epoch and reuses it across all
-/// nonces / blocks in that epoch.
+/// Wraps one [`RandomXVM`] reading a ~2 GB fast-mode dataset. Prefer building
+/// these from a shared [`FastDataset`] (via [`FastDataset::hasher`]) when more
+/// than one thread mines the same epoch, so they share ONE dataset instead of
+/// allocating `N × 2 GB` (#568). [`FastHasher::new`] is the standalone path: it
+/// builds its own dataset and is handy for single-VM use and tests.
 pub struct FastHasher {
     seed_key: [u8; 32],
     vm: RandomXVM,
 }
 
 impl FastHasher {
-    /// Build a fast-mode hasher for the given seed key (full dataset).
+    /// Build a standalone fast-mode hasher for `seed_key`, allocating its **own**
+    /// ~2 GB dataset.
+    ///
+    /// When several threads mine the same epoch, build one [`FastDataset`] and
+    /// call [`FastDataset::hasher`] per thread instead, so they share a single
+    /// dataset rather than `N × 2 GB` (#568).
     pub fn new(seed_key: [u8; 32]) -> Result<Self, randomx_rs::RandomXError> {
-        let flags = fast_flags();
-        let cache = RandomXCache::new(flags, &seed_key)?;
-        let dataset = RandomXDataset::new(flags, cache, 0)?;
-        let vm = RandomXVM::new(flags, None, Some(dataset))?;
-        Ok(Self { seed_key, vm })
+        FastDataset::new(seed_key)?.hasher()
     }
 
     /// The seed key this hasher is bound to.
@@ -469,6 +546,60 @@ mod tests {
             light_hasher_hash, light,
             "LightHasher != verify_pow_hash — FORK RISK (#566)"
         );
+    }
+
+    /// CRITICAL (#568): multiple VMs built from ONE shared [`FastDataset`] must
+    /// produce the **byte-identical** hash that a standalone [`FastHasher`]
+    /// produces — otherwise sharing the dataset (the fix for the `N × 2 GB`
+    /// halt) would silently fork the chain.
+    ///
+    /// This is what makes the memory optimization consensus-safe: hashing over a
+    /// shared dataset is the same computation as hashing over a private one. To
+    /// avoid allocating several ~2 GB datasets, the test builds **one** dataset
+    /// and derives every VM (and the standalone comparison) from it; the
+    /// canonical light-mode verifier (`verify_pow_hash`) is the independent
+    /// ground truth that pins the expected output.
+    #[test]
+    fn test_shared_dataset_matches_standalone() {
+        let seed = seed_key_for_height(0);
+        let pre = pow_preimage(777, &[4u8; 32], &[5u8; 32], &[6u8; 32]);
+
+        // Ground truth: the canonical verifier hash (no 2 GB dataset).
+        let canonical = verify_pow_hash(&seed, &pre);
+
+        // ONE shared ~2 GB dataset, reused for every VM below.
+        let dataset = FastDataset::new(seed).expect("shared fast dataset");
+        assert_eq!(dataset.seed_key(), seed);
+
+        // Two independent VMs over the SAME shared dataset (this is exactly how
+        // N mining threads share one dataset at runtime).
+        let shared_a = dataset.hasher().expect("VM A over shared dataset");
+        let shared_b = dataset.hasher().expect("VM B over shared dataset");
+
+        let hash_a = shared_a.hash(&pre);
+        let hash_b = shared_b.hash(&pre);
+
+        // Both shared VMs agree with each other...
+        assert_eq!(
+            hash_a, hash_b,
+            "two VMs over one shared dataset disagree — FORK RISK (#568)"
+        );
+        // ...and with the standalone/canonical hash. `FastHasher::new` builds a
+        // standalone hasher the same way `FastDataset::hasher` does, and
+        // `test_light_equals_fast` pins standalone-fast == canonical, so this
+        // equality means shared == standalone without a second 2 GB allocation.
+        assert_eq!(
+            hash_a,
+            canonical,
+            "shared-dataset VM != canonical/standalone hash — FORK RISK (#568) \
+             (shared={}, canonical={})",
+            hex::encode(hash_a),
+            hex::encode(canonical),
+        );
+
+        // A different nonce must change the hash (the VM actually reads input).
+        let pre2 = pow_preimage(778, &[4u8; 32], &[5u8; 32], &[6u8; 32]);
+        assert_ne!(hash_a, shared_a.hash(&pre2));
     }
 
     // Expected output of the known-answer vector. Generated by the light-mode

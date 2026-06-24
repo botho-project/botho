@@ -7,7 +7,7 @@ use std::{
     sync::{
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         mpsc::{channel, Receiver, Sender},
-        Arc,
+        Arc, Mutex,
     },
     thread::{self, JoinHandle},
     time::Instant,
@@ -16,7 +16,7 @@ use tracing::{info, trace, warn};
 
 use crate::{
     block::{calculate_block_reward, MintingTx},
-    pow::{self, FastHasher, LightHasher, MinerHasher},
+    pow::{self, FastDataset, FastHasher, LightHasher, MinerHasher},
 };
 
 /// How many times a worker retries building the fast-mode RandomX dataset
@@ -30,6 +30,33 @@ const FAST_BUILD_ATTEMPTS: u32 = 3;
 /// out a transient failure, not to stall for long before degrading to light
 /// mode (#566, part C).
 const FAST_BUILD_BACKOFF_BASE_MS: u64 = 500;
+
+/// Upper bound on the **auto-detected** minting thread count (used only when
+/// `minting.threads == 0`).
+///
+/// With one shared RandomX dataset (#568) the thread count no longer drives
+/// memory: the miner needs ~2 GB for the single shared fast-mode dataset plus a
+/// small (~2 MB) scratchpad per thread, regardless of `N`. So this cap is NOT a
+/// RAM guard (that hazard is gone) — it only avoids oversubscribing a many-core
+/// box and starving the node's own consensus / RPC / networking work with
+/// mining threads (the in-process contention noted in #441/#444). An operator
+/// who really wants more threads sets `minting.threads` explicitly, which
+/// bypasses this cap entirely.
+pub const MAX_AUTO_MINT_THREADS: usize = 16;
+
+/// Choose the default number of minting threads when `minting.threads == 0`.
+///
+/// Returns the detected CPU count clamped to `[1, MAX_AUTO_MINT_THREADS]`.
+///
+/// This is the RAM-aware default (#568): before dataset sharing, defaulting to
+/// `num_cpus::get()` implied `N × 2 GB` of RandomX datasets and could silently
+/// exceed RAM — on the 2-core/3.8 GB faucet box that demanded ~4 GB and
+/// OOM-halted the chain at height 213 (#539). Now every thread shares ONE ~2 GB
+/// dataset, so the auto default is RAM-safe for any `N`; the clamp purely caps
+/// oversubscription on large boxes.
+pub fn default_mint_threads(detected_cpus: usize) -> usize {
+    detected_cpus.clamp(1, MAX_AUTO_MINT_THREADS)
+}
 
 /// Genesis / initial minting difficulty target for **RandomX**.
 ///
@@ -415,6 +442,15 @@ pub struct Minter {
     /// flag false so a node with a dead mining thread can never report
     /// `active:true` (#566, the truthfulness fix for the #539 silent halt).
     live_workers: Arc<AtomicUsize>,
+    /// The ONE fast-mode RandomX dataset (~2 GB) shared by every mining thread,
+    /// bound to the current seed epoch. Built once (by whichever worker first
+    /// reaches a new epoch) and reused by all threads via cheap per-VM clones,
+    /// so the miner needs ~2 GB total + a small per-VM scratchpad instead of the
+    /// `N × 2 GB` that OOM-halted the live testnet (#539/#568). Rebuilt only when
+    /// the seed key rotates (every [`pow::SEED_ROTATION_INTERVAL`] blocks). The
+    /// `Mutex` serializes the expensive build so two threads never race to
+    /// allocate two datasets for the same epoch.
+    fast_dataset: Arc<Mutex<Option<FastDataset>>>,
 }
 
 /// Decrements the live-worker count when a mint worker thread exits, and flips
@@ -489,6 +525,7 @@ impl Minter {
             work_version: Arc::new(AtomicU64::new(0)),
             health,
             live_workers: Arc::new(AtomicUsize::new(0)),
+            fast_dataset: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -527,6 +564,7 @@ impl Minter {
             let work_version = self.work_version.clone();
             let live_workers = self.live_workers.clone();
             let health = self.health.clone();
+            let fast_dataset = self.fast_dataset.clone();
 
             let handle = thread::spawn(move || {
                 // The exit guard fires on EVERY way this worker can terminate —
@@ -547,6 +585,7 @@ impl Minter {
                     tx_sender,
                     current_work,
                     work_version,
+                    fast_dataset,
                 );
             });
 
@@ -599,6 +638,7 @@ fn mint_loop(
     tx_sender: Sender<MintedMintingTx>,
     current_work: Arc<std::sync::RwLock<MintingWork>>,
     work_version: Arc<AtomicU64>,
+    fast_dataset: Arc<Mutex<Option<FastDataset>>>,
 ) {
     // Each thread starts at a different nonce to avoid overlap
     let mut nonce: u64 = (thread_id as u64) << 56;
@@ -621,7 +661,10 @@ fn mint_loop(
     // `pow::SEED_ROTATION_INTERVAL` blocks). Building it is seconds-expensive,
     // so we must NOT recreate it per hash or per block.
     //
-    // Normally this is a fast-mode hasher (~2 GB dataset, high throughput). If
+    // In fast mode the VM reads the minter-wide SHARED ~2 GB dataset
+    // (`fast_dataset`); all threads' VMs read the same dataset, so the miner's
+    // footprint is ~2 GB total + a small per-VM scratchpad, NOT `N × 2 GB` (the
+    // OOM that halted the live testnet — #539/#568). If
     // that dataset cannot be built — even after bounded retries — the miner
     // transparently falls back to a light-mode hasher (~256 MB cache, much
     // slower) and KEEPS HASHING rather than dying, so an undersized box degrades
@@ -677,7 +720,13 @@ fn mint_loop(
                     "Building RandomX mining hasher for new seed epoch (fast-mode \
                      dataset build takes a few seconds)"
                 );
-                match build_mining_hasher(thread_id, seed_key, &shutdown) {
+                // Drop this thread's previous-epoch hasher BEFORE building the
+                // next one. Its VM holds an `Arc` clone of the old shared
+                // dataset, so releasing it lets the old ~2 GB buffer free as soon
+                // as the last worker rotates, keeping the epoch-boundary peak
+                // bounded rather than stacking old+new across all threads (#568).
+                hasher = None;
+                match build_mining_hasher(thread_id, seed_key, &shutdown, &fast_dataset) {
                     Some(h) => hasher = Some(h),
                     None => {
                         // No hasher could be built (fast retries exhausted AND
@@ -789,12 +838,49 @@ fn mint_loop(
     }
 }
 
+/// Obtain a fast-mode VM over the minter-wide **shared** ~2 GB dataset for
+/// `seed_key`, (re)building the dataset at most once per seed epoch (#568).
+///
+/// The first worker to reach a new epoch pays the seconds-expensive ~2 GB build
+/// while holding the `Mutex`; every other worker then gets a cheap VM over the
+/// same dataset (a small per-VM scratchpad). This is what turns the miner's
+/// memory footprint from `N × 2 GB` into ~2 GB + small per-VM scratchpads — the
+/// fix for the live-testnet OOM halt (#539). The previous epoch's dataset is
+/// dropped before the new one is allocated so the cell never holds two datasets.
+fn obtain_shared_fast_hasher(
+    fast_dataset: &Mutex<Option<FastDataset>>,
+    seed_key: [u8; 32],
+) -> Result<FastHasher, randomx_rs::RandomXError> {
+    // Recover from a poisoned lock rather than panicking: a worker that died
+    // mid-build must not permanently wedge the rest of the miner. The dataset is
+    // immutable once built, so the contents behind a poisoned lock are sound.
+    let mut guard = fast_dataset
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    let needs_build = guard
+        .as_ref()
+        .map(|d| d.seed_key() != seed_key)
+        .unwrap_or(true);
+    if needs_build {
+        // Free the stale (previous-epoch) dataset BEFORE allocating the new one
+        // so the cell holds at most one ~2 GB buffer at a time.
+        *guard = None;
+        *guard = Some(FastDataset::new(seed_key)?);
+    }
+    guard
+        .as_ref()
+        .expect("shared dataset present after build")
+        .hasher()
+}
+
 /// Build the RandomX mining hasher for `seed_key`, resiliently (#566, parts
-/// B+C).
+/// B+C) over the minter-wide shared dataset (#568).
 ///
 /// Strategy:
-/// 1. Try to build the fast-mode hasher (~2 GB dataset). On failure, retry up
-///    to [`FAST_BUILD_ATTEMPTS`] times with exponential backoff
+/// 1. Try to build a fast-mode hasher (VM) over the **shared** ~2 GB dataset
+///    (built once per epoch, see [`obtain_shared_fast_hasher`]). On failure,
+///    retry up to [`FAST_BUILD_ATTEMPTS`] times with exponential backoff
 ///    ([`FAST_BUILD_BACKOFF_BASE_MS`]) — a single transient allocation failure
 ///    must not permanently wedge the miner, but we must not busy-loop either.
 /// 2. If fast mode is still unavailable, fall back to a **light-mode** hasher
@@ -810,6 +896,7 @@ fn build_mining_hasher(
     thread_id: usize,
     seed_key: [u8; 32],
     shutdown: &AtomicBool,
+    fast_dataset: &Mutex<Option<FastDataset>>,
 ) -> Option<MinerHasher> {
     let mut last_err: Option<randomx_rs::RandomXError> = None;
 
@@ -817,7 +904,7 @@ fn build_mining_hasher(
         if shutdown.load(Ordering::Relaxed) {
             return None;
         }
-        match FastHasher::new(seed_key) {
+        match obtain_shared_fast_hasher(fast_dataset, seed_key) {
             Ok(h) => return Some(MinerHasher::Fast(h)),
             Err(e) => {
                 warn!(
@@ -1071,6 +1158,28 @@ mod tests {
         assert!(
             !health.is_active(),
             "panic-exit of the last worker must still flip active false (#566)"
+        );
+    }
+
+    /// The RAM-aware auto thread default (#568): clamps the detected CPU count
+    /// to `[1, MAX_AUTO_MINT_THREADS]`. With one shared dataset this is no longer
+    /// a RAM lever (it was `N × 2 GB` before), so the clamp is purely an
+    /// oversubscription guard.
+    #[test]
+    fn test_default_mint_threads_clamps() {
+        // At least one thread even if detection reports an absurd 0.
+        assert_eq!(default_mint_threads(0), 1);
+        // Typical small boxes pass through unchanged.
+        assert_eq!(default_mint_threads(1), 1);
+        assert_eq!(default_mint_threads(2), 2);
+        assert_eq!(default_mint_threads(8), 8);
+        // The cap value itself passes through.
+        assert_eq!(default_mint_threads(MAX_AUTO_MINT_THREADS), MAX_AUTO_MINT_THREADS);
+        // Many-core boxes are clamped to the oversubscription cap.
+        assert_eq!(default_mint_threads(128), MAX_AUTO_MINT_THREADS);
+        assert_eq!(
+            default_mint_threads(MAX_AUTO_MINT_THREADS + 1),
+            MAX_AUTO_MINT_THREADS
         );
     }
 
