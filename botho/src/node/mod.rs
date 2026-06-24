@@ -274,24 +274,6 @@ impl Node {
             .and_then(|l| l.get_chain_state().ok())
             .map(|s| s.tip_timestamp);
 
-        self.ledger
-            .write()
-            .map_err(|_| anyhow::anyhow!("Ledger lock poisoned"))?
-            .add_block(block)
-            .map_err(|e| anyhow::anyhow!("Failed to add network block: {}", e))?;
-
-        // Remove confirmed transactions from mempool and update dynamic fee state
-        if let Ok(mut mempool) = self.mempool.write() {
-            mempool.remove_confirmed(&block.transactions);
-            // Also clean up any now-invalid transactions
-            if let Ok(ledger) = self.ledger.read() {
-                mempool.remove_invalid(&*ledger);
-            }
-        }
-
-        // Note: Dynamic fee update is handled by the caller who has access to
-        // consensus timing information. See update_dynamic_fee_after_block().
-
         // Update emission controller with block data. Only the burn share of
         // fees is destroyed; the rest is redistributed via the lottery pool
         // (audit cycle 6, M4). Mirror the ledger's accounting by using the
@@ -314,13 +296,17 @@ impl Node {
             _ => None,
         };
 
+        // H3 (#558): compute the prospective emission state on a CLONE so the
+        // in-memory controller is not mutated until the atomic DB write below
+        // succeeds. The block and the emission/difficulty counters must commit
+        // in a SINGLE LMDB write txn — a crash between two separate commits
+        // would advance the chain height while leaving difficulty/epoch state
+        // stale, and on restart the node would compute a hard-validated
+        // difficulty that diverges from peers (permanent fork from one crash).
         let old_difficulty = self.emission_controller.difficulty;
-        let (new_difficulty, new_reward) = self.emission_controller.record_block(
-            tx_count,
-            reward_paid,
-            fees_burned,
-            observed_secs,
-        );
+        let mut next_controller = self.emission_controller.clone();
+        let (new_difficulty, new_reward) =
+            next_controller.record_block(tx_count, reward_paid, fees_burned, observed_secs);
 
         if new_difficulty != old_difficulty {
             info!(
@@ -332,19 +318,39 @@ impl Node {
             );
         }
 
-        // Persist emission controller state
+        let emission = crate::ledger::EmissionStateUpdate {
+            difficulty: new_difficulty,
+            total_tx: next_controller.total_tx,
+            epoch_tx: next_controller.epoch_tx,
+            epoch_emission: next_controller.epoch_emission,
+            epoch_burns: next_controller.epoch_burns,
+            current_reward: new_reward,
+        };
+
+        // Single atomic write: block + emission state share one wtxn/commit.
         self.ledger
             .write()
             .map_err(|_| anyhow::anyhow!("Ledger lock poisoned"))?
-            .update_emission_state(
-                new_difficulty,
-                self.emission_controller.total_tx,
-                self.emission_controller.epoch_tx,
-                self.emission_controller.epoch_emission,
-                self.emission_controller.epoch_burns,
-                new_reward,
-            )
-            .map_err(|e| anyhow::anyhow!("Failed to persist emission state: {}", e))?;
+            .add_block_with_emission(block, emission)
+            .map_err(|e| anyhow::anyhow!("Failed to add network block: {}", e))?;
+
+        // The atomic write committed: now adopt the mutated controller in
+        // memory. Doing this only AFTER a successful commit keeps the in-memory
+        // controller consistent with persisted chain state even if the write
+        // had failed (the block-add path is the sole mutator of this state).
+        self.emission_controller = next_controller;
+
+        // Remove confirmed transactions from mempool and update dynamic fee state
+        if let Ok(mut mempool) = self.mempool.write() {
+            mempool.remove_confirmed(&block.transactions);
+            // Also clean up any now-invalid transactions
+            if let Ok(ledger) = self.ledger.read() {
+                mempool.remove_invalid(&*ledger);
+            }
+        }
+
+        // Note: Dynamic fee update is handled by the caller who has access to
+        // consensus timing information. See update_dynamic_fee_after_block().
 
         // Update minter with new work if minting
         if let Some(ref minter) = self.minter {

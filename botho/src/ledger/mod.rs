@@ -2,7 +2,7 @@ mod snapshot;
 mod store;
 
 pub use snapshot::{SnapshotError, UtxoSnapshot};
-pub use store::{ClusterWealthInfo, Ledger, TxLocation};
+pub use store::{ClusterWealthInfo, EmissionStateUpdate, Ledger, TxLocation};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;

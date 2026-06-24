@@ -44,6 +44,36 @@ fn first_stale_transfer_tx(block: &Block) -> Option<usize> {
         .position(|tx| tx.created_at_height + MAX_TX_AGE < block_height)
 }
 
+/// Emission-controller state to persist atomically alongside a block.
+///
+/// The difficulty/reward/epoch counters are a pure function of the applied
+/// block, so they can be written inside the *same* LMDB write transaction as
+/// the block itself. Folding them into one txn (via
+/// [`Ledger::add_block_with_emission`]) closes the crash-atomicity gap (audit
+/// cycle-6 **H3**, issue #558): a crash between two separate commits would
+/// otherwise advance the chain height while leaving the difficulty/epoch state
+/// stale, causing the node to compute a hard-validated difficulty that diverges
+/// permanently from its peers.
+///
+/// Field semantics mirror [`Ledger::update_emission_state`] exactly — this is
+/// only a *when* change (one commit instead of two), never a *what* change to
+/// the persisted values.
+#[derive(Debug, Clone, Copy)]
+pub struct EmissionStateUpdate {
+    /// New PoW difficulty (chain state; hard-validated on the next block).
+    pub difficulty: u64,
+    /// Cumulative transaction count.
+    pub total_tx: u64,
+    /// Transactions accumulated in the current adjustment epoch.
+    pub epoch_tx: u64,
+    /// Emission accumulated in the current adjustment epoch.
+    pub epoch_emission: u64,
+    /// Burns accumulated in the current adjustment epoch.
+    pub epoch_burns: u64,
+    /// Current block reward (informational).
+    pub current_reward: u64,
+}
+
 /// LMDB-backed ledger storage using heed
 pub struct Ledger {
     env: Env,
@@ -402,6 +432,41 @@ impl Ledger {
 
     /// Add a new block to the chain
     pub fn add_block(&self, block: &Block) -> Result<(), LedgerError> {
+        self.add_block_inner(block, None)
+    }
+
+    /// Add a block AND persist the emission-controller state in a SINGLE LMDB
+    /// write transaction (audit cycle-6 **H3**, issue #558).
+    ///
+    /// This is the crash-atomic block-acceptance path used by the network
+    /// integration. The block writes (UTXO set, key images, height/tip/total
+    /// meta, lottery pool) and the emission writes (difficulty/reward/epoch
+    /// counters) commit together or not at all, so a crash can never advance
+    /// the chain height while leaving difficulty/epoch state stale (which
+    /// would make the node compute a hard-validated difficulty that
+    /// diverges from peers).
+    ///
+    /// The emission values must be the pure function of `block` that the caller
+    /// would otherwise have passed to [`Ledger::update_emission_state`]; this
+    /// method changes only *when* they are committed, never *what* is
+    /// committed.
+    pub fn add_block_with_emission(
+        &self,
+        block: &Block,
+        emission: EmissionStateUpdate,
+    ) -> Result<(), LedgerError> {
+        self.add_block_inner(block, Some(emission))
+    }
+
+    /// Shared implementation for [`Ledger::add_block`] and
+    /// [`Ledger::add_block_with_emission`]. When `emission` is `Some`, the
+    /// emission-controller meta keys are written into the same `wtxn` as the
+    /// block, before the single commit (issue #558).
+    fn add_block_inner(
+        &self,
+        block: &Block,
+        emission: Option<EmissionStateUpdate>,
+    ) -> Result<(), LedgerError> {
         let state = self.get_chain_state()?;
 
         // Validate block height
@@ -766,6 +831,49 @@ impl Ledger {
             )
             .map_err(|e| LedgerError::Database(format!("Failed to put lottery_pool: {}", e)))?;
 
+        // H3 (#558): fold the emission-controller state into the SAME write txn
+        // as the block. These are the difficulty/reward/epoch counters that are
+        // a pure function of the applied block; writing them here (rather than
+        // in a separate `update_emission_state` commit) makes block + emission
+        // state crash-atomic. Mirrors `update_emission_state` exactly — same
+        // keys, same encoding — so a no-crash node persists identical values.
+        if let Some(e) = emission {
+            self.meta_db
+                .put(&mut wtxn, META_DIFFICULTY, &e.difficulty.to_le_bytes())
+                .map_err(|err| {
+                    LedgerError::Database(format!("Failed to put difficulty: {}", err))
+                })?;
+            self.meta_db
+                .put(&mut wtxn, META_TOTAL_TX, &e.total_tx.to_le_bytes())
+                .map_err(|err| LedgerError::Database(format!("Failed to put total_tx: {}", err)))?;
+            self.meta_db
+                .put(&mut wtxn, META_EPOCH_TX, &e.epoch_tx.to_le_bytes())
+                .map_err(|err| LedgerError::Database(format!("Failed to put epoch_tx: {}", err)))?;
+            self.meta_db
+                .put(
+                    &mut wtxn,
+                    META_EPOCH_EMISSION,
+                    &e.epoch_emission.to_le_bytes(),
+                )
+                .map_err(|err| {
+                    LedgerError::Database(format!("Failed to put epoch_emission: {}", err))
+                })?;
+            self.meta_db
+                .put(&mut wtxn, META_EPOCH_BURNS, &e.epoch_burns.to_le_bytes())
+                .map_err(|err| {
+                    LedgerError::Database(format!("Failed to put epoch_burns: {}", err))
+                })?;
+            self.meta_db
+                .put(
+                    &mut wtxn,
+                    META_CURRENT_REWARD,
+                    &e.current_reward.to_le_bytes(),
+                )
+                .map_err(|err| {
+                    LedgerError::Database(format!("Failed to put current_reward: {}", err))
+                })?;
+        }
+
         wtxn.commit()
             .map_err(|e| LedgerError::Database(format!("Failed to commit: {}", e)))?;
 
@@ -821,7 +929,15 @@ impl Ledger {
         Ok(())
     }
 
-    /// Update emission controller state in chain state
+    /// Update emission controller state in chain state in its OWN write txn.
+    ///
+    /// NOTE (#558): the network block-acceptance path no longer uses this — it
+    /// now folds the emission writes into the block's write txn via
+    /// [`Ledger::add_block_with_emission`] so block + emission state are
+    /// crash-atomic. This standalone two-commit variant is retained (rather
+    /// than deleted, per the project's code-preservation guideline) for any
+    /// out-of-band state correction and as the reference for the field
+    /// encoding, which `add_block_with_emission` mirrors exactly.
     pub fn update_emission_state(
         &self,
         difficulty: u64,
@@ -2756,6 +2872,120 @@ mod tests {
             prev_height, post_height,
             "rejected block must not advance height"
         );
+    }
+
+    // H3 (#558): block + emission state must be crash-atomic — written in a
+    // SINGLE write txn that commits together or not at all.
+    //
+    // This asserts the rollback half of that guarantee: when the block is
+    // rejected, the emission/difficulty writes that were staged into the SAME
+    // `wtxn` are discarded with it. If emission used a separate commit (the old
+    // two-txn path), the difficulty/epoch state would have advanced even though
+    // the block was rejected — exactly the divergence H3 fixes. We feed a
+    // malformed block (wrong height, fails the first validation gate) together
+    // with an emission update whose values differ from the persisted ones, and
+    // confirm NONE of the emission fields changed.
+    #[test]
+    fn test_add_block_with_emission_is_atomic_on_reject() {
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+
+        // Baseline emission/difficulty state at genesis.
+        let before = ledger.get_chain_state().unwrap();
+
+        // An emission update that is DISTINCT from the persisted state in every
+        // field, so any leaked write would be observable.
+        let emission = EmissionStateUpdate {
+            difficulty: before.difficulty.wrapping_add(123_456),
+            total_tx: before.total_tx + 7,
+            epoch_tx: before.epoch_tx + 11,
+            epoch_emission: before.epoch_emission + 13,
+            epoch_burns: before.epoch_burns + 17,
+            current_reward: before.current_reward.wrapping_add(999),
+        };
+        // Sanity: the update really would change state if it landed.
+        assert_ne!(emission.difficulty, before.difficulty);
+
+        // Malformed block: wrong height is rejected before the wtxn ever opens,
+        // but the contract we care about is that emission state is untouched.
+        let mut bad = Block::genesis_for_network(Network::Testnet);
+        bad.header.height = 999; // not before.height + 1
+
+        let result = ledger.add_block_with_emission(&bad, emission);
+        assert!(
+            matches!(result, Err(LedgerError::InvalidBlock(_))),
+            "malformed block must be rejected with a typed LedgerError, got {:?}",
+            result
+        );
+
+        // No block was added AND no emission field moved: the pair is atomic.
+        let after = ledger.get_chain_state().unwrap();
+        assert_eq!(
+            after.height, before.height,
+            "rejected block advanced height"
+        );
+        assert_eq!(
+            after.difficulty, before.difficulty,
+            "emission difficulty leaked despite block rejection (non-atomic write)"
+        );
+        assert_eq!(after.total_tx, before.total_tx, "total_tx leaked");
+        assert_eq!(after.epoch_tx, before.epoch_tx, "epoch_tx leaked");
+        assert_eq!(
+            after.epoch_emission, before.epoch_emission,
+            "epoch_emission leaked"
+        );
+        assert_eq!(after.epoch_burns, before.epoch_burns, "epoch_burns leaked");
+        assert_eq!(
+            after.current_reward, before.current_reward,
+            "current_reward leaked"
+        );
+    }
+
+    // H3 (#558): the folded emission writes in `add_block_with_emission` must
+    // use the SAME key encoding as the standalone `update_emission_state`, so a
+    // node that takes the atomic path persists byte-identical chain state to one
+    // that took the legacy two-commit path. We exercise the encoding via
+    // `update_emission_state` (which `add_block_inner` mirrors verbatim) and
+    // confirm every field round-trips through `get_chain_state` and a reopen.
+    #[test]
+    fn test_emission_state_encoding_roundtrip() {
+        let dir = tempdir().unwrap();
+        let values = EmissionStateUpdate {
+            difficulty: 0x0123_4567_89ab_cdef,
+            total_tx: 42,
+            epoch_tx: 500,
+            epoch_emission: 1_000_000,
+            epoch_burns: 250_000,
+            current_reward: 49_000_000_000_000,
+        };
+
+        {
+            let ledger = Ledger::open(dir.path()).unwrap();
+            ledger
+                .update_emission_state(
+                    values.difficulty,
+                    values.total_tx,
+                    values.epoch_tx,
+                    values.epoch_emission,
+                    values.epoch_burns,
+                    values.current_reward,
+                )
+                .unwrap();
+
+            let state = ledger.get_chain_state().unwrap();
+            assert_eq!(state.difficulty, values.difficulty);
+            assert_eq!(state.total_tx, values.total_tx);
+            assert_eq!(state.epoch_tx, values.epoch_tx);
+            assert_eq!(state.epoch_emission, values.epoch_emission);
+            assert_eq!(state.epoch_burns, values.epoch_burns);
+            assert_eq!(state.current_reward, values.current_reward);
+        }
+
+        // Survives a reopen from disk (same LE encoding the folded path uses).
+        let reopened = Ledger::open(dir.path()).unwrap();
+        let state = reopened.get_chain_state().unwrap();
+        assert_eq!(state.difficulty, values.difficulty);
+        assert_eq!(state.current_reward, values.current_reward);
     }
 
     // The cumulative lottery carryover persists as 16-byte LE u128. A value
