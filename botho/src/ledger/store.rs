@@ -137,11 +137,47 @@ impl Ledger {
         Self::open_for_network(path, Network::Testnet)
     }
 
+    /// Test-only: open a ledger whose LMDB reader table holds exactly one slot.
+    /// Holding a single live `RoTxn` then exhausts the table, so the next
+    /// `read_txn()` (e.g. inside `is_key_image_spent`) fails with
+    /// `MdbError::ReadersFull`. Used by the M7 fail-closed tests to inject a DB
+    /// error on the consensus double-spend check.
+    #[cfg(test)]
+    pub fn open_single_reader(path: &Path) -> Result<Self, LedgerError> {
+        Self::open_internal(path, Network::Testnet, Some(1))
+    }
+
+    /// Test-only: open a read transaction against the private LMDB environment.
+    /// Combined with `open_single_reader`, holding the returned `RoTxn`
+    /// exhausts the reader table so subsequent lookups fail closed (used by
+    /// M7 tests in sibling modules such as the mempool).
+    #[cfg(test)]
+    pub fn read_txn_for_test(&self) -> Result<heed::RoTxn<'_>, LedgerError> {
+        self.env
+            .read_txn()
+            .map_err(|e| LedgerError::Database(format!("Failed to start read txn: {}", e)))
+    }
+
     /// Open or create a ledger at the given path for a specific network.
     ///
     /// The ledger will be initialized with the appropriate genesis block
     /// for the specified network if it's empty.
     pub fn open_for_network(path: &Path, network: Network) -> Result<Self, LedgerError> {
+        Self::open_internal(path, network, None)
+    }
+
+    /// Internal constructor shared by `open_for_network` and test helpers.
+    ///
+    /// `max_readers`, when `Some`, caps the LMDB reader-slot table. Production
+    /// callers pass `None` (LMDB's default of 126). Tests pass a small value so
+    /// they can deterministically exhaust the reader table and force read
+    /// transactions to return `MdbError::ReadersFull` — the only practical way
+    /// to inject a DB failure for the M7 fail-closed tests.
+    fn open_internal(
+        path: &Path,
+        network: Network,
+        max_readers: Option<u32>,
+    ) -> Result<Self, LedgerError> {
         // Create directory if needed
         fs::create_dir_all(path)
             .map_err(|e| LedgerError::Database(format!("Failed to create directory: {}", e)))?;
@@ -154,10 +190,13 @@ impl Ledger {
         // directory first, and storing the Env in the struct which owns it for
         // its lifetime.
         let env = unsafe {
-            EnvOpenOptions::new()
-                .max_dbs(7) // Increased for cluster_wealth_db
-                .map_size(1024 * 1024 * 1024) // 1GB
-                .open(path)
+            let mut opts = EnvOpenOptions::new();
+            opts.max_dbs(7) // Increased for cluster_wealth_db
+                .map_size(1024 * 1024 * 1024); // 1GB
+            if let Some(readers) = max_readers {
+                opts.max_readers(readers);
+            }
+            opts.open(path)
         }
         .map_err(|e| LedgerError::Database(format!("Failed to open environment: {}", e)))?;
 
@@ -1239,9 +1278,21 @@ impl Ledger {
 
     /// Verify all signatures in a transaction
     pub fn verify_transaction(&self, tx: &BothoTransaction) -> Result<(), LedgerError> {
-        // Verify key images haven't been spent (double-spend check)
+        // Verify key images haven't been spent (double-spend check).
+        //
+        // A DB error here is a node-local operational failure, NOT a statement
+        // that the transaction is invalid. We distinguish two outcomes and fail
+        // CLOSED on the error path (audit cycle 6, M7):
+        //   - lookup succeeds and finds the key image spent -> reject as invalid
+        //     (`LedgerError::InvalidBlock`, the existing/correct verdict)
+        //   - lookup returns Err (DB failure) -> propagate the DB error up via `?` so
+        //     the caller aborts/retries. Previously this used `if let Ok(Some(..))`,
+        //     which silently treated a DB error as "not spent" and let a double-spend
+        //     pass (fail-open). Propagating with `?` preserves the happy-path verdict
+        //     exactly while closing the fail-open hole — a DB error never gets branded
+        //     as block-invalid.
         for (i, input) in tx.inputs.clsag().iter().enumerate() {
-            if let Ok(Some(spent_height)) = self.is_key_image_spent(&input.key_image) {
+            if let Some(spent_height) = self.is_key_image_spent(&input.key_image)? {
                 return Err(LedgerError::InvalidBlock(format!(
                     "Input {} uses key image already spent at height {}",
                     i, spent_height
@@ -1341,9 +1392,18 @@ impl Ledger {
         key_image: &[u8; 32],
         height: u64,
     ) -> Result<(), LedgerError> {
-        // Check if already exists
-        if let Ok(Some(existing_height_bytes)) = self.key_images_db.get(wtxn, key_image.as_slice())
-        {
+        // Check if already exists.
+        //
+        // As with `verify_transaction`, distinguish a DB failure (node-local,
+        // propagate via `?`) from an actual collision (consensus-invalid). The
+        // previous `if let Ok(Some(..))` swallowed a DB `Err` and fell through to
+        // the `put` below, which would record the key image and let a
+        // double-spend through on a transient read error (fail-open, M7).
+        let existing = self
+            .key_images_db
+            .get(wtxn, key_image.as_slice())
+            .map_err(|e| LedgerError::Database(format!("Failed to get key image: {}", e)))?;
+        if let Some(existing_height_bytes) = existing {
             let existing_height =
                 u64::from_le_bytes(existing_height_bytes.try_into().unwrap_or([0u8; 8]));
             warn!(
@@ -2617,6 +2677,91 @@ mod tests {
             let mut wtxn = ledger.env.write_txn().unwrap();
             let result = ledger.record_key_image(&mut wtxn, &key_image, 10);
             assert!(result.is_err());
+        }
+    }
+
+    /// Build a minimal one-input transaction carrying `key_image`. The CLSAG
+    /// signature/ring are bogus, but `verify_transaction` checks the key-image
+    /// double-spend set BEFORE verifying ring signatures, so these tests only
+    /// exercise (and only need) the double-spend branch.
+    fn tx_with_key_image(key_image: [u8; 32]) -> BothoTransaction {
+        use crate::transaction::ClsagRingInput;
+        let input = ClsagRingInput {
+            ring: vec![RingMember {
+                target_key: [0u8; 32],
+                public_key: [0u8; 32],
+                commitment: [0u8; 32],
+            }],
+            key_image,
+            commitment_key_image: [0u8; 32],
+            clsag_signature: Vec::new(),
+            pseudo_output_amount: 0,
+        };
+        BothoTransaction::new(vec![input], vec![], 0, 0)
+    }
+
+    /// M7 fail-closed: when the consensus double-spend lookup hits a DB error,
+    /// `verify_transaction` must PROPAGATE the error (as a node-local
+    /// `LedgerError::Database`), not silently allow the transaction. Previously
+    /// the `if let Ok(Some(..))` pattern swallowed the error and skipped the
+    /// check, letting a double-spend pass on a transient DB failure
+    /// (fail-open).
+    ///
+    /// The DB error is injected by exhausting the LMDB reader table: the ledger
+    /// is opened with a single reader slot, that slot is held by a live read
+    /// txn, so the read txn inside `is_key_image_spent` fails with
+    /// `MdbError::ReadersFull`.
+    #[test]
+    fn test_verify_transaction_propagates_db_error_fail_closed() {
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open_single_reader(dir.path()).unwrap();
+
+        // Hold the only reader slot open so the next read_txn() fails.
+        let _held = ledger.env.read_txn().unwrap();
+
+        // Sanity: the lookup itself errors when the reader table is exhausted.
+        let probe = ledger.is_key_image_spent(&[0x11; 32]);
+        assert!(
+            matches!(probe, Err(LedgerError::Database(_))),
+            "expected reader-table exhaustion to surface a Database error, got {:?}",
+            probe
+        );
+
+        let tx = tx_with_key_image([0x22; 32]);
+        let result = ledger.verify_transaction(&tx);
+
+        // Must FAIL CLOSED: propagate the DB error, NOT return Ok (allow) and
+        // NOT brand the block invalid (which would risk a node-local fork).
+        match result {
+            Err(LedgerError::Database(_)) => {}
+            other => panic!(
+                "verify_transaction must propagate a DB error (fail closed), got {:?}",
+                other
+            ),
+        }
+    }
+
+    /// Happy path (no DB error) must be unchanged: a transaction whose key
+    /// image is genuinely recorded as spent is rejected with
+    /// `InvalidBlock`.
+    #[test]
+    fn test_verify_transaction_rejects_truly_spent_key_image() {
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+
+        let key_image = [0x33; 32];
+        ledger.record_key_image_for_test(&key_image, 7).unwrap();
+
+        let tx = tx_with_key_image(key_image);
+        let result = ledger.verify_transaction(&tx);
+        match result {
+            Err(LedgerError::InvalidBlock(msg)) => {
+                assert!(msg.contains("already spent"), "unexpected message: {}", msg);
+            }
+            other => panic!(
+                "expected InvalidBlock for a truly-spent key image, got {:?}",
+                other
+            ),
         }
     }
 
