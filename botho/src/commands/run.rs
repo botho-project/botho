@@ -1543,7 +1543,38 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                 // alarm only — we do NOT auto-restart (operator policy).
                 if let Ok(guard) = minter_health.read() {
                     if let Some(health) = guard.as_ref() {
-                        health.check_and_warn();
+                        let snap = health.check_and_warn();
+
+                        // Truthful-active reconciliation (#566, code side of
+                        // #539). The mint worker threads flip the shared health
+                        // `active` flag false once the LAST of them exits (by any
+                        // path, including a panic). If that has happened while the
+                        // RPC `active` field / `botho_minting_active` metric still
+                        // advertise a live miner, clear them so a node with a dead
+                        // mining thread can never report `active:true`. Idempotent:
+                        // once cleared, later ticks see it already false and skip.
+                        // We deliberately do NOT auto-restart (operator policy,
+                        // matching the stall detector).
+                        if !snap.active {
+                            let still_advertised = minting_active
+                                .read()
+                                .map(|a| *a)
+                                .unwrap_or(false);
+                            if still_advertised {
+                                warn!(
+                                    "All mint worker threads have exited but minting \
+                                     was still advertised active — clearing the active \
+                                     flag/metric to match reality (#566). The miner is \
+                                     no longer producing blocks; investigate the worker \
+                                     death (see logs above) and restart minting."
+                                );
+                                if let Ok(mut active) = minting_active.write() {
+                                    *active = false;
+                                }
+                                metrics_updater.set_minting_active(false);
+                                ws_broadcaster.minting_status(false, 0.0, 0);
+                            }
+                        }
                     }
                 }
             }

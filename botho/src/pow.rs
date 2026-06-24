@@ -195,6 +195,95 @@ impl FastHasher {
     }
 }
 
+/// A miner-usable **light-mode** RandomX hasher bound to a single seed epoch.
+///
+/// This is the degraded-mode counterpart to [`FastHasher`]: it allocates only
+/// the ~256 MB cache (no 2 GB dataset / `FLAG_FULL_MEM`), so it builds on
+/// RAM-constrained or huge-pages-less boxes where the fast dataset allocation
+/// fails — at a large throughput cost (light hashing is much slower than fast).
+///
+/// CONSENSUS-SAFE: RandomX light and fast modes produce the **identical**
+/// 32-byte output for the same `(seed_key, preimage)` (see the module docs and
+/// `test_light_equals_fast`). A block mined in light mode therefore verifies on
+/// every node exactly like a fast-mode block — this is a resilience knob, NOT a
+/// consensus-rule change (#566, the code-side fix for the #539 halt).
+///
+/// Distinct from the process-wide cached *verifier* VM (`verify_pow_hash` /
+/// [`LIGHT_VM`]): a miner needs its **own** owned VM so it can hash arbitrary
+/// mining preimages at will without contending on the verifier's mutex.
+pub struct LightHasher {
+    seed_key: [u8; 32],
+    vm: RandomXVM,
+}
+
+impl LightHasher {
+    /// Build a light-mode hasher for the given seed key (~256 MB cache, no
+    /// dataset).
+    pub fn new(seed_key: [u8; 32]) -> Result<Self, randomx_rs::RandomXError> {
+        let flags = light_flags();
+        let cache = RandomXCache::new(flags, &seed_key)?;
+        let vm = RandomXVM::new(flags, Some(cache), None)?;
+        Ok(Self { seed_key, vm })
+    }
+
+    /// The seed key this hasher is bound to.
+    pub fn seed_key(&self) -> [u8; 32] {
+        self.seed_key
+    }
+
+    /// Hash a preimage, returning the 32-byte RandomX output (identical to what
+    /// [`FastHasher::hash`] produces for the same `(seed_key, preimage)`).
+    pub fn hash(&self, preimage: &[u8]) -> [u8; 32] {
+        let out = self
+            .vm
+            .calculate_hash(preimage)
+            .expect("RandomX light hash failed");
+        let mut h = [0u8; 32];
+        h.copy_from_slice(&out);
+        h
+    }
+}
+
+/// A mining hasher that is either fast-mode (2 GB dataset, high throughput) or
+/// a degraded light-mode fallback (~256 MB cache, much slower) used when the
+/// fast dataset cannot be built (#566).
+///
+/// Both variants produce **identical** PoW output for the same
+/// `(seed_key, preimage)`, so swapping one for the other never changes which
+/// blocks are valid — it only changes how fast this node finds them. The minter
+/// builds a fast hasher when it can and transparently falls back to light mode
+/// when the fast dataset allocation fails, keeping the chain alive on an
+/// undersized box instead of silently halting.
+pub enum MinerHasher {
+    /// Fast-mode (full dataset) hasher — the normal high-throughput path.
+    Fast(FastHasher),
+    /// Light-mode fallback hasher — slower, used when the fast dataset fails.
+    Light(LightHasher),
+}
+
+impl MinerHasher {
+    /// The seed key this hasher is bound to.
+    pub fn seed_key(&self) -> [u8; 32] {
+        match self {
+            MinerHasher::Fast(h) => h.seed_key(),
+            MinerHasher::Light(h) => h.seed_key(),
+        }
+    }
+
+    /// Hash a mining preimage, returning the 32-byte RandomX output.
+    pub fn hash(&self, preimage: &[u8]) -> [u8; 32] {
+        match self {
+            MinerHasher::Fast(h) => h.hash(preimage),
+            MinerHasher::Light(h) => h.hash(preimage),
+        }
+    }
+
+    /// Whether this is the degraded light-mode fallback (for observability).
+    pub fn is_light(&self) -> bool {
+        matches!(self, MinerHasher::Light(_))
+    }
+}
+
 /// Process-wide cached light-mode verifier VM, keyed by the active seed epoch.
 ///
 /// Verification only needs one VM at a time (the chain advances forward), and
@@ -360,6 +449,25 @@ mod tests {
             "light != fast — FORK RISK (light={}, fast={})",
             hex::encode(light),
             hex::encode(fast_hash)
+        );
+
+        // The miner-usable light-mode fallback hasher (#566) MUST also produce
+        // the identical output: a block mined in degraded light mode has to
+        // verify on every node exactly like a fast-mode block, or the fallback
+        // would fork the chain. Build it off the single fast dataset above so we
+        // don't allocate a second 2 GB dataset.
+        let light_hasher = LightHasher::new(seed).expect("light hasher");
+        let light_hasher_hash = light_hasher.hash(&pre);
+        assert_eq!(
+            light_hasher_hash,
+            fast_hash,
+            "LightHasher != FastHasher — FORK RISK (#566) (light={}, fast={})",
+            hex::encode(light_hasher_hash),
+            hex::encode(fast_hash)
+        );
+        assert_eq!(
+            light_hasher_hash, light,
+            "LightHasher != verify_pow_hash — FORK RISK (#566)"
         );
     }
 
