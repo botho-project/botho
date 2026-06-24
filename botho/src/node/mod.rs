@@ -264,6 +264,16 @@ impl Node {
             hex::encode(&block.hash()[0..8])
         );
 
+        // M5 (#554): capture the PARENT tip timestamp BEFORE adding the block.
+        // After `add_block` the chain tip becomes this very block, so the parent
+        // delta must be read first to drive the time-based difficulty controller.
+        let parent_timestamp: Option<u64> = self
+            .ledger
+            .read()
+            .ok()
+            .and_then(|l| l.get_chain_state().ok())
+            .map(|s| s.tip_timestamp);
+
         self.ledger
             .write()
             .map_err(|_| anyhow::anyhow!("Ledger lock poisoned"))?
@@ -291,18 +301,34 @@ impl Node {
         let reward_paid = block.minting_tx.reward;
         let fees_burned: u64 = block.lottery_summary.amount_burned;
 
+        // M5 (#554): difficulty is driven by observed block TIME, not tx count.
+        // Derive the inter-block time from the parent's timestamp captured above.
+        // Monotonicity is already enforced at acceptance (`store::add_block`), so
+        // the delta is non-negative; the `>=` guard is defensive. `None` when
+        // there is no usable parent (genesis / first block, where tip_timestamp
+        // is 0) leaves difficulty unchanged for that block.
+        let observed_secs: Option<u64> = match parent_timestamp {
+            Some(parent) if parent > 0 && block.header.timestamp >= parent => {
+                Some(block.header.timestamp - parent)
+            }
+            _ => None,
+        };
+
         let old_difficulty = self.emission_controller.difficulty;
-        let (new_difficulty, new_reward) =
-            self.emission_controller
-                .record_block(tx_count, reward_paid, fees_burned);
+        let (new_difficulty, new_reward) = self.emission_controller.record_block(
+            tx_count,
+            reward_paid,
+            fees_burned,
+            observed_secs,
+        );
 
         if new_difficulty != old_difficulty {
             info!(
-                "Difficulty adjustment at tx {}: {} -> {} (ratio: {:.2}x)",
-                self.emission_controller.total_tx,
+                "Difficulty adjustment at height {} (observed block time {:?}s): {} -> {}",
+                block.height(),
+                observed_secs,
                 old_difficulty,
                 new_difficulty,
-                new_difficulty as f64 / old_difficulty as f64
             );
         }
 
