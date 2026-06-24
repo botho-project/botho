@@ -9,7 +9,7 @@
 //! - Synchronize chain state
 //! - Handle peer disconnections gracefully
 
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use futures::StreamExt;
 use libp2p::{
@@ -24,8 +24,9 @@ use tokio::time::timeout;
 use botho::{
     block::Block,
     network::{
-        create_sync_behaviour, ChainSyncManager, ReputationManager, SyncAction, SyncCodec,
-        SyncRateLimiter, SyncRequest, SyncResponse, BLOCKS_PER_REQUEST, MAX_REQUESTS_PER_MINUTE,
+        create_sync_behaviour, ChainSyncManager, NetworkStats, ReputationManager, SyncAction,
+        SyncCodec, SyncRateLimiter, SyncRequest, SyncResponse, BLOCKS_PER_REQUEST,
+        MAX_REQUESTS_PER_MINUTE,
     },
 };
 
@@ -61,7 +62,7 @@ async fn create_test_swarm() -> (Swarm<TestBehaviour>, PeerId, Multiaddr) {
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
             .unwrap();
 
-            let sync = create_sync_behaviour();
+            let sync = create_sync_behaviour(Arc::new(NetworkStats::new()));
 
             Ok(TestBehaviour { gossipsub, sync })
         })
