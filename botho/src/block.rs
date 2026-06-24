@@ -846,8 +846,52 @@ pub mod difficulty {
     /// Minimum difficulty (floor to prevent stuck chain)
     pub const MIN_DIFFICULTY: u64 = 1;
 
-    /// Maximum difficulty (ceiling)
-    pub const MAX_DIFFICULTY: u64 = INITIAL_DIFFICULTY;
+    /// Maximum difficulty (ceiling).
+    ///
+    /// Convention (see [`crate::block::BlockHeader::is_valid_pow`]): PoW is
+    /// valid when `pow_value(hash) < difficulty`, so a HIGHER numeric
+    /// difficulty admits MORE hashes and is therefore EASIER.
+    /// `MAX_DIFFICULTY` is the *easiest* allowed PoW.
+    ///
+    /// M5 (#554): previously this equalled `INITIAL_DIFFICULTY`, which pinned
+    /// the easiest-possible PoW to the genesis assumption. If real network
+    /// hashrate fell below that assumption the chain could never ease
+    /// difficulty past genesis, so block production slowed/stalled with no
+    /// self-correction — a low-hashrate net could not self-heal. We raise
+    /// the ceiling well above genesis so the time-based controller can ease
+    /// PoW below the genesis difficulty and recover.
+    ///
+    /// The bound is kept finite (not `u64::MAX`) so PoW always retains *some*
+    /// cost. `INITIAL_DIFFICULTY` is `2^64 / ~342` expected hashes/block, i.e.
+    /// ~342 expected hashes per block at genesis. `MAX_EASE_MULTIPLE = 256`
+    /// lets block production survive a ~256x hashrate collapse (e.g. a
+    /// multi-node testnet dropping to a single weak miner) while still
+    /// requiring real work: the easiest PoW still expects `342 / 256 ≈ 1.3`
+    /// hashes/block. The product `INITIAL_DIFFICULTY * 256 ≈ 1.38e19` stays
+    /// below `u64::MAX (1.84e19)`, so the ceiling is a genuine finite bound
+    /// rather than a saturated `u64::MAX` (the `saturating_mul` below is
+    /// belt-and-suspenders against recalibration).
+    pub const MAX_EASE_MULTIPLE: u64 = 256;
+
+    /// Maximum difficulty (ceiling). See [`MAX_EASE_MULTIPLE`].
+    ///
+    /// Computed as `INITIAL_DIFFICULTY * MAX_EASE_MULTIPLE`, saturating at
+    /// `u64::MAX` so the constant is always well-defined regardless of the
+    /// genesis calibration.
+    pub const MAX_DIFFICULTY: u64 = INITIAL_DIFFICULTY.saturating_mul(MAX_EASE_MULTIPLE);
+
+    /// Target inter-block time in seconds for the time-based difficulty
+    /// controller (M5, #554). Mirrors `MonetaryPolicy::target_block_time_secs`
+    /// (5 s) and the genesis difficulty calibration in
+    /// [`crate::node::minter::INITIAL_DIFFICULTY`].
+    pub const TARGET_BLOCK_TIME_SECS: u64 = 5;
+
+    /// Upper bound on the observed inter-block time (seconds) the controller
+    /// will act on, as a multiple of [`TARGET_BLOCK_TIME_SECS`]. Caps how
+    /// far a single (consensus-bounded but still loose) timestamp gap can
+    /// push difficulty in one step, complementing the multiplicative [0.5x,
+    /// 2.0x] clamp. At 5 s target this admits gaps up to `5 * 12 = 60 s`.
+    pub const MAX_OBSERVED_BLOCK_TIME_MULTIPLE: u64 = 12;
 
     /// Fixed-point scale for difficulty-adjustment ratios.
     ///
@@ -1017,49 +1061,72 @@ pub mod difficulty {
             }
         }
 
-        /// Record a finalized block and update controller.
+        /// Record a finalized block and update the controller.
         ///
-        /// Returns (new_difficulty, new_block_reward)
-        /// Note: The returned block_reward is informational - actual rewards
-        /// should be calculated using `calculate_block_reward()` based
-        /// on block height.
+        /// M5 (#554): difficulty is now driven by observed **block time** vs
+        /// [`TARGET_BLOCK_TIME_SECS`], NOT by transaction count.
+        /// `observed_secs` is the inter-block time `block.timestamp -
+        /// parent.timestamp` (the caller already holds both via chain
+        /// state). A producer can no longer skew difficulty for free by
+        /// stuffing or starving blocks with transactions, because the
+        /// adjustment signal does not depend on `tx_count` at all.
+        ///
+        /// `observed_secs == None` (e.g. the very first recorded block after
+        /// genesis, where there is no usable parent delta) leaves difficulty
+        /// unchanged for that block.
+        ///
+        /// The emission/burn/tx totals are still accumulated for monetary
+        /// reporting and persistence, but no longer gate difficulty.
+        ///
+        /// Returns (new_difficulty, new_block_reward). The returned
+        /// block_reward is informational — actual rewards come from
+        /// `calculate_block_reward()` based on block height.
         pub fn record_block(
             &mut self,
             tx_count: u64,
             reward_paid: u64,
             fees_burned: u64,
+            observed_secs: Option<u64>,
         ) -> (u64, u64) {
-            // Update totals
+            // Update totals (monetary accounting; independent of difficulty).
             self.total_tx += tx_count;
             self.total_emitted += reward_paid as u128;
             self.total_burned += fees_burned as u128;
 
-            // Update epoch accumulators
+            // Update epoch accumulators (retained for persistence/back-compat;
+            // no longer used to trigger difficulty adjustment — see M5).
             self.epoch_tx += tx_count;
             self.epoch_emission += reward_paid;
             self.epoch_burns += fees_burned;
 
-            // Track the reward for informational purposes
+            // Track the reward for informational purposes.
             self.current_reward = reward_paid;
 
-            // Adjust difficulty at epoch boundary
-            if self.epoch_tx >= ADJUSTMENT_TX_COUNT {
-                self.adjust_difficulty();
+            // Time-driven difficulty adjustment: one step per block, off the
+            // observed inter-block time. Producer-skew-resistant because it
+            // ignores tx_count entirely.
+            if let Some(observed) = observed_secs {
+                self.difficulty = Self::compute_time_adjusted_difficulty(
+                    self.difficulty,
+                    observed,
+                    TARGET_BLOCK_TIME_SECS,
+                );
             }
 
             (self.difficulty, self.current_reward)
         }
 
-        /// Adjust difficulty based on emission rate error.
+        /// LEGACY (pre-M5, #554): emission-rate, tx-count-epoch difficulty
+        /// adjustment. Preserved (CLAUDE.md: stash rather than delete) and kept
+        /// integer-deterministic, but NO LONGER on the live block path — it was
+        /// producer-skewable because the trigger and signal were tx-count
+        /// driven. Retained so the prior controller can be exercised in tests
+        /// and recovered if the time-based controller needs to be reverted.
         ///
-        /// CONSENSUS-CRITICAL: pure integer (u128 basis-point) arithmetic — no
-        /// f64. Difficulty is hard-validated chain state, so the computation
-        /// must be bit-for-bit identical on every platform (audit cycle-6 C5,
-        /// issue #552). The behaviour mirrors the prior f64 controller's
-        /// intent in the block.rs convention (LOWER numeric difficulty =
-        /// HARDER PoW): emitting too fast lowers difficulty, emitting too slow
-        /// raises it, with the per-epoch change clamped to [0.5x, 2.0x].
-        fn adjust_difficulty(&mut self) {
+        /// CONSENSUS-CRITICAL contract (when used): pure integer (u128
+        /// basis-point) arithmetic — no f64 (audit cycle-6 C5, issue #552).
+        #[allow(dead_code)]
+        fn adjust_difficulty_emission_legacy(&mut self) {
             self.difficulty = Self::compute_adjusted_difficulty(
                 self.difficulty,
                 self.epoch_emission,
@@ -1067,6 +1134,69 @@ pub mod difficulty {
                 self.target_emission_per_tx(),
             );
             self.reset_epoch();
+        }
+
+        /// Pure, deterministic **time-based** difficulty-adjustment kernel
+        /// (M5, #554).
+        ///
+        /// Adjusts difficulty so observed block time converges to
+        /// `target_secs`, using the block.rs convention (HIGHER numeric
+        /// difficulty = EASIER PoW; PoW valid iff `pow_value(hash) <
+        /// difficulty`):
+        ///   - blocks too SLOW (`observed > target`) → ease PoW → RAISE
+        ///     difficulty
+        ///   - blocks too FAST (`observed < target`) → harden PoW → LOWER
+        ///     difficulty
+        ///
+        /// The multiplier is `observed / target` in basis points, clamped to
+        /// `[0.5x, 2.0x]` for per-block damping, then applied and clamped to
+        /// the absolute `[MIN_DIFFICULTY, MAX_DIFFICULTY]` bounds.
+        /// Because `MAX_DIFFICULTY` now exceeds `INITIAL_DIFFICULTY`
+        /// (#554), persistently slow blocks can ease PoW *below* the
+        /// genesis difficulty so a low-hashrate network self-corrects.
+        ///
+        /// CONSENSUS-CRITICAL: pure integer (u128 basis-point) arithmetic — no
+        /// f64. Difficulty is hard-validated chain state, so this must be
+        /// bit-for-bit identical on every platform (preserves the #553/#552
+        /// determinism property).
+        ///
+        /// `pub(crate)` so it can be exercised directly with exact integer
+        /// inputs/outputs, independent of controller state.
+        pub(crate) fn compute_time_adjusted_difficulty(
+            current: u64,
+            observed_secs: u64,
+            target_secs: u64,
+        ) -> u64 {
+            // Undefined target → leave difficulty unchanged (defensive; the
+            // constant is nonzero).
+            if target_secs == 0 {
+                return current.clamp(MIN_DIFFICULTY, MAX_DIFFICULTY);
+            }
+
+            // Cap how far a single (consensus-bounded but loose) timestamp gap
+            // can move difficulty in one step. Combined with the [0.5x, 2.0x]
+            // multiplier clamp below this bounds per-block movement even if a
+            // producer pushes the timestamp to the future limit.
+            let max_observed = target_secs.saturating_mul(MAX_OBSERVED_BLOCK_TIME_MULTIPLE);
+            let observed = observed_secs.min(max_observed);
+
+            // Multiplier in basis points (RATIO_SCALE == 1.0x):
+            //   adjustment = observed / target
+            //   observed > target (too slow) → > 1.0x → RAISE difficulty (easier)
+            //   observed < target (too fast) → < 1.0x → LOWER difficulty (harder)
+            // observed == 0 (two blocks at the same second) drives the
+            // multiplier to 0 and is clamped up to the 0.5x floor below.
+            let adjustment_bps: u128 = observed as u128 * RATIO_SCALE / target_secs as u128;
+
+            // Clamp the multiplier to [0.5x, 2.0x] (per-block damping), matching
+            // the emission controller's bounds.
+            let adjustment_bps = adjustment_bps.clamp(RATIO_SCALE / 2, MAX_ADJUSTMENT_FACTOR_BPS);
+
+            // Apply: new = current * adjustment_bps / RATIO_SCALE (u128 to avoid
+            // intermediate overflow), then clamp to absolute difficulty bounds.
+            let new_diff = current as u128 * adjustment_bps / RATIO_SCALE;
+            let new_diff = u64::try_from(new_diff).unwrap_or(u64::MAX);
+            new_diff.clamp(MIN_DIFFICULTY, MAX_DIFFICULTY)
         }
 
         /// Pure, deterministic difficulty-adjustment kernel.
@@ -1202,66 +1332,52 @@ pub mod difficulty {
         fn test_difficulty_adjustment() {
             let mut ctrl = EmissionController::new(1000);
 
-            // Record blocks until we hit an adjustment epoch
+            // M5 (#554): tx accumulation no longer drives difficulty. Recording
+            // blocks without a block-time signal (None) accumulates totals but
+            // leaves difficulty untouched — the old tx-count epoch trigger is
+            // gone (it was producer-skewable).
             for _ in 0..10 {
-                ctrl.record_block(100, INITIAL_REWARD, 0);
+                ctrl.record_block(100, INITIAL_REWARD, 0, None);
             }
-
-            // After 1000 tx, difficulty should adjust
             assert_eq!(ctrl.total_tx, 1000);
-            // Difficulty may or may not change depending on target vs actual
-            // emission
+            assert_eq!(
+                ctrl.difficulty, 1000,
+                "tx count alone must never move difficulty (M5)"
+            );
         }
 
-        /// Documents the EmissionController's adjustment *direction* and its
-        /// limits as a block-time controller (#444).
-        ///
-        /// IMPORTANT: this controller is an *emission-rate* loop, not a
-        /// block-time loop. It compares actual emission-per-tx to a target
-        /// (`current_reward / EXPECTED_TX_PER_BLOCK`) and moves difficulty so
-        /// that emission converges, NOT so that block time converges to 5 s.
-        /// Block time is therefore governed primarily by `INITIAL_DIFFICULTY`.
-        ///
-        /// This test pins the direction of the emission loop: when actual
-        /// emission-per-tx is ABOVE target (emitting too fast), difficulty is
-        /// made HARDER, i.e. the numeric value DECREASES (recall higher
-        /// numeric difficulty = easier/faster here). When emission is BELOW
-        /// target, difficulty increases (easier).
+        /// LEGACY (pre-M5): direction of the now-retired emission-rate loop,
+        /// exercised via the preserved pure kernel
+        /// `compute_adjusted_difficulty` (the stateful tx-count trigger
+        /// was removed in #554 as producer-skewable). Kept to guard the
+        /// legacy kernel against drift in case it is ever revived.
         #[test]
-        fn test_emission_controller_adjustment_direction() {
-            // Use a mid-range start so movement in either direction is visible
-            // without hitting the MIN/MAX_DIFFICULTY clamps.
+        fn test_emission_kernel_adjustment_direction_legacy() {
             let start_difficulty = INITIAL_DIFFICULTY / 2;
 
-            // target_emission_per_tx = current_reward / EXPECTED_TX_PER_BLOCK
-            // (EXPECTED_TX_PER_BLOCK = 20). actual = epoch_emission / epoch_tx.
-
-            // Over-emitting: 1 tx absorbing the full block reward gives
-            // actual = reward, target = reward / 20, so actual >> target.
-            // A full epoch is reached by recording ADJUSTMENT_TX_COUNT blocks
-            // of 1 tx each.
-            let mut fast = EmissionController::new(start_difficulty);
-            for _ in 0..ADJUSTMENT_TX_COUNT {
-                fast.record_block(1, INITIAL_REWARD, 0);
-            }
+            // Over-emitting (actual >> target) → harder → lower numeric.
+            // actual = INITIAL_REWARD/1 = INITIAL_REWARD; target = reward/20.
+            let fast = EmissionController::compute_adjusted_difficulty(
+                start_difficulty,
+                INITIAL_REWARD,
+                1,
+                INITIAL_REWARD / 20,
+            );
             assert!(
-                fast.difficulty < start_difficulty,
-                "over-emitting must lower the numeric difficulty (harder/slower \
-                 emission), got {} from {}",
-                fast.difficulty,
+                fast < start_difficulty,
+                "over-emitting must lower the numeric difficulty (harder), got {} from {}",
+                fast,
                 start_difficulty
             );
 
-            // Under-emitting: a single block carrying a whole epoch's worth of
-            // tx but a tiny total emission. current_reward = 100 keeps target
-            // nonzero (100 / 20 = 5), while actual = 100 / 1000 = 0 < target.
-            let mut slow = EmissionController::new(start_difficulty);
-            slow.record_block(ADJUSTMENT_TX_COUNT, 100, 0);
+            // Under-emitting (actual < target) → easier → higher numeric.
+            // actual = 100/1000 = 0; target = 100/20 = 5.
+            let slow =
+                EmissionController::compute_adjusted_difficulty(start_difficulty, 100, 1000, 5);
             assert!(
-                slow.difficulty > start_difficulty,
-                "under-emitting must raise the numeric difficulty (easier), got \
-                 {} from {}",
-                slow.difficulty,
+                slow > start_difficulty,
+                "under-emitting must raise the numeric difficulty (easier), got {} from {}",
+                slow,
                 start_difficulty
             );
         }
@@ -1395,43 +1511,37 @@ pub mod difficulty {
             );
         }
 
-        /// Epoch trigger: difficulty only changes once epoch_tx crosses
-        /// ADJUSTMENT_TX_COUNT, and the controller's stateful path agrees with
-        /// the pure kernel.
+        /// M5 (#554): the stateful `record_block` time-path agrees exactly with
+        /// the pure time-based kernel, and `None` (no parent delta) is a no-op.
         #[test]
-        fn test_record_block_epoch_trigger_matches_kernel() {
+        fn test_record_block_time_path_matches_kernel() {
             let start = INITIAL_DIFFICULTY / 2;
 
-            // Just under the epoch threshold → no adjustment yet.
+            // No block-time signal → no adjustment.
             let mut ctrl = EmissionController::new(start);
-            ctrl.record_block(ADJUSTMENT_TX_COUNT - 1, INITIAL_REWARD, 0);
+            ctrl.record_block(7, INITIAL_REWARD, 0, None);
             assert_eq!(
                 ctrl.difficulty, start,
-                "difficulty must not change before the epoch boundary"
+                "difficulty must not change without an observed block time"
             );
 
-            // One full epoch in a single record_block call. The stateful result
-            // must equal the pure kernel on the same inputs.
+            // With an observed block time, the stateful result must equal the
+            // pure kernel on the same inputs.
+            let observed = TARGET_BLOCK_TIME_SECS * 2;
             let mut ctrl2 = EmissionController::new(start);
-            let target = ctrl2.target_emission_per_tx();
-            let emission = INITIAL_REWARD; // 1 block's reward over the whole epoch
-            ctrl2.record_block(ADJUSTMENT_TX_COUNT, emission, 0);
-            let expected = EmissionController::compute_adjusted_difficulty(
+            ctrl2.record_block(7, INITIAL_REWARD, 0, Some(observed));
+            let expected = EmissionController::compute_time_adjusted_difficulty(
                 start,
-                emission,
-                ADJUSTMENT_TX_COUNT,
-                target,
+                observed,
+                TARGET_BLOCK_TIME_SECS,
             );
             assert_eq!(ctrl2.difficulty, expected);
-            // Epoch accumulators reset after adjustment.
-            assert_eq!(ctrl2.epoch_tx, 0);
-            assert_eq!(ctrl2.epoch_emission, 0);
         }
 
         #[test]
         fn test_fee_burn_tracking() {
             let mut ctrl = EmissionController::new(1000);
-            ctrl.record_block(10, 1000, 100);
+            ctrl.record_block(10, 1000, 100, None);
 
             assert_eq!(ctrl.total_burned, 100);
             assert_eq!(ctrl.net_supply(), 900);
@@ -1442,10 +1552,194 @@ pub mod difficulty {
             let mut ctrl = EmissionController::new(1000);
 
             // Record a block with specific reward
-            ctrl.record_block(5, 12345, 100);
+            ctrl.record_block(5, 12345, 100, None);
 
             // current_reward should track the last reward paid
             assert_eq!(ctrl.current_reward, 12345);
+        }
+
+        // === M5 (#554): time-based, producer-skew-resistant difficulty ===
+
+        /// Producer-skew resistance: difficulty must NOT depend on tx_count.
+        /// Recording blocks at the target block time leaves difficulty exactly
+        /// unchanged regardless of whether each block carries 0, 1, or a huge
+        /// number of transactions — so a producer cannot move difficulty by
+        /// stuffing or starving blocks with txs (the core M5 bug).
+        #[test]
+        fn test_difficulty_independent_of_tx_count() {
+            let start = INITIAL_DIFFICULTY;
+            let on_target = Some(TARGET_BLOCK_TIME_SECS);
+
+            // Empty blocks at target time.
+            let mut starved = EmissionController::new(start);
+            for _ in 0..50 {
+                starved.record_block(0, INITIAL_REWARD, 0, on_target);
+            }
+
+            // Stuffed blocks at the SAME (target) time.
+            let mut stuffed = EmissionController::new(start);
+            for _ in 0..50 {
+                stuffed.record_block(100_000, INITIAL_REWARD, 0, on_target);
+            }
+
+            assert_eq!(
+                starved.difficulty, stuffed.difficulty,
+                "tx count must not affect difficulty"
+            );
+            assert_eq!(
+                starved.difficulty, start,
+                "on-target block time must leave difficulty unchanged"
+            );
+        }
+
+        /// Time-based direction: slow blocks ease PoW (raise numeric
+        /// difficulty), fast blocks harden PoW (lower numeric
+        /// difficulty). Driven through the stateful `record_block` path
+        /// with `observed_secs`.
+        #[test]
+        fn test_record_block_time_direction() {
+            let start = INITIAL_DIFFICULTY / 2;
+
+            // Slow: observed 2x target → easier (higher numeric).
+            let mut slow = EmissionController::new(start);
+            slow.record_block(7, INITIAL_REWARD, 0, Some(TARGET_BLOCK_TIME_SECS * 2));
+            assert!(
+                slow.difficulty > start,
+                "slow blocks must raise difficulty (ease PoW), got {} from {}",
+                slow.difficulty,
+                start
+            );
+
+            // Fast: observed half target → harder (lower numeric).
+            let mut fast = EmissionController::new(start);
+            fast.record_block(7, INITIAL_REWARD, 0, Some(TARGET_BLOCK_TIME_SECS / 2));
+            assert!(
+                fast.difficulty < start,
+                "fast blocks must lower difficulty (harden PoW), got {} from {}",
+                fast.difficulty,
+                start
+            );
+
+            // None (no parent delta) leaves difficulty unchanged.
+            let mut noop = EmissionController::new(start);
+            noop.record_block(7, INITIAL_REWARD, 0, None);
+            assert_eq!(noop.difficulty, start);
+        }
+
+        /// A low-hashrate network must be able to ease PoW BELOW genesis. With
+        /// `MAX_DIFFICULTY == INITIAL_DIFFICULTY` (the old floor) this was
+        /// impossible and the chain could not self-heal. Persistently slow
+        /// blocks starting AT genesis must push difficulty strictly above
+        /// `INITIAL_DIFFICULTY` (= easier than genesis).
+        #[test]
+        fn test_ease_below_genesis() {
+            // Sanity: the ceiling was raised above genesis.
+            assert!(
+                MAX_DIFFICULTY > INITIAL_DIFFICULTY,
+                "MAX_DIFFICULTY must exceed INITIAL_DIFFICULTY for self-healing"
+            );
+
+            let mut ctrl = EmissionController::new(INITIAL_DIFFICULTY);
+            // Network far slower than target (capped observed time), every block.
+            let slow = Some(TARGET_BLOCK_TIME_SECS * MAX_OBSERVED_BLOCK_TIME_MULTIPLE);
+            for _ in 0..20 {
+                ctrl.record_block(1, INITIAL_REWARD, 0, slow);
+            }
+            assert!(
+                ctrl.difficulty > INITIAL_DIFFICULTY,
+                "PoW must be able to ease below genesis (difficulty {} should \
+                 exceed INITIAL_DIFFICULTY {})",
+                ctrl.difficulty,
+                INITIAL_DIFFICULTY
+            );
+            assert!(ctrl.difficulty <= MAX_DIFFICULTY);
+        }
+
+        /// Determinism of the time-based kernel: identical inputs → identical
+        /// output, every time (integer-only; no f64). Preserves the #553/#552
+        /// property for the new control path.
+        #[test]
+        fn test_compute_time_adjusted_difficulty_deterministic() {
+            let cases = [
+                (INITIAL_DIFFICULTY, 5u64, 5u64),
+                (INITIAL_DIFFICULTY / 2, 10, 5),
+                (INITIAL_DIFFICULTY, 2, 5),
+                (1_000_000, 0, 5),
+                (12_345, 60, 5),
+                (INITIAL_DIFFICULTY, 5, 0), // degenerate target
+            ];
+            for &(cur, obs, tgt) in &cases {
+                let first = EmissionController::compute_time_adjusted_difficulty(cur, obs, tgt);
+                for _ in 0..32 {
+                    assert_eq!(
+                        first,
+                        EmissionController::compute_time_adjusted_difficulty(cur, obs, tgt),
+                        "non-deterministic output for ({cur},{obs},{tgt})"
+                    );
+                }
+            }
+        }
+
+        /// Exact integer outputs for the time-based kernel. Hand-derived:
+        ///   observed   = min(observed_secs, target * MAX_OBSERVED_MULTIPLE)
+        ///   adjustment = clamp(observed * 10000 / target, 5000, 20000)
+        ///   new        = clamp(current * adjustment / 10000, MIN, MAX)
+        #[test]
+        fn test_compute_time_adjusted_difficulty_exact_values() {
+            // On target: observed == target → 1.0x → unchanged.
+            assert_eq!(
+                EmissionController::compute_time_adjusted_difficulty(8_000, 5, 5),
+                8_000
+            );
+
+            // 2x slow → 2.0x → doubled (within bounds).
+            assert_eq!(
+                EmissionController::compute_time_adjusted_difficulty(8_000, 10, 5),
+                16_000
+            );
+
+            // Fast (observed 2 < target 5): raw multiplier 2*10000/5 = 4000,
+            // floored to the 0.5x clamp (5000) → 8000 * 5000/10000 = 4000.
+            assert_eq!(
+                EmissionController::compute_time_adjusted_difficulty(8_000, 2, 5),
+                4_000
+            );
+
+            // observed == 0 → multiplier clamped up to 0.5x floor → halved.
+            assert_eq!(
+                EmissionController::compute_time_adjusted_difficulty(8_000, 0, 5),
+                4_000
+            );
+
+            // Very slow beyond the observed cap → cap applies, still 2.0x max.
+            // observed capped to 5 * 12 = 60; 60*10000/5 = 120000 → clamp 20000.
+            assert_eq!(
+                EmissionController::compute_time_adjusted_difficulty(8_000, 10_000, 5),
+                16_000
+            );
+        }
+
+        /// Clamp bounds for the time-based kernel: multiplier ∈ [0.5x, 2.0x],
+        /// result ∈ [MIN_DIFFICULTY, MAX_DIFFICULTY].
+        #[test]
+        fn test_compute_time_adjusted_difficulty_clamps() {
+            // Absolute floor: tiny difficulty, fast blocks → clamp to MIN.
+            assert_eq!(
+                EmissionController::compute_time_adjusted_difficulty(1, 0, 5),
+                MIN_DIFFICULTY
+            );
+
+            // Absolute ceiling: at MAX, slow blocks → stays at MAX.
+            assert_eq!(
+                EmissionController::compute_time_adjusted_difficulty(MAX_DIFFICULTY, 1_000, 5),
+                MAX_DIFFICULTY
+            );
+
+            // Degenerate target leaves difficulty unchanged (re-clamped).
+            assert_eq!(
+                EmissionController::compute_time_adjusted_difficulty(1234, 10, 0),
+                1234
+            );
         }
     }
 
@@ -1635,7 +1929,7 @@ mod tests {
         ctrl.total_emitted = near_max as u128;
 
         let reward = difficulty::INITIAL_REWARD; // 50 BTH = 5e13 pico
-        ctrl.record_block(1, reward, 0);
+        ctrl.record_block(1, reward, 0, None);
 
         let expected = near_max as u128 + reward as u128;
         assert_eq!(ctrl.total_emitted, expected);
