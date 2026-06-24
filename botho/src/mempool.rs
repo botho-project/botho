@@ -56,7 +56,10 @@ use bth_transaction_types::TAG_WEIGHT_SCALE;
 ///
 /// Background (untagged) value contributes zero, matching
 /// `bth_transaction_core::validation::compute_effective_cluster_wealth`.
-fn effective_cluster_wealth_from_outputs(outputs: &[TxOutput], ledger: &Ledger) -> u64 {
+fn effective_cluster_wealth_from_outputs(
+    outputs: &[TxOutput],
+    ledger: &Ledger,
+) -> Result<u64, String> {
     let mut total_weighted_wealth: u128 = 0;
     let mut total_value: u128 = 0;
 
@@ -65,16 +68,25 @@ fn effective_cluster_wealth_from_outputs(outputs: &[TxOutput], ledger: &Ledger) 
         for entry in &output.cluster_tags.entries {
             let value_fraction =
                 (output.amount as u128 * entry.weight as u128) / (TAG_WEIGHT_SCALE as u128);
-            let global_wealth = ledger.get_cluster_wealth(entry.cluster_id.0).unwrap_or(0);
+            // Propagate DB errors instead of `unwrap_or(0)`. Defaulting a DB
+            // failure to zero wealth would lower the progressive fee (fail-open,
+            // audit cycle 6, M7), letting a wealthy cluster underpay on a
+            // transient read error. Surfacing the error fails CLOSED: the tx is
+            // rejected from the mempool with a LedgerError rather than admitted
+            // at a fee computed from bogus zero wealth. The happy path is
+            // unchanged.
+            let global_wealth = ledger
+                .get_cluster_wealth(entry.cluster_id.0)
+                .map_err(|e| format!("get_cluster_wealth({}): {}", entry.cluster_id.0, e))?;
             total_weighted_wealth += value_fraction * global_wealth as u128;
         }
     }
 
     if total_value == 0 {
-        return 0;
+        return Ok(0);
     }
 
-    (total_weighted_wealth / total_value) as u64
+    Ok((total_weighted_wealth / total_value) as u64)
 }
 
 // ============================================================================
@@ -661,7 +673,8 @@ impl Mempool {
 
         // Compute effective cluster wealth: output tags (inherited from
         // inputs) weighted against the ledger's global per-cluster wealth
-        let cluster_wealth = effective_cluster_wealth_from_outputs(&tx.outputs, ledger);
+        let cluster_wealth = effective_cluster_wealth_from_outputs(&tx.outputs, ledger)
+            .map_err(MempoolError::LedgerError)?;
         // Count outputs with encrypted memos for fee calculation
         let num_memos = tx.outputs.iter().filter(|o| o.has_memo()).count();
 
@@ -1278,7 +1291,7 @@ mod tests {
             e_memo: None,
             cluster_tags: ClusterTagVector::single(ClusterId(1)),
         };
-        let wealth = effective_cluster_wealth_from_outputs(&[small_output], &ledger);
+        let wealth = effective_cluster_wealth_from_outputs(&[small_output], &ledger).unwrap();
         assert_eq!(wealth, whale_amount);
 
         // Half-tagged output: 50% of the global wealth
@@ -1291,13 +1304,49 @@ mod tests {
             e_memo: None,
             cluster_tags: half_tags,
         };
-        let wealth = effective_cluster_wealth_from_outputs(&[half_output], &ledger);
+        let wealth = effective_cluster_wealth_from_outputs(&[half_output], &ledger).unwrap();
         assert_eq!(wealth, whale_amount / 2);
 
         // Untagged (background) outputs contribute zero cluster wealth
         let bg_output = test_output(1_000, 9);
-        let wealth = effective_cluster_wealth_from_outputs(&[bg_output], &ledger);
+        let wealth = effective_cluster_wealth_from_outputs(&[bg_output], &ledger).unwrap();
         assert_eq!(wealth, 0);
+    }
+
+    /// M7 fail-closed: when the per-cluster wealth lookup hits a DB error, the
+    /// fee-input wealth computation must PROPAGATE the error rather than
+    /// `unwrap_or(0)`. Defaulting to zero wealth would lower the progressive
+    /// fee (fail-open), letting a wealthy cluster underpay on a transient
+    /// DB error.
+    ///
+    /// The DB error is injected by exhausting the LMDB reader table: the ledger
+    /// is opened with one reader slot, held open, so `get_cluster_wealth`'s
+    /// read txn fails with `MdbError::ReadersFull`.
+    #[test]
+    fn test_effective_cluster_wealth_fails_closed_on_db_error() {
+        use crate::ledger::Ledger;
+        use bth_transaction_types::ClusterId;
+
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open_single_reader(dir.path()).unwrap();
+
+        // Hold the only reader slot open so the next read_txn() fails.
+        let _held = ledger.read_txn_for_test().unwrap();
+
+        // A cluster-tagged output forces a get_cluster_wealth() lookup.
+        let tagged_output = TxOutput {
+            amount: 1_000,
+            target_key: [0x55; 32],
+            public_key: [0x56; 32],
+            e_memo: None,
+            cluster_tags: ClusterTagVector::single(ClusterId(1)),
+        };
+        let result = effective_cluster_wealth_from_outputs(&[tagged_output], &ledger);
+        assert!(
+            result.is_err(),
+            "wealth computation must fail closed (propagate DB error), got {:?}",
+            result
+        );
     }
 
     #[test]
