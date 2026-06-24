@@ -5,7 +5,7 @@ use bth_util_from_random::FromRandom;
 use rand_core::OsRng;
 use std::{
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         mpsc::{channel, Receiver, Sender},
         Arc,
     },
@@ -16,8 +16,20 @@ use tracing::{info, trace, warn};
 
 use crate::{
     block::{calculate_block_reward, MintingTx},
-    pow::{self, FastHasher},
+    pow::{self, FastHasher, LightHasher, MinerHasher},
 };
+
+/// How many times a worker retries building the fast-mode RandomX dataset
+/// before falling back to light mode (#566, part C). A single transient dataset
+/// allocation failure (e.g. momentary memory pressure / huge-pages contention)
+/// should not permanently wedge the miner, but we must not busy-loop either.
+const FAST_BUILD_ATTEMPTS: u32 = 3;
+
+/// Base backoff between fast-mode dataset build retries, in milliseconds. Grows
+/// exponentially (×1, ×2, …) across attempts. Kept small: the goal is to ride
+/// out a transient failure, not to stall for long before degrading to light
+/// mode (#566, part C).
+const FAST_BUILD_BACKOFF_BASE_MS: u64 = 500;
 
 /// Genesis / initial minting difficulty target for **RandomX**.
 ///
@@ -396,6 +408,36 @@ pub struct Minter {
     work_version: Arc<AtomicU64>,
     /// Shared health handle for stall detection / RPC reporting (#538).
     health: MinterHealth,
+    /// Count of mint worker threads still alive. Seeded to `threads` in
+    /// [`Minter::start`] and decremented by each worker's [`WorkerExitGuard`] on
+    /// exit (by ANY path, including a panic). When it reaches zero — i.e. every
+    /// worker has died — the guard flips the health `active` flag false so a node
+    /// with a dead mining thread can never report `active:true` (#566, the
+    /// truthfulness fix for the #539 silent halt).
+    live_workers: Arc<AtomicUsize>,
+}
+
+/// Decrements the live-worker count when a mint worker thread exits, and flips
+/// the miner's health `active` flag false once the LAST worker is gone.
+///
+/// Because this runs in `Drop`, it fires on **every** termination path of a
+/// worker — normal return, an early `break` (poisoned work lock, closed channel,
+/// unbuildable hasher), or a panic (Drop runs while the thread unwinds). That is
+/// the property the #539 post-mortem needed: previously a dead mint thread left
+/// `active:true` with 0 H/s for ~50h. See #566.
+struct WorkerExitGuard {
+    live_workers: Arc<AtomicUsize>,
+    health: MinterHealth,
+}
+
+impl Drop for WorkerExitGuard {
+    fn drop(&mut self) {
+        // `fetch_sub` returns the PREVIOUS value; `== 1` means this was the
+        // last live worker, so the miner is now fully dead.
+        if self.live_workers.fetch_sub(1, Ordering::SeqCst) == 1 {
+            self.health.set_active(false);
+        }
+    }
 }
 
 impl Minter {
@@ -446,6 +488,7 @@ impl Minter {
             current_work: Arc::new(std::sync::RwLock::new(initial_work)),
             work_version: Arc::new(AtomicU64::new(0)),
             health,
+            live_workers: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -465,6 +508,15 @@ impl Minter {
     }
 
     pub fn start(&mut self) {
+        // Seed the live-worker count and mark the miner active BEFORE spawning,
+        // so the per-worker exit guard can authoritatively flip `active` false
+        // once the LAST worker dies (#566). Ordering matters: if we set active
+        // *after* spawning, a worker that died instantly could be overwritten
+        // back to active=true, re-creating the very "active but dead" lie this
+        // fix exists to prevent.
+        self.live_workers.store(self.threads, Ordering::SeqCst);
+        self.health.set_active(true);
+
         for thread_id in 0..self.threads {
             let shutdown = self.shutdown.clone();
             let total_hashes = self.total_hashes.clone();
@@ -473,8 +525,19 @@ impl Minter {
             let tx_sender = self.tx_sender.clone();
             let current_work = self.current_work.clone();
             let work_version = self.work_version.clone();
+            let live_workers = self.live_workers.clone();
+            let health = self.health.clone();
 
             let handle = thread::spawn(move || {
+                // The exit guard fires on EVERY way this worker can terminate —
+                // normal return, an early `break`, or a panic (Drop runs during
+                // unwind) — flipping `active` false once the last worker exits so
+                // a node with a dead mining thread never reports `active:true`
+                // (#566).
+                let _exit_guard = WorkerExitGuard {
+                    live_workers,
+                    health,
+                };
                 mint_loop(
                     thread_id,
                     address,
@@ -489,9 +552,6 @@ impl Minter {
 
             self.handles.push(handle);
         }
-        // Mark the miner active for health/stall tracking (starts the grace
-        // window). Done after spawning so uptime aligns with real work.
-        self.health.set_active(true);
     }
 
     pub fn stop(self) {
@@ -556,11 +616,18 @@ fn mint_loop(
     let mut cached_target_key = [0u8; 32];
     let mut cached_public_key = [0u8; 32];
 
-    // RandomX fast-mode hasher (~2 GB dataset). Built lazily and reused across
-    // all nonces/blocks within a seed epoch; rebuilt only when the seed key
-    // rotates (every `pow::SEED_ROTATION_INTERVAL` blocks). Building it is
-    // seconds-expensive, so we must NOT recreate it per hash or per block.
-    let mut fast_hasher: Option<FastHasher> = None;
+    // RandomX mining hasher. Built lazily and reused across all nonces/blocks
+    // within a seed epoch; rebuilt only when the seed key rotates (every
+    // `pow::SEED_ROTATION_INTERVAL` blocks). Building it is seconds-expensive,
+    // so we must NOT recreate it per hash or per block.
+    //
+    // Normally this is a fast-mode hasher (~2 GB dataset, high throughput). If
+    // that dataset cannot be built — even after bounded retries — the miner
+    // transparently falls back to a light-mode hasher (~256 MB cache, much
+    // slower) and KEEPS HASHING rather than dying, so an undersized box degrades
+    // gracefully instead of silently halting the chain (#566). Light and fast
+    // produce identical PoW output, so this is consensus-safe.
+    let mut hasher: Option<MinerHasher> = None;
 
     while !shutdown.load(Ordering::Relaxed) {
         // Check if work has been updated
@@ -570,12 +637,18 @@ fn mint_loop(
             let Ok(work_guard) = current_work.read() else {
                 break;
             };
-            cached_work = Some(work_guard.clone());
+            // Clone the work and RELEASE the read lock before the seconds-
+            // expensive hasher build below. Holding the read lock across the
+            // dataset build (and now its retry/backoff window, #566) would block
+            // `update_work`'s write lock for that whole duration.
+            let work = work_guard.clone();
+            drop(work_guard);
+            cached_work = Some(work.clone());
             last_work_version = current_version;
             info!(
                 thread = thread_id,
-                height = work_guard.height,
-                prev_hash = hex::encode(&work_guard.prev_block_hash[0..8]),
+                height = work.height,
+                prev_hash = hex::encode(&work.prev_block_hash[0..8]),
                 "Thread picked up new work"
             );
             // Reset nonce when work changes to avoid collisions
@@ -588,37 +661,40 @@ fn mint_loop(
             cached_target_key = target_key.to_bytes();
             cached_public_key = public_key.to_bytes();
 
-            // (Re)build the RandomX fast-mode hasher if the seed epoch changed.
+            // (Re)build the RandomX mining hasher if the seed epoch changed.
             // Most work updates (new tip every block) stay within the same
-            // epoch, so this only does the expensive ~2 GB dataset build at
-            // epoch boundaries.
-            let seed_key = pow::seed_key_for_height(work_guard.height);
-            let need_rebuild = fast_hasher
+            // epoch, so this only does the expensive dataset build at epoch
+            // boundaries.
+            let seed_key = pow::seed_key_for_height(work.height);
+            let need_rebuild = hasher
                 .as_ref()
                 .map(|h| h.seed_key() != seed_key)
                 .unwrap_or(true);
             if need_rebuild {
                 info!(
                     thread = thread_id,
-                    height = work_guard.height,
-                    "Building RandomX fast-mode dataset for new seed epoch (this takes a few seconds)"
+                    height = work.height,
+                    "Building RandomX mining hasher for new seed epoch (fast-mode \
+                     dataset build takes a few seconds)"
                 );
-                match FastHasher::new(seed_key) {
-                    Ok(h) => fast_hasher = Some(h),
-                    Err(e) => {
-                        tracing::error!(
-                            thread = thread_id,
-                            error = %e,
-                            "Failed to build RandomX fast hasher; stopping minter thread"
-                        );
+                match build_mining_hasher(thread_id, seed_key, &shutdown) {
+                    Some(h) => hasher = Some(h),
+                    None => {
+                        // No hasher could be built (fast retries exhausted AND
+                        // the light-mode fallback also failed) or shutdown was
+                        // requested mid-build. Either way we cannot hash; exit.
+                        // The exit guard flips the health `active` flag false so
+                        // the dead thread is reported truthfully (#566).
                         break;
                     }
                 }
             }
         }
 
+        // Safe: `cached_work`/`hasher` are populated together in the block above
+        // (or we `break`ed out), and once set they persist across iterations.
         let work = cached_work.as_ref().unwrap();
-        let hasher = fast_hasher.as_ref().expect("fast hasher built with work");
+        let hasher = hasher.as_ref().expect("mining hasher built with work");
 
         // Compute PoW hash: RandomX(seed) over
         // nonce || prev_block_hash || minter_view_key || minter_spend_key.
@@ -710,6 +786,89 @@ fn mint_loop(
     // Flush remaining hashes
     if local_hashes > 0 {
         total_hashes.fetch_add(local_hashes, Ordering::Relaxed);
+    }
+}
+
+/// Build the RandomX mining hasher for `seed_key`, resiliently (#566, parts B+C).
+///
+/// Strategy:
+/// 1. Try to build the fast-mode hasher (~2 GB dataset). On failure, retry up to
+///    [`FAST_BUILD_ATTEMPTS`] times with exponential backoff
+///    ([`FAST_BUILD_BACKOFF_BASE_MS`]) — a single transient allocation failure
+///    must not permanently wedge the miner, but we must not busy-loop either.
+/// 2. If fast mode is still unavailable, fall back to a **light-mode** hasher
+///    (~256 MB cache) and keep mining (slower) instead of dying. Light and fast
+///    produce identical PoW output, so this is consensus-safe.
+///
+/// Returns `None` only when neither mode can be built, or when `shutdown` is
+/// requested mid-build (so a stopping minter exits promptly rather than sleeping
+/// out its full backoff). A `None` return causes the worker to exit, which —
+/// via the exit guard — flips the health `active` flag false (#566, part A).
+fn build_mining_hasher(
+    thread_id: usize,
+    seed_key: [u8; 32],
+    shutdown: &AtomicBool,
+) -> Option<MinerHasher> {
+    let mut last_err: Option<randomx_rs::RandomXError> = None;
+
+    for attempt in 1..=FAST_BUILD_ATTEMPTS {
+        if shutdown.load(Ordering::Relaxed) {
+            return None;
+        }
+        match FastHasher::new(seed_key) {
+            Ok(h) => return Some(MinerHasher::Fast(h)),
+            Err(e) => {
+                warn!(
+                    thread = thread_id,
+                    attempt,
+                    max_attempts = FAST_BUILD_ATTEMPTS,
+                    error = %e,
+                    "RandomX fast-mode dataset build failed; retrying with backoff"
+                );
+                last_err = Some(e);
+                if attempt < FAST_BUILD_ATTEMPTS {
+                    // Exponential backoff (×1, ×2, …), slept in short steps so a
+                    // shutdown request is honored promptly.
+                    let backoff_ms = FAST_BUILD_BACKOFF_BASE_MS << (attempt - 1);
+                    let mut slept = 0u64;
+                    while slept < backoff_ms {
+                        if shutdown.load(Ordering::Relaxed) {
+                            return None;
+                        }
+                        let step = (backoff_ms - slept).min(100);
+                        thread::sleep(std::time::Duration::from_millis(step));
+                        slept += step;
+                    }
+                }
+            }
+        }
+    }
+
+    if shutdown.load(Ordering::Relaxed) {
+        return None;
+    }
+
+    // Fast mode exhausted — degrade to light mode and KEEP MINING (#566, part B).
+    warn!(
+        thread = thread_id,
+        attempts = FAST_BUILD_ATTEMPTS,
+        last_error = ?last_err,
+        "RandomX fast-mode dataset unavailable after retries; FALLING BACK to \
+         DEGRADED light-mode mining (much slower, but produces consensus-identical \
+         PoW so blocks still verify everywhere — see #566). Check that the box has \
+         enough RAM / huge-pages configured to restore fast-mode throughput."
+    );
+    match LightHasher::new(seed_key) {
+        Ok(h) => Some(MinerHasher::Light(h)),
+        Err(e) => {
+            tracing::error!(
+                thread = thread_id,
+                error = %e,
+                "RandomX light-mode hasher ALSO failed to build; minter thread \
+                 cannot hash and will exit (active flag will be cleared, #566)"
+            );
+            None
+        }
     }
 }
 
@@ -845,6 +1004,71 @@ mod tests {
         // coinbase, even one with all-zero keys.
         let unbound = MinterHealth::new(Arc::new(AtomicU64::new(0)), Instant::now());
         assert!(!unbound.owns_coinbase(&[0u8; 32], &[0u8; 32]));
+    }
+
+    // ----- Truthful `active` flag on worker death (#566) -----
+
+    /// The exit guard must flip the health `active` flag false only once the
+    /// LAST worker exits — not while any worker is still alive. This is the core
+    /// truthfulness mechanism that prevents a node with a dead mining thread from
+    /// reporting `active:true` (the #539 silent halt).
+    #[test]
+    fn test_active_flips_false_when_last_worker_exits() {
+        let health = MinterHealth::new(Arc::new(AtomicU64::new(0)), Instant::now());
+        health.set_active(true);
+        assert!(health.is_active());
+
+        // Two live workers.
+        let live = Arc::new(AtomicUsize::new(2));
+        let g1 = WorkerExitGuard {
+            live_workers: live.clone(),
+            health: health.clone(),
+        };
+        let g2 = WorkerExitGuard {
+            live_workers: live.clone(),
+            health: health.clone(),
+        };
+
+        // First worker exits: one remains, so the miner is still active.
+        drop(g1);
+        assert!(
+            health.is_active(),
+            "miner must stay active while a worker remains"
+        );
+
+        // Last worker exits: the miner is now fully dead and must report so.
+        drop(g2);
+        assert!(
+            !health.is_active(),
+            "active must be false once the LAST worker exits (#566)"
+        );
+    }
+
+    /// A worker that exits via a PANIC must still flip `active` false — the exit
+    /// guard's `Drop` runs while the thread unwinds. This is the
+    /// `.expect(\"RandomX ... hash failed\")` death path called out in #566/#539.
+    #[test]
+    fn test_active_flips_false_on_worker_panic() {
+        let health = MinterHealth::new(Arc::new(AtomicU64::new(0)), Instant::now());
+        health.set_active(true);
+        let live = Arc::new(AtomicUsize::new(1));
+
+        let h = health.clone();
+        let l = live.clone();
+        let handle = thread::spawn(move || {
+            let _exit_guard = WorkerExitGuard {
+                live_workers: l,
+                health: h,
+            };
+            panic!("simulated RandomX hash failure");
+        });
+        // Join swallows the panic; the guard's Drop has already run during unwind.
+        let _ = handle.join();
+
+        assert!(
+            !health.is_active(),
+            "panic-exit of the last worker must still flip active false (#566)"
+        );
     }
 
     /// Documents and locks the genesis difficulty calibration (#444).
