@@ -5,10 +5,23 @@ name: Workspace Build
 # feature-unification break that only manifests on Linux (#361). This job
 # exists to give that bug — and any future Linux-only feature-unification
 # regression — a red/green signal so it can be fixed and stay fixed.
+#
+# It ALSO compile-checks every test target in the workspace (see the
+# `cargo test --workspace --no-run` step). `cargo build --workspace` does NOT
+# compile `[[test]]` / integration targets, so before this an integration test
+# under `botho/tests/` could silently stop compiling and CI stayed green — that
+# is exactly what happened to `network_integration` when the
+# `create_sync_behaviour` signature changed in #551 (fixed in #563). The
+# compile-check below makes that class of signature drift fail CI (#562).
+#
+# Trigger note: `**.rs` is included so a pure source change (no Cargo.toml/lock
+# edit, like #551) still exercises the compile-check. Without it this workflow
+# would not even run for the change that originally rotted the target.
 
 on:
   pull_request:
     paths:
+      - '**.rs'
       - '**/Cargo.toml'
       - '**/Cargo.lock'
       - 'crypto/**'
@@ -54,3 +67,14 @@ jobs:
 
       - name: Build workspace
         run: cargo build --workspace
+
+      # Compile (but do NOT run) every test target in the workspace, including
+      # the integration tests under `botho/tests/` (network_integration,
+      # byzantine_integration, etc.). `cargo build --workspace` above skips
+      # `[[test]]` targets, so this is what actually catches integration-test
+      # signature drift. `--no-run` is deliberate: the integration/e2e suites
+      # are slow and some are network-flaky (they run on demand via
+      # e2e-tests.yml), so we gate on COMPILE here, not execution, to keep this
+      # required check fast and deterministic while still failing on rot (#562).
+      - name: Compile-check all test targets (no run)
+        run: cargo test --workspace --no-run
