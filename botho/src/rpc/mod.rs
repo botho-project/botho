@@ -2025,15 +2025,22 @@ async fn handle_network_info(id: Value, state: &RpcState) -> JsonRpcResponse {
     // network loop) we fall back to the previous placeholder behavior:
     // `inboundCount: 0` and `outboundCount: peerCount`, so the endpoint shape is
     // unchanged for those callers.
-    let (inbound, outbound, bytes_sent, bytes_received) = match state.network_stats.as_ref() {
-        Some(stats) => (
-            stats.inbound_count(),
-            stats.outbound_count(),
-            stats.bytes_sent(),
-            stats.bytes_received(),
-        ),
-        None => (0, peers as u64, 0, 0),
-    };
+    // `bytesSent` / `bytesReceived` are application-layer payload totals (#542);
+    // `wireBytesSent` / `wireBytesReceived` are raw bytes-on-wire including
+    // Noise/yamux framing, fed by the counting transport wrapper (#550). The
+    // wire totals are always >= the payload totals once any traffic flows.
+    let (inbound, outbound, bytes_sent, bytes_received, wire_sent, wire_received) =
+        match state.network_stats.as_ref() {
+            Some(stats) => (
+                stats.inbound_count(),
+                stats.outbound_count(),
+                stats.bytes_sent(),
+                stats.bytes_received(),
+                stats.wire_bytes_sent(),
+                stats.wire_bytes_received(),
+            ),
+            None => (0, peers as u64, 0, 0, 0, 0),
+        };
 
     JsonRpcResponse::success(
         id,
@@ -2043,6 +2050,8 @@ async fn handle_network_info(id: Value, state: &RpcState) -> JsonRpcResponse {
             "outboundCount": outbound,
             "bytesSent": bytes_sent,
             "bytesReceived": bytes_received,
+            "wireBytesSent": wire_sent,
+            "wireBytesReceived": wire_received,
             "uptimeSeconds": state.start_time.elapsed().as_secs(),
         }),
     )
@@ -4205,12 +4214,19 @@ mod tests {
         );
         assert_eq!(result["bytesSent"], json!(0));
         assert_eq!(result["bytesReceived"], json!(0));
+        // #550: wire counters also default to zero with no handle.
+        assert_eq!(result["wireBytesSent"], json!(0));
+        assert_eq!(result["wireBytesReceived"], json!(0));
 
         // (2) Stats handle wired in: real values surfaced. Simulate the network
         // event loop having recorded traffic + connections.
         let stats = Arc::new(NetworkStats::new());
         stats.record_sent(4096);
         stats.record_received(8192);
+        // #550: simulate the counting transport recording raw wire bytes
+        // (always >= payload once framing overhead is included).
+        stats.record_wire_sent(5000);
+        stats.record_wire_received(9000);
         // Two inbound, one outbound (record_connection_opened: inbound flag).
         stats.record_connection_opened(true);
         stats.record_connection_opened(true);
@@ -4224,6 +4240,12 @@ mod tests {
         assert_eq!(result["outboundCount"], json!(1), "real outbound count");
         assert_eq!(result["bytesSent"], json!(4096));
         assert_eq!(result["bytesReceived"], json!(8192));
+        assert_eq!(result["wireBytesSent"], json!(5000), "real wire bytes sent");
+        assert_eq!(
+            result["wireBytesReceived"],
+            json!(9000),
+            "real wire bytes received"
+        );
 
         // (3) Genuine zero: handle present but nothing sent / no inbound.
         let empty_stats = Arc::new(NetworkStats::new());
@@ -4231,6 +4253,8 @@ mod tests {
         let result = handle_network_info(json!(1), &state).await.result.unwrap();
         assert_eq!(result["bytesSent"], json!(0));
         assert_eq!(result["bytesReceived"], json!(0));
+        assert_eq!(result["wireBytesSent"], json!(0));
+        assert_eq!(result["wireBytesReceived"], json!(0));
         assert_eq!(result["inboundCount"], json!(0));
         assert_eq!(result["outboundCount"], json!(0));
     }

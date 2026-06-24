@@ -20,6 +20,7 @@ mod reputation;
 mod seeds;
 mod sync;
 pub mod transport;
+mod wire_counter;
 
 pub use compact_block::{
     BlockTxn, CompactBlock, GetBlockTxn, PrefilledTx, ReconstructionResult, ShortId,

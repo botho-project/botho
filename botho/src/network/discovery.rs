@@ -18,6 +18,7 @@
 //!   and seed nodes to broadcast upcoming network upgrades.
 
 use libp2p::{
+    core::Transport as _,
     gossipsub::{self, IdentTopic, MessageAuthenticity},
     identify, identity, noise,
     request_response::{self, InboundRequestId, OutboundRequestId, ResponseChannel},
@@ -358,12 +359,26 @@ pub struct BothoBehaviour {
 ///   *inbound*. Counted on first establishment to a peer and decremented when
 ///   the last connection to that peer closes.
 ///
-/// ## Known gaps (intentional — see #542)
+/// ## Wire-level byte counters (#550)
 ///
-/// - Transport framing overhead (Noise handshake, yamux framing, TCP headers)
-///   is NOT counted; these are payload counters, not raw wire counters (#550,
-///   still open).
+/// In addition to the application-payload counters above, `NetworkStats` also
+/// exposes **raw wire-level** counters ([`wire_bytes_sent`] /
+/// [`wire_bytes_received`]). These are fed by a counting transport wrapper
+/// installed *below* the Noise and yamux upgrades (see
+/// [`wire_counter`](crate::network::wire_counter)), so they include **all**
+/// framing overhead: the Noise handshake, yamux stream framing, and every byte
+/// of multiplexed payload — i.e. true bytes-on-wire over TCP (the only
+/// remaining piece not measured is the kernel-level TCP/IP header itself, which
+/// is invisible to a user-space byte stream).
 ///
+/// The application-payload counters remain the right tool for "is useful
+/// traffic flowing"; the wire counters answer "how much bandwidth did this node
+/// actually consume" (e.g. for bandwidth-billing a managed rig). Both are
+/// surfaced by `network_getInfo` — payload as `bytesSent` / `bytesReceived` and
+/// wire as `wireBytesSent` / `wireBytesReceived`.
+///
+/// [`wire_bytes_sent`]: NetworkStats::wire_bytes_sent
+/// [`wire_bytes_received`]: NetworkStats::wire_bytes_received
 /// [`SyncCodec`]: crate::network::sync::SyncCodec
 #[derive(Debug, Default)]
 pub struct NetworkStats {
@@ -371,6 +386,8 @@ pub struct NetworkStats {
     bytes_received: AtomicU64,
     inbound_count: AtomicU64,
     outbound_count: AtomicU64,
+    wire_bytes_sent: AtomicU64,
+    wire_bytes_received: AtomicU64,
 }
 
 impl NetworkStats {
@@ -440,6 +457,33 @@ impl NetworkStats {
     /// Current number of outbound (locally-dialed) connections.
     pub fn outbound_count(&self) -> u64 {
         self.outbound_count.load(Ordering::Relaxed)
+    }
+
+    /// Record `n` raw bytes written to the transport (#550).
+    ///
+    /// Called from the counting transport wrapper that sits below the Noise and
+    /// yamux upgrades, so `n` includes all framing overhead (Noise handshake,
+    /// yamux framing, multiplexed payload).
+    pub fn record_wire_sent(&self, n: u64) {
+        self.wire_bytes_sent.fetch_add(n, Ordering::Relaxed);
+    }
+
+    /// Record `n` raw bytes read from the transport (#550). Includes all
+    /// framing overhead — see [`record_wire_sent`](Self::record_wire_sent).
+    pub fn record_wire_received(&self, n: u64) {
+        self.wire_bytes_received.fetch_add(n, Ordering::Relaxed);
+    }
+
+    /// Total raw wire bytes sent since startup, including Noise/yamux framing
+    /// (#550). Zero if the counting transport wrapper is not installed.
+    pub fn wire_bytes_sent(&self) -> u64 {
+        self.wire_bytes_sent.load(Ordering::Relaxed)
+    }
+
+    /// Total raw wire bytes received since startup, including Noise/yamux
+    /// framing (#550). Zero if the counting transport wrapper is not installed.
+    pub fn wire_bytes_received(&self) -> u64 {
+        self.wire_bytes_received.load(Ordering::Relaxed)
     }
 }
 
@@ -673,13 +717,30 @@ impl NetworkDiscovery {
         // closure can hand them to the sync codec without borrowing `self`
         // (#549).
         let stats = Arc::clone(&self.stats);
+        // Build the TCP transport manually (rather than via `with_tcp`) so we
+        // can install a raw byte-counting wrapper *below* the Noise and yamux
+        // upgrades (#550). Counting at the base TCP stream means the
+        // `wireBytesSent` / `wireBytesReceived` totals include all framing
+        // overhead (Noise handshake, yamux frames) — true bytes-on-wire — which
+        // the application-payload counters from #542 deliberately omit. The
+        // upgrade chain below mirrors exactly what `with_tcp` builds internally
+        // (V1Lazy upgrade → Noise authentication → yamux multiplexing).
+        let wire_stats = Arc::clone(&self.stats);
         let mut swarm = libp2p::SwarmBuilder::with_existing_identity(self.keypair.clone())
             .with_tokio()
-            .with_tcp(
-                tcp::Config::default(),
-                noise::Config::new,
-                yamux::Config::default,
-            )?
+            .with_other_transport(move |key| {
+                let base = tcp::tokio::Transport::new(tcp::Config::default());
+                let counted =
+                    super::wire_counter::with_wire_counting(base, Arc::clone(&wire_stats));
+                let noise = noise::Config::new(key)
+                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+                Ok::<_, Box<dyn std::error::Error + Send + Sync>>(
+                    counted
+                        .upgrade(libp2p::core::upgrade::Version::V1Lazy)
+                        .authenticate(noise)
+                        .multiplex(yamux::Config::default()),
+                )
+            })?
             .with_behaviour(|key| {
                 // Configure gossipsub with message size limits
                 // Use MAX_BLOCK_SIZE as the limit since blocks are the largest messages
