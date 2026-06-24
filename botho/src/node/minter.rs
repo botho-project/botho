@@ -409,11 +409,11 @@ pub struct Minter {
     /// Shared health handle for stall detection / RPC reporting (#538).
     health: MinterHealth,
     /// Count of mint worker threads still alive. Seeded to `threads` in
-    /// [`Minter::start`] and decremented by each worker's [`WorkerExitGuard`] on
-    /// exit (by ANY path, including a panic). When it reaches zero — i.e. every
-    /// worker has died — the guard flips the health `active` flag false so a node
-    /// with a dead mining thread can never report `active:true` (#566, the
-    /// truthfulness fix for the #539 silent halt).
+    /// [`Minter::start`] and decremented by each worker's [`WorkerExitGuard`]
+    /// on exit (by ANY path, including a panic). When it reaches zero —
+    /// i.e. every worker has died — the guard flips the health `active`
+    /// flag false so a node with a dead mining thread can never report
+    /// `active:true` (#566, the truthfulness fix for the #539 silent halt).
     live_workers: Arc<AtomicUsize>,
 }
 
@@ -421,10 +421,10 @@ pub struct Minter {
 /// the miner's health `active` flag false once the LAST worker is gone.
 ///
 /// Because this runs in `Drop`, it fires on **every** termination path of a
-/// worker — normal return, an early `break` (poisoned work lock, closed channel,
-/// unbuildable hasher), or a panic (Drop runs while the thread unwinds). That is
-/// the property the #539 post-mortem needed: previously a dead mint thread left
-/// `active:true` with 0 H/s for ~50h. See #566.
+/// worker — normal return, an early `break` (poisoned work lock, closed
+/// channel, unbuildable hasher), or a panic (Drop runs while the thread
+/// unwinds). That is the property the #539 post-mortem needed: previously a
+/// dead mint thread left `active:true` with 0 H/s for ~50h. See #566.
 struct WorkerExitGuard {
     live_workers: Arc<AtomicUsize>,
     health: MinterHealth,
@@ -789,11 +789,12 @@ fn mint_loop(
     }
 }
 
-/// Build the RandomX mining hasher for `seed_key`, resiliently (#566, parts B+C).
+/// Build the RandomX mining hasher for `seed_key`, resiliently (#566, parts
+/// B+C).
 ///
 /// Strategy:
-/// 1. Try to build the fast-mode hasher (~2 GB dataset). On failure, retry up to
-///    [`FAST_BUILD_ATTEMPTS`] times with exponential backoff
+/// 1. Try to build the fast-mode hasher (~2 GB dataset). On failure, retry up
+///    to [`FAST_BUILD_ATTEMPTS`] times with exponential backoff
 ///    ([`FAST_BUILD_BACKOFF_BASE_MS`]) — a single transient allocation failure
 ///    must not permanently wedge the miner, but we must not busy-loop either.
 /// 2. If fast mode is still unavailable, fall back to a **light-mode** hasher
@@ -801,9 +802,10 @@ fn mint_loop(
 ///    produce identical PoW output, so this is consensus-safe.
 ///
 /// Returns `None` only when neither mode can be built, or when `shutdown` is
-/// requested mid-build (so a stopping minter exits promptly rather than sleeping
-/// out its full backoff). A `None` return causes the worker to exit, which —
-/// via the exit guard — flips the health `active` flag false (#566, part A).
+/// requested mid-build (so a stopping minter exits promptly rather than
+/// sleeping out its full backoff). A `None` return causes the worker to exit,
+/// which — via the exit guard — flips the health `active` flag false (#566,
+/// part A).
 fn build_mining_hasher(
     thread_id: usize,
     seed_key: [u8; 32],
@@ -1009,9 +1011,9 @@ mod tests {
     // ----- Truthful `active` flag on worker death (#566) -----
 
     /// The exit guard must flip the health `active` flag false only once the
-    /// LAST worker exits — not while any worker is still alive. This is the core
-    /// truthfulness mechanism that prevents a node with a dead mining thread from
-    /// reporting `active:true` (the #539 silent halt).
+    /// LAST worker exits — not while any worker is still alive. This is the
+    /// core truthfulness mechanism that prevents a node with a dead mining
+    /// thread from reporting `active:true` (the #539 silent halt).
     #[test]
     fn test_active_flips_false_when_last_worker_exits() {
         let health = MinterHealth::new(Arc::new(AtomicU64::new(0)), Instant::now());
@@ -1044,9 +1046,10 @@ mod tests {
         );
     }
 
-    /// A worker that exits via a PANIC must still flip `active` false — the exit
-    /// guard's `Drop` runs while the thread unwinds. This is the
-    /// `.expect(\"RandomX ... hash failed\")` death path called out in #566/#539.
+    /// A worker that exits via a PANIC must still flip `active` false — the
+    /// exit guard's `Drop` runs while the thread unwinds. This is the
+    /// `.expect(\"RandomX ... hash failed\")` death path called out in
+    /// #566/#539.
     #[test]
     fn test_active_flips_false_on_worker_panic() {
         let health = MinterHealth::new(Arc::new(AtomicU64::new(0)), Instant::now());
