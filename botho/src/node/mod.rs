@@ -169,13 +169,22 @@ impl Node {
             anyhow::anyhow!("Cannot mine without a wallet. Run 'botho init' to create one.")
         })?;
 
+        // `minting.threads == 0` means auto-detect. Route through
+        // `default_mint_threads` so the default is RAM-aware: with one shared
+        // RandomX dataset (#568) all threads share ONE ~2 GB dataset (not the
+        // `N × 2 GB` that OOM-halted the live testnet, #539), and the count is
+        // clamped to avoid oversubscribing a many-core box.
         let threads = if self.config.minting.threads == 0 {
-            num_cpus::get()
+            minter::default_mint_threads(num_cpus::get())
         } else {
             self.config.minting.threads as usize
         };
 
-        info!("Starting minting with {} threads", threads);
+        info!(
+            "Starting minting with {} threads (one shared ~2 GB RandomX dataset \
+             across all threads, #568)",
+            threads
+        );
 
         // Each minter owns its own shutdown flag (see `Minter::new`). We must
         // NOT pass the node-wide `self.shutdown` here: `Minter::stop` sets the
