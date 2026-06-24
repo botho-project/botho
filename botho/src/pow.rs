@@ -160,10 +160,10 @@ pub fn fast_flags() -> RandomXFlag {
 
 /// A **shared** fast-mode RandomX dataset (~2 GB) bound to a single seed epoch.
 ///
-/// `randomx-rs`'s [`RandomXDataset`] is internally `Arc`-backed and is only ever
-/// *read* during hashing, so a SINGLE dataset can back many per-thread VMs at
-/// once — exactly the way Monero's miner shares one dataset across all of its
-/// mining threads. Build the dataset **once per seed epoch** and hand each
+/// `randomx-rs`'s [`RandomXDataset`] is internally `Arc`-backed and is only
+/// ever *read* during hashing, so a SINGLE dataset can back many per-thread VMs
+/// at once — exactly the way Monero's miner shares one dataset across all of
+/// its mining threads. Build the dataset **once per seed epoch** and hand each
 /// mining thread a cheap VM over it via [`FastDataset::hasher`]; the total cost
 /// is then ~2 GB (the one dataset) + a small (~2 MB) scratchpad per VM, **not**
 /// `N × 2 GB`.
@@ -174,9 +174,9 @@ pub fn fast_flags() -> RandomXFlag {
 /// OOM-halted at height 213 (see #539/#568). Sharing one dataset removes that
 /// per-thread multiplier.
 ///
-/// Cloning a `FastDataset` is a cheap atomic `Arc` refcount bump that shares the
-/// same underlying ~2 GB buffer; the clone is consumed by [`RandomXVM`] and kept
-/// alive for the VM's lifetime.
+/// Cloning a `FastDataset` is a cheap atomic `Arc` refcount bump that shares
+/// the same underlying ~2 GB buffer; the clone is consumed by [`RandomXVM`] and
+/// kept alive for the VM's lifetime.
 #[derive(Clone)]
 pub struct FastDataset {
     seed_key: [u8; 32],
@@ -199,10 +199,10 @@ unsafe impl Send for FastDataset {}
 impl FastDataset {
     /// Build the shared ~2 GB fast-mode dataset for `seed_key`.
     ///
-    /// Seconds-expensive (allocates and fills the full dataset). Do this **once**
-    /// per seed epoch, then derive every mining thread's VM from it with
-    /// [`FastDataset::hasher`] — never once per thread (that is the `N × 2 GB`
-    /// halt this type exists to prevent, #568).
+    /// Seconds-expensive (allocates and fills the full dataset). Do this
+    /// **once** per seed epoch, then derive every mining thread's VM from
+    /// it with [`FastDataset::hasher`] — never once per thread (that is the
+    /// `N × 2 GB` halt this type exists to prevent, #568).
     pub fn new(seed_key: [u8; 32]) -> Result<Self, randomx_rs::RandomXError> {
         let flags = fast_flags();
         let cache = RandomXCache::new(flags, &seed_key)?;
@@ -215,13 +215,15 @@ impl FastDataset {
         self.seed_key
     }
 
-    /// Build a fast-mode [`FastHasher`] (VM) that reads **this** shared dataset.
+    /// Build a fast-mode [`FastHasher`] (VM) that reads **this** shared
+    /// dataset.
     ///
     /// Cheap: it allocates only the VM's small scratchpad, not another ~2 GB
-    /// dataset. The returned hasher holds a cheap `Arc` clone of the dataset, so
-    /// the dataset stays alive for as long as any VM derived from it. Output is
-    /// byte-identical to a standalone [`FastHasher::new`] for the same
-    /// `(seed_key, preimage)` — sharing changes *memory*, never the hash.
+    /// dataset. The returned hasher holds a cheap `Arc` clone of the dataset,
+    /// so the dataset stays alive for as long as any VM derived from it.
+    /// Output is byte-identical to a standalone [`FastHasher::new`] for the
+    /// same `(seed_key, preimage)` — sharing changes *memory*, never the
+    /// hash.
     pub fn hasher(&self) -> Result<FastHasher, randomx_rs::RandomXError> {
         let flags = fast_flags();
         let vm = RandomXVM::new(flags, None, Some(self.dataset.clone()))?;
@@ -245,8 +247,8 @@ pub struct FastHasher {
 }
 
 impl FastHasher {
-    /// Build a standalone fast-mode hasher for `seed_key`, allocating its **own**
-    /// ~2 GB dataset.
+    /// Build a standalone fast-mode hasher for `seed_key`, allocating its
+    /// **own** ~2 GB dataset.
     ///
     /// When several threads mine the same epoch, build one [`FastDataset`] and
     /// call [`FastDataset::hasher`] per thread instead, so they share a single
@@ -553,12 +555,12 @@ mod tests {
     /// produces — otherwise sharing the dataset (the fix for the `N × 2 GB`
     /// halt) would silently fork the chain.
     ///
-    /// This is what makes the memory optimization consensus-safe: hashing over a
-    /// shared dataset is the same computation as hashing over a private one. To
-    /// avoid allocating several ~2 GB datasets, the test builds **one** dataset
-    /// and derives every VM (and the standalone comparison) from it; the
-    /// canonical light-mode verifier (`verify_pow_hash`) is the independent
-    /// ground truth that pins the expected output.
+    /// This is what makes the memory optimization consensus-safe: hashing over
+    /// a shared dataset is the same computation as hashing over a private
+    /// one. To avoid allocating several ~2 GB datasets, the test builds
+    /// **one** dataset and derives every VM (and the standalone comparison)
+    /// from it; the canonical light-mode verifier (`verify_pow_hash`) is
+    /// the independent ground truth that pins the expected output.
     #[test]
     fn test_shared_dataset_matches_standalone() {
         let seed = seed_key_for_height(0);

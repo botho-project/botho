@@ -445,11 +445,12 @@ pub struct Minter {
     /// The ONE fast-mode RandomX dataset (~2 GB) shared by every mining thread,
     /// bound to the current seed epoch. Built once (by whichever worker first
     /// reaches a new epoch) and reused by all threads via cheap per-VM clones,
-    /// so the miner needs ~2 GB total + a small per-VM scratchpad instead of the
-    /// `N × 2 GB` that OOM-halted the live testnet (#539/#568). Rebuilt only when
-    /// the seed key rotates (every [`pow::SEED_ROTATION_INTERVAL`] blocks). The
-    /// `Mutex` serializes the expensive build so two threads never race to
-    /// allocate two datasets for the same epoch.
+    /// so the miner needs ~2 GB total + a small per-VM scratchpad instead of
+    /// the `N × 2 GB` that OOM-halted the live testnet (#539/#568). Rebuilt
+    /// only when the seed key rotates (every
+    /// [`pow::SEED_ROTATION_INTERVAL`] blocks). The `Mutex` serializes the
+    /// expensive build so two threads never race to allocate two datasets
+    /// for the same epoch.
     fast_dataset: Arc<Mutex<Option<FastDataset>>>,
 }
 
@@ -846,7 +847,8 @@ fn mint_loop(
 /// same dataset (a small per-VM scratchpad). This is what turns the miner's
 /// memory footprint from `N × 2 GB` into ~2 GB + small per-VM scratchpads — the
 /// fix for the live-testnet OOM halt (#539). The previous epoch's dataset is
-/// dropped before the new one is allocated so the cell never holds two datasets.
+/// dropped before the new one is allocated so the cell never holds two
+/// datasets.
 fn obtain_shared_fast_hasher(
     fast_dataset: &Mutex<Option<FastDataset>>,
     seed_key: [u8; 32],
@@ -1162,9 +1164,9 @@ mod tests {
     }
 
     /// The RAM-aware auto thread default (#568): clamps the detected CPU count
-    /// to `[1, MAX_AUTO_MINT_THREADS]`. With one shared dataset this is no longer
-    /// a RAM lever (it was `N × 2 GB` before), so the clamp is purely an
-    /// oversubscription guard.
+    /// to `[1, MAX_AUTO_MINT_THREADS]`. With one shared dataset this is no
+    /// longer a RAM lever (it was `N × 2 GB` before), so the clamp is
+    /// purely an oversubscription guard.
     #[test]
     fn test_default_mint_threads_clamps() {
         // At least one thread even if detection reports an absurd 0.
@@ -1174,7 +1176,10 @@ mod tests {
         assert_eq!(default_mint_threads(2), 2);
         assert_eq!(default_mint_threads(8), 8);
         // The cap value itself passes through.
-        assert_eq!(default_mint_threads(MAX_AUTO_MINT_THREADS), MAX_AUTO_MINT_THREADS);
+        assert_eq!(
+            default_mint_threads(MAX_AUTO_MINT_THREADS),
+            MAX_AUTO_MINT_THREADS
+        );
         // Many-core boxes are clamped to the oversubscription cap.
         assert_eq!(default_mint_threads(128), MAX_AUTO_MINT_THREADS);
         assert_eq!(
