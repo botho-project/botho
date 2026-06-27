@@ -188,25 +188,72 @@ impl FeeConfig {
     ///
     /// Returns the multiplier in OUTPUT_PENALTY_SCALE (1000 = 1x).
     ///
+    /// # Determinism (consensus path)
+    /// This is the per-tx minimum-fee path, so it must be **bit-reproducible**
+    /// across platforms/compilers — floating point (`f64::powf`) is not, so it
+    /// is forbidden here. The computation is integer-only.
+    ///
+    /// # Exponent policy
+    /// The consensus fee exponent MUST be an integer (i.e.
+    /// `output_fee_exponent_scaled` MUST be a multiple of
+    /// `OUTPUT_FEE_EXPONENT_SCALE`). A fractional exponent has no current
+    /// consumer and cannot be reproduced bit-identically across platforms, so
+    /// any fractional part is **clamped down** to the nearest integer exponent
+    /// here (integer division of `output_fee_exponent_scaled`). Callers should
+    /// validate configs with [`FeeConfig::validate`] before use; the clamp is a
+    /// defense-in-depth fallback, not a supported configuration mode.
+    ///
+    /// For integer exponents this is **bit-identical** to the previous
+    /// `f64::powf` implementation across the entire in-domain
+    /// `[0, output_count_cap]` (the product is exact, so the old truncating
+    /// `(x * 1000.0) as u64` was already a no-op rounding step).
+    ///
     /// # Examples
     /// With default config (exponent=2.0, cap=10):
+    /// - 0 outputs: 0^2 = 0x (0)
     /// - 1 output: 1^2 = 1x (1000)
     /// - 2 outputs: 2^2 = 4x (4000)
     /// - 5 outputs: 5^2 = 25x (25000)
     /// - 10 outputs: 10^2 = 100x (100000)
     /// - 20 outputs: 10^2 = 100x (capped at 100000)
     pub fn output_penalty(&self, output_count: usize) -> u64 {
-        // Apply cap
-        let effective_count = std::cmp::min(output_count as u32, self.output_count_cap) as f64;
+        // Apply cap. u128 staging keeps `count^exp` from overflowing before the
+        // final saturating narrow to u64.
+        let effective_count = std::cmp::min(output_count as u32, self.output_count_cap) as u128;
 
-        // Compute exponent: exponent_scaled / 1000
-        let exponent = self.output_fee_exponent_scaled as f64 / OUTPUT_FEE_EXPONENT_SCALE as f64;
+        // Integer exponent only (see "Exponent policy" above): floor the
+        // fixed-point exponent to a whole number via integer division.
+        let exponent = self.output_fee_exponent_scaled / OUTPUT_FEE_EXPONENT_SCALE;
 
-        // Compute penalty: count^exponent
-        let penalty = effective_count.powf(exponent);
+        // penalty = count^exponent, returned in OUTPUT_FEE_EXPONENT_SCALE
+        // fixed-point. `checked_pow` saturates an overflowing power to u128::MAX
+        // (then narrowed below) instead of panicking on adversarial configs.
+        let penalty = effective_count
+            .checked_pow(exponent)
+            .unwrap_or(u128::MAX)
+            .saturating_mul(OUTPUT_FEE_EXPONENT_SCALE as u128);
 
-        // Return as fixed-point scaled by 1000
-        (penalty * OUTPUT_FEE_EXPONENT_SCALE as f64) as u64
+        penalty.min(u64::MAX as u128) as u64
+    }
+
+    /// Validate that this fee config is usable on the consensus fee path.
+    ///
+    /// The only consensus-relevant constraint today is the integer-exponent
+    /// policy documented on [`FeeConfig::output_penalty`]: a fractional
+    /// `output_fee_exponent_scaled` cannot be reproduced bit-identically across
+    /// platforms and has no current consumer. Returns `Err` describing the
+    /// offending field rather than silently clamping, so config loaders can
+    /// reject it up front.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.output_fee_exponent_scaled % OUTPUT_FEE_EXPONENT_SCALE != 0 {
+            return Err(format!(
+                "output_fee_exponent_scaled ({}) must be a multiple of \
+                 OUTPUT_FEE_EXPONENT_SCALE ({}); fractional fee exponents are \
+                 not bit-reproducible and not allowed on the consensus fee path",
+                self.output_fee_exponent_scaled, OUTPUT_FEE_EXPONENT_SCALE
+            ));
+        }
+        Ok(())
     }
 
     /// Compute the fee for a transaction based on size, cluster wealth, and
@@ -1024,6 +1071,79 @@ mod tests {
         assert_eq!(config.output_penalty(2), 2000);
         assert_eq!(config.output_penalty(5), 5000);
         assert_eq!(config.output_penalty(10), 10000);
+    }
+
+    /// Value-preservation guard for the integer rewrite of `output_penalty`
+    /// (issue #570). Asserts the EXACT table the previous `f64::powf`
+    /// implementation produced for the default config across the full
+    /// `[0, cap]` domain (and the cap clamp above it). If any of these change,
+    /// the rewrite is no longer bit-identical and must NOT land independently
+    /// of a consensus reset.
+    #[test]
+    fn test_output_penalty_default_table_value_preserving() {
+        let config = FeeConfig::default(); // exponent 2.0, cap 10
+
+        // count^2 * 1000, exactly as the old `(count.powf(2.0) * 1000.0) as u64`.
+        let expected: &[(usize, u64)] = &[
+            (0, 0),        // 0^2 = 0
+            (1, 1_000),    // 1^2
+            (2, 4_000),    // 2^2
+            (3, 9_000),    // 3^2
+            (4, 16_000),   // 4^2
+            (5, 25_000),   // 5^2
+            (6, 36_000),   // 6^2
+            (7, 49_000),   // 7^2
+            (8, 64_000),   // 8^2
+            (9, 81_000),   // 9^2
+            (10, 100_000), // 10^2 (cap)
+            (11, 100_000), // clamped to cap^2
+            (20, 100_000), // clamped to cap^2
+            (1_000, 100_000),
+        ];
+
+        for &(count, want) in expected {
+            assert_eq!(
+                config.output_penalty(count),
+                want,
+                "output_penalty({count}) regressed from value-preserving table"
+            );
+        }
+    }
+
+    /// `output_penalty` must be integer-only and must never panic, even for
+    /// adversarial configs (huge exponent / huge cap) — it saturates instead.
+    #[test]
+    fn test_output_penalty_saturates_without_panic() {
+        let config = FeeConfig {
+            output_fee_exponent_scaled: 64_000, // exponent 64
+            output_count_cap: 1_000_000,
+            ..FeeConfig::default()
+        };
+        // 1_000_000^64 vastly exceeds u64; must saturate, not panic/overflow.
+        assert_eq!(config.output_penalty(1_000_000), u64::MAX);
+        // Small inputs still compute exactly: 1^64 * 1000 = 1000.
+        assert_eq!(config.output_penalty(1), 1_000);
+    }
+
+    /// Exponent policy: integer exponents validate; fractional ones are
+    /// rejected by `validate()` and clamped down (floored) by `output_penalty`.
+    #[test]
+    fn test_exponent_policy_validate_and_clamp() {
+        // Integer exponents pass validation.
+        assert!(FeeConfig::default().validate().is_ok());
+        assert!(FeeConfig::with_linear_output_fees().validate().is_ok());
+
+        // A fractional exponent (2.5 -> 2500) is not a multiple of 1000.
+        let fractional = FeeConfig {
+            output_fee_exponent_scaled: 2_500,
+            ..FeeConfig::default()
+        };
+        assert!(fractional.validate().is_err());
+
+        // output_penalty clamps the fractional exponent DOWN to 2.0, so it
+        // behaves as the floored integer exponent (defense-in-depth).
+        assert_eq!(fractional.output_penalty(3), 9_000); // 3^2 * 1000, not
+                                                         // 3^2.5
     }
 
     #[test]
