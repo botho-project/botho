@@ -219,8 +219,7 @@ impl FeeConfig {
     pub fn output_penalty(&self, output_count: usize) -> u64 {
         // Apply cap. u128 staging keeps `count^exp` from overflowing before the
         // final saturating narrow to u64.
-        let effective_count =
-            std::cmp::min(output_count as u32, self.output_count_cap) as u128;
+        let effective_count = std::cmp::min(output_count as u32, self.output_count_cap) as u128;
 
         // Integer exponent only (see "Exponent policy" above): floor the
         // fixed-point exponent to a whole number via integer division.
@@ -1143,7 +1142,8 @@ mod tests {
 
         // output_penalty clamps the fractional exponent DOWN to 2.0, so it
         // behaves as the floored integer exponent (defense-in-depth).
-        assert_eq!(fractional.output_penalty(3), 9_000); // 3^2 * 1000, not 3^2.5
+        assert_eq!(fractional.output_penalty(3), 9_000); // 3^2 * 1000, not
+                                                         // 3^2.5
     }
 
     #[test]
