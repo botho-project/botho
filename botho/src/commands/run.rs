@@ -2119,9 +2119,11 @@ fn apply_lottery_to_block(
                     return burn_fee_share(block);
                 }
             };
-            match ledger
-                .get_lottery_validation_candidates(block.height(), &lottery_config.draw_config)
-            {
+            match ledger.get_lottery_validation_candidates(
+                block.height(),
+                &block.header.prev_block_hash,
+                &lottery_config.draw_config,
+            ) {
                 Ok(c) => (pool, c),
                 Err(e) => {
                     warn!("Failed to get lottery candidates: {}", e);

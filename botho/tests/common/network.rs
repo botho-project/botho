@@ -671,8 +671,11 @@ fn apply_lottery_to_block(block: Block, ledger: &Arc<RwLock<Ledger>>) -> Block {
                 Ok(p) => p,
                 Err(_) => return burn_fee_share(block),
             };
-            match led.get_lottery_validation_candidates(block.height(), &lottery_config.draw_config)
-            {
+            match led.get_lottery_validation_candidates(
+                block.height(),
+                &block.header.prev_block_hash,
+                &lottery_config.draw_config,
+            ) {
                 Ok(c) => (pool, c),
                 Err(_) => return burn_fee_share(block),
             }
