@@ -133,7 +133,11 @@ fn apply_lottery_to_block(block: Block, ledger: &Ledger) -> Block {
 
     let stored_pool = ledger.get_lottery_pool().unwrap_or(0);
     let candidates = ledger
-        .get_lottery_validation_candidates(block.height(), &lottery_config.draw_config)
+        .get_lottery_validation_candidates(
+            block.height(),
+            &block.header.prev_block_hash,
+            &lottery_config.draw_config,
+        )
         .unwrap_or_default();
 
     if total_fees == 0 && emission_share == 0 && stored_pool == 0 {

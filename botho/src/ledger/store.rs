@@ -682,11 +682,14 @@ impl Ledger {
             || stored_lottery_pool > 0
         {
             let lottery_config = LotteryFeeConfig::default();
-            let candidates = self
-                .get_lottery_validation_candidates(block.height(), &lottery_config.draw_config)?;
-
-            // prev_block_hash is used for verifiable randomness
+            // prev_block_hash is used for verifiable randomness — both for the
+            // candidate-window start offset and the draw itself.
             let prev_block_hash = &block.header.prev_block_hash;
+            let candidates = self.get_lottery_validation_candidates(
+                block.height(),
+                prev_block_hash,
+                &lottery_config.draw_config,
+            )?;
 
             match validate_block_lottery(
                 block,
@@ -2321,20 +2324,39 @@ impl Ledger {
     /// (Previously the proposer used a separate `get_lottery_candidates`
     /// with different age/value thresholds — a latent consensus bug.)
     ///
+    /// # Candidate windowing (anti-grind)
+    /// When more than `MAX_LOTTERY_CANDIDATES` UTXOs are eligible, the set is
+    /// not the lexicographically lowest 10k UTXO IDs (a fixed prefix that a
+    /// vanity-ground low `tx_hash` could permanently occupy). Instead, the
+    /// window starts at a deterministic, per-block seed-derived offset into the
+    /// UTXO-id keyspace and wraps around to the start. The offset is derived
+    /// from the same verifiable-randomness source the draw consumes
+    /// (`prev_block_hash` + height), so the proposer and every validator derive
+    /// an identical window, while the window rotates each block — grinding a
+    /// low hash position no longer guarantees membership.
+    ///
     /// # Arguments
     /// * `block_height` - The block height being validated (UTXOs must be
     ///   older)
+    /// * `prev_block_hash` - Previous block hash; the verifiable-randomness
+    ///   seed used (with height) to derive the candidate-window start offset.
+    ///   MUST be the same value the draw/verification uses, or proposer and
+    ///   validator diverge.
     /// * `config` - Lottery draw configuration with age/value thresholds
     ///
     /// # Returns
-    /// A vector of `LotteryCandidate` for all eligible UTXOs.
+    /// A vector of `LotteryCandidate` for all eligible UTXOs (capped at
+    /// `MAX_LOTTERY_CANDIDATES`). When at most that many are eligible, the
+    /// result is exactly the full eligible set (only the order differs from a
+    /// plain key-order scan; the draw re-seeds, so order is irrelevant).
     pub fn get_lottery_validation_candidates(
         &self,
         block_height: u64,
+        prev_block_hash: &[u8; 32],
         config: &LotteryDrawConfig,
     ) -> Result<Vec<LotteryCandidate>, LedgerError> {
         use bth_cluster_tax::ClusterFactorCurve;
-        use std::collections::HashMap;
+        use std::{collections::HashMap, ops::Bound};
 
         /// Deterministic cap on the lottery candidate set. Must be the same
         /// for proposers and validators (consensus-critical).
@@ -2350,17 +2372,39 @@ impl Ledger {
         let mut wealth_cache: HashMap<u64, u64> = HashMap::new();
         let factor_curve = ClusterFactorCurve::default_params();
 
-        let iter = self
+        // Seed-derived 36-byte start offset into the UTXO-id keyspace.
+        let offset_key = Self::lottery_candidate_offset_key(prev_block_hash, block_height);
+        let offset_slice: &[u8] = &offset_key;
+
+        // Wraparound rotation: walk `[offset, end)` then `[start, offset)`.
+        // The two half-open ranges partition the UTXO keyspace exactly once
+        // (disjoint, no overlap, no double-count), so chaining them visits
+        // every UTXO once, starting at the seed-derived offset and wrapping to
+        // the start — a deterministic, per-block-rotating window. The cap break
+        // stops collection once 10k eligible UTXOs are gathered; if the eligible
+        // set is <= 10k we never break and collect them all.
+        let upper = self
             .utxo_db
-            .iter(&rtxn)
+            .range(
+                &rtxn,
+                &(Bound::Included(offset_slice), Bound::<&[u8]>::Unbounded),
+            )
+            .map_err(|e| LedgerError::Database(format!("Failed to create iterator: {}", e)))?;
+        let lower = self
+            .utxo_db
+            .range(
+                &rtxn,
+                &(Bound::<&[u8]>::Unbounded, Bound::Excluded(offset_slice)),
+            )
             .map_err(|e| LedgerError::Database(format!("Failed to create iterator: {}", e)))?;
 
-        for result in iter {
-            // CONSENSUS-CRITICAL: the candidate set (including the cap and
-            // its iteration order) must be identical for the block proposer
-            // and every validator, because lottery verification re-runs the
-            // draw. LMDB iteration order is key order, which is a
-            // deterministic function of the UTXO set.
+        for result in upper.chain(lower) {
+            // CONSENSUS-CRITICAL: the candidate set (including the cap, the
+            // seed-derived start offset, and the wraparound order) must be
+            // identical for the block proposer and every validator, because
+            // lottery verification re-runs the draw. The offset is a pure
+            // function of (prev_block_hash, height); LMDB range iteration order
+            // is key order, a deterministic function of the UTXO set.
             if candidates.len() >= MAX_LOTTERY_CANDIDATES {
                 break;
             }
@@ -2428,6 +2472,42 @@ impl Ledger {
         );
 
         Ok(candidates)
+    }
+
+    /// Derive the deterministic 36-byte start offset into the UTXO-id keyspace
+    /// for lottery candidate selection.
+    ///
+    /// UTXO keys are `tx_hash || output_index` (32 + 4 = 36 bytes). The offset
+    /// rotates every block via the same verifiable-randomness source the draw
+    /// consumes (`prev_block_hash` + height), so the proposer and every
+    /// validator derive an identical window for the same block, while the
+    /// window moves block-to-block. Using SHA-256 (the codebase's
+    /// lottery-seed primitive, see `generate_seed` in `cluster-tax`) with
+    /// domain separation keeps this offset independent of the draw seed yet
+    /// equally deterministic.
+    fn lottery_candidate_offset_key(prev_block_hash: &[u8; 32], block_height: u64) -> [u8; 36] {
+        use sha2::{Digest, Sha256};
+
+        // First 32 bytes (tx_hash slot): domain-separated hash over the lottery
+        // randomness inputs.
+        let mut head_hasher = Sha256::new();
+        head_hasher.update(b"LOTTERY_CANDIDATE_OFFSET_V1");
+        head_hasher.update(prev_block_hash);
+        head_hasher.update(block_height.to_le_bytes());
+        let head: [u8; 32] = head_hasher.finalize().into();
+
+        // Remaining 4 bytes (output_index slot): a second domain-separated hash
+        // so the full 36-byte offset is uniformly distributed across the
+        // keyspace rather than always landing on a zero index suffix.
+        let mut tail_hasher = Sha256::new();
+        tail_hasher.update(b"LOTTERY_CANDIDATE_OFFSET_V1_TAIL");
+        tail_hasher.update(head);
+        let tail: [u8; 32] = tail_hasher.finalize().into();
+
+        let mut key = [0u8; 36];
+        key[..32].copy_from_slice(&head);
+        key[32..].copy_from_slice(&tail[..4]);
+        key
     }
 
     /// Convert ClusterTagVector (on-chain format) to TagVector (cluster-tax
@@ -3164,5 +3244,213 @@ mod tests {
         let fresh_dir = tempdir().unwrap();
         let fresh = Ledger::open(fresh_dir.path()).unwrap();
         assert_eq!(fresh.get_lottery_pool().unwrap(), 0u128);
+    }
+
+    // ----------------------------------------------------------------------
+    // Lottery candidate windowing (issue #572): seed-derived wraparound
+    // ----------------------------------------------------------------------
+
+    /// Mirror of the private `MAX_LOTTERY_CANDIDATES` cap inside
+    /// `get_lottery_validation_candidates`. Kept in sync by hand; the tests
+    /// below probe behavior at and beyond this boundary.
+    const TEST_LOTTERY_CAP: usize = 10_000;
+
+    /// Build a lottery-eligible UTXO with a uniformly-distributed key.
+    ///
+    /// Real `tx_hash` values are SHA-256 outputs spread across the whole
+    /// keyspace, so the seed-derived offset (also uniform) lands *among* them.
+    /// We mirror that here by hashing `index` into `tx_hash` — structured/low
+    /// keys clustered in one corner would make a uniform offset almost always
+    /// fall above every key, collapsing the window to a fixed start. Amount and
+    /// age clear the default draw thresholds, so every such UTXO is eligible.
+    fn eligible_test_utxo(index: u64) -> Utxo {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(b"BOTHO_TEST_UTXO_V1");
+        hasher.update(index.to_le_bytes());
+        let tx_hash: [u8; 32] = hasher.finalize().into();
+        Utxo {
+            id: UtxoId {
+                tx_hash,
+                output_index: 0,
+            },
+            output: TxOutput {
+                amount: 10_000_000, // >= default min_utxo_value (1_000_000)
+                target_key: [0u8; 32],
+                public_key: [0u8; 32],
+                e_memo: None,
+                cluster_tags: ClusterTagVector::empty(),
+            },
+            created_at: 0, // eligible at any height >= min_utxo_age
+        }
+    }
+
+    fn insert_test_utxos(ledger: &Ledger, utxos: &[Utxo]) {
+        let mut wtxn = ledger.env.write_txn().unwrap();
+        for u in utxos {
+            let bytes = bincode::serialize(u).unwrap();
+            ledger
+                .utxo_db
+                .put(&mut wtxn, &u.id.to_bytes(), &bytes)
+                .unwrap();
+        }
+        wtxn.commit().unwrap();
+    }
+
+    fn candidate_ids(c: &[LotteryCandidate]) -> Vec<[u8; 36]> {
+        c.iter().map(|x| x.id).collect()
+    }
+
+    /// Determinism + full-set-under-cap. Two independent calls with identical
+    /// `(height, prev_block_hash, UTXO set)` must yield an identical candidate
+    /// sequence (this is exactly the proposer-vs-validator agreement property,
+    /// since both paths call this one function). When the eligible set is at
+    /// most the cap, the result is the entire eligible set.
+    #[test]
+    fn lottery_candidates_deterministic_and_full_under_cap() {
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+        let config = LotteryDrawConfig::default();
+        let height = 1000u64;
+        let prev = [7u8; 32];
+
+        let utxos: Vec<Utxo> = (0..50).map(eligible_test_utxo).collect();
+        insert_test_utxos(&ledger, &utxos);
+
+        let a = ledger
+            .get_lottery_validation_candidates(height, &prev, &config)
+            .unwrap();
+        let b = ledger
+            .get_lottery_validation_candidates(height, &prev, &config)
+            .unwrap();
+
+        // Determinism: identical inputs → identical candidate sequence (order
+        // included), so the proposer and every validator agree.
+        assert_eq!(candidate_ids(&a), candidate_ids(&b));
+
+        // Under the cap, the candidate set is exactly the full eligible set.
+        let got: std::collections::BTreeSet<[u8; 36]> = a.iter().map(|c| c.id).collect();
+        let want: std::collections::BTreeSet<[u8; 36]> =
+            utxos.iter().map(|u| u.id.to_bytes()).collect();
+        assert_eq!(got, want);
+        assert_eq!(a.len(), 50);
+    }
+
+    /// Under the cap the *set* of candidates is independent of the seed (only
+    /// the rotation/order can differ). This confirms the seed offset never
+    /// silently drops eligible UTXOs when everyone fits.
+    #[test]
+    fn lottery_candidates_full_set_independent_of_seed_under_cap() {
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+        let config = LotteryDrawConfig::default();
+        let height = 1000u64;
+
+        let utxos: Vec<Utxo> = (0..50).map(eligible_test_utxo).collect();
+        insert_test_utxos(&ledger, &utxos);
+
+        let a = ledger
+            .get_lottery_validation_candidates(height, &[1u8; 32], &config)
+            .unwrap();
+        let b = ledger
+            .get_lottery_validation_candidates(height, &[2u8; 32], &config)
+            .unwrap();
+
+        let sa: std::collections::BTreeSet<[u8; 36]> = a.iter().map(|c| c.id).collect();
+        let sb: std::collections::BTreeSet<[u8; 36]> = b.iter().map(|c| c.id).collect();
+        assert_eq!(
+            sa, sb,
+            "candidate set must not depend on seed under the cap"
+        );
+        assert_eq!(sa.len(), 50);
+    }
+
+    /// Anti-grind + coverage with more than the cap eligible.
+    ///
+    /// With a surplus over the 10k cap, the seed-derived wraparound window
+    /// rotates each block. A vanity-ground lowest-`tx_hash` UTXO (the
+    /// guaranteed-seat exploit under the old fixed first-N prefix) must be
+    /// excluded for at least one seed, and every eligible UTXO must appear for
+    /// at least one seed (no permanent exclusion).
+    #[test]
+    fn lottery_candidate_window_degrinds_low_hash_and_covers_all() {
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+        let config = LotteryDrawConfig::default();
+        let height = 1000u64;
+
+        let surplus = 3_000usize;
+        let n = TEST_LOTTERY_CAP + surplus; // 13_000 eligible
+        let utxos: Vec<Utxo> = (0..n as u64).map(eligible_test_utxo).collect();
+        insert_test_utxos(&ledger, &utxos);
+
+        // The lexicographically lowest UTXO id in the set: the best-case
+        // grind target — exactly the "permanent seat" a vanity-ground low
+        // tx_hash bought under the old fixed first-N prefix.
+        let vanity = utxos
+            .iter()
+            .map(|u| u.id.to_bytes())
+            .min()
+            .expect("non-empty utxo set");
+
+        let seeds: u8 = 48;
+        let mut vanity_included = 0usize;
+        let mut vanity_excluded = 0usize;
+        let mut covered: std::collections::HashSet<[u8; 36]> = std::collections::HashSet::new();
+
+        for s in 0..seeds {
+            let prev = [s; 32];
+            let cands = ledger
+                .get_lottery_validation_candidates(height, &prev, &config)
+                .unwrap();
+
+            // The 10k cap is enforced when more are eligible.
+            assert_eq!(cands.len(), TEST_LOTTERY_CAP);
+
+            let ids: std::collections::HashSet<[u8; 36]> = cands.iter().map(|c| c.id).collect();
+            // No duplicates within a single window (the two wraparound segments
+            // are disjoint).
+            assert_eq!(ids.len(), cands.len());
+
+            if ids.contains(&vanity) {
+                vanity_included += 1;
+            } else {
+                vanity_excluded += 1;
+            }
+            covered.extend(ids);
+        }
+
+        // Anti-grind: the lowest-hash UTXO is NOT guaranteed a seat — excluded
+        // for at least one seed (old behavior: always included), yet it still
+        // participates for some seeds.
+        assert!(
+            vanity_excluded > 0,
+            "low-hash UTXO was a candidate for every seed (still grindable)"
+        );
+        assert!(
+            vanity_included > 0,
+            "low-hash UTXO never participated across the seed range"
+        );
+
+        // Coverage: over the seed range every eligible UTXO appears in some
+        // window — no permanent exclusion.
+        assert_eq!(
+            covered.len(),
+            n,
+            "some eligible UTXOs were never selected for any seed"
+        );
+    }
+
+    /// The seed-derived offset key is a pure function of `(prev_block_hash,
+    /// height)`: identical inputs → identical 36-byte key, and changing either
+    /// input changes the key. This is the determinism root for proposer ==
+    /// validator candidate windows.
+    #[test]
+    fn lottery_candidate_offset_key_is_pure_and_sensitive() {
+        let prev = [3u8; 32];
+        let k = Ledger::lottery_candidate_offset_key(&prev, 100);
+        assert_eq!(k, Ledger::lottery_candidate_offset_key(&prev, 100));
+        assert_ne!(k, Ledger::lottery_candidate_offset_key(&prev, 101));
+        assert_ne!(k, Ledger::lottery_candidate_offset_key(&[4u8; 32], 100));
     }
 }
