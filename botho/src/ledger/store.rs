@@ -1,12 +1,12 @@
 use bth_account_keys::{AccountKey, PublicAddress};
 use bth_cluster_tax::{LotteryCandidate, LotteryDrawConfig, TagVector};
-use bth_transaction_types::{Network, TAG_WEIGHT_SCALE};
+use bth_transaction_types::{ClusterTagVector, Network, TAG_WEIGHT_SCALE};
 use heed::{
     types::{Bytes, U64},
     Database, Env, EnvOpenOptions, RwTxn,
 };
 use rand::Rng;
-use std::{fs, path::Path};
+use std::{collections::BTreeMap, fs, path::Path};
 use tracing::{debug, info, warn};
 
 use super::{ChainState, LedgerError};
@@ -42,6 +42,85 @@ fn first_stale_transfer_tx(block: &Block) -> Option<usize> {
         .transactions
         .iter()
         .position(|tx| tx.created_at_height + MAX_TX_AGE < block_height)
+}
+
+/// Consensus decay rate for the cluster-tag inflation guard (issue #576).
+///
+/// Fixed at 0 (no decay credit) on purpose. The per-cluster bound this yields
+/// — output mass <= input mass — is the *most permissive* conservation-of-mass
+/// bound, so it never false-rejects an honestly built block regardless of how
+/// much decay that block's wallet actually applied. Decay credit legitimately
+/// ranges from 0 (no entropy proof / proof-required height) up to the base
+/// rate depending on the entropy proof, so any nonzero rate here could reject a
+/// valid zero-decay-credit block and halt consensus. The guard's sole job is to
+/// reject *inflation* — outputs claiming more cluster mass than the inputs can
+/// supply — which `decay_rate = 0` captures exactly.
+const CONSENSUS_TAG_DECAY_RATE: u32 = 0;
+
+/// Cluster-tag inflation guard (issue #576, decomposition item H2-B3).
+///
+/// Ports the integer/`BTreeMap` conservation-of-mass logic of
+/// `bth_transaction_core::validation::validate_cluster_tag_inheritance` to the
+/// node's `(ClusterTagVector, value)` representation so it can run at block
+/// validation time. For each cluster present on the inputs, the summed output
+/// tag *mass* (`Σ value · weight / TAG_WEIGHT_SCALE`) may not exceed the
+/// (decayed) input mass plus a small rounding tolerance; otherwise the block is
+/// rejected. New clusters that appear only on the outputs are permitted,
+/// exactly as in the upstream validator (they may arise from background
+/// attribution).
+///
+/// `input_tagged` is the set of `(tags, value)` pairs resolved from the
+/// transaction's ring members against the committed UTXO set. The real input is
+/// hidden among decoys, so the resolved ring members are the only node-agnostic
+/// input set available; since the real inputs are a subset of the ring,
+/// ring-member mass is an upper bound on the true input mass and the guard
+/// therefore never false-rejects a valid block.
+///
+/// Determinism (consensus fork safety): this is a pure function of the
+/// transaction plus committed UTXO state. All accumulation uses `BTreeMap`
+/// (sorted, deterministic iteration order) and integer arithmetic in `u128`
+/// (overflow-safe vs. the upstream `u64` accumulation, since summed ring-member
+/// mass can exceed `u64::MAX`). No `HashMap`/`HashSet` iteration order, no
+/// `f64`, and no node-local state enter the computation, so a proposer and a
+/// validator applying the same block reach an identical verdict.
+fn check_cluster_tag_inheritance(
+    input_tagged: &[(ClusterTagVector, u64)],
+    outputs: &[TxOutput],
+) -> Result<(), LedgerError> {
+    fn accumulate<'a>(
+        items: impl Iterator<Item = (u64, &'a ClusterTagVector)>,
+    ) -> BTreeMap<u64, u128> {
+        let mut masses: BTreeMap<u64, u128> = BTreeMap::new();
+        for (value, tags) in items {
+            for entry in &tags.entries {
+                let mass = (value as u128) * (entry.weight as u128) / (TAG_WEIGHT_SCALE as u128);
+                *masses.entry(entry.cluster_id.0).or_insert(0) += mass;
+            }
+        }
+        masses
+    }
+
+    let input_masses = accumulate(input_tagged.iter().map(|(tags, value)| (*value, tags)));
+    let output_masses = accumulate(outputs.iter().map(|o| (o.amount, &o.cluster_tags)));
+
+    let decay_factor = TAG_WEIGHT_SCALE.saturating_sub(CONSENSUS_TAG_DECAY_RATE) as u128;
+    let scale = TAG_WEIGHT_SCALE as u128;
+
+    for (cluster, &input_mass) in &input_masses {
+        let expected = input_mass * decay_factor / scale;
+        let actual = output_masses.get(cluster).copied().unwrap_or(0);
+        // Allow some tolerance for per-entry integer rounding (mirrors upstream).
+        let tolerance = (input_mass / 1000).max(1);
+
+        if actual > expected + tolerance {
+            return Err(LedgerError::InvalidBlock(format!(
+                "cluster {} tag inflation: output mass {} exceeds expected {} (input mass {}, tolerance {})",
+                cluster, actual, expected, input_mass, tolerance
+            )));
+        }
+    }
+
+    Ok(())
 }
 
 /// Emission-controller state to persist atomically alongside a block.
@@ -666,6 +745,26 @@ impl Ledger {
             self.verify_ring_members(tx).map_err(|e| {
                 LedgerError::InvalidBlock(format!(
                     "Transaction {} ring member validation failed: {}",
+                    tx_idx, e
+                ))
+            })?;
+        }
+
+        // C6 (issue #576, H2-B3): cluster-tag inflation guard.
+        //
+        // Wire the existing transaction-core conservation-of-mass validator
+        // (`validate_cluster_tag_inheritance`) into the consensus path so a
+        // block carrying a tx with tag-INFLATED outputs is rejected at block
+        // acceptance, not merely at mempool admission (blocks bypass the
+        // mempool). The check is a pure function of the transaction plus the
+        // committed UTXO state — integer/`BTreeMap` only, no node-local state —
+        // so a proposer and a validator reach the same verdict (no fork). It
+        // runs after C3, which has already bound every ring member to a real
+        // UTXO. See `check_cluster_tag_inheritance`.
+        for (tx_idx, tx) in block.transactions.iter().enumerate() {
+            self.verify_cluster_tag_inheritance(tx).map_err(|e| {
+                LedgerError::InvalidBlock(format!(
+                    "Transaction {} cluster-tag inheritance validation failed: {}",
                     tx_idx, e
                 ))
             })?;
@@ -1362,6 +1461,31 @@ impl Ledger {
             }
         }
         Ok(())
+    }
+
+    /// C6 (issue #576, H2-B3): reject a transaction whose outputs inflate
+    /// cluster-tag mass beyond what its inputs can supply.
+    ///
+    /// Resolves the transaction's ring members against the committed UTXO set
+    /// and applies the conservation-of-mass logic in
+    /// [`check_cluster_tag_inheritance`]. Runs after C3
+    /// (`verify_ring_members`), which already guarantees every ring member
+    /// resolves to a real UTXO; a member that fails to resolve here is simply
+    /// skipped (C3 would have aborted the block first). The resolved ring
+    /// members are the only deterministic, node-agnostic input set — the real
+    /// input is hidden among the decoys — and the real inputs are a subset of
+    /// the ring, so this never false-rejects a valid block. See the
+    /// determinism note on [`check_cluster_tag_inheritance`].
+    fn verify_cluster_tag_inheritance(&self, tx: &BothoTransaction) -> Result<(), LedgerError> {
+        let mut input_tagged: Vec<(ClusterTagVector, u64)> = Vec::new();
+        for input in tx.inputs.clsag() {
+            for member in &input.ring {
+                if let Some(utxo) = self.get_utxo_by_target_key(&member.target_key)? {
+                    input_tagged.push((utxo.output.cluster_tags.clone(), utxo.output.amount));
+                }
+            }
+        }
+        check_cluster_tag_inheritance(&input_tagged, &tx.outputs)
     }
 
     // ========================================================================
@@ -3452,5 +3576,147 @@ mod tests {
         assert_eq!(k, Ledger::lottery_candidate_offset_key(&prev, 100));
         assert_ne!(k, Ledger::lottery_candidate_offset_key(&prev, 101));
         assert_ne!(k, Ledger::lottery_candidate_offset_key(&[4u8; 32], 100));
+    }
+
+    // ------------------------------------------------------------------
+    // Cluster-tag inflation guard (issue #576, H2-B3)
+    // ------------------------------------------------------------------
+
+    /// Build a `TxOutput` with a given amount and cluster tags. Stealth keys
+    /// are deterministic functions of `seed` so distinct outputs index under
+    /// distinct target keys.
+    #[cfg(test)]
+    fn mk_tagged_output(amount: u64, seed: u8, tags: ClusterTagVector) -> TxOutput {
+        TxOutput {
+            amount,
+            target_key: [seed; 32],
+            public_key: [seed.wrapping_add(100); 32],
+            e_memo: None,
+            cluster_tags: tags,
+        }
+    }
+
+    /// Cluster tag vector attributing 100% of value to a single cluster.
+    #[cfg(test)]
+    fn full_tag(cluster: u64) -> ClusterTagVector {
+        use bth_transaction_types::ClusterId;
+        ClusterTagVector::from_pairs(&[(ClusterId(cluster), TAG_WEIGHT_SCALE)])
+    }
+
+    /// Unit test of the pure conservation-of-mass core
+    /// ([`check_cluster_tag_inheritance`]): a tx whose outputs claim MORE
+    /// cluster-tag mass than the inputs supply is rejected, while a legitimate
+    /// decayed-inheritance tx (output mass <= input mass) is accepted. This is
+    /// the integer/`BTreeMap` logic that the consensus path now enforces.
+    #[test]
+    fn check_cluster_tag_inheritance_rejects_inflation_accepts_decay() {
+        use bth_transaction_types::ClusterId;
+
+        // Input: 1_000_000 picocredits fully attributed to cluster 1.
+        //   input mass(cluster 1) = 1_000_000 * 1_000_000 / TAG_WEIGHT_SCALE
+        //                         = 1_000_000.
+        let inputs = vec![(full_tag(1), 1_000_000u64)];
+
+        // Legitimate: a decayed inheritance — fee burned, weight decayed to
+        // 95%. Output mass = 990_000 * 950_000 / 1_000_000 = 940_500 <= input
+        // mass, so it is accepted.
+        let legit = vec![mk_tagged_output(
+            990_000,
+            1,
+            ClusterTagVector::from_pairs(&[(ClusterId(1), 950_000)]),
+        )];
+        assert!(
+            check_cluster_tag_inheritance(&inputs, &legit).is_ok(),
+            "a legitimately decayed-inheritance tx must pass"
+        );
+
+        // Inflated: outputs claim 2x the input's cluster-1 mass out of thin
+        // air. output mass = 2_000_000 > input mass 1_000_000 + tolerance →
+        // rejected.
+        let inflated = vec![mk_tagged_output(2_000_000, 2, full_tag(1))];
+        let err = check_cluster_tag_inheritance(&inputs, &inflated)
+            .expect_err("a tag-inflated-output tx must be rejected");
+        assert!(
+            matches!(err, LedgerError::InvalidBlock(_)),
+            "inflation must surface as InvalidBlock, got {:?}",
+            err
+        );
+    }
+
+    /// End-to-end through the ledger resolution path
+    /// ([`Ledger::verify_cluster_tag_inheritance`]): the guard resolves the
+    /// transaction's ring members against the committed UTXO set (the only
+    /// deterministic, node-agnostic input set, since the real input is hidden
+    /// among the decoys) and rejects a tx whose outputs inflate cluster-tag
+    /// mass beyond the resolved ring's supply, while accepting a conserving
+    /// tx. This exercises the exact wiring `add_block_inner` invokes.
+    #[test]
+    fn verify_cluster_tag_inheritance_resolves_ring_and_rejects_inflation() {
+        use crate::transaction::{ClsagRingInput, Transaction as Tx, TxInputs};
+
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+
+        // Two on-chain UTXOs, each 1_000_000 fully attributed to cluster 1.
+        // The transaction's ring references both; resolved cluster-1 input mass
+        // is therefore 2_000_000 (real input ⊆ ring, so this is an upper bound
+        // on the true input mass and never false-rejects).
+        let utxo_outputs = [
+            mk_tagged_output(1_000_000, 10, full_tag(1)),
+            mk_tagged_output(1_000_000, 20, full_tag(1)),
+        ];
+        for (idx, output) in utxo_outputs.iter().enumerate() {
+            let utxo = Utxo {
+                id: UtxoId::new([idx as u8 + 50; 32], idx as u32),
+                output: output.clone(),
+                created_at: 0,
+            };
+            let mut wtxn = ledger.env.write_txn().unwrap();
+            let bytes = bincode::serialize(&utxo).unwrap();
+            ledger
+                .utxo_db
+                .put(&mut wtxn, &utxo.id.to_bytes(), &bytes)
+                .unwrap();
+            ledger.add_to_address_index(&mut wtxn, &utxo).unwrap();
+            wtxn.commit().unwrap();
+        }
+
+        let ring: Vec<RingMember> = utxo_outputs.iter().map(RingMember::from_output).collect();
+        let mk_input = || ClsagRingInput {
+            ring: ring.clone(),
+            key_image: [0u8; 32],
+            commitment_key_image: [0u8; 32],
+            clsag_signature: Vec::new(),
+            pseudo_output_amount: 0,
+        };
+
+        // Conserving: output mass 1_000_000 <= resolved input mass 2_000_000.
+        let legit_tx = Tx {
+            inputs: TxInputs::new(vec![mk_input()]),
+            outputs: vec![mk_tagged_output(1_000_000, 30, full_tag(1))],
+            fee: 0,
+            created_at_height: 0,
+        };
+        assert!(
+            ledger.verify_cluster_tag_inheritance(&legit_tx).is_ok(),
+            "a conserving tx must pass the ledger-resolved guard"
+        );
+
+        // Inflated: output mass 3_000_000 > resolved input mass 2_000_000 +
+        // tolerance → rejected.
+        let inflated_tx = Tx {
+            inputs: TxInputs::new(vec![mk_input()]),
+            outputs: vec![mk_tagged_output(3_000_000, 40, full_tag(1))],
+            fee: 0,
+            created_at_height: 0,
+        };
+        let err = ledger
+            .verify_cluster_tag_inheritance(&inflated_tx)
+            .expect_err("a tag-inflated-output tx must be rejected by the ledger guard");
+        assert!(
+            matches!(err, LedgerError::InvalidBlock(_)),
+            "inflation must surface as InvalidBlock, got {:?}",
+            err
+        );
     }
 }
