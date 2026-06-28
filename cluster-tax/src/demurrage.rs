@@ -122,9 +122,70 @@ pub fn ring_elapsed_centroid(members: &[(u64, u64)], current_height: u64) -> u64
     (weighted / total_value) as u64
 }
 
+/// Compute the cluster factor implied by the value-weighted centroid of a
+/// ring's own cluster wealth.
+///
+/// This is the wealth/factor analog of [`ring_elapsed_centroid`]: where that
+/// function takes the value-weighted centroid of ring members' public creation
+/// AGES, this takes the value-weighted centroid of their effective cluster
+/// WEALTH and maps it through the progressive fee curve.
+///
+/// # Why this exists (audit cycle 6 H2, design #574 item B2)
+///
+/// The cluster factor that drives the demurrage charge (and the progressive
+/// fee) is otherwise derived from the transaction's spender-authored OUTPUT
+/// tags. A wealthy spender can tag every output as "background" (factor 1x) and
+/// pay ~zero demurrage, even while spending coins that inherited a wealthy
+/// cluster's tags — picking fresh background-tagged decoys to drag the implied
+/// factor toward 1.
+///
+/// The ring members' tags, by contrast, are public chain state the spender
+/// cannot rewrite. The real input is one of the ring members and carries its
+/// inherited (wealthy) tags, so the factor the ring composition implies is a
+/// floor the spender cannot claim below. There is no free or empirical
+/// parameter: the floor is a pure function of public ring data and the chain's
+/// per-cluster wealth.
+///
+/// # Arguments
+/// * `members` - `(value, member_effective_cluster_wealth)` for each ring
+///   member. `member_effective_cluster_wealth` is the member's value-normalized
+///   cluster wealth (`Σ_tag weight × W_global / TAG_WEIGHT_SCALE`), resolved by
+///   the caller from public per-cluster wealth state.
+/// * `curve` - The progressive cluster factor curve.
+///
+/// # Returns
+/// The implied cluster factor in FACTOR_SCALE units (1000 = 1x .. 6000 = 6x).
+/// Background-only rings (zero centroid wealth) imply exactly the 1x floor.
+///
+/// # Determinism
+/// CONSENSUS-CRITICAL: pure integer arithmetic, ordered-slice input, no
+/// HashMap/HashSet iteration order, no node-local state. Safe for the consensus
+/// fee-floor enforcement (item B4) to reuse unchanged.
+pub fn ring_centroid_implied_factor(
+    members: &[(u64, u64)],
+    curve: &crate::fee_curve::ClusterFactorCurve,
+) -> u64 {
+    let mut weighted: u128 = 0;
+    let mut total_value: u128 = 0;
+
+    for &(value, member_wealth) in members {
+        weighted += value as u128 * member_wealth as u128;
+        total_value += value as u128;
+    }
+
+    let centroid_wealth = if total_value == 0 {
+        0
+    } else {
+        (weighted / total_value).min(u64::MAX as u128) as u64
+    };
+
+    curve.factor(centroid_wealth)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fee_curve::ClusterFactorCurve;
 
     const BLOCKS_PER_YEAR: u64 = 6_307_200; // 5s blocks
 
@@ -238,6 +299,79 @@ mod tests {
     fn test_ring_centroid_empty_and_zero_value() {
         assert_eq!(ring_elapsed_centroid(&[], 1000), 0);
         assert_eq!(ring_elapsed_centroid(&[(0, 0)], 1000), 0);
+    }
+
+    #[test]
+    fn test_ring_centroid_implied_factor_wealthy_ring() {
+        // Every member carries a wealthy cluster's wealth -> high implied factor.
+        let curve = ClusterFactorCurve::default_params();
+        // (value, member_effective_wealth)
+        let members = [(1_000_000u64, 100_000_000u64), (1_000_000, 100_000_000)];
+        let implied = ring_centroid_implied_factor(&members, &curve);
+        // Wealthy centroid maps near the curve maximum, well above 1x.
+        assert!(implied >= 5_000, "wealthy ring implied factor = {implied}");
+        assert_eq!(implied, curve.factor(100_000_000));
+    }
+
+    #[test]
+    fn test_ring_centroid_implied_factor_background_ring() {
+        // Zero member wealth (background ring) -> exactly the 1x floor.
+        let curve = ClusterFactorCurve::default_params();
+        let members = [(1_000_000u64, 0u64), (2_000_000, 0)];
+        let implied = ring_centroid_implied_factor(&members, &curve);
+        assert_eq!(implied, curve.factor(0));
+        assert_eq!(implied, FACTOR_SCALE); // 1x
+    }
+
+    #[test]
+    fn test_ring_centroid_implied_factor_value_weighted() {
+        // A large-value wealthy member dominates the centroid; a small fresh
+        // background decoy barely moves it.
+        let curve = ClusterFactorCurve::default_params();
+        let members = [
+            (100_000_000u64, 100_000_000u64), // big wealthy real input
+            (1_000, 0),                       // tiny fresh background decoy
+        ];
+        let implied = ring_centroid_implied_factor(&members, &curve);
+        // Centroid wealth ~ 100M × 100M / 100.001M ≈ 99.999M -> still high.
+        assert!(
+            implied >= 5_000,
+            "value-weighted implied factor = {implied}"
+        );
+    }
+
+    #[test]
+    fn test_ring_centroid_implied_factor_empty() {
+        let curve = ClusterFactorCurve::default_params();
+        assert_eq!(ring_centroid_implied_factor(&[], &curve), curve.factor(0));
+    }
+
+    #[test]
+    fn test_ring_centroid_floor_changes_demurrage_outcome() {
+        // End-to-end: a background-claimed factor pays zero demurrage, but the
+        // ring-floored factor produces a real charge. The spender can no longer
+        // escape demurrage by understating the output tags.
+        let curve = ClusterFactorCurve::default_params();
+        let members = [(1_000_000u64, 100_000_000u64), (1_000_000, 100_000_000)];
+
+        let claimed_factor = FACTOR_SCALE; // 1x background claim
+        let charge_claimed = demurrage_charge(
+            1_000_000,
+            claimed_factor,
+            BLOCKS_PER_YEAR,
+            200,
+            BLOCKS_PER_YEAR,
+        );
+        assert_eq!(charge_claimed, 0, "background claim pays no demurrage");
+
+        let implied = ring_centroid_implied_factor(&members, &curve);
+        let floored = claimed_factor.max(implied);
+        let charge_floored =
+            demurrage_charge(1_000_000, floored, BLOCKS_PER_YEAR, 200, BLOCKS_PER_YEAR);
+        assert!(
+            charge_floored > 0,
+            "ring-floored factor must produce a real demurrage charge: {charge_floored}"
+        );
     }
 
     #[test]

@@ -237,6 +237,29 @@ impl Ledger {
             .map_err(|e| LedgerError::Database(format!("Failed to start read txn: {}", e)))
     }
 
+    /// Test-only: set the total wealth attributed to a cluster directly,
+    /// bypassing the per-output accumulation path. Used to seed cluster wealth
+    /// for the ring-centroid factor-floor tests.
+    #[cfg(test)]
+    pub fn set_cluster_wealth_for_test(
+        &self,
+        cluster_id: u64,
+        wealth: u64,
+    ) -> Result<(), LedgerError> {
+        let mut wtxn = self
+            .env
+            .write_txn()
+            .map_err(|e| LedgerError::Database(format!("Failed to start write txn: {}", e)))?;
+        let cluster_key = cluster_id.to_le_bytes();
+        self.cluster_wealth_db
+            .put(&mut wtxn, cluster_key.as_slice(), &wealth.to_le_bytes())
+            .map_err(|e| LedgerError::Database(format!("Failed to set cluster wealth: {}", e)))?;
+        wtxn.commit().map_err(|e| {
+            LedgerError::Database(format!("Failed to commit cluster wealth: {}", e))
+        })?;
+        Ok(())
+    }
+
     /// Open or create a ledger at the given path for a specific network.
     ///
     /// The ledger will be initialized with the appropriate genesis block
@@ -1972,6 +1995,59 @@ impl Ledger {
         }
     }
 
+    /// Floor a spender-claimed cluster factor at the factor implied by the ring
+    /// centroid (audit cycle 6 H2, design #574 item B2).
+    ///
+    /// The `claimed_factor` is derived from a transaction's spender-authored
+    /// OUTPUT tags, so on its own it is gameable: a wealthy spender can tag
+    /// outputs as background (factor 1x) and pay ~zero demurrage. This raises
+    /// it to at least the factor implied by the RING MEMBERS' own (public,
+    /// inherited) cluster tags, which the spender cannot rewrite — so fresh
+    /// background decoys can no longer drive the demurrage factor below what
+    /// the ring composition implies. The floor can only ever RAISE the
+    /// factor; a genuinely-background ring leaves a 1x claim unchanged.
+    ///
+    /// Per-cluster wealth is resolved from the ledger **fail-closed**: a DB
+    /// read error propagates as `LedgerError` rather than silently
+    /// defaulting to zero wealth (which would lower the floor — matching
+    /// the M7 fail-closed fix). The factor math is the consensus-safe,
+    /// integer-only, node-local-state-free helper
+    /// [`bth_cluster_tax::ring_centroid_implied_factor`], which the consensus
+    /// fee-floor enforcement (item B4) can reuse unchanged.
+    ///
+    /// # Arguments
+    /// * `claimed_factor` - The cluster factor implied by the spender's output
+    ///   tags, in FACTOR_SCALE units.
+    /// * `ring_members` - The resolved `(value, cluster_tags)` of every ring
+    ///   member across all inputs (public chain data).
+    /// * `curve` - The progressive cluster factor curve.
+    ///
+    /// # Returns
+    /// `max(claimed_factor, ring_centroid_implied_factor)` in FACTOR_SCALE
+    /// units.
+    pub fn ring_centroid_floored_factor(
+        &self,
+        claimed_factor: u64,
+        ring_members: &[(u64, &ClusterTagVector)],
+        curve: &bth_cluster_tax::ClusterFactorCurve,
+    ) -> Result<u64, LedgerError> {
+        // Resolve each ring member's value-normalized effective cluster wealth
+        // (Σ_tag weight × W_global / TAG_WEIGHT_SCALE), fail-closed.
+        let mut members: Vec<(u64, u64)> = Vec::with_capacity(ring_members.len());
+        for (value, tags) in ring_members {
+            let mut member_wealth: u128 = 0;
+            for entry in &tags.entries {
+                let global_wealth = self.get_cluster_wealth(entry.cluster_id.0)?;
+                member_wealth +=
+                    (entry.weight as u128 * global_wealth as u128) / TAG_WEIGHT_SCALE as u128;
+            }
+            members.push((*value, member_wealth.min(u64::MAX as u128) as u64));
+        }
+
+        let implied = bth_cluster_tax::ring_centroid_implied_factor(&members, curve);
+        Ok(claimed_factor.max(implied))
+    }
+
     /// Compute effective cluster wealth for a set of UTXOs identified by
     /// target keys.
     ///
@@ -2679,6 +2755,87 @@ mod tests {
     use super::*;
     use bth_transaction_types::ClusterTagVector;
     use tempfile::tempdir;
+
+    // ========================================================================
+    // Ring-centroid cluster-factor floor (audit cycle 6 H2, design #574 B2)
+    // ========================================================================
+
+    fn cluster_tags(cluster_id: u64) -> ClusterTagVector {
+        ClusterTagVector::from_pairs(&[(
+            bth_transaction_types::ClusterId(cluster_id),
+            TAG_WEIGHT_SCALE,
+        )])
+    }
+
+    /// Attack case: the spender claims a background (1x) factor from output
+    /// tags, but the ring members carry a wealthy cluster's tags. The floor
+    /// must raise the demurrage factor to the ring-implied value.
+    #[test]
+    fn test_ring_centroid_floor_raises_understated_factor() {
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+
+        // Seed a wealthy cluster.
+        ledger.set_cluster_wealth_for_test(1, 100_000_000).unwrap();
+
+        let curve = bth_cluster_tax::ClusterFactorCurve::default_params();
+        let wealthy = cluster_tags(1);
+        let ring_members: Vec<(u64, &ClusterTagVector)> =
+            vec![(1_000_000, &wealthy), (1_000_000, &wealthy)];
+
+        let claimed_factor = 1_000; // 1x background claim
+        let floored = ledger
+            .ring_centroid_floored_factor(claimed_factor, &ring_members, &curve)
+            .unwrap();
+
+        assert!(
+            floored > claimed_factor,
+            "floor must raise the understated factor: {floored} > {claimed_factor}"
+        );
+        // Matches the factor the wealthy centroid implies directly.
+        assert_eq!(floored, curve.factor(100_000_000));
+    }
+
+    /// Legitimate background spend: the ring is also background (no seeded
+    /// cluster wealth), so the floor leaves the 1x claim unchanged.
+    #[test]
+    fn test_ring_centroid_floor_leaves_background_unchanged() {
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+
+        let curve = bth_cluster_tax::ClusterFactorCurve::default_params();
+        let bg = ClusterTagVector::empty();
+        let ring_members: Vec<(u64, &ClusterTagVector)> = vec![(1_000_000, &bg), (1_000_000, &bg)];
+
+        let claimed_factor = 1_000; // 1x background
+        let floored = ledger
+            .ring_centroid_floored_factor(claimed_factor, &ring_members, &curve)
+            .unwrap();
+
+        assert_eq!(
+            floored, claimed_factor,
+            "background spend must be unaffected"
+        );
+    }
+
+    /// The floor can only raise: a claim already above the ring-implied factor
+    /// is preserved.
+    #[test]
+    fn test_ring_centroid_floor_never_lowers_claim() {
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+
+        let curve = bth_cluster_tax::ClusterFactorCurve::default_params();
+        let bg = ClusterTagVector::empty();
+        let ring_members: Vec<(u64, &ClusterTagVector)> = vec![(1_000_000, &bg)];
+
+        let claimed_factor = 6_000; // 6x
+        let floored = ledger
+            .ring_centroid_floored_factor(claimed_factor, &ring_members, &curve)
+            .unwrap();
+
+        assert_eq!(floored, 6_000);
+    }
 
     /// Issue #451 (Test B, apply side): the deterministic backstop must flag a
     /// block containing a transfer tx that is too old relative to the block's
