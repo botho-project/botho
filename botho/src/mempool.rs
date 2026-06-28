@@ -642,7 +642,7 @@ impl Mempool {
             .map_err(|e| MempoolError::InvalidTransaction(e.to_string()))?;
 
         // Validate inputs (all transactions use CLSAG ring signatures)
-        let (input_sum, ring_members) =
+        let (input_sum, ring_members, ring_tags) =
             self.validate_clsag_inputs(tx.inputs.clsag(), &tx, ledger)?;
 
         // Validate outputs + fee <= inputs
@@ -698,6 +698,15 @@ impl Mempool {
         // heights (the real input dominates its own ring's centroid); the
         // factor term means factor-1 (background/commerce) spends pay zero.
         // See docs/design/cluster-tilted-redistribution.md.
+        // Cluster factor for demurrage. The factor from the spender-authored
+        // output tags (`cluster_wealth`) is only a CLAIM; floor it at the
+        // factor implied by the ring members' own public tags so fresh
+        // background decoys cannot drag demurrage to zero (audit cycle 6 H2,
+        // design #574 item B2).
+        let claimed_factor = self.fee_config.cluster_factor(cluster_wealth);
+        let demurrage_factor =
+            self.ring_centroid_floored_factor(&ring_tags, claimed_factor, ledger)?;
+
         let demurrage = {
             let policy = crate::monetary::mainnet_policy();
             let chain_height = ledger.get_chain_state().map(|s| s.height).unwrap_or(0);
@@ -705,7 +714,7 @@ impl Mempool {
             let blocks_per_year = (365 * 24 * 60 * 60) / policy.target_block_time_secs.max(1);
             bth_cluster_tax::demurrage_charge(
                 output_sum,
-                self.fee_config.cluster_factor(cluster_wealth),
+                demurrage_factor,
                 elapsed,
                 policy.demurrage_rate_bps(chain_height),
                 blocks_per_year,
@@ -771,15 +780,25 @@ impl Mempool {
 
     /// Validate CLSAG (standard-private) transaction inputs.
     ///
-    /// Returns the potential input sum and the public (value, creation
-    /// height) of every resolved ring member — the latter feeds the
-    /// demurrage elapsed-time centroid.
+    /// Returns the potential input sum, the public (value, creation
+    /// height) of every resolved ring member (which feeds the demurrage
+    /// elapsed-time centroid), and the (cluster tags, value) of every resolved
+    /// ring member (which feeds the cluster-factor floor — see
+    /// [`Mempool::ring_centroid_floored_factor`]).
+    #[allow(clippy::type_complexity)]
     fn validate_clsag_inputs(
         &self,
         clsag_inputs: &[crate::transaction::ClsagRingInput],
         tx: &Transaction,
         ledger: &Ledger,
-    ) -> Result<(u64, Vec<(u64, u64)>), MempoolError> {
+    ) -> Result<
+        (
+            u64,
+            Vec<(u64, u64)>,
+            Vec<(bth_transaction_types::ClusterTagVector, u64)>,
+        ),
+        MempoolError,
+    > {
         // Check for double-spends via key images (mempool)
         for input in clsag_inputs {
             if self.spent_key_images.contains_key(&input.key_image) {
@@ -869,7 +888,43 @@ impl Mempool {
             });
         }
 
-        Ok((potential_input_sum, ring_members))
+        Ok((potential_input_sum, ring_members, all_ring_tags))
+    }
+
+    /// Floor a spender-claimed cluster factor at the factor implied by the
+    /// ring centroid (audit cycle 6 H2, design #574 item B2).
+    ///
+    /// The `claimed_factor` is derived from the transaction's spender-authored
+    /// OUTPUT tags, so on its own it is gameable: a wealthy spender can tag
+    /// outputs as background and pay ~zero demurrage. This raises it to at least
+    /// the factor implied by the RING MEMBERS' own (public, inherited) cluster
+    /// tags, which the spender cannot rewrite. Fresh background decoys can no
+    /// longer drive the factor below what the ring composition implies.
+    ///
+    /// Per-cluster wealth is resolved from the ledger **fail-closed** (a DB read
+    /// error propagates as `LedgerError` rather than silently defaulting to zero
+    /// wealth, which would lower the floor — matching the M7 fix in
+    /// [`effective_cluster_wealth_from_outputs`]). The factor math is the
+    /// consensus-safe, integer-only, node-local-state-free helper
+    /// [`bth_cluster_tax::ring_centroid_implied_factor`] (via the shared
+    /// [`Ledger::ring_centroid_floored_factor`]), which item B4 can reuse on the
+    /// consensus path.
+    fn ring_centroid_floored_factor(
+        &self,
+        ring_tags: &[(bth_transaction_types::ClusterTagVector, u64)],
+        claimed_factor: u64,
+        ledger: &Ledger,
+    ) -> Result<u64, MempoolError> {
+        let ring_members: Vec<(u64, &bth_transaction_types::ClusterTagVector)> =
+            ring_tags.iter().map(|(tags, value)| (*value, tags)).collect();
+
+        ledger
+            .ring_centroid_floored_factor(
+                claimed_factor,
+                &ring_members,
+                &self.fee_config.cluster_curve,
+            )
+            .map_err(|e| MempoolError::LedgerError(e.to_string()))
     }
 
     /// Remove a transaction from the mempool and clear its key images.
