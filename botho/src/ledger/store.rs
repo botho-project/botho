@@ -254,8 +254,9 @@ impl Ledger {
         self.cluster_wealth_db
             .put(&mut wtxn, cluster_key.as_slice(), &wealth.to_le_bytes())
             .map_err(|e| LedgerError::Database(format!("Failed to set cluster wealth: {}", e)))?;
-        wtxn.commit()
-            .map_err(|e| LedgerError::Database(format!("Failed to commit cluster wealth: {}", e)))?;
+        wtxn.commit().map_err(|e| {
+            LedgerError::Database(format!("Failed to commit cluster wealth: {}", e))
+        })?;
         Ok(())
     }
 
@@ -2002,15 +2003,15 @@ impl Ledger {
     /// outputs as background (factor 1x) and pay ~zero demurrage. This raises
     /// it to at least the factor implied by the RING MEMBERS' own (public,
     /// inherited) cluster tags, which the spender cannot rewrite — so fresh
-    /// background decoys can no longer drive the demurrage factor below what the
-    /// ring composition implies. The floor can only ever RAISE the factor; a
-    /// genuinely-background ring leaves a 1x claim unchanged.
+    /// background decoys can no longer drive the demurrage factor below what
+    /// the ring composition implies. The floor can only ever RAISE the
+    /// factor; a genuinely-background ring leaves a 1x claim unchanged.
     ///
-    /// Per-cluster wealth is resolved from the ledger **fail-closed**: a DB read
-    /// error propagates as `LedgerError` rather than silently defaulting to zero
-    /// wealth (which would lower the floor — matching the M7 fail-closed fix).
-    /// The factor math is the consensus-safe, integer-only,
-    /// node-local-state-free helper
+    /// Per-cluster wealth is resolved from the ledger **fail-closed**: a DB
+    /// read error propagates as `LedgerError` rather than silently
+    /// defaulting to zero wealth (which would lower the floor — matching
+    /// the M7 fail-closed fix). The factor math is the consensus-safe,
+    /// integer-only, node-local-state-free helper
     /// [`bth_cluster_tax::ring_centroid_implied_factor`], which the consensus
     /// fee-floor enforcement (item B4) can reuse unchanged.
     ///
@@ -2767,8 +2768,8 @@ mod tests {
     }
 
     /// Attack case: the spender claims a background (1x) factor from output
-    /// tags, but the ring members carry a wealthy cluster's tags. The floor must
-    /// raise the demurrage factor to the ring-implied value.
+    /// tags, but the ring members carry a wealthy cluster's tags. The floor
+    /// must raise the demurrage factor to the ring-implied value.
     #[test]
     fn test_ring_centroid_floor_raises_understated_factor() {
         let dir = tempdir().unwrap();
@@ -2804,15 +2805,17 @@ mod tests {
 
         let curve = bth_cluster_tax::ClusterFactorCurve::default_params();
         let bg = ClusterTagVector::empty();
-        let ring_members: Vec<(u64, &ClusterTagVector)> =
-            vec![(1_000_000, &bg), (1_000_000, &bg)];
+        let ring_members: Vec<(u64, &ClusterTagVector)> = vec![(1_000_000, &bg), (1_000_000, &bg)];
 
         let claimed_factor = 1_000; // 1x background
         let floored = ledger
             .ring_centroid_floored_factor(claimed_factor, &ring_members, &curve)
             .unwrap();
 
-        assert_eq!(floored, claimed_factor, "background spend must be unaffected");
+        assert_eq!(
+            floored, claimed_factor,
+            "background spend must be unaffected"
+        );
     }
 
     /// The floor can only raise: a claim already above the ring-implied factor

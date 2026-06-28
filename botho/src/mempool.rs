@@ -896,27 +896,30 @@ impl Mempool {
     ///
     /// The `claimed_factor` is derived from the transaction's spender-authored
     /// OUTPUT tags, so on its own it is gameable: a wealthy spender can tag
-    /// outputs as background and pay ~zero demurrage. This raises it to at least
-    /// the factor implied by the RING MEMBERS' own (public, inherited) cluster
-    /// tags, which the spender cannot rewrite. Fresh background decoys can no
-    /// longer drive the factor below what the ring composition implies.
+    /// outputs as background and pay ~zero demurrage. This raises it to at
+    /// least the factor implied by the RING MEMBERS' own (public,
+    /// inherited) cluster tags, which the spender cannot rewrite. Fresh
+    /// background decoys can no longer drive the factor below what the ring
+    /// composition implies.
     ///
-    /// Per-cluster wealth is resolved from the ledger **fail-closed** (a DB read
-    /// error propagates as `LedgerError` rather than silently defaulting to zero
-    /// wealth, which would lower the floor — matching the M7 fix in
-    /// [`effective_cluster_wealth_from_outputs`]). The factor math is the
-    /// consensus-safe, integer-only, node-local-state-free helper
-    /// [`bth_cluster_tax::ring_centroid_implied_factor`] (via the shared
-    /// [`Ledger::ring_centroid_floored_factor`]), which item B4 can reuse on the
-    /// consensus path.
+    /// Per-cluster wealth is resolved from the ledger **fail-closed** (a DB
+    /// read error propagates as `LedgerError` rather than silently
+    /// defaulting to zero wealth, which would lower the floor — matching
+    /// the M7 fix in [`effective_cluster_wealth_from_outputs`]). The factor
+    /// math is the consensus-safe, integer-only, node-local-state-free
+    /// helper [`bth_cluster_tax::ring_centroid_implied_factor`] (via the
+    /// shared [`Ledger::ring_centroid_floored_factor`]), which item B4 can
+    /// reuse on the consensus path.
     fn ring_centroid_floored_factor(
         &self,
         ring_tags: &[(bth_transaction_types::ClusterTagVector, u64)],
         claimed_factor: u64,
         ledger: &Ledger,
     ) -> Result<u64, MempoolError> {
-        let ring_members: Vec<(u64, &bth_transaction_types::ClusterTagVector)> =
-            ring_tags.iter().map(|(tags, value)| (*value, tags)).collect();
+        let ring_members: Vec<(u64, &bth_transaction_types::ClusterTagVector)> = ring_tags
+            .iter()
+            .map(|(tags, value)| (*value, tags))
+            .collect();
 
         ledger
             .ring_centroid_floored_factor(

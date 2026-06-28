@@ -334,16 +334,16 @@ mod tests {
         ];
         let implied = ring_centroid_implied_factor(&members, &curve);
         // Centroid wealth ~ 100M × 100M / 100.001M ≈ 99.999M -> still high.
-        assert!(implied >= 5_000, "value-weighted implied factor = {implied}");
+        assert!(
+            implied >= 5_000,
+            "value-weighted implied factor = {implied}"
+        );
     }
 
     #[test]
     fn test_ring_centroid_implied_factor_empty() {
         let curve = ClusterFactorCurve::default_params();
-        assert_eq!(
-            ring_centroid_implied_factor(&[], &curve),
-            curve.factor(0)
-        );
+        assert_eq!(ring_centroid_implied_factor(&[], &curve), curve.factor(0));
     }
 
     #[test]
