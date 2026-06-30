@@ -16,6 +16,18 @@
  *   - must be HTTPS (or http://localhost for local dev),
  *   - we do NOT fetch it here — reachability is checked by the network context's
  *     `setCustomEndpoint` (`node_getStatus`) before it is committed.
+ *
+ * SECURITY GUARDRAIL (#587): HTTPS validation is necessary but NOT sufficient.
+ * A `?rpc=` link is attacker-controllable (Signal/QR/paste all carry it), and an
+ * attacker's node is perfectly valid HTTPS — it can lie about balances and
+ * confirmations, censor/withhold the user's transactions, and harvest addresses
+ * + IP. Therefore a parsed link MUST NEVER silently switch the active node. The
+ * network context surfaces a parsed link as a *pending* trust prompt
+ * (`pendingRpcLink`) and only applies it after an explicit user accept; a
+ * decline leaves the prior node intact. Anyone wiring a new consumer of
+ * `parseRpcDeepLink` must route it through that trust gate — do NOT call
+ * `setCustomEndpoint` directly from a deep link. See `classifyRpcHost` below and
+ * the `CustomRpcTrustGate` component.
  */
 
 /** The query-string key carrying a custom RPC endpoint in a deep link. */
@@ -81,4 +93,54 @@ export function parseRpcDeepLink(search: string): ParsedRpcLink {
 export function buildWalletRpcLink(walletPath: string, rpcUrl: string): string {
   const sep = walletPath.includes('?') ? '&' : '?'
   return `${walletPath}${sep}${RPC_PARAM}=${encodeURIComponent(rpcUrl)}`
+}
+
+/**
+ * Extract the bare host (no port) from a candidate RPC URL, or `null` when the
+ * URL cannot be parsed. Used by the trust gate to name the node the link wants
+ * to point the wallet at ("This link wants to point your wallet at <host>").
+ */
+export function rpcLinkHost(candidate: string): string | null {
+  try {
+    return new URL(candidate).hostname
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Host suffixes operated by the Botho project. A link whose host falls under one
+ * of these is shown as a "known operator" hint (e.g. a BaaS-provisioned rig at
+ * `rig-abc.testnet.botho.io`); anything else is an UNKNOWN host shown with a
+ * stronger warning. This is a hint only — it never bypasses the trust gate, it
+ * just tunes the wording so a fully-arbitrary `evil.example` cannot masquerade
+ * as a first-party node.
+ */
+export const KNOWN_RPC_HOST_SUFFIXES = ['.botho.io'] as const
+
+/** Hosts that are exactly the operator apex (not just a subdomain). */
+const KNOWN_RPC_HOST_EXACT = ['botho.io'] as const
+
+export type RpcHostTrust = 'known' | 'unknown'
+
+/**
+ * Classify a candidate RPC URL's host as a `known` Botho-operated host or an
+ * `unknown` third-party host. Loopback (localhost / 127.0.0.1) counts as
+ * `known` so local-dev links don't trip the stronger-warning path. An
+ * unparseable URL is treated as `unknown` (most conservative).
+ *
+ * IMPORTANT: this is a UI hint, not an authorization decision. Both `known` and
+ * `unknown` hosts still require explicit user acceptance via the trust gate
+ * (#587) — see the security note at the top of this file.
+ */
+export function classifyRpcHost(candidate: string): RpcHostTrust {
+  const host = rpcLinkHost(candidate)
+  if (host === null) return 'unknown'
+  const lower = host.toLowerCase()
+  if (lower === 'localhost' || lower === '127.0.0.1') return 'known'
+  if (KNOWN_RPC_HOST_EXACT.includes(lower as (typeof KNOWN_RPC_HOST_EXACT)[number])) {
+    return 'known'
+  }
+  if (KNOWN_RPC_HOST_SUFFIXES.some((suffix) => lower.endsWith(suffix))) return 'known'
+  return 'unknown'
 }

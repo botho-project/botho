@@ -12,6 +12,7 @@ import { RequestModal } from '../components/RequestModal'
 import { ReceiveModal } from '../components/ReceiveModal'
 import { OutstandingLinks } from '../components/OutstandingLinks'
 import { OfflineBanner } from '../components/OfflineBanner'
+import { CustomRpcTrustGate, CustomNodeBanner } from '../components/CustomRpcTrustGate'
 import { PasswordFields, PasswordSettingsModal, isPasswordValid } from '../components/PasswordSettingsModal'
 import { Send, Link2, Download, RefreshCw, ArrowLeft, Shield, Eye, KeyRound, AlertCircle, Lock, Settings, Trash2, Users, QrCode, Clock } from 'lucide-react'
 
@@ -399,6 +400,10 @@ function WalletDashboard() {
           node goes unreachable mid-use, with a one-click switch action. */}
       <OfflineBanner />
 
+      {/* Custom-node-from-a-link banner (#587): reminds the user they accepted a
+          `?rpc=` deep link and are off the default seeds, with a one-tap revert. */}
+      <CustomNodeBanner />
+
       <BalanceCard
         balance={balance}
         address={address}
@@ -678,6 +683,10 @@ export function WalletPage() {
 
   return (
     <div className="min-h-screen">
+      {/* Custom-RPC deep-link trust gate (#587): a `?rpc=` link is surfaced as a
+          pending prompt and must be explicitly accepted before it can switch the
+          active node. Rendered at the page root so it overlays any wallet view. */}
+      <CustomRpcTrustGate />
       <header className="border-b border-steel bg-abyss/50 backdrop-blur-md sticky top-0 z-40">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 py-3 sm:py-4 flex items-center justify-between">
           <Link to={homeHref} className="flex items-center gap-2 sm:gap-3">
