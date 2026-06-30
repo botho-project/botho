@@ -225,6 +225,13 @@ export async function validateRpcEndpoint(endpoint: string): Promise<boolean> {
 const INGRESS_STORAGE_KEY = 'botho_selected_ingress'
 const NETWORK_STORAGE_KEY = 'botho_selected_network'
 const CUSTOM_ENDPOINT_KEY = 'botho_custom_endpoint'
+/**
+ * Records the host of a custom node the user accepted *from a deep link* (#587).
+ * Persisted so the "connected to custom node <host> (from a link)" banner
+ * survives a reload, reminding the user they are off the default seeds. Cleared
+ * whenever the user reverts or picks a built-in ingress.
+ */
+const CUSTOM_NODE_FROM_LINK_KEY = 'botho_custom_node_from_link'
 
 /**
  * Save selected ingress node to localStorage.
@@ -235,6 +242,41 @@ export function saveSelectedIngress(ingressId: string): void {
     // Keep the legacy network key consistent so older reads stay valid.
     localStorage.setItem(NETWORK_STORAGE_KEY, DEFAULT_NETWORK_ID)
     localStorage.removeItem(CUSTOM_ENDPOINT_KEY)
+    // Choosing a built-in ingress means we are no longer on a link-supplied node.
+    localStorage.removeItem(CUSTOM_NODE_FROM_LINK_KEY)
+  } catch {
+    // localStorage may not be available
+  }
+}
+
+/**
+ * Persist that the active custom node was accepted from a deep link (#587),
+ * keyed by host. Drives the "from a link" banner.
+ */
+export function saveCustomNodeFromLink(host: string): void {
+  try {
+    localStorage.setItem(CUSTOM_NODE_FROM_LINK_KEY, host)
+  } catch {
+    // localStorage may not be available
+  }
+}
+
+/**
+ * Load the host of the link-supplied custom node, or `null` when the active node
+ * was not accepted from a link (or storage is unavailable).
+ */
+export function loadCustomNodeFromLink(): string | null {
+  try {
+    return localStorage.getItem(CUSTOM_NODE_FROM_LINK_KEY)
+  } catch {
+    return null
+  }
+}
+
+/** Forget the link-supplied custom node marker (on revert / manual switch). */
+export function clearCustomNodeFromLink(): void {
+  try {
+    localStorage.removeItem(CUSTOM_NODE_FROM_LINK_KEY)
   } catch {
     // localStorage may not be available
   }
