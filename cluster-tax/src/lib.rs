@@ -95,7 +95,9 @@ pub use crypto::{
     ENTROPY_SCALE,
     MIN_ENTROPY_THRESHOLD_SCALED,
 };
-pub use demurrage::{demurrage_charge, ring_centroid_implied_factor, ring_elapsed_centroid};
+pub use demurrage::{
+    demurrage_charge, ring_centroid_implied_factor, ring_elapsed_centroid, ring_elapsed_quantile,
+};
 pub use dynamic_fee::{DynamicFeeBase, DynamicFeeState, FeeSuggestion};
 pub use entropy_decay::{
     apply_entropy_decay, calculate_entropy_decay, compare_decay_modes, conservative_entropy_delta,
