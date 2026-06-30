@@ -519,6 +519,46 @@ mod cli {
             #[arg(long)]
             quick: bool,
         },
+
+        /// Decoy-quantile demurrage sweep (empirical gate for #577 / H2-B1):
+        /// compare the value-weighted-mean age kernel (centroid) against
+        /// value-independent order statistics (quantile@p75/p90/max) under an
+        /// ADVERSARIAL decoy population. Reports final Gini, Δgini, the
+        /// adversary dilution ratio and the honest over-charge ratio per
+        /// kernel. Does NOT wire anything into consensus.
+        DecoyQuantileSweep {
+            /// Number of factor-1 background holders
+            #[arg(long, default_value = "100")]
+            poor: usize,
+
+            /// Number of honest factor-6 whales (age-similar decoys)
+            #[arg(long, default_value = "10")]
+            honest_whales: usize,
+
+            /// Number of adversarial factor-6 whales (fresh high-value decoys)
+            #[arg(long, default_value = "10")]
+            adversary_whales: usize,
+
+            /// Ring size (1 real input + ring_size-1 decoys)
+            #[arg(long, default_value = "11")]
+            ring_size: usize,
+
+            /// Simulated rounds (each round ~= one year of holding)
+            #[arg(long, default_value = "25")]
+            rounds: u64,
+
+            /// Annual demurrage rate in basis points at max cluster factor
+            #[arg(long, default_value = "200")]
+            rate_bps: u32,
+
+            /// Honest decoy age jitter half-width in basis points (500 = ±5%)
+            #[arg(long, default_value = "500")]
+            honest_jitter_bps: u32,
+
+            /// Base RNG seed for reproducibility
+            #[arg(long, default_value = "2953379877")]
+            seed: u64,
+        },
     }
 
     pub fn run(cli: Cli) {
@@ -717,6 +757,25 @@ mod cli {
                 whales,
                 &output,
                 quick,
+            ),
+            Command::DecoyQuantileSweep {
+                poor,
+                honest_whales,
+                adversary_whales,
+                ring_size,
+                rounds,
+                rate_bps,
+                honest_jitter_bps,
+                seed,
+            } => run_decoy_quantile_sweep(
+                poor,
+                honest_whales,
+                adversary_whales,
+                ring_size,
+                rounds,
+                rate_bps,
+                honest_jitter_bps,
+                seed,
             ),
         }
     }
@@ -4021,6 +4080,44 @@ mod cli {
             Ok(()) => println!("Wrote CSV:     {}", csv_path.display()),
             Err(e) => eprintln!("Failed to write {}: {e}", csv_path.display()),
         }
+    }
+
+    /// Decoy-quantile demurrage sweep (empirical gate for issue #577 / H2-B1).
+    ///
+    /// Compares the shipped value-weighted-mean age kernel against
+    /// value-independent order statistics under an adversarial decoy
+    /// population, and prints the gate table. Does NOT wire anything into
+    /// consensus — #577's consensus wiring stays blocked under #323.
+    #[allow(clippy::too_many_arguments)]
+    fn run_decoy_quantile_sweep(
+        poor: usize,
+        honest_whales: usize,
+        adversary_whales: usize,
+        ring_size: usize,
+        rounds: u64,
+        rate_bps: u32,
+        honest_jitter_bps: u32,
+        seed: u64,
+    ) {
+        use bth_cluster_tax::simulation::decoy_quantile_sweep::{
+            run_decoy_sweep, to_table, DecoySweepParams,
+        };
+
+        let defaults = DecoySweepParams::default();
+        let params = DecoySweepParams {
+            poor,
+            honest_whales,
+            adversary_whales,
+            ring_size,
+            rounds,
+            rate_bps,
+            honest_jitter_bps,
+            seed,
+            ..defaults
+        };
+
+        let report = run_decoy_sweep(&params);
+        println!("{}", to_table(&report));
     }
 }
 
