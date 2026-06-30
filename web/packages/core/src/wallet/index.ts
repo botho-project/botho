@@ -15,10 +15,13 @@ import {
 export {
   CLAIM_LINK_VERSION,
   CLAIM_LINK_ENTROPY_BYTES,
+  CLAIM_LINK_MAX_AMOUNT_PICOCREDITS,
   createClaimLinkMnemonic,
   encodeClaimLinkFragment,
   buildClaimLink,
   parseClaimLinkFragment,
+  isWithinClaimLinkCap,
+  assertClaimLinkAmountWithinCap,
   type ClaimLinkSecret,
 } from './claim-link'
 

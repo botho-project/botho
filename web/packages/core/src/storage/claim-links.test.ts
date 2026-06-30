@@ -234,4 +234,32 @@ describe('EncryptedClaimLinks', () => {
     // Still encrypted at rest after the status update.
     expect(isVaultBlob(localStorage.getItem(STORAGE_KEY)!)).toBe(true)
   })
+
+  // Confirm the #474 at-rest guarantee STILL holds for the sender's
+  // outstanding-link records across the full lifecycle (#589): the bearer
+  // secret must never appear in cleartext in localStorage — not after add, not
+  // after a status transition. This is the persistence side of "treat a claim
+  // link like cash": if the device's storage is read, no live secret leaks.
+  it('never leaves a bearer secret in plaintext across the record lifecycle (#589)', async () => {
+    const key = await VaultKey.fromPassword('hygiene-589-pw')
+    const store = new ClaimLinkStore(new EncryptedClaimLinks(() => key))
+    await store.load()
+    const rec = await store.add(SAMPLE)
+
+    const assertNoCleartext = () => {
+      const raw = localStorage.getItem(STORAGE_KEY)!
+      expect(isVaultBlob(raw)).toBe(true)
+      for (const word of SAMPLE.ephMnemonic.split(' ')) {
+        expect(raw).not.toContain(word)
+      }
+      expect(raw).not.toContain(SAMPLE.ephMnemonic)
+      expect(raw).not.toContain(SAMPLE.ephAddress)
+    }
+
+    assertNoCleartext() // after add
+    await store.setStatus(rec.id, 'claimed')
+    assertNoCleartext() // after marking claimed
+    await store.setStatus(rec.id, 'refunded')
+    assertNoCleartext() // after marking refunded
+  })
 })
