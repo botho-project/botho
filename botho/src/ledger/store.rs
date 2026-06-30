@@ -1705,11 +1705,10 @@ impl Ledger {
                 DecoySelectionError::InsufficientCandidates {
                     required,
                     available,
-                } => LedgerError::InvalidBlock(format!(
-                    "Insufficient decoy candidates: need {}, have {}. \
-                         The ledger needs more confirmed outputs for private transactions.",
-                    required, available
-                )),
+                } => LedgerError::InsufficientDecoys {
+                    required,
+                    available,
+                },
                 DecoySelectionError::InvalidDistribution => {
                     LedgerError::InvalidBlock("Invalid gamma distribution parameters".to_string())
                 }
@@ -1778,10 +1777,10 @@ impl Ledger {
                 DecoySelectionError::InsufficientCandidates {
                     required,
                     available,
-                } => LedgerError::InvalidBlock(format!(
-                    "Insufficient decoy candidates: need {}, have {}",
-                    required, available
-                )),
+                } => LedgerError::InsufficientDecoys {
+                    required,
+                    available,
+                },
                 DecoySelectionError::InvalidDistribution => {
                     LedgerError::InvalidBlock("Invalid gamma distribution parameters".to_string())
                 }
@@ -2765,6 +2764,42 @@ mod tests {
             bth_transaction_types::ClusterId(cluster_id),
             TAG_WEIGHT_SCALE,
         )])
+    }
+
+    /// Cold-start (issue #583): a fresh-genesis chain has no age-eligible
+    /// outputs, so decoy gather must fail with the *typed*
+    /// `LedgerError::InsufficientDecoys` variant (carrying the structured
+    /// required/available counts) rather than a stringly-typed `InvalidBlock`.
+    /// This is what lets the faucet RPC match the cold-start condition
+    /// precisely and return a graceful "warming up" response.
+    #[test]
+    fn test_cold_start_decoy_gather_returns_typed_insufficient_decoys() {
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+
+        let mut rng = rand::thread_rng();
+        let decoys_needed = 19;
+
+        // get_decoy_outputs_for_input (used by create_private_transaction).
+        let result = ledger.get_decoy_outputs_for_input(decoys_needed, &[], 10, 0, None, &mut rng);
+        match result {
+            Err(LedgerError::InsufficientDecoys {
+                required,
+                available,
+            }) => {
+                assert_eq!(required, decoys_needed);
+                assert_eq!(available, 0, "fresh chain has no eligible decoys");
+            }
+            other => panic!("expected typed InsufficientDecoys, got {:?}", other),
+        }
+
+        // The sibling OSPEAD gather must map to the same typed variant.
+        let result = ledger.get_decoy_outputs_ospead(decoys_needed, &[], 10, None, &mut rng);
+        assert!(
+            matches!(result, Err(LedgerError::InsufficientDecoys { .. })),
+            "ospead gather should also surface the typed variant, got {:?}",
+            result
+        );
     }
 
     /// Attack case: the spender claims a background (1x) factor from output

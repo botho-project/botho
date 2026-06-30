@@ -21,6 +21,15 @@ pub enum LedgerError {
     #[error("Invalid block: {0}")]
     InvalidBlock(String),
 
+    /// Not enough age-eligible decoy outputs exist yet to form a ring
+    /// signature. This is a cold-start condition on a fresh chain (the decoy
+    /// anonymity set has not warmed up), not a bug — it self-heals as outputs
+    /// mature. Kept as a distinct typed variant so callers (e.g. the faucet
+    /// RPC) can match it precisely and surface a graceful "warming up" response
+    /// instead of a scary raw error string.
+    #[error("Insufficient decoy candidates: need {required}, have {available}. The ledger needs more confirmed outputs for private transactions.")]
+    InsufficientDecoys { required: usize, available: usize },
+
     #[error("Block already exists at height {0}")]
     BlockExists(u64),
 

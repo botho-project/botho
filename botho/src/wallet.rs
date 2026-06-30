@@ -514,7 +514,12 @@ impl Wallet {
                     Some(&selector),
                     &mut rng,
                 )
-                .map_err(|e| anyhow::anyhow!("Failed to get decoy outputs: {}", e))?;
+                // Preserve the typed `LedgerError` as the anyhow source (via
+                // `.context`, not `anyhow!("{}", e)`) so callers such as the
+                // faucet RPC can downcast to `LedgerError::InsufficientDecoys`
+                // and surface a graceful cold-start "warming up" response
+                // instead of string-matching a raw error.
+                .map_err(|e| anyhow::Error::new(e).context("Failed to get decoy outputs"))?;
 
             if decoys.len() < decoys_needed {
                 return Err(anyhow::anyhow!(

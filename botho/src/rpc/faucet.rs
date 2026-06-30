@@ -449,6 +449,20 @@ pub struct FaucetResponse {
     pub amount: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub amount_formatted: Option<String>,
+    /// Set to `true` when the request failed only because the chain's decoy
+    /// anonymity set has not warmed up yet (cold-start after a fresh genesis).
+    /// This is a transient, self-healing condition — not an error — so callers
+    /// (e.g. the web-wallet) can render a friendly "chain warming up, try again
+    /// shortly" state instead of a scary raw error. See issue #583.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warming_up: Option<bool>,
+    /// Number of age-eligible decoy outputs currently available (warming-up
+    /// only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub have_decoys: Option<usize>,
+    /// Number of decoy outputs needed to form a ring (warming-up only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub need_decoys: Option<usize>,
 }
 
 impl FaucetResponse {
@@ -459,7 +473,45 @@ impl FaucetResponse {
             tx_hash: Some(tx_hash),
             amount: Some(amount.to_string()),
             amount_formatted: Some(format!("{:.6} BTH", bth)),
+            warming_up: None,
+            have_decoys: None,
+            need_decoys: None,
         }
+    }
+
+    /// Build a graceful "chain warming up" response for the cold-start
+    /// insufficient-decoys condition. Returned as a normal JSON-RPC result
+    /// (HTTP 200), not an error, with `success: false` and `warmingUp: true`.
+    pub fn warming_up(have_decoys: usize, need_decoys: usize) -> Self {
+        Self {
+            success: false,
+            tx_hash: None,
+            amount: None,
+            amount_formatted: None,
+            warming_up: Some(true),
+            have_decoys: Some(have_decoys),
+            need_decoys: Some(need_decoys),
+        }
+    }
+
+    /// Inspect an error returned from transaction creation and, *only* if it is
+    /// the cold-start insufficient-decoys condition
+    /// (`LedgerError::InsufficientDecoys`, threaded through the anyhow source
+    /// chain), return the corresponding warming-up response.
+    ///
+    /// Returns `None` for every other error so that genuine tx-creation
+    /// failures still surface as real errors — this is the guard against
+    /// over-suppression (issue #583).
+    pub fn warming_up_for_tx_error(err: &anyhow::Error) -> Option<Self> {
+        err.chain()
+            .find_map(|cause| cause.downcast_ref::<crate::ledger::LedgerError>())
+            .and_then(|ledger_err| match ledger_err {
+                crate::ledger::LedgerError::InsufficientDecoys {
+                    required,
+                    available,
+                } => Some(Self::warming_up(*available, *required)),
+                _ => None,
+            })
     }
 }
 
@@ -484,6 +536,76 @@ mod tests {
         let ip: IpAddr = "192.168.1.1".parse().unwrap();
 
         assert!(state.check_rate_limit(ip, "view:abc\nspend:def").is_ok());
+    }
+
+    // --- Cold-start "warming up" response (issue #583) ---
+
+    #[test]
+    fn test_warming_up_response_serde_shape() {
+        // The structured warming-up result must serialize to the camelCase
+        // shape the web-wallet expects: success:false, warmingUp:true with
+        // haveDecoys/needDecoys, and NO txHash/amount fields.
+        let response = FaucetResponse::warming_up(4, 19);
+        let value = serde_json::to_value(&response).unwrap();
+
+        assert_eq!(value["success"], serde_json::json!(false));
+        assert_eq!(value["warmingUp"], serde_json::json!(true));
+        assert_eq!(value["haveDecoys"], serde_json::json!(4));
+        assert_eq!(value["needDecoys"], serde_json::json!(19));
+        assert!(value.get("txHash").is_none());
+        assert!(value.get("amount").is_none());
+    }
+
+    #[test]
+    fn test_success_response_has_no_warming_up_flag() {
+        // A normal successful dispense must not carry warming-up fields.
+        let response = FaucetResponse::success("deadbeef".to_string(), 10_000_000_000_000);
+        let value = serde_json::to_value(&response).unwrap();
+
+        assert_eq!(value["success"], serde_json::json!(true));
+        assert!(value.get("warmingUp").is_none());
+        assert!(value.get("haveDecoys").is_none());
+        assert!(value.get("needDecoys").is_none());
+        assert_eq!(value["txHash"], serde_json::json!("deadbeef"));
+    }
+
+    #[test]
+    fn test_cold_start_insufficient_decoys_maps_to_warming_up() {
+        // Simulate the error the wallet surfaces on a fresh-genesis chain:
+        // a typed LedgerError::InsufficientDecoys threaded through the anyhow
+        // source chain (mirrors wallet::create_private_transaction wrapping).
+        let err = anyhow::Error::new(crate::ledger::LedgerError::InsufficientDecoys {
+            required: 19,
+            available: 4,
+        })
+        .context("Failed to get decoy outputs");
+        let err = err.context("Failed to create transaction");
+
+        let response = FaucetResponse::warming_up_for_tx_error(&err)
+            .expect("insufficient-decoys error should map to a warming-up response");
+
+        assert_eq!(response.success, false);
+        assert_eq!(response.warming_up, Some(true));
+        assert_eq!(response.have_decoys, Some(4));
+        assert_eq!(response.need_decoys, Some(19));
+    }
+
+    #[test]
+    fn test_genuine_tx_error_is_not_suppressed() {
+        // Guard against over-suppression: any error that is NOT the cold-start
+        // insufficient-decoys case must return None so it surfaces as a real
+        // error to the caller.
+
+        // A plain anyhow error (e.g. "No UTXOs to spend").
+        let plain = anyhow::anyhow!("No UTXOs to spend");
+        assert!(FaucetResponse::warming_up_for_tx_error(&plain).is_none());
+
+        // A *different* typed LedgerError must also surface normally.
+        let other = anyhow::Error::new(crate::ledger::LedgerError::InvalidBlock(
+            "key image already spent".to_string(),
+        ))
+        .context("Failed to get decoy outputs");
+        assert!(FaucetResponse::warming_up_for_tx_error(&other).is_none());
     }
 
     #[test]
