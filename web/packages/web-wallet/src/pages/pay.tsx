@@ -1,7 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Button, Card, Input, Logo } from '@botho/ui'
-import { formatBTH, parseBTH, isValidAddress, createMnemonic12 } from '@botho/core'
+import {
+  formatBTH,
+  parseBTH,
+  isValidAddress,
+  createMnemonic12,
+  BTH_MULTIPLIER,
+  type Contact,
+} from '@botho/core'
 import {
   Send,
   AlertCircle,
@@ -12,10 +19,21 @@ import {
   Eye,
   ExternalLink,
   ShieldAlert,
+  ShieldQuestion,
+  UserCheck,
+  UserPlus,
 } from 'lucide-react'
 import { useWallet } from '../contexts/wallet'
 import { useNetwork } from '../contexts/network'
 import { parsePaymentRequestFragment, type PaymentRequest } from '../lib/payment-request'
+
+/**
+ * A payment-request link is fully attacker-controllable. When such a link
+ * PRE-FILLS an amount at or above this threshold (in picocredits), the payer
+ * must actively acknowledge it (or re-enter the amount themselves) before the
+ * Pay button enables — a link-supplied amount is never treated as pre-approved.
+ */
+const LARGE_PREFILL_THRESHOLD = 100n * BTH_MULTIPLIER // 100 BTH
 
 /**
  * Pay page for payment-request links (#470) — the *pull* complement to the
@@ -40,7 +58,8 @@ export function PayPage() {
     hasWallet,
     isLocked,
     address,
-    getContactName,
+    contacts,
+    addContact,
     send,
     refreshBalance,
     refreshTransactions,
@@ -133,7 +152,8 @@ export function PayPage() {
                     request={request}
                     ownAddress={address}
                     balance={balance}
-                    getContactName={getContactName}
+                    contacts={contacts}
+                    addContact={addContact}
                     send={send}
                     refreshBalance={refreshBalance}
                     refreshTransactions={refreshTransactions}
@@ -158,7 +178,8 @@ function PayConfirm({
   request,
   ownAddress,
   balance,
-  getContactName,
+  contacts,
+  addContact,
   send,
   refreshBalance,
   refreshTransactions,
@@ -167,7 +188,8 @@ function PayConfirm({
   request: PaymentRequest
   ownAddress: string | null
   balance: import('@botho/core').Balance | null
-  getContactName: (address: string) => string
+  contacts: Contact[]
+  addContact: (name: string, address: string, notes?: string) => Promise<Contact>
   send: (to: string, amount: bigint, memo?: string) => Promise<string>
   refreshBalance: () => Promise<void>
   refreshTransactions: () => Promise<void>
@@ -176,16 +198,30 @@ function PayConfirm({
   const [amountStr, setAmountStr] = useState(
     request.amount !== undefined ? formatBTH(request.amount, { separators: false }) : '',
   )
+  // Whether the payer has touched the amount field. Editing the amount counts as
+  // actively (re-)entering it, which clears the large-prefill acknowledgement.
+  const [amountEdited, setAmountEdited] = useState(false)
+  // Explicit acknowledgement of a large amount that the LINK pre-filled.
+  const [largeAmountAck, setLargeAmountAck] = useState(false)
   const [isSending, setIsSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [txHash, setTxHash] = useState<string | null>(null)
+  // Post-pay "save as contact" affordance (only offered for unknown recipients).
+  const [saveName, setSaveName] = useState('')
+  const [savingContact, setSavingContact] = useState(false)
+  const [savedContact, setSavedContact] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
 
-  const contactName = useMemo(() => {
-    const name = getContactName(request.to)
-    // getContactName falls back to a shortened address when unknown; only show a
-    // "name" when it differs from the raw address (i.e. an actual contact).
-    return name && name !== request.to ? name : null
-  }, [getContactName, request.to])
+  // Resolve the recipient against the address book directly (case-insensitive).
+  // An entry here means the payer has saved or previously paid this address; its
+  // absence is the signal for the unknown-recipient warning below.
+  const existingContact = useMemo(
+    () => contacts.find((c) => c.address.toLowerCase() === request.to.toLowerCase()),
+    [contacts, request.to],
+  )
+  const isKnownRecipient = existingContact !== undefined
+  const contactName =
+    existingContact && existingContact.name.trim() ? existingContact.name.trim() : null
 
   const addressValid = isValidAddress(request.to)
   const isSelfPay = ownAddress != null && ownAddress === request.to
@@ -201,7 +237,14 @@ function PayConfirm({
     }
   }
 
-  const canPay = addressValid && amount > 0n && !amountError && !isSending
+  // A large, link-supplied (still-untouched) amount must be acknowledged before
+  // paying. Re-entering the amount yourself satisfies the same requirement.
+  const prefilledAmount = request.amount
+  const isLargePrefill =
+    prefilledAmount !== undefined && prefilledAmount >= LARGE_PREFILL_THRESHOLD
+  const needsLargeAck = isLargePrefill && !amountEdited && !largeAmountAck
+
+  const canPay = addressValid && amount > 0n && !amountError && !isSending && !needsLargeAck
 
   const handlePay = async () => {
     if (!canPay) return
@@ -218,8 +261,24 @@ function PayConfirm({
     }
   }
 
+  const handleSaveContact = async () => {
+    setSavingContact(true)
+    setSaveError(null)
+    try {
+      await addContact(saveName.trim(), request.to)
+      setSavedContact(true)
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : 'Could not save contact.')
+    } finally {
+      setSavingContact(false)
+    }
+  }
+
   if (txHash) {
     const explorerTxUrl = explorerBase ? `${explorerBase}/tx/${txHash}` : null
+    // Offer to remember a first-time recipient so the next payment shows them as
+    // a known contact rather than an anonymous address.
+    const offerSaveContact = !isKnownRecipient && !isSelfPay
     return (
       <div className="space-y-4">
         <div className="flex flex-col items-center gap-2 text-center">
@@ -241,6 +300,41 @@ function PayConfirm({
             </a>
           )}
         </div>
+
+        {offerSaveContact &&
+          (savedContact ? (
+            <div className="flex items-center gap-2 p-3 rounded-lg bg-success/10 border border-success/20 text-success text-xs">
+              <UserCheck size={15} className="shrink-0" />
+              <span>Saved to your contacts.</span>
+            </div>
+          ) : (
+            <div className="space-y-2 p-3 rounded-lg bg-abyss border border-steel">
+              <p className="text-xs text-ghost flex items-center gap-1.5">
+                <UserPlus size={14} className="text-pulse" />
+                Save this address as a contact?
+              </p>
+              <Input
+                type="text"
+                placeholder="Name (optional)"
+                value={saveName}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                  setSaveName(e.target.value)
+                  setSaveError(null)
+                }}
+              />
+              {saveError && <p className="text-xs text-danger">{saveError}</p>}
+              <Button
+                onClick={handleSaveContact}
+                disabled={savingContact}
+                variant="secondary"
+                className="w-full justify-center"
+              >
+                {savingContact ? <Loader2 size={16} className="mr-2 animate-spin" /> : null}
+                Save as contact
+              </Button>
+            </div>
+          ))}
+
         <Link to="/wallet">
           <Button className="w-full justify-center">Go to my wallet</Button>
         </Link>
@@ -274,9 +368,40 @@ function PayConfirm({
         </div>
       )}
 
+      {/*
+        Recipient trust framing. A phone user cannot eyeball-verify a base58
+        address, and a payment-request link can point anywhere, so a first-time
+        recipient gets a distinct warning while a saved contact is reassured.
+      */}
+      {!isSelfPay &&
+        (isKnownRecipient ? (
+          <div className="flex items-start gap-2 p-3 rounded-lg bg-success/10 border border-success/20 text-success text-xs">
+            <UserCheck size={15} className="shrink-0 mt-0.5" />
+            <span>
+              {contactName
+                ? `You've paid ${contactName} before — they're in your contacts.`
+                : "You've paid this address before — it's in your contacts."}
+            </span>
+          </div>
+        ) : (
+          <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-200/90 text-xs">
+            <ShieldQuestion size={15} className="text-amber-400 shrink-0 mt-0.5" />
+            <span>
+              <strong className="font-semibold text-amber-100">
+                You have not paid this address before.
+              </strong>{' '}
+              Double-check the full address above — payment-request links are
+              attacker-controllable and payments can&apos;t be reversed.
+            </span>
+          </div>
+        ))}
+
       {request.memo && (
         <div>
-          <label className="block text-sm text-ghost mb-1.5">Memo</label>
+          <label className="block text-sm text-ghost mb-1.5">
+            Note from the requester{' '}
+            <span className="text-ghost/60">(not from Botho)</span>
+          </label>
           <div className="px-3 py-2 rounded-lg bg-abyss border border-steel text-sm text-light break-words">
             {request.memo}
           </div>
@@ -303,6 +428,7 @@ function PayConfirm({
           value={amountStr}
           onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
             setAmountStr(e.target.value)
+            setAmountEdited(true)
             setError(null)
           }}
           autoFocus={request.amount === undefined}
@@ -311,6 +437,28 @@ function PayConfirm({
           <p className="text-xs text-ghost mt-1">
             The requester didn&apos;t specify an amount — enter how much to send.
           </p>
+        )}
+
+        {/*
+          A large amount pre-filled by the LINK is never pre-approved: require an
+          explicit tick (or a manual re-entry, which clears this) before paying.
+        */}
+        {isLargePrefill && !amountEdited && (
+          <label className="mt-3 flex items-start gap-2 cursor-pointer p-3 rounded-lg bg-amber-500/10 border border-amber-500/20">
+            <input
+              type="checkbox"
+              checked={largeAmountAck}
+              onChange={(e) => setLargeAmountAck(e.target.checked)}
+              className="mt-0.5 w-4 h-4 accent-pulse shrink-0"
+            />
+            <span className="text-xs text-amber-200/90">
+              This link is requesting a large amount (
+              <strong className="font-semibold text-amber-100">
+                {formatBTH(prefilledAmount!)} BTH
+              </strong>
+              ). I&apos;ve verified the amount and recipient and want to send it.
+            </span>
+          </label>
         )}
       </div>
 
