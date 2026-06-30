@@ -2181,6 +2181,181 @@ mod tests {
         );
     }
 
+    /// Issue #593 regression (pins the #428/#433 gates against #427 Finding 3):
+    /// the STAGGERED-start 2-node solo-latch fork must not occur end-to-end.
+    ///
+    /// #427's empirical investigation found the real 2-minter fragility was a
+    /// solo-latch *startup race*: a freshly-booted minter that mints slot 1
+    /// *before* peering completes latches into solo (1-of-1) mode and builds a
+    /// divergent chain, forking once its peer connects. Simultaneous start
+    /// (the existing `two_minters_converge_on_single_value_no_fork` path) never
+    /// forked even pre-fix; only a *staggered* start did. This test drives that
+    /// staggered scenario through the production `min_peers >= 1` gate and
+    /// asserts no fork.
+    ///
+    /// Lifecycle modelled (matches `commands::run` startup):
+    ///   1. Node A boots holding the transient startup solo (1-of-1) quorum,
+    ///      declares it expects a peer (`min_peers == 1`), but B is not yet
+    ///      connected (`connected_peers == 0`). A mines slot 1 and would,
+    ///      pre-fix, directly solo-externalize a divergent block. The
+    ///      participation gate (#428) WITHHOLDS it.
+    ///   2. B connects (`connected_peers == 1`) but A's SCP quorum is still
+    ///      1-of-1 for one more moment. A would now pass the participation
+    ///      gate, but the transitional-solo guard (#433) WITHHOLDS the solo
+    ///      block until the quorum reconfigures.
+    ///   3. A reconfigures to the 2-of-2 quorum (the run loop does this on the
+    ///      peer event) and B joins as a federated 2-of-2 node. Both advance
+    ///      and externalize the SAME value at the common height — no fork.
+    ///
+    /// The withheld slot-1 coinbase is never dropped: it stays queued in
+    /// `pending_values` and is proposed via federated SCP once the quorum
+    /// forms.
+    #[test]
+    fn staggered_start_two_minters_do_not_solo_latch_fork() {
+        let cfg = ConsensusConfig::fixed_timing(0);
+        let prev = [0u8; 32]; // shared genesis tip
+
+        // --- Negative control (no regression to dev/genesis solo minting) ---
+        // A genuine single-node network (`min_peers == 0`) must still mint solo:
+        // the participation gate must not gate a node that declared no peers.
+        {
+            let mut solo = ConsensusService::new(
+                node(1),
+                QuorumSet::new(1, vec![QuorumSetMember::Node(node(1))]),
+                cfg.clone(),
+                genesis_chain_state(),
+            );
+            assert_eq!(
+                solo.min_peers, 0,
+                "genuine single-node has no peer expectation"
+            );
+            assert!(solo.is_solo_mode());
+            let solo_tx = intrinsic_valid_minting_tx(7, prev, 1);
+            let solo_bytes = bincode::serialize(&solo_tx).expect("serialize");
+            solo.submit_minting_tx(solo_tx.hash(), solo_tx.pow_priority(), solo_bytes);
+            solo.propose_pending_values();
+            assert!(
+                solo.externalized.is_some(),
+                "min_peers==0 node must still mint solo (gate must not regress dev/genesis)"
+            );
+        }
+
+        // --- Staggered start of the real (peered) network ---
+        // Node A boots holding the transient startup solo quorum and expects a
+        // peer, but B has not connected yet.
+        let mut a = ConsensusService::new(
+            node(1),
+            QuorumSet::new(1, vec![QuorumSetMember::Node(node(1))]),
+            cfg.clone(),
+            genesis_chain_state(),
+        );
+        a.set_min_peers(1);
+        a.set_connected_peers(0);
+        assert!(
+            a.is_solo_mode(),
+            "A boots holding the transient 1-of-1 startup quorum"
+        );
+
+        // A mines its slot-1 coinbase and tries to mint it while still pre-quorum.
+        let a_tx = intrinsic_valid_minting_tx(1, prev, 1);
+        let a_bytes = bincode::serialize(&a_tx).expect("serialize a_tx");
+        a.submit_minting_tx(a_tx.hash(), a_tx.pow_priority(), a_bytes.clone());
+
+        // Step 1: participation gate (#428) — A expects a peer but has none
+        // connected, so it must NOT externalize a pre-quorum solo block.
+        assert!(
+            !a.should_propose_this_round(),
+            "participation gate: A expecting a peer must not mint while pre-quorum"
+        );
+        a.propose_pending_values();
+        assert!(
+            a.externalized.is_none(),
+            "SOLO-LATCH (#427/#428): A must withhold its pre-quorum slot-1 block, \
+             not externalize a divergent solo chain"
+        );
+        assert!(
+            !a.pending_values.is_empty(),
+            "withheld coinbase must remain queued, not be dropped"
+        );
+
+        // Step 2: B connects, but A's SCP quorum is momentarily still 1-of-1.
+        // The participation gate would now open, but the transitional-solo guard
+        // (#433) must still withhold the solo direct-externalize.
+        a.set_connected_peers(1);
+        assert!(
+            a.should_propose_this_round(),
+            "participation gate opens once the expected peer is connected"
+        );
+        assert!(
+            a.is_transitional_solo(),
+            "peer connected + still 1-of-1 must register as transitional solo"
+        );
+        a.propose_pending_values();
+        assert!(
+            a.externalized.is_none(),
+            "TRANSITIONAL SOLO (#433): A must withhold the solo block until the \
+             quorum reconfigures out of 1-of-1"
+        );
+        assert!(
+            !a.pending_values.is_empty(),
+            "withheld coinbase must still be queued after the transitional withhold"
+        );
+
+        // Step 3: A reconfigures to the 2-of-2 quorum (run loop does this on the
+        // peer event). The withhold left the slot at a clean boundary, so the
+        // reconfig applies immediately rather than deferring.
+        let qs = recommended_quorum(&[1, 2]);
+        assert!(a.reconfigure_quorum(qs.clone()));
+        assert!(
+            !a.is_solo_mode(),
+            "A must leave solo once the peer joins the quorum"
+        );
+        assert!(!a.is_transitional_solo());
+
+        // B boots as a federated 2-of-2 node (the later, non-staggered join) and
+        // mines its own competing slot-1 coinbase.
+        let mut b = ConsensusService::new(node(2), qs.clone(), cfg, genesis_chain_state());
+        b.set_min_peers(1);
+        b.set_connected_peers(1);
+        assert!(!b.is_solo_mode(), "B joins an established 2-of-2 quorum");
+
+        let b_tx = intrinsic_valid_minting_tx(50, prev, 1);
+        assert_ne!(
+            a_tx.hash(),
+            b_tx.hash(),
+            "minters must race distinct coinbases"
+        );
+
+        // Gossip cross-registration: B learns A's already-queued coinbase; B mines
+        // and submits its own, which A learns.
+        b.register_minting_tx(a_tx.hash(), a_bytes);
+        submit_and_register(&mut b, &mut a, &b_tx);
+
+        // Both nodes advance the (now federated) quorum to externalization.
+        let (a_ext, b_ext) = run_two_services(&mut a, &mut b, 2000);
+        let a_vals = a_ext.expect("node A never externalized after the staggered join (stalled)");
+        let b_vals = b_ext.expect("node B never externalized after the staggered join (stalled)");
+
+        // No fork: identical externalized value set at the common height.
+        assert_eq!(
+            a_vals, b_vals,
+            "SOLO-LATCH FORK (#427): the staggered minters externalized DIFFERENT \
+             value sets at the same slot"
+        );
+        // Exactly one coinbase survives the combiner, and it is one of the two raced.
+        let minting: Vec<_> = a_vals.iter().filter(|v| v.is_minting_tx).collect();
+        assert_eq!(
+            minting.len(),
+            1,
+            "exactly one minting tx must be externalized"
+        );
+        let chosen = minting[0].tx_hash;
+        assert!(
+            chosen == a_tx.hash() || chosen == b_tx.hash(),
+            "externalized minting tx must be one of the two raced coinbases"
+        );
+    }
+
     /// Issue #449 regression (THE load-bearing test): two real
     /// `ConsensusService` instances in a 2-of-2 quorum must converge on and
     /// externalize a block CONTAINING a regular TRANSFER tx, with both
