@@ -59,6 +59,38 @@ cd botho/infra/faucet
 sudo ./deploy-faucet.sh
 ```
 
+> **Build prerequisites.** A from-source build needs
+> `build-essential cmake pkg-config libssl-dev` plus a Rust toolchain. `cmake`
+> is mandatory: `randomx-rs` compiles RandomX's C++ via a cmake build script and
+> the build aborts without it. The deploy scripts (`deploy-faucet.sh`,
+> `deploy-botho.sh`) install these automatically.
+
+### Building for low-RAM seed boxes (build-once-and-distribute)
+
+The seed boxes are **t4g.small (1.8 GiB RAM, 0 swap)** and a `--release` build of
+this workspace OOMs there. Do **not** build on the seeds. The verified path (used
+in the #323 redeploy) is to build once on the faucet and copy the binary to the
+seeds:
+
+```bash
+# On the faucet (t4g.medium, 3.7 GiB RAM) — add a temporary swapfile first so
+# the RandomX-linked release build doesn't OOM:
+sudo fallocate -l 4G /swapfile && sudo chmod 600 /swapfile
+sudo mkswap /swapfile && sudo swapon /swapfile
+
+cd ~/botho && git fetch origin && git reset --hard origin/main
+cargo build --release -p botho
+
+# Distribute the identical aarch64 binary to each seed (all boxes are
+# Ubuntu 24.04.3 / glibc 2.39, so the binary is portable):
+scp target/release/botho ubuntu@seed.botho.io:/tmp/botho
+scp target/release/botho ubuntu@seed2.botho.io:/tmp/botho
+# then on each seed: sudo install -m755 /tmp/botho /usr/local/bin/botho && restart the service
+
+# Optional: remove the swapfile when done.
+sudo swapoff /swapfile && sudo rm /swapfile
+```
+
 ### Option 2: Manual Deployment
 
 See [Manual Deployment Steps](#manual-deployment-steps) below.
@@ -318,12 +350,18 @@ The faucet includes built-in rate limiting to prevent abuse:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y build-essential curl git pkg-config libssl-dev
+sudo apt-get install -y build-essential cmake curl git pkg-config libssl-dev
 
 # Install Rust
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 source ~/.cargo/env
 ```
+
+> **`cmake` is required.** `randomx-rs` compiles the RandomX C++ library via a
+> cmake build script; without it a from-source build fails with
+> ``error: failed to run custom build command for `randomx-rs` ... is `cmake`
+> not installed?``. The full build prerequisite set is
+> `build-essential cmake pkg-config libssl-dev` plus a Rust toolchain.
 
 ### 3. Build Botho
 

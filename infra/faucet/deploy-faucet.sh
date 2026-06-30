@@ -86,6 +86,7 @@ log_step "Installing system dependencies..."
 apt-get update
 apt-get install -y \
     build-essential \
+    cmake \
     curl \
     git \
     pkg-config \

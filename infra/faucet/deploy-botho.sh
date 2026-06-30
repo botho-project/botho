@@ -54,7 +54,7 @@ fi
 
 # Step 2: Ensure build dependencies
 log_step "Checking build dependencies..."
-ssh $SSH_OPTS "$HOST" "sudo apt-get update -qq && sudo apt-get install -y -qq build-essential pkg-config libssl-dev" >/dev/null
+ssh $SSH_OPTS "$HOST" "sudo apt-get update -qq && sudo apt-get install -y -qq build-essential cmake pkg-config libssl-dev" >/dev/null
 
 # Step 3: Clone or update repository
 log_step "Updating source code on server..."

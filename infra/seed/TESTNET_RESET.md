@@ -135,8 +135,17 @@ run `workflow_dispatch` with `dry_run=true`, or locally:
 
 1. **Build/publish a current release binary** — either push a fresh `v0.2.x`
    tag (triggers `release.yml`) or build `linux-aarch64` and copy to the host.
+   Build prerequisites are `build-essential cmake pkg-config libssl-dev` plus a
+   Rust toolchain — **`cmake` is mandatory** (`randomx-rs` compiles RandomX's C++
+   via a cmake build script and the build aborts without it).
+   **Do not build on the seed boxes:** they are t4g.small (1.8 GiB RAM, 0 swap)
+   and a release build OOMs. Build once on the faucet (3.7 GiB + a temporary 4 GiB
+   swapfile) and `scp` the identical aarch64 binary to the seeds — all boxes are
+   Ubuntu 24.04.3 / glibc 2.39, so the binary is portable. See the
+   "Building for low-RAM seed boxes" note in `infra/faucet/README.md`.
 2. **Deploy the binary** to `seed.botho.io` (`infra/seed/deploy-botho.sh`,
-   needs SSH key).
+   needs SSH key). Note `deploy-botho.sh` builds **on the host**, which OOMs on
+   t4g.small seeds — use the build-once-and-distribute path above for seeds.
 3. **Reset the chain** to fresh genesis on protocol 2.0.0
    (`reset-chain.sh` / `reset-to-testnet.sh` against the live host).
 4. **Bring up >= 1 additional regional seed** to retire `peerCount: 0`, switch
