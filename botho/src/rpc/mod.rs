@@ -2977,6 +2977,28 @@ async fn handle_faucet_request(
     ) {
         Ok(t) => t,
         Err(e) => {
+            // Cold-start guard (issue #583): on a fresh-genesis chain the decoy
+            // anonymity set has not warmed up yet, so ring formation fails with
+            // a typed `LedgerError::InsufficientDecoys`. This self-heals in
+            // ~30 blocks. Catch ONLY that specific case and return a graceful,
+            // structured "warming up" result (HTTP 200, not an error) so the
+            // web-wallet can render a friendly message. All other tx-creation
+            // failures still surface as real errors below.
+            if let Some(response) = faucet::FaucetResponse::warming_up_for_tx_error(&e) {
+                warn!(
+                    "Faucet: chain warming up — insufficient decoys (have {:?}, need {:?})",
+                    response.have_decoys, response.need_decoys
+                );
+                return match serde_json::to_value(&response) {
+                    Ok(value) => JsonRpcResponse::success(id, value),
+                    Err(e) => JsonRpcResponse::error(
+                        id,
+                        -32000,
+                        &format!("Failed to serialize response: {}", e),
+                    ),
+                };
+            }
+
             error!("Faucet: failed to create transaction: {}", e);
             return JsonRpcResponse::error(
                 id,

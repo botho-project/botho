@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Button, Card } from '@botho/ui'
-import { Droplets, Loader2, Check, AlertCircle, ExternalLink } from 'lucide-react'
+import { Droplets, Loader2, Check, AlertCircle, ExternalLink, Hourglass } from 'lucide-react'
 import { useNetwork } from '../contexts/network'
 import { useWallet } from '../contexts/wallet'
 
@@ -10,6 +10,12 @@ interface FaucetResponse {
   amount?: number
   error?: string
   retryAfter?: number
+  // Cold-start "chain warming up" state (issue #583): the node returns a
+  // structured result (not an error) when the decoy anonymity set is still
+  // too small to build a private transaction on a freshly-reset chain.
+  warmingUp?: boolean
+  haveDecoys?: number
+  needDecoys?: number
 }
 
 export function FaucetButton() {
@@ -71,6 +77,16 @@ export function FaucetButton() {
             error: json.error.message || 'Faucet request failed',
           })
         }
+      } else if (json.result?.warmingUp) {
+        // Cold-start: the chain hasn't accumulated enough age-eligible decoy
+        // outputs yet. This self-heals within ~30 blocks of a reset, so show a
+        // friendly "warming up" state rather than a scary error.
+        setResult({
+          success: false,
+          warmingUp: true,
+          haveDecoys: json.result.haveDecoys,
+          needDecoys: json.result.needDecoys,
+        })
       } else if (json.result) {
         setResult({
           success: true,
@@ -120,11 +136,15 @@ export function FaucetButton() {
             <div className={`mb-4 p-3 rounded-lg ${
               result.success
                 ? 'bg-success/10 border border-success/20'
-                : 'bg-danger/10 border border-danger/20'
+                : result.warmingUp
+                  ? 'bg-pulse/10 border border-pulse/20'
+                  : 'bg-danger/10 border border-danger/20'
             }`}>
               <div className="flex items-start gap-2">
                 {result.success ? (
                   <Check size={16} className="text-success mt-0.5 shrink-0" />
+                ) : result.warmingUp ? (
+                  <Hourglass size={16} className="text-pulse mt-0.5 shrink-0" />
                 ) : (
                   <AlertCircle size={16} className="text-danger mt-0.5 shrink-0" />
                 )}
@@ -145,6 +165,20 @@ export function FaucetButton() {
                           <ExternalLink size={12} />
                         </a>
                       )}
+                    </>
+                  ) : result.warmingUp ? (
+                    <>
+                      <p className="text-sm text-pulse">
+                        Chain is warming up — try again shortly.
+                      </p>
+                      <p className="text-xs text-ghost mt-1">
+                        A freshly reset testnet needs a few blocks to build up enough
+                        outputs for private transactions
+                        {result.haveDecoys != null && result.needDecoys != null
+                          ? ` (${result.haveDecoys}/${result.needDecoys} ready)`
+                          : ''}
+                        . This usually clears within ~10 minutes.
+                      </p>
                     </>
                   ) : (
                     <>
