@@ -1,7 +1,12 @@
 import { useEffect, useState } from 'react'
 import { Button, Card } from '@botho/ui'
-import { formatBTH, shortenAddress, buildClaimLink } from '@botho/core'
-import { Link2, Copy, Check, RotateCcw, Trash2, RefreshCw } from 'lucide-react'
+import {
+  formatBTH,
+  shortenAddress,
+  buildClaimLink,
+  CLAIM_LINK_EXPIRY_WINDOW_SECONDS,
+} from '@botho/core'
+import { Link2, Copy, Check, RotateCcw, Trash2, RefreshCw, AlertTriangle } from 'lucide-react'
 import { useWallet } from '../contexts/wallet'
 
 /**
@@ -11,7 +16,18 @@ import { useWallet } from '../contexts/wallet'
  * link again, reclaim (refund) an unclaimed link's funds, or forget a record.
  * Status is refreshed by re-scanning each ephemeral wallet (chain is the source
  * of truth: a swept output reads back as "claimed").
+ *
+ * STALE-LINK NUDGE (#589): an unclaimed bearer secret that lingers in a chat
+ * log is drainable by anyone who later reads that history. Links left
+ * outstanding past the expiry window are surfaced prominently with a one-tap
+ * reclaim so funds don't sit claimable in chat history indefinitely.
  */
+
+/** True if an outstanding link has aged past the expiry-nudge window. */
+function isStale(link: { status: string; createdAt: number }, nowSeconds: number): boolean {
+  return link.status === 'outstanding' && nowSeconds - link.createdAt >= CLAIM_LINK_EXPIRY_WINDOW_SECONDS
+}
+
 export function OutstandingLinks() {
   const { claimLinks, refreshClaimLinks, refundClaimLink, forgetClaimLink } = useWallet()
   const [busyId, setBusyId] = useState<string | null>(null)
@@ -27,6 +43,9 @@ export function OutstandingLinks() {
   }, [])
 
   if (claimLinks.length === 0) return null
+
+  const nowSeconds = Math.floor(Date.now() / 1000)
+  const staleCount = claimLinks.filter((l) => isStale(l, nowSeconds)).length
 
   const handleRefresh = async () => {
     setRefreshing(true)
@@ -94,16 +113,38 @@ export function OutstandingLinks() {
         </div>
       )}
 
+      {staleCount > 0 && (
+        <div className="mb-3 flex items-start gap-2 p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-200/90 text-xs">
+          <AlertTriangle size={14} className="shrink-0 mt-0.5 text-amber-400" />
+          <span>
+            {staleCount === 1
+              ? 'You have 1 link that has been unclaimed for over a week.'
+              : `You have ${staleCount} links that have been unclaimed for over a week.`}{' '}
+            Reclaim {staleCount === 1 ? 'it' : 'them'} so the funds don&apos;t sit claimable in
+            the recipient&apos;s chat history.
+          </span>
+        </div>
+      )}
+
       <div className="space-y-2">
-        {claimLinks.map((link) => (
+        {claimLinks.map((link) => {
+          const stale = isStale(link, nowSeconds)
+          return (
           <div
             key={link.id}
-            className="flex items-center justify-between gap-3 p-3 rounded-lg bg-abyss border border-steel"
+            className={`flex items-center justify-between gap-3 p-3 rounded-lg bg-abyss border ${
+              stale ? 'border-amber-500/40' : 'border-steel'
+            }`}
           >
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <span className="text-sm text-light font-medium">{formatBTH(link.amount)} BTH</span>
                 {statusLabel(link.status)}
+                {stale && (
+                  <span className="inline-flex items-center gap-1 text-xs text-amber-400">
+                    <AlertTriangle size={11} /> Stale
+                  </span>
+                )}
               </div>
               <p className="text-xs text-ghost font-mono truncate">{shortenAddress(link.ephAddress)}</p>
             </div>
@@ -141,7 +182,8 @@ export function OutstandingLinks() {
               </Button>
             </div>
           </div>
-        ))}
+          )
+        })}
       </div>
     </Card>
   )

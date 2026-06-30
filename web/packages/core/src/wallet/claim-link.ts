@@ -41,6 +41,51 @@ export const CLAIM_LINK_VERSION = 'v1'
 /** Length, in bytes, of the entropy backing a 12-word (128-bit) mnemonic. */
 export const CLAIM_LINK_ENTROPY_BYTES = 16
 
+/** Picocredits per 1 BTH (12 decimals, mirrors `format.ts`). */
+const PICOCREDITS_PER_BTH = 1_000_000_000_000n
+
+/**
+ * Hard cap, in picocredits, on the amount a single bearer claim link may carry
+ * (issue #589).
+ *
+ * RATIONALE — "treat a claim link like cash": a claim link is a *bearer
+ * instrument*. The bearer secret persists in BOTH parties' chat history, cloud
+ * chat backups, and screenshots even over an E2E-encrypted messenger; anyone
+ * who later reads that history can drain any still-unclaimed link. Capping the
+ * amount bounds the loss if that history is compromised — you would not text
+ * someone a large stack of cash. Larger transfers should use a **request link**
+ * (a pull: the payer keeps custody until they approve), which never parks a
+ * spendable secret in a chat log.
+ *
+ * 1,000 BTH is a deliberately conservative default for a person-to-person
+ * "cash-like" transfer; it is a product call and may be revisited as BTH's
+ * real-world value settles. It is enforced at link-creation time (UI + the
+ * funding path) so funds can never be parked above the cap.
+ */
+export const CLAIM_LINK_MAX_AMOUNT_PICOCREDITS = 1_000n * PICOCREDITS_PER_BTH
+
+/** True if `amount` (picocredits) is within the per-link cap (and positive). */
+export function isWithinClaimLinkCap(amount: bigint): boolean {
+  return amount > 0n && amount <= CLAIM_LINK_MAX_AMOUNT_PICOCREDITS
+}
+
+/**
+ * Throw a descriptive error if `amount` (picocredits) exceeds the per-link cap.
+ *
+ * Used by the funding path so a too-large amount is rejected BEFORE any
+ * on-chain spend. The message nudges toward a request link for large transfers.
+ */
+export function assertClaimLinkAmountWithinCap(amount: bigint): void {
+  if (amount > CLAIM_LINK_MAX_AMOUNT_PICOCREDITS) {
+    const capBth = (CLAIM_LINK_MAX_AMOUNT_PICOCREDITS / PICOCREDITS_PER_BTH).toString()
+    throw new Error(
+      `Claim links are capped at ${capBth} BTH — treat them like cash. ` +
+        'For a larger transfer, use a request link instead so the funds stay in your ' +
+        'custody until the recipient pulls them.',
+    )
+  }
+}
+
 /**
  * A parsed claim-link secret: the reconstructed ephemeral mnemonic plus the
  * optional, non-authoritative amount hint (picocredits) carried in the link.

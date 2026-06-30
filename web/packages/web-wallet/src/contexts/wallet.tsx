@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from 'react'
 import { RemoteNodeAdapter, type WsConnectionStatus } from '@botho/adapters'
-import { AddressBook, EncryptedAddressBook, ClaimLinkStore, EncryptedClaimLinks, saveWallet, loadWallet, loadWalletWithKey, getWalletInfo, deriveAddress, deriveKeypairs, parseAddress, isValidMnemonic, clearWallet, createClaimLinkMnemonic, buildClaimLink, VaultKey, MIN_PASSWORD_LENGTH } from '@botho/core'
+import { AddressBook, EncryptedAddressBook, ClaimLinkStore, EncryptedClaimLinks, saveWallet, loadWallet, loadWalletWithKey, getWalletInfo, deriveAddress, deriveKeypairs, parseAddress, isValidMnemonic, clearWallet, createClaimLinkMnemonic, buildClaimLink, assertClaimLinkAmountWithinCap, VaultKey, MIN_PASSWORD_LENGTH } from '@botho/core'
 import type { Balance, Contact, NodeInfo, Transaction, ClaimLinkRecord, Timestamp } from '@botho/core'
 import { buildSendTransaction, spendableBalance, buildOwnedHistory } from '@botho/wasm-signer'
 import { buildAndSubmitSend, scanEphemeral, sweepEphemeral, SWEEP_FEE_RESERVE } from '../lib/claim-link-ops'
@@ -1071,6 +1071,12 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     const mnemonic = mnemonicRef.current
     if (!mnemonic) throw new Error('Wallet is locked. Unlock it before sending.')
     if (amount <= 0n) throw new Error('Amount must be greater than 0')
+
+    // Per-link amount cap (#589): a claim link is a bearer instrument whose
+    // secret lingers in chat history — bound the loss by treating it like cash.
+    // Reject an over-cap amount BEFORE any on-chain spend; large transfers
+    // should use a request link instead.
+    assertClaimLinkAmountWithinCap(amount)
 
     // CRITICAL: the claim-link bearer secret can only be persisted under a vault
     // key (encrypted at rest). A plaintext / no-password wallet has no session

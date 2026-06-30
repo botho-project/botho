@@ -2,10 +2,13 @@ import { describe, it, expect } from 'vitest'
 import {
   CLAIM_LINK_VERSION,
   CLAIM_LINK_ENTROPY_BYTES,
+  CLAIM_LINK_MAX_AMOUNT_PICOCREDITS,
   createClaimLinkMnemonic,
   encodeClaimLinkFragment,
   buildClaimLink,
   parseClaimLinkFragment,
+  isWithinClaimLinkCap,
+  assertClaimLinkAmountWithinCap,
 } from './claim-link'
 import { isValidMnemonic, deriveAddress, createMnemonic } from './index'
 
@@ -128,6 +131,96 @@ describe('claim-link helpers', () => {
 
     it('exposes the expected entropy size constant', () => {
       expect(CLAIM_LINK_ENTROPY_BYTES).toBe(16)
+    })
+  })
+
+  // -------------------------------------------------------------------------
+  // Unfurl-safety invariant (#589)
+  //
+  // The property that makes sharing a claim link over an E2E messenger safe:
+  // the bearer secret lives ONLY in the URL FRAGMENT. Browsers never transmit
+  // the fragment to a server, so a messenger link-preview / unfurl fetch (a
+  // server-side GET of the URL) can never see — let alone act on — the secret.
+  // These tests codify that the secret never leaks into the path or query.
+  // -------------------------------------------------------------------------
+  describe('unfurl-safety invariant: secret is fragment-only', () => {
+    function secretOf(fragment: string): string {
+      const s = fragment.replace(/^#/, '').split('.')[1]
+      expect(s).toBeTruthy()
+      return s
+    }
+
+    it('puts the bearer secret ONLY in the fragment (never path or query)', () => {
+      const m = createClaimLinkMnemonic()
+      const url = buildClaimLink('https://wallet.botho.io', m)
+      const u = new URL(url)
+      const secret = secretOf(u.hash)
+
+      // The fragment carries the secret...
+      expect(u.hash.slice(1)).toContain(secret)
+      // ...and the path / query carry none of it.
+      expect(u.pathname).toBe('/claim')
+      expect(u.search).toBe('')
+      expect(u.pathname).not.toContain(secret)
+      expect(u.search).not.toContain(secret)
+    })
+
+    it('keeps the secret out of the part of the URL a server would receive', () => {
+      // A messenger preview bot / web server only ever sees everything BEFORE
+      // the `#` (browsers strip the fragment before sending the request).
+      const m = createClaimLinkMnemonic()
+      const amountHint = 5_000_000_000_000n
+      const url = buildClaimLink('https://wallet.botho.io', m, amountHint)
+      const hashIdx = url.indexOf('#')
+      const serverVisible = url.slice(0, hashIdx)
+      const secret = secretOf(url.slice(hashIdx))
+
+      expect(serverVisible).toBe('https://wallet.botho.io/claim')
+      expect(serverVisible).not.toContain(secret)
+      // The amount hint is also fragment-only — nothing about the link reaches
+      // the server beyond the static `/claim` path.
+      expect(serverVisible).not.toContain(amountHint.toString())
+      expect(serverVisible).not.toContain('?')
+    })
+
+    it('never emits a query string, even with an amount hint', () => {
+      const m = createClaimLinkMnemonic()
+      const url = buildClaimLink('https://wallet.botho.io', m, 1n)
+      const u = new URL(url)
+      expect(u.search).toBe('')
+      // Everything secret-bearing is after the `#`.
+      expect(url.indexOf('?')).toBe(-1)
+    })
+  })
+
+  // -------------------------------------------------------------------------
+  // Per-link amount cap (#589): treat a claim link like cash.
+  // -------------------------------------------------------------------------
+  describe('per-link amount cap', () => {
+    it('caps the maximum at 1,000 BTH (in picocredits)', () => {
+      expect(CLAIM_LINK_MAX_AMOUNT_PICOCREDITS).toBe(1_000n * 1_000_000_000_000n)
+    })
+
+    it('isWithinClaimLinkCap accepts positive amounts up to the cap', () => {
+      expect(isWithinClaimLinkCap(1n)).toBe(true)
+      expect(isWithinClaimLinkCap(CLAIM_LINK_MAX_AMOUNT_PICOCREDITS)).toBe(true)
+    })
+
+    it('isWithinClaimLinkCap rejects non-positive and over-cap amounts', () => {
+      expect(isWithinClaimLinkCap(0n)).toBe(false)
+      expect(isWithinClaimLinkCap(-1n)).toBe(false)
+      expect(isWithinClaimLinkCap(CLAIM_LINK_MAX_AMOUNT_PICOCREDITS + 1n)).toBe(false)
+    })
+
+    it('assertClaimLinkAmountWithinCap throws above the cap with a request-link nudge', () => {
+      expect(() =>
+        assertClaimLinkAmountWithinCap(CLAIM_LINK_MAX_AMOUNT_PICOCREDITS + 1n),
+      ).toThrow(/request link/i)
+    })
+
+    it('assertClaimLinkAmountWithinCap permits amounts at or below the cap', () => {
+      expect(() => assertClaimLinkAmountWithinCap(CLAIM_LINK_MAX_AMOUNT_PICOCREDITS)).not.toThrow()
+      expect(() => assertClaimLinkAmountWithinCap(1n)).not.toThrow()
     })
   })
 })

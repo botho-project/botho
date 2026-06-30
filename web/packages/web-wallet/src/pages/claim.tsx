@@ -35,10 +35,20 @@ import { scanEphemeral, sweepEphemeral, type EphemeralScan } from '../lib/claim-
  *
  * Chain is the source of truth: a swept (already-claimed) or not-yet-confirmed
  * link both scan to an empty spendable set; we distinguish via state.
+ *
+ * UNFURL-SAFETY INVARIANT (#589): parsing the fragment is a pure, local,
+ * non-network operation. The page performs NO network fetch keyed on the bearer
+ * secret until the recipient EXPLICITLY acts (clicks "Reveal"). So even if a
+ * link-preview / unfurl bot were to load this page WITH the fragment (it
+ * normally can't — browsers never send the fragment to a server), it would
+ * never trigger an on-chain scan or claim, nor leak the secret. The `claim-page
+ * performs no fetch before user action` regression test in `claim.test.tsx`
+ * locks this in.
  */
 
 type ClaimState =
   | 'parsing'
+  | 'ready' // secret parsed & held locally; awaiting explicit user action (no network yet)
   | 'invalid'
   | 'scanning'
   | 'waiting' // funding not yet confirmed
@@ -66,6 +76,11 @@ export function ClaimPage() {
 
   // 1. Parse the fragment ONCE on mount, then strip it from the URL so the
   //    bearer secret does not linger in the address bar / history.
+  //
+  //    NOTE (#589): parsing is purely local — NO network call happens here. We
+  //    land in the 'ready' state and wait for the recipient to explicitly act
+  //    before touching the node (see `handleReveal`). This is the unfurl-safety
+  //    invariant: a preview/unfurl load can never trigger a scan or claim.
   useEffect(() => {
     const hash = window.location.hash
     if (!hash || hash === '#') {
@@ -82,11 +97,19 @@ export function ClaimPage() {
       } catch {
         // replaceState may be unavailable in some embeds; non-fatal.
       }
-      setState('scanning')
+      // Do NOT scan yet — wait for an explicit user action (unfurl-safety).
+      setState('ready')
     } catch (err) {
       setState('invalid')
       setError(err instanceof Error ? err.message : 'This claim link is not valid.')
     }
+  }, [])
+
+  // Explicit user action that begins the first network call (the scan). Keeping
+  // the scan behind this gate is what makes a preview/unfurl fetch a no-op.
+  const handleReveal = useCallback(() => {
+    setError(null)
+    setState('scanning')
   }, [])
 
   const runScan = useCallback(async () => {
@@ -193,7 +216,30 @@ export function ClaimPage() {
             {(state === 'parsing' || state === 'scanning') && (
               <div className="flex flex-col items-center gap-3 py-6 text-ghost">
                 <Loader2 size={28} className="animate-spin text-pulse" />
-                <p className="text-sm">Reading your claim link…</p>
+                <p className="text-sm">
+                  {state === 'scanning' ? 'Checking your claim link…' : 'Reading your claim link…'}
+                </p>
+              </div>
+            )}
+
+            {state === 'ready' && (
+              <div className="space-y-4">
+                <div className="text-center">
+                  <p className="text-sm text-ghost">Someone sent you a claim link.</p>
+                  {secret?.amountHint !== undefined && (
+                    <p className="font-display text-2xl font-bold text-pulse mt-1">
+                      ~{formatBTH(secret.amountHint)} BTH
+                    </p>
+                  )}
+                </div>
+                <Button onClick={handleReveal} className="w-full justify-center">
+                  <Gift size={16} className="mr-2" />
+                  Reveal &amp; check this link
+                </Button>
+                <p className="text-xs text-ghost text-center">
+                  We only contact the network once you tap above — your link stays private until
+                  then.
+                </p>
               </div>
             )}
 
@@ -320,6 +366,19 @@ export function ClaimPage() {
                     </a>
                   )}
                 </div>
+
+                {/* Post-claim hygiene (#589): the link is now spent, but its
+                    bearer secret still lingers in the chat. Nudge the recipient
+                    to delete the message to cut its dwell time in history. */}
+                <div className="flex items-start gap-2 p-3 rounded-lg bg-steel/40 border border-steel text-xs text-ghost">
+                  <ShieldAlert size={14} className="shrink-0 mt-0.5 text-amber-400" />
+                  <span>
+                    For your privacy, delete the message that contained this link from your chat.
+                    It&apos;s already claimed and can&apos;t be used again, but removing it keeps the
+                    secret out of your message history and backups.
+                  </span>
+                </div>
+
                 <Link to="/wallet">
                   <Button className="w-full justify-center">Go to my wallet</Button>
                 </Link>

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Button, Card, Input } from '@botho/ui'
-import { formatBTH, parseBTH } from '@botho/core'
+import { formatBTH, parseBTH, CLAIM_LINK_MAX_AMOUNT_PICOCREDITS } from '@botho/core'
 import { Link2, Copy, Check, AlertCircle, Loader2, X, ShieldAlert } from 'lucide-react'
 import { useWallet, type CreatedClaimLink } from '../contexts/wallet'
 
@@ -42,7 +42,10 @@ export function SendLinkModal({ isOpen, onClose }: { isOpen: boolean; onClose: (
     amount = 0n
   }
   const available = balance?.available ?? 0n
-  const canCreate = amount > 0n && !isCreating
+  // Per-link amount cap (#589): bound how much can sit claimable in chat
+  // history. Over the cap, block creation and nudge toward a request link.
+  const overCap = amount > CLAIM_LINK_MAX_AMOUNT_PICOCREDITS
+  const canCreate = amount > 0n && !overCap && !isCreating
 
   const handleCreate = async () => {
     setError(null)
@@ -105,6 +108,19 @@ export function SendLinkModal({ isOpen, onClose }: { isOpen: boolean; onClose: (
                 Available: {formatBTH(available)} BTH. A small network fee is added to
                 cover the recipient&apos;s claim.
               </p>
+              <p className="text-xs text-ghost mt-1">
+                Max per link: {formatBTH(CLAIM_LINK_MAX_AMOUNT_PICOCREDITS)} BTH.
+              </p>
+              {overCap && (
+                <div className="mt-2 flex items-start gap-2 p-2.5 rounded-lg bg-danger/10 border border-danger/20 text-danger text-xs">
+                  <AlertCircle size={14} className="shrink-0 mt-0.5" />
+                  <span>
+                    Claim links are capped at {formatBTH(CLAIM_LINK_MAX_AMOUNT_PICOCREDITS)} BTH —
+                    treat them like cash. For a larger transfer, use a <strong>request link</strong>{' '}
+                    instead so the funds stay in your custody until the recipient pulls them.
+                  </span>
+                </div>
+              )}
             </div>
 
             <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-500/10 border border-amber-500/20">
