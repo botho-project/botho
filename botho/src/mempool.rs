@@ -807,9 +807,15 @@ impl Mempool {
         }
 
         // Check for double-spends via key images (ledger)
+        //
+        // M7 fail-closed: distinguish `Ok(None)` (genuinely unspent) from a DB
+        // error. Swallowing the error and admitting the tx as if unspent would
+        // let an already-spent key image pass this filter under DB pressure.
         for input in clsag_inputs {
-            if let Ok(Some(_)) = ledger.is_key_image_spent(&input.key_image) {
-                return Err(MempoolError::KeyImageSpent(input.key_image));
+            match ledger.is_key_image_spent(&input.key_image) {
+                Ok(Some(_)) => return Err(MempoolError::KeyImageSpent(input.key_image)),
+                Ok(None) => {}
+                Err(e) => return Err(MempoolError::LedgerError(e.to_string())),
             }
         }
 
@@ -1009,11 +1015,29 @@ impl Mempool {
         let mut to_remove = Vec::new();
 
         for (tx_hash, pending) in &self.txs {
-            // Check if any key image was spent in ledger
-            let is_invalid =
-                pending.tx.inputs.clsag().iter().any(|input| {
-                    matches!(ledger.is_key_image_spent(&input.key_image), Ok(Some(_)))
-                });
+            // Check if any key image was spent in ledger.
+            //
+            // M7 fail-closed: on a DB error, evict rather than retain. Retaining
+            // a possibly-double-spending tx (the pre-fix behavior of
+            // `matches!(..., Ok(Some(_)))`, which treats `Err(_)` as "still
+            // valid") risks re-proposing a double-spend. A false eviction is
+            // harmless — the sender can resubmit.
+            let is_invalid = pending.tx.inputs.clsag().iter().any(|input| {
+                match ledger.is_key_image_spent(&input.key_image) {
+                    Ok(Some(_)) => true, // spent on-chain -> evict
+                    Ok(None) => false,   // unspent -> keep
+                    Err(e) => {
+                        warn!(
+                            "DB error checking key image {} for mempool tx {}; \
+                             evicting (fail closed): {}",
+                            hex::encode(&input.key_image[0..8]),
+                            hex::encode(&tx_hash[0..8]),
+                            e
+                        );
+                        true // DB error -> fail closed: evict
+                    }
+                }
+            });
 
             if is_invalid {
                 to_remove.push(*tx_hash);
@@ -1404,6 +1428,64 @@ mod tests {
             result.is_err(),
             "wealth computation must fail closed (propagate DB error), got {:?}",
             result
+        );
+    }
+
+    /// M7 fail-closed (admission): when the ledger key-image lookup hits a DB
+    /// error, `validate_clsag_inputs` must REJECT the transaction rather than
+    /// admit it as if the key image were unspent. The pre-fix
+    /// `if let Ok(Some(_))` swallowed the error and fell through to admission.
+    ///
+    /// The DB error is injected by exhausting the LMDB reader table: the ledger
+    /// is opened with one reader slot, held open, so `is_key_image_spent`'s
+    /// read txn fails with `MdbError::ReadersFull`.
+    #[test]
+    fn test_validate_clsag_inputs_fails_closed_on_db_error() {
+        use crate::ledger::Ledger;
+
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open_single_reader(dir.path()).unwrap();
+
+        // Hold the only reader slot open so the next read_txn() fails.
+        let _held = ledger.read_txn_for_test().unwrap();
+
+        let mempool = Mempool::new();
+        let tx = test_tx(MIN_TX_FEE, 1);
+        let result = mempool.validate_clsag_inputs(tx.inputs.clsag(), &tx, &ledger);
+
+        assert!(
+            matches!(result, Err(MempoolError::LedgerError(_))),
+            "admission must fail closed (propagate DB error), got {:?}",
+            result
+        );
+    }
+
+    /// M7 fail-closed (eviction): when the ledger key-image lookup hits a DB
+    /// error, `remove_invalid` must EVICT the transaction rather than retain a
+    /// possible double-spend. The pre-fix `matches!(..., Ok(Some(_)))` treated
+    /// `Err(_)` as "still valid" and kept the tx. A false eviction is harmless
+    /// (the sender can resubmit), so evicting on uncertainty fails closed.
+    #[test]
+    fn test_remove_invalid_evicts_on_db_error() {
+        use crate::ledger::Ledger;
+
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open_single_reader(dir.path()).unwrap();
+
+        // Hold the only reader slot open so the next read_txn() fails.
+        let _held = ledger.read_txn_for_test().unwrap();
+
+        let mut mempool = Mempool::new();
+        let tx = test_tx(MIN_TX_FEE, 1);
+        let tx_hash = tx.hash();
+        mempool.txs.insert(tx_hash, PendingTx::new(tx));
+        assert_eq!(mempool.len(), 1);
+
+        mempool.remove_invalid(&ledger);
+
+        assert!(
+            mempool.is_empty(),
+            "eviction must fail closed (evict on DB error), tx still present"
         );
     }
 
