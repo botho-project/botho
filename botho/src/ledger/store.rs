@@ -209,6 +209,21 @@ const META_CURRENT_REWARD: &[u8] = b"current_reward";
 // Redistribution lottery carryover pool (consensus state)
 const META_LOTTERY_POOL: &[u8] = b"lottery_pool";
 
+/// Sum a block's per-transaction fees, rejecting on `u64` overflow.
+///
+/// Per-tx fees are attacker-influenced, so a naive `.sum::<u64>()` would wrap
+/// silently under `overflow-checks = false` (release) or panic (debug) for a
+/// crafted block whose fees total past `u64::MAX`. We accumulate with
+/// `checked_add` and return `LedgerError::FeeOverflow` instead, matching the
+/// per-tx balance overflow guard from issue #340. See issue #599.
+fn checked_block_fees(block: &Block) -> Result<u64, LedgerError> {
+    block
+        .transactions
+        .iter()
+        .try_fold(0u64, |acc, tx| acc.checked_add(tx.fee))
+        .ok_or(LedgerError::FeeOverflow)
+}
+
 impl Ledger {
     /// Open or create a ledger at the given path (defaults to Testnet for
     /// backward compatibility)
@@ -861,7 +876,11 @@ impl Ledger {
         // fee would overstate destroyed supply 5x and break conservation
         // (audit cycle 6, M4). The lottery summary's burn amount was verified
         // against the pool accounting by `validate_block_lottery` above.
-        let block_fees: u64 = block.transactions.iter().map(|tx| tx.fee).sum();
+        //
+        // Fees are attacker-influenced, so accumulate with `checked_add` and
+        // reject on overflow rather than wrapping silently (release) or
+        // panicking (debug). See issue #599 (mirrors the #340 balance guard).
+        let block_fees: u64 = checked_block_fees(block)?;
         let actually_burned = block.lottery_summary.amount_burned;
         let new_total_fees_burned = state.total_fees_burned + actually_burned as u128;
 
@@ -3369,6 +3388,49 @@ mod tests {
     // leaving the conserved state unchanged — the exact pre/post check the
     // fuzz target performs.
     // ------------------------------------------------------------------
+    // #599: the block-fee accumulation in `add_block_inner` must reject a
+    // fee-sum overflow with a typed error rather than wrapping silently
+    // (release) or panicking (debug). `checked_block_fees` is the exact
+    // reduction `add_block_inner` invokes; we test it directly because driving
+    // an overflowing-fee block all the way to the fee-accounting line would
+    // require it to first pass every prior consensus gate (PoW, ring
+    // signatures, lottery validation), which an attacker cannot do for a
+    // u64::MAX fee total. This test is meaningful in BOTH build modes: the old
+    // `.sum()` panicked here in debug and wrapped to 1 in release.
+    #[test]
+    fn test_checked_block_fees_rejects_overflow() {
+        use crate::transaction::Transaction;
+
+        let mut block = Block::genesis_for_network(Network::Testnet);
+        // Two fees whose sum exceeds u64::MAX.
+        block.transactions = vec![
+            Transaction::new_stub_with_fee(u64::MAX),
+            Transaction::new_stub_with_fee(3),
+        ];
+
+        let result = checked_block_fees(&block);
+        assert!(
+            matches!(result, Err(LedgerError::FeeOverflow)),
+            "fee-sum overflow must be rejected with LedgerError::FeeOverflow, got {:?}",
+            result
+        );
+    }
+
+    // #599: a non-overflowing fee total is still summed correctly.
+    #[test]
+    fn test_checked_block_fees_normal_sum() {
+        use crate::transaction::Transaction;
+
+        let mut block = Block::genesis_for_network(Network::Testnet);
+        block.transactions = vec![
+            Transaction::new_stub_with_fee(100),
+            Transaction::new_stub_with_fee(250),
+            Transaction::new_stub_with_fee(650),
+        ];
+
+        assert_eq!(checked_block_fees(&block).unwrap(), 1000);
+    }
+
     #[test]
     fn fuzz_wiring_add_block_rejects_malformed_and_conserves_supply() {
         let dir = tempdir().unwrap();
