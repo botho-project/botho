@@ -13,16 +13,17 @@
 //! - `compute_base`/`update` take an `at_min_block_time` flag derived from
 //!   wall-clock block timing, which is also node-local.
 //!
-//! A node with a HOT congestion EMA and a node with a COLD EMA therefore compute
-//! different fee bases for the same transaction. If that value gated block
-//! validity, the two nodes would accept different sets of blocks and the chain
-//! would fork (audit cycle 6 finding **M1**). Consensus instead uses a fixed,
-//! congestion-free floor (`botho::ledger::Ledger::consensus_fee_floor`, pinned to
-//! `DynamicFeeBase::default().base_min` with NO congestion term). Relay policy
-//! layers this dynamic base on top: because `compute_base` is always clamped to
-//! `>= base_min`, the relay threshold can only ever TIGHTEN above the consensus
-//! floor, never fall below it (Bitcoin's min-relay-fee vs. consensus-validity
-//! split; design #574 Q1/Q2, invariant enforced in `botho::mempool`).
+//! A node with a HOT congestion EMA and a node with a COLD EMA therefore
+//! compute different fee bases for the same transaction. If that value gated
+//! block validity, the two nodes would accept different sets of blocks and the
+//! chain would fork (audit cycle 6 finding **M1**). Consensus instead uses a
+//! fixed, congestion-free floor (`botho::ledger::Ledger::consensus_fee_floor`,
+//! pinned to `DynamicFeeBase::default().base_min` with NO congestion term).
+//! Relay policy layers this dynamic base on top: because `compute_base` is
+//! always clamped to `>= base_min`, the relay threshold can only ever TIGHTEN
+//! above the consensus floor, never fall below it (Bitcoin's min-relay-fee vs.
+//! consensus-validity split; design #574 Q1/Q2, invariant enforced in
+//! `botho::mempool`).
 //!
 //! # Design Philosophy
 //!

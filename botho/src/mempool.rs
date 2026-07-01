@@ -2205,8 +2205,10 @@ mod tests {
         tip_height: u64,
         cluster_wealth: &[(u64, u64)],
     ) -> Vec<RingMember> {
-        use crate::ledger::{ChainState, UtxoSnapshot};
-        use crate::transaction::{Utxo, UtxoId};
+        use crate::{
+            ledger::{ChainState, UtxoSnapshot},
+            transaction::{Utxo, UtxoId},
+        };
         use bth_transaction_types::{ClusterId, TAG_WEIGHT_SCALE};
 
         let mut utxos = Vec::new();
@@ -2248,11 +2250,12 @@ mod tests {
     }
 
     /// Compute the mempool relay-admission `minimum_fee` for `tx` under a given
-    /// `DynamicFeeBase` congestion state. This reproduces the exact formula used
-    /// in `Mempool::add_tx` (base curve × cluster factor × congestion base, plus
-    /// the `ring_elapsed_quantile@max` + factor-floored demurrage) so the test
-    /// asserts against the true relay threshold, differing from the consensus
-    /// floor ONLY by the congestion multiplier.
+    /// `DynamicFeeBase` congestion state. This reproduces the exact formula
+    /// used in `Mempool::add_tx` (base curve × cluster factor × congestion
+    /// base, plus the `ring_elapsed_quantile@max` + factor-floored
+    /// demurrage) so the test asserts against the true relay threshold,
+    /// differing from the consensus floor ONLY by the congestion
+    /// multiplier.
     #[cfg(test)]
     fn relay_minimum_fee(
         tx: &Transaction,
@@ -2296,8 +2299,10 @@ mod tests {
         }
 
         let claimed_factor = fee_config.cluster_factor(cluster_wealth);
-        let ring_refs: Vec<(u64, &ClusterTagVector)> =
-            ring_tags.iter().map(|(tags, value)| (*value, tags)).collect();
+        let ring_refs: Vec<(u64, &ClusterTagVector)> = ring_tags
+            .iter()
+            .map(|(tags, value)| (*value, tags))
+            .collect();
         let demurrage_factor = ledger
             .ring_centroid_floored_factor(claimed_factor, &ring_refs, &fee_config.cluster_curve)
             .unwrap();
@@ -2349,7 +2354,10 @@ mod tests {
             target_key: [130; 32],
             public_key: [131; 32],
             e_memo: None,
-            cluster_tags: ClusterTagVector::from_pairs(&[(ClusterId(wealthy_cluster), TAG_WEIGHT_SCALE)]),
+            cluster_tags: ClusterTagVector::from_pairs(&[(
+                ClusterId(wealthy_cluster),
+                TAG_WEIGHT_SCALE,
+            )]),
         }];
         let tx = Transaction {
             inputs: TxInputs::new(vec![ClsagRingInput {
@@ -2369,7 +2377,10 @@ mod tests {
         // Consensus floor: congestion-free, evaluated at the same height the
         // mempool uses for its demurrage clock.
         let consensus_floor = ledger.consensus_fee_floor(&tx, tip_height).unwrap();
-        assert!(consensus_floor > 0, "expected a positive floor for a wealthy old ring");
+        assert!(
+            consensus_floor > 0,
+            "expected a positive floor for a wealthy old ring"
+        );
 
         // COLD node: fresh EMA, not at min block time -> dynamic base pinned to
         // base_min == CONSENSUS_FEE_BASE.
