@@ -592,9 +592,24 @@ impl Block {
         hasher.finalize().into()
     }
 
-    /// Get total fees from all transactions
+    /// Get total fees from all transactions.
+    ///
+    /// Per-transaction fees are attacker-influenced, so this accumulates with
+    /// `saturating_add`: a crafted block whose fees sum past `u64::MAX` clamps
+    /// to `u64::MAX` rather than wrapping silently (release, `overflow-checks =
+    /// false`) or panicking (debug). See issue #599.
+    ///
+    /// Caller contract: this is *not* an authoritative fee total for consensus
+    /// arithmetic. A saturated value only ever fails validation — it cannot
+    /// match a block's declared lottery split — and any block with an
+    /// overflowing fee total is rejected outright by the ledger via a checked
+    /// accumulation in `add_block_inner` (`LedgerError::FeeOverflow`). Callers
+    /// use it only for the "are there any fees at all?" gate and for lottery
+    /// accounting that is separately re-checked against the block's summary.
     pub fn total_fees(&self) -> u64 {
-        self.transactions.iter().map(|tx| tx.fee).sum()
+        self.transactions
+            .iter()
+            .fold(0u64, |acc, tx| acc.saturating_add(tx.fee))
     }
 }
 
@@ -1836,6 +1851,45 @@ mod tests {
         let hash1 = genesis.hash();
         let hash2 = genesis.hash();
         assert_eq!(hash1, hash2);
+    }
+
+    // --- #599: fee-sum overflow is handled deterministically ---
+
+    /// `total_fees()` must saturate rather than wrap silently (release) or
+    /// panic (debug) when attacker-influenced per-tx fees sum past `u64::MAX`.
+    /// This test is meaningful in BOTH build modes: in debug the old `.sum()`
+    /// panicked here; in release it wrapped to a small value.
+    #[test]
+    fn test_total_fees_saturates_on_overflow() {
+        let mut genesis = Block::genesis();
+        // Two fees whose sum exceeds u64::MAX. A wrapping accumulator would
+        // yield u64::MAX.wrapping_add(2) == 1; a saturating one yields u64::MAX.
+        genesis.transactions = vec![
+            Transaction::new_stub_with_fee(u64::MAX),
+            Transaction::new_stub_with_fee(3),
+        ];
+
+        let total = genesis.total_fees();
+        assert_eq!(
+            total,
+            u64::MAX,
+            "fee total must clamp to u64::MAX, not wrap"
+        );
+        // The "any fees at all?" gate still fires on the saturated total.
+        assert!(total > 0);
+    }
+
+    /// A non-overflowing fee total is still summed correctly after the switch
+    /// to saturating accumulation.
+    #[test]
+    fn test_total_fees_normal_sum() {
+        let mut genesis = Block::genesis();
+        genesis.transactions = vec![
+            Transaction::new_stub_with_fee(100),
+            Transaction::new_stub_with_fee(250),
+            Transaction::new_stub_with_fee(650),
+        ];
+        assert_eq!(genesis.total_fees(), 1000);
     }
 
     // Note: Block reward calculation uses calculate_block_reward() which is

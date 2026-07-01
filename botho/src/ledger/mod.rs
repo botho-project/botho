@@ -53,6 +53,14 @@ pub enum LedgerError {
 
     #[error("Lottery winner not found in candidates: {0}")]
     LotteryWinnerNotEligible(String),
+
+    /// The sum of per-transaction fees in the block overflows `u64`. Fees are
+    /// attacker-influenced, so a crafted block whose fees sum past `u64::MAX`
+    /// would wrap silently under `overflow-checks=false` (release) or panic in
+    /// debug. We reject such blocks deterministically instead. Mirrors the
+    /// per-tx balance overflow guard from issue #340.
+    #[error("Block fee total overflows u64")]
+    FeeOverflow,
 }
 
 /// Information about the current chain state
