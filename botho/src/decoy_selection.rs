@@ -232,6 +232,58 @@ const SPEND_HISTORY_SIZE: usize = 10_000;
 const DEFAULT_GAMMA_SHAPE: f64 = 19.28;
 const DEFAULT_GAMMA_SCALE_DAYS: f64 = 1.61;
 
+/// Age-similarity policy: maximum relative spread, in basis points, of a
+/// selected decoy's age around the real input's age (1000 bps = ±10%).
+///
+/// # Why this exists (issue #596, consensus-economic dependency of #577-B1)
+///
+/// The #577 empirical gate (PR #595) selected the `ring_elapsed_quantile@max`
+/// order-statistic as the demurrage clock: the charge is computed from the
+/// **oldest** ring member's age, not the value-weighted centroid. This fully
+/// neutralizes the H2 fresh-high-value-decoy age-dilution attack (an adversary
+/// can no longer drag the elapsed time down with fresh decoys), but it makes
+/// the wallet's decoy age spread consensus-economically load-bearing: an honest
+/// spender whose ring contains a decoy much OLDER than their real input is
+/// over-charged demurrage relative to their true holding time.
+///
+/// PR #595's sensitivity sweep measured the honest over-charge under `@max` as
+/// a function of the ring's decoy age-spread, against the #314 tolerance
+/// (≤15%):
+///
+/// | honest decoy age-spread | honest over-charge | within #314 tol (≤15%) |
+/// |-------------------------|--------------------|------------------------|
+/// | ±5%                     | 1.039              | yes                    |
+/// | ±10%                    | 1.077              | yes                    |
+/// | ±20%                    | 1.158              | no                     |
+/// | ±35%                    | 1.277              | no                     |
+/// | ±50%                    | 1.388              | no                     |
+///
+/// ±10% is the widest empirically-safe band (1.077 ≤ 1.15). We adopt ±10% as
+/// the policy: it maximizes the eligible decoy pool (and hence anonymity) among
+/// the #314-safe bands. Because `@max` reads the single oldest member, the
+/// realized over-charge is bounded above by `max_ring_age / real_age`, which
+/// this band caps at ≤1.10 by construction — strictly inside the #314 bound.
+///
+/// The gamma/OSPEAD age distribution is still applied WITHIN the band, so the
+/// realistic recent-biased spend shape is preserved among age-similar decoys.
+pub const AGE_SIMILARITY_SPREAD_BPS: u64 = 1_000;
+
+/// Compute the inclusive `[min_age, max_age]` decoy-age band around a real
+/// input's age under the [`AGE_SIMILARITY_SPREAD_BPS`] policy.
+///
+/// The lower bound is additionally floored at [`MIN_DECOY_AGE_BLOCKS`] so
+/// decoys are always confirmed. A degenerate real age (below the confirmation
+/// floor) can produce `min_age > max_age`, in which case no candidate is
+/// in-band and callers fall back to nearest-age selection.
+pub fn age_similarity_band(real_input_age: u64) -> (u64, u64) {
+    let delta = (real_input_age as u128 * AGE_SIMILARITY_SPREAD_BPS as u128 / 10_000) as u64;
+    let min_age = real_input_age
+        .saturating_sub(delta)
+        .max(MIN_DECOY_AGE_BLOCKS);
+    let max_age = real_input_age.saturating_add(delta);
+    (min_age, max_age)
+}
+
 /// An output candidate for decoy selection with age and cluster information.
 #[derive(Debug, Clone)]
 pub struct OutputCandidate {
@@ -595,19 +647,37 @@ impl GammaDecoySelector {
         log_weight.exp().max(1e-10)
     }
 
-    /// Select decoys with a target age for the real input.
+    /// Select decoys age-similar to the real input, sampled within the
+    /// [`AGE_SIMILARITY_SPREAD_BPS`] band using the gamma spend distribution.
     ///
-    /// This version samples decoy ages that, together with the real input age,
-    /// form a plausible ring from the observer's perspective.
+    /// # Consensus-economic role (issue #596)
+    ///
+    /// Under the `ring_elapsed_quantile@max` demurrage kernel (#577-B1 / PR
+    /// #595) the charge is driven by the OLDEST ring member's age. A decoy much
+    /// older than the real input therefore over-charges an honest spender. This
+    /// method bounds every selected decoy's age to `age_similarity_band(real)`
+    /// (±10% by policy), keeping the realized over-charge under `@max` at
+    /// ≤1.10 — inside the #314 ≤15% tolerance. The gamma/OSPEAD age weighting
+    /// is still applied WITHIN the band, so the realistic recent-biased
+    /// spend shape is preserved among the age-similar candidates.
+    ///
+    /// # Liveness fallback
+    ///
+    /// If the in-band pool cannot supply `count` decoys (sparse chain / unusual
+    /// real age), the remaining slots are filled with the NEAREST-aged eligible
+    /// candidates. This preserves transaction liveness while still minimizing
+    /// the realized max ring age — and hence the honest over-charge — to the
+    /// tightest value the available pool allows, rather than reverting to the
+    /// unbounded global-gamma sample that motivated this issue.
     pub fn select_decoys_for_input<R: Rng>(
         &self,
         candidates: &[OutputCandidate],
         count: usize,
         exclude_keys: &[[u8; 32]],
-        _real_input_age: u64, // Reserved for future use in age-aware sampling
+        real_input_age: u64,
         rng: &mut R,
     ) -> Result<Vec<TxOutput>, DecoySelectionError> {
-        // Filter eligible candidates
+        // Filter eligible candidates (confirmed, not excluded).
         let eligible: Vec<&OutputCandidate> = candidates
             .iter()
             .filter(|c| {
@@ -628,30 +698,52 @@ impl GammaDecoySelector {
         )
         .map_err(|_| DecoySelectionError::InvalidDistribution)?;
 
-        // For each decoy slot, sample a target age and find best matching candidate
+        // Age-similarity band around the real input's age (#596).
+        let (min_age, max_age) = age_similarity_band(real_input_age);
+
         let mut selected = Vec::with_capacity(count);
         let mut used_keys = exclude_keys.to_vec();
 
+        // Phase 1: draw from WITHIN the band. Sample a target age from the gamma
+        // spend distribution, clamp it into the band, and pick the nearest-aged
+        // in-band candidate. This keeps the realistic within-band distribution.
         for _ in 0..count {
-            // Sample target age from gamma distribution
             let target_age: f64 = gamma.sample(rng);
-            let target_age_blocks =
-                (target_age as u64).clamp(MIN_DECOY_AGE_BLOCKS, MAX_DECOY_AGE_BLOCKS);
+            let target_age_blocks = (target_age as u64).clamp(min_age, max_age);
 
-            // Find best matching candidate not yet used
             let best = eligible
                 .iter()
-                .filter(|c| !used_keys.contains(&c.output.target_key))
-                .min_by_key(|c| {
-                    let diff = (c.age_blocks as i64 - target_age_blocks as i64).abs();
-                    diff as u64
-                });
+                .filter(|c| {
+                    c.age_blocks >= min_age
+                        && c.age_blocks <= max_age
+                        && !used_keys.contains(&c.output.target_key)
+                })
+                .min_by_key(|c| (c.age_blocks as i64 - target_age_blocks as i64).unsigned_abs());
 
             if let Some(candidate) = best {
                 selected.push(candidate.output.clone());
                 used_keys.push(candidate.output.target_key);
             } else {
+                // Band exhausted; remaining slots handled by the fallback below.
                 break;
+            }
+        }
+
+        // Phase 2 (liveness fallback): fill any remaining slots with the
+        // nearest-aged eligible candidates so over-charge stays as small as the
+        // pool allows even when the band cannot be fully satisfied.
+        if selected.len() < count {
+            let mut leftovers: Vec<&&OutputCandidate> = eligible
+                .iter()
+                .filter(|c| !used_keys.contains(&c.output.target_key))
+                .collect();
+            leftovers.sort_by_key(|c| (c.age_blocks as i64 - real_input_age as i64).unsigned_abs());
+            for candidate in leftovers {
+                if selected.len() >= count {
+                    break;
+                }
+                selected.push(candidate.output.clone());
+                used_keys.push(candidate.output.target_key);
             }
         }
 
@@ -1399,6 +1491,155 @@ mod tests {
             similar_count >= 4,
             "Expected at least 4 similar, got {similar_count}"
         );
+    }
+
+    // =========================================================================
+    // Age-similarity policy tests (issue #596)
+    // =========================================================================
+
+    #[test]
+    fn test_age_similarity_band_bounds() {
+        // ±10% band around a 30-day (~21600-block) input.
+        let (min_age, max_age) = age_similarity_band(21_600);
+        assert_eq!(min_age, 19_440); // 21600 - 10%
+        assert_eq!(max_age, 23_760); // 21600 + 10%
+
+        // Proportional band for a small age.
+        let (min_small, max_small) = age_similarity_band(50);
+        assert_eq!(min_small, 45); // 50 - 10%
+        assert_eq!(max_small, 55); // 50 + 10%
+
+        // Lower bound floors at the confirmation minimum when the proportional
+        // band would dip below it.
+        let (min_floor, max_floor) = age_similarity_band(11);
+        assert_eq!(min_floor, MIN_DECOY_AGE_BLOCKS); // max(11 - 1, 10) = 10
+        assert_eq!(max_floor, 12);
+    }
+
+    /// The core #596 guarantee: for an honest spender, the realized demurrage
+    /// over-charge under the `ring_elapsed_quantile@max` kernel (PR #595) stays
+    /// within the #314 tolerance (≤15%). The age-similarity band caps it at
+    /// ≤1.10 by construction even when the candidate pool contains decoys far
+    /// older than the real input.
+    #[test]
+    fn test_honest_overcharge_under_max_within_314_bound() {
+        use bth_cluster_tax::demurrage::{demurrage_charge, ring_elapsed_quantile};
+
+        const BLOCKS_PER_YEAR: u64 = 6_307_200; // 5s blocks
+        const RATE_BPS: u32 = 200; // 2%/yr
+        const VALUE: u64 = 1_000_000;
+        // Worst case for demurrage magnitude: full 6x cluster factor.
+        const FACTOR: u64 = 6_000;
+
+        let selector = GammaDecoySelector::new();
+        let current_height = 1_000_000u64;
+        let real_input_age = 21_600u64; // ~30 days
+
+        // Candidate pool spanning a WIDE age range, from far younger to ~2.8x
+        // the real age — decoys that would over-charge the honest spender under
+        // @max if the band were not enforced.
+        let mut candidates = Vec::new();
+        for i in 0..300u64 {
+            let mut key = [0u8; 32];
+            key[0] = (i % 251) as u8;
+            key[1] = (i / 251) as u8;
+            let age = 1_000 + i * 200; // 1000 .. 60800 blocks
+            candidates.push(make_candidate(key, age, current_height));
+        }
+
+        let mut real_key = [0u8; 32];
+        real_key[0] = 254;
+        let exclude = vec![real_key];
+
+        // Demurrage on the spender's TRUE holding age.
+        let true_charge =
+            demurrage_charge(VALUE, FACTOR, real_input_age, RATE_BPS, BLOCKS_PER_YEAR);
+        assert!(true_charge > 0);
+
+        let mut rng = rand::thread_rng();
+        let mut worst_overcharge = 1.0f64;
+
+        for _ in 0..300 {
+            let decoys = selector
+                .select_decoys_for_input(&candidates, 10, &exclude, real_input_age, &mut rng)
+                .expect("age-similar selection should succeed with a dense pool");
+
+            // Reconstruct ring members as (value, creation_height): the real
+            // input plus the selected decoys.
+            let mut members: Vec<(u64, u64)> = vec![(VALUE, current_height - real_input_age)];
+            for d in &decoys {
+                let age = candidates
+                    .iter()
+                    .find(|c| c.output.target_key == d.target_key)
+                    .expect("decoy must come from the candidate pool")
+                    .age_blocks;
+                members.push((VALUE, current_height - age));
+            }
+
+            // @max order-statistic over ages (quantile_bps = 10000).
+            let max_elapsed = ring_elapsed_quantile(&members, current_height, 10_000);
+            let charge_max =
+                demurrage_charge(VALUE, FACTOR, max_elapsed, RATE_BPS, BLOCKS_PER_YEAR);
+            let overcharge = charge_max as f64 / true_charge as f64;
+            worst_overcharge = worst_overcharge.max(overcharge);
+        }
+
+        eprintln!(
+            "worst honest over-charge under ring_elapsed_quantile@max: {:.4}",
+            worst_overcharge
+        );
+
+        // #314 bound (≤15%).
+        assert!(
+            worst_overcharge <= 1.15,
+            "over-charge {worst_overcharge} breaches the #314 tolerance"
+        );
+        // ±10% band caps it at ≤1.10 by construction (small slack for integer
+        // rounding in demurrage_charge).
+        assert!(
+            worst_overcharge <= 1.101,
+            "over-charge {worst_overcharge} exceeds the ±10% band ceiling"
+        );
+    }
+
+    /// Selection must never pick a decoy outside the age band when the band has
+    /// enough candidates to fill the ring.
+    #[test]
+    fn test_age_similar_selection_stays_in_band() {
+        let selector = GammaDecoySelector::new();
+        let current_height = 1_000_000u64;
+        let real_input_age = 21_600u64;
+        let (min_age, max_age) = age_similarity_band(real_input_age);
+
+        // Dense in-band pool plus far-out decoys that must never be chosen.
+        let mut candidates = Vec::new();
+        for i in 0..300u64 {
+            let mut key = [0u8; 32];
+            key[0] = (i % 251) as u8;
+            key[1] = (i / 251) as u8;
+            let age = 1_000 + i * 200;
+            candidates.push(make_candidate(key, age, current_height));
+        }
+
+        let mut rng = rand::thread_rng();
+        let exclude: Vec<[u8; 32]> = vec![];
+
+        for _ in 0..100 {
+            let decoys = selector
+                .select_decoys_for_input(&candidates, 10, &exclude, real_input_age, &mut rng)
+                .expect("selection should succeed");
+            for d in &decoys {
+                let age = candidates
+                    .iter()
+                    .find(|c| c.output.target_key == d.target_key)
+                    .unwrap()
+                    .age_blocks;
+                assert!(
+                    age >= min_age && age <= max_age,
+                    "decoy age {age} outside band [{min_age}, {max_age}]"
+                );
+            }
+        }
     }
 
     #[test]
