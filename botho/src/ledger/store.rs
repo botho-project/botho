@@ -1648,6 +1648,19 @@ impl Ledger {
         Ok(())
     }
 
+    /// Test-only entry point to the private block-validity gate
+    /// [`Ledger::verify_consensus_fee_floor`], so tests in sibling modules
+    /// (e.g. the mempool relay-only-tightening invariant, issue #579) can
+    /// exercise the real consensus acceptance path rather than re-deriving it.
+    #[cfg(test)]
+    pub fn verify_consensus_fee_floor_for_test(
+        &self,
+        tx: &BothoTransaction,
+        block_height: u64,
+    ) -> Result<(), LedgerError> {
+        self.verify_consensus_fee_floor(tx, block_height)
+    }
+
     /// Compute the deterministic consensus fee floor for a transfer tx.
     ///
     /// Split out from [`Ledger::verify_consensus_fee_floor`] so tests (and any

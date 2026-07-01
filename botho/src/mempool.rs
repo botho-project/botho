@@ -678,7 +678,18 @@ impl Mempool {
         // Count outputs with encrypted memos for fee calculation
         let num_memos = tx.outputs.iter().filter(|o| o.has_memo()).count();
 
-        // Get the current dynamic fee base (adjusts based on congestion)
+        // Get the current dynamic fee base (adjusts based on congestion).
+        //
+        // RELAY-ONLY policy: `DynamicFeeBase` carries a node-local f64 EMA (reset
+        // on restart) and a wall-clock `at_min_block_time` flag, so its output is
+        // NOT deterministic across nodes. It must NEVER enter consensus — see the
+        // type docs on `bth_cluster_tax::DynamicFeeBase` and the consensus floor
+        // `Ledger::consensus_fee_floor` (which deliberately pins the base to the
+        // neutral `CONSENSUS_FEE_BASE`, omitting congestion). Because
+        // `compute_base` is clamped to `>= base_min == CONSENSUS_FEE_BASE`, this
+        // term can only ever RAISE the local relay threshold above the consensus
+        // floor (never below it) — the relay-only-tightening invariant asserted
+        // just below where `minimum_fee` is computed.
         let dynamic_base = self.dynamic_fee.compute_base(self.at_min_block_time);
 
         // Use dynamic fee calculation for minimum (with actual output count)
@@ -707,9 +718,13 @@ impl Mempool {
         let demurrage_factor =
             self.ring_centroid_floored_factor(&ring_tags, claimed_factor, ledger)?;
 
+        // Current chain tip height. Used both for the demurrage clock below and
+        // for the relay-only-tightening invariant check (M1-B5), so the mempool
+        // and the consensus floor evaluate the demurrage at the identical height.
+        let chain_height = ledger.get_chain_state().map(|s| s.height).unwrap_or(0);
+
         let demurrage = {
             let policy = crate::monetary::mainnet_policy();
-            let chain_height = ledger.get_chain_state().map(|s| s.height).unwrap_or(0);
             // H2/B1 (issue #578, design #574): use the max-quantile order
             // statistic of ring-member ages, NOT the value-weighted mean. The
             // mean lets a spender pad the ring with fresh high-value decoys to
@@ -732,6 +747,46 @@ impl Mempool {
             )
         };
         let minimum_fee = base_minimum_fee.saturating_add(demurrage);
+
+        // M1-B5 (issue #579, design #574 Q1/Q2): relay-only-tightening invariant.
+        //
+        // The mempool admission threshold `minimum_fee` must NEVER fall below the
+        // deterministic consensus fee floor (`Ledger::consensus_fee_floor`, added
+        // in H1-B4 / #578). Relay policy may only ever TIGHTEN above the consensus
+        // floor — it can never admit a transaction that consensus would reject at
+        // block validation (Bitcoin's min-relay-fee vs. consensus-validity split).
+        //
+        // Both sides compute the SAME base curve and the SAME demurrage kernel
+        // (`ring_elapsed_quantile@max` + `ring_centroid_floored_factor`) at the
+        // SAME `chain_height`; the ONLY structural difference is the congestion
+        // term: the mempool multiplies in `dynamic_base = compute_base(..)` while
+        // the consensus floor pins the base to the neutral `CONSENSUS_FEE_BASE`
+        // (== `DynamicFeeBase::default().base_min`). Because `dynamic_base >=
+        // base_min` always (`compute_base` is clamped to `[base_min, base_max]`),
+        // `minimum_fee >= consensus_floor` holds structurally.
+        //
+        // This is a SAFETY NET, not a gate: it does not change the admission
+        // decision below (that still compares `tx.fee` against `minimum_fee`).
+        // We use `debug_assert!` so the invariant is enforced in tests/CI and
+        // during development without adding a hot-path ledger read (an extra
+        // `consensus_fee_floor` call, which resolves ring UTXOs) to release
+        // builds. If it ever fires, a relay-policy change has broken the
+        // never-fall-below-consensus contract and must be fixed before ship.
+        debug_assert!(
+            {
+                match ledger.consensus_fee_floor(&tx, chain_height) {
+                    Ok(consensus_floor) => minimum_fee >= consensus_floor,
+                    // A DB error recomputing the floor is not an invariant
+                    // violation; skip the assertion rather than panic on
+                    // transient ledger pressure.
+                    Err(_) => true,
+                }
+            },
+            "mempool relay minimum_fee {} fell below the consensus fee floor \
+             (relay must only tighten, never fall below consensus; height {})",
+            minimum_fee,
+            chain_height,
+        );
 
         if tx.fee < minimum_fee {
             let shortfall = minimum_fee.saturating_sub(tx.fee);
@@ -2123,5 +2178,262 @@ mod tests {
         let dynamic_fee = DynamicFeeBase::default();
         let mempool = Mempool::with_dynamic_fee(config, dynamic_fee);
         assert!(mempool.is_fee_enforcement_enabled());
+    }
+
+    // ---------------------------------------------------------------------
+    // M1-B5 (issue #579, design #574): relay-only-tightening invariant.
+    //
+    // The mempool admission threshold must always be >= the deterministic
+    // consensus fee floor: relay policy can only ever TIGHTEN above consensus,
+    // never fall below it. Congestion (the node-local `DynamicFeeBase`) stays a
+    // relay-only multiplier; block validity uses the congestion-free
+    // `Ledger::consensus_fee_floor`. A node with a HOT congestion EMA and a node
+    // with a COLD EMA therefore both admit/reject against a threshold that is
+    // always >= the (shared) consensus floor, and both accept the identical set
+    // of BLOCKS.
+    // ---------------------------------------------------------------------
+
+    /// Seed the ledger, via a snapshot, with a set of ring UTXOs and cluster
+    /// wealth, returning the ring members that reference them. Mirrors the
+    /// store.rs `seed_ring_utxos` helper but through the public snapshot path
+    /// (the low-level UTXO db is private to the ledger module).
+    #[cfg(test)]
+    fn seed_ring_via_snapshot(
+        ledger: &Ledger,
+        // (amount, created_at, cluster_id (0 == background), seed byte)
+        specs: &[(u64, u64, u64, u8)],
+        tip_height: u64,
+        cluster_wealth: &[(u64, u64)],
+    ) -> Vec<RingMember> {
+        use crate::ledger::{ChainState, UtxoSnapshot};
+        use crate::transaction::{Utxo, UtxoId};
+        use bth_transaction_types::{ClusterId, TAG_WEIGHT_SCALE};
+
+        let mut utxos = Vec::new();
+        let mut ring = Vec::new();
+        for &(amount, created_at, cluster, seed) in specs {
+            let tags = if cluster == 0 {
+                ClusterTagVector::empty()
+            } else {
+                ClusterTagVector::from_pairs(&[(ClusterId(cluster), TAG_WEIGHT_SCALE)])
+            };
+            let output = TxOutput {
+                amount,
+                target_key: [seed; 32],
+                public_key: [seed.wrapping_add(1); 32],
+                e_memo: None,
+                cluster_tags: tags,
+            };
+            utxos.push(Utxo {
+                id: UtxoId::new([seed; 32], 0),
+                output: output.clone(),
+                created_at,
+            });
+            ring.push(RingMember::from_output(&output));
+        }
+
+        let mut chain_state = ChainState::default();
+        chain_state.height = tip_height;
+        let snapshot = UtxoSnapshot::new(
+            tip_height,
+            [0u8; 32],
+            chain_state,
+            utxos,
+            vec![],
+            cluster_wealth.to_vec(),
+        )
+        .unwrap();
+        ledger.load_from_snapshot(&snapshot, None).unwrap();
+        ring
+    }
+
+    /// Compute the mempool relay-admission `minimum_fee` for `tx` under a given
+    /// `DynamicFeeBase` congestion state. This reproduces the exact formula used
+    /// in `Mempool::add_tx` (base curve × cluster factor × congestion base, plus
+    /// the `ring_elapsed_quantile@max` + factor-floored demurrage) so the test
+    /// asserts against the true relay threshold, differing from the consensus
+    /// floor ONLY by the congestion multiplier.
+    #[cfg(test)]
+    fn relay_minimum_fee(
+        tx: &Transaction,
+        ledger: &Ledger,
+        fee_config: &FeeConfig,
+        dynamic_fee: &DynamicFeeBase,
+        at_min_block_time: bool,
+    ) -> u64 {
+        let tx_size_bytes = tx.estimate_size();
+        let num_outputs = tx.outputs.len();
+        let num_memos = tx.outputs.iter().filter(|o| o.has_memo()).count();
+        let cluster_wealth = effective_cluster_wealth_from_outputs(&tx.outputs, ledger).unwrap();
+        let dynamic_base = dynamic_fee.compute_base(at_min_block_time);
+
+        let base_minimum_fee = fee_config.minimum_fee_dynamic_with_outputs(
+            FeeTransactionType::Hidden,
+            tx_size_bytes,
+            cluster_wealth,
+            num_outputs,
+            num_memos,
+            dynamic_base,
+        );
+
+        let output_sum: u64 = tx
+            .outputs
+            .iter()
+            .fold(0u64, |acc, o| acc.saturating_add(o.amount));
+
+        // Ring members: (value, created_at) for the age quantile, plus tags for
+        // the factor floor — resolved from the committed UTXO set, exactly as
+        // the mempool does inside validate_clsag_inputs.
+        let mut ring_members: Vec<(u64, u64)> = Vec::new();
+        let mut ring_tags: Vec<(ClusterTagVector, u64)> = Vec::new();
+        for input in tx.inputs.clsag() {
+            for member in &input.ring {
+                if let Ok(Some(utxo)) = ledger.get_utxo_by_target_key(&member.target_key) {
+                    ring_members.push((utxo.output.amount, utxo.created_at));
+                    ring_tags.push((utxo.output.cluster_tags.clone(), utxo.output.amount));
+                }
+            }
+        }
+
+        let claimed_factor = fee_config.cluster_factor(cluster_wealth);
+        let ring_refs: Vec<(u64, &ClusterTagVector)> =
+            ring_tags.iter().map(|(tags, value)| (*value, tags)).collect();
+        let demurrage_factor = ledger
+            .ring_centroid_floored_factor(claimed_factor, &ring_refs, &fee_config.cluster_curve)
+            .unwrap();
+
+        let policy = crate::monetary::mainnet_policy();
+        let chain_height = ledger.get_chain_state().map(|s| s.height).unwrap_or(0);
+        let elapsed = bth_cluster_tax::ring_elapsed_quantile(&ring_members, chain_height, 10_000);
+        let blocks_per_year = (365 * 24 * 60 * 60) / policy.target_block_time_secs.max(1);
+        let demurrage = bth_cluster_tax::demurrage_charge(
+            output_sum,
+            demurrage_factor,
+            elapsed,
+            policy.demurrage_rate_bps(chain_height),
+            blocks_per_year,
+        );
+
+        base_minimum_fee.saturating_add(demurrage)
+    }
+
+    /// A HOT node (congested, elevated `DynamicFeeBase`) and a COLD node
+    /// (uncongested) both compute a relay `minimum_fee` that is >= the
+    /// consensus fee floor. The hot node is strictly stricter (relay only
+    /// tightens); the consensus floor is identical for both (block validity is
+    /// congestion-independent), so both nodes accept the same BLOCKS.
+    #[test]
+    fn relay_minimum_never_below_consensus_floor_hot_and_cold() {
+        use crate::transaction::{ClsagRingInput, TxInputs};
+        use bth_transaction_types::{ClusterId, TAG_WEIGHT_SCALE};
+
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+
+        // Wealthy, old cluster so demurrage is non-trivial. Height must be past
+        // the halving interval for demurrage to be active (see store.rs tests).
+        let tip_height = 8_000_000u64;
+        let wealthy_cluster = 9u64;
+        let ring = seed_ring_via_snapshot(
+            &ledger,
+            &[
+                (100_000_000, 0, wealthy_cluster, 80),
+                (100_000_000, 10, wealthy_cluster, 81),
+            ],
+            tip_height,
+            &[(wealthy_cluster, 10_000_000_000)],
+        );
+
+        let outputs = vec![TxOutput {
+            amount: 90_000_000,
+            target_key: [130; 32],
+            public_key: [131; 32],
+            e_memo: None,
+            cluster_tags: ClusterTagVector::from_pairs(&[(ClusterId(wealthy_cluster), TAG_WEIGHT_SCALE)]),
+        }];
+        let tx = Transaction {
+            inputs: TxInputs::new(vec![ClsagRingInput {
+                ring,
+                key_image: [0u8; 32],
+                commitment_key_image: [0u8; 32],
+                clsag_signature: Vec::new(),
+                pseudo_output_amount: 0,
+            }]),
+            outputs,
+            fee: 0,
+            created_at_height: 0,
+        };
+
+        let fee_config = FeeConfig::default();
+
+        // Consensus floor: congestion-free, evaluated at the same height the
+        // mempool uses for its demurrage clock.
+        let consensus_floor = ledger.consensus_fee_floor(&tx, tip_height).unwrap();
+        assert!(consensus_floor > 0, "expected a positive floor for a wealthy old ring");
+
+        // COLD node: fresh EMA, not at min block time -> dynamic base pinned to
+        // base_min == CONSENSUS_FEE_BASE.
+        let cold = DynamicFeeBase::default();
+        let relay_cold = relay_minimum_fee(&tx, &ledger, &fee_config, &cold, false);
+
+        // HOT node: sustained 100% fullness at min block time -> elevated base.
+        let mut hot = DynamicFeeBase::default();
+        for _ in 0..50 {
+            hot.update(100, 100, true);
+        }
+        assert!(
+            hot.compute_base(true) > cold.compute_base(false),
+            "hot node's congestion base must exceed the cold node's"
+        );
+        let relay_hot = relay_minimum_fee(&tx, &ledger, &fee_config, &hot, true);
+
+        // Relay only tightens: both nodes are >= the consensus floor, and the
+        // hot node is strictly stricter than the cold node.
+        assert!(
+            relay_cold >= consensus_floor,
+            "cold relay minimum {relay_cold} fell below consensus floor {consensus_floor}"
+        );
+        assert!(
+            relay_hot >= consensus_floor,
+            "hot relay minimum {relay_hot} fell below consensus floor {consensus_floor}"
+        );
+        assert!(
+            relay_hot > relay_cold,
+            "hot node must charge more than cold node (hot={relay_hot}, cold={relay_cold})"
+        );
+
+        // The cold, uncongested relay minimum equals the consensus floor exactly:
+        // the only difference between them is the congestion multiplier, which is
+        // 1x when uncongested.
+        assert_eq!(
+            relay_cold, consensus_floor,
+            "uncongested relay minimum must equal the consensus floor (same kernel, 1x congestion)"
+        );
+
+        // Block validity is congestion-independent: `verify_consensus_fee_floor`
+        // never reads any node-local congestion state, so the block-acceptance
+        // decision is identical for the hot and cold nodes above. A tx paying
+        // exactly `consensus_floor` is block-valid; one paying `consensus_floor -
+        // 1` is not — on every node, regardless of EMA.
+        let at_floor_tx = Transaction {
+            fee: consensus_floor,
+            ..tx.clone()
+        };
+        assert!(
+            ledger
+                .verify_consensus_fee_floor_for_test(&at_floor_tx, tip_height)
+                .is_ok(),
+            "a tx at exactly the consensus floor must pass block validation"
+        );
+        let under_tx = Transaction {
+            fee: consensus_floor - 1,
+            ..tx.clone()
+        };
+        assert!(
+            ledger
+                .verify_consensus_fee_floor_for_test(&under_tx, tip_height)
+                .is_err(),
+            "a tx below the consensus floor must be rejected at block validation"
+        );
     }
 }
