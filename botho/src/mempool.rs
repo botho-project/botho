@@ -710,7 +710,18 @@ impl Mempool {
         let demurrage = {
             let policy = crate::monetary::mainnet_policy();
             let chain_height = ledger.get_chain_state().map(|s| s.height).unwrap_or(0);
-            let elapsed = bth_cluster_tax::ring_elapsed_centroid(&ring_members, chain_height);
+            // H2/B1 (issue #578, design #574): use the max-quantile order
+            // statistic of ring-member ages, NOT the value-weighted mean. The
+            // mean lets a spender pad the ring with fresh high-value decoys to
+            // drag the demurrage clock toward zero; the max is value-independent
+            // and surfaces a lone old real input. Mempool admission and the
+            // consensus fee floor (`Ledger::consensus_fee_floor`) share this
+            // exact kernel so relay and consensus agree on the demurrage clock.
+            let elapsed = bth_cluster_tax::ring_elapsed_quantile(
+                &ring_members,
+                chain_height,
+                10_000, // quantile_bps = 10000 == max
+            );
             let blocks_per_year = (365 * 24 * 60 * 60) / policy.target_block_time_secs.max(1);
             bth_cluster_tax::demurrage_charge(
                 output_sum,
