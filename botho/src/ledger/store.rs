@@ -1626,13 +1626,13 @@ impl Ledger {
     ///   height being applied), identical on every node.
     ///
     /// All arithmetic is integer-only; the only maps used are the `BTreeMap`
-    /// inside the reused helpers. No `HashMap`/`HashSet` iteration order feeds a
-    /// consensus value. Applies from genesis (height 0) — no soft
+    /// inside the reused helpers. No `HashMap`/`HashSet` iteration order feeds
+    /// a consensus value. Applies from genesis (height 0) — no soft
     /// activation-height ramp inside the consensus path.
     ///
-    /// Returns `Ok(())` when `tx.fee >= floor`, `Err(LedgerError::InvalidBlock)`
-    /// when under-fee, and propagates `LedgerError::Database` on a ledger read
-    /// error (fail-closed).
+    /// Returns `Ok(())` when `tx.fee >= floor`,
+    /// `Err(LedgerError::InvalidBlock)` when under-fee, and propagates
+    /// `LedgerError::Database` on a ledger read error (fail-closed).
     fn verify_consensus_fee_floor(
         &self,
         tx: &BothoTransaction,
@@ -1651,8 +1651,8 @@ impl Ledger {
     /// Compute the deterministic consensus fee floor for a transfer tx.
     ///
     /// Split out from [`Ledger::verify_consensus_fee_floor`] so tests (and any
-    /// independent recomputation) can assert the floor is a pure function of the
-    /// block plus chain state. See that method for the full determinism
+    /// independent recomputation) can assert the floor is a pure function of
+    /// the block plus chain state. See that method for the full determinism
     /// contract.
     pub fn consensus_fee_floor(
         &self,
@@ -1688,9 +1688,10 @@ impl Ledger {
         // Demurrage charge. Resolve the ring members ONCE from the committed
         // UTXO set: we need (value, created_at) for the age quantile and
         // (value, &cluster_tags) for the factor floor. Fail-closed on DB error.
-        let output_sum: u64 = tx.outputs.iter().fold(0u64, |acc, o| {
-            acc.saturating_add(o.amount)
-        });
+        let output_sum: u64 = tx
+            .outputs
+            .iter()
+            .fold(0u64, |acc, o| acc.saturating_add(o.amount));
 
         let mut ring_age_members: Vec<(u64, u64)> = Vec::new();
         // Owns the resolved cluster-tag vectors so we can hand out borrows.
@@ -1699,15 +1700,13 @@ impl Ledger {
             for member in &input.ring {
                 if let Some(utxo) = self.get_utxo_by_target_key(&member.target_key)? {
                     ring_age_members.push((utxo.output.amount, utxo.created_at));
-                    ring_tag_owned
-                        .push((utxo.output.amount, utxo.output.cluster_tags.clone()));
+                    ring_tag_owned.push((utxo.output.amount, utxo.output.cluster_tags.clone()));
                 }
             }
         }
 
         let policy = crate::monetary::mainnet_policy();
-        let blocks_per_year =
-            (365 * 24 * 60 * 60) / policy.target_block_time_secs.max(1);
+        let blocks_per_year = (365 * 24 * 60 * 60) / policy.target_block_time_secs.max(1);
 
         // H2/B1: max-quantile age (value-independent order statistic) instead of
         // the value-weighted mean centroid — fresh decoys can no longer drag
@@ -1764,8 +1763,8 @@ impl Ledger {
         for output in outputs {
             total_value += output.amount as u128;
             for entry in &output.cluster_tags.entries {
-                let value_fraction = (output.amount as u128 * entry.weight as u128)
-                    / (TAG_WEIGHT_SCALE as u128);
+                let value_fraction =
+                    (output.amount as u128 * entry.weight as u128) / (TAG_WEIGHT_SCALE as u128);
                 let global_wealth = self.get_cluster_wealth(entry.cluster_id.0)?;
                 total_weighted_wealth += value_fraction * global_wealth as u128;
             }
@@ -4229,10 +4228,7 @@ mod tests {
     /// Store on-chain UTXOs and return their ring members. Each entry is
     /// `(amount, created_at, cluster_id_or_0_for_background, seed)`.
     #[cfg(test)]
-    fn seed_ring_utxos(
-        ledger: &Ledger,
-        specs: &[(u64, u64, u64, u8)],
-    ) -> Vec<RingMember> {
+    fn seed_ring_utxos(ledger: &Ledger, specs: &[(u64, u64, u64, u8)]) -> Vec<RingMember> {
         use bth_transaction_types::ClusterId;
         let mut ring = Vec::new();
         for &(amount, created_at, cluster, seed) in specs {
@@ -4261,11 +4257,7 @@ mod tests {
     }
 
     #[cfg(test)]
-    fn mk_transfer_tx(
-        ring: Vec<RingMember>,
-        outputs: Vec<TxOutput>,
-        fee: u64,
-    ) -> BothoTransaction {
+    fn mk_transfer_tx(ring: Vec<RingMember>, outputs: Vec<TxOutput>, fee: u64) -> BothoTransaction {
         use crate::transaction::{ClsagRingInput, TxInputs};
         let input = ClsagRingInput {
             ring,
@@ -4283,8 +4275,8 @@ mod tests {
     }
 
     /// A transfer tx with a fee one picocredit below the recomputed floor is
-    /// rejected, while the same tx at exactly the floor is accepted. This is the
-    /// core H1-B4 gate.
+    /// rejected, while the same tx at exactly the floor is accepted. This is
+    /// the core H1-B4 gate.
     #[test]
     fn consensus_fee_floor_rejects_under_fee_accepts_at_floor() {
         let dir = tempdir().unwrap();
@@ -4319,25 +4311,19 @@ mod tests {
     }
 
     /// The floor is a pure function of block + chain state: an independent
-    /// recomputation yields the identical value (determinism contract, #574 Q5).
+    /// recomputation yields the identical value (determinism contract, #574
+    /// Q5).
     #[test]
     fn consensus_fee_floor_is_deterministic_recomputation() {
         let dir = tempdir().unwrap();
         let ledger = Ledger::open(dir.path()).unwrap();
         ledger.set_cluster_wealth_for_test(7, 500_000_000).unwrap();
 
-        let ring = seed_ring_utxos(
-            &ledger,
-            &[(50_000_000, 0, 7, 61), (1_000, 900, 0, 62)],
-        );
-        let outputs = vec![mk_tagged_output(
-            40_000_000,
-            71,
-            {
-                use bth_transaction_types::ClusterId;
-                ClusterTagVector::from_pairs(&[(ClusterId(7), TAG_WEIGHT_SCALE)])
-            },
-        )];
+        let ring = seed_ring_utxos(&ledger, &[(50_000_000, 0, 7, 61), (1_000, 900, 0, 62)]);
+        let outputs = vec![mk_tagged_output(40_000_000, 71, {
+            use bth_transaction_types::ClusterId;
+            ClusterTagVector::from_pairs(&[(ClusterId(7), TAG_WEIGHT_SCALE)])
+        })];
         let tx = mk_transfer_tx(ring, outputs, 0);
 
         let a = ledger.consensus_fee_floor(&tx, 1_000).unwrap();
@@ -4346,17 +4332,19 @@ mod tests {
         assert!(a > 0);
     }
 
-    /// H2/B1 demurrage@max: padding a wealthy old input's ring with fresh decoys
-    /// no longer drives the demurrage clock (and therefore the floor) to zero.
-    /// Contrast with the old value-weighted centroid, which the equal-value
-    /// fresh decoys would have diluted ~91%.
+    /// H2/B1 demurrage@max: padding a wealthy old input's ring with fresh
+    /// decoys no longer drives the demurrage clock (and therefore the
+    /// floor) to zero. Contrast with the old value-weighted centroid, which
+    /// the equal-value fresh decoys would have diluted ~91%.
     #[test]
     fn consensus_fee_floor_demurrage_at_max_resists_fresh_decoy_dilution() {
         use bth_transaction_types::ClusterId;
         let dir = tempdir().unwrap();
         let ledger = Ledger::open(dir.path()).unwrap();
         // A wealthy cluster so the factor floor lifts demurrage above zero.
-        ledger.set_cluster_wealth_for_test(9, 10_000_000_000).unwrap();
+        ledger
+            .set_cluster_wealth_for_test(9, 10_000_000_000)
+            .unwrap();
 
         // Height must be at/after the halving interval (~6.3M blocks) so
         // demurrage is active (zero during the bootstrap epoch by design —
@@ -4413,8 +4401,7 @@ mod tests {
             }
             v
         };
-        let mean_age =
-            bth_cluster_tax::ring_elapsed_centroid(&age_members, block_height);
+        let mean_age = bth_cluster_tax::ring_elapsed_centroid(&age_members, block_height);
         let max_age = bth_cluster_tax::ring_elapsed_quantile(
             &age_members,
             block_height,
@@ -4433,16 +4420,15 @@ mod tests {
     fn consensus_fee_floor_factor_floor_binds_background_outputs() {
         let dir = tempdir().unwrap();
         let ledger = Ledger::open(dir.path()).unwrap();
-        ledger.set_cluster_wealth_for_test(5, 10_000_000_000).unwrap();
+        ledger
+            .set_cluster_wealth_for_test(5, 10_000_000_000)
+            .unwrap();
 
         // Past the halving interval so demurrage is active (see the note in the
         // decoy-dilution test above).
         let block_height = 8_000_000u64;
         // Ring members carry a wealthy cluster's tags and are old.
-        let ring = seed_ring_utxos(
-            &ledger,
-            &[(100_000_000, 0, 5, 40), (100_000_000, 0, 5, 41)],
-        );
+        let ring = seed_ring_utxos(&ledger, &[(100_000_000, 0, 5, 40), (100_000_000, 0, 5, 41)]);
         // Outputs claim BACKGROUND (untagged) -> claimed factor is 1x -> zero
         // demurrage on the claim alone. The ring-centroid floor must override.
         let outputs = vec![mk_tagged_output(90_000_000, 130, ClusterTagVector::empty())];
@@ -4506,11 +4492,11 @@ mod tests {
     }
 
     /// Fail-closed (M7): a demurrage-relevant DB read error propagates as a
-    /// LedgerError rather than defaulting to a lower floor. Exercised indirectly
-    /// via the happy path (get_cluster_wealth returns 0 for absent clusters, not
-    /// an error) plus the explicit contract in the code; here we assert that a
-    /// wealthy cluster's wealth actually raises the floor (proving the read is
-    /// consulted, not silently zeroed).
+    /// LedgerError rather than defaulting to a lower floor. Exercised
+    /// indirectly via the happy path (get_cluster_wealth returns 0 for
+    /// absent clusters, not an error) plus the explicit contract in the
+    /// code; here we assert that a wealthy cluster's wealth actually raises
+    /// the floor (proving the read is consulted, not silently zeroed).
     #[test]
     fn consensus_fee_floor_consults_cluster_wealth() {
         use bth_transaction_types::ClusterId;
@@ -4523,7 +4509,9 @@ mod tests {
         let tx = mk_transfer_tx(ring, outputs, 0);
 
         let poor = ledger.consensus_fee_floor(&tx, 1000).unwrap();
-        ledger.set_cluster_wealth_for_test(3, 10_000_000_000).unwrap();
+        ledger
+            .set_cluster_wealth_for_test(3, 10_000_000_000)
+            .unwrap();
         let rich = ledger.consensus_fee_floor(&tx, 1000).unwrap();
 
         assert!(
