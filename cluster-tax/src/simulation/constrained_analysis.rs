@@ -1100,6 +1100,71 @@ mod tests {
         }
     }
 
+    /// Issue #596: quantify the ring-anonymity cost of the ±10% age-similarity
+    /// decoy band that the wallet enforces so honest spenders stay within the
+    /// #314 demurrage over-charge bound under the `ring_elapsed_quantile@max`
+    /// kernel (#577-B1 / PR #595).
+    ///
+    /// The wallet policy is a symmetric ±10% band; here we approximate it with
+    /// `max_age_ratio = 1.10` (decoy age within `[real/1.1, real*1.1]`) and
+    /// isolate the AGE constraint by leaving the factor constraint open. We
+    /// report the bits-of-privacy reduction versus unconstrained selection so
+    /// the tradeoff is documented and quantified rather than silent.
+    #[test]
+    fn test_age_similarity_band_privacy_cost() {
+        let pool = create_test_pool();
+        let mut rng = rand::thread_rng();
+
+        let config = ConstraintConfig {
+            ring_size: 11,
+            max_age_ratio: 1.10,
+            max_factor_ratio: 1000.0, // effectively no factor constraint
+        };
+
+        let analysis = run_comparative_analysis(&pool, &config, 500, &mut rng);
+
+        let bits = |stats: &SelectionStats, adv: &str| {
+            stats
+                .bits_by_adversary
+                .get(adv)
+                .map(|s| s.mean)
+                .unwrap_or(0.0)
+        };
+        let reduction = |adv: &str| {
+            analysis
+                .privacy_reduction
+                .bits_reduction
+                .get(adv)
+                .copied()
+                .unwrap_or(0.0)
+        };
+
+        eprintln!("=== #596 age-similarity band (±10% ≈ max_age_ratio 1.10) privacy cost ===");
+        for adv in ["Naive", "Age-Heuristic", "Cluster-Fingerprint", "Combined"] {
+            eprintln!(
+                "  {adv:<20} constrained {:.3} bits | unconstrained {:.3} bits | reduction {:+.3} bits",
+                bits(&analysis.constrained, adv),
+                bits(&analysis.unconstrained, adv),
+                reduction(adv),
+            );
+        }
+        eprintln!(
+            "  success rate {:.1}% | fallback rate {:.1}%",
+            analysis.constrained.success_rate * 100.0,
+            analysis.constrained.fallback_rate * 100.0
+        );
+
+        // The band must not collapse effective anonymity. The Combined
+        // (age + cluster) adversary is the realistic worst case; assert its bits
+        // reduction stays under 2 bits so a regression that guts anonymity fails
+        // loudly. The exact measured number is reported above for review.
+        let combined_reduction = reduction("Combined");
+        assert!(
+            combined_reduction < 2.0,
+            "±10% age band reduces Combined privacy by {combined_reduction} bits — too costly"
+        );
+    }
+
     #[test]
     fn test_ring_size_recommendation() {
         let pool = create_test_pool();
