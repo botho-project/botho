@@ -1,5 +1,30 @@
 //! Dynamic fee base that responds to network congestion.
 //!
+//! # RELAY-ONLY policy — MUST NOT enter consensus
+//!
+//! Every value produced by [`DynamicFeeBase`] is **node-local and
+//! non-deterministic across the network**, so it must be confined to
+//! mempool/relay admission policy and must NEVER feed a consensus (block
+//! validation) decision:
+//!
+//! - `ema_fullness` is an `f64` (non-associative floating-point arithmetic can
+//!   differ across compilers/architectures) that is **reset on node restart**
+//!   (see the field docs), so two honest nodes routinely disagree on it.
+//! - `compute_base`/`update` take an `at_min_block_time` flag derived from
+//!   wall-clock block timing, which is also node-local.
+//!
+//! A node with a HOT congestion EMA and a node with a COLD EMA therefore
+//! compute different fee bases for the same transaction. If that value gated
+//! block validity, the two nodes would accept different sets of blocks and the
+//! chain would fork (audit cycle 6 finding **M1**). Consensus instead uses a
+//! fixed, congestion-free floor (`botho::ledger::Ledger::consensus_fee_floor`,
+//! pinned to `DynamicFeeBase::default().base_min` with NO congestion term).
+//! Relay policy layers this dynamic base on top: because `compute_base` is
+//! always clamped to `>= base_min`, the relay threshold can only ever TIGHTEN
+//! above the consensus floor, never fall below it (Bitcoin's min-relay-fee vs.
+//! consensus-validity split; design #574 Q1/Q2, invariant enforced in
+//! `botho::mempool`).
+//!
 //! # Design Philosophy
 //!
 //! Botho uses a cascaded congestion control system:
@@ -48,6 +73,11 @@ use std::collections::VecDeque;
 ///
 /// Only activates when block timing is at minimum (maximum capacity).
 /// Uses exponential response to strongly discourage excess demand.
+///
+/// **RELAY-ONLY**: its `f64` `ema_fullness` (reset on restart) and wall-clock
+/// `at_min_block_time` input are node-local, so this value must never enter
+/// consensus. See the module-level docs for why congestion pricing stays out of
+/// the consensus fee floor.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DynamicFeeBase {
