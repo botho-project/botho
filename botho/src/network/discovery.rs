@@ -66,26 +66,33 @@ use crate::{
 /// old (1.x) format are consensus-incompatible and are disconnected by the
 /// major-version check. Coordinate with the planned testnet reset.
 ///
-/// Bumped to 2.1.0 for the cycle-6 H1 consensus work (issue #606, successor to
+/// Bumped to 3.0.0 for the cycle-6 H1 consensus work (issue #606, successor to
 /// #323). Current `main` now enforces block-acceptance rules that the running
 /// 2.0.0 chain does not: the deterministic consensus fee floor in `add_block`
 /// (H1, PR #602), block fee-sum overflow rejection (#601), and fail-closed
 /// key-image double-spend checks in the store and mempool (#600/#564/#598).
 /// These are consensus-incompatible with the 2.0.0 chain's already-produced
 /// history, so a rolling upgrade is impossible — a coordinated testnet reset
-/// with a fresh genesis is required. `MIN_SUPPORTED_PROTOCOL_VERSION` is raised
-/// in lockstep so 2.0.0 peers are disconnected via the protocol-version
-/// peer-disconnect mechanism rather than silently forking against the new
-/// block-acceptance rules.
-pub const PROTOCOL_VERSION: &str = "2.1.0";
+/// with a fresh genesis is required.
+///
+/// A MAJOR bump (not 2.1.0) is required because the peer-disconnect mechanism
+/// (`is_consensus_compatible` / `consensus_incompatibility`) compares major
+/// versions only: minor/patch differences within the same major merely warn
+/// (graceful soft-fork behavior). Only a major bump actually disconnects
+/// 2.0.0 peers instead of letting them silently fork against the new
+/// block-acceptance rules. `MIN_SUPPORTED_PROTOCOL_VERSION` is raised in
+/// lockstep.
+pub const PROTOCOL_VERSION: &str = "3.0.0";
 
 /// Minimum supported protocol version.
 /// Peers below this version are consensus-incompatible and are disconnected.
-/// Raised to 2.1.0 alongside `PROTOCOL_VERSION` for the H1 consensus fee-floor
+/// Raised to 3.0.0 alongside `PROTOCOL_VERSION` for the H1 consensus fee-floor
 /// deploy (issue #606): 2.0.0 peers produce/accept blocks that violate the new
 /// deterministic fee floor (#602) and related fail-closed rules, so they must
-/// be dropped rather than allowed to fork the reset chain.
-pub const MIN_SUPPORTED_PROTOCOL_VERSION: &str = "2.1.0";
+/// be dropped rather than allowed to fork the reset chain. The bump is a MAJOR
+/// bump because the disconnect check (`is_consensus_compatible`) is major-only;
+/// a minor bump would only warn.
+pub const MIN_SUPPORTED_PROTOCOL_VERSION: &str = "3.0.0";
 
 /// Topic for block announcements
 const BLOCKS_TOPIC: &str = "botho/blocks/1.0.0";
@@ -2148,24 +2155,41 @@ mod tests {
 
     #[test]
     fn test_protocol_version_constant() {
-        // Bumped to 2.1.0 for the cycle-6 H1 consensus fee-floor deploy
+        // Bumped to 3.0.0 for the cycle-6 H1 consensus fee-floor deploy
         // (issue #606): current `main` enforces the deterministic consensus
         // fee floor (#602) plus fee-sum overflow (#601) and fail-closed
         // double-spend (#600/#564/#598), all incompatible with the running
         // 2.0.0 chain, requiring a coordinated reset with fresh genesis.
-        assert_eq!(PROTOCOL_VERSION, "2.1.0");
+        // A MAJOR bump is required because `is_consensus_compatible` (the
+        // peer-disconnect gate) compares majors only — a minor bump would
+        // merely warn, leaving 2.0.0 peers connected and silently forking.
+        assert_eq!(PROTOCOL_VERSION, "3.0.0");
         let parsed = ProtocolVersion::parse(PROTOCOL_VERSION).unwrap();
-        assert_eq!(parsed.major, 2);
-        assert_eq!(parsed.minor, 1);
+        assert_eq!(parsed.major, 3);
+        assert_eq!(parsed.minor, 0);
         assert_eq!(parsed.patch, 0);
     }
 
     #[test]
     fn test_min_supported_protocol_version_constant() {
-        assert_eq!(MIN_SUPPORTED_PROTOCOL_VERSION, "2.1.0");
+        assert_eq!(MIN_SUPPORTED_PROTOCOL_VERSION, "3.0.0");
         let parsed = ProtocolVersion::parse(MIN_SUPPORTED_PROTOCOL_VERSION).unwrap();
-        assert_eq!(parsed.major, 2);
-        assert_eq!(parsed.minor, 1);
+        assert_eq!(parsed.major, 3);
+        assert_eq!(parsed.minor, 0);
+    }
+
+    /// Regression guard for #606: the 3.0.0 deploy must actually DISCONNECT
+    /// 2.0.0 peers (not just warn). This pins the major-only disconnect
+    /// semantics against the live constants.
+    #[test]
+    fn test_v2_peers_are_consensus_incompatible_with_current() {
+        let local = ProtocolVersion::parse(PROTOCOL_VERSION).unwrap();
+        let old_peer = ProtocolVersion::parse("2.0.0").unwrap();
+        assert!(!old_peer.is_consensus_compatible(&local));
+        assert_eq!(
+            ProtocolVersion::consensus_incompatibility(&Some(old_peer.clone()), &local),
+            Some(old_peer)
+        );
     }
 
     #[test]
