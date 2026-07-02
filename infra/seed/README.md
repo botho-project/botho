@@ -32,7 +32,7 @@ infra/seed/
 
 ## Testnet Reset & Multi-Seed Bootstrap
 
-For the coordinated reset onto current `main` (protocol 2.0.0), the
+For the coordinated reset onto current `main` (protocol 3.0.0), the
 genesis/network-parameter reconciliation table, single-seed vs multi-seed
 quorum config, the regional-seed scaffolding, and the operator deploy steps,
 see **[`TESTNET_RESET.md`](./TESTNET_RESET.md)**.

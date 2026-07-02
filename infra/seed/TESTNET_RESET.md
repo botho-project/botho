@@ -1,8 +1,9 @@
 # Testnet Reset & Multi-Seed Bootstrap (operator runbook)
 
 This document covers the **coordinated testnet reset** onto current `main`
-(protocol `2.0.0`) and the **multi-seed bootstrap** plan. It pairs with the
-automatable-prep PR for issue #323.
+(protocol `3.0.0`) and the **multi-seed bootstrap** plan. It was written for
+the #323 reset (protocol `2.0.0`) and updated for the #606 reset (protocol
+`3.0.0`, H1 consensus fee floor).
 
 > **Scope split.** The *code/config* prep (scripts, genesis reconciliation,
 > multi-seed config scaffolding, release-build path) is in the repo. The
@@ -15,7 +16,7 @@ Current `main` values that any reset must match:
 
 | Parameter | Value | Source |
 |-----------|-------|--------|
-| Protocol version | `2.0.0` | `botho/src/network/discovery.rs` (`PROTOCOL_VERSION`, `MIN_SUPPORTED_PROTOCOL_VERSION`) |
+| Protocol version | `3.0.0` | `botho/src/network/discovery.rs` (`PROTOCOL_VERSION`, `MIN_SUPPORTED_PROTOCOL_VERSION`). Consensus-breaking resets require a **major** bump — `is_consensus_compatible` compares major only, so a minor bump would merely warn, not disconnect, old peers. |
 | Testnet genesis magic | `BOTHO_TESTNET_GENESIS_V1` (32-byte, in `prev_block_hash`) | `botho/src/block.rs` (`TESTNET_GENESIS_MAGIC`) |
 | Mainnet genesis magic | `BOTHO_MAINNET_GENESIS_V1` | `botho/src/block.rs` (`MAINNET_GENESIS_MAGIC`) |
 | Testnet network magic | `BTHT` (`0x42 0x54 0x48 0x54`) | `transaction/types/src/constants.rs` (`Network::magic_bytes`) |
@@ -146,7 +147,7 @@ run `workflow_dispatch` with `dry_run=true`, or locally:
 2. **Deploy the binary** to `seed.botho.io` (`infra/seed/deploy-botho.sh`,
    needs SSH key). Note `deploy-botho.sh` builds **on the host**, which OOMs on
    t4g.small seeds — use the build-once-and-distribute path above for seeds.
-3. **Reset the chain** to fresh genesis on protocol 2.0.0
+3. **Reset the chain** to fresh genesis on the current protocol version
    (`reset-chain.sh` / `reset-to-testnet.sh` against the live host).
 4. **Bring up >= 1 additional regional seed** to retire `peerCount: 0`, switch
    quorum back to `recommended`, and either publish DNS TXT seeds or set
