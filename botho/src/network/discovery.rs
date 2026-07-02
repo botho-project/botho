@@ -65,13 +65,27 @@ use crate::{
 /// consensus-breaking change to the transaction wire format. Nodes running the
 /// old (1.x) format are consensus-incompatible and are disconnected by the
 /// major-version check. Coordinate with the planned testnet reset.
-pub const PROTOCOL_VERSION: &str = "2.0.0";
+///
+/// Bumped to 2.1.0 for the cycle-6 H1 consensus work (issue #606, successor to
+/// #323). Current `main` now enforces block-acceptance rules that the running
+/// 2.0.0 chain does not: the deterministic consensus fee floor in `add_block`
+/// (H1, PR #602), block fee-sum overflow rejection (#601), and fail-closed
+/// key-image double-spend checks in the store and mempool (#600/#564/#598).
+/// These are consensus-incompatible with the 2.0.0 chain's already-produced
+/// history, so a rolling upgrade is impossible — a coordinated testnet reset
+/// with a fresh genesis is required. `MIN_SUPPORTED_PROTOCOL_VERSION` is raised
+/// in lockstep so 2.0.0 peers are disconnected via the protocol-version
+/// peer-disconnect mechanism rather than silently forking against the new
+/// block-acceptance rules.
+pub const PROTOCOL_VERSION: &str = "2.1.0";
 
 /// Minimum supported protocol version.
-/// Peers below this major version are consensus-incompatible (their
-/// transaction wire format predates the I4 multi-input balance fix) and are
-/// disconnected.
-pub const MIN_SUPPORTED_PROTOCOL_VERSION: &str = "2.0.0";
+/// Peers below this version are consensus-incompatible and are disconnected.
+/// Raised to 2.1.0 alongside `PROTOCOL_VERSION` for the H1 consensus fee-floor
+/// deploy (issue #606): 2.0.0 peers produce/accept blocks that violate the new
+/// deterministic fee floor (#602) and related fail-closed rules, so they must
+/// be dropped rather than allowed to fork the reset chain.
+pub const MIN_SUPPORTED_PROTOCOL_VERSION: &str = "2.1.0";
 
 /// Topic for block announcements
 const BLOCKS_TOPIC: &str = "botho/blocks/1.0.0";
@@ -2134,20 +2148,24 @@ mod tests {
 
     #[test]
     fn test_protocol_version_constant() {
-        // Bumped to 2.0.0 for the consensus-breaking I4 multi-input CLSAG
-        // balance fix (new `pseudo_output_amount` tx wire field).
-        assert_eq!(PROTOCOL_VERSION, "2.0.0");
+        // Bumped to 2.1.0 for the cycle-6 H1 consensus fee-floor deploy
+        // (issue #606): current `main` enforces the deterministic consensus
+        // fee floor (#602) plus fee-sum overflow (#601) and fail-closed
+        // double-spend (#600/#564/#598), all incompatible with the running
+        // 2.0.0 chain, requiring a coordinated reset with fresh genesis.
+        assert_eq!(PROTOCOL_VERSION, "2.1.0");
         let parsed = ProtocolVersion::parse(PROTOCOL_VERSION).unwrap();
         assert_eq!(parsed.major, 2);
-        assert_eq!(parsed.minor, 0);
+        assert_eq!(parsed.minor, 1);
         assert_eq!(parsed.patch, 0);
     }
 
     #[test]
     fn test_min_supported_protocol_version_constant() {
-        assert_eq!(MIN_SUPPORTED_PROTOCOL_VERSION, "2.0.0");
+        assert_eq!(MIN_SUPPORTED_PROTOCOL_VERSION, "2.1.0");
         let parsed = ProtocolVersion::parse(MIN_SUPPORTED_PROTOCOL_VERSION).unwrap();
         assert_eq!(parsed.major, 2);
+        assert_eq!(parsed.minor, 1);
     }
 
     #[test]

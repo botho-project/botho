@@ -27,7 +27,7 @@ export const EXPECTED_NETWORK = "botho-testnet";
  * we treat a node as compatible when our version is within that node's
  * accepted window (major version match, see `isProtocolCompatible`).
  */
-export const CLIENT_PROTOCOL_VERSION = "2.0.0";
+export const CLIENT_PROTOCOL_VERSION = "2.1.0";
 
 /** Outcome of comparing a node's reported network against this build. */
 export type NetworkMatch = "match" | "mismatch" | "unknown";
