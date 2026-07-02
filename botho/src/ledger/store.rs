@@ -2445,7 +2445,14 @@ impl Ledger {
                         let contribution = ((utxo.output.amount as u128) * (entry.weight as u128)
                             / (TAG_WEIGHT_SCALE as u128))
                             as u64;
-                        *cluster_wealths.entry(entry.cluster_id.0).or_insert(0) += contribution;
+                        // Saturating add for determinism parity with the
+                        // incremental path (`update_cluster_wealth_for_output`),
+                        // which uses `saturating_add`. A rebuilt node must
+                        // produce byte-identical cluster wealth to an
+                        // incrementally-accumulated one, since progressive-fee /
+                        // demurrage inputs read `cluster_wealth_db`. See #604.
+                        let e = cluster_wealths.entry(entry.cluster_id.0).or_insert(0u64);
+                        *e = e.saturating_add(contribution);
                     }
                 }
             }
@@ -3540,6 +3547,121 @@ mod tests {
         assert_eq!(info.total_value, small_amount);
         assert_eq!(info.max_cluster_wealth, whale_amount + small_amount);
         assert_eq!(info.dominant_cluster_id, Some(1));
+    }
+
+    /// Determinism parity (#604): a node that *rebuilds* the cluster wealth
+    /// index from the UTXO set must produce byte-identical
+    /// `cluster_wealth_db` contents to a node that *incrementally* accumulated
+    /// it via `update_cluster_wealth_for_output`. Both paths must share the
+    /// same overflow discipline (`saturating_add`), including at the
+    /// saturation boundary — otherwise a rebuilt node would diverge on
+    /// progressive-fee / demurrage inputs that read `cluster_wealth_db`.
+    #[test]
+    fn test_rebuild_matches_incremental_cluster_wealth_at_saturation() {
+        use bth_transaction_types::ClusterId;
+
+        // Full-weight tag => contribution == output.amount.
+        fn full_tags(cluster: u64) -> ClusterTagVector {
+            ClusterTagVector::from_pairs(&[(ClusterId(cluster), TAG_WEIGHT_SCALE)])
+        }
+
+        // A mix of ordinary values plus values engineered to overflow u64
+        // when summed for a single cluster. Cluster 1 receives three huge
+        // contributions whose sum far exceeds u64::MAX (each ~0.7·MAX), so it
+        // MUST saturate identically on both paths. Cluster 2 stays well below
+        // the boundary to confirm no behavior change there.
+        let huge = (u64::MAX / 4) * 3; // ~0.75 * u64::MAX
+        let outputs: Vec<TxOutput> = vec![
+            // cluster 1: three huge contributions -> saturates
+            TxOutput {
+                amount: huge,
+                target_key: [0x01; 32],
+                public_key: [0xA1; 32],
+                e_memo: None,
+                cluster_tags: full_tags(1),
+            },
+            TxOutput {
+                amount: huge,
+                target_key: [0x02; 32],
+                public_key: [0xA2; 32],
+                e_memo: None,
+                cluster_tags: full_tags(1),
+            },
+            TxOutput {
+                amount: huge,
+                target_key: [0x03; 32],
+                public_key: [0xA3; 32],
+                e_memo: None,
+                cluster_tags: full_tags(1),
+            },
+            // cluster 2: small, below saturation
+            TxOutput {
+                amount: 1_000,
+                target_key: [0x04; 32],
+                public_key: [0xA4; 32],
+                e_memo: None,
+                cluster_tags: full_tags(2),
+            },
+            TxOutput {
+                amount: 2_500,
+                target_key: [0x05; 32],
+                public_key: [0xA5; 32],
+                e_memo: None,
+                cluster_tags: full_tags(2),
+            },
+        ];
+
+        // ---- Incremental ledger: drive update_cluster_wealth_for_output ----
+        let inc_dir = tempdir().unwrap();
+        let inc_ledger = Ledger::open(inc_dir.path()).unwrap();
+        {
+            let mut wtxn = inc_ledger.env.write_txn().unwrap();
+            for output in &outputs {
+                inc_ledger
+                    .update_cluster_wealth_for_output(&mut wtxn, output)
+                    .unwrap();
+            }
+            wtxn.commit().unwrap();
+        }
+
+        // ---- Rebuild ledger: populate utxo_db, then rebuild from scratch ----
+        let rb_dir = tempdir().unwrap();
+        let rb_ledger = Ledger::open(rb_dir.path()).unwrap();
+        {
+            let mut wtxn = rb_ledger.env.write_txn().unwrap();
+            for (i, output) in outputs.iter().enumerate() {
+                let utxo = Utxo {
+                    id: UtxoId::new([i as u8; 32], 0),
+                    output: output.clone(),
+                    created_at: 1,
+                };
+                let bytes = bincode::serialize(&utxo).unwrap();
+                rb_ledger
+                    .utxo_db
+                    .put(&mut wtxn, &utxo.id.to_bytes(), &bytes)
+                    .unwrap();
+            }
+            wtxn.commit().unwrap();
+        }
+        rb_ledger.rebuild_cluster_wealth_index().unwrap();
+
+        // ---- Compare full cluster_wealth_db contents (sorted for stability) ----
+        let mut inc = inc_ledger.get_all_cluster_wealth().unwrap();
+        let mut rb = rb_ledger.get_all_cluster_wealth().unwrap();
+        inc.sort_unstable();
+        rb.sort_unstable();
+        assert_eq!(
+            inc, rb,
+            "rebuild path must produce byte-identical cluster wealth to the incremental path"
+        );
+
+        // Cluster 1 must have saturated at u64::MAX on both paths.
+        assert_eq!(inc_ledger.get_cluster_wealth(1).unwrap(), u64::MAX);
+        assert_eq!(rb_ledger.get_cluster_wealth(1).unwrap(), u64::MAX);
+
+        // Cluster 2 (below the boundary) must be the exact, unsaturated sum.
+        assert_eq!(inc_ledger.get_cluster_wealth(2).unwrap(), 3_500);
+        assert_eq!(rb_ledger.get_cluster_wealth(2).unwrap(), 3_500);
     }
 
     #[test]
