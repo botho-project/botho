@@ -441,6 +441,7 @@ impl RpcPool {
 // Response types for RPC calls
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct NodeStatus {
     pub version: String,
     pub network: String,
@@ -454,11 +455,16 @@ pub struct NodeStatus {
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct ChainInfo {
     pub height: u64,
     pub tip_hash: String,
     pub difficulty: u64,
-    pub total_mined: u64,
+    /// Total picocredits mined. The node emits this as a decimal string
+    /// because the u128 value exceeds JS's 2^53 safe-integer limit
+    /// (botho/src/rpc/mod.rs, `getChainInfo` handler). Callers that need a
+    /// numeric value should parse it (e.g. `.parse::<u128>()`).
+    pub total_mined: String,
     pub mempool_size: usize,
     pub mempool_fees: u64,
 }
@@ -470,37 +476,38 @@ pub struct BlockOutputs {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TxOutput {
+    // Node emits `txHash` (botho/src/rpc/mod.rs, chain_getOutputs handler).
     pub tx_hash: String,
+    // Node emits `outputIndex`.
     pub output_index: u32,
     /// One-time target key (stealth spend key)
-    #[serde(rename = "targetKey")]
     pub target_key: String,
     /// Ephemeral public key (for DH derivation)
-    #[serde(rename = "publicKey")]
     pub public_key: String,
     /// Amount commitment (or plaintext amount)
-    #[serde(rename = "amountCommitment")]
     pub amount_commitment: String,
     /// Cluster tags for progressive fee calculation.
     /// Array of [cluster_id, weight] pairs where weight is parts per million.
-    #[serde(rename = "clusterTags", default)]
+    #[serde(default)]
     pub cluster_tags: Vec<[u64; 2]>,
     /// ML-KEM-768 ciphertext for PQ outputs (1088 bytes, hex-encoded)
     /// Only present for QuantumPrivateTxOut outputs
-    #[serde(rename = "pqCiphertext")]
     pub pq_ciphertext: Option<String>,
     /// Indicates if this is a quantum-private output
-    #[serde(rename = "isPqOutput", default)]
+    #[serde(default)]
     pub is_pq_output: bool,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SubmitTxResult {
     tx_hash: String,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct FeeEstimate {
     #[allow(dead_code)]
     minimum_fee: u64,
@@ -636,5 +643,182 @@ mod tests {
         let discovery = NodeDiscovery::new();
         let pool = RpcPool::new(discovery);
         assert_eq!(pool.connected_count(), 0);
+    }
+
+    // ---------------------------------------------------------------------
+    // RPC wire-format regression guards (#610)
+    //
+    // The node emits camelCase JSON (see botho/src/rpc/mod.rs handlers).
+    // These fixtures mirror the *actual* shape each handler emits so that a
+    // future field-casing drift is caught at `cargo test` time rather than
+    // live against the testnet ("Failed to connect to any nodes"). This is
+    // the wallet edition of the #541-#544 hardcoded-observability bug class.
+    // ---------------------------------------------------------------------
+
+    use serde_json::json;
+
+    /// Mirrors `node_getStatus` (botho/src/rpc/mod.rs). Wallet only reads a
+    /// subset of the emitted fields; extra fields must be ignored gracefully.
+    #[test]
+    fn test_node_status_deserializes_from_node_json() {
+        let fixture = json!({
+            "version": "3.0.0",
+            "nodeVersion": "3.0.0",
+            "gitCommit": "deadbeef",
+            "gitCommitShort": "deadbee",
+            "buildTime": "unknown",
+            "network": "botho-testnet",
+            "uptimeSeconds": 3600u64,
+            "syncStatus": "synced",
+            "syncProgress": 1.0,
+            "synced": true,
+            "chainHeight": 204u64,
+            "tipHash": "0000000000000000000000000000000000000000000000000000000000000000",
+            "peerCount": 2usize,
+            "scpPeerCount": 2usize,
+            "mempoolSize": 0usize,
+            "mintingActive": true,
+            "mintingThreads": 4u64,
+            "totalTransactions": 17u64,
+            "quorumFaultTolerant": false,
+            "quorumDegenerate": true,
+            "minerStalled": false,
+        });
+
+        let status: NodeStatus =
+            serde_json::from_value(fixture).expect("NodeStatus should deserialize camelCase JSON");
+        assert_eq!(status.version, "3.0.0");
+        assert_eq!(status.network, "botho-testnet");
+        assert_eq!(status.uptime_seconds, 3600);
+        assert_eq!(status.sync_status, "synced");
+        assert_eq!(status.chain_height, 204);
+        assert_eq!(
+            status.tip_hash,
+            "0000000000000000000000000000000000000000000000000000000000000000"
+        );
+        assert_eq!(status.peer_count, 2);
+        assert_eq!(status.mempool_size, 0);
+        assert!(status.minting_active);
+    }
+
+    /// Mirrors `getChainInfo` (botho/src/rpc/mod.rs). `totalMined` is a
+    /// decimal string (u128 > JS safe-integer), not a number.
+    #[test]
+    fn test_chain_info_deserializes_with_string_total_mined() {
+        let fixture = json!({
+            "height": 204u64,
+            "tipHash": "1111111111111111111111111111111111111111111111111111111111111111",
+            "difficulty": 12345u64,
+            "totalMined": "611000000000000000000",
+            "totalFeesBurned": "1000",
+            "circulatingSupply": "610999999999999999000",
+            "mempoolSize": 3usize,
+            "mempoolFees": 5000u64,
+        });
+
+        let info: ChainInfo =
+            serde_json::from_value(fixture).expect("ChainInfo should deserialize camelCase JSON");
+        assert_eq!(info.height, 204);
+        assert_eq!(
+            info.tip_hash,
+            "1111111111111111111111111111111111111111111111111111111111111111"
+        );
+        assert_eq!(info.difficulty, 12345);
+        // total_mined is a decimal string that round-trips exactly and parses
+        // into the full-precision u128 value.
+        assert_eq!(info.total_mined, "611000000000000000000");
+        assert_eq!(info.total_mined.parse::<u128>().unwrap(), 611_000_000_000_000_000_000u128);
+        assert_eq!(info.mempool_size, 3);
+        assert_eq!(info.mempool_fees, 5000);
+    }
+
+    /// Mirrors a regular transaction output emitted by `chain_getOutputs`
+    /// (botho/src/rpc/mod.rs). Exercises both the newly-renamed fields
+    /// (`txHash`/`outputIndex`) and the previously-working stealth-key fields.
+    #[test]
+    fn test_tx_output_deserializes_from_node_json() {
+        let fixture = json!({
+            "txHash": "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899",
+            "outputIndex": 0u32,
+            "targetKey": "deadbeef",
+            "publicKey": "cafebabe",
+            "amountCommitment": "0100000000000000",
+            "clusterTags": [[1u64, 1_000_000u64], [2u64, 500_000u64]],
+        });
+
+        let out: TxOutput =
+            serde_json::from_value(fixture).expect("TxOutput should deserialize camelCase JSON");
+        assert_eq!(
+            out.tx_hash,
+            "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899"
+        );
+        assert_eq!(out.output_index, 0);
+        assert_eq!(out.target_key, "deadbeef");
+        assert_eq!(out.public_key, "cafebabe");
+        assert_eq!(out.amount_commitment, "0100000000000000");
+        assert_eq!(out.cluster_tags, vec![[1, 1_000_000], [2, 500_000]]);
+        // Optional PQ fields default cleanly when absent.
+        assert!(out.pq_ciphertext.is_none());
+        assert!(!out.is_pq_output);
+    }
+
+    /// Mirrors the coinbase output shape emitted by `chain_getOutputs`
+    /// (`outputIndex` == u32::MAX, no explicit `clusterTags` guaranteed).
+    #[test]
+    fn test_tx_output_coinbase_shape_deserializes() {
+        let fixture = json!({
+            "txHash": "0011223344556677889900112233445566778899001122334455667788990011",
+            "outputIndex": u32::MAX,
+            "targetKey": "aa",
+            "publicKey": "bb",
+            "amountCommitment": "cc",
+            "clusterTags": [],
+            "coinbase": true,
+        });
+
+        let out: TxOutput = serde_json::from_value(fixture)
+            .expect("coinbase TxOutput should deserialize camelCase JSON");
+        assert_eq!(out.output_index, u32::MAX);
+        assert!(out.cluster_tags.is_empty());
+    }
+
+    /// Mirrors `tx_submit` success (botho/src/rpc/mod.rs).
+    #[test]
+    fn test_submit_tx_result_deserializes_from_node_json() {
+        let fixture = json!({
+            "txHash": "abcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcd0",
+        });
+
+        let result: SubmitTxResult =
+            serde_json::from_value(fixture).expect("SubmitTxResult should deserialize txHash");
+        assert_eq!(
+            result.tx_hash,
+            "abcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcd0"
+        );
+    }
+
+    /// Mirrors `estimateFee` (botho/src/rpc/mod.rs). Only a subset of the
+    /// emitted fields is consumed; extras must be ignored.
+    #[test]
+    fn test_fee_estimate_deserializes_from_node_json() {
+        let fixture = json!({
+            "minimumFee": 1000u64,
+            "clusterFactor": 1000u64,
+            "clusterFactorDisplay": "1.00x",
+            "recommendedFee": 2000u64,
+            "highPriorityFee": 4000u64,
+            "clusterWealth": 0u64,
+            "params": {
+                "amount": 100u64,
+                "txType": "transfer",
+                "memos": 0u64,
+            },
+        });
+
+        let fee: FeeEstimate =
+            serde_json::from_value(fixture).expect("FeeEstimate should deserialize camelCase JSON");
+        assert_eq!(fee.minimum_fee, 1000);
+        assert_eq!(fee.recommended_fee, 2000);
+        assert_eq!(fee.high_priority_fee, 4000);
     }
 }
