@@ -727,7 +727,10 @@ mod tests {
         // total_mined is a decimal string that round-trips exactly and parses
         // into the full-precision u128 value.
         assert_eq!(info.total_mined, "611000000000000000000");
-        assert_eq!(info.total_mined.parse::<u128>().unwrap(), 611_000_000_000_000_000_000u128);
+        assert_eq!(
+            info.total_mined.parse::<u128>().unwrap(),
+            611_000_000_000_000_000_000u128
+        );
         assert_eq!(info.mempool_size, 3);
         assert_eq!(info.mempool_fees, 5000);
     }
