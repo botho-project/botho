@@ -10,17 +10,61 @@
 use botho_wallet::{
     discovery::NodeDiscovery,
     keys::{validate_mnemonic, WalletKeys},
+    rpc_pool::RpcPool,
     storage::EncryptedWallet,
     transaction::{
-        format_amount, parse_amount, OwnedUtxo, Transaction, TransactionBuilder, TxInput, TxOutput,
-        MIN_FEE, PICOCREDITS_PER_CAD,
+        format_amount, parse_amount, to_tx_hex, OwnedUtxo, TransactionBuilder, MIN_TX_FEE,
+        PICOCREDITS_PER_CAD,
     },
+};
+
+// The real transaction format now comes from the shared clsag crate (the same
+// type the node accepts). The wallet's flat `botho-tx-v1` types were
+// quarantined in `transaction_legacy.rs` — see issue #614.
+use bth_transaction_clsag::{
+    RingMember, Transaction as ClsagTransaction, TxOutput as ClsagTxOutput, MIN_RING_SIZE,
 };
 use tempfile::TempDir;
 
 // Standard BIP39 test vector (24 words)
 const TEST_MNEMONIC: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art";
+// A distinct valid 24-word phrase for recipient/decoy fixtures.
+const RECIPIENT_MNEMONIC: &str = "legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth title";
 const TEST_PASSWORD: &str = "secure-test-password-123!";
+
+/// Build a UTXO genuinely owned by `keys` (a real stealth output whose spend
+/// key the wallet can recover), suitable for CLSAG signing.
+fn owned_utxo(keys: &WalletKeys, amount: u64, created_at: u64, seed: u8) -> OwnedUtxo {
+    let out = ClsagTxOutput::new(amount, &keys.public_address());
+    OwnedUtxo {
+        tx_hash: [seed; 32],
+        output_index: 0,
+        amount,
+        created_at,
+        target_key: out.target_key,
+        public_key: out.public_key,
+        subaddress_index: 0,
+        cluster_tags: None,
+    }
+}
+
+/// A ring of `n` valid decoy members (real stealth outputs to a distinct
+/// wallet).
+fn fixture_decoys(n: usize) -> Vec<RingMember> {
+    let decoy_keys = WalletKeys::from_mnemonic(RECIPIENT_MNEMONIC).unwrap();
+    (0..n)
+        .map(|i| {
+            let out = ClsagTxOutput::new(1_000 + i as u64, &decoy_keys.public_address());
+            RingMember::from_output(&out)
+        })
+        .collect()
+}
+
+/// A disconnected RPC pool. Error-path builder tests reach their error before
+/// any RPC call, so the pool is never dialed.
+fn disconnected_rpc() -> RpcPool {
+    RpcPool::new(NodeDiscovery::new())
+}
 
 // ============================================================================
 // Wallet Lifecycle Tests
@@ -161,170 +205,135 @@ mod wallet_lifecycle {
 mod transaction_building {
     use super::*;
 
-    fn create_test_utxos() -> Vec<OwnedUtxo> {
-        vec![
-            OwnedUtxo {
-                tx_hash: [1u8; 32],
-                output_index: 0,
-                amount: 10 * PICOCREDITS_PER_CAD, // 10 CAD
-                created_at: 100,
-                target_key: [0u8; 32],
-                public_key: [0u8; 32],
-                subaddress_index: 0,
-                cluster_tags: None,
-            },
-            OwnedUtxo {
-                tx_hash: [2u8; 32],
-                output_index: 0,
-                amount: 5 * PICOCREDITS_PER_CAD, // 5 CAD
-                created_at: 101,
-                target_key: [0u8; 32],
-                public_key: [0u8; 32],
-                subaddress_index: 0,
-                cluster_tags: None,
-            },
-            OwnedUtxo {
-                tx_hash: [3u8; 32],
-                output_index: 1,
-                amount: 1 * PICOCREDITS_PER_CAD, // 1 CAD
-                created_at: 102,
-                target_key: [0u8; 32],
-                public_key: [0u8; 32],
-                subaddress_index: 0,
-                cluster_tags: None,
-            },
-        ]
-    }
+    // These drive the real CLSAG assembly via `build_signed_transaction` with
+    // fixture decoy rings (the RPC decoy fetch is bypassed so the tests are
+    // deterministic and node-free). Each fixture UTXO is a genuine stealth
+    // output the wallet can spend.
 
     #[test]
-    fn test_build_simple_transaction() {
+    fn test_build_clsag_transaction_verifies() {
         let keys = WalletKeys::from_mnemonic(TEST_MNEMONIC).unwrap();
-        let utxos = create_test_utxos();
-        let builder = TransactionBuilder::new(keys.clone(), utxos, 150);
+        let recipient = WalletKeys::from_mnemonic(RECIPIENT_MNEMONIC)
+            .unwrap()
+            .public_address();
 
-        // Build transaction: send 3 CAD
-        let recipient = keys.public_address(); // Send to self for testing
-        let amount = 3 * PICOCREDITS_PER_CAD;
-        let fee = MIN_FEE;
+        let input_amount = 10 * PICOCREDITS_PER_CAD;
+        let utxo = owned_utxo(&keys, input_amount, 50, 1);
+        let builder = TransactionBuilder::new(keys.clone(), vec![utxo.clone()], 150);
 
-        let tx = builder.build_transfer(&recipient, amount, fee).unwrap();
+        let tx = builder
+            .build_signed_transaction(
+                &recipient,
+                3 * PICOCREDITS_PER_CAD,
+                MIN_TX_FEE,
+                vec![utxo],
+                input_amount,
+                vec![fixture_decoys(MIN_RING_SIZE - 1)],
+            )
+            .unwrap()
+            .transaction;
 
-        // Verify transaction structure
-        assert_eq!(tx.version, 1);
-        assert!(!tx.inputs.is_empty());
-        assert!(!tx.outputs.is_empty());
-        assert_eq!(tx.fee, fee);
+        assert_eq!(tx.inputs.len(), 1);
+        assert_eq!(tx.inputs.clsag()[0].ring.len(), MIN_RING_SIZE);
+        assert_eq!(tx.fee, MIN_TX_FEE);
         assert_eq!(tx.created_at_height, 150);
-
-        // Verify all inputs are signed
-        for input in &tx.inputs {
-            assert!(!input.signature.is_empty());
-            assert_eq!(input.signature.len(), 64); // Schnorrkel signature
-        }
+        assert!(tx.is_valid_structure().is_ok());
+        assert!(tx.verify_ring_signatures().is_ok());
     }
 
     #[test]
     fn test_transaction_with_change() {
         let keys = WalletKeys::from_mnemonic(TEST_MNEMONIC).unwrap();
-        let utxos = vec![OwnedUtxo {
-            tx_hash: [1u8; 32],
-            output_index: 0,
-            amount: 10 * PICOCREDITS_PER_CAD,
-            created_at: 100,
-            target_key: [0u8; 32],
-            public_key: [0u8; 32],
-            subaddress_index: 0,
-            cluster_tags: None,
-        }];
+        let recipient = WalletKeys::from_mnemonic(RECIPIENT_MNEMONIC)
+            .unwrap()
+            .public_address();
 
-        let builder = TransactionBuilder::new(keys.clone(), utxos, 150);
+        let input_amount = 10 * PICOCREDITS_PER_CAD;
+        let utxo = owned_utxo(&keys, input_amount, 50, 1);
+        let builder = TransactionBuilder::new(keys.clone(), vec![utxo.clone()], 150);
 
-        // Send 3 CAD with 10 CAD UTXO - should have change
         let tx = builder
-            .build_transfer(&keys.public_address(), 3 * PICOCREDITS_PER_CAD, MIN_FEE)
-            .unwrap();
+            .build_signed_transaction(
+                &recipient,
+                3 * PICOCREDITS_PER_CAD,
+                MIN_TX_FEE,
+                vec![utxo],
+                input_amount,
+                vec![fixture_decoys(MIN_RING_SIZE - 1)],
+            )
+            .unwrap()
+            .transaction;
 
-        // Should have 2 outputs: recipient + change
+        // Recipient + change.
         assert_eq!(tx.outputs.len(), 2);
-
-        // Verify amounts
         let total_output: u64 = tx.outputs.iter().map(|o| o.amount).sum();
-        assert_eq!(total_output + tx.fee, 10 * PICOCREDITS_PER_CAD);
+        assert_eq!(total_output + tx.fee, input_amount);
+        assert!(tx.verify_ring_signatures().is_ok());
     }
 
     #[test]
     fn test_transaction_exact_amount_no_change() {
         let keys = WalletKeys::from_mnemonic(TEST_MNEMONIC).unwrap();
+        let recipient = WalletKeys::from_mnemonic(RECIPIENT_MNEMONIC)
+            .unwrap()
+            .public_address();
+
         let exact_amount = PICOCREDITS_PER_CAD; // 1 CAD
-        let fee = MIN_FEE;
-
-        let utxos = vec![OwnedUtxo {
-            tx_hash: [1u8; 32],
-            output_index: 0,
-            amount: exact_amount + fee,
-            created_at: 100,
-            target_key: [0u8; 32],
-            public_key: [0u8; 32],
-            subaddress_index: 0,
-            cluster_tags: None,
-        }];
-
-        let builder = TransactionBuilder::new(keys.clone(), utxos, 150);
+        let fee = MIN_TX_FEE;
+        let input_amount = exact_amount + fee;
+        let utxo = owned_utxo(&keys, input_amount, 50, 1);
+        let builder = TransactionBuilder::new(keys.clone(), vec![utxo.clone()], 150);
 
         let tx = builder
-            .build_transfer(&keys.public_address(), exact_amount, fee)
-            .unwrap();
+            .build_signed_transaction(
+                &recipient,
+                exact_amount,
+                fee,
+                vec![utxo],
+                input_amount,
+                vec![fixture_decoys(MIN_RING_SIZE - 1)],
+            )
+            .unwrap()
+            .transaction;
 
-        // Should have only 1 output (no change because it's dust)
+        // No change output (would be zero / dust).
         assert_eq!(tx.outputs.len(), 1);
         assert_eq!(tx.outputs[0].amount, exact_amount);
+        assert!(tx.verify_ring_signatures().is_ok());
     }
 
     #[test]
-    fn test_transaction_signing_deterministic() {
+    fn test_transaction_serialization_roundtrips_through_node_type() {
         let keys = WalletKeys::from_mnemonic(TEST_MNEMONIC).unwrap();
-        let utxos = create_test_utxos();
+        let recipient = WalletKeys::from_mnemonic(RECIPIENT_MNEMONIC)
+            .unwrap()
+            .public_address();
 
-        let builder1 = TransactionBuilder::new(keys.clone(), utxos.clone(), 150);
-        let builder2 = TransactionBuilder::new(keys.clone(), utxos, 150);
-
-        let tx1 = builder1
-            .build_transfer(&keys.public_address(), PICOCREDITS_PER_CAD, MIN_FEE)
-            .unwrap();
-        let tx2 = builder2
-            .build_transfer(&keys.public_address(), PICOCREDITS_PER_CAD, MIN_FEE)
-            .unwrap();
-
-        // Signing hash should be based on transaction content, not random
-        // Note: Outputs have random components, so hashes may differ
-        // But structure should be the same
-        assert_eq!(tx1.inputs.len(), tx2.inputs.len());
-        assert_eq!(tx1.fee, tx2.fee);
-    }
-
-    #[test]
-    fn test_transaction_serialization() {
-        let keys = WalletKeys::from_mnemonic(TEST_MNEMONIC).unwrap();
-        let utxos = create_test_utxos();
-        let builder = TransactionBuilder::new(keys.clone(), utxos, 150);
+        let input_amount = 5 * PICOCREDITS_PER_CAD;
+        let utxo = owned_utxo(&keys, input_amount, 50, 1);
+        let builder = TransactionBuilder::new(keys.clone(), vec![utxo.clone()], 150);
 
         let tx = builder
-            .build_transfer(&keys.public_address(), PICOCREDITS_PER_CAD, MIN_FEE)
-            .unwrap();
+            .build_signed_transaction(
+                &recipient,
+                PICOCREDITS_PER_CAD,
+                MIN_TX_FEE,
+                vec![utxo],
+                input_amount,
+                vec![fixture_decoys(MIN_RING_SIZE - 1)],
+            )
+            .unwrap()
+            .transaction;
 
-        // Serialize to hex
-        let hex = tx.to_hex();
-        assert!(!hex.is_empty());
-
-        // Should be valid hex
+        // Hex-encode the way `tx_submit` expects, then decode as the node's
+        // transaction type and re-verify.
+        let hex = to_tx_hex(&tx).unwrap();
         let bytes = hex::decode(&hex).unwrap();
-        assert!(!bytes.is_empty());
-
-        // Should be deserializable
-        let deserialized: Transaction = bincode::deserialize(&bytes).unwrap();
-        assert_eq!(deserialized.version, tx.version);
-        assert_eq!(deserialized.fee, tx.fee);
-        assert_eq!(deserialized.inputs.len(), tx.inputs.len());
+        let decoded: ClsagTransaction = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.fee, tx.fee);
+        assert_eq!(decoded.inputs.len(), tx.inputs.len());
+        assert_eq!(decoded.outputs.len(), tx.outputs.len());
+        assert!(decoded.verify_ring_signatures().is_ok());
     }
 }
 
@@ -335,61 +344,64 @@ mod transaction_building {
 mod utxo_selection {
     use super::*;
 
-    #[test]
-    fn test_insufficient_funds() {
+    // Error-path builder tests: each returns before any RPC decoy fetch, so a
+    // disconnected pool is never dialed.
+
+    #[tokio::test]
+    async fn test_insufficient_funds() {
         let keys = WalletKeys::from_mnemonic(TEST_MNEMONIC).unwrap();
-        let utxos = vec![OwnedUtxo {
-            tx_hash: [1u8; 32],
-            output_index: 0,
-            amount: PICOCREDITS_PER_CAD, // Only 1 CAD
-            created_at: 100,
-            target_key: [0u8; 32],
-            public_key: [0u8; 32],
-            subaddress_index: 0,
-            cluster_tags: None,
-        }];
+        let utxos = vec![owned_utxo(&keys, PICOCREDITS_PER_CAD, 100, 1)]; // Only 1 CAD
 
         let builder = TransactionBuilder::new(keys.clone(), utxos, 150);
+        let mut rpc = disconnected_rpc();
 
-        // Try to send 10 CAD - should fail
-        let result =
-            builder.build_transfer(&keys.public_address(), 10 * PICOCREDITS_PER_CAD, MIN_FEE);
+        // Try to send 10 CAD - should fail during selection (pre-RPC).
+        let result = builder
+            .build_transfer(
+                &mut rpc,
+                &keys.public_address(),
+                10 * PICOCREDITS_PER_CAD,
+                MIN_TX_FEE,
+            )
+            .await;
 
         assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(err.to_string().contains("Insufficient funds"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Insufficient funds"));
     }
 
-    #[test]
-    fn test_no_utxos_available() {
+    #[tokio::test]
+    async fn test_no_utxos_available() {
         let keys = WalletKeys::from_mnemonic(TEST_MNEMONIC).unwrap();
-        let utxos: Vec<OwnedUtxo> = vec![];
+        let builder = TransactionBuilder::new(keys.clone(), vec![], 150);
+        let mut rpc = disconnected_rpc();
 
-        let builder = TransactionBuilder::new(keys.clone(), utxos, 150);
-
-        let result = builder.build_transfer(&keys.public_address(), PICOCREDITS_PER_CAD, MIN_FEE);
+        let result = builder
+            .build_transfer(
+                &mut rpc,
+                &keys.public_address(),
+                PICOCREDITS_PER_CAD,
+                MIN_TX_FEE,
+            )
+            .await;
 
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("No UTXOs"));
     }
 
-    #[test]
-    fn test_zero_amount_rejected() {
+    #[tokio::test]
+    async fn test_zero_amount_rejected() {
         let keys = WalletKeys::from_mnemonic(TEST_MNEMONIC).unwrap();
-        let utxos = vec![OwnedUtxo {
-            tx_hash: [1u8; 32],
-            output_index: 0,
-            amount: PICOCREDITS_PER_CAD,
-            created_at: 100,
-            target_key: [0u8; 32],
-            public_key: [0u8; 32],
-            subaddress_index: 0,
-            cluster_tags: None,
-        }];
+        let utxos = vec![owned_utxo(&keys, PICOCREDITS_PER_CAD, 100, 1)];
 
         let builder = TransactionBuilder::new(keys.clone(), utxos, 150);
+        let mut rpc = disconnected_rpc();
 
-        let result = builder.build_transfer(&keys.public_address(), 0, MIN_FEE);
+        let result = builder
+            .build_transfer(&mut rpc, &keys.public_address(), 0, MIN_TX_FEE)
+            .await;
 
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("greater than 0"));
@@ -399,50 +411,20 @@ mod utxo_selection {
     fn test_largest_first_selection() {
         let keys = WalletKeys::from_mnemonic(TEST_MNEMONIC).unwrap();
 
-        // Create UTXOs of varying sizes
+        // UTXOs of varying sizes (distinct tx_hash seeds).
         let utxos = vec![
-            OwnedUtxo {
-                tx_hash: [1u8; 32],
-                output_index: 0,
-                amount: 1 * PICOCREDITS_PER_CAD, // 1 CAD - smallest
-                created_at: 100,
-                target_key: [0u8; 32],
-                public_key: [0u8; 32],
-                subaddress_index: 0,
-                cluster_tags: None,
-            },
-            OwnedUtxo {
-                tx_hash: [2u8; 32],
-                output_index: 0,
-                amount: 5 * PICOCREDITS_PER_CAD, // 5 CAD - largest
-                created_at: 101,
-                target_key: [0u8; 32],
-                public_key: [0u8; 32],
-                subaddress_index: 0,
-                cluster_tags: None,
-            },
-            OwnedUtxo {
-                tx_hash: [3u8; 32],
-                output_index: 0,
-                amount: 2 * PICOCREDITS_PER_CAD, // 2 CAD - medium
-                created_at: 102,
-                target_key: [0u8; 32],
-                public_key: [0u8; 32],
-                subaddress_index: 0,
-                cluster_tags: None,
-            },
+            owned_utxo(&keys, PICOCREDITS_PER_CAD, 100, 1), // 1 CAD - smallest
+            owned_utxo(&keys, 5 * PICOCREDITS_PER_CAD, 101, 2), // 5 CAD - largest
+            owned_utxo(&keys, 2 * PICOCREDITS_PER_CAD, 102, 3), // 2 CAD - medium
         ];
 
         let builder = TransactionBuilder::new(keys.clone(), utxos, 150);
 
-        // Request 4 CAD - should select the 5 CAD UTXO
-        let tx = builder
-            .build_transfer(&keys.public_address(), 4 * PICOCREDITS_PER_CAD, MIN_FEE)
-            .unwrap();
-
-        // Should only need 1 input (the 5 CAD UTXO)
-        assert_eq!(tx.inputs.len(), 1);
-        assert_eq!(tx.inputs[0].tx_hash, [2u8; 32]); // The 5 CAD UTXO
+        // Request 4 CAD - largest-first should select only the 5 CAD UTXO.
+        let (selected, total) = builder.select_inputs(4 * PICOCREDITS_PER_CAD).unwrap();
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].tx_hash, [2u8; 32]); // The 5 CAD UTXO
+        assert_eq!(total, 5 * PICOCREDITS_PER_CAD);
     }
 
     #[test]
@@ -474,13 +456,10 @@ mod utxo_selection {
 
         let builder = TransactionBuilder::new(keys.clone(), utxos, 150);
 
-        // Request 4 CAD - needs both UTXOs
-        let tx = builder
-            .build_transfer(&keys.public_address(), 4 * PICOCREDITS_PER_CAD, MIN_FEE)
-            .unwrap();
-
-        // Should need 2 inputs
-        assert_eq!(tx.inputs.len(), 2);
+        // Request 4 CAD - needs both UTXOs.
+        let (selected, total) = builder.select_inputs(4 * PICOCREDITS_PER_CAD).unwrap();
+        assert_eq!(selected.len(), 2);
+        assert_eq!(total, 5 * PICOCREDITS_PER_CAD);
     }
 
     #[test]
@@ -783,53 +762,40 @@ mod signing {
     }
 
     #[test]
-    fn test_transaction_inputs_all_signed() {
+    fn test_transaction_inputs_all_have_ring_signatures() {
         let keys = WalletKeys::from_mnemonic(TEST_MNEMONIC).unwrap();
+        let recipient = WalletKeys::from_mnemonic(RECIPIENT_MNEMONIC)
+            .unwrap()
+            .public_address();
 
-        let utxos = vec![
-            OwnedUtxo {
-                tx_hash: [1u8; 32],
-                output_index: 0,
-                amount: PICOCREDITS_PER_CAD,
-                created_at: 100,
-                target_key: [0u8; 32],
-                public_key: [0u8; 32],
-                subaddress_index: 0,
-                cluster_tags: None,
-            },
-            OwnedUtxo {
-                tx_hash: [2u8; 32],
-                output_index: 0,
-                amount: PICOCREDITS_PER_CAD,
-                created_at: 101,
-                target_key: [0u8; 32],
-                public_key: [0u8; 32],
-                subaddress_index: 0,
-                cluster_tags: None,
-            },
-            OwnedUtxo {
-                tx_hash: [3u8; 32],
-                output_index: 0,
-                amount: PICOCREDITS_PER_CAD,
-                created_at: 102,
-                target_key: [0u8; 32],
-                public_key: [0u8; 32],
-                subaddress_index: 0,
-                cluster_tags: None,
-            },
-        ];
-
-        let builder = TransactionBuilder::new(keys.clone(), utxos, 150);
+        // Two owned inputs of 1 CAD each; spend ~1 CAD + fee across both.
+        let u1 = owned_utxo(&keys, PICOCREDITS_PER_CAD, 100, 1);
+        let u2 = owned_utxo(&keys, PICOCREDITS_PER_CAD, 101, 2);
+        let total_selected = 2 * PICOCREDITS_PER_CAD;
+        let builder = TransactionBuilder::new(keys.clone(), vec![u1.clone(), u2.clone()], 150);
 
         let tx = builder
-            .build_transfer(&keys.public_address(), 2 * PICOCREDITS_PER_CAD, MIN_FEE)
-            .unwrap();
+            .build_signed_transaction(
+                &recipient,
+                PICOCREDITS_PER_CAD,
+                MIN_TX_FEE,
+                vec![u1, u2],
+                total_selected,
+                vec![
+                    fixture_decoys(MIN_RING_SIZE - 1),
+                    fixture_decoys(MIN_RING_SIZE - 1),
+                ],
+            )
+            .unwrap()
+            .transaction;
 
-        // Every input should have a valid signature
-        for input in &tx.inputs {
-            assert!(!input.signature.is_empty());
-            assert_eq!(input.signature.len(), 64);
+        // Every input carries a full CLSAG ring signature.
+        assert_eq!(tx.inputs.len(), 2);
+        for input in tx.inputs.clsag() {
+            assert_eq!(input.ring.len(), MIN_RING_SIZE);
+            assert!(!input.clsag_signature.is_empty());
         }
+        assert!(tx.verify_ring_signatures().is_ok());
     }
 }
 
@@ -840,140 +806,63 @@ mod signing {
 mod transaction_hash {
     use super::*;
 
+    // The CLSAG signing hash is computed over outputs + fee + height (never over
+    // signatures, which don't exist yet at signing time). Build outputs directly
+    // from the clsag TxOutput type.
+    fn clsag_output(amount: u64, target: [u8; 32], public: [u8; 32]) -> ClsagTxOutput {
+        ClsagTxOutput {
+            amount,
+            target_key: target,
+            public_key: public,
+            e_memo: None,
+            cluster_tags: Default::default(),
+        }
+    }
+
     #[test]
-    fn test_signing_hash_excludes_signatures() {
-        let tx1 = Transaction::new(
-            vec![TxInput {
-                tx_hash: [1u8; 32],
-                output_index: 0,
-                signature: vec![0u8; 64],
-            }],
-            vec![TxOutput {
-                amount: 1000,
-                recipient_view_key: [2u8; 32],
-                recipient_spend_key: [3u8; 32],
-                output_public_key: [4u8; 32],
-            }],
-            100,
-            1,
-        );
-
-        let tx2 = Transaction::new(
-            vec![TxInput {
-                tx_hash: [1u8; 32],
-                output_index: 0,
-                signature: vec![0xff; 64], // Different signature
-            }],
-            vec![TxOutput {
-                amount: 1000,
-                recipient_view_key: [2u8; 32],
-                recipient_spend_key: [3u8; 32],
-                output_public_key: [4u8; 32],
-            }],
-            100,
-            1,
-        );
-
-        // Signing hash should be the same
+    fn test_signing_hash_deterministic_over_content() {
+        let outputs = vec![clsag_output(1000, [2u8; 32], [3u8; 32])];
+        let tx1 = ClsagTransaction::new_clsag(Vec::new(), outputs.clone(), 100, 1);
+        let tx2 = ClsagTransaction::new_clsag(Vec::new(), outputs, 100, 1);
+        // Same content -> same signing hash (and it does not depend on any
+        // input signatures, which are absent here by construction).
         assert_eq!(tx1.signing_hash(), tx2.signing_hash());
     }
 
     #[test]
     fn test_signing_hash_changes_with_amount() {
-        let tx1 = Transaction::new(
-            vec![TxInput {
-                tx_hash: [1u8; 32],
-                output_index: 0,
-                signature: vec![],
-            }],
-            vec![TxOutput {
-                amount: 1000,
-                recipient_view_key: [2u8; 32],
-                recipient_spend_key: [3u8; 32],
-                output_public_key: [4u8; 32],
-            }],
+        let tx1 = ClsagTransaction::new_clsag(
+            Vec::new(),
+            vec![clsag_output(1000, [2u8; 32], [3u8; 32])],
             100,
             1,
         );
-
-        let tx2 = Transaction::new(
-            vec![TxInput {
-                tx_hash: [1u8; 32],
-                output_index: 0,
-                signature: vec![],
-            }],
-            vec![TxOutput {
-                amount: 2000, // Different amount
-                recipient_view_key: [2u8; 32],
-                recipient_spend_key: [3u8; 32],
-                output_public_key: [4u8; 32],
-            }],
+        let tx2 = ClsagTransaction::new_clsag(
+            Vec::new(),
+            vec![clsag_output(2000, [2u8; 32], [3u8; 32])],
             100,
             1,
         );
-
         assert_ne!(tx1.signing_hash(), tx2.signing_hash());
     }
 
     #[test]
     fn test_signing_hash_changes_with_fee() {
-        let tx1 = Transaction::new(
-            vec![TxInput {
-                tx_hash: [1u8; 32],
-                output_index: 0,
-                signature: vec![],
-            }],
-            vec![TxOutput {
-                amount: 1000,
-                recipient_view_key: [2u8; 32],
-                recipient_spend_key: [3u8; 32],
-                output_public_key: [4u8; 32],
-            }],
-            100,
-            1,
-        );
-
-        let tx2 = Transaction::new(
-            vec![TxInput {
-                tx_hash: [1u8; 32],
-                output_index: 0,
-                signature: vec![],
-            }],
-            vec![TxOutput {
-                amount: 1000,
-                recipient_view_key: [2u8; 32],
-                recipient_spend_key: [3u8; 32],
-                output_public_key: [4u8; 32],
-            }],
-            200, // Different fee
-            1,
-        );
-
+        let outputs = vec![clsag_output(1000, [2u8; 32], [3u8; 32])];
+        let tx1 = ClsagTransaction::new_clsag(Vec::new(), outputs.clone(), 100, 1);
+        let tx2 = ClsagTransaction::new_clsag(Vec::new(), outputs, 200, 1);
         assert_ne!(tx1.signing_hash(), tx2.signing_hash());
     }
 
     #[test]
     fn test_hash_is_deterministic() {
-        let tx = Transaction::new(
-            vec![TxInput {
-                tx_hash: [1u8; 32],
-                output_index: 0,
-                signature: vec![0u8; 64],
-            }],
-            vec![TxOutput {
-                amount: 1000,
-                recipient_view_key: [2u8; 32],
-                recipient_spend_key: [3u8; 32],
-                output_public_key: [4u8; 32],
-            }],
+        let tx = ClsagTransaction::new_clsag(
+            Vec::new(),
+            vec![clsag_output(1000, [2u8; 32], [3u8; 32])],
             100,
             1,
         );
-
-        let hash1 = tx.signing_hash();
-        let hash2 = tx.signing_hash();
-
-        assert_eq!(hash1, hash2);
+        assert_eq!(tx.signing_hash(), tx.signing_hash());
     }
 }
 
@@ -1164,36 +1053,39 @@ mod decoy_selection {
         wealth
     }
 
+    /// Build `n` in-band decoy candidates for a real input of the given age.
+    /// Ages are spread evenly across the ±10% band [900, 1100] (real age 1000).
+    fn in_band_pool(n: usize, attribution_pct: u32) -> Vec<UtxoCandidate> {
+        // Real age 1000 -> band [900, 1100].
+        let (min_age, max_age) = (900u64, 1100u64);
+        (0..n)
+            .map(|i| {
+                let age = min_age + (i as u64 % (max_age - min_age + 1));
+                create_utxo((i + 1) as u8, CURRENT_BLOCK - age, attribution_pct)
+            })
+            .collect()
+    }
+
     #[test]
     fn test_decoy_selection_integration() {
-        // Create a realistic UTXO pool with varying ages and attributions
-        let real_utxo = create_utxo(0, 5_000, 25); // Age: 5000 blocks, 25% attribution
-
-        let mut pool = Vec::new();
-        // Add UTXOs with similar characteristics (good decoys)
-        for i in 1..=20 {
-            let created_at = 4_500 + (i as u64 * 100); // Ages: 5500 to 3500
-            let attribution = 20 + (i % 10); // 20-29% attribution
-            pool.push(create_utxo(i, created_at, attribution as u32));
-        }
+        // Real input age 1000 -> ±10% band [900, 1100].
+        let real_utxo = create_utxo(0, 9_000, 25);
+        let pool = in_band_pool(25, 25);
 
         let cluster_wealth = create_cluster_wealth();
-        let config = DecoySelectionConfig::default(); // Ring size 11
+        let config = DecoySelectionConfig::default(); // Ring size 20
 
-        let result = select_decoys(
+        let decoys = select_decoys(
             &real_utxo,
             &pool,
             CURRENT_BLOCK,
             &cluster_wealth,
             TOTAL_SUPPLY,
             &config,
-        );
+        )
+        .expect("selection should succeed");
+        assert_eq!(decoys.len(), 19, "Should select 19 decoys for ring size 20");
 
-        assert!(result.is_ok(), "Should succeed: {:?}", result);
-        let decoys = result.unwrap();
-        assert_eq!(decoys.len(), 10, "Should select 10 decoys for ring size 11");
-
-        // Validate all selected decoys meet constraints
         let violations = validate_decoys(
             &real_utxo,
             &decoys,
@@ -1211,47 +1103,31 @@ mod decoy_selection {
 
     #[test]
     fn test_decoy_selection_prevents_fee_inflation_attack() {
-        // Scenario: Malicious node tries to select high-factor decoys
-        // to inflate the user's fees
-
-        let real_utxo = create_utxo(0, 5_000, 10); // Low attribution (10%)
+        // A malicious pool offers high-factor decoys to inflate the user's fee;
+        // the factor ceiling must exclude them.
+        let real_utxo = create_utxo(0, 9_000, 10); // Low attribution (10%)
         let cluster_wealth = create_cluster_wealth();
 
-        // Pool contains both low-factor and high-factor UTXOs
-        let mut pool = Vec::new();
-
-        // Some legitimate low-factor decoys
-        for i in 1..=5 {
-            pool.push(create_utxo(i, 5_000 + i as u64 * 50, 15)); // ~15%
+        // 19 legitimate low-factor in-band decoys + several high-factor ones.
+        let mut pool = in_band_pool(19, 15);
+        for i in 20..=28 {
+            pool.push(create_utxo(i, CURRENT_BLOCK - 1000, 100)); // 100% attribution
         }
 
-        // High-factor "attack" decoys
-        for i in 6..=15 {
-            pool.push(create_utxo(i, 5_000 + i as u64 * 50, 100)); // 100%
-        }
-
-        let config = DecoySelectionConfig {
-            ring_size: 6, // Need 5 decoys
-            max_age_ratio: 2.0,
-            max_factor_ratio: 1.5, // Key constraint!
-        };
-
-        let result = select_decoys(
+        let config = DecoySelectionConfig::default(); // ring 20, factor ceiling 1.5
+        let decoys = select_decoys(
             &real_utxo,
             &pool,
             CURRENT_BLOCK,
             &cluster_wealth,
             TOTAL_SUPPLY,
             &config,
-        );
+        )
+        .expect("selection should succeed");
 
-        assert!(result.is_ok());
-        let decoys = result.unwrap();
-
-        // Verify NO high-factor decoys were selected
+        let real_factor = real_utxo.cluster_factor_global(&cluster_wealth, TOTAL_SUPPLY);
         for decoy in &decoys {
             let factor = decoy.cluster_factor_global(&cluster_wealth, TOTAL_SUPPLY);
-            let real_factor = real_utxo.cluster_factor_global(&cluster_wealth, TOTAL_SUPPLY);
             assert!(
                 factor <= real_factor * config.max_factor_ratio,
                 "High-factor decoy should be excluded: factor {} > max {}",
@@ -1263,28 +1139,42 @@ mod decoy_selection {
 
     #[test]
     fn test_decoy_selection_enforces_age_similarity() {
-        let real_utxo = create_utxo(0, 9_000, 0); // Age: 1000 blocks
+        // Real age 1000 -> band [900, 1100].
+        let real_utxo = create_utxo(0, 9_000, 0);
         let cluster_wealth = create_cluster_wealth();
 
-        // Pool with various ages
-        let pool = vec![
-            create_utxo(1, 9_800, 0),  // Age: 200 - too young
-            create_utxo(2, 9_600, 0),  // Age: 400 - too young
-            create_utxo(3, 8_500, 0),  // Age: 1500 - valid
-            create_utxo(4, 8_000, 0),  // Age: 2000 - at limit
-            create_utxo(5, 7_000, 0),  // Age: 3000 - too old
-            create_utxo(6, 6_000, 0),  // Age: 4000 - too old
-            create_utxo(7, 8_800, 0),  // Age: 1200 - valid
-            create_utxo(8, 8_600, 0),  // Age: 1400 - valid
-            create_utxo(9, 8_300, 0),  // Age: 1700 - valid
-            create_utxo(10, 9_400, 0), // Age: 600 - valid (min age ~500)
-        ];
+        let mut pool = in_band_pool(19, 0);
+        // Out-of-band candidates that must never be selected.
+        pool.push(create_utxo(200, 9_800, 0)); // age 200 - too young
+        pool.push(create_utxo(201, 7_000, 0)); // age 3000 - too old
 
-        let config = DecoySelectionConfig {
-            ring_size: 5, // Need 4 decoys
-            max_age_ratio: 2.0,
-            max_factor_ratio: 10.0, // Relaxed for this test
-        };
+        let config = DecoySelectionConfig::default();
+        let decoys = select_decoys(
+            &real_utxo,
+            &pool,
+            CURRENT_BLOCK,
+            &cluster_wealth,
+            TOTAL_SUPPLY,
+            &config,
+        )
+        .expect("selection should succeed");
+
+        for decoy in &decoys {
+            let age = decoy.age(CURRENT_BLOCK);
+            assert!(
+                (900..=1100).contains(&age),
+                "Decoy age {} outside ±10% band",
+                age
+            );
+        }
+    }
+
+    #[test]
+    fn test_decoy_selection_rejects_young_input() {
+        // A real input younger than the confirmation floor must fail cleanly.
+        let real_utxo = create_utxo(0, CURRENT_BLOCK - 5, 0); // age 5 < 10
+        let cluster_wealth = create_cluster_wealth();
+        let pool = in_band_pool(25, 0);
 
         let result = select_decoys(
             &real_utxo,
@@ -1292,49 +1182,26 @@ mod decoy_selection {
             CURRENT_BLOCK,
             &cluster_wealth,
             TOTAL_SUPPLY,
-            &config,
+            &DecoySelectionConfig::default(),
         );
-
-        assert!(result.is_ok());
-        let decoys = result.unwrap();
-
-        // Verify all decoys are within age bounds
-        let real_age = 1000u64;
-        let min_age = (real_age as f64 / 2.0).ceil() as u64;
-        let max_age = (real_age as f64 * 2.0).floor() as u64;
-
-        for decoy in &decoys {
-            let age = decoy.age(CURRENT_BLOCK);
-            assert!(
-                age >= min_age && age <= max_age,
-                "Decoy age {} outside bounds [{}, {}]",
-                age,
-                min_age,
-                max_age
-            );
-        }
+        assert!(matches!(
+            result,
+            Err(DecoySelectionError::InvalidRealUtxo(_))
+        ));
     }
 
     #[test]
-    fn test_decoy_selection_fallback_relaxes_constraints() {
-        let real_utxo = create_utxo(0, 9_000, 0); // Age: 1000 blocks
-        let cluster_wealth = create_cluster_wealth();
+    fn test_decoy_selection_fallback_relaxes_factor() {
+        // Only high-factor in-band decoys exist; the strict factor ceiling
+        // fails, but the fallback relaxes the ceiling (never the age band).
+        let real_utxo = create_utxo(0, 9_000, 0); // anonymous, factor ~1.0
+        let mut cluster_wealth = HashMap::new();
+        cluster_wealth.insert(ClusterId::new(1), 5_000_000_000_000); // 50% of supply
 
-        // Pool with UTXOs outside strict bounds but within fallback bounds
-        let mut pool = Vec::new();
-        for i in 1..=15 {
-            // Ages around 300-400 (below strict min of 500, but within relaxed 333)
-            pool.push(create_utxo(i, 9_650 + i as u64 * 5, 0));
-        }
+        let pool = in_band_pool(25, 100); // all 100%-attribution (high factor)
 
-        let config = DecoySelectionConfig {
-            ring_size: 5,
-            max_age_ratio: 2.0, // Strict bounds
-            max_factor_ratio: 1.5,
-        };
-
-        // Strict selection should fail
-        let strict_result = select_decoys(
+        let config = DecoySelectionConfig::default();
+        let strict = select_decoys(
             &real_utxo,
             &pool,
             CURRENT_BLOCK,
@@ -1343,52 +1210,42 @@ mod decoy_selection {
             &config,
         );
         assert!(
-            matches!(
-                strict_result,
-                Err(DecoySelectionError::InsufficientDecoys { .. })
-            ),
-            "Strict selection should fail"
+            matches!(strict, Err(DecoySelectionError::InsufficientDecoys { .. })),
+            "Strict factor ceiling should exclude all high-factor decoys"
         );
 
-        // Fallback should succeed with relaxed constraints
-        let fallback_result = select_decoys_with_fallback(
+        let (decoys, was_relaxed) = select_decoys_with_fallback(
             &real_utxo,
             &pool,
             CURRENT_BLOCK,
             &cluster_wealth,
             TOTAL_SUPPLY,
             &config,
+        )
+        .expect("fallback should succeed");
+        assert!(
+            was_relaxed,
+            "Should indicate the factor ceiling was relaxed"
         );
-
-        assert!(fallback_result.is_ok(), "Fallback should succeed");
-        let (decoys, was_relaxed) = fallback_result.unwrap();
-        assert!(was_relaxed, "Should indicate constraints were relaxed");
-        assert_eq!(decoys.len(), 4, "Should still select required decoys");
+        assert_eq!(decoys.len(), 19, "Should still select required decoys");
     }
 
     #[test]
     fn test_validate_decoys_detects_violations() {
-        let real_utxo = create_utxo(0, 9_000, 10); // Age: 1000, 10% attribution
+        // Real age 1000 -> band [900, 1100].
+        let real_utxo = create_utxo(0, 9_000, 10);
 
-        // Use cluster wealth where cluster 1 is wealthy (50% of supply)
-        // This makes 100% attribution to cluster 1 produce a high factor
         let mut cluster_wealth = HashMap::new();
         cluster_wealth.insert(ClusterId::new(1), 5_000_000_000_000); // 50% of supply
 
-        // Create decoys with violations
         let decoys = vec![
             create_utxo(1, 9_900, 10),  // Age: 100 - TOO YOUNG
-            create_utxo(2, 8_500, 10),  // Age: 1500 - valid
+            create_utxo(2, 9_000, 10),  // Age: 1000 - valid
             create_utxo(3, 5_000, 10),  // Age: 5000 - TOO OLD
-            create_utxo(4, 8_700, 100), // Age: 1300, 100% attribution - FACTOR TOO HIGH
+            create_utxo(4, 9_000, 100), // Age: 1000, 100% attribution - FACTOR TOO HIGH
         ];
 
-        let config = DecoySelectionConfig {
-            ring_size: 5,
-            max_age_ratio: 2.0,
-            max_factor_ratio: 1.5,
-        };
-
+        let config = DecoySelectionConfig::default();
         let violations = validate_decoys(
             &real_utxo,
             &decoys,
@@ -1398,15 +1255,12 @@ mod decoy_selection {
             &config,
         );
 
-        // Should detect 3 violations (too young, too old, high factor)
         assert_eq!(
             violations.len(),
             3,
             "Should detect 3 violations: {:?}",
             violations
         );
-
-        // Verify specific violations
         assert!(
             violations
                 .iter()
@@ -1424,69 +1278,6 @@ mod decoy_selection {
                 .iter()
                 .any(|(idx, msg)| *idx == 3 && msg.contains("factor")),
             "Should detect factor violation"
-        );
-    }
-
-    #[test]
-    fn test_decoy_selection_realistic_scenario() {
-        // Simulate a realistic decoy selection for a user transaction
-
-        // User has a UTXO from commerce (30% attribution, 2000 blocks old)
-        let real_utxo = create_utxo(0, 8_000, 30);
-        let cluster_wealth = create_cluster_wealth();
-
-        // Create a realistic UTXO pool with diverse characteristics
-        let mut pool = Vec::new();
-
-        // Old anonymous UTXOs (too different in age)
-        for i in 1..=5 {
-            pool.push(create_utxo(i, 1_000 + i as u64 * 100, 0));
-        }
-
-        // Recent low-value UTXOs (within age range)
-        for i in 6..=15 {
-            pool.push(create_utxo(i, 7_000 + i as u64 * 100, 20));
-        }
-
-        // Commerce UTXOs similar to real input (best candidates)
-        for i in 16..=25 {
-            pool.push(create_utxo(i, 7_500 + i as u64 * 50, 25));
-        }
-
-        // High-value whale UTXOs (factor too high)
-        for i in 26..=30 {
-            pool.push(create_utxo(i, 7_800 + i as u64 * 30, 90));
-        }
-
-        let config = DecoySelectionConfig::default();
-
-        let result = select_decoys(
-            &real_utxo,
-            &pool,
-            CURRENT_BLOCK,
-            &cluster_wealth,
-            TOTAL_SUPPLY,
-            &config,
-        );
-
-        assert!(result.is_ok());
-        let decoys = result.unwrap();
-        assert_eq!(decoys.len(), 10);
-
-        // Validate the selection meets all constraints
-        let violations = validate_decoys(
-            &real_utxo,
-            &decoys,
-            CURRENT_BLOCK,
-            &cluster_wealth,
-            TOTAL_SUPPLY,
-            &config,
-        );
-
-        assert!(
-            violations.is_empty(),
-            "Realistic scenario should produce valid selection: {:?}",
-            violations
         );
     }
 }

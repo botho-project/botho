@@ -33,7 +33,8 @@ use botho_wallet::{
     rpc_pool::RpcPool,
     storage::EncryptedWallet,
     transaction::{
-        sync_wallet as do_sync_wallet, OwnedUtxo, TransactionBuilder, PICOCREDITS_PER_CAD,
+        sync_wallet as do_sync_wallet, to_tx_hex, OwnedUtxo, TransactionBuilder,
+        PICOCREDITS_PER_CAD,
     },
 };
 
@@ -527,21 +528,25 @@ async fn send_transaction_internal(
     // Build transaction based on privacy level
     let tx = match params.privacy_level {
         PrivacyLevel::Standard => builder
-            .build_transfer(&recipient, amount, fee)
+            .build_transfer(&mut rpc, &recipient, amount, fee)
+            .await
             .map_err(|e| anyhow!("Failed to build transaction: {}", e))?,
         PrivacyLevel::Private => {
             // For private transactions, we would use ring signatures
             // For now, fall back to standard (private tx requires more infrastructure)
             log::warn!("Private transactions not yet fully implemented, using standard");
             builder
-                .build_transfer(&recipient, amount, fee)
+                .build_transfer(&mut rpc, &recipient, amount, fee)
+                .await
                 .map_err(|e| anyhow!("Failed to build transaction: {}", e))?
         }
     };
 
     // 8. Submit transaction
     let tx_hash = rpc
-        .submit_transaction(&tx.to_hex())
+        .submit_transaction(
+            &to_tx_hex(&tx).map_err(|e| anyhow!("Failed to serialize transaction: {}", e))?,
+        )
         .await
         .map_err(|e| anyhow!("Failed to submit transaction: {}", e))?;
 

@@ -11,26 +11,46 @@ use bth_crypto_keys::{RistrettoPrivate, RistrettoPublic};
 use bth_crypto_ring_signature::onetime_keys::{
     recover_onetime_private_key, recover_public_subaddress_spend_key,
 };
-use rand::{rngs::OsRng, RngCore};
+use bth_transaction_clsag::{ClsagRingInput, RingMember, Transaction, TxOutput, MIN_RING_SIZE};
+use bth_transaction_types::{ClusterId, ClusterTagEntry, ClusterTagVector};
+use rand::{rngs::OsRng, seq::SliceRandom};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use crate::{
     fee_estimation::StoredTags,
     keys::WalletKeys,
+    ring_builder::fetch_decoy_ring_members,
     rpc_pool::{BlockOutputs, RpcPool},
 };
+
+// The real transaction format lives in `bth-transaction-clsag` (the same crate
+// the node exposes as `botho::transaction`). Re-export the consensus fee floor
+// so callers (e.g. `commands::send`) can enforce it without importing the crate
+// directly.
+pub use bth_transaction_clsag::MIN_TX_FEE;
 
 #[cfg(feature = "pq")]
 use bth_crypto_pq::MlKem768Ciphertext;
 #[cfg(feature = "pq")]
 use bth_crypto_ring_signature::pq_onetime_keys::check_pq_output_ownership;
+#[cfg(feature = "pq")]
+use sha2::{Digest, Sha256};
 
 /// Picocredits per CAD
 pub const PICOCREDITS_PER_CAD: u64 = 1_000_000_000_000;
 
-/// Minimum transaction fee
+/// Minimum transaction fee (legacy display constant).
+///
+/// The consensus-enforced floor is [`MIN_TX_FEE`] (100_000_000 picocredits);
+/// transaction building must never submit a fee below it. This smaller value is
+/// retained only for backward-compatible display code.
 pub const MIN_FEE: u64 = 1_000_000; // 0.000001 CAD
+
+/// Cluster-tag decay rate for output inheritance.
+///
+/// Matches the node's `DEFAULT_CLUSTER_DECAY_RATE` so outputs built by the CLI
+/// wallet inherit ancestry identically to node-built transactions.
+pub const DEFAULT_CLUSTER_DECAY_RATE: u32 = 50_000;
 
 /// Dust threshold - minimum output amount in picocredits.
 /// Outputs below this value are rejected to prevent unspendable UTXOs.
@@ -177,131 +197,48 @@ impl PqOwnedUtxo {
     }
 }
 
-/// A transaction output
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TxOutput {
-    pub amount: u64,
-    pub recipient_view_key: [u8; 32],
-    pub recipient_spend_key: [u8; 32],
-    pub output_public_key: [u8; 32],
-}
+// NOTE: The wallet's own flat `botho-tx-v1` Transaction/TxInput/TxOutput types
+// (with cryptographically-broken stealth outputs) have been replaced by the
+// real CLSAG format from `bth-transaction-clsag`, imported at the top of this
+// module. The legacy types are quarantined in `transaction_legacy.rs` per
+// CLAUDE.md code-preservation. See issue #614.
 
-impl TxOutput {
-    /// Create a new output for a recipient
-    pub fn new(amount: u64, recipient: &PublicAddress) -> Self {
-        let view_key = recipient.view_public_key().to_bytes();
-        let spend_key = recipient.spend_public_key().to_bytes();
-
-        // Generate one-time output key using cryptographically secure RNG
-        let mut random_bytes = [0u8; 32];
-        OsRng.fill_bytes(&mut random_bytes);
-
-        let mut hasher = Sha256::new();
-        hasher.update(view_key);
-        hasher.update(spend_key);
-        hasher.update(amount.to_le_bytes());
-        hasher.update(random_bytes);
-        let output_key: [u8; 32] = hasher.finalize().into();
-
-        Self {
-            amount,
-            recipient_view_key: view_key,
-            recipient_spend_key: spend_key,
-            output_public_key: output_key,
-        }
+/// Convert wallet-local [`StoredTags`] into the on-chain [`ClusterTagVector`]
+/// carried by outputs. Cluster IDs and parts-per-million weights map 1:1.
+fn stored_tags_to_cluster_vector(tags: &StoredTags) -> ClusterTagVector {
+    let entries = tags
+        .tags
+        .iter()
+        .map(|&(id, weight)| ClusterTagEntry {
+            cluster_id: ClusterId(id),
+            weight,
+        })
+        .collect();
+    ClusterTagVector {
+        entries,
+        decay_state: None,
     }
 }
 
-/// A transaction input
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TxInput {
-    pub tx_hash: [u8; 32],
-    pub output_index: u32,
-    pub signature: Vec<u8>,
+/// Compute the merged, decayed cluster-tag vector inherited by all outputs of a
+/// transaction that spends `selected`. Mirrors the node's
+/// `Wallet::compute_inherited_tags` (amount-weighted merge at
+/// [`DEFAULT_CLUSTER_DECAY_RATE`]).
+fn inherited_cluster_tags(selected: &[OwnedUtxo]) -> ClusterTagVector {
+    let inputs: Vec<(ClusterTagVector, u64)> = selected
+        .iter()
+        .map(|u| (stored_tags_to_cluster_vector(&u.tags()), u.amount))
+        .collect();
+    ClusterTagVector::merge_weighted(&inputs, DEFAULT_CLUSTER_DECAY_RATE)
 }
 
-/// A complete transaction
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Transaction {
-    pub version: u32,
-    pub inputs: Vec<TxInput>,
-    pub outputs: Vec<TxOutput>,
-    pub fee: u64,
-    pub created_at_height: u64,
-}
-
-impl Transaction {
-    /// Create a new unsigned transaction
-    pub fn new(
-        inputs: Vec<TxInput>,
-        outputs: Vec<TxOutput>,
-        fee: u64,
-        created_at_height: u64,
-    ) -> Self {
-        Self {
-            version: 1,
-            inputs,
-            outputs,
-            fee,
-            created_at_height,
-        }
-    }
-
-    /// Compute the signing hash (message to be signed)
-    pub fn signing_hash(&self) -> [u8; 32] {
-        let mut hasher = Sha256::new();
-        hasher.update(b"botho-tx-v1");
-        hasher.update(self.version.to_le_bytes());
-
-        for input in &self.inputs {
-            hasher.update(input.tx_hash);
-            hasher.update(input.output_index.to_le_bytes());
-        }
-
-        for output in &self.outputs {
-            hasher.update(output.amount.to_le_bytes());
-            hasher.update(output.recipient_view_key);
-            hasher.update(output.recipient_spend_key);
-            hasher.update(output.output_public_key);
-        }
-
-        hasher.update(self.fee.to_le_bytes());
-        hasher.update(self.created_at_height.to_le_bytes());
-        hasher.finalize().into()
-    }
-
-    /// Compute the transaction hash
-    pub fn hash(&self) -> [u8; 32] {
-        let mut hasher = Sha256::new();
-        hasher.update(self.version.to_le_bytes());
-
-        for input in &self.inputs {
-            hasher.update(input.tx_hash);
-            hasher.update(input.output_index.to_le_bytes());
-        }
-
-        for output in &self.outputs {
-            hasher.update(output.amount.to_le_bytes());
-            hasher.update(output.recipient_view_key);
-            hasher.update(output.recipient_spend_key);
-            hasher.update(output.output_public_key);
-        }
-
-        hasher.update(self.fee.to_le_bytes());
-        hasher.update(self.created_at_height.to_le_bytes());
-        hasher.finalize().into()
-    }
-
-    /// Serialize to hex for submission
-    pub fn to_hex(&self) -> String {
-        let bytes = bincode::serialize(self).expect("Serialization should not fail");
-        hex::encode(bytes)
-    }
-
-    /// Total output amount
-    pub fn total_output(&self) -> u64 {
-        self.outputs.iter().map(|o| o.amount).sum()
-    }
+/// Serialize a signed transaction to hex for submission via `tx_submit`.
+///
+/// Uses the same bincode encoding the node's `tx_submit` handler deserializes
+/// into `botho::transaction::Transaction`.
+pub fn to_tx_hex(tx: &Transaction) -> Result<String> {
+    let bytes = bincode::serialize(tx).map_err(|e| anyhow!("Failed to serialize tx: {}", e))?;
+    Ok(hex::encode(bytes))
 }
 
 /// Result of building a transfer transaction.
@@ -343,35 +280,42 @@ impl TransactionBuilder {
         self.utxos.iter().map(|u| u.amount).sum()
     }
 
-    /// Build and sign a transaction
+    /// Build and sign a CLSAG transaction (fetches decoy ring members via RPC).
     ///
     /// If the change amount is below `DUST_THRESHOLD`, it is added to the fee
     /// instead of creating an unspendable output.
     ///
     /// Returns just the transaction for simple use cases. For cluster tag
     /// propagation, use `build_transfer_with_metadata` instead.
-    pub fn build_transfer(
+    pub async fn build_transfer(
         &self,
+        rpc: &mut RpcPool,
         recipient: &PublicAddress,
         amount: u64,
         fee: u64,
     ) -> Result<Transaction> {
-        let result = self.build_transfer_with_metadata(recipient, amount, fee)?;
+        let result = self
+            .build_transfer_with_metadata(rpc, recipient, amount, fee)
+            .await?;
         Ok(result.transaction)
     }
 
-    /// Build and sign a transaction with full metadata.
+    /// Build and sign a CLSAG transaction with full metadata.
     ///
-    /// If the change amount is below `DUST_THRESHOLD`, it is added to the fee
-    /// instead of creating an unspendable output.
+    /// This is the live send path. For each selected input it fetches an
+    /// age-similar decoy ring over RPC (`chain_getOutputs`), assembles a
+    /// ring-size-20 CLSAG ring with the real input at a randomized position,
+    /// and produces a transaction that bincode-round-trips through
+    /// `botho::transaction::Transaction`.
     ///
     /// Returns `TransferResult` containing:
     /// - The signed transaction
     /// - The actual fee (may be higher if dust was absorbed)
-    /// - The change output's public key (for cluster tag tracking)
+    /// - The change output's public key (for cluster tag tracking, issue #249)
     /// - The selected input UTXOs (for computing blended tags)
-    pub fn build_transfer_with_metadata(
+    pub async fn build_transfer_with_metadata(
         &self,
+        rpc: &mut RpcPool,
         recipient: &PublicAddress,
         amount: u64,
         fee: u64,
@@ -397,41 +341,160 @@ impl TransactionBuilder {
         // Select UTXOs
         let (selected, total_selected) = self.select_utxos(total_needed)?;
 
-        // Calculate change
+        // Exclude our own inputs from every ring's decoy pool.
+        let exclude_keys: Vec<[u8; 32]> = selected.iter().map(|u| u.target_key).collect();
+
+        // Fetch an age-similar decoy ring for each selected input. This is the
+        // only asynchronous step; the CLSAG assembly below is deterministic
+        // given the fetched rings, which keeps it unit-testable in isolation.
+        let decoys_needed = MIN_RING_SIZE - 1;
+        let mut decoy_rings: Vec<Vec<RingMember>> = Vec::with_capacity(selected.len());
+        for utxo in &selected {
+            let real_age = self.sync_height.saturating_sub(utxo.created_at);
+            let decoys = fetch_decoy_ring_members(
+                rpc,
+                real_age,
+                self.sync_height,
+                &exclude_keys,
+                decoys_needed,
+            )
+            .await?;
+            decoy_rings.push(decoys);
+        }
+
+        self.build_signed_transaction(
+            recipient,
+            amount,
+            fee,
+            selected,
+            total_selected,
+            decoy_rings,
+        )
+    }
+
+    /// Assemble and CLSAG-sign the transaction from pre-fetched decoy rings.
+    ///
+    /// Split out from the RPC decoy fetch so the full crypto assembly can be
+    /// exercised in tests with fixture UTXOs and ring members (the live path
+    /// sources `decoy_rings` from [`Self::build_transfer_with_metadata`]).
+    ///
+    /// `decoy_rings[i]` supplies the decoys for `selected[i]`; each must hold
+    /// at least `MIN_RING_SIZE - 1` members.
+    pub fn build_signed_transaction(
+        &self,
+        recipient: &PublicAddress,
+        amount: u64,
+        fee: u64,
+        selected: Vec<OwnedUtxo>,
+        total_selected: u64,
+        decoy_rings: Vec<Vec<RingMember>>,
+    ) -> Result<TransferResult> {
+        if decoy_rings.len() != selected.len() {
+            return Err(anyhow!(
+                "internal error: {} decoy rings for {} inputs",
+                decoy_rings.len(),
+                selected.len()
+            ));
+        }
+
+        let total_needed = amount
+            .checked_add(fee)
+            .ok_or_else(|| anyhow!("Amount overflow"))?;
         let change = total_selected
             .checked_sub(total_needed)
             .ok_or_else(|| anyhow!("Insufficient funds"))?;
 
-        // Create inputs (unsigned)
-        let inputs: Vec<TxInput> = selected
-            .iter()
-            .map(|utxo| TxInput {
-                tx_hash: utxo.tx_hash,
-                output_index: utxo.output_index,
-                signature: vec![], // Will be filled in after signing
-            })
-            .collect();
+        // All outputs inherit the same merged+decayed cluster-tag vector from
+        // the inputs (matches the node's create_private_transaction).
+        let inherited_tags = inherited_cluster_tags(&selected);
 
-        // Create outputs
-        let mut outputs = vec![TxOutput::new(amount, recipient)];
+        // Recipient output (real stealth address via Ristretto DH).
+        let mut outputs = vec![TxOutput::new_with_cluster_tags(
+            amount,
+            recipient,
+            None,
+            inherited_tags.clone(),
+        )];
 
-        // Handle change: if above dust threshold, create change output
-        // Otherwise, add dust to fee (prevents unspendable UTXOs)
+        // Change: if above dust, create a change output back to ourselves;
+        // otherwise absorb the dust into the fee to avoid an unspendable UTXO.
         let (actual_fee, change_output_public_key) = if change >= DUST_THRESHOLD {
-            let change_output = TxOutput::new(change, &self.keys.public_address());
-            let change_key = change_output.output_public_key;
+            let change_output = TxOutput::new_with_cluster_tags(
+                change,
+                &self.keys.public_address(),
+                None,
+                inherited_tags.clone(),
+            );
+            let change_key = change_output.public_key;
             outputs.push(change_output);
             (fee, Some(change_key))
         } else {
-            // Dust change is absorbed into fee
             (fee + change, None)
         };
 
-        // Create transaction
-        let mut tx = Transaction::new(inputs, outputs, actual_fee, self.sync_height);
+        // Preliminary tx (no inputs) yields the signing hash bound by all
+        // outputs, the fee, and the height — the CLSAG message.
+        let preliminary =
+            Transaction::new_clsag(Vec::new(), outputs.clone(), actual_fee, self.sync_height);
+        let signing_hash = preliminary.signing_hash();
 
-        // Sign all inputs
-        self.sign_transaction(&mut tx)?;
+        let account_key = self.keys.account_key();
+        let mut rng = OsRng;
+        let mut ring_inputs = Vec::with_capacity(selected.len());
+
+        for (utxo, decoys) in selected.iter().zip(decoy_rings.into_iter()) {
+            if decoys.len() < MIN_RING_SIZE - 1 {
+                return Err(anyhow!(
+                    "insufficient decoys for ring: need {}, have {}",
+                    MIN_RING_SIZE - 1,
+                    decoys.len()
+                ));
+            }
+
+            // Recover the one-time private key for this UTXO.
+            let onetime_private = utxo.recover_spend_key(account_key).ok_or_else(|| {
+                anyhow!(
+                    "Failed to recover spend key for UTXO {}",
+                    hex::encode(&utxo.tx_hash[0..8])
+                )
+            })?;
+
+            // Real ring member: transparent commitment over the spent amount.
+            let real_output = TxOutput {
+                amount: utxo.amount,
+                target_key: utxo.target_key,
+                public_key: utxo.public_key,
+                e_memo: None,
+                cluster_tags: ClusterTagVector::empty(),
+            };
+            let real_member = RingMember::from_output(&real_output);
+
+            // Assemble ring = real + decoys, then randomize the real input's
+            // position (CLSAG requires the signer index to be secret).
+            let mut ring: Vec<RingMember> = Vec::with_capacity(MIN_RING_SIZE);
+            ring.push(real_member);
+            ring.extend(decoys.into_iter().take(MIN_RING_SIZE - 1));
+            ring.shuffle(&mut rng);
+
+            let real_index = ring
+                .iter()
+                .position(|m| m.target_key == utxo.target_key)
+                .ok_or_else(|| anyhow!("internal error: real input missing from ring"))?;
+
+            let ring_input = ClsagRingInput::new(
+                ring,
+                real_index,
+                &onetime_private,
+                utxo.amount,
+                &signing_hash,
+                &mut rng,
+            )
+            .map_err(|e| anyhow!("Failed to create ring signature: {}", e))?;
+
+            ring_inputs.push(ring_input);
+        }
+
+        let tx = Transaction::new_clsag(ring_inputs, outputs, actual_fee, self.sync_height);
 
         Ok(TransferResult {
             transaction: tx,
@@ -439,6 +502,14 @@ impl TransactionBuilder {
             change_output_public_key,
             selected_inputs: selected,
         })
+    }
+
+    /// Select input UTXOs to cover `target` using a largest-first algorithm.
+    ///
+    /// Returns the selected UTXOs and their total value. Exposed for tests and
+    /// callers that want to preview which inputs a transfer would spend.
+    pub fn select_inputs(&self, target: u64) -> Result<(Vec<OwnedUtxo>, u64)> {
+        self.select_utxos(target)
     }
 
     /// Select UTXOs using largest-first algorithm
@@ -471,19 +542,6 @@ impl TransactionBuilder {
         }
 
         Ok((selected, total))
-    }
-
-    /// Sign all inputs of a transaction
-    fn sign_transaction(&self, tx: &mut Transaction) -> Result<()> {
-        let signing_hash = tx.signing_hash();
-
-        for input in &mut tx.inputs {
-            // Sign with our spend key
-            let signature = self.keys.sign(b"botho-tx-v1", &signing_hash);
-            input.signature = signature;
-        }
-
-        Ok(())
     }
 }
 
@@ -959,42 +1017,194 @@ mod tests {
         assert_eq!(builder.balance(), 1_500_000_000_000);
     }
 
+    // ------------------------------------------------------------------
+    // CLSAG transaction-building tests (issue #614).
+    //
+    // These drive the real crypto path: fixture UTXOs owned by a wallet plus
+    // fixture decoy ring members are assembled into a signed CLSAG tx via
+    // `build_signed_transaction` (the RPC decoy fetch is bypassed so the
+    // assembly is deterministic and CI-runnable). Live-testnet send is
+    // deferred to the operator.
+    // ------------------------------------------------------------------
+
+    const TEST_MNEMONIC: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art";
+    // A distinct 24-word phrase for the recipient wallet.
+    const RECIPIENT_MNEMONIC: &str = "legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth title";
+
+    /// Create a UTXO that `keys` genuinely owns, by generating a real stealth
+    /// output to the wallet's default subaddress and capturing its keys.
+    fn owned_fixture_utxo(keys: &WalletKeys, amount: u64, created_at: u64) -> OwnedUtxo {
+        let out = TxOutput::new(amount, &keys.public_address());
+        let utxo = OwnedUtxo {
+            tx_hash: [9u8; 32],
+            output_index: 0,
+            amount,
+            created_at,
+            target_key: out.target_key,
+            public_key: out.public_key,
+            subaddress_index: 0,
+            cluster_tags: None,
+        };
+        // Sanity: the wallet must be able to recover the spend key.
+        assert!(
+            utxo.recover_spend_key(keys.account_key()).is_some(),
+            "fixture UTXO must be spendable by the wallet"
+        );
+        utxo
+    }
+
+    /// Build a ring of `n` random-but-valid decoy members.
+    fn fixture_decoys(n: usize) -> Vec<RingMember> {
+        let decoy_keys = WalletKeys::from_mnemonic(RECIPIENT_MNEMONIC).unwrap();
+        (0..n)
+            .map(|i| {
+                let out = TxOutput::new(1_000 + i as u64, &decoy_keys.public_address());
+                RingMember::from_output(&out)
+            })
+            .collect()
+    }
+
     #[test]
-    fn test_transaction_signing_hash() {
-        let tx1 = Transaction::new(
-            vec![TxInput {
-                tx_hash: [1u8; 32],
-                output_index: 0,
-                signature: vec![0u8; 64],
-            }],
-            vec![TxOutput {
-                amount: 1000,
-                recipient_view_key: [2u8; 32],
-                recipient_spend_key: [3u8; 32],
-                output_public_key: [4u8; 32],
-            }],
-            100,
-            1,
+    fn test_build_signed_transaction_roundtrips_and_verifies() {
+        use bth_transaction_clsag::Transaction as ClsagTx;
+
+        let keys = WalletKeys::from_mnemonic(TEST_MNEMONIC).unwrap();
+        let recipient_keys = WalletKeys::from_mnemonic(RECIPIENT_MNEMONIC).unwrap();
+        let recipient = recipient_keys.public_address();
+
+        let input_amount = 5_000_000_000_000u64; // 5 CAD
+        let send_amount = 1_000_000_000_000u64; // 1 CAD
+        let fee = MIN_TX_FEE;
+
+        let utxo = owned_fixture_utxo(&keys, input_amount, 50);
+        let builder = TransactionBuilder::new(keys.clone(), vec![utxo.clone()], 1_000);
+
+        let decoy_rings = vec![fixture_decoys(MIN_RING_SIZE - 1)];
+        let result = builder
+            .build_signed_transaction(
+                &recipient,
+                send_amount,
+                fee,
+                vec![utxo],
+                input_amount,
+                decoy_rings,
+            )
+            .expect("build should succeed");
+
+        let tx = &result.transaction;
+        // Ring size is exactly MIN_RING_SIZE (20).
+        assert_eq!(tx.inputs.len(), 1);
+        assert_eq!(tx.inputs.clsag()[0].ring.len(), MIN_RING_SIZE);
+
+        // Structure and balance/signature verification pass.
+        assert!(tx.is_valid_structure().is_ok(), "structure must be valid");
+        assert!(
+            tx.verify_ring_signatures().is_ok(),
+            "CLSAG ring signatures must verify"
         );
 
-        let tx2 = Transaction::new(
-            vec![TxInput {
-                tx_hash: [1u8; 32],
-                output_index: 0,
-                signature: vec![0xff; 64], // Different signature
-            }],
-            vec![TxOutput {
-                amount: 1000,
-                recipient_view_key: [2u8; 32],
-                recipient_spend_key: [3u8; 32],
-                output_public_key: [4u8; 32],
-            }],
-            100,
-            1,
+        // Bincode round-trip through the node's transaction type.
+        let hex = to_tx_hex(tx).expect("serialize");
+        let bytes = hex::decode(&hex).expect("hex decode");
+        let decoded: ClsagTx = bincode::deserialize(&bytes).expect("deserialize as node tx");
+        assert!(
+            decoded.verify_ring_signatures().is_ok(),
+            "round-tripped tx must still verify"
+        );
+        assert_eq!(decoded.fee, tx.fee);
+        assert_eq!(decoded.outputs.len(), tx.outputs.len());
+    }
+
+    #[test]
+    fn test_output_is_detectable_by_recipient() {
+        // The exact bug class the curator found: outputs must be detectable by
+        // the recipient's stealth-address scanner.
+        let keys = WalletKeys::from_mnemonic(TEST_MNEMONIC).unwrap();
+        let recipient_keys = WalletKeys::from_mnemonic(RECIPIENT_MNEMONIC).unwrap();
+        let recipient = recipient_keys.public_address();
+
+        let input_amount = 5_000_000_000_000u64;
+        let send_amount = 1_000_000_000_000u64;
+
+        let utxo = owned_fixture_utxo(&keys, input_amount, 50);
+        let builder = TransactionBuilder::new(keys.clone(), vec![utxo.clone()], 1_000);
+        let decoy_rings = vec![fixture_decoys(MIN_RING_SIZE - 1)];
+
+        let result = builder
+            .build_signed_transaction(
+                &recipient,
+                send_amount,
+                MIN_TX_FEE,
+                vec![utxo],
+                input_amount,
+                decoy_rings,
+            )
+            .expect("build should succeed");
+
+        // The first output is the recipient output. The recipient's scanner
+        // must detect ownership via the DH stealth protocol.
+        let recipient_scanner = WalletScanner::new(&recipient_keys);
+        let out = &result.transaction.outputs[0];
+        assert_eq!(out.amount, send_amount);
+        let owned = recipient_scanner.check_ownership(&out.target_key, &out.public_key);
+        assert_eq!(
+            owned,
+            Some(0),
+            "recipient must detect the output on their default subaddress"
         );
 
-        // Signing hash should be the same regardless of signature content
-        assert_eq!(tx1.signing_hash(), tx2.signing_hash());
+        // And the *sender* must NOT detect the recipient's output as their own.
+        let sender_scanner = WalletScanner::new(&keys);
+        assert_eq!(
+            sender_scanner.check_ownership(&out.target_key, &out.public_key),
+            None,
+            "sender must not own the recipient's output"
+        );
+
+        // The change output (if any) must be detectable by the sender.
+        if let Some(change_key) = result.change_output_public_key {
+            let change_out = result
+                .transaction
+                .outputs
+                .iter()
+                .find(|o| o.public_key == change_key)
+                .expect("change output present");
+            assert!(
+                sender_scanner
+                    .check_ownership(&change_out.target_key, &change_out.public_key)
+                    .is_some(),
+                "sender must detect their own change output"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_young_input_rejected_cleanly() {
+        // A UTXO younger than MIN_DECOY_AGE_BLOCKS must produce a clean,
+        // user-facing error (no panic) before any ring is built. We reach the
+        // young-input guard via the fetch path without needing a live node by
+        // constructing the decoy fetch directly.
+        use crate::ring_builder::fetch_decoy_ring_members;
+
+        // real_age = 5 (< 10) — guard must fire before any RPC call, so passing
+        // a placeholder RpcPool is never dereferenced. We assert the guard by
+        // calling the (RPC-independent) prefix through a helper that mirrors the
+        // build path: real_age computed from a fresh UTXO.
+        let keys = WalletKeys::from_mnemonic(TEST_MNEMONIC).unwrap();
+        let _utxo = owned_fixture_utxo(&keys, 5_000_000_000_000, 995); // height 1000 - 995 = age 5
+
+        // The guard lives at the top of fetch_decoy_ring_members and returns
+        // before touching `rpc`, but Rust still requires a &mut RpcPool. Build a
+        // disconnected pool; the guard returns first.
+        let mut rpc = RpcPool::new(crate::discovery::NodeDiscovery::new());
+        let err = fetch_decoy_ring_members(&mut rpc, 5, 1_000, &[], MIN_RING_SIZE - 1)
+            .await
+            .expect_err("young input must error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("too new") && msg.contains("confirmations"),
+            "expected a clean young-input message, got: {msg}"
+        );
     }
 
     #[cfg(feature = "pq")]
