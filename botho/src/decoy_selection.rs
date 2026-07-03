@@ -707,25 +707,39 @@ impl GammaDecoySelector {
         // Phase 1: draw from WITHIN the band. Sample a target age from the gamma
         // spend distribution, clamp it into the band, and pick the nearest-aged
         // in-band candidate. This keeps the realistic within-band distribution.
-        for _ in 0..count {
-            let target_age: f64 = gamma.sample(rng);
-            let target_age_blocks = (target_age as u64).clamp(min_age, max_age);
+        //
+        // Skip phase 1 entirely when the band is degenerate (`min_age > max_age`).
+        // `age_similarity_band` produces this for a real input younger than
+        // `MIN_DECOY_AGE_BLOCKS`: the lower bound is floored at the confirmation
+        // depth while the upper bound tracks the (young) real age, so no candidate
+        // can ever be in-band. Its doc comment promises callers fall back to
+        // nearest-age selection here — this is that fallback. Entering the loop
+        // would hit `u64::clamp(min_age, max_age)`, which panics when
+        // `min_age > max_age` (issue #611). No RNG is drawn in the degenerate
+        // case, so the non-degenerate path is unaffected and stays deterministic.
+        if min_age <= max_age {
+            for _ in 0..count {
+                let target_age: f64 = gamma.sample(rng);
+                let target_age_blocks = (target_age as u64).clamp(min_age, max_age);
 
-            let best = eligible
-                .iter()
-                .filter(|c| {
-                    c.age_blocks >= min_age
-                        && c.age_blocks <= max_age
-                        && !used_keys.contains(&c.output.target_key)
-                })
-                .min_by_key(|c| (c.age_blocks as i64 - target_age_blocks as i64).unsigned_abs());
+                let best = eligible
+                    .iter()
+                    .filter(|c| {
+                        c.age_blocks >= min_age
+                            && c.age_blocks <= max_age
+                            && !used_keys.contains(&c.output.target_key)
+                    })
+                    .min_by_key(|c| {
+                        (c.age_blocks as i64 - target_age_blocks as i64).unsigned_abs()
+                    });
 
-            if let Some(candidate) = best {
-                selected.push(candidate.output.clone());
-                used_keys.push(candidate.output.target_key);
-            } else {
-                // Band exhausted; remaining slots handled by the fallback below.
-                break;
+                if let Some(candidate) = best {
+                    selected.push(candidate.output.clone());
+                    used_keys.push(candidate.output.target_key);
+                } else {
+                    // Band exhausted; remaining slots handled by the fallback below.
+                    break;
+                }
             }
         }
 
@@ -1640,6 +1654,144 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Regression for issue #611: a real input younger than
+    /// `MIN_DECOY_AGE_BLOCKS` produces a degenerate age band (`min_age >
+    /// max_age`). The phase-1 loop used to call `u64::clamp(min_age,
+    /// max_age)` unconditionally, which panics when `min_age > max_age`.
+    /// The fix skips phase 1 for degenerate bands and lets the nearest-age
+    /// phase-2 fallback fill the ring.
+    #[test]
+    fn test_young_real_input_no_panic() {
+        let selector = GammaDecoySelector::new();
+        let current_height = 1_000_000u64;
+        let count = 10usize;
+
+        // Dense pool of confirmed candidates (all aged >= MIN_DECOY_AGE_BLOCKS)
+        // so phase 2 can always supply a full ring.
+        let mut candidates = Vec::new();
+        for i in 0..50u64 {
+            let mut key = [0u8; 32];
+            key[0] = (i % 251) as u8;
+            key[1] = (i / 251) as u8;
+            let age = MIN_DECOY_AGE_BLOCKS + i; // 10 .. 59
+            candidates.push(make_candidate(key, age, current_height));
+        }
+        let exclude: Vec<[u8; 32]> = vec![];
+        let mut rng = rand::thread_rng();
+
+        // AC-1 / AC-4: age 0 must not panic (degenerate band [10, 0]).
+        // AC-2: phase 2 fills the full ring; every decoy is confirmed (age >= 10).
+        let decoys_0 = selector
+            .select_decoys_for_input(&candidates, count, &exclude, 0, &mut rng)
+            .expect("age-0 real input must fall back to phase-2 selection, not panic");
+        assert_eq!(
+            decoys_0.len(),
+            count,
+            "phase-2 fallback must fill the full ring for a degenerate band"
+        );
+        for d in &decoys_0 {
+            let age = candidates
+                .iter()
+                .find(|c| c.output.target_key == d.target_key)
+                .expect("decoy must come from the candidate pool")
+                .age_blocks;
+            assert!(
+                age >= MIN_DECOY_AGE_BLOCKS,
+                "phase-2 decoy age {age} below confirmation floor"
+            );
+        }
+
+        // AC-5: age 9 is the last degenerate value (band [10, 9]). Same fallback.
+        let decoys_9 = selector
+            .select_decoys_for_input(&candidates, count, &exclude, 9, &mut rng)
+            .expect("age-9 real input must fall back to phase-2 selection, not panic");
+        assert_eq!(decoys_9.len(), count);
+        for d in &decoys_9 {
+            let age = candidates
+                .iter()
+                .find(|c| c.output.target_key == d.target_key)
+                .expect("decoy must come from the candidate pool")
+                .age_blocks;
+            assert!(
+                age >= MIN_DECOY_AGE_BLOCKS,
+                "phase-2 decoy age {age} below confirmation floor"
+            );
+        }
+
+        // AC-5: age 10 is the first NON-degenerate value. The band is [10, 11]
+        // (delta = 10 * 1000 / 10000 = 1), so phase 1 runs. Confirm phase-1
+        // in-band selection by giving the pool a dense supply at ages 10 and 11
+        // and asserting every decoy lands inside the band.
+        let (min10, max10) = age_similarity_band(10);
+        assert_eq!((min10, max10), (10, 11), "band for age 10 must be [10, 11]");
+        let mut in_band_pool = Vec::new();
+        for i in 0..30u64 {
+            let mut key = [0u8; 32];
+            key[0] = (i % 251) as u8;
+            key[1] = (i / 251) as u8;
+            let age = 10 + (i % 2); // alternate 10 and 11, both in-band
+            in_band_pool.push(make_candidate(key, age, current_height));
+        }
+        for _ in 0..50 {
+            let decoys_10 = selector
+                .select_decoys_for_input(&in_band_pool, count, &exclude, 10, &mut rng)
+                .expect("age-10 real input must select via phase 1");
+            assert_eq!(decoys_10.len(), count);
+            for d in &decoys_10 {
+                let age = in_band_pool
+                    .iter()
+                    .find(|c| c.output.target_key == d.target_key)
+                    .expect("decoy must come from the candidate pool")
+                    .age_blocks;
+                assert!(
+                    (min10..=max10).contains(&age),
+                    "age-10 decoy age {age} outside phase-1 band [{min10}, {max10}]"
+                );
+            }
+        }
+    }
+
+    /// AC-6: the fix must not perturb the non-degenerate path's RNG
+    /// consumption. Given the same seed and pool, `select_decoys_for_input`
+    /// returns the same decoy set (same members, same order) across runs.
+    #[test]
+    fn test_select_decoys_deterministic_with_seed() {
+        use rand::SeedableRng;
+        use rand_chacha::ChaCha8Rng;
+
+        let selector = GammaDecoySelector::new();
+        let current_height = 1_000_000u64;
+        let real_input_age = 21_600u64; // non-degenerate: phase 1 runs
+        let count = 10usize;
+
+        let mut candidates = Vec::new();
+        for i in 0..300u64 {
+            let mut key = [0u8; 32];
+            key[0] = (i % 251) as u8;
+            key[1] = (i / 251) as u8;
+            let age = 1_000 + i * 200;
+            candidates.push(make_candidate(key, age, current_height));
+        }
+        let exclude: Vec<[u8; 32]> = vec![];
+
+        let mut rng_a = ChaCha8Rng::seed_from_u64(0xB0_1234_5678);
+        let decoys_a = selector
+            .select_decoys_for_input(&candidates, count, &exclude, real_input_age, &mut rng_a)
+            .expect("selection should succeed");
+
+        let mut rng_b = ChaCha8Rng::seed_from_u64(0xB0_1234_5678);
+        let decoys_b = selector
+            .select_decoys_for_input(&candidates, count, &exclude, real_input_age, &mut rng_b)
+            .expect("selection should succeed");
+
+        let keys_a: Vec<[u8; 32]> = decoys_a.iter().map(|d| d.target_key).collect();
+        let keys_b: Vec<[u8; 32]> = decoys_b.iter().map(|d| d.target_key).collect();
+        assert_eq!(
+            keys_a, keys_b,
+            "same seed + pool must yield identical decoy selection"
+        );
     }
 
     #[test]
