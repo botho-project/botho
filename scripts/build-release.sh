@@ -132,6 +132,15 @@ DIST_DIR="$PROJECT_ROOT/dist"
 rm -rf "$DIST_DIR"
 mkdir -p "$DIST_DIR"
 
+# Portable SHA-256: coreutils sha256sum on Linux, shasum on macOS runners
+sha256() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$@"
+    else
+        shasum -a 256 "$@"
+    fi
+}
+
 # List of binaries to package
 BINARIES=(
     "botho"
@@ -147,7 +156,7 @@ for bin in "${BINARIES[@]}"; do
         cp "$BINARY_PATH" "$DIST_DIR/"
 
         # Generate individual checksum
-        (cd "$DIST_DIR" && sha256sum "$bin" > "$bin.sha256")
+        (cd "$DIST_DIR" && sha256 "$bin" > "$bin.sha256")
 
         echo "  $bin: $(cat "$DIST_DIR/$bin.sha256" | cut -d' ' -f1)"
     else
@@ -156,7 +165,7 @@ for bin in "${BINARIES[@]}"; do
 done
 
 # Generate combined checksums file
-(cd "$DIST_DIR" && sha256sum * 2>/dev/null | grep -v '\.sha256$' | grep -v '\.sig$' | grep -v 'checksums.txt' > checksums.txt) || true
+(cd "$DIST_DIR" && sha256 * 2>/dev/null | grep -v '\.sha256$' | grep -v '\.sig$' | grep -v 'checksums.txt' > checksums.txt) || true
 
 echo ""
 echo "=== Build Metadata ==="
