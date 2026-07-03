@@ -10,8 +10,8 @@ use crate::{
     rpc_pool::RpcPool,
     storage::EncryptedWallet,
     transaction::{
-        apply_pending_change_tags, format_amount, parse_amount, sync_wallet, OwnedUtxo,
-        TransactionBuilder, DUST_THRESHOLD, PICOCREDITS_PER_CAD,
+        apply_pending_change_tags, format_amount, parse_amount, sync_wallet, to_tx_hex, OwnedUtxo,
+        TransactionBuilder, DUST_THRESHOLD, MIN_TX_FEE, PICOCREDITS_PER_CAD,
     },
 };
 
@@ -136,7 +136,10 @@ async fn run_classical(
     let output_count = 2; // Assume we'll have change for estimation
 
     let fee_estimate = fee_estimator.estimate_fee(&inputs_for_estimation, output_count);
-    let fee = fee_estimate.total_fee.max(1_000_000); // Enforce minimum fee
+    // Enforce the consensus fee floor. At zero cluster wealth the structural
+    // MIN_TX_FEE (100_000_000 picocredits) dominates the progressive estimate;
+    // the node rejects any transaction below it (bth_transaction_clsag).
+    let fee = fee_estimate.total_fee.max(MIN_TX_FEE);
 
     // Build transaction
     let builder = TransactionBuilder::new(keys.clone(), utxos, height);
@@ -212,14 +215,15 @@ async fn run_classical(
     println!();
     println!("Signing transaction...");
 
-    let transfer_result =
-        builder.build_transfer_with_metadata(&recipient, amount_picocredits, fee)?;
+    let transfer_result = builder
+        .build_transfer_with_metadata(&mut rpc, &recipient, amount_picocredits, fee)
+        .await?;
 
     // Submit transaction
     println!("Submitting transaction...");
 
     let tx_hash = rpc
-        .submit_transaction(&transfer_result.transaction.to_hex())
+        .submit_transaction(&to_tx_hex(&transfer_result.transaction)?)
         .await?;
 
     println!();

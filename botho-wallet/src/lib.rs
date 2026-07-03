@@ -14,10 +14,13 @@ pub mod decoy_selection;
 pub mod discovery;
 pub mod fee_estimation;
 pub mod keys;
+pub mod ring_builder;
 pub mod rpc_pool;
 pub mod secmem;
 pub mod storage;
 pub mod transaction;
+/// Legacy `botho-tx-v1` transaction types, quarantined (see module docs).
+pub mod transaction_legacy;
 
 pub mod commands;
 

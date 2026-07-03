@@ -22,6 +22,15 @@ bth-crypto-pq = { path = "../crypto/pq", optional = true }
 bth-crypto-ring-signature = { path = "../crypto/ring-signature" }
 bth-core = { path = "../core" }
 bth-cluster-tax = { path = "../cluster-tax", features = ["serde"] }
+# Real transaction format (CLSAG ring signatures + stealth-address outputs).
+# Provides RingMember, ClsagRingInput, Transaction::new_clsag, the correct
+# stealth-address TxOutput, and MIN_RING_SIZE/MIN_TX_FEE. This is the same
+# crate the node exposes as `botho::transaction`, so txs built here
+# bincode-round-trip through the node's `tx_submit` deserializer.
+bth-transaction-clsag = { path = "../transaction/clsag" }
+# Cluster-tag ancestry vector embedded in outputs (ClusterTagVector). Matches
+# the type the clsag TxOutput carries so inherited tags serialize identically.
+bth-transaction-types = { path = "../transaction/types" }
 botho = { path = "../botho", optional = true }
 
 # BIP39 mnemonic support

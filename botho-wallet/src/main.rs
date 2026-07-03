@@ -7,13 +7,16 @@ use clap::{Parser, Subcommand};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod commands;
+mod decoy_selection;
 mod discovery;
 mod fee_estimation;
 mod keys;
+mod ring_builder;
 mod rpc_pool;
 mod secmem;
 mod storage;
 mod transaction;
+mod transaction_legacy;
 
 #[derive(Parser)]
 #[command(name = "botho-wallet")]

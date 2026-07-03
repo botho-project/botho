@@ -1,52 +1,86 @@
 //! Decoy Selection for Ring Signatures
 //!
-//! Implements wallet-side decoy selection constraints to prevent fee inflation
-//! attacks and ensure good privacy properties for ring signatures.
+//! Wallet-side decoy-selection policy for CLSAG ring signatures. This module
+//! provides the age-band primitives shared with the live send path (see
+//! [`crate::ring_builder`]) plus a constraint-checking selector used for
+//! validating externally-supplied decoy sets.
 //!
-//! # Constraints
+//! # Age-similarity policy (matches the node)
 //!
-//! 1. **Age similarity**: Decoys should be within 2x age of real input
-//!    - `age > real_age / 2 && age < real_age * 2`
+//! Decoys are drawn from within **±10%** of the real input's age
+//! ([`AGE_SIMILARITY_SPREAD_BPS`]), floored at [`MIN_DECOY_AGE_BLOCKS`]
+//! confirmations. This mirrors the node's `GammaDecoySelector`
+//! (`botho/src/decoy_selection.rs`): a wider band (the old 2× ratio) let an
+//! age-heuristic adversary fingerprint CLI-wallet rings by their unusually
+//! broad ring-age spread. Keeping the same ±10% band collapses that distinction
+//! (issue #614 item 4; #314-safe under `ring_elapsed_quantile@max`).
 //!
-//! 2. **Cluster factor ceiling**: Decoys should not have significantly higher
-//!    factor
-//!    - `decoy_factor <= real_factor * 1.5`
+//! # Cluster-factor ceiling
 //!
-//! # Privacy Considerations
+//! Decoys must not have a significantly higher cluster factor than the real
+//! input (`decoy_factor <= real_factor * max_factor_ratio`). This prevents a
+//! malicious pool from inflating progressive fees via high-factor decoys.
 //!
-//! Overly strict constraints reduce the anonymity set. The design balances:
-//! - **Looser constraints** = larger anonymity set, less fee accuracy
-//! - **Stricter constraints** = smaller anonymity set, better fee accuracy
+//! # Ring size
 //!
-//! The recommended defaults (2x age, 1.5x factor) provide reasonable balance.
+//! The default ring size is [`DEFAULT_RING_SIZE`] = 20, matching the node's
+//! consensus floor `MIN_RING_SIZE`. Rings smaller than 20 are rejected by the
+//! node at signing and validation time, so the wallet must never build them.
 //!
-//! # Reference
+//! # Randomization
 //!
-//! See `docs/design/ring-signature-tag-propagation.md` for full design
-//! rationale.
+//! Eligible candidates are shuffled with a CSPRNG before the ring is drawn, so
+//! ring membership is never a deterministic first-N slice of a height-sorted
+//! pool (issue #614 item 5).
 
 use std::collections::HashMap;
 
-use bth_cluster_tax::{ClusterId, TagVector, TAG_WEIGHT_SCALE};
+use bth_cluster_tax::{ClusterId, TAG_WEIGHT_SCALE};
+use rand::{rngs::OsRng, seq::SliceRandom};
 
 use crate::fee_estimation::StoredTags;
+
+/// Minimum confirmations before an output may be used as a ring member (real or
+/// decoy). Mirrors the node's `MIN_DECOY_AGE_BLOCKS`.
+pub const MIN_DECOY_AGE_BLOCKS: u64 = 10;
+
+/// Half-width of the decoy age-similarity band, in basis points of the real
+/// input's age. `1_000` bps = ±10%. Mirrors the node's
+/// `AGE_SIMILARITY_SPREAD_BPS`.
+pub const AGE_SIMILARITY_SPREAD_BPS: u64 = 1_000;
+
+/// Default (and minimum) ring size, matching the node's consensus
+/// `MIN_RING_SIZE`. A ring of 20 provides a strong anonymity set with compact
+/// ~700-byte CLSAG signatures.
+pub const DEFAULT_RING_SIZE: usize = 20;
+
+/// Compute the inclusive `[min_age, max_age]` decoy-age band around a real
+/// input's age under the [`AGE_SIMILARITY_SPREAD_BPS`] policy.
+///
+/// The lower bound is floored at [`MIN_DECOY_AGE_BLOCKS`] so decoys are always
+/// confirmed. A degenerate real age (below the confirmation floor) can produce
+/// `min_age > max_age`, in which case no candidate is in-band; callers must
+/// guard against spending such young inputs before reaching this function.
+pub fn age_similarity_band(real_input_age: u64) -> (u64, u64) {
+    let delta = (real_input_age as u128 * AGE_SIMILARITY_SPREAD_BPS as u128 / 10_000) as u64;
+    let min_age = real_input_age
+        .saturating_sub(delta)
+        .max(MIN_DECOY_AGE_BLOCKS);
+    let max_age = real_input_age.saturating_add(delta);
+    (min_age, max_age)
+}
 
 /// Configuration for decoy selection constraints.
 #[derive(Clone, Debug)]
 pub struct DecoySelectionConfig {
-    /// Ring size (including real input).
-    /// Default: 11 (same as Monero)
+    /// Ring size (including the real input).
+    /// Default: [`DEFAULT_RING_SIZE`] (20) — the node's consensus floor.
     pub ring_size: usize,
-
-    /// Maximum age ratio between decoy and real input.
-    /// A value of 2.0 means decoys must be within 2x age of the real input.
-    /// Default: 2.0
-    pub max_age_ratio: f64,
 
     /// Maximum cluster factor ratio between decoy and real input.
     /// A value of 1.5 means decoy factor must be <= 1.5x real factor.
-    /// This prevents fee inflation attacks where malicious nodes select
-    /// high-factor decoys to inflate fees.
+    /// This prevents fee-inflation attacks where a malicious pool selects
+    /// high-factor decoys to inflate progressive fees.
     /// Default: 1.5
     pub max_factor_ratio: f64,
 }
@@ -54,8 +88,7 @@ pub struct DecoySelectionConfig {
 impl Default for DecoySelectionConfig {
     fn default() -> Self {
         Self {
-            ring_size: 11,
-            max_age_ratio: 2.0,
+            ring_size: DEFAULT_RING_SIZE,
             max_factor_ratio: 1.5,
         }
     }
@@ -63,10 +96,9 @@ impl Default for DecoySelectionConfig {
 
 impl DecoySelectionConfig {
     /// Create a new configuration with custom parameters.
-    pub fn new(ring_size: usize, max_age_ratio: f64, max_factor_ratio: f64) -> Self {
+    pub fn new(ring_size: usize, max_factor_ratio: f64) -> Self {
         Self {
             ring_size,
-            max_age_ratio,
             max_factor_ratio,
         }
     }
@@ -86,7 +118,8 @@ pub enum DecoySelectionError {
     /// No UTXOs available in the pool.
     EmptyUtxoPool,
 
-    /// The real UTXO has invalid parameters (e.g., zero age).
+    /// The real UTXO has invalid parameters (e.g., too young to spend
+    /// privately).
     InvalidRealUtxo(String),
 
     /// Ring size must be at least 2 (real input + 1 decoy).
@@ -196,7 +229,8 @@ impl UtxoCandidate {
     }
 }
 
-/// Select decoys for a ring signature that satisfy age and factor constraints.
+/// Select decoys for a ring signature that satisfy the age-similarity band and
+/// cluster-factor ceiling.
 ///
 /// # Arguments
 ///
@@ -207,30 +241,21 @@ impl UtxoCandidate {
 /// * `total_supply` - Total coin supply for factor normalization
 /// * `config` - Decoy selection configuration
 ///
-/// # Returns
-///
-/// A vector of selected decoy UTXOs, or an error if constraints cannot be
-/// satisfied.
-///
 /// # Constraints Applied
 ///
-/// 1. **Age similarity**: `decoy_age > real_age / max_age_ratio && decoy_age <
-///    real_age * max_age_ratio`
-/// 2. **Factor ceiling**: `decoy_factor <= real_factor * max_factor_ratio`
+/// 1. **Age similarity**: decoy age within [`age_similarity_band`] of the real
+///    input's age (±10%, floored at [`MIN_DECOY_AGE_BLOCKS`]).
+/// 2. **Factor ceiling**: `decoy_factor <= real_factor * max_factor_ratio`.
 ///
-/// # Example
+/// Eligible candidates are shuffled (CSPRNG) before the ring is drawn, so the
+/// result is not a deterministic first-N slice.
 ///
-/// ```ignore
-/// let config = DecoySelectionConfig::default();
-/// let decoys = select_decoys(
-///     &real_utxo,
-///     &utxo_pool,
-///     current_block,
-///     &cluster_wealth,
-///     total_supply,
-///     &config,
-/// )?;
-/// ```
+/// # Errors
+///
+/// Returns [`DecoySelectionError::InvalidRealUtxo`] if the real input is
+/// younger than [`MIN_DECOY_AGE_BLOCKS`] (spending it would produce a
+/// degenerate age band). Callers surfacing to users should translate this into
+/// a "wait for confirmations" message.
 pub fn select_decoys(
     real_utxo: &UtxoCandidate,
     utxo_pool: &[UtxoCandidate],
@@ -249,17 +274,21 @@ pub fn select_decoys(
     }
 
     let real_age = real_utxo.age(current_block);
-    if real_age == 0 {
-        return Err(DecoySelectionError::InvalidRealUtxo(
-            "UTXO has zero age".to_string(),
-        ));
+
+    // Young-input guard (mirrors node decoy_selection.rs; #611/#618). Below the
+    // confirmation floor the ±10% band is degenerate (min_age > max_age).
+    if real_age < MIN_DECOY_AGE_BLOCKS {
+        return Err(DecoySelectionError::InvalidRealUtxo(format!(
+            "UTXO is too new to spend privately — wait for at least {} confirmations \
+             (current age: {} block(s))",
+            MIN_DECOY_AGE_BLOCKS, real_age
+        )));
     }
 
     let real_factor = real_utxo.cluster_factor_global(cluster_wealth, total_supply);
 
-    // Calculate age bounds
-    let min_age = (real_age as f64 / config.max_age_ratio).ceil() as u64;
-    let max_age = (real_age as f64 * config.max_age_ratio).floor() as u64;
+    // Age band (±10%, floored at the confirmation minimum).
+    let (min_age, max_age) = age_similarity_band(real_age);
 
     // Calculate maximum allowed factor for decoys
     let max_allowed_factor = real_factor * config.max_factor_ratio;
@@ -267,7 +296,7 @@ pub fn select_decoys(
     let decoys_needed = config.decoys_needed();
 
     // Filter candidates that meet all constraints
-    let eligible: Vec<UtxoCandidate> = utxo_pool
+    let mut eligible: Vec<UtxoCandidate> = utxo_pool
         .iter()
         .filter(|candidate| {
             // Skip if same as real UTXO
@@ -277,7 +306,7 @@ pub fn select_decoys(
 
             let candidate_age = candidate.age(current_block);
 
-            // Age constraint: within max_age_ratio of real age
+            // Age constraint: within the ±10% band
             if candidate_age < min_age || candidate_age > max_age {
                 return false;
             }
@@ -301,27 +330,24 @@ pub fn select_decoys(
         });
     }
 
-    // Select decoys (for now, take first N; could add random selection)
-    Ok(eligible.into_iter().take(decoys_needed).collect())
+    // Shuffle before taking N so ring membership is randomized, not a
+    // deterministic first-N slice of a height-sorted pool.
+    let mut rng = OsRng;
+    eligible.shuffle(&mut rng);
+    eligible.truncate(decoys_needed);
+    Ok(eligible)
 }
 
-/// Select decoys with fallback to relaxed constraints.
+/// Select decoys with fallback to a relaxed cluster-factor ceiling.
 ///
-/// If strict constraints cannot be satisfied, progressively relaxes them
-/// while ensuring some level of privacy protection.
-///
-/// # Fallback Strategy
-///
-/// 1. Try with default constraints (2x age, 1.5x factor)
-/// 2. Relax age constraint to 3x
-/// 3. Relax factor constraint to 2.0x
-/// 4. Relax both to 4x age, 2.5x factor
-/// 5. If still insufficient, return error with best available count
+/// The age-similarity band is a **privacy invariant** and is never relaxed — a
+/// wider band would fingerprint the transaction. Only the factor ceiling is
+/// progressively relaxed if the strict ceiling yields too few decoys.
 ///
 /// # Warning
 ///
-/// Using relaxed constraints reduces privacy. The caller should consider
-/// warning the user or refusing the transaction if constraints are too relaxed.
+/// A relaxed factor ceiling admits higher-factor decoys, which can slightly
+/// raise the estimated fee. The caller should consider warning the user.
 pub fn select_decoys_with_fallback(
     real_utxo: &UtxoCandidate,
     utxo_pool: &[UtxoCandidate],
@@ -346,60 +372,37 @@ pub fn select_decoys_with_fallback(
         Err(e) => return Err(e),
     }
 
-    // Fallback 1: Relax age constraint
-    let relaxed_age = DecoySelectionConfig {
-        ring_size: config.ring_size,
-        max_age_ratio: 3.0,
-        max_factor_ratio: config.max_factor_ratio,
-    };
+    // Progressively relax ONLY the factor ceiling (never the age band).
+    for relaxed_factor in [2.0_f64, 3.0, 5.0] {
+        let relaxed = DecoySelectionConfig {
+            ring_size: config.ring_size,
+            max_factor_ratio: relaxed_factor,
+        };
 
-    if let Ok(decoys) = select_decoys(
+        match select_decoys(
+            real_utxo,
+            utxo_pool,
+            current_block,
+            cluster_wealth,
+            total_supply,
+            &relaxed,
+        ) {
+            Ok(decoys) => return Ok((decoys, true)),
+            Err(DecoySelectionError::InsufficientDecoys { .. }) => continue,
+            Err(e) => return Err(e),
+        }
+    }
+
+    // Still insufficient after maximum relaxation — report the strict shortfall.
+    select_decoys(
         real_utxo,
         utxo_pool,
         current_block,
         cluster_wealth,
         total_supply,
-        &relaxed_age,
-    ) {
-        return Ok((decoys, true));
-    }
-
-    // Fallback 2: Relax factor constraint
-    let relaxed_factor = DecoySelectionConfig {
-        ring_size: config.ring_size,
-        max_age_ratio: config.max_age_ratio,
-        max_factor_ratio: 2.0,
-    };
-
-    if let Ok(decoys) = select_decoys(
-        real_utxo,
-        utxo_pool,
-        current_block,
-        cluster_wealth,
-        total_supply,
-        &relaxed_factor,
-    ) {
-        return Ok((decoys, true));
-    }
-
-    // Fallback 3: Relax both constraints significantly
-    let relaxed_both = DecoySelectionConfig {
-        ring_size: config.ring_size,
-        max_age_ratio: 4.0,
-        max_factor_ratio: 2.5,
-    };
-
-    match select_decoys(
-        real_utxo,
-        utxo_pool,
-        current_block,
-        cluster_wealth,
-        total_supply,
-        &relaxed_both,
-    ) {
-        Ok(decoys) => Ok((decoys, true)),
-        Err(e) => Err(e),
-    }
+        config,
+    )
+    .map(|decoys| (decoys, true))
 }
 
 /// Validate that a set of decoys meets the selection constraints.
@@ -419,8 +422,7 @@ pub fn validate_decoys(
     let real_age = real_utxo.age(current_block);
     let real_factor = real_utxo.cluster_factor_global(cluster_wealth, total_supply);
 
-    let min_age = (real_age as f64 / config.max_age_ratio).ceil() as u64;
-    let max_age = (real_age as f64 * config.max_age_ratio).floor() as u64;
+    let (min_age, max_age) = age_similarity_band(real_age);
     let max_allowed_factor = real_factor * config.max_factor_ratio;
 
     for (i, decoy) in decoys.iter().enumerate() {
@@ -482,13 +484,54 @@ mod tests {
     const TOTAL_SUPPLY: u64 = 10_000_000_000_000;
     const CURRENT_BLOCK: u64 = 10_000;
 
+    /// Build a pool of `n` decoy candidates whose ages fall inside the ±10%
+    /// band of a real input created at `real_created_at`, all with the given
+    /// tags. Ages are spread across the in-band window.
+    fn in_band_pool(n: usize, real_created_at: u64, tags: &[(u64, u32)]) -> Vec<UtxoCandidate> {
+        let real_age = CURRENT_BLOCK - real_created_at;
+        let (min_age, max_age) = age_similarity_band(real_age);
+        let mut pool = Vec::new();
+        for i in 0..n {
+            // Distribute ages evenly within [min_age, max_age].
+            let span = max_age - min_age;
+            let age = min_age + (i as u64 % (span + 1));
+            let created_at = CURRENT_BLOCK - age;
+            pool.push(create_utxo((i + 1) as u8, created_at, tags));
+        }
+        pool
+    }
+
     #[test]
     fn test_config_defaults() {
         let config = DecoySelectionConfig::default();
-        assert_eq!(config.ring_size, 11);
-        assert_eq!(config.max_age_ratio, 2.0);
+        assert_eq!(config.ring_size, 20);
         assert_eq!(config.max_factor_ratio, 1.5);
-        assert_eq!(config.decoys_needed(), 10);
+        assert_eq!(config.decoys_needed(), 19);
+        // Ring size must match the node's consensus floor.
+        assert_eq!(config.ring_size, DEFAULT_RING_SIZE);
+    }
+
+    #[test]
+    fn test_age_similarity_band() {
+        // ±10% around a healthy age.
+        assert_eq!(age_similarity_band(1000), (900, 1100));
+        assert_eq!(age_similarity_band(100), (90, 110));
+        // ±10% of 50 is ±5 -> [45, 55]; above the confirmation floor.
+        let (min_age, max_age) = age_similarity_band(50);
+        assert_eq!(min_age, 45);
+        assert_eq!(max_age, 55);
+        // A lower age hits the confirmation floor: ±10% of 80 is ±8 -> min 72.
+        let (min_floor, _) = age_similarity_band(80);
+        assert_eq!(min_floor, 72);
+    }
+
+    #[test]
+    fn test_age_similarity_band_floor() {
+        // A tiny age produces a degenerate band (min > max) after flooring.
+        let (min_age, max_age) = age_similarity_band(5);
+        assert_eq!(min_age, MIN_DECOY_AGE_BLOCKS);
+        assert_eq!(max_age, 5);
+        assert!(min_age > max_age, "degenerate band expected for young age");
     }
 
     #[test]
@@ -503,7 +546,6 @@ mod tests {
     fn test_cluster_factor_anonymous() {
         let utxo = create_utxo(1, 5_000, &[]);
         let factor = utxo.cluster_factor();
-        // Empty tags = 0% attribution = 1.0 factor
         assert!((factor - 1.0).abs() < 0.001);
     }
 
@@ -511,40 +553,17 @@ mod tests {
     fn test_cluster_factor_full_attribution() {
         let utxo = create_utxo(1, 5_000, &[(1, TAG_WEIGHT_SCALE)]);
         let factor = utxo.cluster_factor();
-        // 100% attribution = 6.0 factor
         assert!((factor - 6.0).abs() < 0.001);
     }
 
     #[test]
-    fn test_cluster_factor_partial_attribution() {
-        let utxo = create_utxo(1, 5_000, &[(1, TAG_WEIGHT_SCALE / 2)]);
-        let factor = utxo.cluster_factor();
-        // 50% attribution = 3.5 factor
-        assert!((factor - 3.5).abs() < 0.001);
-    }
-
-    #[test]
     fn test_select_decoys_basic() {
-        let real_utxo = create_utxo(0, 5_000, &[(1, TAG_WEIGHT_SCALE / 2)]);
+        // Real input created at 9_000 -> age 1000 -> band [900, 1100].
+        let real_utxo = create_utxo(0, 9_000, &[(1, TAG_WEIGHT_SCALE / 2)]);
         let cluster_wealth = create_cluster_wealth();
+        let pool = in_band_pool(25, 9_000, &[(1, TAG_WEIGHT_SCALE / 2)]);
 
-        // Create pool of eligible decoys
-        let mut pool = Vec::new();
-        for i in 1..=15 {
-            // Similar age (within 2x), similar factor
-            pool.push(create_utxo(
-                i,
-                4_000 + i as u64 * 100,
-                &[(1, TAG_WEIGHT_SCALE / 2)],
-            ));
-        }
-
-        let config = DecoySelectionConfig {
-            ring_size: 11,
-            max_age_ratio: 2.0,
-            max_factor_ratio: 1.5,
-        };
-
+        let config = DecoySelectionConfig::default(); // ring 20, needs 19
         let result = select_decoys(
             &real_utxo,
             &pool,
@@ -554,103 +573,84 @@ mod tests {
             &config,
         );
 
-        assert!(result.is_ok());
+        assert!(result.is_ok(), "{:?}", result.err());
         let decoys = result.unwrap();
-        assert_eq!(decoys.len(), 10); // ring_size - 1
+        assert_eq!(decoys.len(), 19);
+        // All within the ±10% band.
+        for d in &decoys {
+            let age = d.age(CURRENT_BLOCK);
+            assert!((900..=1100).contains(&age), "age {} out of band", age);
+        }
     }
 
     #[test]
     fn test_select_decoys_age_filtering() {
-        let real_utxo = create_utxo(0, 9_000, &[]); // Age: 1000 blocks
+        // Real age 1000 -> band [900, 1100].
+        let real_utxo = create_utxo(0, 9_000, &[]);
         let cluster_wealth = create_cluster_wealth();
 
-        // Pool with various ages
-        let pool = vec![
-            create_utxo(1, 9_800, &[]), // Age: 200 - too young (< 500)
-            create_utxo(2, 9_500, &[]), // Age: 500 - at lower bound
-            create_utxo(3, 8_500, &[]), // Age: 1500 - good
-            create_utxo(4, 8_000, &[]), // Age: 2000 - at upper bound
-            create_utxo(5, 7_000, &[]), // Age: 3000 - too old (> 2000)
-            create_utxo(6, 8_700, &[]), // Age: 1300 - good
-            create_utxo(7, 8_200, &[]), // Age: 1800 - good
-        ];
+        let mut pool = in_band_pool(19, 9_000, &[]);
+        // Add clearly out-of-band candidates that must never be selected.
+        pool.push(create_utxo(200, 9_800, &[])); // age 200 - too young
+        pool.push(create_utxo(201, 8_000, &[])); // age 2000 - too old
 
-        let config = DecoySelectionConfig {
-            ring_size: 4, // Need 3 decoys
-            max_age_ratio: 2.0,
-            max_factor_ratio: 10.0, // Relax factor constraint for this test
-        };
-
-        let result = select_decoys(
+        let config = DecoySelectionConfig::default();
+        let decoys = select_decoys(
             &real_utxo,
             &pool,
             CURRENT_BLOCK,
             &cluster_wealth,
             TOTAL_SUPPLY,
             &config,
-        );
+        )
+        .expect("selection should succeed");
 
-        assert!(result.is_ok());
-        let decoys = result.unwrap();
-        assert_eq!(decoys.len(), 3);
-
-        // Verify all selected decoys meet age constraint
         for decoy in &decoys {
             let age = decoy.age(CURRENT_BLOCK);
-            assert!(age >= 500 && age <= 2000, "Age {} out of bounds", age);
+            assert!((900..=1100).contains(&age), "Age {} out of band", age);
+            assert_ne!(decoy.id, [200u8; 32]);
+            assert_ne!(decoy.id, [201u8; 32]);
         }
     }
 
     #[test]
     fn test_select_decoys_factor_filtering() {
-        let real_utxo = create_utxo(0, 5_000, &[(1, TAG_WEIGHT_SCALE / 4)]); // ~25% = factor ~2.25
-        let cluster_wealth = create_cluster_wealth();
+        // Real ~25% attribution to a wealthy cluster (50% of supply).
+        let real_utxo = create_utxo(0, 9_000, &[(1, TAG_WEIGHT_SCALE / 4)]);
+        let mut cluster_wealth = HashMap::new();
+        cluster_wealth.insert(ClusterId::new(1), 5_000_000_000_000); // 50% of supply
 
-        // Pool with various factors
-        let pool = vec![
-            create_utxo(1, 5_500, &[]),                          // 0% = 1.0 - good
-            create_utxo(2, 5_500, &[(1, TAG_WEIGHT_SCALE / 4)]), // 25% = ~2.25 - good
-            create_utxo(3, 5_500, &[(1, TAG_WEIGHT_SCALE / 2)]), /* 50% = 3.5 - at limit (1.5 *
-                                                                  * 2.25 = 3.375) */
-            create_utxo(4, 5_500, &[(1, TAG_WEIGHT_SCALE)]), // 100% = 6.0 - too high
-            create_utxo(5, 5_500, &[(1, TAG_WEIGHT_SCALE / 5)]), // 20% = ~2.0 - good
-        ];
+        // 19 acceptable low-factor (anonymous) decoys plus one 100%-attribution
+        // decoy whose factor exceeds real_factor * 1.5 and must be excluded.
+        let mut pool = in_band_pool(19, 9_000, &[]);
+        pool.push(create_utxo(250, 9_000, &[(1, TAG_WEIGHT_SCALE)]));
 
-        let config = DecoySelectionConfig {
-            ring_size: 4,
-            max_age_ratio: 10.0, // Relax age constraint for this test
-            max_factor_ratio: 1.5,
-        };
-
-        let result = select_decoys(
+        let config = DecoySelectionConfig::default();
+        let decoys = select_decoys(
             &real_utxo,
             &pool,
             CURRENT_BLOCK,
             &cluster_wealth,
             TOTAL_SUPPLY,
             &config,
-        );
+        )
+        .expect("selection should succeed");
 
-        assert!(result.is_ok());
-        let decoys = result.unwrap();
-        assert_eq!(decoys.len(), 3);
-
-        // Verify decoy 4 (100% attribution) was not selected
         for decoy in &decoys {
-            assert_ne!(decoy.id, [4u8; 32], "High-factor decoy should be excluded");
+            assert_ne!(
+                decoy.id, [250u8; 32],
+                "High-factor decoy should be excluded"
+            );
         }
     }
 
     #[test]
     fn test_select_decoys_insufficient() {
-        let real_utxo = create_utxo(0, 5_000, &[]);
+        let real_utxo = create_utxo(0, 9_000, &[]);
         let cluster_wealth = create_cluster_wealth();
+        let pool = in_band_pool(2, 9_000, &[]);
 
-        // Pool too small
-        let pool = vec![create_utxo(1, 5_500, &[]), create_utxo(2, 5_500, &[])];
-
-        let config = DecoySelectionConfig::default(); // Needs 10 decoys
-
+        let config = DecoySelectionConfig::default(); // needs 19
         let result = select_decoys(
             &real_utxo,
             &pool,
@@ -663,7 +663,7 @@ mod tests {
         assert!(matches!(
             result,
             Err(DecoySelectionError::InsufficientDecoys {
-                required: 10,
+                required: 19,
                 available: 2
             })
         ));
@@ -671,7 +671,7 @@ mod tests {
 
     #[test]
     fn test_select_decoys_empty_pool() {
-        let real_utxo = create_utxo(0, 5_000, &[]);
+        let real_utxo = create_utxo(0, 9_000, &[]);
         let cluster_wealth = create_cluster_wealth();
 
         let result = select_decoys(
@@ -688,13 +688,12 @@ mod tests {
 
     #[test]
     fn test_select_decoys_invalid_ring_size() {
-        let real_utxo = create_utxo(0, 5_000, &[]);
+        let real_utxo = create_utxo(0, 9_000, &[]);
         let cluster_wealth = create_cluster_wealth();
-        let pool = vec![create_utxo(1, 5_500, &[])];
+        let pool = in_band_pool(5, 9_000, &[]);
 
         let config = DecoySelectionConfig {
             ring_size: 1, // Invalid
-            max_age_ratio: 2.0,
             max_factor_ratio: 1.5,
         };
 
@@ -711,10 +710,36 @@ mod tests {
     }
 
     #[test]
-    fn test_select_decoys_zero_age() {
-        let real_utxo = create_utxo(0, CURRENT_BLOCK, &[]); // Created this block = 0 age
+    fn test_select_decoys_young_input_rejected() {
+        // Real input younger than the confirmation floor must be rejected
+        // cleanly (no panic, no degenerate band).
+        let real_utxo = create_utxo(0, CURRENT_BLOCK - 5, &[]); // age 5 < 10
         let cluster_wealth = create_cluster_wealth();
-        let pool = vec![create_utxo(1, 5_500, &[])];
+        let pool = in_band_pool(25, 9_000, &[]);
+
+        let result = select_decoys(
+            &real_utxo,
+            &pool,
+            CURRENT_BLOCK,
+            &cluster_wealth,
+            TOTAL_SUPPLY,
+            &DecoySelectionConfig::default(),
+        );
+
+        match result {
+            Err(DecoySelectionError::InvalidRealUtxo(msg)) => {
+                assert!(msg.contains("too new"), "unexpected message: {}", msg);
+            }
+            other => panic!("expected InvalidRealUtxo, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_select_decoys_zero_age_rejected() {
+        // Age 0 is a special case of the young-input guard.
+        let real_utxo = create_utxo(0, CURRENT_BLOCK, &[]);
+        let cluster_wealth = create_cluster_wealth();
+        let pool = in_band_pool(25, 9_000, &[]);
 
         let result = select_decoys(
             &real_utxo,
@@ -733,111 +758,113 @@ mod tests {
 
     #[test]
     fn test_select_decoys_excludes_self() {
-        let real_utxo = create_utxo(0, 5_000, &[]);
+        let real_utxo = create_utxo(0, 9_000, &[]);
         let cluster_wealth = create_cluster_wealth();
 
-        // Pool includes the real UTXO
-        let pool = vec![
-            create_utxo(0, 5_000, &[]), // Same as real
-            create_utxo(1, 5_500, &[]),
-            create_utxo(2, 5_500, &[]),
-            create_utxo(3, 5_500, &[]),
-        ];
+        // Pool includes the real UTXO (same id) plus enough in-band decoys.
+        let mut pool = in_band_pool(25, 9_000, &[]);
+        pool.push(create_utxo(0, 9_000, &[])); // same id as real
 
-        let config = DecoySelectionConfig {
-            ring_size: 3,
-            max_age_ratio: 2.0,
-            max_factor_ratio: 1.5,
-        };
-
-        let result = select_decoys(
+        let decoys = select_decoys(
             &real_utxo,
             &pool,
             CURRENT_BLOCK,
             &cluster_wealth,
             TOTAL_SUPPLY,
-            &config,
-        );
+            &DecoySelectionConfig::default(),
+        )
+        .expect("selection should succeed");
 
-        assert!(result.is_ok());
-        let decoys = result.unwrap();
-
-        // Verify real UTXO was not selected
         for decoy in &decoys {
             assert_ne!(decoy.id, real_utxo.id, "Real UTXO should not be in decoys");
         }
     }
 
     #[test]
-    fn test_select_decoys_with_fallback_success_first_try() {
-        let real_utxo = create_utxo(0, 5_000, &[]);
+    fn test_select_decoys_is_randomized() {
+        // With a pool much larger than needed, the selected set should not be
+        // the deterministic first-19 of the input order (astronomically
+        // unlikely under a fair shuffle).
+        let real_utxo = create_utxo(0, 9_000, &[]);
         let cluster_wealth = create_cluster_wealth();
+        let pool = in_band_pool(60, 9_000, &[]);
 
-        let mut pool = Vec::new();
-        for i in 1..=15 {
-            pool.push(create_utxo(i, 5_000 + i as u64 * 50, &[]));
-        }
+        let first_n_ids: Vec<[u8; 32]> = pool.iter().take(19).map(|c| c.id).collect();
 
-        let config = DecoySelectionConfig::default();
-
-        let result = select_decoys_with_fallback(
+        let decoys = select_decoys(
             &real_utxo,
             &pool,
             CURRENT_BLOCK,
             &cluster_wealth,
             TOTAL_SUPPLY,
-            &config,
-        );
+            &DecoySelectionConfig::default(),
+        )
+        .expect("selection should succeed");
+        let selected_ids: Vec<[u8; 32]> = decoys.iter().map(|c| c.id).collect();
 
-        assert!(result.is_ok());
-        let (decoys, relaxed) = result.unwrap();
-        assert_eq!(decoys.len(), 10);
+        assert_eq!(selected_ids.len(), 19);
+        assert_ne!(
+            selected_ids, first_n_ids,
+            "selection must be shuffled, not a deterministic first-N slice"
+        );
+    }
+
+    #[test]
+    fn test_select_decoys_with_fallback_success_first_try() {
+        let real_utxo = create_utxo(0, 9_000, &[]);
+        let cluster_wealth = create_cluster_wealth();
+        let pool = in_band_pool(25, 9_000, &[]);
+
+        let (decoys, relaxed) = select_decoys_with_fallback(
+            &real_utxo,
+            &pool,
+            CURRENT_BLOCK,
+            &cluster_wealth,
+            TOTAL_SUPPLY,
+            &DecoySelectionConfig::default(),
+        )
+        .expect("selection should succeed");
+
+        assert_eq!(decoys.len(), 19);
         assert!(!relaxed, "Should succeed without relaxation");
     }
 
     #[test]
-    fn test_select_decoys_with_fallback_relaxed() {
-        let real_utxo = create_utxo(0, 5_000, &[]); // Age: 5000
-        let cluster_wealth = create_cluster_wealth();
+    fn test_select_decoys_with_fallback_relaxes_factor() {
+        // Real input is anonymous (factor 1.0); strict ceiling 1.5x = 1.5.
+        let real_utxo = create_utxo(0, 9_000, &[]);
+        // Cluster 1 is wealthy so attributed decoys have a high factor.
+        let mut cluster_wealth = HashMap::new();
+        cluster_wealth.insert(ClusterId::new(1), 5_000_000_000_000); // 50%
 
-        // Pool with UTXOs outside strict age bounds but within relaxed bounds
-        let mut pool = Vec::new();
-        for i in 1..=15 {
-            // Ages around 1500-2000 (below min 2500 with 2x, but within 3x)
-            pool.push(create_utxo(i, 8_000 + i as u64 * 50, &[]));
-        }
+        // All in-band decoys are attributed to the wealthy cluster (high
+        // factor) — the strict ceiling excludes them, forcing relaxation.
+        let pool = in_band_pool(25, 9_000, &[(1, TAG_WEIGHT_SCALE)]);
 
-        let config = DecoySelectionConfig {
-            ring_size: 11,
-            max_age_ratio: 2.0, // Strict: age must be 2500-10000
-            max_factor_ratio: 1.5,
-        };
-
-        let result = select_decoys_with_fallback(
+        let (decoys, relaxed) = select_decoys_with_fallback(
             &real_utxo,
             &pool,
             CURRENT_BLOCK,
             &cluster_wealth,
             TOTAL_SUPPLY,
-            &config,
-        );
+            &DecoySelectionConfig::default(),
+        )
+        .expect("selection should succeed after relaxation");
 
-        assert!(result.is_ok());
-        let (_decoys, relaxed) = result.unwrap();
-        assert!(relaxed, "Should indicate constraints were relaxed");
+        assert_eq!(decoys.len(), 19);
+        assert!(relaxed, "Should indicate the factor ceiling was relaxed");
     }
 
     #[test]
     fn test_validate_decoys_all_valid() {
-        let real_utxo = create_utxo(0, 5_000, &[]); // Age: 5000
+        // Real age 1000 -> band [900, 1100].
+        let real_utxo = create_utxo(0, 9_000, &[]);
         let cluster_wealth = create_cluster_wealth();
 
         let decoys = vec![
-            create_utxo(1, 6_000, &[]), // Age: 4000 - within bounds
-            create_utxo(2, 7_000, &[]), // Age: 3000 - within bounds
+            create_utxo(1, 9_050, &[]), // age 950 - in band
+            create_utxo(2, 8_950, &[]), // age 1050 - in band
         ];
-
-        let config = DecoySelectionConfig::default();
 
         let violations = validate_decoys(
             &real_utxo,
@@ -845,24 +872,27 @@ mod tests {
             CURRENT_BLOCK,
             &cluster_wealth,
             TOTAL_SUPPLY,
-            &config,
+            &DecoySelectionConfig::default(),
         );
 
-        assert!(violations.is_empty(), "Expected no violations");
+        assert!(
+            violations.is_empty(),
+            "Expected no violations: {:?}",
+            violations
+        );
     }
 
     #[test]
     fn test_validate_decoys_age_violations() {
-        let real_utxo = create_utxo(0, 9_000, &[]); // Age: 1000
+        // Real age 1000 -> band [900, 1100].
+        let real_utxo = create_utxo(0, 9_000, &[]);
         let cluster_wealth = create_cluster_wealth();
 
         let decoys = vec![
-            create_utxo(1, 9_800, &[]), // Age: 200 - too young
-            create_utxo(2, 8_500, &[]), // Age: 1500 - valid
-            create_utxo(3, 5_000, &[]), // Age: 5000 - too old
+            create_utxo(1, 9_800, &[]), // age 200 - too young
+            create_utxo(2, 9_000, &[]), // age 1000 - valid
+            create_utxo(3, 5_000, &[]), // age 5000 - too old
         ];
-
-        let config = DecoySelectionConfig::default();
 
         let violations = validate_decoys(
             &real_utxo,
@@ -870,7 +900,7 @@ mod tests {
             CURRENT_BLOCK,
             &cluster_wealth,
             TOTAL_SUPPLY,
-            &config,
+            &DecoySelectionConfig::default(),
         );
 
         assert_eq!(violations.len(), 2);
@@ -882,30 +912,23 @@ mod tests {
 
     #[test]
     fn test_validate_decoys_factor_violation() {
-        // Real UTXO has low factor (anonymous = ~1.0)
-        let real_utxo = create_utxo(0, 5_000, &[]);
+        let real_utxo = create_utxo(0, 9_000, &[]);
 
-        // Create cluster wealth where cluster 1 is wealthy (50% of supply)
         let mut cluster_wealth = HashMap::new();
         cluster_wealth.insert(ClusterId::new(1), 5_000_000_000_000); // 50% of supply
 
-        // Decoy has 100% attribution to the wealthy cluster
-        // This gives a high factor that exceeds the 1.5x limit
-        let decoys = vec![create_utxo(1, 5_500, &[(1, TAG_WEIGHT_SCALE)])];
+        // Decoy age in band (age 1000), but 100% attribution -> high factor.
+        let decoys = vec![create_utxo(1, 9_000, &[(1, TAG_WEIGHT_SCALE)])];
 
         let config = DecoySelectionConfig::default();
 
         let real_factor = real_utxo.cluster_factor_global(&cluster_wealth, TOTAL_SUPPLY);
         let decoy_factor = decoys[0].cluster_factor_global(&cluster_wealth, TOTAL_SUPPLY);
-
-        // Verify our setup produces the expected violation condition
         assert!(
             decoy_factor > real_factor * config.max_factor_ratio,
-            "Decoy factor {} should exceed max allowed {} (real {} * {})",
+            "Decoy factor {} should exceed max allowed {}",
             decoy_factor,
-            real_factor * config.max_factor_ratio,
-            real_factor,
-            config.max_factor_ratio
+            real_factor * config.max_factor_ratio
         );
 
         let violations = validate_decoys(
@@ -920,7 +943,7 @@ mod tests {
         assert_eq!(
             violations.len(),
             1,
-            "Should detect 1 violation, found: {:?}",
+            "Should detect 1 violation: {:?}",
             violations
         );
         assert!(violations[0].1.contains("factor too high"));
@@ -929,10 +952,10 @@ mod tests {
     #[test]
     fn test_error_display() {
         let e1 = DecoySelectionError::InsufficientDecoys {
-            required: 10,
+            required: 19,
             available: 5,
         };
-        assert!(e1.to_string().contains("10"));
+        assert!(e1.to_string().contains("19"));
         assert!(e1.to_string().contains("5"));
 
         let e2 = DecoySelectionError::EmptyUtxoPool;
