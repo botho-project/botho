@@ -13,20 +13,21 @@
 //! 2. DNS TXT-record discovery (`seeds.botho.io` / `seeds.testnet.botho.io`).
 //! 3. The hardcoded fallback list defined here.
 //!
-//! ## Multi-seed / regional scaffolding
+//! ## Multi-seed / regional seeds
 //!
-//! PLAN.md calls for >= 3 geographically diverse seeds + DNS failover. The
-//! regional hostnames below (`us`, `eu`, `ap`) are *scaffolding*: they are
-//! emitted only when [`include_regional_seeds`] is true, which currently
-//! requires the `BOTHO_REGIONAL_SEEDS=1` environment variable. They stay OFF
-//! by default because the regional DNS records are not yet provisioned —
-//! dialing unresolvable hostnames just wastes connection attempts.
+//! PLAN.md calls for >= 3 geographically diverse seeds + DNS failover.
 //!
-//! Operator activation (NOT done by this code):
-//!   1. Launch the regional seed hosts and point DNS at them.
-//!   2. Either set `BOTHO_REGIONAL_SEEDS=1`, or (preferred) publish the seeds
-//!      as `seeds.testnet.botho.io` TXT records so DNS discovery picks them up
-//!      with zero client changes.
+//! **Testnet**: the regional hosts are LIVE as of 2026-07-04 (#613) —
+//! `us.seed.botho.io` (us-west-2), `eu.seed.botho.io` (eu-central-1),
+//! `ap.seed.botho.io` (ap-southeast-1) all resolve and serve gossip on
+//! 17100, and the same peers are published as `seeds.testnet.botho.io`
+//! TXT records (the primary discovery path). The testnet fallback list
+//! therefore includes them **by default**.
+//!
+//! **Mainnet**: the regional hostnames remain *scaffolding* — no mainnet
+//! network exists yet. They are emitted only when
+//! [`include_regional_seeds`] is true (`BOTHO_REGIONAL_SEEDS=1`), to be
+//! flipped on as part of mainnet genesis provisioning.
 
 use bth_transaction_types::constants::Network;
 
@@ -38,8 +39,9 @@ const TESTNET_PRIMARY_SEED: &str = "/dns4/seed.botho.io/tcp/17100";
 const MAINNET_PRIMARY_SEED: &str =
     "/dns4/seed.botho.io/tcp/7100/p2p/12D3KooWBrjTYjNrEwi9MM3AKFenmymyWVXtXbQiSx7eDnDwv9qQ";
 
-/// Regional testnet seeds (>= 3 regions per PLAN.md). NOT yet live — gated
-/// behind [`include_regional_seeds`]. Peer IDs are resolved dynamically.
+/// Regional testnet seeds (>= 3 regions per PLAN.md). LIVE since 2026-07-04
+/// (#613) and included by default. Peer IDs are resolved dynamically so a
+/// host re-key does not require a client release.
 const TESTNET_REGIONAL_SEEDS: &[&str] = &[
     "/dns4/us.seed.botho.io/tcp/17100",
     "/dns4/eu.seed.botho.io/tcp/17100",
@@ -54,11 +56,12 @@ const MAINNET_REGIONAL_SEEDS: &[&str] = &[
     "/dns4/ap.seed.botho.io/tcp/7100",
 ];
 
-/// Whether to include the (not-yet-live) regional seed scaffolding.
+/// Whether to include the (not-yet-live) MAINNET regional seed scaffolding.
 ///
 /// Returns true only when `BOTHO_REGIONAL_SEEDS` is set to a truthy value
 /// (`1`, `true`, `yes`). Keeping this opt-in avoids dialing unresolvable
-/// hostnames before the regional infra exists.
+/// hostnames before the regional infra exists. Testnet regional seeds are
+/// live (#613) and no longer consult this gate.
 pub fn include_regional_seeds() -> bool {
     match std::env::var("BOTHO_REGIONAL_SEEDS") {
         Ok(v) => {
@@ -71,16 +74,21 @@ pub fn include_regional_seeds() -> bool {
 
 /// Hardcoded fallback bootstrap seeds for a network.
 ///
-/// Always includes the primary live seed. Includes the regional scaffolding
+/// Always includes the primary live seed. Testnet regional seeds are live
+/// (#613) and always included; mainnet regional scaffolding is included
 /// only when [`include_regional_seeds`] is true.
 pub fn fallback_seeds(network: Network) -> Vec<String> {
-    let (primary, regional): (&str, &[&str]) = match network {
-        Network::Mainnet => (MAINNET_PRIMARY_SEED, MAINNET_REGIONAL_SEEDS),
-        Network::Testnet => (TESTNET_PRIMARY_SEED, TESTNET_REGIONAL_SEEDS),
+    let (primary, regional, regional_live): (&str, &[&str], bool) = match network {
+        Network::Mainnet => (
+            MAINNET_PRIMARY_SEED,
+            MAINNET_REGIONAL_SEEDS,
+            include_regional_seeds(),
+        ),
+        Network::Testnet => (TESTNET_PRIMARY_SEED, TESTNET_REGIONAL_SEEDS, true),
     };
 
     let mut seeds = vec![primary.to_string()];
-    if include_regional_seeds() {
+    if regional_live {
         seeds.extend(regional.iter().map(|s| s.to_string()));
     }
     seeds
@@ -124,12 +132,26 @@ mod tests {
     }
 
     #[test]
-    fn regional_seeds_off_by_default() {
-        // This test does not set BOTHO_REGIONAL_SEEDS. In a clean environment
-        // only the primary seed is returned. (We avoid mutating the process
-        // env here to stay robust against parallel test execution.)
+    fn testnet_regional_seeds_on_by_default() {
+        // Testnet regional seeds are live (#613): primary + 3 regions,
+        // regardless of BOTHO_REGIONAL_SEEDS.
+        let testnet = fallback_seeds(Network::Testnet);
+        assert_eq!(testnet.len(), 1 + TESTNET_REGIONAL_SEEDS.len());
+        for r in ["us.seed", "eu.seed", "ap.seed"] {
+            assert!(
+                testnet.iter().any(|s| s.contains(r)),
+                "missing live testnet region {r}"
+            );
+        }
+    }
+
+    #[test]
+    fn mainnet_regional_seeds_off_by_default() {
+        // Mainnet regional hosts are still scaffolding. This test does not
+        // set BOTHO_REGIONAL_SEEDS; in a clean environment only the primary
+        // mainnet seed is returned. (We avoid mutating the process env here
+        // to stay robust against parallel test execution.)
         if std::env::var("BOTHO_REGIONAL_SEEDS").is_err() {
-            assert_eq!(fallback_seeds(Network::Testnet).len(), 1);
             assert_eq!(fallback_seeds(Network::Mainnet).len(), 1);
         }
     }
