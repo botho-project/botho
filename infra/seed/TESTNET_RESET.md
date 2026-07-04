@@ -77,7 +77,9 @@ so minting stalls at *"have 1, need 2"*.
   ```
 
 - **Multi-seed (>= 2 nodes):** use the committed `botho-seed.service` as-is
-  (`run --relay`, no minting on seeds) and quorum `mode = "recommended"`.
+  (plain `run` with `[minting] enabled = false` — there is no `--relay` CLI
+  flag; relay behavior is simply running without minting) and quorum
+  `mode = "recommended"`.
   Run minting on a dedicated validator/faucet node.
 
 See the header comments in `botho-seed.service` for the exact `ExecStart`
