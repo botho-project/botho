@@ -656,16 +656,15 @@ fn set_windows_owner_only_acl(path: &Path) -> Result<()> {
     use windows::{
         core::PCWSTR,
         Win32::{
-            Foundation::{CloseHandle, HANDLE, PSID},
+            Foundation::{CloseHandle, LocalFree, GENERIC_READ, GENERIC_WRITE, HANDLE, HLOCAL},
             Security::{
                 Authorization::{
-                    SetEntriesInAclW, SetNamedSecurityInfoW, EXPLICIT_ACCESS_W, NO_INHERITANCE,
-                    SET_ACCESS, SE_FILE_OBJECT, TRUSTEE_IS_SID, TRUSTEE_TYPE, TRUSTEE_W,
+                    SetEntriesInAclW, SetNamedSecurityInfoW, EXPLICIT_ACCESS_W, SET_ACCESS,
+                    SE_FILE_OBJECT, TRUSTEE_IS_SID, TRUSTEE_TYPE, TRUSTEE_W,
                 },
-                GetTokenInformation, TokenUser, ACL, DACL_SECURITY_INFORMATION, GENERIC_READ,
-                GENERIC_WRITE, PROTECTED_DACL_SECURITY_INFORMATION, TOKEN_QUERY, TOKEN_USER,
+                GetTokenInformation, TokenUser, ACL, DACL_SECURITY_INFORMATION, NO_INHERITANCE,
+                PROTECTED_DACL_SECURITY_INFORMATION, PSID, TOKEN_QUERY, TOKEN_USER,
             },
-            System::Memory::{LocalFree, HLOCAL},
         },
     };
 
@@ -744,8 +743,9 @@ fn set_windows_owner_only_acl(path: &Path) -> Result<()> {
     // - None for the existing ACL (creating a new one)
     // - A valid mutable pointer to receive the new ACL
     // The resulting ACL pointer must be freed with LocalFree when done.
+    // In windows 0.58 this returns WIN32_ERROR (not Result); convert via .ok().
     unsafe {
-        SetEntriesInAclW(Some(&[ea]), None, &mut new_acl)?;
+        SetEntriesInAclW(Some(&[ea]), None, &mut new_acl).ok()?;
     }
 
     // Convert path to wide string
