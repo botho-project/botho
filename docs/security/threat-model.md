@@ -463,15 +463,20 @@ peer gating (`botho/src/network/discovery.rs`).
 
 **Bootstrap order:** (1) explicit `bootstrap_peers` in `config.toml`, (2) DNS
 TXT discovery (`seeds.botho.io` / `seeds.testnet.botho.io`), (3) hardcoded
-fallback list. The testnet fallback list ships the live regional seeds by
-default (#613): a primary (`seed.botho.io`) plus regional hosts
-`us`/`eu`/`ap.seed.botho.io`. Mainnet regional hostnames are scaffolding, gated
-behind `BOTHO_REGIONAL_SEEDS`.
+fallback list. The testnet fallback list ships the regional seeds live and
+on by default as of 2026-07-04 (#613; verifiable in `seeds.rs`, where
+`fallback_seeds(Network::Testnet)` unconditionally returns the primary plus
+regionals): a primary (`seed.botho.io`) plus regional hosts
+`us`/`eu`/`ap.seed.botho.io`. Multi-region seed diversity is therefore an
+active default, but #613 remains open for the residual hardening it tracks —
+health-checked DNS failover and seed-availability alerting are not yet
+shipped. Mainnet regional hostnames are still scaffolding, gated behind
+`BOTHO_REGIONAL_SEEDS`.
 
 | Attack | Mitigation | Status |
 |--------|------------|--------|
 | DNS poisoning / spoofed TXT seeds | Falls back to hardcoded seeds on DNS failure; block validation rejects any peer's invalid chain regardless of how it was discovered | Partial — DNS records are **not** cryptographically pinned (no DNSSEC dependency); a poisoned resolver can bias peer selection / attempt eclipse |
-| Eclipse via seed-list control | Multi-region seed diversity (#613); per-IP connection caps | Partial |
+| Eclipse via seed-list control | Multi-region seed diversity (testnet regionals live & default-on 2026-07-04, #613; DNS failover and seed-availability alerting still tracked there); per-IP connection caps | Partial |
 | Malicious primary seed | Mainnet primary seed multiaddr pins a peer ID; testnet primary resolves peer ID dynamically (host re-key without client release) | Partial (testnet unpinned by design) |
 | Protocol downgrade / incompatible peers | Major-version mismatch disconnects (`PROTOCOL_VERSION` 3.0.0, `consensus_incompatibility`, #608); minor/patch differences warn only | Mitigated (upgrade hygiene, not a security boundary — see I1) |
 | Redial storm after version disconnect | Per-IP caps bound cost; no ban/backoff window yet (L1) | Partial |
