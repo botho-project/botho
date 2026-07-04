@@ -30,9 +30,14 @@ WorkingDirectory=/home/ubuntu
 #   threshold = 1
 #   members = []
 #
-# Switch BACK to --relay (and quorum mode "recommended") once a second seed /
-# validator joins. See infra/seed/README.md "Single-seed vs multi-seed".
-ExecStart=/usr/local/bin/botho --testnet run --relay
+# Switch BACK to relay mode (no --mint flags, [minting] enabled = false in
+# config.toml, quorum mode "recommended") once a second seed / validator
+# joins. See infra/seed/README.md "Single-seed vs multi-seed".
+#
+# NOTE: there is no --relay CLI flag (verified against the 3.0.0 binary,
+# 2026-07-04 — passing it fails with "unexpected argument"). Relay behavior
+# is simply running without minting.
+ExecStart=/usr/local/bin/botho --testnet run
 
 # Restart on failure
 Restart=on-failure

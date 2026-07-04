@@ -42,8 +42,9 @@ see **[`TESTNET_RESET.md`](./TESTNET_RESET.md)**.
 A lone seed cannot form the default `recommended` quorum (needs >= 2 nodes), so
 minting stalls. For single-seed bring-up, run with `--mint --mint-threads 1`
 and set `[network.quorum]` to `mode = "explicit"`, `threshold = 1`,
-`members = []`. Switch back to `--relay` + `recommended` once a second node
-joins. The exact `ExecStart` variants are documented in `botho-seed.service`.
+`members = []`. Switch back to relay mode (plain `run`, minting disabled) +
+`recommended` once a second node joins. The exact `ExecStart` variants are
+documented in `botho-seed.service`.
 
 ## Node Setup
 
