@@ -743,8 +743,9 @@ fn set_windows_owner_only_acl(path: &Path) -> Result<()> {
     // - None for the existing ACL (creating a new one)
     // - A valid mutable pointer to receive the new ACL
     // The resulting ACL pointer must be freed with LocalFree when done.
+    // In windows 0.58 this returns WIN32_ERROR (not Result); convert via .ok().
     unsafe {
-        SetEntriesInAclW(Some(&[ea]), None, &mut new_acl)?;
+        SetEntriesInAclW(Some(&[ea]), None, &mut new_acl).ok()?;
     }
 
     // Convert path to wide string
