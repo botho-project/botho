@@ -15,9 +15,9 @@
 //! ## Invariants asserted (issue #337, target 4)
 //!
 //! For arbitrary inputs across the full u64 range:
-//! 1. `ClusterFactorCurve::factor` returns a value in `[FACTOR_SCALE,
-//!    factor_max * FACTOR_SCALE]` — for the default curve `[1000, 6000]` — and
-//!    `sigmoid_approx` returns `<= SIGMOID_SCALE`.
+//! 1. `ClusterFactorCurve::factor` (log-domain, u128 picocredit input) returns
+//!    a value in `[FACTOR_SCALE, factor_max * FACTOR_SCALE]` — for the default
+//!    curve `[1000, 6000]`.
 //! 2. `demurrage_charge` never panics/overflows; it is a non-negative u64 fee
 //!    floor and returns 0 for factor-1 coins / zero rate / zero elapsed. In the
 //!    realistic parameter domain (rate_bps <= 10_000, factor <=
@@ -62,18 +62,9 @@ struct FuzzMath {
 }
 
 fuzz_target!(|m: FuzzMath| {
-    // --- 1. Cluster-factor LUT (sigmoid) ---------------------------------
+    // --- 1. Cluster-factor curve (log-domain sigmoid) --------------------
     let curve = ClusterFactorCurve::default_params();
-    let sigmoid = curve.sigmoid_approx(m.cluster_wealth);
-    assert!(
-        sigmoid <= ClusterFactorCurve::SIGMOID_SCALE,
-        "sigmoid_approx({}) = {} exceeds SIGMOID_SCALE {}",
-        m.cluster_wealth,
-        sigmoid,
-        ClusterFactorCurve::SIGMOID_SCALE
-    );
-
-    let factor = curve.factor(m.cluster_wealth);
+    let factor = curve.factor(m.cluster_wealth as u128);
     // Documented bound for the default curve: 1x..=6x in FACTOR_SCALE units.
     let max_factor = curve.factor_max as u64 * ClusterFactorCurve::FACTOR_SCALE;
     let min_factor = curve.factor_min as u64 * ClusterFactorCurve::FACTOR_SCALE;

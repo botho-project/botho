@@ -260,7 +260,7 @@ pub fn ring_centroid_implied_factor(
         (weighted / total_value).min(u64::MAX as u128) as u64
     };
 
-    curve.factor(centroid_wealth)
+    curve.factor(centroid_wealth as u128)
 }
 
 #[cfg(test)]
@@ -498,12 +498,13 @@ mod tests {
     fn test_ring_centroid_implied_factor_wealthy_ring() {
         // Every member carries a wealthy cluster's wealth -> high implied factor.
         let curve = ClusterFactorCurve::default_params();
-        // (value, member_effective_wealth)
-        let members = [(1_000_000u64, 100_000_000u64), (1_000_000, 100_000_000)];
+        // (value, member_effective_wealth) — wealth in picocredits: 10M BTH.
+        const W: u64 = 10_000_000_000_000_000_000; // 10M BTH in pico
+        let members = [(1_000_000u64, W), (1_000_000, W)];
         let implied = ring_centroid_implied_factor(&members, &curve);
         // Wealthy centroid maps near the curve maximum, well above 1x.
         assert!(implied >= 5_000, "wealthy ring implied factor = {implied}");
-        assert_eq!(implied, curve.factor(100_000_000));
+        assert_eq!(implied, curve.factor(W as u128));
     }
 
     #[test]
@@ -522,11 +523,11 @@ mod tests {
         // background decoy barely moves it.
         let curve = ClusterFactorCurve::default_params();
         let members = [
-            (100_000_000u64, 100_000_000u64), // big wealthy real input
-            (1_000, 0),                       // tiny fresh background decoy
+            (100_000_000u64, 10_000_000_000_000_000_000u64), // big wealthy real input (10M BTH)
+            (1_000, 0),                                      // tiny fresh background decoy
         ];
         let implied = ring_centroid_implied_factor(&members, &curve);
-        // Centroid wealth ~ 100M × 100M / 100.001M ≈ 99.999M -> still high.
+        // Centroid wealth ≈ 10M BTH (decoy barely moves it) -> still high.
         assert!(
             implied >= 5_000,
             "value-weighted implied factor = {implied}"
@@ -545,7 +546,11 @@ mod tests {
         // ring-floored factor produces a real charge. The spender can no longer
         // escape demurrage by understating the output tags.
         let curve = ClusterFactorCurve::default_params();
-        let members = [(1_000_000u64, 100_000_000u64), (1_000_000, 100_000_000)];
+        // Member wealth in picocredits: 10M BTH -> high implied factor.
+        let members = [
+            (1_000_000u64, 10_000_000_000_000_000_000u64),
+            (1_000_000, 10_000_000_000_000_000_000),
+        ];
 
         let claimed_factor = FACTOR_SCALE; // 1x background claim
         let charge_claimed = demurrage_charge(

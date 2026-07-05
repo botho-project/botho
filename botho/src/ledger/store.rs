@@ -2934,7 +2934,7 @@ impl Ledger {
                         // factor() returns FACTOR_SCALE units (1000..6000),
                         // which LotteryCandidate uses directly (integer
                         // fixed-point, consensus-deterministic)
-                        let cluster_factor = factor_curve.factor(effective_wealth);
+                        let cluster_factor = factor_curve.factor(effective_wealth as u128);
 
                         let candidate = LotteryCandidate::new(
                             utxo_id,
@@ -3096,8 +3096,9 @@ mod tests {
         let dir = tempdir().unwrap();
         let ledger = Ledger::open(dir.path()).unwrap();
 
-        // Seed a wealthy cluster.
-        ledger.set_cluster_wealth_for_test(1, 100_000_000).unwrap();
+        // Seed a wealthy cluster (picocredits: 10M BTH).
+        const W: u64 = 10_000_000_000_000_000_000; // 10M BTH in pico
+        ledger.set_cluster_wealth_for_test(1, W).unwrap();
 
         let curve = bth_cluster_tax::ClusterFactorCurve::default_params();
         let wealthy = cluster_tags(1);
@@ -3114,7 +3115,7 @@ mod tests {
             "floor must raise the understated factor: {floored} > {claimed_factor}"
         );
         // Matches the factor the wealthy centroid implies directly.
-        assert_eq!(floored, curve.factor(100_000_000));
+        assert_eq!(floored, curve.factor(W as u128));
     }
 
     /// Legitimate background spend: the ring is also background (no seeded
@@ -4478,7 +4479,7 @@ mod tests {
         let ledger = Ledger::open(dir.path()).unwrap();
         // A wealthy cluster so the factor floor lifts demurrage above zero.
         ledger
-            .set_cluster_wealth_for_test(9, 10_000_000_000)
+            .set_cluster_wealth_for_test(9, 10_000_000_000_000_000_000)
             .unwrap();
 
         // Height must be at/after the halving interval (~6.3M blocks) so
@@ -4556,7 +4557,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let ledger = Ledger::open(dir.path()).unwrap();
         ledger
-            .set_cluster_wealth_for_test(5, 10_000_000_000)
+            .set_cluster_wealth_for_test(5, 10_000_000_000_000_000_000)
             .unwrap();
 
         // Past the halving interval so demurrage is active (see the note in the
@@ -4645,7 +4646,7 @@ mod tests {
 
         let poor = ledger.consensus_fee_floor(&tx, 1000).unwrap();
         ledger
-            .set_cluster_wealth_for_test(3, 10_000_000_000)
+            .set_cluster_wealth_for_test(3, 10_000_000_000_000_000_000)
             .unwrap();
         let rich = ledger.consensus_fee_floor(&tx, 1000).unwrap();
 
