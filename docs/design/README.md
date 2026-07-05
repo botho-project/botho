@@ -50,6 +50,12 @@ This section contains design proposals, roadmaps, and technical specifications f
 | [PoW Connection Challenge](pow-connection-challenge.md) | Implemented | DDoS protection via proof-of-work |
 | [Traffic Privacy Roadmap](traffic-privacy-roadmap.md) | Draft | Onion routing and protocol obfuscation |
 
+## Tooling & Observability
+
+| Document | Status | Description |
+|----------|--------|-------------|
+| [Block Explorer + Network Stats](block-explorer-network-stats.md) | Proposed | Placement/storage decisions for the public explorer (ship in web-wallet) and multi-node stats dashboard (extend metrics-daemon); privacy rules, M2 views, staleness alerting, phased breakdown |
+
 ## Archived
 
 Withdrawn or superseded designs are moved to [archive/](archive/). Each archived document explains why it was withdrawn and what supersedes it.
