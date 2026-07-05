@@ -49,8 +49,11 @@ jobs:
             target: aarch64-unknown-linux-gnu
             artifact_name: linux-aarch64
 
-          # macOS Intel
-          - os: macos-13
+          # macOS Intel. GitHub retired the macos-13 runner image (Dec 2025);
+          # macos-15-intel is the supported Intel label (through ~2027).
+          # Jobs targeting retired labels queue forever, which blocked the
+          # whole release pipeline on the first v0.3.0 tag run.
+          - os: macos-15-intel
             target: x86_64-apple-darwin
             artifact_name: macos-x86_64
 
@@ -219,7 +222,7 @@ jobs:
             2. Running `./scripts/build-release.sh`
             3. Comparing SHA256 checksums
 
-            See `docs/REPRODUCIBLE_BUILDS.md` for detailed verification instructions.
+            See `docs/operations/reproducible-builds.md` for detailed verification instructions.
 
             ### Checksums
 

@@ -6,6 +6,21 @@ Run Botho in production environments.
 
 ### Basic Production Setup
 
+Prefer published release artifacts — they are reproducible and checksummed
+(see [reproducible-builds.md](reproducible-builds.md)):
+
+```bash
+# Install from the latest GitHub release (aarch64 shown; use linux-x86_64 on x86)
+TAG=v0.3.0  # or query /releases/latest
+curl -fsSLO https://github.com/botho-project/botho/releases/download/$TAG/botho-$TAG-linux-aarch64.tar.gz
+curl -fsSLO https://github.com/botho-project/botho/releases/download/$TAG/checksums-linux-aarch64.txt
+tar xzf botho-$TAG-linux-aarch64.tar.gz
+sha256sum -c checksums-linux-aarch64.txt
+sudo install -m755 botho /usr/local/bin/
+```
+
+Building from source is the fallback (e.g. for untagged commits):
+
 ```bash
 # Build release binary
 cargo build --release
