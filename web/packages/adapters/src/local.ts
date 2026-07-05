@@ -225,6 +225,31 @@ export class LocalNodeAdapter implements NodeAdapter {
     return BigInt(data.fee)
   }
 
+  /**
+   * Look up the sender's cluster wealth (string-encoded u128) for a set of owned
+   * output target keys (#634). The local node exposes the same JSON-RPC method
+   * as the seed nodes (`cluster_getWealthByTargetKeys`) on `/rpc` — the endpoint
+   * {@link probeNode} already uses — so we call it there rather than the REST
+   * `/api/` surface. `max_cluster_wealth` is parsed via `BigInt()` (never
+   * `Number()`) to preserve the full u128 range. Returns `0n` for an empty
+   * target-key list, or if the node returns an error.
+   */
+  async getClusterWealth(targetKeys: string[]): Promise<bigint> {
+    if (targetKeys.length === 0) return 0n
+    const response = await this.fetchApi('/rpc', {
+      method: 'POST',
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'cluster_getWealthByTargetKeys',
+        params: { target_keys: targetKeys },
+        id: 1,
+      }),
+    })
+    const json = await response.json()
+    if (json.error || !json.result) return 0n
+    return BigInt(json.result.max_cluster_wealth || '0')
+  }
+
   // =========================================================================
   // Events
   // =========================================================================

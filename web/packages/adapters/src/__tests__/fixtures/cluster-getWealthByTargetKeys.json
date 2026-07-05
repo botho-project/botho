@@ -1,0 +1,14 @@
+{
+  "jsonrpc": "2.0",
+  "result": {
+    "cluster_breakdown": [],
+    "cluster_factor": 1000,
+    "cluster_factor_display": "1.00x",
+    "dominant_cluster_id": null,
+    "max_cluster_wealth": "0",
+    "max_cluster_wealth_btd": "0.000000000",
+    "total_value": 0,
+    "utxo_count": 0
+  },
+  "id": 1
+}

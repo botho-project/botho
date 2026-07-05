@@ -240,6 +240,7 @@ export {
   buildOwnedHistory,
   spendableBalance,
   spendableOwnedOutputs,
+  ownedOutputTargetKeys,
   type BuildSendParams,
   type BuildSendResult,
   type ChainOutputWithMeta,

@@ -1,0 +1,9 @@
+{
+  "jsonrpc": "2.0",
+  "result": {
+    "cluster_id": "1",
+    "wealth": "0",
+    "wealth_btd": "0.000000000"
+  },
+  "id": 1
+}

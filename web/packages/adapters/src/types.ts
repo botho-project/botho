@@ -150,6 +150,19 @@ export interface NodeAdapter {
    */
   estimateFee(sizeBytes: number, clusterWealth?: bigint): Promise<bigint>
 
+  /**
+   * Look up the sender's cluster wealth for a set of owned output target keys,
+   * for use as the `clusterWealth` argument to {@link estimateFee} (progressive
+   * fees, #626/#628/#634).
+   *
+   * The value is a string-encoded u128 on the wire and MUST be parsed via
+   * `BigInt()` (never `Number()`) — cluster wealth can exceed
+   * `Number.MAX_SAFE_INTEGER`. Returns `0n` for an empty target-key list.
+   *
+   * @param targetKeys Hex-encoded target keys of the wallet's owned outputs
+   */
+  getClusterWealth(targetKeys: string[]): Promise<bigint>
+
   // =========================================================================
   // Events
   // =========================================================================

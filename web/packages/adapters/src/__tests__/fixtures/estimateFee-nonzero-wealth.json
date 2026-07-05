@@ -1,0 +1,13 @@
+{
+  "jsonrpc": "2.0",
+  "result": {
+    "clusterFactor": 1265,
+    "clusterFactorDisplay": "1.26x",
+    "clusterWealth": "1000000000000000",
+    "highPriorityFee": 40480,
+    "minimumFee": 20240,
+    "params": { "amount": 0, "clusterWealth": "1000000000000000", "memos": 0, "txType": "hidden" },
+    "recommendedFee": 20240
+  },
+  "id": 1
+}

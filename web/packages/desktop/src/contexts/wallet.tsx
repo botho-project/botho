@@ -335,6 +335,13 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     // Standard: Minting transaction with ML-DSA signature
     // Private: CLSAG ring signature (~700 bytes per input, ring=20)
     const sizeBytes = privacyLevel === 'private' ? 4000 : 2000
+    // NOTE (#634): no cluster wealth is passed here, so this UI estimate uses the
+    // node's 1.00x base rate. Unlike the web wallet, the desktop app keeps the
+    // wallet keys inside Rust (never in JS), so this context cannot scan owned
+    // outputs to derive the cluster's target keys. The authoritative,
+    // cluster-aware fee is computed in the Rust `send_transaction` path at send
+    // time; `LocalNodeAdapter.getClusterWealth` is available for a future
+    // Rust-side (or key-bearing) caller to supply it.
     return adapter.estimateFee(sizeBytes)
   }, [adapter])
 

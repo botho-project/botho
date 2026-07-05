@@ -1,0 +1,27 @@
+{
+  "jsonrpc": "2.0",
+  "result": {
+    "buildTime": "2026-07-05T12:30:57Z",
+    "chainHeight": 202,
+    "gitCommit": "4f944e0de540e8774df3c0663a77561307c4a291",
+    "gitCommitShort": "4f944e0",
+    "mempoolSize": 0,
+    "minerStalled": false,
+    "mintingActive": false,
+    "mintingThreads": 0,
+    "network": "botho-testnet",
+    "nodeVersion": "0.2.0",
+    "peerCount": 2,
+    "quorumDegenerate": true,
+    "quorumFaultTolerant": false,
+    "scpPeerCount": 2,
+    "syncProgress": 100.0,
+    "syncStatus": "synced",
+    "synced": true,
+    "tipHash": "ce2354d505daf75ace1b05ef6a0c879edbd067272c4102dacd297d266cd57b9c",
+    "totalTransactions": 0,
+    "uptimeSeconds": 13436,
+    "version": "0.2.0"
+  },
+  "id": 1
+}

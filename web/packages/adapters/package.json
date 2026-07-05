@@ -10,12 +10,16 @@
     "./local": "./src/local.ts"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@botho/core": "workspace:*"
   },
   "devDependencies": {
-    "typescript": "~5.9.3"
+    "@types/node": "^22.10.0",
+    "typescript": "~5.9.3",
+    "vitest": "^4.0.16"
   }
 }
