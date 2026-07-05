@@ -7,6 +7,7 @@ use botho::{commands, config, telemetry};
 #[derive(Parser)]
 #[command(name = "botho")]
 #[command(about = "A privacy-preserving mined cryptocurrency", long_about = None)]
+#[command(version)]
 struct Cli {
     /// Use testnet (default during beta)
     #[arg(long, global = true, conflicts_with = "mainnet")]
