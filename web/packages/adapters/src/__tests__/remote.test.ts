@@ -85,13 +85,19 @@ afterEach(() => {
 })
 
 describe('RemoteNodeAdapter.estimateFee', () => {
-  it('returns a bigint even though the node sends fees as JSON numbers', async () => {
+  it('returns a bigint fee even though the node sends fees as JSON numbers', async () => {
     const adapter = await connectedAdapter({ estimateFee: estimateFeeZero })
-    const fee = await adapter.estimateFee(0)
+    const { fee } = await adapter.estimateFee(0)
     expect(typeof fee).toBe('bigint')
     // recommendedFee in the live fixture is the JSON number 16000.
     expect(fee).toBe(16000n)
     expect(fee).toBe(BigInt(estimateFeeZero.result.recommendedFee as number))
+  })
+
+  it('returns the node-computed clusterFactorDisplay (base rate)', async () => {
+    const adapter = await connectedAdapter({ estimateFee: estimateFeeZero })
+    const { clusterFactorDisplay } = await adapter.estimateFee(0)
+    expect(clusterFactorDisplay).toBe('1.00x')
   })
 
   it('omits cluster_wealth from the request when none is supplied', async () => {
@@ -102,11 +108,12 @@ describe('RemoteNodeAdapter.estimateFee', () => {
     expect(call?.params.cluster_wealth).toBeUndefined()
   })
 
-  it('forwards clusterWealth as a decimal STRING and returns the higher fee factor', async () => {
+  it('forwards clusterWealth as a decimal STRING and returns the higher fee + factor display', async () => {
     const adapter = await connectedAdapter({ estimateFee: estimateFeeNonzero })
     // 1000 BTH = 1e15 picocredits; live node returns the 1.26x factor for this.
-    const fee = await adapter.estimateFee(0, 1_000_000_000_000_000n)
+    const { fee, clusterFactorDisplay } = await adapter.estimateFee(0, 1_000_000_000_000_000n)
     expect(fee).toBe(20240n)
+    expect(clusterFactorDisplay).toBe('1.26x')
     const call = lastCall('estimateFee')
     expect(call?.params.cluster_wealth).toBe('1000000000000000')
     expect(typeof call?.params.cluster_wealth).toBe('string')
@@ -126,7 +133,7 @@ describe('RemoteNodeAdapter.estimateFee', () => {
     // BigInt — the clusterWealth string must not be parsed at all here.
     expect(typeof estimateFeeZero.result.clusterWealth).toBe('string')
     const adapter = await connectedAdapter({ estimateFee: estimateFeeZero })
-    const fee = await adapter.estimateFee(0)
+    const { fee } = await adapter.estimateFee(0)
     expect(fee).toBe(BigInt(String(estimateFeeZero.result.recommendedFee)))
   })
 })

@@ -7,7 +7,7 @@ import {
   useRef,
   type ReactNode,
 } from 'react'
-import { RemoteNodeAdapter, type WsConnectionStatus } from '@botho/adapters'
+import { RemoteNodeAdapter, type FeeEstimate, type WsConnectionStatus } from '@botho/adapters'
 import { AddressBook, EncryptedAddressBook, ClaimLinkStore, EncryptedClaimLinks, saveWallet, loadWallet, loadWalletWithKey, getWalletInfo, deriveAddress, deriveKeypairs, parseAddress, isValidMnemonic, clearWallet, createClaimLinkMnemonic, buildClaimLink, assertClaimLinkAmountWithinCap, VaultKey, MIN_PASSWORD_LENGTH } from '@botho/core'
 import type { Balance, Contact, NodeInfo, Transaction, ClaimLinkRecord, Timestamp } from '@botho/core'
 import { buildSendTransaction, spendableBalance, buildOwnedHistory, ownedOutputTargetKeys } from '@botho/wasm-signer'
@@ -120,6 +120,16 @@ interface WalletContextValue extends WalletState {
 
   // Transactions
   send: (to: string, amount: bigint, memo?: string) => Promise<string>
+  /**
+   * Estimate the fee for a send, returning both the fee and the node-computed
+   * cluster fee factor display string (#635). Mirrors the {@link send} flow:
+   * derives the wallet's cluster wealth from its owned output target keys and
+   * forwards it to the node so the progressive fee factor is applied. Falls back
+   * to a base-rate `{ fee: 0n, clusterFactorDisplay: '1.00x' }` on any failure
+   * (locked wallet, not connected, network error) so the send modal never
+   * crashes on the pre-send fee display.
+   */
+  estimateFee: (amount: bigint) => Promise<FeeEstimate>
   refreshBalance: () => Promise<void>
   refreshTransactions: () => Promise<void>
 
@@ -1015,7 +1025,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     }
     let fee: bigint
     try {
-      fee = await adapter.estimateFee(0, clusterWealth)
+      fee = (await adapter.estimateFee(0, clusterWealth)).fee
     } catch {
       fee = 0n
     }
@@ -1072,6 +1082,50 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
     return result.txHash
   }, [state.address])
+
+  // Pre-send fee estimate for the send modal (#635). Mirrors the cluster-wealth
+  // derivation in `send` above so the displayed fee — and the node-computed
+  // `clusterFactorDisplay` that explains it — match what the actual send will
+  // pay. Best-effort throughout: a locked/disconnected wallet, or any network
+  // failure, resolves to the base-rate `{ fee: 0n, clusterFactorDisplay:
+  // '1.00x' }` rather than throwing into the modal's render effect.
+  const estimateFee = useCallback(async (_amount: bigint): Promise<FeeEstimate> => {
+    const adapter = adapterRef.current
+    const fallback: FeeEstimate = { fee: 0n, clusterFactorDisplay: '1.00x' }
+    if (!adapter.isConnected()) return fallback
+
+    const mnemonic = mnemonicRef.current
+    if (!mnemonic) return fallback
+
+    // Derive the wallet's cluster wealth from its owned output target keys, the
+    // same way `send` does, so the node applies the correct progressive fee
+    // factor (#626/#628/#634). Any failure falls back to a zero cluster wealth
+    // (base-rate estimate).
+    let clusterWealth = 0n
+    try {
+      const kp = deriveKeypairs(mnemonic, 0)
+      const targetKeys = await ownedOutputTargetKeys(
+        {
+          spendPrivateKey: toHex(kp.spendPrivate),
+          viewPrivateKey: toHex(kp.viewPrivate),
+        },
+        {
+          getChainHeight: () => adapter.getBlockHeight(),
+          getOutputs: (start, end) => adapter.getRawOutputs(start, end),
+          areKeyImagesSpent: (keyImages) => adapter.areKeyImagesSpent(keyImages),
+        },
+      )
+      clusterWealth = await adapter.getClusterWealth(targetKeys)
+    } catch {
+      clusterWealth = 0n
+    }
+
+    try {
+      return await adapter.estimateFee(0, clusterWealth)
+    } catch {
+      return fallback
+    }
+  }, [])
 
   const refreshBalance = useCallback(async () => {
     const adapter = adapterRef.current
@@ -1253,6 +1307,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         changePassword,
         getVaultKey,
         send,
+        estimateFee,
         refreshBalance,
         refreshTransactions,
         addContact,

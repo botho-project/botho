@@ -56,7 +56,7 @@ function rpcFromAdapter(adapter: RemoteNodeAdapter): SendRpc {
 async function resolveFee(adapter: RemoteNodeAdapter): Promise<bigint> {
   let fee: bigint
   try {
-    fee = await adapter.estimateFee(0)
+    fee = (await adapter.estimateFee(0)).fee
   } catch {
     fee = 0n
   }

@@ -46,6 +46,24 @@ export interface TxSubmitResult {
 }
 
 /**
+ * Result of estimating a transaction fee.
+ *
+ * Carries both the fee amount and the node-computed cluster-factor display
+ * string so the send UI can show *why* the fee is what it is (progressive fee,
+ * #626/#628/#634). The node computes `clusterFactorDisplay` server-side from the
+ * live log-domain curve — clients must never hardcode a factor table.
+ */
+export interface FeeEstimate {
+  /** Recommended fee in picocredits. */
+  fee: bigint
+  /**
+   * Node-computed display string for the cluster fee factor, e.g. "1.85x".
+   * Always "1.00x" at the base rate (no cluster-wealth premium).
+   */
+  clusterFactorDisplay: string
+}
+
+/**
  * Options for fetching transaction history
  */
 export interface TxHistoryOptions {
@@ -144,11 +162,16 @@ export interface NodeAdapter {
   submitTransaction(signedTx: Uint8Array): Promise<TxSubmitResult>
 
   /**
-   * Estimate the fee for a transaction
+   * Estimate the fee for a transaction.
+   *
+   * Returns a {@link FeeEstimate} carrying both the fee and the node-computed
+   * `clusterFactorDisplay` (e.g. "1.85x") so the send UI can explain the
+   * progressive fee. Callers on older nodes that omit the factor see "1.00x".
+   *
    * @param sizeBytes Estimated transaction size in bytes
    * @param clusterWealth Total wealth in the sender's cluster (for progressive fees)
    */
-  estimateFee(sizeBytes: number, clusterWealth?: bigint): Promise<bigint>
+  estimateFee(sizeBytes: number, clusterWealth?: bigint): Promise<FeeEstimate>
 
   /**
    * Look up the sender's cluster wealth for a set of owned output target keys,

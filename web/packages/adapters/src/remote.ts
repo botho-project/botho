@@ -11,6 +11,7 @@ import type {
 } from '@botho/core'
 import type {
   BlockFetchOptions,
+  FeeEstimate,
   MempoolUpdate,
   NodeAdapter,
   PeerStatus,
@@ -488,7 +489,7 @@ export class RemoteNodeAdapter implements NodeAdapter {
     }
   }
 
-  async estimateFee(_sizeBytes: number, clusterWealth?: bigint): Promise<bigint> {
+  async estimateFee(_sizeBytes: number, clusterWealth?: bigint): Promise<FeeEstimate> {
     // Forward the sender's cluster wealth so the node applies the progressive
     // fee factor (#626/#628). It is a string-encoded u128 on the wire — never a
     // JS number — so the full u128 range survives without precision loss. When
@@ -508,9 +509,17 @@ export class RemoteNodeAdapter implements NodeAdapter {
       // coerced/rounded by Number().
       minimumFee: number | string
       recommendedFee: number | string
+      // Node-computed display string for the cluster fee factor, e.g. "1.85x"
+      // (#635). Server-side from the live log-domain curve — never hardcoded
+      // client-side. Absent on older nodes, in which case we fall back to
+      // "1.00x" (base rate).
+      clusterFactorDisplay?: string
     }>('estimateFee', params)
 
-    return BigInt(String(result.recommendedFee ?? result.minimumFee ?? 0))
+    return {
+      fee: BigInt(String(result.recommendedFee ?? result.minimumFee ?? 0)),
+      clusterFactorDisplay: result.clusterFactorDisplay ?? '1.00x',
+    }
   }
 
   /**

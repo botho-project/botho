@@ -803,9 +803,12 @@ export function WalletPage() {
     [sendTransaction]
   )
 
-  // Wrap estimateFee to match SendModal interface
+  // Wrap estimateFee to match SendModal interface. Returns the full FeeEstimate
+  // (fee + cluster factor display) from the context; the desktop path always
+  // reports a "1.00x" base rate since the cluster-aware fee is computed
+  // Rust-side at send time (#635).
   const handleEstimateFee = useCallback(
-    async (amount: bigint, privacyLevel: 'standard' | 'private'): Promise<bigint> => {
+    (amount: bigint, privacyLevel: 'standard' | 'private') => {
       return estimateFee(amount, privacyLevel)
     },
     [estimateFee]
