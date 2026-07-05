@@ -193,7 +193,7 @@ pub fn validate_cluster_fee(
     let minimum_fee = fee_config.compute_fee(
         TransactionType::Hidden,
         tx_size_bytes,
-        effective_wealth,
+        effective_wealth as u128,
         num_memos,
     );
 
@@ -238,7 +238,7 @@ pub fn validate_cluster_fee_dynamic(
     let minimum_fee = fee_config.compute_fee_with_dynamic_base(
         TransactionType::Hidden,
         tx_size_bytes,
-        effective_wealth,
+        effective_wealth as u128,
         num_memos,
         dynamic_base,
     );
@@ -275,7 +275,7 @@ pub fn compute_cluster_factor(
 ) -> u64 {
     let effective_wealth =
         compute_effective_cluster_wealth(input_tx_outs, input_values, cluster_wealth);
-    fee_config.cluster_factor(effective_wealth)
+    fee_config.cluster_factor(effective_wealth as u128)
 }
 
 /// Trait for looking up cluster wealth.
@@ -486,7 +486,7 @@ pub fn validate_ring_cluster_fee(
     let minimum_fee = fee_config.compute_fee_with_outputs(
         TransactionType::Hidden,
         tx_size_bytes,
-        max_cluster_wealth,
+        max_cluster_wealth as u128,
         num_outputs,
         num_memos,
     );
@@ -536,7 +536,7 @@ pub fn validate_ring_cluster_fee_dynamic(
     let minimum_fee = fee_config.compute_fee_with_dynamic_base_and_outputs(
         TransactionType::Hidden,
         tx_size_bytes,
-        max_cluster_wealth,
+        max_cluster_wealth as u128,
         num_outputs,
         num_memos,
         dynamic_base,

@@ -695,7 +695,26 @@ impl LotterySimulation {
         owner_id
     }
 
-    /// Add an owner with a specific cluster factor (for testing).
+    /// **LEGACY / DEPRECATED (#626).** Add an owner with a *hardcoded* cluster
+    /// factor.
+    ///
+    /// This is the entry point the #314 structural-Gini validation used
+    /// (`sim.rs::run_lottery_experiment`, factors pinned to 1.0/2.0/6.0): it
+    /// **bypasses the cluster-factor curve entirely**, so experiments built on
+    /// it never exercised the production sigmoid. It is retained ONLY to
+    /// reproduce those historical runs byte-for-byte.
+    ///
+    /// New experiments MUST use [`Self::add_owner_via_production_curve`], which
+    /// derives the factor from the owner's simulated cluster wealth (declared
+    /// in BTH, converted to picocredits at the boundary) through the REAL
+    /// consensus curve [`crate::fee_curve::ClusterFactorCurve::factor`] —
+    /// the same compiled function the node runs. See the M2 run matrix in
+    /// `sim.rs` and `experiments/M2_RUNBOOK.md`.
+    #[deprecated(
+        note = "hardcodes the cluster factor and bypasses the production curve; \
+                use `add_owner_via_production_curve` for new experiments. Retained \
+                only to reproduce historical #314 runs byte-for-byte (#626)."
+    )]
     pub fn add_owner_with_factor(
         &mut self,
         wealth: u64,
@@ -728,6 +747,65 @@ impl LotterySimulation {
 
         self.owners.insert(owner_id, owner);
         owner_id
+    }
+
+    /// The production log-domain cluster factor for a cluster wealth expressed
+    /// in **whole BTH**, as an f64 multiplier in `[1.0, 6.0]` for the sim's
+    /// f64 fee/ticket math (#626).
+    ///
+    /// This is the unit-ambiguity kill switch demanded by #626 §7: the sim
+    /// declares wealth in BTH and this function converts to **picocredits** at
+    /// the curve boundary (`× PICO_PER_BTH`) before calling the REAL consensus
+    /// curve [`crate::fee_curve::ClusterFactorCurve::factor`]. The node and the
+    /// sim therefore share the exact same compiled curve — no linear-domain
+    /// `FeeCurve::rate_bps` approximation, no hardcoded constant.
+    pub fn production_cluster_factor_bth(wealth_bth: u128) -> f64 {
+        use crate::fee_curve::{ClusterFactorCurve, PICO_PER_BTH};
+        let curve = ClusterFactorCurve::default_params();
+        let wealth_pico = wealth_bth.saturating_mul(PICO_PER_BTH);
+        curve.factor(wealth_pico) as f64 / ClusterFactorCurve::FACTOR_SCALE as f64
+    }
+
+    /// Add an owner whose cluster factor is derived from the REAL production
+    /// curve at `cluster_wealth_bth` (BTH), not a hardcoded constant or the
+    /// legacy linear `FeeCurve` (#626). `value` is the owner's on-chain value
+    /// in sim base units (used for UTXOs/tickets); `cluster_wealth_bth` is
+    /// the cumulative tagged cluster wealth in BTH that drives the factor.
+    ///
+    /// This is the #314-validation-faithful replacement for
+    /// [`Self::add_owner_with_factor`].
+    pub fn add_owner_via_production_curve(
+        &mut self,
+        value: u64,
+        cluster_wealth_bth: u128,
+        strategy: SybilStrategy,
+    ) -> u64 {
+        let factor = Self::production_cluster_factor_bth(cluster_wealth_bth);
+        // Intentional internal reuse of the deprecated hardcoded-factor path:
+        // this method IS the production-curve replacement, feeding it a
+        // curve-derived factor rather than a caller-supplied constant.
+        #[allow(deprecated)]
+        self.add_owner_with_factor(value, strategy, factor)
+    }
+
+    /// Re-price every UTXO an owner currently holds to a new cluster factor.
+    ///
+    /// Used by the cumulative / epoch-halving M2 runners to move an owner's
+    /// factor as its cumulative tagged wealth ratchets up (or is halved at an
+    /// epoch boundary) — recomputed through
+    /// [`Self::production_cluster_factor_bth`] so the ratchet is exercised
+    /// against the real curve. Deterministic; pure state update on
+    /// already-owned UTXOs.
+    pub fn set_owner_cluster_factor(&mut self, owner_id: u64, cluster_factor: f64) {
+        let factor = cluster_factor.clamp(1.0, MAX_CLUSTER_FACTOR);
+        if let Some(owner) = self.owners.get(&owner_id) {
+            let ids = owner.utxo_ids.clone();
+            for id in ids {
+                if let Some(u) = self.utxos.get_mut(&id) {
+                    u.cluster_factor = factor;
+                }
+            }
+        }
     }
 
     /// Create an empty owner (for manual UTXO creation).
@@ -1978,6 +2056,10 @@ pub struct SybilTestResult {
 
 #[cfg(test)]
 mod tests {
+    // These historical regression tests intentionally exercise the deprecated
+    // hardcoded-factor path (`add_owner_with_factor`) to reproduce the #314
+    // structural-Gini runs byte-for-byte (#626).
+    #![allow(deprecated)]
     use super::*;
 
     #[test]

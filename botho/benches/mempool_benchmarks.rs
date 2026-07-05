@@ -157,7 +157,7 @@ fn bench_estimate_fee_with_wealth(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("Mempool estimate_fee_with_wealth");
 
-    for wealth in [0u64, 1_000_000_000_000, 10_000_000_000_000_000].iter() {
+    for wealth in [0u128, 1_000_000_000_000, 10_000_000_000_000_000].iter() {
         group.bench_with_input(BenchmarkId::new("wealth", wealth), wealth, |b, &wealth| {
             b.iter(|| {
                 black_box(mempool.estimate_fee_with_wealth(
@@ -179,7 +179,7 @@ fn bench_cluster_factor(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("Mempool cluster_factor");
 
-    for wealth in [0u64, 1_000_000_000_000, 10_000_000_000_000_000].iter() {
+    for wealth in [0u128, 1_000_000_000_000, 10_000_000_000_000_000].iter() {
         group.bench_with_input(BenchmarkId::new("wealth", wealth), wealth, |b, &wealth| {
             b.iter(|| black_box(mempool.cluster_factor(wealth)))
         });

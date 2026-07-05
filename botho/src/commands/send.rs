@@ -102,9 +102,10 @@ pub fn run(
                     entry.weight as u128 * global
                 })
                 .sum();
-            // estimate_typical_fee takes a u64 wealth (widening is PR 3); clamp.
-            (weighted / bth_transaction_types::TAG_WEIGHT_SCALE as u128).min(u64::MAX as u128)
-                as u64
+            // estimate_typical_fee takes full-u128 wealth end-to-end (#626 PR3):
+            // no clamp — the exact per-UTXO effective wealth flows into the fee
+            // estimate and the demurrage factor below.
+            weighted / bth_transaction_types::TAG_WEIGHT_SCALE as u128
         })
         .max()
         .unwrap_or(0);
