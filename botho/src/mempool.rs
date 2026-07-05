@@ -2346,7 +2346,9 @@ mod tests {
                 (100_000_000, 10, wealthy_cluster, 81),
             ],
             tip_height,
-            &[(wealthy_cluster, 10_000_000_000)],
+            // Cluster global wealth in picocredits: 10M BTH -> high factor so
+            // demurrage is non-trivial (#626 log-domain curve).
+            &[(wealthy_cluster, 10_000_000_000_000_000_000)],
         );
 
         let outputs = vec![TxOutput {

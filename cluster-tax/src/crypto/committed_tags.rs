@@ -734,7 +734,7 @@ impl CommittedFeeProver {
     ) -> Option<SegmentOrProof> {
         // Check that fee is actually sufficient
         // fee = base_fee * factor(wealth) / FACTOR_SCALE
-        let factor = self.curve.factor(self.wealth);
+        let factor = self.curve.factor(self.wealth as u128);
         let required_fee =
             (self.base_fee as u128 * factor as u128 / ZkFeeCurve::FACTOR_SCALE as u128) as u64;
         if self.fee_paid < required_fee {
@@ -743,7 +743,7 @@ impl CommittedFeeProver {
 
         // Find the real segment using in_segment
         let real_segment = (0..ZkFeeCurve::NUM_SEGMENTS)
-            .find(|&i| self.curve.in_segment(self.wealth, i))
+            .find(|&i| self.curve.in_segment(self.wealth as u128, i))
             .unwrap_or(ZkFeeCurve::NUM_SEGMENTS - 1);
         let all_params = self.curve.all_segment_params();
 
@@ -790,9 +790,17 @@ impl CommittedFeeProver {
     ) -> SegmentFeeProof {
         let g = blinding_generator();
 
-        // Range proof: wealth in [w_lo, w_hi)
-        let lower_diff = self.wealth.saturating_sub(params.w_lo);
-        let upper_diff = params.w_hi.saturating_sub(self.wealth + 1);
+        // Range proof: wealth in [w_lo, w_hi). `w_lo`/`w_hi` are u128 (pico);
+        // the committed wealth is u64. Compute the diffs in u128 and saturate
+        // back to u64 for the Scalar commitment (Phase-2 ZK path is provisional
+        // and not consensus-binding — see the #626 ZkFeeCurve re-anchor note).
+        let lower_diff = (self.wealth as u128)
+            .saturating_sub(params.w_lo)
+            .min(u64::MAX as u128) as u64;
+        let upper_diff = params
+            .w_hi
+            .saturating_sub(self.wealth as u128 + 1)
+            .min(u64::MAX as u128) as u64;
 
         let lower_blinding = Scalar::random(rng);
         let upper_blinding = Scalar::random(rng);
@@ -810,7 +818,7 @@ impl CommittedFeeProver {
         // Linear proof: fee >= intercept + slope * wealth
         // Compute factor using HEAD's SegmentParams: factor = intercept/FACTOR_SCALE +
         // slope * (w - w_lo) / SLOPE_SCALE
-        let w_offset = self.wealth.saturating_sub(params.w_lo) as i128;
+        let w_offset = (self.wealth as u128).saturating_sub(params.w_lo) as i128;
         let slope_contribution =
             (params.slope_scaled as i128 * w_offset / ZkFeeCurve::SLOPE_SCALE) as i64;
         let expected_factor = ((params.intercept_scaled + slope_contribution)

@@ -1296,7 +1296,7 @@ mod tests {
         let curve = ClusterFactorCurve::default_params();
         // Valid mid-range wealth and the u64 extremes all stay in [1000, 6000].
         for w in [0u64, 10_000_000, u64::MAX] {
-            let f = curve.factor(w);
+            let f = curve.factor(w as u128);
             assert!(
                 (FACTOR_SCALE..=MAX_FACTOR_SCALED).contains(&f),
                 "factor {} out of [{}, {}] for wealth {}",
