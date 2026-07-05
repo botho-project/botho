@@ -1,6 +1,6 @@
 [package]
 name = "botho-metrics-daemon"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "Historical metrics collection daemon for Botho faucet"
 license = "MIT"

@@ -12,6 +12,64 @@ bumps (`0.X.Y`) are backwards-compatible.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-05
+
+### Summary
+
+Consensus-breaking release (requires a coordinated network reset). Ships two
+protocol bumps — `2.0.0 → 3.0.0 → 4.0.0` — that pin the current testnet: a
+deterministic consensus fee floor (H1) and a log-domain cluster-factor curve
+with recalibrated `w_mid` and `u128` cluster-wealth accounting (#626). Also
+lands the CLI thin wallet's real CLSAG ring transactions, regional testnet
+seeds on by default, and a validated, reproducible release pipeline.
+
+### Changed (consensus-breaking — requires network reset)
+
+- **Deterministic consensus fee floor in `add_block`.** The minimum-fee rule is
+  now enforced in the consensus path with integer-only arithmetic; the mempool
+  relay fee may only tighten *above* the consensus floor, never below it (H1).
+  Block fee-sum arithmetic rejects/saturates on overflow instead of wrapping.
+  Protocol version bumped to `3.0.0` for the required reset. (#600, #601, #602,
+  #603, #606, #608)
+- **Log-domain cluster-factor curve in picocredits.** The cluster-tax factor is
+  computed on a log-domain curve with a recalibrated `w_mid`, the
+  `cluster_wealth_db` accumulator is widened `u64 → u128` to avoid overflow at
+  full-supply scale, and the real curve is exercised by an M2 simulation
+  harness. Protocol version bumped to `4.0.0` for the required reset. (#626,
+  #627, #628, #629, #631)
+- **M2 cumulative cluster-wealth semantic ratified** as a design decision
+  (spend-time cumulative accrual). (#605, #630)
+- **Cluster-wealth rebuild uses `saturating_add`** for determinism parity (M3).
+  (#607)
+
+### Added
+
+- **Real CLSAG ring transactions in the CLI thin wallet** — the wallet now
+  builds actual ring signatures instead of placeholder transactions. (#614,
+  #620)
+- **Live testnet regional seeds included in the fallback set by default**, so a
+  fresh node can discover the network without manual seed configuration. (#613,
+  #624)
+
+### Fixed
+
+- **Wallet RPC serde field-case drift** vs the current node repaired — restores
+  wallet ↔ node compatibility. (#610, #617)
+- **Decoy selection clamp panic** — phase-1 in-band draw is skipped when the age
+  band is degenerate, avoiding an out-of-range clamp. (#611, #618)
+- **Reproducible release pipeline portability.** Portable `sha256` wrapper for
+  macOS runners (`sha256sum` is Linux-only), and the `botho-wallet` Windows
+  file-ACL code fixed to compile against `windows` 0.58 (module paths, features,
+  `WIN32_ERROR`). Validated across all five release targets. (#615, #619, #621,
+  #622)
+
+### Docs & Security
+
+- **Threat model refreshed** for audit cycle-6 and the economic mechanism.
+  (#616, #625)
+- **Testnet runbook updated** for the protocol resets; stale `--relay` flag
+  references removed; mainnet-blocker list refreshed. (#609, #612, #623)
+
 ## [0.2.0] - 2026-06-15
 
 ### Summary

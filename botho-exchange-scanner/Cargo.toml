@@ -1,6 +1,6 @@
 [package]
 name = "botho-exchange-scanner"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "Exchange deposit scanner for Botho cryptocurrency"
 license = "Apache-2.0"

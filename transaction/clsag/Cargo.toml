@@ -1,6 +1,6 @@
 [package]
 name = "bth-transaction-clsag"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["Botho"]
 edition = "2021"
 description = "Self-contained CLSAG ring-signature transaction types for Botho (stealth addresses + ring signatures)"
