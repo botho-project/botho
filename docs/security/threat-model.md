@@ -447,8 +447,15 @@ threshold *above* this floor, never below (Bitcoin min-relay vs.
 consensus-validity split).
 
 **Open items from cycle 6 (not consensus-exploitable today, tracked):**
-- Cumulative cluster wealth never decrements (M2) — an economics/design
-  question, deterministic.
+- Cumulative cluster wealth never decrements (M2) — **RATIFIED 2026-07-05 as a
+  design decision** (#605, option 2): cluster wealth is intentionally lifetime
+  cumulative tagged volume with no decay. Deterministic; economics-only.
+  Empirically justified on the #626-recalibrated log-domain curve (cumulative
+  ΔGini +0.2171/+0.2242 at 10yr, +0.5644/+0.5745 at 20yr, honest/gamed — every
+  epoch-halving decay variant strictly weaker). Live-testnet confirmation of
+  the on-chain factor distribution after the 4.0.0 reset remains pending on
+  #605. See
+  [redistribution design doc](../design/cluster-tilted-redistribution.md#cluster-wealth-is-cumulative-lifetime-volume-design-decision).
 - Fee accounting books 100% of fees as burned while 80% is redistributed (M4)
   — no consensus effect today (difficulty ignores burns).
 - No explicit fork-choice/reorg handling in `add_block` beyond exact
@@ -628,7 +635,10 @@ For a block B applied at height H by any honest node:
 - Decoy-sourced tag-mass inflation vs. the C6 guard (**#581**)
 - Spend-time (not continuous) demurrage → "everyone parks" drift (**#314**)
 - Lottery payout privacy: winners visible on-chain, factor distribution leaks
-- Cluster wealth is cumulative and never decrements (M2)
+- Cluster wealth is cumulative and never decrements (M2) — **ratified design
+  decision** (#605, 2026-07-05): intentional lifetime-volume semantic, no
+  decay; empirically justified on the #626 log-domain curve. Live-testnet
+  factor-distribution confirmation after the 4.0.0 reset still pending (#605).
 
 ---
 
