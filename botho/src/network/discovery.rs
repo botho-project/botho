@@ -82,17 +82,30 @@ use crate::{
 /// 2.0.0 peers instead of letting them silently fork against the new
 /// block-acceptance rules. `MIN_SUPPORTED_PROTOCOL_VERSION` is raised in
 /// lockstep.
-pub const PROTOCOL_VERSION: &str = "3.0.0";
+///
+/// Bumped to 4.0.0 for the coordinated testnet reset deploying the #626
+/// consensus changes and the ratified #605 semantics. #626 replaces the C7
+/// consensus fee floor with a log-domain fee curve and widens cluster-wealth
+/// accounting to u128 (#627/#628/#629), and #605 ratifies the cluster-wealth
+/// decay semantics that ride the same reset. Because #626 changes the C7 fee
+/// floor a block must satisfy to be accepted, 3.0.0 peers are
+/// consensus-incompatible with the reset chain's block-acceptance rules — they
+/// would compute a different floor and fork. As with the 2.x -> 3.0.0 bump this
+/// must be MAJOR: `is_consensus_compatible` / `consensus_incompatibility`
+/// compare major versions only, so only a major bump disconnects 3.0.0 peers
+/// rather than letting them silently fork. `MIN_SUPPORTED_PROTOCOL_VERSION` is
+/// raised in lockstep.
+pub const PROTOCOL_VERSION: &str = "4.0.0";
 
 /// Minimum supported protocol version.
 /// Peers below this version are consensus-incompatible and are disconnected.
-/// Raised to 3.0.0 alongside `PROTOCOL_VERSION` for the H1 consensus fee-floor
-/// deploy (issue #606): 2.0.0 peers produce/accept blocks that violate the new
-/// deterministic fee floor (#602) and related fail-closed rules, so they must
-/// be dropped rather than allowed to fork the reset chain. The bump is a MAJOR
-/// bump because the disconnect check (`is_consensus_compatible`) is major-only;
-/// a minor bump would only warn.
-pub const MIN_SUPPORTED_PROTOCOL_VERSION: &str = "3.0.0";
+/// Raised to 4.0.0 alongside `PROTOCOL_VERSION` for the reset deploying the
+/// #626 log-domain fee curve (u128 cluster wealth, #627/#628/#629) and the
+/// ratified #605 semantics: 3.0.0 peers apply the old C7 fee floor and would
+/// accept/produce blocks the reset chain rejects, so they must be dropped
+/// rather than allowed to fork. The bump is MAJOR because the disconnect check
+/// (`is_consensus_compatible`) is major-only; a minor bump would only warn.
+pub const MIN_SUPPORTED_PROTOCOL_VERSION: &str = "4.0.0";
 
 /// Topic for block announcements
 const BLOCKS_TOPIC: &str = "botho/blocks/1.0.0";
@@ -2155,36 +2168,55 @@ mod tests {
 
     #[test]
     fn test_protocol_version_constant() {
-        // Bumped to 3.0.0 for the cycle-6 H1 consensus fee-floor deploy
-        // (issue #606): current `main` enforces the deterministic consensus
-        // fee floor (#602) plus fee-sum overflow (#601) and fail-closed
-        // double-spend (#600/#564/#598), all incompatible with the running
-        // 2.0.0 chain, requiring a coordinated reset with fresh genesis.
+        // Bumped to 4.0.0 for the coordinated reset deploying the #626
+        // consensus changes (log-domain fee curve replacing the C7 fee
+        // floor; u128 cluster wealth, #627/#628/#629) and the ratified #605
+        // cluster-wealth decay semantics. #626 changes the fee floor a block
+        // must satisfy to be accepted, so 3.0.0 peers are consensus-
+        // incompatible with the reset chain and a fresh genesis is required.
         // A MAJOR bump is required because `is_consensus_compatible` (the
         // peer-disconnect gate) compares majors only — a minor bump would
-        // merely warn, leaving 2.0.0 peers connected and silently forking.
-        assert_eq!(PROTOCOL_VERSION, "3.0.0");
+        // merely warn, leaving 3.0.0 peers connected and silently forking.
+        assert_eq!(PROTOCOL_VERSION, "4.0.0");
         let parsed = ProtocolVersion::parse(PROTOCOL_VERSION).unwrap();
-        assert_eq!(parsed.major, 3);
+        assert_eq!(parsed.major, 4);
         assert_eq!(parsed.minor, 0);
         assert_eq!(parsed.patch, 0);
     }
 
     #[test]
     fn test_min_supported_protocol_version_constant() {
-        assert_eq!(MIN_SUPPORTED_PROTOCOL_VERSION, "3.0.0");
+        assert_eq!(MIN_SUPPORTED_PROTOCOL_VERSION, "4.0.0");
         let parsed = ProtocolVersion::parse(MIN_SUPPORTED_PROTOCOL_VERSION).unwrap();
-        assert_eq!(parsed.major, 3);
+        assert_eq!(parsed.major, 4);
         assert_eq!(parsed.minor, 0);
     }
 
-    /// Regression guard for #606: the 3.0.0 deploy must actually DISCONNECT
-    /// 2.0.0 peers (not just warn). This pins the major-only disconnect
-    /// semantics against the live constants.
+    /// Regression guard (originally #606): a consensus-breaking reset must
+    /// actually DISCONNECT the immediately-preceding major's peers, not just
+    /// warn. Pins the major-only disconnect semantics for the 2.0.0 pre-reset
+    /// chain against the live constants.
     #[test]
     fn test_v2_peers_are_consensus_incompatible_with_current() {
         let local = ProtocolVersion::parse(PROTOCOL_VERSION).unwrap();
         let old_peer = ProtocolVersion::parse("2.0.0").unwrap();
+        assert!(!old_peer.is_consensus_compatible(&local));
+        assert_eq!(
+            ProtocolVersion::consensus_incompatibility(&Some(old_peer.clone()), &local),
+            Some(old_peer)
+        );
+    }
+
+    /// Regression guard for the #605/#626 reset: the 4.0.0 deploy must
+    /// actually DISCONNECT 3.0.0 peers (the H1 fee-floor chain), not merely
+    /// warn — #626's log-domain fee curve changes the C7 floor, so a 3.0.0
+    /// peer would fork. Pins the major-only disconnect semantics against the
+    /// live constants so a future accidental minor-only bump of a consensus-
+    /// breaking change fails the suite.
+    #[test]
+    fn test_v3_peers_are_consensus_incompatible_with_current() {
+        let local = ProtocolVersion::parse(PROTOCOL_VERSION).unwrap();
+        let old_peer = ProtocolVersion::parse("3.0.0").unwrap();
         assert!(!old_peer.is_consensus_compatible(&local));
         assert_eq!(
             ProtocolVersion::consensus_incompatibility(&Some(old_peer.clone()), &local),

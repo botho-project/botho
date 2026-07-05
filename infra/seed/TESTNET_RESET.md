@@ -1,9 +1,11 @@
 # Testnet Reset & Multi-Seed Bootstrap (operator runbook)
 
 This document covers the **coordinated testnet reset** onto current `main`
-(protocol `3.0.0`) and the **multi-seed bootstrap** plan. It was written for
-the #323 reset (protocol `2.0.0`) and updated for the #606 reset (protocol
-`3.0.0`, H1 consensus fee floor).
+(protocol `4.0.0`) and the **multi-seed bootstrap** plan. It was written for
+the #323 reset (protocol `2.0.0`), updated for the #606 reset (protocol
+`3.0.0`, H1 consensus fee floor), and again for the #605/#626 reset (protocol
+`4.0.0`, log-domain fee curve + u128 cluster wealth + ratified cluster-wealth
+decay).
 
 > **Scope split.** The *code/config* prep (scripts, genesis reconciliation,
 > multi-seed config scaffolding, release-build path) is in the repo. The
@@ -16,7 +18,7 @@ Current `main` values that any reset must match:
 
 | Parameter | Value | Source |
 |-----------|-------|--------|
-| Protocol version | `3.0.0` | `botho/src/network/discovery.rs` (`PROTOCOL_VERSION`, `MIN_SUPPORTED_PROTOCOL_VERSION`). Consensus-breaking resets require a **major** bump — `is_consensus_compatible` compares major only, so a minor bump would merely warn, not disconnect, old peers. |
+| Protocol version | `4.0.0` | `botho/src/network/discovery.rs` (`PROTOCOL_VERSION`, `MIN_SUPPORTED_PROTOCOL_VERSION`). Consensus-breaking resets require a **major** bump — `is_consensus_compatible` compares major only, so a minor bump would merely warn, not disconnect, old peers. |
 | Testnet genesis magic | `BOTHO_TESTNET_GENESIS_V1` (32-byte, in `prev_block_hash`) | `botho/src/block.rs` (`TESTNET_GENESIS_MAGIC`) |
 | Mainnet genesis magic | `BOTHO_MAINNET_GENESIS_V1` | `botho/src/block.rs` (`MAINNET_GENESIS_MAGIC`) |
 | Testnet network magic | `BTHT` (`0x42 0x54 0x48 0x54`) | `transaction/types/src/constants.rs` (`Network::magic_bytes`) |

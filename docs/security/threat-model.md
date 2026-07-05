@@ -485,7 +485,7 @@ shipped. Mainnet regional hostnames are still scaffolding, gated behind
 | DNS poisoning / spoofed TXT seeds | Falls back to hardcoded seeds on DNS failure; block validation rejects any peer's invalid chain regardless of how it was discovered | Partial — DNS records are **not** cryptographically pinned (no DNSSEC dependency); a poisoned resolver can bias peer selection / attempt eclipse |
 | Eclipse via seed-list control | Multi-region seed diversity (testnet regionals live & default-on 2026-07-04, #613; DNS failover and seed-availability alerting still tracked there); per-IP connection caps | Partial |
 | Malicious primary seed | Mainnet primary seed multiaddr pins a peer ID; testnet primary resolves peer ID dynamically (host re-key without client release) | Partial (testnet unpinned by design) |
-| Protocol downgrade / incompatible peers | Major-version mismatch disconnects (`PROTOCOL_VERSION` 3.0.0, `consensus_incompatibility`, #608); minor/patch differences warn only | Mitigated (upgrade hygiene, not a security boundary — see I1) |
+| Protocol downgrade / incompatible peers | Major-version mismatch disconnects (`PROTOCOL_VERSION` 4.0.0, `consensus_incompatibility`, #605/#626); minor/patch differences warn only | Mitigated (upgrade hygiene, not a security boundary — see I1) |
 | Redial storm after version disconnect | Per-IP caps bound cost; no ban/backoff window yet (L1) | Partial |
 
 **Note:** protocol versions are self-reported via libp2p identify. The
