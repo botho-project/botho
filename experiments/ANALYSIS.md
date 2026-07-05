@@ -1187,11 +1187,14 @@ Cumulative passes with a 4–11× margin at both horizons, honest and gamed.
 Redistribution strengthens with horizon (Gini 0.93 → 0.37 at 20yr); gamed
 runs edge out honest because whale split/churn under cumulative tagging just
 re-tags value (no evasion channel). The merchant cohort (5,000 BTH,
-2×/yr velocity) reaches a mean factor of ~2.8x at 10yr from accumulated
-volume alone — the accepted velocity-vs-holdings mispricing, a sim cohort
+2×/yr velocity) reaches a mean factor of 3.53x at 10yr from accumulated
+volume alone — above the harness's ≥3x mispricing flag (`FLAG` in the run
+output) — the accepted velocity-vs-holdings mispricing, a sim cohort
 output (reproducible via
 `target/release/cluster-tax-sim m2-cumulative --horizon-years 10`), not one
-of the ΔGini/whale-factor figures in the table.
+of the ΔGini/whale-factor figures in the table. The ratified decision
+accepted this flagged mispricing as dominated by the redistribution benefit;
+the post-4.0.0-reset live measurement should re-check the merchant band.
 
 ### Run set 2 — epoch-halving decay (option 1), for comparison
 

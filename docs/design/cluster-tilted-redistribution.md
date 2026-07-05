@@ -185,13 +185,18 @@ values and costs both redistribution and new consensus surface.
 - **Velocity-vs-holdings mispricing.** Because wealth is lifetime volume, an
   active-commerce cluster prices on everything that has ever flowed through it,
   not what it currently holds. In the sim's population ladder the merchant
-  cohort (5,000 BTH held, 2×/yr velocity) reaches a **mean factor of ~2.8x at
-  the 10-year horizon** from accumulated volume alone. This ~2.8x figure is the
-  **sim cohort output**, reproducible via
+  cohort (5,000 BTH held, 2×/yr velocity) reaches a **mean factor of 3.53x at
+  the 10-year horizon** from accumulated volume alone — above the harness's
+  own ≥3x mispricing flag, which the run reports as `FLAG`. This 3.53x figure
+  is the **sim cohort output**, reproducible via
   `target/release/cluster-tax-sim m2-cumulative --horizon-years 10`; it is *not*
-  one of the ratified ΔGini/whale-factor result-table numbers above. Accepted:
-  the mispricing is bounded by the log-domain curve (a merchant stays well
-  below the whale band) and the redistribution benefit dominates it.
+  one of the ratified ΔGini/whale-factor result-table numbers above. Accepted
+  with eyes open: the mispricing is real and flagged, but it is bounded by the
+  log-domain curve (the merchant band stays well below the whale band at
+  5.6–5.7x), and the ratified decision weighed the redistribution benefit
+  (ΔGini +0.22 to +0.57) as dominating it. The live-testnet confirmation
+  after the protocol-4.0.0 reset should re-measure merchant-cohort factors
+  against this prediction.
 - **Dormancy is no escape.** Parking coins does not lower a cluster's tracked
   wealth; the ratchet is permanent. This is intended — it removes hoarding as a
   factor-reduction strategy.
