@@ -12,6 +12,7 @@ use libp2p::{
     request_response::{self, Codec, ProtocolSupport},
     PeerId, StreamProtocol,
 };
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -76,6 +77,20 @@ pub const SYNC_INITIAL_GAP: u64 = 1;
 /// re-requesting status lets a long-running node detect that the chain grew
 /// and re-enter catch-up, instead of relying solely on gossiped tip blocks.
 pub const STATUS_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Initial retry backoff after a sync failure.
+///
+/// The delay before a `Failed` node re-enters `Discovery` starts here and grows
+/// exponentially (see [`MAX_RETRY_BACKOFF`]) on each consecutive failure, so a
+/// peer that keeps serving unusable responses is not hammered in a tight loop
+/// (#641). Reset to this value on the first successful batch application.
+pub const INITIAL_RETRY_BACKOFF: Duration = Duration::from_secs(5);
+
+/// Upper bound on the retry backoff after repeated sync failures (#641).
+///
+/// Exponential growth is capped here so recovery latency stays bounded once the
+/// network heals, while still throttling a persistently failing peer.
+pub const MAX_RETRY_BACKOFF: Duration = Duration::from_secs(60);
 
 // ============================================================================
 // Protocol Messages
@@ -472,11 +487,26 @@ pub struct ChainSyncManager {
     peer_statuses: HashMap<PeerId, PeerStatus>,
     /// Our current chain height
     local_height: u64,
-    /// Height we're currently downloading from
-    download_height: u64,
+    /// `start_height` of the `GetBlocks` request currently in flight, if any
+    /// (#641).
+    ///
+    /// The sync tick fires on a fixed interval (every ~2s in the node event
+    /// loop). Without this guard, `tick()` would re-issue a `GetBlocks` request
+    /// for the same range on every tick while the prior response was still in
+    /// flight — producing duplicate, overlapping batches that the requester
+    /// then hard-failed on, driving a tight retry loop near a batch boundary.
+    /// While `pending_request.is_some()`, `tick()` issues no new block request;
+    /// it is cleared when a response arrives ([`on_blocks`]), on failure
+    /// ([`on_failure`]), or when the download peer disconnects
+    /// ([`on_peer_disconnected`]).
+    pending_request: Option<u64>,
     /// Rate limiter
     rate_limiter: SyncRateLimiter,
-    /// Retry backoff duration
+    /// Current retry backoff duration.
+    ///
+    /// Starts at [`INITIAL_RETRY_BACKOFF`], doubles on each consecutive
+    /// [`on_failure`] (capped at [`MAX_RETRY_BACKOFF`]), and resets on the
+    /// first successful batch application ([`on_blocks_added`]) (#641).
     retry_backoff: Duration,
     /// Peer reputation tracking for sync selection
     reputation: ReputationManager,
@@ -491,9 +521,9 @@ impl ChainSyncManager {
             state: SyncState::Discovery,
             peer_statuses: HashMap::new(),
             local_height,
-            download_height: local_height,
+            pending_request: None,
             rate_limiter: SyncRateLimiter::default(),
-            retry_backoff: Duration::from_secs(5),
+            retry_backoff: INITIAL_RETRY_BACKOFF,
             reputation: ReputationManager::new(),
             last_status_refresh: Instant::now(),
         }
@@ -549,10 +579,17 @@ impl ChainSyncManager {
         }
     }
 
-    /// Update local chain height
+    /// Update local chain height.
+    ///
+    /// This is called on every sync tick to keep the manager's view of the
+    /// committed chain height current. It is the single source of truth for the
+    /// download cursor: `tick()` anchors the next `GetBlocks` request at
+    /// `local_height + 1`, so a request in flight is unaffected by this call
+    /// (#641). Previously a separate `download_height` cursor was also reset
+    /// here, which — combined with a fixed-interval tick — re-anchored
+    /// duplicate requests at the same start height and drove a retry loop.
     pub fn set_local_height(&mut self, height: u64) {
         self.local_height = height;
-        self.download_height = height;
     }
 
     /// Get rate limiter for handling incoming requests
@@ -604,7 +641,7 @@ impl ChainSyncManager {
                         peer: best_peer,
                         target_height: status.height,
                     };
-                    self.download_height = self.local_height;
+                    self.pending_request = None;
                 } else if matches!(self.state, SyncState::Discovery) {
                     // Within one block of the tip during initial discovery:
                     // gossip will close the gap. Mark synced.
@@ -668,7 +705,7 @@ impl ChainSyncManager {
                         peer: best_peer,
                         target_height: status.height,
                     };
-                    self.download_height = self.local_height;
+                    self.pending_request = None;
                 }
             }
         }
@@ -684,6 +721,12 @@ impl ChainSyncManager {
         // Record successful response in reputation
         self.reputation.response_received(peer);
 
+        // A response arrived, so the in-flight request (if any) is resolved:
+        // clear the guard so `tick()` may issue the next batch request (#641).
+        // Cleared unconditionally, including for an empty batch, so an empty
+        // response does not wedge the state machine with a stuck guard.
+        self.pending_request = None;
+
         if blocks.is_empty() {
             return None;
         }
@@ -697,17 +740,28 @@ impl ChainSyncManager {
             "Received blocks"
         );
 
-        // Update download height
-        self.download_height = last_height;
-
-        // Return action to add blocks
+        // Return action to add blocks. The caller skips blocks it already has
+        // (overlap tolerance) before applying the novel tail — see
+        // `commands/run.rs`. The committed height is advanced via
+        // `on_blocks_added`, which is also what anchors the next request.
         Some(SyncAction::AddBlocks(blocks))
     }
 
     /// Called after blocks are added to ledger
     pub fn on_blocks_added(&mut self, new_height: u64) {
         self.local_height = new_height;
-        self.download_height = new_height;
+
+        // A batch has been committed, so any in-flight request has resolved.
+        // Clear the guard so `tick()` may anchor and issue the next batch at the
+        // new committed tip (#641). In the production path `on_blocks` already
+        // cleared it; clearing again here is redundant-safe and keeps the guard
+        // correct even if a caller advances height without routing through
+        // `on_blocks`.
+        self.pending_request = None;
+
+        // Real forward progress: reset the retry backoff so a transient failure
+        // earlier in the sync does not keep recovery latency inflated (#641).
+        self.retry_backoff = INITIAL_RETRY_BACKOFF;
 
         // Check if we've caught up
         if let SyncState::Downloading { target_height, .. } = self.state {
@@ -718,7 +772,14 @@ impl ChainSyncManager {
         }
     }
 
-    /// Handle sync failure
+    /// Handle sync failure.
+    ///
+    /// Transitions to `Failed` with a jittered retry deadline, then grows the
+    /// backoff for the *next* failure (exponential, capped at
+    /// [`MAX_RETRY_BACKOFF`]). This throttles a peer that keeps serving
+    /// unusable responses instead of retrying every fixed
+    /// [`INITIAL_RETRY_BACKOFF`] forever (#641). The backoff resets on the
+    /// next successful batch application ([`on_blocks_added`]).
     pub fn on_failure(&mut self, peer: Option<&PeerId>, reason: String) {
         // Record failure in reputation if we know which peer failed
         if let Some(p) = peer {
@@ -728,10 +789,26 @@ impl ChainSyncManager {
             warn!(%reason, "Sync failed");
         }
 
+        // The in-flight request (if any) has resolved into a failure.
+        self.pending_request = None;
+
         self.state = SyncState::Failed {
             reason,
-            retry_at: Instant::now() + self.retry_backoff,
+            retry_at: Instant::now() + Self::jittered(self.retry_backoff),
         };
+
+        // Grow the backoff for the next consecutive failure, capped.
+        self.retry_backoff = (self.retry_backoff * 2).min(MAX_RETRY_BACKOFF);
+    }
+
+    /// Apply +/-25% uniform jitter to a backoff duration so many nodes failing
+    /// against the same peer at once do not retry in lockstep (thundering
+    /// herd).
+    fn jittered(base: Duration) -> Duration {
+        let millis = base.as_millis() as f64;
+        // Uniform factor in [0.75, 1.25].
+        let factor = rand::thread_rng().gen_range(0.75..=1.25);
+        Duration::from_millis((millis * factor) as u64)
     }
 
     /// Handle peer disconnection
@@ -746,6 +823,9 @@ impl ChainSyncManager {
         {
             if download_peer == peer {
                 self.state = SyncState::Discovery;
+                // The request to this peer will never complete; drop the guard
+                // so a re-selected peer can be queried (#641).
+                self.pending_request = None;
             }
         }
     }
@@ -845,7 +925,7 @@ impl ChainSyncManager {
                                 peer: best_peer,
                                 target_height: status.height,
                             };
-                            self.download_height = self.local_height;
+                            self.pending_request = None;
                         } else {
                             self.state = SyncState::Synced;
                             return Some(SyncAction::Synced);
@@ -864,15 +944,29 @@ impl ChainSyncManager {
                 peer,
                 target_height,
             } => {
-                if self.download_height >= *target_height {
+                // The committed height is the single source of truth for the
+                // cursor: `on_blocks_added` advances it as batches land, and a
+                // batch is complete once it reaches the target (#641).
+                if self.local_height >= *target_height {
                     self.state = SyncState::Synced;
+                    self.pending_request = None;
                     return Some(SyncAction::Synced);
                 }
 
-                // Request next batch
+                // In-flight guard: never issue a second `GetBlocks` while a
+                // prior request is still awaiting a response. The fixed-interval
+                // sync tick would otherwise re-request the same range every tick
+                // and produce duplicate, overlapping batches (#641).
+                if self.pending_request.is_some() {
+                    return None;
+                }
+
+                // Request the next batch anchored at our committed tip.
+                let start_height = self.local_height + 1;
+                self.pending_request = Some(start_height);
                 Some(SyncAction::RequestBlocks {
                     peer: *peer,
-                    start_height: self.download_height + 1,
+                    start_height,
                     count: BLOCKS_PER_REQUEST,
                 })
             }
@@ -893,7 +987,7 @@ impl ChainSyncManager {
                             peer: best_peer,
                             target_height: status.height,
                         };
-                        self.download_height = self.local_height;
+                        self.pending_request = None;
                         return None;
                     }
                 }
@@ -2079,5 +2173,243 @@ mod tests {
             .unwrap();
 
         assert_eq!(stats.bytes_sent(), one * 2);
+    }
+
+    // ========================================================================
+    // In-flight request guard + exponential backoff (#641)
+    // ========================================================================
+
+    /// The sync tick fires on a fixed interval. While a `GetBlocks` request is
+    /// in flight, a subsequent `tick()` must NOT issue a duplicate request for
+    /// the same range — the pre-#641 behavior that produced overlapping batches
+    /// and a retry loop at the batch boundary.
+    #[test]
+    fn test_tick_does_not_duplicate_request_while_in_flight() {
+        let mut manager = ChainSyncManager::new(0);
+        let peer = make_peer_id();
+        manager.on_status(peer, 250, [1u8; 32]);
+        assert!(matches!(manager.state(), SyncState::Downloading { .. }));
+
+        // First tick issues a request anchored at local_height + 1.
+        let first = manager.tick(&[peer]);
+        assert!(
+            matches!(
+                first,
+                Some(SyncAction::RequestBlocks {
+                    start_height: 1,
+                    ..
+                })
+            ),
+            "first tick should request blocks from height 1, got {first:?}"
+        );
+
+        // A second (and third) tick BEFORE the response arrives must be a no-op:
+        // the in-flight guard suppresses the duplicate request.
+        assert!(
+            manager.tick(&[peer]).is_none(),
+            "second tick must not issue a duplicate request while one is pending"
+        );
+        assert!(
+            manager.tick(&[peer]).is_none(),
+            "third tick must not issue a duplicate request while one is pending"
+        );
+    }
+
+    /// After a response is applied (`on_blocks` + `on_blocks_added`), the guard
+    /// clears and the next tick issues a fresh request anchored at the new
+    /// committed tip — not the stale start height.
+    #[test]
+    fn test_tick_reissues_after_response_anchored_at_new_tip() {
+        let mut manager = ChainSyncManager::new(0);
+        let peer = make_peer_id();
+        manager.on_status(peer, 250, [1u8; 32]);
+
+        // Request [1..], guard set.
+        assert!(matches!(
+            manager.tick(&[peer]),
+            Some(SyncAction::RequestBlocks {
+                start_height: 1,
+                ..
+            })
+        ));
+        assert!(
+            manager.tick(&[peer]).is_none(),
+            "guard suppresses duplicate"
+        );
+
+        // Response arrives for the first 100 blocks: clear the guard and advance
+        // the committed height.
+        manager.on_blocks_added(100);
+
+        // Next tick issues a request anchored at the NEW tip (101), proving the
+        // cursor tracks committed height and re-anchoring does not repeat 1.
+        let next = manager.tick(&[peer]);
+        assert!(
+            matches!(
+                next,
+                Some(SyncAction::RequestBlocks {
+                    start_height: 101,
+                    ..
+                })
+            ),
+            "next request must be anchored at local_height + 1 = 101, got {next:?}"
+        );
+    }
+
+    /// `set_local_height` (called on every sync tick) must NOT re-anchor an
+    /// in-flight request. Pre-#641 it reset a separate `download_height`
+    /// cursor, which — combined with the fixed tick — re-issued a duplicate
+    /// request at the same start height.
+    #[test]
+    fn test_set_local_height_does_not_reanchor_in_flight_request() {
+        let mut manager = ChainSyncManager::new(100);
+        let peer = make_peer_id();
+        manager.on_status(peer, 300, [1u8; 32]);
+
+        // Request [101..], guard set.
+        assert!(matches!(
+            manager.tick(&[peer]),
+            Some(SyncAction::RequestBlocks {
+                start_height: 101,
+                ..
+            })
+        ));
+
+        // The tick loop refreshes local height from the (unchanged) ledger while
+        // the response is still in flight. This must remain a no-op.
+        manager.set_local_height(100);
+        assert!(
+            manager.tick(&[peer]).is_none(),
+            "refreshing local height must not re-issue the in-flight request"
+        );
+    }
+
+    /// A pure-overlap response (server re-serves a range we already committed)
+    /// must not wedge the state machine: `on_blocks` clears the guard even
+    /// though the caller applies nothing, and the next tick makes forward
+    /// progress anchored at the real tip. This is the unit-level analogue of
+    /// the #641 duplicate-batch scenario.
+    #[test]
+    fn test_overlap_response_clears_guard_and_makes_progress() {
+        let mut manager = ChainSyncManager::new(0);
+        let peer = make_peer_id();
+        manager.on_status(peer, 250, [1u8; 32]);
+
+        // First batch [1..100] applied.
+        assert!(matches!(
+            manager.tick(&[peer]),
+            Some(SyncAction::RequestBlocks {
+                start_height: 1,
+                ..
+            })
+        ));
+        manager.on_blocks_added(100);
+
+        // Second request [101..], guard set.
+        assert!(matches!(
+            manager.tick(&[peer]),
+            Some(SyncAction::RequestBlocks {
+                start_height: 101,
+                ..
+            })
+        ));
+
+        // A duplicate/overlapping empty-tail response arrives. `on_blocks` with
+        // an empty batch clears the guard and returns no action (the caller
+        // applies nothing and does NOT fail).
+        assert!(manager.on_blocks(&peer, vec![], false).is_none());
+        assert!(
+            !matches!(manager.state(), SyncState::Failed { .. }),
+            "a pure-overlap response must not push the manager into Failed"
+        );
+
+        // The guard is cleared, so the next tick re-requests from the real tip.
+        let next = manager.tick(&[peer]);
+        assert!(
+            matches!(
+                next,
+                Some(SyncAction::RequestBlocks {
+                    start_height: 101,
+                    ..
+                })
+            ),
+            "after an overlap response the next tick must re-request from 101, got {next:?}"
+        );
+    }
+
+    /// `on_failure` must grow the retry backoff exponentially (capped) and push
+    /// out the retry deadline, so a peer serving unusable responses is not
+    /// hammered every fixed interval (#641).
+    #[test]
+    fn test_on_failure_exponential_backoff() {
+        let mut manager = ChainSyncManager::new(0);
+        let peer = make_peer_id();
+
+        // Backoff starts at the initial value.
+        assert_eq!(manager.retry_backoff, INITIAL_RETRY_BACKOFF);
+
+        let mut prev = manager.retry_backoff;
+        // Five consecutive failures: backoff doubles until the cap.
+        for i in 0..5 {
+            manager.on_failure(Some(&peer), format!("failure {i}"));
+            let now = manager.retry_backoff;
+            if prev < MAX_RETRY_BACKOFF {
+                assert!(
+                    now > prev || now == MAX_RETRY_BACKOFF,
+                    "backoff must grow toward the cap: {prev:?} -> {now:?}"
+                );
+            }
+            assert!(
+                now <= MAX_RETRY_BACKOFF,
+                "backoff must never exceed the cap: {now:?}"
+            );
+            prev = now;
+        }
+
+        // Terminal value is the cap.
+        assert_eq!(manager.retry_backoff, MAX_RETRY_BACKOFF);
+        // And the guard is cleared on failure.
+        assert_eq!(manager.pending_request, None);
+    }
+
+    /// A successful batch application resets the backoff so recovery latency is
+    /// not permanently inflated by an earlier transient failure (#641).
+    #[test]
+    fn test_backoff_resets_on_progress() {
+        let mut manager = ChainSyncManager::new(0);
+        let peer = make_peer_id();
+
+        manager.on_failure(Some(&peer), "boom".to_string());
+        manager.on_failure(Some(&peer), "boom".to_string());
+        assert!(manager.retry_backoff > INITIAL_RETRY_BACKOFF);
+
+        manager.on_blocks_added(50);
+        assert_eq!(
+            manager.retry_backoff, INITIAL_RETRY_BACKOFF,
+            "forward progress must reset the retry backoff"
+        );
+    }
+
+    /// The in-flight guard must not survive a peer disconnect while
+    /// downloading: the request to the departed peer will never complete,
+    /// so a re-selected peer must be queryable.
+    #[test]
+    fn test_peer_disconnect_clears_in_flight_guard() {
+        let mut manager = ChainSyncManager::new(0);
+        let peer = make_peer_id();
+        manager.on_status(peer, 250, [1u8; 32]);
+
+        assert!(matches!(
+            manager.tick(&[peer]),
+            Some(SyncAction::RequestBlocks {
+                start_height: 1,
+                ..
+            })
+        ));
+
+        // Downloading peer drops -> back to Discovery, guard cleared.
+        manager.on_peer_disconnected(&peer);
+        assert!(matches!(manager.state(), SyncState::Discovery));
+        assert_eq!(manager.pending_request, None);
     }
 }

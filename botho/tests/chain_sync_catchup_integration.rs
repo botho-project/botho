@@ -669,3 +669,176 @@ fn test_sync_messages_roundtrip() {
         } if tip_hash == [9u8; 32]
     ));
 }
+
+/// Apply a served `GetBlocks` batch exactly as the node event loop does in
+/// `commands/run.rs` after the #641 fix: snapshot the committed height, skip
+/// blocks at or below it (overlap tolerance), and apply only the novel tail.
+///
+/// Returns the number of blocks actually applied. A pure-overlap batch (every
+/// block already committed) applies zero and must NOT be reported as a failure
+/// — pre-#641 the requester hard-failed on the first already-known block
+/// ("Expected height N, got N-k") and entered a retry loop.
+fn apply_batch_with_overlap_skip(
+    sync_manager: &mut ChainSyncManager,
+    node: &Ledger,
+    peer: PeerId,
+    response: SyncResponse,
+) -> usize {
+    let SyncResponse::Blocks { blocks, has_more } = response else {
+        panic!("expected Blocks response");
+    };
+    let Some(SyncAction::AddBlocks(blocks)) = sync_manager.on_blocks(&peer, blocks, has_more)
+    else {
+        return 0;
+    };
+
+    let local_before = node.get_chain_state().unwrap().height;
+    let mut applied = 0;
+    for block in &blocks {
+        // Overlap: already committed. Skip rather than fail.
+        if block.height() <= local_before {
+            continue;
+        }
+        node.add_block(block).unwrap_or_else(|e| {
+            panic!(
+                "unexpected apply failure for novel block {}: {}",
+                block.height(),
+                e
+            )
+        });
+        applied += 1;
+    }
+    if applied > 0 {
+        sync_manager.on_blocks_added(node.get_chain_state().unwrap().height);
+    }
+    applied
+}
+
+/// Regression test for #641: a fresh node bootstrapping near a batch boundary
+/// must tolerate a peer re-serving an *overlapping* batch (blocks it has
+/// already committed) instead of hard-failing the whole batch and locking into
+/// a retry loop.
+///
+/// This reproduces the exact live-testnet failure sequence: after batch
+/// `[1..100]` is applied, a duplicate/stale response for a range the node
+/// already has arrives. Pre-fix, the first already-known block failed the
+/// ledger's sequential-height check ("Expected height 101, got 1"), the batch
+/// aborted, and the node entered `Failed` and looped. Post-fix, the overlap is
+/// skipped, no failure is raised, and the node completes sync to tip.
+#[test]
+#[serial]
+fn test_duplicate_batch_response_tolerated() {
+    // 145 mirrors the live-testnet repro: tip just past a 100-block batch
+    // boundary, so the final batch overlaps the boundary.
+    let target_height = 145;
+
+    // --- Source node: chain to 145 ---
+    let source_dir = TempDir::new().unwrap();
+    let source = Ledger::open(source_dir.path()).unwrap();
+    source.set_difficulty(TRIVIAL_DIFFICULTY).unwrap();
+    let minter = create_test_wallet().public_address();
+    build_chain_to_height(&source, &minter, target_height);
+    let source_state = source.get_chain_state().unwrap();
+    assert_eq!(source_state.height, target_height);
+
+    // --- Fresh node at genesis ---
+    let node_dir = TempDir::new().unwrap();
+    let node = Ledger::open(node_dir.path()).unwrap();
+    node.set_difficulty(TRIVIAL_DIFFICULTY).unwrap();
+
+    let mut sync_manager = ChainSyncManager::new(0);
+    let peer = PeerId::random();
+
+    // Discovery -> Downloading (peer far ahead).
+    sync_manager.on_status(peer, source_state.height, source_state.tip_hash);
+    assert!(matches!(
+        sync_manager.state(),
+        SyncState::Downloading { .. }
+    ));
+
+    // --- Batch 1 [1..100] applied normally ---
+    let action = sync_manager
+        .tick(&[peer])
+        .expect("should request first batch");
+    let SyncAction::RequestBlocks {
+        start_height,
+        count,
+        ..
+    } = action
+    else {
+        panic!("expected RequestBlocks, got {action:?}");
+    };
+    assert_eq!(start_height, 1, "first request anchored at genesis + 1");
+    sync_manager.on_request_sent(peer);
+    let applied = apply_batch_with_overlap_skip(
+        &mut sync_manager,
+        &node,
+        peer,
+        serve_get_blocks(&source, start_height, count),
+    );
+    assert_eq!(applied, 100, "first batch applies 100 novel blocks");
+    assert_eq!(node.get_chain_state().unwrap().height, 100);
+
+    // --- The #641 trigger: a DUPLICATE stale response for [1..100] arrives ---
+    // (In production this is the second, redundant request the pre-fix
+    // fixed-interval tick issued while the first response was still in flight.)
+    sync_manager.set_local_height(node.get_chain_state().unwrap().height);
+    let dup_applied = apply_batch_with_overlap_skip(
+        &mut sync_manager,
+        &node,
+        peer,
+        serve_get_blocks(&source, 1, 100),
+    );
+    assert_eq!(
+        dup_applied, 0,
+        "a fully-overlapping batch must apply zero blocks"
+    );
+    assert!(
+        !matches!(sync_manager.state(), SyncState::Failed { .. }),
+        "an overlapping batch must NOT push the sync manager into Failed (the #641 bug)"
+    );
+    assert_eq!(
+        node.get_chain_state().unwrap().height,
+        100,
+        "the overlap must not corrupt or regress committed height"
+    );
+
+    // --- Finish sync to tip; the state machine must still make progress ---
+    let iterations = run_catchup(&mut sync_manager, &node, &source, peer);
+
+    let node_state = node.get_chain_state().unwrap();
+    assert_eq!(
+        node_state.height, target_height,
+        "node must reach the source tip despite the overlapping batch"
+    );
+    assert_eq!(
+        node_state.tip_hash, source_state.tip_hash,
+        "node tip hash must match the source after tolerating the overlap"
+    );
+    assert!(
+        sync_manager.is_synced(),
+        "sync manager must report Synced, not loop in Failed"
+    );
+
+    // --- Final overlap: a late duplicate of the tail [101..145] after we are ---
+    // already at the tip (the curator's step-5 "Response B" scenario). It must
+    // be tolerated with zero applied and no failure.
+    let late_dup = apply_batch_with_overlap_skip(
+        &mut sync_manager,
+        &node,
+        peer,
+        serve_get_blocks(&source, 101, 100),
+    );
+    assert_eq!(late_dup, 0, "late duplicate tail applies nothing");
+    assert!(
+        sync_manager.is_synced(),
+        "a late duplicate response must not knock a synced node out of Synced"
+    );
+
+    // The whole exchange must have converged quickly — a regression that
+    // re-requests the same range would blow past this bound.
+    assert!(
+        iterations < 50,
+        "catch-up after overlap took too many iterations: {iterations}"
+    );
+}
