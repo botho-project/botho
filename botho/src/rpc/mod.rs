@@ -1220,17 +1220,31 @@ async fn handle_mempool_info(id: Value, state: &RpcState) -> JsonRpcResponse {
     )
 }
 
+/// Parse a `cluster_wealth` RPC parameter as `u128` picocredits.
+///
+/// Since the accumulator widened to u128 (#626), wealth can exceed the JS
+/// safe-integer / u64 range, so wallets send it as a decimal STRING (matching
+/// the `cluster_getWealth*` string responses). A legacy numeric value is still
+/// accepted for backward compatibility. Missing / unparseable → 0.
+fn parse_cluster_wealth_param(params: &Value) -> u128 {
+    match params.get("cluster_wealth") {
+        Some(Value::String(s)) => s.parse::<u128>().unwrap_or(0),
+        Some(v) => v.as_u64().map(u128::from).unwrap_or(0),
+        None => 0,
+    }
+}
+
 async fn handle_estimate_fee(id: Value, params: &Value, state: &RpcState) -> JsonRpcResponse {
     // Parse parameters
     let amount = params.get("amount").and_then(|v| v.as_u64()).unwrap_or(0);
     let num_memos = params.get("memos").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
 
     // Parse optional cluster_wealth for accurate progressive fee calculation
-    // Wallets can get this from cluster_getWealthByTargetKeys
-    let cluster_wealth = params
-        .get("cluster_wealth")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
+    // (u128 pico, string-encoded). Wallets get this from
+    // cluster_getWealthByTargetKeys. The mempool fee API still takes u64
+    // (widening is PR 3 of #626); clamp for the call, echo the full value.
+    let cluster_wealth = parse_cluster_wealth_param(params);
+    let cluster_wealth_u64 = cluster_wealth.min(u64::MAX as u128) as u64;
 
     // All transactions are private (CLSAG ring signatures)
     let tx_type = bth_cluster_tax::TransactionType::Hidden;
@@ -1238,10 +1252,11 @@ async fn handle_estimate_fee(id: Value, params: &Value, state: &RpcState) -> Jso
     let mempool = read_lock!(state.mempool, id.clone());
 
     // Calculate minimum fee using the fee curve with cluster wealth
-    let minimum_fee = mempool.estimate_fee_with_wealth(tx_type, amount, num_memos, cluster_wealth);
+    let minimum_fee =
+        mempool.estimate_fee_with_wealth(tx_type, amount, num_memos, cluster_wealth_u64);
 
     // Get cluster factor for display (1000 = 1x, 6000 = 6x based on wealth)
-    let cluster_factor = mempool.cluster_factor(cluster_wealth);
+    let cluster_factor = mempool.cluster_factor(cluster_wealth_u64);
 
     // Calculate average mempool fee for priority estimation
     let avg_fee = if !mempool.is_empty() {
@@ -1263,12 +1278,12 @@ async fn handle_estimate_fee(id: Value, params: &Value, state: &RpcState) -> Jso
             "clusterFactorDisplay": format!("{:.2}x", cluster_factor as f64 / 1000.0),
             "recommendedFee": avg_fee.max(minimum_fee),
             "highPriorityFee": (avg_fee * 2).max(minimum_fee * 2),
-            "clusterWealth": cluster_wealth,
+            "clusterWealth": cluster_wealth.to_string(),
             "params": {
                 "amount": amount,
                 "txType": tx_type_str,
                 "memos": num_memos,
-                "clusterWealth": cluster_wealth,
+                "clusterWealth": cluster_wealth.to_string(),
             }
         }),
     )
@@ -2431,11 +2446,13 @@ async fn handle_cluster_get_wealth(id: Value, params: &Value, state: &RpcState) 
     let ledger = read_lock!(state.ledger, id.clone());
 
     match ledger.get_cluster_wealth(cluster_id) {
+        // `wealth` is u128 pico (#626): serialize as a STRING (can exceed the
+        // JS safe-integer / u64 range), matching the `totalMined` precedent.
         Ok(wealth) => JsonRpcResponse::success(
             id,
             json!({
                 "cluster_id": cluster_id.to_string(),
-                "wealth": wealth,
+                "wealth": wealth.to_string(),
                 "wealth_btd": format!("{:.9}", wealth as f64 / 1_000_000_000_000.0),
             }),
         ),
@@ -2521,17 +2538,20 @@ async fn handle_cluster_get_wealth_by_target_keys(
 
     match ledger.compute_cluster_wealth_for_utxos(&target_keys) {
         Ok(info) => {
-            // Calculate the fee multiplier for this wealth level
-            let cluster_factor = mempool.cluster_factor(info.max_cluster_wealth);
+            // Calculate the fee multiplier for this wealth level. `cluster_factor`
+            // still takes u64 (widening is PR 3 of #626); clamp the u128 wealth.
+            let cluster_factor =
+                mempool.cluster_factor(info.max_cluster_wealth.min(u64::MAX as u128) as u64);
 
-            // Format cluster breakdown for response
+            // Format cluster breakdown for response. Wealth is u128 pico (#626),
+            // serialized as STRINGS (may exceed the JS/u64 range).
             let breakdown: Vec<Value> = info
                 .cluster_breakdown
                 .iter()
                 .map(|(cluster_id, wealth)| {
                     json!({
                         "cluster_id": cluster_id.to_string(),
-                        "wealth": wealth,
+                        "wealth": wealth.to_string(),
                     })
                 })
                 .collect();
@@ -2539,7 +2559,7 @@ async fn handle_cluster_get_wealth_by_target_keys(
             JsonRpcResponse::success(
                 id,
                 json!({
-                    "max_cluster_wealth": info.max_cluster_wealth,
+                    "max_cluster_wealth": info.max_cluster_wealth.to_string(),
                     "max_cluster_wealth_btd": format!("{:.9}", info.max_cluster_wealth as f64 / 1_000_000_000_000.0),
                     "total_value": info.total_value,
                     "utxo_count": info.utxo_count,
@@ -2572,14 +2592,19 @@ async fn handle_cluster_get_all_wealth(id: Value, state: &RpcState) -> JsonRpcRe
 
     match ledger.get_all_cluster_wealth() {
         Ok(clusters) => {
-            let total_tracked: u64 = clusters.iter().map(|(_, w)| w).sum();
+            // Wealth is u128 pico (#626); accumulate in u128 and serialize wealth
+            // fields as STRINGS (can exceed the JS/u64 range).
+            let total_tracked: u128 = clusters
+                .iter()
+                .map(|(_, w)| *w)
+                .fold(0u128, |acc, w| acc.saturating_add(w));
 
             let entries: Vec<Value> = clusters
                 .iter()
                 .map(|(cluster_id, wealth)| {
                     json!({
                         "cluster_id": cluster_id.to_string(),
-                        "wealth": wealth,
+                        "wealth": wealth.to_string(),
                     })
                 })
                 .collect();
@@ -2588,7 +2613,7 @@ async fn handle_cluster_get_all_wealth(id: Value, state: &RpcState) -> JsonRpcRe
                 id,
                 json!({
                     "count": clusters.len(),
-                    "total_tracked_wealth": total_tracked,
+                    "total_tracked_wealth": total_tracked.to_string(),
                     "clusters": entries,
                 }),
             )
@@ -2637,10 +2662,9 @@ async fn handle_entropy_estimate_fee(
         .and_then(|v| v.as_u64())
         .unwrap_or(3) as usize;
     let amount = params.get("amount").and_then(|v| v.as_u64()).unwrap_or(0);
-    let cluster_wealth = params
-        .get("cluster_wealth")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
+    // u128 pico, string-encoded (#626); mempool fee API is u64 until PR 3.
+    let cluster_wealth = parse_cluster_wealth_param(params);
+    let cluster_wealth_u64 = cluster_wealth.min(u64::MAX as u128) as u64;
 
     // Calculate proof size based on cluster count
     // Formula from design doc:
@@ -2656,12 +2680,12 @@ async fn handle_entropy_estimate_fee(
     let additional_fee = (proof_size_estimate as u64) * fee_rate;
 
     // Apply cluster factor to the additional fee
-    let cluster_factor = mempool.cluster_factor(cluster_wealth);
+    let cluster_factor = mempool.cluster_factor(cluster_wealth_u64);
     let adjusted_additional_fee = additional_fee * cluster_factor / 1000;
 
     // Calculate total tx fee with entropy proof
     let tx_type = bth_cluster_tax::TransactionType::Hidden;
-    let base_fee = mempool.estimate_fee_with_wealth(tx_type, amount, 0, cluster_wealth);
+    let base_fee = mempool.estimate_fee_with_wealth(tx_type, amount, 0, cluster_wealth_u64);
     let total_fee_with_proof = base_fee + adjusted_additional_fee;
 
     let entropy_proof_required = is_entropy_proof_required(chain_state.height);
@@ -2688,7 +2712,7 @@ async fn handle_entropy_estimate_fee(
             "params": {
                 "clusterCount": cluster_count,
                 "amount": amount,
-                "clusterWealth": cluster_wealth,
+                "clusterWealth": cluster_wealth.to_string(),
             }
         }),
     )

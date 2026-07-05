@@ -201,13 +201,48 @@ pub struct Ledger {
     /// tx_index u32) Maps transaction hashes to their location for fast
     /// lookups (exchange integration).
     tx_index_db: Database<Bytes, Bytes>,
-    /// cluster_wealth: cluster_id (8 bytes) -> wealth (8 bytes)
+    /// cluster_wealth: cluster_id (8 bytes) -> wealth (16 bytes, u128 LE)
     /// Tracks total value per cluster tag across all UTXOs for progressive fee
     /// calculation. Note: This is an approximation - with ring signatures,
     /// we cannot know which UTXO was actually spent, so spent UTXOs still
     /// contribute to cluster wealth until eventually removed by UTXO
     /// pruning (if implemented).
+    ///
+    /// PROTOCOL 4.0.0 (#626): the value widened `u64` -> `u128` (16-byte LE) so
+    /// cumulative tagged wealth can exceed the former `u64::MAX` pico ceiling
+    /// (18.44M BTH), which the log-domain factor curve now maps across the full
+    /// supply range. See [`decode_cluster_wealth`] for the reject-legacy read
+    /// contract.
     cluster_wealth_db: Database<Bytes, Bytes>,
+}
+
+/// Serialized width of a `cluster_wealth_db` value: 16-byte little-endian
+/// `u128` (protocol 4.0.0, #626).
+const CLUSTER_WEALTH_LEN: usize = 16;
+
+/// Decode a `cluster_wealth_db` value, enforcing the 16-byte LE `u128`
+/// serialization contract (#626 determinism section).
+///
+/// Fresh genesis is ASSUMED: a legacy 8-byte (`u64`) value written by a
+/// pre-4.0.0 node is REJECTED with a hard error, never silently reinterpreted
+/// as a truncated/zero-padded `u128`. This fails CLOSED (consistent with the
+/// M7 discipline): a wrong-width value surfaces as a `LedgerError` rather than
+/// a bogus wealth that would mis-price the progressive fee / lottery tilt.
+/// There is no in-place migration because the widening rides the 4.0.0 testnet
+/// reset.
+#[inline]
+fn decode_cluster_wealth(bytes: &[u8]) -> Result<u128, LedgerError> {
+    if bytes.len() != CLUSTER_WEALTH_LEN {
+        return Err(LedgerError::Database(format!(
+            "cluster_wealth value has {} bytes, expected {} (16-byte LE u128); \
+             legacy 8-byte values are rejected — fresh genesis (protocol 4.0.0) assumed",
+            bytes.len(),
+            CLUSTER_WEALTH_LEN
+        )));
+    }
+    let mut arr = [0u8; CLUSTER_WEALTH_LEN];
+    arr.copy_from_slice(bytes);
+    Ok(u128::from_le_bytes(arr))
 }
 
 // Metadata keys
@@ -286,7 +321,7 @@ impl Ledger {
     pub fn set_cluster_wealth_for_test(
         &self,
         cluster_id: u64,
-        wealth: u64,
+        wealth: u128,
     ) -> Result<(), LedgerError> {
         let mut wtxn = self
             .env
@@ -2221,24 +2256,30 @@ impl Ledger {
         output: &TxOutput,
     ) -> Result<(), LedgerError> {
         for entry in &output.cluster_tags.entries {
-            // Contribution = output_amount × tag_weight / TAG_WEIGHT_SCALE
-            let contribution = ((output.amount as u128) * (entry.weight as u128)
-                / (TAG_WEIGHT_SCALE as u128)) as u64;
+            // Contribution = output_amount × tag_weight / TAG_WEIGHT_SCALE.
+            // Kept in full u128 (no down-cast): the accumulator is now u128 so
+            // cumulative wealth can exceed the former u64::MAX pico ceiling.
+            let contribution =
+                (output.amount as u128) * (entry.weight as u128) / (TAG_WEIGHT_SCALE as u128);
 
             if contribution > 0 {
                 let cluster_key = entry.cluster_id.0.to_le_bytes();
 
-                // Get current wealth
-                let current = self
+                // Get current wealth (16-byte LE u128, reject-legacy).
+                let current = match self
                     .cluster_wealth_db
                     .get(wtxn, cluster_key.as_slice())
                     .map_err(|e| {
                         LedgerError::Database(format!("Failed to get cluster wealth: {}", e))
-                    })?
-                    .map(|b: &[u8]| u64::from_le_bytes(b.try_into().unwrap_or([0; 8])))
-                    .unwrap_or(0);
+                    })? {
+                    Some(bytes) => decode_cluster_wealth(bytes)?,
+                    None => 0u128,
+                };
 
-                // Add contribution
+                // Add contribution. saturating_add on u128 keeps byte-identical
+                // semantics with the rebuild path (`rebuild_cluster_wealth_index`);
+                // saturation at u128::MAX is astronomically unreachable but the
+                // discipline is preserved (M3 lesson, #604/#607).
                 let new_wealth = current.saturating_add(contribution);
                 self.cluster_wealth_db
                     .put(wtxn, cluster_key.as_slice(), &new_wealth.to_le_bytes())
@@ -2254,7 +2295,7 @@ impl Ledger {
     ///
     /// Returns the sum of (amount × weight / TAG_WEIGHT_SCALE) for all UTXOs
     /// with tags referencing this cluster.
-    pub fn get_cluster_wealth(&self, cluster_id: u64) -> Result<u64, LedgerError> {
+    pub fn get_cluster_wealth(&self, cluster_id: u64) -> Result<u128, LedgerError> {
         let rtxn = self
             .env
             .read_txn()
@@ -2262,10 +2303,8 @@ impl Ledger {
 
         let cluster_key = cluster_id.to_le_bytes();
         match self.cluster_wealth_db.get(&rtxn, cluster_key.as_slice()) {
-            Ok(Some(bytes)) if bytes.len() == 8 => {
-                Ok(u64::from_le_bytes(bytes.try_into().unwrap()))
-            }
-            Ok(_) => Ok(0),
+            Ok(Some(bytes)) => decode_cluster_wealth(bytes),
+            Ok(None) => Ok(0),
             Err(e) => Err(LedgerError::Database(format!(
                 "Failed to get cluster wealth: {}",
                 e
@@ -2315,10 +2354,14 @@ impl Ledger {
         for (value, tags) in ring_members {
             let mut member_wealth: u128 = 0;
             for entry in &tags.entries {
+                // `get_cluster_wealth` is now u128 (16-byte LE accumulator).
                 let global_wealth = self.get_cluster_wealth(entry.cluster_id.0)?;
-                member_wealth +=
-                    (entry.weight as u128 * global_wealth as u128) / TAG_WEIGHT_SCALE as u128;
+                member_wealth += (entry.weight as u128 * global_wealth) / TAG_WEIGHT_SCALE as u128;
             }
+            // `ring_centroid_implied_factor` still takes a u64 wealth (its
+            // widening to u128 is PR 3 of #626); clamp here so the consensus
+            // fee-floor math is unchanged at this stage. Deterministic on every
+            // node, so no fork — the ceiling simply persists until PR 3.
             members.push((*value, member_wealth.min(u64::MAX as u128) as u64));
         }
 
@@ -2351,8 +2394,8 @@ impl Ledger {
     ) -> Result<ClusterWealthInfo, LedgerError> {
         use std::collections::HashMap;
 
-        let mut global_wealths: HashMap<u64, u64> = HashMap::new();
-        let mut max_effective_wealth = 0u64;
+        let mut global_wealths: HashMap<u64, u128> = HashMap::new();
+        let mut max_effective_wealth = 0u128;
         let mut total_value = 0u64;
         let mut utxo_count = 0usize;
 
@@ -2369,10 +2412,10 @@ impl Ledger {
                             *e.insert(self.get_cluster_wealth(entry.cluster_id.0)?)
                         }
                     };
-                    weighted += (entry.weight as u128) * (global as u128);
+                    weighted = weighted.saturating_add((entry.weight as u128) * global);
                 }
                 // Divide by full scale: background weight dilutes toward zero
-                let effective = (weighted / TAG_WEIGHT_SCALE as u128) as u64;
+                let effective = weighted / TAG_WEIGHT_SCALE as u128;
                 max_effective_wealth = max_effective_wealth.max(effective);
             }
         }
@@ -2395,7 +2438,7 @@ impl Ledger {
     ///
     /// Returns all tracked cluster IDs and their total wealth.
     /// Useful for network-wide wealth distribution analysis.
-    pub fn get_all_cluster_wealth(&self) -> Result<Vec<(u64, u64)>, LedgerError> {
+    pub fn get_all_cluster_wealth(&self) -> Result<Vec<(u64, u128)>, LedgerError> {
         let rtxn = self
             .env
             .read_txn()
@@ -2408,9 +2451,10 @@ impl Ledger {
 
         for item in iter {
             if let Ok((key, value)) = item {
-                if key.len() == 8 && value.len() == 8 {
+                if key.len() == 8 {
                     let cluster_id = u64::from_le_bytes(key.try_into().unwrap());
-                    let wealth = u64::from_le_bytes(value.try_into().unwrap());
+                    // 16-byte LE u128, reject-legacy (fail closed on wrong width).
+                    let wealth = decode_cluster_wealth(value)?;
                     result.push((cluster_id, wealth));
                 }
             }
@@ -2432,7 +2476,7 @@ impl Ledger {
             .map_err(|e| LedgerError::Database(format!("Failed to start read txn: {}", e)))?;
 
         // First pass: compute wealth from all UTXOs
-        let mut cluster_wealths: HashMap<u64, u64> = HashMap::new();
+        let mut cluster_wealths: HashMap<u64, u128> = HashMap::new();
         let iter = self
             .utxo_db
             .iter(&rtxn)
@@ -2442,16 +2486,17 @@ impl Ledger {
             if let Ok((_, value)) = item {
                 if let Ok(utxo) = bincode::deserialize::<Utxo>(value) {
                     for entry in &utxo.output.cluster_tags.entries {
-                        let contribution = ((utxo.output.amount as u128) * (entry.weight as u128)
-                            / (TAG_WEIGHT_SCALE as u128))
-                            as u64;
+                        // Full u128 contribution (no down-cast), matching the
+                        // incremental path exactly at the new width.
+                        let contribution = (utxo.output.amount as u128) * (entry.weight as u128)
+                            / (TAG_WEIGHT_SCALE as u128);
                         // Saturating add for determinism parity with the
                         // incremental path (`update_cluster_wealth_for_output`),
                         // which uses `saturating_add`. A rebuilt node must
                         // produce byte-identical cluster wealth to an
                         // incrementally-accumulated one, since progressive-fee /
                         // demurrage inputs read `cluster_wealth_db`. See #604.
-                        let e = cluster_wealths.entry(entry.cluster_id.0).or_insert(0u64);
+                        let e = cluster_wealths.entry(entry.cluster_id.0).or_insert(0u128);
                         *e = e.saturating_add(contribution);
                     }
                 }
@@ -2550,9 +2595,10 @@ impl Ledger {
 
         for result in cw_iter {
             if let Ok((key, value)) = result {
-                if key.len() == 8 && value.len() == 8 {
+                if key.len() == 8 {
                     let cluster_id = u64::from_le_bytes(key.try_into().unwrap());
-                    let wealth = u64::from_le_bytes(value.try_into().unwrap());
+                    // 16-byte LE u128, reject-legacy (#626).
+                    let wealth = decode_cluster_wealth(value)?;
                     cluster_wealth.push((cluster_id, wealth));
                 }
             }
@@ -2853,8 +2899,8 @@ impl Ledger {
             .map_err(|e| LedgerError::Database(format!("Failed to start read txn: {}", e)))?;
 
         let mut candidates = Vec::new();
-        // Per-cluster global wealth cache for this scan
-        let mut wealth_cache: HashMap<u64, u64> = HashMap::new();
+        // Per-cluster global wealth cache for this scan (u128, #626)
+        let mut wealth_cache: HashMap<u64, u128> = HashMap::new();
         let factor_curve = ClusterFactorCurve::default_params();
 
         // Seed-derived 36-byte start offset into the UTXO-id keyspace.
@@ -2916,25 +2962,35 @@ impl Ledger {
                             let global = match wealth_cache.entry(entry.cluster_id.0) {
                                 std::collections::hash_map::Entry::Occupied(e) => *e.get(),
                                 std::collections::hash_map::Entry::Vacant(e) => {
+                                    // 16-byte LE u128 accumulator (#626). A
+                                    // wrong-width value fails closed (propagates)
+                                    // rather than silently reading as 0 wealth,
+                                    // which would mis-tilt the consensus lottery.
                                     let w = match self
                                         .cluster_wealth_db
                                         .get(&rtxn, entry.cluster_id.0.to_le_bytes().as_slice())
-                                    {
-                                        Ok(Some(bytes)) if bytes.len() == 8 => {
-                                            u64::from_le_bytes(bytes.try_into().unwrap())
-                                        }
-                                        _ => 0,
+                                        .map_err(|e| {
+                                            LedgerError::Database(format!(
+                                                "Failed to get cluster wealth: {}",
+                                                e
+                                            ))
+                                        })? {
+                                        Some(bytes) => decode_cluster_wealth(bytes)?,
+                                        None => 0u128,
                                     };
                                     *e.insert(w)
                                 }
                             };
-                            weighted += (entry.weight as u128) * (global as u128);
+                            weighted = weighted.saturating_add((entry.weight as u128) * global);
                         }
-                        let effective_wealth = (weighted / TAG_WEIGHT_SCALE as u128) as u64;
+                        // Full u128 effective wealth: `factor()` accepts u128
+                        // (log-domain curve, #626 PR 1), so the lottery tilt uses
+                        // the un-clamped accumulator directly.
+                        let effective_wealth = weighted / TAG_WEIGHT_SCALE as u128;
                         // factor() returns FACTOR_SCALE units (1000..6000),
                         // which LotteryCandidate uses directly (integer
                         // fixed-point, consensus-deterministic)
-                        let cluster_factor = factor_curve.factor(effective_wealth as u128);
+                        let cluster_factor = factor_curve.factor(effective_wealth);
 
                         let candidate = LotteryCandidate::new(
                             utxo_id,
@@ -3018,9 +3074,10 @@ impl Ledger {
 /// Used by wallets to understand their cluster profile and estimate fees.
 #[derive(Debug, Clone)]
 pub struct ClusterWealthInfo {
-    /// Maximum cluster wealth across all provided UTXOs.
+    /// Maximum cluster wealth across all provided UTXOs (picocredits).
     /// This is the value used for fee calculation (progressive fees).
-    pub max_cluster_wealth: u64,
+    /// Widened to u128 with the accumulator (#626); can exceed u64::MAX pico.
+    pub max_cluster_wealth: u128,
 
     /// Total value of the provided UTXOs.
     pub total_value: u64,
@@ -3031,8 +3088,9 @@ pub struct ClusterWealthInfo {
     /// The cluster ID with the highest wealth (if any).
     pub dominant_cluster_id: Option<u64>,
 
-    /// Breakdown of wealth by cluster ID: (cluster_id, wealth)
-    pub cluster_breakdown: Vec<(u64, u64)>,
+    /// Breakdown of wealth by cluster ID: (cluster_id, wealth in picocredits,
+    /// u128)
+    pub cluster_breakdown: Vec<(u64, u128)>,
 }
 
 #[cfg(test)]
@@ -3097,7 +3155,7 @@ mod tests {
         let ledger = Ledger::open(dir.path()).unwrap();
 
         // Seed a wealthy cluster (picocredits: 10M BTH).
-        const W: u64 = 10_000_000_000_000_000_000; // 10M BTH in pico
+        const W: u128 = 10_000_000_000_000_000_000; // 10M BTH in pico
         ledger.set_cluster_wealth_for_test(1, W).unwrap();
 
         let curve = bth_cluster_tax::ClusterFactorCurve::default_params();
@@ -3115,7 +3173,7 @@ mod tests {
             "floor must raise the understated factor: {floored} > {claimed_factor}"
         );
         // Matches the factor the wealthy centroid implies directly.
-        assert_eq!(floored, curve.factor(W as u128));
+        assert_eq!(floored, curve.factor(W));
     }
 
     /// Legitimate background spend: the ring is also background (no seeded
@@ -3546,70 +3604,59 @@ mod tests {
             .unwrap();
         assert_eq!(info.utxo_count, 1);
         assert_eq!(info.total_value, small_amount);
-        assert_eq!(info.max_cluster_wealth, whale_amount + small_amount);
+        assert_eq!(
+            info.max_cluster_wealth,
+            (whale_amount + small_amount) as u128
+        );
         assert_eq!(info.dominant_cluster_id, Some(1));
     }
 
-    /// Determinism parity (#604): a node that *rebuilds* the cluster wealth
-    /// index from the UTXO set must produce byte-identical
-    /// `cluster_wealth_db` contents to a node that *incrementally* accumulated
-    /// it via `update_cluster_wealth_for_output`. Both paths must share the
-    /// same overflow discipline (`saturating_add`), including at the
-    /// saturation boundary — otherwise a rebuilt node would diverge on
-    /// progressive-fee / demurrage inputs that read `cluster_wealth_db`.
-    #[test]
-    fn test_rebuild_matches_incremental_cluster_wealth_at_saturation() {
+    /// Full-weight tag => contribution == output.amount.
+    #[cfg(test)]
+    fn full_tags(cluster: u64) -> ClusterTagVector {
         use bth_transaction_types::ClusterId;
+        ClusterTagVector::from_pairs(&[(ClusterId(cluster), TAG_WEIGHT_SCALE)])
+    }
 
-        // Full-weight tag => contribution == output.amount.
-        fn full_tags(cluster: u64) -> ClusterTagVector {
-            ClusterTagVector::from_pairs(&[(ClusterId(cluster), TAG_WEIGHT_SCALE)])
+    #[cfg(test)]
+    fn tagged_output(amount: u64, tk: u8, cluster: u64) -> TxOutput {
+        TxOutput {
+            amount,
+            target_key: [tk; 32],
+            public_key: [tk ^ 0xA0; 32],
+            e_memo: None,
+            cluster_tags: full_tags(cluster),
         }
+    }
 
-        // A mix of ordinary values plus values engineered to overflow u64
-        // when summed for a single cluster. Cluster 1 receives three huge
-        // contributions whose sum far exceeds u64::MAX (each ~0.7·MAX), so it
-        // MUST saturate identically on both paths. Cluster 2 stays well below
-        // the boundary to confirm no behavior change there.
-        let huge = (u64::MAX / 4) * 3; // ~0.75 * u64::MAX
+    /// Determinism parity (#604/#607, u128 edition, #626): a node that
+    /// *rebuilds* the cluster wealth index from the UTXO set must produce
+    /// byte-identical `cluster_wealth_db` contents (now 16-byte LE u128) to a
+    /// node that *incrementally* accumulated it via
+    /// `update_cluster_wealth_for_output`. This includes the case the u128
+    /// widening was designed for: a single cluster whose contributions sum
+    /// **past `u64::MAX`** — under the old u64 accumulator this saturated at
+    /// `u64::MAX`; at u128 it must record the EXACT sum, identically on both
+    /// paths. Any accumulation-order or width bug surfaces as a divergence
+    /// (a consensus fork caught in CI, not on the testnet).
+    #[test]
+    fn test_rebuild_matches_incremental_cluster_wealth_past_u64_max() {
+        // Cluster 1: three huge contributions whose sum exceeds u64::MAX but
+        // fits comfortably in u128 (each ~0.75·u64::MAX; sum ~2.25·u64::MAX).
+        // Cluster 2: small, exact sum, confirms no behavior change below range.
+        let huge = (u64::MAX / 4) * 3; // ~0.75 * u64::MAX, fits a u64 output.amount
+        let expected_c1 = huge as u128 * 3; // exact, > u64::MAX, no saturation
+        assert!(
+            expected_c1 > u64::MAX as u128,
+            "test fixture must exceed the former u64 ceiling"
+        );
+
         let outputs: Vec<TxOutput> = vec![
-            // cluster 1: three huge contributions -> saturates
-            TxOutput {
-                amount: huge,
-                target_key: [0x01; 32],
-                public_key: [0xA1; 32],
-                e_memo: None,
-                cluster_tags: full_tags(1),
-            },
-            TxOutput {
-                amount: huge,
-                target_key: [0x02; 32],
-                public_key: [0xA2; 32],
-                e_memo: None,
-                cluster_tags: full_tags(1),
-            },
-            TxOutput {
-                amount: huge,
-                target_key: [0x03; 32],
-                public_key: [0xA3; 32],
-                e_memo: None,
-                cluster_tags: full_tags(1),
-            },
-            // cluster 2: small, below saturation
-            TxOutput {
-                amount: 1_000,
-                target_key: [0x04; 32],
-                public_key: [0xA4; 32],
-                e_memo: None,
-                cluster_tags: full_tags(2),
-            },
-            TxOutput {
-                amount: 2_500,
-                target_key: [0x05; 32],
-                public_key: [0xA5; 32],
-                e_memo: None,
-                cluster_tags: full_tags(2),
-            },
+            tagged_output(huge, 0x01, 1),
+            tagged_output(huge, 0x02, 1),
+            tagged_output(huge, 0x03, 1),
+            tagged_output(1_000, 0x04, 2),
+            tagged_output(2_500, 0x05, 2),
         ];
 
         // ---- Incremental ledger: drive update_cluster_wealth_for_output ----
@@ -3656,13 +3703,114 @@ mod tests {
             "rebuild path must produce byte-identical cluster wealth to the incremental path"
         );
 
-        // Cluster 1 must have saturated at u64::MAX on both paths.
-        assert_eq!(inc_ledger.get_cluster_wealth(1).unwrap(), u64::MAX);
-        assert_eq!(rb_ledger.get_cluster_wealth(1).unwrap(), u64::MAX);
+        // Cluster 1 must be the EXACT sum (> u64::MAX), not saturated.
+        assert_eq!(inc_ledger.get_cluster_wealth(1).unwrap(), expected_c1);
+        assert_eq!(rb_ledger.get_cluster_wealth(1).unwrap(), expected_c1);
 
-        // Cluster 2 (below the boundary) must be the exact, unsaturated sum.
+        // Cluster 2 (small) must be the exact sum on both paths.
         assert_eq!(inc_ledger.get_cluster_wealth(2).unwrap(), 3_500);
         assert_eq!(rb_ledger.get_cluster_wealth(2).unwrap(), 3_500);
+    }
+
+    /// Serialization contract pin (#626 determinism section): a
+    /// `cluster_wealth_db` value is exactly 16 bytes, little-endian `u128`.
+    /// Reading back the raw DB bytes must equal `wealth.to_le_bytes()` and
+    /// `get_cluster_wealth` must decode it losslessly, including values that
+    /// exceed the former u64 ceiling.
+    #[test]
+    fn test_cluster_wealth_serialization_is_16_byte_le_u128() {
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+
+        // A value beyond u64::MAX to exercise the widened width.
+        let wealth: u128 = (u64::MAX as u128) + 123_456_789;
+        ledger.set_cluster_wealth_for_test(42, wealth).unwrap();
+
+        // Raw bytes: exactly 16, little-endian.
+        let rtxn = ledger.env.read_txn().unwrap();
+        let raw = ledger
+            .cluster_wealth_db
+            .get(&rtxn, 42u64.to_le_bytes().as_slice())
+            .unwrap()
+            .expect("cluster 42 must be present");
+        assert_eq!(raw.len(), CLUSTER_WEALTH_LEN, "value must be 16 bytes");
+        assert_eq!(
+            raw,
+            wealth.to_le_bytes(),
+            "value must be little-endian u128"
+        );
+        drop(rtxn);
+
+        // Lossless decode through the public accessor.
+        assert_eq!(ledger.get_cluster_wealth(42).unwrap(), wealth);
+    }
+
+    /// Reject-legacy contract (#626): a legacy 8-byte (`u64`) value MUST fail
+    /// closed on read rather than being silently reinterpreted. Fresh genesis
+    /// (protocol 4.0.0) is assumed, so a wrong-width value is a hard error.
+    #[test]
+    fn test_cluster_wealth_rejects_legacy_8_byte_value() {
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+
+        // Inject an 8-byte legacy value directly into the DB.
+        {
+            let mut wtxn = ledger.env.write_txn().unwrap();
+            let legacy: u64 = 1_000_000;
+            ledger
+                .cluster_wealth_db
+                .put(
+                    &mut wtxn,
+                    7u64.to_le_bytes().as_slice(),
+                    &legacy.to_le_bytes(),
+                )
+                .unwrap();
+            wtxn.commit().unwrap();
+        }
+
+        // Every reader must reject it (fail closed), not read a truncated value.
+        let single = ledger.get_cluster_wealth(7);
+        assert!(
+            matches!(single, Err(LedgerError::Database(_))),
+            "8-byte legacy value must be rejected, got {single:?}"
+        );
+        let all = ledger.get_all_cluster_wealth();
+        assert!(
+            matches!(all, Err(LedgerError::Database(_))),
+            "get_all_cluster_wealth must reject an 8-byte legacy value, got {all:?}"
+        );
+    }
+
+    /// Saturation discipline at the u128 boundary (#604/#607 lesson kept at the
+    /// new width): although astronomically unreachable via real outputs (each
+    /// contribution is a u64 amount), the incremental path must still
+    /// `saturating_add` at `u128::MAX` rather than wrap. Seed a cluster just
+    /// below the ceiling and add a contribution that would overflow.
+    #[test]
+    fn test_incremental_saturates_at_u128_max() {
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+
+        // Seed near the ceiling, leaving headroom smaller than the next
+        // contribution.
+        ledger
+            .set_cluster_wealth_for_test(3, u128::MAX - 10)
+            .unwrap();
+
+        // A full-weight output of amount 1000 => contribution 1000 > 10 headroom.
+        {
+            let mut wtxn = ledger.env.write_txn().unwrap();
+            ledger
+                .update_cluster_wealth_for_output(&mut wtxn, &tagged_output(1_000, 0x0B, 3))
+                .unwrap();
+            wtxn.commit().unwrap();
+        }
+
+        assert_eq!(
+            ledger.get_cluster_wealth(3).unwrap(),
+            u128::MAX,
+            "must saturate at u128::MAX, not wrap"
+        );
     }
 
     #[test]

@@ -97,11 +97,14 @@ pub fn run(
                 .entries
                 .iter()
                 .map(|entry| {
+                    // get_cluster_wealth is now u128 (16-byte accumulator, #626).
                     let global = ledger.get_cluster_wealth(entry.cluster_id.0).unwrap_or(0);
-                    entry.weight as u128 * global as u128
+                    entry.weight as u128 * global
                 })
                 .sum();
-            (weighted / bth_transaction_types::TAG_WEIGHT_SCALE as u128) as u64
+            // estimate_typical_fee takes a u64 wealth (widening is PR 3); clamp.
+            (weighted / bth_transaction_types::TAG_WEIGHT_SCALE as u128).min(u64::MAX as u128)
+                as u64
         })
         .max()
         .unwrap_or(0);
