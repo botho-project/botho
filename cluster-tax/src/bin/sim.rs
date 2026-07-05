@@ -3756,6 +3756,9 @@ mod cli {
     /// default FeeCurve's w_mid is far below sim balances and would pin
     /// everyone at max factor (this flaw also affected the original sweep).
     #[allow(clippy::too_many_arguments)]
+    // Reproduces the historical #314 lottery experiment, which pins cluster
+    // factors to 1.0/2.0/6.0 via the deprecated `add_owner_with_factor` (#626).
+    #[allow(deprecated)]
     fn run_lottery_experiment(
         blocks: u64,
         txs_per_block: u32,
@@ -4334,5 +4337,5 @@ fn main() {
 #[cfg(not(feature = "cli"))]
 fn main() {
     eprintln!("This binary requires the 'cli' feature. Build with:");
-    eprintln!("  cargo build -p mc-cluster-tax --features cli --bin cluster-tax-sim");
+    eprintln!("  cargo build -p bth-cluster-tax --features cli --bin cluster-tax-sim");
 }

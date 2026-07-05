@@ -2367,14 +2367,21 @@ impl Ledger {
                 // `get_cluster_wealth` is full-u128 (16-byte LE accumulator).
                 let global_wealth = self.get_cluster_wealth(entry.cluster_id.0)?;
                 member_wealth = member_wealth.saturating_add(
-                    (entry.weight as u128 * global_wealth) / TAG_WEIGHT_SCALE as u128,
+                    (entry.weight as u128).saturating_mul(global_wealth) / TAG_WEIGHT_SCALE as u128,
                 );
             }
             // `ring_centroid_implied_factor` now takes full-u128 wealth (#626
             // PR3) — the prior `.min(u64::MAX)` clamp is gone, so the consensus
-            // fee floor sees the exact per-member cumulative wealth. The centroid
-            // product overflow is handled deterministically inside that helper
-            // (saturating → factor 6000), identical on every node → no fork.
+            // fee floor sees the exact per-member cumulative wealth.
+            //
+            // Overflow is saturated at each multiply on this consensus path:
+            //   - here, `weight × global_wealth` saturates to u128::MAX before the divide
+            //     (global_wealth is the unbounded, monotonic PR2 accumulator, so the
+            //     product is not provably < u128::MAX);
+            //   - inside `ring_centroid_implied_factor`, the `value × member_wealth` and
+            //     `total_value` products likewise saturate.
+            // A saturated wealth maps deterministically to factor 6000 (the max,
+            // most-conservative fee floor) — identical on every node → no fork.
             members.push((*value, member_wealth));
         }
 
@@ -2425,7 +2432,8 @@ impl Ledger {
                             *e.insert(self.get_cluster_wealth(entry.cluster_id.0)?)
                         }
                     };
-                    weighted = weighted.saturating_add((entry.weight as u128) * global);
+                    weighted =
+                        weighted.saturating_add((entry.weight as u128).saturating_mul(global));
                 }
                 // Divide by full scale: background weight dilutes toward zero
                 let effective = weighted / TAG_WEIGHT_SCALE as u128;
@@ -2994,7 +3002,8 @@ impl Ledger {
                                     *e.insert(w)
                                 }
                             };
-                            weighted = weighted.saturating_add((entry.weight as u128) * global);
+                            weighted = weighted
+                                .saturating_add((entry.weight as u128).saturating_mul(global));
                         }
                         // Full u128 effective wealth: `factor()` accepts u128
                         // (log-domain curve, #626 PR 1), so the lottery tilt uses
@@ -3228,6 +3237,44 @@ mod tests {
             .unwrap();
 
         assert_eq!(floored, 6_000);
+    }
+
+    /// Regression (#626 PR3, Judge blocker): the C7 consensus fee-floor path
+    /// resolves per-member wealth as `weight × global_wealth /
+    /// TAG_WEIGHT_SCALE`. `global_wealth` is the unbounded, monotonic PR2
+    /// accumulator, so the product is not provably below `u128::MAX`. With
+    /// an unchecked `*` this path panics in a debug build (and wraps to a
+    /// WRONG, LOWER floor in release — the non-conservative direction) at
+    /// extreme wealth. The `saturating_mul` fix must instead saturate to
+    /// `u128::MAX`, which the curve maps deterministically to the max,
+    /// most-conservative factor 6000.
+    #[test]
+    fn test_ring_centroid_floor_saturates_at_max_wealth_no_panic() {
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+
+        // Extreme accumulator value: the unbounded PR2 wealth at its ceiling.
+        ledger.set_cluster_wealth_for_test(1, u128::MAX).unwrap();
+
+        let curve = bth_cluster_tax::ClusterFactorCurve::default_params();
+        let wealthy = cluster_tags(1); // full-weight tag on the saturated cluster
+        let ring_members: Vec<(u64, &ClusterTagVector)> =
+            vec![(1_000_000, &wealthy), (1_000_000, &wealthy)];
+
+        let claimed_factor = 1_000; // 1x background claim
+                                    // Must NOT panic (debug) nor wrap (release): the `weight × global_wealth`
+                                    // multiply saturates before the divide.
+        let floored = ledger
+            .ring_centroid_floored_factor(claimed_factor, &ring_members, &curve)
+            .unwrap();
+
+        // Saturated wealth → max floor, the conservative direction.
+        assert_eq!(
+            floored,
+            curve.factor(u128::MAX),
+            "saturated wealth must map to the max, most-conservative factor"
+        );
+        assert!(floored >= claimed_factor);
     }
 
     /// Issue #451 (Test B, apply side): the deterministic backstop must flag a

@@ -710,6 +710,11 @@ impl LotterySimulation {
     /// consensus curve [`crate::fee_curve::ClusterFactorCurve::factor`] —
     /// the same compiled function the node runs. See the M2 run matrix in
     /// `sim.rs` and `experiments/M2_RUNBOOK.md`.
+    #[deprecated(
+        note = "hardcodes the cluster factor and bypasses the production curve; \
+                use `add_owner_via_production_curve` for new experiments. Retained \
+                only to reproduce historical #314 runs byte-for-byte (#626)."
+    )]
     pub fn add_owner_with_factor(
         &mut self,
         wealth: u64,
@@ -776,6 +781,10 @@ impl LotterySimulation {
         strategy: SybilStrategy,
     ) -> u64 {
         let factor = Self::production_cluster_factor_bth(cluster_wealth_bth);
+        // Intentional internal reuse of the deprecated hardcoded-factor path:
+        // this method IS the production-curve replacement, feeding it a
+        // curve-derived factor rather than a caller-supplied constant.
+        #[allow(deprecated)]
         self.add_owner_with_factor(value, strategy, factor)
     }
 
@@ -2047,6 +2056,10 @@ pub struct SybilTestResult {
 
 #[cfg(test)]
 mod tests {
+    // These historical regression tests intentionally exercise the deprecated
+    // hardcoded-factor path (`add_owner_with_factor`) to reproduce the #314
+    // structural-Gini runs byte-for-byte (#626).
+    #![allow(deprecated)]
     use super::*;
 
     #[test]
