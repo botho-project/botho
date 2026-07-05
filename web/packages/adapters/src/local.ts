@@ -11,6 +11,7 @@ import type {
 } from '@botho/core'
 import type {
   BlockFetchOptions,
+  FeeEstimate,
   LocalNodeConfig,
   MempoolUpdate,
   NodeAdapter,
@@ -213,7 +214,7 @@ export class LocalNodeAdapter implements NodeAdapter {
     }
   }
 
-  async estimateFee(sizeBytes: number, clusterWealth?: bigint): Promise<bigint> {
+  async estimateFee(sizeBytes: number, clusterWealth?: bigint): Promise<FeeEstimate> {
     const response = await this.fetchApi('/api/fees/estimate', {
       method: 'POST',
       body: JSON.stringify({
@@ -222,7 +223,14 @@ export class LocalNodeAdapter implements NodeAdapter {
       }),
     })
     const data = await response.json()
-    return BigInt(data.fee)
+    // The desktop's `/api/fees/estimate` REST endpoint returns a base-rate fee:
+    // the authoritative cluster-aware fee is computed Rust-side in
+    // `send_transaction`, so the JS estimate is always the 1.00x base rate
+    // (#634/#635). Report "1.00x" unconditionally here.
+    return {
+      fee: BigInt(data.fee),
+      clusterFactorDisplay: '1.00x',
+    }
   }
 
   /**

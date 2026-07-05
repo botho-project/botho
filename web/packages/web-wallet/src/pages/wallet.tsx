@@ -303,7 +303,7 @@ function SettingsModal({
 }
 
 function WalletDashboard() {
-  const { address, balance, transactions, isConnecting, isConnected, refreshBalance, refreshTransactions, resetWallet, send, contacts, searchContacts, isEncrypted, setPassword, changePassword, lockWallet, autoLockMinutes, setAutoLockMinutes } = useWallet()
+  const { address, balance, transactions, isConnecting, isConnected, refreshBalance, refreshTransactions, resetWallet, send, estimateFee, contacts, searchContacts, isEncrypted, setPassword, changePassword, lockWallet, autoLockMinutes, setAutoLockMinutes } = useWallet()
 
   // Resolve a counterparty address to a saved contact name for the transaction
   // history. We auto-create blank-name "previously paid" entries when sending,
@@ -350,12 +350,13 @@ function WalletDashboard() {
     }
   }
 
-  const estimateFee = async (_amount: bigint, privacyLevel: 'standard' | 'private'): Promise<bigint> => {
-    // Estimate based on transaction size
-    const sizeBytes = privacyLevel === 'private' ? 22000 : 4000
-    // Simple fee calculation: 1 picocredit per byte
-    return BigInt(sizeBytes)
-  }
+  // The real fee estimate (with the node-computed cluster factor) comes from the
+  // wallet context, which mirrors the send flow's cluster-wealth derivation
+  // (#635). The SendModal's `estimateFee` prop ignores the privacy-level second
+  // argument, so a thin wrapper adapts the context's `(amount) => FeeEstimate`
+  // signature to the modal's `(amount, privacyLevel) => FeeEstimate`.
+  const handleEstimateFee = (amount: bigint, _privacyLevel: 'standard' | 'private') =>
+    estimateFee(amount)
 
   const actionButtons = (
     <>
@@ -454,7 +455,7 @@ function WalletDashboard() {
         isOpen={sendOpen}
         onClose={() => setSendOpen(false)}
         balance={balance}
-        estimateFee={estimateFee}
+        estimateFee={handleEstimateFee}
         onSend={handleSend}
         isSending={isSending}
         contacts={contacts}

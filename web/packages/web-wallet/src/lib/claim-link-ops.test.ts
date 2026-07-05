@@ -58,7 +58,7 @@ function stubAdapter(opts: StubOpts = {}): RemoteNodeAdapter {
   return {
     isConnected: () => connected,
     getBlockHeight: async () => 100,
-    estimateFee: async () => MIN_TX_FEE,
+    estimateFee: async () => ({ fee: MIN_TX_FEE, clusterFactorDisplay: '1.00x' }),
     getRawOutputs: async () => outputs,
     areKeyImagesSpent: async (keyImages: string[]) =>
       keyImages.map((keyImage) => ({

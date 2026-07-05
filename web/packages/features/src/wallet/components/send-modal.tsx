@@ -7,6 +7,18 @@ import { AlertCircle, ChevronDown, ChevronUp, Loader2, Send, ShieldAlert, User, 
 
 export type SendPrivacyLevel = 'standard' | 'private'
 
+/**
+ * Result of a fee estimate: the fee amount plus the node-computed cluster fee
+ * factor display string (#635). Structurally identical to `@botho/adapters`'
+ * `FeeEstimate` — kept as a local type so this UI package stays decoupled from
+ * the node-adapter package (and reusable by the mobile app). "1.00x" means the
+ * base rate (no cluster-wealth premium).
+ */
+export interface FeeEstimate {
+  fee: bigint
+  clusterFactorDisplay: string
+}
+
 export interface SendFormData {
   recipient: string
   amount: bigint
@@ -29,8 +41,12 @@ export interface SendModalProps {
   onClose: () => void
   /** Current balance (for max button) */
   balance: Balance | null
-  /** Fee estimator function */
-  estimateFee: (amount: bigint, privacyLevel: SendPrivacyLevel) => Promise<bigint>
+  /**
+   * Fee estimator function. Returns both the fee and the node-computed cluster
+   * fee factor display string so the modal can show *why* the fee is what it is
+   * (#635).
+   */
+  estimateFee: (amount: bigint, privacyLevel: SendPrivacyLevel) => Promise<FeeEstimate>
   /** Send handler */
   onSend: (data: SendFormData) => Promise<SendResult>
   /** Whether a send is in progress */
@@ -85,6 +101,10 @@ export function SendModal({
   const [privacyLevel] = useState<SendPrivacyLevel>('standard')
   const [memo, setMemo] = useState('')
   const [fee, setFee] = useState<bigint>(BigInt(0))
+  // Node-computed cluster fee factor display string (#635). "1.00x" is the base
+  // rate; anything above it means the sender's cluster wealth triggers Botho's
+  // progressive fee.
+  const [clusterFactorDisplay, setClusterFactorDisplay] = useState<string>('1.00x')
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const [showAdvanced, setShowAdvanced] = useState(false)
@@ -104,6 +124,7 @@ export function SendModal({
       setUseCustomFee(false)
       setCustomFeeInput('')
       setShowPicker(false)
+      setClusterFactorDisplay('1.00x')
     }
   }, [isOpen])
 
@@ -143,12 +164,17 @@ export function SendModal({
     ownAddress != null &&
     trimmedRecipient.toLowerCase() === ownAddress.trim().toLowerCase()
 
-  // Estimate fee when amount or privacy changes
+  // Estimate fee when amount or privacy changes. The estimate carries the
+  // node's cluster factor display string, which updates the factor row live as
+  // the user types (#635).
   useEffect(() => {
     if (amount) {
       try {
         const amountBigInt = parseBTH(amount)
-        estimateFee(amountBigInt, privacyLevel).then(setFee)
+        estimateFee(amountBigInt, privacyLevel).then((estimate) => {
+          setFee(estimate.fee)
+          setClusterFactorDisplay(estimate.clusterFactorDisplay)
+        })
       } catch {
         // Invalid amount
       }
@@ -430,6 +456,35 @@ export function SendModal({
                 </span>
                 <span className="font-mono text-[--color-light]">{formatBTH(effectiveFee)} BTH</span>
               </div>
+              {/*
+                Cluster fee factor (#635). Above the 1.00x base rate the sender's
+                cluster wealth triggers Botho's progressive fee, so we surface the
+                multiplier with a one-line explanation. At the base rate we show
+                reassuring copy so a first-time user isn't confused by a factor
+                they didn't expect. The node computes the display string — no
+                client-side factor table.
+              */}
+              {clusterFactorDisplay !== '1.00x' ? (
+                <div className="mt-2 border-t border-[--color-steel] pt-2">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="flex items-center gap-1 text-[--color-ghost]">
+                      <AlertCircle className="h-3 w-3 shrink-0 text-[--color-warning]" />
+                      Progressive rate
+                    </span>
+                    <span className="font-mono font-semibold text-[--color-warning]">
+                      {clusterFactorDisplay}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-xs text-[--color-dim]">
+                    Your cluster&rsquo;s total holdings trigger Botho&rsquo;s progressive fee —
+                    larger clusters pay proportionally more for network resources.
+                  </p>
+                </div>
+              ) : (
+                <p className="mt-1 text-xs text-[--color-dim]">
+                  Standard rate — no cluster-wealth premium
+                </p>
+              )}
               {amount && (
                 <div className="mt-2 flex items-center justify-between border-t border-[--color-steel] pt-2 text-sm">
                   <span className="font-medium text-[--color-ghost]">Total</span>

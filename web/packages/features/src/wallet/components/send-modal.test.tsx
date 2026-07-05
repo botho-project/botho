@@ -29,7 +29,7 @@ function setup(overrides: Partial<React.ComponentProps<typeof SendModal>> = {}) 
     isOpen: true,
     onClose: vi.fn(),
     balance: BALANCE,
-    estimateFee: vi.fn().mockResolvedValue(4000n),
+    estimateFee: vi.fn().mockResolvedValue({ fee: 4000n, clusterFactorDisplay: '1.00x' }),
     onSend,
     ...overrides,
   }
@@ -124,5 +124,39 @@ describe('SendModal self-send guard', () => {
 
     expect(screen.queryByText(/your own address/i)).toBeNull()
     expect(getSubmitButton().disabled).toBe(false)
+  })
+})
+
+describe('SendModal cluster fee factor display (#635)', () => {
+  beforeEach(() => cleanup())
+
+  it('shows the progressive-rate row and multiplier when the factor is above 1.00x', async () => {
+    setup({
+      estimateFee: vi
+        .fn()
+        .mockResolvedValue({ fee: 20240n, clusterFactorDisplay: '1.85x' }),
+    })
+    // Entering an amount triggers the estimateFee effect, which resolves with
+    // the above-base factor.
+    fireEvent.change(getAmountInput(), { target: { value: '10' } })
+
+    // The multiplier and its "Progressive rate" label render...
+    expect(await screen.findByText('1.85x')).toBeDefined()
+    expect(screen.getByText('Progressive rate')).toBeDefined()
+    // ...along with the one-line why-explanation.
+    expect(screen.getByText(/progressive fee/i)).toBeDefined()
+    // ...and the base-rate copy is NOT shown.
+    expect(screen.queryByText(/no cluster-wealth premium/i)).toBeNull()
+  })
+
+  it('shows the base-rate copy and no progressive row at 1.00x', async () => {
+    // The default setup mock resolves with clusterFactorDisplay: '1.00x'.
+    setup()
+    fireEvent.change(getAmountInput(), { target: { value: '10' } })
+
+    // Give the estimateFee effect a chance to resolve, then assert the base-rate
+    // copy is present and the progressive row is absent.
+    expect(await screen.findByText(/no cluster-wealth premium/i)).toBeDefined()
+    expect(screen.queryByText('Progressive rate')).toBeNull()
   })
 })

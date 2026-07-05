@@ -8,6 +8,7 @@ import {
 } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { LocalNodeAdapter } from '@botho/adapters'
+import type { FeeEstimate } from '@botho/adapters'
 import type { Balance, Transaction, Address } from '@botho/core'
 import { useConnection } from './connection'
 
@@ -51,7 +52,7 @@ interface WalletContextValue extends WalletState {
   refreshBalance: () => Promise<void>
   refreshTransactions: () => Promise<void>
   sendTransaction: (params: SendTxParams) => Promise<{ success: boolean; txHash?: string; error?: string }>
-  estimateFee: (amount: bigint, privacyLevel: 'standard' | 'private') => Promise<bigint>
+  estimateFee: (amount: bigint, privacyLevel: 'standard' | 'private') => Promise<FeeEstimate>
   setAddress: (address: Address) => void
   /** Unlock wallet from file using password (mnemonic stays in Rust) */
   unlockWallet: (password: string, path?: string) => Promise<{ success: boolean; address?: string; error?: string }>
@@ -328,8 +329,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     }
   }, [adapter, state.address])
 
-  const estimateFee = useCallback(async (_amount: bigint, privacyLevel: 'standard' | 'private'): Promise<bigint> => {
-    if (!adapter) return BigInt(0)
+  const estimateFee = useCallback(async (_amount: bigint, privacyLevel: 'standard' | 'private'): Promise<FeeEstimate> => {
+    if (!adapter) return { fee: BigInt(0), clusterFactorDisplay: '1.00x' }
 
     // Estimate transaction size based on privacy level
     // Standard: Minting transaction with ML-DSA signature
