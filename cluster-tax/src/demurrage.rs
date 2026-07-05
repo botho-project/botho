@@ -243,24 +243,34 @@ pub fn ring_elapsed_quantile(
 /// HashMap/HashSet iteration order, no node-local state. Safe for the consensus
 /// fee-floor enforcement (item B4) to reuse unchanged.
 pub fn ring_centroid_implied_factor(
-    members: &[(u64, u64)],
+    members: &[(u64, u128)],
     curve: &crate::fee_curve::ClusterFactorCurve,
 ) -> u64 {
     let mut weighted: u128 = 0;
     let mut total_value: u128 = 0;
 
     for &(value, member_wealth) in members {
-        weighted += value as u128 * member_wealth as u128;
-        total_value += value as u128;
+        // `member_wealth` is now full-u128 cumulative cluster wealth (#626 PR3;
+        // the accumulator was widened in PR2). `value` is a u64 coin amount, so
+        // the product can reach ~1.8e19 × 1e19 ≈ 1.8e38 per member and the sum
+        // over a ring can cross u128::MAX (3.4e38) once cumulative wealth grows
+        // into the tens-of-millions-of-BTH range. Use saturating arithmetic:
+        // on the (astronomically distant) overflow the centroid pins to
+        // u128::MAX, which `factor()` maps to the exact 6000 (max) floor — the
+        // conservative direction for an anti-gaming floor, and deterministic on
+        // every node (no fork). This replaces the `.min(u64::MAX)` clamp PR2
+        // added while `factor()` still took u64.
+        weighted = weighted.saturating_add((value as u128).saturating_mul(member_wealth));
+        total_value = total_value.saturating_add(value as u128);
     }
 
     let centroid_wealth = if total_value == 0 {
         0
     } else {
-        (weighted / total_value).min(u64::MAX as u128) as u64
+        weighted / total_value
     };
 
-    curve.factor(centroid_wealth as u128)
+    curve.factor(centroid_wealth)
 }
 
 #[cfg(test)]
@@ -499,19 +509,19 @@ mod tests {
         // Every member carries a wealthy cluster's wealth -> high implied factor.
         let curve = ClusterFactorCurve::default_params();
         // (value, member_effective_wealth) — wealth in picocredits: 10M BTH.
-        const W: u64 = 10_000_000_000_000_000_000; // 10M BTH in pico
+        const W: u128 = 10_000_000_000_000_000_000; // 10M BTH in pico
         let members = [(1_000_000u64, W), (1_000_000, W)];
         let implied = ring_centroid_implied_factor(&members, &curve);
         // Wealthy centroid maps near the curve maximum, well above 1x.
         assert!(implied >= 5_000, "wealthy ring implied factor = {implied}");
-        assert_eq!(implied, curve.factor(W as u128));
+        assert_eq!(implied, curve.factor(W));
     }
 
     #[test]
     fn test_ring_centroid_implied_factor_background_ring() {
         // Zero member wealth (background ring) -> exactly the 1x floor.
         let curve = ClusterFactorCurve::default_params();
-        let members = [(1_000_000u64, 0u64), (2_000_000, 0)];
+        let members = [(1_000_000u64, 0u128), (2_000_000, 0)];
         let implied = ring_centroid_implied_factor(&members, &curve);
         assert_eq!(implied, curve.factor(0));
         assert_eq!(implied, FACTOR_SCALE); // 1x
@@ -523,8 +533,8 @@ mod tests {
         // background decoy barely moves it.
         let curve = ClusterFactorCurve::default_params();
         let members = [
-            (100_000_000u64, 10_000_000_000_000_000_000u64), // big wealthy real input (10M BTH)
-            (1_000, 0),                                      // tiny fresh background decoy
+            (100_000_000u64, 10_000_000_000_000_000_000u128), // big wealthy real input (10M BTH)
+            (1_000, 0),                                       // tiny fresh background decoy
         ];
         let implied = ring_centroid_implied_factor(&members, &curve);
         // Centroid wealth ≈ 10M BTH (decoy barely moves it) -> still high.
@@ -548,7 +558,7 @@ mod tests {
         let curve = ClusterFactorCurve::default_params();
         // Member wealth in picocredits: 10M BTH -> high implied factor.
         let members = [
-            (1_000_000u64, 10_000_000_000_000_000_000u64),
+            (1_000_000u64, 10_000_000_000_000_000_000u128),
             (1_000_000, 10_000_000_000_000_000_000),
         ];
 

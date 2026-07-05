@@ -59,12 +59,12 @@ use bth_transaction_types::TAG_WEIGHT_SCALE;
 fn effective_cluster_wealth_from_outputs(
     outputs: &[TxOutput],
     ledger: &Ledger,
-) -> Result<u64, String> {
+) -> Result<u128, String> {
     let mut total_weighted_wealth: u128 = 0;
     let mut total_value: u128 = 0;
 
     for output in outputs {
-        total_value += output.amount as u128;
+        total_value = total_value.saturating_add(output.amount as u128);
         for entry in &output.cluster_tags.entries {
             let value_fraction =
                 (output.amount as u128 * entry.weight as u128) / (TAG_WEIGHT_SCALE as u128);
@@ -75,17 +75,20 @@ fn effective_cluster_wealth_from_outputs(
             // rejected from the mempool with a LedgerError rather than admitted
             // at a fee computed from bogus zero wealth. The happy path is
             // unchanged.
-            // `get_cluster_wealth` is now u128 (16-byte accumulator, #626).
-            // The mempool progressive-fee API (`FeeConfig::cluster_factor`) still
-            // takes u64 — its widening to u128 is PR 3 of #626 — so clamp here.
-            // Clamping also bounds `value_fraction * global_wealth` away from a
-            // u128 overflow (both operands can now approach u64::MAX). Relay
-            // policy only; deterministic; the u64 ceiling persists until PR 3.
+            // `get_cluster_wealth` is u128 (16-byte accumulator, #626 PR2); the
+            // fee API now takes u128 end-to-end (#626 PR3), so the u64 clamp PR2
+            // added here is gone — full-width wealth flows straight into
+            // `FeeConfig::cluster_factor`. `value_fraction` (≤ output.amount ≤
+            // u64::MAX) × `global_wealth` (u128) and the running sum can in
+            // principle exceed u128 only at astronomically-distant cumulative
+            // wealth (tens of millions of BTH per member × full-supply values);
+            // saturating arithmetic pins that to u128::MAX → factor 6000 (max),
+            // the conservative relay direction. Deterministic; relay policy only.
             let global_wealth = ledger
                 .get_cluster_wealth(entry.cluster_id.0)
-                .map_err(|e| format!("get_cluster_wealth({}): {}", entry.cluster_id.0, e))?
-                .min(u64::MAX as u128);
-            total_weighted_wealth += value_fraction * global_wealth;
+                .map_err(|e| format!("get_cluster_wealth({}): {}", entry.cluster_id.0, e))?;
+            total_weighted_wealth =
+                total_weighted_wealth.saturating_add(value_fraction.saturating_mul(global_wealth));
         }
     }
 
@@ -93,7 +96,7 @@ fn effective_cluster_wealth_from_outputs(
         return Ok(0);
     }
 
-    Ok((total_weighted_wealth / total_value) as u64)
+    Ok(total_weighted_wealth / total_value)
 }
 
 // ============================================================================
@@ -300,8 +303,8 @@ pub struct PendingTx {
     /// smaller clusters. Stored as scaled integer (×1000) to avoid floating
     /// point.
     pub fee_density: u64,
-    /// The cluster wealth used for fee calculation.
-    pub cluster_wealth: u64,
+    /// The cluster wealth used for fee calculation (u128 pico, #626 PR3).
+    pub cluster_wealth: u128,
 }
 
 impl PendingTx {
@@ -329,7 +332,7 @@ impl PendingTx {
     /// Fee density = fee / (size × cluster_factor / 1000)
     /// The cluster_factor is in 1000-scale (1000 = 1x, 6000 = 6x), so we
     /// divide by cluster_factor and multiply by 1000 to normalize.
-    pub fn with_cluster_factor(tx: Transaction, cluster_wealth: u64, cluster_factor: u64) -> Self {
+    pub fn with_cluster_factor(tx: Transaction, cluster_wealth: u128, cluster_factor: u64) -> Self {
         let tx_size = tx.estimate_size().max(1);
         let fee_per_byte = tx.fee / tx_size as u64;
 
@@ -521,7 +524,7 @@ impl Mempool {
     /// # Arguments
     /// * `tx_size` - Estimated transaction size in bytes
     /// * `cluster_wealth` - Sender's cluster wealth (0 if unknown)
-    pub fn suggest_fees(&self, tx_size: usize, cluster_wealth: u64) -> FeeSuggestion {
+    pub fn suggest_fees(&self, tx_size: usize, cluster_wealth: u128) -> FeeSuggestion {
         let cluster_factor = self.fee_config.cluster_factor(cluster_wealth);
         self.dynamic_fee
             .suggest_fees(tx_size, cluster_factor, self.at_min_block_time)
@@ -543,7 +546,7 @@ impl Mempool {
         // Use 0 for estimation - wallets should use Wallet::compute_cluster_wealth()
         // and call suggest_fees() with their actual cluster wealth for accurate
         // estimates
-        let cluster_wealth = 0u64;
+        let cluster_wealth = 0u128;
 
         // Get typical size for this tx type
         let typical_size = match tx_type {
@@ -590,7 +593,7 @@ impl Mempool {
         tx_type: FeeTransactionType,
         _amount: u64,
         num_memos: usize,
-        cluster_wealth: u64,
+        cluster_wealth: u128,
     ) -> u64 {
         // Get typical size for this tx type
         let typical_size = match tx_type {
@@ -617,7 +620,7 @@ impl Mempool {
     /// estimates with your cluster profile, use `suggest_fees()` with
     /// computed cluster wealth.
     pub fn estimate_fee_static(&self, tx_type: FeeTransactionType, num_memos: usize) -> u64 {
-        let cluster_wealth = 0u64;
+        let cluster_wealth = 0u128;
         self.fee_config
             .estimate_typical_fee(tx_type, cluster_wealth, num_memos)
     }
@@ -626,7 +629,7 @@ impl Mempool {
     ///
     /// Returns the multiplier as a fixed-point value (1000 = 1x, 6000 = 6x).
     /// Useful for displaying progressive fee information to users.
-    pub fn cluster_factor(&self, cluster_wealth: u64) -> u64 {
+    pub fn cluster_factor(&self, cluster_wealth: u128) -> u64 {
         self.fee_config.cluster_factor(cluster_wealth)
     }
 
@@ -1060,8 +1063,9 @@ impl Mempool {
     /// Get transactions with their fee data for block building.
     ///
     /// Returns (transaction, fee, cluster_wealth) tuples sorted by fee density.
-    /// Used by block builder to calculate lottery pool.
-    pub fn get_transactions_with_fees(&self, max_count: usize) -> Vec<(Transaction, u64, u64)> {
+    /// Used by block builder to calculate lottery pool. `cluster_wealth` is
+    /// u128 pico (#626 PR3).
+    pub fn get_transactions_with_fees(&self, max_count: usize) -> Vec<(Transaction, u64, u128)> {
         let mut txs: Vec<_> = self.txs.values().collect();
 
         // Sort by fee density (highest first)
@@ -1447,7 +1451,7 @@ mod tests {
             cluster_tags: ClusterTagVector::single(ClusterId(1)),
         };
         let wealth = effective_cluster_wealth_from_outputs(&[small_output], &ledger).unwrap();
-        assert_eq!(wealth, whale_amount);
+        assert_eq!(wealth, whale_amount as u128);
 
         // Half-tagged output: 50% of the global wealth
         let mut half_tags = ClusterTagVector::single(ClusterId(1));
@@ -1460,7 +1464,7 @@ mod tests {
             cluster_tags: half_tags,
         };
         let wealth = effective_cluster_wealth_from_outputs(&[half_output], &ledger).unwrap();
-        assert_eq!(wealth, whale_amount / 2);
+        assert_eq!(wealth, whale_amount as u128 / 2);
 
         // Untagged (background) outputs contribute zero cluster wealth
         let bg_output = test_output(1_000, 9);

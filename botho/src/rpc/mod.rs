@@ -1241,10 +1241,9 @@ async fn handle_estimate_fee(id: Value, params: &Value, state: &RpcState) -> Jso
 
     // Parse optional cluster_wealth for accurate progressive fee calculation
     // (u128 pico, string-encoded). Wallets get this from
-    // cluster_getWealthByTargetKeys. The mempool fee API still takes u64
-    // (widening is PR 3 of #626); clamp for the call, echo the full value.
+    // cluster_getWealthByTargetKeys. The mempool fee API takes u128 end-to-end
+    // (#626 PR3) — the prior u64 clamp is gone; full-width wealth flows through.
     let cluster_wealth = parse_cluster_wealth_param(params);
-    let cluster_wealth_u64 = cluster_wealth.min(u64::MAX as u128) as u64;
 
     // All transactions are private (CLSAG ring signatures)
     let tx_type = bth_cluster_tax::TransactionType::Hidden;
@@ -1252,11 +1251,10 @@ async fn handle_estimate_fee(id: Value, params: &Value, state: &RpcState) -> Jso
     let mempool = read_lock!(state.mempool, id.clone());
 
     // Calculate minimum fee using the fee curve with cluster wealth
-    let minimum_fee =
-        mempool.estimate_fee_with_wealth(tx_type, amount, num_memos, cluster_wealth_u64);
+    let minimum_fee = mempool.estimate_fee_with_wealth(tx_type, amount, num_memos, cluster_wealth);
 
     // Get cluster factor for display (1000 = 1x, 6000 = 6x based on wealth)
-    let cluster_factor = mempool.cluster_factor(cluster_wealth_u64);
+    let cluster_factor = mempool.cluster_factor(cluster_wealth);
 
     // Calculate average mempool fee for priority estimation
     let avg_fee = if !mempool.is_empty() {
@@ -2539,9 +2537,8 @@ async fn handle_cluster_get_wealth_by_target_keys(
     match ledger.compute_cluster_wealth_for_utxos(&target_keys) {
         Ok(info) => {
             // Calculate the fee multiplier for this wealth level. `cluster_factor`
-            // still takes u64 (widening is PR 3 of #626); clamp the u128 wealth.
-            let cluster_factor =
-                mempool.cluster_factor(info.max_cluster_wealth.min(u64::MAX as u128) as u64);
+            // takes full-u128 wealth end-to-end (#626 PR3) — no clamp.
+            let cluster_factor = mempool.cluster_factor(info.max_cluster_wealth);
 
             // Format cluster breakdown for response. Wealth is u128 pico (#626),
             // serialized as STRINGS (may exceed the JS/u64 range).
@@ -2662,9 +2659,8 @@ async fn handle_entropy_estimate_fee(
         .and_then(|v| v.as_u64())
         .unwrap_or(3) as usize;
     let amount = params.get("amount").and_then(|v| v.as_u64()).unwrap_or(0);
-    // u128 pico, string-encoded (#626); mempool fee API is u64 until PR 3.
+    // u128 pico, string-encoded (#626); mempool fee API is u128 end-to-end (PR3).
     let cluster_wealth = parse_cluster_wealth_param(params);
-    let cluster_wealth_u64 = cluster_wealth.min(u64::MAX as u128) as u64;
 
     // Calculate proof size based on cluster count
     // Formula from design doc:
@@ -2680,12 +2676,12 @@ async fn handle_entropy_estimate_fee(
     let additional_fee = (proof_size_estimate as u64) * fee_rate;
 
     // Apply cluster factor to the additional fee
-    let cluster_factor = mempool.cluster_factor(cluster_wealth_u64);
+    let cluster_factor = mempool.cluster_factor(cluster_wealth);
     let adjusted_additional_fee = additional_fee * cluster_factor / 1000;
 
     // Calculate total tx fee with entropy proof
     let tx_type = bth_cluster_tax::TransactionType::Hidden;
-    let base_fee = mempool.estimate_fee_with_wealth(tx_type, amount, 0, cluster_wealth_u64);
+    let base_fee = mempool.estimate_fee_with_wealth(tx_type, amount, 0, cluster_wealth);
     let total_fee_with_proof = base_fee + adjusted_additional_fee;
 
     let entropy_proof_required = is_entropy_proof_required(chain_state.height);

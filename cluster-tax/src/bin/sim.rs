@@ -559,6 +559,70 @@ mod cli {
             #[arg(long, default_value = "2953379877")]
             seed: u64,
         },
+
+        /// M2 (#605 / #626 §7) — RECALIBRATED-CUMULATIVE run: exercises the
+        /// REAL production log-domain cluster-factor curve (not the
+        /// #314 hardcoded factors). Population declared in BTH, factor
+        /// derived per-epoch from each cluster's cumulative tagged
+        /// volume through `ClusterFactorCurve::factor` at 611M-BTH
+        /// realism. Emits Δgini vs the >0.05 criterion for the honest
+        /// and gamed (split+churn) equilibria.
+        ///
+        /// Reproducible one-liners (see experiments/M2_RUNBOOK.md):
+        ///   sim m2-cumulative --horizon-years 10
+        ///   sim m2-cumulative --horizon-years 20 --gamed
+        M2Cumulative {
+            /// Horizon in years (10 and 20 are the #605 long-horizon runs)
+            #[arg(long, default_value = "10")]
+            horizon_years: u64,
+
+            /// Gamed equilibrium: strategic whale splits + churns to game
+            /// payout
+            #[arg(long)]
+            gamed: bool,
+
+            /// Deterministic RNG seed
+            #[arg(long, default_value = "626626626")]
+            seed: u64,
+
+            /// Smoke mode: tiny horizon (days, not years) for end-to-end tests
+            #[arg(long)]
+            smoke: bool,
+        },
+
+        /// M2 (#605 / #626 §7) — EPOCH-HALVING DECAY variant: same cumulative
+        /// harness on the REAL curve, plus deterministic `w >>= 1` halving of
+        /// each cluster's cumulative wealth at epoch boundaries (pure function
+        /// of height; never per-access — M3 lesson). Sweeps half-lives
+        /// {2,5,10}yr and additionally emits the WASH-TRADING evasion
+        /// metric (pass <20%, prior art 94–99% at aggressive per-hop
+        /// decay) and the privacy ring-IDENTIFICATION rate (pass <50%,
+        /// prior art 78.7% at 20% decay) from experiments/ANALYSIS.md.
+        ///
+        /// Reproducible one-liners (see experiments/M2_RUNBOOK.md):
+        ///   sim m2-decay --horizon-years 10 --half-life-years 5
+        ///   sim m2-decay --horizon-years 20 --half-life-years 2 --gamed
+        M2Decay {
+            /// Horizon in years
+            #[arg(long, default_value = "10")]
+            horizon_years: u64,
+
+            /// Epoch-halving half-life in years ({2,5,10} is the #605 sweep)
+            #[arg(long, default_value = "5")]
+            half_life_years: u64,
+
+            /// Gamed equilibrium: strategic whale splits + churns
+            #[arg(long)]
+            gamed: bool,
+
+            /// Deterministic RNG seed
+            #[arg(long, default_value = "626626626")]
+            seed: u64,
+
+            /// Smoke mode: tiny horizon (days, not years) for end-to-end tests
+            #[arg(long)]
+            smoke: bool,
+        },
     }
 
     pub fn run(cli: Cli) {
@@ -777,6 +841,23 @@ mod cli {
                 honest_jitter_bps,
                 seed,
             ),
+            Command::M2Cumulative {
+                horizon_years,
+                gamed,
+                seed,
+                smoke,
+            } => {
+                run_m2_cumulative(horizon_years, gamed, seed, smoke);
+            }
+            Command::M2Decay {
+                horizon_years,
+                half_life_years,
+                gamed,
+                seed,
+                smoke,
+            } => {
+                run_m2_decay(horizon_years, half_life_years, gamed, seed, smoke);
+            }
         }
     }
 
@@ -3999,6 +4080,128 @@ mod cli {
         println!("  demurrage entirely; only emission dilution touches parked wealth.");
     }
 
+    // ========================================================================
+    // M2 run matrix (#605 / #626 §7) — thin printing wrappers over the lib
+    // harness `bth_cluster_tax::simulation::m2`, which exercises the REAL
+    // production log-domain cluster-factor curve (not the #314 hardcoded
+    // factors). The smoke tests live in that module and run under the default
+    // `cargo test -p bth-cluster-tax`.
+    // ========================================================================
+
+    fn m2_pass(b: bool) -> &'static str {
+        if b {
+            "PASS"
+        } else {
+            "FAIL"
+        }
+    }
+    fn m2_flag(b: bool) -> &'static str {
+        if b {
+            "FLAG"
+        } else {
+            "ok"
+        }
+    }
+
+    fn print_m2_population() {
+        use bth_cluster_tax::simulation::{lottery::LotterySimulation, m2::m2_population};
+        for c in m2_population() {
+            println!(
+                "  cohort {:<9} n={:>3}  holdings={:>10} BTH  velocity={}x/yr  entry factor={:.3}x",
+                c.name,
+                c.count,
+                c.holdings_bth,
+                c.velocity_per_year,
+                LotterySimulation::production_cluster_factor_bth(c.holdings_bth),
+            );
+        }
+    }
+
+    /// Run set 1: recalibrated-cumulative long-horizon run. Emits Δgini vs the
+    /// >0.05 criterion plus merchant-mispricing and whale-progressivity health.
+    fn run_m2_cumulative(horizon_years: u64, gamed: bool, seed: u64, smoke: bool) {
+        use bth_cluster_tax::simulation::m2::{run_m2, M2Params};
+        println!("M2 RECALIBRATED-CUMULATIVE (real log-domain curve, #626 §7 run set 1)");
+        println!(
+            "horizon={}yr  equilibrium={}  seed={}{}",
+            horizon_years,
+            if gamed { "gamed" } else { "honest" },
+            seed,
+            if smoke { "  [SMOKE]" } else { "" }
+        );
+        print_m2_population();
+        let r = run_m2(&M2Params {
+            horizon_years,
+            half_life_years: None,
+            gamed,
+            seed,
+            smoke,
+        });
+        println!(
+            "gini0={:.4}  giniF={:.4}  dGini={:+.4}  (criterion >0.05: {})",
+            r.gini0,
+            r.gini_f,
+            r.delta_gini,
+            m2_pass(r.delta_gini > 0.05)
+        );
+        println!(
+            "merchant mean factor={:.3}x  (mispricing flag >=3x: {})",
+            r.merchant_mean_factor,
+            m2_flag(r.merchant_mean_factor >= 3.0)
+        );
+        println!(
+            "whale mean factor={:.3}x  (should stay >5x: {})",
+            r.whale_mean_factor,
+            m2_pass(r.whale_mean_factor > 5.0)
+        );
+    }
+
+    /// Run set 2: epoch-halving decay variant. Emits Δgini plus the
+    /// wash-trading evasion and privacy ring-identification metrics from
+    /// experiments/ANALYSIS.md prior art.
+    fn run_m2_decay(horizon_years: u64, half_life_years: u64, gamed: bool, seed: u64, smoke: bool) {
+        use bth_cluster_tax::simulation::m2::{run_m2, M2Params};
+        println!("M2 EPOCH-HALVING DECAY (real log-domain curve, #626 §7 run set 2)");
+        println!(
+            "horizon={}yr  half_life={}yr  equilibrium={}  seed={}{}",
+            horizon_years,
+            half_life_years,
+            if gamed { "gamed" } else { "honest" },
+            seed,
+            if smoke { "  [SMOKE]" } else { "" }
+        );
+        print_m2_population();
+        let r = run_m2(&M2Params {
+            horizon_years,
+            half_life_years: Some(half_life_years),
+            gamed,
+            seed,
+            smoke,
+        });
+        let evasion = r.wash_evasion_pct.unwrap_or(0.0);
+        let id_rate = r.ring_id_rate.unwrap_or(0.0);
+        println!(
+            "gini0={:.4}  giniF={:.4}  dGini={:+.4}  (criterion >0.05: {})",
+            r.gini0,
+            r.gini_f,
+            r.delta_gini,
+            m2_pass(r.delta_gini > 0.05)
+        );
+        println!(
+            "wash-trading evasion={:.1}%  (criterion <20%: {})  [prior art 94-99% @ aggressive per-hop]",
+            evasion,
+            m2_pass(evasion < 20.0)
+        );
+        println!(
+            "ring identification rate={:.1}%  (criterion <50%: {})  [prior art 78.7% @ 20% decay]",
+            id_rate * 100.0,
+            m2_pass(id_rate < 0.50)
+        );
+        println!(
+            "merchant mean factor={:.3}x  whale mean factor={:.3}x",
+            r.merchant_mean_factor, r.whale_mean_factor
+        );
+    }
     /// Emission-schedule sweep (issue #350).
     ///
     /// Runs the candidate schedule grid through both the analytic monetary

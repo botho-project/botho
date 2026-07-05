@@ -47,7 +47,7 @@ use crate::common::{
 /// Compute expected minimum fee in picocredits (ready for Transaction.fee).
 /// This converts from nanoBTH (cluster-tax system) to picocredits (transaction
 /// system) and ensures the result is at least MIN_TX_FEE.
-fn compute_expected_min_fee(tx: &Transaction, cluster_wealth: u64, dynamic_base: u64) -> u64 {
+fn compute_expected_min_fee(tx: &Transaction, cluster_wealth: u128, dynamic_base: u64) -> u64 {
     let fee_config = FeeConfig::default();
     let tx_size = tx.estimate_size();
     // All transactions now use CLSAG ring signatures (Hidden type)
@@ -61,14 +61,14 @@ fn compute_expected_min_fee(tx: &Transaction, cluster_wealth: u64, dynamic_base:
 }
 
 /// Compute cluster wealth from transaction outputs (same as mempool does).
-fn compute_cluster_wealth_from_outputs(outputs: &[TxOutput]) -> u64 {
-    let mut cluster_wealths: HashMap<u64, u64> = HashMap::new();
+fn compute_cluster_wealth_from_outputs(outputs: &[TxOutput]) -> u128 {
+    let mut cluster_wealths: HashMap<u64, u128> = HashMap::new();
 
     for output in outputs {
         let value = output.amount;
         for entry in &output.cluster_tags.entries {
             let contribution =
-                ((value as u128) * (entry.weight as u128) / (TAG_WEIGHT_SCALE as u128)) as u64;
+                (value as u128) * (entry.weight as u128) / (TAG_WEIGHT_SCALE as u128);
             *cluster_wealths.entry(entry.cluster_id.0).or_insert(0) += contribution;
         }
     }
@@ -220,11 +220,11 @@ fn test_cluster_factor_wealthy_pay_more() {
 
     // Test cluster factors at different wealth levels
     let test_cases = [
-        (0u64, "Zero wealth"),
-        (1_000_000u64, "1M wealth"),
-        (10_000_000u64, "10M wealth (w_mid)"),
-        (50_000_000u64, "50M wealth"),
-        (100_000_000u64, "100M wealth"),
+        (0u128, "Zero wealth"),
+        (1_000_000u128, "1M wealth"),
+        (10_000_000u128, "10M wealth (w_mid)"),
+        (50_000_000u128, "50M wealth"),
+        (100_000_000u128, "100M wealth"),
     ];
 
     println!("Testing cluster factor curve:");
@@ -429,7 +429,7 @@ fn test_fee_rejection_wealthy_sender() {
     let tx_size_estimate = 4000;
     let small_holder_fee_nano =
         fee_config.compute_fee(TransactionType::Hidden, tx_size_estimate, 0, 0);
-    let wealthy_amount = 1_000_000 * PICOCREDITS_PER_CREDIT; // 1M BTH wealth
+    let wealthy_amount = (1_000_000 * PICOCREDITS_PER_CREDIT) as u128; // 1M BTH wealth
     let wealthy_fee_nano =
         fee_config.compute_fee(TransactionType::Hidden, tx_size_estimate, wealthy_amount, 0);
 
@@ -643,7 +643,7 @@ fn test_size_based_fee_scaling() {
     println!("\n=== Size-Based Fee Scaling Test ===\n");
 
     let fee_config = FeeConfig::default();
-    let cluster_wealth = 0u64; // Small holder for predictable results
+    let cluster_wealth = 0u128; // Small holder for predictable results
 
     // Test different transaction sizes
     let sizes = [1000, 2000, 4000, 8000, 16000, 65000];
@@ -689,7 +689,7 @@ fn test_memo_fees() {
 
     let fee_config = FeeConfig::default();
     let tx_size = 4000;
-    let cluster_wealth = 0u64;
+    let cluster_wealth = 0u128;
 
     println!("Memo fee: {} nanoBTH per memo", fee_config.fee_per_memo);
     println!();
@@ -739,7 +739,7 @@ fn test_combined_cluster_and_congestion() {
     println!("Base fee (small holder, normal): {} nanoBTH", base_fee);
 
     // Calculate wealthy sender fee (no congestion)
-    let wealthy_cluster = 100_000_000u64;
+    let wealthy_cluster = 100_000_000u128;
     let wealthy_fee = fee_config.compute_fee(TransactionType::Hidden, tx_size, wealthy_cluster, 0);
     let cluster_multiplier = wealthy_fee as f64 / base_fee as f64;
     println!(
@@ -840,7 +840,7 @@ fn test_e2e_progressive_fee_enforcement() {
     let fee_config = FeeConfig::default();
 
     // Minted coins have 100% cluster attribution to their cluster ID
-    let minted_cluster_wealth = utxo.output.amount;
+    let minted_cluster_wealth = utxo.output.amount as u128;
     let cluster_factor = fee_config.cluster_factor(minted_cluster_wealth);
 
     println!("Sender's UTXO:");

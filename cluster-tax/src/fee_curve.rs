@@ -281,7 +281,7 @@ impl FeeConfig {
         &self,
         tx_type: TransactionType,
         tx_size_bytes: usize,
-        cluster_wealth: u64,
+        cluster_wealth: u128,
         num_outputs: usize,
         num_memos: usize,
     ) -> u64 {
@@ -290,7 +290,7 @@ impl FeeConfig {
         }
 
         // Get cluster factor (1x to 6x in 1000-scale fixed point)
-        let cluster_factor = self.cluster_curve.factor(cluster_wealth as u128);
+        let cluster_factor = self.cluster_curve.factor(cluster_wealth);
 
         // Get output penalty (capped quadratic by default)
         let output_penalty = self.output_penalty(num_outputs);
@@ -330,7 +330,7 @@ impl FeeConfig {
         &self,
         tx_type: TransactionType,
         tx_size_bytes: usize,
-        cluster_wealth: u64,
+        cluster_wealth: u128,
         num_memos: usize,
     ) -> u64 {
         // Default to 2 outputs (standard transfer: payment + change)
@@ -342,7 +342,7 @@ impl FeeConfig {
         &self,
         tx_type: TransactionType,
         tx_size_bytes: usize,
-        cluster_wealth: u64,
+        cluster_wealth: u128,
     ) -> u64 {
         self.compute_fee(tx_type, tx_size_bytes, cluster_wealth, 0)
     }
@@ -362,8 +362,8 @@ impl FeeConfig {
     /// Get the cluster factor for a given wealth level.
     ///
     /// Returns the multiplier as a fixed-point value (1000 = 1x, 6000 = 6x).
-    pub fn cluster_factor(&self, cluster_wealth: u64) -> u64 {
-        self.cluster_curve.factor(cluster_wealth as u128)
+    pub fn cluster_factor(&self, cluster_wealth: u128) -> u64 {
+        self.cluster_curve.factor(cluster_wealth)
     }
 
     /// Estimate fee for a typical transaction.
@@ -377,7 +377,7 @@ impl FeeConfig {
     pub fn estimate_typical_fee(
         &self,
         tx_type: TransactionType,
-        cluster_wealth: u64,
+        cluster_wealth: u128,
         num_memos: usize,
     ) -> u64 {
         self.estimate_fee_with_outputs(tx_type, cluster_wealth, 2, num_memos)
@@ -391,7 +391,7 @@ impl FeeConfig {
     pub fn estimate_fee_with_outputs(
         &self,
         tx_type: TransactionType,
-        cluster_wealth: u64,
+        cluster_wealth: u128,
         num_outputs: usize,
         num_memos: usize,
     ) -> u64 {
@@ -419,7 +419,7 @@ impl FeeConfig {
         &self,
         tx_type: TransactionType,
         tx_size_bytes: usize,
-        cluster_wealth: u64,
+        cluster_wealth: u128,
         num_memos: usize,
     ) -> u64 {
         self.compute_fee(tx_type, tx_size_bytes, cluster_wealth, num_memos)
@@ -430,7 +430,7 @@ impl FeeConfig {
         &self,
         tx_type: TransactionType,
         tx_size_bytes: usize,
-        cluster_wealth: u64,
+        cluster_wealth: u128,
         num_outputs: usize,
         num_memos: usize,
     ) -> u64 {
@@ -466,7 +466,7 @@ impl FeeConfig {
         &self,
         tx_type: TransactionType,
         tx_size_bytes: usize,
-        cluster_wealth: u64,
+        cluster_wealth: u128,
         num_memos: usize,
         dynamic_base: u64,
     ) -> u64 {
@@ -502,7 +502,7 @@ impl FeeConfig {
         &self,
         tx_type: TransactionType,
         tx_size_bytes: usize,
-        cluster_wealth: u64,
+        cluster_wealth: u128,
         num_outputs: usize,
         num_memos: usize,
         dynamic_base: u64,
@@ -512,7 +512,7 @@ impl FeeConfig {
         }
 
         // Get cluster factor (1x to 6x in 1000-scale fixed point)
-        let cluster_factor = self.cluster_curve.factor(cluster_wealth as u128);
+        let cluster_factor = self.cluster_curve.factor(cluster_wealth);
 
         // Get output penalty (capped quadratic by default)
         let output_penalty = self.output_penalty(num_outputs);
@@ -539,7 +539,7 @@ impl FeeConfig {
         &self,
         tx_type: TransactionType,
         tx_size_bytes: usize,
-        cluster_wealth: u64,
+        cluster_wealth: u128,
         num_memos: usize,
         dynamic_base: u64,
     ) -> u64 {
@@ -557,7 +557,7 @@ impl FeeConfig {
         &self,
         tx_type: TransactionType,
         tx_size_bytes: usize,
-        cluster_wealth: u64,
+        cluster_wealth: u128,
         num_outputs: usize,
         num_memos: usize,
         dynamic_base: u64,
@@ -1328,8 +1328,12 @@ mod tests {
         );
 
         // Same transaction with a large (1M BTH) cluster → ~5x factor.
-        let fee_large =
-            config.compute_fee(TransactionType::Hidden, 4_000, (1_000_000 * PICO) as u64, 0);
+        let fee_large = config.compute_fee(
+            TransactionType::Hidden,
+            4_000,
+            (1_000_000 * PICO) as u128,
+            0,
+        );
         assert!(
             fee_large > fee_small * 2,
             "Large cluster should pay more: {fee_large} > {fee_small}"
@@ -1435,13 +1439,17 @@ mod tests {
         // Test that fees increase with cluster wealth (picocredit inputs).
         // 1k BTH → 1.265x, 100k BTH (midpoint) → 3.5x, 1M BTH → 5.093x.
         let fee_small =
-            config.compute_fee(TransactionType::Hidden, tx_size, (1_000 * PICO) as u64, 0);
-        let fee_mid =
-            config.compute_fee(TransactionType::Hidden, tx_size, (100_000 * PICO) as u64, 0);
+            config.compute_fee(TransactionType::Hidden, tx_size, (1_000 * PICO) as u128, 0);
+        let fee_mid = config.compute_fee(
+            TransactionType::Hidden,
+            tx_size,
+            (100_000 * PICO) as u128,
+            0,
+        );
         let fee_large = config.compute_fee(
             TransactionType::Hidden,
             tx_size,
-            (1_000_000 * PICO) as u64,
+            (1_000_000 * PICO) as u128,
             0,
         );
 
