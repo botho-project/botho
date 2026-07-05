@@ -185,6 +185,10 @@ jobs:
 
             # Create tarball for Unix platforms
             if [[ "$platform" != windows* ]]; then
+              # Restore exec bits stripped by actions/upload-artifact (issue #640)
+              # so extracted tarball binaries are runnable without a manual chmod.
+              chmod +x "$dir"/botho "$dir"/botho-wallet "$dir"/botho-exchange-scanner 2>/dev/null || true
+
               tar -czvf "release-assets/botho-${GITHUB_REF_NAME}-${platform}.tar.gz" \
                 -C "$dir" \
                 --exclude='*.sha256' \

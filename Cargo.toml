@@ -247,3 +247,9 @@ lto = "thin"
 [patch.crates-io]
 bulletproofs-og = { git = "https://github.com/mobilecoinfoundation/bulletproofs.git", rev = "9abfdc054d9ba65f1e185ea1e6eff3947ce879dc" }
 schnorrkel-og = { git = "https://github.com/mobilecoinfoundation/schnorrkel.git", rev = "049bf9d30f3bbe072e2ad1b5eefdf0f3c851215e" }
+# Vendored fork of randomx-rs 1.4.1 (issue #640). Upstream's build.rs hardcodes
+# `-DARCH=native`, compiling RandomX for the exact build-machine CPU and breaking
+# reproducible builds. Our copy defaults to the portable `DARCH=default` and honours
+# a RANDOMX_ARCH override. Kept in-tree (not a git fork) so the build is fully
+# hermetic — no external fetch — and the patch is reviewable in this repo.
+randomx-rs = { path = "vendor/randomx-rs" }

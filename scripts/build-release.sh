@@ -87,6 +87,14 @@ export TZ=UTC
 export CARGO_INCREMENTAL=0
 export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$PROJECT_ROOT=botho"
 
+# C/C++ flags for reproducibility (issue #640)
+# randomx-rs builds the RandomX C++ library via cmake, which honours CFLAGS/CXXFLAGS.
+# Without path remapping, cmake embeds the absolute build-time path into the object
+# files' debug sections, making `botho` hash-different across checkout paths.
+# -ffile-prefix-map rewrites both __FILE__ macros and DWARF debug paths (GCC 8+, clang 10+).
+export CFLAGS="${CFLAGS:-} -ffile-prefix-map=$PROJECT_ROOT=botho"
+export CXXFLAGS="${CXXFLAGS:-} -ffile-prefix-map=$PROJECT_ROOT=botho"
+
 # Ensure consistent ordering
 export LANG=C.UTF-8
 
