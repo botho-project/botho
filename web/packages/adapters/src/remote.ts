@@ -488,17 +488,49 @@ export class RemoteNodeAdapter implements NodeAdapter {
     }
   }
 
-  async estimateFee(_sizeBytes: number, _clusterWealth?: bigint): Promise<bigint> {
-    const result = await this.call<{
-      minimumFee: number
-      recommendedFee: number
-    }>('estimateFee', {
+  async estimateFee(_sizeBytes: number, clusterWealth?: bigint): Promise<bigint> {
+    // Forward the sender's cluster wealth so the node applies the progressive
+    // fee factor (#626/#628). It is a string-encoded u128 on the wire — never a
+    // JS number — so the full u128 range survives without precision loss. When
+    // omitted, the node returns the 1.00x base-rate fee (matches local.ts).
+    const params: Record<string, unknown> = {
       amount: 0,
       private: true,
       memos: 0,
-    })
+    }
+    if (clusterWealth !== undefined) {
+      params.cluster_wealth = clusterWealth.toString()
+    }
 
-    return BigInt(result.recommendedFee || result.minimumFee || 0)
+    const result = await this.call<{
+      // The node serializes these fees as JSON numbers (u64), but we parse them
+      // through BigInt(String(...)) so a future wide value cannot be silently
+      // coerced/rounded by Number().
+      minimumFee: number | string
+      recommendedFee: number | string
+    }>('estimateFee', params)
+
+    return BigInt(String(result.recommendedFee ?? result.minimumFee ?? 0))
+  }
+
+  /**
+   * Look up the sender's cluster wealth (string-encoded u128) for a set of owned
+   * output target keys, so {@link estimateFee} can be given a real cluster
+   * wealth and the node applies the correct progressive fee factor (#634).
+   *
+   * The node's `cluster_getWealthByTargetKeys` returns `max_cluster_wealth` as a
+   * decimal string (u128, #628) — it MUST flow through `BigInt()`, never
+   * `Number()`, since cluster wealth can exceed `Number.MAX_SAFE_INTEGER`.
+   * Returns `0n` for an empty target-key list (fresh/empty wallet).
+   */
+  async getClusterWealth(targetKeys: string[]): Promise<bigint> {
+    if (targetKeys.length === 0) return 0n
+    const result = await this.call<{
+      max_cluster_wealth: string
+      cluster_factor: number
+      total_value: number
+    }>('cluster_getWealthByTargetKeys', { target_keys: targetKeys })
+    return BigInt(result.max_cluster_wealth || '0')
   }
 
   // =========================================================================

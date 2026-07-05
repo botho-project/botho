@@ -136,6 +136,35 @@ export async function spendableBalance(
 }
 
 /**
+ * Return the target keys (hex) of the wallet's owned outputs. These identify the
+ * wallet's cluster to the node's progressive-fee lookup
+ * (`cluster_getWealthByTargetKeys`), so the wallet can fetch its real cluster
+ * wealth before an `estimateFee` call and be charged the correct fee factor
+ * (#626/#628/#634).
+ *
+ * Uses the same node-identical wasm ownership scan as {@link spendableBalance}.
+ * Includes all owned outputs (not just currently-spendable ones): the node
+ * clusters a wallet by every output it has ever touched, so spent outputs still
+ * contribute to cluster identity. Returns an empty array for a wallet with no
+ * owned outputs.
+ */
+export async function ownedOutputTargetKeys(
+  keys: SignerKeys,
+  rpc: SendRpc,
+): Promise<string[]> {
+  const signer = await loadSigner()
+  const height = await rpc.getChainHeight()
+  const candidates = await rpc.getOutputs(0, height)
+  if (candidates.length === 0) return []
+  const owned = signer.scanOwnedOutputs({
+    spendPrivateKey: keys.spendPrivateKey,
+    viewPrivateKey: keys.viewPrivateKey,
+    outputs: candidates,
+  })
+  return owned.map((o) => o.targetKey)
+}
+
+/**
  * A chain output annotated with the block it landed in and its source tx hash.
  * This is what the node returns via `chain_getOutputs` (height per block, txHash
  * per output) and is the raw material for client-side transaction history.

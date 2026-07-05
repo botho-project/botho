@@ -10,7 +10,7 @@ import {
 import { RemoteNodeAdapter, type WsConnectionStatus } from '@botho/adapters'
 import { AddressBook, EncryptedAddressBook, ClaimLinkStore, EncryptedClaimLinks, saveWallet, loadWallet, loadWalletWithKey, getWalletInfo, deriveAddress, deriveKeypairs, parseAddress, isValidMnemonic, clearWallet, createClaimLinkMnemonic, buildClaimLink, assertClaimLinkAmountWithinCap, VaultKey, MIN_PASSWORD_LENGTH } from '@botho/core'
 import type { Balance, Contact, NodeInfo, Transaction, ClaimLinkRecord, Timestamp } from '@botho/core'
-import { buildSendTransaction, spendableBalance, buildOwnedHistory } from '@botho/wasm-signer'
+import { buildSendTransaction, spendableBalance, buildOwnedHistory, ownedOutputTargetKeys } from '@botho/wasm-signer'
 import { buildAndSubmitSend, scanEphemeral, sweepEphemeral, SWEEP_FEE_RESERVE } from '../lib/claim-link-ops'
 import { type NetworkConfig, loadSelectedNetwork, loadSelectedIngress, NETWORKS, DEFAULT_NETWORK_ID, DEFAULT_INGRESS_ID, createCustomNetwork, networkForIngress, getIngressNode } from '../config/networks'
 
@@ -988,10 +988,34 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     //    (e.g. a per-byte estimate of a few thousand picocredits). The signer
     //    rejects any tx whose fee is under MIN_TX_FEE, so clamp the fee to that
     //    floor regardless of what the estimator returns.
+    //
+    //    Before estimating, derive the wallet's cluster wealth from its owned
+    //    output target keys and pass it to estimateFee so the node applies the
+    //    correct progressive fee factor (#626/#628/#634). Without this the node
+    //    always returns the 1.00x base rate. Best-effort: any failure falls back
+    //    to a zero cluster wealth (base-rate estimate) rather than blocking the
+    //    send.
     const MIN_TX_FEE = 100_000_000n // signer's MIN_TX_FEE (picocredits)
+    let clusterWealth = 0n
+    try {
+      const targetKeys = await ownedOutputTargetKeys(
+        {
+          spendPrivateKey: toHex(kp.spendPrivate),
+          viewPrivateKey: toHex(kp.viewPrivate),
+        },
+        {
+          getChainHeight: () => adapter.getBlockHeight(),
+          getOutputs: (start, end) => adapter.getRawOutputs(start, end),
+          areKeyImagesSpent: (keyImages) => adapter.areKeyImagesSpent(keyImages),
+        },
+      )
+      clusterWealth = await adapter.getClusterWealth(targetKeys)
+    } catch {
+      clusterWealth = 0n
+    }
     let fee: bigint
     try {
-      fee = await adapter.estimateFee(0)
+      fee = await adapter.estimateFee(0, clusterWealth)
     } catch {
       fee = 0n
     }
