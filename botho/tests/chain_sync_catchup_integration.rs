@@ -27,7 +27,9 @@ use tempfile::TempDir;
 use botho::{
     block::{Block, BlockHeader, BlockLotterySummary, MintingTx},
     ledger::Ledger,
-    network::{ChainSyncManager, SyncAction, SyncRequest, SyncResponse, SyncState},
+    network::{
+        ChainSyncManager, SyncAction, SyncRequest, SyncResponse, SyncState, OVERLAP_THRESHOLD,
+    },
     transaction::{Transaction, PICOCREDITS_PER_CREDIT},
 };
 use botho_wallet::WalletKeys;
@@ -840,5 +842,125 @@ fn test_duplicate_batch_response_tolerated() {
     assert!(
         iterations < 50,
         "catch-up after overlap took too many iterations: {iterations}"
+    );
+}
+
+/// Regression test for #644: a peer that *persistently* re-serves an
+/// already-held range (pure overlap, zero forward progress) must, past
+/// `OVERLAP_THRESHOLD` consecutive such responses, be dinged and rotated out in
+/// favour of an alternative peer — rather than spinning the sync tick forever
+/// with no backoff and no reputation consequence (the concern #641/#643 left
+/// open).
+///
+/// This models the production run-loop path: a pure-overlap batch (every block
+/// at or below our committed height) applies nothing and, per #644, calls
+/// `on_zero_progress`. With a second healthy peer available, the misbehaving
+/// download peer is rotated out (the manager stays in `Downloading`, not
+/// `Failed`) and sync completes via the alternative.
+#[test]
+#[serial]
+fn test_persistent_overlap_peer_triggers_soft_failure() {
+    let target_height = 145;
+
+    // --- Source node: chain to 145 ---
+    let source_dir = TempDir::new().unwrap();
+    let source = Ledger::open(source_dir.path()).unwrap();
+    source.set_difficulty(TRIVIAL_DIFFICULTY).unwrap();
+    let minter = create_test_wallet().public_address();
+    build_chain_to_height(&source, &minter, target_height);
+    let source_state = source.get_chain_state().unwrap();
+    assert_eq!(source_state.height, target_height);
+
+    // --- Fresh node at genesis ---
+    let node_dir = TempDir::new().unwrap();
+    let node = Ledger::open(node_dir.path()).unwrap();
+    node.set_difficulty(TRIVIAL_DIFFICULTY).unwrap();
+
+    let mut sync_manager = ChainSyncManager::new(0);
+    let peer_a = PeerId::random();
+    let peer_b = PeerId::random();
+
+    // Two peers both at the tip, so an alternative download peer is always
+    // available when we rotate the misbehaving one out.
+    sync_manager.on_status(peer_a, source_state.height, source_state.tip_hash);
+    sync_manager.on_status(peer_b, source_state.height, source_state.tip_hash);
+
+    // Identify which peer the manager chose to download from, and the other.
+    let (bad_peer, alt_peer) = match sync_manager.state() {
+        SyncState::Downloading { peer, .. } if *peer == peer_a => (peer_a, peer_b),
+        SyncState::Downloading { peer, .. } if *peer == peer_b => (peer_b, peer_a),
+        other => panic!("expected Downloading, got {other:?}"),
+    };
+
+    // --- Batch 1 [1..100] applied normally from the download peer ---
+    let action = sync_manager
+        .tick(&[bad_peer, alt_peer])
+        .expect("should request first batch");
+    let SyncAction::RequestBlocks {
+        start_height,
+        count,
+        ..
+    } = action
+    else {
+        panic!("expected RequestBlocks, got {action:?}");
+    };
+    assert_eq!(start_height, 1, "first request anchored at genesis + 1");
+    sync_manager.on_request_sent(bad_peer);
+    let applied = apply_batch_with_overlap_skip(
+        &mut sync_manager,
+        &node,
+        bad_peer,
+        serve_get_blocks(&source, start_height, count),
+    );
+    assert_eq!(applied, 100, "first batch applies 100 novel blocks");
+    assert_eq!(node.get_chain_state().unwrap().height, 100);
+
+    // --- The misbehaving peer persistently re-serves [1..100] (pure overlap) ---
+    for i in 0..OVERLAP_THRESHOLD {
+        sync_manager.set_local_height(node.get_chain_state().unwrap().height);
+        let dup_applied = apply_batch_with_overlap_skip(
+            &mut sync_manager,
+            &node,
+            bad_peer,
+            serve_get_blocks(&source, 1, 100),
+        );
+        assert_eq!(dup_applied, 0, "overlap response {i} must apply nothing");
+        // Production path: a zero-progress batch notifies the sync manager.
+        sync_manager.on_zero_progress(&bad_peer);
+    }
+
+    // --- Threshold reached: ding + rotate to the alternative, NOT Failed ---
+    assert_eq!(
+        sync_manager
+            .reputation_mut()
+            .get(&bad_peer)
+            .map(|r| r.failures)
+            .unwrap_or(0),
+        1,
+        "the persistently-overlapping peer must be dinged exactly once"
+    );
+    assert!(
+        matches!(sync_manager.state(), SyncState::Downloading { peer, .. } if *peer == alt_peer),
+        "an available alternative peer must be rotated in without entering Failed"
+    );
+
+    // --- Sync completes via the alternative peer ---
+    let iterations = run_catchup(&mut sync_manager, &node, &source, alt_peer);
+    let node_state = node.get_chain_state().unwrap();
+    assert_eq!(
+        node_state.height, target_height,
+        "node must reach the source tip via the rotated-in peer"
+    );
+    assert_eq!(
+        node_state.tip_hash, source_state.tip_hash,
+        "node tip hash must match the source after rotation"
+    );
+    assert!(
+        sync_manager.is_synced(),
+        "sync manager must report Synced after completing via the alternative peer"
+    );
+    assert!(
+        iterations < 50,
+        "catch-up via the alternative peer took too many iterations: {iterations}"
     );
 }

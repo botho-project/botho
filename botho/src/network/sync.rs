@@ -92,6 +92,22 @@ pub const INITIAL_RETRY_BACKOFF: Duration = Duration::from_secs(5);
 /// network heals, while still throttling a persistently failing peer.
 pub const MAX_RETRY_BACKOFF: Duration = Duration::from_secs(60);
 
+/// Consecutive pure-overlap (zero-progress) responses tolerated from one peer
+/// before a soft failure is applied (#644).
+///
+/// A response batch that contains no novel blocks — every block is at or below
+/// our committed height — makes no forward progress. The overlap-tolerance path
+/// (#643) correctly refuses to hard-fail on such a batch, so a genuinely
+/// misbehaving peer that keeps re-serving a range we already hold would
+/// otherwise spin the ~2s sync tick indefinitely with no backoff and no
+/// reputation consequence. Past this many *consecutive* zero-progress responses
+/// from the same peer, [`ChainSyncManager::on_zero_progress`] dings reputation
+/// and rotates the download peer (or engages backoff when no alternative
+/// exists). Three balances responsiveness against false positives from benign
+/// batch-boundary transients: one or two overlaps can be coincidental; three
+/// consecutive from the same peer indicates persistent misbehaviour.
+pub const OVERLAP_THRESHOLD: u32 = 3;
+
 // ============================================================================
 // Protocol Messages
 // ============================================================================
@@ -512,6 +528,17 @@ pub struct ChainSyncManager {
     reputation: ReputationManager,
     /// Last time we re-polled peers for status while synced
     last_status_refresh: Instant,
+    /// Consecutive pure-overlap (zero-progress) response counts per peer
+    /// (#644).
+    ///
+    /// Incremented by [`on_zero_progress`] each time a peer's response batch
+    /// applied no novel blocks. Past [`OVERLAP_THRESHOLD`] the peer is treated
+    /// as persistently misbehaving (soft failure). Cleared entirely on any real
+    /// forward progress ([`on_blocks_added`]) and the peer's entry is removed
+    /// on disconnect ([`on_peer_disconnected`]), so a peer is never
+    /// penalised for a stale overlap after it resumes normal service or
+    /// reconnects.
+    peer_overlap_counts: HashMap<PeerId, u32>,
 }
 
 impl ChainSyncManager {
@@ -526,6 +553,7 @@ impl ChainSyncManager {
             retry_backoff: INITIAL_RETRY_BACKOFF,
             reputation: ReputationManager::new(),
             last_status_refresh: Instant::now(),
+            peer_overlap_counts: HashMap::new(),
         }
     }
 
@@ -763,11 +791,95 @@ impl ChainSyncManager {
         // earlier in the sync does not keep recovery latency inflated (#641).
         self.retry_backoff = INITIAL_RETRY_BACKOFF;
 
+        // Forward progress wipes the slate clean for every peer: a batch that
+        // advances our tip proves the download is making progress, so no peer
+        // should carry a stale consecutive-overlap count into the next batch
+        // (#644).
+        self.peer_overlap_counts.clear();
+
         // Check if we've caught up
         if let SyncState::Downloading { target_height, .. } = self.state {
             if new_height >= target_height {
                 debug!(height = new_height, "Sync complete");
                 self.state = SyncState::Synced;
+            }
+        }
+    }
+
+    /// Handle a response batch that applied no novel blocks (pure overlap).
+    ///
+    /// Called by the run loop when every block in a peer's response was at or
+    /// below our committed height, so the batch made zero forward progress. The
+    /// overlap-tolerance path (#643) deliberately does NOT hard-fail on such a
+    /// batch — a one-off duplicate near a batch boundary is benign and must be
+    /// tolerated. But a peer that *persistently* ignores the requested
+    /// `start_height` and keeps re-serving a range we already hold would spin
+    /// the fixed-interval sync tick forever with no backoff and no reputation
+    /// consequence (#644).
+    ///
+    /// This tracks consecutive zero-progress responses per peer. Below
+    /// [`OVERLAP_THRESHOLD`] nothing happens (benign transient overlap is
+    /// tolerated). At the threshold the offending peer's reputation is dinged
+    /// and, if it is the current download peer:
+    /// - it is rotated out in favour of an alternative unbanned peer (the sync
+    ///   manager stays in `Downloading` — less disruptive than a full reset);
+    ///   or
+    /// - when no alternative exists, [`on_failure`] engages the jittered
+    ///   exponential backoff so the tick is no longer spun in a tight loop.
+    ///
+    /// The counter resets after action so it does not wrap, and forward
+    /// progress ([`on_blocks_added`]) or disconnect
+    /// ([`on_peer_disconnected`]) clears it.
+    pub fn on_zero_progress(&mut self, peer: &PeerId) {
+        let count = self.peer_overlap_counts.entry(*peer).or_insert(0);
+        *count += 1;
+        if *count < OVERLAP_THRESHOLD {
+            return;
+        }
+        // Reset the counter now that we are taking action, so it does not wrap
+        // and a peer that keeps misbehaving is penalised once per threshold
+        // window rather than on every subsequent response.
+        *count = 0;
+
+        warn!(
+            %peer,
+            threshold = OVERLAP_THRESHOLD,
+            "Peer persistently re-serving already-held range; applying soft failure"
+        );
+
+        // Ding reputation exactly once, up front. This both records the penalty
+        // and worsens the offender's selection score, so the `best_peer()` call
+        // below deterministically prefers an alternative peer when one exists.
+        self.reputation.request_failed(peer);
+
+        // Only rotate/backoff when the offender is the peer we are actively
+        // downloading from; a stale response from a peer we already rotated away
+        // from is still worth a reputation ding but must not disturb the current
+        // download.
+        let is_download_peer = matches!(
+            &self.state,
+            SyncState::Downloading { peer: dp, .. } if dp == peer
+        );
+
+        if is_download_peer {
+            // Prefer a soft rotate to a *different* unbanned peer over a full
+            // `Failed` reset. Having just dinged the offender, `best_peer()`
+            // returns it again only when it is the sole candidate.
+            match self.best_peer() {
+                Some((next_peer, _)) if next_peer != *peer => {
+                    if let SyncState::Downloading { peer: dp, .. } = &mut self.state {
+                        *dp = next_peer;
+                    }
+                    // The stale in-flight request (if any) targets the rotated
+                    // peer; drop the guard so the next tick queries the new peer.
+                    self.pending_request = None;
+                }
+                _ => {
+                    // No alternative peer: full soft-fail with backoff. Pass
+                    // `None` so `on_failure` does not double-ding the reputation
+                    // already recorded above.
+                    self.on_failure(None, "persistent zero-progress overlap".to_string());
+                }
             }
         }
     }
@@ -814,6 +926,11 @@ impl ChainSyncManager {
     /// Handle peer disconnection
     pub fn on_peer_disconnected(&mut self, peer: &PeerId) {
         self.peer_statuses.remove(peer);
+
+        // Drop any consecutive-overlap count for this peer so a reconnecting
+        // peer starts with a clean slate rather than inheriting a stale count
+        // (#644).
+        self.peer_overlap_counts.remove(peer);
 
         // If we were downloading from this peer, go back to discovery
         if let SyncState::Downloading {
@@ -1579,6 +1696,170 @@ mod tests {
         // The peer should have a reputation entry
         let rep = manager.reputation_mut().get(&peer);
         assert!(rep.is_some());
+    }
+
+    // ========================================================================
+    // on_zero_progress (persistent-overlap soft failure) tests (#644)
+    // ========================================================================
+
+    #[test]
+    fn test_on_zero_progress_below_threshold_no_penalty() {
+        // A peer that delivers fewer than OVERLAP_THRESHOLD consecutive
+        // pure-overlap batches incurs no backoff and no reputation penalty:
+        // benign transient overlap must be tolerated.
+        let mut manager = ChainSyncManager::new(0);
+        let peer = make_peer_id();
+        manager.on_status(peer, 100, [1u8; 32]);
+        assert!(matches!(manager.state(), SyncState::Downloading { .. }));
+
+        for _ in 0..(OVERLAP_THRESHOLD - 1) {
+            manager.on_zero_progress(&peer);
+        }
+
+        // Still downloading from the same peer, no failure recorded.
+        assert!(
+            matches!(manager.state(), SyncState::Downloading { peer: p, .. } if *p == peer),
+            "below threshold must stay Downloading from the same peer"
+        );
+        let failures = manager
+            .reputation_mut()
+            .get(&peer)
+            .map(|r| r.failures)
+            .unwrap_or(0);
+        assert_eq!(failures, 0, "below threshold must not ding reputation");
+    }
+
+    #[test]
+    fn test_on_zero_progress_at_threshold_dings_reputation() {
+        // At OVERLAP_THRESHOLD consecutive pure-overlap batches with no
+        // alternative peer available, the manager dings reputation and engages
+        // the backoff path (enters Failed).
+        let mut manager = ChainSyncManager::new(0);
+        let peer = make_peer_id();
+        manager.on_status(peer, 100, [1u8; 32]);
+        assert!(matches!(manager.state(), SyncState::Downloading { .. }));
+
+        for _ in 0..OVERLAP_THRESHOLD {
+            manager.on_zero_progress(&peer);
+        }
+
+        let failures = manager
+            .reputation_mut()
+            .get(&peer)
+            .map(|r| r.failures)
+            .unwrap_or(0);
+        assert_eq!(
+            failures, 1,
+            "reaching the threshold must record exactly one failure"
+        );
+        // No alternative peer exists, so on_failure engages the backoff path.
+        assert!(
+            matches!(manager.state(), SyncState::Failed { .. }),
+            "no alternative peer -> soft-fail into Failed with backoff"
+        );
+    }
+
+    #[test]
+    fn test_on_zero_progress_at_threshold_rotates_to_alternative_peer() {
+        // With an alternative unbanned peer available, the offending peer is
+        // rotated out and the manager stays in Downloading (not Failed).
+        let mut manager = ChainSyncManager::new(0);
+        let peer_a = make_peer_id();
+        let peer_b = make_peer_id();
+        manager.on_status(peer_a, 100, [1u8; 32]);
+        manager.on_status(peer_b, 100, [2u8; 32]);
+
+        // Identify which peer the manager chose to download from, and the other.
+        let (download_peer, other_peer) = match manager.state() {
+            SyncState::Downloading { peer, .. } if *peer == peer_a => (peer_a, peer_b),
+            SyncState::Downloading { peer, .. } if *peer == peer_b => (peer_b, peer_a),
+            other => panic!("expected Downloading, got {other:?}"),
+        };
+
+        for _ in 0..OVERLAP_THRESHOLD {
+            manager.on_zero_progress(&download_peer);
+        }
+
+        // Reputation dinged, but rotated to the alternative rather than failing.
+        assert_eq!(
+            manager
+                .reputation_mut()
+                .get(&download_peer)
+                .map(|r| r.failures)
+                .unwrap_or(0),
+            1,
+            "the offending peer's reputation must be dinged"
+        );
+        assert!(
+            matches!(manager.state(), SyncState::Downloading { peer: p, .. } if *p == other_peer),
+            "an available alternative peer must be rotated in without entering Failed"
+        );
+    }
+
+    #[test]
+    fn test_on_zero_progress_resets_on_forward_progress() {
+        // Forward progress clears the consecutive-overlap slate, so overlaps
+        // that straddle a successful batch never accumulate to the threshold.
+        let mut manager = ChainSyncManager::new(0);
+        let peer = make_peer_id();
+        manager.on_status(peer, 100, [1u8; 32]);
+
+        // Two overlaps (below threshold), then real forward progress.
+        manager.on_zero_progress(&peer);
+        manager.on_zero_progress(&peer);
+        manager.on_blocks_added(50); // still below target 100 -> stays Downloading
+
+        // Two more overlaps: the counter restarted from zero, so no penalty.
+        manager.on_zero_progress(&peer);
+        manager.on_zero_progress(&peer);
+
+        assert_eq!(
+            manager
+                .reputation_mut()
+                .get(&peer)
+                .map(|r| r.failures)
+                .unwrap_or(0),
+            0,
+            "forward progress must reset the overlap counter"
+        );
+        assert!(
+            matches!(manager.state(), SyncState::Downloading { .. }),
+            "no soft failure should fire when progress reset the counter"
+        );
+    }
+
+    #[test]
+    fn test_on_zero_progress_clears_on_disconnect() {
+        // A reconnecting peer starts with a clean slate: overlaps from before a
+        // disconnect must not carry over.
+        let mut manager = ChainSyncManager::new(0);
+        let peer = make_peer_id();
+        manager.on_status(peer, 100, [1u8; 32]);
+
+        // Two overlaps (below threshold), then the peer disconnects.
+        manager.on_zero_progress(&peer);
+        manager.on_zero_progress(&peer);
+        manager.on_peer_disconnected(&peer);
+        assert!(matches!(manager.state(), SyncState::Discovery));
+
+        // Peer reconnects and delivers two more overlaps: counter restarted.
+        manager.on_status(peer, 100, [1u8; 32]);
+        manager.on_zero_progress(&peer);
+        manager.on_zero_progress(&peer);
+
+        assert_eq!(
+            manager
+                .reputation_mut()
+                .get(&peer)
+                .map(|r| r.failures)
+                .unwrap_or(0),
+            0,
+            "disconnect must clear the overlap counter for the peer"
+        );
+        assert!(
+            matches!(manager.state(), SyncState::Downloading { .. }),
+            "no soft failure should fire after a disconnect reset the counter"
+        );
     }
 
     // ========================================================================
