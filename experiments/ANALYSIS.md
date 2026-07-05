@@ -1146,3 +1146,81 @@ mechanism's Δgini > 0.05 claim stands in the gamed equilibrium.
    now enforced in the mempool), no tag-decay dynamics inside this
    experiment. A follow-up should co-simulate redistribution with the
    decay/wash-trading model.
+
+## M2 Resolution — Cumulative vs Epoch-Halving Decay (2026-07-05, issue #605)
+
+This section book-ends the decay findings above. The earlier wash-trading
+analysis (94–99% evasion at aggressive per-hop decay; 78.7% ring
+identification at 20% per-hop decay) established that *aggressive* cluster
+decay is a privacy and evasion hazard. Cycle-6 item **M2** (#605) asked the
+complementary question: given that `cluster_wealth_db` is monotonically
+non-decreasing (cumulative lifetime tagged volume, never decremented —
+decrement is impossible under ring privacy), does the monotonic ratchet
+degrade the validated Gini outcome at realistic horizons, or should a
+*conservative* decay be added?
+
+The operator ratified the empirical program on 2026-07-04 and set the
+decision rule: if recalibrated-**cumulative** semantics hold ΔGini > 0.05 at
+long horizons with a discriminating factor distribution → **option 2**
+(document cumulative); only if it degrades → **option 1** (deterministic
+epoch halving, never per-access), re-cleared against the wash-trading
+metrics.
+
+### Harness
+
+All runs use the **real production `ClusterFactorCurve`** (log-domain,
+`w_mid = 100k BTH`) — the #626 recalibration (#627), on the `u128`
+accumulator (#628) — not the #314 hardcoded 1.0/2.0/6.0 factors. Pinned at
+`main @ da24457`, seed `626626626`, deterministic. Full run matrix and
+one-liners: `experiments/M2_RUNBOOK.md`.
+
+### Run set 1 — cumulative (option 2), the decision-rule primary
+
+| Run | ΔGini | criterion > 0.05 | whale factor |
+|---|---|---|---|
+| 10yr honest | +0.2171 | PASS | 5.646x PASS |
+| 10yr gamed | +0.2242 | PASS | 5.646x PASS |
+| 20yr honest | +0.5644 | PASS | 5.745x PASS |
+| 20yr gamed | +0.5745 | PASS | 5.745x PASS |
+
+Cumulative passes with a 4–11× margin at both horizons, honest and gamed.
+Redistribution strengthens with horizon (Gini 0.93 → 0.37 at 20yr); gamed
+runs edge out honest because whale split/churn under cumulative tagging just
+re-tags value (no evasion channel). The merchant cohort (5,000 BTH,
+2×/yr velocity) reaches a mean factor of 3.53x at 10yr from accumulated
+volume alone — above the harness's ≥3x mispricing flag (`FLAG` in the run
+output) — the accepted velocity-vs-holdings mispricing, a sim cohort
+output (reproducible via
+`target/release/cluster-tax-sim m2-cumulative --horizon-years 10`), not one
+of the ΔGini/whale-factor figures in the table. The ratified decision
+accepted this flagged mispricing as dominated by the redistribution benefit;
+the post-4.0.0-reset live measurement should re-check the merchant band.
+
+### Run set 2 — epoch-halving decay (option 1), for comparison
+
+| Half-life | 10yr ΔGini (honest/gamed) | evasion (<20%) | ring-ID (<50%) |
+|---|---|---|---|
+| 2yr | +0.1839 / +0.1897 | 0.0% PASS | 17.8% PASS |
+| 5yr | +0.2096 / +0.2164 | 0.0% PASS | 13.2% PASS |
+| 10yr | +0.2171 / +0.2242 | 1.5% PASS | 11.3% PASS |
+| 5yr @ 20yr gamed | +0.4718 | 0.0% PASS | 13.2% PASS |
+
+Deterministic epoch halving is *safe* — nowhere near the prior art's
+94–99% evasion or 78.7% ring identification — but **strictly weaker on ΔGini
+at every half-life**, converging up to the cumulative result as the half-life
+grows. Decay buys nothing the decision rule values and adds consensus surface.
+
+### Outcome — RATIFIED 2026-07-05: option 2
+
+Per the decision rule, cumulative passed decisively with a discriminating
+factor distribution (whales pinned high, small users ~1x — the recalibrated
+curve, not a step), so the operator ratified **option 2: cluster wealth is
+intentionally cumulative lifetime tagged volume, no decay.** Documented as a
+first-class design decision in
+`docs/design/cluster-tilted-redistribution.md`; threat-model cross-reference
+updated. #581's residual and M3's saturation ceiling remain valid under the
+#628 `u128` widening. The one remaining verification — live-testnet
+factor-distribution confirmation after the 4.0.0 reset, against the
+2026-07-04 6x-pinned baseline — is tracked on #605 and is **still pending**;
+the sim's wash-trading model is the harness's #574-era adversary, and the
+live phase exists to catch model-vs-reality gaps.

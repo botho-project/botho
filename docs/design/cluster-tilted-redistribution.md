@@ -117,6 +117,107 @@ A second-order attack — acquiring low-factor coins from others — is
 self-correcting under global cluster wealth tracking: accumulating a large
 share of a cluster's coins raises that cluster's wealth and hence its factor.
 
+## Cluster Wealth Is Cumulative Lifetime Volume (Design Decision)
+
+**Status: RATIFIED 2026-07-05 (option 2, accept-and-document).** Cycle-6 audit
+item **M2** (#605) asked whether `cluster_wealth_db` — which is
+*monotonically non-decreasing*, since `update_cluster_wealth_for_output`
+(`botho/src/ledger/store.rs`) only ever adds and no decrement path exists —
+should acquire a deterministic decay schedule (option 1) or be accepted and
+documented as the intended semantic (option 2). The operator ratified
+**option 2**.
+
+### The semantic
+
+Cluster wealth is **lifetime cumulative tagged volume**, not current holdings.
+Every output ever attributed to a cluster adds to its tracked wealth and
+nothing is ever subtracted. Decrement is not merely unimplemented — it is
+essentially impossible under ring privacy: you cannot tell when a specific
+tagged value is spent, so there is no privacy-preserving signal on which to
+base a decrement. The progressive fee therefore prices a cluster by the total
+value that has ever flowed through it, and a cluster's factor only ratchets
+upward toward the `max_factor` ceiling.
+
+### Empirical basis (2026-07-05, recalibrated log-domain curve)
+
+The decision follows the empirical program ratified 2026-07-04. All runs use
+the **real production `ClusterFactorCurve`** (log-domain, `w_mid = 100k BTH`)
+merged as part of #626's fix (#627), on the `u128` accumulator (#628) — not
+the #314 hardcoded 1.0/2.0/6.0 factors. Harness pinned at `main @ da24457`,
+seed `626626626`, deterministic. Reproduction: `experiments/M2_RUNBOOK.md`.
+
+**Cumulative (option 2) — the decision-rule primary** (criterion: ΔGini > 0.05
+at long horizons):
+
+| Run | ΔGini | criterion > 0.05 | whale factor |
+|---|---|---|---|
+| 10yr honest | +0.2171 | PASS | 5.646x PASS |
+| 10yr gamed | +0.2242 | PASS | 5.646x PASS |
+| 20yr honest | +0.5644 | PASS | 5.745x PASS |
+| 20yr gamed | +0.5745 | PASS | 5.745x PASS |
+
+Cumulative semantics on the recalibrated curve pass the decision rule with a
+4–11× margin, at both horizons, honest and gamed. Redistribution *strengthens*
+with horizon (Gini 0.93 → 0.37 at 20yr), and the gamed runs do marginally
+better than honest — whale splitting/churning under cumulative tagging simply
+re-tags the value, opening no evasion channel.
+
+**Epoch-halving decay variants (option 1) — for comparison.** Deterministic
+epoch halving (`w >>= 1` once per `half_life_years`, a pure function of the
+epoch index — never per-access, per the M3 determinism lesson), with the
+wash-trading evasion gate (<20%) and ring-identification gate (<50%):
+
+| Half-life | 10yr ΔGini (honest/gamed) | evasion (<20%) | ring-ID (<50%) |
+|---|---|---|---|
+| 2yr | +0.1839 / +0.1897 | 0.0% PASS | 17.8% PASS |
+| 5yr | +0.2096 / +0.2164 | 0.0% PASS | 13.2% PASS |
+| 10yr | +0.2171 / +0.2242 | 1.5% PASS | 11.3% PASS |
+| 5yr @ 20yr gamed | +0.4718 | 0.0% PASS | 13.2% PASS |
+
+Epoch halving is *safe* — nothing like the prior art's 94–99% per-hop-decay
+evasion or 78.7% ring identification (`experiments/ANALYSIS.md`) — but it is
+**strictly weaker on ΔGini at every half-life**, converging up to the
+cumulative result as the half-life grows. Decay buys nothing the criterion
+values and costs both redistribution and new consensus surface.
+
+### Accepted trade-offs
+
+- **Velocity-vs-holdings mispricing.** Because wealth is lifetime volume, an
+  active-commerce cluster prices on everything that has ever flowed through it,
+  not what it currently holds. In the sim's population ladder the merchant
+  cohort (5,000 BTH held, 2×/yr velocity) reaches a **mean factor of 3.53x at
+  the 10-year horizon** from accumulated volume alone — above the harness's
+  own ≥3x mispricing flag, which the run reports as `FLAG`. This 3.53x figure
+  is the **sim cohort output**, reproducible via
+  `target/release/cluster-tax-sim m2-cumulative --horizon-years 10`; it is *not*
+  one of the ratified ΔGini/whale-factor result-table numbers above. Accepted
+  with eyes open: the mispricing is real and flagged, but it is bounded by the
+  log-domain curve (the merchant band stays well below the whale band at
+  5.6–5.7x), and the ratified decision weighed the redistribution benefit
+  (ΔGini +0.22 to +0.57) as dominating it. The live-testnet confirmation
+  after the protocol-4.0.0 reset should re-measure merchant-cohort factors
+  against this prediction.
+- **Dormancy is no escape.** Parking coins does not lower a cluster's tracked
+  wealth; the ratchet is permanent. This is intended — it removes hoarding as a
+  factor-reduction strategy.
+- **Residual and headroom.** #581's decoy-sourced tag-inflation residual and
+  M3's saturation-ceiling analysis remain valid; both are held within the
+  `u128` accumulator headroom introduced by #628 (no wrap at realistic
+  lifetime volumes on the log-domain curve).
+
+### Validity scope and remaining verification
+
+These results are valid **only on the #626-recalibrated log-domain curve**
+(`w_mid = 100k BTH`); the pre-#626 step-function curve (`w_mid` in simulator
+units) is not represented. One honest caveat for the record: the harness's
+wash-trading/gaming model is its implementation of the #574-era adversary, and
+the live-testnet phase exists precisely to catch model-vs-reality gaps.
+**Still pending:** live-testnet confirmation of the real factor distribution
+after the 4.0.0 reset, measured against the 2026-07-04 6x-pinned baseline —
+tracked on #605 as the final verification. This documentation records the
+ratified design decision; it does not claim the on-chain confirmation is
+complete.
+
 ## Parameters and Headroom
 
 | Lever | Validated value | Headroom | Cost of turning up |
@@ -225,3 +326,8 @@ state), which bounds seed-grinding gain below the PoW cost of a regrind.
 ## Changelog
 
 - 2026-06-11: Initial proposal from validated experiment results
+- 2026-07-05: Added "Cluster Wealth Is Cumulative Lifetime Volume (Design
+  Decision)" — records the operator-ratified (option 2) semantic that cluster
+  wealth is cumulative lifetime tagged volume with no decay, with the
+  2026-07-05 empirical run matrix on the #626-recalibrated log-domain curve
+  (#605).
