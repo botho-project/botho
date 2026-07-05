@@ -155,9 +155,14 @@ If instance cannot be recovered:
 # (Use your IaC tooling or manual launch)
 
 # After new instance is running:
-# 1. Install Botho
-cargo build --release
-sudo cp target/release/botho /usr/local/bin/
+# 1. Install Botho from the latest release artifact (preferred; checksummed —
+#    see docs/operations/reproducible-builds.md). Building from source on the
+#    seed is the fallback and OOMs on t4g.small — see infra/faucet/README.md.
+TAG=$(curl -fsSL https://api.github.com/repos/botho-project/botho/releases/latest | grep -m1 '"tag_name"' | cut -d'"' -f4)
+curl -fsSLO https://github.com/botho-project/botho/releases/download/$TAG/botho-$TAG-linux-aarch64.tar.gz
+curl -fsSLO https://github.com/botho-project/botho/releases/download/$TAG/checksums-linux-aarch64.txt
+tar xzf botho-$TAG-linux-aarch64.tar.gz && sha256sum -c checksums-linux-aarch64.txt
+sudo install -m755 botho /usr/local/bin/
 
 # 2. Restore config from backup
 gpg -d /backup/botho/config_latest.gpg > ~/.botho/config.toml

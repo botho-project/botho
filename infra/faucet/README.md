@@ -65,12 +65,27 @@ sudo ./deploy-faucet.sh
 > the build aborts without it. The deploy scripts (`deploy-faucet.sh`,
 > `deploy-botho.sh`) install these automatically.
 
-### Building for low-RAM seed boxes (build-once-and-distribute)
+### Preferred: deploy release artifacts (no build at all)
+
+When deploying a tagged release, skip building entirely — the release
+workflow publishes reproducible, checksummed `linux-aarch64` binaries
+(see `docs/operations/reproducible-builds.md`). `deploy-botho.sh` does this
+by default; manually:
+
+```bash
+TAG=v0.3.0
+curl -fsSLO https://github.com/botho-project/botho/releases/download/$TAG/botho-$TAG-linux-aarch64.tar.gz
+curl -fsSLO https://github.com/botho-project/botho/releases/download/$TAG/checksums-linux-aarch64.txt
+tar xzf botho-$TAG-linux-aarch64.tar.gz && sha256sum -c checksums-linux-aarch64.txt
+sudo install -m755 botho /usr/local/bin/botho  # then restart the service
+```
+
+### Fallback for untagged commits: build-once-and-distribute
 
 The seed boxes are **t4g.small (1.8 GiB RAM, 0 swap)** and a `--release` build of
-this workspace OOMs there. Do **not** build on the seeds. The verified path (used
-in the #323 redeploy) is to build once on the faucet and copy the binary to the
-seeds:
+this workspace OOMs there. Do **not** build on the seeds. When you must deploy
+an untagged commit, the verified path (used in the #323 redeploy) is to build
+once on the faucet and copy the binary to the seeds:
 
 ```bash
 # On the faucet (t4g.medium, 3.7 GiB RAM) — add a temporary swapfile first so
@@ -363,7 +378,11 @@ source ~/.cargo/env
 > not installed?``. The full build prerequisite set is
 > `build-essential cmake pkg-config libssl-dev` plus a Rust toolchain.
 
-### 3. Build Botho
+### 3. Install Botho
+
+Prefer the published release artifact (reproducible + checksummed; see the
+"Preferred: deploy release artifacts" section above). Build from source only
+for untagged commits:
 
 ```bash
 git clone https://github.com/botho-project/botho.git
