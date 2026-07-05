@@ -1002,8 +1002,32 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                                     if let Some(SyncAction::AddBlocks(blocks)) =
                                         sync_manager.on_blocks(&peer, blocks, has_more)
                                     {
+                                        // Overlap tolerance (#641): a peer may re-serve a
+                                        // batch that overlaps blocks we already committed
+                                        // (e.g. a duplicate response near a batch boundary).
+                                        // Snapshot our committed height *before* the loop and
+                                        // skip any block at or below it, applying only the
+                                        // novel tail. Applying an already-committed block
+                                        // would hard-fail the ledger's sequential-height
+                                        // check ("Expected height N, got N-k") and, pre-fix,
+                                        // aborted the whole batch and drove a retry loop.
+                                        let local_height_before = node
+                                            .shared_ledger()
+                                            .read()
+                                            .ok()
+                                            .and_then(|l| l.get_chain_state().ok())
+                                            .map(|s| s.height)
+                                            .unwrap_or(0);
                                         let mut applied_any = false;
                                         for block in &blocks {
+                                            // Already have this block — skip it rather than
+                                            // fail. A pure-overlap batch (all blocks known)
+                                            // therefore applies nothing and does NOT trigger
+                                            // on_failure, so the node stays out of the retry
+                                            // loop and advances on the next request.
+                                            if block.height() <= local_height_before {
+                                                continue;
+                                            }
                                             if let Err(e) = node.add_block_from_network(block) {
                                                 warn!("Failed to add synced block {}: {}", block.height(), e);
                                                 sync_manager.on_failure(Some(&peer), e.to_string());
