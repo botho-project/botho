@@ -810,7 +810,9 @@ mod tests {
             "clusterFactorDisplay": "1.00x",
             "recommendedFee": 2000u64,
             "highPriorityFee": 4000u64,
-            "clusterWealth": 0u64,
+            // clusterWealth is now a STRING (u128 pico, #626); FeeEstimate does
+            // not consume it, but the fixture mirrors the real string contract.
+            "clusterWealth": "0",
             "params": {
                 "amount": 100u64,
                 "txType": "transfer",

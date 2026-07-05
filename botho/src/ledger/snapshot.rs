@@ -111,7 +111,7 @@ impl UtxoSnapshot {
         chain_state: ChainState,
         utxos: Vec<Utxo>,
         key_images: Vec<([u8; 32], u64)>, // (key_image, spent_height)
-        cluster_wealth: Vec<(u64, u64)>,  // (cluster_id, wealth)
+        cluster_wealth: Vec<(u64, u128)>, // (cluster_id, wealth) — u128 pico (#626)
     ) -> Result<Self, SnapshotError> {
         // Compute UTXO Merkle root
         let utxo_hashes: Vec<[u8; 32]> = utxos
@@ -178,7 +178,7 @@ impl UtxoSnapshot {
     }
 
     /// Decompress and deserialize the cluster wealth data.
-    pub fn get_cluster_wealth(&self) -> Result<Vec<(u64, u64)>, SnapshotError> {
+    pub fn get_cluster_wealth(&self) -> Result<Vec<(u64, u128)>, SnapshotError> {
         let decompressed = decompress(&self.cluster_wealth_data)?;
         bincode::deserialize(&decompressed).map_err(|e| SnapshotError::Serialization(e.to_string()))
     }
@@ -444,7 +444,7 @@ mod tests {
     fn test_snapshot_creation() {
         let utxos = vec![test_utxo(1), test_utxo(2), test_utxo(3)];
         let key_images = vec![([1u8; 32], 100u64), ([2u8; 32], 200u64)];
-        let cluster_wealth = vec![(1u64, 1000u64), (2u64, 2000u64)];
+        let cluster_wealth = vec![(1u64, 1000u128), (2u64, 2000u128)];
 
         let snapshot = UtxoSnapshot::new(
             1000,

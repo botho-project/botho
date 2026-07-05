@@ -75,10 +75,17 @@ fn effective_cluster_wealth_from_outputs(
             // rejected from the mempool with a LedgerError rather than admitted
             // at a fee computed from bogus zero wealth. The happy path is
             // unchanged.
+            // `get_cluster_wealth` is now u128 (16-byte accumulator, #626).
+            // The mempool progressive-fee API (`FeeConfig::cluster_factor`) still
+            // takes u64 — its widening to u128 is PR 3 of #626 — so clamp here.
+            // Clamping also bounds `value_fraction * global_wealth` away from a
+            // u128 overflow (both operands can now approach u64::MAX). Relay
+            // policy only; deterministic; the u64 ceiling persists until PR 3.
             let global_wealth = ledger
                 .get_cluster_wealth(entry.cluster_id.0)
-                .map_err(|e| format!("get_cluster_wealth({}): {}", entry.cluster_id.0, e))?;
-            total_weighted_wealth += value_fraction * global_wealth as u128;
+                .map_err(|e| format!("get_cluster_wealth({}): {}", entry.cluster_id.0, e))?
+                .min(u64::MAX as u128);
+            total_weighted_wealth += value_fraction * global_wealth;
         }
     }
 
@@ -1424,7 +1431,7 @@ mod tests {
             crate::ledger::ChainState::default(),
             vec![whale_utxo],
             vec![],
-            vec![(1, whale_amount)],
+            vec![(1, whale_amount as u128)],
         )
         .unwrap();
         ledger.load_from_snapshot(&snapshot, None).unwrap();
@@ -2203,7 +2210,7 @@ mod tests {
         // (amount, created_at, cluster_id (0 == background), seed byte)
         specs: &[(u64, u64, u64, u8)],
         tip_height: u64,
-        cluster_wealth: &[(u64, u64)],
+        cluster_wealth: &[(u64, u128)],
     ) -> Vec<RingMember> {
         use crate::{
             ledger::{ChainState, UtxoSnapshot},
