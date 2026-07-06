@@ -88,6 +88,7 @@ go_build_artifacts/
 *.private
 .loom/state.json
 .loom/worktrees/
+.loom/sweep-checkpoint/
 .loom/*.log
 .loom/*.sock
 .loom-in-use
