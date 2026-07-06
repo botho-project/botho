@@ -60,6 +60,44 @@ const MAX_CACHE_TTL: Duration = Duration::from_secs(3600);
 /// Default TTL when DNS doesn't provide one
 const DEFAULT_TTL: Duration = Duration::from_secs(300);
 
+/// Upper bound on a single DNS seed lookup.
+///
+/// Mitigation for RUSTSEC-2026-0118/-0119 (hickory-proto 0.25: DNS-response
+/// triggered CPU exhaustion / unbounded loop). A hostile or hanging DNS
+/// response must not stall node bootstrap: on timeout the caller falls back
+/// to hardcoded seeds via the existing [`DnsSeedError::DnsQuery`] path.
+///
+/// Note: `tokio::time::timeout` cancels at await points, so this bounds the
+/// hang and caps the blast radius but cannot preempt a purely synchronous CPU
+/// spin between awaits. Tracking note (#659): the full fix is the
+/// libp2p 0.57+ / hickory-proto 0.26 upgrade — when libp2p ships a release on
+/// hickory 0.26, bump it, drop the direct `hickory-resolver = "0.25"` pin in
+/// `botho/Cargo.toml`, and remove the RUSTSEC-2026-0118/-0119 ignores from
+/// `deny.toml`.
+const DNS_QUERY_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Drive a DNS lookup future with a hard upper bound.
+///
+/// Production callers pass [`DNS_QUERY_TIMEOUT`]; the duration is a parameter
+/// so tests can prove the bound with a tiny timeout instead of sleeping.
+/// Maps both a timeout and an inner lookup failure into
+/// [`DnsSeedError::DnsQuery`], which callers already handle by falling back to
+/// hardcoded seeds.
+async fn lookup_with_timeout<F, T, E>(timeout: Duration, fut: F) -> Result<T, DnsSeedError>
+where
+    F: std::future::Future<Output = Result<T, E>>,
+    E: std::fmt::Display,
+{
+    match tokio::time::timeout(timeout, fut).await {
+        Ok(Ok(response)) => Ok(response),
+        Ok(Err(e)) => Err(DnsSeedError::DnsQuery(format!("DNS lookup failed: {}", e))),
+        Err(_elapsed) => Err(DnsSeedError::DnsQuery(format!(
+            "DNS lookup timed out after {:?}",
+            timeout
+        ))),
+    }
+}
+
 /// Cached seed entries with expiration
 #[derive(Debug, Clone)]
 struct CachedSeeds {
@@ -163,10 +201,7 @@ impl DnsSeedDiscovery {
         )
         .build();
 
-        let response = resolver
-            .txt_lookup(domain)
-            .await
-            .map_err(|e| DnsSeedError::DnsQuery(format!("DNS lookup failed: {}", e)))?;
+        let response = lookup_with_timeout(DNS_QUERY_TIMEOUT, resolver.txt_lookup(domain)).await?;
 
         let mut peers = Vec::new();
 
@@ -443,6 +478,58 @@ mod tests {
         discovery.invalidate_cache();
 
         assert!(!discovery.is_cache_valid());
+    }
+
+    /// A lookup that never resolves must error out at the timeout bound
+    /// instead of hanging bootstrap (#659, RUSTSEC-2026-0118/-0119).
+    ///
+    /// Uses a tiny timeout (the helper is duration-parameterised; production
+    /// passes `DNS_QUERY_TIMEOUT`) so the test completes in milliseconds
+    /// without tokio's `test-util` feature.
+    #[tokio::test]
+    async fn test_lookup_with_timeout_bounds_hanging_lookup() {
+        let bound = Duration::from_millis(25);
+        let start = Instant::now();
+
+        let result: Result<(), DnsSeedError> =
+            lookup_with_timeout(bound, std::future::pending::<Result<(), std::io::Error>>()).await;
+
+        match result {
+            Err(DnsSeedError::DnsQuery(msg)) => {
+                assert!(
+                    msg.contains("timed out"),
+                    "expected timeout message, got: {msg}"
+                );
+            }
+            other => panic!("expected DnsQuery timeout error, got {other:?}"),
+        }
+
+        // The bound fired: a never-resolving lookup returned promptly rather
+        // than hanging (generous ceiling to avoid CI-scheduling flakiness).
+        assert!(start.elapsed() >= bound);
+        assert!(start.elapsed() < Duration::from_secs(5));
+    }
+
+    #[tokio::test]
+    async fn test_lookup_with_timeout_passes_through_success() {
+        let result =
+            lookup_with_timeout(DNS_QUERY_TIMEOUT, async { Ok::<_, std::io::Error>(42u32) }).await;
+        assert_eq!(result.unwrap(), 42);
+    }
+
+    #[tokio::test]
+    async fn test_lookup_with_timeout_maps_inner_error() {
+        let result: Result<u32, DnsSeedError> = lookup_with_timeout(DNS_QUERY_TIMEOUT, async {
+            Err::<u32, _>(std::io::Error::other("resolver exploded"))
+        })
+        .await;
+
+        match result {
+            Err(DnsSeedError::DnsQuery(msg)) => {
+                assert!(msg.contains("resolver exploded"), "got: {msg}");
+            }
+            other => panic!("expected DnsQuery error, got {other:?}"),
+        }
     }
 
     #[test]
