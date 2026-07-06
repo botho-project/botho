@@ -68,20 +68,10 @@ ignore = [
     # (rustls 0.23); the 0.102 line has no patched release, so clearing these
     # requires a sentry / rustls-0.23 bump, not a webpki bump. Tracked for a
     # sentry-upgrade follow-up.
-    "RUSTSEC-2026-0104",  # rustls-webpki reachable panic in CRL parsing (0.102.8 via sentry)
-    "RUSTSEC-2026-0049",  # rustls-webpki CRL distribution-point authority mismatch (0.102.8 via sentry)
-    "RUSTSEC-2026-0098",  # rustls-webpki URI name-constraint bypass (0.102.8 via sentry)
-    "RUSTSEC-2026-0099",  # rustls-webpki wildcard name-constraint bypass (0.102.8 via sentry)
-
-    # rand 0.8.5 / 0.9.2 - unsoundness only triggerable with a custom global
-    # logger that calls rand::rng(); not our usage. Fix exists (>=0.8.6 /
-    # >=0.9.3 / >=0.10.1) but needs a broad transitive bump; deferred to keep
-    # this PR's lockfile change limited to quinn-proto.
-    "RUSTSEC-2026-0097",  # rand rng() unsoundness under a custom global logger (deferred bump)
-
-    # anyhow 1.0.100 - Error::downcast_mut unsoundness. Fix in >=1.0.103;
-    # deferred (lockfile change scoped to quinn-proto in this PR).
-    "RUSTSEC-2026-0190",  # anyhow downcast_mut unsoundness (fix >=1.0.103, deferred)
+    "RUSTSEC-2026-0104",  # rustls-webpki reachable panic in CRL parsing (0.102.8 via sentry; sentry/rustls-0.23 bump tracked in #661)
+    "RUSTSEC-2026-0049",  # rustls-webpki CRL distribution-point authority mismatch (0.102.8 via sentry; sentry/rustls-0.23 bump tracked in #661)
+    "RUSTSEC-2026-0098",  # rustls-webpki URI name-constraint bypass (0.102.8 via sentry; sentry/rustls-0.23 bump tracked in #661)
+    "RUSTSEC-2026-0099",  # rustls-webpki wildcard name-constraint bypass (0.102.8 via sentry; sentry/rustls-0.23 bump tracked in #661)
 
     # bincode 1.3.3 - unmaintained; no safe upgrade (2.x is a different API).
     "RUSTSEC-2025-0141",  # bincode unmaintained (no safe upgrade)
