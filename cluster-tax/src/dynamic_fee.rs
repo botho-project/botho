@@ -46,9 +46,11 @@
 //! ```
 //!
 //! Under extreme conditions (network saturated + wealthy sender):
-//! - dynamic_base: up to 100x
+//! - dynamic_base: up to ~7.4x (e² at 100% fullness with a 75% target; the
+//!   `base_max: 100` ceiling is a safety clamp that the response curve never
+//!   reaches — see `response_k` docs and `test_full_blocks_strong_response`)
 //! - cluster_factor: up to 6x
-//! - Combined: up to 600x base fee
+//! - Combined: up to ~44x base fee (~7.4x congestion × 6x cluster factor)
 //!
 //! This is intentional egalitarian design: wealthy users pay significantly more
 //! during congestion, ensuring small users maintain network access.
