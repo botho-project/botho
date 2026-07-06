@@ -1,6 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
+import { StrictMode } from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
@@ -119,5 +120,64 @@ describe('ClaimPage unfurl-safety (#589): no network fetch before user action', 
     renderClaim()
     await screen.findByText(/no claim link found/i)
     expect(scanEphemeralMock).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * Fragment-survives-double-invoke regression (#654).
+ *
+ * The mount effect strips the fragment (#589). Before the fix, a SECOND effect
+ * invocation (React StrictMode double-invokes effects in dev; a service-worker
+ * reload in prod) read the now-empty `window.location.hash` and clobbered the
+ * parsed `ready` state with the "No claim link found." error — so EVERY valid
+ * claim link rendered "not found". Capturing the fragment once at state-init
+ * time makes the effect idempotent.
+ */
+describe('ClaimPage valid-link survives StrictMode double-invoke (#654)', () => {
+  beforeEach(() => {
+    cleanup()
+    scanEphemeralMock.mockReset()
+    sweepEphemeralMock.mockReset()
+    for (const spy of Object.values(adapterSpies)) spy.mockClear()
+    window.history.replaceState(null, '', '/claim')
+  })
+
+  afterEach(() => {
+    window.location.hash = ''
+  })
+
+  function renderClaimStrict() {
+    return render(
+      <StrictMode>
+        <MemoryRouter>
+          <ClaimPage />
+        </MemoryRouter>
+      </StrictMode>,
+    )
+  }
+
+  it('reaches the ready "Reveal" state (not "not found") under StrictMode', async () => {
+    setClaimHash()
+    renderClaimStrict()
+
+    // The parsed `ready` state must survive both effect invocations.
+    await screen.findByRole('button', { name: /reveal/i })
+    expect(screen.queryByText(/no claim link found/i)).toBeNull()
+    // Still unfurl-safe: no network touched just by reaching ready.
+    expect(scanEphemeralMock).not.toHaveBeenCalled()
+  })
+
+  it('still strips the secret from the address bar (preserves #589)', async () => {
+    setClaimHash()
+    renderClaimStrict()
+    await screen.findByRole('button', { name: /reveal/i })
+    expect(window.location.hash).toBe('')
+  })
+
+  it('still surfaces an invalid state for a malformed fragment under StrictMode', async () => {
+    window.location.hash = '#v1.not-valid-base58-secret'
+    renderClaimStrict()
+    // A malformed fragment must still reach the invalid state (no regression).
+    await screen.findByText(/no claim link found|not valid/i)
   })
 })

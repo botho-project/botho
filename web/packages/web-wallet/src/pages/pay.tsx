@@ -70,21 +70,30 @@ export function PayPage() {
   } = useWallet()
   const { network } = useNetwork()
 
+  // Capture the URL fragment SYNCHRONOUSLY, exactly once, at state-init time —
+  // BEFORE any effect runs. The mount effect below strips the fragment (#589),
+  // so a second effect invocation (React StrictMode double-invokes effects in
+  // dev) would otherwise read an empty hash and clobber the parsed state with
+  // the "not found" error. Reading it here makes the effect idempotent.
+  const [initialHash] = useState<string>(() => window.location.hash)
+
   const [parseState, setParseState] = useState<ParseState>('parsing')
   const [request, setRequest] = useState<PaymentRequest | null>(null)
   const [parseError, setParseError] = useState<string | null>(null)
 
-  // 1. Parse the fragment ONCE on mount, then strip it from the URL so the
-  //    requester's address does not linger in the address bar / history / logs.
+  // 1. Parse the captured fragment ONCE on mount, then strip it from the URL so
+  //    the requester's address does not linger in the address bar / history /
+  //    logs. Parsing `initialHash` (not the live `window.location.hash`) is what
+  //    makes this idempotent: on a StrictMode re-invoke the live hash is already
+  //    stripped, but `initialHash` still holds the original fragment.
   useEffect(() => {
-    const hash = window.location.hash
-    if (!hash || hash === '#') {
+    if (!initialHash || initialHash === '#') {
       setParseState('invalid')
       setParseError('No payment request found. The link should look like .../pay#…')
       return
     }
     try {
-      const parsed = parsePaymentRequestFragment(hash)
+      const parsed = parsePaymentRequestFragment(initialHash)
       setRequest(parsed)
       try {
         window.history.replaceState(null, '', window.location.pathname + window.location.search)
@@ -96,7 +105,7 @@ export function PayPage() {
       setParseState('invalid')
       setParseError(err instanceof Error ? err.message : 'This payment-request link is not valid.')
     }
-  }, [])
+  }, [initialHash])
 
   const explorerBase = network.explorerUrl
 
