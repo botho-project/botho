@@ -1,7 +1,21 @@
-import { useState } from 'react'
-import { Link, useLocation } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { Logo } from '@botho/ui'
-import { ArrowLeft, Book, Code, Shield, Zap, Globe, Terminal, Menu, X, Coins, Tag, Scale } from 'lucide-react'
+import {
+  AlertTriangle,
+  ArrowLeft,
+  Book,
+  Code,
+  Shield,
+  Zap,
+  Globe,
+  Terminal,
+  Menu,
+  X,
+  Coins,
+  Tag,
+  Scale,
+} from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
@@ -1256,8 +1270,31 @@ Botho implements a novel **progressive fee system** that taxes wealth concentrat
 
 export function DocsPage() {
   const location = useLocation()
+  const navigate = useNavigate()
+
+  // Path-style deep links (`/docs/<section>`) land here via the `/docs/*`
+  // catchall route in App.tsx. The hash form (`/docs#<section>`) is the
+  // canonical URL every internal link generates, so known path segments are
+  // redirected to it (history `replace` keeps Back from bouncing through the
+  // path form). Unknown segments fall through and render a visible
+  // "section not found" hint instead of silently showing Getting Started (#656).
+  const splat = useParams()['*'] ?? ''
+  const pathSegment = splat.replace(/\/+$/, '')
+  const normalizedSegment = pathSegment.toLowerCase()
+  // A hash always wins over a path segment (e.g. /docs/consensus#privacy).
+  const hasHash = location.hash.slice(1) !== ''
+  const segmentIsKnown = normalizedSegment !== '' && sections.some((s) => s.id === normalizedSegment)
+  const shouldRedirect = segmentIsKnown && !hasHash
+
+  useEffect(() => {
+    if (shouldRedirect) {
+      navigate(`/docs#${normalizedSegment}`, { replace: true })
+    }
+  }, [shouldRedirect, normalizedSegment, navigate])
+
   const hash = location.hash.slice(1) || 'getting-started'
   const currentSection = sections.find((s) => s.id === hash) || sections[0]
+  const notFoundSegment = !hasHash && pathSegment !== '' && !segmentIsKnown ? pathSegment : null
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
 
   const handleNavClick = () => {
@@ -1378,6 +1415,17 @@ export function DocsPage() {
       {/* Main content */}
       <main className="flex-1 md:ml-64">
         <div className="max-w-3xl mx-auto px-4 sm:px-8 md:px-12 py-8 md:py-16">
+          {notFoundSegment && (
+            <div
+              role="status"
+              className="mb-6 flex items-start gap-2 p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-200/90 text-sm"
+            >
+              <AlertTriangle size={16} className="shrink-0 mt-0.5 text-amber-400" />
+              <span>
+                Section &ldquo;{notFoundSegment}&rdquo; not found — showing Getting Started.
+              </span>
+            </div>
+          )}
           <div className="flex items-center gap-3 mb-6 md:mb-8">
             <currentSection.icon className="text-pulse shrink-0" size={28} />
             <h1 className="font-display text-2xl md:text-3xl font-bold">{currentSection.title}</h1>
