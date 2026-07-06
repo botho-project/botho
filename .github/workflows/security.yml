@@ -1,6 +1,20 @@
 name: Security
 
+# Runs cargo-deny as a supply-chain gate: advisories, licenses, bans, sources.
+#
+# Trigger note: unlike workspace-build.yml (which path-filters to `**.rs` etc.),
+# this job runs on EVERY pull request and every push to main. A security
+# advisory gate must not be path-filtered: RustSec advisories are published
+# continuously and can newly apply to dependencies that a given PR never
+# touches, so gating only on Rust/manifest changes would let the tree drift
+# out of compliance between dependency edits. `workflow_dispatch` is kept for
+# manual runs. cargo-deny only reads local files, so `contents: read` is
+# sufficient and no secrets are required.
+
 on:
+  pull_request:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:

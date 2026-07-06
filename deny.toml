@@ -42,6 +42,43 @@ ignore = [
     "RUSTSEC-2025-0100",
     # number_prefix - unmaintained, transitive from indicatif
     "RUSTSEC-2025-0119",
+
+    # --- Cycle-7 audit (issue #658) --------------------------------------
+    # Advisories firing against the live RustSec DB as of 2026-07-05 that have
+    # no in-semver fix available or whose fix is deferred. Each is justified
+    # below. The hickory/libp2p upgrade path is tracked in follow-up issue #659
+    # (Slice B); the DNS advisories are node-reachable and monitored there.
+
+    # hickory-proto 0.25.2 - node-reachable DNS resolver (libp2p-dns / mdns).
+    # Fix requires hickory >=0.26.1, blocked on the libp2p 0.56 -> 0.57 upgrade.
+    "RUSTSEC-2026-0119",  # hickory-proto O(n^2) CPU exhaustion on name compression (#659)
+    "RUSTSEC-2026-0118",  # hickory-proto NSEC3 unbounded loop - no fixed version exists; monitor (#659)
+
+    # quick-xml 0.38.4 - desktop-wallet only (tauri/plist), not node-reachable.
+    "RUSTSEC-2026-0194",  # quick-xml quadratic duplicate-attribute check (desktop-only)
+    "RUSTSEC-2026-0195",  # quick-xml unbounded namespace-declaration allocation (desktop-only)
+
+    # core2 0.4.0 - yanked/unmaintained, libp2p -> multihash transitive.
+    # No fix until the libp2p upgrade (#659). Warning-level.
+    "RUSTSEC-2026-0105",  # core2 unmaintained/yanked (libp2p transitive, #659)
+
+    # rustls-webpki 0.102.8 - fires only against the OLD 0.102 line pulled in
+    # via rustls 0.22.4 -> sentry 0.34.0 -> bth-common. The workspace's primary
+    # rustls-webpki 0.103.13 is NOT affected. Fixes land in the 0.103.x line
+    # (rustls 0.23); the 0.102 line has no patched release, so clearing these
+    # requires a sentry / rustls-0.23 bump, not a webpki bump. Tracked for a
+    # sentry-upgrade follow-up.
+    "RUSTSEC-2026-0104",  # rustls-webpki reachable panic in CRL parsing (0.102.8 via sentry; sentry/rustls-0.23 bump tracked in #661)
+    "RUSTSEC-2026-0049",  # rustls-webpki CRL distribution-point authority mismatch (0.102.8 via sentry; sentry/rustls-0.23 bump tracked in #661)
+    "RUSTSEC-2026-0098",  # rustls-webpki URI name-constraint bypass (0.102.8 via sentry; sentry/rustls-0.23 bump tracked in #661)
+    "RUSTSEC-2026-0099",  # rustls-webpki wildcard name-constraint bypass (0.102.8 via sentry; sentry/rustls-0.23 bump tracked in #661)
+
+    # bincode 1.3.3 - unmaintained; no safe upgrade (2.x is a different API).
+    "RUSTSEC-2025-0141",  # bincode unmaintained (no safe upgrade)
+
+    # rustls-pemfile 2.2.0 - unmaintained; no safe upgrade. Transitive via the
+    # reqwest / rustls TLS stack.
+    "RUSTSEC-2025-0134",  # rustls-pemfile unmaintained (no safe upgrade)
 ]
 
 [licenses]
@@ -77,8 +114,10 @@ exceptions = [
     { crate = "bth-consensus-scp", allow = ["GPL-3.0"] },
     { crate = "bth-consensus-scp-play", allow = ["GPL-3.0"] },
     { crate = "bth-consensus-scp-types", allow = ["GPL-3.0"] },
+    { crate = "bth-transaction-clsag", allow = ["GPL-3.0"] },
     { crate = "bth-util-logger-macros", allow = ["GPL-3.0"] },
     { crate = "bth-util-test-helper", allow = ["GPL-3.0"] },
+    { crate = "bth-wasm-signer", allow = ["GPL-3.0"] },
 ]
 
 [[licenses.clarify]]
