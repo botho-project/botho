@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { QRCodeSVG } from 'qrcode.react'
-import { Button, Card } from '@botho/ui'
+import { Button, Card, ModalOverlay } from '@botho/ui'
 import { QrCode, Copy, Check, AlertCircle, X, Link2 } from 'lucide-react'
 import { useWallet } from '../contexts/wallet'
 
@@ -48,7 +48,12 @@ export function ReceiveModal({
   }
 
   return (
-    <div className="fixed inset-0 bg-void/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 z-50">
+    // Shared dismissal policy (#655): backdrop click / Escape dismiss through
+    // handleClose so the copied state resets, same as the X / Done buttons.
+    <ModalOverlay
+      onDismiss={handleClose}
+      className="bg-void/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4"
+    >
       <Card className="w-full sm:max-w-md p-5 sm:p-6 rounded-t-2xl sm:rounded-2xl max-h-[92vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-5">
           <div className="flex items-center gap-2">
@@ -116,6 +121,6 @@ export function ReceiveModal({
           </div>
         )}
       </Card>
-    </div>
+    </ModalOverlay>
   )
 }

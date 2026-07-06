@@ -127,6 +127,52 @@ describe('SendModal self-send guard', () => {
   })
 })
 
+describe('SendModal dismissal (#655)', () => {
+  beforeEach(() => cleanup())
+
+  function getBackdrop(): HTMLElement {
+    return screen.getByRole('dialog')
+  }
+
+  it('closes on Escape', () => {
+    const { props } = setup()
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(props.onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('closes on backdrop click', () => {
+    const { props } = setup()
+    const backdrop = getBackdrop()
+    fireEvent.mouseDown(backdrop)
+    fireEvent.click(backdrop)
+    expect(props.onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not close on a click inside the panel', () => {
+    const { props } = setup()
+    const input = getAmountInput()
+    fireEvent.mouseDown(input)
+    fireEvent.click(input)
+    expect(props.onClose).not.toHaveBeenCalled()
+  })
+
+  it('does not close when a text-selection drag ends over the backdrop', () => {
+    const { props } = setup()
+    fireEvent.mouseDown(getAmountInput())
+    fireEvent.click(getBackdrop())
+    expect(props.onClose).not.toHaveBeenCalled()
+  })
+
+  it('suppresses backdrop and Escape dismissal while a send is in flight', () => {
+    const { props } = setup({ isSending: true })
+    const backdrop = getBackdrop()
+    fireEvent.mouseDown(backdrop)
+    fireEvent.click(backdrop)
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(props.onClose).not.toHaveBeenCalled()
+  })
+})
+
 describe('SendModal cluster fee factor display (#635)', () => {
   beforeEach(() => cleanup())
 

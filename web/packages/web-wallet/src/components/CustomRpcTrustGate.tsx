@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Card } from '@botho/ui'
+import { Card, ModalOverlay } from '@botho/ui'
 import { ShieldAlert, ShieldCheck, X, Link2 } from 'lucide-react'
 import { useNetwork } from '../contexts/network'
 
@@ -39,11 +39,14 @@ export function CustomRpcTrustGate() {
   }
 
   return (
-    <div
-      className="fixed inset-0 bg-void/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 z-50"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="rpc-trust-title"
+    // Shared dismissal policy (#655): backdrop click / Escape map to DECLINE —
+    // the safe default (keep the current node). Accepting a custom node must
+    // always be the explicit, deliberate action. Suppressed while connecting.
+    <ModalOverlay
+      onDismiss={declinePendingRpcLink}
+      dismissable={!busy}
+      ariaLabelledBy="rpc-trust-title"
+      className="bg-void/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4"
     >
       <Card className="w-full sm:max-w-md p-5 sm:p-6 rounded-t-2xl sm:rounded-2xl max-h-[92vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-4">
@@ -118,7 +121,7 @@ export function CustomRpcTrustGate() {
           </button>
         </div>
       </Card>
-    </div>
+    </ModalOverlay>
   )
 }
 

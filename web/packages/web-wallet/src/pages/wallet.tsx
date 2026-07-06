@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react'
 import { Link } from 'react-router-dom'
-import { Button, Card, Input, Logo } from '@botho/ui'
+import { Button, Card, Input, Logo, ModalOverlay } from '@botho/ui'
 import { createMnemonic12 } from '@botho/core'
 import { BalanceCard, TransactionList, SendModal, type SendFormData, type SendResult } from '@botho/features'
 import { useWallet } from '../contexts/wallet'
@@ -226,7 +226,12 @@ function SettingsModal({
   onClose: () => void
 }) {
   return (
-    <div className="fixed inset-0 bg-void/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 z-50">
+    // Shared dismissal policy (#655): backdrop click / Escape close, same as
+    // the explicit Close button.
+    <ModalOverlay
+      onDismiss={onClose}
+      className="bg-void/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4"
+    >
       <Card className="w-full sm:max-w-md p-5 sm:p-6 rounded-t-2xl sm:rounded-2xl">
         <div className="text-center mb-5 sm:mb-6">
           <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-pulse/10 flex items-center justify-center mx-auto mb-3 sm:mb-4">
@@ -298,7 +303,7 @@ function SettingsModal({
           </Button>
         </div>
       </Card>
-    </div>
+    </ModalOverlay>
   )
 }
 
@@ -504,7 +509,12 @@ function WalletDashboard() {
       )}
 
       {showResetConfirm && (
-        <div className="fixed inset-0 bg-void/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 z-50">
+        // Destructive confirm (#655): backdrop click / Escape dismiss to the
+        // safe Cancel path — never to the destructive Reset action.
+        <ModalOverlay
+          onDismiss={() => setShowResetConfirm(false)}
+          className="bg-void/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4"
+        >
           <Card className="w-full sm:max-w-md p-5 sm:p-6 rounded-t-2xl sm:rounded-2xl">
             <div className="text-center mb-5 sm:mb-6">
               <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-danger/10 flex items-center justify-center mx-auto mb-3 sm:mb-4">
@@ -522,7 +532,7 @@ function WalletDashboard() {
               </Button>
             </div>
           </Card>
-        </div>
+        </ModalOverlay>
       )}
     </div>
   )

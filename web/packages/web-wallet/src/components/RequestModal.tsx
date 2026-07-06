@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { QRCodeSVG } from 'qrcode.react'
-import { Button, Card, Input } from '@botho/ui'
+import { Button, Card, Input, ModalOverlay } from '@botho/ui'
 import { formatBTH, parseBTH } from '@botho/core'
 import { Download, Copy, Check, AlertCircle, X, QrCode } from 'lucide-react'
 import { useWallet } from '../contexts/wallet'
@@ -109,7 +109,12 @@ export function RequestModal({ isOpen, onClose }: { isOpen: boolean; onClose: ()
   }
 
   return (
-    <div className="fixed inset-0 bg-void/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 z-50">
+    // Shared dismissal policy (#655): backdrop click / Escape dismiss through
+    // handleClose so the form state is reset, same as the X / Done buttons.
+    <ModalOverlay
+      onDismiss={handleClose}
+      className="bg-void/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4"
+    >
       <Card className="w-full sm:max-w-md p-5 sm:p-6 rounded-t-2xl sm:rounded-2xl max-h-[92vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-5">
           <div className="flex items-center gap-2">
@@ -271,6 +276,6 @@ export function RequestModal({ isOpen, onClose }: { isOpen: boolean; onClose: ()
           </div>
         )}
       </Card>
-    </div>
+    </ModalOverlay>
   )
 }

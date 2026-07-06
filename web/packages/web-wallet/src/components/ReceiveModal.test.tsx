@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, cleanup } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 import { ReceiveModal } from './ReceiveModal'
 
 const TEST_ADDRESS = 'btho1qexampleaddress000000000000000000000000000deadbeef'
@@ -49,5 +49,30 @@ describe('ReceiveModal', () => {
     useWalletMock.mockReturnValue({ address: null })
     render(<ReceiveModal isOpen onClose={() => {}} />)
     expect(screen.getByText(/Unlock or create a wallet/i)).toBeDefined()
+  })
+
+  it('closes on backdrop click (#655)', () => {
+    const onClose = vi.fn()
+    render(<ReceiveModal isOpen onClose={onClose} />)
+    const backdrop = screen.getByRole('dialog')
+    fireEvent.mouseDown(backdrop)
+    fireEvent.click(backdrop)
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('closes on Escape (#655)', () => {
+    const onClose = vi.fn()
+    render(<ReceiveModal isOpen onClose={onClose} />)
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not close on a click inside the panel (#655)', () => {
+    const onClose = vi.fn()
+    render(<ReceiveModal isOpen onClose={onClose} />)
+    const field = screen.getByDisplayValue(TEST_ADDRESS)
+    fireEvent.mouseDown(field)
+    fireEvent.click(field)
+    expect(onClose).not.toHaveBeenCalled()
   })
 })
