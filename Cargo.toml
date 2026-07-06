@@ -146,7 +146,7 @@ retry = "2"
 schnorrkel-og = { version = "0.11.0-pre.0", default-features = false }
 secrecy = "0.8"
 semver = "1"
-sentry = { version = "0.34", default-features = false }
+sentry = { version = "0.46", default-features = false }
 serde = { version = "1", default-features = false }
 serde_derive = "1"
 serde_json = { version = "1", default-features = false, features = ["alloc"] }
