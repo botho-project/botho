@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Button, Card, Input } from '@botho/ui'
+import { Button, Card, Input, ModalOverlay } from '@botho/ui'
 import { MIN_PASSWORD_LENGTH, passwordStrength, type PasswordStrength } from '@botho/core'
 import { AlertCircle, Lock, RefreshCw } from 'lucide-react'
 
@@ -122,7 +122,14 @@ export function PasswordSettingsModal({
   }
 
   return (
-    <div className="fixed inset-0 bg-void/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 z-50">
+    // Shared dismissal policy (#655): backdrop click / Escape close, but are
+    // suppressed while the password re-wrap is saving so the operation can't
+    // be orphaned mid-flight (mirrors the disabled Cancel button).
+    <ModalOverlay
+      onDismiss={onClose}
+      dismissable={!isSaving}
+      className="bg-void/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4"
+    >
       <Card className="w-full sm:max-w-md p-5 sm:p-6 rounded-t-2xl sm:rounded-2xl">
         <div className="text-center mb-5 sm:mb-6">
           <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-pulse/10 flex items-center justify-center mx-auto mb-3 sm:mb-4">
@@ -179,6 +186,6 @@ export function PasswordSettingsModal({
           </div>
         </div>
       </Card>
-    </div>
+    </ModalOverlay>
   )
 }

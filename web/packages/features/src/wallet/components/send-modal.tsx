@@ -1,8 +1,8 @@
 import { useMemo, useState, useEffect } from 'react'
 import type { Balance, Contact } from '@botho/core'
 import { formatBTH, parseBTH, isValidAddress } from '@botho/core'
-import { Button, Input } from '@botho/ui'
-import { motion, AnimatePresence } from 'motion/react'
+import { Button, Input, ModalOverlay } from '@botho/ui'
+import { motion } from 'motion/react'
 import { AlertCircle, ChevronDown, ChevronUp, Loader2, Send, ShieldAlert, User, X, Zap } from 'lucide-react'
 
 export type SendPrivacyLevel = 'standard' | 'private'
@@ -249,21 +249,19 @@ export function SendModal({
   if (!isOpen) return null
 
   return (
-    <AnimatePresence>
+    // Shared dismissal policy (#655): backdrop click / Escape close the modal,
+    // suppressed while a send is in flight so an in-progress transaction can't
+    // be orphaned by an accidental dismissal.
+    <ModalOverlay
+      onDismiss={onClose}
+      dismissable={!isSending}
+      className="flex items-center justify-center bg-black/60 backdrop-blur-sm"
+    >
       <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-        className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
-        onClick={onClose}
+        initial={{ opacity: 0, scale: 0.95, y: 20 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        className="relative w-full max-w-md rounded-2xl border border-[--color-steel] bg-[--color-abyss] p-6 shadow-2xl"
       >
-        <motion.div
-          initial={{ opacity: 0, scale: 0.95, y: 20 }}
-          animate={{ opacity: 1, scale: 1, y: 0 }}
-          exit={{ opacity: 0, scale: 0.95, y: 20 }}
-          onClick={(e) => e.stopPropagation()}
-          className="relative w-full max-w-md rounded-2xl border border-[--color-steel] bg-[--color-abyss] p-6 shadow-2xl"
-        >
           {/* Close button */}
           <button
             onClick={onClose}
@@ -526,8 +524,7 @@ export function SendModal({
               )}
             </Button>
           </div>
-        </motion.div>
       </motion.div>
-    </AnimatePresence>
+    </ModalOverlay>
   )
 }

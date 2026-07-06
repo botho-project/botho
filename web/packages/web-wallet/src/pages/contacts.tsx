@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Button, Card, Input, Logo } from '@botho/ui'
+import { Button, Card, Input, Logo, ModalOverlay } from '@botho/ui'
 import { isValidAddress } from '@botho/core'
 import type { Contact } from '@botho/core'
 import {
@@ -397,7 +397,13 @@ function ContactEditor({
   }
 
   return (
-    <div className="fixed inset-0 bg-void/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 z-50">
+    // Shared dismissal policy (#655): backdrop click / Escape close, same as
+    // the X button; suppressed while a save/delete is in flight.
+    <ModalOverlay
+      onDismiss={onClose}
+      dismissable={!busy}
+      className="bg-void/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4"
+    >
       <Card className="w-full sm:max-w-md p-5 sm:p-6 rounded-t-2xl sm:rounded-2xl max-h-[92vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-5">
           <h3 className="font-display text-lg font-semibold">
@@ -508,6 +514,6 @@ function ContactEditor({
           )}
         </div>
       </Card>
-    </div>
+    </ModalOverlay>
   )
 }
