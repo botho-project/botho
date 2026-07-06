@@ -61,6 +61,13 @@ export function ClaimPage() {
   const adapter = useAdapter()
   const { network } = useNetwork()
 
+  // Capture the URL fragment SYNCHRONOUSLY, exactly once, at state-init time —
+  // BEFORE any effect runs. The mount effect below strips the fragment (#589),
+  // so a second effect invocation (React StrictMode double-invokes effects in
+  // dev) would otherwise read an empty hash and clobber the parsed 'ready' state
+  // with the "not found" error. Reading it here makes the effect idempotent.
+  const [initialHash] = useState<string>(() => window.location.hash)
+
   const [state, setState] = useState<ClaimState>('parsing')
   const [secret, setSecret] = useState<ClaimLinkSecret | null>(null)
   const [scan, setScan] = useState<EphemeralScan | null>(null)
@@ -82,14 +89,13 @@ export function ClaimPage() {
   //    before touching the node (see `handleReveal`). This is the unfurl-safety
   //    invariant: a preview/unfurl load can never trigger a scan or claim.
   useEffect(() => {
-    const hash = window.location.hash
-    if (!hash || hash === '#') {
+    if (!initialHash || initialHash === '#') {
       setState('invalid')
       setError('No claim link found. The link should look like .../claim#…')
       return
     }
     try {
-      const parsed = parseClaimLinkFragment(hash)
+      const parsed = parseClaimLinkFragment(initialHash)
       setSecret(parsed)
       // Strip the fragment so the secret is not visible/logged after reading.
       try {
@@ -103,7 +109,7 @@ export function ClaimPage() {
       setState('invalid')
       setError(err instanceof Error ? err.message : 'This claim link is not valid.')
     }
-  }, [])
+  }, [initialHash])
 
   // Explicit user action that begins the first network call (the scan). Keeping
   // the scan behind this gate is what makes a preview/unfurl fetch a no-op.

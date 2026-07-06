@@ -7,6 +7,7 @@
  * coming from the requester (not Botho), and (c) never treat a large
  * link-supplied amount as pre-approved.
  */
+import { StrictMode } from 'react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
@@ -134,5 +135,68 @@ describe('PayPage recipient + memo + amount hardening (#588)', () => {
     renderPay({ to: RECIPIENT, amount: 1n * BTH_MULTIPLIER })
 
     expect(screen.queryByText(/This link is requesting a large amount/i)).toBeNull()
+  })
+})
+
+/**
+ * Fragment-survives-double-invoke regression (#654).
+ *
+ * The mount effect strips the fragment (#589). Before the fix, a SECOND effect
+ * invocation (React StrictMode double-invokes effects in dev; a service-worker
+ * reload in prod) read the now-empty `window.location.hash` and clobbered the
+ * parsed `ready` state with the "No payment request found." error — so EVERY
+ * valid link rendered "not found". Capturing the fragment once at state-init
+ * time makes the effect idempotent.
+ */
+describe('PayPage valid-link survives StrictMode double-invoke (#654)', () => {
+  beforeEach(() => {
+    cleanup()
+    useWalletMock.mockReset()
+    window.location.hash = ''
+  })
+
+  function renderPayStrict(req: PaymentRequest) {
+    window.location.hash = '#' + buildPaymentRequestFragment(req)
+    return render(
+      <StrictMode>
+        <MemoryRouter>
+          <PayPage />
+        </MemoryRouter>
+      </StrictMode>,
+    )
+  }
+
+  it('renders the pay-confirm UI (not "not found") under StrictMode', () => {
+    useWalletMock.mockReturnValue(baseWallet())
+    renderPayStrict({ to: RECIPIENT, amount: 1n * BTH_MULTIPLIER })
+
+    // The parsed `ready` state must survive both effect invocations: the
+    // PayConfirm UI (recipient address + amount field) renders, not the error.
+    expect(screen.queryByText(/No payment request found/i)).toBeNull()
+    expect(screen.getByText(/Amount \(BTH\)/i)).toBeDefined()
+    expect(screen.getByText(RECIPIENT)).toBeDefined()
+  })
+
+  it('still strips the fragment from the address bar (preserves #589)', () => {
+    useWalletMock.mockReturnValue(baseWallet())
+    renderPayStrict({ to: RECIPIENT })
+
+    // The requester's address must not linger in the URL after reading.
+    expect(window.location.hash).toBe('')
+  })
+
+  it('still surfaces a parse error for a malformed fragment under StrictMode', () => {
+    useWalletMock.mockReturnValue(baseWallet())
+    window.location.hash = '#not-a-valid-payment-request-fragment'
+    render(
+      <StrictMode>
+        <MemoryRouter>
+          <PayPage />
+        </MemoryRouter>
+      </StrictMode>,
+    )
+
+    // A malformed fragment must still reach the invalid state (no regression).
+    expect(screen.getByText(/No payment request found|not valid/i)).toBeDefined()
   })
 })
