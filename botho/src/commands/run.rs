@@ -1019,6 +1019,7 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                                             .map(|s| s.height)
                                             .unwrap_or(0);
                                         let mut applied_any = false;
+                                        let mut had_failure = false;
                                         for block in &blocks {
                                             // Already have this block — skip it rather than
                                             // fail. A pure-overlap batch (all blocks known)
@@ -1031,6 +1032,7 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                                             if let Err(e) = node.add_block_from_network(block) {
                                                 warn!("Failed to add synced block {}: {}", block.height(), e);
                                                 sync_manager.on_failure(Some(&peer), e.to_string());
+                                                had_failure = true;
                                                 break;
                                             }
                                             applied_any = true;
@@ -1081,6 +1083,16 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                                                     }
                                                 }
                                             }
+                                        } else if !had_failure {
+                                            // Pure-overlap batch: every block was at or
+                                            // below our committed height, so nothing was
+                                            // applied and no failure was raised. Notify the
+                                            // sync manager so it can track consecutive
+                                            // zero-progress responses and, past a threshold,
+                                            // penalise a peer that persistently re-serves a
+                                            // range we already hold (#644). A one-off overlap
+                                            // stays below the threshold and is tolerated.
+                                            sync_manager.on_zero_progress(&peer);
                                         }
                                     }
                                 }
