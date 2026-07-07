@@ -238,6 +238,7 @@ export function setSigner(signer: WasmSigner): void {
 export {
   buildSendTransaction,
   buildOwnedHistory,
+  netOwnedHistory,
   spendableBalance,
   spendableOwnedOutputs,
   ownedOutputTargetKeys,
@@ -245,6 +246,7 @@ export {
   type BuildSendResult,
   type ChainOutputWithMeta,
   type HistoryEntry,
+  type NettedHistoryEntry,
   type HistoryRpc,
   type KeyImageSpentStatus,
   type SendRpc,

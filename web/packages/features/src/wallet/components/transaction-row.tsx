@@ -122,11 +122,20 @@ export function TransactionRow({
             {counterparty}
           </span>
           <span className="text-[--color-muted]">•</span>
+          {/* A zero timestamp means "no wall-clock time known" (client-side
+              history has only block heights, #675): show the height rather
+              than fabricating a relative time. */}
           <span
             className="text-xs text-[--color-dim]"
-            title={formatAbsoluteTime(tx.timestamp)}
+            title={tx.timestamp > 0 ? formatAbsoluteTime(tx.timestamp) : undefined}
           >
-            {formatRelativeTime(tx.timestamp)}
+            {tx.timestamp > 0
+              ? formatRelativeTime(tx.timestamp)
+              : tx.blockHeight != null
+                ? `Block #${tx.blockHeight}`
+                : tx.status === 'pending'
+                  ? 'Pending'
+                  : '—'}
           </span>
         </div>
       </div>

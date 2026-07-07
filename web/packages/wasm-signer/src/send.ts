@@ -299,6 +299,131 @@ export async function buildOwnedHistory(
   return entries
 }
 
+/**
+ * A history ROW ready for UI rendering: one row per user-visible event, with a
+ * unique id, rather than one row per owned output (#675).
+ */
+export interface NettedHistoryEntry {
+  /** Stable, unique row id (safe as a React key). */
+  id: string
+  type: 'receive' | 'send'
+  /**
+   * Net amount in picocredits, always positive. For a send this is the net
+   * outflow after subtracting same-block change; for a receive it is the sum
+   * of the tx's owned outputs.
+   */
+  amount: bigint
+  /** Block height of the event; 0 for a not-yet-mined (pending) spend. */
+  blockHeight: number
+  /** 'pending' while an outflow's key image is only in mempools. */
+  status: 'pending' | 'confirmed'
+}
+
+/**
+ * Collapse per-output {@link HistoryEntry} rows into per-event rows (#675).
+ *
+ * `buildOwnedHistory` intentionally reports raw per-output facts; rendered
+ * as-is they have three defects: (a) a spent output emits a receive AND a
+ * spend entry with the SAME txHash (duplicate React keys), (b) a multi-output
+ * receive emits one row per output with the same txHash, and (c) a send shows
+ * "-<whole input>" plus "+<change>" instead of the net outflow.
+ *
+ * Netting heuristic: the ring signature hides which tx consumed an output, so
+ * a spend only knows its `spentHeight`. Owned outputs RECEIVED in that same
+ * block are treated as the spend's change and subtracted — for a single-user
+ * wallet that is exactly the change output. If the subtraction would go
+ * negative (e.g. a genuine incoming payment landed in the same block), the
+ * receives are kept as their own rows instead, so an incoming amount is never
+ * silently swallowed.
+ */
+export function netOwnedHistory(entries: HistoryEntry[]): NettedHistoryEntry[] {
+  // Group receives by creating tx: one row per receiving tx.
+  const receiveByTx = new Map<string, { amount: bigint; blockHeight: number }>()
+  // Group spends by the block they were spent in (null = still pending).
+  const spendByHeight = new Map<number, bigint>()
+  let pendingSpend = 0n
+
+  for (const e of entries) {
+    if (e.type === 'receive') {
+      const g = receiveByTx.get(e.txHash)
+      if (g) {
+        g.amount += e.amount
+      } else {
+        receiveByTx.set(e.txHash, { amount: e.amount, blockHeight: e.blockHeight })
+      }
+    } else if (e.spentHeight != null) {
+      spendByHeight.set(e.spentHeight, (spendByHeight.get(e.spentHeight) ?? 0n) + e.amount)
+    } else {
+      pendingSpend += e.amount
+    }
+  }
+
+  const rows: NettedHistoryEntry[] = []
+  const consumedAsChange = new Set<string>()
+
+  for (const [height, spentSum] of spendByHeight) {
+    // Candidate change: receives that landed in the spend's block.
+    const changeTxs: string[] = []
+    let changeSum = 0n
+    for (const [txHash, g] of receiveByTx) {
+      if (g.blockHeight === height) {
+        changeTxs.push(txHash)
+        changeSum += g.amount
+      }
+    }
+    if (changeSum <= spentSum) {
+      for (const txHash of changeTxs) consumedAsChange.add(txHash)
+      rows.push({
+        id: `send-${height}`,
+        type: 'send',
+        amount: spentSum - changeSum,
+        blockHeight: height,
+        status: 'confirmed',
+      })
+    } else {
+      // More received than spent in this block: don't guess which part is
+      // change — show the gross spend and keep the receives visible.
+      rows.push({
+        id: `send-${height}`,
+        type: 'send',
+        amount: spentSum,
+        blockHeight: height,
+        status: 'confirmed',
+      })
+    }
+  }
+
+  if (pendingSpend > 0n) {
+    // The unmined spend's change is also unmined, so nothing to net against;
+    // the row corrects itself to the net amount once the tx confirms.
+    rows.push({
+      id: 'send-pending',
+      type: 'send',
+      amount: pendingSpend,
+      blockHeight: 0,
+      status: 'pending',
+    })
+  }
+
+  for (const [txHash, g] of receiveByTx) {
+    if (consumedAsChange.has(txHash)) continue
+    rows.push({
+      id: `recv-${txHash}`,
+      type: 'receive',
+      amount: g.amount,
+      blockHeight: g.blockHeight,
+      status: 'confirmed',
+    })
+  }
+
+  // Pending first, then newest first.
+  rows.sort((a, b) => {
+    if (a.status !== b.status) return a.status === 'pending' ? -1 : 1
+    return b.blockHeight - a.blockHeight
+  })
+  return rows
+}
+
 /** Inputs to {@link buildSendTransaction}. */
 export interface BuildSendParams {
   /** Account keys derived from the wallet mnemonic. */
