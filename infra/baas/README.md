@@ -26,11 +26,15 @@ recipe in `infra/seed/` and `infra/faucet/`:
 ## What it does (idempotent, logged to `/var/log/botho-rig-bootstrap.log`)
 
 1. **Install deps** — nginx, certbot, curl, jq, ca-certificates.
-2. **Download the prebuilt `botho` linux-aarch64 binary** from
-   `BOTHO_BINARY_URL` (the `binaries-linux-aarch64` release artifact; never
-   built from source on the box, which is slow / OOM-prone). Optional
-   `BOTHO_BINARY_SHA256` (the `linux-aarch64` line from the `release-checksums`
-   artifact) is verified; the file is checked to be `aarch64`.
+2. **Download the prebuilt `botho` linux-aarch64 binary** — from
+   `BOTHO_BINARY_URL` if set (the release tarball
+   `botho-vX.Y.Z-linux-aarch64.tar.gz`, or a bare-binary mirror), else reuse an
+   already-installed `/usr/local/bin/botho`, else **resolve the latest GitHub
+   release automatically** and checksum-pin it. Never built from source on the
+   box (slow / OOM-prone). Tarballs are extracted (`botho` member); optional
+   `BOTHO_BINARY_SHA256` (the `botho` line of `checksums-linux-aarch64.txt`)
+   is verified against the (extracted) binary, which is also checked to be
+   `aarch64` and installed mode `0755`.
 3. **Generate identity + config** — a per-rig 24-word wallet mnemonic and
    `~/.botho/testnet/config.toml` (testnet, RandomX minting on, faucet off,
    `quorum.mode = recommended` / `min_peers = 1`, `bootstrap_peers = []`,
@@ -56,8 +60,9 @@ recipe in `infra/seed/` and `infra/faucet/`:
 
 | Variable              | Required | Default            | Purpose |
 |-----------------------|----------|--------------------|---------|
-| `BOTHO_BINARY_URL`    | yes\*    | —                  | URL to the prebuilt linux-aarch64 `botho` binary — the `binaries-linux-aarch64` release artifact (see **Binary source** below). \*Not required on an idempotent re-run if `/usr/local/bin/botho` already exists. |
-| `BOTHO_BINARY_SHA256` | no       | —                  | Expected sha256; verified if set. Pass the `linux-aarch64` line from the release's `release-checksums` artifact to pin the exact published build. |
+| `BOTHO_BINARY_URL`    | no       | latest GitHub release | URL to the prebuilt linux-aarch64 build: the release tarball `botho-vX.Y.Z-linux-aarch64.tar.gz` (canonical since v0.3.0; the `botho` member is extracted) or a bare `botho` binary (S3/R2 mirror, legacy). When unset, an existing `/usr/local/bin/botho` is reused (idempotent re-run), else the latest GitHub release's tarball is resolved via the GitHub API (see **Binary source** below). |
+| `BOTHO_BINARY_SHA256` | no       | auto-pinned in latest-release mode | Expected sha256 of the `botho` **binary**; verified if set. Pass the `botho` line of the release asset `checksums-linux-aarch64.txt` (per-binary digests of the **extracted** files — the tarball's own digest is not published; do **not** use `SHA256SUMS.txt`, which mixes all platforms unlabelled). In bare-binary mode the downloaded file itself is verified. |
+| `BOTHO_REPO`          | no       | `botho-project/botho` | GitHub `owner/repo` used for latest-release resolution. |
 | `RIG_ID`              | no       | —                  | Short opaque rig id (e.g. `abc123`). When set and `RIG_HOSTNAME` is unset, the hostname is derived as `rig-<RIG_ID>.<RIG_DOMAIN>`. Recorded in `rig-info.txt`. |
 | `RIG_DOMAIN`          | no       | `testnet.botho.io` | Zone for `rig-<RIG_ID>` hostnames; combined with `RIG_ID` to derive `RIG_HOSTNAME`. |
 | `RIG_HOSTNAME`        | no       | —                  | Public hostname, e.g. `rig-abc123.testnet.botho.io`. Takes precedence over `RIG_ID`/`RIG_DOMAIN`. If neither is set, public nginx/TLS is skipped (RPC still on `localhost:17101`). |
@@ -91,30 +96,49 @@ journalctl -u botho -f
 ### 1. Binary source (`BOTHO_BINARY_URL`)
 
 The rig **downloads the prebuilt arm64 binary** — it never builds from source on
-the box (t4g release builds are slow and RandomX-linked crates can OOM). The
-canonical source is the **`binaries-linux-aarch64`** artifact built by
-`.github/workflows/release.yml` (target `aarch64-unknown-linux-gnu`), and the
-matching checksum is the `linux-aarch64/...` line in the **`release-checksums`**
-artifact (`all-checksums.txt`).
+the box (t4g release builds are slow and RandomX-linked crates can OOM).
 
-However, the latest GitHub release (`v0.2.0`) ships **no downloadable asset** —
-the workflow produces the artifact, but the operator hasn't attached/mirrored a
-GET-able copy. So the bootstrap **cannot resolve a URL on its own**; it consumes
-`BOTHO_BINARY_URL` (and, ideally, `BOTHO_BINARY_SHA256`).
+Since **v0.3.0** (2026-07-05) the canonical source is the **GitHub release
+asset** published by `.github/workflows/release.yml`:
 
-**#458 (P6.2) must publish the current `linux-aarch64` `botho` artifact and pass
-its URL + checksum**, for example:
+- `botho-vX.Y.Z-linux-aarch64.tar.gz` — gzip tarball with top-level members
+  `botho`, `botho-wallet`, `botho-exchange-scanner` (mode `0644` inside the
+  archive; the bootstrap extracts `botho` and installs it `0755`).
+- `checksums-linux-aarch64.txt` — sha256 digests of each **extracted binary**
+  (one per line). **The tarball's own digest is published nowhere**, so in
+  tarball mode `BOTHO_BINARY_SHA256` is compared against the extracted `botho`.
+- Do **not** verify against `SHA256SUMS.txt`: it is an unlabelled concatenation
+  of every platform's checksums, so `botho` appears once per platform with
+  conflicting digests. Always use `checksums-<platform>.txt`.
 
-- On a release tag, attach the `binaries-linux-aarch64` binary to the GitHub
-  release and use the asset's download URL; pass the matching `linux-aarch64`
-  sha256 from `release-checksums` as `BOTHO_BINARY_SHA256`; or
-- Build via `scripts/build-release.sh` (or the `release.yml` workflow on a tag),
-  then mirror `target/aarch64-unknown-linux-gnu/release/botho` to an S3/R2 object
-  the rig can `GET`, and pass that object URL as `BOTHO_BINARY_URL`.
+The bootstrap resolves the binary in this order (Step 2 of the script):
 
-Interim stand-in (used for the live verification of this PR): copy the binary
-already running on a live seed (it is the exact network build) to a temporary
-HTTP location and pass that URL — see the verification notes in the PR.
+1. **Explicit `BOTHO_BINARY_URL`** — the release tarball URL, or a bare
+   aarch64 `botho` binary (e.g. an S3/R2 mirror object; legacy path, still
+   supported — in that mode the sha256 is of the downloaded file itself).
+2. **Existing `/usr/local/bin/botho`** — reused on idempotent re-runs; no
+   network access is attempted.
+3. **Latest GitHub release fallback** — resolves the newest release of
+   `BOTHO_REPO` via `https://api.github.com/repos/<repo>/releases/latest`,
+   downloads `botho-<tag>-linux-aarch64.tar.gz`, and (when
+   `BOTHO_BINARY_SHA256` is unset) auto-pins the `botho` digest from the same
+   release's `checksums-linux-aarch64.txt`. If the GitHub API is unreachable,
+   the script fails with instructions to pass `BOTHO_BINARY_URL` explicitly.
+
+So the provisioner (#458 P6.2) may omit both variables entirely (track the
+latest release), or pin an exact build:
+
+```bash
+export BOTHO_BINARY_URL="https://github.com/botho-project/botho/releases/download/v0.3.0/botho-v0.3.0-linux-aarch64.tar.gz"
+# the `botho` line of that release's checksums-linux-aarch64.txt:
+export BOTHO_BINARY_SHA256="019f31e8e29cf482567be1c51f65d499aeffda1b63f57098a99106a31053aab1"
+```
+
+> **Obsolete guidance (pre-v0.3.0):** earlier releases (≤ `v0.2.0`) shipped no
+> downloadable assets, which forced an interim "copy the binary from a live
+> seed to a temporary HTTP location" stand-in. That workaround is no longer
+> needed and must not be used — release assets are the canonical source
+> (see #638, "prefer release artifacts in deploys").
 
 ### 2. DNS pre-creation (`RIG_HOSTNAME` / `RIG_ID`)
 
@@ -133,8 +157,10 @@ DNS-less local testing use `TLS_MODE=skip`.
 export RIG_ID="abc123"                 # -> rig-abc123.testnet.botho.io
 export REGION="us-west-2"
 export TIER="t4g.medium"
-export BOTHO_BINARY_URL="https://artifacts.botho.io/botho/<rev>/botho-aarch64"
-export BOTHO_BINARY_SHA256="<linux-aarch64 sha256 from release-checksums>"
+# Binary: omit both exports to track the latest GitHub release (auto-pinned
+# from checksums-linux-aarch64.txt), or pin an exact release build:
+export BOTHO_BINARY_URL="https://github.com/botho-project/botho/releases/download/v0.3.0/botho-v0.3.0-linux-aarch64.tar.gz"
+export BOTHO_BINARY_SHA256="<the 'botho' line of that release's checksums-linux-aarch64.txt>"
 export MINT_THREADS=1
 # ... then the contents of rig-bootstrap.sh ...
 ```
@@ -150,3 +176,79 @@ the instance's user-data. cloud-init runs it as root on first boot.)
 - `t4g.medium` (arm64, 2 vCPU, ~4 GB; RandomX needs ~2 GB), Ubuntu 24.04 arm64.
 - Security group must allow inbound `17100` (gossip), `80`/`443` (nginx/ACME),
   and `22` only for break-glass (the bootstrap needs no inbound SSH).
+
+## Operator validation runbook (protocol 4.0.0 / release-asset flow)
+
+> **Status: pending live validation.** This runbook is the end-to-end check for
+> issue #652 — execute it after any change to the binary-acquisition flow (and
+> after protocol resets) and record the results on the tracking issue. It
+> requires AWS access and is **not** exercised by CI.
+
+### 1. Launch
+
+Launch a fresh instance (matching the provisioner's parameters, #502):
+
+- **AMI**: Ubuntu 24.04 LTS arm64 (`ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-arm64-server-*`).
+- **Type**: `t4g.medium`; root volume ≥ 16 GB gp3.
+- **Security group**: inbound `17100/tcp` (gossip), `80`/`443` (only if testing
+  TLS), `22` for break-glass.
+- **User data**: the exports below followed by the full contents of
+  `rig-bootstrap.sh`:
+
+```bash
+#!/usr/bin/env bash
+export TIER="t4g.medium"
+export TLS_MODE="skip"       # DNS-less validation; use RIG_ID + webroot to also test TLS
+# No BOTHO_BINARY_URL / BOTHO_BINARY_SHA256: exercises the latest-release
+# resolution + auto checksum pinning (the default provisioner path).
+# ... contents of rig-bootstrap.sh ...
+```
+
+### 2. Verify provisioning
+
+SSH in (break-glass) and check:
+
+```bash
+sudo tail -50 /var/log/botho-rig-bootstrap.log
+# Expect: "latest release: vX.Y.Z", "pinned sha256 from checksums-linux-aarch64.txt: ...",
+#         "gzip tarball detected; extracting 'botho' member", "sha256 verified: ...",
+#         "installed botho (aarch64)", "=== Botho rig bootstrap complete ==="
+ls -l /usr/local/bin/botho      # mode 0755
+systemctl is-active botho       # active
+```
+
+### 3. Verify the node joined protocol-4.0.0 testnet and mints
+
+```bash
+# Network / sync / peers / minting (node_getStatus):
+curl -s -X POST http://localhost:17101 -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","method":"node_getStatus","params":{},"id":1}' \
+  | jq '{network:.result.network, height:.result.chainHeight, peers:.result.peerCount,
+         synced:.result.synced, syncStatus:.result.syncStatus,
+         mintingActive:.result.mintingActive, nodeVersion:.result.nodeVersion}'
+
+# Wire-protocol version (node_getIdentity — protocolVersion is NOT in node_getStatus):
+curl -s -X POST http://localhost:17101 -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","method":"node_getIdentity","params":{},"id":1}' \
+  | jq '{protocolVersion:.result.protocolVersion, network:.result.network,
+         dnsSeedDomain:.result.dnsSeedDomain}'
+```
+
+Pass criteria (record actual values on the tracking issue):
+
+- [ ] `network` = `botho-testnet` (both calls).
+- [ ] `protocolVersion` = `4.0.0`.
+- [ ] `peerCount` ≥ 1 within a few minutes — peers discovered via DNS-seed
+      discovery (`seeds.testnet.botho.io`; seed/seed2/faucet). No
+      `BOOTSTRAP_PEERS` needed.
+- [ ] `synced` = `true` and `chainHeight` tracks the live cluster tip
+      (compare against a seed's `/rpc`).
+- [ ] `mintingActive` = `true` (RandomX; 1 thread by default) and, after a
+      while, `journalctl -u botho` shows minting activity with no restarts.
+
+### 4. Idempotency spot-check
+
+Re-run the script on the same box (`sudo bash rig-bootstrap.sh` with the same
+env): Step 2 must log `reusing existing /usr/local/bin/botho (idempotent
+re-run)` (no download/API call), the wallet mnemonic must be preserved, and the
+service must come back healthy.
