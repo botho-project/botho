@@ -138,7 +138,18 @@ fn compute_ring_centroid(
 ) -> bth_transaction_types::ClusterTagVector {
     use bth_transaction_types::{ClusterId, ClusterTagVector};
 
-    let total_value: u64 = ring_tags.iter().map(|(_, v)| *v).sum();
+    // Ring member values are attacker-influenced (the sender picks which UTXOs
+    // decoy the ring), so this sum must saturate: a plain `.sum()` panics on
+    // overflow once `overflow-checks = true` is on the release profile (#663).
+    // Saturation is semantics-preserving here — `total_value` is only used as
+    // the normalization denominator for a heuristic tag-similarity score (never
+    // a consensus value), and the per-cluster mass accumulation below already
+    // widens to `u128`, so a saturated `u64::MAX` denominator stays finite,
+    // stays nonzero, and merely bounds the (ratio-based) centroid rather than
+    // crashing the node's mempool-admission path.
+    let total_value: u64 = ring_tags
+        .iter()
+        .fold(0u64, |acc, (_, v)| acc.saturating_add(*v));
     if total_value == 0 {
         return ClusterTagVector::empty();
     }
@@ -1233,9 +1244,17 @@ impl Mempool {
         self.txs.is_empty()
     }
 
-    /// Get total fees of all pending transactions
+    /// Get total fees of all pending transactions.
+    ///
+    /// Saturating: admitted fees are balance-validated (bounded by real input
+    /// value), but total picocredit supply exceeds `u64::MAX`, so an extreme
+    /// aggregate could still overflow. This is a stats/RPC value — with
+    /// `overflow-checks = true` on the release profile (#663) an unchecked
+    /// `sum()` here could panic the node instead of clamping a statistic.
     pub fn total_fees(&self) -> u64 {
-        self.txs.values().map(|p| p.tx.fee).sum()
+        self.txs
+            .values()
+            .fold(0u64, |acc, p| acc.saturating_add(p.tx.fee))
     }
 
     /// Check if a transaction is in the mempool

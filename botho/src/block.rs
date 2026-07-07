@@ -570,8 +570,15 @@ impl Block {
     }
 
     /// Get total lottery payouts in this block.
+    ///
+    /// Saturating for the same reason as [`Block::total_fees`]: payouts in a
+    /// gossiped block are attacker-influenced, and with `overflow-checks =
+    /// true` on the release profile (#663) an unchecked `sum()` would panic
+    /// on a crafted block instead of letting validation reject it.
     pub fn total_lottery_payouts(&self) -> u64 {
-        self.lottery_outputs.iter().map(|o| o.payout).sum()
+        self.lottery_outputs
+            .iter()
+            .fold(0u64, |acc, o| acc.saturating_add(o.payout))
     }
 
     /// Compute the transaction root committed by the block header.
@@ -1956,6 +1963,19 @@ mod tests {
             reward, truncated_reward,
             "u128 path must differ from u64-truncated path at this supply",
         );
+    }
+
+    /// #663: with `overflow-checks = true` now on the release profile, the
+    /// reward path must stay panic-free at the extreme corner — max height
+    /// with a supply far past `u64::MAX`. The tail formula is pure `u128`
+    /// arithmetic whose intermediates (supply × bps) stay orders of magnitude
+    /// below `u128::MAX` at any reachable supply; this pins that invariant
+    /// under checked release builds (`cargo test --release`).
+    #[test]
+    fn test_block_reward_no_overflow_at_max_height_and_supply() {
+        let real_supply_cap: u128 = 1_220_000_000_000_000_000_000; // ~1.22e21 picocredits
+        let reward = calculate_block_reward(u64::MAX, real_supply_cap);
+        assert!(reward >= 1, "tail reward is floored at 1");
     }
 
     /// Phase-1 halving reward is height-driven and independent of supply, so

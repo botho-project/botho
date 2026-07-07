@@ -2474,7 +2474,10 @@ fn apply_lottery_to_block(
     block: crate::block::Block,
     shared_ledger: &SharedLedger,
 ) -> crate::block::Block {
-    let total_fees: u64 = block.transactions.iter().map(|tx| tx.fee).sum();
+    // Saturating (block.rs::total_fees): a plain sum() panics under
+    // release overflow-checks on this every-node externalize path before
+    // add_block's checked_block_fees can reject the block gracefully.
+    let total_fees: u64 = block.total_fees();
     let emission_share = block.minting_tx.lottery_emission_share();
 
     // Helper for error cases: burn only the fee burn share (the pool share

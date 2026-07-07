@@ -38,10 +38,18 @@ const MAX_FUTURE_TIMESTAMP_SECS: u64 = 2 * 60 * 60;
 /// fires for blocks we build (no externalize-then-reject halt).
 fn first_stale_transfer_tx(block: &Block) -> Option<usize> {
     let block_height = block.height();
+    // `created_at_height` is attacker-influenced (it arrives in a gossiped
+    // block, before signature validation), so the age bound must saturate:
+    // with `overflow-checks = true` on the release profile (#663) an unchecked
+    // `+` here would let a crafted `created_at_height` near `u64::MAX` panic
+    // every validating node. Saturation preserves the rule's semantics — a
+    // saturated sum is `u64::MAX`, which is never `< block_height`, so such a
+    // tx is simply "not stale" here and is rejected by the later gates (C3
+    // ring resolution) instead.
     block
         .transactions
         .iter()
-        .position(|tx| tx.created_at_height + MAX_TX_AGE < block_height)
+        .position(|tx| tx.created_at_height.saturating_add(MAX_TX_AGE) < block_height)
 }
 
 /// Consensus decay rate for the cluster-tag inflation guard (issue #576).
@@ -808,6 +816,18 @@ impl Ledger {
             ));
         }
 
+        // Fee-sum overflow guard (#599, #663). Per-tx fees are
+        // attacker-influenced, so accumulate with `checked_add` and reject on
+        // overflow with a typed error rather than wrapping silently or (under
+        // `overflow-checks = true`, which the release profile now carries)
+        // panicking the node. Runs here — right after the tx list is bound to
+        // the header (C4) and before the expensive gates — so a crafted
+        // overflow block is rejected early and deterministically: the check is
+        // a pure function of the block contents, so proposer and validators
+        // reach the same verdict (no fork). The validated sum is reused by the
+        // fee-accounting section below.
+        let block_fees: u64 = checked_block_fees(block)?;
+
         // C5 (issue #451): Deterministic height-based staleness backstop.
         //
         // Reject any block that contains a transfer tx that is too old relative
@@ -966,10 +986,9 @@ impl Ledger {
         // (audit cycle 6, M4). The lottery summary's burn amount was verified
         // against the pool accounting by `validate_block_lottery` above.
         //
-        // Fees are attacker-influenced, so accumulate with `checked_add` and
-        // reject on overflow rather than wrapping silently (release) or
-        // panicking (debug). See issue #599 (mirrors the #340 balance guard).
-        let block_fees: u64 = checked_block_fees(block)?;
+        // `block_fees` was already validated overflow-free by the fee-sum
+        // overflow guard up front (#599, #663 — mirrors the #340 balance
+        // guard).
         let actually_burned = block.lottery_summary.amount_burned;
         let new_total_fees_burned = state.total_fees_burned + actually_burned as u128;
 
@@ -3982,12 +4001,11 @@ mod tests {
     // #599: the block-fee accumulation in `add_block_inner` must reject a
     // fee-sum overflow with a typed error rather than wrapping silently
     // (release) or panicking (debug). `checked_block_fees` is the exact
-    // reduction `add_block_inner` invokes; we test it directly because driving
-    // an overflowing-fee block all the way to the fee-accounting line would
-    // require it to first pass every prior consensus gate (PoW, ring
-    // signatures, lottery validation), which an attacker cannot do for a
-    // u64::MAX fee total. This test is meaningful in BOTH build modes: the old
-    // `.sum()` panicked here in debug and wrapped to 1 in release.
+    // reduction `add_block_inner` invokes; this unit test pins the reduction
+    // directly, and `test_add_block_rejects_fee_overflow_block` below drives
+    // a crafted block through the real `add_block` path (#663). This test is
+    // meaningful in BOTH build modes: the old `.sum()` panicked here in debug
+    // and wrapped to 1 in release.
     #[test]
     fn test_checked_block_fees_rejects_overflow() {
         use crate::transaction::Transaction;
@@ -4020,6 +4038,62 @@ mod tests {
         ];
 
         assert_eq!(checked_block_fees(&block).unwrap(), 1000);
+    }
+
+    // #663 (overflow-checks in release): integration-level companion to
+    // `test_checked_block_fees_rejects_overflow`. A crafted gossiped block
+    // whose per-tx fees sum past `u64::MAX` must be rejected by the REAL
+    // block-acceptance path (`add_block`) with a clean typed
+    // `Err(LedgerError::FeeOverflow)` — never a node panic. With
+    // `overflow-checks = true` now set on the release profile, an unguarded
+    // `.sum()` on this path would abort the node instead of wrapping, so this
+    // test (run under `cargo test --release` in CI-equivalent verification)
+    // proves the guard fires before any unchecked arithmetic can.
+    //
+    // The block is honest on every gate that precedes the fee-sum guard
+    // (height, prev hash, minting-tx consistency, expected difficulty, PoW,
+    // expected reward, timestamps, tx_root) so the rejection observed is the
+    // fee-overflow rejection specifically, not an earlier structural one.
+    #[test]
+    fn test_add_block_rejects_fee_overflow_block() {
+        use crate::{block::calculate_block_reward, transaction::Transaction};
+        use bth_account_keys::AccountKey;
+        use rand::{rngs::StdRng, SeedableRng};
+
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+
+        // Make PoW trivially satisfiable so the crafted block reaches the
+        // fee-sum guard instead of stopping at the PoW gate.
+        ledger.set_difficulty(u64::MAX).unwrap();
+        let state = ledger.get_chain_state().unwrap();
+        let genesis = ledger.get_block(0).unwrap();
+
+        let mut rng = StdRng::seed_from_u64(663);
+        let minter = AccountKey::random(&mut rng);
+
+        // Two fees whose sum exceeds u64::MAX.
+        let txs = vec![
+            Transaction::new_stub_with_fee(u64::MAX),
+            Transaction::new_stub_with_fee(3),
+        ];
+        let block = Block::new_template_with_txs(
+            &genesis,
+            &minter.default_subaddress(),
+            state.difficulty,
+            calculate_block_reward(1, state.total_mined),
+            txs,
+        );
+
+        let result = ledger.add_block(&block);
+        assert!(
+            matches!(result, Err(LedgerError::FeeOverflow)),
+            "overflow-fee block must be rejected via Err(LedgerError::FeeOverflow), got {:?}",
+            result
+        );
+
+        // The rejected block must not have advanced the chain.
+        assert_eq!(ledger.get_chain_state().unwrap().height, 0);
     }
 
     #[test]

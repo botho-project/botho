@@ -224,6 +224,24 @@ opt-level = 3
 rpath = false
 lto = false
 debug-assertions = false
+# Panic-on-overflow backstop for consensus/economics arithmetic (#663).
+# Unchecked +/-/* on attacker-influenced values must never wrap silently in
+# production; hot paths use checked_/saturating_ ops and return typed errors,
+# and this flag protects future code that hasn't been hand-audited. Measured
+# cost on hash-dominated validation benches (pow_hash, verify_pow, block hash)
+# was within noise; see the PR for #663 for the full criterion numbers.
+# The `mobile` profiles inherit this. `bench` inherits `release`, so criterion
+# numbers reflect production codegen.
+overflow-checks = true
+
+# Exemption: curve25519-dalek's constant-time Ristretto/Ed25519 limb
+# arithmetic is audited upstream crypto, not the consensus/economics code the
+# backstop above targets, and compiling it with overflow checks measurably
+# regressed EC-heavy paths 20-30% (schnorr_prove/verify, cluster_generator,
+# committed-tag conservation proofs, MintingTx one-time keys — #663 bench
+# runs). Ring-signature and tag verification dominate block validation cost,
+# so the checks stay off for this one package. Botho's own crates keep them.
+[profile.release.package.curve25519-dalek]
 overflow-checks = false
 
 [profile.mobile]
