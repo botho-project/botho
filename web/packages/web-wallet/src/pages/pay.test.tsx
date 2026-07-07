@@ -31,6 +31,19 @@ vi.mock('../contexts/network', () => ({
 
 const ASYNC_NOOP = async () => {}
 
+// This environment's jsdom does not provide localStorage; mirror the mock used
+// by core's wallet.test.ts. WalletGate reads it via getWalletInfo (#673).
+const localStorageMock = (() => {
+  let store: Record<string, string> = {}
+  return {
+    getItem: (key: string) => store[key] ?? null,
+    setItem: (key: string, value: string) => { store[key] = value },
+    removeItem: (key: string) => { delete store[key] },
+    clear: () => { store = {} },
+  }
+})()
+Object.defineProperty(globalThis, 'localStorage', { value: localStorageMock })
+
 // Two distinct, structurally valid testnet addresses.
 const RECIPIENT = deriveAddressFromMnemonic(createMnemonic12(), 'testnet')
 const OWN = deriveAddressFromMnemonic(createMnemonic12(), 'testnet')
@@ -282,5 +295,89 @@ describe('PayPage WalletGate enforces the required-password policy (#672)', () =
     fireEvent.click(importBtn)
     await waitFor(() => expect(importWallet).toHaveBeenCalledTimes(1))
     expect(importWallet).toHaveBeenCalledWith(expect.any(String), VALID_PASSWORD)
+  })
+})
+
+/**
+ * WalletGate hydration + overwrite safety (#673).
+ *
+ * (1) On a cold `/pay` load the wallet context hydrates AFTER the gate mounts,
+ * so `mode` (initialized once) stayed 'create' even when the device holds a
+ * locked wallet — showing a fresh mnemonic with no path to unlock. (2) The
+ * create/import flows overwrote a stored wallet's seed with no warning.
+ */
+describe('PayPage WalletGate hydration + overwrite guard (#673)', () => {
+  const VALID_PASSWORD = 'correct-horse-battery'
+
+  beforeEach(() => {
+    cleanup()
+    useWalletMock.mockReset()
+    window.location.hash = ''
+    localStorageMock.clear()
+  })
+
+  it('flips to the unlock form when the context resolves to a locked wallet', () => {
+    // Pre-hydration: no wallet known yet -> gate mounts in create mode.
+    useWalletMock.mockReturnValue(
+      baseWallet({ hasWallet: false, isLocked: false, address: null }),
+    )
+    const view = renderPay({ to: RECIPIENT })
+    expect(screen.getByText(/Click to reveal/i)).toBeDefined()
+
+    // Context hydrates: this device has an encrypted (locked) wallet.
+    useWalletMock.mockReturnValue(baseWallet({ hasWallet: true, isLocked: true }))
+    view.rerender(
+      <MemoryRouter>
+        <PayPage />
+      </MemoryRouter>,
+    )
+
+    // The gate must now show the UNLOCK form, not a fresh mnemonic.
+    expect(screen.getByPlaceholderText(/Enter password/i)).toBeDefined()
+    expect(screen.queryByRole('button', { name: /Create & Continue/i })).toBeNull()
+  })
+
+  it('requires an explicit acknowledgement before creating over a stored wallet', () => {
+    // A wallet already sits in storage (context not hydrated yet — the guard
+    // must read storage directly).
+    localStorageMock.setItem('botho-wallet-mnemonic', 'opaque-vault-blob')
+    localStorageMock.setItem('botho-wallet-address', 'tbotho://1/ExistingAddr12345678')
+    localStorageMock.setItem('botho-wallet-encrypted', 'true')
+
+    const createWallet = vi.fn(ASYNC_NOOP)
+    useWalletMock.mockReturnValue(
+      baseWallet({ hasWallet: false, address: null, createWallet }),
+    )
+    renderPay({ to: RECIPIENT })
+
+    // Complete every OTHER requirement of the create flow.
+    fireEvent.click(screen.getByText(/Click to reveal/i))
+    fireEvent.click(
+      screen.getByRole('checkbox', { name: /written down my recovery phrase/i }),
+    )
+    fireEvent.change(screen.getByPlaceholderText(/^Password \(min/i), {
+      target: { value: VALID_PASSWORD },
+    })
+    fireEvent.change(screen.getByPlaceholderText(/Confirm password/i), {
+      target: { value: VALID_PASSWORD },
+    })
+
+    // The warning names the existing address and the button stays disabled.
+    expect(screen.getByText(/already has a wallet/i).textContent).toContain(
+      'tbotho://1/E',
+    )
+    const createBtn = screen.getByRole('button', {
+      name: /Create & Continue/i,
+    }) as HTMLButtonElement
+    expect(createBtn.disabled).toBe(true)
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /already has a wallet/i }))
+    expect(createBtn.disabled).toBe(false)
+  })
+
+  it('does not show the overwrite warning on a device with no stored wallet', () => {
+    useWalletMock.mockReturnValue(baseWallet({ hasWallet: false, address: null }))
+    renderPay({ to: RECIPIENT })
+    expect(screen.queryByText(/already has a wallet/i)).toBeNull()
   })
 })

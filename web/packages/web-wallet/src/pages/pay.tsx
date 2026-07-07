@@ -6,6 +6,8 @@ import {
   parseBTH,
   isValidAddress,
   createMnemonic12,
+  getWalletInfo,
+  shortenAddress,
   BTH_MULTIPLIER,
   type Contact,
 } from '@botho/core'
@@ -523,6 +525,24 @@ function WalletGate({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // The wallet context hydrates AFTER a cold mount (#673): the gate can mount
+  // with hasWallet=false / isLocked=false and only learn "a locked wallet
+  // exists" a tick later. `mode` is initialized once, so without this sync an
+  // encrypted-wallet user opening a pay link lands on the CREATE form with no
+  // path to unlock (the mode toggle is hidden while locked).
+  useEffect(() => {
+    if (isLocked) setMode('unlock')
+  }, [isLocked])
+
+  // Overwrite guard (#673): creating/importing while a wallet is already
+  // stored on this device silently replaces its seed — funds loss if it was
+  // not backed up. Read storage directly (not context state, which may not
+  // have hydrated yet) and require an explicit acknowledgement that names
+  // the existing address.
+  const [existingWallet] = useState(() => getWalletInfo())
+  const [overwriteAck, setOverwriteAck] = useState(false)
+  const overwriteBlocked = existingWallet.exists && !overwriteAck
+
   // unlock
   const [password, setPassword] = useState('')
   // create
@@ -552,7 +572,7 @@ function WalletGate({
   }
 
   const handleCreate = async () => {
-    if (!newPasswordValid) return
+    if (!newPasswordValid || overwriteBlocked) return
     setBusy(true)
     setError(null)
     try {
@@ -565,7 +585,7 @@ function WalletGate({
   }
 
   const handleImport = async () => {
-    if (!newPasswordValid) return
+    if (!newPasswordValid || overwriteBlocked) return
     setBusy(true)
     setError(null)
     try {
@@ -681,9 +701,27 @@ function WalletGate({
               onConfirmPassword={setConfirmNewPassword}
             />
           </div>
+          {existingWallet.exists && (
+            <label className="flex items-start gap-2 cursor-pointer p-3 rounded-lg bg-danger/10 border border-danger/20">
+              <input
+                type="checkbox"
+                checked={overwriteAck}
+                onChange={(e) => setOverwriteAck(e.target.checked)}
+                className="mt-0.5 w-4 h-4 accent-pulse shrink-0"
+              />
+              <span className="text-xs text-danger">
+                <strong className="font-semibold">
+                  This device already has a wallet
+                  {existingWallet.address ? ` (${shortenAddress(existingWallet.address)})` : ''}.
+                </strong>{' '}
+                Continuing replaces it and deletes its stored seed — any funds in
+                it are lost unless you have its recovery phrase backed up.
+              </span>
+            </label>
+          )}
           <Button
             onClick={handleCreate}
-            disabled={!revealed || !confirmed || !newPasswordValid || busy}
+            disabled={!revealed || !confirmed || !newPasswordValid || overwriteBlocked || busy}
             className="w-full justify-center"
           >
             {busy ? <Loader2 size={16} className="mr-2 animate-spin" /> : null}
@@ -715,9 +753,27 @@ function WalletGate({
               onConfirmPassword={setConfirmNewPassword}
             />
           </div>
+          {existingWallet.exists && (
+            <label className="flex items-start gap-2 cursor-pointer p-3 rounded-lg bg-danger/10 border border-danger/20">
+              <input
+                type="checkbox"
+                checked={overwriteAck}
+                onChange={(e) => setOverwriteAck(e.target.checked)}
+                className="mt-0.5 w-4 h-4 accent-pulse shrink-0"
+              />
+              <span className="text-xs text-danger">
+                <strong className="font-semibold">
+                  This device already has a wallet
+                  {existingWallet.address ? ` (${shortenAddress(existingWallet.address)})` : ''}.
+                </strong>{' '}
+                Continuing replaces it and deletes its stored seed — any funds in
+                it are lost unless you have its recovery phrase backed up.
+              </span>
+            </label>
+          )}
           <Button
             onClick={handleImport}
-            disabled={(wordCount !== 12 && wordCount !== 24) || !newPasswordValid || busy}
+            disabled={(wordCount !== 12 && wordCount !== 24) || !newPasswordValid || overwriteBlocked || busy}
             className="w-full justify-center"
           >
             {busy ? <Loader2 size={16} className="mr-2 animate-spin" /> : null}
