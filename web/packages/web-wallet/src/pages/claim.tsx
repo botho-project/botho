@@ -6,8 +6,10 @@ import {
   isValidAddress,
   formatBTH,
   createMnemonic12,
+  getWalletInfo,
   saveWallet,
   deriveAddress,
+  shortenAddress,
   type ClaimLinkSecret,
 } from '@botho/core'
 import {
@@ -84,6 +86,13 @@ export function ClaimPage() {
   const [confirmNewWalletPassword, setConfirmNewWalletPassword] = useState('')
   const newWalletPasswordValid = isPasswordValid(newWalletPassword, confirmNewWalletPassword)
   const persistingNewWallet = showNewWallet && createdMnemonic !== null
+  // Overwrite guard (#673): persisting the in-flow wallet would silently
+  // replace a wallet already stored on this device (funds loss if it was not
+  // backed up). Require an explicit acknowledgement naming the existing
+  // address before the claim can proceed with the new wallet.
+  const [existingWallet] = useState(() => getWalletInfo())
+  const [overwriteAck, setOverwriteAck] = useState(false)
+  const overwriteBlocked = persistingNewWallet && existingWallet.exists && !overwriteAck
 
   // Track whether we've already begun a sweep so a late re-scan can't downgrade
   // the state out from under the user.
@@ -179,6 +188,10 @@ export function ClaimPage() {
     }
     if (persistingNewWallet && !newWalletPasswordValid) {
       setError('Set a password for your new wallet before claiming.')
+      return
+    }
+    if (overwriteBlocked) {
+      setError('Confirm replacing the wallet already stored on this device before claiming.')
       return
     }
     setError(null)
@@ -343,6 +356,28 @@ export function ClaimPage() {
                         onConfirmPassword={setConfirmNewWalletPassword}
                       />
                     </div>
+                    {existingWallet.exists && (
+                      <label className="flex items-start gap-2 cursor-pointer p-3 rounded-lg bg-danger/10 border border-danger/20">
+                        <input
+                          type="checkbox"
+                          checked={overwriteAck}
+                          onChange={(e) => setOverwriteAck(e.target.checked)}
+                          className="mt-0.5 w-4 h-4 accent-pulse shrink-0"
+                        />
+                        <span className="text-xs text-danger">
+                          <strong className="font-semibold">
+                            This device already has a wallet
+                            {existingWallet.address
+                              ? ` (${shortenAddress(existingWallet.address)})`
+                              : ''}
+                            .
+                          </strong>{' '}
+                          Claiming with this NEW wallet replaces the stored one and
+                          deletes its seed — any funds in it are lost unless you
+                          have its recovery phrase backed up.
+                        </span>
+                      </label>
+                    )}
                   </div>
                 )}
 
@@ -358,7 +393,8 @@ export function ClaimPage() {
                   disabled={
                     state === 'sweeping' ||
                     !destination.trim() ||
-                    (persistingNewWallet && !newWalletPasswordValid)
+                    (persistingNewWallet && !newWalletPasswordValid) ||
+                    overwriteBlocked
                   }
                   className="w-full justify-center"
                 >

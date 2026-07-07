@@ -259,3 +259,70 @@ describe('ClaimPage in-flow wallet create persists ENCRYPTED (#672)', () => {
     expect(stored!.trim().split(/\s+/).length).toBe(1)
   }, 30000)
 })
+
+/**
+ * Overwrite guard for the in-flow "Create one" wallet (#673): claiming with a
+ * freshly created wallet on a device that ALREADY stores a wallet replaces the
+ * stored seed (funds loss). The claim must stay blocked until the recipient
+ * explicitly acknowledges the replacement, which names the existing address.
+ */
+describe('ClaimPage in-flow create requires overwrite acknowledgement (#673)', () => {
+  const VALID_PASSWORD = 'correct-horse-battery'
+
+  beforeEach(() => {
+    cleanup()
+    scanEphemeralMock.mockReset()
+    scanEphemeralMock.mockResolvedValue({
+      gross: 5_000_000_000_000n,
+      fee: 100_000_000n,
+      net: 4_900_000_000_000n,
+    })
+    sweepEphemeralMock.mockReset()
+    for (const spy of Object.values(adapterSpies)) spy.mockClear()
+    window.history.replaceState(null, '', '/claim')
+    localStorageMock.clear()
+  })
+
+  afterEach(() => {
+    window.location.hash = ''
+    localStorageMock.clear()
+  })
+
+  it('blocks the claim until the stored-wallet replacement is acknowledged', async () => {
+    // A wallet already sits in storage BEFORE the page loads.
+    localStorageMock.setItem('botho-wallet-mnemonic', 'opaque-vault-blob')
+    localStorageMock.setItem('botho-wallet-address', 'tbotho://1/ExistingAddr12345678')
+    localStorageMock.setItem('botho-wallet-encrypted', 'true')
+
+    setClaimHash()
+    renderClaim()
+
+    fireEvent.click(await screen.findByRole('button', { name: /reveal/i }))
+    fireEvent.click(await screen.findByRole('button', { name: /create one/i }))
+
+    // Password valid, destination pre-filled — only the overwrite ack missing.
+    fireEvent.change(screen.getByPlaceholderText(/^Password \(min/i), {
+      target: { value: VALID_PASSWORD },
+    })
+    fireEvent.change(screen.getByPlaceholderText(/Confirm password/i), {
+      target: { value: VALID_PASSWORD },
+    })
+
+    const claimBtn = screen.getByRole('button', { name: /^Claim / }) as HTMLButtonElement
+    expect(screen.getByText(/already has a wallet/i).textContent).toContain(
+      'tbotho://1/E',
+    )
+    expect(claimBtn.disabled).toBe(true)
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /already has a wallet/i }))
+    await waitFor(() => expect(claimBtn.disabled).toBe(false))
+  })
+
+  it('shows no overwrite warning when the device has no stored wallet', async () => {
+    setClaimHash()
+    renderClaim()
+    fireEvent.click(await screen.findByRole('button', { name: /reveal/i }))
+    fireEvent.click(await screen.findByRole('button', { name: /create one/i }))
+    expect(screen.queryByText(/already has a wallet/i)).toBeNull()
+  })
+})
