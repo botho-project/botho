@@ -37,6 +37,17 @@ const LIVE = process.env.BOTHO_LIVE === '1'
 
 const BASE_URL = process.env.BOTHO_LIVE_URL ?? 'https://wallet.botho.io'
 
+// A vite DEV server does not emit /sw.js or the precache manifest — only a
+// built bundle does. Skip the PWA assertions when pointed at local dev so a
+// local run isn't misleading (#676); force them with BOTHO_LIVE_EXPECT_PWA=1
+// when serving a production build locally (`vite preview`).
+const IS_LOCAL_DEV =
+  /^https?:\/\/(localhost|127\.0\.0\.1)/.test(BASE_URL) &&
+  process.env.BOTHO_LIVE_EXPECT_PWA !== '1'
+
+// Matches PasswordFields' placeholder (min length lives in @botho/core).
+const PASSWORD = 'live-smoke-password'
+
 // Known BIP39 test mnemonic — produces a deterministic testnet address. Never
 // holds real funds. Mirrors web/e2e/fixtures/test-data.ts TEST_MNEMONIC_12.
 const TEST_MNEMONIC_12 =
@@ -84,6 +95,10 @@ test.describe('Live smoke @ wallet.botho.io', () => {
   })
 
   test('PWA manifest + service worker are served', async ({ page, request }) => {
+    test.skip(
+      IS_LOCAL_DEV,
+      'dev server does not emit /sw.js — run against a built bundle or set BOTHO_LIVE_EXPECT_PWA=1',
+    )
     await page.goto(`${BASE_URL}/`, { timeout: NAV_TIMEOUT })
 
     // Manifest link is present in the document head and resolves to a 200.
@@ -130,11 +145,17 @@ test.describe('Live smoke @ wallet.botho.io', () => {
     await expect(trigger).toBeVisible({ timeout: UI_TIMEOUT })
     await trigger.click()
 
-    // The dropdown header + the three live ingress nodes.
+    // The dropdown header + the three live ingress nodes. Scope the row
+    // lookups to the dropdown container: the TRIGGER's accessible name also
+    // starts with the selected node's name ("Seed (validator) Testnet"), so an
+    // unscoped getByRole is a strict-mode violation once the menu is open.
+    const dropdown = page.locator('div.absolute', {
+      has: page.getByText(/Trusted RPC ingress/i),
+    })
     await expect(page.getByText(/Trusted RPC ingress/i)).toBeVisible()
-    const seed = page.getByRole('button', { name: /^Seed \(validator\)/ })
-    const seed2 = page.getByRole('button', { name: /^Seed 2 \(validator\)/ })
-    const faucetNode = page.getByRole('button', { name: /^Faucet node/ })
+    const seed = dropdown.getByRole('button', { name: /^Seed \(validator\)/ })
+    const seed2 = dropdown.getByRole('button', { name: /^Seed 2 \(validator\)/ })
+    const faucetNode = dropdown.getByRole('button', { name: /^Faucet node/ })
     await expect(seed).toBeVisible()
     await expect(seed2).toBeVisible()
     await expect(faucetNode).toBeVisible()
@@ -176,9 +197,11 @@ test.describe('Live smoke @ wallet.botho.io', () => {
     await page.getByRole('button', { name: 'Import Existing' }).click()
     const mnemonicInput = page.getByPlaceholder(/Enter your recovery phrase/i)
     await mnemonicInput.fill(TEST_MNEMONIC_12)
+    await fillPasswordFields(page)
     await page.getByRole('button', { name: 'Import Wallet' }).click()
 
-    await expect(page.getByRole('button', { name: /Send/i })).toBeVisible({ timeout: UI_TIMEOUT })
+    // exact: the dashboard also has "Send via Link" — /Send/i is ambiguous (strict mode).
+    await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeVisible({ timeout: UI_TIMEOUT })
 
     const addressButton = page
       .locator('button')
@@ -219,11 +242,25 @@ async function gotoFreshWallet(page: Page) {
   await page.waitForLoadState('networkidle')
 }
 
-/** Create a wallet entirely client-side (reveal mnemonic, confirm, create). */
+/**
+ * Create a wallet entirely client-side (reveal mnemonic, confirm, set the
+ * REQUIRED password (#475), create).
+ */
 async function createWalletClientSide(page: Page) {
   await page.getByText('Click to reveal').click()
   const confirmCheckbox = page.locator('input[type="checkbox"]').first()
   await confirmCheckbox.check()
+  await fillPasswordFields(page)
   await page.getByRole('button', { name: 'Create Wallet' }).click()
-  await expect(page.getByRole('button', { name: /Send/i })).toBeVisible({ timeout: UI_TIMEOUT })
+  // exact: the dashboard also has "Send via Link" — /Send/i is ambiguous (strict mode).
+  await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeVisible({ timeout: UI_TIMEOUT })
+}
+
+/**
+ * Fill the #475 password + confirm fields. Since #475 a password is REQUIRED
+ * for create AND import — the submit buttons stay disabled without one.
+ */
+async function fillPasswordFields(page: Page) {
+  await page.getByPlaceholder(/^Password \(min/).fill(PASSWORD)
+  await page.getByPlaceholder('Confirm password').fill(PASSWORD)
 }
