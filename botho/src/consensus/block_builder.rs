@@ -299,8 +299,11 @@ impl BlockBuilder {
     where
         F: Fn(&[u8; 36]) -> Option<Utxo>,
     {
-        // Calculate total fees from transactions
-        let total_fees: u64 = block.transactions.iter().map(|tx| tx.fee).sum();
+        // Calculate total fees from transactions. Saturating
+        // (block.rs::total_fees) — a plain sum() panics under release
+        // overflow-checks on this every-node externalize path before
+        // add_block's checked_block_fees can reject the block gracefully.
+        let total_fees: u64 = block.total_fees();
 
         // Pool accounting: carryover + emission share + fee pool share,
         // payouts capped at one block reward (anti-grinding bound). Must
