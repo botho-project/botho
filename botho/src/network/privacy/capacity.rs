@@ -26,7 +26,9 @@
 //! # Example
 //!
 //! ```
-//! use botho::network::privacy::capacity::{RelayCapacity, NatType, SimpleNodeStats, NodeStats};
+//! use botho::network::privacy::capacity::{
+//!     RelayCapacity, RelayCapacityExt, NatType, SimpleNodeStats,
+//! };
 //!
 //! // Create stats for a well-connected node
 //! let stats = SimpleNodeStats {

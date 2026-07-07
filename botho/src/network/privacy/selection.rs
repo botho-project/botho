@@ -23,28 +23,38 @@
 //! use botho::network::privacy::{
 //!     CircuitSelector, SelectionConfig, RelayPeerInfo, RelayCapacity, NatType,
 //! };
+//! use botho::network::privacy::capacity::{RelayCapacityExt, SimpleNodeStats};
 //! use libp2p::PeerId;
 //! use std::net::Ipv4Addr;
 //!
 //! // Create selector with default config
 //! let selector = CircuitSelector::new(SelectionConfig::default());
 //!
-//! // Create some test peers
+//! // Peers need a measured capacity that clears the config's minimum relay
+//! // score — a default (zeroed) RelayCapacity scores 0 and is never selected.
+//! let capacity = || RelayCapacity::measure(&SimpleNodeStats {
+//!     bandwidth_bps: 10_000_000,
+//!     uptime_ratio: 0.95,
+//!     nat_type: NatType::Open,
+//!     current_load: 0.2,
+//! });
+//!
+//! // Create some test peers on distinct /16 subnets
 //! let peers = vec![
 //!     RelayPeerInfo::new(
 //!         PeerId::random(),
 //!         Some(Ipv4Addr::new(10, 0, 1, 1)),
-//!         RelayCapacity::default(),
+//!         capacity(),
 //!     ),
 //!     RelayPeerInfo::new(
 //!         PeerId::random(),
 //!         Some(Ipv4Addr::new(10, 1, 1, 1)),
-//!         RelayCapacity::default(),
+//!         capacity(),
 //!     ),
 //!     RelayPeerInfo::new(
 //!         PeerId::random(),
 //!         Some(Ipv4Addr::new(10, 2, 1, 1)),
-//!         RelayCapacity::default(),
+//!         capacity(),
 //!     ),
 //! ];
 //!
