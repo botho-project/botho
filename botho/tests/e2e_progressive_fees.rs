@@ -269,7 +269,10 @@ fn test_cluster_factor_wealthy_pay_more() {
     let factor_mid = fee_config.cluster_factor(100_000 * PICO_PER_BTH);
     let factor_max = fee_config.cluster_factor(500_000_000 * PICO_PER_BTH);
 
-    assert_eq!(factor_zero, 1000, "Zero wealth must sit on the exact 1x floor");
+    assert_eq!(
+        factor_zero, 1000,
+        "Zero wealth must sit on the exact 1x floor"
+    );
     assert_eq!(
         factor_floor_edge, 1000,
         "1 BTH is far below W_MID >> 12 and must sit on the exact 1x floor"
