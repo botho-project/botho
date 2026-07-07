@@ -12,6 +12,22 @@ bumps (`0.X.Y`) are backwards-compatible.
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-07-07
+
+### Added
+- Explorer-facing RPC enrichment (#696): `getBlockByHeight`/`getBlockByHash`
+  gain additive `transactions` (hash/fee/ringSize — structure only, never
+  amounts or recipients), `totalFees`, and `lottery` summary fields;
+  `cluster_getAllWealth` gains a per-cluster `factor` from the live fee
+  curve (single source of curve truth for the explorer's wealth histogram).
+- Fleet metrics daemon (#697): multi-node collection with per-node SQLite
+  rollups and a public history API for the wallet's /network dashboard.
+
+### Fixed
+- Nodes re-dial configured bootstrap peers whenever under-connected, not
+  only at zero peers (#690) — rolling deploys can no longer strand the
+  fleet in a star topology that wedges SCP externalization.
+
 ## [0.3.1] - 2026-07-07
 
 ### Fixed

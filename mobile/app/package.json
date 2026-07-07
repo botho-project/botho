@@ -1,6 +1,6 @@
 {
   "name": "botho-mobile",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Botho Mobile Wallet",
   "main": "expo-router/entry",
   "scripts": {
