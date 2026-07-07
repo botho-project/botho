@@ -309,7 +309,7 @@ impl<V: Value, ValidationError: Clone + Display + 'static> ScpNode<V> for Node<V
     }
 
     /// Get metrics for the current slot.
-    fn get_current_slot_metrics(&mut self) -> SlotMetrics {
+    fn get_current_slot_metrics(&self) -> SlotMetrics {
         self.current_slot.get_metrics()
     }
 

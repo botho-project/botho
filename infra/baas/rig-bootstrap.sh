@@ -20,9 +20,14 @@
 # exports below) into the instance launch's "User data" field. cloud-init runs
 # it as root on first boot. It is also safe to run by hand:
 #
+#     sudo RIG_ID=demo REGION=us-west-2 TIER=t4g.medium ./rig-bootstrap.sh
+#
+# (with no BOTHO_BINARY_URL, the latest GitHub release's linux-aarch64 tarball
+# is resolved and checksum-pinned automatically), or with an explicit pin:
+#
 #     sudo RIG_ID=demo REGION=us-west-2 TIER=t4g.medium \
-#          BOTHO_BINARY_URL=https://example.com/botho-aarch64 \
-#          BOTHO_BINARY_SHA256=<sha256 from release-checksums> \
+#          BOTHO_BINARY_URL=https://github.com/botho-project/botho/releases/download/v0.3.0/botho-v0.3.0-linux-aarch64.tar.gz \
+#          BOTHO_BINARY_SHA256=<'botho' line from checksums-linux-aarch64.txt> \
 #          ./rig-bootstrap.sh
 #
 # (RIG_ID=demo derives RIG_HOSTNAME=rig-demo.testnet.botho.io.)
@@ -32,21 +37,33 @@
 # ---------------------------------------------------------------------------
 # PARAMETERS (environment variables / user-data exports)
 # ---------------------------------------------------------------------------
-#   BOTHO_BINARY_URL   (REQUIRED unless a binary is already installed)
-#                      URL to the prebuilt linux-aarch64 `botho` binary. This is
-#                      the `binaries-linux-aarch64` artifact produced by
-#                      .github/workflows/release.yml (target
-#                      aarch64-unknown-linux-gnu) — the rig is arm64, so it
-#                      DOWNLOADS this prebuilt binary rather than building from
-#                      source on the box. The provisioner (#458 P6.2) resolves a
-#                      GET-able URL (GitHub release asset, or a mirror in S3/R2)
-#                      and passes it here. See BINARY SOURCE note at the bottom
-#                      of this file and infra/baas/README.md.
-#   BOTHO_BINARY_SHA256 (optional) expected sha256 of the downloaded binary.
-#                      Verified if set. The provisioner should pass the
-#                      linux-aarch64 checksum from the release's
-#                      `release-checksums` artifact (all-checksums.txt) so each
-#                      rig pins the exact published build.
+#   BOTHO_BINARY_URL   (optional) URL to the prebuilt linux-aarch64 botho
+#                      build. Accepts EITHER the published GitHub release
+#                      tarball (`botho-vX.Y.Z-linux-aarch64.tar.gz`, the
+#                      canonical source since v0.3.0 — the `botho` member is
+#                      extracted and installed) OR a bare aarch64 `botho`
+#                      binary (e.g. an S3/R2 mirror object; legacy path, still
+#                      supported). The rig is arm64, so it DOWNLOADS a prebuilt
+#                      binary rather than building from source on the box.
+#                      When unset: an already-installed /usr/local/bin/botho is
+#                      reused (idempotent re-run); otherwise the latest GitHub
+#                      release's linux-aarch64 tarball is resolved via the
+#                      GitHub API and used automatically. See BINARY SOURCE
+#                      note at the bottom of this file and infra/baas/README.md.
+#   BOTHO_BINARY_SHA256 (optional) expected sha256 of the `botho` BINARY —
+#                      verified if set. In tarball mode this is compared against
+#                      the EXTRACTED `botho` (the release publishes per-binary
+#                      digests: pass the `botho` line of the release asset
+#                      `checksums-linux-aarch64.txt`; the tarball's own digest
+#                      is published nowhere). In bare-binary mode the downloaded
+#                      file itself is verified. Do NOT take digests from
+#                      SHA256SUMS.txt — it concatenates all platforms without
+#                      labels and lists `botho` multiple times. When both this
+#                      and BOTHO_BINARY_URL are unset (latest-release mode), the
+#                      digest is fetched from the same release's
+#                      checksums-linux-aarch64.txt and pinned automatically.
+#   BOTHO_REPO         (optional, default "botho-project/botho") GitHub
+#                      owner/repo used for latest-release resolution.
 #   RIG_ID             (optional) short opaque rig identifier (e.g. abc123),
 #                      assigned by the provisioner / Stripe subscription mapping.
 #                      When set and RIG_HOSTNAME is unset, the public hostname is
@@ -125,6 +142,7 @@ REGION="${REGION:-}"
 TIER="${TIER:-t4g.medium}"
 BOTHO_BINARY_URL="${BOTHO_BINARY_URL:-}"
 BOTHO_BINARY_SHA256="${BOTHO_BINARY_SHA256:-}"
+BOTHO_REPO="${BOTHO_REPO:-botho-project/botho}"
 BOOTSTRAP_PEERS="${BOOTSTRAP_PEERS:-}"
 MINT_THREADS="${MINT_THREADS:-1}"
 CERTBOT_EMAIL="${CERTBOT_EMAIL:-admin@botho.io}"
@@ -158,7 +176,7 @@ if [[ -z "$RIG_HOSTNAME" && -n "$RIG_ID" ]]; then
 fi
 
 log "Params: NETWORK=$NETWORK RIG_ID='${RIG_ID:-<none>}' RIG_HOSTNAME='${RIG_HOSTNAME:-<none>}' REGION='${REGION:-<unset>}' TIER=$TIER TLS_MODE=$TLS_MODE MINT_THREADS=$MINT_THREADS"
-log "Binary source: ${BOTHO_BINARY_URL:-<none, will require existing $BIN_PATH>}"
+log "Binary source: ${BOTHO_BINARY_URL:-<unset: reuse existing $BIN_PATH, else latest GitHub release>}"
 
 # ===========================================================================
 # Step 1: Install dependencies (idempotent)
@@ -182,26 +200,49 @@ fi
 # Step 2: Obtain the botho linux-aarch64 binary
 # ===========================================================================
 # PREFER fetching a published binary over building on the box (t4g release
-# builds take ~20+ min and can OOM RandomX-linked crates). The source is the
-# BOTHO_BINARY_URL parameter; #458's provisioner publishes the release artifact
-# (e.g. to S3/R2) and supplies the URL.
+# builds take ~20+ min and can OOM RandomX-linked crates). Source resolution
+# order (see BINARY SOURCE NOTE at the bottom of this file):
+#   1. explicit BOTHO_BINARY_URL (release tarball or bare-binary mirror),
+#   2. existing $BIN_PATH (idempotent re-run — never re-downloads),
+#   3. the latest GitHub release's linux-aarch64 tarball, checksum-pinned from
+#      the same release's checksums-linux-aarch64.txt (canonical since v0.3.0;
+#      release assets preferred per #638).
 log "Step 2: obtaining botho binary"
 install_binary() {
-    local url="$1" tmp
+    # $1 = URL to EITHER the release tarball botho-vX.Y.Z-linux-aarch64.tar.gz
+    # (gzip; top-level `botho` member, mode 0644 inside the archive) OR a bare
+    # aarch64 `botho` binary (legacy S3/R2 mirror path). Either way the
+    # resulting binary is installed 0755 at $BIN_PATH.
+    local url="$1" tmp candidate extract_dir=""
     tmp="$(mktemp /tmp/botho.XXXXXX)"
     log "  downloading $url"
     curl -fSL --retry 5 --retry-delay 5 -o "$tmp" "$url" \
         || fail "failed to download botho binary from $url"
+    candidate="$tmp"
+    if file "$tmp" | grep -qi "gzip compressed"; then
+        log "  gzip tarball detected; extracting 'botho' member"
+        extract_dir="$(mktemp -d /tmp/botho-extract.XXXXXX)"
+        tar -xzf "$tmp" -C "$extract_dir" \
+            || fail "failed to extract release tarball downloaded from $url"
+        candidate="$extract_dir/botho"
+        [[ -f "$candidate" ]] \
+            || fail "release tarball from $url has no top-level 'botho' member"
+    fi
     if [[ -n "$BOTHO_BINARY_SHA256" ]]; then
+        # In tarball mode this verifies the EXTRACTED `botho` binary: the
+        # release publishes per-binary digests (checksums-linux-aarch64.txt),
+        # not a tarball digest. In bare-binary mode it verifies the download.
         local got
-        got="$(sha256sum "$tmp" | awk '{print $1}')"
+        got="$(sha256sum "$candidate" | awk '{print $1}')"
         [[ "$got" == "$BOTHO_BINARY_SHA256" ]] \
             || fail "binary sha256 mismatch: got $got expected $BOTHO_BINARY_SHA256"
         log "  sha256 verified: $got"
     fi
-    file "$tmp" | grep -q "aarch64" || fail "downloaded binary is not aarch64: $(file "$tmp")"
-    install -m 0755 "$tmp" "$BIN_PATH"
+    file "$candidate" | grep -q "aarch64" \
+        || fail "botho binary is not aarch64: $(file "$candidate")"
+    install -m 0755 "$candidate" "$BIN_PATH"
     rm -f "$tmp"
+    if [[ -n "$extract_dir" ]]; then rm -rf "$extract_dir"; fi
 }
 
 if [[ -n "$BOTHO_BINARY_URL" ]]; then
@@ -209,7 +250,29 @@ if [[ -n "$BOTHO_BINARY_URL" ]]; then
 elif [[ -x "$BIN_PATH" ]]; then
     log "  BOTHO_BINARY_URL unset; reusing existing $BIN_PATH (idempotent re-run)"
 else
-    fail "no BOTHO_BINARY_URL and no existing $BIN_PATH. The provisioner (#458) must publish a linux-aarch64 binary and pass BOTHO_BINARY_URL. See infra/baas/README.md."
+    # Latest-release fallback: resolve the newest GitHub release and consume
+    # its linux-aarch64 tarball, pinning the published `botho` digest unless
+    # the operator already supplied one.
+    log "  BOTHO_BINARY_URL unset and no $BIN_PATH; resolving latest GitHub release of $BOTHO_REPO"
+    LATEST_TAG="$(curl -fsSL --retry 3 --retry-delay 2 \
+        "https://api.github.com/repos/${BOTHO_REPO}/releases/latest" 2>/dev/null \
+        | grep -m1 '"tag_name"' | cut -d'"' -f4 || true)"
+    [[ -n "$LATEST_TAG" ]] \
+        || fail "could not resolve the latest release tag of $BOTHO_REPO from the GitHub API. Pass BOTHO_BINARY_URL explicitly (release tarball or bare-binary mirror URL). See infra/baas/README.md."
+    RELEASE_BASE="https://github.com/${BOTHO_REPO}/releases/download/${LATEST_TAG}"
+    log "  latest release: $LATEST_TAG"
+    if [[ -z "$BOTHO_BINARY_SHA256" ]]; then
+        # Pin the digest of the extracted `botho` binary — the `botho` line of
+        # checksums-linux-aarch64.txt. (Do NOT use SHA256SUMS.txt: it is a
+        # platform-unlabelled concatenation with multiple `botho` lines.)
+        BOTHO_BINARY_SHA256="$(curl -fsSL --retry 3 --retry-delay 2 \
+            "${RELEASE_BASE}/checksums-linux-aarch64.txt" 2>/dev/null \
+            | awk '$2 == "botho" {print $1; exit}' || true)"
+        [[ -n "$BOTHO_BINARY_SHA256" ]] \
+            || fail "could not fetch the 'botho' digest from ${RELEASE_BASE}/checksums-linux-aarch64.txt. Pass BOTHO_BINARY_SHA256 (or an explicit BOTHO_BINARY_URL) instead."
+        log "  pinned sha256 from checksums-linux-aarch64.txt: $BOTHO_BINARY_SHA256"
+    fi
+    install_binary "${RELEASE_BASE}/botho-${LATEST_TAG}-linux-aarch64.tar.gz"
 fi
 # The binary has no `--version` flag; the version is reported via RPC
 # (nodeVersion) once the node is up. Record the architecture here; resolve the
@@ -638,19 +701,38 @@ log "Read back any time: sudo rig-status   |   cat ${RUN_HOME}/rig-info.txt"
 # ---------------------------------------------------------------------------
 # This bootstrap DOWNLOADS the prebuilt arm64 binary (it never builds from
 # source on the box — t4g release builds are slow and RandomX-linked crates can
-# OOM). The canonical source is the `binaries-linux-aarch64` artifact built by
-# .github/workflows/release.yml (target aarch64-unknown-linux-gnu), with its
-# checksum in the `release-checksums` artifact (all-checksums.txt, the
-# `linux-aarch64/...` line). Pass:
-#     BOTHO_BINARY_URL=<GET-able URL to the aarch64 botho binary>
-#     BOTHO_BINARY_SHA256=<that binary's sha256 from release-checksums>
+# OOM). Since v0.3.0 (2026-07-05) the canonical source is the GitHub RELEASE
+# ASSET published by .github/workflows/release.yml:
 #
-# As of this writing the latest GitHub release (v0.2.0) has NO published binary
-# ASSET (the workflow produces the artifact, but the operator hasn't attached a
-# downloadable release asset / mirror yet), so the bootstrap cannot resolve a
-# public URL on its own. The provisioner (#458 P6.2) MUST publish the current
-# linux-aarch64 `botho` artifact (attach it to the GitHub release, or mirror to
-# S3/R2) and pass its URL as BOTHO_BINARY_URL (and the checksum as
-# BOTHO_BINARY_SHA256). See infra/baas/README.md for the recommended
-# distribution flow and the interim "copy from a live seed" stand-in used
-# during verification.
+#     botho-vX.Y.Z-linux-aarch64.tar.gz   (gzip tarball; top-level members
+#                                          `botho`, `botho-wallet`,
+#                                          `botho-exchange-scanner`, mode 0644
+#                                          inside the archive — this script
+#                                          extracts `botho` and installs it
+#                                          0755)
+#     checksums-linux-aarch64.txt         (sha256 of each EXTRACTED binary,
+#                                          one per line — the tarball's own
+#                                          digest is published nowhere)
+#
+# Verification: BOTHO_BINARY_SHA256 must be the `botho` line of
+# checksums-linux-aarch64.txt (i.e. the digest of the extracted binary). Do
+# NOT take digests from SHA256SUMS.txt — it concatenates every platform's
+# checksums with no platform labels, so `botho` appears multiple times with
+# conflicting digests.
+#
+# Resolution order implemented in Step 2:
+#   1. BOTHO_BINARY_URL set  -> download it. Accepts the release tarball OR a
+#      bare aarch64 binary (legacy S3/R2 mirror path, kept for backward
+#      compatibility; in that mode the digest is of the downloaded file).
+#   2. else, $BIN_PATH exists -> reuse it (idempotent re-run; no network).
+#   3. else -> resolve the latest GitHub release of $BOTHO_REPO via the GitHub
+#      API and consume its linux-aarch64 tarball, auto-pinning the `botho`
+#      digest from checksums-linux-aarch64.txt when BOTHO_BINARY_SHA256 is
+#      unset. If the API is unreachable, the script fails with instructions to
+#      pass BOTHO_BINARY_URL explicitly.
+#
+# The provisioner (#458 P6.2) may therefore omit both variables entirely
+# (latest release), or pin an exact build by passing the release-asset URL +
+# the published `botho` digest. (Historical: pre-v0.3.0 releases shipped no
+# downloadable assets, which required an interim "copy from a live seed"
+# stand-in — that guidance is obsolete.) See infra/baas/README.md.

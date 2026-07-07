@@ -68,6 +68,7 @@ use tracing::{debug, error, info, warn};
 use crate::{
     address::Address,
     config::QuorumConfig,
+    consensus::{QuorumGateSnapshot, ScpSlotSnapshot},
     ledger::Ledger,
     mempool::Mempool,
     network::{NetworkStats, SyncStatusSnapshot},
@@ -242,6 +243,26 @@ pub struct RpcState {
     /// caught-up node. Surfaced as `synced`, `syncStatus`, and
     /// `syncProgress` in `node_getStatus`.
     pub sync_status: Option<Arc<RwLock<Option<SyncStatusSnapshot>>>>,
+    /// Shared SCP slot-progress handle for slot-stall observability (#653,
+    /// epic #532 Phase 0). `commands::run` publishes a fresh
+    /// [`ScpSlotSnapshot`] here on every consensus tick, derived from the live
+    /// SCP slot metrics + externalization history (never a constant — the
+    /// anti-#541–#544 gate). `None` until wired in (tests / relay nodes); the
+    /// inner `Option` is `None` until the first tick publishes. Surfaced as
+    /// the `scpSlot*` / `slotStalled` / `slotStallSeconds` fields in
+    /// `node_getStatus`.
+    pub scp_slot_status: Option<Arc<RwLock<Option<ScpSlotSnapshot>>>>,
+    /// Shared quorum-promotion-gate handle (#651, epic #441 §3/P5).
+    /// `commands::run` publishes a fresh [`QuorumGateSnapshot`] here at the
+    /// initial quorum seed and on every peer-churn rebuild — always derived
+    /// from a real gate evaluation, never a constant (the anti-#541–#544
+    /// gate). `None` until wired in (tests / relay nodes); the inner `Option`
+    /// is `None` until the first evaluation publishes. Surfaced as the
+    /// `quorumCuratedMembers` / `quorumAutoMembers` /
+    /// `quorumGateSuppressedPeers` / `quorumGateMaxAutoMembers` /
+    /// `quorumGateIntersectionRefused` fields in `node_getStatus` (JSON
+    /// `null` until first publish).
+    pub quorum_gate_status: Option<Arc<RwLock<Option<QuorumGateSnapshot>>>>,
     /// Shared snapshot of the live connected-peer set surfaced by
     /// `network_getPeers` (#544). `commands::run` publishes a cheap clone of
     /// the discovery peer table here on each peer connect/disconnect; the
@@ -290,6 +311,8 @@ impl RpcState {
             identity: NodeIdentity::default(),
             minter_health: None,
             sync_status: None,
+            scp_slot_status: None,
+            quorum_gate_status: None,
             peers: Arc::new(RwLock::new(Vec::new())),
             network_stats: None,
         }
@@ -330,6 +353,8 @@ impl RpcState {
             identity: NodeIdentity::default(),
             minter_health: None,
             sync_status: None,
+            scp_slot_status: None,
+            quorum_gate_status: None,
             peers: Arc::new(RwLock::new(Vec::new())),
             network_stats: None,
         }
@@ -368,6 +393,8 @@ impl RpcState {
             identity: NodeIdentity::default(),
             minter_health: None,
             sync_status: None,
+            scp_slot_status: None,
+            quorum_gate_status: None,
             peers: Arc::new(RwLock::new(Vec::new())),
             network_stats: None,
         }
@@ -432,6 +459,52 @@ impl RpcState {
     /// pre-sync state, in which case `node_getStatus` assumes a caught-up node.
     fn sync_status_snapshot(&self) -> Option<SyncStatusSnapshot> {
         let handle = self.sync_status.as_ref()?;
+        let guard = handle.read().ok()?;
+        guard.clone()
+    }
+
+    /// Wire in the shared SCP slot-progress handle so `node_getStatus` can
+    /// surface live slot-stall observability (#653). `commands::run` calls
+    /// this with the handle the consensus tick publishes
+    /// [`ScpSlotSnapshot`]s into.
+    pub fn with_scp_slot_status(
+        mut self,
+        scp_slot_status: Arc<RwLock<Option<ScpSlotSnapshot>>>,
+    ) -> Self {
+        self.scp_slot_status = Some(scp_slot_status);
+        self
+    }
+
+    /// Read the current SCP slot-progress snapshot, if a handle is wired in
+    /// and the consensus tick has published at least once. Returns `None` for
+    /// tests / relay nodes / pre-first-tick state, in which case
+    /// `node_getStatus` reports the slot fields as absent/idle rather than
+    /// fabricating values.
+    fn scp_slot_snapshot(&self) -> Option<ScpSlotSnapshot> {
+        let handle = self.scp_slot_status.as_ref()?;
+        let guard = handle.read().ok()?;
+        guard.clone()
+    }
+
+    /// Wire in the shared quorum-promotion-gate handle so `node_getStatus`
+    /// can surface curated-vs-auto quorum membership and gate state (#651).
+    /// `commands::run` calls this with the handle the quorum rebuild path
+    /// publishes [`QuorumGateSnapshot`]s into.
+    pub fn with_quorum_gate_status(
+        mut self,
+        quorum_gate_status: Arc<RwLock<Option<QuorumGateSnapshot>>>,
+    ) -> Self {
+        self.quorum_gate_status = Some(quorum_gate_status);
+        self
+    }
+
+    /// Read the current quorum-promotion-gate snapshot, if a handle is wired
+    /// in and the gate has evaluated at least once. Returns `None` for tests
+    /// / relay nodes / pre-first-rebuild state, in which case
+    /// `node_getStatus` reports the gate fields as JSON `null` rather than
+    /// fabricating values.
+    fn quorum_gate_snapshot(&self) -> Option<QuorumGateSnapshot> {
+        let handle = self.quorum_gate_status.as_ref()?;
         let guard = handle.read().ok()?;
         guard.clone()
     }
@@ -975,6 +1048,29 @@ async fn handle_node_status(id: Value, state: &RpcState) -> JsonRpcResponse {
         .map(|s| s.stalled)
         .unwrap_or(false);
 
+    // SCP slot-stall observability (#653, epic #532 Phase 0). Every field is
+    // read from the snapshot the consensus tick publishes from LIVE SCP slot
+    // state (SlotMetrics + externalization history) — never fabricated here
+    // (the anti-#541–#544 gate). With no handle wired in (tests / relay
+    // nodes) or before the first tick, the counters render as JSON null and
+    // the booleans default to false: an unwired node reports "no data", not a
+    // plausible-looking constant.
+    let scp_slot = state.scp_slot_snapshot();
+    let scp_slot_active = scp_slot
+        .as_ref()
+        .map(|s| s.scp_slot_active)
+        .unwrap_or(false);
+    let slot_stalled = scp_slot.as_ref().map(|s| s.slot_stalled).unwrap_or(false);
+    let slot_stall_seconds = scp_slot.as_ref().map(|s| s.stall_seconds).unwrap_or(0);
+
+    // Quorum promotion gate observability (#651, epic #441 §3/P5). Every
+    // field is read from the snapshot the quorum rebuild path publishes from
+    // a REAL gate evaluation — never fabricated here (the anti-#541–#544
+    // gate). With no handle wired in (tests / relay nodes) or before the
+    // first rebuild, all gate fields render as JSON null: an unwired node
+    // reports "no data", not a plausible-looking constant.
+    let quorum_gate = state.quorum_gate_snapshot();
+
     JsonRpcResponse::success(
         id,
         json!({
@@ -1001,9 +1097,42 @@ async fn handle_node_status(id: Value, state: &RpcState) -> JsonRpcResponse {
             // `quorumDegenerate` flags the n-of-n / zero-fault-tolerance regime.
             "quorumFaultTolerant": quorum_fault_tolerant,
             "quorumDegenerate": quorum_degenerate,
+            // Quorum promotion gate (#651): curated vs auto-promoted quorum
+            // membership and gate state, from the rebuild path's
+            // QuorumGateSnapshot. All null until the first gate evaluation.
+            "quorumCuratedMembers": quorum_gate.as_ref().map(|g| g.curated_members),
+            "quorumAutoMembers": quorum_gate.as_ref().map(|g| g.auto_members),
+            // > 0 means the gate is actively keeping discovered peers OUT of
+            // the safety-critical quorum (over-cap auto peers, or all
+            // non-curated peers in explicit mode).
+            "quorumGateSuppressedPeers": quorum_gate.as_ref().map(|g| g.suppressed_peers),
+            "quorumGateMaxAutoMembers": quorum_gate.as_ref().map(|g| g.max_auto_members),
+            // true when the latest candidate quorum set failed the
+            // bth-quorum-sim intersection check and was refused (the node
+            // kept its previous safe quorum set).
+            "quorumGateIntersectionRefused": quorum_gate.as_ref().map(|g| g.intersection_refused),
             // Stuck-miner early-warning (#538): true iff this node's miner is
             // active but producing 0 H/s past the grace + stall window.
             "minerStalled": miner_stalled,
+            // SCP slot-stall observability (#653, #532 Phase 0): live slot
+            // progress from the consensus tick's ScpSlotSnapshot. Index /
+            // phase / counters are null until the first snapshot is published.
+            "scpSlotIndex": scp_slot.as_ref().map(|s| s.slot_index),
+            "scpSlotPhase": scp_slot.as_ref().map(|s| s.phase.clone()),
+            "scpSlotActive": scp_slot_active,
+            "scpNominationRound": scp_slot.as_ref().map(|s| s.nomination_round),
+            "scpVotedNominated": scp_slot.as_ref().map(|s| s.num_voted_nominated),
+            "scpAcceptedNominated": scp_slot.as_ref().map(|s| s.num_accepted_nominated),
+            "scpConfirmedNominated": scp_slot.as_ref().map(|s| s.num_confirmed_nominated),
+            "scpBallotCounter": scp_slot.as_ref().map(|s| s.ballot_counter),
+            // Derived stall verdict: slot ACTIVE but no externalization for >
+            // SLOT_STALL_THRESHOLD_MULTIPLIER x the effective slot duration.
+            // An idle node (nothing to propose) is never "stalled".
+            "slotStalled": slot_stalled,
+            "slotStallSeconds": slot_stall_seconds,
+            "lastExternalizedSlot": scp_slot.as_ref().and_then(|s| s.last_externalized_slot),
+            "lastExternalizedSecondsAgo": scp_slot.as_ref().and_then(|s| s.last_externalized_seconds_ago),
+            "effectiveSlotDurationSecs": scp_slot.as_ref().map(|s| s.effective_slot_duration_secs),
         }),
     )
 }
@@ -3582,6 +3711,199 @@ mod tests {
         assert_eq!(minting["stalled"], json!(false));
         let node = handle_node_status(json!(1), &state).await.result.unwrap();
         assert_eq!(node["minerStalled"], json!(false));
+    }
+
+    /// #653 (epic #532 Phase 0): the `node_getStatus` SCP slot fields must
+    /// track the shared snapshot handle the consensus tick publishes into —
+    /// the anti-#541–#544 gate at the RPC layer. With no handle wired in the
+    /// fields report absent/idle (null counters, false booleans) instead of
+    /// fabricated values; with a handle, two DIFFERENT snapshots must yield
+    /// DIFFERENT JSON (the fields are live, not constants).
+    #[tokio::test]
+    async fn test_node_status_tracks_scp_slot_snapshot() {
+        use crate::{consensus::ScpSlotSnapshot, ledger::Ledger, mempool::Mempool};
+
+        fn fresh_state() -> RpcState {
+            let dir = tempfile::tempdir().unwrap();
+            let ledger = Ledger::open(dir.path()).unwrap();
+            std::mem::forget(dir);
+            RpcState::new(
+                ledger,
+                Mempool::new(),
+                Network::Testnet,
+                None,
+                None,
+                vec![],
+                Arc::new(WsBroadcaster::new(16)),
+            )
+        }
+
+        // (1) No handle wired in: absent/idle defaults, never fabricated data.
+        let state = fresh_state();
+        let result = handle_node_status(json!(1), &state).await.result.unwrap();
+        assert_eq!(result["scpSlotActive"], json!(false));
+        assert_eq!(result["slotStalled"], json!(false));
+        assert_eq!(result["slotStallSeconds"], json!(0));
+        assert_eq!(result["scpSlotIndex"], Value::Null);
+        assert_eq!(result["scpSlotPhase"], Value::Null);
+        assert_eq!(result["scpVotedNominated"], Value::Null);
+        assert_eq!(result["scpBallotCounter"], Value::Null);
+        assert_eq!(result["lastExternalizedSlot"], Value::Null);
+        assert_eq!(result["lastExternalizedSecondsAgo"], Value::Null);
+
+        // (2) Handle wired but nothing published yet: same absent/idle shape.
+        let handle = Arc::new(RwLock::new(None));
+        let state = fresh_state().with_scp_slot_status(handle.clone());
+        let result = handle_node_status(json!(1), &state).await.result.unwrap();
+        assert_eq!(result["scpSlotActive"], json!(false));
+        assert_eq!(result["scpSlotIndex"], Value::Null);
+
+        // (3) Active-progressing snapshot published by the consensus tick.
+        *handle.write().unwrap() = Some(ScpSlotSnapshot {
+            slot_index: 42,
+            phase: "NominatePrepare".to_string(),
+            num_voted_nominated: 2,
+            num_accepted_nominated: 1,
+            num_confirmed_nominated: 0,
+            nomination_round: 3,
+            ballot_counter: 0,
+            scp_slot_active: true,
+            slot_stalled: false,
+            stall_seconds: 4,
+            last_externalized_slot: Some(41),
+            last_externalized_seconds_ago: Some(4),
+            effective_slot_duration_secs: 20,
+        });
+        let active = handle_node_status(json!(1), &state).await.result.unwrap();
+        assert_eq!(active["scpSlotIndex"], json!(42));
+        assert_eq!(active["scpSlotPhase"], json!("NominatePrepare"));
+        assert_eq!(active["scpSlotActive"], json!(true));
+        assert_eq!(active["scpNominationRound"], json!(3));
+        assert_eq!(active["scpVotedNominated"], json!(2));
+        assert_eq!(active["scpAcceptedNominated"], json!(1));
+        assert_eq!(active["scpConfirmedNominated"], json!(0));
+        assert_eq!(active["scpBallotCounter"], json!(0));
+        assert_eq!(active["slotStalled"], json!(false));
+        assert_eq!(active["slotStallSeconds"], json!(4));
+        assert_eq!(active["lastExternalizedSlot"], json!(41));
+        assert_eq!(active["lastExternalizedSecondsAgo"], json!(4));
+        assert_eq!(active["effectiveSlotDurationSecs"], json!(20));
+
+        // (4) Jammed snapshot: the SAME handle now reports a stall — every
+        // field must move with the snapshot (not-a-constant proof).
+        *handle.write().unwrap() = Some(ScpSlotSnapshot {
+            slot_index: 42,
+            phase: "Prepare".to_string(),
+            num_voted_nominated: 2,
+            num_accepted_nominated: 2,
+            num_confirmed_nominated: 1,
+            nomination_round: 9,
+            ballot_counter: 7,
+            scp_slot_active: true,
+            slot_stalled: true,
+            stall_seconds: 61,
+            last_externalized_slot: Some(41),
+            last_externalized_seconds_ago: Some(61),
+            effective_slot_duration_secs: 20,
+        });
+        let jammed = handle_node_status(json!(1), &state).await.result.unwrap();
+        assert_eq!(jammed["slotStalled"], json!(true));
+        assert_eq!(jammed["slotStallSeconds"], json!(61));
+        assert_eq!(jammed["scpSlotPhase"], json!("Prepare"));
+        assert_eq!(jammed["scpBallotCounter"], json!(7));
+        assert_eq!(jammed["scpNominationRound"], json!(9));
+        assert_ne!(
+            active["slotStalled"], jammed["slotStalled"],
+            "slotStalled must track the live snapshot, not a constant"
+        );
+        assert_ne!(
+            active["slotStallSeconds"], jammed["slotStallSeconds"],
+            "slotStallSeconds must track the live snapshot, not a constant"
+        );
+    }
+
+    /// #651 (epic #441 §3/P5): the `node_getStatus` quorum-promotion-gate
+    /// fields must track the shared snapshot handle the quorum rebuild path
+    /// publishes into — the anti-#541–#544 gate at the RPC layer. With no
+    /// handle wired in (or wired but never published) every gate field is
+    /// JSON null, never a fabricated zero; with a handle, two DIFFERENT
+    /// snapshots must yield DIFFERENT JSON (the fields are live, not
+    /// constants).
+    #[tokio::test]
+    async fn test_node_status_tracks_quorum_gate_snapshot() {
+        use crate::{consensus::QuorumGateSnapshot, ledger::Ledger, mempool::Mempool};
+
+        fn fresh_state() -> RpcState {
+            let dir = tempfile::tempdir().unwrap();
+            let ledger = Ledger::open(dir.path()).unwrap();
+            std::mem::forget(dir);
+            RpcState::new(
+                ledger,
+                Mempool::new(),
+                Network::Testnet,
+                None,
+                None,
+                vec![],
+                Arc::new(WsBroadcaster::new(16)),
+            )
+        }
+
+        // (1) No handle wired in: all gate fields null (no data, not zeros).
+        let state = fresh_state();
+        let result = handle_node_status(json!(1), &state).await.result.unwrap();
+        assert_eq!(result["quorumCuratedMembers"], Value::Null);
+        assert_eq!(result["quorumAutoMembers"], Value::Null);
+        assert_eq!(result["quorumGateSuppressedPeers"], Value::Null);
+        assert_eq!(result["quorumGateMaxAutoMembers"], Value::Null);
+        assert_eq!(result["quorumGateIntersectionRefused"], Value::Null);
+
+        // (2) Handle wired but nothing published yet: still null.
+        let handle = Arc::new(RwLock::new(None));
+        let state = fresh_state().with_quorum_gate_status(handle.clone());
+        let result = handle_node_status(json!(1), &state).await.result.unwrap();
+        assert_eq!(result["quorumCuratedMembers"], Value::Null);
+        assert_eq!(result["quorumAutoMembers"], Value::Null);
+        assert_eq!(result["quorumGateSuppressedPeers"], Value::Null);
+        assert_eq!(result["quorumGateMaxAutoMembers"], Value::Null);
+        assert_eq!(result["quorumGateIntersectionRefused"], Value::Null);
+
+        // (3) Small honest cluster: gate admits everyone, suppresses no one.
+        *handle.write().unwrap() = Some(QuorumGateSnapshot {
+            curated_members: 0,
+            auto_members: 4,
+            suppressed_peers: 0,
+            max_auto_members: 8,
+            intersection_refused: false,
+        });
+        let quiet = handle_node_status(json!(1), &state).await.result.unwrap();
+        assert_eq!(quiet["quorumCuratedMembers"], json!(0));
+        assert_eq!(quiet["quorumAutoMembers"], json!(4));
+        assert_eq!(quiet["quorumGateSuppressedPeers"], json!(0));
+        assert_eq!(quiet["quorumGateMaxAutoMembers"], json!(8));
+        assert_eq!(quiet["quorumGateIntersectionRefused"], json!(false));
+
+        // (4) Sybil flood: the SAME handle now reports active suppression —
+        // every field must move with the snapshot (not-a-constant proof).
+        *handle.write().unwrap() = Some(QuorumGateSnapshot {
+            curated_members: 2,
+            auto_members: 8,
+            suppressed_peers: 22,
+            max_auto_members: 8,
+            intersection_refused: true,
+        });
+        let flooded = handle_node_status(json!(1), &state).await.result.unwrap();
+        assert_eq!(flooded["quorumCuratedMembers"], json!(2));
+        assert_eq!(flooded["quorumAutoMembers"], json!(8));
+        assert_eq!(flooded["quorumGateSuppressedPeers"], json!(22));
+        assert_eq!(flooded["quorumGateIntersectionRefused"], json!(true));
+        assert_ne!(
+            quiet["quorumGateSuppressedPeers"], flooded["quorumGateSuppressedPeers"],
+            "quorumGateSuppressedPeers must track the live snapshot, not a constant"
+        );
+        assert_ne!(
+            quiet["quorumGateIntersectionRefused"], flooded["quorumGateIntersectionRefused"],
+            "quorumGateIntersectionRefused must track the live snapshot, not a constant"
+        );
     }
 
     /// #543: `minting_getStatus.blocksFound` reflects the live count from the

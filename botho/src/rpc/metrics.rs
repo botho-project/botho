@@ -15,6 +15,10 @@
 //! - `botho_consensus_round_duration_seconds` - SCP consensus round duration
 //!   (histogram)
 //! - `botho_consensus_nominations_total` - Total SCP nominations (counter)
+//! - `botho_scp_slot_stalled` - Current SCP slot stalled: active but not
+//!   externalizing (gauge, 0/1)
+//! - `botho_scp_slot_stall_seconds` - Seconds the active SCP slot has gone
+//!   without externalizing, 0 while idle (gauge)
 //!
 //! ### System Metrics
 //! - `botho_data_dir_usage_bytes` - Bytes used by the data directory (gauge)
@@ -328,6 +332,23 @@ lazy_static! {
         "Whether minting is active (1) or not (0)"
     ).expect("Failed to create minting_active metric");
 
+    /// Whether the current SCP slot is stalled (1) or not (0) — active
+    /// nomination/ballot state with no externalization past the stall
+    /// threshold (#653, epic #532 Phase 0). Updated from the live
+    /// `ScpSlotSnapshot` on every consensus tick.
+    pub static ref SCP_SLOT_STALLED: IntGauge = IntGauge::new(
+        "botho_scp_slot_stalled",
+        "Whether the current SCP slot is stalled: active but not externalizing (1) or not (0)"
+    ).expect("Failed to create scp_slot_stalled metric");
+
+    /// Seconds the current ACTIVE SCP slot has gone without an
+    /// externalization (0 while idle). Advances while a round stays jammed,
+    /// so operators can quantify a stall, not just detect it (#653).
+    pub static ref SCP_SLOT_STALL_SECONDS: IntGauge = IntGauge::new(
+        "botho_scp_slot_stall_seconds",
+        "Seconds the active SCP slot has gone without externalizing (0 while idle)"
+    ).expect("Failed to create scp_slot_stall_seconds metric");
+
     // ============================================================================
     // System Metrics
     // ============================================================================
@@ -424,6 +445,12 @@ pub fn init_metrics() {
     REGISTRY
         .register(Box::new(MINTING_ACTIVE.clone()))
         .expect("Failed to register minting_active");
+    REGISTRY
+        .register(Box::new(SCP_SLOT_STALLED.clone()))
+        .expect("Failed to register scp_slot_stalled");
+    REGISTRY
+        .register(Box::new(SCP_SLOT_STALL_SECONDS.clone()))
+        .expect("Failed to register scp_slot_stall_seconds");
 
     // Register histograms
     REGISTRY
@@ -608,6 +635,18 @@ impl MetricsUpdater {
         MINTING_ACTIVE.set(if active { 1 } else { 0 });
     }
 
+    /// Update the SCP slot-stalled metric (#653). Called from the consensus
+    /// tick with the live `ScpSlotSnapshot.slot_stalled` verdict.
+    pub fn set_scp_slot_stalled(&self, stalled: bool) {
+        SCP_SLOT_STALLED.set(if stalled { 1 } else { 0 });
+    }
+
+    /// Update the SCP slot stall-duration metric (#653). Called from the
+    /// consensus tick with the live `ScpSlotSnapshot.stall_seconds`.
+    pub fn set_scp_slot_stall_seconds(&self, seconds: u64) {
+        SCP_SLOT_STALL_SECONDS.set(seconds.min(i64::MAX as u64) as i64);
+    }
+
     /// Record a validation latency observation.
     pub fn observe_validation_latency(&self, seconds: f64) {
         VALIDATION_LATENCY.observe(seconds);
@@ -783,6 +822,24 @@ mod tests {
 
         updater.set_minting_active(false);
         assert_eq!(MINTING_ACTIVE.get(), 0);
+    }
+
+    /// #653: the SCP slot-stall gauges must track the values the consensus
+    /// tick pushes — both directions (set and clear), so a stall showing on
+    /// the dashboard is live state, not a latched constant.
+    #[test]
+    fn test_scp_slot_stall_gauges() {
+        let updater = MetricsUpdater::new();
+
+        updater.set_scp_slot_stalled(true);
+        updater.set_scp_slot_stall_seconds(61);
+        assert_eq!(SCP_SLOT_STALLED.get(), 1);
+        assert_eq!(SCP_SLOT_STALL_SECONDS.get(), 61);
+
+        updater.set_scp_slot_stalled(false);
+        updater.set_scp_slot_stall_seconds(0);
+        assert_eq!(SCP_SLOT_STALLED.get(), 0);
+        assert_eq!(SCP_SLOT_STALL_SECONDS.get(), 0);
     }
 
     #[test]
