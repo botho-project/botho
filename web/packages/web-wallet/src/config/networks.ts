@@ -50,12 +50,12 @@ function getEnvFaucetEndpoint(): string | undefined {
 }
 
 /**
- * The live testnet SCP nodes the user can select as their trusted ingress.
+ * The live testnet nodes the user can select as their trusted ingress.
  *
- * Each is a real validator/faucet node with CORS enabled for browser access.
- * `seed2` is a second validator — kept in the list so the picker always offers
- * three SCP ingress options; its health check surfaces reachability so users
- * can see when it is down (e.g. no public DNS/TLS) before selecting it.
+ * Each is a real node with TLS + CORS enabled for browser access: three US
+ * validators (seed/seed2/faucet) and two regional relay seeds (eu/ap, #613).
+ * Health checks surface reachability so users can see when a node is down
+ * before selecting it.
  */
 export const INGRESS_NODES: IngressNode[] = [
   {
@@ -78,6 +78,23 @@ export const INGRESS_NODES: IngressNode[] = [
     role: 'SCP validator + faucet',
     rpcEndpoint: 'https://faucet.botho.io/rpc',
     servesFaucet: true,
+  },
+  // Regional relay seeds (#613), TLS-terminated on-box via nginx + Let's
+  // Encrypt (#636) — the wallet is an HTTPS PWA, so plain-HTTP :17101
+  // endpoints would be blocked as mixed content.
+  {
+    id: 'eu',
+    name: 'EU seed (Frankfurt)',
+    role: 'Regional relay seed',
+    rpcEndpoint: 'https://eu.seed.botho.io/rpc',
+    servesFaucet: false,
+  },
+  {
+    id: 'ap',
+    name: 'AP seed (Singapore)',
+    role: 'Regional relay seed',
+    rpcEndpoint: 'https://ap.seed.botho.io/rpc',
+    servesFaucet: false,
   },
 ]
 
