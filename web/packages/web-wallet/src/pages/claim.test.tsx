@@ -181,3 +181,81 @@ describe('ClaimPage valid-link survives StrictMode double-invoke (#654)', () => 
     await screen.findByText(/no claim link found|not valid/i)
   })
 })
+
+// This environment's jsdom does not provide localStorage; mirror the mock used
+// by core's wallet.test.ts so the REAL saveWallet can persist through it.
+const localStorageMock = (() => {
+  let store: Record<string, string> = {}
+  return {
+    getItem: (key: string) => store[key] ?? null,
+    setItem: (key: string, value: string) => { store[key] = value },
+    removeItem: (key: string) => { delete store[key] },
+    clear: () => { store = {} },
+  }
+})()
+Object.defineProperty(globalThis, 'localStorage', { value: localStorageMock })
+
+/**
+ * Required-password policy for the in-flow "Create one" wallet (#672).
+ *
+ * `handleSweep` previously persisted the freshly created wallet with
+ * `saveWallet(mnemonic)` — no password — writing the raw 12-word seed to
+ * localStorage in plaintext (`botho-wallet-encrypted = 'false'`), bypassing the
+ * #475 policy for exactly the users whose first wallet arrives via a claim
+ * link. This locks in: no claim while the password is missing, and the
+ * persisted seed is an encrypted vault blob.
+ */
+describe('ClaimPage in-flow wallet create persists ENCRYPTED (#672)', () => {
+  const VALID_PASSWORD = 'correct-horse-battery'
+
+  beforeEach(() => {
+    cleanup()
+    scanEphemeralMock.mockReset()
+    scanEphemeralMock.mockResolvedValue({
+      gross: 5_000_000_000_000n,
+      fee: 100_000_000n,
+      net: 4_900_000_000_000n,
+    })
+    sweepEphemeralMock.mockReset()
+    sweepEphemeralMock.mockResolvedValue({ txHash: 'tx' })
+    for (const spy of Object.values(adapterSpies)) spy.mockClear()
+    window.history.replaceState(null, '', '/claim')
+    localStorageMock.clear()
+  })
+
+  afterEach(() => {
+    window.location.hash = ''
+    localStorageMock.clear()
+  })
+
+  it('requires a password before claiming and stores a vault blob, not plaintext', async () => {
+    setClaimHash()
+    renderClaim()
+
+    fireEvent.click(await screen.findByRole('button', { name: /reveal/i }))
+    fireEvent.click(await screen.findByRole('button', { name: /create one/i }))
+
+    // Destination is pre-filled from the new wallet, but there is no password
+    // yet — the Claim button must stay disabled.
+    const claimBtn = screen.getByRole('button', { name: /^Claim / }) as HTMLButtonElement
+    expect(claimBtn.disabled).toBe(true)
+
+    fireEvent.change(screen.getByPlaceholderText(/^Password \(min/i), {
+      target: { value: VALID_PASSWORD },
+    })
+    fireEvent.change(screen.getByPlaceholderText(/Confirm password/i), {
+      target: { value: VALID_PASSWORD },
+    })
+    await waitFor(() => expect(claimBtn.disabled).toBe(false))
+
+    fireEvent.click(claimBtn)
+    // Real saveWallet + PBKDF2 (600k iterations) runs here — allow extra time.
+    await screen.findByText(/on their way to your address/i, {}, { timeout: 20000 })
+
+    expect(localStorageMock.getItem('botho-wallet-encrypted')).toBe('true')
+    const stored = localStorageMock.getItem('botho-wallet-mnemonic')
+    expect(stored).not.toBeNull()
+    // An encrypted vault blob is one opaque token — never a 12-word phrase.
+    expect(stored!.trim().split(/\s+/).length).toBe(1)
+  }, 30000)
+})
