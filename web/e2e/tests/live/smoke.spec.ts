@@ -67,7 +67,10 @@ test.describe('Live smoke @ wallet.botho.io', () => {
     const wasmErrors: string[] = []
     const failedWasm: string[] = []
     page.on('console', (msg) => {
-      if (msg.type() === 'error' && /wasm|bth_wasm_signer|\/pkg\//i.test(msg.text())) {
+      // Match the signer artifact specifically — a bare /wasm/ also matches
+      // "wasm-unsafe-eval" inside unrelated CSP-violation messages (e.g. the
+      // Cloudflare analytics beacon being blocked by our own script-src).
+      if (msg.type() === 'error' && /bth_wasm_signer|\/pkg\/|\.wasm\b/i.test(msg.text())) {
         wasmErrors.push(msg.text())
       }
     })
