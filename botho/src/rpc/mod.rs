@@ -1276,24 +1276,66 @@ async fn handle_supply_info(id: Value, state: &RpcState) -> JsonRpcResponse {
     )
 }
 
+/// Serialize a block into the explorer-facing RPC shape shared by
+/// `getBlockByHeight` and `getBlockByHash`.
+///
+/// #696: on top of the original header fields (which existing consumers — the
+/// web wallet adapter and the seed status page — depend on and which must not
+/// change), this adds privacy-safe per-transaction structure (hash, fee, ring
+/// size — never amounts/recipients/linkage), the block's total fees, and the
+/// lottery summary so explorers can render block detail and lottery events
+/// without re-deriving consensus data client-side.
+fn block_to_json(block: &crate::block::Block) -> Value {
+    // Per-transfer-tx structure. `ringSize` is the number of ring members in
+    // the transaction's first input; every input uses the same fixed ring
+    // size, and a well-formed transfer tx always has at least one input
+    // (0 only for degenerate/test blocks).
+    let transactions: Vec<Value> = block
+        .transactions
+        .iter()
+        .map(|tx| {
+            json!({
+                "hash": hex::encode(tx.hash()),
+                "fee": tx.fee,
+                "ringSize": tx.inputs.clsag().first().map(|input| input.ring.len()).unwrap_or(0),
+            })
+        })
+        .collect();
+
+    // Lottery summary: the real `BlockLotterySummary` fields (block.rs) in
+    // camelCase, plus the on-chain payout structure carried alongside it.
+    let summary = &block.lottery_summary;
+    let lottery = json!({
+        "totalFees": summary.total_fees,
+        "poolDistributed": summary.pool_distributed,
+        "amountBurned": summary.amount_burned,
+        "lotterySeed": hex::encode(summary.lottery_seed),
+        "payoutCount": block.lottery_outputs.len(),
+        "payoutTotal": block.total_lottery_payouts(),
+    });
+
+    json!({
+        "height": block.height(),
+        "hash": hex::encode(block.hash()),
+        "prevHash": hex::encode(block.header.prev_block_hash),
+        "timestamp": block.header.timestamp,
+        "difficulty": block.header.difficulty,
+        "nonce": block.header.nonce,
+        "txCount": block.transactions.len(),
+        "mintingReward": block.minting_tx.reward,
+        // #696 additive explorer fields below this line.
+        "transactions": transactions,
+        "totalFees": block.total_fees(),
+        "lottery": lottery,
+    })
+}
+
 async fn handle_get_block(id: Value, params: &Value, state: &RpcState) -> JsonRpcResponse {
     let height = params.get("height").and_then(|v| v.as_u64()).unwrap_or(0);
     let ledger = read_lock!(state.ledger, id.clone());
 
     match ledger.get_block(height) {
-        Ok(block) => JsonRpcResponse::success(
-            id,
-            json!({
-                "height": block.height(),
-                "hash": hex::encode(block.hash()),
-                "prevHash": hex::encode(block.header.prev_block_hash),
-                "timestamp": block.header.timestamp,
-                "difficulty": block.header.difficulty,
-                "nonce": block.header.nonce,
-                "txCount": block.transactions.len(),
-                "mintingReward": block.minting_tx.reward,
-            }),
-        ),
+        Ok(block) => JsonRpcResponse::success(id, block_to_json(&block)),
         Err(e) => JsonRpcResponse::error(id, -32000, &format!("Block not found: {}", e)),
     }
 }
@@ -1336,19 +1378,7 @@ async fn handle_get_block_by_hash(id: Value, params: &Value, state: &RpcState) -
     let chain_height = ledger.get_chain_state().map(|s| s.height).unwrap_or(0);
 
     match ledger.get_block_by_hash(&block_hash, chain_height) {
-        Ok(Some(block)) => JsonRpcResponse::success(
-            id,
-            json!({
-                "height": block.height(),
-                "hash": hex::encode(block.hash()),
-                "prevHash": hex::encode(block.header.prev_block_hash),
-                "timestamp": block.header.timestamp,
-                "difficulty": block.header.difficulty,
-                "nonce": block.header.nonce,
-                "txCount": block.transactions.len(),
-                "mintingReward": block.minting_tx.reward,
-            }),
-        ),
+        Ok(Some(block)) => JsonRpcResponse::success(id, block_to_json(&block)),
         Ok(None) => JsonRpcResponse::error(id, -32000, "Block not found"),
         Err(e) => JsonRpcResponse::error(id, -32000, &format!("Block not found: {}", e)),
     }
@@ -2757,6 +2787,11 @@ async fn handle_cluster_get_wealth_by_target_keys(
 /// cluster IDs in the UTXO set.
 async fn handle_cluster_get_all_wealth(id: Value, state: &RpcState) -> JsonRpcResponse {
     let ledger = read_lock!(state.ledger, id.clone());
+    // Mempool holds the live fee curve; taken (ledger → mempool, matching
+    // cluster_getWealthByTargetKeys) so `factor` comes from the same
+    // `cluster_factor` the fee-estimation RPCs use — one source of curve
+    // truth, no TS re-implementation (#696, drift class #610).
+    let mempool = read_lock!(state.mempool, id.clone());
 
     match ledger.get_all_cluster_wealth() {
         Ok(clusters) => {
@@ -2773,6 +2808,9 @@ async fn handle_cluster_get_all_wealth(id: Value, state: &RpcState) -> JsonRpcRe
                     json!({
                         "cluster_id": cluster_id.to_string(),
                         "wealth": wealth.to_string(),
+                        // Milli-x fee factor from the live curve
+                        // (1000 = 1x .. 6000 = 6x). #696 additive.
+                        "factor": mempool.cluster_factor(*wealth),
                     })
                 })
                 .collect();
@@ -4639,5 +4677,221 @@ mod tests {
         assert_eq!(result["bytesReceived"], json!(0));
         assert_eq!(result["inboundCount"], json!(0));
         assert_eq!(result["outboundCount"], json!(0));
+    }
+
+    /// #696: `block_to_json` — the shared `getBlockByHeight` /
+    /// `getBlockByHash` shape — must carry the additive explorer fields
+    /// (`transactions`, `totalFees`, `lottery`) alongside the ORIGINAL header
+    /// fields, which existing consumers (web wallet adapter, seed status page)
+    /// depend on and which must not change.
+    #[test]
+    fn test_block_to_json_explorer_fields() {
+        use crate::{
+            block::{Block, BlockLotterySummary, LotteryOutput},
+            transaction::{ClsagRingInput, RingMember, Transaction},
+        };
+
+        // A transfer tx with an 11-member ring. `block_to_json` only reads
+        // structure (hash / fee / ring length), so the signature can be empty.
+        let ring: Vec<RingMember> = (0..11)
+            .map(|i| RingMember {
+                target_key: [i as u8; 32],
+                public_key: [i as u8; 32],
+                commitment: [0u8; 32],
+            })
+            .collect();
+        let input = ClsagRingInput {
+            ring,
+            key_image: [1u8; 32],
+            commitment_key_image: [2u8; 32],
+            clsag_signature: Vec::new(),
+            pseudo_output_amount: 500,
+        };
+        let tx = Transaction::new(vec![input], Vec::new(), 250, 0);
+        let tx_hash_hex = hex::encode(tx.hash());
+
+        let mut block = Block::genesis();
+        block.transactions.push(tx);
+        block.set_lottery_result(
+            vec![
+                LotteryOutput {
+                    winner_tx_hash: [3u8; 32],
+                    winner_output_index: 0,
+                    payout: 60,
+                    target_key: [4u8; 32],
+                    public_key: [5u8; 32],
+                },
+                LotteryOutput {
+                    winner_tx_hash: [6u8; 32],
+                    winner_output_index: 1,
+                    payout: 40,
+                    target_key: [7u8; 32],
+                    public_key: [8u8; 32],
+                },
+            ],
+            BlockLotterySummary {
+                total_fees: 250,
+                pool_distributed: 200,
+                amount_burned: 50,
+                lottery_seed: [9u8; 32],
+            },
+        );
+
+        let json = block_to_json(&block);
+
+        // Original fields: present and unchanged (additive-only contract).
+        assert_eq!(json["height"], json!(block.height()));
+        assert_eq!(json["hash"], json!(hex::encode(block.hash())));
+        assert_eq!(
+            json["prevHash"],
+            json!(hex::encode(block.header.prev_block_hash))
+        );
+        assert_eq!(json["timestamp"], json!(block.header.timestamp));
+        assert_eq!(json["difficulty"], json!(block.header.difficulty));
+        assert_eq!(json["nonce"], json!(block.header.nonce));
+        assert_eq!(json["txCount"], json!(1));
+        assert_eq!(json["mintingReward"], json!(block.minting_tx.reward));
+
+        // New: per-tx structure (privacy-safe — hash / fee / ring size only).
+        let txs = json["transactions"].as_array().expect("transactions array");
+        assert_eq!(txs.len(), 1);
+        assert_eq!(txs[0]["hash"], json!(tx_hash_hex));
+        assert_eq!(txs[0]["fee"], json!(250));
+        assert_eq!(txs[0]["ringSize"], json!(11));
+        // No amount/recipient/linkage fields leak into the tx entries.
+        assert!(txs[0].get("outputs").is_none());
+        assert!(txs[0].get("amount").is_none());
+
+        // New: block fee total (saturating helper).
+        assert_eq!(json["totalFees"], json!(250));
+
+        // New: lottery summary — the real BlockLotterySummary fields in
+        // camelCase, plus on-chain payout structure.
+        let lottery = &json["lottery"];
+        assert_eq!(lottery["totalFees"], json!(250));
+        assert_eq!(lottery["poolDistributed"], json!(200));
+        assert_eq!(lottery["amountBurned"], json!(50));
+        assert_eq!(lottery["lotterySeed"], json!(hex::encode([9u8; 32])));
+        assert_eq!(lottery["payoutCount"], json!(2));
+        assert_eq!(lottery["payoutTotal"], json!(100));
+    }
+
+    /// #696: the `getBlockByHeight` handler returns the enriched shape end to
+    /// end, and a block with no transfer txs (genesis) renders the new fields
+    /// as empty/zero defaults rather than omitting them.
+    #[tokio::test]
+    async fn test_get_block_by_height_additive_explorer_fields() {
+        use crate::{ledger::Ledger, mempool::Mempool};
+
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+        std::mem::forget(dir);
+        let state = RpcState::new(
+            ledger,
+            Mempool::new(),
+            Network::Testnet,
+            None,
+            None,
+            vec![],
+            Arc::new(WsBroadcaster::new(16)),
+        );
+
+        let result = handle_get_block(json!(1), &json!({"height": 0}), &state)
+            .await
+            .result
+            .expect("genesis block exists");
+
+        // Original shape intact.
+        assert_eq!(result["height"], json!(0));
+        assert!(result["hash"].is_string());
+        assert!(result["prevHash"].is_string());
+        assert_eq!(result["txCount"], json!(0));
+
+        // New fields present with empty/default values.
+        assert_eq!(result["transactions"], json!([]));
+        assert_eq!(result["totalFees"], json!(0));
+        assert_eq!(result["lottery"]["totalFees"], json!(0));
+        assert_eq!(result["lottery"]["poolDistributed"], json!(0));
+        assert_eq!(result["lottery"]["amountBurned"], json!(0));
+        assert_eq!(result["lottery"]["payoutCount"], json!(0));
+        assert_eq!(result["lottery"]["payoutTotal"], json!(0));
+        assert_eq!(
+            result["lottery"]["lotterySeed"],
+            json!(hex::encode([0u8; 32]))
+        );
+    }
+
+    /// #696: `cluster_getAllWealth` entries carry a `factor` field — the
+    /// milli-x multiplier (1000 = 1x .. 6000 = 6x) computed via the SAME live
+    /// fee curve the fee-estimation RPCs use (`Mempool::cluster_factor`), so
+    /// the explorer never re-implements the consensus curve client-side.
+    #[tokio::test]
+    async fn test_cluster_get_all_wealth_includes_live_curve_factor() {
+        use crate::{ledger::Ledger, mempool::Mempool};
+
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+        std::mem::forget(dir);
+
+        // Seed one poor and one ultra-wealthy cluster directly.
+        let poor_wealth: u128 = 1;
+        let rich_wealth: u128 = u128::MAX;
+        ledger.set_cluster_wealth_for_test(1, poor_wealth).unwrap();
+        ledger.set_cluster_wealth_for_test(2, rich_wealth).unwrap();
+
+        let state = RpcState::new(
+            ledger,
+            Mempool::new(),
+            Network::Testnet,
+            None,
+            None,
+            vec![],
+            Arc::new(WsBroadcaster::new(16)),
+        );
+
+        let result = handle_cluster_get_all_wealth(json!(1), &state)
+            .await
+            .result
+            .expect("cluster_getAllWealth succeeds");
+
+        // Existing shape intact (additive-only).
+        assert_eq!(result["count"], json!(2));
+        assert!(result["total_tracked_wealth"].is_string());
+        let clusters = result["clusters"].as_array().expect("clusters array");
+        assert_eq!(clusters.len(), 2);
+
+        // The reference curve: same default FeeConfig the RPC state's mempool
+        // carries.
+        let reference = Mempool::new();
+
+        let mut poor_factor = None;
+        let mut rich_factor = None;
+        for entry in clusters {
+            // Existing fields unchanged: string cluster_id + string wealth.
+            let wealth: u128 = entry["wealth"].as_str().unwrap().parse().unwrap();
+            let factor = entry["factor"].as_u64().expect("factor is a u64");
+            // Single source of curve truth: matches the live cluster_factor.
+            assert_eq!(factor, reference.cluster_factor(wealth));
+            // Curve bounds: milli-x in [1000, 6000].
+            assert!(
+                (1000..=6000).contains(&factor),
+                "factor {} out of bounds",
+                factor
+            );
+            match entry["cluster_id"].as_str().unwrap() {
+                "1" => poor_factor = Some(factor),
+                "2" => rich_factor = Some(factor),
+                other => panic!("unexpected cluster_id {}", other),
+            }
+        }
+        let poor_factor = poor_factor.expect("cluster 1 present");
+        let rich_factor = rich_factor.expect("cluster 2 present");
+        assert_eq!(poor_factor, 1000, "negligible wealth pays the 1x floor");
+        assert!(
+            rich_factor > poor_factor,
+            "curve is progressive: {} !> {}",
+            rich_factor,
+            poor_factor
+        );
     }
 }
