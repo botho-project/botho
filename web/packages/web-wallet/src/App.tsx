@@ -9,6 +9,7 @@ import { ContactsPage } from './pages/contacts'
 import { DocsPage } from './pages/docs'
 import { ExplorerPage } from './pages/explorer'
 import { NetworkPage } from './pages/network'
+import { OperatorPage } from './pages/operator'
 import { RigPage, RigSuccessPage, RigStatusPage } from './pages/rig'
 
 /**
@@ -52,6 +53,8 @@ function App() {
             <Route path="/contacts" element={<ContactsPage />} />
             <Route path="/explorer" element={<ExplorerPage />} />
             <Route path="/network" element={<NetworkPage />} />
+            {/* Operator dashboard — public read surface (#706, #695 P4.1). */}
+            <Route path="/operator" element={<OperatorPage />} />
             <Route path="/explorer/tx/:hash" element={<ExplorerPage />} />
             <Route path="/explorer/block/:hash" element={<ExplorerPage />} />
             <Route path="/docs" element={<DocsPage />} />
