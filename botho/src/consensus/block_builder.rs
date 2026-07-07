@@ -125,7 +125,27 @@ impl BlockBuilder {
                     // the apply-time backstop never fires for our own blocks
                     // (no externalize-then-reject halt — the #449/#421 failure
                     // mode).
-                    if tx.created_at_height + MAX_TX_AGE < block_height {
+                    //
+                    // `created_at_height` is attacker-set and is NOT bounded
+                    // anywhere (mempool admission, the SCP intrinsic validity
+                    // gate, and gossip all leave it unconstrained), so the age
+                    // bound must saturate. With `overflow-checks = true` on the
+                    // release profile (#663) an unchecked `+` here would let a
+                    // crafted `created_at_height` near `u64::MAX` panic — and
+                    // because `build_from_externalized` runs deterministically
+                    // on EVERY node after externalization (run.rs), that is a
+                    // network-wide halt, not just a proposer-local one.
+                    // Saturation preserves the rule's semantics and matches the
+                    // apply-side store.rs `first_stale_transfer_tx` exactly: a
+                    // saturated sum is `u64::MAX`, which is never `<
+                    // block_height`, so a tx claiming a far-future
+                    // `created_at_height` is treated as "not stale" here (it is
+                    // instead rejected by the later validity gates — e.g. C3
+                    // ring resolution — rather than by this staleness filter).
+                    // Both paths run the same binary on the same block height,
+                    // so the build and apply verdicts cannot diverge across
+                    // nodes.
+                    if tx.created_at_height.saturating_add(MAX_TX_AGE) < block_height {
                         warn!(
                             tx_hash = hex::encode(&value.tx_hash[0..8]),
                             created_at_height = tx.created_at_height,
@@ -532,6 +552,79 @@ mod tests {
         assert!(
             !built.transfer_tx_hashes.contains(&stale_hash),
             "stale tx hash must not be recorded in the built block"
+        );
+    }
+
+    /// Issue #663 (overflow-checks hardening): `created_at_height` is
+    /// attacker-set and unbounded, so the staleness age bound
+    /// (`created_at_height + MAX_TX_AGE`) must not panic under
+    /// `overflow-checks = true` (the release profile). A tx with
+    /// `created_at_height == u64::MAX` must build cleanly — never panic with
+    /// "attempt to add with overflow" — because `build_from_externalized` runs
+    /// deterministically on every validating node after externalization, so a
+    /// panic here is a network-wide halt vector (not just a proposer-local
+    /// crash).
+    ///
+    /// Semantics: with `saturating_add`, `u64::MAX + MAX_TX_AGE` saturates to
+    /// `u64::MAX`, which is never `< block_height`, so the far-future tx is
+    /// classified "not stale" here and simply retained by this filter (it is
+    /// rejected downstream by the ordinary validity gates, e.g. C3 ring
+    /// resolution, on real crafted inputs). This deterministically matches the
+    /// apply-side `first_stale_transfer_tx` in store.rs, so build and apply
+    /// verdicts cannot diverge across nodes.
+    #[test]
+    fn test_build_from_externalized_no_overflow_on_max_created_at_height() {
+        use crate::transaction::TxInputs;
+
+        let block_height = 200u64;
+
+        // Attacker-crafted tx: created_at_height == u64::MAX. Under the old
+        // unchecked `+ MAX_TX_AGE` this panicked "attempt to add with overflow"
+        // with overflow-checks enabled.
+        let crafted = Transaction {
+            inputs: TxInputs::new(vec![]),
+            outputs: vec![],
+            fee: 0,
+            created_at_height: u64::MAX,
+        };
+        let crafted_hash = crafted.hash();
+
+        let values = vec![
+            ConsensusValue::from_minting_tx([9u8; 32], 0),
+            ConsensusValue::from_transaction(crafted_hash, 0),
+        ];
+
+        let minting_tx = mock_minting_tx(block_height);
+        let get_minting = |_: &[u8; 32]| Some(minting_tx.clone());
+        let get_transfer = move |h: &[u8; 32]| {
+            if *h == crafted_hash {
+                Some(crafted.clone())
+            } else {
+                None
+            }
+        };
+
+        // Must not panic under overflow-checks. Build twice to pin determinism.
+        let built_a =
+            BlockBuilder::build_from_externalized(&values, get_minting, get_transfer.clone())
+                .expect("build must not panic on u64::MAX created_at_height");
+        let built_b = BlockBuilder::build_from_externalized(&values, get_minting, get_transfer)
+            .expect("second build must not panic either");
+
+        // Deterministic inclusion: saturated sum (u64::MAX) is never
+        // < block_height, so the far-future tx is "not stale" and retained here.
+        assert_eq!(
+            built_a.block.transactions.len(),
+            1,
+            "u64::MAX-created tx is not stale (saturated sum >= block_height) and is retained"
+        );
+        assert_eq!(
+            built_a.transfer_tx_hashes, built_b.transfer_tx_hashes,
+            "inclusion/exclusion of the crafted tx must be deterministic across builds"
+        );
+        assert!(
+            built_a.transfer_tx_hashes.contains(&crafted_hash),
+            "crafted tx must be deterministically recorded in the built block"
         );
     }
 
