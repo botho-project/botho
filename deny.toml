@@ -39,6 +39,10 @@ ignore = [
     "RUSTSEC-2025-0098",
     # num-bigint-dig reciprocal_mg10 unsoundness
     "RUSTSEC-2025-0100",
+    # number_prefix - unmaintained, transitive from indicatif. NOTE: fires in
+    # CI (cargo-deny in the security workflow) but reports advisory-not-detected
+    # on some local cargo-deny versions - keep the ignore either way.
+    "RUSTSEC-2025-0119",
 
     # --- Cycle-7 audit (issue #658) --------------------------------------
     # Advisories firing against the live RustSec DB as of 2026-07-05 that have
