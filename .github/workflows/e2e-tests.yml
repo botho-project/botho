@@ -178,6 +178,11 @@ jobs:
         run: |
           cargo test --package botho --test e2e_consensus_integration -- --test-threads=1
           cargo test --package botho --test network_integration -- --test-threads=1
+          # Progressive-fee curve suite (#669): fast and deterministic, but it
+          # was in no workflow, so the #626/#627 curve recalibration silently
+          # stranded its expectations. Runs here so fee-curve changes must
+          # keep the e2e expectations current.
+          cargo test --package botho --test e2e_progressive_fees -- --test-threads=1
 
   summary:
     name: E2E Test Summary

@@ -218,19 +218,23 @@ fn test_cluster_factor_wealthy_pay_more() {
     let fee_config = FeeConfig::default();
     let tx_size = 4000; // ~4KB typical CLSAG transaction
 
-    // Test cluster factors at different wealth levels
+    // Wealth is measured in PICOCREDITS since the #626/#627 recalibration:
+    // the deployed log-domain curve is exactly 1x below `W_MID >> 12`
+    // (~24.4 BTH), exactly 3.5x at `W_MID_PICO` (100k BTH), and exactly 6x
+    // at or above `W_MID << 12` (~409.6M BTH). Cases span the whole curve.
+    const PICO_PER_BTH: u128 = 1_000_000_000_000;
     let test_cases = [
         (0u128, "Zero wealth"),
-        (1_000_000u128, "1M wealth"),
-        (10_000_000u128, "10M wealth (w_mid)"),
-        (50_000_000u128, "50M wealth"),
-        (100_000_000u128, "100M wealth"),
+        (PICO_PER_BTH, "1 BTH (below 1x floor edge)"),
+        (100_000 * PICO_PER_BTH, "100k BTH (w_mid)"),
+        (10_000_000 * PICO_PER_BTH, "10M BTH"),
+        (500_000_000 * PICO_PER_BTH, "500M BTH (6x ceiling)"),
     ];
 
     println!("Testing cluster factor curve:");
     println!(
-        "{:>20} | {:>12} | {:>15}",
-        "Cluster Wealth", "Factor", "Fee (nanoBTH)"
+        "{:>28} | {:>12} | {:>18}",
+        "Cluster Wealth", "Factor", "Fee (picocredits)"
     );
     println!("{:-<20}-+-{:-<12}-+-{:-<15}", "", "", "");
 
@@ -256,22 +260,30 @@ fn test_cluster_factor_wealthy_pay_more() {
         prev_fee = fee;
     }
 
-    // Verify extreme values
+    // Verify the deployed curve's exact invariants (#626 spec):
+    // exact 1x floor below `W_MID >> 12`, exact 3.5x at the midpoint
+    // (sigmoid(0) = 0.5 -> 1000 + 5000/2), exact 6x ceiling at/above
+    // `W_MID << 12`.
     let factor_zero = fee_config.cluster_factor(0);
-    let factor_max = fee_config.cluster_factor(100_000_000);
+    let factor_floor_edge = fee_config.cluster_factor(PICO_PER_BTH);
+    let factor_mid = fee_config.cluster_factor(100_000 * PICO_PER_BTH);
+    let factor_max = fee_config.cluster_factor(500_000_000 * PICO_PER_BTH);
 
-    // Zero wealth should be close to 1x (1000-2000 range due to sigmoid)
-    assert!(
-        factor_zero < 3000,
-        "Zero wealth factor should be low: {}",
-        factor_zero
+    assert_eq!(
+        factor_zero, 1000,
+        "Zero wealth must sit on the exact 1x floor"
     );
-
-    // Max wealth should be close to 6x (5000-6000 range)
-    assert!(
-        factor_max >= 5000,
-        "Max wealth factor should be high: {}",
-        factor_max
+    assert_eq!(
+        factor_floor_edge, 1000,
+        "1 BTH is far below W_MID >> 12 and must sit on the exact 1x floor"
+    );
+    assert_eq!(
+        factor_mid, 3500,
+        "The curve midpoint (100k BTH) must be exactly 3.5x"
+    );
+    assert_eq!(
+        factor_max, 6000,
+        "500M BTH is above W_MID << 12 and must hit the exact 6x ceiling"
     );
 
     // Ratio should be significant (at least 2x difference)
