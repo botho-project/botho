@@ -790,6 +790,7 @@ dependencies = [
  "bth-crypto-pq",
  "bth-crypto-ring-signature",
  "bth-gossip",
+ "bth-quorum-sim",
  "bth-transaction-clsag",
  "bth-transaction-core",
  "bth-transaction-types",

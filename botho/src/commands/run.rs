@@ -22,10 +22,10 @@ use std::collections::HashMap;
 
 use crate::{
     block::MintingTx,
-    config::{Config, QuorumMode},
+    config::{Config, QuorumConfig, QuorumMode},
     consensus::{
         BlockBuilder, ConsensusConfig, ConsensusEvent, ConsensusService, LotteryFeeConfig,
-        ScpSlotSnapshot, TransactionValidator,
+        QuorumGateSnapshot, ScpSlotSnapshot, TransactionValidator,
     },
     network::{
         default_seed_domain, BlockTxn, ChainSyncManager, CompactBlock, GetBlockTxn,
@@ -430,6 +430,14 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
     // can tell a jammed competing-coinbase round apart from an idle node.
     let scp_slot_status: Arc<RwLock<Option<ScpSlotSnapshot>>> = Arc::new(RwLock::new(None));
 
+    // Shared quorum-promotion-gate handle (#651, epic #441 §3/P5). The quorum
+    // rebuild path below publishes a fresh snapshot of the gate's evaluation
+    // (curated vs auto-promoted member counts, suppressed peers, intersection
+    // refusals) at the initial seed and on every peer-churn rebuild; the RPC
+    // layer surfaces it in `node_getStatus` so an operator can see the gate
+    // working. `None` until the first evaluation (never fabricated).
+    let quorum_gate_status: Arc<RwLock<Option<QuorumGateSnapshot>>> = Arc::new(RwLock::new(None));
+
     let mut rpc_state = RpcState::from_shared(
         node.shared_ledger(),
         node.shared_mempool(),
@@ -449,6 +457,9 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
     // Live SCP slot-stall observability for `node_getStatus` (#653). Shares
     // the handle the consensus tick publishes into.
     .with_scp_slot_status(scp_slot_status.clone())
+    // Quorum promotion gate observability for `node_getStatus` (#651). Shares
+    // the handle the quorum rebuild path publishes into.
+    .with_quorum_gate_status(quorum_gate_status.clone())
     .with_peers(peers_snapshot.clone())
     // Live traffic / connection-direction counters for `network_getInfo`
     // (#542). Shares the same handle the network event loop increments.
@@ -571,7 +582,16 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
     // solo. A genuine lone node (no peers connected) still yields a 1-of-1 solo
     // quorum and mints solo — no regression for `min_peers == 0`.
     let scp_quorum_set = if discovery.peer_count() > 0 {
-        rebuild_scp_quorum_set(&config, &discovery, &local_peer_id)
+        // Initial seed goes through the promotion gate (#651) like every
+        // later churn rebuild; there is no previous quorum set yet, so an
+        // intersection refusal falls back to a majority threshold inside the
+        // gate. Publish the gate snapshot so `node_getStatus` reflects the
+        // seed evaluation.
+        let (qs, gate_snapshot) = rebuild_scp_quorum_set(&config, &discovery, &local_peer_id, None);
+        if let Ok(mut guard) = quorum_gate_status.write() {
+            *guard = Some(gate_snapshot);
+        }
+        qs
     } else {
         build_scp_quorum_set(&quorum, &local_peer_id)
     };
@@ -852,7 +872,10 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                             if let Ok(mut count) = peer_count.write() {
                                 *count = new_peer_count;
                             }
-                            // Update SCP peer count (all peers participate in consensus)
+                            // Update SCP peer count. NOTE: this is the raw connected-peer
+                            // count used by the #509 quorumFaultTolerant/quorumDegenerate
+                            // flags; actual quorum MEMBERSHIP is bounded by the promotion
+                            // gate (#651) and surfaced separately via QuorumGateSnapshot.
                             if let Ok(mut count) = scp_peer_count.write() {
                                 *count = new_peer_count;
                             }
@@ -873,9 +896,23 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                             consensus.set_connected_peers(new_peer_count);
 
                             // Reconfigure the consensus quorum to include the
-                            // newly connected peer. This is what lifts a node
+                            // newly connected peer, THROUGH the promotion gate
+                            // (#651): curated members are always admitted,
+                            // auto-discovered peers only up to the configured
+                            // cap, and a candidate that fails the quorum-
+                            // intersection check is refused (the gate returns
+                            // the previous set, which reconfigure_quorum
+                            // debounces as a no-op). This is what lifts a node
                             // out of latched solo mode without a restart.
-                            let new_qs = rebuild_scp_quorum_set(&config, &discovery, &local_peer_id);
+                            let (new_qs, gate_snapshot) = rebuild_scp_quorum_set(
+                                &config,
+                                &discovery,
+                                &local_peer_id,
+                                Some(consensus.quorum_set()),
+                            );
+                            if let Ok(mut guard) = quorum_gate_status.write() {
+                                *guard = Some(gate_snapshot);
+                            }
                             if consensus.reconfigure_quorum(new_qs) {
                                 info!(
                                     threshold = consensus.quorum_set().threshold,
@@ -916,7 +953,10 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                             if let Ok(mut count) = peer_count.write() {
                                 *count = new_peer_count;
                             }
-                            // Update SCP peer count (all peers participate in consensus)
+                            // Update SCP peer count. NOTE: this is the raw connected-peer
+                            // count used by the #509 quorumFaultTolerant/quorumDegenerate
+                            // flags; actual quorum MEMBERSHIP is bounded by the promotion
+                            // gate (#651) and surfaced separately via QuorumGateSnapshot.
                             if let Ok(mut count) = scp_peer_count.write() {
                                 *count = new_peer_count;
                             }
@@ -943,8 +983,19 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                             // is gone. rebuild_scp_quorum_set always yields a
                             // non-empty set (local node is always a member) and
                             // recomputes a satisfiable threshold, so churn can
-                            // never produce an empty or unreachable quorum.
-                            let new_qs = rebuild_scp_quorum_set(&config, &discovery, &local_peer_id);
+                            // never produce an empty or unreachable quorum. The
+                            // rebuild goes through the promotion gate (#651);
+                            // a suppressed auto peer may be promoted here to
+                            // backfill the departed member's slot.
+                            let (new_qs, gate_snapshot) = rebuild_scp_quorum_set(
+                                &config,
+                                &discovery,
+                                &local_peer_id,
+                                Some(consensus.quorum_set()),
+                            );
+                            if let Ok(mut guard) = quorum_gate_status.write() {
+                                *guard = Some(gate_snapshot);
+                            }
                             if consensus.reconfigure_quorum(new_qs) {
                                 info!(
                                     threshold = consensus.quorum_set().threshold,
@@ -1997,47 +2048,283 @@ fn build_scp_quorum_set(quorum: &QuorumBuilder, local_peer_id: &libp2p::PeerId) 
     QuorumSet::new(threshold, members)
 }
 
-/// Rebuild the SCP quorum set from the *current* set of connected peers.
+/// Rebuild the SCP quorum set from the *current* set of connected peers,
+/// applying the quorum promotion gate (#651, epic #441 §3/P5).
 ///
-/// Called whenever peers connect or disconnect so the consensus quorum tracks
-/// live membership instead of being frozen at startup. Members are the local
-/// node plus every connected peer; the threshold follows the configured quorum
-/// policy:
+/// Called at the initial quorum seed and whenever peers connect or disconnect
+/// so the consensus quorum tracks live membership instead of being frozen at
+/// startup. This is a thin wrapper that extracts the connected PeerIds from
+/// the discovery peer table and delegates to [`gated_scp_quorum_set`] (the
+/// pure, unit-testable gate core).
 ///
-/// - `Recommended`: the fault-model-aware threshold over `n = peers + 1`
-///   (matches [`QuorumConfig::effective_threshold`]) — crash 2f+1 simple
-///   majority `floor(n/2)+1` by default, or BFT 3f+1 `n - floor((n-1)/3)` when
-///   `quorum.fault_model = bft`.
-/// - `Explicit`: the configured threshold, clamped to the member count so we
-///   never demand more confirmations than there are members.
-///
-/// A lone node (no peers) yields a 1-of-1 solo quorum.
+/// `previous` is the quorum set currently applied to the consensus service
+/// (if any): when the gated candidate fails the quorum-intersection check it
+/// is refused and `previous` is returned unchanged, so the caller's
+/// `reconfigure_quorum` debounces it as a no-op and the node keeps its last
+/// safe quorum set.
 fn rebuild_scp_quorum_set(
     config: &Config,
     discovery: &NetworkDiscovery,
     local_peer_id: &libp2p::PeerId,
-) -> QuorumSet {
+    previous: Option<&QuorumSet>,
+) -> (QuorumSet, QuorumGateSnapshot) {
+    let connected: Vec<libp2p::PeerId> = discovery.peer_table().iter().map(|p| p.peer_id).collect();
+    gated_scp_quorum_set(&config.network.quorum, local_peer_id, &connected, previous)
+}
+
+/// The quorum promotion gate (#651, epic #441 §3/P5): build the SCP quorum
+/// set from the connected peer set WITHOUT letting auto-trusted peers
+/// silently enter the safety-critical quorum.
+///
+/// Epic #441 §3 separates "trusted to talk to" (peering/gossip — optimistic
+/// auto-trust is fine) from "trusted to validate" (SCP quorum membership —
+/// safety-bearing, must be gated). Membership is therefore built as an
+/// operator-curated core plus a bounded auto set:
+///
+/// - **Curated core** (`[network.quorum] members`, base58 PeerId strings,
+///   mapped through the same deterministic [`peer_id_to_node_id`] derivation as
+///   everything else): always admitted, never counted against the cap.
+///   - `Explicit` mode: the quorum set is the curated core + self, whether or
+///     not each member is currently connected (membership must not follow
+///     connectivity, otherwise a partition lets a minority side clamp its
+///     threshold down and externalize a divergent chain). Auto-discovered peers
+///     get **zero** quorum membership — they remain gossip/peering only.
+///   - `Recommended` mode: connected curated members are always admitted.
+/// - **Auto set** (`Recommended` mode only): connected non-curated peers are
+///   admitted up to `max_auto_members`. Beyond the cap, candidates are ordered
+///   by their derived `NodeID` and the first `max_auto_members` are taken, so
+///   the selection is deterministic for a given peer set (arrival-order
+///   independent). Suppressed peers stay connected for gossip/sync but hold no
+///   quorum membership.
+///
+/// The threshold follows the configured quorum policy over the **gated**
+/// member count `n` (not the raw flood size):
+///
+/// - `Recommended`: the fault-model-aware threshold (matches
+///   [`QuorumConfig::effective_threshold`]) — crash 2f+1 simple majority
+///   `floor(n/2)+1` by default, or BFT 3f+1 `n - floor((n-1)/3)`.
+/// - `Explicit`: the configured threshold, clamped to the member count so we
+///   never demand more confirmations than there are members.
+///
+/// Before the candidate is returned it must pass the exact `bth-quorum-sim`
+/// quorum-intersection check ([`symmetric_quorum_has_intersection`]). A
+/// candidate admitting disjoint quorums (e.g. an explicit 2-of-4, the
+/// #510/PR-#512 canonical fork counterexample) is **refused**: the node keeps
+/// `previous` (its last safe quorum set), or — at the initial seed, when no
+/// previous set exists — falls back to a majority threshold `floor(n/2)+1`
+/// over the same members, which always intersects.
+///
+/// A lone node (no peers, no curated members) yields a 1-of-1 solo quorum,
+/// exactly as before the gate.
+///
+/// Returns the quorum set to apply plus a [`QuorumGateSnapshot`] describing
+/// this evaluation (curated/auto/suppressed counts, refusal flag) for
+/// `node_getStatus` observability.
+fn gated_scp_quorum_set(
+    quorum_cfg: &QuorumConfig,
+    local_peer_id: &libp2p::PeerId,
+    connected_peers: &[libp2p::PeerId],
+    previous: Option<&QuorumSet>,
+) -> (QuorumSet, QuorumGateSnapshot) {
     use bth_consensus_scp_types::QuorumSetMember;
 
-    // Local node is always a member.
-    let mut members: Vec<QuorumSetMember<NodeID>> =
-        vec![QuorumSetMember::Node(peer_id_to_node_id(local_peer_id))];
+    let local_node_id = peer_id_to_node_id(local_peer_id);
 
-    for peer in discovery.peer_table() {
-        members.push(QuorumSetMember::Node(peer_id_to_node_id(&peer.peer_id)));
+    // Partition the connected peers into curated (operator-listed) and
+    // auto-discovered. Matching is by base58 PeerId string, the same
+    // string-level matching `QuorumConfig::can_reach_quorum` uses.
+    let curated_strings: std::collections::HashSet<&str> =
+        quorum_cfg.members.iter().map(|s| s.as_str()).collect();
+    let mut connected_curated: Vec<libp2p::PeerId> = Vec::new();
+    let mut auto_candidates: Vec<libp2p::PeerId> = Vec::new();
+    for peer in connected_peers {
+        if *peer == *local_peer_id {
+            // Defensive: never double-admit self.
+            continue;
+        }
+        if curated_strings.contains(peer.to_string().as_str()) {
+            connected_curated.push(*peer);
+        } else {
+            auto_candidates.push(*peer);
+        }
     }
 
-    let n = members.len();
-    let threshold = match config.network.quorum.mode {
-        QuorumMode::Recommended => config.network.quorum.effective_threshold(n - 1) as u32,
+    // Local node is always a member.
+    let mut member_ids: Vec<NodeID> = vec![local_node_id.clone()];
+    let curated_members;
+    let auto_members;
+    let suppressed_peers;
+
+    match quorum_cfg.mode {
+        QuorumMode::Explicit => {
+            // Curated core + self ONLY. Every configured member is included
+            // whether or not it is currently connected, so the operator's
+            // threshold keeps its intended intersection properties under
+            // partition. Auto peers are never promoted.
+            for member in &quorum_cfg.members {
+                match member.parse::<libp2p::PeerId>() {
+                    Ok(peer_id) => {
+                        if peer_id == *local_peer_id {
+                            continue;
+                        }
+                        let node_id = peer_id_to_node_id(&peer_id);
+                        if !member_ids.contains(&node_id) {
+                            member_ids.push(node_id);
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            member,
+                            error = %e,
+                            "Ignoring unparseable [network.quorum] member (not a base58 PeerId)"
+                        );
+                    }
+                }
+            }
+            curated_members = member_ids.len() - 1;
+            auto_members = 0;
+            // Every connected non-curated peer is being kept out of the
+            // quorum by the gate.
+            suppressed_peers = auto_candidates.len();
+        }
+        QuorumMode::Recommended => {
+            // Connected curated members are always admitted and do not count
+            // against the auto cap.
+            let cap = quorum_cfg.max_auto_members as usize;
+            let admitted_auto: std::collections::HashSet<libp2p::PeerId> =
+                if auto_candidates.len() <= cap {
+                    auto_candidates.iter().copied().collect()
+                } else {
+                    // Deterministic trimming: order candidates by their derived
+                    // NodeID (public key) and take the first `cap`, so two
+                    // nodes seeing the same peer set select the same subset
+                    // regardless of connection arrival order.
+                    let mut by_node_id: Vec<(NodeID, libp2p::PeerId)> = auto_candidates
+                        .iter()
+                        .map(|p| (peer_id_to_node_id(p), *p))
+                        .collect();
+                    by_node_id.sort_by(|a, b| a.0.cmp(&b.0));
+                    by_node_id
+                        .into_iter()
+                        .take(cap)
+                        .map(|(_, peer)| peer)
+                        .collect()
+                };
+
+            // Build membership preserving the peer-table order (local node
+            // first, then connected peers in discovery order), exactly as the
+            // ungated rebuild did — under the cap the output is byte-identical
+            // to the pre-gate behavior.
+            for peer in connected_peers {
+                if *peer == *local_peer_id {
+                    continue;
+                }
+                let is_curated = curated_strings.contains(peer.to_string().as_str());
+                if !is_curated && !admitted_auto.contains(peer) {
+                    continue;
+                }
+                let node_id = peer_id_to_node_id(peer);
+                if !member_ids.contains(&node_id) {
+                    member_ids.push(node_id);
+                }
+            }
+            curated_members = connected_curated.len();
+            auto_members = admitted_auto.len();
+            suppressed_peers = auto_candidates.len() - admitted_auto.len();
+        }
+    }
+
+    let n = member_ids.len();
+    let threshold = match quorum_cfg.mode {
+        QuorumMode::Recommended => quorum_cfg.effective_threshold(n - 1) as u32,
         QuorumMode::Explicit => {
             // Clamp to member count; a threshold larger than n can never be met
             // and would deadlock consensus.
-            (config.network.quorum.threshold).min(n as u32).max(1)
+            (quorum_cfg.threshold).min(n as u32).max(1)
         }
     };
 
-    QuorumSet::new(threshold, members)
+    let members: Vec<QuorumSetMember<NodeID>> =
+        member_ids.into_iter().map(QuorumSetMember::Node).collect();
+    let candidate = QuorumSet::new(threshold, members);
+
+    // Intersection-preserving admission check (#651 acceptance criterion 3):
+    // refuse any candidate whose FBAS model admits disjoint quorums, since
+    // two disjoint quorums can externalize conflicting values — a fork that
+    // no amount of after-the-fact shunning can undo.
+    let intersection_refused = !symmetric_quorum_has_intersection(n, threshold as usize);
+    let quorum_set = if intersection_refused {
+        match previous {
+            Some(prev) => {
+                error!(
+                    candidate_threshold = threshold,
+                    candidate_members = n,
+                    "Quorum promotion gate REFUSED candidate quorum set: \
+                     {threshold}-of-{n} admits disjoint quorums (fork risk, \
+                     bth-quorum-sim intersection check failed); keeping the \
+                     previous quorum set"
+                );
+                prev.clone()
+            }
+            None => {
+                // Initial seed: no previous safe set to keep. Fall back to a
+                // simple-majority threshold over the same members — majority
+                // quorums always pairwise intersect — rather than starting
+                // consensus on a forkable configuration.
+                let safe_threshold = (n / 2 + 1) as u32;
+                error!(
+                    candidate_threshold = threshold,
+                    candidate_members = n,
+                    safe_threshold,
+                    "Quorum promotion gate REFUSED initial quorum set: \
+                     {threshold}-of-{n} admits disjoint quorums (fork risk, \
+                     bth-quorum-sim intersection check failed); seeding with a \
+                     majority {safe_threshold}-of-{n} threshold instead — fix \
+                     [network.quorum] threshold/members"
+                );
+                QuorumSet {
+                    threshold: safe_threshold,
+                    members: candidate.members.clone(),
+                }
+            }
+        }
+    } else {
+        candidate
+    };
+
+    let snapshot = QuorumGateSnapshot {
+        curated_members,
+        auto_members,
+        suppressed_peers,
+        max_auto_members: quorum_cfg.max_auto_members,
+        intersection_refused,
+    };
+    (quorum_set, snapshot)
+}
+
+/// Exact check that a symmetric `threshold`-of-`n` quorum enjoys quorum
+/// intersection, backed by `bth-quorum-sim`'s brute-force FBAS analysis
+/// (PR #512) — the same analyzer that verified the 2-of-4 disjoint-quorum
+/// counterexample from the #510 research. Botho's flat quorum (every member
+/// shares one threshold) is exactly `Fbas::symmetric`.
+///
+/// The sim's `NodeSet` is a `u32` bitmask and the analysis enumerates `2^n`
+/// subsets, exact and fast for the gated sizes this is called with
+/// (`n <= 1 + curated + max_auto_members`). If an operator configures a
+/// curated core too large for the exact check we fall back to the analytic
+/// rule: in a symmetric FBAS the minimal quorums are exactly the
+/// threshold-sized member subsets, so intersection holds iff
+/// `threshold > n/2` (two subsets each larger than half of `n` must share a
+/// node).
+fn symmetric_quorum_has_intersection(n: usize, threshold: usize) -> bool {
+    /// Beyond this size the exact 2^n enumeration is no longer cheap (and the
+    /// sim hard-caps at 32 nodes).
+    const MAX_EXACT_SIM_NODES: usize = 20;
+    if n <= MAX_EXACT_SIM_NODES {
+        bth_quorum_sim::Fbas::symmetric(n, threshold).has_quorum_intersection()
+    } else {
+        threshold > n / 2
+    }
 }
 
 /// Convert a libp2p PeerId to an SCP NodeID.
@@ -2392,5 +2679,289 @@ mod tests {
             2,
             "quorum must contain two distinct nodes"
         );
+    }
+
+    // ---- Issue #651: quorum promotion gate ----
+
+    /// Build `n` distinct synthetic peers.
+    fn synthetic_peers(n: usize) -> Vec<libp2p::PeerId> {
+        (0..n)
+            .map(|i| {
+                let mut seed = [0u8; 32];
+                seed[0] = (i & 0xFF) as u8;
+                seed[1] = ((i >> 8) & 0xFF) as u8;
+                seed[31] = 0x51; // domain-separate from other tests
+                ed25519_peer_id(seed)
+            })
+            .collect()
+    }
+
+    /// Extract the member NodeIDs of a quorum set IN ORDER (flat sets only).
+    fn member_node_ids(qs: &QuorumSet) -> Vec<NodeID> {
+        use bth_consensus_scp_types::QuorumSetMember;
+        qs.members
+            .iter()
+            .filter_map(|m| match &**m {
+                Some(QuorumSetMember::Node(node_id)) => Some(node_id.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn gate_sybil_flood_is_capped_and_intersection_safe() {
+        // Acceptance criterion (a): a Sybil flood of connectable auto-peers
+        // must NOT silently produce a degenerate/forkable quorum. With the
+        // default config (Recommended/Crash, cap 8), 30 flooding peers get at
+        // most 8 quorum seats and the threshold is computed over the GATED
+        // member count, not the flood size.
+        let cfg = QuorumConfig::default();
+        let local = ed25519_peer_id([0xAA; 32]);
+        let flood = synthetic_peers(30);
+
+        let (qs, snap) = gated_scp_quorum_set(&cfg, &local, &flood, None);
+
+        assert_eq!(
+            qs.members.len(),
+            1 + cfg.max_auto_members as usize,
+            "flood must be capped at self + max_auto_members"
+        );
+        // Crash majority over the gated n=9, not over the flood's n=31.
+        assert_eq!(qs.threshold, 5, "threshold must follow the gated n");
+        assert!(qs.is_valid());
+        assert_eq!(snap.auto_members, 8);
+        assert_eq!(snap.curated_members, 0);
+        assert_eq!(snap.suppressed_peers, 22);
+        assert!(!snap.intersection_refused);
+        // The gated quorum must have quorum intersection (no disjoint
+        // quorums => no fork), verified with the exact bth-quorum-sim check.
+        assert!(
+            bth_quorum_sim::Fbas::symmetric(qs.members.len(), qs.threshold as usize)
+                .has_quorum_intersection()
+        );
+    }
+
+    #[test]
+    fn gate_explicit_mode_admits_only_the_curated_core() {
+        // Acceptance criterion (b) + the curated-core scope finding: in
+        // Explicit mode the quorum membership is the operator-curated core +
+        // self; auto-discovered peers get ZERO quorum membership no matter
+        // how many connect. Curated members are included whether or not they
+        // are currently connected, so a partition cannot clamp the
+        // operator's threshold down onto a forkable minority.
+        let curated = synthetic_peers(4);
+        let cfg = QuorumConfig {
+            mode: QuorumMode::Explicit,
+            threshold: 3,
+            members: curated.iter().map(|p| p.to_string()).collect(),
+            ..QuorumConfig::default()
+        };
+        let local = ed25519_peer_id([0xAB; 32]);
+
+        // Only 2 of the 4 curated members are connected, plus a 20-peer
+        // auto flood.
+        let mut connected: Vec<libp2p::PeerId> = curated[..2].to_vec();
+        let flood = synthetic_peers(24)[4..].to_vec(); // 20 distinct non-curated
+        connected.extend_from_slice(&flood);
+
+        let (qs, snap) = gated_scp_quorum_set(&cfg, &local, &connected, None);
+
+        let nodes = qs.nodes();
+        // Every curated member is in (connected or not).
+        for peer in &curated {
+            assert!(
+                nodes.contains(&peer_id_to_node_id(peer)),
+                "curated member {peer} must remain in the quorum set"
+            );
+        }
+        // No auto peer is in.
+        for peer in &flood {
+            assert!(
+                !nodes.contains(&peer_id_to_node_id(peer)),
+                "auto peer {peer} must not be promoted in explicit mode"
+            );
+        }
+        assert_eq!(qs.members.len(), 5, "self + 4 curated");
+        assert_eq!(qs.threshold, 3);
+        assert!(qs.is_valid());
+        assert_eq!(snap.curated_members, 4);
+        assert_eq!(snap.auto_members, 0);
+        assert_eq!(snap.suppressed_peers, 20);
+        assert!(!snap.intersection_refused);
+    }
+
+    #[test]
+    fn gate_recommended_curated_members_do_not_count_against_cap() {
+        // Connected curated members are always admitted in Recommended mode
+        // and are exempt from the auto cap.
+        let curated = synthetic_peers(3);
+        let cfg = QuorumConfig {
+            members: curated.iter().map(|p| p.to_string()).collect(),
+            max_auto_members: 2,
+            ..QuorumConfig::default()
+        };
+        let local = ed25519_peer_id([0xAC; 32]);
+
+        let mut connected = curated.clone();
+        let autos = synthetic_peers(8)[3..].to_vec(); // 5 distinct auto peers
+        connected.extend_from_slice(&autos);
+
+        let (qs, snap) = gated_scp_quorum_set(&cfg, &local, &connected, None);
+
+        let nodes = qs.nodes();
+        for peer in &curated {
+            assert!(nodes.contains(&peer_id_to_node_id(peer)));
+        }
+        // self + 3 curated + 2 capped autos.
+        assert_eq!(qs.members.len(), 6);
+        assert_eq!(snap.curated_members, 3);
+        assert_eq!(snap.auto_members, 2);
+        assert_eq!(snap.suppressed_peers, 3);
+        assert!(!snap.intersection_refused);
+        assert!(qs.is_valid());
+    }
+
+    #[test]
+    fn gate_preserves_small_honest_clusters_exactly() {
+        // Acceptance criterion (c): for auto-peer counts at or under the cap
+        // (which covers the 5-node live testnet: self + 4 peers,
+        // Recommended/Crash) the gated output must be IDENTICAL to the
+        // pre-gate `rebuild_scp_quorum_set` output — same members, same
+        // order, same threshold — so small honest clusters see zero behavior
+        // change. k = 0 also covers the solo 1-of-1 bootstrap shape.
+        let cfg = QuorumConfig::default();
+        let local = ed25519_peer_id([0xAD; 32]);
+        let local_node_id = peer_id_to_node_id(&local);
+
+        for k in 0..=cfg.max_auto_members as usize {
+            let peers = synthetic_peers(k);
+            let (qs, snap) = gated_scp_quorum_set(&cfg, &local, &peers, None);
+
+            // Byte-identical to the ungated construction: local node first,
+            // then every connected peer in discovery order, with the
+            // fault-model threshold over n = k + 1.
+            let mut expected_ids = vec![local_node_id.clone()];
+            expected_ids.extend(peers.iter().map(peer_id_to_node_id));
+            assert_eq!(
+                member_node_ids(&qs),
+                expected_ids,
+                "k={k}: members (and their order) must match the ungated output"
+            );
+            assert_eq!(
+                qs.threshold,
+                cfg.effective_threshold(k) as u32,
+                "k={k}: threshold must match the ungated output"
+            );
+            assert_eq!(snap.suppressed_peers, 0, "k={k}: nothing suppressed");
+            assert_eq!(snap.auto_members, k);
+            assert_eq!(snap.curated_members, 0);
+            assert!(!snap.intersection_refused, "k={k}: nothing refused");
+        }
+    }
+
+    #[test]
+    fn gate_refuses_non_intersecting_candidate_and_keeps_previous_set() {
+        // Acceptance criterion (d): an admission that would break quorum
+        // intersection against the curated core is REFUSED. Explicit 2-of-4
+        // is the #510/PR-#512 canonical counterexample: it admits the
+        // disjoint quorums {A,B} / {C,D}, i.e. a fork.
+        let curated = synthetic_peers(3);
+        let cfg = QuorumConfig {
+            mode: QuorumMode::Explicit,
+            threshold: 2, // 2-of-4 with self => disjoint quorums exist
+            members: curated.iter().map(|p| p.to_string()).collect(),
+            ..QuorumConfig::default()
+        };
+        let local = ed25519_peer_id([0xAE; 32]);
+        let local_node_id = peer_id_to_node_id(&local);
+
+        // With a previous safe set: the refusal falls back to it unchanged.
+        let previous = QuorumSet::new(
+            1,
+            vec![bth_consensus_scp_types::QuorumSetMember::Node(
+                local_node_id.clone(),
+            )],
+        );
+        let (qs, snap) = gated_scp_quorum_set(&cfg, &local, &curated, Some(&previous));
+        assert!(snap.intersection_refused);
+        assert_eq!(
+            qs, previous,
+            "refused candidate must fall back to the previous safe quorum set"
+        );
+
+        // At the initial seed (no previous set): the refusal falls back to a
+        // majority threshold over the same members, which always intersects.
+        let (qs, snap) = gated_scp_quorum_set(&cfg, &local, &curated, None);
+        assert!(snap.intersection_refused);
+        assert_eq!(qs.members.len(), 4);
+        assert_eq!(qs.threshold, 3, "majority fallback: floor(4/2)+1");
+        assert!(bth_quorum_sim::Fbas::symmetric(4, 3).has_quorum_intersection());
+
+        // Sanity: the sim really does flag the refused candidate as forkable.
+        assert!(!bth_quorum_sim::Fbas::symmetric(4, 2).has_quorum_intersection());
+    }
+
+    #[test]
+    fn gate_selection_is_deterministic_across_arrival_orders() {
+        // Over-cap trimming must be arrival-order independent: two nodes
+        // seeing the same peer set (in whatever connection order) must build
+        // the same quorum set, otherwise churn ordering would desynchronize
+        // quorum views. QuorumSet equality is member-order-insensitive.
+        let cfg = QuorumConfig::default();
+        let local = ed25519_peer_id([0xAF; 32]);
+        let peers = synthetic_peers(15); // over the cap of 8
+
+        let (forward_qs, forward_snap) = gated_scp_quorum_set(&cfg, &local, &peers, None);
+        let mut reversed = peers.clone();
+        reversed.reverse();
+        let (reversed_qs, reversed_snap) = gated_scp_quorum_set(&cfg, &local, &reversed, None);
+
+        assert_eq!(
+            forward_qs, reversed_qs,
+            "same peer set must yield the same gated quorum set regardless of arrival order"
+        );
+        assert_eq!(forward_snap.auto_members, reversed_snap.auto_members);
+        assert_eq!(
+            forward_snap.suppressed_peers,
+            reversed_snap.suppressed_peers
+        );
+    }
+
+    #[test]
+    fn gate_never_double_admits_self_listed_as_curated_member() {
+        // An operator listing the local node's own PeerId under
+        // [network.quorum] members must not produce a duplicate NodeID (a
+        // duplicate makes the quorum set invalid and SCP rejects every
+        // outgoing message).
+        let curated = synthetic_peers(2);
+        let local = ed25519_peer_id([0xB0; 32]);
+        let mut members: Vec<String> = curated.iter().map(|p| p.to_string()).collect();
+        members.push(local.to_string());
+        let cfg = QuorumConfig {
+            mode: QuorumMode::Explicit,
+            threshold: 2,
+            members,
+            ..QuorumConfig::default()
+        };
+
+        let (qs, _snap) = gated_scp_quorum_set(&cfg, &local, &curated, None);
+        assert_eq!(qs.members.len(), 3, "self must appear exactly once");
+        assert!(qs.is_valid(), "no duplicate members: {qs:?}");
+    }
+
+    #[test]
+    fn symmetric_intersection_check_matches_known_cases() {
+        // 2-of-4 admits disjoint {A,B}/{C,D} quorums (the #510 fork case).
+        assert!(!symmetric_quorum_has_intersection(4, 2));
+        // Majorities always pairwise intersect.
+        assert!(symmetric_quorum_has_intersection(4, 3));
+        assert!(symmetric_quorum_has_intersection(9, 5));
+        // Solo 1-of-1 bootstrap has (vacuous) intersection — never refused.
+        assert!(symmetric_quorum_has_intersection(1, 1));
+        // 1-of-2 splits into two disjoint singleton quorums.
+        assert!(!symmetric_quorum_has_intersection(2, 1));
+        // Above the exact-sim envelope the analytic majority rule takes over.
+        assert!(symmetric_quorum_has_intersection(25, 13));
+        assert!(!symmetric_quorum_has_intersection(25, 12));
     }
 }

@@ -23,8 +23,8 @@ pub use lottery::{
     LotteryValidationError,
 };
 pub use service::{
-    ConsensusConfig, ConsensusEvent, ConsensusService, ScpMessage, ScpSlotSnapshot,
-    SLOT_STALL_THRESHOLD_MULTIPLIER,
+    ConsensusConfig, ConsensusEvent, ConsensusService, QuorumGateSnapshot, ScpMessage,
+    ScpSlotSnapshot, SLOT_STALL_THRESHOLD_MULTIPLIER,
 };
 pub use validation::{BatchValidationResult, TransactionValidator, ValidationError};
 pub use value::{ConsensusValue, ConsensusValueHash};
