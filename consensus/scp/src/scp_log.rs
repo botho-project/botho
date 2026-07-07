@@ -301,7 +301,7 @@ impl<V: Value, N: ScpNode<V>> ScpNode<V> for LoggingScpNode<V, N> {
         self.node.current_slot_index()
     }
 
-    fn get_current_slot_metrics(&mut self) -> SlotMetrics {
+    fn get_current_slot_metrics(&self) -> SlotMetrics {
         self.node.get_current_slot_metrics()
     }
 

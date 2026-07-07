@@ -25,7 +25,7 @@ use crate::{
     config::{Config, QuorumMode},
     consensus::{
         BlockBuilder, ConsensusConfig, ConsensusEvent, ConsensusService, LotteryFeeConfig,
-        TransactionValidator,
+        ScpSlotSnapshot, TransactionValidator,
     },
     network::{
         default_seed_domain, BlockTxn, ChainSyncManager, CompactBlock, GetBlockTxn,
@@ -423,6 +423,13 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
     // instead of always claiming to be synced.
     let sync_status: Arc<RwLock<Option<SyncStatusSnapshot>>> = Arc::new(RwLock::new(None));
 
+    // Shared SCP slot-progress handle (#653, epic #532 Phase 0). The consensus
+    // tick below publishes a fresh snapshot of the live SCP slot state
+    // (nomination counters, phase, ballot counter, stall verdict) here on
+    // every tick; the RPC layer surfaces it in `node_getStatus` so an operator
+    // can tell a jammed competing-coinbase round apart from an idle node.
+    let scp_slot_status: Arc<RwLock<Option<ScpSlotSnapshot>>> = Arc::new(RwLock::new(None));
+
     let mut rpc_state = RpcState::from_shared(
         node.shared_ledger(),
         node.shared_mempool(),
@@ -439,6 +446,9 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
     .with_identity(node_identity)
     .with_minter_health(minter_health.clone())
     .with_sync_status(sync_status.clone())
+    // Live SCP slot-stall observability for `node_getStatus` (#653). Shares
+    // the handle the consensus tick publishes into.
+    .with_scp_slot_status(scp_slot_status.clone())
     .with_peers(peers_snapshot.clone())
     // Live traffic / connection-direction counters for `network_getInfo`
     // (#542). Shares the same handle the network event loop increments.
@@ -687,6 +697,11 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
     // Track pending compact blocks awaiting missing transactions
     // Key: block hash, Value: (compact block, missing indices)
     let mut pending_compact_blocks: HashMap<[u8; 32], (CompactBlock, Vec<u16>)> = HashMap::new();
+
+    // Edge-trigger for the SCP slot-stall warning (#653): warn once when the
+    // stall verdict flips true, not on every 500ms consensus tick while it
+    // stays jammed (the metric/RPC snapshot keeps reporting continuously).
+    let mut slot_stall_warned = false;
 
     loop {
         if shutdown.load(Ordering::SeqCst) {
@@ -1557,6 +1572,32 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                             debug!(slot = slot_index, phase = %phase, "Consensus progress");
                         }
                     }
+                }
+
+                // Publish the live SCP slot-progress snapshot (#653, epic #532
+                // Phase 0) AFTER the event drain, so a just-externalized slot
+                // is reflected (stall clock reset, advanced slot index) rather
+                // than reported one tick stale. The RPC layer reads the shared
+                // handle for `node_getStatus`; the Prometheus gauges mirror the
+                // stall verdict for the Grafana dashboard / alarms.
+                let slot_snapshot = consensus.slot_status();
+                metrics_updater.set_scp_slot_stalled(slot_snapshot.slot_stalled);
+                metrics_updater.set_scp_slot_stall_seconds(slot_snapshot.stall_seconds);
+                if slot_snapshot.slot_stalled && !slot_stall_warned {
+                    slot_stall_warned = true;
+                    warn!(
+                        slot = slot_snapshot.slot_index,
+                        stall_seconds = slot_snapshot.stall_seconds,
+                        phase = %slot_snapshot.phase,
+                        ballot_counter = slot_snapshot.ballot_counter,
+                        "SCP slot is ACTIVE but has not externalized past the stall \
+                         threshold — possible jammed round (#532 Phase 0 signal)"
+                    );
+                } else if !slot_snapshot.slot_stalled {
+                    slot_stall_warned = false;
+                }
+                if let Ok(mut guard) = scp_slot_status.write() {
+                    *guard = Some(slot_snapshot);
                 }
             }
 

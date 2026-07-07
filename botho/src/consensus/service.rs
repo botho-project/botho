@@ -72,6 +72,94 @@ impl ConsensusConfig {
     }
 }
 
+/// Stall threshold multiplier for [`ConsensusService::slot_status`] (issue
+/// #653, epic #532 Phase 0).
+///
+/// A slot is reported as STALLED when it is active (nomination/ballot state
+/// present) but has not externalized for more than
+/// `SLOT_STALL_THRESHOLD_MULTIPLIER x` the EFFECTIVE slot duration. The
+/// threshold is derived from [`ConsensusService::current_slot_duration`]
+/// (dynamic timing adjusts the slot duration at runtime between 3s and the
+/// configured default of 20s), NOT a hardcoded wall-clock constant, so the
+/// verdict stays meaningful across timing levels. `3x` gives federated voting
+/// a couple of full round-trips of slack before alarming: a healthy slot
+/// externalizes within ~1 slot duration, so 3 missed durations on an ACTIVE
+/// slot is a genuinely jammed round, not ordinary latency.
+pub const SLOT_STALL_THRESHOLD_MULTIPLIER: u32 = 3;
+
+/// Read-only snapshot of the current SCP slot's progress, for operator
+/// observability (issue #653, epic #532 Phase 0).
+///
+/// Every field is derived from LIVE consensus state at the moment
+/// [`ConsensusService::slot_status`] is called — the SCP node's
+/// [`SlotMetrics`] (nomination sets / ballot counter / phase), the current
+/// slot index, and the service's externalization history. Nothing here is a
+/// constant or placeholder (the anti-#541–#544 gate): unit tests drive the
+/// service through idle / active / jammed states and assert these fields
+/// change accordingly.
+///
+/// `commands::run` publishes a fresh snapshot into a shared
+/// `Arc<RwLock<Option<ScpSlotSnapshot>>>` on every consensus tick; the RPC
+/// layer surfaces it in `node_getStatus` and the Prometheus exporter mirrors
+/// the stall verdict as `botho_scp_slot_stalled` /
+/// `botho_scp_slot_stall_seconds`.
+#[derive(Debug, Clone)]
+pub struct ScpSlotSnapshot {
+    /// The SCP slot currently being worked on (== the block height being
+    /// built).
+    pub slot_index: SlotIndex,
+
+    /// Current slot phase (`NominatePrepare`, `Prepare`, `Commit`,
+    /// `Externalize`), pre-rendered as a string so the RPC layer needs no SCP
+    /// types.
+    pub phase: String,
+
+    /// Number of values voted nominated (the slot's `X` set).
+    pub num_voted_nominated: usize,
+
+    /// Number of values accepted nominated (the slot's `Y` set).
+    pub num_accepted_nominated: usize,
+
+    /// Number of values confirmed nominated (the slot's `Z` set).
+    pub num_confirmed_nominated: usize,
+
+    /// Current nomination round within the slot.
+    pub nomination_round: u32,
+
+    /// Highest ballot counter (`bN`); `0` until balloting starts.
+    pub ballot_counter: u32,
+
+    /// The `scp_slot_active` predicate: the slot holds nomination or ballot
+    /// state (or has progressed past `NominatePrepare`). This is the SAME
+    /// predicate `reconfigure_quorum` uses to detect an in-flight round (both
+    /// call [`ConsensusService::slot_metrics_indicate_active`], so they cannot
+    /// drift). `false` == idle (nothing to propose is NOT a stall).
+    pub scp_slot_active: bool,
+
+    /// Derived stall verdict: the slot is ACTIVE but has not externalized for
+    /// more than [`SLOT_STALL_THRESHOLD_MULTIPLIER`] x the effective slot
+    /// duration. Distinguishes a jammed round from an idle node — the empirical
+    /// signal that gates #532 Phase 1.
+    pub slot_stalled: bool,
+
+    /// Seconds since the last externalization (or service start, before the
+    /// first one) WHILE the slot is active; `0` when the slot is idle. This is
+    /// the stall clock: it advances monotonically while a round stays jammed,
+    /// so the operator can quantify how long, not just whether.
+    pub stall_seconds: u64,
+
+    /// Highest slot index this service has surfaced as externalized, if any.
+    pub last_externalized_slot: Option<SlotIndex>,
+
+    /// Seconds since the last externalization, `None` until the first one.
+    pub last_externalized_seconds_ago: Option<u64>,
+
+    /// The effective slot duration (dynamic or fixed) the stall threshold was
+    /// derived from, in seconds, so the operator can interpret
+    /// `stall_seconds` in context.
+    pub effective_slot_duration_secs: u64,
+}
+
 /// Events emitted by the consensus service
 #[derive(Debug, Clone)]
 pub enum ConsensusEvent {
@@ -172,6 +260,18 @@ pub struct ConsensusService {
     /// (the SCP node auto-advances on externalize, so the just-externalized
     /// slot stays readable for several ticks).
     last_externalized_slot: Option<SlotIndex>,
+
+    /// When the last slot externalized (issue #653). Set at BOTH
+    /// externalization points — the solo direct-externalize path in
+    /// `propose_pending_values` and the SCP-driven `check_externalized` — so
+    /// [`Self::slot_status`] can derive a live stall duration. `None` until
+    /// the first externalization (the stall clock then falls back to
+    /// `started_at`).
+    last_externalized_at: Option<Instant>,
+
+    /// When this service was constructed. The baseline for the slot-stall
+    /// clock before the first externalization (issue #653).
+    started_at: Instant,
 
     /// A quorum set reconfiguration that arrived mid-round and was deferred to
     /// the next slot boundary to avoid stranding an in-flight slot.
@@ -355,6 +455,8 @@ impl ConsensusService {
             last_slot_attempt: Instant::now(),
             externalized: None,
             last_externalized_slot: None,
+            last_externalized_at: None,
+            started_at: Instant::now(),
             pending_quorum_set: None,
             // Default to 0 = no participation gate (genuine solo / dev / tests).
             // The node run loop calls `set_min_peers` to enable the gate when
@@ -478,11 +580,7 @@ impl ConsensusService {
         // `bN == 0`; the empty-nomination-sets + `bN == 0` signal is the robust
         // boundary indicator, with the phase check as a secondary guard.
         let metrics = self.scp_node.get_current_slot_metrics();
-        let scp_slot_active = metrics.num_voted_nominated > 0
-            || metrics.num_accepted_nominated > 0
-            || metrics.num_confirmed_nominated > 0
-            || metrics.bN > 0
-            || metrics.phase != ScpPhase::NominatePrepare;
+        let scp_slot_active = Self::slot_metrics_indicate_active(&metrics);
         let at_slot_boundary =
             self.proposed_values.is_empty() && self.externalized.is_none() && !scp_slot_active;
 
@@ -602,6 +700,80 @@ impl ConsensusService {
     /// Get current slot index
     pub fn current_slot(&self) -> SlotIndex {
         self.scp_node.current_slot_index()
+    }
+
+    /// The `scp_slot_active` predicate (issue #653): does this slot hold ANY
+    /// nomination or ballot state, or has it progressed past the initial
+    /// `NominatePrepare` phase?
+    ///
+    /// This is the single shared definition used by BOTH
+    /// [`Self::reconfigure_quorum`] (to detect an in-flight round that must
+    /// defer a quorum swap) and [`Self::slot_status`] (the operator-observable
+    /// snapshot), so the two consumers cannot drift.
+    fn slot_metrics_indicate_active(metrics: &SlotMetrics) -> bool {
+        metrics.num_voted_nominated > 0
+            || metrics.num_accepted_nominated > 0
+            || metrics.num_confirmed_nominated > 0
+            || metrics.bN > 0
+            || metrics.phase != ScpPhase::NominatePrepare
+    }
+
+    /// Read-only snapshot of the current SCP slot's progress for operator
+    /// observability (issue #653, epic #532 Phase 0).
+    ///
+    /// Every field is computed from LIVE state at call time:
+    /// - the raw nomination counters / ballot counter / phase come straight
+    ///   from `scp_node.get_current_slot_metrics()` (the slot's real X/Y/Z/B
+    ///   sets),
+    /// - `scp_slot_active` is the shared [`Self::slot_metrics_indicate_active`]
+    ///   predicate,
+    /// - the stall clock is `now - last_externalized_at` (service start before
+    ///   the first externalization), and
+    /// - `slot_stalled` is true iff the slot is ACTIVE and the stall clock
+    ///   exceeds [`SLOT_STALL_THRESHOLD_MULTIPLIER`] x the EFFECTIVE slot
+    ///   duration ([`Self::current_slot_duration`], which dynamic timing
+    ///   adjusts at runtime — never a hardcoded wall-clock threshold).
+    ///
+    /// An IDLE slot (nothing to propose) is never "stalled": `slot_stalled`
+    /// requires active nomination/ballot state, which is exactly what
+    /// distinguishes a jammed competing-coinbase round from a quiet node.
+    pub fn slot_status(&self) -> ScpSlotSnapshot {
+        let metrics = self.scp_node.get_current_slot_metrics();
+        let scp_slot_active = Self::slot_metrics_indicate_active(&metrics);
+
+        let slot_duration = self.current_slot_duration();
+        let last_externalized_seconds_ago =
+            self.last_externalized_at.map(|t| t.elapsed().as_secs());
+        // Stall clock: time since we last made externalization progress,
+        // falling back to service start before the first externalization.
+        let since_progress = self
+            .last_externalized_at
+            .unwrap_or(self.started_at)
+            .elapsed();
+        let slot_stalled =
+            scp_slot_active && since_progress > slot_duration * SLOT_STALL_THRESHOLD_MULTIPLIER;
+
+        ScpSlotSnapshot {
+            slot_index: self.scp_node.current_slot_index(),
+            phase: format!("{:?}", metrics.phase),
+            num_voted_nominated: metrics.num_voted_nominated,
+            num_accepted_nominated: metrics.num_accepted_nominated,
+            num_confirmed_nominated: metrics.num_confirmed_nominated,
+            nomination_round: metrics.cur_nomination_round,
+            ballot_counter: metrics.bN,
+            scp_slot_active,
+            slot_stalled,
+            // The stall clock is only meaningful while the slot is active; an
+            // idle node (nothing to propose) is not "N seconds stalled".
+            stall_seconds: if scp_slot_active {
+                since_progress.as_secs()
+            } else {
+                0
+            },
+            last_externalized_slot: self.last_externalized_slot,
+            last_externalized_seconds_ago,
+            effective_slot_duration_secs: slot_duration.as_secs(),
+        }
     }
 
     /// Submit a transaction for consensus.
@@ -936,6 +1108,10 @@ impl ConsensusService {
             self.pending_values.retain(|v| !v.is_minting_tx);
 
             self.externalized = Some(values.clone());
+            // Slot-stall clock (issue #653): record the externalization time
+            // on the solo direct-externalize path too, so `slot_status` keeps
+            // an honest stall baseline in every mode.
+            self.last_externalized_at = Some(Instant::now());
             self.events.push_back(ConsensusEvent::SlotExternalized {
                 slot_index: slot,
                 values,
@@ -1042,6 +1218,9 @@ impl ConsensusService {
             self.pending_values.retain(|v| !v.is_minting_tx);
 
             self.externalized = Some(values.clone());
+            // Slot-stall clock (issue #653): a fresh externalization resets
+            // the stall baseline `slot_status` measures against.
+            self.last_externalized_at = Some(Instant::now());
 
             self.events.push_back(ConsensusEvent::SlotExternalized {
                 slot_index: externalized_slot,
@@ -3331,5 +3510,295 @@ mod tests {
             "SAFETY: a slot holding ballot/commit state must NEVER be abandoned by \
              the forward anchor — that could re-open a committed value and fork"
         );
+    }
+
+    // ----------------------------------------------------------------------
+    // Issue #653 (epic #532 Phase 0): operator-observable SCP slot status
+    // ----------------------------------------------------------------------
+
+    /// The shared `scp_slot_active` predicate must be a genuine function of
+    /// the slot metrics: false only for a pristine slot, true when ANY
+    /// nomination/ballot indicator is set. This is the single helper both
+    /// `reconfigure_quorum` and `slot_status` consume, so proving it here
+    /// pins both consumers.
+    #[test]
+    fn slot_active_predicate_tracks_each_metrics_field() {
+        let pristine = SlotMetrics {
+            phase: ScpPhase::NominatePrepare,
+            num_voted_nominated: 0,
+            num_accepted_nominated: 0,
+            num_confirmed_nominated: 0,
+            cur_nomination_round: 1,
+            bN: 0,
+        };
+        assert!(
+            !ConsensusService::slot_metrics_indicate_active(&pristine),
+            "a pristine slot must be inactive"
+        );
+
+        // Each indicator alone must flip the predicate.
+        for (label, metrics) in [
+            (
+                "voted-nominated",
+                SlotMetrics {
+                    num_voted_nominated: 1,
+                    ..pristine_metrics()
+                },
+            ),
+            (
+                "accepted-nominated",
+                SlotMetrics {
+                    num_accepted_nominated: 1,
+                    ..pristine_metrics()
+                },
+            ),
+            (
+                "confirmed-nominated",
+                SlotMetrics {
+                    num_confirmed_nominated: 1,
+                    ..pristine_metrics()
+                },
+            ),
+            (
+                "ballot counter",
+                SlotMetrics {
+                    bN: 1,
+                    ..pristine_metrics()
+                },
+            ),
+            (
+                "phase past NominatePrepare",
+                SlotMetrics {
+                    phase: ScpPhase::Prepare,
+                    ..pristine_metrics()
+                },
+            ),
+        ] {
+            assert!(
+                ConsensusService::slot_metrics_indicate_active(&metrics),
+                "{label} alone must make the slot active"
+            );
+        }
+    }
+
+    /// Helper for the predicate truth-table test above.
+    fn pristine_metrics() -> SlotMetrics {
+        SlotMetrics {
+            phase: ScpPhase::NominatePrepare,
+            num_voted_nominated: 0,
+            num_accepted_nominated: 0,
+            num_confirmed_nominated: 0,
+            cur_nomination_round: 1,
+            bN: 0,
+        }
+    }
+
+    /// THE anti-#541–#544 gate for issue #653: `slot_status()` must be
+    /// genuinely derived from live SCP state, not constants. Drive the service
+    /// through (a) idle, (b) active-progressing, and (c) jammed-slot states
+    /// and assert the snapshot fields CHANGE accordingly.
+    ///
+    /// The jam uses the same harness as
+    /// `reconfigure_during_peer_populated_slot_is_deferred`: a peer
+    /// nominate/prepare message populates the slot, but the peer (1 of 2)
+    /// never confirms, so the round can never complete — the exact
+    /// competing-coinbase wedge shape Phase 0 must observe. The stall clock is
+    /// backdated deterministically instead of sleeping.
+    #[test]
+    fn slot_status_distinguishes_idle_active_and_jammed_states() {
+        // fixed_timing(1) => effective slot duration 1s => stall threshold 3s.
+        let mut svc = peered_service(&[1, 2]);
+
+        // --- (a) IDLE: fresh slot, nothing proposed, no peer state. ---
+        let idle = svc.slot_status();
+        assert!(!idle.scp_slot_active, "fresh slot must be inactive");
+        assert!(!idle.slot_stalled, "an idle slot is never stalled");
+        assert_eq!(idle.stall_seconds, 0, "idle slot has no stall clock");
+        assert_eq!(idle.num_voted_nominated, 0);
+        assert_eq!(idle.num_accepted_nominated, 0);
+        assert_eq!(idle.num_confirmed_nominated, 0);
+        assert_eq!(idle.ballot_counter, 0);
+        assert_eq!(idle.phase, "NominatePrepare");
+        assert_eq!(idle.last_externalized_slot, None);
+        assert_eq!(idle.last_externalized_seconds_ago, None);
+        assert_eq!(idle.effective_slot_duration_secs, 1);
+        assert_eq!(idle.slot_index, svc.current_slot());
+
+        // --- (b) ACTIVE-PROGRESSING: a peer populates the slot. ---
+        let tx = valid_transfer_tx();
+        let tx_bytes = bincode::serialize(&tx).expect("tx serializes");
+        let tx_hash = [7u8; 32];
+        if let Ok(mut state) = svc.shared_state.write() {
+            state.tx_cache.insert(
+                tx_hash,
+                TxCacheEntry {
+                    data: tx_bytes,
+                    is_minting_tx: false,
+                },
+            );
+        }
+        let value = ConsensusValue::from_transaction(tx_hash, tx.fee);
+        let peer_msg = peer_nominate_prepare(
+            node(2),
+            recommended_quorum(&[1, 2]),
+            svc.scp_node.current_slot_index(),
+            value,
+        );
+        let _ = svc
+            .scp_node
+            .handle_message(&peer_msg)
+            .expect("peer message should be accepted");
+
+        let active = svc.slot_status();
+        assert!(
+            active.scp_slot_active,
+            "peer nomination must flip the slot active"
+        );
+        assert!(
+            !active.slot_stalled,
+            "a freshly-active slot inside the threshold is progressing, not stalled"
+        );
+        assert!(
+            active.num_voted_nominated > 0
+                || active.num_accepted_nominated > 0
+                || active.ballot_counter > 0
+                || active.phase != "NominatePrepare",
+            "the raw counters must reflect the peer-driven slot state \
+             (voted {}, accepted {}, bN {}, phase {})",
+            active.num_voted_nominated,
+            active.num_accepted_nominated,
+            active.ballot_counter,
+            active.phase
+        );
+        // Explicit not-a-constant proof: idle and active snapshots differ.
+        assert_ne!(
+            idle.scp_slot_active, active.scp_slot_active,
+            "scpSlotActive must be a live signal, not a constant"
+        );
+        assert!(
+            idle.num_voted_nominated != active.num_voted_nominated
+                || idle.num_accepted_nominated != active.num_accepted_nominated
+                || idle.ballot_counter != active.ballot_counter
+                || idle.phase != active.phase,
+            "the raw slot counters must change between idle and active states"
+        );
+
+        // --- (c) JAMMED: the active slot fails to externalize past the ---
+        // --- threshold. Backdate the stall baseline deterministically.  ---
+        svc.last_externalized_at = Some(
+            Instant::now()
+                .checked_sub(Duration::from_secs(30))
+                .expect("monotonic clock supports 30s backdating"),
+        );
+        let jammed = svc.slot_status();
+        assert!(jammed.scp_slot_active, "the jammed slot is still active");
+        assert!(
+            jammed.slot_stalled,
+            "active + 30s without externalization (threshold 3s) must report a stall"
+        );
+        assert!(
+            jammed.stall_seconds >= 30,
+            "stall clock must quantify the jam (got {}s)",
+            jammed.stall_seconds
+        );
+        assert!(
+            jammed.last_externalized_seconds_ago.unwrap_or(0) >= 30,
+            "externalization age must reflect the backdated timestamp"
+        );
+
+        // The stall clock ADVANCES while the jam persists (monotonic).
+        svc.last_externalized_at = Some(
+            Instant::now()
+                .checked_sub(Duration::from_secs(90))
+                .expect("monotonic clock supports 90s backdating"),
+        );
+        let later = svc.slot_status();
+        assert!(later.slot_stalled, "still jammed");
+        assert!(
+            later.stall_seconds > jammed.stall_seconds,
+            "stall duration must advance while jammed ({} -> {})",
+            jammed.stall_seconds,
+            later.stall_seconds
+        );
+
+        // Final not-a-constant proof across all three states.
+        assert!(
+            !idle.slot_stalled && !active.slot_stalled && jammed.slot_stalled,
+            "slotStalled must be false/false/true across idle/active/jammed — \
+             it is derived from live state, not fixed"
+        );
+        assert!(
+            idle.stall_seconds == 0 && jammed.stall_seconds > active.stall_seconds,
+            "slotStallSeconds must track the live stall clock, not a constant"
+        );
+    }
+
+    /// Both externalization paths must stamp the stall baseline: the solo
+    /// direct-externalize path resets the clock the moment it externalizes,
+    /// so a healthy node never drifts toward a phantom stall.
+    #[test]
+    fn solo_externalization_stamps_the_stall_clock() {
+        let mut svc = solo_service();
+        assert!(svc.last_externalized_at.is_none());
+        assert_eq!(svc.slot_status().last_externalized_seconds_ago, None);
+
+        svc.submit_transaction([7u8; 32], 0, vec![1, 2, 3]);
+        svc.propose_pending_values();
+        assert!(
+            svc.externalized.is_some(),
+            "solo mode externalizes directly"
+        );
+        assert!(
+            svc.last_externalized_at.is_some(),
+            "solo externalize must stamp the stall baseline (issue #653)"
+        );
+        let snap = svc.slot_status();
+        assert_eq!(
+            snap.last_externalized_seconds_ago,
+            Some(0),
+            "the externalization just happened"
+        );
+        assert!(!snap.slot_stalled);
+    }
+
+    /// Multi-node observation (accessor-level, per the #653 loopback
+    /// criterion): a clean 2-node federated convergence externalizes via
+    /// `check_externalized`, which must stamp the stall baseline on BOTH
+    /// nodes, and neither node may report a stall after healthy progress.
+    #[test]
+    fn multi_node_convergence_stamps_stall_clock_and_reports_no_stall() {
+        let cfg = ConsensusConfig::fixed_timing(0);
+        let qs = recommended_quorum(&[1, 2]);
+        let mut a = ConsensusService::new(node(1), qs.clone(), cfg.clone(), genesis_chain_state());
+        let mut b = ConsensusService::new(node(2), qs, cfg, genesis_chain_state());
+
+        let prev = [0u8; 32];
+        let a_tx = intrinsic_valid_minting_tx(1, prev, 1);
+        let b_tx = intrinsic_valid_minting_tx(50, prev, 1);
+        submit_and_register(&mut a, &mut b, &a_tx);
+        submit_and_register(&mut b, &mut a, &b_tx);
+
+        let (a_ext, b_ext) = run_two_services(&mut a, &mut b, 2000);
+        assert!(a_ext.is_some() && b_ext.is_some(), "both must externalize");
+
+        for (label, svc) in [("A", &a), ("B", &b)] {
+            let snap = svc.slot_status();
+            assert_eq!(
+                snap.last_externalized_slot,
+                Some(1),
+                "node {label} must report the externalized slot"
+            );
+            let age = snap
+                .last_externalized_seconds_ago
+                .expect("federated externalize must stamp the stall baseline");
+            assert!(
+                age <= 5,
+                "node {label}: externalization age must be fresh (got {age}s)"
+            );
+            assert!(
+                !snap.slot_stalled,
+                "node {label}: healthy convergence must never report a slot stall"
+            );
+        }
     }
 }
