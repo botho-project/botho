@@ -117,6 +117,24 @@ fn should_resume_from_balance_pause(balance: u64, low_threshold: u64, mempool_le
     balance < low_threshold || mempool_len > 0
 }
 
+/// Decide whether the reconnect tick should re-dial the configured bootstrap
+/// peers.
+///
+/// Bootstrap entries are bare multiaddrs with no peer IDs, so they cannot be
+/// matched one-to-one against the connected peer table. Instead, "connected to
+/// fewer peers than there are configured bootstrap peers" is treated as
+/// under-connected and the whole bootstrap list is re-dialed: libp2p treats a
+/// dial to an already-connected address as a cheap no-op, so the redundant
+/// dials are harmless. A stricter `peer_count == 0` guard let a partially
+/// formed mesh persist indefinitely — during the 2026-07-07 rolling deploy
+/// every node latched onto a single hub (star topology) and SCP could not
+/// externalize until the nodes were manually restarted (issue #690). In steady
+/// state (`peer_count >= bootstrap_peer_count`) no dials are issued, so the 5s
+/// tick does not spam the network.
+fn should_redial_bootstrap_peers(peer_count: usize, bootstrap_peer_count: usize) -> bool {
+    peer_count < bootstrap_peer_count
+}
+
 /// Check if minting should be enabled based on quorum config and connected
 /// peers
 fn check_minting_eligibility(
@@ -241,10 +259,12 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
     );
 
     // Keep a copy of the bootstrap multiaddrs so the main loop can re-dial them
-    // if the node ends up with no peers. The initial dial happens during the
-    // pre-loop discovery window; if that connection is lost (e.g. a transient
-    // drop right after startup) there is otherwise no path back to the network
-    // for a node whose only peers are bootstrap nodes (issue #409).
+    // whenever the node is under-connected. The initial dial happens during the
+    // pre-loop discovery window; if a connection is lost or never made (e.g. a
+    // transient drop right after startup, or a target that was mid-restart
+    // during a rolling deploy) there is otherwise no path back to full
+    // connectivity for a node whose only peers are bootstrap nodes (issues
+    // #409, #690).
     let reconnect_bootstrap_peers = bootstrap_peers.clone();
 
     // Start network discovery.
@@ -1771,12 +1791,19 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                 }
             }
 
-            // Reconnect tick: if we have no peers, re-dial configured bootstrap
-            // peers. The initial dial happens before the main loop; a node that
-            // lost that connection during startup would otherwise be stranded
-            // with no way back to the network (issue #409).
+            // Reconnect tick: while under-connected, re-dial the configured
+            // bootstrap peers. The initial dial happens before the main loop;
+            // dials that fail there (e.g. targets mid-restart during a rolling
+            // deploy) must be retried or the node is stranded with no way back
+            // to the network (issue #409) or stuck in a partial mesh that
+            // wedges SCP (issue #690). See `should_redial_bootstrap_peers` for
+            // why the whole list is re-dialed rather than only unconnected
+            // entries.
             _ = reconnect_interval.tick() => {
-                if discovery.peer_count() == 0 && !reconnect_bootstrap_peers.is_empty() {
+                if should_redial_bootstrap_peers(
+                    discovery.peer_count(),
+                    reconnect_bootstrap_peers.len(),
+                ) {
                     for peer_addr in &reconnect_bootstrap_peers {
                         if let Ok(addr) = peer_addr.parse::<libp2p::Multiaddr>() {
                             debug!("Reconnect: re-dialing bootstrap peer {}", addr);
@@ -2681,6 +2708,35 @@ mod tests {
         let mid = LOW + (HIGH - LOW) / 2;
         assert!(!should_pause_for_balance(mid, HIGH, 0));
         assert!(!should_resume_from_balance_pause(mid, LOW, 0));
+    }
+
+    // ---- Issue #690: reconnect tick must heal partial meshes, not just
+    // zero-peer nodes ----
+
+    #[test]
+    fn redials_when_under_connected() {
+        // Regression test for issue #690: a node with exactly one peer but two
+        // configured bootstrap peers is a spoke in a star topology and must
+        // keep re-dialing until it reaches full bootstrap connectivity.
+        assert!(should_redial_bootstrap_peers(0, 2));
+        assert!(should_redial_bootstrap_peers(1, 2));
+        assert!(should_redial_bootstrap_peers(3, 4));
+    }
+
+    #[test]
+    fn does_not_redial_at_steady_state() {
+        // Once connected to at least as many peers as there are configured
+        // bootstrap peers, the tick must go quiet so it does not spam dials.
+        assert!(!should_redial_bootstrap_peers(2, 2));
+        assert!(!should_redial_bootstrap_peers(5, 2));
+    }
+
+    #[test]
+    fn does_not_redial_with_no_bootstrap_peers() {
+        // A node with no configured bootstrap peers has nothing to dial,
+        // regardless of its peer count.
+        assert!(!should_redial_bootstrap_peers(0, 0));
+        assert!(!should_redial_bootstrap_peers(3, 0));
     }
 
     // ---- Issue #414: PeerId -> NodeID mapping must be deterministic + injective
