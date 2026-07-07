@@ -438,6 +438,15 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
     // working. `None` until the first evaluation (never fabricated).
     let quorum_gate_status: Arc<RwLock<Option<QuorumGateSnapshot>>> = Arc::new(RwLock::new(None));
 
+    // Relay channel from the RPC layer into this event loop (#674): every
+    // mempool-accepted `tx_submit` is gossiped to peers and registered in the
+    // SCP tx cache immediately, independent of local minting state. Before
+    // this, mempool contents were only announced from inside the
+    // active-minting path, so a non-minting ingress node (the web-wallet
+    // default) was a black hole for submitted transactions.
+    let (tx_relay_tx, mut tx_relay_rx) =
+        tokio::sync::mpsc::unbounded_channel::<crate::transaction::Transaction>();
+
     let mut rpc_state = RpcState::from_shared(
         node.shared_ledger(),
         node.shared_mempool(),
@@ -463,7 +472,9 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
     .with_peers(peers_snapshot.clone())
     // Live traffic / connection-direction counters for `network_getInfo`
     // (#542). Shares the same handle the network event loop increments.
-    .with_network_stats(discovery.stats());
+    .with_network_stats(discovery.stats())
+    // RPC -> event-loop tx relay (#674), consumed in the select! loop below.
+    .with_tx_relay(tx_relay_tx);
 
     // Initialize wallet for RPC (balance checking, faucet, etc.)
     if let Some(mnemonic) = config.mnemonic() {
@@ -713,6 +724,12 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
     // node that lost its only connection right after startup can rejoin
     // (issue #409). Cheap and a no-op once peers are connected.
     let mut reconnect_interval = tokio::time::interval(Duration::from_secs(5));
+    // Periodically re-announce mempool contents to peers, independent of
+    // minting state (#674). Catches txs that were submitted while we had no
+    // peers (or while peers were offline) and would otherwise never propagate
+    // from a non-minting node. Gossipsub message ids are source+seqno, so a
+    // re-publish is a fresh message to peers whose mempools then dedupe it.
+    let mut mempool_rebroadcast_interval = tokio::time::interval(Duration::from_secs(30));
 
     // Track pending compact blocks awaiting missing transactions
     // Key: block hash, Value: (compact block, missing indices)
@@ -1702,6 +1719,53 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                                 metrics_updater.set_minting_active(false);
                                 ws_broadcaster.minting_status(false, 0.0, 0);
                             }
+                        }
+                    }
+                }
+            }
+
+            // RPC-submitted transaction relay (#674): gossip every
+            // mempool-accepted `tx_submit` to peers and seed the SCP tx cache
+            // NOW, regardless of whether this node is minting. Mirrors the
+            // NewTransaction gossip-receive path: mempool acceptance (in the
+            // RPC handler) was the validity gate, and `register_transfer_tx`
+            // is cache-only — a non-minting node does not start proposing
+            // consensus values, it just lets peers' SCP messages referencing
+            // the tx validate (#449).
+            Some(tx) = tx_relay_rx.recv() => {
+                let tx_hash = tx.hash();
+                let tx_bytes = bincode::serialize(&tx)
+                    .expect("Failed to serialize transaction");
+                if let Err(e) =
+                    NetworkDiscovery::broadcast_transaction(&mut swarm, discovery.stats_ref(), &tx)
+                {
+                    // No peers yet is normal at startup; the rebroadcast tick
+                    // below retries until the tx propagates.
+                    debug!("Failed to broadcast RPC-submitted tx: {}", e);
+                } else {
+                    info!(
+                        "Relayed RPC-submitted tx {} to network",
+                        hex::encode(&tx_hash[0..8])
+                    );
+                }
+                consensus.register_transfer_tx(tx_hash, tx_bytes);
+            }
+
+            // Periodic mempool re-announce (#674): retries propagation for
+            // txs that were submitted while this node had no (or stale) peer
+            // connections. Peers dedupe via their own mempool acceptance, so
+            // a re-publish of an already-known tx is a no-op for them.
+            _ = mempool_rebroadcast_interval.tick() => {
+                let pending = node.get_pending_transactions(32);
+                if !pending.is_empty() && discovery.peer_count() > 0 {
+                    debug!("Re-announcing {} mempool tx(s) to peers", pending.len());
+                    for tx in &pending {
+                        if let Err(e) = NetworkDiscovery::broadcast_transaction(
+                            &mut swarm,
+                            discovery.stats_ref(),
+                            tx,
+                        ) {
+                            debug!("Failed to re-announce mempool tx: {}", e);
                         }
                     }
                 }
