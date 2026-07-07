@@ -3000,8 +3000,7 @@ mod tests {
     fn analytic_rule_matches_sim_for_flat_symmetric_quorums() {
         for n in 1..=13 {
             for threshold in 1..=n {
-                let sim = bth_quorum_sim::Fbas::symmetric(n, threshold)
-                    .has_quorum_intersection();
+                let sim = bth_quorum_sim::Fbas::symmetric(n, threshold).has_quorum_intersection();
                 let analytic = threshold > n / 2;
                 assert_eq!(
                     sim, analytic,
