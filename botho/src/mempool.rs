@@ -1233,9 +1233,17 @@ impl Mempool {
         self.txs.is_empty()
     }
 
-    /// Get total fees of all pending transactions
+    /// Get total fees of all pending transactions.
+    ///
+    /// Saturating: admitted fees are balance-validated (bounded by real input
+    /// value), but total picocredit supply exceeds `u64::MAX`, so an extreme
+    /// aggregate could still overflow. This is a stats/RPC value — with
+    /// `overflow-checks = true` on the release profile (#663) an unchecked
+    /// `sum()` here could panic the node instead of clamping a statistic.
     pub fn total_fees(&self) -> u64 {
-        self.txs.values().map(|p| p.tx.fee).sum()
+        self.txs
+            .values()
+            .fold(0u64, |acc, p| acc.saturating_add(p.tx.fee))
     }
 
     /// Check if a transaction is in the mempool
