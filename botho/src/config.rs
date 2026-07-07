@@ -346,13 +346,41 @@ pub struct QuorumConfig {
     #[serde(default = "default_threshold")]
     pub threshold: u32,
 
-    /// For explicit mode: peer IDs to trust (as base58 strings)
+    /// Operator-curated quorum members (base58 PeerId strings) — the
+    /// safety-bearing "curated core" of the quorum promotion gate (#651).
+    ///
+    /// - In `Explicit` mode these are the **only** peers (besides self)
+    ///   admitted into the SCP quorum set; auto-discovered peers stay
+    ///   peering/gossip-only.
+    /// - In `Recommended` mode any *connected* curated member is always
+    ///   admitted and does not count against [`Self::max_auto_members`].
     #[serde(default)]
     pub members: Vec<String>,
 
     /// For recommended mode: minimum peers before minting can start
     #[serde(default = "default_min_peers")]
     pub min_peers: u32,
+
+    /// Quorum promotion gate (#651, epic #441 §3/P5): in `Recommended` mode,
+    /// the maximum number of auto-discovered (non-curated) peers that may be
+    /// promoted into the safety-critical SCP quorum set. Curated
+    /// [`Self::members`] never count against this cap.
+    ///
+    /// Without a cap, a Sybil flood of connectable peers is auto-admitted
+    /// into quorums on the next churn event — a safety (fork) risk, not just
+    /// a liveness one. The cap bounds the auto-trusted set; peers beyond it
+    /// remain connected for gossip/sync but hold no quorum membership.
+    /// Selection above the cap is deterministic (candidates are ordered by
+    /// their derived SCP `NodeID`), so the same peer set always yields the
+    /// same quorum set regardless of arrival order.
+    ///
+    /// The default (8) is comfortably above the current live-testnet shape
+    /// (self + 4 peers), so small honest clusters see zero behavior change,
+    /// while keeping the quorum small enough for the exact
+    /// `bth-quorum-sim` intersection check on every rebuild. Setting `0`
+    /// makes `Recommended` mode curated-only (auto peers never validate).
+    #[serde(default = "default_max_auto_members")]
+    pub max_auto_members: u32,
 }
 
 impl Default for QuorumConfig {
@@ -363,6 +391,7 @@ impl Default for QuorumConfig {
             threshold: 2,
             members: Vec::new(),
             min_peers: 1,
+            max_auto_members: default_max_auto_members(),
         }
     }
 }
@@ -500,6 +529,12 @@ fn default_threshold() -> u32 {
 
 fn default_min_peers() -> u32 {
     1
+}
+
+/// Default cap on auto-promoted (non-curated) quorum members (#651). See
+/// [`QuorumConfig::max_auto_members`].
+fn default_max_auto_members() -> u32 {
+    8
 }
 
 /// Maximum quorum set members (keeps things simple)
@@ -881,6 +916,22 @@ mod tests {
         assert_eq!(quorum.threshold, 2);
         assert_eq!(quorum.min_peers, 1);
         assert!(quorum.members.is_empty());
+        // #651 promotion gate: cap defaults to 8 — comfortably above the
+        // 5-node live testnet (self + 4 peers) so small clusters see zero
+        // behavior change.
+        assert_eq!(quorum.max_auto_members, 8);
+    }
+
+    #[test]
+    fn test_quorum_max_auto_members_serde_default() {
+        // Existing config files without the #651 gate key must keep parsing
+        // and get the default cap.
+        let quorum: QuorumConfig = toml::from_str("").unwrap();
+        assert_eq!(quorum.max_auto_members, 8);
+
+        // And an explicit value is honored.
+        let quorum: QuorumConfig = toml::from_str("max_auto_members = 3").unwrap();
+        assert_eq!(quorum.max_auto_members, 3);
     }
 
     #[test]
@@ -891,6 +942,7 @@ mod tests {
             threshold: 2,
             members: vec!["peer1".to_string(), "peer2".to_string()],
             min_peers: 1,
+            max_auto_members: 8,
         };
 
         // No peers connected - can't reach quorum
@@ -919,6 +971,7 @@ mod tests {
             threshold: 2,    // ignored in recommended mode
             members: vec![], // ignored in recommended mode
             min_peers: 1,
+            max_auto_members: 8,
         };
 
         // No peers - can't mine
@@ -964,6 +1017,7 @@ mod tests {
             threshold: 2,
             members: vec![],
             min_peers: 1,
+            max_auto_members: 8,
         };
 
         assert_eq!(quorum.effective_threshold(0), 1); // n=1: 1-of-1
@@ -1046,6 +1100,7 @@ mod tests {
             threshold: 2,
             members: vec!["peer1".to_string(), "peer2".to_string()],
             min_peers: 1,
+            max_auto_members: 8,
         };
 
         for n in 1..=6 {
@@ -1063,6 +1118,7 @@ mod tests {
             threshold: 2,
             members: vec![],
             min_peers: 2, // Require at least 2 peers
+            max_auto_members: 8,
         };
 
         // One peer - not enough

@@ -68,7 +68,7 @@ use tracing::{debug, error, info, warn};
 use crate::{
     address::Address,
     config::QuorumConfig,
-    consensus::ScpSlotSnapshot,
+    consensus::{QuorumGateSnapshot, ScpSlotSnapshot},
     ledger::Ledger,
     mempool::Mempool,
     network::{NetworkStats, SyncStatusSnapshot},
@@ -252,6 +252,17 @@ pub struct RpcState {
     /// the `scpSlot*` / `slotStalled` / `slotStallSeconds` fields in
     /// `node_getStatus`.
     pub scp_slot_status: Option<Arc<RwLock<Option<ScpSlotSnapshot>>>>,
+    /// Shared quorum-promotion-gate handle (#651, epic #441 §3/P5).
+    /// `commands::run` publishes a fresh [`QuorumGateSnapshot`] here at the
+    /// initial quorum seed and on every peer-churn rebuild — always derived
+    /// from a real gate evaluation, never a constant (the anti-#541–#544
+    /// gate). `None` until wired in (tests / relay nodes); the inner `Option`
+    /// is `None` until the first evaluation publishes. Surfaced as the
+    /// `quorumCuratedMembers` / `quorumAutoMembers` /
+    /// `quorumGateSuppressedPeers` / `quorumGateMaxAutoMembers` /
+    /// `quorumGateIntersectionRefused` fields in `node_getStatus` (JSON
+    /// `null` until first publish).
+    pub quorum_gate_status: Option<Arc<RwLock<Option<QuorumGateSnapshot>>>>,
     /// Shared snapshot of the live connected-peer set surfaced by
     /// `network_getPeers` (#544). `commands::run` publishes a cheap clone of
     /// the discovery peer table here on each peer connect/disconnect; the
@@ -301,6 +312,7 @@ impl RpcState {
             minter_health: None,
             sync_status: None,
             scp_slot_status: None,
+            quorum_gate_status: None,
             peers: Arc::new(RwLock::new(Vec::new())),
             network_stats: None,
         }
@@ -342,6 +354,7 @@ impl RpcState {
             minter_health: None,
             sync_status: None,
             scp_slot_status: None,
+            quorum_gate_status: None,
             peers: Arc::new(RwLock::new(Vec::new())),
             network_stats: None,
         }
@@ -381,6 +394,7 @@ impl RpcState {
             minter_health: None,
             sync_status: None,
             scp_slot_status: None,
+            quorum_gate_status: None,
             peers: Arc::new(RwLock::new(Vec::new())),
             network_stats: None,
         }
@@ -468,6 +482,29 @@ impl RpcState {
     /// fabricating values.
     fn scp_slot_snapshot(&self) -> Option<ScpSlotSnapshot> {
         let handle = self.scp_slot_status.as_ref()?;
+        let guard = handle.read().ok()?;
+        guard.clone()
+    }
+
+    /// Wire in the shared quorum-promotion-gate handle so `node_getStatus`
+    /// can surface curated-vs-auto quorum membership and gate state (#651).
+    /// `commands::run` calls this with the handle the quorum rebuild path
+    /// publishes [`QuorumGateSnapshot`]s into.
+    pub fn with_quorum_gate_status(
+        mut self,
+        quorum_gate_status: Arc<RwLock<Option<QuorumGateSnapshot>>>,
+    ) -> Self {
+        self.quorum_gate_status = Some(quorum_gate_status);
+        self
+    }
+
+    /// Read the current quorum-promotion-gate snapshot, if a handle is wired
+    /// in and the gate has evaluated at least once. Returns `None` for tests
+    /// / relay nodes / pre-first-rebuild state, in which case
+    /// `node_getStatus` reports the gate fields as JSON `null` rather than
+    /// fabricating values.
+    fn quorum_gate_snapshot(&self) -> Option<QuorumGateSnapshot> {
+        let handle = self.quorum_gate_status.as_ref()?;
         let guard = handle.read().ok()?;
         guard.clone()
     }
@@ -1026,6 +1063,14 @@ async fn handle_node_status(id: Value, state: &RpcState) -> JsonRpcResponse {
     let slot_stalled = scp_slot.as_ref().map(|s| s.slot_stalled).unwrap_or(false);
     let slot_stall_seconds = scp_slot.as_ref().map(|s| s.stall_seconds).unwrap_or(0);
 
+    // Quorum promotion gate observability (#651, epic #441 §3/P5). Every
+    // field is read from the snapshot the quorum rebuild path publishes from
+    // a REAL gate evaluation — never fabricated here (the anti-#541–#544
+    // gate). With no handle wired in (tests / relay nodes) or before the
+    // first rebuild, all gate fields render as JSON null: an unwired node
+    // reports "no data", not a plausible-looking constant.
+    let quorum_gate = state.quorum_gate_snapshot();
+
     JsonRpcResponse::success(
         id,
         json!({
@@ -1052,6 +1097,20 @@ async fn handle_node_status(id: Value, state: &RpcState) -> JsonRpcResponse {
             // `quorumDegenerate` flags the n-of-n / zero-fault-tolerance regime.
             "quorumFaultTolerant": quorum_fault_tolerant,
             "quorumDegenerate": quorum_degenerate,
+            // Quorum promotion gate (#651): curated vs auto-promoted quorum
+            // membership and gate state, from the rebuild path's
+            // QuorumGateSnapshot. All null until the first gate evaluation.
+            "quorumCuratedMembers": quorum_gate.as_ref().map(|g| g.curated_members),
+            "quorumAutoMembers": quorum_gate.as_ref().map(|g| g.auto_members),
+            // > 0 means the gate is actively keeping discovered peers OUT of
+            // the safety-critical quorum (over-cap auto peers, or all
+            // non-curated peers in explicit mode).
+            "quorumGateSuppressedPeers": quorum_gate.as_ref().map(|g| g.suppressed_peers),
+            "quorumGateMaxAutoMembers": quorum_gate.as_ref().map(|g| g.max_auto_members),
+            // true when the latest candidate quorum set failed the
+            // bth-quorum-sim intersection check and was refused (the node
+            // kept its previous safe quorum set).
+            "quorumGateIntersectionRefused": quorum_gate.as_ref().map(|g| g.intersection_refused),
             // Stuck-miner early-warning (#538): true iff this node's miner is
             // active but producing 0 H/s past the grace + stall window.
             "minerStalled": miner_stalled,
@@ -3760,6 +3819,90 @@ mod tests {
         assert_ne!(
             active["slotStallSeconds"], jammed["slotStallSeconds"],
             "slotStallSeconds must track the live snapshot, not a constant"
+        );
+    }
+
+    /// #651 (epic #441 §3/P5): the `node_getStatus` quorum-promotion-gate
+    /// fields must track the shared snapshot handle the quorum rebuild path
+    /// publishes into — the anti-#541–#544 gate at the RPC layer. With no
+    /// handle wired in (or wired but never published) every gate field is
+    /// JSON null, never a fabricated zero; with a handle, two DIFFERENT
+    /// snapshots must yield DIFFERENT JSON (the fields are live, not
+    /// constants).
+    #[tokio::test]
+    async fn test_node_status_tracks_quorum_gate_snapshot() {
+        use crate::{consensus::QuorumGateSnapshot, ledger::Ledger, mempool::Mempool};
+
+        fn fresh_state() -> RpcState {
+            let dir = tempfile::tempdir().unwrap();
+            let ledger = Ledger::open(dir.path()).unwrap();
+            std::mem::forget(dir);
+            RpcState::new(
+                ledger,
+                Mempool::new(),
+                Network::Testnet,
+                None,
+                None,
+                vec![],
+                Arc::new(WsBroadcaster::new(16)),
+            )
+        }
+
+        // (1) No handle wired in: all gate fields null (no data, not zeros).
+        let state = fresh_state();
+        let result = handle_node_status(json!(1), &state).await.result.unwrap();
+        assert_eq!(result["quorumCuratedMembers"], Value::Null);
+        assert_eq!(result["quorumAutoMembers"], Value::Null);
+        assert_eq!(result["quorumGateSuppressedPeers"], Value::Null);
+        assert_eq!(result["quorumGateMaxAutoMembers"], Value::Null);
+        assert_eq!(result["quorumGateIntersectionRefused"], Value::Null);
+
+        // (2) Handle wired but nothing published yet: still null.
+        let handle = Arc::new(RwLock::new(None));
+        let state = fresh_state().with_quorum_gate_status(handle.clone());
+        let result = handle_node_status(json!(1), &state).await.result.unwrap();
+        assert_eq!(result["quorumCuratedMembers"], Value::Null);
+        assert_eq!(result["quorumAutoMembers"], Value::Null);
+        assert_eq!(result["quorumGateSuppressedPeers"], Value::Null);
+        assert_eq!(result["quorumGateMaxAutoMembers"], Value::Null);
+        assert_eq!(result["quorumGateIntersectionRefused"], Value::Null);
+
+        // (3) Small honest cluster: gate admits everyone, suppresses no one.
+        *handle.write().unwrap() = Some(QuorumGateSnapshot {
+            curated_members: 0,
+            auto_members: 4,
+            suppressed_peers: 0,
+            max_auto_members: 8,
+            intersection_refused: false,
+        });
+        let quiet = handle_node_status(json!(1), &state).await.result.unwrap();
+        assert_eq!(quiet["quorumCuratedMembers"], json!(0));
+        assert_eq!(quiet["quorumAutoMembers"], json!(4));
+        assert_eq!(quiet["quorumGateSuppressedPeers"], json!(0));
+        assert_eq!(quiet["quorumGateMaxAutoMembers"], json!(8));
+        assert_eq!(quiet["quorumGateIntersectionRefused"], json!(false));
+
+        // (4) Sybil flood: the SAME handle now reports active suppression —
+        // every field must move with the snapshot (not-a-constant proof).
+        *handle.write().unwrap() = Some(QuorumGateSnapshot {
+            curated_members: 2,
+            auto_members: 8,
+            suppressed_peers: 22,
+            max_auto_members: 8,
+            intersection_refused: true,
+        });
+        let flooded = handle_node_status(json!(1), &state).await.result.unwrap();
+        assert_eq!(flooded["quorumCuratedMembers"], json!(2));
+        assert_eq!(flooded["quorumAutoMembers"], json!(8));
+        assert_eq!(flooded["quorumGateSuppressedPeers"], json!(22));
+        assert_eq!(flooded["quorumGateIntersectionRefused"], json!(true));
+        assert_ne!(
+            quiet["quorumGateSuppressedPeers"], flooded["quorumGateSuppressedPeers"],
+            "quorumGateSuppressedPeers must track the live snapshot, not a constant"
+        );
+        assert_ne!(
+            quiet["quorumGateIntersectionRefused"], flooded["quorumGateIntersectionRefused"],
+            "quorumGateIntersectionRefused must track the live snapshot, not a constant"
         );
     }
 

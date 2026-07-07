@@ -160,6 +160,44 @@ pub struct ScpSlotSnapshot {
     pub effective_slot_duration_secs: u64,
 }
 
+/// A snapshot of the quorum promotion gate's last evaluation (#651, epic
+/// #441 §3/P5).
+///
+/// Every field is derived from a real gate evaluation in
+/// `commands::run::gated_scp_quorum_set` — never a constant or placeholder
+/// (the anti-#541–#544 gate). `commands::run` publishes a fresh snapshot into
+/// a shared `Arc<RwLock<Option<QuorumGateSnapshot>>>` at the initial quorum
+/// seed and on every peer-churn rebuild; the RPC layer surfaces it in
+/// `node_getStatus` (the `quorumCuratedMembers` / `quorumAutoMembers` /
+/// `quorumGateSuppressedPeers` / `quorumGateMaxAutoMembers` /
+/// `quorumGateIntersectionRefused` fields), reporting JSON `null` until the
+/// first publish.
+#[derive(Debug, Clone)]
+pub struct QuorumGateSnapshot {
+    /// Operator-curated (`[network.quorum] members`) quorum members admitted
+    /// by the gate, excluding self.
+    pub curated_members: usize,
+
+    /// Auto-discovered (non-curated) peers promoted into the quorum set by
+    /// the gate, bounded by `max_auto_members`.
+    pub auto_members: usize,
+
+    /// Connected peers the gate is currently keeping OUT of the quorum set
+    /// (over-cap auto peers in `Recommended` mode, or every non-curated peer
+    /// in `Explicit` mode). `> 0` means the gate is actively suppressing
+    /// promotions.
+    pub suppressed_peers: usize,
+
+    /// Echo of the configured `max_auto_members` cap, for dashboards.
+    pub max_auto_members: u32,
+
+    /// `true` when the most recent candidate quorum set FAILED the
+    /// `bth-quorum-sim` quorum-intersection check and was refused: the node
+    /// kept its previous safe quorum set (or, at initial seed, fell back to a
+    /// majority-threshold set over the same members).
+    pub intersection_refused: bool,
+}
+
 /// Events emitted by the consensus service
 #[derive(Debug, Clone)]
 pub enum ConsensusEvent {
