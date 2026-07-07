@@ -18,3 +18,9 @@ export type { ErrorMessageProps } from './error-message'
 
 export { DetailRow } from './detail-row'
 export type { DetailRowProps } from './detail-row'
+
+export { ClusterWealth } from './cluster-wealth'
+export type { ClusterWealthProps } from './cluster-wealth'
+
+export { LotteryFeed } from './lottery-feed'
+export type { LotteryFeedProps } from './lottery-feed'

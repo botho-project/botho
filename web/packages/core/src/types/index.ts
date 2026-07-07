@@ -110,6 +110,33 @@ export interface Contact {
 // Block Types
 // ============================================================================
 
+/**
+ * Privacy-safe per-transaction structure inside a block (#699/#700).
+ * Structure only: hash, fee, ring size — never amounts, recipients, or
+ * linkage data.
+ */
+export interface BlockTransactionSummary {
+  hash: TxHash
+  /** Transaction fee in picocredits. */
+  fee: Amount
+  /** Ring-member count of the tx's CLSAG inputs (all inputs share it). */
+  ringSize: number
+}
+
+/**
+ * On-chain lottery summary for a block (#699/#700). All amounts are
+ * picocredits. Blocks without lottery activity carry explicit zeros.
+ */
+export interface BlockLotterySummary {
+  totalFees: Amount
+  poolDistributed: Amount
+  amountBurned: Amount
+  /** Hex-encoded lottery seed for this block. */
+  lotterySeed: string
+  payoutCount: number
+  payoutTotal: Amount
+}
+
 export interface Block {
   hash: BlockHash
   height: BlockHeight
@@ -120,6 +147,15 @@ export interface Block {
   minter?: Address
   reward: Amount
   difficulty: bigint
+  /**
+   * Enriched explorer fields (#700). Optional and additive — older nodes
+   * omit them, and consumers must guard with undefined checks.
+   */
+  transactions?: BlockTransactionSummary[]
+  /** Sum of all tx fees in the block, in picocredits. */
+  totalFees?: Amount
+  /** Lottery summary; present when the node serves the enriched RPC. */
+  lottery?: BlockLotterySummary
 }
 
 // ============================================================================

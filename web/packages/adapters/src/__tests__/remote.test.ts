@@ -169,6 +169,129 @@ describe('RemoteNodeAdapter.getClusterWealth', () => {
   })
 })
 
+describe('RemoteNodeAdapter.getAllClusterWealth', () => {
+  it('parses the captured live fixture: string wealth -> bigint, missing factor -> 1000 floor', async () => {
+    // The fixture predates #700 (no per-cluster factor) — the adapter must
+    // default to the 1000 floor for old nodes, never re-derive the curve.
+    const adapter = await connectedAdapter({ cluster_getAllWealth: clusterGetAllWealth })
+    const clusters = await adapter.getAllClusterWealth()
+    expect(clusters).toHaveLength(3)
+    expect(clusters[0]).toEqual({
+      clusterId: '7244222622098737154',
+      wealth: 50_000_000_000_000n,
+      factor: 1000,
+    })
+    expect(typeof clusters[0].wealth).toBe('bigint')
+    // cluster_id stays a string — the real captured ids exceed 2^53.
+    expect(typeof clusters[0].clusterId).toBe('string')
+  })
+
+  it('parses enriched #700 responses: u128 wealth exactly + node-supplied factor', async () => {
+    const response = {
+      jsonrpc: '2.0',
+      result: {
+        count: 2,
+        total_tracked_wealth: '340282366920938463463374607431768211455',
+        clusters: [
+          { cluster_id: '1', wealth: '1', factor: 1000 },
+          { cluster_id: '2', wealth: '340282366920938463463374607431768211454', factor: 6000 },
+        ],
+      },
+      id: 1,
+    }
+    const adapter = await connectedAdapter({ cluster_getAllWealth: response })
+    const clusters = await adapter.getAllClusterWealth()
+    expect(clusters[0]).toEqual({ clusterId: '1', wealth: 1n, factor: 1000 })
+    expect(clusters[1].wealth).toBe(340282366920938463463374607431768211454n)
+    expect(clusters[1].wealth.toString()).toBe('340282366920938463463374607431768211454')
+    expect(clusters[1].factor).toBe(6000)
+  })
+
+  it('returns [] when the node sends no clusters array', async () => {
+    const response = {
+      jsonrpc: '2.0',
+      result: { count: 0, total_tracked_wealth: '0' },
+      id: 1,
+    }
+    const adapter = await connectedAdapter({ cluster_getAllWealth: response })
+    expect(await adapter.getAllClusterWealth()).toEqual([])
+  })
+})
+
+describe('RemoteNodeAdapter.getBlock enriched fields (#700)', () => {
+  /** Base pre-#700 block shape, byte-for-byte what old nodes serve. */
+  const legacyBlock = {
+    height: 42,
+    hash: 'f'.repeat(64),
+    prevHash: 'e'.repeat(64),
+    timestamp: 1751840000,
+    difficulty: 12345,
+    nonce: 987,
+    txCount: 1,
+    mintingReward: 4800000000000,
+  }
+
+  function rpc(result: Record<string, unknown>) {
+    return { jsonrpc: '2.0', result, id: 1 }
+  }
+
+  it('maps the enriched #700 shape: per-tx summaries, totalFees, lottery — all bigint amounts', async () => {
+    const adapter = await connectedAdapter({
+      getBlockByHeight: rpc({
+        ...legacyBlock,
+        transactions: [{ hash: 'c0de'.repeat(16), fee: 250, ringSize: 20 }],
+        totalFees: 250,
+        lottery: {
+          totalFees: 250,
+          poolDistributed: 200,
+          amountBurned: 50,
+          lotterySeed: '09'.repeat(32),
+          payoutCount: 2,
+          payoutTotal: 100,
+        },
+      }),
+    })
+    const block = await adapter.getBlock(42)
+    expect(block).not.toBeNull()
+    expect(block!.transactions).toEqual([
+      { hash: 'c0de'.repeat(16), fee: 250n, ringSize: 20 },
+    ])
+    expect(block!.totalFees).toBe(250n)
+    expect(block!.lottery).toEqual({
+      totalFees: 250n,
+      poolDistributed: 200n,
+      amountBurned: 50n,
+      lotterySeed: '09'.repeat(32),
+      payoutCount: 2,
+      payoutTotal: 100n,
+    })
+    // Pre-existing fields are unchanged by the enrichment.
+    expect(block!.height).toBe(42)
+    expect(block!.reward).toBe(4800000000000n)
+    expect(block!.previousHash).toBe('e'.repeat(64))
+  })
+
+  it('leaves enriched fields undefined for old nodes (additive contract — no break)', async () => {
+    const adapter = await connectedAdapter({ getBlockByHeight: rpc(legacyBlock) })
+    const block = await adapter.getBlock(42)
+    expect(block).not.toBeNull()
+    expect(block!.transactions).toBeUndefined()
+    expect(block!.totalFees).toBeUndefined()
+    expect(block!.lottery).toBeUndefined()
+    expect(block!.transactionCount).toBe(1)
+  })
+
+  it('maps the same enrichment on the getBlockByHash path', async () => {
+    const adapter = await connectedAdapter({
+      getBlockByHash: rpc({ ...legacyBlock, totalFees: 99, transactions: [] }),
+    })
+    const block = await adapter.getBlock('f'.repeat(64))
+    expect(block!.totalFees).toBe(99n)
+    expect(block!.transactions).toEqual([])
+    expect(lastCall('getBlockByHash')?.params.hash).toBe('f'.repeat(64))
+  })
+})
+
 describe('u128 / u64 wire-format round-trips', () => {
   it('round-trips BigInt("99999999999999999999") (> u64 max) exactly', () => {
     const big = '99999999999999999999'

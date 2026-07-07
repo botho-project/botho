@@ -82,6 +82,23 @@ export interface BlockFetchOptions {
 }
 
 /**
+ * One cluster's tracked wealth + live fee factor, from `cluster_getAllWealth`
+ * (#699/#700). Powers the explorer's wealth-distribution histogram.
+ */
+export interface ClusterWealthEntry {
+  /** Cluster id as a decimal string (u64 — can exceed 2^53, never parseInt). */
+  clusterId: string
+  /** Tracked wealth in picocredits (string-encoded u128 on the wire). */
+  wealth: bigint
+  /**
+   * Node-computed milli-x fee-curve multiplier (1000 = 1.00x .. 6000 = 6.00x).
+   * Comes from the SAME Rust curve as `tx_estimateFee` — clients must never
+   * re-derive the curve. Older nodes omit it; the adapter defaults to 1000.
+   */
+  factor: number
+}
+
+/**
  * Abstract interface for connecting to Botho nodes
  *
  * This allows the same wallet UI to work with:
@@ -185,6 +202,17 @@ export interface NodeAdapter {
    * @param targetKeys Hex-encoded target keys of the wallet's owned outputs
    */
   getClusterWealth(targetKeys: string[]): Promise<bigint>
+
+  /**
+   * Fetch every tracked cluster's wealth + live fee factor
+   * (`cluster_getAllWealth`, #699/#700) for the explorer's wealth-distribution
+   * view. Wealth is a string-encoded u128 on the wire and MUST be parsed via
+   * `BigInt()` (never `Number()`).
+   *
+   * Optional: not every adapter/node supports it — callers must degrade
+   * gracefully when absent.
+   */
+  getAllClusterWealth?(): Promise<ClusterWealthEntry[]>
 
   // =========================================================================
   // Events

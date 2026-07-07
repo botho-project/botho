@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from 'react'
 import type { Block, Transaction } from '@botho/core'
-import type { ExplorerDataSource, ExplorerView, ExplorerContextValue } from './types'
+import type { ExplorerDataSource, ExplorerTab, ExplorerView, ExplorerContextValue } from './types'
+import type { ClusterWealthEntry } from './wealth'
 
 const ExplorerContext = createContext<ExplorerContextValue | null>(null)
 
@@ -25,6 +26,12 @@ export function ExplorerProvider({ dataSource, isReady = true, initialQuery, onV
   const [error, setError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState(initialQuery ?? '')
   const [initialQueryProcessed, setInitialQueryProcessed] = useState(false)
+  const [activeTab, setActiveTabInternal] = useState<ExplorerTab>('blocks')
+  const [clusterWealth, setClusterWealth] = useState<ClusterWealthEntry[] | null>(null)
+  const [wealthLoading, setWealthLoading] = useState(false)
+  const [wealthError, setWealthError] = useState<string | null>(null)
+
+  const wealthSupported = typeof dataSource.getAllClusterWealth === 'function'
 
   // Wrapper to notify parent of view changes
   const setView = useCallback((newView: ExplorerView) => {
@@ -173,6 +180,57 @@ export function ExplorerProvider({ dataSource, isReady = true, initialQuery, onV
     setError(null)
   }, [setView])
 
+  // Fetch a transaction by hash and view it (block-detail per-tx links, #699)
+  const viewTransactionByHash = useCallback(
+    async (txHash: string) => {
+      if (!isReady) return
+
+      setLoading(true)
+      setError(null)
+
+      try {
+        const tx = await dataSource.getTransaction(txHash)
+        if (tx) {
+          setView({ mode: 'transaction', transaction: tx })
+        } else {
+          setError('Transaction not found')
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to load transaction')
+      } finally {
+        setLoading(false)
+      }
+    },
+    [dataSource, isReady, setView]
+  )
+
+  // Refresh cluster-wealth data (wealth-distribution tab, #699)
+  const refreshWealth = useCallback(async () => {
+    if (!isReady || !dataSource.getAllClusterWealth) return
+
+    setWealthLoading(true)
+    setWealthError(null)
+
+    try {
+      const clusters = await dataSource.getAllClusterWealth()
+      setClusterWealth(clusters)
+    } catch (err) {
+      setWealthError(err instanceof Error ? err.message : 'Failed to load cluster wealth')
+    } finally {
+      setWealthLoading(false)
+    }
+  }, [dataSource, isReady])
+
+  // Switch the list-mode tab; always lands back on the list view
+  const setActiveTab = useCallback(
+    (tab: ExplorerTab) => {
+      setActiveTabInternal(tab)
+      setView({ mode: 'list' })
+      setError(null)
+    },
+    [setView]
+  )
+
   // Go back to list
   const goBack = useCallback(() => {
     setView({ mode: 'list' })
@@ -194,6 +252,13 @@ export function ExplorerProvider({ dataSource, isReady = true, initialQuery, onV
       search()
     }
   }, [isReady, initialQuery, initialQueryProcessed, search])
+
+  // Lazily fetch cluster wealth the first time the wealth tab is opened
+  useEffect(() => {
+    if (activeTab === 'wealth' && isReady && clusterWealth === null && !wealthLoading) {
+      refreshWealth()
+    }
+  }, [activeTab, isReady, clusterWealth, wealthLoading, refreshWealth])
 
   // Subscribe to new blocks
   useEffect(() => {
@@ -221,9 +286,17 @@ export function ExplorerProvider({ dataSource, isReady = true, initialQuery, onV
     search,
     viewBlock,
     viewTransaction,
+    viewTransactionByHash,
     goBack,
     loadMore,
     refresh,
+    activeTab,
+    setActiveTab,
+    clusterWealth,
+    wealthLoading,
+    wealthError,
+    wealthSupported,
+    refreshWealth,
   }
 
   return <ExplorerContext.Provider value={value}>{children}</ExplorerContext.Provider>

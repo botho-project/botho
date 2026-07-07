@@ -35,6 +35,8 @@ export function ExplorerPage() {
       getBlock: (heightOrHash) => adapter.getBlock(heightOrHash),
       getTransaction: (txHash) => adapter.getTransaction(txHash),
       onNewBlock: (callback) => adapter.onNewBlock(callback),
+      // Wealth-distribution tab (#699): all tracked clusters + live factors.
+      getAllClusterWealth: () => adapter.getAllClusterWealth(),
     }
   }, [adapter])
 

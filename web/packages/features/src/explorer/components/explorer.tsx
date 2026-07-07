@@ -3,11 +3,14 @@ import { Card, CardContent } from '@botho/ui'
 import { motion, AnimatePresence } from 'motion/react'
 import { Database } from 'lucide-react'
 import { useExplorer } from '../context'
+import type { ExplorerTab } from '../types'
 import { SearchBar } from './search-bar'
 import { ErrorMessage } from './error-message'
 import { BlockList } from './block-list'
 import { BlockDetail } from './block-detail'
 import { TransactionDetail } from './transaction-detail'
+import { ClusterWealth } from './cluster-wealth'
+import { LotteryFeed } from './lottery-feed'
 
 export interface ExplorerProps {
   /** Whether the data source is connected/ready */
@@ -18,18 +21,35 @@ export interface ExplorerProps {
   className?: string
 }
 
+const TABS: Array<{ id: ExplorerTab; label: string }> = [
+  { id: 'blocks', label: 'Blocks' },
+  { id: 'wealth', label: 'Wealth distribution' },
+  { id: 'lottery', label: 'Lottery' },
+]
+
 /**
  * Complete blockchain explorer component
  *
- * Renders search bar, block list, block details, and transaction details
- * based on the current view state from ExplorerContext.
+ * Renders search bar, list-mode tabs (blocks / wealth distribution / lottery),
+ * block details, and transaction details based on the current view state from
+ * ExplorerContext.
  */
 export function Explorer({
   isConnected = true,
   notConnectedMessage,
   className,
 }: ExplorerProps) {
-  const { view } = useExplorer()
+  const {
+    view,
+    blocks,
+    activeTab,
+    setActiveTab,
+    viewBlock,
+    clusterWealth,
+    wealthLoading,
+    wealthError,
+    wealthSupported,
+  } = useExplorer()
 
   // Not connected state
   if (!isConnected) {
@@ -62,16 +82,52 @@ export function Explorer({
       {/* Error message */}
       <ErrorMessage />
 
+      {/* List-mode tabs (#699) */}
+      {view.mode === 'list' && (
+        <div
+          role="tablist"
+          aria-label="Explorer views"
+          className="flex gap-1 rounded-lg border border-[--color-slate]/30 bg-[--color-abyss]/40 p-1"
+        >
+          {TABS.map((tab) => (
+            <button
+              key={tab.id}
+              role="tab"
+              aria-selected={activeTab === tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`flex-1 rounded-md px-3 py-1.5 text-sm transition-colors ${
+                activeTab === tab.id
+                  ? 'bg-[--color-pulse]/15 text-[--color-pulse]'
+                  : 'text-[--color-ghost] hover:text-[--color-light]'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Content based on view mode */}
       <AnimatePresence mode="wait">
         {view.mode === 'list' && (
           <motion.div
-            key="list"
+            key={`list-${activeTab}`}
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
           >
-            <BlockList />
+            {activeTab === 'blocks' && <BlockList />}
+            {activeTab === 'wealth' && (
+              <ClusterWealth
+                clusters={clusterWealth}
+                loading={wealthLoading}
+                error={wealthError}
+                supported={wealthSupported}
+              />
+            )}
+            {activeTab === 'lottery' && (
+              <LotteryFeed blocks={blocks} onViewBlock={viewBlock} />
+            )}
           </motion.div>
         )}
 
