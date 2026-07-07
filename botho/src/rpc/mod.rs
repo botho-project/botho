@@ -277,6 +277,16 @@ pub struct RpcState {
     /// that never start the network loop, in which case those fields fall back
     /// to `0`.
     pub network_stats: Option<Arc<NetworkStats>>,
+    /// Relay channel from the RPC layer into the network event loop (#674).
+    /// `handle_submit_tx` pushes every mempool-accepted transaction here so
+    /// `commands::run` can gossip it to peers and register it in the SCP tx
+    /// cache immediately — independent of local minting state. Without this, a
+    /// non-minting node is a black hole for RPC-submitted transactions: they
+    /// sit in the local mempool and are only ever announced from inside the
+    /// active-minting code path. `None` in tests / setups without a network
+    /// loop, in which case submission remains mempool-local (previous
+    /// behavior).
+    pub tx_relay: Option<tokio::sync::mpsc::UnboundedSender<crate::transaction::Transaction>>,
 }
 
 impl RpcState {
@@ -315,6 +325,7 @@ impl RpcState {
             quorum_gate_status: None,
             peers: Arc::new(RwLock::new(Vec::new())),
             network_stats: None,
+            tx_relay: None,
         }
     }
 
@@ -357,6 +368,7 @@ impl RpcState {
             quorum_gate_status: None,
             peers: Arc::new(RwLock::new(Vec::new())),
             network_stats: None,
+            tx_relay: None,
         }
     }
 
@@ -397,6 +409,7 @@ impl RpcState {
             quorum_gate_status: None,
             peers: Arc::new(RwLock::new(Vec::new())),
             network_stats: None,
+            tx_relay: None,
         }
     }
 
@@ -523,6 +536,15 @@ impl RpcState {
     /// [`NetworkStats`] handle the network event loop increments.
     pub fn with_network_stats(mut self, network_stats: Arc<NetworkStats>) -> Self {
         self.network_stats = Some(network_stats);
+        self
+    }
+
+    /// Wire in the tx-relay channel into the network event loop (#674).
+    pub fn with_tx_relay(
+        mut self,
+        sender: tokio::sync::mpsc::UnboundedSender<crate::transaction::Transaction>,
+    ) -> Self {
+        self.tx_relay = Some(sender);
         self
     }
 }
@@ -1772,13 +1794,33 @@ async fn handle_submit_tx(id: Value, params: &Value, state: &RpcState) -> JsonRp
     let ledger = read_lock!(state.ledger, id.clone());
     let mut mempool = write_lock!(state.mempool, id.clone());
 
+    // Keep a copy for relay: `add_tx` consumes the tx, and the network event
+    // loop needs the full transaction to gossip it to peers (#674).
+    let relay_tx = tx.clone();
+
     match mempool.add_tx(tx, &ledger) {
-        Ok(hash) => JsonRpcResponse::success(
-            id,
-            json!({
-                "txHash": hex::encode(hash),
-            }),
-        ),
+        Ok(hash) => {
+            // Hand the accepted tx to the network event loop for immediate
+            // gossip + SCP tx-cache registration (#674). Mempool acceptance
+            // above is the validity gate (full structural + UTXO + signature
+            // checks), so only validated txs are relayed. Without this, a
+            // non-minting node never announces RPC-submitted txs — they sit in
+            // the local mempool forever because the steady-state broadcast
+            // only ran inside the active-minting path.
+            if let Some(relay) = &state.tx_relay {
+                if relay.send(relay_tx).is_err() {
+                    // Event loop gone (shutdown); the tx is still in the local
+                    // mempool, matching pre-#674 behavior.
+                    warn!("tx relay channel closed; submitted tx not gossiped");
+                }
+            }
+            JsonRpcResponse::success(
+                id,
+                json!({
+                    "txHash": hex::encode(hash),
+                }),
+            )
+        }
         Err(e) => JsonRpcResponse::error(id, -32000, &format!("Failed to add transaction: {}", e)),
     }
 }

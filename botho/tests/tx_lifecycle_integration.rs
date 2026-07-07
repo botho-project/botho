@@ -1267,3 +1267,120 @@ fn test_mempool_transactions_sorted_by_fee() {
     // Lowest fee should be last (1x base)
     assert_eq!(sorted_txs[2].fee, base_fee);
 }
+
+// ============================================================================
+// RPC tx_submit relay (#674)
+// ============================================================================
+
+/// #674: a mempool-accepted `tx_submit` must be handed to the network relay
+/// channel so the event loop gossips it to peers immediately — independent of
+/// local minting state. Before the fix, RPC-submitted txs sat in the receiving
+/// node's mempool forever on a non-minting node (the web-wallet's default
+/// ingress), so send / claim-link / pay flows silently never confirmed.
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn test_rpc_tx_submit_relays_accepted_tx() {
+    // -- Fund a wallet on a real ledger (same recipe as the tests above) --
+    let (_temp_dir, ledger) = create_test_ledger();
+    let mempool = Mempool::new();
+    let miner_wallet = create_wallet(1);
+    let recipient_wallet = create_wallet(2);
+    mine_decoy_blocks(&ledger, &miner_wallet);
+
+    let utxos = scan_wallet_utxos(&ledger, &miner_wallet);
+    let (sender_utxo, subaddr_idx) = &utxos[0];
+    let send_amount = 10 * PICOCREDITS_PER_CREDIT;
+    let fee = calculate_fee_for_outputs(&mempool, sender_utxo.output.amount);
+    let state = ledger.get_chain_state().unwrap();
+    let tx = create_signed_transaction(
+        &miner_wallet,
+        sender_utxo,
+        *subaddr_idx,
+        &recipient_wallet.public_address(),
+        send_amount,
+        fee,
+        state.height,
+        &ledger,
+    );
+    let expected_hash = tx.hash();
+    let tx_hex = hex::encode(bincode::serialize(&tx).expect("serialize tx"));
+
+    // -- RPC server whose state carries the #674 relay channel --
+    let (relay_sender, mut relay_rx) = tokio::sync::mpsc::unbounded_channel();
+    let rpc_state = std::sync::Arc::new(
+        botho::rpc::RpcState::new(
+            ledger,
+            mempool,
+            bth_transaction_types::constants::Network::Testnet,
+            None,
+            None,
+            vec!["*".to_string()],
+            std::sync::Arc::new(botho::rpc::WsBroadcaster::new(16)),
+        )
+        .with_tx_relay(relay_sender),
+    );
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("local addr");
+    drop(listener);
+    let state_clone = rpc_state.clone();
+    tokio::spawn(async move {
+        let _ = botho::rpc::start_rpc_server(addr, state_clone).await;
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    let client = reqwest::Client::new();
+    let submit = |tx_hex: String| {
+        let client = client.clone();
+        async move {
+            client
+                .post(format!("http://{}", addr))
+                .json(&serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tx_submit",
+                    "params": { "tx_hex": tx_hex },
+                }))
+                .send()
+                .await
+                .expect("send")
+                .json::<serde_json::Value>()
+                .await
+                .expect("parse")
+        }
+    };
+
+    // A valid, mempool-accepted submission is pushed onto the relay channel.
+    let resp = submit(tx_hex.clone()).await;
+    assert!(
+        resp["error"].is_null(),
+        "tx_submit failed: {:?}",
+        resp["error"]
+    );
+    assert_eq!(
+        resp["result"]["txHash"].as_str().expect("txHash"),
+        hex::encode(expected_hash)
+    );
+    let relayed = relay_rx
+        .try_recv()
+        .expect("accepted tx was not pushed to the relay channel (#674)");
+    assert_eq!(
+        relayed.hash(),
+        expected_hash,
+        "relay channel must carry the exact accepted tx"
+    );
+
+    // A REJECTED submission (duplicate spend of the same key images) must not
+    // be relayed: mempool acceptance is the relay's validity gate.
+    let resp2 = submit(tx_hex).await;
+    assert!(
+        resp2["error"].is_object(),
+        "duplicate submit should be rejected by the mempool"
+    );
+    assert!(
+        relay_rx.try_recv().is_err(),
+        "rejected tx must NOT reach the relay channel"
+    );
+}
