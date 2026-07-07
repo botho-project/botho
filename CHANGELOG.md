@@ -12,6 +12,35 @@ bumps (`0.X.Y`) are backwards-compatible.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-07-07
+
+### Fixed
+- **Node: `tx_submit` now relays transactions to peers regardless of minting
+  state** (#674). Previously a non-minting ingress node (the web wallet's
+  default) was a black hole for RPC-submitted transactions — sends, claim
+  links, and pay flows silently never confirmed. Accepted txs are gossiped and
+  SCP-cache-registered at accept time, plus a 30s mempool re-announce tick.
+- Web wallet: `/pay` and `/claim` inline wallet create/import now enforce the
+  required-password policy — no more plaintext seeds from the link funnels
+  (#672); WalletGate lands on the unlock form for locked wallets and
+  overwriting a stored wallet requires explicit confirmation (#673).
+- Web wallet: transaction history shows per-event rows with netted send
+  amounts, real confirmations/status, and block heights instead of fabricated
+  "just now" timestamps (#675).
+- Two broken `network/privacy` doctests; doctests now run in CI (#670).
+- Stale cluster-factor e2e expectations rescaled to the picocredit curve;
+  `e2e_progressive_fees` now runs in CI (#669).
+
+### Changed
+- Release builds enable `overflow-checks` (curve25519-dalek exempted for
+  performance); attacker-influenced sums on consensus paths saturate instead
+  of silently wrapping (#663).
+
+### Security
+- `crossbeam-epoch` 0.9.18 → 0.9.20 (RUSTSEC-2026-0204); cargo-deny PR gate
+  green again (#679).
+- Cycle-7 internal audit report committed (`audits/2026-07-05-cycle7.md`).
+
 ## [0.3.0] - 2026-07-05
 
 ### Summary
