@@ -264,6 +264,60 @@ async fn test_get_block_by_hash_known() {
     assert!(result["timestamp"].is_number());
     // The returned block's hash must match the requested hash.
     assert_eq!(result["hash"].as_str().unwrap(), tip_hash);
+
+    // #696: the enriched explorer fields ride along on the by-hash path too.
+    assert!(result["transactions"].is_array());
+    assert!(result["totalFees"].is_number());
+    assert!(result["lottery"].is_object());
+}
+
+/// #696: `getBlockByHeight` carries the additive explorer fields —
+/// `transactions` (per-tx hash/fee/ringSize), `totalFees`, and the `lottery`
+/// summary — while leaving the original header shape untouched. Exercised
+/// against the genesis block, which always exists in a fresh ledger, so the
+/// new fields must render as explicit empty/zero defaults (never be omitted).
+#[tokio::test]
+#[serial]
+async fn test_get_block_by_height_explorer_fields() {
+    let (_temp_dir, addr, _handle) = spawn_test_rpc_server().await;
+    let client = Client::new();
+
+    let response = rpc_call(&client, addr, "getBlockByHeight", json!({"height": 0})).await;
+    assert!(
+        response["error"].is_null(),
+        "genesis block should exist: {:?}",
+        response["error"]
+    );
+    let result = &response["result"];
+
+    // Original (pre-#696) shape intact — additive-only contract.
+    assert!(result["height"].is_number());
+    assert!(result["hash"].is_string());
+    assert!(result["prevHash"].is_string());
+    assert!(result["timestamp"].is_number());
+    assert!(result["difficulty"].is_number());
+    assert!(result["nonce"].is_number());
+    assert!(result["txCount"].is_number());
+    assert!(result["mintingReward"].is_number());
+
+    // New: per-tx structure. Genesis has no transfer txs -> empty array.
+    let txs = result["transactions"]
+        .as_array()
+        .expect("transactions must be an array");
+    assert!(txs.is_empty());
+
+    // New: block fee total.
+    assert_eq!(result["totalFees"], json!(0));
+
+    // New: lottery summary with the full field set, zeroed for genesis.
+    let lottery = &result["lottery"];
+    assert!(lottery.is_object());
+    assert_eq!(lottery["totalFees"], json!(0));
+    assert_eq!(lottery["poolDistributed"], json!(0));
+    assert_eq!(lottery["amountBurned"], json!(0));
+    assert!(lottery["lotterySeed"].is_string());
+    assert_eq!(lottery["payoutCount"], json!(0));
+    assert_eq!(lottery["payoutTotal"], json!(0));
 }
 
 #[tokio::test]
