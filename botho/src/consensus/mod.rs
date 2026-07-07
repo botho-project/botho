@@ -22,6 +22,9 @@ pub use lottery::{
     verify_lottery_result, BlockLotteryResult, LotteryFeeConfig, LotteryStats,
     LotteryValidationError,
 };
-pub use service::{ConsensusConfig, ConsensusEvent, ConsensusService, ScpMessage};
+pub use service::{
+    ConsensusConfig, ConsensusEvent, ConsensusService, ScpMessage, ScpSlotSnapshot,
+    SLOT_STALL_THRESHOLD_MULTIPLIER,
+};
 pub use validation::{BatchValidationResult, TransactionValidator, ValidationError};
 pub use value::{ConsensusValue, ConsensusValueHash};

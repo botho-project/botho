@@ -48,7 +48,12 @@ pub trait ScpNode<V: Value>: Send {
     fn current_slot_index(&self) -> SlotIndex;
 
     /// Get metrics for the current slot.
-    fn get_current_slot_metrics(&mut self) -> SlotMetrics;
+    ///
+    /// Read-only (`&self`): the underlying
+    /// [`crate::slot::ScpSlot::get_metrics`] only reads the slot's X/Y/Z/B
+    /// state, and observability consumers (issue #653) need to snapshot slot
+    /// progress without exclusive access.
+    fn get_current_slot_metrics(&self) -> SlotMetrics;
 
     /// Additional debug info, e.g. a JSON representation of the Slot's state.
     fn get_slot_debug_snapshot(&mut self, slot_index: SlotIndex) -> Option<String>;
