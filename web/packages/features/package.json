@@ -9,7 +9,11 @@
     "./explorer": "./src/explorer/index.ts",
     "./explorer/*": "./src/explorer/*",
     "./wallet": "./src/wallet/index.ts",
-    "./wallet/*": "./src/wallet/*"
+    "./wallet/*": "./src/wallet/*",
+    "./network": "./src/network/index.ts",
+    "./network/*": "./src/network/*",
+    "./operator": "./src/operator/index.ts",
+    "./operator/*": "./src/operator/*"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"
