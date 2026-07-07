@@ -1,8 +1,8 @@
 [package]
 name = "botho-metrics-daemon"
-version = "0.3.1"
+version = "0.4.0"
 edition = "2021"
-description = "Historical metrics collection daemon for Botho faucet"
+description = "Fleet metrics collection daemon and history API for the Botho testnet"
 license = "MIT"
 
 [[bin]]
@@ -40,6 +40,3 @@ thiserror = "1"
 
 # Configuration
 clap = { version = "4", features = ["derive"] }
-
-[dev-dependencies]
-tempfile = "3"

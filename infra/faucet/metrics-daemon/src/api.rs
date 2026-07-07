@@ -1,8 +1,12 @@
-//! HTTP API for serving historical metrics
+//! HTTP API for serving fleet metrics
 //!
-//! Endpoints:
-//! - GET /api/metrics/history?metric=height&period=24h&granularity=5min
-//! - GET /api/metrics/latest
+//! Endpoints (contract for the wallet network dashboard, see issue #697):
+//! - GET /api/metrics/latest -> JSON array, one entry per node: {node,
+//!   timestamp, height, peerCount, scpPeerCount, mempoolSize, mintingActive,
+//!   uptimeSeconds, heightStale}
+//! - GET /api/metrics/history?node=<name>&resolution=5min|hourly|daily&
+//!   since=<unix-seconds> -> JSON array of samples for that node: {timestamp,
+//!   height, peerCount, scpPeerCount, mempoolSize, txTotal}
 //! - GET /health
 
 use anyhow::Result;
@@ -17,33 +21,10 @@ use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use tower_http::cors::{Any, CorsLayer};
 
-use crate::db::{DataPoint, HistoryQuery, MetricsDb};
+use crate::db::{MetricsDb, Resolution};
 
 /// Shared application state
 type AppState = Arc<Mutex<MetricsDb>>;
-
-/// History response
-#[derive(Serialize)]
-struct HistoryResponse {
-    metric: String,
-    period: String,
-    granularity: String,
-    data: Vec<DataPoint>,
-}
-
-/// Latest metrics response
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct LatestResponse {
-    timestamp: i64,
-    height: u64,
-    peer_count: f64,
-    scp_peer_count: f64,
-    mempool_size: f64,
-    tx_delta: i64,
-    uptime_seconds: u64,
-    minting_active: bool,
-}
 
 /// Error response
 #[derive(Serialize)]
@@ -76,75 +57,59 @@ async fn health() -> impl IntoResponse {
     "OK"
 }
 
-/// Query parameters for history endpoint
+/// Query parameters for the history endpoint
 #[derive(Debug, Deserialize)]
 struct HistoryParams {
-    metric: Option<String>,
-    period: Option<String>,
-    granularity: Option<String>,
+    node: Option<String>,
+    resolution: Option<String>,
+    since: Option<i64>,
 }
 
-/// Get historical metrics
+/// Get historical metrics for one node
 async fn history(
     State(db): State<AppState>,
     Query(params): Query<HistoryParams>,
 ) -> impl IntoResponse {
-    let query = HistoryQuery {
-        metric: params.metric.unwrap_or_else(|| "height".to_string()),
-        period: params.period.unwrap_or_else(|| "24h".to_string()),
-        granularity: params.granularity.unwrap_or_else(|| "5min".to_string()),
+    let Some(node) = params.node else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "missing required query parameter: node",
+        );
     };
 
-    let db_lock = db.lock().unwrap();
+    let resolution_str = params.resolution.as_deref().unwrap_or("5min");
+    let Some(resolution) = Resolution::parse(resolution_str) else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid resolution: expected 5min, hourly, or daily",
+        );
+    };
 
-    match db_lock.query_history(&query) {
-        Ok(data) => {
-            let response = HistoryResponse {
-                metric: query.metric,
-                period: query.period,
-                granularity: query.granularity,
-                data,
-            };
-            (StatusCode::OK, Json(response)).into_response()
-        }
-        Err(e) => {
-            let response = ErrorResponse {
-                error: e.to_string(),
-            };
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(response)).into_response()
-        }
+    let since = params.since.unwrap_or(0);
+
+    let db_lock = db.lock().unwrap();
+    match db_lock.query_node_history(&node, resolution, since) {
+        Ok(data) => (StatusCode::OK, Json(data)).into_response(),
+        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
 }
 
-/// Get latest metrics sample
+/// Get latest sample for every node (empty array until first collection)
 async fn latest(State(db): State<AppState>) -> impl IntoResponse {
     let db_lock = db.lock().unwrap();
 
-    match db_lock.get_latest() {
-        Ok(Some(sample)) => {
-            let response = LatestResponse {
-                timestamp: sample.timestamp,
-                height: sample.height,
-                peer_count: sample.peer_count,
-                scp_peer_count: sample.scp_peer_count,
-                mempool_size: sample.mempool_size,
-                tx_delta: sample.tx_delta,
-                uptime_seconds: sample.uptime_seconds,
-                minting_active: sample.minting_active,
-            };
-            (StatusCode::OK, Json(response)).into_response()
-        }
-        Ok(None) => {
-            let response = ErrorResponse {
-                error: "No data available".to_string(),
-            };
-            (StatusCode::NOT_FOUND, Json(response)).into_response()
-        }
-        Err(e) => {
-            let response = ErrorResponse {
-                error: e.to_string(),
-            };
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(response)).into_response()
-        }
+    match db_lock.get_latest_per_node() {
+        Ok(entries) => (StatusCode::OK, Json(entries)).into_response(),
+        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
+}
+
+fn error_response(status: StatusCode, message: &str) -> axum::response::Response {
+    (
+        status,
+        Json(ErrorResponse {
+            error: message.to_string(),
+        }),
+    )
+        .into_response()
 }

@@ -1,0 +1,52 @@
+[Unit]
+Description=Botho Metrics Daemon (fleet collector + history API)
+Documentation=https://github.com/botho-project/botho
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=botho
+Group=botho
+WorkingDirectory=/home/botho
+
+# Poll all five testnet nodes every 5 minutes and serve the history API.
+# The faucet node is polled locally; the other nodes via their public
+# HTTPS RPC endpoints. A down node is logged and skipped per tick.
+ExecStart=/usr/local/bin/botho-metrics-daemon \
+    --node seed=https://seed.botho.io/rpc \
+    --node seed2=https://seed2.botho.io/rpc \
+    --node faucet=http://127.0.0.1:17101 \
+    --node eu=https://eu.seed.botho.io/rpc \
+    --node ap=https://ap.seed.botho.io/rpc \
+    --db /var/lib/botho-metrics/metrics.db \
+    --api-port 17102 \
+    --interval 300
+
+Restart=always
+RestartSec=10
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+# Creates /var/lib/botho-metrics owned by the service user
+StateDirectory=botho-metrics
+ReadWritePaths=/var/lib/botho-metrics
+
+# Resource limits
+LimitNOFILE=65535
+MemoryMax=256M
+
+# Environment
+Environment=RUST_LOG=info
+Environment=RUST_BACKTRACE=1
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=botho-metrics
+
+[Install]
+WantedBy=multi-user.target
