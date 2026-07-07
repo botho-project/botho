@@ -2309,17 +2309,37 @@ fn gated_scp_quorum_set(
 /// shares one threshold) is exactly `Fbas::symmetric`.
 ///
 /// The sim's `NodeSet` is a `u32` bitmask and the analysis enumerates `2^n`
-/// subsets, exact and fast for the gated sizes this is called with
-/// (`n <= 1 + curated + max_auto_members`). If an operator configures a
-/// curated core too large for the exact check we fall back to the analytic
-/// rule: in a symmetric FBAS the minimal quorums are exactly the
-/// threshold-sized member subsets, so intersection holds iff
-/// `threshold > n/2` (two subsets each larger than half of `n` must share a
-/// node).
+/// subsets, but the real cost is `minimal_quorums()`' O(|quorums|²) subset
+/// scan plus the pairwise intersection loop, which blows up well before the
+/// bitmask limit. Above [`MAX_EXACT_SIM_NODES`] we fall back to the analytic
+/// rule, which is *exact* — not an approximation — for a flat symmetric FBAS:
+/// its minimal quorums are exactly the threshold-sized member subsets, so
+/// quorum intersection holds iff `threshold > n/2` (two subsets each larger
+/// than half of `n` must share a node). The sim call at small `n` is therefore
+/// belt-and-braces validation of the same answer the analytic rule gives, not
+/// added precision.
 fn symmetric_quorum_has_intersection(n: usize, threshold: usize) -> bool {
-    /// Beyond this size the exact 2^n enumeration is no longer cheap (and the
-    /// sim hard-caps at 32 nodes).
-    const MAX_EXACT_SIM_NODES: usize = 20;
+    /// Largest `n` for which the brute-force FBAS analysis is cheap enough to
+    /// run *synchronously on the main network event loop* (peer connect/
+    /// disconnect handlers) without starving consensus ticks. Measured in a
+    /// release build of `Fbas::symmetric(n, t).has_quorum_intersection()`:
+    ///
+    /// | n  | threshold | elapsed |
+    /// |----|-----------|---------|
+    /// | 9  | 5         | 86 µs   |
+    /// | 13 | 7         | 4.9 ms  |
+    /// | 15 | 8         | 733 ms  |
+    /// | 17 | 9         | 3.3 s   |
+    /// | 18 | 10        | 9.2 s   |
+    /// | 19 | 10        | 26.4 s  |
+    /// | 20 | 11        | 46.6 s  |
+    ///
+    /// The cost is `minimal_quorums()`' O(|quorums|²) subset scan (~432k
+    /// quorums / ~168k minimal at n=20/t=11), not the `2^n` enumeration, so it
+    /// explodes between n=13 (~5 ms) and n=15 (~0.7 s). Debug builds are worse.
+    /// Cap at 13 (≤ 5 ms worst case); above it the analytic rule is exact for
+    /// flat symmetric quorums (see the fn doc), so nothing is lost.
+    const MAX_EXACT_SIM_NODES: usize = 13;
     if n <= MAX_EXACT_SIM_NODES {
         bth_quorum_sim::Fbas::symmetric(n, threshold).has_quorum_intersection()
     } else {
@@ -2960,8 +2980,34 @@ mod tests {
         assert!(symmetric_quorum_has_intersection(1, 1));
         // 1-of-2 splits into two disjoint singleton quorums.
         assert!(!symmetric_quorum_has_intersection(2, 1));
-        // Above the exact-sim envelope the analytic majority rule takes over.
+        // Just under the exact-sim boundary (n = 13): still runs the sim.
+        assert!(symmetric_quorum_has_intersection(13, 7));
+        assert!(!symmetric_quorum_has_intersection(13, 6));
+        // Just over the boundary (n = 14): the analytic majority rule takes over.
+        assert!(symmetric_quorum_has_intersection(14, 8));
+        assert!(!symmetric_quorum_has_intersection(14, 7));
+        // Well above the envelope, the analytic rule still holds.
         assert!(symmetric_quorum_has_intersection(25, 13));
         assert!(!symmetric_quorum_has_intersection(25, 12));
+    }
+
+    /// The analytic majority rule (`threshold > n/2`) is provably exact for a
+    /// flat symmetric quorum, so it must agree with the brute-force sim at
+    /// every `(n, threshold)` the sim can still handle cheaply. This property
+    /// check guards the boundary constant: if `MAX_EXACT_SIM_NODES` is raised
+    /// past a point where the two paths diverge, this fails.
+    #[test]
+    fn analytic_rule_matches_sim_for_flat_symmetric_quorums() {
+        for n in 1..=13 {
+            for threshold in 1..=n {
+                let sim = bth_quorum_sim::Fbas::symmetric(n, threshold)
+                    .has_quorum_intersection();
+                let analytic = threshold > n / 2;
+                assert_eq!(
+                    sim, analytic,
+                    "sim/analytic disagree at n={n}, threshold={threshold}"
+                );
+            }
+        }
     }
 }
