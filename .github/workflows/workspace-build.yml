@@ -78,3 +78,9 @@ jobs:
       # required check fast and deterministic while still failing on rot (#562).
       - name: Compile-check all test targets (no run)
         run: cargo test --workspace --no-run
+
+      # Doctests are NOT compiled by `--no-run` above and no other workflow
+      # runs them, so documentation examples rotted silently (#670). They are
+      # fast (seconds) and deterministic, so run them for real.
+      - name: Run doctests
+        run: cargo test --workspace --doc
