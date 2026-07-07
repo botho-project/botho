@@ -6,6 +6,7 @@ export type { ExplorerProviderProps } from './context'
 export type {
   ExplorerDataSource,
   ExplorerView,
+  ExplorerTab,
   ExplorerContextValue,
 } from './types'
 
@@ -18,6 +19,8 @@ export {
   TransactionDetail,
   ErrorMessage,
   DetailRow,
+  ClusterWealth,
+  LotteryFeed,
 } from './components'
 
 export type {
@@ -28,6 +31,8 @@ export type {
   TransactionDetailProps,
   ErrorMessageProps,
   DetailRowProps,
+  ClusterWealthProps,
+  LotteryFeedProps,
 } from './components'
 
 // Utilities
@@ -41,3 +46,24 @@ export {
   isValidBlockHeight,
   ZERO_HASH,
 } from './utils'
+
+// Wealth-distribution derivations (#699)
+export {
+  FACTOR_BANDS,
+  PICO_PER_BTH,
+  factorBand,
+  formatFactor,
+  wealthBucketIndex,
+  bucketLabel,
+  bucketClusters,
+  summarizeWealth,
+} from './wealth'
+export type {
+  ClusterWealthEntry,
+  FactorBand,
+  WealthBucket,
+  WealthSummary,
+} from './wealth'
+
+// Lottery-feed derivations (#699)
+export { selectLotteryBlocks } from './lottery'

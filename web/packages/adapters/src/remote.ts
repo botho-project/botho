@@ -11,6 +11,7 @@ import type {
 } from '@botho/core'
 import type {
   BlockFetchOptions,
+  ClusterWealthEntry,
   FeeEstimate,
   MempoolUpdate,
   NodeAdapter,
@@ -62,6 +63,74 @@ function leHexToBigInt(hex: string): bigint {
     result = (result << 8n) | BigInt(parseInt(hex.slice(i, i + 2), 16))
   }
   return result
+}
+
+/**
+ * Wire shape of `getBlockByHeight` / `getBlockByHash` results. The
+ * `transactions` / `totalFees` / `lottery` fields are the additive explorer
+ * enrichment from #700 — older nodes omit them, so they are all optional and
+ * the mapping below guards with undefined checks.
+ */
+interface RpcBlockResult {
+  height: number
+  hash: string
+  prevHash: string
+  timestamp: number
+  difficulty: number
+  txCount: number
+  mintingReward: number
+  transactions?: Array<{ hash: string; fee: number; ringSize: number }>
+  totalFees?: number
+  lottery?: {
+    totalFees?: number
+    poolDistributed?: number
+    amountBurned?: number
+    lotterySeed?: string
+    payoutCount?: number
+    payoutTotal?: number
+  }
+}
+
+/**
+ * Map an RPC block result to the core `Block` shape. Fee/lottery amounts go
+ * through `BigInt(String(...))` (never bare `Number()` arithmetic) so future
+ * wide values cannot be silently coerced. Enriched fields stay `undefined`
+ * when an older node omits them (#699 additive contract).
+ */
+function mapRpcBlock(result: RpcBlockResult): Block {
+  const block: Block = {
+    hash: result.hash,
+    height: result.height,
+    timestamp: result.timestamp,
+    previousHash: result.prevHash,
+    transactionCount: result.txCount,
+    size: 0, // Not provided
+    reward: BigInt(result.mintingReward || 0),
+    difficulty: BigInt(result.difficulty || 0),
+  }
+
+  if (Array.isArray(result.transactions)) {
+    block.transactions = result.transactions.map((tx) => ({
+      hash: tx.hash,
+      fee: BigInt(String(tx.fee ?? 0)),
+      ringSize: tx.ringSize ?? 0,
+    }))
+  }
+  if (result.totalFees !== undefined) {
+    block.totalFees = BigInt(String(result.totalFees))
+  }
+  if (result.lottery !== undefined) {
+    block.lottery = {
+      totalFees: BigInt(String(result.lottery.totalFees ?? 0)),
+      poolDistributed: BigInt(String(result.lottery.poolDistributed ?? 0)),
+      amountBurned: BigInt(String(result.lottery.amountBurned ?? 0)),
+      lotterySeed: result.lottery.lotterySeed ?? '',
+      payoutCount: result.lottery.payoutCount ?? 0,
+      payoutTotal: BigInt(String(result.lottery.payoutTotal ?? 0)),
+    }
+  }
+
+  return block
 }
 
 /** JSON-RPC 2.0 request */
@@ -206,48 +275,16 @@ export class RemoteNodeAdapter implements NodeAdapter {
   async getBlock(heightOrHash: BlockHeight | string): Promise<Block | null> {
     try {
       if (typeof heightOrHash === 'number') {
-        const result = await this.call<{
-          height: number
-          hash: string
-          prevHash: string
-          timestamp: number
-          difficulty: number
-          txCount: number
-          mintingReward: number
-        }>('getBlockByHeight', { height: heightOrHash })
-
-        return {
-          hash: result.hash,
-          height: result.height,
-          timestamp: result.timestamp,
-          previousHash: result.prevHash,
-          transactionCount: result.txCount,
-          size: 0, // Not provided
-          reward: BigInt(result.mintingReward || 0),
-          difficulty: BigInt(result.difficulty || 0),
-        }
+        const result = await this.call<RpcBlockResult>('getBlockByHeight', {
+          height: heightOrHash,
+        })
+        return mapRpcBlock(result)
       } else {
         // Resolve by hash via the node's getBlockByHash RPC (issue #330).
-        const result = await this.call<{
-          height: number
-          hash: string
-          prevHash: string
-          timestamp: number
-          difficulty: number
-          txCount: number
-          mintingReward: number
-        }>('getBlockByHash', { hash: heightOrHash })
-
-        return {
-          hash: result.hash,
-          height: result.height,
-          timestamp: result.timestamp,
-          previousHash: result.prevHash,
-          transactionCount: result.txCount,
-          size: 0, // Not provided
-          reward: BigInt(result.mintingReward || 0),
-          difficulty: BigInt(result.difficulty || 0),
-        }
+        const result = await this.call<RpcBlockResult>('getBlockByHash', {
+          hash: heightOrHash,
+        })
+        return mapRpcBlock(result)
       }
     } catch {
       return null
@@ -540,6 +577,32 @@ export class RemoteNodeAdapter implements NodeAdapter {
       total_value: number
     }>('cluster_getWealthByTargetKeys', { target_keys: targetKeys })
     return BigInt(result.max_cluster_wealth || '0')
+  }
+
+  /**
+   * Fetch every tracked cluster's wealth + live fee-curve factor via the
+   * node's `cluster_getAllWealth` RPC (#699/#700), for the explorer's
+   * wealth-distribution histogram.
+   *
+   * - `wealth` is a string-encoded u128 (#628) — parsed with `BigInt()`,
+   *   never `Number()` (precision loss above 2^53).
+   * - `factor` is the node-computed milli-x multiplier (1000..6000) from the
+   *   live Rust fee curve; older nodes omit it and we default to the 1000
+   *   floor rather than re-deriving the curve client-side (#610 drift class).
+   * - `cluster_id` stays a string — real ids exceed `Number.MAX_SAFE_INTEGER`.
+   */
+  async getAllClusterWealth(): Promise<ClusterWealthEntry[]> {
+    const result = await this.call<{
+      count: number
+      total_tracked_wealth: string
+      clusters?: Array<{ cluster_id: string; wealth: string; factor?: number }>
+    }>('cluster_getAllWealth', {})
+
+    return (result.clusters ?? []).map((cluster) => ({
+      clusterId: cluster.cluster_id,
+      wealth: BigInt(cluster.wealth || '0'),
+      factor: cluster.factor ?? 1000,
+    }))
   }
 
   // =========================================================================
