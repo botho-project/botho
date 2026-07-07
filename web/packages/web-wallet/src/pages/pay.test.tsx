@@ -9,7 +9,7 @@
  */
 import { StrictMode } from 'react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, cleanup } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import {
   createMnemonic12,
@@ -198,5 +198,89 @@ describe('PayPage valid-link survives StrictMode double-invoke (#654)', () => {
 
     // A malformed fragment must still reach the invalid state (no regression).
     expect(screen.getByText(/No payment request found|not valid/i)).toBeDefined()
+  })
+})
+
+/**
+ * Required-password policy on the link-flow WalletGate (#672).
+ *
+ * The main `/wallet` setup enforces #475 (password REQUIRED, seed encrypted at
+ * rest), but the /pay gate's create/import previously called
+ * `createWallet`/`importWallet` with NO password — persisting a plaintext seed
+ * for exactly the users whose first touch of Botho is a shared link. These
+ * tests pin the gate to the same policy: the buttons stay disabled without a
+ * valid password, and the password is plumbed through to the context.
+ */
+describe('PayPage WalletGate enforces the required-password policy (#672)', () => {
+  const VALID_PASSWORD = 'correct-horse-battery'
+
+  beforeEach(() => {
+    cleanup()
+    useWalletMock.mockReset()
+    window.location.hash = ''
+  })
+
+  it('create flow: stays disabled without a password, passes it to createWallet', async () => {
+    const createWallet = vi.fn(ASYNC_NOOP)
+    useWalletMock.mockReturnValue(
+      baseWallet({ hasWallet: false, address: null, createWallet }),
+    )
+    renderPay({ to: RECIPIENT })
+
+    // Reveal the phrase and tick the stored-safely box — previously sufficient.
+    fireEvent.click(screen.getByText(/Click to reveal/i))
+    fireEvent.click(screen.getByRole('checkbox'))
+
+    const createBtn = screen.getByRole('button', {
+      name: /Create & Continue/i,
+    }) as HTMLButtonElement
+    expect(createBtn.disabled).toBe(true)
+
+    // A too-short password is not enough.
+    const pw = screen.getByPlaceholderText(/^Password \(min/i)
+    const confirm = screen.getByPlaceholderText(/Confirm password/i)
+    fireEvent.change(pw, { target: { value: 'short' } })
+    fireEvent.change(confirm, { target: { value: 'short' } })
+    expect(createBtn.disabled).toBe(true)
+
+    fireEvent.change(pw, { target: { value: VALID_PASSWORD } })
+    fireEvent.change(confirm, { target: { value: VALID_PASSWORD } })
+    expect(createBtn.disabled).toBe(false)
+
+    fireEvent.click(createBtn)
+    await waitFor(() => expect(createWallet).toHaveBeenCalledTimes(1))
+    // The seed is encrypted at rest because the password reaches the context.
+    expect(createWallet).toHaveBeenCalledWith(expect.any(String), VALID_PASSWORD)
+  })
+
+  it('import flow: stays disabled without a password, passes it to importWallet', async () => {
+    const importWallet = vi.fn(ASYNC_NOOP)
+    useWalletMock.mockReturnValue(
+      baseWallet({ hasWallet: false, address: null, importWallet }),
+    )
+    renderPay({ to: RECIPIENT })
+
+    fireEvent.click(screen.getByRole('button', { name: /Import Existing/i }))
+    fireEvent.change(screen.getByPlaceholderText(/recovery phrase/i), {
+      target: { value: createMnemonic12() },
+    })
+
+    const importBtn = screen.getByRole('button', {
+      name: /Import & Continue/i,
+    }) as HTMLButtonElement
+    // A valid seed alone must NOT enable the button.
+    expect(importBtn.disabled).toBe(true)
+
+    fireEvent.change(screen.getByPlaceholderText(/^Password \(min/i), {
+      target: { value: VALID_PASSWORD },
+    })
+    fireEvent.change(screen.getByPlaceholderText(/Confirm password/i), {
+      target: { value: VALID_PASSWORD },
+    })
+    expect(importBtn.disabled).toBe(false)
+
+    fireEvent.click(importBtn)
+    await waitFor(() => expect(importWallet).toHaveBeenCalledTimes(1))
+    expect(importWallet).toHaveBeenCalledWith(expect.any(String), VALID_PASSWORD)
   })
 })

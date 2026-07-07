@@ -23,6 +23,7 @@ import {
 } from 'lucide-react'
 import { useAdapter } from '../contexts/wallet'
 import { useNetwork } from '../contexts/network'
+import { PasswordFields, isPasswordValid } from '../components/PasswordSettingsModal'
 import { scanEphemeral, sweepEphemeral, type EphemeralScan } from '../lib/claim-link-ops'
 
 /**
@@ -76,6 +77,13 @@ export function ClaimPage() {
   const [claimTxHash, setClaimTxHash] = useState<string | null>(null)
   const [createdMnemonic, setCreatedMnemonic] = useState<string | null>(null)
   const [showNewWallet, setShowNewWallet] = useState(false)
+  // SECURITY (#672): an in-flow-created wallet follows the same #475 policy as
+  // the main setup — a password is REQUIRED so the persisted seed is encrypted
+  // at rest, not written to localStorage in plaintext.
+  const [newWalletPassword, setNewWalletPassword] = useState('')
+  const [confirmNewWalletPassword, setConfirmNewWalletPassword] = useState('')
+  const newWalletPasswordValid = isPasswordValid(newWalletPassword, confirmNewWalletPassword)
+  const persistingNewWallet = showNewWallet && createdMnemonic !== null
 
   // Track whether we've already begun a sweep so a late re-scan can't downgrade
   // the state out from under the user.
@@ -169,14 +177,19 @@ export function ClaimPage() {
       setError('Enter a valid destination address (tbotho://… or botho://…).')
       return
     }
+    if (persistingNewWallet && !newWalletPasswordValid) {
+      setError('Set a password for your new wallet before claiming.')
+      return
+    }
     setError(null)
     sweepingRef.current = true
     setState('sweeping')
     try {
       // If the recipient created a new wallet in-flow, persist it so they can
-      // use it afterwards in this browser.
+      // use it afterwards in this browser — encrypted under their password
+      // (#672/#475; saveWallet with a password writes a vault blob).
       if (createdMnemonic && showNewWallet) {
-        await saveWallet(createdMnemonic)
+        await saveWallet(createdMnemonic, newWalletPassword)
       }
       const { txHash } = await sweepEphemeral(adapter, secret.mnemonic, dest)
       setClaimTxHash(txHash)
@@ -317,8 +330,19 @@ export function ClaimPage() {
                     </p>
                     <p className="text-xs text-amber-200/80">
                       Write this down and keep it safe — it is the ONLY way to recover this
-                      wallet. We&apos;ll save it in this browser when you claim.
+                      wallet. We&apos;ll save it encrypted in this browser when you claim.
                     </p>
+                    <div className="pt-1">
+                      <p className="text-xs text-amber-200/80 mb-2">
+                        Set a password — your wallet is encrypted on this device with it.
+                      </p>
+                      <PasswordFields
+                        password={newWalletPassword}
+                        confirmPassword={confirmNewWalletPassword}
+                        onPassword={setNewWalletPassword}
+                        onConfirmPassword={setConfirmNewWalletPassword}
+                      />
+                    </div>
                   </div>
                 )}
 
@@ -331,7 +355,11 @@ export function ClaimPage() {
 
                 <Button
                   onClick={handleSweep}
-                  disabled={state === 'sweeping' || !destination.trim()}
+                  disabled={
+                    state === 'sweeping' ||
+                    !destination.trim() ||
+                    (persistingNewWallet && !newWalletPasswordValid)
+                  }
                   className="w-full justify-center"
                 >
                   {state === 'sweeping' ? (

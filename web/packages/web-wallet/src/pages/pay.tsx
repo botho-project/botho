@@ -25,6 +25,7 @@ import {
 } from 'lucide-react'
 import { useWallet } from '../contexts/wallet'
 import { useNetwork } from '../contexts/network'
+import { PasswordFields, isPasswordValid } from '../components/PasswordSettingsModal'
 import { parsePaymentRequestFragment, type PaymentRequest } from '../lib/payment-request'
 
 /**
@@ -530,6 +531,13 @@ function WalletGate({
   const [confirmed, setConfirmed] = useState(false)
   // import
   const [seedPhrase, setSeedPhrase] = useState('')
+  // create + import — SECURITY (#672): link-flow wallets follow the same #475
+  // policy as the main setup: a password is REQUIRED and the seed is encrypted
+  // at rest. Without this, a visitor whose first touch is a pay/claim link
+  // ends up with a plaintext seed in localStorage.
+  const [newPassword, setNewPassword] = useState('')
+  const [confirmNewPassword, setConfirmNewPassword] = useState('')
+  const newPasswordValid = isPasswordValid(newPassword, confirmNewPassword)
 
   const handleUnlock = async () => {
     setBusy(true)
@@ -544,10 +552,11 @@ function WalletGate({
   }
 
   const handleCreate = async () => {
+    if (!newPasswordValid) return
     setBusy(true)
     setError(null)
     try {
-      await onCreate(newMnemonic)
+      await onCreate(newMnemonic, newPassword)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not create wallet.')
     } finally {
@@ -556,10 +565,11 @@ function WalletGate({
   }
 
   const handleImport = async () => {
+    if (!newPasswordValid) return
     setBusy(true)
     setError(null)
     try {
-      await onImport(seedPhrase)
+      await onImport(seedPhrase, newPassword)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Import failed.')
     } finally {
@@ -660,9 +670,20 @@ function WalletGate({
               I&apos;ve written down my recovery phrase and stored it safely.
             </span>
           </label>
+          <div>
+            <p className="text-xs text-ghost mb-2">
+              Set a password — your wallet is encrypted on this device with it.
+            </p>
+            <PasswordFields
+              password={newPassword}
+              confirmPassword={confirmNewPassword}
+              onPassword={setNewPassword}
+              onConfirmPassword={setConfirmNewPassword}
+            />
+          </div>
           <Button
             onClick={handleCreate}
-            disabled={!revealed || !confirmed || busy}
+            disabled={!revealed || !confirmed || !newPasswordValid || busy}
             className="w-full justify-center"
           >
             {busy ? <Loader2 size={16} className="mr-2 animate-spin" /> : null}
@@ -683,9 +704,20 @@ function WalletGate({
             rows={3}
             className="w-full p-3 rounded-lg bg-abyss border border-steel font-mono text-xs leading-relaxed resize-none focus:outline-none focus:ring-2 focus:ring-pulse/50 focus:border-pulse placeholder:text-ghost/50"
           />
+          <div>
+            <p className="text-xs text-ghost mb-2">
+              Set a password — your wallet is encrypted on this device with it.
+            </p>
+            <PasswordFields
+              password={newPassword}
+              confirmPassword={confirmNewPassword}
+              onPassword={setNewPassword}
+              onConfirmPassword={setConfirmNewPassword}
+            />
+          </div>
           <Button
             onClick={handleImport}
-            disabled={(wordCount !== 12 && wordCount !== 24) || busy}
+            disabled={(wordCount !== 12 && wordCount !== 24) || !newPasswordValid || busy}
             className="w-full justify-center"
           >
             {busy ? <Loader2 size={16} className="mr-2 animate-spin" /> : null}
