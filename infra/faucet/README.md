@@ -295,12 +295,100 @@ Add these ports for the web UI:
 | 80 | TCP | 0.0.0.0/0 | HTTP (redirects to HTTPS) |
 | 443 | TCP | 0.0.0.0/0 | HTTPS |
 
+## Fleet Metrics Daemon (botho-metrics)
+
+`metrics-daemon/` is a small standalone crate that polls `node_getStatus`
+on every testnet node every 5 minutes, stores per-node samples in SQLite
+(with hourly/daily rollups and retention), and serves a public history API
+for the wallet network dashboard (issue #697).
+
+### API contract
+
+Public base URL: `https://faucet.botho.io/metrics-api/`
+(nginx strips the `/metrics-api` prefix; the daemon itself listens on
+`127.0.0.1:17102`).
+
+**`GET /metrics-api/api/metrics/latest`** — one entry per node:
+
+```json
+[
+  {
+    "node": "seed",
+    "timestamp": 1751846400,
+    "height": 12345,
+    "peerCount": 4.0,
+    "scpPeerCount": 3.0,
+    "mempoolSize": 0.0,
+    "mintingActive": false,
+    "uptimeSeconds": 86400,
+    "heightStale": false
+  }
+]
+```
+
+`heightStale` is true when the node's height has not changed across the
+last 3 samples (~15 minutes) — the chain-height alerting signal.
+
+**`GET /metrics-api/api/metrics/history?node=<name>&resolution=5min|hourly|daily&since=<unix-seconds>`**
+— samples for one node (`node` required; `resolution` defaults to `5min`;
+`since` defaults to 0):
+
+```json
+[
+  {
+    "timestamp": 1751846400,
+    "height": 12345,
+    "peerCount": 4.0,
+    "scpPeerCount": 3.0,
+    "mempoolSize": 0.0,
+    "txTotal": 12
+  }
+]
+```
+
+**`GET /metrics-api/health`** — plain `OK`.
+
+Retention: 5min samples 24h, hourly 30d, daily 1y.
+
+### Deploying on the faucet box
+
+Build on the host (small crate, fine to build in place):
+
+```bash
+cd ~/botho && git pull
+cargo build --release -p botho-metrics-daemon
+sudo install -m755 target/release/botho-metrics-daemon /usr/local/bin/
+
+# Install + start the service (polls all 5 testnet nodes, see unit file)
+sudo cp infra/faucet/botho-metrics.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now botho-metrics
+
+# The DB lives at /var/lib/botho-metrics/metrics.db (StateDirectory).
+# Schema changed in #697 (per-node rows, no migration; testnet DB is
+# disposable) — delete any old single-node metrics.db before first start.
+
+# nginx route: faucet-nginx.conf already contains the /metrics-api/
+# location block (GET-only, CORS '*', proxied to 127.0.0.1:17102).
+sudo cp infra/faucet/faucet-nginx.conf /etc/nginx/sites-available/faucet.botho.io
+sudo nginx -t && sudo systemctl reload nginx
+
+# Verify
+curl -s https://faucet.botho.io/metrics-api/health
+curl -s https://faucet.botho.io/metrics-api/api/metrics/latest | jq .
+```
+
+Single-node fallback (no `--node` args): `--node-url <url>` polls one node
+and stores it under the node name `default`.
+
 ## Files
 
 | File | Description |
 |------|-------------|
 | `deploy-faucet.sh` | Automated deployment script |
 | `botho-faucet.service` | systemd service file |
+| `botho-metrics.service` | systemd unit for the fleet metrics daemon |
+| `metrics-daemon/` | Fleet metrics collector + history API crate |
 | `faucet-config.toml.template` | Configuration template |
 | `faucet-nginx.conf` | nginx configuration for web UI |
 | `web/` | Static web UI files |

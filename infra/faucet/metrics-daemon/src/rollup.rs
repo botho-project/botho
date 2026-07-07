@@ -104,14 +104,11 @@ fn cleanup_old_data(db: &mut MetricsDb, now: chrono::DateTime<Utc>) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::MetricsSample;
-    use tempfile::TempDir;
+    use crate::db::{MetricsSample, Resolution};
 
     #[test]
-    fn test_rollup_aggregation() {
-        let temp_dir = TempDir::new().unwrap();
-        let db_path = temp_dir.path().join("test.db");
-        let mut db = MetricsDb::open(&db_path).unwrap();
+    fn test_rollup_aggregation_per_node() {
+        let mut db = MetricsDb::open_in_memory().unwrap();
 
         // Use current time rounded to start of hour
         let now = Utc::now();
@@ -122,31 +119,40 @@ mod tests {
             .unwrap_or(now)
             .timestamp();
 
-        // Insert 12 samples (one per 5 minutes = 1 hour of data)
-        for i in 0..12 {
-            let sample = MetricsSample {
-                timestamp: base_time + i * 300, // Every 5 minutes
-                height: 1000 + i as u64,
-                peer_count: 5.0,
-                scp_peer_count: 3.0,
-                mempool_size: 10.0 + i as f64,
-                tx_delta: 10,
-                uptime_seconds: 1000,
-                minting_active: true,
-            };
-            db.insert_sample(&sample).unwrap();
+        // Insert 12 samples per node (one per 5 minutes = 1 hour of data)
+        for node in ["seed", "eu"] {
+            for i in 0..12 {
+                let sample = MetricsSample {
+                    node: node.to_string(),
+                    timestamp: base_time + i * 300, // Every 5 minutes
+                    height: 1000 + i as u64,
+                    peer_count: 5.0,
+                    scp_peer_count: 3.0,
+                    mempool_size: 10.0 + i as f64,
+                    tx_delta: 10,
+                    uptime_seconds: 1000,
+                    minting_active: true,
+                };
+                db.insert_sample(&sample).unwrap();
+            }
         }
 
         // Aggregate to hourly
         db.aggregate_to_hourly(base_time).unwrap();
 
-        // Query should return data within the last 24h
-        let query = crate::db::HistoryQuery {
-            metric: "height".to_string(),
-            period: "24h".to_string(),
-            granularity: "5min".to_string(),
-        };
-        let data = db.query_history(&query).unwrap();
-        assert_eq!(data.len(), 12);
+        // Each node keeps its own raw samples and its own hourly bucket
+        for node in ["seed", "eu"] {
+            let raw = db
+                .query_node_history(node, Resolution::FiveMin, base_time)
+                .unwrap();
+            assert_eq!(raw.len(), 12);
+
+            let hourly = db
+                .query_node_history(node, Resolution::Hourly, base_time)
+                .unwrap();
+            assert_eq!(hourly.len(), 1);
+            assert_eq!(hourly[0].height, 1011);
+            assert_eq!(hourly[0].tx_total, 120);
+        }
     }
 }
