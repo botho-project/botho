@@ -28,6 +28,11 @@ with their tracking issue.
 
 **New / expanded threat coverage:**
 
+- **Operator action surface (2026-07-07, design-stage)**: the P4 quorum
+  write path is designed in `docs/security/quorum-write-path.md` and
+  summarized in Attack Surface §1a; implementation (#709) is blocked on the
+  #708 security review.
+
 - **Consensus block-acceptance path** — a new attack-surface section. Cycle 6
   ([audit](../../audits/2026-06-11-cycle6.md)) found that blocks arriving via
   gossip/sync bypassed most economic consensus rules (five Criticals: C1–C5).
@@ -349,6 +354,42 @@ the residuals above are explicitly tracked, not mitigated.
 | Replay attacks | Timestamp validation (5 min window) | Mitigated |
 | CSRF | CORS origin checking | Mitigated |
 | Resource exhaustion | Request size limits, rate limits | Mitigated |
+
+### 1a. Operator Action Surface (planned — #708 design, #709 implementation)
+
+**Endpoint:** `operator_submitAction` / `operator_get*` JSON-RPC methods
+(design: `docs/security/quorum-write-path.md`; not yet implemented).
+
+The P4 admin dashboard (#441 P4, decision #664) adds a remotely-reachable
+surface that can READ trust internals (per-peer quorum-gate classification,
+`[network.quorum]` contents, operator audit log) and WRITE quorum-curation
+inputs (`quorum.pin_member` / `quorum.unpin_member` /
+`quorum.set_max_auto_members`).
+
+| Entry Point | Input | Validation | Reference |
+|-------------|-------|------------|-----------|
+| `operator_get*` (reads) | HMAC bearer token | Constant-time HMAC verify, TTL | design §2 (read path, mirrors `baas-worker/status-link.ts`) |
+| `operator_submitAction` | Signed envelope | Ed25519 over canonical JSON + domain separator; target binding; expiry ≤300s; single-use nonce; action allowlist | design §3–§5 |
+
+**Structural protections** (see `quorum-write-path.md` for the full threat
+analysis):
+- The operator private key exists only on the operator's machine — no key
+  material on nodes, the dashboard host, or the BaaS worker; node compromise
+  cannot sign actions against other nodes.
+- Every write flows through the existing quorum promotion gate
+  (`gated_scp_quorum_set`) including the FBAS intersection check — a
+  fork-capable (splitting-set) configuration is refused before application;
+  the residual write-path failure class is a recoverable liveness stall.
+- All outcomes (applied and refused) are append-only audit-logged with the
+  signer fingerprint.
+
+**Attack vectors:**
+| Attack | Mitigation | Status |
+|--------|------------|--------|
+| Stolen read token | Read-only by construction; TTL; secret rotation | Designed (#708) |
+| Envelope replay/retarget | Nonce + targetNode binding + expiry + signature | Designed (#708) |
+| Compromised dashboard host | No key on host; gate + audit bound malicious signed actions | Designed (#708), residual risk documented |
+| Malicious key holder | Cannot fork (gate); mode/threshold not in v1; SSH-domain revocation | Designed (#708) |
 
 ### 2. P2P Protocol Attack Surface
 
