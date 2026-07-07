@@ -89,9 +89,11 @@ export function TransactionRow({
     tx.type === 'minting' ? 'Minting Reward' : isReceive ? 'Received' : 'Sent'
 
   // Prefer a friendly contact name for the counterparty, falling back to the
-  // raw address (truncated via CSS) and finally the tx id.
+  // raw address (truncated via CSS). No fallback to tx.id: netted history
+  // rows (#675) carry synthetic ids, and the ring hides the real
+  // counterparty anyway — an empty slot beats a meaningless token.
   const counterpartyName = tx.counterparty ? resolveName?.(tx.counterparty) : undefined
-  const counterparty = counterpartyName || tx.counterparty || tx.id
+  const counterparty = counterpartyName || tx.counterparty || ''
 
   return (
     <motion.div
@@ -115,18 +117,31 @@ export function TransactionRow({
           {showPrivacy && <PrivacyBadge cryptoType={tx.cryptoType} />}
         </div>
         <div className="mt-0.5 flex items-center gap-2">
-          <span
-            className={`max-w-[180px] truncate text-xs text-[--color-dim] ${counterpartyName ? '' : 'font-mono'}`}
-            title={tx.counterparty}
-          >
-            {counterparty}
-          </span>
-          <span className="text-[--color-muted]">•</span>
+          {counterparty && (
+            <>
+              <span
+                className={`max-w-[180px] truncate text-xs text-[--color-dim] ${counterpartyName ? '' : 'font-mono'}`}
+                title={tx.counterparty}
+              >
+                {counterparty}
+              </span>
+              <span className="text-[--color-muted]">•</span>
+            </>
+          )}
+          {/* A zero timestamp means "no wall-clock time known" (client-side
+              history has only block heights, #675): show the height rather
+              than fabricating a relative time. */}
           <span
             className="text-xs text-[--color-dim]"
-            title={formatAbsoluteTime(tx.timestamp)}
+            title={tx.timestamp > 0 ? formatAbsoluteTime(tx.timestamp) : undefined}
           >
-            {formatRelativeTime(tx.timestamp)}
+            {tx.timestamp > 0
+              ? formatRelativeTime(tx.timestamp)
+              : tx.blockHeight != null
+                ? `Block #${tx.blockHeight}`
+                : tx.status === 'pending'
+                  ? 'Pending'
+                  : '—'}
           </span>
         </div>
       </div>

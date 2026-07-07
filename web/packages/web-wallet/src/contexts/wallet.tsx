@@ -10,7 +10,7 @@ import {
 import { RemoteNodeAdapter, type FeeEstimate, type WsConnectionStatus } from '@botho/adapters'
 import { AddressBook, EncryptedAddressBook, ClaimLinkStore, EncryptedClaimLinks, saveWallet, loadWallet, loadWalletWithKey, getWalletInfo, deriveAddress, deriveKeypairs, parseAddress, isValidMnemonic, clearWallet, createClaimLinkMnemonic, buildClaimLink, assertClaimLinkAmountWithinCap, VaultKey, MIN_PASSWORD_LENGTH } from '@botho/core'
 import type { Balance, Contact, NodeInfo, Transaction, ClaimLinkRecord, Timestamp } from '@botho/core'
-import { buildSendTransaction, spendableBalance, buildOwnedHistory, ownedOutputTargetKeys } from '@botho/wasm-signer'
+import { buildSendTransaction, spendableBalance, buildOwnedHistory, netOwnedHistory, ownedOutputTargetKeys } from '@botho/wasm-signer'
 import { buildAndSubmitSend, scanEphemeral, sweepEphemeral, SWEEP_FEE_RESERVE } from '../lib/claim-link-ops'
 import { type NetworkConfig, loadSelectedNetwork, loadSelectedIngress, NETWORKS, DEFAULT_NETWORK_ID, DEFAULT_INGRESS_ID, createCustomNetwork, networkForIngress, getIngressNode } from '../config/networks'
 
@@ -252,17 +252,29 @@ async function fetchHistory(
         areKeyImagesSpent: (keyImages) => adapter.areKeyImagesSpent(keyImages),
       },
     )
-    return entries.map((e) => ({
-      id: e.txHash,
-      type: e.type === 'spend' ? ('send' as const) : ('receive' as const),
+    // Collapse per-output entries into per-event rows (#675): unique ids (no
+    // duplicate React keys), sends netted against same-block change, and a
+    // real pending/confirmed status instead of a hardcoded one.
+    const chainHeight = await adapter.getBlockHeight()
+    return netOwnedHistory(entries).map((e) => ({
+      id: e.id,
+      type: e.type,
       amount: e.amount,
+      // Fee is not knowable client-side (the ring hides the consuming tx);
+      // 0n is the type's "unknown" and the row does not render it.
       fee: 0n,
       privacyLevel: 'private' as const,
       cryptoType: 'clsag' as const,
-      status: 'confirmed' as const,
-      timestamp: Date.now(),
-      blockHeight: e.blockHeight,
-      confirmations: 0,
+      status: e.status,
+      // Block timestamps are not exposed by the outputs RPC. 0 marks "no
+      // wall-clock time known": the row falls back to showing the block
+      // height instead of fabricating "just now" on every refresh (#675).
+      timestamp: 0,
+      blockHeight: e.blockHeight > 0 ? e.blockHeight : undefined,
+      confirmations:
+        e.status === 'confirmed' && e.blockHeight > 0
+          ? Math.max(0, chainHeight - e.blockHeight + 1)
+          : 0,
     }))
   } catch {
     // wasm artifact missing or scan failed: show no history rather than spam.

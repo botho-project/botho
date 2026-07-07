@@ -156,3 +156,117 @@ describe('buildOwnedHistory (#459)', () => {
     expect(await buildOwnedHistory(KEYS, rpcWith(outputs))).toEqual([])
   })
 })
+
+// ============================================================================
+// netOwnedHistory (#675)
+// ============================================================================
+
+import { netOwnedHistory, type HistoryEntry } from '../src/index'
+
+/**
+ * Unit tests for the per-event netting layer (#675). `buildOwnedHistory`
+ * reports raw per-output facts; rendering them 1:1 produced duplicate React
+ * keys (receive + spend of the same output share a txHash), one row per
+ * output for multi-output receives, and "-<whole input> / +<change>" instead
+ * of the net send amount. Pure function — no signer/rpc needed.
+ */
+describe('netOwnedHistory', () => {
+  const recv = (txHash: string, amount: bigint, blockHeight: number): HistoryEntry => ({
+    txHash,
+    type: 'receive',
+    amount,
+    blockHeight,
+    spent: false,
+    spentHeight: null,
+  })
+  const spend = (
+    txHash: string,
+    amount: bigint,
+    spentHeight: number | null,
+  ): HistoryEntry => ({
+    txHash,
+    type: 'spend',
+    amount,
+    blockHeight: spentHeight ?? 0,
+    spent: true,
+    spentHeight,
+  })
+
+  it('produces unique row ids (no duplicate React keys)', () => {
+    // One output received in tx A at h=5, later spent at h=9 with change
+    // received in tx B at h=9 — the raw entries carry duplicate txHashes.
+    const rows = netOwnedHistory([
+      recv('txA', 1_000n, 5),
+      spend('txA', 1_000n, 9),
+      recv('txB', 800n, 9),
+    ])
+    const ids = rows.map((r) => r.id)
+    expect(new Set(ids).size).toBe(ids.length)
+  })
+
+  it('nets a send against its same-block change', () => {
+    const rows = netOwnedHistory([
+      recv('txA', 1_000n, 5),
+      spend('txA', 1_000n, 9),
+      recv('txB', 800n, 9), // change
+    ])
+    const send = rows.find((r) => r.type === 'send')!
+    expect(send.amount).toBe(200n) // 1000 spent - 800 change
+    expect(send.blockHeight).toBe(9)
+    expect(send.status).toBe('confirmed')
+    // The change receive is folded into the send, the original receive stays.
+    expect(rows.filter((r) => r.type === 'receive')).toHaveLength(1)
+    expect(rows.find((r) => r.type === 'receive')!.amount).toBe(1_000n)
+  })
+
+  it('collapses a multi-output receive into one row with the summed amount', () => {
+    const rows = netOwnedHistory([recv('txM', 300n, 4), recv('txM', 700n, 4)])
+    expect(rows).toHaveLength(1)
+    expect(rows[0].type).toBe('receive')
+    expect(rows[0].amount).toBe(1_000n)
+  })
+
+  it('keeps a same-block incoming payment visible when it exceeds the spend', () => {
+    // Spent 100 at h=9 but received 800 at h=9 (a genuine incoming payment,
+    // not change) — netting would go negative, so nothing is swallowed.
+    const rows = netOwnedHistory([
+      recv('txA', 100n, 5),
+      spend('txA', 100n, 9),
+      recv('txB', 800n, 9),
+    ])
+    const send = rows.find((r) => r.type === 'send')!
+    expect(send.amount).toBe(100n) // gross, un-netted
+    const receives = rows.filter((r) => r.type === 'receive')
+    expect(receives.map((r) => r.amount).sort()).toEqual([100n, 800n].sort())
+  })
+
+  it('surfaces an unmined spend as a single pending send row, sorted first', () => {
+    const rows = netOwnedHistory([
+      recv('txA', 1_000n, 5),
+      spend('txA', 1_000n, null), // key image only pending in mempools
+      recv('txOld', 50n, 2),
+    ])
+    expect(rows[0].type).toBe('send')
+    expect(rows[0].status).toBe('pending')
+    expect(rows[0].amount).toBe(1_000n)
+    // Confirmed rows follow, newest first.
+    expect(rows.slice(1).every((r) => r.status === 'confirmed')).toBe(true)
+  })
+
+  it('merges multi-input spends confirmed in the same block', () => {
+    const rows = netOwnedHistory([
+      recv('txA', 600n, 3),
+      recv('txB', 500n, 4),
+      spend('txA', 600n, 9),
+      spend('txB', 500n, 9),
+      recv('txC', 100n, 9), // change
+    ])
+    const sends = rows.filter((r) => r.type === 'send')
+    expect(sends).toHaveLength(1)
+    expect(sends[0].amount).toBe(1_000n) // 1100 spent - 100 change
+  })
+
+  it('returns an empty list for no entries', () => {
+    expect(netOwnedHistory([])).toEqual([])
+  })
+})
