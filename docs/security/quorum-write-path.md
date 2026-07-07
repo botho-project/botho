@@ -98,7 +98,8 @@ separator prevents cross-protocol signature reuse.
 }
 ```
 
-- **Action enum (v1)** — deliberately minimal:
+- **Action enum (v1)** — deliberately minimal, and restricted to
+  `recommended`-mode nodes (see §7.3 for why explicit mode is excluded):
   - `quorum.pin_member` — add a base58 PeerId to `[network.quorum] members`
     (the curated set the gate always admits).
   - `quorum.unpin_member` — remove one.
@@ -107,6 +108,14 @@ separator prevents cross-protocol signature reuse.
     `threshold` changes. These have the widest blast radius (an explicit
     threshold interacts with unreachable configured members, §7.2) and stay
     SSH-only until v1 has operational history.
+- **The v1 action-set boundary is a verifier-level invariant, not just a
+  scoping choice.** The mode/threshold exclusion is the entire mitigation
+  bounding a compromised-dashboard attack (§8.3) to recoverable liveness
+  harassment. Therefore: the verifier rejects any action outside the v1
+  allowlist (fail-closed on unknown actions, §4.7), and **adding a
+  mode/threshold action in any future version is gated on a fresh security
+  review of this document** — it must not be introduced as an incidental
+  feature PR. This is an explicit exit condition on #709.
 - **`targetNode`**: the receiving node's base58 PeerId (its libp2p identity,
   surfaced by `node_getIdentity`, #500). Binds the envelope to exactly one
   node — an envelope captured in transit cannot be replayed against a
@@ -293,15 +302,29 @@ ships with #709 covering ladder steps with exact commands, alongside the
 existing runbooks (database-corruption, key-compromise, network-partition,
 seed-node-recovery).
 
-### 7.3 Fleet divergence
+### 7.3 Fleet divergence — and why v1 is `recommended`-mode only
 
 Per-node targeting means the fleet's `[network.quorum]` configs can diverge
 (one node accepted a pin, another refused because its connected-peer view
-differed). Divergent *configs* are an operational untidiness, not a safety
-problem — each node's LIVE quorum set passed its own intersection check.
-The trust dashboard (#707) surfaces per-node config so divergence is visible;
-the dashboard's fleet-action composer treats "some nodes refused" as a
+differed). Under **`recommended` mode** this is merely operational
+untidiness: a curated member counts toward a node's quorum *only when
+connected* (run.rs:2308), so a divergent-but-each-intersection-valid fleet
+still forms quorums over the peers actually reachable. Each node's LIVE set
+passed its own intersection check; the trust dashboard (#707) surfaces the
+divergence, and the fleet-action composer treats "some nodes refused" as a
 first-class partial-failure outcome.
+
+Under **`explicit` mode** the same divergence is more dangerous: configured
+members count toward the threshold whether or not connected (run.rs:2251), so
+a fleet that disagrees on membership can have each node individually pass
+intersection yet collectively fail to form a quorum any node will accept — a
+fleet-wide liveness stall that no single compensating action fixes (each node
+needs a different corrective edit). **This is why v1 pin/unpin actions are
+restricted to `recommended`-mode nodes** (§3): the write path refuses a
+membership edit against an explicit-mode node, so reaching this failure state
+requires the SSH path, where the operator already sees and edits the whole
+config atomically. Explicit-mode curation graduating into the write path is
+part of the same future-review gate as mode/threshold actions (§3).
 
 ## 8. Threat analysis
 
