@@ -89,8 +89,10 @@ deploy_from_release() {
     if ! ssh $SSH_OPTS "$HOST" "set -euo pipefail
         rm -rf /tmp/botho-release && mkdir -p /tmp/botho-release
         cd /tmp/botho-release
-        curl -fsSL -o botho.tar.gz '$base/botho-$tag-$platform.tar.gz'
-        curl -fsSL -o checksums.txt '$base/checksums-$platform.txt'
+        # --retry: GitHub artifact downloads fail transiently from some
+        # regions (observed from ap-southeast-1 on two consecutive deploys).
+        curl -fsSL --retry 3 --retry-delay 2 -o botho.tar.gz '$base/botho-$tag-$platform.tar.gz'
+        curl -fsSL --retry 3 --retry-delay 2 -o checksums.txt '$base/checksums-$platform.txt'
         tar xzf botho.tar.gz"; then
         log_error "Release download failed (no $tag release, or missing $platform asset)"
         return 1
