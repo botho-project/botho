@@ -8,6 +8,7 @@ import { PayPage } from './pages/pay'
 import { ContactsPage } from './pages/contacts'
 import { DocsPage } from './pages/docs'
 import { ExplorerPage } from './pages/explorer'
+import { NetworkPage } from './pages/network'
 import { RigPage, RigSuccessPage, RigStatusPage } from './pages/rig'
 
 /**
@@ -50,6 +51,7 @@ function App() {
             <Route path="/pay" element={<PayPage />} />
             <Route path="/contacts" element={<ContactsPage />} />
             <Route path="/explorer" element={<ExplorerPage />} />
+            <Route path="/network" element={<NetworkPage />} />
             <Route path="/explorer/tx/:hash" element={<ExplorerPage />} />
             <Route path="/explorer/block/:hash" element={<ExplorerPage />} />
             <Route path="/docs" element={<DocsPage />} />

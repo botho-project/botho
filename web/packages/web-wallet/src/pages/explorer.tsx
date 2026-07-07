@@ -49,7 +49,12 @@ export function ExplorerPage() {
             <span className="font-display text-base sm:text-lg font-semibold hidden sm:inline">Block Explorer</span>
             <span className="font-display text-base font-semibold sm:hidden">Explorer</span>
           </Link>
-          <NetworkSelector />
+          <div className="flex items-center gap-4">
+            <Link to="/network" className="text-sm text-ghost hover:text-light transition-colors">
+              Network
+            </Link>
+            <NetworkSelector />
+          </div>
         </div>
       </header>
 

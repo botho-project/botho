@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Button, Logo } from '@botho/ui'
-import { Shield, Scale, Atom, Zap, ArrowRight, Github, Menu, X, FileText, Blocks, Server } from 'lucide-react'
+import {Activity, Shield, Scale, Atom, Zap, ArrowRight, Github, Menu, X, FileText, Blocks, Server} from 'lucide-react'
 
 const features = [
   {
@@ -51,6 +51,10 @@ export function LandingPage() {
             <Link to="/explorer" className="text-ghost hover:text-light transition-colors flex items-center gap-2">
               <Blocks size={18} />
               Explorer
+            </Link>
+            <Link to="/network" className="text-ghost hover:text-light transition-colors flex items-center gap-2">
+              <Activity size={18} />
+              Network
             </Link>
             <Link to="/docs" className="text-ghost hover:text-light transition-colors">
               Docs
