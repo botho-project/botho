@@ -166,8 +166,9 @@ export function buildCheckoutSessionParams(
     params.set('customer_email', req.email)
   }
 
-  // Let Stripe create/reuse a Customer so renewals + the customer portal work.
-  params.set('customer_creation', 'always')
+  // Subscription mode always creates a Customer (so renewals + the customer
+  // portal work) — `customer_creation` is a payment-mode-only param and Stripe
+  // rejects it here, so we don't set it.
   params.set('billing_address_collection', 'auto')
 
   return params
