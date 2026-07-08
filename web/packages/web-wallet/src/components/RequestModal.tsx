@@ -71,7 +71,7 @@ export function RequestModal({ isOpen, onClose }: { isOpen: boolean; onClose: ()
     const origin =
       typeof window !== 'undefined' && window.location?.origin
         ? window.location.origin
-        : 'https://wallet.botho.io'
+        : 'https://botho.io'
     try {
       url = buildPaymentRequestLink(
         origin,

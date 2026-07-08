@@ -1201,7 +1201,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     const origin =
       typeof window !== 'undefined' && window.location?.origin
         ? window.location.origin
-        : 'https://wallet.botho.io'
+        : 'https://botho.io'
     const url = buildClaimLink(origin, ephMnemonic, amount)
 
     // Refresh the sender's balance opportunistically.

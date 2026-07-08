@@ -61,7 +61,7 @@ export function OutstandingLinks() {
     const origin =
       typeof window !== 'undefined' && window.location?.origin
         ? window.location.origin
-        : 'https://wallet.botho.io'
+        : 'https://botho.io'
     const url = buildClaimLink(origin, ephMnemonic, amount)
     try {
       await navigator.clipboard.writeText(url)
