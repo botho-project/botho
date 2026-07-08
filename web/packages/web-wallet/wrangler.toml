@@ -2,7 +2,7 @@
 #
 # Deploy with:
 #   pnpm --filter @botho/web-wallet deploy
-# which runs `wrangler pages deploy dist --project-name=botho-wallet`.
+# which runs `wrangler pages deploy dist --project-name=botho`.
 #
 # Requires CLOUDFLARE_API_TOKEN with the "Cloudflare Pages: Edit" permission.
 name = "botho"

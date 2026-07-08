@@ -10,7 +10,7 @@
  *
  * Link format (#470):
  *
- *   https://wallet.botho.io/pay#<base64url(JSON)>
+ *   https://botho.io/pay#<base64url(JSON)>
  *
  * where the JSON is `{ to, amount?, memo? }`:
  *   - `to`     the requester's public address (tbotho://… / botho://…).
@@ -98,7 +98,7 @@ export function buildPaymentRequestFragment(req: PaymentRequest): string {
 /**
  * Build the full shareable payment-request URL.
  *
- * @param origin e.g. `https://wallet.botho.io` (trailing slash tolerated)
+ * @param origin e.g. `https://botho.io` (trailing slash tolerated)
  * @param req    the payment request
  */
 export function buildPaymentRequestLink(origin: string, req: PaymentRequest): string {

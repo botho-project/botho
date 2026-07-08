@@ -3,7 +3,7 @@
  *
  * A managed-node owner is handed a link like:
  *
- *     https://wallet.botho.io/wallet?rpc=https%3A%2F%2Fnode-abc.testnet.botho.io%2Frpc
+ *     https://botho.io/wallet?rpc=https%3A%2F%2Fnode-abc.testnet.botho.io%2Frpc
  *
  * Opening it should point the wallet's RPC ingress at their own node. The wallet
  * already supports a "custom RPC" ingress (see `setCustomEndpoint` in the network

@@ -1,4 +1,4 @@
-# Cloudflare Pages headers for wallet.botho.io (#476)
+# Cloudflare Pages headers for botho.io (#476)
 #
 # A strict Content-Security-Policy so that an XSS or malicious-dependency bug
 # cannot execute injected script: scripts are pinned to our own origin (no

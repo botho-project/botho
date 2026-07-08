@@ -1,6 +1,6 @@
 # Botho Web Wallet — Security & Threat Model
 
-This document states honestly what the Botho web wallet (`wallet.botho.io`)
+This document states honestly what the Botho web wallet (`botho.io`)
 does and does not protect, so users can make an informed decision about how to
 hold value in it. It reflects the code as shipped, not aspirations.
 
@@ -51,7 +51,7 @@ If you create a wallet **without a password**, there is no vault key, so:
 Encryption-at-rest does not defend against an attacker who can run code on the
 origin or read process memory **while the wallet is unlocked**:
 
-- **XSS / malicious dependency.** Any JavaScript running on `wallet.botho.io`
+- **XSS / malicious dependency.** Any JavaScript running on `botho.io`
   can read `localStorage` and, once you have unlocked, the decrypted seed and
   vault key live in memory and can be read by that code. The at-rest encryption
   protects a *locked* wallet (cold storage, shared device, another extension
@@ -67,13 +67,13 @@ origin or read process memory **while the wallet is unlocked**:
   thin-client privacy cost. Botho's on-chain privacy (ring signatures,
   stealth addresses) still protects observers of the chain itself, but your
   chosen ingress node sees your interest. Run your own node for maximum privacy.
-- **Phishing / fake sites.** Always confirm the origin is `wallet.botho.io`.
+- **Phishing / fake sites.** Always confirm the origin is `botho.io`.
 
 ## Hardening shipped
 
 ### Content-Security-Policy (#476)
 
-`public/_headers` ships a strict CSP on `wallet.botho.io` (Cloudflare Pages):
+`public/_headers` ships a strict CSP on `botho.io` (Cloudflare Pages):
 
 ```
 default-src 'self';

@@ -1,5 +1,5 @@
 /**
- * Live-smoke e2e — runs against the DEPLOYED wallet (https://wallet.botho.io)
+ * Live-smoke e2e — runs against the DEPLOYED wallet (https://botho.io)
  * and the LIVE testnet SCP nodes, complementing the hermetic local-mock suite.
  *
  * WHY THIS EXISTS
@@ -21,7 +21,7 @@
  *
  *   (or from web/e2e: `BOTHO_LIVE=1 npx playwright test --config playwright.live.config.ts`)
  *
- * Override the target with BOTHO_LIVE_URL (defaults to https://wallet.botho.io).
+ * Override the target with BOTHO_LIVE_URL (defaults to https://botho.io).
  * Without BOTHO_LIVE=1 every test in this file is skipped, so even if this file
  * were ever picked up by the default config it would be a no-op there.
  *
@@ -35,7 +35,7 @@ import { test, expect, type Page } from '@playwright/test'
 // CI / `pnpm test` (which hits live infra + faucet rate limits).
 const LIVE = process.env.BOTHO_LIVE === '1'
 
-const BASE_URL = process.env.BOTHO_LIVE_URL ?? 'https://wallet.botho.io'
+const BASE_URL = process.env.BOTHO_LIVE_URL ?? 'https://botho.io'
 
 // A vite DEV server does not emit /sw.js or the precache manifest — only a
 // built bundle does. Skip the PWA assertions when pointed at local dev so a
@@ -57,7 +57,7 @@ const TEST_MNEMONIC_12 =
 const NAV_TIMEOUT = 30_000
 const UI_TIMEOUT = 20_000
 
-test.describe('Live smoke @ wallet.botho.io', () => {
+test.describe('Live smoke @ botho.io', () => {
   test.skip(!LIVE, 'Set BOTHO_LIVE=1 to run the live-smoke suite (hits live infra + faucet limits).')
 
   // The deployed bundle dynamic-imports the wasm signer from /pkg/*; a 404 there
