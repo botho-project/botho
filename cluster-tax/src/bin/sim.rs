@@ -476,6 +476,14 @@ mod cli {
             #[arg(long, default_value = "200")]
             demurrage_bps: u32,
 
+            /// Deterministic RNG seed. The run is fully reproducible for a
+            /// given seed (the sim uses `BTreeMap`s for order-stable iteration
+            /// and forks a `ChaCha20Rng` master stream). Sweep this across a
+            /// seed set to build the whitepaper §10.6 multi-seed confidence
+            /// interval; the default is the historical single-point seed.
+            #[arg(long, default_value = "2953379877")]
+            seed: u64,
+
             /// Quick mode: ~20-day horizon for sanity checking
             #[arg(long)]
             quick: bool,
@@ -793,6 +801,7 @@ mod cli {
                 split,
                 churn_days,
                 demurrage_bps,
+                seed,
                 quick,
             } => run_lottery_experiment(
                 if quick { 86_400 } else { blocks },
@@ -802,6 +811,7 @@ mod cli {
                 split,
                 churn_days,
                 demurrage_bps,
+                seed,
             ),
             Command::EmissionSweep {
                 rounds,
@@ -3767,6 +3777,7 @@ mod cli {
         split: u32,
         churn_days: u64,
         demurrage_bps: u32,
+        seed: u64,
     ) {
         use bth_cluster_tax::simulation::lottery::{
             LotteryConfig, LotterySimulation, SelectionMode, SybilStrategy, TransactionModel,
@@ -3921,6 +3932,7 @@ mod cli {
             split,
             churn_days,
         );
+        println!("Seed: {seed} (deterministic; sweep for the §10.6 multi-seed CI)");
         println!();
         println!("| Scenario | Gini0 | GiniF | dGini | vs A | Whale 5%-> | Whale net (BTH) | Poor 5%-> |");
         println!("|----------|-------|-------|-------|------|------------|-----------------|-----------|");
@@ -3955,7 +3967,11 @@ mod cli {
                 Payout::ClusterTilted => SelectionMode::ClusterWeighted,
             };
 
-            let mut sim = LotterySimulation::new(config, FeeCurve::default_params());
+            // Seed every scenario from the same base seed: the whole run is
+            // reproducible, and sharing the RNG stream across scenarios is a
+            // common-random-numbers variance reduction for the "vs A" deltas.
+            let mut sim =
+                LotterySimulation::new_seeded(config, FeeCurve::default_params(), seed);
 
             let mut poor_ids = Vec::new();
             for _ in 0..80 {
