@@ -707,6 +707,30 @@ simulation redistributes marginally more than honest). Payout cap ≤ 1 reward
 with carryover, plus a seed-rotated candidate window (#573), bounds
 seed-grinding gain below the PoW cost of a regrind.
 
+**H4 candidate-cap grindability at scale (analysed 2026-07-07, #715 — ACCEPTED
+as economically inert).** When more than `MAX_LOTTERY_CANDIDATES` (10,000)
+UTXOs are eligible, only a seed-selected 10k window participates in a given
+block's draw. The residual grindability is bounded on three fronts:
+- **Window grind** is defeated by #573: UTXO ids (`tx_hash‖index`) are
+  ~uniformly distributed, so a rotating 10k-of-N window captures an attacker's
+  fair share regardless of offset; clustering UTXOs into a contiguous keyspace
+  region would require vanity-grinding every `tx_hash` (astronomically
+  expensive).
+- **Draw grind** is structurally a one-block lookahead only: both the window
+  and the draw are seeded by `block.header.prev_block_hash` — the hash of the
+  *already-committed* previous block (fixed by SCP externalization before the
+  current block is mined). A miner therefore cannot grind its own block's
+  lottery; the only surface is biasing `hash(N−1)` while mining N−1, which
+  competes with competing-coinbase PoW-priority optimization, costs a full PoW
+  attempt per grind, and yields only the *marginal* gain over the fair-share
+  draw — bounded above by the ≤1-reward payout cap. EV(grind) is negative.
+- **Scale** is bounded by the *per-block* payout cap (applied to the total
+  block payout, not per-winner), so a large-UTXO holder's expected winnings
+  stay proportional to weight share and cannot grow with UTXO count.
+
+This disposition is in scope for the external audit (#616) to independently
+confirm the EV/grindability argument.
+
 **Residual:** payout privacy — on-chain winners statistically reveal the winner
 factor distribution (design Open Question 4). Open.
 
