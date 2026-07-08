@@ -3,13 +3,13 @@
   "Id": "BothoBaasProvisionerLeastPrivilege",
   "Statement": [
     {
-      "Sid": "DescribeManagedRigs",
+      "Sid": "DescribeManagedNodes",
       "Effect": "Allow",
       "Action": ["ec2:DescribeInstances"],
       "Resource": "*"
     },
     {
-      "Sid": "RunManagedRigConstrained",
+      "Sid": "RunManagedNodeConstrained",
       "Effect": "Allow",
       "Action": ["ec2:RunInstances"],
       "Resource": ["arn:aws:ec2:us-west-2:ACCOUNT_ID:instance/*"],
@@ -17,20 +17,20 @@
         "StringEquals": {
           "ec2:InstanceType": "t4g.medium",
           "ec2:Region": "us-west-2",
-          "aws:RequestTag/botho:managed-rig": "true"
+          "aws:RequestTag/botho:managed-node": "true"
         },
         "ForAnyValue:StringEquals": {
           "aws:TagKeys": [
-            "botho:managed-rig",
+            "botho:managed-node",
             "botho:subscription",
             "botho:user",
-            "botho:rig-id"
+            "botho:node-id"
           ]
         }
       }
     },
     {
-      "Sid": "RunManagedRigSupportingResources",
+      "Sid": "RunManagedNodeSupportingResources",
       "Effect": "Allow",
       "Action": ["ec2:RunInstances"],
       "Resource": [
@@ -54,13 +54,13 @@
       }
     },
     {
-      "Sid": "TerminateOnlyManagedRigs",
+      "Sid": "TerminateOnlyManagedNodes",
       "Effect": "Allow",
       "Action": ["ec2:TerminateInstances"],
       "Resource": "arn:aws:ec2:us-west-2:ACCOUNT_ID:instance/*",
       "Condition": {
         "StringEquals": {
-          "ec2:ResourceTag/botho:managed-rig": "true"
+          "ec2:ResourceTag/botho:managed-node": "true"
         }
       }
     }

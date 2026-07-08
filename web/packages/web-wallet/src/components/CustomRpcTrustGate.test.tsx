@@ -52,8 +52,8 @@ describe('CustomRpcTrustGate component (#587)', () => {
   it('shows a softer hint for a known Botho-operated host', () => {
     useNetworkMock.mockReturnValue({
       pendingRpcLink: {
-        rpcUrl: 'https://rig.testnet.botho.io/rpc',
-        host: 'rig.testnet.botho.io',
+        rpcUrl: 'https://node.testnet.botho.io/rpc',
+        host: 'node.testnet.botho.io',
         trust: 'known',
       },
       acceptPendingRpcLink: vi.fn(),
@@ -68,8 +68,8 @@ describe('CustomRpcTrustGate component (#587)', () => {
     const accept = vi.fn().mockResolvedValue(true)
     useNetworkMock.mockReturnValue({
       pendingRpcLink: {
-        rpcUrl: 'https://rig.testnet.botho.io/rpc',
-        host: 'rig.testnet.botho.io',
+        rpcUrl: 'https://node.testnet.botho.io/rpc',
+        host: 'node.testnet.botho.io',
         trust: 'known',
       },
       acceptPendingRpcLink: accept,
@@ -98,13 +98,13 @@ describe('CustomNodeBanner component (#587)', () => {
   it('names the custom host and offers a one-tap revert', () => {
     const revert = vi.fn()
     useNetworkMock.mockReturnValue({
-      customNodeFromLink: 'rig-x.testnet.botho.io',
+      customNodeFromLink: 'node-x.testnet.botho.io',
       revertCustomNode: revert,
     })
     render(<CustomNodeBanner />)
     expect(screen.getByRole('status')).toBeTruthy()
     expect(screen.getByText(/from a link/i)).toBeTruthy()
-    expect(screen.getByText('rig-x.testnet.botho.io')).toBeTruthy()
+    expect(screen.getByText('node-x.testnet.botho.io')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: /switch back/i }))
     expect(revert).toHaveBeenCalled()
   })

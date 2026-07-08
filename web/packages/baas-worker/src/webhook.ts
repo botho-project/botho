@@ -3,7 +3,7 @@
  *
  * This is the security-critical JOIN between billing and auto-provisioning:
  * a paid Stripe event is the ONLY thing that may launch (or tear down) a managed
- * rig. There is deliberately no public `/provision` route (#458 §5).
+ * node. There is deliberately no public `/provision` route (#458 §5).
  *
  * Guarantees enforced here (#458 §2, §3, §5):
  *  1. **Signature verification first.** Every request must carry a valid
@@ -17,9 +17,9 @@
  *     bytes and break the HMAC — and would also expose a parser to unverified
  *     input).
  *  3. **Provision triggers:** `checkout.session.completed`, `invoice.paid`
- *     → `provisionRig`.
+ *     → `provisionNode`.
  *  4. **Teardown triggers:** `customer.subscription.deleted`,
- *     `invoice.payment_failed` (past grace) → `teardownRig`.
+ *     `invoice.payment_failed` (past grace) → `teardownNode`.
  *  5. **Idempotency:** Stripe retries deliveries. We rely on the provisioner's
  *     own idempotency (it dedups by `subscription_id` via D1 + the EC2 tag), so a
  *     replayed delivery never double-provisions. Unknown event types are a
@@ -40,7 +40,7 @@ import type {
   ProvisionOutcome,
   ProvisionRequest,
 } from './provisioner'
-import { provisionRig, teardownRig } from './provisioner'
+import { provisionNode, teardownNode } from './provisioner'
 
 /** Worker env keys this module needs. The signing secret is a Worker secret. */
 export interface WebhookEnv {
@@ -244,7 +244,7 @@ export function extractProvisionRequest(
 /**
  * Map a verified Stripe event to the appropriate provisioner call. Pure w.r.t.
  * the injected `deps` (fakes in tests). Idempotency is the provisioner's job —
- * a replayed delivery flows through `provisionRig`/`teardownRig` which dedup by
+ * a replayed delivery flows through `provisionNode`/`teardownNode` which dedup by
  * subscription id (#458 §3, §5).
  */
 export async function handleStripeEvent(
@@ -259,7 +259,7 @@ export async function handleStripeEvent(
     if (!req) {
       return { action: 'ignore', reason: `provision event "${type}" missing subscription/customer/region` }
     }
-    const outcome = await provisionRig(req, deps)
+    const outcome = await provisionNode(req, deps)
     return { action: 'provision', outcome, subscriptionId: req.subscriptionId }
   }
 
@@ -268,7 +268,7 @@ export async function handleStripeEvent(
     if (!subscriptionId) {
       return { action: 'ignore', reason: `teardown event "${type}" missing subscription id` }
     }
-    const result = await teardownRig(subscriptionId, deps)
+    const result = await teardownNode(subscriptionId, deps)
     return { action: 'teardown', result, subscriptionId }
   }
 

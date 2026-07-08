@@ -1,7 +1,7 @@
 /**
  * Cloudflare DNS client for the Botho-as-a-Service provisioner (#458 §3 step 3).
  *
- * Creates / deletes the `A rig-<id>.testnet.botho.io -> <instance public IP>`
+ * Creates / deletes the `A node-<id>.testnet.botho.io -> <instance public IP>`
  * record via the Cloudflare API using a Zone:DNS:Edit token. The provisioner
  * depends on the `DnsClient` *interface* so tests use an in-memory fake and no
  * real Cloudflare call happens under test (#502 requirement).

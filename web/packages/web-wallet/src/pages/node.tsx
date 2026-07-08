@@ -15,17 +15,17 @@ import {
   CreditCard,
 } from 'lucide-react'
 import {
-  DEFAULT_RIG_REGION,
-  RIG_REGIONS,
-  RigCheckoutError,
-  startRigCheckout,
-} from '../lib/rig-checkout'
+  DEFAULT_NODE_REGION,
+  NODE_REGIONS,
+  NodeCheckoutError,
+  startNodeCheckout,
+} from '../lib/node-checkout'
 import {
   createPortalUrl,
-  fetchRigStatus,
+  fetchNodeStatus,
   tokenFromSearch,
-  type RigStatus,
-} from '../lib/rig-status'
+  type NodeStatus,
+} from '../lib/node-status'
 
 /**
  * P7.1 — "Host a node" surface (#458 §2, §4; issue #504).
@@ -46,19 +46,19 @@ import {
  * product). Billing runs in Stripe TEST mode while on testnet.
  *
  * Webhook → provisioning is P7.2 (#506); the rich status page is P6.3. After
- * checkout, Stripe redirects to `/rig/success` (the placeholder below).
+ * checkout, Stripe redirects to `/node/success` (the placeholder below).
  */
-export function RigPage() {
-  const [region, setRegion] = useState<string>(DEFAULT_RIG_REGION)
+export function NodePage() {
+  const [region, setRegion] = useState<string>(DEFAULT_NODE_REGION)
   const [email, setEmail] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  async function handleGetRig() {
+  async function handleGetNode() {
     setError(null)
     setSubmitting(true)
     try {
-      const session = await startRigCheckout({
+      const session = await startNodeCheckout({
         region,
         email: email.trim() || undefined,
       })
@@ -66,7 +66,7 @@ export function RigPage() {
       window.location.assign(session.url)
     } catch (err) {
       const message =
-        err instanceof RigCheckoutError
+        err instanceof NodeCheckoutError
           ? err.message
           : 'Something went wrong starting checkout. Please try again.'
       setError(message)
@@ -143,17 +143,17 @@ export function RigPage() {
 
           {/* Checkout form */}
           <Card className="p-5 sm:p-6">
-            <label className="block text-sm font-medium text-light mb-2" htmlFor="rig-region">
+            <label className="block text-sm font-medium text-light mb-2" htmlFor="node-region">
               Region
             </label>
             <select
-              id="rig-region"
+              id="node-region"
               value={region}
               onChange={(e) => setRegion(e.target.value)}
               disabled={submitting}
               className="w-full mb-1 px-3 py-2.5 rounded-lg bg-void border border-steel text-light focus:outline-none focus:border-pulse disabled:opacity-50"
             >
-              {RIG_REGIONS.map((r) => (
+              {NODE_REGIONS.map((r) => (
                 <option key={r.id} value={r.id}>
                   {r.label}
                 </option>
@@ -164,11 +164,11 @@ export function RigPage() {
               subscribe.
             </p>
 
-            <label className="block text-sm font-medium text-light mb-2" htmlFor="rig-email">
+            <label className="block text-sm font-medium text-light mb-2" htmlFor="node-email">
               Email <span className="text-ghost font-normal">(optional)</span>
             </label>
             <Input
-              id="rig-email"
+              id="node-email"
               type="email"
               placeholder="you@example.com"
               value={email}
@@ -191,7 +191,7 @@ export function RigPage() {
             <Button
               size="lg"
               className="w-full justify-center"
-              onClick={handleGetRig}
+              onClick={handleGetNode}
               disabled={submitting}
             >
               {submitting ? (
@@ -213,8 +213,8 @@ export function RigPage() {
   )
 }
 
-/** Shared page chrome (header) for the rig success / status pages. */
-function RigPageShell({ children }: { children: React.ReactNode }) {
+/** Shared page chrome (header) for the node success / status pages. */
+function NodePageShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="min-h-screen flex flex-col">
       <header className="fixed top-0 left-0 right-0 z-50 backdrop-blur-md bg-void/80 border-b border-steel">
@@ -234,13 +234,13 @@ function RigPageShell({ children }: { children: React.ReactNode }) {
 
 /**
  * Post-checkout success page (#458 §4). Stripe redirects here after a completed
- * checkout (`/rig/success?session_id=...`). Provisioning is asynchronous (the
+ * checkout (`/node/success?session_id=...`). Provisioning is asynchronous (the
  * webhook launches the node), so this confirms the subscription and points the
  * user at the live status page once they have their magic link.
  */
-export function RigSuccessPage() {
+export function NodeSuccessPage() {
   return (
-    <RigPageShell>
+    <NodePageShell>
       <Card className="max-w-md w-full p-6 sm:p-8 text-center">
         <div className="w-14 h-14 rounded-full bg-success/10 flex items-center justify-center mx-auto mb-5">
           <Check className="text-success" size={28} />
@@ -249,9 +249,9 @@ export function RigSuccessPage() {
           Subscription started
         </h1>
         <p className="text-sm sm:text-base text-ghost mb-6">
-          Thanks! Your managed rig is being provisioned. We'll email you a secure
+          Thanks! Your managed node is being provisioned. We'll email you a secure
           link to your node's status page — it shows your private RPC URL, the
-          rig's health, and a one-click link to open it in the wallet.
+          node's health, and a one-click link to open it in the wallet.
         </p>
         <div className="flex flex-col gap-3">
           <Link to="/wallet">
@@ -264,13 +264,13 @@ export function RigSuccessPage() {
           </Link>
         </div>
       </Card>
-    </RigPageShell>
+    </NodePageShell>
   )
 }
 
-/** Colored dot + label for a rig's lifecycle state. */
-function StateBadge({ state }: { state: RigStatus['state'] }) {
-  const map: Record<RigStatus['state'], { label: string; cls: string }> = {
+/** Colored dot + label for a node's lifecycle state. */
+function StateBadge({ state }: { state: NodeStatus['state'] }) {
+  const map: Record<NodeStatus['state'], { label: string; cls: string }> = {
     provisioning: { label: 'Provisioning', cls: 'bg-warning/20 text-warning' },
     running: { label: 'Running', cls: 'bg-success/20 text-success' },
     suspended: { label: 'Suspended', cls: 'bg-warning/20 text-warning' },
@@ -281,7 +281,7 @@ function StateBadge({ state }: { state: RigStatus['state'] }) {
 }
 
 /** One-line health summary from node_getStatus. */
-function healthSummary(health: RigStatus['health']): string {
+function healthSummary(health: NodeStatus['health']): string {
   if (health.status === 'unknown') return 'Not yet reporting'
   if (health.status === 'offline') return 'Unreachable'
   const h = health.chainHeight != null ? `height ${health.chainHeight}` : 'online'
@@ -290,14 +290,14 @@ function healthSummary(health: RigStatus['health']): string {
 }
 
 /**
- * Rig status page (P6.3, #458 §3 step 5 / §4 / §6). Reached via a magic link
- * (`/rig/status?token=...`) — the MVP identity model (no password, the signed
- * link is the credential). Shows the rig's RPC URL, state, and live health, plus
- * an "Open in wallet" deep link (pre-selects the rig as the custom RPC ingress)
+ * Node status page (P6.3, #458 §3 step 5 / §4 / §6). Reached via a magic link
+ * (`/node/status?token=...`) — the MVP identity model (no password, the signed
+ * link is the credential). Shows the node's RPC URL, state, and live health, plus
+ * an "Open in wallet" deep link (pre-selects the node as the custom RPC ingress)
  * and a "Manage Subscription" button (Stripe Customer Portal).
  */
-export function RigStatusPage() {
-  const [status, setStatus] = useState<RigStatus | null>(null)
+export function NodeStatusPage() {
+  const [status, setStatus] = useState<NodeStatus | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
@@ -315,9 +315,9 @@ export function RigStatusPage() {
     setLoading(true)
     setError(null)
     try {
-      setStatus(await fetchRigStatus(token))
+      setStatus(await fetchNodeStatus(token))
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not load your rig status.')
+      setError(err instanceof Error ? err.message : 'Could not load your node status.')
     } finally {
       setLoading(false)
     }
@@ -351,14 +351,14 @@ export function RigStatusPage() {
   }
 
   return (
-    <RigPageShell>
+    <NodePageShell>
       <Card className="max-w-lg w-full p-6 sm:p-8">
         <div className="flex items-center gap-3 mb-6">
           <div className="w-11 h-11 rounded-lg bg-pulse/10 flex items-center justify-center">
             <Server className="text-pulse" size={22} />
           </div>
           <div>
-            <h1 className="font-display text-xl sm:text-2xl font-bold">Your managed rig</h1>
+            <h1 className="font-display text-xl sm:text-2xl font-bold">Your managed node</h1>
             <p className="text-xs text-ghost">Botho-as-a-Service · testnet</p>
           </div>
         </div>
@@ -366,7 +366,7 @@ export function RigStatusPage() {
         {loading && (
           <div className="flex items-center gap-2 text-ghost py-8 justify-center">
             <Loader2 className="animate-spin" size={18} />
-            Loading your rig…
+            Loading your node…
           </div>
         )}
 
@@ -412,7 +412,7 @@ export function RigStatusPage() {
             </div>
 
             <div className="flex flex-col gap-3 pt-1">
-              {/* Deep link: opens the wallet with this rig pre-selected as the
+              {/* Deep link: opens the wallet with this node pre-selected as the
                   custom RPC ingress (#458 §3 step 5). */}
               <a href={status.walletDeepLink}>
                 <Button size="lg" className="w-full justify-center gap-2">
@@ -438,6 +438,6 @@ export function RigStatusPage() {
           </div>
         )}
       </Card>
-    </RigPageShell>
+    </NodePageShell>
   )
 }

@@ -4,8 +4,8 @@ import worker, { handleCheckout, type Env } from './index'
 const ENV: Env = {
   STRIPE_SECRET_KEY: 'sk_test_dummy',
   STRIPE_PRICE_ID: 'price_test_50mo',
-  CHECKOUT_SUCCESS_URL: 'https://botho.io/rig/success',
-  CHECKOUT_CANCEL_URL: 'https://botho.io/rig',
+  CHECKOUT_SUCCESS_URL: 'https://botho.io/node/success',
+  CHECKOUT_CANCEL_URL: 'https://botho.io/node',
   ALLOWED_ORIGINS: 'https://botho.io',
 }
 

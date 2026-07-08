@@ -1,11 +1,11 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
-  RigStatusError,
+  NodeStatusError,
   createPortalUrl,
-  fetchRigStatus,
+  fetchNodeStatus,
   tokenFromSearch,
-  type RigStatus,
-} from './rig-status'
+  type NodeStatus,
+} from './node-status'
 
 function okResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -14,13 +14,13 @@ function okResponse(body: unknown, status = 200): Response {
   })
 }
 
-const SAMPLE: RigStatus = {
-  rigId: 'abc123',
-  rpcUrl: 'https://rig-abc123.testnet.botho.io/rpc',
+const SAMPLE: NodeStatus = {
+  nodeId: 'abc123',
+  rpcUrl: 'https://node-abc123.testnet.botho.io/rpc',
   state: 'running',
   region: 'us-west-2',
   health: { status: 'online', chainHeight: 42, synced: true },
-  walletDeepLink: 'https://wallet.botho.io/wallet?rpc=https%3A%2F%2Frig-abc123%2Frpc',
+  walletDeepLink: 'https://wallet.botho.io/wallet?rpc=https%3A%2F%2Fnode-abc123%2Frpc',
 }
 
 describe('tokenFromSearch', () => {
@@ -34,10 +34,10 @@ describe('tokenFromSearch', () => {
   })
 })
 
-describe('fetchRigStatus', () => {
-  it('GETs /status?token= and returns the rig status', async () => {
+describe('fetchNodeStatus', () => {
+  it('GETs /status?token= and returns the node status', async () => {
     const fetchMock = vi.fn(async () => okResponse(SAMPLE))
-    const result = await fetchRigStatus('cus_A.1.sig', fetchMock as unknown as typeof fetch)
+    const result = await fetchNodeStatus('cus_A.1.sig', fetchMock as unknown as typeof fetch)
     expect(result.rpcUrl).toBe(SAMPLE.rpcUrl)
     expect(result.health.status).toBe('online')
 
@@ -49,24 +49,24 @@ describe('fetchRigStatus', () => {
   it('maps 401 to an expired/invalid link error', async () => {
     const fetchMock = vi.fn(async () => okResponse({ error: 'unauthorized' }, 401))
     await expect(
-      fetchRigStatus('bad', fetchMock as unknown as typeof fetch),
+      fetchNodeStatus('bad', fetchMock as unknown as typeof fetch),
     ).rejects.toMatchObject({ status: 401 })
   })
 
-  it('maps 404 to a "no rig yet" error', async () => {
-    const fetchMock = vi.fn(async () => okResponse({ error: 'no rig found' }, 404))
+  it('maps 404 to a "no node yet" error', async () => {
+    const fetchMock = vi.fn(async () => okResponse({ error: 'no node found' }, 404))
     await expect(
-      fetchRigStatus('cus_A.1.sig', fetchMock as unknown as typeof fetch),
+      fetchNodeStatus('cus_A.1.sig', fetchMock as unknown as typeof fetch),
     ).rejects.toMatchObject({ status: 404 })
   })
 
-  it('throws RigStatusError when the network is unreachable', async () => {
+  it('throws NodeStatusError when the network is unreachable', async () => {
     const fetchMock = vi.fn(async () => {
       throw new Error('network down')
     })
     await expect(
-      fetchRigStatus('cus_A.1.sig', fetchMock as unknown as typeof fetch),
-    ).rejects.toBeInstanceOf(RigStatusError)
+      fetchNodeStatus('cus_A.1.sig', fetchMock as unknown as typeof fetch),
+    ).rejects.toBeInstanceOf(NodeStatusError)
   })
 })
 
@@ -87,6 +87,6 @@ describe('createPortalUrl', () => {
     const fetchMock = vi.fn(async () => okResponse({ error: 'unauthorized' }, 401))
     await expect(
       createPortalUrl('bad', fetchMock as unknown as typeof fetch),
-    ).rejects.toBeInstanceOf(RigStatusError)
+    ).rejects.toBeInstanceOf(NodeStatusError)
   })
 })

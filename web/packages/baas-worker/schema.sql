@@ -5,19 +5,19 @@
 -- Apply to the remote D1 database:
 --   wrangler d1 execute botho-baas --remote --file=schema.sql
 --
--- The `rigs` table is the user<->rig mapping. `subscription_id` is UNIQUE and is
+-- The `nodes` table is the user<->node mapping. `subscription_id` is UNIQUE and is
 -- the idempotency anchor: the provisioner checks it BEFORE launching so a
 -- replayed Stripe trigger never creates a second instance (#458 §3, §5).
 
-CREATE TABLE IF NOT EXISTS rigs (
+CREATE TABLE IF NOT EXISTS nodes (
   -- Stripe customer id == our user identity (#458 §4).
   user             TEXT    NOT NULL,
   -- Stripe customer id (denormalized for lookups / portal).
   stripe_customer  TEXT    NOT NULL,
   -- Stripe subscription id — the idempotency key.
   subscription_id  TEXT    NOT NULL UNIQUE,
-  -- Short opaque rig id used for the hostname (rig-<id>.<domain>).
-  rig_id           TEXT    NOT NULL,
+  -- Short opaque node id used for the hostname (node-<id>.<domain>).
+  node_id           TEXT    NOT NULL,
   -- EC2 instance id once launched (NULL while still pre-launch).
   instance_id      TEXT,
   -- AWS region (constrained to the allowlist by the provisioner).
@@ -31,6 +31,6 @@ CREATE TABLE IF NOT EXISTS rigs (
   updated_at       INTEGER NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_rigs_state ON rigs (state);
-CREATE INDEX IF NOT EXISTS idx_rigs_customer ON rigs (stripe_customer);
-CREATE INDEX IF NOT EXISTS idx_rigs_instance ON rigs (instance_id);
+CREATE INDEX IF NOT EXISTS idx_nodes_state ON nodes (state);
+CREATE INDEX IF NOT EXISTS idx_nodes_customer ON nodes (stripe_customer);
+CREATE INDEX IF NOT EXISTS idx_nodes_instance ON nodes (instance_id);

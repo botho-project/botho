@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { reconcileOnce, type ReconcileDeps } from './reconcile'
 import type { Ec2Instance } from './ec2'
-import { rigHostname, TAG_MANAGED_RIG } from './rig-config'
+import { nodeHostname, TAG_MANAGED_NODE } from './node-config'
 import {
   FakeDns,
   FakeEc2,
@@ -35,12 +35,12 @@ function makeDeps(overrides: Partial<ReconcileDeps> = {}): {
   return { deps, ec2, dns, store, stripe }
 }
 
-/** Build a managed-rig EC2 instance fixture. */
-function rig(partial: Partial<Ec2Instance> & { instanceId: string }): Ec2Instance {
+/** Build a managed-node EC2 instance fixture. */
+function node(partial: Partial<Ec2Instance> & { instanceId: string }): Ec2Instance {
   return {
     state: 'running',
     subscriptionTag: undefined,
-    rigIdTag: undefined,
+    nodeIdTag: undefined,
     publicIp: '1.2.3.4',
     launchTimeMs: NOW - 60_000,
     ...partial,
@@ -51,7 +51,7 @@ describe('reconcileOnce', () => {
   it('leaves an instance whose subscription is ACTIVE strictly alone', async () => {
     const { deps, ec2, stripe } = makeDeps()
     ec2.managedByRegion.set(REGION, [
-      rig({ instanceId: 'i-active', subscriptionTag: 'sub_active', rigIdTag: 'active1' }),
+      node({ instanceId: 'i-active', subscriptionTag: 'sub_active', nodeIdTag: 'active1' }),
     ])
     stripe.active.add('sub_active')
 
@@ -70,32 +70,32 @@ describe('reconcileOnce', () => {
       user: 'cus_1',
       stripeCustomer: 'cus_1',
       subscriptionId: 'sub_dead',
-      rigId: 'dead1',
+      nodeId: 'dead1',
       region: REGION,
-      rpcUrl: 'https://rig-dead1.testnet.botho.io/rpc',
+      rpcUrl: 'https://node-dead1.testnet.botho.io/rpc',
     })
     await store.setInstanceId('sub_dead', 'i-dead')
     ec2.managedByRegion.set(REGION, [
-      rig({ instanceId: 'i-dead', subscriptionTag: 'sub_dead', rigIdTag: 'dead1' }),
+      node({ instanceId: 'i-dead', subscriptionTag: 'sub_dead', nodeIdTag: 'dead1' }),
     ])
     // stripe.active is empty → sub_dead is NOT active.
 
     const report = await reconcileOnce(deps)
 
     expect(ec2.terminateCalls).toEqual([{ region: REGION, instanceId: 'i-dead' }])
-    expect(dns.deleteCalls).toContain(rigHostname('dead1'))
+    expect(dns.deleteCalls).toContain(nodeHostname('dead1'))
     expect((await store.getBySubscription('sub_dead'))?.state).toBe('terminated')
     expect(report.reaped).toBe(1)
     expect(report.items[0].disposition).toBe('orphan_cancelled')
   })
 
-  it('terminates a STUCK-PROVISIONING rig past the threshold (inactive sub)', async () => {
+  it('terminates a STUCK-PROVISIONING node past the threshold (inactive sub)', async () => {
     const { deps, ec2 } = makeDeps({ stuckProvisioningMs: 30 * 60 * 1000 })
     ec2.managedByRegion.set(REGION, [
-      rig({
+      node({
         instanceId: 'i-stuck',
         subscriptionTag: 'sub_stuck',
-        rigIdTag: 'stuck1',
+        nodeIdTag: 'stuck1',
         state: 'pending', // never reached running
         publicIp: undefined,
         launchTimeMs: NOW - 60 * 60 * 1000, // launched an hour ago
@@ -110,48 +110,48 @@ describe('reconcileOnce', () => {
     expect(report.reaped).toBe(1)
   })
 
-  it('terminates a managed rig with NO subscription tag (orphan by definition)', async () => {
+  it('terminates a managed node with NO subscription tag (orphan by definition)', async () => {
     const { deps, ec2, stripe } = makeDeps()
     ec2.managedByRegion.set(REGION, [
-      rig({ instanceId: 'i-notag', subscriptionTag: undefined, rigIdTag: 'notag1' }),
+      node({ instanceId: 'i-notag', subscriptionTag: undefined, nodeIdTag: 'notag1' }),
     ])
 
     const report = await reconcileOnce(deps)
 
     expect(ec2.terminateCalls).toEqual([{ region: REGION, instanceId: 'i-notag' }])
     expect(report.items[0].disposition).toBe('orphan_no_subscription_tag')
-    // Stripe is never consulted for a tag-less rig.
+    // Stripe is never consulted for a tag-less node.
     expect(stripe.calls).toEqual([])
   })
 
-  it('SKIPS (does not reap) a rig when the Stripe lookup errors transiently', async () => {
+  it('SKIPS (does not reap) a node when the Stripe lookup errors transiently', async () => {
     const { deps, ec2, stripe } = makeDeps()
     ec2.managedByRegion.set(REGION, [
-      rig({ instanceId: 'i-hiccup', subscriptionTag: 'sub_hiccup', rigIdTag: 'hiccup1' }),
+      node({ instanceId: 'i-hiccup', subscriptionTag: 'sub_hiccup', nodeIdTag: 'hiccup1' }),
     ])
     stripe.throwFor.add('sub_hiccup')
 
     const report = await reconcileOnce(deps)
 
-    // Never reap a (possibly paying) rig on a Stripe outage.
+    // Never reap a (possibly paying) node on a Stripe outage.
     expect(ec2.terminateCalls).toEqual([])
     expect(report.reaped).toBe(0)
     expect(report.skipped).toBe(1)
     expect(report.items[0].disposition).toBe('skipped_stripe_error')
   })
 
-  it('NEVER touches non-managed-rig instances (only describeManagedRigs is consulted)', async () => {
+  it('NEVER touches non-managed-node instances (only describeManagedNodes is consulted)', async () => {
     const { deps, ec2 } = makeDeps()
-    // describeManagedRigs is the ONLY listing the sweep uses, and it is filtered
-    // by botho:managed-rig=true. Seed-node-like instances are simply never
+    // describeManagedNodes is the ONLY listing the sweep uses, and it is filtered
+    // by botho:managed-node=true. Seed-node-like instances are simply never
     // returned by it, so they can never be terminated. Assert the sweep only
-    // ever terminates what describeManagedRigs yields.
+    // ever terminates what describeManagedNodes yields.
     ec2.managedByRegion.set(REGION, [
-      rig({ instanceId: 'i-managed-dead', subscriptionTag: 'sub_dead', rigIdTag: 'd1' }),
+      node({ instanceId: 'i-managed-dead', subscriptionTag: 'sub_dead', nodeIdTag: 'd1' }),
     ])
     // A "seed node" the test deliberately does NOT put in managedByRegion:
     ec2.bySubscription.set('seed', [
-      rig({ instanceId: 'i-seed-node', subscriptionTag: undefined }),
+      node({ instanceId: 'i-seed-node', subscriptionTag: undefined }),
     ])
 
     const report = await reconcileOnce(deps)
@@ -165,8 +165,8 @@ describe('reconcileOnce', () => {
   it('ignores instances already terminating/terminated', async () => {
     const { deps, ec2 } = makeDeps()
     ec2.managedByRegion.set(REGION, [
-      rig({ instanceId: 'i-gone', subscriptionTag: 'sub_x', state: 'terminated' }),
-      rig({ instanceId: 'i-going', subscriptionTag: 'sub_y', state: 'shutting-down' }),
+      node({ instanceId: 'i-gone', subscriptionTag: 'sub_x', state: 'terminated' }),
+      node({ instanceId: 'i-going', subscriptionTag: 'sub_y', state: 'shutting-down' }),
     ])
 
     const report = await reconcileOnce(deps)
@@ -178,14 +178,14 @@ describe('reconcileOnce', () => {
   it('continues the sweep when one region cannot be listed', async () => {
     const { deps, ec2, stripe } = makeDeps({ regions: ['us-west-2', 'us-east-1'] })
     // us-west-2 listing throws; us-east-1 still gets swept.
-    ec2.describeManagedRigsError = undefined
-    const original = ec2.describeManagedRigs.bind(ec2)
-    ec2.describeManagedRigs = async (region: string) => {
+    ec2.describeManagedNodesError = undefined
+    const original = ec2.describeManagedNodes.bind(ec2)
+    ec2.describeManagedNodes = async (region: string) => {
       if (region === 'us-west-2') throw new Error('throttled')
       return original(region)
     }
     ec2.managedByRegion.set('us-east-1', [
-      rig({ instanceId: 'i-east-dead', subscriptionTag: 'sub_dead', rigIdTag: 'e1' }),
+      node({ instanceId: 'i-east-dead', subscriptionTag: 'sub_dead', nodeIdTag: 'e1' }),
     ])
 
     const report = await reconcileOnce(deps)
@@ -197,11 +197,11 @@ describe('reconcileOnce', () => {
     void stripe
   })
 
-  it('reaps an active-then-cancelled rig only after Stripe reports inactive', async () => {
+  it('reaps an active-then-cancelled node only after Stripe reports inactive', async () => {
     const { deps, ec2, stripe } = makeDeps()
     ec2.managedByRegion.set(REGION, [
-      rig({ instanceId: 'i-a', subscriptionTag: 'sub_a', rigIdTag: 'a1' }),
-      rig({ instanceId: 'i-b', subscriptionTag: 'sub_b', rigIdTag: 'b1' }),
+      node({ instanceId: 'i-a', subscriptionTag: 'sub_a', nodeIdTag: 'a1' }),
+      node({ instanceId: 'i-b', subscriptionTag: 'sub_b', nodeIdTag: 'b1' }),
     ])
     stripe.active.add('sub_a') // a stays, b reaped
 
@@ -216,8 +216,8 @@ describe('reconcileOnce', () => {
 })
 
 describe('reconcile filter discipline', () => {
-  it('the sweep listing is gated on the botho:managed-rig tag', () => {
+  it('the sweep listing is gated on the botho:managed-node tag', () => {
     // Documents the structural guarantee asserted in the EC2 client + sweep.
-    expect(TAG_MANAGED_RIG).toBe('botho:managed-rig')
+    expect(TAG_MANAGED_NODE).toBe('botho:managed-node')
   })
 })

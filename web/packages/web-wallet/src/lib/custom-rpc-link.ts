@@ -1,9 +1,9 @@
 /**
  * Custom-RPC deep link parsing for the Botho Web Wallet (P6.3 of #458, §3 step 5).
  *
- * A managed-rig owner is handed a link like:
+ * A managed-node owner is handed a link like:
  *
- *     https://wallet.botho.io/wallet?rpc=https%3A%2F%2Frig-abc.testnet.botho.io%2Frpc
+ *     https://wallet.botho.io/wallet?rpc=https%3A%2F%2Fnode-abc.testnet.botho.io%2Frpc
  *
  * Opening it should point the wallet's RPC ingress at their own node. The wallet
  * already supports a "custom RPC" ingress (see `setCustomEndpoint` in the network
@@ -110,8 +110,8 @@ export function rpcLinkHost(candidate: string): string | null {
 
 /**
  * Host suffixes operated by the Botho project. A link whose host falls under one
- * of these is shown as a "known operator" hint (e.g. a BaaS-provisioned rig at
- * `rig-abc.testnet.botho.io`); anything else is an UNKNOWN host shown with a
+ * of these is shown as a "known operator" hint (e.g. a BaaS-provisioned node at
+ * `node-abc.testnet.botho.io`); anything else is an UNKNOWN host shown with a
  * stronger warning. This is a hint only — it never bypasses the trust gate, it
  * just tunes the wording so a fully-arbitrary `evil.example` cannot masquerade
  * as a first-party node.

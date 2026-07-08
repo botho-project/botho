@@ -8,19 +8,19 @@
  * The real implementation (`HttpEc2Client`) signs requests with SigV4
  * (`aws-sigv4.ts`) and talks to the EC2 query API. Only the verbs the
  * provisioner/teardown/reconciler need are implemented:
- *   - RunInstances        (launch a managed rig)
+ *   - RunInstances        (launch a managed node)
  *   - DescribeInstances   (idempotency reconcile by the botho:subscription tag,
- *                          AND the SEC sweep listing ALL botho:managed-rig=true)
+ *                          AND the SEC sweep listing ALL botho:managed-node=true)
  *   - TerminateInstances  (teardown / orphan reaping)
  *
  * Tags applied to every launch (#458 §3 step 1, §5):
- *   botho:managed-rig=true, botho:subscription=<sub>, botho:user=<user>,
- *   botho:rig-id=<rigId>.
+ *   botho:managed-node=true, botho:subscription=<sub>, botho:user=<user>,
+ *   botho:node-id=<nodeId>.
  */
 
 import { signAwsRequest, type AwsCredentials } from './aws-sigv4'
 
-/** A live (non-terminated) managed rig instance as seen by EC2. */
+/** A live (non-terminated) managed node instance as seen by EC2. */
 export interface Ec2Instance {
   instanceId: string
   /** Lifecycle state: pending | running | stopping | stopped | shutting-down | terminated. */
@@ -29,24 +29,24 @@ export interface Ec2Instance {
   publicIp?: string
   /** Value of the `botho:subscription` tag, if present. */
   subscriptionTag?: string
-  /** Value of the `botho:rig-id` tag, if present (for DNS cleanup on reap). */
-  rigIdTag?: string
+  /** Value of the `botho:node-id` tag, if present (for DNS cleanup on reap). */
+  nodeIdTag?: string
   /**
    * EC2 `<launchTime>` parsed to epoch ms. Used by the reconciliation sweep
-   * (#508) to detect "stuck-provisioning" rigs that never reached `running`
+   * (#508) to detect "stuck-provisioning" nodes that never reached `running`
    * within a threshold. Undefined if the field was absent in the response.
    */
   launchTimeMs?: number
 }
 
-/** Parameters for launching one managed rig. */
+/** Parameters for launching one managed node. */
 export interface RunInstanceParams {
   region: string
   amiId: string
   instanceType: string
   securityGroupId: string
   keyName: string
-  /** Base64-encoded EC2 user-data (the rig bootstrap script + env exports). */
+  /** Base64-encoded EC2 user-data (the node bootstrap script + env exports). */
   userDataBase64: string
   /** Resource tags applied at launch (key -> value). */
   tags: Record<string, string>
@@ -66,13 +66,13 @@ export interface Ec2Client {
    */
   describeBySubscription(region: string, subscriptionId: string): Promise<Ec2Instance[]>
   /**
-   * List ALL instances tagged `botho:managed-rig=true` in `region`. This is the
+   * List ALL instances tagged `botho:managed-node=true` in `region`. This is the
    * input to the SEC reconciliation sweep (#508 / #458 §5): it enumerates every
-   * managed rig EC2 knows about so the sweep can cross-check each against Stripe
-   * and reap orphans. The `botho:managed-rig=true` filter means the sweep can
-   * only ever SEE managed rigs — never the seed/seed2/faucet nodes.
+   * managed node EC2 knows about so the sweep can cross-check each against Stripe
+   * and reap orphans. The `botho:managed-node=true` filter means the sweep can
+   * only ever SEE managed nodes — never the seed/seed2/faucet nodes.
    */
-  describeManagedRigs(region: string): Promise<Ec2Instance[]>
+  describeManagedNodes(region: string): Promise<Ec2Instance[]>
   /** Terminate an instance (teardown / orphan reaping). Safe if already gone. */
   terminateInstance(region: string, instanceId: string): Promise<void>
 }
@@ -166,7 +166,7 @@ export function parseDescribeInstancesResponse(xml: string): Ec2Instance[] {
       block,
       /<key>botho:subscription<\/key>\s*<value>([^<]+)<\/value>/,
     )
-    const rigIdTag = pick(block, /<key>botho:rig-id<\/key>\s*<value>([^<]+)<\/value>/)
+    const nodeIdTag = pick(block, /<key>botho:node-id<\/key>\s*<value>([^<]+)<\/value>/)
     const launchTimeRaw = pick(block, /<launchTime>([^<]+)<\/launchTime>/)
     const parsed = launchTimeRaw ? Date.parse(launchTimeRaw) : NaN
     const launchTimeMs = Number.isNaN(parsed) ? undefined : parsed
@@ -175,7 +175,7 @@ export function parseDescribeInstancesResponse(xml: string): Ec2Instance[] {
       state,
       publicIp,
       subscriptionTag,
-      rigIdTag,
+      nodeIdTag,
       launchTimeMs,
     })
   }
@@ -245,14 +245,14 @@ export class HttpEc2Client implements Ec2Client {
     return parseDescribeInstancesResponse(xml)
   }
 
-  async describeManagedRigs(region: string): Promise<Ec2Instance[]> {
+  async describeManagedNodes(region: string): Promise<Ec2Instance[]> {
     const body = new URLSearchParams()
     body.set('Action', 'DescribeInstances')
     body.set('Version', EC2_API_VERSION)
-    // Scope the listing to managed rigs ONLY. This is the same tag IAM uses to
+    // Scope the listing to managed nodes ONLY. This is the same tag IAM uses to
     // gate TerminateInstances, so the sweep can never even enumerate (let alone
     // terminate) the seed/seed2/faucet nodes (#458 §5).
-    body.set('Filter.1.Name', 'tag:botho:managed-rig')
+    body.set('Filter.1.Name', 'tag:botho:managed-node')
     body.set('Filter.1.Value.1', 'true')
     const xml = await this.send(region, body)
     return parseDescribeInstancesResponse(xml)

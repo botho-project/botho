@@ -5,7 +5,7 @@ import policy from '../iam/provisioner-policy.json'
  * Validates the committed provisioner IAM policy (#508, #458 §5). The policy is a
  * deliverable artifact; these checks assert it stays valid JSON AND keeps the
  * load-bearing security properties — most importantly that TerminateInstances is
- * tag-conditioned to `botho:managed-rig=true` so the credential can NEVER
+ * tag-conditioned to `botho:managed-node=true` so the credential can NEVER
  * terminate the seed/seed2/faucet nodes.
  *
  * The JSON is imported as a module (resolveJsonModule), so a parse failure or a
@@ -61,16 +61,16 @@ describe('provisioner IAM policy', () => {
     }
   })
 
-  it('restricts TerminateInstances to botho:managed-rig=true resources (CRITICAL)', () => {
+  it('restricts TerminateInstances to botho:managed-node=true resources (CRITICAL)', () => {
     const term = statements.find((s) =>
       actionsOf(s).includes('ec2:TerminateInstances'),
     )
     expect(term).toBeDefined()
     const cond = term?.Condition?.StringEquals as Record<string, unknown> | undefined
     expect(cond).toBeDefined()
-    // The load-bearing guarantee: terminate is gated on the managed-rig tag, so
+    // The load-bearing guarantee: terminate is gated on the managed-node tag, so
     // the seed/seed2/faucet nodes (which lack it) can never be terminated.
-    expect(cond?.['ec2:ResourceTag/botho:managed-rig']).toBe('true')
+    expect(cond?.['ec2:ResourceTag/botho:managed-node']).toBe('true')
   })
 
   it('constrains RunInstances to t4g.medium + us-west-2 + the required tag', () => {
@@ -83,7 +83,7 @@ describe('provisioner IAM policy', () => {
     const eq = constrained?.Condition?.StringEquals as Record<string, unknown>
     expect(eq['ec2:InstanceType']).toBe('t4g.medium')
     expect(eq['ec2:Region']).toBe('us-west-2')
-    expect(eq['aws:RequestTag/botho:managed-rig']).toBe('true')
+    expect(eq['aws:RequestTag/botho:managed-node']).toBe('true')
   })
 
   it('allows CreateTags ONLY as part of a RunInstances launch (tag-on-create)', () => {

@@ -2,9 +2,9 @@
  * Frontend client for the Botho-as-a-Service `/status` + `/portal` endpoints
  * (P6.3 of #458, §4/§6).
  *
- * A managed-rig owner returns to the status page with a **magic-link token**
+ * A managed-node owner returns to the status page with a **magic-link token**
  * (the MVP identity model — #458 §4: no password, the signed link is the
- * credential). The page calls `fetchRigStatus(token)` to get the rig's RPC URL,
+ * credential). The page calls `fetchNodeStatus(token)` to get the node's RPC URL,
  * lifecycle state, and live health, and `openManageSubscription(token)` to jump
  * to the Stripe Customer Portal.
  *
@@ -12,13 +12,13 @@
  * Stripe secret + the status-link signing secret. No secrets live here.
  */
 
-import { baasEndpoint } from './rig-checkout'
+import { baasEndpoint } from './node-checkout'
 
-/** Lifecycle state of a rig (mirrors the Worker's `RigState`). */
-export type RigState = 'provisioning' | 'running' | 'suspended' | 'terminated'
+/** Lifecycle state of a node (mirrors the Worker's `NodeState`). */
+export type NodeState = 'provisioning' | 'running' | 'suspended' | 'terminated'
 
 /** Health summary surfaced from `node_getStatus` (mirrors the Worker). */
-export interface RigHealth {
+export interface NodeHealth {
   status: 'online' | 'offline' | 'unknown'
   chainHeight?: number
   synced?: boolean
@@ -26,24 +26,24 @@ export interface RigHealth {
 }
 
 /** The `/status` response body. */
-export interface RigStatus {
-  rigId: string
+export interface NodeStatus {
+  nodeId: string
   rpcUrl: string
-  state: RigState
+  state: NodeState
   region: string
-  health: RigHealth
-  /** Deep link that opens this wallet pointed at the rig's RPC. */
+  health: NodeHealth
+  /** Deep link that opens this wallet pointed at the node's RPC. */
   walletDeepLink: string
 }
 
 /** Error from a status/portal call, carrying an HTTP status when available. */
-export class RigStatusError extends Error {
+export class NodeStatusError extends Error {
   constructor(
     message: string,
     public readonly status?: number,
   ) {
     super(message)
-    this.name = 'RigStatusError'
+    this.name = 'NodeStatusError'
   }
 }
 
@@ -52,7 +52,7 @@ export const STATUS_TOKEN_PARAM = 'token'
 
 /**
  * Read the magic-link token from a query string (the status page is opened as
- * `/rig/status?token=…`). Returns null when absent.
+ * `/node/status?token=…`). Returns null when absent.
  */
 export function tokenFromSearch(search: string): string | null {
   try {
@@ -64,38 +64,38 @@ export function tokenFromSearch(search: string): string | null {
 }
 
 /**
- * Fetch the authenticated user's rig status from the control-plane Worker.
+ * Fetch the authenticated user's node status from the control-plane Worker.
  * `fetchImpl` is injectable for tests.
  *
- * Throws `RigStatusError` (with the HTTP status) on 4xx/5xx so the page can show
- * a specific message — e.g. 401 → "this link has expired", 404 → "no rig yet".
+ * Throws `NodeStatusError` (with the HTTP status) on 4xx/5xx so the page can show
+ * a specific message — e.g. 401 → "this link has expired", 404 → "no node yet".
  */
-export async function fetchRigStatus(
+export async function fetchNodeStatus(
   token: string,
   fetchImpl: typeof fetch = fetch,
-): Promise<RigStatus> {
+): Promise<NodeStatus> {
   const url = `${baasEndpoint()}/status?${STATUS_TOKEN_PARAM}=${encodeURIComponent(token)}`
   let resp: Response
   try {
     resp = await fetchImpl(url, { method: 'GET' })
   } catch {
-    throw new RigStatusError('Could not reach the status service. Try again.')
+    throw new NodeStatusError('Could not reach the status service. Try again.')
   }
 
   if (!resp.ok) {
     if (resp.status === 401) {
-      throw new RigStatusError('This link is invalid or has expired.', 401)
+      throw new NodeStatusError('This link is invalid or has expired.', 401)
     }
     if (resp.status === 404) {
-      throw new RigStatusError('No rig found for this account yet.', 404)
+      throw new NodeStatusError('No node found for this account yet.', 404)
     }
-    throw new RigStatusError('Could not load your rig status.', resp.status)
+    throw new NodeStatusError('Could not load your node status.', resp.status)
   }
 
   try {
-    return (await resp.json()) as RigStatus
+    return (await resp.json()) as NodeStatus
   } catch {
-    throw new RigStatusError('Unexpected response from the status service.', resp.status)
+    throw new NodeStatusError('Unexpected response from the status service.', resp.status)
   }
 }
 
@@ -115,17 +115,17 @@ export async function createPortalUrl(
       body: JSON.stringify({ token }),
     })
   } catch {
-    throw new RigStatusError('Could not reach the billing portal. Try again.')
+    throw new NodeStatusError('Could not reach the billing portal. Try again.')
   }
 
   let json: { url?: string; error?: string }
   try {
     json = (await resp.json()) as typeof json
   } catch {
-    throw new RigStatusError('Unexpected response from the billing portal.', resp.status)
+    throw new NodeStatusError('Unexpected response from the billing portal.', resp.status)
   }
   if (!resp.ok || !json.url) {
-    throw new RigStatusError(json.error ?? 'Could not open the billing portal.', resp.status)
+    throw new NodeStatusError(json.error ?? 'Could not open the billing portal.', resp.status)
   }
   return json.url
 }

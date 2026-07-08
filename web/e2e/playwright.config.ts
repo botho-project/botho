@@ -162,6 +162,18 @@ export default defineConfig({
       testMatch: /wallet\/.*\.spec\.ts/,
     },
 
+    // Botho-as-a-Service "Host a node" checkout + status flows (#458). The
+    // Worker (/checkout, /status, /portal) is mocked via page.route (see
+    // fixtures/node.ts) so these stay hermetic — no Stripe, no AWS.
+    {
+      name: 'node',
+      use: {
+        ...devices['Desktop Chrome'],
+        baseURL: WEB_BASE_URL,
+      },
+      testMatch: /node\/.*\.spec\.ts/,
+    },
+
     // Explorer tests
     {
       name: 'explorer',

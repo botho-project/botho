@@ -3,12 +3,12 @@ import {
   buildStatusResponse,
   buildWalletDeepLink,
   createPortalSession,
-  fetchRigHealth,
+  fetchNodeHealth,
   lookupStatusForCustomer,
   StripePortalError,
 } from './status'
 import { FakeStore } from './test-fakes'
-import type { NewRigRecord, RigState } from './rig-store'
+import type { NewNodeRecord, NodeState } from './node-store'
 
 const WALLET = 'https://wallet.botho.io'
 
@@ -21,28 +21,28 @@ function nodeStatusOk(result: Record<string, unknown> = { chainHeight: 42, synce
   )
 }
 
-async function seedRig(
+async function seedNode(
   store: FakeStore,
-  over: Partial<NewRigRecord> = {},
-  state: RigState = 'running',
+  over: Partial<NewNodeRecord> = {},
+  state: NodeState = 'running',
 ): Promise<void> {
-  const rec: NewRigRecord = {
+  const rec: NewNodeRecord = {
     user: over.stripeCustomer ?? 'cus_A',
     stripeCustomer: over.stripeCustomer ?? 'cus_A',
     subscriptionId: over.subscriptionId ?? 'sub_A',
-    rigId: over.rigId ?? 'abc123',
+    nodeId: over.nodeId ?? 'abc123',
     region: over.region ?? 'us-west-2',
-    rpcUrl: over.rpcUrl ?? 'https://rig-abc123.testnet.botho.io/rpc',
+    rpcUrl: over.rpcUrl ?? 'https://node-abc123.testnet.botho.io/rpc',
   }
   await store.insertProvisioning(rec)
   if (state !== 'provisioning') await store.setState(rec.subscriptionId, state)
 }
 
 describe('buildWalletDeepLink', () => {
-  it('encodes the rig RPC into a /wallet?rpc= deep link', () => {
-    const link = buildWalletDeepLink(WALLET, 'https://rig-x.testnet.botho.io/rpc')
+  it('encodes the node RPC into a /wallet?rpc= deep link', () => {
+    const link = buildWalletDeepLink(WALLET, 'https://node-x.testnet.botho.io/rpc')
     expect(link).toBe(
-      'https://wallet.botho.io/wallet?rpc=https%3A%2F%2Frig-x.testnet.botho.io%2Frpc',
+      'https://wallet.botho.io/wallet?rpc=https%3A%2F%2Fnode-x.testnet.botho.io%2Frpc',
     )
   })
 
@@ -52,10 +52,10 @@ describe('buildWalletDeepLink', () => {
   })
 })
 
-describe('fetchRigHealth', () => {
+describe('fetchNodeHealth', () => {
   it('reports online with chain height + sync from node_getStatus', async () => {
     const fetchMock = nodeStatusOk({ chainHeight: 100, synced: false, syncProgress: 73 })
-    const health = await fetchRigHealth('https://n/rpc', fetchMock as unknown as typeof fetch)
+    const health = await fetchNodeHealth('https://n/rpc', fetchMock as unknown as typeof fetch)
     expect(health.status).toBe('online')
     expect(health.chainHeight).toBe(100)
     expect(health.synced).toBe(false)
@@ -69,7 +69,7 @@ describe('fetchRigHealth', () => {
         headers: { 'Content-Type': 'application/json' },
       }),
     )
-    const health = await fetchRigHealth('https://n/rpc', fetchMock as unknown as typeof fetch)
+    const health = await fetchNodeHealth('https://n/rpc', fetchMock as unknown as typeof fetch)
     expect(health.status).toBe('offline')
   })
 
@@ -77,30 +77,30 @@ describe('fetchRigHealth', () => {
     const fetchMock = vi.fn(async () => {
       throw new Error('network down')
     })
-    const health = await fetchRigHealth('https://n/rpc', fetchMock as unknown as typeof fetch)
+    const health = await fetchNodeHealth('https://n/rpc', fetchMock as unknown as typeof fetch)
     expect(health.status).toBe('offline')
   })
 })
 
 describe('buildStatusResponse', () => {
-  it('probes health for a running rig', async () => {
+  it('probes health for a running node', async () => {
     const store = new FakeStore()
-    await seedRig(store, {}, 'running')
-    const rig = await store.getByCustomer('cus_A')
+    await seedNode(store, {}, 'running')
+    const node = await store.getByCustomer('cus_A')
     const fetchMock = nodeStatusOk()
-    const status = await buildStatusResponse(rig!, WALLET, fetchMock as unknown as typeof fetch)
+    const status = await buildStatusResponse(node!, WALLET, fetchMock as unknown as typeof fetch)
     expect(status.state).toBe('running')
     expect(status.health.status).toBe('online')
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(status.walletDeepLink).toContain('/wallet?rpc=')
   })
 
-  it('does NOT probe a provisioning rig (health unknown, no node call)', async () => {
+  it('does NOT probe a provisioning node (health unknown, no node call)', async () => {
     const store = new FakeStore()
-    await seedRig(store, {}, 'provisioning')
-    const rig = await store.getByCustomer('cus_A')
+    await seedNode(store, {}, 'provisioning')
+    const node = await store.getByCustomer('cus_A')
     const fetchMock = nodeStatusOk()
-    const status = await buildStatusResponse(rig!, WALLET, fetchMock as unknown as typeof fetch)
+    const status = await buildStatusResponse(node!, WALLET, fetchMock as unknown as typeof fetch)
     expect(status.state).toBe('provisioning')
     expect(status.health.status).toBe('unknown')
     expect(fetchMock).not.toHaveBeenCalled()
@@ -108,9 +108,9 @@ describe('buildStatusResponse', () => {
 })
 
 describe('lookupStatusForCustomer (authz)', () => {
-  it('returns the requesting customer’s own rig', async () => {
+  it('returns the requesting customer’s own node', async () => {
     const store = new FakeStore()
-    await seedRig(store, { stripeCustomer: 'cus_A', subscriptionId: 'sub_A' }, 'running')
+    await seedNode(store, { stripeCustomer: 'cus_A', subscriptionId: 'sub_A' }, 'running')
     const result = await lookupStatusForCustomer(
       'cus_A',
       store,
@@ -118,23 +118,23 @@ describe('lookupStatusForCustomer (authz)', () => {
       nodeStatusOk() as unknown as typeof fetch,
     )
     expect(result.ok).toBe(true)
-    if (result.ok) expect(result.status.rpcUrl).toContain('rig-abc123')
+    if (result.ok) expect(result.status.rpcUrl).toContain('node-abc123')
   })
 
-  it('does NOT return another customer’s rig (404, no leak)', async () => {
+  it('does NOT return another customer’s node (404, no leak)', async () => {
     const store = new FakeStore()
-    // Only customer B has a rig.
-    await seedRig(
+    // Only customer B has a node.
+    await seedNode(
       store,
       {
         stripeCustomer: 'cus_B',
         subscriptionId: 'sub_B',
-        rigId: 'secret',
-        rpcUrl: 'https://rig-secret.testnet.botho.io/rpc',
+        nodeId: 'secret',
+        rpcUrl: 'https://node-secret.testnet.botho.io/rpc',
       },
       'running',
     )
-    // Customer A (authenticated) asks for their rig — must get nothing.
+    // Customer A (authenticated) asks for their node — must get nothing.
     const result = await lookupStatusForCustomer(
       'cus_A',
       store,
@@ -145,16 +145,16 @@ describe('lookupStatusForCustomer (authz)', () => {
     if (!result.ok) expect(result.code).toBe('not_found')
   })
 
-  it('prefers a live rig over a terminated one for the same customer', async () => {
+  it('prefers a live node over a terminated one for the same customer', async () => {
     const store = new FakeStore()
-    await seedRig(
+    await seedNode(
       store,
-      { stripeCustomer: 'cus_A', subscriptionId: 'sub_old', rigId: 'old', rpcUrl: 'https://old/rpc' },
+      { stripeCustomer: 'cus_A', subscriptionId: 'sub_old', nodeId: 'old', rpcUrl: 'https://old/rpc' },
       'terminated',
     )
-    await seedRig(
+    await seedNode(
       store,
-      { stripeCustomer: 'cus_A', subscriptionId: 'sub_new', rigId: 'new', rpcUrl: 'https://rig-new/rpc' },
+      { stripeCustomer: 'cus_A', subscriptionId: 'sub_new', nodeId: 'new', rpcUrl: 'https://node-new/rpc' },
       'running',
     )
     const result = await lookupStatusForCustomer(
@@ -164,7 +164,7 @@ describe('lookupStatusForCustomer (authz)', () => {
       nodeStatusOk() as unknown as typeof fetch,
     )
     expect(result.ok).toBe(true)
-    if (result.ok) expect(result.status.rpcUrl).toBe('https://rig-new/rpc')
+    if (result.ok) expect(result.status.rpcUrl).toBe('https://node-new/rpc')
   })
 })
 
@@ -181,7 +181,7 @@ describe('createPortalSession', () => {
     })
     const session = await createPortalSession(
       'cus_A',
-      'https://botho.io/rig/status',
+      'https://botho.io/node/status',
       'sk_test_dummy',
       fetchMock as unknown as typeof fetch,
     )

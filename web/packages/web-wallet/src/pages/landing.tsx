@@ -59,7 +59,7 @@ export function LandingPage() {
             <Link to="/docs" className="text-ghost hover:text-light transition-colors">
               Docs
             </Link>
-            <Link to="/rig" className="text-ghost hover:text-light transition-colors flex items-center gap-2">
+            <Link to="/node" className="text-ghost hover:text-light transition-colors flex items-center gap-2">
               <Server size={18} />
               Host a Node
             </Link>
@@ -116,7 +116,7 @@ export function LandingPage() {
                 Documentation
               </Link>
               <Link
-                to="/rig"
+                to="/node"
                 onClick={() => setMobileMenuOpen(false)}
                 className="flex items-center gap-2 px-4 py-3 rounded-lg text-ghost hover:text-light hover:bg-steel/50 transition-colors"
               >
@@ -236,7 +236,7 @@ export function LandingPage() {
           </h2>
           <p className="text-sm sm:text-base text-ghost mb-6 sm:mb-8 px-2">
             Create a wallet in seconds. No email, no KYC, no tracking. Or run your
-            own always-on node with a managed rig.
+            own always-on node with a managed node.
           </p>
           <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 justify-center px-4 sm:px-0">
             <Link to="/wallet" className="w-full sm:w-auto">
@@ -245,7 +245,7 @@ export function LandingPage() {
                 <ArrowRight className="ml-2" size={18} />
               </Button>
             </Link>
-            <Link to="/rig" className="w-full sm:w-auto">
+            <Link to="/node" className="w-full sm:w-auto">
               <Button variant="secondary" size="lg" className="w-full sm:w-auto justify-center">
                 <Server className="mr-2" size={18} />
                 Host a Node

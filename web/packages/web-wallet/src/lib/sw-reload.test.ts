@@ -15,7 +15,7 @@ describe('shouldReloadOnControllerChange (#654)', () => {
   })
 
   it('allows the reload on ordinary pages', () => {
-    for (const path of ['/', '/wallet', '/explorer', '/contacts', '/rig', '/docs']) {
+    for (const path of ['/', '/wallet', '/explorer', '/contacts', '/node', '/docs']) {
       expect(shouldReloadOnControllerChange(path)).toBe(true)
     }
   })

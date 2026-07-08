@@ -1,11 +1,11 @@
 /**
- * Compute shape + safety allowlists for Botho-as-a-Service managed rigs
+ * Compute shape + safety allowlists for Botho-as-a-Service managed nodes
  * (#458 §3, §5).
  *
  * These constants are the "proven recipe" parameters from the live seed/faucet
- * rigs. They are deliberately centralized and server-authoritative so the
+ * nodes. They are deliberately centralized and server-authoritative so the
  * provisioner (and the SEC hardening pass, #508) have a single source of truth
- * for what a managed rig is allowed to be.
+ * for what a managed node is allowed to be.
  *
  * SAFE BY CONSTRUCTION (#458 §5): the allowlists here are enforced in
  * `provisioner.ts` BEFORE any AWS call, so a crafted/replayed trigger can never
@@ -13,7 +13,7 @@
  */
 
 /**
- * AWS regions a managed rig may be provisioned in. Kept deliberately small and
+ * AWS regions a managed node may be provisioned in. Kept deliberately small and
  * server-authoritative (#458 §5: "Region allowlist — start: us-west-2 only,
  * expand deliberately"). Fail closed on anything else.
  */
@@ -26,7 +26,7 @@ export function isAllowedRegion(region: string): region is AllowedRegion {
 }
 
 /**
- * EC2 instance types a managed rig may use. MVP is `t4g.medium`-only (#458 §3,
+ * EC2 instance types a managed node may use. MVP is `t4g.medium`-only (#458 §3,
  * §5): RandomX's ~2GB dataset needs the RAM and this is the proven shape. Any
  * other type is rejected (the provisioner also *forces* this type rather than
  * trusting caller input — defense in depth).
@@ -47,7 +47,7 @@ export function isAllowedInstanceType(
 /**
  * Global fleet cap — a circuit breaker against cost-runaway / abuse (#458 §5:
  * "Global fleet cap (e.g. N instances) as a circuit breaker"). The provisioner
- * counts live managed rigs in D1 and refuses to launch beyond this. Overridable
+ * counts live managed nodes in D1 and refuses to launch beyond this. Overridable
  * per-environment via the `FLEET_CAP` Worker var; this is the conservative
  * default while on testnet.
  *
@@ -59,9 +59,9 @@ export const DEFAULT_FLEET_CAP = 25
 /** Hard cap of running instances per active subscription (#458 §5). */
 export const MAX_INSTANCES_PER_SUBSCRIPTION = 1
 
-/** The compute shape passed to EC2 `RunInstances` for a managed rig (#458 §3). */
-export interface RigComputeConfig {
-  /** Ubuntu 24.04 arm64 AMI (matches the live seed/faucet rigs). */
+/** The compute shape passed to EC2 `RunInstances` for a managed node (#458 §3). */
+export interface NodeComputeConfig {
+  /** Ubuntu 24.04 arm64 AMI (matches the live seed/faucet nodes). */
   amiId: string
   /** Security group id. */
   securityGroupId: string
@@ -75,33 +75,33 @@ export interface RigComputeConfig {
  * The proven seed/faucet compute shape (#458 §1, §3). Non-secret identifiers,
  * safe to keep in the repo; overridable via Worker vars for other accounts.
  */
-export const DEFAULT_RIG_COMPUTE: RigComputeConfig = {
+export const DEFAULT_NODE_COMPUTE: NodeComputeConfig = {
   amiId: 'ami-012798e88aebdba5c',
   securityGroupId: 'sg-0dd3fc95ec3916a4a',
   keyName: 'botho-nodes',
   instanceType: DEFAULT_INSTANCE_TYPE,
 }
 
-/** Zone under which per-rig hostnames live: `rig-<id>.<RIG_DOMAIN>`. */
-export const DEFAULT_RIG_DOMAIN = 'testnet.botho.io'
+/** Zone under which per-node hostnames live: `node-<id>.<NODE_DOMAIN>`. */
+export const DEFAULT_NODE_DOMAIN = 'testnet.botho.io'
 
 /**
- * Derive the public hostname for a rig from its id. Mirrors the bootstrap
- * script's derivation (`infra/baas/rig-bootstrap.sh`): accepts a bare id
- * (`abc123`) or an already-prefixed `rig-abc123`.
+ * Derive the public hostname for a node from its id. Mirrors the bootstrap
+ * script's derivation (`infra/baas/node-bootstrap.sh`): accepts a bare id
+ * (`abc123`) or an already-prefixed `node-abc123`.
  */
-export function rigHostname(rigId: string, domain = DEFAULT_RIG_DOMAIN): string {
-  const base = rigId.startsWith('rig-') ? rigId : `rig-${rigId}`
+export function nodeHostname(nodeId: string, domain = DEFAULT_NODE_DOMAIN): string {
+  const base = nodeId.startsWith('node-') ? nodeId : `node-${nodeId}`
   return `${base}.${domain}`
 }
 
-/** The HTTPS `/rpc` URL a user points the PWA at, given a rig hostname. */
-export function rigRpcUrl(hostname: string): string {
+/** The HTTPS `/rpc` URL a user points the PWA at, given a node hostname. */
+export function nodeRpcUrl(hostname: string): string {
   return `https://${hostname}/rpc`
 }
 
-/** EC2 resource tag keys for managed rigs (#458 §3 step 1, §5). */
-export const TAG_MANAGED_RIG = 'botho:managed-rig'
+/** EC2 resource tag keys for managed nodes (#458 §3 step 1, §5). */
+export const TAG_MANAGED_NODE = 'botho:managed-node'
 export const TAG_SUBSCRIPTION = 'botho:subscription'
 export const TAG_USER = 'botho:user'
-export const TAG_RIG_ID = 'botho:rig-id'
+export const TAG_NODE_ID = 'botho:node-id'

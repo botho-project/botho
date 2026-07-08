@@ -1,4 +1,4 @@
-# Botho BaaS — Rig Bootstrap (`infra/baas/`)
+# Botho BaaS — Node Bootstrap (`infra/baas/`)
 
 Self-contained **cloud-init / EC2 user-data** that turns a fresh instance into a
 working Botho **testnet mining node** with **zero manual SSH**. This is the
@@ -18,12 +18,12 @@ recipe in `infra/seed/` and `infra/faucet/`:
 
 ## Files
 
-- `rig-bootstrap.sh` — the entire first-boot provisioner (paste as user-data).
-- `bip39-english.txt` — BIP39 wordlist, used to generate a per-rig wallet
+- `node-bootstrap.sh` — the entire first-boot provisioner (paste as user-data).
+- `bip39-english.txt` — BIP39 wordlist, used to generate a per-node wallet
   mnemonic non-interactively (the built-in `botho init` is interactive). It is
   the byte-identical wordlist the node's `tiny-bip39` dependency uses.
 
-## What it does (idempotent, logged to `/var/log/botho-rig-bootstrap.log`)
+## What it does (idempotent, logged to `/var/log/botho-node-bootstrap.log`)
 
 1. **Install deps** — nginx, certbot, curl, jq, ca-certificates.
 2. **Download the prebuilt `botho` linux-aarch64 binary** — from
@@ -35,7 +35,7 @@ recipe in `infra/seed/` and `infra/faucet/`:
    `BOTHO_BINARY_SHA256` (the `botho` line of `checksums-linux-aarch64.txt`)
    is verified against the (extracted) binary, which is also checked to be
    `aarch64` and installed mode `0755`.
-3. **Generate identity + config** — a per-rig 24-word wallet mnemonic and
+3. **Generate identity + config** — a per-node 24-word wallet mnemonic and
    `~/.botho/testnet/config.toml` (testnet, RandomX minting on, faucet off,
    `quorum.mode = recommended` / `min_peers = 1`, `bootstrap_peers = []`,
    DNS-seed discovery `seeds.testnet.botho.io` enabled). The wallet mnemonic is
@@ -52,9 +52,9 @@ recipe in `infra/seed/` and `infra/faucet/`:
    > therefore supply resolved `/ip4/.../tcp/<port>/p2p/<peer_id>` multiaddrs.
 4. **Install + start** the `botho` systemd unit
    (`botho --testnet run --mint --mint-threads N`).
-5. **nginx + TLS + `/rpc` proxy** for `RIG_HOSTNAME` (mirrors
+5. **nginx + TLS + `/rpc` proxy** for `NODE_HOSTNAME` (mirrors
    `seed-nginx.conf`: HTTP→HTTPS redirect, CORS de-duplication, `/rpc/ws`).
-6. **Emit rig info** to `~/rig-info.txt` and install `rig-status` for read-back.
+6. **Emit node info** to `~/node-info.txt` and install `node-status` for read-back.
 
 ## Inputs (env vars / user-data exports)
 
@@ -63,31 +63,31 @@ recipe in `infra/seed/` and `infra/faucet/`:
 | `BOTHO_BINARY_URL`    | no       | latest GitHub release | URL to the prebuilt linux-aarch64 build: the release tarball `botho-vX.Y.Z-linux-aarch64.tar.gz` (canonical since v0.3.0; the `botho` member is extracted) or a bare `botho` binary (S3/R2 mirror, legacy). When unset, an existing `/usr/local/bin/botho` is reused (idempotent re-run), else the latest GitHub release's tarball is resolved via the GitHub API (see **Binary source** below). |
 | `BOTHO_BINARY_SHA256` | no       | auto-pinned in latest-release mode | Expected sha256 of the `botho` **binary**; verified if set. Pass the `botho` line of the release asset `checksums-linux-aarch64.txt` (per-binary digests of the **extracted** files — the tarball's own digest is not published; do **not** use `SHA256SUMS.txt`, which mixes all platforms unlabelled). In bare-binary mode the downloaded file itself is verified. |
 | `BOTHO_REPO`          | no       | `botho-project/botho` | GitHub `owner/repo` used for latest-release resolution. |
-| `RIG_ID`              | no       | —                  | Short opaque rig id (e.g. `abc123`). When set and `RIG_HOSTNAME` is unset, the hostname is derived as `rig-<RIG_ID>.<RIG_DOMAIN>`. Recorded in `rig-info.txt`. |
-| `RIG_DOMAIN`          | no       | `testnet.botho.io` | Zone for `rig-<RIG_ID>` hostnames; combined with `RIG_ID` to derive `RIG_HOSTNAME`. |
-| `RIG_HOSTNAME`        | no       | —                  | Public hostname, e.g. `rig-abc123.testnet.botho.io`. Takes precedence over `RIG_ID`/`RIG_DOMAIN`. If neither is set, public nginx/TLS is skipped (RPC still on `localhost:17101`). |
-| `REGION`              | no       | —                  | AWS region the rig launched in (informational; the provisioner picks it at run-instances time). Recorded in `rig-info.txt`. |
-| `TIER`                | no       | `t4g.medium`       | Instance type/tier (informational; MVP is t4g.medium-only). Recorded in `rig-info.txt`. |
+| `NODE_ID`              | no       | —                  | Short opaque node id (e.g. `abc123`). When set and `NODE_HOSTNAME` is unset, the hostname is derived as `node-<NODE_ID>.<NODE_DOMAIN>`. Recorded in `node-info.txt`. |
+| `NODE_DOMAIN`          | no       | `testnet.botho.io` | Zone for `node-<NODE_ID>` hostnames; combined with `NODE_ID` to derive `NODE_HOSTNAME`. |
+| `NODE_HOSTNAME`        | no       | —                  | Public hostname, e.g. `node-abc123.testnet.botho.io`. Takes precedence over `NODE_ID`/`NODE_DOMAIN`. If neither is set, public nginx/TLS is skipped (RPC still on `localhost:17101`). |
+| `REGION`              | no       | —                  | AWS region the node launched in (informational; the provisioner picks it at run-instances time). Recorded in `node-info.txt`. |
+| `TIER`                | no       | `t4g.medium`       | Instance type/tier (informational; MVP is t4g.medium-only). Recorded in `node-info.txt`. |
 | `NETWORK`             | no       | `testnet`          | Only `testnet` is supported in this slice. |
 | `BOOTSTRAP_PEERS`     | no       | DNS-seed discovery | Comma-separated **resolved** multiaddrs (`/ip4/.../tcp/<port>/p2p/<peer_id>`). Default empty -> DNS-seed discovery (the working path; bare `/dns4` is unsupported). |
 | `MINT_THREADS`        | no       | `1`                | RandomX threads (t4g.medium = 2 vCPU). |
 | `CERTBOT_EMAIL`       | no       | `admin@botho.io`   | Let's Encrypt registration email. |
 | `TLS_MODE`            | no       | `webroot`          | `webroot` (needs nginx+DNS) / `standalone` / `skip` (HTTP-only, for local testing). |
-| `RIG_WALLET_MNEMONIC` | no       | generated          | Bring-your-own wallet (#458 will decide BYO vs generated). |
+| `NODE_WALLET_MNEMONIC` | no       | generated          | Bring-your-own wallet (#458 will decide BYO vs generated). |
 
 ## Outputs
 
-- `/var/log/botho-rig-bootstrap.log` — full provisioning log.
+- `/var/log/botho-node-bootstrap.log` — full provisioning log.
 - `~ubuntu/.botho/testnet/config.toml` — node config incl. mnemonic (chmod 600).
-- `~ubuntu/rig-info.txt` — rig id, region, tier, RPC URL, public IP, binary
+- `~ubuntu/node-info.txt` — node id, region, tier, RPC URL, public IP, binary
   version, helper commands.
-- `botho.service` running and mining; `rig-status` read-back helper.
+- `botho.service` running and mining; `node-status` read-back helper.
 
 Read back at any time:
 
 ```bash
-sudo rig-status                 # network/height/peers/synced/mintingActive
-cat ~ubuntu/rig-info.txt
+sudo node-status                 # network/height/peers/synced/mintingActive
+cat ~ubuntu/node-info.txt
 journalctl -u botho -f
 ```
 
@@ -95,7 +95,7 @@ journalctl -u botho -f
 
 ### 1. Binary source (`BOTHO_BINARY_URL`)
 
-The rig **downloads the prebuilt arm64 binary** — it never builds from source on
+The node **downloads the prebuilt arm64 binary** — it never builds from source on
 the box (t4g release builds are slow and RandomX-linked crates can OOM).
 
 Since **v0.3.0** (2026-07-05) the canonical source is the **GitHub release
@@ -140,10 +140,10 @@ export BOTHO_BINARY_SHA256="019f31e8e29cf482567be1c51f65d499aeffda1b63f57098a991
 > needed and must not be used — release assets are the canonical source
 > (see #638, "prefer release artifacts in deploys").
 
-### 2. DNS pre-creation (`RIG_HOSTNAME` / `RIG_ID`)
+### 2. DNS pre-creation (`NODE_HOSTNAME` / `NODE_ID`)
 
-The provisioner must create the `RIG_HOSTNAME` (or the derived
-`rig-<RIG_ID>.<RIG_DOMAIN>`) A record pointing at the
+The provisioner must create the `NODE_HOSTNAME` (or the derived
+`node-<NODE_ID>.<NODE_DOMAIN>`) A record pointing at the
 instance's public IP **before/at boot** so Let's Encrypt (`webroot`/
 `standalone`) can validate. If DNS isn't ready when the script runs, certbot is
 skipped gracefully and nginx serves HTTP-only `/rpc`; re-running the script
@@ -154,7 +154,7 @@ DNS-less local testing use `TLS_MODE=skip`.
 
 ```bash
 #!/usr/bin/env bash
-export RIG_ID="abc123"                 # -> rig-abc123.testnet.botho.io
+export NODE_ID="abc123"                 # -> node-abc123.testnet.botho.io
 export REGION="us-west-2"
 export TIER="t4g.medium"
 # Binary: omit both exports to track the latest GitHub release (auto-pinned
@@ -162,13 +162,13 @@ export TIER="t4g.medium"
 export BOTHO_BINARY_URL="https://github.com/botho-project/botho/releases/download/v0.3.0/botho-v0.3.0-linux-aarch64.tar.gz"
 export BOTHO_BINARY_SHA256="<the 'botho' line of that release's checksums-linux-aarch64.txt>"
 export MINT_THREADS=1
-# ... then the contents of rig-bootstrap.sh ...
+# ... then the contents of node-bootstrap.sh ...
 ```
 
-(Pass `RIG_HOSTNAME` directly instead of `RIG_ID`/`RIG_DOMAIN` if you want a
+(Pass `NODE_HOSTNAME` directly instead of `NODE_ID`/`NODE_DOMAIN` if you want a
 fully custom hostname.)
 
-(In practice the provisioner concatenates the exports + `rig-bootstrap.sh` into
+(In practice the provisioner concatenates the exports + `node-bootstrap.sh` into
 the instance's user-data. cloud-init runs it as root on first boot.)
 
 ## Target
@@ -193,15 +193,15 @@ Launch a fresh instance (matching the provisioner's parameters, #502):
 - **Security group**: inbound `17100/tcp` (gossip), `80`/`443` (only if testing
   TLS), `22` for break-glass.
 - **User data**: the exports below followed by the full contents of
-  `rig-bootstrap.sh`:
+  `node-bootstrap.sh`:
 
 ```bash
 #!/usr/bin/env bash
 export TIER="t4g.medium"
-export TLS_MODE="skip"       # DNS-less validation; use RIG_ID + webroot to also test TLS
+export TLS_MODE="skip"       # DNS-less validation; use NODE_ID + webroot to also test TLS
 # No BOTHO_BINARY_URL / BOTHO_BINARY_SHA256: exercises the latest-release
 # resolution + auto checksum pinning (the default provisioner path).
-# ... contents of rig-bootstrap.sh ...
+# ... contents of node-bootstrap.sh ...
 ```
 
 ### 2. Verify provisioning
@@ -209,10 +209,10 @@ export TLS_MODE="skip"       # DNS-less validation; use RIG_ID + webroot to also
 SSH in (break-glass) and check:
 
 ```bash
-sudo tail -50 /var/log/botho-rig-bootstrap.log
+sudo tail -50 /var/log/botho-node-bootstrap.log
 # Expect: "latest release: vX.Y.Z", "pinned sha256 from checksums-linux-aarch64.txt: ...",
 #         "gzip tarball detected; extracting 'botho' member", "sha256 verified: ...",
-#         "installed botho (aarch64)", "=== Botho rig bootstrap complete ==="
+#         "installed botho (aarch64)", "=== Botho node bootstrap complete ==="
 ls -l /usr/local/bin/botho      # mode 0755
 systemctl is-active botho       # active
 ```
@@ -248,7 +248,7 @@ Pass criteria (record actual values on the tracking issue):
 
 ### 4. Idempotency spot-check
 
-Re-run the script on the same box (`sudo bash rig-bootstrap.sh` with the same
+Re-run the script on the same box (`sudo bash node-bootstrap.sh` with the same
 env): Step 2 must log `reusing existing /usr/local/bin/botho (idempotent
 re-run)` (no download/API call), the wallet mnemonic must be preserved, and the
 service must come back healthy.

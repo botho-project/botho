@@ -3,10 +3,10 @@
  * (P6.3 of #458, §4).
  *
  * Identity for the MVP is the **Stripe customer** — there is no password system
- * (#458 §4). A returning user looks up their rig via a *signed, expiring* token
+ * (#458 §4). A returning user looks up their node via a *signed, expiring* token
  * that binds to exactly one Stripe customer id. The `/status` endpoint verifies
- * the token, extracts the customer id, and looks the rig up keyed on that id, so
- * a user can only ever see their own rig (authz — never trust a customer id
+ * the token, extracts the customer id, and looks the node up keyed on that id, so
+ * a user can only ever see their own node (authz — never trust a customer id
  * straight from the client).
  *
  * Token format (URL-safe, single opaque string):
@@ -19,7 +19,7 @@
  * single, audited HMAC implementation.
  *
  * The token is a bearer credential: anyone holding it can read that customer's
- * rig URL/state. That matches the magic-link model in #458 §4 (the link is the
+ * node URL/state. That matches the magic-link model in #458 §4 (the link is the
  * credential, mailed to the customer's address). It deliberately grants NO
  * write/provision capability — `/status` is read-only, and provisioning is only
  * ever triggered by a signature-verified Stripe webhook (#458 §5).

@@ -16,17 +16,17 @@ describe('HttpDnsClient.upsertARecord (mocked fetch — no real Cloudflare)', ()
       .mockResolvedValueOnce(cfJson({ success: true, result: [] }))
       // create -> created
       .mockResolvedValueOnce(
-        cfJson({ success: true, result: { id: 'rec1', name: 'rig-a.testnet.botho.io', content: '1.2.3.4' } }),
+        cfJson({ success: true, result: { id: 'rec1', name: 'node-a.testnet.botho.io', content: '1.2.3.4' } }),
       )
 
     const client = new HttpDnsClient('token', 'zone1', fetchMock as unknown as typeof fetch)
-    const rec = await client.upsertARecord('rig-a.testnet.botho.io', '1.2.3.4')
+    const rec = await client.upsertARecord('node-a.testnet.botho.io', '1.2.3.4')
     expect(rec.id).toBe('rec1')
 
     const [, createInit] = fetchMock.mock.calls[1] as unknown as [string, RequestInit]
     expect(createInit.method).toBe('POST')
     const payload = JSON.parse(createInit.body as string)
-    expect(payload).toMatchObject({ type: 'A', name: 'rig-a.testnet.botho.io', content: '1.2.3.4' })
+    expect(payload).toMatchObject({ type: 'A', name: 'node-a.testnet.botho.io', content: '1.2.3.4' })
     const headers = createInit.headers as Record<string, string>
     expect(headers.Authorization).toBe('Bearer token')
   })
@@ -35,14 +35,14 @@ describe('HttpDnsClient.upsertARecord (mocked fetch — no real Cloudflare)', ()
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
-        cfJson({ success: true, result: [{ id: 'rec1', name: 'rig-a.testnet.botho.io', content: '9.9.9.9' }] }),
+        cfJson({ success: true, result: [{ id: 'rec1', name: 'node-a.testnet.botho.io', content: '9.9.9.9' }] }),
       )
       .mockResolvedValueOnce(
-        cfJson({ success: true, result: { id: 'rec1', name: 'rig-a.testnet.botho.io', content: '1.2.3.4' } }),
+        cfJson({ success: true, result: { id: 'rec1', name: 'node-a.testnet.botho.io', content: '1.2.3.4' } }),
       )
 
     const client = new HttpDnsClient('token', 'zone1', fetchMock as unknown as typeof fetch)
-    await client.upsertARecord('rig-a.testnet.botho.io', '1.2.3.4')
+    await client.upsertARecord('node-a.testnet.botho.io', '1.2.3.4')
 
     const [updateUrl, updateInit] = fetchMock.mock.calls[1] as unknown as [string, RequestInit]
     expect(updateInit.method).toBe('PUT')
@@ -63,12 +63,12 @@ describe('HttpDnsClient.deleteARecord', () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
-        cfJson({ success: true, result: [{ id: 'rec1', name: 'rig-a.testnet.botho.io', content: '1.2.3.4' }] }),
+        cfJson({ success: true, result: [{ id: 'rec1', name: 'node-a.testnet.botho.io', content: '1.2.3.4' }] }),
       )
       .mockResolvedValueOnce(cfJson({ success: true, result: { id: 'rec1' } }))
 
     const client = new HttpDnsClient('token', 'zone1', fetchMock as unknown as typeof fetch)
-    await client.deleteARecord('rig-a.testnet.botho.io')
+    await client.deleteARecord('node-a.testnet.botho.io')
 
     const [, delInit] = fetchMock.mock.calls[1] as unknown as [string, RequestInit]
     expect(delInit.method).toBe('DELETE')
