@@ -368,19 +368,34 @@ creating net deflation.
 \toprule
 \textbf{Wealth Distribution} & \textbf{Daily Fees} & \textbf{Redistributed} & \textbf{Burned} \\
 \midrule
-Equal (factor 1.0) & 16 BTH & 12.8 BTH & 3.2 BTH \\
-Current inequality & 48 BTH & 38.4 BTH & 9.6 BTH \\
-High inequality & 96 BTH & 76.8 BTH & 19.2 BTH \\
+Equal (factor 1.0) & 16 mBTH & 12.8 mBTH & 3.2 mBTH \\
+Current inequality & 48 mBTH & 38.4 mBTH & 9.6 mBTH \\
+High inequality & 96 mBTH & 76.8 mBTH & 19.2 mBTH \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\textbf{Assumptions}: 1M transactions/day, each paying an average all-in fee
-of $\approx$16 $\mu$BTH in the factor-1 row (a 4 KB transaction well above the
-1\,pico-BTH/byte congestion floor, reflecting typical paid fees rather than
-the bare minimum); the daily-fee column scales with the mean cluster factor
-of each wealth distribution. These are illustrative flow magnitudes, not
-minimum-fee quotes.
+\textbf{Assumptions and derivation}: the per-transaction figure is the
+congestion-floor consensus minimum for a standard transfer, computed directly
+from the fee formula (\texttt{minimum\_fee\_dynamic\_with\_outputs},
+\texttt{botho/src/ledger/store.rs}). Take a 4 KB transaction
+($\text{size} = 4{,}000$ bytes) with 2 outputs (payment + change) from a
+factor-1 cluster, at the congestion floor $b = 1$\,pico-BTH/byte:
+\begin{equation}
+f_{\text{tx}} = \underbrace{b}_{1} \times \underbrace{\text{size}}_{4{,}000}
+  \times \underbrace{\text{cluster\_factor}}_{1.0}
+  \times \underbrace{\text{output\_penalty}}_{2^{2} = 4}
+  = 16{,}000 \text{ pico-BTH} = 1.6\times10^{-8}\,\text{BTH},
+\end{equation}
+i.e.\ 16\,nano-BTH per transaction (the 2-output superlinear penalty
+$\min(2,10)^2 = 4$ is part of the enforced minimum). Over 1M
+transactions/day the factor-1 aggregate is
+$10^{6}\times16{,}000\text{ pico-BTH} = 1.6\times10^{10}\text{ pico-BTH}
+ = 1.6\times10^{-2}\,\text{BTH} = 16\,\text{mBTH}$. The remaining rows scale
+the aggregate by each distribution's mean cluster factor ($\approx3\times$ and
+$\approx6\times$, within the 1--6 range). These are floor-level flow
+magnitudes; a rising dynamic base (up to the $100\times$ clamp) or larger,
+multi-output transactions raise them proportionally.
 
 \subsection{Minter Incentives}
 
