@@ -318,7 +318,7 @@ fee = fee_per_byte × tx_size × cluster_factor
 | Type | Ring Size | Signature Size | Typical Total Size | Fee (1x cluster) | Fee (6x cluster) |
 |------|-----------|----------------|-------------------|------------------|------------------|
 | Minting | — | ~3.3 KB (ML-DSA) | ~1.5 KB | 0 | 0 |
-| Private | 20 | ~0.7 KB (CLSAG) | ~4 KB | ~4,000 nanoBTH | ~24,000 nanoBTH |
+| Private | 20 | ~0.7 KB (CLSAG) | ~4 KB | ~4,000 picocredits | ~24,000 picocredits |
 
 ### Transaction Limits
 

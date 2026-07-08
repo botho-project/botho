@@ -81,7 +81,7 @@ fee = fee_per_byte × tx_size × cluster_factor(sender_wealth)
 
 | Component | Description |
 |-----------|-------------|
-| `fee_per_byte` | Base rate (default: 1 nanoBTH/byte) |
+| `fee_per_byte` | Base rate (default: 1 picocredit/byte) |
 | `tx_size` | Transaction size in bytes |
 | `cluster_factor` | 1x-6x based on sender's cluster wealth |
 
@@ -115,11 +115,11 @@ let config = FeeConfig::default();
 
 // Small holder: pays base fee
 let fee = config.compute_fee(TransactionType::Hidden, 2000, 1_000, 0);
-// ≈ 2000 nanoBTH
+// ≈ 2000 picocredits
 
 // Large holder: pays 6x premium
 let fee = config.compute_fee(TransactionType::Hidden, 2000, 100_000_000, 0);
-// ≈ 12000 nanoBTH
+// ≈ 12000 picocredits
 ```
 
 ## Fee Distribution: Lottery + Burn
@@ -255,8 +255,8 @@ For detailed analysis and rationale:
 use bth_cluster_tax::{FeeConfig, ClusterFactorCurve};
 
 let config = FeeConfig {
-    fee_per_byte: 1,              // 1 nanoBTH per byte
-    fee_per_memo: 100,            // 100 nanoBTH per memo
+    fee_per_byte: 1,              // 1 picocredit per byte
+    fee_per_memo: 100,            // 100 picocredits per memo
     cluster_curve: ClusterFactorCurve {
         factor_min: 100,          // 1.00x minimum
         factor_max: 600,          // 6.00x maximum

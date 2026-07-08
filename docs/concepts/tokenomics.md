@@ -7,8 +7,8 @@ Botho (BTH) uses a two-phase emission model designed for long-term sustainabilit
 | Parameter | Value |
 |-----------|-------|
 | Token symbol | BTH |
-| Internal precision | picocredits (10⁻¹² BTH) |
-| Display unit | nanoBTH (10⁻⁹ BTH) |
+| Base unit | picocredits (10⁻¹² BTH) |
+| Display unit | BTH (formatted from picocredits at the UI edge) |
 | Pre-mine | None (100% mined) |
 | Phase 1 supply | ~611 million BTH (~5 years of halvings) |
 | Block time | 5-40 seconds (dynamic based on load); 5s baseline for monetary calculations |
@@ -16,37 +16,21 @@ Botho (BTH) uses a two-phase emission model designed for long-term sustainabilit
 
 ## Unit System
 
-BTH uses a **two-tier precision system** for optimal balance between accuracy and usability:
-
-### Internal Precision (12 decimals)
-
-Transaction amounts use picocredits for maximum accounting precision:
+BTH uses a **single base unit** — the **picocredit** (10⁻¹² BTH). Every amount in
+the protocol (transaction values, fees, emission, and monetary policy) is
+denominated in picocredits. Amounts are formatted into BTH, or convenient
+multiples like milliBTH and microBTH, only at the user-interface edge.
 
 | Unit | Picocredits | BTH |
 |------|-------------|-----|
 | 1 picocredit | 1 | 0.000000000001 |
-| 1 nanoBTH | 1,000 | 0.000000001 |
 | 1 microBTH (µBTH) | 1,000,000 | 0.000001 |
 | 1 milliBTH (mBTH) | 1,000,000,000 | 0.001 |
 | 1 BTH | 1,000,000,000,000 | 1 |
 
-### Display Precision (9 decimals)
-
-User interfaces and fee calculations use nanoBTH for manageable numbers:
-
-| Unit | nanoBTH | BTH |
-|------|---------|-----|
-| 1 nanoBTH | 1 | 0.000000001 |
-| 1 microBTH (µBTH) | 1,000 | 0.000001 |
-| 1 milliBTH (mBTH) | 1,000,000 | 0.001 |
-| 1 BTH | 1,000,000,000 | 1 |
-
-### Why Two Tiers?
-
-- **Picocredits (10¹²)**: Used by bridge contracts, transaction amounts, and internal accounting. Provides sub-nanoBTH precision for exact calculations.
-- **NanoBTH (10⁹)**: Used for supply tracking, fee calculations, and user display. Fits in u64 for 100M+ BTH totals.
-
-**Conversion**: 1 nanoBTH = 1,000 picocredits
+Picocredits provide 12 decimals of precision. Aggregate supply exceeds u64 when
+expressed in picocredits (100M BTH = 10²⁰ picocredits), so supply totals are
+tracked in **u128**; individual transaction amounts fit comfortably in u64.
 
 ## Emission Schedule
 
@@ -115,10 +99,10 @@ fee = dynamic_base × tx_size × cluster_factor + memo_fees
 
 | Component | Range | Description |
 |-----------|-------|-------------|
-| `dynamic_base` | 1-100 nanoBTH/byte | Adjusts based on network congestion |
+| `dynamic_base` | 1-100 picocredits/byte | Adjusts based on network congestion |
 | `tx_size` | ~4-65 KB | Transaction size in bytes |
 | `cluster_factor` | 1x-6x | Progressive multiplier based on sender's cluster wealth |
-| `memo_fees` | 100 nanoBTH/memo | Additional fee for encrypted memos |
+| `memo_fees` | 100 picocredits/memo | Additional fee for encrypted memos |
 
 #### Fee Destination: Redistribution Lottery + Burn (80/20)
 
@@ -139,7 +123,7 @@ Fees are proportional to transaction size, ensuring larger transactions pay more
 
 | Type | Ring Size | Typical Size | Base Fee (1x cluster) |
 |------|-----------|--------------|----------------------|
-| Private (CLSAG) | 20 | ~4 KB | ~4,000 nanoBTH |
+| Private (CLSAG) | 20 | ~4 KB | ~4,000 picocredits |
 | Minting | — | ~1.5 KB | 0 (no fee) |
 
 ### Dynamic Congestion Pricing
@@ -318,10 +302,10 @@ This ensures:
 
 ### Overflow Safety
 
-- Phase 1 completion (~year 5): ~611M BTH = ~6.11 × 10¹⁷ nanoBTH
-- Maximum representable (u64): ~1.84 × 10¹⁹ nanoBTH
-- Growth capacity: ~30× tail-onset supply
-- At 2% annual inflation: **~170 years before overflow** (internal accounting uses picocredits in u128, so this u64 nanoBTH headroom is a display-tier bound, not a hard limit)
+- Phase 1 completion (~year 5): ~611M BTH = ~6.11 × 10²⁰ picocredits
+- Maximum representable (u128): ~3.4 × 10³⁸ picocredits
+- Growth capacity: ~18 orders of magnitude above tail-onset supply
+- At 2% annual inflation: **no practical overflow risk** — all monetary accounting uses picocredits in u128, which retains ~16 orders of magnitude of headroom above the entire projected supply
 
 ## Economic Design Philosophy
 

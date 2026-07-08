@@ -242,9 +242,9 @@ Get blockchain information including supply metrics.
 | `height` | integer | Current block height |
 | `tipHash` | string | Hash of the latest block (hex) |
 | `difficulty` | integer | Current mining difficulty |
-| `totalMined` | integer | Gross emission (all BTH ever minted), in nanoBTH |
-| `totalFeesBurned` | integer | Cumulative transaction fees burned, in nanoBTH |
-| `circulatingSupply` | integer | Net supply (totalMined - totalFeesBurned), in nanoBTH |
+| `totalMined` | integer | Gross emission (all BTH ever minted), in picocredits |
+| `totalFeesBurned` | integer | Cumulative transaction fees burned, in picocredits |
+| `circulatingSupply` | integer | Net supply (totalMined - totalFeesBurned), in picocredits |
 | `mempoolSize` | integer | Pending transaction count |
 | `mempoolFees` | integer | Total fees in mempool |
 
@@ -267,11 +267,11 @@ Get circulating supply information. Useful for exchanges and block explorers to 
 | Field | Type | Description |
 |-------|------|-------------|
 | `height` | integer | Current block height |
-| `totalMined` | integer | Gross emission (all BTH ever minted), in nanoBTH |
-| `totalFeesBurned` | integer | Cumulative transaction fees burned, in nanoBTH |
-| `circulatingSupply` | integer | Net supply (totalMined - totalFeesBurned), in nanoBTH |
+| `totalMined` | integer | Gross emission (all BTH ever minted), in picocredits |
+| `totalFeesBurned` | integer | Cumulative transaction fees burned, in picocredits |
+| `circulatingSupply` | integer | Net supply (totalMined - totalFeesBurned), in picocredits |
 
-**Note:** All values are in nanoBTH (1 BTH = 1,000,000,000 nanoBTH). Collected transaction fees are split 80% into the cluster-tilted redistribution lottery and 20% burned; only the burned 20% (`totalFeesBurned`) is removed from circulation, which is why circulating supply = totalMined - totalFeesBurned.
+**Note:** All values are in picocredits (1 BTH = 1,000,000,000,000 picocredits). Collected transaction fees are split 80% into the cluster-tilted redistribution lottery and 20% burned; only the burned 20% (`totalFeesBurned`) is removed from circulation, which is why circulating supply = totalMined - totalFeesBurned.
 
 **Example:**
 ```bash
@@ -421,7 +421,7 @@ Estimate the transaction fee.
 **Parameters:**
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `amount` | integer | No | 0 | Transaction amount in nanoBTH |
+| `amount` | integer | No | 0 | Transaction amount in picocredits |
 | `private` | boolean | No | true | Whether transaction uses privacy features |
 | `memos` | integer | No | 0 | Number of encrypted memos |
 
@@ -667,7 +667,7 @@ Estimate the additional fee for including an entropy proof in a transaction.
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
 | `cluster_count` | integer | No | 3 | Number of clusters involved (affects proof size) |
-| `amount` | integer | No | 0 | Transaction amount in nanoBTH |
+| `amount` | integer | No | 0 | Transaction amount in picocredits |
 | `cluster_wealth` | integer | No | 0 | Sender's cluster wealth for progressive fee |
 
 **Response:**

@@ -678,6 +678,7 @@ External audit will be commissioned when:
 | Error message leakage | MEDIUM | Generic error messages |
 | Password strength validation | MEDIUM | 8-char minimum enforced |
 | Timing attack in word verification | LOW | Constant-time comparison |
+| Unit naming confusion | MEDIUM | Unified all amounts to a single base unit (picocredits); the former dual-unit tier was removed end-to-end in #694/#712 |
 
 ### Remaining Issues
 
@@ -687,7 +688,6 @@ External audit will be commissioned when:
 | Sync response bandwidth | MEDIUM | `sync.rs` | 600 MB/min theoretical |
 | Cluster wealth tracking disabled | MEDIUM | `mempool.rs:408` | Hardcoded to 0 |
 | Block timing inconsistency | MEDIUM | Multiple | 60s vs 5-40s dynamic |
-| Unit naming confusion | MEDIUM | 62 files | picocredits vs nanoBTH |
 | Unsound glib v0.18.5 | MEDIUM | Tauri/GTK3 | Upstream issue |
 | Deprecated derive_pq_keys() | LOW | `derive.rs:114` | Kept for tests |
 | Version warnings not enforced | LOW | `discovery.rs` | Warns but doesn't disconnect |
