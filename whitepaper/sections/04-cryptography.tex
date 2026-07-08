@@ -71,8 +71,10 @@ independent random points.
 \subsection{Post-Quantum Stealth Addresses}
 \label{sec:pq-stealth}
 
-Traditional CryptoNote stealth addresses use ECDH for key exchange. \Botho
-replaces this with ML-KEM-768 to achieve post-quantum recipient privacy.
+Traditional CryptoNote stealth addresses use ECDH for key
+exchange~\cite{cryptonote,courtois-stealth}, building on the dual-key
+stealth-address construction (DKSAP). \Botho replaces the ECDH step with
+ML-KEM-768 to achieve post-quantum recipient privacy.
 
 \subsubsection{Protocol Description}
 

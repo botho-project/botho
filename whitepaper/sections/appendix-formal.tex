@@ -168,44 +168,67 @@ function apply_transaction(
 
 \subsubsection{Fee Processing}
 
-Fee redistribution follows the 80/20 lottery/burn model:
+Fee redistribution follows the 80/20 lottery/burn model with a cumulative,
+emission-fed pool and a per-block payout cap. The pseudocode below mirrors
+the consensus implementation (\texttt{consensus/lottery.rs},
+\texttt{cluster-tax/lottery.rs}); it is the authoritative specification of
+the draw referenced from Sections~\ref{sec:monetary} and \ref{sec:economics}.
 
-\begin{lstlisting}[caption={Fee processing function}]
+\begin{lstlisting}[caption={Fee processing and lottery draw}]
+const WINNERS_PER_DRAW: usize = 4;
+const MIN_UTXO_AGE:   u64 = 720;         // blocks
+const MIN_UTXO_VALUE: u64 = 1_000_000;   // 1 microBTH, in picocredits
+const MAX_FACTOR: u64 = 6000;            // 6.0x, in FACTOR_SCALE units
+const FACTOR_SCALE: u64 = 1000;          // 1.0x
+
 function process_fees(state: State, block: Block) -> State {
     let total_fees = sum(block.transactions.map(|tx| tx.fee))
-    let lottery_pool = 0.8 * total_fees
-    let burn_amount = 0.2 * total_fees  // Destroyed
+    let (fee_pool, burn) = (80% * total_fees, 20% * total_fees) // burn destroyed
 
-    // Select lottery winners using deterministic randomness
-    let seed = hash(block.prev_hash || block.merkle_root)
-    let num_winners = 5
-    let winners = select_random_utxos(state.utxo_set, seed, num_winners)
+    // Pool is cumulative (u128) and also fed by the block reward's
+    // height-scheduled emission share; payout is capped at one reward.
+    let emission_share = lottery_emission_share(block.height, block.reward)
+    let available: u128 = state.pool_carryover + emission_share + fee_pool
+    let payout: u64 = min(available, block.reward)        // anti-grind cap
 
-    // Distribute lottery pool
-    let per_winner = lottery_pool / num_winners
-    for winner_outpoint in winners {
-        // Create lottery payout transaction
-        let payout = create_lottery_payout(winner_outpoint, per_winner)
-        state = apply_lottery_payout(state, payout)
+    if payout > 0 {
+        let winners = draw_winners(state.utxo_set, payout, block.height,
+                                   block.prev_hash)         // may be empty
+        for w in winners {
+            state = apply_lottery_payout(state, w.outpoint, w.payout)
+        }
+        state.pool_carryover = available - payout          // surplus carries
+    } else {
+        state.pool_carryover = available
     }
-
     state
 }
 
-function select_random_utxos(
-    utxo_set: Set<UTXO>,
-    seed: Hash,
-    count: usize
-) -> Vec<Outpoint> {
-    let utxos: Vec<UTXO> = utxo_set.to_sorted_vec()
-    let mut selected = Vec::new()
+// Verifiable, value-weighted, cluster-tilted selection without replacement.
+function draw_winners(
+    utxos: Set<UTXO>, payout: u64, height: u64, prev_hash: Hash
+) -> Vec<Winner> {
+    let eligible = utxos.filter(|u|
+        height - u.created_height >= MIN_UTXO_AGE && u.value >= MIN_UTXO_VALUE)
+    if eligible.is_empty() { return [] }
 
-    for i in 0..count {
-        let index = hash_to_index(seed, i, utxos.len())
-        selected.push(utxos[index].outpoint)
+    // Seed = committed PREVIOUS block hash + height (no current-block input).
+    let seed = SHA256("LOTTERY_SEED_V1" || prev_hash || height.le_bytes())
+
+    // weight_i = value_i * (MAX_FACTOR - factor_i + FACTOR_SCALE), all integer.
+    // A factor-1.0 coin has 6x the per-value weight of a factor-6.0 coin.
+    let weights = eligible.map(|u|
+        (u, u.value * (MAX_FACTOR - clamp(u.factor) + FACTOR_SCALE)))
+    let total: u128 = sum(weights.values())
+
+    let n = min(WINNERS_PER_DRAW, eligible.len())
+    let per_winner = payout / n
+    let mut winners = []
+    for i in 0..n {
+        let roll = verifiable_random_u128(seed, i) % total   // deterministic
+        winners.push(cumulative_select(weights, roll, exclude=winners))
     }
-
-    selected
+    assign_payouts(winners, per_winner, remainder_to_last=payout - per_winner*n)
 }
 \end{lstlisting}
 

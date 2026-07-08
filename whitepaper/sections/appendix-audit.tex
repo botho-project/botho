@@ -48,8 +48,11 @@ Minting authenticity & ML-DSA-65 & EUF-CMA security of ML-DSA \\
 \begin{enumerate}
   \item \textbf{Sybil resistance}: Splitting wealth does not reduce total fees
     (Theorem~\ref{thm:sybil-resistance})
-  \item \textbf{Lottery fairness}: UTXO selection is uniformly random and
-    unpredictable
+  \item \textbf{Lottery fairness}: Winner selection is value-weighted and
+    cluster-tilted (weight $\propto v_i(\phi_{\max}-\phi_i+1)$), verifiable,
+    and grind-resistant --- seeded from the committed previous block hash and
+    height, with the per-block payout capped at one block reward
+    (Appendix~\ref{appendix:formal})
   \item \textbf{Inflation bounds}: Supply growth follows the emission schedule
     exactly
 \end{enumerate}
@@ -128,27 +131,31 @@ The following components require thorough review:
 
 \subsubsection{Test Vectors}
 
-Auditors should verify the following test vectors:
+Auditors should verify the following test vectors. The hex digests below are
+truncated and \emph{illustrative only}; the full byte-exact vectors are
+published with the reference test suite.
 
-\begin{lstlisting}[caption={Key derivation test vector}]
+\begin{lstlisting}[caption={Key derivation test vector (illustrative)}]
 Mnemonic: "abandon abandon ... about" (standard 24-word)
-Expected view key (hex): 0x7b3a...
-Expected spend key (hex): 0x4c1f...
+Expected view key (hex): 0x7b3a...   (illustrative)
+Expected spend key (hex): 0x4c1f...  (illustrative)
 Expected ML-KEM public key (first 32 bytes): 0x9d2e...
 \end{lstlisting}
 
-\begin{lstlisting}[caption={Ring signature test vector}]
+\begin{lstlisting}[caption={Ring signature test vector (illustrative)}]
 Message: 0x0000...0000 (32 zero bytes)
 Ring size: 20
 Real index: 7
-Expected key image (hex): 0x5f8c...
+Expected key image (hex): 0x5f8c...  (illustrative)
 Signature must verify: true
 \end{lstlisting}
 
-\begin{lstlisting}[caption={Cluster factor test vector}]
-Cluster wealth: 1,000,000 BTH
-Steepness parameter: 100,000
-Expected factor: 5.5x
+\begin{lstlisting}[caption={Cluster factor test vector (log-domain curve)}]
+Curve: log-domain sigmoid, range 1.0x..6.0x
+Midpoint w_mid: 100,000 BTH  -> factor 3.5x  (exact anchor)
+Log-width:      2.0 octaves per sigmoid unit
+Effective wealth: 1,000,000 BTH (~3.32 octaves above midpoint)
+Expected factor: ~5.2x
 \end{lstlisting}
 
 \subsection{Known Limitations}

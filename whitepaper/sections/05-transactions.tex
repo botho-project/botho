@@ -166,48 +166,75 @@ However, decay only applies when UTXOs meet an age threshold:
 \end{cases}
 \end{equation}
 
-where $T_{\min} = 720$ blocks ($\approx$ 2 hours at 10s blocks).
+where $T_{\min} = 720$ blocks ($\approx$ 1 hour at the 5\,s reference block
+time, and correspondingly longer when the network runs slower).
 
-\textbf{Wash Trading Resistance}: Since new outputs must wait before decay
-applies, rapid self-transfers achieve no decay:
+\textbf{Wash Trading Resistance}: Since new outputs must wait $T_{\min}$
+before decay applies again, the binding constraint is age, not transaction
+count: at the 5\,s reference a holder can trigger at most one decay event per
+hour (24/day), so rapid self-transfers achieve no decay.
 
 \begin{table}[h]
 \centering
-\caption{Tag decay limits}
+\caption{Tag decay limits (at the 5\,s reference; $\times$0.95 per event, one
+event per 720 blocks)}
 \label{tab:decay-limits}
 \begin{tabular}{@{}lcc@{}}
 \toprule
-\textbf{Attack} & \textbf{Transactions} & \textbf{Maximum Decay} \\
+\textbf{Attack} & \textbf{Decay Events} & \textbf{Maximum Decay} \\
 \midrule
-Rapid wash (1 minute) & 100 & 0\% \\
-Patient wash (1 day) & 1000 & 46\% \\
-Patient wash (1 week) & 7000 & 97\% \\
+Rapid wash (1 minute) & 0 & 0\% \\
+Patient wash (1 day) & 24 & 71\% \\
+Patient wash (1 week) & 168 & $\approx$100\% \\
 \bottomrule
 \end{tabular}
 \end{table}
 
+\subsubsection{Cluster Wealth Accumulation}
+\label{sec:cluster-wealth}
+
+Although each minting event creates a fresh, per-block cluster id
+(Equation, Section~\ref{sec:cluster-tags}), a cluster's \emph{wealth} is not
+one block reward: it is the cumulative tagged value that lineage controls
+across the entire UTXO set. Formally, the wealth of cluster $c$ is
+\begin{equation}
+W_c = \sum_{U \in \mathcal{U}} v(U)\, w_c(U),
+\end{equation}
+the value-weighted sum of every UTXO's attribution to $c$. As coins minted in
+that lineage circulate and blend, $W_c$ accumulates through tag inheritance
+and can grow to hundreds of thousands of BTH --- far above a single 50 BTH
+reward. The ledger tracks $W_c$ as a cumulative \texttt{u128} per cluster.
+
 \subsubsection{Cluster Factor Calculation}
 
-The cluster factor is derived from the dominant cluster's total minted wealth:
-
+A UTXO's scalar cluster factor is obtained by (i) collapsing its tag vector
+to an \emph{effective wealth}, the tag-weighted sum of the constituent
+clusters' wealths,
 \begin{equation}
-\text{cluster\_factor} = 1 + 5 \cdot \sigma\left(\frac{W_{\max}}{\text{steepness}}\right)
+W_{\text{eff}}(U) = \sum_{c} w_c(U)\, W_c,
 \end{equation}
-
-where $W_{\max}$ is the total BTH ever minted by the dominant cluster and
-$\sigma(x) = x/(1+x)$ is a sigmoid function.
+and (ii) mapping that wealth through a \emph{log-domain} sigmoid that rises
+across orders of magnitude of wealth:
+\begin{equation}
+\phi(U) = 1 + 5\,\sigma\!\left(\frac{\log_2 W_{\text{eff}}(U) - \log_2 W_{\text{mid}}}{\omega}\right),
+\end{equation}
+where $\sigma$ is the logistic function, $W_{\text{mid}} = 100{,}000$ BTH is
+the midpoint (a cluster at the midpoint sits at exactly $3.5\times$), and
+$\omega = 2.0$ octaves per sigmoid unit sets the width. The factor is clamped
+to $[1\times, 6\times]$. Diffuse, low-wealth attribution dilutes
+$W_{\text{eff}}$ toward zero, so genuinely small holders sit at $1\times$.
 
 \begin{table}[h]
 \centering
-\caption{Progressive fee multipliers}
+\caption{Progressive fee multipliers (log-domain curve, $W_{\text{mid}}=100$k BTH)}
 \label{tab:fee-multipliers}
 \begin{tabular}{@{}lc@{}}
 \toprule
-\textbf{Cluster Wealth Percentile} & \textbf{Fee Multiplier} \\
+\textbf{Effective Cluster Wealth} & \textbf{Fee Multiplier} \\
 \midrule
-Bottom 50\% & 1.0$\times$ -- 1.5$\times$ \\
-50th -- 90th & 1.5$\times$ -- 3.0$\times$ \\
-Top 10\% & 3.0$\times$ -- 6.0$\times$ \\
+$\leq$1{,}000 BTH & $\approx$1.0$\times$ \\
+$\sim$100{,}000 BTH (midpoint) & 3.5$\times$ \\
+$\gtrsim$1{,}000{,}000 BTH & $\approx$5.2$\times$ -- 6.0$\times$ \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -238,8 +265,9 @@ The cluster tag system resists common attacks:
     inherit the parent's cluster attribution unchanged.
   \item \textbf{Creating multiple addresses}: All outputs from the same
     cluster share the same factor.
-  \item \textbf{Wash trading}: Age-based gating limits decay to $\sim$12
-    events per day maximum.
+  \item \textbf{Wash trading}: Age-based gating limits decay to $\sim$24
+    events per day maximum (at the 5\,s reference; fewer when blocks are
+    slower).
   \item \textbf{Mixing through exchanges}: Reduces cluster concentration
     over time, but requires actual economic activity (legitimate use case).
 \end{itemize}

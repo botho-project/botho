@@ -339,15 +339,19 @@ insufficient, security may degrade.
 
 \subsubsection{Tail Emission}
 
-Monero's perpetual tail emission ($\sim$0.6 XMR per block indefinitely)
-ensures permanent miner incentive. This trades absolute scarcity for
-security sustainability---a tradeoff \Botho embraces.
+Monero's perpetual tail emission ($\sim$0.6 XMR per block
+indefinitely~\cite{monero}) ensures permanent miner incentive. This trades
+absolute scarcity for security sustainability---a tradeoff \Botho embraces.
 
 \subsubsection{Demurrage}
 
-Demurrage currencies~\cite{gesell} (Freigeld, Chiemgauer) impose holding costs through
-time-based value decay. While economically interesting, cryptographic
-implementation is challenging and user experience suffers.
+Demurrage currencies~\cite{gesell} (Freigeld, Chiemgauer) impose holding costs
+through time-based value decay. Classical demurrage taxes \emph{all} holdings
+uniformly, which harms ordinary users and complicates the user experience.
+\Botho instead applies demurrage \emph{selectively}: the stock-level fee-floor
+term scales with a coin's cluster factor (Section~\ref{sec:cluster-tags}), so
+idle high-concentration wealth carries a holding cost while ordinary
+factor-1 balances are exempt.
 
 \subsubsection{Novel: Progressive Fees}
 
@@ -360,5 +364,6 @@ mechanism that:
   \item Preserves privacy (no identity required)
 \end{itemize}
 
-Combined with fee burning, this creates economic pressure toward
-circulation without explicit demurrage.
+Combined with fee burning and the cluster-scaled demurrage term above, this
+creates economic pressure toward circulation while sparing ordinary holders
+the uniform holding cost of classical demurrage.

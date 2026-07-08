@@ -50,8 +50,8 @@ amount correlation, decoy age distribution biases).}
 \textbf{Why not Monero's 11?}
 \begin{itemize}
   \item Research shows Monero's effective anonymity is lower than nominal
-  \item Chain analysis companies report success rates suggesting $<$5
-    effective ring members
+  \item Empirical traceability studies report success rates suggesting $<$5
+    effective ring members for Monero-style rings~\cite{monerotracing}
   \item Botho's 20 provides meaningful improvement with acceptable overhead
 \end{itemize}
 
@@ -83,9 +83,10 @@ permanent on-chain data.
 
 \subsection{Consensus Parameters}
 
-\subsubsection{Block Time: 5--40 Seconds (Dynamic)}
+\subsubsection{Block Time: 3--40 Seconds (Dynamic)}
 
-Block time varies based on network utilization.
+Block time is selected from five discrete load levels
+(Section~\ref{sec:dynamic-timing}); it is not fixed.
 
 \begin{table}[h]
 \centering
@@ -95,9 +96,9 @@ Block time varies based on network utilization.
 \toprule
 \textbf{Bound} & \textbf{Value} & \textbf{Constraint} \\
 \midrule
-Minimum & 5 seconds & SCP convergence time ($\sim$3--4s) \\
-Target (low util) & 40 seconds & User experience, emission rate \\
-Target (high util) & 5 seconds & Throughput during demand \\
+Consensus floor & 3 seconds & Minimum SCP externalization time \\
+Idle ceiling & 40 seconds & User experience, emission rate \\
+Monetary reference & 5 seconds & Sustained-high-load level \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -146,7 +147,7 @@ Target (high util) & 5 seconds & Throughput during demand \\
 
 \textbf{Why 144?}
 \begin{itemize}
-  \item At 10-second average, represents $\sim$24 minutes
+  \item At the 5\,s reference block time, represents $\sim$12 minutes
   \item Long enough to smooth variance in block times
   \item Short enough to respond to hashrate changes
   \item Same philosophy as Bitcoin's 2016-block window scaled to block time
@@ -255,10 +256,14 @@ N_{\text{year}}$ with $\beta_{\text{net}} = 2\%$, $\beta_{\text{burn}} = 0.5\%$
 
 \subsubsection{Progressive Fee Multiplier: 1$\times$ to 6$\times$}
 
-\textbf{Sigmoid steepness parameter}:
+\textbf{Log-domain sigmoid} (see Section~\ref{sec:cluster-wealth}):
 \[
-\text{factor} = 1 + 5 \cdot \sigma\left(\frac{W}{\text{steepness}}\right)
+\text{factor} = 1 + 5 \cdot \sigma\!\left(\frac{\log_2 W_{\text{eff}} - \log_2 W_{\text{mid}}}{\omega}\right),
+\quad W_{\text{mid}} = 100{,}000\text{ BTH},\ \omega = 2.0.
 \]
+The curve rises across \emph{orders of magnitude} of effective cluster wealth
+rather than linearly, so a factor-1 floor covers the vast majority of holders
+and the midpoint ($3.5\times$) sits at 100k BTH.
 
 \textbf{Why maximum 6$\times$?}
 \begin{itemize}
@@ -279,15 +284,19 @@ N_{\text{year}}$ with $\beta_{\text{net}} = 2\%$, $\beta_{\text{burn}} = 0.5\%$
 \textbf{Decay rate 0.95}:
 \begin{itemize}
   \item Half-life: $\ln(0.5) / \ln(0.95) \approx 13.5$ decay events
-  \item At maximum 1 decay per 720 blocks ($\sim$2 hours): 27 hours half-life
+  \item At maximum 1 decay per 720 blocks ($\sim$1 hour at the 5\,s
+    reference): $\approx$13.5 hours half-life
   \item Encourages circulation without rapid tag elimination
 \end{itemize}
 
 \textbf{Minimum age 720 blocks}:
 \begin{itemize}
-  \item At 10-second blocks: $\sim$2 hours
+  \item $\sim$1 hour at the 5\,s reference block time (longer when blocks are
+    slower under the dynamic schedule)
   \item Prevents rapid wash trading from bypassing progressive fees
-  \item Patient wash trading (1 week) achieves only 97\% decay
+  \item Patient wash trading over one week ($\sim$168 decay events) approaches
+    100\% decay; the binding cost is the enforced inter-decay age, not the
+    number of transactions
   \item Creates meaningful time cost for fee evasion
 \end{itemize}
 
@@ -340,7 +349,7 @@ N_{\text{year}}$ with $\beta_{\text{net}} = 2\%$, $\beta_{\text{burn}} = 0.5\%$
 \midrule
 Ring size & 20 & Crypto & Soft fork \\
 ML-KEM level & 768 & Crypto & Hard fork \\
-Block time & 5--40s & Consensus & Soft fork \\
+Block time & 3--40s (dynamic) & Consensus & Soft fork \\
 Quorum threshold & 3/4, 2/3 & Consensus & Hard fork \\
 Initial reward & 50 BTH & Economic & Genesis \\
 Halving period & 6,307,200 blocks & Economic & Hard fork \\
