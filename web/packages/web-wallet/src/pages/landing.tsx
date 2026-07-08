@@ -61,7 +61,7 @@ export function LandingPage() {
             </Link>
             <Link to="/rig" className="text-ghost hover:text-light transition-colors flex items-center gap-2">
               <Server size={18} />
-              Get a Rig
+              Host a Node
             </Link>
             <a
               href="/botho-whitepaper.pdf"
@@ -121,7 +121,7 @@ export function LandingPage() {
                 className="flex items-center gap-2 px-4 py-3 rounded-lg text-ghost hover:text-light hover:bg-steel/50 transition-colors"
               >
                 <Server size={18} />
-                Get a Rig
+                Host a Node
               </Link>
               <a
                 href="/botho-whitepaper.pdf"
@@ -248,7 +248,7 @@ export function LandingPage() {
             <Link to="/rig" className="w-full sm:w-auto">
               <Button variant="secondary" size="lg" className="w-full sm:w-auto justify-center">
                 <Server className="mr-2" size={18} />
-                Get a Rig
+                Host a Node
               </Button>
             </Link>
           </div>
