@@ -285,10 +285,16 @@ factor 1$\times$), 30 mid holders (25\%, 2$\times$), 9 honest whales (65\%,
 The operating point routes 2.5\%/yr of supply from tail emission into the
 lottery pool and applies 2\%/yr demurrage at factor 6, with the split-invariant
 6:1 payout tilt. Design criterion: $\Delta G > 0.05$ versus the
-no-redistribution baseline. Runs are deterministic given an RNG seed;
-the figures below use the default seed \texttt{2953379877} and are
-reproducible via \texttt{cluster-tax-sim lottery-experiment} (a multi-seed
-confidence interval is future work; see below).
+no-redistribution baseline. Runs are deterministic given an RNG seed (the
+simulation forks a \texttt{ChaCha20} stream over order-stable
+\texttt{BTreeMap} state, so a seed fixes the run byte-for-byte). To show the
+headline result is not an artefact of one lucky draw, the winning mechanism
+was re-run across an eight-seed set --- \texttt{\{2953379877, 626626626, 1,
+42, 12345, 271828183, 314159265, 161803398\}} --- and the bold row below
+reports the \emph{mean $\pm$ 95\% confidence interval} (Student-$t$, $n=8$) of
+the five-year $\Delta G$ against the no-redistribution baseline. Each seed is
+reproducible via \texttt{cluster-tax-sim lottery-experiment -{}-blocks 7884000
+-{}-seed <seed>}; the other (comparison-only) rows use the first seed.
 
 \textbf{These levers are part of the specified protocol}, not analysis-only
 add-ons. Emission-routing is the height-scheduled emission share paid into the
@@ -300,17 +306,20 @@ at a representative operating point.
 
 \begin{table}[h]
 \centering
-\caption{Five-year Gini change vs.\ baseline, honest and gamed}
+\caption{Five-year $\Delta G$ vs.\ the no-redistribution baseline, honest and
+gamed. The bold winning row's honest figure is the mean $\pm$ 95\% CI over the
+eight-seed set ($n=8$; $1\sigma = 0.0003$); every other cell is the
+first-seed ($\mathtt{2953379877}$) value.}
 \label{tab:gini-experiment}
 \begin{tabular}{@{}lcc@{}}
 \toprule
 \textbf{Payout mechanism} & \textbf{Honest} & \textbf{Gamed} \\
 \midrule
-Uniform per UTXO + emission & $+0.177$ & $\mathbf{-0.026}$ \\
+Uniform per UTXO + emission & $+0.176$ & $\mathbf{-0.026}$ \\
 Value-weighted + emission & $-0.001$ & $-0.001$ \\
 Cluster demurrage only & $+0.008$ & $+0.009$ \\
 Cluster-tilted + emission & $+0.054$ & $+0.055$ \\
-\textbf{Cluster-tilted + emission + demurrage} & $\mathbf{+0.078}$ & robust \\
+\textbf{Cluster-tilted + emission + demurrage} & $\mathbf{+0.078 \pm 0.0002}$ & $+0.076$ \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -351,8 +360,14 @@ genuine commerce (tag decay is rate-bounded; see
 Section~\ref{sec:security}).
 
 \textbf{Magnitude and headroom}. At the conservative parameters above, the
-combined mechanism reduces Gini by $\approx 0.08$ per five years in the
-adversarial equilibrium ($0.77 \to 0.68$), passing the design criterion.
+combined mechanism reduces the Gini coefficient by $0.078 \pm 0.0002$ per five
+years ($\Delta G$ vs.\ the no-redistribution baseline; mean $\pm$ 95\% CI over
+the eight seeds), and by $\approx 0.097$ in absolute terms ($0.77 \to 0.68$).
+The strategic-whale (split-and-churn) attack does not degrade this ---
+the gamed run reduces $\Delta G$ by $0.076$ while the attacker's own share
+falls from 5\% to 3.4\% of supply. Every seed clears the $\Delta G > 0.05$
+design criterion by better than a $50\%$ margin, and the eight-seed spread is
+negligible ($1\sigma = 0.0003$): the result is not sensitive to the RNG seed.
 All three levers have headroom --- steeper (quadratic) tilt, higher
 demurrage, larger emission fraction --- with quantified costs in payout
 privacy, holding ergonomics, and miner security budget respectively. The
