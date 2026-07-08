@@ -10,8 +10,8 @@
     "build:all": "pnpm build:wasm && pnpm build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "deploy": "pnpm build && wrangler pages deploy dist --project-name=botho-wallet",
-    "deploy:all": "pnpm build:all && wrangler pages deploy dist --project-name=botho-wallet"
+    "deploy": "pnpm build && wrangler pages deploy dist --project-name=botho",
+    "deploy:all": "pnpm build:all && wrangler pages deploy dist --project-name=botho"
   },
   "dependencies": {
     "@botho/adapters": "workspace:*",
