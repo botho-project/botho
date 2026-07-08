@@ -59,7 +59,7 @@ redistributed via lottery, 20\% burned. \\
 \midrule
 Ring size & 20 & Sender hidden among 20 possibilities \\
 Transaction size & $\sim$4 KB & Practical for mobile wallets \\
-Block time & 5--40s & Dynamic based on network load \\
+Block time & 3--40s & Dynamic based on load (5s monetary reference) \\
 Finality & $\sim$5s & Deterministic (not probabilistic) \\
 Tail emission & 2\% net/yr & Supply-dependent ($\sim$1.94 BTH/block at 611M) \\
 \bottomrule
@@ -96,9 +96,10 @@ coin \emph{ancestry}, not current ownership---preserves privacy.
 
 \textbf{Fee distribution}:
 \begin{itemize}
-\item 80\% redistributed via cluster-tilted lottery: winner weight is UTXO
-  value scaled by inverse cluster factor, so payouts favor coins from
-  low-wealth clusters while remaining immune to splitting strategies
+\item 80\% redistributed via a cluster-tilted lottery to 4 winning UTXOs per
+  block: winner weight is UTXO value scaled by inverse cluster factor, so
+  payouts favor coins from low-wealth clusters while remaining immune to
+  splitting strategies
 \item 20\% burned (creates deflationary pressure proportional to usage)
 \end{itemize}
 
@@ -139,7 +140,7 @@ Fair distribution & Yes & No & No & No \\
 \section*{Resources}
 
 \begin{itemize}
-\item \textbf{Full whitepaper}: \texttt{botho-whitepaper.pdf} (127 pages)
+\item \textbf{Full whitepaper}: \texttt{botho-whitepaper.pdf} (129 pages)
 \item \textbf{Website}: \url{https://botho.org}
 \item \textbf{Source code}: \url{https://github.com/botho/botho}
 \end{itemize}
