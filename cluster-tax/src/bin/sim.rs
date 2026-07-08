@@ -3970,8 +3970,7 @@ mod cli {
             // Seed every scenario from the same base seed: the whole run is
             // reproducible, and sharing the RNG stream across scenarios is a
             // common-random-numbers variance reduction for the "vs A" deltas.
-            let mut sim =
-                LotterySimulation::new_seeded(config, FeeCurve::default_params(), seed);
+            let mut sim = LotterySimulation::new_seeded(config, FeeCurve::default_params(), seed);
 
             let mut poor_ids = Vec::new();
             for _ in 0..80 {
