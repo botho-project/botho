@@ -4,19 +4,19 @@
  * MVP surface:
  *   - POST /checkout  create a Stripe Checkout Session (subscription, $50/mo)  (P7.1)
  *   - POST /webhook   Stripe signature verify -> provision/deprovision         (P7.2 / #506)
- *   - GET  /status    authenticated user looks up their rig (URL + state +
+ *   - GET  /status    authenticated user looks up their node (URL + state +
  *                     live health) via a magic-link token                      (P6.3)
  *   - POST /portal    open a Stripe Customer Portal session (manage/cancel)    (P6.3)
  *   - GET  /healthz   liveness probe
  *
  * The provisioner core (#502) lives in `provisioner.ts` and is exposed as a
- * function — `provisionRig` / `teardownRig` — that the Stripe webhook (#506)
+ * function — `provisionNode` / `teardownNode` — that the Stripe webhook (#506)
  * calls. There is deliberately NO public `/provision` route: only the
  * signature-verified webhook may trigger a launch (#458 §5).
  *
  * `/status` is read-only and authz-scoped: the customer id always comes from a
  * *verified* magic-link token (`status-link.ts`), and the D1 lookup is keyed on
- * that id, so a user can only ever see their own rig (#458 §4, §5).
+ * that id, so a user can only ever see their own node (#458 §4, §5).
  *
  * All secrets (Stripe key, AWS creds, CF DNS token, status-link secret) come
  * from Worker secrets / vars — never the repo. See `wrangler.toml` and
@@ -42,7 +42,7 @@ import {
   lookupStatusForCustomer,
   StripePortalError,
 } from './status'
-import { D1RigStore, type D1Like } from './rig-store'
+import { D1NodeStore, type D1Like } from './node-store'
 import { reconcileOnce } from './reconcile'
 import {
   missingReconcileEnv,
@@ -53,9 +53,9 @@ import {
 // Re-export the provisioner surface so the webhook (and any future consumer) can
 // import everything from the package entry without reaching into modules.
 export {
-  provisionRig,
-  teardownRig,
-  deriveRigId,
+  provisionNode,
+  teardownNode,
+  deriveNodeId,
   type ProvisionRequest,
   type ProvisionOutcome,
   type ProvisionerDeps,
@@ -91,7 +91,7 @@ export {
   createPortalSession,
   buildWalletDeepLink,
   type StatusResponse,
-  type RigHealth,
+  type NodeHealth,
 } from './status'
 
 /** Env keys used only by the `/status` + `/portal` surface (P6.3). */
@@ -108,7 +108,7 @@ export interface StatusEnv {
   WALLET_BASE_URL?: string
   /**
    * Where Stripe returns the user after they close the Customer Portal
-   * (e.g. "https://botho.io/rig/status"). Worker var.
+   * (e.g. "https://botho.io/node/status"). Worker var.
    */
   PORTAL_RETURN_URL?: string
 }
@@ -292,29 +292,29 @@ export async function handleWebhook(
 }
 
 /**
- * Build a `RigStore` from the D1 binding for the read-only `/status` + `/portal`
+ * Build a `NodeStore` from the D1 binding for the read-only `/status` + `/portal`
  * surface. Kept separate from the provisioner's `depsFromEnv` because status
  * needs only the store (no EC2/DNS/AWS creds), so a misconfigured provisioner
- * never blocks a user from reading their own rig.
+ * never blocks a user from reading their own node.
  */
-function storeFromEnv(env: Env): D1RigStore {
+function storeFromEnv(env: Env): D1NodeStore {
   if (env.DB == null) {
     throw new Error('status: DB binding not configured')
   }
-  return new D1RigStore(env.DB as D1Like)
+  return new D1NodeStore(env.DB as D1Like)
 }
 
 /**
- * Handle GET /status — the authenticated rig lookup (P6.3, #458 §4/§6).
+ * Handle GET /status — the authenticated node lookup (P6.3, #458 §4/§6).
  *
  * Authz model: the customer id is taken ONLY from the verified magic-link token
  * (`?token=`), never from the request. The D1 lookup is keyed on that id, so a
- * user can only ever see their own rig. Exported for direct unit testing.
+ * user can only ever see their own node. Exported for direct unit testing.
  *
- *   200 -> { rigId, rpcUrl, state, region, health, walletDeepLink }
+ *   200 -> { nodeId, rpcUrl, state, region, health, walletDeepLink }
  *   400 -> missing token
  *   401 -> invalid / expired / forged token (no data leak)
- *   404 -> token valid but this customer has no rig
+ *   404 -> token valid but this customer has no node
  *   500 -> service not configured
  */
 export async function handleStatus(
@@ -343,12 +343,12 @@ export async function handleStatus(
 
   const verified = await verifyStatusToken(token, env.STATUS_LINK_SECRET)
   if (!verified.ok) {
-    // Generic 401 — never reveal which check failed or whether a rig exists.
+    // Generic 401 — never reveal which check failed or whether a node exists.
     console.warn('status: token rejected:', verified.reason)
     return jsonResponse({ error: 'unauthorized' }, 401, cors)
   }
 
-  let store: D1RigStore
+  let store: D1NodeStore
   try {
     store = storeFromEnv(env)
   } catch (err) {
@@ -364,7 +364,7 @@ export async function handleStatus(
       fetchImpl,
     )
     if (!result.ok) {
-      return jsonResponse({ error: 'no rig found' }, 404, cors)
+      return jsonResponse({ error: 'no node found' }, 404, cors)
     }
     return jsonResponse(result.status, 200, cors)
   } catch (err) {
@@ -442,7 +442,7 @@ export async function handlePortal(
 
 /**
  * Handle the scheduled (cron) trigger — the SEC reconciliation sweep (#508,
- * #458 §5). Lists every `botho:managed-rig=true` EC2 instance, cross-checks each
+ * #458 §5). Lists every `botho:managed-node=true` EC2 instance, cross-checks each
  * `botho:subscription` against Stripe, and reaps orphans (cancelled / unpaid /
  * absent / stuck-provisioning). The cost-bleed safety net behind the webhook.
  *
@@ -484,7 +484,7 @@ export default {
     const url = new URL(request.url)
     const origin = request.headers.get('Origin')
 
-    // CORS preflight for the browser "Get a rig" / status surfaces.
+    // CORS preflight for the browser "Get a node" / status surfaces.
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: corsHeaders(env, origin) })
     }

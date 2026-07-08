@@ -9,7 +9,7 @@
  * SECRETS (Worker secrets, never the repo — #458 §5):
  *   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, (optional) AWS_SESSION_TOKEN
  *   CF_DNS_API_TOKEN, CF_DNS_ZONE_ID, STRIPE_SECRET_KEY
- * VARS (non-secret): RIG_DOMAIN, RECONCILE_REGIONS, STUCK_PROVISIONING_MS.
+ * VARS (non-secret): NODE_DOMAIN, RECONCILE_REGIONS, STUCK_PROVISIONING_MS.
  * BINDING: DB (D1).
  */
 
@@ -17,11 +17,11 @@ import { HttpDnsClient } from './cloudflare-dns'
 import { HttpEc2Client } from './ec2'
 import type { ProvisionerEnv } from './provisioner-env'
 import {
-  DEFAULT_RIG_DOMAIN,
+  DEFAULT_NODE_DOMAIN,
   REGION_ALLOWLIST,
-} from './rig-config'
+} from './node-config'
 import { DEFAULT_STUCK_PROVISIONING_MS, type ReconcileDeps } from './reconcile'
-import { D1RigStore, type D1Like } from './rig-store'
+import { D1NodeStore, type D1Like } from './node-store'
 import { HttpSubscriptionChecker } from './stripe-subscriptions'
 
 /** Worker env keys the reconciler needs beyond the provisioner's. */
@@ -34,7 +34,7 @@ export interface ReconcileEnv extends ProvisionerEnv {
   STRIPE_SECRET_KEY: string
   /**
    * Comma-separated regions to sweep. Defaults to the provisioner's
-   * REGION_ALLOWLIST (the only regions a rig can be launched in).
+   * REGION_ALLOWLIST (the only regions a node can be launched in).
    */
   RECONCILE_REGIONS?: string
   /** Override the stuck-provisioning threshold (ms). */
@@ -94,7 +94,7 @@ export function reconcileDepsFromEnv(
     env.CF_DNS_ZONE_ID as string,
     fetchImpl,
   )
-  const store = new D1RigStore(env.DB as D1Like)
+  const store = new D1NodeStore(env.DB as D1Like)
   const stripe = new HttpSubscriptionChecker(env.STRIPE_SECRET_KEY as string, fetchImpl)
 
   return {
@@ -103,7 +103,7 @@ export function reconcileDepsFromEnv(
     store,
     stripe,
     regions: reconcileRegions(env),
-    rigDomain: env.RIG_DOMAIN || DEFAULT_RIG_DOMAIN,
+    nodeDomain: env.NODE_DOMAIN || DEFAULT_NODE_DOMAIN,
     stuckProvisioningMs: env.STUCK_PROVISIONING_MS
       ? Number(env.STUCK_PROVISIONING_MS)
       : DEFAULT_STUCK_PROVISIONING_MS,

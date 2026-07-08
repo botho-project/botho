@@ -3,10 +3,10 @@ import { buildUserData, renderUserDataScript } from './user-data'
 import { testBase64, testBase64Decode } from './test-fakes'
 
 const PARAMS = {
-  rigId: 'abc123',
+  nodeId: 'abc123',
   region: 'us-west-2',
   tier: 't4g.medium',
-  rigDomain: 'testnet.botho.io',
+  nodeDomain: 'testnet.botho.io',
   binaryUrl: 'https://example.com/botho-aarch64',
   binarySha256: 'deadbeef',
 }
@@ -14,9 +14,9 @@ const PARAMS = {
 describe('renderUserDataScript', () => {
   const script = renderUserDataScript(PARAMS)
 
-  it('exports the bootstrap parameters the rig-bootstrap.sh contract expects', () => {
-    expect(script).toContain("export RIG_ID='abc123'")
-    expect(script).toContain("export RIG_DOMAIN='testnet.botho.io'")
+  it('exports the bootstrap parameters the node-bootstrap.sh contract expects', () => {
+    expect(script).toContain("export NODE_ID='abc123'")
+    expect(script).toContain("export NODE_DOMAIN='testnet.botho.io'")
     expect(script).toContain("export REGION='us-west-2'")
     expect(script).toContain("export TIER='t4g.medium'")
     expect(script).toContain('export NETWORK=testnet')
@@ -25,9 +25,9 @@ describe('renderUserDataScript', () => {
   })
 
   it('fetches + execs the bootstrap script', () => {
-    expect(script).toContain('rig-bootstrap.sh')
+    expect(script).toContain('node-bootstrap.sh')
     expect(script).toContain('curl -fsSL')
-    expect(script).toContain('exec /root/rig-bootstrap.sh')
+    expect(script).toContain('exec /root/node-bootstrap.sh')
   })
 
   it('omits the binary exports when not provided', () => {
@@ -36,10 +36,10 @@ describe('renderUserDataScript', () => {
     expect(s).not.toContain('BOTHO_BINARY_SHA256')
   })
 
-  it('shell-quotes safely against injection in the rig id', () => {
-    const s = renderUserDataScript({ ...PARAMS, rigId: "x'; rm -rf /; '" })
+  it('shell-quotes safely against injection in the node id', () => {
+    const s = renderUserDataScript({ ...PARAMS, nodeId: "x'; rm -rf /; '" })
     // The single quote is escaped POSIX-style; no unescaped break-out.
-    expect(s).toContain(`export RIG_ID='x'\\''; rm -rf /; '\\'''`)
+    expect(s).toContain(`export NODE_ID='x'\\''; rm -rf /; '\\'''`)
   })
 
   it('honors a custom bootstrap script url', () => {

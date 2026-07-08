@@ -1,10 +1,10 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
-  DEFAULT_RIG_REGION,
-  RIG_REGIONS,
-  RigCheckoutError,
-  startRigCheckout,
-} from './rig-checkout'
+  DEFAULT_NODE_REGION,
+  NODE_REGIONS,
+  NodeCheckoutError,
+  startNodeCheckout,
+} from './node-checkout'
 
 function okResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -13,20 +13,20 @@ function okResponse(body: unknown, status = 200): Response {
   })
 }
 
-describe('rig region allowlist', () => {
+describe('node region allowlist', () => {
   it('starts with only us-west-2', () => {
-    expect(RIG_REGIONS.map((r) => r.id)).toEqual(['us-west-2'])
-    expect(DEFAULT_RIG_REGION).toBe('us-west-2')
+    expect(NODE_REGIONS.map((r) => r.id)).toEqual(['us-west-2'])
+    expect(DEFAULT_NODE_REGION).toBe('us-west-2')
   })
 })
 
-describe('startRigCheckout', () => {
+describe('startNodeCheckout', () => {
   it('POSTs region (+ email) to /checkout and returns id+url', async () => {
     const fetchMock = vi.fn(async () =>
       okResponse({ id: 'cs_test_1', url: 'https://checkout.stripe.com/c/1' }),
     )
 
-    const result = await startRigCheckout(
+    const result = await startNodeCheckout(
       { region: 'us-west-2', email: 'a@b.co' },
       fetchMock as unknown as typeof fetch,
     )
@@ -45,23 +45,23 @@ describe('startRigCheckout', () => {
     const fetchMock = vi.fn(async () =>
       okResponse({ id: 'cs_test_2', url: 'https://checkout.stripe.com/c/2' }),
     )
-    await startRigCheckout({ region: 'us-west-2' }, fetchMock as unknown as typeof fetch)
+    await startNodeCheckout({ region: 'us-west-2' }, fetchMock as unknown as typeof fetch)
     const init = (fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]
     expect(JSON.parse(init.body as string)).toEqual({ region: 'us-west-2' })
   })
 
-  it('throws RigCheckoutError with the server message on a 4xx', async () => {
+  it('throws NodeCheckoutError with the server message on a 4xx', async () => {
     const fetchMock = vi.fn(async () => okResponse({ error: 'region not in allowlist' }, 400))
     await expect(
-      startRigCheckout({ region: 'eu-central-1' }, fetchMock as unknown as typeof fetch),
+      startNodeCheckout({ region: 'eu-central-1' }, fetchMock as unknown as typeof fetch),
     ).rejects.toMatchObject({ message: 'region not in allowlist', status: 400 })
   })
 
   it('throws when the response lacks a url', async () => {
     const fetchMock = vi.fn(async () => okResponse({ id: 'cs_test_3' }, 200))
     await expect(
-      startRigCheckout({ region: 'us-west-2' }, fetchMock as unknown as typeof fetch),
-    ).rejects.toBeInstanceOf(RigCheckoutError)
+      startNodeCheckout({ region: 'us-west-2' }, fetchMock as unknown as typeof fetch),
+    ).rejects.toBeInstanceOf(NodeCheckoutError)
   })
 
   it('throws a friendly error when the network is unreachable', async () => {
@@ -69,7 +69,7 @@ describe('startRigCheckout', () => {
       throw new Error('network down')
     })
     await expect(
-      startRigCheckout({ region: 'us-west-2' }, fetchMock as unknown as typeof fetch),
+      startNodeCheckout({ region: 'us-west-2' }, fetchMock as unknown as typeof fetch),
     ).rejects.toMatchObject({ message: /Could not reach/ })
   })
 })

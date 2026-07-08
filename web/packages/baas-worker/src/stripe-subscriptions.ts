@@ -2,9 +2,9 @@
  * Stripe subscription-status client for the SEC reconciliation sweep (#508,
  * #458 §5).
  *
- * The reconciliation cron needs to answer one question per managed rig: "is the
+ * The reconciliation cron needs to answer one question per managed node: "is the
  * `botho:subscription` tag on this EC2 instance still an ACTIVE Stripe
- * subscription?" If not (cancelled, unpaid, or never existed), the rig is an
+ * subscription?" If not (cancelled, unpaid, or never existed), the node is an
  * orphan and must be reaped to stop cost bleed.
  *
  * The reconciler depends on the `SubscriptionChecker` *interface* — never the
@@ -16,8 +16,8 @@
 
 /**
  * Stripe subscription `status` values. A subscription only entitles a running
- * rig while it is in an ACTIVE state. `trialing` counts as active (the customer
- * is in a paid relationship); everything else means "stop the rig".
+ * node while it is in an ACTIVE state. `trialing` counts as active (the customer
+ * is in a paid relationship); everything else means "stop the node".
  *
  * Reference: Stripe Subscription.status.
  */
@@ -26,21 +26,21 @@ export const ACTIVE_SUBSCRIPTION_STATUSES = new Set([
   'trialing',
 ])
 
-/** True if a Stripe subscription status still entitles a running rig. */
+/** True if a Stripe subscription status still entitles a running node. */
 export function isActiveSubscriptionStatus(status: string | undefined): boolean {
   return status !== undefined && ACTIVE_SUBSCRIPTION_STATUSES.has(status)
 }
 
 /**
  * Injectable Stripe surface for the reconciler. The single method answers
- * "should the rig backed by this subscription keep running?".
+ * "should the node backed by this subscription keep running?".
  */
 export interface SubscriptionChecker {
   /**
    * Return whether `subscriptionId` is an ACTIVE Stripe subscription. A
-   * cancelled/unpaid/absent subscription returns false (→ reap the rig). MUST be
+   * cancelled/unpaid/absent subscription returns false (→ reap the node). MUST be
    * conservative on transient lookup errors: see `HttpSubscriptionChecker`,
-   * which throws so the sweep can SKIP that rig rather than wrongly reaping a
+   * which throws so the sweep can SKIP that node rather than wrongly reaping a
    * paying customer's box on a Stripe hiccup.
    */
   isActive(subscriptionId: string): Promise<boolean>
@@ -67,7 +67,7 @@ export class StripeSubscriptionError extends Error {
  *   - 200 + a non-active status (canceled/unpaid/past_due/incomplete...) → false
  *   - 404 (no such subscription) → false (definitely an orphan)
  *   - any other non-2xx → THROW (transient): the sweep treats a throw as
- *     "skip this rig this cycle" so a Stripe outage never reaps paying rigs.
+ *     "skip this node this cycle" so a Stripe outage never reaps paying nodes.
  */
 export class HttpSubscriptionChecker implements SubscriptionChecker {
   constructor(

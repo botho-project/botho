@@ -17,16 +17,16 @@
 #   STATUS_LINK_SECRET  HMAC secret for magic-link status tokens (P6.3, #458 §4).
 #                       The /status + /portal endpoints verify the token against
 #                       this; it binds to ONE Stripe customer so a user only ever
-#                       sees their own rig. Any long random string. Required for
+#                       sees their own node. Any long random string. Required for
 #                       /status and /portal.
 #   --- provisioner (#502, #458 §3/§5) — a DEDICATED, tightly-scoped IAM user ---
 #   AWS_ACCESS_KEY_ID       provisioner IAM user access key.
 #   AWS_SECRET_ACCESS_KEY   provisioner IAM user secret key.
 #   AWS_SESSION_TOKEN       (optional) STS session token if using temp creds.
-#   CF_DNS_API_TOKEN        Cloudflare Zone:DNS:Edit token for rig DNS records.
+#   CF_DNS_API_TOKEN        Cloudflare Zone:DNS:Edit token for node DNS records.
 #   CF_DNS_ZONE_ID          Cloudflare zone id for testnet.botho.io.
 #   BOTHO_BINARY_URL        (optional) URL of the linux-aarch64 botho binary the
-#                           rig downloads at boot (release asset / R2 mirror).
+#                           node downloads at boot (release asset / R2 mirror).
 #   BOTHO_BINARY_SHA256     (optional) sha256 to pin that binary.
 #
 # VARS below are non-secret and safe to commit (public URLs, ids, an origin
@@ -37,14 +37,14 @@ main = "src/index.ts"
 compatibility_date = "2024-09-23"
 
 # --- SEC reconciliation cron (#508, #458 §5) -------------------------------
-# Scheduled sweep that lists every botho:managed-rig=true EC2 instance,
+# Scheduled sweep that lists every botho:managed-node=true EC2 instance,
 # cross-checks each botho:subscription against Stripe, and TERMINATES orphans
 # (cancelled / unpaid / absent / stuck-provisioning). The cost-bleed safety net
 # behind the webhook teardown. Runs every 15 minutes.
 [triggers]
 crons = ["*/15 * * * *"]
 
-# D1 — the user<->rig mapping (#458 §3 step 4). Apply schema.sql before first
+# D1 — the user<->node mapping (#458 §3 step 4). Apply schema.sql before first
 # use. The `database_id` below is a PLACEHOLDER: replace it with the real id from
 # `wrangler d1 create botho-baas` (the id is an account-scoped uuid, not a
 # secret, but is environment-specific so it is left blank here).
@@ -55,9 +55,9 @@ database_id = "876905b5-a42f-4735-b888-4f9e898751c6"
 
 [vars]
 # Where Stripe redirects after a successful / cancelled checkout. These point at
-# the Pages site that hosts the "Get a rig" surface.
-CHECKOUT_SUCCESS_URL = "https://botho.io/rig/success"
-CHECKOUT_CANCEL_URL = "https://botho.io/rig"
+# the Pages site that hosts the "Get a node" surface.
+CHECKOUT_SUCCESS_URL = "https://botho.io/node/success"
+CHECKOUT_CANCEL_URL = "https://botho.io/node"
 # Browser origins permitted to call /checkout, /status, /portal (comma-separated).
 ALLOWED_ORIGINS = "https://botho.io,https://wallet.botho.io"
 
@@ -65,25 +65,25 @@ ALLOWED_ORIGINS = "https://botho.io,https://wallet.botho.io"
 # Wallet origin used to build the "open in wallet" deep link (#458 §3 step 5).
 WALLET_BASE_URL = "https://wallet.botho.io"
 # Where Stripe returns the user after they close the Customer Portal.
-PORTAL_RETURN_URL = "https://botho.io/rig/status"
+PORTAL_RETURN_URL = "https://botho.io/node/status"
 
 # --- provisioner non-secret config (#502) ---------------------------------
-# Compute shape (proven seed/faucet rig). Non-secret identifiers.
-RIG_AMI_ID = "ami-012798e88aebdba5c"
-RIG_SECURITY_GROUP_ID = "sg-0dd3fc95ec3916a4a"
-RIG_KEY_NAME = "botho-nodes"
-# Zone under which rig-<id> hostnames live.
-RIG_DOMAIN = "testnet.botho.io"
+# Compute shape (proven seed/faucet node). Non-secret identifiers.
+NODE_AMI_ID = "ami-012798e88aebdba5c"
+NODE_SECURITY_GROUP_ID = "sg-0dd3fc95ec3916a4a"
+NODE_KEY_NAME = "botho-nodes"
+# Zone under which node-<id> hostnames live.
+NODE_DOMAIN = "testnet.botho.io"
 # Global fleet-cap circuit breaker (#458 §5). Conservative default for testnet.
 FLEET_CAP = "25"
 # Where the instance fetches the bootstrap script at first boot (#499/#521).
-BOOTSTRAP_SCRIPT_URL = "https://raw.githubusercontent.com/botho-project/botho/main/infra/baas/rig-bootstrap.sh"
+BOOTSTRAP_SCRIPT_URL = "https://raw.githubusercontent.com/botho-project/botho/main/infra/baas/node-bootstrap.sh"
 
 # --- SEC reconciliation cron config (#508) --------------------------------
 # Regions the sweep scans. Defaults to the launch allowlist (us-west-2) when
-# unset; expand in lockstep with REGION_ALLOWLIST in rig-config.ts.
+# unset; expand in lockstep with REGION_ALLOWLIST in node-config.ts.
 RECONCILE_REGIONS = "us-west-2"
-# Age (ms) after which a not-yet-running rig with a non-active subscription is
+# Age (ms) after which a not-yet-running node with a non-active subscription is
 # reaped as "stuck provisioning". Default 1_800_000 (30 min).
 STUCK_PROVISIONING_MS = "1800000"
 # NOTE: the cron also needs STRIPE_SECRET_KEY (already a required secret for

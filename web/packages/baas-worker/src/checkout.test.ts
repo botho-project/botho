@@ -15,8 +15,8 @@ import {
 const ENV: CheckoutEnv = {
   STRIPE_SECRET_KEY: 'sk_test_dummy',
   STRIPE_PRICE_ID: 'price_test_50mo',
-  CHECKOUT_SUCCESS_URL: 'https://botho.io/rig/success',
-  CHECKOUT_CANCEL_URL: 'https://botho.io/rig',
+  CHECKOUT_SUCCESS_URL: 'https://botho.io/node/success',
+  CHECKOUT_CANCEL_URL: 'https://botho.io/node',
 }
 
 describe('region allowlist', () => {
@@ -133,9 +133,9 @@ describe('buildCheckoutSessionParams', () => {
 
   it('sets success/cancel urls and appends the session-id template', () => {
     expect(params.get('success_url')).toBe(
-      'https://botho.io/rig/success?session_id={CHECKOUT_SESSION_ID}',
+      'https://botho.io/node/success?session_id={CHECKOUT_SESSION_ID}',
     )
-    expect(params.get('cancel_url')).toBe('https://botho.io/rig')
+    expect(params.get('cancel_url')).toBe('https://botho.io/node')
   })
 
   it('captures region on both session and subscription metadata (#458 §3)', () => {

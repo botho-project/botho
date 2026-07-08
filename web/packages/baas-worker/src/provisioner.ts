@@ -7,8 +7,8 @@
  *   2. Checks idempotency: D1 first, then reconciles against the EC2
  *      `botho:subscription` tag, so a replayed trigger NEVER launches a second
  *      instance.
- *   3. Launches EC2 `RunInstances` (tagged) with the rig-bootstrap user-data.
- *   4. Creates the Cloudflare DNS A record `rig-<id>.<domain> -> public IP`.
+ *   3. Launches EC2 `RunInstances` (tagged) with the node-bootstrap user-data.
+ *   4. Creates the Cloudflare DNS A record `node-<id>.<domain> -> public IP`.
  *   5. Writes / advances the D1 mapping (provisioning -> running).
  *
  * It is exposed as a plain async function/handler that the Stripe webhook (P7.2
@@ -29,24 +29,24 @@ import type { Ec2Client } from './ec2'
 import { isLiveInstanceState } from './ec2'
 import {
   DEFAULT_FLEET_CAP,
-  DEFAULT_RIG_COMPUTE,
-  DEFAULT_RIG_DOMAIN,
+  DEFAULT_NODE_COMPUTE,
+  DEFAULT_NODE_DOMAIN,
   isAllowedInstanceType,
   isAllowedRegion,
   MAX_INSTANCES_PER_SUBSCRIPTION,
-  rigHostname,
-  rigRpcUrl,
-  TAG_MANAGED_RIG,
-  TAG_RIG_ID,
+  nodeHostname,
+  nodeRpcUrl,
+  TAG_MANAGED_NODE,
+  TAG_NODE_ID,
   TAG_SUBSCRIPTION,
   TAG_USER,
-  type RigComputeConfig,
-} from './rig-config'
+  type NodeComputeConfig,
+} from './node-config'
 import {
   DuplicateSubscriptionError,
-  type RigRecord,
-  type RigStore,
-} from './rig-store'
+  type NodeRecord,
+  type NodeStore,
+} from './node-store'
 
 /** Input the (future) webhook hands to the provisioner. */
 export interface ProvisionRequest {
@@ -61,31 +61,31 @@ export interface ProvisionRequest {
    * provisioner forces `t4g.medium` regardless (defense in depth, #458 §5).
    */
   instanceType?: string
-  /** Optional explicit rig id; otherwise derived from the subscription id. */
-  rigId?: string
+  /** Optional explicit node id; otherwise derived from the subscription id. */
+  nodeId?: string
 }
 
 /** Everything the provisioner needs, injected for testability. */
 export interface ProvisionerDeps {
   ec2: Ec2Client
   dns: DnsClient
-  store: RigStore
+  store: NodeStore
   /** Compute shape (AMI/SG/key/type). Defaults to the proven seed/faucet shape. */
-  compute?: RigComputeConfig
-  /** Zone for rig hostnames. Default: testnet.botho.io. */
-  rigDomain?: string
+  compute?: NodeComputeConfig
+  /** Zone for node hostnames. Default: testnet.botho.io. */
+  nodeDomain?: string
   /** Global fleet cap circuit-breaker. Default: DEFAULT_FLEET_CAP. */
   fleetCap?: number
   /** Bootstrap binary download URL passed to user-data (BOTHO_BINARY_URL). */
   binaryUrl?: string
   /** Optional sha256 to pin the binary (BOTHO_BINARY_SHA256). */
   binarySha256?: string
-  /** URL of rig-bootstrap.sh to fetch at boot (BOOTSTRAP_SCRIPT_URL). */
+  /** URL of node-bootstrap.sh to fetch at boot (BOOTSTRAP_SCRIPT_URL). */
   bootstrapScriptUrl?: string
 }
 
 export type ProvisionOutcome =
-  | { ok: true; record: RigRecord; created: boolean }
+  | { ok: true; record: NodeRecord; created: boolean }
   | { ok: false; code: ProvisionErrorCode; error: string }
 
 export type ProvisionErrorCode =
@@ -101,27 +101,27 @@ export type ProvisionErrorCode =
   | 'invalid_request'
   | 'launch_failed'
 
-/** Derive a short rig id from a subscription id when none is supplied. */
-export function deriveRigId(subscriptionId: string): string {
+/** Derive a short node id from a subscription id when none is supplied. */
+export function deriveNodeId(subscriptionId: string): string {
   // Stripe sub ids look like `sub_1Abc...`. Strip the prefix + lowercase to a
   // DNS-safe label. Keep it short and stable so retries derive the same id.
   const tail = subscriptionId.replace(/^sub_/, '').toLowerCase()
   const safe = tail.replace(/[^a-z0-9]/g, '').slice(0, 20)
-  return safe.length > 0 ? safe : 'rig'
+  return safe.length > 0 ? safe : 'node'
 }
 
 /**
- * Provision (or reconcile an existing) managed rig for a subscription.
+ * Provision (or reconcile an existing) managed node for a subscription.
  * Idempotent and fail-closed. Never throws on a cap/validation failure — those
  * return a structured `{ ok: false }` so the caller (webhook/queue) can decide
  * whether to ACK or dead-letter.
  */
-export async function provisionRig(
+export async function provisionNode(
   req: ProvisionRequest,
   deps: ProvisionerDeps,
 ): Promise<ProvisionOutcome> {
-  const compute = deps.compute ?? DEFAULT_RIG_COMPUTE
-  const rigDomain = deps.rigDomain ?? DEFAULT_RIG_DOMAIN
+  const compute = deps.compute ?? DEFAULT_NODE_COMPUTE
+  const nodeDomain = deps.nodeDomain ?? DEFAULT_NODE_DOMAIN
   const fleetCap = deps.fleetCap ?? DEFAULT_FLEET_CAP
 
   // --- 0. Basic input validation -------------------------------------------
@@ -173,14 +173,14 @@ export async function provisionRig(
   if (liveTagged && !existing) {
     // An orphaned instance exists but D1 has no row. Adopt it: write the row
     // pointing at the found instance instead of launching a new one.
-    const rigId = req.rigId ?? deriveRigId(req.subscriptionId)
-    const hostname = rigHostname(rigId, rigDomain)
-    const rpcUrl = rigRpcUrl(hostname)
+    const nodeId = req.nodeId ?? deriveNodeId(req.subscriptionId)
+    const hostname = nodeHostname(nodeId, nodeDomain)
+    const rpcUrl = nodeRpcUrl(hostname)
     const record = await insertRowSafely(deps.store, {
       user: req.customerId,
       stripeCustomer: req.customerId,
       subscriptionId: req.subscriptionId,
-      rigId,
+      nodeId,
       region: req.region,
       rpcUrl,
     })
@@ -207,9 +207,9 @@ export async function provisionRig(
   }
 
   // --- 5. Insert / reuse the D1 provisioning row ----------------------------
-  const rigId = existing?.rigId ?? req.rigId ?? deriveRigId(req.subscriptionId)
-  const hostname = rigHostname(rigId, rigDomain)
-  const rpcUrl = rigRpcUrl(hostname)
+  const nodeId = existing?.nodeId ?? req.nodeId ?? deriveNodeId(req.subscriptionId)
+  const hostname = nodeHostname(nodeId, nodeDomain)
+  const rpcUrl = nodeRpcUrl(hostname)
 
   let record = existing
   if (!record) {
@@ -217,7 +217,7 @@ export async function provisionRig(
       user: req.customerId,
       stripeCustomer: req.customerId,
       subscriptionId: req.subscriptionId,
-      rigId,
+      nodeId,
       region: req.region,
       rpcUrl,
     })
@@ -252,13 +252,13 @@ export async function provisionRig(
     }
   }
 
-  // --- 6. Launch the instance (tagged) with rig-bootstrap user-data ---------
+  // --- 6. Launch the instance (tagged) with node-bootstrap user-data ---------
   const userDataBase64 = buildUserData(
     {
-      rigId,
+      nodeId,
       region: req.region,
       tier: instanceType,
-      rigDomain,
+      nodeDomain,
       binaryUrl: deps.binaryUrl,
       binarySha256: deps.binarySha256,
       bootstrapScriptUrl: deps.bootstrapScriptUrl,
@@ -277,10 +277,10 @@ export async function provisionRig(
       keyName: compute.keyName,
       userDataBase64,
       tags: {
-        [TAG_MANAGED_RIG]: 'true',
+        [TAG_MANAGED_NODE]: 'true',
         [TAG_SUBSCRIPTION]: req.subscriptionId,
         [TAG_USER]: req.customerId,
-        [TAG_RIG_ID]: rigId,
+        [TAG_NODE_ID]: nodeId,
       },
     })
     instanceId = launched.instanceId
@@ -304,7 +304,7 @@ export async function provisionRig(
     await deps.store.setState(req.subscriptionId, 'running')
   }
 
-  const finalRecord: RigRecord = {
+  const finalRecord: NodeRecord = {
     ...record,
     instanceId,
     state: publicIp ? 'running' : 'provisioning',
@@ -317,11 +317,11 @@ export async function provisionRig(
  * Callable by SEC (#508) / P7.2 even before the trigger wiring lands (#458 §3).
  * Idempotent and best-effort — missing instance/record is not an error.
  */
-export async function teardownRig(
+export async function teardownNode(
   subscriptionId: string,
   deps: ProvisionerDeps,
 ): Promise<{ ok: boolean; error?: string }> {
-  const rigDomain = deps.rigDomain ?? DEFAULT_RIG_DOMAIN
+  const nodeDomain = deps.nodeDomain ?? DEFAULT_NODE_DOMAIN
   const record = await deps.store.getBySubscription(subscriptionId)
   if (!record) return { ok: true }
 
@@ -329,7 +329,7 @@ export async function teardownRig(
     if (record.instanceId) {
       await deps.ec2.terminateInstance(record.region, record.instanceId)
     }
-    await deps.dns.deleteARecord(rigHostname(record.rigId, rigDomain))
+    await deps.dns.deleteARecord(nodeHostname(record.nodeId, nodeDomain))
     await deps.store.setState(subscriptionId, 'terminated')
     return { ok: true }
   } catch (err) {
@@ -343,9 +343,9 @@ export async function teardownRig(
 
 /** Insert a row, tolerating a concurrent insert (treat dup as "already there"). */
 async function insertRowSafely(
-  store: RigStore,
-  rec: Parameters<RigStore['insertProvisioning']>[0],
-): Promise<RigRecord> {
+  store: NodeStore,
+  rec: Parameters<NodeStore['insertProvisioning']>[0],
+): Promise<NodeRecord> {
   try {
     return await store.insertProvisioning(rec)
   } catch (err) {
@@ -365,9 +365,9 @@ async function insertRowSafely(
 async function reconcileFromEc2(
   req: ProvisionRequest,
   deps: ProvisionerDeps,
-  existing: RigRecord,
-): Promise<RigRecord | undefined> {
-  const rigDomain = deps.rigDomain ?? DEFAULT_RIG_DOMAIN
+  existing: NodeRecord,
+): Promise<NodeRecord | undefined> {
+  const nodeDomain = deps.nodeDomain ?? DEFAULT_NODE_DOMAIN
   const tagged = await deps.ec2.describeBySubscription(req.region, req.subscriptionId)
   const live = tagged.find((i) => isLiveInstanceState(i.state))
   if (!live) return undefined
@@ -375,7 +375,7 @@ async function reconcileFromEc2(
   await deps.store.setInstanceId(req.subscriptionId, live.instanceId)
   let state = existing.state
   if (live.publicIp) {
-    await deps.dns.upsertARecord(rigHostname(existing.rigId, rigDomain), live.publicIp)
+    await deps.dns.upsertARecord(nodeHostname(existing.nodeId, nodeDomain), live.publicIp)
     await deps.store.setState(req.subscriptionId, 'running')
     state = 'running'
   }

@@ -1,5 +1,5 @@
 /**
- * Stripe Checkout Session creation for Botho-as-a-Service managed rigs.
+ * Stripe Checkout Session creation for Botho-as-a-Service managed nodes.
  *
  * This module is the pure, testable core of the `/checkout` endpoint (P7.1 of
  * the BaaS MVP, parent #458 §2). It takes a validated checkout request plus the
@@ -20,8 +20,8 @@
  */
 
 /**
- * AWS regions a managed rig may be provisioned in. Re-exported from the single
- * source of truth in `rig-config.ts` (#458 §5: "Region allowlist — start:
+ * AWS regions a managed node may be provisioned in. Re-exported from the single
+ * source of truth in `node-config.ts` (#458 §5: "Region allowlist — start:
  * us-west-2 only") so checkout and the provisioner can never diverge. The
  * frontend dropdown is constrained to this list, and the Worker re-validates so
  * a crafted request can never request an off-list region.
@@ -30,10 +30,10 @@ export {
   REGION_ALLOWLIST,
   isAllowedRegion,
   type AllowedRegion,
-} from './rig-config'
+} from './node-config'
 
-import type { AllowedRegion } from './rig-config'
-import { isAllowedRegion } from './rig-config'
+import type { AllowedRegion } from './node-config'
+import { isAllowedRegion } from './node-config'
 
 /**
  * The subset of Worker env this module needs. Bound from Worker secrets / vars
@@ -53,7 +53,7 @@ export interface CheckoutEnv {
 
 /** Parsed + validated input for a checkout request. */
 export interface CheckoutRequest {
-  /** Desired AWS region for the rig; must be in REGION_ALLOWLIST. */
+  /** Desired AWS region for the node; must be in REGION_ALLOWLIST. */
   region: AllowedRegion
   /** Optional pre-filled customer email (lets Stripe skip asking). */
   email?: string
@@ -147,7 +147,7 @@ export function buildCheckoutSessionParams(
   const params = new URLSearchParams()
   params.set('mode', 'subscription')
 
-  // Single $50/mo line item; quantity 1 (one rig per subscription — #458 §5).
+  // Single $50/mo line item; quantity 1 (one node per subscription — #458 §5).
   params.set('line_items[0][price]', env.STRIPE_PRICE_ID)
   params.set('line_items[0][quantity]', '1')
 

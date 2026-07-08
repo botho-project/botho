@@ -12,7 +12,7 @@ import { handleWebhook, type Env } from './index'
 import { hmacSha256Hex } from './webhook'
 import { FakeDns, FakeEc2, FakeStore } from './test-fakes'
 import type { ProvisionerDeps } from './provisioner'
-import { DEFAULT_RIG_COMPUTE, DEFAULT_INSTANCE_TYPE } from './rig-config'
+import { DEFAULT_NODE_COMPUTE, DEFAULT_INSTANCE_TYPE } from './node-config'
 
 const SECRET = 'whsec_test_secret_value'
 
@@ -20,8 +20,8 @@ const ENV: Env = {
   // checkout env (unused here but part of the shared Env shape)
   STRIPE_SECRET_KEY: 'sk_test_dummy',
   STRIPE_PRICE_ID: 'price_test',
-  CHECKOUT_SUCCESS_URL: 'https://botho.io/rig/success',
-  CHECKOUT_CANCEL_URL: 'https://botho.io/rig',
+  CHECKOUT_SUCCESS_URL: 'https://botho.io/node/success',
+  CHECKOUT_CANCEL_URL: 'https://botho.io/node',
   // webhook secret
   STRIPE_WEBHOOK_SECRET: SECRET,
   // provisioner env so missingProvisionerEnv() passes (DB is the fake below)
@@ -66,8 +66,8 @@ function makeDeps(): {
     ec2,
     dns,
     store,
-    compute: { ...DEFAULT_RIG_COMPUTE, instanceType: DEFAULT_INSTANCE_TYPE },
-    rigDomain: 'testnet.botho.io',
+    compute: { ...DEFAULT_NODE_COMPUTE, instanceType: DEFAULT_INSTANCE_TYPE },
+    nodeDomain: 'testnet.botho.io',
     fleetCap: 25,
   }
   return { deps, depsFor: () => deps }
@@ -141,9 +141,9 @@ describe('handleWebhook', () => {
       user: 'cus_xyz',
       stripeCustomer: 'cus_xyz',
       subscriptionId: 'sub_del',
-      rigId: 'del',
+      nodeId: 'del',
       region: 'us-west-2',
-      rpcUrl: 'https://rig-del.testnet.botho.io/rpc',
+      rpcUrl: 'https://node-del.testnet.botho.io/rpc',
     })
     await deps.store.setInstanceId('sub_del', 'i-del')
 

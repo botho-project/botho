@@ -3,15 +3,15 @@
  * binding). Kept separate from `provisioner.ts` so the core flow stays pure and
  * testable with fakes, while this thin adapter wires the production clients.
  *
- * The Stripe webhook (P7.2 / #506) calls `provisionRig(req, depsFromEnv(env))`
+ * The Stripe webhook (P7.2 / #506) calls `provisionNode(req, depsFromEnv(env))`
  * from its Queue consumer / Durable Object — it never re-implements the wiring.
  *
  * SECRETS (Worker secrets, never the repo — #458 §2, §5):
  *   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, (optional) AWS_SESSION_TOKEN
  *   CF_DNS_API_TOKEN, CF_DNS_ZONE_ID
  *   (optional) BOTHO_BINARY_URL, BOTHO_BINARY_SHA256, BOOTSTRAP_SCRIPT_URL
- * VARS (non-secret): RIG_DOMAIN, FLEET_CAP, RIG_AMI_ID, RIG_SECURITY_GROUP_ID,
- *   RIG_KEY_NAME.
+ * VARS (non-secret): NODE_DOMAIN, FLEET_CAP, NODE_AMI_ID, NODE_SECURITY_GROUP_ID,
+ *   NODE_KEY_NAME.
  * BINDING: DB (D1).
  */
 
@@ -20,11 +20,11 @@ import { HttpEc2Client } from './ec2'
 import type { ProvisionerDeps } from './provisioner'
 import {
   DEFAULT_FLEET_CAP,
-  DEFAULT_RIG_COMPUTE,
-  DEFAULT_RIG_DOMAIN,
+  DEFAULT_NODE_COMPUTE,
+  DEFAULT_NODE_DOMAIN,
   DEFAULT_INSTANCE_TYPE,
-} from './rig-config'
-import { D1RigStore, type D1Like } from './rig-store'
+} from './node-config'
+import { D1NodeStore, type D1Like } from './node-store'
 
 /** Worker env keys the provisioner needs. All secrets come from Worker secrets. */
 export interface ProvisionerEnv {
@@ -38,10 +38,10 @@ export interface ProvisionerEnv {
   CF_DNS_ZONE_ID?: string
 
   // --- non-secret compute overrides (default to the proven seed/faucet shape)-
-  RIG_AMI_ID?: string
-  RIG_SECURITY_GROUP_ID?: string
-  RIG_KEY_NAME?: string
-  RIG_DOMAIN?: string
+  NODE_AMI_ID?: string
+  NODE_SECURITY_GROUP_ID?: string
+  NODE_KEY_NAME?: string
+  NODE_DOMAIN?: string
   FLEET_CAP?: string
 
   // --- bootstrap binary plumbing (passed to user-data) ----------------------
@@ -95,19 +95,19 @@ export function depsFromEnv(
     env.CF_DNS_ZONE_ID as string,
     fetchImpl,
   )
-  const store = new D1RigStore(env.DB as D1Like)
+  const store = new D1NodeStore(env.DB as D1Like)
 
   return {
     ec2,
     dns,
     store,
     compute: {
-      amiId: env.RIG_AMI_ID || DEFAULT_RIG_COMPUTE.amiId,
-      securityGroupId: env.RIG_SECURITY_GROUP_ID || DEFAULT_RIG_COMPUTE.securityGroupId,
-      keyName: env.RIG_KEY_NAME || DEFAULT_RIG_COMPUTE.keyName,
+      amiId: env.NODE_AMI_ID || DEFAULT_NODE_COMPUTE.amiId,
+      securityGroupId: env.NODE_SECURITY_GROUP_ID || DEFAULT_NODE_COMPUTE.securityGroupId,
+      keyName: env.NODE_KEY_NAME || DEFAULT_NODE_COMPUTE.keyName,
       instanceType: DEFAULT_INSTANCE_TYPE,
     },
-    rigDomain: env.RIG_DOMAIN || DEFAULT_RIG_DOMAIN,
+    nodeDomain: env.NODE_DOMAIN || DEFAULT_NODE_DOMAIN,
     fleetCap: env.FLEET_CAP ? Number(env.FLEET_CAP) : DEFAULT_FLEET_CAP,
     binaryUrl: env.BOTHO_BINARY_URL,
     binarySha256: env.BOTHO_BINARY_SHA256,

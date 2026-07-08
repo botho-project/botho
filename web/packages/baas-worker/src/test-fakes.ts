@@ -8,11 +8,11 @@ import type { Ec2Client, Ec2Instance, RunInstanceParams } from './ec2'
 import {
   ACTIVE_STATES,
   DuplicateSubscriptionError,
-  type NewRigRecord,
-  type RigRecord,
-  type RigState,
-  type RigStore,
-} from './rig-store'
+  type NewNodeRecord,
+  type NodeRecord,
+  type NodeState,
+  type NodeStore,
+} from './node-store'
 import {
   StripeSubscriptionError,
   type SubscriptionChecker,
@@ -25,14 +25,14 @@ export class FakeEc2 implements Ec2Client {
   /** Instances keyed by subscription tag, seeded by tests for reconcile paths. */
   bySubscription = new Map<string, Ec2Instance[]>()
   /**
-   * All managed rigs per region, seeded by tests for the reconciliation sweep
-   * (#508). `describeManagedRigs(region)` returns this list. When a test does
+   * All managed nodes per region, seeded by tests for the reconciliation sweep
+   * (#508). `describeManagedNodes(region)` returns this list. When a test does
    * not seed it, falls back to every instance tracked via runInstance so the
    * existing provisioner tests need no change.
    */
   managedByRegion = new Map<string, Ec2Instance[]>()
-  /** If set, describeManagedRigs throws for this region (transient-error tests). */
-  describeManagedRigsError: string | undefined
+  /** If set, describeManagedNodes throws for this region (transient-error tests). */
+  describeManagedNodesError: string | undefined
   private seq = 0
   /** Public IP returned by runInstance (undefined => not yet assigned). */
   runPublicIp: string | undefined
@@ -45,7 +45,7 @@ export class FakeEc2 implements Ec2Client {
       state: 'pending',
       publicIp: this.runPublicIp,
       subscriptionTag: params.tags['botho:subscription'],
-      rigIdTag: params.tags['botho:rig-id'],
+      nodeIdTag: params.tags['botho:node-id'],
     }
     const sub = params.tags['botho:subscription']
     const list = this.bySubscription.get(sub) ?? []
@@ -61,9 +61,9 @@ export class FakeEc2 implements Ec2Client {
     return this.bySubscription.get(subscriptionId) ?? []
   }
 
-  async describeManagedRigs(region: string): Promise<Ec2Instance[]> {
-    if (this.describeManagedRigsError) {
-      throw new Error(this.describeManagedRigsError)
+  async describeManagedNodes(region: string): Promise<Ec2Instance[]> {
+    if (this.describeManagedNodesError) {
+      throw new Error(this.describeManagedNodesError)
     }
     if (this.managedByRegion.has(region)) {
       return this.managedByRegion.get(region) ?? []
@@ -95,7 +95,7 @@ export class FakeSubscriptionChecker implements SubscriptionChecker {
     this.calls.push(subscriptionId)
     if (this.throwFor.has(subscriptionId)) {
       // Mirror HttpSubscriptionChecker: a transient error throws so the sweep
-      // skips the rig rather than reaping it.
+      // skips the node rather than reaping it.
       throw new StripeSubscriptionError('simulated transient error', 503)
     }
     return this.active.has(subscriptionId)
@@ -122,21 +122,21 @@ export class FakeDns implements DnsClient {
   }
 }
 
-/** In-memory RigStore with a UNIQUE constraint on subscription_id. */
-export class FakeStore implements RigStore {
-  rows = new Map<string, RigRecord>()
+/** In-memory NodeStore with a UNIQUE constraint on subscription_id. */
+export class FakeStore implements NodeStore {
+  rows = new Map<string, NodeRecord>()
   private now: number
 
   constructor(now = 1_700_000_000_000) {
     this.now = now
   }
 
-  async getBySubscription(subscriptionId: string): Promise<RigRecord | undefined> {
+  async getBySubscription(subscriptionId: string): Promise<NodeRecord | undefined> {
     return this.rows.get(subscriptionId)
   }
 
-  async getByCustomer(stripeCustomer: string): Promise<RigRecord | undefined> {
-    // Mirror D1RigStore: live rigs before terminated, then newest createdAt.
+  async getByCustomer(stripeCustomer: string): Promise<NodeRecord | undefined> {
+    // Mirror D1NodeStore: live nodes before terminated, then newest createdAt.
     const matches = [...this.rows.values()].filter(
       (r) => r.stripeCustomer === stripeCustomer,
     )
@@ -149,11 +149,11 @@ export class FakeStore implements RigStore {
     return matches[0]
   }
 
-  async insertProvisioning(rec: NewRigRecord): Promise<RigRecord> {
+  async insertProvisioning(rec: NewNodeRecord): Promise<NodeRecord> {
     if (this.rows.has(rec.subscriptionId)) {
       throw new DuplicateSubscriptionError(rec.subscriptionId)
     }
-    const record: RigRecord = {
+    const record: NodeRecord = {
       ...rec,
       instanceId: null,
       state: 'provisioning',
@@ -172,7 +172,7 @@ export class FakeStore implements RigStore {
     }
   }
 
-  async setState(subscriptionId: string, state: RigState): Promise<void> {
+  async setState(subscriptionId: string, state: NodeState): Promise<void> {
     const row = this.rows.get(subscriptionId)
     if (row) {
       row.state = state

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { depsFromEnv, missingProvisionerEnv, type ProvisionerEnv } from './provisioner-env'
-import type { D1Like } from './rig-store'
+import type { D1Like } from './node-store'
 
 const DB = { prepare: () => ({}) } as unknown as D1Like
 
@@ -43,9 +43,9 @@ describe('depsFromEnv', () => {
     const deps = depsFromEnv(FULL)
     expect(deps.compute?.instanceType).toBe('t4g.medium')
     expect(deps.compute?.amiId).toBe('ami-012798e88aebdba5c')
-    expect(deps.rigDomain).toBe('testnet.botho.io')
+    expect(deps.nodeDomain).toBe('testnet.botho.io')
 
-    const overridden = depsFromEnv({ ...FULL, RIG_AMI_ID: 'ami-custom', FLEET_CAP: '7' })
+    const overridden = depsFromEnv({ ...FULL, NODE_AMI_ID: 'ami-custom', FLEET_CAP: '7' })
     expect(overridden.compute?.amiId).toBe('ami-custom')
     expect(overridden.fleetCap).toBe(7)
   })
@@ -53,7 +53,7 @@ describe('depsFromEnv', () => {
   it('never forces a non-allowlisted instance type even via env', () => {
     // There is no env knob for instance type; the compute shape always uses
     // t4g.medium (#458 §5). This documents that invariant.
-    const deps = depsFromEnv({ ...FULL, RIG_KEY_NAME: 'k' })
+    const deps = depsFromEnv({ ...FULL, NODE_KEY_NAME: 'k' })
     expect(deps.compute?.instanceType).toBe('t4g.medium')
   })
 })

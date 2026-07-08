@@ -21,6 +21,10 @@ export const URLS = {
   EXPLORER: `${WEB_BASE}/explorer`,
   FAUCET: FAUCET_BASE,
   LANDING: WEB_BASE,
+  // Botho-as-a-Service "Host a node" surfaces (#458 §2/§4).
+  NODE: `${WEB_BASE}/node`,
+  NODE_SUCCESS: `${WEB_BASE}/node/success`,
+  NODE_STATUS: `${WEB_BASE}/node/status`,
 } as const
 
 // Standard BIP39 test mnemonics - produce deterministic addresses

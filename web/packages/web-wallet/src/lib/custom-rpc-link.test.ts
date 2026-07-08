@@ -10,7 +10,7 @@ import {
 
 describe('isValidRpcUrl', () => {
   it('accepts https endpoints', () => {
-    expect(isValidRpcUrl('https://rig-abc.testnet.botho.io/rpc')).toBe(true)
+    expect(isValidRpcUrl('https://node-abc.testnet.botho.io/rpc')).toBe(true)
   })
 
   it('accepts http only for localhost / 127.0.0.1 (dev)', () => {
@@ -37,11 +37,11 @@ describe('parseRpcDeepLink', () => {
   })
 
   it('parses a valid url-encoded https endpoint', () => {
-    const search = `?${RPC_PARAM}=${encodeURIComponent('https://rig-x.testnet.botho.io/rpc')}`
+    const search = `?${RPC_PARAM}=${encodeURIComponent('https://node-x.testnet.botho.io/rpc')}`
     const parsed = parseRpcDeepLink(search)
     expect(parsed.ok).toBe(true)
     if (parsed.ok === true) {
-      expect(parsed.rpcUrl).toBe('https://rig-x.testnet.botho.io/rpc')
+      expect(parsed.rpcUrl).toBe('https://node-x.testnet.botho.io/rpc')
     }
   })
 
@@ -71,7 +71,7 @@ describe('buildWalletRpcLink', () => {
   })
 
   it('round-trips through parseRpcDeepLink', () => {
-    const rpc = 'https://rig-abc.testnet.botho.io/rpc'
+    const rpc = 'https://node-abc.testnet.botho.io/rpc'
     const link = buildWalletRpcLink('/wallet', rpc)
     const search = link.slice(link.indexOf('?'))
     const parsed = parseRpcDeepLink(search)
@@ -82,8 +82,8 @@ describe('buildWalletRpcLink', () => {
 
 describe('rpcLinkHost', () => {
   it('extracts the bare host without the port', () => {
-    expect(rpcLinkHost('https://rig-abc.testnet.botho.io:8443/rpc')).toBe(
-      'rig-abc.testnet.botho.io',
+    expect(rpcLinkHost('https://node-abc.testnet.botho.io:8443/rpc')).toBe(
+      'node-abc.testnet.botho.io',
     )
   })
 
@@ -95,7 +95,7 @@ describe('rpcLinkHost', () => {
 describe('classifyRpcHost (#587 trust hint — never an authorization decision)', () => {
   it('treats Botho-operated hosts as known', () => {
     expect(classifyRpcHost('https://seed.botho.io/rpc')).toBe('known')
-    expect(classifyRpcHost('https://rig-abc.testnet.botho.io/rpc')).toBe('known')
+    expect(classifyRpcHost('https://node-abc.testnet.botho.io/rpc')).toBe('known')
     expect(classifyRpcHost('https://botho.io/rpc')).toBe('known')
   })
 

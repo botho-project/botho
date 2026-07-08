@@ -2,17 +2,17 @@ import { describe, it, expect, vi } from 'vitest'
 import worker, { handleStatus, handlePortal, type Env } from './index'
 import { mintStatusToken } from './status-link'
 import { FakeStore } from './test-fakes'
-import type { D1Like } from './rig-store'
-import type { NewRigRecord, RigState } from './rig-store'
+import type { D1Like } from './node-store'
+import type { NewNodeRecord, NodeState } from './node-store'
 
 const STATUS_SECRET = 'test-status-secret'
 
 /**
  * A FakeStore exposed through the D1-shaped `prepare()` API that handleStatus
- * uses via D1RigStore. Rather than emulate SQL, we install a FakeStore directly
- * by monkeypatching: handleStatus builds a D1RigStore(env.DB). We instead supply
+ * uses via D1NodeStore. Rather than emulate SQL, we install a FakeStore directly
+ * by monkeypatching: handleStatus builds a D1NodeStore(env.DB). We instead supply
  * a tiny D1 shim that the queries hit. To keep the test focused on the HTTP +
- * authz layer (the store SQL is covered in rig-store.test.ts), we back the shim
+ * authz layer (the store SQL is covered in node-store.test.ts), we back the shim
  * with an in-memory FakeStore and translate the two SELECT shapes it issues.
  */
 function makeD1(store: FakeStore): D1Like {
@@ -32,7 +32,7 @@ function makeD1(store: FakeStore): D1Like {
               user: rec.user,
               stripe_customer: rec.stripeCustomer,
               subscription_id: rec.subscriptionId,
-              rig_id: rec.rigId,
+              node_id: rec.nodeId,
               instance_id: rec.instanceId,
               region: rec.region,
               rpc_url: rec.rpcUrl,
@@ -57,16 +57,16 @@ function makeD1(store: FakeStore): D1Like {
 
 async function seed(
   store: FakeStore,
-  over: Partial<NewRigRecord>,
-  state: RigState = 'running',
+  over: Partial<NewNodeRecord>,
+  state: NodeState = 'running',
 ): Promise<void> {
-  const rec: NewRigRecord = {
+  const rec: NewNodeRecord = {
     user: over.stripeCustomer ?? 'cus_A',
     stripeCustomer: over.stripeCustomer ?? 'cus_A',
     subscriptionId: over.subscriptionId ?? 'sub_A',
-    rigId: over.rigId ?? 'abc123',
+    nodeId: over.nodeId ?? 'abc123',
     region: over.region ?? 'us-west-2',
-    rpcUrl: over.rpcUrl ?? 'https://rig-abc123.testnet.botho.io/rpc',
+    rpcUrl: over.rpcUrl ?? 'https://node-abc123.testnet.botho.io/rpc',
   }
   await store.insertProvisioning(rec)
   if (state !== 'provisioning') await store.setState(rec.subscriptionId, state)
@@ -76,11 +76,11 @@ function baseEnv(store: FakeStore): Env {
   return {
     STRIPE_SECRET_KEY: 'sk_test_dummy',
     STRIPE_PRICE_ID: 'price_test',
-    CHECKOUT_SUCCESS_URL: 'https://botho.io/rig/success',
-    CHECKOUT_CANCEL_URL: 'https://botho.io/rig',
+    CHECKOUT_SUCCESS_URL: 'https://botho.io/node/success',
+    CHECKOUT_CANCEL_URL: 'https://botho.io/node',
     STATUS_LINK_SECRET: STATUS_SECRET,
     WALLET_BASE_URL: 'https://wallet.botho.io',
-    PORTAL_RETURN_URL: 'https://botho.io/rig/status',
+    PORTAL_RETURN_URL: 'https://botho.io/node/status',
     DB: makeD1(store),
   }
 }
@@ -102,7 +102,7 @@ function statusReq(token?: string): Request {
 }
 
 describe('handleStatus', () => {
-  it('returns the authenticated customer’s rig (200)', async () => {
+  it('returns the authenticated customer’s node (200)', async () => {
     const store = new FakeStore()
     await seed(store, { stripeCustomer: 'cus_A', subscriptionId: 'sub_A' }, 'running')
     const env = baseEnv(store)
@@ -110,15 +110,15 @@ describe('handleStatus', () => {
     const res = await handleStatus(statusReq(token), env, nodeOk() as unknown as typeof fetch)
     expect(res.status).toBe(200)
     const json = (await res.json()) as { rpcUrl: string; state: string; health: { status: string } }
-    expect(json.rpcUrl).toContain('rig-abc123')
+    expect(json.rpcUrl).toContain('node-abc123')
     expect(json.state).toBe('running')
     expect(json.health.status).toBe('online')
   })
 
-  it('does NOT leak another customer’s rig — 404 for a user without one', async () => {
+  it('does NOT leak another customer’s node — 404 for a user without one', async () => {
     const store = new FakeStore()
-    // Only cus_B has a rig.
-    await seed(store, { stripeCustomer: 'cus_B', subscriptionId: 'sub_B', rigId: 'secret' }, 'running')
+    // Only cus_B has a node.
+    await seed(store, { stripeCustomer: 'cus_B', subscriptionId: 'sub_B', nodeId: 'secret' }, 'running')
     const env = baseEnv(store)
     // cus_A is authenticated (valid token) but owns nothing.
     const token = await mintStatusToken('cus_A', STATUS_SECRET)
@@ -143,7 +143,7 @@ describe('handleStatus', () => {
     const res = await handleStatus(statusReq(forged), env, nodeOk() as unknown as typeof fetch)
     expect(res.status).toBe(401)
     const body = await res.text()
-    expect(body).not.toContain('rig-abc123')
+    expect(body).not.toContain('node-abc123')
   })
 
   it('fails closed with 500 when STATUS_LINK_SECRET is unset', async () => {

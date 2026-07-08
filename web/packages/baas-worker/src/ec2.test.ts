@@ -16,7 +16,7 @@ const PARAMS: RunInstanceParams = {
   keyName: 'botho-nodes',
   userDataBase64: 'BASE64DATA',
   tags: {
-    'botho:managed-rig': 'true',
+    'botho:managed-node': 'true',
     'botho:subscription': 'sub_ABC',
     'botho:user': 'cus_XYZ',
   },
@@ -39,7 +39,7 @@ describe('buildRunInstancesBody', () => {
 
   it('encodes the instance tags as TagSpecification entries', () => {
     expect(body.get('TagSpecification.1.ResourceType')).toBe('instance')
-    expect(body.get('TagSpecification.1.Tag.1.Key')).toBe('botho:managed-rig')
+    expect(body.get('TagSpecification.1.Tag.1.Key')).toBe('botho:managed-node')
     expect(body.get('TagSpecification.1.Tag.1.Value')).toBe('true')
     expect(body.get('TagSpecification.1.Tag.2.Key')).toBe('botho:subscription')
     expect(body.get('TagSpecification.1.Tag.2.Value')).toBe('sub_ABC')
@@ -88,7 +88,7 @@ describe('parseDescribeInstancesResponse', () => {
     expect(list[0].subscriptionTag).toBe('sub_ABC')
   })
 
-  it('extracts the botho:rig-id tag and parses launchTime to epoch ms', () => {
+  it('extracts the botho:node-id tag and parses launchTime to epoch ms', () => {
     const xml = `<DescribeInstancesResponse><reservationSet><item>
       <instancesSet>
         <item>
@@ -96,9 +96,9 @@ describe('parseDescribeInstancesResponse', () => {
           <instanceState><name>pending</name></instanceState>
           <launchTime>2026-06-21T12:00:00.000Z</launchTime>
           <tagSet>
-            <item><key>botho:managed-rig</key><value>true</value></item>
+            <item><key>botho:managed-node</key><value>true</value></item>
             <item><key>botho:subscription</key><value>sub_DEF</value></item>
-            <item><key>botho:rig-id</key><value>def456</value></item>
+            <item><key>botho:node-id</key><value>def456</value></item>
           </tagSet>
         </item>
       </instancesSet>
@@ -106,7 +106,7 @@ describe('parseDescribeInstancesResponse', () => {
     const list = parseDescribeInstancesResponse(xml)
     expect(list).toHaveLength(1)
     expect(list[0].subscriptionTag).toBe('sub_DEF')
-    expect(list[0].rigIdTag).toBe('def456')
+    expect(list[0].nodeIdTag).toBe('def456')
     expect(list[0].launchTimeMs).toBe(Date.parse('2026-06-21T12:00:00.000Z'))
   })
 
@@ -155,17 +155,17 @@ describe('HttpEc2Client (mocked fetch — no real AWS)', () => {
     expect(headers.Authorization).toContain('AWS4-HMAC-SHA256')
   })
 
-  it('describeManagedRigs filters on the botho:managed-rig=true tag', async () => {
+  it('describeManagedNodes filters on the botho:managed-node=true tag', async () => {
     let sentBody = ''
     const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
       sentBody = String(init.body)
       return new Response('<DescribeInstancesResponse/>', { status: 200 })
     })
     const client = new HttpEc2Client(creds, fetchMock as unknown as typeof fetch)
-    await client.describeManagedRigs('us-west-2')
+    await client.describeManagedNodes('us-west-2')
     const params = new URLSearchParams(sentBody)
     expect(params.get('Action')).toBe('DescribeInstances')
-    expect(params.get('Filter.1.Name')).toBe('tag:botho:managed-rig')
+    expect(params.get('Filter.1.Name')).toBe('tag:botho:managed-node')
     expect(params.get('Filter.1.Value.1')).toBe('true')
   })
 

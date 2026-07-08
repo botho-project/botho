@@ -13,7 +13,7 @@ import {
 } from './webhook'
 import { FakeDns, FakeEc2, FakeStore } from './test-fakes'
 import type { ProvisionerDeps } from './provisioner'
-import { DEFAULT_RIG_COMPUTE, DEFAULT_INSTANCE_TYPE } from './rig-config'
+import { DEFAULT_NODE_COMPUTE, DEFAULT_INSTANCE_TYPE } from './node-config'
 
 const SECRET = 'whsec_test_secret_value'
 
@@ -25,8 +25,8 @@ function fakeDeps(): ProvisionerDeps & { ec2: FakeEc2; dns: FakeDns; store: Fake
     ec2,
     dns,
     store,
-    compute: { ...DEFAULT_RIG_COMPUTE, instanceType: DEFAULT_INSTANCE_TYPE },
-    rigDomain: 'testnet.botho.io',
+    compute: { ...DEFAULT_NODE_COMPUTE, instanceType: DEFAULT_INSTANCE_TYPE },
+    nodeDomain: 'testnet.botho.io',
     fleetCap: 25,
   }
 }
@@ -246,14 +246,14 @@ describe('handleStripeEvent', () => {
 
   it('tears down on customer.subscription.deleted', async () => {
     const deps = fakeDeps()
-    // Seed an existing running rig so teardown has something to terminate.
+    // Seed an existing running node so teardown has something to terminate.
     await deps.store.insertProvisioning({
       user: 'cus_xyz',
       stripeCustomer: 'cus_xyz',
       subscriptionId: 'sub_del',
-      rigId: 'del',
+      nodeId: 'del',
       region: 'us-west-2',
-      rpcUrl: 'https://rig-del.testnet.botho.io/rpc',
+      rpcUrl: 'https://node-del.testnet.botho.io/rpc',
     })
     await deps.store.setInstanceId('sub_del', 'i-123')
 
@@ -273,9 +273,9 @@ describe('handleStripeEvent', () => {
       user: 'cus_xyz',
       stripeCustomer: 'cus_xyz',
       subscriptionId: 'sub_pf',
-      rigId: 'pf',
+      nodeId: 'pf',
       region: 'us-west-2',
-      rpcUrl: 'https://rig-pf.testnet.botho.io/rpc',
+      rpcUrl: 'https://node-pf.testnet.botho.io/rpc',
     })
     await deps.store.setInstanceId('sub_pf', 'i-pf')
 

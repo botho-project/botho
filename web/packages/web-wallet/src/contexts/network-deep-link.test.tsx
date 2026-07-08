@@ -143,14 +143,14 @@ describe('custom-RPC deep link is gated by the NetworkProvider (#587)', () => {
   })
 
   it('accept switches to the custom node and records the "from a link" marker', async () => {
-    setSearch(rpcQuery('https://rig-x.testnet.botho.io/rpc'))
+    setSearch(rpcQuery('https://node-x.testnet.botho.io/rpc'))
     render(
       <NetworkProvider>
         <Probe />
       </NetworkProvider>,
     )
     await waitFor(() =>
-      expect(screen.getByTestId('pending-host').textContent).toBe('rig-x.testnet.botho.io'),
+      expect(screen.getByTestId('pending-host').textContent).toBe('node-x.testnet.botho.io'),
     )
     expect(screen.getByTestId('pending-trust').textContent).toBe('known')
 
@@ -159,20 +159,20 @@ describe('custom-RPC deep link is gated by the NetworkProvider (#587)', () => {
     })
 
     await waitFor(() => expect(screen.getByTestId('ingress').textContent).toBe('custom'))
-    expect(screen.getByTestId('from-link').textContent).toBe('rig-x.testnet.botho.io')
+    expect(screen.getByTestId('from-link').textContent).toBe('node-x.testnet.botho.io')
     expect(screen.getByTestId('pending-host').textContent).toBe('none')
-    expect(localStorage.getItem('botho_custom_node_from_link')).toBe('rig-x.testnet.botho.io')
+    expect(localStorage.getItem('botho_custom_node_from_link')).toBe('node-x.testnet.botho.io')
   })
 
   it('revert returns to the default node and clears the marker', async () => {
-    setSearch(rpcQuery('https://rig-x.testnet.botho.io/rpc'))
+    setSearch(rpcQuery('https://node-x.testnet.botho.io/rpc'))
     render(
       <NetworkProvider>
         <Probe />
       </NetworkProvider>,
     )
     await waitFor(() =>
-      expect(screen.getByTestId('pending-host').textContent).toBe('rig-x.testnet.botho.io'),
+      expect(screen.getByTestId('pending-host').textContent).toBe('node-x.testnet.botho.io'),
     )
     await act(async () => {
       fireEvent.click(screen.getByText('accept'))

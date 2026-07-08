@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Botho BaaS Rig Bootstrap (cloud-init / EC2 user-data)
+# Botho BaaS Node Bootstrap (cloud-init / EC2 user-data)
 # =====================================================
 #
 # Self-contained first-boot provisioner that turns a *fresh* EC2 instance
@@ -20,17 +20,17 @@
 # exports below) into the instance launch's "User data" field. cloud-init runs
 # it as root on first boot. It is also safe to run by hand:
 #
-#     sudo RIG_ID=demo REGION=us-west-2 TIER=t4g.medium ./rig-bootstrap.sh
+#     sudo NODE_ID=demo REGION=us-west-2 TIER=t4g.medium ./node-bootstrap.sh
 #
 # (with no BOTHO_BINARY_URL, the latest GitHub release's linux-aarch64 tarball
 # is resolved and checksum-pinned automatically), or with an explicit pin:
 #
-#     sudo RIG_ID=demo REGION=us-west-2 TIER=t4g.medium \
+#     sudo NODE_ID=demo REGION=us-west-2 TIER=t4g.medium \
 #          BOTHO_BINARY_URL=https://github.com/botho-project/botho/releases/download/v0.3.0/botho-v0.3.0-linux-aarch64.tar.gz \
 #          BOTHO_BINARY_SHA256=<'botho' line from checksums-linux-aarch64.txt> \
-#          ./rig-bootstrap.sh
+#          ./node-bootstrap.sh
 #
-# (RIG_ID=demo derives RIG_HOSTNAME=rig-demo.testnet.botho.io.)
+# (NODE_ID=demo derives NODE_HOSTNAME=node-demo.testnet.botho.io.)
 #
 # Re-running is safe (idempotent): each step checks current state first.
 #
@@ -43,7 +43,7 @@
 #                      canonical source since v0.3.0 — the `botho` member is
 #                      extracted and installed) OR a bare aarch64 `botho`
 #                      binary (e.g. an S3/R2 mirror object; legacy path, still
-#                      supported). The rig is arm64, so it DOWNLOADS a prebuilt
+#                      supported). The node is arm64, so it DOWNLOADS a prebuilt
 #                      binary rather than building from source on the box.
 #                      When unset: an already-installed /usr/local/bin/botho is
 #                      reused (idempotent re-run); otherwise the latest GitHub
@@ -64,29 +64,29 @@
 #                      checksums-linux-aarch64.txt and pinned automatically.
 #   BOTHO_REPO         (optional, default "botho-project/botho") GitHub
 #                      owner/repo used for latest-release resolution.
-#   RIG_ID             (optional) short opaque rig identifier (e.g. abc123),
+#   NODE_ID             (optional) short opaque node identifier (e.g. abc123),
 #                      assigned by the provisioner / Stripe subscription mapping.
-#                      When set and RIG_HOSTNAME is unset, the public hostname is
-#                      derived as rig-<RIG_ID>.<RIG_DOMAIN>. Recorded in
-#                      rig-info.txt for control-plane traceability.
-#   RIG_DOMAIN         (optional, default "testnet.botho.io") the zone under
-#                      which rig-<RIG_ID> hostnames live; combined with RIG_ID to
-#                      derive RIG_HOSTNAME when the latter is not given directly.
-#   RIG_HOSTNAME       (optional) public hostname for this rig, e.g.
-#                      rig-abc123.testnet.botho.io. Takes precedence over
-#                      RIG_ID/RIG_DOMAIN. The provisioner pre-creates the DNS A
+#                      When set and NODE_HOSTNAME is unset, the public hostname is
+#                      derived as node-<NODE_ID>.<NODE_DOMAIN>. Recorded in
+#                      node-info.txt for control-plane traceability.
+#   NODE_DOMAIN         (optional, default "testnet.botho.io") the zone under
+#                      which node-<NODE_ID> hostnames live; combined with NODE_ID to
+#                      derive NODE_HOSTNAME when the latter is not given directly.
+#   NODE_HOSTNAME       (optional) public hostname for this node, e.g.
+#                      node-abc123.testnet.botho.io. Takes precedence over
+#                      NODE_ID/NODE_DOMAIN. The provisioner pre-creates the DNS A
 #                      record -> this instance's public IP BEFORE boot. If
-#                      neither RIG_HOSTNAME nor RIG_ID is set, TLS/nginx public
+#                      neither NODE_HOSTNAME nor NODE_ID is set, TLS/nginx public
 #                      setup is skipped and the node still serves RPC on
 #                      localhost:17101.
-#   REGION             (optional) AWS region the rig was launched in (e.g.
+#   REGION             (optional) AWS region the node was launched in (e.g.
 #                      us-west-2). Informational here — the instance is already
 #                      in its region by the time user-data runs; the provisioner
 #                      (#458 P6.2) picks the region at run-instances time.
-#                      Recorded in rig-info.txt.
+#                      Recorded in node-info.txt.
 #   TIER               (optional, default "t4g.medium") instance type / tier the
 #                      provisioner launched. Informational; recorded in
-#                      rig-info.txt. The MVP is t4g.medium-only (#458 §5).
+#                      node-info.txt. The MVP is t4g.medium-only (#458 §5).
 #   NETWORK            (optional, default "testnet"). Only "testnet" is
 #                      supported by this slice.
 #   BOOTSTRAP_PEERS    (optional) comma-separated libp2p multiaddrs to use as
@@ -98,11 +98,11 @@
 #   TLS_MODE           (optional) "webroot" (default, needs nginx+DNS),
 #                      "standalone" (certbot --standalone, stops nginx briefly),
 #                      or "skip" (no certbot; HTTP-only nginx for local test).
-#   RIG_WALLET_MNEMONIC (optional) bring-your-own 24-word mnemonic. Default:
-#                      generate a fresh per-rig mnemonic. (#458 will decide
+#   NODE_WALLET_MNEMONIC (optional) bring-your-own 24-word mnemonic. Default:
+#                      generate a fresh per-node mnemonic. (#458 will decide
 #                      bring-your-own vs generated; the param exists already.)
 #   BIP39_WORDLIST_URL (optional) URL to the BIP39 English wordlist (2048 words,
-#                      one per line) used to generate the rig mnemonic. Default:
+#                      one per line) used to generate the node mnemonic. Default:
 #                      the canonical bitcoin/bips raw URL. A local copy next to
 #                      this script (or at /usr/local/share/botho/) is used first
 #                      if present, so user-data stays small.
@@ -110,34 +110,34 @@
 # ---------------------------------------------------------------------------
 # OUTPUTS
 # ---------------------------------------------------------------------------
-#   /var/log/botho-rig-bootstrap.log   full provisioning log
+#   /var/log/botho-node-bootstrap.log   full provisioning log
 #   /home/ubuntu/.botho/testnet/config.toml   node config (mnemonic, chmod 600)
-#   /home/ubuntu/rig-info.txt          machine-readable summary (RPC URL, peer
+#   /home/ubuntu/node-info.txt          machine-readable summary (RPC URL, peer
 #                                      id, mnemonic location, status command)
 #   systemd unit `botho` running `botho --testnet run --mint`
-#   Read back any time with:  sudo /usr/local/bin/rig-status   (installed here)
+#   Read back any time with:  sudo /usr/local/bin/node-status   (installed here)
 #
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
 # Logging: tee everything to a persistent log AND the cloud-init console.
 # ---------------------------------------------------------------------------
-LOG_FILE="/var/log/botho-rig-bootstrap.log"
+LOG_FILE="/var/log/botho-node-bootstrap.log"
 exec > >(tee -a "$LOG_FILE") 2>&1
 
 ts()   { date -u +"%Y-%m-%dT%H:%M:%SZ"; }
-log()  { echo "[$(ts)] [rig-bootstrap] $*"; }
-fail() { echo "[$(ts)] [rig-bootstrap] FATAL: $*" >&2; exit 1; }
+log()  { echo "[$(ts)] [node-bootstrap] $*"; }
+fail() { echo "[$(ts)] [node-bootstrap] FATAL: $*" >&2; exit 1; }
 
-log "=== Botho rig bootstrap starting ==="
+log "=== Botho node bootstrap starting ==="
 
 # ---------------------------------------------------------------------------
 # Parameters & defaults
 # ---------------------------------------------------------------------------
 NETWORK="${NETWORK:-testnet}"
-RIG_ID="${RIG_ID:-}"
-RIG_DOMAIN="${RIG_DOMAIN:-testnet.botho.io}"
-RIG_HOSTNAME="${RIG_HOSTNAME:-}"
+NODE_ID="${NODE_ID:-}"
+NODE_DOMAIN="${NODE_DOMAIN:-testnet.botho.io}"
+NODE_HOSTNAME="${NODE_HOSTNAME:-}"
 REGION="${REGION:-}"
 TIER="${TIER:-t4g.medium}"
 BOTHO_BINARY_URL="${BOTHO_BINARY_URL:-}"
@@ -147,7 +147,7 @@ BOOTSTRAP_PEERS="${BOOTSTRAP_PEERS:-}"
 MINT_THREADS="${MINT_THREADS:-1}"
 CERTBOT_EMAIL="${CERTBOT_EMAIL:-admin@botho.io}"
 TLS_MODE="${TLS_MODE:-webroot}"
-RIG_WALLET_MNEMONIC="${RIG_WALLET_MNEMONIC:-}"
+NODE_WALLET_MNEMONIC="${NODE_WALLET_MNEMONIC:-}"
 BIP39_WORDLIST_URL="${BIP39_WORDLIST_URL:-https://raw.githubusercontent.com/bitcoin/bips/master/bip-0039/english.txt}"
 
 # Service account: the Ubuntu arm64 AMI ships an "ubuntu" user; mirror the
@@ -163,19 +163,19 @@ GOSSIP_PORT=17100
 [[ "$NETWORK" == "testnet" ]] || fail "Only NETWORK=testnet is supported in this slice (got '$NETWORK')."
 id "$RUN_USER" >/dev/null 2>&1 || fail "Expected user '$RUN_USER' to exist (Ubuntu arm64 AMI)."
 
-# Derive the public hostname from RIG_ID when RIG_HOSTNAME was not given
-# directly. The provisioner (#458 P6.2) assigns RIG_ID per subscription and
-# creates the DNS A record for rig-<RIG_ID>.<RIG_DOMAIN> before boot.
-if [[ -z "$RIG_HOSTNAME" && -n "$RIG_ID" ]]; then
-    # Allow RIG_ID to be either the bare id (abc123) or a full "rig-abc123".
-    case "$RIG_ID" in
-        rig-*) RIG_HOSTNAME="${RIG_ID}.${RIG_DOMAIN}" ;;
-        *)     RIG_HOSTNAME="rig-${RIG_ID}.${RIG_DOMAIN}" ;;
+# Derive the public hostname from NODE_ID when NODE_HOSTNAME was not given
+# directly. The provisioner (#458 P6.2) assigns NODE_ID per subscription and
+# creates the DNS A record for node-<NODE_ID>.<NODE_DOMAIN> before boot.
+if [[ -z "$NODE_HOSTNAME" && -n "$NODE_ID" ]]; then
+    # Allow NODE_ID to be either the bare id (abc123) or a full "node-abc123".
+    case "$NODE_ID" in
+        node-*) NODE_HOSTNAME="${NODE_ID}.${NODE_DOMAIN}" ;;
+        *)     NODE_HOSTNAME="node-${NODE_ID}.${NODE_DOMAIN}" ;;
     esac
-    log "Derived RIG_HOSTNAME='$RIG_HOSTNAME' from RIG_ID='$RIG_ID' RIG_DOMAIN='$RIG_DOMAIN'"
+    log "Derived NODE_HOSTNAME='$NODE_HOSTNAME' from NODE_ID='$NODE_ID' NODE_DOMAIN='$NODE_DOMAIN'"
 fi
 
-log "Params: NETWORK=$NETWORK RIG_ID='${RIG_ID:-<none>}' RIG_HOSTNAME='${RIG_HOSTNAME:-<none>}' REGION='${REGION:-<unset>}' TIER=$TIER TLS_MODE=$TLS_MODE MINT_THREADS=$MINT_THREADS"
+log "Params: NETWORK=$NETWORK NODE_ID='${NODE_ID:-<none>}' NODE_HOSTNAME='${NODE_HOSTNAME:-<none>}' REGION='${REGION:-<unset>}' TIER=$TIER TLS_MODE=$TLS_MODE MINT_THREADS=$MINT_THREADS"
 log "Binary source: ${BOTHO_BINARY_URL:-<unset: reuse existing $BIN_PATH, else latest GitHub release>}"
 
 # ===========================================================================
@@ -281,14 +281,14 @@ if file "$BIN_PATH" | grep -qi "aarch64"; then BIN_ARCH="aarch64"; else BIN_ARCH
 log "  installed botho ($BIN_ARCH)"
 
 # ===========================================================================
-# Step 3: Generate per-rig identity + write config.toml
+# Step 3: Generate per-node identity + write config.toml
 # ===========================================================================
 # Notes on "node_key":
 #   The botho binary persists its libp2p peer identity automatically: on first
 #   start it creates ~/.botho/<network>/node_key and reloads it on every
 #   subsequent boot (log: "Loaded persistent node identity from ... node_key").
-#   So the rig's peer id is stable across reboots with no action needed here.
-#   The *wallet mnemonic* below is the rig's economic identity (it owns the
+#   So the node's peer id is stable across reboots with no action needed here.
+#   The *wallet mnemonic* below is the node's economic identity (it owns the
 #   mined rewards); we generate it once and preserve it across re-runs.
 log "Step 3: generating identity + config"
 install -d -o "$RUN_USER" -g "$RUN_USER" -m 0755 "$RUN_HOME/.botho"
@@ -315,11 +315,11 @@ if [[ -f "$CONFIG_FILE" ]]; then
     log "  config already exists; preserving wallet mnemonic (idempotent)"
     MNEMONIC="$(grep -E '^\s*mnemonic\s*=' "$CONFIG_FILE" | head -1 | sed -E 's/^[^"]*"([^"]*)".*/\1/')"
     [[ -n "$MNEMONIC" ]] || fail "existing config has no mnemonic; refusing to overwrite. Inspect $CONFIG_FILE"
-elif [[ -n "$RIG_WALLET_MNEMONIC" ]]; then
-    log "  using bring-your-own RIG_WALLET_MNEMONIC"
-    MNEMONIC="$RIG_WALLET_MNEMONIC"
+elif [[ -n "$NODE_WALLET_MNEMONIC" ]]; then
+    log "  using bring-your-own NODE_WALLET_MNEMONIC"
+    MNEMONIC="$NODE_WALLET_MNEMONIC"
 else
-    log "  generating fresh per-rig wallet mnemonic"
+    log "  generating fresh per-node wallet mnemonic"
     WORDLIST="$(dirname "$0")/bip39-english.txt"
     [[ -f "$WORDLIST" ]] || WORDLIST="/usr/local/share/botho/bip39-english.txt"
     if [[ ! -f "$WORDLIST" ]]; then
@@ -357,8 +357,8 @@ fi
 if [[ ! -f "$CONFIG_FILE" ]]; then
     log "  writing $CONFIG_FILE"
     cat > "$CONFIG_FILE" <<EOF
-# Botho BaaS rig config (generated by rig-bootstrap.sh on $(ts))
-# Testnet mining node. Contains the rig wallet mnemonic -> chmod 600.
+# Botho BaaS node config (generated by node-bootstrap.sh on $(ts))
+# Testnet mining node. Contains the node wallet mnemonic -> chmod 600.
 network_type = "testnet"
 
 [wallet]
@@ -369,7 +369,7 @@ gossip_port = ${GOSSIP_PORT}
 rpc_port = ${RPC_PORT}
 metrics_port = 19090
 
-# Allow the rig's own HTTPS host + local nginx proxy to call RPC.
+# Allow the node's own HTTPS host + local nginx proxy to call RPC.
 cors_origins = ["*"]
 
 # Bootstrap peers. Empty by default: DNS-seed discovery below resolves
@@ -407,7 +407,7 @@ log "Step 4: installing botho systemd unit"
 SERVICE_FILE="/etc/systemd/system/botho.service"
 cat > "$SERVICE_FILE" <<EOF
 [Unit]
-Description=Botho BaaS Rig (Testnet Mining Node)
+Description=Botho BaaS Node (Testnet Mining Node)
 Documentation=https://github.com/botho-project/botho
 After=network-online.target
 Wants=network-online.target
@@ -448,14 +448,14 @@ systemctl restart botho
 log "  botho.service started"
 
 # ===========================================================================
-# Step 5: nginx + TLS + /rpc reverse proxy for the rig hostname
+# Step 5: nginx + TLS + /rpc reverse proxy for the node hostname
 # ===========================================================================
-if [[ -z "$RIG_HOSTNAME" ]]; then
-    log "Step 5: RIG_HOSTNAME unset -> skipping public nginx/TLS (node still serves RPC on localhost:${RPC_PORT})"
+if [[ -z "$NODE_HOSTNAME" ]]; then
+    log "Step 5: NODE_HOSTNAME unset -> skipping public nginx/TLS (node still serves RPC on localhost:${RPC_PORT})"
 else
-    log "Step 5: configuring nginx (+TLS mode=$TLS_MODE) for $RIG_HOSTNAME"
+    log "Step 5: configuring nginx (+TLS mode=$TLS_MODE) for $NODE_HOSTNAME"
     install -d -m 0755 /var/www/certbot
-    NGINX_SITE="/etc/nginx/sites-available/${RIG_HOSTNAME}"
+    NGINX_SITE="/etc/nginx/sites-available/${NODE_HOSTNAME}"
 
     write_http_only_site() {
         # Minimal HTTP server: ACME challenge + /rpc proxy. Used before certs
@@ -465,7 +465,7 @@ map \$http_upgrade \$connection_upgrade { default upgrade; '' close; }
 server {
     listen 80;
     listen [::]:80;
-    server_name ${RIG_HOSTNAME};
+    server_name ${NODE_HOSTNAME};
 
     location /.well-known/acme-challenge/ { root /var/www/certbot; }
     location /health { access_log off; add_header Content-Type text/plain; return 200 "OK"; }
@@ -503,7 +503,7 @@ map \$http_upgrade \$connection_upgrade { default upgrade; '' close; }
 server {
     listen 80;
     listen [::]:80;
-    server_name ${RIG_HOSTNAME};
+    server_name ${NODE_HOSTNAME};
     location /.well-known/acme-challenge/ { root /var/www/certbot; }
     location / { return 301 https://\$host\$request_uri; }
 }
@@ -511,10 +511,10 @@ server {
 server {
     listen 443 ssl http2;
     listen [::]:443 ssl http2;
-    server_name ${RIG_HOSTNAME};
+    server_name ${NODE_HOSTNAME};
 
-    ssl_certificate /etc/letsencrypt/live/${RIG_HOSTNAME}/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/${RIG_HOSTNAME}/privkey.pem;
+    ssl_certificate /etc/letsencrypt/live/${NODE_HOSTNAME}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${NODE_HOSTNAME}/privkey.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_prefer_server_ciphers on;
     ssl_session_cache shared:SSL:10m;
@@ -583,12 +583,12 @@ EOF
     # Remove the default site so server_name matching is unambiguous.
     rm -f /etc/nginx/sites-enabled/default
 
-    have_cert() { [[ -f "/etc/letsencrypt/live/${RIG_HOSTNAME}/fullchain.pem" ]]; }
+    have_cert() { [[ -f "/etc/letsencrypt/live/${NODE_HOSTNAME}/fullchain.pem" ]]; }
 
     case "$TLS_MODE" in
         skip)
             write_http_only_site
-            ln -sf "$NGINX_SITE" "/etc/nginx/sites-enabled/${RIG_HOSTNAME}"
+            ln -sf "$NGINX_SITE" "/etc/nginx/sites-enabled/${NODE_HOSTNAME}"
             nginx -t && systemctl reload nginx
             log "  nginx HTTP-only (/rpc) ready (TLS skipped)"
             ;;
@@ -596,10 +596,10 @@ EOF
             if ! have_cert; then
                 systemctl stop nginx || true
                 certbot certonly --standalone -n --agree-tos -m "$CERTBOT_EMAIL" \
-                    -d "$RIG_HOSTNAME" || log "  WARN: certbot --standalone failed (DNS not pointed yet?)"
+                    -d "$NODE_HOSTNAME" || log "  WARN: certbot --standalone failed (DNS not pointed yet?)"
             fi
             if have_cert; then write_tls_site; else write_http_only_site; fi
-            ln -sf "$NGINX_SITE" "/etc/nginx/sites-enabled/${RIG_HOSTNAME}"
+            ln -sf "$NGINX_SITE" "/etc/nginx/sites-enabled/${NODE_HOSTNAME}"
             nginx -t && systemctl restart nginx
             log "  nginx ready ($(have_cert && echo HTTPS || echo HTTP-only))"
             ;;
@@ -607,17 +607,17 @@ EOF
             # Bring up HTTP first so the ACME webroot challenge can be served,
             # then obtain a cert and switch to the full TLS site.
             write_http_only_site
-            ln -sf "$NGINX_SITE" "/etc/nginx/sites-enabled/${RIG_HOSTNAME}"
+            ln -sf "$NGINX_SITE" "/etc/nginx/sites-enabled/${NODE_HOSTNAME}"
             nginx -t && systemctl reload nginx
             if ! have_cert; then
                 certbot certonly --webroot -w /var/www/certbot -n --agree-tos \
-                    -m "$CERTBOT_EMAIL" -d "$RIG_HOSTNAME" \
-                    || log "  WARN: certbot webroot failed (is DNS for $RIG_HOSTNAME pointed at this host yet?). Serving HTTP-only for now; re-run this script after DNS propagates."
+                    -m "$CERTBOT_EMAIL" -d "$NODE_HOSTNAME" \
+                    || log "  WARN: certbot webroot failed (is DNS for $NODE_HOSTNAME pointed at this host yet?). Serving HTTP-only for now; re-run this script after DNS propagates."
             fi
             if have_cert; then
                 write_tls_site
                 nginx -t && systemctl reload nginx
-                log "  nginx HTTPS /rpc ready for https://${RIG_HOSTNAME}/rpc"
+                log "  nginx HTTPS /rpc ready for https://${NODE_HOSTNAME}/rpc"
             else
                 log "  nginx HTTP-only /rpc ready (no cert yet)"
             fi
@@ -626,13 +626,13 @@ EOF
 fi
 
 # ===========================================================================
-# Step 6: Emit rig info + install a `rig-status` read-back helper
+# Step 6: Emit node info + install a `node-status` read-back helper
 # ===========================================================================
-log "Step 6: writing rig-info + installing rig-status helper"
+log "Step 6: writing node-info + installing node-status helper"
 
-cat > /usr/local/bin/rig-status <<EOF
+cat > /usr/local/bin/node-status <<EOF
 #!/usr/bin/env bash
-# Read back this rig's node status + RPC URL.
+# Read back this node's node status + RPC URL.
 set -euo pipefail
 echo "botho.service: \$(systemctl is-active botho 2>/dev/null || echo inactive)"
 RESP="\$(curl -s -m 8 -X POST http://localhost:${RPC_PORT} -H 'Content-Type: application/json' \
@@ -643,7 +643,7 @@ else
     echo "\$RESP"
 fi
 EOF
-chmod +x /usr/local/bin/rig-status
+chmod +x /usr/local/bin/node-status
 
 # Best-effort metadata reads. These MUST NOT abort the script (set -e/pipefail),
 # so each is guarded and failures degrade to "unknown".
@@ -664,17 +664,17 @@ VER_TMP="$(printf '%s' "$VER_RESP" | jq -r '.result.nodeVersion // empty' 2>/dev
 [[ -n "$VER_TMP" ]] && BIN_VERSION="${VER_TMP} ${BIN_ARCH}"
 set -e
 
-if [[ -n "$RIG_HOSTNAME" ]]; then
-    RPC_URL="https://${RIG_HOSTNAME}/rpc  (or http://${RIG_HOSTNAME}/rpc until TLS issued)"
+if [[ -n "$NODE_HOSTNAME" ]]; then
+    RPC_URL="https://${NODE_HOSTNAME}/rpc  (or http://${NODE_HOSTNAME}/rpc until TLS issued)"
 else
     RPC_URL="http://localhost:${RPC_PORT}  (no public hostname configured)"
 fi
 
-cat > "${RUN_HOME}/rig-info.txt" <<EOF
-# Botho rig provisioned by rig-bootstrap.sh on $(ts)
+cat > "${RUN_HOME}/node-info.txt" <<EOF
+# Botho node provisioned by node-bootstrap.sh on $(ts)
 network        = ${NETWORK}
-rig_id         = ${RIG_ID:-<none>}
-rig_hostname   = ${RIG_HOSTNAME:-<none>}
+node_id         = ${NODE_ID:-<none>}
+node_hostname   = ${NODE_HOSTNAME:-<none>}
 region         = ${REGION:-<unset>}
 tier           = ${TIER}
 public_ip      = ${PUBLIC_IP}
@@ -684,17 +684,17 @@ local_rpc      = http://localhost:${RPC_PORT}
 config         = ${CONFIG_FILE}   (mnemonic inside, chmod 600)
 service        = systemctl status botho
 logs           = journalctl -u botho -f
-status         = sudo rig-status
+status         = sudo node-status
 EOF
-chown "$RUN_USER:$RUN_USER" "${RUN_HOME}/rig-info.txt"
+chown "$RUN_USER:$RUN_USER" "${RUN_HOME}/node-info.txt"
 
 # Give the node a moment, then log a first status (best effort).
 sleep 5
 log "Initial node status:"
-/usr/local/bin/rig-status 2>&1 | sed 's/^/    /' || true
+/usr/local/bin/node-status 2>&1 | sed 's/^/    /' || true
 
-log "=== Botho rig bootstrap complete ==="
-log "Read back any time: sudo rig-status   |   cat ${RUN_HOME}/rig-info.txt"
+log "=== Botho node bootstrap complete ==="
+log "Read back any time: sudo node-status   |   cat ${RUN_HOME}/node-info.txt"
 
 # ---------------------------------------------------------------------------
 # BINARY SOURCE NOTE (for #458)

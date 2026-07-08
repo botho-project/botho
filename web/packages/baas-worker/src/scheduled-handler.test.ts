@@ -20,8 +20,8 @@ import type { ReconcileDeps } from './reconcile'
 const ENV: Env = {
   STRIPE_SECRET_KEY: 'sk_test_dummy',
   STRIPE_PRICE_ID: 'price_test',
-  CHECKOUT_SUCCESS_URL: 'https://botho.io/rig/success',
-  CHECKOUT_CANCEL_URL: 'https://botho.io/rig',
+  CHECKOUT_SUCCESS_URL: 'https://botho.io/node/success',
+  CHECKOUT_CANCEL_URL: 'https://botho.io/node',
   AWS_ACCESS_KEY_ID: 'AKIA_TEST',
   AWS_SECRET_ACCESS_KEY: 'secret',
   CF_DNS_API_TOKEN: 'cf_token',
@@ -47,21 +47,21 @@ function makeDeps(): {
 }
 
 describe('handleScheduled (cron reconciliation)', () => {
-  it('reaps an orphan and leaves an active rig (full sweep wiring)', async () => {
+  it('reaps an orphan and leaves an active node (full sweep wiring)', async () => {
     const { deps, depsFor } = makeDeps()
     deps.ec2.managedByRegion.set('us-west-2', [
       {
         instanceId: 'i-active',
         state: 'running',
         subscriptionTag: 'sub_ok',
-        rigIdTag: 'ok1',
+        nodeIdTag: 'ok1',
         publicIp: '1.1.1.1',
       },
       {
         instanceId: 'i-orphan',
         state: 'running',
         subscriptionTag: 'sub_dead',
-        rigIdTag: 'dead1',
+        nodeIdTag: 'dead1',
         publicIp: '2.2.2.2',
       },
     ])
@@ -90,7 +90,7 @@ describe('handleScheduled (cron reconciliation)', () => {
 
   it('does not throw when a sweep step errors (logs + continues)', async () => {
     const { deps, depsFor } = makeDeps()
-    deps.ec2.describeManagedRigsError = 'boom'
+    deps.ec2.describeManagedNodesError = 'boom'
     await expect(handleScheduled(ENV, depsFor)).resolves.toBeUndefined()
   })
 })
