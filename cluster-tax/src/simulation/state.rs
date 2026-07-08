@@ -348,8 +348,8 @@ mod tests {
     /// Previously the sort was stable on balance only, so tied balances kept
     /// their `HashMap` iteration order — randomly seeded per process — which
     /// let a downstream fee/cluster consumer sum in a process-dependent
-    /// order and drift the result (S3 `fees_recycled` differed by ~3
-    /// nanoBTH across runs).
+    /// order and drift the result (S3 `fees_recycled` differed by ~3 base
+    /// units across runs).
     ///
     /// This test inserts the *same* agents in two opposite orders and asserts
     /// the output is byte-identical, then checks the explicit tie-break

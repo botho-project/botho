@@ -1150,19 +1150,19 @@ Botho (BTH) uses a two-phase emission model designed for long-term sustainabilit
 | Parameter | Value |
 |-----------|-------|
 | Token symbol | BTH |
-| Smallest unit | nanoBTH (10⁻⁹ BTH) |
+| Smallest unit | picocredit (10⁻¹² BTH) |
 | Pre-mine | None (100% mined) |
 | Phase 1 supply | ~100 million BTH |
 | Target block time | 20 seconds |
 
 ### Unit System
 
-BTH uses 9-decimal precision:
+BTH uses 12-decimal precision. The picocredit is the single base unit — every amount on the wire (balances, fees, cluster wealth) is denominated in picocredits, and formatting into BTH happens only in the display layer:
 
-- **1 nanoBTH** = 0.000000001 BTH (smallest unit)
-- **1 microBTH (µBTH)** = 1,000 nanoBTH = 0.000001 BTH
-- **1 milliBTH (mBTH)** = 1,000,000 nanoBTH = 0.001 BTH
-- **1 BTH** = 1,000,000,000 nanoBTH
+- **1 picocredit** = 0.000000000001 BTH (smallest unit)
+- **1 microBTH (µBTH)** = 1,000,000 picocredits = 0.000001 BTH
+- **1 milliBTH (mBTH)** = 1,000,000,000 picocredits = 0.001 BTH
+- **1 BTH** = 1,000,000,000,000 picocredits
 
 ---
 

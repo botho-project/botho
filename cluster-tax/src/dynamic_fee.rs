@@ -83,11 +83,11 @@ use std::collections::VecDeque;
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DynamicFeeBase {
-    /// Minimum fee base (floor), in nanoBTH per byte.
+    /// Minimum fee base (floor), in picocredits per byte.
     /// Fees never go below this, even when network is empty.
     pub base_min: u64,
 
-    /// Maximum fee base (ceiling), in nanoBTH per byte.
+    /// Maximum fee base (ceiling), in picocredits per byte.
     /// Prevents runaway fees during extreme scenarios.
     pub base_max: u64,
 
@@ -121,7 +121,7 @@ pub struct DynamicFeeBase {
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DynamicFeeState {
-    /// Current fee base in nanoBTH per byte.
+    /// Current fee base in picocredits per byte.
     pub current_base: u64,
 
     /// Current fee multiplier (1.0 = base_min).
@@ -143,7 +143,7 @@ pub struct DynamicFeeState {
 impl Default for DynamicFeeBase {
     fn default() -> Self {
         Self {
-            base_min: 1,           // 1 nanoBTH/byte floor
+            base_min: 1,           // 1 picocredit/byte floor
             base_max: 100,         // 100x max multiplier
             target_fullness: 0.75, // 75% target
             response_k: 8.0,       // Strong exponential response

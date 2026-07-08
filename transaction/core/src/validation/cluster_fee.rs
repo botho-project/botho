@@ -221,7 +221,7 @@ pub fn validate_cluster_fee(
 /// * `num_memos` - Number of outputs with encrypted memos
 /// * `fee_config` - The fee configuration
 /// * `cluster_wealth` - Lookup for total wealth of each cluster
-/// * `dynamic_base` - Current dynamic fee base (nanoBTH per byte)
+/// * `dynamic_base` - Current dynamic fee base (picocredits per byte)
 pub fn validate_cluster_fee_dynamic(
     declared_fee: u64,
     tx_size_bytes: usize,
@@ -516,7 +516,7 @@ pub fn validate_ring_cluster_fee(
 /// * `num_memos` - Number of outputs with encrypted memos
 /// * `fee_config` - The fee configuration
 /// * `cluster_wealth` - Lookup for total wealth of each cluster
-/// * `dynamic_base` - Current dynamic fee base (nanoBTH per byte)
+/// * `dynamic_base` - Current dynamic fee base (picocredits per byte)
 pub fn validate_ring_cluster_fee_dynamic(
     declared_fee: u64,
     tx_size_bytes: usize,

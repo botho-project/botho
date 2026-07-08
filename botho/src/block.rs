@@ -644,39 +644,29 @@ pub fn calculate_block_reward(height: u64, total_supply: u128) -> u64 {
     } else {
         // Phase 2: Calculate tail reward based on supply.
         //
-        // `MonetaryPolicy::calculate_tail_reward` (cluster-tax crate) takes a
-        // `u64` supply, but by the time the chain reaches Phase 2 the real
-        // picocredit supply (~1.2e21) far exceeds `u64::MAX`. Truncating to
-        // `u64` would compute a wildly wrong tail reward, so we recompute the
-        // identical integer formula in `u128` here rather than widen the
-        // cluster-tax simulation crate (out of scope per #333). This MUST stay
-        // bit-for-bit equivalent to `MonetaryPolicy::calculate_tail_reward`.
+        // By the time the chain reaches Phase 2 the real picocredit supply
+        // (~1.2e21) far exceeds `u64::MAX`, so the `u128` entry point must be
+        // used — truncating through the `u64` API would compute a wildly
+        // wrong tail reward. The formula used to be reimplemented locally
+        // while the cluster-tax crate was `u64`-only (#333); the #694
+        // picocredit migration widened the crate itself, so this now
+        // delegates to the single canonical implementation.
         calculate_tail_reward_u128(&policy, total_supply)
     }
 }
 
-/// `u128` reimplementation of `MonetaryPolicy::calculate_tail_reward`.
+/// `u128`-supply tail-reward computation.
 ///
-/// Kept byte-for-byte identical to the cluster-tax crate's `u64` version
-/// (which already does its internal arithmetic in `u128`); the only
-/// difference is that the `supply` input is accepted as `u128` so realistic
-/// picocredit supplies above `u64::MAX` do not truncate. See #333.
+/// Thin wrapper over
+/// [`bth_cluster_tax::MonetaryPolicy::calculate_tail_reward_u128`],
+/// kept so existing callers/tests retain their entry point. The `supply`
+/// input is `u128` so realistic picocredit supplies above `u64::MAX` do not
+/// truncate. See #333/#694.
 fn calculate_tail_reward_u128(
     policy: &bth_cluster_tax::MonetaryPolicy,
     supply_at_transition: u128,
 ) -> u64 {
-    // Target annual NET emission.
-    let target_net = supply_at_transition * policy.tail_inflation_bps as u128 / 10_000;
-    // Expected annual fee burns.
-    let expected_burns = supply_at_transition * policy.expected_fee_burn_rate_bps as u128 / 10_000;
-    // Gross emission needed.
-    let gross_needed = target_net + expected_burns;
-    // Blocks per year at target rate.
-    let secs_per_year: u128 = 365 * 24 * 3600;
-    let blocks_per_year = secs_per_year / policy.target_block_time_secs as u128;
-    // Reward per block (a single block reward never approaches u64::MAX).
-    let reward = gross_needed / blocks_per_year;
-    reward.max(1) as u64
+    policy.calculate_tail_reward_u128(supply_at_transition)
 }
 
 /// Dynamic block timing based on network load.

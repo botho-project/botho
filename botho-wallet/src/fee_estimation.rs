@@ -76,11 +76,11 @@ pub const MINIMUM_BASE_RATE: u64 = 1;
 /// let mut cache = CachedFeeRate::default();
 ///
 /// // After fetching from network:
-/// cache.update(5); // 5 nanoBTH/byte
+/// cache.update(5); // 5 picocredits/byte
 ///
 /// // Get rate (returns None if expired)
 /// if let Some(rate) = cache.rate() {
-///     println!("Using cached rate: {} nanoBTH/byte", rate);
+///     println!("Using cached rate: {} picocredits/byte", rate);
 /// } else {
 ///     println!("Cache expired, refresh needed");
 /// }
@@ -90,7 +90,7 @@ pub const MINIMUM_BASE_RATE: u64 = 1;
 /// ```
 #[derive(Debug, Clone)]
 pub struct CachedFeeRate {
-    /// Current base rate in nanoBTH per byte.
+    /// Current base rate in picocredits per byte.
     base_rate: u64,
 
     /// Time when this rate was last updated.
@@ -156,7 +156,7 @@ impl CachedFeeRate {
     /// Get the cached rate or the default minimum rate.
     ///
     /// Use this when you always need a rate value. Falls back to
-    /// [`MINIMUM_BASE_RATE`] (1 nanoBTH/byte) if the cache is expired
+    /// [`MINIMUM_BASE_RATE`] (1 picocredit/byte) if the cache is expired
     /// or was never updated.
     pub fn rate_or_default(&self) -> u64 {
         self.rate().unwrap_or(MINIMUM_BASE_RATE)
@@ -359,7 +359,7 @@ pub struct FeeEstimator {
     /// Full fee configuration for output penalties.
     fee_config: FeeConfig,
 
-    /// Base fee rate in nanoBTH per byte (dynamic, from network).
+    /// Base fee rate in picocredits per byte (dynamic, from network).
     base_rate: u64,
 }
 
@@ -374,7 +374,7 @@ impl FeeEstimator {
     pub fn new() -> Self {
         Self {
             fee_config: FeeConfig::default(),
-            base_rate: 1, // 1 nanoBTH per byte (minimum)
+            base_rate: 1, // 1 picocredit per byte (minimum)
         }
     }
 

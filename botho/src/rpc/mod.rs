@@ -1474,7 +1474,7 @@ async fn handle_estimate_fee(id: Value, params: &Value, state: &RpcState) -> Jso
 /// use this to update their local FeeEstimator for accurate fee estimation.
 ///
 /// # Returns
-/// - `baseRate`: Current base fee rate in nanoBTH per byte
+/// - `baseRate`: Current base fee rate in picocredits per byte
 /// - `baseMin`: Minimum possible base rate (floor)
 /// - `baseMax`: Maximum possible base rate (ceiling)
 /// - `multiplier`: Current multiplier (baseRate / baseMin)
@@ -2622,7 +2622,8 @@ async fn handle_list_view_keys(id: Value, params: &Value, state: &RpcState) -> J
 /// - `cluster_id`: The cluster identifier (numeric string or number)
 ///
 /// # Returns
-/// The total wealth in nanoBTH attributed to this cluster across all UTXOs.
+/// The total wealth in picocredits attributed to this cluster across all
+/// UTXOs.
 async fn handle_cluster_get_wealth(id: Value, params: &Value, state: &RpcState) -> JsonRpcResponse {
     // Parse cluster_id parameter (accept both string and number)
     let cluster_id = if let Some(id_str) = params.get("cluster_id").and_then(|v| v.as_str()) {

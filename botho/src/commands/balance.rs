@@ -7,11 +7,8 @@ use crate::{
     wallet::Wallet,
 };
 
-/// Picocredits per BTH (10^12) - internal precision
+/// Picocredits per BTH (10^12) - the single base unit (#649/#694)
 const PICOCREDITS_PER_BTH: u64 = 1_000_000_000_000;
-
-/// Picocredits per nanoBTH (10^3) - for nanoBTH display
-const PICOCREDITS_PER_NANOBTH: u64 = 1_000;
 
 /// Show wallet balance
 pub fn run(config_path: &Path) -> Result<()> {
@@ -43,15 +40,15 @@ pub fn run(config_path: &Path) -> Result<()> {
     let balance_picocredits: u64 = utxos.iter().map(|u| u.output.amount).sum();
     let utxo_count = utxos.len();
 
-    // Convert to display units
+    // Convert to display units: BTH (formatted) with the raw picocredit base
+    // amount alongside. Picocredits are the only unit below the UI edge
+    // (#649/#694); the former nanoBTH display tier is retired.
     let balance_bth = balance_picocredits as f64 / PICOCREDITS_PER_BTH as f64;
-    let balance_nanobth = balance_picocredits / PICOCREDITS_PER_NANOBTH;
 
     println!();
     println!("=== Wallet Balance ===");
     println!("Balance: {:.12} BTH", balance_bth);
-    println!("         {} nanoBTH", balance_nanobth);
-    println!("         {} picocredits (internal)", balance_picocredits);
+    println!("         {} picocredits (base unit)", balance_picocredits);
     println!("UTXOs: {}", utxo_count);
     println!();
     println!("Chain height: {}", state.height);

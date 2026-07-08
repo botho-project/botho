@@ -95,7 +95,18 @@ use crate::{
 /// compare major versions only, so only a major bump disconnects 3.0.0 peers
 /// rather than letting them silently fork. `MIN_SUPPORTED_PROTOCOL_VERSION` is
 /// raised in lockstep.
-pub const PROTOCOL_VERSION: &str = "4.0.0";
+///
+/// Bumped to 4.1.0 for the #694 nanoBTH -> picocredits unit migration
+/// (decision #649). This retires the two-tier unit system: the RPC contract's
+/// unit declarations change (`baseRate` and cluster-wealth fields are
+/// picocredit-denominated), and wallets/adapters must be updated in lockstep.
+/// The bump is MINOR, not major, because no consensus rule changes: the fee
+/// curve, consensus fee floor (`CONSENSUS_FEE_BASE`), emission constants
+/// (`mainnet_policy`) and all on-chain amounts were already picocredit-native
+/// since the 4.0.0 reset (#626) — every migrated value is identical in BTH
+/// terms, so 4.0.0 peers accept exactly the same blocks. Per the #608 lesson:
+/// major = consensus-breaking disconnect, minor = warn (soft, RPC-shape-only).
+pub const PROTOCOL_VERSION: &str = "4.1.0";
 
 /// Minimum supported protocol version.
 /// Peers below this version are consensus-incompatible and are disconnected.
@@ -105,6 +116,10 @@ pub const PROTOCOL_VERSION: &str = "4.0.0";
 /// accept/produce blocks the reset chain rejects, so they must be dropped
 /// rather than allowed to fork. The bump is MAJOR because the disconnect check
 /// (`is_consensus_compatible`) is major-only; a minor bump would only warn.
+///
+/// Deliberately NOT raised for the 4.1.0 minor bump (#694 unit migration):
+/// 4.0.0 peers remain consensus-compatible (no block-acceptance rule changed),
+/// so they must keep connecting rather than be disconnected.
 pub const MIN_SUPPORTED_PROTOCOL_VERSION: &str = "4.0.0";
 
 /// Topic for block announcements
@@ -2177,11 +2192,28 @@ mod tests {
         // A MAJOR bump is required because `is_consensus_compatible` (the
         // peer-disconnect gate) compares majors only — a minor bump would
         // merely warn, leaving 3.0.0 peers connected and silently forking.
-        assert_eq!(PROTOCOL_VERSION, "4.0.0");
+        //
+        // Bumped to 4.1.0 (MINOR) for the #694 nanoBTH -> picocredits
+        // migration: the RPC contract's declared units change but no
+        // consensus rule does, so 4.0.x peers stay connected (warn-only).
+        assert_eq!(PROTOCOL_VERSION, "4.1.0");
         let parsed = ProtocolVersion::parse(PROTOCOL_VERSION).unwrap();
         assert_eq!(parsed.major, 4);
-        assert_eq!(parsed.minor, 0);
+        assert_eq!(parsed.minor, 1);
         assert_eq!(parsed.patch, 0);
+    }
+
+    /// The #694 unit migration must NOT disconnect 4.0.0 peers: it is a
+    /// minor (RPC-shape-only) bump and 4.0.0 is consensus-compatible.
+    #[test]
+    fn test_v4_peers_remain_consensus_compatible_with_current() {
+        let local = ProtocolVersion::parse(PROTOCOL_VERSION).unwrap();
+        let v4_peer = ProtocolVersion::parse("4.0.0").unwrap();
+        assert!(v4_peer.is_consensus_compatible(&local));
+        assert_eq!(
+            ProtocolVersion::consensus_incompatibility(&Some(v4_peer), &local),
+            None
+        );
     }
 
     #[test]

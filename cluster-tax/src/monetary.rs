@@ -3,18 +3,24 @@
 //! # BTH Tokenomics Summary
 //!
 //! - **Initial supply**: 0 BTH (100% mined, no pre-mine)
-//! - **Unit**: 1 BTH = 10^9 nanoBTH (9 decimal places)
+//! - **Unit**: 1 BTH = 10^12 picocredits (12 decimal places; picocredits are
+//!   the single base unit below the UI edge, decision #649)
 //! - **Phase 1 (Years 0-10)**: Halving schedule distributes ~100M BTH
 //! - **Phase 2 (Year 10+)**: 2% target annual inflation
 //! - **Fee burns**: All cluster taxes are burned, reducing effective inflation
 //!
 //! # Overflow Safety
 //!
-//! With nanoBTH (10^9) as the smallest unit:
-//! - 100M BTH at year 10 = 10^17 nanoBTH
-//! - u64::MAX ≈ 1.84 × 10^19, giving ~184x growth capacity
-//! - At 2% annual inflation: (1.02)^263 ≈ 184x is the limit
-//! - Safe for ~260 years after Phase 1 (~270 years from genesis)
+//! With picocredits (10^12 per BTH) as the base unit, realistic full-scale
+//! supplies exceed `u64::MAX` (~1.84 × 10^19 picocredits ≈ 18.4M BTH):
+//! - 100M BTH = 10^20 picocredits.
+//!
+//! The node therefore performs its supply accounting and tail-reward
+//! computation in `u128` (issues #333/#626); see
+//! [`MonetaryPolicy::calculate_tail_reward_u128`]. The `u64` fields on
+//! [`MonetaryState`] / [`DifficultyController`] in this crate are simulation
+//! tooling used at horizon-scaled magnitudes, where totals stay far below
+//! `u64::MAX`.
 //!
 //! # Design Goals
 //!
@@ -74,14 +80,14 @@
 
 /// Monetary policy configuration.
 ///
-/// All monetary values are denominated in nanoBTH (10^-9 BTH).
+/// All monetary values are denominated in picocredits (10^-12 BTH).
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MonetaryPolicy {
     // === Phase 1: Halving ===
-    /// Initial block reward in nanoBTH.
+    /// Initial block reward in picocredits.
     ///
-    /// Default: 50 BTH = 50_000_000_000 nanoBTH
+    /// Default: 50 BTH = 50_000_000_000_000 picocredits
     pub initial_reward: u64,
 
     /// Number of blocks between halvings.
@@ -142,10 +148,10 @@ impl Default for MonetaryPolicy {
     fn default() -> Self {
         Self {
             // Phase 1: ~10 years of halvings
-            // Initial reward: 50 BTH = 50_000_000_000 nanoBTH
+            // Initial reward: 50 BTH = 50_000_000_000_000 picocredits
             // Over 5 halvings: 50 + 25 + 12.5 + 6.25 + 3.125 ≈ 96.9 BTH/block-equivalent
             // With ~1.05M blocks/halving → ~100M BTH distributed in Phase 1
-            initial_reward: 50_000_000_000,
+            initial_reward: 50_000_000_000_000,
             halving_interval: 1_051_200, // ~2 years at 1 min blocks (525,600 blocks/year)
             halving_count: 5,            // 5 halvings = 10 years
 
@@ -172,7 +178,8 @@ impl MonetaryPolicy {
     /// halvings).
     pub fn bitcoin_like() -> Self {
         Self {
-            initial_reward: 50_000_000_000,
+            // 50 BTH = 50_000_000_000_000 picocredits
+            initial_reward: 50_000_000_000_000,
             halving_interval: 210_000, // ~4 years at 10 min blocks
             halving_count: 5,
 
@@ -300,12 +307,27 @@ impl MonetaryPolicy {
     /// The reward is set to achieve target_net + expected_fees at target block
     /// rate.
     pub fn calculate_tail_reward(&self, supply_at_transition: u64) -> u64 {
+        self.calculate_tail_reward_u128(supply_at_transition as u128)
+    }
+
+    /// `u128`-input variant of [`Self::calculate_tail_reward`].
+    ///
+    /// At picocredit scale (1 BTH = 10^12 picocredits, decision #649) realistic
+    /// full-scale supplies exceed `u64::MAX` (~1.84e19 picocredits ≈ 18.4M
+    /// BTH), so callers that track supply in `u128` (the node's ledger, #333;
+    /// the emission sweep's analytic track) must not truncate through the `u64`
+    /// entry point. The arithmetic is identical to the `u64` version (which
+    /// already computed internally in `u128`) — only the input width differs.
+    ///
+    /// A single block reward never approaches `u64::MAX`, so the return type
+    /// stays `u64`.
+    pub fn calculate_tail_reward_u128(&self, supply_at_transition: u128) -> u64 {
         // Target annual NET emission
-        let target_net = supply_at_transition as u128 * self.tail_inflation_bps as u128 / 10_000;
+        let target_net = supply_at_transition * self.tail_inflation_bps as u128 / 10_000;
 
         // Expected annual fee burns
         let expected_burns =
-            supply_at_transition as u128 * self.expected_fee_burn_rate_bps as u128 / 10_000;
+            supply_at_transition * self.expected_fee_burn_rate_bps as u128 / 10_000;
 
         // Gross emission needed
         let gross_needed = target_net + expected_burns;
@@ -1336,6 +1358,40 @@ mod tests {
 
     // === BTH Tokenomics Tests ===
 
+    /// Picocredits per BTH (1 BTH = 10^12 picocredits).
+    const PICOCREDITS_PER_BTH: u128 = 1_000_000_000_000;
+
+    /// Pin the BTH-denominated value of the library default policies after the
+    /// nanoBTH -> picocredits re-denomination (#694): the initial block reward
+    /// must still be exactly 50 BTH, now expressed in picocredits.
+    #[test]
+    fn test_initial_reward_is_50_bth_in_picocredits() {
+        assert_eq!(
+            MonetaryPolicy::default().initial_reward as u128,
+            50 * PICOCREDITS_PER_BTH,
+            "default initial_reward must be 50 BTH in picocredits"
+        );
+        assert_eq!(
+            MonetaryPolicy::bitcoin_like().initial_reward as u128,
+            50 * PICOCREDITS_PER_BTH,
+            "bitcoin_like initial_reward must be 50 BTH in picocredits"
+        );
+    }
+
+    /// The `u128` tail-reward entry point must be bit-for-bit identical to the
+    /// `u64` version over the shared input range.
+    #[test]
+    fn test_tail_reward_u128_matches_u64_variant() {
+        let policy = MonetaryPolicy::default();
+        for supply in [0u64, 1, 999, 100_000_000, u64::MAX / 2, u64::MAX] {
+            assert_eq!(
+                policy.calculate_tail_reward(supply),
+                policy.calculate_tail_reward_u128(supply as u128),
+                "divergence at supply {supply}"
+            );
+        }
+    }
+
     /// Verify the documented BTH emission schedule produces ~100M BTH in Phase
     /// 1.
     #[test]
@@ -1356,15 +1412,14 @@ mod tests {
         let r = policy.initial_reward as u128;
         let h = policy.halving_interval as u128;
 
-        let total_phase1_nanobth = h * r +           // Halving 0: 50 BTH/block
+        let total_phase1_picocredits = h * r +           // Halving 0: 50 BTH/block
             h * (r / 2) +     // Halving 1: 25 BTH/block
             h * (r / 4) +     // Halving 2: 12.5 BTH/block
             h * (r / 8) +     // Halving 3: 6.25 BTH/block
             h * (r / 16); // Halving 4: 3.125 BTH/block
 
-        // Convert to BTH (from nanoBTH)
-        let bth_to_nanobth = 1_000_000_000u128;
-        let total_phase1_bth = total_phase1_nanobth / bth_to_nanobth;
+        // Convert to BTH (from picocredits)
+        let total_phase1_bth = total_phase1_picocredits / PICOCREDITS_PER_BTH;
 
         // Should be approximately 100M BTH (within 5% tolerance)
         let expected = 100_000_000u128;
@@ -1383,10 +1438,12 @@ mod tests {
     fn test_bth_phase2_tail_reward() {
         let policy = MonetaryPolicy::default();
 
-        // At end of Phase 1, supply is ~100M BTH = 10^17 nanoBTH
-        let supply_at_phase2 = 100_000_000u64 * 1_000_000_000u64; // 100M BTH in nanoBTH
+        // At end of Phase 1, supply is ~100M BTH = 10^20 picocredits. This
+        // exceeds u64::MAX, so the u128 entry point must be used (as the
+        // node's ledger does, #333).
+        let supply_at_phase2 = 100_000_000u128 * PICOCREDITS_PER_BTH; // 100M BTH
 
-        let tail_reward = policy.calculate_tail_reward(supply_at_phase2);
+        let tail_reward = policy.calculate_tail_reward_u128(supply_at_phase2);
 
         // Expected calculation:
         // Target NET inflation: 2% of 100M = 2M BTH/year
@@ -1395,7 +1452,7 @@ mod tests {
         // Blocks per year at 1 min: 525,600
         // Tail reward = 2.5M BTH / 525,600 ≈ 4.76 BTH/block
         let expected_bth_per_block = 4.76;
-        let actual_bth_per_block = tail_reward as f64 / 1_000_000_000.0;
+        let actual_bth_per_block = tail_reward as f64 / PICOCREDITS_PER_BTH as f64;
 
         assert!(
             (actual_bth_per_block - expected_bth_per_block).abs() < 0.5,
@@ -1405,31 +1462,36 @@ mod tests {
         );
     }
 
-    /// Verify u64 overflow safety for 260+ years.
+    /// Verify the overflow envelope at picocredit scale (#694).
+    ///
+    /// At the pico scale, full Phase-1 supply no longer fits in u64 — that is
+    /// expected, and it is why the node's supply accounting is u128 (#333) and
+    /// why [`MonetaryPolicy::calculate_tail_reward_u128`] exists. u128 has
+    /// astronomically more headroom than 250 years of 2% inflation needs.
     #[test]
     fn test_bth_overflow_safety() {
-        // Phase 1 supply: 100M BTH = 10^17 nanoBTH
-        let phase1_supply_nanobth = 100_000_000u128 * 1_000_000_000u128;
+        // Phase 1 supply: 100M BTH = 10^20 picocredits.
+        let phase1_supply_pico = 100_000_000u128 * PICOCREDITS_PER_BTH;
 
-        // Maximum multiplier before u64 overflow
-        let max_multiplier = u64::MAX as u128 / phase1_supply_nanobth;
-
-        // Should have at least 184x growth capacity
+        // Exceeds u64::MAX — the reason full-scale supply tracking is u128.
         assert!(
-            max_multiplier >= 184,
-            "Should support 184x growth (got {}x)",
-            max_multiplier
+            phase1_supply_pico > u64::MAX as u128,
+            "100M BTH in picocredits ({}) must exceed u64::MAX",
+            phase1_supply_pico
         );
 
-        // Verify 250 years of 2% inflation fits
-        // (1.02)^250 ≈ 144.2
-        let supply_250y = phase1_supply_nanobth * 144_210 / 1_000;
+        // 250 years of 2% inflation: (1.02)^250 ≈ 144.2 — trivially fits u128.
+        let supply_250y = phase1_supply_pico * 144_210 / 1_000;
         assert!(
-            supply_250y < u64::MAX as u128,
-            "250-year supply {} should fit in u64 (max {})",
-            supply_250y,
-            u64::MAX
+            supply_250y < u128::MAX / 1_000_000,
+            "250-year supply {} must fit u128 with ample headroom",
+            supply_250y
         );
+
+        // Per-block quantities stay in u64: the initial (largest) block reward
+        // is 50 BTH = 5e13 picocredits, far below u64::MAX.
+        let initial_reward = MonetaryPolicy::default().initial_reward;
+        assert!(initial_reward < u64::MAX / 100_000);
     }
 
     /// Simulate full Phase 1 with default policy and verify supply.
@@ -1439,7 +1501,7 @@ mod tests {
             // Use smaller intervals for faster test
             halving_interval: 100,
             halving_count: 5,
-            initial_reward: 50_000_000_000,       // 50 BTH in nanoBTH
+            initial_reward: 50_000_000_000_000, // 50 BTH in picocredits
             difficulty_adjustment_interval: 1000, // Avoid adjustments during test
             ..Default::default()
         };
@@ -1458,7 +1520,7 @@ mod tests {
 
         // Verify supply was created (exact calculation for test params)
         // R × 100 × (1 + 0.5 + 0.25 + 0.125 + 0.0625) = R × 100 × 1.9375
-        let expected_supply = 50_000_000_000u128 * 100 * 1937 / 1000;
+        let expected_supply = 50_000_000_000_000u128 * 100 * 1937 / 1000;
         let actual_supply = controller.state.total_supply as u128;
 
         assert!(
